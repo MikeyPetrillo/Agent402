@@ -155,6 +155,10 @@ elevated one is `private, no-store`, so a shared cache never keeps it.
   required check green, pinned to the tested SHA).
 - A merge to `main` is not a package release: check `npm view <pkg> version` against the local
   `package.json`.
+- The deploy job's "Bazaar listing validation on the new build" step (after Verify, keys blanked)
+  runs `scripts/bazaar-validate.js` against production up to three times a minute apart: a clean
+  run passes, an INVALID run with no clean run fails the job, three unreadable runs warn
+  (`scripts/test-deploy-release-order.js` pins the step).
 - `heartbeat.yml` probes prod on a schedule and opens issues for outages and low balances; a
   daily paid canary (`scripts/paid-canary.js`) buys across every rail. No open issues = healthy.
 - `model-drift.yml` runs the live-catalog guard (`scripts/test-gateway-model-ids.js`) every 6 hours,
@@ -198,6 +202,11 @@ elevated one is `private, no-store`, so a shared cache never keeps it.
   a port-0 boot and a drifted stub, and `mcp-clients.yml` runs it against production every 6
   hours (`MCP_CHECK_TARGET=prod`), paging one issue.
 - A skipped integration test is not coverage: under `CI`, a missing dependency must fail.
+- An offline suite imports `scripts/lib/offline-stores.js` FIRST (before any `src/` module): it
+  clears `REDIS_URL`, `STATE_DATABASE_URL` and the journal switch, which modules read once at
+  import, so a developer's shell never puts the suite on a shared backend. A suite that boots a
+  server spreads `ownStoreEnv(label)` (`scripts/lib/own-stores.js`) after `process.env`, so every
+  file store lands in its own temp directory and two servers never share a SQLite file.
 
 ## x402 settlement ordering (CRITICAL)
 The installed `@x402/express` **runs the handler FIRST, then settles**, and only settles a
@@ -269,9 +278,23 @@ heartbeat page on it under one issue that closes when nothing is owed.
 - **Replay guard:** `src/replay-guard.js` claims a payment credential (x402 nonce, Tempo, Stripe)
   in Redis while its call runs; the claim is renewed every 30 s until settle or release, so a
   route that outlives the claim's expiry cannot run twice on one payment. With Redis configured
-  but unreachable, a long-running or composite route (`isLongRunningSlug`) is refused 503 with
-  `Retry-After` before any payment is taken (x402 dispatcher and card gate); fast routes fall back
-  to a per-process claim.
+  but unreachable, a paid call is refused 503 with `Retry-After` before any payment is taken (x402
+  dispatcher, Tempo gate and card gate, each through `sharedClaimRequired`) on a long-running or
+  composite route (`isLongRunningSlug`), and on any route while another container may be serving
+  (`src/replay-topology.js`: more than one replica configured, inside `DEPLOY_OVERLAP_SECONDS` of
+  listen, default 120, anchored by `markListening` from the listen callback, else import time, or
+  draining, read from `drainSignal()`); a lone container past that window serves fast routes on a
+  per-process claim, so a store outage does not stop sales. A settled 200's consumed mark keeps the
+  guard's default hold; only a grant that was not settled (`grantedUnsettled` in
+  `src/hangup-settlement.js`: a forgiven hang-up, a first-call allowance) is held to the
+  authorization's own `validBefore` plus a margin, since that authorization is still live on chain
+  (`scripts/test-replay-consumed-hold.js`, on Redis).
+- **Store deadlines:** `src/loop-deadline.js` (`withLoopTimeout`, `withLoopDeadline`, `loopDeadline`)
+  bounds every Redis wait (shared limits, the hang-up ticket, the spend reserve, journals,
+  idempotency, the first-call allowance, the shared Databento and Nominatim reads, the cache, the
+  database ping, lease release) in loop time: a deadline re-arms once for time the loop was held
+  and expires only after a poll phase, so an answer that landed during boot work is read, not
+  booked as a store that did not answer (`scripts/test-loop-deadline.js`, `test-loop-deadline-sites.js`).
 - **Per-chain price floors:** `src/network-floors.js`. Every accept is priced through
   `priceForNetwork` (`src/payments.js`: list or per-request quote, plus the chain's
   `NETWORK_PRICE_PREMIUMS` premium, raised to its floor). eip155:4663 has a static floor
@@ -295,9 +318,10 @@ heartbeat page on it under one issue that closes when nothing is owed.
   `AVM_SPONSORSHIP_REFUSAL_HOLD_MS`; published on `/api/rails`, the only excuse the canaries
   accept for a missing sub-cent accept; `AVM_SUBCENT_GATE=off`).
 - **First-call allowance:** `src/first-call-allowance.js`, off unless `FIRST_CALL_ALLOWANCE=on`: a wallet with no paid sale gets one unsettled first call (x402 EVM exact, a flagship or `FIRST_CALL_ALLOWANCE_SLUGS` route at or under `FIRST_CALL_ALLOWANCE_MAX_USD`), inside `FIRST_CALL_ALLOWANCE_DAILY_USD` and `FIRST_CALL_ALLOWANCE_IP_PER_DAY` claimed on Redis before a balance read bounded by `FIRST_CALL_ALLOWANCE_BALANCE_MS` (default 1000); a call asking for a share link is never granted; the wallet key expires (`FIRST_CALL_ALLOWANCE_WALLET_TTL_DAYS`, default 400; a claim after 30 minutes), the state record does not; an onBeforeSettle `skip` leaves its 200 unsettled and unbooked; figures on `/__operator/refunds.json`. The `firstCallAllowance` word on `/api/gateway-status` (on, spent, unavailable) pages nothing: a store that does not answer grants nothing, so every call is paid as usual.
-- **Front door:** `src/front-door.js` writes the three lines that lead `/llms.txt`, `/agents.md`,
-  `server.describe` and the unpaid 402 body; the access line names coins and wires from the rails
-  list and the MPP config. `FRONT_DOOR_402=off` leaves the 402 body as the offer alone.
+- **Front door:** `src/front-door.js` writes the three lines that lead `/llms.txt`, `/agents.md`
+  and `server.describe`; the access line names coins and wires from the rails list and the MPP
+  config. The unpaid 402 body carries the access line and the `/agents.md` link only with
+  `FRONT_DOOR_402=on` (exactly); otherwise the body is the offer alone.
 - **Shareable answers:** `src/answer-share.js`, off unless `ANSWER_SHARE=on` (exactly); then web.answer takes
   `share=true` and writes a public page after a settled 200 (`/answers/:id`, record at `/answers/:id.json`);
   off, no surface offers it and existing pages serve until expiry. `ANSWER_SHARE_TTL_DAYS` (default 30)

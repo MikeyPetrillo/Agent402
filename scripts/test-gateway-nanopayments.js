@@ -46,6 +46,7 @@
 // settles nothing; the status words are words; the switch off, an unreadable
 // /supported and a /supported without a chain each remove the accept there
 // and leave the plain accepts alone.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 import { createServer, request as httpRequest } from "node:http";
 import { spawn } from "node:child_process";
@@ -1681,7 +1682,7 @@ await check("a handler 4xx never settles; settlement_pending answers 402 with th
     assert.equal(sales(port).length, 1, "no new sale");
     const refunds = await (await fetch(`${base}/__operator/refunds.json?status=all`, { headers: { Authorization: `Bearer ${OP}` } })).json();
     assert.equal((refunds.refunds || []).length, 0, "nothing owed");
-    assert.match(log.text, /NOT CHARGED: client closed the connection/);
+    assert.match(log.text, /SETTLE WITHHELD: client closed the connection/);
     assert.ok(!leaks(log.text));
   } finally { proc.kill("SIGKILL"); st.gw = "ok"; st.gwVerifyDelayMs = 0; }
 });

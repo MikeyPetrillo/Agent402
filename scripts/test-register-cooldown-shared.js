@@ -4,6 +4,7 @@
 // container honours a window the first one opened. Two module instances stand
 // in for two containers; in memory mode they share one store, as two
 // containers share Redis. Offline: stubbed fetch, injected crawler.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.X402_INDEX_CRAWL = "off";
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };

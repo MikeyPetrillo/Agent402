@@ -17,6 +17,7 @@
 //     words) answers the buyer as insufficient-funds with a fund-wallet retry,
 //     for a credential that carries no EVM payer, and the sweep reads that 402
 //     as its own wallet being unfunded, never as a rail failure.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 
 let pass = 0, fail = 0;

@@ -38,12 +38,35 @@ const LOCAL_MAX = 100_000;
 // a settle: each command gets this long, then the claim is made in this
 // process (the same fallback as no Redis at all).
 export const COMMAND_DEADLINE_MS = Number(process.env.SETTLE_CLAIM_DEADLINE_MS) > 0 ? Number(process.env.SETTLE_CLAIM_DEADLINE_MS) : 250;
+// The deadline measures Redis, not this process. When the event loop was
+// blocked (a GC pause, a synchronous load) the timer fires late, in the timers
+// phase that runs BEFORE the poll phase reads a reply that arrived during the
+// block. Rejecting there made a claim another replica already holds (SET NX
+// answered "no") read as "no answer", and the local fallback then claimed it
+// here too: one transfer served by two replicas. So the rejection waits for
+// the poll phase (setImmediate), and a timer that fired late re-arms a full
+// deadline from now, at most STALL_REARMS times.
+const STALL_REARMS = 2;
 function within(p) {
-  let timer;
+  let timer, immediate;
   return Promise.race([
     p,
-    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`no answer in ${COMMAND_DEADLINE_MS} ms`)), COMMAND_DEADLINE_MS); timer.unref?.(); }),
-  ]).finally(() => clearTimeout(timer));
+    new Promise((_, reject) => {
+      let rearms = 0;
+      const arm = () => {
+        const due = Date.now() + COMMAND_DEADLINE_MS;
+        timer = setTimeout(() => {
+          const late = Date.now() - due;
+          if (late > COMMAND_DEADLINE_MS / 2 && rearms < STALL_REARMS) { rearms++; arm(); return; }
+          // Not unref'd: an unref'd immediate would wait for the next other
+          // event before the check phase ran it.
+          immediate = setImmediate(() => reject(new Error(`no answer in ${COMMAND_DEADLINE_MS} ms`)));
+        }, COMMAND_DEADLINE_MS);
+        timer.unref?.();
+      };
+      arm();
+    }),
+  ]).finally(() => { clearTimeout(timer); if (immediate) clearImmediate(immediate); });
 }
 
 const local = new Map(); // key -> { holder, until }
@@ -73,6 +96,16 @@ export async function claimSettlementKey(key, holder, { ttlSeconds = SETTLED_TTL
   if (c) {
     try {
       const k = PREFIX + key;
+      // A claim this process made while Redis was not answering (still
+      // connecting at boot, or past a command deadline) lives only here. It
+      // still holds the key: it is written to Redis for the other replicas,
+      // and another holder is refused, so one key never has two owners in
+      // one process because the backend changed between two claims.
+      const mine = localGet(key, now);
+      if (mine && mine.holder !== holder) {
+        await within(c.set(k, mine.holder, { NX: true, EX: Math.max(1, Math.ceil((mine.until - now) / 1000)) })).catch(() => {});
+        return { claimed: false, holder: mine.holder };
+      }
       if (await within(c.set(k, holder, { NX: true, EX: ttlSeconds }))) {
         localSet(key, holder, ttlSeconds, now);
         return { claimed: true, holder };

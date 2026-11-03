@@ -7,7 +7,7 @@ import { scheduleBazaarRouteCheck, withBazaarHidden } from "./bazaar-route-check
 import { HTTPFacilitatorClient, x402ResourceServer } from "@x402/core/server";
 import { installAcceptOutputSchema, withOutputSchemaOnFirstAccept, outputSchemaFromExtensions, acceptOutputSchemaEnabled } from "./accept-output-schema.js";
 import { avmSubcentGateEnabled, installAvmSubcentGate, noteAvmSettleRefusal, startAvmSponsorshipRefresher, REFRESH_MS as AVM_SPONSORSHIP_REFRESH_MS } from "./avm-sponsorship.js";
-import { isBillingRefusalReceipt } from "./payment-reject.js";
+import { isBillingRefusalReceipt, pendingSettleRefusal, withPendingSettleRefusal } from "./payment-reject.js";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { UptoEvmScheme } from "@x402/evm/upto/server";
 import { pinFacilitatorSigners } from "./upto-signer.js";
@@ -35,11 +35,11 @@ import { x402EvmOnly, RAILS } from "./rails.js";
 import { networkPriceFloors, applyNetworkFloor, networkFloorUsd } from "./network-floors.js";
 import { installFacilitatorDiagnostics, labelFacilitatorErrors } from "./facilitator-diagnostics.js";
 import { isAlreadyOnChainSettleError, recoverAlreadyOnChain } from "./settle-onchain-proof.js";
-import { pendingSettleApplies, confirmPendingSettle, notePendingSettleAnswers, takePendingAnswers, peekPendingAnswers } from "./pending-settle.js";
+import { pendingSettleApplies, confirmPendingSettle, notePendingSettleAnswers, takePendingAnswers, peekPendingAnswers, pendingSettleTxOf, pendingTxsOf } from "./pending-settle.js";
 import { registerSettlementClaimHooks, registerSettlementClaimRelease, recoveredTxHeldElsewhere } from "./settlement-claims.js";
 import { registerFirstCallAllowanceSettleHook } from "./first-call-allowance.js";
 import { registerLateSettleHook } from "./late-settlements.js";
-import { chargeCancelledForClientGone, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
+import { chargeCancelledForClientGone, registerSettleSentHook, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
 import { markCoveredRunSettled } from "./inflight-cover.js";
 import { ARC_CAIP2, ARC_USDC, ARC_PROFILE, CIRCLE_LABEL, CircleFacilitatorClient, circleClientFromEnv, circleKeyConfigured, withoutArcKinds, arcContractWalletsEnabled, isContractWalletPayment, CIRCLE_EVM_LABEL, CIRCLE_EVM_FALLBACK_NETWORKS, CIRCLE_EVM_FALLBACK_PROFILES, circleEvmFallbackEnabled, circleEvmFallbackFromEnv } from "./circle-facilitator.js";
 import { markGatedRailOffered } from "./gated-rails.js";
@@ -821,6 +821,11 @@ export function boundDiscoveryBlock(block, maxBytes = BAZAAR_DISCOVERY_MAX_BYTES
 export const CHALLENGE_VARIABLE_MAX_BYTES = Number(process.env.CHALLENGE_VARIABLE_MAX_BYTES) || 1_900;
 export const CHALLENGE_SHORT_DESCRIPTION_MAX = 300;
 const LONG_EXAMPLE_STRING = 200;
+// A shortened input string is a placeholder, not a value: a buyer or a sweep
+// that replays the 402's example must take the full one from /openapi.json
+// (scripts/lib/replayable-example.js), or the tool answers 400.
+const SHORTENED_EXAMPLE_RE = /^<\d+ characters; the full example is in \/openapi\.json>$/;
+export const isShortenedExampleString = (v) => typeof v === "string" && SHORTENED_EXAMPLE_RE.test(v);
 function shortExampleStrings(v) {
   if (typeof v === "string") return v.length > LONG_EXAMPLE_STRING ? `<${v.length} characters; the full example is in /openapi.json>` : v;
   if (Array.isArray(v)) return v.map(shortExampleStrings);
@@ -1998,6 +2003,11 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // the authorization; the release runs after the failure hooks, so it fires
   // only when nothing recovered the payment.
   registerSettlementClaimHooks(server);
+  // The charge leaves here: the last hook that can abort or skip a settle is
+  // the claim above, so a request this hook sees is one whose facilitator
+  // call follows (src/hangup-settlement.js markSettleSent). Nothing that can
+  // end the chain may be registered after it.
+  registerSettleSentHook(server);
   registerSettlementClaimRelease(server);
   // A settle failure that names a transaction may still land: booked and
   // read from the chain, and owed if it did (src/late-settlements.js).
@@ -2841,9 +2851,10 @@ export async function startFacilitatorGasCheck({ network, urls, ownSigners = [],
   return tick;
 }
 
-/** A facilitator's host, counted by the failure monitor as "facilitator:<host>". */
-function registerFacilitatorUpstream(url) {
-  try { toolFailureMonitor().registerUpstreamHost(url, `facilitator:${new URL(String(url)).host}`); } catch { /* not a URL */ }
+/** A facilitator's host, counted by the failure monitor as "facilitator:<host>"
+ *  (only calls under its URL's path, so a data API on the same host is not). */
+export function registerFacilitatorUpstream(url) {
+  try { toolFailureMonitor().registerUpstreamHost(url, `facilitator:${new URL(String(url)).host}`, { byPath: true }); } catch { /* not a URL */ }
 }
 
 export function registerFacilitatorFailureHooks(server, payAiClient, solvadorClient = null, fallbackOverrides = null, { outageFor = () => null } = {}) {
@@ -3048,7 +3059,10 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
           if (isRetryableSettleRefusal(refusal, ctx?.requirements?.network)) { revertOnly = !isPreBroadcastSettleRejection(refusal); continue; }
           // The chain stops here. A refusal that names a transaction may still
           // land: the late-settlement book reads it (src/late-settlements.js).
-          // An ambiguous one from a listed facilitator is read on chain first.
+          // A pending answer with a transaction is read on chain first, within
+          // the same bounds as the primary's; an ambiguous one from a listed
+          // facilitator goes to the network's outage read.
+          { const o = await settleAfterFallbackPending(ctx, refusal, name); if (o) return o; }
           if (!own) { const o = await settleAfterAmbiguous(ctx, refusal, name, outageFor); if (o) return o; }
           noteLateTx(ctx, result?.transaction, name);
           return;
@@ -3083,6 +3097,7 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
         // mean the transfer is already on-chain — trying anyone else could
         // charge the buyer twice, so the chain STOPS.
         if (!isRetryableSettleRefusal(err, ctx?.requirements?.network)) {
+          { const o = await settleAfterFallbackPending(ctx, err, name); if (o) return o; }
           if (!own) { const o = await settleAfterAmbiguous(ctx, err, name, outageFor); if (o) return o; }
           noteLateTx(ctx, err?.transaction, name);
           return;
@@ -3103,16 +3118,25 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
  * when the failure stands (the late-settlement book then books every noted
  * transaction).
  */
-async function settleAfterPending(ctx) {
+async function settleAfterPending(ctx, { error = null, via = null } = {}) {
   const network = ctx?.requirements?.network;
+  // A fallback's pending answer is read through the same path as the
+  // primary's: its refusal stands in for the failure the hook was given (so
+  // its transaction is read beside every noted one), and its outcome is
+  // counted under the fallback's label.
+  const readCtx = error ? { ...ctx, error } : ctx;
   const notes = peekPendingAnswers(ctx?.paymentPayload);
-  const facilitator = pendingFacilitatorOf(notes, ctx, network);
+  const facilitator = via || pendingFacilitatorOf(notes, ctx, network);
   const count = (outcome) => { try { toolFailureMonitor().notePendingSettle({ network, facilitator, outcome }); } catch { /* bookkeeping only */ } };
   let r;
-  try { r = await confirmPendingSettle(ctx); } catch (e) { r = { recovered: false, code: "rpcError", reason: `receipt read errored: ${String(e?.message || e).slice(0, 120)}` }; }
+  try { r = await confirmPendingSettle(readCtx); } catch (e) { r = { recovered: false, code: "rpcError", reason: `receipt read errored: ${String(e?.message || e).slice(0, 120)}` }; }
   if (!r.recovered) {
     if (r.code !== "notApplicable") count(r.code);
-    console.warn(`[payments] ${network} pending settle not recovered: ${r.reason}; each noted transaction is booked until it is read on chain`);
+    console.warn(`[payments] ${network} pending settle${via ? ` (${via} fallback)` : ""} not recovered: ${r.reason}; each noted transaction is booked until it is read on chain`);
+    // The buyer's 402 says the transfer may still land and is then owed,
+    // and names each noted transaction. Not when the transfer is already a
+    // sale (it answered another request) or nothing was read at all.
+    if (!PENDING_REFUSAL_SILENT.has(r.code)) explainPendingRefusal(ctx, network, pendingTxsOf(readCtx));
     return undefined;
   }
   if (await recoveredTxHeldElsewhere(ctx, r.result)) {
@@ -3125,6 +3149,54 @@ async function settleAfterPending(ctx) {
   releaseCoverOnSettled(ctx, r.result);
   console.warn(`[payments] recovered ${network} settlement after a pending answer: tx ${r.result.transaction} (read on chain)`);
   return { recovered: true, result: r.result };
+}
+
+/** A fallback's refusal that is a pending answer naming a transaction, read
+ *  on chain like the primary's (src/pending-settle.js); undefined when it is
+ *  not one, or when its transfer is not proven (the chain then stops as it
+ *  always did, and the late-settlement book books the transaction). */
+async function settleAfterFallbackPending(ctx, refusal, via) {
+  if (isBatchedCtx(ctx) || !pendingSettleTxOf(refusal)) return undefined;
+  if (!pendingSettleApplies({ ...ctx, error: refusal })) return undefined;
+  return settleAfterPending(ctx, { error: refusal, via });
+}
+
+// Unrecovered outcomes whose 402 carries no pending explanation: nothing was
+// read, or the transfer is already a sale or held by another request.
+const PENDING_REFUSAL_SILENT = new Set(["notApplicable", "alreadySold", "heldElsewhere"]);
+
+/**
+ * Mark this request's settle-failure 402 with the unconfirmed-settlement
+ * explanation (src/payment-reject.js pendingSettleRefusal): the response's
+ * send is wrapped so a JSON 402 body gets the reason, hint, network and the
+ * noted transactions. It runs last, after the verify hint and the PoW hint
+ * shaped the body, so a primary's quota explanation ("nothing was charged")
+ * never stands beside a transfer that may still land. The PAYMENT-RESPONSE
+ * header is not touched, and any other status goes out unchanged.
+ */
+function explainPendingRefusal(ctx, network, txs) {
+  const req = ctx?.transportContext?.request?.adapter?.req;
+  const res = req?.res;
+  if (!res || typeof res.send !== "function") return;
+  const refusal = pendingSettleRefusal({ network, transactions: txs });
+  if (!refusal) return;
+  req.__a402PendingRefusal = refusal;
+  if (res.__a402PendingRefusalWrapped) return;
+  res.__a402PendingRefusalWrapped = true;
+  const origSend = res.send;
+  res.send = function pendingExplainedSend(chunk) {
+    try {
+      const r = req.__a402PendingRefusal;
+      if (r && res.statusCode === 402 && !res.headersSent && typeof chunk === "string" && chunk.trimStart().startsWith("{")) {
+        const body = JSON.parse(chunk);
+        if (body && typeof body === "object" && !Array.isArray(body)) {
+          chunk = JSON.stringify(withPendingSettleRefusal(body, r));
+          req.__paymentRejectReason = r.reason;
+        }
+      }
+    } catch { /* an explanation must never break a 402 */ }
+    return origSend.call(this, chunk);
+  };
 }
 
 /** The facilitator a payment's pending answers came from, as the failure

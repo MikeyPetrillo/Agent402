@@ -11,6 +11,7 @@
 //      fewer results than a plain top-k. The local catalog is exempt.
 //
 // Offline, no server, no network: seeds the in-memory cache via _cacheForTests().
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { routeQuery, _cacheForTests } from "../src/x402-index.js";
 
 const fail = (m) => { console.error("FAIL:", m); process.exit(1); };

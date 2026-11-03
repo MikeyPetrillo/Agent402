@@ -13,6 +13,8 @@
 // src/db-probe.js at init time). Cached for 60 s so a poll cannot become a
 // connection storm against a database that is already struggling.
 
+import { withLoopTimeout } from "./loop-deadline.js";
+
 const STATUS_CACHE_MS = 60_000;
 // A FAILED reading is cached only briefly. Both observers outside production
 // confirm an alarm with a second reading 20-30 s after the first, and with a
@@ -31,10 +33,10 @@ const PING_TIMEOUT_MS = 12_000;
 
 let cache = null; // { at, value }
 
+// Loop time (src/loop-deadline.js): a ping answered while a stall held the
+// loop is read, not reported as a database that did not answer.
 function withTimeout(promise, ms) {
-  let timer;
-  const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("timeout")), ms); });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+  return withLoopTimeout(promise, ms, () => new Error("timeout"), { ref: true });
 }
 
 // `ping` resolves when `SELECT 1` answered; rejects/throws otherwise; returns

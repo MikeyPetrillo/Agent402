@@ -19,6 +19,7 @@
 // Offline: placeholder hosts only, the crawler is off, nothing leaves the machine.
 //
 //   node scripts/test-router-people-data.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.X402_INDEX_CRAWL = "off";
 process.env.ROUTER_WORKERS = "1";
 import assert from "node:assert/strict";

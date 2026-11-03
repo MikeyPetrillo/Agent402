@@ -147,7 +147,7 @@ export function needsCaller(host) {
 }
 
 let outcomeObserver = null;
-/** One observer of each outbound call's outcome: fn(host, promise, init). */
+/** One observer of each outbound call's outcome: fn(host, promise, init, path). */
 export function setEgressOutcomeObserver(fn) { outcomeObserver = typeof fn === "function" ? fn : null; }
 
 /** Install the hooks. Idempotent; safe to call once at boot. */
@@ -159,10 +159,12 @@ export function installEgressMeter() {
   if (typeof origFetch === "function") {
     globalThis.fetch = function meteredFetch(input, init) {
       let h = "";
+      let path = null;
       try {
-        if (typeof input === "string") h = new URL(input).host;
-        else if (input instanceof URL) h = input.host;
-        else if (input && typeof input.url === "string") h = new URL(input.url).host;
+        const u = typeof input === "string" ? new URL(input)
+          : input instanceof URL ? input
+          : input && typeof input.url === "string" ? new URL(input.url) : null;
+        if (u) { h = u.host; path = u.pathname; }
         // Lazy: the stack is only materialised while this host still needs
         // attribution. Building it unconditionally is what slowed boot.
         if (h) recordEgress(h, needsCaller(h) ? captureStack : null);
@@ -174,7 +176,7 @@ export function installEgressMeter() {
       const p = origFetch.apply(this, arguments);
       // The outcome observer (src/tool-failure-monitor.js) sees the host and
       // the promise; it attaches its own handlers and never changes either.
-      if (outcomeObserver && h) { try { outcomeObserver(h, p, init); } catch { /* observing must never break a request */ } }
+      if (outcomeObserver && h) { try { outcomeObserver(h, p, init, path); } catch { /* observing must never break a request */ } }
       return p;
     };
   }

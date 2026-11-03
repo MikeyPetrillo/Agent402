@@ -2,6 +2,7 @@
 // hands out a random hostname per session, so a dead tunnel never comes back:
 // its slot is released after days (settled or not), and tunnels may hold only
 // a share of the slots, so live ones cannot fill the door for stable sellers.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import {
   isEphemeralTunnelOrigin, tunnelSubmissionCap, selectReleasableOrigins,
   registerOrigin, __testResetSubmitted, __testSetSubmittedCap,

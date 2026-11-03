@@ -24,6 +24,7 @@
 // Wherever the price check is on the request path it runs BEFORE the read, so
 // an over-bound query is refused without being read. A warmer pre-read counts
 // every upstream call it makes. The self-check's quote is not demand.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import dnsPromises from "node:dns/promises";
 import { syncBuiltinESMExports } from "node:module";
 

@@ -3,6 +3,14 @@
 // feeds: detail mode on the credit counter, the primed proof cache, the
 // index's Solana payTo list, ranking, stale-on-error, persistence. Offline: a
 // stub Solana RPC serves token accounts, signatures and parsed transactions.
+// The board's store is checked through its file (written, read back, and
+// rewritten to simulate a restart). With a state database the same store is a
+// row named after the file's basename, which outlives the run and is read at
+// boot instead of the file; the Postgres path has its own suite
+// (test-board-scan-once-pg.js). This one runs on the file backend whatever
+// the calling shell exports.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import "./lib/file-mode.js";
 import { createServer } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";

@@ -7,6 +7,7 @@
 // rule. Booted (FREE_MODE, port 0): the public words carry only `status`, the
 // operator endpoint answers 404 without the token and the rows with it, and a
 // bespoke route's error answer is logged as a "[tool-error]" line.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import "./lib/file-mode.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -193,7 +194,8 @@ await check("the egress meter's observer feeds the monitor (5xx, timeout, networ
     const { installEgressMeter, setEgressOutcomeObserver } = await import("../src/egress-meter.js");
     installEgressMeter();
     const m = createToolFailureMonitor({ now: clock().now, env: {} });
-    setEgressOutcomeObserver((h, p, init) => m.observeFetch(h, p, init, "outside"));
+    const seenPaths = [];
+    setEgressOutcomeObserver((h, p, init, path) => { seenPaths.push(path); m.observeFetch(h, p, init, "outside", path); });
     assert.equal((await fetch("https://api.hyperliquid.xyz/five")).status, 503);
     await assert.rejects(fetch("https://api.hyperliquid.xyz/slow"), /timed out/);
     await assert.rejects(fetch("https://api.hyperliquid.xyz/refused"), /fetch failed/);
@@ -203,8 +205,39 @@ await check("the egress meter's observer feeds the monitor (5xx, timeout, networ
     const r = await m.report();
     assert.equal(r.upstreams.length, 1);
     assert.deepEqual(r.upstreams[0].hour.outside, { ok: 1, s5xx: 1, timeout: 1, network: 1, throttled: 0, aborted: 0 });
+    assert.deepEqual(seenPaths, ["/five", "/slow", "/refused", "/ok", "/five"], "the observer is handed each call's path");
     setEgressOutcomeObserver(null);
   } finally { globalThis.fetch = realFetch; }
+});
+
+await check("a facilitator registered by path names only its own calls; the data API on its host is cdp-data", async () => {
+  {
+    const m = createToolFailureMonitor({ now: clock().now, env: {} });
+    assert.ok(m.registerUpstreamHost("https://api.cdp.coinbase.com/platform/v2/x402", "facilitator:api.cdp.coinbase.com", { byPath: true }));
+    assert.equal(m.upstreamNameOf("api.cdp.coinbase.com", "/platform/v2/x402/settle"), "facilitator:api.cdp.coinbase.com");
+    assert.equal(m.upstreamNameOf("api.cdp.coinbase.com", "/platform/v2/x402"), "facilitator:api.cdp.coinbase.com");
+    assert.equal(m.upstreamNameOf("api.cdp.coinbase.com", "/platform/v2/x402x"), "cdp-data", "a sibling path is not under the prefix");
+    assert.equal(m.upstreamNameOf("api.cdp.coinbase.com", "/platform/v2/data/query/run"), "cdp-data");
+    assert.equal(m.upstreamNameOf("api.cdp.coinbase.com"), "facilitator:api.cdp.coinbase.com", "a host-only caller (a pending answer) reads the facilitator");
+    const call = (path, status) => m.observeFetch("api.cdp.coinbase.com", Promise.resolve(new Response("x", { status })), {}, "outside", path);
+    for (let i = 0; i < 3; i++) call("/platform/v2/data/query/run", 502);
+    call("/platform/v2/x402/settle", 200);
+    await new Promise((r) => setTimeout(r, 10));
+    const r = await m.report();
+    const by = Object.fromEntries(r.upstreams.map((u) => [u.upstream, u.hour.outside]));
+    assert.deepEqual(by["cdp-data"], { ok: 0, s5xx: 3, timeout: 0, network: 0, throttled: 0, aborted: 0 }, "data-API 502s count on cdp-data");
+    assert.deepEqual(by["facilitator:api.cdp.coinbase.com"], { ok: 1, s5xx: 0, timeout: 0, network: 0, throttled: 0, aborted: 0 }, "the facilitator keeps only its own calls");
+  }
+});
+
+await check("payments registers the CDP facilitator by path: its data API on the same host is not the facilitator", async () => {
+  const { registerFacilitatorUpstream } = await import("../src/payments.js");
+  const { CDP_FACILITATOR_URL } = await import("../src/cdp-facilitator.js");
+  const { toolFailureMonitor } = await import("../src/tool-failure-monitor.js");
+  registerFacilitatorUpstream(CDP_FACILITATOR_URL);
+  const m = toolFailureMonitor();
+  assert.equal(m.upstreamNameOf("api.cdp.coinbase.com", "/platform/v2/x402/verify"), "facilitator:api.cdp.coinbase.com");
+  assert.equal(m.upstreamNameOf("api.cdp.coinbase.com", "/platform/v2/data/query/run"), "cdp-data");
 });
 
 await check("outcomes by arrival path: grouped, merged across replicas, detail only", async () => {

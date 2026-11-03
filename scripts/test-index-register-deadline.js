@@ -7,6 +7,7 @@
 // the background or on the next crawl, and the per-route probing stops
 // starting new probes once the registration's deadline has passed.
 // Offline: the stub origin is an injected crawler and a stubbed fetch.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.X402_INDEX_CRAWL = "off";
 process.env.STATE_DATABASE_URL = "";
 const { mkdtempSync, rmSync } = await import("node:fs");

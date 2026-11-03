@@ -29,6 +29,8 @@ import { REPO_URL, REPO_NAMESPACE } from "./repo-link.js";
 import { meteredSkip as countMeteredSkip } from "./metered-slugs.js";
 import { creditsSalesEnabled, creditsPrepaymentPhrase } from "./credits-sales.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
+import { settledHoldText, CONSUMED_VALIDITY_MARGIN_MS } from "./replay-guard.js";
+import { firstCallAllowanceEnabled } from "./first-call-allowance.js";
 const REPO = REPO_URL;
 const MAINTAINER = { name: "Havok Holdings LLC", email: "mike@agent402.tools", url: REPO };
 
@@ -206,6 +208,7 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
           "authorization.from (signed EVM payer address, public on-chain): the identity of wallet-scoped routes and the payer recorded for a sale",
           "the payment-identifier extension, when sent: an idempotency key bound to the credential, route and body",
           `the payment's nonce and network: as an idempotency key for a re-sent payment, held with the cached answer for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes`,
+          `a digest of the payment's network, signed payer and nonce: as a replay mark, kept about ${settledHoldText()} after a settled call; for a grant that was not settled (a forgiven hang-up${firstCallAllowanceEnabled() ? ", a served first-call allowance" : ""}), whose authorization is still live on chain, until the authorization's own validBefore plus ${Math.round(CONSUMED_VALIDITY_MARGIN_MS / 60000)} minutes, which can be long when the client signs a long validity window`,
           "the signers of a Solana payment transaction: to tell one paying wallet from another in failure telemetry, stored only as a keyed hash",
           "the source of a Tempo MPP credential (a did:pkh address): to classify the payer of a sale",
           "the payer named in the facilitator's settlement receipt: recorded with the sale when the payment itself names none we can verify",

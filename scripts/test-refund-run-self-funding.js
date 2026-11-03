@@ -30,6 +30,7 @@
 // dry run and the live run alike, and only the workflow's
 // include_lasting_hangups input releases it. A disconnect on an ordinary
 // route and a failed answer on a router tier are repaid as before.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import http from "node:http";
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";

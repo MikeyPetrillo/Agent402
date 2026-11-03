@@ -60,6 +60,7 @@ import {
 import { payerFromRequest, payerFromPaymentResponse, paymentHeaderOf } from "./payer.js";
 import { paidPriceUsd, quotedOnNetworkUsd, ticketPriceUsd } from "./paid-price.js";
 import { runInAbortableScope, abortInFlightComposites, installDrainAwareFetch, isDrainAbort, drainSignal } from "./drain-abort.js";
+import { sharedClaimRequired, markListening } from "./replay-topology.js";
 import { startSolanaLeaderboard, getSolanaLeaderboardSnapshot, solanaEvidenceByOrigin, SOLANA_WINDOWS, checkpointSolanaLeaderboard } from "./solana-leaderboard.js";
 import { creditFromTx as solanaCreditFromTx } from "./solana-buyer.js";
 import { historyAwareRpc, solanaHistoryStatus } from "./solana-history-rpc.js";
@@ -279,19 +280,32 @@ function recordHangupDebt(req, res) {
 // Every close-before-the-first-byte on a paid request ends here (the hang-up
 // hook's onUndelivered). Either the rail settled it - no forgiveness ticket,
 // a Tempo push credential, or the residual window - and recordHangupDebt
-// books it as owed, or the charge was cancelled, which is NOT a refund-ledger
-// debt and writes no row. The bound on cancelled charges is the forgiveness
-// budget the ticket was drawn from (src/hangup-forgiveness.js): the run was
-// recorded there as abandoned under the buyer's wallet, IP and globally the
-// moment the socket closed, and a paid success never clears that record.
+// books it as owed, or no settlement receipt proves a charge, which is NOT a
+// refund-ledger debt here and writes no row. Two different things reach the
+// second branch, and the log names which:
+//   - SETTLE WITHHELD: no settlement point found the buyer connected, so this
+//     server sent no settlement for it (a forgiven hang-up: the forgiveness
+//     budget is its bound, src/hangup-forgiveness.js; or the call never
+//     reached settlement);
+//   - SETTLE UNCONFIRMED: a settlement point found the buyer connected and
+//     sent the charge, then the buyer left and the settle did not confirm.
+//     The transfer may still land; a settle failure that names one is read
+//     from the chain and booked as owed (src/late-settlements.js), so this
+//     never says "not charged", and the run spends no forgiveness budget
+//     (the dispatcher's ticket is released, not abandoned).
 function recordHangupOutcome(req, res) {
   if (recordHangupDebt(req, res)) return;
   if (!ownTrue(req, "__a402Dispatched")) return; // nothing was accepted, or not a catalog route
   const started = Object.hasOwn(req, "__a402HandlerStarted") ? Number(req.__a402HandlerStarted) : 0;
   const rail = railOf(req) || "x402";
   const work = started > 0 ? `after ${Math.max(0, Date.now() - started)} ms of work` : "before the handler ran";
-  const why = hangupForgiven(req) ? "within the hang-up forgiveness budget" : "nothing was settled";
-  console.warn(`[hangup] NOT CHARGED: client closed the connection before the answer was ready (${req.method} ${req.path} rail=${rail} ${work}) - payment not settled; ${why}`);
+  const where = `client closed the connection before the answer was ready (${req.method} ${req.path} rail=${rail} ${work})`;
+  if (settleSentWhileConnected(req)) {
+    console.warn(`[hangup] SETTLE UNCONFIRMED: ${where} - settlement was sent before the close and did not confirm; a late transfer is booked as owed and repaid; no forgiveness budget spent`);
+    return;
+  }
+  const why = hangupForgiven(req) ? "within the hang-up forgiveness budget" : "the call never reached settlement";
+  console.warn(`[hangup] SETTLE WITHHELD: ${where} - no settlement sent; ${why}`);
 }
 // The keys a forgiveness ticket is counted under: the verified payer (signed
 // EIP-3009 payer, the Tempo sender the gate VERIFIED - see inspectTempoSender
@@ -333,7 +347,7 @@ import { asyncProfileOf, estimateBasisSeconds, asyncAdvice, asyncAdviceMiddlewar
 import { progressMiddleware, reportHandlerStarted } from "./job-progress.js";
 import { createTaskStore, taskDataDir } from "./mcp-tasks.js";
 import { admitCoveredRun } from "./inflight-cover.js";
-import { paymentReplayKey, createReplayGuard } from "./replay-guard.js";
+import { paymentReplayKey, paymentValidBeforeMs, createReplayGuard } from "./replay-guard.js";
 import { statusPage, statusSnapshot } from "./status.js";
 import { recordProbes, statusStoreFlush } from "./status-store.js";
 import { tollboothLandingPage } from "./tollbooth-landing.js";
@@ -633,7 +647,7 @@ import { setOgImageVersion, setNavIndexProvider, setDecideLive, ledgerShell, led
 import { ledgerHomePage } from "./ledger-home.js";
 import { ledgerCatalogPage } from "./ledger-catalog.js";
 import { ledgerPricingPage } from "./ledger-pricing.js";
-import { revenueSnapshot, withFreshRecent, revenueApiHandlers, revenuePage, railThroughput, stellarRail, stellarActivity, algorandRail, algorandActivity, evmActivity, solanaActivity, robinhoodActivity, baseActivityViaSql, evmActivityStatus, EVM as EVM_CHAINS, rpcCall, getJsonAcross, ALGORAND_INDEXER_BASES, OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
+import { revenueSnapshot, revenueWarmupEnabled, withFreshRecent, revenueApiHandlers, revenuePage, railThroughput, stellarRail, stellarActivity, algorandRail, algorandActivity, evmActivity, solanaActivity, robinhoodActivity, baseActivityViaSql, evmActivityStatus, EVM as EVM_CHAINS, rpcCall, getJsonAcross, ALGORAND_INDEXER_BASES, OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
 import { stellarPage, stellarSellers } from "./stellar-page.js";
 import { algorandPage, algorandSellers } from "./algorand-page.js";
 import { CHAIN_PAGES, marketSellers, marketOperatorCount, marketPage, marketPageAsync, marketPanelHtml, catalogPayableOn } from "./market-page.js";
@@ -818,7 +832,7 @@ function trialClientKey(ip) {
 }
 const TRIAL_LIMITS_LABEL = `${TRIAL_PER_TOOL_HOUR} per tool per hour, ${TRIAL_IP_HOUR} per hour per client`;
 const OX_TRIAL_LIMITS_LABEL = `${OX_TRIAL_PER_HOUR} per hour, ${OX_TRIAL_PER_DAY} per day per client`;
-import { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, clientGoneError, isClientGoneAbort, onSettleOutcome, onResponseEnd } from "./hangup-settlement.js";
+import { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, settleSentWhileConnected, grantedUnsettled, clientGoneError, isClientGoneAbort, onSettleOutcome, onResponseEnd } from "./hangup-settlement.js";
 import { firstCallAllowanceEnabled, claimFirstCallAllowance, finishFirstCallAllowance, firstCallAllowanceStatus, allowanceServed } from "./first-call-allowance.js";
 import { hangupForgiven, hangupTicketDenial, reserveHangupForgiveness, settleHangupTicket, hangupForgivenessStatus, loadHangupForgiveness, flushHangupForgiveness, hasLastingEffect } from "./hangup-forgiveness.js";
 import { createTempoPushDebts, tempoLedgerPayerPending, whenTempoLedgerPayerKnown } from "./tempo-push-debts.js";
@@ -1575,7 +1589,18 @@ function sellerToolVerdicts(detail) {
   const positiveUsd = (p) => { const n = priceUsdOf(p); return n != null && n > 0 ? n : null; };
   return detail.tools.map((t) => {
     const v = withDispatchFields({ ...t, seller: detail.origin, origin: detail.origin, routable: detail.routable, networks: Array.isArray(t.networks) && t.networks.length ? t.networks : detail.networks, priceUsd: positiveUsd(t.price), urlTemplate: /[{}]/.test(String(t.route || "")), payToByNetwork: detail.payToByNetwork, evmDomainByNetwork: detail.evmDomainByNetwork }, { rowLevel: true });
-    return { ...t, routerDispatchEligible: v.routerDispatchEligible, routerDispatchReason: v.routerDispatchReason, routerDispatchByChain: v.routerDispatchByChain };
+    // The affordance fields travel with the verdict: a row the router pays
+    // now (proven, or the unproven lane) says so, a row it would pay once the
+    // seller proves out says that, as the route rows do (2026-11-03: a
+    // seller read its own rows, saw no executeViaCallableNow, and asked).
+    const { executeVia, executeViaCallableNow, executeViaLane, executeViaWhenEligible } = v;
+    return {
+      ...t, routerDispatchEligible: v.routerDispatchEligible, routerDispatchReason: v.routerDispatchReason, routerDispatchByChain: v.routerDispatchByChain,
+      ...(executeVia !== undefined ? { executeVia } : {}),
+      ...(executeViaWhenEligible !== undefined ? { executeViaWhenEligible } : {}),
+      ...(executeViaCallableNow !== undefined ? { executeViaCallableNow } : {}),
+      ...(executeViaLane !== undefined ? { executeViaLane } : {}),
+    };
   });
 }
 // One seller row of a page's snapshot, labelled (the host's own row is not).
@@ -2402,7 +2427,7 @@ installEgressMeter();
     try { workerHost = new URL(workerUrlAtBoot).host; } catch { /* registerUpstreamHost already parsed it */ }
     setWorkerOutcomeObserver((kind, status) => { monitor.noteUpstream(workerHost, kind, { origin: originNow(), status }); });
   }
-  setEgressOutcomeObserver((host, p, init) => { monitor.observeFetch(host, p, init, originNow()); });
+  setEgressOutcomeObserver((host, p, init, path) => { monitor.observeFetch(host, p, init, originNow(), path); });
   // Identical answers (operator detail): live-data slugs only. A pure-CPU
   // tool answers the same bytes to the same input by design, and the memory
   // and identity-bound reads answer each payer from its own store.
@@ -4064,7 +4089,7 @@ const revenueWallets = () => ({
 // scanning while it is within SNAPSHOT_TTL, so this adds a scan only when the
 // cache has actually gone stale. Best-effort, unref'd; skipped when the crawler
 // is off (offline tests) to keep them from hitting live RPCs.
-if (process.env.X402_INDEX_CRAWL !== "off" && process.env.X402_SYNC_ON_START !== "false") {
+if (revenueWarmupEnabled()) {
   const revenueTick = () => { runAsJob("revenue-snapshot", () => revenueSnapshot(revenueWallets())).catch(() => {}); };
   setTimeout(revenueTick, 4_000).unref();
   setInterval(revenueTick, 5 * 60_000).unref();
@@ -10191,11 +10216,12 @@ if (FREE_MODE) {
       // A first-contact unpaid 402 leads its body with the front door
       // (src/front-door.js): the access line /llms.txt and /agents.md lead
       // with, and the /agents.md link (the recovery lines live there only).
-      // FRONT_DOOR_402=off leaves the body as the offer alone.
+      // Opt-in: only FRONT_DOOR_402=on adds it; otherwise the body is the
+      // offer alone.
       // Body only (the PAYMENT-REQUIRED header is untouched), behind the
       // proof-of-work altPayment where that is offered, and never on a
       // refused payment or proof, which keeps its own explanation.
-      if (firstContact && !req.header("x-pow-solution") && process.env.FRONT_DOOR_402 !== "off") {
+      if (firstContact && !req.header("x-pow-solution") && process.env.FRONT_DOOR_402 === "on") {
         const origJson = res.json.bind(res);
         res.json = (body) => {
           if (res.statusCode === 402 && body && typeof body === "object" && !Array.isArray(body) && !body.frontDoor) {
@@ -10501,11 +10527,18 @@ if (FREE_MODE) {
     // challenges, discovery crawls) return a null key and are never guarded.
     const replayKey = paymentReplayKey(req);
     if (replayKey) {
-      // A long-running or composite route needs the shared claim: with the
-      // shared store configured but unreachable it is refused here, before
-      // any payment is taken, rather than claimed on this replica alone.
+      // The shared claim is required whenever another container may be
+      // serving (src/replay-topology.js: more than one replica, a deploy's
+      // overlap window, a drain) and always on a long-running route: with the
+      // shared store configured but unreachable the call is refused here,
+      // before any payment is verified or settled. A per-process claim on two
+      // containers would let one signed payment run the handler on each. With
+      // one container, or no shared store, the per-process claim is the
+      // guarantee and a store outage does not stop sales.
       const replayDef = CATALOG[`${req.method} ${req.path}`];
-      const verdict = await replayGuard.begin(replayKey, undefined, { requireShared: !!replayDef && isLongRunningSlug(replayDef.slug) });
+      const verdict = await replayGuard.begin(replayKey, undefined, {
+        requireShared: sharedClaimRequired({ longRunning: !!replayDef && isLongRunningSlug(replayDef.slug), draining: drainSignal().aborted }),
+      });
       if (verdict === "unavailable") {
         res.setHeader("Retry-After", "30");
         return res.status(503).json({
@@ -10529,7 +10562,13 @@ if (FREE_MODE) {
       const finishGuard = () => {
         if (resolved) return;
         resolved = true;
-        if (res.statusCode === 200) replayGuard.settle(replayKey).catch(() => {});
+        // A grant that was not settled (a forgiven hang-up, a first-call
+        // allowance: src/hangup-settlement.js grantedUnsettled) leaves the
+        // authorization live on chain, so its mark is held until the
+        // authorization itself expires. A settled grant keeps the guard's
+        // default hold: its nonce is spent on chain, and a far validBefore
+        // held for every paid call would keep one long-lived key each.
+        if (res.statusCode === 200) replayGuard.settle(replayKey, undefined, grantedUnsettled(req) ? { validBeforeMs: paymentValidBeforeMs(req) } : {}).catch(() => {});
         else replayGuard.release(replayKey).catch(() => {}); // not granted (facilitator rejected, handler errored)
       };
       res.on("finish", finishGuard);
@@ -10904,7 +10943,10 @@ if (!FREE_MODE) {
     // once it exists; otherwise the ticket would hold its share of the budget
     // in this process until restart.
     let closed = false, reserved = false;
-    const settle = () => settleHangupTicket(req, { abandoned: clientGoneBeforeFirstByte(req) });
+    // Abandoned (budget spent) only when the charge is withheld: a buyer who
+    // left after a settlement point already sent the charge (the residual
+    // window) is the refund ledger's, and its ticket is released.
+    const settle = () => settleHangupTicket(req, { abandoned: clientGoneBeforeFirstByte(req) && !settleSentWhileConnected(req) });
     res.once("close", () => { closed = true; if (reserved) settle(); });
     // Priced at what this chain charges (the signed amount, or the gated
     // price through the chain's premium and floor), so a ticket holds the
@@ -11273,8 +11315,11 @@ for (const tool of ALL_KIT) {
           throw e;
         }
         // onSettleOutcome reports the final outcome whether or not the buyer
-        // stayed connected (src/hangup-settlement.js), so a settlement that
-        // fails after the buyer left counts here too.
+        // stayed connected (src/hangup-settlement.js): a settlement sent while
+        // the buyer was connected counts here when it fails after the buyer
+        // left, the same as one whose buyer stayed. What it skips is a charge
+        // the forgiveness budget cancelled, which was never sent; that budget
+        // is its bound.
         onSettleOutcome(req, res, () => {
           try {
             // A settled 200 is a settled outcome in the key's window (the
@@ -11716,6 +11761,9 @@ revenueAllTime({ awaitRebuild: true }).then((t) => { if (!__settledMemo.at) stor
 await Promise.race([ledgerFiguresBoot, new Promise((ok) => setTimeout(ok, LEDGER_FIGURES_BOOT_WAIT_MS).unref())]);
 const httpServer = app.listen(PORT, () => {
   listenedAt = Date.now();
+  // The deploy overlap window (src/replay-topology.js) is counted from here,
+  // not from the first import: a slow store load must not spend it.
+  markListening(listenedAt);
   // The bound port, so a PORT=0 boot (a test reading the port back) prints
   // the port the kernel assigned, not the 0 it asked with.
   const boundPort = httpServer.address()?.port ?? PORT;
@@ -11743,10 +11791,13 @@ if (process.env.LAZY_DEPS_WARM !== "off") {
 
 // Warm the revenue snapshot at boot (fire-and-forget): revenueSnapshot is
 // stale-while-revalidate, but a COLD cache makes the first post-deploy visitor
-// await a full 9-rail scan. Pre-warming removes that one latency hole — a
+// await a full 9-rail scan. Pre-warming removes that one latency hole; a
 // failed warmup is harmless (the request path falls back to today's behavior).
-// Skipped in FREE_MODE/CI boots where no wallet is configured.
-if (WALLET_ADDRESS) revenueSnapshot(revenueWallets()).catch(() => { /* warm-up only */ });
+// Skipped where no wallet is configured (FREE_MODE) and wherever the warm-up
+// is off (src/revenue-live.js revenueWarmupEnabled: X402_SYNC_ON_START=false,
+// X402_INDEX_CRAWL=off, REVENUE_WARMUP=off): a paid test boot configures a
+// wallet, and the scan used to reach every chain's public RPC from it.
+if (WALLET_ADDRESS && revenueWarmupEnabled()) revenueSnapshot(revenueWallets()).catch(() => { /* warm-up only */ });
 
 // All-time revenue ledger sync loop: self-gates on durable storage (the
 // production deployment) or REVENUE_LEDGER=true, so test/CI boots never touch
@@ -11931,8 +11982,10 @@ if (_monitors && process.env.MONITOR_SCHEDULER !== "off") bootStep("monitors.sta
 // Warm the revenue snapshot at boot (fire-and-forget): revenueSnapshot serves
 // stale-while-revalidating, so the only request that could ever block on the
 // full seven-rail RPC scan is the very first one after a deploy — this warm
-// takes even that hit off buyers' pageviews.
-bootStep("revenueSnapshot", () => revenueSnapshot(revenueWallets()).catch(() => { /* first pageview warms instead */ }));
+// takes even that hit off buyers' pageviews. Same switch as the warm-up above
+// (revenueWarmupEnabled): this step ran on every test boot and reached every
+// chain's public RPC from it.
+if (revenueWarmupEnabled()) bootStep("revenueSnapshot", () => revenueSnapshot(revenueWallets()).catch(() => { /* first pageview warms instead */ }));
 
 // x402 Leaderboard cache: warms once at boot, refreshes every 4 hours. Failures keep
 // the previous good snapshot rather than wiping it — a transient RPC outage

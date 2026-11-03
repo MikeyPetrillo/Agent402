@@ -11,6 +11,7 @@
 // example reaches no row, cache entry, persisted file, seller detail or log.
 // Offline: documents through the crawl seam, probes through the probe seam,
 // against loopback listeners on port 0.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.X402_INDEX_CRAWL = "off";
 process.env.X402_PAYWALL_PROBES_PER_CYCLE = "25";
 const { mkdtempSync, readFileSync, existsSync } = await import("node:fs");

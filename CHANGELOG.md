@@ -6,6 +6,95 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-03 (replay claims at a deploy, pending settles explained, sweeps follow jobs)
+Payments:
+- While another container may be serving (more than one replica configured,
+  the first 120 seconds after a container starts serving, set by
+  `DEPLOY_OVERLAP_SECONDS`, or a drain), a paid call on any route answers 503
+  with Retry-After when the shared payment store does not answer, before any
+  payment is verified or settled. A lone container past that window serves
+  fast routes on its own claim, so a store outage does not stop sales; a
+  long-running route needs the shared store as before.
+- A re-sent x402 payment is matched by its network, signed payer and nonce,
+  so two wallets or two networks signing the same nonce are two payments;
+  marks an earlier build wrote are still honored across a deploy.
+- A settle fallback that answers pending with a transaction is read on chain
+  like the primary's, and the call is served once the transfer to us is
+  proven. When no noted transaction is confirmed in time, the 402 says so:
+  reason `settlement-unconfirmed`, retry `watch-transaction`, the network and
+  the transactions to watch, and that a transfer which still lands is booked
+  as owed and repaid after on-chain proof. Listed on /x402-test; the
+  no-receipt exception on /agents.md, /llms-full.txt and the guides names
+  this case beside a timed-out settle and a disconnect during settle.
+- A buyer whose connection closes while its settlement is already in flight
+  spends no hang-up forgiveness budget: the log reads SETTLE UNCONFIRMED (a
+  late transfer is booked as owed) in place of NOT CHARGED, and SETTLE
+  WITHHELD when no settlement was sent.
+- A settlement sent while the buyer was connected is a settlement outcome
+  whether or not the buyer stays: one that fails after the buyer closes
+  counts toward the wallet's settle breaker and the composite guard like one
+  whose buyer stayed, and one that succeeds records the sale beside the owed
+  charge. Before, a close timed into the settle call left the run bounded by
+  neither the breaker nor the forgiveness budget. The "settlement sent" mark
+  is now set where the charge leaves: a settle the first-call allowance
+  skipped or the authorization claim refused is never read as sent, so that
+  hang-up spends forgiveness budget as an abandoned run and feeds the
+  breaker nothing.
+- The Tempo gate and the card gate require the shared replay claim on the
+  same rule as the x402 dispatcher: on a long-running route always, and on
+  every route while another container may be serving (more than one
+  replica, a deploy's overlap window, a drain). With the shared store
+  configured but unreachable, a Tempo pull or push credential or a card
+  credential is then refused 503 with `Retry-After` before the handler
+  runs, before a push transfer is claimed and before a card is captured;
+  past the window a lone container serves on its per-process claim. Before,
+  both gates took a per-process claim on a store failure, so one credential
+  sent to two containers could run twice (a push transfer is already
+  final).
+- A settled payment's consumed mark in the replay guard keeps the guard's
+  default hold (one hour). Only a grant that was not settled (a hang-up
+  the forgiveness budget forgave, a first-call allowance) is held to the
+  authorization's own `validBefore` plus a margin, since that
+  authorization is still live on chain. Before, every settled call was
+  held to its `validBefore`, one long-lived key per paid call for a client
+  signing long validity windows.
+- The privacy page says the replay mark is a digest of the payment's network,
+  signed payer and nonce, and how long it is kept: about an hour after a
+  settled call, and for a grant that was not settled (a forgiven hang-up, a
+  served first-call allowance) until the authorization's own validBefore
+  plus ten minutes. The `readsOnly` list under `payment.dataHandling` on
+  /.well-known/x402 names the same mark with the same hold.
+Tools:
+- An upstream read that would start with under 5 ms of its budget is refused
+  as the budget's deadline before any request leaves, instead of leaving with
+  a cap too small to use.
+Surfaces:
+- A seller's own rows on `/api/index?seller=` carry the same `executeVia`
+  fields as route rows (callable now, its lane, or when it becomes eligible).
+- html-frames' published example fits its 402 whole; a paid sweep that meets
+  an example the 402 shortened replays the full one from /openapi.json
+  instead of the placeholder.
+Operations:
+- The Bazaar keep-alive sweep follows a slow route to its settlement: a route
+  that refuses a synchronous paid call is called again with `Prefer:
+  respond-async` and its job polled at the Retry-After it names until it
+  succeeds or fails. A failed job's status and body are read from its error,
+  and it is never retried as a second paid job.
+- The deploy job validates the new build's flagship Bazaar listings after the
+  deploy is verified, keyless, up to three runs a minute apart: a clean run
+  passes, an INVALID run with no clean run fails the job, and three unreadable
+  runs warn.
+- Every shared-store wait (the hang-up ticket, the per-payer spend reserve,
+  journals, idempotency, the first-call store, the shared market-data and
+  geocoding reads, the cache, the database ping, lease release, the shared
+  limiters) counts loop time, so an answer that landed while the loop was
+  held is read before the deadline expires instead of being booked as a store
+  that did not answer.
+- The revenue snapshot's boot warm-ups (a scan of every rail over public
+  chain RPCs) are off under `X402_INDEX_CRAWL=off`, `X402_SYNC_ON_START=false`
+  or `REVENUE_WARMUP=off`; before, two of them ran on every boot that
+  configured a wallet, test boots included.
+
 ### 2026-11-03 (onchain-sql, metered chat, seller registration)
 Router and index:
 - Self-serve seller registration holds 4,000 submission slots (was 2,000,
@@ -15,15 +104,25 @@ Router and index:
   released); other origins after 30 days as before. A released seller's
   registration and tenure survive, and it re-registers into a free slot.
 Tools:
+- onchain-sql is $0.050 a call (was $0.020), and a call sends the query
+  service at most 4 queries: the query itself and up to 3 recovery runs (the
+  row-size measure, the filtered run, a small re-run). A call that reaches
+  the cap without an answer is the uncharged 422 with `hint: "narrow-query"`;
+  the original query is resent only once, and only when the measured rows
+  show its size was not the cause. The onchain-analyst pack follows the
+  tool's price.
 - onchain-sql: a query whose result is too large for the query service to
-  send (its instant internal error) is run again with LIMIT 10 (two
-  attempts, since a small result of this kind still fails now and then). Fewer
-  than 10 rows back is the whole result and is served complete; small rows
-  mean the error was not about size and the original is sent once more;
-  otherwise the 10 rows are served marked truncated (`recovered:
-  "result-size"`, `rowBytes`), with a note giving the row size and the
-  LIMIT that keeps an answer under about 500 KB. When even 10 rows do not
-  fit, the answer says to select fewer or narrower columns.
+  send (its instant internal error) is run again with LIMIT 10, again while
+  the call's query budget holds (a small result of this kind still fails now
+  and then). Fewer than 10 rows back is the whole result and is served
+  complete. Rows so small the whole result could not have been too large
+  mean the original is sent once more inside the budget and served whole;
+  refused again, or with no query left, the 10 rows are served marked
+  truncated (`recovered: "result-size"`, `rowBytes`, `resent` and
+  `refusedAgain` after a second refusal) with a note saying which.
+  Otherwise the 10 rows are served marked truncated with a note giving the
+  row size and the LIMIT that keeps an answer under about 500 KB. When even
+  10 rows do not fit, the answer says to select fewer or narrower columns.
 - onchain-sql: the query service refuses to send a result that holds a row
   over 64 KB (measured: a 65,520-byte row is sent, a 65,540-byte row is
   not, while ten 30 KB rows are). On that refusal the tool now measures the
@@ -76,9 +175,9 @@ Surfaces:
   catalog, listed at /api/pow), then pay per call in the stablecoins and
   over the wires this server offers (named from its live configuration);
   and when to use the service and when not to, linked to /agents.md.
-  server.describe's startHere.firstJob opens with the same first call. The
-  unpaid 402 body carries the access line and the /agents.md link. Rails and
-  wire detail follow unchanged.
+  server.describe's startHere.firstJob opens with the same first call. With
+  FRONT_DOOR_402=on, the unpaid 402 body also carries the access line and the
+  /agents.md link (off by default). Rails and wire detail follow unchanged.
 - New /agents.md (text/markdown, free): the front door, then "When a call
   fails" (four recovery lines, each scoped to where it holds), then how to
   connect, pay and find more tools. Linked from /llms.txt, listed in the

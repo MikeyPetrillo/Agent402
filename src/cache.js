@@ -20,6 +20,7 @@
 //     down a tool. Worst case it adds a few ms then we serve fresh.
 import { createHash } from "node:crypto";
 import { loadRedis } from "./lazy-redis.js";
+import { withLoopDeadline } from "./loop-deadline.js";
 
 // Mirror src/db-ssl.js for Redis: a plaintext redis:// URL is only acceptable
 // on Railway's private mesh; a public host must use rediss:// or the password,
@@ -188,10 +189,9 @@ export async function cacheGet(key) {
   try {
     const c = await getClient();
     if (!c) return null;
-    const v = await Promise.race([
-      c.get(key),
-      new Promise((resolve) => setTimeout(() => resolve(null), CACHE_READ_TIMEOUT_MS)),
-    ]);
+    // Loop time (src/loop-deadline.js): a hit that landed while the loop was
+    // held is read, not dropped for a fresh upstream call.
+    const v = await withLoopDeadline(c.get(key), CACHE_READ_TIMEOUT_MS, null);
     return v ? JSON.parse(v) : null;
   } catch (e) {
     return null;

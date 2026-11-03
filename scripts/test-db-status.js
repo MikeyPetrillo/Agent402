@@ -3,6 +3,7 @@
 // "unreachable" within the timeout, never a hang, (3) the 60 s cache, (4) the
 // public shape carries STATUS WORDS ONLY - no host, error text or latency -
 // and (5) the analytics backoff replaced the permanent latch.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 import { databasesStatus, resetDatabasesStatusCache } from "../src/db-status.js";
 

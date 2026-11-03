@@ -8,6 +8,7 @@
 // 2. cacheKeyFor separates any two calls that differ in any field (declared or
 //    not), keeps case, and does not collide on a shared long prefix.
 // Offline: imports the kits, no server, no Redis.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

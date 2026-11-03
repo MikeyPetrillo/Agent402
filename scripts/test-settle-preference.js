@@ -20,6 +20,7 @@
 //      facilitator is asked (the quoted feePayer no longer matches).
 //
 //   node scripts/test-settle-preference.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { isDeepStrictEqual } from "node:util";

@@ -3,6 +3,7 @@
 //   1. a tool's curated `aliases` score exactly like its slug (max, never additive),
 //   2. a query term under three characters matches whole tokens only - "ip" used
 //      to substring-match gzip / gunzip / html-strip and outrank every IP tool.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.X402_INDEX_CRAWL = "off";
 const { routeQuery } = await import("../src/x402-index.js");
 let pass = 0, fail = 0;

@@ -1,28 +1,55 @@
 // The replay guard while its shared store is configured but unreachable, on
-// the real server: a long-running or composite route is refused with a 503
-// and Retry-After before any payment is verified or settled, and a fast route
-// keeps the per-process fallback and is served and settled as usual.
-// Offline: a stub facilitator, and REDIS_URL naming a local port nothing
-// listens on.
+// the real server, as two containers would run it: TWO servers configured as
+// two replicas boot with a REDIS_URL naming a local port nothing listens on.
+// Every paid route (a long-running one and a fast one alike) is refused with
+// a 503 and Retry-After before any payment is verified or settled, so one
+// signed payment sent to both containers at once runs nowhere and reaches
+// the facilitator zero times (a per-process claim would let each container
+// run the handler and send it to the facilitator). A single container
+// (src/replay-topology.js) refuses a fast route only inside its deploy
+// overlap window; past it a fast route is served on the per-process claim,
+// so a store outage does not stop sales, and a long-running route is still
+// refused. Controls: the same kind of
+// payment is served and settled once by a server with NO shared store
+// configured (one process: the per-process claim is the guarantee), and,
+// when the caller provides a real REDIS_URL, two servers sharing that Redis
+// serve one signed payment sent to both at once exactly once.
+// Part 2 drives the REAL Tempo and card gates (src/mpp-tempo.js,
+// src/mpp-stripe.js) in this process against a shared store that throws:
+// inside the deploy overlap window a Tempo pull credential, a Tempo push
+// credential and a card credential are each refused 503 with Retry-After
+// before the handler runs, before a push transfer is claimed and before a
+// card is captured; past the window each is served on the per-process claim;
+// draining (the drain signal the x402 dispatcher reads) refuses them again.
+// Every booted server runs with X402_INDEX_CRAWL=off, which also turns the
+// revenue warm-up off (src/revenue-live.js revenueWarmupEnabled; the scan
+// reached every chain's public RPC from a test boot): the suite reads every
+// server's log for a chain read and fails on one.
+// Offline: a stub facilitator; Redis only for the optional live control.
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { randomBytes } from "node:crypto";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { getFreePorts } from "./lib/free-port.js";
 import { isLongRunningSlug } from "../src/composite-spend-guard.js";
 
-const [PORT, FAC_PORT, DEAD_REDIS] = await getFreePorts(3);
-const B = `http://127.0.0.1:${PORT}`;
+const LIVE_REDIS = String(process.env.REDIS_URL || "").trim();
+const [PORT_A, PORT_B, PORT_C, PORT_D, PORT_E, FAC_PORT, DEAD_REDIS, PORT_F, PORT_G] = await getFreePorts(9);
 const PAYER = "0x" + "4".repeat(40);
+const TMP = mkdtempSync(join(tmpdir(), "replay-outage-"));
 let pass = 0, failed = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { failed++; console.error(`FAIL - ${m}`); } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 let verifies = 0, settles = 0;
 const facilitator = createServer((req, res) => {
-  let body = ""; req.on("data", (c) => (body += c)); req.on("end", () => {
+  let body = ""; req.on("data", (c) => (body += c)); req.on("end", async () => {
     const reply = (obj) => { res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
     if (req.url === "/supported") return reply({ kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} });
-    if (req.url === "/verify") { verifies++; return reply({ isValid: true, payer: PAYER }); }
+    if (req.url === "/verify") { verifies++; await sleep(150); return reply({ isValid: true, payer: PAYER }); }
     if (req.url === "/settle") { settles++; return reply({ success: true, transaction: "0x" + randomBytes(32).toString("hex"), network: "eip155:8453", payer: PAYER }); }
     if (req.url === "/rpc") return reply({ jsonrpc: "2.0", id: 1, result: "0x0" });
     res.writeHead(404); res.end();
@@ -30,17 +57,38 @@ const facilitator = createServer((req, res) => {
 });
 await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
 
-const log = [];
-const proc = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
-    FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`,
-    CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYMENT_NETWORKS: "base", MPP_SECRET_KEY: "",
-    X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
-    STATS_ALLOW_EPHEMERAL: "true", REDIS_URL: `redis://127.0.0.1:${DEAD_REDIS}` },
-  stdio: ["ignore", "pipe", "pipe"],
-});
-const keep = (d) => { for (const l of String(d).split("\n")) if (l.trim()) log.push(l.slice(0, 300)); if (log.length > 80) log.splice(0, log.length - 80); };
-proc.stdout.on("data", keep); proc.stderr.on("data", keep);
+const procs = [];
+const logs = new Map();
+// A boot reader reaching a public chain RPC leaves one of these lines (the
+// revenue warm-up's getLogs sweep, the facilitator gas read, the late-settle
+// reconcile, the leaderboard scan). Kept per server for the whole run.
+const CHAIN_READ = /\[revenue\]|eth_getLogs|getLogs|\[facilitator-gas\]|\[late-settle\]|\[leaderboard\]/i;
+const chainReads = new Map();
+const bootedAt = Date.now();
+function boot(port, name, redisUrl, extra = {}) {
+  const dir = join(TMP, name);
+  mkdirSync(dir, { recursive: true });
+  const log = [];
+  logs.set(name, log);
+  chainReads.set(name, []);
+  const proc = spawn(process.execPath, ["src/server.js"], {
+    env: { ...process.env, PORT: String(port), FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
+      FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`,
+      CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYMENT_NETWORKS: "base", MPP_SECRET_KEY: "",
+      X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
+      STATS_ALLOW_EPHEMERAL: "true", STATE_DATABASE_URL: "", SALES_LEDGER_DB: join(dir, "sales.db"), REFUND_DB_DIR: dir,
+      REDIS_URL: redisUrl, ...extra },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const keep = (d) => { for (const l of String(d).split("\n")) if (l.trim()) { log.push(l.slice(0, 300)); if (CHAIN_READ.test(l)) chainReads.get(name).push(l.slice(0, 200)); } if (log.length > 80) log.splice(0, log.length - 80); };
+  proc.stdout.on("data", keep); proc.stderr.on("data", keep);
+  procs.push(proc);
+  return `http://127.0.0.1:${port}`;
+}
+async function waitUp(base) {
+  for (let i = 0; i < 240; i++) { try { if ((await fetch(`${base}/health`)).ok) return true; } catch { /* booting */ } await sleep(500); }
+  return false;
+}
 
 const credential = (accept) => Buffer.from(JSON.stringify({
   x402Version: 2, resource: accept.resource, accepted: accept,
@@ -49,56 +97,276 @@ const credential = (accept) => Buffer.from(JSON.stringify({
 const acceptOf = (r) => {
   try { return (JSON.parse(Buffer.from(r.headers.get("payment-required"), "base64").toString("utf8")).accepts || []).find((a) => a.network === "eip155:8453") || null; } catch { return null; }
 };
+const routeOf = (e) => { const [method, path] = String(e.route || `${e.method || "GET"} ${e.path || ""}`).split(" "); return { method, path }; };
+
+const A = boot(PORT_A, "a", `redis://127.0.0.1:${DEAD_REDIS}`, { RATE_LIMIT_REPLICAS: "2" });
+const Bsrv = boot(PORT_B, "b", `redis://127.0.0.1:${DEAD_REDIS}`, { RATE_LIMIT_REPLICAS: "2" });
+// One replica past its deploy overlap window, and one still inside it.
+const F = boot(PORT_F, "f", `redis://127.0.0.1:${DEAD_REDIS}`, { RATE_LIMIT_REPLICAS: "1", STATE_DB_REPLICAS: "", DEPLOY_OVERLAP_SECONDS: "0" });
+const G = boot(PORT_G, "g", `redis://127.0.0.1:${DEAD_REDIS}`, { RATE_LIMIT_REPLICAS: "1", STATE_DB_REPLICAS: "", DEPLOY_OVERLAP_SECONDS: "3600" });
+const C = boot(PORT_C, "c", "");
+const prefix = `outage-${process.pid}-${randomBytes(4).toString("hex")}`;
+const D = LIVE_REDIS ? boot(PORT_D, "d", LIVE_REDIS, { SHARED_LIMITS_PREFIX: prefix }) : null;
+const E = LIVE_REDIS ? boot(PORT_E, "e", LIVE_REDIS, { SHARED_LIMITS_PREFIX: prefix }) : null;
 
 try {
-  let up = false;
-  for (let i = 0; i < 120; i++) { try { if ((await fetch(`${B}/health`)).ok) { up = true; break; } } catch { /* booting */ } await sleep(500); }
-  ok(up, "the server booted with an unreachable shared store");
-  const pricing = await (await fetch(`${B}/api/pricing`)).json();
+  const ups = await Promise.all([A, Bsrv, C, D, E, F, G].filter(Boolean).map(waitUp));
+  ok(ups.every(Boolean), `every server booted (two with an unreachable shared store, one with none${LIVE_REDIS ? ", two on the live Redis" : ""})`);
+  if (!ups.every(Boolean)) { for (const [name, log] of logs) for (const l of log.slice(-12)) console.error(`  server ${name}:`, l); throw new Error("a server did not boot"); }
+  const pricing = await (await fetch(`${A}/api/pricing`)).json();
   const list = Array.isArray(pricing?.endpoints) ? pricing.endpoints : [];
-  const routeOf = (e) => { const [method, path] = String(e.route || `${e.method || "GET"} ${e.path || ""}`).split(" "); return { method, path }; };
 
   // A long-running route: refused before the paywall, nothing verified or settled.
   const slow = list.find((e) => isLongRunningSlug(e.slug) && routeOf(e).method === "POST");
   ok(!!slow, `found a long-running route (${slow?.slug})`);
   if (slow) {
     const { method, path } = routeOf(slow);
-    const unpaid = await fetch(`${B}${path}`, { method, headers: { "content-type": "application/json", prefer: "wait=600" }, body: "{}" });
+    const unpaid = await fetch(`${A}${path}`, { method, headers: { "content-type": "application/json", prefer: "wait=600" }, body: "{}" });
     const accept = acceptOf(unpaid);
     ok(unpaid.status === 402 && !!accept, `the long-running route quotes a Base payment (${unpaid.status})`);
     const v0 = verifies, s0 = settles;
-    const r = await fetch(`${B}${path}`, { method, headers: { "content-type": "application/json", prefer: "wait=600", "payment-signature": credential(accept || {}) }, body: "{}" });
+    const r = await fetch(`${A}${path}`, { method, headers: { "content-type": "application/json", prefer: "wait=600", "payment-signature": credential(accept || {}) }, body: "{}" });
     const body = await r.json().catch(() => ({}));
     ok(r.status === 503 && body.reason === "replay-store-unavailable", `a paid call to ${slow.slug} is refused while the shared store is out (${r.status} ${body.reason || body.error || ""})`);
     ok(r.headers.get("retry-after") === "30", `and says when to retry (Retry-After ${r.headers.get("retry-after")})`);
     ok(verifies === v0 && settles === s0, `nothing was verified or settled for it (verify +${verifies - v0}, settle +${settles - s0})`);
     // Routing ignores case and a trailing slash; so does the refusal.
     const v1 = verifies, s1 = settles;
-    const upper = await fetch(`${B}${path.toUpperCase()}/`, { method, headers: { "content-type": "application/json", prefer: "wait=600", "payment-signature": credential(accept || {}) }, body: "{}" });
+    const upper = await fetch(`${A}${path.toUpperCase()}/`, { method, headers: { "content-type": "application/json", prefer: "wait=600", "payment-signature": credential(accept || {}) }, body: "{}" });
     const ub = await upper.json().catch(() => ({}));
     ok(upper.status === 503 && ub.reason === "replay-store-unavailable" && verifies === v1 && settles === s1, `the same call on ${path.toUpperCase()}/ is refused the same way (${upper.status} ${ub.reason || ub.error || ""})`);
+    // A single container past its overlap window still refuses a long-running
+    // route: its run outlives the window.
+    const unpaidF = await fetch(`${F}${path}`, { method, headers: { "content-type": "application/json", prefer: "wait=600" }, body: "{}" });
+    const acceptF = acceptOf(unpaidF);
+    const v2 = verifies;
+    const rF = await fetch(`${F}${path}`, { method, headers: { "content-type": "application/json", prefer: "wait=600", "payment-signature": credential(acceptF || {}) }, body: "{}" });
+    const bF = await rF.json().catch(() => ({}));
+    ok(rF.status === 503 && bF.reason === "replay-store-unavailable" && verifies === v2, `one container past its window: a long-running route is still refused (${rF.status} ${bF.reason || ""})`);
   }
 
-  // A fast route: served on the per-process fallback and settled.
+  // A fast route: one signed payment sent to BOTH containers at once.
   const fast = list.find((e) => e.slug === "sql-guard");
   ok(!!fast, "found a fast wallet-only route");
   if (fast) {
     const { method, path } = routeOf(fast);
     const q = method === "GET" ? `?sql=${encodeURIComponent("SELECT 1")}` : "";
-    const send = (headers) => fetch(`${B}${path}${q}`, { method, headers: { "content-type": "application/json", ...headers }, ...(method === "GET" ? {} : { body: JSON.stringify({ sql: "SELECT 1" }) }) });
-    const accept = acceptOf(await send({}));
+    const send = (base, headers) => fetch(`${base}${path}${q}`, { method, headers: { "content-type": "application/json", ...headers }, ...(method === "GET" ? {} : { body: JSON.stringify({ sql: "SELECT 1" }) }) });
+    const accept = acceptOf(await send(A, {}));
     ok(!!accept, "the fast route quotes a Base payment");
-    const s0 = settles;
+
     const cred = credential(accept || {});
-    const r = await send({ "payment-signature": cred });
-    ok(r.status === 200 && settles === s0 + 1, `a paid call to ${fast.slug} is served and settled on the per-process fallback (${r.status}, settle +${settles - s0})`);
-    const again = await send({ "payment-signature": cred });
-    ok(again.status !== 200 || again.headers.get("x-replayed-answer") === "1", `the same payment does not buy a second run on this replica (${again.status})`);
+    const v0 = verifies, s0 = settles;
+    const [ra, rb] = await Promise.all([send(A, { "payment-signature": cred }), send(Bsrv, { "payment-signature": cred })]);
+    const [ba, bb] = await Promise.all([ra.json().catch(() => ({})), rb.json().catch(() => ({}))]);
+    ok(ra.status === 503 && rb.status === 503 && ba.reason === "replay-store-unavailable" && bb.reason === "replay-store-unavailable",
+      `shared store out: one payment sent to two containers is refused on both (${ra.status} ${ba.reason || ""}, ${rb.status} ${bb.reason || ""})`);
+    ok(ra.headers.get("retry-after") === "30" && rb.headers.get("retry-after") === "30", "and each says when to retry");
+    ok(verifies === v0 && settles === s0, `nothing reached the facilitator (verify +${verifies - v0}, settle +${settles - s0})`);
+
+    // Control: the same kind of payment on a server with no shared store
+    // configured is served and settled once, and buys no second run.
+    const credC = credential(accept || {});
+    const c0 = settles;
+    const rc = await send(C, { "payment-signature": credC });
+    ok(rc.status === 200 && settles === c0 + 1, `control: with no shared store configured the payment is served and settled (${rc.status}, settle +${settles - c0})`);
+    const againC = await send(C, { "payment-signature": credC });
+    ok(againC.status !== 200 || againC.headers.get("x-replayed-answer") === "1", `control: the same payment does not buy a second run there (${againC.status})`);
+    ok(settles === c0 + 1, "control: and is not settled again");
+
+    // One container past its overlap window: the fast route is served on the
+    // per-process claim (a store outage does not stop sales), once.
+    const credF = credential(accept || {});
+    const f0 = settles;
+    const rf = await send(F, { "payment-signature": credF });
+    ok(rf.status === 200 && settles === f0 + 1, `one container, store out, past the overlap window: the fast route is served and settled once (${rf.status}, settle +${settles - f0})`);
+    const againF = await send(F, { "payment-signature": credF });
+    ok((againF.status !== 200 || againF.headers.get("x-replayed-answer") === "1") && settles === f0 + 1, `and the same payment buys no second run there (${againF.status})`);
+    // ...while inside the window (an old container may still serve) it is refused.
+    const credG = credential(accept || {});
+    const g0 = verifies;
+    const rg = await send(G, { "payment-signature": credG });
+    const bg = await rg.json().catch(() => ({}));
+    ok(rg.status === 503 && bg.reason === "replay-store-unavailable" && verifies === g0, `one container inside its deploy overlap window: refused before any verify (${rg.status} ${bg.reason || ""})`);
+
+    // Live control: two servers on one reachable Redis serve one payment
+    // sent to both at once exactly once.
+    if (D && E) {
+      const credD = credential(accept || {});
+      const d0 = settles;
+      const [rd, re] = await Promise.all([send(D, { "payment-signature": credD }), send(E, { "payment-signature": credD })]);
+      const served = [rd, re].filter((r) => r.status === 200 && r.headers.get("x-replayed-answer") !== "1").length;
+      ok(served === 1 && settles === d0 + 1, `live Redis: one payment sent to two containers runs once and settles once (${rd.status}, ${re.status}; settle +${settles - d0})`);
+    } else {
+      console.log("note - no REDIS_URL given: the live two-container control is skipped (the outage cases above do not need one)");
+    }
+  }
+
+  // No booted server reached a public chain RPC. The warm-up scan used to
+  // start a few seconds after listen whatever the crawler switch said; the
+  // servers are given that long before their logs are read.
+  {
+    const { revenueWarmupEnabled } = await import("../src/revenue-live.js");
+    ok(revenueWarmupEnabled({ X402_INDEX_CRAWL: "off" }) === false && revenueWarmupEnabled({ X402_SYNC_ON_START: "false" }) === false && revenueWarmupEnabled({ REVENUE_WARMUP: "off" }) === false && revenueWarmupEnabled({}) === true && revenueWarmupEnabled({ X402_INDEX_CRAWL: "on", X402_SYNC_ON_START: "true" }) === true, "the revenue warm-up is off under X402_INDEX_CRAWL=off, X402_SYNC_ON_START=false or REVENUE_WARMUP=off, else on");
+    const serverSrc = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+    const warmups = serverSrc.match(/revenueSnapshot\(revenueWallets\(\)\)/g) || [];
+    const gated = serverSrc.match(/(if \(WALLET_ADDRESS && revenueWarmupEnabled\(\)\) revenueSnapshot\(revenueWallets\(\)\)|if \(revenueWarmupEnabled\(\)\) bootStep\("revenueSnapshot", \(\) => revenueSnapshot\(revenueWallets\(\)\)|if \(revenueWarmupEnabled\(\)\) \{\n  const revenueTick = \(\) => \{ runAsJob\("revenue-snapshot", \(\) => revenueSnapshot\(revenueWallets\(\)\)\))/g) || [];
+    ok(gated.length === 3, `server.js starts the three boot warm-ups of the revenue snapshot only through that switch (${gated.length} of 3 gated)`);
+    ok(warmups.length === 6, `and every other revenueSnapshot call in server.js is on a request path (${warmups.length} calls in all, expected 6: three warm-ups, three request paths)`);
+    await sleep(Math.max(0, 20_000 - (Date.now() - bootedAt)));
+    const seen = [...chainReads].filter(([, lines]) => lines.length);
+    ok(seen.length === 0, `no booted server reached a public chain RPC (${seen.map(([n, l]) => `${n}: ${l[0]}`).join("; ") || "no chain read logged"})`);
   }
 } finally {
-  try { proc.kill("SIGKILL"); } catch { /* gone */ }
+  for (const p of procs) { try { p.kill("SIGKILL"); } catch { /* gone */ } }
   facilitator.close();
+  try { rmSync(TMP, { recursive: true, force: true }); } catch { /* best effort */ }
 }
-if (failed) for (const l of log.slice(-25)) console.error("  server:", l);
+
+// ---------------------------------------------------------------- part 2
+// The Tempo and card gates in this process, against a shared store that
+// throws on every call (the same verdict a dead Redis gives the booted
+// servers above). The children are already spawned, so the Tempo and Stripe
+// environment set here reaches none of them.
+{
+  const TREASURY = "0x000000000000000000000000000000000000dEaD";
+  const CUR = "0x2000000000000000000000000000000000000000";
+  process.env.TEMPO_API_KEY = "test-tempo-key";
+  process.env.TEMPO_RECIPIENT_ADDRESS = TREASURY;
+  process.env.TEMPO_CURRENCY = CUR;
+  process.env.STRIPE_SECRET_KEY = "sk_test_fakekey";
+  process.env.STRIPE_PROFILE_ID = "profile_test_fake";
+  // The gates' modules choose their backend at import (scripts/lib/offline-stores.js):
+  // per-process here, whatever the caller exported for the live control above.
+  for (const k of ["REDIS_URL", "STATE_DATABASE_URL", "STATE_DATABASE_URL_FOR_TEST", "LEDGER_JOURNAL_REDIS"]) delete process.env[k];
+  const [express, { Challenge, Credential }, { default: Stripe }, { stripe: stripeMethods }, { createHmac }, { createTempoGate }, { createStripeGate }, { createReplayGuard }, { __setTestClient }, { abortInFlightComposites, drainSignal }] = await Promise.all([
+    import("express").then((m) => m.default), import("mppx"), import("stripe"), import("mppx/server"), import("node:crypto"),
+    import("../src/mpp-tempo.js"), import("../src/mpp-stripe.js"), import("../src/replay-guard.js"), import("../src/shared-limit.js"), import("../src/drain-abort.js"),
+  ]);
+  const broken = { get: async () => { throw new Error("simulated outage"); }, set: async () => { throw new Error("simulated outage"); }, del: async () => { throw new Error("simulated outage"); }, expire: async () => { throw new Error("simulated outage"); } };
+  const e0 = console.error, w0 = console.warn;
+  const quiet = async (fn) => { console.error = () => {}; console.warn = () => {}; try { return await fn(); } finally { console.error = e0; console.warn = w0; } };
+  const listen = (app) => new Promise((r) => { const s = app.listen(0, "127.0.0.1", () => r({ s, url: `http://127.0.0.1:${s.address().port}` })); });
+  const overlap = process.env.DEPLOY_OVERLAP_SECONDS;
+  const inside = () => { process.env.DEPLOY_OVERLAP_SECONDS = "3600"; };
+  const past = () => { process.env.DEPLOY_OVERLAP_SECONDS = "0"; };
+
+  // --- the Tempo gate: a pull credential, a push credential, and a push
+  // credential the route refuses (long-running: the owed-booking path).
+  const SECRET = "outage-secret", REALM = "test.local", SENDER = "0x5555555555555555555555555555555555555555";
+  let credSeq = 0;
+  const tempoChallenge = () => Challenge.from({ realm: REALM, method: "tempo", intent: "charge", expires: new Date(Date.now() + 60_000 + (++credSeq) * 1000), request: { amount: "50000", currency: CUR, decimals: 6, recipient: TREASURY, methodDetails: { chainId: 4217 } }, secretKey: SECRET });
+  const pullCred = () => Credential.serialize({ challenge: tempoChallenge(), payload: { type: "transaction", signature: "0x76" + "00".repeat(60) }, source: `did:pkh:eip155:4217:${SENDER}` });
+  const pushCred = (hash) => Credential.serialize({ challenge: tempoChallenge(), payload: { hash, type: "hash" }, source: `did:pkh:eip155:4217:${SENDER}` });
+  const tempo = { validates: 0, broadcasts: 0, runs: 0, booked: 0 };
+  const tempoApp = express();
+  tempoApp.use(express.json());
+  tempoApp.use(createTempoGate({
+    secretKey: SECRET, realm: REALM, replayGuard: createReplayGuard(),
+    priceFor: (_m, path) => (path === "/paid" ? { priceUsd: 0.05 } : path === "/long" ? { priceUsd: 0.05, longRunning: true } : null),
+    validate: async () => { tempo.validates++; return { ok: true, validation: {} }; },
+    broadcast: async () => { tempo.broadcasts++; return { ok: true, receipt: { method: "tempo", status: "success", reference: `0xr${tempo.broadcasts}`, timestamp: new Date().toISOString() } }; },
+    pushSender: async () => SENDER,
+    onPushInputRefused: async () => { tempo.booked++; return true; },
+    onPushNotClaimed: async () => { tempo.booked++; return true; },
+    pushClaimAllowed: () => true, pushRowOf: () => null,
+  }));
+  tempoApp.use((req, res, next) => (req.tempoSettling ? next() : res.status(402).json({ error: "Payment Required" })));
+  tempoApp.post("/paid", (req, res) => { tempo.runs++; res.json({ ok: true }); });
+  tempoApp.post("/long", (req, res) => { tempo.runs++; res.json({ ok: true }); });
+  const T = await listen(tempoApp);
+  const tempoPost = (path, cred) => fetch(`${T.url}${path}`, { method: "POST", headers: { "content-type": "application/json", Authorization: cred }, body: JSON.stringify({ text: "x" }) });
+  const snap = () => ({ ...tempo });
+  const delta = (a, b) => Object.fromEntries(Object.keys(a).map((k) => [k, b[k] - a[k]]));
+
+  // --- the card gate.
+  const STRIPE_SECRET = createHmac("sha256", process.env.STRIPE_SECRET_KEY).update("mpp-challenge-signing").digest("base64");
+  const stripeMethod = stripeMethods.charge({ client: new Stripe("sk_test_fakekey"), networkId: process.env.STRIPE_PROFILE_ID, paymentMethodTypes: ["card"], livemode: false });
+  const cardCred = () => Credential.serialize({ challenge: Challenge.fromMethod(stripeMethod, { realm: REALM, expires: new Date(Date.now() + 60_000), request: { amount: "0.50", currency: "usd", decimals: 2, networkId: process.env.STRIPE_PROFILE_ID, paymentMethodTypes: ["card"] }, secretKey: STRIPE_SECRET }), payload: { type: "spt", spt: `spt_test_${++credSeq}` } });
+  const card = { captures: 0, runs: 0 };
+  const cardApp = express();
+  cardApp.use(createStripeGate({
+    secretKey: STRIPE_SECRET, realm: REALM, replayGuard: createReplayGuard(), checkToken: async () => ({ ok: true }),
+    priceFor: (_m, path) => (path === "/paid" ? { priceUsd: 0.5, identityBound: false } : null),
+    validate: async () => ({ ok: true, validation: {} }),
+    settle: async () => { card.captures++; return { ok: true, receipt: { method: "stripe", status: "success", reference: `pi_test_${card.captures}`, timestamp: new Date().toISOString() } }; },
+  }));
+  cardApp.use((req, res, next) => (req.stripeSettling ? next() : res.status(402).json({ error: "Payment Required" })));
+  cardApp.post("/paid", (req, res) => { card.runs++; res.json({ ok: true }); });
+  const S = await listen(cardApp);
+  const cardPost = () => fetch(`${S.url}/paid`, { method: "POST", headers: { Authorization: cardCred() } });
+
+  const refused = async (r) => { const b = await r.json().catch(() => ({})); return r.status === 503 && b.reason === "replay-store-unavailable" && r.headers.get("retry-after") === "30"; };
+  __setTestClient(broken);
+  try {
+    // Inside the overlap window: refused before the handler, nothing claimed,
+    // nothing broadcast, nothing captured, nothing booked.
+    inside();
+    let t0 = snap();
+    let r = await quiet(() => tempoPost("/paid", pullCred()));
+    let d = delta(t0, snap());
+    ok(await refused(r) && d.runs === 0 && d.broadcasts === 0, `tempo pull credential, store out, inside the window: refused 503 with Retry-After before the handler, nothing broadcast (${r.status}; ${JSON.stringify(d)})`);
+    t0 = snap();
+    r = await quiet(() => tempoPost("/paid", pushCred("0x" + "a1".repeat(32))));
+    const pb = await r.clone().json().catch(() => ({}));
+    d = delta(t0, snap());
+    ok(await refused(r) && pb.transferClaimed === false && pb.charged === false && d.runs === 0 && d.broadcasts === 0 && d.booked === 0, `tempo push credential, store out, inside the window: refused 503 before the transfer is claimed or finalized, nothing booked (${r.status}; ${JSON.stringify(d)})`);
+    // A push credential the ROUTE refuses (long-running: the owed-booking
+    // path) meets the same store state before its claim: the same 503, so
+    // the buyer does not read a verdict on a transfer nothing checked. The
+    // transfer is final on chain, so the body never says "not charged"; it
+    // says the transfer is booked as owed once the credential returns.
+    t0 = snap();
+    r = await quiet(() => tempoPost("/long", pushCred("0x" + "b2".repeat(32))));
+    const rb = await r.clone().json().catch(() => ({}));
+    d = delta(t0, snap());
+    ok(await refused(r) && rb.transferClaimed === false && d.runs === 0 && d.broadcasts === 0 && d.booked === 0 && d.validates === 0, `tempo push credential on a route that refuses it, store out, inside the window: refused 503 with Retry-After before the claim, no relay call, no handler, nothing booked as owed (${r.status}; ${JSON.stringify(d)})`);
+    ok(typeof rb.error === "string" && /final on chain/.test(rb.error) && /recorded as owed/.test(rb.error) && !/not charged|nothing was charged|no run was started/i.test(rb.error) && !("charged" in rb), `its body says the transfer is final and will be booked as owed when the credential returns, never that nothing was charged (${JSON.stringify(rb).slice(0, 200)})`);
+    const c0 = { ...card };
+    r = await quiet(() => cardPost());
+    ok(await refused(r) && card.runs === c0.runs && card.captures === c0.captures, `card credential, store out, inside the window: refused 503 with Retry-After before the handler, nothing captured (${r.status}; runs +${card.runs - c0.runs}, captures +${card.captures - c0.captures})`);
+
+    // Past the window, one container: served on the per-process claim, once.
+    past();
+    t0 = snap();
+    const pull = pullCred();
+    r = await quiet(() => tempoPost("/paid", pull));
+    d = delta(t0, snap());
+    ok(r.status === 200 && d.runs === 1 && d.broadcasts === 1, `tempo pull credential past the window: served and broadcast once on the per-process claim (${r.status}; ${JSON.stringify(d)})`);
+    t0 = snap();
+    r = await quiet(() => tempoPost("/paid", pull));
+    d = delta(t0, snap());
+    ok(r.status === 402 && d.runs === 0 && d.broadcasts === 0, `and the same credential buys no second run there (${r.status}; ${JSON.stringify(d)})`);
+    t0 = snap();
+    r = await quiet(() => tempoPost("/paid", pushCred("0x" + "c3".repeat(32))));
+    d = delta(t0, snap());
+    ok(r.status === 200 && d.runs === 1 && d.broadcasts === 1, `tempo push credential past the window: claimed and served once (${r.status}; ${JSON.stringify(d)})`);
+    const c1 = { ...card };
+    r = await quiet(() => cardPost());
+    ok(r.status === 200 && card.runs === c1.runs + 1 && card.captures === c1.captures + 1, `card credential past the window: served and captured once (${r.status})`);
+
+    // Draining (SIGTERM: the replacement container is live), past the
+    // window: the shared claim is required again on every gate. The drain
+    // signal is one-way, so this runs last.
+    abortInFlightComposites("test drain");
+    ok(drainSignal().aborted === true, "the drain signal the x402 dispatcher reads is set");
+    t0 = snap();
+    r = await quiet(() => tempoPost("/paid", pullCred()));
+    d = delta(t0, snap());
+    ok(await refused(r) && d.runs === 0 && d.broadcasts === 0, `draining: a tempo pull credential is refused 503 before the handler (${r.status}; ${JSON.stringify(d)})`);
+    t0 = snap();
+    r = await quiet(() => tempoPost("/paid", pushCred("0x" + "d4".repeat(32))));
+    d = delta(t0, snap());
+    ok(await refused(r) && d.runs === 0 && d.broadcasts === 0 && d.booked === 0, `draining: a tempo push credential is refused 503 before the transfer is claimed (${r.status}; ${JSON.stringify(d)})`);
+    const c2 = { ...card };
+    r = await quiet(() => cardPost());
+    ok(await refused(r) && card.runs === c2.runs && card.captures === c2.captures, `draining: a card credential is refused 503 before the handler, nothing captured (${r.status})`);
+  } finally {
+    __setTestClient(null);
+    if (overlap === undefined) delete process.env.DEPLOY_OVERLAP_SECONDS; else process.env.DEPLOY_OVERLAP_SECONDS = overlap;
+    T.s.close(); S.s.close();
+  }
+}
+if (failed) for (const [name, log] of logs) for (const l of log.slice(-15)) console.error(`  server ${name}:`, l);
 console.log(`\ntest-replay-store-outage: ${pass} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

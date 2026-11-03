@@ -15,6 +15,7 @@
 // carries the full set alongside it.
 //
 //   node scripts/test-multi-payto.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 let passed = 0, failed = 0;
 const ok = (c, m) => { if (c) { passed++; console.log(`ok - ${m}`); } else { failed++; console.error(`FAIL - ${m}`); } };
 

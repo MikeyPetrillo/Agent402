@@ -15,6 +15,7 @@
 // These assertions pin the join and, just as importantly, the honesty of the
 // gap measurement: a scan that returned nothing must never be reported as a
 // blind spot of size zero.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import "./lib/file-mode.js"; // file backends: never the caller's database or Redis
 import { provenByChain, unattributedMerchants, merchantsByAddress, baseNetworkPayTo, advertisedPayToEvidence, sharedPayToClaims, payToFromLive402, provenPayToMatches } from "../src/settlement-proof.js";
 

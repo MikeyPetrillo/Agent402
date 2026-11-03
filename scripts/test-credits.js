@@ -5,6 +5,7 @@
 // insufficient/unknown/disabled key gets a 402 with the balance; a non-credits
 // request passes through untouched; accounting hooks fire; state survives a
 // reload; operator status never exposes key material.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createCredits, CREDIT_PACKS, KEY_RE, usdToMicro, microToUsd } from "../src/credits.js";
 import { rmSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

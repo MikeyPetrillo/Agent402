@@ -21,6 +21,7 @@
 // the payer re-checks the accept it signs against the same clearing wallets.
 //
 // Offline: fake leaderboard rows, fake 402s, no server, nothing spent.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { buildEvidenceBinding, baseLiveGate, rowWalletFigures } from "../src/evidence-binding.js";
 import { dispatchEligibility, evidencePayToVerdict, DISPATCH_DETAILS, dispatchLegend } from "../src/dispatch-eligibility.js";

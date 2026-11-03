@@ -21,6 +21,7 @@
 //     nothing. Every slow route in the catalog is long-running today, so this
 //     is the path a push credential on a slow route takes.
 // The relay and the chain are stubs: offline, nothing moves.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import express from "express";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";

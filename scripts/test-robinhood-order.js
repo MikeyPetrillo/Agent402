@@ -4,6 +4,7 @@
 // facilitator is not asked; a funded reading puts the facilitator first again;
 // an unread, unknown or stale reading never moves the order. Offline: stub
 // facilitator, stub relayer, the real settle-failure hook.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";
 import {

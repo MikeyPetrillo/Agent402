@@ -31,6 +31,7 @@
 // default implementation (`fetchImpl = fetch`, `|| globalThis.fetch`). A file's sites are matched to
 // its entries in order of appearance, so a line move never fails this and a new
 // site always does.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";

@@ -6,6 +6,7 @@
 // Chain with its floor) against a local /supported stub; no payment is made.
 // The premium is also on llms.txt, the openapi document and the connector's
 // payment.info, derived from the same map.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { getFreePorts } from "./lib/free-port.js";

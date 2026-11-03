@@ -32,6 +32,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getFreePorts } from "./lib/free-port.js";
 
+// Every store here is a file in this run's own directory: the booted server
+// runs with STATE_DATABASE_URL and REDIS_URL blank, and the books this process
+// opens (the late-settlement book reads the file that server wrote) must read
+// the same files. Inherited from the shell, either variable would point this
+// process at a shared database that outlives the run (a book that never sees
+// the server's entries, rows and claims left by an earlier run).
+delete process.env.STATE_DATABASE_URL;
+delete process.env.REDIS_URL;
+
 let pass = 0;
 const procs = [];
 let stubs = [];
@@ -504,6 +513,7 @@ try {
   let s0 = settles, r0 = receiptReads;
   let r = await send(p);
   ok(r.status === 200 && r.receipt?.success === true && r.receipt?.transaction === p.tx.toLowerCase(), `pending 5xx, mined within the wait -> 200 with PAYMENT-RESPONSE naming the tx (status ${r.status}, ${r.ms} ms)`);
+  ok(!/settlement-unconfirmed/.test(String(r.body)), "a recovered answer carries no pending explanation");
   ok(receiptReads - r0 >= 2 && settles - s0 === 2, `the receipt was polled (${receiptReads - r0} reads) after the facilitator's answer and its single retry (${settles - s0} settles)`);
   ok(serverLog.some((l) => l.includes(`recovered eip155:8453 settlement after a pending answer: tx ${p.tx.toLowerCase()}`)), "the recovery is logged with its tx");
   ok(await waitFor(() => salesFor(p.tx).length === 1), `one sale booked for the tx (${salesFor(p.tx).length})`);
@@ -612,6 +622,10 @@ try {
     ok(r.ms < 4000 + 2 * 20_000, `${mode}: answered inside the bound`);
     ok(await waitFor(() => lateHas(p.tx)), `${mode}: booked in the late-settlement book as before`);
     ok(salesFor(p.tx).length === 0, `${mode}: no sale`);
+    let jb = null; try { jb = JSON.parse(r.body); } catch { /* not json */ }
+    ok(jb?.reason === "settlement-unconfirmed" && JSON.stringify(jb.transactions) === JSON.stringify([p.tx.toLowerCase()]) && jb.network === "eip155:8453" && /may still land/.test(jb.hint) && /owed/.test(jb.hint) && !/not charged|nothing (?:was|is) charged/i.test(r.body),
+      `${mode}: the 402 says the transfer may still land and is then owed, and names the tx (${String(r.body).slice(0, 160)})`);
+    ok(r.receipt && r.receipt.success === false && String(r.receipt.transaction || "").toLowerCase() === p.tx.toLowerCase(), `${mode}: PAYMENT-RESPONSE is the facilitator's failed receipt, unchanged`);
   }
   pv = await pendingView();
   ok(pv.notMined === pv0.notMined + 1 && pv.reverted === pv0.reverted + 1 && pv.wrongTransfer === pv0.wrongTransfer + 3 && pv.rpcError === pv0.rpcError + 1 && pv.rateLimited === pv0.rateLimited + 1,
@@ -640,6 +654,7 @@ try {
   r0 = receiptReads;
   r = await send(p);
   ok(r.status === 402 && receiptReads === r0, `a 5xx with no tx -> 402 and the chain is never read (status ${r.status}, reads ${receiptReads - r0})`);
+  ok(!/settlement-unconfirmed/.test(String(r.body)), "a 5xx with no tx carries no pending explanation");
   ok((await facUp()).s5xx > s5Before, "a genuine 5xx stays counted against the facilitator");
   await sleep(200);
   ok(!lateHas(p.tx), "a 5xx with no tx books nothing");

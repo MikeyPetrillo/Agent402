@@ -5,6 +5,7 @@
 // debited. Proves: the overlapping copy gets 409 and is not charged, the first
 // is debited once, a retry after it finishes replays without a second debit,
 // and calls with no key, a different key or a different body are untouched.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import express from "express";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

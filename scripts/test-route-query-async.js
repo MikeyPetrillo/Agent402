@@ -5,6 +5,7 @@
 // fixture.js): what a concurrent timer sees as its worst lateness is the
 // longest single hold, and it must be far under the query's full cost.
 // Offline.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.X402_INDEX_CRAWL = "off";
 import assert from "node:assert/strict";
 const { routeQuery, routeQueryAsync, _cacheForTests, _setBazaarQualityForTest, warmRouteIndex, _routeIndexSettledForTest } = await import("../src/x402-index.js");

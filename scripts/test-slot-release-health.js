@@ -7,6 +7,7 @@
 // with no row gets one and ages out like everyone else, every crawl cycle logs
 // what the release did or why it did not, and the operator view shows how
 // full the door is.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { selectReleasableOrigins, submissionSlotStatus } from "../src/x402-index.js";
 import { ensureSellerRegistrations, getSellerRegistrations, deleteSellerRegistration, recordSellerRegistrationSeen } from "../src/stats.js";

@@ -4,6 +4,7 @@
 // only when EVERY explicit 2xx variant guarantees it. Reporting a field that
 // only the 200 promises tells a buyer they are safe on a success path where
 // they are not, which is worse than reporting nothing.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { responseContractOf, packResponseContract, unpackResponseContract, responseContractProjection } from "../src/response-contract.js";
 
 let pass = 0, fail = 0;

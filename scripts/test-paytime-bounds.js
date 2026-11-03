@@ -678,10 +678,14 @@ proc = spawn("node", ["--import", "./scripts/lib/openrouter-stub-preload.js", "s
 const keepLog = (chunk) => { for (const line of String(chunk).split("\n")) { if (line.trim()) serverLog.push(line.slice(0, 500)); } };
 proc.stdout.on("data", keepLog); proc.stderr.on("data", keepLog);
 
+// Per-run nonces: with REDIS_URL the settlement claims and the replay guard
+// keep a settled authorization's key for days, so a fixed nonce sequence
+// would read as already settled on the next run against the same Redis.
 let nonceN = 0;
+const NONCE_RUN = (await import("node:crypto")).randomBytes(16).toString("hex");
 const credential = (accepted, payer, validBefore = nowS() + 299) => b64({
   x402Version: 2, resource: accepted.resource, accepted,
-  payload: { signature: "0x" + "11".repeat(65), authorization: { from: payer, to: accepted.payTo, value: accepted.amount, validAfter: "0", validBefore: String(validBefore), nonce: "0x" + (0x9000 + ++nonceN).toString(16).padStart(64, "0") } },
+  payload: { signature: "0x" + "11".repeat(65), authorization: { from: payer, to: accepted.payTo, value: accepted.amount, validAfter: "0", validBefore: String(validBefore), nonce: "0x" + NONCE_RUN + (0x9000 + ++nonceN).toString(16).padStart(32, "0") } },
 });
 const CHAT = { path: "/v1/nano/chat/completions", method: "POST", body: JSON.stringify({ messages: [{ role: "user", content: "say ok" }], max_tokens: 16 }) };
 const FAST = { path: "/v1/images/fast", method: "POST", body: JSON.stringify({ prompt: "a red fox in the snow" }) };

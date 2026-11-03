@@ -5,6 +5,7 @@
 // nothing else, so a facilitator outage and an edge refusing our egress IP
 // were indistinguishable. These assertions fail if the diagnosis stops naming
 // which one it is, or if the wrapper ever touches the response it describes.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { describeErrorResponse, textFromHtml, installFacilitatorDiagnostics } from "../src/facilitator-diagnostics.js";
 
 let pass = 0, fail = 0;

@@ -60,6 +60,13 @@ export const PAYMENT_WINDOW_BUDGET_MS = (DEFAULT_MAX_TIMEOUT_SECONDS - SETTLE_RU
 export const OPTIONAL_READ_FLOOR_MS = 1_500;
 /** The cap most keyless JSON APIs get: a normal answer is well under a second. */
 export const DEFAULT_READ_MS = 8_000;
+/** A read is not started with less than this left in the budget: at the
+ *  budget's edge the abort timer of the read before can fire a millisecond
+ *  ahead of the clock, which leaves a remainder of one or two milliseconds
+ *  that no read can use, and such a read would leave only to be aborted
+ *  (measured 2026-11-03: a second read left with a 1 ms cap at 601 ms of a
+ *  600 ms budget). */
+export const MIN_READ_MS = 5;
 
 const store = new AsyncLocalStorage();
 
@@ -176,9 +183,10 @@ export async function upstreamFetch(url, init = {}, ctx = {}) {
   const budget = ctx.budget === undefined ? currentBudget() : ctx.budget;
   const cap = capOf(timeoutMs, budget);
   ctx.cap = cap;
-  // A budget already spent refuses before any egress; the deadline named is
-  // the handler budget the upstream's earlier reads used up.
-  if (cap <= 0) throw upstreamDeadline(label, step, budget?.totalMs ?? timeoutMs);
+  // A budget already spent (or too close to spent for any read to use)
+  // refuses before any egress; the deadline named is the handler budget the
+  // upstream's earlier reads used up.
+  if (cap < MIN_READ_MS) throw upstreamDeadline(label, step, budget?.totalMs ?? timeoutMs);
   const fetchImpl = ctx.fetchImpl || fetch;
   try {
     return await fetchImpl(url, { ...init, signal: AbortSignal.timeout(cap) });
@@ -221,7 +229,7 @@ export function workUnderDeadline(work, ctx = {}) {
   const budget = ctx.budget === undefined ? currentBudget() : ctx.budget;
   const cap = capOf(timeoutMs, budget);
   ctx.cap = cap;
-  if (cap <= 0) return Promise.reject(upstreamDeadline(label, step, budget?.totalMs ?? timeoutMs));
+  if (cap < MIN_READ_MS) return Promise.reject(upstreamDeadline(label, step, budget?.totalMs ?? timeoutMs));
   let timer;
   const expiry = new Promise((_, reject) => {
     timer = setTimeout(() => {

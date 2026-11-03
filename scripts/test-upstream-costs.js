@@ -30,6 +30,7 @@ ok(I.linkBounds(I.IMAGE_TIERS["v1-images-fast"].chain[0]) === null && I.videosWo
 ok(I.linkRepriced(I.IMAGE_TIERS["v1-images-fast"].chain[0], [{ provider_tag: "black-forest-labs", pricing: [{ billable: "output_image", unit: "megapixel", cost_usd: 1 }] }]), "a link without bounds counts as repriced (skipped)");
 ok(K.openaiCostRow("gpt-4o") === null && K.openaiCostUsd("gpt-4o", { prompt_tokens: 10, completion_tokens: 10 }) === null, "OpenAI telemetry cost is null, never a guess");
 ok(S.upstreamUsdPerMinute("gpt-transcribe") === null, "STT rate is null");
+ok(U.vendorRate("cdp", "sqlQuery") === null && U.vendorRate("exa", "search") === null, "a vendor rate reads null, never a guess");
 
 // ---- a fake table ----
 const FAKE = {
@@ -58,9 +59,10 @@ ok(U.upstreamCostsStatus() === "partial", "a table missing required keys reads p
   // A model gap names an id, which may carry a dotted version (gpt-6.1-terra).
   ok(g.every((x) => !/[0-9]\.[0-9]/.test(x.replace(/^models\[[^\]]*\]$/, "models[]"))), "gaps carry names, never a value");
 }
-const FULL = { ...FAKE, models: [...FAKE.models.slice(0, 2), ...U.REQUIRED_MODEL_ROWS.map((p) => [p, { prompt: 1, completion: 2 }])], speech: { ...FAKE.speech }, openai: { ...FAKE.openai, "gpt-image-2": { completion: 9, prompt: 1 } }, media: { ...FAKE.media, "black-forest-labs/flux-3-image-klein": { worstCaseUsd: 0.5, listedMaxUsd: 0.5 } }, fees: { ...FAKE.fees, rerankPerUnit: 5 }, meter: { markup: 1.25 }, vendor: { exa: { search: 0.5, instant: 0.5, lite: 0.5, answer: 0.5, content: 0.5 }, x: { postRead: 0.5, userRead: 0.5 }, decisions: { luna: 0.5, decisionOne: 0.5, jev: 0.5, maxShare: 0.5 } } };
+const FULL = { ...FAKE, models: [...FAKE.models.slice(0, 2), ...U.REQUIRED_MODEL_ROWS.map((p) => [p, { prompt: 1, completion: 2 }])], speech: { ...FAKE.speech }, openai: { ...FAKE.openai, "gpt-image-2": { completion: 9, prompt: 1 } }, media: { ...FAKE.media, "black-forest-labs/flux-3-image-klein": { worstCaseUsd: 0.5, listedMaxUsd: 0.5 } }, fees: { ...FAKE.fees, rerankPerUnit: 5 }, meter: { markup: 1.25 }, vendor: { exa: { search: 0.5, instant: 0.5, lite: 0.5, answer: 0.5, content: 0.5 }, x: { postRead: 0.5, userRead: 0.5 }, decisions: { luna: 0.5, decisionOne: 0.5, jev: 0.5, maxShare: 0.5 }, cdp: { sqlQuery: 0.5 } } };
 U.setUpstreamCostsForTest(FULL);
 ok(U.upstreamCostsStatus() === "ok" && U.upstreamCostsGaps().length === 0, "a complete table reads ok");
+ok(U.vendorRate("cdp", "sqlQuery") === 0.5 && U.vendorRate("cdp", "nope") === null && U.vendorRate("nope", "x") === null, "a vendor rate reads through; an unknown vendor or key is null");
 U.setUpstreamCostsForTest({ ...FULL, models: [...FULL.models, ["acme/big-pro", { prompt: 0, completion: 9 }]] });
 ok(U.upstreamCostsStatus() === "partial" && U.upstreamCostsGaps().join() === "models[acme/big-pro]", "a zero-rate model row (not stealth) is a gap, not a silent fallback to acme/big");
 // The pinned rows by name: dropping one from REQUIRED_MODEL_ROWS would stop

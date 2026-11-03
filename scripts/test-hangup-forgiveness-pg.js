@@ -9,12 +9,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTestPg } from "./lib/test-pg.js";
 requireTestPg({ label: "test-hangup-forgiveness-pg" });
-const { documents, imports, __dropStateSchema, closeStateDb } = await import("../src/state-db.js");
-const H = await import("../src/hangup-forgiveness.js");
-const { reserveHangupForgiveness, settleHangupTicket, hangupForgiven, hangupForgivenessStatus, hangupKeyDigest, loadHangupForgiveness, persistNow, flushHangupForgiveness, _resetHangupForgiveness, HANGUP_DOCUMENT_NAME } = H;
-
-let pass = 0, fail = 0;
-const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
+// Set before the modules load: the shared store's key prefix is read once,
+// at import, so a prefix set after it would leave this run's windows under
+// the default prefix, where an earlier run's abandoned records still count.
 const TMP = mkdtempSync(join(tmpdir(), "hangup-pg-"));
 const file = join(TMP, "hangup-forgiveness.json");
 process.env.HANGUP_FORGIVE_FILE = file;
@@ -23,6 +20,12 @@ process.env.HANGUP_FORGIVE_SALT = "unit-salt";
 process.env.SHARED_LIMITS_PREFIX ||= `hfpg${process.pid}${Date.now().toString(36)}`;
 process.env.HANGUP_FORGIVE_KEY_USD = "0.25";
 process.env.HANGUP_FORGIVE_GLOBAL_USD = "2";
+const { documents, imports, __dropStateSchema, closeStateDb } = await import("../src/state-db.js");
+const H = await import("../src/hangup-forgiveness.js");
+const { reserveHangupForgiveness, settleHangupTicket, hangupForgiven, hangupForgivenessStatus, hangupKeyDigest, loadHangupForgiveness, persistNow, flushHangupForgiveness, _resetHangupForgiveness, HANGUP_DOCUMENT_NAME } = H;
+
+let pass = 0, fail = 0;
+const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 const now = Date.now();
 // The reservation is awaited: with REDIS_URL set beside the database (the CI
 // lane), the budget is also shared and the reservation is a promise.

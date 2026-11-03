@@ -9,6 +9,7 @@
 //
 // Every check is counted and the suite fails at the end, so a run against the
 // old code reports how many checks it fails instead of stopping at the first.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 
 delete process.env.STATE_DATABASE_URL; // leased() runs fn directly without a database

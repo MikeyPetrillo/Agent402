@@ -13,6 +13,7 @@
 // Offline: no upstream is called; only free surfaces and unpaid 402s are read.
 //
 //   node scripts/test-front-door.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtempSync, readFileSync, readdirSync, statSync, existsSync } from "node:fs";
@@ -239,7 +240,7 @@ async function describeOf(B) {
 }
 
 /** Every surface of one boot; returns the texts the switch checks read. */
-async function readSurfaces(B, tag, { mpp = false } = {}) {
+async function readSurfaces(B, tag, { mpp = false, door402 = true } = {}) {
   const wires = `${RAILS.some((r) => r.asset !== "USDC") ? `stablecoins (USDC, and ${RAILS.filter((r) => r.asset !== "USDC").map((r) => `${r.asset} on ${r.name}`).join(" and ")})` : "USDC"} over x402${mpp ? " or MPP" : ""}`;
   const pricing = await (await fetch(`${B}/api/pricing`)).json();
   const row = (pricing.endpoints || []).find((e) => e.slug === FRONT_DOOR_SLUG);
@@ -313,8 +314,12 @@ async function readSurfaces(B, tag, { mpp = false } = {}) {
   const body402 = JSON.parse(await r.text());
   const hdr = decode(r);
   ok(r.status === 402 && !!hdr, `${tag} unpaid ${ROUTE} -> 402 with PAYMENT-REQUIRED (${r.status})`);
-  ok(Object.keys(body402)[0] === "frontDoor", `${tag} 402 body: frontDoor is the first key on a wallet-only route`);
-  ok(JSON.stringify(body402.frontDoor) === JSON.stringify({ access: fd.access, guide: fd.guide }), `${tag} 402 body: frontDoor is the access line and the guide`);
+  if (door402) {
+    ok(Object.keys(body402)[0] === "frontDoor", `${tag} 402 body: with FRONT_DOOR_402=on, frontDoor is the first key on a wallet-only route`);
+    ok(JSON.stringify(body402.frontDoor) === JSON.stringify({ access: fd.access, guide: fd.guide }), `${tag} 402 body: frontDoor is the access line and the guide`);
+  } else {
+    ok(!("frontDoor" in body402), `${tag} 402 body: FRONT_DOOR_402 unset, the body is the offer alone (no frontDoor)`);
+  }
   ok(!JSON.stringify(hdr).includes("frontDoor") && !JSON.stringify(hdr).includes("pure-CPU"), `${tag} 402 header: carries no front-door text (the challenge does not grow)`);
   ok(Array.isArray(body402.accepts) && body402.accepts.length > 0 && body402.x402Version === hdr.x402Version, `${tag} 402 body: the offer is still mirrored`);
   return { pricing, row, PRICE, ROUTE, llms, agents, fd, body402, hdr, L };
@@ -323,14 +328,14 @@ async function readSurfaces(B, tag, { mpp = false } = {}) {
 // --- boot 1: FIRST_CALL_ALLOWANCE off -----------------------------------------
 {
   const B = await boot({});
-  const s = await readSurfaces(B, "off");
+  const s = await readSurfaces(B, "off", { door402: false });
   const texts = { "/llms.txt": s.llms, [AGENTS_MD_PATH]: s.agents, "server.describe": JSON.stringify(s.fd), "402 body": JSON.stringify(s.body402) };
   for (const [where, text] of Object.entries(texts)) ok(!FIRST_CALL_FREE_COPY.test(text), `off: ${where} offers no free first call`);
   ok(s.hdr.resource?.description === BAZAAR_DESCRIPTIONS[FRONT_DOOR_SLUG], "402 header: the listing description is the curated copy, untrimmed");
   {
     const r = await fetch(`${B}/api/hash`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "x" }) });
     const body = JSON.parse(await r.text());
-    ok(r.status === 402 && Object.keys(body)[0] === "altPayment" && Object.keys(body)[1] === "frontDoor", `402 body on a proof-of-work tool: altPayment stays first, frontDoor next (${Object.keys(body).slice(0, 3).join(",")})`);
+    ok(r.status === 402 && Object.keys(body)[0] === "altPayment" && !("frontDoor" in body), `402 body on a proof-of-work tool: altPayment first, no frontDoor while FRONT_DOOR_402 is unset (${Object.keys(body).slice(0, 3).join(",")})`);
   }
   {
     // A refused payment keeps its own explanation: no block.
@@ -372,8 +377,13 @@ async function readSurfaces(B, tag, { mpp = false } = {}) {
 // --- boot 2: FIRST_CALL_ALLOWANCE on, a non-default cap -------------------------
 {
   const MAX_USD = "0.02";
-  const B = await boot({ FIRST_CALL_ALLOWANCE: "on", FIRST_CALL_ALLOWANCE_MAX_USD: MAX_USD, MPP_SECRET_KEY: "front-door-test-mpp-secret" });
+  const B = await boot({ FIRST_CALL_ALLOWANCE: "on", FIRST_CALL_ALLOWANCE_MAX_USD: MAX_USD, MPP_SECRET_KEY: "front-door-test-mpp-secret", FRONT_DOOR_402: "on" });
   const s = await readSurfaces(B, "on", { mpp: true });
+  {
+    const r = await fetch(`${B}/api/hash`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "x" }) });
+    const body = JSON.parse(await r.text());
+    ok(r.status === 402 && Object.keys(body)[0] === "altPayment" && Object.keys(body)[1] === "frontDoor", `on: 402 body on a proof-of-work tool: altPayment stays first, frontDoor next (${Object.keys(body).slice(0, 3).join(",")})`);
+  }
   const texts = { "/llms.txt": s.llms, [AGENTS_MD_PATH]: s.agents, "server.describe": JSON.stringify(s.fd), "402 body": JSON.stringify(s.body402) };
   for (const [where, text] of Object.entries(texts)) ok(FIRST_CALL_FREE_COPY.test(text), `on: ${where} offers the free first call`);
   const access = strip(s.L.lines.Access);

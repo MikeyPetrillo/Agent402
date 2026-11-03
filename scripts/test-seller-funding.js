@@ -15,6 +15,7 @@
 // eth_getLogs rule (a range over 2,000 blocks is refused above 10,000 logs), one
 // stub HTTP server playing the Bazaar and a Base RPC for the end-to-end scans,
 // and a booted free server for the operator lever. Nothing is spent.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, rmSync, readFileSync, existsSync } from "node:fs";

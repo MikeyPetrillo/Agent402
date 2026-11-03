@@ -1146,7 +1146,8 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           const frontDoor = frontDoorJson(catalog, baseUrl);
           return mcpJsonResult({
             // The front door leads (src/front-door.js): the same block
-            // /llms.txt, /agents.md and the unpaid 402 body open with.
+            // /llms.txt and /agents.md open with (the unpaid 402 body carries
+            // its access line and guide link only with FRONT_DOOR_402=on).
             // startHere.firstJob (kept for clients that read it) opens with
             // the same first-call sentence, so the answer has one first call.
             frontDoor,

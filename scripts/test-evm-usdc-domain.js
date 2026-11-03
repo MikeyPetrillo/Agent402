@@ -4,6 +4,7 @@
 // buyer can pay - Base USDC signs under "USD Coin" (a seller, 2026-09-10,
 // proven with the external seller probe; an earlier seller's 39-route catalog
 // in test-x402-live-quote carries the same accept). Offline.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { readFileSync, readdirSync } from "node:fs";
 import { USDC_DOMAIN_BY_NETWORK, EVM_TOKEN_DOMAINS, CIRCLE_GATEWAY, domainTruthFor, usdcDomainVerdict, evmDomainsOfAccepts, usdcDomainMismatchDetail, isCircleGatewayAccept, unsignableByStockBuyer } from "../src/evm-usdc-domain.js";

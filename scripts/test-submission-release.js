@@ -7,6 +7,7 @@
 // This pins the policy that gives a slot back. Everything here is about
 // REFUSING to release, because a wrong release drops a real seller's listing
 // and the pass runs unattended every cycle.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { selectReleasableOrigins, cycleOkFraction } from "../src/x402-index.js";
 
 let pass = 0, fail = 0;

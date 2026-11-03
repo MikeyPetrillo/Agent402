@@ -1,6 +1,7 @@
 // x402-kit tests. Strict on deterministic logic (transfer-authorization typed
 // data + input validation); live RPC reads are tolerant of upstream flake.
 // Fails only on a real assertion break or if EVERY live RPC call fails.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { X402_TOOLS } from "../src/tools/x402-kit.js";
 
 const h = (slug) => X402_TOOLS.find((t) => t.slug === slug).handler;

@@ -5,6 +5,7 @@ import { createJsonDocument, documentNameOf } from "./json-document.js";
 import { stateDbEnabled, stateDbSchema, withStateTx, trackStoreReady } from "./state-db.js";
 import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded, keyOf as sharedKeyOf, OP_MS } from "./shared-limits.js";
 import { getSharedRedisClient } from "./shared-limit.js";
+import { withLoopTimeout } from "./loop-deadline.js";
 // Bound what a single buyer can make us spend upstream before they have paid us.
 //
 // THE HOLE. @x402/express runs the handler FIRST and settles AFTER, and a <400
@@ -162,19 +163,19 @@ async function reservePayerShared(payer, usd, { maxUnsettledUsd = DEFAULT_MAX_UN
   let c = null;
   try { c = await getSharedRedisClient(); } catch { c = null; }
   if (!c) { noteSharedLimitsDegraded(CONTROL, { ok: false, error: "redis unavailable" }); return { id, reserved: false }; }
-  let timer = null;
   try {
-    const bound = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error("shared-limits: command timed out")), OP_MS()); timer.unref?.(); });
-    const r = await Promise.race([c.eval(WINDOW_RESERVE, {
+    // Loop time (src/loop-deadline.js): an answer that landed while the loop
+    // was held is read, not booked as a store that did not answer.
+    const r = await withLoopTimeout(c.eval(WINDOW_RESERVE, {
       keys: [sharedKeyOf("esg-payer", k)],
       arguments: [now - STALE_MS, Math.max(1, Math.round(STALE_MS)), `${w}|${SHARED_PROC}:${id}`, now, microOf(maxUnsettledUsd), microOf(local), w].map(String),
-    }), bound]);
+    }), OP_MS(), () => new Error("shared-limits: command timed out"));
     if (Number(r?.[0]) === 1) return { id, reserved: true, payer: k, usd: Number(usd) || 0 };
     return { refusal: payerRefusal(Math.max(local, (Number(r?.[1]) || 0) / 1e6), maxUnsettledUsd) };
   } catch (e) {
     noteSharedLimitsDegraded(CONTROL, { ok: false, error: String(e?.message || e).slice(0, 120) });
     return { id, reserved: false };
-  } finally { if (timer) clearTimeout(timer); }
+  }
 }
 /** Give back a shared reservation whose spend was then refused (the chain ceiling). */
 function releasePayerShared(pre) {

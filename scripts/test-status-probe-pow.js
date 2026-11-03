@@ -25,6 +25,12 @@
 // Boots two real servers: a paid-mode one with the token (the PoW gate only
 // runs when the paywall is active - same setup as test-pow-solve-roundtrip)
 // and a FREE_MODE one without it (the challenge route does not depend on mode).
+// The booking checks are /api/stats deltas on the booted server: each server
+// gets stores of its own (and no state database or Redis), so a parallel
+// suite's calls never land in this one's counts.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import "./lib/file-mode.js";
+import { ownStoreEnv } from "./lib/own-stores.js";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -44,7 +50,7 @@ const baseOff = `http://127.0.0.1:${PORT_OFF}`;
 
 const boot = (port, env) => {
   const child = spawn(process.execPath, ["src/server.js"], {
-    env: { ...process.env, PORT: String(port), X402_INDEX_CRAWL: "off", POW_DIFFICULTY: String(NORMAL), POW_SECRET: "status-probe-pow-test-secret", ...env },
+    env: { ...process.env, ...ownStoreEnv("status-probe-pow"), PORT: String(port), X402_INDEX_CRAWL: "off", POW_DIFFICULTY: String(NORMAL), POW_SECRET: "status-probe-pow-test-secret", ...env },
     stdio: ["ignore", "pipe", "pipe"],
   });
   child.log = "";

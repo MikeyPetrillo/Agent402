@@ -12,6 +12,7 @@
 //   * our own host is labelled self, not "untrustworthy"
 //
 //   node scripts/test-seller-trust.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { buildSellerTrustTool, assessSeller } from "../src/tools/seller-trust.js";
 import { dispatchEligibility } from "../src/dispatch-eligibility.js";

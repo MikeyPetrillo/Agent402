@@ -23,6 +23,7 @@
 //   router    a Tempo candidate that spent nothing before its credential left
 //             falls through to the next candidate; a committed or waited-on
 //             failure does not
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import "./lib/file-mode.js";
 import { createServer } from "node:http";
 import { mkdtempSync, readFileSync, existsSync } from "node:fs";

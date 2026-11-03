@@ -35,6 +35,7 @@
 // discovering it. Both directions are asserted, because a guard that only
 // checks "stuffing does not win" would be satisfied by a ranker that had
 // stopped working at all.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 const { routeQuery, _cacheForTests } = await import("../src/x402-index.js");
 
 let pass = 0, fail = 0;

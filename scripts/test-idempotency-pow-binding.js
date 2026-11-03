@@ -6,6 +6,7 @@
 // served on PoW is never stored under that payment header (a third party
 // presenting the same header, key and body runs fresh instead of replaying),
 // while a call carrying only its solution still replays as documented.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import express from "express";
 import { createIdempotency } from "../src/idempotency.js";
 import { createLocalIdempotencyStore } from "../src/idempotency-store.js";

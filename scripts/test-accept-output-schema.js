@@ -7,6 +7,7 @@
 // exactly that control in test-x402-v1-accepts). Pure pieces here; the booted
 // shape is pinned in test-bazaar-contracts and the settlement in
 // test-x402-v1-accepts + test-mpp-shim.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { x402ResourceServer } from "@x402/core/server";
 import { installAcceptOutputSchema, stampOutputSchema, withOutputSchemaOnFirstAccept, outputSchemaFromExtensions, restoreOutputSchemaOnAccepted, acceptOutputSchemaEnabled } from "../src/accept-output-schema.js";

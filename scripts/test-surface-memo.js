@@ -3,6 +3,7 @@
 // a status probe write drops the status snapshot, a ?seller= marketplace view
 // is never cached. From source: the per-chain ledger query and the settled-host
 // set keyed on the leaderboard rows array.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { readFileSync, mkdtempSync } from "node:fs";

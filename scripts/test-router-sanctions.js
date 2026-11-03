@@ -13,6 +13,7 @@
 //   - a list older than its refresh period still screens;
 //   - the address map is stored with each download and read back at boot,
 //     before the server listens, so a restart screens without a download.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import "./lib/file-mode.js"; // file backends: never the caller's database or Redis
 import { strict as assert } from "node:assert";
 import { randomBytes } from "node:crypto";

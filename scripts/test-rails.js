@@ -13,6 +13,7 @@
 //
 //   node scripts/test-rails.js                       # offline only
 //   TARGET_URL=http://127.0.0.1:3000 node scripts/test-rails.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { RAILS, RAILS_AMP, RAILS_OR, RAILS_PAREN, RAILS_SHORT, RAIL_CHAIN_NAMES, RAILS_OS, RAILS_NOTE, railKey, GATED_RAILS, liveRails } from "../src/rails.js";
 import { NETWORKS } from "../src/payments.js";
 import { railsCoveredByLiveView } from "../src/revenue-live.js";

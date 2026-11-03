@@ -19,6 +19,7 @@
 // Same reasoning as src/index-paging.js, written for the same defect.
 //
 //   node scripts/test-negative-answer-honesty.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";

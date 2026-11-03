@@ -5,6 +5,7 @@
 //   3. persistIndexCacheAsync writes the legacy JSON byte-identical to
 //      JSON.stringify({savedAt, entries}), an NDJSON twin, and never holds the
 //      event loop for the whole stringify.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";

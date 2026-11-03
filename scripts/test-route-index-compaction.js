@@ -2,6 +2,7 @@
 // entries without a route query: with a router worker loaded, this thread
 // answers no queries, and stale rows (each holding its old entry) used to pile
 // up one full copy of the seller pool per crawl cycle until the heap ran out.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.X402_INDEX_CRAWL = "off";
 const xi = await import("../src/x402-index.js");
 const { buildRoutePerfFixture } = await import("./lib/route-perf-fixture.js");

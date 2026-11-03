@@ -69,6 +69,7 @@ import { payerFromRequest, paymentHeaderOf, paymentSchemeOf, paymentNonceIdentit
 import { coverTermsOf, readTokenBalance } from "./inflight-cover.js";
 import { OUR_EVM_WALLETS } from "./revenue-live.js";
 import { getSharedRedisClient } from "./shared-limit.js";
+import { withLoopTimeout } from "./loop-deadline.js";
 import { keyOf, OP_MS } from "./shared-limits.js";
 import { stateDbEnabled, records } from "./state-db.js";
 import { handlerInputOf } from "./handler-input.js";
@@ -191,13 +192,11 @@ local v = redis.call('GET', KEYS[1])
 if v == ARGV[1] or not v then redis.call('SET', KEYS[1], ARGV[2], 'EX', ARGV[3]) end
 return 1`;
 
-/** `p` within `ms`, else a rejection: no store or RPC read here waits longer. */
-async function within(p, ms) {
-  let timer = null;
-  try {
-    const bound = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error("timed out")), ms); timer.unref?.(); });
-    return await Promise.race([p, bound]);
-  } finally { if (timer) clearTimeout(timer); }
+/** `p` within `ms` of loop time (src/loop-deadline.js), else a rejection: no
+ *  store or RPC read here waits longer, and an answer that landed while the
+ *  loop was held is read, not taken for one that did not come. */
+function within(p, ms) {
+  return withLoopTimeout(p, ms, () => new Error("timed out"));
 }
 async function sharedClient() {
   try { return (await within(getSharedRedisClient(), OP_MS())) || null; } catch { return null; }

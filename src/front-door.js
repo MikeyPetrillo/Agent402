@@ -1,6 +1,7 @@
 // The front door: the three lines an agent reads first on every machine
-// surface (/llms.txt, /agents.md, the MCP server.describe answer and the
-// unpaid 402 body). One source, so every surface says the same thing: the
+// surface (/llms.txt, /agents.md and the MCP server.describe answer; the
+// unpaid 402 body carries the access line and the guide link only with
+// FRONT_DOOR_402=on). One source, so every surface says the same thing: the
 // call to make first and its price, how access works (the proof-of-work free
 // tier first), and when to use the service and when not to. What happens when
 // a call fails lives on /agents.md under its own heading, linked from line 3.
@@ -58,10 +59,11 @@ const orList = (xs) => (xs.length <= 1 ? xs.join("") : xs.length === 2 ? `${xs[0
 export const RECOVERY_ANCHOR = `#${RECOVERY_HEADING.toLowerCase().replace(/\s+/g, "-")}`;
 
 /** The one exception to "no receipt, nothing settled": a settle that times
- *  out, or a disconnect during it, while the transfer still lands. Every
- *  surface that says no PAYMENT-RESPONSE means nothing settled carries it
- *  (scripts/test-front-door.js scans for the claim). */
-export const LATE_SETTLE_EXCEPTION = "One exception: a transfer that lands after a timed-out settle, or a disconnect during settle, is booked as a refund owed and repaid after on-chain proof.";
+ *  out, a disconnect during it, or a facilitator's pending answer whose
+ *  receipt was not read in time (src/pending-settle.js), while the transfer
+ *  still lands. Every surface that says no PAYMENT-RESPONSE means nothing
+ *  settled carries it (scripts/test-front-door.js scans for the claim). */
+export const LATE_SETTLE_EXCEPTION = "One exception: a transfer that lands after a timed-out settle, a disconnect during settle, or a settle the facilitator answered as pending whose receipt was not read in time, is booked as a refund owed and repaid after on-chain proof.";
 
 /** What the paid tier settles in and over which wires, from the live config:
  *  the stablecoins named from the rails list (USDC alone only when every rail
@@ -172,9 +174,9 @@ export function recoveryMarkdown(catalog, baseUrl) {
 - **If a call is slow:** ${d.recovery[3]}`;
 }
 
-/** JSON: the MCP server.describe answer and the unpaid 402 body. Built once
- *  per catalog, base URL, route count and switch state (every unpaid 402
- *  carries it). */
+/** JSON: the MCP server.describe answer, and the source of the unpaid 402
+ *  body's part (frontDoor402Json, added only with FRONT_DOOR_402=on). Built
+ *  once per catalog, base URL, route count and switch state. */
 const jsonMemo = new WeakMap();
 export function frontDoorJson(catalog, baseUrl) {
   return memoized(jsonMemo, catalog, baseUrl, () => buildFrontDoorJson(catalog, baseUrl));

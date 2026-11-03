@@ -8,6 +8,7 @@
 // but answers WRONG (a 200 where a 402 is required, a collapsed catalog, a
 // rail silently missing from the offer) — the quiet regressions a plain
 // reachability check would wave through.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { readFile } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";

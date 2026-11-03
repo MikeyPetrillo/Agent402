@@ -293,6 +293,46 @@ console.log("\n# STT — cap-before-spend (local duration probe)");
 }
 
 // ---------------------------------------------------------------------------
+// 5b. onchain-sql: the query service meters every query, and one call may
+//     send SQL_QUERY_BUDGET of them (the buyer's query, its retry, the
+//     recovery runs). That many at the table's rate, plus one facilitator
+//     settlement when the table prices one, must sit within the same MARGIN
+//     bound as every other section (worst-case upstream at most MARGIN x the
+//     price). The onchain-analyst pack runs the tool once, so its bundle
+//     price is held to the same bound. Figures stay in the process: the rate
+//     is private, and only PASS/FAIL/SKIP is printed.
+console.log("\n# onchain-sql: the call's query budget vs price");
+{
+  const { CDP_TOOLS, SQL_QUERY_BUDGET } = await import("../src/tools/cdp-kit.js");
+  const { PACK_PRICES, SKILL_PACKS } = await import("../src/skills.js");
+  const { vendorRate } = await import("../src/upstream-costs.js");
+  const rate = vendorRate("cdp", "sqlQuery");
+  if (rate == null) {
+    if (process.env.CI && process.env.UPSTREAM_COSTS_OPTIONAL !== "1") ok(false, "onchain-sql: the private table has no vendor.cdp.sqlQuery rate (required under CI)");
+    else console.log("SKIP - onchain-sql margin: the private table has no vendor.cdp.sqlQuery rate yet");
+  } else {
+    // A settlement fee is optional in the table (fees.settlementPerCall); without one the term is zero.
+    const settle = upstreamCosts().fees.settlementPerCall ?? 0;
+    const priceOf = (s) => Number(String(CDP_TOOLS.find((t) => t.slug === s)?.price ?? "").replace(/[^0-9.]/g, ""));
+    const cost = SQL_QUERY_BUDGET * rate + settle;
+    const sqlPrice = priceOf("onchain-sql");
+    ok(SQL_QUERY_BUDGET >= 4 && Number.isFinite(sqlPrice) && sqlPrice > 0, `onchain-sql: a list price and a query budget of ${SQL_QUERY_BUDGET} to price against`);
+    ok(cost <= MARGIN * sqlPrice + 1e-12, `onchain-sql: ${SQL_QUERY_BUDGET} queries at the table rate plus a settlement sit within the margin bound of the list price: ${cost <= MARGIN * sqlPrice + 1e-12 ? "PASS" : "FAIL"}`);
+    table.push({ tier: "onchain-sql", price: sqlPrice, worst: cost, model: `${SQL_QUERY_BUDGET} queries (query service)` });
+    // The only other route that sends a buyer's query to the query service is
+    // the onchain-analyst pack (skill-runner.js runs onchain-sql once); the
+    // schema step reads the schema endpoint, which is not a query.
+    const packs = SKILL_PACKS.filter((p) => (p.toolSlugs || []).includes("onchain-sql"));
+    ok(packs.length === 1 && packs[0].slug === "onchain-analyst", `one skill pack runs onchain-sql (${packs.map((p) => p.slug).join(", ") || "none"})`);
+    for (const p of packs) {
+      const packPrice = Number(PACK_PRICES[p.slug]);
+      ok(cost <= MARGIN * packPrice + 1e-12, `${p.slug} pack: ${SQL_QUERY_BUDGET} queries plus a settlement sit within the margin bound of its bundle price: ${cost <= MARGIN * packPrice + 1e-12 ? "PASS" : "FAIL"}`);
+      table.push({ tier: p.slug, price: packPrice, worst: cost, model: `${SQL_QUERY_BUDGET} queries (one onchain-sql step)` });
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 6. tool_gone telemetry — every retired-route hit (transparently served 200
 // or teaching 410) must be visible in PostHog.
 console.log("\n# tool_gone — retired-route telemetry");

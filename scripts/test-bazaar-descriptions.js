@@ -2,6 +2,7 @@
 // slug, fits the Bazaar's 500-char cap, reads as what+when (no internal
 // cross-references the Bazaar reader cannot follow), no em dashes; the
 // generic cap truncates at a sentence/word boundary, never mid-word "...".
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { BAZAAR_DESCRIPTIONS, BAZAAR_DESCRIPTION_MAX, bazaarCapDescription, fitChallenge, CHALLENGE_SHORT_DESCRIPTION_MAX, isExamplePointer } from "../src/payments.js";
 import { RUGCHECK_SLUGS, rugcheckEnabled } from "../src/tools/solana-intel-kit.js";
 

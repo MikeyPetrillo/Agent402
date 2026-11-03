@@ -12,6 +12,7 @@
 // $0.02 while the one working URL sat beside them. His second point is the one
 // we could not have seen from here: a prober that tries the documented path
 // records the SELLER as unpayable, for a service that answers 402 correctly.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 
 let pass = 0, fail = 0;

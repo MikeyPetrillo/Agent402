@@ -26,9 +26,10 @@
 //
 // The listener rides onSettleOutcome (src/hangup-settlement.js), which reports
 // the final outcome whether or not the buyer stayed connected: a settlement
-// that fails after the buyer left counts like one whose buyer stayed. A charge
-// cancelled for a buyer who left inside the forgiveness budget is not counted
-// here; that budget is its bound.
+// sent while the buyer was connected that fails after the buyer left counts
+// like one whose buyer stayed. A charge cancelled for a buyer who left inside
+// the forgiveness budget (never sent) is not counted here; that budget is its
+// bound.
 //
 // The finish listener reads the status AND the settle receipt (PAYMENT-RESPONSE
 // with success:false), so a graceful facilitator rejection is caught whatever
@@ -122,13 +123,25 @@ const PROC = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
 let sharedSeq = 0;
 const CONTROL = "gateway-settle-breaker";
 function sharedKey(key) { return key.replace(/[\s]/g, "_"); }
+// Every write this process has sent and not yet heard back from, including
+// the pause a window add sets once its reply shows the trip. The writes are
+// fire-and-forget on the serving path; only the test reset waits on them, so
+// a pause set by a write still in flight cannot land after the reset cleared
+// the flag.
+const pendingWrites = new Set();
+function write(p) {
+  const w = sharedWrite(CONTROL, p);
+  pendingWrites.add(w);
+  w.finally(() => pendingWrites.delete(w));
+  return w;
+}
 function sharedRecordFailure(key, now, { global, billing, withdrawn, walletCount = true }) {
   const member = `${PROC}:${++sharedSeq}`;
   if (global) {
-    void sharedWrite(CONTROL, shared.windowAdd("gwb-global", "all", { windowMs: WINDOW_MS, member: key ? sharedKey(key) : `${withdrawn ? "withdrawn" : "anon"}:${member}`, now })).then((r) => {
+    void write(shared.windowAdd("gwb-global", "all", { windowMs: WINDOW_MS, member: key ? sharedKey(key) : `${withdrawn ? "withdrawn" : "anon"}:${member}`, now })).then((r) => {
       if (!r?.ok || r.count < GLOBAL_MAX_FAILS) return;
-      void sharedWrite(CONTROL, shared.flagSet("gwb-pause", "all", now + WINDOW_MS, { now }));
-      void sharedWrite(CONTROL, shared.windowClear("gwb-global", "all"));
+      void write(shared.flagSet("gwb-pause", "all", now + WINDOW_MS, { now }));
+      void write(shared.windowClear("gwb-global", "all"));
       if (globalPausedUntil <= now) {
         globalPausedUntil = now + WINDOW_MS;
         globalTrips++;
@@ -137,14 +150,11 @@ function sharedRecordFailure(key, now, { global, billing, withdrawn, walletCount
     });
   }
   if (!key || !walletCount) return;
-  void sharedWrite(CONTROL, shared.windowAdd("gwb-fail", sharedKey(key), { windowMs: WINDOW_MS, member, now }));
-  if (billing) void sharedWrite(CONTROL, shared.windowAdd("gwb-bill", sharedKey(key), { windowMs: WINDOW_MS, member, now }));
+  void write(shared.windowAdd("gwb-fail", sharedKey(key), { windowMs: WINDOW_MS, member, now }));
+  if (billing) void write(shared.windowAdd("gwb-bill", sharedKey(key), { windowMs: WINDOW_MS, member, now }));
 }
 function sharedRecordSuccess(key, now) {
-  void sharedWrite(CONTROL, shared.windowAdd("gwb-ok", sharedKey(key), { windowMs: WINDOW_MS, member: `${PROC}:${++sharedSeq}`, now }));
-}
-function sharedClearKey(key) {
-  for (const name of ["gwb-fail", "gwb-bill", "gwb-ok"]) void sharedWrite(CONTROL, shared.windowClear(name, sharedKey(key)));
+  void write(shared.windowAdd("gwb-ok", sharedKey(key), { windowMs: WINDOW_MS, member: `${PROC}:${++sharedSeq}`, now }));
 }
 /** The per-key state with the shared windows folded in: each count is the
  *  larger of the store's and this process's own (a write of this process
@@ -426,13 +436,21 @@ export function gatewaySettleBreakerStatus(now = Date.now()) {
   };
 }
 
-/** Test-only. */
+/** Test-only. With a shared store it returns a promise that settles once
+ *  every write already sent (a trip's pause included) has landed and the
+ *  shared windows and flag are cleared after them; await it. */
 export function _gatewaySettleBreakerReset() {
-  if (SHARED) {
-    for (const k of new Set([...fails.keys(), ...billingFails.keys(), ...oks.keys()])) sharedClearKey(k);
-    void shared.flagSet("gwb-pause", "all", 0); void shared.windowClear("gwb-global", "all");
-  }
+  const keys = new Set([...fails.keys(), ...billingFails.keys(), ...oks.keys()]);
   fails.clear(); billingFails.clear(); oks.clear(); globalFailKeys = new Map(); globalPausedUntil = 0; globalTrips = 0;
+  if (!SHARED) return undefined;
+  return (async () => {
+    while (pendingWrites.size) await Promise.allSettled([...pendingWrites]);
+    await Promise.allSettled([
+      ...[...keys].flatMap((k) => ["gwb-fail", "gwb-bill", "gwb-ok"].map((name) => shared.windowClear(name, sharedKey(k)))),
+      shared.flagSet("gwb-pause", "all", 0), shared.windowClear("gwb-global", "all"),
+    ]);
+    globalPausedUntil = 0; globalTrips = 0;
+  })();
 }
 /** Whether this process writes the breaker through to the shared store. */
 export const _gatewaySettleBreakerShared = SHARED;

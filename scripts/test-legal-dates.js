@@ -11,7 +11,7 @@ import { createHash } from "node:crypto";
 // option) moves the sha, not the date, until that switch ships on.
 const PINS = {
   "src/terms.js": { date: "2026-10-29", sha: "77690fce2187df8e" },
-  "src/privacy.js": { date: "2026-11-03", sha: "a6c4f494d8b73cca" },
+  "src/privacy.js": { date: "2026-11-03", sha: "d1c007c0bda86d87" },
 };
 let pass = 0, fail = 0;
 const TODAY = new Date().toISOString().slice(0, 10);

@@ -13,6 +13,7 @@
 // (throwaway values), once with them unset. Each boot asks every catalog
 // route for its unpaid 402 and checks every accept's payTo against the
 // manifest's declared payee for that route and network.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { getFreePorts } from "./lib/free-port.js";

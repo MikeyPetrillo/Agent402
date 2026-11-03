@@ -196,6 +196,10 @@ const FIXED_UPSTREAMS = [
   [/(^|\.)sec\.gov$/, "edgar"],
   [/(^|\.)exa\.ai$/, "exa"],
   [/(^|\.)openrouter\.ai$/, "openrouter"],
+  // The CDP data API (onchain-sql, balances, onramp). Its facilitator shares
+  // the host and is registered by path at boot, so only calls outside that
+  // path land here.
+  [/^api\.cdp\.coinbase\.com$/, "cdp-data"],
 ];
 
 const emptyTool = () => TOOL_CLASSES.map(() => 0);
@@ -249,7 +253,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
   const paths = new Map();      // arrival path group (src/sale-path.js) -> Map(bucket -> { o: [], s: [], f: [] })
   const rails = new Map();      // payment rail -> Map(bucket -> { o: [], s: [], f: [] })
   let relayerGas = [];          // the last gas check's readings (src/facilitator-gas.js)
-  const hosts = [];             // [matcher(host) -> bool, name, perFetch]
+  const hosts = [];             // [matcher(host, path) -> bool, name, perFetch, key]
   let remote = { at: 0, snapshots: [], ok: false, merged: null };
   let cached = null;      // { at, e }: the last evaluation the words are read from
   let recomputing = false;
@@ -257,10 +261,14 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
   const bucketOf = (t) => Math.floor(t / BUCKET_MS);
   const prune = (m, t) => { const floor = bucketOf(t - DAY_MS); for (const k of m.keys()) if (k <= floor) m.delete(k); };
 
-  function upstreamNameOf(host) {
+  // `path` is the request path when the caller has it (the egress observer);
+  // a host registered by path then names only calls under that path. Without
+  // a path (a caller that knows only the host, such as a facilitator's
+  // pending answer), the registered host's name is read.
+  function upstreamNameOf(host, path = null) {
     const h = String(host || "").toLowerCase().replace(/:\d+$/, "");
     if (!h) return null;
-    for (const [match, name] of hosts) if (match(h)) return name;
+    for (const [match, name] of hosts) if (match(h, path)) return name;
     for (const [re, name] of FIXED_UPSTREAMS) if (re.test(h)) return name;
     return null;
   }
@@ -268,11 +276,17 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
   // `perFetch: false` names a host whose caller reports one final outcome per
   // call (noteUpstream) instead of the egress meter counting every attempt:
   // the render worker, whose wake retries are not failures of the call.
-  function registerUpstreamHost(url, name, { perFetch = true } = {}) {
+  // `byPath: true` names only calls under the URL's path (a facilitator that
+  // shares its host with a data API), when the caller knows the path.
+  function registerUpstreamHost(url, name, { perFetch = true, byPath = false } = {}) {
     try {
-      const h = new URL(String(url)).host.toLowerCase().replace(/:\d+$/, "");
-      if (!h || hosts.some(([m]) => m(h))) return false;
-      hosts.push([(x) => x === h, String(name || h), perFetch !== false]);
+      const u = new URL(String(url));
+      const h = u.host.toLowerCase().replace(/:\d+$/, "");
+      const prefix = byPath ? u.pathname.replace(/\/+$/, "") : "";
+      const key = `${h}${prefix}`;
+      if (!h || hosts.some(([, , , k]) => k === key)) return false;
+      const under = (p) => !prefix || p === null || p === undefined || String(p) === prefix || String(p).startsWith(`${prefix}/`);
+      hosts.push([(x, p) => x === h && under(p), String(name || h), perFetch !== false, key]);
       return true;
     } catch { return false; }
   }
@@ -339,8 +353,8 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     lastToolError.set(s, { at, status: Number(status), message: String(message || "").slice(0, 200), synthetic: !!synthetic });
   }
 
-  function noteUpstream(host, kind, { origin = "background", status = null, at = now() } = {}) {
-    const name = upstreamNameOf(host);
+  function noteUpstream(host, kind, { origin = "background", status = null, at = now(), path = null } = {}) {
+    const name = upstreamNameOf(host, path);
     if (!name || !UPSTREAM_KINDS.includes(kind)) return null;
     let m = upstreams.get(name);
     if (!m) { if (upstreams.size >= MAX_UPSTREAMS) return null; m = new Map(); upstreams.set(name, m); }
@@ -403,16 +417,16 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
   }
 
   /** Observe one outbound fetch (the egress meter's observer). */
-  function observeFetch(host, promise, init, origin) {
+  function observeFetch(host, promise, init, origin, path = null) {
     // A read that marks itself as not an upstream outcome (the model list,
     // src/model-catalog.js) is not counted.
     if (init && init[NO_OUTCOME]) return;
-    if (!upstreamNameOf(host)) return;
+    if (!upstreamNameOf(host, path)) return;
     const h = String(host || "").toLowerCase().replace(/:\d+$/, "");
-    if (hosts.some(([m, , perFetch]) => !perFetch && m(h))) return;
+    if (hosts.some(([m, , perFetch]) => !perFetch && m(h, path))) return;
     Promise.resolve(promise).then(
-      (res) => { noteUpstream(host, upstreamKindOfStatus(res?.status), { origin, status: res?.status ?? null }); },
-      (err) => { noteUpstream(host, upstreamKindOfError(err, init), { origin }); },
+      (res) => { noteUpstream(host, upstreamKindOfStatus(res?.status), { origin, status: res?.status ?? null, path }); },
+      (err) => { noteUpstream(host, upstreamKindOfError(err, init), { origin, path }); },
     );
   }
 

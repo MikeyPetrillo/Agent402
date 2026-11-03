@@ -16,6 +16,7 @@
 //     emits no "finish" for a response ended on a closed socket, which is how
 //     these settlements went missing from the funnel, the sales ledger and the
 //     served-call tally until the tally moved to onSettleOutcome.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer, request as httpRequest } from "node:http";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";

@@ -6,6 +6,7 @@
 // per window, an hourly route allowance per origin, and the register answer
 // says what ran and when the next one is available. Offline: stubbed fetch,
 // injected crawler; example.com only so the SSRF guard's DNS check resolves.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.X402_INDEX_CRAWL = "off";
 const { registerOrigin, __testResetSubmitted, __testSeedCache, __resetForcedCrawlForTest, __shiftRecheckClocksForTest } = await import("../src/x402-index.js");
 

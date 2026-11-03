@@ -8,6 +8,7 @@
 // subdomain sellers ranking.
 //
 // Offline, no server, no network.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { computeAliasOrigins, routeQuery, _cacheForTests } from "../src/x402-index.js";
 
 const fail = (m) => { console.error("FAIL:", m); process.exit(1); };

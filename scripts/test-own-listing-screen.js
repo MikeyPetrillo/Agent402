@@ -14,6 +14,7 @@
 // the slug and the field path. A control plants an instruction phrase and a
 // hidden character in copies of a real 402 and of /openapi.json, and the run
 // fails unless both are reported at the planted path.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { getFreePorts } from "./lib/free-port.js";

@@ -963,7 +963,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (4 scripts, one process each)
+      - name: Offline suites (10 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -996,7 +996,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (2 scripts, one process each)
+      - name: Offline suites (4 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -1161,7 +1161,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (10 scripts, one process each)
+      - name: Offline suites (12 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -1289,7 +1289,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (8 scripts, one process each)
+      - name: Offline suites (15 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -1370,6 +1370,14 @@ jobs:
           t node scripts/test-avm-subcent-shared-redis.js
           # Seller registration limits (x402 and MPP, per IP and global) are one count across two servers on one Redis, with each process's own count as the floor.
           t node scripts/test-registration-limits-redis.js
+          # Hang-up settlement with the booted server's forgiveness budget on the shared store (Part 2 keeps REDIS_URL under a per-run prefix).
+          t node scripts/test-hangup-settlement.js
+          # The settle-failure breaker writes through to the shared store: a trip on one process pauses the other.
+          t node scripts/test-gateway-settle-breaker.js
+          # Two servers on one live Redis run one payment sent to both at once exactly once (the outage cases also run offline).
+          t node scripts/test-replay-store-outage.js
+          # The consumed mark's hold read back from Redis: a settled 200 keeps the guard's hour, a forgiven unsettled hang-up is held to the authorization's validBefore.
+          t node scripts/test-replay-consumed-hold.js
 
       - name: "State database (REAL postgres: documents/records/log lines/leases; every migrated store imports its file once and reads the row; loops skip under another holder's lease; idempotency answers and claims shared over REAL redis)"
         env:
@@ -1415,6 +1423,8 @@ jobs:
           t node scripts/test-x402-index-pg.js
           # Two containers, one seller index: pull, newer wins, removals stick.
           t node scripts/test-index-replicas-pg.js
+          # Two copies of one revision written in either order converge on one copy in both containers and the row.
+          t node scripts/test-index-equal-rev-pg.js
           # The index's save and pull yield on time at production scale (5,800 origins, 198k tools).
           t node scripts/test-index-persist-slices-pg.js
           # The tool directory from the state database (INDEX_LISTINGS_STORE=pg): every page the in-memory directory's, row for row; changes and removals written; no in-memory directory built; a page under 50 ms
@@ -1525,7 +1535,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (4 scripts, one process each)
+      - name: Offline suites (5 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -1591,7 +1601,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (6 scripts, one process each)
+      - name: Offline suites (44 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -1764,7 +1774,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (2 scripts, one process each)
+      - name: Offline suites (18 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -1801,7 +1811,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (23 scripts, one process each)
+      - name: Offline suites (60 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -1924,7 +1934,7 @@ jobs:
       # The original step names ride above each script so the WHY stays here.
       - name: OCR language data for the OCR suites (pinned, hash-checked; the server never downloads it)
         run: node scripts/fetch-tessdata.js tessdata eng spa fra deu
-      - name: Offline suites (11 scripts, one process each)
+      - name: Offline suites (23 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -1983,7 +1993,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (10 scripts, one process each)
+      - name: Offline suites (26 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -2330,7 +2340,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (4 scripts, one process each)
+      - name: Offline suites (9 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -2340,6 +2350,9 @@ jobs:
           t node scripts/test-stats-envelope.js
           # Shared trial counter (a cap of 1 must mean 1 across replicas)
           t node scripts/test-shared-limit.js
+          # Store deadlines count loop time: an answer that landed while the loop was held is read, not a timeout
+          t node scripts/test-loop-deadline.js
+          t node scripts/test-loop-deadline-sites.js
           # Tool pages backlink to the skill packs they belong to
           t node scripts/test-tool-page-backlinks.js
           # Tool pages: escaped examples, one h1, title/description bounds, sections
@@ -2356,7 +2369,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (8 scripts, one process each)
+      - name: Offline suites (17 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -2493,7 +2506,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (20 scripts, one process each)
+      - name: Offline suites (28 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -2541,6 +2554,7 @@ jobs:
           t node scripts/test-llms-mpp-header-note.js
           # "Payment-nonce replay guard (M3 — Attack II: concurrent replay collapses to one grant, release-on-failure)"
           t node scripts/test-replay-guard.js
+          t node scripts/test-replay-topology.js
           # "Replay guard with its shared store unreachable: long-running routes refuse 503 before any payment, fast routes keep the per-process claim (real server + stub facilitator - offline)"
           t node scripts/test-replay-store-outage.js
           # "agent402-client pays over MPP (real mppx fetch as the SDK's fetch; real server + stub facilitator — offline)"
@@ -2653,7 +2667,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (10 scripts, one process each)
+      - name: Offline suites (35 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -2715,6 +2729,8 @@ jobs:
           #  (verified first-party against prod, 2026-08-29). Boots the real server against a
           #  local /supported stub; no payment is made."
           t node scripts/test-bazaar-contracts.js
+          # A 402's shortened example is replayed from /openapi.json; html-frames' example fits whole (offline)
+          t node scripts/test-replayable-example.js
           # Our own listing text (every 402, /api/pricing, /openapi.json, /.well-known/x402) passes
           # the listing screen and the hidden-character scan we hold sellers to (stub facilitator)
           t node scripts/test-own-listing-screen.js
@@ -2738,7 +2754,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (3 scripts, one process each)
+      - name: Offline suites (9 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -2765,7 +2781,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (23 scripts, one process each)
+      - name: Offline suites (102 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -3024,7 +3040,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (87 scripts, one process each)
+      - name: Offline suites (159 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -3353,7 +3369,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (20 scripts, one process each)
+      - name: Offline suites (42 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -3478,7 +3494,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (7 scripts, one process each)
+      - name: Offline suites (10 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -3619,7 +3635,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (12 scripts, one process each)
+      - name: Offline suites (15 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -4124,7 +4140,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (1 scripts, one process each)
+      - name: Offline suites (10 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -4716,7 +4732,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (5 scripts, one process each)
+      - name: Offline suites (62 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -5016,7 +5032,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (1 scripts, one process each)
+      - name: Offline suites (1 script, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -5089,7 +5105,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (2 scripts, one process each)
+      - name: Offline suites (14 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -6478,6 +6494,7 @@ jobs:
           exit 1
 
       - name: Verify deployment
+        id: verify
         env:
           RAILWAY_DOMAIN: ${{ steps.domain.outputs.domain }}
         run: |
@@ -6888,3 +6905,44 @@ jobs:
           done
           echo "::error::decide deployment did not reach SUCCESS in 15 minutes (last status: $LAST). The main app is live."
           exit 1
+
+      # The new build's 402s against Coinbase's Bazaar validator, read-only and
+      # keyless (the heartbeat repeats it on a schedule). Up to three runs a
+      # minute apart, stopping at the first clean one (exit 0), which passes.
+      # With no clean run, one run that read a flagship route INVALID (exit 1)
+      # fails this job whatever the other runs did, so a release that breaks a
+      # listing is red on its own run. Only when every run could not read the
+      # validator (exit 2, CDP-side) does the step warn instead: it then has
+      # no verdict on our build.
+      - name: Bazaar listing validation on the new build
+        if: ${{ !cancelled() && steps.verify.outcome == 'success' }}
+        env:
+          DATABENTO_API_KEY: ""
+          RAILWAY_API_TOKEN: ""
+          CDP_KEY_ID: ""
+          CDP_KEY_SECRET: ""
+          BRAVE_API_KEY: ""
+          FRED_API_KEY: ""
+          FRED_API_KEY_V2: ""
+          MPP_SECRET_KEY: ""
+          X_BEARER_TOKEN: ""
+          WALLET_ADDRESS: ""
+        run: |
+          BEST=9
+          INVALID=0
+          for i in 1 2 3; do
+            set +e
+            OUT=$(TARGET_URL=https://agent402.tools node scripts/bazaar-validate.js 2>&1); CODE=$?
+            set -e
+            echo "--- run $i: exit $CODE"
+            echo "$OUT" | tail -20
+            if [ "$CODE" -lt "$BEST" ]; then BEST=$CODE; fi
+            if [ "$CODE" = "1" ]; then INVALID=$((INVALID + 1)); fi
+            if [ "$CODE" = "0" ]; then break; fi
+            if [ "$i" -lt 3 ]; then sleep 60; fi
+          done
+          case "$BEST" in
+            0) echo "Every flagship route validates on the new build." ;;
+            2) echo "::warning::The Bazaar validator could not be read on any run (CDP-side); no listing verdict for this build." ;;
+            *) echo "::error::No Bazaar validator run was clean against the new build: $INVALID of $i run(s) read a flagship route INVALID, the rest could not be read."; exit 1 ;;
+          esac

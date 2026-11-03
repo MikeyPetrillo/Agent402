@@ -25,6 +25,7 @@
 import { randomBytes } from "node:crypto";
 import { hostname } from "node:os";
 import { getSharedRedisClient } from "./shared-limit.js";
+import { withLoopTimeout } from "./loop-deadline.js";
 import { redisPersistenceMonitor, startRedisPersistenceMonitor, redisPersistenceWord, __setRedisPersistenceClientForTest } from "./redis-persistence.js";
 
 /**
@@ -234,12 +235,12 @@ export function createRedisJournal({ key, redis = () => clientOf(), owner = `${h
   const KEYS = ["items", "seq", "lease", "owner", "pend", "drain", "n"].map((k) => `${p}:${k}`);
   ensureGateWatch();
   let downUntil = 0;
-  const op = (promise) => new Promise((resolve, reject) => {
-    // Not unref'd: a command in flight keeps the process alive until it
-    // answers or times out (the client itself is unref'd, see letExit).
-    const t = setTimeout(() => reject(new Error("redis journal: command timed out")), OP_MS());
-    Promise.resolve(promise).then((v) => { clearTimeout(t); resolve(v); }, (e) => { clearTimeout(t); reject(e); });
-  });
+  // Not unref'd: a command in flight keeps the process alive until it
+  // answers or times out (the client itself is unref'd, see letExit).
+  // Measured in loop time (src/loop-deadline.js): an answer that landed while
+  // the loop was held is read, not booked as a command that timed out (which
+  // opens the down window and sends entries to local disk).
+  const op = (promise) => withLoopTimeout(promise, OP_MS(), () => new Error("redis journal: command timed out"), { ref: true });
   async function run(script, args) {
     let c = null;
     try { c = letExit(await redis()); } catch { c = null; }

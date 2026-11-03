@@ -21,6 +21,7 @@
 // believe it.
 //
 //   node scripts/test-price-known.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";
 import { priceToMicroUsd } from "../src/x402-index.js";

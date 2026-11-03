@@ -10,6 +10,7 @@
 //
 // Run: node scripts/test-listing-text-serve.js
 // sellers.list is mounted only with the router shown (as CI runs it).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.AGENT402_SHOW_ROUTER ??= "1";
 import { readFileSync } from "node:fs";
 import express from "express";

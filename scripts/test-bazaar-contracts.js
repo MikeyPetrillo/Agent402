@@ -14,6 +14,7 @@ import {
 import { boundedSchemaFromExample, SHAPE_HAPPY_PATH_ONLY } from "../src/openapi-schema.js";
 import { gradeX402Response } from "../src/tools/x402-kit.js";
 import { CAIP2_PATTERN } from "../src/avm-network.js";
+import { hasShortenedExample, replayableInput, openapiOperation } from "./lib/replayable-example.js";
 
 const MAX_CHALLENGE_BYTES = 12_000;
 // The JSON body mirrors the header's PaymentRequired object (see
@@ -105,6 +106,11 @@ try {
   if (endpoints.length < CURRENT_PRODUCTION_ROUTE_FLOOR) {
     throw new Error(`catalog shrank to ${endpoints.length}; expected at least ${CURRENT_PRODUCTION_ROUTE_FLOOR} current paid routes`);
   }
+
+  // The paid sweeps replay each 402's example input; a long string there is
+  // a placeholder, and the full example must come back from /openapi.json.
+  const openapi = await (await fetch(`${base}/openapi.json`)).json();
+  let shortenedExamples = 0;
 
   let cursor = 0;
   const rows = [];
@@ -212,6 +218,16 @@ try {
 
     const extension = paymentRequired.extensions?.bazaar;
     if (!extension) { fail(route, "missing bazaar extension"); continue; }
+    {
+      const input = extension.info?.input;
+      if (hasShortenedExample(input?.body) || hasShortenedExample(input?.queryParams)) {
+        shortenedExamples++;
+        const replay = replayableInput(input, openapiOperation(openapi, endpoint.method || "GET", endpoint.path));
+        if (!replay) fail(route, "the 402's example input is shortened and /openapi.json has no full example to replay");
+        else if (hasShortenedExample(replay)) fail(route, "the replayable example still carries a placeholder");
+      }
+      if (endpoint.path === "/api/html-frames" && hasShortenedExample(input)) fail(route, "html-frames' 402 example lost its document to the byte budget");
+    }
     const spec = validateDiscoveryExtensionSpec(extension);
     if (!spec.valid) fail(route, `Bazaar spec: ${(spec.errors || []).join("; ")}`);
     const schema = validateDiscoveryExtension(extension);
@@ -268,6 +284,7 @@ try {
   if (!specificTagSeen) fail("POST /api/extract", "representative route-specific tag did not survive sanitization");
 
   console.log(`catalog routes: ${endpoints.length}`);
+  console.log(`402 examples shortened by the byte budget (replayed from /openapi.json): ${shortenedExamples}`);
   console.log(`route-aware required schemas: ${requiredRoutes}; variable schemas without required: ${variableRoutes}; raw/array schemas: ${rawRoutes}`);
   console.log(`402 amount vs price list: ${fixedPriced} fixed routes at list price, ${quotedPriced} quoted routes inside their published range`);
   console.log(`largest challenge: ${largest.route} at ${largest.bytes} bytes`);

@@ -16,6 +16,7 @@
 // existed, which is why the merge happens at read time.
 //
 // This is the guard that makes adding a rail without naming it fail loudly.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { KNOWN_CAIP2, mergeNetworkCounters } from "../src/stats.js";
 import { NETWORKS } from "../src/payments.js";
 

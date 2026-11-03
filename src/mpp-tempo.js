@@ -45,9 +45,11 @@ import { mppChallengesSuppressed, clientFingerprint } from "./mpp-fallback.js";
 import { TxEnvelopeTempo, SignatureEnvelope, KeyAuthorization } from "ox/tempo";
 import { encodeFunctionData, decodeFunctionResult } from "viem";
 import { Abis, Addresses } from "viem/tempo";
-import { chargeCancelledForClientGone, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
+import { chargeCancelledForClientGone, markSettleSent, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
 import { tempoPushSender } from "./tempo-confirm.js";
 import { syncWindowRefusalOf } from "./slow-sync-window.js";
+import { sharedClaimRequired } from "./replay-topology.js";
+import { drainSignal } from "./drain-abort.js";
 import { screenAddresses, screenFunding, sanctionsScreenStatus, maskAddress as maskOne } from "./sanctions-screen.js";
 import { Secp256k1 } from "ox";
 
@@ -673,7 +675,7 @@ export function checkTempoCredentialBinding(authorizationHeader, { secretKey, re
   // unexpired, our payTo, our currency, Tempo mainnet) by the ROUTE it was
   // presented at. The money a push credential names already paid that
   // challenge, so the gate books it as owed instead of answering "not charged".
-  const badRoute = (reason) => ({ ok: false, reason, routeRefusal: true });
+  const badRoute = (reason, extra = {}) => ({ ok: false, reason, routeRefusal: true, ...extra });
   let credential;
   try { credential = Credential.deserialize(authorizationHeader); } catch { return bad("credential does not deserialize"); }
   const ch = credential?.challenge;
@@ -700,7 +702,7 @@ export function checkTempoCredentialBinding(authorizationHeader, { secretKey, re
   // reach those handlers (it would be served under whatever payer header the
   // request also carried).
   if (item.identityBound) return badRoute("this route is wallet-identity bound (the payment IS the identity); Tempo credentials carry no payer this server verifies - pay it over an x402 rail");
-  if (item.longRunning) return badRoute("this route runs longer than a Tempo credential stays valid (settlement happens after the handler); pay it over an EVM x402 rail or by card");
+  if (item.longRunning) return badRoute("this route runs longer than a Tempo credential stays valid (settlement happens after the handler); pay it over an EVM x402 rail or by card", { longRunning: true });
   const expected = BigInt(Math.round(priceUsd * 10 ** envDecimals()));
   let amount;
   try { amount = BigInt(String(r.amount)); } catch { return bad("challenge amount is not an integer base-units string"); }
@@ -1332,9 +1334,22 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
       };
       // The credential's identity is claimed FIRST, as the paid path does:
       // one that paid a served call (consumed) or is mid-claim on another
-      // request (in flight) is never booked as owed for a call it paid.
+      // request (in flight) is never booked as owed for a call it paid. The
+      // shared claim is required when another container may serve (see the
+      // paid path below); with the store out the answer is the paid path's
+      // 503 with Retry-After: the transfer is final on chain and nothing was
+      // checked, claimed or booked, so the same credential sent again once
+      // the store answers is confirmed and booked as owed then (a plain 402
+      // here would read as a verdict on the credential, which none was
+      // given).
       if (replayGuard && replayKey) {
-        const verdict = await replayGuard.begin(replayKey);
+        const verdict = await replayGuard.begin(replayKey, undefined, { requireShared: sharedClaimRequired({ longRunning: binding.longRunning === true, draining: drainSignal().aborted }) });
+        if (verdict === "unavailable") {
+          logTempoRefusal(req, { cls: "replay-store", amountAtomic: amount, timings: { total: Date.now() - tStart }, detail: `before validate: ${binding.reason}; push credential, shared replay store did not answer; refused before the claim, nothing checked, claimed or booked` });
+          res.setHeader("Retry-After", "30");
+          res.setHeader("Cache-Control", "no-store");
+          return res.status(503).json({ error: `This route is briefly unavailable: the shared payment store did not answer, so the transfer this credential names was not checked, claimed or recorded. That transfer is final on chain. Send the same request again with the same credential in about 30 seconds: this route does not accept it (${b.detail}), so it is then confirmed and recorded as owed to the sending wallet, to be refunded; before the challenge expires the same credential instead pays for a request on a route that offers Tempo.`, reason: "replay-store-unavailable", transferClaimed: false });
+        }
         if (verdict !== "ok") return plain(`replay guard: ${verdict}`);
       }
       try {
@@ -1481,7 +1496,22 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
       req.mppTempoLedgerPayer = req.mppTempoSender;
       const replayKey = replayGuard ? tempoReplayKey(auth) : null;
       if (replayGuard && replayKey) {
-        const verdict = await replayGuard.begin(replayKey);
+        // The shared claim is required whenever another container may be
+        // serving (src/replay-topology.js: more than one replica, a deploy's
+        // overlap window, a drain), as the x402 dispatcher and the card gate
+        // require it: with the shared store configured but unreachable the
+        // call is refused here, before the handler runs or a transfer is
+        // claimed. A per-process claim on two containers would let one
+        // credential (a push transfer is already final) run the handler on
+        // each. With one container, or no shared store, the per-process
+        // claim is the guarantee and a store outage does not stop sales.
+        const verdict = await replayGuard.begin(replayKey, undefined, { requireShared: sharedClaimRequired({ longRunning: binding.longRunning === true, draining: drainSignal().aborted }) });
+        if (verdict === "unavailable") {
+          logTempoRefusal(req, { cls: "replay-store", amountAtomic: binding.amountAtomic, timings: { validate: tValidated - t0, total: Date.now() - tStart }, detail: "shared replay store did not answer; refused before the claim, nothing claimed or broadcast" });
+          res.setHeader("Retry-After", "30");
+          res.setHeader("Cache-Control", "no-store");
+          return res.status(503).json({ error: "This route is briefly unavailable: the shared payment store did not answer, so no run was started and this credential was not claimed or charged. Send the same request again in about 30 seconds.", reason: "replay-store-unavailable", charged: false, transferClaimed: false });
+        }
         if (verdict !== "ok") {
           logTempoRefusal(req, { cls: "replay", amountAtomic: binding.amountAtomic, timings: { validate: tValidated - t0, total: Date.now() - tStart }, detail: `replay guard: ${verdict}` });
           // Spec shape for a spent/in-flight credential: 402 + fresh challenge
@@ -1720,22 +1750,30 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
       // that refusal into a sale.
       const screenedOut = tempoSettlementMode() === "direct" ? screenTempoParties(auth, "before broadcast") : null;
       if (screenedOut) {
+        // Refused with nothing broadcast: no charge left, so the request is
+        // not marked sent (a close here is a withheld charge, never an
+        // unconfirmed settlement, and the refusal feeds the breaker nothing).
         b = screenedOut;
-      } else if (earlyConfirm) {
-        let relayAnswered = false;
-        const relayP = Promise.resolve(broadcast(auth)).then((r) => { relayAnswered = true; return r; }, (e) => { relayAnswered = true; throw e; });
-        const chainP = Promise.resolve(earlyConfirm(auth, () => relayAnswered, watch)).catch((e) => { watch.error = watch.error || String(e?.message || e).slice(0, 60); return null; })
-          .then((c) => (c ? c : new Promise(() => {})));
-        const first = await Promise.race([relayP.then((r) => ({ relay: r })), chainP.then((c) => ({ chain: c }))]);
-        if (first.chain) {
-          early = true;
-          b = { ok: true, receipt: { method: "tempo", status: "success", reference: first.chain.txId, timestamp: new Date().toISOString() } };
-          // The relay finishes on its own; its verdict no longer decides
-          // anything, but a disagreement is worth seeing.
-          relayP.then((r) => { if (!r?.ok) console.warn(`[mpp-tempo] relay answered after the chain had confirmed ${req.method} ${req.path} tx=${first.chain.txId}: ${String(r?.error || "?").slice(0, 160)}`); }, () => {});
-        } else b = first.relay;
       } else {
-        b = await broadcast(auth);
+        // The charge leaves from here, after every check that can still
+        // withhold it: a close after this did not withhold it.
+        markSettleSent(req);
+        if (earlyConfirm) {
+          let relayAnswered = false;
+          const relayP = Promise.resolve(broadcast(auth)).then((r) => { relayAnswered = true; return r; }, (e) => { relayAnswered = true; throw e; });
+          const chainP = Promise.resolve(earlyConfirm(auth, () => relayAnswered, watch)).catch((e) => { watch.error = watch.error || String(e?.message || e).slice(0, 60); return null; })
+            .then((c) => (c ? c : new Promise(() => {})));
+          const first = await Promise.race([relayP.then((r) => ({ relay: r })), chainP.then((c) => ({ chain: c }))]);
+          if (first.chain) {
+            early = true;
+            b = { ok: true, receipt: { method: "tempo", status: "success", reference: first.chain.txId, timestamp: new Date().toISOString() } };
+            // The relay finishes on its own; its verdict no longer decides
+            // anything, but a disagreement is worth seeing.
+            relayP.then((r) => { if (!r?.ok) console.warn(`[mpp-tempo] relay answered after the chain had confirmed ${req.method} ${req.path} tx=${first.chain.txId}: ${String(r?.error || "?").slice(0, 160)}`); }, () => {});
+          } else b = first.relay;
+        } else {
+          b = await broadcast(auth);
+        }
       }
       const tBroadcast = Date.now();
       const watched = earlyConfirm && !early ? ` watch=reads:${watch.reads || 0}${watch.seenAt ? ` seen:+${watch.seenAt - tHandled}ms` : ""}${watch.finalizedLag != null ? ` lag:${watch.finalizedLag}` : ""}${watch.error ? ` err:${watch.error}` : ""}` : "";

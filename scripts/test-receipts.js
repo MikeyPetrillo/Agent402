@@ -15,6 +15,7 @@
 //      drops them is just a number we assert.
 //
 // Offline: the ledger is driven directly with a temp database.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

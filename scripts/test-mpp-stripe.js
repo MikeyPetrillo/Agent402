@@ -9,6 +9,7 @@
 // methodDetails) is the shape `npx mppx validate --yes` accepted end to end
 // against Stripe sandbox on 2026-08-20 (Payment [stripe] successful). This
 // file proves OUR gate logic; the live sandbox run proved the Stripe API leg.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || "sk_test_fakekey";
 process.env.STRIPE_PROFILE_ID = process.env.STRIPE_PROFILE_ID || "profile_test_fake";
 process.env.BASE_URL = "https://agent402.tools";
@@ -215,8 +216,18 @@ const GATE = { secretKey: SECRET, realm: REALM, priceFor, checkToken: async () =
     const r = await quiet(() => fetch(`${url}/long`, { method: "POST", headers: { Authorization: credFor({ priceUsd: 5.00 }) } }));
     const b = await r.json().catch(() => ({}));
     ok(r.status === 503 && b.reason === "replay-store-unavailable" && r.headers.get("retry-after") === "30" && runs === 0 && captures === 0, `gate G: a long-running route is refused while the shared store is out, before its handler, nothing captured (${r.status}, runs ${runs}, captures ${captures})`);
+    // A lone container inside its deploy overlap window (an old container
+    // may still serve) refuses a fast route too; past the window it serves it
+    // on the per-process claim (src/replay-topology.js).
+    const overlap = process.env.DEPLOY_OVERLAP_SECONDS;
+    process.env.DEPLOY_OVERLAP_SECONDS = "3600";
+    const w = await quiet(() => fetch(`${url}/paid`, { method: "POST", headers: { Authorization: credFor() } }));
+    const wb = await w.json().catch(() => ({}));
+    ok(w.status === 503 && wb.reason === "replay-store-unavailable" && runs === 0 && captures === 0, `gate G: inside the overlap window a fast route is refused too, nothing captured (${w.status}, runs ${runs}, captures ${captures})`);
+    process.env.DEPLOY_OVERLAP_SECONDS = "0";
     const f = await quiet(() => fetch(`${url}/paid`, { method: "POST", headers: { Authorization: credFor() } }));
-    ok(f.status === 200 && runs === 1 && captures === 1, `gate G: a fast route keeps the per-process claim and is served and captured (${f.status}, runs ${runs}, captures ${captures})`);
+    ok(f.status === 200 && runs === 1 && captures === 1, `gate G: past the window a fast route keeps the per-process claim and is served and captured (${f.status}, runs ${runs}, captures ${captures})`);
+    if (overlap === undefined) delete process.env.DEPLOY_OVERLAP_SECONDS; else process.env.DEPLOY_OVERLAP_SECONDS = overlap;
   } finally { __setTestClient(null); s.close(); }
 }
 

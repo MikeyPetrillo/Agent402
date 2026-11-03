@@ -31,6 +31,7 @@
 // (a description-only match vanishes), skip the stale check (a replaced
 // entry's old rows come back), stop enqueueing on cache.set (new sellers never
 // appear), restore the full scan (perf bound), reorder the sort keys (golden).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.X402_INDEX_CRAWL = "off";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";

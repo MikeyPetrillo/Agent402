@@ -27,6 +27,7 @@
 // continues from what it already spent there instead of a fresh share.
 import { getSharedRedisClient } from "../shared-limit.js";
 import { sharedLimitsEnabled, keyOf, noteSharedLimitsDegraded } from "../shared-limits.js";
+import { withLoopTimeout } from "../loop-deadline.js";
 
 const cgRatePerMin = () => Math.max(1, parseInt(process.env.COINGECKO_MAX_PER_MIN || "80", 10) || 80);
 let cgTokens = null, cgRefilledAt = 0;
@@ -105,13 +106,11 @@ return 'ok'`;
 
 /** How long one shared command may take before this process decides alone. */
 export const CG_SHARED_DEADLINE_MS = () => Math.max(10, Number(process.env.COINGECKO_SHARED_DEADLINE_MS) || 250);
-/** Resolve `p`, or reject when it has not answered inside the deadline. */
+/** Resolve `p`, or reject when it has not answered inside the deadline,
+ *  counted in loop time (src/loop-deadline.js): an answer that landed while
+ *  the loop was held is taken, not decided alone. */
 export function cgWithin(p, ms = CG_SHARED_DEADLINE_MS()) {
-  let timer;
-  return Promise.race([
-    p,
-    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`no answer in ${ms} ms`)), ms); timer.unref?.(); }),
-  ]).finally(() => clearTimeout(timer));
+  return withLoopTimeout(p, ms, () => new Error(`no answer in ${ms} ms`));
 }
 
 let takeSeq = 0;

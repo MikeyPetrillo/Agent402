@@ -6,6 +6,7 @@
 // eip155:4663 accept is raised for a cheap tool and untouched for a dear one,
 // no other chain moves, the metered per-request quote is floored too, a
 // premium still only adds, and every surface that states the floor reads it.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { networkPriceFloors, applyNetworkFloor, networkFloorUsd, ROBINHOOD_CAIP2, ROBINHOOD_MIN_PRICE_DEFAULT_USD } from "../src/network-floors.js";
 import { acceptsForItem, priceForNetwork, parseNetworkPremiums, premiumUsdByNetworkName, premiumClause } from "../src/payments.js";

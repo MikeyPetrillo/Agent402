@@ -1620,6 +1620,19 @@ async function refreshShared(opts) {
   return r;
 }
 /** Tests only: replace the scan, the shared store (null = none), the lease and the clock. */
+/** Whether the boot warm-ups of the revenue snapshot (a scan of every rail
+ *  over public RPCs; server.js starts one at boot and keeps it warm on a
+ *  tick) run. Off under X402_SYNC_ON_START=false (the switch every other boot
+ *  reader of a chain RPC honors: the facilitator gas check, the late-settle
+ *  reconcile, the leaderboard scan), under X402_INDEX_CRAWL=off (the offline
+ *  test boots, which cannot turn the x402 init off and keep paid routes) and
+ *  under REVENUE_WARMUP=off, so a booted test server never reaches a public
+ *  chain RPC. A request for /revenue still scans on a cold cache. */
+export function revenueWarmupEnabled(env = process.env) {
+  const v = (k) => String(env[k] || "").trim().toLowerCase();
+  return v("X402_SYNC_ON_START") !== "false" && v("X402_INDEX_CRAWL") !== "off" && v("REVENUE_WARMUP") !== "off";
+}
+
 export function _setRevenueSnapshotDepsForTest(d = {}) {
   Object.assign(snapDeps, { scan: null, store: undefined, lease: null, now: () => Date.now() }, d);
   cached = null; cachedAt = 0; refreshing = null; sharedRetryAt = 0;

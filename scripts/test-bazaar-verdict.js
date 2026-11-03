@@ -9,7 +9,8 @@
 // teaches people to ignore it.
 //
 // Run: node scripts/test-bazaar-verdict.js
-import { missingModeVerdict } from "./refresh-bazaar.js";
+import { readFileSync } from "node:fs";
+import { missingModeVerdict, buyOnce, retryable } from "./refresh-bazaar.js";
 
 let pass = 0, fail = 0;
 const check = (name, cond) => {
@@ -78,6 +79,56 @@ const check = (name, cond) => {
   });
   check("a failed buy still decides it even with leftovers present", v.exitCode === 1);
   check("and the message reports both", /2 buy\(s\) FAILED/.test(v.message) && /1 route\(s\) left unpaid/.test(v.message));
+}
+
+// A slow route refuses a synchronous paid call before any payment (400
+// respond_async_required, measured 2026-11-03 on decide-execute); the buy is
+// made again with Prefer: respond-async and its job followed to the end.
+{
+  const R = (status, body, headers = {}) => ({ status, headers: { get: (k) => headers[k.toLowerCase()] ?? null }, text: async () => (typeof body === "string" ? body : JSON.stringify(body)), json: async () => body });
+  const refusal = { error: "respond_async_required", slug: "decide-execute", maxSeconds: 180, syncWindowSeconds: 20, prefer: "respond-async" };
+  const sent = [];
+  const payFetch = async (url, init) => { sent.push({ url, prefer: init.headers?.Prefer || null, method: init.method }); return init.headers?.Prefer === "respond-async" ? R(202, { jobId: "j1", statusUrl: "/api/jobs/j1", status: "working", state: "queued", pollIntervalSeconds: 1 }, { location: "/api/jobs/j1", "retry-after": "1" }) : R(400, refusal); };
+  const polls = [];
+  const plainFetch = async (url) => { polls.push(url); return polls.length < 3 ? R(200, { state: "running", stage: "work", pollIntervalSeconds: 1 }, { "retry-after": "1" }) : R(200, { state: "succeeded", status: "completed", result: { httpStatus: 200, body: { ok: true } } }); };
+  const waits = [];
+  const out = await buyOnce(payFetch, "https://t.example/api/decide/execute", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }, { plainFetch, target: "https://t.example", sleep: async (ms) => { waits.push(ms); } });
+  check("a respond_async_required refusal is followed by the same call with Prefer: respond-async", sent.length === 2 && sent[0].prefer === null && sent[1].prefer === "respond-async" && sent[1].method === "POST");
+  check("the job is polled at its status URL on the target until it succeeds, and the buy reads as the job's 200", polls.length === 3 && polls.every((u) => u === "https://t.example/api/jobs/j1") && out.status === 200 && out.job?.state === "succeeded");
+  check("the poll waits the Retry-After the job names", waits.length === 3 && waits.every((ms) => ms === 1000));
+  // A failed job is the route's failure, with its status.
+  // The server's failed-job shape (src/async-jobs.js publicJob): `error`
+  // with the status and body, a `message`, and no `result`.
+  const failFetch = async () => R(200, { state: "failed", status: "failed", stage: "failed", message: "the route answered 502", error: { httpStatus: 502, body: { error: "upstream" } } });
+  const bad = await buyOnce(payFetch, "https://t.example/api/decide/execute", { method: "POST", headers: {}, body: "{}" }, { plainFetch: failFetch, target: "https://t.example", sleep: async () => {} });
+  check("a failed job reads as its own HTTP status from its error, never as a settlement", bad.status === 502 && /job failed/.test(bad.note) && /upstream/.test(bad.text) && bad.job?.state === "failed");
+  // A plain 200 and any other 400 pass through untouched (one call).
+  const plain = []; const okFetch = async (url) => { plain.push(url); return R(200, { ok: true }); };
+  const fine = await buyOnce(okFetch, "https://t.example/api/hash", { method: "GET", headers: {} });
+  check("an ordinary answer is one call, returned as is", fine.status === 200 && plain.length === 1 && fine.res);
+  let otherCalls = 0; const otherFetch = async () => { otherCalls++; return R(400, { error: "bad input" }); };
+  const other = await buyOnce(otherFetch, "https://t.example/api/x", { method: "POST", headers: {}, body: "{}" });
+  check("another 400 is the route's own refusal, one call, not retried as a job", other.status === 400 && /bad input/.test(other.text) && otherCalls === 1);
+  // A job that never finishes inside its budget (maxSeconds plus a minute of
+  // grace) is a 504, not a hang.
+  let t = 0; const stuckFetch = async () => R(200, { state: "running", pollIntervalSeconds: 1 });
+  const stuck = await buyOnce(payFetch, "https://t.example/api/decide/execute", { method: "POST", headers: {}, body: "{}" }, { plainFetch: stuckFetch, target: "https://t.example", sleep: async (ms) => { t += ms; }, now: () => t });
+  check("a job past its budget is given up as a 504 with the budget named, after the budget plus a minute", stuck.status === 504 && /240 s/.test(stuck.note) && t >= 240_000 && t < 250_000);
+  // The buy loops' retry decision: a plain 402 or 5xx is sent again inside
+  // the three attempts, and a failure that came through a job (the job
+  // already paid for the route) or that buyOnce explained in a note is not,
+  // whatever its status: a retry would open a second paid job for the route.
+  check("a plain 502 is retried on the first two attempts and not the third", retryable({ status: 502 }, 0) && retryable({ status: 502 }, 1) && !retryable({ status: 502 }, 2));
+  check("a plain 402 (a settlement timeout) is retried; a 400 and a 200 are not", retryable({ status: 402 }, 0) && !retryable({ status: 400 }, 0) && !retryable({ status: 200 }, 0));
+  check("the failed job's 502 is not retried: the route is bought once and its job is never re-opened", !retryable(bad, 0) && !retryable(bad, 1));
+  check("a job that did not finish in its budget (504 with a note) is not retried either", !retryable(stuck, 0));
+  check("a 502 that came through a job is not retried even without a note", !retryable({ status: 502, job: { state: "failed" } }, 0));
+  // Both loops decide through retryable, and the rule's text appears once in
+  // the file: in retryable itself, so no loop holds its own copy.
+  const src = readFileSync(new URL("./refresh-bazaar.js", import.meta.url), "utf8");
+  const calls = (src.match(/if \(retryable\(res, attempt\)\)/g) || []).length;
+  const copies = (src.match(/res\.status >= 502\) && attempt/g) || []).length;
+  check(`both buy loops call retryable(res, attempt) (${calls}) and the rule is written once (${copies})`, calls === 2 && copies === 1);
 }
 
 // Accepts a plain array as well as a Set (call-site convenience).

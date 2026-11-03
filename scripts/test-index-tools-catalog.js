@@ -7,6 +7,7 @@
 // inert, and outbound links must not lend them our ranking.
 //
 // Run: node scripts/test-index-tools-catalog.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { indexToolsPage } from "../src/index-tools-page.js";
 
 let pass = 0, fail = 0;

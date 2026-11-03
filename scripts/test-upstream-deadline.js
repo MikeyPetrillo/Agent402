@@ -269,6 +269,27 @@ ok(!stallCalls.some((c) => /\btest-(alchemy|brave|neynar|exa|hunter|openrouter|t
     `two sequential reads under one 600 ms budget end as one deadline inside it: the second never leaves (${reads} read(s), ${ms} ms, "${err?.message}")`);
 }
 
+// A remainder no read can use (under MIN_READ_MS) refuses before any egress:
+// the abort timer of the read before can fire a millisecond ahead of the
+// clock, which used to let a second read leave with a 1 ms cap.
+{
+  const { MIN_READ_MS, budgetOf, workUnderDeadline } = await import("../src/upstream-deadline.js");
+  ok(MIN_READ_MS === 5, "the read floor is the measured one");
+  let left = 0;
+  const seam = (u, i) => { left++; return stall(u, i); };
+  const tiny = budgetOf(MIN_READ_MS - 2);
+  const e1 = await upstreamFetch("https://stalled.test/tiny", {}, { label: "Tiny", step: "lookup", timeoutMs: 5000, tag: null, budget: tiny, fetchImpl: seam }).catch((x) => x);
+  ok(e1?.upstreamFailure === "deadline" && left === 0 && /the lookup read within/.test(e1.message), `a budget with ${MIN_READ_MS - 2} ms left refuses the read before any egress (${left} read(s), "${e1?.message}")`);
+  // The work is a promise (the function takes a promise, raced against the
+  // expiry); a refusal never arms the expiry, so onExpire is never called.
+  let expired = 0;
+  const e2 = await workUnderDeadline(new Promise(() => {}), { label: "Tiny", step: "work", timeoutMs: 5000, budget: budgetOf(MIN_READ_MS - 2), onExpire: () => { expired++; } }).catch((x) => x);
+  ok(e2?.upstreamFailure === "deadline" && expired === 0, `work under a budget with ${MIN_READ_MS - 2} ms left is refused before the expiry is armed (${expired} expiries)`);
+  const t1 = Date.now();
+  const e3 = await upstreamFetch("https://stalled.test/some", {}, { label: "Some", step: "read", timeoutMs: 5000, tag: null, budget: budgetOf(60), fetchImpl: seam }).catch((x) => x);
+  ok(e3?.upstreamFailure === "deadline" && left === 1 && Date.now() - t1 < 60 + SLACK_MS, `a budget with 60 ms left still runs the read under that cap (${left} read(s), ${Date.now() - t1} ms)`);
+}
+
 clearInterval(keepAlive);
 globalThis.fetch = realFetch;
 console.log(`\ntest-upstream-deadline: ${pass} passed, ${fail} failed`);

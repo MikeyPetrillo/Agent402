@@ -6,6 +6,7 @@
 //   2. a response body behind a local $ref yields guaranteed paths;
 //   3. an external, dangling or cyclic $ref is left in place and still reads partial;
 //   4. a pointer through a prototype-reserved name resolves to nothing.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 process.env.X402_INDEX_CRAWL = "off";
 const { normaliseOpenapiTools } = await import("../src/x402-index.js");

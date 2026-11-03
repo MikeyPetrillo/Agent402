@@ -7,6 +7,7 @@
 // field nobody added to the allowlist.
 //
 // No network, no bucket: `put`/`exists` are injected and the "bucket" is a Map.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.BACKUP_S3_ENDPOINT ||= "https://example.invalid";
 process.env.BACKUP_S3_BUCKET ||= "test-bucket";
 process.env.BACKUP_S3_KEY_ID ||= "test-key";

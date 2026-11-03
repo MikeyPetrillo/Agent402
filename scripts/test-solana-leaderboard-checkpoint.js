@@ -13,6 +13,14 @@
 //   * the drain checkpoint saves during a scan and does nothing outside one
 //   * a transaction read that fails the same way scan after scan is skipped
 //     visibly, so that payTo's history closes instead of staying open forever
+// The board's store is checked through its file (written, read back, and
+// rewritten to simulate a restart). With a state database the same store is a
+// row named after the file's basename, which outlives the run and is read at
+// boot instead of the file; the Postgres path has its own suite
+// (test-board-scan-once-pg.js). This one runs on the file backend whatever
+// the calling shell exports.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import "./lib/file-mode.js";
 import { mkdtempSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

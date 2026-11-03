@@ -18,6 +18,7 @@
 // matters. A buyer paying is a worse experience; unbounded free calls are a
 // worse failure.
 import { loadRedis } from "./lazy-redis.js";
+import { withLoopDeadline } from "./loop-deadline.js";
 
 // Mirror src/db-ssl.js for Redis: a plaintext redis:// URL is only acceptable
 // on Railway's private mesh; a public host must use rediss:// or the password,
@@ -69,7 +70,9 @@ const CONNECT_WAIT_MS = 1_000;
 /** Resolve `p`, or null if it takes longer than `ms`. The promise is NOT
  *  cancelled: it keeps running so its result is cached for the next caller. */
 function withDeadline(p, ms) {
-  return Promise.race([p, new Promise((r) => setTimeout(() => r(null), ms).unref?.())]);
+  // In loop time (src/loop-deadline.js): a connect that completed while boot
+  // work held the loop is taken, not reported as an unreachable Redis.
+  return withLoopDeadline(p, ms, null);
 }
 
 /**

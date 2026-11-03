@@ -38,6 +38,7 @@ try {
   ok(detail && detail.origin === origin, "the seeded seller is in the index");
   const tool = (detail.tools || [])[0];
   ok(tool && tool.routerDispatchByChain?.base?.unprovenTier === true && tool.routerDispatchByChain.base.unprovenMaxUsd === 0.01, `the seller's own tool row shows the unproven tier (${JSON.stringify(tool?.routerDispatchByChain?.base)})`);
+  ok(tool.executeVia && tool.executeViaCallableNow === true && tool.executeViaLane === "unproven" && tool.executeViaWhenEligible === undefined, `the seller's own tool row carries the same callable-now affordance as the route row (${JSON.stringify({ executeVia: !!tool.executeVia, now: tool.executeViaCallableNow, lane: tool.executeViaLane })})`);
   ok(detail.routerDispatchByChain?.base?.unprovenTier === undefined, "the seller-level verdict (no single price) still carries no tier");
   const rt = await (await fetch(`${base}/api/route?q=${encodeURIComponent("validate product catalog feed GTIN")}&include=external&top=10`)).json();
   const row = (rt.results || []).find((r) => r.seller === origin);

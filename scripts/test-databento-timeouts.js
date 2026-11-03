@@ -2,6 +2,7 @@
 // A slow or unreachable market-data upstream is a 503 naming the
 // upstream, never a bare 500 (a fetch timeout carries no status of its own).
 // Offline: global fetch is stubbed.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.DATABENTO_API_KEY = "db-test-key-not-real";
 const { dailyBars, availableEnd, DATABENTO_TIMEOUTS_MS } = await import("../src/tools/databento.js");
 

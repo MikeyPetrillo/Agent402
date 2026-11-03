@@ -1,5 +1,6 @@
 // Self-funding SOR burner economics — offline unit tests.
 //   node scripts/test-self-funding.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { acceptsForItem, SELF_FUNDING_SLUGS } from "../src/payments.js";
 import { buyerPaymentNetwork } from "../src/tools/route-execute.js";
 

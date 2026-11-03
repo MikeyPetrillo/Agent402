@@ -4,6 +4,7 @@
 // own source: each step's marker must appear in routeQuery's tiebreak in the
 // same order as the list, so a step added or moved in the sort without the
 // list following it fails here. Offline, source-only.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { ROUTE_ORDER, routeTiebreakLabels } from "../src/route-order.js";
 import { routerRankingSentence } from "../src/routing-proof.js";

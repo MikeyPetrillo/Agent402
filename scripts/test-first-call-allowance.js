@@ -296,7 +296,7 @@ try {
     await fetch(`${B}${rt.path}`, { method: rt.method, headers: { "content-type": "application/json", "payment-signature": credential(accept, SLOW), "x-forwarded-for": "10.5.2.1" }, body: rt.body, signal: ac.signal }).then((x) => x.text()).catch(() => null);
     clearTimeout(t);
     let served = false;
-    for (let i = 0; i < 40 && !served; i++) { served = Bt.log.some((l) => /\[hangup\] (NOT CHARGED|CHARGED-BUT-NOT-SERVED)/.test(l)); if (!served) await sleep(100); }
+    for (let i = 0; i < 40 && !served; i++) { served = Bt.log.some((l) => /\[hangup\] (SETTLE WITHHELD|CHARGED-BUT-NOT-SERVED)/.test(l)); if (!served) await sleep(100); }
     const st5 = await opJson(B, "/__operator/refunds.json");
     ok(served && settles === sH, `a granted call whose client left before its handler was not settled (hang-up recorded ${served}, settles +${settles - sH})`);
     ok(!Bt.log.some((l) => l.includes("CHARGED-BUT-NOT-SERVED")) && (st5.refunds || []).length === 0 && st5.totals?.owed?.n === 0, `and no debt is booked for it (owed ${st5.totals?.owed?.n})`);
@@ -395,7 +395,7 @@ globalThis.fetch = async (input, init) => {
     st = await opJson(C.B, "/__operator/refunds.json");
     const pc = st.firstCallAllowance?.processToday || {};
     ok(pc.served === 1 && pc.released === 0 && settles === sC, `a granted call whose client left during the handler is served unsettled (${JSON.stringify(pc)}, settles +${settles - sC})`);
-    ok(C.log.some((l) => /\[hangup\] NOT CHARGED/.test(l)) && !C.log.some((l) => l.includes("CHARGED-BUT-NOT-SERVED")), "the hang-up is recorded as not charged");
+    ok(C.log.some((l) => /\[hangup\] SETTLE WITHHELD/.test(l)) && !C.log.some((l) => l.includes("CHARGED-BUT-NOT-SERVED")), "the hang-up is recorded as not charged");
     ok((st.refunds || []).length === 0 && st.totals?.owed?.n === 0, `and no debt is booked for it (owed ${st.totals?.owed?.n})`);
 
     // share=true: no grant, a normal settle, and the link it hands out is written.

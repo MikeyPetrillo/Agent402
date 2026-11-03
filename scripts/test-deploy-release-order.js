@@ -22,6 +22,23 @@ const triggerAt = deploySteps.findIndex((s) => /serviceInstanceDeployV2/.test(St
 const upsertAt = deploySteps.findIndex((s) => /variableCollectionUpsert/.test(String(s.run || "")));
 ok(triggerAt > upsertAt && upsertAt >= 0, "the deploy trigger runs after the upsert, so it carries the new values");
 
+// The new build's Bazaar listings are validated after the deploy is verified:
+// the step runs scripts/bazaar-validate.js against production, only when the
+// verify step succeeded, with every upstream key blanked (the validator reads
+// 402s, and the deploy job's secrets never reach package code).
+{
+  const verifyAt = deploySteps.findIndex((s) => s.id === "verify");
+  const bazaarAt = deploySteps.findIndex((s) => /node scripts\/bazaar-validate\.js/.test(String(s.run || "")));
+  const bazaar = deploySteps[bazaarAt] || {};
+  ok(verifyAt >= 0 && bazaarAt > verifyAt, `the deploy job runs scripts/bazaar-validate.js after the verify step (verify ${verifyAt}, validate ${bazaarAt})`);
+  ok(/steps\.verify\.outcome == 'success'/.test(String(bazaar.if || "")), "the Bazaar validation step runs only on a verified deploy");
+  const env = bazaar.env || {};
+  const blanked = ["CDP_KEY_ID", "CDP_KEY_SECRET", "MPP_SECRET_KEY", "X_BEARER_TOKEN", "BRAVE_API_KEY", "DATABENTO_API_KEY", "RAILWAY_API_TOKEN"];
+  ok(blanked.every((k) => k in env && String(env[k] ?? "") === ""), `the Bazaar validation step blanks the upstream keys (${blanked.filter((k) => !(k in env) || String(env[k] ?? "") !== "").join(", ") || "all blank"})`);
+  ok(/TARGET_URL=https:\/\/agent402\.tools/.test(String(bazaar.run || "")), "the validator reads production's 402s");
+  ok(/exit 1/.test(String(bazaar.run || "")) && !bazaar["continue-on-error"], "an INVALID verdict with no clean run fails the job");
+}
+
 const pub = (wf.jobs?.publish?.steps || []).map((s) => String(s.name || ""));
 const clawAt = pub.findIndex((n) => /ClawHub/.test(n));
 const registryAt = pub.findIndex((n) => /MCP Registry/.test(n));

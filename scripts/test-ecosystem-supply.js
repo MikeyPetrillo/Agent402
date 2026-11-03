@@ -3,6 +3,7 @@
 // 10k-tool seller) from dominating a category's `tools` figure. Verifies the
 // true uncapped total is still reported, distinct-seller counts are honest, and
 // the cap is applied per seller per category. No network.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert";
 import { aggregateEcosystemSupply, ecosystemMarket, __testSeedCache, __setMarketMemoTtl } from "../src/x402-index.js";
 

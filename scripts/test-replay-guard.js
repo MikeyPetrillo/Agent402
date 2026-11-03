@@ -9,10 +9,16 @@
 //      N concurrent identical authorizations collapse to a single grant, and
 //      that a failed settle releases the nonce for a legitimate retry.
 //
-// Offline, no facilitator, no network.
+// Offline, no facilitator, no network. The per-process sections pin that
+// path: a REDIS_URL in the caller's environment would send every call to a
+// shared Redis whose keys outlive the run (a fixed key here is "consumed" on
+// the next run) and whose state _state() does not show. The real-Redis
+// behavior has its own suite (scripts/test-replay-guard-redis.js); the
+// Redis code path here runs against an in-memory client (section A4).
 import express from "express";
-import { paymentReplayKey, createReplayGuard } from "../src/replay-guard.js";
-import { __setTestClient } from "../src/shared-limit.js";
+delete process.env.REDIS_URL;
+const { paymentReplayKey, paymentValidBeforeMs, createReplayGuard, CONSUMED_VALIDITY_MARGIN_MS } = await import("../src/replay-guard.js");
+const { __setTestClient } = await import("../src/shared-limit.js");
 
 let passed = 0, failed = 0;
 const ok = (c, m) => { if (c) { passed++; console.log(`ok - ${m}`); } else { failed++; console.error(`FAIL - ${m}`); } };
@@ -53,6 +59,24 @@ function evmCred({ network = "eip155:8453", nonce = "0xabc", from = "0x" + "1".r
   const o1 = paymentReplayKey(fakeReq({ "x-payment": opaque }));
   const o2 = paymentReplayKey(fakeReq({ "x-payment": opaque }));
   ok(o1 && o1 === o2 && o1.startsWith("c:"), "unparseable credential → stable raw-hash identity");
+}
+{
+  // The identity is the nonce scoped to its network AND its signed payer: the
+  // chain consumes a nonce per (token, from), so two wallets that sign the
+  // same nonce are two payments.
+  const A = "0x" + "a".repeat(40), B = "0x" + "b".repeat(40);
+  const ka = paymentReplayKey(fakeReq({ "x-payment": evmCred({ nonce: "0x77", from: A }) }));
+  const kb = paymentReplayKey(fakeReq({ "x-payment": evmCred({ nonce: "0x77", from: B }) }));
+  ok(ka && kb && ka !== kb, "same nonce, different payer → different key");
+  const kA = paymentReplayKey(fakeReq({ "x-payment": evmCred({ nonce: "0x77", from: "0x" + "A".repeat(40) }) }));
+  ok(kA === ka, "an EVM payer is case-folded (checksummed and lowercase spell one wallet)");
+  // A non-EVM payer string is kept as signed: base58 is case-sensitive.
+  const b58 = (from) => Buffer.from(JSON.stringify({ network: "solana:x", payload: { authorization: { nonce: "0x77", from } } })).toString("base64");
+  ok(paymentReplayKey(fakeReq({ "x-payment": b58("AbCdEf") })) !== paymentReplayKey(fakeReq({ "x-payment": b58("abcdef") })), "a base58 payer is never case-folded");
+  // v2 carries the network on `accepted`: two networks are two identities there too.
+  const v2 = (network) => Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "exact", network }, payload: { authorization: { nonce: "0x77", from: A } } })).toString("base64");
+  ok(paymentReplayKey(fakeReq({ "x-payment": v2("eip155:8453") })) !== paymentReplayKey(fakeReq({ "x-payment": v2("eip155:137") })), "v2: same nonce and payer, different network → different key");
+  ok(/^n2:[0-9a-f]{64}:[0-9a-f]{64}$/.test(ka), "a nonce key carries the earlier build's key for the deploy window");
 }
 
 // ---- A2. Guard state machine (local fallback path — no REDIS_URL in this
@@ -108,6 +132,217 @@ function evmCred({ network = "eip155:8453", nonce = "0xabc", from = "0x" + "1".r
   } finally {
     __setTestClient(null);
   }
+}
+
+// ---- A3b. The store fails AFTER the claim landed ------------------------------
+// A command that throws once the SET NX has claimed the key must not leave
+// that claim behind: the buyer's retry of the same unused authorization would
+// otherwise read "inflight" for the claim's whole life.
+{
+  const g = createReplayGuard();
+  const store = new Map();
+  let failOnce = false;
+  const flaky = {
+    isReady: true,
+    get: async (k) => { if (failOnce && [...store.keys()].some((x) => x.includes(":f:"))) { failOnce = false; throw new Error("READONLY"); } return store.has(k) ? store.get(k) : null; },
+    set: async (k, v, o = {}) => { if (o.NX && store.has(k)) return null; store.set(k, v); return "OK"; },
+    del: async (k) => (store.delete(k) ? 1 : 0),
+    expire: async () => 1,
+  };
+  __setTestClient(flaky);
+  try {
+    failOnce = true;
+    ok(await g.begin("n2:partial", undefined, { requireShared: true }) === "unavailable", "a store error after the claim refuses the call");
+    ok(![...store.keys()].some((k) => k.includes(":f:")), `and drops the claim it took (left: ${[...store.keys()].join(",") || "none"})`);
+    ok(await g.begin("n2:partial", undefined, { requireShared: true }) === "ok", "so the buyer's retry of the same authorization is claimed, not refused as in flight");
+    await g.release?.("n2:partial");
+  } finally {
+    __setTestClient(null);
+  }
+}
+
+// ---- A4. The Redis code path against an in-memory client ---------------------
+// A minimal client with the commands the guard sends (GET, SET NX/EX, DEL,
+// EXPIRE) and a hook that runs between two commands, so an interleaving that
+// a real Redis allows can be placed exactly.
+function memoryRedis() {
+  const kv = new Map(); // key -> { v, exp (ms) }
+  const live = (k) => { const e = kv.get(k); if (e && e.exp && e.exp <= Date.now()) { kv.delete(k); return null; } return e || null; };
+  const c = {
+    kv, between: null, sets: [],
+    afterGet: null,
+    async get(k) { const v = live(k)?.v ?? null; if (c.afterGet) { const f = c.afterGet; c.afterGet = null; await f(); } return v; },
+    async set(k, v, o = {}) {
+      if (o.NX && live(k)) return null;
+      kv.set(k, { v, exp: o.EX ? Date.now() + o.EX * 1000 : 0 });
+      c.sets.push({ k, ex: o.EX });
+      if (c.between) { const f = c.between; c.between = null; await f(); }
+      return "OK";
+    },
+    async del(k) {
+      const had = kv.delete(k);
+      if (c.between) { const f = c.between; c.between = null; await f(); }
+      return had ? 1 : 0;
+    },
+    async expire(k, sec) { const e = live(k); if (!e) return 0; e.exp = Date.now() + sec * 1000; return 1; },
+  };
+  return c;
+}
+{
+  // A re-send racing the first request's settle: with the consumed mark
+  // written before the claim is dropped, the racing begin() reads either the
+  // claim ("inflight") or the mark ("consumed"), never neither. The hook runs
+  // the racing begin() right after settle's first write lands, whichever
+  // command that is.
+  const mem = memoryRedis();
+  __setTestClient(mem);
+  try {
+    const g1 = createReplayGuard(), g2 = createReplayGuard();
+    const k = "n:race";
+    ok(await g1.begin(k) === "ok", "redis path: replica 1 claims the nonce");
+    let raced = null;
+    mem.between = async () => { raced = await g2.begin(k); };
+    await g1.settle(k);
+    ok(raced === "inflight" || raced === "consumed", `redis path: a begin() between settle's two writes is refused (got ${raced})`);
+    ok(await g2.begin(k) === "consumed", "redis path: after settle the nonce reads consumed");
+  } finally { __setTestClient(null); }
+}
+{
+  // The consumed mark of a granted payment is held until its authorization
+  // expires (plus a margin) when that is later than the guard's TTL: a
+  // forgiven hang-up is granted without being settled, so the chain would
+  // still accept the authorization.
+  const mem = memoryRedis();
+  __setTestClient(mem);
+  try {
+    const g = createReplayGuard({ ttlMs: 60 * 60 * 1000 });
+    const now = Date.now();
+    await g.begin("n:long");
+    await g.settle("n:long", now, { validBeforeMs: now + 3 * 3600_000 });
+    const ex = mem.sets.find((x) => x.k === "replay:c:n:long")?.ex;
+    ok(ex >= Math.floor((3 * 3600_000 + CONSUMED_VALIDITY_MARGIN_MS) / 1000) - 1, `redis path: a 3 h authorization keeps its consumed mark past its validBefore (EX ${ex} s)`);
+    await g.begin("n:short");
+    await g.settle("n:short", now, { validBeforeMs: now + 300_000 });
+    ok(mem.sets.find((x) => x.k === "replay:c:n:short")?.ex === 3600, "redis path: a 300 s authorization keeps the guard's 1 h TTL (the longer of the two)");
+  } finally { __setTestClient(null); }
+}
+{
+  // The same on the per-process path, with an injected clock.
+  const g = createReplayGuard({ ttlMs: 1000 });
+  await g.begin("n:held", 0);
+  await g.settle("n:held", 0, { validBeforeMs: 10_000 });
+  ok(await g.begin("n:held", 5_000) === "consumed", "local path: past the TTL but before validBefore the mark holds");
+  ok(await g.begin("n:held", 10_000 + CONSUMED_VALIDITY_MARGIN_MS - 1) === "consumed", "local path: and through the margin after validBefore");
+  const g2 = createReplayGuard({ ttlMs: 1000 });
+  await g2.begin("n:held", 0);
+  await g2.settle("n:held", 0, { validBeforeMs: 10_000 });
+  ok(await g2.begin("n:held", 10_000 + CONSUMED_VALIDITY_MARGIN_MS + 1) === "ok", "local path: past validBefore plus the margin the key is free (the chain refuses it now)");
+  // An entry held long at the head does not keep a shorter one behind it alive.
+  const g3 = createReplayGuard({ ttlMs: 1000 });
+  await g3.begin("n:a", 0); await g3.settle("n:a", 0, { validBeforeMs: 1e9 });
+  await g3.begin("n:b", 0); await g3.settle("n:b", 0);
+  ok(await g3.begin("n:b", 2_000) === "ok" && await g3.begin("n:a", 2_000) === "consumed", "local path: each entry expires on its own time");
+}
+{
+  const cred = (auth) => fakeReq({ "payment-signature": Buffer.from(JSON.stringify({ payload: { authorization: auth } })).toString("base64") });
+  ok(paymentValidBeforeMs(cred({ nonce: "0x1", validBefore: "1900000000" })) === 1_900_000_000_000, "paymentValidBeforeMs reads the signed validBefore (seconds) as ms");
+  ok(paymentValidBeforeMs(cred({ nonce: "0x1" })) === null && paymentValidBeforeMs(cred({ nonce: "0x1", validBefore: "-5" })) === null && paymentValidBeforeMs(cred({ nonce: "0x1", validBefore: "1e9" })) === null, "no or malformed validBefore -> null (the guard's TTL applies)");
+  ok(paymentValidBeforeMs(fakeReq({})) === null, "no payment header -> null");
+  const far = paymentValidBeforeMs(cred({ nonce: "0x1", validBefore: "99999999999999999999" }));
+  ok(Number.isFinite(far) && far > Date.now() + 50 * 365 * 24 * 3600_000, "an absurd validBefore is held for a century, never Infinity");
+}
+
+{
+  // The x402 call site passes the authorization's validBefore only for a
+  // grant that was not settled (src/hangup-settlement.js grantedUnsettled:
+  // a forgiven hang-up, a served first-call allowance), so a settled 200
+  // keeps the guard's default hold; and it requires the shared claim on a
+  // long-running route and whenever another container may be serving (the
+  // booted cases are scripts/test-replay-store-outage.js; the hold read back
+  // from Redis is scripts/test-replay-consumed-hold.js).
+  const { readFileSync } = await import("node:fs");
+  const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  ok(server.includes("replayGuard.settle(replayKey, undefined, grantedUnsettled(req) ? { validBeforeMs: paymentValidBeforeMs(req) } : {})"), "server.js holds a granted x402 payment's consumed mark until its validBefore only when the grant was not settled");
+  const { grantedUnsettled } = await import("../src/hangup-settlement.js");
+  const ticket = (granted) => ({ value: { granted, reason: granted ? null : "payer budget" }, enumerable: false });
+  const settled = {}; // a connected buyer, settled
+  const forgiven = Object.defineProperty({ __a402ClientGoneAt: 1 }, "__a402HangupTicket", ticket(true));
+  const residual = Object.defineProperty({ __a402ClientGoneAt: 1 }, "__a402HangupTicket", ticket(true));
+  Object.defineProperty(residual, "__a402SettleCheckedConnectedAt", { value: 2, enumerable: false }); // the charge was sent before the close
+  const unforgiven = Object.defineProperty({ __a402ClientGoneAt: 1 }, "__a402HangupTicket", ticket(false));
+  const allowance = { __a402Allowance: { state: "served" } };
+  const inherited = Object.create({ __a402ClientGoneAt: 1, __a402Allowance: { state: "served" } });
+  ok(grantedUnsettled(settled) === false && grantedUnsettled(residual) === false && grantedUnsettled(unforgiven) === false, "a settled grant, a residual-window hang-up (charge sent) and an unforgiven hang-up keep the default hold");
+  ok(grantedUnsettled(forgiven) === true && grantedUnsettled(allowance) === true, "a forgiven hang-up and a served first-call allowance are held to validBefore");
+  ok(grantedUnsettled(inherited) === false && grantedUnsettled(null) === false, "own properties only: an inherited flag never makes a grant read as unsettled");
+  ok(/requireShared: sharedClaimRequired\(\{ longRunning: !!replayDef && isLongRunningSlug\(replayDef\.slug\), draining: drainSignal\(\)\.aborted \}\)/.test(server), "server.js requires the shared claim on a long-running route and whenever another container may serve (src/replay-topology.js)");
+}
+
+// ---- A5. Payer- and network-scoped keys on the Redis path, and the deploy
+// window: an earlier build keyed on the nonce alone ("n:" + sha256 of
+// "<v1 network>:<nonce>") and wrote a bare timestamp there.
+{
+  const A = "0x" + "a".repeat(40), B = "0x" + "b".repeat(40);
+  const keyOf = (o) => paymentReplayKey(fakeReq({ "x-payment": evmCred(o) }));
+  const legacyName = (k) => "n:" + k.split(":")[2];
+  const mem = memoryRedis();
+  __setTestClient(mem);
+  try {
+    const g1 = createReplayGuard(), g2 = createReplayGuard();
+    const ka = keyOf({ nonce: "0x51", from: A }), kb = keyOf({ nonce: "0x51", from: B });
+    ok(await g1.begin(ka) === "ok", "redis path: payer A claims nonce 0x51");
+    ok(await g2.begin(kb) === "ok", "redis path: payer B signing the same nonce is accepted while A is in flight");
+    ok(await g2.begin(ka) === "inflight", "redis path: payer A's same nonce on another replica is refused (inflight)");
+    await g1.settle(ka);
+    await g2.settle(kb);
+    ok(await g2.begin(ka) === "consumed", "redis path: payer A's same nonce after settle is refused (consumed)");
+    ok(await g1.begin(kb) === "consumed", "redis path: payer B's same nonce after settle is refused (consumed)");
+    const kc = keyOf({ nonce: "0x52", from: A }), kd = keyOf({ nonce: "0x52", from: A, network: "eip155:137" });
+    ok(await g1.begin(kc) === "ok" && await g2.begin(kd) === "ok", "redis path: same payer and nonce on two networks are both accepted");
+    await g1.release(kc); await g2.release(kd);
+    const kc2 = keyOf({ nonce: "0x53", from: A });
+    ok(await g1.begin(kc2) === "ok", "redis path: a fresh nonce claims");
+    await g1.settle(kc2);
+    ok(await g1.begin(keyOf({ nonce: "0x53", from: B })) === "ok", "redis path: another payer's same nonce is accepted after the first one settled");
+
+    // A settle that completes between a begin()'s consumed read and its claim:
+    // the claim succeeds (the settle dropped its own), and the consumed mark
+    // read again under the claim refuses the re-send.
+    const kr = keyOf({ nonce: "0x5f", from: A });
+    ok(await g1.begin(kr) === "ok", "redis path: replica 1 claims a payment");
+    mem.afterGet = async () => { await g1.settle(kr); };
+    ok(await g2.begin(kr) === "consumed", "redis path: a settle that lands between a re-send's read and its claim is still seen (consumed)");
+
+    // Deploy window, earlier build first: its claim and its consumed mark
+    // (bare timestamps at the legacy name) are honored for the same credential.
+    const ke = keyOf({ nonce: "0x61", from: A });
+    await mem.set("replay:f:" + legacyName(ke), String(Date.now()), { NX: true, EX: 120 });
+    ok(await g1.begin(ke) === "inflight", "deploy window: a payment an earlier build holds in flight is refused (inflight)");
+    ok(!mem.kv.has("replay:f:" + ke.split(":").slice(0, 2).join(":")), "deploy window: and the refused claim is given back");
+    const kf = keyOf({ nonce: "0x62", from: A });
+    await mem.set("replay:c:" + legacyName(kf), String(Date.now()), { EX: 3600 });
+    ok(await g1.begin(kf) === "consumed", "deploy window: a payment an earlier build consumed is refused (consumed)");
+    // This build first: an earlier build still running checks any entry at
+    // the legacy name, so this build writes its claim and its consumed mark
+    // there as well, and drops only its own tagged entry.
+    const kg = keyOf({ nonce: "0x63", from: A });
+    ok(await g1.begin(kg) === "ok", "deploy window: this build claims a payment");
+    ok(Boolean(await mem.get("replay:f:" + legacyName(kg))), "deploy window: an earlier build sees that claim at the legacy name");
+    await g1.settle(kg);
+    ok(Boolean(await mem.get("replay:c:" + legacyName(kg))), "deploy window: an earlier build sees the consumed mark at the legacy name");
+    ok(!(await mem.get("replay:f:" + legacyName(kg))), "deploy window: the tagged legacy claim is dropped on settle");
+    const kh = keyOf({ nonce: "0x64", from: A });
+    await g1.begin(kh); await g1.release(kh);
+    ok(!(await mem.get("replay:f:" + legacyName(kh))), "deploy window: a release drops the tagged legacy claim");
+    // A tagged legacy entry (another payer's, written by this build) is not a
+    // refusal for a different payer.
+    ok(await g2.begin(keyOf({ nonce: "0x63", from: B })) === "ok", "deploy window: another payer's tagged legacy mark does not refuse this payer");
+    // An earlier build's claim on the legacy name is never deleted by this build.
+    const ki = keyOf({ nonce: "0x65", from: A });
+    await mem.set("replay:f:" + legacyName(ki), "12345", { EX: 120 });
+    await g1.release(ki);
+    ok((await mem.get("replay:f:" + legacyName(ki))) === "12345", "deploy window: an earlier build's claim is left to its owner");
+  } finally { __setTestClient(null); }
 }
 
 // ---- B. HTTP harness: the real guard code path in an Express app -------------

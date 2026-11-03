@@ -8,6 +8,7 @@
 //   1. every stablecoin address literal in src/payments.js's accept config is
 //      labelled, under its own address;
 //   2. every EVM rail in src/rails.js has a stablecoin label for its network.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { CONTRACT_TOOLS } from "../src/tools/contract-kit.js";
 import { RAILS } from "../src/rails.js";

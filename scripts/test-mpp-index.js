@@ -1,6 +1,7 @@
 // Offline unit tests for the MPP index: origin validation (reused from the
 // x402 side - protocol-agnostic) + the registerMppOrigin flow with an
 // injected fake verifier + the snapshot honesty invariant. No network, no /data.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import {
   validateOriginInput, registerMppOrigin, mppIndexSnapshot, parseMppScanOrigins, parseMppScanList, probeTargetFromDiscovery, seedFromOrigins, discoverFromX402Crawl,
   __testResetSubmitted, __testSetSubmittedCap, __testReset,

@@ -8,6 +8,7 @@
 // paste live keys into specs and examples carry personal data, and detecting
 // that by signature is a losing game. Names are constrained by an allowlist
 // instead, which an attacker cannot write their way around.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { requestContractOf, packRequestContract, unpackRequestContract, safeName, requestContractFromInputSchema, requestContractStrength } from "../src/request-contract.js";
 import { responseContractOf, UNSUPPORTED } from "../src/response-contract.js";
 
