@@ -103,13 +103,14 @@ const check = (name, cond) => {
   const plain = []; const okFetch = async (url) => { plain.push(url); return R(200, { ok: true }); };
   const fine = await buyOnce(okFetch, "https://t.example/api/hash", { method: "GET", headers: {} });
   check("an ordinary answer is one call, returned as is", fine.status === 200 && plain.length === 1 && fine.res);
-  const otherFetch = async () => R(400, { error: "bad input" });
+  let otherCalls = 0; const otherFetch = async () => { otherCalls++; return R(400, { error: "bad input" }); };
   const other = await buyOnce(otherFetch, "https://t.example/api/x", { method: "POST", headers: {}, body: "{}" });
-  check("another 400 is the route's own refusal, not retried as a job", other.status === 400 && /bad input/.test(other.text));
-  // A job that never finishes inside its budget is a 504, not a hang.
+  check("another 400 is the route's own refusal, one call, not retried as a job", other.status === 400 && /bad input/.test(other.text) && otherCalls === 1);
+  // A job that never finishes inside its budget (maxSeconds plus a minute of
+  // grace) is a 504, not a hang.
   let t = 0; const stuckFetch = async () => R(200, { state: "running", pollIntervalSeconds: 1 });
   const stuck = await buyOnce(payFetch, "https://t.example/api/decide/execute", { method: "POST", headers: {}, body: "{}" }, { plainFetch: stuckFetch, target: "https://t.example", sleep: async (ms) => { t += ms; }, now: () => t });
-  check("a job past its budget is given up as a 504 with the budget named", stuck.status === 504 && /240 s/.test(stuck.note));
+  check("a job past its budget is given up as a 504 with the budget named, after the budget plus a minute", stuck.status === 504 && /240 s/.test(stuck.note) && t >= 240_000 && t < 250_000);
 }
 
 // Accepts a plain array as well as a Set (call-site convenience).
