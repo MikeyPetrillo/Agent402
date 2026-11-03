@@ -1038,8 +1038,9 @@ export const CDP_TOOLS = [
           // again with a small outer row cap, tried again while the call's
           // query budget holds (a small result of this kind still fails now
           // and then), served marked truncated, with the row size measured
-          // so the caller can pick a LIMIT. The original is never resent:
-          // it is one more metered query that fails the same way.
+          // so the caller can pick a LIMIT. The original is resent only when
+          // the measured rows show its size was not the cause (below); a
+          // large result resent as written fails the same way.
           const small = { ...body, sql: capped.limitTo(SQL_RECOVER_ROWS) };
           let res2 = null, tries = 0, last = null;
           while (res2 === null) {
@@ -1065,14 +1066,30 @@ export const CDP_TOOLS = [
             const fits = Math.max(1, Math.floor(SQL_SEND_LIMIT_BYTES / rowBytes));
             const ordered = hasOuterOrderBy(capped.inner);
             // Rows this small cannot have made the whole result too large,
-            // so the service's error was a one-off: the answer says so and
-            // the caller sends the query again as written.
-            const oneOff = rowBytes * (SQL_MAX_ROWS + 1) < SQL_SEND_LIMIT_BYTES / 2;
-            return {
-              rows: list, rowCount: list.length, maxRows: SQL_RECOVER_ROWS, recovered: "result-size", rowBytes,
-              ...partialFields(list.length, list.length), complete: false, truncated: true, matchedIsLowerBound: true,
-              note: `The full result ${oneOff ? "was not sent by the query service (it answered its internal error" : `was too large for the query service to send (it answers its internal error`}; ${sendRuleText()}), so the query was run again with LIMIT ${SQL_RECOVER_ROWS} and these are ${ordered ? "its first" : "an arbitrary"} ${list.length} rows${ordered ? "" : " (it has no ORDER BY)"}. A row of this result is about ${Math.max(1, Math.round(rowBytes / 1024))} KB, ${oneOff ? `so the whole answer fits under about ${Math.round(SQL_SEND_LIMIT_BYTES / 1e3)} KB and the error was a one-off: send the query again as written.` : `so a LIMIT of ${Math.min(fits, SQL_MAX_ROWS)} usually keeps an answer under about ${Math.round(SQL_SEND_LIMIT_BYTES / 1e3)} KB: set that, or select fewer or narrower columns, and page with an ORDER BY and OFFSET.`}`,
-            };
+            // so the service's error was not its size: the original is sent
+            // once more while the call's query budget holds (one attempt,
+            // counted in the budget) and served whole. Refused again, or with
+            // no query left, the small rows are served marked truncated and
+            // the note says which, never that the error was a one-off.
+            const rowsSmall = rowBytes * (SQL_MAX_ROWS + 1) < SQL_SEND_LIMIT_BYTES / 2;
+            let refusedAgain = false, resent = false;
+            if (rowsSmall && queries.left() > 0) {
+              resent = true;
+              try { res = await cdpFetch("POST", "/platform/v2/data/query/run", body, { idempotent: true, buyerQuery: true, attempts: 1, lineOffset: capped.lineOffset, queries }); }
+              catch (e3) { if (!e3?.resultTooLarge) throw e3; refusedAgain = true; }
+            }
+            if (!resent || refusedAgain) {
+              const kb = Math.round(SQL_SEND_LIMIT_BYTES / 1e3);
+              const sizeText = rowsSmall
+                ? `so the whole answer fits under about ${kb} KB${refusedAgain ? `, yet the query service refused the full result twice (it answered its internal error both times): set a LIMIT and page with an ORDER BY and OFFSET, or send the query again later.` : `, and the call's query budget of ${SQL_QUERY_BUDGET} queries left no room to send the full query again: send the query again as written, or set a LIMIT and page with an ORDER BY and OFFSET.`}`
+                : `so a LIMIT of ${Math.min(fits, SQL_MAX_ROWS)} usually keeps an answer under about ${kb} KB: set that, or select fewer or narrower columns, and page with an ORDER BY and OFFSET.`;
+              return {
+                rows: list, rowCount: list.length, maxRows: SQL_RECOVER_ROWS, recovered: "result-size", rowBytes,
+                ...partialFields(list.length, list.length), complete: false, truncated: true, matchedIsLowerBound: true,
+                ...(resent ? { resent: true, refusedAgain: true } : {}),
+                note: `The full result ${rowsSmall ? "was not sent by the query service (it answered its internal error" : `was too large for the query service to send (it answers its internal error`}; ${sendRuleText()}), so the query was run again with LIMIT ${SQL_RECOVER_ROWS} and these are ${ordered ? "its first" : "an arbitrary"} ${list.length} rows${ordered ? "" : " (it has no ORDER BY)"}. A row of this result is about ${Math.max(1, Math.round(rowBytes / 1024))} KB, ${sizeText}`,
+              };
+            }
           }
         }
       } finally { buyerQueriesInflight--; if (queries.sent > maxQueriesPerCall) maxQueriesPerCall = queries.sent; }

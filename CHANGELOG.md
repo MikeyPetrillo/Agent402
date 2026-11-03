@@ -108,18 +108,21 @@ Tools:
   service at most 4 queries: the query itself and up to 3 recovery runs (the
   row-size measure, the filtered run, a small re-run). A call that reaches
   the cap without an answer is the uncharged 422 with `hint: "narrow-query"`;
-  the original query is never resent. The onchain-analyst pack follows the
+  the original query is resent only once, and only when the measured rows
+  show its size was not the cause. The onchain-analyst pack follows the
   tool's price.
 - onchain-sql: a query whose result is too large for the query service to
   send (its instant internal error) is run again with LIMIT 10, again while
   the call's query budget holds (a small result of this kind still fails now
   and then). Fewer than 10 rows back is the whole result and is served
-  complete; otherwise the 10 rows are served marked truncated (`recovered:
-  "result-size"`, `rowBytes`), with a note giving the row size and the
-  LIMIT that keeps an answer under about 500 KB, or, when rows that small
-  could not have made the result too large, that the error was a one-off and
-  the query can be sent again as written. When even 10 rows do not fit, the
-  answer says to select fewer or narrower columns.
+  complete. Rows so small the whole result could not have been too large
+  mean the original is sent once more inside the budget and served whole;
+  refused again, or with no query left, the 10 rows are served marked
+  truncated (`recovered: "result-size"`, `rowBytes`, `resent` and
+  `refusedAgain` after a second refusal) with a note saying which.
+  Otherwise the 10 rows are served marked truncated with a note giving the
+  row size and the LIMIT that keeps an answer under about 500 KB. When even
+  10 rows do not fit, the answer says to select fewer or narrower columns.
 - onchain-sql: the query service refuses to send a result that holds a row
   over 64 KB (measured: a 65,520-byte row is sent, a 65,540-byte row is
   not, while ten 30 KB rows are). On that refusal the tool now measures the
