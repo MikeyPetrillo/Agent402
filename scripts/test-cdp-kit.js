@@ -226,6 +226,23 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
       ok(small.truncated === false && small.complete === true && small.rowCount === 1 && small.maxRows === SQL_MAX_ROWS, "a result under the cap is marked complete");
       globalThis.fetch = realFetchCap;
     }
+    // solana.instructions without a block_time range: a filter, group, order
+    // or aggregate is refused before any call; a bare sample and a ranged
+    // query are sent; the narrow-query answer names block_time for Solana.
+    {
+      const { solanaRangeRefusal } = await import("../src/tools/cdp-kit.js");
+      ok(solanaRangeRefusal("SELECT executing_account, COUNT(*) FROM solana.instructions WHERE tx_signer = 'x' GROUP BY executing_account") !== null, "a Solana aggregate with no block_time range is refused");
+      ok(solanaRangeRefusal("SELECT * FROM solana.instructions WHERE tx_signer = 'x'") !== null, "a Solana filter with no block_time range is refused");
+      ok(solanaRangeRefusal("SELECT * FROM solana.instructions LIMIT 5") === null, "a bare Solana sample is sent");
+      ok(solanaRangeRefusal("SELECT COUNT(*) FROM solana.instructions WHERE block_time > now() - INTERVAL 1 DAY") === null, "a Solana query with a block_time range is sent");
+      ok(solanaRangeRefusal("SELECT COUNT(*) FROM base.transactions WHERE block_number > 1") === null, "a Base query is not judged by the Solana rule");
+      calls = [];
+      const r = await tool("onchain-sql").handler({ sql: "SELECT executing_account, COUNT(*) AS n FROM solana.instructions GROUP BY executing_account" }).catch((x) => x);
+      ok(r?.statusCode === 400 && r?.hint === "add-block-time" && /block_time > now\(\) - INTERVAL 1 DAY/.test(r.message) && calls.length === 0, `the handler refuses it before calling the query service (${r?.statusCode}, calls ${calls.length})`);
+      calls = []; reply = () => new Promise((res) => setTimeout(() => res(J(502, {})), 60));
+      const s5 = await tool("onchain-sql").handler({ sql: "SELECT * FROM solana.instructions WHERE block_time > now() - INTERVAL 30 DAY" }).catch((x) => x);
+      ok(s5?.hint === "narrow-query" && /block_time range/.test(s5.message), `a Solana narrow-query answer names block_time (${String(s5?.message).slice(0, 120)})`);
+    }
     // Control: a slow 502 on a query another reader runs (cdpSql) is still retried.
     {
       const { cdpSql } = await import("../src/tools/cdp-kit.js");
