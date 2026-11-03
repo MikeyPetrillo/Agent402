@@ -70,16 +70,19 @@ export function startModelCatalogRefresh() {
 export function _setModelCatalogForTest(ids, at = Date.now()) { state = ids ? { ids: new Set(ids.map((x) => String(x).toLowerCase())), at } : null; lastMissRead = 0; lastFailedAt = 0; }
 
 const tokens = (id) => new Set(id.split(/[-/.:_]/).filter(Boolean));
-// Edit distance, the closeness of two ids (both bounded to 120 characters).
+// Edit distance, the closeness of two ids. Both loops run at most
+// DISTANCE_MAX_CHARS times, whatever the caller's id length.
+const DISTANCE_MAX_CHARS = 120;
 function distance(a, b) {
-  a = a.slice(0, 120); b = b.slice(0, 120);
-  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
-  for (let i = 1; i <= a.length; i++) {
+  const n = Math.min(String(a).length, DISTANCE_MAX_CHARS);
+  const m = Math.min(String(b).length, DISTANCE_MAX_CHARS);
+  let prev = Array.from({ length: m + 1 }, (_, j) => j);
+  for (let i = 1; i <= n; i++) {
     const cur = [i];
-    for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    for (let j = 1; j <= m; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
     prev = cur;
   }
-  return prev[b.length];
+  return prev[m];
 }
 const MAX_ECHO = 200;
 
