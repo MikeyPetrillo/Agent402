@@ -346,9 +346,10 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
     // it — the request's JWT carries CDP_API_KEY_ID as its issuer/subject, so a
     // "key <id> not found"-style upstream message could otherwise reflect it.
     const detail = redactSecrets(String(json?.errorMessage || json?.message || json?.errorType || res.statusText)).slice(0, 200)
-      // A position the service names by line is on the query it received; the
-      // row-cap wrapper puts the buyer's query one line down.
-      .replace(/\bline (\d+)\b/, (m, n) => `line ${Math.max(1, Number(n) - lineOffset)}`);
+      // A position the service names is on the query it received; the row-cap
+      // wrapper puts the buyer's query one line and a few characters down.
+      .replace(/\bline (\d+)\b/, (m, n) => `line ${Math.max(1, Number(n) - lineOffset)}`)
+      .replace(/\b(position (?:start|end): )(\d+)/g, (m, k, n) => `${k}${Math.max(0, Number(n) - lineOffset * SQL_WRAP_HEAD.length)}`);
     if (res.status === 400 || res.status === 404 || res.status === 422) {
       if (buyerQuery) logFailedBuyerQuery(res.status, Date.now() - started, body?.sql);
       const e = bad(`CDP rejected the request: ${detail}`, 422);
@@ -553,6 +554,9 @@ function outerLimit(code) {
  *  under another cap, for the result-size recovery; `lineOffset` is how many
  *  lines the wrapper adds before the query, so a syntax error the service
  *  places by line can be named on the query as written. */
+// What the wrapper puts before the query: one line, and this many characters,
+// which a position the service names is moved back by.
+const SQL_WRAP_HEAD = "SELECT * FROM (\n";
 export function cappedSql(sql, { wrap = null } = {}) {
   // A final `;` and any comments after it are dropped; the query sits on its
   // own lines inside the wrapper, so a trailing line comment ends before ")".
@@ -565,19 +569,21 @@ export function cappedSql(sql, { wrap = null } = {}) {
   if (/^\s*with\b/i.test(code) || /\b(settings|format)\b/i.test(code)) return asWritten;
   const wrapped = wrap ?? subqueryDepth(s) < SQL_NEST_MAX;
   if (wrapped) {
-    const limitTo = (n) => `SELECT * FROM (\n${s}\n) LIMIT ${n}`;
+    const limitTo = (n) => `${SQL_WRAP_HEAD}${s}\n) LIMIT ${n}`;
     return { sql: limitTo(SQL_MAX_ROWS + 1), capped: true, inner: s, limitTo, lineOffset: 1 };
   }
   // At the depth limit: the cap goes in the query's own outer LIMIT. A UNION
-  // outside every parenthesis has no outer LIMIT of its own.
+  // outside every parenthesis has no outer LIMIT of its own. Read with the
+  // identifier quotes kept, as outerLimit reads: "union" is a column.
+  const masked = sqlCode(s);
   let depth = 0;
-  for (let i = 0; i < code.length; i++) {
-    const c = code[i];
+  for (let i = 0; i < masked.length; i++) {
+    const c = masked[i];
     if (c === "(") depth++;
     else if (c === ")") depth = Math.max(0, depth - 1);
-    else if (depth === 0 && (c === "u" || c === "U") && /^union\b/i.test(code.slice(i, i + 6)) && (i === 0 || /\W/.test(code[i - 1]))) return asWritten;
+    else if (depth === 0 && (c === "u" || c === "U") && /^union\b/i.test(masked.slice(i, i + 6)) && (i === 0 || /[^\w"`]/.test(masked[i - 1]))) return asWritten;
   }
-  const lim = outerLimit(sqlCode(s));
+  const lim = outerLimit(masked);
   const limitTo = (n) => (lim ? s.slice(0, lim.numStart) + String(Math.min(lim.value, n)) + s.slice(lim.numEnd) : `${s}\nLIMIT ${n}`);
   return { sql: limitTo(SQL_MAX_ROWS + 1), capped: true, inner: s, limitTo, lineOffset: 0 };
 }

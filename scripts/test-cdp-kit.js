@@ -448,6 +448,7 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
       ok(cappedSql(deep + " limit 7000; -- end").sql === deep + ` limit ${SQL_MAX_ROWS + 1}` && cappedSql("SELECT a FROM (SELECT b FROM (SELECT c FROM t LIMIT 5)) LIMIT 9000").sql.endsWith("LIMIT 5)) LIMIT 1001"), "the case is kept, a trailing semicolon dropped, and a LIMIT inside a subquery is not the outer one");
       const u = cappedSql(deep + " UNION ALL SELECT 1");
       ok(u.capped === false && u.sql === deep + " UNION ALL SELECT 1" && u.limitTo === null, "at the depth limit a UNION outside every parenthesis has no outer LIMIT to lower: sent as written");
+      ok(cappedSql(`SELECT "union" AS u FROM (SELECT b FROM (SELECT c FROM t)) LIMIT 5000`).sql.endsWith(`LIMIT ${SQL_MAX_ROWS + 1}`) && cappedSql(deep.replace("SELECT a", "SELECT a, \`limit\`") + " LIMIT 5000").sql.endsWith(`LIMIT ${SQL_MAX_ROWS + 1}`), "a quoted identifier named union or limit is a column, not the clause");
       ok(cappedSql("SELECT a FROM (SELECT b FROM t)", { wrap: false }).sql === "SELECT a FROM (SELECT b FROM t)\nLIMIT 1001" && cappedSql("SELECT a FROM t").lineOffset === 1, "the wrapper can be turned off by the caller; a wrapped query reports its one-line offset");
       const realFetchN = globalThis.fetch;
       let sent = [];
@@ -477,10 +478,10 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
         ok(rec.recovered === "result-size" && sent.length === 2 && sent[1] === deep + ` LIMIT ${SQL_RECOVER_ROWS}`, `the recovery of a query at the depth limit lowers its own LIMIT (${sent.length} calls)`);
         // A syntax error the service places by line is named on the query as
         // written: one line up for a wrapped query, as is for an unwrapped one.
-        globalThis.fetch = async () => J(400, { errorMessage: "invalid syntax at line 3, column 0" });
+        globalThis.fetch = async () => J(400, { errorMessage: "invalid syntax at line 3, column 0 (position start: 20, position end: 164)" });
         const w = await sqlRun("SELECT a FROM t\nWHERE").catch((x) => x);
         const n = await sqlRun(deep + "\nWHERE").catch((x) => x);
-        ok(w?.statusCode === 422 && /at line 2, column 0/.test(w.message) && n?.statusCode === 422 && /at line 3, column 0/.test(n.message), `a line in the service's refusal is the buyer's line (wrapped: "${w?.message?.slice(-30)}", unwrapped: "${n?.message?.slice(-30)}")`);
+        ok(w?.statusCode === 422 && /at line 2, column 0 \(position start: 4, position end: 148\)/.test(w.message) && n?.statusCode === 422 && /at line 3, column 0 \(position start: 20, position end: 164\)/.test(n.message), `a line and a position in the service's refusal are the buyer's (wrapped: "${w?.message?.slice(-60)}", unwrapped: "${n?.message?.slice(-60)}")`);
       } finally { globalThis.fetch = realFetchN; }
     }
     // solana.instructions without a block_time range: a filter, group, order
