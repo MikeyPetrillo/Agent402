@@ -327,16 +327,21 @@ async function rowsThatFit(body, inner) {
   let res;
   try {
     res = await cdpFetch("POST", "/platform/v2/data/query/run", { ...body, sql: `SELECT * FROM (\n${inner}\n) WHERE ${ROW_SIZE} <= ${SQL_ROW_FILTER_CHARS} LIMIT ${SQL_MAX_ROWS + 1}` }, { idempotent: true, buyerQuery: true, attempts: 1, lineOffset: 1 });
-  } catch (e) { if (e?.resultTooLarge) return null; throw e; }
+  } catch { return null; } // any refusal of the rewritten SQL is not the buyer's to read: the re-run decides
   const all = res?.result ?? res?.rows ?? res?.data ?? res;
   if (!Array.isArray(all)) return null;
+  // Every matching row over the limit: nothing to serve, so no 200 (the
+  // re-run ends in the uncharged answer that says to narrow the columns).
+  if (!all.length) return null;
   const list = all.length > SQL_MAX_ROWS ? all.slice(0, SQL_MAX_ROWS) : all;
   const cut = all.length > list.length;
   const kb = (v) => Math.max(1, Math.round(v / 1024));
+  // `matched` counts every row, the omitted ones too, so the answer reads
+  // incomplete; `truncated` follows the shared rule (src/partial-answer.js).
   return {
     rows: list, rowCount: list.length, maxRows: SQL_MAX_ROWS, recovered: "row-size",
     rowsOmitted: big, omittedReason: "row-size", rowLimitBytes: SQL_ROW_LIMIT_BYTES, maxRowBytes: Number.isFinite(maxRow) ? maxRow : null,
-    ...partialFields(Number.isFinite(n) ? n : list.length + big, list.length), complete: false, truncated: cut, ...(cut ? { matchedIsLowerBound: true } : {}),
+    ...partialFields(Number.isFinite(n) ? n : list.length + big, list.length), ...(cut ? { cutAt: SQL_MAX_ROWS } : {}),
     note: `${big} row(s) of this result are over the query service's ${kb(SQL_ROW_LIMIT_BYTES)} KB per-row limit (the largest is about ${kb(maxRow)} KB; array and map columns are the usual cause) and are omitted; the ${list.length} rows that fit are served${cut ? ` (cut at ${SQL_MAX_ROWS})` : ""}. To get the omitted rows, select fewer or narrower columns or arraySlice the long arrays.`,
   };
 }

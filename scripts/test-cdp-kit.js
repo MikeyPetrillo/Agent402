@@ -433,13 +433,25 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
           const fitRows = Array.from({ length: 18 }, (_, i) => ({ ix: i + 2, sk: "x".repeat(100) }));
           globalThis.fetch = async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sentR.push(q); if (sentR.length === 1) return J(500, { errorMessage: "An internal server error occurred." }); if (isMeasure(q)) return J(200, { result: [{ n: 22, big: 4, maxRow: 65972 }] }); return J(200, { result: fitRows }); };
           const r = await sqlRun("SELECT ix, sk FROM solana.instructions WHERE block_time > now() - INTERVAL 1 DAY GROUP BY ix, sk");
-          ok(r.recovered === "row-size" && r.rowsOmitted === 4 && r.omittedReason === "row-size" && r.rowCount === 18 && r.complete === false && r.truncated === false && r.matched === 22 && r.rowLimitBytes === 65_536 && r.maxRowBytes === 65972 && /4 row\(s\).*64 KB per-row limit.*about 64 KB.*18 rows that fit/.test(r.note), `rows over the per-row limit are omitted and counted, the rest served (${r.rowCount} served, ${r.rowsOmitted} omitted, matched ${r.matched})`);
+          ok(r.recovered === "row-size" && r.rowsOmitted === 4 && r.omittedReason === "row-size" && r.rowCount === 18 && r.complete === false && r.truncated === true && r.matched === 22 && r.rowLimitBytes === 65_536 && r.maxRowBytes === 65972 && /4 row\(s\).*64 KB per-row limit.*about 64 KB.*18 rows that fit/.test(r.note), `rows over the per-row limit are omitted and counted, the rest served (${r.rowCount} served, ${r.rowsOmitted} omitted, matched ${r.matched})`);
           ok(sentR.length === 3 && isMeasure(sentR[1]) && /^SELECT count\(\) AS n, countIf/.test(sentR[1]) && /WHERE length\(toString\(tuple\(\*\)\)\) <= 64000 LIMIT 1001$/.test(sentR[2]) && /^SELECT \* FROM \(\n/.test(sentR[2]), `the measure is one aggregate and the rows that fit are one filtered run (${sentR.length} calls)`);
           // A filtered result past the cap is cut and reads as a lower bound.
           sentR.length = 0;
           globalThis.fetch = async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sentR.push(q); if (sentR.length === 1) return J(500, {}); if (isMeasure(q)) return J(200, { result: [{ n: 5000, big: 2, maxRow: 70000 }] }); return J(200, { result: Array.from({ length: SQL_MAX_ROWS + 1 }, (_, i) => ({ i })) }); };
           const c = await sqlRun("SELECT i FROM base.blocks");
-          ok(c.recovered === "row-size" && c.rowCount === SQL_MAX_ROWS && c.truncated === true && c.matchedIsLowerBound === true && c.rowsOmitted === 2, `a filtered result past the cap is cut at ${SQL_MAX_ROWS} and marked (${c.rowCount}, truncated ${c.truncated})`);
+          ok(c.recovered === "row-size" && c.rowCount === SQL_MAX_ROWS && c.truncated === true && c.complete === false && c.cutAt === SQL_MAX_ROWS && c.matched === 5000 && c.rowsOmitted === 2, `a filtered result past the cap is cut at ${SQL_MAX_ROWS} and marked (${c.rowCount}, truncated ${c.truncated})`);
+          ok(r.truncated === true && r.complete === false && r.matched === 22 && r.returned === 18 && r.cutAt === undefined, "an answer with omitted rows reads incomplete and truncated by the shared rule, with the exact match count");
+          // Every matching row over the limit: nothing to serve, so the re-run
+          // path and its uncharged 422, never an empty 200.
+          sentR.length = 0;
+          globalThis.fetch = async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sentR.push(q); if (isMeasure(q)) return J(200, { result: [{ n: 1, big: 1, maxRow: 70000 }] }); if (/WHERE length\(toString/.test(q)) return J(200, { result: [] }); return isHealth(q) ? J(200, { result: [{ block_number: 1 }] }) : J(500, {}); };
+          const empty = await sqlRun("SELECT * FROM base.transactions WHERE hash = '0xabc'").catch((x) => x);
+          ok(empty?.statusCode === 422 && empty?.hint === "narrow-query" && sentR.filter((q) => !isHealth(q)).length === 5, `every row over the limit is the uncharged narrow-query 422, not an empty 200 (${empty?.statusCode}, ${sentR.filter((q) => !isHealth(q)).length} query calls)`);
+          // A refusal of the rewritten filtered SQL is not the buyer's to read.
+          sentR.length = 0;
+          globalThis.fetch = async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sentR.push(q); if (sentR.length === 1) return J(500, {}); if (isMeasure(q)) return J(200, { result: [{ n: 9, big: 1, maxRow: 70000 }] }); if (/WHERE length\(toString/.test(q)) return J(400, { errorMessage: "unexpected '*' at line 1" }); return J(200, { result: Array.from({ length: SQL_RECOVER_ROWS }, (_, i) => ({ m: i, bals: "x".repeat(4000) })) }); };
+          const rej = await sqlRun("SELECT i FROM base.blocks").catch((x) => x);
+          ok(!(rej instanceof Error) && rej.recovered === "result-size" && sentR.length === 4, `a 400 on the filtered run falls back to the small re-run, never surfaced as the buyer's SQL error (${rej instanceof Error ? rej.statusCode : rej.recovered}, ${sentR.length} calls)`);
           // No row over the limit: the re-run path as before.
           sentR.length = 0;
           globalThis.fetch = async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sentR.push(q); if (sentR.length === 1) return J(500, {}); if (isMeasure(q)) return J(200, { result: [{ n: 400, big: 0, maxRow: 30000 }] }); return J(200, { result: Array.from({ length: SQL_RECOVER_ROWS }, (_, i) => ({ m: i, bals: "x".repeat(4000) })) }); };
