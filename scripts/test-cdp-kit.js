@@ -94,7 +94,7 @@ await rejects(() => tool("wallet-balances").handler({ address: "J7aN3PLJnTCF5qpE
 await rejects(() => tool("wallet-balances").handler({ address: "0x1111111111111111111111111111111111111111", network: "solana" }), 400, "wallet-balances EVM address rejected on solana → 400");
 await rejects(() => tool("onchain-sql").handler({}), 400, "onchain-sql missing sql → 400");
 await rejects(() => tool("onchain-sql").handler({ sql: "DROP TABLE base.events" }), 400, "onchain-sql non-SELECT → 400");
-await rejects(() => tool("onchain-sql").handler({ sql: "SELECT " + "x,".repeat(6000) + "y FROM base.events" }), 400, "onchain-sql over-length → 400");
+await rejects(() => tool("onchain-sql").handler({ sql: "SELECT " + "x,".repeat(31000) + "y FROM base.events" }), 400, "onchain-sql over-length → 400");
 await rejects(() => tool("onchain-sql").handler({ sql: "SELECT 1" }), 503, "onchain-sql valid SELECT reaches the env gate (503 without keys)");
 await rejects(() => tool("onchain-sql").handler({ sql: "WITH t AS (SELECT 1) SELECT * FROM t" }), 503, "onchain-sql WITH…SELECT accepted (503 at env gate)");
 await rejects(() => tool("onchain-sql-schema").handler({}), 503, "onchain-sql-schema reaches the env gate (503 without keys)");
@@ -223,6 +223,24 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
         ok(q1.length === 1 && q1[0].includes("HTTP 502") && q1[0].includes("\\n") && q2.length === 1 && q2[0].includes("HTTP 400"), `a failed buyer query's text is logged once per distinct query, on one line, for a slow cutoff and for the service's refusal (${q1.length}, ${q2.length})`);
         ok(!warned3.some((w) => w.includes("INTERNALQ")), "an internal reader's failed query is not logged as a buyer query");
         _resetCdpLogThrottleForTest();
+        // The lines are bounded by bytes a minute: distinct large queries
+        // past the budget log a head with the length and hash, whole again
+        // the next minute.
+        {
+          const { FAILED_QUERY_LOG_BYTES_PER_MIN, _resetFailedQueryLogBudgetForTest } = await import("../src/tools/cdp-kit.js");
+          _resetFailedQueryLogBudgetForTest(); _resetCdpLogThrottleForTest();
+          const warned4 = []; console.warn = (m) => warned4.push(String(m));
+          calls = []; reply = () => J(400, { errorMessage: "Query scanned more data than the per-query limit allows" });
+          const bigQ = (i) => "SELECT block_number FROM base.blocks WHERE block_time > 1 /* " + "p".repeat(50_000) + " */ -- " + i;
+          const n = Math.ceil(FAILED_QUERY_LOG_BYTES_PER_MIN / 50_000) + 2;
+          for (let i = 0; i < n; i++) await tool("onchain-sql").handler({ sql: bigQ(i) }).catch(() => {});
+          console.warn = realWarn;
+          const lines = warned4.filter((w) => w.startsWith("[cdp] failed buyer query"));
+          const whole = lines.filter((w) => !/head only/.test(w)), headOnly = lines.filter((w) => /head only/.test(w));
+          const bytes = whole.reduce((s, w) => s + w.length, 0);
+          ok(lines.length === n && whole.length >= 1 && headOnly.length >= 2 && bytes <= FAILED_QUERY_LOG_BYTES_PER_MIN + 4096 && headOnly.every((w) => w.length < 1500 && /50\d\d\d chars, sha256 [0-9a-f]{16}/.test(w)), `distinct large failed queries log whole until the minute's byte budget, then a head with length and hash (${whole.length} whole, ${headOnly.length} head-only, ${bytes} bytes)`);
+          _resetFailedQueryLogBudgetForTest(); _resetCdpLogThrottleForTest();
+        }
       }
       console.warn = (m) => warned.push(String(m));
       ok(/rid=rid-123/.test(line) && /502 Bad Gateway/.test(line) && /tables=base\.transactions/.test(line) && /where=1,limit=1/.test(line) && /timefilter=1/.test(line) && !/SECRETLITERAL/.test(line), `a query 5xx is logged with the request id, body and query shape (block_time read as a time filter), no literals (${line.slice(0, 220)})`);
@@ -449,6 +467,30 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
       const u = cappedSql(deep + " UNION ALL SELECT 1");
       ok(u.capped === false && u.sql === deep + " UNION ALL SELECT 1" && u.limitTo === null, "at the depth limit a UNION outside every parenthesis has no outer LIMIT to lower: sent as written");
       ok(cappedSql(`SELECT "union" AS u FROM (SELECT b FROM (SELECT c FROM t)) LIMIT 5000`).sql.endsWith(`LIMIT ${SQL_MAX_ROWS + 1}`) && cappedSql(deep.replace("SELECT a", "SELECT a, \`limit\`") + " LIMIT 5000").sql.endsWith(`LIMIT ${SQL_MAX_ROWS + 1}`), "a quoted identifier named union or limit is a column, not the clause");
+      // The length cap: the query service takes 48 KB queries (measured), so
+      // the cap is 60,000 characters, refused before any call, and the masks
+      // that read a query stay linear at that size.
+      {
+        const { SQL_MAX_CHARS, sqlCode, hasOuterOrderBy, solanaRangeRefusal } = await import("../src/tools/cdp-kit.js");
+        ok(SQL_MAX_CHARS === 60_000, "the SQL length cap is the measured one");
+        ok(new RegExp(`max ${SQL_MAX_CHARS.toLocaleString("en-US")} chars`).test(tool("onchain-sql").discovery.inputSchema.properties.sql.description), "the tool description states the cap from the constant");
+        const realFetchL = globalThis.fetch; let sentL = 0;
+        globalThis.fetch = async () => { sentL++; return J(200, { result: [{ x: 1 }] }); };
+        try {
+          const longOk = "SELECT 1 AS x FROM base.blocks WHERE 1 = 1 " + "/* " + "p".repeat(SQL_MAX_CHARS - 60) + " */";
+          const r = await sqlRun(longOk);
+          ok(r.rowCount === 1 && sentL === 1 && longOk.length <= SQL_MAX_CHARS, `a query at the cap is sent (${longOk.length} chars)`);
+          const over = await sqlRun(longOk + "x".repeat(SQL_MAX_CHARS - longOk.length + 1)).catch((x) => x);
+          ok(over?.statusCode === 400 && /too long/.test(over.message) && /max 60,000/.test(over.message) && sentL === 1, `one past the cap is refused before any call (${over?.message?.slice(0, 60)})`);
+        } finally { globalThis.fetch = realFetchL; }
+        const hostile = ["'" + "\\'".repeat(SQL_MAX_CHARS / 2), "(".repeat(SQL_MAX_CHARS), "(SELECT ".repeat(Math.floor(SQL_MAX_CHARS / 8)), "limit ".repeat(SQL_MAX_CHARS / 6), "/**/".repeat(SQL_MAX_CHARS / 4),
+          // An unterminated literal of escaped quotes ending in a lone backslash: the shape that was quadratic.
+          "SELECT 1 FROM solana.instructions WHERE block_time >= \"" + "\\\"".repeat(SQL_MAX_CHARS / 2 - 40) + "\\", "'" + "\\'".repeat(SQL_MAX_CHARS / 2 - 1) + "\\", "`" + "\\`".repeat(SQL_MAX_CHARS / 2 - 1) + "\\"];
+        const t0 = performance.now();
+        for (const h of hostile) { sqlCode(h); subqueryDepth(h); cappedSql(h); hasOuterOrderBy(h); solanaRangeRefusal(h); }
+        const took = performance.now() - t0;
+        ok(took < 400, `the query readers stay linear on eight hostile queries at the cap (${took.toFixed(0)} ms)`);
+      }
       ok(cappedSql(deep + " LIMIT" + " ".repeat(60) + "5000").sql === deep + " LIMIT" + " ".repeat(60) + String(SQL_MAX_ROWS + 1) && cappedSql(deep + " LIMIT\n\n  5000").sql === deep + ` LIMIT\n\n  ${SQL_MAX_ROWS + 1}`, "a count far from its LIMIT (spaces, lines) is still the outer LIMIT");
       const expr = cappedSql(deep + " LIMIT (5000)");
       ok(expr.capped === false && expr.sql === deep + " LIMIT (5000)" && cappedSql(deep + " LIMIT 1e3").capped === false, "an outer LIMIT whose count is an expression is left as written, never doubled");

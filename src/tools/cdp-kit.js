@@ -137,7 +137,11 @@ export function redactLiterals(text) {
 // pattern was quadratic on an unclosed string of escaped quotes). An
 // identifier in double quotes or backticks is one token, so a quote or a
 // comment marker inside it is neither a string nor a comment.
-const SQL_TOKENS = /('(?:[^'\\]|\\.)*(?:'|$))|("(?:[^"\\]|\\.)*(?:"|$)|`(?:[^`\\]|\\.)*(?:`|$))|(\/\*[\s\S]*?(?:\*\/|$)|--[^\n]*|#[^\n]*)/g;
+// A literal that never closes runs to the end of input; a lone backslash as
+// its last character is taken by the `\\?` so the run ends there too, else
+// every quote position would rescan to the end (quadratic, measured 5 s on
+// 60,000 characters of escaped quotes ending in a backslash).
+const SQL_TOKENS = /('(?:[^'\\]|\\.)*\\?(?:'|$))|("(?:[^"\\]|\\.)*\\?(?:"|$)|`(?:[^`\\]|\\.)*\\?(?:`|$))|(\/\*[\s\S]*?(?:\*\/|$)|--[^\n]*|#[^\n]*)/g;
 export function sqlCode(sql) {
   return String(sql || "").replace(SQL_TOKENS, (m, str, ident) => (str ? "'" + "_".repeat(Math.max(0, m.length - 2)) + m[m.length - 1].replace(/[^']/, "'") : ident ? m : m.replace(/[^\n]/g, " ")));
 }
@@ -244,12 +248,24 @@ export function _resetCdpLogThrottleForTest() { loggedAt.clear(); }
 // hand: the shape alone does not say what in it reads past the service's
 // limits. Once per distinct query a minute; the owner approved this on
 // 2026-11-03, and /privacy names it.
-function logFailedBuyerQuery(status, tookMs, sql) {
+// The lines are bounded by bytes a minute (FAILED_QUERY_LOG_BYTES_PER_MIN):
+// a buyer whose every query fails can send a distinct 60 KB query per call,
+// and "once per distinct query" alone would let it write that much log per
+// refusal. Past the budget the line keeps the query's head, length and hash.
+export const FAILED_QUERY_LOG_BYTES_PER_MIN = 256 * 1024;
+const FAILED_QUERY_LOG_HEAD = 1024;
+let failedQueryLogWindow = 0, failedQueryLogBytes = 0;
+export function _resetFailedQueryLogBudgetForTest() { failedQueryLogWindow = 0; failedQueryLogBytes = 0; }
+function logFailedBuyerQuery(status, tookMs, sql, now = Date.now()) {
   const text = String(sql || "");
   if (!text) return;
-  const key = `sql|${createHash("sha256").update(text).digest("hex").slice(0, 16)}`;
-  if (!logOnce(key)) return;
-  console.warn(`[cdp] failed buyer query (HTTP ${status} after ${tookMs}ms): ${JSON.stringify(text)}`);
+  const hash = createHash("sha256").update(text).digest("hex").slice(0, 16);
+  if (!logOnce(`sql|${hash}`, now)) return;
+  const minute = Math.floor(now / 60_000);
+  if (minute !== failedQueryLogWindow) { failedQueryLogWindow = minute; failedQueryLogBytes = 0; }
+  const whole = failedQueryLogBytes + text.length <= FAILED_QUERY_LOG_BYTES_PER_MIN;
+  failedQueryLogBytes += whole ? text.length : FAILED_QUERY_LOG_HEAD;
+  console.warn(`[cdp] failed buyer query (HTTP ${status} after ${tookMs}ms${whole ? "" : `, ${text.length} chars, sha256 ${hash}, head only: the minute's log budget is spent`}): ${JSON.stringify(whole ? text : text.slice(0, FAILED_QUERY_LOG_HEAD))}`);
 }
 export function _cdpLogThrottleSizeForTest() { return loggedAt.size; }
 export function _cdpLogOnceForTest(key, now) { return logOnce(key, now); }
@@ -422,6 +438,13 @@ export async function cdpSql(sql, { cacheSeconds } = {}) {
 // rows), so a plain SELECT is wrapped with an outer LIMIT one past the cap,
 // which also says whether the result was cut.
 export const SQL_MAX_ROWS = 1000;
+// Characters a buyer's SQL may run to. The query service took 48,000-character
+// queries without complaint (measured 2026-11-03: the buyer's 8 KB query
+// padded to 23, 28 and 48 KB all answered in 4 s), while this cap at 10,000
+// refused five of one buyer's queries (12 to 44 KB) in its last half hour.
+// The JSON body is bounded by the server's 100 KB parser, so the cap sits
+// under it with room for escaping; the masks that read a query are linear.
+export const SQL_MAX_CHARS = 60_000;
 // solana.instructions is pruned by block_time only: a query that filters,
 // groups, orders or aggregates it without a block_time bound scans its whole
 // history and never finishes inside the query service's ~10 s window
@@ -481,7 +504,7 @@ export function blockTimeRangeDays(sql, now = Date.now()) {
   if (!/\bblock_time\b/i.test(q)) return null;
   // Any OR in the query: a bound may not narrow it, so no range is read.
   if (/\bor\b/i.test(sqlCode(sql))) return null;
-  // Each piece is bounded in length, so the reads stay linear on a 10 KB query.
+  // Each piece is bounded in length, so the reads stay linear on a query at the cap.
   const OPERAND = String.raw`('(?:[^'\\]|\\.){0,80}'|[^'()\s,]{1,60}(?:\s*\(\s*\)\s*-\s*interval\s+'?\d{1,9}'?\s*[a-z]{1,10}|\s{0,8}\((?:[^()]|\([^()]{0,80}\)){0,120}\))?(?:\s*-\s*\d{1,9})?|\((?:[^()]|\([^()]{0,80}\)){0,160}\))`;
   let lo = null, hi = null;
   const take = (which, v) => { if (v === null) return; if (which === "lo") lo = lo === null ? v : Math.max(lo, v); else hi = hi === null ? v : Math.min(hi, v); };
@@ -873,7 +896,7 @@ export const CDP_TOOLS = [
       input: { sql: "SELECT COUNT(*) AS txs FROM base.transactions WHERE block_number > 0 LIMIT 1" },
       inputSchema: {
         properties: {
-          sql: { type: "string", description: "Read-only SELECT (ClickHouse dialect, max 10,000 chars). Tables: base.events, base.transactions, base.blocks, base.encoded_logs, base.decoded_user_operations, base.transaction_attributions, base_sepolia.*, solana.instructions (a query that filters, groups or aggregates it needs a block_time range; a day answers in seconds, and a longer range may read past the query service's 100 GB per-query limit). Returns up to 1,000 rows; a larger result is cut and marked truncated." },
+          sql: { type: "string", description: `Read-only SELECT (ClickHouse dialect, max ${SQL_MAX_CHARS.toLocaleString("en-US")} chars). Tables: base.events, base.transactions, base.blocks, base.encoded_logs, base.decoded_user_operations, base.transaction_attributions, base_sepolia.*, solana.instructions (a query that filters, groups or aggregates it needs a block_time range; a day answers in seconds, and a longer range may read past the query service's 100 GB per-query limit). Returns up to 1,000 rows; a larger result is cut and marked truncated.` },
           cacheSeconds: { type: "number", description: "Accept cached results up to this old (max 900). Cheaper + faster for repeated analytics." },
         },
         required: ["sql"],
@@ -885,7 +908,7 @@ export const CDP_TOOLS = [
     handler: async (input) => {
       const sql = String(input?.sql || "").trim();
       if (!sql) throw bad('"sql" is required');
-      if (sql.length > 10_000) throw bad(`"sql" too long (${sql.length} chars, max 10,000)`);
+      if (sql.length > SQL_MAX_CHARS) throw bad(`"sql" too long (${sql.length} chars, max ${SQL_MAX_CHARS.toLocaleString("en-US")})`);
       if (!/^\s*(select|with)\b/i.test(sqlNorm(sql))) throw bad('"sql" must be a read-only SELECT (or WITH … SELECT) statement');
       const unbounded = solanaRangeRefusal(sql);
       if (unbounded) { const e = bad(unbounded); e.hint = "add-block-time"; throw e; }
