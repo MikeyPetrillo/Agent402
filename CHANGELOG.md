@@ -9,11 +9,14 @@ carries its own version on npm.
 ### 2026-11-03 (onchain-sql and metered chat)
 Tools:
 - onchain-sql: a query whose result is too large for the query service to
-  send (its instant internal error) is run once more with LIMIT 25 and those
-  rows are served marked truncated (`recovered: "result-size"`, `rowBytes`),
-  with a note giving the row size, the service's limit of about 1 MB per
-  answer and the LIMIT that fits; when even 25 rows do not fit, the answer
-  says to select fewer or narrower columns.
+  send (its instant internal error) is run again with LIMIT 10 (two
+  attempts, since a small result of this kind still fails now and then). Fewer
+  than 10 rows back is the whole result and is served complete; small rows
+  mean the error was not about size and the original is sent once more;
+  otherwise the 10 rows are served marked truncated (`recovered:
+  "result-size"`, `rowBytes`), with a note giving the row size and the
+  LIMIT that keeps an answer under about 500 KB. When even 10 rows do not
+  fit, the answer says to select fewer or narrower columns.
 - onchain-sql returns at most 1,000 rows per call: a plain SELECT is sent
   with an outer row cap, and a result cut at 1,000 says so in fields
   (`truncated`, `complete`, `matchedIsLowerBound`, `note`, `maxRows`).
