@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getFreePorts } from "./lib/free-port.js";
-import { refreshModelCatalog, unknownModelRefusal, _setModelCatalogForTest } from "../src/model-catalog.js";
+import { refreshModelCatalog, unknownModelRefusal, _setModelCatalogForTest, modelCatalogWanted } from "../src/model-catalog.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -26,8 +26,10 @@ process.env.MODEL_CATALOG_URL = "http://127.0.0.1:9/api/v1/models";
 {
   _setModelCatalogForTest(null);
   ok(unknownModelRefusal(BAD) === null, "no list read yet: nothing is refused (fail open)");
-  _setModelCatalogForTest(LISTED, Date.now() - 4 * 3600_000);
-  ok(unknownModelRefusal(BAD) === null, "a list older than three hours judges nothing (fail open)");
+  _setModelCatalogForTest(LISTED, Date.now() - 31 * 60_000);
+  ok(unknownModelRefusal(BAD) === null, "a list older than 30 minutes judges nothing (fail open)");
+  _setModelCatalogForTest(LISTED, Date.now() - 29 * 60_000);
+  ok(unknownModelRefusal(BAD, { refreshOnMiss: false }) !== null, "a list 29 minutes old still judges");
   _setModelCatalogForTest(LISTED);
   const r = unknownModelRefusal(BAD);
   ok(typeof r === "string" && r.includes(BAD) && /Nothing was charged/.test(r), "an unlisted id is refused, naming it and that nothing was charged");
@@ -69,6 +71,44 @@ process.env.MODEL_CATALOG_URL = "http://127.0.0.1:9/api/v1/models";
   ok(small === false && unknownModelRefusal(BAD) !== null, "an implausibly small list is a failed read and keeps the last good one");
   const down = await refreshModelCatalog({ fetchImpl: async () => { throw new Error("egress down"); } });
   ok(down === false && unknownModelRefusal(BAD) !== null, "an unreadable list keeps the last good one while it is fresh");
+
+  // An id with a same-family successor is left to its fallback even when unlisted.
+  const { AVAILABILITY_SUCCESSORS } = await import("../src/tools/llm-gateway-kit.js");
+  const withSuccessor = Object.keys(AVAILABILITY_SUCCESSORS || {})[0];
+  ok(!!withSuccessor && unknownModelRefusal(withSuccessor, { refreshOnMiss: false }) !== null && meteredModelRefusal(withSuccessor) === null, `an id with a successor is not refused before payment though unlisted (${withSuccessor})`);
+  // Closest suggestion first; wording; the echoed id is bounded.
+  _setModelCatalogForTest([...LISTED, "anthropic/claude-sonnet-5", "anthropic/claude-sonnet-5.5", "anthropic/claude-opus-5.5"]);
+  ok(/include: anthropic\/claude-sonnet-5,/.test(unknownModelRefusal("anthropic/claude-sonet-5", { refreshOnMiss: false })), `the nearest id is named first (${unknownModelRefusal("anthropic/claude-sonet-5", { refreshOnMiss: false })})`);
+  ok(/not a chat model id/.test(unknownModelRefusal(BAD, { refreshOnMiss: false })), "the refusal says chat model (an embedding or speech id is served elsewhere)");
+  ok(unknownModelRefusal("x/" + "a".repeat(100_000), { refreshOnMiss: false }).length < 600, "a huge model id is not echoed back whole");
+  // After a failed read, a miss starts no read until the refresh interval passes.
+  {
+    let reads = 0;
+    await sleep(100);
+    _setModelCatalogForTest(LISTED);
+    await refreshModelCatalog({ fetchImpl: async () => { throw new Error("down"); } });
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async () => { reads++; return new Response("{}", { status: 503 }); };
+    try {
+      unknownModelRefusal("deepseek/miss-after-failure");
+      await sleep(50);
+      ok(reads === 0, `a miss right after a failed read starts no read (reads ${reads})`);
+    } finally { globalThis.fetch = realFetch; _setModelCatalogForTest(LISTED); }
+  }
+  // Read in production only (or against a stub).
+  ok(modelCatalogWanted({}) === false && modelCatalogWanted({ OPENROUTER_API_KEY: "k" }) === false && modelCatalogWanted({ OPENROUTER_API_KEY: "k", NODE_ENV: "production" }) === true
+    && modelCatalogWanted({ OPENROUTER_API_KEY: "k", RAILWAY_ENVIRONMENT_NAME: "production", X402_SYNC_ON_START: "false" }) === false && modelCatalogWanted({ MODEL_CATALOG_URL: "http://x" }) === true,
+    "the list is read only in production with a key, or from a stub");
+  // The read is not counted in the upstream health lane.
+  {
+    const { createToolFailureMonitor } = await import("../src/tool-failure-monitor.js");
+    const m = createToolFailureMonitor({ env: {} });
+    const seen = [];
+    m.observeFetch("openrouter.ai", { then: (f) => { seen.push("then"); } }, { [Symbol.for("agent402.noOutcome")]: true }, "background");
+    m.observeFetch("openrouter.ai", { then: (f) => { seen.push("then"); } }, {}, "background");
+    await sleep(10);
+    ok(seen.length === 1, `a model-list read is skipped by the upstream monitor; a chat call is counted (${seen.length})`);
+  }
 }
 
 delete process.env.MODEL_CATALOG_URL;
@@ -120,6 +160,8 @@ try {
   ok(r2.status === 402 && !!r2.headers.get("payment-required"), `a listed id still gets its 402 offer (${r2.status} ${(await r2.text()).slice(0, 300)})`);
   const r3 = await fetch(`${B}/v1/metered/chat/completions`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ input: { model: BAD, messages: [{ role: "user", content: "hi" }] } }) });
   ok(r3.status === 400, `an id inside an {input:{...}} envelope is read the same way (${r3.status})`);
+  const r4 = await fetch(`${B}/V1/metered/chat/completions/`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: BAD, messages: [{ role: "user", content: "hi" }] }) });
+  ok(r4.status === 400 && !r4.headers.get("payment-required"), `a case or trailing-slash variant of the path is checked the same way (${r4.status})`);
 } catch (e) {
   fail++; console.log(`FAIL - ${e.message}`);
 } finally {

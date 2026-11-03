@@ -23,7 +23,7 @@
 // node:crypto — the @coinbase/cdp-sdk dependency tree (axios/viem/solana-kit)
 // is far heavier than the three REST calls we make. Claim structure mirrors
 // the SDK's auth/utils/jwt.ts exactly.
-import { createPrivateKey, createSign, randomBytes, sign as edSign } from "node:crypto";
+import { createPrivateKey, createSign, randomBytes, sign as edSign, createHash } from "node:crypto";
 import { redactSecrets } from "./redact.js";
 import { partialFields } from "../partial-answer.js";
 import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, currentBudget, isUpstreamFailure, OPTIONAL_READ_FLOOR_MS } from "../upstream-deadline.js";
@@ -127,22 +127,140 @@ export function redactLiterals(text) {
   return String(text || "").replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.){24,}"/g, "'…'").replace(/\b0x[0-9a-f]{6,}\b/gi, "0x…").replace(/\b\d{6,}\b/g, "#");
 }
 
+/** A query with every string literal's inside and every comment blanked,
+ *  the same length as the query, so a keyword check reads only code and a
+ *  position in it is a position in the query. One pass, so a quote inside a
+ *  comment or a comment marker inside a string is read as what it is. In
+ *  this dialect a string is single-quoted; double quotes and backticks quote
+ *  identifiers and are kept. */
+// A string that is never closed runs to the end (linear; a backtracking
+// pattern was quadratic on an unclosed string of escaped quotes). An
+// identifier in double quotes or backticks is one token, so a quote or a
+// comment marker inside it is neither a string nor a comment.
+const SQL_TOKENS = /('(?:[^'\\]|\\.)*(?:'|$))|("(?:[^"\\]|\\.)*(?:"|$)|`(?:[^`\\]|\\.)*(?:`|$))|(\/\*[\s\S]*?(?:\*\/|$)|--[^\n]*|#[^\n]*)/g;
+export function sqlCode(sql) {
+  return String(sql || "").replace(SQL_TOKENS, (m, str, ident) => (str ? "'" + "_".repeat(Math.max(0, m.length - 2)) + m[m.length - 1].replace(/[^']/, "'") : ident ? m : m.replace(/[^\n]/g, " ")));
+}
+/** sqlCode with identifier quotes removed, for keyword and table checks
+ *  (`solana`.`instructions` and "block_time" read as the plain names). */
+export function sqlNorm(sql) {
+  return sqlCode(sql).replace(/[`"]/g, "");
+}
+/** The query with comments blanked and strings kept, for reading values. */
+function sqlNoComments(sql) {
+  return String(sql || "").replace(SQL_TOKENS, (m, str, ident) => (str || ident ? m : m.replace(/[^\n]/g, " ")));
+}
+
 /** A query's shape for a log line: length, tables, clauses. No literals. */
 export function sqlShape(sql) {
-  const s = String(sql || "");
+  const s = sqlNorm(sql);
   const tables = [...new Set([...s.matchAll(/\b(?:from|join)\s+([a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*)/gi)].map((m) => m[1].toLowerCase()))].slice(0, 6);
   const has = (re) => (re.test(s) ? 1 : 0);
-  return `len=${s.length},tables=${tables.join("+") || "-"},where=${has(/\bwhere\b/i)},limit=${has(/\blimit\b/i)},groupby=${has(/\bgroup\s+by\b/i)},orderby=${has(/\border\s+by\b/i)},joins=${(s.match(/\bjoin\b/gi) || []).length},timefilter=${has(/\bblock_(?:timestamp|number)\b[^;]*?(?:>|<|between)/i)}`;
+  return `len=${s.length},tables=${tables.join("+") || "-"},where=${has(/\bwhere\b/i)},limit=${has(/\blimit\b/i)},groupby=${has(/\bgroup\s+by\b/i)},orderby=${has(/\border\s+by\b/i)},joins=${(s.match(/\bjoin\b/gi) || []).length},timefilter=${has(/\bblock_(?:timestamp|number|time|slot)\b[^;]*?(?:>|<|between)/i)}`;
 }
+
+// The failure monitor skips a fetch carrying this key (src/tool-failure-monitor.js).
+const NO_OUTCOME = Symbol.for("agent402.noOutcome");
+
+// Whether the query service answers a known-good query, read only when a
+// buyer's query fails slowly (at most once per HEALTH_TTL_MS), so a query
+// too heavy for the service is told apart from an outage of the service.
+// The known-good query reads the table the buyer's query read, so a table
+// that fails on its own is not read as the buyer's fault.
+export const QUERY_HEALTH_SQL = Object.freeze({
+  solana: "SELECT block_slot FROM solana.instructions LIMIT 1",
+  base: "SELECT block_number FROM base.blocks LIMIT 1",
+});
+export const HEALTH_TTL_MS = 5 * 60_000;
+export const HEALTH_TIMEOUT_MS = 5_000;
+let healthTimeoutMs = HEALTH_TIMEOUT_MS;
+const queryHealth = new Map(); // table -> { ok, at }
+const healthInflight = new Map(); // table -> promise
+function healthTableOf(sql) { return /\bsolana\s*\.\s*instructions\b/i.test(sqlNorm(sql)) ? "solana" : "base"; }
+async function queryServiceHealthy(sql = "", now = Date.now()) {
+  const table = healthTableOf(sql);
+  const known = queryHealth.get(table);
+  if (known && now - known.at < HEALTH_TTL_MS) return known.ok;
+  if (!healthInflight.has(table)) {
+    healthInflight.set(table, (async () => {
+      let ok = false;
+      try {
+        const path = "/platform/v2/data/query/run";
+        const jwt = await mintCdpJwt({ method: "POST", path });
+        // Its own budget and timeout: it runs on an error path, after the
+        // buyer's call, and must not outlive a short wait.
+        const r = await upstreamFetch(`https://${CDP_HOST}${path}`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${jwt}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ sql: QUERY_HEALTH_SQL[table] }),
+        }, { label: "Coinbase Developer Platform", step: "query health", timeoutMs: healthTimeoutMs, tag: "[cdp]", budget: null });
+        ok = r.ok;
+        await r.text().catch(() => "");
+      } catch { ok = false; }
+      queryHealth.set(table, { ok, at: Date.now() });
+      return ok;
+    })().finally(() => { healthInflight.delete(table); }));
+  }
+  return healthInflight.get(table);
+}
+export function _setQueryHealthForTest(ok, table = null) {
+  const tables = table ? [table] : Object.keys(QUERY_HEALTH_SQL);
+  for (const t of tables) { if (ok === null) queryHealth.delete(t); else queryHealth.set(t, { ok, at: Date.now() }); }
+}
+export function _setHealthTimeoutMsForTest(ms) { healthTimeoutMs = ms || HEALTH_TIMEOUT_MS; }
+
+// Buyer queries in flight at once: the query service rate-limits the
+// project, whose keys also sign facilitator calls, so a burst of heavy
+// queries must not hold it. Past the cap a query is refused at once (429,
+// never charged) and told when to retry.
+export const BUYER_QUERY_INFLIGHT_MAX = 2;
+let buyerQueriesInflight = 0;
+export function _buyerQueriesInflightForTest() { return buyerQueriesInflight; }
+
+// One [cdp] 5xx line per status and query shape a minute: a buyer resending
+// the same failing query does not repeat it.
+const loggedAt = new Map();
+function logOnce(key, now = Date.now()) {
+  const last = loggedAt.get(key);
+  if (last && now - last < 60_000) return false;
+  if (loggedAt.size > 500) loggedAt.clear();
+  loggedAt.set(key, now);
+  return true;
+}
+export function _resetCdpLogThrottleForTest() { loggedAt.clear(); }
+
+// The text of a buyer's query the query service could not answer, in the
+// operational log (operator-only) so the exact query can be run again by
+// hand: the shape alone does not say what in it reads past the service's
+// limits. Once per distinct query a minute; the owner approved this on
+// 2026-11-03, and /privacy names it.
+function logFailedBuyerQuery(status, tookMs, sql) {
+  const text = String(sql || "");
+  if (!text) return;
+  const key = `sql|${createHash("sha256").update(text).digest("hex").slice(0, 16)}`;
+  if (!logOnce(key)) return;
+  console.warn(`[cdp] failed buyer query (HTTP ${status} after ${tookMs}ms): ${JSON.stringify(text)}`);
+}
+export function _cdpLogThrottleSizeForTest() { return loggedAt.size; }
+export function _cdpLogOnceForTest(key, now) { return logOnce(key, now); }
 
 // A buyer's SQL query (onchain-sql): the query service answers a 5xx when a
 // result is too large to return (an instant 500; a wide table's slow 502),
 // and the same query fails the same way, so it is tried twice at most, a
 // slow 502/504 once, and the answer says how to narrow it.
 const QUERY_ATTEMPTS = 2;
-function narrowQueryError(status, tookMs, sql = "") {
-  const range = /\bsolana\./i.test(sql) ? "a block_time range (WHERE block_time > now() - INTERVAL 1 DAY)" : "a block_number range or an address filter";
-  const e = bad(`CDP's query service could not return this result (HTTP ${status} after ${(tookMs / 1000).toFixed(1)} s). It answers this way when a result is too large or too slow to send: select fewer columns, add ${range}, or lower the LIMIT; resending it unchanged fails the same way. Nothing was charged.`, 502);
+// A slow 502/504 while the service answers a known-good query is this query
+// running past the service's time window: the caller's to narrow, answered
+// 422 so one buyer's heavy query is a buyer outcome, not a tool failure. With
+// the known-good query failing too, or an instant 500 (twice), it stays a
+// 502, so an outage of the service still reads as one.
+function narrowQueryError(status, tookMs, sql = "", answerStatus = 502) {
+  const solana = /\bsolana\./i.test(sql);
+  const days = solana ? blockTimeRangeDays(sql) : null;
+  const span = days === null ? null : days < 1 ? `${Math.max(1, Math.round(days * 24))} hours` : `${Math.round(days)} days`;
+  const covered = span ? ` This query covers about ${span} of solana.instructions; what it reads depends on its columns and filters (measured: a day answers in seconds, a week does for some filters and not others).` : "";
+  const range = solana ? "a shorter block_time range (start at a day, e.g. WHERE block_time > now() - INTERVAL 1 DAY, and cover a longer period in steps)" : "a block_number range or an address filter";
+  const e = bad(`CDP's query service could not return this result (HTTP ${status} after ${(tookMs / 1000).toFixed(1)} s). It answers this way when a query runs past its answer window of about 10 s, reads more than its 100 GB per-query limit, or returns a result too large to send.${covered} Narrow it: select fewer columns, add ${range}, or lower the LIMIT; resending it unchanged fails the same way. Nothing was charged.`, answerStatus);
   e.hint = "narrow-query";
   return e;
 }
@@ -176,6 +294,10 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
         method,
         headers: { Authorization: `Bearer ${jwt}`, "Content-Type": "application/json" },
         body: body ? JSON.stringify(body) : undefined,
+        // Whether a buyer's query answers depends on the query, so it is
+        // not counted in the upstream's health lane; the health probe below
+        // and the service's own reads are.
+        ...(buyerQuery ? { [NO_OUTCOME]: true } : {}),
       }, { label: "Coinbase Developer Platform", step: cdpStep(path), timeoutMs: CDP_READ_MS, tag: "[cdp]" });
     } catch (e) {
       lastErr = e;
@@ -190,9 +312,9 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
     // A 5xx is logged with what identifies it on both sides: the attempt's
     // time, CDP's request id, the start of its body, and the query's shape
     // (tables and clauses, never its literals).
-    if (res.status >= 500) {
+    if (res.status >= 500 && logOnce(`${res.status}|${body?.sql ? sqlShape(body.sql) : path}`)) {
       const rid = res.headers.get("x-request-id") || res.headers.get("x-correlation-id") || res.headers.get("cf-ray") || "-";
-      console.warn(`[cdp] ${cdpStep(path)} HTTP ${res.status} after ${Date.now() - started}ms (attempt ${attempt + 1}/${ATTEMPTS}) rid=${rid} body=${JSON.stringify(redactLiterals(redactSecrets(text.replace(/\s+/g, " "))).slice(0, 160))}${body?.sql ? ` sql=${sqlShape(body.sql)}` : ""}`);
+      console.warn(`[cdp] ${cdpStep(path)} HTTP ${res.status} after ${Date.now() - started}ms (attempt ${attempt + 1}/${ATTEMPTS}) rid=${rid} body=${JSON.stringify(redactLiterals(redactSecrets(text).slice(0, 4000).replace(/\s+/g, " ")).slice(0, 160))}${body?.sql ? ` sql=${sqlShape(body.sql)}` : ""}`);
     }
     if (res.status === 401 || res.status === 403) {
       throw bad("This tool is temporarily unavailable: Coinbase Developer Platform access is not configured on this deployment.", 503);
@@ -207,12 +329,25 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
     // it — the request's JWT carries CDP_API_KEY_ID as its issuer/subject, so a
     // "key <id> not found"-style upstream message could otherwise reflect it.
     const detail = redactSecrets(String(json?.errorMessage || json?.message || json?.errorType || res.statusText)).slice(0, 200);
-    if (res.status === 400 || res.status === 404 || res.status === 422) throw bad(`CDP rejected the request: ${detail}`, 422);
+    if (res.status === 400 || res.status === 404 || res.status === 422) {
+      if (buyerQuery) logFailedBuyerQuery(res.status, Date.now() - started, body?.sql);
+      throw bad(`CDP rejected the request: ${detail}`, 422);
+    }
     const tookMs = Date.now() - started;
     if (buyerQuery && res.status >= 500) {
-      const final = attempt + 1 >= ATTEMPTS || ((res.status === 502 || res.status === 504) && tookMs >= slowQueryGatewayMs);
-      if (final) throw narrowQueryError(res.status, tookMs, body?.sql);
-      lastErr = narrowQueryError(res.status, tookMs, body?.sql);
+      if ((res.status === 502 || res.status === 504) && tookMs >= slowQueryGatewayMs) {
+        logFailedBuyerQuery(res.status, tookMs, body?.sql);
+        // The query, or the service? Only a service that answers a
+        // known-good query makes this the buyer's to narrow.
+        if (await queryServiceHealthy(body?.sql)) throw narrowQueryError(res.status, tookMs, body?.sql, 422);
+        throw bad(`CDP's query service is failing (HTTP ${res.status} after ${(tookMs / 1000).toFixed(1)} s, and a known-good query failed too); retry later. Nothing was charged.`, 502);
+      }
+      // A 503 is the service being unavailable, not the query: retried, and
+      // answered as an upstream error to retry, never "narrow it".
+      lastErr = res.status === 503
+        ? bad(`CDP upstream error (HTTP 503): the query service is unavailable; retry shortly. Nothing was charged.`, 502)
+        : narrowQueryError(res.status, tookMs, body?.sql);
+      if (attempt + 1 >= ATTEMPTS) { logFailedBuyerQuery(res.status, tookMs, body?.sql); throw lastErr; }
       continue;
     }
     lastErr = bad(`CDP upstream error (HTTP ${res.status}): ${detail}`, 502);
@@ -248,27 +383,97 @@ export async function cdpSql(sql, { cacheSeconds } = {}) {
 // rows), so a plain SELECT is wrapped with an outer LIMIT one past the cap,
 // which also says whether the result was cut.
 export const SQL_MAX_ROWS = 1000;
-// solana.instructions is partitioned by block_time: a query that filters,
+// solana.instructions is pruned by block_time only: a query that filters,
 // groups, orders or aggregates it without a block_time bound scans its whole
 // history and never finishes inside the query service's ~10 s window
-// (measured 2026-11-03: every such query, even one filtered to a single
-// signer or account, a 502 at 10 s; the same query over one day, about 3 s).
-// It is refused before the call with what to add.
+// (measured 2026-11-03: every such query, filtered to a single signer or
+// account, to one block_slot, to a slot range or to one tx_id, a 502 at 10 s
+// or the service's own scan-limit refusal; the same query over one day,
+// seconds). It is refused before the call with what to add.
 export function solanaRangeRefusal(sql) {
-  const s = String(sql || "");
-  if (!/\bsolana\.instructions\b/i.test(s)) return null;
-  if (/\bblock_time\b/i.test(s)) return null;
-  if (!/\b(where|group\s+by|order\s+by|having|join|distinct|count|sum|avg|min|max|uniq\w*|any\w*)\b/i.test(s)) return null;
+  const s = sqlNorm(sql);
+  if (!/\bsolana\s*\.\s*instructions\b/i.test(s)) return null;
+  // A clause that makes it scan, or an aggregate call other than a bare
+  // count (answered from metadata at once, measured 0.2 s); countIf and the
+  // other -If combinators read rows.
+  const clause = /\b(where|prewhere|group\s+by|order\s+by|having|join|distinct|sample|limit\s+\d+\s+by)\b/i.test(s);
+  const aggregate = /\b(?:countif|(?:sum|avg|min|max|uniq\w*|any\w*|arg(?:min|max)\w*|group\w*array\w*|quantile\w*|median\w*|top_?k\w*|stddev\w*|var(?:pop|samp)\w*|corr\w*|covar\w*)(?:if)?)\s*\(/i.test(s);
+  if (!clause && !aggregate) return null;
+  // A range is block_time in a comparison or BETWEEN, not the column named
+  // elsewhere (selected, ordered by, or an alias).
+  if (/\bblock_time\s*(?:>=?|<=?|=|between\b)|(?:>=?|<=?|=)\s*block_time\b/i.test(s)) return null;
   return 'A query on solana.instructions that filters, groups, orders or aggregates needs a block_time range: add, for example, WHERE block_time > now() - INTERVAL 1 DAY (a day answers in seconds; the full history does not finish within the query service\'s limit). Nothing was charged.';
+}
+
+// The query service reads at most 100 GB per query (its documented limit;
+// its own refusal names about 93 GiB). What a solana.instructions query
+// reads depends on its columns and filters, not its range alone (measured
+// 2026-11-03: a week answered for an executing_account filter and was
+// refused for a tx_signer filter; 14 and 30 days were refused; a day
+// answered in seconds every time). So a ranged query is sent and judged by
+// the service, and the answer to a refusal names the days it covered and a
+// day as the range to start from.
+const UNIT_DAYS = { second: 1 / 86400, minute: 1 / 1440, hour: 1 / 24, day: 1, week: 7, month: 30, quarter: 91, year: 365 };
+const RANGE_DAY_MS = 86_400_000;
+// One side of a block_time comparison, as a time in ms, or null when it is a
+// form this reader does not know (then no range is read: the safe direction).
+function timeBoundMs(expr, now) {
+  let e = String(expr || "").trim();
+  // Drop only an outer pair of parentheses that wraps the whole expression.
+  while (e.startsWith("(") && e.endsWith(")")) {
+    let depth = 0, wraps = true;
+    for (let i = 0; i < e.length - 1; i++) { if (e[i] === "(") depth++; else if (e[i] === ")") depth--; if (depth === 0) { wraps = false; break; } }
+    if (!wraps) break;
+    e = e.slice(1, -1).trim();
+  }
+  let m;
+  if ((m = /^(?:now|today)\s*\(\s*\)$/i.exec(e))) return now;
+  if ((m = /^(?:now|today)\s*\(\s*\)\s*-\s*interval\s+'?(\d+)'?\s*(second|minute|hour|day|week|month|quarter|year)s?$/i.exec(e))) return now - Number(m[1]) * UNIT_DAYS[m[2].toLowerCase()] * RANGE_DAY_MS;
+  if ((m = /^today\s*\(\s*\)\s*-\s*(\d+)$/i.exec(e))) return now - Number(m[1]) * RANGE_DAY_MS;
+  if ((m = /^subtract(seconds|minutes|hours|days|weeks|months|quarters|years)\s*\(\s*(?:now|today)\s*\(\s*\)\s*,\s*(\d+)\s*\)$/i.exec(e))) return now - Number(m[2]) * UNIT_DAYS[m[1].toLowerCase().replace(/s$/, "")] * RANGE_DAY_MS;
+  if ((m = /^(?:to(?:date|datetime|datetime64)\s*\(\s*)?'(\d{4}-\d{2}-\d{2})(?:[ T]\d{2}:\d{2}(?::\d{2})?)?'/i.exec(e))) { const t = Date.parse(`${m[1]}T00:00:00Z`); return Number.isFinite(t) ? t : null; }
+  return null;
+}
+/** The block_time span a query covers in days (named in a refusal), read from its block_time
+ *  comparisons only (an INTERVAL elsewhere, a subquery on another table or a
+ *  value in a comment is not a range), or null when it cannot be read. */
+export function blockTimeRangeDays(sql, now = Date.now()) {
+  const q = sqlNoComments(sql).replace(/[`"]/g, "");
+  if (!/\bblock_time\b/i.test(q)) return null;
+  // Any OR in the query: a bound may not narrow it, so no range is read.
+  if (/\bor\b/i.test(sqlCode(sql))) return null;
+  // Each piece is bounded in length, so the reads stay linear on a 10 KB query.
+  const OPERAND = String.raw`('(?:[^'\\]|\\.){0,80}'|[^'()\s,]{1,60}(?:\s*\(\s*\)\s*-\s*interval\s+'?\d{1,9}'?\s*[a-z]{1,10}|\s{0,8}\((?:[^()]|\([^()]{0,80}\)){0,120}\))?(?:\s*-\s*\d{1,9})?|\((?:[^()]|\([^()]{0,80}\)){0,160}\))`;
+  let lo = null, hi = null;
+  const take = (which, v) => { if (v === null) return; if (which === "lo") lo = lo === null ? v : Math.max(lo, v); else hi = hi === null ? v : Math.min(hi, v); };
+  // An operand must end where the expression ends: a longer expression this
+  // reader does not know (now() - toIntervalDay(7)), or a lower bound
+  // followed by OR (which does not narrow), is no bound at all.
+  const END = String.raw`(?=\s*(?:$|\)|;|\b(?:and|group|order|limit|having|union|settings|format|prewhere)\b))`;
+  for (const m of q.matchAll(new RegExp(String.raw`\bblock_time\s*(>=|<=|>|<)\s*` + OPERAND + "(?:" + END + "|(?<tail>))", "gi"))) {
+    if (m.groups?.tail !== undefined) { if (m[1].startsWith(">")) return null; continue; }
+    take(m[1].startsWith(">") ? "lo" : "hi", timeBoundMs(m[2], now));
+  }
+  for (const m of q.matchAll(new RegExp(OPERAND + String.raw`\s*(>=|<=|>|<)\s*block_time\b`, "gi"))) take(m[2].startsWith(">") ? "hi" : "lo", timeBoundMs(m[1], now));
+  for (const m of q.matchAll(new RegExp(String.raw`\bblock_time\s+between\s+` + OPERAND + String.raw`\s+and\s+` + OPERAND, "gi"))) { take("lo", timeBoundMs(m[1], now)); take("hi", timeBoundMs(m[2], now)); }
+  if (lo === null) return null;
+  const days = ((hi === null ? now : hi) - lo) / RANGE_DAY_MS;
+  return days >= 0 ? days : null; // reversed bounds: no readable range
 }
 
 /** The query sent upstream: a plain SELECT wrapped with the row cap. A query
  *  opening with WITH, or carrying SETTINGS or FORMAT, cannot sit inside a
  *  subquery there and is sent as written. */
 export function cappedSql(sql) {
-  const s = String(sql || "").trim().replace(/;+\s*$/, "");
-  if (/^with\b/i.test(s) || /\b(settings|format)\b/i.test(s)) return { sql: s, capped: false };
-  return { sql: `SELECT * FROM (${s}) LIMIT ${SQL_MAX_ROWS + 1}`, capped: true };
+  // A final `;` and any comments after it are dropped; the query sits on its
+  // own lines inside the wrapper, so a trailing line comment ends before ")".
+  const raw = String(sql || "").trim();
+  // Read on the masked query (a `;` inside a string is not the end).
+  const tail = /;[\s;]*$/.exec(sqlCode(raw));
+  const s = (tail ? raw.slice(0, tail.index) : raw).trim();
+  const code = sqlNorm(s);
+  if (/^\s*with\b/i.test(code) || /\b(settings|format)\b/i.test(code)) return { sql: s, capped: false };
+  return { sql: `SELECT * FROM (\n${s}\n) LIMIT ${SQL_MAX_ROWS + 1}`, capped: true };
 }
 
 const EVM_ADDR_RE = /^0x[0-9a-fA-F]{40}$/;
@@ -515,7 +720,7 @@ export const CDP_TOOLS = [
       input: { sql: "SELECT COUNT(*) AS txs FROM base.transactions WHERE block_number > 0 LIMIT 1" },
       inputSchema: {
         properties: {
-          sql: { type: "string", description: "Read-only SELECT (ClickHouse dialect, max 10,000 chars). Tables: base.events, base.transactions, base.blocks, base.encoded_logs, base.decoded_user_operations, base.transaction_attributions, base_sepolia.*, solana.instructions (a query that filters, groups or aggregates it needs a block_time range, e.g. WHERE block_time > now() - INTERVAL 1 DAY). Returns up to 1,000 rows; a larger result is cut and marked truncated." },
+          sql: { type: "string", description: "Read-only SELECT (ClickHouse dialect, max 10,000 chars). Tables: base.events, base.transactions, base.blocks, base.encoded_logs, base.decoded_user_operations, base.transaction_attributions, base_sepolia.*, solana.instructions (a query that filters, groups or aggregates it needs a block_time range; a day answers in seconds, and a longer range may read past the query service's 100 GB per-query limit). Returns up to 1,000 rows; a larger result is cut and marked truncated." },
           cacheSeconds: { type: "number", description: "Accept cached results up to this old (max 900). Cheaper + faster for repeated analytics." },
         },
         required: ["sql"],
@@ -528,7 +733,7 @@ export const CDP_TOOLS = [
       const sql = String(input?.sql || "").trim();
       if (!sql) throw bad('"sql" is required');
       if (sql.length > 10_000) throw bad(`"sql" too long (${sql.length} chars, max 10,000)`);
-      if (!/^\s*(select|with)\b/i.test(sql)) throw bad('"sql" must be a read-only SELECT (or WITH … SELECT) statement');
+      if (!/^\s*(select|with)\b/i.test(sqlNorm(sql))) throw bad('"sql" must be a read-only SELECT (or WITH … SELECT) statement');
       const unbounded = solanaRangeRefusal(sql);
       if (unbounded) { const e = bad(unbounded); e.hint = "add-block-time"; throw e; }
       const body = { sql };
@@ -538,7 +743,15 @@ export const CDP_TOOLS = [
       }
       const capped = cappedSql(sql);
       body.sql = capped.sql;
-      const res = await cdpFetch("POST", "/platform/v2/data/query/run", body, { idempotent: true, buyerQuery: true });
+      if (buyerQueriesInflight >= BUYER_QUERY_INFLIGHT_MAX) {
+        const e = bad(`The query service is answering ${BUYER_QUERY_INFLIGHT_MAX} queries from this server already; retry in a few seconds. Nothing was charged.`, 429);
+        e.retryAfter = 5; e.hint = "busy"; e.shed = true; // a capacity refusal, not a tool failure
+        throw e;
+      }
+      buyerQueriesInflight++;
+      let res;
+      try { res = await cdpFetch("POST", "/platform/v2/data/query/run", body, { idempotent: true, buyerQuery: true }); }
+      finally { buyerQueriesInflight--; }
       const rows = res?.result ?? res?.rows ?? res?.data ?? res;
       const all = Array.isArray(rows) ? rows : [];
       const list = all.length > SQL_MAX_ROWS ? all.slice(0, SQL_MAX_ROWS) : all;
@@ -546,7 +759,7 @@ export const CDP_TOOLS = [
       return {
         rows: list, rowCount: list.length, maxRows: SQL_MAX_ROWS,
         ...partialFields(all.length, list.length),
-        ...(cut ? { matchedIsLowerBound: true, note: `More than ${SQL_MAX_ROWS} rows matched; the first ${SQL_MAX_ROWS} are returned. Add ORDER BY with a LIMIT, a block_number range or an aggregate to get the rows you need.` } : {}),
+        ...(cut ? { ...(capped.capped ? { matchedIsLowerBound: true } : {}), note: `More than ${SQL_MAX_ROWS} rows matched; the first ${SQL_MAX_ROWS} are returned. Add ORDER BY with a LIMIT, a block_number range or an aggregate to get the rows you need.` } : {}),
         ...(capped.capped ? {} : { rowCapApplied: false }),
         ...(Array.isArray(rows) ? {} : { raw: res }),
       };

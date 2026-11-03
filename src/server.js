@@ -90,7 +90,7 @@ import { backfillBrokenPackRefunds } from "./refund-backfill.js";
 import { mppFallbackStatus } from "./mpp-fallback.js";
 import { applyMeteredSettlement, meteredUsdOf } from "./gateway-meter.js";
 import { handlerInputOf, preValidateInput, withIgnoredParams } from "./handler-input.js";
-import { startModelCatalogRefresh } from "./model-catalog.js";
+import { startModelCatalogRefresh, modelCatalogWanted } from "./model-catalog.js";
 import { toolErrorFields } from "./tool-error-fields.js";
 import { shapeRefusal } from "./input-aliases.js";
 import { setSettlementOverrides } from "@x402/express";
@@ -4080,7 +4080,9 @@ if (process.env.X402_SYNC_ON_START !== "false" && GATEWAY_TOOLS_ENABLED.some((t)
 // The metered route's live model list (src/model-catalog.js): an id it does
 // not carry is refused before payment. Same boot-probe switch as above
 // (a MODEL_CATALOG_URL stub turns it on in tests).
-if ((process.env.X402_SYNC_ON_START !== "false" || process.env.MODEL_CATALOG_URL) && GATEWAY_TOOLS_ENABLED.some((t) => t.slug === "v1-chat-metered")) startModelCatalogRefresh();
+// Production only (the route serves with a key there); a test or a self-host
+// without one never reaches the network for it.
+if (modelCatalogWanted() && GATEWAY_TOOLS_ENABLED.some((t) => t.slug === "v1-chat-metered")) startModelCatalogRefresh();
 // Recent rows are re-read from the ledger per request (withFreshRecent); only
 // the balances ride the background snapshot (every 4 hours). Wallet balances and their
 // combined total are operator-only: /api/revenue serializes through
@@ -9698,6 +9700,8 @@ app.get("/api/jobs/:id", asyncJobs.statusHandler);
 // credential has already paid: its gate's own input check answers it.
 app.use((req, res, next) => {
   if (req.method !== "POST" || isTempoPush(req)) return next();
+  // req.path is already the catalog's spelling (case and trailing slash
+  // folded above), so the variants are checked too.
   const def = CATALOG[`POST ${req.path}`];
   if (def?.slug !== "v1-chat-metered") return next();
   let refusal = null;
