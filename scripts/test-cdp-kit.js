@@ -202,6 +202,28 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
       console.warn = realWarn;
       const line2 = warned2.find((w) => w.startsWith("[cdp] query HTTP 502")) || "";
       ok(line2 && !/organiz|apiKeys/.test(line2), `a secret past the slice point is redacted whole, never printed in part (${line2.slice(0, 120)})`);
+      // The failed query's own text is logged (operator-only), once a minute
+      // per distinct query, so it can be run again by hand; an internal
+      // reader's query (cdpSql) is not.
+      {
+        _resetCdpLogThrottleForTest();
+        const warned3 = []; console.warn = (m) => warned3.push(String(m));
+        const q = "SELECT instruction_name, count() AS n FROM solana.instructions WHERE block_time > now() - INTERVAL 1 DAY AND tx_signer = 'FAILQ'\nGROUP BY instruction_name";
+        calls = []; reply = () => new Promise((r) => setTimeout(() => r(J(502, {})), 60));
+        await tool("onchain-sql").handler({ sql: q }).catch(() => {});
+        await tool("onchain-sql").handler({ sql: q }).catch(() => {});
+        calls = []; reply = () => J(400, { errorMessage: "Query scanned more data than the per-query limit allows" });
+        await tool("onchain-sql").handler({ sql: q + " LIMIT 7" }).catch(() => {});
+        const { cdpSql } = await import("../src/tools/cdp-kit.js");
+        calls = []; reply = () => J(500, {});
+        await cdpSql("SELECT 'INTERNALQ' FROM base.blocks").catch(() => {});
+        console.warn = realWarn;
+        const q1 = warned3.filter((w) => w.startsWith("[cdp] failed buyer query") && w.includes("FAILQ") && !w.includes("LIMIT 7"));
+        const q2 = warned3.filter((w) => w.startsWith("[cdp] failed buyer query") && w.includes("LIMIT 7"));
+        ok(q1.length === 1 && q1[0].includes("HTTP 502") && q1[0].includes("\\n") && q2.length === 1 && q2[0].includes("HTTP 400"), `a failed buyer query's text is logged once per distinct query, on one line, for a slow cutoff and for the service's refusal (${q1.length}, ${q2.length})`);
+        ok(!warned3.some((w) => w.includes("INTERNALQ")), "an internal reader's failed query is not logged as a buyer query");
+        _resetCdpLogThrottleForTest();
+      }
       console.warn = (m) => warned.push(String(m));
       ok(/rid=rid-123/.test(line) && /502 Bad Gateway/.test(line) && /tables=base\.transactions/.test(line) && /where=1,limit=1/.test(line) && /timefilter=1/.test(line) && !/SECRETLITERAL/.test(line), `a query 5xx is logged with the request id, body and query shape (block_time read as a time filter), no literals (${line.slice(0, 220)})`);
       ok(lines.length === 1, `the same failure again within a minute is not logged again (${lines.length} lines)`);

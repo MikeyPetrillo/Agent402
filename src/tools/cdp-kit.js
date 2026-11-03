@@ -23,7 +23,7 @@
 // node:crypto — the @coinbase/cdp-sdk dependency tree (axios/viem/solana-kit)
 // is far heavier than the three REST calls we make. Claim structure mirrors
 // the SDK's auth/utils/jwt.ts exactly.
-import { createPrivateKey, createSign, randomBytes, sign as edSign } from "node:crypto";
+import { createPrivateKey, createSign, randomBytes, sign as edSign, createHash } from "node:crypto";
 import { redactSecrets } from "./redact.js";
 import { partialFields } from "../partial-answer.js";
 import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, currentBudget, isUpstreamFailure, OPTIONAL_READ_FLOOR_MS } from "../upstream-deadline.js";
@@ -228,6 +228,19 @@ function logOnce(key, now = Date.now()) {
   return true;
 }
 export function _resetCdpLogThrottleForTest() { loggedAt.clear(); }
+
+// The text of a buyer's query the query service could not answer, in the
+// operational log (operator-only) so the exact query can be run again by
+// hand: the shape alone does not say what in it reads past the service's
+// limits. Once per distinct query a minute; the owner approved this on
+// 2026-11-03, and /privacy names it.
+function logFailedBuyerQuery(status, tookMs, sql) {
+  const text = String(sql || "");
+  if (!text) return;
+  const key = `sql|${createHash("sha256").update(text).digest("hex").slice(0, 16)}`;
+  if (!logOnce(key)) return;
+  console.warn(`[cdp] failed buyer query (HTTP ${status} after ${tookMs}ms): ${JSON.stringify(text)}`);
+}
 export function _cdpLogThrottleSizeForTest() { return loggedAt.size; }
 export function _cdpLogOnceForTest(key, now) { return logOnce(key, now); }
 
@@ -316,10 +329,14 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
     // it — the request's JWT carries CDP_API_KEY_ID as its issuer/subject, so a
     // "key <id> not found"-style upstream message could otherwise reflect it.
     const detail = redactSecrets(String(json?.errorMessage || json?.message || json?.errorType || res.statusText)).slice(0, 200);
-    if (res.status === 400 || res.status === 404 || res.status === 422) throw bad(`CDP rejected the request: ${detail}`, 422);
+    if (res.status === 400 || res.status === 404 || res.status === 422) {
+      if (buyerQuery) logFailedBuyerQuery(res.status, Date.now() - started, body?.sql);
+      throw bad(`CDP rejected the request: ${detail}`, 422);
+    }
     const tookMs = Date.now() - started;
     if (buyerQuery && res.status >= 500) {
       if ((res.status === 502 || res.status === 504) && tookMs >= slowQueryGatewayMs) {
+        logFailedBuyerQuery(res.status, tookMs, body?.sql);
         // The query, or the service? Only a service that answers a
         // known-good query makes this the buyer's to narrow.
         if (await queryServiceHealthy(body?.sql)) throw narrowQueryError(res.status, tookMs, body?.sql, 422);
@@ -330,7 +347,7 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
       lastErr = res.status === 503
         ? bad(`CDP upstream error (HTTP 503): the query service is unavailable; retry shortly. Nothing was charged.`, 502)
         : narrowQueryError(res.status, tookMs, body?.sql);
-      if (attempt + 1 >= ATTEMPTS) throw lastErr;
+      if (attempt + 1 >= ATTEMPTS) { logFailedBuyerQuery(res.status, tookMs, body?.sql); throw lastErr; }
       continue;
     }
     lastErr = bad(`CDP upstream error (HTTP ${res.status}): ${detail}`, 502);
