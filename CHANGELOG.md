@@ -6,8 +6,8 @@ carries its own version on npm.
 
 ## Unreleased
 
-### 2026-11-03 (onchain-sql and metered chat)
-Index:
+### 2026-11-03 (onchain-sql, metered chat, seller registration)
+Router and index:
 - Self-serve seller registration holds 4,000 submission slots (was 2,000,
   which filled with live sellers), set by `INDEX_MAX_SUBMITTED_SEEDS`. A
   seller that has settled payments gives its slot back after 90 days with

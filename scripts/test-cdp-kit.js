@@ -449,6 +449,12 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
       const u = cappedSql(deep + " UNION ALL SELECT 1");
       ok(u.capped === false && u.sql === deep + " UNION ALL SELECT 1" && u.limitTo === null, "at the depth limit a UNION outside every parenthesis has no outer LIMIT to lower: sent as written");
       ok(cappedSql(`SELECT "union" AS u FROM (SELECT b FROM (SELECT c FROM t)) LIMIT 5000`).sql.endsWith(`LIMIT ${SQL_MAX_ROWS + 1}`) && cappedSql(deep.replace("SELECT a", "SELECT a, \`limit\`") + " LIMIT 5000").sql.endsWith(`LIMIT ${SQL_MAX_ROWS + 1}`), "a quoted identifier named union or limit is a column, not the clause");
+      ok(cappedSql(deep + " LIMIT" + " ".repeat(60) + "5000").sql === deep + " LIMIT" + " ".repeat(60) + String(SQL_MAX_ROWS + 1) && cappedSql(deep + " LIMIT\n\n  5000").sql === deep + ` LIMIT\n\n  ${SQL_MAX_ROWS + 1}`, "a count far from its LIMIT (spaces, lines) is still the outer LIMIT");
+      const expr = cappedSql(deep + " LIMIT (5000)");
+      ok(expr.capped === false && expr.sql === deep + " LIMIT (5000)" && cappedSql(deep + " LIMIT 1e3").capped === false, "an outer LIMIT whose count is an expression is left as written, never doubled");
+      ok(cappedSql(deep + " ORDER BY a OFFSET 5").capped === false && cappedSql(deep + " ORDER BY a OFFSET 5 ROWS FETCH FIRST 10 ROWS ONLY").capped === false && cappedSql(deep + " LIMIT 5 OFFSET 5").sql.endsWith("LIMIT 5 OFFSET 5"), "an outer OFFSET or FETCH with no LIMIT before it is left as written; with a LIMIT it is capped as usual");
+      const named = cappedSql(`SELECT 1 AS "a limit 5000", "x union y" FROM (SELECT b FROM (SELECT c FROM t)) LIMIT 9000`);
+      ok(named.sql === `SELECT 1 AS "a limit 5000", "x union y" FROM (SELECT b FROM (SELECT c FROM t)) LIMIT ${SQL_MAX_ROWS + 1}` && subqueryDepth(`SELECT "(select" FROM t`) === 0, "the inside of a quoted identifier is neither a LIMIT, a UNION nor a subquery");
       ok(cappedSql("SELECT a FROM (SELECT b FROM t)", { wrap: false }).sql === "SELECT a FROM (SELECT b FROM t)\nLIMIT 1001" && cappedSql("SELECT a FROM t").lineOffset === 1, "the wrapper can be turned off by the caller; a wrapped query reports its one-line offset");
       const realFetchN = globalThis.fetch;
       let sent = [];
@@ -463,8 +469,13 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
         // of the wrapper sends the query once more with the cap in its LIMIT.
         sent = [];
         globalThis.fetch = async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sent.push(q); return /^SELECT \* FROM \(/.test(q) ? J(400, { errorMessage: "SQL validation failed: subquery nesting too deep (max: 2) (position start: 1, position end: 2)" }) : rowsOf(3); };
+        const { _resetCdpLogThrottleForTest } = await import("../src/tools/cdp-kit.js");
+        _resetCdpLogThrottleForTest();
+        const warnedN = []; const realWarnN = console.warn; console.warn = (m) => warnedN.push(String(m));
         const f = await sqlRun("SELECT a FROM (SELECT b FROM t) LIMIT 50").catch((x) => x);
+        console.warn = realWarnN;
         ok(!(f instanceof Error) && sent.length === 2 && /^SELECT \* FROM \(/.test(sent[0]) && sent[1] === "SELECT a FROM (SELECT b FROM t) LIMIT 50" && f.rowCount === 3 && f.complete === true, `a nesting refusal of the wrapper is answered by the query under its own LIMIT (${sent.length} calls${f instanceof Error ? `, ${f.statusCode}` : ""})`);
+        ok(!warnedN.some((w) => w.startsWith("[cdp] failed buyer query")), `the wrapper's own refusal is not logged as a failed buyer query (${warnedN.length} warnings)`);
         // The same refusal of an unwrapped query is the buyer's, answered once.
         sent = [];
         globalThis.fetch = async (url, init = {}) => { sent.push(JSON.parse(init.body || "{}").sql); return J(400, { errorMessage: "SQL validation failed: subquery nesting too deep (max: 2)" }); };

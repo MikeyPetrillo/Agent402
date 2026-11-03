@@ -146,6 +146,16 @@ export function sqlCode(sql) {
 export function sqlNorm(sql) {
   return sqlCode(sql).replace(/[`"]/g, "");
 }
+/** sqlCode with the inside of every quoted identifier blanked too (its
+ *  quotes kept, length kept), for reading clauses by position: a column
+ *  named "a limit 5" is not a LIMIT and "(select" opens no subquery. */
+function sqlClauses(sql) {
+  return String(sql || "").replace(SQL_TOKENS, (m, str, ident) => {
+    if (str) return "'" + "_".repeat(Math.max(0, m.length - 2)) + m[m.length - 1].replace(/[^']/, "'");
+    if (ident) return m.length > 1 && m[m.length - 1] === m[0] ? m[0] + "_".repeat(m.length - 2) + m[0] : m[0] + "_".repeat(m.length - 1);
+    return m.replace(/[^\n]/g, " ");
+  });
+}
 /** The query with comments blanked and strings kept, for reading values. */
 function sqlNoComments(sql) {
   return String(sql || "").replace(SQL_TOKENS, (m, str, ident) => (str || ident ? m : m.replace(/[^\n]/g, " ")));
@@ -351,9 +361,12 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
       .replace(/\bline (\d+)\b/, (m, n) => `line ${Math.max(1, Number(n) - lineOffset)}`)
       .replace(/\b(position (?:start|end): )(\d+)/g, (m, k, n) => `${k}${Math.max(0, Number(n) - lineOffset * SQL_WRAP_HEAD.length)}`);
     if (res.status === 400 || res.status === 404 || res.status === 422) {
-      if (buyerQuery) logFailedBuyerQuery(res.status, Date.now() - started, body?.sql);
+      const nestingTooDeep = /nesting too deep/i.test(detail);
+      // The wrapper's own depth refusal is the handler's to recover, not a
+      // failed buyer query.
+      if (buyerQuery && !(nestingTooDeep && lineOffset > 0)) logFailedBuyerQuery(res.status, Date.now() - started, body?.sql);
       const e = bad(`CDP rejected the request: ${detail}`, 422);
-      if (/nesting too deep/i.test(detail)) e.nestingTooDeep = true;
+      if (nestingTooDeep) e.nestingTooDeep = true;
       throw e;
     }
     const tookMs = Date.now() - started;
@@ -506,10 +519,10 @@ export function hasOuterOrderBy(sql) {
 // inside the row-cap wrapper is refused "subquery nesting too deep (max: 2)").
 export const SQL_NEST_MAX = 2;
 /** How deep a query nests subqueries: a parenthesis opening a SELECT or WITH,
- *  read on the masked query (one inside a string or a comment is not a
- *  subquery). */
+ *  read on the masked query (one inside a string, a comment or a quoted
+ *  identifier is not a subquery). */
 export function subqueryDepth(sql) {
-  const s = sqlCode(sql);
+  const s = sqlClauses(sql);
   const opensSubquery = /\(\s*(?:select|with)\b/iy;
   let depth = 0, max = 0;
   const stack = [];
@@ -524,18 +537,39 @@ export function subqueryDepth(sql) {
   }
   return max;
 }
+/** Whether a keyword the pattern names stands outside every parenthesis of
+ *  the clause mask. */
+function outerClause(masked, re) {
+  let depth = 0;
+  for (let i = 0; i < masked.length; i++) {
+    const c = masked[i];
+    if (c === "(") depth++;
+    else if (c === ")") depth = Math.max(0, depth - 1);
+    else if (depth === 0 && /[a-z]/i.test(c) && (i === 0 || /[^\w"`]/.test(masked[i - 1])) && re.test(masked.slice(i, i + 8))) return true;
+  }
+  return false;
+}
 /** The query's own outer LIMIT (outside every parenthesis): where its row
- *  count stands in the text and what it is, or null. `LIMIT n BY expr` is a
- *  per-group cap, not a row cap, so it does not count. */
+ *  count stands in the text and what it is; null when there is none; and
+ *  `{ unreadable: true }` for a count this reader cannot lower (an
+ *  expression such as `LIMIT (5000)`). `LIMIT n BY expr` is a per-group cap,
+ *  not a row cap, so it does not count. */
 function outerLimit(code) {
+  const count = /limit\s+(\d+)(?:\s*,\s*(\d+))?(?![\w.])(?!\s+by\b)/iy;
+  const perGroup = /limit\s+\d+(?:\s*,\s*\d+)?\s+by\b/iy;
   let depth = 0;
   for (let i = 0; i < code.length; i++) {
     const c = code[i];
     if (c === "(") depth++;
     else if (c === ")") depth = Math.max(0, depth - 1);
-    else if (depth === 0 && (c === "l" || c === "L") && (i === 0 || /[^\w"`]/.test(code[i - 1]))) {
-      const m = /^limit\s+(\d+)(?:\s*,\s*(\d+))?(?![\w.])(?!\s+by\b)/i.exec(code.slice(i, i + 48));
-      if (!m) continue;
+    else if (depth === 0 && (c === "l" || c === "L") && (i === 0 || /[^\w"`]/.test(code[i - 1])) && /^limit\b/i.test(code.slice(i, i + 6))) {
+      count.lastIndex = i;
+      const m = count.exec(code);
+      if (!m) {
+        perGroup.lastIndex = i;
+        if (perGroup.test(code)) continue;
+        return { unreadable: true };
+      }
       // LIMIT m, n: n is the count. The number's own position in the text.
       const numText = m[2] ?? m[1];
       const numStart = i + m[0].lastIndexOf(numText);
@@ -573,9 +607,10 @@ export function cappedSql(sql, { wrap = null } = {}) {
     return { sql: limitTo(SQL_MAX_ROWS + 1), capped: true, inner: s, limitTo, lineOffset: 1 };
   }
   // At the depth limit: the cap goes in the query's own outer LIMIT. A UNION
-  // outside every parenthesis has no outer LIMIT of its own. Read with the
-  // identifier quotes kept, as outerLimit reads: "union" is a column.
-  const masked = sqlCode(s);
+  // outside every parenthesis has no outer LIMIT of its own. Read on the
+  // clause mask (quoted identifiers blanked, length kept, so a position on
+  // it is a position on the query): "union" is a column.
+  const masked = sqlClauses(s);
   let depth = 0;
   for (let i = 0; i < masked.length; i++) {
     const c = masked[i];
@@ -584,6 +619,11 @@ export function cappedSql(sql, { wrap = null } = {}) {
     else if (depth === 0 && (c === "u" || c === "U") && /^union\b/i.test(masked.slice(i, i + 6)) && (i === 0 || /[^\w"`]/.test(masked[i - 1]))) return asWritten;
   }
   const lim = outerLimit(masked);
+  // An outer LIMIT this reader cannot lower (an expression) is left alone,
+  // and so is an outer OFFSET or FETCH with no LIMIT before it: a LIMIT
+  // appended behind either would be a syntax error the buyer did not write.
+  if (lim?.unreadable) return asWritten;
+  if (!lim && outerClause(masked, /^(?:offset|fetch)\b/i)) return asWritten;
   const limitTo = (n) => (lim ? s.slice(0, lim.numStart) + String(Math.min(lim.value, n)) + s.slice(lim.numEnd) : `${s}\nLIMIT ${n}`);
   return { sql: limitTo(SQL_MAX_ROWS + 1), capped: true, inner: s, limitTo, lineOffset: 0 };
 }

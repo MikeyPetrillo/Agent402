@@ -650,7 +650,7 @@ const submittedSeeds = new GuardedSet();
 // A release is not a deletion: the seller_registrations row survives, so the
 // provenance saying a seller came to us through /sell outlives the listing,
 // and a seller who comes back re-registers into a free slot. An origin that
-// has ever settled a payment is never released, however long it has been down.
+// has settled a payment holds its slot three times as long (90 days dark).
 // If this fills with LIVE sellers, raise CRAWL_INTERVAL_MS first (it is the
 // multiplier), then this (it is linear). It filled with live sellers at 2,000
 // (2026-11-03: 1,985 held, 1,489 of them seen routable within the day, half
@@ -1629,7 +1629,7 @@ async function registerOriginNow(origin, { crawl, replaces = null, deadlineAt = 
     }
   }
   if (!submittedSeeds.has(origin) && submittedSeeds.size >= submittedSeedsCap) {
-    return { listed: false, origin, error: "submission list is full - slots free up after 30 days with no successful probe; open a GitHub issue to get seeded sooner" };
+    return { listed: false, origin, error: `submission list is full - a slot frees up ${Math.round(RELEASE_AFTER_MS / 86400000)} days after its origin's last successful probe (${Math.round(SETTLED_RELEASE_AFTER_MS / 86400000)} for a seller that has settled payments, ${Math.round(TUNNEL_RELEASE_AFTER_MS / 86400000)} for a quick tunnel); open a GitHub issue to get seeded sooner` };
   }
   const doCrawl = crawl || (async (o, opts) => { await crawlSeller(o, opts); return cache.get(o); });
   let v;
@@ -6463,7 +6463,8 @@ const RELEASE_AFTER_MS = Number(process.env.INDEX_RELEASE_AFTER_DAYS || 30) * 86
 // not forever: the 20 oldest slots on 2026-11-03 were settled sellers dark
 // past 30 days, and a slot held by a dead address serves nobody. The
 // registration row, and its tenure, survive the release either way.
-const SETTLED_RELEASE_AFTER_MS = Number(process.env.INDEX_SETTLED_RELEASE_AFTER_DAYS || 90) * 86_400_000;
+// Never shorter than the plain window: a settled seller is not released first.
+const SETTLED_RELEASE_AFTER_MS = Math.max(RELEASE_AFTER_MS, Number(process.env.INDEX_SETTLED_RELEASE_AFTER_DAYS || 90) * 86_400_000);
 
 // The submission ceiling used to be a lifetime bucket: an origin entered and
 // nothing ever took it out, so the front door filled once and stayed full, and
@@ -6599,7 +6600,8 @@ function releaseDeadSubmissions(okFraction) {
   // Loud on purpose: this is the only path that removes a listing, so it must
   // never happen quietly. seller_registrations still holds every one of them.
   const tunnels = releasable.filter(isEphemeralTunnelOrigin).length;
-  console.log(`[x402-index] released ${releasable.length} submission slot(s) with no successful probe (${tunnels} quick-tunnel after ${Math.round(TUNNEL_RELEASE_AFTER_MS / 86400000)}d, ${releasable.length - tunnels} after ${Math.round(RELEASE_AFTER_MS / 86400000)}d): ${releasable.slice(0, 10).join(", ")}${releasable.length > 10 ? ", ..." : ""}`);
+  const settled = releasable.filter((o) => !isEphemeralTunnelOrigin(o) && originHasSettled(o)).length;
+  console.log(`[x402-index] released ${releasable.length} submission slot(s) with no successful probe (${tunnels} quick-tunnel after ${Math.round(TUNNEL_RELEASE_AFTER_MS / 86400000)}d, ${settled} settled after ${Math.round(SETTLED_RELEASE_AFTER_MS / 86400000)}d, ${releasable.length - tunnels - settled} after ${Math.round(RELEASE_AFTER_MS / 86400000)}d): ${releasable.slice(0, 10).join(", ")}${releasable.length > 10 ? ", ..." : ""}`);
   lastReleaseAt = new Date().toISOString();
   return { released: releasable.length, reason: "released" };
 }
