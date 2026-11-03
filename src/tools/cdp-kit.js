@@ -354,7 +354,7 @@ export function solanaRangeRefusal(sql) {
 // signer: 7 days 1.6 s, 14 and 30 days refused at the edge after 10 s). A
 // range past SOLANA_MAX_RANGE_DAYS is refused before the call with the range
 // that works, instead of after the 10 s wait.
-export const SOLANA_MAX_RANGE_DAYS = 30;
+export const SOLANA_MAX_RANGE_DAYS = 7;
 const UNIT_DAYS = { second: 1 / 86400, minute: 1 / 1440, hour: 1 / 24, day: 1, week: 7, month: 30, quarter: 91, year: 365 };
 /** The block_time span a query covers in days, or null when it cannot be read. */
 export function blockTimeRangeDays(sql, now = Date.now()) {
