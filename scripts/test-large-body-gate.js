@@ -162,7 +162,7 @@ try {
 
   // 1. Compressed bodies are refused before they are read, paid or not.
   const gz = gzipSync(JSON.stringify({ prompt: "x", images: ["data:image/png;base64," + "A".repeat(4 * 1024 * 1024)] }));
-  for (const path of ["/v1/images/edits", "/v1/judge/vision", "/api/html-frames", "/v1/audio/transcriptions"]) {
+  for (const path of ["/v1/images/edits", "/v1/judge/vision", "/api/html-frames", "/v1/audio/transcriptions", "/api/onchain-sql"]) {
     const r = await post(path, gz, { "content-encoding": "gzip" });
     ok(r.status === 415, `${path}: a gzip body is refused 415 (got ${r.status})`);
   }
@@ -205,6 +205,21 @@ try {
   const huge = JSON.stringify({ prompt: "x", images: ["data:image/png;base64," + Buffer.alloc(3600 * 1024, 7).toString("base64")] });
   const over = await post("/v1/images/edits", huge, { "payment-signature": cred(q2.accept) });
   ok(over.status === 503 && over.json?.error === "busy" && over.headers.get("retry-after") === "5", `a paid body past the in-flight budget is a 503 with Retry-After (got ${over.status})`);
+
+  // 6b. onchain-sql: a query under its 60,000-character cap can be 120 KB on
+  // the wire once JSON-escaped, past the global 100 KB parser. Unpaid it gets
+  // the small body's 402 unread; paid it reaches the handler, which answers
+  // for the text itself (never the parser's 413).
+  const sqlSmall = JSON.stringify({ sql: "SELECT 1" });
+  const sqlWire = JSON.stringify({ sql: "SELECT 1 " + "\n".repeat(59_000) });
+  ok(sqlWire.length > 110 * 1024, `the escaped query is past the global parser's limit (${sqlWire.length} bytes)`);
+  const s1 = await post("/api/onchain-sql", sqlSmall);
+  const s2 = await post("/api/onchain-sql", sqlWire);
+  ok(s1.status === 402 && s2.status === 402 && s1.accept && JSON.stringify(s1.accept) === JSON.stringify(s2.accept), `an unpaid 120 KB query gets the small body's 402 (${s1.status}/${s2.status})`);
+  const s3 = await post("/api/onchain-sql", sqlWire, { "payment-signature": cred(s2.accept) });
+  ok(s3.status !== 413 && s3.status !== 402 && s3.status !== 415 && s3.json?.error !== "payload-too-large", `a paid 120 KB query reaches the handler, not the parser's 413 (${s3.status} ${s3.text.slice(0, 80)})`);
+  const s4 = await post("/api/onchain-sql", JSON.stringify({ sql: "SELECT 1 " + "x".repeat(60_001) }), { "payment-signature": cred(s2.accept) });
+  ok(s4.status === 400 && /too long/.test(s4.text), `a paid query past the character cap is the handler's 400 (${s4.status})`);
 
   // 7. The operator route checks the token before reading its body.
   const sv = await post("/__operator/seller-verification", JSON.stringify({ rows: "x".repeat(500 * 1024) }));

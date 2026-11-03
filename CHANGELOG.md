@@ -24,6 +24,9 @@ Tools:
   "result-size"`, `rowBytes`), with a note giving the row size and the
   LIMIT that keeps an answer under about 500 KB. When even 10 rows do not
   fit, the answer says to select fewer or narrower columns.
+- onchain-sql takes SQL up to 60,000 characters (was 10,000; the query
+  service answered 48,000-character queries when measured, and the old cap
+  refused real queries).
 - onchain-sql returns at most 1,000 rows per call: a plain SELECT is sent
   with an outer row cap, and a result cut at 1,000 says so in fields
   (`truncated`, `complete`, `matchedIsLowerBound`, `note`, `maxRows`).
