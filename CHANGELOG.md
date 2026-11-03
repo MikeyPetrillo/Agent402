@@ -6,7 +6,14 @@ carries its own version on npm.
 
 ## Unreleased
 
-### 2026-11-03 (onchain-sql and metered chat)
+### 2026-11-03 (onchain-sql, metered chat, seller registration)
+Router and index:
+- Self-serve seller registration holds 4,000 submission slots (was 2,000,
+  which filled with live sellers), set by `INDEX_MAX_SUBMITTED_SEEDS`. A
+  seller that has settled payments gives its slot back after 90 days with
+  no successful probe (`INDEX_SETTLED_RELEASE_AFTER_DAYS`; it was never
+  released); other origins after 30 days as before. A released seller's
+  registration and tenure survive, and it re-registers into a free slot.
 Tools:
 - onchain-sql: a query whose result is too large for the query service to
   send (its instant internal error) is run again with LIMIT 10 (two
@@ -21,7 +28,11 @@ Tools:
   with an outer row cap, and a result cut at 1,000 says so in fields
   (`truncated`, `complete`, `matchedIsLowerBound`, `note`, `maxRows`).
   Queries opening with WITH, or carrying SETTINGS or FORMAT, are sent as
-  written. A query ending in a comment or a semicolon is accepted.
+  written. A query ending in a comment or a semicolon is accepted. A query
+  already two subqueries deep (the query service's limit) takes the cap in
+  its own outer LIMIT instead of the wrapper, which the service refused as
+  one level too many; a syntax error the service places by line is named
+  on the query as written.
 - onchain-sql: a query on solana.instructions that filters, groups, orders
   or aggregates needs a block_time range and is refused before the call
   (400, `hint: "add-block-time"`) with the clause to add; a bare sample or

@@ -650,10 +650,13 @@ const submittedSeeds = new GuardedSet();
 // A release is not a deletion: the seller_registrations row survives, so the
 // provenance saying a seller came to us through /sell outlives the listing,
 // and a seller who comes back re-registers into a free slot. An origin that
-// has ever settled a payment is never released, however long it has been down.
+// has settled a payment holds its slot three times as long (90 days dark).
 // If this fills with LIVE sellers, raise CRAWL_INTERVAL_MS first (it is the
-// multiplier), then this (it is linear).
-const DEFAULT_MAX_SUBMITTED_SEEDS = 2000;
+// multiplier), then this (it is linear). It filled with live sellers at 2,000
+// (2026-11-03: 1,985 held, 1,489 of them seen routable within the day, half
+// settled, none past the idle window), so the ceiling is 4,000 and a
+// variable (INDEX_MAX_SUBMITTED_SEEDS): at most ~15 GB/day if every slot fills.
+const DEFAULT_MAX_SUBMITTED_SEEDS = Math.max(0, Math.floor(Number(process.env.INDEX_MAX_SUBMITTED_SEEDS))) || 4000;
 let submittedSeedsCap = DEFAULT_MAX_SUBMITTED_SEEDS;
 
 /** Test hook: set (or, with no arg, reset) the submission cap. */
@@ -661,16 +664,23 @@ export function __testSetSubmittedCap(n) {
   submittedSeedsCap = typeof n === "number" && n >= 0 ? n : DEFAULT_MAX_SUBMITTED_SEEDS;
 }
 
+/** The stored submission list into memory. Every stored origin is loaded,
+ *  past the cap too: a load that cut the tail would write the cut back to
+ *  the store on the merge that follows (the base minus what is held reads as
+ *  deleted), so a lowered cap would silently delete the newest submissions.
+ *  The cap bounds new growth at the register door; held origins past it
+ *  drain through releases. */
+export function applyStoredSubmissions(arr) {
+  for (const o of Array.isArray(arr) ? arr : []) {
+    if (typeof o === "string") { submittedSeeds.add(o); discoveredSeeds.add(o); }
+  }
+  if (submittedSeeds.size > submittedSeedsCap) console.warn(`[x402-index] ${submittedSeeds.size} submitted origins held, over the cap of ${submittedSeedsCap}: no new submission is accepted until releases bring it under`);
+}
+/** Test hook: adopt one origin as another container's addition would be. */
+export function __testAdoptSubmitted(o) { SUBMITTED_ADAPTER.set(o); }
 export function loadSubmittedSeeds() {
   const d = docFor(SUBMITTED_SEEDS_FILE);
-  const apply = (arr) => {
-    // Respect the cap even if the file was hand-edited or corrupted into
-    // something oversized — the ceiling has to hold on load, not just on write.
-    for (const o of Array.isArray(arr) ? arr : []) {
-      if (submittedSeeds.size >= submittedSeedsCap) break;
-      if (typeof o === "string") { submittedSeeds.add(o); discoveredSeeds.add(o); }
-    }
-  };
+  const apply = applyStoredSubmissions;
   if (d.backend === "pg") return loadMerging(SUBMITTED_SEEDS_FILE, { apply, persist: persistSubmittedSeeds, keyOf: (o) => o, adapter: SUBMITTED_ADAPTER });
   try { apply(d.loadSync(null)); } catch { /* absent file / no volume — in-memory only */ }
   return Promise.resolve();
@@ -680,7 +690,9 @@ const SUBMITTED_ADAPTER = {
   entries: (b) => (Array.isArray(b) ? b.filter((o) => typeof o === "string").map((o) => [o, 1]) : []),
   body: (es) => es.map(([k]) => k),
   local: () => [...submittedSeeds].map((o) => [o, 1]),
-  set: (o) => { if (submittedSeeds.size < submittedSeedsCap && !isRemovedOrigin(o)) { submittedSeeds.add(o); discoveredSeeds.add(o); } },
+  // Another container's addition is held past the cap too: a refused one
+  // would be recorded as agreed and written out of the row on the next merge.
+  set: (o) => { if (!isRemovedOrigin(o)) { submittedSeeds.add(o); discoveredSeeds.add(o); } },
   del: (o) => { submittedSeeds.delete(o); },
 };
 function persistSubmittedSeeds() {
@@ -1626,7 +1638,7 @@ async function registerOriginNow(origin, { crawl, replaces = null, deadlineAt = 
     }
   }
   if (!submittedSeeds.has(origin) && submittedSeeds.size >= submittedSeedsCap) {
-    return { listed: false, origin, error: "submission list is full - slots free up after 30 days with no successful probe; open a GitHub issue to get seeded sooner" };
+    return { listed: false, origin, error: `submission list is full - a slot frees up ${Math.round(RELEASE_AFTER_MS / 86400000)} days after its origin's last successful probe (${Math.round(SETTLED_RELEASE_AFTER_MS / 86400000)} for a seller that has settled payments, ${Math.round(TUNNEL_RELEASE_AFTER_MS / 86400000)} for a quick tunnel); open a GitHub issue to get seeded sooner` };
   }
   const doCrawl = crawl || (async (o, opts) => { await crawlSeller(o, opts); return cache.get(o); });
   let v;
@@ -6444,7 +6456,7 @@ export function isEphemeralTunnelOrigin(origin) {
 // A gone tunnel hostname never comes back, so its slot is released after days,
 // not a month, and a past settlement does not hold it: the seller, if still
 // selling, is already on a new hostname.
-const TUNNEL_RELEASE_AFTER_MS = Number(process.env.INDEX_TUNNEL_RELEASE_AFTER_DAYS || 3) * 86_400_000;
+const TUNNEL_RELEASE_AFTER_MS = daysKnob("INDEX_TUNNEL_RELEASE_AFTER_DAYS", 3);
 // At most this share of the submission slots may be tunnel hostnames, so live
 // tunnels cannot fill the door for sellers on stable hostnames.
 const TUNNEL_SUBMISSION_SHARE = Number(process.env.INDEX_TUNNEL_SUBMISSION_SHARE || 0.25);
@@ -6454,7 +6466,20 @@ export function tunnelSubmissionCap(cap) { return Math.floor(cap * (TUNNEL_SUBMI
 // submission slot is released. 30 days is deliberately far past any outage a
 // seller could be having: it is not a health signal, it is "this address has
 // been gone for a month".
-const RELEASE_AFTER_MS = Number(process.env.INDEX_RELEASE_AFTER_DAYS || 30) * 86_400_000;
+// A window in days from a variable: unset, zero, negative or not a number
+// reads as the default (a zero window would release every live seller).
+function daysKnob(name, dflt) {
+  const d = Number(process.env[name]);
+  return (Number.isFinite(d) && d > 0 ? d : dflt) * 86_400_000;
+}
+const RELEASE_AFTER_MS = daysKnob("INDEX_RELEASE_AFTER_DAYS", 30);
+// A seller who has been paid through us keeps its slot three times as long
+// (it is a real counterparty, and a month is inside a long migration), but
+// not forever: the 20 oldest slots on 2026-11-03 were settled sellers dark
+// past 30 days, and a slot held by a dead address serves nobody. The
+// registration row, and its tenure, survive the release either way.
+// Never shorter than the plain window: a settled seller is not released first.
+const SETTLED_RELEASE_AFTER_MS = Math.max(RELEASE_AFTER_MS, daysKnob("INDEX_SETTLED_RELEASE_AFTER_DAYS", 90));
 
 // The submission ceiling used to be a lifetime bucket: an origin entered and
 // nothing ever took it out, so the front door filled once and stayed full, and
@@ -6477,6 +6502,7 @@ const RELEASE_AFTER_MS = Number(process.env.INDEX_RELEASE_AFTER_DAYS || 30) * 86
 // @param registrations  rows from getSellerRegistrations()
 // @param isSubmitted    is this origin still holding a submission slot?
 // @param hasSettled     has this origin ever settled a payment through us?
+// @param settledMaxIdleMs  the idle window of a seller who has settled
 // @param cycleOkFraction  share of THIS cycle's crawls that succeeded, or null
 export function selectReleasableOrigins({
   registrations = [],
@@ -6484,6 +6510,7 @@ export function selectReleasableOrigins({
   hasSettled = () => false,
   now = Date.now(),
   maxIdleMs = RELEASE_AFTER_MS,
+  settledMaxIdleMs = SETTLED_RELEASE_AFTER_MS,
   tunnelMaxIdleMs = TUNNEL_RELEASE_AFTER_MS,
   cycleOkFraction = null,
   minCycleOkFraction = 0.5,
@@ -6499,16 +6526,16 @@ export function selectReleasableOrigins({
     const origin = row?.origin;
     if (typeof origin !== "string" || !origin) continue;
     if (!isSubmitted(origin)) continue;
-    // A seller who has ever been PAID through us is not a stale submission,
-    // however long they have been down. Money is a stronger claim on a slot
-    // than liveness, and releasing one would quietly drop a real counterparty.
+    // A seller who has been PAID through us is a real counterparty: money is
+    // a stronger claim on a slot than liveness, so it holds the slot through
+    // the longer window before a dead address gives it back.
     const tunnel = isEphemeralTunnelOrigin(origin);
-    if (!tunnel && (row.last_settled_seen || hasSettled(origin))) continue;
+    const settled = !tunnel && !!(row.last_settled_seen || hasSettled(origin));
     // No successful probe ever recorded falls back to first_seen, so a row
     // that predates this column cannot be immortal.
     const lastOk = Number(row.last_routable_seen || row.first_seen || 0);
     if (!lastOk) continue;
-    if (now - lastOk < (tunnel ? tunnelMaxIdleMs : maxIdleMs)) continue;
+    if (now - lastOk < (tunnel ? tunnelMaxIdleMs : settled ? settledMaxIdleMs : maxIdleMs)) continue;
     out.push(origin);
   }
   return out;
@@ -6588,7 +6615,8 @@ function releaseDeadSubmissions(okFraction) {
   // Loud on purpose: this is the only path that removes a listing, so it must
   // never happen quietly. seller_registrations still holds every one of them.
   const tunnels = releasable.filter(isEphemeralTunnelOrigin).length;
-  console.log(`[x402-index] released ${releasable.length} submission slot(s) with no successful probe (${tunnels} quick-tunnel after ${Math.round(TUNNEL_RELEASE_AFTER_MS / 86400000)}d, ${releasable.length - tunnels} after ${Math.round(RELEASE_AFTER_MS / 86400000)}d): ${releasable.slice(0, 10).join(", ")}${releasable.length > 10 ? ", ..." : ""}`);
+  const settled = releasable.filter((o) => !isEphemeralTunnelOrigin(o) && originHasSettled(o)).length;
+  console.log(`[x402-index] released ${releasable.length} submission slot(s) with no successful probe (${tunnels} quick-tunnel after ${Math.round(TUNNEL_RELEASE_AFTER_MS / 86400000)}d, ${settled} settled after ${Math.round(SETTLED_RELEASE_AFTER_MS / 86400000)}d, ${releasable.length - tunnels - settled} after ${Math.round(RELEASE_AFTER_MS / 86400000)}d): ${releasable.slice(0, 10).join(", ")}${releasable.length > 10 ? ", ..." : ""}`);
   lastReleaseAt = new Date().toISOString();
   return { released: releasable.length, reason: "released" };
 }
