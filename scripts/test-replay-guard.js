@@ -134,6 +134,33 @@ function evmCred({ network = "eip155:8453", nonce = "0xabc", from = "0x" + "1".r
   }
 }
 
+// ---- A3b. The store fails AFTER the claim landed ------------------------------
+// A command that throws once the SET NX has claimed the key must not leave
+// that claim behind: the buyer's retry of the same unused authorization would
+// otherwise read "inflight" for the claim's whole life.
+{
+  const g = createReplayGuard();
+  const store = new Map();
+  let failOnce = false;
+  const flaky = {
+    isReady: true,
+    get: async (k) => { if (failOnce && [...store.keys()].some((x) => x.includes(":f:"))) { failOnce = false; throw new Error("READONLY"); } return store.has(k) ? store.get(k) : null; },
+    set: async (k, v, o = {}) => { if (o.NX && store.has(k)) return null; store.set(k, v); return "OK"; },
+    del: async (k) => (store.delete(k) ? 1 : 0),
+    expire: async () => 1,
+  };
+  __setTestClient(flaky);
+  try {
+    failOnce = true;
+    ok(await g.begin("n2:partial", undefined, { requireShared: true }) === "unavailable", "a store error after the claim refuses the call");
+    ok(![...store.keys()].some((k) => k.includes(":f:")), `and drops the claim it took (left: ${[...store.keys()].join(",") || "none"})`);
+    ok(await g.begin("n2:partial", undefined, { requireShared: true }) === "ok", "so the buyer's retry of the same authorization is claimed, not refused as in flight");
+    await g.release?.("n2:partial");
+  } finally {
+    __setTestClient(null);
+  }
+}
+
 // ---- A4. The Redis code path against an in-memory client ---------------------
 // A minimal client with the commands the guard sends (GET, SET NX/EX, DEL,
 // EXPIRE) and a hook that runs between two commands, so an interleaving that

@@ -6490,6 +6490,7 @@ jobs:
           exit 1
 
       - name: Verify deployment
+        id: verify
         env:
           RAILWAY_DOMAIN: ${{ steps.domain.outputs.domain }}
         run: |
@@ -6907,6 +6908,7 @@ jobs:
       # that breaks a listing is red on its own run. A validator that cannot be
       # read (exit 2, CDP-side) warns instead: it gives no verdict on our build.
       - name: Bazaar listing validation on the new build
+        if: ${{ !cancelled() && steps.verify.outcome == 'success' }}
         env:
           DATABENTO_API_KEY: ""
           RAILWAY_API_TOKEN: ""
@@ -6920,6 +6922,7 @@ jobs:
           WALLET_ADDRESS: ""
         run: |
           BEST=9
+          INVALID=0
           for i in 1 2 3; do
             set +e
             OUT=$(TARGET_URL=https://agent402.tools node scripts/bazaar-validate.js 2>&1); CODE=$?
@@ -6927,11 +6930,12 @@ jobs:
             echo "--- run $i: exit $CODE"
             echo "$OUT" | tail -20
             if [ "$CODE" -lt "$BEST" ]; then BEST=$CODE; fi
+            if [ "$CODE" = "1" ]; then INVALID=$((INVALID + 1)); fi
             if [ "$CODE" = "0" ]; then break; fi
             if [ "$i" -lt 3 ]; then sleep 60; fi
           done
           case "$BEST" in
             0) echo "Every flagship route validates on the new build." ;;
             2) echo "::warning::The Bazaar validator could not be read on any run (CDP-side); no listing verdict for this build." ;;
-            *) echo "::error::A flagship route reads INVALID on all three Bazaar validator runs against the new build."; exit 1 ;;
+            *) echo "::error::No Bazaar validator run was clean against the new build: $INVALID of $i run(s) read a flagship route INVALID, the rest could not be read."; exit 1 ;;
           esac

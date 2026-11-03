@@ -240,6 +240,8 @@ export function createReplayGuard({ ttlMs = 60 * 60 * 1000, maxEntries = 50_000,
       if (c) {
         const { primary, legacy } = namesOf(key);
         const tag = LEGACY_TAG + primary;
+        let claimedPrimary = false;
+        let legacyHeld = false;
         try {
           if (await c.get(REDIS_PREFIX + "c:" + primary)) return "consumed";
           if (legacy && isLegacyEntry(await c.get(REDIS_PREFIX + "c:" + legacy))) return "consumed";
@@ -248,7 +250,7 @@ export function createReplayGuard({ ttlMs = 60 * 60 * 1000, maxEntries = 50_000,
           // property inFlight.add() gave for free within one process.
           const claimed = await c.set(REDIS_PREFIX + "f:" + primary, String(now), { NX: true, EX: inflightTtlSeconds });
           if (!claimed) return "inflight";
-          let legacyHeld = false;
+          claimedPrimary = true;
           const back = async (verdict) => { await c.del(REDIS_PREFIX + "f:" + primary); if (legacyHeld) await delIfTagged(c, "f:" + legacy, tag); return verdict; };
           if (legacy) {
             // An earlier build's claim on this credential is honored; another
@@ -264,6 +266,13 @@ export function createReplayGuard({ ttlMs = 60 * 60 * 1000, maxEntries = 50_000,
           startRenew(key, legacyHeld);
           return "ok";
         } catch (e) {
+          // A claim this call took before the store failed is dropped (best
+          // effort), so the buyer's retry is not refused as in flight for the
+          // claim's whole life on a payment that was never used.
+          if (claimedPrimary) {
+            try { await c.del(REDIS_PREFIX + "f:" + primary); } catch { /* expires with its TTL */ }
+            if (legacyHeld) { try { await delIfTagged(c, "f:" + legacy, tag); } catch { /* expires with its TTL */ } }
+          }
           if (requireShared) {
             console.error("[replay-guard] redis begin failed; refusing a route that requires the shared store:", e.message);
             return "unavailable";

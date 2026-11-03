@@ -16,9 +16,9 @@ Surfaces:
   catalog, listed at /api/pow), then pay per call in the stablecoins and
   over the wires this server offers (named from its live configuration);
   and when to use the service and when not to, linked to /agents.md.
-  server.describe's startHere.firstJob opens with the same first call. The
-  unpaid 402 body carries the access line and the /agents.md link. Rails and
-  wire detail follow unchanged.
+  server.describe's startHere.firstJob opens with the same first call. With
+  FRONT_DOOR_402=on, the unpaid 402 body also carries the access line and the
+  /agents.md link (off by default). Rails and wire detail follow unchanged.
 - New /agents.md (text/markdown, free): the front door, then "When a call
   fails" (four recovery lines, each scoped to where it holds), then how to
   connect, pay and find more tools. Linked from /llms.txt, listed in the
