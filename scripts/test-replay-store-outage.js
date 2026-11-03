@@ -14,8 +14,20 @@
 // configured (one process: the per-process claim is the guarantee), and,
 // when the caller provides a real REDIS_URL, two servers sharing that Redis
 // serve one signed payment sent to both at once exactly once.
+// Part 2 drives the REAL Tempo and card gates (src/mpp-tempo.js,
+// src/mpp-stripe.js) in this process against a shared store that throws:
+// inside the deploy overlap window a Tempo pull credential, a Tempo push
+// credential and a card credential are each refused 503 with Retry-After
+// before the handler runs, before a push transfer is claimed and before a
+// card is captured; past the window each is served on the per-process claim;
+// draining (the drain signal the x402 dispatcher reads) refuses them again.
+// Every booted server runs with X402_INDEX_CRAWL=off, which also turns the
+// revenue warm-up off (src/revenue-live.js revenueWarmupEnabled; the scan
+// reached every chain's public RPC from a test boot): the suite reads every
+// server's log for a chain read and fails on one.
 // Offline: a stub facilitator; Redis only for the optional live control.
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { randomBytes } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
@@ -47,11 +59,18 @@ await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
 
 const procs = [];
 const logs = new Map();
+// A boot reader reaching a public chain RPC leaves one of these lines (the
+// revenue warm-up's getLogs sweep, the facilitator gas read, the late-settle
+// reconcile, the leaderboard scan). Kept per server for the whole run.
+const CHAIN_READ = /\[revenue\]|eth_getLogs|getLogs|\[facilitator-gas\]|\[late-settle\]|\[leaderboard\]/i;
+const chainReads = new Map();
+const bootedAt = Date.now();
 function boot(port, name, redisUrl, extra = {}) {
   const dir = join(TMP, name);
   mkdirSync(dir, { recursive: true });
   const log = [];
   logs.set(name, log);
+  chainReads.set(name, []);
   const proc = spawn(process.execPath, ["src/server.js"], {
     env: { ...process.env, PORT: String(port), FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
       FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`,
@@ -61,7 +80,7 @@ function boot(port, name, redisUrl, extra = {}) {
       REDIS_URL: redisUrl, ...extra },
     stdio: ["ignore", "pipe", "pipe"],
   });
-  const keep = (d) => { for (const l of String(d).split("\n")) if (l.trim()) log.push(l.slice(0, 300)); if (log.length > 80) log.splice(0, log.length - 80); };
+  const keep = (d) => { for (const l of String(d).split("\n")) if (l.trim()) { log.push(l.slice(0, 300)); if (CHAIN_READ.test(l)) chainReads.get(name).push(l.slice(0, 200)); } if (log.length > 80) log.splice(0, log.length - 80); };
   proc.stdout.on("data", keep); proc.stderr.on("data", keep);
   procs.push(proc);
   return `http://127.0.0.1:${port}`;
@@ -182,10 +201,164 @@ try {
       console.log("note - no REDIS_URL given: the live two-container control is skipped (the outage cases above do not need one)");
     }
   }
+
+  // No booted server reached a public chain RPC. The warm-up scan used to
+  // start a few seconds after listen whatever the crawler switch said; the
+  // servers are given that long before their logs are read.
+  {
+    const { revenueWarmupEnabled } = await import("../src/revenue-live.js");
+    ok(revenueWarmupEnabled({ X402_INDEX_CRAWL: "off" }) === false && revenueWarmupEnabled({ X402_SYNC_ON_START: "false" }) === false && revenueWarmupEnabled({ REVENUE_WARMUP: "off" }) === false && revenueWarmupEnabled({}) === true && revenueWarmupEnabled({ X402_INDEX_CRAWL: "on", X402_SYNC_ON_START: "true" }) === true, "the revenue warm-up is off under X402_INDEX_CRAWL=off, X402_SYNC_ON_START=false or REVENUE_WARMUP=off, else on");
+    const serverSrc = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+    const warmups = serverSrc.match(/revenueSnapshot\(revenueWallets\(\)\)/g) || [];
+    const gated = serverSrc.match(/(if \(WALLET_ADDRESS && revenueWarmupEnabled\(\)\) revenueSnapshot\(revenueWallets\(\)\)|if \(revenueWarmupEnabled\(\)\) bootStep\("revenueSnapshot", \(\) => revenueSnapshot\(revenueWallets\(\)\)|if \(revenueWarmupEnabled\(\)\) \{\n  const revenueTick = \(\) => \{ runAsJob\("revenue-snapshot", \(\) => revenueSnapshot\(revenueWallets\(\)\)\))/g) || [];
+    ok(gated.length === 3, `server.js starts the three boot warm-ups of the revenue snapshot only through that switch (${gated.length} of 3 gated)`);
+    ok(warmups.length === 6, `and every other revenueSnapshot call in server.js is on a request path (${warmups.length} calls in all, expected 6: three warm-ups, three request paths)`);
+    await sleep(Math.max(0, 20_000 - (Date.now() - bootedAt)));
+    const seen = [...chainReads].filter(([, lines]) => lines.length);
+    ok(seen.length === 0, `no booted server reached a public chain RPC (${seen.map(([n, l]) => `${n}: ${l[0]}`).join("; ") || "no chain read logged"})`);
+  }
 } finally {
   for (const p of procs) { try { p.kill("SIGKILL"); } catch { /* gone */ } }
   facilitator.close();
   try { rmSync(TMP, { recursive: true, force: true }); } catch { /* best effort */ }
+}
+
+// ---------------------------------------------------------------- part 2
+// The Tempo and card gates in this process, against a shared store that
+// throws on every call (the same verdict a dead Redis gives the booted
+// servers above). The children are already spawned, so the Tempo and Stripe
+// environment set here reaches none of them.
+{
+  const TREASURY = "0x000000000000000000000000000000000000dEaD";
+  const CUR = "0x2000000000000000000000000000000000000000";
+  process.env.TEMPO_API_KEY = "test-tempo-key";
+  process.env.TEMPO_RECIPIENT_ADDRESS = TREASURY;
+  process.env.TEMPO_CURRENCY = CUR;
+  process.env.STRIPE_SECRET_KEY = "sk_test_fakekey";
+  process.env.STRIPE_PROFILE_ID = "profile_test_fake";
+  // The gates' modules choose their backend at import (scripts/lib/offline-stores.js):
+  // per-process here, whatever the caller exported for the live control above.
+  for (const k of ["REDIS_URL", "STATE_DATABASE_URL", "STATE_DATABASE_URL_FOR_TEST", "LEDGER_JOURNAL_REDIS"]) delete process.env[k];
+  const [express, { Challenge, Credential }, { default: Stripe }, { stripe: stripeMethods }, { createHmac }, { createTempoGate }, { createStripeGate }, { createReplayGuard }, { __setTestClient }, { abortInFlightComposites, drainSignal }] = await Promise.all([
+    import("express").then((m) => m.default), import("mppx"), import("stripe"), import("mppx/server"), import("node:crypto"),
+    import("../src/mpp-tempo.js"), import("../src/mpp-stripe.js"), import("../src/replay-guard.js"), import("../src/shared-limit.js"), import("../src/drain-abort.js"),
+  ]);
+  const broken = { get: async () => { throw new Error("simulated outage"); }, set: async () => { throw new Error("simulated outage"); }, del: async () => { throw new Error("simulated outage"); }, expire: async () => { throw new Error("simulated outage"); } };
+  const e0 = console.error, w0 = console.warn;
+  const quiet = async (fn) => { console.error = () => {}; console.warn = () => {}; try { return await fn(); } finally { console.error = e0; console.warn = w0; } };
+  const listen = (app) => new Promise((r) => { const s = app.listen(0, "127.0.0.1", () => r({ s, url: `http://127.0.0.1:${s.address().port}` })); });
+  const overlap = process.env.DEPLOY_OVERLAP_SECONDS;
+  const inside = () => { process.env.DEPLOY_OVERLAP_SECONDS = "3600"; };
+  const past = () => { process.env.DEPLOY_OVERLAP_SECONDS = "0"; };
+
+  // --- the Tempo gate: a pull credential, a push credential, and a push
+  // credential the route refuses (long-running: the owed-booking path).
+  const SECRET = "outage-secret", REALM = "test.local", SENDER = "0x5555555555555555555555555555555555555555";
+  let credSeq = 0;
+  const tempoChallenge = () => Challenge.from({ realm: REALM, method: "tempo", intent: "charge", expires: new Date(Date.now() + 60_000 + (++credSeq) * 1000), request: { amount: "50000", currency: CUR, decimals: 6, recipient: TREASURY, methodDetails: { chainId: 4217 } }, secretKey: SECRET });
+  const pullCred = () => Credential.serialize({ challenge: tempoChallenge(), payload: { type: "transaction", signature: "0x76" + "00".repeat(60) }, source: `did:pkh:eip155:4217:${SENDER}` });
+  const pushCred = (hash) => Credential.serialize({ challenge: tempoChallenge(), payload: { hash, type: "hash" }, source: `did:pkh:eip155:4217:${SENDER}` });
+  const tempo = { validates: 0, broadcasts: 0, runs: 0, booked: 0 };
+  const tempoApp = express();
+  tempoApp.use(express.json());
+  tempoApp.use(createTempoGate({
+    secretKey: SECRET, realm: REALM, replayGuard: createReplayGuard(),
+    priceFor: (_m, path) => (path === "/paid" ? { priceUsd: 0.05 } : path === "/long" ? { priceUsd: 0.05, longRunning: true } : null),
+    validate: async () => { tempo.validates++; return { ok: true, validation: {} }; },
+    broadcast: async () => { tempo.broadcasts++; return { ok: true, receipt: { method: "tempo", status: "success", reference: `0xr${tempo.broadcasts}`, timestamp: new Date().toISOString() } }; },
+    pushSender: async () => SENDER,
+    onPushInputRefused: async () => { tempo.booked++; return true; },
+    onPushNotClaimed: async () => { tempo.booked++; return true; },
+    pushClaimAllowed: () => true, pushRowOf: () => null,
+  }));
+  tempoApp.use((req, res, next) => (req.tempoSettling ? next() : res.status(402).json({ error: "Payment Required" })));
+  tempoApp.post("/paid", (req, res) => { tempo.runs++; res.json({ ok: true }); });
+  tempoApp.post("/long", (req, res) => { tempo.runs++; res.json({ ok: true }); });
+  const T = await listen(tempoApp);
+  const tempoPost = (path, cred) => fetch(`${T.url}${path}`, { method: "POST", headers: { "content-type": "application/json", Authorization: cred }, body: JSON.stringify({ text: "x" }) });
+  const snap = () => ({ ...tempo });
+  const delta = (a, b) => Object.fromEntries(Object.keys(a).map((k) => [k, b[k] - a[k]]));
+
+  // --- the card gate.
+  const STRIPE_SECRET = createHmac("sha256", process.env.STRIPE_SECRET_KEY).update("mpp-challenge-signing").digest("base64");
+  const stripeMethod = stripeMethods.charge({ client: new Stripe("sk_test_fakekey"), networkId: process.env.STRIPE_PROFILE_ID, paymentMethodTypes: ["card"], livemode: false });
+  const cardCred = () => Credential.serialize({ challenge: Challenge.fromMethod(stripeMethod, { realm: REALM, expires: new Date(Date.now() + 60_000), request: { amount: "0.50", currency: "usd", decimals: 2, networkId: process.env.STRIPE_PROFILE_ID, paymentMethodTypes: ["card"] }, secretKey: STRIPE_SECRET }), payload: { type: "spt", spt: `spt_test_${++credSeq}` } });
+  const card = { captures: 0, runs: 0 };
+  const cardApp = express();
+  cardApp.use(createStripeGate({
+    secretKey: STRIPE_SECRET, realm: REALM, replayGuard: createReplayGuard(), checkToken: async () => ({ ok: true }),
+    priceFor: (_m, path) => (path === "/paid" ? { priceUsd: 0.5, identityBound: false } : null),
+    validate: async () => ({ ok: true, validation: {} }),
+    settle: async () => { card.captures++; return { ok: true, receipt: { method: "stripe", status: "success", reference: `pi_test_${card.captures}`, timestamp: new Date().toISOString() } }; },
+  }));
+  cardApp.use((req, res, next) => (req.stripeSettling ? next() : res.status(402).json({ error: "Payment Required" })));
+  cardApp.post("/paid", (req, res) => { card.runs++; res.json({ ok: true }); });
+  const S = await listen(cardApp);
+  const cardPost = () => fetch(`${S.url}/paid`, { method: "POST", headers: { Authorization: cardCred() } });
+
+  const refused = async (r) => { const b = await r.json().catch(() => ({})); return r.status === 503 && b.reason === "replay-store-unavailable" && r.headers.get("retry-after") === "30"; };
+  __setTestClient(broken);
+  try {
+    // Inside the overlap window: refused before the handler, nothing claimed,
+    // nothing broadcast, nothing captured, nothing booked.
+    inside();
+    let t0 = snap();
+    let r = await quiet(() => tempoPost("/paid", pullCred()));
+    let d = delta(t0, snap());
+    ok(await refused(r) && d.runs === 0 && d.broadcasts === 0, `tempo pull credential, store out, inside the window: refused 503 with Retry-After before the handler, nothing broadcast (${r.status}; ${JSON.stringify(d)})`);
+    t0 = snap();
+    r = await quiet(() => tempoPost("/paid", pushCred("0x" + "a1".repeat(32))));
+    const pb = await r.clone().json().catch(() => ({}));
+    d = delta(t0, snap());
+    ok(await refused(r) && pb.transferClaimed === false && pb.charged === false && d.runs === 0 && d.broadcasts === 0 && d.booked === 0, `tempo push credential, store out, inside the window: refused 503 before the transfer is claimed or finalized, nothing booked (${r.status}; ${JSON.stringify(d)})`);
+    t0 = snap();
+    r = await quiet(() => tempoPost("/long", pushCred("0x" + "b2".repeat(32))));
+    d = delta(t0, snap());
+    ok(r.status === 402 && d.runs === 0 && d.broadcasts === 0 && d.booked === 0 && d.validates === 0, `tempo push credential on a route that refuses it, store out: the plain refusal, no relay call, nothing booked as owed (${r.status}; ${JSON.stringify(d)})`);
+    const c0 = { ...card };
+    r = await quiet(() => cardPost());
+    ok(await refused(r) && card.runs === c0.runs && card.captures === c0.captures, `card credential, store out, inside the window: refused 503 with Retry-After before the handler, nothing captured (${r.status}; runs +${card.runs - c0.runs}, captures +${card.captures - c0.captures})`);
+
+    // Past the window, one container: served on the per-process claim, once.
+    past();
+    t0 = snap();
+    const pull = pullCred();
+    r = await quiet(() => tempoPost("/paid", pull));
+    d = delta(t0, snap());
+    ok(r.status === 200 && d.runs === 1 && d.broadcasts === 1, `tempo pull credential past the window: served and broadcast once on the per-process claim (${r.status}; ${JSON.stringify(d)})`);
+    t0 = snap();
+    r = await quiet(() => tempoPost("/paid", pull));
+    d = delta(t0, snap());
+    ok(r.status === 402 && d.runs === 0 && d.broadcasts === 0, `and the same credential buys no second run there (${r.status}; ${JSON.stringify(d)})`);
+    t0 = snap();
+    r = await quiet(() => tempoPost("/paid", pushCred("0x" + "c3".repeat(32))));
+    d = delta(t0, snap());
+    ok(r.status === 200 && d.runs === 1 && d.broadcasts === 1, `tempo push credential past the window: claimed and served once (${r.status}; ${JSON.stringify(d)})`);
+    const c1 = { ...card };
+    r = await quiet(() => cardPost());
+    ok(r.status === 200 && card.runs === c1.runs + 1 && card.captures === c1.captures + 1, `card credential past the window: served and captured once (${r.status})`);
+
+    // Draining (SIGTERM: the replacement container is live), past the
+    // window: the shared claim is required again on every gate. The drain
+    // signal is one-way, so this runs last.
+    abortInFlightComposites("test drain");
+    ok(drainSignal().aborted === true, "the drain signal the x402 dispatcher reads is set");
+    t0 = snap();
+    r = await quiet(() => tempoPost("/paid", pullCred()));
+    d = delta(t0, snap());
+    ok(await refused(r) && d.runs === 0 && d.broadcasts === 0, `draining: a tempo pull credential is refused 503 before the handler (${r.status}; ${JSON.stringify(d)})`);
+    t0 = snap();
+    r = await quiet(() => tempoPost("/paid", pushCred("0x" + "d4".repeat(32))));
+    d = delta(t0, snap());
+    ok(await refused(r) && d.runs === 0 && d.broadcasts === 0 && d.booked === 0, `draining: a tempo push credential is refused 503 before the transfer is claimed (${r.status}; ${JSON.stringify(d)})`);
+    const c2 = { ...card };
+    r = await quiet(() => cardPost());
+    ok(await refused(r) && card.runs === c2.runs && card.captures === c2.captures, `draining: a card credential is refused 503 before the handler, nothing captured (${r.status})`);
+  } finally {
+    __setTestClient(null);
+    if (overlap === undefined) delete process.env.DEPLOY_OVERLAP_SECONDS; else process.env.DEPLOY_OVERLAP_SECONDS = overlap;
+    T.s.close(); S.s.close();
+  }
 }
 if (failed) for (const [name, log] of logs) for (const l of log.slice(-15)) console.error(`  server ${name}:`, l);
 console.log(`\ntest-replay-store-outage: ${pass} passed, ${failed} failed`);

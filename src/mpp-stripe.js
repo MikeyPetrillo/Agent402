@@ -27,6 +27,7 @@
 // not mounted, no stripe challenge on any 402 (pure evm/tempo/x402).
 import Stripe from "stripe";
 import { sharedClaimRequired } from "./replay-topology.js";
+import { drainSignal } from "./drain-abort.js";
 import { Challenge, Credential, Expires, Method } from "mppx";
 import { receiptHeader as stripeReceiptHeader, txFromReceiptHeader as stripeTxFromReceiptHeader } from "./mpp-receipt.js";
 import { stripe as stripeMethods } from "mppx/server";
@@ -312,10 +313,12 @@ export function createStripeGate({ validate = validateStripeCredential, settle =
       req.mppStripeCredential = true;
       const replayKey = replayGuard ? `stripe:${binding.challenge.id}` : null;
       if (replayGuard && replayKey) {
-        // A long-running or composite route needs the shared claim: with the
-        // shared store configured but unreachable it is refused before the
-        // handler runs, and nothing is captured.
-        const verdict = await replayGuard.begin(replayKey, undefined, { requireShared: sharedClaimRequired({ longRunning: binding.longRunning }) });
+        // The shared claim is required whenever another container may be
+        // serving (src/replay-topology.js: more than one replica, a deploy's
+        // overlap window, a drain) and always on a long-running or composite
+        // route: with the shared store configured but unreachable it is
+        // refused before the handler runs, and nothing is captured.
+        const verdict = await replayGuard.begin(replayKey, undefined, { requireShared: sharedClaimRequired({ longRunning: binding.longRunning, draining: drainSignal().aborted }) });
         if (verdict === "unavailable") {
           res.setHeader("Retry-After", "30");
           return res.status(503).json({ error: "This route is briefly unavailable: the shared payment store did not answer, so no run was started and the card was not charged. Retry in about 30 seconds.", reason: "replay-store-unavailable" });

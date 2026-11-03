@@ -35,12 +35,18 @@
  * store configured (one process) the per-process Map/Set is the guarantee. A
  * caller that passes `requireShared` gets "unavailable" whenever a shared
  * store is configured but cannot be reached, and refuses the call before any
- * payment is taken: the x402 paid path in server.js passes it on every route,
- * because a per-process claim on two containers lets one signed payment run
- * the handler on each and reach the facilitator twice, where only later
- * layers (the chain's nonce, the settlement claims, the sales ledger) keep
- * the second from being served. A caller that does not pass it falls back to
- * the per-process claim on a Redis failure.
+ * payment is taken. The x402 dispatcher in server.js, the Tempo gate and the
+ * card gate each pass sharedClaimRequired() (src/replay-topology.js): the
+ * shared claim is required on a long-running or composite route always, and
+ * on every route while another container may be serving (more than one
+ * replica, a deploy's overlap window, a drain), because a per-process claim
+ * on two containers lets one signed payment run the handler on each and
+ * reach the facilitator twice, where only later layers (the chain's nonce,
+ * the settlement claims, the sales ledger) keep the second from being served.
+ * A lone container past its overlap window serves a fast route on the
+ * per-process claim, so a store outage does not stop sales there. A caller
+ * that does not pass it falls back to the per-process claim on a Redis
+ * failure.
  */
 import { createHash } from "node:crypto";
 import { paymentHeaderOf } from "./payer.js";
@@ -287,9 +293,13 @@ export function createReplayGuard({ ttlMs = 60 * 60 * 1000, maxEntries = 50_000,
       inFlight.add(key);
       return "ok";
     },
-    /** Mark the nonce consumed — call only when the gated call was granted
+    /** Mark the nonce consumed: call only when the gated call was granted
      *  (200). `validBeforeMs` (paymentValidBeforeMs) holds the mark until the
-     *  authorization itself expires when that is later than ttlMs. */
+     *  authorization itself expires when that is later than ttlMs. Pass it
+     *  only for a grant that was NOT settled (a forgiven hang-up, a first-call
+     *  allowance): a settled authorization is spent on chain, and holding
+     *  every settled mark to a far validBefore keeps one long-lived key per
+     *  paid call. */
     async settle(key, now = Date.now(), { validBeforeMs = null } = {}) {
       stopRenew(key);
       const holdMs = holdMsOf(now, validBeforeMs);
