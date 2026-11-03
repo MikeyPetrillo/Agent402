@@ -302,6 +302,44 @@ function narrowQueryError(status, tookMs, sql = "", answerStatus = 502) {
 export const SQL_RECOVER_ROWS = 10;
 export const SQL_RECOVER_ATTEMPTS = 2;
 export const SQL_SEND_LIMIT_BYTES = 500_000;
+// The query service refuses to send a result that holds a row over 64 KB
+// (measured 2026-11-03: a 65,520-byte row is sent, a 65,540-byte row answers
+// its internal error; ten 30 KB rows, 300 KB in all, are sent). The rows are
+// measured in SQL (length(toString(tuple(*))), close to the JSON size) and
+// the rows that fit are served with the omitted ones counted. The filter
+// threshold sits under the limit for the difference between the two forms.
+export const SQL_ROW_LIMIT_BYTES = 65_536;
+export const SQL_ROW_FILTER_CHARS = 64_000;
+const ROW_SIZE = "length(toString(tuple(*)))";
+/** On the service's internal error for a wrapped query: the rows under the
+ *  per-row limit, served with the count of those over it; null when the
+ *  measure cannot be made or finds no row over the limit (then the re-run
+ *  with a small cap decides). One extra subquery level, so only a query
+ *  under the depth limit (wrapped) takes it. */
+async function rowsThatFit(body, inner) {
+  let agg;
+  try {
+    agg = await cdpFetch("POST", "/platform/v2/data/query/run", { ...body, sql: `SELECT count() AS n, countIf(${ROW_SIZE} > ${SQL_ROW_FILTER_CHARS}) AS big, max(${ROW_SIZE}) AS maxRow FROM (\n${inner}\n)` }, { idempotent: true, buyerQuery: true, attempts: 1, lineOffset: 1 });
+  } catch { return null; }
+  const row = (agg?.result ?? agg?.rows ?? agg?.data ?? [])[0];
+  const big = Number(row?.big), n = Number(row?.n), maxRow = Number(row?.maxRow);
+  if (!(big > 0)) return null;
+  let res;
+  try {
+    res = await cdpFetch("POST", "/platform/v2/data/query/run", { ...body, sql: `SELECT * FROM (\n${inner}\n) WHERE ${ROW_SIZE} <= ${SQL_ROW_FILTER_CHARS} LIMIT ${SQL_MAX_ROWS + 1}` }, { idempotent: true, buyerQuery: true, attempts: 1, lineOffset: 1 });
+  } catch (e) { if (e?.resultTooLarge) return null; throw e; }
+  const all = res?.result ?? res?.rows ?? res?.data ?? res;
+  if (!Array.isArray(all)) return null;
+  const list = all.length > SQL_MAX_ROWS ? all.slice(0, SQL_MAX_ROWS) : all;
+  const cut = all.length > list.length;
+  const kb = (v) => Math.max(1, Math.round(v / 1024));
+  return {
+    rows: list, rowCount: list.length, maxRows: SQL_MAX_ROWS, recovered: "row-size",
+    rowsOmitted: big, omittedReason: "row-size", rowLimitBytes: SQL_ROW_LIMIT_BYTES, maxRowBytes: Number.isFinite(maxRow) ? maxRow : null,
+    ...partialFields(Number.isFinite(n) ? n : list.length + big, list.length), complete: false, truncated: cut, ...(cut ? { matchedIsLowerBound: true } : {}),
+    note: `${big} row(s) of this result are over the query service's ${kb(SQL_ROW_LIMIT_BYTES)} KB per-row limit (the largest is about ${kb(maxRow)} KB; array and map columns are the usual cause) and are omitted; the ${list.length} rows that fit are served${cut ? ` (cut at ${SQL_MAX_ROWS})` : ""}. To get the omitted rows, select fewer or narrower columns or arraySlice the long arrays.`,
+  };
+}
 function resultTooLargeError(status, tookMs) {
   const e = bad(`CDP's query service failed inside this query (HTTP ${status}, its internal error), which it answers when a result is too large to send (an answer under about ${Math.round(SQL_SEND_LIMIT_BYTES / 1e3)} KB is usually sent): lower the LIMIT or select fewer or narrower columns. Nothing was charged.`, 502);
   e.hint = "narrow-query"; e.resultTooLarge = true; e.cdpStatus = status; e.tookMs = tookMs;
@@ -940,10 +978,18 @@ export const CDP_TOOLS = [
         }
         catch (e) {
           if (!(e?.resultTooLarge && capped.capped)) throw e;
-          // The result was too large to send: the same query again with a
-          // small outer row cap (two attempts, since a small result of this
-          // kind still fails now and then), served marked truncated, with
-          // the row size measured so the caller can pick a LIMIT.
+          // A row over the service's per-row limit is the usual cause: the
+          // rows that fit are served with the rest counted. A query at the
+          // subquery depth limit cannot take the measure's extra level.
+          if (capped.lineOffset > 0) {
+            const fit = await rowsThatFit(body, capped.inner);
+            if (fit) return fit;
+          }
+          // Otherwise the result was too large to send: the same query
+          // again with a small outer row cap (two attempts, since a small
+          // result of this kind still fails now and then), served marked
+          // truncated, with the row size measured so the caller can pick a
+          // LIMIT.
           const small = { ...body, sql: capped.limitTo(SQL_RECOVER_ROWS) };
           let res2 = null;
           for (let tryN = 1; tryN <= SQL_RECOVER_ATTEMPTS; tryN++) {
