@@ -285,11 +285,26 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
       ok(solanaRangeRefusal("SELECT * FROM solana.instructions /* where */ LIMIT 3") === null, "a keyword inside a comment does not count");
       ok(solanaRangeRefusal("SELECT sum(stack_height) FROM solana.instructions") !== null, "an aggregate call other than a bare count is refused");
       ok(solanaRangeRefusal("SELECT * FROM solana.instructions WHERE tx_signer = 'block_time'") !== null, "block_time inside a string is not a range");
+      // A range past a week is refused at once with the range that works
+      // (measured: 7 days answers, 14 and 30 do not).
+      const { blockTimeRangeDays, SOLANA_MAX_RANGE_DAYS } = await import("../src/tools/cdp-kit.js");
+      ok(SOLANA_MAX_RANGE_DAYS === 7, "the Solana range cap is the measured week");
+      ok(blockTimeRangeDays("SELECT 1 FROM solana.instructions WHERE block_time > now() - INTERVAL 30 DAY") === 30 && blockTimeRangeDays("SELECT 1 WHERE block_time > now() - INTERVAL 2 WEEK") === 14 && blockTimeRangeDays("SELECT 1 WHERE block_time > now() - INTERVAL 12 HOUR") === 0.5, "INTERVAL ranges are read in days");
+      ok(blockTimeRangeDays("SELECT 1 WHERE block_time >= '2026-10-01' AND block_time < '2026-10-05'") === 4, "two absolute dates give their span");
+      ok(blockTimeRangeDays("SELECT 1 WHERE block_time >= '2026-01-01'", Date.parse("2026-01-31T00:00:00Z")) === 30, "one absolute date spans to now");
+      ok(blockTimeRangeDays("SELECT 1 WHERE tx_signer = 'x'") === null, "no block_time: no range");
+      const wide = "SELECT instruction_name, COUNT(*) AS n FROM solana.instructions WHERE block_time > now() - INTERVAL 30 DAY AND tx_signer = 'x' GROUP BY instruction_name LIMIT 5";
+      const wideR = solanaRangeRefusal(wide);
+      ok(/covers about 30 days/.test(wideR) && /7 days or less/.test(wideR) && /100 GB/.test(wideR), `a 30-day Solana aggregate is refused with the week that works (${String(wideR).slice(0, 90)})`);
+      ok(solanaRangeRefusal(wide.replace("30 DAY", "7 DAY")) === null && solanaRangeRefusal(wide.replace("30 DAY", "14 DAY")) !== null, "a week is sent; two weeks are refused");
+      calls = [];
+      const rw = await tool("onchain-sql").handler({ sql: wide }).catch((x) => x);
+      ok(rw?.statusCode === 400 && rw?.hint === "narrow-block-time" && calls.length === 0, `the handler refuses it before any call with hint narrow-block-time (${rw?.statusCode}, calls ${calls.length})`);
       calls = [];
       const r = await tool("onchain-sql").handler({ sql: "SELECT executing_account, COUNT(*) AS n FROM solana.instructions GROUP BY executing_account" }).catch((x) => x);
       ok(r?.statusCode === 400 && r?.hint === "add-block-time" && /block_time > now\(\) - INTERVAL 1 DAY/.test(r.message) && calls.length === 0, `the handler refuses it before calling the query service (${r?.statusCode}, calls ${calls.length})`);
       calls = []; reply = () => new Promise((res) => setTimeout(() => res(J(502, {})), 60));
-      const s5 = await tool("onchain-sql").handler({ sql: "SELECT * FROM solana.instructions WHERE block_time > now() - INTERVAL 30 DAY" }).catch((x) => x);
+      const s5 = await tool("onchain-sql").handler({ sql: "SELECT * FROM solana.instructions WHERE block_time > now() - INTERVAL 7 DAY" }).catch((x) => x);
       ok(s5?.hint === "narrow-query" && /block_time range \(a week or less/.test(s5.message), `a Solana narrow-query answer names block_time (${String(s5?.message).slice(0, 120)})`);
     }
     // Control: a slow 502 on a query another reader runs (cdpSql) is still retried.

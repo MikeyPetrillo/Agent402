@@ -15,8 +15,10 @@ Tools:
   written. A query ending in a comment or a semicolon is accepted.
 - onchain-sql: a query on solana.instructions that filters, groups, orders
   or aggregates needs a block_time range and is refused before the call
-  (400, `hint: "add-block-time"`) with the clause to add; a bare sample or
-  count is sent.
+  (400, `hint: "add-block-time"`) with the clause to add; a range longer
+  than 7 days is refused before the call too (400, `hint:
+  "narrow-block-time"`), naming the week that fits the query service's
+  100 GB per-query read limit; a bare sample or count is sent.
 - onchain-sql: a result the query service cannot return is answered with
   how to narrow the query (`hint: "narrow-query"`): a 422 when the service
   answers a known-good query, a 502 when it does not. A buyer's query is
