@@ -1589,7 +1589,18 @@ function sellerToolVerdicts(detail) {
   const positiveUsd = (p) => { const n = priceUsdOf(p); return n != null && n > 0 ? n : null; };
   return detail.tools.map((t) => {
     const v = withDispatchFields({ ...t, seller: detail.origin, origin: detail.origin, routable: detail.routable, networks: Array.isArray(t.networks) && t.networks.length ? t.networks : detail.networks, priceUsd: positiveUsd(t.price), urlTemplate: /[{}]/.test(String(t.route || "")), payToByNetwork: detail.payToByNetwork, evmDomainByNetwork: detail.evmDomainByNetwork }, { rowLevel: true });
-    return { ...t, routerDispatchEligible: v.routerDispatchEligible, routerDispatchReason: v.routerDispatchReason, routerDispatchByChain: v.routerDispatchByChain };
+    // The affordance fields travel with the verdict: a row the router pays
+    // now (proven, or the unproven lane) says so, a row it would pay once the
+    // seller proves out says that, as the route rows do (2026-11-03: a
+    // seller read its own rows, saw no executeViaCallableNow, and asked).
+    const { executeVia, executeViaCallableNow, executeViaLane, executeViaWhenEligible } = v;
+    return {
+      ...t, routerDispatchEligible: v.routerDispatchEligible, routerDispatchReason: v.routerDispatchReason, routerDispatchByChain: v.routerDispatchByChain,
+      ...(executeVia !== undefined ? { executeVia } : {}),
+      ...(executeViaWhenEligible !== undefined ? { executeViaWhenEligible } : {}),
+      ...(executeViaCallableNow !== undefined ? { executeViaCallableNow } : {}),
+      ...(executeViaLane !== undefined ? { executeViaLane } : {}),
+    };
   });
 }
 // One seller row of a page's snapshot, labelled (the host's own row is not).

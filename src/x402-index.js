@@ -8369,6 +8369,10 @@ export function sellerDetail(originOrHost) {
         tags: Array.isArray(t.tags) && t.tags.length ? t.tags : undefined,
         price: t.price ?? null,
         ...priceKnownProjection(t),
+        // The route-execute tier that covers this row's price, as the route
+        // rows carry it: the seller view turns it into the same callable-now
+        // or when-eligible affordance, so the two surfaces never disagree.
+        ...(routeExecuteHint(parsePrice(t.price)) ? { executeVia: routeExecuteHint(parsePrice(t.price)) } : {}),
       ...priceConflictProjection(t),
         ...urlTemplateProjection(t),
         ...(t.paid !== undefined ? { paid: t.paid } : {}),
