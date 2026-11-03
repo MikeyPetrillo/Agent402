@@ -10,6 +10,8 @@
 // fresh read (at most one per MISS_REFRESH_MS), so a model the upstream has
 // just listed is served within a minute of its first request.
 // MODEL_CATALOG_URL points the read elsewhere (a test stub).
+import { OPENROUTER_ATTRIBUTION } from "./openrouter-attribution.js";
+
 const catalogUrl = () => process.env.MODEL_CATALOG_URL || "https://openrouter.ai/api/v1/models";
 const MIN_ENTRIES = 100;
 const REFRESH_MS = 10 * 60_000;
@@ -23,7 +25,7 @@ let inflight = null;
 /** One read of the live list. Answers true (read), false (unreadable). */
 export async function refreshModelCatalog({ fetchImpl = globalThis.fetch, now = Date.now() } = {}) {
   try {
-    const res = await fetchImpl(catalogUrl(), { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(15_000) });
+    const res = await fetchImpl(catalogUrl(), { headers: { ...OPENROUTER_ATTRIBUTION, Accept: "application/json" }, signal: AbortSignal.timeout(15_000) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const j = await res.json();
     const ids = Array.isArray(j?.data) ? j.data.map((m) => String(m?.id || "").toLowerCase()).filter(Boolean) : [];
