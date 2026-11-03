@@ -137,7 +137,11 @@ export function redactLiterals(text) {
 // pattern was quadratic on an unclosed string of escaped quotes). An
 // identifier in double quotes or backticks is one token, so a quote or a
 // comment marker inside it is neither a string nor a comment.
-const SQL_TOKENS = /('(?:[^'\\]|\\.)*(?:'|$))|("(?:[^"\\]|\\.)*(?:"|$)|`(?:[^`\\]|\\.)*(?:`|$))|(\/\*[\s\S]*?(?:\*\/|$)|--[^\n]*|#[^\n]*)/g;
+// A literal that never closes runs to the end of input; a lone backslash as
+// its last character is taken by the `\\?` so the run ends there too, else
+// every quote position would rescan to the end (quadratic, measured 5 s on
+// 60,000 characters of escaped quotes ending in a backslash).
+const SQL_TOKENS = /('(?:[^'\\]|\\.)*\\?(?:'|$))|("(?:[^"\\]|\\.)*\\?(?:"|$)|`(?:[^`\\]|\\.)*\\?(?:`|$))|(\/\*[\s\S]*?(?:\*\/|$)|--[^\n]*|#[^\n]*)/g;
 export function sqlCode(sql) {
   return String(sql || "").replace(SQL_TOKENS, (m, str, ident) => (str ? "'" + "_".repeat(Math.max(0, m.length - 2)) + m[m.length - 1].replace(/[^']/, "'") : ident ? m : m.replace(/[^\n]/g, " ")));
 }
@@ -500,7 +504,7 @@ export function blockTimeRangeDays(sql, now = Date.now()) {
   if (!/\bblock_time\b/i.test(q)) return null;
   // Any OR in the query: a bound may not narrow it, so no range is read.
   if (/\bor\b/i.test(sqlCode(sql))) return null;
-  // Each piece is bounded in length, so the reads stay linear on a 10 KB query.
+  // Each piece is bounded in length, so the reads stay linear on a query at the cap.
   const OPERAND = String.raw`('(?:[^'\\]|\\.){0,80}'|[^'()\s,]{1,60}(?:\s*\(\s*\)\s*-\s*interval\s+'?\d{1,9}'?\s*[a-z]{1,10}|\s{0,8}\((?:[^()]|\([^()]{0,80}\)){0,120}\))?(?:\s*-\s*\d{1,9})?|\((?:[^()]|\([^()]{0,80}\)){0,160}\))`;
   let lo = null, hi = null;
   const take = (which, v) => { if (v === null) return; if (which === "lo") lo = lo === null ? v : Math.max(lo, v); else hi = hi === null ? v : Math.min(hi, v); };
@@ -892,7 +896,7 @@ export const CDP_TOOLS = [
       input: { sql: "SELECT COUNT(*) AS txs FROM base.transactions WHERE block_number > 0 LIMIT 1" },
       inputSchema: {
         properties: {
-          sql: { type: "string", description: "Read-only SELECT (ClickHouse dialect, max 60,000 chars). Tables: base.events, base.transactions, base.blocks, base.encoded_logs, base.decoded_user_operations, base.transaction_attributions, base_sepolia.*, solana.instructions (a query that filters, groups or aggregates it needs a block_time range; a day answers in seconds, and a longer range may read past the query service's 100 GB per-query limit). Returns up to 1,000 rows; a larger result is cut and marked truncated." },
+          sql: { type: "string", description: `Read-only SELECT (ClickHouse dialect, max ${SQL_MAX_CHARS.toLocaleString("en-US")} chars). Tables: base.events, base.transactions, base.blocks, base.encoded_logs, base.decoded_user_operations, base.transaction_attributions, base_sepolia.*, solana.instructions (a query that filters, groups or aggregates it needs a block_time range; a day answers in seconds, and a longer range may read past the query service's 100 GB per-query limit). Returns up to 1,000 rows; a larger result is cut and marked truncated.` },
           cacheSeconds: { type: "number", description: "Accept cached results up to this old (max 900). Cheaper + faster for repeated analytics." },
         },
         required: ["sql"],

@@ -473,6 +473,7 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
       {
         const { SQL_MAX_CHARS, sqlCode, hasOuterOrderBy, solanaRangeRefusal } = await import("../src/tools/cdp-kit.js");
         ok(SQL_MAX_CHARS === 60_000, "the SQL length cap is the measured one");
+        ok(new RegExp(`max ${SQL_MAX_CHARS.toLocaleString("en-US")} chars`).test(tool("onchain-sql").discovery.inputSchema.properties.sql.description), "the tool description states the cap from the constant");
         const realFetchL = globalThis.fetch; let sentL = 0;
         globalThis.fetch = async () => { sentL++; return J(200, { result: [{ x: 1 }] }); };
         try {
@@ -482,11 +483,13 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
           const over = await sqlRun(longOk + "x".repeat(SQL_MAX_CHARS - longOk.length + 1)).catch((x) => x);
           ok(over?.statusCode === 400 && /too long/.test(over.message) && /max 60,000/.test(over.message) && sentL === 1, `one past the cap is refused before any call (${over?.message?.slice(0, 60)})`);
         } finally { globalThis.fetch = realFetchL; }
-        const hostile = ["'" + "\\'".repeat(SQL_MAX_CHARS / 2), "(".repeat(SQL_MAX_CHARS), "(SELECT ".repeat(Math.floor(SQL_MAX_CHARS / 8)), "limit ".repeat(SQL_MAX_CHARS / 6), "/**/".repeat(SQL_MAX_CHARS / 4)];
+        const hostile = ["'" + "\\'".repeat(SQL_MAX_CHARS / 2), "(".repeat(SQL_MAX_CHARS), "(SELECT ".repeat(Math.floor(SQL_MAX_CHARS / 8)), "limit ".repeat(SQL_MAX_CHARS / 6), "/**/".repeat(SQL_MAX_CHARS / 4),
+          // An unterminated literal of escaped quotes ending in a lone backslash: the shape that was quadratic.
+          "SELECT 1 FROM solana.instructions WHERE block_time >= \"" + "\\\"".repeat(SQL_MAX_CHARS / 2 - 40) + "\\", "'" + "\\'".repeat(SQL_MAX_CHARS / 2 - 1) + "\\", "`" + "\\`".repeat(SQL_MAX_CHARS / 2 - 1) + "\\"];
         const t0 = performance.now();
         for (const h of hostile) { sqlCode(h); subqueryDepth(h); cappedSql(h); hasOuterOrderBy(h); solanaRangeRefusal(h); }
         const took = performance.now() - t0;
-        ok(took < 250, `the query readers stay linear on five hostile queries at the cap (${took.toFixed(0)} ms)`);
+        ok(took < 400, `the query readers stay linear on eight hostile queries at the cap (${took.toFixed(0)} ms)`);
       }
       ok(cappedSql(deep + " LIMIT" + " ".repeat(60) + "5000").sql === deep + " LIMIT" + " ".repeat(60) + String(SQL_MAX_ROWS + 1) && cappedSql(deep + " LIMIT\n\n  5000").sql === deep + ` LIMIT\n\n  ${SQL_MAX_ROWS + 1}`, "a count far from its LIMIT (spaces, lines) is still the outer LIMIT");
       const expr = cappedSql(deep + " LIMIT (5000)");
