@@ -1,11 +1,15 @@
 // The replay guard while its shared store is configured but unreachable, on
-// the real server, as two containers would run it: TWO servers boot with a
-// REDIS_URL naming a local port nothing listens on. Every paid route (a
-// long-running one and a fast one alike) is refused with a 503 and
-// Retry-After before any payment is verified or settled, so one signed
-// payment sent to both containers at once runs nowhere and reaches the
-// facilitator zero times (a per-process claim would let each container run
-// the handler and send it to the facilitator). Controls: the same kind of
+// the real server, as two containers would run it: TWO servers configured as
+// two replicas boot with a REDIS_URL naming a local port nothing listens on.
+// Every paid route (a long-running one and a fast one alike) is refused with
+// a 503 and Retry-After before any payment is verified or settled, so one
+// signed payment sent to both containers at once runs nowhere and reaches
+// the facilitator zero times (a per-process claim would let each container
+// run the handler and send it to the facilitator). A single container
+// (src/replay-topology.js) refuses a fast route only inside its deploy
+// overlap window; past it a fast route is served on the per-process claim,
+// so a store outage does not stop sales, and a long-running route is still
+// refused. Controls: the same kind of
 // payment is served and settled once by a server with NO shared store
 // configured (one process: the per-process claim is the guarantee), and,
 // when the caller provides a real REDIS_URL, two servers sharing that Redis
@@ -21,7 +25,7 @@ import { getFreePorts } from "./lib/free-port.js";
 import { isLongRunningSlug } from "../src/composite-spend-guard.js";
 
 const LIVE_REDIS = String(process.env.REDIS_URL || "").trim();
-const [PORT_A, PORT_B, PORT_C, PORT_D, PORT_E, FAC_PORT, DEAD_REDIS] = await getFreePorts(7);
+const [PORT_A, PORT_B, PORT_C, PORT_D, PORT_E, FAC_PORT, DEAD_REDIS, PORT_F, PORT_G] = await getFreePorts(9);
 const PAYER = "0x" + "4".repeat(40);
 const TMP = mkdtempSync(join(tmpdir(), "replay-outage-"));
 let pass = 0, failed = 0;
@@ -76,15 +80,18 @@ const acceptOf = (r) => {
 };
 const routeOf = (e) => { const [method, path] = String(e.route || `${e.method || "GET"} ${e.path || ""}`).split(" "); return { method, path }; };
 
-const A = boot(PORT_A, "a", `redis://127.0.0.1:${DEAD_REDIS}`);
-const Bsrv = boot(PORT_B, "b", `redis://127.0.0.1:${DEAD_REDIS}`);
+const A = boot(PORT_A, "a", `redis://127.0.0.1:${DEAD_REDIS}`, { RATE_LIMIT_REPLICAS: "2" });
+const Bsrv = boot(PORT_B, "b", `redis://127.0.0.1:${DEAD_REDIS}`, { RATE_LIMIT_REPLICAS: "2" });
+// One replica past its deploy overlap window, and one still inside it.
+const F = boot(PORT_F, "f", `redis://127.0.0.1:${DEAD_REDIS}`, { RATE_LIMIT_REPLICAS: "1", STATE_DB_REPLICAS: "", DEPLOY_OVERLAP_SECONDS: "0" });
+const G = boot(PORT_G, "g", `redis://127.0.0.1:${DEAD_REDIS}`, { RATE_LIMIT_REPLICAS: "1", STATE_DB_REPLICAS: "", DEPLOY_OVERLAP_SECONDS: "3600" });
 const C = boot(PORT_C, "c", "");
 const prefix = `outage-${process.pid}-${randomBytes(4).toString("hex")}`;
 const D = LIVE_REDIS ? boot(PORT_D, "d", LIVE_REDIS, { SHARED_LIMITS_PREFIX: prefix }) : null;
 const E = LIVE_REDIS ? boot(PORT_E, "e", LIVE_REDIS, { SHARED_LIMITS_PREFIX: prefix }) : null;
 
 try {
-  const ups = await Promise.all([A, Bsrv, C, D, E].filter(Boolean).map(waitUp));
+  const ups = await Promise.all([A, Bsrv, C, D, E, F, G].filter(Boolean).map(waitUp));
   ok(ups.every(Boolean), `every server booted (two with an unreachable shared store, one with none${LIVE_REDIS ? ", two on the live Redis" : ""})`);
   if (!ups.every(Boolean)) { for (const [name, log] of logs) for (const l of log.slice(-12)) console.error(`  server ${name}:`, l); throw new Error("a server did not boot"); }
   const pricing = await (await fetch(`${A}/api/pricing`)).json();
@@ -109,6 +116,14 @@ try {
     const upper = await fetch(`${A}${path.toUpperCase()}/`, { method, headers: { "content-type": "application/json", prefer: "wait=600", "payment-signature": credential(accept || {}) }, body: "{}" });
     const ub = await upper.json().catch(() => ({}));
     ok(upper.status === 503 && ub.reason === "replay-store-unavailable" && verifies === v1 && settles === s1, `the same call on ${path.toUpperCase()}/ is refused the same way (${upper.status} ${ub.reason || ub.error || ""})`);
+    // A single container past its overlap window still refuses a long-running
+    // route: its run outlives the window.
+    const unpaidF = await fetch(`${F}${path}`, { method, headers: { "content-type": "application/json", prefer: "wait=600" }, body: "{}" });
+    const acceptF = acceptOf(unpaidF);
+    const v2 = verifies;
+    const rF = await fetch(`${F}${path}`, { method, headers: { "content-type": "application/json", prefer: "wait=600", "payment-signature": credential(acceptF || {}) }, body: "{}" });
+    const bF = await rF.json().catch(() => ({}));
+    ok(rF.status === 503 && bF.reason === "replay-store-unavailable" && verifies === v2, `one container past its window: a long-running route is still refused (${rF.status} ${bF.reason || ""})`);
   }
 
   // A fast route: one signed payment sent to BOTH containers at once.
@@ -139,6 +154,21 @@ try {
     const againC = await send(C, { "payment-signature": credC });
     ok(againC.status !== 200 || againC.headers.get("x-replayed-answer") === "1", `control: the same payment does not buy a second run there (${againC.status})`);
     ok(settles === c0 + 1, "control: and is not settled again");
+
+    // One container past its overlap window: the fast route is served on the
+    // per-process claim (a store outage does not stop sales), once.
+    const credF = credential(accept || {});
+    const f0 = settles;
+    const rf = await send(F, { "payment-signature": credF });
+    ok(rf.status === 200 && settles === f0 + 1, `one container, store out, past the overlap window: the fast route is served and settled once (${rf.status}, settle +${settles - f0})`);
+    const againF = await send(F, { "payment-signature": credF });
+    ok((againF.status !== 200 || againF.headers.get("x-replayed-answer") === "1") && settles === f0 + 1, `and the same payment buys no second run there (${againF.status})`);
+    // ...while inside the window (an old container may still serve) it is refused.
+    const credG = credential(accept || {});
+    const g0 = verifies;
+    const rg = await send(G, { "payment-signature": credG });
+    const bg = await rg.json().catch(() => ({}));
+    ok(rg.status === 503 && bg.reason === "replay-store-unavailable" && verifies === g0, `one container inside its deploy overlap window: refused before any verify (${rg.status} ${bg.reason || ""})`);
 
     // Live control: two servers on one reachable Redis serve one payment
     // sent to both at once exactly once.

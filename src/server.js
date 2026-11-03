@@ -60,6 +60,7 @@ import {
 import { payerFromRequest, payerFromPaymentResponse, paymentHeaderOf } from "./payer.js";
 import { paidPriceUsd, quotedOnNetworkUsd, ticketPriceUsd } from "./paid-price.js";
 import { runInAbortableScope, abortInFlightComposites, installDrainAwareFetch, isDrainAbort, drainSignal } from "./drain-abort.js";
+import { sharedClaimRequired } from "./replay-topology.js";
 import { startSolanaLeaderboard, getSolanaLeaderboardSnapshot, solanaEvidenceByOrigin, SOLANA_WINDOWS, checkpointSolanaLeaderboard } from "./solana-leaderboard.js";
 import { creditFromTx as solanaCreditFromTx } from "./solana-buyer.js";
 import { historyAwareRpc, solanaHistoryStatus } from "./solana-history-rpc.js";
@@ -10483,15 +10484,18 @@ if (FREE_MODE) {
     // challenges, discovery crawls) return a null key and are never guarded.
     const replayKey = paymentReplayKey(req);
     if (replayKey) {
-      // Every paid route needs the shared claim: with the shared store
-      // configured but unreachable the call is refused here, before any
-      // payment is verified or settled, rather than claimed on this replica
-      // alone. A per-process claim on two containers lets one signed payment
-      // run the handler on each and reach the facilitator twice; only the
-      // chain's nonce and the later settlement checks would then stand
-      // between the second run and a second answer. With no shared store
-      // configured (one process) the per-process claim is the guarantee.
-      const verdict = await replayGuard.begin(replayKey, undefined, { requireShared: true });
+      // The shared claim is required whenever another container may be
+      // serving (src/replay-topology.js: more than one replica, a deploy's
+      // overlap window, a drain) and always on a long-running route: with the
+      // shared store configured but unreachable the call is refused here,
+      // before any payment is verified or settled. A per-process claim on two
+      // containers would let one signed payment run the handler on each. With
+      // one container, or no shared store, the per-process claim is the
+      // guarantee and a store outage does not stop sales.
+      const replayDef = CATALOG[`${req.method} ${req.path}`];
+      const verdict = await replayGuard.begin(replayKey, undefined, {
+        requireShared: sharedClaimRequired({ longRunning: !!replayDef && isLongRunningSlug(replayDef.slug), draining: drainSignal().aborted }),
+      });
       if (verdict === "unavailable") {
         res.setHeader("Retry-After", "30");
         return res.status(503).json({

@@ -259,9 +259,11 @@ heartbeat page on it under one issue that closes when nothing is owed.
 - **Replay guard:** `src/replay-guard.js` claims a payment credential (x402 nonce, Tempo, Stripe)
   in Redis while its call runs; the claim is renewed every 30 s until settle or release, so a
   route that outlives the claim's expiry cannot run twice on one payment. With Redis configured
-  but unreachable, a long-running or composite route (`isLongRunningSlug`) is refused 503 with
-  `Retry-After` before any payment is taken (x402 dispatcher and card gate); fast routes fall back
-  to a per-process claim.
+  but unreachable, a paid call is refused 503 with `Retry-After` before any payment is taken (x402
+  dispatcher and card gate) on a long-running or composite route (`isLongRunningSlug`), and on any
+  route while another container may be serving (`src/replay-topology.js`: more than one replica
+  configured, inside `DEPLOY_OVERLAP_SECONDS` of boot, default 120, or draining); a lone container
+  past that window serves fast routes on a per-process claim, so a store outage does not stop sales.
 - **Per-chain price floors:** `src/network-floors.js`. Every accept is priced through
   `priceForNetwork` (`src/payments.js`: list or per-request quote, plus the chain's
   `NETWORK_PRICE_PREMIUMS` premium, raised to its floor). eip155:4663 has a static floor

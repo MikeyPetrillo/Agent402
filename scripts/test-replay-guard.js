@@ -259,7 +259,7 @@ function memoryRedis() {
   const { readFileSync } = await import("node:fs");
   const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   ok(server.includes("replayGuard.settle(replayKey, undefined, { validBeforeMs: paymentValidBeforeMs(req) })"), "server.js holds a granted x402 payment's consumed mark until its validBefore");
-  ok(server.includes("await replayGuard.begin(replayKey, undefined, { requireShared: true })"), "server.js requires the shared claim on every paid x402 route");
+  ok(/requireShared: sharedClaimRequired\(\{ longRunning: !!replayDef && isLongRunningSlug\(replayDef\.slug\), draining: drainSignal\(\)\.aborted \}\)/.test(server), "server.js requires the shared claim on a long-running route and whenever another container may serve (src/replay-topology.js)");
 }
 
 // ---- A5. Payer- and network-scoped keys on the Redis path, and the deploy
