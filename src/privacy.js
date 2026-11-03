@@ -188,7 +188,10 @@ so every claim below is verifiable in code.</p>
   code reads these fields of a payment: the signed payer wallet address (already public on-chain), the
   scheme and network it settles on, the optional <code>payment-identifier</code> (used as an idempotency key
   and kept with the cached answer for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes), the payment's nonce and network (as an
-  idempotency key for a re-sent payment, held with the cached answer for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes), the signers of a Solana payment (stored only
+  idempotency key for a re-sent payment, held with the cached answer for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes), a digest of the payment's
+  network, signed payer and nonce as a replay mark (kept about an hour after a settled call; for a forgiven
+  hang-up whose authorization could still be settled, until the authorization's validBefore plus 10 minutes),
+  the signers of a Solana payment (stored only
   as a keyed hash), the source address of a Tempo credential, the payer the settlement receipt names, and,
   on a refused payment, the resource URL it names (see telemetry above). The optional description and
   <code>reason</code> annotation fields are not read, logged or retained. The machine-readable list is in

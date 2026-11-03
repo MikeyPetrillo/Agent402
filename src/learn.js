@@ -155,7 +155,7 @@ export const LEARN = [
         { code: X402_CLIENT },
       ]],
       ["What happens when a call fails", [
-        P(`On this server the tool runs before settlement, and settlement completes only for a successful response. An error, a timeout or an upstream failure cancels the payment, so nothing moves. You can check it from the response you hold: no ${C("PAYMENT-RESPONSE")} header means you were not charged on x402. One exception: a transfer that lands after a timed-out settle, or a disconnect during settle, is booked as a refund owed and repaid after on-chain proof. Send an ${C("Idempotency-Key")} header and a retry of a call that was already served and paid replays the first answer.`),
+        P(`On this server the tool runs before settlement, and settlement completes only for a successful response. An error, a timeout or an upstream failure cancels the payment, so nothing moves. You can check it from the response you hold: no ${C("PAYMENT-RESPONSE")} header means you were not charged on x402. One exception: a transfer that lands after a timed-out settle, a disconnect during settle, or a settle the facilitator answered as pending whose receipt was not read in time, is booked as a refund owed and repaid after on-chain proof. Send an ${C("Idempotency-Key")} header and a retry of a call that was already served and paid replays the first answer.`),
       ]],
     ],
     links: [["/what-is-x402", "What is x402? (the full explainer)"], ["/x402-test", "Test your x402 client against a real 402"], ["/guides/x402-in-5-minutes", "x402 in 5 minutes"], ["/integrations/client", "agent402-client"], ["/tools/hash", "hash, the tool in the example"]],

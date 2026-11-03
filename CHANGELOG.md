@@ -6,6 +6,59 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-03 (replay claims at a deploy, pending settles explained, sweeps follow jobs)
+Payments:
+- While another container may be serving (more than one replica configured,
+  the first 120 seconds after a container starts serving, set by
+  `DEPLOY_OVERLAP_SECONDS`, or a drain), a paid call on any route answers 503
+  with Retry-After when the shared payment store does not answer, before any
+  payment is verified or settled. A lone container past that window serves
+  fast routes on its own claim, so a store outage does not stop sales; a
+  long-running route needs the shared store as before.
+- A re-sent x402 payment is matched by its network, signed payer and nonce,
+  so two wallets or two networks signing the same nonce are two payments;
+  marks an earlier build wrote are still honored across a deploy.
+- A settle fallback that answers pending with a transaction is read on chain
+  like the primary's, and the call is served once the transfer to us is
+  proven. When no noted transaction is confirmed in time, the 402 says so:
+  reason `settlement-unconfirmed`, retry `watch-transaction`, the network and
+  the transactions to watch, and that a transfer which still lands is booked
+  as owed and repaid after on-chain proof. Listed on /x402-test; the
+  no-receipt exception on /agents.md, /llms-full.txt and the guides names
+  this case beside a timed-out settle and a disconnect during settle.
+- A buyer whose connection closes while its settlement is already in flight
+  spends no hang-up forgiveness budget: the log reads SETTLE UNCONFIRMED (a
+  late transfer is booked as owed) in place of NOT CHARGED, and SETTLE
+  WITHHELD when no settlement was sent.
+- The privacy page says the replay mark is a digest of the payment's network,
+  signed payer and nonce, and how long it is kept.
+Tools:
+- An upstream read that would start with under 5 ms of its budget is refused
+  as the budget's deadline before any request leaves, instead of leaving with
+  a cap too small to use.
+Surfaces:
+- A seller's own rows on `/api/index?seller=` carry the same `executeVia`
+  fields as route rows (callable now, its lane, or when it becomes eligible).
+- html-frames' published example fits its 402 whole; a paid sweep that meets
+  an example the 402 shortened replays the full one from /openapi.json
+  instead of the placeholder.
+Operations:
+- The Bazaar keep-alive sweep follows a slow route to its settlement: a route
+  that refuses a synchronous paid call is called again with `Prefer:
+  respond-async` and its job polled at the Retry-After it names until it
+  succeeds or fails. A failed job's status and body are read from its error,
+  and it is never retried as a second paid job.
+- The deploy job validates the new build's flagship Bazaar listings after the
+  deploy is verified, keyless, up to three runs a minute apart: a clean run
+  passes, an INVALID run with no clean run fails the job, and three unreadable
+  runs warn.
+- Every shared-store wait (the hang-up ticket, the per-payer spend reserve,
+  journals, idempotency, the first-call store, the shared market-data and
+  geocoding reads, the cache, the database ping, lease release, the shared
+  limiters) counts loop time, so an answer that landed while the loop was
+  held is read before the deadline expires instead of being booked as a store
+  that did not answer.
+
 ### 2026-11-03 (onchain-sql, metered chat, seller registration)
 Payments:
 - The Tempo gate and the card gate require the shared replay claim on the

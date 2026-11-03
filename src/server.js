@@ -60,7 +60,7 @@ import {
 import { payerFromRequest, payerFromPaymentResponse, paymentHeaderOf } from "./payer.js";
 import { paidPriceUsd, quotedOnNetworkUsd, ticketPriceUsd } from "./paid-price.js";
 import { runInAbortableScope, abortInFlightComposites, installDrainAwareFetch, isDrainAbort, drainSignal } from "./drain-abort.js";
-import { sharedClaimRequired } from "./replay-topology.js";
+import { sharedClaimRequired, markListening } from "./replay-topology.js";
 import { startSolanaLeaderboard, getSolanaLeaderboardSnapshot, solanaEvidenceByOrigin, SOLANA_WINDOWS, checkpointSolanaLeaderboard } from "./solana-leaderboard.js";
 import { creditFromTx as solanaCreditFromTx } from "./solana-buyer.js";
 import { historyAwareRpc, solanaHistoryStatus } from "./solana-history-rpc.js";
@@ -11761,6 +11761,9 @@ revenueAllTime({ awaitRebuild: true }).then((t) => { if (!__settledMemo.at) stor
 await Promise.race([ledgerFiguresBoot, new Promise((ok) => setTimeout(ok, LEDGER_FIGURES_BOOT_WAIT_MS).unref())]);
 const httpServer = app.listen(PORT, () => {
   listenedAt = Date.now();
+  // The deploy overlap window (src/replay-topology.js) is counted from here,
+  // not from the first import: a slow store load must not spend it.
+  markListening(listenedAt);
   // The bound port, so a PORT=0 boot (a test reading the port back) prints
   // the port the kernel assigned, not the 0 it asked with.
   const boundPort = httpServer.address()?.port ?? PORT;
