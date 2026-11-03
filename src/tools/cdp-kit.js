@@ -12,7 +12,7 @@
 //                            a shared per-account CDP budget)
 //   onramp-link      $0.001  single-use Coinbase Onramp URL that lets a human
 //                            fund an agent's wallet with a card / Apple Pay
-//   onchain-sql      $0.020  read-only ClickHouse-dialect SQL over Coinbase's
+//   onchain-sql      $0.050  read-only ClickHouse-dialect SQL over Coinbase's
 //                            indexed DECODED chain data (Base events/txs/
 //                            blocks/user-ops/builder-code attributions,
 //                            Solana token instructions) — no indexer to run
@@ -971,7 +971,7 @@ export const CDP_TOOLS = [
     name: "Onchain SQL (query Base with SQL)",
     slug: "onchain-sql",
     category: "wallet",
-    price: "$0.020",
+    price: "$0.050",
     description:
       "Run read-only SQL against indexed, DECODED blockchain data - base.events (decoded logs with parameters), base.transactions, base.blocks, base.decoded_user_operations, base.transaction_attributions (builder codes), plus solana.instructions (filter it by block_time). ClickHouse-dialect SELECTs, server-side grammar validation, up to 1,000 rows per call (a larger result is cut at 1,000 and says so). Ask Base anything - token flows, event analytics, gas studies - in one call, no indexer to run.",
     tags: [...SHARED_TAGS, "sql", "analytics", "onchain-data", "base", "events", "clickhouse", "data-science"],

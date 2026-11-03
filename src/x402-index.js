@@ -189,6 +189,7 @@ import { esc } from "./ledger-chrome.js";
 import { safeFetch, probePublicUrl } from "./tools/fetch-guard.js";
 import { readTextCapped } from "./capped-body.js";
 import { parseRobots, robotsAllows } from "./tools/kit.js";
+import { CDP_TOOLS } from "./tools/cdp-kit.js";
 import { partialFields, clampFields } from "./partial-answer.js";
 import { responseContractOf, packResponseContract, responseContractProjection } from "./response-contract.js";
 import { deliveryProjection } from "./response-observation.js";
@@ -9917,7 +9918,7 @@ export function economySectionHtml(snap, leaderboardSnap) {
   return `<div class="panel" id="economy">
   <div class="ph">
     <h2>The economy, over time</h2>
-    <div class="pn">Every gasless EIP-3009 USDC settlement on Base - the primitive x402 uses - counted chain-wide across every seller, not just Agent402's own catalog. Machine-readable at <a href="/api/x402-economy">/api/x402-economy</a>; same query any agent can buy as <a href="/tools/onchain-sql">onchain-sql</a> for $0.02.</div>
+    <div class="pn">Every gasless EIP-3009 USDC settlement on Base - the primitive x402 uses - counted chain-wide across every seller, not just Agent402's own catalog. Machine-readable at <a href="/api/x402-economy">/api/x402-economy</a>; same query any agent can buy as <a href="/tools/onchain-sql">onchain-sql</a> for ${esc(CDP_TOOLS.find((t) => t.slug === "onchain-sql")?.price || "its list price")}.</div>
   </div>
   <div style="padding:14px 18px;">
     <div class="grid" style="margin:0 0 14px;">
