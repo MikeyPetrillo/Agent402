@@ -439,8 +439,25 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
           sentR.length = 0;
           globalThis.fetch = async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sentR.push(q); if (sentR.length === 1) return J(500, {}); if (isMeasure(q)) return J(200, { result: [{ n: 5000, big: 2, maxRow: 70000 }] }); return J(200, { result: Array.from({ length: SQL_MAX_ROWS + 1 }, (_, i) => ({ i })) }); };
           const c = await sqlRun("SELECT i FROM base.blocks");
-          ok(c.recovered === "row-size" && c.rowCount === SQL_MAX_ROWS && c.truncated === true && c.complete === false && c.cutAt === SQL_MAX_ROWS && c.matched === 5000 && c.rowsOmitted === 2, `a filtered result past the cap is cut at ${SQL_MAX_ROWS} and marked (${c.rowCount}, truncated ${c.truncated})`);
-          ok(r.truncated === true && r.complete === false && r.matched === 22 && r.returned === 18 && r.cutAt === undefined, "an answer with omitted rows reads incomplete and truncated by the shared rule, with the exact match count");
+          ok(c.recovered === "row-size" && c.rowCount === SQL_MAX_ROWS && c.truncated === true && c.complete === false && c.cutAt === undefined && c.countsFromSeparateRun === undefined && c.matched === 5000 && c.rowsOmitted === 2 && /about 68 KB/.test(c.note), `a filtered result past the cap is cut at ${SQL_MAX_ROWS} and marked (${c.rowCount}, truncated ${c.truncated})`);
+          ok(r.truncated === true && r.complete === false && r.matched === 22 && r.returned === 18 && r.cutAt === undefined && r.countsFromSeparateRun === undefined && !/separate run/.test(r.note), "an answer with omitted rows reads incomplete and truncated by the shared rule, with the exact match count");
+          // The measure and the serving run disagree (a query with no ORDER BY):
+          // the match count is never below served plus omitted, and the answer
+          // says the counts came from a separate run.
+          sentR.length = 0;
+          globalThis.fetch = async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sentR.push(q); if (sentR.length === 1) return J(500, {}); if (isMeasure(q)) return J(200, { result: [{ n: 5, big: 4 }] }); return J(200, { result: fitRows }); };
+          const two = await sqlRun("SELECT ix, sk FROM solana.instructions WHERE block_time > now() - INTERVAL 1 DAY");
+          ok(two.recovered === "row-size" && two.matched === 22 && two.returned === 18 && two.rowsOmitted === 4 && two.complete === false && two.truncated === true && two.countsFromSeparateRun === true && /separate run/.test(two.note) && two.maxRowBytes === null && !/about NaN/.test(two.note) && /limit \(array and map/.test(two.note), `a measure that disagrees with the serving run never reads complete, is marked, and a missing maxRow leaves the note whole (matched ${two.matched}, complete ${two.complete}, marked ${two.countsFromSeparateRun})`);
+          // A refusal of the rewritten measure or filter is never logged as
+          // the buyer's failed query; the buyer's own instant 500 still is.
+          sentR.length = 0;
+          { const warnedR = []; const realWarnR = console.warn; console.warn = (m) => warnedR.push(String(m));
+            globalThis.fetch = async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sentR.push(q); if (sentR.length === 1) return J(500, {}); if (isMeasure(q)) return J(400, { errorMessage: "ROWSIZEMEASURE refused" }); return J(200, { result: Array.from({ length: SQL_RECOVER_ROWS }, (_, i) => ({ m: i, bals: "x".repeat(4000) })) }); };
+            const lg = await sqlRun("SELECT i, 'ROWSIZEBUYER' AS t FROM base.blocks");
+            console.warn = realWarnR;
+            const fails = warnedR.filter((w) => w.includes("failed buyer query"));
+            ok(lg.recovered === "result-size" && fails.length === 1 && fails[0].includes("ROWSIZEBUYER") && !fails.some((w) => w.includes("countIf(")), `the rewritten measure's refusal is not logged as a failed buyer query, the buyer's own 500 is (${fails.length} line, rewritten logged ${fails.some((w) => w.includes("countIf("))})`);
+          }
           // Every matching row over the limit: nothing to serve, so the re-run
           // path and its uncharged 422, never an empty 200.
           sentR.length = 0;
