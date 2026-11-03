@@ -245,8 +245,9 @@ ${meteredCurl(baseUrl)}
   \`PAYMENT-RESPONSE\` means nothing settled and a retry is safe; a
   \`PAYMENT-RESPONSE\` with \`success: false\` means x402 settlement was refused, you
   were not charged on x402, retry with a fresh authorization. One exception: a
-  transfer that lands after a timed-out settle, or a disconnect during settle, is
-  booked as a refund owed and repaid after on-chain proof.
+  transfer that lands after a timed-out settle, a disconnect during settle, or a
+  settle the facilitator answered as pending whose receipt was not read in time,
+  is booked as a refund owed and repaid after on-chain proof.
 - **400** - your input failed validation; the body says what to fix. Not charged on x402.
 - **413** - wallet-keyed memory quota full. Not charged on x402.
 - **502/503** - upstream or capacity failure. Not charged on x402 (settlement runs
