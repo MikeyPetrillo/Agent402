@@ -30,8 +30,40 @@ Payments:
   spends no hang-up forgiveness budget: the log reads SETTLE UNCONFIRMED (a
   late transfer is booked as owed) in place of NOT CHARGED, and SETTLE
   WITHHELD when no settlement was sent.
+- A settlement sent while the buyer was connected is a settlement outcome
+  whether or not the buyer stays: one that fails after the buyer closes
+  counts toward the wallet's settle breaker and the composite guard like one
+  whose buyer stayed, and one that succeeds records the sale beside the owed
+  charge. Before, a close timed into the settle call left the run bounded by
+  neither the breaker nor the forgiveness budget. The "settlement sent" mark
+  is now set where the charge leaves: a settle the first-call allowance
+  skipped or the authorization claim refused is never read as sent, so that
+  hang-up spends forgiveness budget as an abandoned run and feeds the
+  breaker nothing.
+- The Tempo gate and the card gate require the shared replay claim on the
+  same rule as the x402 dispatcher: on a long-running route always, and on
+  every route while another container may be serving (more than one
+  replica, a deploy's overlap window, a drain). With the shared store
+  configured but unreachable, a Tempo pull or push credential or a card
+  credential is then refused 503 with `Retry-After` before the handler
+  runs, before a push transfer is claimed and before a card is captured;
+  past the window a lone container serves on its per-process claim. Before,
+  both gates took a per-process claim on a store failure, so one credential
+  sent to two containers could run twice (a push transfer is already
+  final).
+- A settled payment's consumed mark in the replay guard keeps the guard's
+  default hold (one hour). Only a grant that was not settled (a hang-up
+  the forgiveness budget forgave, a first-call allowance) is held to the
+  authorization's own `validBefore` plus a margin, since that
+  authorization is still live on chain. Before, every settled call was
+  held to its `validBefore`, one long-lived key per paid call for a client
+  signing long validity windows.
 - The privacy page says the replay mark is a digest of the payment's network,
-  signed payer and nonce, and how long it is kept.
+  signed payer and nonce, and how long it is kept: about an hour after a
+  settled call, and for a grant that was not settled (a forgiven hang-up, a
+  served first-call allowance) until the authorization's own validBefore
+  plus ten minutes. The `readsOnly` list under `payment.dataHandling` on
+  /.well-known/x402 names the same mark with the same hold.
 Tools:
 - An upstream read that would start with under 5 ms of its budget is refused
   as the budget's deadline before any request leaves, instead of leaving with
@@ -58,32 +90,12 @@ Operations:
   limiters) counts loop time, so an answer that landed while the loop was
   held is read before the deadline expires instead of being booked as a store
   that did not answer.
-
-### 2026-11-03 (onchain-sql, metered chat, seller registration)
-Payments:
-- The Tempo gate and the card gate require the shared replay claim on the
-  same rule as the x402 dispatcher: on a long-running route always, and on
-  every route while another container may be serving (more than one
-  replica, a deploy's overlap window, a drain). With the shared store
-  configured but unreachable, a Tempo pull or push credential or a card
-  credential is then refused 503 with `Retry-After` before the handler
-  runs, before a push transfer is claimed and before a card is captured;
-  past the window a lone container serves on its per-process claim. Before,
-  both gates took a per-process claim on a store failure, so one credential
-  sent to two containers could run twice (a push transfer is already
-  final).
-- A settled payment's consumed mark in the replay guard keeps the guard's
-  default hold (one hour). Only a grant that was not settled (a hang-up
-  the forgiveness budget forgave, a first-call allowance) is held to the
-  authorization's own `validBefore` plus a margin, since that
-  authorization is still live on chain. Before, every settled call was
-  held to its `validBefore`, one long-lived key per paid call for a client
-  signing long validity windows.
-Operations:
 - The revenue snapshot's boot warm-ups (a scan of every rail over public
   chain RPCs) are off under `X402_INDEX_CRAWL=off`, `X402_SYNC_ON_START=false`
   or `REVENUE_WARMUP=off`; before, two of them ran on every boot that
   configured a wallet, test boots included.
+
+### 2026-11-03 (onchain-sql, metered chat, seller registration)
 Router and index:
 - Self-serve seller registration holds 4,000 submission slots (was 2,000,
   which filled with live sellers), set by `INDEX_MAX_SUBMITTED_SEEDS`. A
@@ -142,17 +154,6 @@ Tools:
 - The metered chat route refuses a model id missing from the upstream's
   live chat model list with a 400 before payment, naming the nearest ids it
   serves (a model with a same-family successor is still served).
-Payments:
-- A settlement sent while the buyer was connected is a settlement outcome
-  whether or not the buyer stays: one that fails after the buyer closes
-  counts toward the wallet's settle breaker and the composite guard like one
-  whose buyer stayed, and one that succeeds records the sale beside the owed
-  charge. Before, a close timed into the settle call left the run bounded by
-  neither the breaker nor the forgiveness budget. The "settlement sent" mark
-  is now set where the charge leaves: a settle the first-call allowance
-  skipped or the authorization claim refused is never read as sent, so that
-  hang-up spends forgiveness budget as an abandoned run and feeds the
-  breaker nothing.
 
 ### 2026-11-02 (agent front door)
 Surfaces:
