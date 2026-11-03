@@ -389,11 +389,7 @@ export async function runMissingMode({ sweep = false } = {}) {
           if (i % 50 === 0 || i === missing.length - 1 || res.job) console.log(`  [${i + 1}/${missing.length}] OK ${key} (${t.price})${res.job ? " as a job" : ""}`);
           break;
         }
-        // 402 = facilitator hiccup (settlement timeout); retry after a pause.
-        // 502/503/504 = upstream flap; also worth retrying.
-        // A failure that came through a job is not retried: a second try would
-        // open a second paid job for the same route.
-        if ((res.status === 402 || res.status >= 502) && attempt < 2 && !res.job && !res.note) {
+        if (retryable(res, attempt)) {
           console.warn(`  RETRY ${key} → HTTP ${res.status} (attempt ${attempt + 1}/3, waiting 5s)`);
           await new Promise((r) => setTimeout(r, 5000));
           continue;
@@ -493,6 +489,17 @@ export function missingModeVerdict({ failCount, okCount, stillMissingPaths, boug
     exitCode: 1,
     message: `${failCount} buy(s) FAILED (plus ${unpaid.length} route(s) left unpaid by the caps, which is expected).`,
   };
+}
+
+/** Whether a buy loop sends the same paid call again after buyOnce's answer:
+ *  a 402 (a facilitator hiccup, a settlement timeout) or a 5xx from the route
+ *  (an upstream flap), inside the three attempts, and never a failure that
+ *  came through a job or that buyOnce explained in a note: the job already
+ *  paid for the route, and a second try would open a second paid job for it.
+ *  Both buy loops (the sweep and the paid refresh) decide through this one
+ *  function; scripts/test-bazaar-verdict.js pins it. */
+export function retryable(res, attempt) {
+  return (res.status === 402 || res.status >= 502) && attempt < 2 && !res.job && !res.note;
 }
 
 /** One paid call, as the sweep needs it: the route's own answer, or, for a
@@ -630,7 +637,7 @@ async function main() {
           results.ok++;
           break;
         }
-        if ((res.status === 402 || res.status >= 502) && attempt < 2 && !res.job && !res.note) {
+        if (retryable(res, attempt)) {
           console.warn(`  RETRY ${method} ${meta.path} → HTTP ${res.status} (attempt ${attempt + 1}/3, waiting 5s)`);
           await new Promise((r) => setTimeout(r, 5000));
           continue;

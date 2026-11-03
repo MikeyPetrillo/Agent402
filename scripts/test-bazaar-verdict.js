@@ -9,7 +9,8 @@
 // teaches people to ignore it.
 //
 // Run: node scripts/test-bazaar-verdict.js
-import { missingModeVerdict, buyOnce } from "./refresh-bazaar.js";
+import { readFileSync } from "node:fs";
+import { missingModeVerdict, buyOnce, retryable } from "./refresh-bazaar.js";
 
 let pass = 0, fail = 0;
 const check = (name, cond) => {
@@ -113,6 +114,21 @@ const check = (name, cond) => {
   let t = 0; const stuckFetch = async () => R(200, { state: "running", pollIntervalSeconds: 1 });
   const stuck = await buyOnce(payFetch, "https://t.example/api/decide/execute", { method: "POST", headers: {}, body: "{}" }, { plainFetch: stuckFetch, target: "https://t.example", sleep: async (ms) => { t += ms; }, now: () => t });
   check("a job past its budget is given up as a 504 with the budget named, after the budget plus a minute", stuck.status === 504 && /240 s/.test(stuck.note) && t >= 240_000 && t < 250_000);
+  // The buy loops' retry decision: a plain 402 or 5xx is sent again inside
+  // the three attempts, and a failure that came through a job (the job
+  // already paid for the route) or that buyOnce explained in a note is not,
+  // whatever its status: a retry would open a second paid job for the route.
+  check("a plain 502 is retried on the first two attempts and not the third", retryable({ status: 502 }, 0) && retryable({ status: 502 }, 1) && !retryable({ status: 502 }, 2));
+  check("a plain 402 (a settlement timeout) is retried; a 400 and a 200 are not", retryable({ status: 402 }, 0) && !retryable({ status: 400 }, 0) && !retryable({ status: 200 }, 0));
+  check("the failed job's 502 is not retried: the route is bought once and its job is never re-opened", !retryable(bad, 0) && !retryable(bad, 1));
+  check("a job that did not finish in its budget (504 with a note) is not retried either", !retryable(stuck, 0));
+  check("a 502 that came through a job is not retried even without a note", !retryable({ status: 502, job: { state: "failed" } }, 0));
+  // Both loops decide through retryable, and the rule's text appears once in
+  // the file: in retryable itself, so no loop holds its own copy.
+  const src = readFileSync(new URL("./refresh-bazaar.js", import.meta.url), "utf8");
+  const calls = (src.match(/if \(retryable\(res, attempt\)\)/g) || []).length;
+  const copies = (src.match(/res\.status >= 502\) && attempt/g) || []).length;
+  check(`both buy loops call retryable(res, attempt) (${calls}) and the rule is written once (${copies})`, calls === 2 && copies === 1);
 }
 
 // Accepts a plain array as well as a Set (call-site convenience).
