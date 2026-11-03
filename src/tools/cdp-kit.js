@@ -277,7 +277,7 @@ export const SQL_RECOVER_ROWS = 10;
 export const SQL_RECOVER_ATTEMPTS = 2;
 export const SQL_SEND_LIMIT_BYTES = 500_000;
 function resultTooLargeError(status, tookMs) {
-  const e = bad(`CDP's query service failed inside this query (HTTP ${status}, its internal error), which it answers when a result is too large to send (an answer under about ${Math.round(SQL_SEND_LIMIT_BYTES / 1e3)} KB is sent): lower the LIMIT or select fewer or narrower columns. Nothing was charged.`, 502);
+  const e = bad(`CDP's query service failed inside this query (HTTP ${status}, its internal error), which it answers when a result is too large to send (an answer under about ${Math.round(SQL_SEND_LIMIT_BYTES / 1e3)} KB is usually sent): lower the LIMIT or select fewer or narrower columns. Nothing was charged.`, 502);
   e.hint = "narrow-query"; e.resultTooLarge = true; e.cdpStatus = status; e.tookMs = tookMs;
   return e;
 }
@@ -479,6 +479,20 @@ export function blockTimeRangeDays(sql, now = Date.now()) {
   if (lo === null) return null;
   const days = ((hi === null ? now : hi) - lo) / RANGE_DAY_MS;
   return days >= 0 ? days : null; // reversed bounds: no readable range
+}
+
+/** Whether a query orders its own result: an ORDER BY outside every
+ *  parenthesis (one inside a subquery orders only that subquery). */
+export function hasOuterOrderBy(sql) {
+  const s = sqlNorm(sql);
+  let depth = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === "(") depth++;
+    else if (c === ")") depth = Math.max(0, depth - 1);
+    else if (depth === 0 && /[oO]/.test(c) && /^order\s+by\b/i.test(s.slice(i, i + 12)) && (i === 0 || /\W/.test(s[i - 1]))) return true;
+  }
+  return false;
 }
 
 /** The query sent upstream: a plain SELECT wrapped with the row cap. A query
@@ -806,11 +820,11 @@ export const CDP_TOOLS = [
             }
             if (!res) {
               const fits = Math.max(1, Math.floor(SQL_SEND_LIMIT_BYTES / rowBytes));
-              const ordered = /\border\s+by\b/i.test(sqlNorm(capped.inner));
+              const ordered = hasOuterOrderBy(capped.inner);
               return {
                 rows: list, rowCount: list.length, maxRows: SQL_RECOVER_ROWS, recovered: "result-size", rowBytes,
                 ...partialFields(list.length, list.length), complete: false, truncated: true, matchedIsLowerBound: true,
-                note: `The full result was too large for the query service to send (it answers its internal error; an answer under about ${Math.round(SQL_SEND_LIMIT_BYTES / 1e3)} KB is sent), so the query was run again with LIMIT ${SQL_RECOVER_ROWS} and these are ${ordered ? "its first" : "an arbitrary"} ${list.length} rows${ordered ? "" : " (it has no ORDER BY)"}. A row of this result is about ${Math.max(1, Math.round(rowBytes / 1024))} KB, so a LIMIT of ${Math.min(fits, SQL_MAX_ROWS)} keeps an answer under about ${Math.round(SQL_SEND_LIMIT_BYTES / 1e3)} KB: set that, or select fewer or narrower columns, and page with an ORDER BY and OFFSET.`,
+                note: `The full result was too large for the query service to send (it answers its internal error; an answer under about ${Math.round(SQL_SEND_LIMIT_BYTES / 1e3)} KB is usually sent), so the query was run again with LIMIT ${SQL_RECOVER_ROWS} and these are ${ordered ? "its first" : "an arbitrary"} ${list.length} rows${ordered ? "" : " (it has no ORDER BY)"}. A row of this result is about ${Math.max(1, Math.round(rowBytes / 1024))} KB, so a LIMIT of ${Math.min(fits, SQL_MAX_ROWS)} usually keeps an answer under about ${Math.round(SQL_SEND_LIMIT_BYTES / 1e3)} KB: set that, or select fewer or narrower columns, and page with an ORDER BY and OFFSET.`,
               };
             }
           }
