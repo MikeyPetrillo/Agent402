@@ -54,7 +54,7 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-02.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-03.</p>
 </section>
 
 <section>
@@ -128,7 +128,9 @@ so every claim below is verifiable in code.</p>
     address then answers that it was removed.</li>` : ""}
   </ul></li>
   <li><b>IP addresses.</b> Used for rate limiting and in standard operational logs (request path, status
-  code) for abuse prevention and debugging. Most rate-limit counters are kept in process memory for up
+  code) for abuse prevention and debugging. When the onchain data service cannot answer an
+  <code>onchain-sql</code> query, the text of that query is written to the same operational log so the
+  failure can be reproduced; it is kept with the log and not used for anything else. Most rate-limit counters are kept in process memory for up
   to one hour. The free trial's counters (the <code>?trial=1</code> allowance on the pure-CPU tools, see the
   <a href="/terms">terms</a>) are kept in our Redis store, with the address (for IPv6, its
   /64 prefix) in the counter's key, for one hour, or 24 hours for the per-client daily allowance. We also

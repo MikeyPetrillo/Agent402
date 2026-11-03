@@ -98,6 +98,8 @@ const CF_BLOCK = `<html> <head> <title>Coinbase</title> <meta name="robots" cont
   ok(logged.length === 0, "a JSON error body is left to the upstream reporter");
   await wrapped("https://f.example/settle");
   ok(logged.length === 1, "a facilitator HTML error is diagnosed");
+  await wrapped("https://f.example/settle", { [Symbol.for("agent402.noOutcome")]: true });
+  ok(logged.length === 1, "a read marked as not an upstream outcome (a buyer's SQL query on the shared host) is not diagnosed here");
 }
 
 {

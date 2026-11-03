@@ -3311,6 +3311,7 @@ jobs:
           # Metered settlement pricing rule (upto only, never above the ceiling, missing cost is not free - offline)
           t node scripts/test-gateway-meter.js
           t node scripts/test-metered-quote-binding.js
+          t node scripts/test-model-catalog.js
           # Metered settlement is wired and fails safe (sentinel never reaches a buyer - offline)
           t node scripts/test-gateway-meter-wiring.js
           # Payment scheme is read where @x402/core actually puts it (v1 top-level vs v2 accepted - pins the INSTALLED dep, offline)

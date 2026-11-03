@@ -163,6 +163,23 @@ ok(r.listed === false, "cap: rejected origin stays rejected on retry (not persis
 r = await registerOrigin("https://cap-first.example", { crawl: capCrawl });
 ok(r.listed === true, "cap: an already-known origin still returns its state normally at cap");
 
+// A stored list longer than the cap is loaded whole (a cut would be written
+// back to the store as a deletion), with a warning; the door stays shut.
+{
+  const { applyStoredSubmissions, submissionSlotStatus } = await import("../src/x402-index.js");
+  __testResetSubmitted();
+  __testSetSubmittedCap(1);
+  const warned = []; const realWarn = console.warn; console.warn = (m) => warned.push(String(m));
+  applyStoredSubmissions(["https://held-a.example", "https://held-b.example", 7, "https://held-c.example"]);
+  console.warn = realWarn;
+  ok(submissionSlotStatus().submitted === 3 && warned.some((w) => /3 submitted origins held, over the cap of 1/.test(w)), `every stored origin is loaded past the cap, with a warning (${submissionSlotStatus().submitted} held, ${warned.length} warning)`);
+  r = await registerOrigin("https://cap-third.example", { crawl: capCrawl });
+  ok(r.listed === false && /full/i.test(String(r.error)), "cap: the door stays shut while more are held than the cap");
+  const { __testAdoptSubmitted } = await import("../src/x402-index.js");
+  __testAdoptSubmitted("https://held-d.example");
+  ok(submissionSlotStatus().submitted === 4, `another container's addition is held past the cap too (${submissionSlotStatus().submitted} held)`);
+}
+
 __testSetSubmittedCap(); // restore default for any tests that run after this file
 __testResetSubmitted();
 

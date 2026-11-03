@@ -186,6 +186,8 @@ export function upstreamKindOfStatus(status) {
 
 // Named upstreams, by host. Facilitator and render-worker hosts are added at
 // boot from their configured URLs (registerUpstreamHost), never typed here.
+const NO_OUTCOME = Symbol.for("agent402.noOutcome");
+
 const FIXED_UPSTREAMS = [
   [/(^|\.)databento\.com$/, "databento"],
   [/(^|\.)stlouisfed\.org$/, "fred"],
@@ -416,6 +418,9 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
 
   /** Observe one outbound fetch (the egress meter's observer). */
   function observeFetch(host, promise, init, origin, path = null) {
+    // A read that marks itself as not an upstream outcome (the model list,
+    // src/model-catalog.js) is not counted.
+    if (init && init[NO_OUTCOME]) return;
     if (!upstreamNameOf(host, path)) return;
     const h = String(host || "").toLowerCase().replace(/:\d+$/, "");
     if (hosts.some(([m, , perFetch]) => !perFetch && m(h, path))) return;

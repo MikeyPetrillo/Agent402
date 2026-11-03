@@ -50,7 +50,8 @@ if (String(process.env.STATE_DATABASE_URL || "").trim()) {
   requireTestPg({ label: "test-json-document" });
   // Every query of this half goes through a relay the test can cut (an outage).
   const { startPgRelay } = await import("./lib/pg-relay.js");
-  const relay = await startPgRelay(process.env.STATE_DATABASE_URL);
+  const directUrl = process.env.STATE_DATABASE_URL;
+  const relay = await startPgRelay(directUrl);
   process.env.STATE_DATABASE_URL = relay.url;
   const { createJsonDocument, SKIP_UPDATE, rowMarkOf } = await import("../src/json-document.js?pg");
   const sdb = await import("../src/state-db.js");
@@ -141,17 +142,28 @@ if (String(process.env.STATE_DATABASE_URL || "").trim()) {
     // state database's parameter cleaning: the save lands rather than failing.
     const nulSave = await bad.save({ ok: 1, s: "nul\u0000inside" });
     ok(nulSave === true && (await sdb.documents.get("e1.json")).body.s === "nulinside", "a body with a NUL character is saved with the character removed");
-    // The failed body is re-sent on a timer; hold that timer past the heal so
-    // the row read below sees what the outage left, not the re-send.
+    // The failed body is re-sent on a timer (held past this check) and also
+    // the moment the pool answers again (onStateDbRecovered). So the row the
+    // outage left is read over a direct connection BEFORE the pool's first
+    // good query; then the recovery re-send is awaited.
     const retryMs = process.env.STATE_STORE_RETRY_MS;
     process.env.STATE_STORE_RETRY_MS = "60000";
     relay.cut();
     const cutSave = await bad.save({ ok: 2 });
-    await heal();
     ok(cutSave === false && bad.lastError, "a save during an outage resolves false and records the error");
-    ok((await sdb.documents.get("e1.json")).body.ok === 1, "...and the row is the last good body");
-    // Restored only after the read: the retry is scheduled once the failed
-    // save's loop ends, so restoring earlier let a 1 s re-send land first.
+    {
+      const { default: pg } = await import("pg");
+      const direct = new pg.Client({ connectionString: directUrl });
+      await direct.connect();
+      try {
+        const row = (await direct.query(`SELECT body FROM ${sdb.stateDbSchema()}.documents WHERE name = $1`, ["e1.json"])).rows[0];
+        ok(row?.body?.ok === 1, `...and the row is the last good body (${JSON.stringify(row?.body)})`);
+      } finally { await direct.end().catch(() => {}); }
+    }
+    await heal();
+    let landed = null;
+    for (let i = 0; i < 40 && landed !== 2; i++) { landed = (await sdb.documents.get("e1.json"))?.body?.ok; if (landed !== 2) await new Promise((r) => setTimeout(r, 50)); }
+    ok(landed === 2, `once the pool answers again the held body lands without waiting out its timer (${landed})`);
     if (retryMs === undefined) delete process.env.STATE_STORE_RETRY_MS; else process.env.STATE_STORE_RETRY_MS = retryMs;
 
     // ---- update(): two writers never drop each other (H8) --------------------

@@ -6,6 +6,50 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-03 (onchain-sql, metered chat, seller registration)
+Router and index:
+- Self-serve seller registration holds 4,000 submission slots (was 2,000,
+  which filled with live sellers), set by `INDEX_MAX_SUBMITTED_SEEDS`. A
+  seller that has settled payments gives its slot back after 90 days with
+  no successful probe (`INDEX_SETTLED_RELEASE_AFTER_DAYS`; it was never
+  released); other origins after 30 days as before. A released seller's
+  registration and tenure survive, and it re-registers into a free slot.
+Tools:
+- onchain-sql: a query whose result is too large for the query service to
+  send (its instant internal error) is run again with LIMIT 10 (two
+  attempts, since a small result of this kind still fails now and then). Fewer
+  than 10 rows back is the whole result and is served complete; small rows
+  mean the error was not about size and the original is sent once more;
+  otherwise the 10 rows are served marked truncated (`recovered:
+  "result-size"`, `rowBytes`), with a note giving the row size and the
+  LIMIT that keeps an answer under about 500 KB. When even 10 rows do not
+  fit, the answer says to select fewer or narrower columns.
+- onchain-sql returns at most 1,000 rows per call: a plain SELECT is sent
+  with an outer row cap, and a result cut at 1,000 says so in fields
+  (`truncated`, `complete`, `matchedIsLowerBound`, `note`, `maxRows`).
+  Queries opening with WITH, or carrying SETTINGS or FORMAT, are sent as
+  written. A query ending in a comment or a semicolon is accepted. A query
+  already two subqueries deep (the query service's limit) takes the cap in
+  its own outer LIMIT instead of the wrapper, which the service refused as
+  one level too many; a syntax error the service places by line is named
+  on the query as written.
+- onchain-sql: a query on solana.instructions that filters, groups, orders
+  or aggregates needs a block_time range and is refused before the call
+  (400, `hint: "add-block-time"`) with the clause to add; a bare sample or
+  count is sent.
+- onchain-sql: a query the service cuts off after its answer window of
+  about 10 s is answered with how to narrow it (`hint: "narrow-query"`):
+  a 422 when the service still answers a known-good query on the same
+  table, a 502 when it does not; a fast 5xx is tried twice, then answered
+  502 with the same hint. For Solana the answer names the span the query
+  covered and a day of block_time as the range to start from. At most two
+  buyer queries run at once per server; a third is refused 429 with a
+  retry time, uncharged. The description no longer lists hyperevm.events.
+- Tool error answers carry a short `hint` code when the tool sets one.
+- The metered chat route refuses a model id missing from the upstream's
+  live chat model list with a 400 before payment, naming the nearest ids it
+  serves (a model with a same-family successor is still served).
+
 ### 2026-11-02 (agent front door)
 Surfaces:
 - /llms.txt (after its title, summary, base URL and full-text link),

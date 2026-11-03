@@ -91,6 +91,8 @@ import { backfillBrokenPackRefunds } from "./refund-backfill.js";
 import { mppFallbackStatus } from "./mpp-fallback.js";
 import { applyMeteredSettlement, meteredUsdOf } from "./gateway-meter.js";
 import { handlerInputOf, preValidateInput, withIgnoredParams } from "./handler-input.js";
+import { startModelCatalogRefresh, modelCatalogWanted } from "./model-catalog.js";
+import { toolErrorFields } from "./tool-error-fields.js";
 import { shapeRefusal } from "./input-aliases.js";
 import { setSettlementOverrides } from "@x402/express";
 // Metered settlement ships DARK, like the upto scheme it rides on: it changes
@@ -542,7 +544,7 @@ import { LLM_GEMINI_TOOLS, GEMINI_PATH_BY_TIER } from "./tools/llm-gemini-kit.js
 import { refusalReason } from "./refusal-reason.js";
 import { setKnownProductKeys } from "./posthog.js";
 import { LLM_RESPONSES_TOOLS } from "./tools/llm-responses-kit.js";
-import { LLM_GATEWAY_TOOLS, TIERS, PRICED_BY_MODEL_NOTE, modelsList, promptCacheKey, promptCacheGetShared, promptCacheStore, GATEWAY_TIER_BY_PATH, embeddingsCacheKey, EMBEDDINGS_PATH, rerankCacheKey, RERANK_PATH, gatewayCreditsStatus, oxAlphaAvailable, probeOxAlphaAvailability, OX_ROUTE, oxUpstreamIsFree, isFlatTier, METERED_MAX_QUOTE_USD } from "./tools/llm-gateway-kit.js";
+import { LLM_GATEWAY_TOOLS, TIERS, PRICED_BY_MODEL_NOTE, modelsList, promptCacheKey, promptCacheGetShared, promptCacheStore, GATEWAY_TIER_BY_PATH, embeddingsCacheKey, EMBEDDINGS_PATH, rerankCacheKey, RERANK_PATH, gatewayCreditsStatus, oxAlphaAvailable, probeOxAlphaAvailability, canonicalModel, meteredModelRefusal, OX_ROUTE, oxUpstreamIsFree, isFlatTier, METERED_MAX_QUOTE_USD } from "./tools/llm-gateway-kit.js";
 // /v1/audio/speech stays behind OPENROUTER_TTS_ENABLED as a rollout gate:
 // @x402/express (v2.16) runs the handler first and settles only a <400
 // response, so a 502 is never charged — but an UNLISTED route returns no 402
@@ -4089,6 +4091,12 @@ if (process.env.X402_SYNC_ON_START !== "false" && GATEWAY_TOOLS_ENABLED.some((t)
   setTimeout(() => { probeOxAlphaAvailability().catch(() => {}); }, 6_000).unref();
   setInterval(() => { probeOxAlphaAvailability().catch(() => {}); }, 60 * 60_000).unref();
 }
+// The metered route's live model list (src/model-catalog.js): an id it does
+// not carry is refused before payment. Same boot-probe switch as above
+// (a MODEL_CATALOG_URL stub turns it on in tests).
+// Production only (the route serves with a key there); a test or a self-host
+// without one never reaches the network for it.
+if (modelCatalogWanted() && GATEWAY_TOOLS_ENABLED.some((t) => t.slug === "v1-chat-metered")) startModelCatalogRefresh();
 // Recent rows are re-read from the ledger per request (withFreshRecent); only
 // the balances ride the background snapshot (every 4 hours). Wallet balances and their
 // combined total are operator-only: /api/revenue serializes through
@@ -9700,6 +9708,24 @@ if (CDN_PROXY_ON) app.use(cdnSyncWindowMiddleware({ asyncRouteOf, wantsAsync, ca
 app.use(slowSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPaymentAttempt, followsJobAnswer, isInternal: isInternalReplay, isTempoPush }));
 app.use(asyncJobs.middleware);
 app.get("/api/jobs/:id", asyncJobs.statusHandler);
+// A metered chat body naming a model id the upstream does not serve is
+// refused before any payment gate (src/model-catalog.js, which fails open),
+// so the buyer signs nothing for a call that cannot be served. A Tempo push
+// credential has already paid: its gate's own input check answers it.
+app.use((req, res, next) => {
+  if (req.method !== "POST" || isTempoPush(req)) return next();
+  // req.path is already the catalog's spelling (case and trailing slash
+  // folded above), so the variants are checked too.
+  const def = CATALOG[`POST ${req.path}`];
+  if (def?.slug !== "v1-chat-metered") return next();
+  let refusal = null;
+  try {
+    const model = canonicalModel(handlerInputOf(req, def)?.model);
+    refusal = model ? meteredModelRefusal(model) : null;
+  } catch { return next(); }
+  if (!refusal) return next();
+  return res.status(400).json({ error: { message: refusal, type: "invalid_request_error", code: "unknown_model" }, tool: def.slug });
+});
 
 // Tempo push-transfer debts (src/tempo-push-debts.js), built with the Tempo
 // gate below; read again at finish to void a debt whose transfer was served.
@@ -10994,17 +11020,13 @@ function sendToolError(res, err, slug) {
   // Scrubbed like the route binder's answer (src/tools/redact.js).
   const errorMessage = redactSecrets(err?.message);
   logToolError(slug || "unknown", status, errorMessage, undefined, isSyntheticRequest(res.req));
-  const upstreamStatus = Number.isInteger(err?.upstreamStatus) ? err.upstreamStatus : null;
-  const attribution = typeof err?.attribution === "string" ? err.attribution : upstreamStatus ? "upstream" : null;
   if (Number.isInteger(err?.retryAfter)) res.set("Retry-After", String(err.retryAfter));
   // A refusal for capacity (a full worker queue) is shed load, not a tool failure.
   if (err?.shed === true && res.locals) res.locals.shed = true;
   return res.status(status).json({
     error: errorMessage || "request failed",
     ...(slug ? { tool: slug } : {}),
-    ...(upstreamStatus ? { upstreamStatus } : {}),
-    ...(attribution ? { attribution } : {}),
-    ...(Number.isInteger(err?.retryAfter) ? { retryAfterSeconds: err.retryAfter } : {}),
+    ...toolErrorFields(err),
   });
 }
 
@@ -11529,11 +11551,7 @@ for (const tool of ALL_KIT) {
       if (Number.isInteger(err?.retryAfter)) res.set("Retry-After", String(err.retryAfter));
       // A refusal for capacity (a full worker queue) is shed load, not a tool failure.
       if (err?.shed === true) res.locals.shed = true;
-      const provenance = {
-        ...(upstreamStatus ? { upstreamStatus } : {}),
-        ...(attribution ? { attribution } : {}),
-        ...(Number.isInteger(err?.retryAfter) ? { retryAfterSeconds: err.retryAfter } : {}),
-      };
+      const provenance = toolErrorFields(err);
       if (status >= 400 && status < 500 && !fromUpstream) {
         res.status(status).json({
           error: errorMessage,

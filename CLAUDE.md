@@ -30,6 +30,12 @@ LLC: credit the entity, never a personal name.
   report products and recurring monitors.
 - `src/find.js` (`/api/find`), `src/discovery.js` (`/.well-known/x402`, `/api/reliability`),
   `src/x402-index.js` (crawled seller index), `src/dispatch-eligibility.js` (router labels).
+  Self-serve submissions (`POST /api/index/register`) hold at most `INDEX_MAX_SUBMITTED_SEEDS`
+  slots (default 4000; unset or 0 reads as the default; `INDEX_TUNNEL_SUBMISSION_SHARE`, 0.25,
+  of them for quick tunnels); a slot is released after `INDEX_RELEASE_AFTER_DAYS` (30) with no
+  successful probe, `INDEX_SETTLED_RELEASE_AFTER_DAYS` (90, never below the plain window) for a
+  seller that has settled, `INDEX_TUNNEL_RELEASE_AFTER_DAYS` (3) for a tunnel. The operator
+  seeds past the cap with `POST /__operator/index/seed`.
 - `src/tools/route-execute.js`: route-and-execute, buys from proven external sellers per chain
   (`src/x402-buyer.js`, `src/solana-buyer.js` whose external leg runs under `SOR_SVM_BUDGET_MS`,
   inside a recent blockhash's life, `src/tempo-buyer.js`, `src/algorand-sellers.js`).
@@ -238,6 +244,10 @@ heartbeat page on it under one issue that closes when nothing is owed.
   tier whose 402 is a per-request quote. `handlerInputOf(req)` (`src/handler-input.js`) is the
   one input object for pricing and serving; a body nested past `MAX_INPUT_DEPTH` (64) is refused
   there with a 400 before any handler walks it. Streams commit 200 only on the first `data:` frame.
+  The metered chat route refuses a model id missing from the upstream's live model list with a 400
+  before any payment gate (`src/model-catalog.js`, read every 10 minutes and on a miss at most once a
+  minute; fails open with no read under 30 minutes old; retiring ids and ids with successors are left to their fallback;
+  `MODEL_CATALOG_URL` points the read at a stub).
   `GATEWAY_METERED_BILLING=on` gates metered settlement, the buffered override and a credits
   stream's debit on finish alike (`recordStreamedUsage`, `meteredUsdOf` in `src/gateway-meter.js`).
 - **Settle-failure breakers:** `src/gateway-settle-breaker.js` (per wallet and global on `/v1`,
