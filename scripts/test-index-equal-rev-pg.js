@@ -3,7 +3,7 @@
 // at most the new one, and the pull skipped a row unless it was newer than
 // the copy held, so the second of two equal-revision writes landed in the
 // table and the first writer never read it: the two containers served
-// different catalogues for that origin until its next crawl. Each row now
+// different catalogs for that origin until its next crawl. Each row now
 // carries the hash of its content, and (revision, hash) orders two copies the
 // same way in the upsert and in the pull, so both containers and the table
 // converge on one copy whichever wrote first.
