@@ -18,20 +18,33 @@ import { isPrivateIp } from "../src/tools/fetch-guard.js";
 
 const CONNECT_TIMEOUT_MS = Number(process.env.EGRESS_PROXY_TIMEOUT_MS) || 15_000;
 
+// Every refusal reads the same, whatever the reason (a name that does not
+// resolve, a private address, a scheme the proxy does not carry), so a page
+// that redirects the browser here learns nothing about which internal names
+// exist. A refusal on the plain-HTTP path also carries EGRESS_REFUSED_HEADER,
+// which render.js reads to fail the call instead of rendering this text.
+export const EGRESS_REFUSAL = "blocked by the egress policy";
+export const EGRESS_REFUSED_HEADER = "x-egress-refused";
+const refuse = (res) => {
+  if (res.headersSent) return res.end();
+  res.writeHead(403, { "content-type": "text/plain; charset=utf-8", "content-length": Buffer.byteLength(EGRESS_REFUSAL), [EGRESS_REFUSED_HEADER]: "1", connection: "close" });
+  res.end(EGRESS_REFUSAL);
+};
+
 // Resolve a host to a SINGLE validated, pinned address. Throws (blocks) if an IP
 // literal is private, resolution fails, or ANY resolved address is private —
 // so a public-A-record + private-AAAA split can never slip a connection through.
 export async function resolvePinned(host) {
   const lit = net.isIP(host);
   if (lit) {
-    if (isPrivateIp(host)) throw new Error(`blocked: ${host} is a private/reserved address`);
+    if (isPrivateIp(host)) throw new Error(EGRESS_REFUSAL);
     return { address: host, family: lit };
   }
   let addrs;
   try { addrs = await dns.lookup(host, { all: true, verbatim: true }); }
-  catch { throw new Error(`blocked: cannot resolve ${host}`); }
-  if (!addrs.length) throw new Error(`blocked: no address for ${host}`);
-  if (addrs.some((a) => isPrivateIp(a.address))) throw new Error(`blocked: ${host} resolves to a private/reserved address`);
+  catch { throw new Error(EGRESS_REFUSAL); }
+  if (!addrs.length) throw new Error(EGRESS_REFUSAL);
+  if (addrs.some((a) => isPrivateIp(a.address))) throw new Error(EGRESS_REFUSAL);
   return addrs[0]; // pinned: connect to this exact validated IP, no re-resolution
 }
 
@@ -42,10 +55,10 @@ export function startEgressProxy({ port = 0, resolve: resolveHost = resolvePinne
     // Plain HTTP proxying (absolute-form request URL) — rare from Chromium.
     (async () => {
       let target;
-      try { target = new URL(req.url); } catch { res.writeHead(400).end("bad target"); return; }
-      if (target.protocol !== "http:") { res.writeHead(403).end("only http(s) via CONNECT"); return; }
+      try { target = new URL(req.url); } catch { refuse(res); return; }
+      if (target.protocol !== "http:") { refuse(res); return; }
       let pinned;
-      try { pinned = await resolveHost(target.hostname); } catch (e) { res.writeHead(403).end(e.message); return; }
+      try { pinned = await resolveHost(target.hostname); } catch { refuse(res); return; }
       const upstream = http.request(
         { host: pinned.address, family: pinned.family, port: Number(target.port) || 80, method: req.method, path: target.pathname + target.search, headers: { ...req.headers, host: target.host }, timeout: CONNECT_TIMEOUT_MS },
         (up) => { res.writeHead(up.statusCode || 502, up.headers); up.pipe(res); },
@@ -64,7 +77,7 @@ export function startEgressProxy({ port = 0, resolve: resolveHost = resolvePinne
       const port = Number(portStr) || 443;
       let pinned;
       try { pinned = await resolveHost(host); }
-      catch (e) { try { clientSocket.write(`HTTP/1.1 403 Forbidden\r\n\r\n${e.message}`); } catch { /* */ } clientSocket.destroy(); return; }
+      catch { try { clientSocket.write(`HTTP/1.1 403 Forbidden\r\nContent-Length: ${Buffer.byteLength(EGRESS_REFUSAL)}\r\n\r\n${EGRESS_REFUSAL}`); } catch { /* */ } clientSocket.destroy(); return; }
       const upstream = net.connect({ host: pinned.address, port, family: pinned.family }, () => {
         clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
         if (head && head.length) upstream.write(head);
