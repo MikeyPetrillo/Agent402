@@ -6,7 +6,7 @@ carries its own version on npm.
 
 ## Unreleased
 
-### 2026-11-04 (shorter home and docs pages, one page per adapter)
+### 2026-11-04 (Office files from data, shorter pages, one page per adapter)
 Gateway:
 - inception/mercury-2.5 leaves the auto tier's fast band ahead of its
   upstream expiration on 2026-11-08, a date every model of its family
@@ -31,6 +31,9 @@ Tools:
   characters of text, an 8 MB file), a cap answers 400 naming it, and the
   file is built in a worker thread.
 Surfaces:
+- Agent hosts guide: add Agent402 to a Paperclip company as a custom MCP
+  server, with the free proof-of-work tools, how paid tools answer on the
+  connector, and the per-action Allowed, Ask first and Off settings.
 - The home page is five blocks: the hero with the live payments panel, the
   agents and people doors (the free tier in two lines, Decide as a table
   row), three short claims with one row of chain marks, a two-line seller
