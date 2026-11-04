@@ -74,6 +74,10 @@ Surfaces:
 - html-frames' published example fits its 402 whole; a paid sweep that meets
   an example the 402 shortened replays the full one from /openapi.json
   instead of the placeholder.
+- /agentic-finance, /sell, /what-is-x402, /what-is-mpp, /faq and /docs read
+  shorter: one-sentence openings, one call to action per target, one x402 vs
+  MPP table (on /what-is-x402), FAQ questions grouped under headings, and
+  /docs titled Docs; /terms states that prepaid credits are not currently sold.
 Operations:
 - The Bazaar keep-alive sweep follows a slow route to its settlement: a route
   that refuses a synchronous paid call is called again with `Prefer:
