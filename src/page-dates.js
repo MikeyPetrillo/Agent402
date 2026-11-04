@@ -82,7 +82,6 @@ export const PAGE_SOURCES = {
 /** Prefix families: one module renders every page under the prefix. */
 export const FAMILY_SOURCES = [
   ["/blog/", ["src/blog.js"]],
-  ["/docs/adapters/", ["src/adapter-docs.js"]],
   ["/learn/", ["src/learn.js"]],
   ["/integrations/", ["src/integration-pages.js"]],
   ["/guides/", ["src/guides.js"]],

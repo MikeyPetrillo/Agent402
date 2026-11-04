@@ -149,14 +149,12 @@ function inputFieldsOf(slug) {
 }
 
 const { INTEGRATIONS } = await import("../src/integration-pages.js");
-const { ADAPTERS } = await import("../src/adapter-docs.js");
 const { guideSlugs } = await import("../src/guides.js");
 const { learnSlugs } = await import("../src/learn.js");
 const { BLOG_POSTS } = await import("../src/blog.js");
 const pages = [
   "/quickstart", "/integrations", "/docs/adapters", "/docs/webhooks", "/what-is-x402", "/what-is-mpp", "/playground", "/workflows", "/learn",
   ...INTEGRATIONS.map((i) => `/integrations/${i.slug}`),
-  ...ADAPTERS.map((a) => `/docs/adapters/${a.slug}`),
   ...guideSlugs().map((s) => `/guides/${s}`),
   ...learnSlugs().map((s) => `/learn/${s}`),
   ...BLOG_POSTS.map((p) => `/blog/${p.slug}`),

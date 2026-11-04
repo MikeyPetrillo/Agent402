@@ -7,7 +7,7 @@
 // Found in an internal audit (2026-08-16): /docs/:slug and /revenue both did
 // this. Grepping the whole src/ tree for the same shape while fixing it
 // turned up two more instances the audit's own spot-check missed
-// (/docs/adapters/:slug via adapter-docs.js, /docs/webhooks via
+// (/docs/adapters/:slug via adapter-docs.js, now a 301 to /integrations/:slug; /docs/webhooks via
 // webhooks.js) - both fixed the same way. integrations.js also has its own
 // <main>, but it renders through the OLDER src/chrome.js shell, which never
 // wraps in <main> at all, so that one is not nested and is correctly left
@@ -24,7 +24,7 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 // plus a handful of other page types as a sanity sweep against a regression
 // introduced elsewhere.
 const PATHS = [
-  "/docs/Architecture", "/revenue", "/docs/adapters/openai", "/docs/webhooks",
+  "/docs/Architecture", "/revenue", "/integrations/openai", "/docs/webhooks",
   "/", "/marketplace", "/tools", "/sell", "/leaderboard", "/skills", "/what-is-x402",
   "/status", "/pricing", "/playground", "/integrations", "/markets", "/security", "/company",
   "/learn", "/learn/x402", "/integrations/mcp",
