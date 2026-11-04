@@ -172,7 +172,7 @@ export function hostCardHtml(f) {
     <p style="font-size:var(--fs-sm);line-height:1.55;color:var(--muted);margin:0 0 10px;">Agent402 runs this index and sells 500+ tools, metered models and reports on the same rails. <a href="#about-figures" style="color:var(--muted);">What these figures count</a>.</p>
     <div style="display:flex;gap:16px;flex-wrap:wrap;font-family:var(--font-mono);font-size:var(--fs-sm);">
       <a href="/tools" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);">tools &rarr;</a>
-      <a href="/#why" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);">why pay here &rarr;</a>
+      <a href="/docs#why" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);">why pay here &rarr;</a>
       <a href="/revenue" style="color:var(--muted);text-decoration:none;">every settlement &rarr;</a>
     </div>
   </div>`;
@@ -213,7 +213,7 @@ export function hostIndexEntry(f) {
         ? HOST_LEDGER_START_NOTE(f.externalAllTime.since)
         : "The ledger could not report when its record starts, so allTime.since is null and the figure is not a lifetime total.",
     },
-    links: { pricing: `${b}/api/pricing`, openapi: `${b}/openapi.json`, manifest: `${b}/.well-known/x402`, tools: `${b}/tools`, why: `${b}/#why` },
+    links: { pricing: `${b}/api/pricing`, openapi: `${b}/openapi.json`, manifest: `${b}/.well-known/x402`, tools: `${b}/tools`, why: `${b}/docs#why` },
   };
 }
 
