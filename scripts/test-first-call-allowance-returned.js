@@ -16,10 +16,17 @@
 // firstPaidSaleAfterAsync) on a temporary SQLite ledger: internal sales, sales
 // before the grant and free (proof-of-work) rows never count, a mixed-case EVM
 // payer matches, a lowercased Solana address does not, and chunking gives the
-// same answer as one query.
-import { mkdtempSync } from "node:fs";
+// same answer as one query, and a sale at the grant's exact moment is not
+// "after" it (the reader's own contract, not only the assembly's re-check).
+// Part C: the read on a ledger of 50k+ outside rows with no ANALYZE
+// statistics (what the file and the database mode's mirror both carry) uses
+// idx_sales_payer per pair and holds the event loop briefly, never one scan
+// of the outside sales per grant.
+import "./lib/offline-stores.js";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createRequire } from "node:module";
 
 delete process.env.STATE_DATABASE_URL;
 delete process.env.FIRST_CALL_ALLOWANCE;
@@ -28,6 +35,7 @@ process.env.SALES_LEDGER_DB = join(dir, "sales.db");
 
 const m = await import("../src/first-call-allowance.js");
 const ledger = await import("../src/sales-ledger.js");
+const { PAYING_RAILS_SQL } = await import("../src/paid-rails.js");
 
 let pass = 0, failed = 0;
 const ok = (c, msg) => { if (c) { pass++; console.log(`ok - ${msg}`); } else { failed++; console.error(`FAIL - ${msg}`); } };
@@ -185,6 +193,61 @@ m._resetFirstCallAllowance();
 const st = await m.firstCallAllowanceStatus({ returned: { listGrants: grantsOf(grants), firstPaidAfter: ledger.firstPaidSaleAfterAsync } });
 const r = st.returnedPayers;
 ok(r.granted === 7 && r.paidAgain === 3 && r.paidAgainWithin7d === 2, `assembled over the real ledger: 7 granted, 3 paid again, 2 within 7 days (${r.granted}/${r.paidAgain}/${r.paidAgainWithin7d})`);
+
+// A second handle on the same file writes rows with chosen timestamps (WAL;
+// the module's handle reads them on its next query).
+const Database = createRequire(import.meta.url)("better-sqlite3");
+const raw = new Database(process.env.SALES_LEDGER_DB);
+const insRaw = raw.prepare("INSERT INTO sales (ts, slug, price_usd, rail, network, payer, tx, internal, wire) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+{
+  const F = "0x" + "f6".repeat(20);
+  const AT = now - 3 * DAY;
+  insRaw.run(AT, "web-search", 0.01, "usdc", "eip155:8453", F, "0xexact", 0, "x402");
+  const atGrant = await ledger.firstPaidSaleAfterAsync([{ payer: F, grantedAtMs: AT }]);
+  ok(!atGrant.has(F), "real ledger: a sale at the grant's exact moment is not after it");
+  const before = await ledger.firstPaidSaleAfterAsync([{ payer: F, grantedAtMs: AT - 1 }]);
+  ok(before.get(F) === AT, "real ledger: the same sale counts for a grant one millisecond earlier");
+}
+
+// ---- Part C: a large ledger with no planner statistics ----
+{
+  const HEAVY = 50, PER = 1000, SPREAD = 5000, ROUND = 10_000;
+  const T1 = Date.UTC(2026, 0, 1);
+  raw.transaction(() => {
+    // 50 granted wallets that kept buying (1,000 sales each after the grant) ...
+    for (let w = 0; w < HEAVY; w++) for (let i = 0; i < PER; i++) insRaw.run(T1 + i * 1000, "web-search", 0.001, "usdc", "eip155:8453", `0x${w.toString(16).padStart(40, "9")}`, null, 0, "x402");
+    // ... and outside sales from 5,000 other wallets, a quarter of them free rows.
+    for (let i = 0; i < ROUND; i++) insRaw.run(T1 + i, "web-search", 0.01, i % 4 ? "usdc" : "pow", "eip155:8453", "0x" + (i % SPREAD).toString(16).padStart(40, "7"), `0xr${i}`, 0, "x402");
+  })();
+  const outside = raw.prepare("SELECT COUNT(*) AS n FROM sales WHERE internal = 0").get().n;
+  const stats = raw.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'sqlite_stat1'").get().n;
+  ok(outside >= 50_000 && stats === 0, `large ledger: ${outside} outside rows, no ANALYZE statistics`);
+  const plan = ledger.firstPaidAfterPlan();
+  ok(plan.some((d) => /USING INDEX idx_sales_payer \(payer=\? AND ts>\?\)/.test(d)) && !plan.some((d) => /idx_sales_ext_ts|^SCAN s\b/.test(d)),
+    `the read seeks idx_sales_payer per pair, never drives from the outside-sales index (${plan.join(" | ")})`);
+  const big = [
+    ...Array.from({ length: HEAVY }, (_, w) => ({ payer: `0x${w.toString(16).padStart(40, "9")}`, grantedAtMs: T1 - DAY })),
+    ...Array.from({ length: ledger.FIRST_PAID_AFTER_CHUNK * 2 - HEAVY }, (_, i) => ({ payer: "0x" + (i * 7).toString(16).padStart(40, "7"), grantedAtMs: T1 + ROUND / 2 })),
+  ];
+  let worst = 0, last = performance.now(), live = true;
+  const tick = () => { const t = performance.now(); worst = Math.max(worst, t - last); last = t; if (live) setImmediate(tick); };
+  setImmediate(tick);
+  const t0 = performance.now();
+  const found = await ledger.firstPaidSaleAfterAsync(big);
+  const total = performance.now() - t0;
+  live = false;
+  // Expected: every heavy wallet, and each spread wallet with a paid sale past mid-run.
+  const expect = new Map();
+  for (const g of big) {
+    const hit = raw.prepare(`SELECT MIN(ts) AS t FROM sales NOT INDEXED WHERE payer = ? AND ts > ? AND internal = 0 AND rail IN ${PAYING_RAILS_SQL}`).get(g.payer, g.grantedAtMs).t;
+    if (hit != null) expect.set(g.payer, hit);
+  }
+  ok(found.size === expect.size && [...expect].every(([p, t]) => found.get(p) === t), `large ledger: the same answer as a per-wallet scan (${found.size} of ${expect.size})`);
+  const BOUND_MS = 100;
+  ok(total < 1000 && worst < BOUND_MS, `large ledger: ${big.length} grants read in ${total.toFixed(0)} ms, longest event-loop hold ${worst.toFixed(0)} ms (bound ${BOUND_MS} ms)`);
+}
+raw.close();
+rmSync(dir, { recursive: true, force: true });
 
 console.log(`\n${pass} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

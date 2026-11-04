@@ -853,14 +853,27 @@ export function payerHasPaidSale(payer) {
 }
 // Returning grant holders (the first-call allowance's operator figure): for
 // each (payer, grant time) pair, the first outside paid sale strictly after
-// the grant. One query per chunk of pairs, joined on idx_sales_payer, never
-// one per wallet.
+// the grant. One query per chunk of pairs, never one per wallet. Each pair is
+// one correlated seek on idx_sales_payer (payer = ? AND ts > ?) that stops at
+// the first paying row, so a chunk costs (pairs x log rows) whatever a payer
+// bought later. INDEXED BY pins the index: the sales table carries no ANALYZE
+// statistics (the file and the database mode's in-memory mirror alike), and
+// without them the planner drives a plain join from idx_sales_ext_ts and
+// rescans the pair list once per outside sale, which held the loop for minutes
+// on a large ledger (scripts/test-first-call-allowance-returned.js pins the
+// plan). MIN over the pairs folds a payer listed twice; a NULL is no sale and
+// is dropped by the caller.
 const qFirstPaidAfter = db.prepare(`
   WITH g(payer, gts) AS (SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?))
-  SELECT g.payer AS payer, MIN(s.ts) AS first_ts
-    FROM g JOIN sales s ON s.payer = g.payer AND s.ts > g.gts
-   WHERE s.internal = 0 AND s.rail IN ${PAYING_RAILS_SQL}
-   GROUP BY g.payer`);
+  SELECT payer, MIN(first_ts) AS first_ts FROM (
+    SELECT g.payer AS payer,
+           (SELECT s.ts FROM sales s INDEXED BY idx_sales_payer
+             WHERE s.payer = g.payer AND s.ts > g.gts AND s.internal = 0 AND s.rail IN ${PAYING_RAILS_SQL}
+             ORDER BY s.ts LIMIT 1) AS first_ts
+      FROM g)
+   GROUP BY payer`);
+/** EXPLAIN QUERY PLAN details of the returning-payers read (tests pin the index). */
+export function firstPaidAfterPlan() { return db.prepare(`EXPLAIN QUERY PLAN ${qFirstPaidAfter.source}`).all("[]").map((r) => r.detail); }
 export const FIRST_PAID_AFTER_CHUNK = 500;
 function* firstPaidSaleAfterSteps(grants, chunk) {
   const pairs = [];
@@ -872,7 +885,7 @@ function* firstPaidSaleAfterSteps(grants, chunk) {
   const out = new Map();
   const size = Math.max(1, Math.min(FIRST_PAID_AFTER_CHUNK, Number(chunk) || FIRST_PAID_AFTER_CHUNK));
   for (let i = 0; i < pairs.length; i += size) {
-    for (const r of qFirstPaidAfter.all(JSON.stringify(pairs.slice(i, i + size)))) out.set(r.payer, Number(r.first_ts));
+    for (const r of qFirstPaidAfter.all(JSON.stringify(pairs.slice(i, i + size)))) if (r.first_ts != null) out.set(r.payer, Number(r.first_ts));
     yield;
   }
   return out;
