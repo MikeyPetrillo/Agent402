@@ -51,6 +51,18 @@ const WRAP_ALL = process.env.WRAP_ALL === "1";
 const SAMPLE = Number(process.env.WRAP_SAMPLE || 25);
 const CONCURRENCY = Math.max(1, Number(process.env.WRAP_CONCURRENCY || 4));
 const ONLY_FAMILIES = (process.env.WRAP_FAMILY || "").split(",").map((s) => s.trim()).filter(Boolean);
+// The in-page work (scroll to settle, then the audit) has no deadline of its
+// own in the browser driver, so a page that stops answering would hold the
+// lane until the job's own timeout with nothing naming it (output is printed
+// per width). Each page's in-page work gets this deadline; past it the page
+// fails by name, printed at once, and its tab is replaced. The slowest page
+// measured is about 5 s.
+const PAGE_DEADLINE_MS = Number(process.env.WRAP_PAGE_DEADLINE_MS || 90_000);
+const withDeadline = (promise, ms) => {
+  let timer;
+  promise.catch(() => {}); // a tab closed after its deadline rejects here; that is expected
+  return Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(Object.assign(new Error(`no answer within ${ms} ms`), { deadline: true })), ms); })]).finally(() => clearTimeout(timer));
+};
 
 // Generated families: one template, many pages. Anything else is hand-written ("pages").
 const FAMILIES = [
@@ -320,7 +332,8 @@ async function settle(page) {
   // Scroll the whole page so scroll-reveal sections render, then return to the top.
   await page.evaluate(async () => {
     const step = Math.max(200, Math.floor(innerHeight * 0.8));
-    for (let y = 0; y < document.documentElement.scrollHeight; y += step) { scrollTo(0, y); await new Promise((r) => setTimeout(r, 40)); }
+    // Bounded: a page that grows as it scrolls cannot keep this loop going.
+    for (let y = 0, k = 0; y < document.documentElement.scrollHeight && k < 600; y += step, k++) { scrollTo(0, y); await new Promise((r) => setTimeout(r, 40)); }
     scrollTo(0, document.documentElement.scrollHeight); await new Promise((r) => setTimeout(r, 150));
     scrollTo(0, 0); await new Promise((r) => setTimeout(r, 100));
     await document.fonts.ready;
@@ -400,7 +413,7 @@ try {
       const pool = await Promise.all(Array.from({ length: Math.min(CONCURRENCY, PAGES.length) }, () => ctx.newPage()));
       const free = pool.slice();
       const lines = await mapLimit(PAGES, pool.length, async (path) => {
-        const page = free.pop();
+        let page = free.pop();
         const key = `${path} @${width}`;
         const fam = familyOf(path);
         const log = [];
@@ -409,8 +422,18 @@ try {
           try { res = await page.goto(`${BASE}${path}`, { waitUntil: "load", timeout: 45000 }); } catch (e) { log.push(`FAIL - ${key} did not load (${String(e.message).slice(0, 80)})`); failures++; counts[key] = "load"; return log; }
           if (!res || res.status() !== 200) { log.push(`FAIL - ${key} answered ${res?.status()}`); failures++; counts[key] = "status"; return log; }
           if (!/html/i.test(res.headers()["content-type"] || "")) { log.push(`skip - ${key} is not HTML`); return log; }
-          await settle(page);
-          const found = await page.evaluate(audit, { exclude: EXCLUDE, width, ragFrac: RAG_MIN_FRACTION, ragWords: RAG_MIN_WORDS });
+          let found;
+          try {
+            found = await withDeadline((async () => { await settle(page); return page.evaluate(audit, { exclude: EXCLUDE, width, ragFrac: RAG_MIN_FRACTION, ragWords: RAG_MIN_WORDS }); })(), PAGE_DEADLINE_MS);
+          } catch (e) {
+            if (!e.deadline) throw e;
+            const msg = `FAIL - ${key} did not settle and audit within ${PAGE_DEADLINE_MS} ms`;
+            console.log(msg);
+            log.push(msg); failures++; counts[key] = "hang";
+            try { await page.close(); } catch {}
+            page = await ctx.newPage();
+            return log;
+          }
           counts[key] = found.length;
           famTotals[`${fam} @${width}`] = (famTotals[`${fam} @${width}`] || 0) + found.length;
           failures += found.length;
