@@ -231,8 +231,9 @@ async function bootAndBurst(routerWorkers) {
     const burstMs = Math.round(performance.now() - tb);
     const after = await op();
     const answered = results.filter((r) => r.status === 200 && Array.isArray(r.body?.results) && r.body.results.length > 0).length;
+    const missed = results.filter((r) => !(r.status === 200 && Array.isArray(r.body?.results) && r.body.results.length > 0)).map((r) => `${r.status}${r.body?.error ? ` ${String(r.body.error).slice(0, 60)}` : r.error ? ` ${r.error.slice(0, 60)}` : ""}`);
     const stallLines = log.filter((l) => l.includes("[loop-lag]")).length;
-    return { answered, burstMs, healthN: health.length, p50: Math.round(pct(health, 0.5)), p95: Math.round(pct(health, 0.95)), max: Math.round(Math.max(...health)), worstMs: after.loop.worstMs, stalls: after.loop.stalls, stallLines, routerPool: after.routerPool, lastMinute: after.loop.lastMinute };
+    return { answered, missed, burstMs, healthN: health.length, p50: Math.round(pct(health, 0.5)), p95: Math.round(pct(health, 0.95)), max: Math.round(Math.max(...health)), worstMs: after.loop.worstMs, stalls: after.loop.stalls, stallLines, routerPool: after.routerPool, lastMinute: after.loop.lastMinute };
   } finally {
     proc.kill("SIGKILL");
   }
@@ -242,7 +243,7 @@ const inThread = await bootAndBurst(0);
 console.log(`# in-thread (ROUTER_WORKERS=0): burst of ${BURST} answered ${inThread.answered} in ${inThread.burstMs} ms; /health n=${inThread.healthN} p50=${inThread.p50}ms p95=${inThread.p95}ms max=${inThread.max}ms; main-loop worst hold ${inThread.worstMs} ms, stalls>=250ms ${inThread.stalls}`);
 const worker = await bootAndBurst(1);
 console.log(`# worker (ROUTER_WORKERS=1): burst of ${BURST} answered ${worker.answered} in ${worker.burstMs} ms; /health n=${worker.healthN} p50=${worker.p50}ms p95=${worker.p95}ms max=${worker.max}ms; main-loop worst hold ${worker.worstMs} ms, stalls>=250ms ${worker.stalls}; pool ${JSON.stringify(worker.routerPool)}`);
-ok(worker.answered === BURST, `every query of the burst answered 200 with rows on the worker boot (${worker.answered}/${BURST})`);
+ok(worker.answered === BURST, `every query of the burst answered 200 with rows on the worker boot (${worker.answered}/${BURST}${worker.missed.length ? `; missed: ${worker.missed.join("; ")}` : ""})`);
 ok(worker.routerPool.served.worker >= BURST, `the burst was served by the worker (${worker.routerPool.served.worker} worker-served, ${worker.routerPool.served.inThread} in-thread)`);
 // The bound. With the scoring in the worker, a /health probe waits only for
 // this thread's own work per answer (a message post, the dispatch-field
