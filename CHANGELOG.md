@@ -22,6 +22,10 @@ Tools:
   from one payer in 10 minutes, the next answers 429 with Retry-After.
 - `a2a-card-fetch` answers the address check's 400 for a host it may not
   reach, the same answer every URL tool gives.
+- URL tools answer 503 with Retry-After when this server's resolver cannot
+  answer a lookup, and the one 400 for a name that does not exist. A host
+  name without a dot is answered with that 400. `favicon-grab` refuses a
+  non-http scheme.
 Gateway:
 - The Responses and Messages wires pass each input item, content block and
   tool on with its documented fields only.
