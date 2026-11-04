@@ -225,3 +225,8 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 var t=null;var later=function(){clearTimeout(t);t=setTimeout(mark,200);};window.addEventListener('resize',later);
 /* Report bodies and tables are drawn after load: mark them when they arrive. */
 try{new MutationObserver(later).observe(document.body||document.documentElement,{childList:true,subtree:true});}catch(e){}})();
+
+/* A link to a collapsed <details> (a page's shared notes, #about-figures) opens it on arrival. */
+(function(){function open(){try{var id=decodeURIComponent(location.hash.slice(1));if(!id)return;var el=document.getElementById(id);var d=el&&(el.tagName==='DETAILS'?el:el.closest('details'));if(d&&!d.open){d.open=true;el.scrollIntoView();}}catch(e){}}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',open);else open();
+window.addEventListener('hashchange',open);})();

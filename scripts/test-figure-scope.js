@@ -77,7 +77,8 @@ const tmp = (p) => { const d = mkdtempSync(join(tmpdir(), "a402-scope-")); dirs.
   // viaUSDC counter stood at 35,947 against 11,825 settlements in the ledger.
   // The card said "11,825 settlements, all time" and named no start, so a
   // reader takes a figure beginning three weeks in as the whole history.
-  const { hostFigures, hostCardHtml, hostRowHtml, hostIndexEntry } = await import("../src/host-entry.js");
+  const { hostFigures, hostCardHtml, hostCardNotes, hostRowHtml, hostIndexEntry } = await import("../src/host-entry.js");
+  const { marketPage } = await import("../src/market-page.js");
   const summary = ({ days }) => ({
     recordingSince: Date.parse("2026-07-03T22:45:23.470Z"),
     totals: { external: { sales: days === 30 ? 5032 : 11825 } },
@@ -93,8 +94,13 @@ const tmp = (p) => { const d = mkdtempSync(join(tmpdir(), "a402-scope-")); dirs.
   ok(!/settlements, all time/.test(card) && !/distinct buyers, all time/.test(card),
     "the card no longer calls a ledger-scoped figure 'all time'");
   ok(row.includes("since 2026-07-03"), "the leaderboard host row labels its widest figure the same way");
-  ok(card.includes("not lifetime totals") && row.includes("not lifetime totals"),
-    "both surfaces say in words that these are not lifetime totals");
+  // The card's scope sentences live once per marketplace page, in the shared
+  // notes block the card links to (#about-figures); the leaderboard row keeps
+  // them inline. Both surfaces still say it in words.
+  const chainPage = marketPage("base", "https://agent402.tools", { snapshot: { sellers: [] }, host: f });
+  ok(hostCardNotes(f).includes("not lifetime totals") && row.includes("not lifetime totals")
+    && card.includes('href="#about-figures"') && /id="about-figures"[\s\S]*not lifetime totals/.test(chainPage),
+    "both surfaces say in words that these are not lifetime totals (the card through the page's notes)");
   const me = hostIndexEntry(f);
   ok(me.external.allTime.since === "2026-07-03" && typeof me.external.scopeNote === "string" && me.external.scopeNote.includes("2026-07-03"),
     "the JSON answer carries the start INSIDE the allTime object, not only beside it");
