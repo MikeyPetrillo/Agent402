@@ -3052,7 +3052,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (159 scripts, one process each)
+      - name: Offline suites (160 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -3148,6 +3148,8 @@ jobs:
           t node scripts/test-bazaar-validate.js
           # Anthropic Messages wire on the five tiers (validation, probe clamp, outbound prefs, billing strip, failover, paid-empty guard, SSE scrub - offline)
           t node scripts/test-llm-messages.js
+          # The gateway suites pass on the placeholder cost table too (docs/example-upstream-costs.json; prints exit codes and counts only - offline)
+          t node scripts/test-example-costs-suites.js
           # Availability failover: a model with no live host is served by its same-family successor (named in the reply), model_fallback:false opts out, rate limits retry the same model first (offline, every wire)
           t node scripts/test-gateway-availability.js
           # Flight search and status: sellers are config, payTo pinned and capped, no second seller after a payment may have left, spend guard first (offline)
