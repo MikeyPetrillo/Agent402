@@ -4,7 +4,7 @@
 // (whyHomeClaims) that link there. `t` is the row heading (one line at desktop
 // width), `s` the one-sentence row text, `h` + `p` the full claim behind "how it
 // works". `links` (at most two) sit on the row; `more` sit inside the expander.
-// scripts/test-wrap-quality.js measures the rows in Chromium. /why answers a 301 to /#why. The agent-facing
+// scripts/test-wrap-quality.js measures the rows in Chromium. /why answers a 301 to /docs#why. The agent-facing
 // surfaces (llms.txt, MCP instructions, package READMEs) point at it, so the
 // seven points live in ONE place and read the same everywhere. First-party
 // claims only: no comparisons, no third-party names, evergreen "500+" counts.
@@ -193,8 +193,8 @@ export function whyDocsSectionHtml() {
  * from the same sources as the full rows, each linking its proof. */
 export function whyHomeClaims() {
   return [
-    { id: "never-charged", t: WHY_POINTS.find((w) => w.id === "never-charged").t, s: "An error cancels settlement; a Tempo payment sent first is recorded and refunded.", link: ["/docs#why-never-charged", "how it settles"] },
+    { id: "never-charged", t: WHY_POINTS.find((w) => w.id === "never-charged").t, s: "An error cancels settlement; a Tempo payment sent first is recorded as a refund owed.", link: ["/docs#why-never-charged", "how it settles"] },
     { id: "one-key", t: "One wallet pays for all of it.", s: "500+ tools, model tiers, media and reports, each paid per call from the same wallet.", link: ["/docs#why-one-key", "what it covers"] },
-    { id: "chains", t: `Pay on ${RAILS.length} chains or over MPP.`, s: "A settled x402 call returns a receipt that names its on-chain transaction.", link: ["/proof", "receipts"] },
+    { id: "chains", t: `Pay on ${RAILS.length} chains or over MPP.`, s: "Every settled x402 call returns a receipt naming its chain transaction, or its batch transfer id.", link: ["/proof", "receipts"] },
   ];
 }

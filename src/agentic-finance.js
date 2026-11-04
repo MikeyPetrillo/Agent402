@@ -69,7 +69,7 @@ export function agenticFinancePage(baseUrl) {
     </nav>
     <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.94;margin:0 0 24px;color:var(--ink);">Agentic Finance <span style="color:var(--accent);">(AIFI)</span></h1>
     <p id="definition" class="ml-measure" style="font-size:var(--fs-lg);line-height:1.5;color:var(--muted);margin:0 0 16px;">${esc(DEFINITION)}</p>
-    <p class="ml-measure" style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0;">The long form, with the stack and one purchase traced on the wire, is ${link("/blog/what-is-agentic-finance-aifi", "the AIFI post")}. Every term is defined once in ${link("/glossary", "the glossary")}, and ${link("/101", "x402 and MPP 101")} starts from zero.</p>
+    <p class="ml-measure" style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0;">The long form, with the stack and one purchase traced on the wire, is ${link("/blog/what-is-agentic-finance-aifi#stack", "the AIFI post")}. Every term is defined once in ${link("/glossary", "the glossary")}, and ${link("/101", "x402 and MPP 101")} starts from zero.</p>
   </div>
 </header>
 

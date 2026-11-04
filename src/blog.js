@@ -113,9 +113,14 @@ export const BLOG_POSTS = [
 
 <p>Two round trips, a couple of seconds, a fraction of a cent. Nothing to sign up for means nothing to leak, and one receipt per call means an agent's spend is legible line by line.</p>
 
-<h2>The four layers</h2>
+<h2 id="stack">The four layers</h2>
 
-<p>The <a href="/agentic-finance#stack">category page</a> draws the stack in four layers: agents with wallets, the applied layer (discovery, routing, pricing, reliability, receipts, transparency), the payment protocols (x402 and MPP), and the stablecoin rails they settle on.</p>
+<ol>
+  <li><strong>Agents.</strong> Autonomous software with a wallet: MCP-connected assistants, crawlers, research and trading agents, other services' agents. The buyers and, increasingly, the sellers.</li>
+  <li><strong>The applied layer.</strong> Discovery, routing, pricing, reliability, receipts, transparency. Where an agent finds the right service and pays it once, safely.</li>
+  <li><strong>Payment protocols.</strong> x402 and MPP. Open, HTTP-native, wallet as identity.</li>
+  <li><strong>Rails and money.</strong> Stablecoins settled on public chains: USDC across the EVM chains plus Solana, Stellar and Algorand; USDG on Robinhood Chain; native Tempo.</li>
+</ol>
 
 <p>The interesting problems live in the second layer. A wire format tells you how to pay one seller you already trust. It says nothing about which of a dozen sellers to pay, whether that seller has ever actually delivered, what happens when a paid call fails, or how anyone can check the numbers a marketplace publishes about itself. Those are finance questions, and they only appear once the payments layer works.</p>
 
