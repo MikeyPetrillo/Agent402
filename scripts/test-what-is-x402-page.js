@@ -58,5 +58,14 @@ ok(html.includes(">MPP</th>") && html.includes("PAYMENT-SIGNATURE header carryin
 // --- copy hygiene -----------------------------------------------------------
 ok(!html.includes("—"), "no em dashes anywhere in the page copy");
 
+// --- one comparison table, one CTA per target (2026-11 trim) ------------------
+{
+  const page = whatIsX402Page("https://agent402.tools", { stats, leaderboardSnapshot });
+  ok((page.match(/<section id="compare"/g) || []).length === 1, "the x402 vs MPP table lives here, once (/what-is-mpp links it)");
+  const ctaHrefs = [...page.matchAll(/<a class="btn[^"]*" href="([^"]+)"/g)].map((m) => m[1]);
+  ok(ctaHrefs.length > 0 && new Set(ctaHrefs).size === ctaHrefs.length, `one call to action per target (${ctaHrefs.join(", ")})`);
+  ok(page.includes('id="agentic"') && page.includes("could the software complete the purchase with no human awake"), "#agentic keeps the practical test the AIFI post links to");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
