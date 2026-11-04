@@ -587,6 +587,27 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
     const only = await run({ list: [selfCand], pay: good });
     ok(only.e?.statusCode === 409 && /own wallets/.test(only.e.message) && only.calls.length === 0, `with no other candidate it is refused 409 and nothing is paid (${only.e?.statusCode})`);
     ok(guard.walletDailySpentUsd("base") === 0, "nothing was booked against the Base wallet for the refused candidate");
+    // The internal wallet list fails closed: when it cannot be loaded, no
+    // address is cleared as not ours, and the buyers refuse 503 before signing.
+    const ow = await import("../src/own-wallets.js");
+    const outsider = "0x" + "12".repeat(20);
+    ow.setOwnWalletImportForTest(null);
+    let normal = null; try { await ow.assertNotOwnPayout(outsider); } catch (x) { normal = x; }
+    ok(normal === null && !(await ow.isOwnPayoutAddress(outsider, { env: {} })), "control: with the list loaded an outside wallet is cleared");
+    let own = null; try { await ow.assertNotOwnPayout(ourEvm); } catch (x) { own = x; }
+    ok(own?.statusCode === 502, `control: with the list loaded our own wallet is refused 502 (${own?.statusCode})`);
+    for (const [label, fn] of [["a throwing import", async () => { throw new Error("import failed"); }], ["a module without the sets", async () => ({})]]) {
+      ow.setOwnWalletImportForTest(fn);
+      ok(await ow.isOwnPayoutAddress(outsider, { env: {} }) === true, `${label}: an outside wallet is not cleared`);
+      ok(await ownPayoutOf({ provenPayTo: outsider }) === outsider, `${label}: route-execute reads every candidate as ours`);
+      let e = null; try { await ow.assertNotOwnPayout(outsider); } catch (x) { e = x; }
+      ok(e?.statusCode === 503 && e.message === "own-wallet list unavailable; nothing was signed", `${label}: assertNotOwnPayout refuses 503 (${e?.statusCode} ${e?.message})`);
+      const down = await run({ list: [outside], pay: good });
+      ok(down.e && down.calls.length === 0, `${label}: route-execute pays nothing (${down.e?.statusCode})`);
+    }
+    ow.setOwnWalletImportForTest(null);
+    let back = null; try { await ow.assertNotOwnPayout(outsider); } catch (x) { back = x; }
+    ok(back === null, "a failed load is not cached: the list loads again once the module is back");
   }
   guard.__reset();
 }
