@@ -1360,11 +1360,6 @@ function* marketPageAllSteps(baseUrl, { snapshot, leaderboardSnap, economySnap, 
       </div>
     </div>
     <p style="font-size:var(--fs-sm);color:var(--faint);margin:10px 0 0;">Describe the job, not the tool name - FIND searches every tool and shows live results. Resolving is free (<span style="color:var(--muted);">GET /api/find</span>), you only pay to execute. This is the neutral x402 index: every seller, not just ours.</p>
-    <div style="margin:12px 0 0;padding:12px 18px;border:1px solid var(--hairline);background:var(--card);max-width:640px;display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;">
-      <span style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.1em;color:var(--faint);">SELLER PATH</span>
-      <span style="font-size:var(--fs-md);color:var(--muted);flex:1;min-width:220px;">Selling an x402 API? Listing is free, takes no signup, and deducts nothing from your price.</span>
-      <a href="/sell" style="font-family:var(--font-mono);font-size:var(--fs-sm);font-weight:700;color:var(--accent);text-decoration:none;white-space:nowrap;">list your API →</a>
-    </div>
     ${statsHtml}
   </div>`;
 
@@ -1445,7 +1440,7 @@ function* marketPageAllSteps(baseUrl, { snapshot, leaderboardSnap, economySnap, 
   <div class="ml-cta-panel" style="margin:48px 0 0;background:var(--panel);border:1px solid var(--hairline);padding:40px 36px;position:relative;overflow:hidden;">
     <div style="position:relative;">
       <h2 style="font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 12px;color:var(--on-panel);">Add your API to the index.</h2>
-      <p style="font-size:var(--fs-base);line-height:1.6;color:var(--on-panel-muted);margin:0 0 22px;max-width:64ch;">Free, no signup, nothing deducted. Serve a 402 and register the origin: the crawler reads it at once and re-probes it ${crawlIntervalLabel()}.</p>
+      <p style="font-size:var(--fs-base);line-height:1.6;color:var(--on-panel-muted);margin:0 0 22px;max-width:64ch;">Listing is free, takes no signup and deducts nothing from your price. Serve a 402 and register the origin: the crawler reads it at once and re-probes it ${crawlIntervalLabel()}.</p>
       <div style="display:flex;gap:11px;flex-wrap:wrap;">
         <a class="btn btn-primary" href="/sell">List your API - free →</a>
         <a href="/leaderboard" style="background:transparent;border:1.5px solid var(--panel-rule-2);color:var(--on-panel);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:12px 22px;">SEE THE LEADERBOARD</a>

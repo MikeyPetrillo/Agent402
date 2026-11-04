@@ -314,7 +314,7 @@ ${solanaSectionHtml(solana)}
     <div class="ml-cta-panel" style="background:var(--panel);border:1px solid var(--hairline);padding:48px 44px;position:relative;overflow:hidden;">
       <div style="position:relative;">
         <h2 class="lb-h2" style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 14px;color:var(--on-panel);">Want a row here?</h2>
-        <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 26px;max-width:64ch;">Serve x402 challenges, register your origin, and the crawler picks you up on the next pass. Free, no signup, nothing deducted from your price.</p>
+        <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 26px;max-width:64ch;">Serve x402 challenges, register your origin, and the crawler picks you up on the next pass. Listing is free and nothing is deducted from your price.</p>
         <div style="display:flex;gap:11px;flex-wrap:wrap;">
           <a class="btn btn-primary on-panel ml-cta" href="/sell">List your API - free →</a>
           <a class="btn btn-secondary on-panel ml-cta" href="/what-is-x402">What is x402?</a>

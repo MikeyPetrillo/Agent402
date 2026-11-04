@@ -153,7 +153,7 @@ table{border-collapse:collapse;width:100%}
     <div style="padding:28px;border-right:1px solid var(--hairline);background:var(--footer-bg);">
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--ok);margin-bottom:14px;">FREE TIER</div>
       <h2 style="font-weight:700;font-size:var(--fs-2xl);margin:0 0 14px;color:var(--ink);">Pay with CPU, not USDC</h2>
-      <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;">Every pure-CPU tool is payable in compute. Your machine solves a single-use sha256 puzzle - ${esc(powCostPhrase())} - and the call goes through. No wallet, no funding, no signup.</p>
+      <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;">Every pure-CPU tool is payable in compute. Your machine solves a single-use sha256 puzzle - ${esc(powCostPhrase())} - and the call goes through. No wallet, no funding.</p>
       <pre style="margin:0 0 16px;background:var(--panel);border:1px solid var(--panel-rule);color:var(--on-panel);padding:14px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># the MCP connector solves it for you
 </span>claude mcp add --transport http \
   agent402 https://agent402.tools/mcp</pre>
