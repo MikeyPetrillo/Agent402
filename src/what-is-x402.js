@@ -43,7 +43,7 @@ const COMPARE = [
   ["Challenge", "402 with a PAYMENT-REQUIRED header (base64 JSON payment requirements)", "402 with a standard WWW-Authenticate: Payment header"],
   ["Credential", "PAYMENT-SIGNATURE header carrying the signed authorization (X-PAYMENT in x402 v1)", "Authorization: Payment, the normal HTTP auth slot"],
   ["Receipt", "PAYMENT-RESPONSE response header", "Payment-Receipt response header"],
-  ["Settlement", "EIP-3009 stablecoin authorization, verified by a facilitator", "evm method: identical (EIP-3009, same facilitator); tempo method: settles natively on Tempo. Same price either way"],
+  ["Settlement", "EIP-3009 stablecoin authorization, verified by a facilitator", "evm method: identical (EIP-3009, same facilitator); tempo method: settles natively through Tempo's own relay. Same price either way"],
   ["Client", "@x402/fetch and other x402 clients", "mppx and any HTTP client that speaks the Payment scheme"],
   ["On Agent402", "Served on every paid route", "Served on the same routes, no configuration either side"],
 ];
@@ -185,9 +185,7 @@ table{border-collapse:collapse;width:100%}
 <section id="402" style="max-width:900px;margin:0 auto;padding:64px 30px 0;">
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">01 / HISTORY</div>
   <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--ink);">The status code the web reserved and never used.</h2>
-  <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);margin:0 0 18px;">When HTTP/1.1 was written in 1997 its authors set aside a response code for the case where a client had to pay before it could have something: <span style="font-family:var(--font-mono);font-size:var(--fs-base);color:var(--ink);">402 Payment Required</span>. The spec marked it reserved for future use, and there it sat for roughly thirty years, one of the few status codes almost no server ever sent.</p>
-  <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);margin:0 0 18px;">The reason was not neglect. Card payments cannot fit inside one HTTP response: they need a redirect to a hosted page, a session, a stored credential, and a human to approve the charge. A protocol-level "pay me for this request" was unimplementable with the payment rails of the time.</p>
-  <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);margin:0;">Stablecoins changed the arithmetic. A signed transfer authorization is small enough to travel in a header, cheap enough to be worth a tenth of a cent, and needs no merchant account. x402 is what the 402 status code looks like once a payment system exists that can settle inside a single round trip.</p>
+  <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);margin:0;">HTTP/1.1 reserved <span style="font-family:var(--font-mono);font-size:var(--fs-base);color:var(--ink);">402 Payment Required</span> in 1997 for future use, and almost no server sent it for roughly thirty years: card payments need a redirect, a session and a human, none of which fit in one HTTP response. A signed stablecoin authorization fits in a header and settles inside a single round trip, so x402 finally gives the status code a payment system.</p>
 </section>
 
 <section id="how" style="max-width:1180px;margin:0 auto;padding:64px 30px 0;">
@@ -232,14 +230,12 @@ PAYMENT-RESPONSE: eyJzdWNjZXNzIjp0cnVlLCJ0cmFuc2FjdGlvbiI6&hellip;
 
 <section id="agentic" style="max-width:900px;margin:0 auto;padding:64px 30px 0;">
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">04 / AGENTIC PAYMENTS</div>
-  <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--ink);">What agentic payments are, and why they had to exist.</h2>
-  <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);margin:0 0 18px;"><strong style="color:var(--ink);font-weight:700;">Agentic payments are purchases made by software rather than people.</strong> An AI agent working a real task keeps running into things it cannot answer from memory: fetch a live page, pull a filing, convert a file, check an address on a chain.</p>
-  <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);margin:0 0 18px;">Signing up for twenty APIs is not something it can do. It has no email inbox to confirm, no credit card, no authority to accept terms of service, and no way to rotate the keys it would collect. Every one of those is a human step wedged in front of a machine task.</p>
-  <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);margin:0 0 24px;">Paying a fraction of a cent per call, from a wallet it controls, is a step it can take unattended. That inverts the model: instead of registering for access, the agent simply pays for the one thing it needs, and the payment is the identity. Nothing to sign up for means nothing to leak.</p>
+  <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--ink);">What agentic payments are</h2>
+  <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);margin:0 0 24px;"><strong style="color:var(--ink);font-weight:700;">Agentic payments are purchases made by software rather than people.</strong> An AI agent working a task needs a live page, a filing or a conversion, and it cannot confirm an email, hold a card or accept terms of service. It can pay a fraction of a cent per call from a wallet it controls, unattended, and the payment is the identity.</p>
   <div style="border-left:2px solid var(--accent);padding:4px 0 4px 20px;">
     <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--ink);margin:0;font-weight:500;">The practical test of an agentic payment: could the software complete the purchase with no human awake? If a human has to approve, register, or paste a key, it is not agentic.</p>
   </div>
-  <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);margin:24px 0 0;">Agentic payments are the wire. What forms on top of them once thousands of agents and sellers transact - price discovery, routing between competing sellers, reliability signals, receipts, transparent revenue - is <a href="/agentic-finance" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">Agentic Finance</a>, and Agent402 is built as its applied layer.</p>
+  <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);margin:24px 0 0;">The economy that forms on top of these payments is <a href="/agentic-finance" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">Agentic Finance</a>, and Agent402 is built as its applied layer.</p>
 </section>
 
 <section id="chains" style="max-width:1180px;margin:0 auto;padding:64px 30px 0;">
@@ -301,24 +297,12 @@ PAYMENT-RESPONSE: eyJzdWNjZXNzIjp0cnVlLCJ0cmFuc2FjdGlvbiI6&hellip;
   </div>
 </section>
 
-<section id="faq" style="max-width:900px;margin:0 auto;padding:64px 30px 0;">
+<section id="faq" style="max-width:900px;margin:0 auto;padding:64px 30px 56px;">
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">08 / QUESTIONS</div>
   <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 30px;color:var(--ink);">Questions people and agents ask.</h2>
   <div style="display:flex;flex-direction:column;gap:0;border-top:1px solid var(--hairline);">${faqHtml}</div>
 </section>
 
-<section style="max-width:1180px;margin:0 auto;padding:56px 30px 56px;">
-  <div class="ml-cta-panel" style="background:var(--panel);border:1px solid var(--hairline);padding:52px 44px;position:relative;overflow:hidden;">
-    <div style="position:relative;">
-      <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 16px;color:var(--on-panel);">Now put it to work.</h2>
-      <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 28px;max-width:540px;">Agent402 is the applied layer for both protocols: an open index, a neutral router, and an on-chain ranking of the x402 sellers that settle. Free to list, free to browse.</p>
-      <div style="display:flex;gap:11px;flex-wrap:wrap;">
-        <a class="btn btn-primary on-panel" href="/sell">List your API - free →</a>
-        <a class="btn btn-secondary on-panel" href="/marketplace">See the index</a>
-      </div>
-    </div>
-  </div>
-</section>
 ${ledgerFooterCompact()}`;
 
   return ledgerShell({

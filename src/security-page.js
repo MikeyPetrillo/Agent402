@@ -29,7 +29,7 @@ const SECTIONS = [
   {
     h: "Key handling",
     p: [
-      `Payments on the crypto rails are non-custodial: buyers sign with their own keys, settlement goes to public addresses we publish (the treasury, and for the router tiers our spending wallets), and no customer key ever reaches the server. One card path is not, and we say so rather than let the word cover it: ${creditsPrepaymentPhrase()}. A card report is an ordinary card charge: taken at checkout, and refunded to the card automatically if the report fails to generate. The wallets the service spends from are dedicated, low-balance and alarmed; the treasury never signs a request. Production secrets live only in the hosting platform's variable store, are never committed, and CI signing and publishing keys are scoped Actions secrets with npm publishing on OIDC provenance. Links we email (confirmations, unsubscribes, monitor management) are HMAC-signed with dedicated secrets and verified in constant time.`,
+      `Payments on the crypto rails are non-custodial: buyers sign with their own keys, settlement goes to public addresses we publish (the treasury, and for the router tiers our spending wallets), and no customer key ever reaches the server. One card path is not: ${creditsPrepaymentPhrase()}. A card report is an ordinary card charge: taken at checkout, and refunded to the card automatically if the report fails to generate. The wallets the service spends from are dedicated, low-balance and alarmed; the treasury never signs a request. Production secrets live only in the hosting platform's variable store, are never committed, and CI signing and publishing keys are scoped Actions secrets with npm publishing on OIDC provenance. Links we email (confirmations, unsubscribes, monitor management) are HMAC-signed with dedicated secrets and verified in constant time.`,
     ],
     links: [["/transparency", "Disclosures"]],
   },
@@ -38,7 +38,7 @@ const SECTIONS = [
     p: [
       `Every tool that fetches a caller-supplied URL goes through a DNS-pinned SSRF guard that refuses private, link-local and metadata addresses and re-validates on redirects; on agent402.tools the headless browser and media parsers run in a separate worker that holds no secrets, behind the same egress guard, and the server refuses to start without it (a self-hosted instance runs them in-process unless it configures the worker). The free tier is a signed, single-use, slug-scoped proof-of-work token. Settlement runs after the handler, so on x402 an error is not charged, and a settled receipt that arrives on a failed response is ledgered as a debt with an on-chain proof step before any refund leaves. Per-IP and shared rate limits fail closed; a wallet blocklist is enforced before settlement; every page carries a content security policy that allows no inline scripts (the one exception is the sandboxed, network-less frame of the SDK playground), and every response carries HSTS.`,
     ],
-    links: [["/#why", "Why pay here"], ["/proof", "Receipts"]],
+    links: [["/docs#why", "Why pay here"], ["/proof", "Receipts"]],
   },
   {
     h: "Controls on the code",
@@ -51,7 +51,7 @@ const SECTIONS = [
     h: "Redact before you send",
     p: [
       "Agents often hold text you would rather not share. The Redact PII tool masks email addresses, phone numbers, card-like numbers, IP addresses and US social security numbers before the text goes anywhere else, and returns the masked text with a count of each type it masked.",
-      "It is a priced tool like the rest of the catalog, with the price shown on its page. Run it on your side before a prompt, a log line or a support ticket leaves your system.",
+      "Run it on your side before a prompt, a log line or a support ticket leaves your system; its price is on its page.",
     ],
     links: [["/tools/redact", "Redact tool"]],
   },
@@ -73,7 +73,7 @@ export function securityPage(baseUrl) {
   <div style="max-width:1180px;margin:0 auto;padding:52px 30px 44px;">
     <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-bottom:22px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <span style="color:var(--ink);">security</span></nav>
     <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:.98;margin:0 0 18px;color:var(--ink);max-width:900px;">Security at Agent402.</h1>
-    <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:820px;margin:0;">Agent402.Tools is operated by <a href="https://havok.holdings" rel="noopener" style="color:var(--ink);">Havok Holdings LLC</a>. This page states how the hosted service is built, what it holds, and how to report a problem. Every control named here is in the open-source server and can be read.</p>
+    <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:820px;margin:0;">Agent402.Tools is operated by <a href="https://havok.holdings" rel="noopener" style="color:var(--ink);">Havok Holdings LLC</a>. This page states how the hosted service is built, what it holds, and how to report a problem.</p>
   </div>
 </header>
 ${SECTIONS.map((s) => `

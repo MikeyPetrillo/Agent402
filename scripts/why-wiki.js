@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // wiki/Why-Pay-Here.md is GENERATED from WHY_POINTS (src/why.js), the list the
-// home page's #why section renders. The page used to say its points were
+// /docs #why section renders. The page used to say its points were
 // "copied from" that list and then drifted from it (a sentence the list had
 // gained was missing, and a count the list had dropped was still there).
 //
@@ -26,7 +26,7 @@ export function whyWikiMarkdown() {
 
 > **Payment wires:** every paid endpoint accepts **x402** and **MPP** (Machine Payments Protocol) on the same 402 - see [[Paying with x402]] and [[Paying with MPP]]. Agent402 is the applied layer of [[Agentic Finance]]: agents that pay and get paid on their own.
 
-${cap(count(n))} things that are different about paying here. Every claim links to the surface that proves it: what the server does, measured on the server, on the open protocols anyone can build on, x402 and MPP. The live version is ${SITE}/#why; this page is generated from the same list (\`src/why.js\`) by \`scripts/why-wiki.js\`.
+${cap(count(n))} things that are different about paying here. Every claim links to the surface that proves it: what the server does, measured on the server, on the open protocols anyone can build on, x402 and MPP. The live version is ${SITE}/docs#why; this page is generated from the same list (\`src/why.js\`) by \`scripts/why-wiki.js\`.
 `;
   const points = WHY_POINTS.map((w) => {
     const links = [...(w.links || []), ...(w.more || [])].map(([href, label]) => `- ${cap(label)}: ${abs(href)}`).join("\n");

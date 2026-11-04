@@ -10292,10 +10292,12 @@ const collate = new Intl.Collator().compare;
 function* interleaveSteps(rows) {
   function* pass(subset) {
     const bySeller = new Map();
+    let n = 0;
     for (const r of subset) {
       const k = r.sellerName || r.seller;
       if (!bySeller.has(k)) bySeller.set(k, []);
       bySeller.get(k).push(r);
+      if (++n % 4096 === 0) yield;
     }
     yield;
     const entries = [...bySeller.entries()].sort((a, b) => collate(String(a[0]), String(b[0])));
@@ -10316,10 +10318,20 @@ function* interleaveSteps(rows) {
     }
     return out;
   }
-  const described = yield* pass(rows.filter((r) => r.described));
-  const rest = yield* pass(rows.filter((r) => !r.described));
-  return [...described, ...rest];
+  // The split, the grouping above and the final join each walk every row
+  // (about 200k in a full directory): a slice at a time, never in one step
+  // (in one step they held the loop 50 to 170 ms on a loaded runner).
+  const yes = [], no = [];
+  for (let i = 0; i < rows.length; i++) { (rows[i].described ? yes : no).push(rows[i]); if (i % 8192 === 8191) yield; }
+  const described = yield* pass(yes);
+  yield;
+  const rest = yield* pass(no);
+  yield;
+  for (let i = 0; i < rest.length; i++) { described.push(rest[i]); if (i % 16384 === 16383) yield; }
+  return described;
 }
+/** Test hook: the directory's interleave as steps (src/x402-index.js interleaveSteps). */
+export function _interleaveStepsForTest(rows) { return interleaveSteps(rows); }
 
 function flatRowsForEntry(origin, v, self, seen, out) {
   // Same bar as /api/index/register.

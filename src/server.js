@@ -577,6 +577,7 @@ import { CODE_RUN_TOOLS } from "./tools/code-run-kit.js";
 import { TTS_TOOLS, elevenLabsBreakerState } from "./tools/tts-kit.js";
 // Translate-and-speak: composes the chat gateway and the tts kit in-process (src/tools/dub-kit.js).
 import { DUB_TOOLS } from "./tools/dub-kit.js";
+import { OFFICE_TOOLS } from "./tools/office-kit.js";
 // 2026-08-22 seller-landscape builds: keyless derivatives data + env-gated X data / B2B enrichment.
 import { DERIVATIVES_TOOLS } from "./tools/derivatives-kit.js";
 import { solanaIntelToolsEnabled, rugcheckEnabled } from "./tools/solana-intel-kit.js";
@@ -641,7 +642,7 @@ import { blogIndex, blogPost } from "./blog.js";
 import { contributePage } from "./contribute.js";
 import { workflowsPage } from "./workflows.js";
 import { badgeSvg } from "./badges.js";
-import { adapterDocsIndex, adapterDocPage } from "./adapter-docs.js";
+import { adapterDocsIndex, adapterRedirectTarget } from "./adapter-docs.js";
 import { webhooksPage } from "./webhooks.js";
 import { setOgImageVersion, setNavIndexProvider, setDecideLive, ledgerShell, ledgerFooterCompact, esc as escHtml, renderPathStore, ASSET_VERSION } from "./ledger-chrome.js";
 import { ledgerHomePage } from "./ledger-home.js";
@@ -681,7 +682,7 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, salesLedgerFlush, salesCohorts, payerHasPaidSale } from "./sales-ledger.js";
+import { answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, payerHasPaidSale, firstPaidSaleAfterAsync } from "./sales-ledger.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
@@ -698,7 +699,7 @@ const JUDGE_TOOLS_ENABLED = [...(judgeEnabled() ? JUDGE_TOOLS : []), ...(judgePr
 // status probe's mark) or a payer that is one of our wallets. Stats only.
 const decideOwnTraffic = (req) => isSyntheticRequest(req) || isOwnWallet(payerFromRequest(req)) || isOwnWallet(req?.mppTempoSender);
 const DECIDE_TOOLS_ENABLED = decideEnabled() && decideLedger() ? buildDecideTools({ getCatalog: () => CATALOG, ledger: decideLedger(), isOwnTraffic: decideOwnTraffic }) : [];
-const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...BROWSER_MEASURE_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...DATE_TIME_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_SAFETY_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...X_DATA_TOOLS_ENABLED, ...EXA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...DEFI_TOOLS, ...CVE_TOOLS, ...MCP_PACKAGE_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...FARCASTER_SOCIAL_TOOLS_ENABLED, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS, ...ATTEST_TOOLS, ...SANCTIONS_TOOLS, ...FEEDBACK_TOOLS, ...CHAIN_RPC_TOOLS, ...JUDGE_TOOLS_ENABLED, ...LOOP_GATE_TOOLS, ...DECIDE_TOOLS_ENABLED, ...MARKET_TICK_TOOLS, ...PAGE_CHANGE_TOOLS, ...EMAIL_GUARD_TOOLS, ...DUB_TOOLS];
+const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...BROWSER_MEASURE_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...DATE_TIME_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_SAFETY_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...X_DATA_TOOLS_ENABLED, ...EXA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...DEFI_TOOLS, ...CVE_TOOLS, ...MCP_PACKAGE_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...FARCASTER_SOCIAL_TOOLS_ENABLED, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS, ...ATTEST_TOOLS, ...SANCTIONS_TOOLS, ...FEEDBACK_TOOLS, ...CHAIN_RPC_TOOLS, ...JUDGE_TOOLS_ENABLED, ...LOOP_GATE_TOOLS, ...DECIDE_TOOLS_ENABLED, ...MARKET_TICK_TOOLS, ...PAGE_CHANGE_TOOLS, ...EMAIL_GUARD_TOOLS, ...DUB_TOOLS, ...OFFICE_TOOLS];
 // House style on every report tier's output (agents, card buyers, monitors
 // all reach the same handler object): no em or en dashes in what a person
 // reads. Wrapped in place so _premiumHandlers below sees the wrapped one.
@@ -3260,6 +3261,9 @@ const LARGE_BODY_ROUTES = [
   // onchain-sql takes SQL to 60,000 characters (SQL_MAX_CHARS), which JSON
   // escaping can double on the wire past the global 100 KB parser.
   ["/api/onchain-sql", 256 * 1024],
+  // The Office builders take 100,000 characters of text or 50,000 cells
+  // (OFFICE_LIMITS.requestBytes), past the global parser once JSON-escaped.
+  ["/api/xlsx-create", 2 * MB], ["/api/docx-create", 2 * MB], ["/api/pptx-create", 2 * MB],
 ];
 const largeBodyUnpaidLimiter = createRateLimiter("large-body-unpaid", { perMin: 60, perHour: 1200 });
 app.use(createLargeBodyGate({
@@ -3299,6 +3303,8 @@ app.use("/api/html-frames", unlessBodyUnread(express.json({ limit: "12mb", infla
 // onchain-sql: a 60,000-character query is up to 120 KB once JSON-escaped;
 // the handler's own cap (SQL_MAX_CHARS) checks the text again.
 app.use("/api/onchain-sql", unlessBodyUnread(express.json({ limit: "256kb", inflate: false })));
+// Office builders: the caps in OFFICE_LIMITS are checked again by each handler.
+app.use(["/api/xlsx-create", "/api/docx-create", "/api/pptx-create"], unlessBodyUnread(express.json({ limit: "2mb", inflate: false })));
 // Image edit: up to four reference images as base64 in JSON, or one as a
 // multipart file (OpenAI's images.edit() wire). The handler checks each image.
 app.use("/v1/images/edits", unlessBodyUnread(express.json({ limit: "34mb", inflate: false })));
@@ -3933,11 +3939,12 @@ app.get("/speech", (_req, res) => htmlCache(res, 300, 900).send(speechPage(BASE_
 // positions under; DefinedTerm + Article + FAQPage structured data.
 app.get("/agentic-finance", (_req, res) => htmlCache(res, 300, 900).send(agenticFinancePage(BASE_URL)));
 app.get("/aifi", (_req, res) => res.redirect(301, "/agentic-finance"));
-// /why - the seven first-party differences live in the #why section of the
-// home page (src/why.js renders it). Older links and published package READMEs
-// still name /why, so it answers a permanent redirect to the section. The
-// fragment is literal: a browser applies it after following the redirect.
-app.get("/why", (_req, res) => res.redirect(301, "/#why"));
+// /why - the seven first-party differences live in full in the #why section of
+// /docs (src/why.js renders it; the home page's #why shows three of them, short).
+// Older links and published package READMEs still name /why, so it answers a
+// permanent redirect to the full section. The fragment is literal: a browser
+// applies it after following the redirect.
+app.get("/why", (_req, res) => res.redirect(301, "/docs#why"));
 // The conformance front door. The classifier that answers a failing client has
 // shipped since August; this is the page that tells anyone it exists.
 app.get("/x402-test", (_req, res) => htmlCache(res, 300, 900).send(x402TestPage(BASE_URL)));
@@ -4917,7 +4924,7 @@ app.get("/__operator/sales.json", async (req, res) => {
     // Distinct outside MPP agents this UTC week (partial week), a count only;
     // the series and method split live on /__operator/mpp-agents.json.
     let mppAgentsThisWeek = null;
-    try { mppAgentsThisWeek = mppAgentsWeekly({ weeks: 1 }).weeks[0]?.distinctAgents ?? 0; } catch { /* count is optional */ }
+    try { mppAgentsThisWeek = mppAgentsThisWeekCount(); } catch { /* count is optional */ }
     // The detailed summary walks the whole window: read across turns, never in line.
     const summary = await salesSummaryAsync({ detailed: true });
     res.json({ ...summary, mppAgentsThisWeek, feedback: { byTool: feedbackByTool({ days: 90 }), bad: badFeedback({ days: 30 }) } });
@@ -5151,9 +5158,9 @@ app.get("/blog", (_req, res) => htmlCache(res, 300, 900).send(blogIndex(BASE_URL
 // exact tool count the evergreen rule forbids on served pages); keep the URL.
 app.get("/blog/1000-tools-milestone", (_req, res) => res.redirect(301, "/blog/catalog-milestone"));
 app.get("/blog/:slug", (req, res) => { const html = blogPost(BASE_URL, req.params.slug); if (!html) return notFoundPage(res, { what: "Post", href: "/blog", label: "All posts" }); htmlCache(res, 300, 900).send(html); });
-// /compare folded into the side-by-side table of the home #why section; /community's
+// /compare folded into the side-by-side table of the /docs #why section; /community's
 // adapters, packages and sample reports live on /integrations and /reports.
-app.get("/compare", (_req, res) => res.redirect(301, "/#why-compare"));
+app.get("/compare", (_req, res) => res.redirect(301, "/docs#why-compare"));
 app.get("/community", (_req, res) => res.redirect(301, "/integrations"));
 app.get("/contribute", (_req, res) => htmlCache(res, 300, 900).send(contributePage(BASE_URL)));
 app.get("/workflows", (_req, res) => htmlCache(res, 300, 900).send(workflowsPage(BASE_URL, CATALOG)));
@@ -5171,7 +5178,8 @@ app.get("/badges", (_req, res) => res.redirect(301, "/docs#badges"));
 app.get("/badges/:style.svg", (req, res) => { const svg = badgeSvg(req.params.style); if (!svg) return res.status(404).json({ error: "unknown badge style" }); res.setHeader("Cache-Control", "public, max-age=3600").type("image/svg+xml").send(svg); });
 app.get("/docs/adapters", (_req, res) => htmlCache(res, 300, 900).send(adapterDocsIndex(BASE_URL)));
 app.get("/docs/webhooks", (_req, res) => htmlCache(res, 300, 900).send(webhooksPage(BASE_URL)));
-app.get("/docs/adapters/:slug", (req, res) => { const html = adapterDocPage(BASE_URL, req.params.slug); if (!html) return notFoundPage(res, { what: "Adapter", href: "/docs/adapters", label: "All adapters" }); htmlCache(res, 300, 900).send(html); });
+// One page per framework adapter: /integrations/<slug>. The old docs path moves there.
+app.get("/docs/adapters/:slug", (req, res) => { const to = adapterRedirectTarget(req.params.slug); if (!to) return notFoundPage(res, { what: "Adapter", href: "/docs/adapters", label: "All adapters" }); res.redirect(301, to); });
 app.get("/changelog.xml", (_req, res) => { res.setHeader("Cache-Control", "public, max-age=600"); res.type("application/rss+xml").send(changelogRss(BASE_URL)); });
 app.get("/sitemapindex.xml", (_req, res) => { res.setHeader("Cache-Control", "public, max-age=3600"); res.type("application/xml").send(sitemapIndex(BASE_URL, CATALOG)); });
 app.get("/sitemap-pages.xml", (_req, res) => { res.setHeader("Cache-Control", "public, max-age=3600"); res.type("application/xml").send(sitemapPages(BASE_URL, CATALOG)); });
@@ -6120,8 +6128,9 @@ app.get("/__operator/refunds.json", async (req, res) => {
     // an abandoned run is charged and appears above as owed with httpStatus 499.
     hangupForgiveness: hangupForgivenessStatus(),
     // First-call allowance grants (src/first-call-allowance.js): switch,
-    // caps, today's grants and list-price USD, refusals by reason.
-    firstCallAllowance: await firstCallAllowanceStatus().catch(() => null),
+    // caps, today's grants and list-price USD, refusals by reason, and
+    // returnedPayers (granted wallets that later paid; cached, operator only).
+    firstCallAllowance: await firstCallAllowanceStatus({ returned: firstPaidSaleAfterAsync }).catch(() => null),
     // Settle failures that named a transaction, open until the chain says
     // whether it landed (src/late-settlements.js); a landed one becomes an
     // owed row above.

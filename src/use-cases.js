@@ -5,7 +5,8 @@ import { esc } from "./ledger-chrome.js";
 // live catalog at render time: every typed cost line on this page had drifted
 // from the prices the paywall charges, one claimed a set of network tools was
 // free over proof-of-work, and the stories were written as past events.
-// `calls` = [slug, count]; `per` names the unit the total is for.
+// `calls` = [slug, count]; `per` names the unit the total is for. Three tasks,
+// one per kind of work (data research, web monitoring, cited answers).
 export const USE_CASES = [
   {
     title: "Research 50 public companies overnight",
@@ -14,47 +15,17 @@ export const USE_CASES = [
     per: "for 50 companies",
   },
   {
-    title: "Check a domain's security posture",
-    story: "A security team's agent reads a vendor's domain in one pass: DNS records, TLS certificate, WHOIS, HTTP headers, SPF and robots.txt.",
-    calls: [["dns", 1], ["tls-cert", 1], ["whois", 1], ["http-check", 1], ["spf-check", 1], ["robots-check", 1]],
-    per: "per domain",
-  },
-  {
-    title: "Extract 200 PDF invoices to text",
-    story: "A procurement agent converts 200 supplier invoices from PDF to markdown, then parses line items, totals and dates into structured JSON for reconciliation.",
-    calls: [["pdf-to-markdown", 200]],
-    per: "for 200 invoices",
-  },
-  {
     title: "Watch competitor pricing daily",
     story: "A pricing agent reads 40 product pages every morning (render for the 20 JavaScript-heavy ones, extract for the 20 static ones, both returning markdown it scans for prices) and logs changes to its wallet-keyed memory for trend analysis.",
     calls: [["render", 20], ["extract", 20], ["memory-write", 20]],
     per: "per day",
   },
   {
-    title: "Build a macro dashboard from government data",
-    story: "A research agent assembles a US economic snapshot: CPI year-over-year, unemployment, the Fed funds rate, the Treasury yield curve and FX rates, from official feeds, with no API keys.",
-    calls: [["cpi-yoy", 1], ["unemployment-rate", 1], ["fed-funds", 1], ["treasury-yield-curve", 1], ["fx-dashboard", 1]],
-    per: "per snapshot",
-  },
-  {
     title: "Answer customer questions with live web search",
     story: "A support agent searches the live web for product documentation, gets a cited, model-written synthesis from the answer tool (model-backed) and includes the source URLs in its reply.",
     calls: [["search", 1], ["answer", 1]],
     per: "per question",
-  },
-  {
-    title: "Validate an address list and geocode the new rows",
-    story: "An ops agent lints a CSV of 500 customer rows, checks the contact emails and geocodes the 20 new addresses to lat/lng at one call a second, the open geocoder's pace, with no maps API key.",
-    calls: [["csv-lint", 1], ["geocode", 20], ["email-validate", 500]],
-    per: "for 500 rows",
-  },
-  {
-    title: "Cross-check SEC insider trades against stock moves",
-    story: "A compliance agent pulls recent insider trades from EDGAR, matches them against the stock's price history and flags trades that preceded large moves.",
-    calls: [["edgar-insider-trades", 1], ["stock-history", 1], ["stock-quote", 1]],
-    per: "per company",
-  },
+  }
 ];
 
 const priceNum = (def) => Number(String(def?.price ?? "").replace(/[^0-9.]/g, ""));
@@ -92,8 +63,7 @@ export function examplesJsonLd(baseUrl) {
 /** CSS for the #examples section (appended to the docs page's extraCss). */
 export const EXAMPLES_SECTION_CSS = `
   #examples { scroll-margin-top: 110px; }
-  .ex-grid { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:0 0 44px; }
-  @media (max-width:740px){ .ex-grid { grid-template-columns:minmax(0,1fr); } }
+  .ex-grid { display:grid;grid-template-columns:minmax(0,1fr);gap:14px;margin:0 0 44px; }
   .ex-card { background:var(--card);border:1px solid var(--hairline);padding:18px 20px; }
   .ml-docs-main .ex-card h3 { font-family:var(--font-body);font-weight:600;font-size:var(--fs-lg);line-height:1.3;margin:0 0 8px;color:var(--ink); }
   .ml-docs-main .ex-card p { font-size:var(--fs-md);line-height:1.55;color:var(--muted);margin:0 0 10px; }
@@ -131,7 +101,7 @@ export function examplesSectionHtml(catalog = {}) {
   return `<!-- EXAMPLES -->
       <section>
       <h2 id="examples" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 10px;">Examples.</h2>
-      <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:640px;margin:0 0 18px;">Tasks an agent can run here, from overnight research to daily monitoring. Each one names the calls it makes and what they cost at today's per-call prices, read from the live catalog.</p>
+      <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:640px;margin:0 0 18px;">Each task names the calls it makes and what they cost at today's per-call prices, read from the live catalog.</p>
       <div class="ex-grid">${cards}
       </div>
       </section>

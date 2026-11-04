@@ -17,7 +17,7 @@ import { onGatedRailOffered } from "./gated-rails.js";
 import { CATEGORIES } from "./pages.js";
 import { chainMark, CHAIN_ORDER } from "./chain-logos.js";
 import { discoveryNote } from "./discovery-note.js";
-import { hostCardHtml } from "./host-entry.js";
+import { hostCardHtml, hostCardNotes } from "./host-entry.js";
 import { standingCountsExcludingHost } from "./standing.js";
 import { ALGORAND_MAINNET_CAIP2 } from "./avm-network.js";
 
@@ -360,7 +360,7 @@ export function withPremium(usdPrice, premiumUsd) {
 // the same on every chain apart from the chain's own SDK notes.
 export function sellParagraphHtml(C) {
   const net = C.sellNetworkHtml ? esc(C.sellNetworkHtml) : `the ${esc(C.chainName)} CAIP-2 network (<code>${esc(C.caip2)}</code>)`;
-  return `Accept ${net} in your 402 challenge; an x402 facilitator that supports ${esc(C.chainName)} verifies and settles each payment. ${C.sellExtraHtml} Then serve <code>/.well-known/x402</code> and list it on <a href="/sell">/sell</a> (free): the index crawler picks it up, and rows here are ordered by settled calls, then crawl health. Want a guaranteed crawl? <a href="${repoUrl("issues")}" rel="noopener">Open a seed request</a>.`;
+  return `Accept ${net} in your 402 challenge; an x402 facilitator that supports ${esc(C.chainName)} verifies and settles each payment. ${C.sellExtraHtml} Then serve <code>/.well-known/x402</code> and list it on <a href="/sell">/sell</a> (free): the index crawler picks it up. Want a guaranteed crawl? <a href="${repoUrl("issues")}" rel="noopener">Open a seed request</a>.`;
 }
 // The host's on-chain tx count is our wallet's whole reading, our own canary
 // and volume runs included, unlike the host card's outside-buyer figures.
@@ -441,7 +441,7 @@ export function marketTools(_chainKey, snapshot) {
 // DOMContentLoaded, once the whole roster is in the DOM. (An earlier version
 // queried the rows at parse time and its zero-rows early return dead-wired
 // the controls on every load; the execution-order test locks this in.)
-export function marketFilterBar(chainKey, _baseUrl, routerChains = null) {
+export function marketFilterBar(chainKey, _baseUrl) {
   const tab = (key, label, href, on) =>
     `<a data-chain-tab="${key}" href="${href}" class="mfb-tab${on ? " on" : ""}">${esc(label)}</a>`;
   const tabs = [tab("all", "All", "/marketplace", chainKey == null)]
@@ -456,8 +456,29 @@ export function marketFilterBar(chainKey, _baseUrl, routerChains = null) {
     <select class="mfb-sel" data-mfb-sort aria-label="Sort sellers by"><option value="calls">most settled</option><option value="usd">volume</option><option value="buyers">buyers</option><option value="tools">tools</option><option value="health">health</option></select>
     <input class="mfb-search" data-mfb-search placeholder="search sellers" aria-label="Search sellers">` : ""}
   </div>
-  <p class="mfb-legend" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:6px 0 0;line-height:1.5;"><strong style="color:var(--muted);">healthy</strong> = the last crawl of the origin succeeded, nothing more. <strong style="color:var(--muted);">dispatch</strong> = this host's router will buy from this seller right now, on the chain the badge names; it buys on ${esc(routerChainsProse(routerChains))}, paying from the chain the buyer paid on. A seller can be listed, healthy and still not dispatch-eligible (for example: the last crawl failed, it accepts no chain the router pays on, or it has too little settlement history yet). The reason is on each row and on <code>/api/index</code> as <code>routerDispatchReason</code>.</p>
 ${rowControls ? `  <script src="/js/market-filter-bar.js"></script>` : ""}`;
+}
+
+// The notes every marketplace page shares, rendered once per page in one
+// collapsed block (figuresNotesHtml) so each page leads with its own chain's
+// content: what the index holds and how its rows are ordered, the row marks'
+// legend, the host card's scope, and how to read the 402 sample. Collapsed,
+// not removed: every sentence stays in the served HTML for crawlers and agents.
+export function dispatchLegendHtml(routerChains = null) {
+  return `<p class="mfb-legend"><strong style="color:var(--ink);">healthy</strong> = the last crawl of the origin succeeded, nothing more. <strong style="color:var(--ink);">dispatch</strong> = this host's router will buy from this seller right now, on the chain the badge names; it buys on ${esc(routerChainsProse(routerChains))}, paying from the chain the buyer paid on. A seller can be listed, healthy and still not dispatch-eligible (for example: the last crawl failed, it accepts no chain the router pays on, or it has too little settlement history yet). A row's mark names the reason, and <code>/api/index</code> carries it as <code>routerDispatchReason</code>.</p>`;
+}
+export function figuresNotesHtml({ chainName = null, routerChains = null, host = null, challenge = false } = {}) {
+  const items = [
+    `<p>${chainName ? `An open index of the whole ${esc(chainName)} x402 economy: this host` : "This host"} plus every independent seller the crawl finds, the x402 Bazaar discovery listing included, so other venues' listings appear here too. Each origin is re-probed ${crawlIntervalLabel()}, and rows are ordered by settled calls, then crawl health.</p>`,
+    dispatchLegendHtml(routerChains),
+    host ? `<p>${esc(hostCardNotes(host))}</p>` : "",
+    challenge ? `<p>In the 402 challenge sample, <code>amount</code> is in the token's smallest unit (6 decimals: 1000 = $0.001) and <code>asset</code> is the token's on-chain id.</p>` : "",
+  ].filter(Boolean);
+  return `
+  <details id="about-figures" class="ml-notes">
+    <summary>About these figures</summary>
+    <div class="ml-notes-body ml-measure">${items.join("")}</div>
+  </details>`;
 }
 
   // Dispatch badge, rendered ONLY when the handler labelled the seller
@@ -850,7 +871,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
       <input id="reg-origin" type="url" placeholder="https://api.yourdomain.com" style="flex:1;font-family:var(--font-mono);font-size:var(--fs-sm);padding:9px 12px;border:1px solid var(--hairline);background:var(--paper);color:var(--ink);" aria-label="https://api.yourdomain.com">
       <button class="btn btn-primary btn-sm" id="reg-go">Submit</button>
     </div>
-    <div id="reg-out" role="status" aria-live="polite" data-listed-note="${esc(C.chainName)} sellers appear on this page; all sellers appear on /marketplace." style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);margin-top:8px;">Free, no account - we probe your origin's x402 surface and list you if it answers. Rows are ordered by settled calls, then crawl health.</div>
+    <div id="reg-out" role="status" aria-live="polite" data-listed-note="${esc(C.chainName)} sellers appear on this page; all sellers appear on /marketplace." style="font-size:var(--fs-sm);line-height:1.5;color:var(--muted);margin-top:8px;">We probe your origin's x402 surface and list you if it answers.</div>
   </div>
   <script src="/js/reg-form.js"></script>`;
 
@@ -884,7 +905,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   // cargo - the EVERY TOOL INDEXED link - rides the nav dropdown and footer
   // on every page. Three stacked chain lists read as clutter.
 
-  const subheadHtml = `Pay-per-call tools for AI agents - settled in ${esc(C.asset)} on ${esc(C.chainName)}, no signup, no API keys. The wallet is the account.`;
+  const subheadHtml = `Pay-per-call tools for AI agents, settled in ${esc(C.asset)} on ${esc(C.chainName)}. The wallet is the account.`;
 
   const headerHtml = `
   <div class="ml-2col" style="display:grid;grid-template-columns:1.15fr .85fr;gap:34px;align-items:start;">
@@ -906,14 +927,13 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
           <a href="#sellers" style="color:var(--muted);text-decoration:none;">browse sellers</a>
         </div>
       </div>
-      <p style="font-size:var(--fs-sm);color:var(--faint);margin:10px 0 0;">An open index of the whole ${esc(C.chainName)} x402 economy - this host plus every independent seller the crawl finds (the x402 Bazaar discovery listing included), each re-probed ${crawlIntervalLabel()}. Not a walled market: other venues' listings appear here too.</p>
       ${receiptHtml}
       <p style="font-size:var(--fs-sm);line-height:1.45;color:var(--faint);margin:4px 0 0;min-height:56px;">${esc(canaryLineFor(C))}</p>
     </div>
     ${railManifestHtml}
   </div>
   ${hostCardHtml(host)}
-  ${marketFilterBar(chainKey, baseUrl, routerChains)}
+  ${marketFilterBar(chainKey, baseUrl)}
   ${statsHtml}`;
 
   // --- terminal roster -----------------------------------------------------
@@ -1002,7 +1022,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   <span style="color:var(--on-panel-faint);">"asset"</span>: "&lt;${esc(C.asset)} token ${C.caip2.startsWith("algorand:") ? "ASA id" : C.caip2.startsWith("solana:") ? "mint" : "contract address"}&gt;",
   <span style="color:var(--on-panel-faint);">"payTo"</span>: "&lt;your wallet&gt;"
 }</pre>
-      <p style="margin:0;padding:0 18px 14px;font-family:var(--font-mono);font-size:var(--fs-2xs);line-height:1.6;color:var(--on-panel-faint);">amount is in the token's smallest unit (6 decimals: 1000 = $0.001); asset is the token's on-chain id. For a live accept on this chain: <code style="display:block;margin-top:4px;font:inherit;color:var(--on-panel);background:none;padding:0;">curl -i ${esc(baseUrl)}/api/hash?text=hi</code></p>
+      <p style="margin:0;padding:0 18px 14px;font-family:var(--font-mono);font-size:var(--fs-2xs);line-height:1.6;color:var(--on-panel-faint);">For a live accept on this chain: <code style="display:block;margin-top:4px;font:inherit;color:var(--on-panel);background:none;padding:0;">curl -i ${esc(baseUrl)}/api/hash?text=hi</code></p>
     </div>
   </div>`;
 
@@ -1013,7 +1033,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
        row, sortable, searchable and keyboard-navigable. The per-seller facts
        the card roster used to add (collapsed sibling endpoints, the MPP wire,
        the dispatch verdict and its reason) ride the row as marks. -->
-  <section id="sellers" aria-label="Sellers accepting ${esc(C.chainName)}">${terminalHtml}${terminalCaption}${terminalCapNote}${honesty}</section>
+  <section id="sellers" aria-label="Sellers accepting ${esc(C.chainName)}">${terminalHtml}${terminalCaption}${terminalCapNote}${honesty}${figuresNotesHtml({ chainName: C.chainName, routerChains, host, challenge: true })}</section>
 
   <section>
     <div id="market-panel" data-chain="${esc(chainKey)}">${marketPanelHtml(chainKey, { snapshot, activity, selectedSeller, leaderboardSnap })}</div>
@@ -1021,7 +1041,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
 
   <section>
     <h2 style="font-size:var(--fs-xl);font-weight:700;margin:40px 0 10px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Buy tools with ${esc(C.asset)} on ${esc(C.chainName)}</h2>
-    <p style="font-size:var(--fs-base);color:var(--muted);margin:0 0 10px;">${payableSentence(payable, C)}, from ${usdExact(low)} to ${usdExact(high)} a call${premiumNote}${groups.length ? `, across ${groups.map((g) => esc(g.label.toLowerCase())).slice(0, 6).join(", ")} and more` : ""}. The catalog page carries the category browser; this page is the chain's ledger.</p>
+    <p style="font-size:var(--fs-base);color:var(--muted);margin:0 0 10px;">${payableSentence(payable, C)}, from ${usdExact(low)} to ${usdExact(high)} a call${premiumNote}${groups.length ? `, across ${groups.map((g) => esc(g.label.toLowerCase())).slice(0, 6).join(", ")} and more` : ""}.</p>
     <p style="font-family:var(--font-mono);font-size:var(--fs-sm);background:var(--card-zebra);padding:10px 14px;margin:0;">agents: <code>GET ${esc(baseUrl)}/api/route?q=&lt;task&gt;&amp;network=${esc(C.networkParam)}</code></p>
   </section>
 
@@ -1248,7 +1268,7 @@ function* marketPageAllSteps(baseUrl, { snapshot, leaderboardSnap, economySnap, 
   const rankedVisible = truncated ? ranked.slice(0, ALL_ROW_CAP) : ranked;
   const visibleSellers = localSeller ? [localSeller, ...rankedVisible] : rankedVisible;
   const capNote = truncated
-    ? `<p class="chips-note ml-meta" style="font-size:var(--fs-xs);">${["this host pinned", "showing the top " + ALL_ROW_CAP + " of " + ranked.length + " independent sellers", '<a href="/marketplace?all=1" style="color:var(--muted);">show all &rarr;</a>'].map((t) => `<span>${t}</span>`).join("")}</p>`
+    ? `<p class="chips-note ml-meta" style="font-size:var(--fs-xs);">${["this host pinned", "top " + ALL_ROW_CAP + " of " + ranked.length + " independent sellers", '<a href="/marketplace?all=1" style="color:var(--muted);">show all &rarr;</a>'].map((t) => `<span>${t}</span>`).join("")}</p>`
     : "";
 
   // Grid rows, not a <table> - reuses the exact .mlr-row/.ml-roster-compact
@@ -1339,12 +1359,7 @@ function* marketPageAllSteps(baseUrl, { snapshot, leaderboardSnap, economySnap, 
         <a href="#sellers" style="color:var(--muted);text-decoration:none;">browse all sellers</a>
       </div>
     </div>
-    <p style="font-size:var(--fs-sm);color:var(--faint);margin:10px 0 0;">Describe the job, not the tool name - FIND searches every tool and shows live results. Resolving is free (<span style="color:var(--muted);">GET /api/find</span>), you only pay to execute. This is the neutral x402 index: every seller, not just ours.</p>
-    <div style="margin:12px 0 0;padding:12px 18px;border:1px solid var(--hairline);background:var(--card);max-width:640px;display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;">
-      <span style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.1em;color:var(--faint);">SELLER PATH</span>
-      <span style="font-size:var(--fs-md);color:var(--muted);flex:1;min-width:220px;">Selling an x402 API? Listing is free, takes no signup, and deducts nothing from your price.</span>
-      <a href="/sell" style="font-family:var(--font-mono);font-size:var(--fs-sm);font-weight:700;color:var(--accent);text-decoration:none;white-space:nowrap;">list your API →</a>
-    </div>
+    <p style="font-size:var(--fs-sm);color:var(--faint);margin:10px 0 0;">Describe the job, not the tool name: FIND searches every tool and shows live results. Resolving is free (<span style="color:var(--muted);">GET /api/find</span>); you pay only to execute. This is the neutral x402 index: every seller, not just ours.</p>
     ${statsHtml}
   </div>`;
 
@@ -1388,15 +1403,15 @@ function* marketPageAllSteps(baseUrl, { snapshot, leaderboardSnap, economySnap, 
   <div class="ml-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--hairline);margin-top:48px;">
     <div style="padding:26px;border-right:1px solid var(--hairline);background:var(--card);">
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">$ GET /api/route</div>
-      <h2 style="font-weight:700;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">Or skip the browsing</h2>
+      <h2 style="font-weight:700;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">Route a task instead</h2>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;">Describe the task and the Smart Order Router resolves it to a tool - from this index, ours or anyone else's - then runs it. Candidates are ranked by how well they match, then crawl health, buyers and price; a model can make the final pick (<a href="/guides/smart-order-router" style="color:var(--muted);">the full rule</a>). It buys from external sellers and resells the result to you.</p>
       <pre style="margin:0 0 14px;background:var(--panel);border:1px solid var(--panel-rule);color:var(--on-panel);padding:14px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># free to resolve; running a result costs the router price in its executeVia
 </span>curl 'https://agent402.tools/api/route?q=ocr+an+image'</pre>
       <a href="/guides/smart-order-router" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1.5px solid var(--accent);padding-bottom:1px;">how the router ranks →</a>
     </div>
     <div style="padding:26px;background:var(--card);">
-      <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">HOW THE INDEX IS BUILT</div>
-      <h2 style="font-weight:700;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">Crawled, not curated</h2>
+      <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">$ GET /api/index</div>
+      <h2 style="font-weight:700;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">How the index is built</h2>
       <div style="display:flex;flex-direction:column;">${[
         "Discovery: the x402 Bazaar discovery listing plus our own crawler, plus anyone who self-registers at POST /api/index/register.",
         "We read each seller's manifest for its tools, routes and prices, and its live 402 challenge for the chains it accepts.",
@@ -1425,7 +1440,7 @@ function* marketPageAllSteps(baseUrl, { snapshot, leaderboardSnap, economySnap, 
   <div class="ml-cta-panel" style="margin:48px 0 0;background:var(--panel);border:1px solid var(--hairline);padding:40px 36px;position:relative;overflow:hidden;">
     <div style="position:relative;">
       <h2 style="font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 12px;color:var(--on-panel);">Add your API to the index.</h2>
-      <p style="font-size:var(--fs-base);line-height:1.6;color:var(--on-panel-muted);margin:0 0 22px;max-width:64ch;">Free, no signup, nothing deducted. Serve a 402 and register the origin: the crawler reads it at once and re-probes it ${crawlIntervalLabel()}.</p>
+      <p style="font-size:var(--fs-base);line-height:1.6;color:var(--on-panel-muted);margin:0 0 22px;max-width:64ch;">Listing is free, takes no signup and deducts nothing from your price. Serve a 402 and register the origin: the crawler reads it at once and re-probes it ${crawlIntervalLabel()}.</p>
       <div style="display:flex;gap:11px;flex-wrap:wrap;">
         <a class="btn btn-primary" href="/sell">List your API - free →</a>
         <a href="/leaderboard" style="background:transparent;border:1.5px solid var(--panel-rule-2);color:var(--on-panel);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:12px 22px;">SEE THE LEADERBOARD</a>
@@ -1490,8 +1505,9 @@ function* marketPageAllSteps(baseUrl, { snapshot, leaderboardSnap, economySnap, 
   <section>${headerHtml}</section>
   <section>
     ${hostCardHtml(host)}
-    ${marketFilterBar(null, baseUrl, routerChains)}
+    ${marketFilterBar(null, baseUrl)}
     ${rosterHtml}
+    ${figuresNotesHtml({ routerChains, host })}
   </section>
   <section>${chainGridSection}</section>
   <section>${economyStripHtml(economySnap)}</section>

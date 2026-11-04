@@ -1316,6 +1316,8 @@ jobs:
           t node scripts/test-page-change-kit.js
           # email-guard (offline: MIME reader, HTML worker, header, link and text signals)
           t node scripts/test-email-guard.js
+          # Office files (offline: xlsx, docx and pptx read back by an independent zip reader; caps, no-formula, no-egress, timing)
+          t node scripts/test-office-create.js
           # Memory v2 unit tests (grants, counters, audit chain, recall)
           t node scripts/test-memory.js
           # The local embedding's token hash: unchanged for strings, string-coerced and bounded.
@@ -1472,6 +1474,8 @@ jobs:
           t node scripts/test-first-call-allowance.js
           # The allowance's settle skip is keyed by the payment (network, payer, nonce), never by finding the request: a moved adapter path still skips a granted 200 (REAL redis, in-process).
           t node scripts/test-first-call-allowance-hook.js
+          # The grant's record on Postgres keeps the claim time, so a paid call booked while a slow free call ran reads as a return (REAL redis + postgres, in-process).
+          t node scripts/test-first-call-allowance-record-pg.js
           t node scripts/test-external-spend-guard-pg.js
           # The per-payer unsettled ceiling holds across replicas: one reservation script on REAL redis (needs this lane's Redis).
           t node scripts/test-external-spend-guard-redis.js
@@ -1811,7 +1815,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (60 scripts, one process each)
+      - name: Offline suites (61 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -1877,6 +1881,8 @@ jobs:
           t node scripts/test-revenue-cold.js
           # The live rail scan runs once per period across containers (lease + shared snapshot, adopted at boot); cadences default to 4 hours and the copy says so (injected scan/store/lease - offline)
           t node scripts/test-revenue-shared-scan.js
+          # The paged Tempo read equals the one-query read it replaced: same rows once each, same sum, (ts, id) order, with ties across page boundaries (offline)
+          t node scripts/test-tempo-paging-oracle.js
           # Settle-fallback chain (Solvador first on its advertised networks -> PayAI -> Solvador last resort; double-settle gate between fallbacks - offline)
           t node scripts/test-settle-fallback.js
           # A listed Robinhood settle fallback is tried only after its /supported confirms eip155:4663 (paid-mode boot vs stub facilitators - offline)
@@ -3283,6 +3289,8 @@ jobs:
           t node scripts/test-mpp-agents-weekly.js
           # Arrival path per sale (mcp, client package, http) on the operator surfaces; sweep/burst cohorts; the Gateway test buyer is ours
           t node scripts/test-sale-path.js
+          # First-call allowance returning payers (operator view): granted wallets with a later outside paid sale, and within 7 days; one batched ledger read, cached (offline, temp SQLite ledger)
+          t node scripts/test-first-call-allowance-returned.js
           t node scripts/test-attest-kit.js
           # One mirror pull in flight; a fresh lookup during a running pull waits and pulls again (offline)
           t node scripts/test-single-flight.js

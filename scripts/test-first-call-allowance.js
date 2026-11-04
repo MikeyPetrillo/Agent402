@@ -188,6 +188,8 @@ try {
     // No forgiveness ticket: a granted call's hang-up reaches the debt recorder.
     HANGUP_FORGIVE: "off",
     ANSWER_SHARE: "on",
+    // The returning-payer figure is read fresh on every operator read here.
+    FIRST_CALL_ALLOWANCE_RETURNED_CACHE_MS: "0",
     ...(PG_URL ? { STATE_DATABASE_URL: PG_URL, STATE_DB_SCHEMA: PG_SCHEMA } : {}),
   });
   const B = Bt.B;
@@ -348,8 +350,16 @@ try {
     try {
       const rows = (await c.query(`SELECT id FROM ${PG_SCHEMA}.records WHERE collection = 'first-call-allowance'`)).rows.map((r) => r.id).sort();
       ok(rows.length === grants && rows.includes(wA) && !rows.includes(wallet(0xf4)), `with the state database, each served grant is a record (${rows.length} of ${grants})`);
+      // wA's grant was followed by a settled paid call: it is a returning payer.
+      const rp = (await opJson(B, "/__operator/refunds.json")).firstCallAllowance?.returnedPayers;
+      ok(rp?.granted === grants && rp?.paidAgain >= 1 && rp?.paidAgainWithin7d === rp?.paidAgain && rp?.complete === true,
+        `the operator view counts granted wallets that paid again (${JSON.stringify(rp)})`);
     } finally { await c.end().catch(() => {}); }
-  } else console.log("skip - state database records (no STATE_DATABASE_URL)");
+  } else {
+    console.log("skip - state database records (no STATE_DATABASE_URL)");
+    const rp = (await opJson(B, "/__operator/refunds.json")).firstCallAllowance?.returnedPayers;
+    ok(rp?.granted === 0 && rp?.paidAgain === 0 && typeof rp?.asOf === "string", `without the state database the figure reads zero grants (${JSON.stringify(rp)})`);
+  }
   Bt.proc.kill("SIGKILL"); Bt = null;
 
   // ---------------- Boot C: a slow handler, no forgiveness ticket ----------------

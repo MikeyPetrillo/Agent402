@@ -62,7 +62,7 @@ The flat tiers: one price per call whatever the length, for a buyer who wants a 
 
 | Endpoint | Price | Serves | Input cap | Output cap |
 |---|---|---|---|---|
-| `POST /v1/nano/chat/completions` | $0.003 | nano models (gpt-6-luna by default, gpt-5.6-luna, gpt-5-nano, gemini flash-lite, mercury-2.5, small llama/ministral/qwen, deepseek-chat; `GET /v1/models` lists the live set) - priced for high-frequency agent loops | 12k chars | 768 tokens |
+| `POST /v1/nano/chat/completions` | $0.003 | nano models (gpt-6-luna by default, gpt-5.6-luna, gpt-5-nano, gemini flash-lite, small llama/ministral/qwen, deepseek-chat; `GET /v1/models` lists the live set) - priced for high-frequency agent loops | 12k chars | 768 tokens |
 | `POST /v1/auto/chat/completions` | $0.01 | **model optional** - deterministic eval-ranked routing (see below) | 16k chars | 1,024 tokens |
 | `POST /v1/chat/completions` | $0.02 | budget/mid models (gpt-4o-mini, gpt-4.1-mini, claude haiku, gemini flash-lite, deepseek, llama, mistral, qwen) | 32k chars | 2,048 tokens |
 | `POST /v1/pro/chat/completions` | $0.10 | mid-frontier (gpt-4o, gpt-4.1, gpt-6 sol, claude sonnet incl. sonnet-5.5, gemini pro and 3.x flash, grok) | 48k chars | 4,096 tokens |

@@ -65,7 +65,7 @@ import { isLongRunningSlug } from "./composite-spend-guard.js";
 import { asyncProfileOf } from "./slow-routes.js";
 import { wantsAsync, LOOPBACK_HEADER } from "./async-jobs.js";
 import { isGatewayBatchedRequest } from "./gateway-wire.js";
-import { payerFromRequest, paymentHeaderOf, paymentSchemeOf, paymentNonceIdentityOf } from "./payer.js";
+import { payerFromRequest, paymentHeaderOf, paymentSchemeOf, paymentNonceIdentityOf, normalizePayerAddress } from "./payer.js";
 import { coverTermsOf, readTokenBalance } from "./inflight-cover.js";
 import { OUR_EVM_WALLETS } from "./revenue-live.js";
 import { getSharedRedisClient } from "./shared-limit.js";
@@ -403,7 +403,12 @@ export async function finishFirstCallAllowance(req, { now = Date.now() } = {}) {
   if (a.state === "served") {
     await evalBounded(COMMIT, [k.wallet], [a.token, `granted:${now}`, firstCallAllowanceConfig().walletTtlSeconds]);
     if (stateDbEnabled()) {
-      try { await records.put(RECORD_COLLECTION, a.payer, { grantedAt: new Date(now).toISOString(), slug: a.slug, network: a.network }); }
+      // The grant's time is its claim, not this finish: a paid call the
+      // wallet made while a slow free call ran is booked between the two,
+      // and it is a sale after the grant (the returning-payers figure reads
+      // sales strictly after this time). The claim found no paid sale.
+      const grantedAt = Number.isFinite(a.claimedAt) ? a.claimedAt : now;
+      try { await records.put(RECORD_COLLECTION, a.payer, { grantedAt: new Date(grantedAt).toISOString(), slug: a.slug, network: a.network }); }
       catch (e) { lastStoreError = `record: ${String(e?.message || e).slice(0, 80)}`; }
     }
     noteLifecycle("served", now);
@@ -417,8 +422,87 @@ export async function finishFirstCallAllowance(req, { now = Date.now() } = {}) {
   return true;
 }
 
-/** Operator figures (micro-dollars rounded to USD) and the public word. */
-export async function firstCallAllowanceStatus({ now = Date.now() } = {}) {
+// Returning grant holders, for the operator view only: of the wallets with a
+// served grant (the permanent records), how many later made an outside paid
+// sale on any route, and how many did so within RETURN_WINDOW_MS of the grant.
+// A sale at the grant's own moment or before it never counts. Cached for
+// RETURNED_CACHE_MS (FIRST_CALL_ALLOWANCE_RETURNED_CACHE_MS), one computation in flight at a time; grants are read a
+// page at a time up to RETURNED_MAX_GRANTS, and the ledger is asked once per
+// chunk of wallets (src/sales-ledger.js firstPaidSaleAfterAsync).
+export const RETURN_WINDOW_MS = 7 * 86_400_000;
+export const RETURNED_CACHE_MS = 5 * 60_000;
+const RETURNED_PAGE = 1_000;
+const RETURNED_MAX_GRANTS = 100_000;
+let returnedCache = null;
+let returnedInflight = null;
+
+/** Every served grant as [{ payer, grantedAtMs }] (state database records;
+ *  none without it), at most RETURNED_MAX_GRANTS. */
+export async function listServedGrants({ max = RETURNED_MAX_GRANTS } = {}) {
+  if (!stateDbEnabled()) return { grants: [], complete: true };
+  const grants = [];
+  let after = "";
+  for (;;) {
+    const page = await records.list(RECORD_COLLECTION, { limit: RETURNED_PAGE, after });
+    for (const r of page) {
+      if (grants.length >= max) return { grants, complete: false };
+      grants.push({ payer: r.id, grantedAtMs: Date.parse(r.body?.grantedAt) });
+    }
+    if (page.length < RETURNED_PAGE) return { grants, complete: true };
+    after = page[page.length - 1].id;
+  }
+}
+
+/** Compute the figure from a grant list and the ledger reader (test seams). */
+export async function computeReturnedPayers({ listGrants = listServedGrants, firstPaidAfter, now = Date.now() } = {}) {
+  const listed = await listGrants();
+  const byPayer = new Map();
+  for (const g of listed?.grants || []) {
+    const payer = normalizePayerAddress(g?.payer);
+    const t = Number(g?.grantedAtMs);
+    if (!payer || !Number.isFinite(t)) continue;
+    // One grant per wallet; a duplicate keeps the earliest.
+    if (!byPayer.has(payer) || t < byPayer.get(payer)) byPayer.set(payer, t);
+  }
+  const grants = [...byPayer].map(([payer, grantedAtMs]) => ({ payer, grantedAtMs }));
+  const first = grants.length ? await firstPaidAfter(grants) : new Map();
+  let paidAgain = 0, paidAgainWithin7d = 0, since = Infinity;
+  for (const g of grants) {
+    since = Math.min(since, g.grantedAtMs);
+    const ts = Number(first?.get?.(g.payer));
+    // The ledger is asked for sales strictly after the grant; checked again
+    // here so a reader that returns the free call's own moment never counts it.
+    if (!Number.isFinite(ts) || !(ts > g.grantedAtMs)) continue;
+    paidAgain++;
+    if (ts - g.grantedAtMs <= RETURN_WINDOW_MS) paidAgainWithin7d++;
+  }
+  return {
+    granted: grants.length,
+    paidAgain,
+    paidAgainWithin7d,
+    sinceIso: Number.isFinite(since) ? new Date(since).toISOString() : null,
+    asOf: new Date(now).toISOString(),
+    complete: listed?.complete !== false,
+  };
+}
+
+/** The cached figure: the same object within RETURNED_CACHE_MS of its
+ *  computation, recomputed after it. A failed computation is not cached. */
+export async function returnedPayersStatus({ now = Date.now(), cacheMs = envNumber("FIRST_CALL_ALLOWANCE_RETURNED_CACHE_MS", RETURNED_CACHE_MS), ...seams } = {}) {
+  if (returnedCache && now - returnedCache.at < cacheMs) return returnedCache.value;
+  if (!returnedInflight) {
+    returnedInflight = computeReturnedPayers({ ...seams, now })
+      .then((value) => { returnedCache = { at: now, value }; return value; })
+      .finally(() => { returnedInflight = null; });
+  }
+  return returnedInflight;
+}
+
+/** Operator figures (micro-dollars rounded to USD) and the public word.
+ *  `returned` (operator view only) adds `returnedPayers`: its value is the
+ *  ledger reader, firstPaidSaleAfterAsync, passed in so this module never
+ *  loads the sales ledger. Reported whether the switch is on or off. */
+export async function firstCallAllowanceStatus({ now = Date.now(), returned = null } = {}) {
   const cfg = firstCallAllowanceConfig();
   const out = {
     enabled: cfg.enabled,
@@ -432,6 +516,10 @@ export async function firstCallAllowanceStatus({ now = Date.now() } = {}) {
     lastStoreError,
     status: "off",
   };
+  if (returned) {
+    const seams = typeof returned === "function" ? { firstPaidAfter: returned } : returned;
+    out.returnedPayers = await returnedPayersStatus({ ...seams, now }).catch((e) => ({ error: String(e?.message || e).slice(0, 120) }));
+  }
   if (!cfg.enabled) return out;
   // Bounded like the claim: a hung store reads "unavailable" within OP_MS.
   const c = await sharedClient();
@@ -452,4 +540,4 @@ export async function firstCallAllowanceStatus({ now = Date.now() } = {}) {
 /** Test seam: how many claimed payments this process holds. */
 export function _allowanceClaimsHeld() { return claimsByPayment.size; }
 /** Test seam. */
-export function _resetFirstCallAllowance() { claimsByPayment.clear(); lastStoreError = null; deniedToday = { day: "", byReason: {} }; lifecycleToday = { day: "", claimed: 0, served: 0, released: 0 }; }
+export function _resetFirstCallAllowance() { claimsByPayment.clear(); returnedCache = null; returnedInflight = null; lastStoreError = null; deniedToday = { day: "", byReason: {} }; lifecycleToday = { day: "", claimed: 0, served: 0, released: 0 }; }

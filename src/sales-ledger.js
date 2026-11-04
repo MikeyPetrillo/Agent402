@@ -851,6 +851,52 @@ export function payerHasPaidSale(payer) {
   if (!p) return false;
   return Boolean(qPayerAnySale.get(p));
 }
+// Returning grant holders (the first-call allowance's operator figure): for
+// each (payer, grant time) pair, the first outside paid sale strictly after
+// the grant. One query per chunk of pairs, never one per wallet. Each pair is
+// one correlated seek on idx_sales_payer (payer = ? AND ts > ?) that stops at
+// the first paying row, so a chunk costs (pairs x log rows) whatever a payer
+// bought later. INDEXED BY pins the index: the sales table carries no ANALYZE
+// statistics (the file and the database mode's in-memory mirror alike), and
+// without them the planner drives a plain join from idx_sales_ext_ts and
+// rescans the pair list once per outside sale, which held the loop for minutes
+// on a large ledger (scripts/test-first-call-allowance-returned.js pins the
+// plan). MIN over the pairs folds a payer listed twice; a NULL is no sale and
+// is dropped by the caller.
+const qFirstPaidAfter = db.prepare(`
+  WITH g(payer, gts) AS (SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?))
+  SELECT payer, MIN(first_ts) AS first_ts FROM (
+    SELECT g.payer AS payer,
+           (SELECT s.ts FROM sales s INDEXED BY idx_sales_payer
+             WHERE s.payer = g.payer AND s.ts > g.gts AND s.internal = 0 AND s.rail IN ${PAYING_RAILS_SQL}
+             ORDER BY s.ts LIMIT 1) AS first_ts
+      FROM g)
+   GROUP BY payer`);
+/** EXPLAIN QUERY PLAN details of the returning-payers read (tests pin the index). */
+export function firstPaidAfterPlan() { return db.prepare(`EXPLAIN QUERY PLAN ${qFirstPaidAfter.source}`).all("[]").map((r) => r.detail); }
+export const FIRST_PAID_AFTER_CHUNK = 500;
+function* firstPaidSaleAfterSteps(grants, chunk) {
+  const pairs = [];
+  for (const g of Array.isArray(grants) ? grants : []) {
+    const p = normalizePayerAddress(g?.payer);
+    const t = Number(g?.grantedAtMs);
+    if (p && Number.isFinite(t)) pairs.push([p, t]);
+  }
+  const out = new Map();
+  const size = Math.max(1, Math.min(FIRST_PAID_AFTER_CHUNK, Number(chunk) || FIRST_PAID_AFTER_CHUNK));
+  for (let i = 0; i < pairs.length; i += size) {
+    for (const r of qFirstPaidAfter.all(JSON.stringify(pairs.slice(i, i + size)))) if (r.first_ts != null) out.set(r.payer, Number(r.first_ts));
+    yield;
+  }
+  return out;
+}
+/** Map of payer to the ts of its first outside paid sale after its grant
+ *  time, for `grants` = [{ payer, grantedAtMs }]. Payers are normalized as the
+ *  ledger stores them (EVM lowercased, other chains case-exact). Chunked, and
+ *  spread over event-loop turns like the summaries. Database mode: the mirror. */
+export function firstPaidSaleAfterAsync(grants, { chunk = FIRST_PAID_AFTER_CHUNK } = {}) {
+  return runStepsAsync(firstPaidSaleAfterSteps(grants, chunk));
+}
 const qPayerByNetwork = db.prepare(`
   SELECT network, COUNT(*) AS n, SUM(price_usd) AS usd
   FROM sales WHERE payer = ? AND rail IN ${PAYING_RAILS_SQL} AND ts >= ?
@@ -1663,18 +1709,50 @@ export function tempoDailyRecordingSince() {
 // headline could not see a Tempo payment. `internal` is this table's
 // own classification and is never re-derived by the reader. Uncapped on
 // purpose: these rows feed distinct counts.
-const qTempoExternalPayments = db.prepare(`
-  SELECT ts, payer, tx, price_usd FROM sales
-  WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND wire IN ('mpp-tempo', 'mpp-tempo-subscription')
-  ORDER BY ts`);
+// Read a page at a time: each wire's rows are walked on its (wire, ts) index
+// in (ts, id) order, TEMPO_PAGE_ROWS index rows per page whatever they hold
+// (internal and free rows are dropped here, not in the query, so a page is
+// bounded in rows read, not in rows kept), and the two wires are merged in
+// (ts, id) order. The revenue ledger's sliced reads run these steps across
+// event-loop turns; the one-call export runs them back to back, so both read
+// the same rows in the same order.
+const TEMPO_WIRES = ["mpp-tempo", "mpp-tempo-subscription"];
+const TEMPO_PAGE_ROWS = 1000;
+const qTempoWirePage = db.prepare("SELECT id, ts, payer, tx, price_usd, rail, internal FROM sales WHERE wire = ? AND (ts, id) > (?, ?) ORDER BY ts, id LIMIT ?");
+/** externalTempoPayments as steps: a bare yield between pages and while
+ *  merging. An unreadable ledger reads as no Tempo payments. */
+export function* externalTempoPaymentsSteps() {
+  try { return yield* tempoPaymentPages(); } catch { return []; }
+}
+function* tempoPaymentPages() {
+  const lists = [];
+  for (const wire of TEMPO_WIRES) {
+    const kept = [];
+    let ts = Number.MIN_SAFE_INTEGER, id = Number.MIN_SAFE_INTEGER;
+    for (;;) {
+      const page = qTempoWirePage.all(wire, ts, id, TEMPO_PAGE_ROWS);
+      for (const r of page) if (r.internal === 0 && isPaidRail(r.rail)) kept.push(r);
+      if (page.length < TEMPO_PAGE_ROWS) break;
+      ({ ts, id } = page[page.length - 1]);
+      yield;
+    }
+    lists.push(kept);
+    yield;
+  }
+  const [a, b] = lists;
+  const out = new Array(a.length + b.length);
+  for (let i = 0, j = 0, k = 0; k < out.length; k++) {
+    const takeA = j >= b.length || (i < a.length && (a[i].ts < b[j].ts || (a[i].ts === b[j].ts && a[i].id < b[j].id)));
+    const r = takeA ? a[i++] : b[j++];
+    out[k] = { ts: r.ts, payer: r.payer || null, tx: r.tx || null, usd: Number(r.price_usd) || 0 };
+    if ((k + 1) % TEMPO_PAGE_ROWS === 0) yield;
+  }
+  return out;
+}
 
 /** [{ts, payer, tx, usd}] for every external Tempo settlement, oldest first. */
 // Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
-export function externalTempoPayments() {
-  try {
-    return qTempoExternalPayments.all().map((r) => ({ ts: r.ts, payer: r.payer || null, tx: r.tx || null, usd: Number(r.price_usd) || 0 }));
-  } catch { return []; }
-}
+export function externalTempoPayments() { return runSteps(externalTempoPaymentsSteps()); }
 
 // Circle Gateway batched sales (wire gateway-batched): settled off chain at
 // Gateway and credited to our Gateway balance, so no on-chain transfer to the
@@ -1798,6 +1876,21 @@ const qAgentFirstAll = db.prepare(`
 const qAgentFirstMpp = db.prepare(`
   SELECT payer, MIN(ts) AS first_ts FROM sales
   WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND payer IS NOT NULL AND wire IN ${MPP_AGENT_WIRES_SQL} GROUP BY payer`);
+
+// The current week's distinct MPP agents alone (the operator's sales page):
+// mppAgentsWeekly also reads every payer's first payment across all history
+// for its new/returning split, two whole-ledger scans that held the loop for
+// tens of milliseconds per read. This count needs neither: one range read of
+// the week on the (internal, ts) index.
+const qMppAgentsInWeek = db.prepare(`
+  SELECT COUNT(DISTINCT payer) AS n FROM sales
+  WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND wire IN ${MPP_AGENT_WIRES_SQL}
+    AND payer IS NOT NULL AND payer <> '' AND ts >= ? AND ts < ?`);
+/** mppAgentsWeekly({ weeks: 1, now }).weeks[0].distinctAgents, read without the history scans. */
+export function mppAgentsThisWeek(now = Date.now()) {
+  const start = weekStartOf(now);
+  return qMppAgentsInWeek.get(start, start + WEEK_MS)?.n ?? 0;
+}
 
 export function weekStartOf(ts) {
   return Math.floor((ts - WEEK_EPOCH_MS) / WEEK_MS) * WEEK_MS + WEEK_EPOCH_MS;

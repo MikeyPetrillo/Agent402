@@ -28,6 +28,7 @@
 // that were wrong are forbidden outright in served copy.
 import { readFileSync, readdirSync } from "node:fs";
 import { RAILS } from "../src/rails.js";
+import { failedCallFootnote } from "../src/settlement-footnote.js";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -683,7 +684,12 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
     "and a run where no step succeeds is not charged, except a Tempo transfer sent before the call, which is recorded as owed.",
     "A 4xx/5xx is not charged on x402: settlement runs after the handler and only on a response under 400.",
     "A paid call that ends in any status of 400 or above is not charged over x402, MPP and a prepaid credits key: settlement is canceled when the tool fails.",
+    // The shared footnote (src/settlement-footnote.js) every tool and integration page renders.
+    "A paid call that ends in any status of 400 or above is not charged over x402, MPP or a prepaid credits key: settlement runs after the tool and only on a successful response.",
     "An unpaid 402 charges nothing.",
+    // The shared footnote as each page renders it, built by the module itself.
+    failedCallFootnote(),
+    failedCallFootnote({ rails: ["x402", "MPP"], tempoPush: true }),
     // A handler's refusal is restated per rail at send, so its line is not copy.
     "    throw bad(\"The decision service failed - not charged; retry shortly\", 502);",
   ];

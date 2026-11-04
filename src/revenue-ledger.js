@@ -36,7 +36,7 @@ import {
 import { usdcDeltaForOwner, payerFromMeta, isExternalPayment } from "../scripts/revenue-scan-solana.js";
 import { solanaHistoryRead } from "./solana-history-rpc.js";
 import { evmLogsRead } from "./evm-logs-rpc.js";
-import { externalTempoPayments, gatewayBatchedPayments } from "./sales-ledger.js";
+import { externalTempoPaymentsSteps, gatewayBatchedPayments } from "./sales-ledger.js";
 import { createBlockClock, rpcHeaderReader, dateFromAnchors } from "./block-clock.js";
 import { NOMINAL_BLOCK_MS, blockMs, blocksForSeconds, refreshBlockMs, blockTimeChanges } from "./chain-block-time.js";
 import { registerMemoryStore, registerSqliteStore } from "./memory-stores.js";
@@ -101,6 +101,11 @@ CREATE INDEX IF NOT EXISTS idx_transfers_recent ON transfers (chain, wallet, blo
 -- The buyer figures fold external Tempo settlements in from the sales ledger
 -- and skip any whose tx is already a transfer here; this answers that lookup.
 CREATE INDEX IF NOT EXISTS idx_transfers_txhash ON transfers (tx_hash);
+-- The block anchors that date a chain's undated rows (datedPoints: its dated
+-- rows grouped by block) walk this index in block order. On the other indexes
+-- the read scanned the chain's whole history into a temp b-tree, inside one
+-- step of a sliced read (about 17 ms at 400k rows).
+CREATE INDEX IF NOT EXISTS idx_transfers_dated ON transfers (chain, block, when_ts) WHERE when_ts IS NOT NULL AND block IS NOT NULL;
 CREATE TABLE IF NOT EXISTS cursors (
   chain      TEXT NOT NULL,
   wallet     TEXT NOT NULL,
@@ -393,12 +398,30 @@ export function undatedRowDater(chain, wallet, { anchorsFor = datedAnchors } = {
     return dateFromAnchors(Number(block), anchors, msPerBlock(chain));
   };
 }
-function datedAnchors(chain, wallet) {
-  const pts = db.prepare("SELECT block, MIN(when_ts) AS ts FROM transfers WHERE chain = ? AND when_ts IS NOT NULL AND block IS NOT NULL GROUP BY block ORDER BY block").all(chain)
-    .map((r) => [Number(r.block), Number(r.ts) * 1000]);
+const DATED_POINTS_SQL = "SELECT block, MIN(when_ts) AS ts FROM transfers WHERE chain = ? AND when_ts IS NOT NULL AND block IS NOT NULL GROUP BY block ORDER BY block";
+const qDatedPoints = db.prepare(DATED_POINTS_SQL);
+let datedPointsReads = 0;
+/** Test hook: how many times a chain's dated points were read. */
+export function _datedPointsReadsForTests() { return datedPointsReads; }
+/** Test hook: the query plan of the dated-points read. */
+export function _datedPointsPlanForTests(chain = "base") { return db.prepare(`EXPLAIN QUERY PLAN ${DATED_POINTS_SQL}`).all(chain).map((r) => r.detail); }
+/** [[block, ms]] for a chain's dated rows, one per block, ascending: the
+ *  anchors every wallet on the chain dates its undated rows from. */
+function datedPoints(chain) {
+  datedPointsReads++;
+  return qDatedPoints.all(chain).map((r) => [Number(r.block), Number(r.ts) * 1000]);
+}
+/** Test hook: each wallet's anchors from one shared read of the chain's
+ *  dated points, and that read's length before and after. */
+export function _sharedAnchorsForTests(chain, wallets) {
+  const pts = datedPoints(chain), before = pts.length;
+  const anchors = wallets.map((w) => datedAnchors(chain, w, pts));
+  return { before, after: pts.length, anchors };
+}
+function datedAnchors(chain, wallet, pts = datedPoints(chain)) {
   const cur = getCursor.get(chain, wallet);
   if (cur?.caught_up && cur.next_block != null && cur.updated_ts && (!pts.length || cur.next_block > pts[pts.length - 1][0])) {
-    pts.push([Number(cur.next_block), cur.updated_ts * 1000]);
+    return [...pts, [Number(cur.next_block), cur.updated_ts * 1000]];
   }
   return pts;
 }
@@ -1136,6 +1159,34 @@ async function runLedgerStepsSliced(gen) {
   return r.value;
 }
 
+/** Test hook: the longest stretch one step of a sliced read runs between its
+ *  yields, in milliseconds of `clock` (this thread's CPU by default; a test
+ *  can pass a clock that also counts a blocking wait). A wallet's rows are
+ *  answered outside the timing, as the sliced runner answers them a page at
+ *  a time. The sliced runner can only yield where a step does. `windows`
+ *  lists each step's milliseconds and whether it began with a pair's answer
+ *  (its rows, or its aggregate). */
+export function _longestLedgerStepForTests(kind, wallets, { clock } = {}) {
+  const gen = kind === "events" ? externalPaymentEventSteps(wallets) : kind === "daily" ? ledgerDailySteps(wallets, null, { withScope: true }) : ledgerSummarySteps(wallets);
+  const cpuMs = typeof clock === "function" ? clock : () => { const u = process.threadCpuUsage(); return (u.user + u.system) / 1000; };
+  let q = null, longest = 0, steps = 0, answer;
+  const windows = [];
+  for (;;) {
+    const fed = answer !== undefined;
+    const c0 = cpuMs();
+    const r = gen.next(answer);
+    const ms = cpuMs() - c0;
+    longest = Math.max(longest, ms);
+    steps++;
+    windows.push({ ms, fed });
+    if (r.done) return { longestMs: longest, steps, windows };
+    const v = r.value;
+    answer = undefined;
+    if (v?.pairRead && v.agg) answer = (q || (q = qSummaryAgg())).get(payerDustFloorUsd, payerDustFloorUsd, v.chain, v.wallet);
+    else if (v?.pairRead) answer = qPairRows.all(v.chain, v.wallet);
+  }
+}
+
 export function ledgerSummary(wallets) { return runLedgerSteps(ledgerSummarySteps(wallets)); }
 /** ledgerSummary spread over event-loop turns (same value). */
 export function ledgerSummaryAsync(wallets) { return runLedgerStepsSliced(ledgerSummarySteps(wallets)); }
@@ -1172,7 +1223,7 @@ function* ledgerSummarySteps(wallets) {
   // keep their meaning; the combined pair is what /revenue headlines.
   let tempoCount = 0, tempoUsd = 0;
   yield;
-  for (const r of tempoExternalRows()) { tempoCount++; tempoUsd += r.usd; }
+  for (const r of yield* tempoExternalRowsSteps()) { tempoCount++; tempoUsd += r.usd; }
   // Circle Gateway batched sales settle off chain at Gateway and are credited
   // to our Gateway balance, so no treasury transfer carries them: they come
   // from the sales ledger too. A withdrawal later mints that balance on chain,
@@ -1260,9 +1311,12 @@ function* ledgerDailySteps(wallets, mppTx = null, { withScope = false } = {}) {
     ...(wallets.algorandExtraWallets || []).filter(Boolean),
   ]);
   const byDay = new Map(); // "YYYY-MM-DD|chain" -> {extUsd, extTx, intUsd, intTx}
+  const points = new Map(); // chain -> dated points, read once per walk
   for (const [chain, wallet] of chains) {
     if (!wallet) continue;
-    const dateOf = undatedRowDater(chain, wallet);
+    // As in externalPaymentEventSteps: the anchors in a step of their own.
+    if (!points.has(chain)) { yield; points.set(chain, datedPoints(chain)); yield; }
+    const dateOf = undatedRowDater(chain, wallet, { anchorsFor: (c, w) => datedAnchors(c, w, points.get(c)) });
     let seen = 0;
     for (const t of yield pairRead(chain, wallet)) {
       if (++seen % ROW_YIELD_EVERY === 0) yield;
@@ -1407,13 +1461,21 @@ function tempoPayerKey(raw) {
 }
 
 /** Lowercased tx hashes from `txs` that already appear in the transfers table. */
-function onchainTxSet(txs) {
+// One indexed lookup per Tempo tx, a bare yield every TEMPO_TX_YIELD_EVERY.
+const TEMPO_TX_YIELD_EVERY = 256;
+let tempoRowCostForTests = null;
+/** Test hook: extra work run after every Tempo tx lookup (a slow host, simulated). */
+export function _setTempoRowCostForTests(fn) { tempoRowCostForTests = typeof fn === "function" ? fn : null; }
+function* onchainTxSetSteps(txs) {
   const found = new Set();
   if (!txs.length) return found;
   const q = db.prepare("SELECT 1 FROM transfers WHERE tx_hash = ? OR tx_hash = ? LIMIT 1");
+  let n = 0;
   for (const tx of txs) {
     const s = String(tx);
     if (q.get(s, s.toLowerCase())) found.add(s.toLowerCase());
+    if (tempoRowCostForTests) tempoRowCostForTests();
+    if (++n % TEMPO_TX_YIELD_EVERY === 0) yield;
   }
   return found;
 }
@@ -1424,9 +1486,13 @@ function onchainTxSet(txs) {
  * ledger, so a payment is never counted by both sources. Only Tempo: MPP over
  * Base/Celo settles as an ordinary on-chain transfer and is already here.
  */
-function tempoExternalRows() {
-  const tempo = externalTempoPayments();
-  const onchain = onchainTxSet(tempo.map((r) => r.tx).filter(Boolean));
+// As steps: the sales-ledger read yields between its pages and the dedupe
+// between lookups, so the sliced runner spreads both over turns on elapsed
+// time (the read and the lookups grow with the Tempo history, and in one turn
+// they held the loop for the whole of it).
+function* tempoExternalRowsSteps() {
+  const tempo = yield* externalTempoPaymentsSteps();
+  const onchain = yield* onchainTxSetSteps(tempo.map((r) => r.tx).filter(Boolean));
   return tempo.filter((r) => !(r.tx && onchain.has(String(r.tx).toLowerCase())));
 }
 
@@ -1471,9 +1537,14 @@ function externalPaymentEvents(wallets, events) { return events || readExternalP
 function readExternalPaymentEvents(wallets) { return runLedgerSteps(externalPaymentEventSteps(wallets)); }
 function* externalPaymentEventSteps(wallets) {
   const out = [];
+  const points = new Map(); // chain -> dated points, read once per walk
   for (const [chain, wallet] of walletPairs(wallets)) {
     if (!wallet) continue;
-    const dateOf = undatedRowDater(chain, wallet);
+    // The chain's block anchors in a step of their own, once per walk: read
+    // on the first undated row, they held that row page's step for the read,
+    // and read per wallet, once for each wallet a chain carries.
+    if (!points.has(chain)) { yield; points.set(chain, datedPoints(chain)); yield; }
+    const dateOf = undatedRowDater(chain, wallet, { anchorsFor: (c, w) => datedAnchors(c, w, points.get(c)) });
     let seen = 0;
     for (const t of yield pairRead(chain, wallet)) {
       if (++seen % ROW_YIELD_EVERY === 0) yield;
@@ -1488,7 +1559,9 @@ function* externalPaymentEventSteps(wallets) {
     }
   }
   yield;
-  for (const r of tempoExternalRows()) {
+  let tempoSeen = 0;
+  for (const r of yield* tempoExternalRowsSteps()) {
+    if (++tempoSeen % ROW_YIELD_EVERY === 0) yield;
     if (!Number.isFinite(r.ts)) continue;
     out.push({ day: new Date(r.ts).toISOString().slice(0, 10), payer: tempoPayerKey(r.payer) });
   }

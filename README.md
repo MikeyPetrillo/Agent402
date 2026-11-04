@@ -4,9 +4,9 @@ Live at **[agent402.tools](https://agent402.tools)**.
 
 **The paid door for AI agents: 500+ tools, metered models and finished reports, paid per call in USDC over x402 and MPP, or by card. The applied layer of Agentic Finance. Open source, self-hostable, MCP-native.**
 
-Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent402.tools) · [Why pay here](https://agent402.tools/#why) · [Receipts](https://agent402.tools/proof) · [Status](https://agent402.tools/status) · [Security](https://agent402.tools/security) · [Company](https://agent402.tools/company)
+Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent402.tools) · [Why pay here](https://agent402.tools/docs#why) · [Receipts](https://agent402.tools/proof) · [Status](https://agent402.tools/status) · [Security](https://agent402.tools/security) · [Company](https://agent402.tools/company)
 
-**Try it in 30 seconds:** `claude mcp add agent402 -- npx -y agent402-mcp@0.13.27`, or paste `https://agent402.tools/mcp` into any MCP client. The free tier needs no wallet. Verified setup blocks for Cursor, VS Code, Windsurf, Cline, Roo Code, Codex CLI, Gemini CLI, Continue, ElizaOS and AgentCore: [agent402.tools/guides/agent-hosts](https://agent402.tools/guides/agent-hosts) (shortlinks `agent402.sh/<host>`, e.g. `agent402.sh/cursor`).
+**Try it in 30 seconds:** `claude mcp add agent402 -- npx -y agent402-mcp@0.13.27`, or paste `https://agent402.tools/mcp` into any MCP client. The free tier needs no wallet. Verified setup blocks for Cursor, VS Code, Windsurf, Cline, Roo Code, Codex CLI, Gemini CLI, Continue, ElizaOS, Paperclip and AgentCore: [agent402.tools/guides/agent-hosts](https://agent402.tools/guides/agent-hosts) (shortlinks `agent402.sh/<host>`, e.g. `agent402.sh/cursor`).
 
 **Who pays:** agents pay per call (from $0.001; models metered under a quoted ceiling and settled at actual usage); people buy finished reports ($2 to $5) and monitors ($5 a month) by card; sites charge crawlers with the tollbooth.
 
@@ -589,7 +589,7 @@ sha256 proof-of-work (a fraction of a second on a laptop; the MCP servers do it 
 
 ## Why pay here - seven things that are different
 
-Every claim links to the surface that proves it (the live version, a section of the home page: [agent402.tools/#why](https://agent402.tools/#why)).
+Every claim links to the surface that proves it (the live version, a section of the docs: [agent402.tools/docs#why](https://agent402.tools/docs#why)).
 
 1. **Pay for what the model used, with the ceiling quoted first.** The metered gateway (`POST /v1/metered/chat/completions`) quotes each 402 from the request's own body; a wallet paying `upto` settles actual usage under that ceiling, provider discounts such as prompt-cache reads pass through, and every settled x402 or MPP response carries a receipt; a JSON answer bought with an EVM wallet can be attested on Base by that wallet (`POST /api/attest`).
 2. **A failed x402 call is not charged, and the response proves it.** Settlement runs after the handler and an error status cancels it, so a response with no payment receipt, or a receipt marked `success:false`, moved no money; a retry carrying the same `Idempotency-Key` and the same payment credential replays the paid answer instead of paying again, and a request re-sent with the same signed EVM payment is answered from its first answer even without a key (`X-Replayed-Answer: 1`); the one residual case (a settled receipt on an error response) is detected by our own alarm and recorded as a debt in a refund ledger, never written off silently.

@@ -1,10 +1,10 @@
 // "Why pay here" - what is actually different about paying here, every claim
-// linked to the surface that proves it. Rendered as the #why section of the
-// home page (src/ledger-home.js): `t` is the row heading (one line at desktop
+// linked to the surface that proves it. Rendered in full as the #why section of
+// /docs (src/ledger-docs.js); the home page's #why shows three short claims
+// (whyHomeClaims) that link there. `t` is the row heading (one line at desktop
 // width), `s` the one-sentence row text, `h` + `p` the full claim behind "how it
 // works". `links` (at most two) sit on the row; `more` sit inside the expander.
-// scripts/test-wrap-quality.js measures the rows in Chromium. /why answers a 301 to /#why, and /docs keeps an
-// id="why" stub pointing there for old deep links. The agent-facing
+// scripts/test-wrap-quality.js measures the rows in Chromium. /why answers a 301 to /docs#why. The agent-facing
 // surfaces (llms.txt, MCP instructions, package READMEs) point at it, so the
 // seven points live in ONE place and read the same everywhere. First-party
 // claims only: no comparisons, no third-party names, evergreen "500+" counts.
@@ -90,7 +90,7 @@ export const WHY_POINTS = [
 ];
 
 /** The other ways to give an agent tools, side by side (the old /compare
- * page, folded in here; /compare answers a 301 to /#why-compare). Category labels
+ * page, folded in here; /compare answers a 301 to /docs#why-compare). Category labels
  * only: no product or vendor is named. */
 export const WHY_COMPARE = {
   cols: ["Here", "Building it yourself", "Calling each provider directly"],
@@ -109,9 +109,9 @@ export function whyPointsPlain() {
 }
 
 /** JSON-LD for the #why section: the seven points as an ItemList anchored
- * on the home page. */
+ * on /docs, where the full rows render. */
 export function whyJsonLd(baseUrl) {
-  const at = `${baseUrl}/`;
+  const at = `${baseUrl}/docs`;
   return {
     "@context": "https://schema.org",
     "@type": "ItemList",
@@ -121,7 +121,7 @@ export function whyJsonLd(baseUrl) {
   };
 }
 
-/** CSS for the home #why section (appended to the home page's extraCss). */
+/** CSS for the #why rows and table (appended to the /docs extraCss). */
 export const WHY_SECTION_CSS = `
   #why, #why-compare, .why-pt { scroll-margin-top: 90px; }
   .why-list { border-top:1px solid var(--hairline); }
@@ -149,7 +149,8 @@ export const WHY_SECTION_CSS = `
   .why-cmp tbody tr:last-child th, .why-cmp tbody tr:last-child td { border-bottom:none; }
   .why-cmp tbody th { font-weight:600;color:var(--ink);white-space:nowrap; }
   .why-cmp td { color:var(--muted); }
-  .why-cmp td.why-cmp-here { color:var(--ink); }`;
+  .why-cmp td.why-cmp-here { color:var(--ink); }
+  @media (max-width:600px){ .why-cmp td { min-width:150px; } }`;
 
 /** The comparison table under the seven points, in its own scroll wrapper. */
 function whyCompareHtml() {
@@ -158,13 +159,12 @@ function whyCompareHtml() {
   return `<div class="why-cmp-wrap" tabindex="0" aria-label="Comparison table, scrolls sideways on narrow screens"><table class="why-cmp"><thead>${head}</thead><tbody>${rows}</tbody></table></div>`;
 }
 
-/** The "Why pay here" section of the home page: seven rows, each a kicker and
- * a one-line heading on the left; on the right one sentence, at most two proof
- * links, and the full claim (with any further proof links) behind "how it
- * works". Then the side-by-side table. */
-export function whySectionHtml() {
+/** The seven rows, each a kicker and a one-line heading on the left; on the
+ * right one sentence, at most two proof links, and the full claim (with any
+ * further proof links) behind "how it works". */
+function whyPointsHtml() {
   const linkHtml = ([href, label]) => `<a class="why-proof" href="${esc(href)}">${esc(label)} &rarr;</a>`;
-  const points = WHY_POINTS.map((w) => `
+  return WHY_POINTS.map((w) => `
     <div class="why-pt" id="why-${esc(w.id)}">
       <div><div class="why-k">${esc(w.kicker)}</div><h3>${esc(w.t)}</h3></div>
       <div class="why-body">
@@ -172,19 +172,29 @@ export function whySectionHtml() {
         <div class="why-row">${w.links.map(linkHtml).join("")}<details><summary>how it works +</summary><p><strong>${esc(w.h)}</strong> ${esc(w.p)}</p>${w.more.length ? `<div class="why-row">${w.more.map(linkHtml).join("")}</div>` : ""}</details></div>
       </div>
     </div>`).join("");
-  return `<section id="why" style="max-width:1180px;margin:0 auto;padding:64px 30px 0;">
-  <div class="hm-kicker">$ GET /#why</div>
-  <h2 class="hm-h2" style="margin:0 0 12px;">Why pay here.</h2>
-  <p class="hm-lede" style="margin:0 0 26px;">Seven claims, each linked to the surface that proves it.</p>
-  <div class="why-list">${points}
-  </div>
-  <h3 id="why-compare" style="font-weight:600;font-size:var(--fs-xl);letter-spacing:-.02em;margin:34px 0 12px;color:var(--ink);">Side by side with the other ways in.</h3>
-  ${whyCompareHtml()}
-</section>`;
 }
 
-/** What /docs keeps at #why: a pointer for old deep links, not a copy. */
-export function whyDocsStubHtml() {
-  return `<p id="why" style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);margin:0 0 30px;">Why pay here: what is different, each point with its proof, is on the <a href="/#why" style="color:var(--ink);">home page</a>.</p>
+/** The full "Why pay here" section, on /docs#why: the seven rows, then the
+ * side-by-side table. The home page shows three short claims that link here. */
+export function whyDocsSectionHtml() {
+  return `<section id="why">
+      <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 12px;color:var(--ink);">Why pay here.</h2>
+      <p style="font-size:var(--fs-md);color:var(--muted);max-width:76ch;margin:0 0 22px;">Seven claims, each linked to the surface that proves it.</p>
+      <div class="why-list">${whyPointsHtml()}
+      </div>
+      <h3 id="why-compare" style="font-weight:600;font-size:var(--fs-xl);letter-spacing:-.02em;margin:34px 0 12px;color:var(--ink);">Side by side with the other ways in.</h3>
+      ${whyCompareHtml()}
+      <div style="height:44px;"></div>
+      </section>
 `;
+}
+
+/** The home page's three claims: a short heading and one sentence each, read
+ * from the same sources as the full rows, each linking its proof. */
+export function whyHomeClaims() {
+  return [
+    { id: "never-charged", t: WHY_POINTS.find((w) => w.id === "never-charged").t, s: "An error cancels settlement; a Tempo payment sent first is recorded as a refund owed.", link: ["/docs#why-never-charged", "how it settles"] },
+    { id: "one-key", t: "One wallet pays for all of it.", s: "500+ tools, model tiers, media and reports, each paid per call from the same wallet.", link: ["/docs#why-one-key", "what it covers"] },
+    { id: "chains", t: `Pay on ${RAILS.length} chains or over MPP.`, s: "Every settled x402 call returns a receipt naming its chain transaction, or its batch transfer id.", link: ["/proof", "receipts"] },
+  ];
 }

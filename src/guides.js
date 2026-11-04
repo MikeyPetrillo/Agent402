@@ -14,10 +14,11 @@ marked.use({ renderer: { heading({ tokens, depth }) { const html = this.parser.p
 import { ledgerShell, ledgerFooterCompact, esc, breadcrumbLd } from "./ledger-chrome.js";
 import { fitTitle } from "./seo-meta.js";
 import { GUIDE_INTEGRATIONS, integrationBySlug } from "./integration-pages.js";
-import { RAILS_OR, RAILS_AMP, resolveRailCountTokens } from "./rails.js";
+import { RAILS_COUNT, RAILS_COUNT_MD, resolveRailCountTokens } from "./rails.js";
 import { TIERS, METERED_MAX_QUOTE_USD, EMBEDDINGS_PRICE } from "./tools/llm-gateway-kit.js";
 import { routingProofSentence, routerRankingSentence } from "./routing-proof.js";
-import { mppEvmDiscoveryRails } from "./mpp-shim.js";
+import { mppEvmDiscoveryRails, mppShimEnabled } from "./mpp-shim.js";
+import { FLAGSHIP_SLUGS, FLAGSHIP_MCP_NAMES } from "./mcp-flagship.js";
 import { creditsSalesEnabled, creditsPrepaymentPhrase } from "./credits-sales.js";
 import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
 import { meteredRoutesInline, meteredFromPrice, meteredQuoteSentence, meteredDefaultModel, flatTiersLine } from "./metered-lead.js";
@@ -52,6 +53,17 @@ function resolveGuideTokens(text, catalog) {
       return "| Route | Price | Covers tools listed up to |\n| --- | --- | --- |\n" +
         rows.map((d) => `| \`${d.route}\` | ${fmtUsd(priceUsd(d.price))} | ${fmtUsd(d.underlyingMaxUsd)} |`).join("\n");
     })
+    .replace(/\{\{mcpRunActions\}\}/g, () => {
+      // The flagship actions the connector lists: a flagship is listed only
+      // when its slug is in the catalog, so the guide names the same set.
+      const slugs = bySlug ? FLAGSHIP_SLUGS.filter((slug) => bySlug.has(slug)) : FLAGSHIP_SLUGS.filter((slug) => !slug.startsWith("decide"));
+      return slugs.map((slug) => "`" + FLAGSHIP_MCP_NAMES[slug] + "`").join(", ");
+    })
+    // The connector pays a wallet-only tool over MPP only while MPP is on
+    // (the same MPP_SECRET_KEY switch the connector's loopback reads).
+    .replace(/\{\{connectorPaidAnswer\}\}/g, () => (mppShimEnabled()
+      ? "answer with their MPP payment challenge instead of a result: an MCP client that pays MPP settles it in the same call"
+      : "answer with payment setup instead of a result"))
     .replace(/\{\{routingProof\}\}/g, () => routingProofSentence())
     .replace(/\{\{routerRanking\}\}/g, () => routerRankingSentence())
     .replace(/\{\{mppEvmRails\}\}/g, () => {
@@ -71,7 +83,7 @@ const GUIDES = [
     slug: "x402-in-5-minutes",
     title: "Make your AI agent pay for what it needs: x402 in 5 minutes",
     description:
-      `A working example of the x402 payment protocol: your agent calls an API, gets an HTTP 402 quote, pays ${RAILS_OR} from its own wallet, and gets the result - no signup, no API key.`,
+      `A working example of the x402 payment protocol: your agent calls an API, gets an HTTP 402 quote, pays ${RAILS_COUNT} from its own wallet, and gets the result - no signup, no API key.`,
     md: `
 The useful web hides behind signups, captchas, and API keys - none of which an
 autonomous agent can obtain mid-task. [x402](https://x402.org) fixes this with
@@ -81,13 +93,10 @@ live service ([agent402.tools](https://agent402.tools)) you can pay right now.
 
 ## The protocol in one paragraph
 
-Your client calls a paid endpoint. The server replies \`402\` with a
-machine-readable quote - price, asset (USDC), network (Base), pay-to address.
-Your client signs a USDC transfer authorization from its own wallet (no gas
-needed; the facilitator sponsors it) and retries the request with the payment
-header. The server verifies the payment, runs the request, and settles on-chain
-only when the response succeeds, so a failed x402 call is not charged. Seconds, end
-to end. **The payment is the identity** - no account ever existed.
+Your client calls a paid endpoint and gets a \`402\` quote; it signs a USDC
+authorization from its own wallet and retries, and the server settles only when
+the response succeeds, so a failed x402 call is not charged. The headers, step
+by step: [how x402 works](/learn/x402).
 
 ## See a quote (free)
 
@@ -101,7 +110,7 @@ curl -i -X POST https://agent402.tools/api/extract \\
 
 ## Pay it (JavaScript)
 
-Fund a wallet with a little ${RAILS_OR} (no gas needed on EVM chains - the facilitator sponsors it), then:
+Fund a wallet with a little ${RAILS_COUNT_MD} (no gas needed on EVM chains - the facilitator sponsors it), then:
 
 \`\`\`js
 import { wrapFetchWithPayment } from "@x402/fetch";
@@ -294,7 +303,7 @@ for the full API.
     title: "Sell your API to AI agents over x402 - no billing system required",
     seoTitle: "Sell your API to AI agents over x402",
     description:
-      `Put a per-call USDC paywall in front of any HTTP endpoint with the x402 protocol: quote over HTTP 402, settle on ${RAILS_AMP} through a facilitator, and get discovered by agents - no accounts, invoices, or payment forms.`,
+      `Put a per-call USDC paywall in front of any HTTP endpoint with the x402 protocol: quote over HTTP 402, settle in ${RAILS_COUNT} through a facilitator, and get discovered by agents - no accounts, invoices, or payment forms.`,
     md: `
 If you run an API, the next wave of customers can't sign up for it. Autonomous
 agents don't have credit cards, can't pass captchas, and won't wait for a sales
@@ -1178,7 +1187,7 @@ its normal schedule.
   },
   {
     slug: "agent-hosts",
-    title: "Use Agent402 from Claude Code, Cursor, VS Code, Windsurf, Cline, Roo Code, Codex CLI, Gemini CLI, Continue, ElizaOS, AgentCore and any OpenAI SDK",
+    title: "Use Agent402 from Claude Code, Cursor, VS Code, Windsurf, Cline, Roo Code, Codex CLI, Gemini CLI, Continue, ElizaOS, Paperclip, AgentCore and any OpenAI SDK",
     seoTitle: "Use Agent402 from Claude Code, Cursor and more",
     description:
       "Two doors into Agent402 from the agent host you already run: models through an OpenAI-compatible base URL (metered, from $" + TIERS["v1-chat-metered"].price + " a call, paid from a wallet over x402" + (CREDITS_ON ? " or with a prepaid credits key" : ", or with a credits key bought earlier") + "), and 500+ tools through MCP. Copy the block for your host.",
@@ -1207,7 +1216,7 @@ is shown once and emailed, and it goes in \`AGENT402_CREDITS_KEY\` in place of
 in \`AGENT402_CREDITS_KEY\` in place of \`AGENT_KEY\` in any stdio block below.`}
 \`GET /api/credits/balance\` (Bearer) reports what a credits key has left. Use a
 low-value wallet funded only with what you mean to spend. Every route also answers a stock x402 \`402\`
-(${RAILS_OR}) and an MPP challenge, so any x402 client pays per call with no key.
+(${RAILS_COUNT_MD}) and an MPP challenge, so any x402 client pays per call with no key.
 
 ## Pay from a wallet (local proxy)
 
@@ -1315,6 +1324,32 @@ Paid tools from a wallet:
 \`\`\`
 
 **Use a new wallet holding only a few dollars of USDC. Never your main wallet.**
+
+## Paperclip
+
+Add the hosted connector to a Paperclip company as a custom MCP server:
+
+1. Open **Connectors**, then **Connect your own MCP server**.
+2. Paste \`https://agent402.tools/mcp\`. Paperclip inspects the server; the
+   connector needs no sign-in and no key, so it goes straight to the
+   discovered actions.
+3. Choose which agents can use the connection, then save.
+
+With no wallet, \`catalog.search\`, \`catalog.find\`, \`payment.info\` and
+\`server.describe\` answer for free, and \`catalog.call\` runs the pure-CPU
+tools (hash, uuid, base64, markdown, JSON and more) free through
+proof-of-work, rate-limited. Wallet-only tools, the flagship web and market
+tools among them, {{connectorPaidAnswer}}, and a call that carries no payment
+is never charged. Paperclip's connectors take a URL; to pay from your own
+wallet, add the stdio server from the Cursor block above, with \`AGENT_KEY\`
+set, as an MCP server on the agent itself. Prices are on [/pricing](/pricing).
+
+Each action has its own setting on the connection's **Permissions** tab:
+**Allowed** runs it without review, **Ask first** waits for a person to
+approve each call, and **Off** removes it from the agent. A new connection
+starts every action at **Allowed**. \`catalog.call\` and each flagship action
+({{mcpRunActions}}) run a tool; set all of them to **Ask first** to review
+every run.
 
 ## Continue
 
@@ -1641,7 +1676,7 @@ tier (OpenAI chat, OpenAI Responses, Anthropic Messages, Gemini generateContent)
 images, speech and transcription, 500+ tools, finished reports
 and monitors, and a router that buys from other sellers and resells the
 result, proven sellers first. Why pay here, with the proof links:
-[agent402.tools/#why](https://agent402.tools/#why).
+[agent402.tools/docs#why](https://agent402.tools/docs#why).
 `,
   },
   {
@@ -1742,7 +1777,7 @@ tier's price, and the paid call is served under that tier's caps.
 
 ## Pay from a wallet instead
 
-Every tier answers an x402 \`402\` (${RAILS_OR}) and an MPP challenge, so any
+Every tier answers an x402 \`402\` (${RAILS_COUNT_MD}) and an MPP challenge, so any
 x402-capable client can pay per call with no key at all. For OpenClaw the
 [\`agent402-openclaw\`](https://www.npmjs.com/package/agent402-openclaw) plugin
 runs a loopback proxy that pays and forwards, with a credits key or an x402
@@ -1798,7 +1833,7 @@ receipt shape:
   first, and sells it to you.
 
 Why pay here, in one section with the proof links:
-[agent402.tools/#why](https://agent402.tools/#why). The short version: usage is
+[agent402.tools/docs#why](https://agent402.tools/docs#why). The short version: usage is
 priced under a ceiling you see before you pay, a failed x402 call is not charged and the
 receipt shows it, a keyed retry never pays twice, and uptime and transactions are published from
 outside production.

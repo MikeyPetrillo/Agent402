@@ -7,7 +7,6 @@ import { isComputePayable, POW_DIFFICULTY } from "./pow.js";
 import { guideSlugs } from "./guides.js";
 import { skillSlugs, SKILL_PACKS, PACK_PRICES, PACK_PRICE_RANGE } from "./skills.js";
 import { BLOG_POSTS } from "./blog.js";
-import { ADAPTERS } from "./adapter-docs.js";
 import { integrationSlugs } from "./integration-pages.js";
 import { LEARN, learnSlugs } from "./learn.js";
 import { RAILS, RAILS_OR } from "./rails.js";
@@ -293,7 +292,6 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/docs/webhooks`, priority: "0.7" },
     { loc: `${baseUrl}/playground`, priority: "0.8" },
     ...BLOG_POSTS.map((p) => ({ loc: `${baseUrl}/blog/${p.slug}`, priority: "0.7" })),
-    ...ADAPTERS.map((a) => ({ loc: `${baseUrl}/docs/adapters/${a.slug}`, priority: "0.7" })),
     ...learnIntegrationUrls(baseUrl),
   ];
   const entries = [...staticUrls, ...programmaticUrls(baseUrl), ...guideUrls(baseUrl), ...skillUrls(baseUrl), ...categoryUrls(baseUrl, catalog), ...toolUrls(baseUrl, catalog)]
@@ -389,7 +387,6 @@ function pageUrls(baseUrl, catalog) {
     { loc: `${baseUrl}/docs/adapters`, priority: "0.8" },
     { loc: `${baseUrl}/docs/webhooks`, priority: "0.7" },
     ...BLOG_POSTS.map((p) => ({ loc: `${baseUrl}/blog/${p.slug}`, priority: "0.7" })),
-    ...ADAPTERS.map((a) => ({ loc: `${baseUrl}/docs/adapters/${a.slug}`, priority: "0.7" })),
     { loc: `${baseUrl}/privacy`, priority: "0.4" },
     { loc: `${baseUrl}/terms`, priority: "0.4" },
     { loc: `${baseUrl}/transparency`, priority: "0.4" },
@@ -567,7 +564,7 @@ Base URL: ${baseUrl}
 
 **Open source and two-sided.** Agent402 is the open-source, self-hostable applied layer of Agentic Finance (agents paying and getting paid on their own) for x402 and MPP (+ MCP server): 500+ pay-per-call tools for agents to buy (live web search + cited answers, browser rendering, PDFs, OCR, images, live financial / crypto / macro data, SEC EDGAR, wallet-keyed memory, a metered model gateway, finished reports), a neutral cross-seller index and on-chain leaderboard for the whole x402 ecosystem, and \`agent402-tollbooth\` for API sellers to charge AI crawlers per request. Maintainer: Havok Holdings LLC. Read every line and run it yourself: ${REPO_URL}
 
-**Why pay here (seven first-party differences, each proven on a live surface - full section: /#why).** ${whyPointsPlain().map((line, i) => `(${i + 1}) ${line}`).join(" ")} Metered usage pricing: \`POST /v1/metered/chat/completions\` quotes each request from its body; finished reports and monitors: /reports and /monitors; sourcing from other sellers: \`POST /api/route/execute\`; proof: /status and /revenue.
+**Why pay here (seven first-party differences, each proven on a live surface - full section: /docs#why).** ${whyPointsPlain().map((line, i) => `(${i + 1}) ${line}`).join(" ")} Metered usage pricing: \`POST /v1/metered/chat/completions\` quotes each request from its body; finished reports and monitors: /reports and /monitors; sourcing from other sellers: \`POST /api/route/execute\`; proof: /status and /revenue.
 
 **This is machine-to-machine commerce, and you can verify it.** Run the full loop with no human and no funds - \`node scripts/demo-payment.js\` discovers the catalog, gets quoted over HTTP 402, pays with compute, and uses the result. Every stablecoin call settles on-chain on the rail the buyer chose, to the payTo its 402 named (on Base that is agent402.base.eth, verifiable on Basescan, except for any route that /.well-known/x402 lists under payToByRoute); live economy stats are at ${baseUrl}/api/stats and a machine-readable reliability report (each claim with a verification URL) at ${baseUrl}/api/reliability.
 

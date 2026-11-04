@@ -226,11 +226,11 @@ export async function probeOxAlphaAvailability({ fetchImpl } = {}) {
 // gemini-3.5-flash-lite (priced like the model it replaces). Both were
 // live-verified to answer with no hidden reasoning at a 64-token budget.
 //
-// 2026-09-29: inception/mercury-2.5 is the third fast-band link (one endpoint,
-// 260k context). Live calls: at effort "low" (what the budget tiers inject) it
-// reasoned ~260 tokens and then answered at a 768-token budget in under a
-// second; at a 64-token budget it spent the budget reasoning, which the chain
-// walks past (isEmptyLength), never a paid empty answer.
+// 2026-11-04: inception/mercury-2.5 left the fast band (it was the third link
+// from 2026-09-29). The upstream lists an expiration date of 2026-11-08 for
+// every model of its family, so there is no same-family successor; a caller
+// naming it is served as itself until then and gemini-3.1-flash-lite from
+// that day (RETIRING_MODELS, scheduled).
 //
 // 2026-09-24: openai/gpt-6-luna leads the fast band. A live call at a
 // 64-token budget with reasoning effort "low" (what the auto tier injects)
@@ -239,10 +239,10 @@ export const AUTO_QUALITIES = ["fast", "balanced", "best"];
 export const AUTO_RANKINGS = {
   // fast — cheapest/snappiest serving; right for high-frequency loop turns.
   fast: {
-    code: ["openai/gpt-6-luna", "google/gemini-3.1-flash-lite", "inception/mercury-2.5", "qwen/qwen-2.5-coder-32b-instruct", "openai/gpt-4o-mini"],
-    reasoning: ["openai/gpt-6-luna", "google/gemini-3.1-flash-lite", "inception/mercury-2.5", "openai/gpt-4o-mini", "deepseek/deepseek-chat"],
-    long: ["openai/gpt-6-luna", "google/gemini-3.1-flash-lite", "inception/mercury-2.5", "openai/gpt-4o-mini", "deepseek/deepseek-chat"],
-    general: ["openai/gpt-6-luna", "google/gemini-3.1-flash-lite", "inception/mercury-2.5", "openai/gpt-4o-mini", "deepseek/deepseek-chat"],
+    code: ["openai/gpt-6-luna", "google/gemini-3.1-flash-lite", "qwen/qwen-2.5-coder-32b-instruct", "openai/gpt-4o-mini"],
+    reasoning: ["openai/gpt-6-luna", "google/gemini-3.1-flash-lite", "openai/gpt-4o-mini", "deepseek/deepseek-chat"],
+    long: ["openai/gpt-6-luna", "google/gemini-3.1-flash-lite", "openai/gpt-4o-mini", "deepseek/deepseek-chat"],
+    general: ["openai/gpt-6-luna", "google/gemini-3.1-flash-lite", "openai/gpt-4o-mini", "deepseek/deepseek-chat"],
   },
   // balanced — the default band. deepseek-chat keeps the code head (proven,
   // cheap); gpt-5.6-luna leads the rest (1M ctx covers `long` natively).
@@ -331,7 +331,8 @@ export const TIERS = {
       // from OpenRouter entirely (verified against the live models list).
       // gemini-2.5-flash-lite left 2026-09-29 (upstream expiration 2026-10-20): served by its successor via RETIRING_MODELS.
       "google/gemini-3.1-flash-lite", // inside this tier's max_price
-      "inception/mercury-2.5", // 2026-09-29, fast-band link; exact id only
+      // inception/mercury-2.5: served as itself until its upstream expiration on 2026-11-08 (its whole family), then by gemini-3.1-flash-lite (RETIRING_MODELS, scheduled). In no ranking, fallback or default; this prefix goes on that day.
+      "inception/mercury-2.5",
       "meta-llama/llama-3.2-1b-instruct", "meta-llama/llama-3.2-3b-instruct",
       // ministral-3b/8b were renamed upstream to the -2512 ids (the bare ids
       // 404 at OpenRouter; live-verified 2026-08-19). Listed with the live id so
@@ -783,6 +784,11 @@ export const RETIRING_MODELS = Object.freeze({
   // both non-reasoning and priced inside the tier's max_price.
   "poolside/laguna-xs-2.1": { until: "2026-10-31", use: "mistralai/ministral-3b-2512" },
   "poolside/laguna-s-2.1": { until: "2026-10-31", use: "mistralai/ministral-8b-2512" },
+  // Mercury 2.5 (OpenRouter expiration_date 2026-11-08, as for every model of
+  // its family, so none is a successor). SCHEDULED: it left the fast band
+  // 2026-11-04 and is served as itself on the tiers that admit it until that
+  // day, then by the fast band's other budget link on nano.
+  "inception/mercury-2.5": { until: "2026-11-08", use: "google/gemini-3.1-flash-lite", asItselfUntil: true },
   // Claude Sonnet 4 (OpenRouter expiration_date 2026-10-15). The pro tier's
   // family prefix still admits the id; its successor is the same family's
   // current model, priced below it.
@@ -2242,6 +2248,7 @@ export const REASONING_MODELS = [
   // tiers inject "low", pro "low".
   { id: "anthropic/claude-haiku-5.5", efforts: ["low", "medium", "high", "xhigh", "max"], adaptive: true },
   // Mercury 2.5: reasoning default-on at medium, "none" supported (live 2026-09-29).
+  // Kept while the id is served as itself (scheduled retirement, 2026-11-08).
   { id: "inception/mercury-2.5", efforts: ["none", "low", "medium", "high"] },
   { id: "anthropic/claude-opus-5", efforts: ["low", "medium", "high", "xhigh", "max"] },
   // Claude Opus 5.5: reasoning MANDATORY, default effort high (live catalog

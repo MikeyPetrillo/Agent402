@@ -9,7 +9,7 @@
 //   node scripts/test-large-body-gate.js   (unit checks, then a paid-mode boot
 //                                           on port 0 against a stub facilitator)
 import { spawn } from "node:child_process";
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
 import { EventEmitter } from "node:events";
@@ -162,7 +162,7 @@ try {
 
   // 1. Compressed bodies are refused before they are read, paid or not.
   const gz = gzipSync(JSON.stringify({ prompt: "x", images: ["data:image/png;base64," + "A".repeat(4 * 1024 * 1024)] }));
-  for (const path of ["/v1/images/edits", "/v1/judge/vision", "/api/html-frames", "/v1/audio/transcriptions", "/api/onchain-sql"]) {
+  for (const path of ["/v1/images/edits", "/v1/judge/vision", "/api/html-frames", "/v1/audio/transcriptions", "/api/onchain-sql", "/api/xlsx-create", "/api/docx-create", "/api/pptx-create"]) {
     const r = await post(path, gz, { "content-encoding": "gzip" });
     ok(r.status === 415, `${path}: a gzip body is refused 415 (got ${r.status})`);
   }
@@ -220,6 +220,24 @@ try {
   ok(s3.status !== 413 && s3.status !== 402 && s3.status !== 415 && s3.json?.error !== "payload-too-large", `a paid 120 KB query reaches the handler, not the parser's 413 (${s3.status} ${s3.text.slice(0, 80)})`);
   const s4 = await post("/api/onchain-sql", JSON.stringify({ sql: "SELECT 1 " + "x".repeat(60_001) }), { "payment-signature": cred(s2.accept) });
   ok(s4.status === 400 && /too long/.test(s4.text), `a paid query past the character cap is the handler's 400 (${s4.status})`);
+
+  // 6c. The Office builders take up to 2 MB, past the global parser. An
+  // unpaid body there is answered from the headers: a 1.5 MB body that sends
+  // 100 KB and then stalls still gets its 402, so no unpaid client holds a
+  // parse slot (or the in-flight budget) while it trickles.
+  const stalled = (path) => new Promise((resolve) => {
+    const u = new URL(B + path);
+    const req = httpRequest({ host: u.hostname, port: u.port, path: u.pathname, method: "POST", headers: { "content-type": "application/json", "content-length": String(1536 * 1024) } }, (res) => {
+      res.resume(); clearTimeout(t); req.destroy(); resolve(res.statusCode);
+    });
+    const t = setTimeout(() => { req.destroy(); resolve("no answer in 5 s"); }, 5000);
+    req.on("error", () => {});
+    req.write('{"markdown":"' + "x".repeat(100 * 1024));
+  });
+  for (const path of ["/api/xlsx-create", "/api/docx-create", "/api/pptx-create"]) {
+    const code = await stalled(path);
+    ok(code === 402, `${path}: an unpaid 1.5 MB body that stalls after 100 KB is answered 402 from its headers, unread (got ${code})`);
+  }
 
   // 7. The operator route checks the token before reading its body.
   const sv = await post("/__operator/seller-verification", JSON.stringify({ rows: "x".repeat(500 * 1024) }));

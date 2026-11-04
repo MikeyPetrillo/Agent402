@@ -135,10 +135,10 @@ export function humanReportsPage(baseUrl) {
     Checkout canceled, the card was not charged. Pick a report below whenever you are ready. Every price is on its button.
   </div>
   <section class="hero">
-    <div class="eyebrow eyebrow-tags"><span>Cited reports</span><span>one price per report</span><span>price on every button</span></div>
-    <h1>A finished report, <em>not a chat answer.</em></h1>
-    <p class="lede">Deep research on any question, due diligence on any public company, a 13F breakdown of any fund, a graded audit of any domain. Built from live data, research and filing reports cited to their sources, delivered in ${REPORT_TURNAROUND}. <b>Nothing to sign up for, nothing recurring.</b> Pay by card at checkout and the report is yours. Agents skip the card and pay per call over x402 or MPP.</p>
-    <div class="trust"><span><span class="dot"></span> Built from live data</span><span><span class="dot"></span> Auto-refunded if a report fails</span><span><span class="dot"></span> Secure card checkout</span><span><span class="dot"></span> PDF and data tables</span></div>
+    <div class="eyebrow eyebrow-tags"><span>one price per report</span></div>
+    <h1>Cited reports</h1>
+    <p class="lede">Deep research on any question, due diligence on any public company, a 13F breakdown of any fund, a graded audit of any domain: built from live data, research and filing reports cited to their sources, delivered in ${REPORT_TURNAROUND}. <b>Pay once by card at checkout, nothing recurring.</b> Agents pay per call over x402 or MPP.</p>
+    <div class="trust"><span><span class="dot"></span> Auto-refunded if a report fails</span><span><span class="dot"></span> Secure card checkout</span><span><span class="dot"></span> PDF and data tables</span></div>
     <p class="note" id="model-note" style="margin-top:12px;max-width:76ch;">${esc(REPORT_MODEL_NOTE)}</p>
     <div class="mon-offer"><p><b>Need it again when something changes?</b> A monitor watches one target and re-runs the report when the facts move. ${esc(monitorPriceLabel())}, cancel anytime.</p><a class="btn btn-secondary btn-sm" href="/monitors">See monitors →</a></div>
     <div class="samples-strip" style="margin-top:18px;padding:14px 16px;border:1px solid var(--hairline);background:var(--card);">

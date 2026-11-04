@@ -1890,12 +1890,30 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   // Claude Sonnet 5.5 (2026-09-29): own dated row at the dearest endpoint, reasoning row (mandatory upstream).
   ok(tierFor("anthropic/claude-sonnet-5.5") === "v1-chat-pro" && cf("anthropic/claude-sonnet-5.5") === ROW("anthropic/claude-sonnet-5.5") && cf("anthropic/claude-sonnet-5.5").completion <= TIERS["v1-chat-pro"].maxPrice.completion, "sonnet-5.5 homes on pro with its own row, inside pro's bound");
   ok(tokenizerFactor("anthropic/claude-sonnet-5.5") === NEW_TOKENIZER_FACTOR && rp("anthropic/claude-sonnet-5.5")?.id === "anthropic/claude-sonnet-5.5" && JSON.stringify(dr("anthropic/claude-sonnet-5.5", "v1-chat-pro")) === '{"effort":"low"}', "sonnet-5.5: newer tokenizer, pro injects low (default high upstream)");
-  // Mercury 2.5 (2026-09-29): third fast-band link, nano-admitted, own row.
-  const MER = "inception/mercury-2.5";
-  ok(tierFor(MER) === "v1-chat-nano" && TIERS["v1-chat-auto"].prefixes.includes(MER) && tierAllows("v1-chat-metered", MER) && !tierFor("inception/mercury-2"), "mercury-2.5 homes on nano, admitted on auto and metered; mercury-2 is not admitted");
-  ok(Object.values(AUTO_RANKINGS.fast).every((l) => l[2] === MER) && !Object.values(AUTO_RANKINGS.balanced).flat().includes(MER) && !Object.values(AUTO_RANKINGS.best).flat().includes(MER), "mercury-2.5 is the third link of every fast category and in no other band");
-  ok(cf(MER) === ROW(MER) && cf(MER).completion <= TIERS["v1-chat-nano"].maxPrice.completion && cf(MER).completion <= TIERS["v1-chat-auto"].maxPrice.completion, "mercury-2.5 has its own row, inside the nano and auto bounds");
-  ok(JSON.stringify(dr(MER, "v1-chat-nano")) === '{"effort":"low"}' && JSON.stringify(dr(MER, "v1-chat-auto")) === '{"effort":"low"}' && !fe(MER), "mercury-2.5: budget tiers inject low (default medium upstream); not flex");
+  // Mercury 2.5 (upstream expiration 2026-11-08, as for every model of its
+  // family): SCHEDULED. Out of every ranking, fallback and default now; served
+  // as itself (its own row) on the tiers that admit it until the date, then
+  // gemini-3.1-flash-lite, the fast band's other budget link.
+  const MER = "inception/mercury-2.5", MER_USE = "google/gemini-3.1-flash-lite";
+  ok(RETIRING_MODELS[MER]?.until === "2026-11-08" && RETIRING_MODELS[MER].use === MER_USE && RETIRING_MODELS[MER].asItselfUntil === true && tierFor(MER_USE) === "v1-chat-nano", "mercury-2.5: scheduled to retire 2026-11-08, successor gemini-3.1-flash-lite on nano");
+  ok(!Object.values(TIERS).some((t) => (t.fallbacks || []).some((f) => f.startsWith("inception/")) || String(t.defaultModel || "").startsWith("inception/")), "no tier fallback or default names an inception/ model");
+  ok(!Object.values(AUTO_RANKINGS).flatMap((b) => Object.values(b).flat()).some((m) => m.startsWith("inception/")) && !TIERS["v1-chat-auto"].prefixes.some((p) => p.startsWith("inception/")), "no auto ranking (or auto admission) names an inception/ model");
+  ok(!K.FLEX_MODELS.some((m) => m.startsWith("inception/")) && !tierFor("inception/mercury-2") && !tierFor("inception/mercury-3"), "no flex entry names an inception/ model; mercury-2 and mercury-3 are admitted nowhere");
+  ok(Object.values(AUTO_RANKINGS.fast).every((l) => l.length >= 4 && l[0] === "openai/gpt-6-luna" && l[1] === MER_USE && l.every((m) => tierAllows("v1-chat-auto", m))), "every fast category keeps a chain of four or more links, each admitted on auto");
+  const merOn = (tier) => validateRequest({ model: MER, messages: [{ role: "user", content: "hi" }] }, tier);
+  K.setRetiringClockForTest(() => Date.parse("2026-11-07T23:59:59Z"));
+  ok(!retiringModel(MER) && tierFor(MER) === "v1-chat-nano" && tierAllows("v1-chat-metered", MER) && cf(MER) === ROW(MER) && JSON.stringify(dr(MER, "v1-chat-nano")) === '{"effort":"low"}', "before 2026-11-08: mercury-2.5 homes on nano, admitted on metered, priced by its own row, low effort injected");
+  for (const tier of ["v1-chat-nano", "v1-chat-metered"]) {
+    const b = merOn(tier);
+    ok(b.model === MER && !b.__substitutedFrom, `before 2026-11-08 on ${tier}: mercury-2.5 served as itself`);
+  }
+  K.setRetiringClockForTest(() => Date.parse("2026-11-08T00:00:00Z"));
+  ok(retiringModel(MER)?.use === MER_USE && Object.keys(TIERS).every((t) => tierAllows(t, MER) === tierAllows(t, MER_USE)), "from 2026-11-08: mercury-2.5 is admitted only where its successor is");
+  for (const tier of ["v1-chat-nano", "v1-chat", "v1-chat-metered"]) {
+    const b = merOn(tier);
+    ok(b.model === MER_USE && b.__substitutedFrom === MER, `from 2026-11-08 on ${tier}: mercury-2.5 served as ${MER_USE} with the swap named`);
+  }
+  K.setRetiringClockForTest(null);
   ok(!tierFor("nvidia/nemotron-3.5-lightning"), "nemotron-3.5-lightning stays out (reasons by default with no effort knob in the catalog)");
 }
 

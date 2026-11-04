@@ -20,7 +20,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { WHY_POINTS, WHY_COMPARE } from "../src/why.js";
+import { WHY_POINTS, WHY_COMPARE, whyHomeClaims } from "../src/why.js";
 import { USE_CASES, useCaseCost } from "../src/use-cases.js";
 import { BADGE_STYLES } from "../src/badges.js";
 import { esc } from "../src/ledger-chrome.js";
@@ -284,34 +284,43 @@ try {
   }
 }
 
-// --- "Why pay here" lives on the home page (#why); /why redirects there -----
+// --- "Why pay here": three short claims on the home page (#why), the seven
+// full rows and the side-by-side table on /docs#why; /why redirects there ---
 {
   const res = await fetch(`${BASE}/why`, { redirect: "manual" });
   ok(res.status === 301, `/why → 301 (got ${res.status})`);
-  ok(res.headers.get("location") === "/#why", `/why Location is /#why (got ${res.headers.get("location")})`);
+  ok(res.headers.get("location") === "/docs#why", `/why Location is /docs#why (got ${res.headers.get("location")})`);
   const home = await (await fetch(`${BASE}/`)).text();
-  const m = home.match(/<section id="why"[\s\S]*?<\/section>/);
-  ok(m != null, "the home page renders the #why section");
+  const hm = (home.match(/<section id="why"[\s\S]*?<\/section>/) || [""])[0];
+  ok(hm.length > 0, "the home page renders the #why section");
+  const claims = whyHomeClaims();
+  ok(claims.length === 3, `the home page shows three claims (got ${claims.length})`);
+  for (const c of claims) {
+    ok(hm.includes(`id="why-${c.id}"`) && hm.includes(`<h3>${esc(c.t)}</h3>`) && hm.includes(`<p>${esc(c.s)}</p>`), `/#why shows the ${c.id} claim`);
+    ok(c.t.length <= 40 && c.s.split(/\s+/).length <= 16, `/#why ${c.id} is short (${c.t.length} chars, ${c.s.split(/\s+/).length} words)`);
+    ok(hm.includes(`href="${esc(c.link[0])}"`), `/#why ${c.id} links its proof ${c.link[0]}`);
+  }
+  ok(hm.includes('href="/docs#why"'), "the home #why links the full seven on /docs#why");
+  ok(!/class="why-pt"|class="why-cmp"/.test(hm), "the home page no longer carries the full rows or the table");
+  const docs = await (await fetch(`${BASE}/docs`)).text();
+  const m = docs.match(/<section id="why"[\s\S]*?<\/section>/);
+  ok(m != null, "/docs renders the full #why section");
   const why = m?.[0] || "";
   ok(WHY_POINTS.length === 7, `seven why points (got ${WHY_POINTS.length})`);
   for (const w of WHY_POINTS) {
-    ok(why.includes(`id="why-${w.id}"`) && why.includes(`<h3>${esc(w.t)}</h3>`), `/#why carries the ${w.id} row heading`);
-    ok(typeof w.t === "string" && w.t.length <= 40, `/#why ${w.id} heading is short enough for one line (${w.t.length} chars)`);
-    ok(typeof w.s === "string" && w.s.length > 20 && w.s.length <= 130 && why.includes(esc(w.s)), `/#why ${w.id} shows its one-sentence claim`);
-    ok(why.includes(esc(w.h)) && why.includes(esc(w.p)), `/#why ${w.id} keeps the full claim behind how it works`);
-    ok(Array.isArray(w.links) && w.links.length >= 1 && w.links.length <= 2, `/#why ${w.id} shows one or two proof links on its row`);
-    for (const [href] of [...w.links, ...(w.more || [])]) ok(why.includes(`href="${esc(href)}"`), `/#why ${w.id} links its proof ${href}`);
+    ok(why.includes(`id="why-${w.id}"`) && why.includes(`<h3>${esc(w.t)}</h3>`), `/docs#why carries the ${w.id} row heading`);
+    ok(typeof w.t === "string" && w.t.length <= 40, `/docs#why ${w.id} heading is short enough for one line (${w.t.length} chars)`);
+    ok(typeof w.s === "string" && w.s.length > 20 && w.s.length <= 130 && why.includes(esc(w.s)), `/docs#why ${w.id} shows its one-sentence claim`);
+    ok(why.includes(esc(w.h)) && why.includes(esc(w.p)), `/docs#why ${w.id} keeps the full claim behind how it works`);
+    ok(Array.isArray(w.links) && w.links.length >= 1 && w.links.length <= 2, `/docs#why ${w.id} shows one or two proof links on its row`);
+    for (const [href] of [...w.links, ...(w.more || [])]) ok(why.includes(`href="${esc(href)}"`), `/docs#why ${w.id} links its proof ${href}`);
   }
-  ok(why.includes('id="why-compare"') && why.includes('class="why-cmp"'), "/#why carries the side-by-side table");
-  for (const c of WHY_COMPARE.cols) ok(why.includes(`<th scope="col">${esc(c)}</th>`), `/#why table has the "${c}" column`);
-  for (const [label, ...cells] of WHY_COMPARE.rows) ok(why.includes(`<th scope="row">${esc(label)}</th>`) && cells.every((c) => why.includes(esc(c))), `/#why table has the "${label}" row`);
-  ok(/"@id":"[^"]*\/#why"/.test(home), "the seven points' ItemList is anchored on the home page");
-  // /docs keeps a pointer for old /docs#why links, not a copy of the points.
-  const docs = await (await fetch(`${BASE}/docs`)).text();
-  const stub = (docs.match(/<p id="why"[\s\S]*?<\/p>/) || [""])[0];
-  ok(stub.includes('href="/#why"'), "/docs keeps an id=\"why\" stub that links /#why");
-  ok(!WHY_POINTS.some((w) => docs.includes(`id="why-${w.id}"`)), "/docs no longer repeats the seven points");
-  ok(docs.indexOf('id="why"') < docs.indexOf('id="how"'), "the #why stub sits above how payment works");
+  ok(why.includes('id="why-compare"') && why.includes('class="why-cmp"'), "/docs#why carries the side-by-side table");
+  for (const c of WHY_COMPARE.cols) ok(why.includes(`<th scope="col">${esc(c)}</th>`), `/docs#why table has the "${c}" column`);
+  for (const [label, ...cells] of WHY_COMPARE.rows) ok(why.includes(`<th scope="row">${esc(label)}</th>`) && cells.every((c) => why.includes(esc(c))), `/docs#why table has the "${label}" row`);
+  ok(/"@id":"[^"]*\/docs#why"/.test(docs), "the seven points' ItemList is anchored on /docs");
+  ok(!/"@id":"[^"]*\/#why"/.test(home), "...and no longer on the home page, which does not render them");
+  ok((docs.match(/id="why"/g) || []).length === 1, "/docs carries one #why, the full section");
   for (const sm of ["/sitemap.xml", "/sitemap-pages.xml"]) {
     const xml = await (await fetch(`${BASE}${sm}`)).text();
     ok(!/\/why<\/loc>/.test(xml), `${sm} does not list /why`);
@@ -389,7 +398,7 @@ try {
 // /faq stays (linked from the home FAQ, listed in the sitemap); /compare,
 // /use-cases and /badges became sections of /docs; /community, /shop and the
 // weekly digest page redirect. The agent row still links SKILL.md and webhooks.
-const MOVED = { "/compare": "/#why-compare", "/use-cases": "/docs#examples", "/badges": "/docs#badges", "/community": "/integrations", "/shop": "/tools", "/digest": "/docs" };
+const MOVED = { "/compare": "/docs#why-compare", "/use-cases": "/docs#examples", "/badges": "/docs#badges", "/community": "/integrations", "/shop": "/tools", "/digest": "/docs" };
 {
   for (const p of ["/", "/pricing", "/docs"]) {
     const html = await (await fetch(`${BASE}${p}`)).text();

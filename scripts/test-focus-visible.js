@@ -23,7 +23,6 @@ try {
   // from (the input itself, or its focus-within wrapper)].
   const CASES = [
     { path: "/tools", input: "#cat-search", borderEl: ".cat-search-wrap", label: "/tools catalog search" },
-    { path: "/", input: "#hm-demo-in", borderEl: "#hm-demo-in", label: "/ homepage PoW demo input" },
     { path: "/marketplace", input: "form.mkt-search-wrap input[name='q']", borderEl: "form.mkt-search-wrap", label: "/marketplace search" },
     { path: "/base", input: "form.mkt-search-wrap input[name='q']", borderEl: "form.mkt-search-wrap", label: "/base (per-chain) search" },
   ];

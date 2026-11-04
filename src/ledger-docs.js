@@ -1,5 +1,5 @@
 // Machine Ledger — Docs landing page (/docs)
-// Quickstart, a #why pointer to the home page (/why redirects to /#why), payment flow, three ways in, free tier,
+// Quickstart, payment flow, three ways in, free tier, the full "Why pay here" rows (#why),
 // examples (#examples; /use-cases redirects to it), badges (#badges; /badges redirects to it), reference endpoints -
 // rendered inside the SAME sidebar+content shell every /docs/:slug wiki page
 // uses (src/docs.js), so the docs surface reads as one site with persistent
@@ -11,11 +11,10 @@
 
 import { ledgerShell, ledgerFooterCompact, fmtNum } from "./ledger-chrome.js";
 import { docsLayoutHtml, DOCS_LAYOUT_CSS, docPrevNextHtml, DOCS_SEARCH_SCRIPT } from "./docs.js";
-import { RAILS_PAREN } from "./rails.js";
 import { toolList } from "./pages.js";
 import { isComputePayable } from "./pow.js";
 import { decideConfig } from "./decide/config.js";
-import { whyDocsStubHtml } from "./why.js";
+import { whyDocsSectionHtml, whyJsonLd, WHY_SECTION_CSS } from "./why.js";
 import { examplesSectionHtml, examplesJsonLd, EXAMPLES_SECTION_CSS } from "./use-cases.js";
 import { badgesSectionHtml, BADGES_SECTION_CSS } from "./badges.js";
 
@@ -73,7 +72,7 @@ export function ledgerDocsPage(baseUrl, catalog) {
   const extractPrice = slugPrice(catalog, "extract");
   const canonical = baseUrl + "/docs";
   const title = "Docs - Agent402 x402 + MCP server";
-  const description = `Add ${fmtNum(totalCount)} x402 tools, most of them deterministic code, plus an OpenAI-compatible /v1 gateway to your agent in about a minute. No signup, no API key - start free with proof-of-work, settle ${RAILS_PAREN} when you scale.`;
+  const description = `The Agent402 docs: add ${fmtNum(totalCount)} x402 tools, most of them deterministic code, plus an OpenAI-compatible /v1 gateway to your agent. Start free with proof-of-work, then pay per call in USDC over x402 or MPP.`;
 
   const articleLd = {
     "@context": "https://schema.org",
@@ -87,17 +86,17 @@ export function ledgerDocsPage(baseUrl, catalog) {
       url: baseUrl,
     },
   };
-  // The "Why pay here" points live on the home page (/#why); this page keeps
-  // an id="why" pointer so old /docs#why links still land on something.
-  const jsonLd = [articleLd, examplesJsonLd(baseUrl)];
+  // The "Why pay here" points render in full here (#why); the home page shows
+  // three short claims that link to them.
+  const jsonLd = [articleLd, examplesJsonLd(baseUrl), whyJsonLd(baseUrl)];
 
-  const extraCss = `${DOCS_LAYOUT_CSS}
+  const extraCss = `${DOCS_LAYOUT_CSS}${WHY_SECTION_CSS}
   #quickstart, #why, #how, #add, #free, #gateway, #endpoints { scroll-margin-top: 110px; }${EXAMPLES_SECTION_CSS}${BADGES_SECTION_CSS}`;
 
   const main = `
       <section>
-      <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 14px;">Quickstart.</h1>
-      <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:76ch;margin:0 0 30px;">Add ${fmtNum(totalCount)} tools - plus an open cross-seller Index, Smart Order Router, and an OpenAI-compatible /v1 gateway - to your agent in about a minute. No signup, no API key - start free with proof-of-work, settle ${RAILS_PAREN} when you scale.</p>
+      <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 14px;">Docs</h1>
+      <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:76ch;margin:0 0 30px;">Add ${fmtNum(totalCount)} tools, the cross-seller index and Smart Order Router, and an OpenAI-compatible /v1 gateway to your agent. Start free with proof-of-work, then pay per call in USDC on <a href="/pricing" style="color:var(--ink);text-decoration:underline;text-underline-offset:3px;">the chains in /pricing</a>.</p>
 
       <div id="quickstart" style="border:1px solid var(--hairline);background:var(--panel);margin-bottom:14px;">
         <div style="display:flex;align-items:center;gap:7px;padding:11px 15px;border-bottom:1px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--on-panel-dim);">terminal</div>
@@ -114,7 +113,7 @@ node demo.js
       <p style="font-size:var(--fs-md);color:var(--muted);max-width:76ch;margin:0 0 44px;">The demo signs on the EVM rails. To pay on Solana, Stellar or Algorand, see <a href="/docs/Paying-with-x402" style="color:var(--ink);text-decoration:underline;text-underline-offset:3px;">Paying with x402</a>.</p>
       </section>
 
-      ${whyDocsStubHtml()}      <!-- HOW -->
+      <!-- HOW -->
       <section>
       <h2 id="how" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 18px;">How payment works.</h2>
       <div style="border:1px solid var(--hairline);background:var(--card);margin-bottom:44px;">
@@ -198,7 +197,7 @@ ${gateway.rows}
       </div>
       </section>
 
-`; })() : ""}      ${examplesSectionHtml(catalog)}
+`; })() : ""}      ${whyDocsSectionHtml()}      ${examplesSectionHtml(catalog)}
       ${badgesSectionHtml(baseUrl)}
       <!-- ENDPOINTS -->
       <section>

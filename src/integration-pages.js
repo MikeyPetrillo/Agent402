@@ -10,6 +10,7 @@
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { repoUrl } from "./repo-link.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
+import { failedCallFootnote } from "./settlement-footnote.js";
 // Prepaid credits are only presented as a way to pay while packs are sold.
 const CREDITS_ON = creditsSalesEnabled();
 export const CREDITS_HELD = CREDITS_ON ? "a prepaid credits key" : "a credits key bought earlier";
@@ -58,6 +59,27 @@ const META_PAYMENT = [
   "Unpaid lookups (find, route, about) use `fetchImpl` and never spend anything.",
 ];
 
+// The adapters' own parameter lists, by shape: per-slug adapters destructure
+// { baseUrl, slugs, freeOnly, fetch } and return { tools, execute, client };
+// meta-tool adapters destructure { baseUrl, fetch, fetchImpl } and return the
+// four meta tools. Rendered as the Configuration section of each adapter's
+// /integrations page (the one page per framework; /docs/adapters/<slug>
+// redirects there), and scripts/test-doc-snippets.js checks the examples
+// against the adapters' exports.
+export const ADAPTER_CONFIG = {
+  "per-slug": [
+    { option: "slugs", type: "string[]", desc: "Load only these tools (a short list gives the model better tool selection).", example: `agent402Tools({ slugs: ["hash", "markdown-to-html"] })` },
+    { option: "freeOnly", type: "boolean", desc: "Default true: keep only compute-payable tools, paid with proof-of-work. Set false to include wallet-only tools.", example: `agent402Tools({ slugs: ["extract", "hash"], freeOnly: false, fetch: payFetch })` },
+    { option: "fetch", type: "typeof fetch", desc: "A payment-wrapped fetch (@x402/fetch for x402, mppx for MPP) that pays wallet-only tools.", example: `agent402Tools({ freeOnly: false, fetch: payFetch })` },
+    { option: "baseUrl", type: "string", desc: "Point to a self-hosted Agent402 instance.", example: `agent402Tools({ baseUrl: "https://my-agent402.example.com" })` },
+  ],
+  meta: [
+    { option: "fetch", type: "typeof fetch", desc: "A payment-wrapped fetch (@x402/fetch for x402, mppx for MPP) that agent402_call uses for wallet-only tools.", example: `agent402Tools({ fetch: payFetch })` },
+    { option: "fetchImpl", type: "typeof fetch", desc: "The plain fetch used for the unpaid lookups (find, route, about) and proof-of-work calls. Defaults to the global fetch.", example: `agent402Tools({ fetchImpl: globalThis.fetch })` },
+    { option: "baseUrl", type: "string", desc: "Point to a self-hosted Agent402 instance.", example: `agent402Tools({ baseUrl: "https://my-agent402.example.com" })` },
+  ],
+};
+
 export const INTEGRATIONS = [
   {
     slug: "openai",
@@ -67,6 +89,8 @@ export const INTEGRATIONS = [
     pkg: "agent402-openai-tools",
     dir: "adapters/openai-tools",
     docsSlug: "openai",
+    shape: "per-slug",
+    worksWith: ["OpenAI chat.completions", "OpenAI Responses API"],
     what: "Turns Agent402 tools into OpenAI function-calling definitions. The returned `tools` array is the same JSON used by chat.completions and the Responses API, and `execute` runs whatever tool call the model returns.",
     install: "npm install openai agent402-openai-tools @x402/fetch @x402/core @x402/evm viem",
     example: `import OpenAI from "openai";
@@ -102,6 +126,8 @@ const { tools, execute } = await agent402Tools({ slugs: ["hash", "markdown-to-ht
     pkg: "agent402-anthropic-tools",
     dir: "adapters/anthropic-tools",
     docsSlug: "anthropic",
+    shape: "per-slug",
+    worksWith: ["Anthropic Messages API", "Any Claude model with tool use"],
     what: "Turns Agent402 tools into Anthropic Messages API tool definitions (`input_schema` format) for server-side agents and custom tool loops. For Claude clients that speak MCP, the hosted connector at /mcp is the shorter path; this package is for direct Messages API integrations.",
     install: "npm install @anthropic-ai/sdk agent402-anthropic-tools @x402/fetch @x402/core @x402/evm viem",
     example: `import Anthropic from "@anthropic-ai/sdk";
@@ -136,6 +162,8 @@ const { tools, execute } = await agent402Tools({ slugs: ["hash", "markdown-to-ht
     pkg: "agent402-ai-sdk",
     dir: "adapters/ai-sdk",
     docsSlug: "ai-sdk",
+    shape: "meta",
+    worksWith: ["generateText", "streamText", "Any AI SDK provider"],
     what: "Gives a Vercel AI SDK agent four meta tools that reach the whole catalog: the model describes a task, `agent402_find` or `agent402_route` picks the tool, and `agent402_call` runs and pays for it. Works with `generateText` and `streamText` on any provider the SDK supports.",
     install: "npm install agent402-ai-sdk ai @ai-sdk/openai zod @x402/fetch @x402/core @x402/evm viem",
     example: `import { agent402Tools } from "agent402-ai-sdk";
@@ -166,6 +194,8 @@ const { text } = await generateText({
     pkg: "agent402-langchain",
     dir: "adapters/langchain",
     docsSlug: "langchain",
+    shape: "meta",
+    worksWith: ["LangChain JS", "LangGraph", "createAgent", "Any tool-calling LangChain model"],
     what: "LangChain.js tool objects for Agent402, ready for any LangChain or LangGraph agent. Four meta tools cover the whole catalog, so the agent's tool budget stays small however many endpoints the catalog holds.",
     install: "npm install agent402-langchain langchain @langchain/core @langchain/openai zod @x402/fetch @x402/core @x402/evm viem",
     example: `import { agent402Tools } from "agent402-langchain";
@@ -227,6 +257,8 @@ toolkit = Agent402Toolkit(base_url="https://agent402.tools", x402_fetch=my_signe
     pkg: "agent402-llamaindex",
     dir: "adapters/llamaindex",
     docsSlug: "llamaindex",
+    shape: "per-slug",
+    worksWith: ["LlamaIndex TS", "@llamaindex/workflow agent()", "FunctionTool"],
     what: "Returns a `FunctionTool[]` array for any LlamaIndex TS agent or workflow, built from the catalog's raw JSON Schema, so there is no Zod or hand-written schema to maintain.",
     install: "npm install llamaindex @llamaindex/workflow @llamaindex/openai agent402-llamaindex @x402/fetch @x402/core @x402/evm viem",
     example: `import { agent } from "@llamaindex/workflow";
@@ -255,6 +287,8 @@ const { tools } = await agent402Tools({ slugs: ["hash", "markdown-to-html", "tex
     pkg: "agent402-google-adk",
     dir: "adapters/google-adk",
     docsSlug: "google-adk",
+    shape: "meta",
+    worksWith: ["Google Agent Development Kit", "LlmAgent", "Gemini models"],
     what: "ADK `FunctionTool` instances for Gemini agents built on the Agent Development Kit. Both peers are optional: without `@google/adk` and `zod`, `agent402ToolSpecs()` gives the same four tools with no dependencies.",
     install: "npm install agent402-google-adk @google/adk zod @x402/fetch @x402/core @x402/evm viem",
     example: `import { agent402Tools } from "agent402-google-adk";
@@ -285,6 +319,8 @@ const tools = await agent402Tools({ fetch: payFetch });`,
     pkg: "agent402-openai-agents",
     dir: "adapters/openai-agents",
     docsSlug: "openai-agents",
+    shape: "meta",
+    worksWith: ["@openai/agents", "Agent", "run()"],
     what: "Tools for agents built with the OpenAI Agents SDK (`@openai/agents`). Pass them to `new Agent({ tools })` and the agent can find, route to and call any tool in the catalog.",
     install: "npm install agent402-openai-agents @openai/agents @x402/fetch @x402/core @x402/evm viem",
     example: `import { agent402Tools } from "agent402-openai-agents";
@@ -314,6 +350,8 @@ const result = await run(agent, "${SEARCH_THEN_ANSWER}");`,
     pkg: "agent402-strands",
     dir: "adapters/strands",
     docsSlug: "strands",
+    shape: "per-slug",
+    worksWith: ["@strands-agents/sdk", "AWS Bedrock AgentCore", "Any Strands-compatible model"],
     what: "Strands `tool({...})` instances for TypeScript agents, including Strands agents running on AWS Bedrock AgentCore. Pull a curated subset of the catalog into the agent; when it calls a tool, the adapter solves a proof-of-work or signs an x402 payment and returns the structured result.",
     install: "npm install agent402-strands @strands-agents/sdk zod @x402/fetch @x402/core @x402/evm viem",
     lang: "ts",
@@ -674,6 +712,7 @@ export function integrationPage(baseUrl, slug, catalog, guideTitles = {}) {
   const description = i.meta;
   const github = repoUrl(`tree/main/${i.dir}`);
   const tools = toolsFor(i, catalog);
+  const config = ADAPTER_CONFIG[i.shape] || [];
 
   const breadcrumbLd = {
     "@context": "https://schema.org",
@@ -733,8 +772,18 @@ export function integrationPage(baseUrl, slug, catalog, guideTitles = {}) {
       <h2 ${H2}>How payment works</h2>
       <ul style="padding-left:20px;margin:0 0 16px;">${i.payment.map((e) => `<li ${LI}>${inline(e)}</li>`).join("")}</ul>
       ${i.walletExample ? `<pre ${PRE}><code>${esc(i.walletExample)}</code></pre>` : ""}
-      <p style="color:var(--muted);font-size:var(--fs-base);line-height:1.6;margin:14px 0 0;">${esc(i.settleNote || "A call that fails is not charged on x402: settlement runs after the tool and only on a successful response.")} Background: ${learnLinks}.</p>
+      <p style="color:var(--muted);font-size:var(--fs-base);line-height:1.6;margin:14px 0 0;">${esc(i.settleNote || failedCallFootnote())} Background: ${learnLinks}.</p>
     </section>
+
+    ${config.length ? `<section id="config" style="margin-bottom:34px;">
+      <h2 ${H2}>Configuration</h2>
+      <div style="overflow-x:auto;margin-bottom:14px;"><table style="width:100%;border-collapse:collapse;font-size:var(--fs-md);">
+        <thead><tr>${["Option", "Type", "Description"].map((h) => `<th style="text-align:left;color:var(--faint);font-weight:500;padding:8px 10px;border-bottom:1px solid var(--hairline);font-size:var(--fs-2xs);text-transform:uppercase;letter-spacing:.08em;font-family:var(--font-mono);">${h}</th>`).join("")}</tr></thead>
+        <tbody>${config.map((c) => `<tr><td style="padding:8px 10px;border-bottom:1px solid var(--hairline);"><code style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);">${esc(c.option)}</code></td><td style="padding:8px 10px;border-bottom:1px solid var(--hairline);"><code style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);">${esc(c.type)}</code></td><td style="padding:8px 10px;border-bottom:1px solid var(--hairline);color:var(--ink);">${esc(c.desc)}</td></tr>`).join("")}</tbody>
+      </table></div>
+      <pre ${PRE}><code>${config.map((c) => `// ${esc(c.desc)}\n${esc(c.example)}`).join("\n\n")}</code></pre>
+      ${(i.worksWith || []).length ? `<p class="ml-meta" style="margin:14px 0 0;"><span>works with</span>${i.worksWith.map((w) => `<span>${esc(w)}</span>`).join("")}</p>` : ""}
+    </section>` : ""}
 
     ${tools.length ? `<section style="margin-bottom:34px;">
       <h2 ${H2}>Tools to try first</h2>
@@ -749,7 +798,6 @@ ${toolCards}
       <ul style="list-style:none;padding:0;margin:0;">
         <li ${LI}><a href="${esc(registryUrl(i))}" rel="noopener" ${A}>${esc(i.pkg)} on ${esc(registryLabel(i))}</a></li>
         <li ${LI}><a href="${esc(github)}" rel="noopener" ${A}>source on GitHub</a></li>
-        ${i.docsSlug ? `<li ${LI}><a href="/docs/adapters/${esc(i.docsSlug)}" ${A}>configuration reference</a></li>` : ""}
         ${(i.guides || []).map((g) => `<li ${LI}>Guide: <a href="/guides/${esc(g)}" ${A}>${esc(guideTitles[g] || guideTitle(g))}</a></li>`).join("")}
         <li ${LI}><a href="/integrations" ${A}>All integrations</a></li>
       </ul>
