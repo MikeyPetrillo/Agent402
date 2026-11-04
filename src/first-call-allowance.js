@@ -403,7 +403,12 @@ export async function finishFirstCallAllowance(req, { now = Date.now() } = {}) {
   if (a.state === "served") {
     await evalBounded(COMMIT, [k.wallet], [a.token, `granted:${now}`, firstCallAllowanceConfig().walletTtlSeconds]);
     if (stateDbEnabled()) {
-      try { await records.put(RECORD_COLLECTION, a.payer, { grantedAt: new Date(now).toISOString(), slug: a.slug, network: a.network }); }
+      // The grant's time is its claim, not this finish: a paid call the
+      // wallet made while a slow free call ran is booked between the two,
+      // and it is a sale after the grant (the returning-payers figure reads
+      // sales strictly after this time). The claim found no paid sale.
+      const grantedAt = Number.isFinite(a.claimedAt) ? a.claimedAt : now;
+      try { await records.put(RECORD_COLLECTION, a.payer, { grantedAt: new Date(grantedAt).toISOString(), slug: a.slug, network: a.network }); }
       catch (e) { lastStoreError = `record: ${String(e?.message || e).slice(0, 80)}`; }
     }
     noteLifecycle("served", now);
