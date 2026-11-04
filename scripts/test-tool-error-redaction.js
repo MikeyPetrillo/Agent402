@@ -88,6 +88,33 @@ const OP_TOKEN = ["op", "Canary", "Token", String(process.pid)].join("");
   ok(r(`Authorization: Basic ${other}`) === "Authorization: Basic [redacted]", "a Basic token in the text loses its credentials whatever their source");
   ok(!r(`hash salt salt-${PATH_KEY}g`).includes(PATH_KEY), "a *_SALT value is redacted");
   for (const prose of ["Basic arithmetic is fine", "Basic Authentication required", "use Basic AuthenticationHeaders"]) ok(r(prose) === prose, `the word Basic in prose passes through ("${prose}")`);
+  // A configured *_URL that carries no credential stays readable, whatever
+  // its path; one that carries a credential loses that part only.
+  process.env.PROBE_DOCS_URL = "https://docs.example.test/guides/getting-started-guide-2024/configuration-reference?section=webhooks-and-retries";
+  const docsText = "see https://docs.example.test/guides/getting-started-guide-2024/configuration-reference?section=webhooks-and-retries";
+  ok(r(docsText) === docsText, `a non-secret *_URL with long word segments passes through (${r(docsText)})`);
+  const HOOK_TOKEN = ["Hook", "Canary", "Tok", String(process.pid), "zz"].join("");
+  process.env.PROBE_WEBHOOK_URL = `https://hooks.example.test/services/team-alerts/${HOOK_TOKEN}?channel=ops`;
+  const hookOut = r(`post to https://hooks.example.test/services/team-alerts/${HOOK_TOKEN}?channel=ops failed`);
+  ok(hookOut === "post to https://hooks.example.test/services/team-alerts/[redacted]?channel=ops failed", `a *_URL loses only its credential segment (${hookOut})`);
+  const QTOKEN = ["q", "Canary", String(process.pid), "Abc", "def"].join("");
+  process.env.PROBE_EXPORT_URL = `https://export.example.test/v1/data?cursor=${QTOKEN}&format=csv`;
+  ok(r(`GET https://export.example.test/v1/data?cursor=${QTOKEN}&format=csv`) === "GET https://export.example.test/v1/data?cursor=[redacted]&format=csv", "a credential-looking query value under any name is redacted, the rest kept");
+  // Known key shapes and random runs are credentials; words are not.
+  const { looksLikeCredential } = await import("../src/tools/redact.js");
+  const shapes = [["sk", "live", "Q1w2E3r4T5y6U7i8"].join("_"), ["ghp", "AbCdEfGhIjKlMnOpQrSt"].join("_"), "123e4567-e89b-42d3-a456-426614174000", "xqzvbnmlkjhgfdsapoiuyt"];
+  for (const s of shapes) ok(looksLikeCredential(s), `looksLikeCredential: ${s.slice(0, 6)}... is a credential`);
+  for (const s of ["getting-started-guide-2024", "configuration-reference", "internationalization", "release-notes-2026-11-04"]) ok(!looksLikeCredential(s), `looksLikeCredential: ${s} is not`);
+  // Encoded spellings of a secret: percent-encoded (either hex case), hex
+  // (either case) and with JSON-escaped slashes.
+  const ENC = ["enc", "Canary", "/Key+", String(process.pid), "=x"].join("");
+  process.env.PROBE_ENCODED_API_KEY = ENC;
+  const pct = encodeURIComponent(ENC);
+  for (const [label, form] of [["percent-encoded", pct], ["percent-encoded, lowercase escapes", pct.replace(/%[0-9A-F]{2}/g, (m) => m.toLowerCase())],
+    ["hex", Buffer.from(ENC).toString("hex")], ["uppercase hex", Buffer.from(ENC).toString("hex").toUpperCase()], ["JSON-escaped slashes", ENC.replaceAll("/", "\\/")]]) {
+    const out = r(`upstream echoed ${form} back`);
+    ok(out === "upstream echoed [redacted] back", `a secret's ${label} form is redacted (${out.slice(0, 60)})`);
+  }
   // upstreamErrorText: what a keyless kit relays from an upstream error body.
   {
     const { upstreamErrorText: u } = await import("../src/tools/redact.js");

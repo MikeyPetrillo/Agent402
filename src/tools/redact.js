@@ -16,18 +16,21 @@
 // keys are longer, and redacting tiny values would mangle innocent substrings.
 //
 // Connection strings and URLs carry credentials under names that say URL:
-// a database or Redis URL (*DATABASE_URL, *REDIS_URL) is redacted whole,
-// and any *_URL value (or each entry of a comma or space separated list)
-// that carries userinfo or a credential query parameter is redacted whole,
-// along with its password and that parameter's value on their own. A
-// `scheme://user:password@` in the text itself loses its password even when
-// no variable names it.
+// a database or Redis URL (*DATABASE_URL, *REDIS_URL) is redacted whole.
+// Any other *_URL value (or each entry of a comma or space separated list)
+// gives up only the parts that carry a credential: its password (or a
+// credential-looking username), a credential-named or credential-looking
+// query value, and a credential-looking path segment (looksLikeCredential:
+// a known key shape, or a long run mixing letters with digits, or a long
+// random-looking run). The rest of the URL, a docs link included, stays
+// readable. A `scheme://user:password@` in the text itself loses its
+// password even when no variable names it.
 //
 // RPC endpoints carry their key in the path (https://host/v2/<key>) as often
 // as in the query, so every *_RPC, *_RPCS, *_RPC_URL and *_RPC_URLS entry is
 // redacted whole, along with each long path segment and every query value.
-// Any other *_URL entry also gives up a long mixed letter-and-digit path
-// segment. Each secret's base64 form (alone and as `value:`) is redacted too,
+// Each secret's base64 form (alone and as `value:`), its percent-encoded and
+// hex forms (either case) and its JSON-escaped-slash form are redacted too,
 // and a `Basic <credentials>` token in the text loses its credentials whatever
 // variable they came from. *_SALT values count as secrets.
 import { stripHiddenCharacters } from "../hidden-chars.js";
@@ -47,10 +50,36 @@ const CREDENTIAL_PARAM_RE = /^(key|api[-_]?key|apikey|token|access[-_]?token|aut
 const USERINFO_IN_TEXT_RE = /\b([a-z][a-z0-9+.-]{0,31}:\/\/[^\s:@/]{0,256}:)([^\s@/]{1,256})@/gi;
 const MIN_SECRET_LEN = 8;
 
-/** The credential-bearing strings in one URL- or RPC-named variable's value. */
+// Known key shapes: provider prefixes, a JWT, a UUID.
+const KEY_SHAPE_RE = /^(?:sk|pk|rk)[-_][A-Za-z0-9_-]{8,}$|^(?:ghp|gho|ghu|ghs|ghr|github_pat|glpat|xox[abpres])[-_][A-Za-z0-9_-]{8,}$|^(?:AKIA|ASIA|AIza)[A-Za-z0-9_-]{12,}$|^eyJ[A-Za-z0-9_-]{8,}$|^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** Shannon entropy of `s`, in bits per character. */
+function entropy(s) {
+  const counts = new Map();
+  for (const ch of s) counts.set(ch, (counts.get(ch) || 0) + 1);
+  let h = 0;
+  for (const n of counts.values()) { const p = n / s.length; h -= p * Math.log2(p); }
+  return h;
+}
+/** Does one path segment or query value of a *_URL look like a credential?
+ *  A known key shape, or a run between separators that is long and mixes
+ *  letters with digits, or is long and random-looking. Words joined by
+ *  hyphens ("getting-started-guide-2024") do not. */
+export function looksLikeCredential(s) {
+  const v = String(s || "");
+  if (v.length < 16 || v.length > 4096) return false;
+  if (KEY_SHAPE_RE.test(v)) return true;
+  return v.split(/[-_.~]+/).some((run) => (run.length >= 12 && /[A-Za-z]/.test(run) && /[0-9]/.test(run))
+    || (run.length >= 16 && entropy(run) >= 3.7));
+}
+
+/** The credential-bearing strings in one URL- or RPC-named variable's value.
+ *  An RPC or database URL is redacted whole; any other *_URL gives up only
+ *  the parts that carry a credential (a password, a credential-named or
+ *  credential-looking query value, a credential-looking path segment). */
 function urlSecrets(name, value) {
   const out = [];
   const rpc = RPC_NAME_RE.test(name);
+  const whole = rpc || DB_URL_NAME_RE.test(name);
   for (const entry of value.split(/[\s,]+/)) {
     if (!entry) continue;
     let u = null;
@@ -58,19 +87,33 @@ function urlSecrets(name, value) {
     const parts = [];
     if (u) {
       if (u.password) parts.push(decodeURIComponent(u.password), u.password);
-      for (const [k, v] of u.searchParams) if ((rpc || CREDENTIAL_PARAM_RE.test(k)) && v) parts.push(v);
+      else if (u.username && looksLikeCredential(decodeURIComponent(u.username))) parts.push(decodeURIComponent(u.username), u.username);
+      for (const [k, v] of u.searchParams) if (v && (rpc || CREDENTIAL_PARAM_RE.test(k) || looksLikeCredential(v))) parts.push(v);
       for (const seg of u.pathname.split("/")) {
         if (!PATH_SEGMENT_RE.test(seg)) continue;
-        if (rpc || (/[A-Za-z]/.test(seg) && /[0-9]/.test(seg))) parts.push(seg);
+        if (rpc || looksLikeCredential(seg)) parts.push(seg);
       }
     }
-    if (rpc || DB_URL_NAME_RE.test(name) || parts.length || (u && u.username)) {
-      out.push(entry, ...parts);
+    if (whole) {
+      out.push(entry);
       // A client prints the parsed form (trailing slash added, case folded).
       if (u && u.href !== entry) out.push(u.href);
     }
+    out.push(...parts);
   }
   return out;
+}
+
+/** A secret's encoded spellings: percent-encoded (either hex case), hex
+ *  (either case) and with JSON-escaped slashes. */
+function encodedForms(value) {
+  const forms = [];
+  const pct = encodeURIComponent(value);
+  if (pct !== value) forms.push(pct, pct.replace(/%[0-9A-F]{2}/g, (m) => m.toLowerCase()));
+  const hex = Buffer.from(value, "utf8").toString("hex");
+  forms.push(hex, hex.toUpperCase());
+  if (value.includes("/")) forms.push(value.replaceAll("/", "\\/"));
+  return forms;
 }
 
 /** A secret's base64 forms: alone, and as the user part of `value:password`
@@ -97,7 +140,9 @@ function secretValues() {
     }
     if (RPC_NAME_RE.test(name) || URL_NAME_RE.test(name)) plain.push(...urlSecrets(name, value));
   }
-  const all = [...new Set(plain.filter((v) => v.length >= MIN_SECRET_LEN)).values()].map((v) => [v, false]);
+  const kept = plain.filter((v) => v.length >= MIN_SECRET_LEN);
+  for (const v of [...kept]) kept.push(...encodedForms(v));
+  const all = [...new Set(kept).values()].map((v) => [v, false]);
   for (const form of encoded) if (form.length >= MIN_SECRET_LEN) all.push([form, true]);
   return all.sort((a, b) => b[0].length - a[0].length);
 }
