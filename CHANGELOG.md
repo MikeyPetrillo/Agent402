@@ -65,11 +65,11 @@ Payments:
   plus ten minutes. The `readsOnly` list under `payment.dataHandling` on
   /.well-known/x402 names the same mark with the same hold.
 Gateway:
-- inception/mercury-2.5 leaves the nano tier and the auto tier's fast band
-  ahead of its upstream expiration on 2026-11-08, a date every model of its
-  family carries. A call naming it is served by google/gemini-3.1-flash-lite
-  at the tier and price of the route called, the swap named in
-  agent402_model_substituted.
+- inception/mercury-2.5 leaves the auto tier's fast band ahead of its
+  upstream expiration on 2026-11-08, a date every model of its family
+  carries. A call naming it is served as itself until that day, then by
+  google/gemini-3.1-flash-lite at the tier and price of the route called,
+  the swap named in agent402_model_substituted.
 Tools:
 - An upstream read that would start with under 5 ms of its budget is refused
   as the budget's deadline before any request leaves, instead of leaving with
