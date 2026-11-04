@@ -101,6 +101,11 @@ CREATE INDEX IF NOT EXISTS idx_transfers_recent ON transfers (chain, wallet, blo
 -- The buyer figures fold external Tempo settlements in from the sales ledger
 -- and skip any whose tx is already a transfer here; this answers that lookup.
 CREATE INDEX IF NOT EXISTS idx_transfers_txhash ON transfers (tx_hash);
+-- The block anchors that date a chain's undated rows (datedPoints: its dated
+-- rows grouped by block) walk this index in block order. On the other indexes
+-- the read scanned the chain's whole history into a temp b-tree, inside one
+-- step of a sliced read (about 17 ms at 400k rows).
+CREATE INDEX IF NOT EXISTS idx_transfers_dated ON transfers (chain, block, when_ts) WHERE when_ts IS NOT NULL AND block IS NOT NULL;
 CREATE TABLE IF NOT EXISTS cursors (
   chain      TEXT NOT NULL,
   wallet     TEXT NOT NULL,
@@ -393,12 +398,23 @@ export function undatedRowDater(chain, wallet, { anchorsFor = datedAnchors } = {
     return dateFromAnchors(Number(block), anchors, msPerBlock(chain));
   };
 }
-function datedAnchors(chain, wallet) {
-  const pts = db.prepare("SELECT block, MIN(when_ts) AS ts FROM transfers WHERE chain = ? AND when_ts IS NOT NULL AND block IS NOT NULL GROUP BY block ORDER BY block").all(chain)
-    .map((r) => [Number(r.block), Number(r.ts) * 1000]);
+const DATED_POINTS_SQL = "SELECT block, MIN(when_ts) AS ts FROM transfers WHERE chain = ? AND when_ts IS NOT NULL AND block IS NOT NULL GROUP BY block ORDER BY block";
+const qDatedPoints = db.prepare(DATED_POINTS_SQL);
+let datedPointsReads = 0;
+/** Test hook: how many times a chain's dated points were read. */
+export function _datedPointsReadsForTests() { return datedPointsReads; }
+/** Test hook: the query plan of the dated-points read. */
+export function _datedPointsPlanForTests(chain = "base") { return db.prepare(`EXPLAIN QUERY PLAN ${DATED_POINTS_SQL}`).all(chain).map((r) => r.detail); }
+/** [[block, ms]] for a chain's dated rows, one per block, ascending: the
+ *  anchors every wallet on the chain dates its undated rows from. */
+function datedPoints(chain) {
+  datedPointsReads++;
+  return qDatedPoints.all(chain).map((r) => [Number(r.block), Number(r.ts) * 1000]);
+}
+function datedAnchors(chain, wallet, pts = datedPoints(chain)) {
   const cur = getCursor.get(chain, wallet);
   if (cur?.caught_up && cur.next_block != null && cur.updated_ts && (!pts.length || cur.next_block > pts[pts.length - 1][0])) {
-    pts.push([Number(cur.next_block), cur.updated_ts * 1000]);
+    return [...pts, [Number(cur.next_block), cur.updated_ts * 1000]];
   }
   return pts;
 }
@@ -1140,17 +1156,23 @@ async function runLedgerStepsSliced(gen) {
  *  yields, in milliseconds of `clock` (this thread's CPU by default; a test
  *  can pass a clock that also counts a blocking wait). A wallet's rows are
  *  answered outside the timing, as the sliced runner answers them a page at
- *  a time. The sliced runner can only yield where a step does. */
+ *  a time. The sliced runner can only yield where a step does. `windows`
+ *  lists each step's milliseconds and whether it began with a pair's answer
+ *  (its rows, or its aggregate). */
 export function _longestLedgerStepForTests(kind, wallets, { clock } = {}) {
-  const gen = kind === "events" ? externalPaymentEventSteps(wallets) : ledgerSummarySteps(wallets);
+  const gen = kind === "events" ? externalPaymentEventSteps(wallets) : kind === "daily" ? ledgerDailySteps(wallets, null, { withScope: true }) : ledgerSummarySteps(wallets);
   const cpuMs = typeof clock === "function" ? clock : () => { const u = process.threadCpuUsage(); return (u.user + u.system) / 1000; };
   let q = null, longest = 0, steps = 0, answer;
+  const windows = [];
   for (;;) {
+    const fed = answer !== undefined;
     const c0 = cpuMs();
     const r = gen.next(answer);
-    longest = Math.max(longest, cpuMs() - c0);
+    const ms = cpuMs() - c0;
+    longest = Math.max(longest, ms);
     steps++;
-    if (r.done) return { longestMs: longest, steps };
+    windows.push({ ms, fed });
+    if (r.done) return { longestMs: longest, steps, windows };
     const v = r.value;
     answer = undefined;
     if (v?.pairRead && v.agg) answer = (q || (q = qSummaryAgg())).get(payerDustFloorUsd, payerDustFloorUsd, v.chain, v.wallet);
@@ -1282,9 +1304,12 @@ function* ledgerDailySteps(wallets, mppTx = null, { withScope = false } = {}) {
     ...(wallets.algorandExtraWallets || []).filter(Boolean),
   ]);
   const byDay = new Map(); // "YYYY-MM-DD|chain" -> {extUsd, extTx, intUsd, intTx}
+  const points = new Map(); // chain -> dated points, read once per walk
   for (const [chain, wallet] of chains) {
     if (!wallet) continue;
-    const dateOf = undatedRowDater(chain, wallet);
+    // As in externalPaymentEventSteps: the anchors in a step of their own.
+    if (!points.has(chain)) { yield; points.set(chain, datedPoints(chain)); yield; }
+    const dateOf = undatedRowDater(chain, wallet, { anchorsFor: (c, w) => datedAnchors(c, w, points.get(c)) });
     let seen = 0;
     for (const t of yield pairRead(chain, wallet)) {
       if (++seen % ROW_YIELD_EVERY === 0) yield;
@@ -1505,9 +1530,14 @@ function externalPaymentEvents(wallets, events) { return events || readExternalP
 function readExternalPaymentEvents(wallets) { return runLedgerSteps(externalPaymentEventSteps(wallets)); }
 function* externalPaymentEventSteps(wallets) {
   const out = [];
+  const points = new Map(); // chain -> dated points, read once per walk
   for (const [chain, wallet] of walletPairs(wallets)) {
     if (!wallet) continue;
-    const dateOf = undatedRowDater(chain, wallet);
+    // The chain's block anchors in a step of their own, once per walk: read
+    // on the first undated row, they held that row page's step for the read,
+    // and read per wallet, once for each wallet a chain carries.
+    if (!points.has(chain)) { yield; points.set(chain, datedPoints(chain)); yield; }
+    const dateOf = undatedRowDater(chain, wallet, { anchorsFor: (c, w) => datedAnchors(c, w, points.get(c)) });
     let seen = 0;
     for (const t of yield pairRead(chain, wallet)) {
       if (++seen % ROW_YIELD_EVERY === 0) yield;

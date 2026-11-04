@@ -360,6 +360,35 @@ const rev = await import("../src/revenue-ledger.js");
       ok(tempoRows > 4096 && heldUnder(r.longestMs, STEP_BOUND_MS), `the ${kind === "summary" ? "ledgerSummary" : "externalPaymentEventsFor"} steps yield within the Tempo history: with ${rowCost.toFixed(3)} ms more work per Tempo row (${tempoRows} rows), the longest of ${r.steps} steps ran ${r.longestMs.toFixed(1)} ms ours (${STEP.note})`);
     }
   } finally { rev._setTempoRowCostForTests(null); }
+  // The block anchors that date a chain's undated rows: read on an index that
+  // walks blocks in order (on the others the read built a temp b-tree over the
+  // chain's whole history, about 17 ms at 400k rows), once per chain per walk
+  // however many wallets the chain carries, each read in a step of its own
+  // (it once ran inside the step of a row page). The walk's clock here is the
+  // read count, so each window's reading is the reads that step made.
+  const plan = rev._datedPointsPlanForTests("base");
+  ok(plan.some((d) => d.includes("idx_transfers_dated")) && !plan.some((d) => d.includes("TEMP B-TREE")), `the dated-points read walks idx_transfers_dated, no temp b-tree (${plan.join(" | ")})`);
+  const W2 = "0x2222222222222222222222222222222222222222", W3 = "0x3333333333333333333333333333333333333333";
+  {
+    const extra = new Database(process.env.REVENUE_LEDGER_DB);
+    const insX = extra.prepare("INSERT OR IGNORE INTO transfers (chain, wallet, txid, tx_hash, block, when_ts, payer, usd, asset, external) VALUES (?,?,?,?,?,?,?,?,?,?)");
+    extra.transaction(() => {
+      for (const [k, w] of [W2, W3].entries()) for (let i = 0; i < 3000; i++) {
+        const tx = "0x" + (k + 1).toString(16) + i.toString(16).padStart(63, "0");
+        insX.run("base", w, `${tx}:0`, tx, 30_000_000 + i * 900, null, "0x" + (i % 50).toString(16).padStart(40, "c"), 0.01, "USDC", 1);
+      }
+    })();
+    extra.close();
+  }
+  const three = { ...wallets, baseExtraWallets: [W2, W3] };
+  for (const kind of ["events", "daily"]) {
+    const counted = (w) => rev._longestLedgerStepForTests(kind, w, { clock: () => rev._datedPointsReadsForTests() });
+    const one = counted(wallets), all = counted(three);
+    const reads = (r) => r.windows.reduce((t, x) => t + x.ms, 0);
+    ok(reads(one) > 0 && reads(all) === reads(one), `the ${kind} walk reads each chain's dated points once: ${reads(one)} reads with one base wallet, ${reads(all)} with three`);
+    const shared = all.windows.filter((x) => x.ms > 0 && (x.fed || x.ms > 1));
+    ok(shared.length === 0, `...each in a step of its own, never one that began with a wallet's rows (${shared.length} of ${all.steps} steps shared a read)`);
+  }
 }
 
 // --- 1c. the index: snapshot, tool directory, seller summaries.
@@ -389,6 +418,44 @@ const { ctx } = buildRoutePerfFixture({ sellers: 5800, toolsTarget: 198_000, cac
   ok(total > 190_000 && isDeepStrictEqual(sliced, whole), `the sliced directory is the one-turn directory, row for row (${total} rows)`);
   const cats = x.indexedToolCategories("");
   ok(isDeepStrictEqual(x.indexedToolCategories(""), cats) && cats.reduce((s, c) => s + c.count, 0) === x.allIndexedTools({ limit: 1 }).thirdParty, "the category counts are memoized and still count every third-party row");
+}
+{
+  // The directory's interleave (described rows first, each half round-robin
+  // by seller, routes in order), step by step on a full directory's rows: the
+  // split, the grouping and the final join each walk every row, and in one
+  // step they held the loop 50 to 170 ms on a loaded runner. The rows count
+  // their own field reads, so a step that walks every row is seen whatever
+  // the host's speed; the step bound covers the work no field read shows.
+  // The join reads no field, so it is counted in steps: the route sort is the
+  // last read, and after it come the round-robin (a step per depth of the
+  // deepest seller) and the join, a step per 16,384 rows it moves.
+  let reads = 0;
+  const N = 200_000, collate = new Intl.Collator().compare;
+  const rows = Array.from({ length: N }, (_, i) => {
+    const seller = `https://s${i % 5800}.example`, sellerName = i % 3 ? `Seller ${i % 5800}` : "", described = i % 5 < 2;
+    const route = `/r${(i * 7919) % N}`;
+    return { get route() { reads++; return route; }, get seller() { reads++; return seller; }, get sellerName() { reads++; return sellerName; }, get described() { reads++; return described; } };
+  });
+  const roundRobin = (subset) => {
+    const by = new Map();
+    for (const r of subset) { const k = r.sellerName || r.seller; if (!by.has(k)) by.set(k, []); by.get(k).push(r); }
+    const groups = [...by.entries()].sort((a, b) => collate(String(a[0]), String(b[0]))).map(([, l]) => l.sort((a, b) => collate(String(a.route), String(b.route))));
+    const out = [];
+    for (let i = 0; out.length < subset.length; i++) for (const g of groups) if (i < g.length) out.push(g[i]);
+    return out;
+  };
+  const expected = [...roundRobin(rows.filter((r) => r.described)), ...roundRobin(rows.filter((r) => !r.described))];
+  const rest = rows.filter((row) => !row.described);
+  const depth = Math.max(...[...Map.groupBy(rest, (row) => row.sellerName || row.seller).values()].map((g) => g.length));
+  let most = 0, steps = 0, lastRead = 0, r;
+  const it = x._interleaveStepsForTest(rows);
+  do { const r0 = reads; r = it.next(); most = Math.max(most, reads - r0); steps++; if (reads > r0) lastRead = steps; } while (!r.done);
+  const tail = steps - lastRead, joinSlices = Math.floor(rest.length / 16384);
+  ok(r.value.length === N && r.value.every((row, i) => row === expected[i]), `the sliced interleave is the one-pass interleave, row for row (${N} rows)`);
+  ok(most <= 2 * 8192, `...and no step reads more than a slice of rows (most field reads in one step: ${most} of ${N} rows, over ${steps} steps)`);
+  ok(tail >= depth + joinSlices, `...and the round-robin and the join run in slices: ${tail} steps after the last field read, at least ${depth} for the round-robin and ${joinSlices} for the join of ${rest.length} rows`);
+  const st = await longestStep(() => x._interleaveStepsForTest(rows));
+  ok(st.sameShape && heldUnder(st.longest, STEP_BOUND_MS), `...in ${st.count} steps, the longest ${st.longest.toFixed(1)} ms ours, each step its least over three walks (${STEP.note}; one walk's worst step ${st.single.toFixed(1)} ms)`);
 }
 {
   x.__resetRoutableSummaryMemoForTest();
