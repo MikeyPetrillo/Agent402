@@ -119,8 +119,10 @@ export const BLOG_POSTS = [
   <li><strong>Agents.</strong> Autonomous software with a wallet: MCP-connected assistants, crawlers, research and trading agents, other services' agents. The buyers and, increasingly, the sellers.</li>
   <li><strong>The applied layer.</strong> Discovery, routing, pricing, reliability, receipts, transparency. Where an agent finds the right service and pays it once, safely.</li>
   <li><strong>Payment protocols.</strong> x402 and MPP. Open, HTTP-native, wallet as identity.</li>
-  <li><strong>Rails and money.</strong> Stablecoins settled on public chains: USDC across the EVM chains plus Solana, Stellar and Algorand; USDG on Robinhood Chain; native Tempo.</li>
+  <li><strong>Rails and money.</strong> Stablecoins settled on public chains; <a href="/api/rails">/api/rails</a> lists the chains and coins this server settles on today.</li>
 </ol>
+
+<p><em>Updated 2026-11-04: the four layers are written out here in place of a link to the category page, with the chains pointing at the live rail list.</em></p>
 
 <p>The interesting problems live in the second layer. A wire format tells you how to pay one seller you already trust. It says nothing about which of a dozen sellers to pay, whether that seller has ever actually delivered, what happens when a paid call fails, or how anyone can check the numbers a marketplace publishes about itself. Those are finance questions, and they only appear once the payments layer works.</p>
 
