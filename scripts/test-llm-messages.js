@@ -440,5 +440,38 @@ delete process.env.OPENROUTER_API_KEY;
   }
 }
 
+// ---- outbound content blocks are rebuilt from their documented fields ----
+// A field the wire does not document (a file reference, a container, an
+// unknown key) never reaches the upstream, on any block type, the system
+// blocks or the tools; every documented field still does.
+{
+  const tool = bySlug("v1-chat-messages") || LLM_MESSAGES_TOOLS.find((t) => /^v1-chat-messages$|^v1-chat-pro-messages$/.test(t.slug));
+  seen = [];
+  globalThis.fetch = async (url, init) => { const b = JSON.parse(init.body); seen.push({ url: String(url), b }); return { ok: true, status: 200, text: async () => JSON.stringify(reply(b.model)) }; };
+  const model = tool.discovery?.input?.model || "anthropic/claude-haiku-4.5";
+  await tool.handler({ model, max_tokens: 64, file_id: "file-ours-0",
+    system: [{ type: "text", text: "be terse", cache_control: { type: "ephemeral", extra: 1 }, file_id: "file-ours-1" }],
+    messages: [
+      { role: "user", file_id: "file-ours-2", content: [
+        { type: "text", text: "what is this?", citations: [{ type: "char_location", file_id: "file-ours-3" }] },
+        { type: "image", source: { type: "base64", media_type: "image/png", data: "AAAA", file_id: "file-ours-4" } },
+        { type: "image", source: { type: "url", url: "https://img.example.test/a.png", container: "cntr-ours" } },
+      ] },
+      { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "f", input: { a: 1 }, container_id: "cntr-ours" }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", is_error: false, content: [{ type: "text", text: "42", file_id: "file-ours-5" }] }] },
+    ],
+    tools: [{ name: "f", description: "d", input_schema: { type: "object" }, cache_control: { type: "ephemeral" }, file_ids: ["file-ours-6"] }],
+  }, fakeReq);
+  const out = seen[0]?.b || {};
+  const wire = JSON.stringify(out);
+  ok(seen.length === 1 && !/file-ours|cntr-ours|"extra"|citations|file_ids|container/.test(wire), "Messages: no undocumented field (file reference, container, unknown key) reaches the upstream");
+  ok(out.system?.[0]?.text === "be terse" && out.system[0].cache_control?.type === "ephemeral", "Messages: a system block keeps text and cache_control");
+  const [u, a, r] = out.messages || [];
+  ok(u?.role === "user" && u.content[0].text === "what is this?" && u.content[1].source?.data === "AAAA" && u.content[1].source.media_type === "image/png" && u.content[2].source?.url === "https://img.example.test/a.png", "Messages: text and image blocks keep text and their base64 or url source");
+  ok(a?.content?.[0]?.id === "t1" && a.content[0].name === "f" && a.content[0].input?.a === 1, "Messages: a tool_use block keeps id, name and input");
+  ok(r?.content?.[0]?.tool_use_id === "t1" && r.content[0].is_error === false && r.content[0].content?.[0]?.text === "42", "Messages: a tool_result keeps tool_use_id, is_error and its content");
+  ok(out.tools?.[0]?.name === "f" && out.tools[0].description === "d" && out.tools[0].input_schema?.type === "object" && out.tools[0].cache_control?.type === "ephemeral", "Messages: a tool keeps name, description, input_schema and cache_control");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

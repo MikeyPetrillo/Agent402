@@ -313,5 +313,40 @@ delete process.env.OPENROUTER_API_KEY;
   }
 }
 
+// ---- outbound input items are rebuilt from their documented fields ----
+// A field the wire does not document (a file reference, a container, an
+// unknown key) never reaches the upstream, on any item or part type; every
+// documented field still does.
+{
+  const nano = bySlug("v1-chat-nano-responses");
+  seen = [];
+  globalThis.fetch = async (url, init) => { const b = JSON.parse(init.body); seen.push(b); return { ok: true, status: 200, text: async () => JSON.stringify(reply(b.model)) }; };
+  await nano.handler({ model: "openai/gpt-5-nano", input: [
+    { type: "message", role: "developer", content: "be terse", file_id: "file-ours-1" },
+    { role: "user", content: [
+      { type: "input_text", text: "what is this?", file_id: "file-ours-2", extra: 1 },
+      { type: "input_image", image_url: "https://img.example.test/a.png", detail: "low", file_id: "file-ours-3" },
+      { type: "input_image", image_url: { url: "data:image/png;base64,AAAA", file_id: "file-ours-4" } },
+    ] },
+    { type: "message", role: "assistant", id: "msg_1", status: "completed", content: [{ type: "output_text", text: "earlier", annotations: [{ type: "file_citation", file_id: "file-ours-5" }] }] },
+    { type: "reasoning", id: "rs_1", summary: [{ type: "summary_text", text: "thought", file_id: "file-ours-6" }], encrypted_content: "enc", container_id: "cntr-ours" },
+    { type: "function_call", id: "fc_1", call_id: "c1", name: "f", arguments: "{}", namespace: "ns", container_id: "cntr-ours" },
+    { type: "function_call_output", call_id: "c1", output: [{ type: "input_text", text: "42", file_id: "file-ours-7" }], vector_store_ids: ["vs-ours"] },
+  ], tools: [{ type: "function", name: "f", description: "d", parameters: { type: "object" }, strict: true, file_ids: ["file-ours-8"] }],
+  text: { format: { type: "text" }, verbosity: "low", file_id: "file-ours-9" } }, fakeReq);
+  const out = seen[0] || {};
+  const wire = JSON.stringify(out);
+  ok(seen.length === 1 && !/file-ours|cntr-ours|vs-ours|"extra"|file_ids|vector_store_ids|container_id/.test(wire), "Responses: no undocumented field (file reference, container, unknown key) reaches the upstream");
+  const [dev, user, asst, rs, fc, fco] = out.input || [];
+  ok(dev?.type === "message" && dev.role === "developer" && dev.content === "be terse", "Responses: a message keeps type, role and string content");
+  ok(user?.content?.[0]?.text === "what is this?" && user.content[1].image_url === "https://img.example.test/a.png" && user.content[1].detail === "low" && user.content[2].image_url?.url === "data:image/png;base64,AAAA", "Responses: text and image parts keep text, image_url (string or {url}) and detail");
+  ok(asst?.id === "msg_1" && asst.status === "completed" && asst.content[0].type === "output_text" && asst.content[0].text === "earlier", "Responses: an echoed assistant message keeps id, status and its output_text");
+  ok(rs?.type === "reasoning" && rs.id === "rs_1" && rs.summary[0].text === "thought" && rs.encrypted_content === "enc", "Responses: a reasoning item keeps id, summary and encrypted_content");
+  ok(fc?.call_id === "c1" && fc.name === "f" && fc.arguments === "{}" && fc.namespace === "ns" && fc.id === "fc_1", "Responses: a function_call keeps call_id, name, arguments, namespace and id");
+  ok(fco?.call_id === "c1" && fco.output[0].text === "42", "Responses: a function_call_output keeps call_id and its output parts");
+  ok(out.tools?.[0]?.name === "f" && out.tools[0].strict === true && out.tools[0].description === "d" && out.tools[0].parameters?.type === "object", "Responses: a function tool keeps name, description, parameters and strict");
+  ok(out.text?.format?.type === "text" && out.text.verbosity === "low", "Responses: text keeps format and verbosity");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

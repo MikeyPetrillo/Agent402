@@ -99,6 +99,44 @@ function probeParts(parts, where, acc) {
   });
 }
 
+// What goes upstream is rebuilt from the fields each item and part type
+// documents, never the buyer's object: an unknown field, a file reference
+// (file_id, file_url) or a container reference would otherwise reach the
+// upstream unread. Runs after validation, so every kept field was checked.
+const IMAGE_DETAIL = new Set(["auto", "low", "high"]);
+const str = (v) => typeof v === "string";
+function forwardPart(p) {
+  if (p.type === "input_image") {
+    const image_url = str(p.image_url) ? p.image_url : { url: p.image_url.url };
+    return { type: "input_image", image_url, ...(IMAGE_DETAIL.has(p.detail) ? { detail: p.detail } : {}) };
+  }
+  return { type: p.type, text: p.text };
+}
+const forwardContent = (c) => (str(c) ? c : c.map(forwardPart));
+const withIdStatus = (it, out) => ({ ...out, ...(str(it.id) ? { id: it.id } : {}), ...(str(it.status) ? { status: it.status } : {}) });
+function forwardItem(it, type) {
+  switch (type) {
+    case "message":
+      return withIdStatus(it, { ...(it.type === "message" ? { type: "message" } : {}), role: it.role, content: forwardContent(it.content) });
+    case "function_call":
+      return withIdStatus(it, { type: "function_call", call_id: it.call_id, name: it.name, arguments: str(it.arguments) ? it.arguments : JSON.stringify(it.arguments ?? {}), ...(str(it.namespace) ? { namespace: it.namespace } : {}) });
+    case "function_call_output":
+      return withIdStatus(it, { type: "function_call_output", call_id: it.call_id, output: forwardContent(it.output) });
+    case "reasoning": {
+      const summary = Array.isArray(it.summary) ? it.summary.filter((x) => x && str(x.text)).map((x) => ({ type: "summary_text", text: x.text })) : [];
+      return withIdStatus(it, { type: "reasoning", summary, ...(str(it.encrypted_content) ? { encrypted_content: it.encrypted_content } : {}) });
+    }
+    default:
+      return null;
+  }
+}
+const forwardFunctionTool = (t) => ({
+  type: "function", name: t.name,
+  ...(str(t.description) ? { description: t.description } : {}),
+  ...(t.parameters !== undefined ? { parameters: t.parameters } : {}),
+  ...(typeof t.strict === "boolean" ? { strict: t.strict } : {}),
+});
+
 /** Validate an OpenAI Responses request for a tier. Returns
  *  { body, probe, imageCount, isRouted, routedCategory, routedQuality, chain }. */
 export function validateResponsesRequest(input, tierSlug) {
@@ -141,13 +179,13 @@ export function validateResponsesRequest(input, tierSlug) {
   }
   const acc = { chars: 0, images: 0 };
   let probeInput;
+  let forwardInput = input.input;
   if (typeof input.input === "string") { acc.chars += input.input.length; probeInput = input.input; }
   else if (Array.isArray(input.input)) {
     const maxItems = Number.isFinite(tier.maxInputItems) ? tier.maxInputItems : MAX_INPUT_ITEMS;
     if (input.input.length === 0 || input.input.length > maxItems) throw bad(`"input" must have 1-${maxItems} items on ${RESPONSES_PATH_BY_TIER[tierSlug]}` + (!tier.metered && TIERS["v1-chat-metered"]?.maxInputItems ? ` (${RESPONSES_PATH_BY_TIER["v1-chat-metered"]} allows ${TIERS["v1-chat-metered"].maxInputItems})` : ""));
-    probeInput = input.input.map((it, i) => {
-      if (!it || typeof it !== "object") throw bad(`input[${i}] must be an object`);
-      const type = it.type || (it.role ? "message" : null);
+    forwardInput = [];
+    const probeItem = (it, type, i) => {
       switch (type) {
         case "message":
           if (!ROLES.has(it.role)) throw bad(`input[${i}].role must be user, assistant, system or developer`);
@@ -172,6 +210,13 @@ export function validateResponsesRequest(input, tierSlug) {
         default:
           throw bad(`input[${i}]: unsupported item type "${type}" (allowed: message, function_call, function_call_output, reasoning)`);
       }
+    };
+    probeInput = input.input.map((it, i) => {
+      if (!it || typeof it !== "object") throw bad(`input[${i}] must be an object`);
+      const type = it.type || (it.role ? "message" : null);
+      const checked = probeItem(it, type, i);
+      forwardInput.push(forwardItem(it, type));
+      return checked;
     });
   } else throw bad('"input" is required: a string or an array of input items');
   let instructions;
@@ -190,13 +235,20 @@ export function validateResponsesRequest(input, tierSlug) {
   if (!Number.isFinite(maxOut) || maxOut < 1) maxOut = tierDefaultMax;
   if (maxOut > tier.maxTokens) maxOut = tier.maxTokens;
 
-  const body = { model: isRouted ? undefined : model, input: input.input, max_output_tokens: maxOut, store: false };
+  const body = { model: isRouted ? undefined : model, input: forwardInput, max_output_tokens: maxOut, store: false };
   if (instructions !== undefined) body.instructions = instructions;
   // Parameters the model does not take (GPT-6 Astra sampling; Claude Haiku 5
   // sampling and assistant prefill): named before any upstream call, as on the
   // chat and Messages wires.
   if (!isRouted) refuseUnsupportedParams(model, paramCtx);
-  for (const k of ["temperature", "top_p", "metadata", "tool_choice", "parallel_tool_calls", "truncation", "text"]) if (input[k] !== undefined) body[k] = input[k];
+  for (const k of ["temperature", "top_p", "metadata", "tool_choice", "parallel_tool_calls", "truncation"]) if (input[k] !== undefined) body[k] = input[k];
+  // `text` carries the output format and verbosity, nothing else.
+  if (input.text && typeof input.text === "object" && !Array.isArray(input.text)) {
+    const text = {};
+    if (input.text.format !== undefined) text.format = input.text.format;
+    if (input.text.verbosity !== undefined) text.verbosity = input.text.verbosity;
+    body.text = text;
+  } else if (input.text !== undefined) body.text = input.text;
   // tool_choice mirrors the tools guard (function tools only): Responses wire
   // is "none"|"auto"|"required" or {type:"function", name} - a hosted-tool
   // choice ({type:"web_search_preview"} etc.) is refused like the tool itself.
@@ -223,7 +275,7 @@ export function validateResponsesRequest(input, tierSlug) {
       }
       if (SERVER_TOOL_RE.test(t.type) || t.type !== "function") throw bad(`tools[${i}]: "${t.type}" is a server-side tool (spend bounded by neither max_output_tokens nor the price cap) - only type:"function" tools (and namespaces of them) are served`);
       if (typeof t.name !== "string") throw bad(`tools[${i}].name is required`);
-      flat.push(t);
+      flat.push(forwardFunctionTool(t));
     }
     if (flat.length > MAX_TOOLS) throw bad(`"tools" flattens to ${flat.length} function tools; the maximum is ${MAX_TOOLS}`);
     body.tools = flat;
