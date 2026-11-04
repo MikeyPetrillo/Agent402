@@ -6,7 +6,7 @@ carries its own version on npm.
 
 ## Unreleased
 
-### 2026-11-05 (Audio-only decoding, refused redirects answer 400)
+### 2026-11-05 (Audio-only decoding, refused redirects answer 400, documented gateway fields)
 Tools:
 - `media-info`, `audio-convert` and `audio-normalize` decode audio streams
   only. `media-info` still lists every stream: a video, image or subtitle
@@ -18,7 +18,17 @@ Tools:
   rendering the refusal as the page.
 - `html-frames` runs documents in a browser of its own with the JavaScript
   JIT off, so WebAssembly is not available to a document; plain script,
-  canvas, SVG and CSS animation render as before.
+  canvas, SVG and CSS animation render as before. After 5 failed documents
+  from one payer in 10 minutes, the next answers 429 with Retry-After.
+- `a2a-card-fetch` answers the address check's 400 for a host it may not
+  reach, the same answer every URL tool gives.
+Gateway:
+- The Responses and Messages wires pass each input item, content block and
+  tool on with its documented fields only.
+Index:
+- A seller registration naming one of this server's own hosts is refused.
+Reports:
+- A public report's JSON has its own address, `/reports/public/<id>.json`.
 
 ### 2026-11-04 (Office files from data, shorter pages, one page per adapter)
 Gateway:
