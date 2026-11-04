@@ -146,5 +146,42 @@ for (const file of ["listing-pass.yml", "mint-bazaar-rows.yml", "algorand-rail-c
   ok(iSweep > iInstall && tokenSteps.length === 1 && tokenSteps[0] > iSweep && /gh issue/.test(String(steps[tokenSteps[0]].run || "")), `algorand-rail-canary.yml: the workflow token is on the issue step alone, after the sweep (steps ${tokenSteps.join(", ")})`);
 }
 
+// The other direction: a suite that needs the private cost table
+// (scripts/lib/require-upstream-costs.js) fails under CI without it, so every
+// deploy.yml step that runs one must hand it the table: the secret, or a
+// table file, never a blank. UPSTREAM_COSTS_OPTIONAL is only ever the fork
+// expression, so a push run can never skip.
+{
+  const { readdirSync } = await import("node:fs");
+  const wf = load(text);
+  const scriptsDir = new URL("../scripts/", import.meta.url);
+  const needTable = readdirSync(scriptsDir).filter((f) => f.endsWith(".js") && /require-upstream-costs\.js/.test(readFileSync(new URL(f, scriptsDir), "utf8")));
+  const MUST = ["test-leak-guard.js", "test-llm-gateway.js", "test-llm-messages.js", "test-llm-responses.js", "test-async-jobs.js"];
+  for (const s of MUST) ok(needTable.includes(s), `${s} requires the cost table (fails under CI without it)`);
+  const lib = readFileSync(new URL("lib/require-upstream-costs.js", scriptsDir), "utf8");
+  ok(/process\.env\.CI && process\.env\.UPSTREAM_COSTS_OPTIONAL !== "1"/.test(lib) && /process\.exit\(1\)/.test(lib), "require-upstream-costs fails under CI unless the run is marked optional");
+  const FORK_ONLY = /^\$\{\{ github\.event\.pull_request\.head\.repo\.fork && '1' \|\| '' \}\}$/;
+  const runs = new Map();
+  for (const [jobName, job] of Object.entries(wf.jobs || {})) {
+    for (const st of job.steps || []) {
+      const run = String(st.run || "");
+      for (const s of needTable) {
+        if (!new RegExp(`scripts/${s.replace(/\./g, "\\.")}(?=[\\s;&|)]|$)`, "m").test(run)) continue;
+        const env = { ...(wf.env || {}), ...(job.env || {}), ...(st.env || {}) };
+        const json = String(env.UPSTREAM_COSTS_JSON ?? "");
+        const file = String(env.UPSTREAM_COSTS_FILE ?? "");
+        const opt = env.UPSTREAM_COSTS_OPTIONAL;
+        const table = /^\$\{\{ secrets\.UPSTREAM_COSTS_JSON \}\}$/.test(json) || file.trim() !== "";
+        if (!table || (opt !== undefined && !FORK_ONLY.test(String(opt)))) {
+          ok(false, `${s} in ${jobName} "${String(st.name || "").slice(0, 50)}" gets the cost table and is optional only on a fork`);
+        }
+        runs.set(s, (runs.get(s) || 0) + 1);
+      }
+    }
+  }
+  for (const s of MUST) ok((runs.get(s) || 0) >= 1, `deploy.yml runs ${s} with the cost table (${runs.get(s) || 0} step(s))`);
+  ok(runs.size >= MUST.length, `every deploy.yml step that runs a cost-table suite hands it the table (${runs.size} suites checked)`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
