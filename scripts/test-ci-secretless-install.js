@@ -3,8 +3,9 @@
 // the registry). An install runs dependency lifecycle scripts, so a secret
 // left in its env is readable by any postinstall a version bump brings in.
 // The spending workflows that install packages (listing-pass.yml,
-// mint-bazaar-rows.yml) keep every secret and the workflow token at step
-// scope, never on an install step or at job or workflow scope.
+// mint-bazaar-rows.yml, algorand-rail-canary.yml) keep every secret and the
+// workflow token at step scope, never on an install step (npm rebuild runs
+// install scripts too) or at job or workflow scope.
 // Offline: reads the workflow text only.
 import { readFileSync } from "node:fs";
 import { load } from "js-yaml";
@@ -111,8 +112,8 @@ if (deployJob) {
 // Spending workflows: an install step runs dependency code with whatever its
 // environment holds, so no secret (nor the workflow token) may reach one.
 const SECRETISH = /secrets\.|github\.token|GITHUB_TOKEN/;
-const INSTALL_RUN = /\bnpm (ci|install|i)\b|\bnpx\b|\byarn\b|\bpnpm\b/;
-for (const file of ["listing-pass.yml", "mint-bazaar-rows.yml"]) {
+const INSTALL_RUN = /\bnpm (ci|install|i|rebuild)\b|\bnpx\b|\byarn\b|\bpnpm\b/;
+for (const file of ["listing-pass.yml", "mint-bazaar-rows.yml", "algorand-rail-canary.yml"]) {
   const wf = load(readFileSync(new URL(`../.github/workflows/${file}`, import.meta.url), "utf8"));
   const leaks = (env) => Object.entries(env || {}).filter(([, v]) => SECRETISH.test(String(v))).map(([k]) => k);
   ok(leaks(wf.env).length === 0, `${file}: no secret at workflow scope`);

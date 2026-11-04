@@ -41,8 +41,9 @@ jobs:
   canary:
     runs-on: ubuntu-24.04
     timeout-minutes: 110
+    # The workflow token is not at job scope: the install step runs
+    # better-sqlite3's install script, so only the issue step carries it.
     env:
-      GH_TOKEN: ${{ github.token }}
       TARGET_URL: https://agent402.tools
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -50,8 +51,8 @@ jobs:
         with:
           node-version: 22
       - name: Install x402 client
-        # No wallet secrets are in scope for this step (they live on the run
-        # step), and --ignore-scripts blocks dependency lifecycle scripts
+        # No wallet secret and no workflow token are in scope for this step
+        # (they live on the sweep and issue steps), and --ignore-scripts blocks dependency lifecycle scripts
         # entirely (audit R-07), except better-sqlite3's own rebuild: the sweep
         # imports src/payments.js, whose import chain reaches src/pow.js, which
         # opens a SQLite file at load (the same step the other paid workflows
@@ -107,6 +108,7 @@ jobs:
         # ${{ }} to match the repo-wide convention for step outputs
         # referenced inside run: - cheap consistency, not a live fix.
         env:
+          GH_TOKEN: ${{ github.token }}
           RESULT: ${{ steps.sweep.outputs.result }}
         run: |
           TITLE="Algorand rail canary FAILING"
