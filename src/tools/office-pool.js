@@ -9,7 +9,10 @@
 //  - QUEUE_MAX caps work waiting behind them; past it a call answers 503 with
 //    nothing charged (any answer at or above 400 cancels x402 settlement).
 //  - JOB_TIMEOUT_MS is a backstop far above the largest input's measured build
-//    (scripts/test-office-create.js times it).
+//    (scripts/test-office-create.js times it). It also bounds the wait: a job
+//    still queued that long is refused with the full queue's 503 before any
+//    build, so a call never waits past one deadline and then builds for a
+//    client that may have left.
 //  - Idle workers end after IDLE_MS, so their heaps are not held for good.
 import { Worker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
@@ -27,6 +30,7 @@ const queue = [];
 let nextJobId = 1;
 
 const unavailable = (message, extra = {}) => Object.assign(new Error(message), { statusCode: 503, ...extra });
+const busy = () => unavailable("Office builders are busy; retry in a few seconds. Nothing was charged.", { retryAfter: 5, shed: true });
 
 function settle(slot, fn, arg) {
   const job = slot.job;
@@ -68,6 +72,7 @@ function spawnSlot() {
   return slot;
 }
 function assign(slot, job) {
+  clearTimeout(job.queueTimer);
   slot.job = job;
   clearTimeout(slot.idleTimer);
   slot.worker.ref();
@@ -92,9 +97,19 @@ export function officePoolState() { return { workers: slots.length, busy: slots.
 /** Build one file off the main thread. Resolves { base64, bytes, stats? };
  *  rejects with the builder's statusCode and message. */
 export function runOfficeOp(op, spec, { timeoutMs = OFFICE_JOB_TIMEOUT_MS } = {}) {
-  if (queue.length >= OFFICE_QUEUE_MAX) return Promise.reject(unavailable("Office builders are busy; retry in a few seconds. Nothing was charged.", { retryAfter: 5, shed: true }));
+  if (queue.length >= OFFICE_QUEUE_MAX) return Promise.reject(busy());
   return new Promise((resolve, reject) => {
-    queue.push({ id: nextJobId++, op, spec, timeoutMs, resolve, reject, timer: null });
+    const job = { id: nextJobId++, op, spec, timeoutMs, resolve, reject, timer: null, queueTimer: null };
+    queue.push(job);
     pump();
+    if (queue.includes(job)) {
+      job.queueTimer = setTimeout(() => {
+        const i = queue.indexOf(job);
+        if (i < 0) return;
+        queue.splice(i, 1);
+        reject(busy());
+      }, timeoutMs);
+      job.queueTimer.unref();
+    }
   });
 }

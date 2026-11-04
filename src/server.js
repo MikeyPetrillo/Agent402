@@ -3261,6 +3261,9 @@ const LARGE_BODY_ROUTES = [
   // onchain-sql takes SQL to 60,000 characters (SQL_MAX_CHARS), which JSON
   // escaping can double on the wire past the global 100 KB parser.
   ["/api/onchain-sql", 256 * 1024],
+  // The Office builders take 100,000 characters of text or 50,000 cells
+  // (OFFICE_LIMITS.requestBytes), past the global parser once JSON-escaped.
+  ["/api/xlsx-create", 2 * MB], ["/api/docx-create", 2 * MB], ["/api/pptx-create", 2 * MB],
 ];
 const largeBodyUnpaidLimiter = createRateLimiter("large-body-unpaid", { perMin: 60, perHour: 1200 });
 app.use(createLargeBodyGate({
@@ -3300,6 +3303,8 @@ app.use("/api/html-frames", unlessBodyUnread(express.json({ limit: "12mb", infla
 // onchain-sql: a 60,000-character query is up to 120 KB once JSON-escaped;
 // the handler's own cap (SQL_MAX_CHARS) checks the text again.
 app.use("/api/onchain-sql", unlessBodyUnread(express.json({ limit: "256kb", inflate: false })));
+// Office builders: the caps in OFFICE_LIMITS are checked again by each handler.
+app.use(["/api/xlsx-create", "/api/docx-create", "/api/pptx-create"], unlessBodyUnread(express.json({ limit: "2mb", inflate: false })));
 // Image edit: up to four reference images as base64 in JSON, or one as a
 // multipart file (OpenAI's images.edit() wire). The handler checks each image.
 app.use("/v1/images/edits", unlessBodyUnread(express.json({ limit: "34mb", inflate: false })));

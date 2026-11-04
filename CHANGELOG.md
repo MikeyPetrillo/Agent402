@@ -27,9 +27,10 @@ Tools:
   title, bullets in up to five levels, an optional table and speaker notes,
   plus an optional title slide. Nothing is fetched: a link is written as a
   hyperlink and an image as its alt text linked to its address. Each call is
-  bounded (sheets, rows, cells, slides, bullets, table sizes, 100,000
-  characters of text, an 8 MB file), a cap answers 400 naming it, and the
-  file is built in a worker thread.
+  bounded (sheets, rows, cells, slides, bullets, table sizes and table cells,
+  100,000 characters of text in a request body of up to 2 MB, an 8 MB file):
+  an input cap answers 400 naming it, the file size cap and the build
+  deadline answer 422, and the file is built in a worker thread.
 Surfaces:
 - Agent hosts guide: add Agent402 to a Paperclip company as a custom MCP
   server, with the free proof-of-work tools, how paid tools answer on the

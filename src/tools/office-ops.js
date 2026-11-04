@@ -21,8 +21,11 @@ export function bad(message, statusCode = 400) {
 export const OFFICE_LIMITS = Object.freeze({
   totalChars: 100_000,        // every string in one call, summed
   outputBytes: 8 * 1024 * 1024, // the finished file
+  // The request body these routes' parser takes (src/server.js mounts them on
+  // the large-body gate): room for every cap below once JSON-escaped.
+  requestBytes: 2 * 1024 * 1024,
   xlsx: Object.freeze({ sheets: 20, rowsPerSheet: 10_000, columns: 200, cells: 50_000, cellChars: 32_767 }),
-  docx: Object.freeze({ markdownChars: 100_000, titleChars: 500, blocks: 5_000, tableRows: 200, tableColumns: 20, nesting: 8 }),
+  docx: Object.freeze({ markdownChars: 100_000, titleChars: 500, blocks: 5_000, tableRows: 200, tableColumns: 20, tableCells: 25_000, nesting: 8, inlineNesting: 16 }),
   pptx: Object.freeze({ slides: 100, bullets: 30, bulletChars: 1_000, titleChars: 300, tableRows: 20, tableColumns: 10, cellChars: 500, notesChars: 10_000 }),
 });
 
@@ -183,18 +186,22 @@ export function validateXlsx(input) {
         keys = [...set];
       }
       if (keys.length > L.columns) throw bad(`sheets[${si}].columns names ${keys.length} columns; the cap is ${L.columns} (cap columns)`);
+      // Counted from the row and key counts before the grid is allocated.
+      cells += (rows.length + (header ? 1 : 0)) * keys.length;
+      if (cells > L.cells) throw bad(`The workbook holds more than ${L.cells} cells; the cap is ${L.cells} (cap cells)`);
       grid = rows.map((r) => keys.map((k) => r[k]));
       if (header) grid.unshift(keys.slice());
     } else {
       grid = rows;
-      for (const [ri, r] of rows.entries()) if (r.length > L.columns) throw bad(`sheets[${si}].rows[${ri}] holds ${r.length} cells; the cap is ${L.columns} columns (cap columns)`);
+      for (const [ri, r] of rows.entries()) {
+        if (r.length > L.columns) throw bad(`sheets[${si}].rows[${ri}] holds ${r.length} cells; the cap is ${L.columns} columns (cap columns)`);
+        cells += r.length;
+      }
+      if (cells > L.cells) throw bad(`The workbook holds more than ${L.cells} cells; the cap is ${L.cells} (cap cells)`);
     }
     const width = grid.reduce((m, r) => Math.max(m, r.length), 0);
     if (!keys) keys = header && grid.length ? Array.from({ length: width }, (_, i) => (typeof grid[0][i] === "string" ? grid[0][i] : columnLetter(i))) : Array.from({ length: width }, (_, i) => columnLetter(i));
-    const data = grid.map((r, ri) => r.map((v, ci) => {
-      if (++cells > L.cells) throw bad(`The workbook holds more than ${L.cells} cells; the cap is ${L.cells} (cap cells)`);
-      return cellOf(v, `sheets[${si}] row ${ri + 1} column ${columnLetter(ci)}`, take);
-    }));
+    const data = grid.map((r, ri) => r.map((v, ci) => cellOf(v, `sheets[${si}] row ${ri + 1} column ${columnLetter(ci)}`, take)));
     const hs = sh.headerStyle && typeof sh.headerStyle === "object" ? sh.headerStyle : {};
     if (sh.headerStyle !== undefined && (typeof sh.headerStyle !== "object" || sh.headerStyle === null || Array.isArray(sh.headerStyle))) throw bad(`sheets[${si}].headerStyle must be an object`);
     if (hs.bold !== undefined && typeof hs.bold !== "boolean") throw bad(`sheets[${si}].headerStyle.bold must be true or false`);
@@ -290,6 +297,8 @@ export async function buildDocx(spec) {
     if (e instanceof RangeError) throw bad(`"markdown" nests more than ${L.nesting} levels deep (cap nesting)`);
     throw e;
   }
+  const cells = docxTableCells(tokens);
+  if (cells > L.tableCells) throw bad(`The document's tables hold ${cells} cells (rows times columns, a short row counted at the header's width); the cap is ${L.tableCells} (cap tableCells)`);
   const blocks = [];
   let count = 0;
   let listInstance = 0;
@@ -302,10 +311,7 @@ export async function buildDocx(spec) {
   const runsOf = (toks, fmt = {}, depth = 0) => {
     const out = [];
     if (!toks) return out;
-    if (depth > 16) {
-      out.push(new D.TextRun({ text: toks.map((t) => t.raw ?? t.text ?? "").join(""), ...fmt }));
-      return out;
-    }
+    if (depth > L.inlineNesting) throw bad(`"markdown" nests inline formatting more than ${L.inlineNesting} levels deep (cap nesting)`);
     for (const t of toks) {
       switch (t.type) {
         case "strong": out.push(...runsOf(t.tokens, { ...fmt, bold: true }, depth + 1)); break;
@@ -445,6 +451,23 @@ export async function buildDocx(spec) {
   });
   const buffer = await D.Packer.toBuffer(doc);
   return { buffer, stats: { blocks: count, headings, tables, listItems, codeBlocks, links } };
+}
+
+/** Table cells the document would build, summed over every table at any
+ *  depth (quotes, lists): each row is padded to its header's width, so a table
+ *  costs (rows + 1) x columns. Read from the token tree before any cell is
+ *  built; an explicit stack, so a deep tree cannot overflow the call stack. */
+export function docxTableCells(tokens) {
+  let cells = 0;
+  const stack = [tokens];
+  while (stack.length) {
+    for (const t of stack.pop() || []) {
+      if (t.type === "table") cells += ((t.rows?.length || 0) + 1) * (t.header?.length || 0);
+      else if (t.type === "blockquote") stack.push(t.tokens);
+      else if (t.type === "list") for (const item of t.items || []) stack.push(item.tokens);
+    }
+  }
+  return cells;
 }
 
 // marked keeps HTML entities escaped in token text; the document wants the characters.

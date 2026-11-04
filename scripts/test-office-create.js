@@ -14,9 +14,18 @@
 //     while every builder runs in this thread on inputs full of URLs.
 //   - Timing: the largest input each cap allows is validated and built, and
 //     the event loop is sampled while the worker builds it.
+//   - docx table cells are capped across the whole document before any cell is
+//     built; xlsx cells are counted before the grid is allocated; a job that
+//     waits in the queue past its deadline answers the busy 503 unbuilt.
+//   - The caller path: a FREE_MODE boot on port 0 serves inputs near each
+//     published cap over HTTP (bodies past the global 100 KB parser).
 //
 //   node scripts/test-office-create.js
 import "./lib/offline-stores.js";
+import { spawn } from "node:child_process";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { ownStoreEnv } from "./lib/own-stores.js";
 import http from "node:http";
 import https from "node:https";
 import net from "node:net";
@@ -25,8 +34,8 @@ import dns from "node:dns";
 import { inflateRawSync } from "node:zlib";
 import { syncBuiltinESMExports } from "node:module";
 import { OFFICE_TOOLS } from "../src/tools/office-kit.js";
-import { OFFICE_LIMITS, OFFICE_OPS, OFFICE_TYPES, validateXlsx, validateDocx, validatePptx, finish } from "../src/tools/office-ops.js";
-import { runOfficeOp, officePoolState } from "../src/tools/office-pool.js";
+import { OFFICE_LIMITS, OFFICE_OPS, OFFICE_TYPES, validateXlsx, validateDocx, validatePptx, finish, docxTableCells } from "../src/tools/office-ops.js";
+import { runOfficeOp, officePoolState, OFFICE_POOL_MAX } from "../src/tools/office-pool.js";
 import { handlerInputOf } from "../src/handler-input.js";
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";
 import { FREE_TIER_SLUGS } from "../src/free-tier.js";
@@ -138,7 +147,12 @@ for (const t of OFFICE_TOOLS) {
   ok(!FREE_TIER_SLUGS.has(t.slug), `${t.slug} is wallet-only (not on the free-tier allowlist)`);
   ok(t.route === `POST /api/${t.slug}` && t.category && t.description && t.tags.length && t.discovery?.inputSchema && t.discovery?.input && t.discovery?.output?.example, `${t.slug} carries the full tool def`);
   ok(!/\u2014/.test(t.description) && !/\bdeterministic\b/i.test(t.description), `${t.slug} description: no em dash, no unscoped absolute`);
+  ok(t.description.includes(`up to ${OFFICE_LIMITS.requestBytes / (1024 * 1024)} MB`), `${t.slug} description states the request body cap`);
 }
+// pptxgenjs's "shrink" applies only once PowerPoint edits the text, so the copy
+// says what the builder does: the font size steps by bullet and row count.
+ok(!/shrink/i.test(tool("pptx-create").description) && /font size steps down/.test(tool("pptx-create").description), "pptx-create description claims no shrink-to-fit; it names the font-size steps");
+ok(tool("docx-create").description.includes(`${OFFICE_LIMITS.docx.tableCells.toLocaleString("en-US")} table cells`), "docx-create description publishes the tableCells cap");
 void WALLET_ONLY_SLUGS;
 
 // ----------------------------------------------------------------------------
@@ -318,6 +332,48 @@ await refuses(() => ph({ slides: [{}] }), 400, /needs a "title"/, "pptx: an empt
 await refuses(() => ph({}), 400, /Send "slides"/, "pptx: no slides");
 await refuses(() => finish(Buffer.alloc(11), 10), 422, /cap outputBytes/, "output past the output cap answers 422");
 
+// docx: table cells are summed over the document, short rows at the header's
+// width, before a cell is built. 30 tables of 200 rows by 20 columns written
+// as bare "|" rows fit in about 20 KB of JSON and once drove the worker to
+// its heap limit (a 503 after seconds); they answer the 400 at once.
+{
+  const hdr = `|${Array.from({ length: D.tableColumns }, () => "h").join("|")}|\n|${Array.from({ length: D.tableColumns }, () => "-").join("|")}|\n`;
+  const padded = (hdr + "|\n".repeat(D.tableRows - 1) + "\n").repeat(30);
+  const bodyBytes = JSON.stringify({ markdown: padded }).length;
+  ok(bodyBytes < 25_000, `30 padded tables are a small body (${bodyBytes} bytes)`);
+  const t0 = performance.now();
+  await refuses(() => dh({ markdown: padded }), 400, /cap tableCells/, `docx: 30 padded tables (${30 * D.tableRows * D.tableColumns} cells) past the ${D.tableCells} table-cell cap`);
+  const ms = performance.now() - t0;
+  ok(ms < 2_000, `...refused in ${ms.toFixed(0)} ms, before any cell is built`);
+  const { Lexer } = await import("marked");
+  const one = `${hdr}| a |`;
+  const lexed = new Lexer({ gfm: true }).lex(`${one}\n\n> ${one.split("\n").join("\n> ")}\n\n- item\n\n  ${one.split("\n").join("\n  ")}\n`);
+  ok(docxTableCells(lexed) === 3 * 2 * D.tableColumns, `table cells are counted inside quotes and lists too (${docxTableCells(lexed)})`);
+}
+
+// xlsx: the cell cap is read from row and key counts before the grid is built,
+// so no cell value is read from an input past it.
+{
+  let reads = 0;
+  const keys = Array.from({ length: X.columns }, (_, i) => `k${i}`);
+  const row = {};
+  for (const k of keys) Object.defineProperty(row, k, { enumerable: true, get() { reads++; return 1; } });
+  await refuses(() => xh({ rows: Array.from({ length: X.rowsPerSheet }, () => row), columns: keys }), 400, /cap cells/, `xlsx: ${X.rowsPerSheet} object rows by ${X.columns} columns past the cell cap`);
+  ok(reads === 0, `...refused before a cell value is read (${reads} reads)`);
+  reads = 0;
+  const arr = new Proxy(Array.from({ length: X.columns }, () => 1), { get(t, k, r) { if (typeof k === "string" && /^\d+$/.test(k)) reads++; return Reflect.get(t, k, r); } });
+  await refuses(() => xh({ rows: Array.from({ length: X.rowsPerSheet }, () => arr) }), 400, /cap cells/, `xlsx: ${X.rowsPerSheet} array rows by ${X.columns} cells past the cell cap`);
+  ok(reads === 0, `...refused before a cell value is read (${reads} reads)`);
+}
+
+// docx: inline formatting nested past its cap is refused with a 400 naming it
+// (the guard in runsOf), well before the call stack would run out.
+{
+  const nest = (n) => { let md = "x"; for (let i = 0; i < n; i++) { const m = i % 2 ? "*" : "**"; md = `${m}a ${md} b${m}`; } return md; };
+  await refuses(() => dh({ markdown: nest(40) }), 400, /inline formatting more than \d+ levels deep \(cap nesting\)/, "docx: inline emphasis nested 40 levels answers the inline cap nesting 400");
+  ok((await dh({ markdown: nest(6) })).bytes > 0, "docx: emphasis nested 6 levels builds");
+}
+
 // The input depth guard runs before any handler (src/handler-input.js).
 {
   let deep = [1];
@@ -363,6 +419,71 @@ for (const [label, [handler, input]] of Object.entries(largest)) {
   ok(again.bytes > 0, "the pool serves the next call after a deadline kill");
   const st = officePoolState();
   ok(st.busy === 0 && st.waiting === 0, `pool idle afterwards (${JSON.stringify(st)})`);
+}
+
+// A job that waits in the queue longer than its deadline is refused with the
+// full queue's 503 and Retry-After, before any build, instead of building
+// minutes later for a caller that may have left.
+{
+  const slow = validatePptx(largest["pptx-create (100 slides with full tables)"][1]);
+  const blockers = Array.from({ length: OFFICE_POOL_MAX }, () => runOfficeOp("pptx", slow));
+  const t0 = performance.now();
+  let got = null;
+  try { await runOfficeOp("xlsx", validateXlsx({ rows: [["queued"]] }), { timeoutMs: 20 }); got = { statusCode: 200 }; }
+  catch (e) { got = e; }
+  const waited = performance.now() - t0;
+  const settled = await Promise.allSettled(blockers);
+  ok(got.statusCode === 503 && got.shed === true && got.retryAfter === 5 && /busy/.test(got.message), `a job queued past its deadline answers the busy 503 with Retry-After (got ${got.statusCode} ${got.message || ""})`);
+  ok(waited < 1_000, `...within its deadline of the wait, not after the builders free up (${waited.toFixed(0)} ms)`);
+  ok(settled.every((r) => r.status === "fulfilled"), "the builds it waited behind still finish");
+  const st = officePoolState();
+  ok(st.busy === 0 && st.waiting === 0, `queue empty afterwards (${JSON.stringify(st)})`);
+}
+
+// ----------------------------------------------------------------------------
+// The caller path: inputs near the published caps over HTTP. These routes
+// take bodies past the global 100 KB parser (the large-body gate in
+// src/server.js), so a legal input never meets a 413.
+// ----------------------------------------------------------------------------
+{
+  const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+  const srv = spawn(process.execPath, ["src/server.js"], {
+    cwd: ROOT,
+    env: { ...process.env, ...ownStoreEnv("office-http"), PORT: "0", FREE_MODE: "true",
+      X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", UNPAID_QUOTE_BUDGET_PER_HOUR: "0" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let log = "";
+  srv.stdout.on("data", (d) => { log += d; });
+  srv.stderr.on("data", (d) => { log += d; });
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  try {
+    let B = null;
+    for (let i = 0; i < 240 && !B; i++) { const m = log.match(/listening on :(\d+)/); if (m) B = `http://127.0.0.1:${m[1]}`; else await sleep(500); }
+    if (!B) throw new Error(`server never came up:\n${log.slice(-600)}`);
+    for (let i = 0; i < 60; i++) { try { if ((await fetch(`${B}/health`)).ok) break; } catch { /* not yet */ } await sleep(500); }
+    const post = async (slug, body) => {
+      const r = await fetch(`${B}/api/${slug}`, { method: "POST", headers: { "content-type": "application/json" }, body });
+      let json = null; try { json = await r.json(); } catch { /* not JSON */ }
+      return { status: r.status, json };
+    };
+    const cases = [
+      ["docx-create", { markdown: Array.from({ length: 2_400 }, (_, i) => `Line ${i} says "quoted" text and more.`).join("\n\n").slice(0, D.markdownChars - 10) }, (j) => j.blocks > 2_000],
+      ["xlsx-create", { rows: Array.from({ length: X.rowsPerSheet }, (_, r) => Array.from({ length: X.cells / X.rowsPerSheet }, (_, c) => r * 5 + c + 0.125)) }, (j) => j.sheets[0].rows === X.rowsPerSheet],
+      ["pptx-create", { slides: Array.from({ length: P.slides - 1 }, (_, i) => ({ title: `S${i}`, bullets: ['a"'.repeat(Math.floor(P.bulletChars / 2) - 5)] })) }, (j) => j.slides === P.slides - 1],
+    ];
+    for (const [slug, input, check] of cases) {
+      const body = JSON.stringify(input);
+      const r = await post(slug, body);
+      ok(body.length > 100 * 1024 && r.status === 200 && r.json && check(r.json), `HTTP ${slug}: a ${(body.length / 1024).toFixed(0)} KB body near the published caps answers 200 (got ${r.status}${r.json?.error ? ` ${r.json.error}` : ""})`);
+    }
+    const over = await post("docx-create", JSON.stringify({ markdown: "x".repeat(OFFICE_LIMITS.requestBytes + 1) }));
+    ok(over.status === 413, `HTTP docx-create: a body past ${OFFICE_LIMITS.requestBytes} bytes meets the route's parser limit (got ${over.status})`);
+  } catch (e) {
+    fail++; console.error(`ASSERT FAIL - HTTP caller path: ${e.message}`);
+  } finally {
+    srv.kill("SIGTERM");
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

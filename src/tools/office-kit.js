@@ -10,12 +10,13 @@ import { runOfficeOp } from "./office-pool.js";
 
 const X = OFFICE_LIMITS.xlsx, D = OFFICE_LIMITS.docx, P = OFFICE_LIMITS.pptx;
 const TOTAL = OFFICE_LIMITS.totalChars.toLocaleString("en-US");
+const BODY = `The request body may be up to ${OFFICE_LIMITS.requestBytes / (1024 * 1024)} MB.`;
 
 export const OFFICE_TOOLS = [
   {
     route: "POST /api/xlsx-create", name: "Create Excel spreadsheet (.xlsx)", slug: "xlsx-create", category: "conversion", price: "$0.003",
     description:
-      `Turn rows of data into a real Excel workbook (.xlsx) in one call. Send "sheets": each a "name" plus "rows" as an array of arrays or an array of objects (an optional "columns" list sets the order). The first row is a bold, filled, frozen header by default; "headerStyle", "columnWidths" (auto-sized otherwise) and "numberFormats" (such as "#,##0.00") are optional. Every cell is written as a literal value, never a formula: text that starts with = + - or @ stays text. Up to ${X.sheets} sheets, ${X.rowsPerSheet.toLocaleString("en-US")} rows per sheet, ${X.columns} columns and ${X.cells.toLocaleString("en-US")} cells, ${TOTAL} characters in all. Returns the file as base64 with its size, content type and filename.`,
+      `Turn rows of data into a real Excel workbook (.xlsx) in one call. Send "sheets": each a "name" plus "rows" as an array of arrays or an array of objects (an optional "columns" list sets the order). The first row is a bold, filled, frozen header by default; "headerStyle", "columnWidths" (auto-sized otherwise) and "numberFormats" (such as "#,##0.00") are optional. Every cell is written as a literal value, never a formula: text that starts with = + - or @ stays text. Up to ${X.sheets} sheets, ${X.rowsPerSheet.toLocaleString("en-US")} rows per sheet, ${X.columns} columns and ${X.cells.toLocaleString("en-US")} cells, ${TOTAL} characters in all. ${BODY} Returns the file as base64 with its size, content type and filename.`,
     tags: ["excel", "xlsx", "spreadsheet", "create-excel", "workbook", "office", "export", "json-to-xlsx", "csv-to-excel", "documents"],
     discovery: {
       bodyType: "json",
@@ -53,7 +54,7 @@ export const OFFICE_TOOLS = [
   {
     route: "POST /api/docx-create", name: "Create Word document (.docx)", slug: "docx-create", category: "conversion", price: "$0.003",
     description:
-      `Turn markdown into a real Word document (.docx) in one call. Send "markdown" and an optional "title": headings, paragraphs, bold, italic, strikethrough, inline code, bullet and numbered lists (nested), task lists, tables, code blocks, block quotes, horizontal rules and links come out as native Word formatting. A link is written as a hyperlink; an image is written as its alt text linked to its address and is never fetched. Up to ${D.markdownChars.toLocaleString("en-US")} characters, ${D.blocks.toLocaleString("en-US")} blocks, tables of ${D.tableRows} rows by ${D.tableColumns} columns, nesting ${D.nesting} levels. Returns the file as base64 with its size, content type and filename.`,
+      `Turn markdown into a real Word document (.docx) in one call. Send "markdown" and an optional "title": headings, paragraphs, bold, italic, strikethrough, inline code, bullet and numbered lists (nested), task lists, tables, code blocks, block quotes, horizontal rules and links come out as native Word formatting. A link is written as a hyperlink; an image is written as its alt text linked to its address and is never fetched. Up to ${D.markdownChars.toLocaleString("en-US")} characters, ${D.blocks.toLocaleString("en-US")} blocks, tables of ${D.tableRows} rows by ${D.tableColumns} columns and ${D.tableCells.toLocaleString("en-US")} table cells in all (a short row counts at its header's width), nesting ${D.nesting} levels. ${BODY} Returns the file as base64 with its size, content type and filename.`,
     tags: ["word", "docx", "document", "create-word", "markdown-to-docx", "office", "export", "report", "documents"],
     discovery: {
       bodyType: "json",
@@ -81,7 +82,7 @@ export const OFFICE_TOOLS = [
   {
     route: "POST /api/pptx-create", name: "Create PowerPoint deck (.pptx)", slug: "pptx-create", category: "conversion", price: "$0.003",
     description:
-      `Turn slide outlines into a real PowerPoint deck (.pptx, 16:9) in one call. Send "slides": each with a "title", "bullets" (strings, or {"text","level"} for indent levels 0 to 4), an optional "table" ({"header","rows"} or an array of rows), optional speaker "notes" and "numbered" for a numbered list. An optional deck "title" and "subtitle" add a title slide first. Text sizes shrink to fit. Up to ${P.slides} slides, ${P.bullets} bullets per slide, tables of ${P.tableRows} rows by ${P.tableColumns} columns, ${TOTAL} characters in all. Returns the file as base64 with its size, content type and filename.`,
+      `Turn slide outlines into a real PowerPoint deck (.pptx, 16:9) in one call. Send "slides": each with a "title", "bullets" (strings, or {"text","level"} for indent levels 0 to 4), an optional "table" ({"header","rows"} or an array of rows), optional speaker "notes" and "numbered" for a numbered list. An optional deck "title" and "subtitle" add a title slide first. The font size steps down as a slide holds more bullets or table rows. Up to ${P.slides} slides, ${P.bullets} bullets per slide, tables of ${P.tableRows} rows by ${P.tableColumns} columns, ${TOTAL} characters in all. ${BODY} Returns the file as base64 with its size, content type and filename.`,
     tags: ["powerpoint", "pptx", "slides", "presentation", "deck", "create-powerpoint", "office", "export", "documents"],
     discovery: {
       bodyType: "json",
