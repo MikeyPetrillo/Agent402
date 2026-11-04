@@ -88,6 +88,17 @@ const OP_TOKEN = ["op", "Canary", "Token", String(process.pid)].join("");
   ok(r(`Authorization: Basic ${other}`) === "Authorization: Basic [redacted]", "a Basic token in the text loses its credentials whatever their source");
   ok(!r(`hash salt salt-${PATH_KEY}g`).includes(PATH_KEY), "a *_SALT value is redacted");
   for (const prose of ["Basic arithmetic is fine", "Basic Authentication required", "use Basic AuthenticationHeaders"]) ok(r(prose) === prose, `the word Basic in prose passes through ("${prose}")`);
+  // upstreamErrorText: what a keyless kit relays from an upstream error body.
+  {
+    const { upstreamErrorText: u } = await import("../src/tools/redact.js");
+    ok(u(JSON.stringify({ error: { code: 7, message: "unknown product" }, html: "<p>".repeat(100) })) === "unknown product", "upstreamErrorText: a JSON body gives up its message field only");
+    ok(u(JSON.stringify({ message: `bad key fk-${PATH_KEY}f` })).includes("[redacted]") && !u(JSON.stringify({ message: `bad key fk-${PATH_KEY}f` })).includes(PATH_KEY), "upstreamErrorText: the relayed text is redacted");
+    const long = u(`x${"\u200b"}y\n\n\tz ${"w".repeat(5000)}`, 120);
+    ok(long.startsWith("xy z ") && long.length <= 123 && !long.includes("\u200b") && !/[\n\t]/.test(long), "upstreamErrorText: hidden and control characters go, whitespace folds, the text is bounded");
+    const straddle = u(`${"a".repeat(195)} fk-${PATH_KEY}f`, 200);
+    ok(!straddle.includes("fk-"), "upstreamErrorText: the whole text is redacted before it is cut, so a cut leaves no key head");
+    ok(u("") === "" && u(null) === "" && u("plain text") === "plain text", "upstreamErrorText: empty and plain text pass through");
+  }
   // Error text can carry a caller's input, so the scan must stay linear on
   // any shape: a long dotted run, and the same with URLs and @ in it.
   for (const [label, text] of [
@@ -118,11 +129,11 @@ const OP_TOKEN = ["op", "Canary", "Token", String(process.pid)].join("");
   ok(/json\(\{ error: redactSecrets\(err\?\.message\) \}\)/.test(mem), "the memory routes answer the scrubbed message");
   // No route block answers or logs a thrown message raw: inside every app
   // route (literal paths and the catalog binder's app[method](path, ...)), a
-  // line that builds a json/send answer, an error/detail/message field or a
+  // line that builds a json/send answer, a problem body, an error/detail/message field or a
   // console line from e.message or err.message wraps it in redactSecrets.
   // ALLOW lists lines whose message is proven constant (none today).
   const ALLOW = [];
-  const ANSWER = /json\(|send\(|\b(?:error|detail|message):|console\.(?:log|warn|error)\(/;
+  const ANSWER = /json\(|send\(|Problem\(|\b(?:error|detail|message):|console\.(?:log|warn|error)\(/;
   const RAW = /(?<!redactSecrets\()(?<!redactSecrets\(String\()\b(?:e|err)\??\.message\b/;
   const lines = server.split("\n");
   let route = null; const raw = []; let routes = 0, opRoutes = 0;

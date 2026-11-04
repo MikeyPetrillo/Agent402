@@ -22,7 +22,7 @@ const CRYPTO_READ_MS = 10_000;
 const CRYPTO_RETRY_READ_MS = 12_000;
 import { cgTake, cgRefusalMessage, isCoinGeckoHost, COINGECKO_ATTRIBUTION } from "./coingecko-rate.js";
 import { createCgCache } from "./coingecko-cache.js";
-import { redactSecrets } from "./redact.js";
+import { upstreamErrorText } from "./redact.js";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -195,7 +195,7 @@ async function jsonLoad(safeUrl, host, { isCg, sendCgKey, cgKey }) {
     // Redact the FULL upstream body before slicing (a secret straddling the
     // 200-char cut would otherwise leave an unredactable prefix): the CoinGecko
     // demo key rides this request and there is no 401/403 shield above.
-    throw bad(`${host} HTTP ${s}: ${redactSecrets(text).slice(0, 200)}`, 422);
+    throw bad(`${host} HTTP ${s}: ${upstreamErrorText(text, 200)}`, 422);
   }
   let data;
   try { data = JSON.parse(text); }

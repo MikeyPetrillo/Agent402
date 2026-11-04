@@ -30,6 +30,8 @@
 // segment. Each secret's base64 form (alone and as `value:`) is redacted too,
 // and a `Basic <credentials>` token in the text loses its credentials whatever
 // variable they came from. *_SALT values count as secrets.
+import { stripHiddenCharacters } from "../hidden-chars.js";
+
 const SECRET_NAME_RE = /(KEY|TOKEN|SECRET|PASSWORD|MNEMONIC|PRIVATE|SALT)/i;
 const URL_NAME_RE = /URLS?$/i;
 const RPC_NAME_RE = /RPCS?(_URLS?)?$/i;
@@ -112,4 +114,29 @@ export function redactSecrets(text) {
   }
   if (!out.includes("://") || !out.includes("@")) return out;
   return out.replace(USERINFO_IN_TEXT_RE, "$1[redacted]@");
+}
+
+// Upstream error text a keyless kit relays to the buyer: the message field of
+// a JSON body when there is one (else the text), redacted whole before it is
+// cut, with hidden and control characters removed and whitespace folded, at
+// most `max` characters. The buyer keeps the upstream's reason, not its page.
+const MESSAGE_FIELDS = ["message", "error_message", "error_description", "error", "detail", "details", "msg", "reason", "title"];
+function messageOf(v, depth = 0) {
+  if (typeof v === "string") return v.trim() || null;
+  if (!v || typeof v !== "object" || depth > 2) return null;
+  if (Array.isArray(v)) return v.length ? messageOf(v[0], depth + 1) : null;
+  for (const k of MESSAGE_FIELDS) {
+    const m = messageOf(v[k], depth + 1);
+    if (m) return m;
+  }
+  return null;
+}
+export function upstreamErrorText(raw, max = 200) {
+  let s = typeof raw === "string" ? raw : (raw == null ? "" : JSON.stringify(raw));
+  s = redactSecrets(s.slice(0, 65_536));
+  if (/^\s*[[{"]/.test(s)) {
+    try { const m = messageOf(JSON.parse(s)); if (m) s = m; } catch { /* not JSON: keep the text */ }
+  }
+  s = stripHiddenCharacters(s).replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").replace(/\s+/g, " ").trim();
+  return s.length > max ? `${s.slice(0, max)}...` : s;
 }
