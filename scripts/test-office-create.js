@@ -320,6 +320,13 @@ for (const t of OFFICE_TOOLS) {
   const [title1, body1] = shapes("ppt/slides/slide1.xml");
   const needPt = body1.paras * body1.sz * 1.45;
   ok(body1.paras === 30 && needPt <= body1.cy, `30 bullets fit their box as opened (${body1.sz} pt: about ${Math.round(needPt)} pt of lines in a ${Math.round(body1.cy)} pt box)`);
+  {
+    // Every numbered paragraph names its own place in its level's count, so a
+    // viewer that reads startAt as a restart still numbers 1, 2, 3.
+    const { buf: nb } = await buildHere("pptx", { slides: [{ title: "Plan", numbered: true, bullets: ["Ship", { text: "Export", level: 1 }, { text: "Status", level: 1 }, "Hire", { text: "Two", level: 1 }, "Review"] }] });
+    const starts = [...unzip(nb).get("ppt/slides/slide1.xml").matchAll(/<a:buAutoNum [^>]*startAt="(\d+)"/g)].map((m) => Number(m[1]));
+    ok(JSON.stringify(starts) === "[1,1,2,2,1,3]", `numbered bullets carry their place per level (startAt ${JSON.stringify(starts)})`);
+  }
   const [title2] = shapes("ppt/slides/slide2.xml");
   ok(title1.sz === 30 && title2.sz < 30 && 2 * title2.sz * 1.2 <= title2.cy, `a title that wraps to two lines steps down to fit its box (${title2.sz} pt in ${Math.round(title2.cy)} pt; a short title stays ${title1.sz} pt)`);
 }

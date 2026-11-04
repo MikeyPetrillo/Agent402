@@ -599,9 +599,14 @@ export async function buildPptx(spec) {
     const avail = bottom - top;
     const bulletH = sl.bullets.length ? (sl.table ? Math.min(avail * 0.4, 0.45 * sl.bullets.length + 0.2) : avail) : 0;
     if (sl.bullets.length) {
+      // Each numbered paragraph carries its own place in its level's count:
+      // the library writes startAt on every paragraph, and a viewer that reads
+      // startAt as a restart would number every item 1.
+      const numberAt = [];
+      { const counts = []; for (const b of sl.bullets) { counts.length = b.level + 1; counts[b.level] = (counts[b.level] || 0) + 1; numberAt.push(counts[b.level]); } }
       const size = fittedSize(sl.bullets, { wIn: W - 2 * PAD, hIn: bulletH, sizes: [22, 20, 18, 16, 14, 12, 11, 10, 9] });
       s.addText(
-        sl.bullets.map((b) => ({ text: b.text, options: { bullet: sl.numbered ? { type: "number" } : true, indentLevel: b.level, breakLine: true } })),
+        sl.bullets.map((b, i) => ({ text: b.text, options: { bullet: sl.numbered ? { type: "number", numberStartAt: numberAt[i] } : true, indentLevel: b.level, breakLine: true } })),
         { x: PAD, y: top, w: W - 2 * PAD, h: bulletH, fontFace: "Calibri", fontSize: size, color: ink, valign: "top", paraSpaceAfter: Math.round(size * 0.25), fit: "shrink" },
       );
     }
