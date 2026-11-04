@@ -157,7 +157,7 @@ export function ledgerPricingPage(baseUrl, catalog) {
   <section style="max-width:1180px;margin:0 auto;padding:56px 30px 0;">
     <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">// POST /v1/*</div>
     <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:0 0 12px;">The /v1 LLM gateway.</h2>
-    <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:76ch;margin:0 0 22px;">Point any OpenAI SDK at <code>base_url https://agent402.tools/v1/metered</code> and every request is quoted from its own body before payment, then settled at what the call actually used, under that quote. Same wallet-is-the-identity model as every other tool. The flat tiers below stay for callers that want one fixed price; omit the model on the auto tier and the gateway picks one for the prompt.</p>
+    <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:76ch;margin:0 0 22px;">Point any OpenAI SDK at <code>base_url https://agent402.tools/v1/metered</code> and every request is quoted from its own body before payment, then settled at what the call actually used, under that quote. The flat tiers below stay for callers that want one fixed price; omit the model on the auto tier and the gateway picks one for the prompt.</p>
     <div style="border:1px solid var(--hairline);background:var(--card);font-family:var(--font-mono);font-size:var(--fs-md);">
       ${gatewayRows.map((r, i) => receiptRow(r[0], r[1], i === gatewayRows.length - 1)).join("\n      ")}
     </div>
@@ -170,12 +170,11 @@ export function ledgerPricingPage(baseUrl, catalog) {
        gateway turns each quote into a ceiling instead. -->
   <section style="max-width:1180px;margin:0 auto;padding:56px 30px 0;">
     <div style="border:1px solid var(--hairline);background:var(--card);padding:28px 30px;">
-      <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--accent);letter-spacing:.1em;margin-bottom:10px;">MAKING A LOT OF CALLS</div>
-      <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:0 0 10px;">Stop signing every call.</h2>
-      <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:76ch;margin:0 0 22px;">Per-call pricing is the point, but a signature per call is not. Paying exact over x402 means one authorization signed and one settlement waited on for every request, which is fine for ten calls and the wrong shape for ten thousand. On the metered gateway an approval made once turns each quote into a ceiling, still per-request priced and still settled only on a 200.</p>
+      <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:0 0 10px;">Paying for many calls</h2>
+      <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:76ch;margin:0 0 22px;">Paying exact over x402 signs one authorization and waits on one settlement per request: fine for ten calls, the wrong shape for ten thousand. On the metered gateway one approval turns each quote into a ceiling, still priced per request and settled only on a 200.</p>
       <div>
           <div style="font-family:var(--font-mono);font-size:var(--fs-xs);font-weight:700;margin-bottom:6px;">Keep the wallet &middot; approve once</div>
-          <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);margin:0 0 10px;">A one-time Permit2 approval for USDC on Base (one on-chain transaction, which needs a little ETH on Base for gas) turns every quote into a ceiling rather than a charge: the gateway settles the actual usage under it, per request, with no fixed tier to overpay into. Non-custodial on this rail, and the approval is yours to revoke.</p>
+          <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);margin:0 0 10px;">A one-time Permit2 approval for USDC on Base (one on-chain transaction, which needs a little ETH on Base for gas) lets the gateway settle the actual usage under each quote, with no fixed tier to overpay into. Non-custodial on this rail, and the approval is yours to revoke.</p>
           <div style="overflow-x:auto;"><code style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);white-space:nowrap;background:transparent;">npx agent402-openclaw permit2-approve</code></div>
           <p style="font-size:var(--fs-sm);line-height:1.5;color:var(--faint);margin:8px 0 0;">The approval belongs to the wallet, so it applies to any client that pays from it, not only OpenClaw.</p>
         </div>
@@ -185,7 +184,7 @@ export function ledgerPricingPage(baseUrl, catalog) {
   <!-- CTA -->
   <section style="max-width:1180px;margin:0 auto;padding:56px 30px 64px;">
     <div style="border:1px solid var(--hairline);background:var(--panel);padding:32px 30px;display:flex;align-items:center;justify-content:space-between;gap:24px;flex-wrap:wrap;">
-      <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);line-height:1;letter-spacing:-.02em;margin:0;color:var(--on-panel);">Start on the free tier. No wallet.</h2>
+      <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);line-height:1;letter-spacing:-.02em;margin:0;color:var(--on-panel);">Start on the free tier</h2>
       <div style="display:flex;flex-wrap:wrap;gap:11px;">
         <a class="btn btn-secondary on-panel" href="/docs">Quickstart \u2192</a>
         <a href="/tools" style="white-space:nowrap;background:transparent;border:1.5px solid var(--panel-rule-2);color:var(--on-panel);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:12px 20px;">Browse tools</a>

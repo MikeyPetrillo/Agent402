@@ -18,7 +18,7 @@
 import { ledgerShell, ledgerFooterCompact, esc, fmtNum } from "./ledger-chrome.js";
 import { standingBand } from "./standing.js";
 import { rankBy, DEFAULTS as LEADERBOARD_DEFAULTS } from "./leaderboard.js";
-import { hostRowHtml, HOST_EXCLUSION_NOTE, wideLabel } from "./host-entry.js";
+import { hostRowHtml, wideLabel } from "./host-entry.js";
 
 import { ORG_SAME_AS } from "./repo-link.js";
 import { leaderboardCadence, cadenceBadge, LEADERBOARD_REFRESH_MS } from "./refresh-cadence.js";
@@ -235,9 +235,9 @@ export function ledgerLeaderboardPage(baseUrl, snapshot, { stats, walletAddress,
       <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-bottom:20px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <span style="color:var(--ink);">leaderboard</span></nav>
       <div class="lb-2col" style="display:grid;grid-template-columns:1.15fr .85fr;gap:50px;align-items:start;">
         <div>
-          <h1 class="lb-h1" style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.95;margin:0 0 22px;color:var(--ink);">Who is actually<br>settling <span style="color:var(--accent);">x402</span>?</h1>
-          <p style="font-size:var(--fs-lg);line-height:1.5;color:var(--muted);margin:0 0 18px;">The x402 sellers we can crawl, ranked by <strong style="color:var(--ink);font-weight:700;">real Base USDC settled on chain</strong> - not self-reported traffic, not a press release. Read from event logs, refreshed ${leaderboardCadence()}, and free to query. The table below is the head of the board, and says how many rows of how many it is showing.</p>
-          <p style="font-size:var(--fs-base);line-height:1.6;color:var(--faint);margin:0 0 24px;">Agent402 is excluded from this ranking by default. An index that puts itself first is not evidence of anything, so our own figure is published separately below.</p>
+          <h1 class="lb-h1" style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.95;margin:0 0 22px;color:var(--ink);">The <span style="color:var(--accent);">x402</span> seller leaderboard</h1>
+          <p style="font-size:var(--fs-lg);line-height:1.5;color:var(--muted);margin:0 0 18px;">The x402 sellers we can crawl, ranked by <strong style="color:var(--ink);font-weight:700;">real Base USDC settled on chain</strong>, read from event logs, refreshed ${leaderboardCadence()} and free to query. The table below is the head of the board, and says how many rows of how many it is showing.</p>
+          <p style="font-size:var(--fs-base);line-height:1.6;color:var(--faint);margin:0 0 24px;">Agent402 is excluded from this ranking by default; our own figures are published separately below.</p>
           ${partialNote ? `<p style="font-size:var(--fs-sm);font-family:var(--font-mono);color:var(--accent);max-width:76ch;margin:0 0 20px;">${esc(partialNote)}</p>` : ""}
           <div style="display:flex;flex-wrap:wrap;gap:11px;">
             <a class="btn btn-secondary ml-cta" href="/api/leaderboard?include=external">GET /api/leaderboard</a>
@@ -286,7 +286,6 @@ ${solanaSectionHtml(solana)}
           <tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">outside settlements, ${esc(wideLabel(host))}</th><td style="padding:11px 14px;text-align:right;color:var(--accent);" data-host-ext-all>${esc(fmtNum(host.externalAllTime.settlements))}</td></tr>` : ""}
           ${selfMpp != null ? `<tr><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">outside settlements over the MPP wire</th><td style="padding:11px 14px;text-align:right;color:var(--accent);" data-self-mpp>${esc(selfMpp)}</td></tr>` : ""}
         </tbody></table>
-        ${host ? `<p style="font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.6;color:var(--faint);margin:14px 0 0;">${esc(HOST_EXCLUSION_NOTE)}</p>` : ""}
 
       </div>
       <div style="padding:28px;background:var(--card);">
