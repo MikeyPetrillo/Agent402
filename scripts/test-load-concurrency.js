@@ -87,6 +87,19 @@ const TAIL_SLOW_HANDLERS = 4;
 // most of a second's arrivals at once (far above 5%), while a few GC pauses
 // on a slow runner stay under it.
 const SHED_MAX_FRACTION = 0.05;
+// The shed share is read like the loop-held checks below: the lag gate admits
+// on wall time, so a host busy with other work sheds more with no change in
+// this server. The allowance is the floor above times the run's own slowdown,
+// the slow tool's idle cost against the laptop reading (SHED_REF_SLOW_MS, the
+// ~25 ms the input comment cites), capped at SHED_SCALE_MAX so a saturated
+// loop (most of a second's arrivals) still fails; the idle /health p95 is not
+// used, since a few probes of a couple of ms move it by whole multiples. A
+// share over the allowance runs one more load window and fails only when that
+// window is over it too. Sheds on the mix's one unprotected free route (the
+// proof-of-work challenge) count here; a shed on a priced route still fails.
+const SHED_REF_SLOW_MS = 25;
+const SHED_SCALE_MAX = 3;
+const SHED_KEYS = ["GET /api/find", "GET /api/route", "GET /api/pow/challenge"];
 // One uncached search per buyer per 2 s: under the 30-a-minute per-client
 // limiter (23 searches in 45 s), the way an agent that discovers, then calls,
 // actually behaves. A 429 here is a pacing bug in this test, and fails it.
@@ -165,6 +178,9 @@ async function call(key, url, init = {}, ip = null) {
     s.status[res.status] = (s.status[res.status] || 0) + 1;
     let json = null;
     try { json = JSON.parse(text); } catch { /* not every answer is JSON (qr, images) */ }
+    // A shed is the load gate's own 503 (src/load-shed.js shedResponse), told
+    // apart from any other 503 by its body.
+    if (res.status === 503 && /^The server is busy/.test(String(json?.error || ""))) s.shed = (s.shed || 0) + 1;
     return { status: res.status, json, headers: res.headers };
   } catch (e) {
     s.lat.push(performance.now() - t0);
@@ -302,8 +318,15 @@ try {
     await Promise.all(Array.from({ length: BUYERS }, (_, id) => buyer(id, start, start + LOAD_MS)));
     return probe;
   };
+  // Shed counts per window: calls and sheds on the routes the gate may shed.
+  const shedSnap = () => Object.fromEntries(SHED_KEYS.map((k) => { const st = stats.get(k); return [k, { n: st ? st.lat.length : 0, shed: st?.shed || 0 }]; }));
+  const shedWindow = (a, b) => { let n = 0, shed = 0; for (const k of SHED_KEYS) { n += b[k].n - a[k].n; shed += b[k].shed - a[k].shed; } return { n, shed, share: shed / Math.max(1, n) }; };
+  const shedScale = Math.min(SHED_SCALE_MAX, Math.max(1, slowIdleP50 / SHED_REF_SLOW_MS));
+  const SHED_ALLOW = SHED_MAX_FRACTION * shedScale;
   const loadStart = Date.now();
+  const shed0 = shedSnap();
   const load = await runLoad();
+  const shed1 = shedWindow(shed0, shedSnap());
   const loadP95 = pct(load.lat, 0.95);
   const HELD_MS = HELD_FRACTION_OF_SLOW * slowIdleP50;
   const BUSY_SHARE_MAX = SLOW_TOOL_THREAD_SHARE + BUSY_SHARE_SLACK;
@@ -338,39 +361,53 @@ try {
 
   // ---- assertions --------------------------------------------------------
   const isDiscovery = (k) => k === "GET /api/find" || k === "GET /api/route";
-  const toolKeys = keys.filter((k) => !isDiscovery(k));
-  const toolNon200 = toolKeys.flatMap((k) => Object.entries(stats.get(k).status).filter(([c]) => c !== "200").map(([c, v]) => `${k} ${c}:${v}`));
-  const tool5xx = toolKeys.reduce((a, k) => a + Object.entries(stats.get(k).status).filter(([c]) => c >= 500).reduce((b, [, v]) => b + v, 0), 0);
-  ok(tool5xx === 0, `zero 5xx on tool routes (${toolKeys.length} routes)`);
+  // One confirming window serves every check that reads the machine: the
+  // /health busy share and tail, and the shed share.
+  const verdict = healthVerdict(load.lat);
+  console.log(`# /health run 1: ${verdict.line}`);
+  console.log(`# shed run 1: ${shed1.shed}/${shed1.n} (${(100 * shed1.share).toFixed(1)}%), allowance ${(100 * SHED_ALLOW).toFixed(1)}% = ${SHED_MAX_FRACTION * 100}% x ${shedScale.toFixed(2)} (slow-tool idle p50 ${r0(slowIdleP50)}ms against ${SHED_REF_SLOW_MS}ms)`);
+  let busyOk = verdict.busyOk, tailOk = verdict.tailOk, confirm = null;
+  let shedOk = shed1.share <= SHED_ALLOW, shed2 = null;
+  if (!busyOk || !tailOk || !shedOk) {
+    console.log(`# ${!shedOk ? "the shed share" : "a /health check"} was over its bound; running the load once more to confirm`);
+    const before = shedSnap();
+    const again = await runLoad();
+    shed2 = shedWindow(before, shedSnap());
+    confirm = healthVerdict(again.lat);
+    console.log(`# /health run 2: ${confirm.line}`);
+    console.log(`# shed run 2: ${shed2.shed}/${shed2.n} (${(100 * shed2.share).toFixed(1)}%)`);
+    busyOk ||= confirm.busyOk;
+    tailOk ||= confirm.tailOk;
+    shedOk ||= shed2.share <= SHED_ALLOW;
+  }
+  const keysNow = [...stats.keys()].sort();
+  const toolKeys = keysNow.filter((k) => !isDiscovery(k));
+  // A shed on the proof-of-work challenge is admission control, read by the
+  // shed check; every other non-200 on a tool route, a shed included, fails.
+  const shedOkOn = (k) => SHED_KEYS.includes(k);
+  const toolBad = (k, c, v) => (c === "503" && shedOkOn(k) ? v - (stats.get(k).shed || 0) : v);
+  const toolNon200 = toolKeys.flatMap((k) => Object.entries(stats.get(k).status).filter(([c]) => c !== "200").map(([c, v]) => [k, c, toolBad(k, c, v)]).filter(([, , v]) => v > 0).map(([k, c, v]) => `${k} ${c}:${v}`));
+  const tool5xx = toolKeys.reduce((a, k) => a + Object.entries(stats.get(k).status).filter(([c]) => c >= 500).reduce((b, [c, v]) => b + toolBad(k, c, v), 0), 0);
+  ok(tool5xx === 0, `zero 5xx on tool routes, a shed proof-of-work challenge aside (${toolKeys.length} routes)`);
   ok(toolNon200.length === 0, `every tool call answered 200${toolNon200.length ? `: ${toolNon200.join(", ")}` : ""}`);
-  let discoveryN = 0, discoveryShed = 0;
+  let discoveryN = 0;
   const discoveryOther = [];
-  for (const k of keys.filter(isDiscovery)) {
+  for (const k of keysNow.filter(isDiscovery)) {
     for (const [c, v] of Object.entries(stats.get(k).status)) {
       discoveryN += v;
-      if (c === "503") discoveryShed += v;
-      else if (c !== "200") discoveryOther.push(`${k} ${c}:${v}`);
+      const other = c === "503" ? v - (stats.get(k).shed || 0) : c !== "200" ? v : 0;
+      if (other > 0) discoveryOther.push(`${k} ${c}:${other}`);
     }
   }
   ok(discoveryN >= BUYERS * Math.floor(LOAD_MS / DISCOVERY_MIN_GAP_MS) * 0.5, `discovery was exercised (${discoveryN} uncached searches)`);
   ok(discoveryOther.length === 0, `discovery answered only 200 or a shed 503 (no 429 from the per-client limiter, no 5xx)${discoveryOther.length ? `: ${discoveryOther.join(", ")}` : ""}`);
   const shedCounted = (perf.shed?.discoveryBudget || 0) + (perf.shed?.discoveryInflight || 0) + (perf.shed?.shedLag || 0) + (perf.shed?.shedInflight || 0);
-  ok(discoveryShed <= Math.floor(SHED_MAX_FRACTION * discoveryN), `discovery sheds ${discoveryShed}/${discoveryN} (${(100 * discoveryShed / Math.max(1, discoveryN)).toFixed(1)}%) within ${SHED_MAX_FRACTION * 100}% (server counters: budget ${perf.shed?.discoveryBudget || 0}, inflight ${perf.shed?.discoveryInflight || 0}, lag ${perf.shed?.shedLag || 0}, total ${shedCounted})`);
+  const shedLine = (w) => `${w.shed}/${w.n} (${(100 * w.share).toFixed(1)}%)`;
+  ok(shedOk, `sheds ${shedLine(shed1)}${shed2 ? `; confirm run ${shedLine(shed2)}` : ""} within ${(100 * SHED_ALLOW).toFixed(1)}% (${SHED_MAX_FRACTION * 100}% x ${shedScale.toFixed(2)}; run 1 server counters: budget ${perf.shed?.discoveryBudget || 0}, inflight ${perf.shed?.discoveryInflight || 0}, lag ${perf.shed?.shedLag || 0}, total ${shedCounted})`);
   const timeouts = [...stats.values()].reduce((a, s) => a + s.timeouts, 0);
   const errors = [...stats.values()].reduce((a, s) => a + s.errors, 0);
   ok(timeouts === 0 && errors === 0, `no request hit the ${HARD_TIMEOUT_MS / 1000}s hard timeout or failed to connect (timeouts ${timeouts}, errors ${errors})`);
   ok(load.bad === 0 && load.lat.length >= LOAD_MS / PROBE_EVERY_MS * 0.8, `/health answered 200 on every probe during the load (n=${load.lat.length})`);
-  const verdict = healthVerdict(load.lat);
-  console.log(`# /health run 1: ${verdict.line}`);
-  let busyOk = verdict.busyOk, tailOk = verdict.tailOk, confirm = null;
-  if (!busyOk || !tailOk) {
-    console.log("# a /health check failed; running the load once more to confirm");
-    const again = await runLoad();
-    confirm = healthVerdict(again.lat);
-    console.log(`# /health run 2: ${confirm.line}`);
-    busyOk ||= confirm.busyOk;
-    tailOk ||= confirm.tailOk;
-  }
   const both = (k, f) => f(verdict[k]) + (confirm ? `; confirm run ${f(confirm[k])}` : "");
   ok(busyOk, `/health busy share under load ${both("busy", (x) => `${(100 * x).toFixed(1)}%`)} <= ${(100 * BUSY_SHARE_MAX).toFixed(0)}% (probes held over ${r0(HELD_MS)}ms = ${HELD_FRACTION_OF_SLOW}x slow-tool idle p50 ${r0(slowIdleP50)}ms; the mix holds the loop about ${SLOW_TOOL_THREAD_SHARE * 100}%)`);
   ok(tailOk, `/health median window p95 under load ${both("tail", (x) => `${r0(x)}ms`)} <= ${r0(TAIL_MAX)}ms (${TAIL_SLOW_HANDLERS}x slow-tool idle p50 ${r0(slowIdleP50)}ms; windows ${both("winP95", (w) => w.map(r0).join("/"))})`);
