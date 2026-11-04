@@ -7,7 +7,6 @@ import { isComputePayable, POW_DIFFICULTY } from "./pow.js";
 import { guideSlugs } from "./guides.js";
 import { skillSlugs, SKILL_PACKS, PACK_PRICES, PACK_PRICE_RANGE } from "./skills.js";
 import { BLOG_POSTS } from "./blog.js";
-import { ADAPTERS } from "./adapter-docs.js";
 import { integrationSlugs } from "./integration-pages.js";
 import { LEARN, learnSlugs } from "./learn.js";
 import { RAILS, RAILS_OR } from "./rails.js";
@@ -293,7 +292,6 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/docs/webhooks`, priority: "0.7" },
     { loc: `${baseUrl}/playground`, priority: "0.8" },
     ...BLOG_POSTS.map((p) => ({ loc: `${baseUrl}/blog/${p.slug}`, priority: "0.7" })),
-    ...ADAPTERS.map((a) => ({ loc: `${baseUrl}/docs/adapters/${a.slug}`, priority: "0.7" })),
     ...learnIntegrationUrls(baseUrl),
   ];
   const entries = [...staticUrls, ...programmaticUrls(baseUrl), ...guideUrls(baseUrl), ...skillUrls(baseUrl), ...categoryUrls(baseUrl, catalog), ...toolUrls(baseUrl, catalog)]
@@ -389,7 +387,6 @@ function pageUrls(baseUrl, catalog) {
     { loc: `${baseUrl}/docs/adapters`, priority: "0.8" },
     { loc: `${baseUrl}/docs/webhooks`, priority: "0.7" },
     ...BLOG_POSTS.map((p) => ({ loc: `${baseUrl}/blog/${p.slug}`, priority: "0.7" })),
-    ...ADAPTERS.map((a) => ({ loc: `${baseUrl}/docs/adapters/${a.slug}`, priority: "0.7" })),
     { loc: `${baseUrl}/privacy`, priority: "0.4" },
     { loc: `${baseUrl}/terms`, priority: "0.4" },
     { loc: `${baseUrl}/transparency`, priority: "0.4" },

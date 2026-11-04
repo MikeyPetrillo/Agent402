@@ -91,7 +91,7 @@ export const BLOG_POSTS = [
     date: "2026-08-18",
     title: "Agentic Finance (AIFI): the economy that forms once agents can pay",
     excerpt: "Agentic payments are the wire. Agentic Finance is what forms on top of it: agents discovering services, paying per request from their own wallets over x402 or MPP, receiving receipts, and earning per request in return. What the term means, what one purchase looks like, and where Agent402 sits.",
-    body: `<p><strong>Agentic Finance (AIFI)</strong> is software agents transacting on their own: discovering a service, reading a machine-readable price, paying per request from a non-custodial wallet over an open protocol, receiving a verifiable receipt, and, on the other side, earning per request for what they serve. No accounts, no API keys, no invoices. The payment is the identity and every settlement is on a public ledger.</p>
+    body: `<p><strong>Agentic Finance (AIFI)</strong> is software agents transacting on their own: discovering a service, reading a machine-readable price, paying per request from a non-custodial wallet over an open protocol, receiving a verifiable receipt, and, on the other side, earning per request for what they serve. The payment is the identity and every settlement is on a public ledger.</p>
 
 <p>We use the term deliberately, and this post is the long form of the <a href="/agentic-finance">category page</a>: what it means, why it is different from the two phrases it gets confused with, what a single purchase actually looks like on the wire, and where Agent402 sits in it.</p>
 
@@ -115,25 +115,15 @@ export const BLOG_POSTS = [
 
 <h2>The four layers</h2>
 
-<ol>
-  <li><strong>Agents.</strong> Autonomous software with a wallet: MCP-connected assistants, crawlers, research and trading agents, other services' agents. The buyers and, increasingly, the sellers.</li>
-  <li><strong>The applied layer.</strong> Discovery, routing, pricing, reliability, receipts, transparency. Where an agent finds the right service and pays it once, safely.</li>
-  <li><strong>Payment protocols.</strong> x402 and MPP. Open, HTTP-native, wallet as identity.</li>
-  <li><strong>Rails and money.</strong> Stablecoins settled on public chains: USDC across the EVM chains plus Solana, Stellar and Algorand; USDG on Robinhood Chain; native Tempo.</li>
-</ol>
+<p>The <a href="/agentic-finance#stack">category page</a> draws the stack in four layers: agents with wallets, the applied layer (discovery, routing, pricing, reliability, receipts, transparency), the payment protocols (x402 and MPP), and the stablecoin rails they settle on.</p>
 
 <p>The interesting problems live in the second layer. A wire format tells you how to pay one seller you already trust. It says nothing about which of a dozen sellers to pay, whether that seller has ever actually delivered, what happens when a paid call fails, or how anyone can check the numbers a marketplace publishes about itself. Those are finance questions, and they only appear once the payments layer works.</p>
 
 <h2>Where Agent402 sits</h2>
 
-<p>Agent402 is built as the applied layer, and every piece of it is live on both wires:</p>
+<p>Agent402 is built as that applied layer, live on both wires: it sells <a href="/tools">500+ pay-per-call tools</a>, each tested against its own example in CI, routes a task to the best seller across an <a href="/marketplace">open index</a> with the <a href="/guides/smart-order-router">Smart Order Router</a>, lets any site charge agents through the open-source <a href="/sell">tollbooth</a>, and publishes <a href="/revenue">every settlement</a> with its on-chain receipt.</p>
 
-<ul>
-  <li><strong>Buy:</strong> a catalog of 500+ pay-per-call tools - search, browser rendering, PDFs, OCR, financial and chain data, an OpenAI-compatible LLM gateway - each priced, tested against its own example in CI, and settled on chain over x402 or MPP. <a href="/tools">Browse the catalog</a>.</li>
-  <li><strong>Route:</strong> an open <a href="/marketplace">cross-seller index</a> and a <a href="/guides/smart-order-router">Smart Order Router</a> that resolves a task to the best seller across the ecosystem - ours or anyone's - buys the result from that seller on the same chain the agent paid on, and sells it to the agent with a receipt. ${routingProofSentence()}</li>
-  <li><strong>Sell:</strong> the open-source <a href="/sell">tollbooth</a> that lets any site or API charge agents per request over both wires while humans browse free. Non-custodial, no signup.</li>
-  <li><strong>Prove:</strong> <a href="/revenue">live transactions</a> by rail and by wire (external revenue too), every figure linked to its on-chain receipt, an on-chain seller leaderboard, uptime measured from outside, and a ledger for the rare charged-but-failed call so it is refunded rather than forgotten.</li>
-</ul>
+<p>${routingProofSentence()} The <a href="/agentic-finance">category page</a> sets out each piece and the surface that proves it.</p>
 
 <p>Settlement ordering is the detail we care most about, because it is where a marketplace can quietly cheat its buyers: Agent402 runs the tool first and settles only on a successful response, so a failed x402 call is not charged. A daily canary buys real tools over both x402 and MPP so the claim is re-proven on mainnet rather than asserted once.</p>
 

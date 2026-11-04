@@ -149,6 +149,13 @@ try {
     ok(a.status === 301 && a.headers.get("location") === "/docs/adapters", "/docs/Adapters -> /docs/adapters");
     const b = await fetch(`${base}/docs/adapters`, { redirect: "manual" });
     ok(b.status === 200, "/docs/adapters answers 200 (no redirect loop)");
+    // One page per framework adapter: the old per-adapter docs path moves there.
+    const ad = await fetch(`${base}/docs/adapters/langchain`, { redirect: "manual" });
+    ok(ad.status === 301 && ad.headers.get("location") === "/integrations/langchain", `/docs/adapters/langchain -> /integrations/langchain (got ${ad.status} ${ad.headers.get("location")})`);
+    const adPage = await (await fetch(`${base}/integrations/langchain`)).text();
+    ok(/id="config"/.test(adPage) && /fetchImpl/.test(adPage), "the /integrations page carries the adapter's configuration table");
+    const unknown = await fetch(`${base}/docs/adapters/no-such-adapter`, { redirect: "manual" });
+    ok(unknown.status === 404, `an unknown adapter slug answers 404, not a redirect (got ${unknown.status})`);
     const h = await fetch(`${base}/docs/Home`, { redirect: "manual" });
     ok(h.status === 301 && h.headers.get("location") === "/docs", "/docs/Home -> /docs");
     const g = await fetch(`${base}/docs/Getting-Started`, { redirect: "manual" });

@@ -2768,12 +2768,11 @@ export function skillsIndex(baseUrl) {
     <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-bottom:20px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <a href="/tools" style="color:var(--muted);text-decoration:none;">our tools</a> / <span style="color:var(--ink);">skill packs</span></nav>
     <div class="sk-hero" style="grid-template-columns:1.05fr .95fr;gap:50px;align-items:start;">
       <div>
-        <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 20px;color:var(--ink);">Seven tools.<br>One <span style="color:var(--accent);">payment</span>.</h1>
-        <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);margin:0 0 16px;">A real job is never one call. Auditing a domain takes seven tools; parsing a document takes seven more. Orchestrate that yourself and you are running seven payments, seven round trips and seven failure modes - and writing the code that holds it together.</p>
+        <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 20px;color:var(--ink);">Skill packs</h1>
+        <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);margin:0 0 16px;">A real job is never one call. Auditing a domain takes seven tools; run them yourself and that is seven payments, seven round trips, seven failure modes and the code that holds them together.</p>
         <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--faint);margin:0 0 30px;">A skill pack runs the sequence server-side. One request, one settlement, one response with every step in it. <strong style="color:var(--ink);font-weight:700;">${packCount} packs, ${PACK_PRICE_RANGE.text}, none priced above the sum of its tools.</strong></p>
         <div style="display:flex;flex-wrap:wrap;gap:11px;">
           <a class="btn btn-secondary ml-cta" href="#packs">Browse the packs →</a>
-          <a class="btn btn-secondary ml-cta" href="/api/skill-packs.json">skill-packs.json</a>
         </div>
       </div>
       <div style="border:1px solid var(--hairline);background:var(--panel);">
@@ -2790,9 +2789,8 @@ export function skillsIndex(baseUrl) {
 
 <section style="max-width:1180px;margin:0 auto;padding:56px 30px 0;">
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">$ POST /api/skill/security-audit</div>
-  <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Partial success is a result, not an error.</h2>
-  <div class="ml-meta" style="margin:10px 0 14px;"><span>the part that matters</span></div>
-  <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:740px;margin:0 0 28px;">This is the real difference, and it only shows up when something goes wrong. Orchestrate seven calls yourself and a failure on step six leaves you holding five results you have already paid for, a broken chain, and the job of working out what to retry. A pack returns the whole ledger: what succeeded, what did not, and why - in one response you can act on.</p>
+  <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 14px;color:var(--ink);">When a step fails</h2>
+  <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:740px;margin:0 0 28px;">Run seven calls yourself and a failure on step six leaves five paid results and a broken chain to retry. A pack returns the whole ledger in one response: what succeeded, what did not, and why.</p>
   <div class="sk-scroll" style="border:1px solid var(--hairline);background:var(--panel);">
     <table style="font-family:var(--font-body);font-size:var(--fs-md);">
       <caption style="text-align:left;font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--on-panel-faint);padding:14px 18px;border-bottom:1px solid var(--panel-rule);">One run · a step failed · the response is still usable</caption>
@@ -2812,7 +2810,7 @@ export function skillsIndex(baseUrl) {
     <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Every pack, and what it runs.</h2>
     <a href="/api/skill-packs.json" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1.5px solid var(--accent);padding-bottom:1px;">the machine-readable list →</a>
   </div>
-  <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:700px;margin:0 0 28px;">Every pack publishes its tool sequence before you pay. These are deterministic sequences, not an agent improvising - the same inputs run the same steps in the same order, every time. Six are set out in full below; the rest of the ${packCount} follow.</p>
+  <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);max-width:700px;margin:0 0 28px;">Every pack publishes its tool sequence before you pay: the same inputs run the same steps in the same order. Six are set out in full below; the rest of the ${packCount} follow.</p>
   <div class="sk-cardgrid">${flagshipCardsHtml}</div>
   <div style="border:1px solid var(--hairline);border-top:none;background:var(--footer-bg);padding:22px 24px;">
     <div class="ml-meta" style="font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin:0 0 14px;"><span>${rest.length} more</span><span>each links to its own steps</span></div>
@@ -2835,10 +2833,9 @@ export function skillsIndex(baseUrl) {
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">IN CLAUDE</div>
       <h2 style="font-weight:700;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">One tool call, payment handled</h2>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;">Through MCP a pack is a single tool the model can pick. Ask for the job in words - the connector chooses the pack, settles the payment, and returns the ledger.</p>
-      <pre style="margin:0 0 16px;background:var(--panel);border:1px solid var(--panel-rule);color:var(--on-panel);padding:15px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.8;white-space:pre-wrap;word-break:break-word;">claude mcp add agent402 -s user -- npx -y agent402-mcp@0.13.27
+      <pre style="margin:0;background:var(--panel);border:1px solid var(--panel-rule);color:var(--on-panel);padding:15px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.8;white-space:pre-wrap;word-break:break-word;">claude mcp add agent402 -s user -- npx -y agent402-mcp@0.13.27
 
 <span style="color:var(--on-panel-faint);">"run a security audit on example.com"</span></pre>
-      <a href="/docs#add" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1.5px solid var(--accent);padding-bottom:1px;">connector setup →</a>
     </div>
   </div>
 </section>
@@ -2851,11 +2848,10 @@ export function skillsIndex(baseUrl) {
 <section style="max-width:1180px;margin:0 auto;padding:44px 30px 52px;">
   <div class="ml-cta-panel" style="background:var(--panel);border:1px solid var(--hairline);padding:46px 40px;position:relative;overflow:hidden;">
     <div style="position:relative;">
-      <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 14px;color:var(--on-panel);">Stop writing the glue.</h2>
-      <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 26px;max-width:520px;">Describe the job and let the pack run the sequence. One payment, one response, and a result you can use even when a step fails.</p>
+      <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 14px;color:var(--on-panel);">Run a pack from your agent</h2>
+      <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 26px;max-width:520px;">Connect the MCP server or call the route directly: describe the job and the pack runs the sequence.</p>
       <div style="display:flex;gap:11px;flex-wrap:wrap;">
         <a class="btn btn-primary on-panel ml-cta" href="/docs#add">Add to your agent →</a>
-        <a class="btn btn-secondary on-panel ml-cta" href="#packs">Browse the packs</a>
         <a class="btn btn-secondary on-panel ml-cta" href="/tools">Single tools</a>
       </div>
     </div>

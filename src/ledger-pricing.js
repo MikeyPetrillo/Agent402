@@ -5,7 +5,7 @@
 import { ledgerShell, ledgerFooterCompact, esc, fmtNum } from "./ledger-chrome.js";
 import { toolList } from "./pages.js";
 import { isComputePayable, powCostPhrase } from "./pow.js";
-import { RAILS_OR, RAILS_SHORT } from "./rails.js";
+import { RAILS_OR, RAILS_SHORT, RAILS_COUNT } from "./rails.js";
 import { tempoEnabled } from "./mpp-tempo.js";
 // Monitors cost what MONITOR_PRODUCTS says they cost. This page said "$3 a
 // month" for three weeks after the 2026-08-23 repricing made it $5, while
@@ -101,8 +101,8 @@ export function ledgerPricingPage(baseUrl, catalog) {
   <!-- HEAD -->
   <section style="max-width:1180px;margin:0 auto;padding:56px 30px 30px;">
     <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:14px;">$ GET /pricing</div>
-    <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 14px;">Pay per call.<br>Pay per report.</h1>
-    <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:76ch;margin:0;">Pay in compute with a proof-of-work puzzle, or settle micro-amounts per call - ${RAILS_OR}. No signup, no minimum; card welcome at /reports, and monitors are the one subscription (${MONITOR_MONTHLY}, cancel anytime). The wallet is the identity.</p>
+    <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 14px;">Pricing</h1>
+    <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:76ch;margin:0;">Pay in compute with a proof-of-work puzzle, or settle micro-amounts per call in <a href="#chains" style="color:var(--ink);">${esc(RAILS_COUNT)}</a>. No minimum; card welcome at <a href="/reports" style="color:var(--ink);">/reports</a>, and monitors are the one subscription (${MONITOR_MONTHLY}, cancel anytime). The wallet is the identity.</p>
   </section>
 
   <!-- TWO PLANS -->
@@ -118,7 +118,7 @@ export function ledgerPricingPage(baseUrl, catalog) {
         <p style="font-size:var(--fs-base);line-height:1.5;color:var(--muted);margin:0 0 20px;">Solve a short sha256 puzzle - ${esc(powCostPhrase())} - instead of paying. No wallet at all.</p>
         <div style="display:flex;flex-direction:column;gap:10px;font-size:var(--fs-md);border-top:1px solid var(--hairline);padding-top:18px;">
           ${check(`${fmtNum(freeCount)} pure-CPU tools`)}
-          ${check("No wallet, no funds, no account")}
+          ${check("Nothing to fund")}
           ${check("Hosted MCP connector runs these free")}
           ${dim("Rate-limited; browser/GPU tools excluded")}
         </div>
@@ -131,7 +131,8 @@ export function ledgerPricingPage(baseUrl, catalog) {
           <span style="font-family:var(--font-body);font-weight:900;font-size:var(--fs-5xl);letter-spacing:-.03em;color:var(--on-panel);">${esc(floor)}</span>
           <span style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--on-panel-dim);white-space:nowrap;">/ call &amp; up</span>
         </div>
-        <p style="font-size:var(--fs-base);line-height:1.5;color:var(--on-panel-muted);margin:0 0 20px;">An x402 or MPP client signs the stablecoin payment from the agent's own wallet and retries, settling in seconds. x402 takes ${esc(RAILS_SHORT)}${tempoEnabled() ? "; MPP also settles natively on Tempo" : ""}.</p>
+        <p style="font-size:var(--fs-base);line-height:1.5;color:var(--on-panel-muted);margin:0 0 12px;">An x402 or MPP client signs the stablecoin payment from the agent's own wallet and retries, settling in seconds.</p>
+        <p id="chains" style="font-size:var(--fs-sm);line-height:1.5;color:var(--on-panel-muted);margin:0 0 20px;">x402 takes ${esc(RAILS_OR)}${tempoEnabled() ? "; MPP also settles natively on Tempo" : ""}.</p>
         <div style="display:flex;flex-direction:column;gap:10px;font-size:var(--fs-md);color:var(--on-panel);border-top:1px solid var(--panel-rule-2);padding-top:18px;">
           ${check(`All ${fmtNum(totalCount)} tools, including browser & memory`)}
           ${check("A fixed price per tool call; metered model calls settle actual usage under the quote")}
@@ -156,7 +157,7 @@ export function ledgerPricingPage(baseUrl, catalog) {
   <section style="max-width:1180px;margin:0 auto;padding:56px 30px 0;">
     <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">// POST /v1/*</div>
     <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:0 0 12px;">The /v1 LLM gateway.</h2>
-    <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:76ch;margin:0 0 22px;">Point any OpenAI SDK at <code>base_url https://agent402.tools/v1/metered</code> and every request is quoted from its own body before payment, then settled at what the call actually used, under that quote. Same wallet-is-the-identity model as every other tool. The flat tiers below stay for callers that want one fixed price; omit the model on the auto tier and the gateway picks one for the prompt.</p>
+    <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:76ch;margin:0 0 22px;">Point any OpenAI SDK at <code>base_url https://agent402.tools/v1/metered</code> and every request is quoted from its own body before payment, then settled at what the call actually used, under that quote. The flat tiers below stay for callers that want one fixed price; omit the model on the auto tier and the gateway picks one for the prompt.</p>
     <div style="border:1px solid var(--hairline);background:var(--card);font-family:var(--font-mono);font-size:var(--fs-md);">
       ${gatewayRows.map((r, i) => receiptRow(r[0], r[1], i === gatewayRows.length - 1)).join("\n      ")}
     </div>
@@ -169,12 +170,11 @@ export function ledgerPricingPage(baseUrl, catalog) {
        gateway turns each quote into a ceiling instead. -->
   <section style="max-width:1180px;margin:0 auto;padding:56px 30px 0;">
     <div style="border:1px solid var(--hairline);background:var(--card);padding:28px 30px;">
-      <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--accent);letter-spacing:.1em;margin-bottom:10px;">MAKING A LOT OF CALLS</div>
-      <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:0 0 10px;">Stop signing every call.</h2>
-      <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:76ch;margin:0 0 22px;">Per-call pricing is the point, but a signature per call is not. Paying exact over x402 means one authorization signed and one settlement waited on for every request, which is fine for ten calls and the wrong shape for ten thousand. On the metered gateway an approval made once turns each quote into a ceiling, still per-request priced and still settled only on a 200.</p>
+      <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:0 0 10px;">Paying for many calls</h2>
+      <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:76ch;margin:0 0 22px;">Paying exact over x402 signs one authorization and waits on one settlement per request: fine for ten calls, the wrong shape for ten thousand. On the metered gateway one approval turns each quote into a ceiling, still priced per request and settled only on a 200.</p>
       <div>
           <div style="font-family:var(--font-mono);font-size:var(--fs-xs);font-weight:700;margin-bottom:6px;">Keep the wallet &middot; approve once</div>
-          <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);margin:0 0 10px;">A one-time Permit2 approval for USDC on Base (one on-chain transaction, which needs a little ETH on Base for gas) turns every quote into a ceiling rather than a charge: the gateway settles the actual usage under it, per request, with no fixed tier to overpay into. Non-custodial on this rail, and the approval is yours to revoke.</p>
+          <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);margin:0 0 10px;">A one-time Permit2 approval for USDC on Base (one on-chain transaction, which needs a little ETH on Base for gas) lets the gateway settle the actual usage under each quote, with no fixed tier to overpay into. Non-custodial on this rail, and the approval is yours to revoke.</p>
           <div style="overflow-x:auto;"><code style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);white-space:nowrap;background:transparent;">npx agent402-openclaw permit2-approve</code></div>
           <p style="font-size:var(--fs-sm);line-height:1.5;color:var(--faint);margin:8px 0 0;">The approval belongs to the wallet, so it applies to any client that pays from it, not only OpenClaw.</p>
         </div>
@@ -184,7 +184,7 @@ export function ledgerPricingPage(baseUrl, catalog) {
   <!-- CTA -->
   <section style="max-width:1180px;margin:0 auto;padding:56px 30px 64px;">
     <div style="border:1px solid var(--hairline);background:var(--panel);padding:32px 30px;display:flex;align-items:center;justify-content:space-between;gap:24px;flex-wrap:wrap;">
-      <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);line-height:1;letter-spacing:-.02em;margin:0;color:var(--on-panel);">Start on the free tier. No wallet.</h2>
+      <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);line-height:1;letter-spacing:-.02em;margin:0;color:var(--on-panel);">Start on the free tier</h2>
       <div style="display:flex;flex-wrap:wrap;gap:11px;">
         <a class="btn btn-secondary on-panel" href="/docs">Quickstart \u2192</a>
         <a href="/tools" style="white-space:nowrap;background:transparent;border:1.5px solid var(--panel-rule-2);color:var(--on-panel);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-md);text-decoration:none;padding:12px 20px;">Browse tools</a>

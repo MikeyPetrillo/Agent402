@@ -156,7 +156,7 @@ console.log(res.status, res.headers.get("payment-receipt"), await res.json());`;
       <div>
         <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.94;margin:0 0 24px;color:var(--ink);text-wrap:balance;">How to pay for <span style="color:var(--accent);">one call</span></h1>
         <p style="font-size:var(--fs-lg);line-height:1.5;color:var(--muted);margin:0 0 20px;"><strong style="color:var(--ink);font-weight:700;">Every paid route answers an unpaid request with a 402 that names the price and every way to pay it.</strong> Pay with a stablecoin from a wallet over ${link("/what-is-x402", "x402")} or ${link("/what-is-mpp", "MPP")}, with a card where the price allows it, with a prepaid key, or with a solved puzzle on the pure-CPU tools. Same URL, same answer, same receipt.</p>
-        <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);margin:0;">This page is the whole path for each rail: what you need, the handshake in plain words, a snippet to paste, what comes back, and what happens to the money when a call fails. Prices on this page are read from the catalog that ${link("/api/pricing", "/api/pricing")} serves.</p>
+        <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);margin:0;">Prices on this page are read from the catalog that ${link("/api/pricing", "/api/pricing")} serves.</p>
       </div>
       <div style="border:1px solid var(--hairline);background:var(--panel);">
         <div style="padding:12px 18px;border-bottom:1px solid var(--panel-rule-2);${mono}font-size:var(--fs-2xs);letter-spacing:.08em;color:var(--on-panel-dim);">ON THIS PAGE</div>
@@ -222,7 +222,7 @@ PAYMENT-RESPONSE: eyJzdWNjZXNzIjp0cnVlLCJ0cmFuc2FjdGlvbiI6IjB4…
 ${section("mpp", `
   ${eyebrow("03 / MPP")}
   ${h2("MPP: the same handshake in HTTP auth headers.")}
-  ${p(`MPP, the Machine Payments Protocol, carries the quote in ${code("WWW-Authenticate: Payment")} and the payment in ${code("Authorization: Payment")}, and the settled answer returns a ${code("Payment-Receipt")}. The same 402 carries both the x402 offer and the MPP challenges, so your client picks the dialect.`)}
+  ${p(`MPP, the ${link("/learn/mpp", "Machine Payments Protocol")}, carries the quote in ${code("WWW-Authenticate: Payment")} and the payment in ${code("Authorization: Payment")}, and the settled answer returns a ${code("Payment-Receipt")}. The same 402 carries both the x402 offer and the MPP challenges, so your client picks the dialect.`)}
   ${mppTable}
   ${mppOrder ? p(mppOrder) : ""}
   ${h3("What you need")}
@@ -308,14 +308,14 @@ ${section("failed", `
     row([tdMono("credits"), td("The hold is released; the balance is unchanged."), td("Not debited."), td("The hold is released while the budget holds; past it, the debit is booked as owed.")]),
     row([tdMono("proof-of-work"), td("The solution is spent; fetch a new challenge."), td("Not applicable: nothing settles."), td("Fetch a new challenge.")]),
   ].join(""))}
-  ${p(`<strong style="color:var(--ink);font-weight:700;">The hang-up budget is bounded on purpose.</strong> A buyer whose connection closes before the first response byte is not settled while the service holds a forgiveness ticket for that request, priced at what it would have charged, against a per-wallet, per-IP and service-wide budget that a paid success never refills. The budget never refuses service: once it is spent, the call is settled as it would be without the rule, and the charge is booked as owed and repaid from the refund ledger after on-chain proof. Routes whose effect outlives the answer (memory writes, attestations, purchases from outside sellers) never take a ticket.`)}
+  ${p(`<strong style="color:var(--ink);font-weight:700;">The hang-up budget is bounded on purpose.</strong> A buyer whose connection closes before the first response byte is not settled while the service holds a forgiveness ticket for that request, priced at the charge, against a per-wallet, per-IP and service-wide budget that a paid success never refills. It never refuses service: once it is spent, the call settles as usual and the charge is booked as owed, repaid after on-chain proof. Routes whose effect outlives the answer (memory writes, attestations, purchases from outside sellers) never take a ticket.`)}
   ${p(`<strong style="color:var(--ink);font-weight:700;">Retries.</strong> Send an ${code("Idempotency-Key")} header (or the x402 ${code("payment-identifier")} extension) and a repeat of the same credential, route and body within ${idemMinutes} minutes replays the settled 200 (answers up to ${esc(IDEM_MAX_BODY_LABEL)}) without a second settlement. On the x402 wallet path the key is bound to the exact signed authorization: a fresh signature is a fresh payment, so keep the signed request and resend it yourself, or use a credits key for the calls you retry. A request re-sent with the same signed EVM payment and no key is replayed the same way inside that window (${code("X-Replayed-Answer: 1")}); routes with a lasting effect and streamed calls are the exception.`)}
   ${p(`<strong style="color:var(--ink);font-weight:700;">Refunds.</strong> A charged-but-undelivered call is recorded as a debt with its settlement transaction as evidence and repaid from a separate, capped job after review; the server never holds a spending key. A refused payment is free to get wrong: ${link("/x402-test", "/x402-test")} decodes each refusal.`)}
 `, true)}
 
 ${section("check", `
   ${eyebrow("08 / WHERE TO CHECK")}
-  ${h2("Read it yourself before you pay.")}
+  ${h2("Where to check.")}
   <ul class="ml-ticks" style="max-width:820px;font-size:var(--fs-base);">
     <li>${link("/api/pricing", "/api/pricing")}: every route, its price, its networks, and ${code("computePayable")} on the free ones.</li>
     <li>${link("/.well-known/x402", "/.well-known/x402")}: the machine-readable manifest, with the chains and MPP methods this instance takes.</li>

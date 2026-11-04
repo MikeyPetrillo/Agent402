@@ -14,7 +14,7 @@ marked.use({ renderer: { heading({ tokens, depth }) { const html = this.parser.p
 import { ledgerShell, ledgerFooterCompact, esc, breadcrumbLd } from "./ledger-chrome.js";
 import { fitTitle } from "./seo-meta.js";
 import { GUIDE_INTEGRATIONS, integrationBySlug } from "./integration-pages.js";
-import { RAILS_OR, RAILS_AMP, resolveRailCountTokens } from "./rails.js";
+import { RAILS_COUNT, RAILS_COUNT_MD, resolveRailCountTokens } from "./rails.js";
 import { TIERS, METERED_MAX_QUOTE_USD, EMBEDDINGS_PRICE } from "./tools/llm-gateway-kit.js";
 import { routingProofSentence, routerRankingSentence } from "./routing-proof.js";
 import { mppEvmDiscoveryRails } from "./mpp-shim.js";
@@ -71,7 +71,7 @@ const GUIDES = [
     slug: "x402-in-5-minutes",
     title: "Make your AI agent pay for what it needs: x402 in 5 minutes",
     description:
-      `A working example of the x402 payment protocol: your agent calls an API, gets an HTTP 402 quote, pays ${RAILS_OR} from its own wallet, and gets the result - no signup, no API key.`,
+      `A working example of the x402 payment protocol: your agent calls an API, gets an HTTP 402 quote, pays ${RAILS_COUNT} from its own wallet, and gets the result - no signup, no API key.`,
     md: `
 The useful web hides behind signups, captchas, and API keys - none of which an
 autonomous agent can obtain mid-task. [x402](https://x402.org) fixes this with
@@ -81,13 +81,10 @@ live service ([agent402.tools](https://agent402.tools)) you can pay right now.
 
 ## The protocol in one paragraph
 
-Your client calls a paid endpoint. The server replies \`402\` with a
-machine-readable quote - price, asset (USDC), network (Base), pay-to address.
-Your client signs a USDC transfer authorization from its own wallet (no gas
-needed; the facilitator sponsors it) and retries the request with the payment
-header. The server verifies the payment, runs the request, and settles on-chain
-only when the response succeeds, so a failed x402 call is not charged. Seconds, end
-to end. **The payment is the identity** - no account ever existed.
+Your client calls a paid endpoint and gets a \`402\` quote; it signs a USDC
+authorization from its own wallet and retries, and the server settles only when
+the response succeeds, so a failed x402 call is not charged. The headers, step
+by step: [how x402 works](/learn/x402).
 
 ## See a quote (free)
 
@@ -101,7 +98,7 @@ curl -i -X POST https://agent402.tools/api/extract \\
 
 ## Pay it (JavaScript)
 
-Fund a wallet with a little ${RAILS_OR} (no gas needed on EVM chains - the facilitator sponsors it), then:
+Fund a wallet with a little ${RAILS_COUNT_MD} (no gas needed on EVM chains - the facilitator sponsors it), then:
 
 \`\`\`js
 import { wrapFetchWithPayment } from "@x402/fetch";
@@ -294,7 +291,7 @@ for the full API.
     title: "Sell your API to AI agents over x402 - no billing system required",
     seoTitle: "Sell your API to AI agents over x402",
     description:
-      `Put a per-call USDC paywall in front of any HTTP endpoint with the x402 protocol: quote over HTTP 402, settle on ${RAILS_AMP} through a facilitator, and get discovered by agents - no accounts, invoices, or payment forms.`,
+      `Put a per-call USDC paywall in front of any HTTP endpoint with the x402 protocol: quote over HTTP 402, settle in ${RAILS_COUNT} through a facilitator, and get discovered by agents - no accounts, invoices, or payment forms.`,
     md: `
 If you run an API, the next wave of customers can't sign up for it. Autonomous
 agents don't have credit cards, can't pass captchas, and won't wait for a sales
@@ -1207,7 +1204,7 @@ is shown once and emailed, and it goes in \`AGENT402_CREDITS_KEY\` in place of
 in \`AGENT402_CREDITS_KEY\` in place of \`AGENT_KEY\` in any stdio block below.`}
 \`GET /api/credits/balance\` (Bearer) reports what a credits key has left. Use a
 low-value wallet funded only with what you mean to spend. Every route also answers a stock x402 \`402\`
-(${RAILS_OR}) and an MPP challenge, so any x402 client pays per call with no key.
+(${RAILS_COUNT_MD}) and an MPP challenge, so any x402 client pays per call with no key.
 
 ## Pay from a wallet (local proxy)
 
@@ -1742,7 +1739,7 @@ tier's price, and the paid call is served under that tier's caps.
 
 ## Pay from a wallet instead
 
-Every tier answers an x402 \`402\` (${RAILS_OR}) and an MPP challenge, so any
+Every tier answers an x402 \`402\` (${RAILS_COUNT_MD}) and an MPP challenge, so any
 x402-capable client can pay per call with no key at all. For OpenClaw the
 [\`agent402-openclaw\`](https://www.npmjs.com/package/agent402-openclaw) plugin
 runs a loopback proxy that pays and forwards, with a credits key or an x402

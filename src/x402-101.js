@@ -42,7 +42,7 @@ export const SLIDES = [
     id: "402", kicker: "02 / the old idea",
     headline: "The web already had a button for this: <span class=\"s101-accent\">402 Payment Required</span>.",
     body: `<p>When the web's rules were written in 1997, the authors reserved a response code for "this costs money" and never used it, because card payments could not fit inside a single web request. Stablecoins changed that: a payment can now be a small signed message that travels inside the request itself.</p>
-<div class="s101-analogy"><span>Analogy</span> A vending machine. The price is printed on the glass (the 402). You put a coin in (the payment rides on the retry). You get the item (the answer) and a receipt. No membership, no account, no login.</div>
+<div class="s101-analogy"><span>Analogy</span> A vending machine. The price is printed on the glass (the 402). You put a coin in (the payment rides on the retry). You get the item (the answer) and a receipt.</div>
 <p>Two open protocols do exactly this: <strong>x402</strong> (started by Coinbase) and <strong>MPP</strong>, the Machine Payments Protocol (started by Tempo, on a standards track). Same idea, two dialects of the same handshake.</p>`,
     notes: "Do not go deep on blockchains here. The point is that a payment can be a signed note inside an HTTP request. If asked 'why now': stablecoins made a dollar-denominated payment small and cheap enough to ride in a header, and the settlement companies (Coinbase, Stripe/Tempo) built the plumbing.",
   },
@@ -108,7 +108,7 @@ export const SLIDES = [
     body: `<div class="s101-grid">
 <div><div class="s101-tag">Buy</div><strong>500+ pay-per-call tools</strong><p>Web search with citations, headless browser, PDFs, OCR, financial and SEC data, an OpenAI-compatible LLM gateway. Every one priced per call and settled on chain over x402 or MPP; the model-backed ones are marked as such.</p></div>
 <div><div class="s101-tag">Route</div><strong>An open index and a Smart Order Router</strong><p>One call resolves a task to the best seller across the whole ecosystem, ours or anyone's, buys the result from that seller and sells it to the agent. ${routingProofSentence()}</p></div>
-<div><div class="s101-tag">Sell</div><strong>The tollbooth</strong><p>One line in front of any site or API: humans browse free, agents pay per request over both wires, straight to your wallet. Non-custodial, no signup, nothing deducted from your price.</p></div>
+<div><div class="s101-tag">Sell</div><strong>The tollbooth</strong><p>One line in front of any site or API: humans browse free, agents pay per request over both wires, straight to your wallet. Non-custodial, and nothing is deducted from your price.</p></div>
 <div><div class="s101-tag">Prove</div><strong>Numbers you can check</strong><p>Live transaction counts by rail and wire (external revenue underneath), an on-chain seller leaderboard, uptime measured from outside, refunds ledgered.</p></div>
 </div>`,
     notes: "Tailor to who is in the room. A data or API company: lead with Sell (the tollbooth turns their existing API into something agents can pay for in an afternoon). An agent builder: lead with Buy and Route (one integration, 500+ tools, and a router that shops the whole ecosystem for them). Both: the payment is the identity, so there is no onboarding on either side.",

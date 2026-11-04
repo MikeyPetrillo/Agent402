@@ -353,6 +353,11 @@ h1, h2, h3 { text-wrap: balance; }
    table column's minimum alone, so names in cells stay whole. */
 body { overflow-wrap: break-word; }
 .ml-measure { max-width: 76ch; }
+/* Notes a page shares with its siblings (legends, scope caveats): one collapsed block per page. */
+.ml-notes { margin: 18px 0 0; border-top: 1px solid var(--hairline); border-bottom: 1px solid var(--hairline); }
+.ml-notes > summary { cursor: pointer; padding: 10px 0; font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--muted); white-space: nowrap; }
+.ml-notes-body { padding: 0 0 12px; }
+.ml-notes-body p { font-size: var(--fs-sm); line-height: 1.55; color: var(--muted); margin: 0 0 8px; }
 .ml-nowrap { white-space: nowrap; }
 .ml-items { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: baseline; }
 .ml-items > * { white-space: nowrap; max-width: 100%; }

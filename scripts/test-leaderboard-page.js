@@ -28,7 +28,8 @@ const SELF_WALLET = "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0";
   const self = { railsWithOutside: ["Base", "Solana", "Stellar"], railsOffered: 13, mppExternal: 7 };
   const html = ledgerLeaderboardPage(BASE_URL, snapshot, { stats, walletAddress: SELF_WALLET, self });
 
-  ok(html.includes("Who is actually") && html.includes("settling <span"), "hero H1 renders");
+  // The h1 names the page (DESIGN.md voice: no slogan titles).
+  ok(/<h1[^>]*>The <span[^>]*>x402<\/span> seller leaderboard<\/h1>/.test(html), "hero H1 renders the page's name");
   ok(!html.slice(0, html.indexOf("Agent402, for comparison")).includes(">Agent402.Tools<"), "Agent402's own row is excluded from the ranked table (wallet-matched)");
   ok(html.includes(">Seller-One.example<") && html.includes(">seller-two.example<"), "external sellers render in the ranked table");
   // Re-ranked after exclusion: Seller-One.example (was rank 2) must now read 01.

@@ -85,6 +85,12 @@ Surfaces:
   shorter: one-sentence openings, one call to action per target, one x402 vs
   MPP table (on /what-is-x402), FAQ questions grouped under headings, and
   /docs titled Docs; /terms states that prepaid credits are not currently sold.
+- Chain pages and /marketplace keep their shared legend and scope notes in
+  one collapsed "About these figures" block; each framework adapter has one
+  page at /integrations/<slug> with its configuration table
+  (/docs/adapters/<slug> redirects there); tool, integration and /markets
+  pages share one failed-call footnote; openings name the chain count and
+  link the one chain list on /pricing; page titles are plain descriptions.
 Operations:
 - The Bazaar keep-alive sweep follows a slow route to its settlement: a route
   that refuses a synchronous paid call is called again with `Prefer:

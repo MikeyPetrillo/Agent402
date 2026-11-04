@@ -144,7 +144,15 @@ export const HOST_EXCLUSION_NOTE = "These figures count paid settlements from ou
 export const wideLabel = (f) => (f?.externalAllTime?.since ? `since ${f.externalAllTime.since}` : "all time");
 /** The one sentence that keeps "since" from reading as an arbitrary cutoff. */
 export const HOST_LEDGER_START_NOTE = (since) =>
-  `Settlements are counted from the sales ledger, which starts ${since}; earlier calls were served and settled but are not itemised in it, so these are not lifetime totals.`;
+  `Settlements are counted from the sales ledger, which starts ${since}; earlier calls were served and settled but are not itemized in it, so these are not lifetime totals.`;
+
+/** The card's scope sentences. The marketplace pages render them once, in
+ *  their shared notes block (figuresNotesHtml in src/market-page.js), and the
+ *  card links there; the leaderboard row carries them inline. */
+export function hostCardNotes(f) {
+  if (!f) return "";
+  return `${HOST_EXCLUSION_NOTE}${f.externalAllTime?.since ? ` ${HOST_LEDGER_START_NOTE(f.externalAllTime.since)}` : ""}`;
+}
 
 /** Marketplace card, rendered above the roster and outside every count. */
 export function hostCardHtml(f) {
@@ -161,7 +169,7 @@ export function hostCardHtml(f) {
       <span><strong>${fmt(f.externalAllTime.settlements)}</strong> <span style="color:var(--faint);">paid settlement${f.externalAllTime.settlements === 1 ? "" : "s"}, ${esc(wideLabel(f))}</span></span>
       <span><strong>${fmt(f.externalAllTime.buyers)}</strong> <span style="color:var(--faint);">distinct buyer${f.externalAllTime.buyers === 1 ? "" : "s"}, ${esc(wideLabel(f))}</span></span>
     </div>
-    <p style="font-size:var(--fs-sm);line-height:1.55;color:var(--muted);margin:0 0 10px;">Agent402 runs this index and sells 500+ tools, metered models and reports on the same rails. ${esc(HOST_EXCLUSION_NOTE)}${f.externalAllTime.since ? ` ${esc(HOST_LEDGER_START_NOTE(f.externalAllTime.since))}` : ""}</p>
+    <p style="font-size:var(--fs-sm);line-height:1.55;color:var(--muted);margin:0 0 10px;">Agent402 runs this index and sells 500+ tools, metered models and reports on the same rails. <a href="#about-figures" style="color:var(--muted);">What these figures count</a>.</p>
     <div style="display:flex;gap:16px;flex-wrap:wrap;font-family:var(--font-mono);font-size:var(--fs-sm);">
       <a href="/tools" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);">tools &rarr;</a>
       <a href="/#why" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);">why pay here &rarr;</a>

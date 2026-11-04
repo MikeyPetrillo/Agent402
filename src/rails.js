@@ -82,6 +82,14 @@ const othersPlus = others.map((o) => ` - plus ${o.asset} on ${o.name}`).join("")
 /** "USDC on Base, Solana, Polygon, Arbitrum & Stellar — plus USDG on Robinhood Chain" */
 export const RAILS_AMP = `USDC on ${usdcAmp}${othersPlus}`;
 
+/** "USDC or USDG on thirteen chains": the short form an opening or an aside
+ *  uses instead of inlining every chain. The full list lives once on /pricing
+ *  (RAILS_CHAINS_ANCHOR); RAILS_COUNT_MD links there from markdown. */
+const assets = [...new Set(RAILS.map((r) => r.asset))];
+export const RAILS_COUNT = `${assets.length > 1 ? `${assets.slice(0, -1).join(", ")} or ${assets.at(-1)}` : assets[0]} on ${countWord(RAILS.length)} chains`;
+export const RAILS_CHAINS_ANCHOR = "/pricing#chains";
+export const RAILS_COUNT_MD = `[${RAILS_COUNT}](${RAILS_CHAINS_ANCHOR})`;
+
 /** "USDC on Base, Solana, Polygon, Arbitrum, or Stellar — or USDG on Robinhood Chain" */
 export const RAILS_OR = `USDC on ${usdcOr}${othersDash}`;
 
