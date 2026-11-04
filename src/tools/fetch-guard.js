@@ -242,7 +242,15 @@ export function upstreamFailure(upstreamStatus, { retryAfter = null, host = null
  * race between an upfront DNS check and the socket connect (DNS rebinding), and
  * every redirect hop re-resolves through the same guard.
  */
+// A single-label name (no dot: "ftp", "localhost", an internal service name)
+// is never a public site, and how a resolver answers one depends on the
+// machine's search domains. It is refused like a private address, before any
+// lookup, so the answer is the same on every host.
+function isSingleLabel(host) {
+  return !isIP(host) && !String(host).replace(/\.$/, "").includes(".");
+}
 function guardedLookup(hostname, options, callback) {
+  if (isSingleLabel(hostname)) return callback(blockedError());
   // Force IPv4. Railway's egress has NO working IPv6 — every AAAA address is
   // ENETUNREACH — and Node's happy-eyeballs races the IPv6 address on a dual-stack
   // host ~15% of the time, surfacing as UND_ERR_SOCKET / "could not connect"
@@ -357,6 +365,7 @@ export async function assertPublicUrl(rawUrl) {
   if (isIP(host) ? isPrivateIp(host) : false) {
     throw badRequest(UNRESOLVED_OR_PRIVATE);
   }
+  if (isSingleLabel(host)) throw badRequest(UNRESOLVED_OR_PRIVATE);
   if (!isIP(host)) {
     let resolved;
     try {

@@ -2183,7 +2183,10 @@ const networkTools = [
       let ip = host;
       if (!isIP(host)) {
         assertQueryableName(host);
-        const resolved = await lookup(host).catch((e) => {
+        const lookupMs = Number(process.env.DNS_LOOKUP_TIMEOUT_MS) > 0 ? Number(process.env.DNS_LOOKUP_TIMEOUT_MS) : 10_000;
+        let lookupTimer;
+        const timedOut = new Promise((_, reject) => { lookupTimer = setTimeout(() => reject(Object.assign(new Error("lookup timed out"), { code: "ETIMEOUT" })), lookupMs); });
+        const resolved = await Promise.race([lookup(host), timedOut]).finally(() => clearTimeout(lookupTimer)).catch((e) => {
           // A resolver that cannot answer is ours to retry, not the caller's input.
           if (isTransientLookupError(e)) throw lookupUnavailable(e);
           throw bad(UNRESOLVED_OR_PRIVATE);
