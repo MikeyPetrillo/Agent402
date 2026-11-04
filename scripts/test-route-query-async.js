@@ -27,26 +27,36 @@ for (const q of [...GOLDEN_QUERIES, HEAVY, "the and for a of on with to"]) {
   }
 }
 
-// How long the thread is held at a stretch. A timer due every 1 ms records
-// how late it fires; a query that never yields makes it late by the whole
-// query.
+// How long the thread is held at a stretch. A callback queued on every turn
+// records the gap between turns; a query that never yields makes one gap the
+// whole query. A gap counts this thread's CPU time inside it, not its wall
+// time: on a loaded host the thread sits descheduled inside a slice, which
+// stretches the gap without any of the query's work in it (measured under CPU
+// contention: the query's last step, the global sort of about 31,000 scored
+// rows, ran 31 to 48 ms of thread CPU and read 57 to 95 ms of wall time).
+const threadCpuMs = () => { const u = process.threadCpuUsage(); return (u.user + u.system) / 1000; };
 async function worstHold(run) {
-  let worst = 0, last = performance.now(), live = true;
-  const tick = () => { const now = performance.now(); worst = Math.max(worst, now - last); last = now; if (live) setImmediate(tick); };
+  let worst = 0, worstWall = 0, last = performance.now(), lastCpu = threadCpuMs(), live = true;
+  const tick = () => {
+    const now = performance.now(), cpu = threadCpuMs();
+    worst = Math.max(worst, Math.min(now - last, cpu - lastCpu)); worstWall = Math.max(worstWall, now - last);
+    last = now; lastCpu = cpu;
+    if (live) setImmediate(tick);
+  };
   setImmediate(tick);
   const t0 = performance.now();
   await run();
   const total = performance.now() - t0;
   live = false;
   await new Promise((r) => setImmediate(r));
-  return { worst, total };
+  return { worst, worstWall, total };
 }
 routeQuery({ query: HEAVY, top: 10, include: "external", ...ctx }); // warm statics
 const sync = await worstHold(async () => { routeQuery({ query: HEAVY, top: 10, include: "external", ...ctx }); });
 let busy = 0;
 const asy = await worstHold(() => routeQueryAsync({ query: HEAVY, top: 10, include: "external", ...ctx }, { onBusy: (ms) => { busy += ms; } }));
-console.log(`# sync hold ${sync.worst.toFixed(1)} ms of ${sync.total.toFixed(1)}; async worst hold ${asy.worst.toFixed(1)} ms over ${asy.total.toFixed(1)} ms, busy ${busy.toFixed(1)} ms`);
-ok(asy.worst < sync.worst * 0.6, `the async query's longest hold (${asy.worst.toFixed(1)} ms) is well under the sync query's (${sync.worst.toFixed(1)} ms)`);
+console.log(`# sync hold ${sync.worst.toFixed(1)} ms of thread CPU (${sync.worstWall.toFixed(1)} ms wall) of ${sync.total.toFixed(1)}; async worst hold ${asy.worst.toFixed(1)} ms of thread CPU (${asy.worstWall.toFixed(1)} ms wall) over ${asy.total.toFixed(1)} ms, busy ${busy.toFixed(1)} ms`);
+ok(asy.worst < sync.worst * 0.6, `the async query's longest hold (${asy.worst.toFixed(1)} ms of thread CPU) is well under the sync query's (${sync.worst.toFixed(1)} ms)`);
 ok(busy > 0 && busy <= asy.total + 1, "onBusy reports the time the query actually held the thread");
 let calls = 0;
 await routeQueryAsync({ query: HEAVY, top: 10, include: "external", ...ctx }, { onBusy: () => { calls++; } });
