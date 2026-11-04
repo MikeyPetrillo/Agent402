@@ -1008,6 +1008,12 @@ jobs:
           t node scripts/test-page-dates.js
           # Bing sitemap registration script: lists then submits only the missing feeds (stubbed, offline)
           t node scripts/test-submit-sitemaps.js
+      - name: Runner kills and memory (on failure)
+        if: failure()
+        run: |
+          free -m || true
+          sudo dmesg -T 2>/dev/null | grep -iE 'killed process|out of memory|oom-kill' | tail -20 || true
+          ps -eo pid,rss,etime,args --sort=-rss | head -15 | cut -c1-200 || true
 
   test-unit-a3:
     # The second half of test-unit-a (2026-08-25, split by the seconds each item
@@ -2225,6 +2231,12 @@ jobs:
           t node scripts/test-health-flags.js
           # /skills/<slug> contract (every pack renders workflow + tools + claudePrompt + JSON-LD)
           t node scripts/test-skill-page-contract.js
+      - name: Runner kills and memory (on failure)
+        if: failure()
+        run: |
+          free -m || true
+          sudo dmesg -T 2>/dev/null | grep -iE 'killed process|out of memory|oom-kill' | tail -20 || true
+          ps -eo pid,rss,etime,args --sort=-rss | head -15 | cut -c1-200 || true
 
   test-unit-b3:
     # The second half of test-unit-b (2026-08-25, split by the seconds each item
@@ -2415,6 +2427,12 @@ jobs:
           t node scripts/test-ci-facilitator-scope.js
           # A composite report is refused (503, not charged) while draining - a late request on a busy keep-alive socket must not start a 4-minute run into the deadline
           t node scripts/test-drain-refuses-composites.js
+      - name: Runner kills and memory (on failure)
+        if: failure()
+        run: |
+          free -m || true
+          sudo dmesg -T 2>/dev/null | grep -iE 'killed process|out of memory|oom-kill' | tail -20 || true
+          ps -eo pid,rss,etime,args --sort=-rss | head -15 | cut -c1-200 || true
 
   test-unit-b2:
     # Second half of test-unit-b (2026-08-25), split by the seconds each script
@@ -3537,6 +3555,12 @@ jobs:
 
       - name: Multi-agent coordination demo (two wallets, one namespace)
         run: node scripts/demo-coordination.js
+      - name: Runner kills and memory (on failure)
+        if: failure()
+        run: |
+          free -m || true
+          sudo dmesg -T 2>/dev/null | grep -iE 'killed process|out of memory|oom-kill' | tail -20 || true
+          ps -eo pid,rss,etime,args --sort=-rss | head -15 | cut -c1-200 || true
 
   test:
     # UPSTREAM AFFINITY, not just time. Balancing by duration alone put suites
@@ -3809,6 +3833,12 @@ jobs:
           curl -s localhost:3000/api/hash -X POST -H 'Content-Type: application/json' -d '{"text":"x"}' >/dev/null
           curl -s localhost:3000/api/stats | jq -e '.tools >= 500 and .toolCallsServed.total >= 1 and (.summary | test("machine-to-machine"))' >/dev/null \
             && echo "/api/stats OK" || { echo "/api/stats wrong"; curl -s localhost:3000/api/stats; exit 1; }
+      - name: Runner kills and memory (on failure)
+        if: failure()
+        run: |
+          free -m || true
+          sudo dmesg -T 2>/dev/null | grep -iE 'killed process|out of memory|oom-kill' | tail -20 || true
+          ps -eo pid,rss,etime,args --sort=-rss | head -15 | cut -c1-200 || true
 
   test-paid:
     # Suites that boot their OWN paid-mode or stub-facilitator server (PoW gate,
@@ -4085,6 +4115,12 @@ jobs:
           t node scripts/test-mcp-tasks.js
           # PostHog funnel (discovery→402→settlement capture; paid-mode boot vs mock facilitator — offline)
           t node scripts/test-posthog-funnel.js
+      - name: Runner kills and memory (on failure)
+        if: failure()
+        run: |
+          free -m || true
+          sudo dmesg -T 2>/dev/null | grep -iE 'killed process|out of memory|oom-kill' | tail -20 || true
+          ps -eo pid,rss,etime,args --sort=-rss | head -15 | cut -c1-200 || true
 
   test-paid2:
     # Second half of test-paid (2026-08-25), split by the seconds each script
@@ -4400,6 +4436,12 @@ jobs:
       # (Chromium, 1440 + 390 px). Boots its own server like the wrap check.
       - name: Sticky chrome (nav and panels hold after a scroll, 1440 + 390 px)
         run: node scripts/test-sticky-chrome.js
+      - name: Runner kills and memory (on failure)
+        if: failure()
+        run: |
+          free -m || true
+          sudo dmesg -T 2>/dev/null | grep -iE 'killed process|out of memory|oom-kill' | tail -20 || true
+          ps -eo pid,rss,etime,args --sort=-rss | head -15 | cut -c1-200 || true
 
   test-sweeps2:
     # The second half of test-sweeps (2026-08-25, split by the seconds each item
@@ -4675,6 +4717,12 @@ jobs:
 
       - name: gov-data Catalog API v4 (retired CKAN v3 proxy 404s on catalog-old)
         run: node scripts/test-gov-data.js
+      - name: Runner kills and memory (on failure)
+        if: failure()
+        run: |
+          free -m || true
+          sudo dmesg -T 2>/dev/null | grep -iE 'killed process|out of memory|oom-kill' | tail -20 || true
+          ps -eo pid,rss,etime,args --sort=-rss | head -15 | cut -c1-200 || true
 
   test-pricing:
     # Test job runs on its own [test] marker AND auto-runs whenever a commit
@@ -4897,6 +4945,12 @@ jobs:
           t node scripts/test-pricing-margin.js
           # A model whose reasoning bills outside max_tokens is quoted and clamped for it: the metered quote covers the measured token mixes at the markup (private table, offline)
           t node scripts/test-metered-uncapped-reasoning.js
+      - name: Runner kills and memory (on failure)
+        if: failure()
+        run: |
+          free -m || true
+          sudo dmesg -T 2>/dev/null | grep -iE 'killed process|out of memory|oom-kill' | tail -20 || true
+          ps -eo pid,rss,etime,args --sort=-rss | head -15 | cut -c1-200 || true
 
   test-unit-c:
     # Test job runs on its own [test] marker AND auto-runs whenever a commit
@@ -5065,6 +5119,12 @@ jobs:
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
           # upto scheme ships dark, refuses what it cannot price
           t node scripts/test-upto-scheme.js
+      - name: Runner kills and memory (on failure)
+        if: failure()
+        run: |
+          free -m || true
+          sudo dmesg -T 2>/dev/null | grep -iE 'killed process|out of memory|oom-kill' | tail -20 || true
+          ps -eo pid,rss,etime,args --sort=-rss | head -15 | cut -c1-200 || true
 
   test-unit-c2:
     # Second half of test-unit-c (2026-08-25), split by the seconds each script
