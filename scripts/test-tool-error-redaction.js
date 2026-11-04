@@ -264,5 +264,23 @@ try {
   rmSync(TMP, { recursive: true, force: true });
 }
 
+// The secret list is built once per distinct set of secret-bearing variables,
+// not on every call: a page redacts hundreds of lines in one turn, and the
+// encoded forms of a large secret cost far more than the scan.
+{
+  const { redactSecrets, _secretBuildsForTests } = await import("../src/tools/redact.js");
+  process.env.CACHE_PROBE_API_KEY = "cacheprobe-" + "k".repeat(24);
+  redactSecrets("warm");
+  const before = _secretBuildsForTests();
+  let allRedacted = true;
+  for (let i = 0; i < 100; i++) if (!redactSecrets(`line ${i} ${process.env.CACHE_PROBE_API_KEY}`).includes("[redacted]")) allRedacted = false;
+  ok(_secretBuildsForTests() === before && allRedacted, `100 redactions with the same variables build the secret list once (${_secretBuildsForTests() - before} rebuilds) and redact every line`);
+  ok(redactSecrets(`jwt=${Buffer.from(process.env.CACHE_PROBE_API_KEY).toString("base64url")}`).includes("[redacted]"), "a secret's base64url form is redacted too");
+  process.env.CACHE_PROBE_API_KEY = "cacheprobe-" + "z".repeat(24);
+  const next = redactSecrets(`after the change ${process.env.CACHE_PROBE_API_KEY}`);
+  ok(_secretBuildsForTests() === before + 1 && next.includes("[redacted]") && !next.includes("zzzz"), "...and a changed secret is picked up and redacted on the next call");
+  delete process.env.CACHE_PROBE_API_KEY;
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

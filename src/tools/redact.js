@@ -120,15 +120,38 @@ function encodedForms(value) {
  *  (its 3-byte-aligned prefix, which begins every such encoding). */
 function base64Forms(value) {
   const user = Buffer.from(`${value}:`, "utf8");
-  return [Buffer.from(value, "utf8").toString("base64"), user.subarray(0, user.length - (user.length % 3)).toString("base64")];
+  const std = [Buffer.from(value, "utf8").toString("base64"), user.subarray(0, user.length - (user.length % 3)).toString("base64")];
+  // The URL-safe alphabet (JWTs, signed URLs) spells the same bytes with - and _.
+  return [...std, ...std.map((f) => f.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""))];
 }
 
 const BASE64_TAIL = "[A-Za-z0-9+/]{0,1024}={0,2}";
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /** [value, isBase64] pairs, longest first, so a whole URL goes before the
- *  password inside it. */
+ *  password inside it. Built once per distinct set of secret-bearing
+ *  variables: the encoded forms of a large secret cost far more than a scan,
+ *  and a page can redact hundreds of lines in one turn. */
+let secretCache = { sig: null, values: [] };
+function secretSignature() {
+  let sig = "";
+  for (const [name, raw] of Object.entries(process.env)) {
+    if (typeof raw === "string" && (SECRET_NAME_RE.test(name) || RPC_NAME_RE.test(name) || URL_NAME_RE.test(name))) sig += `${name}\u0000${raw}\u0000`;
+  }
+  return sig;
+}
 function secretValues() {
+  const sig = secretSignature();
+  if (sig === secretCache.sig) return secretCache.values;
+  const values = buildSecretValues();
+  secretBuilds++;
+  secretCache = { sig, values };
+  return values;
+}
+let secretBuilds = 0;
+/** Test hook: how many times the secret list was built. */
+export function _secretBuildsForTests() { return secretBuilds; }
+function buildSecretValues() {
   const plain = [];
   const encoded = new Set();
   for (const [name, raw] of Object.entries(process.env)) {
