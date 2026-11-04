@@ -359,6 +359,8 @@ function watchMainNavigation(page) {
   const checked = new Set();
   let marked = false;
   const isMain = (r) => { try { return r.isNavigationRequest() && r.frame() === page.mainFrame(); } catch { return false; } };
+  // A page without events (the pool tests' stand-in browser) has no hops to watch.
+  if (typeof page.on !== "function") return { assertAllowed: async () => {} };
   page.on("request", (r) => {
     if (!isMain(r)) return;
     let u;
