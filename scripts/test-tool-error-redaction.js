@@ -64,6 +64,30 @@ const OP_TOKEN = ["op", "Canary", "Token", String(process.pid)].join("");
   ok(!r(`dial mysql://root:${loose}@10.0.0.9/app`).includes(loose), "a userinfo password in the text itself is redacted even when no variable names it");
   ok(r("see https://public.example.test/docs for the shape") === "see https://public.example.test/docs for the shape", "a plain URL passes through unchanged");
   ok(r("Missing or invalid \"pattern\"") === "Missing or invalid \"pattern\"", "innocent text passes through unchanged");
+  // RPC endpoints carry the key in the path; Basic credentials are base64;
+  // salts are secrets under a name that says neither KEY nor TOKEN.
+  const PATH_KEY = ["Rpc", "Canary", "Path", "Key", String(process.pid)].join("");
+  process.env.PROBE_SOLANA_RPC_URL = `https://sol.example.test/v2/${PATH_KEY}`;
+  process.env.PROBE_BASE_RPCS = `https://a.example.test/${PATH_KEY}b, https://b.example.test/rpc?x=${PATH_KEY}c`;
+  process.env.PROBE_TEMPO_RPC = `https://tempo.example.test/${PATH_KEY}d`;
+  process.env.PROBE_HOOK_URL = `https://hooks.example.test/services/${PATH_KEY}e`;
+  process.env.PROBE_FEED_API_KEY = `fk-${PATH_KEY}f`;
+  process.env.PROBE_ID_SALT = `salt-${PATH_KEY}g`;
+  ok(!r(`fetch failed: https://sol.example.test/v2/${PATH_KEY}`).includes(PATH_KEY), "a *_RPC_URL whose path carries the key is redacted");
+  ok(!r(`HTTP request failed. URL: https://sol.example.test/v2/${PATH_KEY}/`).includes(PATH_KEY), "...in its parsed form too, and its key segment on its own");
+  ok(!r(`a failed: https://a.example.test/${PATH_KEY}b`).includes(PATH_KEY), "an entry of a *_RPCS list is redacted");
+  ok(!r(`b failed: https://b.example.test/rpc?x=${PATH_KEY}c`).includes(PATH_KEY), "...and an RPC query value under any parameter name");
+  ok(!r(`dial https://tempo.example.test/${PATH_KEY}d`).includes(PATH_KEY), "a *_RPC value is redacted");
+  ok(!r(`post to https://hooks.example.test/services/${PATH_KEY}e failed`).includes(PATH_KEY), "a long key-like path segment of a *_URL is redacted");
+  const basicKey = Buffer.from(`fk-${PATH_KEY}f:`).toString("base64");
+  const basicPair = Buffer.from(`fk-${PATH_KEY}f:pw123`).toString("base64");
+  ok(!r(`echo ${basicKey}`).includes(basicKey.slice(0, 12)), "a secret's base64 form as a Basic user is redacted");
+  const pairOut = r(`echo ${basicPair}`);
+  ok(!pairOut.includes(basicPair.slice(0, 12)) && !pairOut.includes(basicPair.slice(-6)), "...with the rest of its base64 run");
+  const other = Buffer.from("someone:" + ["other", "Canary", "Pw"].join("")).toString("base64");
+  ok(r(`Authorization: Basic ${other}`) === "Authorization: Basic [redacted]", "a Basic token in the text loses its credentials whatever their source");
+  ok(!r(`hash salt salt-${PATH_KEY}g`).includes(PATH_KEY), "a *_SALT value is redacted");
+  for (const prose of ["Basic arithmetic is fine", "Basic Authentication required", "use Basic AuthenticationHeaders"]) ok(r(prose) === prose, `the word Basic in prose passes through ("${prose}")`);
   // Error text can carry a caller's input, so the scan must stay linear on
   // any shape: a long dotted run, and the same with URLs and @ in it.
   for (const [label, text] of [

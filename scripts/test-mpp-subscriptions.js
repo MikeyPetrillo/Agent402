@@ -27,9 +27,10 @@ import {
   subscriptionFeePayerPolicy, SUB_FEE_PAYER_MAX_GAS,
   isTransientChargeError, TRANSIENT_CHARGE_BACKOFF_MS, isSendPhaseAmbiguity, expectedRenewalMemo,
   renewalValidForSeconds, withRenewalValidity, RENEWAL_VALID_FOR_DEFAULT_S, RENEWAL_VALID_FOR_MAX_S, SETTLEABLE_SLACK_MS,
-  guardDestroyedKeys, KEY_GONE_PREFIX, createFileStore,
+  guardDestroyedKeys, KEY_GONE_PREFIX, createFileStore, diagnoseError,
 } from "../src/mpp-subscriptions.js";
 import { MONITOR_PRODUCTS } from "../src/stripe-subscriptions.js";
+import { HttpRequestError } from "viem";
 
 let pass = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { console.error("FAIL:", m); process.exit(1); } };
@@ -1009,6 +1010,22 @@ let liveSubId = null, liveHeader = null, liveToken = null, liveBuyer = null;
   const copies = () => Object.values(JSON.parse(readFileSync(path, "utf8"))).filter((v) => v && typeof v === "object" && v.privateKey === keyEntry.privateKey).length;
   ok(copies() >= 3, `the key is held under offer, address and lookup key (${copies()} copies)`);
   ok(!Object.keys(JSON.parse(readFileSync(path, "utf8"))).some((k) => k.includes("pending-access-key")), "no sealing key is ever written: our challenges carry no key token");
+}
+
+// The log line for a failed RPC call passes the redactor: viem's
+// HttpRequestError quotes the request URL in metaMessages and its message, and
+// an RPC URL's path can carry its key.
+{
+  const pathKey = ["rpc", "Canary", "Path", String(process.pid), "abcdef"].join("");
+  const saved = process.env.TEMPO_RPC_URL;
+  process.env.TEMPO_RPC_URL = `https://rpc.example.test/${pathKey}`;
+  const err = new HttpRequestError({ url: `https://rpc.example.test/${pathKey}`, status: 500, details: "upstream busy", body: { method: "eth_call" } });
+  ok(JSON.stringify(err.metaMessages).includes(pathKey), "control: viem's HttpRequestError quotes the RPC URL in metaMessages");
+  const line = diagnoseError(new Error("charge failed", { cause: err }));
+  ok(!line.includes(pathKey) && line.includes("[redacted]") && line.includes("upstream busy"), "diagnoseError redacts an RPC URL path key and keeps the upstream's reason");
+  const cut = diagnoseError(Object.assign(new Error("x"), { metaMessages: ["y".repeat(290) + pathKey] }));
+  ok(!cut.includes(pathKey.slice(0, 8)), "a field is redacted before it is cut, so no key head survives the cut");
+  if (saved === undefined) delete process.env.TEMPO_RPC_URL; else process.env.TEMPO_RPC_URL = saved;
 }
 
 rmSync(tmp, { recursive: true, force: true });
