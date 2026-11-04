@@ -2,6 +2,7 @@
 // view and the /api/my-usage tool's identity gate. Offline: SALES_LEDGER_DB
 // points at a temp file, and the x402 identity is a hand-built EIP-3009
 // X-PAYMENT header (the same shape payerFromRequest verifies in prod).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

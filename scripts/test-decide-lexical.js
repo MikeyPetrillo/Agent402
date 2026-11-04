@@ -10,6 +10,7 @@
 //   node scripts/test-decide-lexical.js
 //   DECIDE_EQ_ROWS=200000 node --expose-gc scripts/test-decide-lexical.js   production scale, with heap figures
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { LexicalIndex, tokenize } from "../services/decide/lexical.js";
 import { ToolIndex } from "../services/decide/tool-index.js";

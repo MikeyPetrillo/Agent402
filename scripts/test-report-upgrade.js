@@ -16,6 +16,7 @@
 // Runs the REAL report viewer (assets/js/report-view.js) in jsdom against the
 // REAL delivery page, and the real email builders. Sends no email (the builders
 // are pure; emailEnabled() is false without provider env anyway).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { JSDOM, VirtualConsole } from "jsdom";
 import { monitorForKind, monitorPrefillUrl, upgradeOffer, monitorMapJson, priceUsd } from "../src/report-upgrade.js";

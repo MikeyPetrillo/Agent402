@@ -4,6 +4,7 @@
 // sells it to the buyer, at the seller's price plus a disclosed markup or at
 // the route's flat price. This keeps the copy, docs, package READMEs, tool
 // tags and the terms on that description.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 

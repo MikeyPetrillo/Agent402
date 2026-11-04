@@ -8,6 +8,7 @@
 // The kit list is derived from src/tools (every kit that calls the synthesis
 // model and serves a report), so a new report kit with no case here fails.
 // No network: fetch answers only the stubbed synthesis call.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync } from "node:fs";
 import { Jimp } from "jimp";
 

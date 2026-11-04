@@ -3,6 +3,7 @@
 // Booted half: the wire shape on a free server.
 //
 //   node scripts/test-retired-routes.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { getFreePort } from "./lib/free-port.js";
 import { RETIRED_TOOLS, RETIRED_PACKS, RETIRED_CONVERTERS_AT, retiredEntryFor, assertRetiredRegistryConsistent, retirementHeaders } from "../src/retired-tools.js";

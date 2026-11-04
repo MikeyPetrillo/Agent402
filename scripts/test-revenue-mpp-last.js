@@ -3,6 +3,7 @@
 // the newest settlement's date only (no clock time) and marks it "ours" when
 // it is newer than the rail's newest outside settlement, as the x402 table
 // does. A tie, or a rail with no internal/external split, is never ours.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { JSDOM } from "jsdom";
 import { revenuePage } from "../src/revenue-live.js";

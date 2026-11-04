@@ -39,6 +39,7 @@
 //   TARGET_URL=http://127.0.0.1:3000 node scripts/test-corpus.js [--tier 0|1|2|all]
 //     [--only slug,slug] [--file name] [--json out.json] [--concurrency 4]
 //   (no TARGET_URL: boots its own FREE_MODE server on a free port)
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createWriteStream, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";

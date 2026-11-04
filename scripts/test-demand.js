@@ -1,4 +1,5 @@
 // Unit tests for the demand-kit pure transforms (no network).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { textToMarkdown } from "../src/tools/demand-kit.js";
 
 const fail = (m) => { console.error("FAIL:", m); process.exit(1); };

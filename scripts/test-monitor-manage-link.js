@@ -6,6 +6,7 @@
 // one and none otherwise, and returns 429 past its per-IP and per-address
 // limits; server.js mounts the route and verifies the signed sub link.
 // Offline (stubbed Stripe, stubbed sender), port 0, in CI.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import express from "express";
 import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";

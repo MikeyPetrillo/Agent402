@@ -6,6 +6,7 @@
 // examples say what the handler returns.
 //
 //   node scripts/test-image-gen-kit.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.OPENAI_API_KEY = "sk-test-not-a-real-key";
 const { IMAGE_GEN_TOOLS, TIERS } = await import("../src/tools/image-gen-kit.js");
 

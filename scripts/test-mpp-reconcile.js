@@ -6,6 +6,7 @@
 // asserts served_unpaid, day boundaries are soft, a rerun is idempotent, no
 // payer address reaches any output, the public status carries words only, and
 // the operator routes are operator-only on a booted server.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";

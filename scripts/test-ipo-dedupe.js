@@ -2,6 +2,7 @@
 // a window that ends today, and a filing that lands between two reads shifts
 // the next page by one, repeating the boundary filing; a filing whose several
 // documents match would also repeat. Offline hits shaped like efts.sec.gov.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { dedupeByAccession } from "../src/tools/edgar-kit.js";
 
 let pass = 0, fail = 0;

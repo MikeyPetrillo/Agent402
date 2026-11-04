@@ -3,6 +3,7 @@
 // src/market-page.js already covers /stellar and /algorand (see
 // scripts/test-stellar-page.js / test-algorand-page.js); this file locks
 // down the CHAIN_PAGES entries added alongside them. No server, no network.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { marketSellers, marketSellersAll, marketPage, marketPanelHtml, CHAIN_PAGES, marketFilterBar, sellParagraphHtml, dispatchBadge, routerChainsProse, withPremium } from "../src/market-page.js";
 import { sitemapPages, sitemapXml, llmsTxt } from "../src/seo.js";
 import { serviceManifest } from "../src/discovery.js";

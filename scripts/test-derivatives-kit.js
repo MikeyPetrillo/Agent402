@@ -11,6 +11,7 @@
 //     upstream body relayed.
 // Live coverage is the catalog's answers-its-own-example sweep (test-all.js).
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { DERIVATIVES_TOOLS, __test } from "../src/tools/derivatives-kit.js";
 
 const h = (slug) => DERIVATIVES_TOOLS.find((t) => t.slug === slug).handler;

@@ -2,6 +2,7 @@
 // "toString") is an unsupported network: a 400 naming the supported ones,
 // never a TypeError read off the prototype. Covers every kit that resolves a
 // caller-supplied network name.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { pickNetwork as chainPick } from "../src/tools/chain-kit.js";
 import { pickNetwork as alchemyPick } from "../src/tools/alchemy-data-kit.js";
 

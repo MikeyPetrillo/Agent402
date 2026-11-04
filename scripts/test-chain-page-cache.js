@@ -3,6 +3,7 @@
 // froze the server for 47 s because each request resolved sellers and read
 // the revenue snapshot first. ?seller= views are memoized per listed seller
 // (scripts/test-chain-seller-view-memo.js) and their builds are capped.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { getFreePort } from "./lib/free-port.js";

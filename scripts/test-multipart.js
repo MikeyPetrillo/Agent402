@@ -8,6 +8,7 @@
 // parser splits on.
 //
 //   node scripts/test-multipart.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 const { parseMultipartFile, boundaryOf } = await import("../src/multipart.js");
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.log("FAIL -", m); } };

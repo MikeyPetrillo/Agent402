@@ -14,6 +14,7 @@
 // down to 6/min (a real buyer clicks Buy once, a few times if comparing).
 // Locks both halves: the unparseable-body path is now counted, and one request
 // still consumes exactly one token (the in-route checks must not double-count).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { getFreePort } from "./lib/free-port.js";
 

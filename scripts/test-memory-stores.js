@@ -4,6 +4,7 @@
 // every registered store reports, and the route stays operator-only.
 //
 //   node scripts/test-memory-stores.js          (offline; boots a free-mode server)
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

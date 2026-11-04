@@ -10,6 +10,7 @@
 //   every commit, for coverage the daily paid-canary already has post-deploy.
 //   Local devs and special verification runs can still set BRAVE_LIVE_TEST=1
 //   alongside BRAVE_API_KEY to exercise the real integration.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { SEARCH_TOOLS, cleanSnippet } from "../src/tools/search.js";
 
 const h = (slug) => SEARCH_TOOLS.find((t) => t.slug === slug).handler;

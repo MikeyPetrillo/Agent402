@@ -1,5 +1,6 @@
 // Search data pipeline (src/search-data.js), offline: stubbed Google/Bing
 // endpoints, an in-memory store, and one booted server for the operator routes.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { generateKeyPairSync, createVerify } from "node:crypto";
 import { spawn } from "node:child_process";
 import { getFreePort } from "./lib/free-port.js";

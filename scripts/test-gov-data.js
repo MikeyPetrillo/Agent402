@@ -8,6 +8,7 @@
 // WHY: a hand-maintained upstream URL can silently rot while FREE_MODE CI
 // treats gov-data as NETWORK-lenient and the weekly Algorand rail canary is
 // the first hard fail. Pin the path so a regression back to /v3 fails CI.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { GOV_TOOLS } from "../src/tools/gov-kit.js";
 

@@ -6,6 +6,7 @@
 // threw, and recall-report - which requires 2 of its 3 feeds to read - 502'd
 // for any drug name absent from the food and device feeds (most of them).
 // Found 2026-08-27 generating the losartan sample. Offline: fetch is stubbed.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { GOV_TOOLS } from "../src/tools/gov-kit.js";
 import { probeRecalls, reasonGroups, makeRecallHandler } from "../src/tools/recall-report-kit.js";
 

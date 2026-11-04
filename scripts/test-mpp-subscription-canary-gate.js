@@ -8,6 +8,7 @@
 // flag on an internal function is only as safe as the route that sets it.
 //
 // Boots its own server, so it needs no live prod and spends nothing.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createHmac } from "node:crypto";
 

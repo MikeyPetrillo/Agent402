@@ -2,6 +2,7 @@
 // A user regex runs on the shared event loop, so a catastrophic-backtracking
 // pattern is an unauthenticated, free-tier server-wide DoS — this guard rejects
 // the dangerous shapes before compiling. Offline, deterministic.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { compileUserRegex, escapeRegex } from "../src/tools/safe-regex.js";
 
 let pass = 0, fail = 0;

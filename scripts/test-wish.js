@@ -3,6 +3,7 @@
 // Pure module tests — no server boot, no network. Each logical section gets
 // its own throwaway JSONL file via __testSetFilePath so rate-limit buckets
 // and cluster state never leak between sections.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, writeFileSync, unlinkSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

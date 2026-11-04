@@ -5,6 +5,7 @@
 // faucet's local rate gate.
 //
 //   node scripts/test-cdp-kit.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { generateKeyPairSync, createVerify, verify as edVerify } from "node:crypto";
 
 delete process.env.CDP_API_KEY_ID;

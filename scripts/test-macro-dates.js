@@ -4,6 +4,7 @@
 // states the same value; the release calendar's window starts at today's
 // date in America/Chicago. Offline: DNS and fetch are answered locally with
 // bodies shaped like the upstream APIs.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import dnsPromises from "node:dns/promises";
 import { syncBuiltinESMExports } from "node:module";
 dnsPromises.lookup = async () => ({ address: "1.1.1.1", family: 4 });

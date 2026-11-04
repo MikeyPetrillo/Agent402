@@ -18,6 +18,7 @@
 //     at, before any model call; at or below it, the call goes through;
 //   - the formula in words is on the tool and in its description;
 //   - tts-lite stays flat; the dub price is unchanged by the quote.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.OPENROUTER_API_KEY ||= "test-key-never-used";
 const { TTS_TOOLS, TTS_TIERS, TTS_QUOTE, TTS_QUOTE_ANCHOR_CHARS, ttsQuoteUsd, ttsQuoteFormula, __resetTtsBreakerForTest } = await import("../src/tools/tts-kit.js");
 const { handlerInputOf, preValidateInput } = await import("../src/handler-input.js");

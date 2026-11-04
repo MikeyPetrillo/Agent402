@@ -2,6 +2,7 @@
 // (src/next-call.js): web.search -> web.answer, decide.plan -> decide.execute.
 // Offline. A client that ignores unknown fields must keep working, so the
 // wrapper only ever ADDS one key and keeps everything else byte-for-byte.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { withNextCall, nextCallFor } from "../src/next-call.js";
 import { readFileSync } from "node:fs";
 

@@ -13,6 +13,7 @@
 //   2. unpaid GET on the same route still 402s (no regression);
 //   3. HEAD on free surfaces (/health, /llms.txt) stays 200 — only paid
 //      catalog routes are gated.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer, request as httpRequest } from "node:http";
 

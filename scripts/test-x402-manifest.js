@@ -26,6 +26,7 @@
 //      "how do I plug this into Claude/Cursor?" answer.
 //
 //   node scripts/test-x402-manifest.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";

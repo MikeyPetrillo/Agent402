@@ -11,6 +11,7 @@
 //
 // Offline: reads the repo, calls the pure text generators (llms.txt, MCP
 // instructions), never boots a server or touches the network.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";

@@ -18,6 +18,7 @@
 // EXEC_TIERS array + a live catalog fixture.
 //
 //   node scripts/test-llms-route-execute-tiers.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { llmsTxt } from "../src/seo.js";
 import { EXEC_TIERS } from "../src/tools/route-execute.js";
 

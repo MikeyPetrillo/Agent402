@@ -20,6 +20,7 @@
 // Each one also still times out on a store that never answers (the market
 // data miss on the caller path is scripts/test-databento-shared-cache.js c).
 //   node scripts/test-loop-deadline-sites.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { writeFileSync, mkdtempSync } from "node:fs";
 import { open } from "node:fs/promises";
 import dnsPromises from "node:dns/promises";

@@ -22,6 +22,7 @@
 //      preview the prompt before running it.
 //
 //   node scripts/test-mcp-prompts.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";

@@ -25,6 +25,7 @@
 //   - every 402 carries Cache-Control: no-store, a paid answer
 //     private, no-store, an operator answer private, no-store, and a public
 //     free surface keeps its own header.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";

@@ -4,6 +4,7 @@
 // READY_ROUTER_WAIT_MS, so a worker that will not load cannot fail a deploy.
 // With ROUTER_WORKERS=0 there is no worker to wait for and readiness answers
 // 200 at once.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { getFreePort } from "./lib/free-port.js";
 

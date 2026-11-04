@@ -16,6 +16,7 @@
 //   3. the process exits 0 well inside the drain deadline;
 //   4. the deadline fits under the Railway grace the deploy job sets, and the
 //      code has no timer/quiet-window path left that could reintroduce a wait.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { getFreePort } from "./lib/free-port.js";
 import http from "node:http";

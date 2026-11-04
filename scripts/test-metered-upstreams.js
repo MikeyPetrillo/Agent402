@@ -24,6 +24,7 @@
 // A paid TOOL handler calling a metered upstream is fine and needs no entry
 // here: the buyer paid, the margin was checked, revenue is attached. Everything
 // else must declare what bounds it.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync } from "node:fs";
 
 let pass = 0, fail = 0;

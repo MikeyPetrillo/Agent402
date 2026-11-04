@@ -3,6 +3,7 @@
 // menu. The per-chain lists were removed from the menus; every rail stays
 // reachable from the marketplace directory. This pins that the menus neither
 // list a chain nor drop the single link, whatever the live index reports.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { ledgerShell, setNavIndexProvider } from "../src/ledger-chrome.js";
 import { RAILS as RAIL_TABLE, railKey } from "../src/rails.js";
 

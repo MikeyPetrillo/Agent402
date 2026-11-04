@@ -2,6 +2,7 @@
 // multi-chain scan runs, and every rail is bounded as a whole, so one slow rail
 // cannot keep the scan from finishing (2026-10-01: every cold visit waited
 // out the 25 s deadline and /api/revenue answered 500).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { lastGoodSnapshot } from "../src/revenue-live.js";
 import { RAILS } from "../src/rails.js";

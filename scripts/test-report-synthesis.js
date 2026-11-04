@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // A report synthesis that stops for length is retried once inside the budget
 // and, failing that, trimmed to a complete block and marked. Offline.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync } from "node:fs";
 import { REPORT_TIERS } from "../src/report-tiers.js";
 import { LINKEDIN_WORDS } from "../src/tools/linkedin-article-kit.js";

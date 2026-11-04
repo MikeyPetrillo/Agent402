@@ -5,6 +5,7 @@
 // the body is bounded; every origin faces the same validation a /sell
 // submission does; a dry run registers nothing; a commit answers per origin
 // and an origin with no x402 surface is reported, not listed.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";

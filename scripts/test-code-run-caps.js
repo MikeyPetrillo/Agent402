@@ -4,6 +4,7 @@
 // before creation. Offline unit test of the cap logic + config.
 //
 //   node scripts/test-code-run-caps.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";

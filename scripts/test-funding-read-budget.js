@@ -30,6 +30,7 @@
 // retry allowance is spent in the first refresh, where a wallet whose payers
 // first pay later must still be read in its first scan. Offline, nothing is
 // spent.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer } from "node:http";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

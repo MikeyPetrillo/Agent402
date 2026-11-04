@@ -20,6 +20,7 @@
 //   4. State written by the earlier implementation loads, and the meta and
 //      segment bodies written now are the same bytes it wrote.
 // Ties on (block, logIndex) keep the order the old single sorted array had.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";

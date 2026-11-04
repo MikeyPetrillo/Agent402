@@ -16,6 +16,7 @@
 // Requires a booted server (same TARGET_URL convention as other page tests):
 //   FREE_MODE=true PORT=3000 node src/server.js
 //   TARGET_URL=http://127.0.0.1:3000 node scripts/test-css-tokens-resolve.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { chromium } from "playwright";
 

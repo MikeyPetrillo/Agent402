@@ -14,6 +14,7 @@
 // the scan itself; anything else needs a line in ALLOW with its reason.
 // The scanner is exercised on a sample first, so a clean tree is a result and
 // not a scanner that read nothing. Offline; committed files only.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";

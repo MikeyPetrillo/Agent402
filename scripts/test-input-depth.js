@@ -9,6 +9,7 @@
 // thousands of levels deep overflows the stack. handlerInputOf
 // (src/handler-input.js) refuses both shapes before dispatch; the MCP
 // connector, which calls handlers with its own params, makes the same check.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";

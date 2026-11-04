@@ -9,6 +9,7 @@
 // the DEFAULT (public) shape - it must stay aggregate-only.
 //
 //   node scripts/test-sales-ledger.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFile } from "node:fs/promises";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

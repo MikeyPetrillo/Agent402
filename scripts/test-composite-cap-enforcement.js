@@ -7,6 +7,7 @@
 //
 // Every report kit already reports through recordCompositeUsage, so that is
 // where the check lives - one place, no per-kit wiring to forget.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import {
   recordCompositeUsage, compositeUsageSnapshot, _compositeGuardReset, _compositeUsageSettled,
 } from "../src/composite-spend-guard.js";

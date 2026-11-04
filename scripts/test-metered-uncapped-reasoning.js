@@ -14,6 +14,7 @@
 //   - the flat-tier clamp leaves a cap whose worst case, factor included, stays
 //     inside the tier's margin budget.
 // Under CI the private table is required; a fork's run may skip (UPSTREAM_COSTS_OPTIONAL).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 const { worstCaseUpstreamCost, clampToMargin, meteredQuoteUsd, reasoningOutsideMaxTokens, UNCAPPED_REASONING_OUT_FACTOR, TIERS, costFor, MARGIN } = await import("../src/tools/llm-gateway-kit.js");
 const { meterMarkup } = await import("../src/gateway-meter.js");
 const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");

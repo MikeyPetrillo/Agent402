@@ -5,6 +5,7 @@
 // only on NEW ids and at most once a day, probe failures never email and back
 // off, per-address and total caps, no enumeration, counts-only stats, and the
 // form + page wiring (CSP-safe external script, honeypot field).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

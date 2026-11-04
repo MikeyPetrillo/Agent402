@@ -8,6 +8,7 @@
 // 404) with no upstream body relayed. Live run of every example opt-in via
 // ALCHEMY_LIVE_TEST=1 with ALCHEMY_API_KEY set.
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { ALCHEMY_DATA_TOOLS, __test } from "../src/tools/alchemy-data-kit.js";
 
 const { takeAddress, takeTxHash, takeBlockTag, takeInt, takeCategories, takeAddressList, formatUnits,

@@ -6,6 +6,7 @@
 // edge 502 or 504 (a worker that took the body and crashed) is final.
 //
 //   node scripts/test-worker-wake-retry.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import http from "node:http";
 import { getFreePort } from "./lib/free-port.js";
 

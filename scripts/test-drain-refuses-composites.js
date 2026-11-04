@@ -9,6 +9,7 @@
 //
 // Proven on a real keep-alive socket against a real server: warm the socket,
 // SIGTERM, send a composite POST down the same connection, expect the 503.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { getFreePorts } from "./lib/free-port.js";
 import http from "node:http";

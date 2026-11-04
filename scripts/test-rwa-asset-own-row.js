@@ -2,6 +2,7 @@
 // markets answer does not carry the requested id, market is null, never
 // another asset's row. Offline: fetch answers with bodies shaped like the
 // rwas endpoints.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { CRYPTO_MARKETS_TOOLS, clearCryptoMarketsCache, resetCgRateLimit } from "../src/tools/crypto-markets-kit.js";
 
 let pass = 0, fail = 0;

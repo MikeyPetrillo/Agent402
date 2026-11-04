@@ -34,6 +34,7 @@
 //   WRAP_ALL=1 ...                                    (every generated page too)
 //   WRAP_PAGES=/,/sell WRAP_WIDTHS=1440 ...           (narrow a run while fixing)
 //   WRAP_FAMILY=tools,skills ...                      (some families; "pages" = hand-written)
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { join, dirname } from "node:path";

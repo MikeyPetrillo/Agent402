@@ -5,6 +5,7 @@
 // that the binder consumes it, and above all that the sentinel NEVER reaches a
 // buyer - it carries our upstream bill, which is the one number the gateway
 // strips from every response.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 
 let pass = 0;

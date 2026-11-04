@@ -23,6 +23,7 @@
 // handlers at a time (both read in the slow tool's idle cost from the same
 // run, and confirmed by a second load window before failing), or when any
 // request hits the hard timeout.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";

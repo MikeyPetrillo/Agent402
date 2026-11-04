@@ -13,6 +13,7 @@
 //
 // Offline — no server, no network, no secrets. Spawns short-lived child node
 // processes to swap NODE_ENV without polluting this runner's env.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";

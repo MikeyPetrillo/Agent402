@@ -10,6 +10,7 @@
 //  - find, route and the connector all attach it, and the /api/find miss path
 //    reads the caller IP it is handed (it used to reference an out-of-scope
 //    `req`, which threw and was swallowed, so no HTTP miss was ever recorded).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import http from "node:http";
 import https from "node:https";

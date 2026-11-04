@@ -6,6 +6,7 @@
 // Drives scripts/dataset-health.mjs as a child process against a local stub of
 // the two endpoints it reads, so the assertions are about the check's
 // judgement rather than about prod being healthy today.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";

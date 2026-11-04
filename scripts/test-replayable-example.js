@@ -10,6 +10,7 @@
 //      resolveReplayableInput (the caller path, not only the helper);
 //   4. html-frames' own example fits under the shortening threshold, so its
 //      402 carries the working document.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync } from "node:fs";
 import { fitChallenge, isShortenedExampleString } from "../src/payments.js";
 import { hasShortenedExample, replayableInput, resolveReplayableInput, openapiReader, openapiOperation } from "./lib/replayable-example.js";

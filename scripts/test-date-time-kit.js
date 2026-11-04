@@ -1,5 +1,6 @@
 // Date-time-kit tests — all deterministic (no network). Validates input
 // rejection + correct computation for every tool.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { DATE_TIME_TOOLS } from "../src/tools/date-time-kit.js";
 
 const h = (slug) => DATE_TIME_TOOLS.find((t) => t.slug === slug).handler;

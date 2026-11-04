@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // The MTA-STS policy text is well-formed for any configuration, and absent
 // without mail hosts. Offline.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { mtaStsPolicy } from "../src/mta-sts.js";
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };

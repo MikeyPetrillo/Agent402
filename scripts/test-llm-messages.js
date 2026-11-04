@@ -1,5 +1,6 @@
 // /v1/.../messages (Anthropic Messages wire) - offline, stub fetch.
 process.env.POSTHOG_TEST_CAPTURE = "1";
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { LLM_MESSAGES_TOOLS, validateMessagesRequest, isEmptyMaxTokens, MESSAGES_PATH_BY_TIER, MESSAGES_TIER_BY_PATH } from "../src/tools/llm-messages-kit.js";
 import { TIERS, createSseUsageScrubber } from "../src/tools/llm-gateway-kit.js";
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";

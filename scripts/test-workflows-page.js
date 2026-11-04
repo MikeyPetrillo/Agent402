@@ -7,6 +7,7 @@
 // With TARGET_URL set (a FREE_MODE server), it also runs the steps that need no
 // wallet, key or paid upstream: pdf-info -> pdf-to-markdown -> text-stats on a
 // public PDF, and text-diff over two snapshots.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { WORKFLOWS, workflowsPage } from "../src/workflows.js";
 
 let pass = 0, fail = 0;

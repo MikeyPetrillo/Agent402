@@ -5,6 +5,7 @@
 // non-string input is hashed as its string form (it used to read `.length`
 // off whatever it was handed), and an oversized input is read up to the
 // bound, never for as long as the caller says it is.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { fnv1a } from "../src/tools/memory.js";
 
 let pass = 0, fail = 0;

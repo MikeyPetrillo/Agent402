@@ -6,6 +6,7 @@
 // a caller naming the retired id served by its successor, so it stays.
 //
 //   node scripts/test-model-retirements.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 

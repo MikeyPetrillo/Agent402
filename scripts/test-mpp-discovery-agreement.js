@@ -2,6 +2,7 @@
 // predicate. The discovery doc once offered tempo on every paid route while the
 // 402 withheld it on identity-bound and long-running routes, so a crawler and
 // an agent budgeting from the document were promised a method that was refused.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { tempoOfferedFor } from "../src/mpp-tempo.js";
 

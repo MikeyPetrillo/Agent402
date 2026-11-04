@@ -1,6 +1,7 @@
 // A tool page names MPP only when this server offers it. MPP rides the shim,
 // which mounts only with MPP_SECRET_KEY; a self-host without the key offers
 // x402 alone, and its pages must not tell a buyer to pay over a rail it lacks.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { toolPage } from "../src/pages.js";
 
 let pass = 0, fail = 0;

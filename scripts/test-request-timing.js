@@ -1,4 +1,5 @@
 // Per-route timing + in-flight list + the [loop-stats] minute line, offline.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 import http from "node:http";
 import express from "express";

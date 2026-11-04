@@ -1,5 +1,6 @@
 // Unit-test the PDF transforms on in-memory buffers (no network — the fetch
 // layer is SSRF-guarded and tested separately). Covers the new pdf-* tools.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { PDFDocument } from "pdf-lib";
 import zlib from "node:zlib";
 import { pdfInfo, mergePdfs, extractPages, rotatePdf, imagesToPdf, parsePages } from "../src/tools/pdf-kit.js";

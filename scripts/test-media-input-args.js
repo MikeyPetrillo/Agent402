@@ -4,6 +4,7 @@
 // playlist or concat list that names further inputs. A body whose container
 // is not recognized is refused before any process starts. Offline: the
 // process runner is replaced and only its arguments are read.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { probeMedia, toMp3, normalizeAudio, transcodePcm, inputFormatOf, __setExecFileForTest } from "../src/tools/media-kit.js";
 
 let pass = 0, fail = 0;

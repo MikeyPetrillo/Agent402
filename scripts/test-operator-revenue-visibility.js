@@ -16,6 +16,7 @@
 //      leaderboards are visible without clicking a column header.
 //
 //   node scripts/test-operator-revenue-visibility.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { getOperatorBreakdown } from "../src/stats.js";
 import { operatorPage } from "../src/operator.js";
 

@@ -35,6 +35,7 @@
 //
 // Run: node scripts/test-design-tokens.js            (repo tree)
 //      node scripts/test-design-tokens.js --self-test (proves it can fail)
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync } from "node:fs";
 
 const ROOT = new URL("../", import.meta.url);

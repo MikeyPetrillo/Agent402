@@ -7,6 +7,7 @@
 //
 // This guard fails if any served page states a crawl cadence that is not the
 // one derived from the timer constant. Offline; no server boot.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync } from "node:fs";
 import { crawlIntervalLabel } from "../src/crawl-cadence.js";
 import { mppCrawlIntervalLabel } from "../src/mpp-index.js";

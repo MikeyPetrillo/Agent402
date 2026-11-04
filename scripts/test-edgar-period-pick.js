@@ -4,6 +4,7 @@
 // 10-K row, not the quarter-length rows a 10-K also carries. A fallback tag
 // that measures something else is labeled as what it is. Offline fixtures
 // shaped like data.sec.gov companyfacts / companyconcept unit rows.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { financialMetrics, pickLatestPeriods } from "../src/tools/edgar-kit.js";
 import { pickDossierPeriods } from "../src/tools/dossier-kit.js";
 

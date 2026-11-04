@@ -11,6 +11,7 @@
 // Needs Playwright's Chromium; under CI a missing browser fails, it never skips.
 //
 //   node scripts/test-render-isolation.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import http from "node:http";
 import { readFileSync } from "node:fs";
 import { __test } from "../src/tools/render.js";

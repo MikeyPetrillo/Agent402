@@ -3,6 +3,7 @@
 // settle-failed classification. Defensive by contract: any shape surprise
 // must yield null, never a throw (they run inside the tally middleware on
 // every paid response).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { networkFromPaymentResponse, decodeSettleReceipt } from "../src/stats.js";
 
 let pass = 0, fail = 0;

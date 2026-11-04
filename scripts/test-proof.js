@@ -1,5 +1,6 @@
 // /proof + /api/proof: the metered tier's settled-vs-quote receipts.
 // Offline: a scratch ledger, then the feed and the page.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

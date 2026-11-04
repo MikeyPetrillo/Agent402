@@ -4,6 +4,7 @@
 // answers 403 on a credential without ListBucket); putObject percent-encodes
 // the key per segment and signs exactly the path it sends; a Buffer upload
 // sends no explicit content-length header.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createHash, createHmac } from "node:crypto";
 
 process.env.BACKUP_S3_ENDPOINT = "https://bucket.example.test";

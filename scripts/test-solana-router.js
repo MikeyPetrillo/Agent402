@@ -5,6 +5,7 @@
 // facilitator challenges carry) and a stub Solana RPC serves the USDC mint
 // account, so the REAL @x402/svm scheme signs a real transaction with an
 // ephemeral keypair and no network leaves the process.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { createServer } from "node:http";
 

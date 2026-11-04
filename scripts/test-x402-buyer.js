@@ -1,6 +1,7 @@
 // x402-buyer hardening tests (F2 accept-pinning, F3 post-spend read, margin cap).
 // Mocks global fetch so no wallet/network is needed. The refusal paths throw
 // BEFORE any signing, so they run offline with a throwaway key.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { randomBytes } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";

@@ -17,6 +17,7 @@
 // fails, it never skips.
 //
 //   node scripts/test-render-redirect-refusal.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import http from "node:http";
 import net from "node:net";
 import { resolvePinned, startEgressProxy, EGRESS_REFUSAL } from "../worker/egress-proxy.js";

@@ -5,6 +5,7 @@
 // network: every resolver call is answered by the stub.
 //
 //   node scripts/test-dns-name-filter.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import dns from "node:dns";
 import dnsP from "node:dns/promises";
 import { syncBuiltinESMExports } from "node:module";

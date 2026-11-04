@@ -9,6 +9,7 @@
 //   - control: another mint, served by the same stub, answers 200 with rows
 //     and the partial-answer fields, so the 503s above are the deadline and
 //     not a broken stub.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { getFreePorts } from "./lib/free-port.js";

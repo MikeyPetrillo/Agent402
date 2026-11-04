@@ -4,6 +4,7 @@
 // ledgerSummary, per-chain splits, and the "don't start in CI" gate.
 //
 //   node scripts/test-revenue-ledger.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

@@ -5,6 +5,7 @@
 // before. ticker-pack's submissions reader passes the older file names on.
 // Offline: the readers are injected with data shaped like EDGAR's
 // submissions JSON (columnar arrays) and its older files.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import dnsPromises from "node:dns/promises";
 import { syncBuiltinESMExports } from "node:module";
 dnsPromises.lookup = async () => ({ address: "1.1.1.1", family: 4 });

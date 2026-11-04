@@ -12,6 +12,7 @@
 // payload. Also locks: pass-through for plain x402 buyers (no receipt), a
 // single verify + single settle per purchase (no double-settle), HMAC tamper
 // and expiry rejection in the translator.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { isDeepStrictEqual } from "node:util";

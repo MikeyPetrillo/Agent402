@@ -3,6 +3,7 @@
 // real run): DKIM probed by the MX provider's selectors, DNS-host feasibility
 // for CAA/DNSSEC, advisory cross-origin headers, CSP quality, www/apex twin,
 // server-header severity, and JSON on the report link. Offline.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { PROVIDER_DKIM_SELECTORS, providerForMx, NETWORK_TOOLS } from "../src/tools/network-kit.js";
 import { promises as dnsPromises } from "node:dns";

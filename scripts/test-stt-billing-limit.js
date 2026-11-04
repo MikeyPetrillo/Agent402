@@ -4,6 +4,7 @@
 // upstream. Ordinary rate limits and request errors keep their own answers.
 // Offline: a synthetic WAV is uploaded through the multipart handler and
 // fetch answers with bodies shaped like the transcription API's errors.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { makeMultipartHandler } from "../src/tools/stt-kit.js";
 
 process.env.OPENAI_API_KEY = "sk-test-not-real";

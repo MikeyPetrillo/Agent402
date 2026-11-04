@@ -4,6 +4,7 @@
 // its ceiling is never called, the caller gets an uncharged 503, and the
 // ceiling is read the same way as every other spend guard (0 refuses all,
 // `off` disables, malformed reads as the default).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import {
   HARD_CAPS, hardCapOf, takeHardCap, hardCapRefusalForHost, hardCapStatus, _resetHardCaps,
 } from "../src/upstream-hard-caps.js";

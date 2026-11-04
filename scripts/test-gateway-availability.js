@@ -15,6 +15,7 @@
 //    and a request that recovers on retry is not substituted;
 //  - a model with no successor and no fallbacks still fails as before;
 //  - the successor never goes upstream carrying the opt-out field.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
 requireUpstreamCosts("test-gateway-availability");
 process.env.OPENROUTER_API_KEY = "test-key";

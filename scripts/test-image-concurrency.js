@@ -16,6 +16,7 @@
 // The source is the exact hostile shape: a solid 4000x4000 PNG is ~67KB on the
 // wire but 16M pixels to decode, which is the most a free caller is allowed
 // (FREE_MAX_SRC_PIXELS). Cheap to send, expensive to decode.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { Jimp, JimpMime } from "jimp";
 

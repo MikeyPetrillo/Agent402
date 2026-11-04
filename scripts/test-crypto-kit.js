@@ -6,6 +6,7 @@
 //
 // Assertions break the build if our validation/parsing changes. Live calls only
 // break the build if EVERY one fails — that would mean our integration broke.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { CRYPTO_TOOLS } from "../src/tools/crypto-kit.js";
 
 const h = (slug) => CRYPTO_TOOLS.find((t) => t.slug === slug).handler;

@@ -7,6 +7,7 @@
 //
 //   node scripts/test-decide-harness.js
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { buildDecision, BasePlanner, SEAMS, runPlan, RESUME_STAGE, selectFallbacks } from "../services/decide/planner.js";
 import { defineHarness, makeRegistry, ownSeams } from "../services/decide/harness.js";
 import { HARNESSES, harnessById, chainIdentifiers, checkChainParams, seriesRange, mediaFormat, refFor, addressFamily } from "../services/decide/harnesses.js";

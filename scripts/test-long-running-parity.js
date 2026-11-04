@@ -8,6 +8,7 @@
 //
 // Both predicates are now imported from the server. This pins that they are
 // imported rather than restated, because a copy is what drifts.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { isLongRunningSlug, EXPENSIVE_COMPOSITE_SLUGS, LONG_RUNNING_SLUGS } from "../src/composite-spend-guard.js";
 

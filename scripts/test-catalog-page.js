@@ -1,5 +1,6 @@
 // Offline unit tests for the /tools catalog page renderer (Aug 2026 revamp).
 // Fixture catalog — no server, no network.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { ledgerCatalogPage } from "../src/ledger-catalog.js";
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";
 import { FREE_TIER_SLUGS } from "../src/free-tier.js";

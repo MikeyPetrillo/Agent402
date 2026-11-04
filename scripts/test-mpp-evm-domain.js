@@ -21,6 +21,7 @@
 //
 // Boots the real server with the paywall ACTIVE against a stub facilitator, so
 // the assertions are about the real gate chain and not a mock of it.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { Challenge, Credential, PaymentRequest, x402 } from "mppx";

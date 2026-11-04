@@ -3,6 +3,7 @@
 // tool, exact output) → flagship wallet-only tool by name (must refuse with
 // guidance, not execute). Run against a server started with FREE_MODE or paid
 // mode — the /mcp endpoint sits before the paywall either way.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createHash } from "node:crypto";
 import { FLAGSHIP_SLUGS, FLAGSHIP_MCP_NAMES } from "../src/mcp-flagship.js";
 

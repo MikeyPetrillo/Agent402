@@ -4,6 +4,7 @@
 // control sequences.
 //
 //   node scripts/test-log-safe.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { logSafe } from "../src/log-safe.js";
 
 let pass = 0, fail = 0;

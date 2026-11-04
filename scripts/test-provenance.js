@@ -8,6 +8,7 @@
 //   node scripts/test-provenance.js
 process.env.BRAVE_API_KEY = process.env.BRAVE_API_KEY || "test-key-provenance";
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { markUntrusted } from "../src/tools/provenance.js";
 import { htmlToArticle } from "../src/tools/extract.js";
 import { SEARCH_TOOLS } from "../src/tools/search.js";

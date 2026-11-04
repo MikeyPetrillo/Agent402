@@ -15,6 +15,7 @@
 //   c. a buyer who hangs up mid-handler is marked gone, and nothing settles;
 //   d. the summary is operator-only (404 without the token) and the log line
 //      carries no payer address and no transaction hash.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer, request as httpRequest } from "node:http";
 import { mkdtempSync, rmSync } from "node:fs";

@@ -49,6 +49,7 @@
 // CONTROL: grading asserts 502 would fail (the NETWORK hole), gov-data must be
 // in-scope, and a planted Brave slug must be out-of-scope — vacuous green is
 // refused (floor on in-scope count).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";

@@ -7,6 +7,7 @@
 // Pure-CPU tools must return 200 with no error. Network/browser tools are
 // exercised but tolerant of upstream/sandbox failures (they need real egress;
 // CI has it). Memory tools get a demo namespace and accept their valid 4xx.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { missingDocumentedKeys, emptyPromisedArrays } from "./sweep-shape.js";
 import { requestExampleOf, multipartBodyFrom, MULTIPART_TYPE } from "../src/openapi-request.js";
 

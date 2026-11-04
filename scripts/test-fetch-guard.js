@@ -10,6 +10,7 @@
 //
 // No network egress — assertions run against a mocked global fetch so this
 // passes in any sandbox (CI, local, restricted networks).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 const fail = (m) => { console.error("FAIL:", m); process.exit(1); };
 const ok = (label) => console.log("  ✓", label);
 

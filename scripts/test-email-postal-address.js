@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // F-01 guard: every outbound email carries the physical postal address.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.EMAIL_FROM = "test@agent402.tools";
 process.env.ZEPTOMAIL_TOKEN = "";
 process.env.RESEND_API_KEY = "";

@@ -1,6 +1,7 @@
 // flight-search accepts a departure date that is today anywhere on Earth: a
 // date is past only when it is before the calendar date in UTC-12. Pure
 // validation, offline.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { validateSearch } from "../src/tools/flights-kit.js";
 
 let pass = 0, fail = 0;

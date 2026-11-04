@@ -2,6 +2,7 @@
 // wallet payment only (src/third-party-routes.js): prepaid credits and card
 // payments are spent only on Agent402's own services. Checks the real catalog
 // definitions carry the flag and that both card-funded gates receive it.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { paysThirdParty } from "../src/third-party-routes.js";
 

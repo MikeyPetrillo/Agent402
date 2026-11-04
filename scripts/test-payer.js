@@ -3,6 +3,7 @@
 // wallet-keyed memory (400 after charging) and nulled payer analytics. The
 // existing suites can't catch it: test-memory injects `actor` directly and
 // never goes through the HTTP header. Pure-function, offline.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { payerFromRequest, payerFromPaymentResponse, normalizePayerAddress } from "../src/payer.js";
 
 let pass = 0, fail = 0;

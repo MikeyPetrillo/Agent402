@@ -5,6 +5,7 @@
 //
 //   node scripts/test-decide-planner.js
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { scoreCandidates, reliabilityScore, priceScore, freshnessScore } from "../services/decide/rank.js";
 import { buildDecision, parseDecideInput, cacheKeyFor, compilePrompt, groundedParams, isPackRow, packChoiceOptions } from "../services/decide/planner.js";
 import { validateParams, skeletonParams, pruneParams } from "../src/decide/params.js";

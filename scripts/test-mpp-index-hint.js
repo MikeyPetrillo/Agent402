@@ -5,6 +5,7 @@
 // real, working, path-scoped seller failed verification honestly - the
 // limitation pickProbeTarget's own comment recorded. Offline: injected
 // verifier, scratch seeds file, no network.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

@@ -3,6 +3,7 @@
 // 4-6 h). Genuine failures only: a 402 row is a settlement refusal where the
 // buyer kept the money. Public readers get the word, never a count.
 process.env.FREE_MODE = "true";
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 const { recordChargedFailure, chargedFailuresGenuineSince } = await import("../src/stats.js");
 

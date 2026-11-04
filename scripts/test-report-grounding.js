@@ -16,6 +16,7 @@
 //      call), the report text unchanged and the field on the JSON
 //   8. the report viewer (jsdom) shows the note under the title
 // No network and no paid upstream: every fetch is stubbed.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync } from "node:fs";
 import { JSDOM, VirtualConsole } from "jsdom";
 import {

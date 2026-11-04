@@ -3,6 +3,7 @@
 // history, and Referer). Auth is a POST-login session cookie (Secure/HttpOnly/
 // SameSite=Strict) or a header for curl/API. Boots the real server (the only
 // faithful way to test the route wiring) with a known token.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { getFreePort } from "./lib/free-port.js";
 

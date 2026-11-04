@@ -6,6 +6,7 @@ process.env.EMAIL_FROM = "alerts@agent402.tools";
 process.env.ZEPTOMAIL_TOKEN = "zepto-test-token";
 process.env.RESEND_API_KEY = "";
 process.env.COMPANY_POSTAL_ADDRESS = "Test address";
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

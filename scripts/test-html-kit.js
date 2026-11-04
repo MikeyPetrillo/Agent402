@@ -3,6 +3,7 @@
 // no network, no fixtures. Covers the happy paths each tool documents in
 // its `discovery.input` example plus the agent-facing error contracts
 // (bad selectors, oversize input, wrong selector type).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { HTML_TOOLS } from "../src/tools/html-kit.js";
 
 const tool = (slug) => HTML_TOOLS.find((t) => t.slug === slug);

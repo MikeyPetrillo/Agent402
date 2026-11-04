@@ -18,6 +18,7 @@
 // pointing at the throwaway root, so the real default trust path is used.
 //
 //   node scripts/test-tls-distrust.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { join, dirname } from "node:path";

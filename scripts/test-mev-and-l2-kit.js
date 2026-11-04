@@ -3,6 +3,7 @@
 // Live calls are opt-in via MEV_LIVE_TEST=1; Alchemy paths additionally need
 // ALCHEMY_API_KEY.
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { MEV_AND_L2_TOOLS, __test } from "../src/tools/mev-and-l2-kit.js";
 
 const { weiToEth, hexToInt, hexToBigNumber, shortPubkey, pickNetwork, NETWORKS, IS_L2 } = __test;

@@ -30,6 +30,7 @@
 // third party being down is reported loudly and never fatal. A CONTROL leg with
 // a planted bug runs first, so a clean sweep is only believed once the harness
 // has been shown to catch one.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { classifyProbeFailure } from "./probe-classify.js";
 
 const BRETT = "0x532f27101965dd16442E59d40670FaF5eBB142E4"; // Base, a real token with holders

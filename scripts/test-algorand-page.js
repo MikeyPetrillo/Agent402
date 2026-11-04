@@ -1,6 +1,7 @@
 // Offline unit tests for the /algorand marketplace page renderer. Fixture
 // snapshot + fixture rail — no server, no network. Mirrors
 // scripts/test-stellar-page.js's coverage.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { algorandSellers, algorandTools, algorandPage } from "../src/algorand-page.js";
 
 let pass = 0, fail = 0;

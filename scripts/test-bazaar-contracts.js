@@ -2,6 +2,7 @@
 // Full paid-route contract sweep for the data emitted in PAYMENT-REQUIRED.
 // Boots the real server against a local /supported stub: no payment is made,
 // but every catalog route builds the same x402 v2 challenge as production.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer } from "node:http";
 import { isDeepStrictEqual } from "node:util";
 import { spawn } from "node:child_process";

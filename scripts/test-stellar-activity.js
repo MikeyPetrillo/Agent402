@@ -1,6 +1,7 @@
 // Offline unit tests for the Stellar activity scan's pure parts:
 // parseStellarPayment (Horizon record → entry) and bucketStellarActivity
 // (entries → per-day buckets + totals). No network.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { parseStellarPayment, bucketStellarActivity, USDC_ISSUER } from "../src/revenue-live.js";
 
 let pass = 0, fail = 0;

@@ -5,6 +5,7 @@
 //
 //   node scripts/test-decide-site.js
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { ledgerShell, ledgerFooterCompact, setDecideLive, decideLive } from "../src/ledger-chrome.js";
 import { ledgerHomePage } from "../src/ledger-home.js";
 import { decidePage } from "../src/decide-page.js";

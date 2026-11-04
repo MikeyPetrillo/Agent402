@@ -15,6 +15,7 @@
 // must recover the REAL txid from the reconstructed submitted bytes — the
 // whole fix hangs on that derivation, so it is pinned against chain truth,
 // not a synthetic vector.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import express from "express";
 import { readFileSync } from "node:fs";
 import { keccak256 } from "viem";

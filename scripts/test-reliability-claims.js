@@ -16,6 +16,7 @@
 //
 // An overclaim on a page whose whole purpose is verifiability is worse than no
 // page. These assertions pin the claims to things a reader could check.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { reliabilityReport } from "../src/discovery.js";
 

@@ -4,6 +4,7 @@
 // last case is the one a path-only skip would miss: a page added under /api
 // later would ship without a CSP and nothing would say so. Drives the real
 // middleware in a throwaway Express app with the four answer shapes.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import express from "express";
 import { securityHeaders, headIsHtml } from "../src/security-headers.js";
 

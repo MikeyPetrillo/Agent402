@@ -8,6 +8,7 @@
 // `qualified`.
 //
 //   node scripts/test-wish-classify.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 let pass = 0;
 // Hermetic: a developer shell's OpenRouter key would turn on the Decision-1
 // fallback (src/decision-one.js); scripts/test-decision-one.js covers it.

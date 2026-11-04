@@ -3,6 +3,7 @@
 // no section keep the homepage card, and every section SVG the server renders
 // is well-formed with no template leak. Why: until 2026-09-14 every section
 // page served the same /card.png, so every link preview looked identical.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";

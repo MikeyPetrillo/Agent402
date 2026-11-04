@@ -8,6 +8,7 @@
 //   - a skill pack also runs server-side at POST /api/skill/<slug> for one
 //     payment, priced by scripts/pack-prices.js.
 // Offline.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { existsSync, readFileSync } from "node:fs";
 import { contributePage } from "../src/contribute.js";
 import { decodeEntities, stripTags, stripInlineTags } from "./lib/html-text.js";

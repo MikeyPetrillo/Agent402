@@ -20,6 +20,7 @@
 //     the card minimum still does.
 // Offline: a stub facilitator and a stub speech upstream (the OpenRouter
 // preload), a seeded credits key in a scratch store; no payment leaves the machine.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";

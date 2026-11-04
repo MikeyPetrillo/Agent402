@@ -4,6 +4,7 @@
 // row landed: it waits for it, then shares one follow-up pull with every
 // other waiter. The timer's run() still skips while a pull is running.
 //   node scripts/test-single-flight.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { singleFlight } from "../src/ledger-mirror.js";
 
 let pass = 0, fail = 0;

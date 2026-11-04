@@ -14,6 +14,7 @@
 // Two halves, both pinned here: the memo itself (recorded from the paid leg,
 // cleared by a delivered 200, forgotten on a TTL) and the label (a chain named
 // in it is not eligible whatever its settlement count says).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";

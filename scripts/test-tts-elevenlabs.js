@@ -17,6 +17,7 @@
 //     the backup's nearest and every format still served; the first backup
 //     gives nine of the ten names their own voice id (coral and sage share
 //     one); a bad request is a 400 and never reaches a backup.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { TTS_TOOLS, TTS_TIERS, ttsQuoteUsd, ELEVENLABS_VOICE_MAP, ELEVENLABS_VOICES, TTS_BACKUP_MODELS, ELEVEN_MAX_IN_FLIGHT, __makeHandlerForTest, __resetTtsBreakerForTest, __ttsBreakerForTest, elevenLabsBreakerState } from "../src/tools/tts-kit.js";
 import { SPEECH_MODELS } from "../src/tools/llm-gateway-kit.js";
 import { STT_TIERS, STT_MARGIN, STT_TOOLS, upstreamUsdPerMinute } from "../src/tools/stt-kit.js";

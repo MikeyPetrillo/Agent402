@@ -21,6 +21,7 @@
 // held to the ceiling.
 //
 //   node scripts/test-leaderboard-price-match.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";
 import { aggregateLeaderboard, priceMatches, advertisedMicroUsd, DEFAULTS } from "../src/leaderboard.js";

@@ -12,6 +12,7 @@
 //   - an OpenAI account-level billing refusal is a 502, not the buyer's 400.
 //
 //   node scripts/test-gateway-resilience.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { EventEmitter } from "node:events";
 process.env.OPENROUTER_API_KEY = "test-key";
 process.env.OPENAI_API_KEY = "sk-test-not-real";

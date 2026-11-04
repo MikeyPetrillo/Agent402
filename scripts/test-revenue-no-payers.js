@@ -2,6 +2,7 @@
 // transfer row named its payer (`from`), and even without that field a tx hash
 // resolves to its payer on chain, so the rows stay server-side and the one
 // per-rail settle that leaves is our OWN (canary or volume run).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 const { publicRevenueSnapshot, newestOwnSettle } = await import("../src/revenue-live.js");
 

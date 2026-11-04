@@ -1,5 +1,6 @@
 // Exact-output tests for the agent-kit (token-count, text-chunk, json-validate,
 // jsonl). Pure functions, no server needed.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { AGENT_TOOLS } from "../src/tools/agent-kit.js";
 
 const tool = (slug) => AGENT_TOOLS.find((t) => t.slug === slug);

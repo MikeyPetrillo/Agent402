@@ -15,6 +15,7 @@
 // polled. The longest /health wait during the call is how long the loop was
 // held; a call that holds it past the bound is re-run once and fails if it
 // holds it again.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";

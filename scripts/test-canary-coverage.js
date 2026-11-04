@@ -15,6 +15,7 @@
 //      advertised price (guards the stale-price drift found in the audit).
 //
 // Run: node scripts/test-canary-coverage.js  (pure imports + source parsing)
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";

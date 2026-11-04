@@ -11,6 +11,7 @@
 // document being wider than the screen, and only layout can tell you that.
 // The bars keep their 2px min-width on purpose: thinner reads as a smear, and
 // the whole point of the strip is that a bad day is visible.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { chromium } from "playwright-core";
 
 // Drives the LOCAL server and builds the strip itself.

@@ -6,6 +6,7 @@
 // case, separators, apostrophes and Unicode punctuation, passes both gates; and
 // random text built from those words never passes PREFILTER while failing the
 // raw gate.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { __routeCategoryGatesForTests as G, personalDataMatch } from "../src/route-category.js";
 

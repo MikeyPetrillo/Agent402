@@ -8,6 +8,7 @@
 // the paywall path would emit in prod). Offline, no network.
 //
 //   node scripts/test-cache-hygiene.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 
 const PORT = 3091;

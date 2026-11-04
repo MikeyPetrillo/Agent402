@@ -24,6 +24,7 @@
 //   - with the private cost table: each tier's worst case (the chat tier's
 //     bound for a translation at the cap, plus every speech link at the cap)
 //     stays within MARGIN of the summed price.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { DUB_TOOLS, DUB_TIERS, DUB_MAX_CHARS, TRANSLATE_SLUG, dubPriceUsd, normalizeLanguage, parseTranslation, __setStepsForTest } from "../src/tools/dub-kit.js";
 import { TTS_TOOLS, TTS_TIERS, FORMAT_CONTENT_TYPES } from "../src/tools/tts-kit.js";
 import { LLM_GATEWAY_TOOLS, TIERS, MARGIN, validateRequest, worstCaseUpstreamCost } from "../src/tools/llm-gateway-kit.js";

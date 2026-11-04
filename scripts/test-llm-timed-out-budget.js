@@ -11,6 +11,7 @@
 // Offline: stub fetch, no network, no keys.
 //
 //   node scripts/test-llm-timed-out-budget.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.POSTHOG_TEST_CAPTURE = "1";
 process.env.OPENROUTER_API_KEY = "test-key";
 const { LLM_GATEWAY_TOOLS, UPSTREAM_TIMEOUT_MS, timedOutAttempt } = await import("../src/tools/llm-gateway-kit.js");

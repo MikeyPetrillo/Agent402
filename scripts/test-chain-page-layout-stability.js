@@ -15,6 +15,7 @@
 // Requires a booted server (same TARGET_URL convention as test-market-pages.js):
 //   FREE_MODE=true PORT=3000 node src/server.js
 //   TARGET_URL=http://127.0.0.1:3000 node scripts/test-chain-page-layout-stability.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { CHAIN_PAGES } from "../src/market-page.js";
 
 const BASE = process.env.TARGET_URL || "http://127.0.0.1:3000";

@@ -9,6 +9,7 @@
 // Offline - calls llmsTxt() directly with a minimal fixture catalog.
 //
 //   node scripts/test-llms-mpp-header-note.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { llmsFullTxt } from "../src/seo.js";
 
 let pass = 0, fail = 0;

@@ -12,6 +12,7 @@
 //    actually signed;
 // then the shapes: inputs are validated before any spend, both answer formats
 // normalize, and the answer names which seller served it.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { parseFlightSellers, buildFlightTools, fillTemplate, validateSearch, validateStatus, normalizeFareSearch, normalizeFlightTrack } from "../src/tools/flights-kit.js";
 
 let pass = 0, fail = 0;

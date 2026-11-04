@@ -16,6 +16,7 @@
 //      and every route block in server.js, are read from source.
 //
 //   node scripts/test-tool-error-redaction.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

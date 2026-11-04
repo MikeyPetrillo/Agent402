@@ -5,6 +5,7 @@
 // live per-minute rate (2026-09-18: the standard tier moved off
 // gpt-4o-mini-transcribe, which OpenAI retires 2027-02-26, onto gpt-transcribe,
 // and its cap dropped 5 -> 4 minutes to stay inside the margin rule). Offline: synthetic WAV buffers, no network.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { probeDurationSeconds, assertWithinDurationCap, STT_TIERS, upstreamUsdPerMinute, STT_MARGIN, STT_TOOLS } from "../src/tools/stt-kit.js";
 import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
 requireUpstreamCosts("test-stt-cap");

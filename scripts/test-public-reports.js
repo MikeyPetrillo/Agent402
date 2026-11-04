@@ -6,6 +6,7 @@
 // revoking makes the link dead, and a re-publish brings the SAME link back.
 // Offline: stub Stripe + generator for the engine; a FREE_MODE boot (no Stripe)
 // for the routes, reading the real default store dir.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, unlinkSync, readFileSync } from "node:fs";
 import { join } from "node:path";

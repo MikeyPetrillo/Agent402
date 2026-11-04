@@ -3,6 +3,7 @@
 // cover with neither reads as unknown (null), never as 0 shares or 0%, which
 // would show a 5%+ holder as having fallen below 5%. Offline fixtures shaped
 // like EDGAR primary_doc.xml covers.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { parse13GCover } from "../src/tools/ticker-pack-kit.js";
 
 let pass = 0, fail = 0;

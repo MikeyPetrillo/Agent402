@@ -14,6 +14,7 @@
 //   2. nothing bounded the paid path, so volume was whatever the internet chose
 //   3. the wallet cache called clear() at 500 entries, so crossing the
 //      threshold re-cooled every wallet at once and re-billed all of them
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { robotsTxt } from "../src/seo.js";
 

@@ -26,6 +26,7 @@
 //   6. No solution header → 402 (paid-mode paywall fires).
 //
 //   node scripts/test-pow-solve-roundtrip.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";

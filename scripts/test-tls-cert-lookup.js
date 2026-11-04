@@ -3,6 +3,7 @@
 // codes) is a retryable 503 attributed upstream, and a name that does not
 // exist is the one neutral 400 a private address also gets. The built-in
 // resolver is stubbed before the kit loads, so nothing leaves this process.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createRequire, syncBuiltinESMExports } from "node:module";
 
 const require = createRequire(import.meta.url);

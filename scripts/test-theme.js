@@ -14,6 +14,7 @@
 // and white in others.
 //
 //   node scripts/test-theme.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { ledgerShell, LEDGER_CSS } from "../src/ledger-chrome.js";
 import { readFileSync } from "node:fs";
 

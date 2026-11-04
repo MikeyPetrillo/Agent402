@@ -2,6 +2,7 @@
 // skillsIndex, Aug 2026 revamp). No server, no network - real SKILL_PACKS
 // data, since the page has no fixture-able inputs of its own (unlike the
 // other revamped pages, it takes only baseUrl).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { skillsIndex, SKILL_PACKS, PACK_PRICES, skillPackPage, skillPacksJson, PACK_PRICE_RANGE } from "../src/skills.js";
 
 let pass = 0, fail = 0;

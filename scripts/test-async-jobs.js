@@ -17,6 +17,7 @@
 //     /api/pricing row says so;
 //   - a job reports queued, then running with a stage, an estimated progress
 //     and an ETA, with Retry-After on every state that is not final.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { connect } from "node:net";

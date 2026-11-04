@@ -15,6 +15,7 @@
 //   - with the warm-up on (a second boot), it loads every lazy package and logs
 //     the count.
 // Offline: the examples used here carry their input inline.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";

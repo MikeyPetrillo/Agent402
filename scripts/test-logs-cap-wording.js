@@ -1,6 +1,7 @@
 // Every eth_getLogs reader narrows its range on a node's result-size refusal.
 // Nodes word that cap differently; each wording seen from a public node is
 // pinned here against every reader's pattern, so a new wording is one line.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { EVENT_LOGS_SIZE_ERR } from "../src/tools/chain-kit.js";
 import { RANGE_ERR } from "../src/revenue-ledger.js";
 import { RANGE_RE } from "../src/evm-logs-rpc.js";

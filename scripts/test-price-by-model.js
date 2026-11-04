@@ -12,6 +12,7 @@
 // a request that clears validation at the home tier ends 503 "not configured"
 // (settlement cancelled), while one left on the route tier ends 400 "served by
 // the ... tier". Nothing leaves the machine; nothing settles.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { Challenge } from "mppx";

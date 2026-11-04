@@ -6,6 +6,7 @@
 // from another address is still served. The wrapper's own window is unit
 // tested in scripts/test-html-frames-isolation.js; this pins that the route
 // is wired to it.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";

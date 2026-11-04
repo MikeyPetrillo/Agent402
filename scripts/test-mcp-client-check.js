@@ -12,6 +12,7 @@
 // a break's failure would prove nothing about the assertion it targets.
 //
 //   node scripts/test-mcp-client-check.js        (offline: no network, no spend)
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";

@@ -11,6 +11,7 @@
 //   * the report-ready and monitor emails (the real builders; nothing is sent)
 // and that it stays off what a model does not write (the IPO digest, a
 // "problem" mail about a run that produced nothing).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { JSDOM, VirtualConsole } from "jsdom";
 import { REPORT_MODEL_NOTE, CODE_WRITTEN_REPORT_KINDS, reportIsModelWritten, kitDisclaimer } from "../src/report-disclosure.js";

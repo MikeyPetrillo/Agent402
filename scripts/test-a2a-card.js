@@ -1,5 +1,6 @@
 // A2A Agent Card validator — offline unit tests. No network.
 //   node scripts/test-a2a-card.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { validateAgentCard, SAMPLE_AGENT_CARD, A2A_WELL_KNOWN_PATHS, buildOurAgentCard, buildAgentRegistration, ERC8004_IDENTITY_REGISTRY } from "../src/tools/a2a-card.js";
 
 let passed = 0, failed = 0;

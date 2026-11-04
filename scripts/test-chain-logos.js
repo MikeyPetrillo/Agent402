@@ -3,6 +3,7 @@
 // brand colors), and the trust strip links every chain to its marketplace page.
 //
 //   node scripts/test-chain-logos.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { CHAIN_MARKS, CHAIN_ORDER, chainMark, chainLogoStrip, RAIL_COUNT_WORD } from "../src/chain-logos.js";
 import { RAILS } from "../src/rails.js";
 

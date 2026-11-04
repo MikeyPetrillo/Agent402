@@ -3,6 +3,7 @@
 // + sql-guard-kit.js). A security tool that is wrong is worse than no tool: a
 // false positive trains agents to ignore it, and a false negative is the
 // production table it was supposed to save. Both directions are pinned here.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { generateKeyPairSync } from "node:crypto";
 import {
   analyzeSql, scrubSql, issueCertificate, verifyCertificate,

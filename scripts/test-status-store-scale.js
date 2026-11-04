@@ -26,6 +26,7 @@
 //     ts goes to the row recorded last.
 //
 // Run: node scripts/test-status-store-scale.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import Database from "better-sqlite3";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

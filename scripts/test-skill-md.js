@@ -6,6 +6,7 @@
 // a dead route is the exact class test-mcp-self-consistency exists for, on
 // the one surface that test does not read), and the house style (no em
 // dashes, evergreen count in prose, exact counts only where derived).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { skillMd } from "../src/skill-md.js";
 
 let pass = 0, fail = 0;

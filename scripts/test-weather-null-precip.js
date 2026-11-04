@@ -2,6 +2,7 @@
 // the upstream's arrays is "no reading", never a measured 0 mm. Offline:
 // DNS and fetch are answered locally with bodies shaped like the forecast and
 // archive APIs.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import dnsPromises from "node:dns/promises";
 import { syncBuiltinESMExports } from "node:module";
 dnsPromises.lookup = async () => ({ address: "1.1.1.1", family: 4 });

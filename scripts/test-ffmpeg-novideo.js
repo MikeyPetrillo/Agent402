@@ -19,6 +19,7 @@
 //      file is refused with 422. Under CI a missing ffmpeg is a failure.
 //
 //   node scripts/test-ffmpeg-novideo.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync, statSync, mkdtempSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";

@@ -11,6 +11,7 @@
 // for /data: persisted, survives a new instance), and the operator lever on a
 // booted server (applied from the next read with no redeploy, and still listed
 // after a restart).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { mkdtempSync, readFileSync, writeFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

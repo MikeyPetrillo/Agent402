@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Does a /api/route or /api/find answer bring a settled call? (src/route-conversion.js)
 // Offline: PostHog in test-capture mode, a fixed caller-hash secret.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 process.env.POSTHOG_TEST_CAPTURE = "1";
 process.env.POW_SECRET = "test-secret";

@@ -14,6 +14,7 @@
 // assertions run against an injected store rather than a live Redis: the
 // property is "two callers share one counter", and a fake proves that exactly
 // while a skipped test proves nothing.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spend, peek, refund, windowKey, sharedLimitEnabled, __setTestClient } from "../src/shared-limit.js";
 import { childJson } from "./lib/child-json.js";
 

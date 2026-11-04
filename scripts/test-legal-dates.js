@@ -3,6 +3,7 @@
 // 2026-10-02) because nothing tied the date to the text. This pins a hash of
 // each page's source with the date line removed: edit the text, and this test
 // fails until the date is bumped AND the pin below is updated with it.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 

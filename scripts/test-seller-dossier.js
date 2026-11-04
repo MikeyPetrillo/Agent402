@@ -14,6 +14,7 @@
 //   * a refusal memo on a chain is surfaced as a flag
 //
 //   node scripts/test-seller-dossier.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { buildSellerDossierTool, composeSellerDossier, hostOf } from "../src/tools/seller-dossier.js";
 import { buildEvidenceBinding } from "../src/evidence-binding.js";

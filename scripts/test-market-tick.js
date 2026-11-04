@@ -16,6 +16,7 @@
 // Part 3 boots the real server twice: with MARKET_TICK unset the route is
 // absent (404, not 410) and no public surface names it; with MARKET_TICK=on
 // the route, its pricing row and its OpenAPI path are present.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import express from "express";

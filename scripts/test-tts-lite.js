@@ -3,6 +3,7 @@
 // request/response contract as the two OpenAI tiers, at a tenth of the price.
 // Offline - the upstream is a stubbed fetch, so this asserts the contract and
 // the money bound, never a live voice.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { TTS_TOOLS, TTS_TIERS } from "../src/tools/tts-kit.js";
 import { SPEECH_MODELS } from "../src/tools/llm-gateway-kit.js";
 import { upstreamCosts } from "../src/upstream-costs.js";

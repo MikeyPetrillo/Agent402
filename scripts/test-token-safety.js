@@ -13,6 +13,7 @@
 // named facts, and an UNANSWERED check is never counted as safe. The first cut
 // broke that rule with `(g.sellTaxPct ?? 0)`, which read "upstream did not say"
 // as "zero tax" - caught by writing this table.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { safetyVerdict } from "../src/tools/token-safety-kit.js";
 
 let pass = 0, fail = 0;

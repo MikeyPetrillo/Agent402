@@ -10,6 +10,7 @@
 // than mis-charge it - but it must not wobble).
 //
 //   node scripts/test-llm-gemini-kit.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 const {
   LLM_GEMINI_TOOLS, GEMINI_PATH_BY_TIER, GEMINI_TIER_BY_PATH,
   geminiToChat, chatToGemini, meteredGeminiQuoteUsd,

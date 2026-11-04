@@ -16,6 +16,7 @@
 //
 // The invariant: the primary is on a short leash, so "slow" becomes "failed"
 // fast enough for the fallback to do its job.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 
 let pass = 0, fail = 0;

@@ -5,6 +5,7 @@
 // helpers, source pins against the /api/stats labels and the dead-letter words
 // the gate reads, and end-to-end runs of the script against a stub server that
 // answers both surfaces.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { readFileSync } from "node:fs";

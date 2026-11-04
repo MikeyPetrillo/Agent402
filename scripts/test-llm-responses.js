@@ -1,5 +1,6 @@
 // /v1/.../responses (OpenAI Responses wire) - offline, stub fetch.
 process.env.POSTHOG_TEST_CAPTURE = "1";
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { LLM_RESPONSES_TOOLS, validateResponsesRequest, isEmptyIncomplete, RESPONSES_PATH_BY_TIER } from "../src/tools/llm-responses-kit.js";
 import { TIERS, createSseUsageScrubber } from "../src/tools/llm-gateway-kit.js";
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";

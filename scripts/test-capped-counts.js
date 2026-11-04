@@ -12,6 +12,7 @@
 // finding, and someone acts on it. This is a SOURCE scan because a fixture
 // small enough to unit-test sits under every limit and passes either way -
 // which is exactly why nothing caught it for five days.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFile } from "node:fs/promises";
 import { walk } from "./lib/shipped-files.js";
 

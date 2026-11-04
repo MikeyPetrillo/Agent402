@@ -31,6 +31,7 @@
 //   /crawler quotes the budget the gate enforces and /robots.txt points at it;
 //   UNPAID_QUOTE_BUDGET_PER_HOUR=off never throttles; a FREE_MODE boot never
 //   throttles (no paywall there, and CI sweeps boot in that mode).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtempSync, rmSync } from "node:fs";

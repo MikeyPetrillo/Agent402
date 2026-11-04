@@ -8,6 +8,7 @@
 //     HTML, links, headers, instruction phrasing), a clean mail with no
 //     findings, oversize input, and MIME a reader cannot fully decode (partial).
 //   - The MIME reader on its own: encodings, charsets, nesting, mailboxes.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { EMAIL_GUARD_TOOLS, siteOf } from "../src/tools/email-guard-kit.js";
 import { parseMessage, parseMailbox, decodeEncodedWords, parseContentType, MAX_RAW_BYTES } from "../src/tools/email-guard-mime.js";
 import { readableBase64 } from "../src/tools/email-guard-html.js";

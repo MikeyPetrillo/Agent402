@@ -6,6 +6,7 @@
 // chain data (the old behavior), so the published board must be identical,
 // across head advances, new and returning wallets, failed reads, a restart
 // from the store, a store that does not match its meta, and the switch.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer } from "node:http";
 import { mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

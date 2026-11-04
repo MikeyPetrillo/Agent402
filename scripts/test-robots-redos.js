@@ -6,6 +6,7 @@
 // Fixed by capping wildcards per rule in src/tools/kit.js's robotsAllows().
 // This proves the fix stays fast on the pathological shape AND that normal
 // robots.txt behavior (0-3 wildcards) is completely unaffected.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { parseRobots, robotsAllows } from "../src/tools/kit.js";
 
 let pass = 0;

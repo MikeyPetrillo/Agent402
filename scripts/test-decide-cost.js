@@ -6,6 +6,7 @@
 //
 //   node scripts/test-decide-cost.js
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { decide, state, summarizeCost, isReady, handler, plainDbConnection, decideDbSsl } from "../services/decide/server.js";
 import { makeLlm } from "../services/decide/llm.js";
 import { embedTexts, _resetEmbedBudget } from "../services/decide/embed.js";

@@ -3,6 +3,7 @@
 // example input; these bugs were wrong on OTHER inputs, so they need their own
 // assertions or a future edit could silently revert them. Boots a free-mode
 // server under TZ=UTC (the date tools assume a UTC host, as prod is).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 
 const PORT = 3099;

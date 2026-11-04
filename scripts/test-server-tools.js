@@ -13,6 +13,7 @@
 //   5. the loop budget is on the outbound body, and billing fields still leave
 //
 // Offline: no network, stubbed fetch.  node scripts/test-server-tools.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.POSTHOG_TEST_CAPTURE = "1";
 
 const {

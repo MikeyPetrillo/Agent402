@@ -4,6 +4,7 @@
 // monitor skips the monitor step silently, the stop link and a repeat purchase
 // end the sequence, the failure email goes out at once with the refund state,
 // idempotent enqueue, signed links, counts-only stats, bounded store.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

@@ -6,6 +6,7 @@
 // fail on the parameter NAME alone. It converts those into sales - but a layer
 // that guesses wrong turns a correct call into a wrong one silently, which is
 // far worse than a 400. These are the three rules that make that impossible.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { applyInputAliases, PARAM_ALIASES } from "../src/input-aliases.js";
 import { handlerInputOf } from "../src/handler-input.js";
 

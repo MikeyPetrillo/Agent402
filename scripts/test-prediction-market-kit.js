@@ -8,6 +8,7 @@
 //   • Live calls are opt-in (Kalshi is keyless,
 //     but live tests share the rate-limit pool so CI doesn't burn them).
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { PREDICTION_MARKET_TOOLS, __test } from "../src/tools/prediction-market-kit.js";
 
 import { readFileSync } from "node:fs";

@@ -3,6 +3,7 @@
 // default — every handler is gated on ALCHEMY_API_KEY and short-circuits to
 // 503. Live calls opt-in via NFT_LIVE_TEST=1 with ALCHEMY_API_KEY set.
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { NFT_MARKET_TOOLS, __test } from "../src/tools/nft-market-kit.js";
 
 const { takeAddress, takeTokenId, pickNetwork, NETWORKS } = __test;

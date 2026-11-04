@@ -10,6 +10,7 @@
 // claude-cli 2.1.250 on 2026-08-27) must reach the metered tier's own
 // validation instead of the global 100 KB parser's 413 - while a flat tier
 // keeps the 100 KB limit (its price does not grow with the body).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { getFreePorts } from "./lib/free-port.js";

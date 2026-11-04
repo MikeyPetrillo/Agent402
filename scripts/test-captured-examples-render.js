@@ -6,6 +6,7 @@
 // a hand-written example renders its own, untouched, with no capture note.
 //
 //   node scripts/test-captured-examples-render.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

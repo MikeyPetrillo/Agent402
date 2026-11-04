@@ -16,6 +16,7 @@
 // that it works - that is the easy half - but that it does NOT work anywhere
 // else, and that adding it broke nothing that used the operator token before.
 // Boots the real server, because the value of the check is in the route wiring.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { walk } from "./lib/shipped-files.js";

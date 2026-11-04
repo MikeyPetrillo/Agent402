@@ -15,6 +15,7 @@
 //   - mode "strict"  -> a real browser request passes, anything else is charged;
 //   - mode "all"     -> a browser request is charged too.
 // A stub facilitator on port 0 stands in for the network; nothing is spent.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer } from "node:http";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";

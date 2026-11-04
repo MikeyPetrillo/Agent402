@@ -16,6 +16,7 @@
 //      now names Prefer: wait); a fast route is untouched;
 //   4. a run that fails after the 202 ends the job failed and never settles.
 // Unit checks cover the switch (SLOW_SYNC_WINDOW_SECONDS, "off") and parsing.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";

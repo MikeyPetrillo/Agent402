@@ -3,6 +3,7 @@
 // every object shape it writes. Found by a restore drill (2026-10-06): a plain
 // FILE store whose name ends in .ndjson (outbound-spend.ndjson) was read as a
 // directory bundle and restored as "0 records", with exit code 0.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { gzipSync } from "node:zlib";

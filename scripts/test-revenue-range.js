@@ -14,6 +14,7 @@
 // The APIs are driven on a booted FREE_MODE server (port from the kernel)
 // against a fixture ledger in a temp directory; the page is rendered from
 // the same pure helpers the route calls, so no chain is read.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";

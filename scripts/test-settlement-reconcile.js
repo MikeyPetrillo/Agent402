@@ -7,6 +7,7 @@
 // The defect being guarded: a facilitator reports a settlement succeeded, we
 // return the buyer's answer, and no transfer ever lands. Measured on Solana
 // 2026-08-06 at 11% of one day's settlements and 25% of the next.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

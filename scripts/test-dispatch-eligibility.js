@@ -3,6 +3,7 @@
 // Fixtures are the rows an outside public-facts readout (2026-09-02) found a
 // buyer agent over-reading on our own surfaces, so the label that would have
 // prevented each misreading is pinned by name.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";
 import { dispatchEligibility, spendChainsOf, SPEND_CHAIN_BY_NETWORK, DISPATCH_REASONS, dispatchLegend } from "../src/dispatch-eligibility.js";

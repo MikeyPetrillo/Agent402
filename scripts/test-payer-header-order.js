@@ -15,6 +15,7 @@
 // This file pins the ordering against the INSTALLED middleware, so a future
 // dependency bump that flips it fails CI instead of silently re-opening the
 // hole.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, existsSync } from "node:fs";
 import { payerFromRequest, paymentHeaderOf } from "../src/payer.js";
 

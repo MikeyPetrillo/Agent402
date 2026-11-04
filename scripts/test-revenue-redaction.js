@@ -12,6 +12,7 @@
 // cannot reintroduce the raw form.
 //
 //   node scripts/test-revenue-redaction.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";

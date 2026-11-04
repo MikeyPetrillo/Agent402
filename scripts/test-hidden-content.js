@@ -6,6 +6,7 @@
 // instruction, that the default leaves every tool's output unchanged, and
 // that "drop" removes it - through the real tool handlers and extraction
 // paths, not only the module. Offline.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { scrubHidden, hiddenMode } from "../src/tools/hidden-content.js";
 import { loadJsdom } from "../src/tools/lazy-deps.js";
 import { htmlToArticle } from "../src/tools/extract.js";

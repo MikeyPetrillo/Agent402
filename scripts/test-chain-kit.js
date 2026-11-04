@@ -8,6 +8,7 @@
 // Without ALCHEMY_API_KEY in env, valid-shaped inputs return a 503
 // "not configured" error — also asserted here.
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { CHAIN_TOOLS } from "../src/tools/chain-kit.js";
 
 const h = (slug) => CHAIN_TOOLS.find((t) => t.slug === slug).handler;

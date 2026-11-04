@@ -28,6 +28,7 @@
 // A control table of known-bad and known-good snippets runs through the same
 // checker first, and the scan must see the guide's own four snippets, so a
 // clean result cannot come from a checker that sees nothing.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";

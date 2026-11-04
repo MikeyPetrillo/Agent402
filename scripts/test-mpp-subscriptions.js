@@ -11,6 +11,7 @@
 // The key authorizations here are REAL: signed with viem accounts and verified
 // through mppx's own verifySubscriptionKeyAuthorization, so the payer this
 // engine records is cryptographically recovered, not asserted by the test.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

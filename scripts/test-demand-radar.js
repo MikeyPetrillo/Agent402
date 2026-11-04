@@ -3,6 +3,7 @@
 // near-threshold math, noise flagging, sorts, filters, empty-aggregate
 // resilience, and the wallet-only (pay-per-call) registration in pow.js.
 // No network, no boot: feeds synthetic getWishesAggregate-shaped aggregates.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { computeDemandRadar } from "../src/tools/x402-kit.js";
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";
 

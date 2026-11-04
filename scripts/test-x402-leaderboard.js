@@ -1,5 +1,6 @@
 // Unit tests for the x402 leaderboard's pure helpers — the parts that decide
 // who shows up on the leaderboard and how their volume gets credited. No network.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import {
   baseUsdcPayToFromItem,
   extractWalletsFromBazaar,

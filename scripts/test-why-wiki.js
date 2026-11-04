@@ -4,6 +4,7 @@
 // and had drifted from it; now it is generated, and this keeps it generated.
 // Offline. Run with the router's unproven-tier env unset (the shipped defaults),
 // as CI does, since one point renders that ceiling.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { whyWikiMarkdown } from "./why-wiki.js";
 import { WHY_POINTS } from "../src/why.js";

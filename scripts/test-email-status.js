@@ -3,6 +3,7 @@
 // provider's prepaid credits ran out and every report link, credits key and
 // alert confirmation stopped going out with nothing in any log). Offline:
 // fetch is stubbed, the status file lives in a temp dir.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { mkdtempSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

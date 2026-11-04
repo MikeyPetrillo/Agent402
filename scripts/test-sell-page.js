@@ -3,6 +3,7 @@
 // new design surfaces no free aggregate numbers on this page at all, only
 // static "what it costs you" copy and a lane-level teaser for the paid
 // /api/bestsellers + /api/demand-radar reads).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { sellPage, catalogPriceOf } from "../src/sell.js";
 import { X402_TOOLS } from "../src/tools/x402-kit.js";

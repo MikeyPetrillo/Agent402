@@ -15,6 +15,7 @@
 //
 //   node scripts/test-sticky-chrome.js                 (boots its own FREE_MODE server)
 //   TARGET_URL=http://127.0.0.1:3000 node scripts/test-sticky-chrome.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
 import { getFreePort } from "./lib/free-port.js";

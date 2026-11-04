@@ -5,6 +5,7 @@
 //   event B20Created(address indexed token, B20Variant indexed variant,
 //                    string name, string symbol, uint8 decimals, bytes variantEventParams)
 // Non-canonical layouts must be REJECTED (null), never guessed. No network.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { B20_INTERNALS } from "../src/tools/b20-kit.js";
 
 const { TOPIC_TRANSFER, TOPIC_MEMO, TOPIC_B20_CREATED, findB20Address, decodeTransfer, memoWord, memoText, logIndexNum } = B20_INTERNALS;

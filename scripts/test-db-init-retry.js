@@ -4,6 +4,7 @@
 // explicit initAnalyticsDb after a failure RETRIES (the 5-min backoff is for
 // the per-call path, not for a deliberate init) and never reports ok when no
 // pool could be built.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 import { initWithRetry } from "../src/db-init-retry.js";
 

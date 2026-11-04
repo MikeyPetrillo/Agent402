@@ -13,6 +13,7 @@
 // for the MPP relay. So it is logged server-side and the thrown message stays
 // status-only. Source-level assertions, because both properties are about what
 // the code SAYS - a runtime test could show the log and still miss the leak.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { readFile } from "node:fs/promises";
 const src = await readFile("src/x402-buyer.js", "utf8");

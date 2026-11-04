@@ -24,6 +24,7 @@
 // volume stay read-only - proven on booted servers against a control boot that
 // does post to the stub); and no tweet text or credential ever reaches a log
 // line or the operator read.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

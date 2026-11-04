@@ -21,6 +21,7 @@
 //     stays in the repo's established no-browser-tests pattern).
 //
 //   node scripts/test-docs-gitbook.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { docsPage, docNeighbors, renderSidebar, docsLayoutHtml, DOCS_SEARCH_SCRIPT, docsSlugs, parseSidebar } from "../src/docs.js";
 import { ledgerDocsPage } from "../src/ledger-docs.js";
 import { readFileSync } from "node:fs";

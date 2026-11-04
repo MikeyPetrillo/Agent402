@@ -15,6 +15,7 @@
 // the next run) and whose state _state() does not show. The real-Redis
 // behavior has its own suite (scripts/test-replay-guard-redis.js); the
 // Redis code path here runs against an in-memory client (section A4).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import express from "express";
 delete process.env.REDIS_URL;
 const { paymentReplayKey, paymentValidBeforeMs, createReplayGuard, CONSUMED_VALIDITY_MARGIN_MS } = await import("../src/replay-guard.js");

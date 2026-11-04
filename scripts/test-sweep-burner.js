@@ -2,6 +2,7 @@
 // per-buy amount comes from the tool's live 402, the number of buys from the
 // excess over the float, and a run MAX_CALLS cuts short says so. Importing the
 // script runs nothing (its main is guarded); no key, no network, no spend.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { planSweep, baseUsdcAccept, usd, fitsPlan, tallyBuy, DENOM_PATH } from "./sweep-burner.js";
 import { SKILL_PACKS } from "../src/skills.js";
 

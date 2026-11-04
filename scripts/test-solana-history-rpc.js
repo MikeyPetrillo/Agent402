@@ -10,6 +10,7 @@
 //   * a keyed null is authoritative; a public null alone is not
 //   * a rate-limited public lane cools down instead of being hammered
 //   * per-lane counters, the public one-word status, lane order and rollback
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer } from "node:http";
 
 let pass = 0, fail = 0;

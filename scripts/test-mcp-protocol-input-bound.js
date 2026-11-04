@@ -18,6 +18,7 @@
 //    against each other.
 //
 //   node scripts/test-mcp-protocol-input-bound.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";

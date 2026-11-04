@@ -6,6 +6,7 @@
 // 5xx -> 502, a deadline -> 503 naming the step), the 60 s in-process cache, and the compact
 // output mapping against fixtures shaped like the live Neynar payloads.
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { FARCASTER_SOCIAL_TOOLS, farcasterSocialEnabled, __test } from "../src/tools/farcaster-social-kit.js";
 
 const {

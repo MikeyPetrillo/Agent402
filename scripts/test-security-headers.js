@@ -2,6 +2,7 @@
 // server and asserts: the Express fingerprint header is gone, a valid RFC 9116
 // security.txt is served, /health hides its internal wiring from the public,
 // and the /mcp CORS stays wildcard-but-credential-free.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { getFreePort } from "./lib/free-port.js";
 

@@ -13,6 +13,7 @@
 // and listed evm first after the 402 had moved tempo to the front, with one
 // currency per method while the 402 offered two. A buyer (or an index) that
 // reads the document and then meets a different 402 learns not to trust it.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { Challenge } from "mppx";

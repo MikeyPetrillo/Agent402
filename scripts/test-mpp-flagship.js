@@ -11,6 +11,7 @@
 //     shows is the catalog's (/api/pricing);
 //   - each surface module builds from mpp-flagship.js rather than a copy.
 // Boots its own FREE_MODE server on a free port (or reads TARGET_URL).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";

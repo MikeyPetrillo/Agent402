@@ -2,6 +2,7 @@
 // resolves to one: Node skips DNS for a literal, so the lookup-based check
 // never ran for http://127.0.0.1/ or http://[::1]/ (and so a redirect hop to
 // one was followed). A real local server stands in for an internal service.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import http from "node:http";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import { ssrfDispatcher, freshSsrfDispatcher, isSsrfBlock, isPrivateIp, assertPublicUrl, safeFetch, UNRESOLVED_OR_PRIVATE, LOOKUP_UNAVAILABLE, LOOKUP_RETRY_AFTER_S, isTransientLookupError } from "../src/tools/fetch-guard.js";

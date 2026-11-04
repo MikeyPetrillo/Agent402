@@ -12,6 +12,7 @@
 // Needs Playwright's Chromium for part 2; under CI a missing browser fails.
 //
 //   node scripts/test-html-frames-isolation.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { PNG } from "pngjs";
 import {
   __test, renderHtmlFrames, launchArgsFor, FRAMES_BROWSER_ARGS, HTML_FRAMES_CSP,

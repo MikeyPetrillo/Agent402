@@ -1,6 +1,7 @@
 // Mail text helpers (src/email-text.js): a header value carries no control
 // character (CR/LF would start a new header) and keeps its length cap; HTML
 // escaping covers both quote kinds so a value stays inert inside an attribute.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { headerText, escapeHtml } from "../src/email-text.js";
 
 let pass = 0, fail = 0;

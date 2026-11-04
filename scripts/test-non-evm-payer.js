@@ -4,6 +4,7 @@
 // rail, is never case-folded, and is null for EVM or unreadable payloads.
 //
 //   node scripts/test-non-evm-payer.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import algosdk from "algosdk";
 import * as sdk from "@stellar/stellar-sdk";
 import { nonEvmPayerFromRequest } from "../src/non-evm-payer.js";

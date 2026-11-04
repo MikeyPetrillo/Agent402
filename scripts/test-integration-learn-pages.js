@@ -16,6 +16,7 @@
 //     the glossary links it;
 //   - /llms-full.txt lists every route /api/pricing publishes and every learn
 //     summary, and /llms.txt links /llms-full.txt.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";

@@ -4,6 +4,7 @@
 // finds the machine-readable site map. JSON answers carry neither. And an agent
 // on a non-EVM rail learns which routes it cannot pay before it pays:
 // /api/pricing lists a restricted route's networks, the x402 manifest says so.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { getFreePort } from "./lib/free-port.js";
 import { withLlmsLinkTag, LLMS_LINK_TAG } from "../src/llms-link.js";

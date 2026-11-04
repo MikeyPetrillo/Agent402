@@ -3,6 +3,7 @@
 // APIs (Pyth Hermes, CoinGecko public, DeFiLlama) — live calls are opt-in via
 // PRICE_FEED_LIVE_TEST=1 to keep CI off the public quotas.
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { PRICE_FEED_TOOLS } from "../src/tools/price-feed-kit.js";
 
 const h = (slug) => PRICE_FEED_TOOLS.find((t) => t.slug === slug).handler;

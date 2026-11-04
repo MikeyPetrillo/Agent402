@@ -7,6 +7,7 @@
 // a simulated chain in three regimes: all 2 s, all 200 ms, and a fork inside
 // the window, and require the window start and the dates to be right in all
 // three. Offline, no RPC.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 import { createBlockClock, dateFromAnchors, rpcHeaderReader } from "../src/block-clock.js";
 import { resolveScanWindow, fundingWindowBlocks, windowSecondsFromEnv, windowLabelFromSeconds, FUNDING_DEFAULTS } from "../src/leaderboard.js";

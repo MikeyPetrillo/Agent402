@@ -4,6 +4,7 @@
 // as settled at the payment gate (found by the 2026-09-24 security review). Three
 // layers, each pinned: request-contract refuses prototype-addressing names, the
 // body builder cannot reach a prototype, and the gate reads only own true flags.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 const { requestContractOf, packRequestContract, unpackRequestContract, safeName } = await import("../src/request-contract.js");

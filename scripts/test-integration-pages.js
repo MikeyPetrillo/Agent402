@@ -10,6 +10,7 @@
 //   - tool cards mark model-backed tools and show prices in one form.
 // Offline (credit sales switch read from env, as the server reads it).
 delete process.env.CREDITS_SALES;
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { decodeEntities, stripTags, stripInlineTags } from "./lib/html-text.js";
 const { INTEGRATIONS, integrationPage, displayPrice } = await import("../src/integration-pages.js");
 const { ledgerIntegrationsPage } = await import("../src/ledger-integrations.js");

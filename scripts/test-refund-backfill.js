@@ -4,6 +4,7 @@
 // are pinned here: who is in, who is out, and that a second run is a no-op.
 //
 // Runs against temp ledgers via SALES_LEDGER_DB / REFUND_DB_DIR.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";

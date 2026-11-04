@@ -13,6 +13,7 @@
 // hold: it fires ONLY when the v2 key is absent, a shape refused 100% of the
 // time today. It can turn a guaranteed failure into a normal match; it can
 // never change the outcome of a payment that already works.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { translateV1Accepts } from "../src/x402-v1-accepts.js";

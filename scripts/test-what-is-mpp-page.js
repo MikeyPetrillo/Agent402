@@ -1,6 +1,7 @@
 // Offline unit tests for /what-is-mpp (src/what-is-mpp.js, Aug 2026 revamp
 // restyle - matches /what-is-x402's visual language). No fixtures needed:
 // the page takes only baseUrl, no live data bindings. No server, no network.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { whatIsMppPage } from "../src/what-is-mpp.js";
 import { whatIsX402Page } from "../src/what-is-x402.js";
 

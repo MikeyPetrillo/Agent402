@@ -8,6 +8,7 @@
 // full real-Chromium RSS test belongs with the browser worker (F02).
 //
 //   node scripts/test-render-bytebudget.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { makeByteBudget } from "../src/tools/render.js";
 
 let pass = 0, fail = 0;

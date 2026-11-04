@@ -13,6 +13,7 @@
 // already thinks. So this reads @x402/core's OWN schema source and fails when
 // the shape our reader depends on is not the shape the library defines - on a
 // version bump, or the next time someone reasons from a neighbouring line.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync } from "node:fs";
 import { paymentSchemeOf } from "../src/payer.js";
 

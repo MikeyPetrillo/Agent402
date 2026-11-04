@@ -10,6 +10,7 @@
 // deliberately includes a GET+POST pair on the same path, so this is a
 // non-vacuous check (a catalog with no duplicate paths at all would pass
 // trivially and prove nothing).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { serviceManifest } from "../src/discovery.js";
 
 let pass = 0, fail = 0;

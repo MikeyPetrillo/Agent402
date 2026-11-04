@@ -14,6 +14,7 @@
 // nothing is a broken tool - applied to the wrapper that hid it.
 //
 // Needs a booted server: TARGET_URL=http://127.0.0.1:PORT node scripts/test-pack-examples.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { SKILL_PACKS } from "../src/skills.js";
 import { fredMaintenanceError } from "../src/tools/macro-kit.js";
 

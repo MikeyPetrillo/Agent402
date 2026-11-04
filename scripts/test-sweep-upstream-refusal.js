@@ -8,6 +8,7 @@
 //     at the fetch layer) answers POST /api/sol-swap-quote with exactly the
 //     body the rule recognizes; with Jupiter answering garbage, the tool's
 //     own 502 is NOT recognized, so the sweep fails it.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { getFreePorts } from "./lib/free-port.js";

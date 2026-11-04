@@ -13,6 +13,7 @@
 //     timeout cases take milliseconds instead of tens of seconds.
 //   - Live checks against the real example sites are opt-in: CRAWL_LIVE_TEST=1.
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { gzipSync } from "node:zlib";
 import { CRAWL_TOOLS, CRAWL_USER_AGENT, normalizeUrl, hostAllowed, parseSitemap, sitemapDeclarations, extractLinks, pageContent, __test } from "../src/tools/crawl-kit.js";
 

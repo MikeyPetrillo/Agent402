@@ -1,5 +1,6 @@
 // Tests for validation-kit (csv-lint). Pure functions, no server needed.
 // phone-format, xml-validate, base-detect and ipv6-expand were retired 2026-08-25.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { VALIDATION_TOOLS } from "../src/tools/validation-kit.js";
 
 const tool = (slug) => VALIDATION_TOOLS.find((t) => t.slug === slug);

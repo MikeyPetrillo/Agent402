@@ -2,6 +2,7 @@
 // (sliced from the source) under a fake clock: an outer build waits for the
 // inner rebuild instead of caching a stale inner value, and a partial inner
 // value keeps the outer one partial.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
