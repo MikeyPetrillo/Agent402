@@ -5,7 +5,7 @@
 import { ledgerShell, ledgerFooterCompact, esc, fmtNum } from "./ledger-chrome.js";
 import { toolList } from "./pages.js";
 import { isComputePayable, powCostPhrase } from "./pow.js";
-import { RAILS_OR, RAILS_SHORT } from "./rails.js";
+import { RAILS_OR, RAILS_SHORT, RAILS_COUNT } from "./rails.js";
 import { tempoEnabled } from "./mpp-tempo.js";
 // Monitors cost what MONITOR_PRODUCTS says they cost. This page said "$3 a
 // month" for three weeks after the 2026-08-23 repricing made it $5, while
@@ -101,8 +101,8 @@ export function ledgerPricingPage(baseUrl, catalog) {
   <!-- HEAD -->
   <section style="max-width:1180px;margin:0 auto;padding:56px 30px 30px;">
     <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:14px;">$ GET /pricing</div>
-    <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 14px;">Pay per call.<br>Pay per report.</h1>
-    <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:76ch;margin:0;">Pay in compute with a proof-of-work puzzle, or settle micro-amounts per call - ${RAILS_OR}. No signup, no minimum; card welcome at /reports, and monitors are the one subscription (${MONITOR_MONTHLY}, cancel anytime). The wallet is the identity.</p>
+    <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 14px;">Pricing</h1>
+    <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:76ch;margin:0;">Pay in compute with a proof-of-work puzzle, or settle micro-amounts per call in <a href="#chains" style="color:var(--ink);">${esc(RAILS_COUNT)}</a>. No minimum; card welcome at <a href="/reports" style="color:var(--ink);">/reports</a>, and monitors are the one subscription (${MONITOR_MONTHLY}, cancel anytime). The wallet is the identity.</p>
   </section>
 
   <!-- TWO PLANS -->
@@ -118,7 +118,7 @@ export function ledgerPricingPage(baseUrl, catalog) {
         <p style="font-size:var(--fs-base);line-height:1.5;color:var(--muted);margin:0 0 20px;">Solve a short sha256 puzzle - ${esc(powCostPhrase())} - instead of paying. No wallet at all.</p>
         <div style="display:flex;flex-direction:column;gap:10px;font-size:var(--fs-md);border-top:1px solid var(--hairline);padding-top:18px;">
           ${check(`${fmtNum(freeCount)} pure-CPU tools`)}
-          ${check("No wallet, no funds, no account")}
+          ${check("Nothing to fund")}
           ${check("Hosted MCP connector runs these free")}
           ${dim("Rate-limited; browser/GPU tools excluded")}
         </div>
@@ -131,7 +131,8 @@ export function ledgerPricingPage(baseUrl, catalog) {
           <span style="font-family:var(--font-body);font-weight:900;font-size:var(--fs-5xl);letter-spacing:-.03em;color:var(--on-panel);">${esc(floor)}</span>
           <span style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--on-panel-dim);white-space:nowrap;">/ call &amp; up</span>
         </div>
-        <p style="font-size:var(--fs-base);line-height:1.5;color:var(--on-panel-muted);margin:0 0 20px;">An x402 or MPP client signs the stablecoin payment from the agent's own wallet and retries, settling in seconds. x402 takes ${esc(RAILS_SHORT)}${tempoEnabled() ? "; MPP also settles natively on Tempo" : ""}.</p>
+        <p style="font-size:var(--fs-base);line-height:1.5;color:var(--on-panel-muted);margin:0 0 12px;">An x402 or MPP client signs the stablecoin payment from the agent's own wallet and retries, settling in seconds.</p>
+        <p id="chains" style="font-size:var(--fs-sm);line-height:1.5;color:var(--on-panel-muted);margin:0 0 20px;">x402 takes ${esc(RAILS_OR)}${tempoEnabled() ? "; MPP also settles natively on Tempo" : ""}.</p>
         <div style="display:flex;flex-direction:column;gap:10px;font-size:var(--fs-md);color:var(--on-panel);border-top:1px solid var(--panel-rule-2);padding-top:18px;">
           ${check(`All ${fmtNum(totalCount)} tools, including browser & memory`)}
           ${check("A fixed price per tool call; metered model calls settle actual usage under the quote")}
