@@ -465,7 +465,7 @@ ${rowControls ? `  <script src="/js/market-filter-bar.js"></script>` : ""}`;
 // legend, the host card's scope, and how to read the 402 sample. Collapsed,
 // not removed: every sentence stays in the served HTML for crawlers and agents.
 export function dispatchLegendHtml(routerChains = null) {
-  return `<p class="mfb-legend"><strong style="color:var(--ink);">healthy</strong> = the last crawl of the origin succeeded, nothing more. <strong style="color:var(--ink);">dispatch</strong> = this host's router will buy from this seller right now, on the chain the badge names; it buys on ${esc(routerChainsProse(routerChains))}, paying from the chain the buyer paid on. A seller can be listed, healthy and still not dispatch-eligible (for example: the last crawl failed, it accepts no chain the router pays on, or it has too little settlement history yet). The reason is on each row and on <code>/api/index</code> as <code>routerDispatchReason</code>.</p>`;
+  return `<p class="mfb-legend"><strong style="color:var(--ink);">healthy</strong> = the last crawl of the origin succeeded, nothing more. <strong style="color:var(--ink);">dispatch</strong> = this host's router will buy from this seller right now, on the chain the badge names; it buys on ${esc(routerChainsProse(routerChains))}, paying from the chain the buyer paid on. A seller can be listed, healthy and still not dispatch-eligible (for example: the last crawl failed, it accepts no chain the router pays on, or it has too little settlement history yet). A row's mark names the reason, and <code>/api/index</code> carries it as <code>routerDispatchReason</code>.</p>`;
 }
 export function figuresNotesHtml({ chainName = null, routerChains = null, host = null, challenge = false } = {}) {
   const items = [
