@@ -4789,7 +4789,7 @@ if (_mppSubs) {
         // RFC 9457 problem saying why, same as the tempo/charge gate answers.
         try { res.set("WWW-Authenticate", (await mint()).header); } catch { /* the caller can GET the offer */ }
         const kind = e.binding ? "invalid-challenge" : "verification-failed";
-        return sendMppProblem(res, mppProblem(kind, `Subscription was not accepted: ${String(e.message).slice(0, 200)}`));
+        return sendMppProblem(res, mppProblem(kind, `Subscription was not accepted: ${redactSecrets(String(e.message)).slice(0, 200)}`));
       }
       if (e?.statusCode && e.statusCode < 500) return res.status(e.statusCode).json({ error: redactSecrets(String(e.message)).slice(0, 200) });
       console.warn("[mpp-subs] activation failed:", redactSecrets(String(e?.message || e)).slice(0, 200));
