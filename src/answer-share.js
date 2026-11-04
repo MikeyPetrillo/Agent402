@@ -298,9 +298,19 @@ export function prepareShare(req, { query, answer, citations }, { now = Date.now
 const REL = "nofollow noopener noreferrer ugc";
 const day = (ms) => new Date(ms).toISOString().slice(0, 10);
 
-/** Inline text of a sanitized answer: escaped, with links only to cited hosts and [n] to its source. */
-function renderInline(text, hosts, numbers) {
-  const linkable = (u) => { const h = httpUrl(u); return h && hosts.has(hostOf(h)) ? h : null; };
+/** Inline text of a sanitized answer: escaped, with links only to cited hosts and [n] to its source.
+ *  A link that is a listed source's URL is kept as given; any other link to a
+ *  cited host loses its query string and fragment, which only the model wrote. */
+function renderInline(text, hosts, numbers, sourceUrls = new Set()) {
+  const linkable = (u) => {
+    const h = httpUrl(u);
+    if (!h || !hosts.has(hostOf(h))) return null;
+    if (sourceUrls.has(h)) return h;
+    const x = new URL(h);
+    x.search = "";
+    x.hash = "";
+    return x.href;
+  };
   const out = [];
   // One left-to-right pass over the three token shapes; everything between
   // them is plain text. Bounded classes only: no nested quantifiers.
@@ -317,14 +327,15 @@ function renderInline(text, hosts, numbers) {
     } else {
       const trimmed = m[4].replace(/[.,;:!?]+$/, "");
       const u = linkable(trimmed);
-      out.push(u ? `<a href="${esc(u)}" rel="${REL}">${esc(trimmed)}</a>${esc(m[4].slice(trimmed.length))}` : esc(m[4]));
+      out.push(u ? `<a href="${esc(u)}" rel="${REL}">${esc(u)}</a>${esc(m[4].slice(trimmed.length))}` : esc(m[4]));
     }
   }
   out.push(plain(text.slice(last)));
   return out.join("");
 }
 /** Tests: the renderer's own link rule, apart from the sanitizer in front of it. */
-export const __renderInline = (text, citations) => renderInline(String(text), new Set(citations.map((c) => hostOf(httpUrl(c?.url) || "")).filter(Boolean)), new Set(citations.map((c) => c?.number)));
+const sourceUrlSet = (cites) => new Set(cites.map((c) => httpUrl(c?.url)).filter(Boolean));
+export const __renderInline = (text, citations) => renderInline(String(text), new Set(citations.map((c) => hostOf(httpUrl(c?.url) || "")).filter(Boolean)), new Set(citations.map((c) => c?.number)), sourceUrlSet(citations));
 // Escaped text with **bold** kept as <strong> (the markers survive escaping unchanged).
 const plain = (s) => esc(s).replace(/\*\*([^*\n]{1,400})\*\*/g, "<strong>$1</strong>");
 
@@ -334,17 +345,18 @@ export function renderAnswerHtml(answer, citations) {
   const clean = sanitizeReportProse(String(answer || ""), cites);
   const hosts = new Set(cites.map((c) => hostOf(httpUrl(c?.url) || "")).filter(Boolean));
   const numbers = new Set(cites.map((c) => c?.number).filter(Number.isInteger));
+  const sourceUrls = sourceUrlSet(cites);
   const blocks = clean.replace(/\r\n?/g, "\n").split(/\n{2,}/).map((b) => b.trim()).filter(Boolean);
   return blocks.map((b) => {
     const lines = b.split("\n");
     if (lines.every((l) => /^\s*(?:[-*•]|\d{1,2}[.)])\s+/.test(l))) {
       const ordered = /^\s*\d/.test(lines[0]);
-      const items = lines.map((l) => `<li>${renderInline(l.replace(/^\s*(?:[-*•]|\d{1,2}[.)])\s+/, ""), hosts, numbers)}</li>`).join("");
+      const items = lines.map((l) => `<li>${renderInline(l.replace(/^\s*(?:[-*•]|\d{1,2}[.)])\s+/, ""), hosts, numbers, sourceUrls)}</li>`).join("");
       return ordered ? `<ol>${items}</ol>` : `<ul>${items}</ul>`;
     }
     const heading = /^#{1,6}\s+(.{1,200})$/.exec(b);
-    if (heading) return `<h3>${renderInline(heading[1], hosts, numbers)}</h3>`;
-    return `<p>${lines.map((l) => renderInline(l.replace(/^#{1,6}\s+/, ""), hosts, numbers)).join("<br>")}</p>`;
+    if (heading) return `<h3>${renderInline(heading[1], hosts, numbers, sourceUrls)}</h3>`;
+    return `<p>${lines.map((l) => renderInline(l.replace(/^#{1,6}\s+/, ""), hosts, numbers, sourceUrls)).join("<br>")}</p>`;
   }).join("\n");
 }
 
