@@ -202,7 +202,7 @@ const READER_PATTERNS = [
   new RegExp(`\\b(?:you|the\\s+(?:[a-z-]+\\s+)?${ADDRESSEE})\\s+(?:must|should|shall|will|need\\s+to|have\\s+to|are\\s+(?:required|instructed|told)\\s+to|is\\s+(?:required|instructed|told)\\s+to)\\s+(?:always\\s+|now\\s+|only\\s+)?(?:rate|score|pick|choose|select|prefer|rank|mark|grade|recommend|ignore|disregard|forget|(?:answer|output|respond|return|treat|consider|give)\\s+(?:with\\s+)?(?:this|me|us|it|best|yes|1))\\b`),
   // A role marker opening the sentence, or a chat-template token anywhere.
   /^\s*["'([{<]*\s*(?:system|assistant|judge|evaluator|grader|ranker|rater|scorer|selector|developer|admin|llm|ai|override|verdict|decision)\s*[:\]>]/,
-  /<\|[a-z_]+\|>|\[\/?inst\]|<<\/?sys>>|#{2,}\s*(?:system|instructions?|assistant|user)\b/,
+  /<\|[a-z_]+\|>|\[\/?inst\]|<<\/?sys>>|(?<!#)#{2,}\s*(?:system|instructions?|assistant|user)\b/,
   // Asking to be chosen, ranked or rated.
   // "us" followed by a hyphen or a dotted name is a region or a host (us-east-1).
   /\b(?:always\s+|only\s+|just\s+|please\s+)?(?:choose|select|pick|prefer|recommend|rank|rate|score|use)\s+(?:me|us)\b(?![-.][a-z0-9])/,

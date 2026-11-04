@@ -200,7 +200,10 @@ export async function ownPayoutOf(ext, opts = {}) {
 // receipt).
 export const JUDGED_OVERRIDE_MIN_SCORE = 4;
 export const JUDGED_OVERRIDE_MIN_SHARE = 0.5;
-const scoreTerms = (task) => [...new Set(String(task || "").toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((t) => t.length >= 2))].slice(0, 32);
+// Task words that carry the task: three letters or more and not a function
+// word, so a slug made of "an" and "to" cannot meet the judged-pick floor.
+const SCORE_STOP_WORDS = new Set(["the", "and", "for", "with", "from", "into", "onto", "that", "this", "these", "those", "are", "was", "were", "has", "have", "had", "can", "use", "using", "get", "via", "per", "out", "all", "any", "its", "our", "your", "you", "not", "but", "how", "what", "which", "who", "when", "where", "why", "please", "then", "than", "also", "some", "each", "one", "two", "new"]);
+const scoreTerms = (task) => [...new Set(String(task || "").toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((t) => t.length >= 3 && !SCORE_STOP_WORDS.has(t)))].slice(0, 32);
 export function lexicalScoreOf(task, row, { name = true } = {}) {
   if (name && Number.isFinite(row?.score)) return row.score;
   const terms = scoreTerms(task);

@@ -40,7 +40,9 @@ export function setOwnWalletImportForTest(fn) {
 /** Is `addr` one of our own wallets? `sets` is injectable for tests. True for
  *  every address while the internal wallet list cannot be loaded. */
 export async function isOwnPayoutAddress(addr, { sets = null, env = process.env } = {}) {
-  const a = typeof addr === "string" ? addr.trim() : "";
+  // Format characters (zero-width, bidi) are dropped and a 0X prefix is read as 0x,
+  // so a spelling the signer would accept cannot pass as someone else's address.
+  const a = typeof addr === "string" ? addr.replace(/\p{Cf}/gu, "").trim().replace(/^0X/, "0x") : "";
   if (!a) return false;
   const isEvm = /^0x[0-9a-fA-F]{40}$/.test(a);
   for (const k of OWN_ADDRESS_ENV) {

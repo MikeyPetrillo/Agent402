@@ -575,6 +575,7 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
     const ourSol = [...OUR_SOLANA_WALLETS][0];
     const { isOwnPayoutAddress, ownPayoutOf } = await import("../src/tools/route-execute.js");
     ok(ourEvm && await isOwnPayoutAddress(ourEvm.toUpperCase().replace(/^0X/, "0x")), "an internal EVM wallet is ours whatever its letter case");
+    ok(ourEvm && await isOwnPayoutAddress("0X" + ourEvm.slice(2)) && await isOwnPayoutAddress(ourEvm.slice(0, 10) + "\u200b" + ourEvm.slice(10)), "a 0X prefix or a zero-width character does not hide an internal wallet");
     ok(ourSol && await isOwnPayoutAddress(ourSol) && !(await isOwnPayoutAddress(ourSol.toLowerCase())), "a base58 wallet is ours only exactly as written");
     const payTo = "0x" + "4d".repeat(20);
     ok(await isOwnPayoutAddress(payTo, { env: { WALLET_ADDRESS: payTo } }) && !(await isOwnPayoutAddress(payTo, { env: {} })), "the configured payTo is ours; the same address with nothing configured is not");
@@ -626,6 +627,8 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
   ok(!low.ok && low.floor === Math.max(JUDGED_OVERRIDE_MIN_SCORE, overrideScoreOf("weather forecast", top) * JUDGED_OVERRIDE_MIN_SHARE),`a description-only match cannot override (score ${low.score}, floor ${low.floor})`);
   ok(!judgedOverrideAllowed("weather forecast", [top, half], half).ok, "a pick under half of the best score cannot override");
   const weak = [{ slug: "a", score: 3 }, { slug: "b", score: 2 }];
+  ok(lexicalScoreOf("convert an image to png format", { slug: "/api/an/to", description: "", tags: [] }, { name: false }) === 0,
+    "function words and two-letter words score nothing, so a slug of them cannot meet the judged-pick floor");
   ok(!judgedOverrideAllowed("t", weak, weak[1]).ok, `below the absolute floor (${JUDGED_OVERRIDE_MIN_SCORE}) no override, however the others score`);
   // Rows with no index score (the Tempo and Algorand legs) are scored with
   // the index ranker's weights.

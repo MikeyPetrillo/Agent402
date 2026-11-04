@@ -97,7 +97,14 @@ const ok = (cond, msg) => {
       if (ms > LISTING_BOUND_MS) { slowFns.add(name); slowScreens.push(`${name} ${JSON.stringify(open)}+${fk}: ${ms.toFixed(1)}ms`); }
       else if (ms > LISTING_BOUND_MS / 4) {
         const quarter = bestOf(fn, build(open, fill, 25_000));
-        if (ms > LISTING_GROWTH * Math.max(quarter, LISTING_BOUND_MS / 20)) slowScreens.push(`${name} ${JSON.stringify(open)}+${fk}: ${quarter.toFixed(1)}ms at 25k, ${ms.toFixed(1)}ms at 100k`);
+        // A suspicion is measured again, both sizes back to back: a load spike
+        // that lands on one reading is not growth; a quadratic reading grows
+        // every time.
+        const grows = (big, small) => big > LISTING_GROWTH * Math.max(small, LISTING_BOUND_MS / 20);
+        if (grows(ms, quarter)) {
+          const again = bestOf(fn, long), againQuarter = bestOf(fn, build(open, fill, 25_000));
+          if (grows(again, againQuarter)) slowScreens.push(`${name} ${JSON.stringify(open)}+${fk}: ${againQuarter.toFixed(1)}ms at 25k, ${again.toFixed(1)}ms at 100k (measured twice)`);
+        }
       }
     }
   }
@@ -106,6 +113,11 @@ const ok = (cond, msg) => {
   // Control: the shape the old digit reading took 17 s on, timed the same way.
   const probe = bestOf(fns.addressesReader, "a1 " + "a".repeat(100_000));
   ok(probe < LISTING_BOUND_MS, `control: a digit-and-letter word before a 100k run of letters reads in ${probe.toFixed(1)}ms`);
+  // A long run of '#' (a markdown heading marker) is read once, not retried from every '#'.
+  for (const [name, fn] of [["addressesReader", fns.addressesReader], ["judgeReadableText", fns.judgeReadableText]]) {
+    const hashes = bestOf(fn, "#".repeat(100_000));
+    ok(hashes < LISTING_BOUND_MS, `${name}: a 100k run of '#' reads in ${hashes.toFixed(1)}ms`);
+  }
 }
 
 const srv = spawn(process.execPath,["--import", "./scripts/offline-egress-preload.js", "src/server.js"], {
