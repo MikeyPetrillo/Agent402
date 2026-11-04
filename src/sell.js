@@ -1,4 +1,4 @@
-// /sell — the seller front door. Two paths to get paid per call: list an
+// /sell: the seller front door. Two paths to get paid per call: list an
 // existing x402 API on the open index (the five steps and the register form
 // below), or tollbooth an existing site (/tollbooth).
 //

@@ -1,4 +1,4 @@
-// Machine Ledger — Home page ("Agent402 Ledger"), Aug 2026 revamp, trimmed
+// Machine Ledger: the home page ("Agent402 Ledger"), Aug 2026 revamp, trimmed
 // 2026-11 to five blocks: hero (what it is, two actions, the live payments
 // panel), the two doors (agents: endpoints, prices and the free tier; people:
 // reports and monitors), three short claims with the chain marks, a two-line
@@ -263,7 +263,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
     <div class="hm-obsidian" style="padding:32px;display:flex;flex-direction:column;gap:16px;">
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);letter-spacing:.18em;text-transform:uppercase;color:var(--on-panel-dim);">For agents</div>
       <h2 class="hm-h2" style="font-size:var(--fs-2xl);color:var(--on-panel);">Find a tool, pay the 402, get JSON.</h2>
-      <p style="margin:0;color:var(--on-panel-muted);font-size:var(--fs-base);line-height:1.5;font-weight:300;">Resolve any task in one free call, then pay per request in ${esc(RAILS_SHORT)}, or over MPP${tempoMarkHtml ? ", natively on Tempo" : ""}. Read by machines at <a href="/llms.txt" ${panelLink}>llms.txt</a>, <a href="/openapi.json" ${panelLink}>openapi.json</a> and <a href="/.well-known/x402" ${panelLink}>.well-known/x402</a>.</p>
+      <p style="margin:0;color:var(--on-panel-muted);font-size:var(--fs-base);line-height:1.5;font-weight:300;">Resolve any task in one free call, then pay per request in ${esc(RAILS_SHORT)}, or over MPP${tempoMarkHtml ? ", natively on Tempo" : ""}. Connect over <a href="/guides/agent-hosts" ${panelLink}>MCP</a> or plain HTTP; machines read <a href="/llms.txt" ${panelLink}>llms.txt</a>, <a href="/openapi.json" ${panelLink}>openapi.json</a> and <a href="/.well-known/x402" ${panelLink}>.well-known/x402</a>.</p>
       <div class="hm-ptable" style="font-family:var(--font-mono);display:flex;flex-direction:column;border:1px solid rgba(255,255,255,.08);border-radius:var(--radius);overflow:hidden;font-size:var(--fs-sm);">
         <a href="/tools/v1-chat-metered" ${rowStyle}><span>POST /v1/metered/chat/completions</span><span ${priceStyle}>from ${esc(slugPrice(tools, "v1-chat-metered"))}</span></a>
         <a href="/api/find?q=whois" ${rowStyle}><span>GET /api/find?q=</span><span ${priceStyle}>free</span></a>

@@ -1268,7 +1268,7 @@ function* marketPageAllSteps(baseUrl, { snapshot, leaderboardSnap, economySnap, 
   const rankedVisible = truncated ? ranked.slice(0, ALL_ROW_CAP) : ranked;
   const visibleSellers = localSeller ? [localSeller, ...rankedVisible] : rankedVisible;
   const capNote = truncated
-    ? `<p class="chips-note ml-meta" style="font-size:var(--fs-xs);">${["this host pinned", "showing the top " + ALL_ROW_CAP + " of " + ranked.length + " independent sellers", '<a href="/marketplace?all=1" style="color:var(--muted);">show all &rarr;</a>'].map((t) => `<span>${t}</span>`).join("")}</p>`
+    ? `<p class="chips-note ml-meta" style="font-size:var(--fs-xs);">${["this host pinned", "top " + ALL_ROW_CAP + " of " + ranked.length + " independent sellers", '<a href="/marketplace?all=1" style="color:var(--muted);">show all &rarr;</a>'].map((t) => `<span>${t}</span>`).join("")}</p>`
     : "";
 
   // Grid rows, not a <table> - reuses the exact .mlr-row/.ml-roster-compact

@@ -287,13 +287,13 @@ for (const c of NEW_CHAINS) {
   // 101 rows, and the note counts INDEPENDENT sellers (120 of the 121, since
   // one is the pinned host).
   ok((capped.match(/<div data-mfb-row/g) || []).length === 101, `all view: cap renders pinned local + top 100 ranked (got ${(capped.match(/<div data-mfb-row/g) || []).length})`);
-  ok(capped.includes("<span>this host pinned</span><span>showing the top 100 of 120 independent sellers</span>"), "all view: cap note discloses the pin + truncation honestly");
+  ok(capped.includes("<span>this host pinned</span><span>top 100 of 120 independent sellers</span>"), "all view: cap note discloses the pin + truncation honestly");
   ok(capped.includes('href="/marketplace?all=1"'), "all view: cap note links the ?all=1 escape hatch");
   ok(/<div data-mfb-row data-local="1"/.test(capped), "all view: the local seller survives the cap (ranked or appended, never dropped)");
   ok(/SELLERS LISTED<\/div><div[^>]*>120</.test(capped), "all view: SELLERS LISTED card counts the full roster (120 independent sellers, host not counted), not the capped table");
   const full = marketPage(null, "https://agent402.tools", { snapshot, leaderboardSnap: { leaderboard: [] }, all: true });
   ok((full.match(/<div data-mfb-row/g) || []).length === 121, `all view: all:true renders every roster row (got ${(full.match(/<div data-mfb-row/g) || []).length})`);
-  ok(!full.includes("showing the top 100"), "all view: no cap note when the full roster is rendered");
+  ok(!full.includes("top 100 of"), "all view: no cap note when the full roster is rendered");
 }
 
 // All-chains view — marketPage(null, …) renders the unified "The x402
