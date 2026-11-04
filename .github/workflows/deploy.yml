@@ -1813,7 +1813,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (60 scripts, one process each)
+      - name: Offline suites (61 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -1879,6 +1879,8 @@ jobs:
           t node scripts/test-revenue-cold.js
           # The live rail scan runs once per period across containers (lease + shared snapshot, adopted at boot); cadences default to 4 hours and the copy says so (injected scan/store/lease - offline)
           t node scripts/test-revenue-shared-scan.js
+          # The paged Tempo read equals the one-query read it replaced: same rows once each, same sum, (ts, id) order, with ties across page boundaries (offline)
+          t node scripts/test-tempo-paging-oracle.js
           # Settle-fallback chain (Solvador first on its advertised networks -> PayAI -> Solvador last resort; double-settle gate between fallbacks - offline)
           t node scripts/test-settle-fallback.js
           # A listed Robinhood settle fallback is tried only after its /supported confirms eip155:4663 (paid-mode boot vs stub facilitators - offline)
