@@ -49,7 +49,7 @@ import { llmsLinkMiddleware } from "./llms-link.js";
 import { extractArticle, fetchPageMeta } from "./tools/extract.js";
 import { dnsLookup } from "./tools/dns.js";
 import { pdfToText } from "./tools/pdf.js";
-import { renderArticle, screenshotPage, rasterizeSvg } from "./tools/render.js";
+import { renderArticle, screenshotPage, rasterizeSvg, withHtmlFramesFailureBound } from "./tools/render.js";
 import { mountAnswerShares, removeShare } from "./answer-share.js";
 import { workerEnabled, runOnWorker, assertWorkerConfig, setWorkerOutcomeObserver } from "./worker-client.js";
 import {
@@ -477,10 +477,12 @@ const MEDIA_TOOLS = MEDIA_TOOLS_RAW.map((t) => ({
 // page-speed and html-frames run on the browser pool, so they follow render's
 // placement: on the secretless worker when it is configured, in-process otherwise.
 import { BROWSER_MEASURE_TOOLS as BROWSER_MEASURE_TOOLS_RAW } from "./tools/browser-measure-kit.js";
-const BROWSER_MEASURE_TOOLS = BROWSER_MEASURE_TOOLS_RAW.map((t) => ({
-  ...t,
-  handler: async (input, ctx) => (workerEnabled() ? runOnWorker(t.slug, input) : t.handler(input, ctx)),
-}));
+// html-frames: failed documents (uncharged 4xx) are bounded per payer, on both
+// placements, keyed on the signed payer, else the client address.
+const BROWSER_MEASURE_TOOLS = BROWSER_MEASURE_TOOLS_RAW.map((t) => {
+  const run = async (input, ctx) => (workerEnabled() ? runOnWorker(t.slug, input) : t.handler(input, ctx));
+  return { ...t, handler: t.slug === "html-frames" ? withHtmlFramesFailureBound(run, (req) => payerFromRequest(req) || req?.ip) : run };
+});
 import { GOV_TOOLS } from "./tools/gov-kit.js";
 import { GEO_TOOLS } from "./tools/geo-kit.js";
 import { OCR_TOOLS } from "./tools/ocr-kit.js";

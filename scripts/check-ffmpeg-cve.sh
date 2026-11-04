@@ -5,10 +5,11 @@
 # built image. It records the ffmpeg build and whether the vulnerable MagicYUV
 # decoder is even compiled in, so the live image is auditable without guessing.
 #
-# Context: Agent402 only invokes ffmpeg for AUDIO (audio-convert/-normalize pass
-# `-vn`) and ffprobe for container metadata (`-show_format -show_streams`) — none
-# of which decode a MagicYUV video frame, so the published PoW/exploit path is
-# not exercised in normal operation. Pin/patch anyway; do NOT run a real exploit
+# Context: every ffmpeg and ffprobe call (src/tools/media-kit.js) passes an
+# audio-only `-codec_whitelist` before `-i`, so no video decoder opens, MagicYUV
+# included. `-vn` alone was not enough: probing an input decodes a frame of each
+# stream before any output option applies (scripts/test-ffmpeg-novideo.js runs
+# real ffmpeg against a video input). Pin/patch anyway; do NOT run a real exploit
 # file to "prove" reachability.
 set -euo pipefail
 

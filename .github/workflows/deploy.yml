@@ -3338,7 +3338,7 @@ jobs:
           t node scripts/test-wallet-e2e.js
           # MCP Registry find-latest-version helper (used by the publish job to auto-deprecate a superseded version — offline)
           t node scripts/test-mcp-find-latest-version.js
-          # FFmpeg video-decode lockout (R-06 — every ffmpeg call is -vn/audio-only; CVE-2026-8461 MagicYUV video decoder unreachable — offline)
+          # FFmpeg video-decode lockout (R-06: every ffmpeg and ffprobe call passes an audio-only -codec_whitelist before -i, so the MagicYUV video decoder never opens; offline)
           t node scripts/test-ffmpeg-novideo.js
           # Log-injection guard (F24 — CR/LF + ANSI + control chars stripped from attacker-controlled log text — offline)
           t node scripts/test-log-safe.js
@@ -4629,6 +4629,9 @@ jobs:
 
       - name: html-frames runs in its own jitless browser, no WebAssembly, failures bounded per payer (real Chromium)
         run: node scripts/test-html-frames-isolation.js
+      # html-frames through the server: a payer's failed documents are bounded (free-mode boot, port 0)
+      - name: html-frames failure bound through the route
+        run: node scripts/test-html-frames-failure-bound.js
 
       - name: Chromium and the media binaries get an allowlisted environment, never a secret (real Chromium)
         run: node scripts/test-child-env.js
