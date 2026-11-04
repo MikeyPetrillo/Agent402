@@ -89,7 +89,9 @@ try {
   idx._setWarmListForTests(async (o, real) => {
     if (o.limit === 1) { reads.singles++; return real(o); }
     reads.pages++;
-    const page = await real({ ...o, limit: o.limit });
+    // A slow database may cancel the real read first: either way one timeout.
+    let page;
+    try { page = await real(o); } catch (e) { if (sdb.isStatementTimeout(e)) reads.timeouts++; throw e; }
     if (page.some((r) => r.id === bigId)) { reads.timeouts++; throw new Error("canceling statement due to statement timeout"); }
     return page;
   });
