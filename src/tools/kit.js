@@ -21,7 +21,7 @@ import { runHtml } from "./html-pool.js";
 import { load as yamlLoad, dump as yamlDump, JSON_SCHEMA as YAML_JSON_SCHEMA } from "js-yaml";
 import { marked } from "marked";
 import QRCode from "qrcode";
-import { assertPublicUrl, safeFetch, ssrfDispatcher, isSsrfBlock, UNRESOLVED_OR_PRIVATE } from "./fetch-guard.js";
+import { assertPublicUrl, safeFetch, ssrfDispatcher, isSsrfBlock, UNRESOLVED_OR_PRIVATE, isTransientLookupError, lookupUnavailable } from "./fetch-guard.js";
 
 const REGEX_WORKER = fileURLToPath(new URL("./regex-worker.js", import.meta.url));
 const REGEX_TIMEOUT_MS = 750;
@@ -2183,7 +2183,9 @@ const networkTools = [
       let ip = host;
       if (!isIP(host)) {
         assertQueryableName(host);
-        const resolved = await lookup(host).catch(() => {
+        const resolved = await lookup(host).catch((e) => {
+          // A resolver that cannot answer is ours to retry, not the caller's input.
+          if (isTransientLookupError(e)) throw lookupUnavailable(e);
           throw bad(UNRESOLVED_OR_PRIVATE);
         });
         ip = resolved.address;

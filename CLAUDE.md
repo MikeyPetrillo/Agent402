@@ -445,6 +445,12 @@ heartbeat page on it under one issue that closes when nothing is owed.
 - **Listing screen:** `src/listing-screen.js` (re-exported by `src/x402-index.js`) flags seller
   listing text that tries to instruct its reader; it depends only on `src/hidden-chars.js`, so
   a workflow with no install (`wish-issues.yml`) reads the same rules.
+- **Outbound fetches:** every buyer-supplied URL goes through `src/tools/fetch-guard.js`. A name
+  that does not resolve and a private address get one neutral 400; a resolver that cannot answer
+  (EAI_AGAIN and the other transient codes, or a lookup past `DNS_LOOKUP_TIMEOUT_MS`, default 10 s)
+  is a retryable 503 attributed upstream. The MCP connector's loopback replay carries a
+  per-process secret in its marker (`src/mcp-loopback.js`); an inbound marker is stripped by the
+  first middleware, so only the real replay is exempt from the discovery limits.
 - **Unpaid quote budget:** `src/unpaid-quote-budget.js` bounds bursts of unpaid 402 reads. A
   payment header counts as an attempt (`src/payment-attempt.js`) only when it decodes to an offered
   network or an MPP credential; bytes that do not decode are an unpaid read.

@@ -2028,6 +2028,8 @@ jobs:
           t node scripts/test-known-assets.js
           # Distrusted intermediate CA refusal: published hashes, every copy, live TLS legs (offline, port 0)
           t node scripts/test-tls-distrust.js
+          # tls-cert's own lookup: a resolver that cannot answer is a retryable 503, a missing name the neutral 400 (stubbed resolver, offline)
+          t node scripts/test-tls-cert-lookup.js
           # A cached repeat's "payment is not charged" copy names the Tempo transfer exception (offline)
           t node scripts/test-cache-repeat-copy.js
           t node scripts/test-legal-dates.js

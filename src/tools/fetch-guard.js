@@ -46,7 +46,7 @@ export function isTransientLookupError(err) {
   return TRANSIENT_LOOKUP_CODES.has(String(err?.code || ""));
 }
 
-function lookupUnavailable(cause) {
+export function lookupUnavailable(cause) {
   return Object.assign(new Error(LOOKUP_UNAVAILABLE), {
     code: LOOKUP_UNAVAILABLE_CODE,
     statusCode: 503,
