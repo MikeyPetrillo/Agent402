@@ -411,6 +411,13 @@ function datedPoints(chain) {
   datedPointsReads++;
   return qDatedPoints.all(chain).map((r) => [Number(r.block), Number(r.ts) * 1000]);
 }
+/** Test hook: each wallet's anchors from one shared read of the chain's
+ *  dated points, and that read's length before and after. */
+export function _sharedAnchorsForTests(chain, wallets) {
+  const pts = datedPoints(chain), before = pts.length;
+  const anchors = wallets.map((w) => datedAnchors(chain, w, pts));
+  return { before, after: pts.length, anchors };
+}
 function datedAnchors(chain, wallet, pts = datedPoints(chain)) {
   const cur = getCursor.get(chain, wallet);
   if (cur?.caught_up && cur.next_block != null && cur.updated_ts && (!pts.length || cur.next_block > pts[pts.length - 1][0])) {

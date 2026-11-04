@@ -381,6 +381,20 @@ const rev = await import("../src/revenue-ledger.js");
     extra.close();
   }
   const three = { ...wallets, baseExtraWallets: [W2, W3] };
+  // The read is shared across a chain's wallets, and each wallet's caught-up
+  // cursor ends ITS anchors only: appended to the shared read, one wallet's
+  // cursor would date the next wallet's newest rows.
+  {
+    const cur = new Database(process.env.REVENUE_LEDGER_DB);
+    const setCursor = cur.prepare("INSERT OR REPLACE INTO cursors (chain, wallet, next_block, caught_up, updated_ts) VALUES (?,?,?,?,?)");
+    setCursor.run("base", W2, 40_100_000, 1, nowS - 3600);
+    setCursor.run("base", W3, 40_200_000, 1, nowS);
+    cur.close();
+    const s = rev._sharedAnchorsForTests("base", [W2, W3]);
+    const last = (a) => a[a.length - 1];
+    ok(s.after === s.before && last(s.anchors[0])[0] === 40_100_000 && last(s.anchors[1])[0] === 40_200_000 && !s.anchors[1].some(([b]) => b === 40_100_000),
+      `each base wallet's anchors end at its own cursor and the shared read is unchanged (${s.before} points before, ${s.after} after; ends ${last(s.anchors[0])[0]}, ${last(s.anchors[1])[0]})`);
+  }
   for (const kind of ["events", "daily"]) {
     const counted = (w) => rev._longestLedgerStepForTests(kind, w, { clock: () => rev._datedPointsReadsForTests() });
     const one = counted(wallets), all = counted(three);
