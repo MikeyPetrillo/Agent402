@@ -24,6 +24,8 @@ import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { PerformanceObserver } from "node:perf_hooks";
 import { createHash } from "node:crypto";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 import Database from "better-sqlite3";
 import { getFreePort } from "./lib/free-port.js";
 import { buildRoutePerfFixture } from "./lib/route-perf-fixture.js";
@@ -140,6 +142,62 @@ const spin = (ms) => { const t = performance.now(); while (performance.now() - t
     const r = await blockOf(async () => spin(5 * limit));
     ok(!heldUnder(r.ms, limit), `a deliberate ${5 * limit} ms hold fails the ${name} pin (measured ${r.ms} ms; ${note})`);
   }
+}
+
+// A sliced walk timed step by step: each step's thread CPU less the
+// collector's pauses inside it, as blockOf reads a gap. That still leaves
+// runtime work outside any reported pause: on a 2-vCPU runner whose collector
+// threads are starved, the main thread finishes their sweeping and marking in
+// whatever step allocates next (seen on CI: one step of the ?all=1 page read
+// 72.6 ms of thread CPU after its 74.2 ms of pauses, while the whole page
+// built in one turn took 67 ms). A step's own work repeats on every walk and
+// that runtime work does not, so each step is read as its least over `walks`
+// walks and the longest of those is pinned.
+async function stepCpuWalk(makeSteps) {
+  const steps = makeSteps();
+  const windows = [];
+  let r;
+  gcPauses.length = 0;
+  do { const t = performance.now(), c0 = threadCpuMs(); r = steps.next(); windows.push([t, performance.now(), threadCpuMs() - c0]); } while (!r.done);
+  // The observer delivers gc entries on a later task.
+  await new Promise((res) => setTimeout(res, 50));
+  return { value: r.value, steps: windows.map(([a0, b0, cpu0]) => {
+    let inGc = 0;
+    for (const [s0, e0] of gcPauses) inGc += Math.max(0, Math.min(b0, e0) - Math.max(a0, s0));
+    return { wall: b0 - a0, gc: inGc, net: Math.min(b0 - a0, cpu0) - inGc };
+  }) };
+}
+async function longestStep(makeSteps, walks = 3) {
+  const runs = [];
+  for (let k = 0; k < walks; k++) runs.push(await stepCpuWalk(makeSteps));
+  const count = runs[0].steps.length;
+  const sameShape = runs.every((w) => w.steps.length === count);
+  let longest = 0, single = 0, longestRaw = 0, longestGc = 0;
+  for (let i = 0; i < count; i++) longest = Math.max(longest, Math.min(...runs.map((w) => w.steps[i]?.net ?? Infinity)));
+  for (const w of runs) for (const st of w.steps) {
+    single = Math.max(single, st.net);
+    if (st.wall > longestRaw) { longestRaw = st.wall; longestGc = st.gc; }
+  }
+  return { value: runs[0].value, values: runs.map((w) => w.value), count, sameShape, longest, single, longestRaw, longestGc };
+}
+// The step reading itself, on synthetic walks of 30 steps: a full collection
+// inside a step is subtracted; work the runtime adds to one walk's step is
+// not the step's; work the step does on every walk still fails the pin.
+{
+  const cpuSpin = (ms) => { const c = threadCpuMs(); while (threadCpuMs() - c < ms) { /* this thread's CPU */ } };
+  setFlagsFromString("--expose-gc");
+  const gc = runInNewContext("gc");
+  const walk = (at, fn) => function* () { for (let i = 0; i < 30; i++) { if (i === at) fn(); yield; } return "done"; };
+  // A live heap built before the walk, so the step holds only the collection.
+  let live = Array.from({ length: 6_000_000 }, (_, i) => ({ i, p: null }));
+  const inGc = await longestStep(walk(10, () => gc()));
+  ok(live.length > 0 && inGc.longestRaw > STEP_BOUND_MS && inGc.longestGc > STEP_BOUND_MS && heldUnder(inGc.longest, STEP_BOUND_MS), `a full collection inside a step is the collector's, not the step's (longest ${inGc.longest.toFixed(1)} ms of thread CPU, one walk's worst ${inGc.single.toFixed(1)} ms; longest raw step ${inGc.longestRaw.toFixed(1)} ms, ${inGc.longestGc.toFixed(1)} ms of it the collector; ${STEP.note})`);
+  live = null;
+  let walkNo = 0;
+  const once = await longestStep(() => { walkNo++; return walk(10, () => { if (walkNo === 2) cpuSpin(3 * STEP_BOUND_MS); })(); });
+  ok(!heldUnder(once.single, STEP_BOUND_MS) && heldUnder(once.longest, STEP_BOUND_MS), `${3 * STEP_BOUND_MS} ms of runtime work in one walk's step is not the step's (that walk read ${once.single.toFixed(1)} ms; the step's least over three walks ${once.longest.toFixed(1)} ms)`);
+  const every = await longestStep(walk(10, () => cpuSpin(2 * STEP_BOUND_MS)));
+  ok(!heldUnder(every.longest, STEP_BOUND_MS), `${2 * STEP_BOUND_MS} ms of work the step does on every walk fails the step pin (read ${every.longest.toFixed(1)} ms; ${STEP.note})`);
 }
 
 // --- 1a. sales summaries
@@ -348,21 +406,8 @@ const mp = await import("../src/market-page.js");
     // the garbage collector's tasks, which run between turns either way).
     // A collector pause that lands inside a step is the runtime's, not the
     // step's work, so it is subtracted the same way blockOf does.
-    const steps = mp._marketPageAllStepsForTest("https://agent402.tools", opts);
-    const windows = [];
-    let count = 0, r;
-    gcPauses.length = 0;
-    do { const t = performance.now(), c0 = threadCpuMs(); r = steps.next(); windows.push([t, performance.now(), threadCpuMs() - c0]); count++; } while (!r.done);
-    await new Promise((res) => setTimeout(res, 50));
-    let longest = 0, longestRaw = 0, longestGc = 0;
-    for (const [a0, b0, cpu0] of windows) {
-      let inGc = 0;
-      for (const [s0, e0] of gcPauses) inGc += Math.max(0, Math.min(b0, e0) - Math.max(a0, s0));
-      if (b0 - a0 > longestRaw) { longestRaw = b0 - a0; longestGc = inGc; }
-      // A step's work in this thread's CPU, as blockOf reads a gap.
-      longest = Math.max(longest, Math.min(b0 - a0, cpu0) - inGc);
-    }
-    ok(r.value === whole && count > 20 && heldUnder(longest, STEP_BOUND_MS), `...in ${count} steps, the longest ${longest.toFixed(1)} ms of thread CPU (${STEP.note}; longest raw step ${longestRaw.toFixed(1)} ms, ${longestGc.toFixed(1)} ms of it the collector)`);
+    const st = await longestStep(() => mp._marketPageAllStepsForTest("https://agent402.tools", opts));
+    ok(st.sameShape && st.values.every((v) => v === whole) && st.count > 20 && heldUnder(st.longest, STEP_BOUND_MS), `...in ${st.count} steps, the longest ${st.longest.toFixed(1)} ms of thread CPU, each step its least over three walks (${STEP.note}; one walk's worst step ${st.single.toFixed(1)} ms; longest raw step ${st.longestRaw.toFixed(1)} ms, ${st.longestGc.toFixed(1)} ms of it the collector)`);
   }
   ok(mp.marketPage("base", "https://agent402.tools", { snapshot: labelled, leaderboardSnap }) === await mp.marketPageAsync("base", "https://agent402.tools", { snapshot: labelled, leaderboardSnap }), "a chain view through marketPageAsync is marketPage's");
 }
