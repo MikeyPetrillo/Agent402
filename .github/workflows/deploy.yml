@@ -1316,6 +1316,8 @@ jobs:
           t node scripts/test-page-change-kit.js
           # email-guard (offline: MIME reader, HTML worker, header, link and text signals)
           t node scripts/test-email-guard.js
+          # Office files (offline: xlsx, docx and pptx read back by an independent zip reader; caps, no-formula, no-egress, timing)
+          t node scripts/test-office-create.js
           # Memory v2 unit tests (grants, counters, audit chain, recall)
           t node scripts/test-memory.js
           # The local embedding's token hash: unchanged for strings, string-coerced and bounded.

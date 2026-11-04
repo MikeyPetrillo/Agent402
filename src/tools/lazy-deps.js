@@ -27,10 +27,13 @@ export const loadJimp = lazyImport(() => import("jimp"));
 export const loadMusicMetadata = lazyImport(() => import("music-metadata"));
 export const loadTesseract = lazyImport(() => import("tesseract.js"));
 
-/** The packages above, by name: the boot-graph test asserts none is loaded at listen. */
+/** The packages above, by name, plus the Office builders' libraries (loaded
+ *  only inside office-worker.js, never on the main thread): the boot-graph
+ *  test asserts none is loaded at listen. */
 export const LAZY_PACKAGES = [
   "jsdom", "@mozilla/readability", "turndown", "@mixmark-io/domino", "pdf-parse", "pdfjs-dist",
   "@napi-rs/canvas", "pdf-lib", "@zxing/library", "jsqr", "jimp", "music-metadata", "tesseract.js",
+  "write-excel-file", "docx", "pptxgenjs",
 ];
 
 const WARMERS = [loadJsdom, loadReadability, loadTurndown, loadPdfParse, loadPdfLib, loadZxing, loadJsQR, loadJimp, loadMusicMetadata, loadTesseract];

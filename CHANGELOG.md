@@ -13,6 +13,23 @@ Gateway:
   carries. A call naming it is served as itself until that day, then by
   google/gemini-3.1-flash-lite at the tier and price of the route called,
   the swap named in agent402_model_substituted.
+Tools:
+- New `xlsx-create`, `docx-create` and `pptx-create` ($0.003 each, wallet
+  only) turn structured data into a real Office file in one call, answered as
+  base64 with its size, content type and filename, the same shape as the PDF
+  tools. `xlsx-create` takes sheets of rows (arrays, or objects with an
+  optional column order) with a bold, filled, frozen header row by default,
+  optional header styling, column widths (auto-sized otherwise) and number
+  formats; every cell is a literal value and text that starts with = + - or @
+  is written as text with the Text format, never a formula. `docx-create`
+  takes a title and markdown (headings, emphasis, lists, task lists, tables,
+  code blocks, quotes, rules, links). `pptx-create` takes slides with a
+  title, bullets in up to five levels, an optional table and speaker notes,
+  plus an optional title slide. Nothing is fetched: a link is written as a
+  hyperlink and an image as its alt text linked to its address. Each call is
+  bounded (sheets, rows, cells, slides, bullets, table sizes, 100,000
+  characters of text, an 8 MB file), a cap answers 400 naming it, and the
+  file is built in a worker thread.
 Surfaces:
 - The home page is five blocks: the hero with the live payments panel, the
   agents and people doors (the free tier in two lines, Decide as a table

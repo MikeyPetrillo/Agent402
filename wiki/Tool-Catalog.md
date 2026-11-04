@@ -23,6 +23,7 @@ These exist because an agent mid-task cannot give itself a browser, a paid searc
 | `screenshot` | $0.004 | PNG of any public page (viewport or full-page) |
 | `extract` | $0.01 | Main-article extraction → clean markdown (title, byline, word count) |
 | `pdf-info`, `pdf-rotate`, `pdf-extract-pages`, `pdf-merge`, `images-to-pdf`, `pdf`, `pdf-to-markdown` | $0.001–$0.01 | Read and manipulate PDFs |
+| `xlsx-create`, `docx-create`, `pptx-create` | $0.003 | Build a real Excel workbook, Word document or PowerPoint deck in one call from rows, markdown or slide outlines; the file comes back as base64, every spreadsheet cell is a literal value (never a formula), and nothing is fetched |
 | `media-info`, `audio-convert`, `audio-normalize` | $0.005–$0.02 | Real ffmpeg: probe, transcode to mp3, EBU R128 loudness normalize |
 | `memory-*` (11 tools) | $0.001–$0.003 | Durable wallet-keyed state + cross-wallet coordination. See [[Memory and Coordination]] |
 | `x402-quote`, `x402-verify`, `usdc-balance`, `tx-status`, `gas-estimate`, `transfer-authorization`, `ens-resolve` | $0.001–$0.004 | **Non-custodial x402 payment toolkit** - decode 402 quotes, verify settlements, read balances/gas/tx, build EIP-3009 authorizations, resolve ENS. Multi-chain: Base, Polygon, Arbitrum, Optimism, Ethereum, Monad, Celo, Avalanche, Sei, Arc. See [[Payments and x402]] |
