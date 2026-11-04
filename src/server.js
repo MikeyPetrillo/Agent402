@@ -681,7 +681,7 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, payerHasPaidSale } from "./sales-ledger.js";
+import { answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, payerHasPaidSale, firstPaidSaleAfterAsync } from "./sales-ledger.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
@@ -6120,8 +6120,9 @@ app.get("/__operator/refunds.json", async (req, res) => {
     // an abandoned run is charged and appears above as owed with httpStatus 499.
     hangupForgiveness: hangupForgivenessStatus(),
     // First-call allowance grants (src/first-call-allowance.js): switch,
-    // caps, today's grants and list-price USD, refusals by reason.
-    firstCallAllowance: await firstCallAllowanceStatus().catch(() => null),
+    // caps, today's grants and list-price USD, refusals by reason, and
+    // returnedPayers (granted wallets that later paid; cached, operator only).
+    firstCallAllowance: await firstCallAllowanceStatus({ returned: firstPaidSaleAfterAsync }).catch(() => null),
     // Settle failures that named a transaction, open until the chain says
     // whether it landed (src/late-settlements.js); a landed one becomes an
     // owed row above.
