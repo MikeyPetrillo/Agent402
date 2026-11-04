@@ -1,5 +1,5 @@
 // Machine Ledger — Docs landing page (/docs)
-// Quickstart, a #why pointer to the home page (/why redirects to /#why), payment flow, three ways in, free tier,
+// Quickstart, payment flow, three ways in, free tier, the full "Why pay here" rows (#why),
 // examples (#examples; /use-cases redirects to it), badges (#badges; /badges redirects to it), reference endpoints -
 // rendered inside the SAME sidebar+content shell every /docs/:slug wiki page
 // uses (src/docs.js), so the docs surface reads as one site with persistent
@@ -15,7 +15,7 @@ import { RAILS_PAREN } from "./rails.js";
 import { toolList } from "./pages.js";
 import { isComputePayable } from "./pow.js";
 import { decideConfig } from "./decide/config.js";
-import { whyDocsStubHtml } from "./why.js";
+import { whyDocsSectionHtml, whyJsonLd, WHY_SECTION_CSS } from "./why.js";
 import { examplesSectionHtml, examplesJsonLd, EXAMPLES_SECTION_CSS } from "./use-cases.js";
 import { badgesSectionHtml, BADGES_SECTION_CSS } from "./badges.js";
 
@@ -87,11 +87,11 @@ export function ledgerDocsPage(baseUrl, catalog) {
       url: baseUrl,
     },
   };
-  // The "Why pay here" points live on the home page (/#why); this page keeps
-  // an id="why" pointer so old /docs#why links still land on something.
-  const jsonLd = [articleLd, examplesJsonLd(baseUrl)];
+  // The "Why pay here" points render in full here (#why); the home page shows
+  // three short claims that link to them.
+  const jsonLd = [articleLd, examplesJsonLd(baseUrl), whyJsonLd(baseUrl)];
 
-  const extraCss = `${DOCS_LAYOUT_CSS}
+  const extraCss = `${DOCS_LAYOUT_CSS}${WHY_SECTION_CSS}
   #quickstart, #why, #how, #add, #free, #gateway, #endpoints { scroll-margin-top: 110px; }${EXAMPLES_SECTION_CSS}${BADGES_SECTION_CSS}`;
 
   const main = `
@@ -114,7 +114,7 @@ node demo.js
       <p style="font-size:var(--fs-md);color:var(--muted);max-width:76ch;margin:0 0 44px;">The demo signs on the EVM rails. To pay on Solana, Stellar or Algorand, see <a href="/docs/Paying-with-x402" style="color:var(--ink);text-decoration:underline;text-underline-offset:3px;">Paying with x402</a>.</p>
       </section>
 
-      ${whyDocsStubHtml()}      <!-- HOW -->
+      <!-- HOW -->
       <section>
       <h2 id="how" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 18px;">How payment works.</h2>
       <div style="border:1px solid var(--hairline);background:var(--card);margin-bottom:44px;">
@@ -198,7 +198,7 @@ ${gateway.rows}
       </div>
       </section>
 
-`; })() : ""}      ${examplesSectionHtml(catalog)}
+`; })() : ""}      ${whyDocsSectionHtml()}      ${examplesSectionHtml(catalog)}
       ${badgesSectionHtml(baseUrl)}
       <!-- ENDPOINTS -->
       <section>

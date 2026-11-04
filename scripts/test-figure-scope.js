@@ -379,8 +379,10 @@ const tmp = (p) => { const d = mkdtempSync(join(tmpdir(), "a402-scope-")); dirs.
   const home = await readFile(new URL("../src/ledger-home.js", import.meta.url), "utf8");
   ok(!/Every x402 seller we can crawl/i.test(home),
     "the homepage no longer claims the whole board over a band that renders twelve rows");
-  ok(/head of the board/.test(home),
-    "...and uses the same sentence /leaderboard does, so one shape is swept, not two");
+  // Since the 2026-11 trim the home page renders no board rows at all; it
+  // links the full board on /leaderboard instead.
+  ok(!/OTHER SELLERS|leaderboardRowsHtml/.test(home) && /href="\/leaderboard"/.test(home),
+    "...and renders no partial board, only a link to the full one on /leaderboard");
 }
 
 for (const d of dirs) rmSync(d, { recursive: true, force: true });

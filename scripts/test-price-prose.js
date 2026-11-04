@@ -196,7 +196,7 @@ for (const [name, html] of [["/reports", humanReportsPage("https://agent402.tool
   ok(/POST \/v1\/metered\/chat\/completions<\/span><span[^>]*>from \$0\.0013</.test(home), "the homepage gateway row states the catalog price");
   ok(/GET \/api\/answer<\/span><span[^>]*>\$0\.081</.test(home), "...and the answer row");
   ok(/POST \/api\/route\/execute<\/span><span[^>]*>from \$0\.077</.test(home), "...and the route-execute row (a flat tier price that covers the seller)");
-  ok(home.includes("GET /api/bestsellers · $0.0071"), "...and the bestsellers kicker");
+  ok(/GET \/api\/bestsellers<\/span><span[^>]*>\$0\.0071</.test(home), "...and the bestsellers row");
   const pricing = ledgerPricingPage("https://agent402.tools", odd);
   ok(pricing.includes("from $0.033"), "the /pricing browser row is the cheaper of render and screenshot, from the catalog");
   ok(pricing.includes("$0.055") && pricing.includes("$0.006") && pricing.includes("$0.009"), "...and extract, payments and memory read from the catalog");

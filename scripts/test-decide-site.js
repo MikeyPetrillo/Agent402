@@ -25,7 +25,7 @@ const links = (html) => (html.match(/href="\/decide(?:#[a-z]+)?"/g) || []).lengt
 setDecideLive(false);
 ok(decideLive() === false, "flag off");
 ok(links(shell() + ledgerFooterCompact()) === 0, "nav, mobile menu and footer carry no /decide link when off");
-ok(!home({}).includes('class="hm-milled hm-decide"'), "homepage renders no Decide door when off");
+ok(!home({}).includes('class="hm-decide"') && !home({}).includes("/api/decide"), "homepage renders no Decide row when off");
 ok(!sitemapPages(BASE, {}).includes("/decide<"), "sitemap-pages omits /decide when the tool is absent");
 ok(!sitemapXml(BASE, {}).includes("/decide<"), "sitemap.xml omits /decide when the tool is absent");
 
@@ -36,8 +36,14 @@ ok(s.includes('class="ml-nav-link" href="/decide">Decide</a>'), "top nav carries
 ok(s.includes("decide · a plan for any job"), "mobile menu carries Decide");
 ok(/>decide<\/a>/.test(ledgerFooterCompact()), "footer carries decide");
 const h = home({});
-ok(h.includes('class="hm-milled hm-decide"') && h.includes("Describe the job. Get the plan."), "homepage renders the Decide door when on");
-ok(h.indexOf('class="hm-doors"') < h.indexOf('class="hm-milled hm-decide"'), "the door sits below the two existing doors");
+{
+  // Since the 2026-11 home trim Decide is a row of the agents table, priced from its config.
+  const row = (h.match(/<a class="hm-decide" href="\/decide"[^>]*><span>POST \/api\/decide<\/span><span[^>]*>from ([^<]+)<\/span><\/a>/) || [])[1];
+  const usd = (n) => `$${Number(n).toFixed(3).replace(/0+$/, "").replace(/\.$/, "")}`;
+  ok(row === usd(decideConfig().prices.quick), `homepage renders the Decide row when on, priced from config (got ${row})`);
+  const doors = h.indexOf('class="hm-doors"'), table = h.indexOf('class="hm-ptable"', doors);
+  ok(doors >= 0 && table > doors && h.indexOf('class="hm-decide"') > table && h.indexOf('class="hm-decide"') < h.indexOf("For people"), "the row sits inside the agents table, under the two doors' agent half");
+}
 ok(sitemapPages(BASE, withDecide).includes(`${BASE}/decide<`), "sitemap-pages lists /decide when the tool is live");
 
 // ---- the page quotes the config, never a typed figure ----
