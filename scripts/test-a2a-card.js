@@ -135,5 +135,25 @@ ok(A2A_WELL_KNOWN_PATHS[0] === "/.well-known/agent-card.json" && A2A_WELL_KNOWN_
   if (saved === undefined) delete process.env.ERC8004_AGENT_ID; else process.env.ERC8004_AGENT_ID = saved;
 }
 
+// a2a-card-fetch answers the address guard's refusal for a non-public target,
+// not "no card found": the same 400 and sentence safeFetch gives everywhere.
+// A local server stands in for an internal service and must see no request.
+{
+  const http = await import("node:http");
+  const { UNRESOLVED_OR_PRIVATE } = await import("../src/tools/fetch-guard.js");
+  const { NETWORK_TOOLS } = await import("../src/tools/network-kit.js");
+  const fetchTool = NETWORK_TOOLS.find((t) => t.slug === "a2a-card-fetch");
+  let hits = 0;
+  const srv = http.createServer((req, res) => { hits++; res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(SAMPLE_AGENT_CARD)); });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  const port = srv.address().port;
+  for (const url of [`http://127.0.0.1:${port}/`, `http://localhost:${port}/`, `http://127.0.0.1:${port}/card.json`, `http://[::ffff:0:7f00:1]:${port}/`, "http://169.254.169.254/"]) {
+    const e = await fetchTool.handler({ url }).then(() => null, (x) => x);
+    ok(e && e.statusCode === 400 && e.message === UNRESOLVED_OR_PRIVATE, `a2a-card-fetch refuses ${url} with the guard's 400 (${e?.statusCode} ${e?.message})`);
+  }
+  ok(hits === 0, `the local server was never reached (${hits} hits)`);
+  srv.close();
+}
+
 console.log(`\n${failed ? "FAILED" : "OK"}: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
