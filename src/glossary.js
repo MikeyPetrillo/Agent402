@@ -42,7 +42,7 @@ export const GLOSSARY = [
     see: [["/what-is-mpp#how", "how one MPP payment works"]] },
   { id: "facilitator", name: "Facilitator", alt: ["x402 facilitator"],
     def: "A service that verifies a signed payment authorization and broadcasts the on-chain transfer on the seller's behalf, so the seller needs no node, no gas and no key management. On x402 the facilitator settles EIP-3009 authorizations; different facilitators cover different chains, and a seller can hold several.",
-    see: [["#settlement", "when Agent402 settles"], ["/revenue", "settlement by rail, live"]] },
+    see: [["/glossary#settlement", "when Agent402 settles"], ["/revenue", "settlement by rail, live"]] },
   { id: "eip-3009", name: "EIP-3009 (transferWithAuthorization)", alt: ["gasless USDC authorization"],
     def: "The token standard that makes x402 and MPP's evm method possible: the payer signs an off-chain authorization for an exact amount to an exact recipient within a validity window, and anyone (the facilitator) can submit it on chain. The payer pays no gas and never hands over a key. USDC implements it on every EVM rail Agent402 accepts.",
     see: [["/what-is-x402#how", "how one payment works"]] },
