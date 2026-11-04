@@ -33,7 +33,7 @@ import { promisify } from "node:util";
 import { createDocumentCache } from "./json-document.js";
 import { shared, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { createListingsStore, listingsStoreEnabled } from "./index-listings-pg.js";
-import { trackStoreReady, leased, stateDbEnabled, stateQuery, stateDbSchema, records, importOnce, pgJsonTextMayChange } from "./state-db.js";
+import { trackStoreReady, leased, stateDbEnabled, stateQuery, stateDbSchema, records, importOnce, pgJsonTextMayChange, largeRowTimeoutMs, isStatementTimeout } from "./state-db.js";
 import { retryingLoad } from "./store-retry.js";
 
 // The last crawl's probe examples per origin (src/probe-example.js), memory
@@ -7671,6 +7671,8 @@ async function persistIndexCacheToStateDb(entries, lines, hashes = []) {
            ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()
            WHERE ${NEWER_OR_SAME_SQL("r.body", "EXCLUDED.body")}`,
           [INDEX_RECORDS, ids[0], bytes || bodies[0]],
+          // A row of tens of megabytes outlasts the default statement limit.
+          { timeoutMs: largeRowTimeoutMs((bytes || bodies[0]).length) },
         );
       } else {
         await stateQuery(
@@ -7745,6 +7747,7 @@ async function importIndexCacheFile() {
        SELECT $1, u.id, u.body FROM unnest($2::text[], $3::jsonb[]) AS u(id, body)
        ON CONFLICT (collection, id) DO NOTHING`,
     ids.length === 1 && bodies[0].length >= PG_SINGLE_ROW_BYTES ? [INDEX_RECORDS, ids[0], bodies[0]] : [INDEX_RECORDS, ids, bodies],
+    ids.length === 1 && bodies[0].length >= PG_SINGLE_ROW_BYTES ? { timeoutMs: largeRowTimeoutMs(bodies[0].length) } : {},
     );
     rows += ids.length;
     await new Promise((r) => setImmediate(r));
@@ -7761,6 +7764,19 @@ async function importIndexCacheFile() {
 export async function warmStartIndexFromStateDb() {
   try { return await warmStartIndexOnce(); } catch { return warmStartLastCount; }
 }
+/** One warm-start page after `after`: WARM_START_BATCH rows, or, when that
+ *  page outlasts the statement limit (a very large row in it), the next row
+ *  alone under the large-row limit. `list` is the records lister (a test seam). */
+async function readWarmPage(after, list = (o) => records.list(INDEX_RECORDS, o)) {
+  try {
+    return { page: await list({ limit: WARM_START_BATCH, after }), single: false };
+  } catch (e) {
+    if (!isStatementTimeout(e)) throw e;
+    return { page: await list({ limit: 1, after, timeoutMs: largeRowTimeoutMs(Infinity) }), single: true };
+  }
+}
+/** Test hook: the warm start's page read with a stub lister. */
+export function _readWarmPageForTests(after, list) { return readWarmPage(after, list); }
 let warmStartLastCount = 0;
 /** One warm start that THROWS on a database error (after logging what it folded). */
 async function warmStartIndexOnce() {
@@ -7773,7 +7789,10 @@ async function warmStartIndexOnce() {
     let after = "";
     const tick = sliceClock();
     for (;;) {
-      const page = await records.list(INDEX_RECORDS, { limit: WARM_START_BATCH, after });
+      // A page holding one very large row can outlast the default statement
+      // limit: that page is read again one row at a time under the large-row
+      // limit, so the warm start passes the row instead of stopping at it.
+      const { page, single } = await readWarmPage(after);
       if (!page.length) break;
       const turn0 = performance.now();
       for (const { id, body } of page) {
@@ -7789,7 +7808,7 @@ async function warmStartIndexOnce() {
       maxTurnMs = Math.max(maxTurnMs, performance.now() - turn0);
       pages++;
       after = page[page.length - 1].id;
-      if (page.length < WARM_START_BATCH) break;
+      if (!single && page.length < WARM_START_BATCH) break;
       await new Promise((r) => setImmediate(r));
     }
   } catch (e) {

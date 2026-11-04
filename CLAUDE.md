@@ -51,6 +51,9 @@ LLC: credit the entity, never a personal name.
   one; the file is imported once). Every scheduled loop runs under `leased(name, ...)`, so two
   containers never run the same tick; a store registers its first load with `trackStoreReady` and
   the server awaits `stateStoresReady` before it listens. `/api/gateway-status` reports `stateDb`.
+  A statement carrying a large row (the index's one-row upsert) runs under `largeRowTimeoutMs`: the
+  default limit plus `STATE_DB_MS_PER_MB` (500) per megabyte past the first, at most
+  `STATE_DB_LARGE_ROW_MAX_MS` (120000); a warm-start page that times out is read again one row at a time.
 - `src/status.js`, `src/status-store.js`: `/status`, measured from outside production.
 - `src/stats.js`, `src/sales-ledger.js`, `src/seo.js`, `src/pages.js`, `src/guides.js`,
   `src/privacy.js`, `src/terms.js`, `src/security-page.js`, `src/company.js`.
