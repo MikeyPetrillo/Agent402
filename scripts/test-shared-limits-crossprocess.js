@@ -94,7 +94,7 @@ const done = (code) => { for (const c of children) { try { c.kill("SIGKILL"); } 
     }
     ok((await page(pb, "a402_op=" + "ab".repeat(32))) === 404, "control: a well-formed session id minted nowhere is refused on B");
     ok((await page(pr, cookie)) === 404, "a container running a rotated operator token refuses the session though it is in the shared store");
-    const out = await fetch(`http://127.0.0.1:${pa}/__operator/logout`, { method: "POST", headers: { cookie }, redirect: "manual" });
+    const out = await fetch(`http://127.0.0.1:${pa}/__operator/logout`, { method: "POST", headers: { cookie, "sec-fetch-site": "same-origin" }, redirect: "manual" });
     ok(out.status === 303, `logout on A redirects (${out.status})`);
     ok((await page(pa, cookie)) === 404, "the logged-out session is refused on A");
     ok((await page(pb, cookie)) === 404, "and on B, which had cached it as valid a moment ago");

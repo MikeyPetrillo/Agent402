@@ -2867,6 +2867,7 @@ app.use("/__operator", (req, res, next) => {
   res.set("Cache-Control", "no-store, private");
   res.set("Pragma", "no-cache");
   res.set("Vary", "Cookie, Authorization");
+  if (operatorWriteRefused(req)) return res.status(403).json({ error: "operator writes from a browser session must come from this site's own pages" });
   if (!OP_SESSION_SHARED) return next();
   syncOperatorSession(req).then(() => next(), () => next());
 });
@@ -3979,10 +3980,22 @@ app.get("/reports/sample/:product", (req, res) => {
 // Public reports (buyer's choice, src/human-checkout.js readPublicReport):
 // the same viewer, indexable, own title/preview/JSON-LD, buy box for the
 // reader's own subject. Served with or without Stripe (files on the volume).
+// The JSON has its own URLs (/reports/public/<id>.json and the /api route),
+// each one representation per cache key. A JSON answer negotiated on the page
+// URL by Accept is marked private: a shared cache that keys on the URL alone
+// keeps the page there, never the JSON.
+const PUBLIC_REPORT_JSON_RE = /^(.+)\.json$/;
 app.get("/reports/public/:publicId", async (req, res, next) => {
-  if (wantsJson(req)) { req.url = `/api/reports/public/${encodeURIComponent(String(req.params.publicId || ""))}`; return next(); }
+  const raw = String(req.params.publicId || "");
+  const asFile = PUBLIC_REPORT_JSON_RE.exec(raw);
+  if (asFile || wantsJson(req)) {
+    if (!asFile) { res.locals.publicReportNegotiated = true; res.vary("Accept"); }
+    req.url = `/api/reports/public/${encodeURIComponent(asFile ? asFile[1] : raw)}`;
+    return next();
+  }
+  res.vary("Accept");
   if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).type("html").send("<p>Too many requests, please slow down.</p>");
-  res.set("Link", `</api/reports/public/${encodeURIComponent(String(req.params.publicId || ""))}>; rel="alternate"; type="application/json"`);
+  res.set("Link", `</reports/public/${encodeURIComponent(raw)}.json>; rel="alternate"; type="application/json"`);
   const r = await readPublicReportFresh(String(req.params.publicId || ""));
   if (!r) return notFoundPage(res, { what: "Public report", href: "/reports", label: "All reports" });
   const canonical = `${BASE_URL}/reports/public/${r.publicId}`;
@@ -4002,7 +4015,7 @@ app.get("/api/reports/public/:publicId", async (req, res) => {
   if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).json({ status: "error", error: "Too many requests, please slow down." });
   const r = await readPublicReportFresh(String(req.params.publicId || ""));
   if (!r) return res.status(404).json({ status: "not_found" });
-  res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=900").json(r);
+  res.set("Cache-Control", res.locals.publicReportNegotiated ? "private, max-age=300" : "public, max-age=300, stale-while-revalidate=900").json(r);
 });
 app.get("/api/reports/sample/:product", (req, res) => {
   const j = sampleJson(String(req.params.product || ""));
@@ -5383,6 +5396,14 @@ const getOperatorToken = (req, { headerOnly = false } = {}) => {
 // expire after OP_SESSION_TTL_MS, and logout (or a token rotation) revokes them
 // without touching the root token.
 const OP_SESSION_TTL_MS = 8 * 3600 * 1000;
+// Inside that absolute lifetime, a session also ends after
+// OPERATOR_SESSION_IDLE_SECONDS (default 1800) with no authenticated request:
+// each one moves the idle deadline forward, never past the absolute expiry.
+// The shared copy of the idle deadline is written at most once per
+// OP_SESSION_TOUCH_MS per session, so another container may end an idle
+// session up to that much early, never late.
+const OP_SESSION_IDLE_MS = Math.min(OP_SESSION_TTL_MS, Math.max(1, Number(process.env.OPERATOR_SESSION_IDLE_SECONDS) || 1800) * 1000);
+const OP_SESSION_TOUCH_MS = Math.min(60_000, Math.floor(OP_SESSION_IDLE_MS / 4));
 // Shared across replicas (src/shared-limits.js): a session is a flag in the
 // shared store, keyed by a digest of the operator token and its id (never the
 // id itself) and valued with its expiry, written on login and cleared on
@@ -5396,26 +5417,36 @@ const OP_SESSION_TTL_MS = 8 * 3600 * 1000;
 const OP_SESSION_SHARED = sharedLimitsEnabled();
 const OP_SID_RE = /^[0-9a-f]{64}$/;
 const opSessionKey = (sid) => createHash("sha256").update(OPERATOR_TOKEN).update("\0").update(String(sid)).digest("hex");
-const operatorSessions = new Map(); // sid -> expiresAt (ms)
+const operatorSessions = new Map(); // sid -> { exp, idle, wroteIdle } (ms)
+const opSessionLive = (s, now) => Boolean(s) && now <= s.exp && now <= s.idle;
 async function newOperatorSession() {
   const sid = randomBytes(32).toString("hex");
-  const exp = Date.now() + OP_SESSION_TTL_MS;
-  operatorSessions.set(sid, exp);
+  const now = Date.now();
+  const exp = now + OP_SESSION_TTL_MS;
+  const idle = Math.min(exp, now + OP_SESSION_IDLE_MS);
+  operatorSessions.set(sid, { exp, idle, wroteIdle: now });
   // Awaited (bounded by the store's op timeout): the browser's next request
   // may land on the other container.
-  if (OP_SESSION_SHARED) await sharedLimitsWrite("operator-session", sharedLimits.flagSet("opsess", opSessionKey(sid), exp));
+  if (OP_SESSION_SHARED) {
+    await sharedLimitsWrite("operator-session", sharedLimits.flagSet("opsess", opSessionKey(sid), exp));
+    await sharedLimitsWrite("operator-session", sharedLimits.flagSet("opsess-idle", opSessionKey(sid), idle));
+  }
   return sid;
 }
 async function revokeOperatorSession(sid) {
   if (!sid) return;
   operatorSessions.delete(sid);
-  if (OP_SESSION_SHARED) await sharedLimitsWrite("operator-session", sharedLimits.flagSet("opsess", opSessionKey(sid), 0));
+  if (OP_SESSION_SHARED) {
+    await sharedLimitsWrite("operator-session", sharedLimits.flagSet("opsess", opSessionKey(sid), 0));
+    await sharedLimitsWrite("operator-session", sharedLimits.flagSet("opsess-idle", opSessionKey(sid), 0));
+  }
 }
 /** Before the operator routes: the cookie's session is read from the shared
- *  store and this process's map takes the answer (an expiry, or nothing: it
- *  was revoked or minted nowhere). A store that does not answer leaves the map
- *  as it stands. Only a cookie of the right shape, from an address with
- *  guessing budget left, reaches the store. */
+ *  store and this process's map takes the answer (an expiry and an idle
+ *  deadline, or nothing: it was revoked, went idle or was minted nowhere). A
+ *  store that does not answer leaves the map as it stands. Only a cookie of
+ *  the right shape, from an address with guessing budget left, reaches the
+ *  store. */
 async function syncOperatorSession(req) {
   if (!OP_SESSION_SHARED) return;
   const sid = readCookie(req, OPERATOR_COOKIE);
@@ -5423,19 +5454,53 @@ async function syncOperatorSession(req) {
   if (operatorAttemptLimiter.peek(operatorAttemptIp(req)).limited) return;
   const r = await sharedLimits.flagGet("opsess", opSessionKey(sid));
   if (!r.ok) { noteSharedLimitsDegraded("operator-session", r); return; }
-  if (r.until > Date.now()) operatorSessions.set(sid, r.until); else operatorSessions.delete(sid);
+  const now = Date.now();
+  if (!(r.until > now)) { operatorSessions.delete(sid); return; }
+  const ri = await sharedLimits.flagGet("opsess-idle", opSessionKey(sid));
+  if (!ri.ok) { noteSharedLimitsDegraded("operator-session", ri); return; }
+  // A touch this process has not yet written may be later than the store's.
+  const local = operatorSessions.get(sid);
+  const s = { exp: r.until, idle: Math.max(ri.until || 0, local?.idle || 0), wroteIdle: local?.wroteIdle || 0 };
+  if (opSessionLive(s, now)) operatorSessions.set(sid, s); else operatorSessions.delete(sid);
 }
+/** A valid session's use moves its idle deadline forward (never past its
+ *  absolute expiry); the shared copy follows at most once per touch interval. */
 function operatorSessionValid(sid) {
   if (!sid) return false;
-  const exp = operatorSessions.get(sid);
-  if (!exp) return false;
-  if (Date.now() > exp) { operatorSessions.delete(sid); return false; }
+  const s = operatorSessions.get(sid);
+  if (!s) return false;
+  const now = Date.now();
+  if (!opSessionLive(s, now)) { operatorSessions.delete(sid); return false; }
+  s.idle = Math.min(s.exp, now + OP_SESSION_IDLE_MS);
+  if (OP_SESSION_SHARED && now - s.wroteIdle >= OP_SESSION_TOUCH_MS) {
+    s.wroteIdle = now;
+    void sharedLimitsWrite("operator-session", sharedLimits.flagSet("opsess-idle", opSessionKey(sid), s.idle));
+  }
   return true;
 }
 setInterval(() => {
   const now = Date.now();
-  for (const [sid, exp] of operatorSessions) if (now > exp) operatorSessions.delete(sid);
-}, 30 * 60 * 1000).unref();
+  for (const [sid, s] of operatorSessions) if (!opSessionLive(s, now)) operatorSessions.delete(sid);
+}, Math.min(30 * 60 * 1000, Math.max(1000, OP_SESSION_IDLE_MS))).unref();
+// A write (any method but GET, HEAD, OPTIONS) that arrives with the session
+// cookie must come from one of our own pages. SameSite=Strict holds the cookie
+// back from other sites only, and every origin under the registrable domain is
+// the same site, so the cookie alone does not show which page sent the write.
+// The browser's Sec-Fetch-Site (same-origin) or the Origin header (equal to
+// BASE_URL's origin) does. A caller whose header token is correct is exempt:
+// a page on another origin cannot set that header, and a script, curl or CI
+// job sends neither Sec-Fetch-Site nor Origin. A request with no cookie is
+// left to the route's own gate (its 404 for a missing credential).
+const OPERATOR_SITE_ORIGIN = (() => { try { return new URL(BASE_URL).origin; } catch { return ""; } })();
+function operatorWriteRefused(req) {
+  const m = req.method;
+  if (m === "GET" || m === "HEAD" || m === "OPTIONS") return false;
+  if (!readCookie(req, OPERATOR_COOKIE)) return false;
+  if (operatorTokenOk(getOperatorToken(req))) return false;
+  if (String(req.headers["sec-fetch-site"] || "").toLowerCase() === "same-origin") return false;
+  const origin = req.headers.origin;
+  return !(OPERATOR_SITE_ORIGIN && typeof origin === "string" && origin === OPERATOR_SITE_ORIGIN);
+}
 // Operator auth: a raw token via header (curl/API), OR a valid session cookie
 // (browser). Both funnel through here so every gated route agrees.
 // Brute-force bound on FAILED credential presentations only.

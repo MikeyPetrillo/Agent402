@@ -135,6 +135,9 @@ Operator-only surfaces live under `/__operator/*` (token-authed); the operator v
 surface reads `X-Operator-Token` only, since `Authorization` there is a buyer's credential.
 Such a route calls `operatorView(req, res)` (server.js): every answer varies on the header, and an
 elevated one is `private, no-store`, so a shared cache never keeps it.
+A browser operator session ends after `OPERATOR_SESSION_IDLE_SECONDS` (default 1800) with no
+request, inside its 8-hour lifetime; a write carrying the session cookie needs Sec-Fetch-Site
+`same-origin` or an Origin equal to BASE_URL's (a header-token caller needs neither).
 
 ## Dev / CI / deploy workflow
 - **Develop on branch `claude/sweet-brown-i99jl3`.** `main` is protected: PR required, never

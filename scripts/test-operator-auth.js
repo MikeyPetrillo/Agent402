@@ -71,7 +71,31 @@ const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.
 
   // 5. Logout is a POST that REVOKES the session server-side (audit R-12).
   ok((await status("/__operator/logout", { method: "GET" })) === 404, "GET /__operator/logout is not a route (no GET side effect)");
-  const logoutRes = await fetch(`${base}/__operator/logout`, { method: "POST", headers: { cookie }, redirect: "manual" });
+  // 4b. A write that rides the cookie must come from our own origin. The
+  //     cookie is SameSite=Strict, which every origin under the registrable
+  //     domain satisfies, so the browser's own Sec-Fetch-Site / Origin decide.
+  {
+    const crossSite = { cookie, origin: "https://live.agent402.tools", "sec-fetch-site": "same-site", "content-type": "application/x-www-form-urlencoded" };
+    const out = await fetch(`${base}/__operator/logout`, { method: "POST", headers: crossSite, body: "x", redirect: "manual" });
+    ok(out.status === 403 && !/a402_op=;/.test(out.headers.get("set-cookie") || ""), `a cookie POST from another origin on the same site is refused (${out.status}) and clears nothing`);
+    ok((await status("/__operator", { headers: { cookie } })) === 200, "...and the session it aimed at is still live");
+    ok((await status("/__operator/monitors/run", { method: "POST", headers: { ...crossSite, "content-type": "text/plain" }, body: "x" })) === 403, "a cross-origin cookie POST never reaches an operator action");
+    ok((await status("/__operator/monitors/run", { method: "POST", headers: { cookie, origin: "https://evil.example", "content-type": "text/plain" }, body: "x" })) === 403, "an Origin of another site with no Sec-Fetch-Site is refused");
+    ok((await status("/__operator/monitors/run", { method: "POST", headers: { cookie, "content-type": "text/plain" }, body: "x" })) === 403, "a cookie POST with neither Origin nor Sec-Fetch-Site is refused");
+    ok((await status("/__operator/monitors/run", { method: "POST", headers: { cookie, origin: "null", "content-type": "text/plain" }, body: "x" })) === 403, "an opaque (null) Origin is refused");
+    const hdrOnly = await status("/__operator/monitors/run", { method: "POST", headers: { "x-operator-token": TOKEN, "content-type": "text/plain" }, body: "x" });
+    ok(hdrOnly !== 403 && hdrOnly !== 404, `a header-token POST with no cookie and no Origin reaches the action (${hdrOnly})`);
+    const bearerOnly = await status("/__operator/monitors/run", { method: "POST", headers: { authorization: `Bearer ${TOKEN}` } });
+    ok(bearerOnly !== 403 && bearerOnly !== 404, `an Authorization: Bearer POST with no Origin reaches the action (${bearerOnly})`);
+    const sameOrigin = await status("/__operator/monitors/run", { method: "POST", headers: { cookie, origin: base, "sec-fetch-site": "same-origin", "content-type": "text/plain" }, body: "x" });
+    ok(sameOrigin === hdrOnly, `a same-origin cookie POST reaches the action like the header token (${sameOrigin})`);
+    const originOnly = await status("/__operator/monitors/run", { method: "POST", headers: { cookie, origin: base, "content-type": "text/plain" }, body: "x" });
+    ok(originOnly === hdrOnly, `a cookie POST whose Origin is this site (no Sec-Fetch-Site) reaches the action (${originOnly})`);
+    ok((await status("/__operator/monitors/run", { method: "POST", headers: { cookie, "x-operator-token": "wrong", "content-type": "text/plain" }, body: "x" })) === 403, "a wrong header token does not exempt a cookie POST");
+    ok((await status("/__operator/monitors/run", { method: "POST" })) === 404, "with no credential at all the route's own gate answers (404)");
+    ok((await status("/__operator", { headers: { cookie, origin: "https://evil.example", "sec-fetch-site": "cross-site" } })) === 200, "a read (GET) is not an operator write and keeps working");
+  }
+  const logoutRes = await fetch(`${base}/__operator/logout`, { method: "POST", headers: { cookie, "sec-fetch-site": "same-origin", origin: base }, redirect: "manual" });
   ok(/a402_op=;/.test(logoutRes.headers.get("set-cookie") || ""), "POST logout clears the cookie");
   ok(logoutRes.status === 303, "POST logout redirects (303) back to login");
   // The revoked session id must no longer authenticate — even presenting the
@@ -270,6 +294,35 @@ const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.
     // It is under /__operator, which the CORS allow-list denies by name.
     const cors = await fetch(`${base}${ev}?origin=https://proof.example.com`, { headers: { origin: "https://evil.example" } });
     ok(!cors.headers.get("access-control-allow-origin"), "seller-evidence is not cross-origin readable");
+  }
+
+  // 8. Idle timeout on top of the absolute lifetime: a second boot with a
+  //    short idle window (OPERATOR_SESSION_IDLE_SECONDS) shows a session in use
+  //    staying live past the window and an unused one ending after it.
+  {
+    const IDLE_S = 3;
+    const port2 = await getFreePort();
+    const base2 = `http://127.0.0.1:${port2}`;
+    const child2 = spawn(process.execPath, ["src/server.js"], {
+      env: { ...process.env, FREE_MODE: "true", PORT: String(port2), AGENT402_OPERATOR_TOKEN: TOKEN, OPERATOR_SESSION_IDLE_SECONDS: String(IDLE_S) },
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+    try {
+      let up2 = false;
+      for (let i = 0; i < 120; i++) { try { if ((await fetch(`${base2}/health`)).ok) { up2 = true; break; } } catch { /* */ } await wait(500); }
+      ok(up2, "the short-idle server booted");
+      const login2 = await fetch(`${base2}/__operator/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: TOKEN }) });
+      const c2 = (login2.headers.get("set-cookie") || "").split(";")[0];
+      ok(login2.status === 200 && /Max-Age=28800/.test(login2.headers.get("set-cookie") || ""), "the cookie keeps the 8-hour absolute lifetime");
+      const page2 = async () => (await fetch(`${base2}/__operator`, { headers: { cookie: c2 }, redirect: "manual" })).status;
+      // Used every second for twice the idle window: still live.
+      let kept = true;
+      for (let i = 0; i < IDLE_S * 2; i++) { await wait(1000); if ((await page2()) !== 200) kept = false; }
+      ok(kept, `a session in use stays live past the idle window (${IDLE_S * 2} s of requests, ${IDLE_S} s window)`);
+      await wait((IDLE_S + 1.5) * 1000);
+      ok((await page2()) === 404, "a session unused for longer than the idle window has ended");
+      ok((await (await fetch(`${base2}/__operator`, { headers: { "x-operator-token": TOKEN } })).status) === 200, "control: the header token on the same server still authenticates");
+    } finally { try { child2.kill("SIGKILL"); } catch { /* */ } }
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);
