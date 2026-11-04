@@ -1963,6 +1963,8 @@ jobs:
           t node scripts/test-html-kit.js
           # Bazaar quality ingestion (30d calls/payers on index sellers + /api/find external rows + ranking tiebreak - offline)
           t node scripts/test-bazaar-quality.js
+          # A seller field that is not text (a number, object or array name, tags as a string) routes without throwing
+          t node scripts/test-seller-field-types.js
           # /api/route ordering: route-order.js pinned to the comparator, read by why.tiebreaks and the ranking sentence (offline)
           t node scripts/test-route-order.js
           # Revenue detector classification (real x402 buys vs funding/tests)
