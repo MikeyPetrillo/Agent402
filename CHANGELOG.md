@@ -6,6 +6,32 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-04 (shorter home and docs pages, one page per adapter)
+Gateway:
+- inception/mercury-2.5 leaves the auto tier's fast band ahead of its
+  upstream expiration on 2026-11-08, a date every model of its family
+  carries. A call naming it is served as itself until that day, then by
+  google/gemini-3.1-flash-lite at the tier and price of the route called,
+  the swap named in agent402_model_substituted.
+Surfaces:
+- The home page is five blocks: the hero with the live payments panel, the
+  agents and people doors (the free tier in two lines, Decide as a table
+  row), three short claims with one row of chain marks, a two-line seller
+  block, and four questions. The seven full claims and the comparison table
+  moved to /docs#why (/why and /compare redirect there); the seller board
+  lives on /leaderboard, the demand ranking on /tools/bestsellers and the
+  proof-of-work demo on /playground, each linked from the page.
+- /agentic-finance, /sell, /what-is-x402, /what-is-mpp, /faq and /docs read
+  shorter: one-sentence openings, one call to action per target, one x402 vs
+  MPP table (on /what-is-x402), FAQ questions grouped under headings, and
+  /docs titled Docs; /terms states that prepaid credits are not currently sold.
+- Chain pages and /marketplace keep their shared legend and scope notes in
+  one collapsed "About these figures" block; each framework adapter has one
+  page at /integrations/<slug> with its configuration table
+  (/docs/adapters/<slug> redirects there); tool, integration and /markets
+  pages share one failed-call footnote; openings name the chain count and
+  link the one chain list on /pricing; page titles are plain descriptions.
+
 ### 2026-11-03 (replay claims at a deploy, pending settles explained, sweeps follow jobs)
 Payments:
 - While another container may be serving (more than one replica configured,
@@ -64,39 +90,16 @@ Payments:
   served first-call allowance) until the authorization's own validBefore
   plus ten minutes. The `readsOnly` list under `payment.dataHandling` on
   /.well-known/x402 names the same mark with the same hold.
-Gateway:
-- inception/mercury-2.5 leaves the auto tier's fast band ahead of its
-  upstream expiration on 2026-11-08, a date every model of its family
-  carries. A call naming it is served as itself until that day, then by
-  google/gemini-3.1-flash-lite at the tier and price of the route called,
-  the swap named in agent402_model_substituted.
 Tools:
 - An upstream read that would start with under 5 ms of its budget is refused
   as the budget's deadline before any request leaves, instead of leaving with
   a cap too small to use.
 Surfaces:
-- The home page is five blocks: the hero with the live payments panel, the
-  agents and people doors (the free tier in two lines, Decide as a table
-  row), three short claims with one row of chain marks, a two-line seller
-  block, and four questions. The seven full claims and the comparison table
-  moved to /docs#why (/why and /compare redirect there); the seller board
-  lives on /leaderboard, the demand ranking on /tools/bestsellers and the
-  proof-of-work demo on /playground, each linked from the page.
 - A seller's own rows on `/api/index?seller=` carry the same `executeVia`
   fields as route rows (callable now, its lane, or when it becomes eligible).
 - html-frames' published example fits its 402 whole; a paid sweep that meets
   an example the 402 shortened replays the full one from /openapi.json
   instead of the placeholder.
-- /agentic-finance, /sell, /what-is-x402, /what-is-mpp, /faq and /docs read
-  shorter: one-sentence openings, one call to action per target, one x402 vs
-  MPP table (on /what-is-x402), FAQ questions grouped under headings, and
-  /docs titled Docs; /terms states that prepaid credits are not currently sold.
-- Chain pages and /marketplace keep their shared legend and scope notes in
-  one collapsed "About these figures" block; each framework adapter has one
-  page at /integrations/<slug> with its configuration table
-  (/docs/adapters/<slug> redirects there); tool, integration and /markets
-  pages share one failed-call footnote; openings name the chain count and
-  link the one chain list on /pricing; page titles are plain descriptions.
 Operations:
 - The Bazaar keep-alive sweep follows a slow route to its settlement: a route
   that refuses a synchronous paid call is called again with `Prefer:

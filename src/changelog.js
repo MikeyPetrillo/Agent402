@@ -2,6 +2,16 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const ENTRIES = [
   {
+    date: "2026-11-04",
+    title: "Shorter home and docs pages, one page per adapter",
+    items: [
+      "Gateway: inception/mercury-2.5 leaves the auto tier's fast band ahead of its upstream expiration on 2026-11-08, a date every model of its family carries. A call naming it is served as itself until that day, then by google/gemini-3.1-flash-lite at the tier and price of the route called, the swap named in agent402_model_substituted.",
+      "Surfaces: the home page is five blocks: the hero with the live payments panel, the agents and people doors (the free tier in two lines, Decide as a table row), three short claims with one row of chain marks, a two-line seller block, and four questions. The seven full claims and the comparison table moved to /docs#why (/why and /compare redirect there); the seller board lives on /leaderboard, the demand ranking on /tools/bestsellers and the proof-of-work demo on /playground, each linked from the page.",
+      "Surfaces: /agentic-finance, /sell, /what-is-x402, /what-is-mpp, /faq and /docs read shorter: one-sentence openings, one call to action per target, one x402 vs MPP table (on /what-is-x402), FAQ questions grouped under headings, and /docs titled Docs; /terms states that prepaid credits are not currently sold.",
+      "Surfaces: chain pages and /marketplace keep their shared legend and scope notes in one collapsed \"About these figures\" block; each framework adapter has one page at /integrations/<slug> with its configuration table (/docs/adapters/<slug> redirects there); tool, integration and /markets pages share one failed-call footnote; openings name the chain count and link the one chain list on /pricing; page titles are plain descriptions.",
+    ],
+  },
+  {
     date: "2026-11-03",
     title: "Replay claims at a deploy, pending settles explained, sweeps follow jobs",
     items: [
@@ -12,7 +22,6 @@ const ENTRIES = [
       "Payments: a settlement sent while the buyer was connected is a settlement outcome whether or not the buyer stays: one that fails after the buyer closes counts toward the wallet's settle breaker and the composite guard like one whose buyer stayed, and one that succeeds records the sale beside the owed charge. The \"settlement sent\" mark is set where the charge leaves: a settle the authorization claim refused is never read as sent, so that hang-up spends forgiveness budget as an abandoned run and feeds the breaker nothing.",
       "Payments: the Tempo gate and the card gate require the shared replay claim on the same rule as the x402 dispatcher: on a long-running route always, and on every route while another container may be serving (more than one replica, a deploy's overlap window, a drain). With the shared store configured but unreachable, a Tempo pull or push credential or a card credential is refused 503 with Retry-After before the handler runs, before a push transfer is claimed and before a card is captured; past the window a lone container serves on its per-process claim.",
       "Payments: a settled payment's consumed mark in the replay guard keeps the guard's default hold (one hour). Only a grant that was not settled (a hang-up the forgiveness budget forgave) is held to the authorization's own validBefore plus a margin, since that authorization is still live on chain. The privacy page and the readsOnly list under payment.dataHandling on /.well-known/x402 name the mark (a digest of the payment's network, signed payer and nonce) and the same hold.",
-      "Gateway: inception/mercury-2.5 leaves the auto tier's fast band ahead of its upstream expiration on 2026-11-08, a date every model of its family carries. A call naming it is served as itself until that day, then by google/gemini-3.1-flash-lite at the tier and price of the route called, the swap named in agent402_model_substituted.",
       "Tools: onchain-sql is $0.040 a call (was $0.020), and a call sends the query service at most 3 queries: the query itself and up to 2 recovery runs (the row-size measure, then the filtered run or a small re-run). A call that reaches the cap without an answer is the uncharged 422 with hint narrow-query; the original query is never resent, and small rows served from the re-run are marked truncated with a note naming the cap. The onchain-analyst pack follows the tool's price.",
       "Tools: an upstream read that would start with under 5 ms of its budget is refused as the budget's deadline before any request leaves, instead of leaving with a cap too small to use.",
       "Surfaces: a seller's own rows on /api/index?seller= carry the same executeVia fields as route rows (callable now, its lane, or when it becomes eligible). html-frames' published example fits its 402 whole, and a paid sweep that meets an example the 402 shortened replays the full one from /openapi.json instead of the placeholder.",
