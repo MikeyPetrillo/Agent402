@@ -1663,18 +1663,50 @@ export function tempoDailyRecordingSince() {
 // headline could not see a Tempo payment. `internal` is this table's
 // own classification and is never re-derived by the reader. Uncapped on
 // purpose: these rows feed distinct counts.
-const qTempoExternalPayments = db.prepare(`
-  SELECT ts, payer, tx, price_usd FROM sales
-  WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND wire IN ('mpp-tempo', 'mpp-tempo-subscription')
-  ORDER BY ts`);
+// Read a page at a time: each wire's rows are walked on its (wire, ts) index
+// in (ts, id) order, TEMPO_PAGE_ROWS index rows per page whatever they hold
+// (internal and free rows are dropped here, not in the query, so a page is
+// bounded in rows read, not in rows kept), and the two wires are merged in
+// (ts, id) order. The revenue ledger's sliced reads run these steps across
+// event-loop turns; the one-call export runs them back to back, so both read
+// the same rows in the same order.
+const TEMPO_WIRES = ["mpp-tempo", "mpp-tempo-subscription"];
+const TEMPO_PAGE_ROWS = 1000;
+const qTempoWirePage = db.prepare("SELECT id, ts, payer, tx, price_usd, rail, internal FROM sales WHERE wire = ? AND (ts, id) > (?, ?) ORDER BY ts, id LIMIT ?");
+/** externalTempoPayments as steps: a bare yield between pages and while
+ *  merging. An unreadable ledger reads as no Tempo payments. */
+export function* externalTempoPaymentsSteps() {
+  try { return yield* tempoPaymentPages(); } catch { return []; }
+}
+function* tempoPaymentPages() {
+  const lists = [];
+  for (const wire of TEMPO_WIRES) {
+    const kept = [];
+    let ts = Number.MIN_SAFE_INTEGER, id = Number.MIN_SAFE_INTEGER;
+    for (;;) {
+      const page = qTempoWirePage.all(wire, ts, id, TEMPO_PAGE_ROWS);
+      for (const r of page) if (r.internal === 0 && isPaidRail(r.rail)) kept.push(r);
+      if (page.length < TEMPO_PAGE_ROWS) break;
+      ({ ts, id } = page[page.length - 1]);
+      yield;
+    }
+    lists.push(kept);
+    yield;
+  }
+  const [a, b] = lists;
+  const out = new Array(a.length + b.length);
+  for (let i = 0, j = 0, k = 0; k < out.length; k++) {
+    const takeA = j >= b.length || (i < a.length && (a[i].ts < b[j].ts || (a[i].ts === b[j].ts && a[i].id < b[j].id)));
+    const r = takeA ? a[i++] : b[j++];
+    out[k] = { ts: r.ts, payer: r.payer || null, tx: r.tx || null, usd: Number(r.price_usd) || 0 };
+    if ((k + 1) % TEMPO_PAGE_ROWS === 0) yield;
+  }
+  return out;
+}
 
 /** [{ts, payer, tx, usd}] for every external Tempo settlement, oldest first. */
 // Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
-export function externalTempoPayments() {
-  try {
-    return qTempoExternalPayments.all().map((r) => ({ ts: r.ts, payer: r.payer || null, tx: r.tx || null, usd: Number(r.price_usd) || 0 }));
-  } catch { return []; }
-}
+export function externalTempoPayments() { return runSteps(externalTempoPaymentsSteps()); }
 
 // Circle Gateway batched sales (wire gateway-batched): settled off chain at
 // Gateway and credited to our Gateway balance, so no on-chain transfer to the
@@ -1798,6 +1830,21 @@ const qAgentFirstAll = db.prepare(`
 const qAgentFirstMpp = db.prepare(`
   SELECT payer, MIN(ts) AS first_ts FROM sales
   WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND payer IS NOT NULL AND wire IN ${MPP_AGENT_WIRES_SQL} GROUP BY payer`);
+
+// The current week's distinct MPP agents alone (the operator's sales page):
+// mppAgentsWeekly also reads every payer's first payment across all history
+// for its new/returning split, two whole-ledger scans that held the loop for
+// tens of milliseconds per read. This count needs neither: one range read of
+// the week on the (internal, ts) index.
+const qMppAgentsInWeek = db.prepare(`
+  SELECT COUNT(DISTINCT payer) AS n FROM sales
+  WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND wire IN ${MPP_AGENT_WIRES_SQL}
+    AND payer IS NOT NULL AND payer <> '' AND ts >= ? AND ts < ?`);
+/** mppAgentsWeekly({ weeks: 1, now }).weeks[0].distinctAgents, read without the history scans. */
+export function mppAgentsThisWeek(now = Date.now()) {
+  const start = weekStartOf(now);
+  return qMppAgentsInWeek.get(start, start + WEEK_MS)?.n ?? 0;
+}
 
 export function weekStartOf(ts) {
   return Math.floor((ts - WEEK_EPOCH_MS) / WEEK_MS) * WEEK_MS + WEEK_EPOCH_MS;

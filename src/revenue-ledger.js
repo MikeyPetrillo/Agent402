@@ -36,7 +36,7 @@ import {
 import { usdcDeltaForOwner, payerFromMeta, isExternalPayment } from "../scripts/revenue-scan-solana.js";
 import { solanaHistoryRead } from "./solana-history-rpc.js";
 import { evmLogsRead } from "./evm-logs-rpc.js";
-import { externalTempoPayments, gatewayBatchedPayments } from "./sales-ledger.js";
+import { externalTempoPaymentsSteps, gatewayBatchedPayments } from "./sales-ledger.js";
 import { createBlockClock, rpcHeaderReader, dateFromAnchors } from "./block-clock.js";
 import { NOMINAL_BLOCK_MS, blockMs, blocksForSeconds, refreshBlockMs, blockTimeChanges } from "./chain-block-time.js";
 import { registerMemoryStore, registerSqliteStore } from "./memory-stores.js";
@@ -1136,6 +1136,27 @@ async function runLedgerStepsSliced(gen) {
   return r.value;
 }
 
+/** Test hook: the longest stretch one step of a sliced read runs between its
+ *  yields, in this thread's CPU milliseconds (a wallet's rows are answered
+ *  outside the timing, as the sliced runner answers them a page at a time).
+ *  The sliced runner can only yield where a step does. */
+export function _longestLedgerStepForTests(kind, wallets) {
+  const gen = kind === "events" ? externalPaymentEventSteps(wallets) : ledgerSummarySteps(wallets);
+  const cpuMs = () => { const u = process.threadCpuUsage(); return (u.user + u.system) / 1000; };
+  let q = null, longest = 0, steps = 0, answer;
+  for (;;) {
+    const c0 = cpuMs();
+    const r = gen.next(answer);
+    longest = Math.max(longest, cpuMs() - c0);
+    steps++;
+    if (r.done) return { longestMs: longest, steps };
+    const v = r.value;
+    answer = undefined;
+    if (v?.pairRead && v.agg) answer = (q || (q = qSummaryAgg())).get(payerDustFloorUsd, payerDustFloorUsd, v.chain, v.wallet);
+    else if (v?.pairRead) answer = qPairRows.all(v.chain, v.wallet);
+  }
+}
+
 export function ledgerSummary(wallets) { return runLedgerSteps(ledgerSummarySteps(wallets)); }
 /** ledgerSummary spread over event-loop turns (same value). */
 export function ledgerSummaryAsync(wallets) { return runLedgerStepsSliced(ledgerSummarySteps(wallets)); }
@@ -1172,7 +1193,7 @@ function* ledgerSummarySteps(wallets) {
   // keep their meaning; the combined pair is what /revenue headlines.
   let tempoCount = 0, tempoUsd = 0;
   yield;
-  for (const r of tempoExternalRows()) { tempoCount++; tempoUsd += r.usd; }
+  for (const r of yield* tempoExternalRowsSteps()) { tempoCount++; tempoUsd += r.usd; }
   // Circle Gateway batched sales settle off chain at Gateway and are credited
   // to our Gateway balance, so no treasury transfer carries them: they come
   // from the sales ledger too. A withdrawal later mints that balance on chain,
@@ -1407,13 +1428,21 @@ function tempoPayerKey(raw) {
 }
 
 /** Lowercased tx hashes from `txs` that already appear in the transfers table. */
-function onchainTxSet(txs) {
+// One indexed lookup per Tempo tx, a bare yield every TEMPO_TX_YIELD_EVERY.
+const TEMPO_TX_YIELD_EVERY = 256;
+let tempoRowCostForTests = null;
+/** Test hook: extra work run after every Tempo tx lookup (a slow host, simulated). */
+export function _setTempoRowCostForTests(fn) { tempoRowCostForTests = typeof fn === "function" ? fn : null; }
+function* onchainTxSetSteps(txs) {
   const found = new Set();
   if (!txs.length) return found;
   const q = db.prepare("SELECT 1 FROM transfers WHERE tx_hash = ? OR tx_hash = ? LIMIT 1");
+  let n = 0;
   for (const tx of txs) {
     const s = String(tx);
     if (q.get(s, s.toLowerCase())) found.add(s.toLowerCase());
+    if (tempoRowCostForTests) tempoRowCostForTests();
+    if (++n % TEMPO_TX_YIELD_EVERY === 0) yield;
   }
   return found;
 }
@@ -1424,9 +1453,13 @@ function onchainTxSet(txs) {
  * ledger, so a payment is never counted by both sources. Only Tempo: MPP over
  * Base/Celo settles as an ordinary on-chain transfer and is already here.
  */
-function tempoExternalRows() {
-  const tempo = externalTempoPayments();
-  const onchain = onchainTxSet(tempo.map((r) => r.tx).filter(Boolean));
+// As steps: the sales-ledger read yields between its pages and the dedupe
+// between lookups, so the sliced runner spreads both over turns on elapsed
+// time (the read and the lookups grow with the Tempo history, and in one turn
+// they held the loop for the whole of it).
+function* tempoExternalRowsSteps() {
+  const tempo = yield* externalTempoPaymentsSteps();
+  const onchain = yield* onchainTxSetSteps(tempo.map((r) => r.tx).filter(Boolean));
   return tempo.filter((r) => !(r.tx && onchain.has(String(r.tx).toLowerCase())));
 }
 
@@ -1488,7 +1521,9 @@ function* externalPaymentEventSteps(wallets) {
     }
   }
   yield;
-  for (const r of tempoExternalRows()) {
+  let tempoSeen = 0;
+  for (const r of yield* tempoExternalRowsSteps()) {
+    if (++tempoSeen % ROW_YIELD_EVERY === 0) yield;
     if (!Number.isFinite(r.ts)) continue;
     out.push({ day: new Date(r.ts).toISOString().slice(0, 10), payer: tempoPayerKey(r.payer) });
   }

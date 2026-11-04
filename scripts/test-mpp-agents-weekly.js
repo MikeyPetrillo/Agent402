@@ -11,7 +11,7 @@ import { getFreePort } from "./lib/free-port.js";
 const dir = mkdtempSync(join(tmpdir(), "a402-mppagents-"));
 const DB = join(dir, "sales.db");
 process.env.SALES_LEDGER_DB = DB;
-const { recordSale, mppAgentsWeekly, weekStartOf } = await import("../src/sales-ledger.js");
+const { recordSale, mppAgentsWeekly, mppAgentsThisWeek, weekStartOf } = await import("../src/sales-ledger.js");
 const { OUR_EVM_WALLETS } = await import("../src/revenue-live.js");
 
 let passed = 0, failed = 0;
@@ -58,6 +58,9 @@ ok(cur.payments === 5 && cur.unattributedPayments === 1, `payments count externa
 ok(Math.abs(cur.usd - 5.005) < 1e-9, `usd sums external MPP payments (got ${cur.usd})`);
 ok(cur.byMethod.tempoCharge.distinctAgents === 2 && cur.byMethod.evm.distinctAgents === 1 && cur.byMethod.tempoSubscription.distinctAgents === 1, "split by method");
 ok(r.weeks[10].distinctAgents === 0, "last week had no MPP agents (B paid on x402)");
+// The operator sales page's count reads the week alone, without the history scans.
+ok(mppAgentsThisWeek(NOW) === cur.distinctAgents && mppAgentsThisWeek(NOW - WEEK) === r.weeks[10].distinctAgents && mppAgentsThisWeek(THIS_WEEK) === cur.distinctAgents && mppAgentsThisWeek(THIS_WEEK + WEEK) === 0,
+  `mppAgentsThisWeek equals the weekly series' current-week count (${mppAgentsThisWeek(NOW)}), last week's, and none for next week`);
 const allCur = r.allRails.weeks[11], allPrev = r.allRails.weeks[10];
 ok(allPrev.distinctAgents === 1 && allPrev.newAgents === 1, "all-rails series counts the x402 payer");
 ok(allCur.distinctAgents === 3 && allCur.newAgents === 1 && allCur.returningAgents === 2, `all rails: B returning (paid last week), A returning, C new (got ${JSON.stringify(allCur)})`);
@@ -93,5 +96,5 @@ ok(good.status === 200 && Array.isArray(gj?.weeks) && gj.weeks.length === 12 && 
 ok(!/0x[0-9a-f]{40}/i.test(JSON.stringify(gj)), "operator route carries no payer address");
 const sales = await fetch(`${base}/__operator/sales.json`, { headers: { "x-operator-token": TOKEN } });
 const sj = await sales.json().catch(() => null);
-ok(sales.status === 200 && Number.isInteger(sj?.mppAgentsThisWeek), "sales.json carries mppAgentsThisWeek as a count");
+ok(sales.status === 200 && Number.isInteger(sj?.mppAgentsThisWeek) && sj.mppAgentsThisWeek === mppAgentsWeekly({ weeks: 1 }).weeks[0].distinctAgents, "sales.json carries mppAgentsThisWeek as a count, the weekly series' own");
 finish(failed ? 1 : 0);

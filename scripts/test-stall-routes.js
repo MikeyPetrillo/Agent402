@@ -228,6 +228,24 @@ const rev = await import("../src/revenue-ledger.js");
     ok(isDeepStrictEqual(b.value, a), `${name}Async equals ${name} (same figures, same order) on ${TRANSFER_ROWS} transfers`);
     ok(heldUnder(b.ms, GAP_MS), `...and never held the loop past ${GAP_MS} ms (${GAP.note}) (worst ${b.ms} ms; longest gap ${b.raw} ms, ${b.gc} ms of it the collector)`);
   }
+  // The sliced runner yields only where a step does, so no step of a read may
+  // carry a whole history: the Tempo settlements (read from the sales ledger
+  // and checked against the transfers, about 4,200 rows here) once ran as one
+  // step, about 30 ms on a laptop, which a runner three times slower carried
+  // past the bound above. A slow host, simulated: each Tempo row costs
+  // 1/1024 of a step's bound more, so a step that took the whole history
+  // would cost at least four bounds, while one that yields every 256 rows
+  // carries a quarter of one. Timed in this thread's CPU, the fastest of
+  // three runs (one run can land on a slower core of a mixed-core host).
+  const tempoRows = sales.externalTempoPayments().length;
+  const rowCost = STEP_BOUND_MS / 1024;
+  rev._setTempoRowCostForTests(() => spin(rowCost));
+  try {
+    for (const kind of ["summary", "events"]) {
+      const r = [0, 1, 2].map(() => rev._longestLedgerStepForTests(kind, wallets)).reduce((p, q) => (q.longestMs < p.longestMs ? q : p));
+      ok(tempoRows > 4096 && heldUnder(r.longestMs, STEP_BOUND_MS), `the ${kind === "summary" ? "ledgerSummary" : "externalPaymentEventsFor"} steps yield within the Tempo history: with ${rowCost.toFixed(3)} ms more work per Tempo row (${tempoRows} rows), the longest of ${r.steps} steps ran ${r.longestMs.toFixed(1)} ms of thread CPU (${STEP.note})`);
+    }
+  } finally { rev._setTempoRowCostForTests(null); }
 }
 
 // --- 1c. the index: snapshot, tool directory, seller summaries.
@@ -453,6 +471,9 @@ try {
     const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
     const route = src.slice(src.indexOf('app.get("/__operator/sales.json"'), src.indexOf('app.get("/__operator/sales.json"') + 1400);
     ok(/await salesSummaryAsync\(\{ detailed: true \}\)/.test(route) && !/[^a-zA-Z]salesSummary\(/.test(route), "/__operator/sales.json awaits salesSummaryAsync, never the one-turn salesSummary");
+    // Its weekly MPP count reads the current week alone: the weekly series
+    // behind it scans every payer's history (two whole-ledger reads in line).
+    ok(/mppAgentsThisWeekCount\(\)/.test(route) && !/mppAgentsWeekly\(/.test(route), "/__operator/sales.json counts this week's MPP agents without the whole-history series");
     const cold = src.slice(src.indexOf("function currentLedgerFigures()"), src.indexOf("const ledgerFiguresBoot"));
     ok(cold.length > 0 && !/salesSummary\(|externalByNetwork\(/.test(cold) && /refreshLedgerFigures\(\)/.test(cold), "a cold shared ledger reading starts the sliced build, never a one-turn read");
     ok(/await Promise\.race\(\[ledgerFiguresBoot,/.test(src) && src.indexOf("await Promise.race([ledgerFiguresBoot,") < src.indexOf("const httpServer = app.listen("), "the first shared ledger reading is awaited (bounded) before the server listens");
