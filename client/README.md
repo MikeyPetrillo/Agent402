@@ -166,6 +166,14 @@ What the server does with it depends on how the call was paid:
   route with the same body, from its first answer inside the replay window,
   with no second settlement, and marks it `X-Replayed-Answer: 1` (identity-bound
   routes, routes with a lasting effect and streamed calls excepted).
+- **A connection reset before any answer:** the SDK's own requests (proof-of-work,
+  credits, discovery) are resent once when the connection failed before the
+  server answered, for example on a kept-alive socket the edge had already
+  closed (`retryResets: false` turns this off). Your `payFetch` is not wrapped,
+  because a retry over a payment wrapper would sign a fresh authorization. To get
+  the same resend on the wallet path, put it under the wrapper:
+  `wrapFetchWithPayment(resetRetryFetch(distrustFetch()), client)`. The resend
+  carries the same signed header, and one authorization settles at most once.
 - **Circle Gateway batched option:** a payment the server has not had confirmed
   by Gateway yet is answered `402` with reason `settlement-pending`; the SDK
   resends the same signed header after the server's `Retry-After` (never a new

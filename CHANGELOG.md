@@ -33,6 +33,11 @@ Index:
 - A seller registration naming one of this server's own hosts is refused.
 Reports:
 - A public report's JSON has its own address, `/reports/public/<id>.json`.
+Packages:
+- agent402-client 0.8.22 resends its own request once when the connection
+  failed before any answer (a closed keep-alive socket), with the same headers
+  and Idempotency-Key; `retryResets: false` turns it off. A caller's payFetch is
+  not wrapped; `resetRetryFetch` is exported to put under a payment wrapper.
 
 ### 2026-11-04 (Office files from data, shorter pages, one page per adapter)
 Gateway:
