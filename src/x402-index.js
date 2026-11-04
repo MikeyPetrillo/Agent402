@@ -256,13 +256,24 @@ export function _selfCheckHostMemoForTest() { return canonicalHostMemo; }
  *  the production domain, compared by canonical host (so a www. twin, a
  *  trailing slash or letter case never makes our own catalog an outside
  *  seller), or an entry whose manifest was permanently redirected onto one
- *  of them (`redirectedTo`). A ported twin is another host. */
+ *  of them (`redirectedTo`). A ported twin is another host.
+ *  A fully qualified spelling (a trailing dot, "agent402.tools.") is the same
+ *  host and folds to it, and so does the platform hostname this service is
+ *  published under (Railway's RAILWAY_PUBLIC_DOMAIN / RAILWAY_STATIC_URL,
+ *  read from the environment, plus any host in SELF_SELLER_HOSTS), which
+ *  answers with this catalog too. */
+const fqdnFold = (h) => (h && (h.endsWith(".") || h.includes(".:")) ? h.replace(/\.+(?=$|:)/, "").replace(/^www\./, "") : h);
+const selfHostOf = (s) => fqdnFold(canonicalHostOf(s));
+const asHostUrl = (v) => { const t = String(v || "").trim(); return t ? (/^https?:\/\//i.test(t) ? t : `https://${t}`) : ""; };
+const PLATFORM_SELF_HOSTS = new Set(
+  [process.env.RAILWAY_PUBLIC_DOMAIN, process.env.RAILWAY_STATIC_URL, ...String(process.env.SELF_SELLER_HOSTS || "").split(",")]
+    .map((v) => fqdnFold(canonicalHost(asHostUrl(v)))).filter(Boolean),
+);
 export function isSelfSeller(origin, { baseUrl = "", redirectedTo = null } = {}) {
-  const base = baseUrl ? canonicalHostOf(String(baseUrl)) : null;
-  const own = origin ? canonicalHostOf(String(origin)) : null;
-  if (own && (own === SELF_HOST || own === base)) return true;
-  const landed = redirectedTo ? canonicalHostOf(String(redirectedTo)) : null;
-  return !!(landed && (landed === SELF_HOST || landed === base));
+  const base = baseUrl ? selfHostOf(String(baseUrl)) : null;
+  const isOurs = (h) => !!h && (h === SELF_HOST || h === base || PLATFORM_SELF_HOSTS.has(h));
+  if (isOurs(origin ? selfHostOf(String(origin)) : null)) return true;
+  return isOurs(redirectedTo ? selfHostOf(String(redirectedTo)) : null);
 }
 // One full re-probe of every known origin per cycle, so this constant is the
 // single biggest lever on our outbound footprint - it multiplies the seed
@@ -1293,7 +1304,9 @@ export function validateOriginInput(raw, { selfOrigin, allowPath = false } = {})
     if (!u.hostname.includes(".")) return { error: "origin must be a public hostname" };
     const n = normalizeSellerKey(raw);
     if (n.error) return { error: n.error };
-    if (selfOrigin && n.origin === String(selfOrigin).toLowerCase().replace(/\/+$/, "")) return { error: "this host is already the local catalog" };
+    // The same self check a bare origin meets below (a www twin, a trailing
+    // dot, letter case and the platform hostname all fold to this catalog).
+    if (isSelfSeller(n.origin, { baseUrl: selfOrigin || "" })) return { error: "this host is already the local catalog" };
     return { origin: n.key };
   }
   if (u.protocol !== "https:") return { error: "origin must be https" };
