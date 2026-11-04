@@ -18,7 +18,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync as readProcFile, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -96,16 +96,28 @@ const sales = await import("../src/sales-ledger.js");
 // The worst event-loop block while `fn` runs, from a 1 ms interval, less the
 // collector's pauses inside it (the production stall line reports collector
 // time apart too): the gaps are kept so a pause is subtracted from the gap it
-// fell in. A gap's hold is the CPU time this thread spent inside it, not its
-// wall time: on a loaded host the thread can sit descheduled in the middle of
-// a turn, which stretches the gap without any of our work in it (measured
-// under contention: a seller-summary rebuild of 6 to 16 ms of thread CPU read
-// 30 to 880 ms of wall time). Every build pinned here is in-memory work and
-// SQLite reads of a warm local file, both CPU on this thread. The wall gap is
-// still reported beside it.
+// fell in. A gap's hold is the time this thread was ours inside it: its wall
+// time less the time it sat runnable on the scheduler's queue waiting for a
+// core. On a loaded host the thread can sit descheduled in the middle of a
+// turn, which stretches the gap without any of our work in it (measured
+// under contention: a seller-summary rebuild of 6 to 16 ms ours read
+// 30 to 880 ms of wall time), so that wait is not ours. A wait the thread
+// chose (a synchronous file read, a spawnSync, an Atomics.wait) is not on
+// that queue and is ours: a buyer waits through it as through CPU work, and
+// a reading of thread CPU alone saw a 200 ms Atomics.wait as 0 ms. The queue
+// wait is the second field of the thread's schedstat (Linux, where CI runs);
+// where that file is missing the hold is the thread's CPU time, which misses
+// a blocking wait, so under CI the file is required.
 const threadCpuMs = () => { const u = process.threadCpuUsage(); return (u.user + u.system) / 1000; };
-let gaps = null, last = performance.now(), lastCpu = threadCpuMs();
-const lagTimer = setInterval(() => { const t = performance.now(), c = threadCpuMs(); if (gaps) gaps.push([last, t, c - lastCpu]); last = t; lastCpu = c; }, 1);
+const SCHEDSTAT = (() => { const p = `/proc/self/task/${process.pid}/schedstat`; try { return /^\d+ \d+ \d+/.test(readProcFile(p, "utf8")) ? p : null; } catch { return null; } })();
+const queuedMs = () => Number(readProcFile(SCHEDSTAT, "utf8").split(" ")[1]) / 1e6;
+// A clock that advances only while the time is ours; a hold is its advance.
+const oursMs = SCHEDSTAT ? () => performance.now() - queuedMs() : threadCpuMs;
+const HOLD_READING = SCHEDSTAT ? "wall time less run-queue wait" : "thread CPU";
+console.log(`# loop holds read as ${HOLD_READING}${SCHEDSTAT ? "" : " (no schedstat here: a blocking wait reads as 0)"}`);
+if (process.env.CI) assert.ok(SCHEDSTAT, "under CI the main thread's schedstat must be readable, so a blocking wait is measured");
+let gaps = null, last = performance.now(), lastOurs = oursMs();
+const lagTimer = setInterval(() => { const t = performance.now(), c = oursMs(); if (gaps) gaps.push([last, t, c - lastOurs]); last = t; lastOurs = c; }, 1);
 const gcPauses = [];
 new PerformanceObserver((list) => { for (const e of list.getEntries()) gcPauses.push([e.startTime, e.startTime + e.duration]); }).observe({ entryTypes: ["gc"] });
 async function blockOf(fn) {
@@ -115,17 +127,17 @@ async function blockOf(fn) {
   // second in the same loop iteration's check phase, with I/O polled between
   // them but no timer phase, so the 1 ms interval read two slices as one gap.
   await new Promise((r) => setImmediate(r));
-  gaps = []; last = performance.now(); lastCpu = threadCpuMs(); gcPauses.length = 0;
+  gaps = []; last = performance.now(); lastOurs = oursMs(); gcPauses.length = 0;
   const value = await fn();
   // The observer delivers gc entries on a later task: wait for a pause that
   // ended the window to arrive before it is subtracted.
   await new Promise((r) => setTimeout(r, 50));
   let ms = 0, raw = 0, gc = 0;
-  for (const [a, b, cpu] of gaps) {
+  for (const [a, b, ours] of gaps) {
     let inGc = 0;
     for (const [s0, e0] of gcPauses) inGc += Math.max(0, Math.min(b, e0) - Math.max(a, s0));
     if (b - a > raw) { raw = b - a; gc = inGc; }
-    ms = Math.max(ms, Math.min(b - a, cpu) - inGc);
+    ms = Math.max(ms, Math.min(b - a, ours) - inGc);
   }
   gaps = null;
   return { value, ms: Math.round(ms), raw: Math.round(raw), gc: Math.round(gc) };
@@ -137,19 +149,25 @@ const heldUnder = (ms, limit) => ms < limit;
 // a derived bound must fail the same pin and the same measurement the
 // figures below pass, whatever the machine's baseline made the bound.
 const spin = (ms) => { const t = performance.now(); while (performance.now() - t < ms) { /* hold the loop */ } };
+const blockFor = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 {
   for (const [name, limit, note] of [["GAP", GAP_MS, GAP.note], ["ROUTE", ROUTE_BOUND_MS, ROUTE.note]]) {
     const r = await blockOf(async () => spin(5 * limit));
     ok(!heldUnder(r.ms, limit), `a deliberate ${5 * limit} ms hold fails the ${name} pin (measured ${r.ms} ms; ${note})`);
   }
+  // A hold that is not CPU work: the thread blocked in a synchronous wait.
+  if (SCHEDSTAT) {
+    const r = await blockOf(async () => blockFor(2 * GAP_MS));
+    ok(!heldUnder(r.ms, GAP_MS), `a deliberate ${2 * GAP_MS} ms blocking wait fails the GAP pin (measured ${r.ms} ms ours; longest gap ${r.raw} ms)`);
+  }
 }
 
-// A sliced walk timed step by step: each step's thread CPU less the
+// A sliced walk timed step by step: each step's hold (ours, as above) less the
 // collector's pauses inside it, as blockOf reads a gap. That still leaves
 // runtime work outside any reported pause: on a 2-vCPU runner whose collector
 // threads are starved, the main thread finishes their sweeping and marking in
 // whatever step allocates next (seen on CI: one step of the ?all=1 page read
-// 72.6 ms of thread CPU after its 74.2 ms of pauses, while the whole page
+// 72.6 ms ours after its 74.2 ms of pauses, while the whole page
 // built in one turn took 67 ms). A step's own work repeats on every walk and
 // that runtime work does not, so each step is read as its least over `walks`
 // walks and the longest of those is pinned.
@@ -158,13 +176,13 @@ async function stepCpuWalk(makeSteps) {
   const windows = [];
   let r;
   gcPauses.length = 0;
-  do { const t = performance.now(), c0 = threadCpuMs(); r = steps.next(); windows.push([t, performance.now(), threadCpuMs() - c0]); } while (!r.done);
+  do { const t = performance.now(), c0 = oursMs(); r = steps.next(); windows.push([t, performance.now(), oursMs() - c0]); } while (!r.done);
   // The observer delivers gc entries on a later task.
   await new Promise((res) => setTimeout(res, 50));
-  return { value: r.value, steps: windows.map(([a0, b0, cpu0]) => {
+  return { value: r.value, steps: windows.map(([a0, b0, ours0]) => {
     let inGc = 0;
     for (const [s0, e0] of gcPauses) inGc += Math.max(0, Math.min(b0, e0) - Math.max(a0, s0));
-    return { wall: b0 - a0, gc: inGc, net: Math.min(b0 - a0, cpu0) - inGc };
+    return { wall: b0 - a0, gc: inGc, net: Math.min(b0 - a0, ours0) - inGc };
   }) };
 }
 async function longestStep(makeSteps, walks = 3) {
@@ -191,13 +209,17 @@ async function longestStep(makeSteps, walks = 3) {
   // A live heap built before the walk, so the step holds only the collection.
   let live = Array.from({ length: 6_000_000 }, (_, i) => ({ i, p: null }));
   const inGc = await longestStep(walk(10, () => gc()));
-  ok(live.length > 0 && inGc.longestRaw > STEP_BOUND_MS && inGc.longestGc > STEP_BOUND_MS && heldUnder(inGc.longest, STEP_BOUND_MS), `a full collection inside a step is the collector's, not the step's (longest ${inGc.longest.toFixed(1)} ms of thread CPU, one walk's worst ${inGc.single.toFixed(1)} ms; longest raw step ${inGc.longestRaw.toFixed(1)} ms, ${inGc.longestGc.toFixed(1)} ms of it the collector; ${STEP.note})`);
+  ok(live.length > 0 && inGc.longestRaw > STEP_BOUND_MS && inGc.longestGc > STEP_BOUND_MS && heldUnder(inGc.longest, STEP_BOUND_MS), `a full collection inside a step is the collector's, not the step's (longest ${inGc.longest.toFixed(1)} ms ours, one walk's worst ${inGc.single.toFixed(1)} ms; longest raw step ${inGc.longestRaw.toFixed(1)} ms, ${inGc.longestGc.toFixed(1)} ms of it the collector; ${STEP.note})`);
   live = null;
   let walkNo = 0;
   const once = await longestStep(() => { walkNo++; return walk(10, () => { if (walkNo === 2) cpuSpin(3 * STEP_BOUND_MS); })(); });
   ok(!heldUnder(once.single, STEP_BOUND_MS) && heldUnder(once.longest, STEP_BOUND_MS), `${3 * STEP_BOUND_MS} ms of runtime work in one walk's step is not the step's (that walk read ${once.single.toFixed(1)} ms; the step's least over three walks ${once.longest.toFixed(1)} ms)`);
   const every = await longestStep(walk(10, () => cpuSpin(2 * STEP_BOUND_MS)));
   ok(!heldUnder(every.longest, STEP_BOUND_MS), `${2 * STEP_BOUND_MS} ms of work the step does on every walk fails the step pin (read ${every.longest.toFixed(1)} ms; ${STEP.note})`);
+  if (SCHEDSTAT) {
+    const waits = await longestStep(walk(10, () => blockFor(2 * STEP_BOUND_MS)));
+    ok(!heldUnder(waits.longest, STEP_BOUND_MS), `a ${2 * STEP_BOUND_MS} ms blocking wait the step makes on every walk fails the step pin (read ${waits.longest.toFixed(1)} ms; ${STEP.note})`);
+  }
 }
 
 // --- 1a. sales summaries
@@ -206,10 +228,10 @@ async function longestStep(makeSteps, walks = 3) {
     const sync = sales.salesSummary({ days });
     const sliced = await blockOf(() => sales.salesSummaryAsync({ days }));
     ok(isDeepStrictEqual(sliced.value, sync), `salesSummaryAsync({ days: ${days} }) equals salesSummary`);
-    ok(heldUnder(sliced.ms, GAP_MS), `...and never held the loop past ${GAP_MS} ms (${GAP.note}) on ${SALES_ROWS} rows (worst ${sliced.ms} ms of thread CPU; longest gap ${sliced.raw} ms, ${sliced.gc} ms of it the collector)`);
+    ok(heldUnder(sliced.ms, GAP_MS), `...and never held the loop past ${GAP_MS} ms (${GAP.note}) on ${SALES_ROWS} rows (worst ${sliced.ms} ms ours; longest gap ${sliced.raw} ms, ${sliced.gc} ms of it the collector)`);
     const nSync = sales.externalByNetwork({ days });
     const nSliced = await blockOf(() => sales.externalByNetworkAsync({ days }));
-    ok(isDeepStrictEqual(nSliced.value, nSync), `externalByNetworkAsync({ days: ${days} }) equals externalByNetwork (worst ${nSliced.ms} ms of thread CPU)`);
+    ok(isDeepStrictEqual(nSliced.value, nSync), `externalByNetworkAsync({ days: ${days} }) equals externalByNetwork (worst ${nSliced.ms} ms ours)`);
   }
   // The page walk against the one-query read of the same window, straight
   // from the file: counts and per-rail totals add across the 30 pages, and a
@@ -254,7 +276,7 @@ async function longestStep(makeSteps, walks = 3) {
     for (const [name, fn] of [["salesSummaryAsync", () => sales.salesSummaryAsync({ days: 36_500 })], ["externalByNetworkAsync", () => sales.externalByNetworkAsync({ days: 36_500 })]]) {
       pages = 0;
       const slow = await blockOf(fn);
-      ok(pages >= 20 && heldUnder(slow.ms, GAP_MS), `${name} with ${pageCost} ms more work per page (${pages} pages, ${pages * pageCost} ms in all) yields on elapsed time: never held the loop past ${GAP_MS} ms (worst ${slow.ms} ms of thread CPU; longest gap ${slow.raw} ms, ${slow.gc} ms of it the collector)`);
+      ok(pages >= 20 && heldUnder(slow.ms, GAP_MS), `${name} with ${pageCost} ms more work per page (${pages} pages, ${pages * pageCost} ms in all) yields on elapsed time: never held the loop past ${GAP_MS} ms (worst ${slow.ms} ms ours; longest gap ${slow.raw} ms, ${slow.gc} ms of it the collector)`);
     }
   } finally { sales._setSummaryPageCostForTests(null); }
 }
@@ -296,7 +318,7 @@ const rev = await import("../src/revenue-ledger.js");
     const a = whole();
     const b = await blockOf(sliced);
     ok(isDeepStrictEqual(b.value, a), `${name}Async equals ${name} (same figures, same order) on ${TRANSFER_ROWS} transfers`);
-    ok(heldUnder(b.ms, GAP_MS), `...and never held the loop past ${GAP_MS} ms (${GAP.note}) (worst ${b.ms} ms of thread CPU; longest gap ${b.raw} ms, ${b.gc} ms of it the collector)`);
+    ok(heldUnder(b.ms, GAP_MS), `...and never held the loop past ${GAP_MS} ms (${GAP.note}) (worst ${b.ms} ms ours; longest gap ${b.raw} ms, ${b.gc} ms of it the collector)`);
   }
   // The sliced runner yields only where a step does, so no step of a read may
   // carry a whole history: the Tempo settlements (read from the sales ledger
@@ -305,15 +327,15 @@ const rev = await import("../src/revenue-ledger.js");
   // past the bound above. A slow host, simulated: each Tempo row costs
   // 1/1024 of a step's bound more, so a step that took the whole history
   // would cost at least four bounds, while one that yields every 256 rows
-  // carries a quarter of one. Timed in this thread's CPU, the fastest of
+  // carries a quarter of one. Timed on the ours clock (above), the fastest of
   // three runs (one run can land on a slower core of a mixed-core host).
   const tempoRows = sales.externalTempoPayments().length;
   const rowCost = STEP_BOUND_MS / 1024;
   rev._setTempoRowCostForTests(() => spin(rowCost));
   try {
     for (const kind of ["summary", "events"]) {
-      const r = [0, 1, 2].map(() => rev._longestLedgerStepForTests(kind, wallets)).reduce((p, q) => (q.longestMs < p.longestMs ? q : p));
-      ok(tempoRows > 4096 && heldUnder(r.longestMs, STEP_BOUND_MS), `the ${kind === "summary" ? "ledgerSummary" : "externalPaymentEventsFor"} steps yield within the Tempo history: with ${rowCost.toFixed(3)} ms more work per Tempo row (${tempoRows} rows), the longest of ${r.steps} steps ran ${r.longestMs.toFixed(1)} ms of thread CPU (${STEP.note})`);
+      const r = [0, 1, 2].map(() => rev._longestLedgerStepForTests(kind, wallets, { clock: oursMs })).reduce((p, q) => (q.longestMs < p.longestMs ? q : p));
+      ok(tempoRows > 4096 && heldUnder(r.longestMs, STEP_BOUND_MS), `the ${kind === "summary" ? "ledgerSummary" : "externalPaymentEventsFor"} steps yield within the Tempo history: with ${rowCost.toFixed(3)} ms more work per Tempo row (${tempoRows} rows), the longest of ${r.steps} steps ran ${r.longestMs.toFixed(1)} ms ours (${STEP.note})`);
     }
   } finally { rev._setTempoRowCostForTests(null); }
 }
@@ -331,12 +353,12 @@ const { ctx } = buildRoutePerfFixture({ sellers: 5800, toolsTarget: 198_000, cac
   { const [o, v] = cache.entries().next().value; cache.set(o, v); }
   const sliced = await blockOf(() => x.indexSnapshotAsync(ctx));
   ok(whole.sellers.length >= 5800 && isDeepStrictEqual(stripAsOf(sliced.value), stripAsOf(whole)), `indexSnapshotAsync equals indexSnapshot (${whole.sellers.length} sellers)`);
-  ok(heldUnder(sliced.ms, GAP_MS), `...and never held the loop past ${GAP_MS} ms (${GAP.note}) (worst ${sliced.ms} ms of thread CPU)`);
+  ok(heldUnder(sliced.ms, GAP_MS), `...and never held the loop past ${GAP_MS} ms (${GAP.note}) (worst ${sliced.ms} ms ours)`);
 }
 {
   const ourTools = [];
   const cold = await blockOf(() => x.indexRowsReady({ ourTools, excludeOrigin: "" }));
-  ok(heldUnder(cold.ms, GAP_MS), `a cold tool directory is built in slices, never past ${GAP_MS} ms (${GAP.note}) (worst ${cold.ms} ms of thread CPU)`);
+  ok(heldUnder(cold.ms, GAP_MS), `a cold tool directory is built in slices, never past ${GAP_MS} ms (${GAP.note}) (worst ${cold.ms} ms ours)`);
   const digest = (r) => createHash("sha256").update(JSON.stringify([r.total, r.matched, r.described, r.results])).digest("hex");
   const sliced = [digest(x.allIndexedTools({ limit: 300, offset: 40_000 })), digest(x.allIndexedTools({ search: "json", limit: 200 }))];
   const total = x.allIndexedTools({ limit: 1 }).total;
@@ -366,7 +388,7 @@ const { ctx } = buildRoutePerfFixture({ sellers: 5800, toolsTarget: 198_000, cac
   const projected = x._routableRowBuildsForTest() - before;
   ok(rebuilt.value.length === first.length + 1 && projected === 2, `a seller-summary rebuild projects only the changed sellers (${projected} of ${rebuilt.value.length})`);
   ok(parses <= 16, `...and parses URLs for the changed sellers only (${parses} parses over ${rebuilt.value.length} sellers)`);
-  ok(heldUnder(rebuilt.ms, GAP_MS), `...and never held the loop past ${GAP_MS} ms (${GAP.note}) (worst ${rebuilt.ms} ms of thread CPU; longest gap ${rebuilt.raw} ms, ${rebuilt.gc} ms of it the collector)`);
+  ok(heldUnder(rebuilt.ms, GAP_MS), `...and never held the loop past ${GAP_MS} ms (${GAP.note}) (worst ${rebuilt.ms} ms ours; longest gap ${rebuilt.raw} ms, ${rebuilt.gc} ms of it the collector)`);
   cache.delete("https://stall-routes-new.example");
 }
 
@@ -400,14 +422,16 @@ const mp = await import("../src/market-page.js");
     const oneTurnMs = Math.round(performance.now() - t0);
     const sliced = await blockOf(() => mp.marketPageAsync(null, "https://agent402.tools", opts));
     ok(sliced.value === whole && whole.length > 100_000, `/marketplace${all ? "?all=1" : ""}: the sliced page is the one-turn page, byte for byte (${whole.length} chars, ${labelled.sellers.length} sellers)`);
-    ok(heldUnder(sliced.ms, GAP_MS), `...and never held the loop past ${GAP_MS} ms (${GAP.note}) (worst ${sliced.ms} ms of thread CPU; longest gap ${sliced.raw} ms, ${sliced.gc} ms of it the collector; the page in one turn: ${oneTurnMs} ms)`);
     // The page's own work per step, timed step by step: no step is more than
-    // a fraction of the whole page (the loop-lag figure above also carries
+    // a fraction of the whole page (the loop-lag figure below also carries
     // the garbage collector's tasks, which run between turns either way).
+    // Read before the loop-lag pin: its bound is the tighter one, so a hold
+    // planted in one step fails here by a wide margin, not there by a narrow one.
     // A collector pause that lands inside a step is the runtime's, not the
     // step's work, so it is subtracted the same way blockOf does.
     const st = await longestStep(() => mp._marketPageAllStepsForTest("https://agent402.tools", opts));
-    ok(st.sameShape && st.values.every((v) => v === whole) && st.count > 20 && heldUnder(st.longest, STEP_BOUND_MS), `...in ${st.count} steps, the longest ${st.longest.toFixed(1)} ms of thread CPU, each step its least over three walks (${STEP.note}; one walk's worst step ${st.single.toFixed(1)} ms; longest raw step ${st.longestRaw.toFixed(1)} ms, ${st.longestGc.toFixed(1)} ms of it the collector)`);
+    ok(st.sameShape && st.values.every((v) => v === whole) && st.count > 20 && heldUnder(st.longest, STEP_BOUND_MS), `...in ${st.count} steps, the longest ${st.longest.toFixed(1)} ms ours, each step its least over three walks (${STEP.note}; one walk's worst step ${st.single.toFixed(1)} ms; longest raw step ${st.longestRaw.toFixed(1)} ms, ${st.longestGc.toFixed(1)} ms of it the collector)`);
+    ok(heldUnder(sliced.ms, GAP_MS), `...and never held the loop past ${GAP_MS} ms (${GAP.note}) (worst ${sliced.ms} ms ours; longest gap ${sliced.raw} ms, ${sliced.gc} ms of it the collector; the page in one turn: ${oneTurnMs} ms)`);
   }
   ok(mp.marketPage("base", "https://agent402.tools", { snapshot: labelled, leaderboardSnap }) === await mp.marketPageAsync("base", "https://agent402.tools", { snapshot: labelled, leaderboardSnap }), "a chain view through marketPageAsync is marketPage's");
 }
@@ -426,15 +450,15 @@ const mp = await import("../src/market-page.js");
   // Each turn of the warm start: the nav strip, the page and a second page
   // read the snapshot, as three HTML requests landing in one turn would.
   while (x.indexWarmStartInProgress()) {
-    const t = performance.now(), c0 = threadCpuMs();
+    const t = performance.now(), c0 = oursMs();
     const before = x._indexSnapshotBuildsForTest();
     const a = x.warmStartSnapshot(ctx), b = x.warmStartSnapshot(ctx), c = x.warmStartSnapshot(ctx);
     if (!(a === b && b === c)) shared = false;
     // A build that finishes inside the readers' turn is an in-line build; the
     // sliced rebuild only starts here and finishes over later turns.
     if (x._indexSnapshotBuildsForTest() - before > 1) inLine++;
-    // In this thread's CPU, as blockOf reads a gap (the wall time is printed).
-    readerWorst = Math.max(readerWorst, threadCpuMs() - c0);
+    // Ours, as blockOf reads a gap (the wall time is printed).
+    readerWorst = Math.max(readerWorst, Math.min(performance.now() - t, oursMs() - c0));
     readerWorstWall = Math.max(readerWorstWall, performance.now() - t);
     turns++;
     await new Promise((r) => setImmediate(r));
@@ -449,7 +473,7 @@ const mp = await import("../src/market-page.js");
   ok(builds < turns, `the readers of ${turns} turns shared ${builds} snapshot builds (each reader used to build its own: ${turns * 3})`);
   // The loop's own worst block over the warm start is printed, not bounded:
   // it is mostly the loader's batches, which this file does not pin.
-  ok(heldUnder(readerWorst, GAP_MS), `...and the readers' longest turn was ${Math.round(readerWorst)} ms of thread CPU (${GAP.note}; ${Math.round(readerWorstWall)} ms of wall time; the loop's longest block over the warm start, loader batches included: ${warmWorst} ms)`);
+  ok(heldUnder(readerWorst, GAP_MS), `...and the readers' longest turn was ${Math.round(readerWorst)} ms ours (${GAP.note}; ${Math.round(readerWorstWall)} ms of wall time; the loop's longest block over the warm start, loader batches included: ${warmWorst} ms)`);
   ok(isDeepStrictEqual(x.warmStartSnapshot(ctx).sellers.length, x.indexSnapshot(ctx).sellers.length), "after the warm start a reader builds from the whole cache");
 }
 

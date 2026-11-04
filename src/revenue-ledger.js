@@ -1137,12 +1137,13 @@ async function runLedgerStepsSliced(gen) {
 }
 
 /** Test hook: the longest stretch one step of a sliced read runs between its
- *  yields, in this thread's CPU milliseconds (a wallet's rows are answered
- *  outside the timing, as the sliced runner answers them a page at a time).
- *  The sliced runner can only yield where a step does. */
-export function _longestLedgerStepForTests(kind, wallets) {
+ *  yields, in milliseconds of `clock` (this thread's CPU by default; a test
+ *  can pass a clock that also counts a blocking wait). A wallet's rows are
+ *  answered outside the timing, as the sliced runner answers them a page at
+ *  a time. The sliced runner can only yield where a step does. */
+export function _longestLedgerStepForTests(kind, wallets, { clock } = {}) {
   const gen = kind === "events" ? externalPaymentEventSteps(wallets) : ledgerSummarySteps(wallets);
-  const cpuMs = () => { const u = process.threadCpuUsage(); return (u.user + u.system) / 1000; };
+  const cpuMs = typeof clock === "function" ? clock : () => { const u = process.threadCpuUsage(); return (u.user + u.system) / 1000; };
   let q = null, longest = 0, steps = 0, answer;
   for (;;) {
     const c0 = cpuMs();
