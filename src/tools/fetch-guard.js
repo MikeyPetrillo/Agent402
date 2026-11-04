@@ -27,6 +27,63 @@ function blockedError(cause) {
   return Object.assign(new Error(UNRESOLVED_OR_PRIVATE), { code: SSRF_BLOCK_CODE, ...(cause ? { cause } : {}) });
 }
 
+// A resolver that failed to answer (as opposed to answering "no such name"):
+// the name may well exist, so the caller's URL is not at fault and a retry can
+// succeed. getaddrinfo reports EAI_AGAIN; the c-ares codes cover a resolver
+// that returned SERVFAIL, timed out, refused the query or was unreachable.
+// Answered apart from the refusal above, it says nothing about which names
+// exist or what they resolve to.
+const TRANSIENT_LOOKUP_CODES = new Set([
+  "EAI_AGAIN", "ESERVFAIL", "ETIMEOUT", "ETIMEDOUT", "ECONNREFUSED", "EREFUSED", "ECANCELLED", "EDNSLOOKUPTIMEOUT",
+]);
+export const LOOKUP_RETRY_AFTER_S = 5;
+const LOOKUP_UNAVAILABLE_CODE = "EDNSUNAVAILABLE";
+/** The answer for a lookup the resolver could not finish. Names no address class. */
+export const LOOKUP_UNAVAILABLE = "Name resolution for the URL host is temporarily unavailable on this server; retry shortly";
+
+/** True when a resolver error means "try again", not "this name has no answer". */
+export function isTransientLookupError(err) {
+  return TRANSIENT_LOOKUP_CODES.has(String(err?.code || ""));
+}
+
+function lookupUnavailable(cause) {
+  return Object.assign(new Error(LOOKUP_UNAVAILABLE), {
+    code: LOOKUP_UNAVAILABLE_CODE,
+    statusCode: 503,
+    attribution: "upstream",
+    retryAfter: LOOKUP_RETRY_AFTER_S,
+    ...(cause ? { cause } : {}),
+  });
+}
+
+// The retryable lookup failure, wherever it sits on a thrown fetch error's cause chain.
+function lookupUnavailableIn(err) {
+  let e = err;
+  for (let i = 0; i < 5 && e; i++) {
+    if (e.code === LOOKUP_UNAVAILABLE_CODE) return e;
+    e = e.cause;
+  }
+  return null;
+}
+
+// One bound on an upfront lookup, so a resolver that never answers reads as a
+// lookup that could not finish rather than a request that hangs.
+// DNS_LOOKUP_TIMEOUT_MS overrides the default, read per call.
+const LOOKUP_TIMEOUT_MS = 10_000;
+async function boundedLookup(host) {
+  const timeoutMs = Number(process.env.DNS_LOOKUP_TIMEOUT_MS) > 0 ? Number(process.env.DNS_LOOKUP_TIMEOUT_MS) : LOOKUP_TIMEOUT_MS;
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(Object.assign(new Error("lookup timed out"), { code: "EDNSLOOKUPTIMEOUT" })), timeoutMs);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([lookup(host), deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function isPrivateV4(ip) {
   const [a, b, c] = ip.split(".").map(Number);
   return (
@@ -194,8 +251,9 @@ function guardedLookup(hostname, options, callback) {
   // anyway, so nothing is lost.
   lookupCb(hostname, { ...options, family: 4 }, (err, address, family) => {
     // A name that does not resolve is refused exactly like a name with a
-    // private answer: on a redirect hop the two must read the same.
-    if (err) return callback(blockedError(err));
+    // private answer: on a redirect hop the two must read the same. A
+    // resolver that could not answer at all is neither, and is retryable.
+    if (err) return callback(isTransientLookupError(err) ? lookupUnavailable(err) : blockedError(err));
     const entries = Array.isArray(address) ? address : [{ address, family }];
     for (const e of entries) {
       if (isPrivateIp(e.address)) return callback(blockedError());
@@ -302,8 +360,9 @@ export async function assertPublicUrl(rawUrl) {
   if (!isIP(host)) {
     let resolved;
     try {
-      resolved = await lookup(host);
-    } catch {
+      resolved = await boundedLookup(host);
+    } catch (err) {
+      if (isTransientLookupError(err)) throw lookupUnavailable(err);
       throw badRequest(UNRESOLVED_OR_PRIVATE);
     }
     if (isPrivateIp(resolved.address)) {
@@ -414,6 +473,8 @@ export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, 
     // Every hop, the first included: a refused connection (no answer for the
     // name, or a private one) is one 400 with one sentence.
     if (isSsrfBlock(err)) throw badRequest(UNRESOLVED_OR_PRIVATE);
+    const unavailable = lookupUnavailableIn(err);
+    if (unavailable) throw lookupUnavailable(unavailable.cause);
     const timedOut = err.name === "AbortError";
     // undici's generic "fetch failed" hides the real transport error — walk
     // the cause chain for a code (ECONNRESET, UND_ERR_CONNECT_TIMEOUT, …) so
