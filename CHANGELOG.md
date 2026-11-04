@@ -74,6 +74,12 @@ Surfaces:
 - html-frames' published example fits its 402 whole; a paid sweep that meets
   an example the 402 shortened replays the full one from /openapi.json
   instead of the placeholder.
+- Chain pages and /marketplace keep their shared legend and scope notes in
+  one collapsed "About these figures" block; each framework adapter has one
+  page at /integrations/<slug> with its configuration table
+  (/docs/adapters/<slug> redirects there); tool, integration and /markets
+  pages share one failed-call footnote; openings name the chain count and
+  link the one chain list on /pricing; page titles are plain descriptions.
 Operations:
 - The Bazaar keep-alive sweep follows a slow route to its settlement: a route
   that refuses a synchronous paid call is called again with `Prefer:
