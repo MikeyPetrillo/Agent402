@@ -22,7 +22,7 @@ const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
   (await import("../src/tools/sanctions-kit.js")).__seedPayoutListForTests();
   const { pickPayableAccept } = await import("../src/x402-buyer.js");
   (await import("../src/x402-buyer.js")).__setBuyerAddressGuardForTest(false); // this suite's sellers are local stubs
-  const good = { network: MAINNET, scheme: "exact", asset: USDC, amount: "5000", payTo: "J7aN3PLJnTCF5qpEnvJHJsnCjcGuqC2rYtEM8Gv3xwg" };
+  const good = { network: MAINNET, scheme: "exact", asset: USDC, amount: "5000", payTo: "JBTACMs35KqALb85iEpat8GT7uwukLc6wZ4vrHWpeQSv" };
   ok(pickPayableAccept([good], "solana") === good, "mainnet solana/exact/USDC accept is pinned");
   ok(pickPayableAccept([{ ...good, network: "solana" }], "solana") !== null, "bare v1 'solana' network label matches");
   ok(pickPayableAccept([{ ...good, network: DEVNET }], "solana") === null, "DEVNET accept never matches - different genesis, unsettleable payment");
@@ -54,7 +54,7 @@ const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
 // ---- 4. proven-seller gate (fail closed) --------------------------------
 {
   const { solanaInboundCount, assertProvenSolanaSeller } = await import("../src/solana-buyer.js");
-  const payTo = "J7aN3PLJnTCF5qpEnvJHJsnCjcGuqC2rYtEM8Gv3xwg";
+  const payTo = "JBTACMs35KqALb85iEpat8GT7uwukLc6wZ4vrHWpeQSv";
   const now = Math.floor(Date.now() / 1000);
   // A stub that also serves getTransaction: `txs` maps signature -> a
   // {credit, funder} intent, from which we synthesize pre/postTokenBalances.
@@ -163,7 +163,8 @@ const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
 
   // Stub seller: bare request -> 402 with a real solana/exact accept; a
   // request carrying a payment header -> 200 + the header captured.
-  const sellerPayTo = "J7aN3PLJnTCF5qpEnvJHJsnCjcGuqC2rYtEM8Gv3xwg";
+  // An outside seller's address: one of our own wallets is refused before signing (src/own-wallets.js).
+  const sellerPayTo = "JBTACMs35KqALb85iEpat8GT7uwukLc6wZ4vrHWpeQSv";
   let seenPayment = null, seenHeaderNames = null;
   const seller = createServer((req, res) => {
     const pay = req.headers["payment-signature"] || req.headers["x-payment"];
@@ -222,7 +223,7 @@ const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
 {
   const { passesSolanaResolveGate } = await import("../src/solana-buyer.js");
   const mk = (accepts) => Buffer.from(JSON.stringify({ x402Version: 2, accepts })).toString("base64");
-  const payTo = "J7aN3PLJnTCF5qpEnvJHJsnCjcGuqC2rYtEM8Gv3xwg";
+  const payTo = "JBTACMs35KqALb85iEpat8GT7uwukLc6wZ4vrHWpeQSv";
   const solAccept = { network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", payTo };
   const proven = await passesSolanaResolveGate({ header: mk([solAccept]), inboundFn: async () => 50 });
   ok(proven.ok === true && proven.payTo === payTo, "a proven candidate passes the resolve-time gate with its payTo named");
@@ -255,7 +256,7 @@ const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
     res.setHeader("content-type", "application/json");
     if (pay) refuserPaidAttempts++;
     if (!pay) {
-      const accepts = [{ scheme: "exact", network: MAINNET, asset: USDC, amount: "5000", payTo: "J7aN3PLJnTCF5qpEnvJHJsnCjcGuqC2rYtEM8Gv3xwg", maxTimeoutSeconds: 60,
+      const accepts = [{ scheme: "exact", network: MAINNET, asset: USDC, amount: "5000", payTo: "JBTACMs35KqALb85iEpat8GT7uwukLc6wZ4vrHWpeQSv", maxTimeoutSeconds: 60,
         extra: { feePayer: "8Y9wxHqJt3mfMUv7pQnBRZUKGdCwjrLBGWtaeu6AGFfe", recentBlockhash: "GfVcyD4kkTrj4bKc7WA9sZCin9JDbdT4Zkd3EittNR1W", lastValidBlockHeight: "250000000" } }];
       res.statusCode = 402;
       res.setHeader("payment-required", Buffer.from(JSON.stringify({ x402Version: 2, error: "payment required", accepts })).toString("base64"));
@@ -358,7 +359,7 @@ const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
 {
   const { assertProvenSolanaSeller, passesSolanaResolveGate, svmUnprovenAllowanceAtomic } = await import("../src/solana-buyer.js");
   const thin = async () => 0;
-  const outcome = (opts) => assertProvenSolanaSeller("J7aN3PLJnTCF5qpEnvJHJsnCjcGuqC2rYtEM8Gv3xwg", { inboundFn: thin, ...opts }).then(() => "paid", (e) => e.statusCode);
+  const outcome = (opts) => assertProvenSolanaSeller("JBTACMs35KqALb85iEpat8GT7uwukLc6wZ4vrHWpeQSv", { inboundFn: thin, ...opts }).then(() => "paid", (e) => e.statusCode);
   ok((await outcome({})) === 409, "no allowance: a thin seller is refused 409 as before");
   ok((await outcome({ allowUnprovenUpToAtomic: 10000n, quotedAtomic: "1000" })) === "paid", "allowance $0.01, quote $0.001 -> the thin seller is paid");
   ok((await outcome({ allowUnprovenUpToAtomic: 10000n, quotedAtomic: "10000" })) === "paid", "quote exactly AT the allowance is paid");
@@ -366,7 +367,7 @@ const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
   ok((await outcome({ allowUnprovenUpToAtomic: 10000n, quotedAtomic: null })) === 409, "no quote to bound -> 409");
   ok((await outcome({ allowUnprovenUpToAtomic: 0n, quotedAtomic: "1" })) === 409, "allowance 0 -> the hard floor");
   const dead = async () => { throw new Error("RPC 429"); };
-  ok((await assertProvenSolanaSeller("J7aN3PLJnTCF5qpEnvJHJsnCjcGuqC2rYtEM8Gv3xwg", { inboundFn: dead, allowUnprovenUpToAtomic: 10000n, quotedAtomic: "1" }).then(() => "paid", (e) => e.statusCode)) === 503,
+  ok((await assertProvenSolanaSeller("JBTACMs35KqALb85iEpat8GT7uwukLc6wZ4vrHWpeQSv", { inboundFn: dead, allowUnprovenUpToAtomic: 10000n, quotedAtomic: "1" }).then(() => "paid", (e) => e.statusCode)) === 503,
     "an UNREADABLE chain is still refused 503 even under the allowance - unproven is not unverifiable");
   const saved = process.env.SOR_SVM_UNPROVEN_MAX_USD;
   delete process.env.SOR_SVM_UNPROVEN_MAX_USD;
@@ -376,7 +377,7 @@ const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
   process.env.SOR_SVM_UNPROVEN_MAX_USD = "abc"; ok(svmUnprovenAllowanceAtomic() === 0n, "a malformed value disables rather than widens");
   process.env.SOR_SVM_UNPROVEN_MAX_USD = "0.002"; ok(svmUnprovenAllowanceAtomic() === 2000n, "a custom allowance is honoured");
   if (saved === undefined) delete process.env.SOR_SVM_UNPROVEN_MAX_USD; else process.env.SOR_SVM_UNPROVEN_MAX_USD = saved;
-  const hdr = Buffer.from(JSON.stringify({ accepts: [{ network: MAINNET, payTo: "J7aN3PLJnTCF5qpEnvJHJsnCjcGuqC2rYtEM8Gv3xwg" }] })).toString("base64");
+  const hdr = Buffer.from(JSON.stringify({ accepts: [{ network: MAINNET, payTo: "JBTACMs35KqALb85iEpat8GT7uwukLc6wZ4vrHWpeQSv" }] })).toString("base64");
   const g = await passesSolanaResolveGate({ header: hdr, inboundFn: async () => 3 });
   ok(g.ok === false && g.inbound === 3, "the resolve gate reports the COUNT on a short-history refusal, so the resolver can tell 'thin' from 'unreadable'");
   const gu = await passesSolanaResolveGate({ header: hdr, inboundFn: dead });
@@ -392,7 +393,7 @@ const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
     res.setHeader("content-type", "application/json");
     if (!pay) {
       res.statusCode = 402;
-      res.end(JSON.stringify({ x402Version: 1, error: "X-PAYMENT header required", accepts: [{ scheme: "exact", network: MAINNET, asset: USDC, maxAmountRequired: "5000", payTo: "J7aN3PLJnTCF5qpEnvJHJsnCjcGuqC2rYtEM8Gv3xwg", maxTimeoutSeconds: 60, resource: "http://stub/v1", description: "stub", mimeType: "application/json",
+      res.end(JSON.stringify({ x402Version: 1, error: "X-PAYMENT header required", accepts: [{ scheme: "exact", network: MAINNET, asset: USDC, maxAmountRequired: "5000", payTo: "JBTACMs35KqALb85iEpat8GT7uwukLc6wZ4vrHWpeQSv", maxTimeoutSeconds: 60, resource: "http://stub/v1", description: "stub", mimeType: "application/json",
         extra: { feePayer: "8Y9wxHqJt3mfMUv7pQnBRZUKGdCwjrLBGWtaeu6AGFfe", recentBlockhash: "GfVcyD4kkTrj4bKc7WA9sZCin9JDbdT4Zkd3EittNR1W", lastValidBlockHeight: "250000000" } }] }));
       return;
     }
@@ -412,7 +413,7 @@ const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
     res.setHeader("content-type", "application/json");
     const sig = req.headers["payment-signature"], xp = req.headers["x-payment"];
     if (!sig && !xp) {
-      const accepts = [{ scheme: "exact", network: MAINNET, asset: USDC, amount: "5000", payTo: "J7aN3PLJnTCF5qpEnvJHJsnCjcGuqC2rYtEM8Gv3xwg", maxTimeoutSeconds: 60,
+      const accepts = [{ scheme: "exact", network: MAINNET, asset: USDC, amount: "5000", payTo: "JBTACMs35KqALb85iEpat8GT7uwukLc6wZ4vrHWpeQSv", maxTimeoutSeconds: 60,
         extra: { feePayer: "8Y9wxHqJt3mfMUv7pQnBRZUKGdCwjrLBGWtaeu6AGFfe", recentBlockhash: "GfVcyD4kkTrj4bKc7WA9sZCin9JDbdT4Zkd3EittNR1W", lastValidBlockHeight: "250000000" } }];
       res.statusCode = 402;
       res.setHeader("payment-required", Buffer.from(JSON.stringify({ x402Version: 2, error: "payment required", accepts })).toString("base64"));

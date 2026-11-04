@@ -79,7 +79,7 @@ export function isPrivateIp(ip) {
   if (g.slice(0, 7).every((x) => x === 0) && g[7] === 1) return true; // ::1
   // IPv4-mapped (::ffff:0:0/96) and IPv4-compatible (::/96) — re-check the v4
   if (g.slice(0, 5).every((x) => x === 0) && (g[5] === 0xffff || g[5] === 0)) return isPrivateV4(embedded(g[6], g[7]));
-  // IPv4-translated (::ffff:0:0:0/96, RFC 2765) — re-check the v4
+  // IPv4-translated (::ffff:0:0:0/96, RFC 2765): re-check the v4
   if (g.slice(0, 4).every((x) => x === 0) && g[4] === 0xffff && g[5] === 0) return isPrivateV4(embedded(g[6], g[7]));
   // NAT64 64:ff9b::/96 — translated v4 in the low 32 bits
   if (g[0] === 0x64 && g[1] === 0xff9b && g[2] === 0 && g[3] === 0 && g[4] === 0 && g[5] === 0) return isPrivateV4(embedded(g[6], g[7]));
