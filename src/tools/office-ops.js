@@ -219,19 +219,32 @@ export function validateXlsx(input) {
   return { sheets: out, filename: fileNameOf(input.filename, "xlsx", "workbook") };
 }
 
-// The characters a number shows under a number format (its first section):
-// thousands separators, the decimals the format fixes, a currency or percent
-// sign. Excel draws ##### in a column narrower than that.
+// The characters a number shows under a number format: the section Excel
+// uses (a second for negatives, a third for zero, when given), its digits,
+// thousands separators and fixed decimals, and every literal it prints (quoted
+// or escaped text, currency and percent signs, parentheses). Excel draws #####
+// in a column narrower than that.
 function formattedLength(v, fmt) {
   if (!fmt) return String(v).length;
-  const f = String(fmt).split(";")[0];
-  const pct = f.includes("%");
+  const sections = String(fmt).split(";");
+  const ownSign = v < 0 && sections[1] !== undefined;
+  const f = ownSign ? sections[1] : v === 0 && sections[2] !== undefined ? sections[2] : sections[0];
+  const quoted = [...f.matchAll(/"([^"]*)"/g)].reduce((t, m) => t + m[1].length, 0);
+  const bare = f.replace(/"[^"]*"/g, "");
+  const escaped = (bare.match(/\\./g) || []).length;
+  const plain = bare.replace(/\\./g, "").replace(/\[[^\]]*\]/g, "").replace(/[_*]./g, "");
+  const sign = v < 0 && !ownSign ? 1 : 0;
+  // A date or time format shows its own pattern's width; text-only shows its literals.
+  if (!/[0#?]/.test(plain)) return /[ymdhs]/i.test(plain) ? plain.length + quoted + escaped + 2 : quoted + escaped + plain.length;
+  const decimals = (/\.([0#?]+)/.exec(plain)?.[1].length) ?? 0;
+  const sci = /E[+-](0+)/i.exec(plain);
+  if (sci) return 1 + (decimals ? decimals + 1 : 0) + 2 + Math.max(2, sci[1].length) + quoted + escaped + sign;
+  const pct = plain.includes("%");
   const n = Math.abs(pct ? v * 100 : v);
-  const decimals = (/\.([0#]+)/.exec(f)?.[1].length) ?? 0;
   const intDigits = String(Math.trunc(Number(n.toFixed(decimals)))).length;
-  const separators = f.includes(",") ? Math.floor((intDigits - 1) / 3) : 0;
-  const signs = (f.replace(/"[^"]*"/g, "").match(/[$%\u20ac\u00a3\u00a5]/g) || []).length;
-  return intDigits + separators + (decimals ? decimals + 1 : 0) + signs + (v < 0 ? 1 : 0);
+  const separators = plain.includes(",") ? Math.floor((intDigits - 1) / 3) : 0;
+  const literals = (plain.match(/[$%\u20ac\u00a3\u00a5()+\-/: ]/g) || []).length;
+  return intDigits + separators + (decimals ? decimals + 1 : 0) + literals + quoted + escaped + sign;
 }
 function autoWidth(data, ci, fmt = null, headerRow = false) {
   let w = 8;
@@ -325,7 +338,7 @@ export async function buildDocx(spec) {
   const runsOf = (toks, fmt = {}, depth = 0) => {
     const out = [];
     if (!toks) return out;
-    if (depth > L.inlineNesting) throw bad(`"markdown" nests inline formatting more than ${L.inlineNesting} levels deep (cap nesting)`);
+    if (depth > L.inlineNesting) throw bad(`"markdown" nests inline formatting more than ${L.inlineNesting} levels deep (cap inlineNesting)`);
     for (const t of toks) {
       switch (t.type) {
         case "strong": out.push(...runsOf(t.tokens, { ...fmt, bold: true }, depth + 1)); break;
@@ -591,7 +604,7 @@ export async function buildPptx(spec) {
     const s = pres.addSlide();
     let top = PAD;
     if (sl.title) {
-      const titleSize = fittedSize([{ text: sl.title }], { wIn: W - 2 * PAD, hIn: 0.9, sizes: [30, 26, 22, 20, 18], spaceAfter: false });
+      const titleSize = fittedSize([{ text: sl.title }], { wIn: W - 2 * PAD, hIn: 0.9, sizes: [30, 26, 22, 20, 18, 16, 14], spaceAfter: false });
       s.addText(sl.title, { x: PAD, y: 0.35, w: W - 2 * PAD, h: 0.9, fontFace: "Calibri", fontSize: titleSize, bold: true, color: ink, valign: "middle", fit: "shrink" });
       top = 1.4;
     }

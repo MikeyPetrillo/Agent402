@@ -296,6 +296,7 @@ for (const t of OFFICE_TOOLS) {
 // ----------------------------------------------------------------------------
 // Layout as the file opens: what a reader sees before editing anything
 // ----------------------------------------------------------------------------
+const P_TITLE_MAX = OFFICE_LIMITS.pptx.titleChars;
 {
   // A formatted number is sized at its shown width: a column narrower than
   // "$98,000.00" opens as ##### in Excel.
@@ -303,6 +304,12 @@ for (const t of OFFICE_TOOLS) {
   const sheet = unzip(buf).get("xl/worksheets/sheet1.xml");
   const width = Number(/<col [^>]*min="1"[^>]*width="([\d.]+)"/.exec(sheet)?.[1]);
   ok(width >= "$98,000.00".length + 1, `a currency-formatted column is as wide as its shown value (width ${width} for "$98,000.00")`);
+  // Quoted text, a negatives section in parentheses and scientific notation print too.
+  for (const [v, fmt, shown] of [[123456, '0" units"', "123456 units"], [98000, '"Total: "#,##0', "Total: 98,000"], [-1234.5, "#,##0.00;(#,##0.00)", "(1,234.50)"], [12345.678, "0.00E+00", "1.23E+04"]]) {
+    const { buf: b } = await buildHere("xlsx", { rows: [["v"], [v]], numberFormats: [fmt], header: true });
+    const w = Number(/<col [^>]*min="1"[^>]*width="([\d.]+)"/.exec(unzip(b).get("xl/worksheets/sheet1.xml"))?.[1]);
+    ok(w >= shown.length + 1, `format ${fmt} is sized for "${shown}" (width ${w})`);
+  }
 }
 {
   // A task item writes its box once: the list token's checkbox is not a block of its own.
@@ -326,6 +333,13 @@ for (const t of OFFICE_TOOLS) {
     const { buf: nb } = await buildHere("pptx", { slides: [{ title: "Plan", numbered: true, bullets: ["Ship", { text: "Export", level: 1 }, { text: "Status", level: 1 }, "Hire", { text: "Two", level: 1 }, "Review"] }] });
     const starts = [...unzip(nb).get("ppt/slides/slide1.xml").matchAll(/<a:buAutoNum [^>]*startAt="(\d+)"/g)].map((m) => Number(m[1]));
     ok(JSON.stringify(starts) === "[1,1,2,2,1,3]", `numbered bullets carry their place per level (startAt ${JSON.stringify(starts)})`);
+  }
+  {
+    // The longest title the cap allows still fits its box.
+    const { buf: tb } = await buildHere("pptx", { slides: [{ title: "Long title words ".repeat(18).slice(0, P_TITLE_MAX), bullets: ["x"] }] });
+    const [t] = (unzip(tb).get("ppt/slides/slide1.xml").match(/<p:sp>[\s\S]*?<\/p:sp>/g) || []).map((x) => ({ cy: Number(/<a:ext cx="\d+" cy="(\d+)"/.exec(x)?.[1]) / 12700, sz: Number(/ sz="(\d+)"/.exec(x)?.[1]) / 100 }));
+    const perLine = Math.floor(((13.333 - 1 - 0.4) * 72) / (t.sz * 0.5)), lines = Math.ceil(P_TITLE_MAX / perLine);
+    ok(lines * t.sz * 1.2 <= t.cy, `a ${P_TITLE_MAX}-character title fits its box (${t.sz} pt, ${lines} lines in ${Math.round(t.cy)} pt)`);
   }
   const [title2] = shapes("ppt/slides/slide2.xml");
   ok(title1.sz === 30 && title2.sz < 30 && 2 * title2.sz * 1.2 <= title2.cy, `a title that wraps to two lines steps down to fit its box (${title2.sz} pt in ${Math.round(title2.cy)} pt; a short title stays ${title1.sz} pt)`);
@@ -408,7 +422,7 @@ await refuses(() => finish(Buffer.alloc(11), 10), 422, /cap outputBytes/, "outpu
 // (the guard in runsOf), well before the call stack would run out.
 {
   const nest = (n) => { let md = "x"; for (let i = 0; i < n; i++) { const m = i % 2 ? "*" : "**"; md = `${m}a ${md} b${m}`; } return md; };
-  await refuses(() => dh({ markdown: nest(40) }), 400, /inline formatting more than \d+ levels deep \(cap nesting\)/, "docx: inline emphasis nested 40 levels answers the inline cap nesting 400");
+  await refuses(() => dh({ markdown: nest(40) }), 400, /inline formatting more than \d+ levels deep \(cap inlineNesting\)/, "docx: inline emphasis nested 40 levels answers the inlineNesting 400");
   ok((await dh({ markdown: nest(6) })).bytes > 0, "docx: emphasis nested 6 levels builds");
 }
 
