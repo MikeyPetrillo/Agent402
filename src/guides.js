@@ -81,13 +81,10 @@ live service ([agent402.tools](https://agent402.tools)) you can pay right now.
 
 ## The protocol in one paragraph
 
-Your client calls a paid endpoint. The server replies \`402\` with a
-machine-readable quote - price, asset (USDC), network (Base), pay-to address.
-Your client signs a USDC transfer authorization from its own wallet (no gas
-needed; the facilitator sponsors it) and retries the request with the payment
-header. The server verifies the payment, runs the request, and settles on-chain
-only when the response succeeds, so a failed x402 call is not charged. Seconds, end
-to end. **The payment is the identity** - no account ever existed.
+Your client calls a paid endpoint and gets a \`402\` quote; it signs a USDC
+authorization from its own wallet and retries, and the server settles only when
+the response succeeds, so a failed x402 call is not charged. The headers, step
+by step: [how x402 works](/learn/x402).
 
 ## See a quote (free)
 
