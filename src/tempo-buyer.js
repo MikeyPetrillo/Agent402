@@ -23,6 +23,7 @@
 //     hold no relay key here. mppx signs pull credentials validBefore = now+25s,
 //     so we sign and send immediately - a slow seller is bounded by their own
 //     window, never by ours.
+import { assertNotOwnPayout } from "./own-wallets.js";
 import { createHash } from "node:crypto";
 import { assertSigningAllowed } from "./signing-halt.js";
 import { assertPayoutScreened } from "./tools/sanctions-kit.js";
@@ -379,6 +380,8 @@ export async function payTempo(url, {
   //    listed, 503 when no list is held (an unscreened payout is never made),
   //    both before anything is signed. A Tempo address is an EVM address,
   //    compared lowercased.
+  // Never one of our own wallets.
+  await assertNotOwnPayout(recipient);
   await assertPayoutScreened(recipient, { label: recipient.toLowerCase() });
   // A charge may name split recipients that the payment also pays. Only the
   // primary recipient is screened and proven, so a challenge with any split

@@ -112,6 +112,23 @@ let t3 = null;
 try { await payX402("https://seller.example/x", { maxAtomic: 500000n, method: "POST", body: {} }); } catch (e) { t3 = e; }
 ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC asset refused (chain pinned by asset)");
 
+// --- our own wallets are never paid ----------------------------------------
+// A listing that fronts this host carries our own payTo; the buyer refuses it
+// before anything is signed or held, whatever the index recorded.
+{
+  const { _spentThisWindow } = await import("../src/x402-buyer.js");
+  const OURS = "0x3333333333333333333333333333333333333333";
+  const prev = process.env.WALLET_ADDRESS;
+  process.env.WALLET_ADDRESS = OURS;
+  try {
+    globalThis.fetch = async () => challenge([{ ...v1entry({ amt: "1000" }), payTo: OURS.toUpperCase().replace(/^0X/, "0x") }]);
+    let e = null;
+    try { await payX402("https://seller.example/x", { maxAtomic: 500000n, method: "POST", body: {}, allowUnproven: true }); } catch (err) { e = err; }
+    ok(e && e.statusCode === 502 && /own wallets/.test(e.message) && /Nothing was signed/.test(e.message), `a challenge naming our own wallet (any letter case) is refused before signing (${e?.statusCode} ${e?.message})`);
+    ok(_spentThisWindow() === 0n, "...and holds no spend budget");
+  } finally { if (prev === undefined) delete process.env.WALLET_ADDRESS; else process.env.WALLET_ADDRESS = prev; }
+}
+
 // --- payTo binding: pay the address that EARNED the proven-ness ---------------
 //
 // The reliability gate joins an origin's ADVERTISED payTo to settlements we

@@ -35,7 +35,10 @@ LLC: credit the entity, never a personal name.
   of them for quick tunnels); a slot is released after `INDEX_RELEASE_AFTER_DAYS` (30) with no
   successful probe, `INDEX_SETTLED_RELEASE_AFTER_DAYS` (90, never below the plain window) for a
   seller that has settled, `INDEX_TUNNEL_RELEASE_AFTER_DAYS` (3) for a tunnel. The operator
-  seeds past the cap with `POST /__operator/index/seed`.
+  seeds past the cap with `POST /__operator/index/seed`. A registration naming one of our own
+  hosts (the base URL, a www or trailing-dot twin, our Railway domain, or a host listed in
+  `SELF_SELLER_HOSTS`) is refused, and no buyer ever pays one of our own wallets
+  (`src/own-wallets.js`, checked by route-execute and again by each buyer before it signs).
 - `src/tools/route-execute.js`: route-and-execute, buys from proven external sellers per chain
   (`src/x402-buyer.js`, `src/solana-buyer.js` whose external leg runs under `SOR_SVM_BUDGET_MS`,
   inside a recent blockhash's life, `src/tempo-buyer.js`, `src/algorand-sellers.js`).
@@ -433,8 +436,12 @@ heartbeat page on it under one issue that closes when nothing is owed.
   run in a small worker pool (`office-pool.js`, `office-worker.js`): `OFFICE_WORKERS_MAX` workers
   (default 2), at most `OFFICE_QUEUE_MAX` calls waiting (default 16; past it a 503 with
   Retry-After), a 15 s deadline that terminates the worker (422), idle workers retired after 30 s.
-  ffmpeg, ffprobe and Chromium start with `childEnv()` (`src/tools/child-env.js`), an
-  allowlist of environment variables, so no key reaches a child process.
+  ffmpeg and ffprobe pass an audio-only `-codec_whitelist` before `-i`, so no video decoder
+  opens. html-frames runs in its own jitless browser; a payer's failed documents are bounded to
+  `HTML_FRAMES_FAIL_MAX` (default 5, per replica) per `HTML_FRAMES_FAIL_WINDOW_MS` (10 minutes),
+  then a 429 with Retry-After. ffmpeg, ffprobe and Chromium start with `childEnv()`
+  (`src/tools/child-env.js`), an allowlist of environment variables, so no key reaches a child
+  process (defense in depth: a same-user child can still read its parent's environment).
 - **Listing screen:** `src/listing-screen.js` (re-exported by `src/x402-index.js`) flags seller
   listing text that tries to instruct its reader; it depends only on `src/hidden-chars.js`, so
   a workflow with no install (`wish-issues.yml`) reads the same rules.

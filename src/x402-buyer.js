@@ -42,6 +42,7 @@ import { provenPayToMatches } from "./settlement-proof.js";
 import { assertPayoutScreened } from "./tools/sanctions-kit.js";
 import { usdcDomainVerdict, unsignableByStockBuyer, firstSignableAccept } from "./evm-usdc-domain.js";
 import { disableVendorSpendControls } from "./x402-spend-controls.js";
+import { assertNotOwnPayout } from "./own-wallets.js";
 import { readBytesCapped, readTextCapped, declaredLength, discardBody, decodeUtf8 } from "./capped-body.js";
 import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 
@@ -1011,6 +1012,8 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
   // A list older than its refresh period still screens. The payout map is
   // stored with each download and read back before the server listens, so a
   // restart screens at once instead of waiting for the next download.
+  // Never one of our own wallets, whatever the index recorded for the seller.
+  await assertNotOwnPayout(payable.payTo);
   await assertPayoutScreened(payable.payTo, { label: String(payable.payTo).slice(0, 64) });
 
   // SOLANA PROVEN-SELLER GATE (pay time, fail closed - the Tempo lesson):
