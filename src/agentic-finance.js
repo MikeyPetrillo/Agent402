@@ -12,49 +12,37 @@ import { routingProofSentence } from "./routing-proof.js";
 import { resolveRailCountTokens } from "./rails.js";
 
 import { ORG_SAME_AS } from "./repo-link.js";
+// The one-sentence definition: the visible lede and the DefinedTerm description.
+const DEFINITION = "Agentic Finance (AIFI) is software agents paying and getting paid on their own: per request, from a non-custodial wallet, over the open protocols x402 and MPP, with a verifiable receipt for each call.";
+
+// The stack, the agentic payments / commerce distinction and what one purchase
+// looks like on the wire live in the long-form post and the glossary; this page
+// links them instead of retelling them.
 const FAQS = [
-  { q: "What is Agentic Finance (AIFI)?", a: "Agentic Finance, AIFI for short, is the practice of software agents transacting on their own: discovering a service, reading a machine-readable price, paying per request from a non-custodial wallet, receiving a verifiable receipt, and, on the other side, earning per request for what they serve. No accounts, no API keys, no invoices. The payment is the identity, and every settlement is on a public ledger." },
-  { q: "How is agentic finance different from agentic payments or agentic commerce?", a: "Agentic payments is the plumbing: a wire format that lets a program pay another program (x402 and MPP are the two open ones). Agentic commerce usually means agents buying goods for humans through checkout flows. Agentic finance is the machine-to-machine economy that forms on top of the plumbing: price discovery, routing between competing sellers, reliability signals, treasury and spend controls, and transparent revenue, all operated by and for autonomous agents." },
-  { q: "Which protocols does agentic finance run on today?", a: "Two open HTTP-native standards carry it: x402 (an HTTP 402 with machine-readable payment requirements, settled in USDC by a facilitator on chains such as Base, Solana, Polygon and others) and MPP, the Machine Payments Protocol (the Payment HTTP authentication scheme, an IETF Internet-Draft, settled on Base and Celo, or natively on Tempo). Both put the price in the 402 and the payment in the retry, so an agent needs nothing but a funded wallet." },
-  { q: "What does Agent402 do in agentic finance?", a: "Agent402 is the applied layer: a catalog of 500+ pay-per-call tools an agent can buy over x402 or MPP, the open cross-seller index and Smart Order Router that finds the best external seller, buys the result from it and resells it to the agent, an on-chain seller leaderboard, live transaction and revenue transparency, and the open-source tollbooth that lets any site or API earn per request from agents. It is open source and self-hostable." },
-  { q: "Do agents need crypto to participate?", a: "To pay, an agent needs a wallet holding a stablecoin (USDC, or USDG on Robinhood Chain, or USDC.e or PathUSD on Tempo) on a supported chain; gas is sponsored on the EVM rails, so no native token is required. Agent402 also offers a free tier: pure-CPU tools are payable with a proof-of-work solve instead of money, so an agent without a wallet still has a path through." },
-  { q: "Is agentic finance real today or a thesis?", a: "It is settling on mainnet every day. Agent402 publishes its own numbers live: thousands of external per-call payments settled on chain, {{railCount}} x402 chains plus Tempo over MPP, and a daily canary that buys real tools over both x402 and MPP so the claim is re-proven continuously. Every figure on the revenue page links to its on-chain proof." },
-  { q: "How do I start selling into agentic finance?", a: "Put a price on an endpoint and answer 402. The fastest path is the open-source agent402-tollbooth: one Express middleware or reverse proxy that charges AI agents per request over x402 and MPP while humans browse free, non-custodial, no signup. Then register your origin so the index and router can find you." },
+  { q: "Do agents need crypto to take part?", a: "To pay, an agent needs a wallet holding a stablecoin (USDC, or USDG on Robinhood Chain, or USDC.e or PathUSD on Tempo) on a supported chain; gas is sponsored on the EVM rails, so no native token is required. Pure-CPU tools are also payable with a proof-of-work solve instead of money." },
+  { q: "Is it live today?", a: "Yes. Agent402 settles on {{railCount}} x402 chains plus Tempo over MPP, and a daily canary buys real tools over both wires. Every figure on the revenue page links to its on-chain proof." },
 ];
 
-const STACK = [
-  ["Agents", "Autonomous software with a wallet: MCP-connected assistants, crawlers, trading and research agents, other services' agents.", "the buyers, and now sellers"],
-  ["Applied layer", "Discovery, routing, pricing, reliability, receipts, transparency. Where an agent finds the right service and pays it once, safely.", "Agent402: index, router, tools, tollbooth"],
-  ["Payment protocols", "x402 (HTTP 402 with machine-readable requirements) and MPP (the Payment HTTP auth scheme). Open, HTTP-native, wallet-as-identity.", "the wire"],
-  ["Rails and money", "Stablecoins settled on public chains: USDC on {{usdcRailsAnd}}; USDG on Robinhood Chain; native Tempo.", "{{railCount}} x402 chains plus Tempo"],
-];
-
+// Where Agent402 sits: one row per thing a reader can do, each with its page.
 const ROLES = [
-  ["BUY", "500+ pay-per-call tools", "Search, browser, PDFs, OCR, live financial and crypto data, SEC filings, forecasting, an OpenAI-compatible LLM gateway. Every one priced per call and settled on chain over x402 or MPP; the model-backed ones are marked as such.", "/tools", "browse the catalog"],
-  ["ROUTE", "Index + Smart Order Router", `One call resolves a task to the best seller across the whole ecosystem, ours or anyone's, buys the result from that seller and sells it to the agent. ${routingProofSentence()}`, "/marketplace", "open index"],
-  ["SELL", "Tollbooth", "Charge AI agents per request on your own site or API over both wires, humans free, non-custodial. Open source, one middleware.", "/sell", "sell into it"],
-  ["PROVE", "On-chain transparency", "Live transaction counts by rail and wire (external revenue underneath, ours never counted as earnings), the seller leaderboard, uptime measured from outside, refunds ledgered. Numbers you can check, not claims.", "/revenue", "see the numbers"],
-];
-
-const TOC = [
-  ["#definition", "The definition"],
-  ["#stack", "The stack"],
-  ["#agent402", "Where Agent402 sits"],
-  ["#proof", "Is it real"],
-  ["#faq", "Questions"],
+  ["Buy tools", "500+ tools an agent pays for per call over x402 or MPP; the model-backed ones are marked as such.", [["/tools", "browse the catalog"]]],
+  ["Buy reports", "Research, due-diligence and filing reports built from live data and cited to their sources.", [["/reports", "see the reports"]]],
+  ["Route", `An open cross-seller index and a Smart Order Router that buys the result from the best seller and sells it to the agent. ${"{{routingProof}}"}`, [["/marketplace", "open the index"], ["/guides/smart-order-router", "how routing works"]]],
+  ["Sell", "Put a price on your API or site with the open-source tollbooth; agents pay per request over both wires while people browse free.", [["/sell", "sell your API"]]],
+  ["Prove", "Settlements by rail and wire, the on-chain seller leaderboard and uptime measured from outside, each figure linked to its proof.", [["/revenue", "revenue"], ["/status", "status"]]],
 ];
 
 export function agenticFinancePage(baseUrl) {
   // Rail counts resolve from the live offer at render (src/rails.js).
   const faqs = FAQS.map((f) => ({ ...f, a: resolveRailCountTokens(f.a) }));
-  const stack = STACK.map((row) => row.map((cell) => resolveRailCountTokens(cell)));
+  const roles = ROLES.map(([h, p, links]) => [h, p.replace("{{routingProof}}", routingProofSentence()), links]);
   const canonical = `${baseUrl}/agentic-finance`;
   const title = "What is Agentic Finance (AIFI)? Agents that pay and get paid";
   const description =
-    "Agentic Finance (AIFI) is software agents transacting on their own: discovering services, paying per request from a wallet over open protocols like x402 and MPP, receiving verifiable receipts, and earning per request in return. The definition, the stack, and where Agent402 fits as its applied layer.";
+    "Agentic Finance (AIFI) is software agents paying and getting paid on their own, per request, over the open protocols x402 and MPP. The definition and where Agent402 fits: tools, reports, routing, selling and on-chain proof.";
 
   const orgLd = { "@type": "Organization", "@id": `${baseUrl}/#organization`, name: "Agent402", url: baseUrl, logo: { "@type": "ImageObject", url: `${baseUrl}/logo.png` }, sameAs: ORG_SAME_AS, knowsAbout: ["Agentic Finance", "AIFI", "x402", "Machine Payments Protocol", "MPP", "agentic payments", "AI agents"] };
-  const termLd = { "@type": "DefinedTerm", "@id": `${canonical}#term`, name: "Agentic Finance", alternateName: "AIFI", description: faqs[0].a, url: canonical, inDefinedTermSet: { "@type": "DefinedTermSet", "@id": `${baseUrl}/glossary#set`, name: "Agentic Finance (AIFI) glossary", url: `${baseUrl}/glossary` } };
+  const termLd = { "@type": "DefinedTerm", "@id": `${canonical}#term`, name: "Agentic Finance", alternateName: "AIFI", description: DEFINITION, url: canonical, inDefinedTermSet: { "@type": "DefinedTermSet", "@id": `${baseUrl}/glossary#set`, name: "Agentic Finance (AIFI) glossary", url: `${baseUrl}/glossary` } };
   const breadcrumbLd = { "@type": "BreadcrumbList", itemListElement: [
     { "@type": "ListItem", position: 1, name: "Agent402", item: `${baseUrl}/` },
     { "@type": "ListItem", position: 2, name: "Agentic Finance (AIFI)", item: canonical },
@@ -63,20 +51,14 @@ export function agenticFinancePage(baseUrl) {
   const faqLd = { "@type": "FAQPage", "@id": `${canonical}#faq`, mainEntity: faqs.map((f) => ({ "@type": "Question", name: f.q, acceptedAnswer: { "@type": "Answer", text: f.a } })) };
 
   const extraCss = `
-@media (max-width:900px){.af-2col,.af-4col,.af-stack-row{grid-template-columns:minmax(0,1fr)!important}}
-@media (min-width:901px) and (max-width:1100px){.af-4col{grid-template-columns:1fr 1fr!important}}
+@media (max-width:900px){.af-row{grid-template-columns:minmax(0,1fr)!important;gap:6px!important}}
 `;
-  const tocHtml = TOC.map(([href, label]) =>
-    `<a href="${href}" style="padding:11px 18px;border-bottom:1px solid var(--panel-rule);text-decoration:none;color:var(--on-panel-soft);font-size:var(--fs-md);">${esc(label)}</a>`
-  ).join("");
-  const stackHtml = stack.map(([layer, what, who], i) =>
-    `<div style="display:grid;grid-template-columns:210px minmax(0,1fr) 240px;gap:20px;padding:20px 24px;border-bottom:1px solid var(--hairline);align-items:baseline;" class="af-stack-row"><div><span style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);">0${i + 1} ·</span> <span style="color:var(--ink);font-weight:800;font-size:var(--fs-lg);white-space:nowrap;">${esc(layer)}</span></div><p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0;">${esc(what)}</p><p style="font-size:var(--fs-sm);line-height:1.5;color:var(--faint);margin:0;">${esc(who)}</p></div>`
-  ).join("");
-  const rolesHtml = ROLES.map(([tag, h, p, href, cta]) =>
-    `<div style="padding:24px;border-right:1px solid var(--hairline);border-bottom:1px solid var(--hairline);background:var(--card);display:flex;flex-direction:column;"><div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:12px;">${esc(tag)}</div><h3 style="font-weight:600;font-size:var(--fs-lg);margin:0 0 10px;color:var(--ink);">${esc(h)}</h3><p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;flex:1;">${esc(p)}</p><a href="${href}" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);align-self:flex-start;">${esc(cta)} →</a></div>`
+  const link = (href, label) => `<a href="${href}" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">${esc(label)}</a>`;
+  const rolesHtml = roles.map(([h, p, links]) =>
+    `<div class="af-row" style="display:grid;grid-template-columns:200px minmax(0,1fr);gap:24px;padding:20px 0;border-bottom:1px solid var(--hairline);align-items:baseline;"><h3 style="font-weight:600;font-size:var(--fs-lg);margin:0;color:var(--ink);">${esc(h)}</h3><p class="ml-measure" style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0;">${esc(p)} ${links.map(([href, label]) => link(href, label)).join(" · ")}</p></div>`
   ).join("");
   const faqHtml = faqs.map((f) =>
-    `<article style="padding:26px 0;border-bottom:1px solid var(--hairline);"><h3 style="font-weight:600;font-size:var(--fs-lg);margin:0 0 12px;color:var(--ink);">${esc(f.q)}</h3><p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);margin:0;">${esc(f.a)}</p></article>`
+    `<article style="padding:22px 0;border-bottom:1px solid var(--hairline);"><h3 style="font-weight:600;font-size:var(--fs-lg);margin:0 0 10px;color:var(--ink);">${esc(f.q)}</h3><p class="ml-measure" style="font-size:var(--fs-base);line-height:1.65;color:var(--muted);margin:0;">${esc(f.a)}</p></article>`
   ).join("");
 
   const body = `
@@ -85,58 +67,26 @@ export function agenticFinancePage(baseUrl) {
     <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-bottom:22px;">
       <a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <span style="color:var(--ink);">agentic finance (aifi)</span>
     </nav>
-    <div class="af-2col" style="display:grid;grid-template-columns:1.1fr .9fr;gap:50px;align-items:start;">
-      <div>
-        <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.94;margin:0 0 24px;color:var(--ink);">Agentic Finance <span style="color:var(--accent);">(AIFI)</span></h1>
-        <p id="definition" style="font-size:var(--fs-lg);line-height:1.5;color:var(--muted);margin:0 0 20px;"><strong style="color:var(--ink);font-weight:700;">Agentic Finance is software agents transacting on their own:</strong> discovering a service, reading a machine-readable price, paying per request from a non-custodial wallet over open protocols like <a href="/what-is-x402" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">x402</a> and <a href="/what-is-mpp" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">MPP</a>, receiving a verifiable receipt, and, on the other side, earning per request for what they serve.</p>
-        <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--muted);margin:0;">No accounts, no API keys, no invoices. The payment is the identity and every settlement is on a public ledger. <strong style="color:var(--ink);">Agent402 is the applied layer of agentic finance</strong>: the tools agents buy, the index and router that find and pay the best seller, the tollbooth that lets any site earn from agents, and the transparency that proves it all on chain.</p>
-      </div>
-      <div style="border:1px solid var(--hairline);background:var(--panel);">
-        <div style="padding:12px 18px;border-bottom:1px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.08em;color:var(--on-panel-dim);">ON THIS PAGE</div>
-        <div style="display:flex;flex-direction:column;">${tocHtml}</div>
-      </div>
-    </div>
+    <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.94;margin:0 0 24px;color:var(--ink);">Agentic Finance <span style="color:var(--accent);">(AIFI)</span></h1>
+    <p id="definition" class="ml-measure" style="font-size:var(--fs-lg);line-height:1.5;color:var(--muted);margin:0 0 16px;">${esc(DEFINITION)}</p>
+    <p class="ml-measure" style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0;">The long form, with the stack and one purchase traced on the wire, is ${link("/blog/what-is-agentic-finance-aifi", "the AIFI post")}. Every term is defined once in ${link("/glossary", "the glossary")}, and ${link("/101", "x402 and MPP 101")} starts from zero.</p>
   </div>
 </header>
 
-<section id="stack" style="max-width:1180px;margin:0 auto;padding:64px 30px 0;">
-  <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">01 / THE STACK</div>
-  <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--ink);">Four layers, top to bottom.</h2>
-  <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 30px;">Agentic payments are the wire. Agentic finance is what forms on top of it once thousands of agents and sellers are transacting: price discovery, routing between competing sellers, reliability signals, spend controls, receipts and transparent revenue. The middle two layers are where the leverage is.</p>
-  <div style="border:1px solid var(--hairline);background:var(--card);">${stackHtml}</div>
+<section id="agent402" style="max-width:1180px;margin:0 auto;padding:56px 30px 0;">
+  <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--ink);">Where Agent402 sits</h2>
+  <div style="border-top:1px solid var(--hairline);">${rolesHtml}</div>
 </section>
 
-<section id="agent402" style="background:var(--panel);margin-top:64px;border-top:1px solid var(--hairline);border-bottom:1px solid var(--hairline);">
-  <div style="max-width:1180px;margin:0 auto;padding:56px 30px;">
-    <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent-lit);margin-bottom:12px;">02 / THE APPLIED LAYER</div>
-    <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--on-panel);">Where Agent402 sits.</h2>
-    <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--on-panel-muted);max-width:820px;margin:0 0 30px;">Open source, self-hostable, two-sided, and live on both open protocols. Everything below settles on mainnet today, and every claim links to the surface that proves it.</p>
-    <div class="af-4col" style="display:grid;grid-template-columns:repeat(4,1fr);border:1.5px solid var(--panel-rule-2);border-right:none;border-bottom:none;">${rolesHtml}</div>
-  </div>
-</section>
-
-<section id="proof" style="max-width:1180px;margin:0 auto;padding:64px 30px 0;">
-  <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">03 / IS IT REAL?</div>
-  <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--ink);">Settling on mainnet, every day.</h2>
-  <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 18px;">Agent402 publishes its own agentic-finance numbers live rather than asserting them: external per-call payments settled on chain by rail and by wire on the <a href="/revenue" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">revenue page</a>, the on-chain <a href="/leaderboard" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">seller leaderboard</a>, availability measured from outside on the <a href="/status" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">status page</a>, and a daily canary that buys real tools over both x402 and MPP so "it works" is re-proven continuously. Machine-readable: <a href="/api/revenue" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">/api/revenue</a>, <a href="/api/leaderboard" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">/api/leaderboard</a>, <a href="/api/status" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">/api/status</a>.</p>
-</section>
-
-<section id="faq" style="max-width:900px;margin:0 auto;padding:64px 30px 0;">
-  <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">04 / QUESTIONS</div>
-  <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 30px;color:var(--ink);">Questions people and agents ask about agentic finance.</h2>
-  <div style="display:flex;flex-direction:column;gap:0;border-top:1px solid var(--hairline);">${faqHtml}</div>
+<section id="faq" style="max-width:1180px;margin:0 auto;padding:56px 30px 0;">
+  <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 20px;color:var(--ink);">Questions</h2>
+  <div style="max-width:900px;border-top:1px solid var(--hairline);">${faqHtml}</div>
 </section>
 
 <section style="max-width:1180px;margin:0 auto;padding:56px 30px 56px;">
-  <div class="ml-cta-panel" style="background:var(--panel);border:1px solid var(--hairline);padding:52px 44px;position:relative;overflow:hidden;">
-    <div style="position:relative;">
-      <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 16px;color:var(--on-panel);">Take part in agentic finance.</h2>
-      <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 28px;max-width:560px;">Give your agent 500+ tools it can pay for over x402 or MPP, or put a price on your own API and let agents pay you. Both are free to start.</p>
-      <div style="display:flex;gap:11px;flex-wrap:wrap;">
-        <a class="btn btn-primary on-panel" href="/docs#add">Add to your agent →</a>
-        <a class="btn btn-secondary on-panel" href="/sell">Sell your API</a>
-      </div>
-    </div>
+  <div class="ml-cta-panel" style="background:var(--panel);border:1px solid var(--hairline);padding:44px;">
+    <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 24px;color:var(--on-panel);">Give your agent 500+ tools</h2>
+    <a class="btn btn-primary on-panel" href="/docs#add">Add to your agent →</a>
   </div>
 </section>
 ${ledgerFooterCompact()}`;
