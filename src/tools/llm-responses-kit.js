@@ -84,6 +84,11 @@ function probeParts(parts, where, acc) {
         if (typeof p.text !== "string") throw bad(`${where}.content[${i}].text must be a string`);
         acc.chars += p.text.length;
         return p;
+      case "refusal":
+        // An echoed assistant refusal (output message content).
+        if (typeof p.refusal !== "string") throw bad(`${where}.content[${i}].refusal must be a string`);
+        acc.chars += p.refusal.length;
+        return p;
       case "input_image": {
         const url = typeof p.image_url === "string" ? p.image_url : (typeof p.image_url?.url === "string" ? p.image_url.url : "");
         if (!url) throw bad(`${where}.content[${i}].image_url is required (http(s) URL or data: URI)`);
@@ -94,7 +99,7 @@ function probeParts(parts, where, acc) {
       case "input_file":
         throw bad(`${where}.content[${i}]: input_file is not served (file parsing is metered upstream) - extract the text first, e.g. POST /api/pdf-text`);
       default:
-        throw bad(`${where}.content[${i}]: unsupported part type "${p.type}" (allowed: input_text, input_image, output_text)`);
+        throw bad(`${where}.content[${i}]: unsupported part type "${p.type}" (allowed: input_text, input_image, output_text, refusal)`);
     }
   });
 }
@@ -105,11 +110,38 @@ function probeParts(parts, where, acc) {
 // upstream unread. Runs after validation, so every kept field was checked.
 const IMAGE_DETAIL = new Set(["auto", "low", "high"]);
 const str = (v) => typeof v === "string";
+const num = (v) => typeof v === "number" && Number.isFinite(v);
+// output_text: `annotations` is required by the output-message schema. Only a
+// url_citation is kept; file_citation, container_file_citation and file_path
+// annotations name a file or container and are dropped.
+function forwardAnnotations(list) {
+  if (!Array.isArray(list)) return [];
+  return list.filter((a) => a && a.type === "url_citation" && str(a.url)).map((a) => ({
+    type: "url_citation", url: a.url,
+    ...(str(a.title) ? { title: a.title } : {}),
+    ...(num(a.start_index) ? { start_index: a.start_index } : {}),
+    ...(num(a.end_index) ? { end_index: a.end_index } : {}),
+  }));
+}
+const forwardBytes = (b) => (Array.isArray(b) && b.every((x) => Number.isInteger(x)) ? { bytes: b } : {});
+const forwardLogprob = (l) => ({ token: l.token, logprob: l.logprob, ...forwardBytes(l.bytes) });
+function forwardLogprobs(list) {
+  if (!Array.isArray(list)) return null;
+  return list.filter((l) => l && str(l.token) && num(l.logprob)).map((l) => ({
+    ...forwardLogprob(l),
+    ...(Array.isArray(l.top_logprobs) ? { top_logprobs: l.top_logprobs.filter((t) => t && str(t.token) && num(t.logprob)).map(forwardLogprob) } : {}),
+  }));
+}
 function forwardPart(p) {
   if (p.type === "input_image") {
     const image_url = str(p.image_url) ? p.image_url : { url: p.image_url.url };
     return { type: "input_image", image_url, ...(IMAGE_DETAIL.has(p.detail) ? { detail: p.detail } : {}) };
   }
+  if (p.type === "output_text") {
+    const logprobs = forwardLogprobs(p.logprobs);
+    return { type: "output_text", text: p.text, annotations: forwardAnnotations(p.annotations), ...(logprobs ? { logprobs } : {}) };
+  }
+  if (p.type === "refusal") return { type: "refusal", refusal: p.refusal };
   return { type: p.type, text: p.text };
 }
 const forwardContent = (c) => (str(c) ? c : c.map(forwardPart));
@@ -124,7 +156,8 @@ function forwardItem(it, type) {
       return withIdStatus(it, { type: "function_call_output", call_id: it.call_id, output: forwardContent(it.output) });
     case "reasoning": {
       const summary = Array.isArray(it.summary) ? it.summary.filter((x) => x && str(x.text)).map((x) => ({ type: "summary_text", text: x.text })) : [];
-      return withIdStatus(it, { type: "reasoning", summary, ...(str(it.encrypted_content) ? { encrypted_content: it.encrypted_content } : {}) });
+      const content = Array.isArray(it.content) ? it.content.filter((x) => x && str(x.text)).map((x) => ({ type: "reasoning_text", text: x.text })) : null;
+      return withIdStatus(it, { type: "reasoning", summary, ...(content ? { content } : {}), ...(str(it.encrypted_content) ? { encrypted_content: it.encrypted_content } : {}) });
     }
     default:
       return null;

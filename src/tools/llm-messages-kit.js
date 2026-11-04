@@ -147,10 +147,35 @@ const str = (v) => typeof v === "string";
 const cacheOf = (b) => (b.cache_control && typeof b.cache_control === "object"
   ? { cache_control: { type: "ephemeral", ...(b.cache_control.ttl !== undefined ? { ttl: b.cache_control.ttl } : {}) } }
   : {});
+// A text block's citations, each rebuilt from the fields its location type
+// documents; the file_id a document location may carry is dropped, and a
+// citation of a type not listed here is dropped whole.
+const CITATION_FIELDS = {
+  char_location: { str: ["document_title"], int: ["document_index", "start_char_index", "end_char_index"] },
+  page_location: { str: ["document_title"], int: ["document_index", "start_page_number", "end_page_number"] },
+  content_block_location: { str: ["document_title"], int: ["document_index", "start_block_index", "end_block_index"] },
+  web_search_result_location: { str: ["encrypted_index", "title", "url"], int: [] },
+  search_result_location: { str: ["source", "title"], int: ["search_result_index", "start_block_index", "end_block_index"] },
+};
+function forwardCitations(list) {
+  if (!Array.isArray(list)) return null;
+  const out = [];
+  for (const c of list) {
+    const spec = c && CITATION_FIELDS[c.type];
+    if (!spec || !str(c.cited_text)) continue;
+    const kept = { type: c.type, cited_text: c.cited_text };
+    for (const k of spec.str) if (str(c[k]) || (k === "document_title" && c[k] === null)) kept[k] = c[k];
+    for (const k of spec.int) if (Number.isInteger(c[k])) kept[k] = c[k];
+    out.push(kept);
+  }
+  return out;
+}
 function forwardBlock(b) {
   switch (b.type) {
-    case "text":
-      return { type: "text", text: b.text, ...cacheOf(b) };
+    case "text": {
+      const citations = forwardCitations(b.citations);
+      return { type: "text", text: b.text, ...(citations && citations.length ? { citations } : {}), ...cacheOf(b) };
+    }
     case "image": {
       const src = b.source;
       const source = src.type === "base64"
