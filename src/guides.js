@@ -1313,6 +1313,31 @@ Paid tools from a wallet:
 
 **Use a new wallet holding only a few dollars of USDC. Never your main wallet.**
 
+## Paperclip
+
+Add the hosted connector to a Paperclip company as a custom MCP server:
+
+1. Open **Connectors**, then **Connect your own MCP server**.
+2. Paste \`https://agent402.tools/mcp\` and press **Check link**. The
+   connector needs no sign-in and no key, so Paperclip goes straight to the
+   discovered actions.
+3. Choose which agents can use the connection, then save.
+
+With no wallet, \`catalog.search\`, \`catalog.find\`, \`payment.info\` and
+\`server.describe\` answer for free, and \`catalog.call\` runs the pure-CPU
+tools (hash, uuid, base64, markdown, JSON and more) free through
+proof-of-work, rate-limited. Wallet-only tools, the flagship web and market
+tools among them, answer with their MPP payment challenge instead of a
+result: an MCP client that pays MPP settles it in the same call, and a call
+that carries no payment is never charged. To pay from your own wallet, run
+the stdio server with \`AGENT_KEY\` set (see Claude Code above). Prices are
+on [/pricing](/pricing).
+
+Each action has its own setting on the connection's **Permissions** tab:
+**Allowed** runs it without review, **Ask first** waits for a person to
+approve each call, and **Off** removes it from the agent. \`catalog.call\` is
+the one that runs tools; set it to **Ask first** to review every run.
+
 ## Continue
 
 \`config.yaml\`. A model entry for chat, plus the connector for agent mode:
