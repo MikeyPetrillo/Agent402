@@ -91,7 +91,11 @@ const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.
     ok(sameOrigin === hdrOnly, `a same-origin cookie POST reaches the action like the header token (${sameOrigin})`);
     const originOnly = await status("/__operator/monitors/run", { method: "POST", headers: { cookie, origin: base, "content-type": "text/plain" }, body: "x" });
     ok(originOnly === hdrOnly, `a cookie POST whose Origin is this site (no Sec-Fetch-Site) reaches the action (${originOnly})`);
-    ok((await status("/__operator/monitors/run", { method: "POST", headers: { cookie, "x-operator-token": "wrong", "content-type": "text/plain" }, body: "x" })) === 403, "a wrong header token does not exempt a cookie POST");
+    // A header credential is never validated by the origin check (another site cannot set one); the gate
+    // reads it, so a wrong one is a counted guess there (see the write-guessing lockout below), and the
+    // live session cookie still decides this request.
+    const wrongHdr = await status("/__operator/monitors/run", { method: "POST", headers: { cookie, "x-operator-token": "wrong", "content-type": "text/plain" }, body: "x" });
+    ok(wrongHdr !== 403 && wrongHdr === hdrOnly, `a header token with a live cookie goes to the gate, not the origin check (${wrongHdr})`);
     ok((await status("/__operator/monitors/run", { method: "POST" })) === 404, "with no credential at all the route's own gate answers (404)");
     ok((await status("/__operator", { headers: { cookie, origin: "https://evil.example", "sec-fetch-site": "cross-site" } })) === 200, "a read (GET) is not an operator write and keeps working");
   }
@@ -144,6 +148,18 @@ const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.
   });
   ok(reLogin.status === 200, "a correct login still succeeds while the elevation budget is exhausted");
   ok((await status("/__operator", { headers: bearer })) === 200, "a successful login clears the lockout");
+
+  // Guesses sent as operator WRITES (a cookie plus a header token) count
+  // against the same budget: the browser-origin check never validates a
+  // header token itself, so it cannot be used to test guesses for free.
+  let writeLocked = false;
+  for (let i = 0; i < 40; i++) {
+    await fetch(`${base}/__operator/monitors/run`, { method: "POST", headers: { cookie, authorization: `Bearer wrong-write-${i}` } }).then((r) => r.arrayBuffer());
+    if ((await status("/__operator", { headers: bearer })) === 404) { writeLocked = true; break; }
+  }
+  ok(writeLocked, "guesses sent as operator writes with a cookie exhaust the same budget");
+  const reLogin2 = await fetch(`${base}/__operator/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: TOKEN }) });
+  ok(reLogin2.status === 200 && (await status("/__operator", { headers: bearer })) === 200, "...and a login clears that lockout too");
 
   // 6. Login is rate-limited (audit R-12): a burst of attempts from one IP 429s.
   let saw429 = false;

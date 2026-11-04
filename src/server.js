@@ -5515,7 +5515,10 @@ function operatorWriteRefused(req) {
   const m = req.method;
   if (m === "GET" || m === "HEAD" || m === "OPTIONS") return false;
   if (!readCookie(req, OPERATOR_COOKIE)) return false;
-  if (operatorTokenOk(getOperatorToken(req))) return false;
+  // A header credential cannot be set by another site's page (CORS keeps
+  // /__operator closed), so its presence skips the origin check; the route's
+  // gate then validates it and counts a wrong one against the guessing budget.
+  if (getOperatorToken(req)) return false;
   if (String(req.headers["sec-fetch-site"] || "").toLowerCase() === "same-origin") return false;
   const origin = req.headers.origin;
   return !(OPERATOR_SITE_ORIGIN && typeof origin === "string" && origin === OPERATOR_SITE_ORIGIN);
