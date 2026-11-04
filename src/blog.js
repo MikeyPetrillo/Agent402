@@ -121,7 +121,9 @@ export const BLOG_POSTS = [
 
 <h2>Where Agent402 sits</h2>
 
-<p>Agent402 is built as that applied layer, live on both wires: it sells <a href="/tools">500+ pay-per-call tools</a>, each tested against its own example in CI, routes a task to the best seller across an <a href="/marketplace">open index</a> with the <a href="/guides/smart-order-router">Smart Order Router</a>, lets any site charge agents through the open-source <a href="/sell">tollbooth</a>, and publishes <a href="/revenue">every settlement</a> with its on-chain receipt. ${routingProofSentence()} The <a href="/agentic-finance">category page</a> sets out each piece and the surface that proves it.</p>
+<p>Agent402 is built as that applied layer, live on both wires: it sells <a href="/tools">500+ pay-per-call tools</a>, each tested against its own example in CI, routes a task to the best seller across an <a href="/marketplace">open index</a> with the <a href="/guides/smart-order-router">Smart Order Router</a>, lets any site charge agents through the open-source <a href="/sell">tollbooth</a>, and publishes <a href="/revenue">every settlement</a> with its on-chain receipt.</p>
+
+<p>${routingProofSentence()} The <a href="/agentic-finance">category page</a> sets out each piece and the surface that proves it.</p>
 
 <p>Settlement ordering is the detail we care most about, because it is where a marketplace can quietly cheat its buyers: Agent402 runs the tool first and settles only on a successful response, so a failed x402 call is not charged. A daily canary buys real tools over both x402 and MPP so the claim is re-proven on mainnet rather than asserted once.</p>
 
