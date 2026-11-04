@@ -18,6 +18,7 @@
 // Exit codes: 0 = buying works (warnings allowed) · 1 = buying broken · 2 = misconfig
 //   · 3 = underfunded (settlement proven; burner empty) · 4 = green but burner low
 //   · 5 = partial-rail (tools settled; one or more chain rail legs failed)
+import { withConnRetry } from "./lib/conn-retry.js";
 import "../src/tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA
 import { legRefusalVerdict } from "./canary-refusal-classify.js";
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
@@ -1240,7 +1241,8 @@ async function main() {
         polyfill: false,
       });
       const url = `${TARGET}/api/uuid`;
-      const bare = await mpp.rawFetch(url, { headers: heartbeatHeaders() });
+      const connNote = (e) => console.warn(`      mpp: connection reset before an answer (${e.cause?.code || e.code || e.message}); one retry`);
+      const bare = await withConnRetry(() => mpp.rawFetch(url, { headers: heartbeatHeaders() }), { onRetry: connNote });
       if (bare.status !== 402) {
         railFail("mpp", `expected a 402 challenge from /api/uuid, got HTTP ${bare.status} — the MPP wire was never exercised`);
         return;
@@ -1257,7 +1259,7 @@ async function main() {
         railFail("mpp", `client produced a non-MPP credential (${credential.slice(0, 24)}…) — native path not taken`);
         return;
       }
-      const paid = await mpp.rawFetch(url, { headers: { ...heartbeatHeaders(), Authorization: credential } });
+      const paid = await withConnRetry(() => mpp.rawFetch(url, { headers: { ...heartbeatHeaders(), Authorization: credential } }), { onRetry: connNote });
       const body = await paid.json().catch(() => ({}));
       if (paid.status === 200 && Array.isArray(body.uuids)) {
         const receiptHdr = paid.headers.get("payment-receipt");
