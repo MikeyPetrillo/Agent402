@@ -112,8 +112,8 @@ export function marketsPage(baseUrl, catalog) {
     </nav>
     <div class="mk-hero">
       <div>
-        <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:.98;margin:0 0 18px;color:var(--ink);">The whole crypto market in one call.</h1>
-        <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);margin:0 0 18px;">${esc(hero?.name || "Market pulse")} returns breadth, volume, open interest, funding extremes, the day's gainers and losers and BTC and ETH at a glance - one request, ${esc(hero?.price || "")}, no API key. ${tools.length - 1} more calls below cover perps, options, DeFi and stablecoins at ${esc(fmtUsd(lo))} to ${esc(fmtUsd(hi))} each.</p>
+        <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:.98;margin:0 0 18px;color:var(--ink);">Crypto market data</h1>
+        <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);margin:0 0 18px;">${esc(hero?.name || "Market pulse")} returns breadth, volume, open interest, funding extremes, the day's gainers and losers and BTC and ETH at a glance, in one request at ${esc(hero?.price || "")}. ${tools.length - 1} more calls below cover perps, options, DeFi and stablecoins at ${esc(fmtUsd(lo))} to ${esc(fmtUsd(hi))} each.</p>
         <p style="font-size:var(--fs-md);line-height:1.6;color:var(--muted);margin:0 0 22px;">Pay per request in USDC over <a href="/what-is-x402" style="color:var(--ink);">x402</a> or <a href="/what-is-mpp" style="color:var(--ink);">MPP</a> from any wallet. The first call answers 402 with the price; the paid retry returns the data. ${esc(failedCallFootnote())}</p>
         <div style="display:flex;gap:11px;flex-wrap:wrap;">
           <a class="btn btn-secondary" href="/tools/${esc(MARKETS_HERO_SLUG)}">Docs + sample output</a>

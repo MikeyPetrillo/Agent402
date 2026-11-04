@@ -1359,7 +1359,7 @@ function* marketPageAllSteps(baseUrl, { snapshot, leaderboardSnap, economySnap, 
         <a href="#sellers" style="color:var(--muted);text-decoration:none;">browse all sellers</a>
       </div>
     </div>
-    <p style="font-size:var(--fs-sm);color:var(--faint);margin:10px 0 0;">Describe the job, not the tool name - FIND searches every tool and shows live results. Resolving is free (<span style="color:var(--muted);">GET /api/find</span>), you only pay to execute. This is the neutral x402 index: every seller, not just ours.</p>
+    <p style="font-size:var(--fs-sm);color:var(--faint);margin:10px 0 0;">Describe the job, not the tool name: FIND searches every tool and shows live results. Resolving is free (<span style="color:var(--muted);">GET /api/find</span>); you pay only to execute. This is the neutral x402 index: every seller, not just ours.</p>
     ${statsHtml}
   </div>`;
 
@@ -1403,15 +1403,15 @@ function* marketPageAllSteps(baseUrl, { snapshot, leaderboardSnap, economySnap, 
   <div class="ml-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--hairline);margin-top:48px;">
     <div style="padding:26px;border-right:1px solid var(--hairline);background:var(--card);">
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">$ GET /api/route</div>
-      <h2 style="font-weight:700;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">Or skip the browsing</h2>
+      <h2 style="font-weight:700;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">Route a task instead</h2>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;">Describe the task and the Smart Order Router resolves it to a tool - from this index, ours or anyone else's - then runs it. Candidates are ranked by how well they match, then crawl health, buyers and price; a model can make the final pick (<a href="/guides/smart-order-router" style="color:var(--muted);">the full rule</a>). It buys from external sellers and resells the result to you.</p>
       <pre style="margin:0 0 14px;background:var(--panel);border:1px solid var(--panel-rule);color:var(--on-panel);padding:14px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># free to resolve; running a result costs the router price in its executeVia
 </span>curl 'https://agent402.tools/api/route?q=ocr+an+image'</pre>
       <a href="/guides/smart-order-router" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1.5px solid var(--accent);padding-bottom:1px;">how the router ranks →</a>
     </div>
     <div style="padding:26px;background:var(--card);">
-      <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">HOW THE INDEX IS BUILT</div>
-      <h2 style="font-weight:700;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">Crawled, not curated</h2>
+      <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">$ GET /api/index</div>
+      <h2 style="font-weight:700;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">How the index is built</h2>
       <div style="display:flex;flex-direction:column;">${[
         "Discovery: the x402 Bazaar discovery listing plus our own crawler, plus anyone who self-registers at POST /api/index/register.",
         "We read each seller's manifest for its tools, routes and prices, and its live 402 challenge for the chains it accepts.",

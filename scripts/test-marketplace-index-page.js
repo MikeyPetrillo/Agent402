@@ -73,7 +73,7 @@ function chainCard(html, slug) {
   const html = marketPage(null, BASE_URL, { snapshot: { sellers: [LOCAL] }, leaderboardSnap: { leaderboard: [] } });
   ok(!html.includes("Routing and payment layer for AI"), "no hardcoded third-party seller blurb (a real seller's design copy) leaked in");
   ok(!html.includes("Company and contact enrichment for agents"), "no hardcoded third-party seller blurb (StableEnrich's design copy) leaked in");
-  ok(html.includes("Crawled, not curated"), "the methodology section states the real discovery model");
+  ok(html.includes("How the index is built"), "the methodology section states the real discovery model");
 }
 
 // --- real, non-fabricated hero subhead ---------------------------------------
@@ -99,7 +99,7 @@ function chainCard(html, slug) {
 // --- methodology + router sections --------------------------------------------
 {
   const html = marketPage(null, BASE_URL, { snapshot: { sellers: [LOCAL] }, leaderboardSnap: { leaderboard: [] } });
-  ok(html.includes("Or skip the browsing") && html.includes("GET /api/route") && html.includes("/api/route?q=ocr+an+image"), "the router-skip section renders, its kicker and example naming one endpoint");
+  ok(html.includes("Route a task instead") && html.includes("GET /api/route") && html.includes("/api/route?q=ocr+an+image"), "the router-skip section renders, its kicker and example naming one endpoint");
   ok(html.includes("Discovery: the x402 Bazaar discovery listing"), "the methodology steps render");
 }
 

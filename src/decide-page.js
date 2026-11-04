@@ -108,9 +108,9 @@ export function decidePage(baseUrl, catalog) {
     <div class="dc-hero">
       <div>
         <div class="dc-num">Agent402 Decide</div>
-        <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:.98;margin:0 0 18px;color:var(--ink);">Describe the job. Get the plan.</h1>
-        <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);margin:0 0 18px;">One paid call returns a call-ready plan over this catalog and outside x402 sellers with a recently verified 402: which tools, in what order, with fallbacks and params that validate. Run it yourself, or have Agent402 run it and the fee comes back as credit.${esc(execPaidOn)}</p>
-        <p style="font-size:var(--fs-md);line-height:1.6;color:var(--muted);margin:0 0 22px;">${usd(p.quick)} to ${usd(p.full)} per decision, paid per request in USDC over <a href="/what-is-x402" style="color:var(--ink);">x402</a> or <a href="/what-is-mpp" style="color:var(--ink);">MPP</a>. No account.</p>
+        <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:.98;margin:0 0 18px;color:var(--ink);">A plan for any job</h1>
+        <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);margin:0 0 18px;">One paid call returns a call-ready plan over this catalog and outside x402 sellers with a recently verified 402: which tools, in what order, with fallbacks and params that validate. Run it yourself, or have Agent402 run it and the fee comes back as credit.</p>
+        <p style="font-size:var(--fs-md);line-height:1.6;color:var(--muted);margin:0 0 22px;">${usd(p.quick)} to ${usd(p.full)} per decision, paid per request in USDC over <a href="/what-is-x402" style="color:var(--ink);">x402</a> or <a href="/what-is-mpp" style="color:var(--ink);">MPP</a>.</p>
         <div style="display:flex;gap:11px;flex-wrap:wrap;">
           <a class="btn btn-primary" href="#connect">Add to your agent →</a>
           <a class="btn btn-secondary" href="/docs#decide">Docs</a>
@@ -130,7 +130,7 @@ ${sec(`<h2 class="dc-h2">How it decides.</h2><p class="dc-lede">A plan is only u
 ${sec(`<h2 class="dc-h2">Three depths.</h2><p class="dc-lede">Priced by how much of the plan you want. Each decision's fee returns as a ${c.credit.percentOfFee}% credit, valid ${c.credit.ttlHours} hours, toward running it.</p>
   <div class="dc-depths">${depths.map(([d, pr, t]) => `<div class="dc-card"><div class="dc-num">depth "${esc(d)}"</div><div class="dc-price">${usd(pr)}</div><p>${esc(t)}</p></div>`).join("")}</div>`)}
 ${sec(`<div style="background:var(--panel);border:1px solid var(--hairline);padding:40px;">
-  <h2 class="dc-h2" style="color:var(--on-panel);">One formula, disclosed.</h2>
+  <h2 class="dc-h2" style="color:var(--on-panel);">How a plan is priced.</h2>
   <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 14px;max-width:760px;">Our tools and every outside seller's are scored on the same five signals with the same weights, and the formula has no term for who sells a tool. The model that judges fit sees the same bounded description for every tool, and every tool in a plan carries <code>firstParty</code>, so the source is disclosed.</p>
   <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0;max-width:760px;">What we charge is on the page: the decision fee by depth, our tools at list price when a plan runs through us, and outside tools at the seller's price plus a disclosed ${c.routingFeePct}% markup. Reliability counts what we observe, one observation per payer per day, and reports through <code>/api/decide/feedback</code> can move a tool only within a bounded range.</p>
 </div>`)}

@@ -152,7 +152,7 @@ table{border-collapse:collapse;width:100%}
   <div class="cat-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--hairline);">
     <div style="padding:28px;border-right:1px solid var(--hairline);background:var(--footer-bg);">
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--ok);margin-bottom:14px;">FREE TIER</div>
-      <h2 style="font-weight:700;font-size:var(--fs-2xl);margin:0 0 14px;color:var(--ink);">Pay with CPU, not USDC</h2>
+      <h2 style="font-weight:700;font-size:var(--fs-2xl);margin:0 0 14px;color:var(--ink);">The proof-of-work free tier</h2>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;">Every pure-CPU tool is payable in compute. Your machine solves a single-use sha256 puzzle - ${esc(powCostPhrase())} - and the call goes through. No wallet, no funding.</p>
       <pre style="margin:0 0 16px;background:var(--panel);border:1px solid var(--panel-rule);color:var(--on-panel);padding:14px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># the MCP connector solves it for you
 </span>claude mcp add --transport http \
@@ -161,7 +161,7 @@ table{border-collapse:collapse;width:100%}
     </div>
     <div style="padding:28px;background:var(--footer-bg);">
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">PAID TOOLS</div>
-      <h2 style="font-weight:700;font-size:var(--fs-2xl);margin:0 0 14px;color:var(--ink);">Quoted before you're charged</h2>
+      <h2 style="font-weight:700;font-size:var(--fs-2xl);margin:0 0 14px;color:var(--ink);">Prices</h2>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;">Anything that costs us money to run - live search, browser rendering, inference, stored memory - is priced per call and states its price in the 402 challenge. A failed x402 call is not charged, and there is no key to leak.</p>
       <pre style="margin:0 0 16px;background:var(--panel);border:1px solid var(--panel-rule);color:var(--on-panel);padding:14px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># price, asset and rail, before paying
 </span>curl -i "https://agent402.tools/api/search?q=x402+adoption"</pre>
@@ -173,7 +173,7 @@ table{border-collapse:collapse;width:100%}
 <section style="max-width:1180px;margin:0 auto;padding:44px 30px 52px;">
   <div class="ml-cta-panel" style="background:var(--panel);border:1px solid var(--hairline);padding:46px 40px;position:relative;overflow:hidden;">
     <div style="position:relative;">
-      <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 14px;color:var(--on-panel);">Don't browse. Just ask.</h2>
+      <h2 style="font-weight:700;font-size:var(--fs-3xl);line-height:1.02;letter-spacing:-.025em;margin:0 0 14px;color:var(--on-panel);">Find a tool by task</h2>
       <p style="font-size:var(--fs-lg);line-height:1.6;color:var(--on-panel-muted);margin:0 0 26px;max-width:64ch;">Paste the MCP URL and describe the job: the hosted connector picks the tool, solves the proof-of-work for the free tools and hands back the result. Install agent402-mcp with a wallet key and it signs the payment for every other tool too.</p>
       <div style="display:flex;gap:11px;flex-wrap:wrap;">
         <a class="btn btn-primary on-panel" href="/docs#add">Add to your agent →</a>
