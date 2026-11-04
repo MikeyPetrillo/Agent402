@@ -2,6 +2,15 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const ENTRIES = [
   {
+    date: "2026-11-05",
+    title: "Audio-only decoding, refused redirects answer 400",
+    items: [
+      "Tools: media-info, audio-convert and audio-normalize decode audio streams only. media-info still lists every stream: a video, image or subtitle stream is read from the container headers and carries decoded: false, with null for a resolution only its decoder would know. A file with no audio stream converts to nothing and answers 422, as before.",
+      "Tools: render and screenshot answer 400 (not charged) when the page's navigation is redirected to a host the browser may not load, instead of rendering the refusal as the page.",
+      "Tools: html-frames runs documents in a browser of its own with the JavaScript JIT off, so WebAssembly is not available to a document; plain script, canvas, SVG and CSS animation render as before.",
+    ],
+  },
+  {
     date: "2026-11-04",
     title: "Office files from data, shorter pages, one page per adapter",
     items: [

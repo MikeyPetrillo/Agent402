@@ -6,6 +6,20 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-05 (Audio-only decoding, refused redirects answer 400)
+Tools:
+- `media-info`, `audio-convert` and `audio-normalize` decode audio streams
+  only. `media-info` still lists every stream: a video, image or subtitle
+  stream is read from the container headers and carries `decoded: false`,
+  with null for a resolution only its decoder would know. A file with no
+  audio stream converts to nothing and answers 422, as before.
+- `render` and `screenshot` answer 400 (not charged) when the page's
+  navigation is redirected to a host the browser may not load, instead of
+  rendering the refusal as the page.
+- `html-frames` runs documents in a browser of its own with the JavaScript
+  JIT off, so WebAssembly is not available to a document; plain script,
+  canvas, SVG and CSS animation render as before.
+
 ### 2026-11-04 (Office files from data, shorter pages, one page per adapter)
 Gateway:
 - inception/mercury-2.5 leaves the auto tier's fast band ahead of its
