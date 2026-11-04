@@ -7461,10 +7461,14 @@ function navChainEntry(chainKey, snapshot, board) {
     return { label, href, sellers: null, tools: null, healthy: false };
   }
 }
-const navChainsFresh = (snapshot, board) => navChainsMemo.value && navChainsMemo.snapshot === snapshot && navChainsMemo.board === (board?.leaderboard || null);
+// The strip reads the leaderboard rows only; every empty list counts alike (the
+// warming placeholder is a fresh empty list per read, which missed the memo on
+// every page until the first scan landed).
+const navBoardKey = (board) => { const l = board?.leaderboard; return Array.isArray(l) && l.length === 0 ? null : (l || null); };
+const navChainsFresh = (snapshot, board) => navChainsMemo.value && navChainsMemo.snapshot === snapshot && navChainsMemo.board === navBoardKey(board);
 // A chain that failed to count is retried on the next render, not pinned.
 function keepNavChains(snapshot, board, value) {
-  if (value.chains.every((c) => c.healthy)) navChainsMemo = { snapshot, board: board?.leaderboard || null, value };
+  if (value.chains.every((c) => c.healthy)) navChainsMemo = { snapshot, board: navBoardKey(board), value };
 }
 setNavIndexProvider(() => {
   const snapshot = getIndexSnapshot();
@@ -7491,7 +7495,7 @@ async function warmNavChains() {
     await new Promise((r) => setImmediate(r));
     chains.push(navChainEntry(key, snapshot, board));
   }
-  if (getIndexSnapshot() === snapshot && (getLeaderboardSnapshot()?.leaderboard || null) === (board?.leaderboard || null)) keepNavChains(snapshot, board, { chains });
+  if (getIndexSnapshot() === snapshot && navBoardKey(getLeaderboardSnapshot()) === navBoardKey(board)) keepNavChains(snapshot, board, { chains });
 }
 // /index — legacy surface, merged into /marketplace (301 keeps SEO equity).
 app.get("/index", (_req, res) => res.redirect(301, "/marketplace"));
@@ -7887,7 +7891,7 @@ async function buildChainPage(chainKey, sellerQuery, all) {
   ]);
   const rail = revSnap?.rails?.find((r) => r.rail === SNAPSHOT_RAIL_LABEL[chainKey]) || null;
   const labelled = await labelledSnapshotAsync(snapshot);
-  return marketPage(chainKey, BASE_URL, { snapshot: labelled, rail, activity, selectedSeller, wallet: rail?.wallet || undefined, leaderboardSnap: getLeaderboardSnapshot(), all, host: hostEntryFigures(chainKey), payable: chainPayable(chainKey), ...chainPageExtras(chainKey) });
+  return marketPageAsync(chainKey, BASE_URL, { snapshot: labelled, rail, activity, selectedSeller, wallet: rail?.wallet || undefined, leaderboardSnap: getLeaderboardSnapshot(), all, host: hostEntryFigures(chainKey), payable: chainPayable(chainKey), ...chainPageExtras(chainKey) });
 }
 // How many catalog tools a chain page can say take payment on that chain, by
 // the 402 builder's own rules (identity-bound and long-running tools are EVM

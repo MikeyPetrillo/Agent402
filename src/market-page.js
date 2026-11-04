@@ -722,6 +722,14 @@ export function marketPanelHtml(chainKey, { snapshot, activity, selectedSeller, 
 
 export function marketPage(chainKey, baseUrl, opts = {}) {
   if (chainKey == null) return marketPageAll(baseUrl, opts);
+  return runSteps(marketPageChainSteps(chainKey, baseUrl, opts));
+}
+/** Test hook: one chain page's steps, to time each one. */
+export function _marketPageChainStepsForTest(chainKey, baseUrl, opts) { return marketPageChainSteps(chainKey, baseUrl, opts); }
+// One chain page as steps (the walks over its sellers yield every
+// PAGE_YIELD_ROWS rows): marketPage runs them back to back and
+// marketPageAsync across turns, so both render the same bytes.
+function* marketPageChainSteps(chainKey, baseUrl, opts = {}) {
   const { snapshot, rail, activity, selectedSeller, wallet, leaderboardSnap, all = false, host = null, payable = null, premiumUsd = 0, floorUsd = 0, routerChains = null, gatewayBatched = false } = opts;
   const C = CHAIN_PAGES[chainKey];
   const measured = chainKey === LEADERBOARD_CHAIN;
@@ -735,9 +743,10 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   const walletExplorerUrl = effectiveWallet ? C.explorerWalletUrl(effectiveWallet) : `https://${C.explorerUrl}`;
   const sellers = marketSellers(chainKey, snapshot);
   const tools = marketTools(chainKey, snapshot);
+  yield;
   // The page's seller count, from the same function the nav and the
   // /marketplace grid read (host excluded; merged only where the roster merges).
-  const sellerCount = marketOperatorCount(chainKey, snapshot, leaderboardSnap);
+  const sellerCount = yield* marketOperatorCountSteps(chainKey, snapshot, leaderboardSnap);
 
   // Per-seller settlement stats for the roster (#tx column) and the seller card,
   // joined from the leaderboard snapshot by the seller's payTo on THIS chain.
@@ -757,7 +766,15 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   // THIS HOST joins by the page's own wallet: the same on-chain reading as
   // every other row, which for our wallet includes our own canary and volume
   // runs. The row is pinned, never ranked, and its figure says so (ownTx).
-  const sellerStat = (s) => { const p = s?.local ? effectiveWallet : sellerPayTo(s); return p ? statByWallet.get(String(p).toLowerCase()) || null : null; };
+  const statOfSeller = (s) => { const p = s?.local ? effectiveWallet : sellerPayTo(s); return p ? statByWallet.get(String(p).toLowerCase()) || null : null; };
+  // Each seller's stat is joined once, ahead of the sort that reads it for
+  // every comparison (a pure join of fixed inputs, so the same value).
+  const statMemo = new Map();
+  for (let i = 0; i < sellers.length; i++) {
+    statMemo.set(sellers[i], statOfSeller(sellers[i]));
+    if (i % PAGE_YIELD_ROWS === PAGE_YIELD_ROWS - 1) yield;
+  }
+  const sellerStat = (s) => (statMemo.has(s) ? statMemo.get(s) : statOfSeller(s));
   const hostOf = (u) => { try { return new URL(u).host; } catch { return ""; } };
 
   // Surface the sellers worth clicking: most on-chain settled calls, then
@@ -769,6 +786,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
     if (!!a.routable !== !!b.routable) return a.routable ? -1 : 1;
     return (b.toolCount || 0) - (a.toolCount || 0);
   });
+  yield;
 
   // Collapse hosts that settle to the SAME leaderboard group into one roster
   // row, so a group's tx total isn't repeated per host (it reads as 2–3× the
@@ -786,7 +804,9 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   const extraByGid = new Map(); // gid -> count of collapsed sibling endpoints
   const primaryByGid = new Map(); // gid -> the seller currently rendered for the group
   const rosterSellers = [];
+  let walked = 0;
   for (const s of sellers) {
+    if (++walked % PAGE_YIELD_ROWS === 0) yield;
     const gid = s.local ? null : sellerStat(s)?.gid;
     if (!gid) { rosterSellers.push(s); continue; }
     const cur = primaryByGid.get(gid);
@@ -951,9 +971,12 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   const independentSellers = rosterSellers.filter((s) => !s.local);
   const terminalCapped = !all && independentSellers.length > TERMINAL_ROW_CAP;
   const terminalPool = terminalCapped ? [...rosterSellers.filter((s) => s.local), ...independentSellers.slice(0, TERMINAL_ROW_CAP)] : rosterSellers;
-  const terminalRows = terminalPool.map((s) => {
+  const terminalRows = [];
+  for (let i = 0; i < terminalPool.length; i++) {
+    if (i % PAGE_YIELD_ROWS === PAGE_YIELD_ROWS - 1) yield;
+    const s = terminalPool[i];
     const st = sellerStat(s) || {};
-    return {
+    terminalRows.push({
       // `host` in scope is the host-card figures object, never a string.
       host: s.local ? (hostOf(baseUrl) || "this host") : hostOf(s.homepage).toLowerCase(),
       href: s.local ? `/${chainKey}#detail` : null,
@@ -972,8 +995,9 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
       // selected seller's panel).
       name: s.local ? null : (s.name || s.displayName || null),
       paid: s.paidToolCount != null && s.paidToolCount !== s.toolCount ? Number(s.paidToolCount) : null,
-    };
-  });
+    });
+  }
+  yield;
   // Ticker rows are the busiest sellers this page already lists, with the
   // direction taken from the selected seller's own daily series when it is the
   // one in scope. A seller we hold no series for carries no arrow rather than
@@ -1147,7 +1171,7 @@ async function runSlicedAsync(gen) {
  *  sliced; a chain view renders in one call, as marketPage does. */
 export async function marketPageAsync(chainKey, baseUrl, opts = {}) {
   if (chainKey == null) return runSlicedAsync(marketPageAllSteps(baseUrl, opts));
-  return marketPage(chainKey, baseUrl, opts);
+  return runSlicedAsync(marketPageChainSteps(chainKey, baseUrl, opts));
 }
 function marketPageAll(baseUrl, opts) { return runSteps(marketPageAllSteps(baseUrl, opts)); }
 /** Test hook: the all-chains page's steps, to time each one. */

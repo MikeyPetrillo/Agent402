@@ -171,7 +171,12 @@ const digest = (r) => createHash("sha256").update(JSON.stringify([r.total, r.mat
   let last = performance.now();
   const timer = setInterval(() => { const t = performance.now(); gaps.push([last, t]); last = t; }, 1);
   gcs.length = 0;
+  // Rows the query scans whole: the entries still pending as it starts, at
+  // the index's mean catalogue size.
+  const pendingTools = Math.round(x._routeIndexStatsForTest().pending * [...cache.values()].reduce((s, v) => s + (v.tools || []).length, 0) / cache.size);
+  const y0 = x._routeCandidateYieldsForTest();
   const sliced = await x.routeQueryAsyncInThread({ query: Q, top: 25, ...routeCtx });
+  const candidateYields = x._routeCandidateYieldsForTest() - y0;
   await new Promise((r) => setTimeout(r, 50));
   clearInterval(timer);
   obs.disconnect();
@@ -195,6 +200,9 @@ const digest = (r) => createHash("sha256").update(JSON.stringify([r.total, r.mat
   const inlineMs = performance.now() - t0;
   const bound = Math.min(1000, Math.max(GAP_MS, inlineMs * 0.4));
   ok(pendingBefore > 1000 && worst < bound, `a route query over a ${pendingBefore}-entry index backlog never holds the loop long (worst ${Math.round(worst)} ms, collector subtracted; bound ${Math.round(bound)} ms: ${GAP_MS} ms or 40% of the ${Math.round(inlineMs)} ms inline drain, under 1000 ms)`);
+  // A row's first statics run the listing screen: the scan of a pending
+  // entry offers a yield every 16 rows (every 256 held a slice past 100 ms).
+  ok(candidateYields >= pendingTools / 16 / 2, `the scan of pending rows offers a yield every 16 rows (${candidateYields} for about ${pendingTools} rows)`);
   // A mismatch names its first differing row, so a failure says what moved.
   const firstDiff = () => {
     if (sliced.count !== drained.count || sliced.sellersMatched !== drained.sellersMatched) return `; count ${sliced.count} vs ${drained.count}, sellers ${sliced.sellersMatched} vs ${drained.sellersMatched}`;
@@ -515,6 +523,86 @@ const digest = (r) => createHash("sha256").update(JSON.stringify([r.total, r.mat
   ok((fn.match(/await writeJoinedInPieces\(/g) || []).length === 2 && !/lines\.join\(/.test(fn), "both cache files are written through the piece writer");
 }
 
+// --- 1h. a row too large for a batch reaches the state database as UTF-8
+// bytes built in pieces across turns, the bytes of the cleaned text the one
+// text parameter sent (the clean and the driver's encode were each one call
+// over the whole body: 0.6-1 s on an 84 MB row); a body cleaning could change
+// keeps the text path.
+{
+  const { cleanPgText } = await import("../src/state-db.js");
+  const PIECE = 1_048_576;
+  const origin = "https://big.example";
+  const from = JSON.stringify(origin).length + 2;
+  // An entry whose text puts a surrogate pair across the first piece's end
+  // (the entry text opens with the six characters {"k":", and the first piece
+  // ends PIECE characters into it) and multi-byte text throughout.
+  const pad = "a".repeat(PIECE - 7);
+  const entryText = JSON.stringify({ k: pad + "\u{1F600}" + "é漢".repeat(600_000) + "\u{1F601}", tools: [{ d: "ü" }] });
+  const line = `[${JSON.stringify(origin)},${entryText}]`;
+  const hash = "AbC+/=hash";
+  const expected = Buffer.from(cleanPgText(`${entryText.slice(0, -1)},"contentHash":${JSON.stringify(hash)}}`), "utf8");
+  const tick = async () => { await new Promise((r) => setImmediate(r)); };
+  const p0 = x._rowBytesPiecesForTest();
+  let worst = 0, last = performance.now();
+  const iv = setInterval(() => { const t = performance.now(); worst = Math.max(worst, t - last); last = t; }, 1);
+  const { turns, value: bytes } = await turnsAdvancing(() => x._rowBytesPiecesForTest(), () => x._rowBodyBytesForTest(line, from, hash, tick));
+  clearInterval(iv);
+  const pieces = x._rowBytesPiecesForTest() - p0;
+  ok(Buffer.isBuffer(bytes) && bytes.equals(expected), `a large row's bytes equal the cleaned text's UTF-8 (${expected.length} bytes)`);
+  ok(pieces >= Math.ceil((line.length - from) / PIECE) && turns >= pieces, `...encoded in ${pieces} pieces across ${turns} turns`);
+  ok(worst < GAP_MS, `...and the encode never held the loop past ${GAP_MS} ms (worst ${Math.round(worst)} ms)`);
+  const noHash = await x._rowBodyBytesForTest(line, from, null);
+  ok(noHash?.equals(Buffer.from(entryText, "utf8")), "without a hash the bytes are the entry text alone");
+  // An escaped NUL or lone surrogate is what cleaning rewrites: that body
+  // keeps the text path, even with the escape across a piece's end.
+  for (const at of [10, PIECE - 9]) { // the second escape starts three characters before the cut
+    const t = JSON.stringify({ k: "a".repeat(at) + "\u0000" + "b".repeat(PIECE) });
+    ok(await x._rowBodyBytesForTest(`[${JSON.stringify(origin)},${t}]`, from, hash) === null, `a body holding an escaped NUL (at ${at}) keeps the text path`);
+  }
+  ok(await x._rowBodyBytesForTest(`[${JSON.stringify(origin)},${JSON.stringify({ k: "\ud800" + "b".repeat(PIECE) })}]`, from, hash) === null, "a body holding an escaped lone surrogate keeps the text path");
+  const idx = readFileSync(new URL("../src/x402-index.js", import.meta.url), "utf8");
+  const fn = idx.slice(idx.indexOf("async function persistIndexCacheToStateDb("), idx.indexOf("async function importIndexCacheFile("));
+  ok(/await rowBodyBytes\(lines\[indexOf\.get\(ids\[0\]\)\]/.test(fn) && /convert_from\(\$3::bytea, 'UTF8'\)::jsonb/.test(fn), "the single-row upsert sends the piecewise bytes");
+  // The boot's warm start holds each row's hash: taken in pieces (the largest
+  // seller's took 0.7 s in one call), the hash the pull takes the same way.
+  const warmAt = idx.indexOf("async function warmStartIndexOnce(");
+  const warm = idx.slice(warmAt, idx.indexOf("  warmStartLastCount = n;\n", warmAt));
+  ok(/pgOriginHashes\.set\(id, await persistedHashSliced\(id, cache\.get\(id\), tick\)\)/.test(warm) && !/persistedHashOf\(/.test(warm), "the warm start hashes each row in pieces");
+}
+
+// --- 1i. a chain page (/base lists thousands of sellers) is built in steps:
+// the async build yields inside its seller walks, each seller's leaderboard
+// stat is joined once rather than per sort comparison, and every byte equals
+// the one-pass build.
+{
+  const mp = await import("../src/market-page.js");
+  const snap = x.indexSnapshot(routeCtx);
+  const wallets = snap.sellers.map((s) => Object.values(s.payToByNetwork || {})[0]).filter(Boolean);
+  const board = { leaderboard: Array.from({ length: 300 }, (_, i) => ({ wallet: wallets[2 * i], wallets: [wallets[2 * i], wallets[2 * i + 1]], callsSettled: 500 - (i % 41), totalUsd: i, uniqueBuyers: 1 })), windowLabel: "30 days" };
+  const base = mp.marketSellers("base", snap).length;
+  for (const all of [false, true]) {
+    const opts = { snapshot: snap, leaderboardSnap: board, all };
+    const one = mp.marketPage("base", "https://agent402.tools", opts);
+    const sliced = await mp.marketPageAsync("base", "https://agent402.tools", opts);
+    let steps = 0, longest = 0;
+    const g = mp._marketPageChainStepsForTest("base", "https://agent402.tools", opts);
+    let t = performance.now(), r = g.next();
+    while (!r.done) { const now = performance.now(); longest = Math.max(longest, now - t); steps++; t = performance.now(); r = g.next(); }
+    longest = Math.max(longest, performance.now() - t);
+    ok(base > 1000 && one === sliced && r.value === one, `the /base page${all ? " (?all=1)" : ""} built in steps equals the one-pass build (${base} sellers, ${one.length} bytes)`);
+    ok(steps >= Math.floor(base / 250) * 3, `...in ${steps} steps (at least three per 250 sellers: the count, the stat join and the roster walk)`);
+    ok(longest < GAP_MS, `...none longer than ${GAP_MS} ms (longest ${Math.round(longest)} ms)`);
+  }
+  // The sort reads a memo: one payTo read per seller, not per comparison.
+  let reads = 0;
+  const counted = { sellers: snap.sellers.map((s) => (s.local ? s : new Proxy(s, { get(o, k) { if (k === "payToByNetwork") reads++; return o[k]; } }))) };
+  mp.marketPage("base", "https://agent402.tools", { snapshot: counted, leaderboardSnap: board });
+  const onBase = mp.marketSellers("base", counted).filter((s) => !s.local).length;
+  ok(reads > 0 && reads <= onBase * 3, `a chain page reads each seller's payTo a bounded number of times (${reads} reads for ${onBase} sellers)`);
+  const srv = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  ok(/return marketPageAsync\(chainKey, BASE_URL, \{ snapshot: labelled, rail,/.test(srv), "the chain page route builds through the sliced builder");
+}
+
 // --- 2 + 3. source pins
 {
   const srv = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
@@ -525,7 +613,14 @@ const digest = (r) => createHash("sha256").update(JSON.stringify([r.total, r.mat
   ok(/app\.get\("\/__operator\/heap\.json"[\s\S]{0,120}operatorAuthed\(req\)/.test(srv), "the heap read is operator-authed");
   const idx = readFileSync(new URL("../src/x402-index.js", import.meta.url), "utf8");
   ok(/enumerable: false/.test(idx) && !/toolHome: new WeakMap/.test(idx), "per-tool router records are hidden properties, not WeakMap entries");
-  ok(/navChainsMemo\.snapshot === snapshot && navChainsMemo\.board === \(board\?\.leaderboard \|\| null\)/.test(srv), "the chain strip is memoized on the index snapshot and the leaderboard rows");
+  ok(/navChainsMemo\.snapshot === snapshot && navChainsMemo\.board === navBoardKey\(board\)/.test(srv), "the chain strip is memoized on the index snapshot and the leaderboard rows");
+  // The warming placeholder is a fresh empty list per read: every empty list
+  // is one key, or each page rebuilt the strip (6 s of CPU in a crawl cycle,
+  // 2026-11-04) until the first scan landed.
+  const keySrc = srv.match(/const navBoardKey = (\(board\) => \{[^\n]*\});/);
+  const navBoardKey = keySrc ? (0, eval)(keySrc[1]) : null;
+  const rows = [{ wallet: "0x1" }];
+  ok(navBoardKey && navBoardKey({ leaderboard: [] }) === navBoardKey({ leaderboard: [] }) && navBoardKey({ leaderboard: [] }) === navBoardKey(null) && navBoardKey({ leaderboard: rows }) === rows, "every empty leaderboard is one strip key; a filled one is its own rows");
 }
 
 console.log(`test-offload-stalls: ${n} passed`);

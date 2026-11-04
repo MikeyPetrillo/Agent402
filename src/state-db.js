@@ -264,6 +264,17 @@ export function cleanPgText(s, { json = true } = {}) {
   }
   return out;
 }
+/** Whether cleanPgText could change this JSON text (false: it returns the text
+ *  as given). Conservative: a candidate escape that cleaning would keep still
+ *  reads true. A caller that checks a long text in pieces cuts it never
+ *  between the two halves of a surrogate pair, and overlaps each piece with
+ *  the five characters before it (an escape is six). */
+export function pgJsonTextMayChange(s) {
+  if (typeof s !== "string") return true;
+  if (s.indexOf("\u0000") !== -1) return true;
+  if (typeof s.isWellFormed === "function" ? !s.isWellFormed() : LONE_SURROGATE.test(s)) return true;
+  return s.indexOf("\\u") !== -1 && JSON_BAD_ESC.test(s);
+}
 /** One query parameter cleaned; arrays element-wise, plain objects as the JSON text pg would send. */
 export function cleanPgParam(v, { json = true } = {}) {
   if (typeof v === "string") return cleanPgText(v, { json });

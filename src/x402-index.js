@@ -33,7 +33,7 @@ import { promisify } from "node:util";
 import { createDocumentCache } from "./json-document.js";
 import { shared, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { createListingsStore, listingsStoreEnabled } from "./index-listings-pg.js";
-import { trackStoreReady, leased, stateDbEnabled, stateQuery, stateDbSchema, records, importOnce } from "./state-db.js";
+import { trackStoreReady, leased, stateDbEnabled, stateQuery, stateDbSchema, records, importOnce, pgJsonTextMayChange } from "./state-db.js";
 import { retryingLoad } from "./store-retry.js";
 
 // The last crawl's probe examples per origin (src/probe-example.js), memory
@@ -7586,6 +7586,56 @@ function* recordBatches(entries, bodyOf) {
   if (ids.length) yield [ids, bodies];
 }
 
+// A row that travels alone is sent as UTF-8 bytes built a piece at a time.
+// Sent as text, the parameter was cleaned (cleanPgText in src/state-db.js: a
+// flatten and three scans of the whole text) and encoded by the driver, each
+// one call over the whole body: 0.6-1 s for the 84 MB row of the largest
+// seller (2026-11-04, local Postgres). Pieces never split a surrogate pair.
+const ROW_BYTES_PIECE = 1_048_576;
+let rowBytesPieces = 0; // pieces encoded, for the step pin
+/** Test hooks: pieces encoded so far, and the encoder itself. */
+export function _rowBytesPiecesForTest() { return rowBytesPieces; }
+export function _rowBodyBytesForTest(...a) { return rowBodyBytes(...a); }
+/** Test hook: the line a save writes for this origin. */
+export function _persistedLineForTest(origin) { const e = persistedEntryOf(cache.get(origin)); return e ? JSON.stringify([origin, e]) : null; }
+/** The stored body of line `[origin,entry]` (the entry text starts at
+ *  `from`) with `hash` added as bodyWithHash adds it, as the UTF-8 bytes of
+ *  cleanPgText of that body. null when cleaning could change the text: that
+ *  body takes the text path, cleaned whole as before. */
+async function rowBodyBytes(line, from, hash, tick = async () => {}) {
+  const to = line.length - 1; // the line's closing "]"
+  // bodyWithHash: the entry's closing "}" gives way to `,"contentHash":"…"}`.
+  let end = to, suffix = "";
+  if (hash && to > from && line.charCodeAt(to - 1) === 125 && !(to - from === 2 && line.charCodeAt(from) === 123)) {
+    end = to - 1;
+    suffix = `,${JSON.stringify(ROW_HASH_KEY)}:${JSON.stringify(hash)}}`;
+  }
+  const cuts = [];
+  for (let a = from; a < end;) {
+    let b = Math.min(end, a + ROW_BYTES_PIECE);
+    if (b < end) { const c = line.charCodeAt(b - 1); if (c >= 0xd800 && c <= 0xdbff) b--; }
+    cuts.push(a, b);
+    a = b;
+  }
+  if (pgJsonTextMayChange(suffix)) return null;
+  let total = Buffer.byteLength(suffix, "utf8");
+  for (let k = 0; k < cuts.length; k += 2) {
+    // Five characters of overlap: an escape cleaning rewrites is six long.
+    if (pgJsonTextMayChange(line.slice(Math.max(from, cuts[k] - 5), cuts[k + 1]))) return null;
+    total += Buffer.byteLength(line.slice(cuts[k], cuts[k + 1]), "utf8");
+    await tick();
+  }
+  const out = Buffer.allocUnsafe(total);
+  let off = 0;
+  for (let k = 0; k < cuts.length; k += 2) {
+    off += out.write(line.slice(cuts[k], cuts[k + 1]), off, "utf8");
+    rowBytesPieces++;
+    await tick();
+  }
+  off += out.write(suffix, off, "utf8");
+  return off === total ? out : null;
+}
+
 /** Upsert changed origins and delete the rows of origins no longer held. */
 async function persistIndexCacheToStateDb(entries, lines, hashes = []) {
   const t0 = performance.now();
@@ -7593,10 +7643,12 @@ async function persistIndexCacheToStateDb(entries, lines, hashes = []) {
   try {
     const held = new Set();
     const changed = new Map(); // origin -> hash, applied once its batch is stored
+    const indexOf = new Map(); // origin -> its line's index
     const tick = sliceClock();
     for (let i = 0; i < entries.length; i++) {
       const origin = entries[i][0];
       held.add(origin);
+      indexOf.set(origin, i);
       const h = hashes[i] ?? lineHash(lines[i]);
       if (pgOriginHashes.get(origin) !== h) changed.set(origin, h);
       await tick();
@@ -7611,12 +7663,14 @@ async function persistIndexCacheToStateDb(entries, lines, hashes = []) {
       // an entry fetched at least as recently as the one it holds, and at one
       // revision only by the copy whose hash orders after it (ROW_HASH_KEY).
       if (ids.length === 1 && bodies[0].length >= PG_SINGLE_ROW_BYTES) {
-        // The same upsert and the same newer-wins rule, one row as a scalar.
+        // The same upsert and the same newer-wins rule, one row as a scalar:
+        // its UTF-8 bytes when they can be built in pieces, else the text.
+        const bytes = await rowBodyBytes(lines[indexOf.get(ids[0])], JSON.stringify(ids[0]).length + 2, changed.get(ids[0]), tick);
         await stateQuery(
-          `INSERT INTO ${recordsTable()} AS r (collection, id, body) VALUES ($1, $2, $3::jsonb)
+          `INSERT INTO ${recordsTable()} AS r (collection, id, body) VALUES ($1, $2, ${bytes ? "convert_from($3::bytea, 'UTF8')::jsonb" : "$3::jsonb"})
            ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()
            WHERE ${NEWER_OR_SAME_SQL("r.body", "EXCLUDED.body")}`,
-          [INDEX_RECORDS, ids[0], bodies[0]],
+          [INDEX_RECORDS, ids[0], bytes || bodies[0]],
         );
       } else {
         await stateQuery(
@@ -7717,6 +7771,7 @@ async function warmStartIndexOnce() {
     const imp = await importOnce(INDEX_IMPORT_NAME, { source: INDEX_CACHE_NDJSON_FILE, run: importIndexCacheFile });
     if (imp.imported && imp.source && imp.source !== "none") console.log(`[x402-index] cache file imported once (${imp.rows} origin(s), ${imp.source})`);
     let after = "";
+    const tick = sliceClock();
     for (;;) {
       const page = await records.list(INDEX_RECORDS, { limit: WARM_START_BATCH, after });
       if (!page.length) break;
@@ -7726,7 +7781,9 @@ async function warmStartIndexOnce() {
         if (rowHash !== undefined) delete body[ROW_HASH_KEY];
         // A row read at boot is held as stored: the first save writes only
         // what this container changed, never every row over a peer's newer one.
-        if (foldWarmEntry(id, body)) { n++; pgOriginHashes.set(id, persistedHashOf(id, cache.get(id))); pgRowHashes.set(id, typeof rowHash === "string" ? rowHash : null); }
+        // The hash of a large catalogue is taken in pieces across turns (the
+        // largest seller's took 0.7 s in one call at boot); the same hash.
+        if (foldWarmEntry(id, body)) { n++; pgOriginHashes.set(id, await persistedHashSliced(id, cache.get(id), tick)); pgRowHashes.set(id, typeof rowHash === "string" ? rowHash : null); }
         else pgOriginHashes.set(id, null);
       }
       maxTurnMs = Math.max(maxTurnMs, performance.now() - turn0);
@@ -9615,6 +9672,11 @@ const ROUTE_SCORE_YIELD_ROWS = 256;
 // (a power of two minus one, for a mask test), and the time one decoration
 // slice of an unindexed entry may take.
 const ROUTE_COLLECT_YIELD_MASK = 4095;
+// Rows of an unindexed entry tested between chances to yield.
+const ROUTE_CANDIDATE_YIELD_MASK = 15;
+let candidateYields = 0;
+/** Test hook: yields taken while unindexed rows were tested. */
+export function _routeCandidateYieldsForTest() { return candidateYields; }
 const ROUTE_DECORATE_SLICE_MS = 6;
 function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = false, baseUrl, catalog, prices, network, toolCount, walletName, scoredMemo = null, drainBacklog = true }) {
   const q = String(query || "").slice(0, 500);
@@ -9832,7 +9894,9 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
       const arr = [];
       for (let i = 0; i < pool.length; i++) {
         if (isCandidate(pool[i])) arr.push(pool[i]);
-        if ((i & 255) === 255) yield;
+        // Every 16 rows: a row's first statics (the listing screen) can cost
+        // half a millisecond, so 256 of them held a slice for 100 ms and more.
+        if ((i & ROUTE_CANDIDATE_YIELD_MASK) === ROUTE_CANDIDATE_YIELD_MASK) { candidateYields++; yield; }
       }
       if (arr.length) byEntry.set(v, arr);
     }
@@ -10547,6 +10611,11 @@ export async function _indexRowsSettledForTest() { while (indexRowsRebuild || fl
 // One collator instead of String#localeCompare per comparison: same order,
 // a fraction of the cost on a 100k-row sort.
 const collate = new Intl.Collator().compare;
+// Rows the round-robin places between chances to yield.
+const INTERLEAVE_YIELD_ROWS = 4096;
+let interleaveVisits = 0;
+/** Test hook: group visits the round-robin has made. */
+export function _interleaveVisitsForTest() { return interleaveVisits; }
 // Yields between units of work (a seller's sort, a slice of the round-robin);
 // run whole by runSteps or across turns by runSlicedAsync.
 function* interleaveSteps(rows) {
@@ -10563,18 +10632,33 @@ function* interleaveSteps(rows) {
     const entries = [...bySeller.entries()].sort((a, b) => collate(String(a[0]), String(b[0])));
     yield;
     const groups = [];
+    const byRoute = (a, b) => collate(String(a.route), String(b.route));
     for (const [, list] of entries) {
-      groups.push(list.sort((a, b) => collate(String(a.route), String(b.route))));
+      // A seller's routes in collation order. The largest seller lists 77k
+      // (a 250-360 ms sort in one step), so a long list is merge-sorted in
+      // steps: the collator is a consistent order and both sorts are stable,
+      // so the order is the engine sort's.
+      groups.push(list.length > SERVICE_KEY_STEP ? yield* stableSortSteps(list, byRoute) : list.sort(byRoute));
       yield;
     }
+    // Round i takes row i of every group that long, in group order. A spent
+    // group leaves the round list (order kept): walking every group in every
+    // round of the longest one (77k rounds over 6k sellers) was 38% of what a
+    // production-sized crawl cycle allocated, and seconds of CPU per build.
     const out = [];
-    for (let i = 0; out.length < subset.length; i++) {
-      let moved = false;
-      for (const g of groups) {
-        if (i < g.length) { out.push(g[i]); moved = true; }
+    let live = groups.filter((g) => g.length > 0);
+    let pushed = 0;
+    for (let i = 0; live.length; i++) {
+      const n = live.length;
+      let keep = 0;
+      for (let j = 0; j < n; j++) {
+        const g = live[j];
+        out.push(g[i]);
+        if (g.length > i + 1) live[keep++] = g;
       }
-      if (!moved) break; // defensive: never spin if a group shrinks underneath us
-      yield;
+      live.length = keep;
+      interleaveVisits += n;
+      if ((pushed += n) >= INTERLEAVE_YIELD_ROWS) { pushed = 0; yield; }
     }
     return out;
   }
