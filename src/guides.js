@@ -17,7 +17,8 @@ import { GUIDE_INTEGRATIONS, integrationBySlug } from "./integration-pages.js";
 import { RAILS_COUNT, RAILS_COUNT_MD, resolveRailCountTokens } from "./rails.js";
 import { TIERS, METERED_MAX_QUOTE_USD, EMBEDDINGS_PRICE } from "./tools/llm-gateway-kit.js";
 import { routingProofSentence, routerRankingSentence } from "./routing-proof.js";
-import { mppEvmDiscoveryRails } from "./mpp-shim.js";
+import { mppEvmDiscoveryRails, mppShimEnabled } from "./mpp-shim.js";
+import { FLAGSHIP_SLUGS, FLAGSHIP_MCP_NAMES } from "./mcp-flagship.js";
 import { creditsSalesEnabled, creditsPrepaymentPhrase } from "./credits-sales.js";
 import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
 import { meteredRoutesInline, meteredFromPrice, meteredQuoteSentence, meteredDefaultModel, flatTiersLine } from "./metered-lead.js";
@@ -52,6 +53,17 @@ function resolveGuideTokens(text, catalog) {
       return "| Route | Price | Covers tools listed up to |\n| --- | --- | --- |\n" +
         rows.map((d) => `| \`${d.route}\` | ${fmtUsd(priceUsd(d.price))} | ${fmtUsd(d.underlyingMaxUsd)} |`).join("\n");
     })
+    .replace(/\{\{mcpRunActions\}\}/g, () => {
+      // The flagship actions the connector lists: a flagship is listed only
+      // when its slug is in the catalog, so the guide names the same set.
+      const slugs = bySlug ? FLAGSHIP_SLUGS.filter((slug) => bySlug.has(slug)) : FLAGSHIP_SLUGS.filter((slug) => !slug.startsWith("decide"));
+      return slugs.map((slug) => "`" + FLAGSHIP_MCP_NAMES[slug] + "`").join(", ");
+    })
+    // The connector pays a wallet-only tool over MPP only while MPP is on
+    // (the same MPP_SECRET_KEY switch the connector's loopback reads).
+    .replace(/\{\{connectorPaidAnswer\}\}/g, () => (mppShimEnabled()
+      ? "answer with their MPP payment challenge instead of a result: an MCP client that pays MPP settles it in the same call"
+      : "answer with payment setup instead of a result"))
     .replace(/\{\{routingProof\}\}/g, () => routingProofSentence())
     .replace(/\{\{routerRanking\}\}/g, () => routerRankingSentence())
     .replace(/\{\{mppEvmRails\}\}/g, () => {
@@ -1175,7 +1187,7 @@ its normal schedule.
   },
   {
     slug: "agent-hosts",
-    title: "Use Agent402 from Claude Code, Cursor, VS Code, Windsurf, Cline, Roo Code, Codex CLI, Gemini CLI, Continue, ElizaOS, AgentCore and any OpenAI SDK",
+    title: "Use Agent402 from Claude Code, Cursor, VS Code, Windsurf, Cline, Roo Code, Codex CLI, Gemini CLI, Continue, ElizaOS, Paperclip, AgentCore and any OpenAI SDK",
     seoTitle: "Use Agent402 from Claude Code, Cursor and more",
     description:
       "Two doors into Agent402 from the agent host you already run: models through an OpenAI-compatible base URL (metered, from $" + TIERS["v1-chat-metered"].price + " a call, paid from a wallet over x402" + (CREDITS_ON ? " or with a prepaid credits key" : ", or with a credits key bought earlier") + "), and 500+ tools through MCP. Copy the block for your host.",
@@ -1318,8 +1330,8 @@ Paid tools from a wallet:
 Add the hosted connector to a Paperclip company as a custom MCP server:
 
 1. Open **Connectors**, then **Connect your own MCP server**.
-2. Paste \`https://agent402.tools/mcp\` and press **Check link**. The
-   connector needs no sign-in and no key, so Paperclip goes straight to the
+2. Paste \`https://agent402.tools/mcp\`. Paperclip inspects the server; the
+   connector needs no sign-in and no key, so it goes straight to the
    discovered actions.
 3. Choose which agents can use the connection, then save.
 
@@ -1327,16 +1339,17 @@ With no wallet, \`catalog.search\`, \`catalog.find\`, \`payment.info\` and
 \`server.describe\` answer for free, and \`catalog.call\` runs the pure-CPU
 tools (hash, uuid, base64, markdown, JSON and more) free through
 proof-of-work, rate-limited. Wallet-only tools, the flagship web and market
-tools among them, answer with their MPP payment challenge instead of a
-result: an MCP client that pays MPP settles it in the same call, and a call
-that carries no payment is never charged. To pay from your own wallet, run
-the stdio server with \`AGENT_KEY\` set (see Claude Code above). Prices are
-on [/pricing](/pricing).
+tools among them, {{connectorPaidAnswer}}, and a call that carries no payment
+is never charged. Paperclip's connectors take a URL; to pay from your own
+wallet, add the stdio server from the Cursor block above, with \`AGENT_KEY\`
+set, as an MCP server on the agent itself. Prices are on [/pricing](/pricing).
 
 Each action has its own setting on the connection's **Permissions** tab:
 **Allowed** runs it without review, **Ask first** waits for a person to
-approve each call, and **Off** removes it from the agent. \`catalog.call\` is
-the one that runs tools; set it to **Ask first** to review every run.
+approve each call, and **Off** removes it from the agent. A new connection
+starts every action at **Allowed**. \`catalog.call\` and each flagship action
+({{mcpRunActions}}) run a tool; set all of them to **Ask first** to review
+every run.
 
 ## Continue
 
