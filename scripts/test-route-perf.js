@@ -33,6 +33,7 @@
 // appear), restore the full scan (perf bound), reorder the sort keys (golden).
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.X402_INDEX_CRAWL = "off";
+import { oursMs, bound, gapMeter } from "./lib/ours-clock.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -42,7 +43,17 @@ const { buildRoutePerfFixture, GOLDEN_QUERIES } = await import("./lib/route-perf
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.log(`FAIL: ${m}`); } };
-const ROUTE_PERF_BOUND_MS = Number(process.env.ROUTE_PERF_BOUND_MS || 250);
+// Every bound below reads the ours clock (scripts/lib/ours-clock.js): the
+// time this thread worked, not wall time a loaded host stretches (a query of
+// 40 ms work read several hundred ms beside four other suites), and is the
+// larger of its laptop floor and a multiple of a same-machine baseline, so a
+// slower runner widens it while a full scan or a lost memo still fails.
+const ROUTE = bound(Number(process.env.ROUTE_PERF_BOUND_MS || 250), 8);
+const ROUTE_PERF_BOUND_MS = ROUTE.ms;
+const MEMO = bound(10, 0.6);
+const BG_GAP = bound(100, 6);
+const REBUILD_GAP = bound(150, 9);
+console.log(`# route ${ROUTE.note}; memo ${MEMO.note}; background gap ${BG_GAP.note}; rebuild gap ${REBUILD_GAP.note}`);
 const cache = _cacheForTests();
 
 // ---------------------------------------------------------------- 3. maintenance (small pool)
@@ -149,7 +160,7 @@ const cache = _cacheForTests();
   for (const q of GOLDEN_QUERIES) {
     const times = [];
     let res;
-    for (let i = 0; i < 5; i++) { const s = performance.now(); res = routeQuery({ query: q, top: 10, include: "all", ...ctx }); times.push(performance.now() - s); }
+    for (let i = 0; i < 5; i++) { const s = oursMs(); res = routeQuery({ query: q, top: 10, include: "all", ...ctx }); times.push(oursMs() - s); }
     times.sort((a, b) => a - b);
     const med = times[2];
     worst.push(med);
@@ -186,7 +197,7 @@ const cache = _cacheForTests();
     const withStop = routeQuery({ query: "get the weather forecast for a city", top: 10, include: "all", ...ctx }).results.map((r) => `${r.seller}|${r.slug}`);
     const bare = routeQuery({ query: "weather forecast city", top: 10, include: "all", ...ctx }).results.map((r) => `${r.seller}|${r.slug}`);
     ok(withStop.length === 10 && withStop.some((x) => bare.includes(x)), `a query padded with common words still answers the task's rows (${withStop.slice(0, 2).join(" ; ")})`);
-    const t0 = performance.now(); routeQuery({ query: "get the data for a thing from the api", top: 10, include: "all", ...ctx }); const tStop = performance.now() - t0;
+    const t0 = oursMs(); routeQuery({ query: "get the data for a thing from the api", top: 10, include: "all", ...ctx }); const tStop = oursMs() - t0;
     ok(tStop < ROUTE_PERF_BOUND_MS, `a query of common words plus one term stays under the bound (${tStop.toFixed(1)} ms)`);
     ok(routeQuery({ query: "the", top: 5, include: "all", ...ctx }).results.length > 0, "a query of only common words still selects on them");
   }
@@ -195,12 +206,12 @@ const cache = _cacheForTests();
   {
     const memo = {};
     const a = routeQuery({ query: "wallet balance", top: 5, include: "all", scoredMemo: memo, ...ctx });
-    const t0 = performance.now();
+    const t0 = oursMs();
     const b = routeQuery({ query: "wallet balance", top: 25, include: "all", scoredMemo: memo, ...ctx });
-    const tMemo = performance.now() - t0;
+    const tMemo = oursMs() - t0;
     const plain = routeQuery({ query: "wallet balance", top: 25, include: "all", ...ctx });
     ok(JSON.stringify(b.results.map((r) => r.slug)) === JSON.stringify(plain.results.map((r) => r.slug)) && a.results[0].slug === plain.results[0].slug, "a shared scoredMemo returns the same ranking as a fresh score");
-    ok(tMemo < 10, `the second call of one request reuses the scored ranking (${tMemo.toFixed(1)} ms)`);
+    ok(tMemo < MEMO.ms, `the second call of one request reuses the scored ranking (${tMemo.toFixed(1)} ms; ${MEMO.note})`);
     const origin = "https://seller9.example";
     cache.set(origin, { ...cache.get(origin), tools: [{ seller: origin, method: "POST", route: "/w", slug: "wallet-balance-now", name: "Wallet balance", description: "wallet balance", category: "data", tags: [], price: 0.0001, networks: ["eip155:8453"] }] });
     const c = routeQuery({ query: "wallet balance", top: 25, include: "all", scoredMemo: memo, ...ctx });
@@ -230,12 +241,11 @@ const cache = _cacheForTests();
     // Build the 80,000 rows BEFORE the gap meter starts, so the meter times the
     // indexer and not the fixture.
     const bigValue = bigEntry(big, 80000);
-    let worst = 0, last = performance.now();
-    const iv = setInterval(() => { const now = performance.now(); worst = Math.max(worst, now - last); last = now; }, 2);
+    const meter = gapMeter();
     cache.set(big, bigValue);
     for (let i = 0; i < 400 && (_routeIndexStatsForTest().pending || _routeIndexStatsForTest().partial); i++) await new Promise((r) => setTimeout(r, 5));
-    clearInterval(iv);
-    ok(!_routeIndexStatsForTest().partial && worst < 100, `an 80,000-tool seller indexes in the background without a long event-loop gap (worst ${worst.toFixed(0)} ms)`);
+    const { worst, worstWall } = meter.stop();
+    ok(!_routeIndexStatsForTest().partial && worst < BG_GAP.ms, `an 80,000-tool seller indexes in the background without a long event-loop gap (worst ${worst.toFixed(0)} ms ours, ${worstWall.toFixed(0)} ms wall; ${BG_GAP.note})`);
     ok(routeQuery({ query: "quux79999", top: 5, include: "external", ...ctx }).results.some((x) => x.slug === "zanzibar-79999"), "...and all of its rows are served once indexed");
     const big2 = "https://huge-seller-2.example";
     cache.set(big2, bigEntry(big2, 40000));
@@ -252,14 +262,13 @@ const cache = _cacheForTests();
     for (const [o, v] of [...cache]) cache.set(o, { ...v, tools: (v.tools || []).map((t) => ({ ...t })) });
     const during = routeQuery({ query: "json to csv", top: 10, include: "all", ...ctx }).results.map((r) => `${r.seller}|${r.slug}|${r.score}`);
     ok(_routeIndexStatsForTest().rebuilding, "past the stale share on a prod-sized pool the rebuild runs in the background");
-    let worst = 0, last = performance.now();
-    const iv = setInterval(() => { const now = performance.now(); worst = Math.max(worst, now - last); last = now; }, 2);
+    const meter = gapMeter();
     await _routeIndexSettledForTest();
     await new Promise((r) => setTimeout(r, 10));
-    clearInterval(iv);
+    const { worst, worstWall } = meter.stop();
     const st = _routeIndexStatsForTest();
     ok(!st.rebuilding && st.staleTools === 0 && st.indexedTools > 100000, `the background rebuild completed with no stale rows (${st.indexedTools} live, ${st.staleTools} stale)`);
-    ok(worst < 150, `no event-loop turn blocked for the rebuild (worst gap ${worst.toFixed(0)} ms; a synchronous rebuild is ~1 s here)`);
+    ok(worst < REBUILD_GAP.ms, `no event-loop turn blocked for the rebuild (worst gap ${worst.toFixed(0)} ms ours, ${worstWall.toFixed(0)} ms wall; ${REBUILD_GAP.note}; a synchronous rebuild is ~1 s here)`);
     const after = routeQuery({ query: "json to csv", top: 10, include: "all", ...ctx }).results.map((r) => `${r.seller}|${r.slug}|${r.score}`);
     ok(JSON.stringify(during) === JSON.stringify(after), "the ranking during the rebuild equals the ranking after it");
   }
