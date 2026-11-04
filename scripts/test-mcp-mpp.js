@@ -115,6 +115,10 @@ ok(Array.isArray(challengesFromHeader(null)) && challengesFromHeader("garbage").
   ok(real?.exempt === true && real.again === true, "the connector's real loopback replay is read as ours");
   ok(forged.length === 3 && forged.every((s) => s.exempt === false && s.again === false), `a client-sent marker on a loopback socket is not (${forged.map((s) => s.exempt).join(",")})`);
   ok(seenBy.every((s) => s.header === undefined), "the marker header is removed before the route runs, the genuine one included");
+  // The server reads the marker in its first middleware, before any route.
+  const serverSrc = (await import("node:fs")).readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  const firstUse = serverSrc.search(/^app\.use\(/m);
+  ok(firstUse >= 0 && serverSrc.slice(firstUse).startsWith("app.use(stripMcpMarker);"), "server.js mounts stripMcpMarker as its first middleware");
 }
 
 // ---- stub facilitator ----
