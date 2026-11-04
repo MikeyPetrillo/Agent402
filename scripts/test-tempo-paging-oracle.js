@@ -29,7 +29,7 @@ const ins = db.prepare("INSERT INTO sales (ts, slug, price_usd, rail, network, p
 let seed = 11;
 const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
 const T0 = Date.UTC(2026, 9, 1);
-const PAGE = 1000; // TEMPO_PAGE_ROWS in the ledger
+const PAGE = 1000; // TEMPO_PAGE_ROWS in the ledger (no wire here is an exact multiple of it)
 let txn = 0;
 const row = (ts, wire, { internal = rnd() < 0.15 ? 1 : 0, rail = rnd() < 0.1 ? "pow" : "usdc", bare = rnd() < 0.05 } = {}) => {
   txn++;
@@ -77,11 +77,18 @@ for (let i = 1; i < got.length; i++) {
   if (a.ts > b.ts || (a.ts === b.ts && a.tx && b.tx && idOf.get(key(a)) > idOf.get(key(b)))) { ordered = false; break; }
 }
 ok(ordered, "paged read: rows come in (ts, id) order across both wires");
-// The steps the revenue ledger slices: same rows, and they yield inside the walk.
+// The steps the revenue ledger slices: the same rows, read a page at a time.
+// The walk yields after every full page of a wire (a page is PAGE index rows,
+// whatever they hold), once after each wire, and every PAGE rows of the
+// merge, so the count is exact: a read that took a wire in one query, or ran
+// as one step, yields fewer times and fails here.
 const steps = sales.externalTempoPaymentsSteps();
 let yields = 0, r = steps.next();
 while (!r.done) { yields++; r = steps.next(); }
-ok(yields >= 8 && JSON.stringify(r.value) === JSON.stringify(got), `the sliced steps give the same rows and yield between pages (${yields} yields)`);
+const pageYields = perWire.reduce((n, w) => n + Math.floor(w.n / PAGE), 0);
+const expected = pageYields + perWire.length + Math.floor(oracle.length / PAGE);
+ok(JSON.stringify(r.value) === JSON.stringify(got), "the sliced steps give the same rows as the one-call read");
+ok(yields === expected, `the sliced steps yield once per ${PAGE}-row page of each wire, after each wire and every ${PAGE} merged rows (${yields} yields, expected ${expected}: ${pageYields} pages)`);
 
 db.close();
 rmSync(dir, { recursive: true, force: true });

@@ -100,6 +100,31 @@ m._resetFirstCallAllowance();
   ok(st.returnedPayers.paidAgain === 0 && st.returnedPayers.paidAgainWithin7d === 0, "a sale at the grant's own moment does not count");
 }
 
+// The 7-day line: a return exactly RETURN_WINDOW_MS after the grant is inside
+// it, one millisecond later is not (it still counts as paid again).
+m._resetFirstCallAllowance();
+{
+  const W = m.RETURN_WINDOW_MS;
+  const reader = stubLedger([
+    { payer: A, ts: T0 + W, internal: 0 },
+    { payer: B, ts: T0 + W + 1, internal: 0 },
+  ]);
+  const st = await m.firstCallAllowanceStatus({ now: T0 + 30 * DAY, returned: { listGrants: grantsOf([{ payer: A, grantedAtMs: T0 }, { payer: B, grantedAtMs: T0 }]), firstPaidAfter: reader } });
+  const r = st.returnedPayers;
+  ok(W === 7 * DAY && r.paidAgain === 2 && r.paidAgainWithin7d === 1, `a return at exactly 7 days is within the window, 1 ms past it is not (${r.paidAgain}/${r.paidAgainWithin7d})`);
+}
+
+// Two grant records for one wallet (a mixed-case and a lowercased id): one
+// grant, read from the earlier time, so a sale between the two counts.
+m._resetFirstCallAllowance();
+{
+  const reader = stubLedger([{ payer: MIXED.toLowerCase(), ts: T0 + 2 * DAY, internal: 0 }]);
+  const st = await m.firstCallAllowanceStatus({ now: T0 + 10 * DAY, returned: { listGrants: grantsOf([{ payer: MIXED, grantedAtMs: T0 + 3 * DAY }, { payer: MIXED.toLowerCase(), grantedAtMs: T0 + DAY }]), firstPaidAfter: reader } });
+  const r = st.returnedPayers;
+  ok(reader.calls[0].length === 1 && reader.calls[0][0].grantedAtMs === T0 + DAY, `duplicate grants for one wallet are asked once, at the earliest grant (${JSON.stringify(reader.calls[0])})`);
+  ok(r.granted === 1 && r.paidAgain === 1 && r.paidAgainWithin7d === 1, `...and count as one granted wallet that paid again (${r.granted}/${r.paidAgain}/${r.paidAgainWithin7d})`);
+}
+
 // Mixed-case EVM matches; non-EVM is passed case-exact.
 m._resetFirstCallAllowance();
 {
@@ -245,6 +270,18 @@ const insRaw = raw.prepare("INSERT INTO sales (ts, slug, price_usd, rail, networ
   ok(found.size === expect.size && [...expect].every(([p, t]) => found.get(p) === t), `large ledger: the same answer as a per-wallet scan (${found.size} of ${expect.size})`);
   const BOUND_MS = 100;
   ok(total < 1000 && worst < BOUND_MS, `large ledger: ${big.length} grants read in ${total.toFixed(0)} ms, longest event-loop hold ${worst.toFixed(0)} ms (bound ${BOUND_MS} ms)`);
+}
+// The wiring: the operator refunds route computes the figure with the real
+// ledger reader, and the public gateway status never does.
+{
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  const at = src.indexOf('app.get("/__operator/refunds.json"');
+  const route = at >= 0 ? src.slice(at, src.indexOf("\napp.", at + 10)) : "";
+  ok(/firstCallAllowance:\s*await firstCallAllowanceStatus\(\{\s*returned:\s*firstPaidSaleAfterAsync\s*\}\)/.test(route), "/__operator/refunds.json passes the ledger reader, so its firstCallAllowance carries returnedPayers");
+  const gs = src.indexOf('app.get("/api/gateway-status"');
+  const gsRoute = gs >= 0 ? src.slice(gs, src.indexOf("\napp.", gs + 10)) : "";
+  ok(gsRoute.length > 0 && !/returned:/.test(gsRoute) && !/firstPaidSaleAfterAsync/.test(gsRoute), "/api/gateway-status never asks for the returning-payers figure");
 }
 raw.close();
 rmSync(dir, { recursive: true, force: true });

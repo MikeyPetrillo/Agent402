@@ -18,7 +18,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync as readProcFile, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync as readProcFile, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -32,74 +32,9 @@ import { buildRoutePerfFixture } from "./lib/route-perf-fixture.js";
 
 let n = 0;
 const ok = (c, m) => { n++; assert.ok(c, m); console.log(`ok - ${m}`); };
-// Same-machine baseline: a fixed job of the kind the builders do (objects
-// built, serialized, parsed, sorted), the fastest of three runs so one
-// collector pause does not decide it. Every loop-hold bound below is the
-// larger of its absolute floor (what a laptop reads, with room) and a share
-// of this baseline, so a shared runner several times slower than a laptop
-// gets a bound several times wider, while a hold that is a multiple of the
-// baseline still fails (the deliberate-regression check below proves it).
-// Measured at about 16 ms on a laptop, where the floors are the bounds. The
-// STALL_*_MS variables set the floors.
-const BASELINE_MS = (() => {
-  const once = () => {
-    const t0 = performance.now();
-    const rows = []; for (let i = 0; i < 36_000; i++) rows.push({ i, s: "k" + (i % 977), v: i * 1.5, t: [i, i + 1] });
-    JSON.parse(JSON.stringify(rows)).sort((a, b) => (a.s < b.s ? -1 : a.s > b.s ? 1 : a.i - b.i));
-    return performance.now() - t0;
-  };
-  return Math.min(once(), once(), once());
-})();
-const bound = (floor, k) => ({ ms: Math.max(floor, Math.round(k * BASELINE_MS)), note: `bound ${Math.max(floor, Math.round(k * BASELINE_MS))} ms: ${floor} ms or ${k}x the ${BASELINE_MS.toFixed(1)} ms baseline` });
-const GAP = bound(Number(process.env.STALL_GAP_MS || 120), 3);
-const GAP_MS = GAP.ms;
-// A first request after boot also compiles the route's code, which a shared
-// runner slows far more than the hot baseline loop (209 ms against a 21 ms
-// baseline seen on one); the stalls this pin exists for were seconds long.
-const ROUTE = bound(Number(process.env.STALL_ROUTE_BOUND_MS || 150), 12);
-const ROUTE_BOUND_MS = ROUTE.ms;
-// One step of a sliced page: measured at 3.4 ms on a laptop for the longest
-// (?all=1, 5,800 sellers); the floor allows a runner several times slower.
-const STEP = bound(Number(process.env.STALL_STEP_BOUND_MS || 25), 0.75);
-const STEP_BOUND_MS = STEP.ms;
-console.log(`baseline ${BASELINE_MS.toFixed(1)} ms; ${GAP.note}; ${ROUTE.note}; ${STEP.note}`);
-const SALES_ROWS = Number(process.env.STALL_SALES_ROWS || 60_000);
-const TRANSFER_ROWS = Number(process.env.STALL_TRANSFER_ROWS || 200_000);
-
-const dir = mkdtempSync(join(tmpdir(), "a402-stall-routes-"));
-process.env.SALES_LEDGER_DB = join(dir, "sales.db");
-process.env.REVENUE_LEDGER_DB = join(dir, "revenue.db");
-process.env.X402_INDEX_CRAWL = "off";
-const now = Date.now();
-let seed = 7;
-const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32;
-
-// --- fixtures: a sales ledger of SALES_ROWS rows over 120 days.
-const sales = await import("../src/sales-ledger.js");
-{
-  const db = new Database(process.env.SALES_LEDGER_DB);
-  const slugs = ["hash", "v1-chat-nano", "web-search", "market-quote", "dns-lookup", "pdf-extract", "tts", "image-gen", "whois", "json-to-csv", "browser-render", "qr"];
-  const nets = ["eip155:8453", "eip155:8453", "eip155:8453", "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", "tempo", "eip155:137", "eip155:42161", "stellar:pubnet", "algorand:mainnet"];
-  const rails = ["usdc", "usdc", "usdc", "pow", "marketplace", "card"];
-  const ins = db.prepare("INSERT INTO sales (ts, slug, price_usd, rail, network, payer, tx, internal, wire) VALUES (?,?,?,?,?,?,?,?,?)");
-  db.transaction(() => {
-    for (let i = 0; i < SALES_ROWS; i++) {
-      const net = nets[Math.floor(rnd() * nets.length)];
-      ins.run(now - Math.floor(rnd() * 120 * 86_400_000), slugs[Math.floor(rnd() * slugs.length)], Math.round(rnd() * 50) / 1000 + 0.001,
-        rails[Math.floor(rnd() * rails.length)], net, rnd() < 0.1 ? null : "0x" + Math.floor(rnd() * 400).toString(16).padStart(40, "a"),
-        "0x" + i.toString(16).padStart(64, "0"), rnd() < 0.25 ? 1 : 0, net === "tempo" ? "mpp-tempo" : "x402");
-    }
-  })();
-  db.close();
-}
-
-// The worst event-loop block while `fn` runs, from a 1 ms interval, less the
-// collector's pauses inside it (the production stall line reports collector
-// time apart too): the gaps are kept so a pause is subtracted from the gap it
-// fell in. A gap's hold is the time this thread was ours inside it: its wall
-// time less the time it sat runnable on the scheduler's queue waiting for a
-// core. On a loaded host the thread can sit descheduled in the middle of a
-// turn, which stretches the gap without any of our work in it (measured
+// A loop hold is the time this thread was ours: its wall time less the time
+// it sat runnable on the scheduler's queue waiting for a core. On a loaded host the thread can sit descheduled in the middle of a
+// turn, which stretches a gap without any of our work in it (measured
 // under contention: a seller-summary rebuild of 6 to 16 ms ours read
 // 30 to 880 ms of wall time), so that wait is not ours. A wait the thread
 // chose (a synchronous file read, a spawnSync, an Atomics.wait) is not on
@@ -116,6 +51,93 @@ const oursMs = SCHEDSTAT ? () => performance.now() - queuedMs() : threadCpuMs;
 const HOLD_READING = SCHEDSTAT ? "wall time less run-queue wait" : "thread CPU";
 console.log(`# loop holds read as ${HOLD_READING}${SCHEDSTAT ? "" : " (no schedstat here: a blocking wait reads as 0)"}`);
 if (process.env.CI) assert.ok(SCHEDSTAT, "under CI the main thread's schedstat must be readable, so a blocking wait is measured");
+// Same-machine baseline: a fixed job of the kind the builders do (objects
+// built, serialized, parsed, sorted), the fastest of three runs so one
+// collector pause does not decide it. Every loop-hold bound below is the
+// larger of its absolute floor (what a laptop reads, with room) and a share
+// of this baseline, so a shared runner several times slower than a laptop
+// gets a bound several times wider, while a hold that is a multiple of the
+// baseline still fails (the deliberate-regression check below proves it).
+// Measured at about 16 ms on a laptop, where the floors are the bounds. The
+// STALL_*_MS variables set the floors. Timed on the ours clock, as the holds
+// are: a wall-clock baseline taken on a contended host read several times its
+// work and widened every bound with it, so a planted hold passed there.
+const BASELINE_MS = (() => {
+  const once = () => {
+    const t0 = oursMs();
+    const rows = []; for (let i = 0; i < 36_000; i++) rows.push({ i, s: "k" + (i % 977), v: i * 1.5, t: [i, i + 1] });
+    JSON.parse(JSON.stringify(rows)).sort((a, b) => (a.s < b.s ? -1 : a.s > b.s ? 1 : a.i - b.i));
+    return oursMs() - t0;
+  };
+  return Math.min(once(), once(), once());
+})();
+const bound = (floor, k) => ({ ms: Math.max(floor, Math.round(k * BASELINE_MS)), note: `bound ${Math.max(floor, Math.round(k * BASELINE_MS))} ms: ${floor} ms or ${k}x the ${BASELINE_MS.toFixed(1)} ms baseline` });
+const GAP = bound(Number(process.env.STALL_GAP_MS || 120), 3);
+const GAP_MS = GAP.ms;
+// A first request after boot also compiles the route's code, which a shared
+// runner slows far more than the hot baseline loop (209 ms against a 21 ms
+// baseline seen on one); the stalls this pin exists for were seconds long.
+const ROUTE = bound(Number(process.env.STALL_ROUTE_BOUND_MS || 150), 12);
+const ROUTE_BOUND_MS = ROUTE.ms;
+// One step of a sliced page: measured at 3.4 ms on a laptop for the longest
+// (?all=1, 5,800 sellers); the floor allows a runner several times slower.
+const STEP = bound(Number(process.env.STALL_STEP_BOUND_MS || 25), 0.75);
+const STEP_BOUND_MS = STEP.ms;
+// The /marketplace walk's roster loops that yield per 250 rows, in whole
+// loops (one-chain view, all-chains view): the fixture reads 4.36 and 5.18,
+// the rest being the operator counts and per-chain passes, which yield per
+// 250 rows of a part of the roster. One loop that stops yielding drops a whole
+// loop's worth below these.
+const MARKET_ROSTER_LOOPS = 4, MARKET_ROSTER_LOOPS_ALL = 5;
+console.log(`baseline ${BASELINE_MS.toFixed(1)} ms; ${GAP.note}; ${ROUTE.note}; ${STEP.note}`);
+const SALES_ROWS = Number(process.env.STALL_SALES_ROWS || 60_000);
+const TRANSFER_ROWS = Number(process.env.STALL_TRANSFER_ROWS || 200_000);
+
+const dir = mkdtempSync(join(tmpdir(), "a402-stall-routes-"));
+// The fixtures (ledgers, the index cache, the booted server's stores) are
+// about half a gigabyte: removed on every exit, a failed assertion included,
+// and on an interrupt. The booted server is killed first (see section 2).
+let serverProc = null;
+process.on("exit", () => {
+  try { serverProc?.kill("SIGKILL"); } catch { /* already gone */ }
+  try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+});
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(sig, () => process.exit(130));
+process.env.SALES_LEDGER_DB = join(dir, "sales.db");
+process.env.REVENUE_LEDGER_DB = join(dir, "revenue.db");
+process.env.X402_INDEX_CRAWL = "off";
+const now = Date.now();
+let seed = 7;
+const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32;
+
+// --- fixtures: a sales ledger of SALES_ROWS rows over 120 days. No row lands
+// within EDGE_MS of the 30-day window's edge: the booted server's figures are
+// read minutes after this test's own, and a row that crossed the edge in
+// between read as a mismatch (seen on a slow run).
+const EDGE_MS = 6 * 3_600_000;
+const clearOfWindowEdge = (ts) => { const edge = now - 30 * 86_400_000; return Math.abs(ts - edge) < EDGE_MS ? edge + (ts < edge ? -EDGE_MS : EDGE_MS) : ts; };
+const sales = await import("../src/sales-ledger.js");
+{
+  const db = new Database(process.env.SALES_LEDGER_DB);
+  const slugs = ["hash", "v1-chat-nano", "web-search", "market-quote", "dns-lookup", "pdf-extract", "tts", "image-gen", "whois", "json-to-csv", "browser-render", "qr"];
+  const nets = ["eip155:8453", "eip155:8453", "eip155:8453", "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", "tempo", "eip155:137", "eip155:42161", "stellar:pubnet", "algorand:mainnet"];
+  const rails = ["usdc", "usdc", "usdc", "pow", "marketplace", "card"];
+  const ins = db.prepare("INSERT INTO sales (ts, slug, price_usd, rail, network, payer, tx, internal, wire) VALUES (?,?,?,?,?,?,?,?,?)");
+  db.transaction(() => {
+    for (let i = 0; i < SALES_ROWS; i++) {
+      const net = nets[Math.floor(rnd() * nets.length)];
+      ins.run(clearOfWindowEdge(now - Math.floor(rnd() * 120 * 86_400_000)), slugs[Math.floor(rnd() * slugs.length)], Math.round(rnd() * 50) / 1000 + 0.001,
+        rails[Math.floor(rnd() * rails.length)], net, rnd() < 0.1 ? null : "0x" + Math.floor(rnd() * 400).toString(16).padStart(40, "a"),
+        "0x" + i.toString(16).padStart(64, "0"), rnd() < 0.25 ? 1 : 0, net === "tempo" ? "mpp-tempo" : "x402");
+    }
+  })();
+  db.close();
+}
+
+// The worst event-loop block while `fn` runs, from a 1 ms interval, less the
+// collector's pauses inside it (the production stall line reports collector
+// time apart too): the gaps are kept so a pause is subtracted from the gap it
+// fell in, and a gap's hold is read on the ours clock (above).
 let gaps = null, last = performance.now(), lastOurs = oursMs();
 const lagTimer = setInterval(() => { const t = performance.now(), c = oursMs(); if (gaps) gaps.push([last, t, c - lastOurs]); last = t; lastOurs = c; }, 1);
 const gcPauses = [];
@@ -432,6 +454,19 @@ const mp = await import("../src/market-page.js");
     const st = await longestStep(() => mp._marketPageAllStepsForTest("https://agent402.tools", opts));
     ok(st.sameShape && st.values.every((v) => v === whole) && st.count > 20 && heldUnder(st.longest, STEP_BOUND_MS), `...in ${st.count} steps, the longest ${st.longest.toFixed(1)} ms ours, each step its least over three walks (${STEP.note}; one walk's worst step ${st.single.toFixed(1)} ms; longest raw step ${st.longestRaw.toFixed(1)} ms, ${st.longestGc.toFixed(1)} ms of it the collector)`);
     ok(heldUnder(sliced.ms, GAP_MS), `...and never held the loop past ${GAP_MS} ms (${GAP.note}) (worst ${sliced.ms} ms ours; longest gap ${sliced.raw} ms, ${sliced.gc} ms of it the collector; the page in one turn: ${oneTurnMs} ms)`);
+    // Every loop over the roster yields, and that is pinned by count, not only
+    // by time: a loop that stopped yielding costs a step a few milliseconds
+    // here, well inside the step bound. The page over half the sellers against
+    // the whole: each roster loop that yields adds a step per 250 rows
+    // (PAGE_YIELD_ROWS in src/market-page.js), so the difference counts them.
+    const halfN = Math.floor(labelled.sellers.length / 2);
+    const halfOpts = { ...opts, snapshot: { ...labelled, sellers: labelled.sellers.slice(0, halfN) } };
+    let halfCount = 1;
+    for (const it = mp._marketPageAllStepsForTest("https://agent402.tools", halfOpts); !it.next().done;) halfCount++;
+    const perLoop = Math.floor((labelled.sellers.length - halfN) / 250);
+    const loops = (st.count - halfCount) / perLoop;
+    const LOOPS = all ? MARKET_ROSTER_LOOPS_ALL : MARKET_ROSTER_LOOPS;
+    ok(loops >= LOOPS, `...and each of its ${LOOPS} roster loops yields every 250 rows: ${st.count} steps over ${labelled.sellers.length} sellers, ${halfCount} over ${halfN} (${loops.toFixed(2)} loops' worth)`);
   }
   ok(mp.marketPage("base", "https://agent402.tools", { snapshot: labelled, leaderboardSnap }) === await mp.marketPageAsync("base", "https://agent402.tools", { snapshot: labelled, leaderboardSnap }), "a chain view through marketPageAsync is marketPage's");
 }
@@ -487,18 +522,59 @@ clearInterval(lagTimer);
   lines.length = 0;
 }
 const TOKEN = "stall-routes-operator-token-0123456789";
+// The booted server's holds are read on the same ours clock as section 1's,
+// by a probe preloaded into its main thread and asked over the IPC channel:
+// its own loop-lag figure (/__operator/perf.json) is wall time, which a busy
+// host stretches without any of the route's work in it (a /marketplace?all=1
+// first request read 1,323 ms there). The wall figure is still printed.
+const HOLD_PROBE = join(dir, "hold-probe.mjs");
+writeFileSync(HOLD_PROBE, `import { readFileSync } from "node:fs";
+import { PerformanceObserver } from "node:perf_hooks";
+import { isMainThread } from "node:worker_threads";
+if (isMainThread && typeof process.send === "function") {
+  const p = "/proc/self/task/" + process.pid + "/schedstat";
+  let sched = null; try { if (/^\\d+ \\d+ \\d+/.test(readFileSync(p, "utf8"))) sched = p; } catch {}
+  const cpu = () => { const u = process.threadCpuUsage(); return (u.user + u.system) / 1000; };
+  const ours = sched ? () => performance.now() - Number(readFileSync(sched, "utf8").split(" ")[1]) / 1e6 : cpu;
+  const gcs = [];
+  new PerformanceObserver((l) => { for (const e of l.getEntries()) { gcs.push([e.startTime, e.startTime + e.duration]); if (gcs.length > 4000) gcs.shift(); } }).observe({ entryTypes: ["gc"] });
+  let gaps = [], last = performance.now(), lastOurs = ours();
+  setInterval(() => { const t = performance.now(), o = ours(); if (t - last > 2) { gaps.push([last, t, o - lastOurs]); if (gaps.length > 20000) gaps.shift(); } last = t; lastOurs = o; }, 1).unref();
+  process.on("message", (m) => {
+    if (m === "hold:reset") { gaps = []; process.send({ hold: "reset" }); return; }
+    if (m !== "hold:read") return;
+    let worst = 0, wall = 0, wallGc = 0;
+    for (const [a, b, o] of gaps) {
+      let g = 0;
+      for (const [s0, e0] of gcs) g += Math.max(0, Math.min(b, e0) - Math.max(a, s0));
+      worst = Math.max(worst, Math.min(b - a, o) - g);
+      if (b - a > wall) { wall = b - a; wallGc = g; }
+    }
+    process.send({ hold: "read", worstMs: Math.round(Math.max(0, worst)), wallMs: Math.round(wall), wallGcMs: Math.round(wallGc), reading: sched ? "ours" : "thread CPU" });
+  });
+}
+`);
 const port = await getFreePort();
 const proc = spawn(process.execPath, ["src/server.js"], {
   env: {
     ...process.env, FREE_MODE: "true", PORT: String(port), X402_INDEX_CRAWL: "", INDEX_CACHE_FILE: join(dir, "x402-index-cache.json"), INDEX_FIRST_CRAWL_DELAY_MS: "999999999",
     ROUTE_INDEX_WARM_DELAY_MS: "0", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", STATE_DATABASE_URL: "", ROUTER_WORKERS: "0",
     AGENT402_OPERATOR_TOKEN: TOKEN, STATS_DB_DIR: dir, LOOP_LAG_TICK_MS: "5", LAZY_DEPS_WARM: "off",
+    NODE_OPTIONS: `${process.env.NODE_OPTIONS || ""} --import ${JSON.stringify(HOLD_PROBE).slice(1, -1)}`.trim(),
   },
-  stdio: ["ignore", "ignore", "inherit"],
+  stdio: ["ignore", "ignore", "inherit", "ipc"],
 });
+serverProc = proc;
 const base = `http://127.0.0.1:${port}`;
 const op = { headers: { authorization: `Bearer ${TOKEN}` } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const serverHold = (cmd) => new Promise((resolve, reject) => {
+  const want = cmd.slice("hold:".length);
+  const timer = setTimeout(() => { proc.off("message", on); reject(new Error(`the hold probe did not answer ${cmd}`)); }, 10_000);
+  function on(m) { if (m?.hold === want) { clearTimeout(timer); proc.off("message", on); resolve(m); } }
+  proc.on("message", on);
+  proc.send(cmd);
+});
 try {
   let up = false;
   for (let i = 0; i < 240 && !up; i++) { try { up = (await fetch(`${base}/health`)).ok; } catch { await sleep(500); } }
@@ -525,23 +601,25 @@ try {
   const routes = ["/base", "/polygon", "/solana", "/monad", "/marketplace", "/marketplace?all=1", "/marketplace/tools", "/marketplace/tools?q=json", "/leaderboard", "/api/sales"];
   for (const r of routes) {
     await fetch(`${base}/__operator/perf.json?reset=1`, op);
+    await serverHold("hold:reset");
     const resp = await fetch(base + r);
     await resp.arrayBuffer();
     await sleep(300);
-    // Our code's hold: the worst block less the collector's share of it.
+    // Our code's hold: the probe's worst gap on the ours clock, less the
+    // collector's share of it. The server's own wall figure is printed.
+    const h = await serverHold("hold:read");
     const { worstMs, worstGcMs = 0 } = (await (await fetch(`${base}/__operator/perf.json`, op)).json()).loop;
-    const ms = worstMs - worstGcMs;
-    ok(resp.status === 200 && heldUnder(ms, ROUTE_BOUND_MS), `GET ${r}, the first request after boot: 200, the loop held at most ${ms} ms (${ROUTE.note}; worst block ${worstMs} ms, ${worstGcMs} ms of it the collector)`);
+    ok(resp.status === 200 && heldUnder(h.worstMs, ROUTE_BOUND_MS), `GET ${r}, the first request after boot: 200, the loop held at most ${h.worstMs} ms ${h.reading} (${ROUTE.note}; longest gap ${h.wallMs} ms, ${h.wallGcMs} ms of it the collector; the server's wall figure ${worstMs} ms, ${worstGcMs} ms of it the collector)`);
   }
   {
     // The operator's sales page reads the detailed summary across turns too,
     // and it is the ledger's own detailed summary.
-    await fetch(`${base}/__operator/perf.json?reset=1`, op);
+    await serverHold("hold:reset");
     const resp = await fetch(`${base}/__operator/sales.json`, op);
     const body = await resp.json();
     await sleep(300);
-    const { worstMs, worstGcMs = 0 } = (await (await fetch(`${base}/__operator/perf.json`, op)).json()).loop;
-    ok(resp.status === 200 && heldUnder(worstMs - worstGcMs, ROUTE_BOUND_MS), `GET /__operator/sales.json: 200, the loop held at most ${worstMs - worstGcMs} ms (${ROUTE.note})`);
+    const h = await serverHold("hold:read");
+    ok(resp.status === 200 && heldUnder(h.worstMs, ROUTE_BOUND_MS), `GET /__operator/sales.json: 200, the loop held at most ${h.worstMs} ms ${h.reading} (${ROUTE.note}; longest gap ${h.wallMs} ms)`);
     const { mppAgentsThisWeek, feedback, ...summary } = body;
     const direct = JSON.parse(JSON.stringify(sales.salesSummary({ days: 30, detailed: true })));
     ok(isDeepStrictEqual(summary.totals, direct.totals) && summary.distinctExternalBuyers === direct.distinctExternalBuyers && isDeepStrictEqual(summary.repeatBuyers, direct.repeatBuyers) && feedback && "mppAgentsThisWeek" in body,

@@ -68,12 +68,14 @@ async function worstHold(run) {
 // derives its bounds, so a slower runner gets a wider one. Measured: the
 // longest step, the final sort, about 65 ms on a laptop against a baseline of
 // about 16 ms.
+// The baseline is timed on the ours clock too, so a contended host does not
+// widen the bound with time that was not ours.
 const BASELINE_MS = (() => {
   const once = () => {
-    const t0 = performance.now();
+    const t0 = oursMs();
     const rows = []; for (let i = 0; i < 36_000; i++) rows.push({ i, s: "k" + (i % 977), v: i * 1.5, t: [i, i + 1] });
     JSON.parse(JSON.stringify(rows)).sort((a, b) => (a.s < b.s ? -1 : a.s > b.s ? 1 : a.i - b.i));
-    return performance.now() - t0;
+    return oursMs() - t0;
   };
   return Math.min(once(), once(), once());
 })();

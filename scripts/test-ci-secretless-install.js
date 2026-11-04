@@ -131,5 +131,20 @@ for (const file of ["listing-pass.yml", "mint-bazaar-rows.yml", "algorand-rail-c
   ok(installs >= 1, `${file}: the scan found its install step (${installs})`);
 }
 
+// The Algorand sweep imports src/payments.js, whose import chain opens a
+// SQLite file at load, so its install must build better-sqlite3's binding
+// (everything else installs with scripts off), and the token stays on the
+// issue step, after the sweep.
+{
+  const wf = load(readFileSync(new URL("../.github/workflows/algorand-rail-canary.yml", import.meta.url), "utf8"));
+  const steps = wf.jobs?.canary?.steps || [];
+  const iInstall = steps.findIndex((st) => /\bnpm ci --ignore-scripts\b/.test(String(st.run || "")));
+  const install = String(steps[iInstall]?.run || "");
+  ok(iInstall >= 0 && /&& npm rebuild better-sqlite3 &&/.test(install) && !/npm (ci|install)(?![^&]*--ignore-scripts)/.test(install), `algorand-rail-canary.yml: the install rebuilds better-sqlite3 and runs every other install with scripts off (${install.slice(0, 120)})`);
+  const iSweep = steps.findIndex((st) => /algorand-rail-canary\.js/.test(String(st.run || "")));
+  const tokenSteps = steps.map((st, i) => [i, st]).filter(([, st]) => SECRETISH.test(String(st.env?.GH_TOKEN || ""))).map(([i]) => i);
+  ok(iSweep > iInstall && tokenSteps.length === 1 && tokenSteps[0] > iSweep && /gh issue/.test(String(steps[tokenSteps[0]].run || "")), `algorand-rail-canary.yml: the workflow token is on the issue step alone, after the sweep (steps ${tokenSteps.join(", ")})`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
