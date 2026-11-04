@@ -317,7 +317,7 @@ heartbeat page on it under one issue that closes when nothing is owed.
   not evidence; a pause a settle refusal set holds against headroom reads for
   `AVM_SPONSORSHIP_REFUSAL_HOLD_MS`; published on `/api/rails`, the only excuse the canaries
   accept for a missing sub-cent accept; `AVM_SUBCENT_GATE=off`).
-- **First-call allowance:** `src/first-call-allowance.js`, off unless `FIRST_CALL_ALLOWANCE=on`: a wallet with no paid sale gets one unsettled first call (x402 EVM exact, a flagship or `FIRST_CALL_ALLOWANCE_SLUGS` route at or under `FIRST_CALL_ALLOWANCE_MAX_USD`), inside `FIRST_CALL_ALLOWANCE_DAILY_USD` and `FIRST_CALL_ALLOWANCE_IP_PER_DAY` claimed on Redis before a balance read bounded by `FIRST_CALL_ALLOWANCE_BALANCE_MS` (default 1000); a call asking for a share link is never granted; the wallet key expires (`FIRST_CALL_ALLOWANCE_WALLET_TTL_DAYS`, default 400; a claim after 30 minutes), the state record does not; an onBeforeSettle `skip` leaves its 200 unsettled and unbooked; figures on `/__operator/refunds.json`, with `returnedPayers` (granted wallets with a later outside paid sale, and within 7 days; one batched ledger read per chunk, cached 5 minutes, reported with the switch off). The `firstCallAllowance` word on `/api/gateway-status` (on, spent, unavailable) pages nothing: a store that does not answer grants nothing, so every call is paid as usual.
+- **First-call allowance:** `src/first-call-allowance.js`, off unless `FIRST_CALL_ALLOWANCE=on`: a wallet with no paid sale gets one unsettled first call (x402 EVM exact, a flagship or `FIRST_CALL_ALLOWANCE_SLUGS` route at or under `FIRST_CALL_ALLOWANCE_MAX_USD`), inside `FIRST_CALL_ALLOWANCE_DAILY_USD` and `FIRST_CALL_ALLOWANCE_IP_PER_DAY` claimed on Redis before a balance read bounded by `FIRST_CALL_ALLOWANCE_BALANCE_MS` (default 1000); a call asking for a share link is never granted; the wallet key expires (`FIRST_CALL_ALLOWANCE_WALLET_TTL_DAYS`, default 400; a claim after 30 minutes), the state record does not; an onBeforeSettle `skip` leaves its 200 unsettled and unbooked; figures on `/__operator/refunds.json`, with `returnedPayers` (granted wallets with a later outside paid sale, and within 7 days; one batched ledger read per chunk, cached `FIRST_CALL_ALLOWANCE_RETURNED_CACHE_MS` (default 5 minutes), reported with the switch off). The `firstCallAllowance` word on `/api/gateway-status` (on, spent, unavailable) pages nothing: a store that does not answer grants nothing, so every call is paid as usual.
 - **Front door:** `src/front-door.js` writes the three lines that lead `/llms.txt`, `/agents.md`
   and `server.describe`; the access line names coins and wires from the rails list and the MPP
   config. The unpaid 402 body carries the access line and the `/agents.md` link only with
@@ -426,7 +426,11 @@ heartbeat page on it under one issue that closes when nothing is owed.
   start within `OCR_INIT_TIMEOUT_MS` (default 30000) answers 503. PDF transforms
   (`src/tools/pdf-ops.js`) run in a fresh worker thread per call (`pdf-offthread.js`,
   `pdf-worker.js`) with a heap limit, a decoded-stream cap and a deadline that terminates it
-  (422). ffmpeg, ffprobe and Chromium start with `childEnv()` (`src/tools/child-env.js`), an
+  (422). The Office builders (`xlsx-create`, `docx-create`, `pptx-create`; `src/tools/office-ops.js`)
+  run in a small worker pool (`office-pool.js`, `office-worker.js`): `OFFICE_WORKERS_MAX` workers
+  (default 2), at most `OFFICE_QUEUE_MAX` calls waiting (default 16; past it a 503 with
+  Retry-After), a 15 s deadline that terminates the worker (422), idle workers retired after 30 s.
+  ffmpeg, ffprobe and Chromium start with `childEnv()` (`src/tools/child-env.js`), an
   allowlist of environment variables, so no key reaches a child process.
 - **Listing screen:** `src/listing-screen.js` (re-exported by `src/x402-index.js`) flags seller
   listing text that tries to instruct its reader; it depends only on `src/hidden-chars.js`, so
