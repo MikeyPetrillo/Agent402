@@ -7765,18 +7765,27 @@ export async function warmStartIndexFromStateDb() {
   try { return await warmStartIndexOnce(); } catch { return warmStartLastCount; }
 }
 /** One warm-start page after `after`: WARM_START_BATCH rows, or, when that
- *  page outlasts the statement limit (a very large row in it), the next row
- *  alone under the large-row limit. `list` is the records lister (a test seam). */
-async function readWarmPage(after, list = (o) => records.list(INDEX_RECORDS, o)) {
-  try {
-    return { page: await list({ limit: WARM_START_BATCH, after }), single: false };
-  } catch (e) {
-    if (!isStatementTimeout(e)) throw e;
-    return { page: await list({ limit: 1, after, timeoutMs: largeRowTimeoutMs(Infinity) }), single: true };
+ *  page outlasts the statement limit (a very large row in it) or `singleOnly`
+ *  is set, the next row alone under the large-row limit. */
+let warmList = (o) => records.list(INDEX_RECORDS, o);
+async function readWarmPage(after, singleOnly = false, list = warmList) {
+  if (!singleOnly) {
+    try {
+      return { page: await list({ limit: WARM_START_BATCH, after }), single: false, timedOut: false };
+    } catch (e) {
+      if (!isStatementTimeout(e)) throw e;
+      return { page: await list({ limit: 1, after, timeoutMs: largeRowTimeoutMs(Infinity) }), single: true, timedOut: true };
+    }
   }
+  return { page: await list({ limit: 1, after, timeoutMs: largeRowTimeoutMs(Infinity) }), single: true, timedOut: false };
 }
-/** Test hook: the warm start's page read with a stub lister. */
-export function _readWarmPageForTests(after, list) { return readWarmPage(after, list); }
+/** Test hooks: the warm start's page read with a stub lister, and the lister
+ *  the warm start uses (`fn(options, real)`; null restores the records read). */
+export function _readWarmPageForTests(after, list, singleOnly = false) { return readWarmPage(after, singleOnly, list); }
+export function _setWarmListForTests(fn) {
+  const real = (o) => records.list(INDEX_RECORDS, o);
+  warmList = fn ? (o) => fn(o, real) : real;
+}
 let warmStartLastCount = 0;
 /** One warm start that THROWS on a database error (after logging what it folded). */
 async function warmStartIndexOnce() {
@@ -7786,13 +7795,16 @@ async function warmStartIndexOnce() {
   try {
     const imp = await importOnce(INDEX_IMPORT_NAME, { source: INDEX_CACHE_NDJSON_FILE, run: importIndexCacheFile });
     if (imp.imported && imp.source && imp.source !== "none") console.log(`[x402-index] cache file imported once (${imp.rows} origin(s), ${imp.source})`);
-    let after = "";
+    let after = "", singleLeft = 0;
     const tick = sliceClock();
     for (;;) {
       // A page holding one very large row can outlast the default statement
-      // limit: that page is read again one row at a time under the large-row
-      // limit, so the warm start passes the row instead of stopping at it.
-      const { page, single } = await readWarmPage(after);
+      // limit: the span that page covered is read one row at a time under the
+      // large-row limit (one timeout per span, not per row before the large
+      // one), then pages resume, so the warm start passes the row.
+      const { page, single, timedOut } = await readWarmPage(after, singleLeft > 0);
+      if (timedOut) singleLeft = WARM_START_BATCH;
+      if (single) singleLeft = Math.max(0, singleLeft - page.length);
       if (!page.length) break;
       const turn0 = performance.now();
       for (const { id, body } of page) {

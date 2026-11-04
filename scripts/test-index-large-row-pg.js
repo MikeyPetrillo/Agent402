@@ -15,6 +15,8 @@ requireTestPg({ label: "test-index-large-row-pg" });
 const STATEMENT_MS = 250;
 process.env.STATE_DB_STATEMENT_TIMEOUT_MS = String(STATEMENT_MS);
 process.env.X402_INDEX_CRAWL = "off";
+const BATCH = 10;
+process.env.INDEX_WARM_START_BATCH = String(BATCH);
 const DIR = mkdtempSync(join(tmpdir(), "index-large-row-pg-"));
 process.env.INDEX_CACHE_FILE = join(DIR, "absent", "x402-index-cache.json");
 process.env.REMOVED_ORIGINS_FILE = join(DIR, "removed-origins.json");
@@ -33,7 +35,7 @@ function seller(i, tools) {
       asset: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", tags: ["item", "x402"], mimeType: "application/json", maxTimeoutSeconds: 60,
     };
   }
-  return [`https://seller-${i}.example`, { manifest: { name: `Seller ${i}`, x402Version: 2, network: "base" }, tools: list, fetchedAt: 1_000_000 + i, error: null, source: "crawl", history: [{ at: 1, ok: true }], paywall: null, discoveryPath: "/.well-known/x402" }];
+  return [`https://seller-${String(i).padStart(3, "0")}.example`, { manifest: { name: `Seller ${i}`, x402Version: 2, network: "base" }, tools: list, fetchedAt: 1_000_000 + i, error: null, source: "crawl", history: [{ at: 1, ok: true }], paywall: null, discoveryPath: "/.well-known/x402" }];
 }
 
 try {
@@ -61,25 +63,44 @@ try {
   const r = await idx._readWarmPageForTests("a", async (o) => { calls.push(o); if (o.limit > 1) throw new Error("canceling statement due to statement timeout"); return [{ id: "b", body: {} }]; });
   ok(r.single && r.page.length === 1 && calls.length === 2 && calls[1].limit === 1 && calls[1].after === "a" && calls[1].timeoutMs === 120_000,
     "a timed-out page is read again as one row after the same id under the large-row limit");
+  const forced = [];
+  const one = await idx._readWarmPageForTests("a", async (o) => { forced.push(o); return [{ id: "b", body: {} }]; }, true);
+  ok(one.single && !one.timedOut && forced.length === 1 && forced[0].limit === 1 && forced[0].timeoutMs === 120_000, "inside a span the next row is read alone, without a page read first");
   let other = null;
   try { await idx._readWarmPageForTests("a", async () => { throw new Error("connection terminated"); }); } catch (e) { other = e; }
   ok(other?.message === "connection terminated", "another error is thrown, not retried");
 
-  // Production's shape: small rows on both sides of one very large row.
-  const entries = [seller(1, 3), seller(2, 60_000), seller(3, 3), seller(4, 3)];
-  const big = JSON.stringify(entries[1]).length;
+  // Production's shape: small rows on both sides of one very large row, the
+  // large one deep inside a page (25 small rows sort before it).
+  const BIG = 25, N = 51;
+  const entries = Array.from({ length: N }, (_, i) => seller(i, i === BIG ? 60_000 : 3));
+  const bigId = entries[BIG][0];
+  const big = JSON.stringify(entries[BIG]).length;
   ok(big > 50 * 1_048_576, `the large row is ${Math.round(big / 1_048_576)} MB`);
   const wrote = await idx.__testPersistToStateDb(entries);
   ok(wrote === true, "the persist writes every row, the large one included");
   const { rows } = await sdb.stateQuery(`SELECT id FROM ${process.env.STATE_DB_SCHEMA}.records WHERE collection = 'x402-index' ORDER BY id`);
-  ok(rows.length === 4, `four rows stored (${rows.map((x) => x.id).join(", ")})`);
+  ok(rows.length === N, `all ${N} rows stored (${rows.length})`);
 
-  // A fresh boot's warm start reads past the large row.
+  // A fresh boot's warm start reads past the large row. A page read whose page
+  // would hold the large row times out, as it does on a busy database; the
+  // one-row reads run on the real database under the large-row limit.
+  const reads = { pages: 0, timeouts: 0, singles: 0 };
+  idx._setWarmListForTests(async (o, real) => {
+    if (o.limit === 1) { reads.singles++; return real(o); }
+    reads.pages++;
+    const page = await real({ ...o, limit: o.limit });
+    if (page.some((r) => r.id === bigId)) { reads.timeouts++; throw new Error("canceling statement due to statement timeout"); }
+    return page;
+  });
   idx._cacheForTests().clear();
   const n = await idx.warmStartIndexFromStateDb();
-  const held = [...idx._cacheForTests().keys()].sort();
-  ok(n === 4 && held.length === 4, `the warm start loads all four sellers (${n}: ${held.join(", ")})`);
-  ok(idx._cacheForTests().get("https://seller-2.example")?.tools?.length === 60_000, "the large seller comes back whole");
+  idx._setWarmListForTests(null);
+  ok(n === N && idx._cacheForTests().size === N, `the warm start loads all ${N} sellers (${n})`);
+  ok(idx._cacheForTests().get(bigId)?.tools?.length === 60_000, "the large seller comes back whole");
+  ok(reads.timeouts === 1, `one timeout for the page holding the large row, not one per row before it (${reads.timeouts})`);
+  ok(reads.singles === BATCH, `that page's span is read one row at a time (${reads.singles} one-row reads, span ${BATCH})`);
+  ok(reads.pages >= 4, `full pages resume after the span (${reads.pages} page reads)`);
 } catch (e) {
   fail++; console.error("FAIL - threw:", e?.stack || e);
 } finally {
