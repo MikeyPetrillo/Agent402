@@ -16,6 +16,17 @@ export const USER_AGENT =
 
 const SSRF_BLOCK_CODE = "ESSRFBLOCKED";
 
+/** The refusal for a host that does not resolve or resolves to a private address. */
+export const UNRESOLVED_OR_PRIVATE = "URL host could not be resolved, or resolves to a private address";
+
+// One error for every connect-time refusal (a name that does not resolve, a
+// name with a private answer, a private literal), so a redirect hop reads the
+// same whichever it was: same code, same message. The resolver error stays on
+// .cause for logs and is never put in the message.
+function blockedError(cause) {
+  return Object.assign(new Error(UNRESOLVED_OR_PRIVATE), { code: SSRF_BLOCK_CODE, ...(cause ? { cause } : {}) });
+}
+
 function isPrivateV4(ip) {
   const [a, b, c] = ip.split(".").map(Number);
   return (
@@ -68,8 +79,16 @@ export function isPrivateIp(ip) {
   if (g.slice(0, 7).every((x) => x === 0) && g[7] === 1) return true; // ::1
   // IPv4-mapped (::ffff:0:0/96) and IPv4-compatible (::/96) — re-check the v4
   if (g.slice(0, 5).every((x) => x === 0) && (g[5] === 0xffff || g[5] === 0)) return isPrivateV4(embedded(g[6], g[7]));
+  // IPv4-translated (::ffff:0:0:0/96, RFC 2765) — re-check the v4
+  if (g.slice(0, 4).every((x) => x === 0) && g[4] === 0xffff && g[5] === 0) return isPrivateV4(embedded(g[6], g[7]));
   // NAT64 64:ff9b::/96 — translated v4 in the low 32 bits
   if (g[0] === 0x64 && g[1] === 0xff9b && g[2] === 0 && g[3] === 0 && g[4] === 0 && g[5] === 0) return isPrivateV4(embedded(g[6], g[7]));
+  // Local-use NAT64 64:ff9b:1::/48 (RFC 8215). In the /96 layout the v4 is the
+  // low 32 bits and is re-checked; any other layout puts the v4 where this
+  // check cannot read it, so the address is refused.
+  if (g[0] === 0x64 && g[1] === 0xff9b && g[2] === 1) {
+    return g[3] === 0 && g[4] === 0 && g[5] === 0 ? isPrivateV4(embedded(g[6], g[7])) : true;
+  }
   // 6to4 2002::/16 — v4 embedded in hextets 1-2
   if (g[0] === 0x2002) return isPrivateV4(embedded(g[1], g[2]));
   if (g[0] === 0x2001 && g[1] === 0) return true; // Teredo tunnel
@@ -174,12 +193,12 @@ function guardedLookup(hostname, options, callback) {
   // Resolving IPv4-only never attempts v6; an IPv6-only host is unreachable here
   // anyway, so nothing is lost.
   lookupCb(hostname, { ...options, family: 4 }, (err, address, family) => {
-    if (err) return callback(err);
+    // A name that does not resolve is refused exactly like a name with a
+    // private answer: on a redirect hop the two must read the same.
+    if (err) return callback(blockedError(err));
     const entries = Array.isArray(address) ? address : [{ address, family }];
     for (const e of entries) {
-      if (isPrivateIp(e.address)) {
-        return callback(Object.assign(new Error(`Blocked: ${hostname} resolves to a private address`), { code: SSRF_BLOCK_CODE }));
-      }
+      if (isPrivateIp(e.address)) return callback(blockedError());
     }
     callback(null, address, family);
   });
@@ -198,7 +217,7 @@ function guardedConnector() {
   return (opts, callback) => {
     const host = String(opts?.hostname || "").replace(/^\[|\]$/g, "");
     if (isIP(host) && isPrivateIp(host)) {
-      return callback(Object.assign(new Error(`Blocked: ${host} is a private address`), { code: SSRF_BLOCK_CODE }), null);
+      return callback(blockedError(), null);
     }
     return connect(opts, callback);
   };
@@ -248,9 +267,6 @@ export async function hostIsPublic(hostname) {
   hostCache.set(hostname, { ok, exp: now + HOST_CACHE_TTL_MS });
   return ok;
 }
-
-/** The refusal for a host that does not resolve or resolves to a private address. */
-export const UNRESOLVED_OR_PRIVATE = "URL host could not be resolved, or resolves to a private address";
 
 /**
  * Validate that a URL is http(s) and does not resolve to a private address.
@@ -395,7 +411,9 @@ export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, 
       },
     });
   } catch (err) {
-    if (isSsrfBlock(err)) throw badRequest("URL resolves to a private address");
+    // Every hop, the first included: a refused connection (no answer for the
+    // name, or a private one) is one 400 with one sentence.
+    if (isSsrfBlock(err)) throw badRequest(UNRESOLVED_OR_PRIVATE);
     const timedOut = err.name === "AbortError";
     // undici's generic "fetch failed" hides the real transport error — walk
     // the cause chain for a code (ECONNRESET, UND_ERR_CONNECT_TIMEOUT, …) so
