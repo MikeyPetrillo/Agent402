@@ -242,12 +242,18 @@ const RUNNER_PROBES = {
   // The exact request sol-token-safety's published example makes (JUP summary).
   RugCheck: "https://api.rugcheck.xyz/v1/tokens/JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN/report/summary",
   // The exact request weather-history's published example makes.
+  // The 12-hour forecast weather-forecast's published example reads (its
+  // /points answer names this grid). A forecast office's grid can lapse ("Forecast
+  // Grid Expired", a 503 to every request that names a JSON type) until the
+  // office reissues it. A grid the point no longer maps to answers 404 here,
+  // which never excuses anything.
+  "NWS forecast": "https://api.weather.gov/gridpoints/OKX/33,42/forecast",
   "Open-Meteo archive": "https://archive-api.open-meteo.com/v1/archive?latitude=51.5074&longitude=-0.1278&start_date=2025-06-01&end_date=2025-06-07&daily=weather_code%2Ctemperature_2m_max%2Ctemperature_2m_min%2Cprecipitation_sum%2Cwind_speed_10m_max&temperature_unit=celsius&wind_speed_unit=kmh&timezone=auto",
 };
 // A tool that relays its upstream's 5xx in the shared fetch helper's words
 // ("Source URL's host returned HTTP 5xx"), which names no upstream: the slug
 // says which one, and the same direct probe decides.
-const RELAYED_HOST_PROBES = { "weather-history": "Open-Meteo archive" };
+const RELAYED_HOST_PROBES = { "weather-history": "Open-Meteo archive", "weather-forecast": "NWS forecast" };
 export function runnerProbeLabel(status, body, slug = null) {
   if (status === 502 && RELAYED_HOST_PROBES[slug] && /^Source URL's host returned HTTP 5\d\d\b/.test(String(body?.error || ""))) return RELAYED_HOST_PROBES[slug];
   if (status !== 503) return null;
@@ -565,7 +571,9 @@ function runControls() {
     "control: only a listed upstream's deadline, unreachable or report-refusal 503 is a candidate (an unlisted upstream, the old 504 words, or other words still fail)");
   ok(runnerProbeLabel(502, { error: "Source URL's host returned HTTP 503 - upstream issue, try again later" }, "weather-history") === "Open-Meteo archive",
     "control: weather-history's relayed upstream 5xx is a runner-probe candidate (excused only if the archive refuses the runner's direct request too)");
-  ok(runnerProbeLabel(502, { error: "Source URL's host returned HTTP 503 - upstream issue, try again later" }, "weather-forecast") === null
+  ok(runnerProbeLabel(502, { error: "Source URL's host returned HTTP 503 - upstream issue, try again later" }, "weather-forecast") === "NWS forecast",
+    "control: weather-forecast's relayed upstream 5xx is a runner-probe candidate (excused only if weather.gov refuses the runner's direct request for the example's grid too)");
+  ok(runnerProbeLabel(502, { error: "Source URL's host returned HTTP 503 - upstream issue, try again later" }, "public-holidays") === null
     && runnerProbeLabel(502, { error: "Source URL's host returned HTTP 404" }, "weather-history") === null
     && runnerProbeLabel(500, { error: "Source URL's host returned HTTP 503 - upstream issue, try again later" }, "weather-history") === null
     && runnerProbeLabel(502, { error: "Open-Meteo returned no historical data" }, "weather-history") === null,
