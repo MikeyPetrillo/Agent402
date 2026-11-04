@@ -1890,12 +1890,20 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   // Claude Sonnet 5.5 (2026-09-29): own dated row at the dearest endpoint, reasoning row (mandatory upstream).
   ok(tierFor("anthropic/claude-sonnet-5.5") === "v1-chat-pro" && cf("anthropic/claude-sonnet-5.5") === ROW("anthropic/claude-sonnet-5.5") && cf("anthropic/claude-sonnet-5.5").completion <= TIERS["v1-chat-pro"].maxPrice.completion, "sonnet-5.5 homes on pro with its own row, inside pro's bound");
   ok(tokenizerFactor("anthropic/claude-sonnet-5.5") === NEW_TOKENIZER_FACTOR && rp("anthropic/claude-sonnet-5.5")?.id === "anthropic/claude-sonnet-5.5" && JSON.stringify(dr("anthropic/claude-sonnet-5.5", "v1-chat-pro")) === '{"effort":"low"}', "sonnet-5.5: newer tokenizer, pro injects low (default high upstream)");
-  // Mercury 2.5 (2026-09-29): third fast-band link, nano-admitted, own row.
-  const MER = "inception/mercury-2.5";
-  ok(tierFor(MER) === "v1-chat-nano" && TIERS["v1-chat-auto"].prefixes.includes(MER) && tierAllows("v1-chat-metered", MER) && !tierFor("inception/mercury-2"), "mercury-2.5 homes on nano, admitted on auto and metered; mercury-2 is not admitted");
-  ok(Object.values(AUTO_RANKINGS.fast).every((l) => l[2] === MER) && !Object.values(AUTO_RANKINGS.balanced).flat().includes(MER) && !Object.values(AUTO_RANKINGS.best).flat().includes(MER), "mercury-2.5 is the third link of every fast category and in no other band");
-  ok(cf(MER) === ROW(MER) && cf(MER).completion <= TIERS["v1-chat-nano"].maxPrice.completion && cf(MER).completion <= TIERS["v1-chat-auto"].maxPrice.completion, "mercury-2.5 has its own row, inside the nano and auto bounds");
-  ok(JSON.stringify(dr(MER, "v1-chat-nano")) === '{"effort":"low"}' && JSON.stringify(dr(MER, "v1-chat-auto")) === '{"effort":"low"}' && !fe(MER), "mercury-2.5: budget tiers inject low (default medium upstream); not flex");
+  // Mercury 2.5 (upstream expiration 2026-11-08, as for every model of its
+  // family): out of every tier, ranking, fallback, flex and effort list, and
+  // each caller served gemini-3.1-flash-lite, the fast band's other budget link.
+  const MER = "inception/mercury-2.5", MER_USE = "google/gemini-3.1-flash-lite";
+  ok(RETIRING_MODELS[MER]?.until === "2026-11-08" && RETIRING_MODELS[MER].use === MER_USE && !RETIRING_MODELS[MER].asItselfUntil && tierFor(MER_USE) === "v1-chat-nano", "mercury-2.5: retiring on 2026-11-08, served as gemini-3.1-flash-lite on nano");
+  ok(!Object.values(TIERS).some((t) => (t.prefixes || []).some((p) => p.startsWith("inception/")) || (t.fallbacks || []).some((f) => f.startsWith("inception/")) || String(t.defaultModel || "").startsWith("inception/")), "no tier prefix, fallback or default names an inception/ model");
+  ok(!Object.values(AUTO_RANKINGS).flatMap((b) => Object.values(b).flat()).some((m) => m.startsWith("inception/")), "no auto ranking names an inception/ model");
+  ok(!K.FLEX_MODELS.some((m) => m.startsWith("inception/")) && !K.REASONING_MODELS.some((r) => String(r.id || r.prefix).startsWith("inception/")), "no flex or reasoning-effort row names an inception/ model");
+  ok(Object.keys(TIERS).every((t) => tierAllows(t, MER) === tierAllows(t, MER_USE)) && !tierFor("inception/mercury-2") && !tierFor("inception/mercury-3"), "mercury-2.5 is admitted only where its successor is; mercury-2 and mercury-3 nowhere");
+  ok(Object.values(AUTO_RANKINGS.fast).every((l) => l.length >= 4 && l[0] === "openai/gpt-6-luna" && l[1] === MER_USE && l.at(-1) !== MER_USE && l.every((m) => tierAllows("v1-chat-auto", m))), "every fast category keeps a chain of four or more links, each admitted on auto");
+  for (const tier of ["v1-chat-nano", "v1-chat", "v1-chat-metered"]) {
+    const b = validateRequest({ model: MER, messages: [{ role: "user", content: "hi" }] }, tier);
+    ok(b.model === MER_USE && b.__substitutedFrom === MER, `mercury-2.5 on ${tier}: served as ${MER_USE} with the swap named`);
+  }
   ok(!tierFor("nvidia/nemotron-3.5-lightning"), "nemotron-3.5-lightning stays out (reasons by default with no effort knob in the catalog)");
 }
 
