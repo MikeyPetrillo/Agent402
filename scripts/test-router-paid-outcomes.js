@@ -40,6 +40,7 @@ process.env.X402_INDEX_CRAWL = "off";
 // this suite drives the payer, so it holds a fixture list.
 (await import("../src/tools/sanctions-kit.js")).__seedPayoutListForTests();
 const buyer = await import("../src/x402-buyer.js");
+(await import("../src/x402-buyer.js")).__setBuyerAddressGuardForTest(false); // this suite's sellers are local stubs
 const guard = await import("../src/external-spend-guard.js");
 const { buildRouteExecuteTool, EXEC_TIERS } = await import("../src/tools/route-execute.js");
 const { buildSellerPayabilityTool } = await import("../src/tools/seller-payability-kit.js");
@@ -127,7 +128,7 @@ const CHAIN = {
 let chainReader = CHAIN.consumed;
 let chainAsked = null;
 const notDebited = async (q) => { chainAsked = q; return chainReader(q); };
-const buy = (host, opts = {}, path = "/x") => buyer.payX402(`https://${host}${path}`, { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, chain: "base", notDebited, ...opts }).then((r) => ({ r }), (e) => ({ e }));
+const buy = (host, opts = {}, path = "/x") => buyer.payX402(`https://${host}${path}`, { maxAtomic: 500000n, method: "POST", body: {}, chain: "base", notDebited, ...opts }).then((r) => ({ r }), (e) => ({ e }));
 
 globalThis.fetch = stubFetch;
 quiet();
@@ -222,7 +223,7 @@ quiet();
   chainReader = CHAIN.consumed;
   const held = buyer._spentThisWindow();
   let e = null;
-  try { await buyer.payX402(`http://127.0.0.1:${srv.address().port}/x`, { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, chain: "base", timeoutMs: 400, notDebited }); } catch (x) { e = x; }
+  try { await buyer.payX402(`http://127.0.0.1:${srv.address().port}/x`, { maxAtomic: 500000n, method: "POST", body: {}, chain: "base", timeoutMs: 400, notDebited }); } catch (x) { e = x; }
   ok(paidSeen === 1, "real socket: the seller received the paid request");
   ok(e && e.committed === true && e.paidUnanswered === true && e.cause?.name === "TimeoutError", `real socket: undici's timeout is committed + paidUnanswered (cause ${e?.cause?.name})`);
   ok(buyer._spentThisWindow() === held + 1000n, "real socket: the hold stands");
@@ -239,7 +240,7 @@ quiet();
   };
   const held2 = buyer._spentThisWindow();
   let e2 = null;
-  try { await buyer.payX402(`http://127.0.0.1:${srv.address().port}/x`, { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, chain: "base", timeoutMs: 400, notDebited }); } catch (x) { e2 = x; }
+  try { await buyer.payX402(`http://127.0.0.1:${srv.address().port}/x`, { maxAtomic: 500000n, method: "POST", body: {}, chain: "base", timeoutMs: 400, notDebited }); } catch (x) { e2 = x; }
   ok(paidSeen === 1, "fallback transport: the retry reached the seller with the payment header");
   ok(e2 && e2.committed === true && e2.paidUnanswered === true && buyer._spentThisWindow() === held2 + 1000n, `fallback transport: an unanswered retry is committed and keeps the hold (committed=${e2?.committed})`);
   for (const s of sockets) s.destroy();
@@ -270,7 +271,7 @@ quiet();
     chainReader = CHAIN.consumed;
     const held3 = buyer._spentThisWindow();
     let e3 = null;
-    try { await buyer.payX402(`http://127.0.0.1:${port2}/x`, { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, chain: "base", timeoutMs: 2000, notDebited }); } catch (x) { e3 = x; }
+    try { await buyer.payX402(`http://127.0.0.1:${port2}/x`, { maxAtomic: 500000n, method: "POST", body: {}, chain: "base", timeoutMs: 2000, notDebited }); } catch (x) { e3 = x; }
     ok(e3 && e3.cause && buyer.neverLeftUs(e3.cause), `fallback refused at connect: the retry's own error is connect-phase (${e3?.cause?.code || e3?.cause?.cause?.code || e3?.message})`);
     ok(e3 && e3.committed === true && e3.paidUnanswered === true && buyer._spentThisWindow() === held3 + 1000n, `fallback refused at connect after the first attempt saw headers: committed, hold stands (committed=${e3?.committed}, held ${buyer._spentThisWindow() - held3})`);
   }
@@ -280,7 +281,7 @@ quiet();
   // own words, with no claim about other sellers (it tries none).
   chainReader = CHAIN.live;
   const tool = buildSellerPayabilityTool({
-    pay: (url, opts) => buyer.payX402(url, { ...opts, trusted: true, notDebited }),
+    pay: (url, opts) => buyer.payX402(url, { ...opts, notDebited }),
     fetchImpl: (url, init) => stubFetch(url, init),
     assertPublicUrl: async () => {},
   });
@@ -297,7 +298,7 @@ const routeTool = (list) => buildRouteExecuteTool({
   getCatalog: () => ({}), tier: PRO,
   resolveExternal: async () => list,
   // Wired the way server.js wires the router: memoizeDelivery on.
-  payExternal: (url, opts) => buyer.payX402(url, { ...opts, trusted: true, memoizeDelivery: true, notDebited }),
+  payExternal: (url, opts) => buyer.payX402(url, { ...opts, memoizeDelivery: true, notDebited }),
   externalEnabled: () => true, externalChains: () => ["base"],
 });
 let ipSeq = 0;
@@ -436,7 +437,7 @@ const near = (a, b) => Math.abs(a - b) < 1e-9;
   const tsock = new Set();
   tsrv.on("connection", (s) => { tsock.add(s); s.on("close", () => tsock.delete(s)); });
   await new Promise((r) => tsrv.listen(0, "127.0.0.1", r));
-  const tempoBuy = () => payTempo(`http://127.0.0.1:${tsrv.address().port}/v1/scrape`, { method: "POST", body: {}, maxAtomic: 5000n, trusted: true, timeoutMs: 3500, createCredential: async () => "Payment ZmFrZQ", proof: async () => 4000 }).then(() => null, (e) => e);
+  const tempoBuy = () => payTempo(`http://127.0.0.1:${tsrv.address().port}/v1/scrape`, { method: "POST", body: {}, maxAtomic: 5000n, timeoutMs: 3500, createCredential: async () => "Payment ZmFrZQ", proof: async () => 4000 }).then(() => null, (e) => e);
   for (const mode of ["reject", "fail", "hang"]) {
     tempoMode = mode;
     const e = await tempoBuy();
@@ -518,7 +519,7 @@ const near = (a, b) => Math.abs(a - b) < 1e-9;
   // with the caller's options passed through unchanged).
   {
     const tool = buildSellerPayabilityTool({
-      pay: (url, opts) => buyer.payX402(url, { ...opts, trusted: true, notDebited }),
+      pay: (url, opts) => buyer.payX402(url, { ...opts, notDebited }),
       fetchImpl: (url, init) => stubFetch(url, init),
       assertPublicUrl: async () => {},
     });

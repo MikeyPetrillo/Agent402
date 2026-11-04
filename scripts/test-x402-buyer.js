@@ -18,6 +18,43 @@ const { quoteWithinCap, readAfterSpend } = await import("../src/x402-buyer.js");
 let pass = 0, fail = 0;
 const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - ${m}`); };
 
+// --- No call option skips the address guard ---------------------------------
+// The buyers once took {trusted:true}, which skipped assertPublicUrl and the
+// pinned dispatcher. Passing it now changes nothing: a seller on this host is
+// refused before any byte reaches it, on the x402 leg, the Tempo leg and the
+// model-list read. Runs before this suite turns the guard off for its stubs.
+{
+  const http = await import("node:http");
+  let hits = 0;
+  const srv = http.createServer((req, res) => { hits++; res.writeHead(402, { "content-type": "application/json" }); res.end("{}"); });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  const local = `http://127.0.0.1:${srv.address().port}`;
+  const buyer = await import("../src/x402-buyer.js");
+  const { payTempo } = await import("../src/tempo-buyer.js");
+  ok(buyer.buyerAddressGuardOn() === true, "the buyer address guard is on by default");
+  const x = await buyer.payX402(`${local}/x`, { maxAtomic: 500000n, trusted: true, method: "POST", body: {} }).then(() => null, (e) => e);
+  ok(x && x.statusCode === 400, `payX402 with trusted:true still refuses a seller on this host (${x?.statusCode} ${x?.message})`);
+  const t = await payTempo(`${local}/x`, { maxAtomic: 5000n, trusted: true, method: "POST", body: {}, createCredential: async () => "Payment x", proof: async () => ({ count: 4000, payers: 50 }) }).then(() => null, (e) => e);
+  ok(t && t.statusCode === 400, `payTempo with trusted:true still refuses a seller on this host (${t?.statusCode} ${t?.message})`);
+  buyer.__resetModelListsForTest?.();
+  const v = await buyer.sellerServesModel(`${local}/v1/chat/completions`, "gpt-x", { trusted: true });
+  ok(v.verdict === "unknown", `sellerServesModel with trusted:true reads no list from this host (${v.verdict})`);
+  ok(hits === 0, `the local seller was never reached (${hits} hits)`);
+  srv.close();
+  const { readFileSync } = await import("node:fs");
+  const sig = (src, name) => { const at = src.indexOf(`export async function ${name}(`); return src.slice(at, src.indexOf(") {", src.indexOf("} = {}", at)) + 3); };
+  const xsrc = readFileSync(new URL("../src/x402-buyer.js", import.meta.url), "utf8");
+  const tsrc = readFileSync(new URL("../src/tempo-buyer.js", import.meta.url), "utf8");
+  ok(!/\btrusted\b/.test(sig(xsrc, "payX402")) && !/\btrusted\b/.test(sig(xsrc, "sellerServesModel")) && !/\btrusted\b/.test(sig(tsrc, "payTempo")), "no buyer entry point takes a trusted option");
+  const prevEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = "production";
+  let threw = false;
+  try { buyer.__setBuyerAddressGuardForTest(false); } catch { threw = true; }
+  if (prevEnv === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = prevEnv;
+  ok(threw && buyer.buyerAddressGuardOn() === true, "the test switch refuses to turn the guard off under NODE_ENV=production");
+  buyer.__setBuyerAddressGuardForTest(false); // the rest of this suite's sellers are stubbed fetches
+}
+
 // --- margin guard edge cases (the F2-adjacent primitive) --------------------
 ok(quoteWithinCap("2000", 5000n) === true, "$0.002 <= $0.005 cap");
 ok(quoteWithinCap("5000", 5000n) === true, "exact cap ok");
@@ -60,19 +97,19 @@ globalThis.fetch = async () => challenge([
   v1entry({ scheme: "exact", amt: "499999999" }),
 ]);
 let t1 = null;
-try { await payX402("https://seller.example/x", { maxAtomic: 500000n, trusted: true, method: "POST", body: {} }); } catch (e) { t1 = e; }
+try { await payX402("https://seller.example/x", { maxAtomic: 500000n, method: "POST", body: {} }); } catch (e) { t1 = e; }
 ok(t1 && /exceeds the .* cap/.test(t1.message), "F2: decoy-first challenge with $500 exact entry refused by cap (not signed)");
 
 // no USDC/exact/Base entry at all → refuse
 globalThis.fetch = async () => challenge([v1entry({ asset: "0xother" })]);
 let t2 = null;
-try { await payX402("https://seller.example/x", { maxAtomic: 500000n, trusted: true, method: "POST", body: {} }); } catch (e) { t2 = e; }
+try { await payX402("https://seller.example/x", { maxAtomic: 500000n, method: "POST", body: {} }); } catch (e) { t2 = e; }
 ok(t2 && /no \w+\/exact\/USDC accept/i.test(t2.message), "F2: non-USDC asset accept refused");
 
 // wrong-chain USDC contract (testnet-style asset) → refuse (asset pin = chain safety)
 globalThis.fetch = async () => challenge([v1entry({ asset: "0x036cbd53842c5426634e7929541ec2318f3dcf7e" /* base-sepolia USDC */ })]);
 let t3 = null;
-try { await payX402("https://seller.example/x", { maxAtomic: 500000n, trusted: true, method: "POST", body: {} }); } catch (e) { t3 = e; }
+try { await payX402("https://seller.example/x", { maxAtomic: 500000n, method: "POST", body: {} }); } catch (e) { t3 = e; }
 ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC asset refused (chain pinned by asset)");
 
 // --- payTo binding: pay the address that EARNED the proven-ness ---------------
@@ -92,7 +129,7 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
   // MISMATCH: refuse, and refuse BEFORE anything is signed or held.
   globalThis.fetch = async () => challenge([payToEntry(OTHER)]);
   let m = null;
-  try { await payX402("https://seller.example/x", { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, provenPayTo: PROVEN }); } catch (e) { m = e; }
+  try { await payX402("https://seller.example/x", { maxAtomic: 500000n, method: "POST", body: {}, provenPayTo: PROVEN }); } catch (e) { m = e; }
   ok(m && /Refusing to pay/.test(m.message) && m.message.includes(OTHER) && m.message.includes(PROVEN),
     "payTo binding: a live 402 naming a different address than the proven one is refused, naming both");
   ok(m && /Nothing was signed/.test(m.message), "payTo binding: the refusal says nothing was signed");
@@ -106,7 +143,7 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
   // regex for a non-EVM rail.
   globalThis.fetch = async () => challenge([payToEntry("0xAbCdEfAbCdEfAbCdEfAbCdEfAbCdEfAbCdEfAbCd")]);
   let raw = null;
-  try { await payX402("https://seller.example/x", { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, provenPayTo: PROVEN }); } catch (e) { raw = e; }
+  try { await payX402("https://seller.example/x", { maxAtomic: 500000n, method: "POST", body: {}, provenPayTo: PROVEN }); } catch (e) { raw = e; }
   ok(raw && raw.message.includes("0xabcdefabcdefabcdefabcdefabcdefabcdefabcd"),
     "payTo binding: the refusal quotes the NORMALIZED address from the verdict");
   ok(raw && !raw.message.includes("0xAbCdEfAbCdEfAbCdEfAbCdEfAbCdEfAbCdEfAbCd"),
@@ -118,20 +155,20 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
     let fetches = 0;
     globalThis.fetch = async () => { fetches++; return challenge([payToEntry(PROVEN)]); };
     let late = null;
-    try { await payX402("https://seller.example/x", { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, signBy: Date.now() - 1 }); } catch (e) { late = e; }
+    try { await payX402("https://seller.example/x", { maxAtomic: 500000n, method: "POST", body: {}, signBy: Date.now() - 1 }); } catch (e) { late = e; }
     ok(late && late.statusCode === 504 && /Nothing was signed/.test(late.message) && fetches === 1, `signBy: past its sign-by moment the payer refuses 504 after the bare 402 and sends no paid request (fetches ${fetches}, ${late?.statusCode})`);
     ok(_spentThisWindow() === 0n, "signBy: a refused late signature holds no spend budget");
     fetches = 0;
     let slow = null;
     globalThis.fetch = async () => { fetches++; await new Promise((r) => setTimeout(r, 60)); return challenge([payToEntry(PROVEN)]); };
-    try { await payX402("https://seller.example/x", { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, signBy: Date.now() + 20 }); } catch (e) { slow = e; }
+    try { await payX402("https://seller.example/x", { maxAtomic: 500000n, method: "POST", body: {}, signBy: Date.now() + 20 }); } catch (e) { slow = e; }
     ok(slow && slow.statusCode === 504 && fetches === 1, `signBy: a seller whose bare 402 takes past the sign-by moment is not paid (fetches ${fetches}, ${slow?.statusCode})`);
   }
 
   // MATCH (case-insensitive, EVM): must NOT be refused for payTo reasons.
   globalThis.fetch = async () => challenge([payToEntry(PROVEN.toUpperCase().replace("0X", "0x"))]);
   let ma = null;
-  try { await payX402("https://seller.example/x", { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, provenPayTo: PROVEN }); } catch (e) { ma = e; }
+  try { await payX402("https://seller.example/x", { maxAtomic: 500000n, method: "POST", body: {}, provenPayTo: PROVEN }); } catch (e) { ma = e; }
   ok(!(ma && /Refusing to pay/.test(ma.message)),
     "payTo binding: the same address in different case is a MATCH, never a refusal (EVM is case-insensitive)");
 
@@ -139,14 +176,14 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
   // source that cannot name an address must not be blocked.
   globalThis.fetch = async () => challenge([payToEntry(OTHER)]);
   let u1 = null;
-  try { await payX402("https://seller.example/x", { maxAtomic: 500000n, trusted: true, method: "POST", body: {} }); } catch (e) { u1 = e; }
+  try { await payX402("https://seller.example/x", { maxAtomic: 500000n, method: "POST", body: {} }); } catch (e) { u1 = e; }
   ok(!(u1 && /Refusing to pay/.test(u1.message)), "payTo binding: no proven address on record does not block");
 
   // UNKNOWN 2: an unreadable payTo in the live 402 is unknown, not a match and
   // not a refusal.
   globalThis.fetch = async () => challenge([payToEntry("not-an-address")]);
   let u2 = null;
-  try { await payX402("https://seller.example/x", { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, provenPayTo: PROVEN }); } catch (e) { u2 = e; }
+  try { await payX402("https://seller.example/x", { maxAtomic: 500000n, method: "POST", body: {}, provenPayTo: PROVEN }); } catch (e) { u2 = e; }
   ok(!(u2 && /Refusing to pay/.test(u2.message)), "payTo binding: an unreadable live payTo is UNKNOWN, never a refusal");
 
   // WRONG EIP-712 DOMAIN NAME (2026-09-10): a v2 Base accept naming "USDC"
@@ -158,12 +195,12 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
     const v2challenge = (accepts) => ({ status: 402, headers: { get: (n) => (String(n).toLowerCase() === "payment-required" ? Buffer.from(JSON.stringify({ x402Version: 2, accepts })).toString("base64") : null) }, json: async () => ({}), text: async () => "" });
     globalThis.fetch = async () => v2challenge([v2("USDC")]);
     let wd = null;
-    try { await payX402("https://wrongdomain.example/x", { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, chain: "base", memoizeDelivery: true }); } catch (e) { wd = e; }
+    try { await payX402("https://wrongdomain.example/x", { maxAtomic: 500000n, method: "POST", body: {}, chain: "base", memoizeDelivery: true }); } catch (e) { wd = e; }
     ok(wd && /EIP-712 name "USDC"/.test(wd.message) && /"USD Coin"/.test(wd.message) && /Nothing was signed/.test(wd.message), "wrong domain: a Base accept naming \"USDC\" is refused before signing, naming both names");
     ok(wd && wd.refused === true && wd.statusCode === 502, "wrong domain: the error is marked refused (route-execute falls through) with a 502");
     ok(_spentThisWindow() === 0n, "wrong domain: no budget held");
     ok(!sellerRefusedRecently("https://wrongdomain.example", "base"), "wrong domain: one meeting is recorded and benches nothing yet");
-    try { await payX402("https://wrongdomain.example/x", { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, chain: "base", memoizeDelivery: true }); } catch { /* refused again */ }
+    try { await payX402("https://wrongdomain.example/x", { maxAtomic: 500000n, method: "POST", body: {}, chain: "base", memoizeDelivery: true }); } catch { /* refused again */ }
     ok(!!sellerRefusedRecently("https://wrongdomain.example", "base"), "wrong domain: the second meeting benches that route on base for the TTL");
     // Control: the same accept naming "USD Coin" passes the domain check. It
     // is then refused by the payTo binding one line further down (the proven
@@ -171,7 +208,7 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
     // this offline test from signing against the stub.
     globalThis.fetch = async () => v2challenge([{ ...v2("USD Coin"), payTo: OTHER }]);
     let rd = null;
-    try { await payX402("https://rightdomain.example/x", { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, chain: "base", provenPayTo: PROVEN }); } catch (e) { rd = e; }
+    try { await payX402("https://rightdomain.example/x", { maxAtomic: 500000n, method: "POST", body: {}, chain: "base", provenPayTo: PROVEN }); } catch (e) { rd = e; }
     ok(rd && /Refusing to pay/.test(rd.message) && !/EIP-712 name/.test(rd.message) && !sellerRefusedRecently("https://rightdomain.example", "base"), "right domain: \"USD Coin\" passes the domain check (the later payTo binding is what refuses) and is not memoized");
 
     // A direct-transfer accept is refused before anything is signed: the
@@ -179,7 +216,7 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
     let calls = 0;
     globalThis.fetch = async () => { calls++; return v2challenge([{ ...v2("USD Coin"), extra: { name: "USD Coin", version: "2", paymentMethod: "direct-transfer" } }]); };
     let dt = null;
-    try { await payX402("https://directtransfer.example/x", { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, chain: "base" }); } catch (e) { dt = e; }
+    try { await payX402("https://directtransfer.example/x", { maxAtomic: 500000n, method: "POST", body: {}, chain: "base" }); } catch (e) { dt = e; }
     ok(dt && dt.refused === true && /paymentMethod "direct-transfer"/.test(dt.message) && /Nothing was signed/.test(dt.message), "direct transfer: the accept is refused before signing, naming the method");
     ok(calls === 1 && _spentThisWindow() === 0n, `direct transfer: only the unpaid request was sent and no budget held (requests ${calls})`);
 
@@ -191,7 +228,7 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
     for (const [label, bad] of [["gateway", gatewayFirst], ["wrong name", v2("USDC")], ["direct transfer", directFirst]]) {
       globalThis.fetch = async () => v2challenge([bad, { ...v2("USD Coin"), payTo: OTHER }]);
       let e1 = null;
-      try { await payX402(`https://first-${label.replace(/ /g, "-")}.example/x`, { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, chain: "base", provenPayTo: PROVEN }); } catch (e) { e1 = e; }
+      try { await payX402(`https://first-${label.replace(/ /g, "-")}.example/x`, { maxAtomic: 500000n, method: "POST", body: {}, chain: "base", provenPayTo: PROVEN }); } catch (e) { e1 = e; }
       ok(e1 && /Refusing to pay/.test(e1.message) && e1.message.includes(OTHER) && !e1.refused, `first payable: a ${label} accept listed first does not refuse a payable seller (got ${e1 && e1.message.slice(0, 80)})`);
     }
     const { pickPayableAccept } = await import("../src/x402-buyer.js");
@@ -205,7 +242,7 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
     payToEntry(OTHER),
   ]);
   let d = null;
-  try { await payX402("https://seller.example/x", { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, provenPayTo: PROVEN }); } catch (e) { d = e; }
+  try { await payX402("https://seller.example/x", { maxAtomic: 500000n, method: "POST", body: {}, provenPayTo: PROVEN }); } catch (e) { d = e; }
   ok(d && /Refusing to pay/.test(d.message) && d.message.includes(OTHER),
     "payTo binding: a decoy accepts[0] paying the proven address does not launder the exact entry we sign");
   ok(_spentThisWindow() === 0n, "payTo binding: no budget held by any refused attempt");
@@ -292,7 +329,7 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
     // The seller's payment layer refusing: it answers with its offer again.
     return { status: 402, headers: { get: (h) => (h.toLowerCase() === "payment-required" ? v2hdr : "application/json") }, json: async () => ({ error: "payment_verification_failed" }), text: async () => JSON.stringify({ error: "payment_verification_failed" }) };
   };
-  const buy = (notDebited, extra = {}) => payX402("https://refuser.example/x", { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, chain: "base", memoizeDelivery: true, notDebited, ...extra }).then(() => null, (e) => e);
+  const buy = (notDebited, extra = {}) => payX402("https://refuser.example/x", { maxAtomic: 500000n, method: "POST", body: {}, chain: "base", memoizeDelivery: true, notDebited, ...extra }).then(() => null, (e) => e);
   const held0 = _spentThisWindow();
   const t0 = Math.floor(Date.now() / 1000);
   const r1 = await buy(async (q) => { asked = q; return { debited: false, observed: 1, expired: true }; }, { refusalMaxWaitMs: 12345 });
@@ -358,7 +395,7 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
   evm.client.createPaymentPayload = async (...a) => { signs++; return realSign(...a); };
   const pay = (payTo, evidenceWallets, extra = {}) => {
     globalThis.fetch = seller(payTo);
-    return payX402("https://tenant.example/x", { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, chain: "base", evidenceWallets, ...extra }).then((r) => ({ r }), (e) => ({ e }));
+    return payX402("https://tenant.example/x", { maxAtomic: 500000n, method: "POST", body: {}, chain: "base", evidenceWallets, ...extra }).then((r) => ({ r }), (e) => ({ e }));
   };
 
   // A1 CONTROL, first: the 402 names the bound wallet -> it signs once and
@@ -413,7 +450,7 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
     const algoPayTo = algosdk.generateAccount().addr.toString();
     globalThis.fetch = async () => ({ status: 402, headers: { get: (n) => (String(n).toLowerCase() === "payment-required" ? b64({ x402Version: 2, accepts: [{ scheme: "exact", network: "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=", asset: "31566704", amount: "1000", payTo: algoPayTo, maxTimeoutSeconds: 60 }] }) : null) }, json: async () => ({}), text: async () => "{}" });
     let a6 = null;
-    try { await payX402("https://tenant.example/x", { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, chain: "algorand", evidenceWallets: [W1] }); } catch (e) { a6 = e; }
+    try { await payX402("https://tenant.example/x", { maxAtomic: 500000n, method: "POST", body: {}, chain: "algorand", evidenceWallets: [W1] }); } catch (e) { a6 = e; }
     ok(a6 && /SENTINEL/.test(a6.message) && avmSigns === 1, `A6: on Algorand the Base-only check is not applied (reached the AVM signer${a6 && !/SENTINEL/.test(a6.message) ? `; threw ${a6.message}` : ""})`);
   }
 
@@ -453,7 +490,7 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
   const entry = (amt) => ({ ...v1entry({ amt }), payTo: PAYTO });
   const refusal = async (amt, opts = {}) => {
     globalThis.fetch = async () => challenge([entry(amt)]);
-    try { await payX402("https://seller.example/x", { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, allowUnproven: true, ...opts }); return null; } catch (e) { return e; }
+    try { await payX402("https://seller.example/x", { maxAtomic: 500000n, method: "POST", body: {}, allowUnproven: true, ...opts }); return null; } catch (e) { return e; }
   };
   delete process.env.SOR_BASE_UNPROVEN_MAX_USD;
   const spentBefore = _spentThisWindow();

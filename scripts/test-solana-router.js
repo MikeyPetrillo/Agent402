@@ -21,6 +21,7 @@ const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
   // this suite drives the payer, so it holds a fixture list.
   (await import("../src/tools/sanctions-kit.js")).__seedPayoutListForTests();
   const { pickPayableAccept } = await import("../src/x402-buyer.js");
+  (await import("../src/x402-buyer.js")).__setBuyerAddressGuardForTest(false); // this suite's sellers are local stubs
   const good = { network: MAINNET, scheme: "exact", asset: USDC, amount: "5000", payTo: "J7aN3PLJnTCF5qpEnvJHJsnCjcGuqC2rYtEM8Gv3xwg" };
   ok(pickPayableAccept([good], "solana") === good, "mainnet solana/exact/USDC accept is pinned");
   ok(pickPayableAccept([{ ...good, network: "solana" }], "solana") !== null, "bare v1 'solana' network label matches");
@@ -192,7 +193,7 @@ const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
   const { payX402 } = await import("../src/x402-buyer.js");
   let proofChecked = null;
   const out = await payX402(sellerUrl, {
-    maxAtomic: "10000", chain: "solana", trusted: true,
+    maxAtomic: "10000", chain: "solana",
     sellerProof: async (payTo) => { proofChecked = payTo; return 25; },
   });
   ok(out?.result?.okFromSeller === true, "OFFLINE e2e: the real @x402/svm scheme signed and the seller served the paid request");
@@ -209,7 +210,7 @@ const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
   // A seller failing the proof gate gets NOTHING signed.
   seenPayment = null;
   const refused = await payX402(sellerUrl, {
-    maxAtomic: "10000", chain: "solana", trusted: true,
+    maxAtomic: "10000", chain: "solana",
     sellerProof: async () => { const e = new Error("Seller payTo has 0 recent inbound USDC transfers on Solana (floor 20) - not routable yet"); e.statusCode = 409; throw e; },
   }).then(() => null, (e) => e);
   ok(refused && refused.statusCode === 409 && seenPayment === null, "an unproven seller is refused BEFORE signing - no payment header ever leaves");
@@ -268,7 +269,7 @@ const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
   await new Promise((r) => refuser.listen(0, "127.0.0.1", r));
   const refuserUrl = `http://127.0.0.1:${refuser.address().port}/v1/chat/completions`;
   const refuserOrigin = `http://127.0.0.1:${refuser.address().port}`;
-  const buy = (notDebited) => payX402(refuserUrl, { maxAtomic: "10000", chain: "solana", trusted: true, sellerProof: async () => 25, notDebited, memoizeDelivery: true }).then(() => null, (e) => e);
+  const buy = (notDebited) => payX402(refuserUrl, { maxAtomic: "10000", chain: "solana", sellerProof: async () => 25, notDebited, memoizeDelivery: true }).then(() => null, (e) => e);
 
   let asked = null;
   const heldBefore = _spentThisWindow();
@@ -399,7 +400,7 @@ const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
     res.end(JSON.stringify({ okFromV1: true }));
   });
   await new Promise((r) => v1.listen(0, "127.0.0.1", r));
-  const out = await payX402(`http://127.0.0.1:${v1.address().port}/v1`, { maxAtomic: "10000", chain: "solana", trusted: true, sellerProof: async () => 25 }).catch((e) => ({ err: e }));
+  const out = await payX402(`http://127.0.0.1:${v1.address().port}/v1`, { maxAtomic: "10000", chain: "solana", sellerProof: async () => 25 }).catch((e) => ({ err: e }));
   ok(out?.result?.okFromV1 === true, "a v1 (body) challenge is still payable");
   ok(v1Headers && v1Headers.xp === true && v1Headers.sig === false, "and a v1 challenge is paid under X-PAYMENT alone - the v1 header name @x402/core emits");
   v1.close();
@@ -422,7 +423,7 @@ const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
     res.end(JSON.stringify({ okFromStelar: true }));
   });
   await new Promise((r) => stelar.listen(0, "127.0.0.1", r));
-  const st = await payX402(`http://127.0.0.1:${stelar.address().port}/thing`, { maxAtomic: "10000", chain: "solana", trusted: true, sellerProof: async () => 25 }).catch((e) => ({ err: e }));
+  const st = await payX402(`http://127.0.0.1:${stelar.address().port}/thing`, { maxAtomic: "10000", chain: "solana", sellerProof: async () => 25 }).catch((e) => ({ err: e }));
   ok(st?.result?.okFromStelar === true, "a v2 seller that names X-PAYMENT in its 402 is paid on the resend");
   ok(attempts.length === 2 && attempts[0].sig && !attempts[0].xp && attempts[1].sig && attempts[1].xp && attempts[1].same,
     "exactly two paid attempts: spec header alone, then the IDENTICAL credential under both names");
@@ -503,7 +504,7 @@ const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
   await new Promise((r) => srv.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${srv.address().port}`;
   __resetModelListsForTest();
-  const t = { trusted: true };
+  const t = {};
   ok((await sellerServesModel(`${base}/v1/chat/completions`, "gpt-4o-mini", t)).verdict === "not-served", "a readable list without the model -> not-served (a real seller's shape)");
   ok((await sellerServesModel(`${base}/v1/chat/completions`, "theta/glm_5_3", t)).verdict === "served", "a listed model -> served");
   ok(hits === 1, "the list was read ONCE for both verdicts (cached per list URL)");

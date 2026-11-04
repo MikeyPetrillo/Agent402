@@ -77,6 +77,7 @@ const kitSrc = readFileSync(new URL("../src/tools/sanctions-kit.js", import.meta
 
 const K = await import("../src/tools/sanctions-kit.js");
 const buyer = await import("../src/x402-buyer.js");
+(await import("../src/x402-buyer.js")).__setBuyerAddressGuardForTest(false); // this suite's sellers are local stubs
 const { payTempo } = await import("../src/tempo-buyer.js");
 const { buildRouteExecuteTool, EXEC_TIERS } = await import("../src/tools/route-execute.js");
 const guard = await import("../src/external-spend-guard.js");
@@ -112,7 +113,7 @@ const realSign = ub.client.createPaymentPayload.bind(ub.client);
 ub.client.createPaymentPayload = async (...a) => { signs++; return realSign(...a); };
 
 const notDebited = async () => ({ debited: false, observed: 1, expired: true });
-const buy = (host) => buyer.payX402(`https://${host}/x`, { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, chain: "base", notDebited }).then((r) => ({ r }), (e) => ({ e }));
+const buy = (host) => buyer.payX402(`https://${host}/x`, { maxAtomic: 500000n, method: "POST", body: {}, chain: "base", notDebited }).then((r) => ({ r }), (e) => ({ e }));
 
 const origWarn = console.warn;
 const quiet = () => { console.warn = () => {}; };
@@ -139,7 +140,7 @@ const loud = () => { console.warn = origWarn; };
   globalThis.fetch = async () => new Response("{}", { status: 402, headers: { "www-authenticate": ch } });
   let te = null;
   quiet();
-  try { await payTempo("https://t.example/x", { maxAtomic: 500000n, trusted: true, body: {}, createCredential: async () => { minted++; return "Payment x"; }, proof: async () => { proofs++; return { count: 999, payers: 99 }; } }); } catch (x) { te = x; }
+  try { await payTempo("https://t.example/x", { maxAtomic: 500000n, body: {}, createCredential: async () => { minted++; return "Payment x"; }, proof: async () => { proofs++; return { count: 999, payers: 99 }; } }); } catch (x) { te = x; }
   loud();
   globalThis.fetch = stubFetch;
   ok(te?.statusCode === 503 && te?.screenUnavailable === true, `no list: payTempo refuses 503 screenUnavailable (got ${te?.statusCode}: ${String(te?.message).slice(0, 80)})`);
@@ -152,7 +153,7 @@ const loud = () => { console.warn = origWarn; };
   const tool = buildRouteExecuteTool({
     getCatalog: () => ({}), tier: PRO,
     resolveExternal: async () => [cand("clean.example"), cand("clean2.example")],
-    payExternal: (url, opts) => buyer.payX402(url, { ...opts, trusted: true, memoizeDelivery: true, notDebited }),
+    payExternal: (url, opts) => buyer.payX402(url, { ...opts, memoizeDelivery: true, notDebited }),
     externalEnabled: () => true, externalChains: () => ["base"],
   });
   const before = guard.walletDailySpentUsd("base");

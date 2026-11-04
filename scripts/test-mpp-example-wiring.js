@@ -29,6 +29,7 @@ const { tempoCatalog, rankTempoResources } = await import("../src/tempo-sellers.
 const { tempoCandidateOf, resolvedCandidateOf } = await import("../src/sor-candidates.js");
 const { buildRouteExecuteTool, EXEC_TIERS } = await import("../src/tools/route-execute.js");
 const { payTempo, TEMPO_USDC } = await import("../src/tempo-buyer.js");
+(await import("../src/x402-buyer.js")).__setBuyerAddressGuardForTest(false); // this suite's sellers are local stubs
 
 let pass = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { console.error("FAIL:", m); process.exit(1); } };
@@ -90,7 +91,7 @@ async function run({ llms = LLMS, params = { url: "https://example.com" } } = {}
     getCatalog: () => ({}), tier, resolveExternal,
     // The real MPP payer; only the host moves to the local stub (the index
     // admits https origins only) and the chain proof is answered.
-    payExternal: (url, opts) => { paidUrl = url; return payTempo(url.replace(ORIGIN, STUB), { ...opts, trusted: true, createCredential: async () => "Payment ZmFrZQ", proof: async () => 4000 }); },
+    payExternal: (url, opts) => { paidUrl = url; return payTempo(url.replace(ORIGIN, STUB), { ...opts, createCredential: async () => "Payment ZmFrZQ", proof: async () => 4000 }); },
     externalEnabled: () => true, externalChains: () => ["tempo"],
   });
   const req = { ip: "192.0.2.10", headers: {}, header: () => undefined, mppTempoCredential: true };
