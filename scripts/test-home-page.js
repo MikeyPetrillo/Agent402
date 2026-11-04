@@ -56,29 +56,13 @@ const catalog = {
   ok(!/of [\d,]+ paid calls/.test(sellSec) && !/%/.test(sellSec), "no share-of-our-volume figure in the seller section");
   ok(!html.includes("went buyer wallet to seller wallet"), "the claim that every other paid call bypassed us is gone");
   ok(/nothing deducted/i.test(sellSec) && /buyer wallet → your wallet/i.test(sellSec), "the neutrality claim a seller is asking about is still made, plainly");
-  ok(html.includes("Seller-One.example") && html.includes("seller-two.example"), "external leaderboard rows render");
-  ok(html.includes(">acme-tools.example<") && !html.includes("Acme Tools - Home"), "a seller whose name is a page title is labeled by its host");
-  {
-    const { sellerLabel } = await import("../src/ledger-home.js");
-    ok(sellerLabel({ name: "one two three four five six seven", origins: ["https://seven.example"] }) === "seven.example" && sellerLabel({ name: "Preview", homepage: "https://p.example" }) === "p.example", "a sentence or a preview page is a title, not a name");
-    ok(sellerLabel({ name: "seller-two.example" }) === "seller-two.example" && sellerLabel({ name: "Acme - Home" }) === "Acme - Home", "a plain name stays, and a title with no host to fall back to stays");
-  }
-  // The shell snippet beside the free-tier demo names the host, like the
-  // register snippet under it: a bare path is not a command anyone can run.
-  ok(html.includes(`curl -s '${BASE_URL}/api/pow/challenge?slug=hash'`) && html.includes(`curl -X POST ${BASE_URL}/api/hash`), "the proof-of-work shell snippet carries the base URL on both calls");
-  {
-    // The five-column mono table is ~520px wide; at a 375px viewport the card's
-    // overflow:hidden clipped the usdc/calls/buyers columns with no way to reach
-    // them (reported from outside 2026-09-08). It must sit in its own
-    // horizontal scroller so the page never scrolls sideways and the columns
-    // stay reachable.
-    const start = html.indexOf("OTHER SELLERS");
-    const seg = html.slice(start, html.indexOf("full leaderboard", start));
-    const wrap = seg.indexOf("overflow-x:auto"), tbl = seg.indexOf("<table");
-    ok(wrap >= 0 && tbl > wrap && /tabindex="0"/.test(seg), "the homepage leaderboard table sits inside a keyboard-reachable horizontal scroller");
-    ok(/min-width:520px/.test(seg), "the table keeps its natural width inside the scroller (columns scroll, never clip)");
-  }
-  ok(!html.slice(html.indexOf('$ GET /api/leaderboard'), html.indexOf('$ GET /api/bestsellers')).includes(">Agent402.Tools<"), "Agent402's own row is excluded from the index/leaderboard section");
+  // 2026-11 trim: the seller section is two lines and one link; the register
+  // form lives on /sell, the board on /leaderboard (linked, not repeated).
+  ok(!/<input|<button|<pre/.test(sellSec), "the seller section carries no form or shell snippet (both live on /sell)");
+  ok(/href="\/leaderboard"/.test(sellSec) && !/Seller-One\.example|seller-two\.example|OTHER SELLERS/.test(html), "the home page links the seller board instead of rendering its rows");
+  // The free tier is two lines in the agents card, pointing at the playground
+  // where the free tools run; the in-page demo and its shell snippet are gone.
+  ok(/The pure-CPU tools are free[^<]*<a href="\/playground"/.test(html.replace(/\(.*?\)/g, "")) && !/id="hm-demo-/.test(html), "the free tier is stated in the agents card and links /playground");
 }
 
 // --- honest fallback when no data is available -------------------------------
@@ -90,7 +74,6 @@ const catalog = {
   ok(!/Listening for on-chain payments/.test(html), "no internal widget state string in served copy");
   ok(html.includes("Settlement count loading"), "the empty state says what is missing, in words a visitor can read");
   ok(!/>0</.test(html.slice(html.indexOf('id="hm-counter"'), html.indexOf('id="hm-counter"') + 400)), "counter does not render a fabricated 0 with no data");
-  ok(html.includes("unavailable"), "leaderboard section states unavailable rather than rendering an empty table silently");
   const sellerSeg = html.slice(html.indexOf('id="sell"'), html.indexOf("</section>", html.indexOf('id="sell"')));
   ok(sellerSeg.length > 80, "control: the seller section was located in the empty state too");
   ok(!/came through the router|paid calls|%/.test(sellerSeg), "no router-share disclosure to degrade: the figure is not published at all");
@@ -104,17 +87,13 @@ const catalog = {
 {
   const html = ledgerHomePage(BASE_URL, catalog, {}, {}, []);
   ok(!/\b\d{1,3}(,\d{3})*\s*(purchases|sales|buyers bought|times bought)\b/i.test(html), "no purchase-count phrasing anywhere on the homepage");
-  // The lanes are read from /api/stats topTools (call volume), mapped to
-  // their catalog categories; nothing is typed, and with no counts there is
-  // no ranking to show.
-  const { CATEGORIES } = await import("../src/pages.js");
-  const top = Object.values(catalog).find((d) => d?.slug && CATEGORIES[d.category]);
+  // The demand lanes left the home page in the 2026-11 trim; the agents table
+  // links the paid per-tool ranking instead. Even with topTools present the
+  // page shows no slug next to a count.
+  const top = Object.values(catalog)[0];
   const ranked = ledgerHomePage(BASE_URL, catalog, { topTools: [{ slug: top.slug, n: 9 }] }, {}, []);
-  const label = CATEGORIES[top.category].label.replace(/&/g, "&amp;");
-  ok(ranked.includes(label), "demand section shows the category of the most-called tool, read from topTools");
-  ok(!ranked.includes(`>${top.slug}<`) && !new RegExp(`${top.slug}[^<]{0,20}\\b9\\b`).test(ranked), "...as a lane, never as a per-tool row with its count");
-  ok(/What agents call most\./.test(ranked) && !/spend most in/.test(ranked), "the heading names what the list measures (calls), not spend");
-  ok(html.includes("No calls counted on this server yet."), "with no counts the section says so instead of showing a typed ranking");
+  ok(!new RegExp(`${top.slug}[^<]{0,20}\\b9\\b`).test(ranked) && !/What agents call most/.test(ranked), "no lane or per-tool row with its count");
+  ok(/href="\/tools\/bestsellers"[^>]*><span>GET \/api\/bestsellers<\/span>/.test(ranked), "the agents table links the per-tool ranking product");
   ok(!/topPaidTools/.test(html), "no reference to the removed topPaidTools field");
   // The one WALLET_ONLY_SLUGS member guaranteed to exist must never appear
   // paired with a bare integer immediately after it (the slug+count shape).
@@ -129,15 +108,18 @@ const catalog = {
   ok(html.includes('"@type":"Organization"') && html.includes('"Havok Holdings LLC"'), "Organization JSON-LD present, credits Havok Holdings LLC");
   ok(html.includes('"@type":"WebSite"') && html.includes('"@type":"SearchAction"'), "WebSite + SearchAction JSON-LD present");
   ok(html.includes('"@type":"SoftwareApplication"') && html.includes('"@type":"AggregateOffer"'), "SoftwareApplication + AggregateOffer JSON-LD present");
-  ok(html.includes('"@type":"Dataset"') && html.includes('"@type":"DataDownload"'), "Dataset + DataDownload JSON-LD present for the leaderboard");
+  // The board left the home page (2026-11), so its Dataset markup did too:
+  // structured data describes what the page renders.
+  ok(!html.includes('"@type":"Dataset"'), "no leaderboard Dataset JSON-LD on a page that no longer renders the board");
   ok(html.includes('"@type":"ItemList"'), "ItemList JSON-LD present for the free discovery primitives");
 
   const faqLdCount = (html.match(/"@type":"Question"/g) || []).length;
   const faqVisibleCount = (html.match(/<summary style=/g) || []).length;
-  // 4 since 2026-08-18: the Agentic Finance (AIFI) definition leads the FAQ.
-  // 7 since the metered gateway became the default way to call a model.
-  ok(faqLdCount === 7, `FAQPage JSON-LD carries exactly 7 questions (got ${faqLdCount})`);
-  ok(faqVisibleCount === 7, `visible FAQ prose carries exactly 7 questions, matching the schema 1:1 (got ${faqVisibleCount})`);
+  // 4 since the 2026-11 trim: selling, card reports and failed reports are
+  // answered by the sections above them; the rest are on /faq.
+  ok(faqLdCount === 4, `FAQPage JSON-LD carries exactly 4 questions (got ${faqLdCount})`);
+  ok(faqVisibleCount === 4, `visible FAQ prose carries exactly 4 questions, matching the schema 1:1 (got ${faqVisibleCount})`);
+  ok(/What is agentic finance\?/.test(html) && /href="\/agentic-finance"/.test(html), "agentic finance is defined lower down and linked, not in the hero");
   ok(/How does an agent call a model\?[\s\S]{0,600}settlement never exceeds that quote/.test(html.replace(/<[^>]+>/g, " ")), "the model FAQ leads with the metered route and its quote");
 }
 
@@ -247,6 +229,8 @@ const catalog = {
   ok(text.includes(`pays you on ${chains}`), "the seller card's router chains are read from the route-execute chain map");
   ok(!/our own \d[\d,]* tools|all \d[\d,]* tools/.test(text), "marketing blocks say 500+, not the exact live count");
   ok(CHAIN_ORDER.length === RAILS.length && CHAIN_ORDER.every(([k, n], i) => n === RAILS[i].name), "the chip row is RAILS, names and order");
+  const marks = (html.match(/<div class="hm-marks">[\s\S]*?<\/div>/) || [""])[0];
+  ok(CHAIN_ORDER.every(([k, n]) => marks.includes(`href="/${k}"`) && marks.includes(`aria-label="${n}"`)), "the compact mark row links every chain's page, each named for screen readers");
   ok(!/fifteen lines|~15 lines/.test(html), "no unverifiable size claim for contributing a tool");
   ok(/href="\/tools\/v1-chat-metered"[^>]*><span>POST \/v1\/metered\/chat\/completions/.test(html), "the metered row links to the metered tier's page");
   const rows = [...html.matchAll(/<span>((?:GET|POST) \/[^<]*)<\/span>/g)].map((m) => m[1]);

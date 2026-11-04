@@ -69,6 +69,13 @@ Tools:
   as the budget's deadline before any request leaves, instead of leaving with
   a cap too small to use.
 Surfaces:
+- The home page is five blocks: the hero with the live payments panel, the
+  agents and people doors (the free tier in two lines, Decide as a table
+  row), three short claims with one row of chain marks, a two-line seller
+  block, and four questions. The seven full claims and the comparison table
+  moved to /docs#why (/why and /compare redirect there); the seller board
+  lives on /leaderboard, the demand ranking on /tools/bestsellers and the
+  proof-of-work demo on /playground, each linked from the page.
 - A seller's own rows on `/api/index?seller=` carry the same `executeVia`
   fields as route rows (callable now, its lane, or when it becomes eligible).
 - html-frames' published example fits its 402 whole; a paid sweep that meets

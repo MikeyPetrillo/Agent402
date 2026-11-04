@@ -234,17 +234,11 @@ const interactions = [
     },
   },
   {
+    // The home page's interactive parts are its live polls (stats and the
+    // live view's figures); the proof-of-work demo moved to /playground.
     path: "/",
     async run(page) {
-      await page.waitForTimeout(500);
-      const input = await page.$("#hm-demo-in");
-      if (input) await input.fill("csp regression check");
-      const runBtn = await page.$("#hm-demo-run");
-      if (runBtn) await runBtn.click();
-      await page.waitForFunction(() => {
-        const s = document.getElementById("hm-demo-status");
-        return s && /200 OK|error/.test(s.textContent || "");
-      }, { timeout: 15000 }).catch(() => {});
+      await page.waitForTimeout(1500);
     },
   },
   {
@@ -260,7 +254,7 @@ const interactions = [
 ];
 
 // The interaction pass stays SERIAL on purpose. These drive real work against
-// the same local server (the homepage PoW demo, the playground's Run), and
+// the same local server (the playground's Run, the docs search), and
 // their waitForFunction calls swallow their own timeouts - so a server slowed
 // by concurrent load would not fail here, it would quietly stop completing the
 // interactions and reduce the coverage to a page load. Seven pages is not where

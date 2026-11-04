@@ -589,7 +589,7 @@ sha256 proof-of-work (a fraction of a second on a laptop; the MCP servers do it 
 
 ## Why pay here - seven things that are different
 
-Every claim links to the surface that proves it (the live version, a section of the home page: [agent402.tools/#why](https://agent402.tools/#why)).
+Every claim links to the surface that proves it (the live version, a section of the docs: [agent402.tools/docs#why](https://agent402.tools/docs#why)).
 
 1. **Pay for what the model used, with the ceiling quoted first.** The metered gateway (`POST /v1/metered/chat/completions`) quotes each 402 from the request's own body; a wallet paying `upto` settles actual usage under that ceiling, provider discounts such as prompt-cache reads pass through, and every settled x402 or MPP response carries a receipt; a JSON answer bought with an EVM wallet can be attested on Base by that wallet (`POST /api/attest`).
 2. **A failed x402 call is not charged, and the response proves it.** Settlement runs after the handler and an error status cancels it, so a response with no payment receipt, or a receipt marked `success:false`, moved no money; a retry carrying the same `Idempotency-Key` and the same payment credential replays the paid answer instead of paying again, and a request re-sent with the same signed EVM payment is answered from its first answer even without a key (`X-Replayed-Answer: 1`); the one residual case (a settled receipt on an error response) is detected by our own alarm and recorded as a debt in a refund ledger, never written off silently.

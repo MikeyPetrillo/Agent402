@@ -54,8 +54,9 @@ ok(/querySelectorAll\('header,section,\[data-reveal\]'\)/.test(chromeSrc),
 // 2026-08-16) correctly dropped those two per-page phantom matches, and the
 // floors below are recalibrated against the TRUE element count so this
 // test measures the same "real elements" it always claimed to. */
+// "/" went from 9 to 5 in the 2026-11 home trim (hero plus four sections).
 const MIN_SECTIONS = {
-  "/": 9, "/base": 4, "/marketplace": 7, "/pricing": 6, "/leaderboard": 5, "/skills": 6, "/tools": 4, "/what-is-x402": 10, "/sell": 9,
+  "/": 5, "/base": 4, "/marketplace": 7, "/pricing": 6, "/leaderboard": 5, "/skills": 6, "/tools": 4, "/what-is-x402": 10, "/sell": 9,
   "/docs": 6, "/status": 4, "/faq": 2, "/revenue": 4, "/playground": 2,
   "/changelog": 2, "/blog": 2, "/transparency": 2, "/privacy": 2, "/terms": 2,
   "/workflows": 3, "/quickstart": 3, "/guides": 2,
