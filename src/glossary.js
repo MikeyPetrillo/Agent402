@@ -87,7 +87,7 @@ export const GLOSSARY = [
     see: [["/docs#add", "add to Claude"], ["/blog/building-with-mcp", "building with MCP"]] },
   { id: "tempo", name: "Tempo", alt: ["tempo method", "Tempo chain"],
     def: "The payments-focused chain that is MPP's native settlement method (chain id 4217, TIP-20 tokens such as PathUSD and USDC.e). Its tempo/charge credentials are validated and broadcast through Tempo's own relay rather than an EIP-3009 facilitator, so accepting a tempo/charge payment needs no signing key on the server. Agent402 accepts it.",
-    see: [["/what-is-mpp#compare", "MPP settlement methods"], ["/mpp-marketplace", "sellers on the MPP wire"]] },
+    see: [["/what-is-x402#compare", "MPP settlement methods"], ["/mpp-marketplace", "sellers on the MPP wire"]] },
 ];
 
 export function glossaryPage(baseUrl) {

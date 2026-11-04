@@ -11,7 +11,6 @@
 
 import { ledgerShell, ledgerFooterCompact, fmtNum } from "./ledger-chrome.js";
 import { docsLayoutHtml, DOCS_LAYOUT_CSS, docPrevNextHtml, DOCS_SEARCH_SCRIPT } from "./docs.js";
-import { RAILS_PAREN } from "./rails.js";
 import { toolList } from "./pages.js";
 import { isComputePayable } from "./pow.js";
 import { decideConfig } from "./decide/config.js";
@@ -73,7 +72,7 @@ export function ledgerDocsPage(baseUrl, catalog) {
   const extractPrice = slugPrice(catalog, "extract");
   const canonical = baseUrl + "/docs";
   const title = "Docs - Agent402 x402 + MCP server";
-  const description = `Add ${fmtNum(totalCount)} x402 tools, most of them deterministic code, plus an OpenAI-compatible /v1 gateway to your agent in about a minute. No signup, no API key - start free with proof-of-work, settle ${RAILS_PAREN} when you scale.`;
+  const description = `The Agent402 docs: add ${fmtNum(totalCount)} x402 tools, most of them deterministic code, plus an OpenAI-compatible /v1 gateway to your agent. Start free with proof-of-work, then pay per call in USDC over x402 or MPP.`;
 
   const articleLd = {
     "@context": "https://schema.org",
@@ -96,8 +95,8 @@ export function ledgerDocsPage(baseUrl, catalog) {
 
   const main = `
       <section>
-      <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 14px;">Quickstart.</h1>
-      <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:76ch;margin:0 0 30px;">Add ${fmtNum(totalCount)} tools - plus an open cross-seller Index, Smart Order Router, and an OpenAI-compatible /v1 gateway - to your agent in about a minute. No signup, no API key - start free with proof-of-work, settle ${RAILS_PAREN} when you scale.</p>
+      <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 14px;">Docs</h1>
+      <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:76ch;margin:0 0 30px;">Add ${fmtNum(totalCount)} tools, the cross-seller index and Smart Order Router, and an OpenAI-compatible /v1 gateway to your agent. Start free with proof-of-work, then pay per call in USDC on <a href="/pricing" style="color:var(--ink);text-decoration:underline;text-underline-offset:3px;">the chains in /pricing</a>.</p>
 
       <div id="quickstart" style="border:1px solid var(--hairline);background:var(--panel);margin-bottom:14px;">
         <div style="display:flex;align-items:center;gap:7px;padding:11px 15px;border-bottom:1px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--on-panel-dim);">terminal</div>

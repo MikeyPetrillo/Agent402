@@ -2,6 +2,7 @@
 // restyle - matches /what-is-x402's visual language). No fixtures needed:
 // the page takes only baseUrl, no live data bindings. No server, no network.
 import { whatIsMppPage } from "../src/what-is-mpp.js";
+import { whatIsX402Page } from "../src/what-is-x402.js";
 
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) { pass++; console.log(`ok - ${msg}`); } else { fail++; console.error(`FAIL - ${msg}`); } };
@@ -12,20 +13,30 @@ const html = whatIsMppPage(BASE_URL);
 // --- content -------------------------------------------------------------------
 ok(html.includes("What is <span") && html.includes(">MPP</span>?"), "hero H1 renders");
 ok(html.includes("How one MPP payment works."), "handshake section renders");
-ok(html.includes("MPP vs x402, side by side."), "comparison section renders");
 ok(html.includes("Where MPP settles today."), "the real 'settles daily via canary' section renders");
 ok(html.includes("How do I accept MPP payments on my own API?"), "the accept-it section renders");
 ok(html.includes("Questions people and agents ask."), "FAQ heading renders");
 
-// --- comparison table: all 5 real rows present --------------------------------
-for (const label of ["Payment terms ride in", "Payment rides in", "Proof of settlement", "Origin", "Settlement"]) {
-  ok(html.includes(`>${label}<`), `comparison table includes the "${label}" row`);
+// --- comparison: one table, on /what-is-x402 ------------------------------------
+// The 2026-11 trim keeps a single x402 vs MPP table (/what-is-x402#compare, the
+// broader pillar page) and links it from here, so the two cannot drift apart.
+ok(html.includes('id="compare"') && html.includes('href="/what-is-x402#compare"'), "#compare links the one comparison table on /what-is-x402");
+ok(!/<th[^>]*>x402<\/th>/.test(html), "this page carries no second x402 vs MPP table");
+{
+  const x402 = whatIsX402Page(BASE_URL, {});
+  const table = (x402.match(/<section id="compare"[\s\S]*?<\/section>/) || [""])[0];
+  for (const needle of ["WWW-Authenticate: Payment", "X-PAYMENT", "Payment-Receipt", "PAYMENT-RESPONSE", "IETF Internet-Draft", "own relay", "same facilitator"]) {
+    ok(table.includes(needle), `the /what-is-x402 table carries what this page's table said: ${needle}`);
+  }
 }
-ok(html.includes("WWW-Authenticate: Payment") && html.includes("X-PAYMENT"), "comparison table names the real header differences");
 
 // --- cross-links to the sibling explainer page --------------------------------
 ok(html.includes('href="/what-is-x402"'), "links to /what-is-x402 (the broader explainer, not duplicated content)");
-ok((html.match(/href="\/what-is-x402"/g) || []).length >= 2, "the cross-link to /what-is-x402 appears more than once (hero + closing CTA)");
+ok((html.match(/href="\/what-is-x402(#compare)?"/g) || []).length >= 2, "the cross-link to /what-is-x402 appears in the hero and at #compare");
+{
+  const ctaHrefs = [...html.matchAll(/<a class="btn[^"]*" href="([^"]+)"/g)].map((m) => m[1]);
+  ok(ctaHrefs.length > 0 && new Set(ctaHrefs).size === ctaHrefs.length, `one call to action per target (${ctaHrefs.join(", ")})`);
+}
 
 // --- structured data -------------------------------------------------------------
 ok(html.includes('"@type":"Organization"'), "Organization JSON-LD present");

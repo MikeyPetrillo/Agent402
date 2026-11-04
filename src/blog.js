@@ -144,7 +144,7 @@ export const BLOG_POSTS = [
 <h2>Where to go next</h2>
 
 <ul>
-  <li>The <a href="/agentic-finance">Agentic Finance (AIFI)</a> category page, with the definition, the stack and the FAQ.</li>
+  <li>The <a href="/agentic-finance">Agentic Finance (AIFI)</a> category page, with the definition and where Agent402 sits.</li>
   <li>The <a href="/glossary">glossary</a>: every term above - 402, facilitator, EIP-3009, receipt, settlement, rails, dual-stack, PoW tier, SOR, tollbooth - defined once, each with its own anchor.</li>
   <li><a href="/what-is-x402">What is x402?</a> and <a href="/what-is-mpp">What is MPP?</a> for the two wires in depth.</li>
   <li><a href="/docs#add">Add Agent402 to your agent</a>, or <a href="/sell">put a price on your own API</a>. Both are free to start.</li>
