@@ -1474,6 +1474,8 @@ jobs:
           t node scripts/test-first-call-allowance.js
           # The allowance's settle skip is keyed by the payment (network, payer, nonce), never by finding the request: a moved adapter path still skips a granted 200 (REAL redis, in-process).
           t node scripts/test-first-call-allowance-hook.js
+          # The grant's record on Postgres keeps the claim time, so a paid call booked while a slow free call ran reads as a return (REAL redis + postgres, in-process).
+          t node scripts/test-first-call-allowance-record-pg.js
           t node scripts/test-external-spend-guard-pg.js
           # The per-payer unsettled ceiling holds across replicas: one reservation script on REAL redis (needs this lane's Redis).
           t node scripts/test-external-spend-guard-redis.js
