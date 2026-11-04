@@ -1834,20 +1834,24 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
   // each listing through the shared judge screen (src/listing-screen.js
   // judgeReadableText, the one decide's judge reads): a listing the screen
   // flags whole reaches it with no description or tags, and every sentence
-  // written to the reader is dropped from the rest; the seller-written slug
-  // and tags are screened the same way. A pinned target was already chosen
-  // by a decision; it is not re-judged.
+  // written to the reader is dropped from the rest; the seller's host, slug
+  // and tags are screened the same way (judgeReadableListing: each alone and
+  // read together, so a sentence split across tags is read whole). A pinned
+  // target was already chosen by a decision; it is not re-judged.
   let judgedSelection = null;
   if (candidates.length && !onlyUrl) {
-    const { judgeReadableText } = await import("./listing-screen.js");
+    const { judgeReadableListing } = await import("./listing-screen.js");
     const { judgedOverrideAllowed } = await import("./tools/route-execute.js");
     const hostOfSeller = (u) => { try { return new URL(u).host; } catch { return String(u || ""); } };
     let ordered = await orderByJudgment(task, candidates, (r) => {
       const raw = String(r.description || r.name || "");
       const clean = !looksLikeListingInjection(raw);
-      const slug = judgeReadableText(String(r.slug || ""), { links: false });
-      const tags = clean && Array.isArray(r.tags) ? r.tags.map((t) => judgeReadableText(String(t), { links: false })).filter(Boolean) : [];
-      return { name: `${hostOfSeller(r.seller || r.url)} ${slug}`.trim(), description: clean ? judgeReadableText(raw, { links: false }) : "", tags };
+      return judgeReadableListing({
+        host: hostOfSeller(r.seller || r.url),
+        slug: String(r.slug || ""),
+        description: clean ? raw : "",
+        tags: clean && Array.isArray(r.tags) ? r.tags.map(String) : [],
+      }, { links: false });
     });
     // A judged reorder stands only when its pick's own match score meets the
     // floor (judgedOverrideAllowed, src/tools/route-execute.js); below it the

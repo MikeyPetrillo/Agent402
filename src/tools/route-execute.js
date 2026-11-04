@@ -184,39 +184,43 @@ export async function ownPayoutOf(ext, opts = {}) {
 // text, so a listing worded to win the judge could otherwise be bought ahead
 // of the top-ranked seller on wording alone. The judge may reorder outside
 // candidates only toward one whose own match score against the task meets a
-// floor drawn from the index ranker's scoring (src/x402-index.js routeQuery:
-// 10 per query term that is a whole slug word, 4 per partial slug hit, 2 per
-// name hit, 1 per description or tag hit), a row's `score`:
-//   - at least JUDGED_OVERRIDE_MIN_SCORE (4): one slug hit, or two terms in
-//     the name, so a match on description words alone, the part a seller
-//     writes freely, does not carry an override;
-//   - at least JUDGED_OVERRIDE_MIN_SHARE (half) of the best score among the
-//     candidates, so a pick far below the closest match is not taken.
+// floor drawn from the index ranker's weights (src/x402-index.js routeQuery:
+// 10 per query term that is a whole slug word, 4 per partial slug hit, 1 per
+// description or tag hit). The name hit (2 per term) is left out of this
+// score: the name is a free-text field the seller writes, and the index
+// reads it into its description text too, so a name stuffed with task words
+// would otherwise carry an override on its own. Every candidate is scored
+// here the same way (the index's own `score` includes the name), and a pick
+// needs:
+//   - at least JUDGED_OVERRIDE_MIN_SCORE (4): one slug hit, or four task
+//     terms in its description and tags;
+//   - at least JUDGED_OVERRIDE_MIN_SHARE (half) of the best such score among
+//     the candidates, so a pick far below the closest match is not taken.
 // Below the floor the lexical order stands (the judge's answer is kept on the
-// receipt). Rows from a catalog that carries no score (the Tempo and
-// Algorand legs) are scored here with the same weights.
+// receipt).
 export const JUDGED_OVERRIDE_MIN_SCORE = 4;
 export const JUDGED_OVERRIDE_MIN_SHARE = 0.5;
 const scoreTerms = (task) => [...new Set(String(task || "").toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((t) => t.length >= 2))].slice(0, 32);
-export function lexicalScoreOf(task, row) {
-  if (Number.isFinite(row?.score)) return row.score;
+export function lexicalScoreOf(task, row, { name = true } = {}) {
+  if (name && Number.isFinite(row?.score)) return row.score;
   const terms = scoreTerms(task);
   const slugWords = String(row?.slug || "").toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
-  const name = String(row?.name || "").toLowerCase();
+  const nameText = String(row?.name || "").toLowerCase();
   const hay = `${row?.description || ""} ${Array.isArray(row?.tags) ? row.tags.join(" ") : ""}`.toLowerCase();
   let s = 0;
   for (const t of terms) {
     if (slugWords.includes(t)) s += 10; else if (slugWords.some((w) => w.includes(t))) s += 4;
-    if (name.includes(t)) s += 2;
+    if (name && nameText.includes(t)) s += 2;
     if (hay.includes(t)) s += 1;
   }
   return s;
 }
+/** The match a judged pick is held to: slug, description and tags, never the name. */
+export const overrideScoreOf = (task, row) => lexicalScoreOf(task, row, { name: false });
 export function judgedOverrideAllowed(task, candidates, chosen) {
   const list = Array.isArray(candidates) ? candidates : [];
   if (!chosen || chosen === list[0]) return { ok: true };
-  const scored = list.every((r) => Number.isFinite(r?.score));
-  const scoreOf = (r) => (scored ? r.score : lexicalScoreOf(task, { ...r, score: undefined }));
+  const scoreOf = (r) => overrideScoreOf(task, r);
   const best = Math.max(0, ...list.map(scoreOf));
   const score = scoreOf(chosen);
   const floor = Math.max(JUDGED_OVERRIDE_MIN_SCORE, best * JUDGED_OVERRIDE_MIN_SHARE);

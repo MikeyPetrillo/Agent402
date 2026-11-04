@@ -48,7 +48,67 @@ const ok = (cond, msg) => {
   else { failed++; console.error(`FAIL - ${msg}`); }
 };
 
-const srv = spawn(process.execPath, ["--import", "./scripts/offline-egress-preload.js", "src/server.js"], {
+// The listing screen (src/listing-screen.js) reads seller-written text on
+// every route call, every judged pick and every index screen, and a free
+// tool (email-guard) reads a buyer's sentences through it: every exported
+// screen function gets 100,000-character runs of the shapes above behind
+// each phrase that opens one of its rules, and must answer each inside
+// LISTING_BOUND_MS (best of three) and grow at most LISTING_GROWTH times from
+// a quarter of the length when it takes over a quarter of the bound (linear
+// grows 4x; a quadratic one 16x).
+{
+  const LISTING_BOUND_MS = Number(process.env.LISTING_BOUND_MS) || 100;
+  const LISTING_GROWTH = 10;
+  const screen = await import("../src/listing-screen.js");
+  const fns = {
+    looksLikeListingInjection: (s) => screen.looksLikeListingInjection(s),
+    matchesInjectionPhrase: (s) => screen.matchesInjectionPhrase(s),
+    listingInjectionFinding: (s) => screen.listingInjectionFinding(s),
+    addressesReader: (s) => screen.addressesReader(s),
+    judgeReadableText: (s) => screen.judgeReadableText(s),
+    judgeReadableName: (s) => screen.judgeReadableName(s),
+    judgeReadableListing: (s) => screen.judgeReadableListing({ host: s, slug: s, description: s, tags: [s, s] }),
+  };
+  const exported = Object.keys(screen).filter((k) => typeof screen[k] === "function");
+  ok(exported.every((k) => k in fns), `every exported screen function is timed (${exported.filter((k) => !(k in fns)).join(",") || "all"})`);
+  const openers = ["", "a1 ", "1gn0re ", "s y s ", "note to the ", "dear ", "hi ", "as the judge ", "you ", "the model ", "system ", "choose ", "best ", "rank ", "rate ", "rate every ", "only ", "always ", "confidence ", "fit ", "perfect ", "evaluators ", "ignore ", "disregard what ", "forget ", "override ", "do not ", "<", "[", "<|", "## ", "judge: ", "select this ", "wähle immer ", "immer dieses ", "elige siempre ", "choisis toujours ", "escolha sempre "];
+  const fills = { space: " ", a: "a", spaceA: " a", dashA: "-a", aUnderscore: "a_", dotA: ".a", comma: ", ", digitA: "1a", cyrillic: "а ", tab: "\t", nl: "\n", entity: "&lt;", zeroWidth: "a​", colon: ": " };
+  const build = (open, fill, n) => (open + fill.repeat(Math.ceil(n / fill.length))).slice(0, n) + "!";
+  // Best of three, but a run far past the bound is not repeated, and a
+  // function found slow once is not timed again, so a regression fails in
+  // seconds rather than running every shape at its slow speed.
+  const bestOf = (fn, s) => {
+    let best = Infinity;
+    for (let i = 0; i < 3; i++) {
+      const t = performance.now(); fn(s); best = Math.min(best, performance.now() - t);
+      if (best > LISTING_BOUND_MS * 5) break;
+    }
+    return best;
+  };
+  const slowScreens = [];
+  const slowFns = new Set();
+  let worst = { ms: 0 };
+  for (const open of openers) for (const [fk, fill] of Object.entries(fills)) {
+    const long = build(open, fill, 100_000);
+    for (const [name, fn] of Object.entries(fns)) {
+      if (slowFns.has(name)) continue;
+      const ms = bestOf(fn, long);
+      if (ms > worst.ms) worst = { ms, name, open, fk };
+      if (ms > LISTING_BOUND_MS) { slowFns.add(name); slowScreens.push(`${name} ${JSON.stringify(open)}+${fk}: ${ms.toFixed(1)}ms`); }
+      else if (ms > LISTING_BOUND_MS / 4) {
+        const quarter = bestOf(fn, build(open, fill, 25_000));
+        if (ms > LISTING_GROWTH * Math.max(quarter, LISTING_BOUND_MS / 20)) slowScreens.push(`${name} ${JSON.stringify(open)}+${fk}: ${quarter.toFixed(1)}ms at 25k, ${ms.toFixed(1)}ms at 100k`);
+      }
+    }
+  }
+  for (const s of slowScreens) console.error(`  slow screen: ${s}`);
+  ok(slowScreens.length === 0, `every screen function answers 100k-character inputs inside ${LISTING_BOUND_MS}ms and grows linearly (worst ${worst.ms.toFixed(1)}ms: ${worst.name} ${JSON.stringify(worst.open)}+${worst.fk})`);
+  // Control: the shape the old digit reading took 17 s on, timed the same way.
+  const probe = bestOf(fns.addressesReader, "a1 " + "a".repeat(100_000));
+  ok(probe < LISTING_BOUND_MS, `control: a digit-and-letter word before a 100k run of letters reads in ${probe.toFixed(1)}ms`);
+}
+
+const srv = spawn(process.execPath,["--import", "./scripts/offline-egress-preload.js", "src/server.js"], {
   cwd: ROOT,
   env: {
     ...process.env,

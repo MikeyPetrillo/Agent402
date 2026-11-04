@@ -11,7 +11,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { OPENROUTER_ATTRIBUTION } from "../../src/openrouter-attribution.js";
-import { judgeReadableText } from "../../src/listing-screen.js";
+import { judgeReadableName, judgeReadableText } from "../../src/listing-screen.js";
 
 const URL_ = "https://openrouter.ai/api/v1/chat/completions";
 
@@ -104,7 +104,7 @@ export function judgePrompt(task, steps, { guidance = "" } = {}) {
     candidates: s.candidates.map((c, j) => {
       const key = `s${i + 1}c${j + 1}`;
       keyToId[key] = c.row.id;
-      return { key, name: judgeReadableText(c.row.name, { max: 120 }), description: judgeText(c.row.description), inputs: Object.keys(c.row.inputSchema?.properties || {}) };
+      return { key, name: judgeReadableName(c.row.name, { max: 120, links: true }), description: judgeText(c.row.description), inputs: Object.keys(c.row.inputSchema?.properties || {}) };
     }),
   }));
   return {
