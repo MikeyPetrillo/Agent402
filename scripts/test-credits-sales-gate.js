@@ -102,6 +102,22 @@ try {
   const pageOff = await (await fetch(`${B}/credits`)).text();
   ok(!/InStock/.test(pageOff) && !/Buy \$20/.test(pageOff) && !/data-pack-buy/.test(pageOff), "/credits carries no Offer, buy snippet or buy button while sales are off");
   const descOf = (html) => (html.match(/<meta name="description" content="([^"]*)"/) || [])[1] || "";
+  // /terms states whether credits are sold, read from the same switch: the
+  // credits clause and the access line both follow it.
+  const termsCredits = async () => {
+    const res = await fetch(`${B}/terms`);
+    const html = await res.text();
+    const clause = (html.match(/<li><b>Prepaid credits:<\/b>([\s\S]*?)<\/li>/) || [])[1] || "";
+    const access = (html.match(/<li>No account\.([\s\S]*?)<\/li>/) || [])[1] || "";
+    return { status: res.status, clause, access };
+  };
+  const OFFERS_CREDITS = /\b(?:are|is) sold\b|\bbuy\b|\bpurchase\b|href="\/credits"/i;
+  const NOT_SOLD = /\bnot (?:currently|now)? ?(?:sold|on sale)\b/i;
+  const tOff = await termsCredits();
+  ok(tOff.status === 200 && tOff.clause.length > 100 && tOff.access.length > 100, "/terms renders its credits clause and access line while sales are off");
+  ok(NOT_SOLD.test(tOff.clause) && /keys? already issued keeps? working/i.test(tOff.clause), `/terms says credits are not currently sold and issued keys keep working ("${(tOff.clause.match(/[^.]*not currently sold[^.]*\./i) || [""])[0].trim()}")`);
+  ok(!OFFERS_CREDITS.test(tOff.clause.replace(/Credits are not money[\s\S]*$/, "")), "/terms offers no credits purchase and no link to buy them while sales are off");
+  ok(/Stripe Checkout, for reports and monitors\)/.test(tOff.access) && !/prepaid credits/i.test(tOff.access), "/terms access line names card for reports and monitors only while sales are off");
   ok(/not on sale/.test(descOf(pageOff)) && !/Buy \$/.test(descOf(pageOff)), `/credits describes itself as closed while sales are off ("${descOf(pageOff).slice(0, 40)}...")`);
   // A closed product is kept out of search: no sitemap slot, noindex on the
   // page, while the page itself still answers 200 for key holders.
@@ -128,6 +144,10 @@ try {
     const xml = await (await fetch(`${B}${path}`)).text();
     ok(/\/credits<\/loc>/.test(xml), `${path} lists /credits when sales are on`);
   }
+  const tOn = await termsCredits();
+  ok(tOn.status === 200 && tOn.clause.length > 100, "/terms renders its credits clause when sales are on");
+  ok(/\bsold by card\b/i.test(tOn.clause) && /href="\/credits"/.test(tOn.clause) && !NOT_SOLD.test(tOn.clause), "/terms offers credits by card at /credits, and does not say they are not sold, when sales are on");
+  ok(/Stripe Checkout, for reports and monitors, and for prepaid credits\)/.test(tOn.access), "/terms access line names card for prepaid credits when sales are on");
 
   // the gate must be read at call time, never latched at boot
   const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");

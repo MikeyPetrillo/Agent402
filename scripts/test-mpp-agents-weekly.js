@@ -2,11 +2,14 @@
 // against a throwaway DB, then a booted half for the operator route.
 //
 //   node scripts/test-mpp-agents-weekly.js
-import { mkdtempSync, rmSync } from "node:fs";
+import "./lib/offline-stores.js";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { getFreePort } from "./lib/free-port.js";
+import { ownStoreEnv } from "./lib/own-stores.js";
 
 const dir = mkdtempSync(join(tmpdir(), "a402-mppagents-"));
 const DB = join(dir, "sales.db");
@@ -64,6 +67,16 @@ ok(mppAgentsThisWeek(NOW) === cur.distinctAgents && mppAgentsThisWeek(NOW - WEEK
 const allCur = r.allRails.weeks[11], allPrev = r.allRails.weeks[10];
 ok(allPrev.distinctAgents === 1 && allPrev.newAgents === 1, "all-rails series counts the x402 payer");
 ok(allCur.distinctAgents === 3 && allCur.newAgents === 1 && allCur.returningAgents === 2, `all rails: B returning (paid last week), A returning, C new (got ${JSON.stringify(allCur)})`);
+// A blank payer string (a row the ledger did not write through recordSale,
+// which stores null) is never an agent, in the series or in the week count.
+const Database = createRequire(import.meta.url)("better-sqlite3");
+const raw = new Database(DB);
+const insertRaw = raw.prepare("INSERT INTO sales (ts, slug, price_usd, rail, network, payer, tx, internal, wire) VALUES (?, 'uuid', 0.001, 'usdc', 'tempo', ?, ?, 0, 'mpp-tempo')");
+insertRaw.run(THIS_WEEK + DAY, "", "t9");
+const rBlank = mppAgentsWeekly({ weeks: 12, now: NOW }).weeks[11];
+ok(rBlank.distinctAgents === 3 && rBlank.unattributedPayments === 2, `the series reads a blank payer as unattributed, not an agent (agents ${rBlank.distinctAgents}, unattributed ${rBlank.unattributedPayments})`);
+ok(mppAgentsThisWeek(NOW) === 3 && mppAgentsThisWeek(NOW) === rBlank.distinctAgents, `the week count never counts a blank or missing payer (got ${mppAgentsThisWeek(NOW)}, want 3)`);
+
 const body = JSON.stringify(r);
 ok(!/0x[0-9a-f]{40}/i.test(body), "no payer address anywhere in the answer");
 
@@ -71,8 +84,43 @@ ok(!/0x[0-9a-f]{40}/i.test(body), "no payer address anywhere in the answer");
 const TOKEN = "operator-test-secret-mpp";
 const PORT = await getFreePort();
 const base = `http://127.0.0.1:${PORT}`;
-const child = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, FREE_MODE: "true", PORT: String(PORT), AGENT402_OPERATOR_TOKEN: TOKEN, SALES_LEDGER_DB: DB, X402_INDEX_CRAWL: "off" },
+// The server reads the ledger at its own clock, so the route's fixture lands
+// in the real current week: two outside agents (one paying twice), plus a
+// blank and a missing payer that are payments but never agents.
+const D = "0xdddd0000000000000000000000000000000000d1", E = "0xeeee0000000000000000000000000000000000e1";
+recordSale({ slug: "uuid", priceUsd: 0.001, rail: "usdc", network: "tempo", payer: D, tx: "n1", wire: "mpp-tempo" });
+recordSale({ slug: "uuid", priceUsd: 0.001, rail: "usdc", network: "base", payer: D, tx: "n2", wire: "mpp" });
+recordSale({ slug: "uuid", priceUsd: 0.001, rail: "usdc", network: "tempo", payer: E, tx: "n3", wire: "mpp-tempo" });
+recordSale({ slug: "uuid", priceUsd: 0.001, rail: "usdc", network: "tempo", payer: null, tx: "n4", wire: "mpp-tempo" });
+insertRaw.run(Date.now(), "", "n5");
+raw.close();
+ok(mppAgentsThisWeek() === 2 && mppAgentsWeekly({ weeks: 1 }).weeks[0].distinctAgents === 2, `the current week holds two agents in the series and the count (got ${mppAgentsThisWeek()})`);
+// The sales page's count must not run the weekly series' whole-history
+// first-payment scans. A preload counts every execution of those statements in
+// the server process; the series route is the live control that it counts.
+const SCAN_LOG = join(dir, "history-scans.log");
+const PRELOAD = join(dir, "count-history-scans.mjs");
+writeFileSync(PRELOAD, `import { createRequire } from "node:module";
+import { appendFileSync } from "node:fs";
+const Database = createRequire(${JSON.stringify(new URL("../package.json", import.meta.url).pathname)})("better-sqlite3");
+const prepare = Database.prototype.prepare;
+let patched = false;
+Database.prototype.prepare = function (sql) {
+  const st = prepare.call(this, sql);
+  if (!patched) {
+    patched = true;
+    const proto = Object.getPrototypeOf(st);
+    for (const m of ["all", "get", "iterate"]) {
+      const f = proto[m];
+      proto[m] = function (...a) { if (/MIN\\(ts\\) AS first_ts/.test(this.source)) appendFileSync(${JSON.stringify(SCAN_LOG)}, "scan\\n"); return f.apply(this, a); };
+    }
+  }
+  return st;
+};
+`);
+const scans = () => (existsSync(SCAN_LOG) ? readFileSync(SCAN_LOG, "utf8").split("\n").filter(Boolean).length : 0);
+const child = spawn(process.execPath, ["--import", PRELOAD, "src/server.js"], {
+  env: { ...process.env, ...ownStoreEnv("mppagents"), FREE_MODE: "true", PORT: String(PORT), AGENT402_OPERATOR_TOKEN: TOKEN, SALES_LEDGER_DB: DB, X402_INDEX_CRAWL: "off" },
   stdio: ["ignore", "pipe", "pipe"],
 });
 let log = "";
@@ -86,6 +134,13 @@ for (let i = 0; i < 120; i++) {
 }
 ok(up, "server booted");
 if (!up) { console.error(log.slice(-800)); finish(1); }
+const scansBeforeSales = scans();
+const sales = await fetch(`${base}/__operator/sales.json`, { headers: { "x-operator-token": TOKEN } });
+const sj = await sales.json().catch(() => null);
+const scansAfterSales = scans();
+ok(sales.status === 200 && sj?.mppAgentsThisWeek === 2, `sales.json returns this week's MPP agent count, blank and missing payers excluded (got ${sj?.mppAgentsThisWeek})`);
+ok(sj?.mppAgentsThisWeek === mppAgentsWeekly({ weeks: 1 }).weeks[0].distinctAgents, "sales.json's count equals the weekly series' current week");
+ok(scansAfterSales === scansBeforeSales, `sales.json runs none of the series' history scans (${scansAfterSales - scansBeforeSales} ran)`);
 const anon = await fetch(`${base}/__operator/mpp-agents.json`);
 ok(anon.status === 404, `no token -> 404 (got ${anon.status})`);
 const bad = await fetch(`${base}/__operator/mpp-agents.json`, { headers: { "x-operator-token": "wrong" } });
@@ -93,8 +148,7 @@ ok(bad.status === 404, `wrong token -> 404 (got ${bad.status})`);
 const good = await fetch(`${base}/__operator/mpp-agents.json`, { headers: { "x-operator-token": TOKEN } });
 const gj = await good.json().catch(() => null);
 ok(good.status === 200 && Array.isArray(gj?.weeks) && gj.weeks.length === 12 && Array.isArray(gj?.allRails?.weeks), "operator gets the weekly series");
+ok(scans() > scansAfterSales, `control: the preload counts the series route's history scans (${scans() - scansAfterSales})`);
+ok(gj?.weeks?.[11]?.distinctAgents === 2, "the series route's current week holds the same two agents");
 ok(!/0x[0-9a-f]{40}/i.test(JSON.stringify(gj)), "operator route carries no payer address");
-const sales = await fetch(`${base}/__operator/sales.json`, { headers: { "x-operator-token": TOKEN } });
-const sj = await sales.json().catch(() => null);
-ok(sales.status === 200 && Number.isInteger(sj?.mppAgentsThisWeek) && sj.mppAgentsThisWeek === mppAgentsWeekly({ weeks: 1 }).weeks[0].distinctAgents, "sales.json carries mppAgentsThisWeek as a count, the weekly series' own");
 finish(failed ? 1 : 0);
