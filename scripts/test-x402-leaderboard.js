@@ -405,13 +405,13 @@ eq(original.map((r) => r.name), snap, "rankBy does not mutate input array");
 {
   const { readFileSync } = await import("node:fs");
   const lb = readFileSync(new URL("../src/leaderboard.js", import.meta.url), "utf8");
-  ok(/mergeCrawledWallets\(sellers, opts\.crawledWallets\(chain\), chain, typeof opts\.crawledPrices === "function" \? opts\.crawledPrices\(chain\) : null\)/.test(lb), "runLeaderboard folds the crawled wallets, and their listed prices, into the scan list");
-  ok(lb.indexOf("mergeCrawledWallets(sellers, opts.crawledWallets") > lb.indexOf("extractWalletsFromBazaar({ items }"), "and does it after the Bazaar extraction, so Bazaar names win");
+  ok(/const crawled = await opts\.crawledWallets\(chain\);\s+const crawledPrices = typeof opts\.crawledPrices === "function" \? await opts\.crawledPrices\(chain\) : null;\s+const \{ merged, added \} = mergeCrawledWallets\(sellers, crawled, chain, crawledPrices\)/.test(lb), "runLeaderboard folds the crawled wallets, and their listed prices, into the scan list");
+  ok(lb.indexOf("await opts.crawledWallets(chain)") > lb.indexOf("await extractWalletsFromBazaarAsync({ items }") && lb.includes("await extractWalletsFromBazaarAsync({ items }"), "and does it after the Bazaar extraction, so Bazaar names win");
   ok(!/from "\.\/x402-index\.js"/.test(lb), "the leaderboard still imports nothing from the index");
   const srv = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   ok(/startLeaderboardRefresh\(\{[\s\S]{0,300}crawledWallets:/.test(srv), "the server supplies crawledWallets at boot");
-  ok(/crawledWallets: \(chain\) => allPayToOrigins\(/.test(srv), "from allPayToOrigins, the same source the Solana board uses");
-  ok(/crawledPrices: \(chain\) => allPayToPrices\(/.test(srv), "and the listed prices from allPayToPrices");
+  ok(/crawledWallets: \(chain\) => allPayToOriginsAsync\(/.test(srv), "from allPayToOrigins (its sliced form), the same source the Solana board uses");
+  ok(/crawledPrices: \(chain\) => allPayToPricesAsync\(/.test(srv), "and the listed prices from allPayToPrices (its sliced form)");
 }
 
 // --- crawl-only wallets carry the prices their own routes publish (2026-09-30)

@@ -905,10 +905,11 @@ export function stampDeclared(tools, declaredRoutes = []) {
     exact.add(r);
     if (r.includes("{")) templates.push(r);
   }
+  const index = templateIndex(templates);
   for (const t of tools) {
     if (!t || typeof t.route !== "string") continue;
     const r = pathOf(t.route);
-    t.declared = exact.has(r) || templates.some((tpl) => routeMatchesTemplate(tpl, r));
+    t.declared = exact.has(r) || !templatesMatching(index, r).next().done;
   }
   return tools;
 }
@@ -2350,14 +2351,16 @@ function setRowPayTo(row, net, addr, source) {
  *  remains visible as the history it is. */
 export function sellerPayToByNetwork(tools) {
   const own = {}, registry = {};
-  for (const t of tools || []) {
-    for (const [net, addr] of Object.entries(t?.payToByNetwork || {})) {
-      if (typeof addr !== "string" || !addr) continue;
-      const bucket = ownPayToSource(payToSourceOf(t, net)) ? own : registry;
-      if (!bucket[net]) bucket[net] = addr;
-    }
-  }
+  for (const t of tools || []) addSellerPayTo(own, registry, t);
   return { ...registry, ...own };
+}
+// One row's part of sellerPayToByNetwork, so a stepped walk folds the same rule.
+function addSellerPayTo(own, registry, t) {
+  for (const [net, addr] of Object.entries(t?.payToByNetwork || {})) {
+    if (typeof addr !== "string" || !addr) continue;
+    const bucket = ownPayToSource(payToSourceOf(t, net)) ? own : registry;
+    if (!bucket[net]) bucket[net] = addr;
+  }
 }
 
 /**
@@ -3892,17 +3895,56 @@ function openapiAllOperationRoutesUnscoped(openapi, originUrl) {
 // Does `concrete` instantiate the templated `route` ("/a/{id}/b" matches
 // "/a/57dc.../b")? Literal segments must match exactly; {param} segments match
 // any non-empty segment. A route with no template is never a template match —
-// literal equality is the exact-match path's job.
-function routeMatchesTemplate(templateRoute, concreteRoute) {
-  if (typeof templateRoute !== "string" || !templateRoute.includes("{")) return false;
-  const t = templateRoute.split("/");
-  const c = String(concreteRoute || "").split("/");
-  if (t.length !== c.length) return false;
-  for (let i = 0; i < t.length; i++) {
-    if (/^\{.+\}$/.test(t[i])) { if (!c[i]) return false; }
-    else if (t[i] !== c[i]) return false;
+// literal equality is the exact-match path's job. Segments are split on "/",
+// and a template and a route with different segment counts never match.
+//
+// Applied to many templates at once: each template is split once and
+// bucketed by its segment count, so a concrete route is compared only with
+// the templates of its own length, in their original order. Matching
+// every row of a 77k-tool seller against its templates one split at a time
+// held the crawl's loop for 176 ms here. `routeOf` reads an item's template.
+function templateIndex(items, routeOf = (x) => x) {
+  const byLen = new Map();
+  for (const x of items) {
+    const tpl = routeOf(x);
+    if (typeof tpl !== "string" || !tpl.includes("{")) continue; // never a template match
+    const segs = tpl.split("/");
+    const params = segs.map((s) => /^\{.+\}$/.test(s));
+    let bucket = byLen.get(segs.length);
+    if (!bucket) byLen.set(segs.length, (bucket = []));
+    bucket.push({ x, segs, params });
   }
-  return true;
+  return byLen;
+}
+/** The one candidate whose template a registry row `b` instantiates (its verb
+ *  too, unless the row's verb was inferred), or null when none or several do:
+ *  the answer a filter over every candidate under the template rule gives. */
+function soleTemplateMatch(index, b) {
+  let only = null, count = 0;
+  for (const x of templatesMatching(index, b.route)) {
+    if (!(b.methodInferred || x.method === b.method)) continue;
+    if (++count > 1) return null;
+    only = x;
+  }
+  return count === 1 ? only : null;
+}
+let templateCompares = 0; // templates compared with a concrete route, for the pin
+/** Test hooks: the indexed matchers, and how many templates they compared. */
+export function _templateMatchForTest(b, candidates) { return soleTemplateMatch(templateIndex(candidates, (x) => x.route), b); }
+export function _templateComparesForTest() { return templateCompares; }
+/** The items of a templateIndex whose template `concreteRoute` instantiates,
+ *  in their original order, under the template rule above. */
+function* templatesMatching(index, concreteRoute) {
+  const c = String(concreteRoute || "").split("/");
+  for (const e of index.get(c.length) || []) {
+    templateCompares++;
+    let fits = true;
+    for (let i = 0; i < e.segs.length; i++) {
+      if (e.params[i]) { if (!c[i]) { fits = false; break; } }
+      else if (e.segs[i] !== c[i]) { fits = false; break; }
+    }
+    if (fits) yield e.x;
+  }
 }
 
 // Bazaar and other registry rows are settlement/discovery evidence, never
@@ -3959,10 +4001,12 @@ export function mergeOpenapiIntoBazaar(openapiTools = [], bazaarTools = [], { al
   // collapses — to one representative row, since its settlements are real.
   const docTemplates = allRoutes.filter((r) => String(r.route).includes("{"));
   const collapsedDocRows = new Map(); // "METHOD template" -> first surviving row
-  const templateMatch = (b, candidates, methodOf) => {
-    const fits = candidates.filter((x) => routeMatchesTemplate(methodOf(x).route, b.route) &&
-      (b.methodInferred || methodOf(x).method === b.method));
-    return fits.length === 1 ? fits[0] : null;
+  // Each candidate list indexed once (templateIndex), on first use.
+  const indexes = new Map();
+  const templateMatch = (b, candidates) => {
+    let index = indexes.get(candidates);
+    if (!index) indexes.set(candidates, (index = templateIndex(candidates, (x) => x.route)));
+    return soleTemplateMatch(index, b);
   };
   const used = new Set();
   const enrich = (b, o, route) => {
@@ -4055,7 +4099,7 @@ export function mergeOpenapiIntoBazaar(openapiTools = [], bazaarTools = [], { al
     // Per-instance collapse, indexed operations first: the first instance
     // becomes the operation's row (templated route, registry payment truth);
     // every further instance of the same operation is dropped.
-    const t = templateMatch(b, templatedOps, (x) => x);
+    const t = templateMatch(b, templatedOps);
     if (t) {
       if (used.has(t)) return null;
       used.add(t);
@@ -4065,7 +4109,7 @@ export function mergeOpenapiIntoBazaar(openapiTools = [], bazaarTools = [], { al
     // (unannotated in an annotated doc, deprecated): real settlements, so
     // keep exactly ONE representative row per operation, on the templated
     // route so it reads as the operation rather than one UUID of it.
-    const d = templateMatch(b, docTemplates, (x) => x);
+    const d = templateMatch(b, docTemplates);
     if (d) {
       const key = `${d.method} ${d.route}`;
       if (collapsedDocRows.has(key)) return null;
@@ -6000,7 +6044,8 @@ function isRoutable(entry) {
 // key, and a dropped entry's memo goes with it.
 const slugSetMemo = new WeakMap();
 const serviceKeyMemo = new WeakMap();
-const canonicalPayeesOf = (tools) => Object.entries(allPayTosByNetwork(tools))
+// The payees part of the key from allPayTosByNetwork's answer.
+const canonicalPayeesFrom = (byNetwork) => Object.entries(byNetwork)
   .sort(([a], [b]) => a.localeCompare(b))
   .map(([network, values]) => [network, [...values].map((value) => String(value).toLowerCase()).sort()]);
 // The full tool contract + payees of one entry, memoized by identity. Built
@@ -6009,22 +6054,98 @@ const canonicalPayeesOf = (tools) => Object.entries(allPayTosByNetwork(tools))
 function exactServiceKeyOf(v) {
   if (!v || typeof v !== "object") return null;
   if (serviceKeyMemo.has(v)) return serviceKeyMemo.get(v);
+  return runSteps(exactServiceKeySteps(v));
+}
+// The key as steps: one entry can carry 100k tools, and serializing, sorting
+// and joining them held the loop 150 ms here in one call. A step ends every
+// SERVICE_KEY_STEP tools (or comparisons, while sorting). The key is the same
+// text: JSON.stringify({ payees, contracts }) writes each contract exactly as
+// JSON.stringify(contract) does, joined by commas, and a stable merge of
+// stably sorted runs under one comparator is the order one stable sort gives.
+const SERVICE_KEY_STEP = 1024;
+let serviceKeySteps = 0; // steps taken by key builds, for the step pin
+/** Test hook: steps the service-key builds have taken so far. */
+export function _serviceKeyStepsForTest() { return serviceKeySteps; }
+/** Test hooks: one entry's key (built in one turn when not memoized), and the
+ *  memoized key alone (undefined when none is held yet). */
+export function _exactServiceKeyForTest(v) { return exactServiceKeyOf(v); }
+export function _memoizedServiceKeyForTest(v) { return serviceKeyMemo.get(v); }
+function* exactServiceKeySteps(v) {
   const tools = v.tools || [];
-  const payees = canonicalPayeesOf(tools);
+  // allPayTosByNetwork(tools), folded a step at a time (each row checks up to
+  // 200 addresses per network).
+  const byNetwork = {};
+  for (let i = 0; i < tools.length; i++) {
+    addPayTos(byNetwork, tools[i]);
+    if (i % SERVICE_KEY_STEP === SERVICE_KEY_STEP - 1) { serviceKeySteps++; yield; }
+  }
+  const payees = canonicalPayeesFrom(byNetwork);
   let key = null;
   if (tools.length && payees.length) {
-    const contracts = tools.map((t) => [
-      String(t.method || "GET").toUpperCase(),
-      String(t.route || ""),
-      String(t.slug || ""),
-      String(t.price ?? ""),
-      t.paid === false ? "free" : "paid-or-unknown",
-      [...(t.networks || [])].map(String).sort(),
-    ]).map((c) => [JSON.stringify(c), c]).sort((a, b) => a[0].localeCompare(b[0])).map((p) => p[1]);
-    key = JSON.stringify({ payees, contracts });
+    const pairs = new Array(tools.length);
+    for (let i = 0; i < tools.length; i++) {
+      const t = tools[i];
+      const c = [
+        String(t.method || "GET").toUpperCase(),
+        String(t.route || ""),
+        String(t.slug || ""),
+        String(t.price ?? ""),
+        t.paid === false ? "free" : "paid-or-unknown",
+        [...(t.networks || [])].map(String).sort(),
+      ];
+      pairs[i] = JSON.stringify(c);
+      if (i % SERVICE_KEY_STEP === SERVICE_KEY_STEP - 1) { serviceKeySteps++; yield; }
+    }
+    const sorted = yield* stableSortSteps(pairs, (a, b) => a.localeCompare(b));
+    const parts = [];
+    for (let i = 0; i < sorted.length; i += SERVICE_KEY_STEP) {
+      parts.push(sorted.slice(i, i + SERVICE_KEY_STEP).join(","));
+      serviceKeySteps++;
+      yield;
+    }
+    key = `{"payees":${JSON.stringify(payees)},"contracts":[${parts.join(",")}]}`;
   }
   serviceKeyMemo.set(v, key);
   return key;
+}
+// A stable sort in steps: runs of SERVICE_KEY_STEP sorted by the engine's
+// stable sort, then merged pairwise (the left run wins a tie), with a step
+// every SERVICE_KEY_STEP elements merged. Same order as arr.slice().sort(cmp).
+function* stableSortSteps(arr, cmp) {
+  const n = arr.length;
+  if (n <= SERVICE_KEY_STEP) return arr.slice().sort(cmp);
+  let runs = [];
+  for (let i = 0; i < n; i += SERVICE_KEY_STEP) { runs.push(arr.slice(i, i + SERVICE_KEY_STEP).sort(cmp)); serviceKeySteps++; yield; }
+  while (runs.length > 1) {
+    const next = [];
+    for (let r = 0; r < runs.length; r += 2) {
+      const a = runs[r], b = runs[r + 1];
+      if (!b) { next.push(a); continue; }
+      const out = new Array(a.length + b.length);
+      let i = 0, j = 0, k = 0, budget = SERVICE_KEY_STEP;
+      while (i < a.length && j < b.length) {
+        out[k++] = cmp(b[j], a[i]) < 0 ? b[j++] : a[i++];
+        if (--budget === 0) { budget = SERVICE_KEY_STEP; serviceKeySteps++; yield; }
+      }
+      while (i < a.length) out[k++] = a[i++];
+      while (j < b.length) out[k++] = b[j++];
+      next.push(out);
+    }
+    runs = next;
+  }
+  return runs[0];
+}
+// Prime one entry's key before `until`: true once it is memoized, false when
+// time ran out (the build resumes on the next call).
+const serviceKeyBuilds = new WeakMap(); // entry -> its key build in progress
+function primeServiceKey(v, until = Infinity) {
+  if (!v || typeof v !== "object" || serviceKeyMemo.has(v)) return true;
+  let gen = serviceKeyBuilds.get(v);
+  if (!gen) { gen = exactServiceKeySteps(v); serviceKeyBuilds.set(v, gen); }
+  for (;;) {
+    if (gen.next().done) { serviceKeyBuilds.delete(v); return true; }
+    if (until !== Infinity && performance.now() >= until) return false;
+  }
 }
 
 // The cache-derived part of the alias set walks every entry (4,360 on prod,
@@ -6114,7 +6235,8 @@ function* computeAliasOriginsBaseSteps(entries) {
   for (const [origin, v] of entries) {
     if (++walked % ALIAS_YIELD_ENTRIES === 0) yield;
     if (v?.error || aliases.has(origin)) continue;
-    const key = exactServiceKey(v);
+    // A key not yet memoized is built in steps here too.
+    const key = v && typeof v === "object" && !serviceKeyMemo.has(v) ? yield* exactServiceKeySteps(v) : exactServiceKey(v);
     if (!key) continue;
     if (!exactGroups.has(key)) exactGroups.set(key, []);
     exactGroups.get(key).push(origin);
@@ -6819,6 +6941,43 @@ function sliceClock(ms = PERSIST_SLICE_MS) {
     start = performance.now();
   };
 }
+// head + lines.join(sep) + tail, written to `path` in pieces of about
+// WRITE_PIECE_CHARS with an await between them: the one join of a 280 MB cache
+// and its encoding held the loop 1.2-1.5 s per file here. A line longer than
+// a piece (one seller's row can pass 80 MB) is cut too, never inside a
+// surrogate pair, so the bytes are the ones the single write produced.
+const WRITE_PIECE_CHARS = 4 * 1048576;
+let writePieces = 0; // pieces written, for the step pin
+/** Test hooks: pieces the cache writes have taken, and the writer itself. */
+export function _cacheWritePiecesForTest() { return writePieces; }
+export function _writeJoinedInPiecesForTest(...a) { return writeJoinedInPieces(...a); }
+async function writeJoinedInPieces(path, head, lines, sep, tail) {
+  const { open } = await import("node:fs/promises");
+  const fh = await open(path, "w");
+  try {
+    const put = async (s) => {
+      writePieces++;
+      const b = Buffer.from(s, "utf8");
+      for (let off = 0; off < b.length;) off += (await fh.write(b, off, b.length - off)).bytesWritten;
+    };
+    let buf = head;
+    for (let i = 0; i < lines.length; i++) {
+      let line = i ? sep + lines[i] : lines[i];
+      while (buf.length + line.length > WRITE_PIECE_CHARS) {
+        let cut = WRITE_PIECE_CHARS - buf.length;
+        if (cut <= 0) { await put(buf); buf = ""; continue; }
+        const c = line.charCodeAt(cut - 1);
+        if (c >= 0xd800 && c <= 0xdbff) cut--; // keep a pair whole
+        if (cut <= 0) { await put(buf); buf = ""; continue; }
+        await put(buf + line.slice(0, cut));
+        buf = "";
+        line = line.slice(cut);
+      }
+      buf += line;
+    }
+    await put(buf + tail);
+  } finally { await fh.close(); }
+}
 /** persistedEntries, projected across turns: the origins are taken in one
  *  pass (the same set and order the synchronous walk reads), then each is
  *  projected with a yield whenever a slice is spent. */
@@ -7101,19 +7260,19 @@ export async function persistIndexCacheAsync(file = INDEX_CACHE_FILE) {
     const top = entries.map(([o], i) => [o, lines[i].length]).sort((a, b) => b[1] - a[1]).slice(0, 5);
     console.log(`[x402-index] persisted ${(bytes / 1_048_576).toFixed(1)} MB for ${entries.length} origins in ${ms}ms; largest: ` +
       top.map(([o, n]) => `${o} ${(n / 1024).toFixed(0)}KB/${(cache.get(o)?.tools || []).length} tools`).join(", "));
-    const { writeFile, rename } = await import("node:fs/promises");
+    const { rename } = await import("node:fs/promises");
     // NDJSON for the incremental loader: header line, then one [origin, entry]
     // per line. Written to a temp path and renamed so a crash mid-write can
     // never leave a half file for the next boot to read.
     const ndFile = file === INDEX_CACHE_FILE ? INDEX_CACHE_NDJSON_FILE : file.replace(/\.json$/, "") + ".ndjson";
     const header = JSON.stringify({ savedAt, format: "ndjson-v1", origins: entries.length });
     const writeFiles = async () => {
-      await writeFile(`${ndFile}.tmp`, header + "\n" + lines.join("\n") + "\n");
+      await writeJoinedInPieces(`${ndFile}.tmp`, header + "\n", lines, "\n", "\n");
       await rename(`${ndFile}.tmp`, ndFile);
       // The legacy single-JSON file stays current too, for the sync loader and
       // for anything that copies it (backups exclude cache files anyway). Built
       // from the same lines: byte-identical to JSON.stringify({ savedAt, entries }).
-      await writeFile(file, `{"savedAt":${savedAt},"entries":[${lines.join(",")}]}`);
+      await writeJoinedInPieces(file, `{"savedAt":${savedAt},"entries":[`, lines, ",", "]}");
     };
     if (stateDbEnabled()) {
       // The state database holds the cache (one row per origin); the files are
@@ -8067,7 +8226,45 @@ export function mppDualStackOrigins() {
  * every known-but-unroutable origin counted as a blind spot. Attribution and
  * routability are different questions. Keys are lowercased addresses.
  */
-export function allPayToOrigins(network = "eip155:8453") {
+export function allPayToOrigins(network = "eip155:8453") { return runSteps(payToOriginsSteps(network)); }
+/** allPayToOrigins across event-loop turns: the same Map, built from the
+ *  entries held when it starts. For the scheduled scans (the Base board). */
+export function allPayToOriginsAsync(network = "eip155:8453") { return runSlicedAsync(payToOriginsSteps(network)); }
+
+// The payTo scans walk every tool row the index holds (about 280k on
+// production's index): 55-105 ms each on a fast machine and several times
+// that on the production container, once per chain per board refresh. Each
+// is one generator, run in one turn (runSteps) or in slices (runSlicedAsync),
+// so the two forms cannot drift. A step ends every PAYTO_SCAN_STEP rows,
+// counted across origins, since one origin can list 100k tools.
+const PAYTO_SCAN_STEP = 2000;
+let payToScanRows = 0; // rows the payTo scans have read, for the step pin
+/** Test hook: tool rows the payTo scans have read so far. */
+export function _payToScanRowsForTest() { return payToScanRows; }
+/** Test hook: one scan's generator, so a test can count rows per step. */
+export function _payToScanStepsForTest(kind, network) {
+  return kind === "origins" ? payToOriginsSteps(network) : kind === "prices" ? payToPricesSteps(network) : solanaPayToOriginsSteps();
+}
+// [origin, rows] pairs, crawled entries first and then the registry rows: the
+// order the one-pass loops read them. Taken once, so a sliced scan reads the
+// entries held when it started (entries are replaced, never mutated).
+function payToScanSources(withBazaar) {
+  const out = [];
+  for (const [origin, v] of cache.entries()) out.push([origin, v?.tools || []]);
+  if (withBazaar) for (const [origin, arr] of bazaarToolsByOrigin.entries()) out.push([origin, arr || []]);
+  return out;
+}
+function* payToRowSteps(sources, visit) {
+  let budget = PAYTO_SCAN_STEP;
+  for (const [origin, rows] of sources) {
+    for (let i = 0; i < rows.length; i++) {
+      payToScanRows++;
+      visit(rows[i], origin);
+      if (--budget === 0) { budget = PAYTO_SCAN_STEP; yield; }
+    }
+  }
+}
+function* payToOriginsSteps(network) {
   const out = new Map();
   const add = (addr, origin) => {
     if (typeof addr !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(addr)) return;
@@ -8076,12 +8273,7 @@ export function allPayToOrigins(network = "eip155:8453") {
     if (!set) { set = new Set(); out.set(k, set); }
     set.add(origin);
   };
-  for (const [origin, v] of cache.entries()) {
-    for (const t of v?.tools || []) add(t?.payToByNetwork?.[network], origin);
-  }
-  for (const [origin, arr] of bazaarToolsByOrigin.entries()) {
-    for (const t of arr || []) add(t?.payToByNetwork?.[network], origin);
-  }
+  yield* payToRowSteps(payToScanSources(true), (t, origin) => add(t?.payToByNetwork?.[network], origin));
   return out;
 }
 
@@ -8092,27 +8284,31 @@ export function allPayToOrigins(network = "eip155:8453") {
  *  price the seller publishes. Crawled rows only: a Bazaar-listed wallet keeps
  *  the Bazaar's own prices (mergeCrawledWallets does not touch those rows).
  *  A route marked free, or with no readable price, contributes nothing. */
-export function allPayToPrices(network = "eip155:8453") {
+export function allPayToPrices(network = "eip155:8453") { return runSteps(payToPricesSteps(network)); }
+/** allPayToPrices across event-loop turns (the same Map). */
+export function allPayToPricesAsync(network = "eip155:8453") { return runSlicedAsync(payToPricesSteps(network)); }
+function* payToPricesSteps(network) {
   const out = new Map();
-  for (const v of cache.values()) {
-    for (const t of v?.tools || []) {
-      const addr = t?.payToByNetwork?.[network];
-      if (typeof addr !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(addr) || t.paid === false) continue;
-      const micro = priceToMicroUsd(t.price);
-      if (!(micro > 0)) continue;
-      const k = addr.toLowerCase();
-      let set = out.get(k);
-      if (!set) { set = new Set(); out.set(k, set); }
-      set.add(micro);
-    }
-  }
+  yield* payToRowSteps(payToScanSources(false), (t) => {
+    const addr = t?.payToByNetwork?.[network];
+    if (typeof addr !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(addr) || t.paid === false) return;
+    const micro = priceToMicroUsd(t.price);
+    if (!(micro > 0)) return;
+    const k = addr.toLowerCase();
+    let set = out.get(k);
+    if (!set) { set = new Set(); out.set(k, set); }
+    set.add(micro);
+  });
   return out;
 }
 
 /** Solana twin of allPayToOrigins: mainnet-label payTos (base58) -> origins.
  *  The Solana leaderboard's scan list (src/solana-leaderboard.js). */
 export const SOLANA_MAINNET_LABELS = new Set(["solana:5eykt4usfv8p8njdtrepy1vzqkqzkvdp", "solana", "solana-mainnet", "solana-mainnet-beta"]);
-export function allSolanaPayToOrigins() {
+export function allSolanaPayToOrigins() { return runSteps(solanaPayToOriginsSteps()); }
+/** allSolanaPayToOrigins across event-loop turns (the same Map). */
+export function allSolanaPayToOriginsAsync() { return runSlicedAsync(solanaPayToOriginsSteps()); }
+function* solanaPayToOriginsSteps() {
   const out = new Map();
   const add = (addr, origin) => {
     if (typeof addr !== "string" || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(addr)) return;
@@ -8120,11 +8316,9 @@ export function allSolanaPayToOrigins() {
     if (!set) { set = new Set(); out.set(addr, set); }
     set.add(origin);
   };
-  const fromTool = (t, origin) => {
+  yield* payToRowSteps(payToScanSources(true), (t, origin) => {
     for (const [net, addr] of Object.entries(t?.payToByNetwork || {})) if (SOLANA_MAINNET_LABELS.has(String(net).toLowerCase())) add(addr, origin);
-  };
-  for (const [origin, v] of cache.entries()) for (const t of v?.tools || []) fromTool(t, origin);
-  for (const [origin, arr] of bazaarToolsByOrigin.entries()) for (const t of arr || []) fromTool(t, origin);
+  });
   return out;
 }
 
@@ -8185,6 +8379,8 @@ function* routableSummarySteps() {
     if (kept && kept.origin === origin) { out.push(kept.row); continue; }
     let host = "";
     try { host = new URL(origin).host.toLowerCase(); } catch { continue; }
+    // The payTo fields, walked in steps (one seller can list 100k tools).
+    const payFields = yield* sellerPayToFieldsSteps([v.tools || []]);
     const row = {
       origin,
       host,
@@ -8209,10 +8405,10 @@ function* routableSummarySteps() {
       // baseNetworkPayTo() returned null for every seller, so the evidence
       // source contributed nothing, always, and looked identical to "no data".
       // The origin's own address first per network (sellerPayToByNetwork).
-      payToByNetwork: sellerPayToByNetwork(v.tools),
+      payToByNetwork: payFields.payToByNetwork,
       // Every advertised payTo, not just the first (see allPayTosByNetwork).
-      payTosByNetwork: allPayTosByNetwork(v.tools),
-      evmDomainByNetwork: evmDomainUnion(v.tools),
+      payTosByNetwork: payFields.payTosByNetwork,
+      evmDomainByNetwork: payFields.evmDomainByNetwork,
     };
     routableRowBuilds++;
     if (v && typeof v === "object") routableRowByEntry.set(v, { origin, row });
@@ -8233,22 +8429,75 @@ function* routableSummarySteps() {
  *  seller-level twin of payToByNetwork (first seen per network wins). */
 function evmDomainUnion(tools) {
   const acc = {};
-  for (const t of tools || []) {
-    for (const [net, obs] of Object.entries(t?.evmDomainByNetwork || {})) {
-      if (!acc[net] && obs && typeof obs === "object" && typeof obs.asset === "string" && typeof obs.name === "string") acc[net] = { asset: obs.asset, name: obs.name };
-    }
-  }
+  for (const t of tools || []) addEvmDomain(acc, t);
   return acc;
+}
+function addEvmDomain(acc, t) {
+  for (const [net, obs] of Object.entries(t?.evmDomainByNetwork || {})) {
+    if (!acc[net] && obs && typeof obs === "object" && typeof obs.asset === "string" && typeof obs.name === "string") acc[net] = { asset: obs.asset, name: obs.name };
+  }
 }
 
 export function allPayTosByNetwork(tools) {
-  return (tools || []).reduce((acc, t) => {
-    for (const [net, addr] of Object.entries(t?.payToByNetwork || {})) {
-      const seen = (acc[net] ||= []);
-      if (!seen.includes(addr) && seen.length < 200) seen.push(addr);
+  return (tools || []).reduce((acc, t) => { addPayTos(acc, t); return acc; }, {});
+}
+function addPayTos(acc, t) {
+  for (const [net, addr] of Object.entries(t?.payToByNetwork || {})) {
+    const seen = (acc[net] ||= []);
+    if (!seen.includes(addr) && seen.length < 200) seen.push(addr);
+  }
+}
+
+// The three seller-level payTo fields over row lists read in order, in one
+// walk with a step every SELLER_FIELDS_STEP rows: one seller can list 100k
+// tools, and a listing row built for it in one turn held the loop 190 ms
+// here. Each field is what its function above returns for the lists joined.
+const SELLER_FIELDS_STEP = 2000;
+let sellerFieldSteps = 0; // steps taken, for the step pin
+/** Test hook: steps the seller-field walks have taken so far. */
+export function _sellerFieldStepsForTest() { return sellerFieldSteps; }
+let sellerFieldRows = 0; // rows the seller-field walks have read
+/** Test hooks: rows read by the seller-field walks, and the two builders that
+ *  run them as generators, so a test can count rows per step. */
+export function _sellerFieldRowsForTest() { return sellerFieldRows; }
+export function _indexSnapshotStepsForTest(ctx) { return indexSnapshotSteps(ctx); }
+export function _routableSummaryStepsForTest() { return routableSummarySteps(); }
+function* sellerPayToFieldsSteps(lists) {
+  const own = {}, registry = {}, payTos = {}, domains = {};
+  let n = 0;
+  for (const list of lists) {
+    for (const t of list) {
+      addSellerPayTo(own, registry, t);
+      addPayTos(payTos, t);
+      addEvmDomain(domains, t);
+      sellerFieldRows++;
+      if (++n % SELLER_FIELDS_STEP === 0) { sellerFieldSteps++; yield; }
     }
-    return acc;
-  }, {});
+  }
+  return { payToByNetwork: { ...registry, ...own }, payTosByNetwork: payTos, evmDomainByNetwork: domains };
+}
+// The listing row's other tool-derived fields, in steps the same way: the
+// network union over the crawled rows then the registry rows (flatMap's
+// reading of each row's list), the first valid Stellar and Algorand payTo in
+// that order, and the paid count when any crawled row carries a paid flag.
+function* sellerListingFieldsSteps(tools, bazaarRows) {
+  const networks = new Set();
+  let stellar = null, algorand = null, flagged = false, paid = 0, n = 0;
+  for (let l = 0; l < 2; l++) {
+    for (const t of l === 0 ? tools : bazaarRows) {
+      if (l === 0) {
+        if (t.paid !== undefined) flagged = true;
+        if (t.paid !== false) paid++;
+      }
+      const ns = t.networks || [];
+      if (Array.isArray(ns)) for (const x of ns) networks.add(x); else networks.add(ns);
+      if (stellar === null && typeof t.stellarPayTo === "string" && /^G[A-Z2-7]{55}$/.test(t.stellarPayTo)) stellar = t.stellarPayTo;
+      if (algorand === null && typeof t.algorandPayTo === "string" && /^[A-Z2-7]{58}$/.test(t.algorandPayTo)) algorand = t.algorandPayTo;
+      sellerFieldRows++;
+      if (++n % SELLER_FIELDS_STEP === 0) { sellerFieldSteps++; yield; }
+    }
+  }
+  return { networks: [...networks], stellarWallet: stellar, algorandWallet: algorand, paidToolCount: flagged ? paid : undefined };
 }
 
 // How many of a seller's tools one detail response carries. Bounded because a
@@ -8507,6 +8756,11 @@ function* indexSnapshotSteps({ baseUrl, catalog, prices, network, toolCount, wal
   for (const [origin, v] of [...cache.entries()]) {
     if (isSelfOrigin(origin, v) || aliasOrigins.has(origin)) continue;
     if (remote.length % SNAPSHOT_YIELD_SELLERS === SNAPSHOT_YIELD_SELLERS - 1) yield;
+    // The tool-derived fields, walked in steps (one seller can list 100k tools).
+    const crawledRows = v.tools || [];
+    const bazaarRows = bazaarToolsByOrigin.get(origin) || [];
+    const listed = yield* sellerListingFieldsSteps(crawledRows, bazaarRows);
+    const payFields = yield* sellerPayToFieldsSteps([bazaarRows, crawledRows]);
     remote.push({
     origin,
     ...(sellerPrefixOf(origin) ? { pathPrefix: sellerPrefixOf(origin) } : {}),
@@ -8527,9 +8781,7 @@ function* indexSnapshotSteps({ baseUrl, catalog, prices, network, toolCount, wal
     // Present only when the seller's document distinguishes paid from free
     // (tools carry paid flags): the buyable subset. Display uses it to show
     // "42 tools · 21 paid" so a padded free surface can't read as paid depth.
-    ...(v.tools?.some((t) => t.paid !== undefined)
-      ? { paidToolCount: v.tools.filter((t) => t.paid !== false).length }
-      : {}),
+    ...(listed.paidToolCount !== undefined ? { paidToolCount: listed.paidToolCount } : {}),
     fetchedAt: v.fetchedAt,
     error: v.error || null,
     local: false,
@@ -8551,22 +8803,15 @@ function* indexSnapshotSteps({ baseUrl, catalog, prices, network, toolCount, wal
     // same origin — a seller with its own manifest AND Stellar accepts on the
     // Bazaar must not read as network-less (it hid two of the four known
     // Stellar sellers from /stellar).
-    networks: [...new Set([
-      ...(v.tools || []).flatMap((t) => t.networks || []),
-      ...(bazaarToolsByOrigin.get(origin) || []).flatMap((t) => t.networks || []),
-    ])],
+    networks: listed.networks,
     // First valid Stellar payTo advertised across this seller's accepts —
     // strkey-validated (ed25519 public key: G + 55 base32 chars) so a hostile
     // accepts value can never reach a Horizon URL.
-    stellarWallet: [...(v.tools || []), ...(bazaarToolsByOrigin.get(origin) || [])]
-      .map((t) => t.stellarPayTo)
-      .find((w) => typeof w === "string" && /^G[A-Z2-7]{55}$/.test(w)) || null,
+    stellarWallet: listed.stellarWallet,
     // First valid Algorand payTo advertised across this seller's accepts —
     // strkey-validated (58 base32 chars) so a hostile accepts value can never
     // reach an indexer URL. Feeds /algorand's per-seller activity scan.
-    algorandWallet: [...(v.tools || []), ...(bazaarToolsByOrigin.get(origin) || [])]
-      .map((t) => t.algorandPayTo)
-      .find((w) => typeof w === "string" && /^[A-Z2-7]{58}$/.test(w)) || null,
+    algorandWallet: listed.algorandWallet,
     // Union of payTo-by-network across this seller's crawled + Bazaar tools
     // (the origin's own address first, see below) — the EVM/Solana counterpart to the
     // stellar/algorand wallets above, so the market pages can scope activity to
@@ -8574,9 +8819,9 @@ function* indexSnapshotSteps({ baseUrl, catalog, prices, network, toolCount, wal
     // The origin's own address first per network: the Bazaar rows listed first
     // here are a registry's record and only fill a network the origin's own
     // documents and live 402s name nothing on (sellerPayToByNetwork).
-    payToByNetwork: sellerPayToByNetwork([...(bazaarToolsByOrigin.get(origin) || []), ...(v.tools || [])]),
-    payTosByNetwork: allPayTosByNetwork([...(bazaarToolsByOrigin.get(origin) || []), ...(v.tools || [])]),
-    evmDomainByNetwork: evmDomainUnion([...(bazaarToolsByOrigin.get(origin) || []), ...(v.tools || [])]),
+    payToByNetwork: payFields.payToByNetwork,
+    payTosByNetwork: payFields.payTosByNetwork,
+    evmDomainByNetwork: payFields.evmDomainByNetwork,
     });
   }
   yield;
@@ -9050,9 +9295,11 @@ function routeIndexAddEntry(origin, v, target = routeIdx, from = 0, until = Infi
       if (list) list.push(t); else postings.set(tok, [t]);
     }
   }
+  // Primes the alias-set memo off the query path, inside the same time budget:
+  // out of time, the entry resumes past its last tool and finishes the key.
+  if (!primeServiceKey(v, until)) return pool.length;
   target.indexed.add(v);
   target.indexedTools += pool.length;
-  exactServiceKeyOf(v); // primes the alias-set memo off the query path
   return -1;
 }
 /** Build the /api/route candidate index now instead of on the first query.

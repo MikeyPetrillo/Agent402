@@ -419,7 +419,7 @@ import { priceToMicroUsd, sellerRouteUrl } from "./x402-index.js";
 import { priceUsdOf } from "./price-usd.js";
 import { submissionSlotStatus } from "./x402-index.js";
 import { startRouterPool, routerPoolStatus } from "./router-pool.js";
-import { allPayToOrigins, allPayToPrices, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedToolsAsync, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategoriesAsync, configureListingsStore, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
+import { allPayToOriginsAsync, allPayToPricesAsync, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedToolsAsync, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategoriesAsync, configureListingsStore, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
 import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot, screenMppSellerForServe } from "./mpp-index.js";
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
 import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled, tempoSettlementMode } from "./mpp-tempo.js";
@@ -5771,7 +5771,7 @@ app.get("/__operator/discovery-gap.json", async (req, res) => {
       // Every payTo any KNOWN origin advertises - crawled entries whether or
       // not they are routable, plus the registry-listed tools (Bazaar rows
       // carry payTo) - so "unattributed" means unknown, not merely unroutable.
-      knownPayToOrigins: allPayToOrigins("eip155:8453"),
+      knownPayToOrigins: await allPayToOriginsAsync("eip155:8453"),
       merchants: econ?.topMerchants || [],
       ourAddresses: [WALLET_ADDRESS, process.env.X402_UPSTREAM_BUYER_ADDRESS].filter(Boolean),
       minPayments: Math.max(1, Math.min(10000, parseInt(req.query.min, 10) || SOR_MIN_SETTLED_TX)),
@@ -12013,7 +12013,7 @@ if (String(process.env.MPP_INDEX_CRAWL || "").toLowerCase() === "off") {
     // Solana SPL leaderboard: hourly batched credits scan over every Solana
     // payTo the index knows, primed into the pay-time gate (src/solana-leaderboard.js).
     startSolanaLeaderboard({
-      listPayTos: async () => (await import("./x402-index.js")).allSolanaPayToOrigins(),
+      listPayTos: async () => (await import("./x402-index.js")).allSolanaPayToOriginsAsync(),
       // getTransaction (immutable, by signature) goes public RPC first with the
       // keyed lane behind it (src/solana-history-rpc.js); the signature and
       // token-account reads stay on the configured lane.
@@ -12154,10 +12154,10 @@ bootStep("setAlgorandCrawlSources", () => {
   });
 });
 bootStep("startLeaderboardRefresh", () => startLeaderboardRefresh({
-  crawledWallets: (chain) => allPayToOrigins(chain?.caip2 || "eip155:8453"),
+  crawledWallets: (chain) => allPayToOriginsAsync(chain?.caip2 || "eip155:8453"),
   // The prices those wallets' own routes publish, so a transfer to a wallet
   // only our crawl knows can be matched to a listed price like a Bazaar one.
-  crawledPrices: (chain) => allPayToPrices(chain?.caip2 || "eip155:8453"),
+  crawledPrices: (chain) => allPayToPricesAsync(chain?.caip2 || "eip155:8453"),
 }));
 // Warm the on-chain economy snapshot once, off the boot path: the cache is
 // cold exactly once per deploy and only a cold cache blocks a visitor.

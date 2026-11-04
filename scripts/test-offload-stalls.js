@@ -8,6 +8,11 @@
 //      one read of the payment history (source pins: the ledger needs a
 //      populated database).
 //   3. The per-page chain strip is memoized on its inputs (source pin).
+// And the holds a production-sized crawl cycle showed locally (2026-11-04),
+// each now taken in steps with the one-pass answer: the payTo scans the
+// boards refresh (1d), one large seller's listing row, routable summary,
+// service key and template matching (1e), the Base board's registry walk
+// (1f), and the cache files written without a state database (1g).
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -17,6 +22,21 @@ import { isDeepStrictEqual } from "node:util";
 let n = 0;
 const ok = (c, m) => { n++; assert.ok(c, m); console.log(`ok - ${m}`); };
 const GAP_MS = Number(process.env.OFFLOAD_GAP_MS || 120);
+// How many event-loop turns a piece of work advanced in: `counter` is the
+// work's own step count, sampled once a turn until `work` settles. A pass
+// taken in one turn advances in one, however many steps it counts.
+async function turnsAdvancing(counter, start) {
+  let done = false, turns = 0, seen = counter();
+  const p = Promise.resolve(start()).finally(() => { done = true; });
+  // The turn that started the work counts as one if it advanced it.
+  if (counter() !== seen) { turns++; seen = counter(); }
+  while (!done) {
+    await new Promise((r) => setImmediate(r));
+    const now = counter();
+    if (now !== seen) { turns++; seen = now; }
+  }
+  return { turns, value: await p };
+}
 
 process.env.X402_INDEX_CRAWL = "off";
 const x = await import("../src/x402-index.js");
@@ -193,6 +213,306 @@ const digest = (r) => createHash("sha256").update(JSON.stringify([r.total, r.mat
   const none = await x.routeQueryAsyncInThread({ query: "to the zzqqnomatch", top: 25, include: "external", ...routeCtx });
   ok(pendingAtQuery, "the backlog is pending when that query starts");
   ok(none.count === 0, `a pending row sharing only "to"/"the" with the query is not a candidate (${none.count} rows)`);
+}
+
+// --- 1d. the payTo scans the board refreshes read (every tool row the index
+// holds, once per chain per refresh) run in steps of a bounded number of rows,
+// and the sliced Map equals the one-pass Map exactly.
+{
+  const SOL = "solana:5eykT4UsFv8P8NJdTREpY1vzqKqZKvdp";
+  const bazaar = [];
+  for (let i = 0; i < 400; i++) {
+    const origin = `https://bazaar${i % 120}.example`;
+    bazaar.push([origin, Array.from({ length: 5 }, (_, j) => ({ route: `${origin}/r${i}-${j}`, price: (j + 1) / 1000, payToByNetwork: { "eip155:8453": `0x${String(9000 + i).padStart(40, "a")}`, [SOL]: `So1${String(i).padStart(40, "1")}`.slice(0, 43) } }))]);
+  }
+  const byOrigin = new Map();
+  for (const [o, rows] of bazaar) byOrigin.set(o, [...(byOrigin.get(o) || []), ...rows]);
+  for (const [o, rows] of byOrigin) x.__testSetBazaarTools(o, rows);
+  // A few crawled rows carry a Solana payTo and a free or unpriced route.
+  let k = 0;
+  for (const [o, v] of [...cache]) {
+    if (k++ % 40 !== 0) continue;
+    cache.set(o, { ...v, tools: v.tools.map((t, j) => (j % 3 === 0 ? { ...t, payToByNetwork: { ...t.payToByNetwork, solana: `Sol${String(j).padStart(40, "2")}`.slice(0, 44) } } : j % 3 === 1 ? { ...t, paid: false } : { ...t, price: null })) });
+  }
+  // The one-pass reference, written out here: the loops the scans ran before
+  // they were sliced, over the same cache and registry rows.
+  const add = (out, k2, origin) => { let s = out.get(k2); if (!s) { s = new Set(); out.set(k2, s); } s.add(origin); };
+  const crawled = [...cache.entries()];
+  const regs = [...byOrigin.entries()];
+  const refOrigins = (net) => {
+    const out = new Map();
+    for (const [o, v] of crawled) for (const t of v?.tools || []) { const a = t?.payToByNetwork?.[net]; if (typeof a === "string" && /^0x[0-9a-fA-F]{40}$/.test(a)) add(out, a.toLowerCase(), o); }
+    for (const [o, arr] of regs) for (const t of arr) { const a = t?.payToByNetwork?.[net]; if (typeof a === "string" && /^0x[0-9a-fA-F]{40}$/.test(a)) add(out, a.toLowerCase(), o); }
+    return out;
+  };
+  const { priceToMicroUsd } = x;
+  const refPrices = (net) => {
+    const out = new Map();
+    for (const [, v] of crawled) for (const t of v?.tools || []) {
+      const a = t?.payToByNetwork?.[net];
+      if (typeof a !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(a) || t.paid === false) continue;
+      const micro = priceToMicroUsd(t.price);
+      if (micro > 0) add(out, a.toLowerCase(), micro);
+    }
+    return out;
+  };
+  const refSolana = () => {
+    const out = new Map();
+    const from = (t, o) => { for (const [net, a] of Object.entries(t?.payToByNetwork || {})) if (x.SOLANA_MAINNET_LABELS.has(String(net).toLowerCase()) && typeof a === "string" && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(a)) add(out, a, o); };
+    for (const [o, v] of crawled) for (const t of v?.tools || []) from(t, o);
+    for (const [o, arr] of regs) for (const t of arr) from(t, o);
+    return out;
+  };
+  const rows = crawled.reduce((n, [, v]) => n + (v.tools || []).length, 0);
+  for (const [kind, net, ref, sync, sliced] of [
+    ["origins", "eip155:8453", refOrigins, () => x.allPayToOrigins("eip155:8453"), () => x.allPayToOriginsAsync("eip155:8453")],
+    ["prices", "eip155:8453", refPrices, () => x.allPayToPrices("eip155:8453"), () => x.allPayToPricesAsync("eip155:8453")],
+    ["solana", null, refSolana, () => x.allSolanaPayToOrigins(), () => x.allSolanaPayToOriginsAsync()],
+  ]) {
+    // Rows read per step, counted by the scan itself: one step per pass is
+    // the one-turn walk this replaced.
+    const gen = x._payToScanStepsForTest(kind, net);
+    let steps = 0, maxRows = 0, before = x._payToScanRowsForTest(), r;
+    do { r = gen.next(); const now = x._payToScanRowsForTest(); maxRows = Math.max(maxRows, now - before); before = now; steps++; } while (!r.done);
+    ok(steps > 20 && maxRows <= 2000, `the ${kind} payTo scan reads at most ${maxRows} of ${rows}+ rows per step (${steps} steps)`);
+    let worst = 0, last = performance.now();
+    const iv = setInterval(() => { const t = performance.now(); worst = Math.max(worst, t - last); last = t; }, 1);
+    const { turns, value: got } = await turnsAdvancing(() => x._payToScanRowsForTest(), sliced);
+    clearInterval(iv);
+    const want = ref(net);
+    // On a clock that moves 50 ms per read, every slice ends after one step,
+    // so the turn count no longer depends on the machine: a pass taken in one
+    // turn still advances in one.
+    const real = performance.now;
+    let fake = real.call(performance);
+    performance.now = () => (fake += 50);
+    let stepped;
+    try { stepped = await turnsAdvancing(() => x._payToScanRowsForTest(), sliced); } finally { performance.now = real; }
+    ok(turns >= 1 && stepped.turns >= 20 && isDeepStrictEqual(stepped.value, ref(net)), `...and the sliced scan yields after each step (${stepped.turns} turns on a stepping clock, ${turns} on the real one)`);
+    ok(want.size > 50 && isDeepStrictEqual(got, want) && isDeepStrictEqual(sync(), want), `...and its sliced and one-turn Maps equal the one-pass Map (${want.size} wallets)`);
+    ok(worst < GAP_MS, `...and the sliced scan never held the loop past ${GAP_MS} ms (worst ${Math.round(worst)} ms)`);
+  }
+  for (const [o] of byOrigin) x.__testSetBazaarTools(o, null);
+  // The caller path: the board refreshes take the sliced forms.
+  const srv = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  ok(/crawledWallets: \(chain\) => allPayToOriginsAsync\(/.test(srv) && /crawledPrices: \(chain\) => allPayToPricesAsync\(/.test(srv) && /\.allSolanaPayToOriginsAsync\(\)/.test(srv) && /knownPayToOrigins: await allPayToOriginsAsync\(/.test(srv), "the Base and Solana boards and the discovery-gap read take the sliced scans");
+  const lb = readFileSync(new URL("../src/leaderboard.js", import.meta.url), "utf8");
+  ok(/await opts\.crawledWallets\(chain\)/.test(lb) && /await opts\.crawledPrices\(chain\)/.test(lb), "and the Base board awaits them");
+}
+
+// --- 1e. one seller listing tens of thousands of tools: the per-seller work
+// the crawl and the readers do on it runs in steps (its listing row, its
+// routable summary, its service key) or reads only the templates of a row's
+// own length (the crawl's template matching), and each answer is the one the
+// one-pass code gives.
+{
+  const BIG = "https://big-catalog.example";
+  const N = 30_000;
+  const SOL = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
+  const tools = Array.from({ length: N }, (_, i) => ({
+    seller: BIG, method: i % 3 ? "GET" : "POST", route: `/v1/item/${i % 5 ? i : `{id}`}/${i % 7}`, slug: `item-${i}`, name: `item ${i}`,
+    description: "catalog row", price: (i % 9) / 1000, networks: i % 4 ? ["eip155:8453"] : ["eip155:8453", SOL],
+    payToByNetwork: { "eip155:8453": `0x${String(i % 300).padStart(40, "b")}`, ...(i % 4 ? {} : { [SOL]: `Big${String(i % 50).padStart(40, "3")}` }) },
+    ...(i % 11 === 0 ? { payToSourceByNetwork: { "eip155:8453": "registry" } } : {}),
+    ...(i % 13 === 0 ? { evmDomainByNetwork: { "eip155:8453": { asset: `0x${"c".repeat(40)}`, name: `USD Coin ${i % 2}` } } } : {}),
+    ...(i === 777 ? { stellarPayTo: `G${"A".repeat(55)}` } : {}),
+    ...(i === 999 ? { algorandPayTo: "B".repeat(58) } : {}),
+    ...(i % 17 === 0 ? { paid: false } : i % 19 === 0 ? { paid: true } : {}),
+  }));
+  const bazaarRows = Array.from({ length: 3000 }, (_, i) => ({ route: `${BIG}/v1/reg/${i}`, networks: ["eip155:137"], payToByNetwork: { "eip155:137": `0x${String(i % 40).padStart(40, "d")}`, "eip155:8453": `0x${String(i % 30).padStart(40, "e")}` }, ...(i === 5 ? { stellarPayTo: `G${"B".repeat(55)}` } : {}) }));
+  x.__testSetBazaarTools(BIG, bazaarRows);
+  // Nothing else pending, so what the drain does next is this entry alone.
+  const drained = async () => { while (x._routeIndexStatsForTest().pending || x._routeIndexStatsForTest().partial) await new Promise((r) => setImmediate(r)); };
+  await drained();
+  const steppingClock = async (fn) => {
+    const real = performance.now;
+    let fake = real.call(performance);
+    performance.now = () => (fake += 3);
+    try { return await fn(); } finally { performance.now = real; }
+  };
+  cache.set(BIG, { manifest: { name: "big", homepage: BIG }, tools, fetchedAt: 1_700_000_100_000, error: null, history: [1, 1, 1] });
+  const v = cache.get(BIG);
+
+  // The service key: the one-pass build, written out here as it ran.
+  const refKey = (() => {
+    const payees = Object.entries(x.allPayTosByNetwork(v.tools)).sort(([a], [b]) => a.localeCompare(b)).map(([net, vals]) => [net, [...vals].map((s) => String(s).toLowerCase()).sort()]);
+    const contracts = v.tools.map((t) => [String(t.method || "GET").toUpperCase(), String(t.route || ""), String(t.slug || ""), String(t.price ?? ""), t.paid === false ? "free" : "paid-or-unknown", [...(t.networks || [])].map(String).sort()])
+      .map((c) => [JSON.stringify(c), c]).sort((a, b) => a[0].localeCompare(b[0])).map((p) => p[1]);
+    return JSON.stringify({ payees, contracts });
+  })();
+  {
+    // Primed by the route index drain, inside its slices. On a clock that
+    // moves 3 ms per read every 12 ms slice ends after a few reads, so the
+    // turn count is the build's own: one turn is a key built in one call.
+    const steps0 = x._serviceKeyStepsForTest();
+    const { turns } = await steppingClock(() => turnsAdvancing(() => x._serviceKeyStepsForTest(), drained));
+    const steps = x._serviceKeyStepsForTest() - steps0;
+    ok(steps >= N / 1024 && turns >= 50, `the ${N}-tool entry's service key is built in ${steps} steps of at most 1024 tools or comparisons, across ${turns} turns of the drain`);
+    ok(x._memoizedServiceKeyForTest(v) === refKey, "...and the key the drain primed is the one-pass key, character for character");
+    // On the real clock, a copy of the entry (a re-crawl) is primed the same way.
+    const again = { ...v };
+    let worst = 0, last = performance.now();
+    const iv = setInterval(() => { const t = performance.now(); worst = Math.max(worst, t - last); last = t; }, 1);
+    cache.set(BIG, again);
+    await drained();
+    clearInterval(iv);
+    ok(x._memoizedServiceKeyForTest(again) === refKey, "...and so is a re-crawled copy's, on the real clock");
+    ok(worst < GAP_MS, `...and the drain that built it never held the loop past ${GAP_MS} ms (worst ${Math.round(worst)} ms)`);
+    cache.set(BIG, v);
+    await drained();
+    // A key on a copy of the entry, built in one call, reads the same.
+    const copy = { ...v };
+    ok(x._exactServiceKeyForTest(copy) === refKey, "the one-call build gives the same key");
+  }
+
+  // The listing row and the routable summary: the one-pass fields, written out.
+  const refRow = (origin, e) => {
+    const reg = origin === BIG ? bazaarRows : [];
+    const both = [...reg, ...(e.tools || [])];
+    return {
+      networks: [...new Set([...(e.tools || []).flatMap((t) => t.networks || []), ...reg.flatMap((t) => t.networks || [])])],
+      stellarWallet: [...(e.tools || []), ...reg].map((t) => t.stellarPayTo).find((w) => typeof w === "string" && /^G[A-Z2-7]{55}$/.test(w)) || null,
+      algorandWallet: [...(e.tools || []), ...reg].map((t) => t.algorandPayTo).find((w) => typeof w === "string" && /^[A-Z2-7]{58}$/.test(w)) || null,
+      payToByNetwork: x.sellerPayToByNetwork(both),
+      payTosByNetwork: x.allPayTosByNetwork(both),
+      ...(e.tools?.some((t) => t.paid !== undefined) ? { paidToolCount: e.tools.filter((t) => t.paid !== false).length } : {}),
+    };
+  };
+  {
+    let worst = 0, last = performance.now();
+    const iv = setInterval(() => { const t = performance.now(); worst = Math.max(worst, t - last); last = t; }, 1);
+    const steps0 = x._sellerFieldStepsForTest();
+    const { turns, value: snap } = await turnsAdvancing(() => x._sellerFieldStepsForTest(), () => x.indexSnapshotAsync(routeCtx));
+    clearInterval(iv);
+    const steps = x._sellerFieldStepsForTest() - steps0;
+    ok(steps >= (2 * N) / 2000 && turns >= 2, `the listing build walks the ${N}-tool seller in ${steps} steps of at most 2000 rows, across ${turns} turns`);
+    ok(worst < GAP_MS, `...and the sliced listing build never held the loop past ${GAP_MS} ms (worst ${Math.round(worst)} ms)`);
+    const pick = (s) => ({ networks: s.networks, stellarWallet: s.stellarWallet, algorandWallet: s.algorandWallet, payToByNetwork: s.payToByNetwork, payTosByNetwork: s.payTosByNetwork, ...(s.paidToolCount !== undefined ? { paidToolCount: s.paidToolCount } : {}) });
+    const remote = snap.sellers.filter((s) => !s.local);
+    const bad = remote.filter((s) => !isDeepStrictEqual(pick(s), refRow(s.origin, cache.get(s.origin))));
+    const big = remote.find((s) => s.origin === BIG);
+    ok(big && big.stellarWallet && big.algorandWallet && big.paidToolCount < N && Object.keys(big.payToByNetwork).length === 3 && bad.length === 0, `...and every seller's tool-derived fields equal the one-pass fields (${remote.length} sellers, ${bad.length} differ${bad[0] ? `: ${bad[0].origin}` : ""})`);
+    ok(isDeepStrictEqual(big.evmDomainByNetwork, { "eip155:8453": { asset: `0x${"c".repeat(40)}`, name: "USD Coin 0" } }), "...and the EIP-712 domain is the first one listed");
+    // The clock fields aside (asOf, and our own entry's fetchedAt, stamped now).
+    const unclocked = (sn) => ({ ...sn, asOf: 0, sellers: sn.sellers.map((s) => (s.local ? { ...s, fetchedAt: 0 } : s)) });
+    ok(isDeepStrictEqual(unclocked(snap), unclocked(x.indexSnapshot(routeCtx))), "the sliced and one-turn listings are the same");
+  }
+  // Rows read per step of a builder, counted by the walks themselves: the big
+  // seller's 66k rows in one step is the one-turn row build this replaced.
+  const maxRowsPerStep = (gen) => {
+    let most = 0, before = x._sellerFieldRowsForTest(), r;
+    do { r = gen.next(); const now = x._sellerFieldRowsForTest(); most = Math.max(most, now - before); before = now; } while (!r.done);
+    return most;
+  };
+  {
+    const most = maxRowsPerStep(x._indexSnapshotStepsForTest(routeCtx));
+    ok(most > 0 && most <= 10_000, `no step of the listing build reads more than ${most} tool rows (the big seller alone has ${2 * (N + 3000)})`);
+  }
+  {
+    const steps0 = x._sellerFieldStepsForTest();
+    const { turns } = await turnsAdvancing(() => x._sellerFieldStepsForTest(), () => x.warmRoutableSellerSummaries());
+    ok(turns >= 2, `the routable summary's walk of it advances across ${turns} turns`);
+    const rows = x.routableSellerSummaries();
+    const row = rows.find((r) => r.origin === BIG);
+    const want = { payToByNetwork: x.sellerPayToByNetwork(v.tools), payTosByNetwork: x.allPayTosByNetwork(v.tools) };
+    ok(row && x._sellerFieldStepsForTest() - steps0 >= N / 2000 && isDeepStrictEqual({ payToByNetwork: row.payToByNetwork, payTosByNetwork: row.payTosByNetwork }, want), `the routable summary walks it in steps too, with the one-pass payTo fields`);
+    // A fresh copy of the entry, so its summary row is built again.
+    cache.set(BIG, { ...v });
+    const most = maxRowsPerStep(x._routableSummaryStepsForTest());
+    ok(most > 0 && most <= 10_000, `no step of the routable summary build reads more than ${most} tool rows (the big seller alone has ${N})`);
+    cache.set(BIG, v);
+  }
+  {
+    // The crawl's template matching: each row compared only with the
+    // templates of its own length, with the answer of a filter over all.
+    const naive = (tpl, concrete) => {
+      if (typeof tpl !== "string" || !tpl.includes("{")) return false;
+      const t = tpl.split("/"), c = String(concrete || "").split("/");
+      if (t.length !== c.length) return false;
+      for (let i = 0; i < t.length; i++) { if (/^\{.+\}$/.test(t[i])) { if (!c[i]) return false; } else if (t[i] !== c[i]) return false; }
+      return true;
+    };
+    const cands = [];
+    for (let i = 0; i < 400; i++) cands.push({ method: i % 2 ? "GET" : "POST", route: ["/a/{id}", `/a/{id}/s${i % 20}`, `/b/${i % 9}/{x}/c`, `/c/{p}/{q}/{r}/${i % 3}`, "/plain/route", "/{all}"][i % 6] });
+    const rowsIn = [];
+    for (let i = 0; i < 3000; i++) rowsIn.push({ method: i % 2 ? "GET" : "POST", methodInferred: i % 5 === 0, route: [`/a/${i}`, `/a/${i}/s${i % 25}`, `/b/${i % 9}/${i}/c`, `/c/${i}/x/y/${i % 3}`, "/a//s1", `/z${i}`, "", null][i % 8] });
+    const c0 = x._templateComparesForTest();
+    let same = 0;
+    for (const b of rowsIn) {
+      const fits = cands.filter((o) => naive(o.route, b.route) && (b.methodInferred || o.method === b.method));
+      const want = fits.length === 1 ? fits[0] : null;
+      if (x._templateMatchForTest(b, cands) === want) same++;
+    }
+    const compares = x._templateComparesForTest() - c0;
+    ok(same === rowsIn.length, `the indexed template match answers as the filter over every template (${same} of ${rowsIn.length} rows)`);
+    ok(compares > 0 && compares < (rowsIn.length * cands.length) / 2, `...comparing ${compares} templates, under half of the ${rowsIn.length * cands.length} a filter over all of them reads`);
+    // stampDeclared on the big catalog, against its templates.
+    const declared = [{ route: "/v1/item/{id}/3" }, { route: "/v1/item/{id}/{n}" }, { route: "/v1/item/5/5" }, { route: "/v1/other/{id}/1" }];
+    const rowsCopy = tools.slice(0, 5000).map((t) => ({ route: t.route }));
+    x.stampDeclared(rowsCopy, declared);
+    const exact = new Set(declared.map((d) => d.route.split("?")[0]));
+    const tpls = [...exact].filter((r) => r.includes("{"));
+    ok(rowsCopy.every((t) => t.declared === (exact.has(t.route) || tpls.some((tpl) => naive(tpl, t.route)))), "stampDeclared marks each row as the template filter does");
+  }
+  cache.delete(BIG);
+  x.__testSetBazaarTools(BIG, null);
+}
+
+// --- 1f. the Base board's registry walk (tens of thousands of listings) runs
+// in steps, with the rows of the one-turn walk.
+{
+  const lb = await import("../src/leaderboard.js");
+  const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+  const items = Array.from({ length: 40_000 }, (_, i) => ({
+    resource: `https://reg${i % 900}.example/r/${i}`, serviceName: i % 3 ? `svc ${i % 900}` : `svc ${i % 900}.example`,
+    accepts: [{ network: "eip155:8453", scheme: "exact", asset: USDC, payTo: `0x${String(i % 1200).padStart(40, "f")}`, maxAmountRequired: String(1000 * (1 + (i % 7))) }],
+  }));
+  const steps0 = lb._extractStepsForTest();
+  let worst = 0, last = performance.now();
+  const iv = setInterval(() => { const t = performance.now(); worst = Math.max(worst, t - last); last = t; }, 1);
+  const { turns, value: sliced } = await turnsAdvancing(() => lb._extractStepsForTest(), () => lb.extractWalletsFromBazaarAsync({ items }));
+  clearInterval(iv);
+  const steps = lb._extractStepsForTest() - steps0;
+  ok(turns >= 2, `the registry walk advances across ${turns} event-loop turns`);
+  const whole = lb.extractWalletsFromBazaar({ items });
+  ok(steps >= items.length / 500 - 1, `the registry walk reads ${items.length} listings in ${steps} steps of 500`);
+  ok(whole.length > 1000 && isDeepStrictEqual(sliced, whole), `...and the sliced walk's rows equal the one-turn rows (${whole.length} wallets)`);
+  ok(worst < GAP_MS, `...and it never held the loop past ${GAP_MS} ms (worst ${Math.round(worst)} ms)`);
+  const src = readFileSync(new URL("../src/leaderboard.js", import.meta.url), "utf8");
+  ok(/let sellers = await extractWalletsFromBazaarAsync\(\{ items \}, chain\)/.test(src), "and the board's refresh takes the sliced walk");
+}
+
+// --- 1g. the cache files (no state database) are written in pieces, with the
+// bytes of the one joined write, a long line and a surrogate pair at a cut too.
+{
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = mkdtempSync(join(tmpdir(), "a402-pieces-"));
+  const PIECE = 4 * 1048576;
+  const first = "[\"https://one.example\",{}]";
+  for (const [head, sep, tail] of [["{\"savedAt\":1,\"entries\":[", ",", "]}"], ["{\"savedAt\":1}\n", "\n", "\n"]]) {
+    // The long line's first pair sits exactly across the first piece's end
+    // (after the head, the first line and a separator), and its second pair
+    // across the next one, so a writer that cut there would split both.
+    const before = PIECE - head.length - first.length - sep.length - 1;
+    const big = "a".repeat(before) + "\u{1F600}" + "b".repeat(PIECE - 2) + "\u{1F601}" + "c".repeat(1000);
+    const lines = [first, big, "x".repeat(PIECE - 2), "\u{1F602}tail", ""];
+    const file = join(dir, "f");
+    const p0 = x._cacheWritePiecesForTest();
+    let worst = 0, last = performance.now();
+    const iv = setInterval(() => { const t = performance.now(); worst = Math.max(worst, t - last); last = t; }, 1);
+    const { turns } = await turnsAdvancing(() => x._cacheWritePiecesForTest(), () => x._writeJoinedInPiecesForTest(file, head, lines, sep, tail));
+    clearInterval(iv);
+    ok(turns >= 2, `a cache write advances across ${turns} event-loop turns`);
+    const pieces = x._cacheWritePiecesForTest() - p0;
+    ok(pieces >= 4 && readFileSync(file).equals(Buffer.from(head + lines.join(sep) + tail, "utf8")), `a cache file is written in ${pieces} pieces, byte for byte the joined write (${JSON.stringify(sep)} between lines)`);
+    ok(worst < GAP_MS, `...and the write never held the loop past ${GAP_MS} ms (worst ${Math.round(worst)} ms)`);
+  }
+  rmSync(dir, { recursive: true, force: true });
+  const idx = readFileSync(new URL("../src/x402-index.js", import.meta.url), "utf8");
+  const fn = idx.slice(idx.indexOf("const writeFiles = async () => {"), idx.indexOf("if (stateDbEnabled()) {", idx.indexOf("const writeFiles = async () => {")));
+  ok((fn.match(/await writeJoinedInPieces\(/g) || []).length === 2 && !/lines\.join\(/.test(fn), "both cache files are written through the piece writer");
 }
 
 // --- 2 + 3. source pins
