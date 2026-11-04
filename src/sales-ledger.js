@@ -851,6 +851,39 @@ export function payerHasPaidSale(payer) {
   if (!p) return false;
   return Boolean(qPayerAnySale.get(p));
 }
+// Returning grant holders (the first-call allowance's operator figure): for
+// each (payer, grant time) pair, the first outside paid sale strictly after
+// the grant. One query per chunk of pairs, joined on idx_sales_payer, never
+// one per wallet.
+const qFirstPaidAfter = db.prepare(`
+  WITH g(payer, gts) AS (SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?))
+  SELECT g.payer AS payer, MIN(s.ts) AS first_ts
+    FROM g JOIN sales s ON s.payer = g.payer AND s.ts > g.gts
+   WHERE s.internal = 0 AND s.rail IN ${PAYING_RAILS_SQL}
+   GROUP BY g.payer`);
+export const FIRST_PAID_AFTER_CHUNK = 500;
+function* firstPaidSaleAfterSteps(grants, chunk) {
+  const pairs = [];
+  for (const g of Array.isArray(grants) ? grants : []) {
+    const p = normalizePayerAddress(g?.payer);
+    const t = Number(g?.grantedAtMs);
+    if (p && Number.isFinite(t)) pairs.push([p, t]);
+  }
+  const out = new Map();
+  const size = Math.max(1, Math.min(FIRST_PAID_AFTER_CHUNK, Number(chunk) || FIRST_PAID_AFTER_CHUNK));
+  for (let i = 0; i < pairs.length; i += size) {
+    for (const r of qFirstPaidAfter.all(JSON.stringify(pairs.slice(i, i + size)))) out.set(r.payer, Number(r.first_ts));
+    yield;
+  }
+  return out;
+}
+/** Map of payer to the ts of its first outside paid sale after its grant
+ *  time, for `grants` = [{ payer, grantedAtMs }]. Payers are normalized as the
+ *  ledger stores them (EVM lowercased, other chains case-exact). Chunked, and
+ *  spread over event-loop turns like the summaries. Database mode: the mirror. */
+export function firstPaidSaleAfterAsync(grants, { chunk = FIRST_PAID_AFTER_CHUNK } = {}) {
+  return runStepsAsync(firstPaidSaleAfterSteps(grants, chunk));
+}
 const qPayerByNetwork = db.prepare(`
   SELECT network, COUNT(*) AS n, SUM(price_usd) AS usd
   FROM sales WHERE payer = ? AND rail IN ${PAYING_RAILS_SQL} AND ts >= ?

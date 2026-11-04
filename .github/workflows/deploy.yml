@@ -3283,6 +3283,8 @@ jobs:
           t node scripts/test-mpp-agents-weekly.js
           # Arrival path per sale (mcp, client package, http) on the operator surfaces; sweep/burst cohorts; the Gateway test buyer is ours
           t node scripts/test-sale-path.js
+          # First-call allowance returning payers (operator view): granted wallets with a later outside paid sale, and within 7 days; one batched ledger read, cached (offline, temp SQLite ledger)
+          t node scripts/test-first-call-allowance-returned.js
           t node scripts/test-attest-kit.js
           # One mirror pull in flight; a fresh lookup during a running pull waits and pulls again (offline)
           t node scripts/test-single-flight.js
