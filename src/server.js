@@ -1827,16 +1827,33 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
     noteExcluded(1);
     return false;
   });
-  // Judged order over gated candidates (src/tool-judge.js); injection-screened text only.
-  // A pinned target was already chosen by a decision; it is not re-judged.
+  // Judged order over gated candidates (src/tool-judge.js). The judge reads
+  // each listing through the shared judge screen (src/listing-screen.js
+  // judgeReadableText, the one decide's judge reads): a listing the screen
+  // flags whole reaches it with no description or tags, and every sentence
+  // written to the reader is dropped from the rest; the seller-written slug
+  // and tags are screened the same way. A pinned target was already chosen
+  // by a decision; it is not re-judged.
   let judgedSelection = null;
   if (candidates.length && !onlyUrl) {
+    const { judgeReadableText } = await import("./listing-screen.js");
+    const { judgedOverrideAllowed } = await import("./tools/route-execute.js");
     const hostOfSeller = (u) => { try { return new URL(u).host; } catch { return String(u || ""); } };
-    const ordered = await orderByJudgment(task, candidates, (r) => {
-      const desc = String(r.description || r.name || "");
-      const clean = !looksLikeListingInjection(desc);
-      return { name: `${hostOfSeller(r.seller || r.url)} ${r.slug || ""}`.trim(), description: clean ? desc : "", tags: clean && Array.isArray(r.tags) ? r.tags : [] };
+    let ordered = await orderByJudgment(task, candidates, (r) => {
+      const raw = String(r.description || r.name || "");
+      const clean = !looksLikeListingInjection(raw);
+      const slug = judgeReadableText(String(r.slug || ""), { links: false });
+      const tags = clean && Array.isArray(r.tags) ? r.tags.map((t) => judgeReadableText(String(t), { links: false })).filter(Boolean) : [];
+      return { name: `${hostOfSeller(r.seller || r.url)} ${slug}`.trim(), description: clean ? judgeReadableText(raw, { links: false }) : "", tags };
     });
+    // A judged reorder stands only when its pick's own match score meets the
+    // floor (judgedOverrideAllowed, src/tools/route-execute.js); below it the
+    // lexical order is kept and the judge's answer rides on the receipt.
+    if (!ordered.refused && ordered.items?.[0] && ordered.items[0] !== candidates[0]
+      && (ordered.selection?.method === "judged" || ordered.selection?.method === "judged-tie")) {
+      const gate = judgedOverrideAllowed(task, candidates, ordered.items[0]);
+      if (!gate.ok) ordered = { ...ordered, items: candidates, selection: { method: "lexical", judged: { ...ordered.selection }, overrideRefused: { reason: "below_lexical_floor", score: gate.score, floor: gate.floor } } };
+    }
     judgedSelection = ordered.selection;
     if (ordered.refused) {
       gateDrops.byReason.judged_no_match = candidates.length;
@@ -7066,12 +7083,23 @@ function requestShape(req) {
 // A single client firing distinct queries in parallel froze the server for
 // 3-18 s at a time and timed out payment relays (2026-09-25), so each client
 // gets a budget of uncached computes; cache hits never count. Our own signed
-// probes and loopback callers (the MCP connector) are exempt.
+// probes and our own loopback callers are exempt.
 const discoveryComputeLimiter = createRateLimiter("discovery-compute", {
   perMin: Number(process.env.DISCOVERY_COMPUTE_PER_MIN) || 30,
   perHour: Number(process.env.DISCOVERY_COMPUTE_PER_HOUR) || 600,
 });
-const isLoopbackIp = (ip) => ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
+// Who is a loopback caller is read from the connection, never from req.ip:
+// req.ip comes from X-Forwarded-For, so a request naming 127.0.0.1 there is
+// an outside client and is limited like any other. Exempt: the MCP
+// connector's marked replay (isMcpLoopback: the marker plus a loopback
+// socket), and a direct local connection that carries no forwarding header
+// at all (a sweep or script on the same machine; nothing that came through a
+// proxy reaches the server that way).
+const LOOPBACK_SOCKET = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+const isDiscoveryLoopback = (req) => isMcpLoopback(req)
+  || (LOOPBACK_SOCKET.has(String(req?.socket?.remoteAddress || ""))
+    && req.headers["x-forwarded-for"] === undefined && req.headers.forwarded === undefined
+    && req.headers["cf-connecting-ip"] === undefined && req.headers["x-real-ip"] === undefined);
 const discoveryCpuBudget = createComputeBudget();
 // Each client's own share of discovery CPU (2026-10-01). One client sending
 // bursts of about twenty distinct uncached /api/route searches every fifteen
@@ -7140,7 +7168,7 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
         return res.json(hit);
       }
     }
-    if (!synthetic && !isLoopbackIp(clientIp(req)) && discoveryComputeLimiter.check(clientIp(req)).limited) {
+    if (!synthetic && !isDiscoveryLoopback(req) && discoveryComputeLimiter.check(clientIp(req)).limited) {
       status = 429;
       res.set("Retry-After", "60");
       return res.status(429).json({
@@ -7149,7 +7177,7 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
         retryAfterSeconds: 60,
       });
     }
-    const clientBudget = !synthetic && !isLoopbackIp(clientIp(req)) ? discoveryClientBudget(clientIp(req)) : null;
+    const clientBudget = !synthetic && !isDiscoveryLoopback(req) ? discoveryClientBudget(clientIp(req)) : null;
     if (clientBudget?.over()) {
       status = 429;
       res.set("Retry-After", "10");
@@ -7162,12 +7190,12 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
     // Global CPU budget for uncached searches across every caller (the
     // per-IP limiter above cannot see many addresses at once). Refused before
     // computing; cache hits above never reach this.
-    if (!synthetic && !isLoopbackIp(clientIp(req)) && discoveryCpuBudget.over()) {
+    if (!synthetic && !isDiscoveryLoopback(req) && discoveryCpuBudget.over()) {
       status = 503; shed = true;
       noteShed("discovery-budget");
       return shedResponse(res, 2);
     }
-    if (!synthetic && !isLoopbackIp(clientIp(req)) && discoveryInFlight.live() >= DISCOVERY_MAX_INFLIGHT) {
+    if (!synthetic && !isDiscoveryLoopback(req) && discoveryInFlight.live() >= DISCOVERY_MAX_INFLIGHT) {
       status = 503; shed = true;
       noteShed("discovery-inflight");
       return shedResponse(res, 2, { reason: "discovery-inflight" });

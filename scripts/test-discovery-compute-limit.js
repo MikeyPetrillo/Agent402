@@ -57,7 +57,20 @@ try {
   ok((await find("distinct query number 7", "198.51.100.4")).status === 200, "another client is unaffected");
   let loopOk = true;
   for (let i = 0; i < 8; i++) if ((await find(`loopback query ${i}`)).status !== 200) loopOk = false;
-  ok(loopOk, "loopback callers (MCP connector, local sweeps) are never limited");
+  ok(loopOk, "a direct local connection with no forwarding header (a local sweep) is never limited");
+  // The exemption is read from the connection, not from X-Forwarded-For: a
+  // request that names 127.0.0.1 there is an outside client like any other.
+  const spoofed = [];
+  for (let i = 0; i < 7; i++) spoofed.push((await find(`forwarded loopback query ${i}`, "127.0.0.1")).status);
+  ok(spoofed.slice(0, 5).every((s) => s === 200) && spoofed.slice(5).every((s) => s === 429), `X-Forwarded-For: 127.0.0.1 is limited like any client (${spoofed.join(",")})`);
+  // The MCP connector's marked replay (marker plus a loopback socket) stays
+  // exempt, whatever buyer address it forwards.
+  let mcpOk = true;
+  for (let i = 0; i < 8; i++) {
+    const r = await fetch(`${base}/api/find?q=${encodeURIComponent(`connector query ${i}`)}`, { headers: { "X-Forwarded-For": "203.0.113.9", "X-Agent402-Via": "mcp" } });
+    if (r.status !== 200) mcpOk = false;
+  }
+  ok(mcpOk, "the MCP connector's marked loopback replay is never limited, even for a buyer past its budget");
 } finally {
   proc.kill("SIGKILL");
 }

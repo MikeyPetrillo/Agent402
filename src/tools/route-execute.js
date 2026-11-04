@@ -169,6 +169,93 @@ export function dispatchable(def) {
   return { ok: true };
 }
 
+// OUR OWN WALLETS ARE NEVER A SELLER. A listing that fronts this host (a
+// www or platform twin, or an outside name pointed at it) carries our own
+// payTo, and the router would then pay our treasury from a spending wallet:
+// a self-payment booked as a purchase. Every address we receive or spend on
+// is refused before anything is signed: the per-rail payTo and spending
+// addresses from the environment, and every internal wallet revenue-live.js
+// already holds apart from revenue (treasury, spending wallets, burners,
+// test buyers). EVM addresses compare lowercased; base58, Stellar and
+// Algorand addresses compare exactly as written.
+const OWN_ADDRESS_ENV = ["WALLET_ADDRESS", "TEMPO_RECIPIENT_ADDRESS", "X402_UPSTREAM_BUYER_ADDRESS", "SOLANA_WALLET_ADDRESS", "STELLAR_WALLET_ADDRESS", "ALGORAND_WALLET_ADDRESS", "ALGORAND_UPSTREAM_BUYER_ADDRESS"];
+let ownWalletSets = null;
+async function loadOwnWalletSets() {
+  if (!ownWalletSets) {
+    // Loaded on first use: revenue-live.js is a large module, and this file
+    // is imported by the index and the router worker, which never pay.
+    try {
+      const m = await import("../revenue-live.js");
+      ownWalletSets = { evm: m.OUR_EVM_WALLETS, other: [m.OUR_SOLANA_WALLETS, m.OUR_STELLAR_WALLETS, m.OUR_ALGORAND_WALLETS] };
+    } catch { ownWalletSets = { evm: new Set(), other: [] }; }
+  }
+  return ownWalletSets;
+}
+/** Is `addr` one of our own wallets? `sets` is injectable for tests. */
+export async function isOwnPayoutAddress(addr, { sets = null, env = process.env } = {}) {
+  const a = typeof addr === "string" ? addr.trim() : "";
+  if (!a) return false;
+  const isEvm = /^0x[0-9a-fA-F]{40}$/.test(a);
+  for (const k of OWN_ADDRESS_ENV) {
+    const v = String(env[k] || "").trim();
+    if (v && (isEvm ? v.toLowerCase() === a.toLowerCase() : v === a)) return true;
+  }
+  const s = sets || await loadOwnWalletSets();
+  if (isEvm) return s.evm.has(a.toLowerCase());
+  return s.other.some((set) => set.has(a));
+}
+/** The first of a candidate's payout addresses that is ours, or null: the
+ *  address it will be paid at (provenPayTo, the one the payer re-checks the
+ *  signed accept against) and the wallets its evidence was measured at. */
+export async function ownPayoutOf(ext, opts = {}) {
+  const addrs = [ext?.provenPayTo, ext?.payTo, ...(Array.isArray(ext?.evidenceWallets) ? ext.evidenceWallets : [])];
+  for (const a of addrs) if (await isOwnPayoutAddress(a, opts)) return String(a);
+  return null;
+}
+
+// A JUDGED PICK NEEDS LEXICAL SUPPORT. The seller judge reads seller-written
+// text, so a listing worded to win the judge could otherwise be bought ahead
+// of the top-ranked seller on wording alone. The judge may reorder outside
+// candidates only toward one whose own match score against the task meets a
+// floor drawn from the index ranker's scoring (src/x402-index.js routeQuery:
+// 10 per query term that is a whole slug word, 4 per partial slug hit, 2 per
+// name hit, 1 per description or tag hit), a row's `score`:
+//   - at least JUDGED_OVERRIDE_MIN_SCORE (4): one slug hit, or two terms in
+//     the name, so a match on description words alone, the part a seller
+//     writes freely, does not carry an override;
+//   - at least JUDGED_OVERRIDE_MIN_SHARE (half) of the best score among the
+//     candidates, so a pick far below the closest match is not taken.
+// Below the floor the lexical order stands (the judge's answer is kept on the
+// receipt). Rows from a catalog that carries no score (the Tempo and
+// Algorand legs) are scored here with the same weights.
+export const JUDGED_OVERRIDE_MIN_SCORE = 4;
+export const JUDGED_OVERRIDE_MIN_SHARE = 0.5;
+const scoreTerms = (task) => [...new Set(String(task || "").toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((t) => t.length >= 2))].slice(0, 32);
+export function lexicalScoreOf(task, row) {
+  if (Number.isFinite(row?.score)) return row.score;
+  const terms = scoreTerms(task);
+  const slugWords = String(row?.slug || "").toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  const name = String(row?.name || "").toLowerCase();
+  const hay = `${row?.description || ""} ${Array.isArray(row?.tags) ? row.tags.join(" ") : ""}`.toLowerCase();
+  let s = 0;
+  for (const t of terms) {
+    if (slugWords.includes(t)) s += 10; else if (slugWords.some((w) => w.includes(t))) s += 4;
+    if (name.includes(t)) s += 2;
+    if (hay.includes(t)) s += 1;
+  }
+  return s;
+}
+export function judgedOverrideAllowed(task, candidates, chosen) {
+  const list = Array.isArray(candidates) ? candidates : [];
+  if (!chosen || chosen === list[0]) return { ok: true };
+  const scored = list.every((r) => Number.isFinite(r?.score));
+  const scoreOf = (r) => (scored ? r.score : lexicalScoreOf(task, { ...r, score: undefined }));
+  const best = Math.max(0, ...list.map(scoreOf));
+  const score = scoreOf(chosen);
+  const floor = Math.max(JUDGED_OVERRIDE_MIN_SCORE, best * JUDGED_OVERRIDE_MIN_SHARE);
+  return score >= floor ? { ok: true, score, floor } : { ok: false, score, floor, best };
+}
+
 // THE BASE SPENDING WALLET'S LAST READING, for a refusal before signing.
 // upstreamBuyerStatus keeps its own 5 min cache (the one /api/gateway-status
 // fills), so a warm reading lands within one event-loop turn; a cold one
@@ -485,6 +572,14 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           // Any spelling of the chain's id on the seller's row counts.
           if (!(ext.url && Array.isArray(ext.networks) && ext.networks.some((n) => EXTERNAL_CHAIN_BY_NETWORK[n] === chain))) {
             lastErr = bad(`External seller "${ext.seller}" does not offer ${chain} settlement - cannot pay it from the ${chain} spending wallet.`, 409);
+            if (hasNext) continue; throw lastErr;
+          }
+          // Never our own wallet (ownPayoutOf above): refused before any
+          // booking or signature, and the next candidate is tried.
+          const ownPayout = await ownPayoutOf(ext);
+          if (ownPayout) {
+            console.warn(`[sor] refusing ${chain} candidate ${ext.seller}: it is paid at this host's own wallet ${ownPayout.slice(0, 10)}…`);
+            lastErr = bad(`External seller "${ext.seller}" is paid at one of this host's own wallets; the router never pays itself. Nothing was spent and nothing is charged.`, 409);
             if (hasNext) continue; throw lastErr;
           }
           const extWire = ext.wire || "x402";
