@@ -101,8 +101,12 @@ const src = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8")
 ok(/refreshed \$\{revenueSnapshotCadence\(\)\}/.test(src("revenue-live.js")), "/revenue prints the live scan's cadence from the constant");
 ok(/refreshed \$\{revenueLedgerCadence\(\)\}/.test(src("revenue-live.js")), "/revenue prints the ledger's cadence from the constant");
 ok(/allCaughtUp \? REVENUE_LEDGER_SYNC_MS :/.test(src("revenue-ledger.js")), "the ledger waits the constant the page prints");
-const pages = ["ledger-leaderboard.js", "ledger-home.js", "what-is-x402.js", "pages.js", "tools/x402-kit.js"];
-ok(pages.every((f) => /leaderboardCadence\(\)/.test(src(f)) && !/[Hh]ourly (on-chain )?snapshot|refreshe[sd] hourly|>HOURLY</.test(src(f))), "every leaderboard surface says the cadence from the constant, none says hourly");
+const TYPED_HOURLY = /[Hh]ourly (on-chain )?snapshot|refreshe[sd] hourly|>HOURLY</;
+const pages = ["ledger-leaderboard.js", "what-is-x402.js", "pages.js", "tools/x402-kit.js"];
+ok(pages.every((f) => /leaderboardCadence\(\)/.test(src(f)) && !TYPED_HOURLY.test(src(f))), "every leaderboard surface says the cadence from the constant, none says hourly");
+// The home page links to /leaderboard and shows no board, so it states no
+// cadence; it must never type one either.
+ok(!TYPED_HOURLY.test(src("ledger-home.js")) && /href="\/leaderboard"/.test(src("ledger-home.js")), "the home page links to /leaderboard and types no cadence");
 const { ledgerLeaderboardPage } = await import("../src/ledger-leaderboard.js");
 let html = "";
 try { html = String(await ledgerLeaderboardPage({ snapshot: { rows: [], totalSellers: 0, asOf: new Date(clock).toISOString(), windowLabel: "7d" } }) || ""); } catch { html = ""; }
