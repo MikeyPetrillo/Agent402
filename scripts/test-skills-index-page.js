@@ -13,7 +13,16 @@ const FLAGSHIP = ["security-audit", "trend-analysis", "structured-scrape", "docu
 const html = skillsIndex(BASE_URL);
 
 // --- real data rendering ------------------------------------------------------
-ok(html.includes("Seven tools.") && html.includes("One <span"), "hero H1 renders");
+// The h1 names the page (DESIGN.md voice: no slogan titles); the seven-tool
+// comparison it used to sloganize is in the lede and the side table.
+ok(/<h1[^>]*>Skill packs<\/h1>/.test(html) && html.includes("Auditing a domain takes seven tools"), "hero H1 names the page and the lede keeps the seven-tool comparison");
+// One call to action per target (a repeated "Browse the packs" or a second
+// /docs#add link was cut): each CTA button points somewhere different.
+{
+  const ctas = [...html.matchAll(/<a class="btn[^"]*" href="([^"]+)"/g)].map((m) => m[1]);
+  ok(ctas.length === new Set(ctas).size, `no two buttons share a target (${ctas.join(", ")})`);
+  ok((html.match(/href="\/docs#add"/g) || []).length === 1, "the connector setup target is linked once");
+}
 ok(html.includes(`${SKILL_PACKS.length} packs, ${PACK_PRICE_RANGE.text}`) && html.includes("none priced above the sum of its tools"), "hero cites the real live pack count, the derived price range and the rule");
 ok(!/\d\+ (skill )?packs|\d\+ multi-tool/.test(html), "the pack count is exact (derived from SKILL_PACKS), never written as a floor");
 ok(/failure paths<\/th><td[^>]*>7<\/td><td[^>]*>1 envelope</.test(html), "a pack still has one failure path to handle: its partial-success envelope");
