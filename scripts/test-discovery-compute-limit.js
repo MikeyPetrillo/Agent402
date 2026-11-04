@@ -35,6 +35,9 @@ ok(a2 !== a1 && a2.length === a1.length + 1, `a new seller in the cache rebuilds
 ok(Object.isFrozen(a2), "the shared list is frozen, so no caller can mutate another's view");
 
 // --- 1 + 2. booted server
+// The connector marker carries a per-process secret (src/mcp-loopback.js); the
+// booted server inherits this one.
+const MCP_MARKER = `mcp;k=${(process.env.MCP_LOOPBACK_TEST_SECRET = "7c".repeat(24))}`;
 const port = await getFreePort();
 const proc = spawn(process.execPath, ["src/server.js"], {
   env: { ...process.env, FREE_MODE: "true", PORT: String(port), X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", DISCOVERY_COMPUTE_PER_MIN: "5", DISCOVERY_COMPUTE_PER_HOUR: "100" },
@@ -65,9 +68,14 @@ try {
   ok(spoofed.slice(0, 5).every((s) => s === 200) && spoofed.slice(5).every((s) => s === 429), `X-Forwarded-For: 127.0.0.1 is limited like any client (${spoofed.join(",")})`);
   // The MCP connector's marked replay (marker plus a loopback socket) stays
   // exempt, whatever buyer address it forwards.
+  // A marker without the secret is a client like any other, however local
+  // its socket (a self-host behind a same-host proxy).
+  const forged = [];
+  for (let i = 0; i < 3; i++) forged.push((await fetch(`${base}/api/find?q=${encodeURIComponent(`forged connector query ${i}`)}`, { headers: { "X-Forwarded-For": "203.0.113.9", "X-Agent402-Via": "mcp" } })).status);
+  ok(forged.every((s) => s === 429), `a client-sent marker is limited (${forged.join(",")})`);
   let mcpOk = true;
   for (let i = 0; i < 8; i++) {
-    const r = await fetch(`${base}/api/find?q=${encodeURIComponent(`connector query ${i}`)}`, { headers: { "X-Forwarded-For": "203.0.113.9", "X-Agent402-Via": "mcp" } });
+    const r = await fetch(`${base}/api/find?q=${encodeURIComponent(`connector query ${i}`)}`, { headers: { "X-Forwarded-For": "203.0.113.9", "X-Agent402-Via": MCP_MARKER } });
     if (r.status !== 200) mcpOk = false;
   }
   ok(mcpOk, "the MCP connector's marked loopback replay is never limited, even for a buyer past its budget");

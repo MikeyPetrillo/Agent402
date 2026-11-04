@@ -39,6 +39,7 @@ import { perReplica } from "./rate-limit.js";
 import { cacheGet, cacheSet, cacheEnabled } from "./cache.js";
 import { decodesAsMppCredential, decodesAsX402Payment } from "./payment-attempt.js";
 import { createHash } from "node:crypto";
+import { isMcpLoopback } from "./mcp-loopback.js";
 
 export const DEFAULT_UNPAID_QUOTE_BUDGET_PER_HOUR = 3000;
 export const UNPAID_QUOTE_BUDGET_KEY_CAP = 20_000;
@@ -114,15 +115,10 @@ export function isExemptUserAgent(ua) {
   return OWN_UA.test(s) || !!indexerFor(s);
 }
 
-const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 /** The MCP connector replays a tool call to our own route over loopback and
- *  marks it. The header alone is caller-settable, so it counts only when the
- *  socket itself is local: a request arriving through the edge proxy never is. */
-export function isMcpLoopback(req) {
-  const via = String(req?.headers?.["x-agent402-via"] || "").trim().toLowerCase();
-  if (via !== "mcp") return false;
-  return LOOPBACK.has(String(req?.socket?.remoteAddress || ""));
-}
+ *  marks it with a per-process secret; the marker counts only with that
+ *  secret on a local socket (src/mcp-loopback.js). */
+export { isMcpLoopback };
 
 export function isExemptPath(path) {
   const p = normalizeCatalogPath(path);

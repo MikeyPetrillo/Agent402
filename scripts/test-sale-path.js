@@ -50,6 +50,9 @@ const OLD = "0x00000000000000000000000000000000000a0001";
   f.close();
 }
 process.env.SALES_LEDGER_DB = FILE;
+// The connector marker carries a per-process secret (src/mcp-loopback.js); the
+// booted server below inherits this one, the in-process modules read it too.
+const MCP_MARKER = `mcp;k=${(process.env.MCP_LOOPBACK_TEST_SECRET = "5a".repeat(24))}`;
 const sp = await import("../src/sale-path.js");
 const sl = await import("../src/sales-ledger.js");
 const { OUR_EVM_WALLETS } = await import("../src/revenue-live.js");
@@ -57,9 +60,11 @@ const { OUR_EVM_WALLETS } = await import("../src/revenue-live.js");
 // ---- the path of a request ------------------------------------------------------
 {
   const req = (headers, addr = "203.0.113.9") => ({ headers, socket: { remoteAddress: addr } });
-  ok(sp.salePathOf(req({ "x-agent402-via": "mcp" }, "127.0.0.1")) === "mcp", "the connector's marker on a loopback socket reads mcp");
-  ok(sp.salePathOf(req({ "x-agent402-via": "mcp", "user-agent": "agent402-client/0.8.21" }, "::ffff:127.0.0.1")) === "mcp", "the loopback marker wins over a User-Agent");
-  ok(sp.salePathOf(req({ "x-agent402-via": "mcp" })) === "http", "the marker from a remote socket is plain http");
+  ok(sp.salePathOf(req({ "x-agent402-via": MCP_MARKER }, "127.0.0.1")) === "mcp", "the connector's marker on a loopback socket reads mcp");
+  ok(sp.salePathOf(req({ "x-agent402-via": "mcp" }, "127.0.0.1")) === "http", "a marker without the secret on a loopback socket is plain http");
+  ok(sp.salePathOf(req({ "x-agent402-via": `mcp;k=${"00".repeat(24)}` }, "127.0.0.1")) === "http", "a marker with the wrong secret is plain http");
+  ok(sp.salePathOf(req({ "x-agent402-via": MCP_MARKER, "user-agent": "agent402-client/0.8.21" }, "::ffff:127.0.0.1")) === "mcp", "the loopback marker wins over a User-Agent");
+  ok(sp.salePathOf(req({ "x-agent402-via": MCP_MARKER })) === "http", "the marker from a remote socket is plain http");
   ok(sp.salePathOf(req({ "user-agent": "agent402-client/0.8.21" })) === "agent402-client/0.8.21", "an agent402-client User-Agent books its product token");
   ok(sp.salePathOf(req({ "user-agent": "agent402-strands/0.1.13 agent402-client/0.8.21" })) === "agent402-strands/0.1.13", "an adapter built on the client books the adapter's own token");
   ok(sp.salePathOf(req({ "user-agent": "agent402-mcp/0.13.23" })) === "agent402-mcp/0.13.23", "the stdio MCP package books its token");
@@ -205,7 +210,7 @@ try {
   })).toString("base64");
   const buy = (payer, headers) => fetch(`${B}/api/uuid`, { headers: { "payment-signature": credential(payer), ...headers } });
   // The connector's loopback: the marker the connector sets (src/mcp-mpp.js), on a local socket.
-  const r1 = await buy("0x00000000000000000000000000000000000b0001", { "x-agent402-via": "mcp", "user-agent": "node" });
+  const r1 = await buy("0x00000000000000000000000000000000000b0001", { "x-agent402-via": MCP_MARKER, "user-agent": "node" });
   const r2 = await buy("0x00000000000000000000000000000000000b0002", { "user-agent": "agent402-client/0.8.21" });
   const r3 = await buy("0x00000000000000000000000000000000000b0003", { "user-agent": "curl/8.7.1" });
   ok(r1.status === 200 && r2.status === 200 && r3.status === 200, `three paid calls answered 200 (${r1.status}, ${r2.status}, ${r3.status})`);
@@ -232,7 +237,7 @@ try {
   ok(!/byPath|agent402-client\/0\.8|organicSales|cohortSales/.test(pub), "nothing of it reaches the public stats or gateway status");
   // The connector really sends that marker on its loopback (the caller path).
   const mpp = readFileSync(new URL("../src/mcp-mpp.js", import.meta.url), "utf8");
-  ok(/"X-Agent402-Via": "mcp"/.test(mpp), "src/mcp-mpp.js sets the marker the ledger reads");
+  ok(/\.\.\.mcpLoopbackHeaders\(\)/.test(mpp), "src/mcp-mpp.js sets the marker the ledger reads");
 } catch (e) {
   ok(false, e?.stack || String(e));
   for (const l of serverLog.slice(-25)) console.error("  server:", l);

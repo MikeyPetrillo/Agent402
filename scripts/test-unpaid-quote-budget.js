@@ -41,6 +41,9 @@ import { getFreePorts } from "./lib/free-port.js";
 const POW_SECRET = "test-unpaid-quote-budget-secret";
 process.env.POW_SECRET = POW_SECRET;
 delete process.env.UNPAID_QUOTE_BUDGET_PER_HOUR;
+// The connector marker carries a per-process secret (src/mcp-loopback.js); the
+// booted servers below inherit this one, the in-process module reads it too.
+const MCP_MARKER = `mcp;k=${(process.env.MCP_LOOPBACK_TEST_SECRET = "6b".repeat(24))}`;
 
 const {
   DEFAULT_UNPAID_QUOTE_BUDGET_PER_HOUR, UNPAID_QUOTE_BUDGET_LOG_CAP, createUnpaidQuoteBudget, unpaidQuoteBudgetPerHour,
@@ -160,8 +163,9 @@ ok(!hasSettlementReceipt({ statusCode: 200, getHeader: (k) => (k.toLowerCase() =
 ok(!hasSettlementReceipt({ statusCode: 402, getHeader: () => "Payment-Receipt" }) && !hasSettlementReceipt({ statusCode: 200, getHeader: () => undefined }) && !hasSettlementReceipt(null), "a refused response, a response with no receipt and no response at all are not settlements");
 ok(isExemptUserAgent("x402scan/1.0") && isExemptUserAgent("Mozilla/5.0 (compatible; Googlebot/2.1)") && isExemptUserAgent("agent402-ci-sweep/1.0 (+https://agent402.tools/crawler)"), "named indexers, search crawlers and our own User-Agents are exempt");
 ok(!isExemptUserAgent("curl/8.4") && !isExemptUserAgent("") && !isExemptUserAgent("python-httpx/0.27"), "an unnamed client is not exempt");
-ok(isMcpLoopback({ headers: { "x-agent402-via": "mcp" }, socket: { remoteAddress: "127.0.0.1" } }) && isMcpLoopback({ headers: { "x-agent402-via": "MCP" }, socket: { remoteAddress: "::ffff:127.0.0.1" } }), "the MCP connector's loopback is recognized");
-ok(!isMcpLoopback({ headers: { "x-agent402-via": "mcp" }, socket: { remoteAddress: "10.0.0.5" } }), "the loopback marker from a non-local socket is ignored (the header alone is caller-settable)");
+ok(isMcpLoopback({ headers: { "x-agent402-via": MCP_MARKER }, socket: { remoteAddress: "127.0.0.1" } }) && isMcpLoopback({ headers: { "x-agent402-via": MCP_MARKER }, socket: { remoteAddress: "::ffff:127.0.0.1" } }), "the MCP connector's loopback is recognized");
+ok(!isMcpLoopback({ headers: { "x-agent402-via": MCP_MARKER }, socket: { remoteAddress: "10.0.0.5" } }), "the loopback marker from a non-local socket is ignored (the header alone is caller-settable)");
+ok(!isMcpLoopback({ headers: { "x-agent402-via": "mcp" }, socket: { remoteAddress: "127.0.0.1" } }), "a marker without the secret on a local socket is not the connector (a same-host proxy)");
 ok(!isMcpLoopback({ headers: {}, socket: { remoteAddress: "127.0.0.1" } }), "a local socket without the marker is not the connector");
 ok(isExemptPath("/mcp") && isExemptPath("/api/pricing") && isExemptPath("/openapi.json") && isExemptPath("/.well-known/x402") && !isExemptPath("/api/uuid"), "/mcp and the discovery surfaces are exempt paths, a tool route is not");
 
@@ -415,7 +419,9 @@ try {
   ok(hb.every((s) => s !== 429), `a signed heartbeat probe from the throttled client is never budgeted (got ${[...new Set(hb)].join(",")})`);
   const forged = await call(P, "/api/uuid", { headers: { "x-heartbeat-token": "forged-token-value-000000000000" } });
   ok(forged.status === 429, `a forged heartbeat token is counted like any other request (got ${forged.status})`);
-  const mcp = await call(P, "/api/uuid", { headers: { "x-agent402-via": "mcp" } });
+  const forgedMcp = await call(P, "/api/uuid", { headers: { "x-agent402-via": "mcp" } });
+  ok(forgedMcp.status === 429, `a marker without the secret is budgeted like any client (got ${forgedMcp.status})`);
+  const mcp = await call(P, "/api/uuid", { headers: { "x-agent402-via": MCP_MARKER } });
   ok(mcp.status !== 429, `the MCP connector's loopback (local socket + marker) is not budgeted (got ${mcp.status})`);
 
   // One address, two programs: two clients.

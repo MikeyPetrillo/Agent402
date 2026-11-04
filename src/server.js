@@ -7,6 +7,7 @@ import { carriesPaymentAttempt, registerOfferedNetworks } from "./payment-attemp
 import { retiredEntryFor, assertRetiredRegistryConsistent, retirementHeaders, RETIRED_CONVERTERS_AT } from "./retired-tools.js";
 import { createTrafficStore, trafficMiddleware } from "./traffic-classifier.js";
 import { redisSharedSettled, createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath } from "./unpaid-quote-budget.js";
+import { stripMcpMarker } from "./mcp-loopback.js";
 import { RAILS_OR, RAILS, x402EvmOnly, x402RailsFor } from "./rails.js";
 import { onGatedRailOffered } from "./gated-rails.js";
 // The networks a PUBLIC surface names (src/public-networks.js): the
@@ -2473,6 +2474,10 @@ app.disable("x-powered-by");
 // percent-encoding) is rewritten to the catalog spelling first, query kept,
 // so every gate and the handler see the same path.
 let catalogPathByFold = null;
+// The MCP connector's loopback marker is read and removed before anything
+// else (src/mcp-loopback.js): a client-sent one is dropped, a genuine one is
+// remembered on the request and its secret never reaches a handler.
+app.use(stripMcpMarker);
 app.use((req, _res, next) => {
   if (!catalogPathByFold) {
     catalogPathByFold = new Map();

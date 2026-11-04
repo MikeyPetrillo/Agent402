@@ -88,6 +88,34 @@ ok(Array.isArray(challengesFromHeader(null)) && challengesFromHeader("garbage").
   await loop({ def: { route: "GET /api/x" }, params: {}, heartbeatToken: "x".repeat(65) });
   ok(!("X-Heartbeat-Token" in seen), "an oversized token is not forwarded");
 }
+{
+  // The loopback marker carries this process's secret (src/mcp-loopback.js).
+  // A route on a real local socket reads the connector's own replay as ours
+  // and a client-sent marker (as a same-host proxy would pass it) as not; the
+  // first read removes the header, so no handler sees the secret.
+  const { createMcpMppLoopback } = await import("../src/mcp-mpp.js");
+  const { isMcpLoopback, stripMcpMarker } = await import("../src/mcp-loopback.js");
+  const seenBy = [];
+  const srv = createServer((req, res) => {
+    stripMcpMarker(req, res, () => {
+      seenBy.push({ path: req.url.split("?")[0], exempt: isMcpLoopback(req), again: isMcpLoopback(req), header: req.headers["x-agent402-via"] });
+      res.writeHead(200, { "content-type": "application/json" }); res.end("{}");
+    });
+  });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  const lp = srv.address().port;
+  const replay = createMcpMppLoopback({ port: lp });
+  await replay({ def: { route: "GET /api/replay" }, params: {}, ip: "203.0.113.9" });
+  for (const via of ["mcp", "MCP", "mcp;k=" + "0".repeat(48)]) {
+    await fetch(`http://127.0.0.1:${lp}/api/forged`, { headers: { "X-Forwarded-For": "203.0.113.9", "X-Agent402-Via": via } });
+  }
+  srv.close();
+  const real = seenBy.find((s) => s.path === "/api/replay");
+  const forged = seenBy.filter((s) => s.path === "/api/forged");
+  ok(real?.exempt === true && real.again === true, "the connector's real loopback replay is read as ours");
+  ok(forged.length === 3 && forged.every((s) => s.exempt === false && s.again === false), `a client-sent marker on a loopback socket is not (${forged.map((s) => s.exempt).join(",")})`);
+  ok(seenBy.every((s) => s.header === undefined), "the marker header is removed before the route runs, the genuine one included");
+}
 
 // ---- stub facilitator ----
 const facCalls = { verify: 0, settle: 0 };
