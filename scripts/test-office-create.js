@@ -294,6 +294,37 @@ for (const t of OFFICE_TOOLS) {
 }
 
 // ----------------------------------------------------------------------------
+// Layout as the file opens: what a reader sees before editing anything
+// ----------------------------------------------------------------------------
+{
+  // A formatted number is sized at its shown width: a column narrower than
+  // "$98,000.00" opens as ##### in Excel.
+  const { buf } = await buildHere("xlsx", { rows: [["amount"], [98000], [1234.5], [-42.1]], numberFormats: ["$#,##0.00"] });
+  const sheet = unzip(buf).get("xl/worksheets/sheet1.xml");
+  const width = Number(/<col [^>]*min="1"[^>]*width="([\d.]+)"/.exec(sheet)?.[1]);
+  ok(width >= "$98,000.00".length + 1, `a currency-formatted column is as wide as its shown value (width ${width} for "$98,000.00")`);
+}
+{
+  // A task item writes its box once: the list token's checkbox is not a block of its own.
+  const { buf } = await buildHere("docx", { markdown: "- [x] done\n- [ ] todo" });
+  const paras = (unzip(buf).get("word/document.xml").match(/<w:p[ >][\s\S]*?<\/w:p>/g) || []).map((p) => texts(p, "w:t").join("")).filter(Boolean);
+  ok(paras.length === 2 && paras[0] === "☑ done" && paras[1] === "☐ todo", `task items are one paragraph each, with no stray marker (${JSON.stringify(paras)})`);
+}
+{
+  // PowerPoint shrinks text only after it is edited, so the deck chooses its
+  // sizes: 30 bullets fit their box as opened, and a two-line title fits its own.
+  const longTitle = "A very long slide title that keeps going to see how the layout handles wrapping across the top";
+  const { buf } = await buildHere("pptx", { slides: [{ title: "Many", bullets: Array.from({ length: 30 }, (_, i) => `Point number ${i + 1} with a little supporting text`) }, { title: longTitle, bullets: ["Short"] }] });
+  const f = unzip(buf);
+  const shapes = (k) => (f.get(k).match(/<p:sp>[\s\S]*?<\/p:sp>/g) || []).map((x) => ({ cy: Number(/<a:ext cx="\d+" cy="(\d+)"/.exec(x)?.[1]) / 12700, sz: Number(/ sz="(\d+)"/.exec(x)?.[1]) / 100, paras: (x.match(/<a:p>/g) || []).length }));
+  const [title1, body1] = shapes("ppt/slides/slide1.xml");
+  const needPt = body1.paras * body1.sz * 1.45;
+  ok(body1.paras === 30 && needPt <= body1.cy, `30 bullets fit their box as opened (${body1.sz} pt: about ${Math.round(needPt)} pt of lines in a ${Math.round(body1.cy)} pt box)`);
+  const [title2] = shapes("ppt/slides/slide2.xml");
+  ok(title1.sz === 30 && title2.sz < 30 && 2 * title2.sz * 1.2 <= title2.cy, `a title that wraps to two lines steps down to fit its box (${title2.sz} pt in ${Math.round(title2.cy)} pt; a short title stays ${title1.sz} pt)`);
+}
+
+// ----------------------------------------------------------------------------
 // Caps: each refused with a 400 that names it
 // ----------------------------------------------------------------------------
 const X = OFFICE_LIMITS.xlsx, D = OFFICE_LIMITS.docx, P = OFFICE_LIMITS.pptx;

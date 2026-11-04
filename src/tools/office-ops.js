@@ -219,12 +219,26 @@ export function validateXlsx(input) {
   return { sheets: out, filename: fileNameOf(input.filename, "xlsx", "workbook") };
 }
 
-function autoWidth(data, ci) {
+// The characters a number shows under a number format (its first section):
+// thousands separators, the decimals the format fixes, a currency or percent
+// sign. Excel draws ##### in a column narrower than that.
+function formattedLength(v, fmt) {
+  if (!fmt) return String(v).length;
+  const f = String(fmt).split(";")[0];
+  const pct = f.includes("%");
+  const n = Math.abs(pct ? v * 100 : v);
+  const decimals = (/\.([0#]+)/.exec(f)?.[1].length) ?? 0;
+  const intDigits = String(Math.trunc(Number(n.toFixed(decimals)))).length;
+  const separators = f.includes(",") ? Math.floor((intDigits - 1) / 3) : 0;
+  const signs = (f.replace(/"[^"]*"/g, "").match(/[$%\u20ac\u00a3\u00a5]/g) || []).length;
+  return intDigits + separators + (decimals ? decimals + 1 : 0) + signs + (v < 0 ? 1 : 0);
+}
+function autoWidth(data, ci, fmt = null, headerRow = false) {
   let w = 8;
-  for (const r of data) {
+  for (const [ri, r] of data.entries()) {
     const v = r[ci];
     if (v === null || v === undefined) continue;
-    const len = typeof v === "string" ? Math.max(...v.split("\n").map((l) => l.length)) : String(v).length;
+    const len = typeof v === "string" ? Math.max(...v.split("\n").map((l) => l.length)) : typeof v === "number" && !(headerRow && ri === 0) ? formattedLength(v, fmt) : String(v).length;
     if (len + 2 > w) w = len + 2;
     if (w >= 60) return 60;
   }
@@ -257,7 +271,7 @@ export async function buildXlsx(spec) {
   const sheets = spec.sheets.map((sh) => ({
     sheet: sh.name,
     data: sh.data.length ? xlsxSheetData(sh) : [[null]],
-    columns: Array.from({ length: Math.max(sh.width, 1) }, (_, ci) => ({ width: sh.columnWidths[ci] ?? autoWidth(sh.data, ci) })),
+    columns: Array.from({ length: Math.max(sh.width, 1) }, (_, ci) => ({ width: sh.columnWidths[ci] ?? autoWidth(sh.data, ci, sh.numberFormats[ci], sh.header) })),
     ...(sh.header && sh.headerStyle.freeze ? { stickyRowsCount: 1 } : {}),
   }));
   const buffer = await writeXlsxFile(sheets).toBuffer();
@@ -394,7 +408,11 @@ export async function buildDocx(spec) {
           listItems++;
           const inline = [];
           const nested = [];
-          for (const c of item.tokens || []) (c.type === "text" || c.type === "paragraph" ? inline : nested).push(c);
+          for (const c of item.tokens || []) {
+            // A task item's checkbox token is the marker written below, not a block.
+            if (c.type === "checkbox") continue;
+            (c.type === "text" || c.type === "paragraph" ? inline : nested).push(c);
+          }
           const runs = [];
           if (item.task) runs.push(new D.TextRun({ text: item.checked ? "\u2611 " : "\u2610 " }));
           inline.forEach((c, i) => { countLinks(c.tokens); if (i > 0) runs.push(new D.TextRun({ break: 1 })); runs.push(...(c.tokens ? runsOf(c.tokens) : textRuns(unescape(c.text), {}))); });
@@ -541,6 +559,21 @@ export function validatePptx(input) {
 }
 
 const W = 13.333, PAD = 0.5;
+// The largest size whose wrapped lines fit the box, estimated with Calibri's
+// average glyph at about half the size and a line at 1.2 times it, plus each
+// paragraph's space after (a quarter of the size). PowerPoint applies its own
+// shrink only after the text is edited, so the size is chosen here.
+function fittedSize(paras, { wIn, hIn, sizes, spaceAfter = true }) {
+  for (const size of sizes) {
+    let lines = 0;
+    for (const { text, level = 0 } of paras) {
+      const perLine = Math.max(8, Math.floor(((wIn - 0.5 * level - 0.4) * 72) / (size * 0.5)));
+      lines += Math.max(1, Math.ceil(String(text).length / perLine));
+    }
+    if (lines * size * 1.2 + (spaceAfter ? paras.length * size * 0.25 : 0) <= hIn * 72) return size;
+  }
+  return sizes[sizes.length - 1];
+}
 export async function buildPptx(spec) {
   const { default: PptxGenJS } = await import("pptxgenjs");
   const pres = new PptxGenJS();
@@ -558,17 +591,18 @@ export async function buildPptx(spec) {
     const s = pres.addSlide();
     let top = PAD;
     if (sl.title) {
-      s.addText(sl.title, { x: PAD, y: 0.35, w: W - 2 * PAD, h: 0.9, fontFace: "Calibri", fontSize: 30, bold: true, color: ink, valign: "middle", fit: "shrink" });
+      const titleSize = fittedSize([{ text: sl.title }], { wIn: W - 2 * PAD, hIn: 0.9, sizes: [30, 26, 22, 20, 18], spaceAfter: false });
+      s.addText(sl.title, { x: PAD, y: 0.35, w: W - 2 * PAD, h: 0.9, fontFace: "Calibri", fontSize: titleSize, bold: true, color: ink, valign: "middle", fit: "shrink" });
       top = 1.4;
     }
     const bottom = 7.5 - 0.4;
     const avail = bottom - top;
     const bulletH = sl.bullets.length ? (sl.table ? Math.min(avail * 0.4, 0.45 * sl.bullets.length + 0.2) : avail) : 0;
     if (sl.bullets.length) {
-      const size = sl.bullets.length > 12 ? 14 : sl.bullets.length > 7 ? 18 : 22;
+      const size = fittedSize(sl.bullets, { wIn: W - 2 * PAD, hIn: bulletH, sizes: [22, 20, 18, 16, 14, 12, 11, 10, 9] });
       s.addText(
         sl.bullets.map((b) => ({ text: b.text, options: { bullet: sl.numbered ? { type: "number" } : true, indentLevel: b.level, breakLine: true } })),
-        { x: PAD, y: top, w: W - 2 * PAD, h: bulletH, fontFace: "Calibri", fontSize: size, color: ink, valign: "top", paraSpaceAfter: 6, fit: "shrink" },
+        { x: PAD, y: top, w: W - 2 * PAD, h: bulletH, fontFace: "Calibri", fontSize: size, color: ink, valign: "top", paraSpaceAfter: Math.round(size * 0.25), fit: "shrink" },
       );
     }
     if (sl.table) {
