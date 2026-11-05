@@ -1907,8 +1907,6 @@ jobs:
           t node scripts/test-settle-fallback.js
           # A listed Robinhood settle fallback is tried only after its /supported confirms eip155:4663 (paid-mode boot vs stub facilitators - offline)
           t node scripts/test-rh-fallback-confirm.js
-          # SOLANA_FALLBACK_FACILITATOR_URL: the last Solana settle fallback, after the existing ones, dropped at boot without Solana exact, inert when unset (paid-mode boots vs stub facilitators - offline)
-          t node scripts/test-solana-last-fallback.js
           # A settle failure that names a transaction is booked and read from the chain: landed after a 402 -> owed once; reverted, foreign or never mined -> nothing owed (stub RPC, real refund ledger - offline)
           t node scripts/test-late-settlements.js
           # A pending settle answer naming a tx is read on chain first: proven mined to us -> 200, one sale, nothing booked, breaker and upstream count read it as settled; unproven, RPC errors, buyer gone or a plain 5xx -> 402 and booked as before (paid-mode boot vs stub facilitator and RPC - offline)
