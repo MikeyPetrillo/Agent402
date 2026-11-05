@@ -24,10 +24,10 @@
 //   - cost: upstream spend against the tier cap, read from the operator
 //     surface, so a report that got cheap is as visible as one that got thin.
 //
-// NOT a CI script. It spends real money on real upstreams. It runs WEEKLY on a
-// ROTATING SUBSET (see report-quality.yml) rather than the whole line, because
-// a full pass costs real synthesis spend - the point is to notice a regression
-// within a couple of weeks, not to audit everything every time.
+// NOT a CI script. It spends real money on real upstreams. It runs on owner
+// dispatch (spend.yml, job report-quality) on a ROTATING SUBSET rather than
+// the whole line, because a full pass costs real synthesis spend - the point
+// is to notice a regression, not to audit everything every time.
 //
 //   TARGET_URL=http://127.0.0.1:PORT node scripts/report-quality-audit.mjs \
 //     [--only research-max,dossier] [--out report.json]

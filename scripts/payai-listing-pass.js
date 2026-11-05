@@ -86,9 +86,9 @@
 // LISTING_ORIGIN, PAYAI_REGISTRY_URL, BAZAAR_REGISTRY_URL,
 // PAYAI_FACILITATOR_URL (where PayAI's /supported is read).
 //
-// Scheduled: .github/workflows/listing-pass.yml runs the four legs live every
-// Wednesday 03:53 UTC (and on dispatch) in the spending environment, and keeps
-// one issue ("Listing pass FAILED") open while a run fails.
+// On dispatch: the listing-pass job of .github/workflows/spend.yml runs the
+// four legs live in the spending environment, and keeps one issue ("Listing
+// pass FAILED") open while a run fails.
 //
 // Purposeful inputs: --inputs FILE is a JSON map, "METHOD /path" -> request
 // body (a query object for a GET). A route with an entry is quoted and bought

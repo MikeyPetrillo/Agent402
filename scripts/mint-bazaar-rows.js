@@ -31,7 +31,7 @@
 //
 // --out FILE writes one record per buy (registry bazaar, chain base, method,
 // path, charged, tx, boughtAt), rewritten after every buy. The workflow keeps
-// it as the mint-bazaar-rows artifact, which the weekly listing pass reads as
+// it as the mint-bazaar-rows artifact, which the listing pass reads as
 // purchase memory (scripts/listing-pass-memory.js): a route minted here is not
 // bought again by that pass within 14 days.
 //

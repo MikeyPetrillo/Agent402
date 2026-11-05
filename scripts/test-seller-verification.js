@@ -51,7 +51,11 @@ const row = (o) => ({ origin: "https://s.example", route: "/r", method: "POST", 
 
 // --- the workflow must not hold bucket credentials --------------------------
 {
-  const wf = readFileSync(new URL("../.github/workflows/seller-sweep.yml", import.meta.url), "utf8");
+  // The seller-sweep job of spend.yml: from its header to the next job.
+  const spendText = readFileSync(new URL("../.github/workflows/spend.yml", import.meta.url), "utf8");
+  const at = spendText.indexOf("\n  seller-sweep:\n");
+  const wf = at < 0 ? "" : spendText.slice(at, spendText.indexOf("\n  # ", at + 1) < 0 ? undefined : spendText.indexOf("\n  # ", at + 1));
+  ok(at >= 0 && /inputs\.job == 'seller-sweep'/.test(wf) && /environment: spending/.test(wf), "the seller sweep is the seller-sweep job of spend.yml, in the spending environment");
   ok(!/BACKUP_S3/.test(wf),
      "the sweep workflow has NO bucket credentials: it runs with a funded spending key, and giving that job write access to our dataset storage would widen what one compromised workflow reaches, for nothing");
   ok(/AGENT402_OPERATOR_TOKEN/.test(wf), "it posts what it observed and the server decides what to keep - the /api/status/probe split");

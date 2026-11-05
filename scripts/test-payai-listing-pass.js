@@ -441,11 +441,13 @@ const cov = coverageFor({ pricing, payaiItems: [{ resource: "https://agent402.to
       art(6, "listing-pass", "2026-10-27T00:00:00Z", { head_repository_id: 2 }),
       art(7, "other", "2026-10-27T00:00:00Z"),
       art(8, "listing-pass", "2026-10-26T00:00:00Z", { head_branch: "claude/x" }),
+      art(9, "listing-pass", "2026-10-27T05:00:00Z"),
     ];
-    ok(pickArtifacts(listing, { now: nowMs }).map((a) => a.id).join() === "1,2,3,8", "only unexpired memory artifacts from this repository's runs in the last 14 days, any branch");
-    ok(MEMORY_ARTIFACTS["payai-listing-pass"] === ".github/workflows/payai-listing.yml" && MEMORY_ARTIFACTS["mint-bazaar-rows"] === ".github/workflows/mint-bazaar-rows.yml" && MEMORY_ARTIFACTS["listing-pass"] === ".github/workflows/listing-pass.yml", "the three artifact names map to the workflows that upload them");
+    ok(pickArtifacts(listing, { now: nowMs }).map((a) => a.id).join() === "1,2,3,8,9", "only unexpired memory artifacts from this repository's runs in the last 14 days, any branch");
+    ok(MEMORY_ARTIFACTS["payai-listing-pass"].join() === ".github/workflows/payai-listing.yml" && MEMORY_ARTIFACTS["mint-bazaar-rows"].join() === ".github/workflows/spend.yml,.github/workflows/mint-bazaar-rows.yml" && MEMORY_ARTIFACTS["listing-pass"].join() === ".github/workflows/spend.yml,.github/workflows/listing-pass.yml", "the three artifact names map to the workflows that upload them: spend.yml now, and the retired file while its runs are in the window");
+    ok(existsSync(new URL("../.github/workflows/spend.yml", import.meta.url)) && !existsSync(new URL("../.github/workflows/listing-pass.yml", import.meta.url)) && !existsSync(new URL("../.github/workflows/mint-bazaar-rows.yml", import.meta.url)), "spend.yml is the live uploader; the retired workflow files are gone");
     const calls = [];
-    const runPaths = { 901: ".github/workflows/payai-listing.yml", 902: ".github/workflows/listing-pass.yml", 903: ".github/workflows/mint-bazaar-rows.yml", 908: ".github/workflows/other.yml" };
+    const runPaths = { 901: ".github/workflows/payai-listing.yml", 902: ".github/workflows/listing-pass.yml", 903: ".github/workflows/mint-bazaar-rows.yml", 908: ".github/workflows/other.yml", 909: ".github/workflows/spend.yml" };
     const f = async (url, init = {}) => {
       const u = new URL(url);
       calls.push({ url: String(url), auth: !!init.headers?.Authorization, redirect: init.redirect });
@@ -461,7 +463,7 @@ const cov = coverageFor({ pricing, payaiItems: [{ resource: "https://agent402.to
     const out = mkdtempSync(join(tmpdir(), "listing-dl-"));
     const unzipped = [];
     const kept = await fetchMemory({ repo: "o/r", token: "tok", outDir: out, now: nowMs, fetchImpl: f, unzip: (zip, dir) => { unzipped.push(dir); writeFileSync(join(dir, "pass.json"), "{}"); }, log: () => {} });
-    ok(kept === 3 && unzipped.length === 3, `three artifacts kept; the one whose run is another workflow is ignored (${kept})`);
+    ok(kept === 4 && unzipped.length === 4, `four artifacts kept (spend.yml and the retired files alike); the one whose run is another workflow is ignored (${kept})`);
     ok(calls.filter((c) => /actions\/artifacts\?name=/.test(c.url)).length === 3, "the artifacts are listed by each of the three names");
     ok(calls.filter((c) => c.url.startsWith("https://blob.test")).every((c) => !c.auth) && calls.filter((c) => /\/zip$/.test(c.url)).every((c) => c.redirect === "manual" && c.auth), "the zip is fetched with the token, the redirect target without it");
     let failed = false;
