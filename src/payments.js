@@ -51,6 +51,7 @@ import { withSettleDemotion, isFundsRefusal, demotedList, settleAttemptOf } from
 import { createRobinhoodOrder, withRobinhoodGasOrder, ownFirstAttemptOf, ownRefusedOf, facilitatorRetryOf, withOwnRefusalMemo } from "./robinhood-order.js";
 import { toolFailureMonitor, setDemotedReader } from "./tool-failure-monitor.js";
 import { isPaymentVerdictReason } from "./settle-verdict.js";
+import { setPublicIndexBootFacilitator } from "./facilitator-public-index.js";
 import { isGatewayBatchedPayment } from "./gateway-wire.js";
 import { GatewayNanopaymentsClient, createGatewayPendingBook, gatewayAcceptFields, gatewayNanopaymentNetworks, gatewayNanopaymentsEnabled, gatewayPendingFile, installGatewayRouting, setGatewayOffer, startGatewayBalanceWatch, startGatewayPendingResolver, byTransferIdAnyCase, gatewayTransferId, GATEWAY_DOMAINS } from "./gateway-nanopayments.js";
 import { existsSync } from "node:fs";
@@ -1204,6 +1205,8 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       if (boot.index >= 0) primeSupportedOnce(entries[first].client, boot.results[first].supported);
     }
     const robinhoodPrimaryUrl = entries[first].url;
+    // The public-index disclosure names the facilitator that settles first.
+    setPublicIndexBootFacilitator("robinhood", robinhoodPrimaryUrl);
     // Its graceful refusals are told apart from its HTTP errors, which the
     // library hands the failure hook in the same shape (gracefulRefusalOf).
     const robinhoodPrimary = markGracefulRefusals(entries[first].client);

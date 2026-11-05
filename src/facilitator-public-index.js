@@ -38,11 +38,22 @@ function hostOf(url) {
   } catch { return ""; }
 }
 
-/** The host each listed chain publishes through: Robinhood's first listed
- *  http(s) facilitator (ROBINHOOD_FACILITATOR_URL, the one it settles through
- *  first). "" when unset or unparsable. */
+// The facilitator the payments boot chose to settle Robinhood first (it may
+// be a later listed one when the first is down at boot), set by src/payments.js.
+let robinhoodBootUrl = "";
+/** Called at boot with the URL of the facilitator that settles Robinhood first. */
+export function setPublicIndexBootFacilitator(chain, url) {
+  if (chain === "robinhood") robinhoodBootUrl = String(url || "").trim().replace(/\/+$/, "");
+}
+
+/** The host each listed chain publishes through: the facilitator Robinhood
+ *  settles through first. That is the one the boot chose when it is still
+ *  listed in ROBINHOOD_FACILITATOR_URL, otherwise (before boot) the first
+ *  listed http(s) one. "" when unset or unparsable. */
 export function publicIndexHosts(env = process.env) {
-  const first = String(env.ROBINHOOD_FACILITATOR_URL || "").split(",").map((s) => s.trim()).find((s) => hostOf(s)) || "";
+  const list = String(env.ROBINHOOD_FACILITATOR_URL || "").split(",").map((s) => s.trim().replace(/\/+$/, ""));
+  const chosen = robinhoodBootUrl && list.includes(robinhoodBootUrl) && hostOf(robinhoodBootUrl) ? robinhoodBootUrl : "";
+  const first = chosen || list.find((s) => hostOf(s)) || "";
   return { robinhood: hostOf(first) };
 }
 
