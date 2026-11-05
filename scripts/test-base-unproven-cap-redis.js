@@ -24,6 +24,60 @@ if (!REDIS) {
 }
 const EACH = 50000n, PER_PROC = 4; // $0.05 a call; the default cap ($0.25) fits five
 
+if (process.argv[2] === "fuzz") {
+  // The running sums (src/base-unproven.js) against the windows they stand
+  // for: a seeded random walk of reserves (some refused), releases (some of
+  // them repeats), clock jumps past expiry and dropped sums, on three sellers that share a
+  // payTo or an origin and the lane. After every step each window's settled
+  // sum, its stored sum and the sum of its unexpired entries agree.
+  const U = await import("../src/base-unproven.js");
+  const { getSharedRedisClient, closeSharedRedis } = await import("../src/shared-limit.js");
+  const c = await getSharedRedisClient();
+  let seed = Number(process.env.XC_SEED) || 1;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+  const pick = (a) => a[Math.floor(rnd() * a.length)];
+  const W1 = `0x${"a1".repeat(20)}`, W2 = `0x${"b2".repeat(20)}`;
+  const sellers = [{ payTo: W1, origin: "https://f1.example/x" }, { payTo: W1, origin: "https://f2.example/x" }, { payTo: W2, origin: "https://f2.example/x" }];
+  const keys = [...new Set(sellers.flatMap((s) => U.unprovenSellerKeys(s))), "lane:base"];
+  const DAY = 24 * 3600_000;
+  let now = 1_800_000_000_000;
+  const handles = [];
+  let mismatches = 0, steps = 0, reserved = 0, refused = 0, released = 0, expired = 0, dropped = 0;
+  const first = [];
+  for (let i = 0; i < Number(process.env.XC_STEPS || 400); i++) {
+    const r = rnd();
+    if (r < 0.55) {
+      const out = await U.reserveUnprovenSellerSpend({ ...pick(sellers), atomic: BigInt(1 + Math.floor(rnd() * 60000)), now, capUsd: pick([0.25, 0.5, 1000]), laneCapUsd: pick([1, 1000]) });
+      if (out.ok) { reserved++; handles.push(out.handle); } else refused++;
+    } else if (r < 0.8 && handles.length) {
+      const h = pick(handles);
+      await U.releaseUnprovenSellerSpend(h);
+      released++;
+    } else if (r > 0.95) {
+      // A sum missing beside a live window (the first touch after the sums
+      // shipped) is rebuilt from the window.
+      await c.del(U.__unprovenStoreKeys(pick(keys)).sum);
+      dropped++;
+    } else {
+      const before = now;
+      now += pick([60_000, 3600_000, 6 * 3600_000, DAY + 1]);
+      if (now - before > DAY) expired++;
+    }
+    steps++;
+    const settled = await U.__unprovenWindowSums(keys, now);
+    for (let j = 0; j < keys.length; j++) {
+      const { window, sum } = U.__unprovenStoreKeys(keys[j]);
+      const entries = await c.zRangeByScore(window, `(${now - DAY}`, "+inf");
+      const want = entries.reduce((t, e) => t + (Number(String(e).split("|")[0]) || 1), 0);
+      const stored = Number((await c.get(sum)) ?? 0);
+      if (settled[j] !== want || stored !== want) { mismatches++; if (first.length < 3) first.push({ step: i, key: keys[j], settled: settled[j], stored, want }); }
+    }
+  }
+  await closeSharedRedis();
+  console.log(JSON.stringify({ steps, mismatches, first, reserved, refused, released, expired, dropped }));
+  process.exit(0);
+}
+
 if (process.argv[2] === "child") {
   // One replica: PER_PROC reservations for the seller at XC_AT, all in flight
   // at once; XC_RELEASE=1 gives every granted one back before exiting.
@@ -105,6 +159,17 @@ for (let i = 0; i < 2; i++) {
   const relA = await replica({ SHARED_LIMITS_PREFIX: `${PREFIX}lr`, XC_LANE: "0.30", XC_DISTINCT: "1", XC_N: "6", XC_RELEASE: "1" });
   const relB = await replica({ SHARED_LIMITS_PREFIX: `${PREFIX}lr`, XC_LANE: "0.30", XC_DISTINCT: "1", XC_N: "6" });
   ok(relA.granted === 6 && relB.granted === 6, `lane reservations released on A free the lane's room for B (${relA.granted} then ${relB.granted})`);
+}
+
+// The running sums equal the summed windows through a random walk of
+// reserves, refusals, releases (repeats included), expiries and dropped sums.
+for (const seed of [7, 4242, 90001]) {
+  const r = await new Promise((resolve, reject) => {
+    const c = spawn(process.execPath, [SELF, "fuzz"], { env: { ...process.env, SHARED_LIMITS_PREFIX: `${PREFIX}fz${seed}`, XC_SEED: String(seed) }, stdio: ["ignore", "pipe", "inherit"] });
+    let out = ""; c.stdout.on("data", (d) => { out += d; });
+    c.on("close", (code) => { try { resolve(childJson(out)); } catch { reject(new Error(`fuzz exited ${code}: ${out}`)); } });
+  });
+  ok(r.mismatches === 0 && r.reserved > 20 && r.refused > 0 && r.released > 10 && r.expired > 2 && r.dropped > 2, `running sums (seed ${seed}): ${r.steps} steps (${r.reserved} reserved, ${r.refused} refused, ${r.released} released, ${r.expired} expiries, ${r.dropped} sums dropped and rebuilt), every settled and stored sum equals the summed window (${r.mismatches} mismatches ${JSON.stringify(r.first)})`);
 }
 
 console.log(`\ntest-base-unproven-cap-redis: ${pass} passed, ${fail} failed`);
