@@ -20,6 +20,9 @@ Router:
 Index:
 - A failed paywall check is re-run after 24 hours and when a seller registers
   again, and the check skips a templated route.
+Surfaces:
+- The agent hosts guide adds Agent402 to a HarnessRouter workspace as a
+  remote MCP server under Add-ons (`/harnessrouter`).
 Operations:
 - The spend jobs run from one workflow, `spend.yml`, each behind the same
   approval. Only the listing pass is scheduled (weekly, still waiting for that
