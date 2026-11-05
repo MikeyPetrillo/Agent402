@@ -19,9 +19,25 @@
 // already sent the header never gets it.
 //
 // The same rules scripts/payai-listing-pass.js applies to its own records.
+//
+// A job id is a bearer link to the paid answer until the job expires
+// (src/async-jobs.js), and these scripts' logs and records are public run
+// output: what they keep of a job is its state, never its id or link, and
+// any error text they store or print passes redactJobLinks first.
 import { awaitJob, jobState, DEFAULT_ASYNC_TIMEOUT_MS } from "../../client/async-job.js";
 
 export const RESPOND_ASYNC = "respond-async";
+export const JOB_REDACTED = "<redacted>";
+
+/** Text with every job link path (/api/jobs/<id>, any id shape, plain or
+ *  percent-encoded) and every jobId value blanked, so a stored or logged
+ *  error never carries a job's bearer id. */
+export function redactJobLinks(text) {
+  return String(text ?? "")
+    .replace(/\/api\/jobs\/[^\s"'`<>()\[\]{},;\\]+/gi, `/api/jobs/${JOB_REDACTED}`)
+    .replace(/%2Fapi%2Fjobs%2F[^\s"'`<>()\[\]{},;&\\]+/gi, `%2Fapi%2Fjobs%2F${JOB_REDACTED}`)
+    .replace(/(job_?id\\?"?\s*[:=]\s*\\?"?)[A-Za-z0-9_.~-]+/gi, `$1${JOB_REDACTED}`);
+}
 
 /** The Prefer value a route's paid call carries up front, from its `async`
  *  block (recommended, or a paid call without the header refused with 400),
@@ -58,10 +74,11 @@ export function asyncRefusalPreferOf(status, text) {
  * @param {string|null} o.prefer   slowPreferOf(...) for this route
  * @param {string} o.baseUrl       the server (a job link must share its origin)
  * @param {Function} o.fetchImpl   a plain fetch for the free job link
- * @returns {Promise<{ res: Response, prefer: string|null, attempts: number, fallback: boolean, job: {id, state}|null, jobFailed: boolean }>}
- *        `res` is the route's final answer. A job still running at the
- *        deadline throws client/async-job.js AsyncJobPendingError
- *        (mayBeCharged: true).
+ * @returns {Promise<{ res: Response, prefer: string|null, attempts: number, fallback: boolean, job: {state}|null, jobFailed: boolean }>}
+ *        `res` is the route's final answer; `job` keeps the job's state
+ *        only. A job still running at the deadline throws
+ *        client/async-job.js AsyncJobPendingError (mayBeCharged: true),
+ *        its message redacted and its link and document dropped.
  */
 export async function paidCallHonoringSlowRoutes(send, { prefer = null, baseUrl, fetchImpl = fetch, slug = "", timeoutMs = DEFAULT_ASYNC_TIMEOUT_MS, sleep, onJob = null } = {}) {
   let sent = prefer || null;
@@ -80,14 +97,24 @@ export async function paidCallHonoringSlowRoutes(send, { prefer = null, baseUrl,
   }
   if (res.status !== 202) return { res, prefer: sent, attempts, fallback, job: null, jobFailed: false };
   let job = null;
-  const final = await awaitJob(res, {
-    baseUrl, fetchImpl, slug, timeoutMs,
-    ...(sleep ? { sleep } : {}),
-    onProgress: (d) => {
-      job = { id: d?.jobId ?? job?.id ?? null, state: jobState(d) };
-      try { onJob?.(job); } catch { /* the caller's callback never breaks the wait */ }
-    },
-  });
+  let final;
+  try {
+    final = await awaitJob(res, {
+      baseUrl, fetchImpl, slug, timeoutMs,
+      ...(sleep ? { sleep } : {}),
+      onProgress: (d) => {
+        job = { state: jobState(d) };
+        try { onJob?.({ ...job }); } catch { /* the caller's callback never breaks the wait */ }
+      },
+    });
+  } catch (e) {
+    if (e && typeof e === "object") {
+      try { e.message = redactJobLinks(e.message); } catch { /* a frozen error keeps its text */ }
+      if ("jobUrl" in e) e.jobUrl = null;
+      if ("job" in e) e.job = job ? { ...job } : null;
+    }
+    throw e;
+  }
   const jobFailed = job?.state === "failed";
   // A failed job is a failed call whatever status its error names.
   const out = jobFailed && final.status < 400

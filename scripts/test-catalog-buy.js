@@ -430,6 +430,92 @@ const run = (opts) => runCatalogBuy({ target, payer: fakePayer, powSecret: SECRE
   ok(threw?.exitCode === 2, "an unreachable price list is a misconfiguration (exit 2)");
 }
 
+// Slow routes bought as jobs: a job's id is a bearer link to the paid answer,
+// so the report and the log keep its state only; a job still pending at the
+// deadline keeps its quote reserved against the cap; a failed job is never
+// retried, whatever status its error names.
+{
+  const ASYNC = { recommended: true, expectedSeconds: 90, maxSeconds: 180, prefer: "respond-async", accepted: 202, statusUrl: "/api/jobs/{id}", preferWait: "wait=180", withoutPrefer: 400 };
+  const enc = (o) => Buffer.from(JSON.stringify(o)).toString("base64");
+  const JOB_ROUTES = {
+    "/v1/job-ok":         { slug: "job-ok",        usd: 0.2,  ending: "succeeded", output: { report: "r" } },
+    // 503 would earn a synchronous buy its retry.
+    "/v1/job-fail":       { slug: "job-fail",      usd: 0.35, ending: "failed",    output: { report: "r" } },
+    "/v1/job-pending":    { slug: "job-pending",   usd: 0.4,  ending: "pending",   output: { report: "r" } },
+    // Quoted: listed at $0.30, its 402 asks $0.70 under a $1 ceiling.
+    "/api/after-pending": { slug: "after-pending", usd: 0.3,  sync: true, quoteMicro: 700_000, quoted: { minUsd: 0.3, maxUsd: 1 }, output: { ok: true } },
+  };
+  const jobPricing = { endpoints: Object.entries(JOB_ROUTES).map(([path, r]) => ({ method: "POST", path, slug: r.slug, price: r.usd.toFixed(3), ...(r.sync ? {} : { async: ASYNC }), ...(r.quoted ? { quoted: true, fromUsd: r.usd, quoteRange: r.quoted } : {}) })) };
+  const jobSpec = { paths: Object.fromEntries(Object.entries(JOB_ROUTES).map(([path, r]) => [path, { post: { tags: ["stub"], "x-payment-info": { price: r.quoted ? { mode: "dynamic", currency: "USD", min: String(r.quoted.minUsd), max: String(r.quoted.maxUsd) } : { mode: "fixed", currency: "USD", amount: String(r.usd) } }, requestBody: { content: { "application/json": { example: { topic: r.slug } } } }, responses: { 200: { content: { "application/json": { example: r.output } } } } } }])) };
+  const jobIds = [];        // every id the stub minted (48 hex characters, as the server's)
+  const jobs = new Map();
+  const jobSeen = [];       // every route request: { path, paid, prefer }
+  const jobServer = createServer(async (req, res) => {
+    const url = new URL(req.url, "http://127.0.0.1");
+    for await (const _ of req) { /* drain */ }
+    const json = (code, body, headers = {}) => { res.writeHead(code, { "content-type": "application/json", ...headers }); res.end(JSON.stringify(body)); };
+    if (url.pathname === "/api/pricing") return json(200, jobPricing);
+    if (url.pathname === "/openapi.json") return json(200, jobSpec);
+    const jm = url.pathname.match(/^\/api\/jobs\/(\w+)$/);
+    if (jm) {
+      const j = jobs.get(jm[1]);
+      if (!j) return json(404, { error: "job_not_found" });
+      if (j.ending === "pending") return json(200, { jobId: jm[1], state: "running", statusUrl: `/api/jobs/${jm[1]}`, pollIntervalSeconds: 1 }, { "retry-after": "1" });
+      if (j.ending === "succeeded") return json(200, { jobId: jm[1], state: "succeeded", result: { httpStatus: 200, headers: { "payment-response": enc({ success: true, transaction: "0x" + "e".repeat(64) }) }, body: { report: "r" } } });
+      return json(200, { jobId: jm[1], state: "failed", message: `The call ended with HTTP 503; see /api/jobs/${jm[1]}.`, error: { httpStatus: 503, body: { error: "upstream_failed", statusUrl: `/api/jobs/${jm[1]}`, jobId: jm[1] } } });
+    }
+    const route = JOB_ROUTES[url.pathname];
+    if (!route) return json(404, { error: "no such route" });
+    const paid = req.headers["payment-signature"] === "stub-sig";
+    jobSeen.push({ path: url.pathname, paid, prefer: req.headers.prefer ?? null });
+    if (!paid) return json(402, { x402Version: 2, accepts: [{ scheme: "exact", network: "eip155:8453", amount: String(route.quoteMicro ?? micro(route.usd)), asset: "0xusdc", payTo: "0xpay" }] });
+    if (route.sync) return json(200, { ok: true }, { "payment-response": enc({ success: true, transaction: "0x" + "d".repeat(64) }) });
+    const id = (jobIds.length + 1).toString(16).padStart(48, "a");
+    jobIds.push(id);
+    jobs.set(id, { ending: route.ending });
+    return json(202, { jobId: id, state: "queued", statusUrl: `/api/jobs/${id}`, pollIntervalSeconds: 1 }, { location: `/api/jobs/${id}`, "retry-after": "1" });
+  });
+  await new Promise((r) => jobServer.listen(0, "127.0.0.1", r));
+  const jobTarget = `http://127.0.0.1:${jobServer.address().port}`;
+  const lines = [];
+  const keep = { log: (m) => lines.push(String(m)), warn: (m) => lines.push(String(m)), error: (m) => lines.push(String(m)) };
+  // A 1.5 s deadline against a 1 s poll wait slept as 50 ms: a job that ends
+  // is read on its first poll, one that never ends is pending within half a second.
+  const runJobs = (opts) => runCatalogBuy({ target: jobTarget, payer: fakePayer, powSecret: SECRET, tier: "all", now: JAN7, capUsd: 100, paceMs: 0, retryBackoffMs: 0, log: keep, readBalanceUsd: async () => 50, jobTimeoutMs: 1500, jobSleep: () => new Promise((r) => setTimeout(r, 50)), ...opts });
+  const paidTo = (p) => jobSeen.filter((x) => x.path === p && x.paid);
+  // The job ids, any /api/jobs/<id> link (only the redacted form is allowed), in the text.
+  const leaksIn = (text) => jobIds.filter((id) => text.includes(id)).concat(/\/api\/jobs\/(?!<redacted>)[^\s"'<>{\\]/.test(text) ? ["a /api/jobs/ link"] : []);
+
+  const s = await runJobs({ only: "job-ok,job-fail,job-pending" });
+  const by = Object.fromEntries(s.results.map((r) => [r.slug, r]));
+  ok(by["job-ok"]?.pass === true && JSON.stringify(by["job-ok"].job) === JSON.stringify({ state: "succeeded" }), `a finished job is graded on its answer and reported by its state only (${JSON.stringify(by["job-ok"])})`);
+  ok(paidTo("/v1/job-fail").length === 1 && by["job-fail"]?.pass === false && by["job-fail"].attempts === 1 && by["job-fail"].status === 503 && by["job-fail"].job?.state === "failed", `a failed job is never retried, though its 503 would earn a synchronous buy a retry (${paidTo("/v1/job-fail").length} paid calls, ${by["job-fail"]?.attempts} attempts)`);
+  ok(/<redacted>/.test(by["job-fail"]?.errorBody || ""), `a failed job's error body that echoes its link is kept redacted (${by["job-fail"]?.errorBody})`);
+  ok(by["job-pending"]?.grade === "job-pending" && by["job-pending"].pass === false && /still running/.test(by["job-pending"].errorBody || "") && /<redacted>/.test(by["job-pending"].errorBody), `a job still running at the deadline is graded job-pending, its collect link redacted (${by["job-pending"]?.errorBody})`);
+  ok(jobIds.length === 3, `the stub minted one job per slow route (${jobIds.length})`);
+  const report = JSON.stringify({ results: s.results, captures: s.captures, markdown: markdownSummary(s) });
+  ok(!leaksIn(report).length, `the report, the captures and the summary carry no job id or job link (${leaksIn(report).join() || "none"})`);
+  ok(!leaksIn(lines.join("\n")).length, `the log carries no job id or job link (${leaksIn(lines.join("\n")).join() || "none"})`);
+  ok(Math.abs(s.spentUsd - (0.2 + 0.4)) < 1e-9, `the settled job and the pending job's quote count against the cap; the failed job's is released ($${s.spentUsd})`);
+
+  // The pending job's quote stays reserved: a buy that would pass the cap with it is held back.
+  jobSeen.length = 0;
+  const held = await runJobs({ only: "job-pending,after-pending", capUsd: 1 });
+  const hb = Object.fromEntries(held.results.map((r) => [r.slug, r]));
+  ok(hb["job-pending"]?.grade === "job-pending" && hb["after-pending"]?.grade === "cap" && paidTo("/api/after-pending").length === 0, `a $0.70 quote after a pending $0.40 job is held back by the $1 cap, never signed (${hb["after-pending"]?.grade}, ${paidTo("/api/after-pending").length} paid calls)`);
+  ok(Math.abs(held.spentUsd - 0.4) < 1e-9, `the pending job's quote is still counted at the end ($${held.spentUsd})`);
+  // Control: after a failed job (nothing charged) the same quote fits and is bought.
+  jobSeen.length = 0;
+  const control = await runJobs({ only: "job-fail,after-pending", capUsd: 1 });
+  const cb = Object.fromEntries(control.results.map((r) => [r.slug, r]));
+  ok(cb["job-fail"]?.pass === false && cb["after-pending"]?.pass === true && paidTo("/api/after-pending").length === 1 && Math.abs(control.spentUsd - 0.7) < 1e-9, `control: after a failed job the same quote fits under the cap and is bought (${cb["after-pending"]?.grade}, $${control.spentUsd})`);
+  // Error text from anywhere else in the call (here the signer) is redacted too.
+  const leakyPayer = { ...fakePayer, pay: async () => { throw new Error(`signer refused; see ${jobTarget}/api/jobs/${"b".repeat(48)}`); } };
+  const leaky = await runJobs({ only: "job-ok", payer: leakyPayer });
+  ok(leaky.results[0]?.pass === false && /signer refused; see .*\/api\/jobs\/<redacted>/.test(leaky.results[0].errorBody || "") && !leaky.results[0].errorBody.includes("b".repeat(48)), `a thrown error's job link is redacted in the report (${leaky.results[0]?.errorBody})`);
+  jobServer.close();
+}
+
 server.close();
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
