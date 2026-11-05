@@ -33,6 +33,11 @@ Security:
   judge, decide, the fetch guard, the router's payer and report prose. MCP
   refusals quote an echoed name as data, and the listing and judge screens
   read markup-split, lookalike and tool-abuse wordings of the same text.
+- In FREE_MODE, identity-bound routes take no wallet identity from an
+  unverified payment header. `TRUST_PROXY_HOPS` defaults to 0 when unset,
+  with a boot warning (set 1 behind one edge proxy). MCP prompt arguments are
+  quoted as data. A paid server answers a job created by a FREE_MODE server as
+  not found.
 Limits:
 - The unpaid price-check budget counts per client address (an IPv6 /64 as
   one) whatever the User-Agent; a named indexer or search crawler reads
