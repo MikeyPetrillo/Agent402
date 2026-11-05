@@ -215,11 +215,66 @@ async function evalBounded(script, keys, args) {
 // This process's own counts for the operator view (the caps are on Redis).
 let lastStoreError = null;
 let deniedToday = { day: "", byReason: {} };
+// Refusals of NEW wallets only (no paid sale on the books, not ours), by
+// reason and route, so a refusal count is not swamped by returning buyers who
+// could never take a grant. `unclassified` counts refusals whose payer could
+// not be read cheaply (another rail, no signed payer, an async ledger seam).
+// Slugs come from the catalog, never from input; still at most
+// NEW_WALLET_SLUG_CAP per reason, the rest folded into "other". No payer
+// address is kept.
+export const NEW_WALLET_SLUG_CAP = 50;
+let newWalletDeniedToday = { day: "", byReason: {}, unclassified: {} };
 let lifecycleToday = { day: "", claimed: 0, served: 0, released: 0 };
-function noteDenied(reason, now) {
+function noteDenied(reason, now, slug = null, payerClass = "unknown") {
   const day = dayOf(now);
   if (deniedToday.day !== day) deniedToday = { day, byReason: {} };
   deniedToday.byReason[reason] = (deniedToday.byReason[reason] || 0) + 1;
+  if (newWalletDeniedToday.day !== day) newWalletDeniedToday = { day, byReason: {}, unclassified: {} };
+  if (payerClass === "unknown") {
+    newWalletDeniedToday.unclassified[reason] = (newWalletDeniedToday.unclassified[reason] || 0) + 1;
+    return;
+  }
+  if (payerClass !== "new") return;
+  const row = newWalletDeniedToday.byReason[reason] || (newWalletDeniedToday.byReason[reason] = { total: 0, bySlug: {} });
+  row.total++;
+  const s = typeof slug === "string" && slug ? slug : "other";
+  const k = Object.hasOwn(row.bySlug, s) || Object.keys(row.bySlug).length < NEW_WALLET_SLUG_CAP ? s : "other";
+  row.bySlug[k] = (row.bySlug[k] || 0) + 1;
+}
+
+/** The signed payer of a plain x402 EVM exact payment, read as the grant path
+ *  reads it, or `{ why }` naming the refusal. No store or RPC read. */
+function plainEvmExactPayer(req) {
+  // Plain x402 EVM exact only: the request carries a payment header the x402
+  // paywall verified, and no other gate (Tempo, Stripe, credits, the MPP shim)
+  // took it. Permit2 and the Gateway batched option are excluded by shape.
+  if (req.tempoSettled || req.stripeSettled || req.creditsSettled || req.mppCredential) return { why: "rail" };
+  const header = paymentHeaderOf(req);
+  if (!header || paymentSchemeOf(req) !== "exact" || isGatewayBatchedRequest(req)) return { why: "rail" };
+  let payload = null;
+  try { payload = JSON.parse(Buffer.from(header, "base64").toString("utf8")); } catch { payload = null; }
+  if (!payload?.payload?.authorization || payload?.payload?.permit2Authorization) return { why: "rail" };
+  const network = String(payload?.accepted?.network ?? payload?.network ?? "");
+  if (!network.startsWith("eip155:")) return { why: "rail" };
+  const payer = payerFromRequest(req);
+  if (!payer) return { why: "no signed payer" };
+  return { why: null, header, network, payer };
+}
+
+/** Whether a refused request's payer is "new", "returning", "ours" or
+ *  "unknown". Reads the ledger only through a synchronous `hasPaidSale` (the
+ *  server's is an in-memory SQLite read); an async one is never called here and
+ *  the payer reads "unknown". Never reads the grant records. */
+function payerClassOf(req, { payer = undefined, synthetic = false, hasPaidSale } = {}) {
+  try {
+    const p = payer === undefined ? plainEvmExactPayer(req).payer : payer;
+    if (!p) return "unknown";
+    if (synthetic || isOurs(p)) return "ours";
+    if (typeof hasPaidSale !== "function" || hasPaidSale.constructor?.name === "AsyncFunction") return "unknown";
+    const v = hasPaidSale(p);
+    if (v && typeof v.then === "function") { v.then(() => {}, () => {}); return "unknown"; }
+    return v ? "returning" : "new";
+  } catch { return "unknown"; }
 }
 function noteLifecycle(what, now) {
   const day = dayOf(now);
@@ -265,57 +320,60 @@ function store(req, a) {
 export async function claimFirstCallAllowance(req, res, def, { ip = null, synthetic = false, hasPaidSale = () => false, readBalance = readTokenBalance, now = Date.now() } = {}) {
   const cfg = firstCallAllowanceConfig();
   const a = { granted: false, state: "denied", reason: null, payer: null, micro: 0, keys: null, token: null, slug: def?.slug || null, done: false };
-  const deny = (reason) => { a.reason = reason; noteDenied(reason, now); return store(req, a); };
+  // `who` classifies the payer for the new-wallet counts: a function, called
+  // only on a refusal, so a granted call does no extra read.
+  const deny = (reason, who = () => payerClassOf(req, { synthetic, hasPaidSale })) => {
+    a.reason = reason;
+    noteDenied(reason, now, a.slug, typeof who === "function" ? who() : who);
+    return store(req, a);
+  };
   if (!cfg.enabled) { a.reason = "off"; return store(req, a); }
   const routeWhy = allowanceRouteRefusal(def, cfg);
   if (routeWhy) return deny(routeWhy);
   if (!(cfg.dailyMicro > 0)) return deny("daily cap");
-  // Plain x402 EVM exact only: the request carries a payment header the x402
-  // paywall verified, and no other gate (Tempo, Stripe, credits, the MPP shim)
-  // took it. Permit2 and the Gateway batched option are excluded by shape.
-  if (req.tempoSettled || req.stripeSettled || req.creditsSettled || req.mppCredential) return deny("rail");
-  const header = paymentHeaderOf(req);
-  if (!header || paymentSchemeOf(req) !== "exact" || isGatewayBatchedRequest(req)) return deny("rail");
-  let payload = null;
-  try { payload = JSON.parse(Buffer.from(header, "base64").toString("utf8")); } catch { payload = null; }
-  if (!payload?.payload?.authorization || payload?.payload?.permit2Authorization) return deny("rail");
-  const network = String(payload?.accepted?.network ?? payload?.network ?? "");
-  if (!network.startsWith("eip155:")) return deny("rail");
-  const payer = payerFromRequest(req);
-  if (!payer) return deny("no signed payer");
-  if (wantsAsync(req) || req.headers?.[LOOPBACK_HEADER] || req.body?.stream === true) return deny("async or streamed");
-  if (synthetic || isOurs(payer)) return deny("own wallet");
-  if (typeof ip !== "string" || !ip) return deny("no client address");
+  const rail = plainEvmExactPayer(req);
+  if (rail.why) return deny(rail.why, "unknown");
+  const { header, network, payer } = rail;
+  const known = () => payerClassOf(req, { payer, synthetic, hasPaidSale });
+  if (wantsAsync(req) || req.headers?.[LOOPBACK_HEADER] || req.body?.stream === true) return deny("async or streamed", known);
+  if (synthetic || isOurs(payer)) return deny("own wallet", "ours");
+  if (typeof ip !== "string" || !ip) return deny("no client address", known);
   // A share link is written only on a settled 200: a grant would hand out a
   // link that is never written.
   let input = null;
   try { input = handlerInputOf(req, def); } catch { input = null; }
-  if (!input) return deny("input");
-  if (shareBlocksGrant(input)) return deny("share");
+  if (!input) return deny("input", known);
+  if (shareBlocksGrant(input)) return deny("share", known);
   let paid = true;
   try { paid = Boolean(await hasPaidSale(payer)); } catch { paid = true; }
-  if (paid) return deny("paid before");
+  if (paid) return deny("paid before", "returning");
   if (stateDbEnabled()) {
     let seen = true;
     try { seen = (await records.get(RECORD_COLLECTION, payer)) != null; } catch { seen = true; }
-    if (seen) return deny("wallet already granted");
+    if (seen) return deny("wallet already granted", "returning");
   }
+  // From here the payer is known new: no paid sale and no grant record.
+  const fresh = "new";
   const terms = coverTermsOf(header);
-  if (!terms || terms.payer !== payer) return deny("rail");
+  if (!terms || terms.payer !== payer) return deny("rail", fresh);
   // The settle hook finds the grant by this identity: a payment without one
   // is never granted.
   const ident = paymentNonceIdentityOf(req);
   const paymentKey = ident && ident.from === payer ? allowancePaymentKey(ident.network, ident.from, ident.nonce) : null;
-  if (!paymentKey) return deny("rail");
+  if (!paymentKey) return deny("rail", fresh);
   // The cheap caps first (one Redis script): a spent cap, a used address or a
   // granted wallet is refused with no RPC read.
   const micro = listMicroOf(def);
   const keys = keysFor(payer, ip, now);
   const token = `claim:${createHash("sha256").update(`${payer}:${now}:${Math.random()}`).digest("hex").slice(0, 16)}`;
   const r = await evalBounded(CLAIM, [keys.wallet, keys.usd, keys.count, keys.ip], [token, micro, cfg.dailyMicro, cfg.ipPerDay, DAY_TTL_SECONDS, CLAIM_TTL_SECONDS]);
-  if (!r.ok) { lastStoreError = r.error; return deny("store unavailable"); }
+  if (!r.ok) { lastStoreError = r.error; return deny("store unavailable", fresh); }
   lastStoreError = null;
-  if (Number(r.value?.[0]) !== 1) return deny(String(r.value?.[1] || "refused"));
+  if (Number(r.value?.[0]) !== 1) {
+    const why = String(r.value?.[1] || "refused");
+    // A wallet key on the store is a wallet granted before: not new.
+    return deny(why, why === "wallet already granted" ? "returning" : fresh);
+  }
   // The balance must cover the call: verify proved it at verify time; this
   // read refuses a wallet that cannot be read in time or does not hold the
   // price, and gives the claim back.
@@ -324,7 +382,7 @@ export async function claimFirstCallAllowance(req, res, def, { ip = null, synthe
   if (typeof balance !== "bigint" || balance < terms.atomic) {
     const back = await evalBounded(RELEASE, [keys.wallet, keys.usd, keys.count, keys.ip], [token, micro]);
     if (!back.ok) lastStoreError = back.error;
-    return deny("balance");
+    return deny("balance", fresh);
   }
   Object.assign(a, { granted: true, state: "claimed", payer, micro, keys, token, network, res, paymentKey, claimedAt: now });
   store(req, a);
@@ -512,6 +570,10 @@ export async function firstCallAllowanceStatus({ now = Date.now(), returned = nu
     routes: [...cfg.slugs].sort(),
     today: null,
     deniedToday: deniedToday.day === dayOf(now) ? { ...deniedToday.byReason } : {},
+    newWalletDeniedToday: newWalletDeniedToday.day === dayOf(now)
+      ? Object.fromEntries(Object.entries(newWalletDeniedToday.byReason).map(([r, v]) => [r, { total: v.total, bySlug: { ...v.bySlug } }]))
+      : {},
+    unclassifiedDeniedToday: newWalletDeniedToday.day === dayOf(now) ? { ...newWalletDeniedToday.unclassified } : {},
     processToday: lifecycleToday.day === dayOf(now) ? { claimed: lifecycleToday.claimed, served: lifecycleToday.served, released: lifecycleToday.released } : { claimed: 0, served: 0, released: 0 },
     lastStoreError,
     status: "off",
@@ -540,4 +602,4 @@ export async function firstCallAllowanceStatus({ now = Date.now(), returned = nu
 /** Test seam: how many claimed payments this process holds. */
 export function _allowanceClaimsHeld() { return claimsByPayment.size; }
 /** Test seam. */
-export function _resetFirstCallAllowance() { claimsByPayment.clear(); returnedCache = null; returnedInflight = null; lastStoreError = null; deniedToday = { day: "", byReason: {} }; lifecycleToday = { day: "", claimed: 0, served: 0, released: 0 }; }
+export function _resetFirstCallAllowance() { claimsByPayment.clear(); returnedCache = null; returnedInflight = null; lastStoreError = null; deniedToday = { day: "", byReason: {} }; newWalletDeniedToday = { day: "", byReason: {}, unclassified: {} }; lifecycleToday = { day: "", claimed: 0, served: 0, released: 0 }; }
