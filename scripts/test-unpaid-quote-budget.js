@@ -23,9 +23,16 @@
 //   a client that settles a payment is not counted for the rest of the hour
 //   (every purchase opens with one bare unpaid request, so a buyer would
 //   otherwise spend this budget on its own purchases);
-//   named indexers (x402scan, a search crawler), our own CI sweep User-Agent, a
-//   signed heartbeat probe and the MCP connector's loopback are never counted;
-//   a second User-Agent from the same address is its own client;
+//   the key is the client ADDRESS alone (req.ip, an IPv6 /64 as one): a
+//   second User-Agent from the same address is the same client, so rotating
+//   User-Agents buys nothing; behind the CDN proxy the key is the resolved
+//   client (src/cdn-client-ip.js), and a CF-Connecting-IP from a peer that is
+//   not the CDN changes nothing;
+//   a User-Agent naming one of our own probes is counted like any other: only
+//   the signed heartbeat marker exempts, and a forged one does not;
+//   a self-declared named indexer or search crawler is counted on its
+//   address against NAMED_CLIENT_BUDGET_MULTIPLIER times the budget, never a
+//   pass; the MCP connector's loopback is never counted;
 //   the discovery documents, pages and unknown paths are never budgeted;
 //   a stats read taken in a new hour reports this hour, not the last one;
 //   /crawler quotes the budget the gate enforces and /robots.txt points at it;
@@ -49,7 +56,7 @@ const MCP_MARKER = `mcp;k=${(process.env.MCP_LOOPBACK_TEST_SECRET = "6b".repeat(
 const {
   DEFAULT_UNPAID_QUOTE_BUDGET_PER_HOUR, UNPAID_QUOTE_BUDGET_LOG_CAP, createUnpaidQuoteBudget, unpaidQuoteBudgetPerHour,
   hasCredentialHeader, looksLikePayment, looksLikePowSolution, hasSettlementReceipt, normalizeCatalogPath,
-  isExemptUserAgent, isMcpLoopback, isExemptPath, secondsToHourBoundary,
+  isNamedClientUserAgent, clientKeyOf, NAMED_CLIENT_BUDGET_MULTIPLIER, isMcpLoopback, isExemptPath, secondsToHourBoundary,
 } = await import("../src/unpaid-quote-budget.js");
 const { crawlerPage, catalogCrawlSection } = await import("../src/crawler-page.js");
 const { perReplica } = await import("../src/rate-limit.js");
@@ -162,8 +169,56 @@ ok(hasSettlementReceipt({ statusCode: 200, getHeader: (k) => (k.toLowerCase() ==
 ok(hasSettlementReceipt({ statusCode: 200, getHeader: (k) => (k === "Payment-Receipt" ? "signed-receipt" : undefined) }), "an MPP Payment-Receipt on a 200 is a settlement");
 ok(!hasSettlementReceipt({ statusCode: 200, getHeader: (k) => (k.toLowerCase() === "payment-response" ? receiptHeader({ success: false }) : undefined) }), "a receipt that reports failure is not a settlement");
 ok(!hasSettlementReceipt({ statusCode: 402, getHeader: () => "Payment-Receipt" }) && !hasSettlementReceipt({ statusCode: 200, getHeader: () => undefined }) && !hasSettlementReceipt(null), "a refused response, a response with no receipt and no response at all are not settlements");
-ok(isExemptUserAgent("x402scan/1.0") && isExemptUserAgent("Mozilla/5.0 (compatible; Googlebot/2.1)") && isExemptUserAgent("agent402-ci-sweep/1.0 (+https://agent402.tools/crawler)"), "named indexers, search crawlers and our own User-Agents are exempt");
-ok(!isExemptUserAgent("curl/8.4") && !isExemptUserAgent("") && !isExemptUserAgent("python-httpx/0.27"), "an unnamed client is not exempt");
+ok(isNamedClientUserAgent("x402scan/1.0") && isNamedClientUserAgent("Mozilla/5.0 (compatible; Googlebot/2.1)"), "a named indexer and a search crawler are named clients (a larger bucket, not a pass)");
+ok(!isNamedClientUserAgent("agent402-ci-sweep/1.0 (+https://agent402.tools/crawler)") && !isNamedClientUserAgent("agent402-heartbeat/1.0") && !isNamedClientUserAgent("agent402-status-probe/1.0"), "our own User-Agents are not named clients: a probe of ours is known by its signed marker, never by what it calls itself");
+ok(!isNamedClientUserAgent("curl/8.4") && !isNamedClientUserAgent("") && !isNamedClientUserAgent("python-httpx/0.27"), "an unnamed client is not a named client");
+ok(NAMED_CLIENT_BUDGET_MULTIPLIER === 10, "a named client reads against ten times the budget");
+// The key is the address req.ip carries, folded to its /64, never a header.
+ok(clientKeyOf({ ip: "203.0.113.9", headers: { "user-agent": "a/1", "cf-connecting-ip": "198.51.100.1", "x-forwarded-for": "198.51.100.2" } }) === "203.0.113.9", "the key is req.ip alone: neither the User-Agent nor a forwarding header a caller wrote moves it");
+ok(clientKeyOf({ ip: "2001:db8:1:2::1" }) === clientKeyOf({ ip: "2001:db8:1:2:ffff:aaaa:bbbb:cccc" }) && clientKeyOf({ ip: "2001:db8:1:2::1" }) !== clientKeyOf({ ip: "2001:db8:1:3::1" }), "two IPv6 addresses in one /64 are one key, the next /64 is another");
+ok(clientKeyOf({ socket: { remoteAddress: "10.1.1.1" } }) === "10.1.1.1" && clientKeyOf({}) === "-", "with no req.ip the socket address is the key");
+
+// The middleware, in process: what a walker can and cannot do to its key.
+{
+  const fakeReq = (ip, headers = {}) => ({ method: "GET", path: "/api/uuid", ip, headers, socket: { remoteAddress: ip } });
+  const fakeRes = () => ({ statusCode: 200, set() { return this; }, status(c) { this.statusCode = c; return this; }, json(b) { this.body = b; return this; }, once() { return this; } });
+  const run = (b, req) => { const res = fakeRes(); let nexted = false; b.middleware(req, res, () => { nexted = true; }); return nexted ? "next" : res.statusCode; };
+  const mk = (extra = {}) => createUnpaidQuoteBudget({ budget: 3, isPriced: () => true, replicas: 1, log: () => {}, ...extra });
+
+  const rot = mk();
+  const rotGot = [];
+  for (let i = 0; i < 4; i++) rotGot.push(run(rot, fakeReq("203.0.113.1", { "user-agent": `walker-${i}/1.0` })));
+  ok(rotGot.slice(0, 3).every((s) => s === "next") && rotGot[3] === 429, `a new User-Agent on every request from one address is refused once the address spends the budget (got ${rotGot.join(",")})`);
+
+  const own = mk();
+  const ownGot = [];
+  for (const ua of ["agent402-heartbeat/1.0", "agent402-status-probe/1.0", "agent402-ci-sweep/1.0", "agent402-paid-canary"]) ownGot.push(run(own, fakeReq("203.0.113.2", { "user-agent": ua })));
+  ok(ownGot.slice(0, 3).every((s) => s === "next") && ownGot[3] === 429, `our own User-Agent strings without the signed marker are counted like any other client (got ${ownGot.join(",")})`);
+
+  const marked = mk({ isSynthetic: (r) => r.headers["x-heartbeat-token"] === "signed" });
+  for (let i = 0; i < 3; i++) run(marked, fakeReq("203.0.113.3"));
+  ok(run(marked, fakeReq("203.0.113.3")) === 429, "control: the address is spent");
+  ok([1, 2, 3, 4, 5].every(() => run(marked, fakeReq("203.0.113.3", { "user-agent": "agent402-heartbeat/1.0", "x-heartbeat-token": "signed" })) === "next"), "a request carrying the signed marker is never counted, even from a spent address");
+  ok(run(marked, fakeReq("203.0.113.3", { "user-agent": "agent402-heartbeat/1.0", "x-heartbeat-token": "forged" })) === 429, "a marker that does not verify is counted");
+
+  const named = mk();
+  const bot = { "user-agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" };
+  let botFirst429 = 0;
+  for (let i = 1; i <= 40 && !botFirst429; i++) if (run(named, fakeReq("203.0.113.4", bot)) === 429) botFirst429 = i;
+  ok(botFirst429 === 3 * NAMED_CLIENT_BUDGET_MULTIPLIER + 1, `a self-declared crawler reads past the plain budget and is refused past ten times it on its address (first 429 at ${botFirst429})`);
+  ok(run(named, fakeReq("203.0.113.4", { "user-agent": "walker/1" })) === 429, "the crawler's reads are on its address's one count: a plain client there is refused too");
+  const mixed = mk();
+  for (let i = 0; i < 3; i++) run(mixed, fakeReq("203.0.113.5", { "user-agent": "walker/1" }));
+  ok(run(mixed, fakeReq("203.0.113.5", { "user-agent": "walker/1" })) === 429 && run(mixed, fakeReq("203.0.113.5", bot)) === "next", "a spent plain client switching to a crawler's name gets the named allowance on the same count, never a fresh one");
+  let mixed429 = 0;
+  for (let i = 1; i <= 40 && !mixed429; i++) if (run(mixed, fakeReq("203.0.113.5", bot)) === 429) mixed429 = i;
+  ok(mixed429 > 0 && mixed429 <= 3 * NAMED_CLIENT_BUDGET_MULTIPLIER, `...and that allowance is bounded by the address's whole count (refused after ${mixed429} more)`);
+
+  const v6 = mk();
+  for (let i = 0; i < 3; i++) run(v6, fakeReq(`2001:db8:5:6::${i + 1}`));
+  ok(run(v6, fakeReq("2001:db8:5:6:ffff:1:2:3")) === 429, "two IPv6 addresses in one /64 share one budget");
+  ok(run(v6, fakeReq("2001:db8:5:7::1")) === "next", "the next /64 has its own");
+}
 ok(isMcpLoopback({ headers: { "x-agent402-via": MCP_MARKER }, socket: { remoteAddress: "127.0.0.1" } }) && isMcpLoopback({ headers: { "x-agent402-via": MCP_MARKER }, socket: { remoteAddress: "::ffff:127.0.0.1" } }), "the MCP connector's loopback is recognized");
 ok(!isMcpLoopback({ headers: { "x-agent402-via": MCP_MARKER }, socket: { remoteAddress: "10.0.0.5" } }), "the loopback marker from a non-local socket is ignored (the header alone is caller-settable)");
 ok(!isMcpLoopback({ headers: { "x-agent402-via": "mcp" }, socket: { remoteAddress: "127.0.0.1" } }), "a marker without the secret on a local socket is not the connector (a same-host proxy)");
@@ -286,6 +341,8 @@ ok(isExemptPath("/mcp") && isExemptPath("/api/pricing") && isExemptPath("/openap
   const page = crawlerPage("https://x.test", { unpaidQuoteBudget: 1234 });
   ok(page.includes("Crawling this catalog") && page.includes('id="crawling-this-catalog"'), "/crawler carries the section, anchored");
   ok(page.includes("Past 1,234 in an hour"), "/crawler quotes the budget it is handed, formatted");
+  ok(page.includes("per client address, whatever the User-Agent") && !/one User-Agent product token/.test(page), "/crawler says the budget is per address, not per User-Agent");
+  ok(page.includes("against 12,340 unpaid requests per address") && !/crawlers are not budgeted/.test(page), "/crawler quotes the named-client allowance and no longer says named crawlers are not budgeted");
   ok(page.includes("If-None-Match") && page.includes("/api/pricing") && page.includes("/.well-known/x402"), "/crawler names the three documents and the conditional read");
   ok(!/\u2014|\u2013/.test(catalogCrawlSection(1234).p.join(" ")), "the section carries no em or en dashes");
   ok(crawlerPage("https://x.test", { unpaidQuoteBudget: 0 }).includes("sets no hourly budget"), "with the budget off the page says no budget is enforced, never a number");
@@ -341,7 +398,11 @@ const call = async (base, path, { method = "GET", ua = "budget-walker/1.0", head
   return r;
 };
 
-const pPaid = boot(PAID, { ...paidEnv, UNPAID_QUOTE_BUDGET_PER_HOUR: "5" });
+// The CDN resolver is on for the paid boot so the key can be checked on the
+// resolved client. A request with no X-Forwarded-For comes from 127.0.0.1,
+// outside the CDN ranges, so the rest of this boot reads req.ip as before.
+const ORIGIN_SECRET = "test-unpaid-budget-origin-secret";
+const pPaid = boot(PAID, { ...paidEnv, UNPAID_QUOTE_BUDGET_PER_HOUR: "5", CDN_PROXY: "on", CDN_ORIGIN_SECRET: ORIGIN_SECRET, TRUST_PROXY_HOPS: "1" });
 const pOff = boot(OFF, { ...paidEnv, UNPAID_QUOTE_BUDGET_PER_HOUR: "off" });
 const pFree = boot(FREE, { FREE_MODE: "true", UNPAID_QUOTE_BUDGET_PER_HOUR: "5" });
 const P = `http://127.0.0.1:${PAID}`, O = `http://127.0.0.1:${OFF}`, F = `http://127.0.0.1:${FREE}`;
@@ -368,6 +429,7 @@ try {
   ok(Number.isInteger(ra) && ra >= 1 && ra <= 3600, `the 429 carries Retry-After in seconds to the hour (got ${sixth.headers.get("retry-after")})`);
   const body = await sixth.json();
   ok(body.ok === false && body.error === "rate-limited", "the 429 body says rate-limited");
+  ok(body.reason === "unpaid-quote-budget", `the 429 body names the budget in reason, which our observers read (got ${body.reason})`);
   ok(typeof body.hint === "string" && body.hint.includes("/crawler") && body.hint.includes("unpaid price checks") && body.hint.includes("budget 5"), "the hint names unpaid price checks, the budget and /crawler");
   ok(body.retryAfterSeconds === ra, "retryAfterSeconds matches the header");
   ok(!sixth.headers.get("payment-required"), "a throttled request is answered before the paywall builds a challenge");
@@ -409,15 +471,15 @@ try {
     ok(r.status === 429, `${label} is counted like any other request (got ${r.status})`);
   }
 
-  // Named clients and our own traffic are never budgeted.
-  for (const [label, ua] of [["an x402scan", "x402scan-indexer/2.0"], ["our CI sweep", "agent402-ci-sweep/1.0 (+https://agent402.tools/crawler)"], ["a search crawler", "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"]]) {
-    const got = [];
-    for (let i = 0; i < 9; i++) got.push((await call(P, "/api/uuid", { ua })).status);
-    ok(got.every((s) => s !== 429), `${label} User-Agent is never throttled (9 requests, got ${[...new Set(got)].join(",")})`);
+  // Our own User-Agent strings are caller text: without the signed marker
+  // they are this spent address's requests like any other.
+  for (const ua of ["agent402-ci-sweep/1.0 (+https://agent402.tools/crawler)", "agent402-heartbeat/1.0", "agent402-status-probe/1.0"]) {
+    const r = await call(P, "/api/uuid", { ua });
+    ok(r.status === 429, `${ua.split(" ")[0]} without the signed marker is counted on its address (got ${r.status})`);
   }
   const hb = [];
-  for (let i = 0; i < 8; i++) hb.push((await call(P, "/api/uuid", { headers: { "x-heartbeat-token": issueHeartbeatToken() } })).status);
-  ok(hb.every((s) => s !== 429), `a signed heartbeat probe from the throttled client is never budgeted (got ${[...new Set(hb)].join(",")})`);
+  for (let i = 0; i < 8; i++) hb.push((await call(P, "/api/uuid", { ua: "agent402-heartbeat/1.0", headers: { "x-heartbeat-token": issueHeartbeatToken() } })).status);
+  ok(hb.every((s) => s === 402), `a signed heartbeat probe from the throttled address is never budgeted (got ${[...new Set(hb)].join(",")})`);
   const forged = await call(P, "/api/uuid", { headers: { "x-heartbeat-token": "forged-token-value-000000000000" } });
   ok(forged.status === 429, `a forged heartbeat token is counted like any other request (got ${forged.status})`);
   const forgedMcp = await call(P, "/api/uuid", { headers: { "x-agent402-via": "mcp" } });
@@ -425,9 +487,9 @@ try {
   const mcp = await call(P, "/api/uuid", { headers: { "x-agent402-via": MCP_MARKER } });
   ok(mcp.status !== 429, `the MCP connector's loopback (local socket + marker) is not budgeted (got ${mcp.status})`);
 
-  // One address, two programs: two clients.
+  // One address, another User-Agent: the same client.
   const other = await call(P, "/api/uuid", { ua: "other-walker/2.0" });
-  ok(other.status === 402, `a different User-Agent from the same address has its own count (got ${other.status})`);
+  ok(other.status === 429, `a different User-Agent from the same address is the same client (got ${other.status})`);
 
   // Discovery, pages and unpriced paths stay open to the throttled client.
   for (const path of ["/api/pricing", "/openapi.json", "/.well-known/x402", "/llms.txt", "/health"]) {
@@ -446,10 +508,50 @@ try {
   // The operator read carries counts only.
   const op = await (await fetch(`${P}/__operator/traffic.json?days=1`, { headers: { authorization: "Bearer test-unpaid-budget-operator" } })).json();
   const ub = op.unpaidQuoteBudget || {};
-  ok(ub.budget === 5 && ub.clientsThrottledThisHour === 1 && ub.clientsThisHour === 2, `the operator traffic read reports the budget and the clients seen (got ${JSON.stringify(ub)})`);
+  ok(ub.budget === 5 && ub.clientsThrottledThisHour === 1 && ub.clientsThisHour === 1, `the operator traffic read reports the budget and the clients seen (got ${JSON.stringify(ub)})`);
   ok(ub.throttledSinceBoot === paid429, `the throttled total matches the 429s this test saw (${ub.throttledSinceBoot} vs ${paid429})`);
   ok(ub.clientsThrottledCapAt === UNPAID_QUOTE_BUDGET_LOG_CAP && ub.clientsThrottledCapped === false, "the read names the cap on the throttled-client count rather than reporting a capped number as a count");
   ok(!/127\.0\.0\.1|::1|budget-walker/.test(JSON.stringify(ub)), "the operator figures carry no address and no User-Agent");
+
+  // Clients told apart by address. X-Forwarded-For stands in for the hosting
+  // edge (trust proxy, one hop), so each block below is a fresh address.
+  const from = (ip, extra = {}) => ({ ...extra, headers: { "x-forwarded-for": ip, ...(extra.headers || {}) } });
+  const statuses = async (n, mkOpts) => { const got = []; for (let i = 0; i < n; i++) got.push((await call(P, "/api/uuid", mkOpts(i))).status); return got; };
+  {
+    const got = await statuses(6, (i) => from("203.0.113.10", { ua: `rotating-${i}/1.0` }));
+    ok(got.slice(0, 5).every((s) => s === 402) && got[5] === 429, `rotating the User-Agent on every request from one address is refused after the budget (got ${got.join(",")})`);
+  }
+  {
+    const bot = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)";
+    const got = await statuses(5 * NAMED_CLIENT_BUDGET_MULTIPLIER + 1, () => from("203.0.113.12", { ua: bot }));
+    const first429 = got.indexOf(429) + 1;
+    ok(first429 === 5 * NAMED_CLIENT_BUDGET_MULTIPLIER + 1 && got.slice(0, 50).every((s) => s === 402), `a self-declared search crawler reads ten times the budget on its address, then is a 429 (first 429 at request ${first429})`);
+    const plain = await call(P, "/api/uuid", from("203.0.113.12"));
+    ok(plain.status === 429, `its count is the address's: a plain client there is refused too (got ${plain.status})`);
+    const idx = await statuses(9, () => from("203.0.113.14", { ua: "x402scan-indexer/2.0" }));
+    ok(idx.every((s) => s === 402), `a named indexer reads past the plain budget (9 requests, got ${[...new Set(idx)].join(",")})`);
+  }
+  {
+    const got = await statuses(5, (i) => from(`2001:db8:aa:bb::${i + 1}`));
+    const same64 = await call(P, "/api/uuid", from("2001:db8:aa:bb:ffff:1:2:3"));
+    const next64 = await call(P, "/api/uuid", from("2001:db8:aa:bc::1"));
+    ok(got.every((s) => s === 402) && same64.status === 429, `two IPv6 addresses in one /64 share a budget (got ${got.join(",")} then ${same64.status})`);
+    ok(next64.status === 402, `the next /64 has its own (got ${next64.status})`);
+  }
+  // Behind the CDN: a peer inside the CDN ranges carrying the origin secret
+  // names the client in CF-Connecting-IP, and the budget keys on that client
+  // whichever edge address carried it.
+  {
+    const viaCdn = (peer, client) => from(peer, { headers: { "x-origin-auth": ORIGIN_SECRET, "cf-connecting-ip": client } });
+    const got = await statuses(6, (i) => viaCdn(`173.245.48.${10 + i}`, "198.51.100.20"));
+    ok(got.slice(0, 5).every((s) => s === 402) && got[5] === 429, `through the CDN the budget keys on the resolved client, across edge addresses (got ${got.join(",")})`);
+    const otherClient = await call(P, "/api/uuid", viaCdn("173.245.48.10", "198.51.100.21"));
+    ok(otherClient.status === 402, `another client behind the same edge address has its own count (got ${otherClient.status})`);
+    const forged = await statuses(6, (i) => from("192.0.2.50", { headers: { "x-origin-auth": ORIGIN_SECRET, "cf-connecting-ip": `198.51.100.${30 + i}` } }));
+    ok(forged.slice(0, 5).every((s) => s === 402) && forged[5] === 429, `a CF-Connecting-IP from a peer outside the CDN ranges is ignored: the peer is the key (got ${forged.join(",")})`);
+    const noSecret = await statuses(6, (i) => from("173.245.48.40", { headers: { "cf-connecting-ip": `198.51.100.${50 + i}` } }));
+    ok(noSecret.slice(0, 5).every((s) => s === 402) && noSecret[5] === 429, `a CDN-range peer without the origin secret is keyed on itself (got ${noSecret.join(",")})`);
+  }
 
   // Budget off: never throttles.
   const offGot = [];

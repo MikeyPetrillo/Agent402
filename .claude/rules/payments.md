@@ -137,7 +137,12 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `/__operator/tool-failures.json` (`pendingSettles`; `scripts/test-pending-settle.js`).
 - **Unpaid quote budget:** `src/unpaid-quote-budget.js` bounds bursts of unpaid 402 reads. A
   payment header counts as an attempt (`src/payment-attempt.js`) only when it decodes to an offered
-  network or an MPP credential; bytes that do not decode are an unpaid read.
+  network or an MPP credential; bytes that do not decode are an unpaid read. The key is the client
+  address alone (`clientKeyOf`: `limiterKey(req.ip)`, an IPv6 /64 as one); the User-Agent is kept
+  for the log line only. Only our signed probes are exempt (`isSynthetic`, server.js `isSyntheticRequest`: the
+  HMAC `X-Heartbeat-Token`); a User-Agent naming us is counted like any other, and a
+  self-declared named indexer or crawler reads against `NAMED_CLIENT_BUDGET_MULTIPLIER` (10) times
+  the budget on the same address count, never a pass.
 - **Challenge size:** `scripts/test-challenge-size.js` keeps the 402 header under what a buyer
   can echo back; `scripts/test-bazaar-contracts.js` validates every 402 against the protocol's
   own schema.

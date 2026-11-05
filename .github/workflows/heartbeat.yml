@@ -75,12 +75,13 @@ jobs:
         run: |
           . scripts/heartbeat-probe.sh
           for attempt in 1 2 3; do
-            if probe; then echo "status=up" >> "$GITHUB_OUTPUT"; echo "production healthy (attempt $attempt)"; exit 0; fi
+            if probe; then echo "status=up" >> "$GITHUB_OUTPUT"; echo "paywall_unknown=$PAYWALL_UNKNOWN" >> "$GITHUB_OUTPUT"; echo "production healthy (attempt $attempt)"; exit 0; fi
             echo "attempt $attempt failed:$FAILS — retrying in 60s"
             sleep 60
           done
           echo "status=down" >> "$GITHUB_OUTPUT"
           echo "fails=$FAILS" >> "$GITHUB_OUTPUT"
+          echo "paywall_unknown=$PAYWALL_UNKNOWN" >> "$GITHUB_OUTPUT"
 
       # Record what this probe observed, so /status can show availability
       # measured from OUTSIDE production rather than production's opinion of
@@ -97,6 +98,9 @@ jobs:
           PROBE_TOKEN: ${{ secrets.STATUS_PROBE_TOKEN }}
           STATUS: ${{ steps.probe.outputs.status }}
           FAILS: ${{ steps.probe.outputs.fails }}
+          # "1" when the unpaid-quote budget refused the paywall read twice:
+          # paywall and rails were not observed and are left out of the record.
+          PAYWALL_UNKNOWN: ${{ steps.probe.outputs.paywall_unknown }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           . scripts/heartbeat-probe.sh

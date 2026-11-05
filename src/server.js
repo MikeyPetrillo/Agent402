@@ -3262,8 +3262,9 @@ app.use((req, _res, next) => {
 // turns a POST on a GET-only canonical route into the GET it needs, so a buyer
 // can POST every verb in the namespace without knowing which is which.
 app.use(chainNamespaceMiddleware);
-// Hourly budget on unpaid price checks per client (ip + User-Agent product
-// token): src/unpaid-quote-budget.js. After the traffic classifier (so a 429 is
+// Hourly budget on unpaid price checks per client address (req.ip, an IPv6
+// /64 as one; the User-Agent never makes a new client or an exemption, only
+// our signed probes are exempt): src/unpaid-quote-budget.js. After the traffic classifier (so a 429 is
 // still classed) and the path rewrites above (so an alias counts as the route
 // it serves), BEFORE the body parsers and every payment/PoW gate, so a
 // throttled request costs no parse and no challenge build. Not mounted under

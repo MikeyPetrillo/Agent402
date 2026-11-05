@@ -117,6 +117,73 @@ console.log("status-probe worker — observation mapping");
   });
 }
 
+// The unpaid-quote budget's 429 (src/unpaid-quote-budget.js): this Worker
+// reads from Cloudflare's shared addresses, so a refusal by that budget says
+// nothing about the paywall. One re-read after Retry-After (capped); two
+// budget refusals leave paywall and rails unobserved, never failed. Any other
+// non-402, a plain 429 included, still fails.
+{
+  const budget429 = () => new Response(JSON.stringify({ ok: false, error: "rate-limited", reason: "unpaid-quote-budget", retryAfterSeconds: 1800 }), { status: 429, headers: { "content-type": "application/json", "retry-after": "1800" } });
+  const healthy402 = () => new Response("", { status: 402, headers: { "payment-required": offer(["eip155:8453"]) } });
+  const { PAYWALL_BUDGET_WAIT_MAX_MS } = await import("../workers/status-probe/src/index.js");
+
+  let n = 0;
+  stub({ extract: () => (++n === 1 ? budget429() : healthy402()) });
+  const waits = [];
+  const once = await probe(PROD, { sleep: async (ms) => { waits.push(ms); } });
+  check("a budget 429 then a 402: re-read once after a capped Retry-After, paywall and rails ok", () => {
+    assert.equal(n, 2, "exactly one re-read");
+    assert.deepEqual(waits, [PAYWALL_BUDGET_WAIT_MAX_MS], "the hour-long Retry-After is capped");
+    assert.ok(PAYWALL_BUDGET_WAIT_MAX_MS <= 10_000, "the wait stays well inside a run");
+    assert.equal(once.components.paywall.ok, true);
+    assert.equal(once.components.rails.ok, true);
+    assert.equal(once.fails.length, 0);
+    assert.equal(once.paywall.observed, true);
+  });
+
+  n = 0;
+  stub({ extract: () => { n++; return budget429(); } });
+  const twice = await probe(PROD, { sleep: async () => {} });
+  check("a budget 429 twice: paywall and rails unobserved, no failure", () => {
+    assert.equal(n, 2, "one re-read, no more");
+    assert.equal(twice.components.paywall, undefined, "an unobserved paywall is not recorded");
+    assert.equal(twice.components.rails, undefined, "nor are the rails");
+    assert.equal(twice.fails.length, 0, `no fail: ${twice.fails.join(" ")}`);
+    assert.equal(twice.paywall.observed, false);
+  });
+  stub({ extract: budget429 });
+  let recordedBody = null;
+  const recordLeg = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    if (String(url).endsWith("/api/status/probe")) { recordedBody = JSON.parse(init.body); return new Response("{}", { status: 200 }); }
+    return recordLeg(url, init);
+  };
+  const out = await run({ PROD, STATUS_PROBE_TOKEN: TOKEN }, { sleep: async () => {} });
+  check("a budget 429 twice through run(): recorded without paywall or rails, no retry pass, no page", () => {
+    assert.equal(out.fails.length, 0);
+    assert.ok(recordedBody && !("paywall" in recordedBody.components) && !("rails" in recordedBody.components), JSON.stringify(recordedBody?.components));
+    assert.equal(recordedBody.components.api.ok, true, "the rest is still recorded");
+    assert.notEqual(out.outage?.action, "opened");
+    assert.deepEqual(out.alarms?.opened || [], []);
+  });
+
+  for (const [label, leg] of [
+    ["a plain 429", () => Response.json({ ok: false, error: "rate-limited" }, { status: 429, headers: { "retry-after": "5" } })],
+    ["a 429 naming another reason", () => Response.json({ ok: false, error: "rate-limited", reason: "something-else" }, { status: 429 })],
+    ["a 500", () => new Response("boom", { status: 500 })],
+  ]) {
+    n = 0;
+    stub({ extract: () => { n++; return leg(); } });
+    const r = await probe(PROD, { sleep: async () => {} });
+    check(`${label} still fails the paywall as before, with no re-read`, () => {
+      assert.equal(n, 1);
+      assert.equal(r.components.paywall.ok, false);
+      assert.equal(r.components.rails.ok, false);
+      assert.ok(r.fails.some((f) => f.startsWith("paywall(")));
+    });
+  }
+}
+
 {
   stub({ pricing: () => Response.json({ endpoints: new Array(12).fill({}) }) });
   const { components } = await probe(PROD);
@@ -365,14 +432,21 @@ for (const [name, over, detail] of failCases) {
   // Subrequests. The worst run this Worker can make: every probe leg on both
   // attempts (a failure forces the retry, the paid-call reaches its call both
   // times), the record, a confirmed alarm reading, and every other alarm
-  // closing an open issue (a comment and a PATCH each).
+  // closing an open issue (a comment and a PATCH each), and the paywall read
+  // refused by the unpaid-quote budget once per attempt (one re-read each).
   let calls = 0;
   const HEALTHY_GW = { status: "ok", upstreamBuyer: { status: "low", trend: "ok" }, upstreamBuyerAvm: { status: "ok" }, upstreamBuyerTempo: { status: "ok" }, subscriptionFeePayer: { status: "ok" }, databases: { leads: { status: "ok" }, analytics: { status: "ok" } }, operatorAuth: { status: "ok" }, tweetQueue: { status: "ok" }, circlePending: { status: "ok" }, gatewayPending: { status: "ok" }, chargedFailures: { status: "ok", windowHours: 6 }, refundsOwed: { status: "ok" }, ledgerDeadLetter: { status: "none" }, redisPersistence: { status: "on" }, backup: { status: "ok" }, outboundDestinations: { status: "ok" },
     upstreamBuyerSvm: { status: "ok" }, stellarFacilitator: { status: "ok" }, upstreamBudgets: { status: "ok" }, upstreamHardCaps: { status: "ok" }, exaAllowance: { status: "ok" }, stateDb: { status: "on" }, sanctions: { status: "ok" }, sanctionsScreen: { status: "fresh" }, email: { status: "ok" }, upstreamCosts: { status: "ok" },
     mppReconcile: { status: "ok", window7d: "ok", chargedFailedStatus: "ok" },
     toolFailures: { status: "ok" }, upstreamHealth: { status: "ok" }, facilitatorFunds: { status: "ok" }, toolAnswers: { status: "ok" }, containedTurns: { status: "ok" }, brokenListings: { status: "ok" }, buyerRefusals: { status: "ok" }, creditsRefunds: { status: "ok" }, cdnOrigin: { status: "ok" } };
   const { ALARMS, MAX_ISSUE_WRITES } = await import("../workers/status-probe/src/index.js");
-  stub({ health: () => new Response("down", { status: 503 }) });
+  let extractReads = 0;
+  stub({
+    health: () => new Response("down", { status: 503 }),
+    extract: () => (++extractReads % 2 === 1
+      ? Response.json({ ok: false, error: "rate-limited", reason: "unpaid-quote-budget" }, { status: 429, headers: { "retry-after": "60" } })
+      : new Response("", { status: 402, headers: { "payment-required": offer(["eip155:8453"]) } })),
+  });
   const prodStub = globalThis.fetch;
   globalThis.fetch = async (url, init = {}) => {
     calls++;
@@ -387,6 +461,7 @@ for (const [name, over, detail] of failCases) {
   const out = await run({ PROD, STATUS_PROBE_TOKEN: TOKEN, GITHUB_ISSUES_TOKEN: "t" }, { sleep: async () => {} });
   check(`worst-case run makes ${calls} subrequests, at least ten under the limit of 50`, () => {
     assert.equal(out.paidCall.observed, true, "the scenario must include the paid-call legs");
+    assert.equal(extractReads, 4, "the scenario must include a budget re-read on both attempts");
     // Every alarm but one wants closing and that one wants opening: more
     // writes than one run may make, so the scenario reaches the write cap.
     assert.ok(ALARMS.length > MAX_ISSUE_WRITES, "the scenario must exceed the write cap");
