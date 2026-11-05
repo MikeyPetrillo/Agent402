@@ -107,6 +107,12 @@ if (deployJob) {
     ok(!envNames.has(name), `deploy job env does not carry ${name} (a Railway-owned credential)`);
     ok(!upsertStep.includes(name), `the variable upsert never names ${name} (a Railway-owned credential)`);
   }
+  // Production's trusted proxy hop count is repository config: the upsert's
+  // first VARS object carries it as the literal "1" on every deploy, outside
+  // any conditional, so a deploy can never leave it unset (src/trust-proxy.js).
+  const firstVars = /VARS=\$\(jq -n [^\n]*\\?\n?[^\n]*'(\{[^']*\})'\)/.exec(upsertStep)?.[1] || "";
+  ok(/(^|[{,]\s*)TRUST_PROXY_HOPS:"1"\s*[,}]/.test(firstVars), `the variable upsert's base VARS sets TRUST_PROXY_HOPS:"1" unconditionally (${firstVars ? "base object found" : "no base object found"})`);
+  ok(!/TRUST_PROXY_HOPS:\$/.test(upsertStep) && (upsertStep.match(/TRUST_PROXY_HOPS/g) || []).length === 1, "TRUST_PROXY_HOPS is named once in the upsert, as a literal, never from a secret or variable");
 }
 
 // Spending workflows: an install step runs dependency code with whatever its

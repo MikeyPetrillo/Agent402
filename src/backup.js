@@ -47,6 +47,7 @@ import { pipeline } from "node:stream/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createJsonDocument } from "./json-document.js";
+import { isProductionEnv } from "./production-env.js";
 import { trackStoreReady, leased, stateDbEnabled, stateDbSchema, stateQuery, withStateTx } from "./state-db.js";
 
 const cfg = () => ({
@@ -430,8 +431,7 @@ export const backupStatus = () => { loadStatus(); refreshStatus(); return { ...s
 // platform's own environment name, which Railway sets on every deployment
 // whatever the image does; never a FREE_MODE boot.
 export function backupProduction(env = process.env) {
-  if (env.FREE_MODE === "true") return false;
-  return env.NODE_ENV === "production" || env.RAILWAY_ENVIRONMENT_NAME === "production" || env.RAILWAY_ENVIRONMENT === "production";
+  return isProductionEnv(env);
 }
 export function backupAlarmStatus(now = Date.now()) {
   if (!backupConfigured()) return "off";

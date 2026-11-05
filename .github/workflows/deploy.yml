@@ -1183,6 +1183,8 @@ jobs:
           t node scripts/test-hidden-chars.js
           # US spelling in public copy: README, wiki, docs, package READMEs, legal and guide pages, tool descriptions (offline)
           t node scripts/test-us-spelling.js
+          # CHANGELOG.md and the /changelog page agree: no duplicated page item, and every dated group from 2026-11-05 on is in both with the same item counts (offline)
+          t node scripts/test-changelog-parity.js
           # Seller text on the agent-read JSON surfaces is cleaned and capped at serve time; a flagged listing is marked and served without its description
           t env AGENT402_SHOW_ROUTER=1 node scripts/test-listing-text-serve.js
           # The listing screen's necessary-word hints answer exactly as the unhinted reading (implication per pattern on a generated corpus, agreement on the honest fixture; offline)
@@ -6465,8 +6467,14 @@ jobs:
           # the platform's setting, so a long grace here buys nothing and only
           # keeps two containers running. 120s clears the 75s deadline with
           # margin; scripts/test-drain-on-sigterm.js enforces both bounds.
+          #
+          # TRUST_PROXY_HOPS: production sits behind one trusted edge hop, so
+          # req.ip is the entry that hop appends; unset, the server trusts no
+          # hop and every client shares the edge's address in each per-IP
+          # limiter (src/trust-proxy.js). A config value, not a secret, set
+          # here on every deploy so the repository holds it.
           VARS=$(jq -n --arg w "$WALLET_ADDRESS" --arg n "$NETWORK" --arg f "$FACILITATOR_URL" --arg b "$BASE" \
-            '{WALLET_ADDRESS:$w, NETWORK:$n, FACILITATOR_URL:$f, BASE_URL:$b, RAILWAY_DEPLOYMENT_DRAINING_SECONDS:"120"}')
+            '{WALLET_ADDRESS:$w, NETWORK:$n, FACILITATOR_URL:$f, BASE_URL:$b, RAILWAY_DEPLOYMENT_DRAINING_SECONDS:"120", TRUST_PROXY_HOPS:"1"}')
           if [ -n "$CDP_KEY_ID" ] && [ -n "$CDP_KEY_SECRET" ]; then
             VARS=$(echo "$VARS" | jq --arg i "$CDP_KEY_ID" --arg s "$CDP_KEY_SECRET" '. + {CDP_API_KEY_ID:$i, CDP_API_KEY_SECRET:$s}')
           fi

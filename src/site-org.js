@@ -15,8 +15,17 @@ export const companyOrgId = (baseUrl) => `${baseUrl}/#org`;
 /** A reference to the site entity, for author/publisher/creator/provider. */
 export const siteOrgRef = (baseUrl) => ({ "@id": siteOrgId(baseUrl) });
 
-/** The site entity in full. `mpp: false` (a server that does not offer MPP) leaves MPP out of knowsAbout. */
-export function siteOrgLd(baseUrl, { mpp = true } = {}) {
+/** Whether this server offers MPP on its pages: the shim mounts only with
+ *  MPP_SECRET_KEY, so a self-host without it offers x402 alone. The one switch
+ *  every page reads (the tool and skill-pack pages, ledgerShell and the site
+ *  entity), so one @id never carries two knowsAbout lists. Read at call time. */
+export function mppOffered(env = process.env) {
+  return !!String(env.MPP_SECRET_KEY || "").trim();
+}
+
+/** The site entity in full. `mpp` defaults to this server's MPP switch
+ *  (mppOffered); false leaves MPP out of knowsAbout. */
+export function siteOrgLd(baseUrl, { mpp = mppOffered() } = {}) {
   return {
     "@context": "https://schema.org",
     "@type": "Organization",

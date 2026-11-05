@@ -12,7 +12,7 @@
 // descriptions, and routes stay accurate even as tools evolve. If a pack
 // references a tool that's been removed, the page surfaces a "missing" placeholder
 // rather than crashing, useful for catching dead references in the test suite.
-import { siteOrgLd } from "./site-org.js";
+import { siteOrgLd, mppOffered } from "./site-org.js";
 import { stripHiddenCharacters, quotedCallerText } from "./hidden-chars.js";
 import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc, breadcrumbTrail } from "./ledger-chrome.js";
 import { RAILS_SHORT } from "./rails.js";
@@ -2932,7 +2932,7 @@ export function packClientSnippet(catalogSlug, args) {
   ].join("\n");
 }
 
-export function skillPackPage(baseUrl, slug, catalog, { mpp = !!(process.env.MPP_SECRET_KEY || "").trim() } = {}) {
+export function skillPackPage(baseUrl, slug, catalog, { mpp = mppOffered() } = {}) {
   const e = ledgerEsc;
   const pack = SKILL_PACKS.find((p) => p.slug === slug);
   if (!pack) return null;

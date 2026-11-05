@@ -1,4 +1,4 @@
-import { siteOrgRef } from "./site-org.js";
+import { siteOrgRef, mppOffered } from "./site-org.js";
 import { heapSamplingReport } from "./boot-profile.js"; // diagnostic boot CPU profile - must stay the FIRST import (see the file)
 import "./tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA, process-wide (see the file)
 import { mtaStsPolicy } from "./mta-sts.js";
@@ -343,7 +343,7 @@ import { assertAvmValidityCovers } from "./avm-validity.js";
 import { assertEvmValidityCovers, EVM_RUN_SECONDS, runTimeNote } from "./evm-validity.js";
 import { createAsyncJobs, wantsAsync, isAsyncLoopbackToken, LOOPBACK_HEADER as ASYNC_LOOPBACK_HEADER } from "./async-jobs.js";
 import { cdnClientIpMiddleware, cdnProxyEnabled, cdnOriginStatus, refreshCdnOriginShared } from "./cdn-client-ip.js";
-import { trustProxyHops, replayClientIpMiddleware } from "./trust-proxy.js";
+import { trustProxyHops, replayClientIpMiddleware, forwardedWithoutHopsWarning } from "./trust-proxy.js";
 import { paidNoStoreMiddleware } from "./paid-no-store.js";
 import { cdnSyncDeadlineMiddleware, cdnSyncWindowMiddleware, followsJobAnswer } from "./cdn-sync-window.js";
 import { slowSyncWindowMiddleware } from "./slow-sync-window.js";
@@ -2517,6 +2517,7 @@ app.use((req, _res, next) => renderPathStore.run(req.path, next));
 const TRUST_PROXY_HOPS = trustProxyHops();
 app.set("trust proxy", TRUST_PROXY_HOPS);
 if (TRUST_PROXY_HOPS === 0) {
+  app.use(forwardedWithoutHopsWarning({ isReplay: (req) => isMcpLoopback(req) || isAsyncLoopbackToken(req.headers[ASYNC_LOOPBACK_HEADER]) }));
   app.use(replayClientIpMiddleware({ isReplay: (req) => isMcpLoopback(req) || isAsyncLoopbackToken(req.headers[ASYNC_LOOPBACK_HEADER]) }));
 }
 // Through the CDN proxy the edge-reported peer is a CDN address and the client
@@ -9336,7 +9337,7 @@ app.get("/tools/:slug", (req, res) => {
   // The method alias (POST on a GET-only path, GET/HEAD on a POST-only path)
   // runs only when the catalog has no route of the other method at this path.
   const otherMethodRouted = !!CATALOG[`${tool.method === "GET" ? "POST" : "GET"} ${tool.path}`];
-  htmlCache(res, 300, 900).send(skillPackCanonical(tool.slug, toolPage(BASE_URL, tool, related, { computePayable: POW_SLUGS.has(tool.slug), powDifficulty: POW_DIFFICULTY, cacheTtl: cachePolicy?.ttl ?? null, otherMethodRouted, mpp: !!(process.env.MPP_SECRET_KEY || "").trim() })));
+  htmlCache(res, 300, 900).send(skillPackCanonical(tool.slug, toolPage(BASE_URL, tool, related, { computePayable: POW_SLUGS.has(tool.slug), powDifficulty: POW_DIFFICULTY, cacheTtl: cachePolicy?.ttl ?? null, otherMethodRouted, mpp: mppOffered() })));
 });
 // A skill pack's catalog page points its canonical at the pack page (/skills/<pack>).
 function skillPackCanonical(toolSlug, html) {

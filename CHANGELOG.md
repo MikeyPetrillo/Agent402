@@ -24,7 +24,9 @@ Router:
 - The lane's terms name only the daily caps that are switched on, and the
   seller-trust and seller-dossier examples show the lane as the tool answers.
 - The per-seller cap keys a path-scoped seller on its origin plus prefix, so
-  tenants on one host keep their own day.
+  tenants on one host keep their own day. Each cap window keeps a running
+  sum, rebuilt from the window when invalid and at least daily, so an older
+  build during a deploy overlap cannot drift the cap.
 Tools:
 - `linkedin-article` takes images only from fast-tier links its resizer can
   read; the fast tier still serves WebP to buyers.
@@ -38,15 +40,21 @@ Security:
   with a boot warning (set 1 behind one edge proxy). MCP prompt arguments are
   quoted as data. A paid server answers a job created by a FREE_MODE server as
   not found.
+Upgrade note:
+- `TRUST_PROXY_HOPS` unset now reads 0 (it read 1), and an explicit 0, which
+  used to read as 1, is honored: set `TRUST_PROXY_HOPS=1` behind one edge
+  proxy. With no hop trusted, the server warns once when a loopback or private
+  peer sends X-Forwarded-For.
 Limits:
 - The unpaid price-check budget counts per client address (an IPv6 /64 as
   one) whatever the User-Agent; a named indexer or search crawler reads
   against ten times the budget on its address, and only our signed probes are
   exempt. On the one address Cloudflare Workers share, each User-Agent gets its
-  own budget under a ceiling for the address. The heartbeat signs its paywall
-  read, the status Worker pages "Paywall not observed" after three unobserved
-  runs, and both read that budget's 429 as not observed, never
-  as a paywall failure.
+  own budget under a ceiling for the address.
+Monitoring:
+- The heartbeat signs its paywall read, the status Worker pages "Paywall not
+  observed" after three unobserved runs, and both read the unpaid price-check
+  budget's 429 as not observed, never as a paywall failure.
 Index:
 - A failed paywall check is re-run after 24 hours and when a seller registers
   again, and the check skips a templated route.

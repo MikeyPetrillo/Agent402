@@ -2,7 +2,7 @@ import { RAILS_AMP, RAILS_OS } from "./rails.js";
 import { metaTitle, metaDescription } from "./seo-meta.js";
 import { ogSectionFor } from "./og-cards.js";
 import { REPO_URL } from "./repo-link.js";
-import { siteOrgLd, siteOrgId } from "./site-org.js";
+import { siteOrgLd, siteOrgId, mppOffered } from "./site-org.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 // The path of the request a page is being rendered for. A page's canonical is
 // its SECTION (/reports for a paid report at /r/<id>), so analytics decisions
@@ -1125,7 +1125,7 @@ export function breadcrumbLd(baseUrl, crumbs) {
   };
 }
 
-export function ledgerShell({ title: rawTitle, description: rawDescription, canonical, baseUrl, activePath = "", ogImage, jsonLd, extraCss = "", body, robots = "index, follow, max-image-preview:large", mpp = true }) {
+export function ledgerShell({ title: rawTitle, description: rawDescription, canonical, baseUrl, activePath = "", ogImage, jsonLd, extraCss = "", body, robots = "index, follow, max-image-preview:large", mpp = mppOffered() }) {
   // The snippet is derived here, once, for every page (see seo-meta.js): a
   // page author writes the paragraph, the shell serves what a search result
   // and a link preview can actually show.
@@ -1160,8 +1160,8 @@ export function ledgerShell({ title: rawTitle, description: rawDescription, cano
   const pageLd = (jsonLd ? (Array.isArray(jsonLd) ? jsonLd : [jsonLd]) : [])
     .filter((j) => !(j && typeof j === "object" && j["@id"] === orgId))
     .map((j) => (j && typeof j === "object" && Array.isArray(j["@graph"]) ? { ...j, "@graph": j["@graph"].filter((n) => !(n && n["@id"] === orgId)) } : j));
-  // `mpp` is the page's own MPP switch (a tool page reads it from the server's
-  // MPP configuration), so the site entity names MPP only where the page may.
+  // `mpp` is the server's MPP switch (mppOffered, src/site-org.js) unless a
+  // page passes its own, so the site entity names MPP only where the page may.
   const allLd = [baseEcosystemLd, siteOrgLd(baseUrl, { mpp }), ...pageLd]
     .map((j) => (j && typeof j === "object" && !j["@context"] ? { "@context": "https://schema.org", ...j } : j));
   // Every "<" is escaped as \u003c, exactly as jsonScriptTag does and for the
