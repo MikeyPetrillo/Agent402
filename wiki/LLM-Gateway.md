@@ -68,7 +68,7 @@ The flat tiers: one price per call whatever the length, for a buyer who wants a 
 | `POST /v1/pro/chat/completions` | $0.10 | mid-frontier (gpt-4o, gpt-4.1, gpt-6 sol, claude sonnet incl. sonnet-5.5, gemini pro and 3.x flash, grok) | 48k chars | 4,096 tokens |
 | `POST /v1/premium/chat/completions` | $0.50 | frontier (gpt-5 and gpt-6 astra, o3, claude opus incl. opus-5.5, claude fable 5.1, and gemini 3.1 pro) | 200k chars | 8,192 tokens |
 | `POST /v1/embeddings` | $0.002 | text-embedding-3-small (default), 3-large, ada-002 - batch up to 64 inputs | 16k chars | - |
-| `POST /v1/images/generations` | $0.08 | FLUX.2 Pro with GPT-5 Image Mini as the failover - one 1024x1024 PNG per call, inline base64 out | 4k-char prompt | 1 image |
+| `POST /v1/images/generations` | $0.08 | FLUX.2 Pro with MAI-Image-2.6 Flash as the failover - one 1024x1024 PNG per call, inline base64 out | 4k-char prompt | 1 image |
 | `POST /v1/audio/speech` | $0.06 | a five-model failover chain; raw mp3/pcm bytes out, the 11 OpenAI voice names plus each model's native voices | 2k-char input | - |
 
 Each tier also answers Google's generateContent wire (`/v1/nano/gemini`, `/v1/gemini`, `/v1/pro/gemini`, `/v1/premium/gemini`, `/v1/metered/gemini`, `/v1/auto/gemini`). A Gemini-wire call that names no model is served by a Gemini model the tier admits: gemini-3.1-flash-lite on nano, gemini-3.5-flash-lite on base and metered, gemini-3.6-flash on pro and gemini-3.1-pro on premium; the auto tier routes. On the premium tier a reasoning model keeps its own effort unless the call's output budget is under the tier's default, in which case the gateway asks for effort `low` so the thinking leaves room for the answer (a `reasoning`, `effort` or `thinking` setting you send always wins).
@@ -123,7 +123,7 @@ The field is absent when metered would not be materially cheaper, on the metered
 
 ## Image generation
 
-`POST /v1/images/generations` speaks the OpenAI images wire - any OpenAI SDK's `images.generate()` works by changing `base_url`. Send `{"prompt": "..."}` (up to 4,000 chars) and get `{created, model, data: [{b64_json, media_type}]}` back - one image per call at a flat $0.08, `n` locked to 1, `response_format` is always inline `b64_json` (nothing is hosted). `zdr: true` works here too. The model is FLUX.2 Pro (GPT-5 Image Mini as the failover), each pinned to one provider with a per-image bound and a live price re-check.
+`POST /v1/images/generations` speaks the OpenAI images wire - any OpenAI SDK's `images.generate()` works by changing `base_url`. Send `{"prompt": "..."}` (up to 4,000 chars) and get `{created, model, data: [{b64_json, media_type}]}` back - one image per call at a flat $0.08, `n` locked to 1, `response_format` is always inline `b64_json` (nothing is hosted). `zdr: true` works here too. The model is FLUX.2 Pro (MAI-Image-2.6 Flash as the failover), each pinned to one provider with a per-image bound and a live price re-check.
 
 ## Text-to-speech
 
