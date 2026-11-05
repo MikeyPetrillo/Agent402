@@ -1102,6 +1102,8 @@ export function ledgerShell({ title: rawTitle, description: rawDescription, cano
   // and a link preview can actually show.
   const title = metaTitle(rawTitle);
   const description = metaDescription(rawDescription);
+  // An operator page is never indexed, whatever its module passed.
+  if (/^(?:https?:\/\/[^/]+)?\/__operator(?:[/?#]|$)/.test(String(canonical || ""))) robots = "noindex, nofollow";
   // A page that names its own card keeps it; otherwise the SECTION card for the
   // page's path (src/og-cards.js), and the homepage card only when no section
   // claims the path. The version stamp rides on every variant for the same
