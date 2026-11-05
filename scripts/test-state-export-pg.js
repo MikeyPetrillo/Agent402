@@ -8,7 +8,7 @@
 // Requires STATE_DATABASE_URL (CI fails without it).
 import { spawnSync } from "node:child_process";
 import { childJson } from "./lib/child-json.js";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pg from "pg";
@@ -33,6 +33,11 @@ try {
   await c.query(`INSERT INTO ${S}.documents (name, body) VALUES ('followups.json', '{"seqs": {"a": 9007199254740993}}'::jsonb), ('email-status.json', '"bare"'::jsonb)`);
   await c.query(`INSERT INTO ${S}.records (collection, id, body) VALUES ('credits', 'k_after', '{"balanceMicro": 9007199254740993}'::jsonb)`);
   await c.query(`INSERT INTO ${S}.log_lines (stream, body) VALUES ('outbound-spend', '{"usd": 0.5, "tx": "0xafter"}'::jsonb)`);
+  // A seller stored as a header and parts (src/index-parts.js): the export writes it as one assembled line.
+  const PARTED = "https://parted.example", H1 = "a".repeat(40), H2 = "b".repeat(40);
+  await c.query(`INSERT INTO ${S}.records (collection, id, body) VALUES ('x402-index', $1, $2::jsonb), ('x402-index-parts', $3, $4::jsonb), ('x402-index-parts', $5, $6::jsonb)`,
+    [PARTED, JSON.stringify({ manifest: { name: "Parted" }, fetchedAt: 7, error: null, source: "crawl", history: [], paywall: null, discoveryPath: null, parts: { tools: 3, size: 2000, hashes: [H1, H2] }, contentHash: "x" }),
+      `${PARTED}#${H1}`, JSON.stringify({ origin: PARTED, hash: H1, tools: [{ route: "/a" }, { route: "/b" }] }), `${PARTED}#${H2}`, JSON.stringify({ origin: PARTED, hash: H2, tools: [{ route: "/c" }] })]);
 
   const ex = run(["scripts/state-export.js", "--out", out]);
   ok(ex.status === 0 && !/UNMAPPED/.test(ex.stdout), `the export runs with every table mapped${ex.status ? ` (${(ex.stderr || ex.stdout).slice(-400)})` : ""}`);
@@ -50,7 +55,11 @@ try {
   ok(vf.status === 0, `the migration verifier finds every store's count equal${vf.status ? `:\n${vf.stdout.split("\n").filter((l) => /\sNO\s/.test(l)).join("\n")}` : ""}`);
   ok(readFileSync(join(out, "followups.json"), "utf8").includes("9007199254740993") && JSON.parse(readFileSync(join(out, "email-status.json"), "utf8")) === "bare", "documents are written exactly, bare strings and big numbers included");
   ok(readFileSync(join(out, "credits", "k_after.json"), "utf8").includes("9007199254740993"), "a credit record keeps a balance above 2^53 exactly");
-  ok(readFileSync(join(out, "x402-index-cache.ndjson"), "utf8").trim().split("\n").length === 6, "the crawl cache has its header line and every origin");
+  const ndLines = readFileSync(join(out, "x402-index-cache.ndjson"), "utf8").trim().split("\n");
+  ok(ndLines.length === 7, `the crawl cache has its header line and every origin (${ndLines.length} lines)`);
+  const partedLine = ndLines.map((l) => { try { return JSON.parse(l); } catch { return null; } }).find((e) => Array.isArray(e) && e[0] === PARTED);
+  ok(partedLine && partedLine[1].tools?.map((t) => t.route).join() === "/a,/b,/c" && !("parts" in partedLine[1]) && partedLine[1].manifest?.name === "Parted", "a seller stored in parts is exported as one assembled line");
+  ok(!readdirSync(out).includes("x402-index-parts"), "the part rows get no directory of their own");
 
   // The money figures: file-mode readers on the export against the database.
   const summary = (mode) => {
