@@ -20,7 +20,7 @@ const { termsPage } = await import("../src/terms.js");
 const { serviceManifest } = await import("../src/discovery.js");
 const { llmsTxt } = await import("../src/seo.js");
 const { marketPage } = await import("../src/market-page.js");
-const { publicIndexBootWarnings, publicIndexPageDate } = await import("../src/facilitator-public-index.js");
+const { publicIndexBootWarnings, publicIndexPageDate, setPublicIndexBootFacilitator } = await import("../src/facilitator-public-index.js");
 
 const ENV = ["FACILITATOR_PUBLIC_INDEX_CHAINS", "FACILITATOR_PUBLIC_INDEX_NAME", "FACILITATOR_PUBLIC_INDEX_POLICY_URL", "FACILITATOR_PUBLIC_INDEX_SINCE", "ROBINHOOD_FACILITATOR_URL"];
 const setEnv = (vars) => { for (const k of ENV) { if (vars[k] === undefined) delete process.env[k]; else process.env[k] = vars[k]; } };
@@ -73,6 +73,20 @@ for (const value of ["robinhood", " Robinhood ,solana", "robinhood,stellar"]) {
 {
   const r = render({ FACILITATOR_PUBLIC_INDEX_CHAINS: "robinhood", ROBINHOOD_FACILITATOR_URL: "https://first.example.test" });
   ok(!/public index/.test(pageText(marketPage("base", BASE, { snapshot: { sellers: [] }, rail: null, activity: null }))) && r.rail.includes("public-settlement-index"), "only the Robinhood rail page carries the row");
+}
+
+// --- the boot chose a later listed facilitator: every surface names that one --
+{
+  const LIST = "https://first.example.test/x402,https://second.example.test";
+  setPublicIndexBootFacilitator("robinhood", "https://second.example.test/");
+  let r = render({ FACILITATOR_PUBLIC_INDEX_CHAINS: "robinhood", ROBINHOOD_FACILITATOR_URL: LIST });
+  ok(r.pt.includes(`On Robinhood Chain, the facilitator that settles the payment (second.example.test) ${FIELDS}`) && !r.pt.includes("first.example.test"), "boot chose the second: privacy names it, not the first listed");
+  ok(JSON.stringify(r.m.payment.dataHandling.publicSettlementIndex.hosts) === JSON.stringify(["second.example.test"]), "boot chose the second: /.well-known/x402 names it");
+  r = render({ FACILITATOR_PUBLIC_INDEX_CHAINS: "robinhood", ROBINHOOD_FACILITATOR_URL: "https://first.example.test" });
+  ok(r.pt.includes("(first.example.test)"), "a boot choice no longer listed is ignored: the first listed is named");
+  setPublicIndexBootFacilitator("robinhood", "");
+  r = render({ FACILITATOR_PUBLIC_INDEX_CHAINS: "robinhood", ROBINHOOD_FACILITATOR_URL: LIST });
+  ok(r.pt.includes("(first.example.test)"), "before boot: the first listed is named");
 }
 
 // --- name and policy URL: escaped, and linked only as a parsed https URL -----

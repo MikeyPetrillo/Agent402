@@ -5,8 +5,10 @@
 // facilitator, before our own relayer and the default chain; when none of them
 // settles it, that refusal is read on chain (the outage handler) before our
 // relayer may submit. A prose verdict about the buyer (a bad signature, too
-// little balance, a used nonce, an expired window) is retried nowhere. An HTTP
-// 5xx, a transport failure and every other network keep the old rules.
+// little balance, an expired window) is retried nowhere; a used authorization
+// is handed to no other settler but is read on chain (the facilitator's own
+// earlier submission may have used it). An HTTP 5xx, a transport failure and
+// every other network keep the old rules: their words are never a verdict.
 // Offline: the real failure hook (src/payments.js), stub facilitators, a stub
 // outage handler.
 //   node scripts/test-rh-prose-refusal.js
@@ -16,7 +18,7 @@ import { SettleError } from "@x402/core/types";
 
 process.env.PAYMENT_SETTLE_FALLBACK = "true";
 const { registerFacilitatorFailureHooks, isListedPassOnRefusal, markGracefulRefusals, gracefulRefusalOf } = await import("../src/payments.js");
-const { isPaymentVerdictReason } = await import("../src/settle-verdict.js");
+const { isPaymentVerdictReason, isUsedAuthorizationReason } = await import("../src/settle-verdict.js");
 const { isAmbiguousSettleFailure } = await import("../src/robinhood-outage.js");
 const { __resetSettlementClaims } = await import("../src/settlement-claims.js");
 
@@ -32,6 +34,7 @@ const TREASURY = "0xabf4fabd7c416fb67202e5f9002389fc75e2a9d0";
 const SIGNATURE = 'Signature does not authorize this transfer for 0x00000000000000000000000000000000000a0001 (EIP-712 domain "Global Dollar" v1 on chain 4663)';
 const BALANCE = "Insufficient balance: payer holds 0 of the 2500 required";
 const NONCE_USED = "Authorization nonce already used";
+const FIAT_USED = "FiatTokenV2: authorization is used or canceled";
 const EXPIRED = "Authorization expired (validBefore has passed)";
 const NO_VERDICT = "Relay temporarily unavailable, try again";
 const GAS = "Facilitator signer has insufficient funds for gas";
@@ -85,18 +88,36 @@ await check("a prose verdict about the buyer is a verdict; the settler's own tro
   for (const r of [SIGNATURE, BALANCE, NONCE_USED, EXPIRED, "invalid_exact_evm_payload_signature", "insufficient_funds", "Transfer amount exceeds balance", "Authorization is not yet valid"]) assert.equal(isPaymentVerdictReason(r), true, r);
   for (const r of [NO_VERDICT, GAS, "invalid_exact_evm_transaction_failed", "unexpected_error", "Settlement failed", "", "Fee payer balance too low"]) assert.equal(isPaymentVerdictReason(r), false, r);
 });
+await check("a balance verdict names the buyer's balance; a node's bare funds or fee message is the settler's own wallet", () => {
+  for (const r of ["ERC20: transfer amount exceeds balance", "Insufficient balance", "invalid_exact_evm_insufficient_balance", "insufficient_funds"]) assert.equal(isPaymentVerdictReason(r), true, r);
+  for (const r of ["insufficient funds", "Insufficient funds", "insufficient funds for gas * price + value", "insufficient funds for transfer", "Insufficient funds to pay the network fee", "Insufficient balance for the network fee", "max fee per gas less than block base fee"]) assert.equal(isPaymentVerdictReason(r), false, r);
+});
+await check("a used authorization, as a code or in words, is its own class", () => {
+  for (const r of [NONCE_USED, FIAT_USED, "EIP3009: authorization is used or canceled", "Authorization already used", "nonce has already been used", "invalid_exact_evm_nonce_already_used"]) assert.equal(isUsedAuthorizationReason(r), true, r);
+  for (const r of [SIGNATURE, BALANCE, EXPIRED, NO_VERDICT, "invalid_exact_evm_payload_signature", "nonce too low", "already known", ""]) assert.equal(isUsedAuthorizationReason(r), false, r);
+});
 await check("isListedPassOnRefusal: a no-verdict refusal with no transaction, on 4663 only", () => {
   assert.equal(isListedPassOnRefusal(asCoreError(graceful(NO_VERDICT)), RH), true);
   assert.equal(isListedPassOnRefusal(asCoreError(graceful(GAS)), RH), true, "the settler's gas is not the buyer's verdict");
   assert.equal(isListedPassOnRefusal(asCoreError(graceful(NO_VERDICT)), "eip155:8453"), false, "Base keeps the old gate");
   assert.equal(isListedPassOnRefusal(asCoreError({ ...graceful(NO_VERDICT), transaction: txh("named") }), RH), false, "names a transaction");
-  for (const r of [SIGNATURE, BALANCE, NONCE_USED, EXPIRED]) assert.equal(isListedPassOnRefusal(asCoreError(graceful(r)), RH), false, r);
+  for (const r of [SIGNATURE, BALANCE, NONCE_USED, FIAT_USED, EXPIRED]) assert.equal(isListedPassOnRefusal(asCoreError(graceful(r)), RH), false, r);
   assert.equal(isListedPassOnRefusal(new SettleError(500, { success: false, errorReason: "", transaction: "", network: RH }), RH), false, "no reason");
   assert.equal(isListedPassOnRefusal(Object.assign(new Error(NO_VERDICT), { errorReason: NO_VERDICT, code: "ETIMEDOUT" }), RH), false, "transport");
 });
-await check("the outage read treats a prose verdict as a verdict (no wait, no relayer)", () => {
-  assert.equal(isAmbiguousSettleFailure(asCoreError(graceful(SIGNATURE))), false);
-  assert.equal(isAmbiguousSettleFailure(asCoreError(graceful(NO_VERDICT))), true);
+await check("the outage read: words are a verdict on a graceful answer only; a used authorization never is; codes as before", () => {
+  const g = { graceful: true };
+  assert.equal(isAmbiguousSettleFailure(asCoreError(graceful(SIGNATURE)), g), false);
+  assert.equal(isAmbiguousSettleFailure(asCoreError(graceful(NO_VERDICT)), g), true);
+  for (const r of [SIGNATURE, EXPIRED, BALANCE, "Broadcast succeeded but receipt wait expired"]) assert.equal(isAmbiguousSettleFailure(new SettleError(502, graceful(r))), true, `HTTP 502 ${r}`);
+  for (const r of [FIAT_USED, NONCE_USED, "Authorization already used", "invalid_exact_evm_nonce_already_used"]) {
+    assert.equal(isAmbiguousSettleFailure(asCoreError(graceful(r)), g), true, `graceful ${r}`);
+    assert.equal(isAmbiguousSettleFailure(new SettleError(502, graceful(r))), true, `HTTP 502 ${r}`);
+  }
+  for (const r of ["invalid_exact_evm_payload_signature", "invalid_exact_evm_insufficient_balance"]) {
+    assert.equal(isAmbiguousSettleFailure(asCoreError(graceful(r)), g), false, `graceful ${r}`);
+    assert.equal(isAmbiguousSettleFailure(new SettleError(502, graceful(r))), false, `HTTP 502 ${r}`);
+  }
 });
 await check("markGracefulRefusals: a 200 refusal is noted, a thrown HTTP error clears it", async () => {
   const p = payment();
@@ -131,13 +152,33 @@ await check("primary refuses in words, the next listed says the nonce is used ->
   assert.equal(out?.recovered, true);
   assert.deepEqual(asked, ["primary", "RH2", "outage"], "a verdict stops the chain; the passed-on refusal is read on chain");
 });
-for (const [label, reason] of [["bad signature", SIGNATURE], ["insufficient buyer balance", BALANCE], ["nonce used", NONCE_USED], ["expired", EXPIRED]]) {
+for (const [label, reason] of [["bad signature", SIGNATURE], ["insufficient buyer balance", BALANCE], ["expired", EXPIRED]]) {
   await check(`a prose buyer verdict (${label}) from the primary is retried nowhere: no listed, no relayer, no chain read`, async () => {
     const { out, asked } = await run({ primary: () => graceful(reason), listed: [["RH2", ok("rh2")]], outage: served });
     assert.equal(out, undefined);
     assert.deepEqual(asked, ["primary"]);
   });
 }
+for (const reason of [FIAT_USED, "Authorization already used", "nonce has already been used", "invalid_exact_evm_nonce_already_used"]) {
+  await check(`a used authorization from the primary ("${reason}") goes to no other settler but is read on chain`, async () => {
+    const { out, asked, handled } = await run({ primary: () => graceful(reason), listed: [["RH2", ok("rh2")]], outage: served });
+    assert.equal(out?.recovered, true);
+    assert.deepEqual(asked, ["primary", "outage"]);
+    assert.deepEqual(handled, [true]);
+  });
+}
+await check("a used authorization from a listed fallback (after a primary revert) is read on chain; the next listed is not asked", async () => {
+  const { out, asked } = await run({ primary: () => ({ success: false, errorReason: "invalid_exact_evm_transaction_failed", errorMessage: 'The contract function "transferWithAuthorization" reverted.', transaction: "", network: RH }), listed: [["RH2", () => graceful(FIAT_USED)], ["RH3", ok("rh3")]], outage: served });
+  assert.equal(out?.recovered, true);
+  assert.deepEqual(asked, ["primary", "RH2", "outage"]);
+});
+await check("verdict words over an HTTP 5xx from the primary are read on chain (it may have broadcast)", async () => {
+  for (const reason of [SIGNATURE, EXPIRED, "Broadcast succeeded but receipt wait expired"]) {
+    const { out, asked } = await run({ primary: () => { throw new SettleError(502, graceful(reason)); }, listed: [["RH2", ok("rh2")]], outage: served });
+    assert.equal(out?.recovered, true, reason);
+    assert.deepEqual(asked, ["primary", "outage"], reason);
+  }
+});
 await check("a prose buyer verdict from a listed fallback (after a primary revert) stops there", async () => {
   const { out, asked } = await run({ primary: () => ({ success: false, errorReason: "invalid_exact_evm_transaction_failed", errorMessage: 'The contract function "transferWithAuthorization" reverted.', transaction: "", network: RH }), listed: [["RH2", () => graceful(SIGNATURE)], ["RH3", ok("rh3")]], outage: served });
   assert.equal(out, undefined);

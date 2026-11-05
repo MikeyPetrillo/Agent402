@@ -114,9 +114,12 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   transaction and a reason that is not a verdict about the buyer (`isListedPassOnRefusal`,
   `markGracefulRefusals`; verdicts as codes or prose in `src/settle-verdict.js`): that one goes to
   the next LISTED facilitator only, and when none settles it, it is read on chain like an ambiguous
-  failure before our relayer may submit. A buyer verdict (signature, balance, used nonce, expired)
-  is retried nowhere; an HTTP error with the same words keeps the ambiguous path
-  (`scripts/test-rh-boot-primary.js`, `scripts/test-rh-prose-refusal.js`).
+  failure before our relayer may submit. A buyer verdict (signature, buyer balance, expired; a code,
+  or words on a graceful answer) is retried nowhere and not read on chain; a used nonce or
+  authorization (code or words) goes to no other settler but is read on chain, since the
+  facilitator's own earlier submission may have used it; an HTTP error with the same words keeps
+  the ambiguous path (`scripts/test-rh-boot-primary.js`, `scripts/test-rh-prose-refusal.js`,
+  `scripts/test-rh-outage.js`).
   `src/facilitator-gas.js` reads each listed facilitator's settlement signers (from
   `/supported`) for gas runway every 10 minutes under a lease (`scripts/test-settle-fallback.js`,
   `scripts/test-tool-failure-monitor.js`). There is no extra Solana settle fallback by design: a

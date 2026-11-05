@@ -44,7 +44,7 @@ function facilitator(name, st) {
   });
 }
 
-async function boot(setup) {
+async function boot(setup, { firstHost = "127.0.0.1", extraEnv = {} } = {}) {
   const [PORT, BASE_FAC, RH1, RH2] = await getFreePorts(4);
   const st = {};
   const servers = [
@@ -59,7 +59,7 @@ async function boot(setup) {
   const proc = spawn(process.execPath, ["src/server.js"], { cwd: root, stdio: ["ignore", "pipe", "pipe"], env: { ...env, PORT: String(PORT), FREE_MODE: "",
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", FACILITATOR_URL: `http://127.0.0.1:${BASE_FAC}`, AGENT402_BASE_RPC: `http://127.0.0.1:${BASE_FAC}/rpc`,
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", MPP_SECRET_KEY: "", PAYMENT_NETWORKS: "base,robinhood",
-    ROBINHOOD_FACILITATOR_URL: `http://127.0.0.1:${RH1},http://127.0.0.1:${RH2}`, ROBINHOOD_FALLBACK_RECHECK_MS: "60000",
+    ROBINHOOD_FACILITATOR_URL: `http://${firstHost}:${RH1},http://127.0.0.1:${RH2}`, ROBINHOOD_FALLBACK_RECHECK_MS: "60000", ...extraEnv,
     PAYMENT_SETTLE_FALLBACK: "true", SALES_LEDGER_DB: join(tmp, "sales.db"), REFUND_DB_DIR: tmp, FACILITATOR_GAS_CHECK: "off",
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off" } });
   const log = []; proc.stdout.on("data", (c) => log.push(String(c))); proc.stderr.on("data", (c) => log.push(String(c)));
@@ -79,16 +79,25 @@ async function boot(setup) {
     return r.status;
   };
   const stop = () => { proc.kill("SIGKILL"); for (const [s] of servers) s.close(); rmSync(tmp, { recursive: true, force: true }); };
-  return { up, accepted, pay, st, log, stop, RH2 };
+  const get = async (path) => { const r = await fetch(`${B}${path}`); return r.text(); };
+  return { up, accepted, pay, st, log, stop, RH2, get };
 }
 
 // 1. The first listed facilitator is down at boot.
 {
-  const b = await boot((st) => { st.rh1.up = false; });
+  // The first is named by another host, so the public-index disclosure shows which one it names.
+  const b = await boot((st) => { st.rh1.up = false; }, { firstHost: "localhost", extraEnv: { FACILITATOR_PUBLIC_INDEX_CHAINS: "robinhood" } });
   try {
     check(b.up, "boot 1: the paid-mode server booted with the first listed facilitator down");
     check(!!b.accepted, "boot 1: USDG on eip155:4663 is still offered (the second listed confirmed it)");
     check(b.log.join("").includes(`127.0.0.1:${b.RH2} settles first`), "boot 1: the boot log names the facilitator that settles first");
+    if (b.up) {
+      const privacy = await b.get("/privacy");
+      const para = (privacy.match(/<li id="public-settlement-index">([\s\S]*?)<\/li>/) || [])[1] || "";
+      check(para.includes("(127.0.0.1)") && !para.includes("localhost"), `boot 1: /privacy names the facilitator the boot chose, not the first listed (${para.slice(0, 120)})`);
+      const hosts = JSON.parse(await b.get("/.well-known/x402"))?.payment?.dataHandling?.publicSettlementIndex?.hosts;
+      check(JSON.stringify(hosts) === JSON.stringify(["127.0.0.1"]), `boot 1: /.well-known/x402 names the chosen facilitator (${JSON.stringify(hosts)})`);
+    }
     const status = b.accepted ? await b.pay() : 0;
     check(status === 200 && b.st.rh2.settles === 1 && b.st.rh1.settles === 0, `boot 1: a paid call settles through the second, once; the first is never asked (status ${status}, rh1 ${b.st.rh1.settles}, rh2 ${b.st.rh2.settles})`);
   } finally { if (failed) console.log(b.log.join("").slice(-2500)); b.stop(); }
