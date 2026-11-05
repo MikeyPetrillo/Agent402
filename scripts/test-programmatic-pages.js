@@ -397,8 +397,9 @@ for (const name of ["hubInsider", "hubFund", "hubDossier"]) {
 }
 {
   const crumbs = ldOf(pages.insider).map((r) => JSON.parse(r)).find((j) => j["@type"] === "BreadcrumbList");
-  eq(crumbs.itemListElement.length, 3, "insider breadcrumb is Reports > Insider filings > entity");
-  eq(crumbs.itemListElement[2].item, `${BASE}/reports/insider/EXMP`, "the last breadcrumb is this page");
+  // One trail per page, from Home (the visible trail renders the same list).
+  eq(crumbs.itemListElement.map((e) => e.name).join(" > "), "Home > Reports > Insider filings > EXMP", "insider breadcrumb is Home > Reports > Insider filings > entity");
+  eq(crumbs.itemListElement.map((e) => e.item).join(" "), [`${BASE}/`, `${BASE}/reports`, `${BASE}/reports/insider`, `${BASE}/reports/insider/EXMP`].join(" "), "each breadcrumb links its level, and the last is this page");
   const product = ldOf(pages.insider).map((r) => JSON.parse(r)).find((j) => j["@type"] === "Product");
   eq(product.offers.price, (HUMAN_PRODUCTS["insider-report"].price / 100).toFixed(2), "the Product offer price comes from HUMAN_PRODUCTS");
   eq(product.offers.seller.name, "Havok Holdings LLC", "the seller is the operating entity");
