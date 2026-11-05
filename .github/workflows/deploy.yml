@@ -2779,6 +2779,11 @@ jobs:
           # Every accept of every 402 asks list plus the chain's premium, raised to its
           # floor, as /api/pricing publishes them (three rails, a stub facilitator).
           t node scripts/test-accept-prices.js
+          # A throw in an x402 beforeVerify / beforeSettle hook answers the hook's declared choice: the
+          # wallet blocklist and the Arc contract-wallet gate refuse with their own reason (402, no settle,
+          # no sale, no idempotency commit, never the handler for a verify refusal), bookkeeping hooks pass;
+          # a payment header decoding to non-object JSON answers 4xx (real resource server + two paid boots)
+          t node scripts/test-x402-hook-throws.js
 
       - name: "Redis integration (the REAL client against a REAL server — cap-of-1, refund, cache round trip; the gap that made a redis major bump undecidable)"
         env:
