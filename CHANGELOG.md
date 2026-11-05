@@ -17,6 +17,10 @@ Router:
   after every proven candidate, paid at its own live 402's payTo, with at most
   $0.25 a day per seller (`SOR_BASE_UNPROVEN_SELLER_DAILY_USD`) and $5 a day
   across all unproven sellers (`SOR_BASE_UNPROVEN_DAILY_USD`).
+- Route-execute is graded step by step in CI: 56 fixed tasks run the real
+  paid server, resolver and payer against stub sellers and check every step
+  from the candidate set to the receipt. The unproven lane reads the same
+  verdict as the public label, at the seller's live payTo.
 Security:
 - A standing red-team suite runs in CI against the MCP connector, the seller
   judge, decide, the fetch guard, the router's payer and report prose. MCP
