@@ -98,28 +98,34 @@ const LEET_CHARS = /[0-9@$]/g;
 const SPACED_RUN = /(?<![a-z0-9])[a-z](?:[ .\-_][a-z](?![a-z0-9]))+/g;
 const SPACED_MIN_LETTERS = 4;
 const foldLeetWord = (w) => (w.length <= MAX_FOLD_WORD && LEET_PAIR.test(w) ? w.replace(LEET_CHARS, (c) => LEET[c] ?? c) : w);
+// A run of four spelled-out letters or more, the condition under which the
+// joined reading is added: tested before the join, which is a pass over the
+// text with a callback per run, so a text with no such run never pays for it.
+const SPACED_LONG_RUN = /(?<![a-z0-9])[a-z](?:[ .\-_][a-z](?![a-z0-9])){3}/;
 // `spacedFrom` is the same reading before its whitespace was collapsed, so a
 // wider gap between spelled-out words ("c h o o s e   m e") still ends a word.
 // Once the text holds one run of four letters or more, a shorter run beside
 // it ("m e") is joined too.
-function extraForms(base, forms, spacedFrom = base) {
-  if (LEET_PAIR.test(base)) { const folded = base.replace(FOLD_WORD, foldLeetWord); if (folded !== base) forms.push(folded); }
-  let longRun = false;
-  const joined = spacedFrom.replace(SPACED_RUN, (w) => { if (w.length >= SPACED_MIN_LETTERS * 2 - 1) longRun = true; return w.replace(/[ .\-_]/g, ""); });
-  if (longRun) {
+// `leetHint`, when given, is a necessary condition on the text for the digit
+// reading to find anything (INJECTION_LEET_HINT below): a text that fails it
+// is not folded, since the folded form could not match either.
+function extraForms(base, forms, spacedFrom = base, leetHint = null) {
+  if (LEET_PAIR.test(base) && (!leetHint || leetHint.test(base))) { const folded = base.replace(FOLD_WORD, foldLeetWord); if (folded !== base) forms.push(folded); }
+  if (SPACED_LONG_RUN.test(spacedFrom)) {
+    const joined = spacedFrom.replace(SPACED_RUN, (w) => w.replace(/[ .\-_]/g, ""));
     const flat = joined.replace(/\s+/g, " ");
     if (flat !== base) forms.push(flat);
   }
   return forms;
 }
-function injectionForms(text) {
+function injectionForms(text, leetHint = null) {
   const raw = String(text || "");
   if (PLAIN_LISTING.test(raw) && !MARKUP_CHARS.test(raw)) {
     const lower = raw.toLowerCase();
-    if (!/[\t\n\r]| {2}/.test(lower)) return extraForms(lower, [lower]);
+    if (!/[\t\n\r]| {2}/.test(lower)) return extraForms(lower, [lower], lower, leetHint);
     const spaced = lower.replace(/[\u0000-\u001f\u007f]/g, " ");
     const flat = spaced.replace(/\s+/g, " ");
-    return extraForms(flat, [flat], spaced);
+    return extraForms(flat, [flat], spaced, leetHint);
   }
   const decoded = decodeTagCharacters(raw).normalize("NFKC")
     .replace(/&(?:lt|gt|amp|quot|apos|nbsp|#\d{1,6}|#x[0-9a-f]{1,6});/gi, (m) => {
@@ -142,11 +148,33 @@ function injectionForms(text) {
   CONFUSABLE_RE.lastIndex = 0;
   // The fullest reading (invisible characters deleted, lookalikes mapped when
   // there are any) is the one the digit and spacing readings start from.
-  return extraForms(forms.length > 3 ? forms[3] : forms[1], forms, fullest);
+  return extraForms(forms.length > 3 ? forms[3] : forms[1], forms, fullest, leetHint);
 }
 // One alternation of every pattern: the same any-match answer as testing them
 // in turn (none carries a flag or a lastIndex), in one pass over the text.
 const INJECTION_ANY = new RegExp(INJECTION_PATTERNS.map((re) => `(?:${re.source})`).join("|"));
+// A necessary condition for INJECTION_ANY: every pattern above contains one
+// of these as a literal, mandatory part (lowercase text, whitespace as the
+// forms carry it), so a form that fails this test cannot match any pattern and
+// the alternation runs only on the few that pass. Written with no letter
+// inside a character class, so the digit reading below can be derived from it.
+// scripts/test-listing-screen-hints.js checks the implication on a generated
+// corpus and the honest fixture.
+const INJECTION_HINT = /ignor|disregard|forget|always|you\s+must|be\s+sure\s+to|priorit|override|[<\[]|system\s*(?:prompt|message|role|notice|note|override|directive|alert)|do\s+not|fit|\b(?:rate|score|grade|judge|mark)\w{0,2}\s+(?:it|this|me|us)\s|perfect|note\s+to/;
+// The same condition on the text BEFORE its digits are read as letters: each
+// letter the fold can produce accepts the characters that fold to it, a word
+// boundary is dropped (the fold can turn "@" or "$" into a letter and close
+// one) and \w also accepts "@" and "$". A text that fails this cannot yield a
+// folded form that passes INJECTION_HINT, so the fold is skipped for it.
+const LEET_SOURCES = { o: "[o0]", i: "[i1]", e: "[e3]", a: "[a4@]", s: "[s5$]", t: "[t7]" };
+const INJECTION_LEET_HINT = new RegExp(INJECTION_HINT.source.replace(/\\.|[oieast]/g, (m) => (m.length === 2 ? (m === "\\b" ? "" : m === "\\w" ? "[\\w@$]" : m) : LEET_SOURCES[m])));
+const anyInjection = (form) => INJECTION_HINT.test(form) && INJECTION_ANY.test(form);
+/** The screen's parts, for scripts/test-listing-screen-hints.js: the full
+ *  alternation, the two hints, and the readings of a text with no hint
+ *  (the reference the hinted path must agree with). */
+export function __testListingScreen() {
+  return { INJECTION_PATTERNS, INJECTION_ANY, INJECTION_HINT, INJECTION_LEET_HINT, injectionForms: (text) => injectionForms(text), foldLeet: (s) => s.replace(FOLD_WORD, foldLeetWord) };
+}
 export function looksLikeListingInjection(text) {
   const t = String(text || "");
   if (t.length > 8000) return true; // no honest listing is a novel; oversized = padding an attack
@@ -160,7 +188,7 @@ export function looksLikeListingInjection(text) {
 /** The phrase rules alone (no length or hidden-character rule), for a caller
  *  that screens one sentence and reports hidden characters on its own. */
 export function matchesInjectionPhrase(text) {
-  for (const form of injectionForms(String(text || ""))) if (INJECTION_ANY.test(form)) return true;
+  for (const form of injectionForms(String(text || ""), INJECTION_LEET_HINT)) if (anyInjection(form)) return true;
   return false;
 }
 /** Which rule of looksLikeListingInjection the text trips, by name, or null:
@@ -241,7 +269,7 @@ export function addressesReader(sentence) {
   const s = String(sentence || "");
   for (const form of injectionForms(s)) {
     const t = form.trim();
-    if (READER_ANY.test(t) || INJECTION_ANY.test(t)) return true;
+    if (READER_ANY.test(t) || anyInjection(t)) return true;
   }
   return false;
 }
