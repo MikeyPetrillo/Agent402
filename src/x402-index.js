@@ -34,6 +34,7 @@ import { createDocumentCache } from "./json-document.js";
 import { shared, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { createListingsStore, listingsStoreEnabled } from "./index-listings-pg.js";
 import { trackStoreReady, leased, stateDbEnabled, stateQuery, stateDbSchema, records, importOnce, pgJsonTextMayChange, largeRowTimeoutMs, isStatementTimeout } from "./state-db.js";
+import { PARTS_COLLECTION, PARTS_ORPHAN_GRACE_MS, isParted, isPartedHeader, headerHashes, partId, splitEntry, assembleEntry } from "./index-parts.js";
 import { retryingLoad } from "./store-retry.js";
 
 // The last crawl's probe examples per origin (src/probe-example.js), memory
@@ -7263,14 +7264,23 @@ export async function persistOriginToStateDb(origin) {
   const entry = persistedEntryOf(cache.get(origin));
   if (!entry) return false;
   try {
-    const line = JSON.stringify([origin, entry]);
-    const h = lineHash(line);
-    await stateQuery(
-      `INSERT INTO ${recordsTable()} AS r (collection, id, body) VALUES ($1, $2, $3::jsonb)
-       ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()
-       WHERE ${NEWER_OR_SAME_SQL("r.body", "EXCLUDED.body")}`,
-      [INDEX_RECORDS, origin, bodyWithHash(JSON.stringify(entry), h)],
-    );
+    let h;
+    if (isParted(entry)) {
+      // A large entry: hashed in pieces across turns (the same line hash), and
+      // stored as a header and its parts (src/index-parts.js).
+      const tick = sliceClock();
+      h = await hashPieces(await linePieces(origin, entry, tick), tick);
+      await writePartedOrigin(origin, entry, h, tick);
+    } else {
+      const line = JSON.stringify([origin, entry]);
+      h = lineHash(line);
+      await stateQuery(
+        `INSERT INTO ${recordsTable()} AS r (collection, id, body) VALUES ($1, $2, $3::jsonb)
+         ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()
+         WHERE ${NEWER_OR_SAME_SQL("r.body", "EXCLUDED.body")}`,
+        [INDEX_RECORDS, origin, bodyWithHash(JSON.stringify(entry), h)],
+      );
+    }
     pgOriginHashes.set(origin, h);
     pgRowHashes.set(origin, h);
     return true;
@@ -7360,6 +7370,10 @@ export async function persistIndexCacheAsync(file = INDEX_CACHE_FILE) {
 // and deletes the rows of origins the cache no longer holds. The file is
 // imported once (the NDJSON twin, or the legacy JSON when only that exists);
 // after that the rows are what a boot reads.
+// A seller with more than PART_TOOLS tools (src/index-parts.js) is a header
+// row under its origin plus content-addressed part rows in PARTS_COLLECTION;
+// a reader assembles them (writePartedOrigin, assembleStoredEntry below), and
+// the maps and rules here read the header as they read a whole row.
 const INDEX_RECORDS = "x402-index";
 const INDEX_IMPORT_NAME = INDEX_CACHE_NDJSON_FILE.split("/").pop();
 // Rows per statement and bytes per statement: an origin's entry can run to
@@ -7371,14 +7385,16 @@ const PG_BYTES_PER_BATCH = 1_048_576;
 // synchronous pass: measured 0.85-1.2 s for one 82 MB entry, against 80 ms for
 // the same text as a scalar, and the stored row is the same either way.
 const PG_SINGLE_ROW_BYTES = 1_048_576;
-// origin -> hash of the line last written (null: held, hash unknown). The hash
-// lets an unchanged origin skip its write; the key set is what a persist
-// deletes against.
+// origin -> hash of the line `[origin, entry]` last written or read for the
+// copy held (null: held, hash unknown): the whole entry's hash whether it was
+// stored as one row or as a header and parts. The hash lets an unchanged
+// origin skip its write; the key set is what a persist deletes against.
 const pgOriginHashes = new Map();
 // origin -> the ROW_HASH_KEY of the copy held, as it was last stored or
-// folded (null: a row without one). Not pgOriginHashes: a copy read back from
-// jsonb hashes differently (jsonb reorders keys), so a container that read
-// a row compares the hash its writer stored, never one it recomputes.
+// folded (null: a row without one); a seller in parts carries it on its
+// header row. Not pgOriginHashes: a copy read back from jsonb hashes
+// differently (jsonb reorders keys), so a container that read a row compares
+// the hash its writer stored, never one it recomputes.
 const pgRowHashes = new Map();
 const lineHash = (line) => createHash("sha1").update(line).digest("base64");
 const recordsTable = () => `${stateDbSchema()}.records`;
@@ -7490,8 +7506,12 @@ export async function pullIndexChanges({ pageSize = 1000, maxPages = 20 } = {}) 
         if (text === undefined) text = (await indexRowTexts([row])).get(id);
         // As the database holds it now: a row changed since the page was read
         // is at least as new, and one deleted since is not folded back.
-        const body = text == null ? null : await parseJsonSliced(text, tick);
+        let body = text == null ? null : await parseJsonSliced(text, tick);
         if (!body || typeof body !== "object" || isRemovedOrigin(id)) continue;
+        // A header names its parts: the entry is the two assembled, or the
+        // copy held stays when no consistent set of parts could be read.
+        if (isPartedHeader(body)) body = await assembleStoredEntry(id, body, tick);
+        if (!body || typeof body !== "object") continue;
         const bodyHash = body[ROW_HASH_KEY];
         delete body[ROW_HASH_KEY];
         if (!(await newerThanHeld(id, entryRev(body), bodyHash))) continue;
@@ -7698,6 +7718,103 @@ async function rowBodyBytes(line, from, hash, tick = async () => {}) {
   return off === total ? out : null;
 }
 
+// ---- a large entry as a header and parts (src/index-parts.js) --------------
+// The parts are written first, each its own statement of a few MB (none needs
+// the large-row limit), then the header under the newer-wins rule; a part the
+// table holds already (the same tools, so the same hash) is not sent again.
+// A reader takes the header and then the parts it names, and never mixes two
+// saves: a part is immutable, and one whose hash is not the named one, or
+// missing, sends the reader back to the header.
+const partStats = { written: 0, skipped: 0, assembled: 0, retries: 0, unreadable: 0, swept: 0, sweeps: 0 };
+/** Test hook: counts of part rows written and skipped, entries assembled, header re-reads, failed assemblies and sweeps. */
+export function __testPartStats() { return { ...partStats }; }
+async function writePartedOrigin(origin, entry, hash, tick) {
+  const { header, parts } = await splitEntry(origin, entry, { tick });
+  const have = await records.existing(PARTS_COLLECTION, parts.map((p) => p.id));
+  for (const p of parts) {
+    if (have.has(p.id)) { partStats.skipped++; continue; }
+    await stateQuery(
+      `INSERT INTO ${recordsTable()} (collection, id, body) VALUES ($1, $2, $3::jsonb) ON CONFLICT (collection, id) DO NOTHING`,
+      [PARTS_COLLECTION, p.id, p.text], { idempotent: true },
+    );
+    partStats.written++;
+    await new Promise((r) => setImmediate(r));
+  }
+  await stateQuery(
+    `INSERT INTO ${recordsTable()} AS r (collection, id, body) VALUES ($1, $2, $3::jsonb)
+     ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()
+     WHERE ${NEWER_OR_SAME_SQL("r.body", "EXCLUDED.body")}`,
+    [INDEX_RECORDS, origin, bodyWithHash(JSON.stringify(header), hash)],
+  );
+  return parts.length;
+}
+/** Delete the part rows no header names (the seller changed, shrank to one
+ *  row, or left the index; or a header write was refused as older), once
+ *  older than PARTS_ORPHAN_GRACE_MS, which outlasts any save: a part a
+ *  sibling container wrote ahead of its header is never taken from under it. */
+async function sweepOrphanParts() {
+  const r = await stateQuery(
+    `DELETE FROM ${recordsTable()} p WHERE p.collection = $1 AND p.updated_at < now() - ($2::int * interval '1 millisecond')
+       AND NOT EXISTS (SELECT 1 FROM ${recordsTable()} h WHERE h.collection = $3 AND h.id = left(p.id, length(p.id) - 41)
+         AND h.body->'parts'->'hashes' ? right(p.id, 40))`,
+    [PARTS_COLLECTION, PARTS_ORPHAN_GRACE_MS, INDEX_RECORDS], { idempotent: true },
+  );
+  partStats.sweeps++;
+  partStats.swept += r.rowCount || 0;
+  return r.rowCount || 0;
+}
+/** Test hook: the sweep, run now. */
+export function __testSweepOrphanParts() { return sweepOrphanParts(); }
+/** The parts a header names, read as text a few per statement and parsed
+ *  across turns: hash -> part body. A part the table does not hold is absent. */
+const PARTS_PER_QUERY = 4;
+async function readPartBodies(origin, hashes, tick) {
+  const out = new Map();
+  for (let i = 0; i < hashes.length; i += PARTS_PER_QUERY) {
+    const ids = hashes.slice(i, i + PARTS_PER_QUERY).map((h) => partId(origin, h));
+    const r = await stateQuery(`SELECT body::text AS t FROM ${recordsTable()} WHERE collection = $1 AND id = ANY($2::text[])`, [PARTS_COLLECTION, ids]);
+    for (const row of r.rows) {
+      const body = await parseJsonSliced(row.t, tick);
+      if (body && typeof body === "object" && typeof body.hash === "string") out.set(body.hash, body);
+      await new Promise((res) => setImmediate(res));
+    }
+  }
+  return out;
+}
+/** The entry a stored header stands for, assembled from its parts. When the
+ *  parts do not match the header (a save landed between the two reads) the
+ *  header is read again, up to PARTS_READ_ATTEMPTS times, and a header that
+ *  became one row again is that row. Null when no consistent copy was read:
+ *  the caller keeps what it holds. The result carries the header's row hash. */
+const PARTS_READ_ATTEMPTS = 3;
+const PARTS_RETRY_WAIT_MS = Number(process.env.INDEX_PARTS_RETRY_WAIT_MS) || 250;
+async function assembleStoredEntry(origin, header, tick, { attempts = PARTS_READ_ATTEMPTS } = {}) {
+  let h = header;
+  for (let a = 0; a < attempts; a++) {
+    if (!headerHashes(h)) break;
+    const entry = assembleEntry(origin, h, await readPartBodies(origin, headerHashes(h), tick));
+    if (entry) { partStats.assembled++; return entry; }
+    partStats.retries++;
+    if (a + 1 >= attempts) break;
+    await new Promise((res) => setTimeout(res, PARTS_RETRY_WAIT_MS));
+    const r = await stateQuery(`SELECT body::text AS t FROM ${recordsTable()} WHERE collection = $1 AND id = $2`, [INDEX_RECORDS, origin]);
+    if (!r.rows.length) break;
+    h = await parseJsonSliced(r.rows[0].t, tick);
+    if (!h || typeof h !== "object") break;
+    if (!isPartedHeader(h)) return h; // one row again
+  }
+  partStats.unreadable++;
+  console.warn(`[x402-index] ${origin}: no consistent set of parts could be read for its stored entry`);
+  return null;
+}
+/** Test hook: the entry stored for an origin, one row or assembled from its parts, without its row hash. */
+export async function _storedEntryForTest(origin) {
+  let body = await records.get(INDEX_RECORDS, origin);
+  if (isPartedHeader(body)) body = await assembleStoredEntry(origin, body, async () => {});
+  if (body && typeof body === "object") delete body[ROW_HASH_KEY];
+  return body;
+}
+
 /** Upsert changed origins and delete the rows of origins no longer held. */
 async function persistIndexCacheToStateDb(entries, lines, hashes = []) {
   const t0 = performance.now();
@@ -7715,9 +7832,20 @@ async function persistIndexCacheToStateDb(entries, lines, hashes = []) {
       if (pgOriginHashes.get(origin) !== h) changed.set(origin, h);
       await tick();
     }
+    // A changed entry too large for one row goes as a header and parts (only
+    // the parts the table lacks are sent); the batches below skip it.
+    let parted = 0, partRows = 0;
+    for (const [origin, h] of changed) {
+      const entry = entries[indexOf.get(origin)][1];
+      if (!isParted(entry)) continue;
+      partRows += await writePartedOrigin(origin, entry, h, tick);
+      pgOriginHashes.set(origin, h); pgRowHashes.set(origin, h);
+      written++; parted++;
+      await new Promise((r) => setImmediate(r));
+    }
     // The body is the entry alone: the line is `[origin, entry]`, and the
     // entry starts after the origin string and its comma.
-    const bodyOf = (i) => (changed.has(entries[i][0]) ? bodyWithHash(lines[i].slice(JSON.stringify(entries[i][0]).length + 2, -1), changed.get(entries[i][0])) : null);
+    const bodyOf = (i) => (changed.has(entries[i][0]) && !isParted(entries[i][1]) ? bodyWithHash(lines[i].slice(JSON.stringify(entries[i][0]).length + 2, -1), changed.get(entries[i][0])) : null);
     for (const [ids, bodies] of recordBatches(entries, bodyOf)) {
       // NEWER WINS (2026-10-15). With two containers, one may hold an older
       // copy of an origin than the row (the other crawled it since), and an
@@ -7756,7 +7884,11 @@ async function persistIndexCacheToStateDb(entries, lines, hashes = []) {
       for (const id of ids) { pgOriginHashes.delete(id); pgRowHashes.delete(id); }
       deleted += ids.length;
     }
-    console.log(`[x402-index] state database: ${written} origin row(s) written, ${deleted} deleted, ${entries.length - written} unchanged, in ${Math.round(performance.now() - t0)}ms`);
+    // Parts no header names any more (a seller that changed, shrank to one
+    // row or left) go once they are older than the grace.
+    const swept = await sweepOrphanParts();
+    console.log(`[x402-index] state database: ${written} origin row(s) written, ${deleted} deleted, ${entries.length - written} unchanged, in ${Math.round(performance.now() - t0)}ms` +
+      (parted || swept ? ` (${parted} in parts, ${partRows} part row(s) named, ${swept} orphan part(s) swept)` : ""));
     return true;
   } catch (e) {
     console.warn(`[x402-index] state database persist failed after ${written} row(s): ${String(e?.message || e).slice(0, 120)}`);
@@ -7869,7 +8001,17 @@ async function warmStartIndexOnce() {
       if (single) singleLeft = Math.max(0, singleLeft - page.length);
       if (!page.length) break;
       const turn0 = performance.now();
-      for (const { id, body } of page) {
+      for (const row of page) {
+        const { id } = row;
+        let body = row.body;
+        // A header row is its entry assembled from the parts it names. One
+        // whose parts could not be read consistently is left in the table
+        // (its row is no key here, so no save deletes it) and seeded, so the
+        // crawl reads the seller again and the next save rewrites it.
+        if (isPartedHeader(body)) {
+          body = await assembleStoredEntry(id, body, tick);
+          if (!body) { if (typeof id === "string" && id && !cache.has(id) && !isRemovedOrigin(id)) discoveredSeeds.add(id); continue; }
+        }
         const rowHash = body && typeof body === "object" ? body[ROW_HASH_KEY] : undefined;
         if (rowHash !== undefined) delete body[ROW_HASH_KEY];
         // A row read at boot is held as stored: the first save writes only
@@ -7894,7 +8036,8 @@ async function warmStartIndexOnce() {
     warmShared = null;
   }
   warmStartLastCount = n;
-  console.log(`[x402-index] warm-started ${n} sellers from the state database in ${Math.round(performance.now() - t0)}ms (${pages} page(s), longest turn ${Math.round(maxTurnMs)}ms)`);
+  console.log(`[x402-index] warm-started ${n} sellers from the state database in ${Math.round(performance.now() - t0)}ms (${pages} page(s), longest turn ${Math.round(maxTurnMs)}ms` +
+    (partStats.assembled || partStats.unreadable ? `, ${partStats.assembled} assembled from parts, ${partStats.unreadable} unreadable` : "") + ")");
   return n;
 }
 /**
