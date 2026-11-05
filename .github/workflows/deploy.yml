@@ -1977,6 +1977,10 @@ jobs:
           t node scripts/test-seller-field-types.js
           # A stored index of sellers with non-text fields boots and serves every seller page and API; entries are cleaned as the cache stores them
           t node scripts/test-seller-field-types-serve.js
+          # A throw inside a scheduled turn (the drain, a shadow rebuild) or inside one seller's listing is contained: the process stays up, the other sellers answer, the counts reach the operator surface (boots the server; offline)
+          t node scripts/test-crash-containment.js
+          # Every setImmediate/setTimeout/setInterval callback in the index module and the server runs under contained() or is allowlisted with a reason
+          t node scripts/test-contained-turns-sites.js
           # /api/route ordering: route-order.js pinned to the comparator, read by why.tiebreaks and the ranking sentence (offline)
           t node scripts/test-route-order.js
           # Revenue detector classification (real x402 buys vs funding/tests)

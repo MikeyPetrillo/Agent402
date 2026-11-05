@@ -598,6 +598,14 @@ Auto-closes when nothing is owed.`,
     body: () => failureWordBody("toolAnswers", "degraded"),
   },
   {
+    // A scheduled turn under contained() (containedTurns, src/contained-turn.js)
+    // threw in each of the last three or more consecutive minutes: repeating
+    // pages, ok clears, unknown does neither. Title matches heartbeat.yml's.
+    title: "containedTurns: a scheduled turn is throwing every minute",
+    verdict: ({ gateway: b }) => wordVerdict(b.containedTurns?.status, ["repeating"], ["ok"]),
+    body: () => "/api/gateway-status reports containedTurns.status=repeating: a background turn (a drain slice, a rebuild step, a timer tick) has thrown in each of the last three or more consecutive minutes; the throw is caught and counted, so the process stays up and the work it guards is not being done. The names and counts are on the operator endpoint, /__operator/perf.json (containedTurns, operator token), and the server log carries one [contained-turn] line per name per minute. Auto-closes when the word is ok.",
+  },
+  {
     // Redis persistence (redisPersistence on /api/gateway-status,
     // src/redis-persistence.js): what INFO persistence says about the Redis
     // behind REDIS_URL. off and degraded page; on clears; unknown does
