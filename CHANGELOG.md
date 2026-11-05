@@ -8,9 +8,9 @@ carries its own version on npm.
 
 ### 2026-11-05 (first-call refusals by new wallet, bounded CI installs)
 Operations:
-- The first-call allowance's operator view counts refusals of new wallets
-  (never paid, never granted) by reason and route, apart from returning
-  buyers, so a route a newcomer wanted shows up by name.
+- The first-call allowance's operator view counts refusals of wallets that
+  never paid by reason and route, apart from returning buyers, so a route a
+  newcomer wanted shows up by name.
 - Every Playwright install in CI goes through the bounded apt helper
   (`scripts/ci-apt-install.sh --playwright-chromium`), and a guard fails any
   workflow step that runs apt directly.

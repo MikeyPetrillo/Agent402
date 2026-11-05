@@ -41,7 +41,7 @@ ok(offenders.length === 0, `no workflow step installs apt packages outside scrip
 const helper = readFileSync(new URL("./ci-apt-install.sh", import.meta.url), "utf8");
 ok(DIRECT[0].test(helper) && DIRECT[1].test(helper), "the patterns match the helper's own apt-get and Playwright calls (control)");
 ok(!DIRECT.some((re) => re.test(code("# npx playwright install --with-deps chromium\necho hi"))), "a commented-out install is not counted (control)");
-ok(/timeout 170/.test(helper) && /for i in 1 2 3/.test(helper) && /--playwright-chromium/.test(helper), "the helper bounds each attempt, retries three times and serves the Playwright install");
+ok(/timeout 170 npx playwright install --with-deps chromium/.test(helper) && /sudo timeout 170 apt-get update -qq && sudo timeout 170 apt-get install /.test(helper) && /for i in 1 2 3/.test(helper) && /--playwright-chromium/.test(helper), "the helper bounds each attempt, retries three times and serves the Playwright install");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
