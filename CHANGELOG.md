@@ -17,6 +17,11 @@ Router:
   after every proven candidate, paid at its own live 402's payTo, with at most
   $0.25 a day per seller (`SOR_BASE_UNPROVEN_SELLER_DAILY_USD`) and $5 a day
   across all unproven sellers (`SOR_BASE_UNPROVEN_DAILY_USD`).
+Security:
+- A standing red-team suite runs in CI against the MCP connector, the seller
+  judge, decide, the fetch guard, the router's payer and report prose. MCP
+  refusals quote an echoed name as data, and the listing and judge screens
+  read markup-split, lookalike and tool-abuse wordings of the same text.
 Limits:
 - The unpaid price-check budget counts per client address (an IPv6 /64 as
   one) whatever the User-Agent; a named indexer or search crawler reads
