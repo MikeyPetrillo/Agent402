@@ -153,6 +153,12 @@ await check("a listed fallback's HTTP 5xx in words after a pass-on stops the cha
   assert.equal(out?.recovered, true);
   assert.deepEqual(asked, ["primary", "RH2", "outage"]);
 });
+await check("the chain read refuses after a pass-on and a listed 5xx: it ran once, the buyer gets 402", async () => {
+  const { out, asked, handled } = await run({ primary: () => graceful(NO_VERDICT), listed: [["RH2", () => { throw new SettleError(502, graceful(NO_VERDICT)); }], ["RH3", ok("rh3")]], outage: () => ({ refused: true, lateAuth: null, reason: "stub refused" }) });
+  assert.equal(out, undefined);
+  assert.deepEqual(asked, ["primary", "RH2", "outage"]);
+  assert.equal(handled.length, 1, "one chain read per payment");
+});
 await check("without our relayer (no outage handler): the next listed is still asked; none settles -> 402", async () => {
   const { out, asked } = await run({ primary: () => graceful(NO_VERDICT), listed: [["RH2", () => graceful(NO_VERDICT)]], withOwn: false, outage: null });
   assert.equal(out, undefined);
