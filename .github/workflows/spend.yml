@@ -1,0 +1,884 @@
+name: Spend (owner dispatch)
+run-name: "Spend: ${{ inputs.job }}"
+
+# The one workflow that spends on demand: a paid purchase from production or
+# an outside seller, a model or vendor call billed to us, or a transfer out of
+# a burner. Dispatch only, no schedule and no push trigger, so nothing here
+# spends unless the owner dispatches it:
+#
+#   gh workflow run spend.yml --ref main -f job=<name> [-f input=value ...]
+#
+# `job` picks exactly one job; every other job is skipped. Each job keeps the
+# steps, secrets, permissions and concurrency it had as its own workflow, and
+# the `spending` environment's approval click: that approval is the money gate.
+#
+# Inputs are shared where they mean the same thing; each input's description
+# names the jobs that read it and the default each one applies when it is
+# left blank. An input a job does not name is ignored by that job.
+#
+# The scheduled canaries and monitors (paid-canary, algorand-rail-canary,
+# facilitator-mainnet-canary, tempo-*, stripe-link-canary, heartbeat), deploy,
+# refunds and wallet funding keep their own workflows.
+on:
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "Which spend job to run (one per dispatch)"
+        required: true
+        type: choice
+        options:
+          - report-quality
+          - catalog-buy
+          - listing-pass
+          - smoke-buy
+          - mint-bazaar-rows
+          - base-list-sweep
+          - seller-sweep
+          - external-seller-probe
+          - algorand-external-buy
+          - mpp-new-agent-e2e
+      only:
+        description: "report-quality: comma-separated slugs (blank: this week's rotating group). catalog-buy: slug substring or comma-separated slugs. listing-pass, mint-bazaar-rows: comma-separated slugs (blank: all)"
+        required: false
+        default: ""
+      live:
+        description: "mint-bazaar-rows, base-list-sweep, seller-sweep, algorand-external-buy: true actually pays; false (default) is a dry run that pays nothing"
+        required: false
+        type: boolean
+        default: false
+      max_usd:
+        description: "Spend cap in USD. catalog-buy: run cap (blank: script default). base-list-sweep: total (blank: 25). seller-sweep: total (blank: 1.50). algorand-external-buy: total (blank: 1.00). external-seller-probe: refuse a quote above (blank: 0.01). mpp-new-agent-e2e: buys budget, cap 0.25 (blank: 0.25)"
+        required: false
+        default: ""
+      per_buy_usd:
+        description: "Per-buy cap in USD. seller-sweep: per seller (blank: 0.02). algorand-external-buy: per buy (blank: 0.10)"
+        required: false
+        default: ""
+      tier:
+        description: "catalog-buy: daily (cheap set + today's weekly slice), weekly (today's slice only), cheap, all"
+        required: false
+        default: "daily"
+      max_spend_usd:
+        description: "listing-pass: per-leg ceiling on what may be signed (cheapest first), above 0 and at most 100."
+        required: false
+        default: "40"
+      max_price_usd:
+        description: "listing-pass: optional per-route price cap above 0; empty means none (every paid route is in scope)."
+        required: false
+        default: ""
+      legs:
+        description: "listing-pass: comma-separated legs to run, from bazaar-base, bazaar-solana, payai-solana, payai-base."
+        required: false
+        default: "bazaar-base,bazaar-solana,payai-solana,payai-base"
+      expensive:
+        description: "mint-bazaar-rows: also buy route-execute-pro and -max"
+        required: false
+        type: boolean
+        default: false
+      limit:
+        description: "base-list-sweep: stop after N routes (blank: 0 = all). seller-sweep: how many sellers (blank: 50)"
+        required: false
+        default: ""
+      offset:
+        description: "seller-sweep: skip this many candidates (shard a long sweep without re-paying earlier sellers)"
+        required: false
+        default: "0"
+      route:
+        description: "smoke-buy: tool route to buy, e.g. /api/unemployment-rate (blank: /api/render)"
+        required: false
+        default: ""
+      url:
+        description: "external-seller-probe: seller endpoint (https), required for that job"
+        required: false
+        default: ""
+      method:
+        description: "smoke-buy: GET or POST (blank: GET). external-seller-probe: HTTP method (blank: POST)"
+        required: false
+        default: ""
+      query:
+        description: "smoke-buy: querystring for GET (e.g. q=gdp&limit=3)"
+        required: false
+        default: ""
+      body:
+        description: "smoke-buy, external-seller-probe: JSON body for POST"
+        required: false
+        default: ""
+      headers:
+        description: "external-seller-probe: extra request headers as a JSON object (seller-side keys; never the payment header)"
+        required: false
+        default: ""
+      expect:
+        description: "smoke-buy: response substring to require (required only when an external target is set)"
+        required: false
+        default: ""
+      strip_extensions:
+        description: "smoke-buy diagnostic: comma-separated x402 extensions to drop from the challenge before paying (e.g. offer-receipt)"
+        required: false
+        default: ""
+      capture_receipt:
+        description: "smoke-buy: capture the seller-signed offer receipt as a workflow artifact (external target only - this host issues none)"
+        required: false
+        type: boolean
+        default: false
+      target:
+        description: "smoke-buy: optional external seller origin to buy from instead of production (x402 compatibility check, e.g. https://seller.example)"
+        required: false
+        default: ""
+      fund_usd:
+        description: "mpp-new-agent-e2e: USDC.e to fund the fresh wallet with (cap 0.30)"
+        required: false
+        default: "0.30"
+
+permissions:
+  contents: read
+
+jobs:
+  # Do the paid reports still SAY anything? A research-max run once returned a
+  # report built on one search and five sources against a tier configured for
+  # twelve searches and a forty-source pool; the envelope was perfect, so every
+  # shape guard passed. A run with `only` blank grades one rotating group of
+  # four (by ISO week), so four dispatches cover every report. Spend is
+  # labelled: it uses the dedicated OpenRouter AUDIT key, never prod's, so an
+  # audit is separable from buyer traffic on the invoice.
+  report-quality:
+    if: inputs.job == 'report-quality'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: spending
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      # --ignore-scripts is the repo's supply-chain rule; better-sqlite3 is the one
+      # native module the server needs, rebuilt explicitly (issue #1233).
+      - run: npm ci --ignore-scripts && npm rebuild better-sqlite3
+
+      - name: Pick this week's group
+        id: pick
+        env:
+          ONLY: ${{ inputs.only }}
+        run: |
+          if [ -n "$ONLY" ]; then echo "slugs=$ONLY" >> "$GITHUB_OUTPUT"; exit 0; fi
+          # Four groups, one a week, so every report is graded inside a month.
+          case $(( $(date -u +%V) % 4 )) in
+            0) S="research,research-pro,research-max" ;;
+            1) S="dossier,dossier-max,market-brief" ;;
+            2) S="fund-report,insider-report" ;;
+            3) S="filing-report,ticker-pack" ;;
+          esac
+          echo "slugs=$S" >> "$GITHUB_OUTPUT"
+          echo "week $(date -u +%V) -> $S"
+
+      - name: Boot the server with real upstreams
+        env:
+          # The AUDIT key, never prod's - this spends real money and it must be
+          # attributable. No fallback on purpose: a silent swap to the prod key
+          # is the exact accounting failure this rule exists to prevent.
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_AUDIT_KEY }}
+          BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
+          ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
+          FREE_MODE: "true"
+          X402_INDEX_CRAWL: "off"
+          PORT: "3000"
+        run: |
+          if [ -z "$OPENROUTER_API_KEY" ]; then
+            echo "::error::OPENROUTER_AUDIT_KEY is not set - refusing to run on prod's key"; exit 1
+          fi
+          node src/server.js > server.log 2>&1 &
+          for i in $(seq 1 90); do curl -sf http://127.0.0.1:3000/health >/dev/null && break; sleep 1; done
+          curl -sf http://127.0.0.1:3000/health || { echo "::error::server did not boot"; tail -40 server.log; exit 1; }
+
+      - name: Grade the reports
+        id: grade
+        env:
+          TARGET_URL: http://127.0.0.1:3000
+          AUDIT_ONLY: ${{ steps.pick.outputs.slugs }}
+        run: node scripts/report-quality-audit.mjs --out quality.json
+
+      - name: Upload the graded reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: report-quality
+          path: |
+            quality.json
+            server.log
+          if-no-files-found: ignore
+
+      # Heartbeat-style: one open issue, and a clean run closes it.
+      - name: Open or close the alert
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FAILED: ${{ steps.grade.outcome }}
+          SLUGS: ${{ steps.pick.outputs.slugs }}
+        run: |
+          TITLE="Paid report quality REGRESSED"
+          EXISTING=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number --jq '.[0].number // empty')
+          if [ "$FAILED" = "failure" ]; then
+            BODY="A graded report came back THIN or unreachable for: $SLUGS. A thin report is one that returned materially less work than its own tier config promises (searches run vs planned, source count vs pool), or that carried dangling citations, unverified numbers, or a pile of absence phrases. The run log names the exact failure per report, and quality.json is attached. Nobody is refunded automatically - check whether real buyers got the same answer. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            if [ -n "$EXISTING" ]; then gh issue comment "$EXISTING" --repo "$GITHUB_REPOSITORY" --body "$BODY";
+            else gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"; fi
+          elif [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "Clean run on $SLUGS: every graded report met its tier's own expectations. $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          fi
+
+  # Buy every tool from production at its list price and grade the answer, so a
+  # broken tool is found by us before a buyer finds it. It pays the real 402 on
+  # Base from the CI burner to our own payTo (the USDC recycles; the real cost is
+  # the upstream work each tool does) and grades the paid answer the way the
+  # strict sweep grades a free one: 200, no error field, every documented output
+  # key present, no empty array where the published example shows rows.
+  #
+  # Tiers (scripts/catalog-buy.js): daily is every tool priced at or under $0.10
+  # plus today's slice of the products above it (a seven-day rotation balanced
+  # by price); weekly is today's slice only; all is the whole catalog (size the
+  # cap for it, for example max_usd 32). Spend is capped per run
+  # (CATALOG_BUY_MAX_USD, the max_usd input, default in the script) against list
+  # prices before anything is bought and against the settled total before every
+  # signature. A fixed-price tool is never signed above its list price; a quoted
+  # tool is never signed above the ceiling its /api/pricing row and
+  # /openapi.json publish. The run refuses to start when the burner holds less
+  # than the planned spend plus a floor (exit 3: funding, not a tool failure).
+  # One paid call in flight, about a second apart. Every request carries the
+  # heartbeat token, so these buys book as internal traffic.
+  #
+  # A tool the cap left unbought is cap-deferred (exit 4), counted apart from
+  # failures. This job never records a /status observation: settlement is the
+  # paid canary's observation. One issue, "Catalog buy FAILING", names the
+  # failing slugs; a green full daily run closes it.
+  catalog-buy:
+    if: inputs.job == 'catalog-buy'
+    runs-on: ubuntu-24.04
+    # The report products run minutes each and the paywall settles after the
+    # handler, so the client has to outlast the work on every one of them.
+    timeout-minutes: 150
+    environment: spending
+    permissions:
+      contents: read
+      issues: write
+    # Wallet, pow and token secrets are NOT at job scope: job-scope env is in
+    # the environment of every step, including the dependency install, where a
+    # package lifecycle script could read them. They are scoped to the steps
+    # that use them.
+    env:
+      TARGET_URL: https://agent402.tools
+      # Production serves buyers first: one paid call in flight, a second apart.
+      CATALOG_BUY_CONCURRENCY: "1"
+      CATALOG_BUY_PACE_MS: "1000"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Install x402 client
+        # No wallet secret is in scope here, and --ignore-scripts blocks every
+        # dependency lifecycle script. The x402 client is pinned to the server's
+        # protocol version (test-workflow-client-pins.js holds it to
+        # package.json); viem is read from the lock, never hand-typed.
+        run: |
+          npm ci --ignore-scripts
+          VIEM=$(node -p "require('./package-lock.json').packages['node_modules/viem'].version")
+          npm install --no-save --ignore-scripts @x402/core@2.30.0 @x402/evm@2.30.0 "viem@$VIEM"
+          echo "installed viem@$(node -p "require('viem/package.json').version")"
+
+      - name: Buy the catalog from production (real USDC at list price)
+        id: buy
+        env:
+          BURNER_KEY: ${{ secrets.BURNER_KEY }}
+          POW_SECRET: ${{ secrets.POW_SECRET }}
+          CATALOG_BUY_MAX_USD: ${{ inputs.max_usd || '' }}
+          TIER: ${{ inputs.tier || 'all' }}
+          ONLY: ${{ inputs.only || '' }}
+          # The route-execute products pay an outside seller from the spending
+          # wallet (its own daily ceiling); the paid canary covers that path.
+          # decide-execute's published example names a decision that exists only
+          # after a paid decide call on the same server, so bought cold it answers
+          # 404 (uncharged); scripts/test-decide-execute.js covers the run itself.
+          CATALOG_BUY_SKIP: route-execute-pro,route-execute-max,decide-execute
+        run: |
+          if [ -z "$BURNER_KEY" ]; then
+            echo "::error::BURNER_KEY is not set in the spending environment; nothing can be bought"
+            echo "result=noconfig" >> "$GITHUB_OUTPUT"; exit 1
+          fi
+          echo "::add-mask::$BURNER_KEY"
+          [ -n "$POW_SECRET" ] && echo "::add-mask::$POW_SECRET"
+          set +e
+          node scripts/catalog-buy.js --tier "$TIER" --only "$ONLY" --out catalog-buy.json --outputs catalog-buy-outputs.json
+          CODE=$?
+          set -e
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          # 0 all passed, 5 some tool failed its grade, 4 nothing failed but the
+          # cap deferred some tools, 3 unfunded: the script writes result= itself.
+          # Anything else is the script not finishing.
+          case "$CODE" in 0|3|4|5) ;; *) echo "result=crashed" >> "$GITHUB_OUTPUT" ;; esac
+          exit 0
+
+      - name: Upload the graded report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: catalog-buy
+          path: catalog-buy.json
+          if-no-files-found: ignore
+
+      # What we bought, for better examples and better tools. No secret is in
+      # scope and nothing is committed: the step reads the paid answers the buy
+      # kept (redacted, bounded, guarded by scripts/catalog-buy-capture.js),
+      # writes the enhancement report and appends its top 20 to the job
+      # summary. Applying captured examples stays a reviewed PR, made locally
+      # with: node scripts/catalog-buy-examples.js --from-run <id> --write
+      - name: Enhancement report from the paid answers
+        if: always() && hashFiles('catalog-buy-outputs.json') != ''
+        run: node scripts/catalog-buy-examples.js --file catalog-buy-outputs.json --report catalog-buy-enhancements.md --step-summary 20
+
+      - name: Upload the paid answers and the enhancement report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: catalog-buy-outputs
+          path: |
+            catalog-buy-outputs.json
+            catalog-buy-enhancements.md
+            captures/
+          if-no-files-found: ignore
+          # Long enough to apply a week's examples after review, short enough
+          # that old answers do not linger.
+          retention-days: 30
+
+      # ONE issue. Opened on the first failing run, commented on each later one,
+      # closed by a green full daily run. A run narrowed with `only` can open or
+      # update it but never closes it: a narrow green proves nothing about the
+      # rest of the catalog.
+      - name: Open, update or close the alert
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ steps.buy.outputs.result }}
+          FAILING: ${{ steps.buy.outputs.failing }}
+          DEFERRING: ${{ steps.buy.outputs.deferring }}
+          GRADED: ${{ steps.buy.outputs.graded }}
+          FAILED: ${{ steps.buy.outputs.failed }}
+          DEFERRED: ${{ steps.buy.outputs.deferred }}
+          TIER: ${{ inputs.tier || 'all' }}
+          ONLY: ${{ inputs.only || '' }}
+          CATALOG_BUY_SKIP: route-execute-pro,route-execute-max,decide-execute
+        run: |
+          TITLE="Catalog buy FAILING"
+          RUN="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          SCOPE="tier $TIER"; [ -n "$ONLY" ] && SCOPE="$SCOPE, only '$ONLY'"
+          case "$RESULT" in
+            ok)
+              if [ -n "$OPEN" ] && [ -z "$ONLY" ] && [ "$TIER" = "daily" ]; then
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: every tool bought at list price passed its grade ($GRADED graded) at $(date -u +%FT%TZ). Run: $RUN"
+              fi
+              exit 0 ;;
+            fail)
+              DEFER_LINE=""; [ "${DEFERRED:-0}" != "0" ] && DEFER_LINE="Deferred (not bought, nothing known): $DEFERRED tool(s): $DEFERRING"
+              BODY="Bought from production and graded like the strict sweep ($SCOPE): $FAILED of $GRADED failed, $DEFERRED deferred. A grade names what the paid answer lacked: http-NNN (the status), error-field (a 200 carrying an error), missing-keys (documented output keys absent), empty (an array the published example shows populated came back empty), unsettled (a 402 after paying), quote-over-list (a fixed-price tool's live 402 asked more than its list price and was not signed), quote-over-ceiling (a quoted tool's live 402 asked more than its documented ceiling and was not signed), no-example (no usable published example). A deferred tool was not bought because the run's spend cap was reached, or (no-own-sale) because it names a sale this run makes and none settled; it is counted apart because nothing is known about it. The step summary carries the full table and the graded report is attached to the run.
+
+          Failing: $FAILING
+          $DEFER_LINE
+
+          Run: $RUN
+          A buyer copying the published example gets the same answer; fix the tool or its example, then dispatch spend.yml with job catalog-buy. A green full daily run closes this." ;;
+            deferred)
+              BODY="Every tool bought from production passed its grade ($SCOPE, $GRADED graded), but $DEFERRED tool(s) were not bought, so nothing is known about them: $DEFERRING. A plain slug was cut by the run's spend cap: raise max_usd, or dispatch spend.yml with job catalog-buy and tier weekly for the products the daily cap cannot fit. A slug marked no-own-sale names a sale this run makes, and none settled to name. Run: $RUN" ;;
+            unfunded)
+              BODY="The catalog buy did not start ($SCOPE): the burner's Base USDC balance is below this run's planned spend plus the floor, so nothing was bought and nothing was checked. This is funding, not a tool failure. Top up the burner (the run log names the address), then dispatch spend.yml with job catalog-buy; a green run closes this. Run: $RUN" ;;
+            *)
+              BODY="The catalog buy did not produce a verdict ($SCOPE, result '$RESULT'): the catalog was not checked. Run: $RUN" ;;
+          esac
+          if [ -n "$OPEN" ]; then
+            gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still failing at $(date -u +%FT%TZ). $BODY"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
+          fi
+          exit 1
+
+  # Keep every paid route listed in both settlement-driven registries, on Base
+  # and on Solana: the Bazaar (CDP's discovery index) and the PayAI facilitator
+  # registry. Each lists a route from a settlement its own facilitator carried,
+  # so a route neither has seen settle stays unlisted until someone pays it.
+  #
+  # scripts/payai-listing-pass.js runs four legs, one after another, each a
+  # coverage read followed by one buy per route that registry lacks on that
+  # chain (the same measurement as scripts/listing-coverage.js --missing):
+  #
+  #   bazaar base     BURNER_KEY, untagged: CDP is first on Base by boot order.
+  #   bazaar solana   SOLANA_BURNER_KEY, untagged: CDP is first on every chain
+  #                   its /supported lists, Solana included. Before it spends the
+  #                   leg proves the untagged Solana signer is not PayAI's.
+  #   payai solana    SOLANA_BURNER_KEY, tagged: X-Agent402-Settle-Via plus the
+  #   payai base      operator token (BURNER_KEY on Base) route that one buy to
+  #                   PayAI (src/settle-preference.js). Before the first buy the
+  #                   leg reads one 402 with and without the headers and spends
+  #                   nothing unless the Solana signer differs; on Base it also
+  #                   requires PayAI's /supported to list exact v2 on Base.
+  #
+  # Every paid route is in scope: no per-route price cap by default (the
+  # max_price_usd input sets one), the report products and both route-execute
+  # tiers included. Those two tiers also spend the router's spending wallet at an
+  # outside seller while they serve, on top of the list price paid here. A
+  # quoted (metered) route is priced by its own 402 (the published example sent
+  # unpaid) and bought at that amount. Each leg is bounded by the per-run
+  # ceiling max_spend_usd (default 40), cut as a prefix of the cheapest-first
+  # order; the rest is skipped and named. The list price lands in our own
+  # treasury; the real cost is the vendor call behind a route that serves
+  # through one. A run with nothing missing spends nothing.
+  #
+  # A registry lists a paid route on its own schedule, so a route bought in one
+  # run may still read as missing in the next. Before the legs the job downloads
+  # the pass records of the last 14 days (the listing-pass and mint-bazaar-rows
+  # artifacts of this workflow and of the workflows it replaced;
+  # scripts/listing-pass-memory.js) and each leg skips a route charged on its
+  # registry and chain within 14 days ("bought <date>, awaiting registry"). The
+  # records are rewritten after every attempt and kept 15 days.
+  #
+  # Routes named in scripts/listing-inputs.json (the reports, the premium model
+  # tiers, the X user lookup) are bought on those purposeful inputs instead of
+  # their published examples, and every record keeps what came back (status,
+  # latency, request-id, model and receipt headers, the body up to 20 KB) for
+  # grading. Request headers are never recorded.
+  #
+  # `legs` narrows a run to chosen legs and `only` (comma-separated slugs) to
+  # chosen routes. One issue, "Listing pass FAILED", stays open while a run
+  # fails and closes on the next green run.
+  listing-pass:
+    if: inputs.job == 'listing-pass'
+    runs-on: ubuntu-24.04
+    # Four legs in one job, so one spending approval covers the run. The
+    # largest gap (hundreds of routes on one leg) runs well past an hour.
+    timeout-minutes: 340
+    environment: spending
+    permissions:
+      contents: read
+      issues: write
+      # Lists and downloads this repository's own listing artifacts (the
+      # purchase memory).
+      actions: read
+    concurrency:
+      group: listing-pass
+      cancel-in-progress: false
+    env:
+      TARGET_URL: https://agent402.tools
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.30.0 @x402/core@2.30.0 @x402/evm@2.30.0 @x402/svm@2.30.0 @solana/kit@8.5.0 viem@2.52.2
+      - name: Download the purchase memory (records of the last 14 days)
+        # The workflow token reads artifacts only; no wallet secret here. A
+        # failure stops the job before the step that spends.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/listing-pass-memory.js --out bought --days 14
+      - name: Buy each route a registry lacks once, per registry and chain
+        # Wallet, gate and pow secrets are scoped to this step, never the
+        # install above.
+        env:
+          MAX_SPEND_USD: ${{ inputs.max_spend_usd || '40' }}
+          MAX_PRICE_USD: ${{ inputs.max_price_usd || '' }}
+          # Read from the environment, never interpolated into the script.
+          LEGS: ${{ inputs.legs || 'bazaar-base,bazaar-solana,payai-solana,payai-base' }}
+          ONLY: ${{ inputs.only || '' }}
+          BURNER_KEY: ${{ secrets.BURNER_KEY }}
+          SOLANA_BURNER_KEY: ${{ secrets.SOLANA_BURNER_KEY }}
+          AGENT402_OPERATOR_TOKEN: ${{ secrets.AGENT402_OPERATOR_TOKEN }}
+          # Signs X-Heartbeat-Token so these self-buys are booked as ours.
+          POW_SECRET: ${{ secrets.POW_SECRET }}
+        run: |
+          [ -n "$BURNER_KEY" ] || { echo "::error::BURNER_KEY is not set - the Base legs cannot pay"; exit 1; }
+          [ -n "$SOLANA_BURNER_KEY" ] || { echo "::error::SOLANA_BURNER_KEY is not set - the Solana legs cannot pay"; exit 1; }
+          [ -n "$AGENT402_OPERATOR_TOKEN" ] || { echo "::error::AGENT402_OPERATOR_TOKEN is not set - the settle-via gate cannot be opened"; exit 1; }
+          echo "::add-mask::$BURNER_KEY"
+          echo "::add-mask::$SOLANA_BURNER_KEY"
+          echo "::add-mask::$AGENT402_OPERATOR_TOKEN"
+          [ -n "$POW_SECRET" ] && echo "::add-mask::$POW_SECRET"
+          printf '%s' "$MAX_SPEND_USD" | grep -Eq '^[0-9]+(\.[0-9]+)?$' && awk -v v="$MAX_SPEND_USD" 'BEGIN { exit !(v > 0 && v <= 100) }' || { echo "::error::max_spend_usd must be a USD amount above 0 and at most 100"; exit 1; }
+          if [ -n "$MAX_PRICE_USD" ]; then
+            printf '%s' "$MAX_PRICE_USD" | grep -Eq '^[0-9]+(\.[0-9]+)?$' && awk -v v="$MAX_PRICE_USD" 'BEGIN { exit !(v > 0) }' || { echo "::error::max_price_usd must be a USD amount above 0, or empty for no cap"; exit 1; }
+          fi
+          if [ -n "$ONLY" ]; then
+            printf '%s' "$ONLY" | grep -Eq '^[a-z0-9][a-z0-9,-]*$' || { echo "::error::only must be comma-separated slugs"; exit 1; }
+          fi
+          printf '%s' "$LEGS" | grep -Eq '^(bazaar|payai)-(base|solana)(,(bazaar|payai)-(base|solana))*$' || { echo "::error::legs must be comma-separated from bazaar-base, bazaar-solana, payai-solana, payai-base"; exit 1; }
+          FAILED=""
+          for LEG in $(printf '%s' "$LEGS" | tr ',' ' '); do
+            REGISTRY="${LEG%%-*}"
+            CHAIN="${LEG#*-}"
+            echo "::group::$REGISTRY / $CHAIN"
+            node scripts/payai-listing-pass.js --registry "$REGISTRY" --chain "$CHAIN" --live --include-upstream --max-spend "$MAX_SPEND_USD" ${MAX_PRICE_USD:+--max-price "$MAX_PRICE_USD"} ${ONLY:+--only "$ONLY"} --bought bought --rebuy-after-days 14 --inputs scripts/listing-inputs.json --out "pass-$LEG.json" || FAILED="$FAILED $LEG($?)"
+            echo "::endgroup::"
+          done
+          if [ -n "$FAILED" ]; then echo "::error::legs that did not complete (exit code):$FAILED"; exit 1; fi
+      - name: Keep the pass records (route, status, tx; never a key)
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: listing-pass
+          path: pass-*.json
+          if-no-files-found: ignore
+          # Longer than the 14-day memory window that reads it back.
+          retention-days: 15
+
+  listing-pass-report:
+    needs: listing-pass
+    # always() so a failed pass still pages; the job gate so another job's
+    # dispatch (which skips the pass) never reads as a failed listing pass.
+    if: always() && inputs.job == 'listing-pass'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    steps:
+      - name: Page if the pass failed, close the page when it passes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PASS: ${{ needs.listing-pass.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          TITLE="Listing pass FAILED"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          if [ "$PASS" != "success" ]; then
+            if [ -z "$OPEN" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A listing pass did not complete (result: $PASS, trigger: ${GITHUB_EVENT_NAME}). While it fails, a route the Bazaar or the PayAI registry lacks on Base or Solana stays unlisted there. Read the run: each leg is a log group; exit 2 is a refused preflight (the settle-via preference not honored, PayAI not listing the chain, or a secret missing) and that leg spent nothing; exit 1 names the route whose buy failed. Records: the listing-pass artifact on $RUN_URL. Re-run: \`gh workflow run spend.yml --ref main -f job=listing-pass\`."
+            else
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still failing at $(date -u +%FT%TZ) (result: $PASS). $RUN_URL"
+            fi
+          elif [ -n "$OPEN" ]; then
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the listing pass completed at $(date -u +%FT%TZ). $RUN_URL"
+          fi
+
+  # Buy ONE tool from production with real USDC on Base to confirm it works
+  # end-to-end (render, FRED, any live-data tool). Cost is the tool's own price.
+  # Marked internal traffic (X-Heartbeat-Token) so it does not pollute the sales
+  # ledger.
+  smoke-buy:
+    if: inputs.job == 'smoke-buy'
+    runs-on: ubuntu-24.04
+    # Spends the burner wallet: every run waits for the spending environment's approval.
+    environment: spending
+    timeout-minutes: 8
+    permissions:
+      contents: read
+    env:
+      TARGET_URL: https://agent402.tools
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Install x402 client (EVM only)
+        # No secrets in scope here; --ignore-scripts blocks dependency lifecycle
+        # scripts. Pinned to the server's protocol version + the repo lock (R-07).
+        # KEEP THIS IN STEP WITH package.json's @x402/* range. It drifted to
+        # 2.16.0 while the server ran 2.22.0, and on 2026-08-29 a buy against an
+        # external seller failed with CDP's `'paymentPayload' is invalid: must
+        # match one of [x402V2Pay...]` - our own canary never caught it because
+        # it only pays OUR 402s, which the old client still shaped correctly.
+        # A buyer workflow that cannot pay a third party is not a buyer test.
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.30.0 @x402/core@2.30.0 @x402/evm@2.30.0 viem@2.52.2
+      - name: Buy one tool from production (real USDC)
+        env:
+          BURNER_KEY: ${{ secrets.BURNER_KEY }}
+          POW_SECRET: ${{ secrets.POW_SECRET }}
+          SMOKE_ROUTE: ${{ inputs.route || '/api/render' }}
+          SMOKE_METHOD: ${{ inputs.method || 'GET' }}
+          SMOKE_QUERY: ${{ inputs.query }}
+          SMOKE_BODY: ${{ inputs.body }}
+          SMOKE_EXPECT: ${{ inputs.expect }}
+          SMOKE_TARGET: ${{ inputs.target }}
+          SMOKE_STRIP_EXTENSIONS: ${{ inputs.strip_extensions }}
+          SMOKE_RECEIPT_OUT: ${{ inputs.capture_receipt && format('{0}/signed-offer-receipt.json', runner.temp) || '' }}
+        run: |
+          if [ -z "$BURNER_KEY" ]; then echo "No BURNER_KEY secret - cannot run the paid smoke test"; exit 1; fi
+          echo "::add-mask::$BURNER_KEY"
+          node scripts/smoke-buy.js
+      - name: Preserve signed offer receipt
+        if: ${{ always() && inputs.capture_receipt }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: signed-offer-receipt
+          path: ${{ runner.temp }}/signed-offer-receipt.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  # A Coinbase Bazaar row is minted by a SETTLED PAYMENT on the canonical URL,
+  # never by listing a tool, so a freshly shipped endpoint is invisible to every
+  # Bazaar-driven discovery surface until somebody buys it. This buys each
+  # unlisted tool once from the CI burner AND ASSERTS THE ANSWER, so it is also
+  # a correctness pass the paid canaries do not give. Dry unless live is true;
+  # the two route-execute tiers (which also spend the SPENDING wallet at an
+  # outside seller) need expensive on top. Each buy is recorded in
+  # pass-mint.json and kept as the mint-bazaar-rows artifact for 15 days: the
+  # listing pass reads it as purchase memory and does not buy a minted route
+  # again within 14 days.
+  mint-bazaar-rows:
+    if: inputs.job == 'mint-bazaar-rows'
+    runs-on: ubuntu-24.04
+    environment: spending
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Install the PINNED client tree (x402 client + viem)
+        run: |
+          mkdir -p /tmp/mint && cp "$GITHUB_WORKSPACE"/scripts/agentkit-live/package.json "$GITHUB_WORKSPACE"/scripts/agentkit-live/package-lock.json /tmp/mint/
+          cp "$GITHUB_WORKSPACE"/scripts/mint-bazaar-rows.js /tmp/mint/
+          cd /tmp/mint && npm ci --ignore-scripts --no-audit --no-fund
+      - name: Buy each unlisted tool once and verify what came back
+        env:
+          BURNER_KEY: ${{ secrets.BURNER_KEY }}
+          POW_SECRET: ${{ secrets.POW_SECRET }}
+          MINT_LIVE: ${{ inputs.live }}
+          MINT_EXPENSIVE: ${{ inputs.expensive }}
+          MINT_ONLY: ${{ inputs.only }}
+        run: |
+          [ -n "$BURNER_KEY" ] || { echo "::error::BURNER_KEY secret missing"; exit 1; }
+          echo "::add-mask::$BURNER_KEY"
+          [ -n "$POW_SECRET" ] && echo "::add-mask::$POW_SECRET"
+          ARGS=""
+          [ "$MINT_LIVE" = "true" ] && ARGS="$ARGS --live --out /tmp/mint/pass-mint.json"
+          [ "$MINT_EXPENSIVE" = "true" ] && ARGS="$ARGS --expensive"
+          [ -n "$MINT_ONLY" ] && ARGS="$ARGS --only $MINT_ONLY"
+          cd /tmp/mint && env -i PATH="$PATH" HOME="$HOME" \
+            BURNER_KEY="$BURNER_KEY" POW_SECRET="${POW_SECRET}" \
+            node mint-bazaar-rows.js $ARGS
+      - name: Keep the mint records (route, status, tx; never a key)
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mint-bazaar-rows
+          path: /tmp/mint/pass-*.json
+          if-no-files-found: ignore
+          # Longer than the 14-day memory window the listing pass reads.
+          retention-days: 15
+
+  # A resource enters the CDP Bazaar on its FIRST SETTLEMENT through Coinbase's
+  # facilitator, not by being advertised. This buys the unlisted routes that
+  # spend only against our OWN upstream accounts, once each, from the CI burner
+  # to our own payTo, so the USDC recycles and the real cost is the upstream
+  # calls. See scripts/base-list-sweep.js for the route list and why the two
+  # router tiers are excluded. Dry unless live is true.
+  base-list-sweep:
+    if: inputs.job == 'base-list-sweep'
+    runs-on: ubuntu-24.04
+    # The report composites run 30 s to 4 min each and the paywall settles AFTER
+    # the handler, so the sweep has to outlast the work on every one of them.
+    timeout-minutes: 330
+    environment: spending
+    permissions:
+      contents: read
+    env:
+      TARGET_URL: https://agent402.tools
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Install x402 client
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/core@2.30.0 @x402/evm@2.30.0
+      - name: Run the sweep
+        env:
+          BURNER_KEY: ${{ secrets.BURNER_KEY }}
+          # Marks every buy internal so the self-purchases are not printed into
+          # the sales ledger and PostHog as outside demand.
+          POW_SECRET: ${{ secrets.POW_SECRET }}
+          SWEEP_MAX_USD: ${{ inputs.max_usd || '25' }}
+          SWEEP_LIMIT: ${{ inputs.limit || '0' }}
+          SWEEP_DRY: ${{ inputs.live && '0' || '1' }}
+        run: |
+          [ -n "$BURNER_KEY" ] && echo "::add-mask::$BURNER_KEY"
+          [ -n "$POW_SECRET" ] && echo "::add-mask::$POW_SECRET"
+          node scripts/base-list-sweep.js --out sweep-report.json --max-usd "$SWEEP_MAX_USD"
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: base-list-sweep-report
+          path: sweep-report.json
+          if-no-files-found: ignore
+
+  # Buy ONE call from many x402 sellers and grade each answer against what that
+  # seller's own OpenAPI or 402 promised. Paying is the only way to tell a
+  # working seller from one that takes the money and returns `{}`; this is the
+  # job the crawler's `runtimeVerified` flag is named for. Dry unless live is
+  # true.
+  seller-sweep:
+    if: inputs.job == 'seller-sweep'
+    runs-on: ubuntu-24.04
+    environment: spending
+    timeout-minutes: 300  # the full sweep is ~2,244 sellers at ~4.7s each
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      # The same PINNED client tree the single-seller probe pays from, so the
+      # signing path here is the one already proven on this rail.
+      - name: Install the pinned x402 client
+        run: |
+          mkdir -p /tmp/sweep && cp "$GITHUB_WORKSPACE"/scripts/agentkit-live/package.json "$GITHUB_WORKSPACE"/scripts/agentkit-live/package-lock.json /tmp/sweep/
+          cp "$GITHUB_WORKSPACE"/scripts/seller-sweep.mjs "$GITHUB_WORKSPACE"/scripts/seller-verify-core.mjs /tmp/sweep/
+          cd /tmp/sweep && npm ci --ignore-scripts --no-audit --no-fund
+      - name: Sweep
+        env:
+          BURNER_KEY: ${{ secrets.BURNER_KEY }}
+          AGENT402_OPERATOR_TOKEN: ${{ secrets.AGENT402_OPERATOR_TOKEN }}
+          SWEEP_LIMIT: ${{ inputs.limit || '50' }}
+          SWEEP_OFFSET: ${{ inputs.offset || '0' }}
+          SWEEP_MAX_USD: ${{ inputs.per_buy_usd || '0.02' }}
+          SWEEP_TOTAL_USD: ${{ inputs.max_usd || '1.50' }}
+          SWEEP_LIVE: ${{ inputs.live }}
+        run: |
+          if [ "$SWEEP_LIVE" = "true" ]; then
+            [ -n "$BURNER_KEY" ] || { echo "::error::live run needs the BURNER_KEY secret"; exit 1; }
+            echo "::add-mask::$BURNER_KEY"
+          fi
+          cd /tmp/sweep && env -i PATH="$PATH" HOME="$HOME" \
+            BURNER_KEY="$BURNER_KEY" AGENT402_OPERATOR_TOKEN="${AGENT402_OPERATOR_TOKEN}" SWEEP_LIMIT="$SWEEP_LIMIT" SWEEP_OFFSET="$SWEEP_OFFSET" SWEEP_MAX_USD="$SWEEP_MAX_USD" \
+            SWEEP_TOTAL_USD="$SWEEP_TOTAL_USD" SWEEP_LIVE="$SWEEP_LIVE" SWEEP_OUT=/tmp/sweep/sweep.json \
+            node seller-sweep.mjs
+      - name: Keep the verdicts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: seller-sweep
+          path: /tmp/sweep/sweep.json
+          if-no-files-found: warn
+
+  # Pays ONE outside x402 seller endpoint once with the CI burner and prints the
+  # status, the settle receipt and the body, so a kit that relays a seller's
+  # response is written from a real one, not from its OpenAPI. Bounded by
+  # max_usd (refused before signing when the seller's live quote is above it).
+  external-seller-probe:
+    if: inputs.job == 'external-seller-probe'
+    runs-on: ubuntu-24.04
+    environment: spending
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Install the PINNED proof tree (x402 client + viem)
+        run: |
+          mkdir -p /tmp/probe && cp "$GITHUB_WORKSPACE"/scripts/agentkit-live/package.json "$GITHUB_WORKSPACE"/scripts/agentkit-live/package-lock.json /tmp/probe/
+          cp "$GITHUB_WORKSPACE"/scripts/external-seller-probe.js /tmp/probe/
+          cd /tmp/probe && npm ci --ignore-scripts --no-audit --no-fund
+      - name: Pay the seller once and print what came back
+        env:
+          BURNER_KEY: ${{ secrets.BURNER_KEY }}
+          PROBE_URL: ${{ inputs.url }}
+          PROBE_METHOD: ${{ inputs.method || 'POST' }}
+          PROBE_BODY: ${{ inputs.body }}
+          PROBE_HEADERS: ${{ inputs.headers }}
+          PROBE_MAX_USD: ${{ inputs.max_usd || '0.01' }}
+        run: |
+          [ -n "$PROBE_URL" ] || { echo "::error::external-seller-probe needs the url input"; exit 1; }
+          [ -n "$BURNER_KEY" ] || { echo "::error::BURNER_KEY secret missing"; exit 1; }
+          echo "::add-mask::$BURNER_KEY"
+          cd /tmp/probe && env -i PATH="$PATH" HOME="$HOME" BURNER_KEY="$BURNER_KEY" PROBE_URL="$PROBE_URL" PROBE_METHOD="$PROBE_METHOD" PROBE_BODY="$PROBE_BODY" PROBE_HEADERS="$PROBE_HEADERS" PROBE_MAX_USD="$PROBE_MAX_USD" node external-seller-probe.js
+
+  # Spend a capped amount of real USDC buying from OTHER sellers on the Algorand
+  # x402 rail, discovered through the GoPlausible facilitator catalog. See
+  # scripts/algorand-external-buy.js. THIS MONEY DOES NOT COME BACK: unlike the
+  # canaries (self-buys that recycle to our own payTo), these payments go to
+  # third parties with no refund path, so the cap is low and the run is dry
+  # unless live is true.
+  algorand-external-buy:
+    if: inputs.job == 'algorand-external-buy'
+    environment: spending
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      TARGET_URL: https://agent402.tools
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Install x402 client
+        # No wallet secrets are in scope for this step (audit R-07), and
+        # --ignore-scripts blocks dependency lifecycle scripts entirely.
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/core@2.30.0 @x402/avm@2.30.0
+
+      - name: Buy from external Algorand sellers
+        # Wallet secret scoped to THIS step only (audit R-07).
+        env:
+          ALGORAND_BURNER_MNEMONIC: ${{ secrets.ALGORAND_BURNER_MNEMONIC }}
+          EXT_MAX_USD: ${{ inputs.max_usd || '1.00' }}
+          EXT_PER_BUY_USD: ${{ inputs.per_buy_usd || '0.10' }}
+          EXT_DRY: ${{ inputs.live && '0' || '1' }}
+        run: |
+          if [ "$EXT_DRY" != "1" ] && [ -z "$ALGORAND_BURNER_MNEMONIC" ]; then
+            echo "No ALGORAND_BURNER_MNEMONIC secret - cannot pay external sellers."; exit 1
+          fi
+          [ -n "$ALGORAND_BURNER_MNEMONIC" ] && echo "::add-mask::$ALGORAND_BURNER_MNEMONIC"
+          node scripts/algorand-external-buy.js --out external-buys.json --max-usd "$EXT_MAX_USD"
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: algorand-external-buys
+          path: external-buys.json
+          if-no-files-found: ignore
+
+  # A brand-new agent's first session on the Tempo MPP rail, against
+  # production: a FRESH wallet funded from the canary burner (<= $0.30 USDC.e on
+  # Tempo), discovery from /llms.txt, /openapi.json, a live 402 and the /mcp
+  # connector, the published mppx quickstart run as written, a list of paid
+  # tools (capped at $0.25 total, $0.01 each), one deliberately bad body, and
+  # the leftover sent back to the burner. Every request carries the heartbeat
+  # token, so every sale is booked as internal. See
+  # scripts/mpp-new-agent-e2e.js.
+  mpp-new-agent-e2e:
+    if: inputs.job == 'mpp-new-agent-e2e'
+    environment: spending
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    concurrency:
+      # Two runs would race the burner's nonces on the funding transfer.
+      group: mpp-new-agent-e2e
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Install (lock-pinned; mppx, viem and the MCP SDK from the repo lock)
+        run: npm ci --ignore-scripts
+      - name: New agent, fresh wallet, first session
+        env:
+          BURNER_KEY: ${{ secrets.BURNER_KEY }}
+          POW_SECRET: ${{ secrets.POW_SECRET }}
+          TARGET_URL: https://agent402.tools
+          # Every input rides an env var, never shell interpolation (N-03).
+          FUND_USD: ${{ inputs.fund_usd || '0.30' }}
+          BUDGET_USD: ${{ inputs.max_usd || '0.25' }}
+        run: node scripts/mpp-new-agent-e2e.js

@@ -29,7 +29,7 @@ const CHAIN = arg("--chain", "eip155:8453");
 const OUT = arg("--out");
 // --target lets a dispatcher point this at ANY external x402 seller (by
 // design, for ecosystem demos) - unlike every other spend-capable workflow in
-// this repo (algorand-external-buy.yml, algorand-rail-canary.yml, refund.yml),
+// this repo (spend.yml, algorand-rail-canary.yml, refund.yml),
 // this one had no ceiling on what it would pay. A malicious or misbehaving
 // external seller's 402 could quote an arbitrary price and this would pay it
 // from the funded demo burner. Real tool prices are cents; $2 is generous

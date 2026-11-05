@@ -2,10 +2,10 @@
 // install step and in the adapter step (it installs framework packages from
 // the registry). An install runs dependency lifecycle scripts, so a secret
 // left in its env is readable by any postinstall a version bump brings in.
-// The spending workflows that install packages (listing-pass.yml,
-// mint-bazaar-rows.yml, algorand-rail-canary.yml) keep every secret and the
-// workflow token at step scope, never on an install step (npm rebuild runs
-// install scripts too) or at job or workflow scope.
+// The spending workflows that install packages (spend.yml, every job of it,
+// and algorand-rail-canary.yml) keep every secret and the workflow token at
+// step scope, never on an install step (npm rebuild runs install scripts too)
+// or at job or workflow scope.
 // Offline: reads the workflow text only.
 import { readFileSync } from "node:fs";
 import { load } from "js-yaml";
@@ -113,7 +113,7 @@ if (deployJob) {
 // environment holds, so no secret (nor the workflow token) may reach one.
 const SECRETISH = /secrets\.|github\.token|GITHUB_TOKEN/;
 const INSTALL_RUN = /\bnpm (ci|install|i|rebuild)\b|\bnpx\b|\byarn\b|\bpnpm\b/;
-for (const file of ["listing-pass.yml", "mint-bazaar-rows.yml", "algorand-rail-canary.yml"]) {
+for (const file of ["spend.yml", "algorand-rail-canary.yml"]) {
   const wf = load(readFileSync(new URL(`../.github/workflows/${file}`, import.meta.url), "utf8"));
   const leaks = (env) => Object.entries(env || {}).filter(([, v]) => SECRETISH.test(String(v))).map(([k]) => k);
   ok(leaks(wf.env).length === 0, `${file}: no secret at workflow scope`);
@@ -128,7 +128,7 @@ for (const file of ["listing-pass.yml", "mint-bazaar-rows.yml", "algorand-rail-c
       ok(stepLeaks.length === 0, `${file} ${name}: "${String(st.name || st.run).slice(0, 50)}" carries no secret${stepLeaks.length ? ` (${stepLeaks.join(", ")})` : ""}`);
     }
   }
-  ok(installs >= 1, `${file}: the scan found its install step (${installs})`);
+  ok(installs >= (file === "spend.yml" ? Object.keys(wf.jobs || {}).length - 1 : 1), `${file}: the scan found its install steps (${installs})`);
 }
 
 // The Algorand sweep imports src/payments.js, whose import chain opens a
