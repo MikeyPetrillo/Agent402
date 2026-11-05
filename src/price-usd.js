@@ -183,3 +183,11 @@ export function isPricedAboveZero(p) {
   const micro = priceToMicroUsd(p);
   return micro != null && micro > 0;
 }
+
+/** A dollar figure for prose: two decimals ("$0.05", "$5.00"), or up to four
+ *  below a cent ("$0.005"). One rule for every sentence that quotes a lane's
+ *  ceiling or daily cap, so the same figure never reads two ways. */
+export function usdFigure(n) {
+  const v = Number(n);
+  return v < 0.01 ? `$${v.toFixed(4).replace(/0+$/, "").replace(/\.$/, "")}` : `$${v.toFixed(2)}`;
+}

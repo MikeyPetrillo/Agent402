@@ -18,6 +18,7 @@ import { agentReportPriceRange, cardReportPriceRange, reportLadderProse } from "
 import { PACK_PRICE_RANGE } from "../src/skills.js";
 import { TIERS } from "../src/tools/llm-gateway-kit.js";
 import { routeTiebreakProse } from "../src/route-order.js";
+import { IMAGE_TIERS } from "../src/tools/llm-images-fast-kit.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TARGET = (process.env.TARGET_URL || "http://127.0.0.1:3000").replace(/\/+$/, "");
@@ -110,6 +111,21 @@ ok(cardSeen >= 3 && agentSeen >= 2 && monthSeen >= 3 && rowsSeen >= 10 && orderS
 
 // Control: a drifted figure is reported through the same comparisons.
 ok(!same("0.85", Math.max(0.6, 1.1)) && `$1 to $5` !== card.text, "control: a wrong range would not match");
+
+// The /v1/images/generations failover the gateway page names is the chain the
+// route walks (IMAGE_TIERS["v1-images"]): every link, in order, by the name the
+// page uses, and no retired link named as current.
+{
+  const gw = wiki.find(([f]) => f === "LLM-Gateway.md")[1];
+  const NAMES = { "black-forest-labs/flux.2-pro": "FLUX.2 Pro", "microsoft/mai-image-2.6-flash": "MAI-Image-2.6 Flash" };
+  const chain = IMAGE_TIERS["v1-images"].chain.map((l) => l.model);
+  ok(chain.every((m) => NAMES[m]), `every /v1/images/generations link has a page name here (${chain.join(", ")}); a new link needs its wiki name`);
+  const [primary, ...failover] = chain.map((m) => NAMES[m]);
+  const row = gw.split("\n").find((l) => l.startsWith("| `POST /v1/images/generations`")) || "";
+  ok(row.includes(`${primary} with ${failover.join(", then ")} as the failover`), `LLM-Gateway's images row names ${primary} with ${failover.join(", ")} as the failover`);
+  ok(gw.includes(`The model is ${primary} (${failover.join(", then ")} as the failover)`), "LLM-Gateway's images section names the same chain");
+  ok(!/GPT-5 Image Mini/i.test(gw), "LLM-Gateway no longer names GPT-5 Image Mini, the retired failover");
+}
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

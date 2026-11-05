@@ -26,7 +26,7 @@ import { reportChat, costOf, textOf } from "../report-synthesis.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 import { checkReportGrounding, sanitizeReportProse } from "../report-grounding.js";
 import { makeResearchHandler } from "./research-deep-kit.js";
-import { IMAGES_FAST_TOOLS } from "./llm-images-fast-kit.js";
+import { imageTierHandler } from "./llm-images-fast-kit.js";
 import { runImageOffThread } from "./image-pool.js";
 import { runImageOp, MAX_SRC_PIXELS, declaredDimensions } from "./image-ops.js";
 
@@ -117,10 +117,17 @@ async function defaultResize(buffer, params) {
   catch (e) { if (e?.statusCode === 400) throw e; return runImageOp({ op: "cover", buffer, params, maxPixels: MAX_SRC_PIXELS }); }
 }
 
+/** One picture for the article from the images-fast tier, walking only the
+ *  links whose output the resizer (Jimp, in image-ops) decodes: the tier's
+ *  WebP link would be billed and then fail every size. */
+export function linkedinImage(input) {
+  return imageTierHandler("v1-images-fast", input, undefined, { jimpDecodable: true });
+}
+
 function defaultDeps() {
   return {
     research: makeResearchHandler(LINKEDIN_TIERS["linkedin-article"].researchTier),
-    generateImage: (input) => IMAGES_FAST_TOOLS.find((t) => t.slug === "v1-images-fast").handler(input),
+    generateImage: linkedinImage,
     synthesize: (body, timeoutMs, user) => reportChat(body, timeoutMs, user),
     resize: defaultResize,
   };

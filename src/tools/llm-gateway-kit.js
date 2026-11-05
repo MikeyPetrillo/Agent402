@@ -3230,8 +3230,8 @@ async function imagesHandler(input, req) {
 // audio.speech.create() works by changing base_url — served via the route
 // binder's { __binary } sentinel). OpenRouter's TTS catalog carries NO
 // OpenAI models (their docs still advertise openai/gpt-4o-mini-tts-2025-12-15;
-// the live ?output_modalities=speech list — and a real paid probe of every
-// entry, 2026-07-16 — says otherwise), so the tier serves a five-model
+// the live ?output_modalities=speech list, and a real paid probe of every
+// entry on 2026-07-16, say otherwise), so the tier serves a five-model
 // failover chain across four providers (Microsoft twice: the cheaper
 // MAI-Voice-2.1-Flash, then MAI-Voice-2.1), every link proven with a real
 // buy. Payment settles AFTER this handler, and only

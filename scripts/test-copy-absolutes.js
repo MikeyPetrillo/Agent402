@@ -437,10 +437,10 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
   {
     const { BASE_UNPROVEN_DEFAULT_USD, BASE_UNPROVEN_SELLER_DAILY_DEFAULT_USD, BASE_UNPROVEN_LANE_DAILY_DEFAULT_USD } = await import("../src/base-unproven.js");
     const { svmUnprovenAllowanceAtomic } = await import("../src/solana-buyer.js");
-    const fig = (n) => `$${n.toFixed(2)}`;
+    const { usdFigure: fig } = await import("../src/price-usd.js");
     const readme = (read("README.md") || "").replace(/\n> ?/g, " ").replace(/\s+/g, " ");
-    ok(readme.includes(`calls priced at ${fig(BASE_UNPROVEN_DEFAULT_USD)} or less on Base (up to ${fig(BASE_UNPROVEN_SELLER_DAILY_DEFAULT_USD)} a day per seller and $${BASE_UNPROVEN_LANE_DAILY_DEFAULT_USD} a day in all) or ${fig(Number(svmUnprovenAllowanceAtomic()) / 1e6)} or less on Solana`),
-       "README's seller line quotes the shipped unproven ceilings and the per-seller daily cap");
+    ok(readme.includes(`calls priced at ${fig(BASE_UNPROVEN_DEFAULT_USD)} or less on Base (up to ${fig(BASE_UNPROVEN_SELLER_DAILY_DEFAULT_USD)} a day per seller and ${fig(BASE_UNPROVEN_LANE_DAILY_DEFAULT_USD)} a day in all) or ${fig(Number(svmUnprovenAllowanceAtomic()) / 1e6)} or less on Solana`),
+       "README's seller line quotes the shipped unproven ceilings, the per-seller daily cap and the lane total, each in usdFigure's format");
   }
   ok(/after every proven candidate/.test(live) && /flagged unproven/.test(live),
      "...and says the two things that make the exception bounded: ordering and the receipt flag");

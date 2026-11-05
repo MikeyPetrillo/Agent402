@@ -12,15 +12,14 @@
 import { svmUnprovenAllowanceAtomic } from "./solana-buyer.js";
 import { baseUnprovenAllowanceUsd, baseUnprovenSellerDailyUsd, baseUnprovenLaneDailyUsd } from "./base-unproven.js";
 import { ROUTE_ORDER, routeTiebreakProse } from "./route-order.js";
+import { usdFigure } from "./price-usd.js";
 
 /** The unproven-tier ceiling in dollars, or 0 when the tier is disabled. */
 export function unprovenAllowanceUsd() {
   return Number(svmUnprovenAllowanceAtomic()) / 1e6;
 }
 
-function usd(n) {
-  return n < 0.01 ? `$${n.toFixed(4).replace(/0+$/, "").replace(/\.$/, "")}` : `$${n.toFixed(2)}`;
-}
+const usd = usdFigure;
 
 /**
  * One sentence about what a seller must prove to be paid by our router.

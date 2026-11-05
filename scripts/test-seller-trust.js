@@ -18,6 +18,8 @@ import { buildSellerTrustTool, assessSeller } from "../src/tools/seller-trust.js
 import { dispatchEligibility } from "../src/dispatch-eligibility.js";
 import { priceUsdOf } from "../src/price-usd.js";
 import { EXEC_TIERS } from "../src/tools/route-execute.js";
+import { routerLanes } from "../src/router-lanes.js";
+import { baseUnprovenAllowanceUsd } from "../src/base-unproven.js";
 // Tier expectations are derived from route-execute's own table, never typed.
 const TIERS_ASC = [...EXEC_TIERS].sort((a, b) => a.underlyingMaxUsd - b.underlyingMaxUsd);
 const tierFor = (usd) => TIERS_ASC.find((t) => usd <= t.underlyingMaxUsd) || null;
@@ -363,6 +365,28 @@ check("without a payTo-evidence source the field is omitted, not faked", () => {
     assert.ok(r.blockers.includes(line));
   });
 }
+
+// The published example's unproven lane is what the tool answers on a default
+// host for the same route: figures and note read through routerLanes, never typed.
+check("the example's unproven lane equals the live lane under the default env", () => {
+  const keys = ["SOR_BASE_UNPROVEN_MAX_USD", "SOR_BASE_UNPROVEN_SELLER_DAILY_USD", "SOR_BASE_UNPROVEN_DAILY_USD"];
+  const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+  for (const k of keys) delete process.env[k];
+  try {
+    const ex = build([], {}).discovery.output.example;
+    const u = ex.lanes.unproven;
+    const live = routerLanes({
+      toolVerdicts: [{ price: u.cheapestUsd, routerDispatchByChain: { base: { eligible: false, reason: "settlement_required", unprovenTier: true } } }],
+      unprovenMaxUsd: baseUnprovenAllowanceUsd(), execTiers: EXEC_TIERS,
+    }).unproven;
+    assert.deepEqual(u, live);
+    assert.match(u.note, /lane's daily total/);
+    assert.match(u.note, /a day in all/);
+    assert.equal(u.cheapestTier, TIERS_ASC.find((t) => u.cheapestUsd <= t.underlyingMaxUsd).slug);
+  } finally {
+    for (const k of keys) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+  }
+});
 
 console.log(`\n${failed ? "FAILED" : "OK"}: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
