@@ -15,7 +15,8 @@ Payments:
 Router:
 - On Base an unproven seller is tried up to $0.05 a call (was $0.01), only
   after every proven candidate, paid at its own live 402's payTo, with at most
-  $0.25 a day per seller (`SOR_BASE_UNPROVEN_SELLER_DAILY_USD`).
+  $0.25 a day per seller (`SOR_BASE_UNPROVEN_SELLER_DAILY_USD`) and $5 a day
+  across all unproven sellers (`SOR_BASE_UNPROVEN_DAILY_USD`).
 Index:
 - A failed paywall check is re-run after 24 hours and when a seller registers
   again, and the check skips a templated route.

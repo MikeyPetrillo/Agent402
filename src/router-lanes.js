@@ -18,7 +18,7 @@
 // and the resolver's Base gate runs), so a seller tool cannot disagree with
 // the router about a route. Pure; no state.
 import { DISPATCH_REASONS, DISPATCH_DETAILS, UNPROVEN_LANE_TERMS } from "./dispatch-eligibility.js";
-import { baseUnprovenSellerDailyUsd } from "./base-unproven.js";
+import { baseUnprovenSellerDailyUsd, baseUnprovenLaneDailyUsd } from "./base-unproven.js";
 import { priceUsdOf, isPricedAboveZero } from "./price-usd.js";
 
 const reasonLine = (reason, detail) => {
@@ -100,7 +100,7 @@ export function routerLanes({ toolVerdicts = [], unprovenMaxUsd = 0, unprovenSel
     // The lane is bounded by its own ceiling; this names the cheapest tier a
     // buyer can call to reach its cheapest route.
     cheapestTier: ceiling && tiered.length ? (tierFor(cheapest(tiered))?.slug || null) : null,
-    note: `${UNPROVEN_LANE_TERMS[0].toUpperCase()}${UNPROVEN_LANE_TERMS.slice(1)}${ceiling ? ` ($${ceiling} per call${Number(unprovenSellerDailyMaxUsd) > 0 ? `, at most $${Number(unprovenSellerDailyMaxUsd)} a day per seller` : ""})` : ""}.`,
+    note: `${UNPROVEN_LANE_TERMS[0].toUpperCase()}${UNPROVEN_LANE_TERMS.slice(1)}${ceiling ? ` ($${ceiling} per call${Number(unprovenSellerDailyMaxUsd) > 0 ? `, at most $${Number(unprovenSellerDailyMaxUsd)} a day per seller` : ""}${baseUnprovenLaneDailyUsd() > 0 ? `, $${baseUnprovenLaneDailyUsd()} a day in all` : ""})` : ""}.`,
     ...(reason ? { reason } : {}),
   };
   return { proven, unproven };

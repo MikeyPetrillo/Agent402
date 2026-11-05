@@ -6,7 +6,7 @@ const ENTRIES = [
     title: "Payment libraries on x402 2.30, a wider unproven lane, one spend workflow",
     items: [
       "Payments: the x402 libraries are 2.30.0 and mppx 0.17.1. A check that runs before verify or settle and fails refuses the payment with a 402 and charges nothing; a Tempo charge whose broadcast is rejected as a replay recovers its receipt instead of answering a new 402.",
-      "Router: on Base an unproven seller is tried up to $0.05 a call (was $0.01), only after every proven candidate, paid at its own live 402's payTo, with at most $0.25 a day per seller.",
+      "Router: on Base an unproven seller is tried up to $0.05 a call (was $0.01), only after every proven candidate, paid at its own live 402's payTo, with at most $0.25 a day per seller and $5 a day across all unproven sellers.",
       "Index: a failed paywall check is re-run after 24 hours and when a seller registers again, and the check skips a templated route.",
       "Index: the index keeps at most 5000 tools per seller, described tools first, and shows the listed count beside it. A listing that cannot be read is dropped alone; /api/gateway-status gains containedTurns and brokenListings.",
       "Gateway: on the Messages wire, citation text counts against the tier's input cap.",
