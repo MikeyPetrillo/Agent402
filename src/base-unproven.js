@@ -67,6 +67,7 @@ import { randomBytes } from "node:crypto";
 import { shared, sharedLimitsEnabled, noteSharedLimitsDegraded, keyOf as sharedKeyOf, OP_MS } from "./shared-limits.js";
 import { getSharedRedisClient } from "./shared-limit.js";
 import { withLoopTimeout } from "./loop-deadline.js";
+import { usdFigure } from "./price-usd.js";
 
 export const BASE_UNPROVEN_DEFAULT_USD = 0.05;
 export const BASE_UNPROVEN_SELLER_DAILY_DEFAULT_USD = 0.25;
@@ -309,19 +310,21 @@ async function sharedSums(keys, now) {
   }
 }
 
+export const _sellerCapRefusal = (spentMicro, capUsd) => refusal(spentMicro, capUsd);
+export const _laneCapRefusal = (spentMicro, capUsd) => laneRefusal(spentMicro, capUsd);
 const refusal = (spentMicro, capUsd) => ({
   ok: false,
   code: "unproven_seller_daily_cap",
   spentUsd: spentMicro / 1e6,
   capUsd,
-  reason: `this seller has been paid $${(spentMicro / 1e6).toFixed(2)} through the Base unproven lane in the last 24 hours (cap $${capUsd} per seller); it is tried again as that spend ages out`,
+  reason: `this seller has been paid ${usdFigure(spentMicro / 1e6)} through the Base unproven lane in the last 24 hours (cap ${usdFigure(capUsd)} per seller); it is tried again as that spend ages out`,
 });
 const laneRefusal = (spentMicro, capUsd) => ({
   ok: false,
   code: "unproven_lane_daily_cap",
   spentUsd: spentMicro / 1e6,
   capUsd,
-  reason: `the Base unproven lane has paid $${(spentMicro / 1e6).toFixed(2)} across all sellers in the last 24 hours (cap $${capUsd}); unproven sellers are tried again as that spend ages out`,
+  reason: `the Base unproven lane has paid ${usdFigure(spentMicro / 1e6)} across all sellers in the last 24 hours (cap ${usdFigure(capUsd)}); unproven sellers are tried again as that spend ages out`,
 });
 
 /**

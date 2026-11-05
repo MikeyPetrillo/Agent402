@@ -256,5 +256,17 @@ ok(dispatchEligibility({ local: true }).reason === "local_catalog" && dispatchEl
   ok(/r\.unproven && chain === "base" && r\.chainProvenPayTo/.test(srv), "the payment is pinned to the unproven candidate's own live payTo");
 }
 
+// Every lane figure prints through usdFigure: the floor-only reason quotes the
+// ceiling and the cheapest route, the proven blocker the tier's cap and the
+// cheapest route, each as "$0.05" / "$0.10" / "$1.00", never "$0.1" or "$1".
+{
+  const floorRow = { price: 0.1, routerDispatchByChain: { base: { eligible: false, reason: "settlement_required" } } };
+  const r1 = routerLanes({ toolVerdicts: [floorRow], unprovenMaxUsd: 0.05, execTiers: [{ slug: "route-execute", underlyingMaxUsd: 1 }] }).unproven.reason || "";
+  ok(r1.includes(`priced above the ${usdFigure(0.05)} unproven ceiling (cheapest ${usdFigure(0.1)})`) && r1.includes("(cheapest $0.10)") && !/\$0\.1\)/.test(r1), `the floor-only reason prints both figures through usdFigure (${r1})`);
+  const provenRow = { price: 2, routerDispatchByChain: { base: { eligible: true } } };
+  const r2 = (routerLanes({ toolVerdicts: [provenRow], unprovenMaxUsd: 0.05, execTiers: [{ slug: "route-execute", underlyingMaxUsd: 1 }] }).proven.blockers || []).join(" ");
+  ok(r2.includes("tier's $1.00 underlying cap (route-execute; cheapest route $2.00)"), `the proven blocker prints the tier cap and cheapest route through usdFigure (${r2})`);
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

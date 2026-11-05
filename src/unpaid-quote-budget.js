@@ -304,18 +304,37 @@ export function createUnpaidQuoteBudget({ budget, isPriced, isSynthetic = () => 
     let ua = "-";
     let key = null;
     let named = false;
+    // Which count refused: "address" (every address but the shared Worker
+    // egress one), "agent" (one User-Agent on the Worker egress address) or
+    // "egress" (that address's whole-address ceiling). The hint and the log
+    // line quote the figure of the count that refused.
+    let scope = "address";
+    let addressKey = null;
+    const named10 = (published * NAMED_CLIENT_BUDGET_MULTIPLIER).toLocaleString("en-US");
+    const egressCeiling = (published * WORKER_EGRESS_ADDRESS_MULTIPLIER).toLocaleString("en-US");
     const refuse = () => {
       throttled += 1;
-      if (!logged.has(key) && logged.size < UNPAID_QUOTE_BUDGET_LOG_CAP) {
-        logged.add(key);
-        try { log(`[unpaid-budget] a client (last User-Agent ${ua}${named ? ", a self-declared named client" : ""}) passed ${named ? namedLimit : limit} unpaid price checks from one address on this container this hour (budget ${published} per hour); answering 429 until the hour turns`); } catch { /* logging never breaks a response */ }
+      const logKey = scope === "egress" ? addressKey : key;
+      if (!logged.has(logKey) && logged.size < UNPAID_QUOTE_BUDGET_LOG_CAP) {
+        logged.add(logKey);
+        const line = scope === "egress"
+          ? `[unpaid-budget] the shared Worker egress address (last User-Agent ${ua}) passed ${limit * WORKER_EGRESS_ADDRESS_MULTIPLIER} unpaid price checks across every User-Agent on this container this hour (whole-address ceiling ${egressCeiling} per hour); answering 429 to every User-Agent there until the hour turns`
+          : scope === "agent"
+            ? `[unpaid-budget] a client on the shared Worker egress address (User-Agent ${ua}${named ? ", a self-declared named client" : ""}) passed ${named ? namedLimit : limit} unpaid price checks on this container this hour (budget ${published} per hour per User-Agent there); answering 429 to that User-Agent until the hour turns`
+            : `[unpaid-budget] a client (last User-Agent ${ua}${named ? ", a self-declared named client" : ""}) passed ${named ? namedLimit : limit} unpaid price checks from one address on this container this hour (budget ${published} per hour); answering 429 until the hour turns`;
+        try { log(line); } catch { /* logging never breaks a response */ }
       }
+      const rule = scope === "egress"
+        ? `Too many unpaid price checks from this shared Worker egress address this hour (ceiling ${egressCeiling} per hour for the whole address, across every User-Agent; each User-Agent there also has its own budget of ${published} per hour).`
+        : scope === "agent"
+          ? `Too many unpaid price checks from this User-Agent this hour (budget ${published} per hour per User-Agent from the shared Worker egress address, under a ceiling of ${egressCeiling} per hour for the whole address; a named indexer or search crawler reads against ${named10}).`
+          : `Too many unpaid price checks from one address this hour (budget ${published} per hour per client address, whatever the User-Agent; an IPv6 /64 is one address; a named indexer or search crawler reads against ${named10}).`;
       res.set("Retry-After", String(verdict.retryAfterSeconds)).set("Cache-Control", "no-store");
       return res.status(429).json({
         ok: false,
         error: "rate-limited",
         reason: UNPAID_QUOTE_BUDGET_REASON,
-        hint: `Too many unpaid price checks from one address this hour (budget ${published} per hour per client address, whatever the User-Agent; an IPv6 /64 is one address; a named indexer or search crawler reads against ${(published * NAMED_CLIENT_BUDGET_MULTIPLIER).toLocaleString("en-US")}). Every route and price is published at /.well-known/x402, /openapi.json and /api/pricing, and a request carrying a payment, a credits key or a proof-of-work solution is never counted. A client that settles a payment stops being counted for the rest of the hour. See ${policyUrl}`,
+        hint: `${rule} Every route and price is published at /.well-known/x402, /openapi.json and /api/pricing, and a request carrying a payment, a credits key or a proof-of-work solution is never counted. A client that settles a payment stops being counted for the rest of the hour. See ${policyUrl}`,
         retryAfterSeconds: verdict.retryAfterSeconds,
       });
     };
@@ -335,10 +354,11 @@ export function createUnpaidQuoteBudget({ budget, isPriced, isSynthetic = () => 
       verdict = hit(key, now(), named ? namedLimit : limit);
       // From the shared Worker egress address the whole address also counts,
       // against a multiple of the budget (see WORKER_EGRESS_ADDRESSES).
-      const addressKey = workerEgressAddressKeyOf(req);
+      addressKey = workerEgressAddressKeyOf(req);
+      if (addressKey) scope = "agent";
       if (addressKey && !verdict.limited) {
         const whole = hit(addressKey, now(), limit * WORKER_EGRESS_ADDRESS_MULTIPLIER);
-        if (whole.limited) verdict = whole;
+        if (whole.limited) { verdict = whole; scope = "egress"; }
       }
       if (!verdict.limited) return next();
     } catch { return next(); }

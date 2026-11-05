@@ -583,6 +583,16 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
   const heldBefore6 = _spentThisWindow();
   const sixth = await buy("https://fresh-seller.example", SELLER_W);
   ok(sixth.e && sixth.e.statusCode === 409 && /daily cap per seller/.test(sixth.e.message) && signs === 0 && paidRequests === 0, `unproven cap: the sixth buy is refused 409 before anything is signed (${sixth.e?.statusCode} ${sixth.e?.message}; signs ${signs})`);
+  {
+    // Every figure in the cap sentences prints through usdFigure: a sub-cent
+    // spend keeps its digits, a whole-dollar cap prints its cents.
+    const { unprovenCapMessage } = await import("../src/x402-buyer.js");
+    const m1 = unprovenCapMessage("0x1234567890abcdef", { code: "unproven_seller_daily_cap", spentUsd: 0.003, capUsd: 5 });
+    const m2 = unprovenCapMessage("0x1234567890abcdef", { code: "unproven_lane_daily_cap", spentUsd: 4.5, capUsd: 5 });
+    ok(m1.includes("daily cap per seller ($0.003 of $5.00 in 24 h)") && m2.includes("daily cap across all sellers ($4.50 of $5.00 in 24 h)"), `unproven cap: the buyer-visible 409 prints both figures through usdFigure (${m1} | ${m2})`);
+    const s1 = BU._sellerCapRefusal(3000, 5).reason, l1 = BU._laneCapRefusal(4_500_000, 5).reason;
+    ok(s1.includes("paid $0.003 through the Base unproven lane") && s1.includes("(cap $5.00 per seller)") && l1.includes("paid $4.50 across all sellers") && l1.includes("(cap $5.00)"), `unproven cap: the seller and lane refusal reasons print through usdFigure (${s1} | ${l1})`);
+  }
   ok(sixth.e && sixth.e.committed !== true, "unproven cap: the refusal is pre-commit, so the router may try its next candidate");
   ok(_spentThisWindow() === heldBefore6, "unproven cap: the refusal gives the window budget hold back");
   // The same wallet behind another origin, and another wallet behind the same origin, are the same seller.

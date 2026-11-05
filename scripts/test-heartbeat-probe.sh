@@ -179,7 +179,7 @@ rm -f "$CAPTURE"; record_observation up "" >/dev/null
 
 # The signed read: with POW_SECRET the paywall read carries X-Heartbeat-Token,
 # the token src/pow.js verifies, so the budget never counts it (isSynthetic).
-echo "heartbeat probe — signed paywall read"
+echo "heartbeat probe: signed paywall read"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 export POW_SECRET="test-heartbeat-secret-do-not-use-in-prod"
 pw_case 402 "" 1 "" "402|{}" && ok "signed: one read, paywall observed" || bad "signed: one read, paywall observed" "PW=$PW unknown=$PAYWALL_UNKNOWN"

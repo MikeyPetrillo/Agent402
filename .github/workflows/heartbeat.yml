@@ -125,8 +125,15 @@ jobs:
         run: |
           TITLE="Paywall not observed"
           [ "$PAYWALL_UNKNOWN" = "1" ] || { echo "paywall observed by this run"; exit 0; }
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
-          if [ -n "$OPEN" ]; then echo "already tracked in #$OPEN"; exit 0; fi
+          # Only an issue with exactly this title, opened by the workflow bot
+          # or the repository owner (the account the status Worker posts as),
+          # is the alarm: an open one gets a comment, so a run after run of
+          # refused reads (a mismatched POW_SECRET) keeps one issue.
+          OPEN=$(ALARM_NAME="$TITLE" ALARM_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ALARM_NAME) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ALARM_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
+          if [ -n "$OPEN" ]; then
+            gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still not observed by the heartbeat at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+            echo "already tracked in #$OPEN"; exit 0
+          fi
           gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The GitHub heartbeat's paywall read was refused by the unpaid-quote budget twice (429, reason unpaid-quote-budget), so this run did not check that paid tools still answer 402. The read is signed with X-Heartbeat-Token and should never be counted: check that the POW_SECRET Actions secret is set and matches the server's. The status Worker closes this on its next observed paywall read."
 
       # Gateway credits: /v1 tiers settle the buyer's USDC before the handler

@@ -67,7 +67,7 @@ export function routerLanes({ toolVerdicts = [], unprovenMaxUsd = 0, unprovenSel
     if (!paid.length) provenBlockers.push("no paid resource is indexed for this origin");
     else if (!onBase.length) provenBlockers.push(reasonLine(paid.find((t) => t.reason)?.reason || "no_supported_route"));
     else if (provenAny.length) provenBlockers.push(highest
-      ? `its proven Base routes are all priced above the highest route-execute tier's $${highest.underlyingMaxUsd} underlying cap (${highest.slug}; cheapest route $${cheapest(provenAny)})`
+      ? `its proven Base routes are all priced above the highest route-execute tier's ${usdFigure(highest.underlyingMaxUsd)} underlying cap (${highest.slug}; cheapest route ${usdFigure(cheapest(provenAny))})`
       : "no route-execute tier is configured to pay it");
     else for (const line of new Set(onBase.map((t) => reasonLine(t.base.reason, t.base.detail)))) provenBlockers.push(line);
   }
@@ -90,7 +90,7 @@ export function routerLanes({ toolVerdicts = [], unprovenMaxUsd = 0, unprovenSel
   else if (proven.eligible || provenAny.length) reason = "this seller clears the Base settlement floor, so the router pays it as a proven seller; the Base unproven lane serves sellers below that floor";
   else if (!paid.length) reason = "no paid resource is indexed for this origin";
   else if (!onBase.length) reason = "the unproven lane is Base only, and this seller has no Base route the router can pay";
-  else if (floorOnly.length) reason = `every Base route held back only by the floor is priced above the $${ceiling} unproven ceiling (cheapest $${cheapest(floorOnly)})`;
+  else if (floorOnly.length) reason = `every Base route held back only by the floor is priced above the ${usdFigure(ceiling)} unproven ceiling (cheapest ${usdFigure(cheapest(floorOnly))})`;
   else reason = `every Base route is held back by something other than the settlement floor: ${[...new Set(onBase.map((t) => reasonLine(t.base.reason, t.base.detail)))].join("; ")}`;
   const sellerDaily = Number(unprovenSellerDailyMaxUsd) > 0 ? Number(unprovenSellerDailyMaxUsd) : null;
   const laneDaily = Number(unprovenLaneDailyMaxUsd) > 0 ? Number(unprovenLaneDailyMaxUsd) : null;

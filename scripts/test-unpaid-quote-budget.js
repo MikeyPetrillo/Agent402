@@ -237,6 +237,40 @@ ok(clientKeyOf({ socket: { remoteAddress: "10.1.1.1" } }) === "10.1.1.1" && clie
   let rotFirst429 = 0;
   for (let i = 1; i <= 100 && !rotFirst429; i++) if (run(rotW, fakeReq(W, { "user-agent": `rot-${i}/1` })) === 429) rotFirst429 = i;
   ok(rotFirst429 === 3 * WORKER_EGRESS_ADDRESS_MULTIPLIER + 1, `one Worker rotating User-Agents meets the address's ceiling at ten times the budget (first 429 at ${rotFirst429})`);
+  // The refusal says which count refused, with that count's figure: one
+  // User-Agent's budget on the egress address, or the whole-address ceiling;
+  // never "per client address, whatever the User-Agent" there.
+  {
+    const lines = [];
+    const wb = createUnpaidQuoteBudget({ budget: 3, isPriced: () => true, replicas: 1, log: (l) => lines.push(l) });
+    const call1 = (req) => { const res = fakeRes(); wb.middleware(req, res, () => {}); return res; };
+    for (let i = 0; i < 3; i++) call1(fakeReq(W, { "user-agent": "agent-a/1" }));
+    const ua429 = call1(fakeReq(W, { "user-agent": "agent-a/1" }));
+    const h1 = ua429.body?.hint || "";
+    ok(ua429.statusCode === 429 && !h1.includes("whatever the User-Agent") && h1.includes("budget 3 per hour per User-Agent from the shared Worker egress address") && h1.includes(`ceiling of ${3 * WORKER_EGRESS_ADDRESS_MULTIPLIER} per hour for the whole address`),
+      `egress, one User-Agent spent: the hint names the per-User-Agent budget and the whole-address ceiling (${h1.slice(0, 140)})`);
+    ok(lines.length === 1 && /shared Worker egress address \(User-Agent agent-a\/1\) passed 3 unpaid/.test(lines[0]) && /per User-Agent there/.test(lines[0]) && !/from one address/.test(lines[0]),
+      `egress, one User-Agent spent: the log line names the User-Agent's budget (${lines[0]})`);
+    lines.length = 0;
+    const wc = createUnpaidQuoteBudget({ budget: 3, isPriced: () => true, replicas: 1, log: (l) => lines.push(l) });
+    const call2 = (req) => { const res = fakeRes(); wc.middleware(req, res, () => {}); return res; };
+    let ceil = null;
+    for (let i = 1; i <= 100 && !ceil; i++) { const r = call2(fakeReq(W, { "user-agent": `spin-${i}/1` })); if (r.statusCode === 429) ceil = r; }
+    const h2 = ceil?.body?.hint || "";
+    const C = 3 * WORKER_EGRESS_ADDRESS_MULTIPLIER;
+    ok(!!ceil && h2.includes(`ceiling ${C} per hour for the whole address, across every User-Agent`) && !h2.includes("whatever the User-Agent") && !/^Too many unpaid price checks from one address/.test(h2) && !h2.startsWith("Too many unpaid price checks from this User-Agent"),
+      `egress, whole-address ceiling: the hint quotes the ceiling (${C}), not the per-client budget (${h2.slice(0, 140)})`);
+    ok(lines.length === 1 && lines[0].includes(`passed ${C} unpaid price checks across every User-Agent`) && lines[0].includes(`whole-address ceiling ${C} per hour`) && !/passed 3 /.test(lines[0]),
+      `egress, whole-address ceiling: the log line quotes the ceiling it passed (${lines[0]})`);
+    call2(fakeReq(W, { "user-agent": "spin-x/1" }));
+    ok(lines.length === 1, "the whole-address refusal is logged once for the address, not once per rotated User-Agent");
+    lines.length = 0;
+    const wd = createUnpaidQuoteBudget({ budget: 3, isPriced: () => true, replicas: 1, log: (l) => lines.push(l) });
+    let plain = null;
+    for (let i = 0; i < 4; i++) { const res = fakeRes(); wd.middleware(fakeReq("203.0.113.70", { "user-agent": `w-${i}/1` }), res, () => {}); plain = res; }
+    ok(plain.statusCode === 429 && (plain.body?.hint || "").includes("budget 3 per hour per client address, whatever the User-Agent") && /from one address/.test(lines[0] || ""),
+      "control: any other address keeps the per-address wording in the hint and the log line");
+  }
   const nonW = mk();
   const nonGot = [];
   for (let i = 0; i < 4; i++) nonGot.push(run(nonW, fakeReq("2a06:98c0:3600::104", { "user-agent": `walker-${i}/1` })));

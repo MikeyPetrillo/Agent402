@@ -46,6 +46,14 @@ import { assertNotOwnPayout } from "./own-wallets.js";
 import { readBytesCapped, readTextCapped, declaredLength, discardBody, decodeUtf8 } from "./capped-body.js";
 import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { reserveUnprovenSellerSpend, releaseUnprovenSellerSpend } from "./base-unproven.js";
+import { usdFigure } from "./price-usd.js";
+
+/** The buyer-visible 409 when a Base unproven daily cap refuses: every figure
+ *  through usdFigure, as the lane's other sentences print them. */
+export function unprovenCapMessage(payTo, capped) {
+  const which = capped.code === "unproven_lane_daily_cap" ? "daily cap across all sellers" : "daily cap per seller";
+  return `Seller ${String(payTo).slice(0, 10)}… is below the Base settlement floor and has reached the unproven lane's ${which} (${usdFigure(capped.spentUsd)} of ${usdFigure(capped.capUsd)} in 24 h) - not paid`;
+}
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -1064,8 +1072,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     if (chain === "base" && allowUnproven) {
       const capped = await reserveUnprovenSellerSpend({ payTo: payable.payTo, origin: url, sellerKey, atomic: quotedAtomic });
       if (!capped.ok) {
-        const which = capped.code === "unproven_lane_daily_cap" ? "daily cap across all sellers" : "daily cap per seller";
-        const e = new Error(`Seller ${String(payable.payTo).slice(0, 10)}… is below the Base settlement floor and has reached the unproven lane's ${which} ($${capped.spentUsd.toFixed(2)} of $${capped.capUsd} in 24 h) - not paid`);
+        const e = new Error(unprovenCapMessage(payable.payTo, capped));
         e.statusCode = 409;
         throw e;
       }
