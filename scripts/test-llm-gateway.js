@@ -1332,7 +1332,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
 // the tier serves a five-model failover chain (every link canary-proven);
 // OpenAI voice names map per-model, native ids pass through.
 {
-  const { validateSpeechRequest, SPEECH_PATH, SPEECH_MODELS, LLM_GATEWAY_TOOLS: tools } = await import("../src/tools/llm-gateway-kit.js");
+  const { validateSpeechRequest, SPEECH_PATH, SPEECH_MODELS, OPENAI_SPEECH_VOICES, LLM_GATEWAY_TOOLS: tools } = await import("../src/tools/llm-gateway-kit.js");
   ok(SPEECH_PATH === "/v1/audio/speech", "speech path constant");
   const speechTool = tools.find((t) => t.slug === "v1-audio-speech");
   ok(speechTool && speechTool.route === "POST /v1/audio/speech" && speechTool.price === "$0.060", "speech tool registered at the OpenAI wire path");
@@ -1350,6 +1350,17 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   ok(nova.bodies[0].voice === "gb_jane_confident" && nova.bodies[2].voice === "af_nova", "OpenAI voice name maps per-model down the chain");
   const native = validateSpeechRequest({ input: "hi", voice: "en_paul_cheerful" });
   ok(native.bodies[0].voice === "en_paul_cheerful" && native.bodies[2].voice === "af_alloy", "native voice id passes through on its model, remaps to alloy elsewhere");
+  // MAI-Voice-2 and -2-Flash expire upstream 2026-12-31; their 2.1 successors
+  // hold the last two links, and the old ids and voice ids still land there.
+  ok(SPEECH_MODELS.slice(-2).map((e) => e.id).join() === "microsoft/mai-voice-2.1-flash,microsoft/mai-voice-2.1" && !SPEECH_MODELS.some((e) => /mai-voice-2(-flash)?$/.test(e.id)), "the MAI links are the 2.1 successors, flash first, still last in the chain");
+  for (const [old, now] of [["microsoft/mai-voice-2-flash", "microsoft/mai-voice-2.1-flash"], ["mai-voice-2-flash", "microsoft/mai-voice-2.1-flash"], ["microsoft/mai-voice-2", "microsoft/mai-voice-2.1"], ["mai-voice-2", "microsoft/mai-voice-2.1"], ["mai-voice-2.1", "microsoft/mai-voice-2.1"]]) {
+    const b = validateSpeechRequest({ input: "hi", model: old }).bodies;
+    ok(b[0].model === now && b.length === 5, `model ${old} is still accepted and pins ${now} first, the rest as fallbacks`);
+  }
+  for (const e of SPEECH_MODELS.slice(-2)) ok(new Set(Object.values(e.map)).size === OPENAI_SPEECH_VOICES.length, `${e.id} gives each OpenAI voice name its own English speaker`);
+  const legacy = validateSpeechRequest({ input: "hi", voice: "fr-FR-Soleil:MAI-Voice-2" });
+  ok(legacy.bodies[3].voice === "fr-FR-Soleil:MAI-Voice-2.1-Flash" && legacy.bodies[4].voice === "fr-FR-Soleil:MAI-Voice-2.1" && legacy.bodies[0].voice === "en_paul_neutral", "a retired MAI-Voice-2 voice id is accepted and lands on the same speaker under 2.1; other links use their alloy");
+  ok(validateSpeechRequest({ input: "hi", voice: "ko-KR-Haena:MAI-Voice-2.1" }).bodies[4].voice === "ko-KR-Haena:MAI-Voice-2.1", "a native MAI-Voice-2.1 id passes through on its model");
   ok(validateSpeechRequest({ input: "hi", response_format: "pcm" }).contentType === "audio/pcm", "pcm supported");
   ok(validateSpeechRequest({ input: "hi", speed: 0.5 }).bodies[0].speed === 0.5, "speed 0.25-4 accepted — upstream bills per input char, so speed is cost-neutral");
   throws(() => validateSpeechRequest({}), '"input" is required', "missing input rejected");
