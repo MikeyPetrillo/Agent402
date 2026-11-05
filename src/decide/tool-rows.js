@@ -32,9 +32,15 @@ const MAX_FIELDS = 24;
 // remains is plain prose.
 const STRIP_RE = /[\u0000-\u001f\u007f-\u009f\u00ad\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufe00-\ufe0f\ufeff\ufff9-\ufffb\u{e0000}-\u{e007f}\u{e0100}-\u{e01ef}<>`]/gu;
 
+// An HTML comment or tag is removed whole first, so the words on either side
+// of it join as a reader of the rendered text sees them ("Ch<!-- -->ange"
+// reads as "Change", which the judge screen then reads too), never left as
+// debris that splits a word ("Ch !-- -- ange").
+const MARKUP_RE = /<!--[\s\S]*?(?:-->|$)|<\/?[a-zA-Z][^<>]{0,256}>/g;
+
 export function cleanText(s, max) {
   if (typeof s !== "string") return "";
-  const t = s.replace(STRIP_RE, " ").replace(/\s+/g, " ").trim();
+  const t = s.replace(MARKUP_RE, "").replace(STRIP_RE, " ").replace(/\s+/g, " ").trim();
   return t.length > max ? t.slice(0, max - 1).trimEnd() + "…" : t;
 }
 

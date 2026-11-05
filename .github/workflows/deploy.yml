@@ -2780,6 +2780,10 @@ jobs:
           # Our own listing text (every 402, /api/pricing, /openapi.json, /.well-known/x402) passes
           # the listing screen and the hidden-character scan we hold sellers to (stub facilitator)
           t node scripts/test-own-listing-screen.js
+          # Standing red team (scripts/redteam-corpus.json): injection and tool-abuse payloads against
+          # the MCP connector, the seller judge, decide's planner, the fetch guard, the router's payer
+          # and report prose; fails on any attack that lands (stub judge, model and facilitator, port 0)
+          t node scripts/test-agent-redteam.js
           # Every accept of every 402 asks list plus the chain's premium, raised to its
           # floor, as /api/pricing publishes them (three rails, a stub facilitator).
           t node scripts/test-accept-prices.js

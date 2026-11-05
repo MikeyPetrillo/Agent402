@@ -23,7 +23,9 @@ import { maySpend, noteSpend, adjustSpend, reserveSpend } from "../external-spen
 import { nonEvmPayerFromRequest } from "../non-evm-payer.js";
 import { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2 } from "../avm-network.js";
 import { findTools } from "../find.js";
-import { judgeTool, decide } from "../tool-judge.js";
+import { judgeTool, decide, orderByJudgment } from "../tool-judge.js";
+import { judgeReadableListing, looksLikeListingInjection } from "../listing-screen.js";
+import { stripHiddenCharacters } from "../hidden-chars.js";
 import { observeDelivery } from "../response-observation.js";
 import { isIdentityBoundRoute } from "../payments.js";
 import { evmCredentialBudgetMs, evmCredentialSettleableMs, evmSellerSignBy, EVM_SELLER_ALLOWANCE_MS } from "../evm-validity.js";
@@ -230,6 +232,40 @@ export function judgedOverrideAllowed(task, candidates, chosen) {
   return score >= floor ? { ok: true, score, floor } : { ok: false, score, floor, best };
 }
 
+/** What the outside-seller judge reads of one candidate: the seller's host,
+ *  slug, description and tags through the shared judge screen
+ *  (judgeReadableListing in src/listing-screen.js, the one decide's judge
+ *  reads). A listing the listing screen flags whole reaches the judge with no
+ *  description or tags; every sentence written to the reader is dropped from
+ *  the rest; the host, slug and tags are screened each alone and read
+ *  together, so a sentence split across tags is read whole. */
+export function sellerJudgeListing(r) {
+  const raw = String(r?.description || r?.name || "");
+  const clean = !looksLikeListingInjection(raw);
+  let host;
+  try { host = new URL(r?.seller || r?.url).host; } catch { host = String(r?.seller || r?.url || ""); }
+  return judgeReadableListing({
+    host,
+    slug: String(r?.slug || ""),
+    description: clean ? raw : "",
+    tags: clean && Array.isArray(r?.tags) ? r.tags.map(String) : [],
+  }, { links: false });
+}
+/** The judged order over gated outside candidates (src/tool-judge.js
+ *  orderByJudgment, reading sellerJudgeListing). A judged reorder stands only
+ *  when its pick's own match score meets the floor (judgedOverrideAllowed);
+ *  below it the lexical order is kept and the judge's answer rides on the
+ *  selection. A pinned target was already chosen and is not judged here. */
+export async function judgeSellerOrder(task, candidates, opts = {}) {
+  let ordered = await orderByJudgment(task, candidates, sellerJudgeListing, opts);
+  if (!ordered.refused && ordered.items?.[0] && ordered.items[0] !== candidates[0]
+    && (ordered.selection?.method === "judged" || ordered.selection?.method === "judged-tie")) {
+    const gate = judgedOverrideAllowed(task, candidates, ordered.items[0]);
+    if (!gate.ok) ordered = { ...ordered, items: candidates, selection: { method: "lexical", judged: { ...ordered.selection }, overrideRefused: { reason: "below_lexical_floor", score: gate.score, floor: gate.floor } } };
+  }
+  return ordered;
+}
+
 // THE BASE SPENDING WALLET'S LAST READING, for a refusal before signing.
 // upstreamBuyerStatus keeps its own 5 min cache (the one /api/gateway-status
 // fills), so a warm reading lands within one event-loop turn; a cold one
@@ -375,7 +411,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
       if (input.slug != null) {
         resolvedBy = "slug";
         def = bySlug.get(String(input.slug)) || null;
-        if (!def) throw bad(`Unknown slug "${String(input.slug).slice(0, 80)}" - resolve one with /api/find?q=<task>`, 404);
+        if (!def) throw bad(`Unknown slug ${JSON.stringify(stripHiddenCharacters(String(input.slug)).slice(0, 80))} - resolve one with /api/find?q=<task>`, 404);
         const d = dispatchable(def);
         if (!d.ok) throw bad(`Tool "${def.slug}" is not dispatchable here: ${d.why}`, 409);
         if (toUsd(def.price) > cap) {
