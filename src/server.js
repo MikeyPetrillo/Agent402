@@ -2041,8 +2041,23 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
             console.warn(`[sor] skipping unproven Base candidate ${r.seller}: its live payTo could not be read`);
             live = false;
           } else {
-            r.chainProvenPayTo = livePayTo;
-            console.log(`[sor] admitting Base candidate ${r.seller} as UNPROVEN (${r.priceUsd} is within the unproven ceiling) - tried after proven sellers`);
+            // The unproven lane is the label's (withDispatchFields): the same
+            // verdict, read with this origin's evidence and the address its
+            // live 402 names. The pre-probe filter above reads no evidence, so
+            // without this an origin whose withheld history sits at a shared
+            // wallet (evidence_payto_shared, which the label keeps out of the
+            // lane) was paid in it.
+            const lane = dispatchEligibility({ routable: true, networks: r.networks, settled: r.settled, payers: r.payers, priceUsd: r.priceUsd, urlTemplate: !!r.urlTemplate, spendChains: ["base"], minSettled: SOR_MIN_SETTLED_TX, minPayers: SOR_MIN_DISTINCT_PAYERS, routeText: r, usdcDomain: r.evmDomainByNetwork?.["eip155:8453"] || null, evidence: r.binding || undefined, livePayTo });
+            if (lane.chains.base?.unprovenTier !== true) {
+              console.warn(`[sor] skipping unproven Base candidate ${r.seller}: ${lane.chains.base?.detail || lane.reason} at its live payTo`);
+              live = false;
+              gateDrops.total++;
+              const why = lane.chains.base?.reason || "other";
+              gateDrops.byReason[why] = (gateDrops.byReason[why] || 0) + 1;
+            } else {
+              r.chainProvenPayTo = livePayTo;
+              console.log(`[sor] admitting Base candidate ${r.seller} as UNPROVEN (${r.priceUsd} is within the unproven ceiling) - tried after proven sellers`);
+            }
           }
         }
         if (live && chain === "base" && r.binding && !r.unproven) {
