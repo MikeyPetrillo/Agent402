@@ -1183,6 +1183,8 @@ jobs:
           t node scripts/test-us-spelling.js
           # Seller text on the agent-read JSON surfaces is cleaned and capped at serve time; a flagged listing is marked and served without its description
           t env AGENT402_SHOW_ROUTER=1 node scripts/test-listing-text-serve.js
+          # The listing screen's necessary-word hints answer exactly as the unhinted reading (implication per pattern on a generated corpus, agreement on the honest fixture; offline)
+          t node scripts/test-listing-screen-hints.js
           # Well-known store (operator-published domain-verification docs; traversal impossible, reserved names refused, no shadowing of /.well-known/x402 — offline)
           t node scripts/test-well-known-store.js
           # /api/reliability envelope (guarantees claim+verify pairing — every listing portal reads this)
