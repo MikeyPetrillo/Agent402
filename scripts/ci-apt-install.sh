@@ -5,8 +5,7 @@
 # The runner's first mirror (azure.archive.ubuntu.com) can stall with no
 # output until the job's own timeout. Each attempt is bounded, apt fails over
 # on an idle transfer, a lost attempt drops that mirror, and a mirror set that
-# is dead for three attempts fails loudly. Same handling as the browser install
-# step in deploy.yml.
+# is dead for three attempts fails loudly.
 set -u
 [ "$#" -gt 0 ] || { echo "usage: ci-apt-install.sh <package>... | --playwright-chromium"; exit 2; }
 PLAYWRIGHT=0

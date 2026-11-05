@@ -8,7 +8,7 @@ carries its own version on npm.
 
 ### 2026-11-05 (first-call refusals by new wallet, bounded CI installs)
 Operations:
-- The first-call allowance's operator view counts refusals of wallets that
+- The operator view of first-call grants counts refusals of wallets that
   never paid by reason and route, apart from returning buyers, so a route a
   newcomer wanted shows up by name.
 - Every Playwright install in CI goes through the bounded apt helper

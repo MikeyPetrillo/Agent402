@@ -5,7 +5,7 @@ const ENTRIES = [
     date: "2026-11-05",
     title: "First-call refusals by new wallet, bounded CI installs",
     items: [
-      "Operations: the first-call allowance's operator view counts refusals of wallets that never paid by reason and route, apart from returning buyers, so a route a newcomer wanted shows up by name.",
+      "Operations: the operator view of first-call grants counts refusals of wallets that never paid by reason and route, apart from returning buyers, so a route a newcomer wanted shows up by name.",
       "Operations: every Playwright install in CI goes through the bounded apt helper, and a guard fails any workflow step that runs apt directly.",
       "Packages: viem is 2.57.16.",
     ],
