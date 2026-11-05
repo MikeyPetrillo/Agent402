@@ -55,6 +55,10 @@ export const UNPAID_QUOTE_BUDGET_KEY_CAP = 20_000;
 // A self-declared named indexer or crawler reads against this many times the
 // budget, on the same per-address count as everything else from that address.
 export const NAMED_CLIENT_BUDGET_MULTIPLIER = 10;
+// The 429 body's `reason`: the machine-readable mark that a refusal is this
+// budget's, so an observer of ours (workers/status-probe, the heartbeat) reads
+// it as "not observed this time" rather than as the paywall failing.
+export const UNPAID_QUOTE_BUDGET_REASON = "unpaid-quote-budget";
 const HOUR_MS = 3_600_000;
 // How many distinct clients we name in the log and count as throttled inside
 // one hour. Past this the throttling continues and the count stops rising, so
@@ -273,6 +277,7 @@ export function createUnpaidQuoteBudget({ budget, isPriced, isSynthetic = () => 
       return res.status(429).json({
         ok: false,
         error: "rate-limited",
+        reason: UNPAID_QUOTE_BUDGET_REASON,
         hint: `Too many unpaid price checks from one address this hour (budget ${published} per hour per client address, whatever the User-Agent; an IPv6 /64 is one address; a named indexer or search crawler reads against ${(published * NAMED_CLIENT_BUDGET_MULTIPLIER).toLocaleString("en-US")}). Every route and price is published at /.well-known/x402, /openapi.json and /api/pricing, and a request carrying a payment, a credits key or a proof-of-work solution is never counted. A client that settles a payment stops being counted for the rest of the hour. See ${policyUrl}`,
         retryAfterSeconds: verdict.retryAfterSeconds,
       });

@@ -156,8 +156,28 @@ export async function checkPaidCall(prod, token) {
   }
 }
 
+// The unpaid-quote budget's 429 (src/unpaid-quote-budget.js) carries this
+// reason. This Worker reads production from Cloudflare's shared addresses, so
+// other callers on that address can spend the budget the paywall read counts
+// against: that refusal says nothing about the paywall. It is re-read once
+// after its Retry-After, capped at PAYWALL_BUDGET_WAIT_MAX_MS (the hour-long
+// Retry-After is never waited out), and a second budget refusal leaves
+// paywall and rails unobserved for this run: not recorded, never a failure,
+// never a page. Any other non-402 fails as before.
+export const UNPAID_QUOTE_BUDGET_REASON = "unpaid-quote-budget";
+export const PAYWALL_BUDGET_WAIT_MAX_MS = 10_000;
+/** True when `r` is the unpaid-quote budget's 429 (reads a clone of the body). */
+export async function isBudgetRefusal(r) {
+  if (r?.status !== 429) return false;
+  try { return (await r.clone().json())?.reason === UNPAID_QUOTE_BUDGET_REASON; } catch { return false; }
+}
+const budgetWaitMs = (r) => {
+  const ra = Number(r.headers.get("retry-after"));
+  return Math.min(PAYWALL_BUDGET_WAIT_MAX_MS, Number.isFinite(ra) && ra > 0 ? ra * 1000 : PAYWALL_BUDGET_WAIT_MAX_MS);
+};
+
 /**
- * Observe production. Returns { components, fails, paidCall } where components
+ * Observe production. Returns { components, fails, paidCall, paywall } where components
  * maps the /status component keys to {ok, detail}. Any thrown error is a failed
  * check, never a failed run: an observation we could not make must be recorded
  * as a failure or not at all, never silently as success.
@@ -166,8 +186,10 @@ export async function checkPaidCall(prod, token) {
  * run and paid-call is never claimed; present but empty, it is skipped.
  */
 export async function probe(prod, opts = {}) {
+  const sleep = opts.sleep || ((ms) => new Promise((res) => setTimeout(res, ms)));
   const components = {};
   const fails = [];
+  let paywall = { observed: true };
   const mark = (key, ok, detail) => {
     components[key] = { ok, detail: ok ? null : detail || "failed" };
     if (!ok) fails.push(`${key}(${detail || "failed"})`);
@@ -212,11 +234,20 @@ export async function probe(prod, opts = {}) {
   // accepts must still carry Base, because a rail dropping out of the offer
   // loses that chain's revenue with no error anywhere.
   try {
-    const r = await grab(`${prod}/api/extract`, {
+    const readPaywall = () => grab(`${prod}/api/extract`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url: "https://example.com" }),
     });
+    let r = await readPaywall();
+    if (await isBudgetRefusal(r)) {
+      await sleep(budgetWaitMs(r));
+      r = await readPaywall();
+    }
+    if (await isBudgetRefusal(r)) {
+      paywall = { observed: false, reason: "unpaid-quote budget refused the read twice" };
+      throw Object.assign(new Error("budget"), { budgetSkip: true });
+    }
     const is402 = r.status === 402;
     mark("paywall", is402, `paywall ${r.status}`);
     if (!is402) {
@@ -234,8 +265,10 @@ export async function probe(prod, opts = {}) {
       else mark("rails", nets.includes(REQUIRED_NETWORK), `base missing: ${nets.join(",").slice(0, 80)}`);
     }
   } catch (e) {
-    mark("paywall", false, String(e?.message || e).slice(0, 60));
-    mark("rails", false, "paywall probe threw");
+    if (!e?.budgetSkip) {
+      mark("paywall", false, String(e?.message || e).slice(0, 60));
+      mark("rails", false, "paywall probe threw");
+    }
   }
 
   let paidCall = null;
@@ -248,7 +281,7 @@ export async function probe(prod, opts = {}) {
     }
   }
 
-  return { components, fails, paidCall };
+  return { components, fails, paidCall, paywall };
 }
 
 /**
@@ -261,10 +294,10 @@ export async function probe(prod, opts = {}) {
  * worker log, so the blip itself is never invisible.
  */
 export async function observe(prod, { sleep = (ms) => new Promise((r) => setTimeout(r, ms)), retryDelayMs = 20000, ...probeOpts } = {}) {
-  const first = await probe(prod, probeOpts);
+  const first = await probe(prod, { sleep, ...probeOpts });
   if (!first.fails.length) return { ...first, retried: false };
   await sleep(retryDelayMs);
-  const second = await probe(prod, probeOpts);
+  const second = await probe(prod, { sleep, ...probeOpts });
   console.log(`status-probe: first attempt FAILS ${first.fails.join(" ")} - after ${retryDelayMs}ms retry: ${second.fails.length ? `FAILS ${second.fails.join(" ")}` : "clean (transient blip, not recorded as down)"}`);
   return { ...second, retried: true };
 }
@@ -1072,7 +1105,7 @@ export async function run(env, timing = {}) {
   }
   // The paid-call challenge takes the same narrow token; the server honors
   // only STATUS_PROBE_TOKEN there.
-  const { components, fails, paidCall } = await observe(prod, {
+  const { components, fails, paidCall, paywall } = await observe(prod, {
     paidCallToken: env.STATUS_PROBE_TOKEN || "",
     ...(timing.sleep ? { sleep: timing.sleep, retryDelayMs: 0 } : {}),
   });
@@ -1098,8 +1131,9 @@ export async function run(env, timing = {}) {
   // /status, so this line is where the reason is readable.
   const paidLine = paidCall?.observed ? "paid-call observed" : `paid-call NOT observed (${paidCall?.reason || "check off"})`;
   const outageLine = outage.error ? `outage skipped (${outage.error})` : `outage ${outage.action}`;
-  console.log(`status-probe: ${fails.length ? `FAILS ${fails.join(" ")}` : "all healthy"} | ${paidLine} | recorded=${recorded} | ${alarmLine} | ${outageLine}`);
-  return { ok: true, recorded, fails, components, paidCall, alarms, outage };
+  const paywallLine = paywall?.observed === false ? ` | paywall NOT observed (${paywall.reason})` : "";
+  console.log(`status-probe: ${fails.length ? `FAILS ${fails.join(" ")}` : "all healthy"} | ${paidLine}${paywallLine} | recorded=${recorded} | ${alarmLine} | ${outageLine}`);
+  return { ok: true, recorded, fails, components, paidCall, paywall, alarms, outage };
 }
 
 export default {

@@ -125,6 +125,56 @@ else
   bad "healthy pass: exactly one attempt, no retry pause" "attempts=$(cat "$COUNT_FILE")"
 fi
 
+# The paywall read and the unpaid-quote budget's 429 (body reason
+# "unpaid-quote-budget"): one capped re-read; two budget refusals leave paywall
+# and rails unobserved, never failed; a plain 429 or a 500 fails as before.
+BUDGET_BODY='{"ok":false,"error":"rate-limited","reason":"unpaid-quote-budget","retryAfterSeconds":1800}'
+# Each answer is "status|body"; the stub writes the body and a Retry-After header.
+pw_case() {  # $1 = expected PW, $2 = expected PAYWALL_UNKNOWN, $3 = expected reads, $4 = expected sleeps, rest = answers
+  local want_pw="$1" want_unknown="$2" want_reads="$3" want_sleeps="$4"; shift 4
+  printf '%s\n' "$@" > "$TMP/answers"; : > "$TMP/reads"; : > "$TMP/sleeps"
+  curl() {
+    local hdr="" out="" ans
+    while [ $# -gt 0 ]; do case "$1" in -D) hdr="$2"; shift 2;; -o) out="$2"; shift 2;; *) shift;; esac; done
+    echo x >> "$TMP/reads"
+    ans=$(sed -n "$(wc -l < "$TMP/reads" | tr -d ' ')p" "$TMP/answers")
+    printf 'HTTP/1.1 %s\r\nretry-after: 1800\r\n\r\n' "${ans%%|*}" > "$hdr"
+    printf '%s' "${ans#*|}" > "$out"
+    printf '%s' "${ans%%|*}"
+  }
+  sleep() { echo "$1" >> "$TMP/sleeps"; }
+  paywall_read >/dev/null
+  unset -f curl sleep
+  local reads sleeps
+  reads=$(wc -l < "$TMP/reads" | tr -d ' '); sleeps=$(tr '\n' ' ' < "$TMP/sleeps" | sed 's/ $//')
+  [ "$PW" = "$want_pw" ] && [ "$PAYWALL_UNKNOWN" = "$want_unknown" ] && [ "$reads" = "$want_reads" ] && [ "$sleeps" = "$want_sleeps" ]
+}
+pw_case 402 "" 2 10 "429|$BUDGET_BODY" "402|{}" \
+  && ok "budget 429 then 402: one re-read after a capped wait, paywall observed" \
+  || bad "budget 429 then 402: one re-read after a capped wait, paywall observed" "PW=$PW unknown=$PAYWALL_UNKNOWN"
+pw_case 429 1 2 10 "429|$BUDGET_BODY" "429|$BUDGET_BODY" \
+  && ok "budget 429 twice: paywall not observed" \
+  || bad "budget 429 twice: paywall not observed" "PW=$PW unknown=$PAYWALL_UNKNOWN"
+pw_case 429 "" 1 "" '429|{"ok":false,"error":"rate-limited"}' \
+  && ok "a plain 429: no re-read, not marked unobserved" \
+  || bad "a plain 429: no re-read, not marked unobserved" "PW=$PW unknown=$PAYWALL_UNKNOWN"
+pw_case 500 "" 1 "" "500|boom" \
+  && ok "a 500: no re-read, not marked unobserved" \
+  || bad "a 500: no re-read, not marked unobserved" "PW=$PW unknown=$PAYWALL_UNKNOWN"
+# probe_once's own rule, on the values paywall_read leaves.
+pw_fails() { FAILS=""; [ "$PW" = "402" ] || [ "$PAYWALL_UNKNOWN" = "1" ] || FAILS="$FAILS paywall($PW)"; echo "$FAILS"; }
+grep -q '\[ "\$PW" = "402" \] || \[ "\$PAYWALL_UNKNOWN" = "1" \] || FAILS="\$FAILS paywall(\$PW)"' "$(dirname "$0")/heartbeat-probe.sh" \
+  && ok "probe_once fails the paywall unless it is a 402 or unobserved" || bad "probe_once fails the paywall unless it is a 402 or unobserved" "rule not found"
+PW=429; PAYWALL_UNKNOWN=1; [ -z "$(pw_fails)" ] && ok "unobserved: no paywall failure" || bad "unobserved: no paywall failure" "$(pw_fails)"
+PW=429; PAYWALL_UNKNOWN=""; [ "$(pw_fails)" = " paywall(429)" ] && ok "plain 429: paywall fails" || bad "plain 429: paywall fails" "$(pw_fails)"
+rm -f "$CAPTURE"; PAYWALL_UNKNOWN=1 record_observation up "" >/dev/null
+[ "$(jq -r '.components | has("paywall") or has("rails")' < "$CAPTURE")" = "false" ] && [ "$(field api)" = "true" ] \
+  && ok "record: an unobserved paywall leaves paywall and rails out, the rest recorded" \
+  || bad "record: an unobserved paywall leaves paywall and rails out, the rest recorded" "$(cat "$CAPTURE")"
+PAYWALL_UNKNOWN=""
+rm -f "$CAPTURE"; record_observation up "" >/dev/null
+[ "$(field paywall)" = "true" ] && ok "record: an observed paywall is recorded" || bad "record: an observed paywall is recorded" "$(cat "$CAPTURE")"
+
 echo
 if [ "$FAIL" -eq 0 ]; then echo "all passed ($PASS)"; else echo "FAILED ($FAIL of $((PASS+FAIL)))"; fi
 [ "$FAIL" -eq 0 ]

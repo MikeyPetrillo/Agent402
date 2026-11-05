@@ -429,6 +429,7 @@ try {
   ok(Number.isInteger(ra) && ra >= 1 && ra <= 3600, `the 429 carries Retry-After in seconds to the hour (got ${sixth.headers.get("retry-after")})`);
   const body = await sixth.json();
   ok(body.ok === false && body.error === "rate-limited", "the 429 body says rate-limited");
+  ok(body.reason === "unpaid-quote-budget", `the 429 body names the budget in reason, which our observers read (got ${body.reason})`);
   ok(typeof body.hint === "string" && body.hint.includes("/crawler") && body.hint.includes("unpaid price checks") && body.hint.includes("budget 5"), "the hint names unpaid price checks, the budget and /crawler");
   ok(body.retryAfterSeconds === ra, "retryAfterSeconds matches the header");
   ok(!sixth.headers.get("payment-required"), "a throttled request is answered before the paywall builds a challenge");
