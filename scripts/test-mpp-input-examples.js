@@ -11,6 +11,7 @@
 //   router    a Tempo candidate carrying an example gets the adapted body; an
 //             x402 candidate (a real input schema) and an ambiguous case get
 //             the buyer's params exactly as before
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { parseLlmsExamples, attachInputExamples, adaptParamsToExample, fetchLlmsExamples, __testResetLlmsExamples, LLMS_TXT_MAX_BYTES } from "../src/mpp-input-examples.js";
 import { tempoCatalog } from "../src/tempo-sellers.js";
 import { buildRouteExecuteTool, EXEC_TIERS } from "../src/tools/route-execute.js";

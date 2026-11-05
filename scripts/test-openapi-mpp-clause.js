@@ -6,6 +6,7 @@
 // tempo challenge; the creditsKey scheme pointed at /credits for purchase while
 // credit sales are off unless CREDITS_SALES is set. Offline: openapiSpec is
 // driven directly on a three-route fixture catalog under controlled env.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.log(`FAIL - ${m}`); } };
 

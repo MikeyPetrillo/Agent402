@@ -3,6 +3,7 @@
 // Covers: happy paths, every algorithm round-trips, error contracts
 // (statusCode=400 on bad input), the zip-bomb guard, and the
 // "each tool answers its own example" invariant the CI suite cares about.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { COMPRESSION_TOOLS } from "../src/tools/compression-kit.js";
 
 let passed = 0;

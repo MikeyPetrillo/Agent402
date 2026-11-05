@@ -12,6 +12,7 @@
 // To get a reliable heapUsed reading (not skewed by whatever GC happened to
 // run), this script re-execs itself once with --expose-gc if it wasn't
 // already started with that flag.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { fileURLToPath } from "url";
 import { spawnSync } from "child_process";
 

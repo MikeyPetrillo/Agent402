@@ -8,6 +8,7 @@
 //
 //   node scripts/test-seo-meta.js                      # offline unit
 //   TARGET_URL=http://127.0.0.1:3000 node scripts/test-seo-meta.js   # + booted sweep
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { metaDescription, metaTitle, fitTitle, trimWords, META_DESCRIPTION_MAX, META_TITLE_MAX, SERP_TITLE_MAX } from "../src/seo-meta.js";
 import { guidePage, guideSlugs } from "../src/guides.js";
 import { sampleMeta, SAMPLES } from "../src/sample-reports.js";

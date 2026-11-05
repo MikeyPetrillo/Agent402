@@ -33,7 +33,7 @@ import { promisify } from "node:util";
 import { createDocumentCache } from "./json-document.js";
 import { shared, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { createListingsStore, listingsStoreEnabled } from "./index-listings-pg.js";
-import { trackStoreReady, leased, stateDbEnabled, stateQuery, stateDbSchema, records, importOnce } from "./state-db.js";
+import { trackStoreReady, leased, stateDbEnabled, stateQuery, stateDbSchema, records, importOnce, pgJsonTextMayChange, largeRowTimeoutMs, isStatementTimeout } from "./state-db.js";
 import { retryingLoad } from "./store-retry.js";
 
 // The last crawl's probe examples per origin (src/probe-example.js), memory
@@ -256,13 +256,24 @@ export function _selfCheckHostMemoForTest() { return canonicalHostMemo; }
  *  the production domain, compared by canonical host (so a www. twin, a
  *  trailing slash or letter case never makes our own catalog an outside
  *  seller), or an entry whose manifest was permanently redirected onto one
- *  of them (`redirectedTo`). A ported twin is another host. */
+ *  of them (`redirectedTo`). A ported twin is another host.
+ *  A fully qualified spelling (a trailing dot, "agent402.tools.") is the same
+ *  host and folds to it, and so does the platform hostname this service is
+ *  published under (Railway's RAILWAY_PUBLIC_DOMAIN / RAILWAY_STATIC_URL,
+ *  read from the environment, plus any host in SELF_SELLER_HOSTS), which
+ *  answers with this catalog too. */
+const fqdnFold = (h) => (h && (h.endsWith(".") || h.includes(".:")) ? h.replace(/\.+(?=$|:)/, "").replace(/^www\./, "") : h);
+const selfHostOf = (s) => fqdnFold(canonicalHostOf(s));
+const asHostUrl = (v) => { const t = String(v || "").trim(); return t ? (/^https?:\/\//i.test(t) ? t : `https://${t}`) : ""; };
+const PLATFORM_SELF_HOSTS = new Set(
+  [process.env.RAILWAY_PUBLIC_DOMAIN, process.env.RAILWAY_STATIC_URL, ...String(process.env.SELF_SELLER_HOSTS || "").split(",")]
+    .map((v) => fqdnFold(canonicalHost(asHostUrl(v)))).filter(Boolean),
+);
 export function isSelfSeller(origin, { baseUrl = "", redirectedTo = null } = {}) {
-  const base = baseUrl ? canonicalHostOf(String(baseUrl)) : null;
-  const own = origin ? canonicalHostOf(String(origin)) : null;
-  if (own && (own === SELF_HOST || own === base)) return true;
-  const landed = redirectedTo ? canonicalHostOf(String(redirectedTo)) : null;
-  return !!(landed && (landed === SELF_HOST || landed === base));
+  const base = baseUrl ? selfHostOf(String(baseUrl)) : null;
+  const isOurs = (h) => !!h && (h === SELF_HOST || h === base || PLATFORM_SELF_HOSTS.has(h));
+  if (isOurs(origin ? selfHostOf(String(origin)) : null)) return true;
+  return isOurs(redirectedTo ? selfHostOf(String(redirectedTo)) : null);
 }
 // One full re-probe of every known origin per cycle, so this constant is the
 // single biggest lever on our outbound footprint - it multiplies the seed
@@ -571,9 +582,70 @@ export function indexCacheVersion() { return cacheVersion; }
 // installs it, and in the worker itself (which is the copy).
 let replicaObserver = null;
 export function _setRouterReplicaObserver(fn) { replicaObserver = typeof fn === "function" ? fn : null; }
+// Seller-written fields that every reader takes as text, and the lists it
+// takes as lists of text. A crawled listing (parsed JSON) can put a number,
+// an object or an array in any of them; a reader that calls a string method
+// on one throws, and an uncaught throw takes the process down. Every entry is
+// cleaned once as it is stored (crawl, Bazaar fallback, pull, warm start, the
+// router worker's replica): a number or boolean becomes its digits, anything
+// else that is not text is dropped. A clean entry is stored as it came.
+const SELLER_TEXT_KEYS = ["name", "description", "category", "slug", "route", "method", "mimeType", "network", "payTo", "asset", "title", "summary"];
+const SELLER_LIST_KEYS = ["tags", "aliases", "networks"];
+const MANIFEST_TEXT_KEYS = ["name", "description", "homepage", "title", "network", "payTo"];
+const asSellerText = (v) => (typeof v === "number" || typeof v === "boolean" ? String(v) : undefined);
+function cleanTextKeys(o, keys) {
+  let out = null;
+  for (const k of keys) {
+    const v = o[k];
+    if (v === undefined || v === null || typeof v === "string") continue;
+    out ||= { ...o };
+    const text = asSellerText(v);
+    if (text === undefined) delete out[k]; else out[k] = text;
+  }
+  return out;
+}
+function cleanSellerTool(t) {
+  if (!t || typeof t !== "object" || Array.isArray(t)) return null;
+  let out = cleanTextKeys(t, SELLER_TEXT_KEYS);
+  for (const k of SELLER_LIST_KEYS) {
+    const v = (out || t)[k];
+    if (v === undefined || v === null) continue;
+    if (Array.isArray(v) && v.every((x) => typeof x === "string")) continue;
+    out ||= { ...t };
+    out[k] = Array.isArray(v) ? v.map((x) => (typeof x === "string" ? x : asSellerText(x))).filter((x) => x !== undefined)
+      : typeof v === "string" ? [v] : [];
+  }
+  return out || t;
+}
+/** The entry with every seller field as its readers take it; the same object when nothing needed it. */
+function cleanSellerEntry(v) {
+  if (!v || typeof v !== "object") return v;
+  let out = null;
+  if (v.tools !== undefined && v.tools !== null) {
+    if (!Array.isArray(v.tools)) out = { ...v, tools: [] };
+    else {
+      let tools = null;
+      for (let i = 0; i < v.tools.length; i++) {
+        const c = cleanSellerTool(v.tools[i]);
+        if (c && c === v.tools[i]) { if (tools) tools.push(c); continue; }
+        tools ||= v.tools.slice(0, i);
+        if (c) tools.push(c);
+      }
+      if (tools) out = { ...v, tools };
+    }
+  }
+  if (v.manifest && typeof v.manifest === "object") {
+    const m = cleanTextKeys(v.manifest, MANIFEST_TEXT_KEYS);
+    if (m) (out ||= { ...v }).manifest = m;
+  }
+  return out || v;
+}
+/** Test hook: the cleaning every stored entry gets. */
+export function _cleanSellerEntryForTests(v) { return cleanSellerEntry(v); }
 class IndexCache extends Map {
   set(origin, v) {
     if (isRemovedOrigin(origin)) { this.delete(origin); return this; }
+    v = cleanSellerEntry(v);
     cacheVersion++;
     routeIndexNoteSet(origin, super.get(origin), v);
     super.set(origin, v);
@@ -894,10 +966,11 @@ export function stampDeclared(tools, declaredRoutes = []) {
     exact.add(r);
     if (r.includes("{")) templates.push(r);
   }
+  const index = templateIndex(templates);
   for (const t of tools) {
     if (!t || typeof t.route !== "string") continue;
     const r = pathOf(t.route);
-    t.declared = exact.has(r) || templates.some((tpl) => routeMatchesTemplate(tpl, r));
+    t.declared = exact.has(r) || !templatesMatching(index, r).next().done;
   }
   return tools;
 }
@@ -1293,7 +1366,9 @@ export function validateOriginInput(raw, { selfOrigin, allowPath = false } = {})
     if (!u.hostname.includes(".")) return { error: "origin must be a public hostname" };
     const n = normalizeSellerKey(raw);
     if (n.error) return { error: n.error };
-    if (selfOrigin && n.origin === String(selfOrigin).toLowerCase().replace(/\/+$/, "")) return { error: "this host is already the local catalog" };
+    // The same self check a bare origin meets below (a www twin, a trailing
+    // dot, letter case and the platform hostname all fold to this catalog).
+    if (isSelfSeller(n.origin, { baseUrl: selfOrigin || "" })) return { error: "this host is already the local catalog" };
     return { origin: n.key };
   }
   if (u.protocol !== "https:") return { error: "origin must be https" };
@@ -2337,14 +2412,16 @@ function setRowPayTo(row, net, addr, source) {
  *  remains visible as the history it is. */
 export function sellerPayToByNetwork(tools) {
   const own = {}, registry = {};
-  for (const t of tools || []) {
-    for (const [net, addr] of Object.entries(t?.payToByNetwork || {})) {
-      if (typeof addr !== "string" || !addr) continue;
-      const bucket = ownPayToSource(payToSourceOf(t, net)) ? own : registry;
-      if (!bucket[net]) bucket[net] = addr;
-    }
-  }
+  for (const t of tools || []) addSellerPayTo(own, registry, t);
   return { ...registry, ...own };
+}
+// One row's part of sellerPayToByNetwork, so a stepped walk folds the same rule.
+function addSellerPayTo(own, registry, t) {
+  for (const [net, addr] of Object.entries(t?.payToByNetwork || {})) {
+    if (typeof addr !== "string" || !addr) continue;
+    const bucket = ownPayToSource(payToSourceOf(t, net)) ? own : registry;
+    if (!bucket[net]) bucket[net] = addr;
+  }
 }
 
 /**
@@ -3879,17 +3956,56 @@ function openapiAllOperationRoutesUnscoped(openapi, originUrl) {
 // Does `concrete` instantiate the templated `route` ("/a/{id}/b" matches
 // "/a/57dc.../b")? Literal segments must match exactly; {param} segments match
 // any non-empty segment. A route with no template is never a template match —
-// literal equality is the exact-match path's job.
-function routeMatchesTemplate(templateRoute, concreteRoute) {
-  if (typeof templateRoute !== "string" || !templateRoute.includes("{")) return false;
-  const t = templateRoute.split("/");
-  const c = String(concreteRoute || "").split("/");
-  if (t.length !== c.length) return false;
-  for (let i = 0; i < t.length; i++) {
-    if (/^\{.+\}$/.test(t[i])) { if (!c[i]) return false; }
-    else if (t[i] !== c[i]) return false;
+// literal equality is the exact-match path's job. Segments are split on "/",
+// and a template and a route with different segment counts never match.
+//
+// Applied to many templates at once: each template is split once and
+// bucketed by its segment count, so a concrete route is compared only with
+// the templates of its own length, in their original order. Matching
+// every row of a 77k-tool seller against its templates one split at a time
+// held the crawl's loop for 176 ms here. `routeOf` reads an item's template.
+function templateIndex(items, routeOf = (x) => x) {
+  const byLen = new Map();
+  for (const x of items) {
+    const tpl = routeOf(x);
+    if (typeof tpl !== "string" || !tpl.includes("{")) continue; // never a template match
+    const segs = tpl.split("/");
+    const params = segs.map((s) => /^\{.+\}$/.test(s));
+    let bucket = byLen.get(segs.length);
+    if (!bucket) byLen.set(segs.length, (bucket = []));
+    bucket.push({ x, segs, params });
   }
-  return true;
+  return byLen;
+}
+/** The one candidate whose template a registry row `b` instantiates (its verb
+ *  too, unless the row's verb was inferred), or null when none or several do:
+ *  the answer a filter over every candidate under the template rule gives. */
+function soleTemplateMatch(index, b) {
+  let only = null, count = 0;
+  for (const x of templatesMatching(index, b.route)) {
+    if (!(b.methodInferred || x.method === b.method)) continue;
+    if (++count > 1) return null;
+    only = x;
+  }
+  return count === 1 ? only : null;
+}
+let templateCompares = 0; // templates compared with a concrete route, for the pin
+/** Test hooks: the indexed matchers, and how many templates they compared. */
+export function _templateMatchForTest(b, candidates) { return soleTemplateMatch(templateIndex(candidates, (x) => x.route), b); }
+export function _templateComparesForTest() { return templateCompares; }
+/** The items of a templateIndex whose template `concreteRoute` instantiates,
+ *  in their original order, under the template rule above. */
+function* templatesMatching(index, concreteRoute) {
+  const c = String(concreteRoute || "").split("/");
+  for (const e of index.get(c.length) || []) {
+    templateCompares++;
+    let fits = true;
+    for (let i = 0; i < e.segs.length; i++) {
+      if (e.params[i]) { if (!c[i]) { fits = false; break; } }
+      else if (e.segs[i] !== c[i]) { fits = false; break; }
+    }
+    if (fits) yield e.x;
+  }
 }
 
 // Bazaar and other registry rows are settlement/discovery evidence, never
@@ -3946,10 +4062,12 @@ export function mergeOpenapiIntoBazaar(openapiTools = [], bazaarTools = [], { al
   // collapses — to one representative row, since its settlements are real.
   const docTemplates = allRoutes.filter((r) => String(r.route).includes("{"));
   const collapsedDocRows = new Map(); // "METHOD template" -> first surviving row
-  const templateMatch = (b, candidates, methodOf) => {
-    const fits = candidates.filter((x) => routeMatchesTemplate(methodOf(x).route, b.route) &&
-      (b.methodInferred || methodOf(x).method === b.method));
-    return fits.length === 1 ? fits[0] : null;
+  // Each candidate list indexed once (templateIndex), on first use.
+  const indexes = new Map();
+  const templateMatch = (b, candidates) => {
+    let index = indexes.get(candidates);
+    if (!index) indexes.set(candidates, (index = templateIndex(candidates, (x) => x.route)));
+    return soleTemplateMatch(index, b);
   };
   const used = new Set();
   const enrich = (b, o, route) => {
@@ -4042,7 +4160,7 @@ export function mergeOpenapiIntoBazaar(openapiTools = [], bazaarTools = [], { al
     // Per-instance collapse, indexed operations first: the first instance
     // becomes the operation's row (templated route, registry payment truth);
     // every further instance of the same operation is dropped.
-    const t = templateMatch(b, templatedOps, (x) => x);
+    const t = templateMatch(b, templatedOps);
     if (t) {
       if (used.has(t)) return null;
       used.add(t);
@@ -4052,7 +4170,7 @@ export function mergeOpenapiIntoBazaar(openapiTools = [], bazaarTools = [], { al
     // (unannotated in an annotated doc, deprecated): real settlements, so
     // keep exactly ONE representative row per operation, on the templated
     // route so it reads as the operation rather than one UUID of it.
-    const d = templateMatch(b, docTemplates, (x) => x);
+    const d = templateMatch(b, docTemplates);
     if (d) {
       const key = `${d.method} ${d.route}`;
       if (collapsedDocRows.has(key)) return null;
@@ -5987,7 +6105,8 @@ function isRoutable(entry) {
 // key, and a dropped entry's memo goes with it.
 const slugSetMemo = new WeakMap();
 const serviceKeyMemo = new WeakMap();
-const canonicalPayeesOf = (tools) => Object.entries(allPayTosByNetwork(tools))
+// The payees part of the key from allPayTosByNetwork's answer.
+const canonicalPayeesFrom = (byNetwork) => Object.entries(byNetwork)
   .sort(([a], [b]) => a.localeCompare(b))
   .map(([network, values]) => [network, [...values].map((value) => String(value).toLowerCase()).sort()]);
 // The full tool contract + payees of one entry, memoized by identity. Built
@@ -5996,22 +6115,98 @@ const canonicalPayeesOf = (tools) => Object.entries(allPayTosByNetwork(tools))
 function exactServiceKeyOf(v) {
   if (!v || typeof v !== "object") return null;
   if (serviceKeyMemo.has(v)) return serviceKeyMemo.get(v);
+  return runSteps(exactServiceKeySteps(v));
+}
+// The key as steps: one entry can carry 100k tools, and serializing, sorting
+// and joining them held the loop 150 ms here in one call. A step ends every
+// SERVICE_KEY_STEP tools (or comparisons, while sorting). The key is the same
+// text: JSON.stringify({ payees, contracts }) writes each contract exactly as
+// JSON.stringify(contract) does, joined by commas, and a stable merge of
+// stably sorted runs under one comparator is the order one stable sort gives.
+const SERVICE_KEY_STEP = 1024;
+let serviceKeySteps = 0; // steps taken by key builds, for the step pin
+/** Test hook: steps the service-key builds have taken so far. */
+export function _serviceKeyStepsForTest() { return serviceKeySteps; }
+/** Test hooks: one entry's key (built in one turn when not memoized), and the
+ *  memoized key alone (undefined when none is held yet). */
+export function _exactServiceKeyForTest(v) { return exactServiceKeyOf(v); }
+export function _memoizedServiceKeyForTest(v) { return serviceKeyMemo.get(v); }
+function* exactServiceKeySteps(v) {
   const tools = v.tools || [];
-  const payees = canonicalPayeesOf(tools);
+  // allPayTosByNetwork(tools), folded a step at a time (each row checks up to
+  // 200 addresses per network).
+  const byNetwork = {};
+  for (let i = 0; i < tools.length; i++) {
+    addPayTos(byNetwork, tools[i]);
+    if (i % SERVICE_KEY_STEP === SERVICE_KEY_STEP - 1) { serviceKeySteps++; yield; }
+  }
+  const payees = canonicalPayeesFrom(byNetwork);
   let key = null;
   if (tools.length && payees.length) {
-    const contracts = tools.map((t) => [
-      String(t.method || "GET").toUpperCase(),
-      String(t.route || ""),
-      String(t.slug || ""),
-      String(t.price ?? ""),
-      t.paid === false ? "free" : "paid-or-unknown",
-      [...(t.networks || [])].map(String).sort(),
-    ]).map((c) => [JSON.stringify(c), c]).sort((a, b) => a[0].localeCompare(b[0])).map((p) => p[1]);
-    key = JSON.stringify({ payees, contracts });
+    const pairs = new Array(tools.length);
+    for (let i = 0; i < tools.length; i++) {
+      const t = tools[i];
+      const c = [
+        String(t.method || "GET").toUpperCase(),
+        String(t.route || ""),
+        String(t.slug || ""),
+        String(t.price ?? ""),
+        t.paid === false ? "free" : "paid-or-unknown",
+        [...(t.networks || [])].map(String).sort(),
+      ];
+      pairs[i] = JSON.stringify(c);
+      if (i % SERVICE_KEY_STEP === SERVICE_KEY_STEP - 1) { serviceKeySteps++; yield; }
+    }
+    const sorted = yield* stableSortSteps(pairs, (a, b) => a.localeCompare(b));
+    const parts = [];
+    for (let i = 0; i < sorted.length; i += SERVICE_KEY_STEP) {
+      parts.push(sorted.slice(i, i + SERVICE_KEY_STEP).join(","));
+      serviceKeySteps++;
+      yield;
+    }
+    key = `{"payees":${JSON.stringify(payees)},"contracts":[${parts.join(",")}]}`;
   }
   serviceKeyMemo.set(v, key);
   return key;
+}
+// A stable sort in steps: runs of SERVICE_KEY_STEP sorted by the engine's
+// stable sort, then merged pairwise (the left run wins a tie), with a step
+// every SERVICE_KEY_STEP elements merged. Same order as arr.slice().sort(cmp).
+function* stableSortSteps(arr, cmp) {
+  const n = arr.length;
+  if (n <= SERVICE_KEY_STEP) return arr.slice().sort(cmp);
+  let runs = [];
+  for (let i = 0; i < n; i += SERVICE_KEY_STEP) { runs.push(arr.slice(i, i + SERVICE_KEY_STEP).sort(cmp)); serviceKeySteps++; yield; }
+  while (runs.length > 1) {
+    const next = [];
+    for (let r = 0; r < runs.length; r += 2) {
+      const a = runs[r], b = runs[r + 1];
+      if (!b) { next.push(a); continue; }
+      const out = new Array(a.length + b.length);
+      let i = 0, j = 0, k = 0, budget = SERVICE_KEY_STEP;
+      while (i < a.length && j < b.length) {
+        out[k++] = cmp(b[j], a[i]) < 0 ? b[j++] : a[i++];
+        if (--budget === 0) { budget = SERVICE_KEY_STEP; serviceKeySteps++; yield; }
+      }
+      while (i < a.length) out[k++] = a[i++];
+      while (j < b.length) out[k++] = b[j++];
+      next.push(out);
+    }
+    runs = next;
+  }
+  return runs[0];
+}
+// Prime one entry's key before `until`: true once it is memoized, false when
+// time ran out (the build resumes on the next call).
+const serviceKeyBuilds = new WeakMap(); // entry -> its key build in progress
+function primeServiceKey(v, until = Infinity) {
+  if (!v || typeof v !== "object" || serviceKeyMemo.has(v)) return true;
+  let gen = serviceKeyBuilds.get(v);
+  if (!gen) { gen = exactServiceKeySteps(v); serviceKeyBuilds.set(v, gen); }
+  for (;;) {
+    if (gen.next().done) { serviceKeyBuilds.delete(v); return true; }
+    if (until !== Infinity && performance.now() >= until) return false;
+  }
 }
 
 // The cache-derived part of the alias set walks every entry (4,360 on prod,
@@ -6101,7 +6296,8 @@ function* computeAliasOriginsBaseSteps(entries) {
   for (const [origin, v] of entries) {
     if (++walked % ALIAS_YIELD_ENTRIES === 0) yield;
     if (v?.error || aliases.has(origin)) continue;
-    const key = exactServiceKey(v);
+    // A key not yet memoized is built in steps here too.
+    const key = v && typeof v === "object" && !serviceKeyMemo.has(v) ? yield* exactServiceKeySteps(v) : exactServiceKey(v);
     if (!key) continue;
     if (!exactGroups.has(key)) exactGroups.set(key, []);
     exactGroups.get(key).push(origin);
@@ -6806,6 +7002,43 @@ function sliceClock(ms = PERSIST_SLICE_MS) {
     start = performance.now();
   };
 }
+// head + lines.join(sep) + tail, written to `path` in pieces of about
+// WRITE_PIECE_CHARS with an await between them: the one join of a 280 MB cache
+// and its encoding held the loop 1.2-1.5 s per file here. A line longer than
+// a piece (one seller's row can pass 80 MB) is cut too, never inside a
+// surrogate pair, so the bytes are the ones the single write produced.
+const WRITE_PIECE_CHARS = 4 * 1048576;
+let writePieces = 0; // pieces written, for the step pin
+/** Test hooks: pieces the cache writes have taken, and the writer itself. */
+export function _cacheWritePiecesForTest() { return writePieces; }
+export function _writeJoinedInPiecesForTest(...a) { return writeJoinedInPieces(...a); }
+async function writeJoinedInPieces(path, head, lines, sep, tail) {
+  const { open } = await import("node:fs/promises");
+  const fh = await open(path, "w");
+  try {
+    const put = async (s) => {
+      writePieces++;
+      const b = Buffer.from(s, "utf8");
+      for (let off = 0; off < b.length;) off += (await fh.write(b, off, b.length - off)).bytesWritten;
+    };
+    let buf = head;
+    for (let i = 0; i < lines.length; i++) {
+      let line = i ? sep + lines[i] : lines[i];
+      while (buf.length + line.length > WRITE_PIECE_CHARS) {
+        let cut = WRITE_PIECE_CHARS - buf.length;
+        if (cut <= 0) { await put(buf); buf = ""; continue; }
+        const c = line.charCodeAt(cut - 1);
+        if (c >= 0xd800 && c <= 0xdbff) cut--; // keep a pair whole
+        if (cut <= 0) { await put(buf); buf = ""; continue; }
+        await put(buf + line.slice(0, cut));
+        buf = "";
+        line = line.slice(cut);
+      }
+      buf += line;
+    }
+    await put(buf + tail);
+  } finally { await fh.close(); }
+}
 /** persistedEntries, projected across turns: the origins are taken in one
  *  pass (the same set and order the synchronous walk reads), then each is
  *  projected with a yield whenever a slice is spent. */
@@ -7088,19 +7321,19 @@ export async function persistIndexCacheAsync(file = INDEX_CACHE_FILE) {
     const top = entries.map(([o], i) => [o, lines[i].length]).sort((a, b) => b[1] - a[1]).slice(0, 5);
     console.log(`[x402-index] persisted ${(bytes / 1_048_576).toFixed(1)} MB for ${entries.length} origins in ${ms}ms; largest: ` +
       top.map(([o, n]) => `${o} ${(n / 1024).toFixed(0)}KB/${(cache.get(o)?.tools || []).length} tools`).join(", "));
-    const { writeFile, rename } = await import("node:fs/promises");
+    const { rename } = await import("node:fs/promises");
     // NDJSON for the incremental loader: header line, then one [origin, entry]
     // per line. Written to a temp path and renamed so a crash mid-write can
     // never leave a half file for the next boot to read.
     const ndFile = file === INDEX_CACHE_FILE ? INDEX_CACHE_NDJSON_FILE : file.replace(/\.json$/, "") + ".ndjson";
     const header = JSON.stringify({ savedAt, format: "ndjson-v1", origins: entries.length });
     const writeFiles = async () => {
-      await writeFile(`${ndFile}.tmp`, header + "\n" + lines.join("\n") + "\n");
+      await writeJoinedInPieces(`${ndFile}.tmp`, header + "\n", lines, "\n", "\n");
       await rename(`${ndFile}.tmp`, ndFile);
       // The legacy single-JSON file stays current too, for the sync loader and
       // for anything that copies it (backups exclude cache files anyway). Built
       // from the same lines: byte-identical to JSON.stringify({ savedAt, entries }).
-      await writeFile(file, `{"savedAt":${savedAt},"entries":[${lines.join(",")}]}`);
+      await writeJoinedInPieces(file, `{"savedAt":${savedAt},"entries":[`, lines, ",", "]}");
     };
     if (stateDbEnabled()) {
       // The state database holds the cache (one row per origin); the files are
@@ -7268,8 +7501,9 @@ export async function pullIndexChanges({ pageSize = 1000, maxPages = 20 } = {}) 
         // kept from the held one, so both containers hold the same content.
         for (const k of ROW_OPTIONAL_KEYS) if (!(k in body)) delete next[k];
         cache.set(id, next);
-        // Held as stored, so this container's next save does not write it back.
-        pgOriginHashes.set(id, await persistedHashSliced(id, next, tick));
+        // Held as stored (the copy the cache keeps, cleaned), so this
+        // container's next save does not write it back.
+        pgOriginHashes.set(id, await persistedHashSliced(id, cache.get(id) ?? next, tick));
         pgRowHashes.set(id, typeof bodyHash === "string" ? bodyHash : null);
         if (!held) discoveredSeeds.add(id);
         folded++;
@@ -7414,6 +7648,56 @@ function* recordBatches(entries, bodyOf) {
   if (ids.length) yield [ids, bodies];
 }
 
+// A row that travels alone is sent as UTF-8 bytes built a piece at a time.
+// Sent as text, the parameter was cleaned (cleanPgText in src/state-db.js: a
+// flatten and three scans of the whole text) and encoded by the driver, each
+// one call over the whole body: 0.6-1 s for the 84 MB row of the largest
+// seller (2026-11-04, local Postgres). Pieces never split a surrogate pair.
+const ROW_BYTES_PIECE = 1_048_576;
+let rowBytesPieces = 0; // pieces encoded, for the step pin
+/** Test hooks: pieces encoded so far, and the encoder itself. */
+export function _rowBytesPiecesForTest() { return rowBytesPieces; }
+export function _rowBodyBytesForTest(...a) { return rowBodyBytes(...a); }
+/** Test hook: the line a save writes for this origin. */
+export function _persistedLineForTest(origin) { const e = persistedEntryOf(cache.get(origin)); return e ? JSON.stringify([origin, e]) : null; }
+/** The stored body of line `[origin,entry]` (the entry text starts at
+ *  `from`) with `hash` added as bodyWithHash adds it, as the UTF-8 bytes of
+ *  cleanPgText of that body. null when cleaning could change the text: that
+ *  body takes the text path, cleaned whole as before. */
+async function rowBodyBytes(line, from, hash, tick = async () => {}) {
+  const to = line.length - 1; // the line's closing "]"
+  // bodyWithHash: the entry's closing "}" gives way to `,"contentHash":"…"}`.
+  let end = to, suffix = "";
+  if (hash && to > from && line.charCodeAt(to - 1) === 125 && !(to - from === 2 && line.charCodeAt(from) === 123)) {
+    end = to - 1;
+    suffix = `,${JSON.stringify(ROW_HASH_KEY)}:${JSON.stringify(hash)}}`;
+  }
+  const cuts = [];
+  for (let a = from; a < end;) {
+    let b = Math.min(end, a + ROW_BYTES_PIECE);
+    if (b < end) { const c = line.charCodeAt(b - 1); if (c >= 0xd800 && c <= 0xdbff) b--; }
+    cuts.push(a, b);
+    a = b;
+  }
+  if (pgJsonTextMayChange(suffix)) return null;
+  let total = Buffer.byteLength(suffix, "utf8");
+  for (let k = 0; k < cuts.length; k += 2) {
+    // Five characters of overlap: an escape cleaning rewrites is six long.
+    if (pgJsonTextMayChange(line.slice(Math.max(from, cuts[k] - 5), cuts[k + 1]))) return null;
+    total += Buffer.byteLength(line.slice(cuts[k], cuts[k + 1]), "utf8");
+    await tick();
+  }
+  const out = Buffer.allocUnsafe(total);
+  let off = 0;
+  for (let k = 0; k < cuts.length; k += 2) {
+    off += out.write(line.slice(cuts[k], cuts[k + 1]), off, "utf8");
+    rowBytesPieces++;
+    await tick();
+  }
+  off += out.write(suffix, off, "utf8");
+  return off === total ? out : null;
+}
+
 /** Upsert changed origins and delete the rows of origins no longer held. */
 async function persistIndexCacheToStateDb(entries, lines, hashes = []) {
   const t0 = performance.now();
@@ -7421,10 +7705,12 @@ async function persistIndexCacheToStateDb(entries, lines, hashes = []) {
   try {
     const held = new Set();
     const changed = new Map(); // origin -> hash, applied once its batch is stored
+    const indexOf = new Map(); // origin -> its line's index
     const tick = sliceClock();
     for (let i = 0; i < entries.length; i++) {
       const origin = entries[i][0];
       held.add(origin);
+      indexOf.set(origin, i);
       const h = hashes[i] ?? lineHash(lines[i]);
       if (pgOriginHashes.get(origin) !== h) changed.set(origin, h);
       await tick();
@@ -7439,12 +7725,16 @@ async function persistIndexCacheToStateDb(entries, lines, hashes = []) {
       // an entry fetched at least as recently as the one it holds, and at one
       // revision only by the copy whose hash orders after it (ROW_HASH_KEY).
       if (ids.length === 1 && bodies[0].length >= PG_SINGLE_ROW_BYTES) {
-        // The same upsert and the same newer-wins rule, one row as a scalar.
+        // The same upsert and the same newer-wins rule, one row as a scalar:
+        // its UTF-8 bytes when they can be built in pieces, else the text.
+        const bytes = await rowBodyBytes(lines[indexOf.get(ids[0])], JSON.stringify(ids[0]).length + 2, changed.get(ids[0]), tick);
         await stateQuery(
-          `INSERT INTO ${recordsTable()} AS r (collection, id, body) VALUES ($1, $2, $3::jsonb)
+          `INSERT INTO ${recordsTable()} AS r (collection, id, body) VALUES ($1, $2, ${bytes ? "convert_from($3::bytea, 'UTF8')::jsonb" : "$3::jsonb"})
            ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()
            WHERE ${NEWER_OR_SAME_SQL("r.body", "EXCLUDED.body")}`,
-          [INDEX_RECORDS, ids[0], bodies[0]],
+          [INDEX_RECORDS, ids[0], bytes || bodies[0]],
+          // A row of tens of megabytes outlasts the default statement limit.
+          { timeoutMs: largeRowTimeoutMs((bytes || bodies[0]).length) },
         );
       } else {
         await stateQuery(
@@ -7519,6 +7809,7 @@ async function importIndexCacheFile() {
        SELECT $1, u.id, u.body FROM unnest($2::text[], $3::jsonb[]) AS u(id, body)
        ON CONFLICT (collection, id) DO NOTHING`,
     ids.length === 1 && bodies[0].length >= PG_SINGLE_ROW_BYTES ? [INDEX_RECORDS, ids[0], bodies[0]] : [INDEX_RECORDS, ids, bodies],
+    ids.length === 1 && bodies[0].length >= PG_SINGLE_ROW_BYTES ? { timeoutMs: largeRowTimeoutMs(bodies[0].length) } : {},
     );
     rows += ids.length;
     await new Promise((r) => setImmediate(r));
@@ -7535,6 +7826,28 @@ async function importIndexCacheFile() {
 export async function warmStartIndexFromStateDb() {
   try { return await warmStartIndexOnce(); } catch { return warmStartLastCount; }
 }
+/** One warm-start page after `after`: WARM_START_BATCH rows, or, when that
+ *  page outlasts the statement limit (a very large row in it) or `singleOnly`
+ *  is set, the next row alone under the large-row limit. */
+let warmList = (o) => records.list(INDEX_RECORDS, o);
+async function readWarmPage(after, singleOnly = false, list = warmList) {
+  if (!singleOnly) {
+    try {
+      return { page: await list({ limit: WARM_START_BATCH, after }), single: false, timedOut: false };
+    } catch (e) {
+      if (!isStatementTimeout(e)) throw e;
+      return { page: await list({ limit: 1, after, timeoutMs: largeRowTimeoutMs(Infinity) }), single: true, timedOut: true };
+    }
+  }
+  return { page: await list({ limit: 1, after, timeoutMs: largeRowTimeoutMs(Infinity) }), single: true, timedOut: false };
+}
+/** Test hooks: the warm start's page read with a stub lister, and the lister
+ *  the warm start uses (`fn(options, real)`; null restores the records read). */
+export function _readWarmPageForTests(after, list, singleOnly = false) { return readWarmPage(after, singleOnly, list); }
+export function _setWarmListForTests(fn) {
+  const real = (o) => records.list(INDEX_RECORDS, o);
+  warmList = fn ? (o) => fn(o, real) : real;
+}
 let warmStartLastCount = 0;
 /** One warm start that THROWS on a database error (after logging what it folded). */
 async function warmStartIndexOnce() {
@@ -7544,9 +7857,16 @@ async function warmStartIndexOnce() {
   try {
     const imp = await importOnce(INDEX_IMPORT_NAME, { source: INDEX_CACHE_NDJSON_FILE, run: importIndexCacheFile });
     if (imp.imported && imp.source && imp.source !== "none") console.log(`[x402-index] cache file imported once (${imp.rows} origin(s), ${imp.source})`);
-    let after = "";
+    let after = "", singleLeft = 0;
+    const tick = sliceClock();
     for (;;) {
-      const page = await records.list(INDEX_RECORDS, { limit: WARM_START_BATCH, after });
+      // A page holding one very large row can outlast the default statement
+      // limit: the span that page covered is read one row at a time under the
+      // large-row limit (one timeout per span, not per row before the large
+      // one), then pages resume, so the warm start passes the row.
+      const { page, single, timedOut } = await readWarmPage(after, singleLeft > 0);
+      if (timedOut) singleLeft = WARM_START_BATCH;
+      if (single) singleLeft = Math.max(0, singleLeft - page.length);
       if (!page.length) break;
       const turn0 = performance.now();
       for (const { id, body } of page) {
@@ -7554,13 +7874,15 @@ async function warmStartIndexOnce() {
         if (rowHash !== undefined) delete body[ROW_HASH_KEY];
         // A row read at boot is held as stored: the first save writes only
         // what this container changed, never every row over a peer's newer one.
-        if (foldWarmEntry(id, body)) { n++; pgOriginHashes.set(id, persistedHashOf(id, cache.get(id))); pgRowHashes.set(id, typeof rowHash === "string" ? rowHash : null); }
+        // The hash of a large catalogue is taken in pieces across turns (the
+        // largest seller's took 0.7 s in one call at boot); the same hash.
+        if (foldWarmEntry(id, body)) { n++; pgOriginHashes.set(id, await persistedHashSliced(id, cache.get(id), tick)); pgRowHashes.set(id, typeof rowHash === "string" ? rowHash : null); }
         else pgOriginHashes.set(id, null);
       }
       maxTurnMs = Math.max(maxTurnMs, performance.now() - turn0);
       pages++;
       after = page[page.length - 1].id;
-      if (page.length < WARM_START_BATCH) break;
+      if (!single && page.length < WARM_START_BATCH) break;
       await new Promise((r) => setImmediate(r));
     }
   } catch (e) {
@@ -8054,7 +8376,45 @@ export function mppDualStackOrigins() {
  * every known-but-unroutable origin counted as a blind spot. Attribution and
  * routability are different questions. Keys are lowercased addresses.
  */
-export function allPayToOrigins(network = "eip155:8453") {
+export function allPayToOrigins(network = "eip155:8453") { return runSteps(payToOriginsSteps(network)); }
+/** allPayToOrigins across event-loop turns: the same Map, built from the
+ *  entries held when it starts. For the scheduled scans (the Base board). */
+export function allPayToOriginsAsync(network = "eip155:8453") { return runSlicedAsync(payToOriginsSteps(network)); }
+
+// The payTo scans walk every tool row the index holds (about 280k on
+// production's index): 55-105 ms each on a fast machine and several times
+// that on the production container, once per chain per board refresh. Each
+// is one generator, run in one turn (runSteps) or in slices (runSlicedAsync),
+// so the two forms cannot drift. A step ends every PAYTO_SCAN_STEP rows,
+// counted across origins, since one origin can list 100k tools.
+const PAYTO_SCAN_STEP = 2000;
+let payToScanRows = 0; // rows the payTo scans have read, for the step pin
+/** Test hook: tool rows the payTo scans have read so far. */
+export function _payToScanRowsForTest() { return payToScanRows; }
+/** Test hook: one scan's generator, so a test can count rows per step. */
+export function _payToScanStepsForTest(kind, network) {
+  return kind === "origins" ? payToOriginsSteps(network) : kind === "prices" ? payToPricesSteps(network) : solanaPayToOriginsSteps();
+}
+// [origin, rows] pairs, crawled entries first and then the registry rows: the
+// order the one-pass loops read them. Taken once, so a sliced scan reads the
+// entries held when it started (entries are replaced, never mutated).
+function payToScanSources(withBazaar) {
+  const out = [];
+  for (const [origin, v] of cache.entries()) out.push([origin, v?.tools || []]);
+  if (withBazaar) for (const [origin, arr] of bazaarToolsByOrigin.entries()) out.push([origin, arr || []]);
+  return out;
+}
+function* payToRowSteps(sources, visit) {
+  let budget = PAYTO_SCAN_STEP;
+  for (const [origin, rows] of sources) {
+    for (let i = 0; i < rows.length; i++) {
+      payToScanRows++;
+      visit(rows[i], origin);
+      if (--budget === 0) { budget = PAYTO_SCAN_STEP; yield; }
+    }
+  }
+}
+function* payToOriginsSteps(network) {
   const out = new Map();
   const add = (addr, origin) => {
     if (typeof addr !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(addr)) return;
@@ -8063,12 +8423,7 @@ export function allPayToOrigins(network = "eip155:8453") {
     if (!set) { set = new Set(); out.set(k, set); }
     set.add(origin);
   };
-  for (const [origin, v] of cache.entries()) {
-    for (const t of v?.tools || []) add(t?.payToByNetwork?.[network], origin);
-  }
-  for (const [origin, arr] of bazaarToolsByOrigin.entries()) {
-    for (const t of arr || []) add(t?.payToByNetwork?.[network], origin);
-  }
+  yield* payToRowSteps(payToScanSources(true), (t, origin) => add(t?.payToByNetwork?.[network], origin));
   return out;
 }
 
@@ -8079,27 +8434,31 @@ export function allPayToOrigins(network = "eip155:8453") {
  *  price the seller publishes. Crawled rows only: a Bazaar-listed wallet keeps
  *  the Bazaar's own prices (mergeCrawledWallets does not touch those rows).
  *  A route marked free, or with no readable price, contributes nothing. */
-export function allPayToPrices(network = "eip155:8453") {
+export function allPayToPrices(network = "eip155:8453") { return runSteps(payToPricesSteps(network)); }
+/** allPayToPrices across event-loop turns (the same Map). */
+export function allPayToPricesAsync(network = "eip155:8453") { return runSlicedAsync(payToPricesSteps(network)); }
+function* payToPricesSteps(network) {
   const out = new Map();
-  for (const v of cache.values()) {
-    for (const t of v?.tools || []) {
-      const addr = t?.payToByNetwork?.[network];
-      if (typeof addr !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(addr) || t.paid === false) continue;
-      const micro = priceToMicroUsd(t.price);
-      if (!(micro > 0)) continue;
-      const k = addr.toLowerCase();
-      let set = out.get(k);
-      if (!set) { set = new Set(); out.set(k, set); }
-      set.add(micro);
-    }
-  }
+  yield* payToRowSteps(payToScanSources(false), (t) => {
+    const addr = t?.payToByNetwork?.[network];
+    if (typeof addr !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(addr) || t.paid === false) return;
+    const micro = priceToMicroUsd(t.price);
+    if (!(micro > 0)) return;
+    const k = addr.toLowerCase();
+    let set = out.get(k);
+    if (!set) { set = new Set(); out.set(k, set); }
+    set.add(micro);
+  });
   return out;
 }
 
 /** Solana twin of allPayToOrigins: mainnet-label payTos (base58) -> origins.
  *  The Solana leaderboard's scan list (src/solana-leaderboard.js). */
 export const SOLANA_MAINNET_LABELS = new Set(["solana:5eykt4usfv8p8njdtrepy1vzqkqzkvdp", "solana", "solana-mainnet", "solana-mainnet-beta"]);
-export function allSolanaPayToOrigins() {
+export function allSolanaPayToOrigins() { return runSteps(solanaPayToOriginsSteps()); }
+/** allSolanaPayToOrigins across event-loop turns (the same Map). */
+export function allSolanaPayToOriginsAsync() { return runSlicedAsync(solanaPayToOriginsSteps()); }
+function* solanaPayToOriginsSteps() {
   const out = new Map();
   const add = (addr, origin) => {
     if (typeof addr !== "string" || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(addr)) return;
@@ -8107,11 +8466,9 @@ export function allSolanaPayToOrigins() {
     if (!set) { set = new Set(); out.set(addr, set); }
     set.add(origin);
   };
-  const fromTool = (t, origin) => {
+  yield* payToRowSteps(payToScanSources(true), (t, origin) => {
     for (const [net, addr] of Object.entries(t?.payToByNetwork || {})) if (SOLANA_MAINNET_LABELS.has(String(net).toLowerCase())) add(addr, origin);
-  };
-  for (const [origin, v] of cache.entries()) for (const t of v?.tools || []) fromTool(t, origin);
-  for (const [origin, arr] of bazaarToolsByOrigin.entries()) for (const t of arr || []) fromTool(t, origin);
+  });
   return out;
 }
 
@@ -8172,6 +8529,8 @@ function* routableSummarySteps() {
     if (kept && kept.origin === origin) { out.push(kept.row); continue; }
     let host = "";
     try { host = new URL(origin).host.toLowerCase(); } catch { continue; }
+    // The payTo fields, walked in steps (one seller can list 100k tools).
+    const payFields = yield* sellerPayToFieldsSteps([v.tools || []]);
     const row = {
       origin,
       host,
@@ -8196,10 +8555,10 @@ function* routableSummarySteps() {
       // baseNetworkPayTo() returned null for every seller, so the evidence
       // source contributed nothing, always, and looked identical to "no data".
       // The origin's own address first per network (sellerPayToByNetwork).
-      payToByNetwork: sellerPayToByNetwork(v.tools),
+      payToByNetwork: payFields.payToByNetwork,
       // Every advertised payTo, not just the first (see allPayTosByNetwork).
-      payTosByNetwork: allPayTosByNetwork(v.tools),
-      evmDomainByNetwork: evmDomainUnion(v.tools),
+      payTosByNetwork: payFields.payTosByNetwork,
+      evmDomainByNetwork: payFields.evmDomainByNetwork,
     };
     routableRowBuilds++;
     if (v && typeof v === "object") routableRowByEntry.set(v, { origin, row });
@@ -8220,22 +8579,75 @@ function* routableSummarySteps() {
  *  seller-level twin of payToByNetwork (first seen per network wins). */
 function evmDomainUnion(tools) {
   const acc = {};
-  for (const t of tools || []) {
-    for (const [net, obs] of Object.entries(t?.evmDomainByNetwork || {})) {
-      if (!acc[net] && obs && typeof obs === "object" && typeof obs.asset === "string" && typeof obs.name === "string") acc[net] = { asset: obs.asset, name: obs.name };
-    }
-  }
+  for (const t of tools || []) addEvmDomain(acc, t);
   return acc;
+}
+function addEvmDomain(acc, t) {
+  for (const [net, obs] of Object.entries(t?.evmDomainByNetwork || {})) {
+    if (!acc[net] && obs && typeof obs === "object" && typeof obs.asset === "string" && typeof obs.name === "string") acc[net] = { asset: obs.asset, name: obs.name };
+  }
 }
 
 export function allPayTosByNetwork(tools) {
-  return (tools || []).reduce((acc, t) => {
-    for (const [net, addr] of Object.entries(t?.payToByNetwork || {})) {
-      const seen = (acc[net] ||= []);
-      if (!seen.includes(addr) && seen.length < 200) seen.push(addr);
+  return (tools || []).reduce((acc, t) => { addPayTos(acc, t); return acc; }, {});
+}
+function addPayTos(acc, t) {
+  for (const [net, addr] of Object.entries(t?.payToByNetwork || {})) {
+    const seen = (acc[net] ||= []);
+    if (!seen.includes(addr) && seen.length < 200) seen.push(addr);
+  }
+}
+
+// The three seller-level payTo fields over row lists read in order, in one
+// walk with a step every SELLER_FIELDS_STEP rows: one seller can list 100k
+// tools, and a listing row built for it in one turn held the loop 190 ms
+// here. Each field is what its function above returns for the lists joined.
+const SELLER_FIELDS_STEP = 2000;
+let sellerFieldSteps = 0; // steps taken, for the step pin
+/** Test hook: steps the seller-field walks have taken so far. */
+export function _sellerFieldStepsForTest() { return sellerFieldSteps; }
+let sellerFieldRows = 0; // rows the seller-field walks have read
+/** Test hooks: rows read by the seller-field walks, and the two builders that
+ *  run them as generators, so a test can count rows per step. */
+export function _sellerFieldRowsForTest() { return sellerFieldRows; }
+export function _indexSnapshotStepsForTest(ctx) { return indexSnapshotSteps(ctx); }
+export function _routableSummaryStepsForTest() { return routableSummarySteps(); }
+function* sellerPayToFieldsSteps(lists) {
+  const own = {}, registry = {}, payTos = {}, domains = {};
+  let n = 0;
+  for (const list of lists) {
+    for (const t of list) {
+      addSellerPayTo(own, registry, t);
+      addPayTos(payTos, t);
+      addEvmDomain(domains, t);
+      sellerFieldRows++;
+      if (++n % SELLER_FIELDS_STEP === 0) { sellerFieldSteps++; yield; }
     }
-    return acc;
-  }, {});
+  }
+  return { payToByNetwork: { ...registry, ...own }, payTosByNetwork: payTos, evmDomainByNetwork: domains };
+}
+// The listing row's other tool-derived fields, in steps the same way: the
+// network union over the crawled rows then the registry rows (flatMap's
+// reading of each row's list), the first valid Stellar and Algorand payTo in
+// that order, and the paid count when any crawled row carries a paid flag.
+function* sellerListingFieldsSteps(tools, bazaarRows) {
+  const networks = new Set();
+  let stellar = null, algorand = null, flagged = false, paid = 0, n = 0;
+  for (let l = 0; l < 2; l++) {
+    for (const t of l === 0 ? tools : bazaarRows) {
+      if (l === 0) {
+        if (t.paid !== undefined) flagged = true;
+        if (t.paid !== false) paid++;
+      }
+      const ns = t.networks || [];
+      if (Array.isArray(ns)) for (const x of ns) networks.add(x); else networks.add(ns);
+      if (stellar === null && typeof t.stellarPayTo === "string" && /^G[A-Z2-7]{55}$/.test(t.stellarPayTo)) stellar = t.stellarPayTo;
+      if (algorand === null && typeof t.algorandPayTo === "string" && /^[A-Z2-7]{58}$/.test(t.algorandPayTo)) algorand = t.algorandPayTo;
+      sellerFieldRows++;
+      if (++n % SELLER_FIELDS_STEP === 0) { sellerFieldSteps++; yield; }
+    }
+  }
+  return { networks: [...networks], stellarWallet: stellar, algorandWallet: algorand, paidToolCount: flagged ? paid : undefined };
 }
 
 // How many of a seller's tools one detail response carries. Bounded because a
@@ -8494,6 +8906,11 @@ function* indexSnapshotSteps({ baseUrl, catalog, prices, network, toolCount, wal
   for (const [origin, v] of [...cache.entries()]) {
     if (isSelfOrigin(origin, v) || aliasOrigins.has(origin)) continue;
     if (remote.length % SNAPSHOT_YIELD_SELLERS === SNAPSHOT_YIELD_SELLERS - 1) yield;
+    // The tool-derived fields, walked in steps (one seller can list 100k tools).
+    const crawledRows = v.tools || [];
+    const bazaarRows = bazaarToolsByOrigin.get(origin) || [];
+    const listed = yield* sellerListingFieldsSteps(crawledRows, bazaarRows);
+    const payFields = yield* sellerPayToFieldsSteps([bazaarRows, crawledRows]);
     remote.push({
     origin,
     ...(sellerPrefixOf(origin) ? { pathPrefix: sellerPrefixOf(origin) } : {}),
@@ -8514,9 +8931,7 @@ function* indexSnapshotSteps({ baseUrl, catalog, prices, network, toolCount, wal
     // Present only when the seller's document distinguishes paid from free
     // (tools carry paid flags): the buyable subset. Display uses it to show
     // "42 tools · 21 paid" so a padded free surface can't read as paid depth.
-    ...(v.tools?.some((t) => t.paid !== undefined)
-      ? { paidToolCount: v.tools.filter((t) => t.paid !== false).length }
-      : {}),
+    ...(listed.paidToolCount !== undefined ? { paidToolCount: listed.paidToolCount } : {}),
     fetchedAt: v.fetchedAt,
     error: v.error || null,
     local: false,
@@ -8538,22 +8953,15 @@ function* indexSnapshotSteps({ baseUrl, catalog, prices, network, toolCount, wal
     // same origin — a seller with its own manifest AND Stellar accepts on the
     // Bazaar must not read as network-less (it hid two of the four known
     // Stellar sellers from /stellar).
-    networks: [...new Set([
-      ...(v.tools || []).flatMap((t) => t.networks || []),
-      ...(bazaarToolsByOrigin.get(origin) || []).flatMap((t) => t.networks || []),
-    ])],
+    networks: listed.networks,
     // First valid Stellar payTo advertised across this seller's accepts —
     // strkey-validated (ed25519 public key: G + 55 base32 chars) so a hostile
     // accepts value can never reach a Horizon URL.
-    stellarWallet: [...(v.tools || []), ...(bazaarToolsByOrigin.get(origin) || [])]
-      .map((t) => t.stellarPayTo)
-      .find((w) => typeof w === "string" && /^G[A-Z2-7]{55}$/.test(w)) || null,
+    stellarWallet: listed.stellarWallet,
     // First valid Algorand payTo advertised across this seller's accepts —
     // strkey-validated (58 base32 chars) so a hostile accepts value can never
     // reach an indexer URL. Feeds /algorand's per-seller activity scan.
-    algorandWallet: [...(v.tools || []), ...(bazaarToolsByOrigin.get(origin) || [])]
-      .map((t) => t.algorandPayTo)
-      .find((w) => typeof w === "string" && /^[A-Z2-7]{58}$/.test(w)) || null,
+    algorandWallet: listed.algorandWallet,
     // Union of payTo-by-network across this seller's crawled + Bazaar tools
     // (the origin's own address first, see below) — the EVM/Solana counterpart to the
     // stellar/algorand wallets above, so the market pages can scope activity to
@@ -8561,9 +8969,9 @@ function* indexSnapshotSteps({ baseUrl, catalog, prices, network, toolCount, wal
     // The origin's own address first per network: the Bazaar rows listed first
     // here are a registry's record and only fill a network the origin's own
     // documents and live 402s name nothing on (sellerPayToByNetwork).
-    payToByNetwork: sellerPayToByNetwork([...(bazaarToolsByOrigin.get(origin) || []), ...(v.tools || [])]),
-    payTosByNetwork: allPayTosByNetwork([...(bazaarToolsByOrigin.get(origin) || []), ...(v.tools || [])]),
-    evmDomainByNetwork: evmDomainUnion([...(bazaarToolsByOrigin.get(origin) || []), ...(v.tools || [])]),
+    payToByNetwork: payFields.payToByNetwork,
+    payTosByNetwork: payFields.payTosByNetwork,
+    evmDomainByNetwork: payFields.evmDomainByNetwork,
     });
   }
   yield;
@@ -9042,9 +9450,11 @@ function routeIndexAddEntry(origin, v, target = routeIdx, from = 0, until = Infi
       if (list) list.push(t); else postings.set(tok, [t]);
     }
   }
+  // Primes the alias-set memo off the query path, inside the same time budget:
+  // out of time, the entry resumes past its last tool and finishes the key.
+  if (!primeServiceKey(v, until)) return pool.length;
   target.indexed.add(v);
   target.indexedTools += pool.length;
-  exactServiceKeyOf(v); // primes the alias-set memo off the query path
   return -1;
 }
 /** Build the /api/route candidate index now instead of on the first query.
@@ -9360,6 +9770,11 @@ const ROUTE_SCORE_YIELD_ROWS = 256;
 // (a power of two minus one, for a mask test), and the time one decoration
 // slice of an unindexed entry may take.
 const ROUTE_COLLECT_YIELD_MASK = 4095;
+// Rows of an unindexed entry tested between chances to yield.
+const ROUTE_CANDIDATE_YIELD_MASK = 15;
+let candidateYields = 0;
+/** Test hook: yields taken while unindexed rows were tested. */
+export function _routeCandidateYieldsForTest() { return candidateYields; }
 const ROUTE_DECORATE_SLICE_MS = 6;
 function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = false, baseUrl, catalog, prices, network, toolCount, walletName, scoredMemo = null, drainBacklog = true }) {
   const q = String(query || "").slice(0, 500);
@@ -9577,7 +9992,9 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
       const arr = [];
       for (let i = 0; i < pool.length; i++) {
         if (isCandidate(pool[i])) arr.push(pool[i]);
-        if ((i & 255) === 255) yield;
+        // Every 16 rows: a row's first statics (the listing screen) can cost
+        // half a millisecond, so 256 of them held a slice for 100 ms and more.
+        if ((i & ROUTE_CANDIDATE_YIELD_MASK) === ROUTE_CANDIDATE_YIELD_MASK) { candidateYields++; yield; }
       }
       if (arr.length) byEntry.set(v, arr);
     }
@@ -10292,6 +10709,11 @@ export async function _indexRowsSettledForTest() { while (indexRowsRebuild || fl
 // One collator instead of String#localeCompare per comparison: same order,
 // a fraction of the cost on a 100k-row sort.
 const collate = new Intl.Collator().compare;
+// Rows the round-robin places between chances to yield.
+const INTERLEAVE_YIELD_ROWS = 4096;
+let interleaveVisits = 0;
+/** Test hook: group visits the round-robin has made. */
+export function _interleaveVisitsForTest() { return interleaveVisits; }
 // Yields between units of work (a seller's sort, a slice of the round-robin);
 // run whole by runSteps or across turns by runSlicedAsync.
 function* interleaveSteps(rows) {
@@ -10308,18 +10730,33 @@ function* interleaveSteps(rows) {
     const entries = [...bySeller.entries()].sort((a, b) => collate(String(a[0]), String(b[0])));
     yield;
     const groups = [];
+    const byRoute = (a, b) => collate(String(a.route), String(b.route));
     for (const [, list] of entries) {
-      groups.push(list.sort((a, b) => collate(String(a.route), String(b.route))));
+      // A seller's routes in collation order. The largest seller lists 77k
+      // (a 250-360 ms sort in one step), so a long list is merge-sorted in
+      // steps: the collator is a consistent order and both sorts are stable,
+      // so the order is the engine sort's.
+      groups.push(list.length > SERVICE_KEY_STEP ? yield* stableSortSteps(list, byRoute) : list.sort(byRoute));
       yield;
     }
+    // Round i takes row i of every group that long, in group order. A spent
+    // group leaves the round list (order kept): walking every group in every
+    // round of the longest one (77k rounds over 6k sellers) was 38% of what a
+    // production-sized crawl cycle allocated, and seconds of CPU per build.
     const out = [];
-    for (let i = 0; out.length < subset.length; i++) {
-      let moved = false;
-      for (const g of groups) {
-        if (i < g.length) { out.push(g[i]); moved = true; }
+    let live = groups.filter((g) => g.length > 0);
+    let pushed = 0;
+    for (let i = 0; live.length; i++) {
+      const n = live.length;
+      let keep = 0;
+      for (let j = 0; j < n; j++) {
+        const g = live[j];
+        out.push(g[i]);
+        if (g.length > i + 1) live[keep++] = g;
       }
-      if (!moved) break; // defensive: never spin if a group shrinks underneath us
-      yield;
+      live.length = keep;
+      interleaveVisits += n;
+      if ((pushed += n) >= INTERLEAVE_YIELD_ROWS) { pushed = 0; yield; }
     }
     return out;
   }

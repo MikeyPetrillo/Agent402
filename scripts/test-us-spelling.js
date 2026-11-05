@@ -8,6 +8,7 @@
 // status token such as "cancelled" is a contract and stays as it is.
 //
 //   node scripts/test-us-spelling.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync } from "node:fs";
 import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";

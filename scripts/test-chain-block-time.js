@@ -11,6 +11,7 @@
 //   * the ledger's real sync path counting its head margin at the live rate.
 // An optional live read of Base Sepolia block times runs outside CI only and
 // is skipped when unreachable; nothing here depends on it.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

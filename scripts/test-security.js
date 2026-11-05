@@ -1,6 +1,7 @@
 // Security regressions from the deep audit. Calls handlers directly and asserts
 // the hardening holds: no prototype pollution, hostile input yields a clean 4xx
 // (not a 500), and the DoS-prone tools stay bounded.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { KIT2 } from "../src/tools/kit2.js";
 import { KIT } from "../src/tools/kit.js";
 import { AGENT_TOOLS } from "../src/tools/agent-kit.js";

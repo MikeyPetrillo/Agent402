@@ -9,6 +9,7 @@
 //   - the caller path is proven on a booted server, not just the module
 //
 //   node scripts/test-well-known-store.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { registerWellKnown, removeWellKnown, getWellKnown, validWellKnownPath, listWellKnown } from "../src/well-known-store.js";
 

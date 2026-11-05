@@ -7,6 +7,7 @@
 //  3. the in-process Chromium launched by render.js is read from the OS
 //     (/proc/<pid>/environ on Linux, ps -E on macOS).
 // Needs Playwright's Chromium; under CI a missing browser fails, it never skips.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { execFile, execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { childEnv } from "../src/tools/child-env.js";

@@ -14,4 +14,13 @@
 //
 // Import this FIRST (before any src/ module), so it runs before those modules
 // read the environment; children the suite spawns inherit the pinned env.
-for (const k of ["REDIS_URL", "STATE_DATABASE_URL", "STATE_DATABASE_URL_FOR_TEST", "LEDGER_JOURNAL_REDIS"]) delete process.env[k];
+// scripts/test-offline-stores-import.js checks that every offline suite does.
+//
+// A suite that re-runs itself in a child with a store variable it chose (a
+// dead Redis address that an injected test client stands in for) names that
+// variable in OFFLINE_STORES_KEEP in the child's env, comma-separated; the
+// child keeps it and drops the rest. The list is read once and removed, so a
+// grandchild starts pinned again.
+const keep = new Set(String(process.env.OFFLINE_STORES_KEEP || "").split(",").map((s) => s.trim()).filter(Boolean));
+delete process.env.OFFLINE_STORES_KEEP;
+for (const k of ["REDIS_URL", "STATE_DATABASE_URL", "STATE_DATABASE_URL_FOR_TEST", "LEDGER_JOURNAL_REDIS"]) if (!keep.has(k)) delete process.env[k];

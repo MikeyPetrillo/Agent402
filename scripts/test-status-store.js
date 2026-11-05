@@ -6,6 +6,7 @@
 // observation from yesterday. Each of those is asserted against here.
 //
 // Run: node scripts/test-status-store.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { existsSync, rmSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

@@ -35,7 +35,10 @@ LLC: credit the entity, never a personal name.
   of them for quick tunnels); a slot is released after `INDEX_RELEASE_AFTER_DAYS` (30) with no
   successful probe, `INDEX_SETTLED_RELEASE_AFTER_DAYS` (90, never below the plain window) for a
   seller that has settled, `INDEX_TUNNEL_RELEASE_AFTER_DAYS` (3) for a tunnel. The operator
-  seeds past the cap with `POST /__operator/index/seed`.
+  seeds past the cap with `POST /__operator/index/seed`. A registration naming one of our own
+  hosts (the base URL, a www or trailing-dot twin, our Railway domain, or a host listed in
+  `SELF_SELLER_HOSTS`) is refused, and no buyer ever pays one of our own wallets
+  (`src/own-wallets.js`, checked by route-execute and again by each buyer before it signs).
 - `src/tools/route-execute.js`: route-and-execute, buys from proven external sellers per chain
   (`src/x402-buyer.js`, `src/solana-buyer.js` whose external leg runs under `SOR_SVM_BUDGET_MS`,
   inside a recent blockhash's life, `src/tempo-buyer.js`, `src/algorand-sellers.js`).
@@ -48,6 +51,10 @@ LLC: credit the entity, never a personal name.
   one; the file is imported once). Every scheduled loop runs under `leased(name, ...)`, so two
   containers never run the same tick; a store registers its first load with `trackStoreReady` and
   the server awaits `stateStoresReady` before it listens. `/api/gateway-status` reports `stateDb`.
+  A statement carrying a large row (the index's one-row upsert) runs under `largeRowTimeoutMs`: the
+  default limit plus `STATE_DB_MS_PER_MB` (500) per megabyte past the first, at most
+  `STATE_DB_LARGE_ROW_MAX_MS` (120000); after a warm-start page times out, the rows that page
+  covered are read one at a time, then full pages resume.
 - `src/status.js`, `src/status-store.js`: `/status`, measured from outside production.
 - `src/stats.js`, `src/sales-ledger.js`, `src/seo.js`, `src/pages.js`, `src/guides.js`,
   `src/privacy.js`, `src/terms.js`, `src/security-page.js`, `src/company.js`.
@@ -135,6 +142,9 @@ Operator-only surfaces live under `/__operator/*` (token-authed); the operator v
 surface reads `X-Operator-Token` only, since `Authorization` there is a buyer's credential.
 Such a route calls `operatorView(req, res)` (server.js): every answer varies on the header, and an
 elevated one is `private, no-store`, so a shared cache never keeps it.
+A browser operator session ends after `OPERATOR_SESSION_IDLE_SECONDS` (default 1800) with no
+request, inside its 8-hour lifetime; a write carrying the session cookie needs Sec-Fetch-Site
+`same-origin` or an Origin equal to BASE_URL's (a header-token caller needs neither).
 
 ## Dev / CI / deploy workflow
 - **Develop on branch `claude/sweet-brown-i99jl3`.** `main` is protected: PR required, never
@@ -430,11 +440,25 @@ heartbeat page on it under one issue that closes when nothing is owed.
   run in a small worker pool (`office-pool.js`, `office-worker.js`): `OFFICE_WORKERS_MAX` workers
   (default 2), at most `OFFICE_QUEUE_MAX` calls waiting (default 16; past it a 503 with
   Retry-After), a 15 s deadline that terminates the worker (422), idle workers retired after 30 s.
-  ffmpeg, ffprobe and Chromium start with `childEnv()` (`src/tools/child-env.js`), an
-  allowlist of environment variables, so no key reaches a child process.
+  ffmpeg and ffprobe pass an audio-only `-codec_whitelist` before `-i`, so no video decoder
+  opens. html-frames runs in its own jitless browser; a payer's failed documents are bounded to
+  `HTML_FRAMES_FAIL_MAX` (default 5, per replica) per `HTML_FRAMES_FAIL_WINDOW_MS` (10 minutes),
+  then a 429 with Retry-After. ffmpeg, ffprobe and Chromium start with `childEnv()`
+  (`src/tools/child-env.js`), an allowlist of environment variables, so no key reaches a child
+  process (defense in depth: a same-user child can still read its parent's environment).
+- **Seller fields:** every entry the index cache stores (crawl, Bazaar fallback, pull, warm start, the
+  router worker's replica) is cleaned once in `IndexCache.set` (`cleanSellerEntry`): a seller field
+  read as text holds a string (a number or boolean becomes its text, anything else is dropped) and a
+  list field holds strings (`scripts/test-seller-field-types-serve.js`).
 - **Listing screen:** `src/listing-screen.js` (re-exported by `src/x402-index.js`) flags seller
   listing text that tries to instruct its reader; it depends only on `src/hidden-chars.js`, so
   a workflow with no install (`wish-issues.yml`) reads the same rules.
+- **Outbound fetches:** every buyer-supplied URL goes through `src/tools/fetch-guard.js`. A name
+  that does not resolve and a private address get one neutral 400; a resolver that cannot answer
+  (EAI_AGAIN and the other transient codes, or a lookup past `DNS_LOOKUP_TIMEOUT_MS`, default 10 s)
+  is a retryable 503 attributed upstream. The MCP connector's loopback replay carries a
+  per-process secret in its marker (`src/mcp-loopback.js`); an inbound marker is stripped by the
+  first middleware, so only the real replay is exempt from the discovery limits.
 - **Unpaid quote budget:** `src/unpaid-quote-budget.js` bounds bursts of unpaid 402 reads. A
   payment header counts as an attempt (`src/payment-attempt.js`) only when it decodes to an offered
   network or an MPP credential; bytes that do not decode are an unpaid read.

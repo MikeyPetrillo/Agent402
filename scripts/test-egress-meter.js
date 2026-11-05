@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 // The thing that totals up what we spend must be cheap, safe and honest.
 //

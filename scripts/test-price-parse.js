@@ -12,6 +12,7 @@
 //   - a string carrying more than one number is a sentence, not a price -> null
 //   - a price published as an OBJECT is still a price the seller stated; 21
 //     routes published null while carrying {"amountMinor":50,"currency":"USD"}
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { priceToMicroUsd } from "../src/price-usd.js";
 

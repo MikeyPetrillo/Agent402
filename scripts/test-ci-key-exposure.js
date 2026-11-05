@@ -19,6 +19,7 @@
 // safe today only because no test lane passes that key, so they fall back to
 // public RPCs. That is a configuration accident, not a guarantee - one `env:`
 // line away from burning CU on every push, with nothing to catch it.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync } from "node:fs";
 
 let pass = 0, fail = 0;

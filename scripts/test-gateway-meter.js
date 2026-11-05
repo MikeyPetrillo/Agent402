@@ -1,4 +1,5 @@
 // The metered-settlement pricing rule.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { meteredUsd, meterMarkup, METER_FLOOR_USD, METER_MIN_SETTLE_USD, isMeterable, applyMeteredSettlement } from "../src/gateway-meter.js";
 import { setUpstreamCostsForTest } from "../src/upstream-costs.js";
 

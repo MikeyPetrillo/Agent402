@@ -1,5 +1,6 @@
 // Exact-output tests for util-kit (geo-distance). Pure functions, no server needed.
 // The other util tools were retired 2026-08-25 (zero external use in 30 days).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createHmac } from "node:crypto";
 import { UTIL_TOOLS } from "../src/tools/util-kit.js";
 

@@ -2,6 +2,7 @@
 // every refusal happens before the upstream call, the price guard reads the
 // private rate, and each route sends its preview header and answers in shape.
 //   node scripts/test-judge-preview.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { deflateSync } from "node:zlib";
 process.env.TYPESAFE_API_KEY = "test-key";
 const K = await import("../src/tools/judge-preview-kit.js");

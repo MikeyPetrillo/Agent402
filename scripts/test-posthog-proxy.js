@@ -13,6 +13,7 @@
 // because it needs a controllable oversized upstream.)
 //
 //   node scripts/test-posthog-proxy.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";

@@ -18,6 +18,7 @@
 //
 // So this seeds a POPULATED payload shaped exactly like the real one and asserts
 // on the redaction function directly. It needs no database and cannot go vacuous.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { redactAnalytics } from "../src/analytics-db.js";
 
 let passed = 0, failed = 0;

@@ -1,5 +1,6 @@
 // F21: unit tests for the bounded rate-limit primitives (offline, no server).
 //   node scripts/test-rate-sweep.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { sweepStaleTsMap, makeWindowCounter } from "../src/rate-sweep.js";
 
 let pass = 0, fail = 0;

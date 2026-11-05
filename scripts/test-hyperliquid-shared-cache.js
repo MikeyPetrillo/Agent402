@@ -9,6 +9,7 @@
 // serves inside the TTL; concurrent misses spend one request; a refusal is
 // never stored; reads with buyer parameters (candles, books) are never shared;
 // and the TTLs stay short enough to be honest about live prices.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createTtlCache } from "../src/tools/ttl-dedupe.js";
 import { HL_LIVE_TTL_MS, HL_LISTING_TTL_MS, HL_HISTORY_TTL_MS, HL_STALE_MAX_MS, sharedTtlFor, __hlShared } from "../src/tools/hyperliquid-shared.js";
 import { CRYPTO_SIGNALS_TOOLS, __test as sig } from "../src/tools/crypto-signals-kit.js";

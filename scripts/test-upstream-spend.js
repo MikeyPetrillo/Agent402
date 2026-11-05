@@ -6,6 +6,7 @@
 // stats DB inside the same capture funnels, BEFORE the PostHog active() gate,
 // so cost is recorded whenever the process serves. These tests pin that
 // ordering by running with NO PostHog key at all.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 
 process.env.FREE_MODE = "true";           // stats DB allowed ephemeral

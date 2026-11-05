@@ -14,6 +14,7 @@
 //      label checks that only NAME the variable inside a string literal.
 //
 //   node scripts/test-burner-log-guard.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";

@@ -7,6 +7,7 @@
 // a paid server against a stub facilitator that answers BOTH shapes and asserts
 // the buyer's 402 carries hint + retry either way, that the hint goes only to
 // the exact credential that failed, and that a bare 402 stays untouched.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { decodeFunctionData, encodeFunctionResult } from "viem";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";

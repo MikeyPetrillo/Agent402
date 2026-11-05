@@ -6,6 +6,7 @@
 // published the key on an unauthenticated endpoint. Three sibling loops in
 // this repo already redact (b20-kit, x402-kit) or name the host only
 // (revenue-live laneName); this pins that leaderboard.js does too.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer } from "node:http";
 
 let pass = 0;

@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: hashgraph-online/ai-plugin-scanner-action@1f9b9bc71e70952f37c2e87142a5db6237fd8b53 # v1.2.812
+      - uses: hashgraph-online/ai-plugin-scanner-action@8c2dd4f9cc381ad56496ca44aab10ce19f6bdd0f # v1.2.813
         with:
           plugin_dir: "."
           trust_repository_policy: "true"

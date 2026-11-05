@@ -10,6 +10,7 @@
 // Stellar reported settle_channel_service_failed for transfers that confirmed.
 // The mirror — success reported for a transfer that reverted or never landed —
 // would refund money we never received.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { verifyInboundPayment } from "../src/payment-verify.js";
 
 let pass = 0, fail = 0;

@@ -1,6 +1,7 @@
 // The operator heap-sampling read: off unless HEAP_SAMPLING=on, token-gated,
 // and on reports live sampled allocations by function and file (names, lines
 // and megabytes only). Boots FREE_MODE servers on free ports, offline.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { getFreePort } from "./lib/free-port.js";
 

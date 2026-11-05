@@ -3,6 +3,7 @@
 // the certificate and fails closed. Offline unit test.
 //
 //   node scripts/test-db-ssl.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { dbSsl } from "../src/db-ssl.js";
 
 let pass = 0, fail = 0;

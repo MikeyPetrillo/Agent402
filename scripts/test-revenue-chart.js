@@ -13,6 +13,7 @@
 //   * a failure of the free endpoint must not blank the revenue chart
 //
 // Runs the real page script in jsdom against stubbed endpoints.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";

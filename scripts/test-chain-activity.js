@@ -5,6 +5,7 @@
 // scripts/test-stellar-activity.js (bucketStellarActivity is chain-agnostic
 // and reused here, not re-tested). Also covers the market-page render with a
 // fixture non-null activity for one EVM chain.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import {
   parseEvmTransfer, evmActivity,
   parseSolanaTransfer, solanaActivity,

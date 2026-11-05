@@ -5,6 +5,7 @@
 // issuer. Both the edgar-insider-trades tool and the insider report keep only
 // the company's own issuer filings. Offline fixtures shaped like
 // efts.sec.gov search-index hits and Form 4 XML.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { eftsIssuerCik, issuerHits } from "../src/tools/edgar-kit.js";
 import { form4FilingsFromHits, parseForm4 } from "../src/tools/insider-flow-kit.js";
 

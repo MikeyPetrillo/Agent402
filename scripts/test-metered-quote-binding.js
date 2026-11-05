@@ -8,6 +8,7 @@
 // envelopes unwrapped. `{input:{model:"anthropic/claude-opus-5", ...}}` quoted
 // the $0.001 floor (the quoter saw no model) and was then served in full.
 // Offline: fetch is stubbed and must never be reached on the refused path.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.OPENROUTER_API_KEY ||= "test-key-never-used";
 const { handlerInputOf } = await import("../src/handler-input.js");
 const { meteredQuoteUsd, LLM_GATEWAY_TOOLS, TIERS } = await import("../src/tools/llm-gateway-kit.js");

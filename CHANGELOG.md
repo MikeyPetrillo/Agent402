@@ -6,6 +6,42 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-05 (Audio-only decoding, refused redirects answer 400, documented gateway fields)
+Tools:
+- `media-info`, `audio-convert` and `audio-normalize` decode audio streams
+  only. `media-info` still lists every stream: a video, image or subtitle
+  stream is read from the container headers and carries `decoded: false`,
+  with null for a resolution only its decoder would know. A file with no
+  audio stream converts to nothing and answers 422, as before.
+- `render` and `screenshot` answer 400 (not charged) when the page's
+  navigation is redirected to a host the browser may not load, instead of
+  rendering the refusal as the page.
+- `html-frames` runs documents in a browser of its own with the JavaScript
+  JIT off, so WebAssembly is not available to a document; plain script,
+  canvas, SVG and CSS animation render as before. After 5 failed documents
+  from one payer in 10 minutes, the next answers 429 with Retry-After.
+- `a2a-card-fetch` answers the address check's 400 for a host it may not
+  reach, the same answer every URL tool gives.
+- URL tools answer 503 with Retry-After when this server's resolver cannot
+  answer a lookup, and the one 400 for a name that does not exist. A host
+  name without a dot is answered with that 400. `favicon-grab` refuses a
+  non-http scheme.
+Gateway:
+- The Responses and Messages wires pass each input item, content block and
+  tool on with its documented fields only.
+Index:
+- A seller registration naming one of this server's own hosts is refused.
+- A seller listing with a number, object or array where text belongs is
+  stored with text fields: numbers become their digits, anything else is
+  dropped, and every seller page, route and search reads it as text.
+Reports:
+- A public report's JSON has its own address, `/reports/public/<id>.json`.
+Packages:
+- agent402-client 0.8.22 resends its own request once when the connection
+  failed before any answer (a closed keep-alive socket), with the same headers
+  and Idempotency-Key; `retryResets: false` turns it off. A caller's payFetch is
+  not wrapped; `resetRetryFetch` is exported to put under a payment wrapper.
+
 ### 2026-11-04 (Office files from data, shorter pages, one page per adapter)
 Gateway:
 - inception/mercury-2.5 leaves the auto tier's fast band ahead of its

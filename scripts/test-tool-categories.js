@@ -9,6 +9,7 @@
 // Offline half: the env-gated decide tools are built here directly (CI holds
 // no decision service, so they are absent from a booted catalog). Booted half
 // (TARGET_URL): every row of /api/pricing.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { CATEGORIES, toolPage } from "../src/pages.js";
 import { buildDecideTools } from "../src/tools/decide-kit.js";
 

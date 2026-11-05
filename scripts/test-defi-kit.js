@@ -15,6 +15,7 @@
 //     and that no upstream body text is ever relayed to the buyer.
 // Live coverage is the catalog's answers-its-own-example sweep (test-all.js).
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { DEFI_TOOLS, __test } from "../src/tools/defi-kit.js";
 
 const h = (slug) => DEFI_TOOLS.find((t) => t.slug === slug).handler;

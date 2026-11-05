@@ -2,6 +2,7 @@
 // /api/reliability). These are what make an agent PICK this seller, so the
 // contract — required fields present, links well-formed, counts coherent —
 // must not silently regress. Offline, no server, no secrets.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { serviceManifest, reliabilityReport, settlementFacilitatorsPublic } from "../src/discovery.js";
 
 const fail = (m) => { console.error("FAIL:", m); process.exit(1); };

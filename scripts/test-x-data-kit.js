@@ -5,6 +5,7 @@
 // fixture output shapes, and the 429 / 401 / 404 / 5xx / timeout mapping.
 // Live calls need a real X_BEARER_TOKEN and are not exercised here.
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { X_DATA_TOOLS, xDataEnabled, __test } from "../src/tools/x-data-kit.js";
 import { upstreamCosts } from "../src/upstream-costs.js";
 import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";

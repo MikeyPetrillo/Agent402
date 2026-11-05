@@ -12,6 +12,7 @@
 // hex in the stylesheet or the rendered markup.
 //
 //   node scripts/test-terminal-tokens.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import {
   TERMINAL_CSS, marketTerminalHtml, terminalRoster, terminalStatusBar,

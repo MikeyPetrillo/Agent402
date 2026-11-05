@@ -6,6 +6,7 @@
 // serves real reliability data from the first request instead of the empty
 // "warming" placeholder that made the SOR resolver find zero proven sellers for
 // the minutes its first on-chain scan takes after each deploy.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeFileSync, rmSync } from "node:fs";

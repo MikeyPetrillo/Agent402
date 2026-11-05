@@ -15,6 +15,7 @@
 // module-level "last error"). Mutation-checked: dropping `fetch: relayFetch`
 // from the relay config fails at the first path/status assertion (the error
 // degrades to "no relay verdict"), so a silent regression cannot pass.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer } from "node:http";
 import { Challenge, Credential } from "mppx";
 

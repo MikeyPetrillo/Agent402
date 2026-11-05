@@ -22,6 +22,7 @@
 // first callback reveals immediately regardless of whether removal exists).
 //
 //   node scripts/test-reveal-on-scroll.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { ledgerShell } from "../src/ledger-chrome.js";
 

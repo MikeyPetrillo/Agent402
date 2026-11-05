@@ -18,6 +18,7 @@
 //    ranked seller does not re-scan the chain;
 //  - the page renders the ranking and marks routable rows, and the JSON shape
 //    stays what /api/mpp-leaderboard consumers see.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { parseOffers } from "../src/mpp-index.js";
 import { rankableRecipients, computeMppLeaderboard, refreshMppLeaderboard, mppLeaderboardSnapshot, __testReset, MPP_LB_WINDOW_BLOCKS } from "../src/mpp-leaderboard.js";
 import { tempoInboundCount, __testResetProofCache, TEMPO_USDC } from "../src/tempo-buyer.js";

@@ -10,6 +10,7 @@
 //
 // No network egress — assertions run against a mocked global fetch so this
 // passes in any sandbox (CI, local, restricted networks).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 const fail = (m) => { console.error("FAIL:", m); process.exit(1); };
 const ok = (label) => console.log("  ✓", label);
 
@@ -208,6 +209,8 @@ for (const u of [
   "http://169.254.169.254/latest/meta-data/",      // AWS/GCP metadata
   "http://[fd00::1]/",                               // IPv6 unique-local
   "http://[::ffff:169.254.169.254]/",               // v4-mapped metadata
+  "http://[::ffff:0:7f00:1]/",                       // v4-translated loopback
+  "http://[64:ff9b:1::7f00:1]/",                     // local-use NAT64 loopback
   "http://127.0.0.1:6379/",                          // loopback redis
   "http://10.0.0.5/", "http://192.168.1.1/", "http://172.16.0.1/",
   "http://100.64.0.1/",                              // CGNAT

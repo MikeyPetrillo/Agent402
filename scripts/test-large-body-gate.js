@@ -8,6 +8,7 @@
 //
 //   node scripts/test-large-body-gate.js   (unit checks, then a paid-mode boot
 //                                           on port 0 against a stub facilitator)
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer, request as httpRequest } from "node:http";
 import { createHash } from "node:crypto";

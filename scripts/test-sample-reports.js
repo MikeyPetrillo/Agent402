@@ -7,6 +7,7 @@
 // fetches must be the done-shaped bundle, and the /reports cards must link the
 // sample only for products that have one. Boots a FREE_MODE server (no Stripe:
 // the sample routes are mounted regardless of checkout).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { getFreePort } from "./lib/free-port.js";

@@ -12,6 +12,7 @@
 // The fix was to DERIVE those strings. This is the guard that keeps them
 // derived: it fails on any dollar figure in a page description that is not an
 // actual product price.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { HUMAN_PRODUCTS } from "../src/human-checkout.js";
 import { MONITOR_PRODUCTS } from "../src/stripe-subscriptions.js";
 import { priceUsdFor } from "../src/report-tiers.js";

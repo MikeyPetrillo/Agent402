@@ -3,6 +3,7 @@
 // the algod client and asset, so src/x402-buyer.js folds it to the CAIP-2 id
 // inside the scheme only; the payment still echoes the seller's own accept.
 // Offline: the real x402 client and scheme, a stub algod client.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { x402Client } from "@x402/core/client";
 import { ExactAvmScheme } from "@x402/avm/exact/client";
 import { toClientAvmSigner } from "@x402/avm";

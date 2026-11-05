@@ -26,6 +26,7 @@
 // facilitator that applies the reference 6 s validBefore rule at settle, and a
 // stub OpenRouter (scripts/lib/openrouter-stub-preload.js; the preload refuses
 // to load without the stub, so this never spends upstream).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer, request as httpRequest } from "node:http";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";

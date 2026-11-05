@@ -6,6 +6,7 @@
 //   • Live upstream calls (GLEIF, Wikidata, Gravatar, GitHub, favicon fetch)
 //     are opt-in via ENRICH_LIVE_TEST=1.
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { ENRICH_TOOLS } from "../src/tools/enrich-kit.js";
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";
 

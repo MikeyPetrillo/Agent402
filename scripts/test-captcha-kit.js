@@ -1,6 +1,7 @@
 // Captcha-kit — offline unit tests. captcha-generate is fully offline;
 // captcha-verify's handler is exercised only for input validation (no live
 // provider call). node scripts/test-captcha-kit.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createHash } from "node:crypto";
 import { CAPTCHA_TOOLS } from "../src/tools/captcha-kit.js";
 

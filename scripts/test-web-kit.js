@@ -4,6 +4,7 @@
 //   • Live upstream calls (archive.org, hnrss.org, youtu.be) are opt-in via
 //     WEB_LIVE_TEST=1.
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { WEB_TOOLS } from "../src/tools/web-kit.js";
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";
 

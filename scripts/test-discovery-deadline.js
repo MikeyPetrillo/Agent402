@@ -17,6 +17,7 @@
 //      length, shows on /__operator/perf.json, and the next query is served.
 // The hanging compute comes from a free-mode-only test hook
 // (DISCOVERY_TEST_HANG_QUERY); the hook is inert whenever payments are on.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";

@@ -7,6 +7,7 @@
 // it (async-local, so it survives however deep the kit calls).
 //
 //   node scripts/test-composite-context.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.POSTHOG_TEST_CAPTURE = "1";
 const { recordCompositeUsage, withCompositeContext, _compositeGuardReset, _compositeUsageSettled } = await import("../src/composite-spend-guard.js");
 const { _testEventsForTest } = await import("../src/posthog.js");

@@ -23,6 +23,8 @@ import { quoteOf, guardSigning, networkIdsOf, acceptUsd } from "./known-assets.j
 export { KNOWN_ASSETS, NETWORK_NAMES, knownAsset, acceptUsd, networkIdsOf } from "./known-assets.js";
 import { distrustFetch } from "./tls-distrust.js";
 export { distrustFetch, distrustDispatcher, distrustCheckServerIdentity, DISTRUSTED_SPKI_SHA256 } from "./tls-distrust.js";
+export { resetRetryFetch, isConnectionReset } from "./reset-retry.js";
+import { resetRetryFetch } from "./reset-retry.js";
 import { awaitJob, shouldRequestAsync, AsyncJobPendingError, DEFAULT_ASYNC_TIMEOUT_MS } from "./async-job.js";
 export { AsyncJobPendingError } from "./async-job.js";
 
@@ -30,7 +32,7 @@ export { AsyncJobPendingError } from "./async-job.js";
 // `User-Agent: agent402-client/<version>` - a standard header, no extra
 // network calls - so a seller can attribute traffic (and settled payments)
 // to this SDK. Product token only; nothing about the caller rides along.
-const VERSION = "0.8.21";
+const VERSION = "0.8.22";
 const USER_AGENT = `agent402-client/${VERSION}`;
 // A package built on this SDK (an adapter) names itself first: its own
 // product token, then this one. Anything that is not one well-formed token
@@ -129,6 +131,8 @@ export class Agent402 {
    *                                         sent before agent402-client's in the User-Agent
    * @param {boolean} [opts.tlsDistrust=true] send the default fetch through distrustFetch (refuses a TLS
    *                                         chain through a distrusted intermediate CA); false sends it as is
+   * @param {boolean} [opts.retryResets=true] resend the SDK's own request once when its connection failed
+   *                                         before any answer (see resetRetryFetch); false sends each once
    * @param {number} [opts.maxPerCallUsd]    hard ceiling on a single paid call (USD); over → SpendingLimitError before paying
    * @param {number} [opts.dailyLimitUsd]    hard ceiling on rolling-24h paid spend (USD)
    * @param {number} [opts.maxPerHostUsd]    hard ceiling on rolling-24h paid spend to one seller host (USD)
@@ -163,7 +167,7 @@ export class Agent402 {
   constructor({ baseUrl = "https://agent402.tools", fetch: payFetch, cache = true, fetchImpl = undefined, tlsDistrust = true,
     maxPerCallUsd = null, dailyLimitUsd = null, maxPerHostUsd = null, creditsKey = null, x402Client = null, payNetworks = null,
     maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES, outputValidator = null,
-    respondAsync = "auto", asyncTimeoutMs = DEFAULT_ASYNC_TIMEOUT_MS, onProgress = null, gateway = null, userAgent = null } = {}) {
+    respondAsync = "auto", asyncTimeoutMs = DEFAULT_ASYNC_TIMEOUT_MS, onProgress = null, gateway = null, userAgent = null, retryResets = true } = {}) {
     this.userAgent = userAgentOf(userAgent);
     this.respondAsync = respondAsync;
     this.gateway = normalizeGateway(gateway);
@@ -175,6 +179,10 @@ export class Agent402 {
       if (typeof fetchImpl === "function" && tlsDistrust !== false) fetchImpl = distrustFetch(fetchImpl);
     }
     if (typeof fetchImpl !== "function") throw new Error("No fetch available - pass { fetchImpl } on Node < 18");
+    // The SDK's own requests resend once when the connection failed before any
+    // answer (a closed keep-alive socket). A caller's payFetch is not wrapped:
+    // retrying over a payment wrapper would sign a fresh authorization.
+    if (retryResets !== false) fetchImpl = resetRetryFetch(fetchImpl);
     this.baseUrl = String(baseUrl).replace(/\/$/, "");
     this.payFetch = payFetch || null;
     // Wrap the plain fetch so every request identifies the SDK (see USER_AGENT

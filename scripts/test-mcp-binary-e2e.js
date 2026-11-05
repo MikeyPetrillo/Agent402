@@ -21,6 +21,7 @@ process.env.AGENT402_MCP_TASKS = "off";
 process.env.X402_INDEX_CRAWL = "off";
 process.env.X402_SYNC_ON_START = "false";
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import express from "express";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";

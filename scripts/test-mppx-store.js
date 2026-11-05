@@ -14,6 +14,7 @@
 //   - building the method warns nothing about an in-memory store.
 // Offline: the chain and redis are stubs; nothing moves.
 //   node scripts/test-mppx-store.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { Challenge, Credential, Method, Store } from "mppx";
 import { tempo } from "mppx/server";
 import { Attribution } from "mppx/tempo";

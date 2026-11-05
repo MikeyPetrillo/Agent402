@@ -1,5 +1,6 @@
 // Exact-output tests for the 39 kit2 tools. Proves each one actually works by
 // asserting a known input produces the expected result.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { KIT2 } from "../src/tools/kit2.js";
 
 const bySlug = Object.fromEntries(KIT2.map((t) => [t.slug, t]));

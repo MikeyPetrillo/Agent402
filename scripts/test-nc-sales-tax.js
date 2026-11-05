@@ -4,6 +4,7 @@
 // routes billed to North Carolina count; wallet payments are skipped; the
 // taxable routes are real; checkout collects the address; the taxable tool
 // pages state the price includes the tax (G.S. 105-164.7(2)).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { ncTaxReport, ncTaxableKind, isNcBilling, taxIncludedPortion, monthBounds, NC_TAXABLE_SLUGS } from "../src/nc-sales-tax.js";
 import { TERMS_VERSION } from "../src/credits-sales.js";

@@ -9,6 +9,7 @@
 // it piled up silently. Found when a 1062-URL sitemap sweep aborted two fund
 // pages at a 20s client timeout; the caller that matters is not the test but
 // any crawler walking our sitemap, Googlebot included.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { __gateInternals, gateDepth } from "../src/programmatic-pages.js";
 
 const { withGate, GATE_BUSY } = __gateInternals;

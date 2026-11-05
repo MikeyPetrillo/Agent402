@@ -1,6 +1,7 @@
 // The shared numeric-setting readers (src/env-num.js), which replaced copies
 // across money limits, breakers and timeouts: zero, negatives, blanks, junk
 // and non-finite values fall back to the default; a valid value is kept.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { positiveNum, envPositive, envAtLeast } from "../src/env-num.js";
 
 let pass = 0, fail = 0;

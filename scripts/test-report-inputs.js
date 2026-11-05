@@ -1,6 +1,7 @@
 // Report INPUT sufficiency, round 2 (2026-08-26 cross-report review): the
 // recall feeds and the domain audit. Each assertion here is a defect a paying
 // reader would have been misled by, verified live before it was fixed.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { recallRow, fdaDate } from "../src/tools/gov-kit.js";
 import { tlsScoreOf, certCoversHost } from "../src/tools/domain-audit-kit.js";
 import { readFileSync } from "node:fs";

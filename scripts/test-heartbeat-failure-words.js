@@ -6,6 +6,7 @@
 // endpoint only, never a slug, a count, an upstream, a facilitator or a
 // funding reason, and the step never reads the operator endpoint. The status
 // Worker carries the same three titles, mapping and bodies.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 import { readFile, mkdtemp, writeFile, chmod, rm } from "node:fs/promises";
 import { spawnSync } from "node:child_process";

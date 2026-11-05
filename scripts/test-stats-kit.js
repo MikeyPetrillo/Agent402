@@ -3,6 +3,7 @@
 // Covers: happy paths against known-correct math, edge cases (zero variance,
 // constant series, single-value), error contracts (statusCode=400), and the
 // "answers its own example" invariant the CI suite cares about.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { STATS_TOOLS } from "../src/tools/stats-kit.js";
 
 let passed = 0;

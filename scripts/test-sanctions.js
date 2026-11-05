@@ -12,6 +12,7 @@
 // an empty list as a clean result. Each of those is asserted below, and the
 // last one is the one that would be catastrophic to get wrong: an empty parse
 // served as "no match" makes every query on earth come back clean.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { readFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";

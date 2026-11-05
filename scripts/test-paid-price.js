@@ -3,6 +3,7 @@
 // moved, every other chain records exactly what it did before (offline).
 //
 //   node scripts/test-paid-price.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 
 process.env.ROBINHOOD_MIN_PRICE_USD = "0.005";

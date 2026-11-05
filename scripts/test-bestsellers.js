@@ -7,6 +7,7 @@
 // via SALES_LEDGER_DB (set BEFORE import, same pattern as test-sales-ledger).
 //
 //   node scripts/test-bestsellers.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

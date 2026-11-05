@@ -14,6 +14,7 @@
 // table with placeholder rates.
 //
 //   node scripts/test-decision-one.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.TYPESAFE_API_KEY = "ts-test-not-real";
 process.env.OPENROUTER_API_KEY = "or-test-not-real";
 process.env.OPENAI_API_KEY = "sk-test-not-real";

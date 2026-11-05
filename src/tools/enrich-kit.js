@@ -677,6 +677,7 @@ export const ENRICH_TOOLS = [
       let raw = typeof i.url === "string" ? i.url.trim() : "";
       if (!raw) throw bad(`"url" is required - a site URL or bare domain`);
       if (raw.length > 2048) throw bad(`"url" is capped at 2048 characters`);
+      if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) && !/^https?:\/\//i.test(raw)) throw bad(`"url" must be http(s) or a bare domain`);
       if (!/^https?:\/\//i.test(raw)) raw = `https://${raw}`;
       // Page fetch (SSRF-guarded). A page that won't serve HTML still gets the
       // /favicon.ico fallback below.

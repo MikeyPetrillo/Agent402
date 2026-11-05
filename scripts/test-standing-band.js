@@ -9,6 +9,7 @@
 // The band is the one sentence asking to be trusted, which makes two things
 // non-negotiable: every figure is DERIVED, and a cold cache says NOTHING
 // rather than a wrong number.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { standingBand, standingCountsExcludingHost } from "../src/standing.js";
 import { pageText } from "./lib/html-text.js";

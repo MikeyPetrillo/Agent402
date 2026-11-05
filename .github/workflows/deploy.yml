@@ -1008,6 +1008,12 @@ jobs:
           t node scripts/test-page-dates.js
           # Bing sitemap registration script: lists then submits only the missing feeds (stubbed, offline)
           t node scripts/test-submit-sitemaps.js
+      - name: Runner kills and memory (on failure)
+        if: failure()
+        run: |
+          free -m || true
+          sudo dmesg -T 2>/dev/null | grep -iE 'killed process|out of memory|oom-kill' | tail -20 || true
+          ps -eo pid,rss,etime,comm --sort=-rss | head -15 || true
 
   test-unit-a3:
     # The second half of test-unit-a (2026-08-25, split by the seconds each item
@@ -1429,6 +1435,8 @@ jobs:
           t node scripts/test-index-equal-rev-pg.js
           # The index's save and pull yield on time at production scale (5,800 origins, 198k tools).
           t node scripts/test-index-persist-slices-pg.js
+          # A row of tens of megabytes is written and warm-started under a statement limit it outlasts
+          t node scripts/test-index-large-row-pg.js
           # The tool directory from the state database (INDEX_LISTINGS_STORE=pg): every page the in-memory directory's, row for row; changes and removals written; no in-memory directory built; a page under 50 ms
           t node scripts/test-index-listings-pg.js
           # A re-price outside a crawl reaches the other container; a boot rewrites nothing it read
@@ -1965,6 +1973,8 @@ jobs:
           t node scripts/test-bazaar-quality.js
           # A seller field that is not text (a number, object or array name, tags as a string) routes without throwing
           t node scripts/test-seller-field-types.js
+          # A stored index of sellers with non-text fields boots and serves every seller page and API; entries are cleaned as the cache stores them
+          t node scripts/test-seller-field-types-serve.js
           # /api/route ordering: route-order.js pinned to the comparator, read by why.tiebreaks and the ranking sentence (offline)
           t node scripts/test-route-order.js
           # Revenue detector classification (real x402 buys vs funding/tests)
@@ -2030,6 +2040,8 @@ jobs:
           t node scripts/test-known-assets.js
           # Distrusted intermediate CA refusal: published hashes, every copy, live TLS legs (offline, port 0)
           t node scripts/test-tls-distrust.js
+          # tls-cert's own lookup: a resolver that cannot answer is a retryable 503, a missing name the neutral 400 (stubbed resolver, offline)
+          t node scripts/test-tls-cert-lookup.js
           # A cached repeat's "payment is not charged" copy names the Tempo transfer exception (offline)
           t node scripts/test-cache-repeat-copy.js
           t node scripts/test-legal-dates.js
@@ -2223,6 +2235,12 @@ jobs:
           t node scripts/test-health-flags.js
           # /skills/<slug> contract (every pack renders workflow + tools + claudePrompt + JSON-LD)
           t node scripts/test-skill-page-contract.js
+      - name: Runner kills and memory (on failure)
+        if: failure()
+        run: |
+          free -m || true
+          sudo dmesg -T 2>/dev/null | grep -iE 'killed process|out of memory|oom-kill' | tail -20 || true
+          ps -eo pid,rss,etime,comm --sort=-rss | head -15 || true
 
   test-unit-b3:
     # The second half of test-unit-b (2026-08-25, split by the seconds each item
@@ -2413,6 +2431,12 @@ jobs:
           t node scripts/test-ci-facilitator-scope.js
           # A composite report is refused (503, not charged) while draining - a late request on a busy keep-alive socket must not start a 4-minute run into the deadline
           t node scripts/test-drain-refuses-composites.js
+      - name: Runner kills and memory (on failure)
+        if: failure()
+        run: |
+          free -m || true
+          sudo dmesg -T 2>/dev/null | grep -iE 'killed process|out of memory|oom-kill' | tail -20 || true
+          ps -eo pid,rss,etime,comm --sort=-rss | head -15 || true
 
   test-unit-b2:
     # Second half of test-unit-b (2026-08-25), split by the seconds each script
@@ -2789,7 +2813,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (102 scripts, one process each)
+      - name: Offline suites (104 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -2868,6 +2892,10 @@ jobs:
           # CI lane gating (every test lane blocks deploy/publish; Chromium only where a script needs it — offline)
           t node scripts/test-ci-gating.js
           t node scripts/test-port-hygiene.js
+          # Every offline suite pins its stores first: ./lib/offline-stores.js is its first import, so an exported REDIS_URL, STATE_DATABASE_URL or LEDGER_JOURNAL_REDIS never reaches a src/ module (static; offline)
+          t node scripts/test-offline-stores-import.js
+          # test-all waits for the seller index before its strict sweep and fails naming the state if it never loads (stub server; offline)
+          t node scripts/test-all-index-wait.js
           # A child's JSON result is read with childJson, never as its last line (offline)
           t node scripts/test-child-json.js
           # No em dash in a shipped package file or a workflow issue body (read from each package's files allowlist - offline)
@@ -3048,7 +3076,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (159 scripts, one process each)
+      - name: Offline suites (160 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -3144,6 +3172,8 @@ jobs:
           t node scripts/test-bazaar-validate.js
           # Anthropic Messages wire on the five tiers (validation, probe clamp, outbound prefs, billing strip, failover, paid-empty guard, SSE scrub - offline)
           t node scripts/test-llm-messages.js
+          # The gateway suites pass on the placeholder cost table too (docs/example-upstream-costs.json; prints exit codes and counts only - offline)
+          t node scripts/test-example-costs-suites.js
           # Availability failover: a model with no live host is served by its same-family successor (named in the reply), model_fallback:false opts out, rate limits retry the same model first (offline, every wire)
           t node scripts/test-gateway-availability.js
           # Flight search and status: sellers are config, payTo pinned and capped, no second seller after a payment may have left, spend guard first (offline)
@@ -3340,7 +3370,7 @@ jobs:
           t node scripts/test-wallet-e2e.js
           # MCP Registry find-latest-version helper (used by the publish job to auto-deprecate a superseded version — offline)
           t node scripts/test-mcp-find-latest-version.js
-          # FFmpeg video-decode lockout (R-06 — every ffmpeg call is -vn/audio-only; CVE-2026-8461 MagicYUV video decoder unreachable — offline)
+          # FFmpeg video-decode lockout (R-06: every ffmpeg and ffprobe call passes an audio-only -codec_whitelist before -i, so the MagicYUV video decoder never opens; offline)
           t node scripts/test-ffmpeg-novideo.js
           # Log-injection guard (F24 — CR/LF + ANSI + control chars stripped from attacker-controlled log text — offline)
           t node scripts/test-log-safe.js
@@ -3529,6 +3559,12 @@ jobs:
 
       - name: Multi-agent coordination demo (two wallets, one namespace)
         run: node scripts/demo-coordination.js
+      - name: Runner kills and memory (on failure)
+        if: failure()
+        run: |
+          free -m || true
+          sudo dmesg -T 2>/dev/null | grep -iE 'killed process|out of memory|oom-kill' | tail -20 || true
+          ps -eo pid,rss,etime,comm --sort=-rss | head -15 || true
 
   test:
     # UPSTREAM AFFINITY, not just time. Balancing by duration alone put suites
@@ -3801,6 +3837,12 @@ jobs:
           curl -s localhost:3000/api/hash -X POST -H 'Content-Type: application/json' -d '{"text":"x"}' >/dev/null
           curl -s localhost:3000/api/stats | jq -e '.tools >= 500 and .toolCallsServed.total >= 1 and (.summary | test("machine-to-machine"))' >/dev/null \
             && echo "/api/stats OK" || { echo "/api/stats wrong"; curl -s localhost:3000/api/stats; exit 1; }
+      - name: Runner kills and memory (on failure)
+        if: failure()
+        run: |
+          free -m || true
+          sudo dmesg -T 2>/dev/null | grep -iE 'killed process|out of memory|oom-kill' | tail -20 || true
+          ps -eo pid,rss,etime,comm --sort=-rss | head -15 || true
 
   test-paid:
     # Suites that boot their OWN paid-mode or stub-facilitator server (PoW gate,
@@ -4077,6 +4119,12 @@ jobs:
           t node scripts/test-mcp-tasks.js
           # PostHog funnel (discovery→402→settlement capture; paid-mode boot vs mock facilitator — offline)
           t node scripts/test-posthog-funnel.js
+      - name: Runner kills and memory (on failure)
+        if: failure()
+        run: |
+          free -m || true
+          sudo dmesg -T 2>/dev/null | grep -iE 'killed process|out of memory|oom-kill' | tail -20 || true
+          ps -eo pid,rss,etime,comm --sort=-rss | head -15 || true
 
   test-paid2:
     # Second half of test-paid (2026-08-25), split by the seconds each script
@@ -4392,6 +4440,12 @@ jobs:
       # (Chromium, 1440 + 390 px). Boots its own server like the wrap check.
       - name: Sticky chrome (nav and panels hold after a scroll, 1440 + 390 px)
         run: node scripts/test-sticky-chrome.js
+      - name: Runner kills and memory (on failure)
+        if: failure()
+        run: |
+          free -m || true
+          sudo dmesg -T 2>/dev/null | grep -iE 'killed process|out of memory|oom-kill' | tail -20 || true
+          ps -eo pid,rss,etime,comm --sort=-rss | head -15 || true
 
   test-sweeps2:
     # The second half of test-sweeps (2026-08-25, split by the seconds each item
@@ -4626,6 +4680,15 @@ jobs:
       - name: Browser contexts block service workers, WebSockets, redirect hops and popups to private hosts (real Chromium)
         run: node scripts/test-render-isolation.js
 
+      - name: A refused redirect of the page's navigation answers 400; one proxy refusal text (real Chromium)
+        run: node scripts/test-render-redirect-refusal.js
+
+      - name: html-frames runs in its own jitless browser, no WebAssembly, failures bounded per payer (real Chromium)
+        run: node scripts/test-html-frames-isolation.js
+      # html-frames through the server: a payer's failed documents are bounded (free-mode boot, port 0)
+      - name: html-frames failure bound through the route
+        run: node scripts/test-html-frames-failure-bound.js
+
       - name: Chromium and the media binaries get an allowlisted environment, never a secret (real Chromium)
         run: node scripts/test-child-env.js
 
@@ -4658,6 +4721,12 @@ jobs:
 
       - name: gov-data Catalog API v4 (retired CKAN v3 proxy 404s on catalog-old)
         run: node scripts/test-gov-data.js
+      - name: Runner kills and memory (on failure)
+        if: failure()
+        run: |
+          free -m || true
+          sudo dmesg -T 2>/dev/null | grep -iE 'killed process|out of memory|oom-kill' | tail -20 || true
+          ps -eo pid,rss,etime,comm --sort=-rss | head -15 || true
 
   test-pricing:
     # Test job runs on its own [test] marker AND auto-runs whenever a commit
@@ -4880,6 +4949,12 @@ jobs:
           t node scripts/test-pricing-margin.js
           # A model whose reasoning bills outside max_tokens is quoted and clamped for it: the metered quote covers the measured token mixes at the markup (private table, offline)
           t node scripts/test-metered-uncapped-reasoning.js
+      - name: Runner kills and memory (on failure)
+        if: failure()
+        run: |
+          free -m || true
+          sudo dmesg -T 2>/dev/null | grep -iE 'killed process|out of memory|oom-kill' | tail -20 || true
+          ps -eo pid,rss,etime,comm --sort=-rss | head -15 || true
 
   test-unit-c:
     # Test job runs on its own [test] marker AND auto-runs whenever a commit
@@ -5048,6 +5123,12 @@ jobs:
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
           # upto scheme ships dark, refuses what it cannot price
           t node scripts/test-upto-scheme.js
+      - name: Runner kills and memory (on failure)
+        if: failure()
+        run: |
+          free -m || true
+          sudo dmesg -T 2>/dev/null | grep -iE 'killed process|out of memory|oom-kill' | tail -20 || true
+          ps -eo pid,rss,etime,comm --sort=-rss | head -15 || true
 
   test-unit-c2:
     # Second half of test-unit-c (2026-08-25), split by the seconds each script
@@ -6673,9 +6754,9 @@ jobs:
           has() { local body code i; for i in 1 2 3; do body=$(curl -s --max-time 20 -w '\n%{http_code}' "$1"); code=${body##*$'\n'}; body=${body%$'\n'*}; case "$code" in 2??) grep -qF -- "$2" <<<"$body" && return 0 ;; esac; LAST_CODE=$code; [ "$i" -lt 3 ] && sleep "${HAS_RETRY_SLEEP:-10}"; done; return 1; }
           ck() { if eval "$2"; then echo "  $1 ✓"; else echo "  $1 MISSING (last HTTP ${LAST_CODE:-?})"; FAILS=$((FAILS+1)); fi; }
           ck "FAQPage JSON-LD"            'has "$PROD/" "\"FAQPage\""'
-          # The ledger homepage renders the FAQ section with a "$ GET /faq"
-          # kicker (its h2 is styled, so the old <h2>FAQ</h2> literal is gone).
-          ck "visible FAQ"               'has "$PROD/" "GET /faq"'
+          # The homepage renders its questions as <details> rows, each with an
+          # ml-faq-mark toggle (the "$ GET /faq" kicker left with the home trim).
+          ck "visible FAQ"               'has "$PROD/" "ml-faq-mark"'
           ck "AggregateOffer"            'has "$PROD/" AggregateOffer'
           ck "robots welcomes AI crawlers" 'has "$PROD/robots.txt" GPTBot'
           ck "MCP connector on landing"  'has "$PROD/" agent402-mcp'

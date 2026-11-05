@@ -3,6 +3,7 @@
 // The point of the flip (2026-10-04) is the DEFAULT: a slug on neither list -
 // every new tool - is wallet-only, so forgetting a list can no longer make an
 // upstream-calling tool free. Offline.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { FREE_TIER_SLUGS } from "../src/free-tier.js";
 import { isComputePayable, WALLET_ONLY_SLUGS, PROBE_POW_SLUG } from "../src/pow.js";
 

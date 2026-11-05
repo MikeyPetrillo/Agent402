@@ -9,6 +9,7 @@
 //   claim. A model-backed tool that is not declared makes both false.
 //
 //   node scripts/test-judge-kit.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 let pass = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { console.error("FAIL:", m); process.exit(1); } };
 

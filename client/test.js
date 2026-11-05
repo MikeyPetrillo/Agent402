@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { Agent402, OutputValidationError, withNetworkPreference, withPayeeAllowlist, NETWORK_CAIP2, quoted402Usd, acceptUsd } from "./index.js";
+import { Agent402, OutputValidationError, withNetworkPreference, withPayeeAllowlist, NETWORK_CAIP2, quoted402Usd, acceptUsd, resetRetryFetch, isConnectionReset } from "./index.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = 3081;
@@ -25,6 +25,38 @@ let pass = 0; const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); 
 // The advisory-caps warning is captured (and still printed) so a test can count it.
 const advisoryWarnings = [];
 { const warn = console.warn; console.warn = (...args) => { const line = args.join(" "); if (line.includes("[agent402-client] spending caps")) advisoryWarnings.push(line); warn(...args); }; }
+
+// Offline: a connection reset before any answer is resent once with the same
+// request; an HTTP answer, a streamed body, a Request object and an aborted
+// call are not; the SDK's own fetch retries, a caller's payFetch does not.
+{
+  const reset = () => Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("write ECONNRESET"), { code: "ECONNRESET" }) });
+  ok(isConnectionReset(reset()) && !isConnectionReset(new Error("boom")), "isConnectionReset reads the fetch error's cause");
+  let n = 0, seen = [];
+  const flaky = async (url, init) => { n++; seen.push(init?.headers?.["payment-signature"]); if (n === 1) throw reset(); return new Response("ok", { status: 200 }); };
+  const r = await resetRetryFetch(flaky, { pauseMs: 1 })("https://x.example/a", { method: "POST", body: "{}", headers: { "payment-signature": "SIG" } });
+  ok(r.status === 200 && n === 2 && seen.every((h) => h === "SIG"), `a reset is resent once with the same headers (${n} sends)`);
+  n = 0;
+  const answered = async () => { n++; return new Response("no", { status: 502 }); };
+  ok((await resetRetryFetch(answered, { pauseMs: 1 })("https://x.example/b")).status === 502 && n === 1, "an HTTP answer is never resent");
+  n = 0;
+  const always = async () => { n++; throw reset(); };
+  ok(await resetRetryFetch(always, { pauseMs: 1 })("https://x.example/c").then(() => false, () => n === 2), "a second reset is not resent again");
+  n = 0;
+  const stream = new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode("x")); c.close(); } });
+  ok(await resetRetryFetch(always, { pauseMs: 1 })("https://x.example/d", { method: "POST", body: stream, duplex: "half" }).then(() => false, () => n === 1), "a streamed body is not resent");
+  n = 0;
+  const sdk = new Agent402({ baseUrl: "https://x.example", fetchImpl: flaky, cache: false });
+  n = 0; seen = [];
+  const viaSdk = await sdk.f("https://x.example/e", {});
+  ok(viaSdk.status === 200 && n === 2, `the SDK's own fetch resends a reset once (${n} sends)`);
+  n = 0;
+  const off = new Agent402({ baseUrl: "https://x.example", fetchImpl: always, retryResets: false });
+  ok(await off.f("https://x.example/f", {}).then(() => false, () => n === 1), "retryResets: false sends once");
+  let payCalls = 0;
+  const pay = new Agent402({ baseUrl: "https://x.example", fetchImpl: answered, fetch: async () => { payCalls++; throw reset(); } });
+  ok(pay.payFetch !== null && (await pay.payFetch("https://x.example/g").then(() => false, () => payCalls === 1)), "a caller's payFetch is not wrapped (one send)");
+}
 
 // Offline: withNetworkPreference pins the settlement chain (e.g. USDG on
 // Robinhood Chain) on any duck-typed x402 client - no @x402 dependency here.
@@ -791,6 +823,20 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 }
 
 // Offline (#1126): the default Idempotency-Key survives an AGENT-LEVEL retry.
+// The SDK's own resend of a reset carries the same Idempotency-Key, so a
+// response lost after the server charged is replayed by the server, not debited again.
+{
+  const keys = [];
+  let n = 0;
+  const c = new Agent402({
+    baseUrl: "https://seller.example", creditsKey: `a402_${"C".repeat(32)}`,
+    fetchImpl: async (url, init) => { keys.push(init.headers["Idempotency-Key"]); if (++n === 1) throw new Error("socket hang up"); return { ok: true, status: 200, json: async () => ({ value: 9 }) }; },
+  });
+  c._catalog = new Map([["answer", { method: "POST", path: "/answer", computePayable: false, price: "$0.01" }]]);
+  const out = await c.call("answer", { q: 1 });
+  ok(out.value === 9 && keys.length === 2 && keys[0] === keys[1], `the SDK's own resend after a lost response reuses the Idempotency-Key (${keys.length} sends)`);
+}
+
 // A lost response is retried one level up - the framework calls call() again -
 // so the key must be stable across call() invocations on one client, fresh per
 // invocation only when the caller opted out of caching, and distinct between
@@ -805,6 +851,9 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     const c = new Agent402({
       baseUrl: "https://seller.example",
       creditsKey,
+      // The framework-level retry is what this case drives, so the SDK's own
+      // resend of a reset is off here (the case after this block covers it).
+      retryResets: false,
       fetchImpl: async (url, init) => {
         keys.push(init.headers["Idempotency-Key"]);
         // First send: the response is LOST after the server has charged.

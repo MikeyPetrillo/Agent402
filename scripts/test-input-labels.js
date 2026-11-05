@@ -3,6 +3,7 @@
 // name: a <label for> pointing at it, an aria-label or aria-labelledby, or
 // aria-hidden when it is a honeypot. A placeholder is not a name. Also pins
 // the analytics config: session replay stays off.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { chromium } from "playwright";
 

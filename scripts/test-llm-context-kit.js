@@ -17,6 +17,7 @@
 //      a deadline or transport failure -> 503 naming the step, malformed body -> 502, oversized body -> 502, and no
 //      upstream body text ever reaches the caller
 //   6. no key -> 503 BEFORE any fetch
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { LLM_CONTEXT_TOOLS, __test } from "../src/tools/llm-context-kit.js";
 
 let pass = 0, fail = 0;

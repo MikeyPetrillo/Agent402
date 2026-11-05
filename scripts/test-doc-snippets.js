@@ -35,6 +35,7 @@
 //
 //   FREE_MODE=true PORT=3000 node src/server.js
 //   TARGET_URL=http://127.0.0.1:3000 node scripts/test-doc-snippets.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";

@@ -4,6 +4,7 @@
 // or a long-running route. Otherwise one container's per-process claim is
 // the guarantee and a shared-store outage does not stop sales. The window is
 // counted from the listen mark when the server makes one, else from import.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { mayHaveSiblings, sharedClaimRequired, deployOverlapMs, markListening, windowStartedAt } from "../src/replay-topology.js";
 let pass = 0, fail = 0;

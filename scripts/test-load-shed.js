@@ -1,5 +1,6 @@
 // Admission control (src/load-shed.js + the gates in server.js) and the
 // limiter's IPv6 /64 keying and key cap, offline and booted.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { getFreePort } from "./lib/free-port.js";

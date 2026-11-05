@@ -18,6 +18,7 @@
 // way to tell us, which is how this survived.
 //
 //   node scripts/test-router-identification.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";
 
@@ -32,6 +33,7 @@ process.env.X402_UPSTREAM_BUYER_KEY = "0x" + "11".repeat(32);
 // this suite drives the payer, so it holds a fixture list.
 (await import("../src/tools/sanctions-kit.js")).__seedPayoutListForTests();
 const { payX402, ROUTER_UA } = await import("../src/x402-buyer.js");
+(await import("../src/x402-buyer.js")).__setBuyerAddressGuardForTest(false); // this suite's sellers are local stubs
 const { CRAWLER_UA } = await import("../src/crawler-page.js");
 
 // Header lookup that does not care about case, because a seller's does not
@@ -77,7 +79,7 @@ function stubSeller() {
 }
 
 const buy = (opts = {}) => payX402("https://seller.example/x", {
-  maxAtomic: 500000n, trusted: true, method: "POST", body: {}, chain: "base",
+  maxAtomic: 500000n, method: "POST", body: {}, chain: "base",
   notDebited: async () => ({ debited: true, observed: 1 }), ...opts,
 }).catch((e) => e);
 

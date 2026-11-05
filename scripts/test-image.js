@@ -2,6 +2,7 @@
 // thumbnail / crop / palette it and verify the output decodes at the expected
 // size and format. The EXIF parser is tested against a hand-crafted TIFF so no
 // network is needed (the live URL path is covered by test-all's example check).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { Jimp, JimpMime } from "jimp";
 import { IMAGE_TOOLS, extractExifBuffer, parseTiff, sniffFormat } from "../src/tools/image-kit.js";
 

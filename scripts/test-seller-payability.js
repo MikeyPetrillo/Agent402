@@ -7,6 +7,7 @@
 // EIP-712 domain name on its Base accept and nothing settled for a month while
 // every surface it owned read healthy (2026-09-10). The domain leg below is
 // that case.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { buildSellerPayabilityTool, normalizeTarget, readChallenge, domainFindings, payabilityFlags, MAX_SPEND_USD } from "../src/tools/seller-payability-kit.js";
 import { LONG_RUNNING_SLUGS } from "../src/composite-spend-guard.js";
 import { requiredSecondsFor } from "../src/avm-validity.js";

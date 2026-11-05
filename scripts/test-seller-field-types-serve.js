@@ -1,0 +1,122 @@
+// A stored seller index whose listings carry a number, an object or an array
+// where text belongs is served whole. A free-mode boot warm-starts from an
+// index file holding such sellers beside a well-formed one; every page and API
+// that reads sellers answers without a server error, the server is still up
+// after all of them, and the stored entries hold text (each entry is cleaned
+// as the index cache stores it, so no reader meets the raw value). The router
+// worker is on, so its replica of the cache is read too.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { spawn } from "node:child_process";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+let pass = 0, fail = 0;
+const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// The unit: what the cache keeps for a listing with non-text fields.
+const { _cleanSellerEntryForTests: clean } = await import("../src/x402-index.js");
+const raw = { manifest: { name: { en: "Odd" }, homepage: 7 }, tools: [{ route: 12, name: ["ocr"], slug: 3, description: { t: 1 }, category: true, tags: "ocr", aliases: [{ a: 1 }, "alt", 5], networks: "eip155:8453", method: "POST" }, null, "not a tool"], fetchedAt: 1 };
+const c = clean(raw);
+const t0 = c.tools[0];
+ok(c !== raw && c.tools.length === 1, `non-object tools are dropped (${c.tools.length} kept of ${raw.tools.length})`);
+ok(t0.route === "12" && t0.slug === "3" && t0.category === "true" && !("name" in t0) && !("description" in t0),
+  `numbers and booleans become their text, objects and arrays are dropped (${JSON.stringify({ route: t0.route, slug: t0.slug, category: t0.category, name: t0.name, description: t0.description })})`);
+ok(JSON.stringify(t0.tags) === '["ocr"]' && JSON.stringify(t0.aliases) === '["alt","5"]' && JSON.stringify(t0.networks) === '["eip155:8453"]',
+  `lists become lists of text (${JSON.stringify([t0.tags, t0.aliases, t0.networks])})`);
+ok(!("name" in c.manifest) && c.manifest.homepage === "7", `manifest text fields are cleaned the same way (${JSON.stringify(c.manifest)})`);
+const good = { manifest: { name: "Good" }, tools: [{ route: "/a", name: "a", slug: "a", tags: ["x"] }] };
+ok(clean(good) === good, "a clean entry is stored as it came (same object)");
+
+// The server: odd sellers beside a well-formed one, read from a stored index.
+const dir = mkdtempSync(join(tmpdir(), "a402-field-types-"));
+const now = Date.now();
+const tool = (origin, over) => ({ seller: origin, method: "POST", route: "/api/ocr", slug: "ocr", name: "ocr", description: "ocr a thing", category: "vision", tags: ["ocr"], price: 0.003, networks: ["eip155:8453"], ...over });
+const shapes = [
+  { name: 404 }, { name: { en: "ocr" } }, { name: ["ocr"] }, { slug: 7 }, { description: { text: "ocr" } }, { description: ["ocr", "a thing"] },
+  { category: 5 }, { tags: "ocr,vision" }, { tags: [{ t: "ocr" }, null, 3] }, { route: 12 }, { method: 1 }, { aliases: [{ a: 1 }, "ocr-alt"] }, { networks: "eip155:8453" },
+];
+const lines = shapes.map((over, i) => {
+  const origin = `https://odd-${i}.example`;
+  return JSON.stringify([origin, { manifest: { name: i % 2 ? { en: "Odd" } : 9, homepage: origin }, tools: [tool(origin, over)], fetchedAt: now, source: "manifest", error: null, history: [1, 1, 1, 1, 1] }]);
+});
+lines.push(JSON.stringify(["https://good.example", { manifest: { name: "Good Seller", homepage: "https://good.example" }, tools: [tool("https://good.example", {})], fetchedAt: now, source: "manifest", error: null, history: [1, 1, 1, 1, 1] }]));
+writeFileSync(join(dir, "x402-index-cache.ndjson"), [JSON.stringify({ savedAt: now, format: "ndjson-v1", origins: lines.length }), ...lines].join("\n") + "\n");
+
+const proc = spawn(process.execPath, ["src/server.js"], {
+  cwd: ROOT,
+  env: {
+    ...process.env, FREE_MODE: "true", PORT: "0", INDEX_CACHE_FILE: join(dir, "x402-index-cache.json"), INDEX_FIRST_CRAWL_DELAY_MS: "999999999",
+    X402_INDEX_CRAWL: "", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", X402_PAYWALL_PROBES_PER_CYCLE: "0", REDIS_URL: "", STATE_DATABASE_URL: "",
+    X402_ECONOMY_DB: join(dir, "econ.db"), MEMORY_DB_FILE: join(dir, "memory.db"), ROUTER_WORKERS: "1", LOAD_SHED: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
+  },
+  stdio: ["ignore", "pipe", "pipe"],
+});
+let log = "";
+proc.stdout.on("data", (d) => { log += d; });
+proc.stderr.on("data", (d) => { log += d; });
+let exited = null;
+proc.on("exit", (code, signal) => { exited = { code, signal }; });
+try {
+  let base = null;
+  for (let i = 0; i < 240 && !base && !exited; i++) { const m = log.match(/listening on :(\d+)/); if (m) base = `http://127.0.0.1:${m[1]}`; else await sleep(250); }
+  if (!base) throw new Error(`server never came up${exited ? ` (exited ${JSON.stringify(exited)})` : ""}:\n${log.slice(-800)}`);
+  let sellers = 0;
+  for (let i = 0; i < 120 && sellers < lines.length && !exited; i++) {
+    try { sellers = (await (await fetch(`${base}/api/index?limit=1`)).json()).sellerCount || 0; } catch { /* warming */ }
+    if (sellers < lines.length) await sleep(500);
+  }
+  ok(sellers >= lines.length, `the index warm-started with every seeded seller (${sellers} of ${lines.length})`);
+
+  const reads = [
+    ["GET", "/api/index"], ["GET", "/api/index?limit=50"], ["GET", "/api/index?seller=odd-0.example"], ["GET", "/api/index?seller=odd-1.example"],
+    ["GET", "/api/index?seller=good.example"], ["GET", "/marketplace"], ["GET", "/marketplace?all=1"], ["GET", "/marketplace/tools"],
+    ["GET", "/marketplace/tools?q=ocr"], ["GET", "/leaderboard"], ["GET", "/base"], ["GET", "/sitemap.xml"], ["GET", "/llms-full.txt"],
+    ["GET", "/api/reliability"], ["GET", "/.well-known/x402"], ["GET", "/api/find?q=ocr%20a%20thing"], ["GET", "/api/stats"],
+    ["POST", "/api/route", { query: "ocr a thing", include: "external", top: 20 }],
+    ["POST", "/api/route", { query: "ocr", include: "external", top: 20 }],
+  ];
+  const bad = [];
+  let goodFound = false;
+  for (const [method, path, body] of reads) {
+    if (exited) break;
+    let status = 0, text = "";
+    try {
+      const r = await fetch(`${base}${path}`, method === "POST" ? { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {});
+      status = r.status; text = await r.text();
+    } catch (e) { status = -1; text = String(e?.message || e); }
+    if (status < 0 || status >= 500) bad.push(`${method} ${path} -> ${status} ${text.slice(0, 120)}`);
+    if (path === "/api/route" && /good\.example/.test(text)) goodFound = true;
+  }
+  ok(bad.length === 0, `every page and API that reads sellers answers without a server error (${bad.length ? bad.join("; ") : `${reads.length} reads`})`);
+  ok(goodFound, "the well-formed seller is still routed beside the odd ones");
+  // What the server holds and shows for an odd seller is text: every tool
+  // field a reader takes as text is a string or absent.
+  const notText = [];
+  for (let i = 0; i < shapes.length; i++) {
+    const d = await (await fetch(`${base}/api/index?seller=odd-${i}.example`)).json().catch(() => null);
+    const walk = (o) => {
+      if (Array.isArray(o)) { o.forEach(walk); return; }
+      if (!o || typeof o !== "object") return;
+      if (typeof o.route === "string" || "route" in o) for (const k of ["name", "description", "category", "slug", "route", "method"]) {
+        if (o[k] !== undefined && o[k] !== null && typeof o[k] !== "string") notText.push(`odd-${i}.${k}=${JSON.stringify(o[k])}`);
+      }
+      for (const v of Object.values(o)) if (v && typeof v === "object") walk(v);
+    };
+    walk(d);
+  }
+  ok(notText.length === 0, `every odd seller's tools are served with text fields (${notText.length ? notText.slice(0, 6).join(", ") : "all text"})`);
+  await sleep(500);
+  ok(!exited && (await fetch(`${base}/health`).then((r) => r.ok).catch(() => false)), `the server is still up after every read${exited ? ` (exited ${JSON.stringify(exited)})` : ""}`);
+  ok(!/uncaughtException/.test(log), "no uncaught exception was logged");
+} catch (e) {
+  fail++; console.error(`FAIL - ${e.message}`);
+} finally {
+  proc.kill("SIGKILL");
+  rmSync(dir, { recursive: true, force: true });
+}
+console.log(`\ntest-seller-field-types-serve: ${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);

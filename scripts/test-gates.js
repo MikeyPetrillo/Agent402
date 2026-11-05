@@ -20,6 +20,7 @@
 // SAFETY: every mutation is reverted in a finally block, and the run ends by
 // asserting `git diff` is clean for every file it touched. If this script is
 // killed mid-run, `git checkout -- <file>` restores it; nothing is committed.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { execFileSync, execSync, spawn } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";

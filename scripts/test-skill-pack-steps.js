@@ -16,6 +16,7 @@
 //
 // Also checks the inverse: a step naming a slug no tool provides. That is how
 // a retirement cut would silently hollow out a pack that still sells.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 import { SKILL_PACKS, PACK_PRICES } from "../src/skills.js";
 import { PACK_STEPS, __test } from "../src/tools/skill-runner.js";

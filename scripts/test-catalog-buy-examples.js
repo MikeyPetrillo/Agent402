@@ -5,6 +5,7 @@
 // captures. No network, no wallet, no money.
 //
 //   node scripts/test-catalog-buy-examples.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

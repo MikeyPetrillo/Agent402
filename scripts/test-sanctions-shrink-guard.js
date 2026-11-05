@@ -3,6 +3,7 @@
 // screen applies; a list of normal size replaces it. Offline: two synthetic
 // SDN XML documents fed through the shared loader with an injected fetch.
 //   node scripts/test-sanctions-shrink-guard.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 const addr = (i) => "0x" + (i + 1).toString(16).padStart(40, "a");

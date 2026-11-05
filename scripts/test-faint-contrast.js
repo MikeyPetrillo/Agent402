@@ -7,6 +7,7 @@
 // the CSS source and computes real WCAG relative-luminance contrast, so a
 // future value change is caught by the math, not just a hardcoded string
 // compare.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 
 let pass = 0, fail = 0;

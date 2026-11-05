@@ -2,6 +2,7 @@
 // /v1/judge and /v1/decisions: OpenAI's Decisions API (gpt-6-luna) first, Jev
 // as the fallback, one answer shape per route. Offline: both upstreams are a
 // stubbed fetch, and the cost table is a test table with placeholder rates.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 
 process.env.OPENAI_API_KEY = "sk-test-not-real";

@@ -18,6 +18,7 @@
 // This is the same failure we diagnose in others: a self-reported metric that
 // does not survive scrutiny. Ours was worse than theirs in one respect — it
 // defamed us.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { recordChargedFailure, getStats } from "../src/stats.js";
 
 let pass = 0, fail = 0;

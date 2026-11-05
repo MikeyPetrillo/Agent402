@@ -1,6 +1,7 @@
 // Browser-pool admission control (security audit A402-08). The wait queue was
 // unbounded; now it is bounded with a deadline and disconnect-abort. Exercises
 // the admission logic directly via the __test hook — no Chromium launch.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { __test } from "../src/tools/render.js";
 
 const { acquireSlot, releaseSlot, state, reset, setQueueDeadline, MAX_CONCURRENT, MAX_QUEUE } = __test;

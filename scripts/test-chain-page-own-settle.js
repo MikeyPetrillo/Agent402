@@ -5,6 +5,7 @@
 // REAL ledger, withFreshRecent and marketPage together: a ledger holding only
 // outside rows in its newest 8 plus an older canary row must render the
 // canary, on every snapshot shape the cached revenue snapshot can carry.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

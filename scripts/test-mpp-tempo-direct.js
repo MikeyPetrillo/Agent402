@@ -3,6 +3,7 @@
 // the chain itself); unset keeps the relay. Offline: a credential that cannot
 // verify is enough to show which endpoint a check reaches.
 //   node scripts/test-mpp-tempo-direct.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { Challenge, Credential } from "mppx";
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };

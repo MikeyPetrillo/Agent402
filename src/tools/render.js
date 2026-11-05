@@ -1,9 +1,10 @@
 import { lookup as dnsLookup } from "node:dns/promises";
-import { assertPublicUrl, hostIsPublic } from "./fetch-guard.js";
+import { assertPublicUrl, hostIsPublic, UNRESOLVED_OR_PRIVATE } from "./fetch-guard.js";
 import { childEnv } from "./child-env.js";
 import { htmlToArticle } from "./extract.js";
 import { partialFields } from "../partial-answer.js";
 import { buildOpportunities } from "./page-speed-opportunities.js";
+import { limiterKey, perReplica } from "../rate-limit.js";
 
 const NAV_TIMEOUT_MS = 25000;
 const MAX_CONCURRENT = 3;
@@ -119,10 +120,10 @@ function releaseSlot() {
 let inProcessProxy = null;
 function startInProcessProxy() {
   if (!inProcessProxy) {
-    inProcessProxy = import("../../worker/egress-proxy.js").then(({ startEgressProxy, resolvePinned }) => startEgressProxy({
+    inProcessProxy = import("../../worker/egress-proxy.js").then(({ startEgressProxy, resolvePinned, EGRESS_REFUSAL }) => startEgressProxy({
       resolve: async (host) => {
         if (guard === PUBLIC_GUARD) return resolvePinned(host);
-        if (!(await guard.hostIsPublic(host))) throw new Error(`blocked: ${host} is not a public host`);
+        if (!(await guard.hostIsPublic(host))) throw new Error(EGRESS_REFUSAL);
         const { address, family } = await dnsLookup(host, { order: "ipv4first" });
         return { address, family };
       },
@@ -132,9 +133,43 @@ function startInProcessProxy() {
   return inProcessProxy;
 }
 
-async function getBrowser() {
+// html-frames runs buyer-written script, so it gets a browser of its own,
+// launched with V8's JIT off (--jitless, which also leaves WebAssembly
+// unavailable). Public pages keep the regular browser. Each is launched on its
+// first use; Playwright drives both over a pipe, never a debugging port.
+export const FRAMES_BROWSER_ARGS = Object.freeze(["--js-flags=--jitless"]);
+let framesBrowserPromise = null;
+
+function getBrowser(kind = "pages") {
+  if (kind === "frames") {
+    if (!framesBrowserPromise) {
+      framesBrowserPromise = launchBrowser(FRAMES_BROWSER_ARGS, () => { framesBrowserPromise = null; });
+    }
+    return framesBrowserPromise;
+  }
   if (!browserPromise) {
-    browserPromise = import("playwright")
+    browserPromise = launchBrowser([], () => { browserPromise = null; });
+  }
+  return browserPromise;
+}
+
+/** The arguments a pool browser is launched with. Exported for the test. */
+export function launchArgsFor(extraArgs = [], egressProxy = "") {
+  const launchArgs = ["--no-sandbox", "--disable-dev-shm-usage", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp", ...extraArgs];
+  if (egressProxy) {
+    launchArgs.push(`--proxy-server=${egressProxy}`);
+    // Chromium implicitly bypasses the proxy for loopback + link-local
+    // literals (incl. the 169.254.169.254 metadata IP). "<-loopback>"
+    // removes that implicit bypass so those ALSO traverse the validating
+    // proxy — making the proxy the single egress chokepoint rather than
+    // relying on the app-layer route guard for literal-IP metadata reach.
+    launchArgs.push("--proxy-bypass-list=<-loopback>");
+  }
+  return launchArgs;
+}
+
+function launchBrowser(extraArgs, onGone) {
+  return import("playwright")
       .then(async ({ chromium }) => {
         // F04: when the worker starts a validating egress proxy (RENDER_EGRESS_
         // PROXY_URL), route ALL Chromium traffic through it so DNS resolution +
@@ -142,45 +177,31 @@ async function getBrowser() {
         // (in-process) => no proxy; the render.js route guard still applies.
         // WebRTC may not send UDP outside the proxy: neither the route guard nor
         // the egress proxy sees STUN/TURN traffic.
-        const launchArgs = ["--no-sandbox", "--disable-dev-shm-usage", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"];
         // Without one (the in-process self-host path), start the same proxy here:
         // context.route does not see redirect hops or a popup's first request,
         // so the proxy is what checks every connection Chromium makes.
         let egressProxy = (process.env.RENDER_EGRESS_PROXY_URL || "").trim();
         if (!egressProxy) egressProxy = (await startInProcessProxy()).url;
-        if (egressProxy) {
-          launchArgs.push(`--proxy-server=${egressProxy}`);
-          // Chromium implicitly bypasses the proxy for loopback + link-local
-          // literals (incl. the 169.254.169.254 metadata IP). "<-loopback>"
-          // removes that implicit bypass so those ALSO traverse the validating
-          // proxy — making the proxy the single egress chokepoint rather than
-          // relying on the app-layer route guard for literal-IP metadata reach.
-          launchArgs.push('--proxy-bypass-list=<-loopback>');
-        }
         // The browser gets an allowlisted environment, never the server's secrets.
-        const browser = await chromium.launch({ args: launchArgs, env: childEnv() });
+        const browser = await chromium.launch({ args: launchArgsFor(extraArgs, egressProxy), env: childEnv() });
         // Self-heal: if Chromium dies (OOM, crash), the next call relaunches
         // instead of serving errors until the process restarts.
-        browser.on("disconnected", () => {
-          browserPromise = null;
-        });
+        browser.on("disconnected", onGone);
         return browser;
       })
       .catch((e) => {
-        browserPromise = null;
+        onGone();
         const err = new Error(`Browser unavailable: ${e.message}`);
         err.statusCode = 503;
         throw err;
       });
-  }
-  return browserPromise;
 }
 
 // Run `body(context)` in one pool slot with a fresh browser context, under the
 // exec deadline. Shared by every pool user (withPage for public URLs, and the
 // sandboxed html-frames renderer), so admission, the deadline and the R-09
 // force-close-before-release live in one place.
-async function inSlot(contextOptions, body, { signal } = {}) {
+async function inSlot(contextOptions, body, { signal, browserKind = "pages" } = {}) {
   // Bounded admission: throws 503 (full/timeout) or 499 (disconnected) instead
   // of joining an unbounded queue or waiting forever.
   await acquireSlot(signal);
@@ -189,7 +210,7 @@ async function inSlot(contextOptions, body, { signal } = {}) {
   let timedOut = false;
   try {
     const run = (async () => {
-      const browser = await getBrowser();
+      const browser = await getBrowser(browserKind);
       context = await browser.newContext(contextOptions);
       try {
         return await body(context);
@@ -301,6 +322,7 @@ async function withPage(rawUrl, fn, { signal, contextOptions = null, beforeGoto 
       cdp.on("Network.webSocketFrameSent", (e) => budget.account(`ws:${e.requestId}`, e.response?.payloadData?.length || 0));
     } catch { cdp = null; /* CDP unavailable (non-Chromium engine) — route guard + exec deadline still bound the render */ }
     if (beforeGoto) await beforeGoto({ page, context, cdp });
+    const nav = watchMainNavigation(page);
     let networkIdle = true;
     try {
       await page.goto(url.href, { waitUntil: "networkidle", timeout: NAV_TIMEOUT_MS });
@@ -308,11 +330,61 @@ async function withPage(rawUrl, fn, { signal, contextOptions = null, beforeGoto 
       networkIdle = false;
       // networkidle never settles on some sites; fall back to whatever loaded
       if (page.url() === "about:blank") {
-        await page.goto(url.href, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
+        try {
+          await page.goto(url.href, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
+        } catch (e) {
+          await nav.assertAllowed();
+          throw e;
+        }
       }
     }
-    return await fn(page, { networkIdle });
+    await nav.assertAllowed();
+    const out = await fn(page, { networkIdle });
+    await nav.assertAllowed();
+    return out;
   }, { signal });
+}
+
+// context.route does not see redirect hops, so a public page that redirects
+// the browser to a private or unresolvable host reaches the egress proxy, which
+// refuses it; Chromium would then show the refusal as the page. Every hop of
+// the page's main-frame navigation (redirects, and later navigations the page
+// starts) is recorded and checked with the same guard; one that is not public,
+// or a refusal the proxy marked, fails the call with a 400 (never charged)
+// that reads the same for every reason.
+export const NAVIGATION_REFUSED = `the page's navigation reached a host the browser may not load: ${UNRESOLVED_OR_PRIVATE}`;
+const MAX_NAV_HOSTS = 32;
+function watchMainNavigation(page) {
+  const hosts = new Set();
+  const checked = new Set();
+  let marked = false;
+  const isMain = (r) => { try { return r.isNavigationRequest() && r.frame() === page.mainFrame(); } catch { return false; } };
+  // A page without events (the pool tests' stand-in browser) has no hops to watch.
+  if (typeof page.on !== "function") return { assertAllowed: async () => {} };
+  page.on("request", (r) => {
+    if (!isMain(r)) return;
+    let u;
+    try { u = new URL(r.url()); } catch { return; }
+    if (u.protocol !== "http:" && u.protocol !== "https:") return;
+    // Past the cap a hop would go unchecked: refuse instead.
+    if (hosts.size < MAX_NAV_HOSTS || hosts.has(u.hostname)) hosts.add(u.hostname); else marked = true;
+  });
+  page.on("response", (r) => {
+    try { if (isMain(r.request()) && r.headers()["x-egress-refused"]) marked = true; } catch { /* page closed */ }
+  });
+  return {
+    async assertAllowed() {
+      let refused = marked;
+      for (const h of hosts) {
+        if (refused) break;
+        if (checked.has(h)) continue;
+        let pub = false;
+        try { pub = await guard.hostIsPublic(h); } catch { pub = false; }
+        if (pub) checked.add(h); else refused = true;
+      }
+      if (refused) throw Object.assign(new Error(NAVIGATION_REFUSED), { statusCode: 400 });
+    },
+  };
 }
 
 /**
@@ -675,7 +747,7 @@ export const HTML_FRAMES_LIMITS = Object.freeze({
 // past it (navigations, popups) except the one fulfilled document.
 export const HTML_FRAMES_CSP = [
   "default-src 'none'",
-  "script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval'",
+  "script-src 'unsafe-inline' 'unsafe-eval'",
   "style-src 'unsafe-inline'",
   "img-src data: blob:",
   "font-src data:",
@@ -708,6 +780,71 @@ function framesSandboxInit() {
 
 function framesError(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
+}
+
+// A document that fails (script error, no renderAt, over a budget or a cap)
+// answers a 4xx, which is never charged. Each payer gets HTML_FRAMES_FAIL_MAX
+// such runs per HTML_FRAMES_FAIL_WINDOW_MS; past it, html-frames answers 429
+// with the wait until the oldest failure leaves the window. Per process, so
+// the budget is divided by the replica count (src/rate-limit.js).
+const FRAMES_FAILED_STATUSES = new Set([400, 413, 422, 504]);
+export const HTML_FRAMES_FAIL_MAX = perReplica(Number(process.env.HTML_FRAMES_FAIL_MAX) || 5);
+export const HTML_FRAMES_FAIL_WINDOW_MS = Number(process.env.HTML_FRAMES_FAIL_WINDOW_MS) || 10 * 60 * 1000;
+
+/** A per-key window of failed runs. Exported for the test. */
+export function createFramesFailureWindow({ max = HTML_FRAMES_FAIL_MAX, windowMs = HTML_FRAMES_FAIL_WINDOW_MS, maxKeys = 20_000, now = Date.now } = {}) {
+  const byKey = new Map();
+  const live = (key, t) => {
+    const hits = byKey.get(key);
+    if (!hits) return null;
+    while (hits.length && hits[0] <= t - windowMs) hits.shift();
+    if (!hits.length) { byKey.delete(key); return null; }
+    return hits;
+  };
+  return {
+    max, windowMs,
+    /** Seconds until `key` may run again; 0 when it may run now. */
+    waitSeconds(key) {
+      if (!key) return 0;
+      const t = now();
+      const hits = live(key, t);
+      if (!hits || hits.length < max) return 0;
+      return Math.max(1, Math.ceil((hits[0] + windowMs - t) / 1000));
+    },
+    noteFailure(key) {
+      if (!key) return;
+      const t = now();
+      let hits = live(key, t);
+      if (!hits) {
+        if (byKey.size >= maxKeys) byKey.delete(byKey.keys().next().value);
+        byKey.set(key, (hits = []));
+      }
+      hits.push(t);
+    },
+    size: () => byKey.size,
+  };
+}
+export const htmlFramesFailures = createFramesFailureWindow();
+
+/** Wrap the html-frames handler (in-process or worker) with the per-payer
+ *  bound on failed runs. `keyOf(ctx)` names the payer (signed payer, else
+ *  the client address); a call with no key is not bounded here. */
+export function withHtmlFramesFailureBound(handler, keyOf, failures = htmlFramesFailures) {
+  return async (input, ctx) => {
+    let key = null;
+    try { key = keyOf(ctx); } catch { key = null; }
+    key = key ? limiterKey(String(key)) : null;
+    const wait = failures.waitSeconds(key);
+    if (wait > 0) {
+      throw Object.assign(new Error(`${failures.max} html-frames documents from this payer failed in the last ${Math.round(failures.windowMs / 60_000)} minutes; retry in ${wait} s`), { statusCode: 429, retryAfter: wait });
+    }
+    try {
+      return await handler(input, ctx);
+    } catch (e) {
+      if (FRAMES_FAILED_STATUSES.has(Number(e?.statusCode))) failures.noteFailure(key);
+      throw e;
+    }
+  };
 }
 
 // Lay out the contact sheet: thumbnails in a grid, each with its time label.
@@ -843,7 +980,7 @@ export async function renderHtmlFrames(html, times, { width, height, signal } = 
       totalBytes,
       network: { blockedRequests: blockedRequests + violations, policy: "all network access refused; only inline script and style, and data: or blob: URLs the document builds itself" },
     };
-  }, { signal });
+  }, { signal, browserKind: "frames" });
 }
 
 /**
@@ -873,13 +1010,13 @@ export const __test = {
   acquireSlot,
   releaseSlot,
   state: () => ({ active, queued: queue.length }),
-  reset: () => { active = 0; queue.length = 0; browserPromise = null; },
+  reset: () => { active = 0; queue.length = 0; browserPromise = null; framesBrowserPromise = null; },
   setQueueDeadline: (ms) => { QUEUE_DEADLINE_MS = ms; },
   setExecDeadline: (ms) => { EXEC_DEADLINE_MS = ms; },
   setCleanupDeadline: (ms) => { CLEANUP_DEADLINE_MS = ms; },
   // Inject a fake browser so withPage's context lifecycle (R-09 cancellation)
   // can be exercised without launching Chromium.
-  injectBrowser: (fake) => { browserPromise = Promise.resolve(fake); },
+  injectBrowser: (fake) => { browserPromise = Promise.resolve(fake); framesBrowserPromise = browserPromise; },
   // Replace the network guard for one test (null restores the public guard).
   setNetworkGuard: (g) => { guard = g ? Object.freeze({ ...PUBLIC_GUARD, ...g }) : PUBLIC_GUARD; },
   withPage,

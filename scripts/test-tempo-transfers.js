@@ -1,5 +1,6 @@
 // Tempo transfer feed (src/tempo-transfers.js) + its use as the MPP
 // leaderboard's primary source (src/mpp-leaderboard.js). Offline: stub fetch.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { emptyFeedState, foldTransfers, syncTempoTransfers, feedStats, feedHistoryDays, pruneFeedState, tempoFeedEnabled } from "../src/tempo-transfers.js";
 import { computeMppLeaderboard, __testReset } from "../src/mpp-leaderboard.js";
 import { TEMPO_USDC } from "../src/tempo-buyer.js";

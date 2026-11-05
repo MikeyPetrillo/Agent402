@@ -3,6 +3,7 @@
 // at timeoutMs with a 504, and a body that arrives in time is still served.
 // fetch is pointed at a local trickle server; the URL handed to safeFetch is a
 // public literal that is never contacted.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import http from "node:http";
 import { safeFetch } from "../src/tools/fetch-guard.js";
 

@@ -1,6 +1,7 @@
 // The public SVG badges are embedded in other projects' READMEs, so their text
 // has to read on its own ground. Every text fill in each badge is checked
 // against the background it sits on: WCAG contrast at least 4.5:1.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { badgeSvg } from "../src/badges.js";
 
 let failed = 0;

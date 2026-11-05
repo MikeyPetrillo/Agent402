@@ -25,6 +25,7 @@
 // adjacent to a specific route, because that is the pattern that misleads a
 // buyer. Prose ranges are left to humans.
 const TARGET = (process.env.TARGET_URL || "http://127.0.0.1:3000").replace(/\/+$/, "");
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";

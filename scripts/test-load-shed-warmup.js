@@ -4,6 +4,7 @@
 // the warm-up a saturated loop with a backlog (a flood: a quarter of the
 // in-flight ceiling, 100 by default) still sheds. The module's start time is bracketed by
 // reading the clock on both sides of its import.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 delete process.env.SHED_LAG_WARMUP_MS;
 delete process.env.LOAD_SHED;
 delete process.env.SHED_LAG_MS;

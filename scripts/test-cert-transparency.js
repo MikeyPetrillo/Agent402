@@ -6,6 +6,7 @@
 // is always fast and never depends on one flaky upstream. This pins that by
 // stubbing globalThis.fetch (the handler passes ssrfDispatcher, but the call is
 // the global fetch) — no network, deterministic.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { NETWORK_TOOLS2 } from "../src/tools/network-kit2.js";
 
 const tool = NETWORK_TOOLS2.find((t) => t.slug === "cert-transparency");

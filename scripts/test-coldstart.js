@@ -17,6 +17,7 @@
 // asserts that the WRONG field produces an error that says which field to use.
 // A dead end that explains itself is the difference between a lost agent and a
 // retry that works.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createHash } from "node:crypto";
 import { getFreePort } from "./lib/free-port.js";
 import { spawn } from "node:child_process";

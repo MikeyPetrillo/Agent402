@@ -7,6 +7,7 @@
 // ranks. This pins that an internal settled call lands in viaUSDCInternal /
 // viaMPPWireInternal only, and that an EXTERNAL settled call still books as
 // before. Runs against the module's /tmp ephemeral DB (no /data here).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.STATS_ALLOW_EPHEMERAL = "true";
 const { recordServedCall, getStats } = await import("../src/stats.js");
 let pass = 0, fail = 0;

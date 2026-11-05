@@ -52,6 +52,7 @@ let deadlineMs = envInt("ROUTER_QUERY_DEADLINE_MS", 10_000) || 10_000;
 const QUEUE_MAX = envInt("ROUTER_QUEUE_MAX", 256) || 256;
 const SYNC_BATCH_ENTRIES = 200; // cache entries per resync message
 const SYNC_BATCH_ROWS = 1000; // Bazaar map rows per resync message
+const FLUSH_BATCH_TOOLS = 20_000; // tools per change message (a seller's tools are cloned whole)
 const YOUNG_DEATH_MS = 30_000; // a worker that dies this soon after loading is respawned with backoff
 const BACKOFF_MAX_MS = 60_000;
 
@@ -68,7 +69,7 @@ let scratchDir = null;
 let respawnBackoffMs = 0;
 let respawnTimer = null;
 const loadWaiters = [];
-const stats = { served: { worker: 0, inThread: 0 }, fallbacks: 0, queueFull: 0, deadlines: 0, crashes: 0, restarts: 0, cloneMs: 0, cloneFailures: 0, resyncs: 0, lastResyncMs: 0, busyMs: 0 };
+const stats = { served: { worker: 0, inThread: 0 }, fallbacks: 0, queueFull: 0, deadlines: 0, crashes: 0, restarts: 0, cloneMs: 0, cloneFailures: 0, largestStoreMessage: { entries: 0, tools: 0 }, resyncs: 0, lastResyncMs: 0, busyMs: 0 };
 
 const yieldToLoop = () => new Promise((r) => setImmediate(r));
 
@@ -147,27 +148,47 @@ function scheduleFlush(w) {
   w.flushScheduled = true;
   setImmediate(() => { w.flushScheduled = false; if (w.state === "loaded") flushPending(w); });
 }
-/** Ship every touched key's current value to one worker, now. */
+/** Ship touched keys' current values to one worker: at most
+ *  SYNC_BATCH_ENTRIES keys and FLUSH_BATCH_TOOLS tools per message, so a
+ *  warm start that touches every seller after the worker loaded is cloned
+ *  across turns, never in one hold; what is left stays pending and the next
+ *  turn sends it. */
 function flushPending(w) {
   const stores = _routerStoresForReplica();
+  let more = false;
   for (const kind of ["cache", "bazaarTools", "bazaarQuality"]) {
     const p = w.pending[kind];
     if (!p.clear && !p.keys.size) continue;
     const store = stores[kind];
     const set = [], del = [];
+    let tools = 0;
     for (const k of p.keys) {
+      if (set.length + del.length >= (kind === "cache" ? SYNC_BATCH_ENTRIES : SYNC_BATCH_ROWS) || tools >= FLUSH_BATCH_TOOLS) { more = true; break; }
+      p.keys.delete(k);
       const v = store.get(k);
       if (v === undefined) del.push(k);
-      else set.push([k, kind === "cache" ? _routerReplicaEntryOf(v) : kind === "bazaarQuality" ? _routerReplicaQualityOf(v) : v]);
+      else {
+        if (kind === "cache") tools += Array.isArray(v.tools) ? v.tools.length : 0;
+        set.push([k, kind === "cache" ? _routerReplicaEntryOf(v) : kind === "bazaarQuality" ? _routerReplicaQualityOf(v) : v]);
+      }
     }
     const msg = { t: kind, clear: p.clear, del, set };
-    p.clear = false; p.keys.clear();
+    p.clear = false;
     postStore(w, msg);
+    if (more) break;
   }
+  if (more) scheduleFlush(w);
 }
 /** postMessage with the clone timed, and an entry that cannot be cloned
  *  (something non-plain in a crawled document) re-sent through JSON. */
 function postStore(w, msg) {
+  if (msg.t === "cache" && Array.isArray(msg.set)) {
+    let tools = 0;
+    for (const [, v] of msg.set) tools += v && Array.isArray(v.tools) ? v.tools.length : 0;
+    const big = stats.largestStoreMessage;
+    if (msg.set.length > big.entries) big.entries = msg.set.length;
+    if (tools > big.tools) big.tools = tools;
+  }
   const t0 = performance.now();
   try { w.worker.postMessage(msg); }
   catch (e) {
@@ -209,14 +230,19 @@ async function resync(w) {
   const live = () => w.gen === gen && w.state === "syncing";
   // Origins listed once; each batch reads the CURRENT entry, so a crawl that
   // lands mid-sync is carried whether it came before or after its batch.
+  // A batch ends at SYNC_BATCH_ENTRIES sellers or FLUSH_BATCH_TOOLS tools.
   const origins = [...stores.cache.keys()];
-  for (let i = 0; i < origins.length; i += SYNC_BATCH_ENTRIES) {
+  for (let i = 0; i < origins.length;) {
     const set = [];
-    for (const o of origins.slice(i, i + SYNC_BATCH_ENTRIES)) {
+    let tools = 0;
+    while (i < origins.length && set.length < SYNC_BATCH_ENTRIES && tools < FLUSH_BATCH_TOOLS) {
+      const o = origins[i++];
       const v = stores.cache.get(o);
-      if (v !== undefined) set.push([o, _routerReplicaEntryOf(v)]);
+      if (v === undefined) continue;
+      tools += Array.isArray(v.tools) ? v.tools.length : 0;
+      set.push([o, _routerReplicaEntryOf(v)]);
     }
-    postStore(w, { t: "cache", set });
+    if (set.length) postStore(w, { t: "cache", set });
     await yieldToLoop();
     if (!live()) return;
   }
@@ -472,6 +498,7 @@ export function routerPoolStatus() {
     loaded: workers.some((w) => w.state === "loaded"),
     ...stats,
     cloneMs: Math.round(stats.cloneMs),
+    largestStoreMessage: { ...stats.largestStoreMessage },
     busyMs: Math.round(stats.busyMs),
   };
 }

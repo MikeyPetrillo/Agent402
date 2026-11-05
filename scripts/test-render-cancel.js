@@ -10,6 +10,7 @@
 // never exceed MAX_CONCURRENT and drain back to zero. No Chromium launch.
 //
 //   node scripts/test-render-cancel.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { __test } from "../src/tools/render.js";
 
 const {

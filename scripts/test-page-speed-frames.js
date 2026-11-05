@@ -31,6 +31,7 @@
 // same contract; only that body is quoted at twice the price.
 //
 //   node scripts/test-page-speed-frames.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import http from "node:http";
 import { gzipSync } from "node:zlib";
 import { readFileSync } from "node:fs";

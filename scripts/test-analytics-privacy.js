@@ -5,6 +5,7 @@
 //   - the footer's "analytics choices" button is rendered hidden, shown by the
 //     GA loader, and reopens the strip for any visitor (not only Europe);
 //   - /privacy lists what the counter receives and has a children statement.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
 

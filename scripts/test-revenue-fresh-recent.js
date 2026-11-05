@@ -2,6 +2,7 @@
 // recent-transfer rows were read inside the hourly revenue snapshot, which is
 // served stale while it rebuilds in the background. withFreshRecent re-reads
 // those rows from the ledger on every request; only the balances stay cached.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { withFreshRecent, EVM } from "../src/revenue-live.js";
 

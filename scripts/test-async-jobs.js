@@ -17,8 +17,10 @@
 //     /api/pricing row says so;
 //   - a job reports queued, then running with a stage, an estimated progress
 //     and an ETA, with Retry-After on every state that is not final.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
+import { connect } from "node:net";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -197,6 +199,32 @@ try {
   const g2 = await job(j2.statusUrl);
   ok(g2.status === "failed" && g2.error?.httpStatus >= 500 && /nothing was charged/.test(g2.message || ""), `a failed run ends the job failed and says not charged (error HTTP ${g2.error?.httpStatus})`);
   ok(fac.settle === s2, `a failed run settles nothing (settles ${fac.settle - s2})`);
+
+  // 2b. An absolute-form request target ("POST http://host/route") matches the
+  // route by its path but cannot be replayed to this host: it is refused 400
+  // before a job is created, so it never holds a job slot, and nothing runs.
+  {
+    const raw = (target) => new Promise((resolve, reject) => {
+      const sock = connect(PORT, "127.0.0.1");
+      let out = "";
+      sock.setTimeout(10_000, () => { sock.destroy(); reject(new Error("raw request timed out")); });
+      sock.on("data", (c) => { out += c; if (/\r\n\r\n/.test(out) && /content-length: (\d+)/i.test(out)) { const len = Number(out.match(/content-length: (\d+)/i)[1]); if (Buffer.byteLength(out.split("\r\n\r\n").slice(1).join("\r\n\r\n")) >= len) sock.end(); } });
+      sock.on("end", () => resolve(out)); sock.on("error", reject);
+      sock.write(`POST ${target} HTTP/1.1\r\nHost: 127.0.0.1:${PORT}\r\nContent-Type: application/json\r\nPrefer: respond-async\r\nX-Forwarded-For: 10.9.0.40\r\nPayment-Signature: ${credential(wallet(40))}\r\nContent-Length: ${Buffer.byteLength(BODY)}\r\nConnection: close\r\n\r\n${BODY}`);
+    });
+    const calls0 = up.calls, verify0 = fac.verify, settle0 = fac.settle;
+    const ans = await raw(`http://evil.example${PATH}`);
+    const status = Number((ans.match(/^HTTP\/1\.1 (\d{3})/) || [])[1]);
+    ok(status === 400 && /request_target_not_origin_form/.test(ans), `an absolute-form target is refused 400 before any job is made (got ${status})`);
+    await sleep(300);
+    ok(up.calls === calls0 && fac.verify === verify0 && fac.settle === settle0, "nothing ran, verified or settled for it");
+    // Control: the same raw request with an origin-form target becomes a job.
+    const origin = await raw(PATH);
+    const okStatus = Number((origin.match(/^HTTP\/1\.1 (\d{3})/) || [])[1]);
+    const jobId = (origin.match(/"jobId":"([0-9a-f]{48})"/) || [])[1];
+    ok(okStatus === 202 && !!jobId, `control: the same raw request with an origin-form target answers 202 with a job (got ${okStatus})`);
+    if (jobId) await waitFor(async () => ["succeeded", "failed"].includes((await job(`/api/jobs/${jobId}`)).state));
+  }
 
   // 3. Refused payment: the job carries the 402, nothing settles.
   const s3 = fac.settle, calls3 = up.calls;

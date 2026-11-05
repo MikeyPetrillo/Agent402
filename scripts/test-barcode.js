@@ -1,6 +1,7 @@
 // Round-trip tests for barcode-decode: generate a QR with the qrcode dep, encode
 // it as PNG and JPEG, and confirm the decoder reads it back. Also checks the
 // not-found path and input validation. Pure functions, no server needed.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import QR from "qrcode";
 import jpeg from "jpeg-js";
 import { PNG } from "pngjs";

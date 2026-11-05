@@ -6,6 +6,7 @@
 // Note: EDGAR enforces a User-Agent header — set EDGAR_USER_AGENT to your own
 // "Name email@domain" string for friendlier rate treatment. The kit ships a
 // generic Agent402 fallback that works out-of-the-box.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { EDGAR_TOOLS, tickerSuggestions } from "../src/tools/edgar-kit.js";
 
 const h = (slug) => EDGAR_TOOLS.find((t) => t.slug === slug).handler;

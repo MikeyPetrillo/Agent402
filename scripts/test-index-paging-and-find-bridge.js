@@ -14,6 +14,7 @@
 //    it could answer for a query spelling a seller's name and never for one
 //    describing a task - which is every real query. Reported by a seller whose
 //    route /api/route?include=external ranks for the same words.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { getFreePort } from "./lib/free-port.js";
 

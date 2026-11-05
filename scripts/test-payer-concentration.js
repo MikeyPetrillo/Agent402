@@ -14,6 +14,7 @@
 //     MINORITY of calls and a supermajority of dollars
 //   - the reference wallet is ONE wallet, and the row says when dollars are
 //     concentrated somewhere its call share cannot see
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { payerConcentration, payerBreadth, finalizeLeaderboard, initWalletAccumulator, foldTransfers, CONCENTRATION, PAYER_BREADTH } from "../src/leaderboard.js";
 import { readFileSync } from "node:fs";
 

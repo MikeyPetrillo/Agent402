@@ -10,6 +10,7 @@
 //
 // What this stores is therefore the one part of the dataset that cost money to
 // make, and the rules below are about not overclaiming with it.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";
 

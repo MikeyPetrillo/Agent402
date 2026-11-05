@@ -11,6 +11,7 @@
 // none of this appears.
 //
 //   node scripts/test-revenue-gateway.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

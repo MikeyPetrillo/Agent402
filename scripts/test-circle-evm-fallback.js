@@ -19,6 +19,7 @@
 //     exact for it.
 // Part 1 drives the real hook and the real client against fetch stubs; part 2
 // boots a paid server against stub facilitators to prove the caller path.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { randomBytes } from "node:crypto";
 import { inspect } from "node:util";

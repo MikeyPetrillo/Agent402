@@ -21,6 +21,7 @@ process.env.DECIDE_INTERNAL_TOKEN = "t".repeat(32);
 // environment would load its own (empty) rows over it.
 delete process.env.STATE_DATABASE_URL;
 delete process.env.REDIS_URL;
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

@@ -16,6 +16,7 @@
 //     never touches a terminal record.
 //
 //   node scripts/test-job-progress.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

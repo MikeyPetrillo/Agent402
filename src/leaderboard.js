@@ -275,13 +275,39 @@ export function rankableChains() {
  * wallet's endpoints), origins (set of host origins), endpoints (count).
  */
 export function extractWalletsFromBazaar(payload, chain = undefined) {
+  const gen = extractWalletsSteps(payload, chain);
+  let r = gen.next();
+  while (!r.done) r = gen.next();
+  return r.value;
+}
+/** extractWalletsFromBazaar across event-loop turns (the same rows): the
+ *  registry walk reads tens of thousands of listings, which held the loop in
+ *  one turn beside the crawled-wallet scans. At most EXTRACT_SLICE_MS a turn. */
+export async function extractWalletsFromBazaarAsync(payload, chain = undefined) {
+  const gen = extractWalletsSteps(payload, chain);
+  let until = performance.now() + EXTRACT_SLICE_MS;
+  let r = gen.next();
+  while (!r.done) {
+    if (performance.now() >= until) { await new Promise((res) => setImmediate(res)); until = performance.now() + EXTRACT_SLICE_MS; }
+    r = gen.next();
+  }
+  return r.value;
+}
+const EXTRACT_SLICE_MS = 8;
+const EXTRACT_STEP = 500; // listings between steps
+let extractSteps = 0; // steps taken, for the step pin
+/** Test hook: steps the listing walks have taken so far. */
+export function _extractStepsForTest() { return extractSteps; }
+function* extractWalletsSteps(payload, chain) {
   const list =
     payload?.resources ||
     payload?.items ||
     payload?.data ||
     (Array.isArray(payload) ? payload : []);
   const byWallet = new Map();
+  let walked = 0;
   for (const item of list) {
+    if (++walked % EXTRACT_STEP === 0) { extractSteps++; yield; }
     const pay = baseUsdcPayToFromItem(item, chain);
     if (!pay) continue;
     const origin = originOf(item?.resource || item?.url || item?.endpoint || item?.homepage);
@@ -1100,13 +1126,17 @@ export async function runLeaderboard(overrides = {}) {
   // 1. Bazaar discovery (paginated) → per-item payTo for Base-mainnet USDC.
   onProgress(`[1/3] Fetching Bazaar discovery (${opts.bazaarUrl})…`);
   const { items, total } = await fetchAllBazaarItems(opts.bazaarUrl, opts);
-  let sellers = extractWalletsFromBazaar({ items }, chain);
+  let sellers = await extractWalletsFromBazaarAsync({ items }, chain);
   onProgress(`      ${items.length}/${total ?? "?"} listings → ${sellers.length} unique ${chain.label}-mainnet wallets`);
   // Our own crawl's payTo wallets, folded in so a self-registered seller can
   // accumulate settlement evidence without joining someone else's registry.
   if (typeof opts.crawledWallets === "function") {
     try {
-      const { merged, added } = mergeCrawledWallets(sellers, opts.crawledWallets(chain), chain, typeof opts.crawledPrices === "function" ? opts.crawledPrices(chain) : null);
+      // Awaited: the server passes the index's sliced scans (each walks every
+      // tool row the index holds); a plain Map from a test reads the same.
+      const crawled = await opts.crawledWallets(chain);
+      const crawledPrices = typeof opts.crawledPrices === "function" ? await opts.crawledPrices(chain) : null;
+      const { merged, added } = mergeCrawledWallets(sellers, crawled, chain, crawledPrices);
       sellers = merged;
       if (added) onProgress(`      +${added} wallet(s) from our own crawl (not in the Bazaar) → ${sellers.length} total`);
     } catch (e) {

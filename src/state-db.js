@@ -118,6 +118,21 @@ export function lastStateDbError() { return lastError; }
 // client-side read limit a little above it (a black-holed socket never
 // answers the server's cancel), a limit on a transaction left idle, TCP
 // keepalive, and a connect limit that also bounds waiting for a free client.
+/** The statement limit for one statement carrying `bytes` of row data: the
+ *  default limit plus STATE_DB_MS_PER_MB (500) for each megabyte past the
+ *  first, at most STATE_DB_LARGE_ROW_MAX_MS (120 s). A row of tens of
+ *  megabytes outlasts the default limit on a busy database. */
+export function largeRowTimeoutMs(bytes) {
+  const base = stateDbTimeouts().statementMs;
+  const perMb = envMs("STATE_DB_MS_PER_MB", 500);
+  const max = Math.max(base, envMs("STATE_DB_LARGE_ROW_MAX_MS", 120_000));
+  const mb = Number.isFinite(bytes) ? Math.max(0, Math.ceil(bytes / 1_048_576) - 1) : Infinity;
+  return Math.min(max, base + mb * perMb);
+}
+/** A statement or read limit ran out (the server's statement_timeout, or the client's read limit). */
+export function isStatementTimeout(err) {
+  return /statement timeout|Query read timeout/i.test(String(err?.message || err || ""));
+}
 export function stateDbTimeouts() {
   const statementMs = envMs("STATE_DB_STATEMENT_TIMEOUT_MS", 10_000);
   return {
@@ -263,6 +278,17 @@ export function cleanPgText(s, { json = true } = {}) {
     if (c === "{" || c === "[" || c === "\"") out = cleanJsonEscapes(out);
   }
   return out;
+}
+/** Whether cleanPgText could change this JSON text (false: it returns the text
+ *  as given). Conservative: a candidate escape that cleaning would keep still
+ *  reads true. A caller that checks a long text in pieces cuts it never
+ *  between the two halves of a surrogate pair, and overlaps each piece with
+ *  the five characters before it (an escape is six). */
+export function pgJsonTextMayChange(s) {
+  if (typeof s !== "string") return true;
+  if (s.indexOf("\u0000") !== -1) return true;
+  if (typeof s.isWellFormed === "function" ? !s.isWellFormed() : LONE_SURROGATE.test(s)) return true;
+  return s.indexOf("\\u") !== -1 && JSON_BAD_ESC.test(s);
 }
 /** One query parameter cleaned; arrays element-wise, plain objects as the JSON text pg would send. */
 export function cleanPgParam(v, { json = true } = {}) {
@@ -444,7 +470,10 @@ async function discardIdleClients(p) {
  * configured. `{ idempotent: true }` marks a write that is safe to send twice
  * (see the retry note above); a SELECT is retried without it.
  */
-export async function stateQuery(text, params = [], { idempotent = false } = {}) {
+export async function stateQuery(text, params = [], { idempotent = false, timeoutMs = 0 } = {}) {
+  // A longer limit for one statement (a very large row): its own transaction
+  // with SET LOCAL statement_timeout and a read limit to match.
+  if (timeoutMs > stateDbTimeouts().statementMs) return withStateTx((client) => client.query(text, params), { timeoutMs });
   const p = await stateDb();
   if (!p) throw new Error("state database not configured");
   const values = cleanParams(params, text);
@@ -535,10 +564,11 @@ export const records = {
     const r = await stateQuery(`DELETE FROM ${T("records")} WHERE collection = $1 AND id = $2`, [checkName(collection, "collection"), checkName(id, "id")]);
     return r.rowCount > 0;
   },
-  async list(collection, { limit = 1000, after = "" } = {}) {
+  async list(collection, { limit = 1000, after = "", timeoutMs = 0 } = {}) {
     const r = await stateQuery(
       `SELECT id, body FROM ${T("records")} WHERE collection = $1 AND id > $2 ORDER BY id LIMIT $3`,
       [checkName(collection, "collection"), String(after), Math.max(1, Math.min(100_000, Number(limit) || 1000))],
+      { timeoutMs },
     );
     return r.rows.map((x) => ({ id: x.id, body: x.body }));
   },

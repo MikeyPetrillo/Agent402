@@ -11,6 +11,7 @@
 // pass/fail; no rate, cost or ratio is printed.
 //
 //   UPSTREAM_COSTS_FILE=<private table> node scripts/test-tts-margins.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
 import { upstreamCosts } from "../src/upstream-costs.js";
 import { TTS_TOOLS, TTS_TIERS, TTS_QUOTE, TTS_BACKUP_MODELS, ttsQuoteUsd } from "../src/tools/tts-kit.js";

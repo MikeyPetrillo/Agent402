@@ -5,6 +5,7 @@
 // 2026-08-30 seven CDP verifies failed that way while CDP answered from outside
 // in 15-37 ms. We had instrumented BOOT only, so a stall hours into a container
 // was invisible. These pin that it actually catches one.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { startLoopLagMonitor, loopLagStatus, resetLoopLag } from "../src/loop-lag.js";
 

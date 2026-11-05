@@ -39,6 +39,7 @@ process.env.X402_INDEX_CRAWL = "off";
 (await import("../src/tools/sanctions-kit.js")).__seedPayoutListForTests();
 const { payTempo, tempoCredentialVerdict, tempoHeadNumber, TEMPO_USDC, TEMPO_CAIP2 } = await import("../src/tempo-buyer.js");
 const { sellerDeliveryMemoEntries, sellerDeliveryFailingRecently, __resetSellerDeliveryFailuresForTest } = await import("../src/x402-buyer.js");
+(await import("../src/x402-buyer.js")).__setBuyerAddressGuardForTest(false); // this suite's sellers are local stubs
 const guard = await import("../src/external-spend-guard.js");
 const { buildRouteExecuteTool, EXEC_TIERS } = await import("../src/tools/route-execute.js");
 const { Challenge, Credential } = await import("mppx");
@@ -190,7 +191,7 @@ const base = `http://127.0.0.1:${srv.address().port}`;
 const outbound = () => existsSync(process.env.OUTBOUND_LEDGER_FILE) ? readFileSync(process.env.OUTBOUND_LEDGER_FILE, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
 let rpcNow = chain();
 const proofWith = () => (cred, o) => tempoCredentialVerdict(cred, { ...o, rpcFn: rpcNow });
-const buy = (path, extra = {}) => payTempo(`${base}${path}`, { method: "POST", body: { url: "https://example.com" }, maxAtomic: 5000n, trusted: true, timeoutMs: 8000, createCredential: mint, proof: async () => ({ count: 4000, payers: 50 }), memoizeDelivery: true, refusalProof: proofWith(), refusalHead: () => tempoHeadNumber({ rpcFn: rpcNow }), refusalMaxWaitMs: 5000, ...extra }).then(() => null, (e) => e);
+const buy = (path, extra = {}) => payTempo(`${base}${path}`, { method: "POST", body: { url: "https://example.com" }, maxAtomic: 5000n, timeoutMs: 8000, createCredential: mint, proof: async () => ({ count: 4000, payers: 50 }), memoizeDelivery: true, refusalProof: proofWith(), refusalHead: () => tempoHeadNumber({ rpcFn: rpcNow }), refusalMaxWaitMs: 5000, ...extra }).then(() => null, (e) => e);
 const origin = base;
 
 {
@@ -293,7 +294,7 @@ const route = async (list) => {
   const tool = buildRouteExecuteTool({
     getCatalog: () => ({}), tier: EXEC_TIERS[0],
     resolveExternal: async () => list,
-    payExternal: (url, opts) => payTempo(url, { ...opts, trusted: true, memoizeDelivery: true, createCredential: mint, proof: async () => ({ count: 4000, payers: 50 }), refusalProof: proofWith(), refusalHead: () => tempoHeadNumber({ rpcFn: rpcNow }) }),
+    payExternal: (url, opts) => payTempo(url, { ...opts, memoizeDelivery: true, createCredential: mint, proof: async () => ({ count: 4000, payers: 50 }), refusalProof: proofWith(), refusalHead: () => tempoHeadNumber({ rpcFn: rpcNow }) }),
     externalEnabled: () => true, externalChains: () => ["tempo"],
   });
   const req = { mppTempoCredential: true, headers: {}, header: () => undefined, ip: `198.51.100.${++ipSeq}` };

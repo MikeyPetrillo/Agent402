@@ -1,6 +1,7 @@
 // Offline unit tests for the x402-trending momentum tool (src/tools/x402-kit.js
 // computeTrending) and its history persistence hooks (src/leaderboard.js
 // persistLeaderboardHistoryPoint / readLeaderboardHistory). No network, no boot.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

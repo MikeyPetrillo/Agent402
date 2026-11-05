@@ -1,6 +1,7 @@
 // Offline unit for ledgerDaily (the /api/revenue/daily series): day bucketing
 // from real timestamps AND cursor-anchored EVM block estimation, external vs
 // canary-sized internal split, funding-sized exclusion. Temp DB, no network.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";

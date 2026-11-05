@@ -16,6 +16,7 @@
 //
 // Requires the real (non-FREE_MODE) paywall path with a stub facilitator,
 // same pattern as test-head-paywall.js.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 

@@ -9,6 +9,7 @@
 //   - the wire is the one the docs specify (POST, x-api-key, `query`/`urls`),
 //     pinned because this repo has shipped two live wire drifts that stub
 //     tests could not see
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import {
   EXA_TOOLS, exaEnabled, estimateExaUsd, actualExaUsd,
   exaSpendStatus, _exaSpendReset, _exaSpendBook, LITE_SEARCH_PARAMS, liteSearchBody,

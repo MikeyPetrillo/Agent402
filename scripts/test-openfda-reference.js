@@ -13,6 +13,7 @@
 // (licensed content, excluded by openFDA's terms) and personal fields
 // (510(k) contacts, MDR reporters) never reach an answer even when the
 // upstream row carries them.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { GOV_TOOLS, labelSection, MDR_EXCERPT_CHARS } from "../src/tools/gov-kit.js";
 
 let pass = 0, fail = 0;

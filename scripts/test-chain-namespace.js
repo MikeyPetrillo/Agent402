@@ -13,6 +13,7 @@
 //      same handler, same price, same paywall. If a verb ever became its own
 //      resource we would be listing one capability twice on every index that
 //      reads our manifest, which is the registry inflation we decline to do.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";
 import { CHAIN_VERB_ROUTES, CHAIN_OWN_ROUTES, VERBS_NOT_FOLDED, chainVerbOf, chainRouteFor, chainNamespaceMap, chainNamespaceMiddleware, chainVerbAliasesByRoute } from "../src/chain-namespace.js";

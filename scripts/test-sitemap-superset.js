@@ -1,6 +1,7 @@
 // /sitemap.xml and the sub-sitemaps are built from separate hand lists, and
 // /docs and /transparency sat in sitemap-pages.xml but not in sitemap.xml
 // (truth audit 2026-10-02). Every URL a sub-sitemap lists must be in the main one.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { sitemapXml, sitemapPages, sitemapGuides, sitemapLearn, sitemapReports, sitemapSkills, sitemapTools, sitemapCategories } from "../src/seo.js";
 
 let pass = 0, fail = 0;

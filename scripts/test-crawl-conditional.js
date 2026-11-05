@@ -10,6 +10,7 @@
 // ours to prove, so this asserts OUR half against real Response objects: that
 // we send the validators we hold, that a 304 is read as success rather than as
 // an upstream error, and that nothing changes for callers who did not opt in.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { safeFetch } from "../src/tools/fetch-guard.js";
 
 let pass = 0, fail = 0;

@@ -14,6 +14,7 @@
 // The published contract is now derivable by the buyer from the response they
 // already hold. This asserts the four branches stay stated, stay mutually
 // exclusive, and that the copy never re-absolutises.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 const TARGET = (process.env.TARGET_URL || "http://127.0.0.1:3000").replace(/\/+$/, "");
 
 let pass = 0, fail = 0;

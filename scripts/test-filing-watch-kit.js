@@ -28,6 +28,7 @@
 //   - allowEmpty is honoured only for the scheduler's own pseudo-request
 //   - docToText / fetchDocText / selectDocuments primitives
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "test-key-not-real";
 
 const mod = await import("../src/tools/filing-watch-kit.js");

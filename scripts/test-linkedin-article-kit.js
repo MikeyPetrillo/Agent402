@@ -2,6 +2,7 @@
 // are stubbed (deps injection, same seam as ticker-pack); the image RESIZING is
 // real (image-ops in-process), because the sizes are the product. No network,
 // no keys, no money.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { Jimp } from "jimp";
 import { makeLinkedInHandler, normLinkedInInput, parseArticleJson, renderSizes, LINKEDIN_SIZES, LINKEDIN_LIMITS, LINKEDIN_TIERS, LINKEDIN_TOOLS } from "../src/tools/linkedin-article-kit.js";
 import { runImageOp, declaredDimensions } from "../src/tools/image-ops.js";

@@ -119,6 +119,14 @@ export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store,
     if (req.method !== "POST" || !wantsAsync(req)) return next();
     const def = asyncRouteOf(req);
     if (!def) return next();
+    // The replay is sent to this host at the request's own target, so only an
+    // origin-form target (a path, "/x?q") becomes a job. An absolute-form one
+    // ("POST http://host/x") matches a route by its path but cannot be
+    // replayed, so it is refused here rather than held as a job that fails.
+    const target = String(req.originalUrl || "");
+    if (!target.startsWith("/") || target.startsWith("//")) {
+      return res.status(400).json({ error: "request_target_not_origin_form", hint: "Send the request target as a path (POST /route), not as an absolute URL. Nothing was charged." });
+    }
     // The replay sends the parsed JSON body; any other body (a multipart
     // upload) is served synchronously rather than replayed without its bytes.
     const ct = String(req.headers["content-type"] || "");

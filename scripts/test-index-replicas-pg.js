@@ -96,6 +96,18 @@ try {
   const got = await B.pullIndexChanges({ pageSize: 7, maxPages: 20 });
   const missing = many.filter((o) => !served(B).has(o));
   ok(got >= many.length && missing.length === 0, `B pulls every row of the batch across page boundaries (${got} folded, ${missing.length} missing)`);
+  // ---- a raw row (an older container's, before seller fields were cleaned) ---
+  // B pulls it and the cache keeps a cleaned copy; B's next save holds that
+  // copy as stored and does not write the row back.
+  const Z = "https://seller-z.example";
+  await sdb.records.put(COLLECTION, Z, entry("/z", 30_000, { tools: [{ route: "/z", name: 404, tags: "z", price: "$0.001" }] }));
+  await B.pullIndexChanges();
+  ok(B._cacheForTests().get(Z)?.tools?.[0]?.name === "404", "B's cache holds the pulled raw row cleaned (a number name as its text)");
+  const stampOf = async () => (await sdb.stateQuery(`SELECT updated_at FROM ${sdb.stateDbSchema()}.records WHERE collection = $1 AND id = $2`, [COLLECTION, Z])).rows[0]?.updated_at?.toISOString();
+  const before = await stampOf();
+  await new Promise((r) => setTimeout(r, 20));
+  await B.persistIndexCacheAsync();
+  ok((await stampOf()) === before, `B's save after the pull does not rewrite the raw row (updated_at ${before})`);
   A.stopCrawler?.(); B.stopCrawler?.();
 } catch (e) {
   fail++; console.error("FAIL - threw:", e?.stack || e);

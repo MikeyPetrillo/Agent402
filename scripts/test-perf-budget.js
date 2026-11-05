@@ -25,6 +25,7 @@
 // turn, so a probe opened beside the flood's 50 connections waited one loaded
 // turn per connection ahead of it, while its handler took 2 ms and no single
 // turn was long enough to read as a stall.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import http from "node:http";

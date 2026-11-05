@@ -7,6 +7,7 @@
 // Offline: the scan, the store and the lease are injected; two module
 // instances stand in for two replicas.
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.log("FAIL -", m); } };
 

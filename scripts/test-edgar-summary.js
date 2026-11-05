@@ -5,6 +5,7 @@
 // is left out (never zero), a throttled read marks the page partial, offering
 // paperwork does not bury the filings a reader wants, and every sentence uses
 // only numbers that came from the input.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import {
   annualSeries, keyFinancials, filingActivity, dossierNarrative, insiderSummary, insiderNarrative, fundNarrative,
   fmtMoney, fiscalYearEndText, stateName, filingUrl, REVENUE_TAGS, possessive, formName, documentLabel,

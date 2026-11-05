@@ -13,6 +13,7 @@
 //      one search cleared the guard that exists to refuse thin reports - the
 //      same failure disarmed its own check, at full price, on a tier that had
 //      then done less work than the $0.60 one plans.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { RESEARCH_TIERS } from "../src/tools/research-deep-kit.js";
 

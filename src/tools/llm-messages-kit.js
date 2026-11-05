@@ -139,6 +139,77 @@ function probeContent(content, where, acc) {
   });
 }
 
+// What goes upstream is rebuilt from the fields each block type documents,
+// never the buyer's object: an unknown field, a file reference (a file source,
+// file_id) or a container reference would otherwise reach the upstream
+// unread. Runs after validation, so every kept field was checked.
+const str = (v) => typeof v === "string";
+const cacheOf = (b) => (b.cache_control && typeof b.cache_control === "object"
+  ? { cache_control: { type: "ephemeral", ...(b.cache_control.ttl !== undefined ? { ttl: b.cache_control.ttl } : {}) } }
+  : {});
+// A text block's citations, each rebuilt from the fields its location type
+// documents; the file_id a document location may carry is dropped, and a
+// citation of a type not listed here is dropped whole.
+const CITATION_FIELDS = {
+  char_location: { str: ["document_title"], int: ["document_index", "start_char_index", "end_char_index"] },
+  page_location: { str: ["document_title"], int: ["document_index", "start_page_number", "end_page_number"] },
+  content_block_location: { str: ["document_title"], int: ["document_index", "start_block_index", "end_block_index"] },
+  web_search_result_location: { str: ["encrypted_index", "title", "url"], int: [] },
+  search_result_location: { str: ["source", "title"], int: ["search_result_index", "start_block_index", "end_block_index"] },
+};
+function forwardCitations(list) {
+  if (!Array.isArray(list)) return null;
+  const out = [];
+  for (const c of list) {
+    const spec = c && CITATION_FIELDS[c.type];
+    if (!spec || !str(c.cited_text)) continue;
+    const kept = { type: c.type, cited_text: c.cited_text };
+    for (const k of spec.str) if (str(c[k]) || (k === "document_title" && c[k] === null)) kept[k] = c[k];
+    for (const k of spec.int) if (Number.isInteger(c[k])) kept[k] = c[k];
+    out.push(kept);
+  }
+  return out;
+}
+function forwardBlock(b) {
+  switch (b.type) {
+    case "text": {
+      const citations = forwardCitations(b.citations);
+      return { type: "text", text: b.text, ...(citations && citations.length ? { citations } : {}), ...cacheOf(b) };
+    }
+    case "image": {
+      const src = b.source;
+      const source = src.type === "base64"
+        ? { type: "base64", media_type: src.media_type, data: src.data }
+        : { type: "url", url: src.url };
+      return { type: "image", source, ...cacheOf(b) };
+    }
+    case "tool_use":
+      return { type: "tool_use", id: b.id, name: b.name, input: b.input && typeof b.input === "object" ? b.input : {}, ...cacheOf(b) };
+    case "tool_result":
+      return {
+        type: "tool_result", tool_use_id: b.tool_use_id,
+        ...(b.content !== undefined ? { content: forwardBlocks(b.content) } : {}),
+        ...(typeof b.is_error === "boolean" ? { is_error: b.is_error } : {}),
+        ...cacheOf(b),
+      };
+    case "thinking":
+      return { type: "thinking", thinking: str(b.thinking) ? b.thinking : "", ...(str(b.signature) ? { signature: b.signature } : {}) };
+    case "redacted_thinking":
+      return { type: "redacted_thinking", data: str(b.data) ? b.data : "" };
+    default:
+      return null;
+  }
+}
+const forwardBlocks = (c) => (str(c) ? c : c.map(forwardBlock));
+const forwardTool = (t) => ({
+  ...(t.type === "custom" ? { type: "custom" } : {}),
+  name: t.name,
+  ...(str(t.description) ? { description: t.description } : {}),
+  input_schema: t.input_schema,
+  ...(typeof t.strict === "boolean" ? { strict: t.strict } : {}),
+  ...cacheOf(t),
+});
+
 /** Validate an Anthropic Messages request for a tier. Returns
  *  { body, probe, imageCount, isRouted, chain } - `body` is the outbound
  *  Anthropic body (model resolved, caps applied), `probe` a token-estimate
@@ -217,8 +288,8 @@ export function validateMessagesRequest(input, tierSlug) {
   const requestedMaxTokens = maxTokens;
   if (maxTokens > tier.maxTokens) maxTokens = tier.maxTokens;
 
-  const body = { model: isRouted ? undefined : model, max_tokens: maxTokens, messages };
-  if (system !== undefined) body.system = input.system;
+  const body = { model: isRouted ? undefined : model, max_tokens: maxTokens, messages: messages.map((m) => ({ role: m.role, content: forwardBlocks(m.content) })) };
+  if (system !== undefined) body.system = forwardBlocks(input.system);
   // Sampling params on the Messages wire (live docs, read 2026-08-28): models
   // released after Claude Opus 4.6 REFUSE `top_k` at any value, `temperature`
   // other than 1, and `top_p` under 0.99 - a 400 from Anthropic, relayed to
@@ -273,7 +344,7 @@ export function validateMessagesRequest(input, tierSlug) {
       if (!t.input_schema || typeof t.input_schema !== "object") throw bad(`tools[${i}].input_schema is required`);
       checkBlockCacheControl(t.cache_control, `tools[${i}]`);
     }
-    body.tools = input.tools;
+    body.tools = input.tools.map(forwardTool);
   }
   if (input.thinking !== undefined) {
     const th = input.thinking;

@@ -25,6 +25,7 @@
 // not 127.0.0.1 (trust proxy is 1 hop).
 import { Challenge, Credential, Receipt } from "mppx";
 import { PROGRESS_HEADER } from "./job-progress.js";
+import { mcpLoopbackHeaders } from "./mcp-loopback.js";
 import { tempoSenderOf } from "./mpp-tempo.js";
 
 export const MCP_PAYMENT_REQUIRED_CODE = -32042;
@@ -153,7 +154,9 @@ export function createMcpMppLoopback({ port, host = "127.0.0.1", fetchImpl = fet
     const [method, path] = String(def.route || "POST /").split(" ");
     const m = (method || "POST").toUpperCase();
     let url = base + path;
-    const headers = { Accept: "application/json, */*", "X-Forwarded-For": String(ip || "127.0.0.1"), "X-Agent402-Via": "mcp" };
+    // The connector's marker, with this process's secret (src/mcp-loopback.js):
+    // the route reads it as our own replay only with the secret on a local socket.
+    const headers = { Accept: "application/json, */*", "X-Forwarded-For": String(ip || "127.0.0.1"), ...mcpLoopbackHeaders() };
     // Our own signed probe marker, forwarded verbatim from the MCP request so a
     // synthetic check over the connector is booked as internal, exactly as it
     // is on a direct HTTP call. The paid route verifies it (isSyntheticRequest);

@@ -26,6 +26,30 @@ ok(validateOriginInput("https://example.com:443").origin === "https://example.co
 ok(validateOriginInput("https://example.com:443", { selfOrigin: "https://example.com" }).error != null, "and is caught by the self-origin check");
 // A different port on our own host is a different service, so it is NOT us.
 ok(validateOriginInput("https://agent402.tools:8443", { selfOrigin: "https://agent402.tools" }).origin === "https://agent402.tools:8443", "a ported twin of our own host is not the local catalog");
+// A path seller meets the same self check as a bare origin: a www twin, a
+// fully qualified spelling (trailing dot) and letter case all fold to us.
+{
+  const self = { selfOrigin: "https://agent402.tools", allowPath: true };
+  for (const o of ["https://agent402.tools/api/x", "https://www.agent402.tools/api/x", "https://agent402.tools./v1/x", "https://WWW.Agent402.Tools./api/x", "https://agent402.tools:443/api/x"]) {
+    ok(/local catalog/.test(validateOriginInput(o, self).error || ""), `a path on our own host is refused as the local catalog: ${o}`);
+  }
+  ok(/local catalog/.test(validateOriginInput("https://agent402.tools.", { selfOrigin: "https://agent402.tools" }).error || ""), "a bare origin with a trailing dot is our own host too");
+  ok(validateOriginInput("https://example.com/api/x", self).origin === "https://example.com/api/x", "control: an outside path seller is still accepted");
+  ok(validateOriginInput("https://agent402.tools:8443/api/x", self).origin === "https://agent402.tools:8443/api/x", "a ported twin with a path is still another host");
+  ok(validateOriginInput("https://notagent402.tools/api/x", self).origin === "https://notagent402.tools/api/x", "a host that only ends with our name is not us");
+  // The platform hostname this service is published under is read from the
+  // environment at import, so it is checked in a fresh process.
+  const { execFileSync } = await import("node:child_process");
+  const probe = `import "./scripts/lib/offline-stores.js"; const { validateOriginInput } = await import("./src/x402-index.js"); const s = { selfOrigin: "https://agent402.tools", allowPath: true }; console.log(JSON.stringify(["https://our-svc-production.up.railway.app", "https://our-svc-production.up.railway.app/api/x", "https://other-svc.up.railway.app/api/x", "https://mirror.example.net"].map((o) => validateOriginInput(o, s))));`;
+  const { childJson } = await import("./lib/child-json.js");
+  const run = (env) => childJson(execFileSync(process.execPath, ["--input-type=module", "-e", probe], { cwd: new URL("..", import.meta.url).pathname, env: { ...process.env, X402_INDEX_CRAWL: "off", ...env }, encoding: "utf8" }));
+  const withEnv = run({ RAILWAY_PUBLIC_DOMAIN: "our-svc-production.up.railway.app", SELF_SELLER_HOSTS: "mirror.example.net" });
+  ok(/local catalog/.test(withEnv[0].error || "") && /local catalog/.test(withEnv[1].error || ""), "our platform hostname (RAILWAY_PUBLIC_DOMAIN), bare or with a path, is the local catalog");
+  ok(withEnv[2].origin === "https://other-svc.up.railway.app/api/x", "another service on the same platform domain is an outside seller");
+  ok(/local catalog/.test(withEnv[3].error || ""), "a host listed in SELF_SELLER_HOSTS is the local catalog");
+  const without = run({ RAILWAY_PUBLIC_DOMAIN: "", RAILWAY_STATIC_URL: "", SELF_SELLER_HOSTS: "" });
+  ok(without[0].origin === "https://our-svc-production.up.railway.app", "control: with no platform hostname configured, that host is an outside seller");
+}
 ok(validateOriginInput("https://example.com:8443/api").error != null, "a path is still refused on a ported origin");
 ok(validateOriginInput("http://example.com:8443").error != null, "http is still refused on a ported origin");
 ok(validateOriginInput("https://localhost").error != null, "dotless host rejected");

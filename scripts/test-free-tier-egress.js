@@ -24,6 +24,7 @@
 // Each free tool is then called with its own documented example, and the
 // invariant is: zero attributed egress. A tool that legitimately needs the
 // network belongs in WALLET_ONLY_SLUGS, which is the fix - not an exemption here.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { readFileSync, existsSync, unlinkSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";

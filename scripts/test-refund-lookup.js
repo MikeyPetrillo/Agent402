@@ -12,6 +12,7 @@
 //    note or any other row;
 //  - my-usage lists ONLY the signed payer's rows;
 //  - the route is free and rate limited.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

@@ -14,6 +14,7 @@
 //   Postgres in scripts/test-leads-purge-pg.js.
 //
 //   node scripts/test-tollbooth-cloud-retired.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";

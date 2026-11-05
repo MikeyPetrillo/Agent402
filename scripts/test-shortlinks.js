@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Dev shortlinks (/claude, /cursor, ... -> the page that answers "how do I use
 // this from X") and the /install script. Boots a free server. In CI.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { writeFileSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";

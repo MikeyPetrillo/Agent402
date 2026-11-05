@@ -10,6 +10,7 @@
 // sink (setMeterSpendSinkForTest), so a kit that stops calling the meter, or
 // prices from the wrong row, fails here. The expected figure is always
 // units x the fake rate, computed, never typed as a dollar amount.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { SPEECH_MODELS } from "../src/tools/llm-gateway-kit.js";
 
 delete process.env.UPSTREAM_COSTS_JSON;

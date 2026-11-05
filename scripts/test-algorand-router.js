@@ -4,6 +4,7 @@
 //   - route-execute chain matching: buyer's payment network -> settlement chain
 //   - AVM buyer gating (503 without the mnemonic, configured flag)
 // No network, no server boot.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert";
 import { pickPayableAccept, avmBuyerConfigured, getUpstreamBuyerAvm, avmBuyerStatus, BUYER_CHAINS } from "../src/x402-buyer.js";
 import { rankAlgorandResources, mergeCrawledResources, proveCrawledResources } from "../src/algorand-sellers.js";

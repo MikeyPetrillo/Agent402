@@ -17,6 +17,7 @@
 // verify it via the test-heartbeat-token suite (unit) plus the assertions
 // below (integration through the dispatcher).
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { setTimeout as wait } from "node:timers/promises";
 

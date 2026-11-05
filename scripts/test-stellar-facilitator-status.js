@@ -2,6 +2,7 @@
 // that had no low-water alarm (found 2026-08-31). This pins the alarm's contract, and in particular the two
 // ways a balance alarm fails FLATTERINGLY: reporting "ok" when it could not
 // actually read a balance, and reporting "ok" off a stranger's endpoint.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 import { stellarFacilitatorStatus, readsAsOurFacilitator } from "../src/stellar-facilitator-status.js";
 

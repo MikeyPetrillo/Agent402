@@ -2,6 +2,7 @@
 // pack pages recommended investment-decision, savings-goal, rag-prep and
 // webhook-debug for weeks after each answered 410 (truth audit 2026-10-02):
 // the retirement guard checks the catalog, never the prose about it.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { SKILL_PACKS } from "../src/skills.js";
 import { RETIRED_PACKS } from "../src/retired-tools.js";
 

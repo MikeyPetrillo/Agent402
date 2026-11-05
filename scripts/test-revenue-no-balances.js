@@ -3,6 +3,7 @@
 // balance field and no combined total; /__operator/revenue.json carries the
 // full reading for an authed operator and answers 404 to everyone else. The
 // handlers are mounted here exactly as server.js mounts them, on port 0.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import express from "express";
 import { revenueApiHandlers, publicRevenueSnapshot, lastGoodSnapshot, revenuePage, revenueCadenceFields, REVENUE_API_MAX_AGE_S } from "../src/revenue-live.js";

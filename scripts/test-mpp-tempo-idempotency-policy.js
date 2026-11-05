@@ -10,6 +10,7 @@
 // no idempotency-key header and the same body, the trace marked; any other
 // 2xx refusal, a refusal on validate, or a broadcast with no key is not
 // retried. Mutation-checked: dropping the retry fails the first assertion.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { __testRelayFetch, isIdempotencyPolicyRefusal } from "../src/mpp-tempo.js";
 
 let pass = 0, fail = 0;

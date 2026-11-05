@@ -5,6 +5,7 @@
 // path is verified live with a paid smoke once the worker service is deployed.
 //
 //   node scripts/test-worker-isolation.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";

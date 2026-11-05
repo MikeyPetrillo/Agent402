@@ -14,6 +14,7 @@
 // Two halves, both pinned here: the memo itself (recorded from the paid leg,
 // cleared by a delivered 200, forgotten on a TTL) and the label (a chain named
 // in it is not eligible whatever its settlement count says).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -31,6 +32,7 @@ const {
   sellerRefusedRecently, __resetSellerRefusalsForTest, _spentThisWindow,
   sellerDeliveryMemoEntries, DELIVERY_FAIL_STRIKES_REQUIRED, isCallerInputStatus,
 } = await import("../src/x402-buyer.js");
+(await import("../src/x402-buyer.js")).__setBuyerAddressGuardForTest(false); // this suite's sellers are local stubs
 const { dispatchEligibility, DISPATCH_REASONS, dispatchLegend } = await import("../src/dispatch-eligibility.js");
 
 // --- 1. the memo primitive ---------------------------------------------------
@@ -159,7 +161,7 @@ const { dispatchEligibility, DISPATCH_REASONS, dispatchLegend } = await import("
   const receipt = Buffer.from(JSON.stringify({ success: true, transaction: "0xabc", network: "base" })).toString("base64");
   // memoizeDelivery mirrors what server.js passes: true only for the router.
   const buy = (origin, { asRouter = true } = {}) => payX402(`${origin}/x`, {
-    maxAtomic: 500000n, trusted: true, method: "POST", body: {}, chain: "base",
+    maxAtomic: 500000n, method: "POST", body: {}, chain: "base",
     notDebited: async () => ({ debited: true, observed: 1 }), memoizeDelivery: asRouter,
   }).then((r) => r, (e) => e);
 
@@ -194,7 +196,7 @@ const { dispatchEligibility, DISPATCH_REASONS, dispatchLegend } = await import("
   //      bare option set the other callers use.
   __resetSellerDeliveryFailuresForTest();
   globalThis.fetch = sellerThat(() => ({ status: 500, headers: hdrs({ "content-type": "text/plain" }), text: async () => "nope", json: async () => ({}) }));
-  const bare = { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, chain: "base", notDebited: async () => ({ debited: true, observed: 1 }) };
+  const bare = { maxAtomic: 500000n, method: "POST", body: {}, chain: "base", notDebited: async () => ({ debited: true, observed: 1 }) };
   await payX402("https://default.example/x", bare).catch(() => {});
   await payX402("https://default.example/x", bare).catch(() => {});
   eq(sellerDeliveryMemoEntries().length, 0,
@@ -213,7 +215,7 @@ const { dispatchEligibility, DISPATCH_REASONS, dispatchLegend } = await import("
   ok(sellerDeliveryFailingRecently("https://refuser.example", "base"), "seeded as failing");
   // The seller's payment layer refusing: its offer comes back with the 402.
   globalThis.fetch = sellerThat(() => ({ status: 402, headers: hdrs({ "content-type": "application/json", "payment-required": hdr }), clone: () => ({ text: async () => "{}" }), text: async () => JSON.stringify({ error: "payment_verification_failed" }), json: async () => ({}) }));
-  const refuse = () => payX402("https://refuser.example/x", { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, chain: "base", memoizeDelivery: true, notDebited: async () => ({ debited: false, observed: 1, expired: true }) }).catch(() => {});
+  const refuse = () => payX402("https://refuser.example/x", { maxAtomic: 500000n, method: "POST", body: {}, chain: "base", memoizeDelivery: true, notDebited: async () => ({ debited: false, observed: 1, expired: true }) }).catch(() => {});
   await refuse();
   eq(sellerDeliveryFailingRecently("https://refuser.example", "base"), null,
      "a refusal the CHAIN proves was uncharged retracts the delivery memo: nobody paid, so it is a refusal and carries the refusal's shorter penalty, not both");
@@ -262,7 +264,7 @@ const { dispatchEligibility, DISPATCH_REASONS, dispatchLegend } = await import("
   // (g) the SAME 400 with no debit is the seller answering the request our
   //     caller wrote: nothing recorded.
   __resetSellerDeliveryFailuresForTest();
-  const undebited = () => payX402("https://said-no.example/x", { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, chain: "base", memoizeDelivery: true, notDebited: async () => ({ debited: false, observed: 1, expired: true }) }).catch(() => {});
+  const undebited = () => payX402("https://said-no.example/x", { maxAtomic: 500000n, method: "POST", body: {}, chain: "base", memoizeDelivery: true, notDebited: async () => ({ debited: false, observed: 1, expired: true }) }).catch(() => {});
   await undebited(); await undebited();
   eq(sellerDeliveryMemoEntries().length, 0, "control: a 400 the chain proves was uncharged records nothing (an honest seller refusing a bad request is not failing)");
   // (h) a 403 carrying the seller's own success receipt, chain unreadable:
@@ -270,7 +272,7 @@ const { dispatchEligibility, DISPATCH_REASONS, dispatchLegend } = await import("
   //     source said so first.
   __resetSellerDeliveryFailuresForTest();
   globalThis.fetch = sellerThat(() => ({ status: 403, headers: hdrs({ "content-type": "application/json", "payment-response": receipt }), text: async () => "{}", json: async () => ({}) }));
-  await payX402("https://self-declared.example/x", { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, chain: "base", memoizeDelivery: true, notDebited: async () => { throw new Error("rpc down"); } }).catch(() => {});
+  await payX402("https://self-declared.example/x", { maxAtomic: 500000n, method: "POST", body: {}, chain: "base", memoizeDelivery: true, notDebited: async () => { throw new Error("rpc down"); } }).catch(() => {});
   eq(sellerDeliveryMemoEntries().find((e) => e.origin === "https://self-declared.example")?.strikes, 1, "a 4xx with a success receipt is a strike even when the chain cannot be read");
   await buy("https://both.example");
   eq(sellerDeliveryMemoEntries().find((e) => e.origin === "https://both.example")?.strikes, 1, "a receipt AND a consumed nonce on one call are ONE strike, not two");

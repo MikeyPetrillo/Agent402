@@ -1,6 +1,7 @@
 // Lock the /api/leaderboard surfacing into every SEO/discovery surface so a
 // future deploy can't silently drop it. Offline — pure functions only, no
 // server, no network, no secrets.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { robotsTxt, sitemapXml, llmsTxt } from "../src/seo.js";
 import { serviceManifest } from "../src/discovery.js";
 

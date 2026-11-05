@@ -11,6 +11,7 @@
 //   - failure = backoff, no email, retried later; per-tick paid cap defers;
 //   - canceled subs are not processed; reports are served by id; the shared
 //     lock makes a second owner skip; state persists across instances.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createMonitorScheduler, describeDomainChanges, DOMAIN_CHECK_MS, DOMAIN_FULL_MS, MIN_FULL_GAP_MS, MAX_FULL_PER_TICK, LOCK_STALE_MS, MAX_FULL_PER_SUB_30D } from "../src/monitor-scheduler.js";
 import { MONITOR_PRODUCTS } from "../src/stripe-subscriptions.js";
 import { rmSync } from "node:fs";

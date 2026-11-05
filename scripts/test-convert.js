@@ -18,6 +18,7 @@
 // surviving /tools/unit-convert; and the surviving convert-suffixed routes
 // (base-convert, unit-convert, timezone-convert) are NOT caught by the
 // retirement pattern.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";

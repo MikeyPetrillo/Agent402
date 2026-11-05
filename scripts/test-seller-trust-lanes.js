@@ -11,6 +11,7 @@
 // A second boot switches the ceiling off and expects the lane to say so.
 //
 //   node scripts/test-seller-trust-lanes.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

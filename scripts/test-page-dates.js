@@ -8,6 +8,7 @@
 // runs this checks out with fetch-depth 0).
 //
 //   node scripts/test-page-dates.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { buildTable, readTable, diffTables, isShallow, scanToolSources } from "./gen-page-dates.js";
 import { pageLastmod, toolLastmod, legalLastmod, filesLastmod, dayOf, pageSourceFiles, PAGE_SOURCES, _setPageDatesTable } from "../src/page-dates.js";

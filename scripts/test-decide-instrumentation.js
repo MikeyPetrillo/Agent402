@@ -5,6 +5,7 @@
 //
 //   node scripts/test-decide-instrumentation.js
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

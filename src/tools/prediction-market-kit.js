@@ -17,6 +17,7 @@
 // Covered by scripts/test-prediction-market-kit.js (offline + opt-in live).
 
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, budgetSpent, currentBudget } from "../upstream-deadline.js";
+import { upstreamErrorText } from "./redact.js";
 
 // DEADLINES (src/upstream-deadline.js): each read has its own cap, composed
 // with the handler budget, so the one retry after a 429 or 5xx (its wait
@@ -92,7 +93,8 @@ async function fetchJson(url, label, meta = null, step = "data") {
   }
   const ct = res.headers.get("content-type") || "";
   if (!res.ok) {
-    const body = ct.includes("json") ? JSON.stringify(await res.json().catch(() => null)).slice(0, 240) : (await res.text().catch(() => "")).slice(0, 240);
+    // The upstream's own reason, bounded and redacted (src/tools/redact.js).
+    const body = upstreamErrorText(await res.text().catch(() => ""), 240);
     const err = bad(`${label} upstream returned HTTP ${res.status}${body ? ": " + body : ""}`, res.status >= 500 ? 502 : res.status);
     // Only outage classes may serve stale — a 4xx is a real answer.
     if (res.status === 429 || res.status >= 500) return serveStale(url, label, meta, err);

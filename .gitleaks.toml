@@ -67,6 +67,10 @@ regexes = [
   # rule reads a description ending in "API key." and captures the next
   # object key, the slug x402-trending. Pinned exactly.
   '''^x402-trending$''',
+  # scripts/test-decide-index.js: an honest-identifier fixture (a route
+  # path), read as a key by generic-api-key and reported again under every
+  # merge commit that carries the file. Pinned exactly.
+  '''^forecast/hourly$''',
   # scripts/test-front-door.js: an earlier placeholder MPP key for a local
   # paid boot (replaced by a plain literal), still in the merge diffs of its
   # branch history. A fixture, not a credential. Pinned exactly.

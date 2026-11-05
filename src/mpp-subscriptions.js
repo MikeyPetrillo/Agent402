@@ -85,6 +85,7 @@ import * as Tempo from "mppx/tempo";
 import { tempo as tempoServer } from "mppx/server";
 import { privateKeyToAccount } from "viem/accounts";
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
+import { redactSecrets } from "./tools/redact.js";
 
 // Tempo mainnet. Same constant mpp-tempo.js pins; a subscription authorization
 // commits to the chain id, so a mismatch is a rejected signature, not a
@@ -787,7 +788,11 @@ export function checkSubscriptionBinding(authorizationHeader, { secretKey, realm
  *  Buyer-facing text is unchanged: the caller still gets the generic
  *  "did not settle" message, because an RPC body can quote a node's words.
  */
-function diagnoseError(err, max = 1200) {
+export function diagnoseError(err, max = 1200) {
+  // Every field passes the redactor before it is cut, so a cut never leaves a
+  // configured value's head behind: viem's metaMessages quote the request URL
+  // (an RPC URL's path or query can carry its key).
+  const clip = (v, n) => redactSecrets(String(v)).slice(0, n);
   const seen = new Set();
   const parts = [];
   for (let e = err, depth = 0; e && depth < 5; e = e.cause, depth++) {
@@ -800,17 +805,17 @@ function diagnoseError(err, max = 1200) {
     // and truncated away the one line that says why. Cause first, bulk last.
     if (e.name) bit.push(e.name);
     if (e.code !== undefined) bit.push(`code=${JSON.stringify(e.code)}`);
-    if (e.data !== undefined) bit.push(`data=${JSON.stringify(e.data).slice(0, 300)}`);
-    if (e.details) bit.push(`details=${String(e.details).slice(0, 300)}`);
-    if (e.shortMessage) bit.push(`short=${String(e.shortMessage).slice(0, 200)}`);
-    if (e.metaMessages) bit.push(`meta=${JSON.stringify(e.metaMessages).slice(0, 300)}`);
+    if (e.data !== undefined) bit.push(`data=${clip(JSON.stringify(e.data), 300)}`);
+    if (e.details) bit.push(`details=${clip(e.details, 300)}`);
+    if (e.shortMessage) bit.push(`short=${clip(e.shortMessage, 200)}`);
+    if (e.metaMessages) bit.push(`meta=${clip(JSON.stringify(e.metaMessages), 300)}`);
     if (e.status !== undefined) bit.push(`status=${e.status}`);
     // The message can carry a full serialized transaction; keep it, keep it last,
     // and keep it short. Its useful head is the first line.
-    if (e.message) bit.push(`msg=${String(e.message).split("\n")[0].slice(0, 200)}`);
+    if (e.message) bit.push(`msg=${clip(String(e.message).split("\n")[0], 200)}`);
     if (bit.length) parts.push(bit.join(" "));
   }
-  const out = parts.join(" <- ") || String(err);
+  const out = redactSecrets(parts.join(" <- ") || String(err));
   return out.length > max ? `${out.slice(0, max)}...` : out;
 }
 

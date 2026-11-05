@@ -11,6 +11,7 @@
 //     explains it as the server's facilitator quota (the readers that classify
 //     the receipt read the same verdict);
 //   - control: a settled 200 receipt is untouched.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtempSync } from "node:fs";

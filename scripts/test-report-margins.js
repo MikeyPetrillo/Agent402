@@ -12,6 +12,7 @@
 // The numbers below are therefore OBSERVATIONS, not targets. When the model mix
 // or model pricing changes, re-measure and move them; do not tune them to make
 // a price look acceptable.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { RESEARCH_TIERS } from "../src/tools/research-deep-kit.js";
 import { DOSSIER_TIERS } from "../src/tools/dossier-kit.js";
 import { FUND_TIERS } from "../src/tools/fund-report-kit.js";

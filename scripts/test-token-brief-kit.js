@@ -19,6 +19,7 @@
 //   - probeTokenBrief() returns a stable fingerprint (volatile drift does not
 //     move it, a bucket crossing does) and describeTokenChanges() reads it
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "test-key-not-real";
 
 const { TOKEN_BRIEF_TOOLS, TOKEN_BRIEF_TIERS, probeTokenBrief, describeTokenChanges, normMint, __test } =

@@ -26,6 +26,7 @@
 // from the router's own constant (nothing may type it), the manifest fields
 // are strings that state their own scope (a boolean cannot), and the phrasings
 // that were wrong are forbidden outright in served copy.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync } from "node:fs";
 import { RAILS } from "../src/rails.js";
 import { failedCallFootnote } from "../src/settlement-footnote.js";

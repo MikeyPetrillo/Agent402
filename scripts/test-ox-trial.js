@@ -11,6 +11,7 @@
 //   2. the trial must NEVER widen proof-of-work redemption to the route - PoW
 //      is cheap and repeatable, so a solved challenge on an upstream-calling
 //      route would be an unmetered free proxy.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";

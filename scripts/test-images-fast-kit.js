@@ -8,6 +8,7 @@
 // keyed on the EVM payer, claimed once, released on every terminal error.
 //
 //   node scripts/test-images-fast-kit.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.POSTHOG_TEST_CAPTURE = "1";
 process.env.VIDEOS_POLL_MS = "5";
 process.env.VIDEOS_MAX_WAIT_MS = "1000";

@@ -3,6 +3,7 @@
 // the removed /index page block did not: real data bindings
 // (rails, leaderboard, router-share disclosure), the commercial-sensitivity
 // rule, JSON-LD honesty, and copy hygiene.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { ledgerHomePage } from "../src/ledger-home.js";
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";
 

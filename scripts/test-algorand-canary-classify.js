@@ -4,6 +4,7 @@
 // third-party/edge outage or our-own-burst throttle (reported, does not fail).
 // Getting this wrong is why #806 stayed open: a transient edge 502 or an
 // upstream vendor 5xx was booked as a broken tool on first sight.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { outcomeOf, isUpstreamOutage, isThrottle, isOurSettleBreaker, subcentBudget, rotateSubcent } from "./avm-canary-classify.js";
 

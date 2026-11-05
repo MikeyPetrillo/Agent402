@@ -31,6 +31,7 @@
 // errors for a human click or a crawler follow. Fixed by rendering it as
 // plain text (matching how the same page already shows the connector URL
 // in a <pre> code block elsewhere), not a link.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { docsSlugs } from "../src/docs.js";
 
 const BASE = process.env.TARGET_URL || "http://127.0.0.1:3000";

@@ -1,5 +1,6 @@
 // Unit tests for Memory v2 (coordination + provenance + recall).
 // Exercises the module directly with two simulated wallets — no HTTP, no payments.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createHash } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";

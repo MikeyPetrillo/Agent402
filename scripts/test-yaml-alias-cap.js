@@ -2,6 +2,7 @@
 // are written out, and refuses with a 400 before serializing an answer past
 // the cap. A few hundred bytes of nested aliases must not produce a huge
 // response or hold the event loop; ordinary anchors and aliases still work.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { KIT } from "../src/tools/kit.js";
 
 let pass = 0, fail = 0;

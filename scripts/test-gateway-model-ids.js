@@ -17,6 +17,7 @@
 //
 // It FAILS on network error rather than skipping: a skipped guard is the same
 // silent green that let every one of those ship.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import {
   TIERS, AUTO_RANKINGS, SPEECH_MODELS, RETIRING_MODELS, retirementPending, FLEX_MODELS, REASONING_MODELS, reasoningRowMatches, costFor, tierFor, tierAllows, STEALTH_MODEL_IDS, modelsList, PRIORITY_PRICE_FACTOR,

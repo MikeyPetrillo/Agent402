@@ -21,7 +21,7 @@
 // All 5 tools are wallet-only — every handler hits an external API and shares
 // a per-IP rate limit (Flashbots relay) or our compute-unit quota (Alchemy).
 
-import { redactSecrets } from "./redact.js";
+import { redactSecrets, upstreamErrorText } from "./redact.js";
 import { partialFields } from "../partial-answer.js";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, isUpstreamFailure, budgetSpent, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 
@@ -83,9 +83,9 @@ async function fetchJson(url, label, init, step = "data", timeoutMs = RELAY_READ
     headers: { accept: "application/json", "user-agent": "agent402/mev-and-l2-kit", ...(init?.headers || {}) },
   }, ctx);
   if (!res.ok) {
-    // Redact the FULL body before slicing — the Alchemy key rides the request
-    // URL and an upstream error body could reflect it.
-    const body = redactSecrets(await res.text().catch(() => "")).slice(0, 240);
+    // Redact the FULL body before slicing (the Alchemy key rides the request
+    // URL and an upstream error body could reflect it); relay its reason only.
+    const body = upstreamErrorText(await res.text().catch(() => ""), 240);
     throw bad(`${label} upstream returned HTTP ${res.status}${body ? ": " + body : ""}`, res.status >= 500 ? 502 : res.status);
   }
   try { return await bodyUnderDeadline(res.json(), ctx); }

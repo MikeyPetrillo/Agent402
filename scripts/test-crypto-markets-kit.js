@@ -1,3 +1,4 @@
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 // scripts/test-crypto-markets-kit.js
 // Offline tests for src/tools/crypto-markets-kit.js. No network: globalThis.fetch

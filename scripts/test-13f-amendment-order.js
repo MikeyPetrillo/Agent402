@@ -2,6 +2,7 @@
 // submissions list is newest first; applied in that order, a restatement
 // filed before a NEW HOLDINGS amendment would wipe the added rows. Offline,
 // rows shaped like parse13fInformationTable output.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { apply13fAmendments } from "../src/tools/edgar-kit.js";
 
 let pass = 0, fail = 0;

@@ -11,6 +11,7 @@
 //     new every time the epoch moves
 //   • lowercasing base58/Stellar addresses merges distinct buyers into one
 // Each is asserted here against a seeded ledger.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";

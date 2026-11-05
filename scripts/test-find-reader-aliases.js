@@ -3,6 +3,7 @@
 // /api/find and /api/route; the neighboring tools keep their own searches, and
 // a search to clean up a piece of text (no page, no URL) does not go to the
 // extractor, which fetches a URL.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { getFreePort } from "./lib/free-port.js";
 

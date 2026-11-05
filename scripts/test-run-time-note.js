@@ -3,6 +3,7 @@
 // new long-running product carries it automatically and the stated time can
 // never drift from the window the server enforces. Boots a FREE_MODE server
 // and reads /api/pricing, the surface agents and the MCP packages read.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { EVM_RUN_SECONDS, runTimeNote } from "../src/evm-validity.js";
 

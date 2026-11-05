@@ -1,6 +1,7 @@
 // Media-kit tests: generate a real 2s sine-wave WAV with ffmpeg (present on CI
 // runners and in the production image), then exercise the pure transforms on
 // buffers. Skips cleanly where ffmpeg is unavailable (e.g. local sandboxes).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

@@ -4,6 +4,7 @@
 // x402" failure modes; here we feed the grader synthetic probed responses (no
 // network, no SSRF guard in the way) and assert the scoring is correct and
 // honest.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { gradeX402Response } from "../src/tools/x402-kit.js";
 
 let passed = 0, failed = 0;

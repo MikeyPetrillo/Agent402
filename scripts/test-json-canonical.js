@@ -1,6 +1,7 @@
 // json-format's sortKeys and canonical (RFC 8785) modes, offline. The vector
 // is the RFC's own example (section 3.2.3); strings are built from char codes
 // so no editor or shell can reinterpret the escapes.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import * as kit from "../src/tools/kit.js";

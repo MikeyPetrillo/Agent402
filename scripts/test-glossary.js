@@ -12,6 +12,7 @@
 // body copy silently stopped), a definition that picks up markup and is then
 // emitted raw into structured data. None of those break a render, so a
 // render smoke never sees them.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { GLOSSARY, glossaryPage } from "../src/glossary.js";
 import { resolveRailCountTokens } from "../src/rails.js";
 import { agenticFinancePage } from "../src/agentic-finance.js";

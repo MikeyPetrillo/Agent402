@@ -12,6 +12,7 @@
 //
 // The page is rendered from the same helpers the route calls and driven in
 // jsdom with the interval captured, so no server or chain is read.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";

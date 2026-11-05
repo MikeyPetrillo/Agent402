@@ -10,6 +10,7 @@
 //                     burns the shared per-account faucet budget)
 //
 //   node scripts/test-cdp-live.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 const { CDP_TOOLS } = await import("../src/tools/cdp-kit.js");
 
 if (!(process.env.CDP_API_KEY_ID || "").trim() || !(process.env.CDP_API_KEY_SECRET || "").trim()) {

@@ -16,6 +16,7 @@
 //
 // The assertions below are mostly about the FALLBACK, because that is where
 // this can do damage: an empty ledger must mean "go scan", never "no revenue".
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { ledgerRecent } from "../src/revenue-ledger.js";
 

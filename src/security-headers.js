@@ -1,7 +1,8 @@
 // Browser security headers. Every answer carries the three that bind any
 // client (nosniff, HSTS, referrer policy). The document-only four (CSP, frame,
 // permissions, cross-domain policy) go on pages, and on an API path only when
-// the answer is HTML.
+// the answer is HTML; an API answer of a type a browser could open as a
+// document gets a sandboxed policy instead (SANDBOX_CSP below).
 // The JSON API paths serve no document: a CSP, frame or permissions policy
 // means nothing to the agent reading them and costs about half a kilobyte on
 // every answer, including the 402 challenge, whose total header size a
@@ -19,6 +20,29 @@ function headIsHtml(res, headArgs) {
     }
   }
   return false;
+}
+// Any other answer on an API path that a browser could open as a document
+// (SVG, XML, XHTML, an unknown or missing type) carries a policy that loads
+// nothing and runs nothing: it is never one of our pages, so it needs no
+// script, style or frame. The inert types below are data a browser shows as
+// data (JSON, plain text, an event stream, media, a raster image, a PDF, an
+// archive or an Office download) and keep the lean header set, so the 402
+// challenge, the JSON answers and the media and file downloads are unchanged.
+// A bodiless answer (204, 304) has nothing to open.
+const SANDBOX_CSP = "default-src 'none'; sandbox";
+const INERT_TYPE_RE = /^\s*(?:application\/(?:json|[\w.-]+\+json|x-ndjson|pdf|zip|gzip|x-gzip|octet-stream|msword|vnd\.ms-[\w.+-]+|vnd\.openxmlformats-officedocument\.[\w.+-]+|vnd\.oasis\.opendocument\.[\w.+-]+)|text\/(?:plain|event-stream|csv|markdown)|audio\/[\w.+-]+|video\/[\w.+-]+|image\/(?:png|jpeg|jpg|gif|webp|avif|bmp|tiff|x-icon|vnd\.microsoft\.icon|heic|heif))\s*(?:;|$)/i;
+function headContentType(res, headArgs) {
+  for (const a of headArgs) {
+    if (a && typeof a === "object" && !Array.isArray(a)) {
+      for (const [k, v] of Object.entries(a)) if (k.toLowerCase() === "content-type") return String(v);
+    }
+  }
+  return String(res.getHeader("content-type") || "");
+}
+function headIsInert(res, headArgs) {
+  const status = typeof headArgs[0] === "number" ? headArgs[0] : res.statusCode;
+  if (status === 204 || status === 304) return true;
+  return INERT_TYPE_RE.test(headContentType(res, headArgs));
 }
 // The analytics tag's script host is allowed per answer: only an HTML body
 // that carries the first-party GA loader (src/ledger-chrome.js gaSnippet,
@@ -49,6 +73,7 @@ export function securityHeaders() {
       const writeHead = res.writeHead;
       res.writeHead = function (...args) {
         if (headIsHtml(res, args)) setDocumentHeaders(res);
+        else if (!res.getHeader("content-security-policy") && !headIsInert(res, args)) res.setHeader("Content-Security-Policy", SANDBOX_CSP);
         return writeHead.apply(this, args);
       };
       return next();
@@ -91,4 +116,4 @@ export function contentSecurityPolicy({ analytics = false } = {}) {
   ).replace("script-src 'self';", analytics ? `script-src 'self' ${GA_SCRIPT_HOST};` : "script-src 'self';");
 }
 
-export { DOCUMENT_HEADERS_SKIP, setDocumentHeaders, headIsHtml };
+export { DOCUMENT_HEADERS_SKIP, setDocumentHeaders, headIsHtml, headIsInert, SANDBOX_CSP };

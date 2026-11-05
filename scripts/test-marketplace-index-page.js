@@ -4,6 +4,7 @@
 // real 4-stat row, methodology + FAQ sections, and JSON-LD - all built from
 // real per-chain computation (marketSellers/marketOperatorCount), never the
 // design source's frozen per-seller lookup tables. No server, no network.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { marketPage, CHAIN_PAGES } from "../src/market-page.js";
 import { RAILS } from "../src/rails.js";
 

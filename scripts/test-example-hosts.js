@@ -16,6 +16,7 @@
 // served and exists, so an example cannot point at a fixture that 404s.
 //
 //   TARGET_URL=http://127.0.0.1:3000 node scripts/test-example-hosts.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";

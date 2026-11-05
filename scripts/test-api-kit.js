@@ -1,4 +1,5 @@
 // Exact-output tests for api-kit (openapi-diff). Pure functions, no server.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { API_TOOLS } from "../src/tools/api-kit.js";
 
 const tool = (slug) => API_TOOLS.find((t) => t.slug === slug);

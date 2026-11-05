@@ -13,6 +13,7 @@
 //     and at the private table's Jev rate inside the price's share.
 //
 //   node scripts/test-loop-gate.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 
 delete process.env.OPENROUTER_API_KEY; delete process.env.DECIDE_OPENROUTER_API_KEY; delete process.env.OPENAI_API_KEY;

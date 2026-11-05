@@ -11,6 +11,7 @@
 // exactly that request. Every one must answer 200.
 //
 //   node scripts/test-tool-page-pow-snippet.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";

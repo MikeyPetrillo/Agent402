@@ -6,6 +6,7 @@
 // one with a specific cause) invents a diagnosis and points the operator at
 // the wrong fix. Keeping a vague reason merely stays vague — that is the safe
 // direction, so null is always the answer under any doubt.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { clarifySvmSettleFailure } from "../src/svm-clarify.js";
 
 let pass = 0, fail = 0;

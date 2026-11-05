@@ -3,6 +3,7 @@
 // green self-check on prod genuinely means the tool returned the right answer —
 // not that a rubber-stamp invariant always returns true. Pure logic, no network;
 // the live tools are exercised against these same invariants by /api/selfcheck.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert";
 import { INVARIANTS } from "../src/selfcheck.js";
 

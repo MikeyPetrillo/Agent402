@@ -6,6 +6,7 @@
 // suite exercises the full tier set, so switch it on before the kit loads.
 process.env.OX_ALPHA_ENABLED = "on";
 process.env.OPENROUTER_TTS_ENABLED = "true"; // modelsList lists the speech models only when the route is on (2026-09-06)
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { TIERS, canonicalModel, PREFIX_CANONICAL, meteredQuoteUsd, METERED_MAX_QUOTE_USD, tierAllows, tierFor, validateRequest, modelsList, LLM_GATEWAY_TOOLS, stableStringify, promptCacheKey, promptCacheGet, promptCacheStore, GATEWAY_TIER_BY_PATH, AUTO_RANKINGS, classifyPrompt, validateEmbeddingsRequest, embeddingsCacheKey, EMBEDDINGS_PATH, isEmptyRefusal, tokenizerFactor, NEW_TOKENIZER_FACTOR, costFor, modelCostRows } from "../src/tools/llm-gateway-kit.js";
 import { upstreamCosts } from "../src/upstream-costs.js";
 import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";

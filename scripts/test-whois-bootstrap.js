@@ -1,6 +1,7 @@
 // Offline contract test for the whois tool's IANA RDAP bootstrap parser.
 // No network: feeds dns.json-shaped fixtures to parseRdapBootstrap and pins
 // the TLD → authoritative-base mapping the handler walks before rdap.org.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { parseRdapBootstrap } from "../src/tools/kit.js";
 
 let failed = 0;

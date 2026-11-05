@@ -6,6 +6,7 @@
 //     own bazaar declaration object afterwards;
 //   - the sliced check validates every route, warns as the vendor does, and
 //     yields between short slices.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { paymentMiddlewareFromHTTPServer, x402HTTPResourceServer } from "@x402/express";
 import { x402ResourceServer } from "@x402/core/server";
 import { checkBazaarRoutesInSlices, withBazaarHidden } from "../src/bazaar-route-check.js";

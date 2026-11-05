@@ -12,6 +12,7 @@
 // request was transparently served 200 or taught with a 410).
 //
 //   node scripts/test-pricing-margin.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 

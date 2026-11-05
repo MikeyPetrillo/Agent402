@@ -3,6 +3,7 @@
 // a second time with a profile - only the SEC filings tools listed under
 // their own dotted names, the catalog meta tools hidden, its own server name
 // and instructions - while /mcp is unchanged. Boots its own FREE_MODE server.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { getFreePort } from "./lib/free-port.js";
 let pass = 0, fail = 0;

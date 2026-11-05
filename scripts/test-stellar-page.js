@@ -1,5 +1,6 @@
 // Offline unit tests for the /stellar marketplace page renderer. Fixture
 // snapshot + fixture rail — no server, no network.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { stellarSellers, stellarTools, stellarPage } from "../src/stellar-page.js";
 
 let pass = 0, fail = 0;

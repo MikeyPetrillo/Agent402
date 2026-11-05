@@ -10,6 +10,7 @@
 // second facilitator cannot double charge - but a facilitator that ANSWERS has
 // done its job, and retrying a verdict until somebody approves the payment
 // would be shopping for a yes. Unreachable is retried; answers never are.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { isUnreachable, isVerdict, verifyElsewhere } from "../src/verify-failover.js";
 

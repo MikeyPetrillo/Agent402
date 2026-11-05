@@ -5,6 +5,7 @@
 // (a $12.5B fair-value loss on escrowed shares issued to the US Government) and
 // XBRL carries it as NonoperatingIncomeExpense -$12.58B. Fixture values are the
 // figures SEC companyfacts reported for CIK 50863 on 2026-08-26.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { incomeBridge, bridgeLines, filingText, extractFilingExcerpts, EXCERPT_TERMS } from "../src/tools/dossier-kit.js";
 let pass = 0, fail = 0;
 const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - ${m}`); };

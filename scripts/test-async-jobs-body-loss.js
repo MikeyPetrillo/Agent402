@@ -4,6 +4,7 @@
 // says so; without that proof nothing is booked and the message does not
 // claim a debt. A loopback that fails before any answer books nothing here
 // (the hang-up hook owns that case). Offline: a stub fetch and a stub store.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createAsyncJobs, LOOPBACK_HEADER } from "../src/async-jobs.js";
 import { DOSSIER_TOOLS } from "../src/tools/dossier-kit.js";
 import { readFileSync } from "node:fs";

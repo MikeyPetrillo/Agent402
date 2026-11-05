@@ -18,6 +18,7 @@
 //     that scope from the outside, where a refactor would break it.
 //  3. The bounds hold: a second call to the same tool pays, and the catalog
 //     cannot be swept.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { getFreePort } from "./lib/free-port.js";
 import { createServer } from "node:http";

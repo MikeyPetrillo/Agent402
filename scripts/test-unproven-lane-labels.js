@@ -4,6 +4,7 @@
 // executeViaLane "unproven") and its own /api/index?seller= tool row (which used
 // to carry only the seller-level verdict, where a price-less row can never show
 // the tier). Two sellers read the seller row, saw "not eligible", and asked.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

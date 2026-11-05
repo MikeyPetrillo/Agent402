@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // House style is enforced in CODE on every report tier's output: no em or en
 // dashes reach a buyer, whichever door they came through. Offline.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { houseStyleText, houseStyleMarkdown, houseStyleBundle, withHouseStyle } from "../src/house-style.js";
 import { REPORT_TIERS } from "../src/report-tiers.js";

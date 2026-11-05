@@ -9,6 +9,7 @@
 // step), and that every request goes to one of the three
 // allowed hosts with the validated mint in the path.
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { SOLANA_INTEL_TOOLS, MINTS, __test, jupiterBase, jupiterHeaders } from "../src/tools/solana-intel-kit.js";
 
 const realFetch = globalThis.fetch;

@@ -7,6 +7,7 @@
 //      change email listing nothing), driven through the REAL kit probe for the
 //      filing kind with a stubbed EDGAR read;
 //   2. the filing alert ("a 10-K, 10-Q or 8-K") is triggered by those forms only.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { makeFreeAlertProbes, FILING_ALERT_FORMS } from "../src/free-alert-probes.js";
 import { probeCompanyFilings } from "../src/tools/filing-watch-kit.js";

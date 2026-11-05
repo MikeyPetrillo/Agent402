@@ -16,6 +16,7 @@
 //      and every route block in server.js, are read from source.
 //
 //   node scripts/test-tool-error-redaction.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -64,6 +65,68 @@ const OP_TOKEN = ["op", "Canary", "Token", String(process.pid)].join("");
   ok(!r(`dial mysql://root:${loose}@10.0.0.9/app`).includes(loose), "a userinfo password in the text itself is redacted even when no variable names it");
   ok(r("see https://public.example.test/docs for the shape") === "see https://public.example.test/docs for the shape", "a plain URL passes through unchanged");
   ok(r("Missing or invalid \"pattern\"") === "Missing or invalid \"pattern\"", "innocent text passes through unchanged");
+  // RPC endpoints carry the key in the path; Basic credentials are base64;
+  // salts are secrets under a name that says neither KEY nor TOKEN.
+  const PATH_KEY = ["Rpc", "Canary", "Path", "Key", String(process.pid)].join("");
+  process.env.PROBE_SOLANA_RPC_URL = `https://sol.example.test/v2/${PATH_KEY}`;
+  process.env.PROBE_BASE_RPCS = `https://a.example.test/${PATH_KEY}b, https://b.example.test/rpc?x=${PATH_KEY}c`;
+  process.env.PROBE_TEMPO_RPC = `https://tempo.example.test/${PATH_KEY}d`;
+  process.env.PROBE_HOOK_URL = `https://hooks.example.test/services/${PATH_KEY}e`;
+  process.env.PROBE_FEED_API_KEY = `fk-${PATH_KEY}f`;
+  process.env.PROBE_ID_SALT = `salt-${PATH_KEY}g`;
+  ok(!r(`fetch failed: https://sol.example.test/v2/${PATH_KEY}`).includes(PATH_KEY), "a *_RPC_URL whose path carries the key is redacted");
+  ok(!r(`HTTP request failed. URL: https://sol.example.test/v2/${PATH_KEY}/`).includes(PATH_KEY), "...in its parsed form too, and its key segment on its own");
+  ok(!r(`a failed: https://a.example.test/${PATH_KEY}b`).includes(PATH_KEY), "an entry of a *_RPCS list is redacted");
+  ok(!r(`b failed: https://b.example.test/rpc?x=${PATH_KEY}c`).includes(PATH_KEY), "...and an RPC query value under any parameter name");
+  ok(!r(`dial https://tempo.example.test/${PATH_KEY}d`).includes(PATH_KEY), "a *_RPC value is redacted");
+  ok(!r(`post to https://hooks.example.test/services/${PATH_KEY}e failed`).includes(PATH_KEY), "a long key-like path segment of a *_URL is redacted");
+  const basicKey = Buffer.from(`fk-${PATH_KEY}f:`).toString("base64");
+  const basicPair = Buffer.from(`fk-${PATH_KEY}f:pw123`).toString("base64");
+  ok(!r(`echo ${basicKey}`).includes(basicKey.slice(0, 12)), "a secret's base64 form as a Basic user is redacted");
+  const pairOut = r(`echo ${basicPair}`);
+  ok(!pairOut.includes(basicPair.slice(0, 12)) && !pairOut.includes(basicPair.slice(-6)), "...with the rest of its base64 run");
+  const other = Buffer.from("someone:" + ["other", "Canary", "Pw"].join("")).toString("base64");
+  ok(r(`Authorization: Basic ${other}`) === "Authorization: Basic [redacted]", "a Basic token in the text loses its credentials whatever their source");
+  ok(!r(`hash salt salt-${PATH_KEY}g`).includes(PATH_KEY), "a *_SALT value is redacted");
+  for (const prose of ["Basic arithmetic is fine", "Basic Authentication required", "use Basic AuthenticationHeaders"]) ok(r(prose) === prose, `the word Basic in prose passes through ("${prose}")`);
+  // A configured *_URL that carries no credential stays readable, whatever
+  // its path; one that carries a credential loses that part only.
+  process.env.PROBE_DOCS_URL = "https://docs.example.test/guides/getting-started-guide-2024/configuration-reference?section=webhooks-and-retries";
+  const docsText = "see https://docs.example.test/guides/getting-started-guide-2024/configuration-reference?section=webhooks-and-retries";
+  ok(r(docsText) === docsText, `a non-secret *_URL with long word segments passes through (${r(docsText)})`);
+  const HOOK_TOKEN = ["Hook", "Canary", "Tok", String(process.pid), "zz"].join("");
+  process.env.PROBE_WEBHOOK_URL = `https://hooks.example.test/services/team-alerts/${HOOK_TOKEN}?channel=ops`;
+  const hookOut = r(`post to https://hooks.example.test/services/team-alerts/${HOOK_TOKEN}?channel=ops failed`);
+  ok(hookOut === "post to https://hooks.example.test/services/team-alerts/[redacted]?channel=ops failed", `a *_URL loses only its credential segment (${hookOut})`);
+  const QTOKEN = ["q", "Canary", String(process.pid), "Abc", "def"].join("");
+  process.env.PROBE_EXPORT_URL = `https://export.example.test/v1/data?cursor=${QTOKEN}&format=csv`;
+  ok(r(`GET https://export.example.test/v1/data?cursor=${QTOKEN}&format=csv`) === "GET https://export.example.test/v1/data?cursor=[redacted]&format=csv", "a credential-looking query value under any name is redacted, the rest kept");
+  // Known key shapes and random runs are credentials; words are not.
+  const { looksLikeCredential } = await import("../src/tools/redact.js");
+  const shapes = [["sk", "live", "Q1w2E3r4T5y6U7i8"].join("_"), ["ghp", "AbCdEfGhIjKlMnOpQrSt"].join("_"), "123e4567-e89b-42d3-a456-426614174000", "xqzvbnmlkjhgfdsapoiuyt"];
+  for (const s of shapes) ok(looksLikeCredential(s), `looksLikeCredential: ${s.slice(0, 6)}... is a credential`);
+  for (const s of ["getting-started-guide-2024", "configuration-reference", "internationalization", "release-notes-2026-11-04"]) ok(!looksLikeCredential(s), `looksLikeCredential: ${s} is not`);
+  // Encoded spellings of a secret: percent-encoded (either hex case), hex
+  // (either case) and with JSON-escaped slashes.
+  const ENC = ["enc", "Canary", "/Key+", String(process.pid), "=x"].join("");
+  process.env.PROBE_ENCODED_API_KEY = ENC;
+  const pct = encodeURIComponent(ENC);
+  for (const [label, form] of [["percent-encoded", pct], ["percent-encoded, lowercase escapes", pct.replace(/%[0-9A-F]{2}/g, (m) => m.toLowerCase())],
+    ["hex", Buffer.from(ENC).toString("hex")], ["uppercase hex", Buffer.from(ENC).toString("hex").toUpperCase()], ["JSON-escaped slashes", ENC.replaceAll("/", "\\/")]]) {
+    const out = r(`upstream echoed ${form} back`);
+    ok(out === "upstream echoed [redacted] back", `a secret's ${label} form is redacted (${out.slice(0, 60)})`);
+  }
+  // upstreamErrorText: what a keyless kit relays from an upstream error body.
+  {
+    const { upstreamErrorText: u } = await import("../src/tools/redact.js");
+    ok(u(JSON.stringify({ error: { code: 7, message: "unknown product" }, html: "<p>".repeat(100) })) === "unknown product", "upstreamErrorText: a JSON body gives up its message field only");
+    ok(u(JSON.stringify({ message: `bad key fk-${PATH_KEY}f` })).includes("[redacted]") && !u(JSON.stringify({ message: `bad key fk-${PATH_KEY}f` })).includes(PATH_KEY), "upstreamErrorText: the relayed text is redacted");
+    const long = u(`x${"\u200b"}y\n\n\tz ${"w".repeat(5000)}`, 120);
+    ok(long.startsWith("xy z ") && long.length <= 123 && !long.includes("\u200b") && !/[\n\t]/.test(long), "upstreamErrorText: hidden and control characters go, whitespace folds, the text is bounded");
+    const straddle = u(`${"a".repeat(195)} fk-${PATH_KEY}f`, 200);
+    ok(!straddle.includes("fk-"), "upstreamErrorText: the whole text is redacted before it is cut, so a cut leaves no key head");
+    ok(u("") === "" && u(null) === "" && u("plain text") === "plain text", "upstreamErrorText: empty and plain text pass through");
+  }
   // Error text can carry a caller's input, so the scan must stay linear on
   // any shape: a long dotted run, and the same with URLs and @ in it.
   for (const [label, text] of [
@@ -94,11 +157,11 @@ const OP_TOKEN = ["op", "Canary", "Token", String(process.pid)].join("");
   ok(/json\(\{ error: redactSecrets\(err\?\.message\) \}\)/.test(mem), "the memory routes answer the scrubbed message");
   // No route block answers or logs a thrown message raw: inside every app
   // route (literal paths and the catalog binder's app[method](path, ...)), a
-  // line that builds a json/send answer, an error/detail/message field or a
+  // line that builds a json/send answer, a problem body, an error/detail/message field or a
   // console line from e.message or err.message wraps it in redactSecrets.
   // ALLOW lists lines whose message is proven constant (none today).
   const ALLOW = [];
-  const ANSWER = /json\(|send\(|\b(?:error|detail|message):|console\.(?:log|warn|error)\(/;
+  const ANSWER = /json\(|send\(|Problem\(|\b(?:error|detail|message):|console\.(?:log|warn|error)\(/;
   const RAW = /(?<!redactSecrets\()(?<!redactSecrets\(String\()\b(?:e|err)\??\.message\b/;
   const lines = server.split("\n");
   let route = null; const raw = []; let routes = 0, opRoutes = 0;
@@ -200,6 +263,24 @@ try {
   child.kill("SIGTERM");
   await new Promise((r) => { child.once("exit", r); setTimeout(r, 5000); });
   rmSync(TMP, { recursive: true, force: true });
+}
+
+// The secret list is built once per distinct set of secret-bearing variables,
+// not on every call: a page redacts hundreds of lines in one turn, and the
+// encoded forms of a large secret cost far more than the scan.
+{
+  const { redactSecrets, _secretBuildsForTests } = await import("../src/tools/redact.js");
+  process.env.CACHE_PROBE_API_KEY = "cacheprobe-" + "k".repeat(24);
+  redactSecrets("warm");
+  const before = _secretBuildsForTests();
+  let allRedacted = true;
+  for (let i = 0; i < 100; i++) if (!redactSecrets(`line ${i} ${process.env.CACHE_PROBE_API_KEY}`).includes("[redacted]")) allRedacted = false;
+  ok(_secretBuildsForTests() === before && allRedacted, `100 redactions with the same variables build the secret list once (${_secretBuildsForTests() - before} rebuilds) and redact every line`);
+  ok(redactSecrets(`jwt=${Buffer.from(process.env.CACHE_PROBE_API_KEY).toString("base64url")}`).includes("[redacted]"), "a secret's base64url form is redacted too");
+  process.env.CACHE_PROBE_API_KEY = "cacheprobe-" + "z".repeat(24);
+  const next = redactSecrets(`after the change ${process.env.CACHE_PROBE_API_KEY}`);
+  ok(_secretBuildsForTests() === before + 1 && next.includes("[redacted]") && !next.includes("zzzz"), "...and a changed secret is picked up and redacted on the next call");
+  delete process.env.CACHE_PROBE_API_KEY;
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);

@@ -2,6 +2,7 @@
 // vectors computed with node:crypto, tampered/wrong-secret rejections,
 // raw-body string enforcement, stripe/slack replay tolerance, and the
 // secret-never-echoed invariant. Pure functions, no server needed.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createHmac } from "node:crypto";
 import { UTIL_TOOLS } from "../src/tools/util-kit.js";
 

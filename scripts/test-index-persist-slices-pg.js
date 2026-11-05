@@ -235,6 +235,28 @@ async function main() {
     ok(JSON.stringify(sellers(A)) === JSON.stringify(await askB("sellers")), "B serves the same sellers and tool counts as A after the pull");
     const row = await sdb.records.get("x402-index", "https://seller-0.example");
     ok(row?.tools?.length === 5009 && row.tools[0].description === data[0][1].tools[0].description && row.fetchedAt === data[0][1].fetchedAt + 10_000_000, "the largest origin's row holds its whole catalogue");
+    // ---- a row too large for a batch: sent as UTF-8 bytes built in pieces ----
+    // (the text parameter's clean and encode were each one call over the whole
+    // body, 0.6-1 s on the largest seller's 84 MB row). The row stored is the
+    // one the text parameter stored.
+    {
+      const { cleanPgText } = sdb;
+      const bigOrigin = "https://seller-big.example";
+      const tools = Array.from({ length: 4000 }, (_, k) => ({ route: `/api/big/${k}`, method: "GET", name: `big tool ${k} 漢字 é \u{1F600}`, description: `Item ${k}: ${"ü".repeat(200)} ${"x".repeat(200)}`, price: "$0.001", network: "eip155:8453", tags: ["big"] }));
+      A._cacheForTests().set(bigOrigin, { manifest: { name: "Big" }, tools, fetchedAt: 5_000_000, error: null, source: "crawl", history: [], paywall: null, discoveryPath: "/.well-known/x402" });
+      const line = A._persistedLineForTest(bigOrigin);
+      const h = createHash("sha1").update(line).digest("base64");
+      const entryText = line.slice(JSON.stringify(bigOrigin).length + 2, -1);
+      const textBody = cleanPgText(`${entryText.slice(0, -1)},"contentHash":${JSON.stringify(h)}}`);
+      const p0 = A._rowBytesPiecesForTest();
+      const big = await longestBlock(() => A.persistIndexCacheAsync());
+      const pieces = A._rowBytesPiecesForTest() - p0;
+      ok(big.result === true && line.length > 2 * 1048576 && pieces >= Math.ceil(entryText.length / 1048576), `a ${(line.length / 1048576).toFixed(1)} MB row is sent in ${pieces} encoded pieces`);
+      ok(big.ms < BOUND_MS, `...and that save never held the event loop past ${BOUND_MS} ms (longest block ${big.ms} ms; ${big.raw} ms with collector pauses)`);
+      const r = await sdb.stateQuery(`SELECT body::text = $2::jsonb::text AS same, body->>'contentHash' AS h FROM ${sdb.stateDbSchema()}.records WHERE collection = 'x402-index' AND id = $1`, [bigOrigin, textBody]);
+      ok(r.rows[0]?.same === true && r.rows[0].h === h, "the stored row equals the row the text parameter stores, its hash included");
+    }
+
     // Last, as it rewrites every row: a failed pull bound is run again under the profiler.
     if (pull.ms >= BOUND_MS) {
       A.__testSeedCache(data.map(([o, e]) => [o, { ...e, fetchedAt: e.fetchedAt + 20_000_000 }]));

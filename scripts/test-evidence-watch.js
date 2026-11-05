@@ -2,6 +2,7 @@
 // floor while their payers pay no other seller, plus one more signal. Review
 // only; it changes no verdict. Offline, plus a source check that the route is
 // operator-gated and that no verdict code reads the list.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { evidenceSignals, evidenceWatchList } from "../src/evidence-watch.js";
 

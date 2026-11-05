@@ -11,6 +11,7 @@
 //     upstream: a server booting on the SAME directory fails a running job of
 //     another (the mechanism, reproduced); a server booting on its OWN
 //     directory leaves it running, and the job completes and settles once.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";

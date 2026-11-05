@@ -1,5 +1,6 @@
 // Tests for text-analysis-kit (readability-score). Pure functions, no server needed.
 // word-frequency, text-similarity, lorem-ipsum and slug-generate were retired 2026-08-25.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { TEXT_ANALYSIS_TOOLS } from "../src/tools/text-analysis-kit.js";
 
 const tool = (slug) => TEXT_ANALYSIS_TOOLS.find((t) => t.slug === slug);

@@ -11,6 +11,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { OPENROUTER_ATTRIBUTION } from "../../src/openrouter-attribution.js";
+import { judgeReadableName, judgeReadableText } from "../../src/listing-screen.js";
 
 const URL_ = "https://openrouter.ai/api/v1/chat/completions";
 
@@ -85,23 +86,12 @@ export function decomposePrompt(task, maxSteps, { guidance = "" } = {}) {
  *  text for every seller, so a longer or link-laden listing buys no advantage
  *  and a URL in a listing is never offered to the model as somewhere to go. */
 // A sentence written to whatever rates the listing rather than about what the
-// tool does (a fit it asks for, a perfect fit, a note or notice to the judge,
-// an instruction to set aside the rules) is dropped before the judge reads it.
-const RATER_ADDRESS = new RegExp([
-  /\bfit\s*(?:score\s*)?(?:of\s*|[:=]\s*)?(?:0?\.\d+|1\.0+|100\s*%)(?![\d.])/,
-  /\b(?:a\s+)?fit\s*(?:score\s*)?(?:of|[:=])\s*1\b/,
-  /\bperfect\s+fit\b/,
-  /\b(?:rate[sd]?|score[sd]?|grade[sd]?|judge[sd]?|rank(?:s|ed)?|mark(?:s|ed)?)\s+(?:it|this|me|us)\s+(?:as\s+)?(?:a\s+)?(?:1(?:\.0+)?\b|10\b|100\b|perfect|the\s+(?:best|top|highest)|first|highest|top)/,
-  /\bnote\s+to\s+(?:the\s+|any\s+|all\s+)?(?:ranking|ranker|judge|judging|model|llm|evaluator|grader|rater|scorer|selector)s?\b/,
-  /\b(?:evaluators?|raters?|graders?|rankers?|judges?|scorers?|ranking\s+models?|selecting\s+(?:models?|agents?))\s+(?:should|must|will|always|rate|give|score|pick|choose|prefer|select)\b/,
-  /\bsystem\s+(?:notice|note|override|directive|alert)\b/,
-  /\b(?:ignore|disregard|forget)\s+(?:all\s+|any\s+|the\s+)?(?:what|everything|anything|previous|prior|above|earlier|other)\b/,
-].map((re) => `(?:${re.source})`).join("|"), "i");
-
+// tool does (a fit it asks for, a note or notice to the judge, a role marker,
+// a request to be chosen, an instruction to set aside the rules) is dropped
+// before the judge reads it, by the one screen route-execute's seller judge
+// reads too (src/listing-screen.js judgeReadableText).
 export function judgeText(desc, max = 300) {
-  const flat = String(desc || "").replace(/\bhttps?:\/\/\S+/gi, "[link]").replace(/\s+/g, " ").trim();
-  const t = flat.split(/(?<=[.!?])\s+/).filter((s) => !RATER_ADDRESS.test(s)).join(" ");
-  return t.length > max ? `${t.slice(0, max - 1)}…` : t;
+  return judgeReadableText(desc, { max });
 }
 
 /** Candidates carry short keys ("s1c3" = step 1, candidate 3); the planner
@@ -114,7 +104,7 @@ export function judgePrompt(task, steps, { guidance = "" } = {}) {
     candidates: s.candidates.map((c, j) => {
       const key = `s${i + 1}c${j + 1}`;
       keyToId[key] = c.row.id;
-      return { key, name: c.row.name, description: judgeText(c.row.description), inputs: Object.keys(c.row.inputSchema?.properties || {}) };
+      return { key, name: judgeReadableName(c.row.name, { max: 120, links: true }), description: judgeText(c.row.description), inputs: Object.keys(c.row.inputSchema?.properties || {}) };
     }),
   }));
   return {

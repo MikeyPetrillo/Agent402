@@ -5,6 +5,7 @@
 // could not see it and the route test only covered the bad-link 400. Boots a
 // FREE_MODE server with a known secret, plants a pending record in the same
 // store the server reads, and drives confirm / unsubscribe / stop end to end.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";

@@ -19,6 +19,7 @@
 //     funding-graph analysis this does not attempt.
 //   * an origin with NO payer evidence is unknown, not failing. It keeps the
 //     old behaviour rather than being refused for a gap in OUR data.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { provenByChain, meetsRouterGate } from "../src/settlement-proof.js";
 
 let pass = 0, fail = 0;

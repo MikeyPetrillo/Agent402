@@ -2,6 +2,7 @@
 // validation logic (deterministic); tolerant of any single flaky upstream —
 // fails only if a validation assertion breaks or if EVERY live call fails
 // (which would mean our integration, not one upstream, is broken).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { DATA_TOOLS } from "../src/tools/data-kit.js";
 
 const h = (slug) => DATA_TOOLS.find((t) => t.slug === slug).handler;

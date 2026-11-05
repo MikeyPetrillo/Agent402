@@ -3,6 +3,7 @@
 // server boot: the route-level 404 gate is exercised by the manual/boot path;
 // here we assert the page reflects the qualification verdicts correctly and
 // that the operator surface is kept out of robots.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { operatorWishesPage } from "../src/operator-wishes.js";
 import { robotsTxt } from "../src/seo.js";
 

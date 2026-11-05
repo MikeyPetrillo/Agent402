@@ -8,6 +8,7 @@
 // The hard part is the TRANSIENT dip that settlement ordering guarantees: we pay
 // the seller during the handler and collect afterwards. An alarm that cannot
 // tell that from a drain would page on every healthy call.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { noteBuyerBalance, upstreamBuyerStatus } from "../src/upstream-buyer-status.js";
 
 let pass = 0, fail = 0;

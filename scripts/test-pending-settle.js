@@ -24,6 +24,7 @@
 //   a genuine 5xx with no tx -> 402, the chain is never read, still counted
 //
 //   node scripts/test-pending-settle.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { createHash } from "node:crypto";

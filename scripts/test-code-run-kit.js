@@ -8,6 +8,7 @@
 //
 //   node scripts/test-code-run-kit.js                   # validation only
 //   E2B_LIVE_TEST=1 E2B_API_KEY=... node scripts/test-code-run-kit.js  # full
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { CODE_RUN_TOOLS } from "../src/tools/code-run-kit.js";
 
 const tool = (slug) => CODE_RUN_TOOLS.find((t) => t.slug === slug);

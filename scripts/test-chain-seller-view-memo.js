@@ -7,6 +7,7 @@
 // Part A drives the memo in process (with --expose-gc for the heap reading);
 // part B boots a FREE_MODE server on a seeded index and counts builds through
 // /__operator/perf.json.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

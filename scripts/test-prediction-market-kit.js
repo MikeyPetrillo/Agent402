@@ -8,6 +8,7 @@
 //   • Live calls are opt-in (Kalshi is keyless,
 //     but live tests share the rate-limit pool so CI doesn't burn them).
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { PREDICTION_MARKET_TOOLS, __test } from "../src/tools/prediction-market-kit.js";
 
 import { readFileSync } from "node:fs";
@@ -225,6 +226,7 @@ if (process.env.PREDICTION_LIVE_TEST === "1") {
     if (u.includes("/events?")) return json({ events: [{ event_ticker: "KXBTC-26SEP1817", title: "BTC price range on Sep 18, 2026 at 5pm EDT?", strike_date: "2026-09-18T21:00:00Z" }] });
     if (u.includes("/live_data/events/KXBTC-26SEP1817")) return json(btcLive);
     if (u.includes("/live_data/weather/nowhere")) return json({ error: { code: "invalid_parameter:_unknown_weather_index_city_\"nowhere\"", message: "invalid parameter: unknown weather index city \"nowhere\"; supported cities: [miami]" } }, 400);
+    if (u.includes("/live_data/weather/hostile")) return json({ error: { code: "bad_request", message: `bad city\u200b ${process.env.PROBE_RELAY_TOKEN} ${"x".repeat(5000)}` }, page: "<html>".repeat(500) }, 400);
     if (u.includes("/live_data/weather/miami/calibrations")) return json({ city: "miami", units: "celsius", calibrations: [{ config_version: "miami-temperature-v1.0", effective_at_ms: 1786665600000, city_reference_c: -0.1, stations: [] }] });
     if (u.includes("/live_data/weather/miami")) return json({ city: "miami", config_version: "miami-temperature-v1.0-cal-20260914", units: "fahrenheit", timeseries: [{ contributors: 5, status: "normal", t: 1789748280000, v: 85.28 }, { contributors: 5, status: "normal", t: 1789748340000, v: 84.92 }] });
     return json({ error: "unexpected" }, 404);
@@ -244,6 +246,15 @@ if (process.env.PREDICTION_LIVE_TEST === "1") {
   ok(urls[0].includes("from=1789748280000&to=1789748340000&detailed=true") && urls.length === 1 && !("calibrations" in r), "kalshi-weather-index: from/to/detailed ride the query and no calibrations call is made unless asked");
   try { await h("kalshi-weather-index")({ city: "nowhere" }); ok(false, "kalshi-weather-index: unknown city did not throw"); }
   catch (e) { ok(e.statusCode === 422 && /supported cities: miami/.test(e.message), `kalshi-weather-index: a city Kalshi does not index is a 422 naming the supported cities (${e.statusCode}: ${e.message.slice(0, 60)})`); }
+  // A hostile upstream error: the buyer gets the status and the upstream's
+  // reason, bounded, redacted and without hidden characters.
+  process.env.PROBE_RELAY_TOKEN = ["relay", "Canary", "Tok", String(process.pid)].join("");
+  try { await h("kalshi-weather-index")({ city: "hostile" }); ok(false, "kalshi-weather-index: a hostile 400 did not throw"); }
+  catch (e) {
+    const m = String(e.message);
+    ok(e.statusCode === 400 && m.includes("bad city") && m.length < 400 && !m.includes(process.env.PROBE_RELAY_TOKEN) && !m.includes("\u200b") && !m.includes("<html>"), `kalshi: a hostile upstream error keeps its status and reason, bounded, redacted and screened (${e.statusCode}, ${m.length} chars)`);
+  }
+  delete process.env.PROBE_RELAY_TOKEN;
   globalThis.fetch = realFetch;
 }
 

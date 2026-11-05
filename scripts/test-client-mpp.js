@@ -5,6 +5,7 @@
 // wallet-only tool through the SDK over the native MPP wire and asserts the
 // SDK's own accounting (spend reservation/settle) and result caching hold on
 // that path exactly as on x402.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { Fetch as MppFetch, evm } from "mppx/client";

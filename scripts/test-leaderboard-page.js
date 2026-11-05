@@ -1,5 +1,6 @@
 // Offline unit tests for the /leaderboard page renderer (src/ledger-leaderboard.js,
 // Aug 2026 revamp). Fixture data only - no server, no network.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { ledgerLeaderboardPage } from "../src/ledger-leaderboard.js";
 
 let pass = 0, fail = 0;

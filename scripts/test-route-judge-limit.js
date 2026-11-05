@@ -8,6 +8,7 @@
 // the third is answered with the same lexical rows and judged:{skipped:"rate"},
 // never an error. The free path's share of the daily ceiling is pinned in
 // test-tool-judge.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { getFreePort } from "./lib/free-port.js";

@@ -5,6 +5,7 @@
 // REDEMPTION IS NOT GATED, and that is the point of the test. Existing keys
 // must keep spending their balance, or turning sales off would strand money
 // that is already out there. This pins both halves.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { getFreePort } from "./lib/free-port.js";

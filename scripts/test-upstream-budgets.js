@@ -5,6 +5,7 @@
 // call with no revenue attached, and one whose monthly quota has run out
 // before. This pins the properties that make the alarm honest rather
 // than decorative.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { upstreamBudgetStatus, UPSTREAM_BUDGETS } from "../src/upstream-budgets.js";
 import { readFileSync } from "node:fs";
 

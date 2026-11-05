@@ -2,6 +2,7 @@
 // (src/avm-validity.js). Crafts real algosdk txns, wraps them in x402 payment
 // headers, and checks the pure decision function against a fixed current round.
 // No network, no server boot.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert";
 import algosdk from "algosdk";
 import {

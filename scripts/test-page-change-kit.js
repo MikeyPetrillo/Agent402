@@ -14,6 +14,7 @@
 //     dispatcher refuses at connect in production (test-fetch-guard.js); the
 //     stub raises the same ESSRFBLOCKED cause so the handler's answer is the
 //     one a buyer sees.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer } from "node:http";
 import { isIP } from "node:net";
 import { PAGE_CHANGE_TOOLS } from "../src/tools/page-change-kit.js";

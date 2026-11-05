@@ -19,6 +19,7 @@ import { createServer } from "node:http";
 import { tempoCatalog, rankTempoResources } from "../src/tempo-sellers.js";
 import { payTempo, __testResetProofCache, tempoInboundCount, tempoInboundEvidence, tempoEvidenceFromLogs, primeTempoInboundCount, TEMPO_USDC, TEMPO_CAIP2 } from "../src/tempo-buyer.js";
 import { sellerDeliveryFailingRecently, sellerDeliveryMemoEntries, __resetSellerDeliveryFailuresForTest, noteSellerDeliveryFailure } from "../src/x402-buyer.js";
+(await import("../src/x402-buyer.js")).__setBuyerAddressGuardForTest(false); // this suite's sellers are local stubs
 import { buyerPaymentNetwork, externalChainsFor, EXTERNAL_CHAIN_BY_NETWORK, buildRouteExecuteTool, EXEC_TIERS } from "../src/tools/route-execute.js";
 import { Challenge } from "mppx";
 import { readFileSync } from "node:fs";
@@ -152,7 +153,7 @@ const proofDown = async () => { throw new Error("rpc down"); };
 const cap = BigInt(5000); // $0.005
 
 // happy path
-const r1 = await payTempo(URL_, { method: "POST", body: { url: "https://x" }, maxAtomic: cap, trusted: true, createCredential: mint, proof: proofOk });
+const r1 = await payTempo(URL_, { method: "POST", body: { url: "https://x" }, maxAtomic: cap, createCredential: mint, proof: proofOk });
 ok(r1.result?.scraped === true && r1.result.echo?.url === "https://x", "paid retry relayed the seller's JSON body (request body forwarded)");
 ok(r1.quote.usd === 0.002 && r1.quote.network === TEMPO_CAIP2, "quote reflects the LIVE 402 amount in USD on Tempo");
 ok(r1.receipt.transaction === "0xfeed" && r1.receipt.wire === "mpp", "receipt carries the Payment-Receipt reference and wire=mpp");
@@ -161,7 +162,7 @@ ok(lastAuth === "Payment ZmFrZQ" && paidHits === 1 && minted === 1, "exactly one
 // guards - each must refuse BEFORE minting
 const refuse = async (mode, opts, re, label) => {
   sellerMode = mode; const before = minted; let err = null;
-  try { await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, trusted: true, createCredential: mint, ...opts }); } catch (e) { err = e; }
+  try { await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, createCredential: mint, ...opts }); } catch (e) { err = e; }
   ok(err && re.test(err.message), `${label} -> refused (${err?.statusCode}: ${String(err?.message).slice(0, 70)})`);
   ok(minted === before, `${label} -> no credential minted`);
 };
@@ -176,7 +177,7 @@ await refuse("splits", { proof: proofOk }, /splits the payment across other reci
 }
 await refuse("ok", { proof: proofDown }, /refusing to spend/, "proof RPC down (fail closed)");
 sellerMode = "reject-paid";
-let rej = null; try { await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, trusted: true, createCredential: mint, proof: proofOk }); } catch (e) { rej = e; }
+let rej = null; try { await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, createCredential: mint, proof: proofOk }); } catch (e) { rej = e; }
 ok(rej && /rejected the paid retry/.test(rej.message) && rej.statusCode === 502, "seller 402 after payment -> 502 (buyer's settlement cancels; our exposure is bounded by cap)");
 
 // ---- one deadline for the whole purchase ----
@@ -187,18 +188,18 @@ ok(rej && /rejected the paid retry/.test(rej.message) && rej.statusCode === 502,
   const t0 = Date.now();
   const hang = new Promise(() => {});
   const guard = new Promise((r) => setTimeout(() => r("test guard fired"), 8000));
-  const out = await Promise.race([payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, trusted: true, createCredential: mint, proof: () => hang, timeoutMs: 4000 }).then(() => "paid", (e) => e), guard]);
+  const out = await Promise.race([payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, createCredential: mint, proof: () => hang, timeoutMs: 4000 }).then(() => "paid", (e) => e), guard]);
   ok(out instanceof Error && out.statusCode === 503 && /deadline/.test(out.message) && minted === before && Date.now() - t0 < 6000, `a hanging settlement-history read ends at the deadline, nothing minted (${out instanceof Error ? out.statusCode : out})`);
   // Too little time left after the read: refused before minting.
   const slow = async () => { await new Promise((r) => setTimeout(r, 1500)); return 4000; };
-  let e = null; try { await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, trusted: true, createCredential: mint, proof: slow, timeoutMs: 4000 }); } catch (x) { e = x; }
+  let e = null; try { await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, createCredential: mint, proof: slow, timeoutMs: 4000 }); } catch (x) { e = x; }
   ok(e && e.statusCode === 504 && minted === before && e.committed !== true, `under 3 s left before minting -> 504, nothing signed (${e?.statusCode}: ${String(e?.message).slice(0, 60)})`);
   // Signing that uses up the budget: the credential is not sent.
   const slowMint = async (resp) => { await new Promise((r) => setTimeout(r, 1500)); return mint(resp); };
-  let late = null; try { await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, trusted: true, createCredential: slowMint, proof: proofOk, timeoutMs: 4000 }); } catch (x) { late = x; }
+  let late = null; try { await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, createCredential: slowMint, proof: proofOk, timeoutMs: 4000 }); } catch (x) { late = x; }
   ok(late && late.statusCode === 504 && /not sent/.test(late.message) && late.committed !== true, `under 3 s left after signing -> 504, the payment is not sent (${late?.statusCode}: ${String(late?.message).slice(0, 60)})`);
   const mintedBeforeControl = minted;
-  const r = await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, trusted: true, createCredential: mint, proof: proofOk, timeoutMs: 4000 });
+  const r = await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, createCredential: mint, proof: proofOk, timeoutMs: 4000 });
   ok(r.result?.scraped === true && minted === mintedBeforeControl + 1, "CONTROL: a quick purchase inside the same budget pays as before");
 }
 
@@ -217,7 +218,7 @@ ok(rej && /rejected the paid retry/.test(rej.message) && rej.statusCode === 502,
     for (const [mode, label] of [["push-only", "push-only"], ["pull-push", "pull or push"]]) {
       sellerMode = mode; outside.length = 0;
       const hitsBefore = paidHits;
-      let e = null; try { await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, trusted: true, proof: proofOk }); } catch (x) { e = x; }
+      let e = null; try { await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, proof: proofOk }); } catch (x) { e = x; }
       ok(e && e.committed !== true && paidHits === hitsBefore, `${label} challenge with the real credential factory: no paid request sent (${e?.statusCode}: ${String(e?.message).slice(0, 80)})`);
       if (mode === "push-only") ok(e?.statusCode === 409 && /push-mode/.test(e.message) && outside.length === 0, `push-only seller refused 409 before any chain call (chain calls: ${outside.length})`);
       else ok(e?.statusCode === 502 && /nothing was sent/.test(e.message) && outside.length > 0, "CONTROL: a pull-capable challenge reaches the pull credential's own preparation");
@@ -233,7 +234,7 @@ ok(rej && /rejected the paid retry/.test(rej.message) && rej.statusCode === 502,
   sellerMode = "redirect-paid";
   const hits = paidHits;
   let e = null, r = null;
-  try { r = await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, trusted: true, createCredential: mint, proof: proofOk }); } catch (x) { e = x; }
+  try { r = await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, createCredential: mint, proof: proofOk }); } catch (x) { e = x; }
   ok(!r && e?.statusCode === 502 && /redirect/.test(String(e?.message)) && paidHits === hits + 1, `a 3xx on the paid leg is a 502, never a delivered answer (${e ? `${e.statusCode}: ${String(e.message).slice(0, 60)}` : "resolved"})`);
   ok(e?.committed === true && e?.signedUsd === 0.002, "...stamped committed with the credential's amount: the credential was handed over");
   sellerMode = "ok";
@@ -243,7 +244,7 @@ ok(rej && /rejected the paid retry/.test(rej.message) && rej.statusCode === 502,
 {
   sellerMode = "broken-body";
   let e = null, r = null;
-  try { r = await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, trusted: true, createCredential: mint, proof: proofOk }); } catch (x) { e = x; }
+  try { r = await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, createCredential: mint, proof: proofOk }); } catch (x) { e = x; }
   ok(!e && r && r.result?.relayError === "upstream body unreadable" && r.quote?.usd === 0.002, `paid 200 with a broken body -> relayed with relayError (${e ? `threw ${e.statusCode}` : JSON.stringify(r?.result)})`);
   sellerMode = "ok";
 }
@@ -255,9 +256,9 @@ sellerMode = "ok";
 await refuse("ok", { proof: async () => ({ count: 4000, payers: 2 }) }, /distinct recent payers on Tempo \(floor 3\)/, "4,000 transfers from TWO payers is below the payer floor");
 {
   const before = minted;
-  const r = await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, trusted: true, createCredential: mint, proof: async () => ({ count: 4000, payers: 3 }) });
+  const r = await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, createCredential: mint, proof: async () => ({ count: 4000, payers: 3 }) });
   ok(r.result?.scraped === true && minted === before + 1, "control: the same count from three payers is paid");
-  const r2 = await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, trusted: true, createCredential: mint, proof: async () => ({ count: 4000, payers: undefined }) });
+  const r2 = await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, createCredential: mint, proof: async () => ({ count: 4000, payers: undefined }) });
   ok(r2.result?.scraped === true, "control: a proof with no payer figure (an older primed count) is judged on the count, as before");
 }
 {
@@ -289,7 +290,7 @@ await refuse("ok", { proof: async () => ({ count: 4000, payers: 2 }) }, /distinc
 // strikes, a settled delivery clears it.
 {
   const ORIGIN = new URL(URL_).origin;
-  const buy = (mode, memoizeDelivery = true) => { sellerMode = mode; return payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, trusted: true, createCredential: mint, proof: proofOk, memoizeDelivery }).then((r) => r, (e) => e); };
+  const buy = (mode, memoizeDelivery = true) => { sellerMode = mode; return payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, createCredential: mint, proof: proofOk, memoizeDelivery }).then((r) => r, (e) => e); };
   __resetSellerDeliveryFailuresForTest();
   const e1 = await buy("fail-500");
   ok(e1 instanceof Error && e1.committed === true, "control: a 500 after the credential went out is still a committed 502");

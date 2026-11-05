@@ -83,6 +83,16 @@ const checkHostile = (html, where) => {
   ok(!html.includes("pixel.png") && !html.includes("cited-host image"), "an image is removed whole, even one on a cited host (the sanitizer runs before the renderer)");
   const inline = AS.__renderInline("[a](https://evil.example/x) https://evil.example/y [b](https://www.x402.org/z) [c](javascript:alert(1))", STUB_CITATIONS);
   ok(!/href="https:\/\/evil|href="javascript/.test(inline) && inline.includes('href="https://www.x402.org/z"'), "the renderer alone links only http(s) URLs on a cited host");
+  // A link the model wrote to a cited host loses its query and fragment; a
+  // listed source's own URL keeps them as given.
+  const cites = [...STUB_CITATIONS, { url: "https://data.example.test/report?id=42&lang=en#t", snippet: "s", number: 4 }];
+  const q = AS.__renderInline("[a](https://www.x402.org/c?d=the+answer+text#frag) https://docs.example.org/x402?leak=1. [src](https://data.example.test/report?id=42&lang=en#t) [other](https://data.example.test/report?id=43)", cites);
+  ok(q.includes('href="https://www.x402.org/c"') && !q.includes("d=the+answer") && !q.includes("#frag"), "a model-written link to a cited host loses its query and fragment");
+  ok(q.includes('href="https://docs.example.org/x402"') && !q.includes("leak=1"), "a bare model-written URL to a cited host loses its query, in the href and the text");
+  ok(q.includes('href="https://data.example.test/report?id=42&amp;lang=en#t"'), "a listed source's own URL keeps its query and fragment as given");
+  ok(q.includes('href="https://data.example.test/report"') && !q.includes("id=43"), "another URL on that source's host loses the query the model wrote");
+  const page = AS.renderAnswerHtml("See [the spec](https://www.x402.org/spec?u=secret) [1].", STUB_CITATIONS);
+  ok(page.includes('href="https://www.x402.org/spec"') && !page.includes("u=secret"), "the answer body applies the same rule");
   ok(html.includes('<a href="#source-1" class="as-cite">[1]</a>') && html.includes("<strong>details</strong>") && /<ul><li>first point/.test(html), "citation markers link to their source; bold and lists render");
 }
 {

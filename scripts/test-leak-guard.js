@@ -56,6 +56,7 @@ process.env.POSTHOG_TEST_CAPTURE = "1";
 
 const CANARIES = ["LEAKCANARY"];
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import {
   LLM_GATEWAY_TOOLS,
   promptCacheKey,

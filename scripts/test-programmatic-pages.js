@@ -19,6 +19,7 @@
 //    which means they must be ESCAPED, not trusted.
 //
 //   node scripts/test-programmatic-pages.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import {
   TICKER_RE, MANAGER_SLUG_RE, normalizeTicker, normalizeManagerSlug, slugToName,
   createTeaserCache, loadTeaser, buildInsiderTeaser, buildFundTeaser, buildDossierTeaser,

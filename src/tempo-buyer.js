@@ -23,16 +23,19 @@
 //     hold no relay key here. mppx signs pull credentials validBefore = now+25s,
 //     so we sign and send immediately - a slow seller is bounded by their own
 //     window, never by ours.
+import { assertNotOwnPayout } from "./own-wallets.js";
 import { createHash } from "node:crypto";
 import { assertSigningAllowed } from "./signing-halt.js";
 import { assertPayoutScreened } from "./tools/sanctions-kit.js";
-import { ROUTER_UA, noteSellerDeliveryFailure, clearSellerDeliveryFailure, isCallerInputStatus } from "./x402-buyer.js";
+import { ROUTER_UA, noteSellerDeliveryFailure, clearSellerDeliveryFailure, isCallerInputStatus, buyerAddressGuardOn } from "./x402-buyer.js";
 import { recordUpstreamSpend } from "./stats.js";
 import { recordOutbound } from "./outbound-ledger.js";
 import { assertPublicUrl, ssrfDispatcher } from "./tools/fetch-guard.js";
 import { Agent as UndiciAgent } from "undici";
 import { withDistrust } from "./tls-distrust.js";
-const trustedDispatcher = new UndiciAgent({ connect: withDistrust() });
+// Used only while a suite has turned the address guard off
+// (__setBuyerAddressGuardForTest in x402-buyer.js); still refuses a distrusted chain.
+const unguardedDispatcher = new UndiciAgent({ connect: withDistrust() });
 import { readBytesCapped, decodeUtf8 } from "./capped-body.js";
 
 
@@ -300,7 +303,7 @@ export async function tempoBuyerStatus() {
  */
 export async function payTempo(url, {
   maxAtomic, method = "POST", body, headers = {}, timeoutMs = 20000, maxBytes = DEFAULT_MAX_BYTES,
-  trusted = false, createCredential = null, proof = tempoInboundEvidence, minSettled = tempoMinSettled(), minPayers = tempoMinPayers(),
+  createCredential = null, proof = tempoInboundEvidence, minSettled = tempoMinSettled(), minPayers = tempoMinPayers(),
   memoizeDelivery = false, slug = null,
   // After an error answer to the paid request, how long the chain may be
   // waited on to prove the credential expired unused (0: not read, and the
@@ -326,7 +329,8 @@ export async function payTempo(url, {
     const stop = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${what} ran past the deadline`)), Math.max(0, leftMs())); });
     return Promise.race([p, stop]).finally(() => clearTimeout(timer));
   };
-  if (!trusted) await assertPublicUrl(url);
+  const guarded = buyerAddressGuardOn();
+  if (guarded) await assertPublicUrl(url);
   const init = (extra = {}) => ({
     method,
     // Same identification as the x402 buyer, for the same reason: this path is
@@ -344,9 +348,9 @@ export async function payTempo(url, {
     redirect: "manual",
     signal: AbortSignal.timeout(Math.max(1, leftMs())),
     // Pin the resolved address on every hop (the one-shot assertPublicUrl above is
-    // TOCTOU-rebindable), exactly as src/x402-buyer.js does. A trusted URL (a
-    // fixed first-party address, or a test seller on this host) skips the guard.
-    dispatcher: trusted ? trustedDispatcher : ssrfDispatcher,
+    // TOCTOU-rebindable), exactly as src/x402-buyer.js does. No call option
+    // skips it; only a suite's process-wide test switch does.
+    dispatcher: guarded ? ssrfDispatcher : unguardedDispatcher,
   });
   // 1. Bare request -> the seller's live 402 (their quote is the truth, the
   //    registry price is a hint).
@@ -376,6 +380,8 @@ export async function payTempo(url, {
   //    listed, 503 when no list is held (an unscreened payout is never made),
   //    both before anything is signed. A Tempo address is an EVM address,
   //    compared lowercased.
+  // Never one of our own wallets.
+  await assertNotOwnPayout(recipient);
   await assertPayoutScreened(recipient, { label: recipient.toLowerCase() });
   // A charge may name split recipients that the payment also pays. Only the
   // primary recipient is screened and proven, so a challenge with any split

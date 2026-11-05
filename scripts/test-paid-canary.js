@@ -131,5 +131,23 @@ ok(classifyRailOutcome({ toolBroken: true, railFailures: [] }) === "broken", "to
   ok(!cacheRepeatOk({ ...good, xCache: "miss" }), "a miss on the paid repeat fails the cache leg");
   ok(!cacheRepeatOk({ ...good, sameAnswer: false }), "a different answer fails the cache leg");
 }
+// A connection reset before any answer (a kept-alive socket the edge closed)
+// is retried once; an HTTP answer or any other error is never retried.
+{
+  const { isConnectionReset, withConnRetry } = await import("./lib/conn-retry.js");
+  const reset = Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("write ECONNRESET"), { code: "ECONNRESET" }) });
+  ok(isConnectionReset(reset) && isConnectionReset(new Error("other side closed")) && !isConnectionReset(new Error("HTTP 502")), "a reset is read through the fetch error's cause; other errors are not resets");
+  let calls = 0;
+  const out = await withConnRetry(async () => { calls++; if (calls === 1) throw reset; return "answered"; }, { pauseMs: 1 });
+  ok(out === "answered" && calls === 2, `a reset is retried once and the second answer returned (${calls} calls)`);
+  calls = 0;
+  const twice = await withConnRetry(async () => { calls++; throw reset; }, { pauseMs: 1 }).then(() => null, (e) => e);
+  ok(twice === reset && calls === 2, `a second reset is not retried again (${calls} calls)`);
+  calls = 0;
+  const other = await withConnRetry(async () => { calls++; throw new Error("HTTP 402"); }, { pauseMs: 1 }).then(() => null, (e) => e);
+  ok(other?.message === "HTTP 402" && calls === 1, "any other error is not retried");
+  const src = (await import("node:fs")).readFileSync(new URL("./paid-canary.js", import.meta.url), "utf8");
+  ok(/withConnRetry\(\(\) => mpp\.rawFetch\(url, \{ headers: heartbeatHeaders\(\) \}\)/.test(src) && /withConnRetry\(\(\) => mpp\.rawFetch\(url, \{ headers: \{ \.\.\.heartbeatHeaders\(\), Authorization: credential \} \}\)/.test(src), "the MPP leg's probe and its paid call both retry a reset");
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

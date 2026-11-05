@@ -3,6 +3,7 @@
 // (Treasury Fiscal Data, Frankfurter/ECB, or World Bank). Fails only if an
 // assertion breaks or if EVERY live call fails (which would mean our
 // integration is broken, not one upstream).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { MACRO_TOOLS, retryTransient, withStaleFallback } from "../src/tools/macro-kit.js";
 
 const h = (slug) => MACRO_TOOLS.find((t) => t.slug === slug).handler;

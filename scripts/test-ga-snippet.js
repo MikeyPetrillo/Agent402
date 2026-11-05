@@ -1,5 +1,6 @@
 // Google Analytics wiring (2026-10-01): env-gated, kept off bearer-link pages,
 // consent-defaulted in Europe, ads features off, CSP opened to one host only.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 
 let pass = 0, fail = 0;

@@ -4,6 +4,7 @@
 // listed for the operator, never reported as refunded), abandoned-claim
 // takeover after a restart (one regeneration, then refund), long-input metadata
 // chunking, and the legacy single-file import. Offline, in CI.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createHumanCheckout, HUMAN_PRODUCTS, humanCheckoutEnabled, chunkInput, unchunkInput, STALE_CLAIM_MS } from "../src/human-checkout.js";
 import { rmSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";

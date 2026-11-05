@@ -1,4 +1,5 @@
 // Unit tests for the one-call tool resolver (/api/find). Pure, no network.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { findTools, applyFrontDoorTerms } from "../src/find.js";
 import { API_TOOLS } from "../src/tools/api-kit.js";
 import { CRYPTO_TOOLS } from "../src/tools/crypto-kit.js";

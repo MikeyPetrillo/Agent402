@@ -441,12 +441,15 @@ const { ctx } = buildRoutePerfFixture({ sellers: 5800, toolsTarget: 198_000, cac
   // their own field reads, so a step that walks every row is seen whatever
   // the host's speed; the step bound covers the work no field read shows.
   // The join reads no field, so it is counted in steps: the route sort is the
-  // last read, and after it come the round-robin (a step per depth of the
-  // deepest seller) and the join, a step per 16,384 rows it moves.
+  // last read, and after it come the round-robin (a step per 8,192 rows it
+  // places, or fewer) and the join, a step per 16,384 rows it moves. One
+  // seller lists 20,000 routes (the largest production seller lists 77k):
+  // its sort runs in steps of 1,024 rows, about 20k field reads each.
   let reads = 0;
   const N = 200_000, collate = new Intl.Collator().compare;
   const rows = Array.from({ length: N }, (_, i) => {
-    const seller = `https://s${i % 5800}.example`, sellerName = i % 3 ? `Seller ${i % 5800}` : "", described = i % 5 < 2;
+    const s = i % 10 === 0 ? "big" : String(i % 5800);
+    const seller = `https://s${s}.example`, sellerName = i % 3 ? `Seller ${s}` : "", described = i % 5 < 2;
     const route = `/r${(i * 7919) % N}`;
     return { get route() { reads++; return route; }, get seller() { reads++; return seller; }, get sellerName() { reads++; return sellerName; }, get described() { reads++; return described; } };
   });
@@ -461,13 +464,19 @@ const { ctx } = buildRoutePerfFixture({ sellers: 5800, toolsTarget: 198_000, cac
   const expected = [...roundRobin(rows.filter((r) => r.described)), ...roundRobin(rows.filter((r) => !r.described))];
   const rest = rows.filter((row) => !row.described);
   const depth = Math.max(...[...Map.groupBy(rest, (row) => row.sellerName || row.seller).values()].map((g) => g.length));
+  const v0 = x._interleaveVisitsForTest();
   let most = 0, steps = 0, lastRead = 0, r;
   const it = x._interleaveStepsForTest(rows);
   do { const r0 = reads; r = it.next(); most = Math.max(most, reads - r0); steps++; if (reads > r0) lastRead = steps; } while (!r.done);
   const tail = steps - lastRead, joinSlices = Math.floor(rest.length / 16384);
   ok(r.value.length === N && r.value.every((row, i) => row === expected[i]), `the sliced interleave is the one-pass interleave, row for row (${N} rows)`);
-  ok(most <= 2 * 8192, `...and no step reads more than a slice of rows (most field reads in one step: ${most} of ${N} rows, over ${steps} steps)`);
-  ok(tail >= depth + joinSlices, `...and the round-robin and the join run in slices: ${tail} steps after the last field read, at least ${depth} for the round-robin and ${joinSlices} for the join of ${rest.length} rows`);
+  ok(most <= 3 * 8192, `...and no step reads more than a slice of rows (most field reads in one step: ${most} of ${N} rows, over ${steps} steps)`);
+  // Each row is placed once: a spent seller leaves the round list (walking
+  // every seller in each round of the deepest one allocated 38% of a
+  // production-sized crawl cycle, 2026-11-04).
+  const visits = x._interleaveVisitsForTest() - v0, rrSlices = Math.floor(rest.length / 8192);
+  ok(visits === N, `...the round-robin visits each row once (${visits} group visits for ${N} rows, ${depth} rounds deep)`);
+  ok(tail >= rrSlices + joinSlices, `...and the round-robin and the join run in slices: ${tail} steps after the last field read, at least ${rrSlices} for the round-robin and ${joinSlices} for the join of ${rest.length} rows`);
   const st = await longestStep(() => x._interleaveStepsForTest(rows));
   ok(st.sameShape && heldUnder(st.longest, STEP_BOUND_MS), `...in ${st.count} steps, the longest ${st.longest.toFixed(1)} ms ours, each step its least over three walks (${STEP.note}; one walk's worst step ${st.single.toFixed(1)} ms)`);
 }

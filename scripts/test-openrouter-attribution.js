@@ -14,6 +14,7 @@
 // let the inner one book its own sale: one purchase would emit several usage
 // rows, each with its own price, and the outer product's margin would read far
 // higher than it is. The inner kits take an `accountAs` callback for this.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";

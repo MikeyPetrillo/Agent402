@@ -1,6 +1,7 @@
 // Weather-kit tests (run in CI, which has network egress). Strict on our own
 // validation logic (deterministic); tolerant of any single flaky upstream —
 // fails only if a validation assertion breaks or if EVERY live call fails.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { WEATHER_TOOLS } from "../src/tools/weather-kit.js";
 
 const h = (slug) => WEATHER_TOOLS.find((t) => t.slug === slug).handler;

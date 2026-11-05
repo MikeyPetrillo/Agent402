@@ -6,6 +6,7 @@
 // every candidate not-live, and both external legs silently resolved nothing
 // (the offline router tests inject the resolver, so they could not see it;
 // the first live Tempo SOR buy did, 2026-08-27).
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
 let pass = 0, fail = 0;

@@ -5,6 +5,7 @@
 // correctness of the check but RESTRAINT: the response belongs to the buyer who
 // paid for it, and the only thing recorded is whether the paths the seller
 // itself published were present.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import {
   observeDelivery, deliveryObservation, deliveryProjection, pathPresent,
   __resetObservationsForTest, __observationCountForTest,

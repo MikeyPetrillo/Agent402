@@ -32,10 +32,12 @@ RUN npm ci --omit=dev && npx playwright install --with-deps chromium \
   # MUST be present — a base-image drift that drops ffmpeg/ffprobe should FAIL
   # the build loudly, not ship an image that 500s every media tool. Then record
   # the exact build + whether the vulnerable MagicYUV *video* decoder is present.
-  # We do NOT fail on its presence: our tools only decode AUDIO (`-vn` on every
-  # ffmpeg call, enforced by scripts/test-ffmpeg-novideo.js), so the decoder is
-  # unreachable through our flags; failing would just break builds over an
-  # unexploitable path. scripts/check-ffmpeg-cve.sh reads the recorded status.
+  # We do NOT fail on its presence: our tools only decode AUDIO. `-vn` alone
+  # does not ensure that (stream probing still opens every input stream's
+  # decoder); every ffmpeg and ffprobe call passes `-codec_whitelist` with an
+  # audio-only decoder list before `-i` (media-kit AUDIO_DECODERS, enforced by
+  # scripts/test-ffmpeg-novideo.js), so no video decoder opens on buyer input.
+  # scripts/check-ffmpeg-cve.sh reads the recorded status.
   && { command -v ffmpeg >/dev/null || { echo "FATAL: ffmpeg missing from image"; exit 1; }; } \
   && { command -v ffprobe >/dev/null || { echo "FATAL: ffprobe missing from image"; exit 1; }; } \
   # /api/tts encodes opus and aac from speech PCM (media-kit transcodePcm).

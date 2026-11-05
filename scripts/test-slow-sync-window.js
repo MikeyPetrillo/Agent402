@@ -16,6 +16,7 @@
 //      now names Prefer: wait); a fast route is untouched;
 //   4. a run that fails after the 202 ends the job failed and never settles.
 // Unit checks cover the switch (SLOW_SYNC_WINDOW_SECONDS, "off") and parsing.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -131,6 +132,9 @@ globalThis.fetch = function (input, init) {
   return real.call(this, input, init);
 };
 `);
+// The connector marker carries a per-process secret (src/mcp-loopback.js); the
+// booted server inherits this one.
+const MCP_MARKER = `mcp;k=${(process.env.MCP_LOOPBACK_TEST_SECRET = "8d".repeat(24))}`;
 proc = spawn(process.execPath, ["--import", preload, "src/server.js"], {
   env: { ...process.env, PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`, PAYMENT_NETWORKS: "base",
@@ -257,7 +261,7 @@ try {
   }
   {
     const c = counts();
-    const r = await post({ "x-agent402-via": "mcp", "x-forwarded-for": "10.8.0.7", "payment-signature": credential(wallet(7)) });
+    const r = await post({ "x-agent402-via": MCP_MARKER, "x-forwarded-for": "10.8.0.7", "payment-signature": credential(wallet(7)) });
     ok(r.status === 200 && fac.settle === c.s + 1, `the MCP connector's local replay is served synchronously as before (got ${r.status})`);
   }
   {

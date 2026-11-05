@@ -1,6 +1,7 @@
 // Offline unit tests for the /mpp-marketplace renderer. No server, no
 // network - mppMarketPage() takes a plain snapshot object, same injectable
 // shape as mppIndexSnapshot() returns.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { mppMarketPage } from "../src/mpp-market-page.js";
 
 let pass = 0, fail = 0;

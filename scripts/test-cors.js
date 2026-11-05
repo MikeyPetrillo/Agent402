@@ -6,6 +6,7 @@
 // echo validation; the booted half proves the middleware runs BEFORE the gates
 // (a preflight is never asked to pay and never spends a limiter token) and
 // that the payment headers a buyer must read are on the expose list.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { corsAllowsPath, corsAllowHeaders, CORS_EXPOSE_HEADERS, CORS_DEFAULT_ALLOW_HEADERS } from "../src/cors.js";
 import { getFreePort } from "./lib/free-port.js";

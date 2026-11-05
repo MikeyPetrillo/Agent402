@@ -2,6 +2,7 @@
 // The metered chat route refuses a model id the upstream's live list does not
 // carry BEFORE any payment gate (src/model-catalog.js; server.js mounts the
 // check ahead of the gates), and fails open with no fresh list.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtempSync } from "node:fs";

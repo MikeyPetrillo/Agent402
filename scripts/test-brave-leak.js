@@ -18,6 +18,7 @@
 // nothing tied the skip list to the pack catalogue. This test is that tie.
 //
 // Offline, no network, no key needed.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync } from "node:fs";
 import { SKILL_PACKS } from "../src/skills.js";
 import { SEARCH_TOOLS } from "../src/tools/search.js";

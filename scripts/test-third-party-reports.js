@@ -9,6 +9,7 @@
 //
 // Scoped to the claim, not to the file that drifted last: any flag added to the
 // dossier is swept, whatever it says.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { NOTICE, buildSellerDossierTool } from "../src/tools/seller-dossier.js";
 import { readFileSync } from "node:fs";
 

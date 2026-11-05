@@ -7,6 +7,7 @@
 //     supplied ABI/signature) are exercised end-to-end offline.
 //   • Live upstream calls are opt-in via CONTRACT_LIVE_TEST=1.
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { CONTRACT_TOOLS, selectorOf, classifyRpcError } from "../src/tools/contract-kit.js";
 
 const h = (slug) => CONTRACT_TOOLS.find((t) => t.slug === slug).handler;

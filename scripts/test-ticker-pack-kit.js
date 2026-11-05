@@ -27,6 +27,7 @@
 //   - the pure stitching helpers and the holders primitives (name
 //     normalization, URL construction refuses traversal, streaming scan)
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "test-key-not-real";
 process.env.RESEARCH_DEBUG = "1"; // exposes the synthesis prompt for the grounding assertion
 

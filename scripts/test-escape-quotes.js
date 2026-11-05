@@ -3,6 +3,7 @@
 // escaped per note, never as one string that holds the markup between them.
 //
 // Run: node scripts/test-escape-quotes.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { esc } from "../src/ledger-chrome.js";
 import { solanaSectionHtml } from "../src/ledger-leaderboard.js";

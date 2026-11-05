@@ -9,6 +9,7 @@
 //      text, and a provider 5xx is still a 502.
 // The upstream is stubbed in-process (part 3 preloads the stub into a booted
 // server with --import), so nothing leaves the machine and nothing is spent.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

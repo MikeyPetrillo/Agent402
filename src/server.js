@@ -7,6 +7,7 @@ import { carriesPaymentAttempt, registerOfferedNetworks } from "./payment-attemp
 import { retiredEntryFor, assertRetiredRegistryConsistent, retirementHeaders, RETIRED_CONVERTERS_AT } from "./retired-tools.js";
 import { createTrafficStore, trafficMiddleware } from "./traffic-classifier.js";
 import { redisSharedSettled, createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath } from "./unpaid-quote-budget.js";
+import { stripMcpMarker } from "./mcp-loopback.js";
 import { RAILS_OR, RAILS, x402EvmOnly, x402RailsFor } from "./rails.js";
 import { onGatedRailOffered } from "./gated-rails.js";
 // The networks a PUBLIC surface names (src/public-networks.js): the
@@ -49,7 +50,7 @@ import { llmsLinkMiddleware } from "./llms-link.js";
 import { extractArticle, fetchPageMeta } from "./tools/extract.js";
 import { dnsLookup } from "./tools/dns.js";
 import { pdfToText } from "./tools/pdf.js";
-import { renderArticle, screenshotPage, rasterizeSvg } from "./tools/render.js";
+import { renderArticle, screenshotPage, rasterizeSvg, withHtmlFramesFailureBound } from "./tools/render.js";
 import { mountAnswerShares, removeShare } from "./answer-share.js";
 import { workerEnabled, runOnWorker, assertWorkerConfig, setWorkerOutcomeObserver } from "./worker-client.js";
 import {
@@ -418,7 +419,7 @@ import { priceToMicroUsd, sellerRouteUrl } from "./x402-index.js";
 import { priceUsdOf } from "./price-usd.js";
 import { submissionSlotStatus } from "./x402-index.js";
 import { startRouterPool, routerPoolStatus } from "./router-pool.js";
-import { allPayToOrigins, allPayToPrices, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedToolsAsync, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategoriesAsync, configureListingsStore, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
+import { allPayToOriginsAsync, allPayToPricesAsync, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedToolsAsync, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategoriesAsync, configureListingsStore, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
 import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot, screenMppSellerForServe } from "./mpp-index.js";
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
 import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled, tempoSettlementMode } from "./mpp-tempo.js";
@@ -477,10 +478,12 @@ const MEDIA_TOOLS = MEDIA_TOOLS_RAW.map((t) => ({
 // page-speed and html-frames run on the browser pool, so they follow render's
 // placement: on the secretless worker when it is configured, in-process otherwise.
 import { BROWSER_MEASURE_TOOLS as BROWSER_MEASURE_TOOLS_RAW } from "./tools/browser-measure-kit.js";
-const BROWSER_MEASURE_TOOLS = BROWSER_MEASURE_TOOLS_RAW.map((t) => ({
-  ...t,
-  handler: async (input, ctx) => (workerEnabled() ? runOnWorker(t.slug, input) : t.handler(input, ctx)),
-}));
+// html-frames: failed documents (uncharged 4xx) are bounded per payer, on both
+// placements, keyed on the signed payer, else the client address.
+const BROWSER_MEASURE_TOOLS = BROWSER_MEASURE_TOOLS_RAW.map((t) => {
+  const run = async (input, ctx) => (workerEnabled() ? runOnWorker(t.slug, input) : t.handler(input, ctx));
+  return { ...t, handler: t.slug === "html-frames" ? withHtmlFramesFailureBound(run, (req) => payerFromRequest(req) || req?.ip) : run };
+});
 import { GOV_TOOLS } from "./tools/gov-kit.js";
 import { GEO_TOOLS } from "./tools/geo-kit.js";
 import { OCR_TOOLS } from "./tools/ocr-kit.js";
@@ -1827,16 +1830,37 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
     noteExcluded(1);
     return false;
   });
-  // Judged order over gated candidates (src/tool-judge.js); injection-screened text only.
-  // A pinned target was already chosen by a decision; it is not re-judged.
+  // Judged order over gated candidates (src/tool-judge.js). The judge reads
+  // each listing through the shared judge screen (src/listing-screen.js
+  // judgeReadableText, the one decide's judge reads): a listing the screen
+  // flags whole reaches it with no description or tags, and every sentence
+  // written to the reader is dropped from the rest; the seller's host, slug
+  // and tags are screened the same way (judgeReadableListing: each alone and
+  // read together, so a sentence split across tags is read whole). A pinned
+  // target was already chosen by a decision; it is not re-judged.
   let judgedSelection = null;
   if (candidates.length && !onlyUrl) {
+    const { judgeReadableListing } = await import("./listing-screen.js");
+    const { judgedOverrideAllowed } = await import("./tools/route-execute.js");
     const hostOfSeller = (u) => { try { return new URL(u).host; } catch { return String(u || ""); } };
-    const ordered = await orderByJudgment(task, candidates, (r) => {
-      const desc = String(r.description || r.name || "");
-      const clean = !looksLikeListingInjection(desc);
-      return { name: `${hostOfSeller(r.seller || r.url)} ${r.slug || ""}`.trim(), description: clean ? desc : "", tags: clean && Array.isArray(r.tags) ? r.tags : [] };
+    let ordered = await orderByJudgment(task, candidates, (r) => {
+      const raw = String(r.description || r.name || "");
+      const clean = !looksLikeListingInjection(raw);
+      return judgeReadableListing({
+        host: hostOfSeller(r.seller || r.url),
+        slug: String(r.slug || ""),
+        description: clean ? raw : "",
+        tags: clean && Array.isArray(r.tags) ? r.tags.map(String) : [],
+      }, { links: false });
     });
+    // A judged reorder stands only when its pick's own match score meets the
+    // floor (judgedOverrideAllowed, src/tools/route-execute.js); below it the
+    // lexical order is kept and the judge's answer rides on the receipt.
+    if (!ordered.refused && ordered.items?.[0] && ordered.items[0] !== candidates[0]
+      && (ordered.selection?.method === "judged" || ordered.selection?.method === "judged-tie")) {
+      const gate = judgedOverrideAllowed(task, candidates, ordered.items[0]);
+      if (!gate.ok) ordered = { ...ordered, items: candidates, selection: { method: "lexical", judged: { ...ordered.selection }, overrideRefused: { reason: "below_lexical_floor", score: gate.score, floor: gate.floor } } };
+    }
     judgedSelection = ordered.selection;
     if (ordered.refused) {
       gateDrops.byReason.judged_no_match = candidates.length;
@@ -2454,6 +2478,10 @@ app.disable("x-powered-by");
 // percent-encoding) is rewritten to the catalog spelling first, query kept,
 // so every gate and the handler see the same path.
 let catalogPathByFold = null;
+// The MCP connector's loopback marker is read and removed before anything
+// else (src/mcp-loopback.js): a client-sent one is dropped, a genuine one is
+// remembered on the request and its secret never reaches a handler.
+app.use(stripMcpMarker);
 app.use((req, _res, next) => {
   if (!catalogPathByFold) {
     catalogPathByFold = new Map();
@@ -2867,6 +2895,7 @@ app.use("/__operator", (req, res, next) => {
   res.set("Cache-Control", "no-store, private");
   res.set("Pragma", "no-cache");
   res.set("Vary", "Cookie, Authorization");
+  if (operatorWriteRefused(req)) return res.status(403).json({ error: "operator writes from a browser session must come from this site's own pages" });
   if (!OP_SESSION_SHARED) return next();
   syncOperatorSession(req).then(() => next(), () => next());
 });
@@ -3979,10 +4008,22 @@ app.get("/reports/sample/:product", (req, res) => {
 // Public reports (buyer's choice, src/human-checkout.js readPublicReport):
 // the same viewer, indexable, own title/preview/JSON-LD, buy box for the
 // reader's own subject. Served with or without Stripe (files on the volume).
+// The JSON has its own URLs (/reports/public/<id>.json and the /api route),
+// each one representation per cache key. A JSON answer negotiated on the page
+// URL by Accept is marked private: a shared cache that keys on the URL alone
+// keeps the page there, never the JSON.
+const PUBLIC_REPORT_JSON_RE = /^(.+)\.json$/;
 app.get("/reports/public/:publicId", async (req, res, next) => {
-  if (wantsJson(req)) { req.url = `/api/reports/public/${encodeURIComponent(String(req.params.publicId || ""))}`; return next(); }
+  const raw = String(req.params.publicId || "");
+  const asFile = PUBLIC_REPORT_JSON_RE.exec(raw);
+  if (asFile || wantsJson(req)) {
+    if (!asFile) { res.locals.publicReportNegotiated = true; res.vary("Accept"); }
+    req.url = `/api/reports/public/${encodeURIComponent(asFile ? asFile[1] : raw)}`;
+    return next();
+  }
+  res.vary("Accept");
   if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).type("html").send("<p>Too many requests, please slow down.</p>");
-  res.set("Link", `</api/reports/public/${encodeURIComponent(String(req.params.publicId || ""))}>; rel="alternate"; type="application/json"`);
+  res.set("Link", `</reports/public/${encodeURIComponent(raw)}.json>; rel="alternate"; type="application/json"`);
   const r = await readPublicReportFresh(String(req.params.publicId || ""));
   if (!r) return notFoundPage(res, { what: "Public report", href: "/reports", label: "All reports" });
   const canonical = `${BASE_URL}/reports/public/${r.publicId}`;
@@ -4002,7 +4043,7 @@ app.get("/api/reports/public/:publicId", async (req, res) => {
   if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).json({ status: "error", error: "Too many requests, please slow down." });
   const r = await readPublicReportFresh(String(req.params.publicId || ""));
   if (!r) return res.status(404).json({ status: "not_found" });
-  res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=900").json(r);
+  res.set("Cache-Control", res.locals.publicReportNegotiated ? "private, max-age=300" : "public, max-age=300, stale-while-revalidate=900").json(r);
 });
 app.get("/api/reports/sample/:product", (req, res) => {
   const j = sampleJson(String(req.params.product || ""));
@@ -4759,7 +4800,7 @@ if (_mppSubs) {
         // RFC 9457 problem saying why, same as the tempo/charge gate answers.
         try { res.set("WWW-Authenticate", (await mint()).header); } catch { /* the caller can GET the offer */ }
         const kind = e.binding ? "invalid-challenge" : "verification-failed";
-        return sendMppProblem(res, mppProblem(kind, `Subscription was not accepted: ${String(e.message).slice(0, 200)}`));
+        return sendMppProblem(res, mppProblem(kind, `Subscription was not accepted: ${redactSecrets(String(e.message)).slice(0, 200)}`));
       }
       if (e?.statusCode && e.statusCode < 500) return res.status(e.statusCode).json({ error: redactSecrets(String(e.message)).slice(0, 200) });
       console.warn("[mpp-subs] activation failed:", redactSecrets(String(e?.message || e)).slice(0, 200));
@@ -5383,6 +5424,14 @@ const getOperatorToken = (req, { headerOnly = false } = {}) => {
 // expire after OP_SESSION_TTL_MS, and logout (or a token rotation) revokes them
 // without touching the root token.
 const OP_SESSION_TTL_MS = 8 * 3600 * 1000;
+// Inside that absolute lifetime, a session also ends after
+// OPERATOR_SESSION_IDLE_SECONDS (default 1800) with no authenticated request:
+// each one moves the idle deadline forward, never past the absolute expiry.
+// The shared copy of the idle deadline is written at most once per
+// OP_SESSION_TOUCH_MS per session, so another container may end an idle
+// session up to that much early, never late.
+const OP_SESSION_IDLE_MS = Math.min(OP_SESSION_TTL_MS, Math.max(1, Number(process.env.OPERATOR_SESSION_IDLE_SECONDS) || 1800) * 1000);
+const OP_SESSION_TOUCH_MS = Math.min(60_000, Math.floor(OP_SESSION_IDLE_MS / 4));
 // Shared across replicas (src/shared-limits.js): a session is a flag in the
 // shared store, keyed by a digest of the operator token and its id (never the
 // id itself) and valued with its expiry, written on login and cleared on
@@ -5396,26 +5445,36 @@ const OP_SESSION_TTL_MS = 8 * 3600 * 1000;
 const OP_SESSION_SHARED = sharedLimitsEnabled();
 const OP_SID_RE = /^[0-9a-f]{64}$/;
 const opSessionKey = (sid) => createHash("sha256").update(OPERATOR_TOKEN).update("\0").update(String(sid)).digest("hex");
-const operatorSessions = new Map(); // sid -> expiresAt (ms)
+const operatorSessions = new Map(); // sid -> { exp, idle, wroteIdle } (ms)
+const opSessionLive = (s, now) => Boolean(s) && now <= s.exp && now <= s.idle;
 async function newOperatorSession() {
   const sid = randomBytes(32).toString("hex");
-  const exp = Date.now() + OP_SESSION_TTL_MS;
-  operatorSessions.set(sid, exp);
+  const now = Date.now();
+  const exp = now + OP_SESSION_TTL_MS;
+  const idle = Math.min(exp, now + OP_SESSION_IDLE_MS);
+  operatorSessions.set(sid, { exp, idle, wroteIdle: now });
   // Awaited (bounded by the store's op timeout): the browser's next request
   // may land on the other container.
-  if (OP_SESSION_SHARED) await sharedLimitsWrite("operator-session", sharedLimits.flagSet("opsess", opSessionKey(sid), exp));
+  if (OP_SESSION_SHARED) {
+    await sharedLimitsWrite("operator-session", sharedLimits.flagSet("opsess", opSessionKey(sid), exp));
+    await sharedLimitsWrite("operator-session", sharedLimits.flagSet("opsess-idle", opSessionKey(sid), idle));
+  }
   return sid;
 }
 async function revokeOperatorSession(sid) {
   if (!sid) return;
   operatorSessions.delete(sid);
-  if (OP_SESSION_SHARED) await sharedLimitsWrite("operator-session", sharedLimits.flagSet("opsess", opSessionKey(sid), 0));
+  if (OP_SESSION_SHARED) {
+    await sharedLimitsWrite("operator-session", sharedLimits.flagSet("opsess", opSessionKey(sid), 0));
+    await sharedLimitsWrite("operator-session", sharedLimits.flagSet("opsess-idle", opSessionKey(sid), 0));
+  }
 }
 /** Before the operator routes: the cookie's session is read from the shared
- *  store and this process's map takes the answer (an expiry, or nothing: it
- *  was revoked or minted nowhere). A store that does not answer leaves the map
- *  as it stands. Only a cookie of the right shape, from an address with
- *  guessing budget left, reaches the store. */
+ *  store and this process's map takes the answer (an expiry and an idle
+ *  deadline, or nothing: it was revoked, went idle or was minted nowhere). A
+ *  store that does not answer leaves the map as it stands. Only a cookie of
+ *  the right shape, from an address with guessing budget left, reaches the
+ *  store. */
 async function syncOperatorSession(req) {
   if (!OP_SESSION_SHARED) return;
   const sid = readCookie(req, OPERATOR_COOKIE);
@@ -5423,19 +5482,56 @@ async function syncOperatorSession(req) {
   if (operatorAttemptLimiter.peek(operatorAttemptIp(req)).limited) return;
   const r = await sharedLimits.flagGet("opsess", opSessionKey(sid));
   if (!r.ok) { noteSharedLimitsDegraded("operator-session", r); return; }
-  if (r.until > Date.now()) operatorSessions.set(sid, r.until); else operatorSessions.delete(sid);
+  const now = Date.now();
+  if (!(r.until > now)) { operatorSessions.delete(sid); return; }
+  const ri = await sharedLimits.flagGet("opsess-idle", opSessionKey(sid));
+  if (!ri.ok) { noteSharedLimitsDegraded("operator-session", ri); return; }
+  // A touch this process has not yet written may be later than the store's.
+  const local = operatorSessions.get(sid);
+  const s = { exp: r.until, idle: Math.max(ri.until || 0, local?.idle || 0), wroteIdle: local?.wroteIdle || 0 };
+  if (opSessionLive(s, now)) operatorSessions.set(sid, s); else operatorSessions.delete(sid);
 }
+/** A valid session's use moves its idle deadline forward (never past its
+ *  absolute expiry); the shared copy follows at most once per touch interval. */
 function operatorSessionValid(sid) {
   if (!sid) return false;
-  const exp = operatorSessions.get(sid);
-  if (!exp) return false;
-  if (Date.now() > exp) { operatorSessions.delete(sid); return false; }
+  const s = operatorSessions.get(sid);
+  if (!s) return false;
+  const now = Date.now();
+  if (!opSessionLive(s, now)) { operatorSessions.delete(sid); return false; }
+  s.idle = Math.min(s.exp, now + OP_SESSION_IDLE_MS);
+  if (OP_SESSION_SHARED && now - s.wroteIdle >= OP_SESSION_TOUCH_MS) {
+    s.wroteIdle = now;
+    void sharedLimitsWrite("operator-session", sharedLimits.flagSet("opsess-idle", opSessionKey(sid), s.idle));
+  }
   return true;
 }
 setInterval(() => {
   const now = Date.now();
-  for (const [sid, exp] of operatorSessions) if (now > exp) operatorSessions.delete(sid);
-}, 30 * 60 * 1000).unref();
+  for (const [sid, s] of operatorSessions) if (!opSessionLive(s, now)) operatorSessions.delete(sid);
+}, Math.min(30 * 60 * 1000, Math.max(1000, OP_SESSION_IDLE_MS))).unref();
+// A write (any method but GET, HEAD, OPTIONS) that arrives with the session
+// cookie must come from one of our own pages. SameSite=Strict holds the cookie
+// back from other sites only, and every origin under the registrable domain is
+// the same site, so the cookie alone does not show which page sent the write.
+// The browser's Sec-Fetch-Site (same-origin) or the Origin header (equal to
+// BASE_URL's origin) does. A caller whose header token is correct is exempt:
+// a page on another origin cannot set that header, and a script, curl or CI
+// job sends neither Sec-Fetch-Site nor Origin. A request with no cookie is
+// left to the route's own gate (its 404 for a missing credential).
+const OPERATOR_SITE_ORIGIN = (() => { try { return new URL(BASE_URL).origin; } catch { return ""; } })();
+function operatorWriteRefused(req) {
+  const m = req.method;
+  if (m === "GET" || m === "HEAD" || m === "OPTIONS") return false;
+  if (!readCookie(req, OPERATOR_COOKIE)) return false;
+  // A header credential cannot be set by another site's page (CORS keeps
+  // /__operator closed), so its presence skips the origin check; the route's
+  // gate then validates it and counts a wrong one against the guessing budget.
+  if (getOperatorToken(req)) return false;
+  if (String(req.headers["sec-fetch-site"] || "").toLowerCase() === "same-origin") return false;
+  const origin = req.headers.origin;
+  return !(OPERATOR_SITE_ORIGIN && typeof origin === "string" && origin === OPERATOR_SITE_ORIGIN);
+}
 // Operator auth: a raw token via header (curl/API), OR a valid session cookie
 // (browser). Both funnel through here so every gated route agrees.
 // Brute-force bound on FAILED credential presentations only.
@@ -5675,7 +5771,7 @@ app.get("/__operator/discovery-gap.json", async (req, res) => {
       // Every payTo any KNOWN origin advertises - crawled entries whether or
       // not they are routable, plus the registry-listed tools (Bazaar rows
       // carry payTo) - so "unattributed" means unknown, not merely unroutable.
-      knownPayToOrigins: allPayToOrigins("eip155:8453"),
+      knownPayToOrigins: await allPayToOriginsAsync("eip155:8453"),
       merchants: econ?.topMerchants || [],
       ourAddresses: [WALLET_ADDRESS, process.env.X402_UPSTREAM_BUYER_ADDRESS].filter(Boolean),
       minPayments: Math.max(1, Math.min(10000, parseInt(req.query.min, 10) || SOR_MIN_SETTLED_TX)),
@@ -7001,12 +7097,23 @@ function requestShape(req) {
 // A single client firing distinct queries in parallel froze the server for
 // 3-18 s at a time and timed out payment relays (2026-09-25), so each client
 // gets a budget of uncached computes; cache hits never count. Our own signed
-// probes and loopback callers (the MCP connector) are exempt.
+// probes and our own loopback callers are exempt.
 const discoveryComputeLimiter = createRateLimiter("discovery-compute", {
   perMin: Number(process.env.DISCOVERY_COMPUTE_PER_MIN) || 30,
   perHour: Number(process.env.DISCOVERY_COMPUTE_PER_HOUR) || 600,
 });
-const isLoopbackIp = (ip) => ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
+// Who is a loopback caller is read from the connection, never from req.ip:
+// req.ip comes from X-Forwarded-For, so a request naming 127.0.0.1 there is
+// an outside client and is limited like any other. Exempt: the MCP
+// connector's marked replay (isMcpLoopback: the marker plus a loopback
+// socket), and a direct local connection that carries no forwarding header
+// at all (a sweep or script on the same machine; nothing that came through a
+// proxy reaches the server that way).
+const LOOPBACK_SOCKET = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+const isDiscoveryLoopback = (req) => isMcpLoopback(req)
+  || (LOOPBACK_SOCKET.has(String(req?.socket?.remoteAddress || ""))
+    && req.headers["x-forwarded-for"] === undefined && req.headers.forwarded === undefined
+    && req.headers["cf-connecting-ip"] === undefined && req.headers["x-real-ip"] === undefined);
 const discoveryCpuBudget = createComputeBudget();
 // Each client's own share of discovery CPU (2026-10-01). One client sending
 // bursts of about twenty distinct uncached /api/route searches every fifteen
@@ -7075,7 +7182,7 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
         return res.json(hit);
       }
     }
-    if (!synthetic && !isLoopbackIp(clientIp(req)) && discoveryComputeLimiter.check(clientIp(req)).limited) {
+    if (!synthetic && !isDiscoveryLoopback(req) && discoveryComputeLimiter.check(clientIp(req)).limited) {
       status = 429;
       res.set("Retry-After", "60");
       return res.status(429).json({
@@ -7084,7 +7191,7 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
         retryAfterSeconds: 60,
       });
     }
-    const clientBudget = !synthetic && !isLoopbackIp(clientIp(req)) ? discoveryClientBudget(clientIp(req)) : null;
+    const clientBudget = !synthetic && !isDiscoveryLoopback(req) ? discoveryClientBudget(clientIp(req)) : null;
     if (clientBudget?.over()) {
       status = 429;
       res.set("Retry-After", "10");
@@ -7097,12 +7204,12 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
     // Global CPU budget for uncached searches across every caller (the
     // per-IP limiter above cannot see many addresses at once). Refused before
     // computing; cache hits above never reach this.
-    if (!synthetic && !isLoopbackIp(clientIp(req)) && discoveryCpuBudget.over()) {
+    if (!synthetic && !isDiscoveryLoopback(req) && discoveryCpuBudget.over()) {
       status = 503; shed = true;
       noteShed("discovery-budget");
       return shedResponse(res, 2);
     }
-    if (!synthetic && !isLoopbackIp(clientIp(req)) && discoveryInFlight.live() >= DISCOVERY_MAX_INFLIGHT) {
+    if (!synthetic && !isDiscoveryLoopback(req) && discoveryInFlight.live() >= DISCOVERY_MAX_INFLIGHT) {
       status = 503; shed = true;
       noteShed("discovery-inflight");
       return shedResponse(res, 2, { reason: "discovery-inflight" });
@@ -7354,10 +7461,14 @@ function navChainEntry(chainKey, snapshot, board) {
     return { label, href, sellers: null, tools: null, healthy: false };
   }
 }
-const navChainsFresh = (snapshot, board) => navChainsMemo.value && navChainsMemo.snapshot === snapshot && navChainsMemo.board === (board?.leaderboard || null);
+// The strip reads the leaderboard rows only; every empty list counts alike (the
+// warming placeholder is a fresh empty list per read, which missed the memo on
+// every page until the first scan landed).
+const navBoardKey = (board) => { const l = board?.leaderboard; return Array.isArray(l) && l.length === 0 ? null : (l || null); };
+const navChainsFresh = (snapshot, board) => navChainsMemo.value && navChainsMemo.snapshot === snapshot && navChainsMemo.board === navBoardKey(board);
 // A chain that failed to count is retried on the next render, not pinned.
 function keepNavChains(snapshot, board, value) {
-  if (value.chains.every((c) => c.healthy)) navChainsMemo = { snapshot, board: board?.leaderboard || null, value };
+  if (value.chains.every((c) => c.healthy)) navChainsMemo = { snapshot, board: navBoardKey(board), value };
 }
 setNavIndexProvider(() => {
   const snapshot = getIndexSnapshot();
@@ -7384,7 +7495,7 @@ async function warmNavChains() {
     await new Promise((r) => setImmediate(r));
     chains.push(navChainEntry(key, snapshot, board));
   }
-  if (getIndexSnapshot() === snapshot && (getLeaderboardSnapshot()?.leaderboard || null) === (board?.leaderboard || null)) keepNavChains(snapshot, board, { chains });
+  if (getIndexSnapshot() === snapshot && navBoardKey(getLeaderboardSnapshot()) === navBoardKey(board)) keepNavChains(snapshot, board, { chains });
 }
 // /index — legacy surface, merged into /marketplace (301 keeps SEO equity).
 app.get("/index", (_req, res) => res.redirect(301, "/marketplace"));
@@ -7780,7 +7891,7 @@ async function buildChainPage(chainKey, sellerQuery, all) {
   ]);
   const rail = revSnap?.rails?.find((r) => r.rail === SNAPSHOT_RAIL_LABEL[chainKey]) || null;
   const labelled = await labelledSnapshotAsync(snapshot);
-  return marketPage(chainKey, BASE_URL, { snapshot: labelled, rail, activity, selectedSeller, wallet: rail?.wallet || undefined, leaderboardSnap: getLeaderboardSnapshot(), all, host: hostEntryFigures(chainKey), payable: chainPayable(chainKey), ...chainPageExtras(chainKey) });
+  return marketPageAsync(chainKey, BASE_URL, { snapshot: labelled, rail, activity, selectedSeller, wallet: rail?.wallet || undefined, leaderboardSnap: getLeaderboardSnapshot(), all, host: hostEntryFigures(chainKey), payable: chainPayable(chainKey), ...chainPageExtras(chainKey) });
 }
 // How many catalog tools a chain page can say take payment on that chain, by
 // the 402 builder's own rules (identity-bound and long-running tools are EVM
@@ -11906,7 +12017,7 @@ if (String(process.env.MPP_INDEX_CRAWL || "").toLowerCase() === "off") {
     // Solana SPL leaderboard: hourly batched credits scan over every Solana
     // payTo the index knows, primed into the pay-time gate (src/solana-leaderboard.js).
     startSolanaLeaderboard({
-      listPayTos: async () => (await import("./x402-index.js")).allSolanaPayToOrigins(),
+      listPayTos: async () => (await import("./x402-index.js")).allSolanaPayToOriginsAsync(),
       // getTransaction (immutable, by signature) goes public RPC first with the
       // keyed lane behind it (src/solana-history-rpc.js); the signature and
       // token-account reads stay on the configured lane.
@@ -12047,10 +12158,10 @@ bootStep("setAlgorandCrawlSources", () => {
   });
 });
 bootStep("startLeaderboardRefresh", () => startLeaderboardRefresh({
-  crawledWallets: (chain) => allPayToOrigins(chain?.caip2 || "eip155:8453"),
+  crawledWallets: (chain) => allPayToOriginsAsync(chain?.caip2 || "eip155:8453"),
   // The prices those wallets' own routes publish, so a transfer to a wallet
   // only our crawl knows can be matched to a listed price like a Bazaar one.
-  crawledPrices: (chain) => allPayToPrices(chain?.caip2 || "eip155:8453"),
+  crawledPrices: (chain) => allPayToPricesAsync(chain?.caip2 || "eip155:8453"),
 }));
 // Warm the on-chain economy snapshot once, off the boot path: the cache is
 // cold exactly once per deploy and only a cold cache blocks a visitor.

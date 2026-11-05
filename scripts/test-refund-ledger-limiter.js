@@ -12,6 +12,7 @@
 //  - the ledger routes are still rate limited, with Retry-After;
 //  - the runner's ledgerUpdate resends only on 429 (refused before any write),
 //    honours Retry-After, gives up after its attempts, and never resends a 5xx.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

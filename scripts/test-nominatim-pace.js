@@ -3,6 +3,7 @@
 // configured, else one second per replica in this process. A call that cannot
 // get a slot within the wait budget is refused (the geo kit then answers from
 // Photon). Offline: an in-memory stand-in for the Redis commands it uses.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { __setTestClient } from "../src/shared-limit.js";
 
 import { spawnSync } from "node:child_process";
@@ -54,7 +55,7 @@ if (process.argv[2] === "shared") {
 }
 if (process.argv[2] !== "geo") {
   const r = spawnSync(process.execPath, [fileURLToPath(import.meta.url), "shared"], {
-    env: { ...process.env, REDIS_URL: "redis://127.0.0.1:1", SHARED_LIMITS: "" }, encoding: "utf8",
+    env: { ...process.env, REDIS_URL: "redis://127.0.0.1:1", OFFLINE_STORES_KEEP: "REDIS_URL", SHARED_LIMITS: "" }, encoding: "utf8",
   });
   process.stdout.write(r.stdout || "");
   if (r.stderr) process.stderr.write(r.stderr);

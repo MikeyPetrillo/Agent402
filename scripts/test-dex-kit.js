@@ -7,6 +7,7 @@
 //     with known-value vectors from Uniswap V3 documentation.
 //   • Live calls are opt-in via DEX_LIVE_TEST=1 (so CI doesn't burn quota).
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { DEX_TOOLS, __test } from "../src/tools/dex-kit.js";
 
 const { priceFromSqrt, spotQuote, slots, decodeUint, decodeInt, decodeAddr, pad32, encAddr, encUint } = __test;

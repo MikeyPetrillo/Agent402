@@ -4,6 +4,7 @@
 // last case is the one a path-only skip would miss: a page added under /api
 // later would ship without a CSP and nothing would say so. Drives the real
 // middleware in a throwaway Express app with the four answer shapes.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import express from "express";
 import { securityHeaders, headIsHtml } from "../src/security-headers.js";
 
@@ -21,6 +22,25 @@ app.get("/v1/page-writehead", (_req, res) => { res.writeHead(200, { "Content-Typ
 app.get("/mcp", (_req, res) => res.json({ ok: true }));
 app.get("/mcp/text", (_req, res) => res.type("text/plain").send("plain"));
 app.get("/apix", (_req, res) => res.json({ ok: true }));
+// Answers a browser could open as a document, and the inert data types that
+// keep the lean set (media, downloads, a stream whose head is flushed first).
+const SVG = '<svg xmlns="http://www.w3.org/2000/svg"><script>1</script></svg>';
+app.get("/api/svg", (_req, res) => res.type("image/svg+xml").send(SVG));
+app.get("/v1/xml", (_req, res) => res.type("application/xml").send("<a/>"));
+app.get("/mcp/xhtml", (_req, res) => { res.writeHead(200, { "Content-Type": "application/xhtml+xml" }); res.end("<html/>"); });
+app.get("/api/untyped", (_req, res) => { res.removeHeader("content-type"); res.end("x"); });
+app.get("/api/own-csp", (_req, res) => res.set("Content-Security-Policy", "default-src 'none'").type("image/svg+xml").send(SVG));
+const INERT = {
+  "/api/problem": "application/problem+json", "/api/text": "text/plain", "/api/mp3": "audio/mpeg", "/api/mp4": "video/mp4",
+  "/api/png": "image/png", "/api/webp": "image/webp", "/api/pdf": "application/pdf", "/api/zip": "application/zip",
+  "/api/docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "/api/xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "/api/bin": "application/octet-stream", "/api/csv": "text/csv",
+};
+for (const [p, t] of Object.entries(INERT)) app.get(p, (_req, res) => res.type(t).send(Buffer.from("x")));
+app.get("/api/sse", (_req, res) => { res.setHeader("Content-Type", "text/event-stream"); res.flushHeaders(); res.write("data: 1\n\n"); setTimeout(() => res.end(), 20); });
+app.get("/api/sse-svg-stream", (_req, res) => { res.setHeader("Content-Type", "image/svg+xml"); res.flushHeaders(); res.write(SVG); setTimeout(() => res.end(), 20); });
+app.get("/api/empty", (_req, res) => res.status(204).end());
 const server = app.listen(0, "127.0.0.1");
 await new Promise((r) => server.once("listening", r));
 const base = `http://127.0.0.1:${server.address().port}`;
@@ -44,6 +64,19 @@ ok(allDoc(h) && always(h), "an HTML answer written with writeHead(status, header
 h = await head("/apix");
 ok(allDoc(h), "/apix is not an API path (prefix needs a slash)");
 ok(/default-src 'self'/.test((await head("/api/page")).get("content-security-policy")), "the API-path CSP is the page CSP");
+
+const SANDBOX = "default-src 'none'; sandbox";
+for (const p of ["/api/svg", "/v1/xml", "/mcp/xhtml", "/api/untyped", "/api/sse-svg-stream"]) {
+  h = await head(p);
+  ok(h.get("content-security-policy") === SANDBOX && h.get("x-content-type-options") === "nosniff" && !h.get("x-frame-options"),
+    `${p} (${h.get("content-type") || "no type"}) carries the sandboxed policy and nosniff (${h.get("content-security-policy")})`);
+}
+ok((await head("/api/own-csp")).get("content-security-policy") === "default-src 'none'", "a route's own policy on an API path is left as it is");
+for (const p of [...Object.keys(INERT), "/api/sse", "/api/empty", "/api/json", "/mcp/text"]) {
+  h = await head(p);
+  ok(noDoc(h) && always(h), `${p} (${h.get("content-type") || "no type"}) keeps the lean set, no policy`);
+}
+ok(!(await head("/page")).get("content-security-policy").includes("sandbox"), "a page keeps the site policy");
 
 const fake = { getHeader: () => "application/json" };
 ok(headIsHtml(fake, [200, { "content-type": "TEXT/HTML; charset=utf-8" }]), "headIsHtml reads a header object passed to writeHead, any case");

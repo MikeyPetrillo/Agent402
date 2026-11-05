@@ -15,6 +15,7 @@
 // challenge even though they could pay one.
 //
 //   node scripts/test-mpp-shim-mppx-registry.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { Chains, Assets } from "mppx/evm";
 import { challengeEnabledForChain } from "../src/mpp-shim.js";
 

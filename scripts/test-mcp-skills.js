@@ -26,6 +26,7 @@ process.env.AGENT402_MCP_REQ_PER_HOUR = "1000000";
 process.env.X402_INDEX_CRAWL = "off";
 process.env.X402_SYNC_ON_START = "false";
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import express from "express";
 import { createHash } from "node:crypto";
 import * as yaml from "js-yaml";

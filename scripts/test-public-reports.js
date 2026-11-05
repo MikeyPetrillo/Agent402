@@ -6,6 +6,7 @@
 // revoking makes the link dead, and a re-publish brings the SAME link back.
 // Offline: stub Stripe + generator for the engine; a FREE_MODE boot (no Stripe)
 // for the routes, reading the real default store dir.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, unlinkSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -73,6 +74,18 @@ try {
   ok(html.includes('data-api="/api/reports/public/"') && html.includes("/js/report-view.js"), "renders through the shared viewer");
   const j = await (await fetch(`${B}/api/reports/public/${pub.publicId}`)).json();
   ok(j.status === "done" && j.publicView === true && j.product === "domain-audit" && j.report === rec.report && !("email" in j) && !("refundId" in j), "the JSON is the report with nothing buyer-identifying");
+  // One representation per cache key: the page URL is the page in a shared
+  // cache, the JSON has its own URLs, and JSON negotiated on the page URL by
+  // Accept is private (an edge that ignores Vary never keeps it there).
+  ok(/\bpublic\b/.test(page.headers.get("cache-control") || "") && /accept/i.test(page.headers.get("vary") || "") && (page.headers.get("link") || "").includes(`</reports/public/${pub.publicId}.json>`), `the page is publicly cacheable, varies on Accept and links its JSON URL (${page.headers.get("cache-control")}; link ${page.headers.get("link")})`);
+  const asFile = await fetch(`${B}/reports/public/${pub.publicId}.json`);
+  const jf = await asFile.json();
+  ok(asFile.status === 200 && /application\/json/.test(asFile.headers.get("content-type") || "") && jf.publicId === pub.publicId && jf.report === rec.report && /\bpublic\b/.test(asFile.headers.get("cache-control") || ""), `/reports/public/<id>.json serves the JSON, publicly cacheable on its own URL (${asFile.headers.get("cache-control")})`);
+  const neg = await fetch(`${B}/reports/public/${pub.publicId}`, { headers: { accept: "application/json" } });
+  const jn = await neg.json();
+  const negCc = neg.headers.get("cache-control") || "";
+  ok(neg.status === 200 && jn.publicId === pub.publicId && /\bprivate\b/.test(negCc) && !/\bpublic\b/.test(negCc) && /accept/i.test(neg.headers.get("vary") || ""), `JSON negotiated on the page URL still answers, marked private ("${negCc}", vary "${neg.headers.get("vary")}")`);
+  ok((await fetch(`${B}/reports/public/rp_000000000000000000.json`)).status === 404, "an unknown id 404s on the .json URL");
   const sm = await (await fetch(`${B}/sitemap-reports.xml`)).text();
   ok(sm.includes(`/reports/public/${pub.publicId}</loc>`), "the public report is in sitemap-reports.xml");
   ok((await fetch(`${B}/reports/public/rp_000000000000000000`)).status === 404 && (await fetch(`${B}/api/reports/public/nope`)).status === 404, "unknown ids 404 on both routes");

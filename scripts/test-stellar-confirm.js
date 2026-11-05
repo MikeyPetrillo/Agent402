@@ -6,6 +6,7 @@
 // every "yes" must be backed by a payer debit AND a credit to our payTo in the
 // SAME successful transaction. Missing a real payment only costs us the sale,
 // which is already the status quo, so null is always the safe answer.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { confirmStellarTransfer, settlePayerOf, settleWithStellarFallback } from "../src/stellar-confirm.js";
 
 let pass = 0, fail = 0;

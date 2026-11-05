@@ -20,6 +20,7 @@
 // keygen + the leak audit of its own output — CI-safe everywhere.
 //
 //   CDP_API_KEY_ID=… CDP_API_KEY_SECRET=… FULL_E2E=1 node scripts/test-wallet-e2e.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

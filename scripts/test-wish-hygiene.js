@@ -16,6 +16,7 @@
 // because "object" from a broken client and "object" from someone wanting
 // object detection cannot be told apart here - and dropping a genuine need is
 // the worse failure.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { isNonQuery, recordWish } from "../src/wish.js";
 
 let pass = 0, fail = 0;

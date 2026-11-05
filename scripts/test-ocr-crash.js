@@ -10,6 +10,7 @@
 // Loads the tesseract model on first use; if that init can't complete (e.g. no
 // network in a minimal sandbox) the test skips rather than false-fail — CI's
 // test-all already exercises the real OCR path with the model available.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { OCR_TOOLS } from "../src/tools/ocr-kit.js";
 
 let pass = 0, fail = 0;

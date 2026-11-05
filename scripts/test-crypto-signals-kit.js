@@ -17,6 +17,7 @@
 //     "unknown coin" shape Hyperliquid really returns (500 "null") -> 422.
 // Live coverage is the catalog's answers-its-own-example sweep (test-all.js).
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import {
   CRYPTO_SIGNALS_TOOLS, NEWS_SOURCES, parseFeed, sma, ema, rsi, macd, bollinger, atr, vwap,
   computeIndicators, marketPulse, __test,

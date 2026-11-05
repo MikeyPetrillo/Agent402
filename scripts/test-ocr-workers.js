@@ -10,6 +10,7 @@
 //  3. The pin table covers exactly the languages the tool accepts.
 // Needs eng, spa, fra and deu installed (node scripts/fetch-tessdata.js tessdata
 // eng spa fra deu); a missing file is a failure, not a skip.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { mkdtempSync, readdirSync, rmSync, copyFileSync, writeFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { tmpdir } from "node:os";

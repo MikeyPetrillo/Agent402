@@ -8,9 +8,27 @@
 // src/upstream-buyer-status.js). Every buy is a spend-BEFORE-our-settle: a failed buyer
 // settlement can cost us the one upstream payment (the LLM-gateway risk class),
 // so the margin guard below refuses any upstream quote over the caller's cap.
-import { assertPublicUrl, ssrfDispatcher } from "./tools/fetch-guard.js";
+import { assertPublicUrl, ssrfDispatcher, freshSsrfDispatcher } from "./tools/fetch-guard.js";
 import { Agent as UndiciAgent } from "undici";
 import { withDistrust } from "./tls-distrust.js";
+
+// THE ADDRESS GUARD ON EVERY SELLER REQUEST. assertPublicUrl runs before the
+// first byte and a pinned dispatcher carries every leg (bare, paid, resend),
+// in this file and in the Tempo buyer. No call option turns it off. A suite
+// whose seller is a stub on this host, or a stubbed fetch for a name that does
+// not resolve, turns it off for its own process with
+// __setBuyerAddressGuardForTest(false); that refuses under NODE_ENV=production.
+let buyerAddressGuard = true;
+export function __setBuyerAddressGuardForTest(on) {
+  if (process.env.NODE_ENV === "production") throw new Error("the buyer address guard stays on in production");
+  buyerAddressGuard = on !== false;
+}
+export function buyerAddressGuardOn() { return buyerAddressGuard; }
+// The connection a suite gets with the guard off: no address pin, and still
+// the distrusted-intermediate refusal.
+const unguardedDispatcher = () => new UndiciAgent({ connect: withDistrust() });
+// fresh: a new connection pool (the paid legs never reuse the bare leg's socket).
+const sellerDispatcher = (fresh) => (!buyerAddressGuard ? unguardedDispatcher() : fresh ? freshSsrfDispatcher() : ssrfDispatcher);
 import { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2, canonicalAvmNetwork } from "./avm-network.js";
 
 // What a seller sees in their logs when our router buys from them. Points at
@@ -24,6 +42,7 @@ import { provenPayToMatches } from "./settlement-proof.js";
 import { assertPayoutScreened } from "./tools/sanctions-kit.js";
 import { usdcDomainVerdict, unsignableByStockBuyer, firstSignableAccept } from "./evm-usdc-domain.js";
 import { disableVendorSpendControls } from "./x402-spend-controls.js";
+import { assertNotOwnPayout } from "./own-wallets.js";
 import { readBytesCapped, readTextCapped, declaredLength, discardBody, decodeUtf8 } from "./capped-body.js";
 import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 
@@ -679,12 +698,12 @@ export function modelListed(ids, model) {
     return id === m || id.endsWith(`/${m}`) || m.endsWith(`/${id}`);
   });
 }
-async function readModelList(modelsUrl, { fetchImpl, trusted }) {
+async function readModelList(modelsUrl, { fetchImpl }) {
   try {
-    if (!trusted) await assertPublicUrl(modelsUrl);
+    if (buyerAddressGuard) await assertPublicUrl(modelsUrl);
     const r = await fetchImpl(modelsUrl, {
       headers: { Accept: "application/json" },
-      ...(trusted ? {} : { dispatcher: ssrfDispatcher }),
+      dispatcher: sellerDispatcher(false),
       redirect: "manual",
       signal: AbortSignal.timeout(5000),
     });
@@ -701,14 +720,14 @@ async function readModelList(modelsUrl, { fetchImpl, trusted }) {
  * { verdict: "served" | "not-served" | "unknown", reason?, ids?, modelsUrl? }.
  * Only "not-served" is a decision; "unknown" must leave routing unchanged.
  */
-export async function sellerServesModel(url, model, { fetchImpl = fetch, trusted = false, now = Date.now() } = {}) {
+export async function sellerServesModel(url, model, { fetchImpl = fetch, now = Date.now() } = {}) {
   if (typeof model !== "string" || !model.trim()) return { verdict: "unknown", reason: "no model requested" };
   const modelsUrl = modelsUrlFor(url);
   if (!modelsUrl) return { verdict: "unknown", reason: "not a chat-shaped route" };
   let entry = modelLists.get(modelsUrl);
   if (!entry || now - entry.at > MODEL_LIST_TTL_MS) {
     if (modelLists.size >= MODEL_LIST_MAX) modelLists.delete(modelLists.keys().next().value);
-    entry = { at: now, ids: await readModelList(modelsUrl, { fetchImpl, trusted }) };
+    entry = { at: now, ids: await readModelList(modelsUrl, { fetchImpl }) };
     modelLists.set(modelsUrl, entry);
   }
   if (!entry.ids) return { verdict: "unknown", reason: "no readable model list", modelsUrl };
@@ -778,9 +797,8 @@ export function neverLeftUs(err) {
 /**
  * Pay one x402 seller endpoint and return { result, quote, receipt }.
  *
- * @param url        the seller endpoint (http/https). SSRF-guarded via
- *                   assertPublicUrl unless {trusted:true} (a fixed first-party
- *                   host the caller has verified, never a caller-supplied URL).
+ * @param url        the seller endpoint (http/https). Always address-guarded:
+ *                   assertPublicUrl first, a pinned dispatcher on every leg.
  * @param maxAtomic  hard ceiling on the upstream quote in atomic USDC (6dp) —
  *                   the margin guard. A quote above it fails 502, never signs.
  * @param method/body  request shape (POST body is a JSON-serializable object).
@@ -793,14 +811,12 @@ export function neverLeftUs(err) {
  * A 200 on the bare request means the endpoint is free — returned with no
  * spend. Only a 402 triggers a payment; anything else is a 502.
  */
-// A fresh plain connection for a trusted URL (no address guard).
-const trustedDispatcher = () => new UndiciAgent({ connect: withDistrust() });
-export async function payX402(url, { maxAtomic, method = "GET", body, headers = {}, timeoutMs = 20000, maxBytes = DEFAULT_MAX_BYTES, trusted = false, chain = "base", provenPayTo = null, evidenceWallets = null, sellerProof = null, notDebited = null, allowUnproven = false, refusalMaxWaitMs = refusalMaxWaitMsDefault(), memoizeDelivery = false, slug = null, signBy = null } = {}) {
+export async function payX402(url, { maxAtomic, method = "GET", body, headers = {}, timeoutMs = 20000, maxBytes = DEFAULT_MAX_BYTES, chain = "base", provenPayTo = null, evidenceWallets = null, sellerProof = null, notDebited = null, allowUnproven = false, refusalMaxWaitMs = refusalMaxWaitMsDefault(), memoizeDelivery = false, slug = null, signBy = null } = {}) {
   assertSigningAllowed("an external x402 payment");
   if (maxAtomic == null) throw bad("payX402 requires maxAtomic (the margin-guard ceiling)", 500);
   const chainCfg = BUYER_CHAINS[chain];
   if (!chainCfg) throw bad(`payX402: unknown chain "${chain}" (known: ${Object.keys(BUYER_CHAINS).join(", ")})`, 500);
-  if (!trusted) {
+  if (buyerAddressGuard) {
     // SSRF: paying an arbitrary URL with a real wallet is the same egress-abuse
     // risk as any fetch — resolve + pin to a public address before spending.
     try { await assertPublicUrl(url); }
@@ -847,9 +863,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     // wouldn't re-check a redirect target. redirect:"manual" + reject any 3xx so
     // a public seller can't 302 us onto an internal host (which would relay
     // internal data or forward our signed X-PAYMENT header).
-    // A trusted URL (a fixed first-party address, or a test seller on this
-    // host) skips the address guard on every leg, not only the up-front check.
-    dispatcher: trusted ? trustedDispatcher() : ssrfDispatcher,
+    dispatcher: sellerDispatcher(false),
     redirect: "manual",
     signal: AbortSignal.timeout(timeoutMs),
   };
@@ -998,6 +1012,8 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
   // A list older than its refresh period still screens. The payout map is
   // stored with each download and read back before the server listens, so a
   // restart screens at once instead of waiting for the next download.
+  // Never one of our own wallets, whatever the index recorded for the seller.
+  await assertNotOwnPayout(payable.payTo);
   await assertPayoutScreened(payable.payTo, { label: String(payable.payTo).slice(0, 64) });
 
   // SOLANA PROVEN-SELLER GATE (pay time, fail closed - the Tempo lesson):
@@ -1088,8 +1104,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     // the reused socket died as an uncaught "invalid content-length header"
     // inside undici, with our signed payment never delivered). guardedLookup
     // still pins the IP, so the SSRF discipline is unchanged.
-    const { freshSsrfDispatcher } = await import("./tools/fetch-guard.js");
-    const paidDispatcher = trusted ? trustedDispatcher() : freshSsrfDispatcher();
+    const paidDispatcher = sellerDispatcher(true);
     const paidHeaders = { ...reqInit.headers, ...payHeaders, "Access-Control-Expose-Headers": "PAYMENT-RESPONSE,X-PAYMENT-RESPONSE" };
     // Wall-clock mark BEFORE the payment header leaves: the chain-truth check
     // after a refusal asks "did our wallet move since here".
@@ -1247,8 +1262,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
         const host = (() => { try { return new URL(url).host; } catch { return "seller"; } })();
         console.warn(`[x402-buyer] ${host} asked for X-PAYMENT by name on a v2 challenge - resending the same credential under both header names (once)`);
         try {
-          const { freshSsrfDispatcher: freshAgain } = await import("./tools/fetch-guard.js");
-          paid = await fetch(url, { ...reqInit, dispatcher: trusted ? trustedDispatcher() : freshAgain(), signal: AbortSignal.timeout(timeoutMs), headers: { ...paidHeaders, "X-PAYMENT": payHeaders["PAYMENT-SIGNATURE"] } });
+          paid = await fetch(url, { ...reqInit, dispatcher: sellerDispatcher(true), signal: AbortSignal.timeout(timeoutMs), headers: { ...paidHeaders, "X-PAYMENT": payHeaders["PAYMENT-SIGNATURE"] } });
         } catch (e) {
           console.warn(`[x402-buyer] ${host}: X-PAYMENT resend failed (${String(e?.message || e).slice(0, 80)}) - keeping the first response`);
         }

@@ -1,5 +1,6 @@
 // /v1/.../messages (Anthropic Messages wire) - offline, stub fetch.
 process.env.POSTHOG_TEST_CAPTURE = "1";
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { LLM_MESSAGES_TOOLS, validateMessagesRequest, isEmptyMaxTokens, MESSAGES_PATH_BY_TIER, MESSAGES_TIER_BY_PATH } from "../src/tools/llm-messages-kit.js";
 import { TIERS, createSseUsageScrubber } from "../src/tools/llm-gateway-kit.js";
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";
@@ -438,6 +439,76 @@ delete process.env.OPENROUTER_API_KEY;
     ok(unfitted.length === 0 && !seen.some((b) => b.model === MODEL), `Messages: a cap at or under the 1024 floor never reaches upstream with that budget (the link is skipped; ${seen.length} other link(s) tried${err ? `, ended ${err.statusCode}` : ""})`);
     if (err) ok(err.statusCode === 400 && /thinking\.budget_tokens/.test(err.message), "...and a walk with no fitting link ends as a 400 naming thinking.budget_tokens (nobody charged)");
   }
+}
+
+// ---- outbound content blocks are rebuilt from their documented fields ----
+// A field the wire does not document (a file reference, a container, an
+// unknown key) never reaches the upstream, on any block type, the system
+// blocks or the tools; every documented field still does.
+{
+  const tool = bySlug("v1-chat-messages") || LLM_MESSAGES_TOOLS.find((t) => /^v1-chat-messages$|^v1-chat-pro-messages$/.test(t.slug));
+  seen = [];
+  globalThis.fetch = async (url, init) => { const b = JSON.parse(init.body); seen.push({ url: String(url), b }); return { ok: true, status: 200, text: async () => JSON.stringify(reply(b.model)) }; };
+  const model = tool.discovery?.input?.model || "anthropic/claude-haiku-4.5";
+  await tool.handler({ model, max_tokens: 64, file_id: "file-ours-0",
+    system: [{ type: "text", text: "be terse", cache_control: { type: "ephemeral", extra: 1 }, file_id: "file-ours-1" }],
+    messages: [
+      { role: "user", file_id: "file-ours-2", content: [
+        { type: "text", text: "what is this?", citations: [{ type: "char_location", file_id: "file-ours-3" }] },
+        { type: "image", source: { type: "base64", media_type: "image/png", data: "AAAA", file_id: "file-ours-4" } },
+        { type: "image", source: { type: "url", url: "https://img.example.test/a.png", container: "cntr-ours" } },
+      ] },
+      { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "f", input: { a: 1 }, container_id: "cntr-ours" }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", is_error: false, content: [{ type: "text", text: "42", file_id: "file-ours-5" }] }] },
+    ],
+    tools: [{ name: "f", description: "d", input_schema: { type: "object" }, cache_control: { type: "ephemeral" }, file_ids: ["file-ours-6"] }],
+  }, fakeReq);
+  const out = seen[0]?.b || {};
+  const wire = JSON.stringify(out);
+  ok(seen.length === 1 && !/file-ours|cntr-ours|"extra"|citations|file_ids|container/.test(wire), "Messages: no undocumented field (file reference, container, unknown key) reaches the upstream");
+  ok(out.system?.[0]?.text === "be terse" && out.system[0].cache_control?.type === "ephemeral", "Messages: a system block keeps text and cache_control");
+  const [u, a, r] = out.messages || [];
+  ok(u?.role === "user" && u.content[0].text === "what is this?" && u.content[1].source?.data === "AAAA" && u.content[1].source.media_type === "image/png" && u.content[2].source?.url === "https://img.example.test/a.png", "Messages: text and image blocks keep text and their base64 or url source");
+  ok(a?.content?.[0]?.id === "t1" && a.content[0].name === "f" && a.content[0].input?.a === 1, "Messages: a tool_use block keeps id, name and input");
+  ok(r?.content?.[0]?.tool_use_id === "t1" && r.content[0].is_error === false && r.content[0].content?.[0]?.text === "42", "Messages: a tool_result keeps tool_use_id, is_error and its content");
+  ok(out.tools?.[0]?.name === "f" && out.tools[0].description === "d" && out.tools[0].input_schema?.type === "object" && out.tools[0].cache_control?.type === "ephemeral", "Messages: a tool keeps name, description, input_schema and cache_control");
+}
+// ---- documented block shapes round-trip ----
+// An echoed assistant turn keeps a text block's citations (each location type
+// with its documented fields; a file_id is dropped), thinking with its
+// signature, redacted_thinking, and cache_control on the blocks that take it.
+{
+  const tool = bySlug("v1-chat-messages") || LLM_MESSAGES_TOOLS.find((t) => /^v1-chat-messages$|^v1-chat-pro-messages$/.test(t.slug));
+  seen = [];
+  globalThis.fetch = async (url, init) => { const b = JSON.parse(init.body); seen.push({ url: String(url), b }); return { ok: true, status: 200, text: async () => JSON.stringify(reply(b.model)) }; };
+  const model = tool.discovery?.input?.model || "anthropic/claude-haiku-4.5";
+  const cites = [
+    { type: "char_location", cited_text: "a", document_index: 0, document_title: "Doc", start_char_index: 0, end_char_index: 1, file_id: "file-ours-c1" },
+    { type: "page_location", cited_text: "b", document_index: 1, document_title: "Doc 2", start_page_number: 1, end_page_number: 2 },
+    { type: "content_block_location", cited_text: "c", document_index: 2, document_title: null, start_block_index: 0, end_block_index: 1 },
+    { type: "web_search_result_location", cited_text: "d", encrypted_index: "ei", title: "Page", url: "https://docs.example.test/" },
+    { type: "search_result_location", cited_text: "e", search_result_index: 0, source: "https://kb.example.test/", title: "KB", start_block_index: 0, end_block_index: 0 },
+    { type: "unknown_location", cited_text: "f", file_id: "file-ours-c2" },
+  ];
+  await tool.handler({ model, max_tokens: 64, messages: [
+    { role: "user", content: "q" },
+    { role: "assistant", content: [
+      { type: "thinking", thinking: "consider", signature: "sig-1" },
+      { type: "redacted_thinking", data: "opaque" },
+      { type: "text", text: "answer", citations: cites, cache_control: { type: "ephemeral", ttl: "5m" } },
+    ] },
+    { role: "user", content: "go on" },
+  ] }, fakeReq);
+  const out = seen[0]?.b || {};
+  const wire = JSON.stringify(out);
+  ok(seen.length === 1 && !/file-ours|unknown_location/.test(wire), "Messages round-trip: no file reference or unknown citation type reaches the upstream");
+  const [th, rt, tx] = out.messages?.[1]?.content || [];
+  ok(th?.type === "thinking" && th.thinking === "consider" && th.signature === "sig-1" && rt?.type === "redacted_thinking" && rt.data === "opaque", "Messages round-trip: thinking keeps its signature, redacted_thinking its data");
+  const sorted = (o) => JSON.stringify(Object.fromEntries(Object.entries(o).sort(([a], [b]) => a.localeCompare(b))));
+  const want = cites.slice(0, 5).map(({ file_id, ...c }) => sorted(c));
+  ok(tx?.type === "text" && tx.text === "answer" && Array.isArray(tx.citations) && JSON.stringify(tx.citations.map(sorted)) === JSON.stringify(want), `Messages round-trip: a text block keeps each citation's documented fields, a null document_title included (${JSON.stringify(tx?.citations)})`);
+  ok(tx?.cache_control?.type === "ephemeral" && tx.cache_control.ttl === "5m", "Messages round-trip: the text block keeps cache_control with its ttl");
+  ok(out.messages?.[0]?.content === "q" && out.messages?.[2]?.content === "go on", "Messages round-trip: string content stays a string and gains no citations");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

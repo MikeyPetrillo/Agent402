@@ -2,6 +2,7 @@
 // stalled indexer hung every request until the proxy's 300 s cutoff (502).
 // Boots the server against an indexer and node that accept and never answer,
 // and requires the page to render within the page deadline plus slack.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtempSync } from "node:fs";

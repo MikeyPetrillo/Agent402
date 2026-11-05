@@ -266,6 +266,10 @@ export const NETWORK_TOOLS = [
             headers: { Accept: "application/json,*/*" },
           }));
         } catch (err) {
+          // A 400 from safeFetch is the address guard (or a URL it cannot
+          // read). Every candidate shares the origin, so the next one would be
+          // refused the same way: answer the guard's own refusal.
+          if (err?.statusCode === 400) throw err;
           tried.push({ url: candidate, error: String(err.message || err).slice(0, 140) });
           continue; // 404 at the canonical path is normal — try the next
         }

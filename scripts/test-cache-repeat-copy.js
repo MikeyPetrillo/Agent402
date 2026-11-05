@@ -3,6 +3,7 @@
 // and that payment is not charged, except a Tempo transfer the buyer sends
 // before the call, which is final when sent. Every published sentence that
 // says a repeat's payment "is not charged" names that exception.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { walk } from "./lib/shipped-files.js";

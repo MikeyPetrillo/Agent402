@@ -50,17 +50,34 @@ export function inputFormatOf(buffer) {
   return null;
 }
 
-/** Input arguments for a downloaded file: local file reads only, and the
- *  demuxer named explicitly. An unrecognized body is refused before ffmpeg runs. */
+/** The decoders an input may open: audio only. `-vn` selects output streams;
+ *  it does not stop ffprobe or ffmpeg's stream probing from opening and
+ *  running a video stream's decoder on the input. This list, passed before
+ *  `-i`, applies to that probing and to every decoder the run opens, so a
+ *  video, subtitle or image stream inside a container is never decoded. */
+export const AUDIO_DECODERS = [
+  "aac", "aac_fixed", "aac_latm", "ac3", "ac3_fixed", "eac3", "alac", "flac",
+  "mp1", "mp1float", "mp2", "mp2float", "mp3", "mp3float", "mp3adu", "mp3adufloat",
+  "opus", "libopus", "vorbis", "libvorbis", "dca", "wavpack", "amrnb", "amrwb",
+  "adpcm_ms", "adpcm_ima_wav", "adpcm_ima_qt", "gsm_ms",
+  "pcm_s16le", "pcm_s16be", "pcm_s24le", "pcm_s24be", "pcm_s32le", "pcm_s32be",
+  "pcm_f32le", "pcm_f32be", "pcm_f64le", "pcm_f64be", "pcm_u8", "pcm_s8", "pcm_alaw", "pcm_mulaw",
+].join(",");
+const AUDIO_DECODER_SET = new Set(AUDIO_DECODERS.split(","));
+
+/** Input arguments for a downloaded file: local file reads only, the
+ *  demuxer named explicitly, audio decoders only. An unrecognized body is
+ *  refused before ffmpeg runs. */
 export function mediaInputArgs(buffer, inPath) {
   const fmt = inputFormatOf(buffer);
   if (!fmt) throw bad("media could not be processed (unrecognized container; send an audio/video file such as mp3, mp4, wav, ogg, flac or webm)", 422);
-  return ["-protocol_whitelist", "file", "-f", fmt, "-i", inPath];
+  return ["-codec_whitelist", AUDIO_DECODERS, "-protocol_whitelist", "file", "-f", fmt, "-i", inPath];
 }
 
-function run(bin, args) {
+function run(bin, args, { keepFailure = false } = {}) {
   return new Promise((resolve, reject) => {
     execImpl(bin, args, { timeout: FFMPEG_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024, env: childEnv() }, (err, stdout, stderr) => {
+      if (err && keepFailure && err.code !== "ENOENT" && !err.killed) return resolve({ failed: true, stdout: String(stdout ?? ""), stderr: String(stderr ?? "") });
       if (err) {
         // A missing binary is OUR configuration, never the buyer's file: say
         // so as a 503 (uncharged). The 422 wording blamed the file for a
@@ -94,11 +111,19 @@ export async function probeMedia(buffer) {
     const inPath = join(dir, "in");
     const input = mediaInputArgs(buffer, inPath);
     await writeFile(inPath, buffer);
-    const { stdout } = await run("ffprobe", [
-      "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", ...input,
-    ]);
+    const res = await run("ffprobe", [
+      "-hide_banner", "-v", "info", "-print_format", "json", "-show_format", "-show_streams", ...input,
+    ], { keepFailure: true });
+    if (res.failed) {
+      // ffprobe stops when a stream's decoder is outside AUDIO_DECODERS (a
+      // video track, cover art, subtitles). Its input summary, printed before
+      // that stop, still names every stream from the container headers.
+      const summary = /not on whitelist/.test(res.stderr) ? probeSummaryOf(res.stderr, buffer.length) : null;
+      if (summary) return summary;
+      throw bad("media could not be processed (is the input a valid audio/video file?)", 422);
+    }
     let data;
-    try { data = JSON.parse(stdout); } catch { throw bad("ffprobe returned no metadata", 422); }
+    try { data = JSON.parse(res.stdout); } catch { throw bad("ffprobe returned no metadata", 422); }
     const f = data.format ?? {};
     return {
       formatName: f.format_name ?? null,
@@ -113,6 +138,54 @@ export async function probeMedia(buffer) {
       })),
     };
   });
+}
+
+const CHANNEL_LAYOUTS = { mono: 1, stereo: 2, "2.1": 3, "3.0": 3, quad: 4, "4.0": 4, "5.0": 5, "5.0(side)": 5, "5.1": 6, "5.1(side)": 6, "6.1": 7, "7.1": 8 };
+/** "25 fps" / "29.97 fps" as the rational string ffprobe reports. */
+const NTSC_RATES = { "23.98": "24000/1001", "23.976": "24000/1001", "29.97": "30000/1001", "59.94": "60000/1001" };
+const fpsRational = (v) => {
+  if (!v) return null;
+  if (NTSC_RATES[v]) return NTSC_RATES[v];
+  const [w, d = ""] = v.split(".");
+  return `${Number(w + d)}/${10 ** d.length}`;
+};
+/** The answer for an input holding a stream ffprobe would not decode, read
+ *  from its input summary (container headers only). Such a stream carries
+ *  `decoded: false`. Exported for the test. */
+export function probeSummaryOf(stderr, bytes) {
+  const lines = String(stderr).split("\n");
+  const first = (re) => { for (const l of lines) { const m = re.exec(l); if (m) return m; } return null; };
+  const head = first(/^Input #0, (.+?), from /);
+  if (!head) return null;
+  const dur = first(/^\s*Duration: (\d+):(\d\d):(\d\d(?:\.\d+)?)/);
+  const br = first(/^\s*Duration: .*bitrate: (\d+) kb\/s/);
+  const streams = [];
+  for (const l of lines) {
+    const m = /^\s*Stream #0:\d+\S*: (Video|Audio|Subtitle|Data|Attachment): (\w+)(.*)$/.exec(l);
+    if (!m) continue;
+    const type = m[1].toLowerCase(), codec = m[2], rest = m[3];
+    const s = { type, codec };
+    if (type === "audio") {
+      s.sampleRate = Number(/(\d+) Hz/.exec(rest)?.[1]) || null;
+      const ch = /Hz, ([^,]+)/.exec(rest)?.[1]?.trim();
+      s.channels = ch ? (CHANNEL_LAYOUTS[ch] ?? (Number(/^(\d+) channels/.exec(ch)?.[1]) || null)) : null;
+    }
+    if (type === "video") {
+      const wh = /, (\d{1,5})x(\d{1,5})/.exec(rest);
+      s.width = wh ? Number(wh[1]) : null;
+      s.height = wh ? Number(wh[2]) : null;
+      s.fps = fpsRational(/([\d.]+) fps/.exec(rest)?.[1]);
+    }
+    if (type !== "audio" || !AUDIO_DECODER_SET.has(codec)) s.decoded = false;
+    streams.push(s);
+  }
+  return {
+    formatName: head[1],
+    durationSec: dur ? Number(dur[1]) * 3600 + Number(dur[2]) * 60 + Number(dur[3]) : null,
+    bitrate: br ? Number(br[1]) * 1000 : null,
+    bytes,
+    streams,
+  };
 }
 
 export async function toMp3(buffer, { bitrate = "192k" } = {}) {
@@ -157,7 +230,7 @@ export async function transcodePcm(buffer, format, { sampleRate = 24000 } = {}) 
     const inPath = join(dir, "in.pcm");
     const outPath = join(dir, `out.${format}`);
     await writeFile(inPath, buffer);
-    await run("ffmpeg", ["-y", "-protocol_whitelist", "file", "-f", "s16le", "-ar", String(sampleRate), "-ac", "1", "-i", inPath, "-vn", "-map_metadata", "-1", ...out, outPath]);
+    await run("ffmpeg", ["-y", "-codec_whitelist", "pcm_s16le", "-protocol_whitelist", "file", "-f", "s16le", "-ar", String(sampleRate), "-ac", "1", "-i", inPath, "-vn", "-map_metadata", "-1", ...out, outPath]);
     return await readFile(outPath);
   } finally {
     pcmRelease();
@@ -235,7 +308,7 @@ export const MEDIA_TOOLS = [
   {
     route: "POST /api/media-info", name: "Media info (ffprobe)", slug: "media-info", category: "web", price: "$0.005",
     description:
-      "Inspect any audio/video URL with ffprobe: container, duration, bitrate, and per-stream codec details (sample rate/channels for audio, resolution/fps for video) as JSON. Body: {\"url\":\"https://…/file.mp4\"}.",
+      "Inspect any audio/video URL with ffprobe: container, duration, bitrate, and per-stream codec details (sample rate/channels for audio, resolution/fps for video) as JSON. Only audio is decoded: a video, image or subtitle stream is read from the container headers and carries decoded: false, with null for a resolution only its decoder would know. Body: {\"url\":\"https://…/file.mp4\"}.",
     tags: ["ffmpeg", "ffprobe", "audio", "video", "metadata"],
     discovery: {
       bodyType: "json",

@@ -2,6 +2,7 @@
 // Offline tests for src/tools/onchain-identity-kit.js. No keys, no network
 // by default. Live calls opt-in via IDENTITY_LIVE_TEST=1.
 
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { ONCHAIN_IDENTITY_TOOLS, __test } from "../src/tools/onchain-identity-kit.js";
 
 const { takeAddress, pickEasNetwork, ENS_API, NEYNAR_API, EAS_INDEXERS } = __test;

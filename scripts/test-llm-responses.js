@@ -1,5 +1,6 @@
 // /v1/.../responses (OpenAI Responses wire) - offline, stub fetch.
 process.env.POSTHOG_TEST_CAPTURE = "1";
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { LLM_RESPONSES_TOOLS, validateResponsesRequest, isEmptyIncomplete, RESPONSES_PATH_BY_TIER } from "../src/tools/llm-responses-kit.js";
 import { TIERS, createSseUsageScrubber } from "../src/tools/llm-gateway-kit.js";
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";
@@ -311,6 +312,80 @@ delete process.env.OPENROUTER_API_KEY;
     await premiumR.handler({ model: MODEL, input: content, max_output_tokens: 8192, reasoning: { max_tokens: 8000 } }, fakeReq);
     ok(seen[0]?.model === MODEL && seen[0].max_output_tokens < 8000 && seen[0].reasoning?.max_tokens === seen[0].max_output_tokens - 1, `Responses: the outbound reasoning budget sits one under the clamped cap (max_output_tokens ${seen[0]?.max_output_tokens}, reasoning ${seen[0]?.reasoning?.max_tokens})`);
   }
+}
+
+// ---- outbound input items are rebuilt from their documented fields ----
+// A field the wire does not document (a file reference, a container, an
+// unknown key) never reaches the upstream, on any item or part type; every
+// documented field still does.
+{
+  const nano = bySlug("v1-chat-nano-responses");
+  seen = [];
+  globalThis.fetch = async (url, init) => { const b = JSON.parse(init.body); seen.push(b); return { ok: true, status: 200, text: async () => JSON.stringify(reply(b.model)) }; };
+  await nano.handler({ model: "openai/gpt-5-nano", input: [
+    { type: "message", role: "developer", content: "be terse", file_id: "file-ours-1" },
+    { role: "user", content: [
+      { type: "input_text", text: "what is this?", file_id: "file-ours-2", extra: 1 },
+      { type: "input_image", image_url: "https://img.example.test/a.png", detail: "low", file_id: "file-ours-3" },
+      { type: "input_image", image_url: { url: "data:image/png;base64,AAAA", file_id: "file-ours-4" } },
+    ] },
+    { type: "message", role: "assistant", id: "msg_1", status: "completed", content: [{ type: "output_text", text: "earlier", annotations: [{ type: "file_citation", file_id: "file-ours-5" }] }] },
+    { type: "reasoning", id: "rs_1", summary: [{ type: "summary_text", text: "thought", file_id: "file-ours-6" }], encrypted_content: "enc", container_id: "cntr-ours" },
+    { type: "function_call", id: "fc_1", call_id: "c1", name: "f", arguments: "{}", namespace: "ns", container_id: "cntr-ours" },
+    { type: "function_call_output", call_id: "c1", output: [{ type: "input_text", text: "42", file_id: "file-ours-7" }], vector_store_ids: ["vs-ours"] },
+  ], tools: [{ type: "function", name: "f", description: "d", parameters: { type: "object" }, strict: true, file_ids: ["file-ours-8"] }],
+  text: { format: { type: "text" }, verbosity: "low", file_id: "file-ours-9" } }, fakeReq);
+  const out = seen[0] || {};
+  const wire = JSON.stringify(out);
+  ok(seen.length === 1 && !/file-ours|cntr-ours|vs-ours|"extra"|file_ids|vector_store_ids|container_id/.test(wire), "Responses: no undocumented field (file reference, container, unknown key) reaches the upstream");
+  const [dev, user, asst, rs, fc, fco] = out.input || [];
+  ok(dev?.type === "message" && dev.role === "developer" && dev.content === "be terse", "Responses: a message keeps type, role and string content");
+  ok(user?.content?.[0]?.text === "what is this?" && user.content[1].image_url === "https://img.example.test/a.png" && user.content[1].detail === "low" && user.content[2].image_url?.url === "data:image/png;base64,AAAA", "Responses: text and image parts keep text, image_url (string or {url}) and detail");
+  ok(asst?.id === "msg_1" && asst.status === "completed" && asst.content[0].type === "output_text" && asst.content[0].text === "earlier", "Responses: an echoed assistant message keeps id, status and its output_text");
+  ok(rs?.type === "reasoning" && rs.id === "rs_1" && rs.summary[0].text === "thought" && rs.encrypted_content === "enc", "Responses: a reasoning item keeps id, summary and encrypted_content");
+  ok(fc?.call_id === "c1" && fc.name === "f" && fc.arguments === "{}" && fc.namespace === "ns" && fc.id === "fc_1", "Responses: a function_call keeps call_id, name, arguments, namespace and id");
+  ok(fco?.call_id === "c1" && fco.output[0].text === "42", "Responses: a function_call_output keeps call_id and its output parts");
+  ok(out.tools?.[0]?.name === "f" && out.tools[0].strict === true && out.tools[0].description === "d" && out.tools[0].parameters?.type === "object", "Responses: a function tool keeps name, description, parameters and strict");
+  ok(out.text?.format?.type === "text" && out.text.verbosity === "low", "Responses: text keeps format and verbosity");
+  ok(Array.isArray(asst?.content?.[0]?.annotations) && asst.content[0].annotations.length === 0, "Responses: output_text always carries annotations (a file_citation is dropped, the array stays)");
+}
+// ---- documented output shapes round-trip ----
+// An echoed assistant turn keeps every documented field: output_text with its
+// url_citation annotations and logprobs, a refusal part, a reasoning item's
+// summary, reasoning_text content and encrypted_content. Annotations that name
+// a file or container are dropped; the rest of the part stays.
+{
+  const nano = bySlug("v1-chat-nano-responses");
+  seen = [];
+  globalThis.fetch = async (url, init) => { const b = JSON.parse(init.body); seen.push(b); return { ok: true, status: 200, text: async () => JSON.stringify(reply(b.model)) }; };
+  const urlCite = { type: "url_citation", url: "https://docs.example.test/x402", title: "x402", start_index: 0, end_index: 5 };
+  const lp = { token: "x4", logprob: -0.02, bytes: [120, 52], top_logprobs: [{ token: "x4", logprob: -0.02, bytes: [120, 52] }, { token: "X", logprob: -4.1, bytes: [88], extra: 1 }] };
+  await nano.handler({ model: "openai/gpt-5-nano", input: [
+    { role: "user", content: "what is x402?" },
+    { type: "message", role: "assistant", id: "msg_2", status: "completed", content: [
+      { type: "output_text", text: "x402 pays per request.", annotations: [urlCite,
+        { type: "file_citation", file_id: "file-ours-a", filename: "a.pdf", index: 1 },
+        { type: "container_file_citation", container_id: "cntr-ours", file_id: "file-ours-b", start_index: 0, end_index: 1, filename: "b" },
+        { type: "file_path", file_id: "file-ours-c", index: 2 }], logprobs: [lp] },
+      { type: "refusal", refusal: "I cannot share that.", file_id: "file-ours-d" },
+    ] },
+    { type: "reasoning", id: "rs_2", summary: [{ type: "summary_text", text: "short" }], content: [{ type: "reasoning_text", text: "long form", container_id: "cntr-ours" }], encrypted_content: "enc2", status: "completed" },
+    { role: "user", content: "and MPP?" },
+  ] }, fakeReq);
+  const out = seen[0] || {};
+  const wire = JSON.stringify(out);
+  ok(seen.length === 1 && !/file-ours|cntr-ours|"extra"|file_citation|file_path|container_file_citation/.test(wire), "Responses round-trip: no file or container reference reaches the upstream");
+  const [, asst, rs] = out.input || [];
+  const [ot, rf] = asst?.content || [];
+  ok(ot?.type === "output_text" && ot.text === "x402 pays per request." && JSON.stringify(ot.annotations) === JSON.stringify([urlCite]), `Responses round-trip: output_text keeps its url_citation annotation (${JSON.stringify(ot?.annotations)})`);
+  ok(JSON.stringify(ot?.logprobs) === JSON.stringify([{ token: "x4", logprob: -0.02, bytes: [120, 52], top_logprobs: [{ token: "x4", logprob: -0.02, bytes: [120, 52] }, { token: "X", logprob: -4.1, bytes: [88] }] }]), `Responses round-trip: output_text keeps logprobs with top_logprobs (${JSON.stringify(ot?.logprobs)})`);
+  ok(rf?.type === "refusal" && rf.refusal === "I cannot share that." && Object.keys(rf).length === 2, "Responses round-trip: a refusal part keeps type and refusal");
+  ok(asst?.id === "msg_2" && asst.status === "completed" && asst.role === "assistant", "Responses round-trip: the assistant message keeps id, status and role");
+  ok(rs?.type === "reasoning" && rs.id === "rs_2" && rs.status === "completed" && rs.summary?.[0]?.text === "short" && rs.content?.[0]?.type === "reasoning_text" && rs.content[0].text === "long form" && rs.encrypted_content === "enc2", `Responses round-trip: reasoning keeps summary, reasoning_text content and encrypted_content (${JSON.stringify(rs)})`);
+  ok(!("logprobs" in (out.input?.[1]?.content?.[1] || {})), "Responses round-trip: a part sent without logprobs gains none");
+  let refused = null;
+  try { await nano.handler({ model: "openai/gpt-5-nano", input: [{ type: "message", role: "assistant", content: [{ type: "refusal" }] }, { role: "user", content: "x" }] }, fakeReq); } catch (e) { refused = e; }
+  ok(refused?.statusCode === 400 && /refusal must be a string/.test(refused.message), `Responses: a refusal part without its text is refused 400 (${refused?.message})`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

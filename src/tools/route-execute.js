@@ -16,6 +16,7 @@
 // spread is the routing fee. Tools above the cap return a self-correcting 409
 // that names the tool and its direct route, so the buyer can call it at list
 // price instead.
+import { isOwnPayoutAddress } from "../own-wallets.js";
 import { createHash } from "node:crypto";
 import { paymentHeaderOf, payerFromRequest } from "../payer.js";
 import { maySpend, noteSpend, adjustSpend, reserveSpend } from "../external-spend-guard.js";
@@ -167,6 +168,66 @@ export function dispatchable(def) {
   // 2026-08-27: $0.01 bought an uncapped Opus call through here).
   if (typeof def.quote === "function") return { ok: false, why: "per-request-priced tools are quoted from the body - call them directly so the 402 carries their real price" };
   return { ok: true };
+}
+
+export { isOwnPayoutAddress };
+/** The first of a candidate's payout addresses that is ours, or null: the
+ *  address it will be paid at (provenPayTo, the one the payer re-checks the
+ *  signed accept against) and the wallets its evidence was measured at. */
+export async function ownPayoutOf(ext, opts = {}) {
+  const addrs = [ext?.provenPayTo, ext?.payTo, ...(Array.isArray(ext?.evidenceWallets) ? ext.evidenceWallets : [])];
+  for (const a of addrs) if (await isOwnPayoutAddress(a, opts)) return String(a);
+  return null;
+}
+
+// A JUDGED PICK NEEDS LEXICAL SUPPORT. The seller judge reads seller-written
+// text, so a listing worded to win the judge could otherwise be bought ahead
+// of the top-ranked seller on wording alone. The judge may reorder outside
+// candidates only toward one whose own match score against the task meets a
+// floor drawn from the index ranker's weights (src/x402-index.js routeQuery:
+// 10 per query term that is a whole slug word, 4 per partial slug hit, 1 per
+// description or tag hit). The name hit (2 per term) is left out of this
+// score: the name is a free-text field the seller writes, and the index
+// reads it into its description text too, so a name stuffed with task words
+// would otherwise carry an override on its own. Every candidate is scored
+// here the same way (the index's own `score` includes the name), and a pick
+// needs:
+//   - at least JUDGED_OVERRIDE_MIN_SCORE (4): one slug hit, or four task
+//     terms in its description and tags;
+//   - at least JUDGED_OVERRIDE_MIN_SHARE (half) of the best such score among
+//     the candidates, so a pick far below the closest match is not taken.
+// Below the floor the lexical order stands (the judge's answer is kept on the
+// receipt).
+export const JUDGED_OVERRIDE_MIN_SCORE = 4;
+export const JUDGED_OVERRIDE_MIN_SHARE = 0.5;
+// Task words that carry the task: three letters or more and not a function
+// word, so a slug made of "an" and "to" cannot meet the judged-pick floor.
+const SCORE_STOP_WORDS = new Set(["the", "and", "for", "with", "from", "into", "onto", "that", "this", "these", "those", "are", "was", "were", "has", "have", "had", "can", "use", "using", "get", "via", "per", "out", "all", "any", "its", "our", "your", "you", "not", "but", "how", "what", "which", "who", "when", "where", "why", "please", "then", "than", "also", "some", "each", "one", "two", "new"]);
+const scoreTerms = (task) => [...new Set(String(task || "").toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((t) => t.length >= 3 && !SCORE_STOP_WORDS.has(t)))].slice(0, 32);
+export function lexicalScoreOf(task, row, { name = true } = {}) {
+  if (name && Number.isFinite(row?.score)) return row.score;
+  const terms = scoreTerms(task);
+  const slugWords = String(row?.slug || "").toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  const nameText = String(row?.name || "").toLowerCase();
+  const hay = `${row?.description || ""} ${Array.isArray(row?.tags) ? row.tags.join(" ") : ""}`.toLowerCase();
+  let s = 0;
+  for (const t of terms) {
+    if (slugWords.includes(t)) s += 10; else if (slugWords.some((w) => w.includes(t))) s += 4;
+    if (name && nameText.includes(t)) s += 2;
+    if (hay.includes(t)) s += 1;
+  }
+  return s;
+}
+/** The match a judged pick is held to: slug, description and tags, never the name. */
+export const overrideScoreOf = (task, row) => lexicalScoreOf(task, row, { name: false });
+export function judgedOverrideAllowed(task, candidates, chosen) {
+  const list = Array.isArray(candidates) ? candidates : [];
+  if (!chosen || chosen === list[0]) return { ok: true };
+  const scoreOf = (r) => overrideScoreOf(task, r);
+  const best = Math.max(0, ...list.map(scoreOf));
+  const score = scoreOf(chosen);
+  const floor = Math.max(JUDGED_OVERRIDE_MIN_SCORE, best * JUDGED_OVERRIDE_MIN_SHARE);
+  return score >= floor ? { ok: true, score, floor } : { ok: false, score, floor, best };
 }
 
 // THE BASE SPENDING WALLET'S LAST READING, for a refusal before signing.
@@ -485,6 +546,14 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           // Any spelling of the chain's id on the seller's row counts.
           if (!(ext.url && Array.isArray(ext.networks) && ext.networks.some((n) => EXTERNAL_CHAIN_BY_NETWORK[n] === chain))) {
             lastErr = bad(`External seller "${ext.seller}" does not offer ${chain} settlement - cannot pay it from the ${chain} spending wallet.`, 409);
+            if (hasNext) continue; throw lastErr;
+          }
+          // Never our own wallet (ownPayoutOf above): refused before any
+          // booking or signature, and the next candidate is tried.
+          const ownPayout = await ownPayoutOf(ext);
+          if (ownPayout) {
+            console.warn(`[sor] refusing ${chain} candidate ${ext.seller}: it is paid at this host's own wallet ${ownPayout.slice(0, 10)}…`);
+            lastErr = bad(`External seller "${ext.seller}" is paid at one of this host's own wallets; the router never pays itself. Nothing was spent and nothing is charged.`, 409);
             if (hasNext) continue; throw lastErr;
           }
           const extWire = ext.wire || "x402";

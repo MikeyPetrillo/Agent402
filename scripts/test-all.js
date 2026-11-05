@@ -7,6 +7,7 @@
 // Pure-CPU tools must return 200 with no error. Network/browser tools are
 // exercised but tolerant of upstream/sandbox failures (they need real egress;
 // CI has it). Memory tools get a demo namespace and accept their valid 4xx.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { missingDocumentedKeys, emptyPromisedArrays } from "./sweep-shape.js";
 import { requestExampleOf, multipartBodyFrom, MULTIPART_TYPE } from "../src/openapi-request.js";
 
@@ -360,6 +361,41 @@ const isMemory = (p) => p.startsWith("/api/memory");
 // so their documented "pay to unlock" 4xx is the CORRECT answer, not a bug —
 // same leniency class as the memory tools.
 const isWalletIdentity = (p) => isMemory(p) || p === "/api/my-usage" || p === "/api/receipts" || p === "/api/feedback";
+
+// The seller index must have loaded before the strict sweep: seller-dossier
+// (and every tool that answers about a third-party seller) refuses with a 503
+// "still loading" until the server's first crawl or warm start lands, which is
+// the honest answer and not a defect. Started right after a boot, the sweep
+// would read that 503 as a failure, so it waits on the server's own signal
+// (`indexing` on /api/index/tools, with its Retry-After) for a bounded time
+// and fails naming the state if the index never becomes ready.
+async function waitForIndexReady(target, { maxMs = Number(process.env.TEST_ALL_INDEX_WAIT_MS || 300_000), log = console.log } = {}) {
+  const t0 = Date.now();
+  let state = "unread", said = "";
+  while (true) {
+    let wait = 2000;
+    try {
+      const r = await fetch(`${target}/api/index/tools?limit=1`, { signal: AbortSignal.timeout(15_000) });
+      if (r.status === 404) return { ready: true, state: "no-index-route", waitedMs: Date.now() - t0 };
+      const b = await r.json().catch(() => ({}));
+      state = String(b.indexState || (b.indexing === true ? "loading" : "ready"));
+      if (r.ok && b.indexing !== true) return { ready: true, state, waitedMs: Date.now() - t0 };
+      const ra = Number(r.headers.get("retry-after"));
+      if (Number.isFinite(ra) && ra > 0) wait = Math.min(ra * 1000, 5000);
+    } catch (e) { state = `unreachable (${e.cause?.code || e.name})`; }
+    if (state !== said) { log(`waiting for the seller index on ${target}: ${state}`); said = state; }
+    if (Date.now() - t0 + wait > maxMs) return { ready: false, state, waitedMs: Date.now() - t0 };
+    await new Promise((r) => setTimeout(r, wait));
+  }
+}
+{
+  const ix = await waitForIndexReady(TARGET);
+  if (!ix.ready) {
+    console.error(`FAIL - the seller index on ${TARGET} never became ready (still ${ix.state} after ${Math.round(ix.waitedMs / 1000)}s; TEST_ALL_INDEX_WAIT_MS bounds the wait). The sweep would read its "still loading" 503s as failures, so it does not start.`);
+    process.exit(1);
+  }
+  if (ix.waitedMs > 1000) console.log(`seller index ${ix.state} after ${Math.round(ix.waitedMs / 1000)}s`);
+}
 
 const spec = await (await fetch(`${TARGET}/openapi.json`)).json();
 const paths = Object.entries(spec.paths);

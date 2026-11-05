@@ -10,6 +10,7 @@
 //
 // No network, no real Stripe key, no /data. Fetch is injected; the store is a
 // temp sqlite file per case.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

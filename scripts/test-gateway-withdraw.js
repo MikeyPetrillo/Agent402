@@ -11,6 +11,7 @@
 //   - a whole-balance withdrawal leaves room for the fee (value plus maxFee
 //     within the balance), an --amount past that is refused, and the
 //     --max-fee default is 1% of the default withdraw alert.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { maxUint256, parseUnits } from "viem";

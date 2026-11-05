@@ -1,6 +1,7 @@
 // Offline unit tests for finance-math-kit. Verifies textbook math against
 // known cross-checkable values (Excel/PMT, classic capital-budgeting examples)
 // and asserts the error contracts return statusCode=400 instead of crashing.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { FINANCE_MATH_TOOLS } from "../src/tools/finance-math-kit.js";
 
 let passed = 0;

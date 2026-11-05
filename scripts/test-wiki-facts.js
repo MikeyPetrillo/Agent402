@@ -8,6 +8,7 @@
 //
 //   FREE_MODE=true PORT=3000 node src/server.js
 //   TARGET_URL=http://127.0.0.1:3000 node scripts/test-wiki-facts.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";

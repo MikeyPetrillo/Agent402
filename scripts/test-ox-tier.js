@@ -31,6 +31,7 @@
 //   node scripts/test-ox-tier.js
 
 // Route PostHog captures to the in-memory sink before anything imports it.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.POSTHOG_TEST_CAPTURE = "1";
 process.env.OPENROUTER_API_KEY = "test-key";
 process.env.OX_ALPHA_ENABLED = "on"; // OFF by default since 2026-09-03; these tests exercise the tier switched on

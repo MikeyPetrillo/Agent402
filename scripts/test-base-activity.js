@@ -3,6 +3,7 @@
 // railway run; ClickHouse isn't reachable from CI). Ensures a missing-creds or
 // bad-input call returns a clean, well-shaped "empty" result so the marketplace
 // panel falls back to the RPC scan instead of throwing.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { baseActivityViaSql } from "../src/revenue-live.js";
 
 let pass = 0, fail = 0;

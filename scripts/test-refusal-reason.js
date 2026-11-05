@@ -10,6 +10,7 @@
 // right are: the vocabulary is closed, and no buyer text escapes.
 //
 //   node scripts/test-refusal-reason.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 const { refusalReason, REFUSAL_REASONS } = await import("../src/refusal-reason.js");
 const { readFileSync } = await import("node:fs");
 

@@ -2,6 +2,7 @@
 // decides what counts as a real external x402 payment. Guards against the bug
 // where non-x402 transfers (funding/tests/swaps, e.g. $1/$5 from the owner's
 // other wallet) were mislabeled as "external customer payments". Pure, no network.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { isExternalPayment, payerFromLog } from "./revenue-scan.js";
 
 let pass = 0, fail = 0;

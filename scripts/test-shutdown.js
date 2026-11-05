@@ -8,6 +8,7 @@
 //
 // Both run the behavior in a real child process (the only faithful way to test
 // process exit). No network beyond localhost /health.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";

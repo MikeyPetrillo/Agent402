@@ -1,6 +1,7 @@
 // The private upstream-cost table (src/upstream-costs.js): parsing, and the
 // safe path every caller takes without it. Offline, and the table here is
 // FAKE: no real rate belongs in this repo.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 delete process.env.UPSTREAM_COSTS_JSON;
 delete process.env.UPSTREAM_COSTS_FILE;
 

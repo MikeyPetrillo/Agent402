@@ -16,6 +16,7 @@
 // configured intent. It is deliberately the conservative approximation — a
 // client pinned to one replica gets its share, never the whole budget — because
 // for a security bound, too tight is the right direction to be wrong in.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createLimiter, perReplica } from "../src/rate-limit.js";
 
 let pass = 0, fail = 0;

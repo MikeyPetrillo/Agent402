@@ -9,6 +9,7 @@
 //
 // Offline, no server. We seed POW_SECRET before importing pow.js so the same
 // secret is used for both sides of the HMAC.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.POW_SECRET = "test-heartbeat-secret-do-not-use-in-prod";
 
 const { issueHeartbeatToken, verifyHeartbeatToken } = await import("../src/pow.js");
