@@ -30,7 +30,8 @@
 // The 13F information table is fetched only when its DECLARED SIZE is under a
 // cap: the largest index complexes publish tables in the tens of megabytes, and
 // a free page must be able to decline that read.
-import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { siteOrgRef } from "./site-org.js";
+import { ledgerShell, ledgerFooterCompact, esc, breadcrumbNavFromLd, breadcrumbLd as sharedBreadcrumbLd } from "./ledger-chrome.js";
 import { REPORTS_CSS } from "./human-reports-page.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
 import { INSIDER_TIERS, INSIDER_DEFAULT_DAYS, INSIDER_MAX_DAYS } from "./tools/insider-flow-kit.js";
@@ -103,6 +104,30 @@ export function createTeaserCache({ ttlMs = TTL_MS, negTtlMs = NEG_TTL_MS, max =
 }
 
 const cache = createTeaserCache();
+
+// --- sitemap lastmod for a seeded entity page --------------------------------
+// The newest filing date a page shows: the newest Form 4 on an insider page,
+// the 13F filing on a fund page, the newest filing a dossier lists. Only a
+// real ISO day counts; a page with none has no lastmod.
+const ISO_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+export function teaserLastmod(kind, data) {
+  if (!data) return null;
+  const dates = kind === "insider" ? [data.latestFiledDate]
+    : kind === "fund" ? [data.filedDate]
+      : kind === "dossier" ? [data.latest10Q?.filingDate, data.latest10K?.filingDate, ...((data.activity?.recent || []).map((r) => r?.filingDate))]
+        : [];
+  return dates.filter((d) => typeof d === "string" && ISO_DAY_RE.test(d)).sort().pop() || null;
+}
+// Path -> that date, recorded when a complete page is built from EDGAR (a
+// partial build, a degraded page or a miss records nothing). Kept per process
+// past the teaser cache's expiry, so the sitemap can date a page it has
+// served; it starts empty, and a page not built since boot carries no lastmod.
+const entityDates = new Map();
+export const entityLastmod = (path) => entityDates.get(path) || null;
+function recordEntityDate(kind, slug, data) {
+  const d = data && !data.partial ? teaserLastmod(kind, data) : null;
+  if (d) entityDates.set(`/reports/${kind}/${slug}`, d);
+}
 
 // --- EDGAR politeness gate --------------------------------------------------
 // SEC's published ceiling is 10 requests/second. A page is 1-4 requests, so a
@@ -387,6 +412,7 @@ export async function loadTeaser(kind, slug, { seeded = false, builders = {}, te
     // space can never become EDGAR full-text-search traffic). That is a 404 and
     // a negative-cache entry, never a page carrying a made-up name in its title.
     if (!data) { teaserCache.setMiss(key); return { status: "missing" }; }
+    if (teaserCache === cache) recordEntityDate(kind, slug, data);
     return { status: "ok", data: teaserCache.setValue(key, data, data?.partial ? PARTIAL_TTL_MS : undefined) };
   } catch (e) {
     // A SEEDED entity is known to exist - we curated it - so no read failure
@@ -482,12 +508,12 @@ function crossLinks(links) {
   return `<div class="pg-links">${links.map((l) => `<a href="${esc(l.href)}">${esc(l.label)}</a>`).join("")}</div>`;
 }
 
+// One trail per page, from Home: shell() renders the visible trail from the
+// same list, so the two never differ.
 function breadcrumbLd(baseUrl, trail) {
-  return {
-    "@context": "https://schema.org", "@type": "BreadcrumbList",
-    itemListElement: trail.map((t, i) => ({ "@type": "ListItem", position: i + 1, name: t.name, item: `${baseUrl}${t.path}` })),
-  };
+  return sharedBreadcrumbLd(baseUrl, [["Home", "/"], ...trail.map((t) => [t.name, t.path])]);
 }
+
 function productLd(baseUrl, family, name, description, canonical) {
   const p = HUMAN_PRODUCTS[family.product];
   return {
@@ -504,7 +530,7 @@ function datasetLd(baseUrl, { name, description, canonical, modified }) {
     name, description, url: canonical,
     isAccessibleForFree: true,
     license: "https://www.sec.gov/about/website-policy",
-    creator: { "@type": "Organization", name: "Havok Holdings LLC", url: baseUrl },
+    creator: siteOrgRef(baseUrl),
     ...(modified ? { dateModified: modified } : {}),
     isBasedOn: "https://www.sec.gov/edgar",
     keywords: ["SEC EDGAR", "filings", "public company data"],
@@ -521,7 +547,7 @@ function shell({ title, description, canonical, baseUrl, body, jsonLd }) {
   return ledgerShell({
     title, description, canonical, baseUrl, activePath: "/reports",
     extraCss: REPORTS_CSS + PROGRAMMATIC_CSS,
-    body: `<div class="wrap">${body}</div>${ledgerFooterCompact()}<script src="/js/report-buy.js"></script><script src="/js/alert-signup.js"></script>`,
+    body: `<div class="wrap">${breadcrumbNavFromLd(baseUrl, jsonLd)}${body}</div>${ledgerFooterCompact()}<script src="/js/report-buy.js"></script><script src="/js/alert-signup.js"></script>`,
     jsonLd,
   });
 }
@@ -567,7 +593,7 @@ export function insiderPage({ ticker, data, baseUrl, degraded = false }) {
   return shell({
     title, description, canonical, baseUrl, body,
     jsonLd: [
-      datasetLd(baseUrl, { name: `${ticker} Form 4 insider transactions`, description, canonical, modified: data?.latestFiledDate || null }),
+      datasetLd(baseUrl, { name: `${ticker} Form 4 insider transactions`, description, canonical, modified: teaserLastmod("insider", data) }),
       breadcrumbLd(baseUrl, [{ name: "Reports", path: "/reports" }, { name: "Insider filings", path: "/reports/insider" }, { name: ticker, path: `/reports/insider/${ticker}` }]),
       productLd(baseUrl, family, `${name} (${ticker})`, `Cited insider flow report on ${name} from SEC Form 4 filings.`, canonical),
     ],
@@ -620,7 +646,7 @@ export function fundPage({ slug, data, baseUrl, degraded = false }) {
   return shell({
     title, description, canonical, baseUrl, body,
     jsonLd: [
-      datasetLd(baseUrl, { name: `${name} Form 13F-HR holdings`, description, canonical, modified: data?.filedDate || null }),
+      datasetLd(baseUrl, { name: `${name} Form 13F-HR holdings`, description, canonical, modified: teaserLastmod("fund", data) }),
       breadcrumbLd(baseUrl, [{ name: "Reports", path: "/reports" }, { name: "Fund 13F holdings", path: "/reports/fund" }, { name, path: `/reports/fund/${slug}` }]),
       productLd(baseUrl, family, name, `Cited 13F portfolio report on ${name}, including what changed last quarter.`, canonical),
     ],
@@ -698,7 +724,7 @@ export function dossierPage({ ticker, data, baseUrl, degraded = false }) {
   return shell({
     title, description, canonical, baseUrl, body,
     jsonLd: [
-      datasetLd(baseUrl, { name: `${name} SEC filing profile`, description, canonical, modified: data?.latest10Q?.filingDate || data?.latest10K?.filingDate || null }),
+      datasetLd(baseUrl, { name: `${name} SEC filing profile`, description, canonical, modified: teaserLastmod("dossier", data) }),
       breadcrumbLd(baseUrl, [{ name: "Reports", path: "/reports" }, { name: "Company profiles", path: "/reports/dossier" }, { name: ticker, path: `/reports/dossier/${ticker}` }]),
       productLd(baseUrl, family, `${name} (${ticker})`, `Cited due-diligence dossier on ${name} built from SEC filings and live sources.`, canonical),
     ],

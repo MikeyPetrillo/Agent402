@@ -1,5 +1,6 @@
 // Server-rendered catalogue pages and the OpenAPI spec — all generated from
 // the tool catalog so they never drift from what the API actually serves.
+import { siteOrgRef } from "./site-org.js";
 import { frontDoorOneLine } from "./front-door.js";
 import { openapiRequestBody } from "./openapi-request.js";
 import { asyncAdvice } from "./slow-routes.js";
@@ -9,7 +10,7 @@ import { REPO_URL } from "./repo-link.js";
 import { isComputePayable } from "./pow.js";
 import { responseSchemaFor } from "./openapi-schema.js";
 import { captureNote } from "./tool-output-examples.js";
-import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc, breadcrumbLd } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc, breadcrumbTrail } from "./ledger-chrome.js";
 import { SKILL_PACKS, PACK_PRICE_RANGE } from "./skills.js";
 import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
 import { agentReportPriceRange, cardReportPriceRange, reportLadderProse } from "./report-tiers.js";
@@ -294,6 +295,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   const canonical = `${baseUrl}/tools/${tool.slug}`;
   const catLabel = CATEGORIES[tool.category]?.label ?? tool.category;
   const catHref = `/tools/category/${tool.category}`;
+  const crumbs = breadcrumbTrail(baseUrl, [["Home", "/"], ["Tools", "/tools"], [catLabel, catHref], [tool.name, `/tools/${tool.slug}`]]);
   const pw = priceWords(tool);
   const schema = tool.discovery?.inputSchema || {};
   const props = schema.properties || {};
@@ -321,7 +323,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
       url: canonical,
       description: tool.description,
       documentation: `${baseUrl}/openapi.json`,
-      provider: { "@type": "Organization", name: "Agent402.Tools", url: baseUrl },
+      provider: siteOrgRef(baseUrl),
       offers: {
         "@type": "Offer",
         price: tool.price.replace("$", ""),
@@ -329,16 +331,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
         description: `${pw.long}, paid over x402 in ${railsOrFor(tool)}${orMpp}. No signup, no API key.${computePayable ? " Or free with proof-of-work (no wallet)." : ""}`,
       },
     },
-    {
-      "@context": "https://schema.org",
-      "@type": "BreadcrumbList",
-      itemListElement: [
-        { "@type": "ListItem", position: 1, name: "Home", item: baseUrl },
-        { "@type": "ListItem", position: 2, name: "Tools", item: `${baseUrl}/tools` },
-        { "@type": "ListItem", position: 3, name: catLabel, item: `${baseUrl}${catHref}` },
-        { "@type": "ListItem", position: 4, name: tool.name, item: canonical },
-      ],
-    },
+    crumbs.ld,
   ];
 
   // --- Answer-first summary: what it does, what it costs, how to pay, where it lives.
@@ -469,8 +462,6 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   // title is always whole. A JS comment, not a CSS one: the CSS block is served.
   const TOOL_PAGE_CSS = `
   .tp-wrap { max-width:1180px; margin:0 auto; padding:56px 30px; }
-  .tp-crumb { font-family:var(--font-mono); font-size:var(--fs-sm); color:var(--faint); margin-bottom:18px; }
-  .tp-crumb a { color:var(--accent); text-decoration:none; }
   .tp-h1 { font-family:var(--font-body); font-weight:800; font-size:var(--fs-3xl); line-height:1; letter-spacing:-.02em; margin-bottom:10px; text-wrap:balance; }
   @media (max-width:640px){ .tp-h1 { font-size:var(--fs-2xl); line-height:1.1; } }
   .tp-badge { display:inline-flex; flex-wrap:wrap; row-gap:4px; background:var(--panel); color:var(--on-panel); font-family:var(--font-mono); font-size:var(--fs-sm); padding:8px 16px; margin:8px 0 6px; }
@@ -499,7 +490,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   `;
 
   const body = `<div class="tp-wrap">
-  <nav class="tp-crumb ml-crumb" aria-label="Breadcrumb"><a href="/">Home</a> / <a href="/tools">Tools</a> / <a href="${e(catHref)}">${e(catLabel)}</a><span class="ml-crumb-cur"> / ${e(tool.name)}</span></nav>
+  ${crumbs.nav}
   <h1 class="tp-h1" title="${e(tool.name)}">${e(tool.name)}</h1>
   <div class="tp-badge">${
     computePayable
@@ -618,13 +609,14 @@ export function categoryPage(baseUrl, catalog, catKey) {
 </div>`;
   }).join("\n");
 
+  const crumbs = breadcrumbTrail(baseUrl, [["Home", "/"], ["Tools", "/tools"], [cat.label, `/tools/category/${catKey}`]]);
   const CAT_CSS = `
   .cp-grid { display:grid; gap:14px; margin:20px 0; }
   @media (min-width:640px){ .cp-grid { grid-template-columns:repeat(3,1fr); } }
   `;
 
   const body = `<div style="max-width:1180px;margin:0 auto;padding:56px 30px;">
-  <div class="ml-crumb" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);margin-bottom:18px;"><a href="/" style="color:var(--accent);text-decoration:none;">Agent402</a> / <a href="/tools" style="color:var(--accent);text-decoration:none;">tools</a><span class="ml-crumb-cur"> / ${e(cat.label)}</span></div>
+  ${crumbs.nav}
   <h1 style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin-bottom:10px;">${e(cat.label)}</h1>
   <p style="color:var(--muted);font-size:var(--fs-lg);line-height:1.6;max-width:720px;">${e(cat.blurb)}</p>
   <div style="background:var(--card);border:1px solid var(--hairline);padding:16px 20px;margin:18px 0;font-size:var(--fs-base);"><b style="color:var(--accent);">${nTools}</b> in this category${freeCount ? ` - <b style="color:var(--accent);">${freeCount} free</b> via proof-of-work` : ""}. <a href="/tools" style="color:var(--accent);">\u2190 All tools</a></div>
@@ -638,7 +630,7 @@ ${ledgerFooterCompact()}`;
     canonical,
     baseUrl,
     activePath: "/tools",
-    jsonLd: [jsonLd, breadcrumbLd(baseUrl, [["Agent402", "/"], ["Tools", "/tools"], [cat.label, `/tools/category/${catKey}`]])],
+    jsonLd: [jsonLd, crumbs.ld],
     extraCss: CAT_CSS,
     body,
   });

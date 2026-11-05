@@ -3,11 +3,11 @@
 // live search, "browse by category" table with a real cpu/usdc/mixed
 // pays-with column, free-tier + paid-tools explainer, closing CTA.
 
+import { siteOrgLd } from "./site-org.js";
 import { ledgerShell, ledgerFooterCompact, esc, fmtNum } from "./ledger-chrome.js";
 import { toolList, CATEGORIES } from "./pages.js";
 import { isComputePayable, powCostPhrase } from "./pow.js";
 
-import { ORG_SAME_AS } from "./repo-link.js";
 
 const TABS = [
   ["Tools", "/tools"],
@@ -54,7 +54,7 @@ export function ledgerCatalogPage(baseUrl, catalog, skillPacks) {
   const title = `${fmtNum(count)} pay-per-call tools for AI agents - Agent402 Tools`;
   const description = `${fmtNum(count)} tools an AI agent can call and pay for per request in USDC. ${fmtNum(freeCount)} run free on proof-of-work. No signup, no API keys. Browse by category, or describe a task and let the router resolve it.`;
 
-  const orgLd = { "@type": "Organization", "@id": `${baseUrl}/#organization`, name: "Agent402", url: baseUrl, sameAs: ORG_SAME_AS };
+  const orgLd = siteOrgLd(baseUrl);
   const breadcrumbLd = { "@type": "BreadcrumbList", itemListElement: [
     { "@type": "ListItem", position: 1, name: "Agent402", item: `${baseUrl}/` },
     { "@type": "ListItem", position: 2, name: "Our tools", item: canonical },

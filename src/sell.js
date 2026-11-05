@@ -11,6 +11,7 @@
 // XSS posture from market-page.js (fetch → JSON → textContent only, never
 // innerHTML) — real, tested, working functionality kept intact under the
 // new visual treatment rather than dropped for a static curl example alone.
+import { siteOrgLd } from "./site-org.js";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { RAILS, RAILS_AMP } from "./rails.js";
 import { crawlIntervalLabel } from "./crawl-cadence.js";
@@ -28,7 +29,7 @@ const ROUTER_PAY_CHAINS = [...new Set(Object.values(EXTERNAL_CHAIN_BY_NETWORK))]
 const listJoin = (a) => (a.length < 2 ? a.join("") : `${a.slice(0, -1).join(", ")} and ${a[a.length - 1]}`);
 const ROUTER_CHAIN_SENTENCE = `When the router buys from a seller to resell the result to an agent, it pays the seller on the chain the agent paid on, so it reaches you only on chains you accept; it holds spending wallets for ${listJoin(ROUTER_PAY_CHAINS)}.`;
 
-import { REPO_URL, ORG_SAME_AS } from "./repo-link.js";
+import { REPO_URL } from "./repo-link.js";
 const REPO = REPO_URL;
 
 const COSTS = [
@@ -145,7 +146,7 @@ export function sellPage(baseUrl, catalog = null) {
   const description =
     "List your API on the open x402 index and get paid in USDC per call, straight to your wallet. Free listing, no signup, nothing deducted from your price. Or tollbooth a site so AI crawlers pay per page. See what agents already pay for.";
 
-  const orgLd = { "@type": "Organization", "@id": `${baseUrl}/#organization`, name: "Agent402", url: baseUrl, logo: { "@type": "ImageObject", url: `${baseUrl}/logo.png` }, sameAs: ORG_SAME_AS };
+  const orgLd = siteOrgLd(baseUrl);
   const breadcrumbLd = { "@type": "BreadcrumbList", itemListElement: [
     { "@type": "ListItem", position: 1, name: "Agent402", item: `${baseUrl}/` },
     { "@type": "ListItem", position: 2, name: "Sell", item: canonical },

@@ -11,6 +11,7 @@
 // Why fixtures and not live generation: a free public page that spends
 // upstream on every render is a spend hole; a fixture costs nothing to
 // serve, is byte-stable for the index, and says when it was generated.
+import { siteOrgRef } from "./site-org.js";
 import { readdirSync, readFileSync } from "node:fs";
 import { trimWords, SERP_TITLE_MAX } from "./seo-meta.js";
 import { join, dirname } from "node:path";
@@ -104,8 +105,8 @@ export function sampleMeta(product, baseUrl) {
       { "@type": "ListItem", position: 3, name: s.label, item: canonical },
     ] },
     { "@type": "Report", "@id": `${canonical}#report`, headline: s.title, name: s.title, about: s.input, isAccessibleForFree: true,
-      ...(s.at ? { datePublished: s.at } : {}), author: { "@type": "Organization", name: "Agent402", url: baseUrl },
-      publisher: { "@type": "Organization", name: "Agent402", url: baseUrl }, mainEntityOfPage: canonical,
+      ...(s.at ? { datePublished: s.at } : {}), author: siteOrgRef(baseUrl),
+      publisher: siteOrgRef(baseUrl), mainEntityOfPage: canonical,
       description: description.slice(0, 300) },
     { "@type": "Product", name: s.label, image: `${baseUrl}/tools/${s.slug}/card.png`, url: `${baseUrl}/reports`, offers: { "@type": "Offer", price: s.priceUsd.toFixed(2), priceCurrency: "USD", url: `${baseUrl}/reports`, availability: "https://schema.org/InStock" } },
   ];

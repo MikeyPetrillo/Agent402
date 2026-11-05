@@ -8,9 +8,9 @@
 // status. /what-is-x402 remains the broader executive explainer covering
 // both protocols; this page is the dedicated landing page for MPP-specific
 // search intent, and the two cross-link rather than duplicate scope.
+import { siteOrgLd } from "./site-org.js";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
-import { ORG_SAME_AS } from "./repo-link.js";
 import { mppFlagshipRows, mppFlagshipSnippet, mppFlagshipOffersPhrase, MPP_FLAGSHIP_SNIPPET_SLUG } from "./mpp-flagship.js";
 const STEPS = [
   ["01", "The client requests a paid resource", "A plain HTTP request, no credentials attached. The server answers 402 Payment Required with a WWW-Authenticate: Payment challenge naming the price, the asset, the chain, and a one-time challenge id."],
@@ -71,7 +71,7 @@ export function whatIsMppPage(baseUrl, catalog = null) {
   const description =
     "MPP (Machine Payments Protocol) is an open protocol, published as an IETF Internet-Draft, that carries pay-per-request payments through HTTP's native authentication headers: a 402 response challenges with WWW-Authenticate: Payment, the client pays via Authorization: Payment, and a signed Payment-Receipt confirms settlement. What it is, how a payment works, how it compares to x402, and where it is live today.";
 
-  const orgLd = { "@type": "Organization", "@id": `${baseUrl}/#organization`, name: "Agent402", url: baseUrl, logo: { "@type": "ImageObject", url: `${baseUrl}/logo.png` }, sameAs: ORG_SAME_AS };
+  const orgLd = siteOrgLd(baseUrl);
   const breadcrumbLd = { "@type": "BreadcrumbList", itemListElement: [
     { "@type": "ListItem", position: 1, name: "Agent402", item: `${baseUrl}/` },
     { "@type": "ListItem", position: 2, name: "What is MPP", item: canonical },

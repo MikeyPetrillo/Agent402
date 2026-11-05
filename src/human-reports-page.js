@@ -10,7 +10,7 @@ import { sampleLinkFor, SAMPLES } from "./sample-reports.js";
 // A long unbroken input (a token mint, a wallet) shows as head…tail in the
 // samples list, so it never breaks mid-string; the sample page shows it whole.
 const shortInput = (v) => (/^\S{25,}$/.test(String(v)) ? `${String(v).slice(0, 6)}…${String(v).slice(-4)}` : String(v));
-import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc, breadcrumbNavFromLd } from "./ledger-chrome.js";
 import { monitorMapJson } from "./report-upgrade.js";
 import { priceUsdFor } from "./report-tiers.js";
 import { INSIDER_TIERS, INSIDER_DEFAULT_DAYS } from "./tools/insider-flow-kit.js";
@@ -284,6 +284,7 @@ const sampleLink = (slug) => { const p = sampleLinkFor(slug); return p ? `<a hre
 export function reportDeliveryPage(sessionId, { api = "/api/r/", waitCopy = `Reports take ${REPORT_TURNAROUND}. Keep this page open, it appears here automatically.`, baseUrl = "https://agent402.tools", robots = "noindex, nofollow", title = "Your report - Agent402", description = "Your Agent402 report.", canonical = `${baseUrl}/reports`, note = "Your report is yours to keep - bookmark this page or use the link we emailed you.", jsonLd, extraHtml = "", extraScripts = "" } = {}) {
   const body = `
 <div class="wrap" style="padding-top:28px;">
+  ${jsonLd ? breadcrumbNavFromLd(baseUrl, jsonLd) : ""}
   <div id="app" data-session="${esc(sessionId)}" data-api="${esc(api)}" data-monitors="${esc(monitorMapJson())}" data-model-note="${esc(REPORT_MODEL_NOTE)}" data-code-kinds="${esc(CODE_WRITTEN_REPORT_KINDS.join(","))}"><div class="status">${/^index/.test(robots) ? `<h1>${esc(title)}</h1><p><span class="spin"></span>${esc(waitCopy)}</p>` : `<h2><span class="spin"></span>Preparing your report…</h2><p>${esc(waitCopy)}</p>`}<p id="rv-elapsed" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);"></p></div></div>
   ${extraHtml}
   ${note ? `<p class="note no-print">${esc(note)}</p>` : ""}

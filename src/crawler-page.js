@@ -13,6 +13,7 @@
 //
 // Every sentence must name behaviour that exists in this repository. If a
 // control here stops being true, change the control or change the page.
+import { siteOrgRef } from "./site-org.js";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { ROUTER_UA } from "./x402-buyer.js";
 import { NAMED_CLIENT_BUDGET_MULTIPLIER, unpaidQuoteBudgetPerHour } from "./unpaid-quote-budget.js";
@@ -138,7 +139,7 @@ ${ledgerFooterCompact()}`;
   const extraCss = `@media (max-width:900px){.sec-2col{grid-template-columns:minmax(0,1fr)!important}}`;
   const jsonLd = [
     { "@type": "BreadcrumbList", itemListElement: [{ "@type": "ListItem", position: 1, name: "Agent402", item: `${baseUrl}/` }, { "@type": "ListItem", position: 2, name: "Crawler", item: canonical }] },
-    { "@type": "WebPage", "@id": canonical, name: title, description, publisher: { "@type": "Organization", name: "Havok Holdings LLC", url: "https://havok.holdings" } },
+    { "@type": "WebPage", "@id": canonical, name: title, description, publisher: siteOrgRef(baseUrl) },
   ];
   return ledgerShell({ title, description, canonical, baseUrl, activePath: "/crawler", extraCss, jsonLd, body });
 }

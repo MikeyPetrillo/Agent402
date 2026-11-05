@@ -15,12 +15,12 @@
 // undercut that existing revenue boundary for free over HTML. Bounded to a
 // curated top N instead, with real "raw JSON" and "browse every seller"
 // escape hatches for the rest - matches the design's own top=12 live poll.
+import { siteOrgLd } from "./site-org.js";
 import { ledgerShell, ledgerFooterCompact, esc, fmtNum } from "./ledger-chrome.js";
 import { standingBand } from "./standing.js";
 import { rankBy, DEFAULTS as LEADERBOARD_DEFAULTS } from "./leaderboard.js";
 import { hostRowHtml, wideLabel } from "./host-entry.js";
 
-import { ORG_SAME_AS } from "./repo-link.js";
 import { leaderboardCadence, cadenceBadge, LEADERBOARD_REFRESH_MS } from "./refresh-cadence.js";
 const HTML_ROWS = 12;
 
@@ -329,7 +329,7 @@ ${solanaSectionHtml(solana)}
   const description =
     "The public on-chain ranking of x402 sellers by Base USDC settled volume: calls settled, total USD and unique buyers per seller. Snapshot refreshed " + leaderboardCadence() + ", built from the x402 Bazaar discovery listing and eth_getLogs. This page shows the head of the board; the free JSON carries the rest. Agent402 excluded from its own ranking.";
 
-  const orgLd = { "@type": "Organization", "@id": `${baseUrl}/#organization`, name: "Agent402", url: baseUrl, logo: { "@type": "ImageObject", url: `${baseUrl}/logo.png` }, sameAs: ORG_SAME_AS };
+  const orgLd = siteOrgLd(baseUrl);
   const breadcrumbLd = { "@type": "BreadcrumbList", itemListElement: [
     { "@type": "ListItem", position: 1, name: "Agent402", item: `${baseUrl}/` },
     { "@type": "ListItem", position: 2, name: "Leaderboard", item: canonical },

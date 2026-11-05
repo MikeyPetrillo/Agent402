@@ -2,7 +2,7 @@
 // live OpenAPI spec. Lets developers browse endpoints, see schemas, and try
 // tools via the playground's PoW solver.
 
-import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, breadcrumbTrail } from "./ledger-chrome.js";
 
 export function apiExplorerPage(baseUrl) {
   const canonical = `${baseUrl}/docs/api/explorer`;
@@ -11,8 +11,6 @@ export function apiExplorerPage(baseUrl) {
 
   const extraCss = `
 .ae-wrap{max-width:1180px;margin:0 auto;padding:56px 30px 0}
-.ae-crumb{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-bottom:14px}
-.ae-crumb a{color:var(--accent);text-decoration:underline;text-underline-offset:3px;text-decoration-thickness:1px;}
 .ae-search{width:100%;max-width:560px;padding:13px 16px;background:var(--card);border:1px solid var(--hairline);color:var(--ink);font-family:var(--font-mono);font-size:var(--fs-md);outline:none;margin-bottom:14px}
 .ae-search:focus{border-color:var(--accent)}
 .ae-count{margin-left:12px;color:var(--faint);font-family:var(--font-mono);font-size:var(--fs-xs)}
@@ -42,9 +40,10 @@ export function apiExplorerPage(baseUrl) {
 @media(max-width:640px){.ae-ep-name{display:none}}
 `;
 
+  const crumbs = breadcrumbTrail(baseUrl, [["Home", "/"], ["Docs", "/docs"], ["API Explorer", "/docs/api/explorer"]]);
   const body = `
 <div class="ae-wrap">
-<p class="ae-crumb"><a href="/">Home</a> &rsaquo; <a href="/docs">Docs</a> &rsaquo; API Explorer</p>
+${crumbs.nav}
 <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:14px;">$ GET /docs/api/explorer</div>
 <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 14px;">API Explorer.</h1>
 <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:620px;margin:0 0 30px;">Browse every endpoint and inspect its input schema; the free proof-of-work tools open straight in the playground. Data from <a href="/openapi.json" style="color:var(--accent);text-decoration:underline;text-underline-offset:3px;">/openapi.json</a>.</p>
@@ -59,5 +58,5 @@ export function apiExplorerPage(baseUrl) {
 ${ledgerFooterCompact()}
 <script src="/js/api-explorer.js"></script>`;
 
-  return ledgerShell({ title, description, canonical, baseUrl, activePath: "/docs", extraCss, body });
+  return ledgerShell({ title, description, canonical, baseUrl, activePath: "/docs", extraCss, jsonLd: crumbs.ld, body });
 }

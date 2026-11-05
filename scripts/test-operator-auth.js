@@ -67,6 +67,15 @@ const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.
   ok((await status("/__operator/wishes", { headers: { cookie } })) === 200, "session cookie authenticates sub-pages");
   ok((await status("/__operator", { headers: { authorization: `Bearer ${TOKEN}` } })) === 200, "Authorization: Bearer still works (curl/API)");
   ok((await status("/__operator", { headers: { "x-operator-token": TOKEN } })) === 200, "X-Operator-Token header still works");
+  // No operator page is indexable: the public sign-in form and every signed-in
+  // page answer X-Robots-Tag noindex and carry a noindex robots meta.
+  for (const [path, headers] of [["/__operator/login", {}], ["/__operator", { cookie }], ["/__operator/wishes", { cookie }], ["/__operator/search", { cookie }]]) {
+    const r = await fetch(`${base}${path}`, { headers, redirect: "manual" });
+    const html = await r.text();
+    const meta = (html.match(/<meta name="robots" content="([^"]*)"/) || [])[1] || "";
+    ok(r.status === 200 && /noindex/.test(r.headers.get("x-robots-tag") || "") && /nofollow/.test(r.headers.get("x-robots-tag") || ""), `${path} answers X-Robots-Tag noindex, nofollow`);
+    ok(/noindex/.test(meta) && !/(^|,\s*)index\b/.test(meta), `${path} carries a noindex robots meta (got "${meta}")`);
+  }
   // A forged/random session id must NOT authenticate.
   ok((await status("/__operator", { headers: { cookie: "a402_op=deadbeefdeadbeef" } })) === 404, "a random session id does not authenticate");
 

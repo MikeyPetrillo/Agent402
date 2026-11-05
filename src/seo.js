@@ -5,7 +5,7 @@ import { erc8004AgentId, ERC8004_IDENTITY_REGISTRY } from "./tools/a2a-card.js";
 import { toolList, CATEGORIES } from "./pages.js";
 import { isComputePayable, POW_DIFFICULTY } from "./pow.js";
 import { guideSlugs } from "./guides.js";
-import { skillSlugs, SKILL_PACKS, PACK_PRICES, PACK_PRICE_RANGE } from "./skills.js";
+import { skillSlugs, SKILL_PACKS, PACK_PRICES, PACK_PRICE_RANGE, skillPackOfToolSlug } from "./skills.js";
 import { BLOG_POSTS } from "./blog.js";
 import { integrationSlugs } from "./integration-pages.js";
 import { LEARN, learnSlugs } from "./learn.js";
@@ -20,6 +20,7 @@ import { mppFlagshipLlmsBlock } from "./mpp-flagship.js";
 import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
 import { meteredRoutesInline, meteredFromPrice, meteredQuoteSentence, meteredCurl, flatTiersLine } from "./metered-lead.js";
 import { seededProgrammaticPaths } from "./programmatic-seeds.js";
+import { entityLastmod } from "./programmatic-pages.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
 import { samplePaths, SAMPLES } from "./sample-reports.js";
@@ -87,13 +88,14 @@ const newestLastmod = (urls) => urls.reduce((acc, u) => (u.lastmod && (!acc || u
 // resolves on EDGAR, but a sitemap that enumerated an open URL space would
 // invite crawlers to mint upstream requests forever. The hub pages get a
 // higher priority than the entity pages that hang off them. A sample report
-// is dated by its fixture and a public report by its publication; the seeded
-// entity pages read EDGAR live and carry no lastmod.
+// is dated by its fixture and a public report by its publication; a seeded
+// entity page by the newest filing it showed when last built (none until it
+// is built; the hubs carry none).
 const publicReportUrls = (baseUrl) => { try { return listPublicReports().map((r) => ({ loc: `${baseUrl}/reports/public/${r.publicId}`, priority: "0.6", lastmod: dayOf(r.at) })); } catch { return []; } };
 const programmaticUrls = (baseUrl) => [
   ...samplePaths().map((p) => ({ loc: `${baseUrl}${p}`, priority: "0.8", lastmod: dayOf(SAMPLES[p.split("/").pop()]?.at) })),
   ...publicReportUrls(baseUrl),
-  ...seededProgrammaticPaths().map((p) => ({ loc: `${baseUrl}${p}`, priority: p.split("/").length === 3 ? "0.8" : "0.6", lastmod: null })),
+  ...seededProgrammaticPaths().map((p) => ({ loc: `${baseUrl}${p}`, priority: p.split("/").length === 3 ? "0.8" : "0.6", lastmod: entityLastmod(p) })),
 ];
 
 export function robotsTxt(baseUrl) {
@@ -321,7 +323,10 @@ export function sitemapCategories(baseUrl, catalog) {
 }
 const guideUrls = (baseUrl) => [{ loc: `${baseUrl}/guides`, priority: "0.8" }, ...guideSlugs().map((s) => ({ loc: `${baseUrl}/guides/${s}`, priority: "0.8" }))];
 const skillUrls = (baseUrl) => [{ loc: `${baseUrl}/skills`, priority: "0.8" }, ...skillSlugs().map((s) => ({ loc: `${baseUrl}/skills/${s}`, priority: "0.8" }))];
-const toolUrls = (baseUrl, catalog) => toolList(catalog).map((t) => ({ loc: `${baseUrl}/tools/${t.slug}`, priority: "0.8" }));
+// A skill pack's /tools/skill-<pack> page is canonical to /skills/<pack>
+// (listed with the skills), so it takes no sitemap slot of its own: a sitemap
+// lists only URLs whose canonical is themselves.
+const toolUrls = (baseUrl, catalog) => toolList(catalog).filter((t) => !skillPackOfToolSlug(t.slug)).map((t) => ({ loc: `${baseUrl}/tools/${t.slug}`, priority: "0.8" }));
 /** The index dates each child sitemap by the newest entry inside it (the
  *  same lists the children serve), and leaves it undated when none is. */
 export function sitemapIndex(baseUrl, catalog = {}) {

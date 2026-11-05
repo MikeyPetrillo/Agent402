@@ -996,7 +996,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (4 scripts, one process each)
+      - name: Offline suites (5 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -1004,6 +1004,8 @@ jobs:
           t node scripts/test-x402-economy.js
           # /sitemap.xml coverage (every skill pack, sample tools, static surfaces, per-URL lastmod stable across boots)
           t node scripts/test-sitemap-coverage.js
+          # Sitemap URLs are their own canonical; breadcrumb trails match their BreadcrumbList; one site entity in JSON-LD
+          t node scripts/test-seo-structure.js
           # The sitemap lastmod table matches git history (needs the full-depth checkout above)
           t node scripts/test-page-dates.js
           # Bing sitemap registration script: lists then submits only the missing feeds (stubbed, offline)

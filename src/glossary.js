@@ -8,13 +8,13 @@
 // the page that goes deep. Same design system as what-is-mpp.js. Counts stay
 // evergreen ("500+"), no live numbers baked in, no third-party names beyond
 // the protocols' own homes.
+import { siteOrgLd } from "./site-org.js";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { routingProofSentence } from "./routing-proof.js";
 import { resolveRailCountTokens } from "./rails.js";
 import { powCostPhrase } from "./pow.js";
 import { LEARN_BY_GLOSSARY_ID, learnBySlug } from "./learn.js";
 
-import { ORG_SAME_AS } from "./repo-link.js";
 // { id, name, alt?: [names], def, see: [[href, label]] } - keep `def` a single
 // plain-text paragraph: it is rendered verbatim AND emitted as the DefinedTerm
 // description in JSON-LD, so no markup.
@@ -96,7 +96,7 @@ export function glossaryPage(baseUrl) {
   const description =
     "Plain-English definitions of the vocabulary of Agentic Finance (AIFI): x402, MPP, HTTP 402, payment requirements and challenges, facilitators, EIP-3009, receipts, settlement, wallets as identity, rails, dual-stack, the proof-of-work free tier, the Smart Order Router, the tollbooth, and more. Each term links to the page that goes deep.";
 
-  const orgLd = { "@type": "Organization", "@id": `${baseUrl}/#organization`, name: "Agent402", url: baseUrl, logo: { "@type": "ImageObject", url: `${baseUrl}/logo.png` }, sameAs: ORG_SAME_AS };
+  const orgLd = siteOrgLd(baseUrl);
   const breadcrumbLd = { "@type": "BreadcrumbList", itemListElement: [
     { "@type": "ListItem", position: 1, name: "Agent402", item: `${baseUrl}/` },
     { "@type": "ListItem", position: 2, name: "Agentic Finance (AIFI)", item: `${baseUrl}/agentic-finance` },

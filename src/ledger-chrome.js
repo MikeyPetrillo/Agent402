@@ -2,6 +2,7 @@ import { RAILS_AMP, RAILS_OS } from "./rails.js";
 import { metaTitle, metaDescription } from "./seo-meta.js";
 import { ogSectionFor } from "./og-cards.js";
 import { REPO_URL } from "./repo-link.js";
+import { siteOrgLd, siteOrgId } from "./site-org.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 // The path of the request a page is being rendered for. A page's canonical is
 // its SECTION (/reports for a paid report at /r/<id>), so analytics decisions
@@ -368,6 +369,9 @@ body { overflow-wrap: break-word; }
 @media (max-width: 600px) { .ml-strip { flex-wrap: nowrap !important; overflow-x: auto; max-width: 100%; padding-bottom: 4px; } .ml-strip > * { flex: none; } }
 /* Breadcrumbs: each link stays whole; on a phone the current page's name (the
    h1 right below repeats it) drops out, so the trail never wraps mid-label. */
+/* The shared trail (breadcrumbNav): the tool page's component, on every page that carries BreadcrumbList data. */
+.ml-crumb-nav { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--faint); margin: 0 0 18px; }
+.ml-crumb-nav a { color: var(--accent); }
 .ml-crumb a { white-space: nowrap; text-decoration:underline;text-underline-offset:3px;text-decoration-thickness:1px; }
 /* The current page's name is one line: a title longer than the row ends in an ellipsis. */
 .ml-crumb-cur { display: inline-block; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
@@ -1087,6 +1091,31 @@ export function gaSnippet(canonical) {
     + jsonScriptTag("ga-config", { id }) + `<script src="${jsSrc("ga-loader.js")}" defer></script>`;
 }
 
+/** The visible trail from the same [name, path] pairs breadcrumbLd reads, so
+ *  the trail a reader sees and the BreadcrumbList a crawler reads name the
+ *  same items in the same order. The last pair is the current page: plain
+ *  text, dropped on a phone where the h1 below repeats it. */
+export function breadcrumbNav(crumbs, { style = "" } = {}) {
+  const list = Array.isArray(crumbs) ? crumbs : [];
+  const links = list.slice(0, -1).map(([name, path]) => `<a href="${esc(path)}">${esc(name)}</a>`).join(" / ");
+  const last = list[list.length - 1];
+  const cur = last ? `<span class="ml-crumb-cur" aria-current="page">${links ? " / " : ""}${esc(last[0])}</span>` : "";
+  return `<nav class="ml-crumb ml-crumb-nav" aria-label="Breadcrumb"${style ? ` style="${esc(style)}"` : ""}>${links}${cur}</nav>`;
+}
+/** The visible trail for a page whose JSON-LD already carries a
+ *  BreadcrumbList (a block of it, or a node in a @graph); "" when none. */
+export function breadcrumbNavFromLd(baseUrl, jsonLd, opts) {
+  const blocks = (Array.isArray(jsonLd) ? jsonLd : [jsonLd]).flatMap((j) => (j && Array.isArray(j["@graph"]) ? j["@graph"] : [j]));
+  const bl = blocks.find((j) => j && j["@type"] === "BreadcrumbList" && Array.isArray(j.itemListElement));
+  if (!bl) return "";
+  const pathOf = (item) => { const u = String(item?.["@id"] || item || ""); return (u.startsWith(baseUrl) ? u.slice(baseUrl.length) : u) || "/"; };
+  return breadcrumbNav(bl.itemListElement.map((e) => [e.name, pathOf(e.item)]), opts);
+}
+/** Both halves of one trail: { nav, ld }. */
+export function breadcrumbTrail(baseUrl, crumbs, opts) {
+  return { nav: breadcrumbNav(crumbs, opts), ld: breadcrumbLd(baseUrl, crumbs) };
+}
+
 /** BreadcrumbList JSON-LD from [name, path] pairs (path relative to baseUrl). */
 export function breadcrumbLd(baseUrl, crumbs) {
   return {
@@ -1102,6 +1131,8 @@ export function ledgerShell({ title: rawTitle, description: rawDescription, cano
   // and a link preview can actually show.
   const title = metaTitle(rawTitle);
   const description = metaDescription(rawDescription);
+  // An operator page is never indexed, whatever its module passed.
+  if (/^(?:https?:\/\/[^/]+)?\/__operator(?:[/?#]|$)/.test(String(canonical || ""))) robots = "noindex, nofollow";
   // A page that names its own card keeps it; otherwise the SECTION card for the
   // page's path (src/og-cards.js), and the homepage card only when no section
   // claims the path. The version stamp rides on every variant for the same
@@ -1122,7 +1153,14 @@ export function ledgerShell({ title: rawTitle, description: rawDescription, cano
     url: baseUrl,
   };
   // Each block is its own script tag, so each needs its own @context.
-  const allLd = [baseEcosystemLd, ...(jsonLd ? (Array.isArray(jsonLd) ? jsonLd : [jsonLd]) : [])]
+  // The site entity (src/site-org.js) rides on every page, defined once: a
+  // page's own copy of it is dropped, so every author or publisher reference
+  // resolves to the one definition.
+  const orgId = siteOrgId(baseUrl);
+  const pageLd = (jsonLd ? (Array.isArray(jsonLd) ? jsonLd : [jsonLd]) : [])
+    .filter((j) => !(j && typeof j === "object" && j["@id"] === orgId))
+    .map((j) => (j && typeof j === "object" && Array.isArray(j["@graph"]) ? { ...j, "@graph": j["@graph"].filter((n) => !(n && n["@id"] === orgId)) } : j));
+  const allLd = [baseEcosystemLd, siteOrgLd(baseUrl), ...pageLd]
     .map((j) => (j && typeof j === "object" && !j["@context"] ? { "@context": "https://schema.org", ...j } : j));
   // Every "<" is escaped as \u003c, exactly as jsonScriptTag does and for the
   // same reason: JSON.stringify never escapes it, so a string field carrying
