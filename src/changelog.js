@@ -7,6 +7,9 @@ const ENTRIES = [
     items: [
       "Operations: the operator view of first-call grants counts refusals of wallets that never paid by reason and route, apart from returning buyers, so a route a newcomer wanted shows up by name.",
       "Operations: every Playwright install in CI goes through the bounded apt helper, and a guard fails any workflow step that runs apt directly.",
+      "Payments: Solana can take one more facilitator as its last settle fallback, after every current one and only once its /supported lists exact on Solana; CDP still settles first.",
+      "Privacy: when a facilitator we settle through publishes settlements on a public index, the privacy page names it and the chains it covers, and the terms point there.",
+      "Operations: the listing pass and the other catalog buy scripts send Prefer: respond-async to slow routes and follow the job to its answer; a failed job counts as a failed buy.",
       "Packages: viem is 2.57.16.",
     ],
   },

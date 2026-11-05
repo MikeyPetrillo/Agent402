@@ -14,6 +14,18 @@ Operations:
 - Every Playwright install in CI goes through the bounded apt helper
   (`scripts/ci-apt-install.sh --playwright-chromium`), and a guard fails any
   workflow step that runs apt directly.
+Payments:
+- Solana can take one more facilitator as its last settle fallback
+  (`SOLANA_FALLBACK_FACILITATOR_URL`), after every current one and only once
+  its `/supported` lists exact on Solana; CDP still settles first.
+Privacy:
+- When a facilitator we settle through publishes settlements on a public
+  index (`FACILITATOR_PUBLIC_INDEX_CHAINS`), the privacy page names it and the
+  chains it covers, and the terms point there.
+Operations:
+- The listing pass and the other catalog buy scripts send
+  `Prefer: respond-async` to slow routes and follow the job to its answer; a
+  failed job counts as a failed buy.
 Packages:
 - viem is 2.57.16.
 
