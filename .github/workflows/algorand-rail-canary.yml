@@ -58,7 +58,7 @@ jobs:
         # opens a SQLite file at load (the same step the other paid workflows
         # run). @x402/* pinned to the server's protocol version
         # (src/payments.js runs 2.16), same posture as scripts/paid-canary.js.
-        run: npm ci --ignore-scripts && npm rebuild better-sqlite3 && npm install --no-save --ignore-scripts @x402/core@2.29.0 @x402/avm@2.29.0
+        run: npm ci --ignore-scripts && npm rebuild better-sqlite3 && npm install --no-save --ignore-scripts @x402/core@2.30.0 @x402/avm@2.30.0
 
       - name: Sweep the catalog on the Algorand rail
         id: sweep
