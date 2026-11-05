@@ -9157,13 +9157,18 @@ function screenedInjection(text) {
   }
   return v;
 }
+// A seller field as text: a crawled listing can carry a number, an object or
+// an array where a string belongs, and reading it as one must not throw.
+const sellerText = (v) => (typeof v === "string" ? v : typeof v === "number" || typeof v === "boolean" ? String(v) : "");
 function toolStatics(t) {
   let st = t[TOOL_STATICS] || toolStaticsMemo.get(t);
   if (st) return st;
-  const hay = `${t.name} ${t.description} ${t.category} ${(t.tags || []).join(" ")}`.toLowerCase();
+  const name = sellerText(t.name), slug = sellerText(t.slug);
+  const tags = Array.isArray(t.tags) ? t.tags.map(sellerText) : [];
+  const hay = `${name} ${sellerText(t.description)} ${sellerText(t.category)} ${tags.join(" ")}`.toLowerCase();
   st = {
-    slug: (t.slug || "").toLowerCase(),
-    name: (t.name || "").toLowerCase(),
+    slug: slug.toLowerCase(),
+    name: name.toLowerCase(),
     hay,
     // Metadata sanitization (M6, defends "Five Attacks on x402" Attack IV-E1 —
     // metadata manipulation): a single crafted external listing whose text tries
@@ -9179,7 +9184,7 @@ function toolStatics(t) {
     // scripts/test-discovery-note.js asserts no local tool trips it.
     // The slug and route are seller-written too (an operationId, a path) and
     // are screened beside the text; they stay out of `hay`, which is scored.
-    injected: screenedInjection(hay) || screenedInjection(`${t.slug || ""} ${t.route || ""}`),
+    injected: screenedInjection(hay) || screenedInjection(`${slug} ${sellerText(t.route)}`),
     // A route in a category the router lists but never buys (personal data
     // about individuals, src/route-category.js): it stays in the index and on
     // /api/index?seller= with its category_excluded verdict, and is never
@@ -9193,7 +9198,7 @@ function toolStatics(t) {
     // (max over slug + aliases per term, never additive). Our asn-info IS an IP
     // geolocation tool but its slug says neither word, so "ip geolocation"
     // routed to a $0.05 external seller above our $0.003 one (2026-08-28).
-    aliases: Array.isArray(t.aliases) && t.aliases.length ? t.aliases.map((a) => String(a).toLowerCase()).filter(Boolean) : NO_ALIASES,
+    aliases: Array.isArray(t.aliases) && t.aliases.length ? t.aliases.map((a) => sellerText(a).toLowerCase()).filter(Boolean) : NO_ALIASES,
     // The row's own NAME in slug form ("Cron next runs" -> cron-next-runs) is an
     // implicit alias: a query that covers every word of the name is an exact
     // match for the name. Applied to EVERY row, ours and the index's alike. It
@@ -9201,7 +9206,7 @@ function toolStatics(t) {
     // query word it carries, so an outside slug that IS a tool's full name in
     // snake_case out-scored the tool's own shorter slug on its own name (49 of
     // 585 after the first pass). Now both sides score the name the same way.
-    nameSlug: (() => { const toks = splitTokens(t.name); const ns = toks.join("-"); return toks.length > 1 && ns !== String(t.slug || "").toLowerCase() ? ns : null; })(),
+    nameSlug: (() => { const toks = splitTokens(name); const ns = toks.join("-"); return toks.length > 1 && ns !== slug.toLowerCase() ? ns : null; })(),
   };
   // Every name the slug rule scores: slug, curated aliases, the name in slug
   // form. Built once here rather than per row per query.

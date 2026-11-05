@@ -92,12 +92,15 @@ function leadOf(description) {
 
 /** The text the classifier reads for one route row, as the index stores it:
  *  its path, slug, name, tags and the first sentence of its description. */
+// A seller field as text (a crawled listing can put a number, an object or an
+// array where a string belongs; reading one must never throw).
+const asText = (v) => (typeof v === "string" ? v : typeof v === "number" || typeof v === "boolean" ? String(v) : "");
 export function routeTextOf(row) {
   if (!row || typeof row !== "object") return "";
-  let path = String(row.route || row.path || "");
+  let path = asText(row.route) || asText(row.path);
   if (!path && typeof row.url === "string") { try { path = new URL(row.url).pathname; } catch { path = ""; } }
-  const tags = Array.isArray(row.tags) ? row.tags.map((x) => String(x || "")).join(" ") : "";
-  return [path, row.slug, row.name, tags, leadOf(row.description)].map((x) => String(x || "")).join(" | ");
+  const tags = Array.isArray(row.tags) ? row.tags.map(asText).join(" ") : "";
+  return [path, asText(row.slug), asText(row.name), tags, leadOf(asText(row.description))].join(" | ");
 }
 
 /** The id of the first personal-data pattern the route's own text matches, or null. */
