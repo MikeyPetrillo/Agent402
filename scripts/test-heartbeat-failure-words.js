@@ -44,6 +44,11 @@ esac
 `);
 await writeFile(path.join(dir, "gh"), `#!/usr/bin/env bash
 if [ "$1 $2" = "issue view" ]; then printf '%s' "$OPEN_BODY"; exit 0; fi
+if [ "$1 $2" = "issue list" ] && [ -n "$ISSUES_JSON" ]; then
+  # A fixture list of open issues: the step's own --jq runs over it, as gh would.
+  jqx=""; prev=""; for a in "$@"; do [ "$prev" = "--jq" ] && jqx="$a"; prev="$a"; done
+  printf '%s' "$ISSUES_JSON" | jq -r "$jqx"; exit 0
+fi
 if [ "$1 $2" = "issue list" ]; then
   for a in "$@"; do case "$a" in *"$OPEN_TITLE"*) [ -n "$OPEN_TITLE" ] && echo "$OPEN_NUM" && exit 0;; esac; done
   exit 0
@@ -53,14 +58,14 @@ printf '%s\\x1f' "$@" >> "$GH_LOG"; printf '\\x1e' >> "$GH_LOG"
 await chmod(path.join(dir, "curl"), 0o755);
 await chmod(path.join(dir, "gh"), 0o755);
 
-async function run({ gateway, op = null, token = "t", open = null, body = "", script = step.run }) {
+async function run({ gateway, op = null, token = "t", open = null, body = "", issues = null, script = step.run }) {
   const gs = path.join(dir, "gs.json"), opf = path.join(dir, "op.json"), log = path.join(dir, "gh.log");
   await writeFile(gs, JSON.stringify(gateway));
   await writeFile(opf, JSON.stringify(op || {}));
   await writeFile(log, "");
   const r = spawnSync("bash", ["-e", "-c", script], {
     env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, PROD: "https://example.invalid", GITHUB_REPOSITORY: "o/r",
-      OP_TOKEN: token || "", GS_FILE: gs, OP_FILE: opf, GH_LOG: log, OPEN_TITLE: open || "", OPEN_NUM: "41", OPEN_BODY: body },
+      OP_TOKEN: token || "", GS_FILE: gs, OP_FILE: opf, GH_LOG: log, OPEN_TITLE: open || "", OPEN_NUM: "41", OPEN_BODY: body, ISSUES_JSON: issues ? JSON.stringify(issues) : "" },
     encoding: "utf8",
   });
   assert.equal(r.status, 0, r.stderr);
@@ -263,6 +268,35 @@ try {
       }
       const { CLEARING_MARK } = await import("../workers/status-probe/src/index.js");
       assert.ok(st.run.includes(`MARK="${CLEARING_MARK}"`), "the step's mark is the status Worker's, so either observer's ok read counts");
+    });
+  }
+
+  // The lookup takes only an issue with exactly the alarm title opened by the
+  // workflow bot or the repository owner (the status Worker's rule), and the
+  // mark counts only after a blank line (where the Worker writes and reads it).
+  for (const [field, badWord, title, st] of [["containedTurns", "repeating", CT_TITLE, ctStep], ["brokenListings", "widespread", BL_TITLE, blStep]]) {
+    await check(`${field}: the issue lookup is the alarm author's exact title only; the mark counts only after a blank line`, async () => {
+      const ISSUE = `/api/gateway-status reports ${field}.status=${badWord}: details.`;
+      const outsider = { number: 7, title, author: { login: "someone-else" } };
+      const near = { number: 8, title: `${title} (copy)`, author: { login: "app/github-actions" } };
+      // An outsider's issue with the exact title: a bad read still opens ours, an ok read closes nothing.
+      let r = await run({ gateway: { [field]: { status: badWord } }, issues: [outsider, near], script: st.run });
+      assert.deepEqual(created(r.calls).map((c) => c.title), [title], "an outsider's or a near-title issue does not suppress the alarm");
+      r = await run({ gateway: { [field]: { status: "ok" } }, issues: [outsider], body: `${ISSUE}\n\nFirst ok read at x`, script: st.run });
+      assert.equal(closed(r.calls).length + edited(r.calls).length, 0, "an outsider's issue is never marked or closed");
+      // The workflow bot (either spelling gh may print) and the owner (any case) are the alarm.
+      for (const login of ["github-actions[bot]", "app/github-actions", "O"]) {
+        r = await run({ gateway: { [field]: { status: "ok" } }, issues: [outsider, { number: 41, title, author: { login } }], body: `${ISSUE}\n\nFirst ok read at x`, script: st.run });
+        assert.equal(closed(r.calls).length, 1, login);
+        assert.equal(closed(r.calls)[0][2], "41", login);
+      }
+      // The mark text anywhere but after a blank line is not a first ok read.
+      r = await run({ gateway: { [field]: { status: "ok" } }, open: title, body: `${ISSUE} First ok read at x`, script: st.run });
+      assert.equal(closed(r.calls).length, 0, "an inline mark does not close");
+      assert.equal(edited(r.calls).length, 1, "it marks instead");
+      const { WORKFLOW_BOT_LOGIN } = await import("../workers/status-probe/src/index.js");
+      assert.equal(WORKFLOW_BOT_LOGIN, "github-actions[bot]");
+      assert.ok(st.run.includes(`"${WORKFLOW_BOT_LOGIN}"`), "the step names the Worker's bot login");
     });
   }
 

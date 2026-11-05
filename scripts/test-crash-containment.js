@@ -43,6 +43,7 @@ const POISON = "https://poison-vision.example";
 const POISON2 = "https://poison-late.example";
 const STATICS = "https://poison-statics.example";
 const STATICS2 = "https://poison-statics-late.example";
+const FORGED = "https://forged-list.example";
 const WIDE = 40; // sellers planted while every row's statics throw
 const TOKEN = "crash-containment-operator-token-0123456789";
 
@@ -57,10 +58,12 @@ export function poisonTool(origin) {
   return t;
 }
 export const goodEntry = (origin) => entry(origin, [tool(origin)]);
-// A row whose decoration reads fine (the spread copies the price object as
-// is) and whose statics throw: priceRank reads the price as text.
+// A row whose decoration and cleaning read fine and whose statics throw. No
+// seller field can do that any more (every field statics reads is cleaned to
+// text or a number), so the throw is planted inside computeToolStatics by its
+// test hook, for this slug only, and travels the real sentinel paths.
 export function staticsPoisonTool(origin) {
-  return tool(origin, { slug: "ocr-statics", price: { toString() { throw new TypeError("poison-statics: a price that cannot be read as text"); } } });
+  return tool(origin, { slug: "ocr-statics" });
 }
 export const staticsPoisonEntry = (origin) => entry(origin, [tool(origin, { slug: "ocr-statics-fine" }), staticsPoisonTool(origin)]);
 export const poisonEntry = (origin) => entry(origin, [tool(origin, { slug: "ocr-fine" }), poisonTool(origin)]);
@@ -131,6 +134,7 @@ if (isMainThread && typeof process.send === "function") {
         // A row whose statics throw inside computeToolStatics (not in
         // decoration): the drain indexes the entry's other row and skips it.
         const skippedBefore = x.brokenListingsSummary().toolsSkipped;
+        x._setToolStaticsFaultForTest(new TypeError("poison-statics: a row whose statics throw"), (t) => t.slug === "ocr-statics");
         cache.set(${JSON.stringify(STATICS)}, E.staticsPoisonEntry(${JSON.stringify(STATICS)}));
         const after = await settled();
         const skippedAfterDrain = x.brokenListingsSummary().toolsSkipped;
@@ -140,7 +144,18 @@ if (isMainThread && typeof process.send === "function") {
         const pendingBefore = x._routeIndexStatsForTest().pending;
         let r = null, err = null;
         try { r = x.routeQuery({ query: "ocr a thing from an image", top: 50, include: "external", ...ctx }); } catch (e) { err = String(e && e.message || e); }
+        x._setToolStaticsFaultForTest(null);
         report(m.id, { after, skippedBefore, skippedAfterDrain, pendingBefore, err, results: (r && r.results || []).map((t) => [t.seller, t.slug]) });
+      } else if (m.cmd === "forged") {
+        // One listing whose 30 rows each name another seller in their own
+        // seller field, every row's statics throwing: one origin, the cache key.
+        x._setToolStaticsFaultForTest(new TypeError("forged rows"), (t) => String(t.route).startsWith("/api/forged-"));
+        cache.set(${JSON.stringify(FORGED)}, E.entry(${JSON.stringify(FORGED)}, Array.from({ length: 30 }, (_, k) => ({ seller: "https://forged-seller-" + k + ".example", method: "GET", route: "/api/forged-" + k, slug: "forged-" + k, name: "ocr forged " + k, description: "ocr a thing from an image", price: 0.001 }))));
+        const after = await settled();
+        let r = null, err = null;
+        try { r = x.routeQuery({ query: "ocr a thing from an image", top: 50, include: "external", ...ctx }); } catch (e) { err = String(e && e.message || e); }
+        x._setToolStaticsFaultForTest(null);
+        report(m.id, { after, err, status: x.brokenListingsStatus({ full: true }) });
       } else if (m.cmd === "widespread") {
         // A code bug that breaks every listing: every row's statics throw.
         x._setToolStaticsFaultForTest(new TypeError("planted statics fault for every row"));
@@ -255,8 +270,12 @@ try {
     `a statics poison still pending is skipped by the query itself, its sibling row ranked (pending ${st.pendingBefore}, skipped ${st.skippedAfterDrain} -> ${st.broken.toolsSkipped})`);
   ok(st.broken.byOrigin[STATICS2]?.count >= 1, `the pending statics poison is counted by origin (${st.broken.byOrigin[STATICS2]?.count})`);
   ok(proc.exitCode === null && (await alive()), "the process is alive after the statics poison");
+  // One listing with 30 forged seller fields counts one origin.
+  const fg = await ask("forged");
+  const forgedKeys = Object.keys(fg.broken.byOrigin).filter((k) => /forged/.test(k));
+  ok(!fg.err && forgedKeys.join() === FORGED && fg.broken.byOrigin[FORGED].count >= 30, `30 rows naming 30 sellers count under the one entry origin (${forgedKeys.join(", ")}; ${fg.broken.byOrigin[FORGED]?.count} rows)`);
   const quiet = await fetch(`${base}/api/gateway-status`).then((r) => r.json()).catch(() => null);
-  ok(quiet?.brokenListings?.status === "ok" && Object.keys(quiet.brokenListings).join() === "status", `four poison sellers leave brokenListings ok, word only (${JSON.stringify(quiet?.brokenListings)})`);
+  ok(quiet?.brokenListings?.status === "ok" && Object.keys(quiet.brokenListings).join() === "status", `five poison sellers leave brokenListings ok, word only (${JSON.stringify(quiet?.brokenListings)})`);
 
   // A handler that rejects answers 500 for that request only.
   await ask("fault");

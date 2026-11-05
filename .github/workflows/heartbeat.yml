@@ -936,8 +936,14 @@ jobs:
           WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.containedTurns.status // "unknown"' 2>/dev/null || echo unknown)
           echo "containedTurns: $WORD"
           TITLE="containedTurns: a scheduled turn is throwing every minute"
+          # The mark counts only on its own line after a blank line, where
+          # the status Worker writes and reads it.
           MARK="First ok read at "
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          NLMARK=$'\n\n'"$MARK"
+          # Only an issue with exactly this title, opened by the workflow bot
+          # or the repository owner, is the alarm (the status Worker's rule):
+          # an outsider's issue with the title neither suppresses nor is closed.
+          OPEN=$(ALARM_NAME="$TITLE" ALARM_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ALARM_NAME) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ALARM_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             repeating)
               if [ -z "$OPEN" ]; then
@@ -947,7 +953,7 @@ jobs:
                 # A bad read after a first ok read starts the count again.
                 BODY_NOW=$(gh issue view "$OPEN" --repo "$GITHUB_REPOSITORY" --json body --jq .body 2>/dev/null || echo "")
                 case "$BODY_NOW" in
-                  *"$MARK"*) gh issue edit "$OPEN" --repo "$GITHUB_REPOSITORY" --body "${BODY_NOW%%$'\n\n'"$MARK"*}" >/dev/null 2>&1 || true ;;
+                  *"$NLMARK"*) gh issue edit "$OPEN" --repo "$GITHUB_REPOSITORY" --body "${BODY_NOW%%$'\n\n'"$MARK"*}" >/dev/null 2>&1 || true ;;
                 esac
               fi
               ;;
@@ -959,7 +965,7 @@ jobs:
               if [ -n "$OPEN" ]; then
                 BODY_NOW=$(gh issue view "$OPEN" --repo "$GITHUB_REPOSITORY" --json body --jq .body 2>/dev/null || echo "")
                 case "$BODY_NOW" in
-                  *"$MARK"*)
+                  *"$NLMARK"*)
                     gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: containedTurns reads ok at $(date -u +%FT%TZ), the second ok read in a row." >/dev/null 2>&1 || true
                     ;;
                   *)
@@ -983,8 +989,14 @@ jobs:
           WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.brokenListings.status // "unknown"' 2>/dev/null || echo unknown)
           echo "brokenListings: $WORD"
           TITLE="brokenListings: seller listings are failing to read across many origins"
+          # The mark counts only on its own line after a blank line, where
+          # the status Worker writes and reads it.
           MARK="First ok read at "
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          NLMARK=$'\n\n'"$MARK"
+          # Only an issue with exactly this title, opened by the workflow bot
+          # or the repository owner, is the alarm (the status Worker's rule):
+          # an outsider's issue with the title neither suppresses nor is closed.
+          OPEN=$(ALARM_NAME="$TITLE" ALARM_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ALARM_NAME) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ALARM_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             widespread)
               if [ -z "$OPEN" ]; then
@@ -994,7 +1006,7 @@ jobs:
                 # A bad read after a first ok read starts the count again.
                 BODY_NOW=$(gh issue view "$OPEN" --repo "$GITHUB_REPOSITORY" --json body --jq .body 2>/dev/null || echo "")
                 case "$BODY_NOW" in
-                  *"$MARK"*) gh issue edit "$OPEN" --repo "$GITHUB_REPOSITORY" --body "${BODY_NOW%%$'\n\n'"$MARK"*}" >/dev/null 2>&1 || true ;;
+                  *"$NLMARK"*) gh issue edit "$OPEN" --repo "$GITHUB_REPOSITORY" --body "${BODY_NOW%%$'\n\n'"$MARK"*}" >/dev/null 2>&1 || true ;;
                 esac
               fi
               ;;
@@ -1006,7 +1018,7 @@ jobs:
               if [ -n "$OPEN" ]; then
                 BODY_NOW=$(gh issue view "$OPEN" --repo "$GITHUB_REPOSITORY" --json body --jq .body 2>/dev/null || echo "")
                 case "$BODY_NOW" in
-                  *"$MARK"*)
+                  *"$NLMARK"*)
                     gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: brokenListings reads ok at $(date -u +%FT%TZ), the second ok read in a row." >/dev/null 2>&1 || true
                     ;;
                   *)

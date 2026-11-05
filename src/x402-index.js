@@ -594,6 +594,13 @@ export function _setRouterReplicaObserver(fn) { replicaObserver = typeof fn === 
 // else that is not text is dropped. A clean entry is stored as it came.
 const SELLER_TEXT_KEYS = ["name", "description", "category", "slug", "route", "method", "mimeType", "network", "payTo", "asset", "title", "summary"];
 const SELLER_LIST_KEYS = ["tags", "aliases", "networks"];
+// Price-like fields the price readers coerce (priceRank, parsePrice, the
+// quote readers): text or a finite number, anything else dropped. A JSON
+// object can carry "toString" and "valueOf" keys that are not functions, and
+// coercing one throws.
+const SELLER_PRICE_KEYS = ["price", "maxAmountRequired", "amount", "priceUsd", "amountUsd"];
+/** A seller value as a price reader may take it: text or a finite number, else undefined. */
+export const sellerNumText = (v) => (typeof v === "string" || (typeof v === "number" && Number.isFinite(v)) ? v : undefined);
 const MANIFEST_TEXT_KEYS = ["name", "description", "homepage", "title", "network", "payTo"];
 const asSellerText = (v) => (typeof v === "number" || typeof v === "boolean" ? String(v) : undefined);
 function cleanTextKeys(o, keys) {
@@ -610,6 +617,12 @@ function cleanTextKeys(o, keys) {
 function cleanSellerTool(t) {
   if (!t || typeof t !== "object" || Array.isArray(t)) return null;
   let out = cleanTextKeys(t, SELLER_TEXT_KEYS);
+  for (const k of SELLER_PRICE_KEYS) {
+    const v = (out || t)[k];
+    if (v === undefined || v === null || sellerNumText(v) !== undefined) continue;
+    out ||= { ...t };
+    delete out[k];
+  }
   for (const k of SELLER_LIST_KEYS) {
     const v = (out || t)[k];
     if (v === undefined || v === null) continue;
@@ -2106,36 +2119,41 @@ async function discoverOneSource(source, selfOrigin) {
     const synthesize = isBazaarDiscoveryUrl(source.url) || source.synthesizeTools === true;
     const toolsByOrigin = synthesize ? new Map() : null;
     const qualityByOrigin = toolsByOrigin ? new Map() : null;
-    let droppedTestnet = 0, droppedJunk = 0;
+    let droppedTestnet = 0, droppedJunk = 0, droppedUnreadable = 0;
     // A registry row under a known path seller's prefix belongs to that seller,
     // not to its shared host (which would list every app on the host as one).
     // Read once per pass, when the first listings arrive.
     let pathSellers = null;
     // Folds one batch of listings into this pass's accumulators. Nothing here
     // touches published state: the swap below runs only once every page is in.
+    const foldItem = (item) => {
+      const url = item.resource || item.resourceUrl || item.url || item.endpoint || item.homepage;
+      const hostOrigin = extractOrigin(url);
+      if (!hostOrigin || hostOrigin === selfOrigin) return;
+      const origin = pathSellerOwning(url, hostOrigin, pathSellers) || hostOrigin;
+      // strict sources (open registries): drop testnet-only listings and
+      // placeholder origins before they reach the index.
+      if (source.strict) {
+        if (!itemHasMainnetAccept(item)) { droppedTestnet++; return; }
+        if (isJunkOrigin(origin)) { droppedJunk++; return; }
+      }
+      found.add(origin);
+      if (toolsByOrigin) {
+        const t = bazaarItemToTool(item, origin);
+        if (t) {
+          const arr = toolsByOrigin.get(origin) || [];
+          arr.push(t);
+          toolsByOrigin.set(origin, arr);
+        }
+        if (qualityByOrigin && item.quality) foldBazaarQuality(qualityByOrigin, origin, item.quality, t?.payToByNetwork?.["eip155:8453"] || null, { curated: item.curated === true && isBazaarDiscoveryUrl(source.url) });
+      }
+    };
     const fold = (list) => {
       if (!pathSellers) pathSellers = pathSellersByHost();
       for (const item of list) {
-        const url = item.resource || item.resourceUrl || item.url || item.endpoint || item.homepage;
-        const hostOrigin = extractOrigin(url);
-        if (!hostOrigin || hostOrigin === selfOrigin) continue;
-        const origin = pathSellerOwning(url, hostOrigin, pathSellers) || hostOrigin;
-        // strict sources (open registries): drop testnet-only listings and
-        // placeholder origins before they reach the index.
-        if (source.strict) {
-          if (!itemHasMainnetAccept(item)) { droppedTestnet++; continue; }
-          if (isJunkOrigin(origin)) { droppedJunk++; continue; }
-        }
-        found.add(origin);
-        if (toolsByOrigin) {
-          const t = bazaarItemToTool(item, origin);
-          if (t) {
-            const arr = toolsByOrigin.get(origin) || [];
-            arr.push(t);
-            toolsByOrigin.set(origin, arr);
-          }
-          if (qualityByOrigin && item.quality) foldBazaarQuality(qualityByOrigin, origin, item.quality, t?.payToByNetwork?.["eip155:8453"] || null, { curated: item.curated === true && isBazaarDiscoveryUrl(source.url) });
-        }
+        // One registry item that cannot be read (a field whose JSON shape
+        // throws when coerced) is dropped alone; the rest of the source is indexed.
+        try { foldItem(item); } catch { droppedUnreadable++; }
       }
     };
     // The Bazaar paginates and has 69k+ listings — a single fetch sees the
@@ -2200,6 +2218,7 @@ async function discoverOneSource(source, selfOrigin) {
     }
     status.origins = found.size;
     if (source.strict) { status.droppedTestnet = droppedTestnet; status.droppedJunk = droppedJunk; }
+    if (droppedUnreadable) status.droppedUnreadable = droppedUnreadable;
     for (const o of found) {
       if (discoveredSeeds.size >= MAX_DISCOVERED_SELLERS) break;
       discoveredSeeds.add(o);
@@ -2459,14 +2478,14 @@ export function acceptDecimals(a) {
   const stated = a?.extra?.decimals ?? a?.decimals;
   if (Number.isInteger(stated) && stated >= 0 && stated <= 36) return stated;
   if (typeof stated === "string" && /^\d{1,2}$/.test(stated.trim())) return Number(stated.trim());
-  const asset = a?.asset == null ? "" : String(a.asset).trim();
-  const net = String(a?.network || "");
+  const asset = sellerNumText(a?.asset) === undefined ? "" : String(a.asset).trim();
+  const net = typeof a?.network === "string" ? a.network : "";
   if (!asset || /^usdc$/i.test(asset)) return 6;
   if (net.startsWith("eip155:")) { const t = domainTruthFor(net, asset); if (t) return t.symbol === "USDC" ? 6 : null; }
   if (net.startsWith("solana") && asset === SVM_USDC_MINT) return 6;
   if (net.startsWith("algorand") && asset === AVM_USDC_ASA) return 6;
   if (net.startsWith("stellar") && asset === STELLAR_USDC_SAC) return 7;
-  if (/^0x[0-9a-f]{40}$/i.test(asset) && /^(usdc|usd coin)$/i.test(String(a?.extra?.name || "").trim())) return 6;
+  if (/^0x[0-9a-f]{40}$/i.test(asset) && /^(usdc|usd coin)$/i.test((typeof a?.extra?.name === "string" ? a.extra.name : "").trim())) return 6;
   return null;
 }
 
@@ -2479,8 +2498,8 @@ export function paymentFieldsFromAccepts(rawAccepts) {
   );
   // Prefer the first Base USDC accept; fall back to any USDC; fall back to first.
   const preferred =
-    accepts.find((a) => a?.network === "eip155:8453" && /USDC|USD Coin/i.test(a?.extra?.name || "")) ||
-    accepts.find((a) => /USDC|USD Coin/i.test(a?.extra?.name || "")) ||
+    accepts.find((a) => a?.network === "eip155:8453" && typeof a?.extra?.name === "string" && /USDC|USD Coin/i.test(a.extra.name)) ||
+    accepts.find((a) => typeof a?.extra?.name === "string" && /USDC|USD Coin/i.test(a.extra.name)) ||
     accepts[0] ||
     null;
   let price = null;
@@ -2488,7 +2507,8 @@ export function paymentFieldsFromAccepts(rawAccepts) {
   // the one most flat-`resources` manifests still publish. Reading only the
   // first left those rows priceless AND cost the live-402 probe that would
   // have learned the figure the origin already declared.
-  const amount = preferred?.amount ?? preferred?.maxAmountRequired;
+  // Text or a number only: a JSON object here would throw when coerced.
+  const amount = sellerNumText(preferred?.amount) ?? sellerNumText(preferred?.maxAmountRequired);
   // Atomic units of the accept's own asset: its stated decimals, or a USDC we
   // know. An asset we cannot scale is left unpriced rather than read as USDC.
   const decimals = preferred ? acceptDecimals(preferred) : null;
@@ -2577,7 +2597,7 @@ export function bazaarItemToTool(item, originUrl) {
     // A payer figure rides only when the item carries one, marked as measured
     // (qualityFromStored reads a stored zero without the marker as unknown).
     quality: item.quality && typeof item.quality === "object"
-      ? { calls30d: Number(item.quality.l30DaysTotalCalls) || 0, ...(item.quality.l30DaysUniquePayers !== undefined && item.quality.l30DaysUniquePayers !== null && Number.isFinite(Number(item.quality.l30DaysUniquePayers)) ? { payers30d: Number(item.quality.l30DaysUniquePayers), payersMeasured: true } : {}), lastCalledAt: typeof item.quality.lastCalledAt === "string" ? item.quality.lastCalledAt : null }
+      ? { calls30d: Number(sellerNumText(item.quality.l30DaysTotalCalls)) || 0, ...(sellerNumText(item.quality.l30DaysUniquePayers) !== undefined && Number.isFinite(Number(item.quality.l30DaysUniquePayers)) ? { payers30d: Number(item.quality.l30DaysUniquePayers), payersMeasured: true } : {}), lastCalledAt: typeof item.quality.lastCalledAt === "string" ? item.quality.lastCalledAt : null }
       : null,
   };
 }
@@ -3568,7 +3588,7 @@ export function mergeManifestIntoTools(manifestTools = [], existing = []) {
   const enrich = (hit, m) => {
     if (!hit.name || hit.name === hit.route || String(hit.name).startsWith("/")) hit.name = m.name || hit.name;
     if (!hit.description) hit.description = m.description || "";
-    if (!hit.price && m.price) hit.price = m.price;
+    if (!hit.price && sellerNumText(m.price) !== undefined && m.price) hit.price = m.price;
     if ((!hit.slug || hit.slug === hit.route) && m.slug) hit.slug = m.slug;
     // Settlement terms too, and this is the half that used to be missing. An
     // OpenAPI document carries no payment metadata, so a row sourced from one
@@ -9485,7 +9505,11 @@ let brokenListingsTotal = 0, brokenListingsOverflow = 0;
 const brokenEntries = new WeakSet(); // entries whose indexing threw; skipped until replaced
 // Read inside a catch, so they never throw themselves.
 const entryOriginOf = (v) => { try { const s = Array.isArray(v?.tools) ? v.tools[0]?.seller : null; return typeof s === "string" && s ? s : null; } catch { return null; } };
-const sellerOfTool = (t) => { try { return typeof t?.seller === "string" ? t.seller : null; } catch { return null; } };
+// A broken row is counted under its ENTRY's origin (the cache key), never the
+// row's own `seller` field: a listing writes that field, and one listing that
+// named 30 sellers would count as 30 origins. The caller passes the origin it
+// holds; else the row's home record (set when its entry was indexed).
+const homeOriginOf = (t) => { try { const h = t?.[TOOL_HOME]; return typeof h?.origin === "string" ? h.origin : null; } catch { return null; } };
 // The public word (brokenListings on /api/gateway-status): the distinct
 // origins whose listings broke inside a rolling window, against the origins
 // the index holds. One seller's bad data is one origin however many of its
@@ -9551,20 +9575,21 @@ export function brokenListingsSummary() {
 }
 export function _resetBrokenListingsForTest() { brokenListings.clear(); brokenRecent.clear(); brokenListingsTotal = 0; brokenListingsOverflow = 0; brokenToolsSkipped = 0; }
 const BROKEN_STATICS = Object.freeze({ broken: true, slug: "", name: "", hay: "", injected: true, excluded: true, priceRank: Infinity, aliases: NO_ALIASES, nameSlug: null, names: Object.freeze([]), nameToks: Object.freeze([]) });
-function toolStatics(t) {
+function toolStatics(t, origin = null) {
   let st = t[TOOL_STATICS] || toolStaticsMemo.get(t);
   if (st) return st;
   try { st = computeToolStatics(t); }
-  catch (e) { st = BROKEN_STATICS; noteBrokenListing(sellerOfTool(t), e); }
+  catch (e) { st = BROKEN_STATICS; noteBrokenListing(origin || homeOriginOf(t), e); }
   if (!setHidden(t, TOOL_STATICS, st)) toolStaticsMemo.set(t, st);
   return st;
 }
 // Test hook: computeToolStatics throws this for every row while set (a code
 // bug that breaks every listing, scripts/test-crash-containment.js).
-let toolStaticsFaultForTest = null;
-export function _setToolStaticsFaultForTest(err) { toolStaticsFaultForTest = err || null; }
+// With `match`, only the rows it accepts throw (one poison row beside good ones).
+let toolStaticsFaultForTest = null, toolStaticsFaultMatch = null;
+export function _setToolStaticsFaultForTest(err, match = null) { toolStaticsFaultForTest = err || null; toolStaticsFaultMatch = typeof match === "function" ? match : null; }
 function computeToolStatics(t) {
-  if (toolStaticsFaultForTest) throw toolStaticsFaultForTest;
+  if (toolStaticsFaultForTest && (!toolStaticsFaultMatch || toolStaticsFaultMatch(t))) throw toolStaticsFaultForTest;
   let st;
   const name = sellerText(t.name), slug = sellerText(t.slug);
   const tags = Array.isArray(t.tags) ? t.tags.map(sellerText) : [];
@@ -9789,7 +9814,7 @@ function routeIndexAddEntry(origin, v, target = routeIdx, from = 0, until = Infi
   for (let pos = from; pos < pool.length; pos++) {
     if (pos > from && (pos & 63) === 0 && until !== Infinity && performance.now() >= until) return pos;
     const t = pool[pos];
-    const st = toolStatics(t);
+    const st = toolStatics(t, origin);
     if (st.broken) { brokenToolsSkipped++; continue; } // its statics threw: never posted, never scored
     // The home record is a property of the tool (its entry and position in
     // that entry's pool), the same whichever shard indexes it.
@@ -10372,8 +10397,8 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
     // exactly as it will once indexed.
     const selectedBy = [];
     for (let k = 0; k < nTerms; k++) if (selecting[k]) selectedBy.push(shortTerm[k] ? ((tok) => tok === terms[k]) : ((tok) => tok.includes(terms[k])));
-    const isCandidate = (t) => {
-      const st = toolStatics(t);
+    const isCandidate = (t, origin) => {
+      const st = toolStatics(t, origin);
       if (st.broken) { brokenToolsSkipped++; return false; }
       const toks = new Set(splitTokens(st.hay));
       for (const nt of st.nameToks) for (const tok of nt) toks.add(tok);
@@ -10389,7 +10414,7 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
       catch (e) { routeIndexEntryBroken(origin, v, e); continue; }
       const arr = [];
       for (let i = 0; i < pool.length; i++) {
-        if (isCandidate(pool[i])) arr.push(pool[i]);
+        if (isCandidate(pool[i], origin)) arr.push(pool[i]);
         // Every 16 rows: a row's first statics (the listing screen) can cost
         // half a millisecond, so 256 of them held a slice for 100 ms and more.
         if ((i & ROUTE_CANDIDATE_YIELD_MASK) === ROUTE_CANDIDATE_YIELD_MASK) { candidateYields++; yield; }
