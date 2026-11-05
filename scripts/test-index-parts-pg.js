@@ -132,7 +132,7 @@ async function main() {
     const parts1 = await partRows();
     ok(parts1.length === parts0.length && after.swept - before.swept === 1, `the replaced part was swept (${parts1.length} rows, ${after.swept - before.swept} swept)`);
     const kept = parts0.filter((r) => parts1.some((s) => s.id === r.id));
-    ok(kept.length === parts0.length - 1 && kept.every((r) => parts1.find((s) => s.id === r.id).at === r.at), "the unchanged part rows keep their stamps");
+    ok(kept.length === parts0.length - 1 && kept.every((r) => parts1.find((s) => s.id === r.id).at > r.at), "the unchanged part rows are kept, their stamps moved to the save that names them again (so no sweep reads them as old)");
     ok(digest(await A._storedEntryForTest(BIG)) === digest(projected(BIG)), "the table assembles to the changed entry");
     const pull = await askB("pull");
     ok(pull.n >= 1 && pull.tools === N && pull.desc === "changed" && pull.big === digest(projected(BIG)), `B pulls the change whole (${pull.n} folded)`);
@@ -186,6 +186,44 @@ async function main() {
     A.__testSeedCache([[BIG, { ...A._cacheForTests().get(BIG), fetchedAt: A._cacheForTests().get(BIG).fetchedAt + 1 }]]);
     await A.persistIndexCacheAsync();
     ok((await partRows()).length === parts0.length, "A's save sweeps the orphan");
+
+    // ---- a sweep lands between a save's existence read and its header write -------
+    // The seller's tools return to an earlier set, whose part the table still
+    // holds as an orphan older than the grace (a part is never rewritten, so
+    // its stamp is the one its first save gave it). A sweep interleaved at the
+    // existence read (another container's, or this process's full save beside
+    // a single-origin write) takes the orphan; the header must not name a row
+    // that is gone.
+    {
+      const held = A._cacheForTests().get(BIG);
+      const beforeSet = JSON.parse(JSON.stringify(projected(BIG)));
+      const earlier = await splitEntry(BIG, beforeSet); // the parts of the set the seller returns to
+      const altered = { ...held, fetchedAt: held.fetchedAt + 1, tools: held.tools.slice() };
+      altered.tools[200] = { ...altered.tools[200], description: "away " + altered.tools[200].description };
+      A.__testSeedCache([[BIG, altered]]);
+      ok(await A.persistIndexCacheAsync() && (await partRows()).length === parts0.length, "the seller changes; the replaced part is swept (A's grace is zero)");
+      // The orphan as another container inside its grace would have left it, then aged past any grace.
+      const nowIds = new Set((await partRows()).map((r) => r.id));
+      const orphan = earlier.parts.find((p) => !nowIds.has(p.id)) || earlier.parts[0];
+      await sdb.stateQuery(`INSERT INTO ${sdb.stateDbSchema()}.records (collection, id, body, updated_at) VALUES ($1, $2, $3::jsonb, now() - interval '20 minutes') ON CONFLICT (collection, id) DO UPDATE SET updated_at = now() - interval '20 minutes'`, [PARTS_COLLECTION, orphan.id, orphan.text]);
+      await sdb.stateQuery(`UPDATE ${sdb.stateDbSchema()}.records SET updated_at = now() - interval '20 minutes' WHERE collection = $1`, [PARTS_COLLECTION]);
+      ok((await partRows()).length === parts0.length + 1, "an aged orphan of the earlier set is in the table");
+      const orig = sdb.records.existing.bind(sdb.records);
+      let sweptInside = -1;
+      sdb.records.existing = async (c, ids) => { const have = await orig(c, ids); sweptInside = await A.__testSweepOrphanParts(); return have; };
+      const b4 = A.__testPartStats();
+      A.__testSeedCache([[BIG, { ...held, fetchedAt: altered.fetchedAt + 1 }]]); // back to the earlier set
+      const saved = await A.persistIndexCacheAsync();
+      sdb.records.existing = orig;
+      const after2 = A.__testPartStats();
+      ok(saved === true && sweptInside === 1, `the interleaved sweep took the orphan during the save (${sweptInside} swept)`);
+      const named = ((await sdb.records.get(COLLECTION, BIG))?.parts?.hashes || []).map((h) => `${BIG}#${h}`);
+      const present = new Set((await partRows()).map((r) => r.id));
+      ok(named.length === parts0.length && named.every((id) => present.has(id)), `every part the header names is in the table (${named.filter((id) => !present.has(id)).length} missing)`);
+      ok(after2.restored - b4.restored === 1, `the part the sweep took was written again before the header landed (${after2.restored - b4.restored} restored)`);
+      ok(digest(await A._storedEntryForTest(BIG)) === digest(projected(BIG)), "the stored entry assembles to the earlier set");
+      ok((await askB("pull")).big === digest(projected(BIG)), "B pulls it whole");
+    }
 
     // ---- shrink under the part size: one row again, parts swept -------------------
     const small = { ...big, fetchedAt: 2_000_000, tools: big.tools.slice(0, 1500) };

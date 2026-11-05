@@ -33,7 +33,7 @@ import { promisify } from "node:util";
 import { createDocumentCache } from "./json-document.js";
 import { shared, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { createListingsStore, listingsStoreEnabled } from "./index-listings-pg.js";
-import { trackStoreReady, leased, stateDbEnabled, stateQuery, stateDbSchema, records, importOnce, pgJsonTextMayChange, largeRowTimeoutMs, isStatementTimeout } from "./state-db.js";
+import { trackStoreReady, leased, stateDbEnabled, stateQuery, stateDbSchema, records, importOnce, pgJsonTextMayChange, largeRowTimeoutMs, isStatementTimeout, withStateTx } from "./state-db.js";
 import { PARTS_COLLECTION, PARTS_ORPHAN_GRACE_MS, isParted, isPartedHeader, headerHashes, partId, splitEntry, assembleEntry } from "./index-parts.js";
 import { retryingLoad } from "./store-retry.js";
 
@@ -7725,8 +7725,8 @@ async function rowBodyBytes(line, from, hash, tick = async () => {}) {
 // A reader takes the header and then the parts it names, and never mixes two
 // saves: a part is immutable, and one whose hash is not the named one, or
 // missing, sends the reader back to the header.
-const partStats = { written: 0, skipped: 0, assembled: 0, retries: 0, unreadable: 0, swept: 0, sweeps: 0 };
-/** Test hook: counts of part rows written and skipped, entries assembled, header re-reads, failed assemblies and sweeps. */
+const partStats = { written: 0, skipped: 0, restored: 0, assembled: 0, retries: 0, unreadable: 0, swept: 0, sweeps: 0 };
+/** Test hook: counts of part rows written, skipped and restored, entries assembled, header re-reads, failed assemblies and sweeps. */
 export function __testPartStats() { return { ...partStats }; }
 async function writePartedOrigin(origin, entry, hash, tick) {
   const { header, parts } = await splitEntry(origin, entry, { tick });
@@ -7740,18 +7740,40 @@ async function writePartedOrigin(origin, entry, hash, tick) {
     partStats.written++;
     await new Promise((r) => setImmediate(r));
   }
-  await stateQuery(
-    `INSERT INTO ${recordsTable()} AS r (collection, id, body) VALUES ($1, $2, $3::jsonb)
-     ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()
-     WHERE ${NEWER_OR_SAME_SQL("r.body", "EXCLUDED.body")}`,
-    [INDEX_RECORDS, origin, bodyWithHash(JSON.stringify(header), hash)],
-  );
+  // The header lands in one transaction with a touch of every part it names:
+  // a part the table held already may be an orphan (named by no header since
+  // the seller changed) past the grace, and a sweep landing between the
+  // existence read above and the header write would take it. The touch
+  // stamps each named part now, so no sweep reads it as old; a sweep already
+  // holding one of the rows waits for this commit and re-reads its condition,
+  // and the header then names it. A part a sweep took first is written again
+  // here (restored), so the header never names a row that is not there.
+  await withStateTx(async (client) => {
+    const ids = [...new Set(parts.map((p) => p.id))];
+    const touched = new Set((await client.query(
+      `UPDATE ${recordsTable()} SET updated_at = now() WHERE collection = $1 AND id = ANY($2::text[]) RETURNING id`,
+      [PARTS_COLLECTION, ids],
+    )).rows.map((r) => r.id));
+    for (const p of parts) {
+      if (touched.has(p.id)) continue;
+      touched.add(p.id);
+      await client.query(`INSERT INTO ${recordsTable()} (collection, id, body) VALUES ($1, $2, $3::jsonb) ON CONFLICT (collection, id) DO NOTHING`, [PARTS_COLLECTION, p.id, p.text]);
+      partStats.restored++;
+    }
+    await client.query(
+      `INSERT INTO ${recordsTable()} AS r (collection, id, body) VALUES ($1, $2, $3::jsonb)
+       ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()
+       WHERE ${NEWER_OR_SAME_SQL("r.body", "EXCLUDED.body")}`,
+      [INDEX_RECORDS, origin, bodyWithHash(JSON.stringify(header), hash)],
+    );
+  });
   return parts.length;
 }
 /** Delete the part rows no header names (the seller changed, shrank to one
  *  row, or left the index; or a header write was refused as older), once
  *  older than PARTS_ORPHAN_GRACE_MS, which outlasts any save: a part a
- *  sibling container wrote ahead of its header is never taken from under it. */
+ *  sibling container wrote or touched ahead of its header is never taken
+ *  from under it. */
 async function sweepOrphanParts() {
   const r = await stateQuery(
     `DELETE FROM ${recordsTable()} p WHERE p.collection = $1 AND p.updated_at < now() - ($2::int * interval '1 millisecond')
