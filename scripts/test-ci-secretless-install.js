@@ -166,7 +166,7 @@ for (const file of ["listing-pass.yml", "mint-bazaar-rows.yml", "algorand-rail-c
     for (const st of job.steps || []) {
       const run = String(st.run || "");
       for (const s of needTable) {
-        if (!new RegExp(`scripts/${s.replace(/\./g, "\\.")}(?=[\\s;&|)]|$)`, "m").test(run)) continue;
+        if (!new RegExp(`scripts/${s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=[\\s;&|)]|$)`, "m").test(run)) continue;
         const env = { ...(wf.env || {}), ...(job.env || {}), ...(st.env || {}) };
         const json = String(env.UPSTREAM_COSTS_JSON ?? "");
         const file = String(env.UPSTREAM_COSTS_FILE ?? "");

@@ -18,3 +18,5 @@ bdcc579e940c7573c228c0561a65883c8e1712a8:scripts/test-front-door.js:generic-api-
 # A test fixture identifier ("forecast/hourly" in scripts/test-decide-index.js) read
 # as a key by the generic rule; not a credential.
 8cfcd2582b0a62a3ef950bd6eebeb22ce07b73aa:scripts/test-decide-index.js:generic-api-key:342
+# The same line as the merge commit that brought main into the batch reports it.
+abaa1e8551cb11a44920cb716685a26c13e3222f:scripts/test-decide-index.js:generic-api-key:342
