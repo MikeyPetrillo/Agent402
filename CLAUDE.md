@@ -446,6 +446,10 @@ heartbeat page on it under one issue that closes when nothing is owed.
   then a 429 with Retry-After. ffmpeg, ffprobe and Chromium start with `childEnv()`
   (`src/tools/child-env.js`), an allowlist of environment variables, so no key reaches a child
   process (defense in depth: a same-user child can still read its parent's environment).
+- **Seller fields:** every entry the index cache stores (crawl, Bazaar fallback, pull, warm start, the
+  router worker's replica) is cleaned once in `IndexCache.set` (`cleanSellerEntry`): a seller field
+  read as text holds a string (a number or boolean becomes its text, anything else is dropped) and a
+  list field holds strings (`scripts/test-seller-field-types-serve.js`).
 - **Listing screen:** `src/listing-screen.js` (re-exported by `src/x402-index.js`) flags seller
   listing text that tries to instruct its reader; it depends only on `src/hidden-chars.js`, so
   a workflow with no install (`wish-issues.yml`) reads the same rules.

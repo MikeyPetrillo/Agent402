@@ -12,6 +12,7 @@ const ENTRIES = [
       "Tools: URL tools answer 503 with Retry-After when this server's resolver cannot answer a lookup, and the one 400 for a name that does not exist. A host name without a dot is answered with that 400. favicon-grab refuses a non-http scheme.",
       "Gateway: the Responses and Messages wires pass each input item, content block and tool on with its documented fields only.",
       "Index: a seller registration naming one of this server's own hosts is refused.",
+      "Index: a seller listing with a number, object or array where text belongs is stored with text fields (numbers become their digits, anything else is dropped), and every seller page, route and search reads it as text.",
       "Reports: a public report's JSON has its own address, /reports/public/<id>.json.",
       "Packages: agent402-client 0.8.22 resends its own request once when the connection failed before any answer (a closed keep-alive socket), with the same headers and Idempotency-Key; retryResets: false turns it off. A caller's payFetch is not wrapped; resetRetryFetch is exported to put under a payment wrapper.",
     ],

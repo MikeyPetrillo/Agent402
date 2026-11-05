@@ -31,6 +31,9 @@ Gateway:
   tool on with its documented fields only.
 Index:
 - A seller registration naming one of this server's own hosts is refused.
+- A seller listing with a number, object or array where text belongs is
+  stored with text fields: numbers become their digits, anything else is
+  dropped, and every seller page, route and search reads it as text.
 Reports:
 - A public report's JSON has its own address, `/reports/public/<id>.json`.
 Packages:

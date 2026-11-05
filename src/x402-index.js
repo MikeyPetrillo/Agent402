@@ -582,9 +582,70 @@ export function indexCacheVersion() { return cacheVersion; }
 // installs it, and in the worker itself (which is the copy).
 let replicaObserver = null;
 export function _setRouterReplicaObserver(fn) { replicaObserver = typeof fn === "function" ? fn : null; }
+// Seller-written fields that every reader takes as text, and the lists it
+// takes as lists of text. A crawled listing (parsed JSON) can put a number,
+// an object or an array in any of them; a reader that calls a string method
+// on one throws, and an uncaught throw takes the process down. Every entry is
+// cleaned once as it is stored (crawl, Bazaar fallback, pull, warm start, the
+// router worker's replica): a number or boolean becomes its digits, anything
+// else that is not text is dropped. A clean entry is stored as it came.
+const SELLER_TEXT_KEYS = ["name", "description", "category", "slug", "route", "method", "mimeType", "network", "payTo", "asset", "title", "summary"];
+const SELLER_LIST_KEYS = ["tags", "aliases", "networks"];
+const MANIFEST_TEXT_KEYS = ["name", "description", "homepage", "title", "network", "payTo"];
+const asSellerText = (v) => (typeof v === "number" || typeof v === "boolean" ? String(v) : undefined);
+function cleanTextKeys(o, keys) {
+  let out = null;
+  for (const k of keys) {
+    const v = o[k];
+    if (v === undefined || v === null || typeof v === "string") continue;
+    out ||= { ...o };
+    const text = asSellerText(v);
+    if (text === undefined) delete out[k]; else out[k] = text;
+  }
+  return out;
+}
+function cleanSellerTool(t) {
+  if (!t || typeof t !== "object" || Array.isArray(t)) return null;
+  let out = cleanTextKeys(t, SELLER_TEXT_KEYS);
+  for (const k of SELLER_LIST_KEYS) {
+    const v = (out || t)[k];
+    if (v === undefined || v === null) continue;
+    if (Array.isArray(v) && v.every((x) => typeof x === "string")) continue;
+    out ||= { ...t };
+    out[k] = Array.isArray(v) ? v.map((x) => (typeof x === "string" ? x : asSellerText(x))).filter((x) => x !== undefined)
+      : typeof v === "string" ? [v] : [];
+  }
+  return out || t;
+}
+/** The entry with every seller field as its readers take it; the same object when nothing needed it. */
+function cleanSellerEntry(v) {
+  if (!v || typeof v !== "object") return v;
+  let out = null;
+  if (v.tools !== undefined && v.tools !== null) {
+    if (!Array.isArray(v.tools)) out = { ...v, tools: [] };
+    else {
+      let tools = null;
+      for (let i = 0; i < v.tools.length; i++) {
+        const c = cleanSellerTool(v.tools[i]);
+        if (c && c === v.tools[i]) { if (tools) tools.push(c); continue; }
+        tools ||= v.tools.slice(0, i);
+        if (c) tools.push(c);
+      }
+      if (tools) out = { ...v, tools };
+    }
+  }
+  if (v.manifest && typeof v.manifest === "object") {
+    const m = cleanTextKeys(v.manifest, MANIFEST_TEXT_KEYS);
+    if (m) (out ||= { ...v }).manifest = m;
+  }
+  return out || v;
+}
+/** Test hook: the cleaning every stored entry gets. */
+export function _cleanSellerEntryForTests(v) { return cleanSellerEntry(v); }
 class IndexCache extends Map {
   set(origin, v) {
     if (isRemovedOrigin(origin)) { this.delete(origin); return this; }
+    v = cleanSellerEntry(v);
     cacheVersion++;
     routeIndexNoteSet(origin, super.get(origin), v);
     super.set(origin, v);
