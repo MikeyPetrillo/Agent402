@@ -17,6 +17,9 @@
 // src/rate-limit.js does): the User-Agent is caller text, so a key that read it
 // was a fresh budget per User-Agent, and an exemption that read it was a pass
 // for anyone who typed a crawler's name. It is kept only for the log line.
+// The one exception is Cloudflare's shared Worker egress address
+// (WORKER_EGRESS_ADDRESSES below), keyed per User-Agent under a whole-address
+// ceiling.
 // A self-declared named indexer or search/AI crawler (a User-Agent
 // traffic-classifier.js names) is still counted, against
 // NAMED_CLIENT_BUDGET_MULTIPLIER times the budget on the same address count:
@@ -133,9 +136,43 @@ export function isNamedClientUserAgent(ua) {
   return !!indexerFor(String(ua || ""));
 }
 
-/** The budget's key: the client address, an IPv6 address folded to its /64. */
+// SHARED WORKER EGRESS. A Cloudflare Worker's request to another Cloudflare
+// zone (this one, behind the CDN proxy) arrives with one fixed client
+// address for every Worker of every account: "In cross-zone subrequests from
+// one Cloudflare zone to another Cloudflare zone, the CF-Connecting-IP value
+// will be set to the Worker client IP address '2a06:98c0:3600::103'"
+// (https://developers.cloudflare.com/fundamentals/reference/http-headers/,
+// "CF-Connecting-IP in Worker subrequests"). Keyed on the address alone, one
+// busy Worker would spend the budget of every Worker-hosted buyer. From that
+// address the key is the address plus the User-Agent token, and the address
+// as a whole reads against WORKER_EGRESS_ADDRESS_MULTIPLIER times the budget,
+// so rotating User-Agents buys a bounded allowance, never an unbounded one.
+export const WORKER_EGRESS_ADDRESSES = Object.freeze(["2a06:98c0:3600::103"]);
+export const WORKER_EGRESS_ADDRESS_MULTIPLIER = 10;
+const canonicalV6 = (ip) => {
+  const s = String(ip || "").trim();
+  if (!s.includes(":") || s.includes("%")) return null;
+  try { return new URL(`http://[${s}]/`).hostname.slice(1, -1); } catch { return null; }
+};
+const WORKER_EGRESS = new Set(WORKER_EGRESS_ADDRESSES.map(canonicalV6));
+/** Whether this client address is Cloudflare's shared Worker egress address. */
+export function isWorkerEgressAddress(ip) {
+  const c = canonicalV6(ip);
+  return c != null && WORKER_EGRESS.has(c);
+}
+
+/** The budget's key: the client address, an IPv6 address folded to its /64;
+ *  from the shared Worker egress address, that plus the User-Agent token. */
 export function clientKeyOf(req) {
-  return limiterKey(req?.ip || req?.socket?.remoteAddress || "-");
+  const ip = req?.ip || req?.socket?.remoteAddress || "-";
+  const base = limiterKey(ip);
+  if (!isWorkerEgressAddress(ip)) return base;
+  return `${base}|ua:${uaToken(req?.headers?.["user-agent"]).toLowerCase()}`;
+}
+/** The whole-address key a Worker egress client also counts against, or null. */
+export function workerEgressAddressKeyOf(req) {
+  const ip = req?.ip || req?.socket?.remoteAddress || "-";
+  return isWorkerEgressAddress(ip) ? `${limiterKey(ip)}|worker-egress` : null;
 }
 
 /** The MCP connector replays a tool call to our own route over loopback and
@@ -296,6 +333,13 @@ export function createUnpaidQuoteBudget({ budget, isPriced, isSynthetic = () => 
       try { if (isSynthetic(req)) return next(); } catch { /* an unreadable token is not ours */ }
       named = isNamedClientUserAgent(req.headers?.["user-agent"]);
       verdict = hit(key, now(), named ? namedLimit : limit);
+      // From the shared Worker egress address the whole address also counts,
+      // against a multiple of the budget (see WORKER_EGRESS_ADDRESSES).
+      const addressKey = workerEgressAddressKeyOf(req);
+      if (addressKey && !verdict.limited) {
+        const whole = hit(addressKey, now(), limit * WORKER_EGRESS_ADDRESS_MULTIPLIER);
+        if (whole.limited) verdict = whole;
+      }
       if (!verdict.limited) return next();
     } catch { return next(); }
     // About to refuse: this client may have paid on another container. The

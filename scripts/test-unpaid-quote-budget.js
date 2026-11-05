@@ -56,7 +56,7 @@ const MCP_MARKER = `mcp;k=${(process.env.MCP_LOOPBACK_TEST_SECRET = "6b".repeat(
 const {
   DEFAULT_UNPAID_QUOTE_BUDGET_PER_HOUR, UNPAID_QUOTE_BUDGET_LOG_CAP, createUnpaidQuoteBudget, unpaidQuoteBudgetPerHour,
   hasCredentialHeader, looksLikePayment, looksLikePowSolution, hasSettlementReceipt, normalizeCatalogPath,
-  isNamedClientUserAgent, clientKeyOf, NAMED_CLIENT_BUDGET_MULTIPLIER, isMcpLoopback, isExemptPath, secondsToHourBoundary,
+  isNamedClientUserAgent, clientKeyOf, NAMED_CLIENT_BUDGET_MULTIPLIER, isWorkerEgressAddress, WORKER_EGRESS_ADDRESSES, WORKER_EGRESS_ADDRESS_MULTIPLIER, isMcpLoopback, isExemptPath, secondsToHourBoundary,
 } = await import("../src/unpaid-quote-budget.js");
 const { crawlerPage, catalogCrawlSection } = await import("../src/crawler-page.js");
 const { perReplica } = await import("../src/rate-limit.js");
@@ -218,6 +218,29 @@ ok(clientKeyOf({ socket: { remoteAddress: "10.1.1.1" } }) === "10.1.1.1" && clie
   for (let i = 0; i < 3; i++) run(v6, fakeReq(`2001:db8:5:6::${i + 1}`));
   ok(run(v6, fakeReq("2001:db8:5:6:ffff:1:2:3")) === 429, "two IPv6 addresses in one /64 share one budget");
   ok(run(v6, fakeReq("2001:db8:5:7::1")) === "next", "the next /64 has its own");
+
+  // Cloudflare's shared Worker egress address: every Worker's cross-zone
+  // request carries it. Two Workers with different User-Agents each keep
+  // their own budget; one Worker rotating User-Agents meets the address's
+  // ceiling; any other address is keyed exactly as before.
+  const W = "2a06:98c0:3600::103";
+  ok(WORKER_EGRESS_ADDRESSES.includes(W) && WORKER_EGRESS_ADDRESS_MULTIPLIER === 10, "the Worker egress address is the documented one, under a ten-times ceiling");
+  ok(isWorkerEgressAddress(W) && isWorkerEgressAddress("2A06:98C0:3600:0:0:0:0:103") && !isWorkerEgressAddress("2a06:98c0:3600::104") && !isWorkerEgressAddress("203.0.113.9") && !isWorkerEgressAddress("-") && !isWorkerEgressAddress(undefined), "only that address, in any spelling, is the Worker egress address");
+  ok(clientKeyOf({ ip: W, headers: { "user-agent": "worker-a/1" } }) !== clientKeyOf({ ip: W, headers: { "user-agent": "worker-b/1" } }), "from the Worker egress address the User-Agent token is part of the key");
+  ok(clientKeyOf({ ip: "2a06:98c0:3600::104", headers: { "user-agent": "worker-a/1" } }) === clientKeyOf({ ip: "2a06:98c0:3600::105", headers: { "user-agent": "worker-b/1" } }), "a neighbor address in the same /64 is keyed on the /64 alone, as before");
+  const wk = mk();
+  for (let i = 0; i < 3; i++) run(wk, fakeReq(W, { "user-agent": "worker-a/1" }));
+  ok(run(wk, fakeReq(W, { "user-agent": "worker-a/1" })) === 429, "control: Worker A spends its own budget");
+  ok([1, 2, 3].every(() => run(wk, fakeReq(W, { "user-agent": "worker-b/2" })) === "next"), "Worker B on the same shared address keeps its own budget");
+  ok(run(wk, fakeReq(W, { "user-agent": "worker-b/2" })) === 429, "...and spends it like anyone else");
+  const rotW = createUnpaidQuoteBudget({ budget: 3, isPriced: () => true, replicas: 1, log: () => {} });
+  let rotFirst429 = 0;
+  for (let i = 1; i <= 100 && !rotFirst429; i++) if (run(rotW, fakeReq(W, { "user-agent": `rot-${i}/1` })) === 429) rotFirst429 = i;
+  ok(rotFirst429 === 3 * WORKER_EGRESS_ADDRESS_MULTIPLIER + 1, `one Worker rotating User-Agents meets the address's ceiling at ten times the budget (first 429 at ${rotFirst429})`);
+  const nonW = mk();
+  const nonGot = [];
+  for (let i = 0; i < 4; i++) nonGot.push(run(nonW, fakeReq("2a06:98c0:3600::104", { "user-agent": `walker-${i}/1` })));
+  ok(nonGot.slice(0, 3).every((s) => s === "next") && nonGot[3] === 429, `a non-Worker address (even beside it) is keyed on the address alone (got ${nonGot.join(",")})`);
 }
 ok(isMcpLoopback({ headers: { "x-agent402-via": MCP_MARKER }, socket: { remoteAddress: "127.0.0.1" } }) && isMcpLoopback({ headers: { "x-agent402-via": MCP_MARKER }, socket: { remoteAddress: "::ffff:127.0.0.1" } }), "the MCP connector's loopback is recognized");
 ok(!isMcpLoopback({ headers: { "x-agent402-via": MCP_MARKER }, socket: { remoteAddress: "10.0.0.5" } }), "the loopback marker from a non-local socket is ignored (the header alone is caller-settable)");
