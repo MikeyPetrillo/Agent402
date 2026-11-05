@@ -1,5 +1,5 @@
 import { repoUrl } from "./repo-link.js";
-import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc, breadcrumbTrail } from "./ledger-chrome.js";
 import { INTEGRATIONS, ADAPTER_CONFIG } from "./integration-pages.js";
 
 // /docs/adapters is the docs section's index of the framework adapters. Each
@@ -55,9 +55,10 @@ export function adapterDocsIndex(baseUrl) {
   .ml-ad-card{background:var(--card);border:1px solid var(--hairline);padding:1.5rem 1.6rem;text-decoration:none;color:var(--ink);transition:border-color .15s;display:block}
   .ml-ad-card:hover{border-color:var(--accent)}`;
 
+  const crumbs = breadcrumbTrail(baseUrl, [["Home", "/"], ["Docs", "/docs"], ["Adapters", "/docs/adapters"]]);
   const body = `
   <div style="max-width:1180px;margin:0 auto;padding:50px 30px 64px;">
-    <p style="font-size:var(--fs-md);color:var(--faint);margin:0 0 20px;"><a href="/" style="color:var(--faint);text-decoration:none;">Home</a> &rsaquo; <a href="/docs" style="color:var(--faint);text-decoration:none;">Docs</a> &rsaquo; Adapters</p>
+    ${crumbs.nav}
     <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 14px;">Framework Adapters.</h1>
     <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:620px;margin:0 0 36px;">Plug Agent402 into your agent framework. Each adapter returns native tool objects: free tools pay with proof-of-work, and paid tools pay through the payment fetch you pass in. More integrations (Coinbase AgentKit, ElizaOS and the Python LangChain toolkit) are on <a href="/integrations" style="color:var(--ink);">/integrations</a>.</p>
 
@@ -76,6 +77,7 @@ ${cards}
     baseUrl,
     activePath: "/docs",
     extraCss,
+    jsonLd: crumbs.ld,
     body,
   });
 }

@@ -11,8 +11,10 @@
 //   legal pages       the "last updated" date the page itself prints
 //   sample reports    the fixture's own generation date
 //   public reports    the report's publication date
-//   anything else     no lastmod at all (a category page, a live data surface
-//                     or a seeded entity page has no single modification date)
+//   seeded entity     the newest filing the page showed when last built
+//   pages             (src/programmatic-pages.js entityLastmod; none before)
+//   anything else     no lastmod at all (a category page or a live data
+//                     surface has no single modification date)
 //
 // The production image carries no git history (.dockerignore drops .git), so
 // the dates are computed where history exists and committed as

@@ -9,6 +9,7 @@
 // The reason table is DERIVED from the classifier's own exported list, and a
 // test scans that module for `reason:` literals, so this page cannot end up
 // teaching a vocabulary the server no longer speaks.
+import { siteOrgRef } from "./site-org.js";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { REJECTION_REASONS } from "./payment-reject.js";
 
@@ -38,7 +39,7 @@ export function x402TestPage(baseUrl) {
 <header style="border-bottom:1px solid var(--hairline);">
   <div style="max-width:1180px;margin:0 auto;padding:52px 30px 44px;">
     <nav aria-label="Breadcrumb" style="${mono}font-size:var(--fs-xs);color:var(--faint);margin-bottom:22px;">
-      <a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <span style="color:var(--ink);">test your client</span>
+      <a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <span style="color:var(--ink);">test your x402 client</span>
     </nav>
     <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 22px;color:var(--ink);max-width:900px;">Test your x402 client against a real endpoint.</h1>
     <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:820px;margin:0;">Every refusal here tells you what was actually wrong: which field differs from what was advertised, which schemes and networks the route offers, whether the amount or the validity window is the problem. Refusals are free, because an error status cancels settlement. You pay only when it works, and then it costs ${esc(PROBE_PRICE)}.</p>
@@ -100,7 +101,7 @@ ${ledgerFooterCompact()}`;
 
   const jsonLd = [
     { "@type": "BreadcrumbList", itemListElement: [{ "@type": "ListItem", position: 1, name: "Agent402", item: `${baseUrl}/` }, { "@type": "ListItem", position: 2, name: "Test your x402 client", item: canonical }] },
-    { "@type": "TechArticle", "@id": canonical, headline: title, description, publisher: { "@type": "Organization", name: "Havok Holdings LLC", url: "https://havok.holdings" } },
+    { "@type": "TechArticle", "@id": canonical, headline: title, description, author: siteOrgRef(baseUrl), publisher: siteOrgRef(baseUrl) },
   ];
   const extraCss = `@media (max-width:900px){h1{font-size:var(--fs-3xl)!important}}`;
   return ledgerShell({ title, description, canonical, baseUrl, activePath: "/x402-test", extraCss, jsonLd, body });

@@ -11,7 +11,7 @@
 // floors, javascript: href neutralization, testnet exclusion, >12-seller
 // compact roster, per-seller activity switching via ?seller=.
 import { fitTitle, META_TITLE_MAX } from "./seo-meta.js";
-import { ledgerShell, ledgerFooterCompact, decideLive, esc, safeHref } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, decideLive, esc, safeHref, breadcrumbNavFromLd } from "./ledger-chrome.js";
 import { x402RailsFor } from "./rails.js";
 import { onGatedRailOffered } from "./gated-rails.js";
 import { CATEGORIES } from "./pages.js";
@@ -876,7 +876,7 @@ function* marketPageChainSteps(chainKey, baseUrl, opts = {}) {
       "@context": "https://schema.org",
       "@type": "BreadcrumbList",
       itemListElement: [
-        { "@type": "ListItem", position: 1, name: "Agent402.Tools", item: baseUrl },
+        { "@type": "ListItem", position: 1, name: "Home", item: `${baseUrl}/` },
         { "@type": "ListItem", position: 2, name: "Marketplace", item: `${baseUrl}/marketplace` },
         { "@type": "ListItem", position: 3, name: C.chainName, item: `${baseUrl}/${chainKey}` },
       ],
@@ -1052,7 +1052,7 @@ function* marketPageChainSteps(chainKey, baseUrl, opts = {}) {
 
   const body = `
 <div style="max-width:1080px;margin:0 auto;padding:36px 24px;">
-  <section>${headerHtml}</section>
+  <section>${breadcrumbNavFromLd(baseUrl, jsonLd)}${headerHtml}</section>
   <!-- One surface over the sellers: every seller on the rail as one comparable
        row, sortable, searchable and keyboard-navigable. The per-seller facts
        the card roster used to add (collapsed sibling endpoints, the MPP wire,
@@ -1489,7 +1489,7 @@ function* marketPageAllSteps(baseUrl, { snapshot, leaderboardSnap, economySnap, 
       "@context": "https://schema.org",
       "@type": "BreadcrumbList",
       itemListElement: [
-        { "@type": "ListItem", position: 1, name: "Agent402.Tools", item: baseUrl },
+        { "@type": "ListItem", position: 1, name: "Home", item: `${baseUrl}/` },
         { "@type": "ListItem", position: 2, name: "Marketplace", item: `${baseUrl}/marketplace` },
       ],
     },
@@ -1526,7 +1526,7 @@ function* marketPageAllSteps(baseUrl, { snapshot, leaderboardSnap, economySnap, 
   yield;
   const body = `
 <div style="max-width:1080px;margin:0 auto;padding:36px 24px;">
-  <section>${headerHtml}</section>
+  <section>${breadcrumbNavFromLd(baseUrl, jsonLd)}${headerHtml}</section>
   <section>
     ${hostCardHtml(host)}
     ${marketFilterBar(null, baseUrl)}

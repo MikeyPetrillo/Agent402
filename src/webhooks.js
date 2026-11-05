@@ -2,7 +2,7 @@
 // (async jobs, idempotent retries, chaining, wallet-keyed state) and the one
 // piece still planned (a callback POST to the buyer's own URL).
 
-import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, breadcrumbTrail } from "./ledger-chrome.js";
 
 import { REPO_URL } from "./repo-link.js";
 export function webhooksPage(baseUrl) {
@@ -17,6 +17,7 @@ export function webhooksPage(baseUrl) {
   }
   .ml-wh-cards { display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin:14px 0 32px; }`;
 
+  const crumbs = breadcrumbTrail(baseUrl, [["Home", "/"], ["Docs", "/docs"], ["Webhooks & Callbacks", "/docs/webhooks"]]);
   const body = `
   <div class="ml-wh-grid" style="max-width:1180px;margin:0 auto;padding:50px 30px 64px;display:grid;grid-template-columns:200px 1fr;gap:44px;align-items:start;">
 
@@ -35,7 +36,7 @@ export function webhooksPage(baseUrl) {
 
     <!-- CONTENT -->
     <div>
-      <p style="font-size:var(--fs-md);color:var(--faint);margin:0 0 20px;"><a href="/" style="color:var(--faint);text-decoration:none;">Home</a> &rsaquo; <a href="/docs" style="color:var(--faint);text-decoration:none;">Docs</a> &rsaquo; Webhooks &amp; Callbacks</p>
+      ${crumbs.nav}
       <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1;margin:0 0 14px;">Webhooks &amp; Callbacks</h1>
       <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:620px;margin:0 0 36px;">How to handle async workflows, retries, and long-running tool chains with Agent402.</p>
 
@@ -129,6 +130,7 @@ await paid.call("memory-write", { key: "example-title", value: page.title });</p
     baseUrl,
     activePath: "/docs",
     extraCss,
+    jsonLd: crumbs.ld,
     body,
   });
 }

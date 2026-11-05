@@ -1,3 +1,4 @@
+import { siteOrgRef } from "./site-org.js";
 import { heapSamplingReport } from "./boot-profile.js"; // diagnostic boot CPU profile - must stay the FIRST import (see the file)
 import "./tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA, process-wide (see the file)
 import { mtaStsPolicy } from "./mta-sts.js";
@@ -636,7 +637,7 @@ import { toolPage, openapiSpec, toolList, CATEGORIES, faqPage, categoryPage, rel
 import { createIdempotency, implicitReplayAllowed } from "./idempotency.js";
 import { mountMcp, mcpClientsSeenSinceBoot } from "./mcp-http.js";
 import { guidesIndex, guidePage, guideTitles } from "./guides.js";
-import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, buildPromptMessages } from "./skills.js";
+import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, buildPromptMessages, skillPackOfToolSlug } from "./skills.js";
 import { docsPage, docsApi, DOCS_SITE_ROUTES } from "./docs.js";
 import { changelogPage, changelogRss } from "./changelog.js";
 import { playgroundPage } from "./playground.js";
@@ -4056,7 +4057,7 @@ app.get("/reports/public/:publicId", async (req, res, next) => {
     title: headline, description, canonical,
     jsonLd: [
       { "@type": "BreadcrumbList", itemListElement: [{ "@type": "ListItem", position: 1, name: "Agent402", item: `${BASE_URL}/` }, { "@type": "ListItem", position: 2, name: "Reports", item: `${BASE_URL}/reports` }, { "@type": "ListItem", position: 3, name: headline, item: canonical }] },
-      { "@type": "Report", "@id": `${canonical}#report`, headline, name: headline, about: r.input, isAccessibleForFree: true, ...(r.at ? { datePublished: r.at } : {}), author: { "@type": "Organization", name: "Agent402", url: BASE_URL }, publisher: { "@type": "Organization", name: "Agent402", url: BASE_URL }, mainEntityOfPage: canonical, description: description.slice(0, 300) },
+      { "@type": "Report", "@id": `${canonical}#report`, headline, name: headline, about: r.input, isAccessibleForFree: true, ...(r.at ? { datePublished: r.at } : {}), author: siteOrgRef(BASE_URL), publisher: siteOrgRef(BASE_URL), mainEntityOfPage: canonical, description: description.slice(0, 300) },
     ],
   }));
 });
@@ -9332,10 +9333,9 @@ app.get("/tools/:slug", (req, res) => {
   htmlCache(res, 300, 900).send(skillPackCanonical(tool.slug, toolPage(BASE_URL, tool, related, { computePayable: POW_SLUGS.has(tool.slug), powDifficulty: POW_DIFFICULTY, cacheTtl: cachePolicy?.ttl ?? null, otherMethodRouted, mpp: !!(process.env.MPP_SECRET_KEY || "").trim() })));
 });
 // A skill pack's catalog page points its canonical at the pack page (/skills/<pack>).
-const SKILL_PACK_SLUGS = new Set(SKILL_PACKS.map((p) => p.slug));
 function skillPackCanonical(toolSlug, html) {
-  const pack = toolSlug.startsWith("skill-") ? toolSlug.slice(6) : null;
-  if (!pack || !SKILL_PACK_SLUGS.has(pack)) return html;
+  const pack = skillPackOfToolSlug(toolSlug);
+  if (!pack) return html;
   const from = `${BASE_URL}/tools/${toolSlug}`, to = `${BASE_URL}/skills/${pack}`;
   return html
     .replace(`<link rel="canonical" href="${from}">`, `<link rel="canonical" href="${to}">`)

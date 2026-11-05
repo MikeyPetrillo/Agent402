@@ -1,6 +1,7 @@
 // Server-rendered technical guides — the prose layer for organic search.
 // Machine surfaces (llms.txt, OpenAPI) serve agents; these serve the humans
 // googling "x402 example" or "AI agent payments" before their agents do.
+import { siteOrgRef } from "./site-org.js";
 import { REPO_URL, repoUrl } from "./repo-link.js";
 import { networkFloorUsd, ROBINHOOD_CAIP2 } from "./network-floors.js";
 import { marked } from "marked";
@@ -11,7 +12,7 @@ import { marked } from "marked";
 export const headingId = (text) => String(text || "").toLowerCase().replace(/[^a-z0-9\s-]/g, "").trim().replace(/\s+/g, "-");
 const tokenText = (tokens) => (tokens || []).map((t) => (t.tokens ? tokenText(t.tokens) : (t.text ?? ""))).join("");
 marked.use({ renderer: { heading({ tokens, depth }) { const html = this.parser.parseInline(tokens); return `<h${depth} id="${headingId(tokenText(tokens))}">${html}</h${depth}>\n`; } } });
-import { ledgerShell, ledgerFooterCompact, esc, breadcrumbLd } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc, breadcrumbTrail } from "./ledger-chrome.js";
 import { fitTitle } from "./seo-meta.js";
 import { GUIDE_INTEGRATIONS, integrationBySlug } from "./integration-pages.js";
 import { RAILS_COUNT, RAILS_COUNT_MD, resolveRailCountTokens } from "./rails.js";
@@ -1895,9 +1896,6 @@ const GUIDE_INDEX_CSS = `
 const GUIDE_PAGE_CSS = `
 .gp-wrap{max-width:760px;margin:0 auto;padding:56px 30px 48px;}
 .gp-eyebrow{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:10px;}
-.gp-crumb{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);margin-bottom:20px;}
-.gp-crumb a{color:var(--accent);text-decoration:underline;text-underline-offset:3px;text-decoration-thickness:1px;}
-.gp-crumb a:hover{text-decoration:underline;}
 .gp-wrap h1{font-family:var(--font-body);font-weight:800;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:0 0 28px;color:var(--ink);text-wrap:balance;}
 @media(max-width:640px){.gp-wrap h1{font-size:var(--fs-2xl);line-height:1.1;}}
 .gp-body{font-size:var(--fs-base);line-height:1.55;color:var(--muted);}
@@ -1970,12 +1968,13 @@ export function guidePage(baseUrl, slug, catalog = null) {
     description: g.description,
     url: canonical,
     image: `${baseUrl}/card.png`,
-    author: { "@type": "Organization", name: "Agent402.Tools", url: baseUrl },
-    publisher: { "@type": "Organization", name: "Agent402.Tools", url: baseUrl },
+    author: siteOrgRef(baseUrl),
+    publisher: siteOrgRef(baseUrl),
   };
 
+  const crumbs = breadcrumbTrail(baseUrl, [["Home", "/"], ["Guides", "/guides"], [g.title, `/guides/${g.slug}`]]);
   const body = `<div class="gp-wrap">
-  <div class="gp-crumb ml-crumb"><a href="/">Home</a> / <a href="/guides">Guides</a><span class="ml-crumb-cur"> / ${esc(g.title)}</span></div>
+  ${crumbs.nav}
   <h1 title="${esc(g.title)}">${esc(g.title)}</h1>
   <div class="gp-body">
     ${marked.parse(g.md).replace(/<table>/g, '<div class="gp-tw"><table>').replace(/<\/table>/g, "</table></div>")}
@@ -1985,8 +1984,7 @@ export function guidePage(baseUrl, slug, catalog = null) {
 </div>
 ${ledgerFooterCompact()}`;
 
-  const crumbs = breadcrumbLd(baseUrl, [["Agent402", "/"], ["Guides", "/guides"], [g.seoTitle || g.title, `/guides/${g.slug}`]]);
-  return ledgerShell({ title, description: g.description, canonical, baseUrl, activePath: "__none__", jsonLd: [jsonLd, crumbs], extraCss: GUIDE_PAGE_CSS, body });
+  return ledgerShell({ title, description: g.description, canonical, baseUrl, activePath: "__none__", jsonLd: [jsonLd, crumbs.ld], extraCss: GUIDE_PAGE_CSS, body });
 }
 
 export const guideSlugs = () => GUIDES.map((g) => g.slug);

@@ -9,6 +9,7 @@
 // layout with a real navigation tree - the opposite of what a GitBook-style
 // docs hub should feel like.
 
+import { siteOrgRef } from "./site-org.js";
 import { ledgerShell, ledgerFooterCompact, fmtNum } from "./ledger-chrome.js";
 import { docsLayoutHtml, DOCS_LAYOUT_CSS, docPrevNextHtml, DOCS_SEARCH_SCRIPT } from "./docs.js";
 import { toolList } from "./pages.js";
@@ -80,11 +81,7 @@ export function ledgerDocsPage(baseUrl, catalog) {
     name: "Agent402.Tools Documentation",
     url: canonical,
     description,
-    publisher: {
-      "@type": "Organization",
-      name: "Agent402.Tools",
-      url: baseUrl,
-    },
+    publisher: siteOrgRef(baseUrl),
   };
   // The "Why pay here" points render in full here (#why); the home page shows
   // three short claims that link to them.

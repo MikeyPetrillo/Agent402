@@ -13,6 +13,7 @@
 // MPP evm method, a Tempo charge, a card and credits all settle only after a
 // final 200; a Tempo push transfer is on chain before the call, so an answer
 // that never arrives is booked as owed.
+import { siteOrgLd } from "./site-org.js";
 import { ledgerShell, ledgerFooterCompact, esc, breadcrumbLd } from "./ledger-chrome.js";
 import { RAILS, railKey, x402EvmOnly, liveRails } from "./rails.js";
 import { mppMethodsSummary } from "./mpp-offers.js";
@@ -25,7 +26,6 @@ import { LIMITS_LABEL as POW_LIMITS_LABEL } from "./rate-limit.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
 import { IDEM_MAX_BODY_LABEL } from "./idempotency-limits.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
-import { ORG_SAME_AS } from "./repo-link.js";
 import { listAnd, mono, eyebrow, h2, h3, p, link, code, pre, section, th, thead, td, row, table as sharedTable } from "./page-html.js";
 
 const NUM_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen"];
@@ -100,7 +100,7 @@ console.log(res.status, res.headers.get("payment-receipt"), await res.json());`;
   const idemMinutes = Math.round(IDEM_TTL_MS / 60000);
 
   // ---- structured data -------------------------------------------------------
-  const orgLd = { "@type": "Organization", "@id": `${baseUrl}/#organization`, name: "Agent402", url: baseUrl, logo: { "@type": "ImageObject", url: `${baseUrl}/logo.png` }, sameAs: ORG_SAME_AS };
+  const orgLd = siteOrgLd(baseUrl);
   const crumbsLd = breadcrumbLd(baseUrl, [["Agent402", "/"], ["How to pay", "/how-to-pay"]]);
   const howToLd = { "@type": "HowTo", "@id": `${canonical}#howto`, name: "Pay for one Agent402 call", description, step: [
     { "@type": "HowToStep", name: "Ask", text: "Send the request with no payment. The answer is 402 Payment Required with the price and every way to pay it." },
