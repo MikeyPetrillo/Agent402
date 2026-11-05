@@ -34,6 +34,7 @@ setGlobalDispatcher(new UndiciAgent({ connect: withDistrust({ family: 4 }) }));
 // while CDP answered from outside in 15-37 ms. See src/loop-lag.js.
 import { loopLagStatus, setStallContext, resetLoopLag, stallsInWindow, recentStalls, longStallVerdict, stallAlarmMsFromEnv } from "./loop-lag.js";
 import { runAsJob, activeJobs } from "./active-jobs.js";
+import { contained, containedTurnsSummary, containedTurnsStatus } from "./contained-turn.js";
 import { installRequestTimingFetch, requestTimingMiddleware, routeTimings, requestsDuring, inFlightCount, responseCounts, currentRequestScope } from "./request-timing.js";
 import { toolFailureMonitor, setIdenticalAnswerReader } from "./tool-failure-monitor.js";
 import { salePathOf } from "./sale-path.js";
@@ -419,7 +420,7 @@ import { priceToMicroUsd, sellerRouteUrl } from "./x402-index.js";
 import { priceUsdOf } from "./price-usd.js";
 import { submissionSlotStatus } from "./x402-index.js";
 import { startRouterPool, routerPoolStatus } from "./router-pool.js";
-import { allPayToOriginsAsync, allPayToPricesAsync, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedToolsAsync, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategoriesAsync, configureListingsStore, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
+import { allPayToOriginsAsync, allPayToPricesAsync, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedToolsAsync, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategoriesAsync, configureListingsStore, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR, brokenListingsSummary, brokenListingsStatus } from "./x402-index.js";
 import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot, screenMppSellerForServe } from "./mpp-index.js";
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
 import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled, tempoSettlementMode } from "./mpp-tempo.js";
@@ -2568,7 +2569,8 @@ function memoSurface(key, ttlMs, build) {
   if (hit) {
     if (!hit.rebuilding) {
       hit.rebuilding = true;
-      setImmediate(() => runAsJob(surfaceJobName(key), () => {
+      // Contained (src/contained-turn.js): the build reads seller data.
+      setImmediate(contained("surface-memo-rebuild", () => runAsJob(surfaceJobName(key), () => {
         try {
           const partial = !stateStoresLoaded();
           const built = build();
@@ -2577,7 +2579,7 @@ function memoSurface(key, ttlMs, build) {
         } catch (e) {
           console.warn(`[surface-memo] ${key} rebuild failed: ${String(e?.message || e).slice(0, 120)}`);
         } finally { hit.rebuilding = false; }
-      }));
+      })));
     }
     return hit.value;
   }
@@ -3886,6 +3888,19 @@ app.get("/api/gateway-status", async (req, res) => {
     // buyerRefusals reads ok / refusing: the settle breaker refused a key that
     // had settled a call in its window (src/gateway-settle-breaker.js) inside
     // the last BUYER_REFUSAL_WINDOW_MS; the count is on the operator detail.
+    // containedTurns reads ok / repeating: a scheduled turn under contained()
+    // (src/contained-turn.js) threw in each of the last three or more
+    // consecutive minutes; the names are on the operator view and the counts
+    // on /__operator/perf.json.
+    containedTurns: (() => { try { return containedTurnsStatus({ full }); } catch { return { status: "unknown" }; } })(),
+    // brokenListings reads ok / widespread: inside a rolling window (15
+    // minutes) the distinct seller origins whose listings broke while they
+    // were read (a statics or decoration throw, src/x402-index.js) reach both
+    // a floor and a share of the indexed origins, which one seller's bad data
+    // never does and a code bug that breaks every listing does. The count,
+    // the indexed origins and the rule are on the operator view; origins on
+    // /__operator/perf.json.
+    brokenListings: (() => { try { return brokenListingsStatus({ full }); } catch { return { status: "unknown" }; } })(),
     ...(await toolFailureMonitor().status({ full }).catch(() => ({ toolFailures: { status: "unknown" }, upstreamHealth: { status: "unknown" }, facilitatorFunds: { status: "unknown" }, toolAnswers: { status: "unknown" }, buyerRefusals: { status: "unknown" } }))),
   };
   // An operator-authed read must not land in a shared cache.
@@ -5923,7 +5938,7 @@ app.get("/__operator/perf.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   // ?reset=1 clears the stall high-water mark first (the load test reads a fresh one per scenario).
   if (req.query.reset === "1") resetLoopLag();
-  res.set("Cache-Control", "no-store").json({ stateQueries: stateQueryStats(), loop: loopLagStatus(), recentStalls: recentStalls(), activeJobs: activeJobs(), inFlight: inFlightCount(), shed: shedStatus(), chainSellerViews: chainSellerViewMemo.stats(), routerPool: routerPoolStatus(), discoveryCpuSpentMs: discoveryCpuBudget.spent(), discovery: discoveryGateStatus(), paidPhases: paidPhaseSummary(), slowPaid: { verdict: slowPaidVerdict(3600_000, Date.now(), SERVING.slowPaidMs), recent: recentSlowPaidCalls() }, stockQuoteWarmer: quoteWarmerStatus(), routes: routeTimings({ top: Math.min(200, parseInt(req.query.top, 10) || 40), minSamples: Math.max(1, parseInt(req.query.min, 10) || 5) }) });
+  res.set("Cache-Control", "no-store").json({ stateQueries: stateQueryStats(), loop: loopLagStatus(), recentStalls: recentStalls(), activeJobs: activeJobs(), inFlight: inFlightCount(), shed: shedStatus(), chainSellerViews: chainSellerViewMemo.stats(), routerPool: routerPoolStatus(), discoveryCpuSpentMs: discoveryCpuBudget.spent(), discovery: discoveryGateStatus(), paidPhases: paidPhaseSummary(), slowPaid: { verdict: slowPaidVerdict(3600_000, Date.now(), SERVING.slowPaidMs), recent: recentSlowPaidCalls() }, stockQuoteWarmer: quoteWarmerStatus(), containedTurns: containedTurnsSummary(), brokenListings: brokenListingsSummary(), routes: routeTimings({ top: Math.min(200, parseInt(req.query.top, 10) || 40), minSamples: Math.max(1, parseInt(req.query.min, 10) || 5) }) });
 });
 // One short CPU-profile window on demand (stall attribution without the
 // per-minute cost of continuous profiling). Answers the longest busy run:
@@ -7379,7 +7394,7 @@ function refreshIndexSnapshotInBackground() {
   indexSnapshotRefreshing = true;
   // setImmediate so the current request returns before we recompute; the
   // build itself runs in slices (indexSnapshotAsync), never one long turn.
-  setImmediate(async () => {
+  setImmediate(contained("index-snapshot-refresh", async () => {
     try {
       const version = indexCacheVersion();
       const value = await indexSnapshotAsync(indexCtx());
@@ -7389,7 +7404,7 @@ function refreshIndexSnapshotInBackground() {
     } finally {
       indexSnapshotRefreshing = false;
     }
-  });
+  }));
 }
 // What the framing band on /revenue, /proof and /leaderboard is measuring.
 // Read from the index totals and the ledger, never typed: a framing paragraph

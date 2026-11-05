@@ -51,10 +51,22 @@ LLC: credit the entity, never a personal name.
   one; the file is imported once). Every scheduled loop runs under `leased(name, ...)`, so two
   containers never run the same tick; a store registers its first load with `trackStoreReady` and
   the server awaits `stateStoresReady` before it listens. `/api/gateway-status` reports `stateDb`.
-  A statement carrying a large row (the index's one-row upsert) runs under `largeRowTimeoutMs`: the
-  default limit plus `STATE_DB_MS_PER_MB` (500) per megabyte past the first, at most
-  `STATE_DB_LARGE_ROW_MAX_MS` (120000); after a warm-start page times out, the rows that page
-  covered are read one at a time, then full pages resume.
+  A seller with more than `PART_TOOLS` tools (`src/index-parts.js`, 2000) is stored as a header row
+  under its origin naming content-addressed part rows (`x402-index-parts`, about 2000 tools each);
+  a save writes only the parts the table lacks and then the header, a reader accepts only the parts
+  the header names (else it re-reads the header or keeps its copy), and unnamed parts are swept after
+  `INDEX_PARTS_ORPHAN_GRACE_MS` (default 10 minutes). `INDEX_PART_TOOLS` moves the threshold. A build
+  from before the parts format reads a header row as a seller with no tools, so before rolling back
+  past it set `INDEX_PART_TOOLS` very high and wait one crawl cycle (each seller rewrites as one row on
+  its next changed save); otherwise fix forward. The index keeps at most `INDEX_SELLER_TOOL_CAP` tools per seller
+  (`src/seller-tool-cap.js`, default 5000; described tools first, then listing order), applied once in
+  `IndexCache.set` before the route index, the persist and the replica read the entry; a cut entry
+  carries `toolsTotal` and `toolsCapped`, shown beside `toolCount` on `/api/index` rows, the `?seller=`
+  detail (with `toolCap` and `toolCapLegend`) and the `index` block of `/__operator/heap.json`
+  (`cappedSellers`, `toolsDropped`). A statement carrying a large single row (the one-row fallback) runs
+  under `largeRowTimeoutMs`: the default limit plus `STATE_DB_MS_PER_MB` (500) per megabyte past the
+  first, at most `STATE_DB_LARGE_ROW_MAX_MS` (120000); after a warm-start page times out, the rows
+  that page covered are read one at a time, then full pages resume.
 - `src/status.js`, `src/status-store.js`: `/status`, measured from outside production.
 - `src/stats.js`, `src/sales-ledger.js`, `src/seo.js`, `src/pages.js`, `src/guides.js`,
   `src/privacy.js`, `src/terms.js`, `src/security-page.js`, `src/company.js`.
@@ -402,7 +414,19 @@ heartbeat page on it under one issue that closes when nothing is owed.
   inputs, import closure, and for decide its export row format and kit); an unreadable or capped
   diff, or a check that fails, redeploys.
 - **Drain:** in-flight composites are aborted on SIGTERM (`src/drain-abort.js`); drain starts
-  immediately (`scripts/test-drain-on-sigterm.js`).
+  immediately (`scripts/test-drain-on-sigterm.js`). An uncaught exception stays fatal, so every
+  scheduled turn that reads seller data (the route index drain and shadow rebuild, the crawl timers,
+  the surface memo and index snapshot rebuilds) runs under `contained(name, fn)`
+  (`src/contained-turn.js`): a throw is counted by name and never escapes, and a listing whose rows
+  cannot be read is dropped alone and counted by origin (`containedTurns`, `brokenListings` on
+  `/__operator/perf.json`; `scripts/test-crash-containment.js`, `scripts/test-contained-turns-sites.js`
+  keeps every timer callback wrapped or allowlisted). The `containedTurns` word on `/api/gateway-status`
+  reads `repeating` while one name has thrown in each of the last three or more consecutive minutes
+  (a per-name minute ring), or on each of its last three or more runs across three distinct minutes
+  with no clean run between (a 30- or 60-minute loop); the heartbeat and the status Worker page on it under one issue.
+  The `brokenListings` word reads `widespread` while the distinct origins whose listings broke in a rolling
+  15 minutes reach both 20 and 5% of the indexed origins (one seller's bad data never does; a code bug that
+  breaks every listing does), paged the same way; both issues close only on the second ok read in a row.
 - **Backups:** `src/backup.js` (encrypted, offsite); restore with `scripts/backup-restore.js`.
   The `backup` word reads `unencrypted` while `BACKUP_ENCRYPTION_KEY` is unset in production
   (`NODE_ENV` or the platform's environment name); the heartbeat and the status probe page on it.

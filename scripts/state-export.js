@@ -36,6 +36,7 @@ import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import pg from "pg";
 import { SQLITE_STORES, RECORD_DIRS, LOG_FILES, INDEX_CACHE, DB_ONLY } from "./lib/state-stores.mjs";
+import { PARTS_COLLECTION, isPartedHeader, headerHashes, partId, assembleEntry } from "../src/index-parts.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const BOOKKEEPING = new Set(["imports", "leases", ...DB_ONLY]);
@@ -138,11 +139,31 @@ export async function exportState(outDir, { url = process.env.STATE_DATABASE_URL
       const collections = (await client.query(`SELECT collection, count(*)::bigint AS n FROM ${schema}.records GROUP BY collection ORDER BY collection`)).rows;
       for (const { collection, n } of collections) {
         if (collection === INDEX_CACHE.collection) {
+          // A seller stored as a header and parts (src/index-parts.js) is
+          // written as the one line the file format holds: its parts assembled.
           const lines = (async function* () {
             yield JSON.stringify({ savedAt: Date.now(), format: "ndjson-v1", origins: Number(n) });
-            for await (const r of cursorRows(client, `SELECT id, body::text AS body FROM ${schema}.records WHERE collection = $1 ORDER BY id`, [collection])) yield `[${JSON.stringify(r.id)},${r.body}]`;
+            for await (const r of cursorRows(client, `SELECT id, body::text AS body FROM ${schema}.records WHERE collection = $1 ORDER BY id`, [collection])) {
+              let body = r.body;
+              if (/"parts"\s*:\s*\{/.test(body)) {
+                const h = JSON.parse(body);
+                if (isPartedHeader(h)) {
+                  const parts = await client.query(`SELECT body FROM ${schema}.records WHERE collection = $1 AND id = ANY($2::text[])`, [PARTS_COLLECTION, (headerHashes(h) || []).map((x) => partId(r.id, x))]);
+                  const entry = assembleEntry(r.id, h, new Map(parts.rows.map((p) => [p.body?.hash, p.body])));
+                  if (!entry) { report.unmapped.push(`record ${collection}/${r.id} (a part it names is missing)`); continue; }
+                  body = JSON.stringify(entry);
+                }
+              }
+              yield `[${JSON.stringify(r.id)},${body}]`;
+            }
           })();
           report.records[collection] = (await writeLines(join(out, INDEX_CACHE.file), lines)) - 1;
+          continue;
+        }
+        if (collection === PARTS_COLLECTION) {
+          // Folded into the crawl cache's lines above; no file of its own.
+          report.records[collection] = Number(n);
+          log(`${collection}: ${n} part row(s) folded into ${INDEX_CACHE.file}`);
           continue;
         }
         const spec = RECORD_DIRS.find((d) => d.collection === collection);

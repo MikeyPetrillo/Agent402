@@ -1317,7 +1317,7 @@ function* marketPageAllSteps(baseUrl, { snapshot, leaderboardSnap, economySnap, 
         <div class="mlr-host" title="${esc(hostOf(s.homepage))}">${esc(hostOf(s.homepage))}</div>
       </div>
       <span style="font-family:var(--font-mono);font-size:var(--fs-sm);">${chainCell(s)}</span>
-      <span class="mlr-tools">${Number(s.toolCount) || 0} tool${s.toolCount === 1 ? "" : "s"}${paidSuffix(s)}${txSuffix(s)}${endpointsNote(s)}</span>
+      <span class="mlr-tools">${s.toolsCapped === true && Number(s.toolsTotal) > Number(s.toolCount) ? `${(Number(s.toolCount) || 0).toLocaleString("en-US")} of ${Number(s.toolsTotal).toLocaleString("en-US")} tools` : `${Number(s.toolCount) || 0} tool${s.toolCount === 1 ? "" : "s"}`}${paidSuffix(s)}${txSuffix(s)}${endpointsNote(s)}</span>
       <span class="mlr-stat${good ? "" : " bad"}"><span class="mlr-dot"></span>${health}</span>${dispatchBadge(s, null)}
     </div>`);
     if (rowParts.length % PAGE_YIELD_ROWS === 0) yield;
@@ -1383,7 +1383,7 @@ function* marketPageAllSteps(baseUrl, { snapshot, leaderboardSnap, economySnap, 
         <a href="#sellers" style="color:var(--muted);text-decoration:none;">browse all sellers</a>
       </div>
     </div>
-    <p style="font-size:var(--fs-sm);color:var(--faint);margin:10px 0 0;">Describe the job, not the tool name: FIND searches every tool and shows live results. Resolving is free (<span style="color:var(--muted);">GET /api/find</span>); you pay only to execute. This is the neutral x402 index: every seller, not just ours.</p>
+    <p style="font-size:var(--fs-sm);color:var(--faint);margin:10px 0 0;">Describe the job, not the tool name: FIND searches every indexed tool and shows live results. Resolving is free (<span style="color:var(--muted);">GET /api/find</span>); you pay only to execute. This is the neutral x402 index: every seller, not just ours.</p>
     ${statsHtml}
   </div>`;
 

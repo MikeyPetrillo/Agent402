@@ -4,17 +4,22 @@
 // that times out is read again one row at a time under the large-row limit, so
 // the boot passes the row instead of stopping at it. The default limit is set
 // low here so a ~60 MB row outlasts it, as the largest seller's row outlasts
-// the production default.
+// the production default. A seller this large is normally stored as a header
+// and parts (src/index-parts.js, scripts/test-index-parts-pg.js); the part
+// size is raised past it here so the one-row path, the fallback that remains
+// for a single row that is still large, is the one under test.
 //   STATE_DATABASE_URL=postgres://... node scripts/test-index-large-row-pg.js
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTestPg } from "./lib/test-pg.js";
+import "./lib/uncapped-sellers.js"; // every seeded tool is kept: the large sellers here are the point
 
 requireTestPg({ label: "test-index-large-row-pg" });
 const STATEMENT_MS = 250;
 process.env.STATE_DB_STATEMENT_TIMEOUT_MS = String(STATEMENT_MS);
 process.env.X402_INDEX_CRAWL = "off";
+process.env.INDEX_PART_TOOLS = "1000000000";
 const BATCH = 10;
 process.env.INDEX_WARM_START_BATCH = String(BATCH);
 const DIR = mkdtempSync(join(tmpdir(), "index-large-row-pg-"));

@@ -33,7 +33,9 @@ import { promisify } from "node:util";
 import { createDocumentCache } from "./json-document.js";
 import { shared, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { createListingsStore, listingsStoreEnabled } from "./index-listings-pg.js";
-import { trackStoreReady, leased, stateDbEnabled, stateQuery, stateDbSchema, records, importOnce, pgJsonTextMayChange, largeRowTimeoutMs, isStatementTimeout } from "./state-db.js";
+import { trackStoreReady, leased, stateDbEnabled, stateQuery, stateDbSchema, records, importOnce, pgJsonTextMayChange, largeRowTimeoutMs, isStatementTimeout, withStateTx } from "./state-db.js";
+import { PARTS_COLLECTION, PARTS_ORPHAN_GRACE_MS, isParted, isPartedHeader, headerHashes, partId, splitEntry, assembleEntry } from "./index-parts.js";
+import { SELLER_TOOL_CAP, capSellerEntry, sellerToolsTotal, toolCapLegend, freshListBase } from "./seller-tool-cap.js";
 import { retryingLoad } from "./store-retry.js";
 
 // The last crawl's probe examples per origin (src/probe-example.js), memory
@@ -296,6 +298,7 @@ import { routeExcludedCategory } from "./route-category.js";
 import { stripHiddenCharacters } from "./hidden-chars.js";
 import { looksLikeListingInjection, matchesInjectionPhrase, listingInjectionFinding } from "./listing-screen.js";
 import { registerMemoryStore, approxBytes } from "./memory-stores.js";
+import { contained } from "./contained-turn.js";
 
 // A seller manifest is third-party JSON: `capabilities.tools` may be a number
 // or anything else (a string reached a marketplace attribute unescaped, review
@@ -591,6 +594,13 @@ export function _setRouterReplicaObserver(fn) { replicaObserver = typeof fn === 
 // else that is not text is dropped. A clean entry is stored as it came.
 const SELLER_TEXT_KEYS = ["name", "description", "category", "slug", "route", "method", "mimeType", "network", "payTo", "asset", "title", "summary"];
 const SELLER_LIST_KEYS = ["tags", "aliases", "networks"];
+// Price-like fields the price readers coerce (priceRank, parsePrice, the
+// quote readers): text or a finite number, anything else dropped. A JSON
+// object can carry "toString" and "valueOf" keys that are not functions, and
+// coercing one throws.
+const SELLER_PRICE_KEYS = ["price", "maxAmountRequired", "amount", "priceUsd", "amountUsd"];
+/** A seller value as a price reader may take it: text or a finite number, else undefined. */
+export const sellerNumText = (v) => (typeof v === "string" || (typeof v === "number" && Number.isFinite(v)) ? v : undefined);
 const MANIFEST_TEXT_KEYS = ["name", "description", "homepage", "title", "network", "payTo"];
 const asSellerText = (v) => (typeof v === "number" || typeof v === "boolean" ? String(v) : undefined);
 function cleanTextKeys(o, keys) {
@@ -607,6 +617,12 @@ function cleanTextKeys(o, keys) {
 function cleanSellerTool(t) {
   if (!t || typeof t !== "object" || Array.isArray(t)) return null;
   let out = cleanTextKeys(t, SELLER_TEXT_KEYS);
+  for (const k of SELLER_PRICE_KEYS) {
+    const v = (out || t)[k];
+    if (v === undefined || v === null || sellerNumText(v) !== undefined) continue;
+    out ||= { ...t };
+    delete out[k];
+  }
   for (const k of SELLER_LIST_KEYS) {
     const v = (out || t)[k];
     if (v === undefined || v === null) continue;
@@ -645,7 +661,10 @@ export function _cleanSellerEntryForTests(v) { return cleanSellerEntry(v); }
 class IndexCache extends Map {
   set(origin, v) {
     if (isRemovedOrigin(origin)) { this.delete(origin); return this; }
-    v = cleanSellerEntry(v);
+    // The one funnel: every stored entry is capped at SELLER_TOOL_CAP tools
+    // (src/seller-tool-cap.js) and then cleaned, so the route index, the
+    // persist, the replica and every reader hold the same list.
+    v = cleanSellerEntry(capSellerEntry(v));
     cacheVersion++;
     routeIndexNoteSet(origin, super.get(origin), v);
     super.set(origin, v);
@@ -1787,6 +1806,10 @@ function sellerSummary(origin, v) {
   return {
     displayName: v.manifest?.name || origin.replace(/^https?:\/\//, ""),
     toolCount: v.tools?.length || 0,
+    // The count the listing held and whether the index cut it (src/seller-tool-cap.js);
+    // on all three seller projections, so no surface reads toolCount as the listing.
+    toolsTotal: sellerToolsTotal(v),
+    toolsCapped: v.toolsCapped === true,
     networks: [...new Set([...(v.tools || []).flatMap((t) => t.networks || []), ...(bazaarToolsByOrigin.get(origin) || []).flatMap((t) => t.networks || [])])],
     routable: isRoutable(v),
     health: healthScore(v),
@@ -2096,36 +2119,41 @@ async function discoverOneSource(source, selfOrigin) {
     const synthesize = isBazaarDiscoveryUrl(source.url) || source.synthesizeTools === true;
     const toolsByOrigin = synthesize ? new Map() : null;
     const qualityByOrigin = toolsByOrigin ? new Map() : null;
-    let droppedTestnet = 0, droppedJunk = 0;
+    let droppedTestnet = 0, droppedJunk = 0, droppedUnreadable = 0;
     // A registry row under a known path seller's prefix belongs to that seller,
     // not to its shared host (which would list every app on the host as one).
     // Read once per pass, when the first listings arrive.
     let pathSellers = null;
     // Folds one batch of listings into this pass's accumulators. Nothing here
     // touches published state: the swap below runs only once every page is in.
+    const foldItem = (item) => {
+      const url = item.resource || item.resourceUrl || item.url || item.endpoint || item.homepage;
+      const hostOrigin = extractOrigin(url);
+      if (!hostOrigin || hostOrigin === selfOrigin) return;
+      const origin = pathSellerOwning(url, hostOrigin, pathSellers) || hostOrigin;
+      // strict sources (open registries): drop testnet-only listings and
+      // placeholder origins before they reach the index.
+      if (source.strict) {
+        if (!itemHasMainnetAccept(item)) { droppedTestnet++; return; }
+        if (isJunkOrigin(origin)) { droppedJunk++; return; }
+      }
+      found.add(origin);
+      if (toolsByOrigin) {
+        const t = bazaarItemToTool(item, origin);
+        if (t) {
+          const arr = toolsByOrigin.get(origin) || [];
+          arr.push(t);
+          toolsByOrigin.set(origin, arr);
+        }
+        if (qualityByOrigin && item.quality) foldBazaarQuality(qualityByOrigin, origin, item.quality, t?.payToByNetwork?.["eip155:8453"] || null, { curated: item.curated === true && isBazaarDiscoveryUrl(source.url) });
+      }
+    };
     const fold = (list) => {
       if (!pathSellers) pathSellers = pathSellersByHost();
       for (const item of list) {
-        const url = item.resource || item.resourceUrl || item.url || item.endpoint || item.homepage;
-        const hostOrigin = extractOrigin(url);
-        if (!hostOrigin || hostOrigin === selfOrigin) continue;
-        const origin = pathSellerOwning(url, hostOrigin, pathSellers) || hostOrigin;
-        // strict sources (open registries): drop testnet-only listings and
-        // placeholder origins before they reach the index.
-        if (source.strict) {
-          if (!itemHasMainnetAccept(item)) { droppedTestnet++; continue; }
-          if (isJunkOrigin(origin)) { droppedJunk++; continue; }
-        }
-        found.add(origin);
-        if (toolsByOrigin) {
-          const t = bazaarItemToTool(item, origin);
-          if (t) {
-            const arr = toolsByOrigin.get(origin) || [];
-            arr.push(t);
-            toolsByOrigin.set(origin, arr);
-          }
-          if (qualityByOrigin && item.quality) foldBazaarQuality(qualityByOrigin, origin, item.quality, t?.payToByNetwork?.["eip155:8453"] || null, { curated: item.curated === true && isBazaarDiscoveryUrl(source.url) });
-        }
+        // One registry item that cannot be read (a field whose JSON shape
+        // throws when coerced) is dropped alone; the rest of the source is indexed.
+        try { foldItem(item); } catch { droppedUnreadable++; }
       }
     };
     // The Bazaar paginates and has 69k+ listings — a single fetch sees the
@@ -2176,7 +2204,8 @@ async function discoverOneSource(source, selfOrigin) {
         const existing = cache.get(o);
         if (!existing || existing.error || existing.source === "bazaar-fallback") {
           cache.set(o, {
-            ...(existing || {}),
+            // A fresh tool list: the total is read from it, not the old entry.
+            ...freshListBase(existing),
             manifest: existing?.manifest || synthManifestFromBazaar(o, arr),
             tools: arr,
             fetchedAt: Date.now(),
@@ -2189,6 +2218,7 @@ async function discoverOneSource(source, selfOrigin) {
     }
     status.origins = found.size;
     if (source.strict) { status.droppedTestnet = droppedTestnet; status.droppedJunk = droppedJunk; }
+    if (droppedUnreadable) status.droppedUnreadable = droppedUnreadable;
     for (const o of found) {
       if (discoveredSeeds.size >= MAX_DISCOVERED_SELLERS) break;
       discoveredSeeds.add(o);
@@ -2448,14 +2478,14 @@ export function acceptDecimals(a) {
   const stated = a?.extra?.decimals ?? a?.decimals;
   if (Number.isInteger(stated) && stated >= 0 && stated <= 36) return stated;
   if (typeof stated === "string" && /^\d{1,2}$/.test(stated.trim())) return Number(stated.trim());
-  const asset = a?.asset == null ? "" : String(a.asset).trim();
-  const net = String(a?.network || "");
+  const asset = sellerNumText(a?.asset) === undefined ? "" : String(a.asset).trim();
+  const net = typeof a?.network === "string" ? a.network : "";
   if (!asset || /^usdc$/i.test(asset)) return 6;
   if (net.startsWith("eip155:")) { const t = domainTruthFor(net, asset); if (t) return t.symbol === "USDC" ? 6 : null; }
   if (net.startsWith("solana") && asset === SVM_USDC_MINT) return 6;
   if (net.startsWith("algorand") && asset === AVM_USDC_ASA) return 6;
   if (net.startsWith("stellar") && asset === STELLAR_USDC_SAC) return 7;
-  if (/^0x[0-9a-f]{40}$/i.test(asset) && /^(usdc|usd coin)$/i.test(String(a?.extra?.name || "").trim())) return 6;
+  if (/^0x[0-9a-f]{40}$/i.test(asset) && /^(usdc|usd coin)$/i.test((typeof a?.extra?.name === "string" ? a.extra.name : "").trim())) return 6;
   return null;
 }
 
@@ -2468,8 +2498,8 @@ export function paymentFieldsFromAccepts(rawAccepts) {
   );
   // Prefer the first Base USDC accept; fall back to any USDC; fall back to first.
   const preferred =
-    accepts.find((a) => a?.network === "eip155:8453" && /USDC|USD Coin/i.test(a?.extra?.name || "")) ||
-    accepts.find((a) => /USDC|USD Coin/i.test(a?.extra?.name || "")) ||
+    accepts.find((a) => a?.network === "eip155:8453" && typeof a?.extra?.name === "string" && /USDC|USD Coin/i.test(a.extra.name)) ||
+    accepts.find((a) => typeof a?.extra?.name === "string" && /USDC|USD Coin/i.test(a.extra.name)) ||
     accepts[0] ||
     null;
   let price = null;
@@ -2477,7 +2507,8 @@ export function paymentFieldsFromAccepts(rawAccepts) {
   // the one most flat-`resources` manifests still publish. Reading only the
   // first left those rows priceless AND cost the live-402 probe that would
   // have learned the figure the origin already declared.
-  const amount = preferred?.amount ?? preferred?.maxAmountRequired;
+  // Text or a number only: a JSON object here would throw when coerced.
+  const amount = sellerNumText(preferred?.amount) ?? sellerNumText(preferred?.maxAmountRequired);
   // Atomic units of the accept's own asset: its stated decimals, or a USDC we
   // know. An asset we cannot scale is left unpriced rather than read as USDC.
   const decimals = preferred ? acceptDecimals(preferred) : null;
@@ -2566,7 +2597,7 @@ export function bazaarItemToTool(item, originUrl) {
     // A payer figure rides only when the item carries one, marked as measured
     // (qualityFromStored reads a stored zero without the marker as unknown).
     quality: item.quality && typeof item.quality === "object"
-      ? { calls30d: Number(item.quality.l30DaysTotalCalls) || 0, ...(item.quality.l30DaysUniquePayers !== undefined && item.quality.l30DaysUniquePayers !== null && Number.isFinite(Number(item.quality.l30DaysUniquePayers)) ? { payers30d: Number(item.quality.l30DaysUniquePayers), payersMeasured: true } : {}), lastCalledAt: typeof item.quality.lastCalledAt === "string" ? item.quality.lastCalledAt : null }
+      ? { calls30d: Number(sellerNumText(item.quality.l30DaysTotalCalls)) || 0, ...(sellerNumText(item.quality.l30DaysUniquePayers) !== undefined && Number.isFinite(Number(item.quality.l30DaysUniquePayers)) ? { payers30d: Number(item.quality.l30DaysUniquePayers), payersMeasured: true } : {}), lastCalledAt: typeof item.quality.lastCalledAt === "string" ? item.quality.lastCalledAt : null }
       : null,
   };
 }
@@ -3557,7 +3588,7 @@ export function mergeManifestIntoTools(manifestTools = [], existing = []) {
   const enrich = (hit, m) => {
     if (!hit.name || hit.name === hit.route || String(hit.name).startsWith("/")) hit.name = m.name || hit.name;
     if (!hit.description) hit.description = m.description || "";
-    if (!hit.price && m.price) hit.price = m.price;
+    if (!hit.price && sellerNumText(m.price) !== undefined && m.price) hit.price = m.price;
     if ((!hit.slug || hit.slug === hit.route) && m.slug) hit.slug = m.slug;
     // Settlement terms too, and this is the half that used to be missing. An
     // OpenAPI document carries no payment metadata, so a row sourced from one
@@ -5960,7 +5991,9 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
       // synthesized one is rebuilt so a newly appeared openapi title wins.
       const keepManifest = prev?.manifest && !prev.manifest.synthesized ? prev.manifest : null;
       cache.set(originUrl, {
-        ...(prev || {}),
+        // A fresh tool list: the total is read from it, not the old entry
+        // (a seller that shrank from 77,000 tools to 6,000 reads 6,000).
+        ...freshListBase(prev),
         manifest:
           keepManifest ||
           (openapi
@@ -7226,7 +7259,7 @@ async function parseJsonSliced(text, tick) {
 }
 
 // The keys persistedEntryOf writes only when set.
-const ROW_OPTIONAL_KEYS = ["fallbackErrors", "redirectedTo", "updatedAt"];
+const ROW_OPTIONAL_KEYS = ["fallbackErrors", "redirectedTo", "updatedAt", "toolsTotal", "toolsCapped"];
 function persistedEntryOf(v, slimTools = null) {
   {
     // A failure with nothing to show is not re-seeded; the crawl re-decides.
@@ -7251,8 +7284,22 @@ function persistedEntryOf(v, slimTools = null) {
       // Stamped by a change made outside a crawl (a re-price): with fetchedAt
       // it is the entry's revision, what the pull and the upsert compare.
       ...(Number(v.updatedAt) > 0 ? { updatedAt: Number(v.updatedAt) } : {}),
+      // A capped entry's listing count (src/seller-tool-cap.js), so a stored
+      // copy is not cut again and keeps the count its listing held.
+      ...(v.toolsCapped === true && Number(v.toolsTotal) > 0 ? { toolsTotal: Number(v.toolsTotal), toolsCapped: true } : {}),
     });
   }
+}
+/** After a stored copy is folded into the cache: when the row held more tools
+ *  than the cap keeps, the copy the cache holds is a new revision (the cap is a
+ *  change made outside a crawl), so this container's next save replaces the
+ *  row with it and the other container pulls it. True then; the caller holds
+ *  no row hash for the origin, so the save writes it. */
+function noteCapOnFold(origin, body) {
+  const held = cache.get(origin);
+  if (!held || held.toolsCapped !== true || !Array.isArray(body?.tools) || body.tools.length <= (Array.isArray(held.tools) ? held.tools.length : 0)) return false;
+  cache.set(origin, { ...held, updatedAt: nextRev(held) });
+  return true;
 }
 
 /** One origin's row, written now: a re-read a seller asked for reaches the
@@ -7263,14 +7310,23 @@ export async function persistOriginToStateDb(origin) {
   const entry = persistedEntryOf(cache.get(origin));
   if (!entry) return false;
   try {
-    const line = JSON.stringify([origin, entry]);
-    const h = lineHash(line);
-    await stateQuery(
-      `INSERT INTO ${recordsTable()} AS r (collection, id, body) VALUES ($1, $2, $3::jsonb)
-       ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()
-       WHERE ${NEWER_OR_SAME_SQL("r.body", "EXCLUDED.body")}`,
-      [INDEX_RECORDS, origin, bodyWithHash(JSON.stringify(entry), h)],
-    );
+    let h;
+    if (isParted(entry)) {
+      // A large entry: hashed in pieces across turns (the same line hash), and
+      // stored as a header and its parts (src/index-parts.js).
+      const tick = sliceClock();
+      h = await hashPieces(await linePieces(origin, entry, tick), tick);
+      await writePartedOrigin(origin, entry, h, tick);
+    } else {
+      const line = JSON.stringify([origin, entry]);
+      h = lineHash(line);
+      await stateQuery(
+        `INSERT INTO ${recordsTable()} AS r (collection, id, body) VALUES ($1, $2, $3::jsonb)
+         ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()
+         WHERE ${NEWER_OR_SAME_SQL("r.body", "EXCLUDED.body")}`,
+        [INDEX_RECORDS, origin, bodyWithHash(JSON.stringify(entry), h)],
+      );
+    }
     pgOriginHashes.set(origin, h);
     pgRowHashes.set(origin, h);
     return true;
@@ -7360,6 +7416,10 @@ export async function persistIndexCacheAsync(file = INDEX_CACHE_FILE) {
 // and deletes the rows of origins the cache no longer holds. The file is
 // imported once (the NDJSON twin, or the legacy JSON when only that exists);
 // after that the rows are what a boot reads.
+// A seller with more than PART_TOOLS tools (src/index-parts.js) is a header
+// row under its origin plus content-addressed part rows in PARTS_COLLECTION;
+// a reader assembles them (writePartedOrigin, assembleStoredEntry below), and
+// the maps and rules here read the header as they read a whole row.
 const INDEX_RECORDS = "x402-index";
 const INDEX_IMPORT_NAME = INDEX_CACHE_NDJSON_FILE.split("/").pop();
 // Rows per statement and bytes per statement: an origin's entry can run to
@@ -7371,14 +7431,16 @@ const PG_BYTES_PER_BATCH = 1_048_576;
 // synchronous pass: measured 0.85-1.2 s for one 82 MB entry, against 80 ms for
 // the same text as a scalar, and the stored row is the same either way.
 const PG_SINGLE_ROW_BYTES = 1_048_576;
-// origin -> hash of the line last written (null: held, hash unknown). The hash
-// lets an unchanged origin skip its write; the key set is what a persist
-// deletes against.
+// origin -> hash of the line `[origin, entry]` last written or read for the
+// copy held (null: held, hash unknown): the whole entry's hash whether it was
+// stored as one row or as a header and parts. The hash lets an unchanged
+// origin skip its write; the key set is what a persist deletes against.
 const pgOriginHashes = new Map();
 // origin -> the ROW_HASH_KEY of the copy held, as it was last stored or
-// folded (null: a row without one). Not pgOriginHashes: a copy read back from
-// jsonb hashes differently (jsonb reorders keys), so a container that read
-// a row compares the hash its writer stored, never one it recomputes.
+// folded (null: a row without one); a seller in parts carries it on its
+// header row. Not pgOriginHashes: a copy read back from jsonb hashes
+// differently (jsonb reorders keys), so a container that read a row compares
+// the hash its writer stored, never one it recomputes.
 const pgRowHashes = new Map();
 const lineHash = (line) => createHash("sha1").update(line).digest("base64");
 const recordsTable = () => `${stateDbSchema()}.records`;
@@ -7490,8 +7552,12 @@ export async function pullIndexChanges({ pageSize = 1000, maxPages = 20 } = {}) 
         if (text === undefined) text = (await indexRowTexts([row])).get(id);
         // As the database holds it now: a row changed since the page was read
         // is at least as new, and one deleted since is not folded back.
-        const body = text == null ? null : await parseJsonSliced(text, tick);
+        let body = text == null ? null : await parseJsonSliced(text, tick);
         if (!body || typeof body !== "object" || isRemovedOrigin(id)) continue;
+        // A header names its parts: the entry is the two assembled, or the
+        // copy held stays when no consistent set of parts could be read.
+        if (isPartedHeader(body)) body = await assembleStoredEntry(id, body, tick);
+        if (!body || typeof body !== "object") continue;
         const bodyHash = body[ROW_HASH_KEY];
         delete body[ROW_HASH_KEY];
         if (!(await newerThanHeld(id, entryRev(body), bodyHash))) continue;
@@ -7502,8 +7568,9 @@ export async function pullIndexChanges({ pageSize = 1000, maxPages = 20 } = {}) 
         for (const k of ROW_OPTIONAL_KEYS) if (!(k in body)) delete next[k];
         cache.set(id, next);
         // Held as stored (the copy the cache keeps, cleaned), so this
-        // container's next save does not write it back.
-        pgOriginHashes.set(id, await persistedHashSliced(id, cache.get(id) ?? next, tick));
+        // container's next save does not write it back; a row the cap cut
+        // on the way in is held as changed, so the save writes the capped copy.
+        pgOriginHashes.set(id, noteCapOnFold(id, body) ? null : await persistedHashSliced(id, cache.get(id) ?? next, tick));
         pgRowHashes.set(id, typeof bodyHash === "string" ? bodyHash : null);
         if (!held) discoveredSeeds.add(id);
         folded++;
@@ -7698,6 +7765,135 @@ async function rowBodyBytes(line, from, hash, tick = async () => {}) {
   return off === total ? out : null;
 }
 
+// ---- a large entry as a header and parts (src/index-parts.js) --------------
+// The parts are written first, each its own statement of a few MB (none needs
+// the large-row limit), then the header under the newer-wins rule; a part the
+// table holds already (the same tools, so the same hash) is not sent again.
+// A reader takes the header and then the parts it names, and never mixes two
+// saves: a part is immutable, and one whose hash is not the named one, or
+// missing, sends the reader back to the header.
+const partStats = { written: 0, skipped: 0, restored: 0, assembled: 0, retries: 0, unreadable: 0, swept: 0, sweeps: 0 };
+/** Test hook: counts of part rows written, skipped and restored, entries assembled, header re-reads, failed assemblies and sweeps. */
+export function __testPartStats() { return { ...partStats }; }
+// Test hook: a parted save of this origin throws before it writes anything.
+let partedWriteFaultForTest = null;
+export function __testSetPartedWriteFault(origin) { partedWriteFaultForTest = origin || null; }
+async function writePartedOrigin(origin, entry, hash, tick) {
+  if (partedWriteFaultForTest && partedWriteFaultForTest === origin) throw new Error(`planted parted write fault for ${origin}`);
+  const { header, parts } = await splitEntry(origin, entry, { tick });
+  const have = await records.existing(PARTS_COLLECTION, parts.map((p) => p.id));
+  for (const p of parts) {
+    if (have.has(p.id)) { partStats.skipped++; continue; }
+    // Each part is a statement of a few MB: the size-scaled limit, as the
+    // one-row upsert of a large entry has.
+    await stateQuery(
+      `INSERT INTO ${recordsTable()} (collection, id, body) VALUES ($1, $2, $3::jsonb) ON CONFLICT (collection, id) DO NOTHING`,
+      [PARTS_COLLECTION, p.id, p.text], { idempotent: true, timeoutMs: largeRowTimeoutMs(p.text.length) },
+    );
+    partStats.written++;
+    await new Promise((r) => setImmediate(r));
+  }
+  // The header lands in one transaction with a touch of every part it names:
+  // a part the table held already may be an orphan (named by no header since
+  // the seller changed) past the grace, and a sweep landing between the
+  // existence read above and the header write would take it. The touch
+  // stamps each named part now, so no sweep reads it as old; a sweep already
+  // holding one of the rows waits for this commit and re-reads its condition,
+  // and the header then names it. A part a sweep took first is written again
+  // here (restored), so the header never names a row that is not there. The
+  // transaction's statement limit is scaled to its largest statement (a
+  // restored part or the header).
+  const headerBody = bodyWithHash(JSON.stringify(header), hash);
+  const largest = parts.reduce((m, p) => Math.max(m, p.text.length), headerBody.length);
+  await withStateTx(async (client) => {
+    const ids = [...new Set(parts.map((p) => p.id))];
+    const touched = new Set((await client.query(
+      `UPDATE ${recordsTable()} SET updated_at = now() WHERE collection = $1 AND id = ANY($2::text[]) RETURNING id`,
+      [PARTS_COLLECTION, ids],
+    )).rows.map((r) => r.id));
+    for (const p of parts) {
+      if (touched.has(p.id)) continue;
+      touched.add(p.id);
+      await client.query(`INSERT INTO ${recordsTable()} (collection, id, body) VALUES ($1, $2, $3::jsonb) ON CONFLICT (collection, id) DO NOTHING`, [PARTS_COLLECTION, p.id, p.text]);
+      partStats.restored++;
+    }
+    await client.query(
+      `INSERT INTO ${recordsTable()} AS r (collection, id, body) VALUES ($1, $2, $3::jsonb)
+       ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()
+       WHERE ${NEWER_OR_SAME_SQL("r.body", "EXCLUDED.body")}`,
+      [INDEX_RECORDS, origin, headerBody],
+    );
+  }, { timeoutMs: largeRowTimeoutMs(largest) });
+  return parts.length;
+}
+/** Delete the part rows no header names (the seller changed, shrank to one
+ *  row, or left the index; or a header write was refused as older), once
+ *  older than PARTS_ORPHAN_GRACE_MS, which outlasts any save: a part a
+ *  sibling container wrote or touched ahead of its header is never taken
+ *  from under it. */
+async function sweepOrphanParts() {
+  const r = await stateQuery(
+    `DELETE FROM ${recordsTable()} p WHERE p.collection = $1 AND p.updated_at < now() - ($2::int * interval '1 millisecond')
+       AND NOT EXISTS (SELECT 1 FROM ${recordsTable()} h WHERE h.collection = $3 AND h.id = left(p.id, length(p.id) - 41)
+         AND h.body->'parts'->'hashes' ? right(p.id, 40))`,
+    [PARTS_COLLECTION, PARTS_ORPHAN_GRACE_MS, INDEX_RECORDS], { idempotent: true },
+  );
+  partStats.sweeps++;
+  partStats.swept += r.rowCount || 0;
+  return r.rowCount || 0;
+}
+/** Test hook: the sweep, run now. */
+export function __testSweepOrphanParts() { return sweepOrphanParts(); }
+/** The parts a header names, read as text a few per statement and parsed
+ *  across turns: hash -> part body. A part the table does not hold is absent. */
+const PARTS_PER_QUERY = 4;
+async function readPartBodies(origin, hashes, tick) {
+  const out = new Map();
+  for (let i = 0; i < hashes.length; i += PARTS_PER_QUERY) {
+    const ids = hashes.slice(i, i + PARTS_PER_QUERY).map((h) => partId(origin, h));
+    const r = await stateQuery(`SELECT body::text AS t FROM ${recordsTable()} WHERE collection = $1 AND id = ANY($2::text[])`, [PARTS_COLLECTION, ids]);
+    for (const row of r.rows) {
+      const body = await parseJsonSliced(row.t, tick);
+      if (body && typeof body === "object" && typeof body.hash === "string") out.set(body.hash, body);
+      await new Promise((res) => setImmediate(res));
+    }
+  }
+  return out;
+}
+/** The entry a stored header stands for, assembled from its parts. When the
+ *  parts do not match the header (a save landed between the two reads) the
+ *  header is read again, up to PARTS_READ_ATTEMPTS times, and a header that
+ *  became one row again is that row. Null when no consistent copy was read:
+ *  the caller keeps what it holds. The result carries the header's row hash. */
+const PARTS_READ_ATTEMPTS = 3;
+const PARTS_RETRY_WAIT_MS = Number(process.env.INDEX_PARTS_RETRY_WAIT_MS) || 250;
+async function assembleStoredEntry(origin, header, tick, { attempts = PARTS_READ_ATTEMPTS } = {}) {
+  let h = header;
+  for (let a = 0; a < attempts; a++) {
+    if (!headerHashes(h)) break;
+    const entry = assembleEntry(origin, h, await readPartBodies(origin, headerHashes(h), tick));
+    if (entry) { partStats.assembled++; return entry; }
+    partStats.retries++;
+    if (a + 1 >= attempts) break;
+    await new Promise((res) => setTimeout(res, PARTS_RETRY_WAIT_MS));
+    const r = await stateQuery(`SELECT body::text AS t FROM ${recordsTable()} WHERE collection = $1 AND id = $2`, [INDEX_RECORDS, origin]);
+    if (!r.rows.length) break;
+    h = await parseJsonSliced(r.rows[0].t, tick);
+    if (!h || typeof h !== "object") break;
+    if (!isPartedHeader(h)) return h; // one row again
+  }
+  partStats.unreadable++;
+  console.warn(`[x402-index] ${origin}: no consistent set of parts could be read for its stored entry`);
+  return null;
+}
+/** Test hook: the entry stored for an origin, one row or assembled from its parts, without its row hash. */
+export async function _storedEntryForTest(origin) {
+  let body = await records.get(INDEX_RECORDS, origin);
+  if (isPartedHeader(body)) body = await assembleStoredEntry(origin, body, async () => {});
+  if (body && typeof body === "object") delete body[ROW_HASH_KEY];
+  return body;
+}
+
 /** Upsert changed origins and delete the rows of origins no longer held. */
 async function persistIndexCacheToStateDb(entries, lines, hashes = []) {
   const t0 = performance.now();
@@ -7715,9 +7911,30 @@ async function persistIndexCacheToStateDb(entries, lines, hashes = []) {
       if (pgOriginHashes.get(origin) !== h) changed.set(origin, h);
       await tick();
     }
+    // A changed entry too large for one row goes as a header and parts (only
+    // the parts the table lacks are sent); the batches below skip it.
+    // One seller's parted save that fails leaves its row as it was and its
+    // hash unrecorded, so the next save retries it; every other seller's save
+    // goes on.
+    let parted = 0, partRows = 0, partedFailed = 0;
+    for (const [origin, h] of changed) {
+      const entry = entries[indexOf.get(origin)][1];
+      if (!isParted(entry)) continue;
+      try {
+        partRows += await writePartedOrigin(origin, entry, h, tick);
+      } catch (e) {
+        partedFailed++;
+        console.warn(`[x402-index] state database: parted save of ${origin} failed, retried on the next save: ${String(e?.message || e).slice(0, 120)}`);
+        await new Promise((r) => setImmediate(r));
+        continue;
+      }
+      pgOriginHashes.set(origin, h); pgRowHashes.set(origin, h);
+      written++; parted++;
+      await new Promise((r) => setImmediate(r));
+    }
     // The body is the entry alone: the line is `[origin, entry]`, and the
     // entry starts after the origin string and its comma.
-    const bodyOf = (i) => (changed.has(entries[i][0]) ? bodyWithHash(lines[i].slice(JSON.stringify(entries[i][0]).length + 2, -1), changed.get(entries[i][0])) : null);
+    const bodyOf = (i) => (changed.has(entries[i][0]) && !isParted(entries[i][1]) ? bodyWithHash(lines[i].slice(JSON.stringify(entries[i][0]).length + 2, -1), changed.get(entries[i][0])) : null);
     for (const [ids, bodies] of recordBatches(entries, bodyOf)) {
       // NEWER WINS (2026-10-15). With two containers, one may hold an older
       // copy of an origin than the row (the other crawled it since), and an
@@ -7756,7 +7973,12 @@ async function persistIndexCacheToStateDb(entries, lines, hashes = []) {
       for (const id of ids) { pgOriginHashes.delete(id); pgRowHashes.delete(id); }
       deleted += ids.length;
     }
-    console.log(`[x402-index] state database: ${written} origin row(s) written, ${deleted} deleted, ${entries.length - written} unchanged, in ${Math.round(performance.now() - t0)}ms`);
+    // Parts no header names any more (a seller that changed, shrank to one
+    // row or left) go once they are older than the grace.
+    const swept = await sweepOrphanParts();
+    console.log(`[x402-index] state database: ${written} origin row(s) written, ${deleted} deleted, ${entries.length - written} unchanged, in ${Math.round(performance.now() - t0)}ms` +
+      (parted || swept ? ` (${parted} in parts, ${partRows} part row(s) named, ${swept} orphan part(s) swept)` : "") +
+      (partedFailed ? `, ${partedFailed} parted save(s) failed and left for the next save` : ""));
     return true;
   } catch (e) {
     console.warn(`[x402-index] state database persist failed after ${written} row(s): ${String(e?.message || e).slice(0, 120)}`);
@@ -7869,14 +8091,24 @@ async function warmStartIndexOnce() {
       if (single) singleLeft = Math.max(0, singleLeft - page.length);
       if (!page.length) break;
       const turn0 = performance.now();
-      for (const { id, body } of page) {
+      for (const row of page) {
+        const { id } = row;
+        let body = row.body;
+        // A header row is its entry assembled from the parts it names. One
+        // whose parts could not be read consistently is left in the table
+        // (its row is no key here, so no save deletes it) and seeded, so the
+        // crawl reads the seller again and the next save rewrites it.
+        if (isPartedHeader(body)) {
+          body = await assembleStoredEntry(id, body, tick);
+          if (!body) { if (typeof id === "string" && id && !cache.has(id) && !isRemovedOrigin(id)) discoveredSeeds.add(id); continue; }
+        }
         const rowHash = body && typeof body === "object" ? body[ROW_HASH_KEY] : undefined;
         if (rowHash !== undefined) delete body[ROW_HASH_KEY];
         // A row read at boot is held as stored: the first save writes only
         // what this container changed, never every row over a peer's newer one.
         // The hash of a large catalogue is taken in pieces across turns (the
         // largest seller's took 0.7 s in one call at boot); the same hash.
-        if (foldWarmEntry(id, body)) { n++; pgOriginHashes.set(id, await persistedHashSliced(id, cache.get(id), tick)); pgRowHashes.set(id, typeof rowHash === "string" ? rowHash : null); }
+        if (foldWarmEntry(id, body)) { n++; pgOriginHashes.set(id, noteCapOnFold(id, body) ? null : await persistedHashSliced(id, cache.get(id), tick)); pgRowHashes.set(id, typeof rowHash === "string" ? rowHash : null); }
         else pgOriginHashes.set(id, null);
       }
       maxTurnMs = Math.max(maxTurnMs, performance.now() - turn0);
@@ -7894,7 +8126,8 @@ async function warmStartIndexOnce() {
     warmShared = null;
   }
   warmStartLastCount = n;
-  console.log(`[x402-index] warm-started ${n} sellers from the state database in ${Math.round(performance.now() - t0)}ms (${pages} page(s), longest turn ${Math.round(maxTurnMs)}ms)`);
+  console.log(`[x402-index] warm-started ${n} sellers from the state database in ${Math.round(performance.now() - t0)}ms (${pages} page(s), longest turn ${Math.round(maxTurnMs)}ms` +
+    (partStats.assembled || partStats.unreadable ? `, ${partStats.assembled} assembled from parts, ${partStats.unreadable} unreadable` : "") + ")");
   return n;
 }
 /**
@@ -8036,13 +8269,13 @@ export function startCrawler(opts = {}) {
   const scheduleRouteIndexWarm = () => {
     // The caller's own warmers (the tool directory) run once the cache is in.
     try { opts.onWarmed?.(); } catch { /* a warmer never breaks the crawler */ }
-    const t = setTimeout(() => {
+    const t = setTimeout(contained("route-index-warm", () => {
       // In slices: the warm start already queued every entry for the
       // background drain, and indexing a prod-sized backlog in one turn held
       // the loop for seconds. This only makes sure the drain is running.
       try { routeIndexSync({ drain: false }); console.log(`[x402-index] route index: ${routeIdx.indexedTools} tools indexed, ${routeIdx.pending.size + (routeIdx.partial ? 1 : 0)} entries still indexing in the background`); }
       catch (e) { console.warn(`[x402-index] route index warm failed (the first query builds it instead): ${String(e?.message || e).slice(0, 120)}`); }
-    }, ROUTE_INDEX_WARM_DELAY_MS);
+    }), ROUTE_INDEX_WARM_DELAY_MS);
     t.unref?.();
   };
   if (opts.syncWarmStart) {
@@ -8070,12 +8303,14 @@ export function startCrawler(opts = {}) {
   // answer its first health check; the warm-started cache already serves every
   // reader meanwhile. Tests that need it immediately pass firstDelayMs: 0.
   const firstDelayMs = Number.isFinite(opts.firstDelayMs) ? opts.firstDelayMs : Number(process.env.INDEX_FIRST_CRAWL_DELAY_MS ?? 30_000);
-  firstCrawlTimer = setTimeout(() => {
+  // Every scheduled turn here reads other sellers' listings, so each runs
+  // contained (src/contained-turn.js): a throw is counted, never fatal.
+  firstCrawlTimer = setTimeout(contained("index-first-crawl", () => {
     firstCrawlTimer = null;
     runDiscoveryLeased(selfOrigin).then(() => runCrawlLeased()).then(() => persistIndexCacheAsync()).catch(() => {});
-  }, Math.max(0, firstDelayMs));
+  }), Math.max(0, firstDelayMs));
   if (typeof firstCrawlTimer.unref === "function") firstCrawlTimer.unref();
-  crawlerTimer = setInterval(() => {
+  crawlerTimer = setInterval(contained("index-crawl-cycle", () => {
     // Re-check a few recorded successions each cycle. A retirement is a claim
     // about NOW, and the marker that justified it can be taken down; without
     // this the hiding outlives the proof and the seller has no undo.
@@ -8087,10 +8322,10 @@ export function startCrawler(opts = {}) {
       .then(() => discoverSuccessions().catch(() => {}))
       .then(() => persistIndexCacheAsync())
       .catch(() => {});
-  }, CRAWL_INTERVAL_MS);
-  discoveryTimer = setInterval(() => runDiscoveryLeased(selfOrigin), DISCOVERY_INTERVAL_MS);
+  }), CRAWL_INTERVAL_MS);
+  discoveryTimer = setInterval(contained("index-discovery", () => runDiscoveryLeased(selfOrigin)), DISCOVERY_INTERVAL_MS);
   if (stateDbEnabled()) {
-    pullTimer = setInterval(() => { pullIndexChanges().catch(() => {}); }, INDEX_PULL_MS);
+    pullTimer = setInterval(contained("index-pull", () => { pullIndexChanges().catch(() => {}); }), INDEX_PULL_MS);
     if (typeof pullTimer.unref === "function") pullTimer.unref();
   }
   // Don't keep the event loop alive on shutdown.
@@ -8536,6 +8771,8 @@ function* routableSummarySteps() {
       host,
       ...(sellerPrefixOf(origin) ? { pathPrefix: sellerPrefixOf(origin) } : {}),
       toolCount: v.tools?.length || manifestToolCount(v.manifest),
+      toolsTotal: sellerToolsTotal(v, manifestToolCount(v.manifest)),
+      toolsCapped: v.toolsCapped === true,
       // Did the origin ever answer us, or is this a registry listing about it?
       originResponded: v.originResponded !== false,
       // Rides with originResponded on ALL THREE accessors on purpose: this
@@ -8674,6 +8911,13 @@ export function sellerDetail(originOrHost) {
       // The seller's own figure is still published, under its own name, when
       // it differs from what we hold.
       toolCount: (v.tools || []).length,
+      // The count the listing held and whether the index cut it at the
+      // per-seller cap (src/seller-tool-cap.js), with the cap and its legend:
+      // a seller auditing the row reads why toolCount is under its own count.
+      toolsTotal: sellerToolsTotal(v),
+      toolsCapped: v.toolsCapped === true,
+      toolCap: SELLER_TOOL_CAP,
+      toolCapLegend: toolCapLegend(),
       ...(manifestToolCount(v.manifest) > 0 && manifestToolCount(v.manifest) !== (v.tools || []).length
         ? { declaredToolCount: manifestToolCount(v.manifest), declaredToolCountNote: "the tool count the seller's own manifest states (capabilities.tools); toolCount is the routes this index holds and returns" }
         : {}),
@@ -8918,6 +9162,8 @@ function* indexSnapshotSteps({ baseUrl, catalog, prices, network, toolCount, wal
     homepage: v.manifest?.homepage || origin,
     network: v.manifest?.payment?.x402?.primaryNetwork || v.manifest?.payment?.primaryNetwork || null,
     toolCount: v.tools?.length || manifestToolCount(v.manifest),
+    toolsTotal: sellerToolsTotal(v, manifestToolCount(v.manifest)),
+    toolsCapped: v.toolsCapped === true,
     // Did the ORIGIN answer, or is this a registry listing about it? Read by
     // the marketplace label and by totals.respondedOrigins. Added here as well
     // as on the other accessors because /api/index and the market pages read
@@ -9006,6 +9252,8 @@ function* indexSnapshotSteps({ baseUrl, catalog, prices, network, toolCount, wal
         return acc;
       }, {});
     keep.toolCount = Math.max(keep.toolCount || 0, drop.toolCount || 0);
+    keep.toolsTotal = Math.max(keep.toolsTotal || 0, drop.toolsTotal || 0, keep.toolCount);
+    keep.toolsCapped = keep.toolsCapped === true || drop.toolsCapped === true;
     if (keep.paidToolCount != null || drop.paidToolCount != null) {
       keep.paidToolCount = Math.max(keep.paidToolCount ?? 0, drop.paidToolCount ?? 0);
     }
@@ -9031,6 +9279,7 @@ function* indexSnapshotSteps({ baseUrl, catalog, prices, network, toolCount, wal
     asOf: new Date().toISOString(),
     sellers,
     discoverySources,
+    toolCapLegend: toolCapLegend(),
     totals: {
       // NOTE: `sellers` counts indexed ORIGINS, not operators. One operator can
       // publish many hostnames — a custom domain plus the raw platform host it
@@ -9063,6 +9312,12 @@ function* indexSnapshotSteps({ baseUrl, catalog, prices, network, toolCount, wal
           .map((a) => a.toLowerCase())
       ).size,
       tools: sellers.reduce((s, x) => s + (x.toolCount || 0), 0),
+      // `tools` is what the index holds. A seller past the per-seller cap
+      // (src/seller-tool-cap.js) is held at the cap; the listings' own counts
+      // and how many sellers were cut ride beside it, under toolCapLegend.
+      toolsTotal: sellers.reduce((s, x) => s + (x.toolsTotal ?? x.toolCount ?? 0), 0),
+      cappedSellers: sellers.filter((x) => x?.toolsCapped === true).length,
+      toolCap: SELLER_TOOL_CAP,
       // Buyable subset of `tools`. Sellers without paid flags (zero-annotation
       // docs, registry-synthesized) count fully — their rows route today, so
       // presuming them paid keeps this the routing-eligible total rather than
@@ -9122,10 +9377,10 @@ function setHidden(obj, key, value) {
   Object.defineProperty(obj, key, { value, writable: true, configurable: true, enumerable: false });
   return true;
 }
-function decoratedRemoteTools(v) {
+function decoratedRemoteTools(v, origin = null) {
   const d = remotePoolMemo.get(v);
   if (d) return d;
-  return decorateRemoteToolsStep(v, Infinity);
+  return decorateRemoteToolsStep(v, Infinity, origin);
 }
 // Seller-level facts every decorated row of one entry shares.
 function decorationContext(v) {
@@ -9173,21 +9428,33 @@ function decorateRow(t, c) {
 // the loop 33 ms locally and 185 ms on a CI runner (2026-10-02); the index
 // slices call this so the decoration is cut into slices too.
 const decoratePartial = new WeakMap();
-function decorateRemoteToolsStep(v, until = Infinity) {
+function decorateRemoteToolsStep(v, until = Infinity, origin = null) {
   const memo = remotePoolMemo.get(v);
   if (memo) return memo;
   let p = decoratePartial.get(v);
-  if (!p) { p = { i: 0, out: [], c: decorationContext(v) }; decoratePartial.set(v, p); }
-  const tools = v.tools || [];
-  for (; p.i < tools.length; p.i++) {
-    if ((p.i & 255) === 0 && until !== Infinity && p.i > 0 && performance.now() >= until) return null;
-    const t = tools[p.i];
-    // paid:false = the seller's own doc says this operation is free.
-    // It lists on the marketplace, but it is never a BUY candidate —
-    // route-execute would 402-dance against an endpoint that never
-    // quotes, and "cheapest tool" rankings would fill with $0 rows.
-    if (t.paid === false) continue;
-    p.out.push(decorateRow(t, p.c));
+  try {
+    if (!p) { p = { i: 0, out: [], c: decorationContext(v) }; decoratePartial.set(v, p); }
+    const tools = v.tools || [];
+    for (; p.i < tools.length; p.i++) {
+      if ((p.i & 255) === 0 && until !== Infinity && p.i > 0 && performance.now() >= until) return null;
+      const t = tools[p.i];
+      // paid:false = the seller's own doc says this operation is free.
+      // It lists on the marketplace, but it is never a BUY candidate:
+      // route-execute would 402-dance against an endpoint that never
+      // quotes, and "cheapest tool" rankings would fill with $0 rows.
+      if (t.paid === false) continue;
+      p.out.push(decorateRow(t, p.c));
+    }
+  } catch (e) {
+    // One listing whose rows cannot be read fails alone: the entry is dropped
+    // whole (an empty pool, memoized like a complete one, so it is read once),
+    // remembered as broken and counted by origin; every caller (the drain, a
+    // shadow rebuild, a query, the directory) goes on with the next entry.
+    decoratePartial.delete(v);
+    const empty = [];
+    remotePoolMemo.set(v, empty);
+    routeIndexEntryBroken(origin || entryOriginOf(v), v, e);
+    return empty;
   }
   decoratePartial.delete(v);
   remotePoolMemo.set(v, p.out);
@@ -9222,9 +9489,108 @@ function screenedInjection(text) {
 // A seller field as text: a crawled listing can carry a number, an object or
 // an array where a string belongs, and reading it as one must not throw.
 const sellerText = (v) => (typeof v === "string" ? v : typeof v === "number" || typeof v === "boolean" ? String(v) : "");
-function toolStatics(t) {
+// --- per-listing containment ---------------------------------------------------
+// One seller's listing whose rows cannot be read (a tool whose statics or
+// decoration throws) fails alone. The tool is remembered as broken (a sentinel
+// statics object, memoized like any other, so it is computed once) and skipped
+// by indexing, candidate collection and scoring; an entry whose decoration
+// throws is dropped whole and skipped by the drain, a shadow rebuild and a
+// query's scan until a crawl replaces it (a new entry object is tried afresh).
+// Both are counted by seller origin, read on /__operator/perf.json
+// (brokenListings). Nothing here reaches the process: a throw a step misses is
+// caught by the scheduled turn's contained() wrapper and counted there.
+const BROKEN_LISTINGS_MAX = 500;
+const brokenListings = new Map(); // origin -> { count, lastAt, lastMessage }
+let brokenListingsTotal = 0, brokenListingsOverflow = 0;
+const brokenEntries = new WeakSet(); // entries whose indexing threw; skipped until replaced
+// Read inside a catch, so they never throw themselves.
+const entryOriginOf = (v) => { try { const s = Array.isArray(v?.tools) ? v.tools[0]?.seller : null; return typeof s === "string" && s ? s : null; } catch { return null; } };
+// A broken row is counted under its ENTRY's origin (the cache key), never the
+// row's own `seller` field: a listing writes that field, and one listing that
+// named 30 sellers would count as 30 origins. The caller passes the origin it
+// holds; else the row's home record (set when its entry was indexed).
+const homeOriginOf = (t) => { try { const h = t?.[TOOL_HOME]; return typeof h?.origin === "string" ? h.origin : null; } catch { return null; } };
+// The public word (brokenListings on /api/gateway-status): the distinct
+// origins whose listings broke inside a rolling window, against the origins
+// the index holds. One seller's bad data is one origin however many of its
+// rows throw, so it never trips the word; a code bug that breaks every
+// listing (statics or decoration throwing for well-formed rows) breaks many
+// origins at once and empties external routing, and reads `widespread`.
+const BROKEN_WINDOW_MS = (() => { const n = Number(process.env.BROKEN_LISTINGS_WINDOW_MS); return Number.isFinite(n) && n > 0 ? n : 15 * 60_000; })();
+const BROKEN_WIDESPREAD_MIN = (() => { const n = Number(process.env.BROKEN_LISTINGS_WIDESPREAD_MIN); return Number.isFinite(n) && n >= 2 ? Math.floor(n) : 20; })();
+const BROKEN_WIDESPREAD_SHARE = (() => { const n = Number(process.env.BROKEN_LISTINGS_WIDESPREAD_SHARE); return Number.isFinite(n) && n > 0 && n <= 1 ? n : 0.05; })();
+const BROKEN_RECENT_MAX = 20_000;
+const brokenRecent = new Map(); // origin -> last broken at, oldest first
+/** The window rule: `widespread` when the distinct origins whose listings
+ *  broke inside the window reach `min` AND `share` of the indexed origins. */
+export function brokenListingsWord(origins, indexed, { min = BROKEN_WIDESPREAD_MIN, share = BROKEN_WIDESPREAD_SHARE } = {}) {
+  const n = Number(origins) || 0;
+  return n >= min && n >= (Number(indexed) || 0) * share ? "widespread" : "ok";
+}
+function noteBrokenRecent(key, now) {
+  brokenRecent.delete(key); // re-inserted last, so the map stays ordered by time
+  brokenRecent.set(key, now);
+  if (brokenRecent.size > BROKEN_RECENT_MAX) brokenRecent.delete(brokenRecent.keys().next().value);
+}
+function pruneBrokenRecent(now) {
+  for (const [k, at] of brokenRecent) { if (now - at <= BROKEN_WINDOW_MS) break; brokenRecent.delete(k); }
+}
+/** brokenListings on /api/gateway-status: ok / widespread publicly; the
+ *  operator view adds the window's origin count, the indexed origins and the rule. */
+export function brokenListingsStatus({ full = false, now = Date.now() } = {}) {
+  pruneBrokenRecent(now);
+  const origins = brokenRecent.size, indexed = cache.size;
+  const status = brokenListingsWord(origins, indexed);
+  return full ? { status, origins, indexedOrigins: indexed, windowMinutes: Math.round(BROKEN_WINDOW_MS / 60_000), widespreadMin: BROKEN_WIDESPREAD_MIN, widespreadShare: BROKEN_WIDESPREAD_SHARE } : { status };
+}
+/** Test hook: note a broken listing for `origin` at `now` (the window's clock). */
+export function _noteBrokenListingForTest(origin, now = Date.now()) { noteBrokenListing(origin, new Error("test"), now); }
+// Rows skipped because their statics threw (the st.broken checks), counted on the operator summary.
+let brokenToolsSkipped = 0;
+function noteBrokenListing(origin, err, now = Date.now()) {
+  const key = typeof origin === "string" && origin ? origin.slice(0, 200) : "unknown";
+  brokenListingsTotal++;
+  noteBrokenRecent(key, now);
+  let row = brokenListings.get(key);
+  if (!row) {
+    if (brokenListings.size >= BROKEN_LISTINGS_MAX) { brokenListingsOverflow++; return; }
+    row = { count: 0, lastAt: 0, lastMessage: "" };
+    brokenListings.set(key, row);
+  }
+  row.count++;
+  row.lastAt = now;
+  row.lastMessage = String(err instanceof Error ? err.message : err ?? "").replace(/\s+/g, " ").slice(0, 160);
+}
+// An entry whose indexing threw: remembered, counted, never retried as this object.
+function routeIndexEntryBroken(origin, v, err) {
+  if (v && typeof v === "object") brokenEntries.add(v);
+  noteBrokenListing(origin, err);
+}
+const isBrokenEntry = (v) => brokenEntries.has(v);
+/** Seller listings dropped for a throw while they were read, by origin: { total, origins, overflow, byOrigin }. */
+export function brokenListingsSummary() {
+  const byOrigin = {};
+  for (const [k, r] of brokenListings) byOrigin[k] = { count: r.count, lastAt: new Date(r.lastAt).toISOString(), lastMessage: r.lastMessage };
+  return { total: brokenListingsTotal, origins: brokenListings.size, overflow: brokenListingsOverflow, toolsSkipped: brokenToolsSkipped, status: brokenListingsStatus().status, byOrigin };
+}
+export function _resetBrokenListingsForTest() { brokenListings.clear(); brokenRecent.clear(); brokenListingsTotal = 0; brokenListingsOverflow = 0; brokenToolsSkipped = 0; }
+const BROKEN_STATICS = Object.freeze({ broken: true, slug: "", name: "", hay: "", injected: true, excluded: true, priceRank: Infinity, aliases: NO_ALIASES, nameSlug: null, names: Object.freeze([]), nameToks: Object.freeze([]) });
+function toolStatics(t, origin = null) {
   let st = t[TOOL_STATICS] || toolStaticsMemo.get(t);
   if (st) return st;
+  try { st = computeToolStatics(t); }
+  catch (e) { st = BROKEN_STATICS; noteBrokenListing(origin || homeOriginOf(t), e); }
+  if (!setHidden(t, TOOL_STATICS, st)) toolStaticsMemo.set(t, st);
+  return st;
+}
+// Test hook: computeToolStatics throws this for every row while set (a code
+// bug that breaks every listing, scripts/test-crash-containment.js).
+// With `match`, only the rows it accepts throw (one poison row beside good ones).
+let toolStaticsFaultForTest = null, toolStaticsFaultMatch = null;
+export function _setToolStaticsFaultForTest(err, match = null) { toolStaticsFaultForTest = err || null; toolStaticsFaultMatch = typeof match === "function" ? match : null; }
+function computeToolStatics(t) {
+  if (toolStaticsFaultForTest && (!toolStaticsFaultMatch || toolStaticsFaultMatch(t))) throw toolStaticsFaultForTest;
+  let st;
   const name = sellerText(t.name), slug = sellerText(t.slug);
   const tags = Array.isArray(t.tags) ? t.tags.map(sellerText) : [];
   const hay = `${name} ${sellerText(t.description)} ${sellerText(t.category)} ${tags.join(" ")}`.toLowerCase();
@@ -9278,7 +9644,6 @@ function toolStatics(t) {
   // single largest thing the router held (63 MB of 164 MB on the
   // production-sized fixture, 2026-09-25).
   st.nameToks = st.names.map((n) => splitTokens(n).map(internToken));
-  if (!setHidden(t, TOOL_STATICS, st)) toolStaticsMemo.set(t, st);
   return st;
 }
 // Whole-token test for a SHORT term (the "ip" rule) without tokenizing the
@@ -9378,25 +9743,36 @@ function routeIndexNoteSet(origin, prev, next) {
 // ~1 s on the query that met it). A query still drains whatever is left, so a
 // result never misses a seller that was set before it.
 let routeDrainScheduled = false;
-function routeIndexScheduleDrain() {
-  if (routeDrainScheduled) return;
-  routeDrainScheduled = true;
-  setImmediate(function drainSlice() {
-    const until = performance.now() + ROUTE_INDEX_SLICE_MS;
+// The slice runs on its own turn, contained: a throw one entry's step did not
+// catch is counted under route-index-drain, the entry it was on is dropped
+// (never retried as this object), and the next slice drains the next entry.
+const ROUTE_INDEX_DRAIN_THREW = "indexing threw outside the entry step";
+const drainSlice = contained("route-index-drain", () => {
+  const until = performance.now() + ROUTE_INDEX_SLICE_MS;
+  let clean = false;
+  try {
     while (performance.now() < until) {
       if (!routeIdx.partial) {
         const first = routeIdx.pending.entries().next().value;
         if (!first) break;
         const [origin, v] = first;
         routeIdx.pending.delete(origin);
-        if (cache.get(origin) !== v || routeIdx.indexed.has(v)) continue;
+        if (cache.get(origin) !== v || routeIdx.indexed.has(v) || isBrokenEntry(v)) continue;
         routeIdx.partial = { origin, v, pos: 0 };
       }
       if (!routeIndexAdvancePartial(until)) break; // out of time inside one seller
     }
+    clean = true;
+  } finally {
+    if (!clean && routeIdx.partial) { const p = routeIdx.partial; routeIdx.partial = null; brokenEntries.add(p.v); noteBrokenListing(p.origin, ROUTE_INDEX_DRAIN_THREW); }
     if (routeIdx.partial || routeIdx.pending.size) setImmediate(drainSlice);
     else { routeDrainScheduled = false; routeIndexCompactIfStale(); }
-  });
+  }
+});
+function routeIndexScheduleDrain() {
+  if (routeDrainScheduled) return;
+  routeDrainScheduled = true;
+  setImmediate(drainSlice);
 }
 function routeIndexReset() {
   routeIdx.postings = new Map();
@@ -9414,7 +9790,9 @@ function routeIndexAdvancePartial(until = Infinity) {
   const p = routeIdx.partial;
   if (!p) return true;
   if (cache.get(p.origin) !== p.v) { routeIdx.partial = null; return true; }
-  const next = routeIndexAddEntry(p.origin, p.v, routeIdx, p.pos, until);
+  let next;
+  try { next = routeIndexAddEntry(p.origin, p.v, routeIdx, p.pos, until); }
+  catch (e) { routeIndexEntryBroken(p.origin, p.v, e); routeIdx.partial = null; return true; }
   if (next !== -1) { p.pos = next; return false; }
   routeIdx.partial = null;
   if (routeIdx.shadow) routeIdx.shadow.late.push([p.origin, p.v]);
@@ -9430,13 +9808,14 @@ function newRouteIndexShard() {
 // tools: the production stall profiler caught a single 4,000-tool entry
 // holding the loop for 1.3 s (2026-09-25).
 function routeIndexAddEntry(origin, v, target = routeIdx, from = 0, until = Infinity) {
-  const pool = decorateRemoteToolsStep(v, until);
+  const pool = decorateRemoteToolsStep(v, until, origin);
   if (!pool) return from; // decoration ran out of time: resume here next slice
   const { postings } = target;
   for (let pos = from; pos < pool.length; pos++) {
     if (pos > from && (pos & 63) === 0 && until !== Infinity && performance.now() >= until) return pos;
     const t = pool[pos];
-    const st = toolStatics(t);
+    const st = toolStatics(t, origin);
+    if (st.broken) { brokenToolsSkipped++; continue; } // its statics threw: never posted, never scored
     // The home record is a property of the tool (its entry and position in
     // that entry's pool), the same whichever shard indexes it.
     t[TOOL_HOME] ? Object.assign(t[TOOL_HOME], { origin, v, pos }) : setHidden(t, TOOL_HOME, { origin, v, pos });
@@ -9476,30 +9855,59 @@ const ROUTE_INDEX_SLICE_MS = 12;
 // ~12 ms between event-loop turns; queries keep reading the current index
 // (its stale postings are filtered by liveness, as always) until the shadow
 // is complete and swapped in.
+// Test hook: the next background rebuild's finish throws this once.
+let shadowFinishFaultForTest = null;
+export function _setShadowFinishFaultForTest(err) { shadowFinishFaultForTest = err || null; }
 function routeIndexStartShadow() {
   if (routeIdx.shadow) return;
   const shadow = { ...newRouteIndexShard(), entries: [...cache].filter(([, v]) => v && typeof v === "object"), i: 0, late: [], cur: null };
   routeIdx.shadow = shadow;
-  const step = () => {
+  // Each slice runs contained (a throw an entry's step did not catch is
+  // counted under route-index-shadow, that entry is dropped and the build
+  // goes on with the next); a throw inside one entry's step drops that entry.
+  const step = contained("route-index-shadow", () => {
     if (routeIdx.shadow !== shadow) return; // reset or superseded
     const until = performance.now() + ROUTE_INDEX_SLICE_MS;
-    while (performance.now() < until) {
-      if (!shadow.cur) {
-        if (shadow.i >= shadow.entries.length) break;
-        const [origin, v] = shadow.entries[shadow.i++];
-        if (cache.get(origin) !== v) continue;
-        shadow.cur = { origin, v, pos: 0 };
+    let clean = false;
+    try {
+      while (performance.now() < until) {
+        if (!shadow.cur) {
+          if (shadow.i >= shadow.entries.length) break;
+          const [origin, v] = shadow.entries[shadow.i++];
+          if (cache.get(origin) !== v || isBrokenEntry(v)) continue;
+          shadow.cur = { origin, v, pos: 0 };
+        }
+        let next;
+        try { next = routeIndexAddEntry(shadow.cur.origin, shadow.cur.v, shadow, shadow.cur.pos, until); }
+        catch (e) { routeIndexEntryBroken(shadow.cur.origin, shadow.cur.v, e); shadow.cur = null; continue; }
+        if (next === -1) shadow.cur = null; else { shadow.cur.pos = next; break; }
       }
-      const next = routeIndexAddEntry(shadow.cur.origin, shadow.cur.v, shadow, shadow.cur.pos, until);
-      if (next === -1) shadow.cur = null; else { shadow.cur.pos = next; break; }
+      clean = true;
+    } finally {
+      if (!clean) {
+        if (shadow.cur) { const c = shadow.cur; shadow.cur = null; brokenEntries.add(c.v); noteBrokenListing(c.origin, ROUTE_INDEX_DRAIN_THREW); }
+        if (routeIdx.shadow === shadow) setImmediate(step);
+      }
     }
     if (shadow.cur || shadow.i < shadow.entries.length) { setImmediate(step); return; }
-    // Entries the current index took from `pending` while the shadow was
-    // being filled were set after its snapshot: carry the live ones over.
-    for (const [origin, v] of shadow.late) if (cache.get(origin) === v && !shadow.indexed.has(v)) routeIndexAddEntry(origin, v, shadow);
+    // The finish. A throw here abandons this build (the live index keeps
+    // answering) and clears routeIdx.shadow, which gates every later rebuild:
+    // left set, no rebuild would ever start again. contained() counts it.
     let stale = 0;
-    for (const [origin, v] of [...shadow.entries, ...shadow.late]) {
-      if (shadow.indexed.has(v) && cache.get(origin) !== v) { stale += (remotePoolMemo.get(v) || []).length; shadow.indexed.delete(v); }
+    try {
+      if (shadowFinishFaultForTest) { const e = shadowFinishFaultForTest; shadowFinishFaultForTest = null; throw e; }
+      // Entries the current index took from `pending` while the shadow was
+      // being filled were set after its snapshot: carry the live ones over.
+      for (const [origin, v] of shadow.late) {
+        if (cache.get(origin) !== v || shadow.indexed.has(v) || isBrokenEntry(v)) continue;
+        try { routeIndexAddEntry(origin, v, shadow); } catch (e) { routeIndexEntryBroken(origin, v, e); }
+      }
+      for (const [origin, v] of [...shadow.entries, ...shadow.late]) {
+        if (shadow.indexed.has(v) && cache.get(origin) !== v) { stale += (remotePoolMemo.get(v) || []).length; shadow.indexed.delete(v); }
+      }
+    } catch (e) {
+      if (routeIdx.shadow === shadow) routeIdx.shadow = null;
+      throw e;
     }
     routeIdx.postings = shadow.postings;
     routeIdx.indexed = shadow.indexed;
@@ -9508,9 +9916,11 @@ function routeIndexStartShadow() {
     routeIdx.termCache.clear();
     routeIdx.shadow = null;
     routeIdx.builds++;
-  };
+  });
   setImmediate(step);
 }
+/** Test hook: start a background rebuild now (the stale-share rule starts the real ones). */
+export function _routeIndexStartShadowForTest() { routeIndexStartShadow(); }
 // Stale rows were cleared only by routeIndexSync, which only a route query on
 // this thread and the boot warm-up call. With a router worker loaded this
 // thread answers no queries, so every crawl cycle's replaced entries piled up
@@ -9526,7 +9936,10 @@ function routeIndexSync({ sync = false, drain = true } = {}) {
     if (sync || total <= ROUTE_INDEX_INLINE_REBUILD_MAX_TOOLS) {
       routeIndexReset();
       routeIdx.builds++;
-      for (const [origin, v] of cache) if (v && typeof v === "object") routeIndexAddEntry(origin, v);
+      for (const [origin, v] of cache) {
+        if (!v || typeof v !== "object" || isBrokenEntry(v)) continue;
+        try { routeIndexAddEntry(origin, v); } catch (e) { routeIndexEntryBroken(origin, v, e); }
+      }
       return;
     }
     routeIndexStartShadow();
@@ -9542,8 +9955,8 @@ function routeIndexSync({ sync = false, drain = true } = {}) {
   if (!routeIdx.pending.size) return;
   for (const [origin, v] of routeIdx.pending) {
     if (cache.get(origin) !== v) continue; // replaced again before we got to it
-    if (routeIdx.indexed.has(v)) continue; // already indexed (a swapped-in shadow took it)
-    routeIndexAddEntry(origin, v);
+    if (routeIdx.indexed.has(v) || isBrokenEntry(v)) continue; // already indexed (a swapped-in shadow took it), or dropped
+    try { routeIndexAddEntry(origin, v); } catch (e) { routeIndexEntryBroken(origin, v, e); continue; }
     if (routeIdx.shadow) routeIdx.shadow.late.push([origin, v]);
   }
   routeIdx.pending.clear();
@@ -9555,9 +9968,9 @@ function routeIndexSync({ sync = false, drain = true } = {}) {
 function routeIndexUnindexedLive() {
   const out = new Map();
   const p = routeIdx.partial;
-  if (p && cache.get(p.origin) === p.v && !routeIdx.indexed.has(p.v)) out.set(p.v, p.origin);
+  if (p && cache.get(p.origin) === p.v && !routeIdx.indexed.has(p.v) && !isBrokenEntry(p.v)) out.set(p.v, p.origin);
   for (const [origin, v] of routeIdx.pending) {
-    if (cache.get(origin) === v && !routeIdx.indexed.has(v)) out.set(v, origin);
+    if (cache.get(origin) === v && !routeIdx.indexed.has(v) && !isBrokenEntry(v)) out.set(v, origin);
   }
   return out;
 }
@@ -9776,7 +10189,12 @@ let candidateYields = 0;
 /** Test hook: yields taken while unindexed rows were tested. */
 export function _routeCandidateYieldsForTest() { return candidateYields; }
 const ROUTE_DECORATE_SLICE_MS = 6;
+// Test hook: the next query throws this error at its first step (a request
+// whose handler rejects must answer 500 alone and leave the next request whole).
+let routeQueryFaultForTest = null;
+export function _setRouteQueryFaultForTest(err) { routeQueryFaultForTest = err || null; }
 function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = false, baseUrl, catalog, prices, network, toolCount, walletName, scoredMemo = null, drainBacklog = true }) {
+  if (routeQueryFaultForTest) { const e = routeQueryFaultForTest; routeQueryFaultForTest = null; throw e; }
   const q = String(query || "").slice(0, 500);
   // Unicode-aware (src/query-terms.js): a CJK query used to tokenize to
   // nothing and answer zero rows (reported from outside 2026-09-10).
@@ -9874,6 +10292,7 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
   const scoreRow = (t) => {
     if (!netOk(t)) return;
     const st = toolStatics(t);
+    if (st.broken) { brokenToolsSkipped++; return; } // its statics threw: never scored
     if (st.injected) return;
     const { name, hay, names, nameToks } = st;
     let score = 0, mSlug = 0, mName = 0, mText = 0;
@@ -9978,8 +10397,9 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
     // exactly as it will once indexed.
     const selectedBy = [];
     for (let k = 0; k < nTerms; k++) if (selecting[k]) selectedBy.push(shortTerm[k] ? ((tok) => tok === terms[k]) : ((tok) => tok.includes(terms[k])));
-    const isCandidate = (t) => {
-      const st = toolStatics(t);
+    const isCandidate = (t, origin) => {
+      const st = toolStatics(t, origin);
+      if (st.broken) { brokenToolsSkipped++; return false; }
       const toks = new Set(splitTokens(st.hay));
       for (const nt of st.nameToks) for (const tok of nt) toks.add(tok);
       for (const tok of toks) for (const sel of selectedBy) if (sel(tok)) return true;
@@ -9988,10 +10408,13 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
     for (const [v, origin] of unindexed) {
       if (!okOf(v, origin)) continue;
       let pool;
-      while (!(pool = decorateRemoteToolsStep(v, performance.now() + ROUTE_DECORATE_SLICE_MS))) yield;
+      // An entry whose rows cannot be read is dropped (decoration contains it);
+      // a throw past that drops it here, and the query ranks every other seller.
+      try { while (!(pool = decorateRemoteToolsStep(v, performance.now() + ROUTE_DECORATE_SLICE_MS, origin))) yield; }
+      catch (e) { routeIndexEntryBroken(origin, v, e); continue; }
       const arr = [];
       for (let i = 0; i < pool.length; i++) {
-        if (isCandidate(pool[i])) arr.push(pool[i]);
+        if (isCandidate(pool[i], origin)) arr.push(pool[i]);
         // Every 16 rows: a row's first statics (the listing screen) can cost
         // half a millisecond, so 256 of them held a slice for 100 ms and more.
         if ((i & ROUTE_CANDIDATE_YIELD_MASK) === ROUTE_CANDIDATE_YIELD_MASK) { candidateYields++; yield; }
@@ -10381,6 +10804,7 @@ const MEMORY_SAMPLE_ENTRIES = 120;
 const jsonLength = (x) => { try { return x == null ? 0 : JSON.stringify(x).length; } catch { return 0; } };
 export function indexMemoryFigures({ sampleBytes = false } = {}) {
   let entries = 0, tools = 0, openapiTools = 0, openapiRoutes = 0, fullManifests = 0, manifestResources = 0, slimManifests = 0, manifestBodies = 0, manifestBodyBytes = 0, openapiPacked = 0, openapiPackedBytes = 0;
+  let cappedSellers = 0, toolsDropped = 0;
   const stride = Math.max(1, Math.floor(cache.size / MEMORY_SAMPLE_ENTRIES));
   const sampled = { entries: 0, tools: 0, openapiTools: 0, openapiRoutes: 0, manifest: 0, rest: 0 };
   const sampledRows = { tools: 0, openapiTools: 0, openapiRoutes: 0 };
@@ -10398,6 +10822,7 @@ export function indexMemoryFigures({ sampleBytes = false } = {}) {
     }
     entries++;
     tools += Array.isArray(v.tools) ? v.tools.length : 0;
+    if (v.toolsCapped === true) { cappedSellers++; toolsDropped += Math.max(0, sellerToolsTotal(v) - (Array.isArray(v.tools) ? v.tools.length : 0)); }
     openapiTools += Array.isArray(v.openapiTools) ? v.openapiTools.length : 0;
     openapiRoutes += Array.isArray(v.openapiRoutes) ? v.openapiRoutes.length : 0;
     if (Buffer.isBuffer(v.manifestBody)) { manifestBodies++; manifestBodyBytes += v.manifestBody.length; }
@@ -10409,7 +10834,7 @@ export function indexMemoryFigures({ sampleBytes = false } = {}) {
       if (Array.isArray(r)) manifestResources += r.length;
     }
   }
-  const out = { entries, tools, openapiTools, openapiRoutes, openapiPacked, openapiPackedBytes, fullManifests, slimManifests, manifestResources, manifestBodies, manifestBodyBytes, internedTokens: tokenIntern.size, routeIndexedTools: routeIdx.indexedTools };
+  const out = { entries, tools, toolCap: SELLER_TOOL_CAP, cappedSellers, toolsDropped, openapiTools, openapiRoutes, openapiPacked, openapiPackedBytes, fullManifests, slimManifests, manifestResources, manifestBodies, manifestBodyBytes, internedTokens: tokenIntern.size, routeIndexedTools: routeIdx.indexedTools };
   if (!sampleBytes) return out;
   // Serialized size from the sample: a floor on what the heap holds (object
   // headers and hidden classes come on top), comparable across fields. Row
@@ -10456,7 +10881,7 @@ export function* routableRemoteEntries({ baseUrl = "" } = {}) {
   const aliases = computeAliasOrigins(cache);
   for (const [origin, v] of cache) {
     if (!v || typeof v !== "object" || !isRoutable(v) || aliases.has(origin) || isSelfSeller(origin, { baseUrl, redirectedTo: v.redirectedTo }) || isRemovedOrigin(origin)) continue;
-    yield [origin, decoratedRemoteTools(v)];
+    yield [origin, decoratedRemoteTools(v, origin)];
   }
 }
 /** routableRemoteEntries across turns: the same filter, order and pools, with
@@ -10470,7 +10895,7 @@ export async function* routableRemoteEntriesSliced({ baseUrl = "", sliceMs = DIR
     if (!v || typeof v !== "object" || !isRoutable(v) || aliases.has(origin) || isSelfSeller(origin, { baseUrl, redirectedTo: v.redirectedTo }) || isRemovedOrigin(origin)) continue;
     let pool = remotePoolMemo.get(v);
     while (!pool) {
-      pool = decorateRemoteToolsStep(v, performance.now() + sliceMs);
+      pool = decorateRemoteToolsStep(v, performance.now() + sliceMs, origin);
       if (!pool) await yieldTurn();
     }
     yield [origin, pool];
@@ -10988,10 +11413,10 @@ function listingRowsForOrigin(origin) {
 function listingsChanged(origin) {
   listings.markDirty(origin);
   if (!listingsFlushTimer) {
-    listingsFlushTimer = setTimeout(() => {
+    listingsFlushTimer = setTimeout(contained("index-listings-flush", () => {
       listingsFlushTimer = null;
       listings.flush().catch((e) => console.warn(`[listings] flush failed: ${String(e?.message || e).slice(0, 120)}`));
-    }, LISTINGS_FLUSH_MS);
+    }), LISTINGS_FLUSH_MS);
     listingsFlushTimer.unref?.();
   }
 }
@@ -11025,7 +11450,8 @@ export function configureListingsStore({ excludeOrigin = "", ourTools = null } =
     // Stored origins the cache no longer holds are removed: first a few
     // minutes after boot (the backfill has written by then), then hourly.
     const tick = () => { reconcileListings().catch((e) => console.warn(`[listings] reconcile failed: ${String(e?.message || e).slice(0, 120)}`)); };
-    listingsReconcileTimer = setTimeout(function again() { tick(); listingsReconcileTimer = setTimeout(again, LISTINGS_RECONCILE_MS); listingsReconcileTimer.unref?.(); }, LISTINGS_RECONCILE_FIRST_MS);
+    const again = contained("index-listings-reconcile", () => { listingsReconcileTimer = setTimeout(again, LISTINGS_RECONCILE_MS); listingsReconcileTimer.unref?.(); tick(); });
+    listingsReconcileTimer = setTimeout(again, LISTINGS_RECONCILE_FIRST_MS);
     listingsReconcileTimer.unref?.();
   }
   return true;

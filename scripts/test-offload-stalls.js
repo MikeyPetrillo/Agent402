@@ -14,6 +14,7 @@
 // service key and template matching (1e), the Base board's registry walk
 // (1f), and the cache files written without a state database (1g).
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import "./lib/uncapped-sellers.js"; // seeds a 30,000-tool seller past the per-seller cap
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -567,7 +568,7 @@ const digest = (r) => createHash("sha256").update(JSON.stringify([r.total, r.mat
   // seller's took 0.7 s in one call), the hash the pull takes the same way.
   const warmAt = idx.indexOf("async function warmStartIndexOnce(");
   const warm = idx.slice(warmAt, idx.indexOf("  warmStartLastCount = n;\n", warmAt));
-  ok(/pgOriginHashes\.set\(id, await persistedHashSliced\(id, cache\.get\(id\), tick\)\)/.test(warm) && !/persistedHashOf\(/.test(warm), "the warm start hashes each row in pieces");
+  ok(/pgOriginHashes\.set\(id, (?:noteCapOnFold\(id, body\) \? null : )?await persistedHashSliced\(id, cache\.get\(id\), tick\)\)/.test(warm) && !/persistedHashOf\(/.test(warm), "the warm start hashes each row in pieces");
 }
 
 // --- 1i. a chain page (/base lists thousands of sellers) is built in steps:

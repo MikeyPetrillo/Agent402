@@ -18,6 +18,13 @@ for (const s of upserts) {
   const calls = String(s.run).split("\n").filter((l) => !/^\s*#/.test(l) && /variableCollectionUpsert\(input:/.test(l));
   ok(calls.length >= 1 && calls.every((l) => /skipDeploys:\s*true/.test(l)), `"${s.name}": every upsert call passes skipDeploys: true`);
 }
+// The verify step prints /api/pricing as a diagnostic under `set -e`: a slow
+// read must not end the step before the health and paywall gates decide.
+{
+  const verify = deploySteps.find((s) => /=== pricing ===/.test(String(s.run || "")));
+  const line = String(verify?.run || "").split("\n").find((l) => /curl[^\n]*\/api\/pricing"/.test(l)) || "";
+  ok(!!verify && /\|\|\s*echo/.test(line), `the verify step's pricing print cannot fail the step (${line.trim().slice(0, 90)})`);
+}
 const triggerAt = deploySteps.findIndex((s) => /serviceInstanceDeployV2/.test(String(s.run || "")));
 const upsertAt = deploySteps.findIndex((s) => /variableCollectionUpsert/.test(String(s.run || "")));
 ok(triggerAt > upsertAt && upsertAt >= 0, "the deploy trigger runs after the upsert, so it carries the new values");

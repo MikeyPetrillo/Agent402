@@ -34,6 +34,15 @@ Index:
 - A seller listing with a number, object or array where text belongs is
   stored with text fields: numbers become their digits, anything else is
   dropped, and every seller page, route and search reads it as text.
+- The index keeps at most 5000 tools per seller (`INDEX_SELLER_TOOL_CAP`),
+  described tools first. `/api/index` rows and `?seller=` carry `toolsTotal`
+  (what the seller lists) and `toolsCapped`; /marketplace shows "N of M tools"
+  for a capped seller, and its listing count reads what sellers list.
+- A seller listing that fails to read is skipped on its own; every other
+  seller still routes. `/api/gateway-status` gains `containedTurns`.
+Gateway:
+- On the Messages wire, a text block's citation text counts against the
+  tier's input cap, as its own text does.
 Reports:
 - A public report's JSON has its own address, `/reports/public/<id>.json`.
 Packages:

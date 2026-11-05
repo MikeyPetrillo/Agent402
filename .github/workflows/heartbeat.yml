@@ -923,6 +923,112 @@ jobs:
       # The issue is public: its body carries the word and the operator
       # endpoint only; slugs and reasons stay on /__operator/tool-failures.json.
       # The status Worker runs the same check under the same title.
+      # A scheduled turn under contained() (src/contained-turn.js) throwing in
+      # each of the last three or more consecutive minutes: one word on
+      # /api/gateway-status. repeating pages, ok closes, unknown does neither.
+      # The issue is public: its body carries the word and the operator
+      # endpoint only; the names and counts stay on /__operator/perf.json.
+      # The status Worker runs the same check under the same title.
+      - name: Contained turn check (alarm on a scheduled turn throwing every minute)
+        if: always()
+        continue-on-error: true
+        run: |
+          WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.containedTurns.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "containedTurns: $WORD"
+          TITLE="containedTurns: a scheduled turn is throwing every minute"
+          # The mark counts only on its own line after a blank line, where
+          # the status Worker writes and reads it.
+          MARK="First ok read at "
+          NLMARK=$'\n\n'"$MARK"
+          # Only an issue with exactly this title, opened by the workflow bot
+          # or the repository owner, is the alarm (the status Worker's rule):
+          # an outsider's issue with the title neither suppresses nor is closed.
+          OPEN=$(ALARM_NAME="$TITLE" ALARM_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ALARM_NAME) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ALARM_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
+          case "$WORD" in
+            repeating)
+              if [ -z "$OPEN" ]; then
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports containedTurns.status=repeating: a background turn (a drain slice, a rebuild step, a timer tick) has thrown in each of the last three or more consecutive minutes; the throw is caught and counted, so the process stays up and the work it guards is not being done. The names and counts are on the operator endpoint, /__operator/perf.json (containedTurns, operator token), and the server log carries one [contained-turn] line per name per minute. Auto-closes after two ok reads in a row." >/dev/null 2>&1 || echo "issue create failed"
+              else
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still repeating at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                # A bad read after a first ok read starts the count again.
+                BODY_NOW=$(gh issue view "$OPEN" --repo "$GITHUB_REPOSITORY" --json body --jq .body 2>/dev/null || echo "")
+                case "$BODY_NOW" in
+                  *"$NLMARK"*) gh issue edit "$OPEN" --repo "$GITHUB_REPOSITORY" --body "${BODY_NOW%%$'\n\n'"$MARK"*}" >/dev/null 2>&1 || true ;;
+                esac
+              fi
+              ;;
+            ok)
+              # Closes on the second consecutive ok read (this step's or the
+              # status Worker's): the word lives in memory, so a restart reads
+              # ok at once, and one ok read across a deploy is not a recovery.
+              # The first ok read leaves a mark line in the issue body.
+              if [ -n "$OPEN" ]; then
+                BODY_NOW=$(gh issue view "$OPEN" --repo "$GITHUB_REPOSITORY" --json body --jq .body 2>/dev/null || echo "")
+                case "$BODY_NOW" in
+                  *"$NLMARK"*)
+                    gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: containedTurns reads ok at $(date -u +%FT%TZ), the second ok read in a row." >/dev/null 2>&1 || true
+                    ;;
+                  *)
+                    gh issue edit "$OPEN" --repo "$GITHUB_REPOSITORY" --body "${BODY_NOW}"$'\n\n'"${MARK}$(date -u +%FT%TZ); closes on the next ok read." >/dev/null 2>&1 || true
+                    ;;
+                esac
+              fi
+              ;;
+          esac
+
+      # Seller listings of many distinct origins failing to read inside a
+      # rolling window (src/x402-index.js): one word on /api/gateway-status.
+      # widespread pages, ok closes, unknown does neither. The issue is
+      # public: its body carries the word and the operator endpoint only; the
+      # origins and counts stay on /__operator/perf.json.
+      # The status Worker runs the same check under the same title.
+      - name: Broken listings check (alarm on listings failing across many origins)
+        if: always()
+        continue-on-error: true
+        run: |
+          WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.brokenListings.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "brokenListings: $WORD"
+          TITLE="brokenListings: seller listings are failing to read across many origins"
+          # The mark counts only on its own line after a blank line, where
+          # the status Worker writes and reads it.
+          MARK="First ok read at "
+          NLMARK=$'\n\n'"$MARK"
+          # Only an issue with exactly this title, opened by the workflow bot
+          # or the repository owner, is the alarm (the status Worker's rule):
+          # an outsider's issue with the title neither suppresses nor is closed.
+          OPEN=$(ALARM_NAME="$TITLE" ALARM_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ALARM_NAME) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ALARM_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
+          case "$WORD" in
+            widespread)
+              if [ -z "$OPEN" ]; then
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports brokenListings.status=widespread: inside the last 15 minutes the seller listings of many distinct origins (past a floor and a share of the indexed origins) threw while they were read and were dropped, which one seller's bad data does not do; a code bug in how listings are read is emptying external routing while the process stays up. The origins and counts are on the operator endpoint, /__operator/perf.json (brokenListings, operator token). Auto-closes after two ok reads in a row." >/dev/null 2>&1 || echo "issue create failed"
+              else
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still widespread at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+                # A bad read after a first ok read starts the count again.
+                BODY_NOW=$(gh issue view "$OPEN" --repo "$GITHUB_REPOSITORY" --json body --jq .body 2>/dev/null || echo "")
+                case "$BODY_NOW" in
+                  *"$NLMARK"*) gh issue edit "$OPEN" --repo "$GITHUB_REPOSITORY" --body "${BODY_NOW%%$'\n\n'"$MARK"*}" >/dev/null 2>&1 || true ;;
+                esac
+              fi
+              ;;
+            ok)
+              # Closes on the second consecutive ok read (this step's or the
+              # status Worker's): the word lives in memory, so a restart reads
+              # ok at once, and one ok read across a deploy is not a recovery.
+              # The first ok read leaves a mark line in the issue body.
+              if [ -n "$OPEN" ]; then
+                BODY_NOW=$(gh issue view "$OPEN" --repo "$GITHUB_REPOSITORY" --json body --jq .body 2>/dev/null || echo "")
+                case "$BODY_NOW" in
+                  *"$NLMARK"*)
+                    gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: brokenListings reads ok at $(date -u +%FT%TZ), the second ok read in a row." >/dev/null 2>&1 || true
+                    ;;
+                  *)
+                    gh issue edit "$OPEN" --repo "$GITHUB_REPOSITORY" --body "${BODY_NOW}"$'\n\n'"${MARK}$(date -u +%FT%TZ); closes on the next ok read." >/dev/null 2>&1 || true
+                    ;;
+                esac
+              fi
+              ;;
+          esac
+
       - name: Tool answer shape check (alarm on empty or error-shaped 200s)
         if: always()
         continue-on-error: true

@@ -49,12 +49,16 @@ export function standingCountsExcludingHost(snapshot) {
   // indexSnapshot's totals are sellers.length and the summed toolCount; a
   // snapshot without totals (a fixture, a partial build) derives them the
   // same way rather than reading zero.
+  // Listings count what each seller lists (toolsTotal), not what the index
+  // holds: a seller past the per-seller cap (src/seller-tool-cap.js) is held
+  // at the cap but still lists every tool it lists.
+  const listed = (x) => n(x?.toolsTotal ?? x?.toolCount);
   const t = snapshot?.totals && Number.isFinite(Number(snapshot.totals.sellers))
     ? snapshot.totals
-    : { sellers: list.length, tools: list.reduce((sum, x) => sum + n(x?.toolCount), 0) };
+    : { sellers: list.length, tools: list.reduce((sum, x) => sum + n(x?.toolCount), 0), toolsTotal: list.reduce((sum, x) => sum + listed(x), 0) };
   return {
     sellers: Math.max(0, n(t.sellers) - (local ? 1 : 0)),
-    listings: Math.max(0, n(t.tools) - (local ? n(local.toolCount) : 0)),
+    listings: Math.max(0, n(t.toolsTotal ?? t.tools) - (local ? listed(local) : 0)),
   };
 }
 

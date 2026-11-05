@@ -370,7 +370,7 @@ for (const [name, over, detail] of failCases) {
   const HEALTHY_GW = { status: "ok", upstreamBuyer: { status: "low", trend: "ok" }, upstreamBuyerAvm: { status: "ok" }, upstreamBuyerTempo: { status: "ok" }, subscriptionFeePayer: { status: "ok" }, databases: { leads: { status: "ok" }, analytics: { status: "ok" } }, operatorAuth: { status: "ok" }, tweetQueue: { status: "ok" }, circlePending: { status: "ok" }, gatewayPending: { status: "ok" }, chargedFailures: { status: "ok", windowHours: 6 }, refundsOwed: { status: "ok" }, ledgerDeadLetter: { status: "none" }, redisPersistence: { status: "on" }, backup: { status: "ok" }, outboundDestinations: { status: "ok" },
     upstreamBuyerSvm: { status: "ok" }, stellarFacilitator: { status: "ok" }, upstreamBudgets: { status: "ok" }, upstreamHardCaps: { status: "ok" }, exaAllowance: { status: "ok" }, stateDb: { status: "on" }, sanctions: { status: "ok" }, sanctionsScreen: { status: "fresh" }, email: { status: "ok" }, upstreamCosts: { status: "ok" },
     mppReconcile: { status: "ok", window7d: "ok", chargedFailedStatus: "ok" },
-    toolFailures: { status: "ok" }, upstreamHealth: { status: "ok" }, facilitatorFunds: { status: "ok" }, toolAnswers: { status: "ok" }, buyerRefusals: { status: "ok" }, creditsRefunds: { status: "ok" }, cdnOrigin: { status: "ok" } };
+    toolFailures: { status: "ok" }, upstreamHealth: { status: "ok" }, facilitatorFunds: { status: "ok" }, toolAnswers: { status: "ok" }, containedTurns: { status: "ok" }, brokenListings: { status: "ok" }, buyerRefusals: { status: "ok" }, creditsRefunds: { status: "ok" }, cdnOrigin: { status: "ok" } };
   const { ALARMS, MAX_ISSUE_WRITES } = await import("../workers/status-probe/src/index.js");
   stub({ health: () => new Response("down", { status: 503 }) });
   const prodStub = globalThis.fetch;
@@ -515,6 +515,50 @@ for (const [name, over, detail] of failCases) {
     assert.equal(comments.length, 0);
   });
 
+  // containedTurns and brokenListings live in the server's memory: a restart
+  // reads ok at once, so one ok read across a deploy is not a recovery. They
+  // close on the second ok read in a row; the first marks the issue body (the
+  // same mark heartbeat.yml writes), a bad read removes the mark.
+  for (const [field, badWord, title] of [["containedTurns", "repeating", "containedTurns: a scheduled turn is throwing every minute"], ["brokenListings", "widespread", "brokenListings: seller listings are failing to read across many origins"]]) {
+    await acheck(`${field}: closes only on the second ok read in a row; a bad read between starts the count again`, async () => {
+      const { CLEARING_MARK } = await import("../workers/status-probe/src/index.js");
+      const ISSUE = `/api/gateway-status reports ${field}.status=${badWord}: details.`;
+      let body = ISSUE;
+      const run = async (word) => {
+        mkGh([{ number: 55, title, body }]);
+        const patches = [];
+        const inner = globalThis.fetch;
+        globalThis.fetch = async (url, init = {}) => { if ((init.method || "").toUpperCase() === "PATCH") patches.push(JSON.parse(init.body)); return inner(url, init); };
+        const g = withGateway({ [field]: { status: word } });
+        const r = await syncAlarms(ENV, { ...nosleep, fetchStatus: feed(g, g) });
+        for (const p of patches) if (typeof p.body === "string") body = p.body;
+        return { r, patches };
+      };
+      let { r, patches } = await run("ok");
+      assert.deepEqual(r.closed, [], "one ok read does not close");
+      assert.deepEqual(r.clearing, [title]);
+      assert.equal(patches.length, 1);
+      assert.ok(body.startsWith(`${ISSUE}\n\n${CLEARING_MARK}`), body);
+      const markedBody = body;
+      ({ r, patches } = await run("ok"));
+      assert.deepEqual(r.closed, [title], "the second ok read in a row closes");
+      assert.deepEqual(patches, [{ state: "closed" }]);
+      body = markedBody;
+      ({ r, patches } = await run(badWord));
+      assert.deepEqual(patches, [{ body: ISSUE }], "a bad read removes the mark line");
+      assert.deepEqual(r.opened, []);
+      ({ r, patches } = await run(badWord));
+      assert.deepEqual(patches, [], "a bad read with no mark writes nothing");
+      ({ r, patches } = await run("ok"));
+      assert.deepEqual(r.closed, [], "after ok, bad, the next ok marks again rather than closing");
+      for (const b of [ISSUE, markedBody]) {
+        body = b;
+        ({ r, patches } = await run("unknown"));
+        assert.deepEqual(patches, [], "unknown neither marks, unmarks nor closes");
+      }
+    });
+  }
+
   await acheck("a pull request with a colliding title is not an alarm", async () => {
     mkGh([{ number: 9, title: "Upstream buyer wallet LOW (x402)", pull_request: { url: "x" } }]);
     const low = withGateway({ upstreamBuyer: { status: "low", trend: "ok" } });
@@ -658,7 +702,7 @@ for (const [name, over, detail] of failCases) {
   await acheck("issue writes are capped per run: opens first, the rest wait for the next run", async () => {
     const titles = ALARMS.map((a) => a.title);
     const allOpen = titles.filter((t) => t !== "Upstream buyer wallet LOW (x402)").map((title, i) => ({ number: i + 1, title }));
-    const everythingHealthy = { gateway: { ...HEALTHY_GATEWAY, upstreamBuyer: { status: "low", trend: "ok" }, tweetQueue: { status: "ok" }, circlePending: { status: "ok" }, gatewayPending: { status: "ok" }, chargedFailures: { status: "ok" }, refundsOwed: { status: "ok" }, ledgerDeadLetter: { status: "none" }, redisPersistence: { status: "on" }, backup: { status: "ok" }, outboundDestinations: { status: "new" }, upstreamBuyerSvm: { status: "ok" }, stellarFacilitator: { status: "ok" }, upstreamBudgets: { status: "ok" }, upstreamHardCaps: { status: "ok" }, exaAllowance: { status: "ok" }, stateDb: { status: "on" }, sanctions: { status: "ok" }, sanctionsScreen: { status: "fresh" }, email: { status: "ok" }, upstreamCosts: { status: "ok" }, mppReconcile: { status: "ok", window7d: "ok", chargedFailedStatus: "ok" }, toolFailures: { status: "ok" }, upstreamHealth: { status: "ok" }, facilitatorFunds: { status: "ok" }, toolAnswers: { status: "ok" }, buyerRefusals: { status: "ok" }, creditsRefunds: { status: "ok" }, cdnOrigin: { status: "ok" } }, status: HEALTHY_STATUS };
+    const everythingHealthy = { gateway: { ...HEALTHY_GATEWAY, upstreamBuyer: { status: "low", trend: "ok" }, tweetQueue: { status: "ok" }, circlePending: { status: "ok" }, gatewayPending: { status: "ok" }, chargedFailures: { status: "ok" }, refundsOwed: { status: "ok" }, ledgerDeadLetter: { status: "none" }, redisPersistence: { status: "on" }, backup: { status: "ok" }, outboundDestinations: { status: "new" }, upstreamBuyerSvm: { status: "ok" }, stellarFacilitator: { status: "ok" }, upstreamBudgets: { status: "ok" }, upstreamHardCaps: { status: "ok" }, exaAllowance: { status: "ok" }, stateDb: { status: "on" }, sanctions: { status: "ok" }, sanctionsScreen: { status: "fresh" }, email: { status: "ok" }, upstreamCosts: { status: "ok" }, mppReconcile: { status: "ok", window7d: "ok", chargedFailedStatus: "ok" }, toolFailures: { status: "ok" }, upstreamHealth: { status: "ok" }, facilitatorFunds: { status: "ok" }, toolAnswers: { status: "ok" }, containedTurns: { status: "ok" }, brokenListings: { status: "ok" }, buyerRefusals: { status: "ok" }, creditsRefunds: { status: "ok" }, cdnOrigin: { status: "ok" } }, status: HEALTHY_STATUS };
     mkGh(allOpen);
     const r1 = await syncAlarms(ENV, { ...nosleep, maxWrites: 4, fetchStatus: feed(everythingHealthy, everythingHealthy) });
     assert.deepEqual(r1.opened, ["Upstream buyer wallet LOW (x402)"]);
@@ -669,7 +713,9 @@ for (const [name, over, detail] of failCases) {
     mkGh([...stillOpen, { number: 999, title: "Upstream buyer wallet LOW (x402)" }]);
     const r2 = await syncAlarms(ENV, { ...nosleep, maxWrites: 100, fetchStatus: feed(everythingHealthy, everythingHealthy) });
     assert.deepEqual(r2.opened, [], "the open landed last run and is not repeated");
-    assert.deepEqual(new Set(r2.closed), new Set(r1.deferred), "the next run writes exactly what was deferred");
+    // A closeAfterTwoOk alarm's first ok read is a mark (one write), not a close.
+    assert.deepEqual(new Set([...r2.closed, ...r2.clearing]), new Set(r1.deferred), "the next run writes exactly what was deferred");
+    assert.ok(r2.clearing.every((t) => ALARMS.find((a) => a.title === t)?.closeAfterTwoOk), `only the two-ok alarms are marked (${r2.clearing})`);
   });
 
   // Words that only heartbeat.yml watched until 2026-10-20. Each maps to
@@ -678,6 +724,9 @@ for (const [name, over, detail] of failCases) {
   await acheck("each moved gateway-status word maps to page, clear or quiet", async () => {
     const cases = [
       ["Solana upstream buyer wallet LOW (x402)", "upstreamBuyerSvm", ["low"], ["ok"]],
+      ["containedTurns: a scheduled turn is throwing every minute", "containedTurns", ["repeating"], ["ok"]],
+      // Listings of many distinct origins failing to read inside the window (src/x402-index.js).
+      ["brokenListings: seller listings are failing to read across many origins", "brokenListings", ["widespread"], ["ok"]],
       ["Stellar facilitator fee account LOW (XLM)", "stellarFacilitator", ["low"], ["ok"]],
       ["Upstream call budget ELEVATED", "upstreamBudgets", ["elevated"], ["ok"]],
       ["Upstream hard ceiling REACHED", "upstreamHardCaps", ["capped"], ["ok"]],

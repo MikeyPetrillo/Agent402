@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import { PerformanceObserver } from "node:perf_hooks";
 import { Session } from "node:inspector/promises";
 import { requireTestPg } from "./lib/test-pg.js";
+import "./lib/uncapped-sellers.js"; // every seeded tool is kept: the large sellers here are the point
 const IS_B = process.env.INDEX_SLICES_ROLE === "b";
 let DIR = null;
 if (!IS_B) {
@@ -233,16 +234,22 @@ async function main() {
 
     // Same index on both sides: the slicing changed when the work runs, not what it produces.
     ok(JSON.stringify(sellers(A)) === JSON.stringify(await askB("sellers")), "B serves the same sellers and tool counts as A after the pull");
-    const row = await sdb.records.get("x402-index", "https://seller-0.example");
-    ok(row?.tools?.length === 5009 && row.tools[0].description === data[0][1].tools[0].description && row.fetchedAt === data[0][1].fetchedAt + 10_000_000, "the largest origin's row holds its whole catalogue");
+    // The largest origin is past the part size, so its row is a header and its
+    // catalogue is in part rows (src/index-parts.js); read assembled.
+    const row = await A._storedEntryForTest("https://seller-0.example");
+    ok(row?.tools?.length === 5009 && row.tools[0].description === data[0][1].tools[0].description && row.fetchedAt === data[0][1].fetchedAt + 10_000_000, "the largest origin's stored entry holds its whole catalogue");
+    ok((await sdb.records.get("x402-index", "https://seller-0.example"))?.parts?.tools === 5009, "...stored as a header naming its parts");
     // ---- a row too large for a batch: sent as UTF-8 bytes built in pieces ----
     // (the text parameter's clean and encode were each one call over the whole
     // body, 0.6-1 s on the largest seller's 84 MB row). The row stored is the
-    // one the text parameter stored.
+    // one the text parameter stored. A seller of the part size or fewer tools
+    // is one row whatever it weighs, so this one stays under it.
     {
       const { cleanPgText } = sdb;
       const bigOrigin = "https://seller-big.example";
-      const tools = Array.from({ length: 4000 }, (_, k) => ({ route: `/api/big/${k}`, method: "GET", name: `big tool ${k} 漢字 é \u{1F600}`, description: `Item ${k}: ${"ü".repeat(200)} ${"x".repeat(200)}`, price: "$0.001", network: "eip155:8453", tags: ["big"] }));
+      // (The persisted projection cuts a description at 400 characters; the
+      // weight sits in the name so the row passes two megabytes.)
+      const tools = Array.from({ length: 2000 }, (_, k) => ({ route: `/api/big/${k}`, method: "GET", name: `big tool ${k} 漢字 é \u{1F600} ${"ü".repeat(500)} ${"x".repeat(500)}`, description: `Item ${k}: ${"ü".repeat(200)} ${"x".repeat(190)}`, price: "$0.001", network: "eip155:8453", tags: ["big"] }));
       A._cacheForTests().set(bigOrigin, { manifest: { name: "Big" }, tools, fetchedAt: 5_000_000, error: null, source: "crawl", history: [], paywall: null, discoveryPath: "/.well-known/x402" });
       const line = A._persistedLineForTest(bigOrigin);
       const h = createHash("sha1").update(line).digest("base64");

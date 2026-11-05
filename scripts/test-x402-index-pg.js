@@ -5,13 +5,19 @@
 // it is written, and a fresh instance warm-starts from the rows in pages with
 // indexWarmStartInProgress() raised until the last page. Requires
 // STATE_DATABASE_URL (CI fails without it).
+// The large sellers here exercise the one-row paths (the single-row upsert,
+// its newer-wins rule, the pull's byte-range read of a large row); a seller
+// this large is normally stored as a header and parts (src/index-parts.js,
+// scripts/test-index-parts-pg.js), so the part size is raised past them.
 import { mkdtempSync, writeFileSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTestPg } from "./lib/test-pg.js";
+import "./lib/uncapped-sellers.js"; // every seeded tool is kept: the large sellers here are the point
 requireTestPg({ label: "test-x402-index-pg" });
 
 process.env.X402_INDEX_CRAWL = "off";
+process.env.INDEX_PART_TOOLS = "1000000000";
 const DIR = mkdtempSync(join(tmpdir(), "x402-index-pg-"));
 process.env.INDEX_CACHE_FILE = join(DIR, "x402-index-cache.json");
 process.env.REMOVED_ORIGINS_FILE = join(DIR, "removed-origins.json");

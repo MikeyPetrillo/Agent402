@@ -92,6 +92,11 @@ ok(standingBand({ sellers: 50 }) !== "", "at the floor it speaks");
   const none = standingCountsExcludingHost({ totals: { sellers: 10, tools: 50 }, sellers: [] });
   ok(none.sellers === 10 && none.listings === 50, "no local row, nothing subtracted");
   ok(standingCountsExcludingHost(null).sellers === 0, "no snapshot reads zero, which suppresses the band");
+  // A seller past the per-seller cap is held at the cap; listings count what it lists.
+  const capped = standingCountsExcludingHost({ totals: { sellers: 3, tools: 5600, toolsTotal: 12600 }, sellers: [{ local: true, toolCount: 600, toolsTotal: 600 }, { toolCount: 5000, toolsTotal: 12000, toolsCapped: true }] });
+  ok(capped.listings === 12000, `listings read toolsTotal, the count sellers list (${capped.listings})`);
+  const derived = standingCountsExcludingHost({ sellers: [{ local: true, toolCount: 600 }, { toolCount: 5000, toolsTotal: 12000, toolsCapped: true }] });
+  ok(derived.listings === 12000, `...and a snapshot without totals derives the same (${derived.listings})`);
 }
 
 console.log(`\ntest-standing-band: ${n} assertions OK`);

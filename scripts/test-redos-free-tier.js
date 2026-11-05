@@ -69,6 +69,9 @@ const ok = (cond, msg) => {
     judgeReadableText: (s) => screen.judgeReadableText(s),
     judgeReadableName: (s) => screen.judgeReadableName(s),
     judgeReadableListing: (s) => screen.judgeReadableListing({ host: s, slug: s, description: s, tags: [s, s] }),
+    // The screen's parts on their own: every reading of the text with no hint,
+    // and the two hints and the alternation on each.
+    __testListingScreen: (s) => { const p = screen.__testListingScreen(); for (const f of p.injectionForms(s)) { p.INJECTION_LEET_HINT.test(f); p.INJECTION_HINT.test(f); p.INJECTION_ANY.test(f); } },
   };
   const exported = Object.keys(screen).filter((k) => typeof screen[k] === "function");
   ok(exported.every((k) => k in fns), `every exported screen function is timed (${exported.filter((k) => !(k in fns)).join(",") || "all"})`);

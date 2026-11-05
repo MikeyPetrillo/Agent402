@@ -1183,6 +1183,8 @@ jobs:
           t node scripts/test-us-spelling.js
           # Seller text on the agent-read JSON surfaces is cleaned and capped at serve time; a flagged listing is marked and served without its description
           t env AGENT402_SHOW_ROUTER=1 node scripts/test-listing-text-serve.js
+          # The listing screen's necessary-word hints answer exactly as the unhinted reading (implication per pattern on a generated corpus, agreement on the honest fixture; offline)
+          t node scripts/test-listing-screen-hints.js
           # Well-known store (operator-published domain-verification docs; traversal impossible, reserved names refused, no shadowing of /.well-known/x402 — offline)
           t node scripts/test-well-known-store.js
           # /api/reliability envelope (guarantees claim+verify pairing — every listing portal reads this)
@@ -1435,8 +1437,10 @@ jobs:
           t node scripts/test-index-equal-rev-pg.js
           # The index's save and pull yield on time at production scale (5,800 origins, 198k tools).
           t node scripts/test-index-persist-slices-pg.js
-          # A row of tens of megabytes is written and warm-started under a statement limit it outlasts
+          # A row of tens of megabytes is written and warm-started under a statement limit it outlasts (the one-row fallback)
           t node scripts/test-index-large-row-pg.js
+          # A 77k-tool seller is stored as a header and parts: a second container assembles the same entry, one changed part is rewritten, a save during a read is never mixed in, shrink and removal leave no part behind; a container under the per-seller cap stores it at the cap in 3 parts, the old parts swept after the grace, and a later boot rewrites nothing
+          t node scripts/test-index-parts-pg.js
           # The tool directory from the state database (INDEX_LISTINGS_STORE=pg): every page the in-memory directory's, row for row; changes and removals written; no in-memory directory built; a page under 50 ms
           t node scripts/test-index-listings-pg.js
           # A re-price outside a crawl reaches the other container; a boot rewrites nothing it read
@@ -1975,6 +1979,12 @@ jobs:
           t node scripts/test-seller-field-types.js
           # A stored index of sellers with non-text fields boots and serves every seller page and API; entries are cleaned as the cache stores them
           t node scripts/test-seller-field-types-serve.js
+          # The index keeps at most INDEX_SELLER_TOOL_CAP tools per seller, described first, in one funnel: a 12,000-tool seller lists at the cap with toolsTotal and toolsCapped on every surface and routes on its kept tools; a mutation control on a copy of src shows the full count with the cap removed (boots the server; offline)
+          t node scripts/test-seller-tool-cap.js
+          # A throw inside a scheduled turn (the drain, a shadow rebuild) or inside one seller's listing is contained: the process stays up, the other sellers answer, the counts reach the operator surface (boots the server; offline)
+          t node scripts/test-crash-containment.js
+          # Every setImmediate/setTimeout/setInterval callback in the index module and the server runs under contained() or is allowlisted with a reason
+          t node scripts/test-contained-turns-sites.js
           # /api/route ordering: route-order.js pinned to the comparator, read by why.tiebreaks and the ranking sentence (offline)
           t node scripts/test-route-order.js
           # Revenue detector classification (real x402 buys vs funding/tests)
@@ -2875,6 +2885,8 @@ jobs:
           t node scripts/test-crawl-politeness.js
           # Index warm-start is incremental (NDJSON twin parsed a batch per turn; no event-loop hold; legacy fallback — offline)
           t node scripts/test-index-ndjson-warmstart.js
+          # A large seller's entry splits into parts and assembles deep-equal; one changed part; shrink to one row; a mix of two saves refused (offline)
+          t node scripts/test-index-parts.js
           t node scripts/test-stall-profiler.js
           t node scripts/test-offload-stalls.js
           # Ledger and index figures behind the stalled routes build across turns: same answers as the one-turn reads, first request after a production-sized boot under the bound (boots the server; offline)
@@ -6606,7 +6618,7 @@ jobs:
           echo "health: $code"
           [ "$code" = "200" ] || { echo "Service did not become healthy in 10 minutes"; exit 1; }
           echo "=== pricing ==="
-          curl -s --max-time 15 "https://$URL/api/pricing"
+          curl -s --max-time 15 "https://$URL/api/pricing" || echo "(pricing read failed: curl exit $?; the gates below decide)"
           echo; echo "=== 402 check (paywall engaged) ==="
           # Retry the paywall probe — a single blip (cold container warming up, a
           # transient network hiccup) must NOT mark a healthy deploy as failed.
