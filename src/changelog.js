@@ -3,13 +3,13 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 const ENTRIES = [
   {
     date: "2026-11-05",
-    title: "First-call refusals by new wallet, bounded CI installs",
+    title: "Robinhood facilitator order, public-index disclosure, job buys",
     items: [
+      "Payments: on Robinhood Chain the server settles through the first listed facilitator whose /supported confirms exact at boot, so a primary that does not answer then leaves the rail on the next one; a listed facilitator's refusal that is not about the buyer's payment moves to the next listed facilitator before our own relayer, and a refusal about the payment itself is never retried.",
+      "Privacy: when the facilitator that settles Robinhood Chain publishes settlements on a public index, the privacy page names it and what it publishes, the terms, /.well-known/x402, llms.txt and the Robinhood page point there, and the pages print the date it began.",
       "Operations: the operator view of first-call grants counts refusals of wallets that never paid by reason and route, apart from returning buyers, so a route a newcomer wanted shows up by name.",
       "Operations: every Playwright install in CI goes through the bounded apt helper, and a guard fails any workflow step that runs apt directly.",
-      "Payments: Solana can take one more facilitator as its last settle fallback, after every current one and only once its /supported lists exact on Solana; CDP still settles first.",
-      "Privacy: when a facilitator we settle through publishes settlements on a public index, the privacy page names it and the chains it covers, and the terms point there.",
-      "Operations: the listing pass and the other catalog buy scripts send Prefer: respond-async to slow routes and follow the job to its answer; a failed job counts as a failed buy.",
+      "Operations: the listing pass and the other catalog buy scripts send Prefer: respond-async to slow routes and follow the job to its answer; a failed job counts as a failed buy, and records keep a job's state, never its link.",
       "Packages: viem is 2.57.16.",
     ],
   },

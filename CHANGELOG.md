@@ -6,7 +6,18 @@ carries its own version on npm.
 
 ## Unreleased
 
-### 2026-11-05 (first-call refusals by new wallet, bounded CI installs)
+### 2026-11-05 (Robinhood facilitator order, public-index disclosure, job buys)
+Payments:
+- On Robinhood Chain the server settles through the first listed facilitator
+  whose `/supported` confirms exact at boot, so a primary that does not answer
+  then leaves the rail on the next one. A listed facilitator's refusal that is
+  not about the buyer's payment moves to the next listed facilitator before
+  our own relayer; a refusal about the payment itself is never retried.
+Privacy:
+- When the facilitator that settles Robinhood Chain publishes settlements on a
+  public index (`FACILITATOR_PUBLIC_INDEX_CHAINS`), the privacy page names it
+  and what it publishes, the terms, `/.well-known/x402`, llms.txt and the
+  Robinhood page point there, and the pages print the date it began.
 Operations:
 - The operator view of first-call grants counts refusals of wallets that
   never paid by reason and route, apart from returning buyers, so a route a
@@ -14,18 +25,10 @@ Operations:
 - Every Playwright install in CI goes through the bounded apt helper
   (`scripts/ci-apt-install.sh --playwright-chromium`), and a guard fails any
   workflow step that runs apt directly.
-Payments:
-- Solana can take one more facilitator as its last settle fallback
-  (`SOLANA_FALLBACK_FACILITATOR_URL`), after every current one and only once
-  its `/supported` lists exact on Solana; CDP still settles first.
-Privacy:
-- When a facilitator we settle through publishes settlements on a public
-  index (`FACILITATOR_PUBLIC_INDEX_CHAINS`), the privacy page names it and the
-  chains it covers, and the terms point there.
-Operations:
 - The listing pass and the other catalog buy scripts send
   `Prefer: respond-async` to slow routes and follow the job to its answer; a
-  failed job counts as a failed buy.
+  failed job counts as a failed buy, and records keep a job's state, never
+  its link.
 Packages:
 - viem is 2.57.16.
 
