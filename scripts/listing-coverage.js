@@ -119,6 +119,9 @@ export function coverageFor({ pricing, bazaarItems = [], payaiItems = [], origin
     const row = {
       method: e.method || "POST", path: e.path, slug: e.slug || null, price: e.price || null,
       priceUsd: priceToUsd(e.price), quoted: e.quoted === true, identityBound: e.identityBound === true, computePayable: e.computePayable === true, modelBacked: e.modelBacked === true,
+      // The row's async block (src/slow-routes.js asyncAdvice): a slow route's
+      // paid call is sent with Prefer: respond-async (scripts/payai-listing-pass.js).
+      async: e.async && typeof e.async === "object" ? e.async : null,
       sells: {}, bazaar: {}, payai: {},
       bazaarRow: registries.bazaar.has(key), payaiRow: registries.payai.has(key),
     };
