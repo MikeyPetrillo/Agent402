@@ -980,6 +980,8 @@ jobs:
           t node scripts/test-llm-kit-spend.js
           t node scripts/test-upstream-costs.js
           t node scripts/test-ci-secretless-install.js
+          # Every workflow apt install goes through the bounded helper (offline)
+          t node scripts/test-ci-apt-bounded.js
           # Gateway settle-failure breaker (per-payer + global refusal before any upstream call, finish-listener outcomes, source pins - offline)
           t node scripts/test-gateway-settle-breaker.js
 
@@ -4363,30 +4365,7 @@ jobs:
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
-        run: |
-          printf 'Acquire::http::Timeout "20";\nAcquire::https::Timeout "20";\nAcquire::Retries "2";\n' \
-            | sudo tee /etc/apt/apt.conf.d/99-ci-mirror-timeouts >/dev/null
-          set_mirrors() {  # $1 = "with-azure" | "no-azure"
-            [ -f /etc/apt/apt-mirrors.txt ] || return 0
-            {
-              printf 'https://archive.ubuntu.com/ubuntu/\tpriority:1\n'
-              [ "$1" = "with-azure" ] && printf 'http://azure.archive.ubuntu.com/ubuntu/\tpriority:2\n'
-              printf 'https://security.ubuntu.com/ubuntu/\tpriority:3\n'
-            } | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
-          }
-          set_mirrors with-azure
-          for i in 1 2 3; do
-            if timeout 170 npx playwright install --with-deps chromium; then exit 0; fi
-            echo "playwright install attempt $i failed or stalled (apt mirror?) - retrying without the azure mirror"
-            # A stalled apt-get may outlive the killed npx (sudo can detach it
-            # from the group); clear it so the retry isn't blocked on its lock.
-            # The stall is in apt's fetch phase, so killing it is safe.
-            sudo pkill -TERM -f 'apt-get' 2>/dev/null || true
-            set_mirrors no-azure
-            sleep 10
-          done
-          echo "playwright install failed 3x - the runner's apt mirror is likely down"
-          exit 1
+        run: bash scripts/ci-apt-install.sh --playwright-chromium
       - name: Start server in free mode
         run: |
           # Raise the MCP rate limit so the full-catalog connector test can sweep
@@ -4585,30 +4564,7 @@ jobs:
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
           E2B_API_KEY: ""
-        run: |
-          printf 'Acquire::http::Timeout "20";\nAcquire::https::Timeout "20";\nAcquire::Retries "2";\n' \
-            | sudo tee /etc/apt/apt.conf.d/99-ci-mirror-timeouts >/dev/null
-          set_mirrors() {  # $1 = "with-azure" | "no-azure"
-            [ -f /etc/apt/apt-mirrors.txt ] || return 0
-            {
-              printf 'https://archive.ubuntu.com/ubuntu/\tpriority:1\n'
-              [ "$1" = "with-azure" ] && printf 'http://azure.archive.ubuntu.com/ubuntu/\tpriority:2\n'
-              printf 'https://security.ubuntu.com/ubuntu/\tpriority:3\n'
-            } | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
-          }
-          set_mirrors with-azure
-          for i in 1 2 3; do
-            if timeout 170 npx playwright install --with-deps chromium; then exit 0; fi
-            echo "playwright install attempt $i failed or stalled (apt mirror?) - retrying without the azure mirror"
-            # A stalled apt-get may outlive the killed npx (sudo can detach it
-            # from the group); clear it so the retry isn't blocked on its lock.
-            # The stall is in apt's fetch phase, so killing it is safe.
-            sudo pkill -TERM -f 'apt-get' 2>/dev/null || true
-            set_mirrors no-azure
-            sleep 10
-          done
-          echo "playwright install failed 3x - the runner's apt mirror is likely down"
-          exit 1
+        run: bash scripts/ci-apt-install.sh --playwright-chromium
       - name: Start server in free mode
         run: |
           # Raise the MCP rate limit so the full-catalog connector test can sweep

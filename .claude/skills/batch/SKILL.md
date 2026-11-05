@@ -97,10 +97,14 @@ and every mutation makes a test fail.
 
 ## 6. Push and merge
 Push only on the owner's word. Open a draft PR from the batch branch. Watch the push-event run
-(`gh run list --event push`), never the PR-event run, which skips tests and ends green. Merge
-only with `scripts/merge-on-green.sh <pr>`.
+(`gh run list --event push`), never the PR-event run, which skips tests and ends green. Before
+marking the PR ready, read its code-scanning alerts
+(`gh api "repos/{owner}/{repo}/code-scanning/alerts?ref=refs/pull/<pr>/merge&state=open"`) and fix
+every alert the batch introduced, test scripts included, with the same test-first rule as step 5.
+Merge only with `scripts/merge-on-green.sh <pr>`.
 
-Result: the PR is merged by the helper, pinned to the tested SHA, every required check green.
+Result: the PR has no open code-scanning alert from the batch and is merged by the helper,
+pinned to the tested SHA, every required check green.
 
 ## 7. Production verification
 - `GET /health`: `meta.build` equals the merge commit.
@@ -129,3 +133,5 @@ guard or skill step added.
 - A CodeQL-shaped substring check on URLs in a test (compare by equality).
 - Values interpolated into a generated script's source (pass them as argv).
 - A workflow edited on one branch and deleted on another.
+- An `apt-get install` in a workflow: CI installs apt packages only through
+  `bash scripts/ci-apt-install.sh <package>...` (bounded attempts, mirror failover).
