@@ -98,7 +98,7 @@ const dropCases = carried(P.drop, DROP_CARRIERS);
 const { decodeTagCharacters, hiddenCharacters } = await import("../src/hidden-chars.js");
 const UNCYR = Object.fromEntries([...Object.entries(CYR).map(([k, v]) => [v, k]), ["ο", "o"], ["α", "a"]]);
 const LEET = { 0: "o", 1: "i", 3: "e", 4: "a", 5: "s", 7: "t" };
-const plainWords = (s) => decodeTagCharacters(String(s || "")).normalize("NFKC").replace(/&nbsp;/gi, " ").replace(/<!--[\s\S]*?-->|<\/?b>/g, "")
+const plainWords = (s) => decodeTagCharacters(String(s || "")).normalize("NFKC").replace(/&nbsp;/gi, " ").replace(/<!--[\s\S]*?-->|<\/?b>/g, "").replace(/[<>]/g, "")
   .replace(/[Ѐ-ӿͰ-Ͽ]/g, (c) => UNCYR[c] || c).toLowerCase()
   .replace(/[a-z0-9]+/g, (w) => (/[a-z]/.test(w) ? w.replace(/[013457]/g, (d) => LEET[d]) : w));
 const STOP = new Set(["this", "that", "with", "from", "your", "have", "will", "before", "into", "than", "then", "tool", "here", "data", "weather", "forecast"]);

@@ -230,7 +230,7 @@ ok(dispatchEligibility({ local: true }).reason === "local_catalog" && dispatchEl
            `${c.name}: the ${surface} names exactly the caps that are on (${text.slice(text.indexOf("never above"), text.indexOf("flagged"))})`);
         ok(/flagged unproven on the buyer's receipt/.test(text) && !/, ,|never past ,|never past and/.test(text), `${c.name}: the ${surface} still reads as one clean sentence`);
       }
-      ok(/at most \$0\.25 a day per seller/.test(note) === c.wantSeller && new RegExp(`${usdFigure(BASE_UNPROVEN_LANE_DAILY_DEFAULT_USD).replace(/[$.]/g, "\\$&")} a day in all`).test(note) === c.wantLane,
+      ok(/at most \$0\.25 a day per seller/.test(note) === c.wantSeller && new RegExp(`${usdFigure(BASE_UNPROVEN_LANE_DAILY_DEFAULT_USD).replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")} a day in all`).test(note) === c.wantLane,
          `${c.name}: the lane note's figures quote the same caps (${note.slice(note.lastIndexOf("("))})`);
     }
     ok(BASE_UNPROVEN_SELLER_DAILY_DEFAULT_USD === 0.25 && usdFigure(BASE_UNPROVEN_LANE_DAILY_DEFAULT_USD) === "$5.00", "the defaults the cases read are the shipped ones, printed in the shared figure format");

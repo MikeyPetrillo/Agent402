@@ -31,7 +31,9 @@ let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const dec = (s) => String(s).replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/\s+/g, " ").trim();
+const stripTags = (s) => { let out = String(s), prev; do { prev = out; out = out.replace(/<[^>]*>/g, ""); } while (out !== prev); return out; };
+// &amp; decodes last, so an escaped entity such as &amp;lt; reads as the text "&lt;".
+const dec = (s) => stripTags(s).replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
 
 /** Every JSON-LD node on a page, nested ones included. */
 function ldNodes(html) {

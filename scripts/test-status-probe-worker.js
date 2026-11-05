@@ -455,7 +455,7 @@ for (const [name, over, detail] of failCases) {
     if (u.endsWith("/api/status")) return Response.json({ components: [{ key: "settlement", current: { state: "operational" } }] });
     if (u === "https://api.github.com/user") return Response.json({ login: "probe-bot" });
     if (u.includes("/issues?state=open")) return Response.json(ALARMS.filter((a) => a.title !== "Upstream buyer wallet LOW (x402)").map((a, i) => ({ number: i + 1, title: a.title, user: { login: "probe-bot" } })));
-    if (u.startsWith("https://api.github.com")) return new Response("{}", { status: 200 });
+    if (new URL(u).hostname === "api.github.com") return new Response("{}", { status: 200 });
     return prodStub(url, init);
   };
   const out = await run({ PROD, STATUS_PROBE_TOKEN: TOKEN, GITHUB_ISSUES_TOKEN: "t" }, { sleep: async () => {} });
@@ -1160,7 +1160,7 @@ for (const [name, over, detail] of failCases) {
       closedNums.push(Number(m[1])); issues = issues.filter((x) => x.number !== Number(m[1]));
       return Response.json({});
     }
-    if (u.startsWith("https://api.github.com")) return new Response("{}", { status: 200 });
+    if (new URL(u).hostname === "api.github.com") return new Response("{}", { status: 200 });
     return prodStub(url, init);
   };
   const ENV = { PROD, STATUS_PROBE_TOKEN: TOKEN, GITHUB_ISSUES_TOKEN: "t" };

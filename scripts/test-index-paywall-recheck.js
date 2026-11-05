@@ -77,7 +77,11 @@ __setProbeFetchForTest((url, opts) => {
   const u = new URL(url);
   if (/\bprobePaywall\b/.test(String(new Error().stack))) hits.set(u.hostname, (hits.get(u.hostname) || 0) + 1);
   if (!u.hostname.endsWith(".example.test")) return Promise.reject(Object.assign(new Error(`left the test hosts: ${url}`), { code: "ENOTFOUND" }));
-  return fetch(`${loop}/${u.hostname}${u.pathname}${u.search}`, { ...opts, redirect: "manual" });
+  // Fixed loopback origin; the stubbed host only picks a path on it.
+  const target = new URL(loop);
+  target.pathname = `/${u.hostname}${u.pathname}`;
+  target.search = u.search;
+  return fetch(target, { ...opts, redirect: "manual" });
 });
 const accepts = [{ scheme: "exact", network: "eip155:8453", amount: "5000", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", payTo: "0x" + "b2".repeat(20), maxTimeoutSeconds: 60, extra: { name: "USD Coin", version: "2" } }];
 const manifestFor = (origin, { template = false } = {}) => ({

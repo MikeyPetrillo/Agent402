@@ -83,7 +83,7 @@ const ctl = createServer(async (req, res) => {
       return send({ exposureUsd: row ? row.unsettledUsd : 0, unproven, delivery: sellerDeliveryMemoEntries().map((e) => ({ origin: e.origin, strikes: e.strikes, actionable: e.actionable })) });
     }
     res.writeHead(404); res.end();
-  } catch (e) { res.writeHead(500); res.end(String(e?.message || e)); }
+  } catch (e) { console.error("[golden-ctl]", e); res.writeHead(500); res.end("control error"); }
 });
 ctl.listen(0, "127.0.0.1", () => {
   if (process.env.GOLDEN_CTL_FILE) writeFileSync(process.env.GOLDEN_CTL_FILE, String(ctl.address().port));
