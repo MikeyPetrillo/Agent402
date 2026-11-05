@@ -122,6 +122,7 @@ import { REPORT_TIERS } from "../src/report-tiers.js";
 import { measureCoverage, missingIn, renderTable, examplesFromOpenapi, multipartKeysFromOpenapi, chainOf, CHAINS } from "./listing-coverage.js";
 import { multipartBodyFrom } from "../src/openapi-request.js";
 import { awaitJob, DEFAULT_ASYNC_TIMEOUT_MS } from "../client/async-job.js";
+import { redactJobLinks } from "./lib/slow-route-buy.js";
 
 export const SETTLE_VIA = "payai";
 export const REGISTRIES = ["bazaar", "payai"];
@@ -767,7 +768,7 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
         // ends throws, and the record keeps chargeUnknown.
         let job = null;
         const res = first.status === 202 && prefer
-          ? await awaitJob(first, { baseUrl: target, fetchImpl, sleep, slug: r.slug, timeoutMs: DEFAULT_ASYNC_TIMEOUT_MS, onProgress: (d) => { job = d; rec.job = { id: d?.jobId ?? rec.job?.id ?? null, state: d?.state ?? d?.status ?? null }; } })
+          ? await awaitJob(first, { baseUrl: target, fetchImpl, sleep, slug: r.slug, timeoutMs: DEFAULT_ASYNC_TIMEOUT_MS, onProgress: (d) => { job = d; rec.job = { state: d?.state ?? d?.status ?? null }; } })
           : first;
         rec.status = res.status;
         const receipt = receiptOf(res);
@@ -776,6 +777,13 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
         const bytes = new Uint8Array(await res.arrayBuffer().catch(() => new ArrayBuffer(0)));
         rec.latencyMs = Date.now() - t0;
         Object.assign(rec, keptBody(bytes, res.headers.get("content-type") || ""));
+        // A job's answer (its message header, its body) is kept with no job
+        // link in it: the id is a bearer link to the paid answer, and the
+        // records are a public run artifact.
+        if (job) {
+          for (const k of Object.keys(rec.responseHeaders)) if (typeof rec.responseHeaders[k] === "string") rec.responseHeaders[k] = redactJobLinks(rec.responseHeaders[k]);
+          if (typeof rec.body === "string") rec.body = redactJobLinks(rec.body);
+        }
         rec.chargeUnknown = false;
         if (res.status === 200 && receipt?.success === true && receipt.transaction) { rec.tx = receipt.transaction; rec.charged = true; break; }
         if (res.status === 200) { rec.error = "200 without a settlement receipt: served unpaid, no row"; break; }
@@ -786,7 +794,7 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
           // may have settled first, so its charge is unknown.
           const answered = job?.error && typeof job.error === "object" && job.error.body !== undefined;
           if (!answered) rec.chargeUnknown = true;
-          rec.error = `job ${rec.job?.state || "failed"}: ${rec.error}${job?.message ? ` (${String(job.message).slice(0, 120)})` : ""}`;
+          rec.error = `job ${rec.job?.state || "failed"}: ${rec.error}${job?.message ? ` (${redactJobLinks(job.message).slice(0, 120)})` : ""}`;
           break;
         }
         const named = !prefer && !asyncFallback ? asyncRefusalPrefer(res.status, bytes) : null;
@@ -798,13 +806,13 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
         // on the server, so it is never paid a second time: the record keeps
         // chargeUnknown, the next run's memory skips the route, and the
         // coverage read at the end shows the row.
-        rec.error = String(e?.message || e).slice(0, 160);
+        rec.error = redactJobLinks(e?.message || e).slice(0, 160);
         rec.latencyMs = Date.now() - t0;
         break;
       }
     }
     writeRecords();
-    if (rec.charged) { settled++; spent += r.priceUsd; log(`  OK    ${r.method.padEnd(4)} ${r.path.padEnd(40)} $${r.priceUsd.toFixed(3)}  tx ${String(rec.tx).slice(0, 16)}${rec.job ? `  job ${rec.job.id}` : ""}`); }
+    if (rec.charged) { settled++; spent += r.priceUsd; log(`  OK    ${r.method.padEnd(4)} ${r.path.padEnd(40)} $${r.priceUsd.toFixed(3)}  tx ${String(rec.tx).slice(0, 16)}${rec.job ? `  job ${rec.job.state}` : ""}`); }
     else if (!rec.attempts) { held++; log(`  SKIP  ${r.method.padEnd(4)} ${r.path.padEnd(40)} ${rec.error}`); }
     else { failed++; log(`  FAIL  ${r.method.padEnd(4)} ${r.path.padEnd(40)} ${rec.error}`); }
     if (i < plan.selected.length - 1 && opts.pauseMs) await sleep(opts.pauseMs);

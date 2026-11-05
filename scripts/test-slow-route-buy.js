@@ -26,7 +26,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { generatePrivateKey } from "viem/accounts";
-import { asyncAdviceByPath, asyncRefusalPreferOf, slowPreferOf, paidCallHonoringSlowRoutes, RESPOND_ASYNC } from "./lib/slow-route-buy.js";
+import { asyncAdviceByPath, asyncRefusalPreferOf, slowPreferOf, paidCallHonoringSlowRoutes, RESPOND_ASYNC, redactJobLinks } from "./lib/slow-route-buy.js";
 import { runCatalogBuy } from "./catalog-buy.js";
 
 let pass = 0, fail = 0;
@@ -136,6 +136,24 @@ const call = (path, prefer) => paidCallHonoringSlowRoutes(async (extra, attempt)
   ok(seen.length === 1 && seen[0].prefer === "respond-async", `a slow route's paid call carries Prefer: respond-async up front, one call (${seen.map((s) => s.prefer).join()})`);
   ok(r.res.status === 200 && body.via === "job" && JSON.parse(Buffer.from(r.res.headers.get("payment-response"), "base64").toString()).transaction === "tx-job-report", "the job is followed to the route's own answer: status, receipt and body");
   ok(polls.length === 2 && r.job?.state === "succeeded" && r.jobFailed === false && r.attempts === 1 && r.fallback === false && r.prefer === "respond-async", `the job link is polled to its terminal state (${polls.length} polls, ${JSON.stringify(r.job)})`);
+}
+// A job id is a bearer link to the paid answer: the helper hands back the
+// job's state only, and a job still pending reaches the caller with its link
+// redacted from the message and dropped from the error.
+{
+  const ID = "f".repeat(48);
+  ok(redactJobLinks(`collect it from ${T}/api/jobs/${ID} (free)`) === `collect it from ${T}/api/jobs/<redacted> (free)` && redactJobLinks(`{"statusUrl":"/api/jobs/x-1.Z","jobId":"${ID}"}`) === `{"statusUrl":"/api/jobs/<redacted>","jobId":"<redacted>"}` && redactJobLinks(`%2Fapi%2Fjobs%2F${ID}&a=1`) === "%2Fapi%2Fjobs%2F<redacted>&a=1" && redactJobLinks(`{\\"jobId\\":\\"${ID}\\"}`) === `{\\"jobId\\":\\"<redacted>\\"}`, "redactJobLinks blanks a job link of any id shape, plain or percent-encoded, and a jobId value, escaped or not");
+  ok(redactJobLinks("/api/jobs/{id}") === "/api/jobs/{id}" && redactJobLinks("HTTP 500 upstream_failed") === "HTTP 500 upstream_failed", "and leaves the documented link template and other text alone");
+  reset();
+  const seenJobs = [];
+  const r = await paidCallHonoringSlowRoutes(async (extra) => fetch(`${T}/v1/report`, { method: "POST", headers: { "content-type": "application/json", "payment-signature": "sig", ...extra }, body: "{}" }), { prefer: RESPOND_ASYNC, baseUrl: T, fetchImpl: fetch, slug: "report", sleep: noSleep, onJob: (j) => seenJobs.push(j) });
+  ok(r.res.status === 200 && JSON.stringify(r.job) === JSON.stringify({ state: "succeeded" }) && seenJobs.length && seenJobs.every((j) => !("id" in j)), `the helper hands back and reports the job's state, never its id (${JSON.stringify(r.job)}, ${JSON.stringify(seenJobs)})`);
+  // A 202 whose job the link no longer knows: pending to the buyer, may be charged.
+  let thrown = null;
+  try {
+    await paidCallHonoringSlowRoutes(async () => new Response(JSON.stringify({ jobId: ID, state: "queued", statusUrl: `/api/jobs/${ID}` }), { status: 202, headers: { location: `/api/jobs/${ID}`, "retry-after": "1" } }), { prefer: RESPOND_ASYNC, baseUrl: T, fetchImpl: fetch, slug: "report", sleep: noSleep });
+  } catch (e) { thrown = e; }
+  ok(thrown?.name === "AsyncJobPendingError" && thrown.mayBeCharged === true && !String(thrown.message).includes(ID) && /\/api\/jobs\/<redacted>/.test(thrown.message) && thrown.jobUrl === null && JSON.stringify(thrown.job) === JSON.stringify({ state: "queued" }), `a pending job's error keeps its state and charge flag, never its id or link (${thrown?.message}; ${JSON.stringify({ jobUrl: thrown?.jobUrl, job: thrown?.job })})`);
 }
 {
   reset();

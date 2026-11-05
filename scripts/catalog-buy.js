@@ -94,7 +94,7 @@ import { fileURLToPath } from "node:url";
 import { missingDocumentedKeys, emptyPromisedArrays } from "./sweep-shape.js";
 import { requestExampleOf, multipartBodyFrom, MULTIPART_TYPE } from "../src/openapi-request.js";
 import { captureRecord, CAPTURE_MAX_BYTES } from "./catalog-buy-capture.js";
-import { slowPreferOf, paidCallHonoringSlowRoutes } from "./lib/slow-route-buy.js";
+import { slowPreferOf, paidCallHonoringSlowRoutes, redactJobLinks } from "./lib/slow-route-buy.js";
 import { DEFAULT_ASYNC_TIMEOUT_MS } from "../client/async-job.js";
 
 export const BASE_CAIP2 = "eip155:8453";
@@ -561,7 +561,8 @@ export async function runCatalogBuy({
       if (e?.name === "AsyncJobPendingError") r.grade = "job-pending";
     }
     const { pass, grade } = gradeAnswer(row, r);
-    const errorBody = r.threw ? String(r.threw).slice(0, 300) : r.status >= 400 ? String(JSON.stringify(r.body ?? r.text ?? "")).slice(0, 300) : null;
+    // Redacted before the cut, so no job link (a bearer id) reaches the report, even in part.
+    const errorBody = r.threw ? redactJobLinks(r.threw).slice(0, 300) : r.status >= 400 ? redactJobLinks(JSON.stringify(r.body ?? r.text ?? "")).slice(0, 300) : null;
     const out = { slug: row.slug, path: row.path, usd: row.usd, quotedUsd: r.quotedUsd ?? null, status: r.status ?? null, grade, pass, ms: Date.now() - t0, attempts, tx: r.tx || null, sentBody, errorBody, ...(r.prefer ? { prefer: r.prefer } : {}), ...(r.asyncFallback ? { asyncFallback: true } : {}), ...(r.job ? { job: { state: r.job.state } } : {}), ...(sale ? { ownSaleOf: sale.slug } : {}) };
     noteSale(row, r, out);
     // The paid answer itself goes to the separate outputs file (redacted,

@@ -431,6 +431,8 @@ const cov = coverageFor({ pricing, payaiItems: [{ resource: "https://agent402.to
     // A stub server: a slow route refuses a paid call without the header
     // (400, before payment), answers 202 and a job with it; each job is
     // polled once running, then ends the way `ending` says.
+    // A job id as the server mints it: 48 hex characters, a bearer link to the paid answer.
+    const jobIdOf = (n) => `${n.toString(16)}`.padStart(48, "c");
     const slowServer = ({ ending = () => "succeeded", refuseEvenWithHeader = false } = {}) => {
       const host = hostFetch();
       const jobs = new Map();
@@ -449,15 +451,19 @@ const cov = coverageFor({ pricing, payaiItems: [{ resource: "https://agent402.to
         j.polls++;
         if (j.polls < 2) return new Response(JSON.stringify({ jobId: m[1], status: "working", state: "running", slug: j.slug, statusUrl: `/api/jobs/${m[1]}`, pollIntervalSeconds: 1 }), { status: 200, headers: { "retry-after": "1" } });
         const end = ending(j.slug);
+        // Still pending to the buyer: the link stops answering, or forgets the job.
+        if (end === "unreadable") return new Response(JSON.stringify({ error: "busy" }), { status: 503 });
+        if (end === "unknown") return new Response(JSON.stringify({ error: "job_not_found" }), { status: 404 });
         if (end === "succeeded") return new Response(JSON.stringify({ jobId: m[1], status: "completed", state: "succeeded", slug: j.slug, result: { httpStatus: 200, headers: { "payment-response": enc({ success: true, transaction: `tx-job-${j.slug}` }) }, body: { report: "done" } } }), { status: 200 });
         if (end === "failed") return new Response(JSON.stringify({ jobId: m[1], status: "failed", state: "failed", slug: j.slug, message: "The call ended with HTTP 500 and nothing was charged.", error: { httpStatus: 500, body: { error: "upstream_failed" } } }), { status: 200 });
+        if (end === "failed-echo") return new Response(JSON.stringify({ jobId: m[1], status: "failed", state: "failed", slug: j.slug, message: `The call did not finish; see /api/jobs/${m[1]}.`, error: { httpStatus: 500, body: { error: "upstream_failed", statusUrl: `/api/jobs/${m[1]}`, jobId: m[1] } } }), { status: 200 });
         return new Response(JSON.stringify({ jobId: m[1], status: "failed", state: "failed", slug: j.slug, message: "The call did not finish.", error: { httpStatus: 504, message: "The run did not finish in time." } }), { status: 200 });
       };
       const answer = (path, n, init) => {
         if (!slowPaths.has(path)) return okAnswer();
         const prefer = String(init?.headers?.Prefer || "");
         if (refuseEvenWithHeader || !/respond-async/.test(prefer)) return refusal(path);
-        const id = `job${n}`;
+        const id = jobIdOf(n);
         jobs.set(id, { slug: path.split("/").pop(), polls: 0 });
         return new Response(JSON.stringify({ jobId: id, status: "working", state: "queued", statusUrl: `/api/jobs/${id}`, pollIntervalSeconds: 1 }), { status: 202, headers: { location: `/api/jobs/${id}`, "retry-after": "1", "preference-applied": "respond-async" } });
       };
@@ -478,9 +484,9 @@ const cov = coverageFor({ pricing, payaiItems: [{ resource: "https://agent402.to
     ok(research.length === 1 && research[0].headers.Prefer === "respond-async", `the slow route's paid call carries Prefer: respond-async up front, one attempt (${research.map((b) => b.headers.Prefer).join()})`);
     ok(hashBuys.length === 1 && !Object.keys(hashBuys[0].headers).some((k) => k.toLowerCase() === "prefer"), "a route that is not slow sends no Prefer header");
     const rRec = a.records.find((x) => x.path === "/v1/research");
-    ok(rRec.charged === true && rRec.tx === "tx-job-research" && rRec.status === 200 && rRec.job?.id === "job2" && rRec.job?.state === "succeeded" && rRec.prefer === "respond-async" && rRec.chargeUnknown === false, `the record keeps the job's settlement tx, the charge, the job id and the header sent (${JSON.stringify({ tx: rRec.tx, job: rRec.job })})`);
-    ok(s1.polls.length === 2 && s1.polls.every((p) => p.url === `${T}/api/jobs/job2`), `the job link is polled on the target with the plain fetch, to its terminal state (${s1.polls.length} polls)`);
-    ok(/OK\s+POST \/v1\/research\s.*tx tx-job-research\s+job job2/.test(a.out), "the OK line names the job");
+    ok(rRec.charged === true && rRec.tx === "tx-job-research" && rRec.status === 200 && JSON.stringify(rRec.job) === JSON.stringify({ state: "succeeded" }) && rRec.prefer === "respond-async" && rRec.chargeUnknown === false, `the record keeps the job's settlement tx, the charge, the job's state (never its id) and the header sent (${JSON.stringify({ tx: rRec.tx, job: rRec.job })})`);
+    ok(s1.polls.length === 2 && s1.polls.every((p) => p.url === `${T}/api/jobs/${jobIdOf(2)}`), `the job link is polled on the target with the plain fetch, to its terminal state (${s1.polls.length} polls)`);
+    ok(/OK\s+POST \/v1\/research\s.*tx tx-job-research\s+job succeeded/.test(a.out), "the OK line names the job's state");
 
     // Fallback: a slow route the catalog does not mark answers 400
     // respond_async_required before payment, and is sent once more with the
@@ -512,6 +518,23 @@ const cov = coverageFor({ pricing, payaiItems: [{ resource: "https://agent402.to
     const cheap = await runSlow("slow-cheap", slowServer({ ending: () => "lost" }));
     ok(mayRetry({ slug: "slow-cheap", priceUsd: 0.01 }, 504) && cheap.code === 1 && cheap.buys.length === 1 && cheap.records[0].status === 504, `a failed job is never retried, even with a status a synchronous buy would retry on (${cheap.buys.length} attempts)`);
     ok(g.code === 1 && g.buys.length === 1 && g.records[0].charged === false && g.records[0].chargeUnknown === true && /^job failed: HTTP 504/.test(g.records[0].error), "a job that ended without the route's answer is failed with its charge unknown (held back by the memory)");
+
+    // No job id or job link reaches the records file or the log, for a job
+    // that finished (succeeded or failed, its answer echoing the link) or one
+    // still pending to the buyer (its error names where to collect it).
+    const leaks = (r) => {
+      const text = `${JSON.stringify(r.records)}\n${r.out}`;
+      return [...new Set([...r.buys.keys()].map((i) => jobIdOf(i + 1)))].filter((id) => text.includes(id)).concat(/\/api\/jobs\/(?!<redacted>)[^\s"'<>{]/.test(text) ? ["a /api/jobs/ link"] : []);
+    };
+    for (const [name, r] of [["succeeded", a], ["failed", e], ["lost", g]]) ok(!leaks(r).length, `a ${name} job leaves no job id or link in the records or the log (${leaks(r).join() || "none"})`);
+    const echo = await runSlow("research", slowServer({ ending: () => "failed-echo" }));
+    ok(echo.code === 1 && echo.records[0].status === 500 && /\/api\/jobs\/<redacted>/.test(echo.records[0].error) && /<redacted>/.test(echo.records[0].body) && !leaks(echo).length, `a failed job whose message and body echo its link is kept redacted (${echo.records[0].error}; ${leaks(echo).join() || "no leak"})`);
+    for (const ending of ["unreadable", "unknown"]) {
+      const p = await runSlow("research", slowServer({ ending: () => ending }));
+      const rec = p.records[0];
+      ok(p.code === 1 && rec.charged === false && rec.chargeUnknown === true && rec.job?.state === "running" && !("id" in rec.job) && /<redacted>/.test(rec.error) && /FAIL\s+POST \/v1\/research/.test(p.out), `a job still pending (link ${ending}) is a failure with its charge unknown, its state kept (${rec.error})`);
+      ok(!leaks(p).length, `a pending job (link ${ending}) leaves no job id or link in the records or the log (${leaks(p).join() || "none"})`);
+    }
   }
 
   // --- records are written after every attempt, so a cut-short run keeps them
