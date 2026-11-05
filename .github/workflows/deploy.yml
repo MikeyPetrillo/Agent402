@@ -1013,7 +1013,7 @@ jobs:
         run: |
           free -m || true
           sudo dmesg -T 2>/dev/null | grep -iE 'killed process|out of memory|oom-kill' | tail -20 || true
-          ps -eo pid,rss,etime,args --sort=-rss | head -15 | cut -c1-200 || true
+          ps -eo pid,rss,etime,comm --sort=-rss | head -15 || true
 
   test-unit-a3:
     # The second half of test-unit-a (2026-08-25, split by the seconds each item
@@ -2240,7 +2240,7 @@ jobs:
         run: |
           free -m || true
           sudo dmesg -T 2>/dev/null | grep -iE 'killed process|out of memory|oom-kill' | tail -20 || true
-          ps -eo pid,rss,etime,args --sort=-rss | head -15 | cut -c1-200 || true
+          ps -eo pid,rss,etime,comm --sort=-rss | head -15 || true
 
   test-unit-b3:
     # The second half of test-unit-b (2026-08-25, split by the seconds each item
@@ -2436,7 +2436,7 @@ jobs:
         run: |
           free -m || true
           sudo dmesg -T 2>/dev/null | grep -iE 'killed process|out of memory|oom-kill' | tail -20 || true
-          ps -eo pid,rss,etime,args --sort=-rss | head -15 | cut -c1-200 || true
+          ps -eo pid,rss,etime,comm --sort=-rss | head -15 || true
 
   test-unit-b2:
     # Second half of test-unit-b (2026-08-25), split by the seconds each script
@@ -3564,7 +3564,7 @@ jobs:
         run: |
           free -m || true
           sudo dmesg -T 2>/dev/null | grep -iE 'killed process|out of memory|oom-kill' | tail -20 || true
-          ps -eo pid,rss,etime,args --sort=-rss | head -15 | cut -c1-200 || true
+          ps -eo pid,rss,etime,comm --sort=-rss | head -15 || true
 
   test:
     # UPSTREAM AFFINITY, not just time. Balancing by duration alone put suites
@@ -3842,7 +3842,7 @@ jobs:
         run: |
           free -m || true
           sudo dmesg -T 2>/dev/null | grep -iE 'killed process|out of memory|oom-kill' | tail -20 || true
-          ps -eo pid,rss,etime,args --sort=-rss | head -15 | cut -c1-200 || true
+          ps -eo pid,rss,etime,comm --sort=-rss | head -15 || true
 
   test-paid:
     # Suites that boot their OWN paid-mode or stub-facilitator server (PoW gate,
@@ -4124,7 +4124,7 @@ jobs:
         run: |
           free -m || true
           sudo dmesg -T 2>/dev/null | grep -iE 'killed process|out of memory|oom-kill' | tail -20 || true
-          ps -eo pid,rss,etime,args --sort=-rss | head -15 | cut -c1-200 || true
+          ps -eo pid,rss,etime,comm --sort=-rss | head -15 || true
 
   test-paid2:
     # Second half of test-paid (2026-08-25), split by the seconds each script
@@ -4445,7 +4445,7 @@ jobs:
         run: |
           free -m || true
           sudo dmesg -T 2>/dev/null | grep -iE 'killed process|out of memory|oom-kill' | tail -20 || true
-          ps -eo pid,rss,etime,args --sort=-rss | head -15 | cut -c1-200 || true
+          ps -eo pid,rss,etime,comm --sort=-rss | head -15 || true
 
   test-sweeps2:
     # The second half of test-sweeps (2026-08-25, split by the seconds each item
@@ -4726,7 +4726,7 @@ jobs:
         run: |
           free -m || true
           sudo dmesg -T 2>/dev/null | grep -iE 'killed process|out of memory|oom-kill' | tail -20 || true
-          ps -eo pid,rss,etime,args --sort=-rss | head -15 | cut -c1-200 || true
+          ps -eo pid,rss,etime,comm --sort=-rss | head -15 || true
 
   test-pricing:
     # Test job runs on its own [test] marker AND auto-runs whenever a commit
@@ -4954,7 +4954,7 @@ jobs:
         run: |
           free -m || true
           sudo dmesg -T 2>/dev/null | grep -iE 'killed process|out of memory|oom-kill' | tail -20 || true
-          ps -eo pid,rss,etime,args --sort=-rss | head -15 | cut -c1-200 || true
+          ps -eo pid,rss,etime,comm --sort=-rss | head -15 || true
 
   test-unit-c:
     # Test job runs on its own [test] marker AND auto-runs whenever a commit
@@ -5128,7 +5128,7 @@ jobs:
         run: |
           free -m || true
           sudo dmesg -T 2>/dev/null | grep -iE 'killed process|out of memory|oom-kill' | tail -20 || true
-          ps -eo pid,rss,etime,args --sort=-rss | head -15 | cut -c1-200 || true
+          ps -eo pid,rss,etime,comm --sort=-rss | head -15 || true
 
   test-unit-c2:
     # Second half of test-unit-c (2026-08-25), split by the seconds each script
