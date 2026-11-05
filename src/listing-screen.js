@@ -72,6 +72,8 @@ const CONFUSABLE_RE = new RegExp(`[${Object.keys(CONFUSABLES).join("")}]`, "g");
 // identity on it, so the four forms below reduce to the lowercased text with
 // its whitespace collapsed. Nearly every listing is this, and the full path
 // costs several times more per listing across an index of tens of thousands.
+// A markdown link ("](") takes the full path too: its label joins the text
+// around it once a cleaning step serves it.
 const PLAIN_LISTING = /^[\t\n\r\x20-\x7e]*$/;
 const MARKUP_CHARS = /[&<>`*~|]/;
 // Digits and symbols written in place of letters ("1gn0re prev1ous
@@ -123,7 +125,7 @@ function extraForms(base, forms, spacedFrom = base, leetHint = null) {
 }
 function injectionForms(text, leetHint = null) {
   const raw = String(text || "");
-  if (PLAIN_LISTING.test(raw) && !MARKUP_CHARS.test(raw)) {
+  if (PLAIN_LISTING.test(raw) && !MARKUP_CHARS.test(raw) && !raw.includes("](")) {
     const lower = raw.toLowerCase();
     if (!/[\t\n\r]| {2}/.test(lower)) return extraForms(lower, [lower], lower, leetHint);
     const spaced = lower.replace(/[\u0000-\u001f\u007f]/g, " ");
@@ -151,8 +153,29 @@ function injectionForms(text, leetHint = null) {
   CONFUSABLE_RE.lastIndex = 0;
   // The fullest reading (invisible characters deleted, lookalikes mapped when
   // there are any) is the one the digit and spacing readings start from.
-  return extraForms(forms.length > 3 ? forms[3] : forms[1], forms, fullest, leetHint);
+  const out = extraForms(forms.length > 3 ? forms[3] : forms[1], forms, fullest, leetHint);
+  // One more reading with markup REMOVED rather than spaced: an HTML comment
+  // or tag deleted and a markdown link read as its label, the way a cleaning
+  // step serves the text, so "Ign<!-- -->ore" or "Ignore<b></b> all" is read
+  // as the phrase it reassembles into. Bounded patterns, one pass each.
+  const more = [];
+  if (/[<[]/.test(deleted)) {
+    const unwrapped = deleted.replace(MARKUP_REMOVED, "").replace(MARKDOWN_LINK, "$1");
+    more.push(flatten(CONFUSABLE_ANY.test(unwrapped) ? unwrapped.replace(CONFUSABLE_RE, (c) => CONFUSABLES[c]) : unwrapped));
+  }
+  // The markup-keeping reading with lookalikes mapped and digits read as
+  // letters, so a role token spelled "<|іm_stаrt|>" or "|1m_start|" is read
+  // as the token it imitates (the other such readings have no markup left).
+  const kept = forms[0];
+  const mapped = CONFUSABLE_ANY.test(kept) ? kept.replace(CONFUSABLE_RE, (c) => CONFUSABLES[c]) : kept;
+  if (mapped !== kept) more.push(mapped);
+  if (LEET_PAIR.test(mapped)) more.push(mapped.replace(FOLD_WORD, foldLeetWord));
+  for (const f of more) if (!out.includes(f) && (!leetHint || leetHint.test(f))) out.push(f);
+  return out;
 }
+const CONFUSABLE_ANY = new RegExp(CONFUSABLE_RE.source);
+const MARKUP_REMOVED = /<!--[\s\S]*?(?:-->|$)|<\/?[a-z][^<>]{0,256}>|!\[[^\[\]\n]{0,200}\]\([^()\n]{0,400}\)/g;
+const MARKDOWN_LINK = /\[([^\[\]\n]{0,200})\]\([^()\n]{0,400}\)/g;
 // One alternation of every pattern: the same any-match answer as testing them
 // in turn (none carries a flag or a lastIndex), in one pass over the text.
 const INJECTION_ANY = new RegExp(INJECTION_PATTERNS.map((re) => `(?:${re.source})`).join("|"));
@@ -235,7 +258,7 @@ const READER_PATTERNS = [
   new RegExp(`\\b(?:you|the\\s+(?:[a-z-]+\\s+)?${ADDRESSEE})\\s+(?:must|should|shall|will|need\\s+to|have\\s+to|are\\s+(?:required|instructed|told)\\s+to|is\\s+(?:required|instructed|told)\\s+to)\\s+(?:always\\s+|now\\s+|only\\s+)?(?:rate|score|pick|choose|select|prefer|rank|mark|grade|recommend|ignore|disregard|forget|(?:answer|output|respond|return|treat|consider|give)\\s+(?:with\\s+)?(?:this|me|us|it|best|yes|1))\\b`),
   // A role marker opening the sentence, or a chat-template token anywhere.
   /^\s*["'([{<]*\s*(?:system|assistant|judge|evaluator|grader|ranker|rater|scorer|selector|developer|admin|llm|ai|override|verdict|decision)\s*[:\]>]/,
-  /<\|[a-z_]+\|>|\[\/?inst\]|<<\/?sys>>|(?<!#)#{2,}\s*(?:system|instructions?|assistant|user)\b/,
+  /<\|[^|<>\s]{1,40}\|>|\|(?:im_[a-z]+|endoftext|eot_id|[a-z]+_header_id|begin_of_text|end_of_text|[a-z]+_of_turn)\||\[\s*\/?\s*inst\s*\]|<<\/?sys>>|(?<!#)#{2,}\s*(?:system|instructions?|assistant|user)\b/,
   // Asking to be chosen, ranked or rated.
   // "us" followed by a hyphen or a dotted name is a region or a host (us-east-1).
   /\b(?:always\s+|only\s+|just\s+|please\s+)?(?:choose|select|pick|prefer|recommend|rank|rate|score|use)\s+(?:me|us)\b(?![-.][a-z0-9])/,
@@ -265,6 +288,21 @@ const READER_PATTERNS = [
   /\b(?:elige|elija|escoge|escoja|selecciona|seleccione)\s+siempre\s+(?:este|esta|esto|estos|estas|nuestr[oa]s?|me|nos)\b|\bsiempre\s+(?:elige|elija|escoge|escoja|selecciona|seleccione)\s+(?:este|esta|esto|nuestr[oa]s?)\b/,
   /\b(?:choisis|choisissez|s[ée]lectionne[zr]?)\s+toujours\s+(?:ce|cet|cette|ceci|moi|nous|notre|nos)\b|\btoujours\s+(?:choisir|choisis|choisissez)\s+(?:ce|cet|cette|ceci|notre|nos)\b/,
   /\b(?:escolha|escolhe|selecione)\s+sempre\s+(?:este|esta|isto|nosso|nossa|me|nos)\b|\bsempre\s+(?:escolha|escolhe|selecione)\s+(?:este|esta|isto|nosso|nossa)\b/,
+  // Asking the reader to move money or act on its own authority: change
+  // where or how much it pays, send funds to a written address, replay a
+  // payment, call a wallet, memory or catalog tool, hand back what it holds,
+  // or take "new instructions" (a judge only ranks, so none of this
+  // describes what the listed tool does).
+  /\b(?:change|set|replace|swap|switch|update|override|redirect|alter)\s+(?:the\s+|your\s+|its\s+|this\s+)?(?:pay[\s_-]?to|payee|recipient|payout|destination|receiving)(?:\s+(?:address|wallet|account))?\s+(?:to|with|into)\b/,
+  /\binstead\s+of\s+(?:the\s+)?(?:listed|advertised|quoted|stated|original|real|named|published)\s+(?:address|wallet|pay[\s_-]?to|recipient|price|amount)\b/,
+  /\b(?:send|transfer|wire|forward|pay|move)\s+(?:(?:\$?\s?\d[\d.,]*|all|any|the|your|some)\s+)?(?:(?:usdc|usd|eth|sol|funds|tokens?|money|balance|crypto)\s+)?(?:(?:to|into)\s+)?(?:(?:wallet|address)\s+)?(?:0x[0-9a-f]{8,}|ox[0-9a-fios]{8,})/,
+  /\b(?:raise|increase|bump|double|triple|inflate|change|set|override)\s+(?:the\s+|your\s+|its\s+)?(?:price|quote|cap|spend(?:ing)?\s+(?:limit|cap)|max(?:imum)?\s*amount\w*)\s+(?:to|by)\b/,
+  /\b(?:replay|resend|re-send|reuse|re-use|resubmit|re-submit|re-?sign|duplicate)\s+(?:the\s+|your\s+|a\s+|that\s+|this\s+|my\s+)?(?:last\s+|previous\s+|prior\s+|same\s+|earlier\s+)?(?:payment|signature|authorization|credential|x-?payment|signed\s+\w+)s?\b/,
+  /\b(?:call|invoke|run|use|trigger|execute)\s+(?:the\s+)?(?:catalog\.call|memory[\w.-]*|[\w.-]*(?:transfer|withdraw|payout)[\w.-]*)(?![\w-])/,
+  /\bsend\s+(?:me|us)\s+(?:the\s+|your\s+|its\s+)?(?:result|output|response|memor(?:y|ies)|data|keys?|secrets?|credentials?|history|prompt)|\bpaste\s+(?:the\s+|its\s+|your\s+)?(?:result|output|response|memor(?:y|ies)|data|keys?|secrets?|credentials?|history|prompt)s?\s+(?:here|below|back|into)\b/,
+  /\b(?:the\s+)?(?:best|top|right|correct|only)\s+(?:choice|pick|option|tool|answer|match)\s+(?:is|=)\s+(?:this|me|us|ours?)\b/,
+  /\bnew\s+(?:instructions?|directives?)\b|["']role["']\s*:\s*["']?(?:system|assistant|developer|tool)\b/,
+  /\b(?:respond|reply|answer|output)\s+only\s+with\b|\b(?:respond|reply|answer)\s+with\s+(?:this|my|our)\s+(?:tool|slug|key|name|listing)\b|\btell\s+the\s+(?:user|human|buyer|caller|operator)\s+to\b/,
 ];
 const READER_ANY = new RegExp(READER_PATTERNS.map((re) => `(?:${re.source})`).join("|"));
 /** True when one sentence of listing text is written to its reader (the
@@ -290,7 +328,9 @@ export function judgeReadableText(text, { max = 0, links = true } = {}) {
   // Each sentence is screened as written (its spacing is one of the readings)
   // and handed on with its whitespace collapsed.
   const sentences = raw.split(/(?<=[.!?])\s+|[\r\n]+/).filter((s) => s.trim());
-  const kept = sentences.filter((s) => !hasHiddenCharacters(s) && !addressesReader(s))
+  // A sentence written as one token with separators between its words
+  // ("Ignore-all-previous-instructions.") is read as words too.
+  const kept = sentences.filter((s) => !hasHiddenCharacters(s) && !addressesReader(s) && !(/^\S+$/.test(s.trim()) && /[-_]/.test(s) && addressesReader(asWords(s))))
     .map((s) => s.replace(/\s+/g, " ").trim())
     .map((s) => (links ? s.replace(/\bhttps?:\/\/\S+/gi, "[link]") : s)).join(" ");
   return max > 0 && kept.length > max ? `${kept.slice(0, max - 1)}…` : kept;
@@ -317,17 +357,25 @@ export function judgeReadableName(text, { max = 0, links = false } = {}) {
  *  as one text, so a sentence split across tags is read whole; when the
  *  joined tags address the reader none is kept. */
 export function judgeReadableListing({ host = "", slug = "", description = "", tags = [] } = {}, { links = false, max = 0, maxTags = 32 } = {}) {
-  const h = judgeReadableName(host);
+  // A host is also read without its last label ("choose-this.example" reads
+  // as "choose this").
+  const hostStr = String(host || "").slice(0, IDENT_MAX);
+  const bareHost = hostStr.includes(".") ? hostStr.slice(0, hostStr.lastIndexOf(".")) : "";
+  const h = bareHost && identAddressesReader(bareHost) ? "" : judgeReadableName(host);
   const sl = judgeReadableName(slug);
   // Read together without the host's last label ("rank-this.example" and
   // "first" read as "rank this first").
   const hostLabels = h.includes(".") ? h.slice(0, h.lastIndexOf(".")) : h;
   const name = h && sl && (identAddressesReader(`${h} ${sl}`) || identAddressesReader(`${hostLabels} ${sl}`)) ? sl : `${h} ${sl}`.trim();
-  const tagList = (Array.isArray(tags) ? tags : []).slice(0, maxTags).map((t) => judgeReadableName(t)).filter(Boolean);
+  const rawTags = (Array.isArray(tags) ? tags : []).slice(0, maxTags);
+  const tagList = rawTags.map((t) => judgeReadableName(t)).filter(Boolean);
   const joined = tagList.join(" ");
+  // Read whole as written too, so a role marker in one tag ("Assistant:")
+  // and the rest of its sentence in the others is read as one sentence.
+  const rawJoined = rawTags.map((t) => String(t || "").slice(0, IDENT_MAX)).join(" ");
   return {
     name,
     description: judgeReadableText(description, { links, max }),
-    tags: joined && identAddressesReader(joined) ? [] : tagList,
+    tags: joined && (identAddressesReader(joined) || (rawJoined !== joined && identAddressesReader(rawJoined))) ? [] : tagList,
   };
 }

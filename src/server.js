@@ -1844,27 +1844,11 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
   // target was already chosen by a decision; it is not re-judged.
   let judgedSelection = null;
   if (candidates.length && !onlyUrl) {
-    const { judgeReadableListing } = await import("./listing-screen.js");
-    const { judgedOverrideAllowed } = await import("./tools/route-execute.js");
-    const hostOfSeller = (u) => { try { return new URL(u).host; } catch { return String(u || ""); } };
-    let ordered = await orderByJudgment(task, candidates, (r) => {
-      const raw = String(r.description || r.name || "");
-      const clean = !looksLikeListingInjection(raw);
-      return judgeReadableListing({
-        host: hostOfSeller(r.seller || r.url),
-        slug: String(r.slug || ""),
-        description: clean ? raw : "",
-        tags: clean && Array.isArray(r.tags) ? r.tags.map(String) : [],
-      }, { links: false });
-    });
-    // A judged reorder stands only when its pick's own match score meets the
-    // floor (judgedOverrideAllowed, src/tools/route-execute.js); below it the
-    // lexical order is kept and the judge's answer rides on the receipt.
-    if (!ordered.refused && ordered.items?.[0] && ordered.items[0] !== candidates[0]
-      && (ordered.selection?.method === "judged" || ordered.selection?.method === "judged-tie")) {
-      const gate = judgedOverrideAllowed(task, candidates, ordered.items[0]);
-      if (!gate.ok) ordered = { ...ordered, items: candidates, selection: { method: "lexical", judged: { ...ordered.selection }, overrideRefused: { reason: "below_lexical_floor", score: gate.score, floor: gate.floor } } };
-    }
+    // judgeSellerOrder (src/tools/route-execute.js): the screened listing
+    // text the judge reads (sellerJudgeListing) and the floor a judged
+    // reorder is held to (judgedOverrideAllowed).
+    const { judgeSellerOrder } = await import("./tools/route-execute.js");
+    const ordered = await judgeSellerOrder(task, candidates);
     judgedSelection = ordered.selection;
     if (ordered.refused) {
       gateDrops.byReason.judged_no_match = candidates.length;
