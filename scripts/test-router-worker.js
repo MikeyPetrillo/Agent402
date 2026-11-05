@@ -50,6 +50,13 @@ await routerPoolLoaded();
 const loadMs = Math.round(performance.now() - t0);
 const st0 = routerPoolStatus();
 ok(st0.loaded && st0.workers.length === 1, `one worker loaded with the ${cache.size}-seller fixture in ${loadMs} ms (resync ${st0.lastResyncMs} ms, ${st0.cloneMs} ms of main-thread cloning)`);
+// Every copy to the worker is bounded: at most 200 sellers and 20,000 tools
+// a message (one seller's tools go whole), so no clone holds this thread for
+// the whole fixture at once, on any machine.
+let biggestSeller = 0;
+for (const v of cache.values()) biggestSeller = Math.max(biggestSeller, Array.isArray(v?.tools) ? v.tools.length : 0);
+const toolCap = Math.max(20_000, biggestSeller);
+ok(st0.largestStoreMessage.entries <= 200 && st0.largestStoreMessage.tools <= toolCap, `the largest copy to the worker held ${st0.largestStoreMessage.entries} sellers and ${st0.largestStoreMessage.tools} tools (at most 200 and ${toolCap})`);
 const wst = await hooks.workerStats();
 ok(wst && wst.cacheSize === cache.size && wst.routeIndex.indexedTools > 100_000, `the worker holds every seller (${wst?.cacheSize}) and indexed ${wst?.routeIndex?.indexedTools} tools (worker heap ${wst?.heapUsedMb} MB)`);
 
@@ -257,4 +264,6 @@ const HEALTH_P95_MS = Number(process.env.ROUTER_WORKER_HEALTH_P95_MS || 200);
 ok(worker.p95 <= HEALTH_P95_MS, `/health p95 ${worker.p95} ms <= ${HEALTH_P95_MS} ms during the burst on the worker boot`);
 ok(worker.worstMs <= HEALTH_P95_MS, `the main loop's worst hold ${worker.worstMs} ms <= ${HEALTH_P95_MS} ms during the burst on the worker boot`);
 ok(worker.stalls === 0, `no main-loop stall over 250 ms during the burst on the worker boot (${worker.stalls})`);
+const bootBig = worker.routerPool.largestStoreMessage || { entries: Infinity, tools: Infinity };
+ok(bootBig.entries <= 200 && bootBig.tools <= toolCap, `on the booted server the largest copy to the worker held ${bootBig.entries} sellers and ${bootBig.tools} tools (the warm start's changes go across turns)`);
 console.log(`test-router-worker: ${n} passed`);
