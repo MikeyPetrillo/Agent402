@@ -1125,7 +1125,7 @@ export function breadcrumbLd(baseUrl, crumbs) {
   };
 }
 
-export function ledgerShell({ title: rawTitle, description: rawDescription, canonical, baseUrl, activePath = "", ogImage, jsonLd, extraCss = "", body, robots = "index, follow, max-image-preview:large" }) {
+export function ledgerShell({ title: rawTitle, description: rawDescription, canonical, baseUrl, activePath = "", ogImage, jsonLd, extraCss = "", body, robots = "index, follow, max-image-preview:large", mpp = true }) {
   // The snippet is derived here, once, for every page (see seo-meta.js): a
   // page author writes the paragraph, the shell serves what a search result
   // and a link preview can actually show.
@@ -1160,7 +1160,9 @@ export function ledgerShell({ title: rawTitle, description: rawDescription, cano
   const pageLd = (jsonLd ? (Array.isArray(jsonLd) ? jsonLd : [jsonLd]) : [])
     .filter((j) => !(j && typeof j === "object" && j["@id"] === orgId))
     .map((j) => (j && typeof j === "object" && Array.isArray(j["@graph"]) ? { ...j, "@graph": j["@graph"].filter((n) => !(n && n["@id"] === orgId)) } : j));
-  const allLd = [baseEcosystemLd, siteOrgLd(baseUrl), ...pageLd]
+  // `mpp` is the page's own MPP switch (a tool page reads it from the server's
+  // MPP configuration), so the site entity names MPP only where the page may.
+  const allLd = [baseEcosystemLd, siteOrgLd(baseUrl, { mpp }), ...pageLd]
     .map((j) => (j && typeof j === "object" && !j["@context"] ? { "@context": "https://schema.org", ...j } : j));
   // Every "<" is escaped as \u003c, exactly as jsonScriptTag does and for the
   // same reason: JSON.stringify never escapes it, so a string field carrying

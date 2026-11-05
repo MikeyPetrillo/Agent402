@@ -173,7 +173,13 @@ const pool = await import("../src/router-pool.js");
   const serverSrc = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   const fn = serverSrc.slice(serverSrc.indexOf("async function resolveExternalSeller("), serverSrc.indexOf("const { probePublicUrl } = await import(\"./tools/fetch-guard.js\");"));
   const filterAt = fn.indexOf("if (!routeExcludedCategory(r)) return true;");
-  ok(filterAt > fn.indexOf('} else if (chain === "algorand") {') && filterAt > fn.indexOf('} else if (chain === "solana") {') && filterAt < fn.indexOf("orderByJudgment("), "the resolver filters the candidates of every chain branch, before judging or probing any");
+  // Judging runs through judgeSellerOrder (src/tools/route-execute.js), which
+  // calls orderByJudgment; the filter must precede that call in the resolver.
+  const judgeAt = fn.indexOf("await judgeSellerOrder(");
+  const reSrc = readFileSync(new URL("../src/tools/route-execute.js", import.meta.url), "utf8");
+  const judgeFn = reSrc.slice(reSrc.indexOf("export async function judgeSellerOrder("));
+  ok(judgeAt > 0 && /orderByJudgment\(/.test(judgeFn.slice(0, judgeFn.indexOf("\n}\n"))), "the resolver judges through judgeSellerOrder, which orders by the judge");
+  ok(filterAt > 0 && filterAt > fn.indexOf('} else if (chain === "algorand") {') && filterAt > fn.indexOf('} else if (chain === "solana") {') && filterAt < judgeAt && !/orderByJudgment\(/.test(fn.slice(0, filterAt)), "the resolver filters the candidates of every chain branch, before judging or probing any");
   const { tempoCandidateOf } = await import("../src/sor-candidates.js");
   const tc = tempoCandidateOf({ origin: "https://s.example", path: "/p", url: "https://s.example/p", method: "POST", priceUsd: 0.01, networks: ["tempo"], description: "people search", tags: ["people"] });
   ok(tc.description === "people search" && tc.tags.join() === "people" && /\.map\(tempoCandidateOf\)/.test(fn) && /\/\/ The route's own text, for the category filter below\.\n\s+description: r\.description,\n\s+\}\)\);/.test(fn), "Tempo and Algorand candidates carry their own text to that filter");

@@ -567,6 +567,7 @@ ${ledgerFooterCompact()}`;
     jsonLd,
     extraCss: TOOL_PAGE_CSS,
     body,
+    mpp,
   });
 }
 

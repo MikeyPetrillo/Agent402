@@ -8,6 +8,8 @@
 //      (`${base}/#organization`), which each page defines once and which names
 //      the company (`${base}/#org`, Havok Holdings LLC) as its parent; never a
 //      Person.
+//      Its sameAs lists only our own profiles (repo, X, our npm and PyPI
+//      packages), never a third-party listing of us.
 //   4. A seeded report page is dated by the newest filing it showed when built.
 //
 // Boots FREE_MODE on a free port and reads every /tools and /skills URL in the
@@ -22,6 +24,8 @@ import { ownStoreEnv } from "./lib/own-stores.js";
 import { insiderPage, fundPage, dossierPage, loadTeaser, teaserLastmod, entityLastmod } from "../src/programmatic-pages.js";
 import { sitemapXml, sitemapReports } from "../src/seo.js";
 import { SEED_TICKERS, SEED_MANAGERS } from "../src/programmatic-seeds.js";
+import { REPO_URL } from "../src/repo-link.js";
+import { siteOrgLd } from "../src/site-org.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -51,6 +55,16 @@ function trailItems(navHtml) {
 }
 
 /** Problems with one rendered page, as strings (none = clean). */
+// First-party profiles only: our repository, our X account, our own npm and
+// PyPI packages. A third-party index or directory page about us is not one.
+const FIRST_PARTY_PROFILE = [
+  (u) => u === REPO_URL,
+  (u) => u === "https://x.com/Agent402Tools",
+  (u) => /^https:\/\/www\.npmjs\.com\/package\/agent402-[a-z0-9-]+$/.test(u),
+  (u) => /^https:\/\/pypi\.org\/project\/agent402-[a-z0-9-]+\/?$/.test(u),
+];
+const foreignSameAs = (org) => [].concat(org?.sameAs ?? []).filter((u) => !FIRST_PARTY_PROFILE.some((f) => f(String(u))));
+
 function pageProblems(base, path, html, { selfCanonical = true } = {}) {
   const problems = [];
   const canon = (html.match(/<link rel="canonical" href="([^"]*)"/) || [])[1];
@@ -74,6 +88,8 @@ function pageProblems(base, path, html, { selfCanonical = true } = {}) {
     const p = defs[0].parentOrganization;
     if (!p || p["@id"] !== `${base}/#org` || p.name !== "Havok Holdings LLC") problems.push(`the site entity's parentOrganization is ${JSON.stringify(p)}`);
     if (defs[0].name !== "Agent402") problems.push(`the site entity is named ${defs[0].name}`);
+    const foreign = foreignSameAs(defs[0]);
+    if (foreign.length) problems.push(`the site entity's sameAs names a profile that is not ours: ${foreign.join(", ")}`);
   }
   // 2. the BreadcrumbList and the visible trail say the same thing.
   const bls = nodes.filter((n) => n["@type"] === "BreadcrumbList");
@@ -90,6 +106,14 @@ function pageProblems(base, path, html, { selfCanonical = true } = {}) {
     }
   }
   return problems;
+}
+
+// --- 3. the site entity's sameAs, in process -----------------------------------
+{
+  const org = siteOrgLd("https://agent402.tools");
+  ok([].concat(org.sameAs || []).length >= 3 && foreignSameAs(org).length === 0,
+    `the site entity's sameAs holds only first-party profiles${foreignSameAs(org).length ? ` (not ours: ${foreignSameAs(org).join(", ")})` : ""}`);
+  ok(foreignSameAs({ sameAs: [REPO_URL, "https://directory.example/server/1"] }).length === 1, "a third-party listing URL in sameAs is caught");
 }
 
 // --- 4. seeded report pages: lastmod from the newest filing, only when real ------

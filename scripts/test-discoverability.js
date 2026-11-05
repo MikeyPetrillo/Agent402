@@ -17,7 +17,9 @@
 //   * /openapi.json           the spec crawlers and directories consume
 //   * /llms.txt               the agent-readable catalog
 //   * /.well-known/x402       the x402 service manifest
-//   * /sitemap.xml            search and AI crawlers
+//   * /sitemap.xml            search and AI crawlers: the tool page's CANONICAL
+//                             URL (a skill-pack alias tool's page is canonical to
+//                             its /skills/<pack> page, which the sitemap lists)
 //   * /tools/<slug>           the human/SEO page must render, not 404
 //   * /api/find?q=<slug>      the resolver must return the tool it was asked for
 //
@@ -44,25 +46,36 @@ const [llms, specRaw, manifestRaw, sitemap] = await Promise.all([
 const specPaths = new Set(Object.keys(JSON.parse(specRaw).paths || {}));
 const manifest = manifestRaw;
 
-const absent = { "llms-full.txt": [], "openapi.json": [], "/.well-known/x402": [], "sitemap.xml": [] };
+const absent = { "llms-full.txt": [], "openapi.json": [], "/.well-known/x402": [] };
 for (const e of catalog) {
   if (!llms.includes(`/tools/${e.slug}`)) absent["llms-full.txt"].push(e.slug);
   if (!specPaths.has(e.path)) absent["openapi.json"].push(e.slug);
   if (!manifest.includes(e.path)) absent["/.well-known/x402"].push(e.slug);
-  if (!sitemap.includes(`/tools/${e.slug}<`)) absent["sitemap.xml"].push(e.slug);
 }
 for (const [surface, missing] of Object.entries(absent)) {
   ok(missing.length === 0,
     `every catalog entry appears in ${surface}${missing.length ? ` (${missing.length} absent, e.g. ${missing.slice(0, 3).join(", ")})` : ""}`);
 }
+// The sitemap lists each page once, at its canonical URL, so each entry is
+// checked by the canonical its own /tools/<slug> page declares (read below).
+const sitemapLocs = new Set([...sitemap.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]));
+const canonicalOf = (html) => (html.match(/<link rel="canonical" href="([^"]+)">/) || [])[1] || null;
 
 // Pages and the resolver, per tool. Batched so 500+ round trips stay quick.
 const chunk = (arr, n) => Array.from({ length: Math.ceil(arr.length / n) }, (_, i) => arr.slice(i * n, i * n + n));
-const pageFails = [], findFails = [];
+const pageFails = [], findFails = [], sitemapMissing = [];
+let aliasCanonicals = 0;
 for (const batch of chunk(catalog, 24)) {
   await Promise.all(batch.map(async (e) => {
     const res = await fetch(`${TARGET}/tools/${e.slug}`);
     if (res.status !== 200) pageFails.push(`${e.slug}:${res.status}`);
+    const canonical = canonicalOf(await res.text());
+    // A tool page is canonical to itself; only a skill-<pack> alias may point
+    // at its pack page, so a stray canonical cannot hide a missing tool page.
+    const own = canonical && canonical.endsWith(`/tools/${e.slug}`);
+    const viaPack = canonical && e.slug.startsWith("skill-") && canonical.endsWith(`/skills/${e.slug.slice(6)}`);
+    if (viaPack) aliasCanonicals++;
+    if (!(own || viaPack) || !sitemapLocs.has(canonical)) sitemapMissing.push(`${e.slug}${canonical ? "" : "(no canonical)"}`);
     try {
       const r = JSON.parse(await get(`/api/find?q=${encodeURIComponent(e.slug)}`));
       const found = [...(r.results || []), ...(r.packs || [])].some((x) => x.slug === e.slug);
@@ -71,6 +84,8 @@ for (const batch of chunk(catalog, 24)) {
   }));
 }
 ok(pageFails.length === 0, `every /tools/<slug> page renders${pageFails.length ? ` (${pageFails.length} failed: ${pageFails.slice(0, 4).join(", ")})` : ""}`);
+ok(sitemapMissing.length === 0,
+  `every catalog entry's canonical page appears in sitemap.xml (${aliasCanonicals} via a skill-pack page)${sitemapMissing.length ? ` (${sitemapMissing.length} absent, e.g. ${sitemapMissing.slice(0, 3).join(", ")})` : ""}`);
 ok(findFails.length === 0, `/api/find returns every tool when asked for it by slug${findFails.length ? ` (${findFails.length} unfindable: ${findFails.slice(0, 4).join(", ")})` : ""}`);
 
 // Every category the catalog uses must be renderable, or its tools are orphaned

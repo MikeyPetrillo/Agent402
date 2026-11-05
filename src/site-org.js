@@ -15,8 +15,8 @@ export const companyOrgId = (baseUrl) => `${baseUrl}/#org`;
 /** A reference to the site entity, for author/publisher/creator/provider. */
 export const siteOrgRef = (baseUrl) => ({ "@id": siteOrgId(baseUrl) });
 
-/** The site entity in full. */
-export function siteOrgLd(baseUrl) {
+/** The site entity in full. `mpp: false` (a server that does not offer MPP) leaves MPP out of knowsAbout. */
+export function siteOrgLd(baseUrl, { mpp = true } = {}) {
   return {
     "@context": "https://schema.org",
     "@type": "Organization",
@@ -24,10 +24,10 @@ export function siteOrgLd(baseUrl) {
     name: SITE_ORG_NAME,
     alternateName: ["Agent402.Tools", "Agent402 Tools", "agent402.tools"],
     url: baseUrl,
-    knowsAbout: ["Agentic Finance", "AIFI", "x402", "Machine Payments Protocol (MPP)", "agentic payments", "AI agents"],
+    knowsAbout: ["Agentic Finance", "AIFI", "x402", ...(mpp ? ["Machine Payments Protocol (MPP)"] : []), "agentic payments", "AI agents"],
     logo: { "@type": "ImageObject", url: `${baseUrl}/logo.png` },
     email: "mike@agent402.tools",
     parentOrganization: { "@type": "Organization", "@id": companyOrgId(baseUrl), name: COMPANY_NAME, url: COMPANY_URL },
-    sameAs: [REPO_URL, "https://x.com/Agent402Tools", "https://www.npmjs.com/package/agent402-mcp", "https://www.npmjs.com/package/agent402-client", "https://www.npmjs.com/package/agent402-tollbooth", "https://pypi.org/project/agent402-langchain/", "https://www.x402scan.com/server/07eb3020-932a-436d-a739-557b6e47101d"],
+    sameAs: [REPO_URL, "https://x.com/Agent402Tools", "https://www.npmjs.com/package/agent402-mcp", "https://www.npmjs.com/package/agent402-client", "https://www.npmjs.com/package/agent402-tollbooth", "https://pypi.org/project/agent402-langchain/"],
   };
 }

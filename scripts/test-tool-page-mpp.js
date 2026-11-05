@@ -17,6 +17,12 @@ for (const computePayable of [true, false]) {
   // matters is in the head (meta, JSON-LD offer) and the page's own <main>.
   const own = off.slice(0, off.indexOf("</head>")) + off.slice(off.indexOf("<main"), off.indexOf("</main>"));
   ok(!/\bMPP\b/.test(own), `mpp off (${computePayable ? "free tier" : "wallet-only"}): the page never names MPP`);
+  // The site entity's knowsAbout reads the same switch as the page copy.
+  const knows = (html) => [...html.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)]
+    .map((m) => { try { return JSON.parse(m[1]); } catch { return null; } })
+    .find((n) => n && n["@type"] === "Organization" && Array.isArray(n.knowsAbout))?.knowsAbout || [];
+  ok(knows(on).includes("Machine Payments Protocol (MPP)") && knows(on).includes("x402"), `mpp on (${computePayable ? "free tier" : "wallet-only"}): the site entity knows about MPP`);
+  ok(knows(off).includes("x402") && !knows(off).some((k) => /\bMPP\b|Machine Payments/.test(k)), `mpp off (${computePayable ? "free tier" : "wallet-only"}): the site entity's knowsAbout leaves MPP out`);
 }
 const dflt = toolPage("https://x.test", tool, [], {});
 ok(/ or MPP/.test(dflt), "default (no option) keeps the hosted wording");
