@@ -7,6 +7,7 @@ const ENTRIES = [
     items: [
       "Payments: the x402 libraries are 2.30.0 and mppx 0.17.1. A check that runs before verify or settle and fails refuses the payment with a 402 and charges nothing; a Tempo charge whose broadcast is rejected as a replay recovers its receipt instead of answering a new 402.",
       "Router: on Base an unproven seller is tried up to $0.05 a call (was $0.01), only after every proven candidate, paid at its own live 402's payTo, with at most $0.25 a day per seller and $5 a day across all unproven sellers.",
+      "Limits: the unpaid price-check budget counts per client address (an IPv6 /64 as one) whatever the User-Agent; a named indexer or search crawler reads against ten times the budget on its address, and only our signed probes are exempt.",
       "Index: a failed paywall check is re-run after 24 hours and when a seller registers again, and the check skips a templated route.",
       "Index: the index keeps at most 5000 tools per seller, described tools first, and shows the listed count beside it. A listing that cannot be read is dropped alone; /api/gateway-status gains containedTurns and brokenListings.",
       "Gateway: on the Messages wire, citation text counts against the tier's input cap.",

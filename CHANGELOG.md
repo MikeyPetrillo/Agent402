@@ -17,6 +17,12 @@ Router:
   after every proven candidate, paid at its own live 402's payTo, with at most
   $0.25 a day per seller (`SOR_BASE_UNPROVEN_SELLER_DAILY_USD`) and $5 a day
   across all unproven sellers (`SOR_BASE_UNPROVEN_DAILY_USD`).
+Limits:
+- The unpaid price-check budget counts per client address (an IPv6 /64 as
+  one) whatever the User-Agent; a named indexer or search crawler reads
+  against ten times the budget on its address, and only our signed probes are
+  exempt. Our status observers read that budget's 429 as not observed, never
+  as a paywall failure.
 Index:
 - A failed paywall check is re-run after 24 hours and when a seller registers
   again, and the check skips a templated route.
