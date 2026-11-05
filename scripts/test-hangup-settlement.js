@@ -506,7 +506,7 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
   { const gone = { __a402ClientGoneAt: Date.now() }; markSettleSent(gone, { evenIfGone: true }); ok(settleSentWhileConnected(gone) === true, "markSettleSent with evenIfGone (the x402 hook's form) marks a buyer whose close landed during the chain"); }
   {
     const hs = readFileSync(new URL("../src/hangup-settlement.js", import.meta.url), "utf8");
-    ok(/export function registerSettleSentHook\(server\) \{\s*\n\s*server\.onBeforeSettle\(passingHook\(HOOK_NAMES\.settleSent, \(ctx\) => \{ markSettleSent\(ctx\?\.transportContext\?\.request\?\.adapter\?\.req, \{ evenIfGone: true \}\); \}\)\);/.test(hs), "the x402 settle-sent hook marks unconditionally (pin; gone-between above runs the behavior)");
+    ok(/export function registerSettleSentHook\(server\) \{\s*\n\s*server\.onBeforeSettle\(refusingHook\(HOOK_NAMES\.settleSent, \(ctx\) => \{ markSettleSent\(ctx\?\.transportContext\?\.request\?\.adapter\?\.req, \{ evenIfGone: true \}\); \}, \{/.test(hs), "the x402 settle-sent hook marks unconditionally and a throw refuses the settle (pin; gone-between above and test-x402-hook-throws run the behavior)");
   }
   server.close();
   _resetHangupForgiveness();

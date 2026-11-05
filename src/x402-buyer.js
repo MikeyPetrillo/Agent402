@@ -155,8 +155,8 @@ export function avmBuyerConfigured() {
  *  403s Railway's egress IP outright, so prod cannot reach the public bases. */
 /**
  * The Algorand client scheme, reading a seller's legacy network id (the full
- * genesis hash) as the CAIP-2 one. @x402/avm 2.29 refuses the legacy spelling
- * when it picks the algod client and asset; the id selects only those, so it is
+ * genesis hash) as the CAIP-2 one. The @x402/avm scheme accepts only the CAIP-2
+ * spelling when it picks the algod client and asset; the id selects only those, so it is
  * folded on the way in. The core client still echoes the seller's own accept
  * (`accepted`), so the payment matches the requirement the seller rebuilds.
  */
@@ -1053,15 +1053,17 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
   const spendToken = await reserveSpend(quotedAtomic); // F3 belt, before signing (throws 429 if over the window budget)
   let committed = false;
   try {
-    // BASE UNPROVEN PER-SELLER DAILY CAP (src/base-unproven.js): checked and
-    // the signed amount reserved in one step, keyed on this accept's payTo and
-    // the seller's origin, before anything is signed. A refusal here is
-    // pre-commit (the finally gives the budget hold back); the reservation is
-    // given back by the same finally only when nothing could have moved.
+    // BASE UNPROVEN DAILY CAPS (src/base-unproven.js): the seller's and the
+    // whole lane's, checked and the signed amount reserved in one step, keyed
+    // on this accept's payTo and the seller's origin, before anything is
+    // signed. A refusal here is pre-commit (the finally gives the budget hold
+    // back); the reservation is given back by the same finally only when
+    // nothing could have moved.
     if (chain === "base" && allowUnproven) {
       const capped = await reserveUnprovenSellerSpend({ payTo: payable.payTo, origin: url, atomic: quotedAtomic });
       if (!capped.ok) {
-        const e = new Error(`Seller ${String(payable.payTo).slice(0, 10)}… is below the Base settlement floor and has reached the unproven lane's daily cap per seller ($${capped.spentUsd.toFixed(2)} of $${capped.capUsd} in 24 h) - not paid`);
+        const which = capped.code === "unproven_lane_daily_cap" ? "daily cap across all sellers" : "daily cap per seller";
+        const e = new Error(`Seller ${String(payable.payTo).slice(0, 10)}… is below the Base settlement floor and has reached the unproven lane's ${which} ($${capped.spentUsd.toFixed(2)} of $${capped.capUsd} in 24 h) - not paid`);
         e.statusCode = 409;
         throw e;
       }

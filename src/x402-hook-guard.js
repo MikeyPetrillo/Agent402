@@ -8,11 +8,14 @@
 // decision, so every such hook we register states its own:
 //
 //   refusingHook  a check that guards money or identity (the wallet
-//                 blocklist, the Arc contract-wallet gate): a throw refuses
-//                 with this hook's own reason, so the buyer reads why.
-//   passingHook   bookkeeping or a buyer courtesy whose failure has its own
-//                 backstop (the client-gone cancel, the settle-sent mark): a
-//                 throw is logged and the payment goes on as before.
+//                 blocklist, the Arc contract-wallet gate), or a mark the
+//                 books read after the settle (the settle-sent mark: a settle
+//                 it did not mark would be booked as a forgiven hang-up,
+//                 charged with no sale): a throw refuses with this hook's own
+//                 reason, so the buyer reads why and is not charged.
+//   passingHook   a buyer courtesy whose failure has its own backstop (the
+//                 client-gone cancel): a throw is logged and the payment goes
+//                 on as before.
 //
 // The non-throwing path is untouched: a sync hook stays sync and its return
 // value is passed through as is.
@@ -65,3 +68,4 @@ export const HOOK_NAMES = Object.freeze({
 });
 export const ARC_CONTRACT_WALLET_CHECK_FAILED = "contract_wallet_check_failed";
 export const WALLET_CHECK_FAILED = "wallet_check_failed";
+export const SETTLE_MARK_FAILED = "settle_mark_failed";

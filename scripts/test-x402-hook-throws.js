@@ -3,15 +3,17 @@
 // @x402/core (2.30.0 and later) refuses a payment whose beforeVerify hook
 // throws and cancels the settle of one whose beforeSettle hook throws; every
 // hook we register states its own choice (src/x402-hook-guard.js): a money or
-// identity check refuses with its own reason, a bookkeeping hook passes.
+// identity check, or a mark the books read after the settle, refuses with its
+// own reason; a buyer courtesy with its own backstop passes.
 //
 // Part 1, in process, the real @x402/core resource server and @x402/express
 // middleware with a stub facilitator client: each guarded hook forced to
 // throw answers its declared choice; the Arc contract-wallet gate's throw is
 // a 402 before the handler runs.
-// Part 2, two paid-mode boots against a stub facilitator: with the wallet
-// blocklist hook forced to throw, a real signed payment answers 402 with no
-// settle call, no booked sale and no idempotency commit; the control boot
+// Part 2, three paid-mode boots against a stub facilitator: with the wallet
+// blocklist hook, or the settle-sent mark, forced to throw, a real signed
+// payment answers 402 with no settle call, no booked sale and no idempotency
+// commit; the control boot
 // settles, books the sale and replays. A payment header that decodes to JSON
 // that is not an object (array, string, null, number) answers 4xx, never 5xx.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
@@ -32,7 +34,7 @@ const [{ x402ResourceServer }, { ExactEvmScheme }, express, { paymentMiddlewareF
   import("@x402/express"), import("../src/x402-hook-guard.js"), import("../src/payments.js"), import("../src/hangup-settlement.js"),
   import("better-sqlite3").then((m) => m.default),
 ]);
-const { HOOK_NAMES, _setHookFaultsForTest, ARC_CONTRACT_WALLET_CHECK_FAILED, WALLET_CHECK_FAILED } = guard;
+const { HOOK_NAMES, _setHookFaultsForTest, ARC_CONTRACT_WALLET_CHECK_FAILED, WALLET_CHECK_FAILED, SETTLE_MARK_FAILED } = guard;
 
 // ------------------------------------------------------------ part 1
 console.log("part 1: each guarded hook against the real resource server");
@@ -104,13 +106,22 @@ async function withLogs(fn) {
 }
 
 {
-  // Settle-sent mark (beforeSettle): a throw passes, the payment settles.
+  // Settle-sent mark (beforeSettle): a settle it did not mark would be booked
+  // as a forgiven hang-up, so a throw refuses with its own reason and the
+  // facilitator is never called. Without a fault the mark is set and the
+  // payment settles, as before.
   const { server, fac } = await resourceServer((s) => hangup.registerSettleSentHook(s));
+  const req = { headers: {} };
+  const control = await settleOf(server, payloadFor(BASE_NET), req);
+  ok(control.success === true && fac.calls.settle === 1 && hangup.settleSentWhileConnected(req), `settle-sent control: the mark is set and the payment settles (${JSON.stringify(control).slice(0, 120)})`);
   _setHookFaultsForTest([HOOK_NAMES.settleSent]);
-  const { out, lines } = await withLogs(() => settleOf(server, payloadFor(BASE_NET), { headers: {} }));
+  const faultReq = { headers: {} };
+  const { out, lines } = await withLogs(() => settleOf(server, payloadFor(BASE_NET), faultReq));
   _setHookFaultsForTest(null);
-  ok(out.success === true && fac.calls.settle === 1, `settle-sent: a throw passes and the payment settles (${JSON.stringify(out).slice(0, 120)})`);
-  ok(lines.some((l) => l.includes(`${HOOK_NAMES.settleSent} failed, payment goes on`)), "settle-sent: the fault fired and was logged by name");
+  ok(out.thrown && out.errorReason === SETTLE_MARK_FAILED, `settle-sent: a throw refuses with ${SETTLE_MARK_FAILED}, not the library's default (${out.errorReason})`);
+  ok(fac.calls.settle === 1, `settle-sent: a throw makes no settle call (settles ${fac.calls.settle})`);
+  ok(!hangup.settleSentWhileConnected(faultReq), "settle-sent: the refused settle is not marked sent");
+  ok(lines.some((l) => l.includes(`${HOOK_NAMES.settleSent} failed, payment refused`)), "settle-sent: the refusal is logged by name");
 }
 
 {
@@ -162,7 +173,7 @@ async function withLogs(fn) {
 
 // ------------------------------------------------------------ part 2
 console.log("part 2: paid-mode boots against a stub facilitator");
-const [CTL_PORT, FAULT_PORT, FAC_PORT] = await getFreePorts(3);
+const [CTL_PORT, FAULT_PORT, MARK_PORT, FAC_PORT] = await getFreePorts(4);
 const fac = { verify: 0, settle: 0 };
 let txN = 0;
 const facilitator = createServer((req, res) => {
@@ -216,7 +227,8 @@ const salesRows = (s) => {
 try {
   const ctl = boot(CTL_PORT, {});
   const flt = boot(FAULT_PORT, { X402_HOOK_FAULT_FOR_TEST: HOOK_NAMES.walletBlocklist });
-  await Promise.all([up(ctl), up(flt)]);
+  const mrk = boot(MARK_PORT, { X402_HOOK_FAULT_FOR_TEST: HOOK_NAMES.settleSent });
+  await Promise.all([up(ctl), up(flt), up(mrk)]);
   const [{ privateKeyToAccount, generatePrivateKey }, { x402Client }, { registerExactEvmScheme }, { wrapFetchWithPayment }] =
     await Promise.all([import("viem/accounts"), import("@x402/core/client"), import("@x402/evm/exact/client"), import("@x402/fetch")]);
   // Mint one genuine signed payment header against a server's 402.
@@ -272,6 +284,27 @@ try {
     await again.text();
     ok(again.status === 402 && !again.headers.get("x-replayed-answer") && !again.headers.get("x-idempotent-replay") && fac.settle - s0 === 0, `fault: nothing was committed under the key or the payment (resend ${again.status}, replayed ${again.headers.get("x-replayed-answer") || again.headers.get("x-idempotent-replay") || "no"})`);
     ok(flt.log.join("").includes(`${HOOK_NAMES.walletBlocklist} failed, payment refused`), "fault: the server logged the refusal by name");
+  }
+
+  // The settle-sent mark forced to throw: 402 naming its reason, no settle,
+  // no sale, nothing committed.
+  {
+    const pay = await mint(mrk, "/api/uuid");
+    const key = `hook-throws-${randomUUID()}`;
+    const v0 = fac.verify, s0 = fac.settle;
+    const r = await fetch(`${mrk.base}/api/uuid`, { headers: { [pay.name]: pay.value, "Idempotency-Key": key } });
+    const text = await r.text();
+    const resp = r.headers.get("payment-response") || r.headers.get("x-payment-response") || "";
+    const decoded = resp ? Buffer.from(resp, "base64").toString() : "";
+    ok(r.status === 402, `settle-sent fault: the mark's throw answers 402 (${r.status})`);
+    ok(`${text} ${decoded}`.includes(SETTLE_MARK_FAILED), `settle-sent fault: the answer names ${SETTLE_MARK_FAILED} (${`${text} ${decoded}`.slice(0, 240)})`);
+    ok(fac.verify - v0 === 1 && fac.settle - s0 === 0, `settle-sent fault: verified once, never settled (${fac.verify - v0}, ${fac.settle - s0})`);
+    await sleep(500);
+    ok(salesRows(mrk).length === 0, `settle-sent fault: no sale is booked (${JSON.stringify(salesRows(mrk))})`);
+    const again = await fetch(`${mrk.base}/api/uuid`, { headers: { [pay.name]: pay.value, "Idempotency-Key": key } });
+    await again.text();
+    ok(again.status === 402 && !again.headers.get("x-replayed-answer") && !again.headers.get("x-idempotent-replay") && fac.settle - s0 === 0, `settle-sent fault: nothing was committed (resend ${again.status})`);
+    ok(mrk.log.join("").includes(`${HOOK_NAMES.settleSent} failed, payment refused`), "settle-sent fault: the server logged the refusal by name");
   }
 
   // A payment header that decodes to JSON that is not an object.
