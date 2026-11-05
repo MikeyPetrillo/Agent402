@@ -20,8 +20,9 @@ Index:
 - A failed paywall check is re-run after 24 hours and when a seller registers
   again, and the check skips a templated route.
 Operations:
-- The on-demand spend jobs run from one dispatch-only workflow, `spend.yml`,
-  each behind the same approval; nothing spends on a schedule.
+- The spend jobs run from one workflow, `spend.yml`, each behind the same
+  approval. Only the listing pass is scheduled (weekly, still waiting for that
+  approval); every other job runs on dispatch.
 Packages:
 - agent402-mcp 0.13.28 runs on x402 2.30 and MCP SDK 1.32.2.
 
