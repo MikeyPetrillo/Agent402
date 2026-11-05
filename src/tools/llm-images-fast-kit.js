@@ -79,7 +79,14 @@ export const IMAGE_EDIT_MIN_SIDE = 256;
 // where the output follows the reference image's aspect.
 const KLEIN3 = "black-forest-labs/flux-3-image-klein";
 const klein3Link = (params) => ({ model: KLEIN3, provider: "black-forest-labs", params: { resolution: "1K", ...params },
-  listed: { unit: "image", variant: "1k" } });
+  listed: { unit: "image", variant: "1k" }, output: "jpeg" });
+
+// The container each link answers with (measured, in the table above). A
+// product that post-processes the picture in Jimp (src/tools/image-ops.js)
+// walks only the links whose output Jimp decodes: Jimp's default build reads
+// these formats and not WebP, so a WebP link there would be billed upstream
+// and then fail the resize. The tiers themselves serve every link.
+export const JIMP_DECODABLE_OUTPUTS = new Set(["png", "jpeg", "gif", "bmp", "tiff"]);
 
 // One link = one model on one provider. Its bounds live in the private table
 // (src/upstream-costs.js, `media`, never committed): `worstCaseUsd` is the
@@ -97,7 +104,7 @@ export const IMAGE_TIERS = {
     chain: [
       // Per-megapixel pricing, locked 1024x1024 billed as 1 MP.
       { model: "black-forest-labs/flux.2-klein-4b", provider: "black-forest-labs", params: {},
-        listed: { unit: "megapixel" } },
+        listed: { unit: "megapixel" }, output: "jpeg" },
       klein3Link({ aspect_ratio: "1:1" }),
       // Flat per image, a provider outside the two Klein links. Replaced
       // gpt-5-image-mini 2026-11-05, which the upstream catalog stamps to
@@ -105,7 +112,7 @@ export const IMAGE_TIERS = {
       // one other provider whose listed per-image price fits under this
       // tier's bound (measured that day: 2 s, lossless WebP 1024x1024 at 1:1).
       { model: "recraft/recraft-v4.1-flash", provider: "recraft", params: { aspect_ratio: "1:1" },
-        listed: { unit: "image" } },
+        listed: { unit: "image" }, output: "webp" },
     ],
     // Former links a caller may still name in `model`; the response names the
     // model actually served.
@@ -117,7 +124,7 @@ export const IMAGE_TIERS = {
     chain: [
       // Per-megapixel pricing, locked 1024x1024.
       { model: "black-forest-labs/flux.2-pro", provider: "black-forest-labs", params: {},
-        listed: { unit: "megapixel" } },
+        listed: { unit: "megapixel" }, output: "jpeg" },
       // Replaced qwen-image-3 (66 s per image) 2026-10-17: a few seconds, and
       // the same 1024x1024 JPEG the primary returns.
       klein3Link({ aspect_ratio: "1:1" }),
@@ -145,14 +152,14 @@ export const IMAGE_TIERS = {
     chain: [
       // Per-megapixel pricing; the locked 1024x1024 output bills as 1 MP (PNG).
       { model: "black-forest-labs/flux.2-pro", provider: "black-forest-labs", params: { output_format: "png" },
-        listed: { unit: "megapixel" } },
+        listed: { unit: "megapixel" }, output: "png" },
       // Token-priced, about 1024 image tokens per square image plus the text
       // prompt; answers PNG 1024x1024 at 1:1 natively (measured 2026-11-05,
       // 11 s). Replaced gpt-5-image-mini that day, ahead of its 2026-12-01
       // expiry: another provider than the primary, PNG, and within this
       // route's bound.
       { model: "microsoft/mai-image-2.6-flash", provider: "azure", params: { aspect_ratio: "1:1" },
-        listed: { unit: "token" } },
+        listed: { unit: "token" }, output: "png" },
     ],
   },
 };
@@ -349,13 +356,15 @@ function userOf(req) { try { return req ? upstreamUserId(req) : undefined; } cat
 // Image handler: walk the chain, first link that returns an image wins.
 // `zdr` (the /v1/images/generations route's documented knob) folds into the
 // provider prefs next to the pin, the way the chat wire folds it.
-export async function imageTierHandler(tierSlug, input, req, { zdr = false } = {}) {
+// `jimpDecodable` (in-process callers only, never a request field) walks only
+// the links whose output Jimp decodes (JIMP_DECODABLE_OUTPUTS).
+export async function imageTierHandler(tierSlug, input, req, { zdr = false, jimpDecodable = false } = {}) {
   const user = userOf(req);
   const tier = IMAGE_TIERS[tierSlug];
   const { prompt, refs } = validateImageTierRequest(input, tierSlug);
   let lastErr = null;
   let started = 0;
-  for (const link of tier.chain) {
+  for (const link of jimpDecodable ? tier.chain.filter((l) => JIMP_DECODABLE_OUTPUTS.has(l.output)) : tier.chain) {
     // Through the CDN proxy the answer must start inside the proxy's wait
     // (src/cdn-sync-window.js): a fallback link that cannot finish in what is
     // left is not started, and the call ends with a 504 (not charged).

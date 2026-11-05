@@ -173,6 +173,53 @@ process.env.OPENROUTER_API_KEY = "test-key";
   ok(calls.length === 2 && calls[1].body.model === KLEIN3 && calls[1].body.resolution === "1K" && calls[1].body.aspect_ratio === "1:1" && calls[1].body.provider.only[0] === "black-forest-labs" && out3.model === KLEIN3, "pro failover pins FLUX 3 Image Klein at 1K square on its provider");
 }
 
+// A product that resizes the picture in Jimp walks only the links Jimp decodes.
+// The fast tier's Recraft link answers WebP, which Jimp's default build cannot
+// read: linkedin-article used to buy it and then fail every size (502).
+{
+  const { JIMP_DECODABLE_OUTPUTS, imageTierHandler } = await import("../src/tools/llm-images-fast-kit.js");
+  const { linkedinImage, renderSizes, LINKEDIN_SIZES } = await import("../src/tools/linkedin-article-kit.js");
+  const { runImageOp } = await import("../src/tools/image-ops.js");
+  const { Jimp } = await import("jimp");
+  for (const [tier, t] of Object.entries(IMAGE_TIERS)) ok(t.chain.every((l) => typeof l.output === "string" && l.output), `${tier}: every link declares the container it answers with`);
+  ok(linkOf("v1-images-fast", RECRAFT).output === "webp" && !JIMP_DECODABLE_OUTPUTS.has("webp"), "the fast tier's Recraft link is the WebP one, and WebP is not on Jimp's list");
+  ok(IMAGE_TIERS["v1-images"].chain.every((l) => JIMP_DECODABLE_OUTPUTS.has(l.output)), "every /v1/images/generations link answers a format Jimp decodes (its documented PNG)");
+  // The copy a buyer reads names every container the fast tier can answer with,
+  // read off the links: the tool description and its Bazaar listing.
+  {
+    const { readFileSync } = await import("node:fs");
+    const SHOWN = { jpeg: "JPEG", png: "PNG", webp: "WebP" };
+    const outs = [...new Set(IMAGE_TIERS["v1-images-fast"].chain.map((l) => l.output))];
+    const desc = bySlug("v1-images-fast").description;
+    const bazaar = (readFileSync(new URL("../src/payments.js", import.meta.url), "utf8").split("\n").find((l) => l.trim().startsWith('"v1-images-fast":')) || "");
+    ok(outs.includes("webp") && outs.every((o) => SHOWN[o] && desc.includes(SHOWN[o])), `the v1-images-fast description names every output its links answer (${outs.map((o) => SHOWN[o]).join(", ")})`);
+    ok(outs.every((o) => bazaar.includes(SHOWN[o])), "the fast tier's Bazaar description names the same outputs, WebP among them");
+  }
+  const realJpeg = (await new Jimp({ width: 1024, height: 1024, color: 0x3366ffff }).getBuffer("image/jpeg", { quality: 85 })).toString("base64");
+  // A 1x1 lossless WebP: the container Recraft answers with.
+  const WEBP_B64 = "UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA==";
+  const webpReply = () => ({ status: 200, json: { data: [{ b64_json: WEBP_B64, media_type: "image/webp" }], usage: { cost: MB.worstCaseUsd } } });
+  const resize = (buffer, params) => runImageOp({ op: "cover", buffer, params });
+  // Primary down, Klein 3 answers a real JPEG, Recraft would answer WebP: the
+  // article's picture comes from Klein 3 and every LinkedIn size renders.
+  calls = []; perModel = { "black-forest-labs/flux.2-klein-4b": () => ({ status: 502, json: {} }), [KLEIN3]: () => ({ status: 200, json: { data: [{ b64_json: realJpeg, media_type: "image/jpeg" }], usage: { cost: QB.worstCaseUsd } } }), [RECRAFT]: webpReply };
+  const g = await linkedinImage({ prompt: "coins on network lines" });
+  const files = await renderSizes(Buffer.from(g.data[0].b64_json, "base64"), "cover", { resize });
+  ok(g.model === KLEIN3 && files.length === LINKEDIN_SIZES.cover.length && files.every((f) => f.media_type === "image/jpeg" && f.bytes > 0), `linkedin-article's picture renders at every cover size (${files.map((f) => `${f.width}x${f.height}`).join(", ")})`);
+  // Both decodable links down: the WebP link is never bought for the article
+  // (it could only be billed and fail the resize); the call ends in a 5xx, not charged.
+  calls = []; perModel = { "black-forest-labs/flux.2-klein-4b": () => ({ status: 502, json: {} }), [KLEIN3]: () => ({ status: 502, json: {} }), [RECRAFT]: webpReply };
+  const e = await throws(() => linkedinImage({ prompt: "coins on network lines" }), "", "both decodable links down: linkedin-article's image call fails");
+  ok(e?.statusCode >= 500 && calls.length === 2 && !calls.some((c) => c.body?.model === RECRAFT), `...without buying the WebP link (${calls.map((c) => c.body?.model).join(", ")})`);
+  // The same outage on the tier itself still serves WebP to a buyer.
+  calls = [];
+  const fast = await imageTierHandler("v1-images-fast", { prompt: "coins on network lines" });
+  ok(fast.model === RECRAFT && fast.data[0].media_type === "image/webp", "the fast tier keeps serving its WebP link to buyers");
+  // Why: the resizer cannot read the WebP the tier would have answered.
+  const why = await renderSizes(Buffer.from(WEBP_B64, "base64"), "cover", { resize }).then(() => null, (x) => x);
+  ok(why && /webp/i.test(String(why.message)), `Jimp refuses WebP, so the filter is what keeps the article whole (${String(why?.message).slice(0, 80)})`);
+}
+
 // imageless -> 502 (walks, then 502 end to end); malformed -> 502
 {
   calls = []; perModel = {
