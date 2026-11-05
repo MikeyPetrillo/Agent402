@@ -5,7 +5,14 @@
 // a cached plan from an older planner is never what gets measured.
 //
 //   BURNER_KEY=0x... POW_SECRET=... [ONLY="task text|other"] node scripts/decide-prod-check.mjs [out.json]
+//
+// A slow route (decide-execute: its /api/pricing row's `async` block) is paid
+// with Prefer: respond-async and its job followed to the end
+// (scripts/lib/slow-route-buy.js); a job that ends failed is a failed run. A
+// 400 respond_async_required (refused before payment) is paid once more with
+// the Prefer header its body names.
 import { createHmac } from "node:crypto";
+import { asyncAdviceByPath, slowPreferOf, paidCallHonoringSlowRoutes } from "./lib/slow-route-buy.js";
 import { writeFileSync } from "node:fs";
 import { GOLDEN } from "./decide-golden-eval.mjs";
 import { validateParams } from "../src/decide/params.js";
@@ -19,7 +26,11 @@ const [{ privateKeyToAccount }, { x402Client }, { registerExactEvmScheme }, { wr
 const client = disableVendorSpendControls(new x402Client());
 registerExactEvmScheme(client, { signer: privateKeyToAccount(pk) });
 const pay = wrapFetchWithPayment(tagged(fetch), client);
-const post = (path, body) => pay(`${TARGET}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+const asyncByPath = await fetch(`${TARGET}/api/pricing`).then((r) => r.json()).then(asyncAdviceByPath).catch(() => new Map());
+const post = async (path, body) => (await paidCallHonoringSlowRoutes(
+  (extra) => pay(`${TARGET}${path}`, { method: "POST", headers: { "content-type": "application/json", ...extra }, body: JSON.stringify(body) }),
+  { prefer: slowPreferOf(asyncByPath.get(path)), baseUrl: TARGET, fetchImpl: tagged(fetch), slug: path },
+)).res;
 const rows = [];
 const ONLY = process.env.ONLY ? process.env.ONLY.split("|") : null;
 for (const g of GOLDEN.filter((g) => !ONLY || ONLY.some((o) => g.task.includes(o)))) {
