@@ -122,7 +122,7 @@ import { REPORT_TIERS } from "../src/report-tiers.js";
 import { measureCoverage, missingIn, renderTable, examplesFromOpenapi, multipartKeysFromOpenapi, chainOf, CHAINS } from "./listing-coverage.js";
 import { multipartBodyFrom } from "../src/openapi-request.js";
 import { awaitJob, DEFAULT_ASYNC_TIMEOUT_MS } from "../client/async-job.js";
-import { redactJobLinks } from "./lib/slow-route-buy.js";
+import { redactJobLinks, slowPreferOf, asyncRefusalPreferOf } from "./lib/slow-route-buy.js";
 
 export const SETTLE_VIA = "payai";
 export const REGISTRIES = ["bazaar", "payai"];
@@ -309,23 +309,8 @@ export const mayRetry = (r, status) => RETRY_STATUSES.includes(status) && !oneAt
 // exactly as a synchronous buy's. Prefer: wait=<maxSeconds> is not used: a
 // run budget past the CDN's synchronous bound is refused on that connection
 // whatever wait the client names, and a held connection past it is cut.
-
-/** The Prefer value a route's paid call carries up front, or null. */
-export function slowPreferOf(r) {
-  const a = r?.async;
-  if (!a || typeof a !== "object" || String(r?.method || "POST").toUpperCase() !== "POST") return null;
-  return a.recommended === true || a.withoutPrefer === 400 ? "respond-async" : null;
-}
-
-/** The Prefer header a 400 respond_async_required body names (refused before
- *  payment), or null for any other answer. */
-export function asyncRefusalPrefer(status, bytes) {
-  if (status !== 400 || !bytes?.length) return null;
-  let doc = null;
-  try { doc = JSON.parse(Buffer.from(bytes).toString("utf8")); } catch { return null; }
-  if (doc?.error !== "respond_async_required") return null;
-  return /^\s*respond-async\s*$/i.test(String(doc.prefer || "")) ? "respond-async" : null;
-}
+// slowPreferOf and asyncRefusalPreferOf are the shared ones
+// (scripts/lib/slow-route-buy.js).
 
 /**
  * Pure: the amount a decoded 402 envelope asks on one chain's exact accept,
@@ -741,7 +726,7 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
     // Prefer: respond-async for a slow route, from its catalog row; a 400
     // respond_async_required answer (refused before payment) sets it for the
     // one retry that answer earns.
-    let prefer = slowPreferOf(r);
+    let prefer = slowPreferOf(r?.async, { method: r?.method });
     let asyncFallback = false;
     for (let attempt = 1; attempt <= 2; attempt++) {
       if (signedAtomic + r.ceilingAtomic > maxSpendAtomic) {
@@ -797,7 +782,7 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
           rec.error = `job ${rec.job?.state || "failed"}: ${rec.error}${job?.message ? ` (${redactJobLinks(job.message).slice(0, 120)})` : ""}`;
           break;
         }
-        const named = !prefer && !asyncFallback ? asyncRefusalPrefer(res.status, bytes) : null;
+        const named = !prefer && !asyncFallback ? asyncRefusalPreferOf(res.status, bytes?.length ? Buffer.from(bytes).toString("utf8") : "") : null;
         if (attempt < 2 && named) { prefer = named; asyncFallback = true; rec.error = `${rec.error} respond_async_required, retried with Prefer: ${named}`; writeRecords(); continue; }
         if (attempt < 2 && mayRetry(r, res.status)) { writeRecords(); await sleep(5000); continue; }
         break;
