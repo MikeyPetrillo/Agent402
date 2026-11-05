@@ -58,8 +58,8 @@ subrequests per invocation):
   hash in workerd and about 10 us in Node, so the expected solve is about
   0.05 ms and the hard cap about 1.1 ms (2.6 ms at Node's cost).
 - The paid-call adds two subrequests per attempt; the worst possible run
-  (retry, alarms opening and closing) is 39, pinned in
-  `scripts/test-status-probe-worker.js`.
+  (retry, a budget re-read on both attempts, alarms opening and closing) is 40,
+  pinned in `scripts/test-status-probe-worker.js`.
 
 ## Deploy
 

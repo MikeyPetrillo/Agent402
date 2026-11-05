@@ -371,6 +371,31 @@ const TOPUP = "Balances are deliberately not published on /api/gateway-status; r
 // page AND must never close a real alarm, so anything that is not an explicit
 // verdict leaves the current state exactly as it is.
 // The body of a public failure-word issue: the word and where the detail is.
+// PAYWALL NOT OBSERVED. A caller that spends the unpaid-quote budget from
+// this Worker's shared address keeps every paywall read here unobserved, and
+// an unobserved read is (rightly) never a failure, so without this the
+// paywall check could stay blind indefinitely with nothing paging. The count
+// of consecutive unobserved runs is kept where every run already writes:
+// each observed run records a paywall row on /api/status/probe, so the age of
+// the newest paywall row on /api/status (current.ageMs) is the time since any
+// observer last saw the paywall. This run's read unobserved and that age at
+// least PAYWALL_UNOBSERVED_PAGE_AFTER_RUNS runs (less half a run, for cron
+// jitter) pages; this run's read observed closes; anything else (no reading,
+// a store with no paywall row yet) does neither. At the 5-minute cron, three
+// runs is about 15 minutes.
+export const PROBE_CADENCE_MS = 5 * 60_000; // wrangler.toml: crons = ["*/5 * * * *"]
+export const PAYWALL_UNOBSERVED_PAGE_AFTER_RUNS = 3;
+export const PAYWALL_UNOBSERVED_TITLE = "Paywall not observed";
+export function paywallUnobservedVerdict(c) {
+  const observed = c?.probe?.paywallObserved;
+  if (observed === true) return "good";
+  if (observed !== false) return "quiet";
+  const comp = Array.isArray(c?.status?.components) ? c.status.components.find((x) => x?.key === "paywall") : null;
+  const age = Number(comp?.current?.ageMs);
+  if (!Number.isFinite(age)) return "quiet";
+  return age >= (PAYWALL_UNOBSERVED_PAGE_AFTER_RUNS - 0.5) * PROBE_CADENCE_MS ? "bad" : "quiet";
+}
+
 const failureWordBody = (field, word) =>
   `/api/gateway-status reports ${field}.status=${word}. The detail is on the operator endpoint, /__operator/tool-failures.json (operator token). Auto-closes when the word is ok.`;
 
@@ -839,6 +864,15 @@ This observer cannot dispatch the canary itself (it holds an issues-only credent
     },
     body: () => `/api/gateway-status reports cdnOrigin.status=unauthenticated: requests from the CDN's address ranges reached the origin without a valid X-Origin-Auth inside the last hour. While that lasts each such request is keyed on the edge address, not its client, so the per-address limiters, budgets and attribution fold onto a few addresses. Check CDN_ORIGIN_SECRET on Railway against the header rule on the proxy (a rotation on one side only reads exactly like this); the operator view of /api/gateway-status carries the count and whether a secret is configured. Auto-closes when the word is ok.`,
   },
+  {
+    title: PAYWALL_UNOBSERVED_TITLE,
+    verdict: paywallUnobservedVerdict,
+    body: (c) => {
+      const comp = Array.isArray(c?.status?.components) ? c.status.components.find((x) => x?.key === "paywall") : null;
+      const mins = Math.round((Number(comp?.current?.ageMs) || 0) / 60_000);
+      return `No observer has seen the paywall for about ${mins} minutes: the status Worker's unpaid read of a wallet-only route was refused by the unpaid-quote budget (429, reason unpaid-quote-budget) on at least ${PAYWALL_UNOBSERVED_PAGE_AFTER_RUNS} runs in a row, so whether paid tools still answer 402 is not being checked. The usual cause is another caller on the Worker's shared egress address spending that address's budget. The GitHub heartbeat signs its read and is never refused; check its latest run, and read the [unpaid-budget] log line for the address. Auto-closes on the Worker's next observed paywall read.`;
+    },
+  },
 ];
 
 const TWEET_QUEUE_BAD = new Set(["halted", "no_credentials", "refused", "in_doubt"]);
@@ -869,7 +903,7 @@ function lowOk(status) {
  * @param {{gateway?:object, status?:object}} ctx - /api/gateway-status and /api/status
  */
 export function judge(ctx) {
-  const c = { gateway: ctx?.gateway || {}, status: ctx?.status || null };
+  const c = { gateway: ctx?.gateway || {}, status: ctx?.status || null, probe: ctx?.probe || null };
   const out = {};
   for (const a of ALARMS) {
     let v = "quiet";
@@ -929,7 +963,7 @@ export async function openIssues(token, env = {}) {
  * Reconcile every alarm against GitHub issues.
  * @returns {{opened:string[], closed:string[], bad:string[], error?:string}}
  */
-export async function syncAlarms(env, { fetchStatus, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), confirmDelayMs = CONFIRM_DELAY_MS, openList = null, maxWrites = MAX_ISSUE_WRITES } = {}) {
+export async function syncAlarms(env, { fetchStatus, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), confirmDelayMs = CONFIRM_DELAY_MS, openList = null, maxWrites = MAX_ISSUE_WRITES, probe = null } = {}) {
   const token = env.GITHUB_ISSUES_TOKEN;
   if (!token) return { opened: [], closed: [], bad: [], error: "no GITHUB_ISSUES_TOKEN (alarms disabled)" };
   const prod = env.PROD || "https://agent402.tools";
@@ -937,7 +971,9 @@ export async function syncAlarms(env, { fetchStatus, sleep = (ms) => new Promise
   // settlement alarm lives there; a failure to read it is NOT fatal - the
   // gateway alarms are still judgeable, and an absent status simply makes the
   // settlement verdict "quiet".
-  const read = fetchStatus || (async () => {
+  // This run's own probe facts (the paywall read observed or not) ride with
+  // every reading, so the confirm read judges them the same way.
+  const readOnce = fetchStatus || (async () => {
     const r = await grab(`${prod}/api/gateway-status`, {}, 15000);
     if (!r.ok) throw new Error(`gateway-status ${r.status}`);
     const gateway = await r.json();
@@ -948,6 +984,7 @@ export async function syncAlarms(env, { fetchStatus, sleep = (ms) => new Promise
     } catch { /* the gateway half still stands */ }
     return { gateway, status };
   });
+  const read = async () => ({ ...(await readOnce()), probe });
 
   let body;
   try { body = await read(); } catch (e) {
@@ -1122,7 +1159,7 @@ export async function run(env, timing = {}) {
     .catch((e) => ({ action: "none", error: String(e?.message || e).slice(0, 100) }));
   // Independent of the probe result: the balance and reachability alarms are
   // healthy-path work too, and their only other observer runs every few hours.
-  const alarms = await syncAlarms(env, { openList, ...(timing.sleep ? { sleep: timing.sleep, confirmDelayMs: 0 } : {}) })
+  const alarms = await syncAlarms(env, { openList, probe: { paywallObserved: paywall?.observed === true }, ...(timing.sleep ? { sleep: timing.sleep, confirmDelayMs: 0 } : {}) })
     .catch((e) => ({ opened: [], closed: [], bad: [], error: String(e?.message || e).slice(0, 100) }));
   const alarmLine = alarms.error
     ? `alarms skipped (${alarms.error})`

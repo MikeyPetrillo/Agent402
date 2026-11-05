@@ -12,7 +12,8 @@
 # The fix is more observations per run, not a looser alarm. Sourced, never
 # executed: it defines probe() and record_observation() and does nothing else.
 #
-# Required env: PROD, RUN_URL, and PROBE_TOKEN (or OP_TOKEN as the fallback). Optional: POW_SECRET,
+# Required env: PROD, RUN_URL, and PROBE_TOKEN (or OP_TOKEN as the fallback). Optional: POW_SECRET
+# (signs the paywall read and the proof-of-work call with X-Heartbeat-Token),
 # ROBINHOOD_FACILITATOR_URL (presence = the operator intends the Robinhood rail).
 #
 # probe() sets the global FAILS to a space-separated list of what failed and
@@ -37,25 +38,48 @@ probe() {
 # The paywall read. The unpaid-quote budget (src/unpaid-quote-budget.js) keys
 # on the client address, and this runs from GitHub's shared addresses, so
 # another caller there can spend the budget this unpaid read counts against.
-# That 429 (body reason "unpaid-quote-budget") says nothing about the paywall:
-# it is re-read once after its Retry-After, capped at HB_BUDGET_WAIT_MAX
-# seconds (default 10; the hour-long Retry-After is never waited out), and a
-# second budget refusal sets PAYWALL_UNKNOWN=1: paywall and rails are not
-# observed this pass, never failed, never paged. Any other non-402 fails as
-# before. Sets PW (the status) and PAYWALL_UNKNOWN.
+# The read carries X-Heartbeat-Token (heartbeat_token, signed with POW_SECRET
+# like the proof-of-work call below), so the server reads it as our own probe
+# (isSynthetic) and the budget never counts or refuses it.
+# Without POW_SECRET the read goes unsigned and the budget's 429 (body reason
+# "unpaid-quote-budget") is the fallback case: it says nothing about the
+# paywall, so it is re-read once after its Retry-After, capped at
+# HB_BUDGET_WAIT_MAX seconds (default 10; the hour-long Retry-After is never
+# waited out), and a second budget refusal sets PAYWALL_UNKNOWN=1: paywall and
+# rails are not observed this pass, never failed, never paged. Any other
+# non-402 fails as before. Sets PW (the status) and PAYWALL_UNKNOWN.
 budget_refusal() {
   [ "$1" = "429" ] && jq -e '.reason == "unpaid-quote-budget"' < /tmp/hb-402.b >/dev/null 2>&1
 }
+# HMAC(POW_SECRET, "heartbeat:" + UTC minute), 32 base64url characters: the
+# token src/pow.js verifies (verifyHeartbeatToken). Prints nothing without
+# POW_SECRET. The secret is read from the environment, never from argv.
+heartbeat_token() {
+  [ -n "${POW_SECRET:-}" ] || return 0
+  node --input-type=module -e '
+    const { createHmac } = await import("node:crypto");
+    process.stdout.write(createHmac("sha256", process.env.POW_SECRET).update("heartbeat:" + Math.floor(Date.now() / 60000)).digest("base64url").slice(0, 32));
+  ' 2>/dev/null || true
+}
+paywall_get() {
+  local HBT
+  HBT=$(heartbeat_token)
+  if [ -n "$HBT" ]; then
+    curl -s --max-time 15 -D /tmp/hb-402.h -o /tmp/hb-402.b -w "%{http_code}" -X POST "$PROD/api/extract" -H 'Content-Type: application/json' -H "X-Heartbeat-Token: $HBT" -d '{"url":"https://example.com"}'
+  else
+    curl -s --max-time 15 -D /tmp/hb-402.h -o /tmp/hb-402.b -w "%{http_code}" -X POST "$PROD/api/extract" -H 'Content-Type: application/json' -d '{"url":"https://example.com"}'
+  fi
+}
 paywall_read() {
   PAYWALL_UNKNOWN=""
-  PW=$(curl -s --max-time 15 -D /tmp/hb-402.h -o /tmp/hb-402.b -w "%{http_code}" -X POST "$PROD/api/extract" -H 'Content-Type: application/json' -d '{"url":"https://example.com"}')
+  PW=$(paywall_get)
   if budget_refusal "$PW"; then
     local RA MAX="${HB_BUDGET_WAIT_MAX:-10}"
     RA=$(tr -d '\r' < /tmp/hb-402.h | awk -F': ' 'tolower($1)=="retry-after"{print $2}' | head -1)
     case "$RA" in ''|*[!0-9]*) RA="$MAX";; esac
     [ "$RA" -gt "$MAX" ] && RA="$MAX"
     sleep "$RA"
-    PW=$(curl -s --max-time 15 -D /tmp/hb-402.h -o /tmp/hb-402.b -w "%{http_code}" -X POST "$PROD/api/extract" -H 'Content-Type: application/json' -d '{"url":"https://example.com"}')
+    PW=$(paywall_get)
     if budget_refusal "$PW"; then
       PAYWALL_UNKNOWN=1
       echo "[heartbeat-probe] paywall not observed: the unpaid-quote budget refused the read twice"
