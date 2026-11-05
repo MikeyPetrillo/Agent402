@@ -60,7 +60,13 @@ Loaded when an index, discovery, router or buyer file is read.
   $0.05), paid only at its live 402's payTo, `sellerProof: "unproven"` on the receipt, and at most
   `SOR_BASE_UNPROVEN_SELLER_DAILY_USD` (default $0.25) per seller (payTo and origin host) over a
   rolling 24 h, reserved before signing on the shared-limits window (Redis) and given back only
-  when nothing moved. Solana's tier (`SOR_SVM_UNPROVEN_MAX_USD`, `src/solana-buyer.js`) is separate.
+  when nothing moved. A rolling 24-hour cap across all sellers (`SOR_BASE_UNPROVEN_DAILY_USD`,
+  default 5; `off` or 0 removes it; a malformed value reads as the default) is reserved in the same
+  script and window store, checked before signing, booked and released under the same rules; a
+  seller refused by it gets the same pre-commit 409 and the router moves on. A payTo listed in
+  `src/shared-paytos.js` is not a per-seller key: a seller paid at one is capped on its origin alone
+  (`configureUnprovenSharedPayTos`, wired in server.js). Solana's tier (`SOR_SVM_UNPROVEN_MAX_USD`,
+  `src/solana-buyer.js`) is separate.
 - **External spend guard:** `src/external-spend-guard.js` (per payer and per chain wallet).
 - **Router evidence:** `src/evidence-binding.js` keeps settlement evidence per wallet;
   `src/seller-funding.js` nets payments made with USDC the paid wallet itself sent the payer

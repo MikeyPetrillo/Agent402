@@ -216,7 +216,9 @@ that a paid success never resets): an onBeforeSettle hook aborts with
 `client_disconnected`, the Tempo broadcast and the Stripe capture make the same check first,
 and credits release the hold. Without a ticket, for a Tempo push credential (finalized
 before the handler) and for a close during the settle call itself, the charge goes through
-and `src/hangup-settlement.js` books it as owed. The budget never refuses service. A route
+and `src/hangup-settlement.js` books it as owed. The settle-sent mark is a refusing hook
+(`src/x402-hook-guard.js`): a throw cancels the settle (`settle_mark_failed`), so a charge is
+never booked as a forgiven hang-up. The budget never refuses service. A route
 whose effect outlives the answer never takes a ticket (`hasLastingEffect`: the memory writers,
 `attest`, `feedback`, the route-execute tiers, `seller-payability`); add a new one there.
 A payer's first hang-up in the window is forgiven at any price under the service-wide budget
