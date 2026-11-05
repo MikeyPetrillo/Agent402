@@ -377,8 +377,10 @@ const TOPUP = "Balances are deliberately not published on /api/gateway-status; r
 // paywall check could stay blind indefinitely with nothing paging. The count
 // of consecutive unobserved runs is kept where every run already writes:
 // each observed run records a paywall row on /api/status/probe, so the age of
-// the newest paywall row on /api/status (current.ageMs) is the time since any
-// observer last saw the paywall. This run's read unobserved and that age at
+// the newest paywall row on /api/status (the youngest of the component's
+// sources[] rows, whatever each one read; current.ageMs only without them,
+// since current names an outage row over a fresher operational one) is the
+// time since any observer last saw the paywall. This run's read unobserved and that age at
 // least PAYWALL_UNOBSERVED_PAGE_AFTER_RUNS runs (less half a run, for cron
 // jitter) pages; this run's read observed closes; anything else (no reading,
 // a store with no paywall row yet) does neither. At the 5-minute cron, three
@@ -386,12 +388,20 @@ const TOPUP = "Balances are deliberately not published on /api/gateway-status; r
 export const PROBE_CADENCE_MS = 5 * 60_000; // wrangler.toml: crons = ["*/5 * * * *"]
 export const PAYWALL_UNOBSERVED_PAGE_AFTER_RUNS = 3;
 export const PAYWALL_UNOBSERVED_TITLE = "Paywall not observed";
+/** Milliseconds since any observer last recorded a paywall row, or NaN when unknown. */
+export function paywallNewestAgeMs(c) {
+  const comp = Array.isArray(c?.status?.components) ? c.status.components.find((x) => x?.key === "paywall") : null;
+  const rows = Array.isArray(comp?.current?.sources) ? comp.current.sources : [];
+  const ages = rows.map((r) => r?.ageMs).filter((a) => typeof a === "number" && Number.isFinite(a) && a >= 0);
+  if (ages.length) return Math.min(...ages);
+  const a = comp?.current?.ageMs;
+  return typeof a === "number" && Number.isFinite(a) ? a : NaN;
+}
 export function paywallUnobservedVerdict(c) {
   const observed = c?.probe?.paywallObserved;
   if (observed === true) return "good";
   if (observed !== false) return "quiet";
-  const comp = Array.isArray(c?.status?.components) ? c.status.components.find((x) => x?.key === "paywall") : null;
-  const age = Number(comp?.current?.ageMs);
+  const age = paywallNewestAgeMs(c);
   if (!Number.isFinite(age)) return "quiet";
   return age >= (PAYWALL_UNOBSERVED_PAGE_AFTER_RUNS - 0.5) * PROBE_CADENCE_MS ? "bad" : "quiet";
 }
@@ -868,8 +878,7 @@ This observer cannot dispatch the canary itself (it holds an issues-only credent
     title: PAYWALL_UNOBSERVED_TITLE,
     verdict: paywallUnobservedVerdict,
     body: (c) => {
-      const comp = Array.isArray(c?.status?.components) ? c.status.components.find((x) => x?.key === "paywall") : null;
-      const mins = Math.round((Number(comp?.current?.ageMs) || 0) / 60_000);
+      const mins = Math.round((paywallNewestAgeMs(c) || 0) / 60_000);
       return `No observer has seen the paywall for about ${mins} minutes: the status Worker's unpaid read of a wallet-only route was refused by the unpaid-quote budget (429, reason unpaid-quote-budget) on at least ${PAYWALL_UNOBSERVED_PAGE_AFTER_RUNS} runs in a row, so whether paid tools still answer 402 is not being checked. The usual cause is another caller on the Worker's shared egress address spending that address's budget. The GitHub heartbeat signs its read and is never refused; check its latest run, and read the [unpaid-budget] log line for the address. Auto-closes on the Worker's next observed paywall read.`;
     },
   },

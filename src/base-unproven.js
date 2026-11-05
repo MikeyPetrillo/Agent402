@@ -108,7 +108,7 @@ export function baseUnprovenLaneDailyUsd() {
 }
 
 // ---- the per-seller ledger ---------------------------------------------------
-const WINDOW = "base-unproven-seller";
+const WINDOW = "base-unproven-seller-v2";
 const CONTROL = "base-unproven-seller-cap";
 const SHARED = sharedLimitsEnabled();
 const PROC = `${process.pid}-${randomBytes(3).toString("hex")}`;
@@ -177,30 +177,58 @@ const localMicro = (k, now) => localRows(k, now).reduce((s, r) => s + r.micro, 0
 // that removed an entry, and lowered by exactly what the expiry prune takes
 // out (ZRANGEBYSCORE over the expired head only). A reserve is O(log n) plus
 // the entries that expired since the last touch, not O(n): the lane window at
-// 50,000 entries was summed in full on every reserve, holding Redis. A sum
-// that is missing while its window holds entries (the first touch after this
-// shipped) is rebuilt from the window once; an empty window's sum is zero and
-// its key is dropped. Every script that touches a window keeps its sum, and
-// nothing else writes these windows (the reads below prune through SETTLE,
-// not the shared-limits window read, which would prune without lowering the
-// sum).
-const SUM_WINDOW = "base-unproven-seller-sum";
-// settle(window, sum, cutoff, windowMs): prune the expired head, lower the sum
-// by what it held, and answer the window's current sum.
+// 50,000 entries was summed in full on every reserve, holding Redis.
+//
+// The sum is a cache of its window, never the other way round:
+// - It is rebuilt from the window (in the same script call) whenever it is
+//   missing, not an integer, negative, or larger than the window could hold
+//   (its entry count times the window's cap: no admitted entry is above the
+//   cap it was admitted under). An empty window's sum is zero and its key is
+//   dropped.
+// - Its expiry is set only when it is (re)built, never renewed by a reserve,
+//   so it is rebuilt from the window at least once per window period and an
+//   error in it cannot outlive a day.
+// - The window and sum names carry the format version (`-v2`). A build that
+//   kept no running sum, or one that renewed the sum's expiry, never writes a
+//   window this build sums: during a deploy overlap or after a rollback the
+//   older build keeps its own window, so its adds and prunes cannot move this
+//   build's sums away from their windows. Those two windows are independent
+//   only while both builds serve; a rebuild here folds in the unexpired
+//   entries of the older build's window (LEGACY_WINDOW, read only, never
+//   written), so a deploy does not hand every seller a fresh day, and an entry
+//   the older build added after this build's last rebuild is seen at the next
+//   one. Members are unique per process and reservation, so folding the same
+//   entry twice adds it once.
+//
+// Every script that touches a window keeps its sum, and nothing else writes
+// these windows (the reads below settle through SETTLE, not the shared-limits
+// window read, which would prune without lowering the sum).
+const LEGACY_WINDOW = "base-unproven-seller";
+const SUM_WINDOW = "base-unproven-seller-v2-sum";
+// settle(window, sum, legacyWindow, cutoff, windowMs, capMicro): prune the
+// expired head, lower the sum by what it held, rebuild it when it cannot be
+// right, and answer the window's current sum. capMicro 0 skips the
+// upper-bound check (a read that knows no cap).
 const SETTLE = `
 local function weight(e) return tonumber(string.match(e, '^(%-?%d+)|')) or 1 end
-local function settle(z, s, cutoff, windowMs)
-  local cur = redis.call('GET', s)
-  if not cur then
-    redis.call('ZREMRANGEBYSCORE', z, '-inf', cutoff)
-    local items = redis.call('ZRANGE', z, 0, -1)
-    if #items == 0 then return 0 end
-    local sum = 0
-    for j = 1, #items do sum = sum + weight(items[j]) end
-    redis.call('SET', s, sum, 'PX', windowMs)
-    return sum
+local function rebuild(z, s, lz, cutoff, windowMs)
+  redis.call('ZREMRANGEBYSCORE', z, '-inf', cutoff)
+  local prior = redis.call('ZRANGEBYSCORE', lz, '(' .. cutoff, '+inf', 'WITHSCORES')
+  for j = 1, #prior, 2 do redis.call('ZADD', z, 'NX', prior[j + 1], prior[j]) end
+  local items = redis.call('ZRANGE', z, 0, -1)
+  if #items == 0 then
+    redis.call('DEL', s)
+    return 0
   end
-  cur = tonumber(cur)
+  local sum = 0
+  for j = 1, #items do sum = sum + weight(items[j]) end
+  redis.call('SET', s, sum, 'PX', windowMs)
+  if redis.call('PTTL', z) < 0 then redis.call('PEXPIRE', z, windowMs) end
+  return sum
+end
+local function settle(z, s, lz, cutoff, windowMs, capMicro)
+  local cur = tonumber(redis.call('GET', s))
+  if not cur or cur < 0 or cur ~= math.floor(cur) then return rebuild(z, s, lz, cutoff, windowMs) end
   local old = redis.call('ZRANGEBYSCORE', z, '-inf', cutoff)
   if #old > 0 then
     local d = 0
@@ -208,38 +236,43 @@ local function settle(z, s, cutoff, windowMs)
     redis.call('ZREMRANGEBYSCORE', z, '-inf', cutoff)
     cur = tonumber(redis.call('DECRBY', s, d))
   end
-  if redis.call('EXISTS', z) == 0 then
-    redis.call('DEL', s)
-    return 0
-  end
+  local count = redis.call('ZCARD', z)
+  if count == 0 or cur < 0 then return rebuild(z, s, lz, cutoff, windowMs) end
+  local cap = tonumber(capMicro) or 0
+  if cap > 0 and cur > count * cap then return rebuild(z, s, lz, cutoff, windowMs) end
   return cur
 end
 `;
 
 // KEYS[1..n] = the windows (the seller's, then the lane's), KEYS[n+1..2n] =
-// their sums; ARGV: cutoff, windowMs, encodedMember, score, weightMicro, then
-// a local floor and a cap per window. Settles every window, and adds the
-// entry to all of them only when each one's larger of its shared sum and this
+// their sums, KEYS[2n+1..3n] = the older build's windows (read on a rebuild
+// only); ARGV: cutoff, windowMs, encodedMember, score, weightMicro, then a
+// local floor and a cap per window. Settles every window, and adds the entry
+// to all of them only when each one's larger of its shared sum and this
 // process's own stays within its own cap; otherwise answers the first window
-// that refused and its figure.
+// that refused and its figure. A sum created by the add (an empty window)
+// gets the window period as its expiry; an existing sum keeps its own.
 const SELLER_RESERVE = `${SETTLE}
-local n = #KEYS / 2
+local n = #KEYS / 3
 local w = tonumber(ARGV[5])
 for i = 1, n do
-  local sum = settle(KEYS[i], KEYS[n + i], ARGV[1], ARGV[2])
+  local sum = settle(KEYS[i], KEYS[n + i], KEYS[2 * n + i], ARGV[1], ARGV[2], ARGV[5 + 2 * i])
   local base = math.max(sum, tonumber(ARGV[4 + 2 * i]))
   if base + w > tonumber(ARGV[5 + 2 * i]) then return { 0, i, base } end
 end
 for i = 1, n do
-  if redis.call('ZADD', KEYS[i], ARGV[4], ARGV[3]) == 1 then redis.call('INCRBY', KEYS[n + i], ARGV[5]) end
+  if redis.call('ZADD', KEYS[i], ARGV[4], ARGV[3]) == 1 then
+    if redis.call('EXISTS', KEYS[n + i]) == 1 then redis.call('INCRBY', KEYS[n + i], ARGV[5])
+    else redis.call('SET', KEYS[n + i], ARGV[5], 'PX', ARGV[2]) end
+  end
   redis.call('PEXPIRE', KEYS[i], ARGV[2])
-  redis.call('PEXPIRE', KEYS[n + i], ARGV[2])
 end
 return { 1, 0, 0 }`;
 
-// KEYS as above; ARGV: encodedMember, weightMicro. Removes the entry and
-// lowers each sum only where the entry was still there (a release after the
-// entry expired, or a second release, lowers nothing).
+// KEYS[1..n] = the windows, KEYS[n+1..2n] = their sums; ARGV: encodedMember,
+// weightMicro. Removes the entry and lowers each sum only where the entry was
+// still there (a release after the entry expired, or a second release, lowers
+// nothing). A sum lowered below zero is rebuilt by the next settle.
 const SELLER_RELEASE = `
 local n = #KEYS / 2
 for i = 1, n do
@@ -250,14 +283,17 @@ for i = 1, n do
 end
 return 1`;
 
-// KEYS as above; ARGV: cutoff, windowMs. Each window's current sum.
+// KEYS as for SELLER_RESERVE; ARGV: cutoff, windowMs, then a cap per window
+// (0 = none). Each window's current sum.
 const SELLER_READ = `${SETTLE}
-local n = #KEYS / 2
+local n = #KEYS / 3
 local out = {}
-for i = 1, n do out[i] = settle(KEYS[i], KEYS[n + i], ARGV[1], ARGV[2]) end
+for i = 1, n do out[i] = settle(KEYS[i], KEYS[n + i], KEYS[2 * n + i], ARGV[1], ARGV[2], ARGV[2 + i]) end
 return out`;
 
-const windowKeys = (keys) => [...keys.map((k) => sharedKeyOf(WINDOW, k)), ...keys.map((k) => sharedKeyOf(SUM_WINDOW, k))];
+const sumKeys = (keys) => [...keys.map((k) => sharedKeyOf(WINDOW, k)), ...keys.map((k) => sharedKeyOf(SUM_WINDOW, k))];
+const windowKeys = (keys) => [...sumKeys(keys), ...keys.map((k) => sharedKeyOf(LEGACY_WINDOW, k))];
+const capMicroOf = (k) => { const usd = k === LANE_KEY ? baseUnprovenLaneDailyUsd() : baseUnprovenSellerDailyUsd(); return usd == null ? 0 : Math.round(usd * 1e6); };
 
 /** The shared sums of these windows at `now` (settling each), or null when the store does not answer. */
 async function sharedSums(keys, now) {
@@ -265,7 +301,7 @@ async function sharedSums(keys, now) {
   try { c = await getSharedRedisClient(); } catch { c = null; }
   if (!c) { noteSharedLimitsDegraded(CONTROL, { ok: false, error: "redis unavailable" }); return null; }
   try {
-    const r = await withLoopTimeout(c.eval(SELLER_READ, { keys: windowKeys(keys), arguments: [now - UNPROVEN_SELLER_WINDOW_MS, UNPROVEN_SELLER_WINDOW_MS].map(String) }), OP_MS(), () => new Error("shared-limits: command timed out"));
+    const r = await withLoopTimeout(c.eval(SELLER_READ, { keys: windowKeys(keys), arguments: [now - UNPROVEN_SELLER_WINDOW_MS, UNPROVEN_SELLER_WINDOW_MS, ...keys.map(capMicroOf)].map(String) }), OP_MS(), () => new Error("shared-limits: command timed out"));
     return Array.isArray(r) ? r.map((x) => Number(x) || 0) : null;
   } catch (e) {
     noteSharedLimitsDegraded(CONTROL, { ok: false, error: String(e?.message || e).slice(0, 120) });
@@ -354,7 +390,7 @@ export function releaseUnprovenSellerSpend(handle) {
     return (async () => {
       const c = await getSharedRedisClient();
       if (!c) throw new Error("redis unavailable");
-      await withLoopTimeout(c.eval(SELLER_RELEASE, { keys: windowKeys(handle.keys), arguments: [`${handle.micro}|${handle.member}`, String(handle.micro)] }), OP_MS(), () => new Error("shared-limits: command timed out"));
+      await withLoopTimeout(c.eval(SELLER_RELEASE, { keys: sumKeys(handle.keys), arguments: [`${handle.micro}|${handle.member}`, String(handle.micro)] }), OP_MS(), () => new Error("shared-limits: command timed out"));
     })().catch((e) => noteSharedLimitsDegraded(CONTROL, { ok: false, error: String(e?.message || e).slice(0, 120) }));
   }
 }
@@ -382,7 +418,7 @@ export async function unprovenLaneSpentUsd({ now = Date.now() } = {}) {
 
 /** Test-only: forget this process's rows (and, with a shared store, the seller's windows and the lane's). */
 export async function __resetUnprovenSellerLedger(sellers = []) {
-  if (SHARED) { for (const s of sellers) for (const k of unprovenSellerKeys(s)) { await shared.windowClear(WINDOW, k); await shared.windowClear(SUM_WINDOW, k); } await shared.windowClear(WINDOW, LANE_KEY); await shared.windowClear(SUM_WINDOW, LANE_KEY); }
+  if (SHARED) { for (const k of [...sellers.flatMap((s) => unprovenSellerKeys(s)), LANE_KEY]) for (const name of [WINDOW, SUM_WINDOW, LEGACY_WINDOW]) await shared.windowClear(name, k); }
   local.clear();
   seq = 0;
 }
@@ -390,4 +426,4 @@ export const __sharedUnprovenSellerLedger = SHARED;
 /** Test-only: the shared sums of these ledger keys at `now`, settled (null without the store). */
 export const __unprovenWindowSums = (keys, now = Date.now()) => (SHARED ? sharedSums(keys, now) : Promise.resolve(null));
 /** Test-only: the shared store's key names for a ledger key (its window and its sum). */
-export const __unprovenStoreKeys = (k) => ({ window: sharedKeyOf(WINDOW, k), sum: sharedKeyOf(SUM_WINDOW, k) });
+export const __unprovenStoreKeys = (k) => ({ window: sharedKeyOf(WINDOW, k), sum: sharedKeyOf(SUM_WINDOW, k), legacy: sharedKeyOf(LEGACY_WINDOW, k) });

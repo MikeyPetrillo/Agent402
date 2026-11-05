@@ -1198,6 +1198,17 @@ for (const [name, over, detail] of failCases) {
     assert.equal(judge({ status: null, probe: { paywallObserved: false } })[T], "quiet");
     assert.equal(judge({ status: st(60 * 60_000) })[T], "quiet");
   });
+  // The paywall's age is its newest row from ANY observer: /api/status names
+  // an outage row as current over a fresher operational one, so a stale
+  // outage from another observer beside a fresh operational read is not
+  // "unobserved", and the page names the newest row's age.
+  check("the verdict reads the newest of the paywall's sources, not current's row", () => {
+    const both = (outageAge, upAge) => ({ components: [{ key: "paywall", current: { state: "outage", ageMs: outageAge, source: "heartbeat", sources: [{ source: "status-worker", state: "operational", ageMs: upAge }, { source: "heartbeat", state: "outage", ageMs: outageAge }] } }] });
+    assert.equal(judge({ status: both(40 * 60_000, 2 * 60_000), probe: { paywallObserved: false } })[T], "quiet");
+    assert.equal(judge({ status: both(40 * 60_000, 20 * 60_000), probe: { paywallObserved: false } })[T], "bad");
+    const alarm = ALARMS.find((a) => a.title === T);
+    assert.match(alarm.body({ status: both(40 * 60_000, 20 * 60_000), probe: { paywallObserved: false } }), /about 20 minutes/);
+  });
 }
 
 console.log(failures ? `\nFAILED (${failures})` : "\nall passed");
