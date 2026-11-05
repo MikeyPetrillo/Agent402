@@ -63,7 +63,7 @@ const needsBrowser = (file) => {
 for (const [name, j] of Object.entries(jobs)) {
   const steps = j.steps || [];
   const usesBrowser = scriptsIn(j).some(needsBrowser);
-  const installs = steps.some((s) => /playwright install/.test(String(s.run || "")));
+  const installs = steps.some((s) => /playwright install|ci-apt-install\.sh --playwright-chromium/.test(String(s.run || "")));
   if (usesBrowser) ok(installs, `job "${name}" runs a browser-driven script without installing Chromium`);
   if (installs) ok(usesBrowser, `job "${name}" installs Chromium but runs no browser-driven script - pure wasted minutes`);
 }
