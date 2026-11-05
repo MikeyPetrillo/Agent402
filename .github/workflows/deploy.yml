@@ -1907,6 +1907,8 @@ jobs:
           t node scripts/test-settle-fallback.js
           # A listed Robinhood settle fallback is tried only after its /supported confirms eip155:4663 (paid-mode boot vs stub facilitators - offline)
           t node scripts/test-rh-fallback-confirm.js
+          # SOLANA_FALLBACK_FACILITATOR_URL: the last Solana settle fallback, after the existing ones, dropped at boot without Solana exact, inert when unset (paid-mode boots vs stub facilitators - offline)
+          t node scripts/test-solana-last-fallback.js
           # A settle failure that names a transaction is booked and read from the chain: landed after a 402 -> owed once; reverted, foreign or never mined -> nothing owed (stub RPC, real refund ledger - offline)
           t node scripts/test-late-settlements.js
           # A pending settle answer naming a tx is read on chain first: proven mined to us -> 200, one sale, nothing booked, breaker and upstream count read it as settled; unproven, RPC errors, buyer gone or a plain 5xx -> 402 and booked as before (paid-mode boot vs stub facilitator and RPC - offline)
@@ -2065,6 +2067,8 @@ jobs:
           t node scripts/test-legal-dates.js
           # Legal, security and machine copy state what the code does (backups, refunds, CSP, MPP chains; offline)
           t node scripts/test-legal-claims.js
+          # FACILITATOR_PUBLIC_INDEX_CHAINS: the privacy paragraph and terms pointer appear only for the listed chains, with their exact wording (offline)
+          t node scripts/test-public-index-copy.js
           t node scripts/test-wire-count-copy.js
           t node scripts/test-pack-copy-retired.js
           # Retired hosted tollbooth: no surface offers it; retired URLs 301, the intake 410s; the operator leads page is gone (boots a server)
