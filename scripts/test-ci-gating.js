@@ -264,6 +264,9 @@ for (const [name, j] of Object.entries(jobs)) {
   const reporter = Object.values(ljobs).find((j) => /gh issue create/.test((j.steps || []).map((st) => String(st.run || "")).join("\n")));
   const report = (reporter?.steps || []).map((st) => String(st.run || "")).join("\n");
   ok(!!reporter && String(reporter.if || "") === "always() && (inputs.job == 'listing-pass' || github.event_name == 'schedule')" && [].concat(reporter.needs || []).length === 1, "a report job runs after the pass whatever its result, and only on a listing-pass dispatch");
+  const lp = listing.jobs["listing-pass"] || {};
+  ok(lp.outputs?.started === "${{ steps.started.outputs.started }}" && (lp.steps || [])[0]?.id === "started", "the listing pass marks itself started in its first step");
+  ok((reporter?.steps || []).some((st) => st.env?.STARTED === "${{ needs.listing-pass.outputs.started }}") && /if \[ "\$STARTED" != "true" \]; then[\s\S]*?exit 0[\s\S]*?if \[ "\$PASS" != "success" \]/.test(report), "a pass that never started (approval not given) pages nothing");
   ok(/TITLE="Listing pass FAILED"/.test(report) && /in:title/.test(report) && /gh issue comment .*Still failing/.test(report) && /gh issue close .*Recovered/.test(report), "it keeps one issue by title: open, Still failing, Recovered on the next green run");
 
   // The one schedule starts the listing pass, behind the same approval.

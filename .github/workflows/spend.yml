@@ -474,7 +474,15 @@ jobs:
       cancel-in-progress: false
     env:
       TARGET_URL: https://agent402.tools
+    # Set by the first step, so the report can tell a pass that ran and
+    # failed from one that never started (approval rejected, timed out or
+    # superseded): only the first pages.
+    outputs:
+      started: ${{ steps.started.outputs.started }}
     steps:
+      - name: Mark the pass started
+        id: started
+        run: echo "started=true" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -552,10 +560,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PASS: ${{ needs.listing-pass.result }}
+          STARTED: ${{ needs.listing-pass.outputs.started }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           TITLE="Listing pass FAILED"
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          # A pass that never started (its spending approval was not given)
+          # spent nothing and failed nothing: no page, and an open page stays.
+          if [ "$STARTED" != "true" ]; then
+            echo "The listing pass did not start (result: $PASS): no approval was given, nothing was spent."
+            exit 0
+          fi
           if [ "$PASS" != "success" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A listing pass did not complete (result: $PASS, trigger: ${GITHUB_EVENT_NAME}). While it fails, a route the Bazaar or the PayAI registry lacks on Base or Solana stays unlisted there. Read the run: each leg is a log group; exit 2 is a refused preflight (the settle-via preference not honored, PayAI not listing the chain, or a secret missing) and that leg spent nothing; exit 1 names the route whose buy failed. Records: the listing-pass artifact on $RUN_URL. Re-run: \`gh workflow run spend.yml --ref main -f job=listing-pass\`."
