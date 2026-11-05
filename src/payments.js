@@ -159,6 +159,12 @@ const ROBINHOOD_FALLBACK_RECHECK_MS = Math.max(1000, Number(process.env.ROBINHOO
 // The offer, the scheme and what the buyer signs do not depend on the list.
 const ROBINHOOD_FACILITATOR_URLS = facilitatorUrlList(process.env.ROBINHOOD_FACILITATOR_URL);
 const ROBINHOOD_FACILITATOR_URL = ROBINHOOD_FACILITATOR_URLS[0] || "";
+// SOLANA_FALLBACK_FACILITATOR_URL (one URL, unset = off): the LAST settle
+// fallback on Solana mainnet, after the chain fallbackCandidatesFor already
+// gives it, under PAYMENT_SETTLE_FALLBACK only. It is never a routing
+// facilitator: no payment on any network settles there first.
+const SOLANA_MAINNET_CAIP2 = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
+const SOLANA_FALLBACK_FACILITATOR_URL = facilitatorUrlList(process.env.SOLANA_FALLBACK_FACILITATOR_URL)[0] || "";
 // ROBINHOOD_RELAYER_KEY (our own relayer, src/robinhood-relayer.js): read at
 // boot; a malformed key turns the feature off with a warning, never a crash.
 function robinhoodRelayerKeySafe() {
@@ -1198,23 +1204,12 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       // on eip155:4663 (confirmed). One that answers without it could only
       // fail: dropped, loudly. One that cannot be reached is not tried yet and
       // is asked again in the background until it answers.
-      const confirmFallback = (f, attempt = 0) => {
-        Promise.resolve().then(() => f.client.getSupported()).then((sup) => {
-          const kinds = Array.isArray(sup?.kinds) ? sup.kinds : [];
-          if (kinds.some((k) => k?.scheme === "exact" && k?.network === ROBINHOOD_CAIP2)) {
-            f.confirmed = true;
-            if (attempt) console.log(`Robinhood Chain: ${f.name} confirmed for the settle fallback`);
-            return;
-          }
-          const i = robinhoodFallbacks.indexOf(f);
-          if (i >= 0) robinhoodFallbacks.splice(i, 1);
-          console.warn(`WARNING: ${f.name} does not advertise exact on ${ROBINHOOD_CAIP2} - dropped from Robinhood's settle fallback`);
-        }).catch((e) => {
-          if (attempt === 0) console.warn(`WARNING: ${f.name} unreachable (${String(e?.message || e).slice(0, 120)}); not tried until its /supported answers (re-checked in the background)`);
-          setTimeout(() => confirmFallback(f, attempt + 1), ROBINHOOD_FALLBACK_RECHECK_MS).unref?.();
+      for (const f of [...robinhoodFallbacks]) {
+        confirmListedFallback(f, {
+          network: ROBINHOOD_CAIP2, chain: "Robinhood Chain", listName: "Robinhood's", recheckMs: ROBINHOOD_FALLBACK_RECHECK_MS,
+          onDrop: () => { const i = robinhoodFallbacks.indexOf(f); if (i >= 0) robinhoodFallbacks.splice(i, 1); },
         });
-      };
-      for (const f of [...robinhoodFallbacks]) confirmFallback(f);
+      }
     }
     if (robinhoodRelayerKeySafe()) {
       try {
@@ -1953,6 +1948,29 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     });
     DEMOTION_NETWORKS.add(CELO_CAIP2);
   }
+  // SOLANA_FALLBACK_FACILITATOR_URL: appended after Solana's default chain,
+  // only once its /supported confirmed exact on Solana mainnet (the same
+  // boot check as Robinhood's listed fallbacks). Not built at all while the
+  // fallback is off or Solana is not offered.
+  const solanaLastConfirmed = new Set();
+  let solanaLast = null;
+  if (SOLANA_FALLBACK_FACILITATOR_URL && svmCaip2.includes(SOLANA_MAINNET_CAIP2)) {
+    if (!/^(1|true|yes|on)$/i.test((process.env.PAYMENT_SETTLE_FALLBACK || "").trim())) {
+      console.warn("WARNING: SOLANA_FALLBACK_FACILITATOR_URL has no effect while PAYMENT_SETTLE_FALLBACK is off");
+    } else {
+      const url = SOLANA_FALLBACK_FACILITATOR_URL;
+      const name = `Solana last fallback (${url})`;
+      const client = new HTTPFacilitatorClient({ url });
+      labelFacilitatorErrors(name, client);
+      registerFacilitatorUpstream(url);
+      solanaLast = { name, client, url, confirmed: false };
+      console.log(`Solana: ${name} is the last settle fallback (PAYMENT_SETTLE_FALLBACK; after a refusal that moved no money)`);
+      confirmListedFallback(solanaLast, {
+        network: SOLANA_MAINNET_CAIP2, chain: "Solana", listName: "Solana's", recheckMs: ROBINHOOD_FALLBACK_RECHECK_MS,
+        onConfirm: () => solanaLastConfirmed.add(SOLANA_MAINNET_CAIP2),
+      });
+    }
+  }
   registerFacilitatorFailureHooks(server, payAiClient, solvadorClient, {
     [ARC_CAIP2]: [],
     ...(solvadorCeloPrimary ? { [CELO_CAIP2]: celoClient ? [{ name: "Celo", client: celoClient }] : [] } : {}),
@@ -1964,6 +1982,8 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     // Base and Polygon: the chain they always had, then the issuer's
     // facilitator last, once its /supported listed the network.
     ...(circleEvm ? lastResortFallbackOverrides({ networks: circleEvmWanted, payAiClient, solvadorClient, last: { name: CIRCLE_EVM_LABEL, client: circleEvm }, confirmed: circleEvmConfirmed }) : {}),
+    // Solana mainnet: its default chain, then the operator's last fallback.
+    ...(solanaLast ? lastResortFallbackOverrides({ networks: [SOLANA_MAINNET_CAIP2], payAiClient, solvadorClient, last: solanaLast, confirmed: solanaLastConfirmed }) : {}),
   }, { outageFor: (network) => (network === ROBINHOOD_CAIP2 ? robinhoodOutage : null) });
   // Contract wallets on Arc (ARC_CONTRACT_WALLETS=on) pay only routes whose
   // effect is not keyed on the payer. An identity-bound route (memory, attest,
@@ -2631,6 +2651,30 @@ export function circlePendingStatusReader(client, listEntries) {
  * gate as every other fallback: each earlier settler must have refused
  * before broadcasting.
  */
+/**
+ * The boot /supported check of an operator-listed settle fallback. One whose
+ * /supported answers with exact on `network` is confirmed (f.confirmed, then
+ * onConfirm); one that answers without it could only fail, so it is dropped
+ * loudly (onDrop) and never tried. One that cannot be reached is not tried yet
+ * and is asked again every `recheckMs` until it answers.
+ */
+export function confirmListedFallback(f, { network, chain, listName, recheckMs, onConfirm = () => {}, onDrop = () => {}, log = console.log, warn = console.warn }, attempt = 0) {
+  return Promise.resolve().then(() => f.client.getSupported()).then((sup) => {
+    const kinds = Array.isArray(sup?.kinds) ? sup.kinds : [];
+    if (kinds.some((k) => k?.scheme === "exact" && k?.network === network)) {
+      f.confirmed = true;
+      onConfirm(f);
+      if (attempt) log(`${chain}: ${f.name} confirmed for the settle fallback`);
+      return;
+    }
+    onDrop(f);
+    warn(`WARNING: ${f.name} does not advertise exact on ${network} - dropped from ${listName} settle fallback`);
+  }).catch((e) => {
+    if (attempt === 0) warn(`WARNING: ${f.name} unreachable (${String(e?.message || e).slice(0, 120)}); not tried until its /supported answers (re-checked in the background)`);
+    setTimeout(() => confirmListedFallback(f, { network, chain, listName, recheckMs, onConfirm, onDrop, log, warn }, attempt + 1), recheckMs).unref?.();
+  });
+}
+
 export function lastResortFallbackOverrides({ networks, payAiClient, solvadorClient, last, confirmed }) {
   const out = {};
   for (const n of networks) {
