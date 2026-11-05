@@ -3,6 +3,18 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 const ENTRIES = [
   {
     date: "2026-11-05",
+    title: "Payment libraries on x402 2.30, a wider unproven lane, one spend workflow",
+    items: [
+      "Payments: the x402 libraries are 2.30.0 and mppx 0.17.1. A check that runs before verify or settle and fails refuses the payment with a 402 and charges nothing; a Tempo charge whose broadcast is rejected as a replay recovers its receipt instead of answering a new 402.",
+      "Router: on Base an unproven seller is tried up to $0.05 a call (was $0.01), only after every proven candidate, paid at its own live 402's payTo, with at most $0.25 a day per seller.",
+      "Index: a failed paywall check is re-run after 24 hours and when a seller registers again, and the check skips a templated route.",
+      "Index: the index keeps at most 5000 tools per seller, described tools first, and shows the listed count beside it. A listing that cannot be read is dropped alone; /api/gateway-status gains containedTurns and brokenListings.",
+      "Gateway: on the Messages wire, citation text counts against the tier's input cap.",
+      "Packages: agent402-mcp 0.13.28 runs on x402 2.30 and MCP SDK 1.32.2, and every install pin names it.",
+    ],
+  },
+  {
+    date: "2026-11-05",
     title: "Audio-only decoding, refused redirects answer 400, documented gateway fields",
     items: [
       "Tools: media-info, audio-convert and audio-normalize decode audio streams only. media-info still lists every stream: a video, image or subtitle stream is read from the container headers and carries decoded: false, with null for a resolution only its decoder would know. A file with no audio stream converts to nothing and answers 422, as before.",

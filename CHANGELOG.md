@@ -6,6 +6,25 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-05 (x402 2.30, a wider unproven lane, one spend workflow)
+Payments:
+- The x402 libraries are 2.30.0 and mppx 0.17.1. A check that runs before
+  verify or settle and fails refuses the payment with a 402 and charges
+  nothing. A Tempo charge whose broadcast is rejected as a replay recovers its
+  receipt instead of answering a new 402.
+Router:
+- On Base an unproven seller is tried up to $0.05 a call (was $0.01), only
+  after every proven candidate, paid at its own live 402's payTo, with at most
+  $0.25 a day per seller (`SOR_BASE_UNPROVEN_SELLER_DAILY_USD`).
+Index:
+- A failed paywall check is re-run after 24 hours and when a seller registers
+  again, and the check skips a templated route.
+Operations:
+- The on-demand spend jobs run from one dispatch-only workflow, `spend.yml`,
+  each behind the same approval; nothing spends on a schedule.
+Packages:
+- agent402-mcp 0.13.28 runs on x402 2.30 and MCP SDK 1.32.2.
+
 ### 2026-11-05 (Audio-only decoding, refused redirects answer 400, documented gateway fields)
 Tools:
 - `media-info`, `audio-convert` and `audio-normalize` decode audio streams
