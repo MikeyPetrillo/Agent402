@@ -287,6 +287,20 @@ export function externalChainsFor(payNet, supported, { tempoFromBase = process.e
 const EXTERNAL_CHAIN_CAIP2 = {};
 for (const [caip2, chain] of Object.entries(EXTERNAL_CHAIN_BY_NETWORK)) EXTERNAL_CHAIN_CAIP2[chain] ??= caip2;
 
+// TRAJECTORY SEAM: one listener that hears each step of the external leg (the
+// candidates resolved, each seller tried or skipped, each outcome), so
+// scripts/test-golden-trajectories.js can grade every step and not only the
+// answer. No listener is set in production, where every call is a no-op.
+let trajectoryListener = null;
+export function setTrajectoryListenerForTest(fn) {
+  if (process.env.NODE_ENV === "production") throw new Error("the trajectory listener is a test seam");
+  trajectoryListener = typeof fn === "function" ? fn : null;
+}
+const traceStep = (req, step, data) => {
+  if (!trajectoryListener) return;
+  try { trajectoryListener(req, step, data); } catch { /* a listener never changes a payment */ }
+};
+
 export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TIERS[0], resolveExternal = null, payExternal = null, externalEnabled = () => false, externalChains = () => ["base"], spendingWalletStatus = cachedSpendingWalletStatus, recordPurchase = recordRouterPurchase }) {
   const EXEC_PRICE_USD = tier.execPriceUsd;
   const UNDERLYING_MAX_USD = tier.underlyingMaxUsd;
@@ -507,6 +521,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             throw bad(`Resolving an external seller used the Tempo time budget (${tempoBudgetMs}ms); nothing was spent and nothing is charged. Tempo credentials expire about 25s after signing, so retry with a fresh credential or pay this route over an EVM rail.`, 504);
           }
           const chainCaip2 = EXTERNAL_CHAIN_CAIP2[chain];
+          traceStep(req, "candidates", { chain, list: candidateList.map((c) => ({ origin: c.seller, url: c.url, lane: c.unproven ? "unproven" : "proven", price: c.price })) });
           // Name WHICH world this is. The resolver tallies candidates it dropped at
           // the dispatch gate, so "nothing does this task" and "plenty do, all of
           // them below the settlement floor" stop sharing one message. They call
@@ -540,11 +555,13 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           const extUsd = toUsd(ext.price);
           if (!(extUsd > 0 && extUsd <= cap)) {
             const up = routeExecuteHint(extUsd);
+            traceStep(req, "skip", { origin: ext.seller, reason: "over_cap" });
             lastErr = bad(`Best external match "${ext.slug}" is ${ext.price} - over this tier's $${cap} cap.${up && up.tool !== tier.slug ? ` Use ${up.tool} (${up.price}).` : " No tier covers that price - call the seller directly."}`, 409);
             if (hasNext) continue; throw lastErr;
           }
           // Any spelling of the chain's id on the seller's row counts.
           if (!(ext.url && Array.isArray(ext.networks) && ext.networks.some((n) => EXTERNAL_CHAIN_BY_NETWORK[n] === chain))) {
+            traceStep(req, "skip", { origin: ext.seller, reason: "wrong_chain" });
             lastErr = bad(`External seller "${ext.seller}" does not offer ${chain} settlement - cannot pay it from the ${chain} spending wallet.`, 409);
             if (hasNext) continue; throw lastErr;
           }
@@ -553,6 +570,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           const ownPayout = await ownPayoutOf(ext);
           if (ownPayout) {
             console.warn(`[sor] refusing ${chain} candidate ${ext.seller}: it is paid at this host's own wallet ${ownPayout.slice(0, 10)}…`);
+            traceStep(req, "skip", { origin: ext.seller, reason: "own_wallet" });
             lastErr = bad(`External seller "${ext.seller}" is paid at one of this host's own wallets; the router never pays itself. Nothing was spent and nothing is charged.`, 409);
             if (hasNext) continue; throw lastErr;
           }
@@ -678,6 +696,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
               // which is the thing being bounded.
               throw lastErr || bad(`Tried ${__paidAttempts} paid seller(s) for this task without a delivered answer. Refusing to sign another payment for one request.`, 502);
             }
+            traceStep(req, "attempt", { origin: ext.seller, lane: ext.unproven ? "unproven" : "proven" });
             paid = await payExternal(extUrl, { method: extMethod, body: extBody, maxAtomic: BigInt(Math.round(cap * 1e6)), chain, provenPayTo: ext.provenPayTo || null, evidenceWallets: ext.evidenceWallets || null, allowUnproven: ext.unproven === true, refusalMaxWaitMs: refusalBudgetMs(), ...(tempoBudgetMs == null && evmSellerSignBy(req) != null ? { signBy: evmSellerSignBy(req) } : {}), ...(windowBudgetMs != null ? { timeoutMs: Math.max(3000, remainingMs()) } : {}) });
           } catch (e) {
             // WHAT STAYS BOOKED IS WHAT MAY HAVE LEFT THE WALLET. The payer
@@ -722,6 +741,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             // it would let two cheap misses starve a legitimate retry. `committed`
             // is payX402's own stamp for "the authorization left".
             const spentMaybe = e?.committed === true;
+            traceStep(req, "outcome", { origin: ext.seller, ok: false, status: e?.statusCode ?? null, committed: spentMaybe, paidUnanswered: e?.paidUnanswered === true, signedUsd: Number.isFinite(Number(e?.signedUsd)) ? Number(e.signedUsd) : null });
             // A payment that left is the router's purchase whatever the seller
             // answered: recorded against the seller's wallet so its
             // third-party counts are reduced by it (src/router-purchases.js).
@@ -791,6 +811,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           // paid (no quote, no receipt): nothing left the wallet, so nothing is
           // booked against it.
           const servedUnpaid = !paid.quote && !paid.receipt;
+          traceStep(req, "outcome", { origin: ext.seller, ok: true, servedUnpaid, signedUsd: paid.quote ? paid.quote.usd : null });
           // The router's own purchase, recorded against the wallet it paid so
           // the seller's third-party counts are reduced by it.
           if (!servedUnpaid) { try { recordPurchase({ origin: ext.seller, payTo: ext.provenPayTo, chain }); } catch { /* best effort */ } }
