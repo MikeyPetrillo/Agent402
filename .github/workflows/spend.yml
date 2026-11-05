@@ -1,10 +1,11 @@
 name: Spend (owner dispatch)
-run-name: "Spend: ${{ inputs.job }}"
+run-name: "Spend: ${{ inputs.job || 'listing-pass (weekly)' }}"
 
 # The one workflow that spends on demand: a paid purchase from production or
 # an outside seller, a model or vendor call billed to us, or a transfer out of
-# a burner. Dispatch only, no schedule and no push trigger, so nothing here
-# spends unless the owner dispatches it:
+# a burner. Dispatch only, except one weekly schedule that starts the listing
+# pass; that run still waits for the `spending` approval like every other, so
+# nothing here spends unless the owner approves it:
 #
 #   gh workflow run spend.yml --ref main -f job=<name> [-f input=value ...]
 #
@@ -20,6 +21,10 @@ run-name: "Spend: ${{ inputs.job }}"
 # facilitator-mainnet-canary, tempo-*, stripe-link-canary, heartbeat), deploy,
 # refunds and wallet funding keep their own workflows.
 on:
+  # The weekly listing pass (keeps our routes listed where buyers discover
+  # them). It waits for the spending approval; every other job is skipped.
+  schedule:
+    - cron: "53 3 * * 3"
   workflow_dispatch:
     inputs:
       job:
@@ -452,7 +457,7 @@ jobs:
   # chosen routes. One issue, "Listing pass FAILED", stays open while a run
   # fails and closes on the next green run.
   listing-pass:
-    if: inputs.job == 'listing-pass'
+    if: inputs.job == 'listing-pass' || github.event_name == 'schedule'
     runs-on: ubuntu-24.04
     # Four legs in one job, so one spending approval covers the run. The
     # largest gap (hundreds of routes on one leg) runs well past an hour.
@@ -535,7 +540,7 @@ jobs:
     needs: listing-pass
     # always() so a failed pass still pages; the job gate so another job's
     # dispatch (which skips the pass) never reads as a failed listing pass.
-    if: always() && inputs.job == 'listing-pass'
+    if: always() && (inputs.job == 'listing-pass' || github.event_name == 'schedule')
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:

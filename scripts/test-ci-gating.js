@@ -188,12 +188,21 @@ for (const [name, j] of Object.entries(jobs)) {
   const jobsFor = (name) => ({ ...spend, jobs: Object.fromEntries(Object.entries(spend.jobs || {}).filter(([, j]) => new RegExp(`inputs\\.job == '${name}'`).test(String(j.if || "")))) });
   const listing = jobsFor("listing-pass");
   const on = spend.on || spend[true] || {};
-  ok(Object.keys(on).join() === "workflow_dispatch", `spend.yml runs only on dispatch: no schedule, push or pull_request trigger (${Object.keys(on).join(", ")})`);
+  ok(Object.keys(on).sort().join() === "schedule,workflow_dispatch", `spend.yml runs on dispatch and one schedule only: no push or pull_request trigger (${Object.keys(on).join(", ")})`);
+  ok(Array.isArray(on.schedule) && on.schedule.length === 1, "spend.yml carries exactly one schedule");
+  // A scheduled run has no inputs, so only the listing pass and its report may
+  // name the schedule; every other job stays dispatch-only.
+  for (const [name, j] of Object.entries(spend.jobs || {})) {
+    const sched = /github\.event_name == 'schedule'/.test(String(j.if || ""));
+    ok(sched === (name === "listing-pass" || name === "listing-pass-report"), `${name}: ${sched ? "runs" : "does not run"} on the weekly schedule`);
+  }
   const choices = on.workflow_dispatch?.inputs?.job?.options || [];
   ok(on.workflow_dispatch?.inputs?.job?.type === "choice" && on.workflow_dispatch?.inputs?.job?.required === true && choices.includes("listing-pass") && choices.includes("mint-bazaar-rows"), "a required job choice picks the spend job");
   for (const c of choices) {
     const own = Object.entries(jobsFor(c).jobs);
-    ok(own.length >= 1 && own.every(([, j]) => new RegExp(`^(always\\(\\) && )?inputs\\.job == '${c}'$`).test(String(j.if || ""))), `choice ${c} runs only its own job(s), each gated on the choice`);
+    // The listing pass alone also runs on the weekly schedule (asserted above).
+    const gate = c === "listing-pass" ? `\\(?inputs\\.job == '${c}' \\|\\| github\\.event_name == 'schedule'\\)?` : `inputs\\.job == '${c}'`;
+    ok(own.length >= 1 && own.every(([, j]) => new RegExp(`^(always\\(\\) && )?${gate}$`).test(String(j.if || ""))), `choice ${c} runs only its own job(s), each gated on the choice`);
     ok(own.some(([, j]) => j.environment === "spending"), `choice ${c} keeps the spending environment's approval`);
   }
   ok(Object.values(spend.jobs || {}).every((j) => /inputs\.job == '/.test(String(j.if || ""))), "every spend.yml job is gated on the job choice");
@@ -250,11 +259,11 @@ for (const [name, j] of Object.entries(jobs)) {
   ok(installOf(spender) && installOf(spender) === installOf(sibling), "it installs the same client packages as bazaar-solana, one line to keep pinned");
   const reporter = Object.values(ljobs).find((j) => /gh issue create/.test((j.steps || []).map((st) => String(st.run || "")).join("\n")));
   const report = (reporter?.steps || []).map((st) => String(st.run || "")).join("\n");
-  ok(!!reporter && String(reporter.if || "") === "always() && inputs.job == 'listing-pass'" && [].concat(reporter.needs || []).length === 1, "a report job runs after the pass whatever its result, and only on a listing-pass dispatch");
+  ok(!!reporter && String(reporter.if || "") === "always() && (inputs.job == 'listing-pass' || github.event_name == 'schedule')" && [].concat(reporter.needs || []).length === 1, "a report job runs after the pass whatever its result, and only on a listing-pass dispatch");
   ok(/TITLE="Listing pass FAILED"/.test(report) && /in:title/.test(report) && /gh issue comment .*Still failing/.test(report) && /gh issue close .*Recovered/.test(report), "it keeps one issue by title: open, Still failing, Recovered on the next green run");
 
-  // Nothing in spend.yml is scheduled, so nothing spends without a dispatch.
-  ok(!/\bcron:/.test(readFileSync(new URL("../.github/workflows/spend.yml", import.meta.url), "utf8")), "spend.yml carries no cron");
+  // The one schedule starts the listing pass, behind the same approval.
+  ok(listing.jobs["listing-pass"]?.environment === "spending", "the scheduled listing pass waits for the spending approval");
 }
 
 console.log(`${pass} passed, ${fail} failed`);
