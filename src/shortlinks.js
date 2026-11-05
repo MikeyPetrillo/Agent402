@@ -22,6 +22,7 @@ export const SHORTLINKS = Object.freeze({
   "/eliza": "/guides/agent-hosts#elizaos",
   "/elizaos": "/guides/agent-hosts#elizaos",
   "/paperclip": "/guides/agent-hosts#paperclip",
+  "/harnessrouter": "/guides/agent-hosts#harnessrouter",
   "/openai": "/guides/agent-hosts#any-openai-sdk",
   "/anthropic": "/guides/agent-hosts#any-anthropic-sdk-messages-wire",
   "/agentcore": "/guides/agent-hosts#amazon-bedrock-agentcore",

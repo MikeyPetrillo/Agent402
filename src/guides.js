@@ -1187,7 +1187,7 @@ its normal schedule.
   },
   {
     slug: "agent-hosts",
-    title: "Use Agent402 from Claude Code, Cursor, VS Code, Windsurf, Cline, Roo Code, Codex CLI, Gemini CLI, Continue, ElizaOS, Paperclip, AgentCore and any OpenAI SDK",
+    title: "Use Agent402 from Claude Code, Cursor, VS Code, Windsurf, Cline, Roo Code, Codex CLI, Gemini CLI, Continue, ElizaOS, Paperclip, HarnessRouter, AgentCore and any OpenAI SDK",
     seoTitle: "Use Agent402 from Claude Code, Cursor and more",
     description:
       "Two doors into Agent402 from the agent host you already run: models through an OpenAI-compatible base URL (metered, from $" + TIERS["v1-chat-metered"].price + " a call, paid from a wallet over x402" + (CREDITS_ON ? " or with a prepaid credits key" : ", or with a credits key bought earlier") + "), and 500+ tools through MCP. Copy the block for your host.",
@@ -1350,6 +1350,44 @@ approve each call, and **Off** removes it from the agent. A new connection
 starts every action at **Allowed**. \`catalog.call\` and each flagship action
 ({{mcpRunActions}}) run a tool; set all of them to **Ask first** to review
 every run.
+
+## HarnessRouter
+
+Add the hosted connector to a HarnessRouter workspace as a remote MCP server
+(HarnessRouter connects remote servers over Streamable HTTP by default):
+
+1. In the console, open **Add-ons** and add an MCP server.
+2. Name it \`agent402\` and give it the address \`https://agent402.tools/mcp\`.
+   The connector needs no sign-in and no key, so leave the server's token
+   field empty.
+3. To change which tools one setup uses, open the setup in **Studio** and
+   choose **Settings**.
+
+Over the API, a harness lists the connector in \`mcp_servers\` when you
+create it:
+
+\`\`\`bash
+curl -s -X POST "$HARNESSROUTER_BASE_URL/v1/harnesses" \\
+  -H "Authorization: Bearer $HARNESSROUTER_API_KEY" -H "Content-Type: application/json" \\
+  -d '{"name":"Research agent","base":"claude-code",
+       "mcp_servers":[{"name":"agent402","url":"https://agent402.tools/mcp","transport":"http"}]}'
+\`\`\`
+
+\`PUT /v1/harnesses/{id}\` replaces the whole configuration, so to add the
+connector to a harness that already exists, read it first and send back its
+current fields with the entry appended to \`mcp_servers\`.
+
+With no wallet, \`catalog.search\`, \`catalog.find\`, \`payment.info\` and
+\`server.describe\` answer for free, and \`catalog.call\` runs the pure-CPU
+tools (hash, uuid, base64, markdown, JSON and more) free through
+proof-of-work, rate-limited. Wallet-only tools, the flagship web and market
+tools among them, {{connectorPaidAnswer}}, and a call that carries no payment
+is never charged. To pay from your own wallet, put the stdio server from the
+Cursor block above, with \`AGENT_KEY\` set, in a plugin's \`mcp.json\`:
+HarnessRouter runs a stdio server only from a plugin, inside the session,
+where the agent can read its variables. Prices are on [/pricing](/pricing).
+
+**Use a new wallet holding only a few dollars of USDC. Never your main wallet.**
 
 ## Continue
 
