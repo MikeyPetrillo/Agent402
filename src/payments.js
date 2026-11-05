@@ -53,6 +53,7 @@ import { toolFailureMonitor, setDemotedReader } from "./tool-failure-monitor.js"
 import { isGatewayBatchedPayment } from "./gateway-wire.js";
 import { GatewayNanopaymentsClient, createGatewayPendingBook, gatewayAcceptFields, gatewayNanopaymentNetworks, gatewayNanopaymentsEnabled, gatewayPendingFile, installGatewayRouting, setGatewayOffer, startGatewayBalanceWatch, startGatewayPendingResolver, byTransferIdAnyCase, gatewayTransferId, GATEWAY_DOMAINS } from "./gateway-nanopayments.js";
 import { existsSync } from "node:fs";
+import { refusingHook, passingHook, HOOK_NAMES, ARC_CONTRACT_WALLET_CHECK_FAILED, WALLET_CHECK_FAILED } from "./x402-hook-guard.js";
 
 // Supported networks. EVM chains use eip155: CAIP-2 IDs; Solana uses the
 // solana: genesis-hash CAIP-2. Adding a chain = register its scheme + list
@@ -2359,8 +2360,10 @@ async function contractVerifyAllowed(req, payer, { now = Date.now(), counter = s
   } catch { return false; }
 }
 
+// A throw anywhere in the gate refuses the payment (before verification, so
+// nothing is charged): an unchecked contract wallet never reaches a route.
 export function registerArcContractWalletRouteGate(server, okRoutes, { counter = shared, now = () => Date.now() } = {}) {
-  server.onBeforeVerify(async (ctx) => {
+  server.onBeforeVerify(refusingHook(HOOK_NAMES.arcContractWalletGate, async (ctx) => {
     if (ctx?.requirements?.network !== ARC_CAIP2) return undefined;
     if (!(await isContractWalletPayment(ctx?.paymentPayload))) return undefined;
     const req = ctx?.transportContext?.request?.adapter?.req;
@@ -2380,7 +2383,10 @@ export function registerArcContractWalletRouteGate(server, okRoutes, { counter =
       };
     }
     return undefined;
-  });
+  }, {
+    reason: ARC_CONTRACT_WALLET_CHECK_FAILED,
+    message: "The contract-wallet check could not run for this payment. Nothing was charged; retry shortly or pay from an EOA.",
+  }));
   return server;
 }
 
@@ -2398,9 +2404,11 @@ export function registerWalletBlocklistPayerEnrichment(server) {
   });
 }
 
-function registerWalletBlocklistHook(server) {
+// A throw refuses the settlement (the buyer is not charged): a payer the
+// blocklist could not be read for is never settled.
+export function registerWalletBlocklistHook(server) {
   registerWalletBlocklistPayerEnrichment(server);
-  server.onBeforeSettle((ctx) => {
+  server.onBeforeSettle(refusingHook(HOOK_NAMES.walletBlocklist, (ctx) => {
     const blocked = blockedPayerFromPayload(ctx?.paymentPayload);
     if (!blocked) return;
     console.warn(`[payments] BLOCKED wallet refused before settlement: ${blocked} (${ctx?.requirements?.network})`);
@@ -2409,7 +2417,10 @@ function registerWalletBlocklistHook(server) {
       reason: "wallet_blocked",
       message: "This wallet is blocked for terms-of-service violations (see https://agent402.tools/terms). Contact mike@agent402.tools.",
     };
-  });
+  }, {
+    reason: WALLET_CHECK_FAILED,
+    message: "The wallet check could not run for this payment, so it was not settled. Nothing was charged; retry shortly.",
+  }));
 }
 
 /**
@@ -2431,14 +2442,17 @@ function registerWalletBlocklistHook(server) {
  * undefined and the payment settles as before, with the charge booked as owed
  * by the hang-up hook: never a silent free run.
  */
+// A throw passes: the payment settles as it does with no ticket, and the
+// hang-up hook books an undelivered charge as owed. Refusing here would hand
+// out the handler's run unpaid on every failure of this check.
 export function registerClientGoneSettleHook(server) {
-  server.onBeforeSettle((ctx) => {
+  server.onBeforeSettle(passingHook(HOOK_NAMES.clientGone, (ctx) => {
     const req = ctx?.transportContext?.request?.adapter?.req;
     // No ticket (budget spent, or a route that never reserved one): settle as
     // usual; the hang-up hook books the undelivered charge as owed.
     if (!req || !chargeCancelledForClientGone(req)) return;
     return { abort: true, reason: "client_disconnected", message: CLIENT_GONE_TEXT };
-  });
+  }));
 }
 
 /**

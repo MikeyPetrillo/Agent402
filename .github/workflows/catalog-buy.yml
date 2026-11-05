@@ -97,7 +97,7 @@ jobs:
         run: |
           npm ci --ignore-scripts
           VIEM=$(node -p "require('./package-lock.json').packages['node_modules/viem'].version")
-          npm install --no-save --ignore-scripts @x402/core@2.29.0 @x402/evm@2.29.0 "viem@$VIEM"
+          npm install --no-save --ignore-scripts @x402/core@2.30.0 @x402/evm@2.30.0 "viem@$VIEM"
           echo "installed viem@$(node -p "require('viem/package.json').version")"
 
       - name: Buy the catalog from production (real USDC at list price)

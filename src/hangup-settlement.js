@@ -52,6 +52,7 @@
 // stream that was cut part way through was (partly) delivered.
 
 import { hangupForgiven } from "./hangup-forgiveness.js";
+import { passingHook, HOOK_NAMES } from "./x402-hook-guard.js";
 import { allowanceServed } from "./allowance-state.js";
 
 export const CLIENT_GONE_TEXT = "The connection closed before the response was ready, so the payment was not settled and nothing was charged.";
@@ -125,8 +126,10 @@ export function markSettleSent(req, { evenIfGone = false } = {}) {
  *  client-gone hook (transportContext.request.adapter.req); if a vendor bump
  *  moves it, nothing is marked and a residual-window close reads as withheld,
  *  which spends forgiveness budget rather than granting a free run. */
+// A throw passes (src/x402-hook-guard.js): the mark is bookkeeping, and an
+// unmarked close reads as withheld, never as a free run.
 export function registerSettleSentHook(server) {
-  server.onBeforeSettle((ctx) => { markSettleSent(ctx?.transportContext?.request?.adapter?.req, { evenIfGone: true }); });
+  server.onBeforeSettle(passingHook(HOOK_NAMES.settleSent, (ctx) => { markSettleSent(ctx?.transportContext?.request?.adapter?.req, { evenIfGone: true }); }));
   return server;
 }
 
