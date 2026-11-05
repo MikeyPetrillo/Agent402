@@ -3231,9 +3231,9 @@ async function imagesHandler(input, req) {
 // binder's { __binary } sentinel). OpenRouter's TTS catalog carries NO
 // OpenAI models (their docs still advertise openai/gpt-4o-mini-tts-2025-12-15;
 // the live ?output_modalities=speech list — and a real paid probe of every
-// entry, 2026-07-16 — says otherwise), so the tier serves a SIX-model
-// failover chain across five independent providers (Microsoft twice: the
-// cheaper -flash variant, then MAI-Voice-2), every link proven with a real
+// entry, 2026-07-16 — says otherwise), so the tier serves a five-model
+// failover chain across four providers (Microsoft twice: the cheaper
+// MAI-Voice-2.1-Flash, then MAI-Voice-2.1), every link proven with a real
 // buy. Payment settles AFTER this handler, and only
 // for a <400 answer, so the chain walks on ANY upstream
 // failure (5xx, network error, empty audio), and only exhausting every
@@ -3258,6 +3258,31 @@ export const OPENAI_SPEECH_VOICES = ["alloy", "ash", "ballad", "coral", "echo", 
 // `model`. Voice ids come from OpenRouter's models API
 // (?output_modalities=speech) — the probe workflow re-verifies all of this
 // live (.github/workflows/openrouter-tts-probe.yml).
+// MAI-Voice-2.1 speakers by locale, read from OpenRouter's models API
+// (supported_voices); a voice id is "<locale>-<speaker>:<model name>", and the
+// flash and full models list the same 97.
+const MAI_SPEAKERS = {
+  "cs-CZ": ["Grant", "Harper"], "da-DK": ["Grant", "Harper"], "de-DE": ["Grant", "Harper", "Klaus", "Mia"],
+  "en-AU": ["Isla"], "en-GB": ["Emily", "Harry"], "en-IN": ["Dhruv", "Priya"],
+  "en-US": ["Ethan", "Grant", "Harper", "Iris", "Jasper", "Olivia", "Sage"],
+  "es-ES": ["Marta"], "es-MX": ["Alejo", "Grant", "Harper", "Valeria"], "fi-FI": ["Grant", "Harper"],
+  "fr-FR": ["Grant", "Harper", "Marc", "Soleil"], "hi-IN": ["Arjun", "Dhruv", "Grant", "Harper", "Kavya", "Priya"],
+  "hu-HU": ["Bence", "Grant", "Harper", "Levente", "Lilla", "Reka"], "id-ID": ["Grant", "Harper"],
+  "it-IT": ["Grant", "Harper", "Luca", "Rosa"], "ko-KR": ["Grant", "Haena", "Harper", "Junho"],
+  "nb-NO": ["Grant", "Harper"], "nl-NL": ["Grant", "Harper", "Sander"], "pl-PL": ["Grant", "Harper"],
+  "pt-BR": ["Caio", "Grant", "Harper", "Luana", "Pedro", "Rafael"], "pt-PT": ["Grant", "Harper", "Rui"],
+  "ro-RO": ["Andrei", "Elena", "Grant", "Harper", "Ioana", "Radu"], "ru-RU": ["Grant", "Harper", "Lev", "Masha"],
+  "sv-SE": ["Grant", "Harper"], "th-TH": ["Grant", "Harper", "Krit", "Nattapong"], "tr-TR": ["Aydin", "Elif", "Grant", "Harper"],
+  "vi-VN": ["Grant", "Harper"], "zh-CN": ["Bo", "Grant", "Harper", "Lan", "Mei", "Wei"],
+};
+const maiVoices = (name) => new Set(Object.entries(MAI_SPEAKERS).flatMap(([loc, who]) => who.map((w) => `${loc}-${w}:${name}`)));
+// One English speaker per OpenAI name, by register (the deepest measured
+// voice for onyx, British speakers for fable and shimmer).
+const MAI_OPENAI_MAP = { alloy: "en-US-Harper", ash: "en-US-Grant", ballad: "en-IN-Dhruv", coral: "en-US-Olivia", echo: "en-US-Jasper", fable: "en-GB-Harry", onyx: "en-US-Ethan", nova: "en-US-Iris", sage: "en-US-Sage", shimmer: "en-GB-Emily", verse: "en-AU-Isla" };
+const maiVoiceMap = (name) => Object.fromEntries(Object.entries(MAI_OPENAI_MAP).map(([k, v]) => [k, `${v}:${name}`]));
+// The four MAI-Voice-2 ids buyers could name before the move, each on its
+// own speaker under the 2.1 model.
+const maiLegacyVoices = (name) => Object.fromEntries(["en-US-Harper", "es-MX-Valeria", "fr-FR-Soleil", "de-DE-Klaus"].map((v) => [`${v}:MAI-Voice-2`, `${v}:${name}`]));
 export const SPEECH_MODELS = [
   {
     id: "mistralai/voxtral-mini-tts-2603",
@@ -3296,31 +3321,37 @@ export const SPEECH_MODELS = [
   // every walk past Kokoro burned a failed round-trip. Removed; the chain is
   // five links. scripts/test-gateway-model-ids.js now checks every link live.
   {
-    // MAI-Voice-2-Flash — same four voices as MAI-Voice-2.
-    // Proven by a real
-    // authenticated buy on probe run 30971572514 (2026-08-05, 200 +
-    // audio/mpeg bytes) before entering the chain.
-    id: "microsoft/mai-voice-2-flash",
-    aliases: ["mai-voice-2-flash"],
-    map: Object.fromEntries(OPENAI_SPEECH_VOICES.map((v) => [v, "en-US-Harper:MAI-Voice-2"])),
-    voices: new Set(["en-US-Harper:MAI-Voice-2", "es-MX-Valeria:MAI-Voice-2", "fr-FR-Soleil:MAI-Voice-2", "de-DE-Klaus:MAI-Voice-2"]),
+    // MAI-Voice-2.1-Flash (2026-11-05) replaced MAI-Voice-2-Flash, which
+    // expires upstream 2026-12-31: same provider, same listed per-char price,
+    // every endpoint ZDR, 97 voices across 23 languages in place of four.
+    // Proven by authenticated buys before entering the chain (mp3 and pcm,
+    // 24 kHz mono, each mapped voice). The old id and its four voice ids are
+    // still accepted and land here (`aliases`, `legacyVoices`).
+    id: "microsoft/mai-voice-2.1-flash",
+    aliases: ["mai-voice-2.1-flash", "microsoft/mai-voice-2-flash", "mai-voice-2-flash"],
+    map: maiVoiceMap("MAI-Voice-2.1-Flash"),
+    voices: maiVoices("MAI-Voice-2.1-Flash"),
+    legacyVoices: maiLegacyVoices("MAI-Voice-2.1-Flash"),
   },
   {
-    // Single English voice — every OpenAI name lands on Harper. Priciest
-    // link and same provider as -flash, hence last: it
-    // only serves when five other providers AND its own flash variant fail.
-    id: "microsoft/mai-voice-2",
-    aliases: ["mai-voice-2"],
-    map: Object.fromEntries(OPENAI_SPEECH_VOICES.map((v) => [v, "en-US-Harper:MAI-Voice-2"])),
-    voices: new Set(["en-US-Harper:MAI-Voice-2", "es-MX-Valeria:MAI-Voice-2", "fr-FR-Soleil:MAI-Voice-2", "de-DE-Klaus:MAI-Voice-2"]),
+    // MAI-Voice-2.1 (2026-11-05) replaced MAI-Voice-2 (expires upstream
+    // 2026-12-31) on the same terms as the flash link above. Priciest link
+    // and same provider as -flash, hence last: it only serves when every
+    // other provider AND its own flash variant fail.
+    id: "microsoft/mai-voice-2.1",
+    aliases: ["mai-voice-2.1", "microsoft/mai-voice-2", "mai-voice-2"],
+    map: maiVoiceMap("MAI-Voice-2.1"),
+    voices: maiVoices("MAI-Voice-2.1"),
+    legacyVoices: maiLegacyVoices("MAI-Voice-2.1"),
   },
 ];
 
 /** The provider's voice id for a requested voice on this chain link:
  *  OpenAI name → mapped; the link's own native id → itself; another link's
- *  native id (chain walked past its model) → this link's alloy. */
+ *  native id (chain walked past its model) → this link's alloy; a retired
+ *  MAI-Voice-2 id → its 2.1 speaker on a MAI link (legacyVoices). */
 function speechVoiceFor(entry, requested) {
-  return entry.map[requested] || (entry.voices.has(requested) ? requested : entry.map.alloy);
+  return entry.map[requested] || (entry.voices.has(requested) ? requested : entry.legacyVoices?.[requested] || entry.map.alloy);
 }
 
 export function validateSpeechRequest(input) {
@@ -3350,7 +3381,7 @@ export function validateSpeechRequest(input) {
     chain = [hit, ...SPEECH_MODELS.filter((e) => e !== hit)];
   }
   const voice = input.voice === undefined ? "alloy" : String(input.voice);
-  if (!OPENAI_SPEECH_VOICES.includes(voice) && !SPEECH_MODELS.some((e) => e.voices.has(voice))) {
+  if (!OPENAI_SPEECH_VOICES.includes(voice) && !SPEECH_MODELS.some((e) => e.voices.has(voice) || e.legacyVoices?.[voice])) {
     throw bad(`"voice" must be an OpenAI voice name (${OPENAI_SPEECH_VOICES.join(", ")}) or a native voice id from GET /v1/models`);
   }
   const format = input.response_format === undefined ? "mp3" : String(input.response_format);
@@ -4088,7 +4119,7 @@ export const LLM_GATEWAY_TOOLS = [
     category: "llm",
     price: "$0.060",
     description:
-      "OpenAI-compatible text-to-speech over x402 - point any OpenAI SDK's audio.speech.create() at base_url https://agent402.tools/v1 and pay $0.06 per call in USDC, no API key, no signup. Served by Voxtral Mini TTS behind a five-model failover chain (xAI Grok Voice, Kokoro, MAI-Voice-2 Flash, MAI-Voice-2), every link proven by a real paid canary - a provider outage never becomes your failure. Up to 2,000 chars in, raw mp3 (default) or pcm bytes out - the same wire shape as OpenAI's endpoint. OpenAI voice names (alloy, nova, …) map per-model; native voice ids (e.g. en_paul_cheerful) work too. zdr:true routes only to zero-data-retention providers.",
+      "OpenAI-compatible text-to-speech over x402 - point any OpenAI SDK's audio.speech.create() at base_url https://agent402.tools/v1 and pay $0.06 per call in USDC, no API key, no signup. Served by Voxtral Mini TTS behind a five-model failover chain (xAI Grok Voice, Kokoro, MAI-Voice-2.1 Flash, MAI-Voice-2.1), every link proven by a real paid canary - a provider outage never becomes your failure. Up to 2,000 chars in, raw mp3 (default) or pcm bytes out - the same wire shape as OpenAI's endpoint. OpenAI voice names (alloy, nova, …) map per-model; native voice ids (e.g. en_paul_cheerful) work too. zdr:true routes only to zero-data-retention providers.",
     tags: ["tts", "text-to-speech", "speech", "audio", "voice", ...SHARED_TAGS],
     // Raw audio bytes through the __binary sentinel, typed by response_format.
     binaryTypes: [...new Set(Object.values(SPEECH_FORMATS))],

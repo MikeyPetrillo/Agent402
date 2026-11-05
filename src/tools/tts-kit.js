@@ -264,11 +264,11 @@ let elevenInFlight = 0;
 // two surfaces cannot drift) gives nine of the ten names their own voice id,
 // three English speakers across their delivery variants; coral and sage share
 // gb_jane_neutral, the one calm variant that speaker has. Then Grok: five
-// distinct voices, so the ten names fold onto five; then MAI-Voice-2, one
-// English voice. Every backup serves all six formats (mp3 and pcm from the
+// distinct voices, so the ten names fold onto five; then MAI-Voice-2.1,
+// a distinct English voice for each name. Every backup serves all six formats (mp3 and pcm from the
 // wire, the rest encoded here), so a backup never loses a buyer a format,
 // only voice distinctness.
-export const TTS_BACKUP_MODELS = ["mistralai/voxtral-mini-tts-2603", "x-ai/grok-voice-tts-1.0", "microsoft/mai-voice-2"];
+export const TTS_BACKUP_MODELS = ["mistralai/voxtral-mini-tts-2603", "x-ai/grok-voice-tts-1.0", "microsoft/mai-voice-2.1"];
 
 /** Whether this call may use ElevenLabs, and if so whether it is the probe. */
 function elevenGate(now = Date.now()) {
