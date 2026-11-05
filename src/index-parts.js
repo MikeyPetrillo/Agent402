@@ -37,7 +37,10 @@ import { createHash } from "node:crypto";
  *  one row, the fallback the large-row statement limit still serves). */
 export const PART_TOOLS = (() => { const n = Number(process.env.INDEX_PART_TOOLS); return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 2000; })();
 export const PARTS_COLLECTION = "x402-index-parts";
-/** A part row not named by any header is deleted once older than this. */
+/** A part row not named by any header is deleted once older than this. It
+ *  must exceed the longest save (parts written, then the touch-and-header
+ *  transaction): a sweep that waits on that transaction re-reads the touched
+ *  rows' stamps against its own now(), so 0 is for single-process tests only. */
 export const PARTS_ORPHAN_GRACE_MS = (() => { const n = Number(process.env.INDEX_PARTS_ORPHAN_GRACE_MS); return Number.isFinite(n) && n >= 0 && String(process.env.INDEX_PARTS_ORPHAN_GRACE_MS ?? "").trim() !== "" ? n : 10 * 60_000; })();
 const PART_ID_SEP = "#";
 const HASH_HEX_LEN = 40;

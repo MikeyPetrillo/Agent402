@@ -419,7 +419,8 @@ heartbeat page on it under one issue that closes when nothing is owed.
   `/__operator/perf.json`; `scripts/test-crash-containment.js`, `scripts/test-contained-turns-sites.js`
   keeps every timer callback wrapped or allowlisted). The `containedTurns` word on `/api/gateway-status`
   reads `repeating` while one name has thrown in each of the last three or more consecutive minutes
-  (a per-name minute ring); the heartbeat and the status Worker page on it under one issue.
+  (a per-name minute ring), or on each of its last three or more runs across three distinct minutes
+  with no clean run between (a 30- or 60-minute loop); the heartbeat and the status Worker page on it under one issue.
 - **Backups:** `src/backup.js` (encrypted, offsite); restore with `scripts/backup-restore.js`.
   The `backup` word reads `unencrypted` while `BACKUP_ENCRYPTION_KEY` is unset in production
   (`NODE_ENV` or the platform's environment name); the heartbeat and the status probe page on it.

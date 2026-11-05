@@ -233,5 +233,40 @@ ok(ALLOW.every((a) => typeof a.reason === "string" && a.reason.length >= 12), "e
   ok(word() === "ok", "two names alternating never add up to one repeating name");
   _resetContainedTurnsForTest();
 }
+// A slow loop (one tick every 30 minutes) never throws in adjacent minutes:
+// its word comes from its runs. Three throwing runs in a row trip it; a clean
+// run clears it; a burst of throwing runs inside one minute does not.
+{
+  const { contained, containedTurnsStatus, _resetContainedTurnsForTest } = await import("../src/contained-turn.js");
+  let now = Date.UTC(2026, 10, 5, 0, 0, 0);
+  _resetContainedTurnsForTest({ log: () => {}, now: () => now });
+  let fails = true;
+  const tick = contained("slow-loop", () => { if (fails) throw new Error("tick failed"); });
+  const word = () => containedTurnsStatus().status;
+  tick(); now += 30 * 60_000; tick();
+  ok(word() === "ok", "two throwing runs 30 minutes apart: ok");
+  now += 30 * 60_000; tick();
+  ok(word() === "repeating" && containedTurnsStatus({ full: true }).repeating.join() === "slow-loop", "three throwing runs in a row, 30 minutes apart: repeating");
+  now += 20 * 60_000;
+  ok(word() === "repeating", "...and it holds between ticks");
+  fails = false; now += 10 * 60_000; tick();
+  ok(word() === "ok", "a clean run clears it");
+  fails = true;
+  const asyncTick = contained("async-loop", async () => { if (fails) throw new Error("async tick failed"); });
+  for (let i = 0; i < 3; i++) { asyncTick(); await new Promise((r) => setImmediate(r)); now += 60 * 60_000; }
+  ok(word() === "repeating", "three rejected async runs an hour apart: repeating");
+  fails = false; asyncTick(); await new Promise((r) => setImmediate(r));
+  ok(word() === "ok", "a resolved async run clears it");
+  fails = true; now = Date.UTC(2026, 10, 5, 6, 0, 0);
+  const burst = contained("drain-burst", () => { if (fails) throw new Error("poison"); });
+  for (let i = 0; i < 10; i++) { burst(); now += 1000; }
+  ok(word() === "ok", "ten throwing runs inside one minute (one poison listing per run): ok");
+  const stopped = contained("stopped-loop", () => { throw new Error("gone"); });
+  for (let i = 0; i < 3; i++) { stopped(); now += 30 * 60_000; }
+  ok(word() === "repeating", "a loop with three throwing runs reads repeating");
+  now += 2 * 60 * 60_000;
+  ok(word() === "ok", "...and lapses to ok two hours after its last run if it is never scheduled again");
+  _resetContainedTurnsForTest();
+}
 console.log(`\ntest-contained-turns-sites: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
