@@ -12,13 +12,22 @@
 //
 // Counted: GET/HEAD/POST to a priced catalog route that carries no plausible
 // payment, credits or proof-of-work credential and is not one of our own signed
-// probes. Keyed by client ip AND the User-Agent product token, so two programs
-// behind one address are two clients. Fixed UTC-hour windows: the 429 says
+// probes. Keyed by the client address alone (req.ip, which src/cdn-client-ip.js
+// resolves, folded to its /64 for IPv6 by limiterKey as every limiter in
+// src/rate-limit.js does): the User-Agent is caller text, so a key that read it
+// was a fresh budget per User-Agent, and an exemption that read it was a pass
+// for anyone who typed a crawler's name. It is kept only for the log line.
+// A self-declared named indexer or search/AI crawler (a User-Agent
+// traffic-classifier.js names) is still counted, against
+// NAMED_CLIENT_BUDGET_MULTIPLIER times the budget on the same address count:
+// a real crawler keeps reading, a forged name buys a bounded allowance, never
+// a pass. Our own probes are exempt only by their signed marker (isSynthetic),
+// never by the User-Agent they send. Fixed UTC-hour windows: the 429 says
 // exactly when the count resets.
-// Never counted: named indexers and search/AI crawlers, our own User-Agents,
-// /mcp and the MCP connector's own loopback, the discovery surfaces, any route
-// that is not priced, a client that has already settled a payment this hour,
-// and every request under FREE_MODE (the server does not mount this there).
+// Never counted: our own signed probes, /mcp and the MCP connector's own
+// loopback, the discovery surfaces, any route that is not priced, a client
+// that has already settled a payment this hour, and every request under
+// FREE_MODE (the server does not mount this there).
 // Memory is bounded: at most `keyCap` keys, least recently seen dropped first.
 // Counted in THIS process: like every limiter in src/rate-limit.js the budget
 // is divided by RATE_LIMIT_REPLICAS (perReplica), so two containers enforce
@@ -34,8 +43,8 @@
 // (the same class the metered quote limiter closed in its own review). A
 // credential must now LOOK like one - the gates still decide whether it really
 // is.
-import { DISCOVERY_PATHS, OWN_UA, indexerFor, uaToken } from "./traffic-classifier.js";
-import { perReplica } from "./rate-limit.js";
+import { DISCOVERY_PATHS, indexerFor, uaToken } from "./traffic-classifier.js";
+import { limiterKey, perReplica } from "./rate-limit.js";
 import { cacheGet, cacheSet, cacheEnabled } from "./cache.js";
 import { decodesAsMppCredential, decodesAsX402Payment } from "./payment-attempt.js";
 import { createHash } from "node:crypto";
@@ -43,6 +52,9 @@ import { isMcpLoopback } from "./mcp-loopback.js";
 
 export const DEFAULT_UNPAID_QUOTE_BUDGET_PER_HOUR = 3000;
 export const UNPAID_QUOTE_BUDGET_KEY_CAP = 20_000;
+// A self-declared named indexer or crawler reads against this many times the
+// budget, on the same per-address count as everything else from that address.
+export const NAMED_CLIENT_BUDGET_MULTIPLIER = 10;
 const HOUR_MS = 3_600_000;
 // How many distinct clients we name in the log and count as throttled inside
 // one hour. Past this the throttling continues and the count stops rising, so
@@ -109,10 +121,17 @@ export function hasCredentialHeader(headers = {}) {
   return looksLikePayment(headers) || looksLikePowSolution(headers?.["x-pow-solution"]);
 }
 
-/** Named indexers, search and AI crawlers, and our own User-Agents are never budgeted. */
-export function isExemptUserAgent(ua) {
-  const s = String(ua || "");
-  return OWN_UA.test(s) || !!indexerFor(s);
+/** A User-Agent that names an indexer, search engine or AI crawler we list
+ *  (traffic-classifier.js). Self-declared, so it buys a larger bucket on its
+ *  address, never an exemption. Our own User-Agents are not named here: our
+ *  probes are recognized by their signed marker only. */
+export function isNamedClientUserAgent(ua) {
+  return !!indexerFor(String(ua || ""));
+}
+
+/** The budget's key: the client address, an IPv6 address folded to its /64. */
+export function clientKeyOf(req) {
+  return limiterKey(req?.ip || req?.socket?.remoteAddress || "-");
 }
 
 /** The MCP connector replays a tool call to our own route over loopback and
@@ -151,8 +170,8 @@ export const secondsToHourBoundary = (now = Date.now()) => Math.max(1, Math.ceil
  * @param {(line:string) => void} [o.log]
  */
 // Which clients have paid this hour, shared by every container through the
-// Redis cache (src/cache.js). Keys are a digest of the address and User-Agent
-// plus the hour, never the address itself, and expire with the hour. Without
+// Redis cache (src/cache.js). Keys are a digest of the client address (the
+// budget's key) plus the hour, never the address itself, and expire with the hour. Without
 // Redis there is no shared record and each container keeps its own, as before.
 export function redisSharedSettled(now = Date.now) {
   if (!cacheEnabled()) return null;
@@ -169,8 +188,9 @@ export function createUnpaidQuoteBudget({ budget, isPriced, isSynthetic = () => 
   const published = Number(budget) || 0;
   const share = (n) => (replicas == null ? perReplica(n) : Math.max(1, Math.floor(n / Math.max(1, Number(replicas) || 1))));
   const limit = published > 0 ? share(published) : 0;
+  const namedLimit = published > 0 ? share(published * NAMED_CLIENT_BUDGET_MULTIPLIER) : 0;
   let hour = -1;
-  const counts = new Map();       // `${ip}|${uaToken}` -> requests this hour, least recently seen first
+  const counts = new Map();       // client address (IPv6 /64) -> requests this hour, least recently seen first
   const logged = new Set();       // keys already logged as throttled this hour
   const settled = new Set();      // keys that settled a payment this hour
   let throttled = 0;
@@ -182,14 +202,16 @@ export function createUnpaidQuoteBudget({ budget, isPriced, isSynthetic = () => 
     return h;
   }
 
-  /** Count one request for `key`; returns { limited, count, retryAfterSeconds }. */
-  function hit(key, t = now()) {
+  /** Count one request for `key` against `cap` (this process's share of the
+   *  budget, or of the named-client allowance); returns
+   *  { limited, count, retryAfterSeconds }. */
+  function hit(key, t = now(), cap = limit) {
     rollover(t);
     const n = (counts.get(key) || 0) + 1;
     counts.delete(key);
     counts.set(key, n);
     while (counts.size > keyCap) counts.delete(counts.keys().next().value);
-    return { limited: limit > 0 && n > limit, count: n, retryAfterSeconds: secondsToHourBoundary(t) };
+    return { limited: cap > 0 && n > cap, count: n, retryAfterSeconds: secondsToHourBoundary(t) };
   }
 
   /** A client that settles a payment stops being counted for the rest of the
@@ -227,48 +249,48 @@ export function createUnpaidQuoteBudget({ budget, isPriced, isSynthetic = () => 
     const path = normalizeCatalogPath(req.path);
     if (!isCountablePath(req, path)) return false;
     if (hasCredentialHeader(req.headers)) return false;
-    if (isExemptUserAgent(req.headers?.["user-agent"])) return false;
     if (isMcpLoopback(req)) return false;
     try { if (isSynthetic(req)) return false; } catch { /* an unreadable token is not ours */ }
     return true;
   }
 
   // Printable ASCII only: the token is caller text and reaches the log line below.
-  const keyOf = (req) => `${req.ip || req.socket?.remoteAddress || "-"}|${uaToken(req.headers?.["user-agent"]).replace(/[^\x20-\x7e]/g, "?")}`;
+  const uaOf = (req) => uaToken(req.headers?.["user-agent"]).replace(/[^\x20-\x7e]/g, "?");
 
   function middleware(req, res, next) {
     if (limit <= 0) return next();
     let verdict;
     let ua = "-";
     let key = null;
+    let named = false;
     const refuse = () => {
       throttled += 1;
       if (!logged.has(key) && logged.size < UNPAID_QUOTE_BUDGET_LOG_CAP) {
         logged.add(key);
-        try { log(`[unpaid-budget] ${ua} passed ${limit} unpaid price checks on this container this hour (budget ${published} per hour); answering 429 until the hour turns`); } catch { /* logging never breaks a response */ }
+        try { log(`[unpaid-budget] a client (last User-Agent ${ua}${named ? ", a self-declared named client" : ""}) passed ${named ? namedLimit : limit} unpaid price checks from one address on this container this hour (budget ${published} per hour); answering 429 until the hour turns`); } catch { /* logging never breaks a response */ }
       }
       res.set("Retry-After", String(verdict.retryAfterSeconds)).set("Cache-Control", "no-store");
       return res.status(429).json({
         ok: false,
         error: "rate-limited",
-        hint: `Too many unpaid price checks from one client this hour (budget ${published} per hour, per address and User-Agent). Every route and price is published at /.well-known/x402, /openapi.json and /api/pricing, and a request carrying a payment, a credits key or a proof-of-work solution is never counted. A client that settles a payment stops being counted for the rest of the hour. See ${policyUrl}`,
+        hint: `Too many unpaid price checks from one address this hour (budget ${published} per hour per client address, whatever the User-Agent; an IPv6 /64 is one address; a named indexer or search crawler reads against ${(published * NAMED_CLIENT_BUDGET_MULTIPLIER).toLocaleString("en-US")}). Every route and price is published at /.well-known/x402, /openapi.json and /api/pricing, and a request carrying a payment, a credits key or a proof-of-work solution is never counted. A client that settles a payment stops being counted for the rest of the hour. See ${policyUrl}`,
         retryAfterSeconds: verdict.retryAfterSeconds,
       });
     };
     try {
       const path = normalizeCatalogPath(req.path);
       if (!isCountablePath(req, path)) return next();
-      key = keyOf(req);
-      ua = key.slice(key.indexOf("|") + 1);
+      key = clientKeyOf(req);
+      ua = uaOf(req);
       // Armed on every request to a priced route, paid or not: the receipt goes
       // out on the PAID retry, which carries a credential and is never counted.
       if (!settled.has(key)) res.once?.("finish", () => { if (hasSettlementReceipt(res)) noteSettled(key); });
       if (settled.has(key)) return next();
       if (hasCredentialHeader(req.headers)) return next();
-      if (isExemptUserAgent(req.headers?.["user-agent"])) return next();
       if (isMcpLoopback(req)) return next();
       try { if (isSynthetic(req)) return next(); } catch { /* an unreadable token is not ours */ }
-      verdict = hit(key);
+      named = isNamedClientUserAgent(req.headers?.["user-agent"]);
+      verdict = hit(key, now(), named ? namedLimit : limit);
       if (!verdict.limited) return next();
     } catch { return next(); }
     // About to refuse: this client may have paid on another container. The
@@ -288,6 +310,7 @@ export function createUnpaidQuoteBudget({ budget, isPriced, isSynthetic = () => 
     return {
       budget: published,
       perReplicaBudget: limit,
+      namedClientMultiplier: NAMED_CLIENT_BUDGET_MULTIPLIER,
       clientsThisHour: stale ? 0 : counts.size,
       clientsSettledThisHour: stale ? 0 : settled.size,
       clientsThrottledThisHour: stale ? 0 : logged.size,

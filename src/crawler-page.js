@@ -15,7 +15,7 @@
 // control here stops being true, change the control or change the page.
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { ROUTER_UA } from "./x402-buyer.js";
-import { unpaidQuoteBudgetPerHour } from "./unpaid-quote-budget.js";
+import { NAMED_CLIENT_BUDGET_MULTIPLIER, unpaidQuoteBudgetPerHour } from "./unpaid-quote-budget.js";
 import { USER_AGENT } from "./tools/fetch-guard.js";
 import { crawlIntervalLabel } from "./crawl-cadence.js";
 
@@ -101,9 +101,11 @@ export function catalogCrawlSection(budget) {
       `If you index this catalog, three documents carry every route and its price: <code>/.well-known/x402</code>, <code>/openapi.json</code> and <code>/api/pricing</code>. Read those rather than requesting each priced route to learn what it costs. <code>/openapi.json</code> is served with an ETag, so a repeat read that sends <code>If-None-Match</code> is a 304 with no body.`,
       `Listed prices change when we ship a release, not from one request to the next, so a full walk of every priced route more than a few times an hour is not needed.`,
       n > 0
-        ? `Unpaid requests to priced routes are budgeted per client, meaning one address and one User-Agent product token. Past ${esc(n.toLocaleString("en-US"))} in an hour, the answer is a 429 with a <code>Retry-After</code> header that counts down to the top of the hour. A request that carries a payment, a credits key or a proof-of-work solution is never counted, and neither are the three documents above, <code>/mcp</code> or any page. Every purchase opens with one bare request, so buying is exempt from the first settlement onward: once a client settles a payment, nothing it sends is counted for the rest of that hour.`
+        ? `Unpaid requests to priced routes are budgeted per client address, whatever the User-Agent (an IPv6 /64 counts as one address). Past ${esc(n.toLocaleString("en-US"))} in an hour, the answer is a 429 with a <code>Retry-After</code> header that counts down to the top of the hour. A request that carries a payment, a credits key or a proof-of-work solution is never counted, and neither are the three documents above, <code>/mcp</code> or any page. Every purchase opens with one bare request, so buying is exempt from the first settlement onward: once a client settles a payment, nothing it sends is counted for the rest of that hour.`
         : `This server sets no hourly budget on unpaid requests to priced routes.`,
-      `Named indexers, search engines and AI crawlers are not budgeted. If your index needs more than this and we do not recognize it by name, email <a href="mailto:mike@agent402.tools">mike@agent402.tools</a> with the User-Agent it sends and we will add it to the named list.`,
+      n > 0
+        ? `Named indexers, search engines and AI crawlers read against ${esc((n * NAMED_CLIENT_BUDGET_MULTIPLIER).toLocaleString("en-US"))} unpaid requests per address in an hour, on the same count as everything else from that address. If your index needs more than this, or we do not recognize it by name, email <a href="mailto:mike@agent402.tools">mike@agent402.tools</a> with the User-Agent it sends and the addresses it reads from.`
+        : `If your index needs anything from us, email <a href="mailto:mike@agent402.tools">mike@agent402.tools</a> with the User-Agent it sends.`,
     ],
     links: [["/.well-known/x402", "The x402 manifest"], ["/openapi.json", "The OpenAPI document"], ["/api/pricing", "The price list"]],
   };
