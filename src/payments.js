@@ -3172,6 +3172,7 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
           const refusal = Object.assign(new Error(String(result?.errorMessage || result?.errorReason || "settle rejected")), {
             errorReason: result?.errorReason, errorMessage: result?.errorMessage, transaction: result?.transaction,
           });
+          GRACEFUL_REFUSALS.add(refusal);
           if (isRetryableSettleRefusal(refusal, net)) { if (!passedOn) revertOnly = !isPreBroadcastSettleRejection(refusal); continue; }
           if (!own && revertRetry === true && isListedPassOnRefusal(refusal, net)) { passedOn ||= { err: refusal, via: name }; continue; }
           // The chain stops here. A refusal that names a transaction may still
@@ -3374,12 +3375,17 @@ function isBatchedCtx(ctx) {
  * the hook result, or undefined when nothing applies (the chain stops as it
  * always did).
  */
+// A listed fallback's graceful HTTP 200 refusal (built in the settle chain).
+const GRACEFUL_REFUSALS = new WeakSet();
 async function settleAfterAmbiguous(ctx, err, via, outageFor) {
   const network = ctx?.requirements?.network;
   const outage = outageFor(network);
   if (!outage) return undefined;
   const { isAmbiguousSettleFailure } = await import("./robinhood-outage.js");
-  if (!isAmbiguousSettleFailure(err, { isPreBroadcast: isPreBroadcastSettleRejection, isRevertRetry: (e) => isRetryableSettleRefusal(e, network) })) return undefined;
+  // A graceful HTTP 200 refusal's words count as a verdict there; an HTTP
+  // error's never do (it may have broadcast).
+  const graceful = GRACEFUL_REFUSALS.has(err) || (err === ctx?.error && gracefulRefusalOf(ctx?.paymentPayload));
+  if (!isAmbiguousSettleFailure(err, { isPreBroadcast: isPreBroadcastSettleRejection, isRevertRetry: (e) => isRetryableSettleRefusal(e, network), graceful })) return undefined;
   // One chain read per payment: a passed-on refusal is not read again after it.
   if (ctx && typeof ctx === "object") ctx.__a402AmbiguousRead = true;
   let r;
@@ -3530,8 +3536,10 @@ export function isRetryableSettleRefusal(err, network) {
  * words). A facilitator that answers in its own words ("relay unavailable")
  * gives exactly this. It passes to the next listed facilitator only; the
  * settle-failure hook reads it on chain when none of them settles it.
- * Transport failures, an answer with no reason, and the refusals the
- * other rules already pass on are not this.
+ * A graceful answer with an empty reason reaches the hook as @x402/core's
+ * "Settlement failed", which names no verdict, so it passes on too; only an
+ * error object with no errorReason at all does not. Transport failures and
+ * the refusals the other rules already pass on are not this.
  */
 export function isListedPassOnRefusal(err, network) {
   if (!REVERT_RETRY_NETWORKS.has(String(network || ""))) return false;
