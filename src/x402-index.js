@@ -1674,7 +1674,9 @@ async function registerOriginNow(origin, { crawl, replaces = null, deadlineAt = 
         noteForcedCrawl(origin);
         clearOriginProbeState(origin);
         reread = true;
-        if (crawl) await crawl(origin, { deadlineAt }); else await crawlSeller(origin, { deadlineAt });
+        // The seller asked us to look again: its paywall is re-probed on this
+        // crawl, whatever the rotation or a stored verdict's age says.
+        if (crawl) await crawl(origin, { deadlineAt, forcePaywall: true }); else await crawlSeller(origin, { deadlineAt, forcePaywall: true });
       }
       const fresh = cache.get(origin);
       const tools = Array.isArray(fresh?.tools) && fresh.tools.length ? fresh.tools : existing.tools;
@@ -1739,7 +1741,8 @@ async function registerOriginNow(origin, { crawl, replaces = null, deadlineAt = 
   }
   const doCrawl = crawl || (async (o, opts) => { await crawlSeller(o, opts); return cache.get(o); });
   let v;
-  try { v = await doCrawl(origin, { deadlineAt }); } catch (e) { v = { error: String(e?.message || e) }; }
+  // A first registration reads the paywall on its first crawl, as a re-registration does.
+  try { v = await doCrawl(origin, { deadlineAt, forcePaywall: true }); } catch (e) { v = { error: String(e?.message || e) }; }
   // Injected test crawlers return the entry directly; the real path re-reads cache.
   if (v && !v.error && (v.tools?.length || v.manifest)) {
     submittedSeeds.add(origin);
@@ -4258,6 +4261,56 @@ function paywallProbeDue() {
   return paywallProbeCursor++ % Math.max(1, Math.ceil(cache.size / PAYWALL_PROBES_PER_CYCLE) || 1) === 0;
 }
 
+// A FAILED VERDICT EXPIRES. The rotation above reaches each seller about once
+// every (sellers / probes per cycle) cycles, days apart across the index, and
+// nothing else re-read a stored verdict, so a seller that fixed its paywall
+// (or re-registered) kept the old failure until its rotation slot came round.
+// A failed verdict older than the window is re-probed by the next crawl that
+// visits the origin, from a budget of its own per cycle (the visiting order
+// rotates, so the budget reaches every expired seller over a few cycles); one
+// that keeps failing is stamped again and waits a whole window. A failed
+// verdict measured on a documentation template (a path with a placeholder,
+// which no seller answers with a 402) measured nothing, so it is expired too.
+// A passing verdict stays on the rotation. X402_PAYWALL_PROBES_PER_CYCLE=0
+// still switches every paywall probe off.
+const PAYWALL_FAILED_RECHECK_MS = (() => {
+  const h = Number(process.env.X402_PAYWALL_FAILED_RECHECK_HOURS);
+  return (Number.isFinite(h) && h > 0 ? h : 24) * 3_600_000;
+})();
+const PAYWALL_RECHECKS_PER_CYCLE = (() => {
+  const n = Number(process.env.X402_PAYWALL_RECHECKS_PER_CYCLE);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 25;
+})();
+let paywallRecheckBudget = PAYWALL_RECHECKS_PER_CYCLE;
+/** Was this stored failure taken at a URL that is still a template? */
+function paywallVerdictOnTemplate(pw) {
+  if (typeof pw?.url !== "string") return false;
+  try { return URL_TEMPLATE_RE.test(new URL(pw.url).pathname); } catch { return false; }
+}
+/** Is this stored paywall verdict a failure due a fresh probe? A missing
+ *  verdict is the rotation's business; a passing one is not expired here. */
+export function paywallVerdictExpired(pw, now = Date.now(), windowMs = PAYWALL_FAILED_RECHECK_MS) {
+  if (!pw || typeof pw !== "object" || pw.ok !== false) return false;
+  if (paywallVerdictOnTemplate(pw)) return true;
+  const at = Number(pw.at);
+  return !(at > 0) || now - at >= windowMs;
+}
+/** Does THIS crawl of the origin probe its paywall? `force` is an explicit
+ *  re-registration (bounded upstream by the per-origin forced-crawl window);
+ *  an expired failure spends the per-cycle re-check budget; otherwise the
+ *  rotation decides. */
+function paywallProbeTurn(prev, { force = false, now = Date.now() } = {}) {
+  if (PAYWALL_PROBES_PER_CYCLE === 0) return false;
+  if (force) return true;
+  if (paywallRecheckBudget > 0 && paywallVerdictExpired(prev?.paywall, now)) { paywallRecheckBudget--; return true; }
+  return paywallProbeDue();
+}
+/** Test seam: the rotation cursor and the re-check budget. */
+export function __resetPaywallProbeForTest({ cursor = 0, recheckBudget = PAYWALL_RECHECKS_PER_CYCLE } = {}) {
+  paywallProbeCursor = cursor;
+  paywallRecheckBudget = recheckBudget;
+}
+
 // How many priceless routes we will quote-probe per seller per crawl. The
 // crawl runs every 30 minutes across ~2,200 origins, so this is the difference
 // between "we learn a catalogue's prices within the hour" and "we hammer a
@@ -5176,6 +5229,10 @@ async function probePaywall(tools, { redirectedTo = null } = {}) {
       // A slow origin is probed with GET only: a POST would send a body to its
       // write routes (feedback, reviews) just to read a price.
       && !(isSlowOrigin(t.seller) && String(t.method || "GET").toUpperCase() !== "GET")
+      // A documentation template (`/token/{symbol}`, `/token/:id`) is not a
+      // callable URL: probing the placeholder reads the seller's 400 for a bad
+      // parameter and files it as a broken paywall.
+      && !URL_TEMPLATE_RE.test(t.route)
   );
   // Prefer a GET: no body to guess, and a wrong body shape would produce a 400
   // that says nothing about the paywall.
@@ -5540,7 +5597,7 @@ export function __resetRobotsCacheForTest() { robotsCache.clear(); }
 // host before it fetches).
 let crawlFetch = (url, opts) => safeFetch(url, opts);
 export function __setCrawlFetchForTest(fn) { crawlFetch = typeof fn === "function" ? fn : (url, opts) => safeFetch(url, opts); }
-export async function __crawlSellerForTest(originUrl) { return crawlSeller(originUrl); }
+export async function __crawlSellerForTest(originUrl, opts) { return crawlSeller(originUrl, opts); }
 
 /** Fetch `path` on `originUrl` unless it is backed off, recording the outcome.
  *  Every per-origin probe in the crawl goes through here so a new one cannot be
@@ -5748,7 +5805,7 @@ function oncePerCrawl() {
   };
 }
 
-async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
+async function crawlSeller(originUrl, { deadlineAt = 0, forcePaywall = false } = {}) {
   const pastDeadline = () => deadlineAt > 0 && Date.now() >= deadlineAt;
   const once = oncePerCrawl();
   // `manifestPublished` is set by the well-known branch only: once the seller's
@@ -5880,7 +5937,7 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
       fallbackErrors: undefined,
       // Not this seller's turn: carry the last reading forward rather than
       // dropping it — null must mean "never probed", not "not probed today".
-      paywall: paywallProbeDue() && !pastDeadline() ? await probePaywall(tools, { redirectedTo }) : (prev?.paywall ?? null),
+      paywall: !pastDeadline() && paywallProbeTurn(prev, { force: forcePaywall }) ? await probePaywall(tools, { redirectedTo }) : (prev?.paywall ?? null),
     });
   } catch (e) {
     // No /.well-known/x402 — two fallback surfaces, richest metadata wins:
@@ -6039,7 +6096,7 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
         // while never having responded — and the marketplace rendered them
         // "healthy". A crawl completing is not a seller answering.
         originResponded: openapiTools.length > 0,
-        paywall: paywallProbeDue() && !pastDeadline() ? await probePaywall(tools, { redirectedTo: prev?.redirectedTo ?? null }) : (prev?.paywall ?? null),
+        paywall: !pastDeadline() && paywallProbeTurn(prev, { force: forcePaywall }) ? await probePaywall(tools, { redirectedTo: prev?.redirectedTo ?? null }) : (prev?.paywall ?? null),
       });
       return;
     }
@@ -6618,6 +6675,7 @@ async function runCrawl() {
   try {
     const seeds = seedList();
     liveQuoteBudget = LIVE_QUOTE_PROBES_PER_CYCLE;   // fresh allowance each cycle
+    paywallRecheckBudget = PAYWALL_RECHECKS_PER_CYCLE; // expired failed paywall verdicts, per cycle
     // ROTATE the visiting order each cycle. The per-cycle quote budget is spent
     // first-come, so a fixed order hands every probe to whichever sellers sit at
     // the front of the list and starves the tail FOREVER - the sellers at the
