@@ -674,7 +674,7 @@ await check("settle demotion safety: an alternate's ambiguous failure stops the 
       assert.deepEqual(gasCheckUrls("https://primary.stub", listed), ["https://primary.stub", "https://confirmed.stub"]);
       const { readFileSync } = await import("node:fs");
       const src = readFileSync(new URL("../src/payments.js", import.meta.url), "utf8");
-      assert.ok(/^\s*urls: \(\) => gasCheckUrls\(ROBINHOOD_FACILITATOR_URL, robinhoodFallbacks\),/m.test(src), "the Robinhood gas check reads its list through gasCheckUrls");
+      assert.ok(/^\s*urls: \(\) => gasCheckUrls\(robinhoodPrimaryUrl, robinhoodFallbacks\),/m.test(src), "the Robinhood gas check reads its list through gasCheckUrls");
     });
     // Settlement gas against the price floor. At 0.02 gwei x 85.4k gas one
     // settlement burns 1.708e-6 ETH; against a 0.006 floor at an 80% share the

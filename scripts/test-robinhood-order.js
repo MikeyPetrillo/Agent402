@@ -313,7 +313,7 @@ await check("the payment middleware wires it: the primary is wrapped, the gas ch
   const src = readFileSync(new URL("../src/payments.js", import.meta.url), "utf8");
   const live = (re) => re.test(src);
   assert.ok(live(/^\s*withRobinhoodGasOrder\(robinhoodPrimary, \{ order: robinhoodOrder, relayer: client \}\);/m));
-  assert.ok(live(/^\s*addFacilitator\(`Robinhood \(\$\{ROBINHOOD_FACILITATOR_URL\}\)`, robinhoodPrimary\);/m));
+  assert.ok(live(/^\s*addFacilitator\(`Robinhood \(\$\{robinhoodPrimaryUrl\}\)`, robinhoodPrimary\);/m));
   assert.ok(live(/^\s*onReadings: robinhoodOrder \? \(readings\) => robinhoodOrder\.update\(readings\) : null,/m));
   assert.ok(live(/^\s*if \(typeof onReadings === "function"\) \{ try \{ onReadings\(readings\); \}/m));
   assert.ok(live(/^\s*startRobinhoodOrderRefresh\(robinhoodOrder\);/m));

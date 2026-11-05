@@ -7,7 +7,7 @@ import { REPO_URL } from "./repo-link.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { creditsSalesEnabled, creditsDailyMaxCents } from "./credits-sales.js";
 import { answerShareEnabled, sharePagesMayBeLive } from "./answer-share.js";
-import { publicIndexTermsText } from "./facilitator-public-index.js";
+import { publicIndexTermsText, withPublicIndexDate } from "./facilitator-public-index.js";
 export function termsPage(baseUrl) {
   // Prepaid credits wording follows the sales switch and the purchase limit.
   const creditsOnSale = creditsSalesEnabled();
@@ -25,7 +25,8 @@ export function termsPage(baseUrl) {
   const sharesOn = sharePagesMayBeLive();
   const sharesOffered = answerShareEnabled();
   // The public settlement index disclosure (FACILITATOR_PUBLIC_INDEX_CHAINS),
-  // pointed to only while a chain is listed.
+  // pointed to only while a chain is listed; the printed date then follows
+  // FACILITATOR_PUBLIC_INDEX_SINCE when that is later (withPublicIndexDate).
   const publicIndex = publicIndexTermsText();
 
   const extraCss = `
@@ -50,7 +51,7 @@ export function termsPage(baseUrl) {
 <section>
 <div class="tm-eyebrow">$ GET /terms</div>
 <h1 class="tm-h1">Terms of Service</h1>
-<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-11-05.</p>
+<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-11-04.</p>
 </section>
 
 <section>
@@ -256,5 +257,5 @@ or <a href="https://x.com/Agent402Tools" rel="noopener">@Agent402Tools on X</a>.
 </div>
 ${ledgerFooterCompact()}`;
 
-  return ledgerShell({ title, description, canonical, baseUrl, activePath: "/terms", extraCss, body });
+  return ledgerShell({ title, description, canonical, baseUrl, activePath: "/terms", extraCss, body: withPublicIndexDate(body) });
 }
