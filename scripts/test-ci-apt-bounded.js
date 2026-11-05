@@ -2,7 +2,7 @@
 // The runner's first apt mirror can stall with no output until the job's own
 // timeout; the helper bounds each attempt, fails over to other mirrors and
 // fails loudly after three. A step that calls apt-get, apt, or Playwright's
-// `--with-deps` (which runs apt-get) directly has none of that.
+// `--with-deps` or `install-deps` (which run apt-get) directly has none of that.
 // Offline: reads the workflow text only.
 import { readFileSync, readdirSync } from "node:fs";
 import { load } from "js-yaml";
@@ -13,6 +13,7 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 const DIRECT = [
   /\bapt(-get)?\s+(-\S+\s+)*(install|update|upgrade)\b/,
   /\bplaywright\s+install\b[^\n]*--with-deps\b/,
+  /\bplaywright\s+install-deps\b/,
 ];
 const HELPER = /\bbash scripts\/ci-apt-install\.sh\b/;
 const code = (run) => String(run).split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
@@ -39,6 +40,7 @@ ok(offenders.length === 0, `no workflow step installs apt packages outside scrip
 
 // Controls: the patterns catch what the helper itself runs, and a comment is not read.
 const helper = readFileSync(new URL("./ci-apt-install.sh", import.meta.url), "utf8");
+ok(DIRECT[2].test("npx playwright install-deps chromium"), "install-deps is caught (control)");
 ok(DIRECT[0].test(helper) && DIRECT[1].test(helper), "the patterns match the helper's own apt-get and Playwright calls (control)");
 ok(!DIRECT.some((re) => re.test(code("# npx playwright install --with-deps chromium\necho hi"))), "a commented-out install is not counted (control)");
 ok(/timeout 170 npx playwright install --with-deps chromium/.test(helper) && /sudo timeout 170 apt-get update -qq && sudo timeout 170 apt-get install /.test(helper) && /for i in 1 2 3/.test(helper) && /--playwright-chromium/.test(helper), "the helper bounds each attempt, retries three times and serves the Playwright install");
