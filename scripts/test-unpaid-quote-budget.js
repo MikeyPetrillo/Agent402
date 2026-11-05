@@ -397,7 +397,7 @@ function boot(port, env) {
   const trafficDir = mkdtempSync(join(tmpdir(), "a402-unpaid-budget-"));
   dirs.push(trafficDir);
   const p = spawn(process.execPath, ["src/server.js"], {
-    env: { ...process.env, ...quiet, PORT: String(port), POW_SECRET, TRAFFIC_DIR: trafficDir, AGENT402_OPERATOR_TOKEN: "test-unpaid-budget-operator", ...env },
+    env: { ...process.env, TRUST_PROXY_HOPS: "1", ...quiet, PORT: String(port), POW_SECRET, TRAFFIC_DIR: trafficDir, AGENT402_OPERATOR_TOKEN: "test-unpaid-budget-operator", ...env },
     stdio: ["ignore", "ignore", "pipe"],
   });
   p.__log = "";

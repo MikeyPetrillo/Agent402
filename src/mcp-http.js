@@ -1,5 +1,5 @@
 import { frontDoorJson } from "./front-door.js";
-import { stripHiddenCharacters } from "./hidden-chars.js";
+import { stripHiddenCharacters, quotedCallerText } from "./hidden-chars.js";
 import { RAILS_PAREN, RAILS_OR, RAILS } from "./rails.js";
 import { gatewayOfferPublic, gatewayOfferNetworkNames } from "./gateway-nanopayments.js";
 import { inputDepthRefusal } from "./handler-input.js";
@@ -108,7 +108,7 @@ const FIND_WEAK_SCORE = 3;
 // A caller-written name echoed in a refusal: quoted as a JSON string (so a
 // quote in it cannot close the quote and continue as the server's own
 // sentence), hidden characters removed and the length bounded.
-const quotedEcho = (v, max = 80) => JSON.stringify(stripHiddenCharacters(String(v ?? "")).slice(0, max));
+const quotedEcho = (v, max = 80) => quotedCallerText(v, max);
 const WISH_HINT_TEXT = "Nothing matched well? Tell us what you needed via POST /api/wish - we cluster demand and build what keeps coming up.";
 
 // Per-IP sliding-window rate limit for tool executions (search/info are free).
@@ -1581,9 +1581,9 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
   // JSON-RPC message (including initialize) is self-contained, which survives
   // redeploys and needs no sticky routing.
   app.post(path, async (req, res) => {
-    // req.ip is derived via the app's "trust proxy" setting, so it's the real
-    // client IP (the edge-appended XFF hop) — NOT a spoofable client-supplied
-    // X-Forwarded-For value. This is the only abuse control on the free tier,
+    // req.ip is derived via the app's "trust proxy" setting (TRUST_PROXY_HOPS:
+    // the edge-appended XFF hop behind a proxy, the socket address with none
+    // trusted), NOT a spoofable client-supplied X-Forwarded-For value. This is the only abuse control on the free tier,
     // so it must not be bypassable by injecting a header.
     const ip = (req.ip || req.socket.remoteAddress || "?").trim();
     // R-11 outer gate #1: per-IP raw-request cap, BEFORE allocating anything.

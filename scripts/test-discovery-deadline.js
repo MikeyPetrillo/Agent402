@@ -103,7 +103,7 @@ const HANG = "hang-marker-7f3a";
 let stderr = "";
 const proc = spawn(process.execPath, ["src/server.js"], {
   env: {
-    ...process.env, FREE_MODE: "true", PORT: String(port), X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "",
+    ...process.env, TRUST_PROXY_HOPS: "1", FREE_MODE: "true", PORT: String(port), X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "",
     AGENT402_OPERATOR_TOKEN: TOKEN, DISCOVERY_TEST_HANG_QUERY: HANG, DISCOVERY_COMPUTE_DEADLINE_MS: String(DEADLINE_MS), DISCOVERY_MAX_INFLIGHT: "2",
   },
   stdio: ["ignore", "ignore", "pipe"],

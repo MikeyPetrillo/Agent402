@@ -22,7 +22,8 @@
 // settle-after-handler, Idempotency-Key) therefore applies verbatim, and a
 // paid MCP call lands in /api/stats as what it is: a paid call over the MPP
 // wire. The buyer's IP rides X-Forwarded-For so per-IP limits see the buyer,
-// not 127.0.0.1 (trust proxy is 1 hop).
+// not 127.0.0.1: read by trust proxy with one hop trusted, and by
+// replayClientIpMiddleware (src/trust-proxy.js) with none.
 import { Challenge, Credential, Receipt } from "mppx";
 import { PROGRESS_HEADER } from "./job-progress.js";
 import { mcpLoopbackHeaders } from "./mcp-loopback.js";

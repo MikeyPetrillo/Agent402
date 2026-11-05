@@ -92,7 +92,7 @@ function boot(tag, extra = {}) {
   const port = extra.PORT;
   const child = spawn(process.execPath, ["--import", "./scripts/lib/databento-stub-preload.js", "src/server.js"], {
     env: {
-      ...process.env, FREE_MODE: "true", RAILWAY_REPLICA_ID: tag,
+      ...process.env, TRUST_PROXY_HOPS: "1", FREE_MODE: "true", RAILWAY_REPLICA_ID: tag,
       X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", POSTHOG_API_KEY: "",
       DATABENTO_API_KEY: "db-test-key-not-real", DATABENTO_STUB_URL: STUB_URL, DATABENTO_SHARED_PREFIX: PREFIX, REDIS_URL,
       DATABENTO_RANGE_TIMEOUT_MS: "800", DATABENTO_COST_TIMEOUT_MS: "800", DATABENTO_DATA_TIMEOUT_MS: "1200",

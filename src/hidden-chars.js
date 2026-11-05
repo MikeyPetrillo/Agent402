@@ -158,6 +158,16 @@ export function stripHiddenCharacters(text) {
   return removeAt(s, hiddenCharacters(s));
 }
 
+/** Caller-written text echoed into our own output, as a JSON string literal
+ *  of at most `max` characters with every hidden character removed: a quote
+ *  or line break in it is escaped, so it cannot close the quote and read on as
+ *  our own words. The MCP connector's refusals and its prompt arguments
+ *  (src/skills.js buildPromptMessages) use it. */
+export function quotedCallerText(value, max = 80) {
+  const s = stripHiddenCharacters(String(value ?? ""));
+  return JSON.stringify(s.length > max ? s.slice(0, max) : s);
+}
+
 function removeAt(s, drop) {
   if (!drop.length) return s;
   let out = "";

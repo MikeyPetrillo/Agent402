@@ -108,7 +108,7 @@ const boot = async (port, dataDir, tag) => {
   const sub = join(TMP, tag);
   mkdirSync(sub, { recursive: true });
   const proc = spawn(process.execPath, ["--import", preload, "src/server.js"], {
-    env: { ...process.env, PORT: String(port), FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
+    env: { ...process.env, TRUST_PROXY_HOPS: "1", PORT: String(port), FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
       FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`, PAYMENT_NETWORKS: "base",
       CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "",
       OPENAI_API_KEY: "sk-test-never-used", OPENROUTER_API_KEY: "", CDN_PROXY: "", STATE_DATABASE_URL: "",

@@ -103,6 +103,25 @@ export function payerFromRequest(req) {
   }
 }
 
+/**
+ * The payer an IDENTITY-BOUND route (memory, my-usage, receipts, attest,
+ * feedback) acts as. On a paid deployment that is payerFromRequest: the payment
+ * middleware verified the signature before the handler ran. FREE_MODE mounts no
+ * paywall, so nothing verifies the header there and its authorization.from is
+ * whatever the caller typed; read as a wallet identity it would let one free
+ * caller act as any wallet (read its memory, grant itself access, list its
+ * purchases). In FREE_MODE this is therefore always null: memory uses its
+ * `demo:<ns>` namespace and the other routes refuse (FREE_MODE_IDENTITY_NOTE).
+ * Read at call time, so a test can flip the switch without re-importing.
+ */
+export const freeModeOn = (env = process.env) => env.FREE_MODE === "true";
+export const FREE_MODE_IDENTITY_NOTE =
+  "This server runs in FREE_MODE: no payment is verified, so a payment header carries no wallet identity here. Wallet-keyed routes answer only on a paid deployment, where the signed payment is the identity.";
+export function identityPayerOf(req, env = process.env) {
+  if (freeModeOn(env)) return null;
+  return payerFromRequest(req);
+}
+
 /** x402 `payment-identifier` extension id carried by the payment payload
  *  (@x402/extensions: `extensions["payment-identifier"].info.id`, 16-128 chars
  *  of [A-Za-z0-9_-]). Returned raw; callers bind it to the credential exactly
