@@ -3066,7 +3066,8 @@ jobs:
       # runs at all - stricter than the secretless-env install below. Native
       # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
       - name: ffmpeg for the media-kit tests (ubuntu-latest ships none; test-media SKIPPED on every CI run until 2026-09-06)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg >/dev/null && ffmpeg -version | head -1
+        timeout-minutes: 10
+        run: bash scripts/ci-apt-install.sh ffmpeg && ffmpeg -version | head -1
       - name: Restore node_modules
         id: nm-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -4299,7 +4300,8 @@ jobs:
       # runs at all - stricter than the secretless-env install below. Native
       # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
       - name: ffmpeg for the three media tools in the example sweep (ubuntu-latest ships none; they answered 503 "not installed" once that stopped being a silent 422)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg >/dev/null && ffmpeg -version | head -1
+        timeout-minutes: 10
+        run: bash scripts/ci-apt-install.sh ffmpeg && ffmpeg -version | head -1
       - name: OCR language data for image-ocr in the example sweep (pinned, hash-checked; the server never downloads it)
         run: node scripts/fetch-tessdata.js tessdata eng
       - name: Restore node_modules

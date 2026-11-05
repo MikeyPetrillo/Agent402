@@ -220,7 +220,7 @@ jobs:
       - name: Capture — waveform + duration via ffmpeg
         if: github.event.inputs.mode == 'capture'
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg >/dev/null 2>&1
+          bash scripts/ci-apt-install.sh ffmpeg
           DUR=$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 /tmp/demo.mp3)
           echo "duration: ${DUR}s"
           echo "{\"durationSec\": $DUR}" > /tmp/duration.json
