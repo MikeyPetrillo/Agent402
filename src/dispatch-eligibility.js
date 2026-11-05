@@ -66,7 +66,7 @@ export const DISPATCH_REASONS = Object.freeze({
 // What the Base unproven tier promises, in one sentence: the legend below and
 // the seller tools' lane summaries (src/router-lanes.js) both quote it, so the
 // field docs and a seller's own report cannot word the lane differently.
-export const UNPROVEN_LANE_TERMS = "on Base the router may still pay the seller, but only after every proven seller for the task, only at the wallet its own live 402 names, never above that ceiling, and flagged unproven on the buyer's receipt";
+export const UNPROVEN_LANE_TERMS = "on Base the router may still pay the seller, but only after every proven seller for the task, only at the wallet its own live 402 names, never above that ceiling, never past its daily cap per seller, and flagged unproven on the buyer's receipt";
 const REASON_PRECEDENCE = ["category_excluded", "crawl_failed", "network_unknown", "no_supported_route", "url_template", "price_unknown", "usdc_domain_mismatch", "gateway_rail_unsupported", "payment_method_unsupported", "delivery_failing", "settlement_self_funded", "settlement_required"];
 // `detail` values a settlement_required verdict can carry beyond the gate's
 // own sentence. Documented in the legend under routerDispatchDetail.

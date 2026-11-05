@@ -512,21 +512,122 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
   };
   delete process.env.SOR_BASE_UNPROVEN_MAX_USD;
   const spentBefore = _spentThisWindow();
-  const high = await refusal("20000");
-  ok(high && high.statusCode === 409 && /above the unproven ceiling 10000/.test(high.message), "unproven Base: a signed quote above the $0.01 default ceiling is refused 409");
+  const high = await refusal("60000");
+  ok(high && high.statusCode === 409 && /above the unproven ceiling 50000/.test(high.message), "unproven Base: a signed $0.06 quote above the $0.05 default ceiling is refused 409");
   ok(_spentThisWindow() === spentBefore, "unproven Base: the refusal holds no spend budget (before reserveSpend)");
   process.env.SOR_BASE_UNPROVEN_MAX_USD = "off";
   const off = await refusal("1000");
   ok(off && off.statusCode === 409, "unproven Base: with the tier switched off even a $0.001 quote is refused");
   process.env.SOR_BASE_UNPROVEN_MAX_USD = "not-a-number";
-  const junk = await refusal("20000");
-  ok(junk && junk.statusCode === 409 && /ceiling 10000/.test(junk.message), "unproven Base: a malformed env reads as the default ceiling, never a wider one");
+  const junk = await refusal("60000");
+  ok(junk && junk.statusCode === 409 && /ceiling 50000/.test(junk.message), "unproven Base: a malformed env reads as the default ceiling, never a wider one");
   if (before === undefined) delete process.env.SOR_BASE_UNPROVEN_MAX_USD; else process.env.SOR_BASE_UNPROVEN_MAX_USD = before;
   const { readFileSync } = await import("node:fs");
   const src = readFileSync(new URL("../src/x402-buyer.js", import.meta.url), "utf8");
   const payFn = src.slice(src.indexOf("export async function payX402"));
   const at = payFn.indexOf('chain === "base" && allowUnproven');
   ok(at > payFn.indexOf("quoteWithinCap(quotedAtomic, maxAtomic)") && at < payFn.indexOf("reserveSpend(quotedAtomic)"), "unproven Base: the ceiling check sits after the cap check and before any budget hold or signature");
+  const capAt = payFn.indexOf("reserveUnprovenSellerSpend(");
+  ok(capAt > at && capAt > payFn.indexOf("let committed = false;\n  try {") && capAt < payFn.indexOf("createPaymentPayload("), "unproven Base: the per-seller daily cap is reserved after the ceiling check, inside the budget hold's try (a refusal gives the hold back), and before any signature");
+}
+
+// --- Base unproven tier: the per-seller rolling 24-hour cap ------------------
+// SOR_BASE_UNPROVEN_SELLER_DAILY_USD (default $0.25) bounds what the lane pays
+// one seller (its payTo and its origin host) in 24 h. The signed amount is
+// reserved before signing and kept once the payment may have moved; a payment
+// that provably moved nothing gives it back. Driven through payX402 against a
+// stub seller that settles, with the real signer (counted at the call).
+{
+  const BU = await import("../src/base-unproven.js");
+  const { getUpstreamBuyer, _spentThisWindow } = await import("../src/x402-buyer.js");
+  const savedMax = process.env.SOR_BASE_UNPROVEN_MAX_USD, savedCap = process.env.SOR_BASE_UNPROVEN_SELLER_DAILY_USD;
+  delete process.env.SOR_BASE_UNPROVEN_MAX_USD; delete process.env.SOR_BASE_UNPROVEN_SELLER_DAILY_USD;
+  ok(BU.baseUnprovenAllowanceUsd() === 0.05 && BU.BASE_UNPROVEN_DEFAULT_USD === 0.05, "unproven cap: the Base ceiling defaults to $0.05");
+  ok(BU.baseUnprovenSellerDailyUsd() === 0.25, "unproven cap: the per-seller daily cap defaults to $0.25");
+  for (const [raw, want, label] of [["off", null, "'off' removes the cap"], ["0", null, "'0' removes the cap"], ["junk", 0.25, "a malformed value reads as the default, never as off"], ["-1", 0.25, "a negative value reads as the default"], ["0.1", 0.1, "a custom cap is honored"]]) {
+    process.env.SOR_BASE_UNPROVEN_SELLER_DAILY_USD = raw;
+    ok(BU.baseUnprovenSellerDailyUsd() === want, `unproven cap: ${label}`);
+  }
+  delete process.env.SOR_BASE_UNPROVEN_SELLER_DAILY_USD;
+
+  const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64");
+  const SELLER_W = "0x" + "5c".repeat(20), OTHER_W = "0x" + "6d".repeat(20);
+  const accept = (payTo, amount) => ({ scheme: "exact", network: "eip155:8453", asset: USDC, amount, payTo, maxTimeoutSeconds: 60, extra: { name: "USD Coin", version: "2" } });
+  let paidRequests = 0;
+  const stub = (payTo, amount) => async (_url, init) => {
+    const h = init?.headers || {};
+    if (!(h["PAYMENT-SIGNATURE"] || h["payment-signature"] || h["X-PAYMENT"])) {
+      return { status: 402, headers: { get: (n) => (String(n).toLowerCase() === "payment-required" ? b64({ x402Version: 2, accepts: [accept(payTo, amount)] }) : null) }, json: async () => ({}), text: async () => "{}" };
+    }
+    paidRequests++;
+    return new Response(JSON.stringify({ answer: 7 }), { status: 200, headers: { "content-type": "application/json", "payment-response": b64({ success: true, transaction: "0x" + "cd".repeat(32), network: "eip155:8453" }) } });
+  };
+  const evm = await getUpstreamBuyer();
+  const realSign = evm.client.createPaymentPayload.bind(evm.client);
+  let signs = 0;
+  evm.client.createPaymentPayload = async (...a) => { signs++; return realSign(...a); };
+  const buy = (origin, payTo, amount = "50000", extra = {}) => {
+    globalThis.fetch = stub(payTo, amount);
+    return payX402(`${origin}/data`, { maxAtomic: 500000n, method: "POST", body: {}, chain: "base", allowUnproven: true, ...extra }).then((r) => ({ r }), (e) => ({ e }));
+  };
+  await BU.__resetUnprovenSellerLedger();
+
+  // CONTROL: a $0.05 quote (the new ceiling, the old one refused it) is signed and settles.
+  signs = 0; paidRequests = 0;
+  const first = await buy("https://fresh-seller.example", SELLER_W);
+  ok(!first.e && first.r?.result?.answer === 7 && signs === 1 && paidRequests === 1, `unproven cap: a $0.05 unproven quote is signed once and settles (${first.e ? first.e.message : "ok"})`);
+  ok(Math.abs(await BU.unprovenSellerSpentUsd({ payTo: SELLER_W, origin: "https://fresh-seller.example" }) - 0.05) < 1e-9, "unproven cap: the settled buy books its signed $0.05 against the seller");
+  for (let i = 0; i < 4; i++) await buy("https://fresh-seller.example", SELLER_W);
+  ok(Math.abs(await BU.unprovenSellerSpentUsd({ payTo: SELLER_W }) - 0.25) < 1e-9, "unproven cap: five settled $0.05 buys reach the $0.25 cap");
+  signs = 0; paidRequests = 0;
+  const heldBefore6 = _spentThisWindow();
+  const sixth = await buy("https://fresh-seller.example", SELLER_W);
+  ok(sixth.e && sixth.e.statusCode === 409 && /daily cap per seller/.test(sixth.e.message) && signs === 0 && paidRequests === 0, `unproven cap: the sixth buy is refused 409 before anything is signed (${sixth.e?.statusCode} ${sixth.e?.message}; signs ${signs})`);
+  ok(sixth.e && sixth.e.committed !== true, "unproven cap: the refusal is pre-commit, so the router may try its next candidate");
+  ok(_spentThisWindow() === heldBefore6, "unproven cap: the refusal gives the window budget hold back");
+  // The same wallet behind another origin, and another wallet behind the same origin, are the same seller.
+  const sameWallet = await buy("https://second-front.example", SELLER_W);
+  ok(sameWallet.e && sameWallet.e.statusCode === 409, "unproven cap: the same payTo behind another origin is still capped");
+  const sameOrigin = await buy("https://fresh-seller.example", OTHER_W);
+  ok(sameOrigin.e && sameOrigin.e.statusCode === 409, "unproven cap: another payTo behind the same origin is still capped");
+  signs = 0;
+  const other = await buy("https://other-seller.example", OTHER_W);
+  ok(!other.e && signs === 1, `unproven cap: a different seller (wallet and origin) is not affected (${other.e?.message || "ok"})`);
+  // A proven candidate (allowUnproven false) never reads the lane's cap.
+  signs = 0;
+  const proven = await buy("https://fresh-seller.example", SELLER_W, "50000", { allowUnproven: false });
+  ok(!proven.e && signs === 1, `unproven cap: a proven buy from a capped seller is not refused by the lane's cap (${proven.e?.message || "ok"})`);
+
+  // A payment that provably moved nothing gives its reservation back: signBy
+  // in the past refuses after the reservation, before anything is signed.
+  await BU.__resetUnprovenSellerLedger();
+  signs = 0;
+  const late = await buy("https://late-seller.example", SELLER_W, "50000", { signBy: Date.now() - 1000 });
+  ok(late.e && late.e.statusCode === 504 && signs === 0, `unproven cap: a refusal before signing (${late.e?.statusCode})`);
+  ok(await BU.unprovenSellerSpentUsd({ payTo: SELLER_W, origin: "https://late-seller.example" }) === 0, "unproven cap: ...gives the seller's reservation back");
+
+  // The window rolls: 24 h after the spend, the seller is paid again (clock injected on the ledger).
+  await BU.__resetUnprovenSellerLedger();
+  const t0 = Date.now();
+  const res = [];
+  for (let i = 0; i < 6; i++) res.push(await BU.reserveUnprovenSellerSpend({ payTo: SELLER_W, origin: "https://roll.example", atomic: 50000n, now: t0 + i }));
+  ok(res.slice(0, 5).every((r) => r.ok) && res[5].ok === false && res[5].code === "unproven_seller_daily_cap", "unproven cap (ledger): five $0.05 reservations fit, the sixth is refused");
+  ok((await BU.reserveUnprovenSellerSpend({ payTo: SELLER_W, origin: "https://roll.example", atomic: 50000n, now: t0 + 23 * 3600_000 })).ok === false, "unproven cap (ledger): still refused 23 h later");
+  ok((await BU.reserveUnprovenSellerSpend({ payTo: SELLER_W, origin: "https://roll.example", atomic: 50000n, now: t0 + 24 * 3600_000 + 10 })).ok === true, "unproven cap (ledger): allowed again once the first spend is 24 h old");
+  const rel = [];
+  for (let i = 0; i < 3; i++) rel.push(await BU.reserveUnprovenSellerSpend({ payTo: OTHER_W, origin: "https://release.example", atomic: 40000n, now: t0 + i }));
+  BU.releaseUnprovenSellerSpend(rel[0].handle);
+  BU.releaseUnprovenSellerSpend(rel[0].handle);
+  ok(Math.abs(await BU.unprovenSellerSpentUsd({ payTo: OTHER_W, origin: "https://release.example", now: t0 + 10 }) - 0.08) < 1e-9, "unproven cap (ledger): a release gives back exactly its own amount, once");
+  ok((await BU.reserveUnprovenSellerSpend({ payTo: "not-an-address", origin: "not a url", atomic: 1000n })).ok === false, "unproven cap (ledger): a seller with no readable key is not paid in the lane");
+  process.env.SOR_BASE_UNPROVEN_SELLER_DAILY_USD = "off";
+  ok((await BU.reserveUnprovenSellerSpend({ payTo: SELLER_W, origin: "https://roll.example", atomic: 50000n, now: t0 + 20 })).ok === true, "unproven cap (ledger): switched off, the cap refuses nothing");
+  delete process.env.SOR_BASE_UNPROVEN_SELLER_DAILY_USD;
+
+  evm.client.createPaymentPayload = realSign;
+  await BU.__resetUnprovenSellerLedger();
+  if (savedMax === undefined) delete process.env.SOR_BASE_UNPROVEN_MAX_USD; else process.env.SOR_BASE_UNPROVEN_MAX_USD = savedMax;
+  if (savedCap === undefined) delete process.env.SOR_BASE_UNPROVEN_SELLER_DAILY_USD; else process.env.SOR_BASE_UNPROVEN_SELLER_DAILY_USD = savedCap;
 }
 
 globalThis.fetch = origFetch;

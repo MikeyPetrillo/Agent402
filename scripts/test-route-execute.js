@@ -391,6 +391,27 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
     const r2 = await mk(async () => good, async () => [A]).handler({ task: "t", include: "external" }, {});
     ok(!("sellerProof" in r2.receipt), "a proven seller's receipt carries no such flag");
   }
+  // A $0.05 seller in the Base unproven lane (the ceiling since 2026-11-05) is
+  // paid only after the proven candidate before it, with allowUnproven, and is
+  // flagged on the receipt; a seller at its daily cap is refused by the buyer
+  // before signing (409, pre-commit), so the next candidate is tried.
+  {
+    const E = { seller: "https://e.example", slug: "svc-e", url: "https://e.example/z", method: "POST", price: "$0.05", networks: ["eip155:8453"], unproven: true };
+    const F = { ...E, seller: "https://f.example", slug: "svc-f", url: "https://f.example/z" };
+    const good5 = { result: { ok: true }, quote: { usd: 0.05, network: "eip155:8453" }, receipt: { transaction: "0xTX5" } };
+    let calls = [], opts = [];
+    const pay = async (url, o) => { calls.push(url); opts.push(o); if (url === A.url) throw err("Seller unreachable", 502); return good5; };
+    const r = await mk(pay, async () => [A, E]).handler({ task: "t", include: "external" }, {});
+    ok(calls.join(",") === [A.url, E.url].join(",") && r.receipt.seller === E.seller && r.receipt.sellerProof === "unproven" && opts[1].allowUnproven === true,
+      "a $0.05 unproven seller is paid after the proven candidate before it, with allowUnproven, flagged unproven on the receipt");
+    calls = [];
+    const capped = async (url) => { calls.push(url); if (url === E.url) throw err("Seller 0xe… is below the Base settlement floor and has reached the unproven lane's daily cap per seller ($0.25 of $0.25 in 24 h) - not paid", 409); return good5; };
+    const r3 = await mk(capped, async () => [E, F]).handler({ task: "t", include: "external" }, {});
+    ok(calls.length === 2 && r3.receipt.seller === F.seller, "a seller at its daily cap (a pre-commit 409) falls through to the next candidate");
+    let threw = null;
+    try { await mk(capped, async () => [E]).handler({ task: "t", include: "external" }, {}); } catch (e) { threw = e; }
+    ok(threw && threw.statusCode === 409 && /daily cap per seller/.test(threw.message), "with no other candidate the cap's 409 reaches the buyer (not charged)");
+  }
   // Every candidate fails PRE-commit -> throw the last error, both attempted.
   {
     let calls = [];

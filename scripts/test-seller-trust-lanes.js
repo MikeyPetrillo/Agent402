@@ -40,12 +40,13 @@ const seller = (origin, price, payTo = PAYTO) => [origin, {
 }];
 const CHEAP = "https://unproven-cheap.example";
 const PRICEY = "https://unproven-pricey.example";
+const EDGE = "https://unproven-edge.example";
 const MID = "https://proven-mid.example", HUGE = "https://proven-huge.example";
 const W_MID = "0x1111111111111111111111111111111111111111", W_HUGE = "0x2222222222222222222222222222222222222222";
 
 async function boot(ceiling) {
   const dir = mkdtempSync(join(tmpdir(), "a402-trust-lanes-"));
-  const entries = [seller(CHEAP, "$0.005"), seller(PRICEY, "$0.02"), seller(MID, "$0.04", W_MID), seller(HUGE, `$${OVER_TOP}`, W_HUGE)];
+  const entries = [seller(CHEAP, "$0.005"), seller(PRICEY, "$0.06"), seller(EDGE, "$0.05", "0x4444444444444444444444444444444444444444"), seller(MID, "$0.04", W_MID), seller(HUGE, `$${OVER_TOP}`, W_HUGE)];
   const lbFile = join(dir, "leaderboard-snapshot.json");
   writeFileSync(lbFile, JSON.stringify({
     spec: "x402-leaderboard/1", asOf: new Date(now).toISOString(), windowLabel: "7d",
@@ -105,8 +106,12 @@ const dossier = async (base, origin) => {
     ok(md.status === 200 && md.body.router.routable === true && md.body.router.routableVia === "proven" && md.body.router.lanes?.proven?.cheapestTier === "route-execute-plus", `the dossier names the same tier for the proven $0.04 seller (${md.body.router.lanes?.proven?.cheapestTier})`);
 
     const b = await trust(base, PRICEY);
-    ok(b.status === 200 && b.body.lanes?.proven?.eligible === false && b.body.lanes?.unproven?.eligible === false, "a $0.02-only seller below the floor: neither lane");
+    ok(b.status === 200 && b.body.lanes?.proven?.eligible === false && b.body.lanes?.unproven?.eligible === false, "a $0.06-only seller below the floor: neither lane (above the $0.05 default ceiling)");
     ok(b.body.routableByOurRouter === false && /unproven ceiling/.test(b.body.lanes.unproven.reason || ""), `the refusal names the ceiling (${b.body.lanes?.unproven?.reason})`);
+
+    const e = await trust(base, EDGE);
+    ok(e.status === 200 && e.body.lanes?.unproven?.eligible === true && e.body.lanes.unproven.maxUsd === 0.05 && e.body.lanes.unproven.cheapestUsd === 0.05 && e.body.routableVia === "unproven", `a $0.05 seller below the floor is routable through the unproven lane at the default ceiling (${JSON.stringify(e.body.lanes?.unproven)})`);
+    ok(e.body.lanes.unproven.sellerDailyMaxUsd === 0.25 && /at most \$0\.25 a day per seller/.test(e.body.lanes.unproven.note), `the lane states the per-seller daily cap (${e.body.lanes.unproven.note})`);
 
     const d = await dossier(base, CHEAP);
     ok(d.status === 200 && d.body?.router, `seller-dossier answers through its route (${d.status})`);

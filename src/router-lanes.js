@@ -8,8 +8,9 @@
 //   unproven  a Base route whose verdict carries `unprovenTier`: below the
 //             floor with nothing else wrong, priced within the unproven
 //             ceiling (src/base-unproven.js). Tried after every proven
-//             candidate, at the wallet the seller's own live 402 names, and
-//             flagged unproven on the receipt.
+//             candidate, at the wallet the seller's own live 402 names, up to
+//             a rolling daily cap per seller, and flagged unproven on the
+//             receipt.
 //
 // This module decides NOTHING about eligibility. Every boolean below is read
 // off a verdict that dispatchEligibility produced for the route (the server's
@@ -17,6 +18,7 @@
 // and the resolver's Base gate runs), so a seller tool cannot disagree with
 // the router about a route. Pure; no state.
 import { DISPATCH_REASONS, DISPATCH_DETAILS, UNPROVEN_LANE_TERMS } from "./dispatch-eligibility.js";
+import { baseUnprovenSellerDailyUsd } from "./base-unproven.js";
 import { priceUsdOf, isPricedAboveZero } from "./price-usd.js";
 
 const reasonLine = (reason, detail) => {
@@ -29,11 +31,13 @@ const reasonLine = (reason, detail) => {
  *                                   routerDispatchByChain / routerDispatchReason
  *                                   (rowLevel verdicts, priced per route)
  * @param {number} o.unprovenMaxUsd  the unproven ceiling in force (0 = switched off)
+ * @param {number|null} o.unprovenSellerDailyMaxUsd  the lane's rolling 24-hour cap per
+ *                                   seller (null = switched off); read from env by default
  * @param {object[]} o.execTiers    route-execute's EXEC_TIERS ({ slug, underlyingMaxUsd });
  *                                   a route is payable by a tier when its price is at
  *                                   or under that tier's underlyingMaxUsd
  */
-export function routerLanes({ toolVerdicts = [], unprovenMaxUsd = 0, execTiers = [] } = {}) {
+export function routerLanes({ toolVerdicts = [], unprovenMaxUsd = 0, unprovenSellerDailyMaxUsd = baseUnprovenSellerDailyUsd(), execTiers = [] } = {}) {
   const tiersAsc = (Array.isArray(execTiers) ? execTiers : [])
     .filter((t) => t && t.slug && Number(t.underlyingMaxUsd) > 0)
     .map((t) => ({ slug: t.slug, underlyingMaxUsd: Number(t.underlyingMaxUsd) }))
@@ -90,12 +94,13 @@ export function routerLanes({ toolVerdicts = [], unprovenMaxUsd = 0, execTiers =
     eligible: Boolean(ceiling) && tiered.length > 0,
     chain: "base",
     maxUsd: ceiling,
+    sellerDailyMaxUsd: ceiling && Number(unprovenSellerDailyMaxUsd) > 0 ? Number(unprovenSellerDailyMaxUsd) : null,
     toolCount: ceiling ? tiered.length : 0,
     cheapestUsd: ceiling ? cheapest(tiered) : null,
     // The lane is bounded by its own ceiling; this names the cheapest tier a
     // buyer can call to reach its cheapest route.
     cheapestTier: ceiling && tiered.length ? (tierFor(cheapest(tiered))?.slug || null) : null,
-    note: `${UNPROVEN_LANE_TERMS[0].toUpperCase()}${UNPROVEN_LANE_TERMS.slice(1)}${ceiling ? ` ($${ceiling} per call)` : ""}.`,
+    note: `${UNPROVEN_LANE_TERMS[0].toUpperCase()}${UNPROVEN_LANE_TERMS.slice(1)}${ceiling ? ` ($${ceiling} per call${Number(unprovenSellerDailyMaxUsd) > 0 ? `, at most $${Number(unprovenSellerDailyMaxUsd)} a day per seller` : ""})` : ""}.`,
     ...(reason ? { reason } : {}),
   };
   return { proven, unproven };
