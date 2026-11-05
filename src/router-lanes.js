@@ -8,16 +8,18 @@
 //   unproven  a Base route whose verdict carries `unprovenTier`: below the
 //             floor with nothing else wrong, priced within the unproven
 //             ceiling (src/base-unproven.js). Tried after every proven
-//             candidate, at the wallet the seller's own live 402 names, and
-//             flagged unproven on the receipt.
+//             candidate, at the wallet the seller's own live 402 names, up to
+//             a rolling daily cap per seller, and flagged unproven on the
+//             receipt.
 //
 // This module decides NOTHING about eligibility. Every boolean below is read
 // off a verdict that dispatchEligibility produced for the route (the server's
 // withDispatchFields, the same call /api/index?seller= and /api/route publish
 // and the resolver's Base gate runs), so a seller tool cannot disagree with
 // the router about a route. Pure; no state.
-import { DISPATCH_REASONS, DISPATCH_DETAILS, UNPROVEN_LANE_TERMS } from "./dispatch-eligibility.js";
-import { priceUsdOf, isPricedAboveZero } from "./price-usd.js";
+import { DISPATCH_REASONS, DISPATCH_DETAILS, unprovenLaneTerms } from "./dispatch-eligibility.js";
+import { baseUnprovenSellerDailyUsd, baseUnprovenLaneDailyUsd, BASE_UNPROVEN_DEFAULT_USD, BASE_UNPROVEN_SELLER_DAILY_DEFAULT_USD, BASE_UNPROVEN_LANE_DAILY_DEFAULT_USD } from "./base-unproven.js";
+import { priceUsdOf, isPricedAboveZero, usdFigure } from "./price-usd.js";
 
 const reasonLine = (reason, detail) => {
   const base = DISPATCH_REASONS[reason] ? `${reason}: ${DISPATCH_REASONS[reason]}` : String(reason || "no verdict");
@@ -29,11 +31,15 @@ const reasonLine = (reason, detail) => {
  *                                   routerDispatchByChain / routerDispatchReason
  *                                   (rowLevel verdicts, priced per route)
  * @param {number} o.unprovenMaxUsd  the unproven ceiling in force (0 = switched off)
+ * @param {number|null} o.unprovenSellerDailyMaxUsd  the lane's rolling 24-hour cap per
+ *                                   seller (null = switched off); read from env by default
+ * @param {number|null} o.unprovenLaneDailyMaxUsd  the lane's rolling 24-hour total across
+ *                                   every seller (null = switched off); read from env by default
  * @param {object[]} o.execTiers    route-execute's EXEC_TIERS ({ slug, underlyingMaxUsd });
  *                                   a route is payable by a tier when its price is at
  *                                   or under that tier's underlyingMaxUsd
  */
-export function routerLanes({ toolVerdicts = [], unprovenMaxUsd = 0, execTiers = [] } = {}) {
+export function routerLanes({ toolVerdicts = [], unprovenMaxUsd = 0, unprovenSellerDailyMaxUsd = baseUnprovenSellerDailyUsd(), unprovenLaneDailyMaxUsd = baseUnprovenLaneDailyUsd(), execTiers = [] } = {}) {
   const tiersAsc = (Array.isArray(execTiers) ? execTiers : [])
     .filter((t) => t && t.slug && Number(t.underlyingMaxUsd) > 0)
     .map((t) => ({ slug: t.slug, underlyingMaxUsd: Number(t.underlyingMaxUsd) }))
@@ -61,7 +67,7 @@ export function routerLanes({ toolVerdicts = [], unprovenMaxUsd = 0, execTiers =
     if (!paid.length) provenBlockers.push("no paid resource is indexed for this origin");
     else if (!onBase.length) provenBlockers.push(reasonLine(paid.find((t) => t.reason)?.reason || "no_supported_route"));
     else if (provenAny.length) provenBlockers.push(highest
-      ? `its proven Base routes are all priced above the highest route-execute tier's $${highest.underlyingMaxUsd} underlying cap (${highest.slug}; cheapest route $${cheapest(provenAny)})`
+      ? `its proven Base routes are all priced above the highest route-execute tier's ${usdFigure(highest.underlyingMaxUsd)} underlying cap (${highest.slug}; cheapest route ${usdFigure(cheapest(provenAny))})`
       : "no route-execute tier is configured to pay it");
     else for (const line of new Set(onBase.map((t) => reasonLine(t.base.reason, t.base.detail)))) provenBlockers.push(line);
   }
@@ -84,19 +90,48 @@ export function routerLanes({ toolVerdicts = [], unprovenMaxUsd = 0, execTiers =
   else if (proven.eligible || provenAny.length) reason = "this seller clears the Base settlement floor, so the router pays it as a proven seller; the Base unproven lane serves sellers below that floor";
   else if (!paid.length) reason = "no paid resource is indexed for this origin";
   else if (!onBase.length) reason = "the unproven lane is Base only, and this seller has no Base route the router can pay";
-  else if (floorOnly.length) reason = `every Base route held back only by the floor is priced above the $${ceiling} unproven ceiling (cheapest $${cheapest(floorOnly)})`;
+  else if (floorOnly.length) reason = `every Base route held back only by the floor is priced above the ${usdFigure(ceiling)} unproven ceiling (cheapest ${usdFigure(cheapest(floorOnly))})`;
   else reason = `every Base route is held back by something other than the settlement floor: ${[...new Set(onBase.map((t) => reasonLine(t.base.reason, t.base.detail)))].join("; ")}`;
+  const sellerDaily = Number(unprovenSellerDailyMaxUsd) > 0 ? Number(unprovenSellerDailyMaxUsd) : null;
+  const laneDaily = Number(unprovenLaneDailyMaxUsd) > 0 ? Number(unprovenLaneDailyMaxUsd) : null;
   const unproven = {
     eligible: Boolean(ceiling) && tiered.length > 0,
     chain: "base",
     maxUsd: ceiling,
+    sellerDailyMaxUsd: ceiling && sellerDaily ? sellerDaily : null,
     toolCount: ceiling ? tiered.length : 0,
     cheapestUsd: ceiling ? cheapest(tiered) : null,
     // The lane is bounded by its own ceiling; this names the cheapest tier a
     // buyer can call to reach its cheapest route.
     cheapestTier: ceiling && tiered.length ? (tierFor(cheapest(tiered))?.slug || null) : null,
-    note: `${UNPROVEN_LANE_TERMS[0].toUpperCase()}${UNPROVEN_LANE_TERMS.slice(1)}${ceiling ? ` ($${ceiling} per call)` : ""}.`,
+    note: unprovenLaneNote({ ceiling, sellerDaily, laneDaily }),
     ...(reason ? { reason } : {}),
   };
   return { proven, unproven };
+}
+
+// The lane's sentence with its figures: the terms name only the caps that are
+// on, and the parenthesis quotes the same caps, each through usdFigure.
+function unprovenLaneNote({ ceiling, sellerDaily, laneDaily }) {
+  const terms = unprovenLaneTerms({ sellerDailyUsd: sellerDaily, laneDailyUsd: laneDaily });
+  const figures = ceiling
+    ? ` (${[`${usdFigure(ceiling)} per call`, sellerDaily ? `at most ${usdFigure(sellerDaily)} a day per seller` : "", laneDaily ? `${usdFigure(laneDaily)} a day in all` : ""].filter(Boolean).join(", ")})`
+    : "";
+  return `${terms[0].toUpperCase()}${terms.slice(1)}${figures}.`;
+}
+
+/**
+ * The unproven lane a published example shows: one Base route at `priceUsd`
+ * held back only by the floor, read through routerLanes under the shipped
+ * defaults (ceiling, per-seller cap, lane total), so an example's figures and
+ * note are the ones the tool answers with on a default host, never typed.
+ */
+export function exampleUnprovenLane({ priceUsd, execTiers = [] } = {}) {
+  return routerLanes({
+    toolVerdicts: [{ price: priceUsd, routerDispatchReason: "settlement_required", routerDispatchByChain: { base: { eligible: false, reason: "settlement_required", unprovenTier: true } } }],
+    unprovenMaxUsd: BASE_UNPROVEN_DEFAULT_USD,
+    unprovenSellerDailyMaxUsd: BASE_UNPROVEN_SELLER_DAILY_DEFAULT_USD,
+    unprovenLaneDailyMaxUsd: BASE_UNPROVEN_LANE_DAILY_DEFAULT_USD,
+    execTiers,
+  }).unproven;
 }

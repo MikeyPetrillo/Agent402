@@ -61,6 +61,7 @@ Set these on your host. None are committed to the repo.
 |---|---|---|
 | `FREE_MODE` | No | Set `true` to serve all tools free (no paywall, no PoW gate) |
 | `PORT` | No | HTTP listen port (default: 3000) |
+| `TRUST_PROXY_HOPS` | Behind a proxy | How many reverse proxies in front of the server append X-Forwarded-For (default 0: the client address is the connection's, and a client-sent X-Forwarded-For is ignored). Set `1` behind a single edge proxy so per-client rate limits see the real client; the server logs a warning at boot while it is unset. Without it, every visitor behind the proxy reads as the proxy's one address and shares its rate limits |
 | `WALLET_ADDRESS` | For paid mode | Your USDC receiving address (Base) |
 | `WALLET_ENS` | No | ENS or Basename for display (e.g. `agent402.base.eth`) |
 | `NETWORK` | For paid mode | Primary chain (default: `base` = Base mainnet; `base-sepolia` for testnet) |

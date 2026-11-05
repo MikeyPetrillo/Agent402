@@ -141,7 +141,7 @@ const boot = async (extraEnv) => {
   const PORT = await getFreePort();
   const B = `http://127.0.0.1:${PORT}`;
   proc = spawn(process.execPath, ["src/server.js"], {
-    env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", CF_IP_RANGES_EXTRA: "", CDN_PROXY: "", CDN_ORIGIN_SECRET: "", POW_CHALLENGE_PER_MIN: "", ...extraEnv },
+    env: { ...process.env, TRUST_PROXY_HOPS: "1", PORT: String(PORT), FREE_MODE: "true", X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", CF_IP_RANGES_EXTRA: "", CDN_PROXY: "", CDN_ORIGIN_SECRET: "", POW_CHALLENGE_PER_MIN: "", ...extraEnv },
     stdio: "ignore",
   });
   let up = false;

@@ -24,7 +24,7 @@
 // reputation score. Two verdicts and a tally of counts. See recordSaleFeedback
 // in sales-ledger.js for why two, and feedbackByTool for why counts only.
 import { saleByTxFresh, recordSaleFeedback, feedbackForTx, feedbackByTool } from "../sales-ledger.js";
-import { payerFromRequest } from "../payer.js";
+import { identityPayerOf, freeModeOn, FREE_MODE_IDENTITY_NOTE } from "../payer.js";
 
 const MAX_REASON = 1000;
 
@@ -44,7 +44,7 @@ export function makeFeedbackHandler(deps = {}) {
   const lookup = deps.saleByTx || saleByTxFresh;
   const record = deps.recordSaleFeedback || recordSaleFeedback;
   const existing = deps.feedbackForTx || feedbackForTx;
-  const payerOf = deps.payerOf || payerFromRequest;
+  const payerOf = deps.payerOf || identityPayerOf;
   const log = deps.log || console.warn;
 
   return async (input, req) => {
@@ -69,6 +69,7 @@ export function makeFeedbackHandler(deps = {}) {
     // and receipts), so a signed payer is always derivable here and a buyer on
     // a rail we cannot read was never offered the route, never charged.
     const caller = payerOf(req);
+    if (!caller && freeModeOn()) throw bad(FREE_MODE_IDENTITY_NOTE, 400);
     if (!caller) {
       throw bad("Feedback is bound to the wallet that PAID for the call being rated, so this call must itself be paid with a signed EVM authorization from that wallet. Nothing was charged.", 403);
     }

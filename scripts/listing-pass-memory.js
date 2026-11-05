@@ -6,16 +6,19 @@
 //
 // A record file is kept as a workflow artifact by each run that buys:
 //
-//   listing-pass        .github/workflows/listing-pass.yml (pass-<leg>.json)
+//   listing-pass        .github/workflows/spend.yml, job listing-pass
+//                       (pass-<leg>.json; earlier runs: listing-pass.yml)
 //   payai-listing-pass  .github/workflows/payai-listing.yml (pass.json; the
-//                       PayAI-only pass this workflow replaced)
-//   mint-bazaar-rows    .github/workflows/mint-bazaar-rows.yml (pass-mint.json)
+//                       PayAI-only pass the listing pass replaced)
+//   mint-bazaar-rows    .github/workflows/spend.yml, job mint-bazaar-rows
+//                       (pass-mint.json; earlier runs: mint-bazaar-rows.yml)
 //
 // The artifacts are listed by name (GET /repos/{repo}/actions/artifacts?name=),
 // on any branch, and one counts when it has not expired, was created within
 // --days (default 14), was uploaded by a run of this repository (not a fork's
 // head) and its run's workflow file is the one that name belongs to (GET
-// /repos/{repo}/actions/runs/{id}). Each is downloaded (GET
+// /repos/{repo}/actions/runs/{id}); a name can belong to more than one file
+// while a retired workflow's artifacts are still inside the window. Each is downloaded (GET
 // .../artifacts/{id}/zip) and its JSON files unpacked under DIR/<artifact id>/.
 // Any API or unpack failure exits 1, so a run that cannot read its memory
 // never reaches the step that spends.
@@ -26,11 +29,11 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-/** Artifact name -> the workflow file whose runs may carry it. */
+/** Artifact name -> the workflow files whose runs may carry it. */
 export const MEMORY_ARTIFACTS = Object.freeze({
-  "listing-pass": ".github/workflows/listing-pass.yml",
-  "payai-listing-pass": ".github/workflows/payai-listing.yml",
-  "mint-bazaar-rows": ".github/workflows/mint-bazaar-rows.yml",
+  "listing-pass": Object.freeze([".github/workflows/spend.yml", ".github/workflows/listing-pass.yml"]),
+  "payai-listing-pass": Object.freeze([".github/workflows/payai-listing.yml"]),
+  "mint-bazaar-rows": Object.freeze([".github/workflows/spend.yml", ".github/workflows/mint-bazaar-rows.yml"]),
 });
 export const DEFAULT_MEMORY_DAYS = 14;
 
@@ -74,7 +77,7 @@ export async function fetchMemory({ repo, token, outDir, days = DEFAULT_MEMORY_D
   for (const a of picked) {
     const runId = a.workflow_run.id;
     if (!runPath.has(runId)) runPath.set(runId, String((await getJson(`/repos/${repo}/actions/runs/${runId}`))?.path || ""));
-    if (runPath.get(runId) !== MEMORY_ARTIFACTS[a.name]) { log(`  ignored ${a.name} ${a.id}: run ${runId} is ${runPath.get(runId) || "an unknown workflow"}`); continue; }
+    if (!MEMORY_ARTIFACTS[a.name].includes(runPath.get(runId))) { log(`  ignored ${a.name} ${a.id}: run ${runId} is ${runPath.get(runId) || "an unknown workflow"}`); continue; }
     // The zip endpoint redirects to signed storage; the token is not sent there.
     const res = await fetchImpl(`${api}/repos/${repo}/actions/artifacts/${a.id}/zip`, { headers, redirect: "manual", signal: AbortSignal.timeout(60_000) });
     const loc = res.headers?.get?.("location");

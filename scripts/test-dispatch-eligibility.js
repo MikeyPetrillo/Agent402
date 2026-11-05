@@ -6,7 +6,10 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";
-import { dispatchEligibility, spendChainsOf, SPEND_CHAIN_BY_NETWORK, DISPATCH_REASONS, dispatchLegend } from "../src/dispatch-eligibility.js";
+import { dispatchEligibility, spendChainsOf, SPEND_CHAIN_BY_NETWORK, DISPATCH_REASONS, dispatchLegend, unprovenLaneTerms } from "../src/dispatch-eligibility.js";
+import { routerLanes } from "../src/router-lanes.js";
+import { usdFigure } from "../src/price-usd.js";
+import { BASE_UNPROVEN_SELLER_DAILY_DEFAULT_USD, BASE_UNPROVEN_LANE_DAILY_DEFAULT_USD } from "../src/base-unproven.js";
 import { EXTERNAL_CHAIN_BY_NETWORK } from "../src/tools/route-execute.js";
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -195,6 +198,44 @@ ok(dispatchEligibility({ local: true }).reason === "local_catalog" && dispatchEl
   ok(dispatchEligibility({ ...base, settled: 0, priceUsd: 0.01, unprovenMaxUsd: 0.01, deliveryFailing: { base: true } }).chains.base.unprovenTier === undefined, "a failing delivery memo is something else wrong: no tier");
   ok(dispatchEligibility({ ...base, settled: 0, priceUsd: 0.01, unprovenMaxUsd: 0.01, urlTemplate: true }).chains.base.unprovenTier === undefined, "a path template: no tier");
   ok(typeof dispatchLegend()["routerDispatchByChain.base.unprovenTier"] === "string", "the legend explains unprovenTier");
+  // The shipped default ceiling (2026-11-05: $0.05), read from env as the router reads it.
+  {
+    const saved = process.env.SOR_BASE_UNPROVEN_MAX_USD;
+    delete process.env.SOR_BASE_UNPROVEN_MAX_USD;
+    const at = dispatchEligibility({ ...base, settled: 0, priceUsd: 0.05 });
+    ok(at.chains.base.unprovenTier === true && at.chains.base.unprovenMaxUsd === 0.05, "default ceiling: a $0.05 seller below the floor is in the unproven tier");
+    ok(dispatchEligibility({ ...base, settled: 0, priceUsd: 0.06 }).chains.base.unprovenTier === undefined, "default ceiling: a $0.06 seller is not");
+    if (saved === undefined) delete process.env.SOR_BASE_UNPROVEN_MAX_USD; else process.env.SOR_BASE_UNPROVEN_MAX_USD = saved;
+  }
+  // The lane's terms name each daily cap only while it is on (`off` or 0 drops
+  // it), on every surface that quotes them: the legend and a seller's lane note.
+  {
+    const keys = ["SOR_BASE_UNPROVEN_SELLER_DAILY_USD", "SOR_BASE_UNPROVEN_DAILY_USD", "SOR_BASE_UNPROVEN_MAX_USD"];
+    const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+    const tiered = [{ price: 0.01, routerDispatchByChain: { base: { eligible: false, reason: "settlement_required", unprovenTier: true } } }];
+    const cases = [
+      { name: "both caps on", seller: "", lane: "", wantSeller: true, wantLane: true },
+      { name: "per-seller cap off", seller: "off", lane: "", wantSeller: false, wantLane: true },
+      { name: "lane total off", seller: "", lane: "0", wantSeller: true, wantLane: false },
+      { name: "both caps off", seller: "0", lane: "off", wantSeller: false, wantLane: false },
+    ];
+    delete process.env.SOR_BASE_UNPROVEN_MAX_USD;
+    for (const c of cases) {
+      if (c.seller) process.env.SOR_BASE_UNPROVEN_SELLER_DAILY_USD = c.seller; else delete process.env.SOR_BASE_UNPROVEN_SELLER_DAILY_USD;
+      if (c.lane) process.env.SOR_BASE_UNPROVEN_DAILY_USD = c.lane; else delete process.env.SOR_BASE_UNPROVEN_DAILY_USD;
+      const legend = dispatchLegend()["routerDispatchByChain.base.unprovenTier"];
+      const note = routerLanes({ toolVerdicts: tiered, unprovenMaxUsd: 0.05, execTiers: [{ slug: "route-execute-plus", underlyingMaxUsd: 0.04 }] }).unproven.note;
+      for (const [surface, text] of [["legend", legend], ["lane note", note], ["terms", unprovenLaneTerms()]]) {
+        ok(/daily cap per seller/.test(text) === c.wantSeller && /lane's daily total/.test(text) === c.wantLane && /never past/.test(text) === (c.wantSeller || c.wantLane),
+           `${c.name}: the ${surface} names exactly the caps that are on (${text.slice(text.indexOf("never above"), text.indexOf("flagged"))})`);
+        ok(/flagged unproven on the buyer's receipt/.test(text) && !/, ,|never past ,|never past and/.test(text), `${c.name}: the ${surface} still reads as one clean sentence`);
+      }
+      ok(/at most \$0\.25 a day per seller/.test(note) === c.wantSeller && new RegExp(`${usdFigure(BASE_UNPROVEN_LANE_DAILY_DEFAULT_USD).replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")} a day in all`).test(note) === c.wantLane,
+         `${c.name}: the lane note's figures quote the same caps (${note.slice(note.lastIndexOf("("))})`);
+    }
+    ok(BASE_UNPROVEN_SELLER_DAILY_DEFAULT_USD === 0.25 && usdFigure(BASE_UNPROVEN_LANE_DAILY_DEFAULT_USD) === "$5.00", "the defaults the cases read are the shipped ones, printed in the shared figure format");
+    for (const k of keys) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+  }
   // The legend says whether the self-funding reader is on, so a reader can
   // tell a gross count from a netted one; the env switch turns it off.
   {
@@ -213,6 +254,18 @@ ok(dispatchEligibility({ local: true }).reason === "local_catalog" && dispatchEl
   ok(/\(a\.unproven \? 1 : 0\) - \(b\.unproven \? 1 : 0\)\) \|\| \(b\.settled - a\.settled\)/.test(srv), "the resolver orders unproven Base candidates after every proven one");
   ok(/live && chain === "base" && r\.unproven[\s\S]{0,400}readLivePayTo\(\)[\s\S]{0,200}if \(!livePayTo\)/.test(srv), "an unproven Base candidate with an unreadable live payTo is not paid");
   ok(/r\.unproven && chain === "base" && r\.chainProvenPayTo/.test(srv), "the payment is pinned to the unproven candidate's own live payTo");
+}
+
+// Every lane figure prints through usdFigure: the floor-only reason quotes the
+// ceiling and the cheapest route, the proven blocker the tier's cap and the
+// cheapest route, each as "$0.05" / "$0.10" / "$1.00", never "$0.1" or "$1".
+{
+  const floorRow = { price: 0.1, routerDispatchByChain: { base: { eligible: false, reason: "settlement_required" } } };
+  const r1 = routerLanes({ toolVerdicts: [floorRow], unprovenMaxUsd: 0.05, execTiers: [{ slug: "route-execute", underlyingMaxUsd: 1 }] }).unproven.reason || "";
+  ok(r1.includes(`priced above the ${usdFigure(0.05)} unproven ceiling (cheapest ${usdFigure(0.1)})`) && r1.includes("(cheapest $0.10)") && !/\$0\.1\)/.test(r1), `the floor-only reason prints both figures through usdFigure (${r1})`);
+  const provenRow = { price: 2, routerDispatchByChain: { base: { eligible: true } } };
+  const r2 = (routerLanes({ toolVerdicts: [provenRow], unprovenMaxUsd: 0.05, execTiers: [{ slug: "route-execute", underlyingMaxUsd: 1 }] }).proven.blockers || []).join(" ");
+  ok(r2.includes("tier's $1.00 underlying cap (route-execute; cheapest route $2.00)"), `the proven blocker prints the tier cap and cheapest route through usdFigure (${r2})`);
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);

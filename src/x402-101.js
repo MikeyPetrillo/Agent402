@@ -15,6 +15,7 @@
 // puzzle, the result and the receipts are fetched from this server at click
 // or load time. Counts in copy stay evergreen ("500+"). No em dashes.
 // Behaviour lives in assets/js/x402-101.js (CSP: no inline scripts).
+import { siteOrgLd } from "./site-org.js";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { routingProofSentence } from "./routing-proof.js";
 import { powCostPhrase } from "./pow.js";
@@ -212,11 +213,9 @@ export function x402101Page(baseUrl) {
       { "@type": "HowToStep", name: "Get", text: "The server verifies, does the work, settles the payment on chain, and returns the answer with a receipt." },
     ],
   };
-  const orgLd = { "@type": "Organization", "@id": `${baseUrl}/#organization`, name: "Agent402", url: baseUrl };
-  const breadcrumbLd = { "@type": "BreadcrumbList", itemListElement: [
-    { "@type": "ListItem", position: 1, name: "Agent402", item: `${baseUrl}/` },
-    { "@type": "ListItem", position: 2, name: "x402 & MPP 101", item: canonical },
-  ] };
+  const orgLd = siteOrgLd(baseUrl);
+  // No BreadcrumbList: the deck is full screen and shows no trail, and the
+  // structured data only describes what a reader sees.
   const body = `
 <div class="s101-wrap" id="s101" data-count="${SLIDES.length}">
 ${slides}
@@ -230,7 +229,7 @@ ${slides}
 ${ledgerFooterCompact()}`;
   return ledgerShell({
     title, description, canonical, baseUrl, activePath: "/what-is-x402", extraCss: CSS,
-    jsonLd: [orgLd, breadcrumbLd, howToLd],
+    jsonLd: [orgLd, howToLd],
     body,
   });
 }

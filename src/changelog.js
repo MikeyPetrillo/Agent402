@@ -3,8 +3,37 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 const ENTRIES = [
   {
     date: "2026-11-05",
+    title: "Payment libraries on x402 2.30, a wider unproven lane, one spend workflow",
+    items: [
+      "Payments: the x402 libraries are 2.30.0 and mppx 0.17.1. A money or identity check that runs before verify or settle and fails refuses the payment with a 402 and charges nothing; a Tempo charge whose broadcast is rejected as a replay recovers its receipt instead of answering a new 402.",
+      "Router: on Base an unproven seller is tried up to $0.05 a call (was $0.01), only after every proven candidate, paid at its own live 402's payTo, with at most $0.25 a day per seller and $5 a day across all unproven sellers.",
+      "Router: the unproven lane's terms name only the daily caps that are switched on, and the seller-trust and seller-dossier examples show the lane as the tool answers on a default host.",
+      "Tools: linkedin-article takes images only from fast-tier links its resizer can read; the fast tier still serves WebP to buyers.",
+      "Router: the per-seller unproven cap keys a path-scoped seller on its origin plus prefix, so tenants on one host keep their own day; each cap window keeps a running sum, rebuilt from the window when invalid and at least daily, so an older build during a deploy overlap cannot drift the cap.",
+      "Monitoring: the heartbeat signs its paywall read, and the status Worker pages \"Paywall not observed\" after three unobserved runs.",
+      "Security: a standing red-team suite runs in CI against the MCP connector, the seller judge, decide, the fetch guard, the router's payer and report prose. MCP refusals quote an echoed name as data, and the listing and judge screens read markup-split, lookalike and tool-abuse wordings of the same text.",
+      "Router: route-execute is graded step by step in CI: 56 fixed tasks run the real paid server, resolver and payer against stub sellers and check every step from the candidate set to the receipt. The unproven lane reads the same verdict as the public label, at the seller's live payTo, so a seller paid at a shared settlement wallet is not tried there.",
+      "Security: in FREE_MODE identity-bound routes take no wallet identity from an unverified payment header (memory uses its demo namespace, the others answer 400); TRUST_PROXY_HOPS defaults to 0 when unset, with a boot warning; MCP prompt arguments are quoted as data, bounded and stripped of hidden characters; a paid server answers a job created by a FREE_MODE server as not found.",
+      "Upgrade note: TRUST_PROXY_HOPS unset now reads 0 (it read 1), and an explicit 0, which used to read as 1, is honored: set TRUST_PROXY_HOPS=1 behind one edge proxy. With no hop trusted, the server warns once when a loopback or private peer sends X-Forwarded-For. Without it, every visitor behind the proxy reads as the proxy's one address and shares its rate limits.",
+      "Limits: the unpaid price-check budget counts per client address (an IPv6 /64 as one) whatever the User-Agent; a named indexer or search crawler reads against ten times the budget on its address, each User-Agent on Cloudflare's shared Worker address gets its own budget under a ceiling for the address, and only our signed probes are exempt.",
+      "Index: a failed paywall check is re-run after 24 hours and when a seller registers again, and the check skips a templated route.",
+      "Gateway: /v1/images/fast now falls over to Recraft V4.1 Flash (WebP) and /v1/images/generations to MAI-Image-2.6 Flash (PNG), ahead of GPT-5 Image Mini's upstream expiry; the former id is still accepted in model. The live model guard checks every image, video and speech link's upstream expiration date.",
+      "Speech: /v1/audio/speech and the /api/tts backups move from MAI-Voice-2 and MAI-Voice-2-Flash (upstream expiry 2026-12-31) to MAI-Voice-2.1 and MAI-Voice-2.1-Flash, with a distinct English voice per voice name; the former model and voice ids are still accepted.",
+      "Pages: operator pages tell search engines not to index them, and the sitemap lists only pages that are their own canonical.",
+      "Pages: structured data names one site entity, Agent402, part of Havok Holdings LLC, as every page's author and publisher.",
+      "Pages: report, skill, blog, guide, docs, category and marketplace pages show a breadcrumb trail that matches their structured data, and seeded SEC report pages carry the date of the newest filing they show.",
+      "Surfaces: the agent hosts guide adds Agent402 to a HarnessRouter workspace as a remote MCP server under Add-ons, with a harness create that lists the connector, the free proof-of-work tools, and how paid tools answer on the connector.",
+      "Operations: the spend jobs run from one workflow, each behind the same approval; only the listing pass is scheduled (weekly, still waiting for that approval, and paging only when it ran and failed).",
+      "Packages: agent402-mcp 0.13.28 runs on x402 2.30 and MCP SDK 1.32.2, and every install pin names it.",
+    ],
+  },
+  {
+    date: "2026-11-05",
     title: "Audio-only decoding, refused redirects answer 400, documented gateway fields",
     items: [
+      "Index: the index keeps at most 5000 tools per seller, described tools first, and shows the listed count beside it.",
+      "Index: a seller listing that cannot be read is dropped alone; every other seller still routes, and /api/gateway-status gains containedTurns and brokenListings.",
+      "Gateway: on the Messages wire, citation text counts against the tier's input cap.",
       "Tools: media-info, audio-convert and audio-normalize decode audio streams only. media-info still lists every stream: a video, image or subtitle stream is read from the container headers and carries decoded: false, with null for a resolution only its decoder would know. A file with no audio stream converts to nothing and answers 422, as before.",
       "Tools: render and screenshot answer 400 (not charged) when the page's navigation is redirected to a host the browser may not load, instead of rendering the refusal as the page.",
       "Tools: html-frames runs documents in a browser of its own with the JavaScript JIT off, so WebAssembly is not available to a document; plain script, canvas, SVG and CSS animation render as before. After 5 failed documents from one payer in 10 minutes, the next answers 429 with Retry-After.",
@@ -748,6 +777,9 @@ const ENTRIES = [
     ],
   },
 ];
+
+/** The dated groups the page and the feed render (read by scripts/test-changelog-parity.js). */
+export const CHANGELOG_ENTRIES = ENTRIES;
 
 export function changelogRss(baseUrl) {
   const xmlEsc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");

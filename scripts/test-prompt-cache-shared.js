@@ -19,7 +19,7 @@ ok((await K.promptCacheGetShared(key)) === null, "a key nobody stored is a miss"
 execFileSync(process.execPath, ["--input-type=module", "-e", `
   const K = await import(${JSON.stringify(new URL("../src/tools/llm-gateway-kit.js", import.meta.url).href)});
   K.promptCacheStore(${JSON.stringify(key)}, ${JSON.stringify(body)});
-  await new Promise((r) => setTimeout(r, 500));
+  await K.promptCacheWritesSettled();
   process.exit(0);
 `], { env: process.env, stdio: "inherit", timeout: 30_000 });
 ok(K.promptCacheGet(key) === null, "this process's own store does not have it (the old per-replica miss)");
@@ -35,7 +35,7 @@ ok(/const hit = await promptCacheGetShared\(key\);/.test(src), "the pre-paywall 
   execFileSync(process.execPath, ["--input-type=module", "-e", `
     const W = await import(${JSON.stringify(new URL("../src/well-known-store.js", import.meta.url).href)});
     W.registerWellKnown(${JSON.stringify(path)}, { token: "abc" });
-    await new Promise((r) => setTimeout(r, 500));
+    await W.wellKnownWritesSettled();
     process.exit(0);
   `], { env: process.env, stdio: "inherit", timeout: 30_000 });
   ok(W.getWellKnown(path) === null, "a verification file registered on another process is not in this one's store");
@@ -43,7 +43,7 @@ ok(/const hit = await promptCacheGetShared\(key\);/.test(src), "the pre-paywall 
   ok(got && JSON.parse(got.body).token === "abc" && got.contentType === "application/json", "...and is served from the shared copy");
   ok((await W.getWellKnownShared("x402")) === null, "a reserved name never reads the shared cache");
   W.removeWellKnown(path);
-  await new Promise((r) => setTimeout(r, 300));
+  await W.wellKnownWritesSettled();
   ok((await W.getWellKnownShared(path)) === null, "a removal leaves a tombstone, so no process serves it again");
 }
 const { closeSharedRedis } = await import("../src/shared-limit.js");

@@ -143,7 +143,11 @@ for (const [name, j] of Object.entries(jobs)) {
   const mergeStyle = /gh pr merge[^\n]*--squash/.test(mog) ? "squash" : "merge";
   ok(mergeStyle === "merge", "merge-on-green.sh merges with --merge (PR title lands in the BODY)");
   // If either side ever changes, the guidance below is what has to change with it.
-  const claude = readFileSync(new URL("../CLAUDE.md", import.meta.url), "utf8");
+  // The guidance lives in CLAUDE.md or a path-scoped .claude/rules/*.md file,
+  // so read them as one text: a paragraph moved between them stays checked.
+  const rulesDir = new URL("../.claude/rules/", import.meta.url);
+  const claude = [readFileSync(new URL("../CLAUDE.md", import.meta.url), "utf8"),
+    ...readdirSync(rulesDir).filter((f) => f.endsWith(".md")).sort().map((f) => readFileSync(new URL(f, rulesDir), "utf8"))].join("\n");
   ok(/marker in a COMMIT SUBJECT/.test(claude),
      "CLAUDE.md tells the next author to put the marker in a commit SUBJECT, not the PR title");
   ok(!/put the marker in the PR TITLE so the merge commit carries it/.test(claude),
@@ -169,9 +173,9 @@ for (const [name, j] of Object.entries(jobs)) {
 // cannot drift apart. The listing pass (scripts/payai-listing-pass.js) pays
 // with the Base and Solana burners AND the operator token (the settle-via gate). A
 // job a commit subject can start is a job a branch push can start with a
-// modified script, so it is not a deploy.yml job at all: it lives in its own
-// workflow with a schedule and a dispatch, no push trigger, and sits in the
-// spending environment.
+// modified script, so it is not a deploy.yml job at all: it is a job of
+// spend.yml, the one owner-dispatched spend workflow (no schedule, no push
+// trigger), and sits in the spending environment.
 {
   const wfText = readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8");
   const m = wfText.match(/MARKERS="([^"]+)"/);
@@ -183,19 +187,37 @@ for (const [name, j] of Object.entries(jobs)) {
   }
   ok(!/node scripts\/payai-listing-pass\.js/.test(wfText), "deploy.yml never runs the listing pass: a push could carry a modified script to the operator token");
 
-  const listing = load(readFileSync(new URL("../.github/workflows/listing-pass.yml", import.meta.url), "utf8"));
-  const on = listing.on || listing[true] || {};
-  const crons = [].concat(on.schedule || []).map((s) => String(s.cron || ""));
-  ok(crons.length === 1 && /^\d{1,2} \d{1,2} \* \* [0-6]$/.test(crons[0]), `the listing pass runs on one weekly cron (${crons.join(", ")})`);
-  ok(!("push" in on) && !("pull_request" in on), "the listing pass has no push or pull_request trigger");
+  const spend = load(readFileSync(new URL("../.github/workflows/spend.yml", import.meta.url), "utf8"));
+  // One spend job per choice: a sub-workflow of the jobs a choice runs.
+  const jobsFor = (name) => ({ ...spend, jobs: Object.fromEntries(Object.entries(spend.jobs || {}).filter(([, j]) => new RegExp(`inputs\\.job == '${name}'`).test(String(j.if || "")))) });
+  const listing = jobsFor("listing-pass");
+  const on = spend.on || spend[true] || {};
+  ok(Object.keys(on).sort().join() === "schedule,workflow_dispatch", `spend.yml runs on dispatch and one schedule only: no push or pull_request trigger (${Object.keys(on).join(", ")})`);
+  ok(Array.isArray(on.schedule) && on.schedule.length === 1, "spend.yml carries exactly one schedule");
+  // A scheduled run has no inputs, so only the listing pass and its report may
+  // name the schedule; every other job stays dispatch-only.
+  for (const [name, j] of Object.entries(spend.jobs || {})) {
+    const sched = /github\.event_name == 'schedule'/.test(String(j.if || ""));
+    ok(sched === (name === "listing-pass" || name === "listing-pass-report"), `${name}: ${sched ? "runs" : "does not run"} on the weekly schedule`);
+  }
+  const choices = on.workflow_dispatch?.inputs?.job?.options || [];
+  ok(on.workflow_dispatch?.inputs?.job?.type === "choice" && on.workflow_dispatch?.inputs?.job?.required === true && choices.includes("listing-pass") && choices.includes("mint-bazaar-rows"), "a required job choice picks the spend job");
+  for (const c of choices) {
+    const own = Object.entries(jobsFor(c).jobs);
+    // The listing pass alone also runs on the weekly schedule (asserted above).
+    const gate = c === "listing-pass" ? `\\(?inputs\\.job == '${c}' \\|\\| github\\.event_name == 'schedule'\\)?` : `inputs\\.job == '${c}'`;
+    ok(own.length >= 1 && own.every(([, j]) => new RegExp(`^(always\\(\\) && )?${gate}$`).test(String(j.if || ""))), `choice ${c} runs only its own job(s), each gated on the choice`);
+    ok(own.some(([, j]) => j.environment === "spending"), `choice ${c} keeps the spending environment's approval`);
+  }
+  ok(Object.values(spend.jobs || {}).every((j) => /inputs\.job == '/.test(String(j.if || ""))), "every spend.yml job is gated on the job choice");
   const inputs = on.workflow_dispatch?.inputs || {};
   ok("max_spend_usd" in inputs && "max_price_usd" in inputs, "its dispatch takes the run ceiling and the optional per-route cap");
   ok(String(inputs.max_price_usd?.default ?? "") === "" && Number(inputs.max_spend_usd?.default) >= 20, "no per-route cap by default; a per-run ceiling by default");
   ok(/bazaar-base/.test(String(inputs.legs?.default || "")) && /bazaar-solana/.test(String(inputs.legs?.default || "")) && /payai-solana/.test(String(inputs.legs?.default || "")) && /payai-base/.test(String(inputs.legs?.default || "")), "its default legs cover both registries on both chains");
-  ok(JSON.stringify(listing.permissions) === JSON.stringify({ contents: "read", issues: "write", actions: "read" }), "its token can read the tree and artifacts and write issues, nothing else");
-  ok(!!listing.concurrency?.group && listing.concurrency?.["cancel-in-progress"] === false, "one run at a time: a second run queues behind the first instead of racing the burner's nonces");
   const ljobs = listing.jobs || {};
   const spender = Object.values(ljobs).find((j) => (j.steps || []).some((st) => /payai-listing-pass\.js/.test(String(st.run || ""))));
+  ok(Object.values(ljobs).length === 2 && Object.values(ljobs).every((j) => JSON.stringify(j.permissions) === JSON.stringify({ contents: "read", issues: "write", actions: "read" })), "its token can read the tree and artifacts and write issues, nothing else");
+  ok(!!spender?.concurrency?.group && spender?.concurrency?.["cancel-in-progress"] === false, "one run at a time: a second run queues behind the first instead of racing the burner's nonces");
   ok(!!spender, "a job in the listing workflow runs the pass");
   ok(String(spender?.environment || "") === "spending", "that job carries the spending environment");
   const run = (spender?.steps || []).map((st) => String(st.run || "")).join("\n");
@@ -227,7 +249,7 @@ for (const [name, j] of Object.entries(jobs)) {
   ok(/add-mask::\$AGENT402_OPERATOR_TOKEN/.test(run) && /add-mask::\$SOLANA_BURNER_KEY/.test(run) && /add-mask::\$BURNER_KEY/.test(run) && /add-mask::\$POW_SECRET/.test(run), "all four secrets are masked in its log");
   const stepEnv = Object.assign({}, ...(spender?.steps || []).map((st) => st.env || {}));
   ok(!spender?.env?.SOLANA_BURNER_KEY && !spender?.env?.BURNER_KEY && !spender?.env?.AGENT402_OPERATOR_TOKEN && !spender?.env?.POW_SECRET, "no secret sits at job scope, where the dependency install could read it");
-  const mint = load(readFileSync(new URL("../.github/workflows/mint-bazaar-rows.yml", import.meta.url), "utf8"));
+  const mint = jobsFor("mint-bazaar-rows");
   const mintEnv = Object.assign({}, ...Object.values(mint.jobs || {}).flatMap((j) => (j.steps || []).map((st) => st.env || {})));
   const mUp = uploads(mint);
   const mintRun = Object.values(mint.jobs || {}).flatMap((j) => j.steps || []).map((st) => String(st.run || "")).join("\n");
@@ -241,27 +263,14 @@ for (const [name, j] of Object.entries(jobs)) {
   ok(installOf(spender) && installOf(spender) === installOf(sibling), "it installs the same client packages as bazaar-solana, one line to keep pinned");
   const reporter = Object.values(ljobs).find((j) => /gh issue create/.test((j.steps || []).map((st) => String(st.run || "")).join("\n")));
   const report = (reporter?.steps || []).map((st) => String(st.run || "")).join("\n");
-  ok(!!reporter && String(reporter.if || "") === "always()" && [].concat(reporter.needs || []).length === 1, "a report job runs after the pass whatever its result");
+  ok(!!reporter && String(reporter.if || "") === "always() && (inputs.job == 'listing-pass' || github.event_name == 'schedule')" && [].concat(reporter.needs || []).length === 1, "a report job runs after the pass whatever its result, and only on a listing-pass dispatch");
+  const lp = listing.jobs["listing-pass"] || {};
+  ok(lp.outputs?.started === "${{ steps.started.outputs.started }}" && (lp.steps || [])[0]?.id === "started", "the listing pass marks itself started in its first step");
+  ok((reporter?.steps || []).some((st) => st.env?.STARTED === "${{ needs.listing-pass.outputs.started }}") && /if \[ "\$STARTED" != "true" \]; then[\s\S]*?exit 0[\s\S]*?if \[ "\$PASS" != "success" \]/.test(report), "a pass that never started (approval not given) pages nothing");
   ok(/TITLE="Listing pass FAILED"/.test(report) && /in:title/.test(report) && /gh issue comment .*Still failing/.test(report) && /gh issue close .*Recovered/.test(report), "it keeps one issue by title: open, Still failing, Recovered on the next green run");
 
-  // The weekly slot collides with no other schedule in the repository: same
-  // minute and hour on a day the other cron also fires.
-  const field = (f, v) => String(f).split(",").some((part) => {
-    if (part === "*") return true;
-    const step = part.match(/^\*\/(\d+)$/); if (step) return v % Number(step[1]) === 0;
-    const range = part.match(/^(\d+)-(\d+)$/); if (range) return v >= Number(range[1]) && v <= Number(range[2]);
-    return Number(part) === v;
-  });
-  const [min, hour, , , dow] = crons[0].split(" ").map((x, i) => (i === 2 || i === 3 ? x : Number(x)));
-  const dir = new URL("../.github/workflows/", import.meta.url);
-  const clashes = [];
-  for (const f of readdirSync(dir).filter((x) => /\.ya?ml$/.test(x) && x !== "listing-pass.yml")) {
-    for (const c of readFileSync(new URL(f, dir), "utf8").matchAll(/cron:\s*"([^"]+)"/g)) {
-      const [m2, h2, , , d2] = c[1].trim().split(/\s+/);
-      if (field(m2, min) && field(h2, hour) && field(d2, dow)) clashes.push(`${f} (${c[1]})`);
-    }
-  }
-  ok(clashes.length === 0, clashes.length ? `the listing slot collides with: ${clashes.join(", ")}` : "the listing slot shares its minute and hour with no other schedule");
+  // The one schedule starts the listing pass, behind the same approval.
+  ok(listing.jobs["listing-pass"]?.environment === "spending", "the scheduled listing pass waits for the spending approval");
 }
 
 console.log(`${pass} passed, ${fail} failed`);

@@ -1,0 +1,201 @@
+{
+  "about": "Golden trajectories for route-execute's external leg, graded step by step by scripts/test-golden-trajectories.js. Every seller is a stub on loopback under .golden.test; tasks run in order against one booted paid server, so a task may read state an earlier one left (a delivery strike, an unproven seller's daily spend). Wallet ids name addresses in `wallets`; $TREASURY and $SPENDING are this host's own payTo and spending wallet.",
+  "env": {
+    "SOR_BASE_UNPROVEN_MAX_USD": "0.01",
+    "SOR_BASE_UNPROVEN_SELLER_DAILY_USD": "0.02",
+    "SOR_BASE_UNPROVEN_DAILY_USD": "5",
+    "SOR_MIN_SETTLED_TX": "50",
+    "SOR_MIN_DISTINCT_PAYERS": "3",
+    "SOR_MAX_CANDIDATES": "3",
+    "SOR_REFUSAL_WINDOW_S": "6"
+  },
+  "wallets": {
+    "qa": "0x5e11e70000000000000000000000000000000001",
+    "qb": "0x5e11e70000000000000000000000000000000002",
+    "qc": "0x5e11e70000000000000000000000000000000003",
+    "na": "0x5e11e70000000000000000000000000000000011",
+    "nb": "0x5e11e70000000000000000000000000000000012",
+    "pa": "0x5e11e70000000000000000000000000000000021",
+    "pa_live": "0x5e11e70000000000000000000000000000000022",
+    "pb": "0x5e11e70000000000000000000000000000000023",
+    "pb_bait": "0x5e11e70000000000000000000000000000000024",
+    "pc": "0x5e11e70000000000000000000000000000000025",
+    "ca_list": "0x5e11e70000000000000000000000000000000031",
+    "ca_live": "0x5e11e70000000000000000000000000000000032",
+    "aa": "0x5e11e70000000000000000000000000000000041",
+    "ab": "0x5e11e70000000000000000000000000000000042",
+    "za": "0x5e11e70000000000000000000000000000000051",
+    "zb": "0x5e11e70000000000000000000000000000000052",
+    "ob": "0x5e11e70000000000000000000000000000000062",
+    "shared": "0x5e11e700000000000000000000000000000000a1",
+    "shared_busy": "0x5e11e700000000000000000000000000000000a2",
+    "va": "0x5e11e70000000000000000000000000000000071",
+    "vb": "0x5e11e70000000000000000000000000000000072",
+    "vc": "0x5e11e70000000000000000000000000000000073",
+    "ia": "0x5e11e70000000000000000000000000000000081",
+    "ib": "0x5e11e70000000000000000000000000000000082",
+    "ic": "0x5e11e70000000000000000000000000000000083",
+    "sdn": "0x5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+    "lb": "0x5e11e70000000000000000000000000000000092",
+    "fa": "0x5e11e700000000000000000000000000000000b1",
+    "fb": "0x5e11e700000000000000000000000000000000b2",
+    "nv": "0x5e11e700000000000000000000000000000000c1",
+    "ta": "0x5e11e700000000000000000000000000000000d1",
+    "tb": "0x5e11e700000000000000000000000000000000d2",
+    "tc": "0x5e11e700000000000000000000000000000000d3",
+    "ra": "0x5e11e700000000000000000000000000000000e1",
+    "sa": "0x5e11e700000000000000000000000000000000e2",
+    "ka": "0x5e11e700000000000000000000000000000000f1",
+    "kb": "0x5e11e700000000000000000000000000000000f2",
+    "ma": "0x5e11e70000000000000000000000000000000101",
+    "pi": "0x5e11e70000000000000000000000000000000111",
+    "ea": "0x5e11e70000000000000000000000000000000121",
+    "eb": "0x5e11e70000000000000000000000000000000122",
+    "ua": "0x5e11e70000000000000000000000000000000131",
+    "ub": "0x5e11e70000000000000000000000000000000132"
+  },
+  "sellers": {
+    "qa": { "host": "quasar-prime", "slug": "quasar-spectrum", "about": "quasar spectrum analysis of a light curve", "price": 0.02, "payTo": "qa", "settled": 900, "payers": 40 },
+    "qb": { "host": "quasar-second", "slug": "quasar-spectrum", "about": "quasar spectrum analysis, second source", "price": 0.015, "payTo": "qb", "settled": 300, "payers": 12 },
+    "qc": { "host": "quasar-crowd", "slug": "quasar-spectrum", "about": "quasar spectrum analysis, one busy buyer", "price": 0.005, "payTo": "qc", "settled": 5000, "payers": 1 },
+
+    "na": { "host": "nebula-flaky", "slug": "nebula-render", "about": "nebula render of a star field", "price": 0.03, "payTo": "na", "settled": 800, "payers": 30, "paid": "take-and-fail" },
+    "nb": { "host": "nebula-steady", "slug": "nebula-render", "about": "nebula render of a star field, backup", "price": 0.025, "payTo": "nb", "settled": 200, "payers": 10 },
+
+    "pa": { "host": "pulsar-switch", "slug": "pulsar-timing", "about": "pulsar timing residuals", "price": 0.02, "payTo": "pa", "settled": 700, "payers": 25, "livePayTo": "pa_live" },
+    "pb": { "host": "pulsar-bait", "slug": "pulsar-timing", "about": "pulsar timing residuals, fast", "price": 0.02, "payTo": "pb", "settled": 650, "payers": 20, "routerPayTo": "pb_bait" },
+    "pc": { "host": "pulsar-honest", "slug": "pulsar-timing", "about": "pulsar timing residuals, plain", "price": 0.02, "payTo": "pc", "settled": 100, "payers": 8 },
+
+    "ca": { "host": "comet-mover", "slug": "comet-perihelion", "about": "comet perihelion distance", "price": 0.008, "payTo": "ca_list", "livePayTo": "ca_live" },
+
+    "aa": { "host": "aurora-pricey", "slug": "aurora-forecast", "about": "aurora forecast by latitude", "price": 0.03, "payTo": "aa" },
+    "ab": { "host": "borealis-creep", "slug": "borealis-tide", "about": "borealis tide estimate", "price": 0.009, "quote": 30000, "payTo": "ab" },
+
+    "za": { "host": "zenith-tiny", "slug": "zenith-index", "about": "zenith index of a sky position", "price": 0.01, "payTo": "za" },
+    "zb": { "host": "zenith-alt", "slug": "zenith-backup", "about": "zenith index backup source", "price": 0.009, "payTo": "zb" },
+
+    "oa": { "host": "orbit-self", "slug": "orbit-almanac", "about": "orbit almanac of a satellite", "price": 0.006, "payTo": "$TREASURY" },
+    "ob": { "host": "orbit-other", "slug": "orbit-almanac-copy", "about": "orbit almanac copy", "price": 0.007, "payTo": "ob" },
+    "oc": { "host": "kestrel-mirror", "slug": "kestrel-mirror", "about": "kestrel mirror service", "price": 0.02, "payTo": "$SPENDING", "settled": 400, "payers": 15 },
+
+    "ha": { "host": "marina-one", "slug": "marina-berth", "about": "marina berth table", "price": 0.01, "payTo": "shared" },
+    "hb": { "host": "jetty-two", "slug": "jetty-wave", "about": "jetty wave height", "price": 0.01, "payTo": "shared" },
+    "hc": { "host": "quay-busy", "slug": "quay-dock", "about": "quay dock schedule", "price": 0.01, "payTo": "shared_busy", "walletSettled": 5000, "walletPayers": 200 },
+
+    "va": { "host": "vega-slow", "slug": "vega-scan", "about": "vega scan of a field", "price": 0.02, "payTo": "va", "settled": 500, "payers": 20, "delayMs": 700 },
+    "vb": { "host": "lyra-stall", "slug": "lyra-probe", "about": "lyra probe readings", "price": 0.02, "payTo": "vb", "settled": 900, "payers": 30, "probeDelayMs": 7500 },
+    "vc": { "host": "lyra-quick", "slug": "lyra-probe", "about": "lyra probe readings, quick", "price": 0.02, "payTo": "vc", "settled": 300, "payers": 10 },
+
+    "ia": { "host": "isotope-down-one", "slug": "isotope-stream", "about": "isotope stream density", "price": 0.02, "payTo": "ia", "settled": 900, "payers": 30, "bare": 503 },
+    "ib": { "host": "isotope-down-two", "slug": "isotope-stream", "about": "isotope stream density, second copy", "price": 0.02, "payTo": "ib", "settled": 600, "payers": 20, "bare": 503 },
+    "ic": { "host": "isotope-crowd", "slug": "isotope-stream", "about": "isotope stream density, one busy buyer", "price": 0.004, "payTo": "ic", "settled": 3000, "payers": 1 },
+
+    "la": { "host": "lumen-listed", "slug": "lumen-archive", "about": "lumen archive search", "price": 0.02, "payTo": "sdn", "settled": 800, "payers": 30 },
+    "lb": { "host": "lumen-clean", "slug": "lumen-archive", "about": "lumen archive search, clean", "price": 0.02, "payTo": "lb", "settled": 100, "payers": 5 },
+
+    "fa": { "host": "flux-badname", "slug": "flux-convert", "about": "flux unit convert", "price": 0.02, "payTo": "fa", "settled": 800, "payers": 30, "liveDomainName": "USDC" },
+    "fb": { "host": "flux-good", "slug": "flux-convert", "about": "flux unit convert, good", "price": 0.02, "payTo": "fb", "settled": 100, "payers": 5 },
+
+    "nv": { "host": "nova-open", "slug": "nova-lookup", "about": "nova lookup by name", "price": 0.02, "payTo": "nv", "settled": 300, "payers": 10, "bare": 200 },
+
+    "ta": { "host": "tachyon-heavy", "slug": "tachyon-burst", "about": "tachyon burst model", "price": 0.06, "payTo": "ta", "settled": 900, "payers": 30 },
+    "tb": { "host": "tachyon-mid", "slug": "tachyon-burst", "about": "tachyon burst model, mid", "price": 0.03, "quote": 50000, "payTo": "tb", "settled": 200, "payers": 10 },
+    "tc": { "host": "tachyon-lite", "slug": "tachyon-burst", "about": "tachyon burst model, lite", "price": 0.01, "payTo": "tc", "settled": 100, "payers": 5 },
+
+    "ra": { "host": "rho-get", "slug": "rho-quote", "about": "rho quote for a symbol", "price": 0.01, "payTo": "ra", "settled": 300, "payers": 10, "method": "GET" },
+
+    "sa": { "host": "sigma-sol", "slug": "sigma-ledger", "about": "sigma ledger rows", "price": 0.01, "payTo": "sa", "settled": 300, "payers": 10, "networks": ["solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"] },
+
+    "ka": { "host": "kappa-taker", "slug": "kappa-relay", "about": "kappa relay message", "price": 0.02, "payTo": "ka", "settled": 500, "payers": 20, "paid": "take-and-fail" },
+    "kb": { "host": "kappa-fresh", "slug": "kappa-relay", "about": "kappa relay message, fresh", "price": 0.005, "payTo": "kb" },
+
+    "ma": { "host": "muon-wobble", "slug": "muon-sample", "about": "muon sample draw", "price": 0.02, "payTo": "ma", "settled": 400, "payers": 15, "paid": "fail-first" },
+
+    "pi": { "host": "pi-discount", "slug": "pi-digits", "about": "pi digits by range", "price": 0.03, "quote": 15000, "payTo": "pi", "settled": 300, "payers": 10 },
+
+    "ea": { "host": "eta-refuser", "slug": "eta-ephemeris", "about": "eta ephemeris table", "price": 0.02, "payTo": "ea", "settled": 900, "payers": 30, "paid": "refuse" },
+    "eb": { "host": "eta-backup", "slug": "eta-ephemeris", "about": "eta ephemeris table, backup", "price": 0.02, "payTo": "eb", "settled": 100, "payers": 5 },
+
+    "ua": { "host": "upsilon-edge", "slug": "upsilon-gauge", "about": "upsilon gauge reading", "price": 0.01, "payTo": "ua" },
+    "ub": { "host": "omicron-over", "slug": "omicron-sweep", "about": "omicron sweep reading", "price": 0.0101, "payTo": "ub" }
+  },
+  "tasks": [
+    { "id": "quasar-proven-first", "task": "quasar spectrum", "expect": { "candidates": ["qa", "qb", "qc"], "tried": ["qa"], "chosen": "qa", "lane": "proven", "signed": [["qa", 20000]], "settle": { "buyer": "settled", "sellerCharged": ["qa"] }, "booking": { "outbound": [["qa", "delivered"]], "exposureUsd": 0 }, "receipt": { "seller": "qa", "sellerProof": null, "underlyingPriceUsd": 0.02 }, "status": 200 } },
+    { "id": "quasar-cap-narrows", "task": "quasar spectrum", "maxUsd": 0.016, "expect": { "candidates": ["qb", "qc"], "tried": ["qb"], "chosen": "qb", "lane": "proven", "signed": [["qb", 15000]], "settle": { "buyer": "settled", "sellerCharged": ["qb"] }, "booking": { "outbound": [["qb", "delivered"]], "exposureUsd": 0 }, "receipt": { "seller": "qb", "sellerProof": null, "underlyingPriceUsd": 0.015 }, "status": 200 } },
+    { "id": "quasar-unproven-by-breadth", "task": "quasar spectrum", "maxUsd": 0.006, "expect": { "candidates": ["qc"], "tried": ["qc"], "chosen": "qc", "lane": "unproven", "signed": [["qc", 5000]], "settle": { "buyer": "settled", "sellerCharged": ["qc"] }, "booking": { "outbound": [["qc", "delivered"]], "exposureUsd": 0 }, "receipt": { "seller": "qc", "sellerProof": "unproven", "underlyingPriceUsd": 0.005 }, "status": 200 } },
+    { "id": "quasar-pinned-target", "task": "quasar spectrum", "target": "qb", "expect": { "candidates": ["qb"], "tried": ["qb"], "chosen": "qb", "lane": "proven", "signed": [["qb", 15000]], "settle": { "buyer": "settled", "sellerCharged": ["qb"] }, "booking": { "outbound": [["qb", "delivered"]], "exposureUsd": 0 }, "receipt": { "seller": "qb", "sellerProof": null, "underlyingPriceUsd": 0.015 }, "status": 200 } },
+    { "id": "quasar-short-authorization", "task": "quasar spectrum", "validForSeconds": 12, "expect": { "candidates": ["qa", "qb", "qc"], "tried": [], "chosen": null, "lane": null, "signed": [], "settle": { "buyer": "cancelled", "sellerCharged": [] }, "booking": { "outbound": [], "exposureUsd": 0 }, "receipt": null, "status": 504 } },
+    { "id": "quasar-unpaid", "task": "quasar spectrum", "unpaid": true, "expect": { "candidates": null, "tried": [], "chosen": null, "lane": null, "signed": [], "settle": { "buyer": "none", "sellerCharged": [] }, "booking": { "outbound": [], "exposureUsd": 0 }, "receipt": null, "status": 402 } },
+
+    { "id": "nebula-takes-and-fails-1", "task": "nebula render", "expect": { "candidates": ["na", "nb"], "tried": ["na"], "chosen": null, "lane": null, "signed": [["na", 30000]], "settle": { "buyer": "cancelled", "sellerCharged": ["na"] }, "booking": { "outbound": [["na", "undelivered"]], "exposureUsd": 0.03 }, "receipt": null, "status": 502 } },
+    { "id": "nebula-takes-and-fails-2", "task": "nebula render", "expect": { "candidates": ["na", "nb"], "tried": ["na"], "chosen": null, "lane": null, "signed": [["na", 30000]], "settle": { "buyer": "cancelled", "sellerCharged": ["na"] }, "booking": { "outbound": [["na", "undelivered"]], "exposureUsd": 0.03 }, "receipt": null, "status": 502 } },
+    { "id": "nebula-memo-skips-failing", "task": "nebula render", "expect": { "candidates": ["nb"], "tried": ["nb"], "chosen": "nb", "lane": "proven", "signed": [["nb", 25000]], "settle": { "buyer": "settled", "sellerCharged": ["nb"] }, "booking": { "outbound": [["nb", "delivered"]], "exposureUsd": 0 }, "receipt": { "seller": "nb", "sellerProof": null, "underlyingPriceUsd": 0.025 }, "status": 200 } },
+    { "id": "nebula-memo-holds", "task": "nebula render", "tier": "max", "expect": { "candidates": ["nb"], "tried": ["nb"], "chosen": "nb", "lane": "proven", "signed": [["nb", 25000]], "settle": { "buyer": "settled", "sellerCharged": ["nb"] }, "booking": { "outbound": [["nb", "delivered"]], "exposureUsd": 0 }, "receipt": { "seller": "nb", "sellerProof": null, "underlyingPriceUsd": 0.025 }, "status": 200 } },
+
+    { "id": "pulsar-payto-switch-and-bait", "task": "pulsar timing", "expect": { "candidates": ["pb", "pc"], "tried": ["pb", "pc"], "chosen": "pc", "lane": "proven", "signed": [["pc", 20000]], "settle": { "buyer": "settled", "sellerCharged": ["pc"] }, "booking": { "outbound": [["pc", "delivered"]], "exposureUsd": 0 }, "receipt": { "seller": "pc", "sellerProof": null, "underlyingPriceUsd": 0.02 }, "status": 200 } },
+    { "id": "pulsar-pinned-switch", "task": "pulsar timing", "target": "pa", "expect": { "candidates": [], "tried": [], "chosen": null, "lane": null, "signed": [], "settle": { "buyer": "cancelled", "sellerCharged": [] }, "booking": { "outbound": [], "exposureUsd": 0 }, "receipt": null, "status": 404 } },
+    { "id": "pulsar-pinned-bait", "task": "pulsar timing", "target": "pb", "expect": { "candidates": ["pb"], "tried": ["pb"], "chosen": null, "lane": null, "signed": [], "settle": { "buyer": "cancelled", "sellerCharged": [] }, "booking": { "outbound": [], "exposureUsd": 0 }, "receipt": null, "status": 502 } },
+
+    { "id": "comet-unproven-live-payto", "task": "comet perihelion", "expect": { "candidates": ["ca"], "tried": ["ca"], "chosen": "ca", "lane": "unproven", "signed": [["ca_live", 8000]], "settle": { "buyer": "settled", "sellerCharged": ["ca"] }, "booking": { "outbound": [["ca", "delivered"]], "exposureUsd": 0 }, "receipt": { "seller": "ca", "sellerProof": "unproven", "underlyingPriceUsd": 0.008 }, "status": 200 } },
+    { "id": "comet-under-cap", "task": "comet perihelion", "maxUsd": 0.005, "expect": { "candidates": [], "tried": [], "chosen": null, "lane": null, "signed": [], "settle": { "buyer": "cancelled", "sellerCharged": [] }, "booking": { "outbound": [], "exposureUsd": 0 }, "receipt": null, "status": 404 } },
+
+    { "id": "aurora-above-ceiling", "task": "aurora forecast", "expect": { "candidates": [], "tried": [], "chosen": null, "lane": null, "signed": [], "settle": { "buyer": "cancelled", "sellerCharged": [] }, "booking": { "outbound": [], "exposureUsd": 0 }, "receipt": null, "status": 409 } },
+    { "id": "aurora-live-quote-above-ceiling", "task": "borealis tide", "expect": { "candidates": ["ab"], "tried": ["ab"], "chosen": null, "lane": null, "signed": [], "settle": { "buyer": "cancelled", "sellerCharged": [] }, "booking": { "outbound": [], "exposureUsd": 0 }, "receipt": null, "status": 409 } },
+
+    { "id": "zenith-unproven-1", "task": "zenith index", "expect": { "candidates": ["za", "zb"], "tried": ["za"], "chosen": "za", "lane": "unproven", "signed": [["za", 10000]], "settle": { "buyer": "settled", "sellerCharged": ["za"] }, "booking": { "outbound": [["za", "delivered"]], "exposureUsd": 0, "unprovenSpentUsd": { "za": 0.01 } }, "receipt": { "seller": "za", "sellerProof": "unproven", "underlyingPriceUsd": 0.01 }, "status": 200 } },
+    { "id": "zenith-unproven-2", "task": "zenith index", "expect": { "candidates": ["za", "zb"], "tried": ["za"], "chosen": "za", "lane": "unproven", "signed": [["za", 10000]], "settle": { "buyer": "settled", "sellerCharged": ["za"] }, "booking": { "outbound": [["za", "delivered"]], "exposureUsd": 0, "unprovenSpentUsd": { "za": 0.02 } }, "receipt": { "seller": "za", "sellerProof": "unproven", "underlyingPriceUsd": 0.01 }, "status": 200 } },
+    { "id": "zenith-capped-falls-through", "task": "zenith index", "expect": { "candidates": ["za", "zb"], "tried": ["za", "zb"], "chosen": "zb", "lane": "unproven", "signed": [["zb", 9000]], "settle": { "buyer": "settled", "sellerCharged": ["zb"] }, "booking": { "outbound": [["zb", "delivered"]], "exposureUsd": 0, "unprovenSpentUsd": { "za": 0.02, "zb": 0.009 } }, "receipt": { "seller": "zb", "sellerProof": "unproven", "underlyingPriceUsd": 0.009 }, "status": 200 } },
+    { "id": "zenith-both-near-cap", "task": "zenith index", "expect": { "candidates": ["za", "zb"], "tried": ["za", "zb"], "chosen": "zb", "lane": "unproven", "signed": [["zb", 9000]], "settle": { "buyer": "settled", "sellerCharged": ["zb"] }, "booking": { "outbound": [["zb", "delivered"]], "exposureUsd": 0, "unprovenSpentUsd": { "za": 0.02, "zb": 0.018 } }, "receipt": { "seller": "zb", "sellerProof": "unproven", "underlyingPriceUsd": 0.009 }, "status": 200 } },
+    { "id": "zenith-all-capped", "task": "zenith index", "expect": { "candidates": ["za", "zb"], "tried": ["za", "zb"], "chosen": null, "lane": null, "signed": [], "settle": { "buyer": "cancelled", "sellerCharged": [] }, "booking": { "outbound": [], "exposureUsd": 0, "unprovenSpentUsd": { "za": 0.02, "zb": 0.018 } }, "receipt": null, "status": 409 } },
+
+    { "id": "orbit-own-treasury-skipped", "task": "orbit almanac", "expect": { "candidates": ["oa", "ob"], "skipped": [["oa", "own_wallet"]], "tried": ["ob"], "chosen": "ob", "lane": "unproven", "signed": [["ob", 7000]], "settle": { "buyer": "settled", "sellerCharged": ["ob"] }, "booking": { "outbound": [["ob", "delivered"]], "exposureUsd": 0 }, "receipt": { "seller": "ob", "sellerProof": "unproven", "underlyingPriceUsd": 0.007 }, "status": 200 } },
+    { "id": "orbit-own-spending-wallet", "task": "kestrel mirror", "expect": { "candidates": ["oc"], "skipped": [["oc", "own_wallet"]], "tried": [], "chosen": null, "lane": null, "signed": [], "settle": { "buyer": "cancelled", "sellerCharged": [] }, "booking": { "outbound": [], "exposureUsd": 0 }, "receipt": null, "status": 409 } },
+
+    { "id": "harbor-shared-1", "task": "marina berth", "expect": { "candidates": ["ha"], "tried": ["ha"], "chosen": "ha", "lane": "unproven", "signed": [["shared", 10000]], "settle": { "buyer": "settled", "sellerCharged": ["ha"] }, "booking": { "outbound": [["ha", "delivered"]], "exposureUsd": 0, "unprovenSpentUsd": { "ha": 0.01 } }, "receipt": { "seller": "ha", "sellerProof": "unproven", "underlyingPriceUsd": 0.01 }, "status": 200 } },
+    { "id": "harbor-shared-2", "task": "marina berth", "expect": { "candidates": ["ha"], "tried": ["ha"], "chosen": "ha", "lane": "unproven", "signed": [["shared", 10000]], "settle": { "buyer": "settled", "sellerCharged": ["ha"] }, "booking": { "outbound": [["ha", "delivered"]], "exposureUsd": 0, "unprovenSpentUsd": { "ha": 0.02 } }, "receipt": { "seller": "ha", "sellerProof": "unproven", "underlyingPriceUsd": 0.01 }, "status": 200 } },
+    { "id": "harbor-shared-other-origin", "task": "jetty wave", "expect": { "candidates": ["hb"], "tried": ["hb"], "chosen": "hb", "lane": "unproven", "signed": [["shared", 10000]], "settle": { "buyer": "settled", "sellerCharged": ["hb"] }, "booking": { "outbound": [["hb", "delivered"]], "exposureUsd": 0, "unprovenSpentUsd": { "ha": 0.02, "hb": 0.01 } }, "receipt": { "seller": "hb", "sellerProof": "unproven", "underlyingPriceUsd": 0.01 }, "status": 200 } },
+    { "id": "harbor-shared-capped", "task": "marina berth", "expect": { "candidates": ["ha"], "tried": ["ha"], "chosen": null, "lane": null, "signed": [], "settle": { "buyer": "cancelled", "sellerCharged": [] }, "booking": { "outbound": [], "exposureUsd": 0, "unprovenSpentUsd": { "ha": 0.02 } }, "receipt": null, "status": 409 } },
+    { "id": "harbor-shared-history-credits-nobody", "task": "quay dock", "expect": { "candidates": [], "tried": [], "chosen": null, "lane": null, "signed": [], "settle": { "buyer": "cancelled", "sellerCharged": [] }, "booking": { "outbound": [], "exposureUsd": 0 }, "receipt": null, "status": 409 } },
+
+    { "id": "vega-slow-seller-served", "task": "vega scan", "expect": { "candidates": ["va"], "tried": ["va"], "chosen": "va", "lane": "proven", "signed": [["va", 20000]], "settle": { "buyer": "settled", "sellerCharged": ["va"] }, "booking": { "outbound": [["va", "delivered"]], "exposureUsd": 0 }, "receipt": { "seller": "va", "sellerProof": null, "underlyingPriceUsd": 0.02 }, "status": 200 } },
+    { "id": "vega-stalled-probe-dropped", "task": "lyra probe", "expect": { "candidates": ["vc"], "tried": ["vc"], "chosen": "vc", "lane": "proven", "signed": [["vc", 20000]], "settle": { "buyer": "settled", "sellerCharged": ["vc"] }, "booking": { "outbound": [["vc", "delivered"]], "exposureUsd": 0 }, "receipt": { "seller": "vc", "sellerProof": null, "underlyingPriceUsd": 0.02 }, "status": 200 } },
+
+    { "id": "ion-unproven-after-proven", "task": "isotope stream", "expect": { "candidates": ["ia", "ib", "ic"], "tried": ["ia", "ib", "ic"], "chosen": "ic", "lane": "unproven", "signed": [["ic", 4000]], "settle": { "buyer": "settled", "sellerCharged": ["ic"] }, "booking": { "outbound": [["ic", "delivered"]], "exposureUsd": 0 }, "receipt": { "seller": "ic", "sellerProof": "unproven", "underlyingPriceUsd": 0.004 }, "status": 200 } },
+    { "id": "ion-unproven-only-under-cap", "task": "isotope stream", "maxUsd": 0.01, "expect": { "candidates": ["ic"], "tried": ["ic"], "chosen": "ic", "lane": "unproven", "signed": [["ic", 4000]], "settle": { "buyer": "settled", "sellerCharged": ["ic"] }, "booking": { "outbound": [["ic", "delivered"]], "exposureUsd": 0 }, "receipt": { "seller": "ic", "sellerProof": "unproven", "underlyingPriceUsd": 0.004 }, "status": 200 } },
+
+    { "id": "lumen-sanctioned-payto-refused", "task": "lumen archive", "expect": { "candidates": ["la", "lb"], "tried": ["la", "lb"], "chosen": "lb", "lane": "proven", "signed": [["lb", 20000]], "settle": { "buyer": "settled", "sellerCharged": ["lb"] }, "booking": { "outbound": [["lb", "delivered"]], "exposureUsd": 0 }, "receipt": { "seller": "lb", "sellerProof": null, "underlyingPriceUsd": 0.02 }, "status": 200 } },
+
+    { "id": "flux-live-domain-mismatch", "task": "flux convert", "expect": { "candidates": ["fb"], "tried": ["fb"], "chosen": "fb", "lane": "proven", "signed": [["fb", 20000]], "settle": { "buyer": "settled", "sellerCharged": ["fb"] }, "booking": { "outbound": [["fb", "delivered"]], "exposureUsd": 0 }, "receipt": { "seller": "fb", "sellerProof": null, "underlyingPriceUsd": 0.02 }, "status": 200 } },
+
+    { "id": "nova-served-unpaid", "task": "nova lookup", "expect": { "candidates": ["nv"], "tried": ["nv"], "chosen": "nv", "lane": "proven", "signed": [], "settle": { "buyer": "settled", "sellerCharged": [] }, "booking": { "outbound": [], "exposureUsd": 0 }, "receipt": { "seller": "nv", "sellerProof": null, "underlyingPriceUsd": 0, "sellerPaid": false }, "status": 200 } },
+
+    { "id": "tachyon-plus-live-quote-over-cap", "task": "tachyon burst", "expect": { "candidates": ["tb", "tc"], "tried": ["tb", "tc"], "chosen": "tc", "lane": "proven", "signed": [["tc", 10000]], "settle": { "buyer": "settled", "sellerCharged": ["tc"] }, "booking": { "outbound": [["tc", "delivered"]], "exposureUsd": 0 }, "receipt": { "seller": "tc", "sellerProof": null, "underlyingPriceUsd": 0.01 }, "status": 200 } },
+    { "id": "tachyon-max-tier", "task": "tachyon burst", "tier": "max", "expect": { "candidates": ["ta", "tb", "tc"], "tried": ["ta"], "chosen": "ta", "lane": "proven", "signed": [["ta", 60000]], "settle": { "buyer": "settled", "sellerCharged": ["ta"] }, "booking": { "outbound": [["ta", "delivered"]], "exposureUsd": 0 }, "receipt": { "seller": "ta", "sellerProof": null, "underlyingPriceUsd": 0.06 }, "status": 200 } },
+    { "id": "tachyon-base-tier-nothing-under-cap", "task": "tachyon burst", "tier": "base", "expect": { "candidates": [], "tried": [], "chosen": null, "lane": null, "signed": [], "settle": { "buyer": "cancelled", "sellerCharged": [] }, "booking": { "outbound": [], "exposureUsd": 0 }, "receipt": null, "status": 404 } },
+
+    { "id": "rho-get-seller", "task": "rho quote", "params": { "symbol": "ABC" }, "expect": { "candidates": ["ra"], "tried": ["ra"], "chosen": "ra", "lane": "proven", "signed": [["ra", 10000]], "settle": { "buyer": "settled", "sellerCharged": ["ra"] }, "booking": { "outbound": [["ra", "delivered"]], "exposureUsd": 0 }, "receipt": { "seller": "ra", "sellerProof": null, "underlyingPriceUsd": 0.01 }, "status": 200 } },
+    { "id": "rho-get-nested-param", "task": "rho quote", "params": { "symbol": { "nested": true } }, "expect": { "candidates": ["ra"], "tried": [], "chosen": null, "lane": null, "signed": [], "settle": { "buyer": "cancelled", "sellerCharged": [] }, "booking": { "outbound": [], "exposureUsd": 0 }, "receipt": null, "status": 400 } },
+
+    { "id": "sigma-solana-only", "task": "sigma ledger", "expect": { "candidates": [], "tried": [], "chosen": null, "lane": null, "signed": [], "settle": { "buyer": "cancelled", "sellerCharged": [] }, "booking": { "outbound": [], "exposureUsd": 0 }, "receipt": null, "status": 404 } },
+
+    { "id": "kappa-committed-stops", "task": "kappa relay", "expect": { "candidates": ["ka", "kb"], "tried": ["ka"], "chosen": null, "lane": null, "signed": [["ka", 20000]], "settle": { "buyer": "cancelled", "sellerCharged": ["ka"] }, "booking": { "outbound": [["ka", "undelivered"]], "exposureUsd": 0.02 }, "receipt": null, "status": 502 } },
+
+    { "id": "mu-fails-once", "task": "muon sample", "expect": { "candidates": ["ma"], "tried": ["ma"], "chosen": null, "lane": null, "signed": [["ma", 20000]], "settle": { "buyer": "cancelled", "sellerCharged": ["ma"] }, "booking": { "outbound": [["ma", "undelivered"]], "exposureUsd": 0.02 }, "receipt": null, "status": 502 } },
+    { "id": "mu-recovers", "task": "muon sample", "expect": { "candidates": ["ma"], "tried": ["ma"], "chosen": "ma", "lane": "proven", "signed": [["ma", 20000]], "settle": { "buyer": "settled", "sellerCharged": ["ma"] }, "booking": { "outbound": [["ma", "delivered"]], "exposureUsd": 0 }, "receipt": { "seller": "ma", "sellerProof": null, "underlyingPriceUsd": 0.02 }, "status": 200 } },
+    { "id": "mu-memo-cleared", "task": "muon sample", "expect": { "candidates": ["ma"], "tried": ["ma"], "chosen": "ma", "lane": "proven", "signed": [["ma", 20000]], "settle": { "buyer": "settled", "sellerCharged": ["ma"] }, "booking": { "outbound": [["ma", "delivered"]], "exposureUsd": 0 }, "receipt": { "seller": "ma", "sellerProof": null, "underlyingPriceUsd": 0.02 }, "status": 200 } },
+
+    { "id": "pi-live-quote-below-listing", "task": "pi digits", "expect": { "candidates": ["pi"], "tried": ["pi"], "chosen": "pi", "lane": "proven", "signed": [["pi", 15000]], "settle": { "buyer": "settled", "sellerCharged": ["pi"] }, "booking": { "outbound": [["pi", "delivered"]], "exposureUsd": 0 }, "receipt": { "seller": "pi", "sellerProof": null, "underlyingPriceUsd": 0.015 }, "status": 200 } },
+
+    { "id": "eta-refused-payment-falls-through", "task": "eta ephemeris", "expect": { "candidates": ["ea", "eb"], "tried": ["ea", "eb"], "chosen": "eb", "lane": "proven", "signed": [["ea", 20000], ["eb", 20000]], "settle": { "buyer": "settled", "sellerCharged": ["eb"] }, "booking": { "outbound": [["eb", "delivered"]], "exposureUsd": 0 }, "receipt": { "seller": "eb", "sellerProof": null, "underlyingPriceUsd": 0.02 }, "status": 200 } },
+
+    { "id": "upsilon-at-ceiling", "task": "upsilon gauge", "expect": { "candidates": ["ua"], "tried": ["ua"], "chosen": "ua", "lane": "unproven", "signed": [["ua", 10000]], "settle": { "buyer": "settled", "sellerCharged": ["ua"] }, "booking": { "outbound": [["ua", "delivered"]], "exposureUsd": 0 }, "receipt": { "seller": "ua", "sellerProof": "unproven", "underlyingPriceUsd": 0.01 }, "status": 200 } },
+    { "id": "upsilon-above-ceiling", "task": "omicron sweep", "expect": { "candidates": [], "tried": [], "chosen": null, "lane": null, "signed": [], "settle": { "buyer": "cancelled", "sellerCharged": [] }, "booking": { "outbound": [], "exposureUsd": 0 }, "receipt": null, "status": 409 } },
+
+    { "id": "no-seller-matches", "task": "xylophone tuning", "expect": { "candidates": [], "tried": [], "chosen": null, "lane": null, "signed": [], "settle": { "buyer": "cancelled", "sellerCharged": [] }, "booking": { "outbound": [], "exposureUsd": 0 }, "receipt": null, "status": 404 } },
+    { "id": "target-not-in-index", "task": "quasar spectrum", "targetUrl": "https://unknown-seller.golden.test/quasar-spectrum", "expect": { "candidates": [], "tried": [], "chosen": null, "lane": null, "signed": [], "settle": { "buyer": "cancelled", "sellerCharged": [] }, "booking": { "outbound": [], "exposureUsd": 0 }, "receipt": null, "status": 404 } },
+    { "id": "target-not-https", "task": "quasar spectrum", "targetUrl": "http://quasar-prime.golden.test/quasar-spectrum", "expect": { "candidates": null, "tried": [], "chosen": null, "lane": null, "signed": [], "settle": { "buyer": "cancelled", "sellerCharged": [] }, "booking": { "outbound": [], "exposureUsd": 0 }, "receipt": null, "status": 400 } },
+    { "id": "target-without-external", "task": "quasar spectrum", "targetUrl": "https://quasar-prime.golden.test/quasar-spectrum", "internal": true, "expect": { "candidates": null, "tried": [], "chosen": null, "lane": null, "signed": [], "settle": { "buyer": "cancelled", "sellerCharged": [] }, "booking": { "outbound": [], "exposureUsd": 0 }, "receipt": null, "status": 400 } },
+    { "id": "internal-slug", "slug": "uuid", "internal": true, "expect": { "candidates": null, "tried": [], "chosen": "internal", "lane": null, "signed": [], "settle": { "buyer": "settled", "sellerCharged": [] }, "booking": { "outbound": [], "exposureUsd": 0 }, "receipt": { "seller": "internal", "sellerProof": null, "underlyingPriceUsd": 0.001 }, "status": 200 } },
+    { "id": "quasar-after-everything", "task": "quasar spectrum", "expect": { "candidates": ["qa", "qb", "qc"], "tried": ["qa"], "chosen": "qa", "lane": "proven", "signed": [["qa", 20000]], "settle": { "buyer": "settled", "sellerCharged": ["qa"] }, "booking": { "outbound": [["qa", "delivered"]], "exposureUsd": 0 }, "receipt": { "seller": "qa", "sellerProof": null, "underlyingPriceUsd": 0.02 }, "status": 200 } }
+  ]
+}

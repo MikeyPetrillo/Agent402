@@ -156,8 +156,28 @@ export async function checkPaidCall(prod, token) {
   }
 }
 
+// The unpaid-quote budget's 429 (src/unpaid-quote-budget.js) carries this
+// reason. This Worker reads production from Cloudflare's shared addresses, so
+// other callers on that address can spend the budget the paywall read counts
+// against: that refusal says nothing about the paywall. It is re-read once
+// after its Retry-After, capped at PAYWALL_BUDGET_WAIT_MAX_MS (the hour-long
+// Retry-After is never waited out), and a second budget refusal leaves
+// paywall and rails unobserved for this run: not recorded, never a failure,
+// never a page. Any other non-402 fails as before.
+export const UNPAID_QUOTE_BUDGET_REASON = "unpaid-quote-budget";
+export const PAYWALL_BUDGET_WAIT_MAX_MS = 10_000;
+/** True when `r` is the unpaid-quote budget's 429 (reads a clone of the body). */
+export async function isBudgetRefusal(r) {
+  if (r?.status !== 429) return false;
+  try { return (await r.clone().json())?.reason === UNPAID_QUOTE_BUDGET_REASON; } catch { return false; }
+}
+const budgetWaitMs = (r) => {
+  const ra = Number(r.headers.get("retry-after"));
+  return Math.min(PAYWALL_BUDGET_WAIT_MAX_MS, Number.isFinite(ra) && ra > 0 ? ra * 1000 : PAYWALL_BUDGET_WAIT_MAX_MS);
+};
+
 /**
- * Observe production. Returns { components, fails, paidCall } where components
+ * Observe production. Returns { components, fails, paidCall, paywall } where components
  * maps the /status component keys to {ok, detail}. Any thrown error is a failed
  * check, never a failed run: an observation we could not make must be recorded
  * as a failure or not at all, never silently as success.
@@ -166,8 +186,10 @@ export async function checkPaidCall(prod, token) {
  * run and paid-call is never claimed; present but empty, it is skipped.
  */
 export async function probe(prod, opts = {}) {
+  const sleep = opts.sleep || ((ms) => new Promise((res) => setTimeout(res, ms)));
   const components = {};
   const fails = [];
+  let paywall = { observed: true };
   const mark = (key, ok, detail) => {
     components[key] = { ok, detail: ok ? null : detail || "failed" };
     if (!ok) fails.push(`${key}(${detail || "failed"})`);
@@ -212,11 +234,20 @@ export async function probe(prod, opts = {}) {
   // accepts must still carry Base, because a rail dropping out of the offer
   // loses that chain's revenue with no error anywhere.
   try {
-    const r = await grab(`${prod}/api/extract`, {
+    const readPaywall = () => grab(`${prod}/api/extract`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url: "https://example.com" }),
     });
+    let r = await readPaywall();
+    if (await isBudgetRefusal(r)) {
+      await sleep(budgetWaitMs(r));
+      r = await readPaywall();
+    }
+    if (await isBudgetRefusal(r)) {
+      paywall = { observed: false, reason: "unpaid-quote budget refused the read twice" };
+      throw Object.assign(new Error("budget"), { budgetSkip: true });
+    }
     const is402 = r.status === 402;
     mark("paywall", is402, `paywall ${r.status}`);
     if (!is402) {
@@ -234,8 +265,10 @@ export async function probe(prod, opts = {}) {
       else mark("rails", nets.includes(REQUIRED_NETWORK), `base missing: ${nets.join(",").slice(0, 80)}`);
     }
   } catch (e) {
-    mark("paywall", false, String(e?.message || e).slice(0, 60));
-    mark("rails", false, "paywall probe threw");
+    if (!e?.budgetSkip) {
+      mark("paywall", false, String(e?.message || e).slice(0, 60));
+      mark("rails", false, "paywall probe threw");
+    }
   }
 
   let paidCall = null;
@@ -248,7 +281,7 @@ export async function probe(prod, opts = {}) {
     }
   }
 
-  return { components, fails, paidCall };
+  return { components, fails, paidCall, paywall };
 }
 
 /**
@@ -261,10 +294,10 @@ export async function probe(prod, opts = {}) {
  * worker log, so the blip itself is never invisible.
  */
 export async function observe(prod, { sleep = (ms) => new Promise((r) => setTimeout(r, ms)), retryDelayMs = 20000, ...probeOpts } = {}) {
-  const first = await probe(prod, probeOpts);
+  const first = await probe(prod, { sleep, ...probeOpts });
   if (!first.fails.length) return { ...first, retried: false };
   await sleep(retryDelayMs);
-  const second = await probe(prod, probeOpts);
+  const second = await probe(prod, { sleep, ...probeOpts });
   console.log(`status-probe: first attempt FAILS ${first.fails.join(" ")} - after ${retryDelayMs}ms retry: ${second.fails.length ? `FAILS ${second.fails.join(" ")}` : "clean (transient blip, not recorded as down)"}`);
   return { ...second, retried: true };
 }
@@ -338,6 +371,41 @@ const TOPUP = "Balances are deliberately not published on /api/gateway-status; r
 // page AND must never close a real alarm, so anything that is not an explicit
 // verdict leaves the current state exactly as it is.
 // The body of a public failure-word issue: the word and where the detail is.
+// PAYWALL NOT OBSERVED. A caller that spends the unpaid-quote budget from
+// this Worker's shared address keeps every paywall read here unobserved, and
+// an unobserved read is (rightly) never a failure, so without this the
+// paywall check could stay blind indefinitely with nothing paging. The count
+// of consecutive unobserved runs is kept where every run already writes:
+// each observed run records a paywall row on /api/status/probe, so the age of
+// the newest paywall row on /api/status (the youngest of the component's
+// sources[] rows, whatever each one read; current.ageMs only without them,
+// since current names an outage row over a fresher operational one) is the
+// time since any observer last saw the paywall. This run's read unobserved and that age at
+// least PAYWALL_UNOBSERVED_PAGE_AFTER_RUNS runs (less half a run, for cron
+// jitter) pages; this run's read observed closes; anything else (no reading,
+// a store with no paywall row yet) does neither. At the 5-minute cron, three
+// runs is about 15 minutes.
+export const PROBE_CADENCE_MS = 5 * 60_000; // wrangler.toml: crons = ["*/5 * * * *"]
+export const PAYWALL_UNOBSERVED_PAGE_AFTER_RUNS = 3;
+export const PAYWALL_UNOBSERVED_TITLE = "Paywall not observed";
+/** Milliseconds since any observer last recorded a paywall row, or NaN when unknown. */
+export function paywallNewestAgeMs(c) {
+  const comp = Array.isArray(c?.status?.components) ? c.status.components.find((x) => x?.key === "paywall") : null;
+  const rows = Array.isArray(comp?.current?.sources) ? comp.current.sources : [];
+  const ages = rows.map((r) => r?.ageMs).filter((a) => typeof a === "number" && Number.isFinite(a) && a >= 0);
+  if (ages.length) return Math.min(...ages);
+  const a = comp?.current?.ageMs;
+  return typeof a === "number" && Number.isFinite(a) ? a : NaN;
+}
+export function paywallUnobservedVerdict(c) {
+  const observed = c?.probe?.paywallObserved;
+  if (observed === true) return "good";
+  if (observed !== false) return "quiet";
+  const age = paywallNewestAgeMs(c);
+  if (!Number.isFinite(age)) return "quiet";
+  return age >= (PAYWALL_UNOBSERVED_PAGE_AFTER_RUNS - 0.5) * PROBE_CADENCE_MS ? "bad" : "quiet";
+}
+
 const failureWordBody = (field, word) =>
   `/api/gateway-status reports ${field}.status=${word}. The detail is on the operator endpoint, /__operator/tool-failures.json (operator token). Auto-closes when the word is ok.`;
 
@@ -806,6 +874,14 @@ This observer cannot dispatch the canary itself (it holds an issues-only credent
     },
     body: () => `/api/gateway-status reports cdnOrigin.status=unauthenticated: requests from the CDN's address ranges reached the origin without a valid X-Origin-Auth inside the last hour. While that lasts each such request is keyed on the edge address, not its client, so the per-address limiters, budgets and attribution fold onto a few addresses. Check CDN_ORIGIN_SECRET on Railway against the header rule on the proxy (a rotation on one side only reads exactly like this); the operator view of /api/gateway-status carries the count and whether a secret is configured. Auto-closes when the word is ok.`,
   },
+  {
+    title: PAYWALL_UNOBSERVED_TITLE,
+    verdict: paywallUnobservedVerdict,
+    body: (c) => {
+      const mins = Math.round((paywallNewestAgeMs(c) || 0) / 60_000);
+      return `No observer has seen the paywall for about ${mins} minutes: the status Worker's unpaid read of a wallet-only route was refused by the unpaid-quote budget (429, reason unpaid-quote-budget) on at least ${PAYWALL_UNOBSERVED_PAGE_AFTER_RUNS} runs in a row, so whether paid tools still answer 402 is not being checked. The usual cause is another caller on the Worker's shared egress address spending that address's budget. The GitHub heartbeat signs its read and is never refused; check its latest run, and read the [unpaid-budget] log line for the address. Auto-closes on the Worker's next observed paywall read.`;
+    },
+  },
 ];
 
 const TWEET_QUEUE_BAD = new Set(["halted", "no_credentials", "refused", "in_doubt"]);
@@ -836,7 +912,7 @@ function lowOk(status) {
  * @param {{gateway?:object, status?:object}} ctx - /api/gateway-status and /api/status
  */
 export function judge(ctx) {
-  const c = { gateway: ctx?.gateway || {}, status: ctx?.status || null };
+  const c = { gateway: ctx?.gateway || {}, status: ctx?.status || null, probe: ctx?.probe || null };
   const out = {};
   for (const a of ALARMS) {
     let v = "quiet";
@@ -896,7 +972,7 @@ export async function openIssues(token, env = {}) {
  * Reconcile every alarm against GitHub issues.
  * @returns {{opened:string[], closed:string[], bad:string[], error?:string}}
  */
-export async function syncAlarms(env, { fetchStatus, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), confirmDelayMs = CONFIRM_DELAY_MS, openList = null, maxWrites = MAX_ISSUE_WRITES } = {}) {
+export async function syncAlarms(env, { fetchStatus, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), confirmDelayMs = CONFIRM_DELAY_MS, openList = null, maxWrites = MAX_ISSUE_WRITES, probe = null } = {}) {
   const token = env.GITHUB_ISSUES_TOKEN;
   if (!token) return { opened: [], closed: [], bad: [], error: "no GITHUB_ISSUES_TOKEN (alarms disabled)" };
   const prod = env.PROD || "https://agent402.tools";
@@ -904,7 +980,9 @@ export async function syncAlarms(env, { fetchStatus, sleep = (ms) => new Promise
   // settlement alarm lives there; a failure to read it is NOT fatal - the
   // gateway alarms are still judgeable, and an absent status simply makes the
   // settlement verdict "quiet".
-  const read = fetchStatus || (async () => {
+  // This run's own probe facts (the paywall read observed or not) ride with
+  // every reading, so the confirm read judges them the same way.
+  const readOnce = fetchStatus || (async () => {
     const r = await grab(`${prod}/api/gateway-status`, {}, 15000);
     if (!r.ok) throw new Error(`gateway-status ${r.status}`);
     const gateway = await r.json();
@@ -915,6 +993,7 @@ export async function syncAlarms(env, { fetchStatus, sleep = (ms) => new Promise
     } catch { /* the gateway half still stands */ }
     return { gateway, status };
   });
+  const read = async () => ({ ...(await readOnce()), probe });
 
   let body;
   try { body = await read(); } catch (e) {
@@ -1072,7 +1151,7 @@ export async function run(env, timing = {}) {
   }
   // The paid-call challenge takes the same narrow token; the server honors
   // only STATUS_PROBE_TOKEN there.
-  const { components, fails, paidCall } = await observe(prod, {
+  const { components, fails, paidCall, paywall } = await observe(prod, {
     paidCallToken: env.STATUS_PROBE_TOKEN || "",
     ...(timing.sleep ? { sleep: timing.sleep, retryDelayMs: 0 } : {}),
   });
@@ -1089,7 +1168,7 @@ export async function run(env, timing = {}) {
     .catch((e) => ({ action: "none", error: String(e?.message || e).slice(0, 100) }));
   // Independent of the probe result: the balance and reachability alarms are
   // healthy-path work too, and their only other observer runs every few hours.
-  const alarms = await syncAlarms(env, { openList, ...(timing.sleep ? { sleep: timing.sleep, confirmDelayMs: 0 } : {}) })
+  const alarms = await syncAlarms(env, { openList, probe: { paywallObserved: paywall?.observed === true }, ...(timing.sleep ? { sleep: timing.sleep, confirmDelayMs: 0 } : {}) })
     .catch((e) => ({ opened: [], closed: [], bad: [], error: String(e?.message || e).slice(0, 100) }));
   const alarmLine = alarms.error
     ? `alarms skipped (${alarms.error})`
@@ -1098,8 +1177,9 @@ export async function run(env, timing = {}) {
   // /status, so this line is where the reason is readable.
   const paidLine = paidCall?.observed ? "paid-call observed" : `paid-call NOT observed (${paidCall?.reason || "check off"})`;
   const outageLine = outage.error ? `outage skipped (${outage.error})` : `outage ${outage.action}`;
-  console.log(`status-probe: ${fails.length ? `FAILS ${fails.join(" ")}` : "all healthy"} | ${paidLine} | recorded=${recorded} | ${alarmLine} | ${outageLine}`);
-  return { ok: true, recorded, fails, components, paidCall, alarms, outage };
+  const paywallLine = paywall?.observed === false ? ` | paywall NOT observed (${paywall.reason})` : "";
+  console.log(`status-probe: ${fails.length ? `FAILS ${fails.join(" ")}` : "all healthy"} | ${paidLine}${paywallLine} | recorded=${recorded} | ${alarmLine} | ${outageLine}`);
+  return { ok: true, recorded, fails, components, paidCall, paywall, alarms, outage };
 }
 
 export default {

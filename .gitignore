@@ -23,10 +23,16 @@ agent-address.txt
 CLAUDE.local.md
 
 # Local Claude Code per-project settings — never committed, EXCEPT
-# .claude/skills/ (shared project skills, e.g. /tweet). A parent-dir
-# exclude would block re-including children, hence the /* form.
+# .claude/skills/ (shared project skills, e.g. /tweet, /batch), .claude/rules/
+# (path-scoped rules) and the reviewer agents (.claude/agents/*-reviewer.md;
+# any other agent file stays local). A parent-dir exclude would block
+# re-including children, hence the /* form.
 .claude/*
 !.claude/skills/
+!.claude/rules/
+!.claude/agents/
+.claude/agents/*
+!.claude/agents/*-reviewer.md
 *.traineddata
 
 # Python build artifacts

@@ -6,6 +6,86 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-05 (x402 2.30, a wider unproven lane, one spend workflow)
+Payments:
+- The x402 libraries are 2.30.0 and mppx 0.17.1. A money or identity check
+  that runs before verify or settle and fails refuses the payment with a 402 and charges
+  nothing. A Tempo charge whose broadcast is rejected as a replay recovers its
+  receipt instead of answering a new 402.
+Router:
+- On Base an unproven seller is tried up to $0.05 a call (was $0.01), only
+  after every proven candidate, paid at its own live 402's payTo, with at most
+  $0.25 a day per seller (`SOR_BASE_UNPROVEN_SELLER_DAILY_USD`) and $5 a day
+  across all unproven sellers (`SOR_BASE_UNPROVEN_DAILY_USD`).
+- Route-execute is graded step by step in CI: 56 fixed tasks run the real
+  paid server, resolver and payer against stub sellers and check every step
+  from the candidate set to the receipt. The unproven lane reads the same
+  verdict as the public label, at the seller's live payTo.
+- The lane's terms name only the daily caps that are switched on, and the
+  seller-trust and seller-dossier examples show the lane as the tool answers.
+- The per-seller cap keys a path-scoped seller on its origin plus prefix, so
+  tenants on one host keep their own day. Each cap window keeps a running
+  sum, rebuilt from the window when invalid and at least daily, so an older
+  build during a deploy overlap cannot drift the cap.
+Tools:
+- `linkedin-article` takes images only from fast-tier links its resizer can
+  read; the fast tier still serves WebP to buyers.
+Security:
+- A standing red-team suite runs in CI against the MCP connector, the seller
+  judge, decide, the fetch guard, the router's payer and report prose. MCP
+  refusals quote an echoed name as data, and the listing and judge screens
+  read markup-split, lookalike and tool-abuse wordings of the same text.
+- In FREE_MODE, identity-bound routes take no wallet identity from an
+  unverified payment header. `TRUST_PROXY_HOPS` defaults to 0 when unset,
+  with a boot warning (set 1 behind one edge proxy). MCP prompt arguments are
+  quoted as data. A paid server answers a job created by a FREE_MODE server as
+  not found.
+Upgrade note:
+- `TRUST_PROXY_HOPS` unset now reads 0 (it read 1), and an explicit 0, which
+  used to read as 1, is honored: set `TRUST_PROXY_HOPS=1` behind one edge
+  proxy. With no hop trusted, the server warns once when a loopback or private
+  peer sends X-Forwarded-For. Without it, every visitor behind the proxy reads
+  as the proxy's one address and shares its rate limits.
+Limits:
+- The unpaid price-check budget counts per client address (an IPv6 /64 as
+  one) whatever the User-Agent; a named indexer or search crawler reads
+  against ten times the budget on its address, and only our signed probes are
+  exempt. On the one address Cloudflare Workers share, each User-Agent gets its
+  own budget under a ceiling for the address.
+Monitoring:
+- The heartbeat signs its paywall read, the status Worker pages "Paywall not
+  observed" after three unobserved runs, and both read the unpaid price-check
+  budget's 429 as not observed, never as a paywall failure.
+Index:
+- A failed paywall check is re-run after 24 hours and when a seller registers
+  again, and the check skips a templated route.
+Gateway:
+- `/v1/images/fast` now falls over to Recraft V4.1 Flash (WebP) and
+  `/v1/images/generations` to MAI-Image-2.6 Flash (PNG), ahead of the GPT-5
+  Image Mini link's upstream expiry; the former id is still accepted in
+  `model`. The live model guard checks every image, video and speech link's
+  upstream expiration date.
+- `/v1/audio/speech` and the `/api/tts` backups move to MAI-Voice-2.1 and
+  MAI-Voice-2.1-Flash ahead of the 2.0 models' upstream expiry, with a
+  distinct English voice per voice name; the former ids are still accepted.
+Pages:
+- Operator pages tell search engines not to index them, and the sitemap lists
+  only pages that are their own canonical.
+- Structured data names one site entity, Agent402, part of Havok Holdings
+  LLC, as every page's author and publisher.
+- Report, skill, blog, guide, docs, category and marketplace pages show a
+  breadcrumb trail that matches their structured data, and seeded SEC report
+  pages carry the date of the newest filing they show.
+Surfaces:
+- The agent hosts guide adds Agent402 to a HarnessRouter workspace as a
+  remote MCP server under Add-ons (`/harnessrouter`).
+Operations:
+- The spend jobs run from one workflow, `spend.yml`, each behind the same
+  approval. Only the listing pass is scheduled (weekly, still waiting for that
+  approval); every other job runs on dispatch.
+Packages:
+- agent402-mcp 0.13.28 runs on x402 2.30 and MCP SDK 1.32.2.
+
 ### 2026-11-05 (Audio-only decoding, refused redirects answer 400, documented gateway fields)
 Tools:
 - `media-info`, `audio-convert` and `audio-normalize` decode audio streams
@@ -39,7 +119,8 @@ Index:
   (what the seller lists) and `toolsCapped`; /marketplace shows "N of M tools"
   for a capped seller, and its listing count reads what sellers list.
 - A seller listing that fails to read is skipped on its own; every other
-  seller still routes. `/api/gateway-status` gains `containedTurns`.
+  seller still routes. `/api/gateway-status` gains `containedTurns` and
+  `brokenListings`.
 Gateway:
 - On the Messages wire, a text block's citation text counts against the
   tier's input cap, as its own text does.

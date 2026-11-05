@@ -506,7 +506,7 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
   { const gone = { __a402ClientGoneAt: Date.now() }; markSettleSent(gone, { evenIfGone: true }); ok(settleSentWhileConnected(gone) === true, "markSettleSent with evenIfGone (the x402 hook's form) marks a buyer whose close landed during the chain"); }
   {
     const hs = readFileSync(new URL("../src/hangup-settlement.js", import.meta.url), "utf8");
-    ok(/export function registerSettleSentHook\(server\) \{\s*\n\s*server\.onBeforeSettle\(\(ctx\) => \{ markSettleSent\(ctx\?\.transportContext\?\.request\?\.adapter\?\.req, \{ evenIfGone: true \}\); \}\);/.test(hs), "the x402 settle-sent hook marks unconditionally (pin; gone-between above runs the behavior)");
+    ok(/export function registerSettleSentHook\(server\) \{\s*\n\s*server\.onBeforeSettle\(refusingHook\(HOOK_NAMES\.settleSent, \(ctx\) => \{ markSettleSent\(ctx\?\.transportContext\?\.request\?\.adapter\?\.req, \{ evenIfGone: true \}\); \}, \{/.test(hs), "the x402 settle-sent hook marks unconditionally and a throw refuses the settle (pin; gone-between above and test-x402-hook-throws run the behavior)");
   }
   server.close();
   _resetHangupForgiveness();
@@ -672,7 +672,7 @@ await new Promise((r) => orStub.listen(OR_PORT, "127.0.0.1", r));
 // case m stops this server gracefully and boots a second one on the same file.
 const HANGUP_FILE = join(TMP, "hangup-forgiveness.json");
 const bootServer = () => spawn("node", ["--import", "./scripts/lib/openrouter-stub-preload.js", "--import", "./scripts/lib/hold-json-preload.js", "src/server.js"], {
-  env: { ...process.env, SHARED_LIMITS: CALLER_SHARED_LIMITS ?? "", SHARED_LIMITS_PREFIX: RUN_PREFIX, PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: TREASURY, NETWORK: "base",
+  env: { ...process.env, TRUST_PROXY_HOPS: "1", SHARED_LIMITS: CALLER_SHARED_LIMITS ?? "", SHARED_LIMITS_PREFIX: RUN_PREFIX, PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: TREASURY, NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`, PAYMENT_NETWORKS: "base",
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "",
     OPENROUTER_API_KEY: "test-key-never-used", OPENROUTER_MANAGEMENT_KEY: "", OPENROUTER_STUB_URL: `http://127.0.0.1:${OR_PORT}`, OPENROUTER_FLEX: "off",

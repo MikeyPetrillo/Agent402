@@ -12,7 +12,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { marked } from "marked";
-import { ledgerShell, ledgerFooterCompact, esc, breadcrumbLd } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc, breadcrumbTrail } from "./ledger-chrome.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WIKI_DIR = join(__dirname, "..", "wiki");
@@ -276,9 +276,6 @@ export const DOCS_LAYOUT_CSS = `
   .ml-docs-main a { color:var(--accent);text-decoration:none; }
   .ml-docs-main a:hover { text-decoration:underline; }
   .ml-docs-main img { max-width:100%; }
-  .ml-docs-crumbs { color:var(--faint);font-size:var(--fs-md);margin-bottom:14px; }
-  .ml-docs-crumbs a { color:var(--faint);text-decoration:none; }
-  .ml-docs-crumbs a:hover { color:var(--accent); }
   .ml-docs-search { margin-bottom:14px; }
   .ml-docs-search input { width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--hairline);color:var(--ink);font-family:var(--font-mono);font-size:var(--fs-md);padding:8px 10px;outline:none; }
   .ml-docs-search input:focus { border-color:var(--accent); }
@@ -321,11 +318,12 @@ export const DOCS_SEARCH_SCRIPT = `<script src="/js/docs-sidebar.js"></script>`;
 
 function shell(baseUrl, title, description, path, body, currentSlug) {
   const extraCss = DOCS_LAYOUT_CSS;
-  const crumbs = [["Agent402", "/"], ["Docs", "/docs"], ...(path === "/docs" ? [] : [[title, path]])];
+  // One trail: the visible links above the article and the BreadcrumbList.
+  const crumbs = breadcrumbTrail(baseUrl, [["Home", "/"], ["Docs", "/docs"], ...(path === "/docs" ? [] : [[title, path]])]);
 
   const pageBody = `
   <div style="max-width:1180px;margin:0 auto;padding:50px 30px 64px;">
-    ${docsLayoutHtml(currentSlug, body)}
+    ${docsLayoutHtml(currentSlug, crumbs.nav + body)}
   </div>
   ${ledgerFooterCompact()}
   ${DOCS_SEARCH_SCRIPT}`;
@@ -337,7 +335,7 @@ function shell(baseUrl, title, description, path, body, currentSlug) {
     baseUrl,
     activePath: "/docs",
     extraCss,
-    jsonLd: breadcrumbLd(baseUrl, crumbs),
+    jsonLd: crumbs.ld,
     body: pageBody,
   });
 }
@@ -372,13 +370,12 @@ export function docsPage(baseUrl, slug) {
   if (!md) return null;
   const title = slug === "API-Reference" ? "API Reference Guide" : slug.replace(/-/g, " ");
   const description = docDescription(md, title);
-  const crumbs = `<div class="ml-docs-crumbs"><a href="/docs">Docs</a> &rsaquo; ${esc(title)}</div>`;
   return shell(
     baseUrl,
     title,
     description,
     `/docs/${slug}`,
-    `${crumbs}${renderMarkdown(md)}${docPrevNextHtml(slug)}`,
+    `${renderMarkdown(md)}${docPrevNextHtml(slug)}`,
     slug
   );
 }
@@ -415,8 +412,7 @@ export function docsApi(baseUrl, catalog) {
     return `<h2 class="ml-docs-api-cat">${esc(cat)} <span style="font-size:var(--fs-sm);font-weight:400;color:var(--faint);font-family:var(--font-mono);">&middot; ${tools.length}</span></h2>${rows}`;
   }).join("\n");
 
-  const body = `<div class="ml-docs-crumbs"><a href="/docs">Docs</a> &rsaquo; API Reference</div>
-<h1>API Reference</h1>
+  const body = `<h1>API Reference</h1>
 <p class="muted">Every tool the server exposes, grouped by category. The same list is available as machine-readable JSON at <a href="/openapi.json">/openapi.json</a> and <a href="/api/pricing">/api/pricing</a>, or as plain text at <a href="/llms.txt">/llms.txt</a>. Call any of them over HTTP, the hosted MCP connector (<code>/mcp</code>), or the <code>agent402-mcp</code> npm server (both on <a href="/docs/MCP-Connector">MCP connector</a>).</p>
 <p class="muted"><b>${catalog.length}</b> tools across <b>${cats.length}</b> categories.</p>
 ${sections}`;

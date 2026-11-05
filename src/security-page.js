@@ -4,6 +4,7 @@
 // surface that can be checked; nothing aspirational. Keep it in step with
 // SECURITY.md and the Security-Model wiki page (test-static-pages renders it,
 // test-surface-copy keeps the house style).
+import { siteOrgRef } from "./site-org.js";
 import { creditsPrepaymentPhrase } from "./credits-sales.js";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
@@ -90,7 +91,7 @@ ${ledgerFooterCompact()}`;
   const extraCss = `@media (max-width:900px){.sec-2col{grid-template-columns:minmax(0,1fr)!important}}`;
   const jsonLd = [
     { "@type": "BreadcrumbList", itemListElement: [{ "@type": "ListItem", position: 1, name: "Agent402", item: `${baseUrl}/` }, { "@type": "ListItem", position: 2, name: "Security", item: canonical }] },
-    { "@type": "WebPage", "@id": canonical, name: title, description, publisher: { "@type": "Organization", name: "Havok Holdings LLC", url: "https://havok.holdings" } },
+    { "@type": "WebPage", "@id": canonical, name: title, description, publisher: siteOrgRef(baseUrl) },
   ];
   return ledgerShell({ title, description, canonical, baseUrl, activePath: "/security", extraCss, jsonLd, body });
 }

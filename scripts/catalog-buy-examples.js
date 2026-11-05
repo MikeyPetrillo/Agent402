@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Turn the weekly catalog buy's paid answers into better examples and a list of
+// Turn the catalog buy's paid answers (spend.yml, job catalog-buy) into better examples and a list of
 // tools to improve.
 //
 // Input: the catalog-buy-outputs artifact (scripts/catalog-buy.js --outputs),

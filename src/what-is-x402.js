@@ -10,12 +10,12 @@
 // (joined through stats.js's CAIP2_NAMES, the same map that produces those
 // counter keys — a local copy here would be a second list that could drift),
 // and the adoption table is the live leaderboard snapshot's top rows.
+import { siteOrgLd } from "./site-org.js";
 import { ledgerShell, ledgerFooterCompact, esc, fmtNum } from "./ledger-chrome.js";
 import { RAILS } from "./rails.js";
 import { CAIP2_NAMES } from "./stats.js";
 import { powCostPhrase } from "./pow.js";
 
-import { ORG_SAME_AS } from "./repo-link.js";
 import { leaderboardCadence } from "./refresh-cadence.js";
 const fmtUsd = (n) =>
   `$${Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -114,7 +114,7 @@ export function whatIsX402Page(baseUrl, { stats, leaderboardSnapshot } = {}) {
   const boardSellers = Number.isFinite(leaderboardSnapshot?.totalSellers) ? fmtNum(leaderboardSnapshot.totalSellers) : null;
   const windowLabel = leaderboardSnapshot?.windowLabel || "7d";
 
-  const orgLd = { "@type": "Organization", "@id": `${baseUrl}/#organization`, name: "Agent402", url: baseUrl, logo: { "@type": "ImageObject", url: `${baseUrl}/logo.png` }, sameAs: ORG_SAME_AS };
+  const orgLd = siteOrgLd(baseUrl);
   const breadcrumbLd = { "@type": "BreadcrumbList", itemListElement: [
     { "@type": "ListItem", position: 1, name: "Agent402", item: `${baseUrl}/` },
     { "@type": "ListItem", position: 2, name: "What is x402 and MPP", item: canonical },
@@ -166,7 +166,7 @@ table{border-collapse:collapse;width:100%}
 <header style="border-bottom:1px solid var(--hairline);">
   <div style="max-width:1180px;margin:0 auto;padding:52px 30px 44px;">
     <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-bottom:22px;">
-      <a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <span style="color:var(--ink);">what is x402 + mpp</span>
+      <a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <span style="color:var(--ink);">what is x402 and mpp</span>
     </nav>
     <div class="wx-2col" style="display:grid;grid-template-columns:1.1fr .9fr;gap:50px;align-items:start;">
       <div>

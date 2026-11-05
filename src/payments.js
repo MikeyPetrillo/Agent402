@@ -53,6 +53,7 @@ import { toolFailureMonitor, setDemotedReader } from "./tool-failure-monitor.js"
 import { isGatewayBatchedPayment } from "./gateway-wire.js";
 import { GatewayNanopaymentsClient, createGatewayPendingBook, gatewayAcceptFields, gatewayNanopaymentNetworks, gatewayNanopaymentsEnabled, gatewayPendingFile, installGatewayRouting, setGatewayOffer, startGatewayBalanceWatch, startGatewayPendingResolver, byTransferIdAnyCase, gatewayTransferId, GATEWAY_DOMAINS } from "./gateway-nanopayments.js";
 import { existsSync } from "node:fs";
+import { refusingHook, passingHook, HOOK_NAMES, ARC_CONTRACT_WALLET_CHECK_FAILED, WALLET_CHECK_FAILED } from "./x402-hook-guard.js";
 
 // Supported networks. EVM chains use eip155: CAIP-2 IDs; Solana uses the
 // solana: genesis-hash CAIP-2. Adding a chain = register its scheme + list
@@ -968,7 +969,7 @@ export const BAZAAR_DESCRIPTIONS = Object.freeze({
   "sol-token-safety": "Safety verdict for one Solana token mint: a graded risk score with the concrete reasons behind it, mint and freeze authority state, how much of the liquidity pool is locked, top-holder concentration, holder count and whether the token is verified. Use it before an agent buys, quotes, or recommends an unfamiliar token, and to screen a list of mints in seconds.",
   "defi-yields": "Live yield opportunities across DeFi, filterable by chain, protocol, token symbol, stablecoin-only, minimum TVL and minimum APY: pool identity, TVL in dollars, total APY split into base and reward, 1-day, 7-day and 30-day APY change, impermanent-loss risk and exposure type. Use it to find, compare or monitor where a given asset earns the most right now.",
   "crypto-news": "Recent crypto headlines aggregated from the public feeds of major outlets, deduplicated and newest first, each with title, source, publish time, canonical URL and a short summary, filterable by keyword, source and time window. Use it when an agent needs what happened in the last hours rather than what a model was trained on.",
-  "v1-images-fast": "Generate an image from a text prompt at a flat price per picture, no token math and no subscription: the OpenAI images request shape in, base64 PNG or JPEG out, with an automatic fallback model so a provider outage does not become your error. Use it when an agent needs a picture cheaply and predictably.",
+  "v1-images-fast": "Generate an image from a text prompt at a flat price per picture, no token math and no subscription: the OpenAI images request shape in, base64 PNG, JPEG or WebP out, with an automatic fallback model so a provider outage does not become your error. Use it when an agent needs a picture cheaply and predictably.",
   "v1-videos": "Generate a short video clip from a text prompt at a flat price per clip: a four-second 720p clip returned inline as base64 MP4, with the duration and resolution locked so the price never moves. Use it when an agent needs motion rather than a still, and needs to know the cost before it calls.",
   "site-crawl": "Crawl a website from a starting URL and return each page as clean markdown: breadth-first over internal links, bounded by page count and depth, honouring robots.txt, with per-page title, status, depth and outbound links. Use it when an agent needs a whole section of a site rather than one known page.",
   "asset-transfers": "Token and native transfer history for any EVM address across major chains: direction, counterparty, asset, exact decimal value, block and transaction hash, filterable by category and block range with a cursor for paging. Use it to reconstruct what an address actually did, rather than only what it holds now.",
@@ -2359,8 +2360,10 @@ async function contractVerifyAllowed(req, payer, { now = Date.now(), counter = s
   } catch { return false; }
 }
 
+// A throw anywhere in the gate refuses the payment (before verification, so
+// nothing is charged): an unchecked contract wallet never reaches a route.
 export function registerArcContractWalletRouteGate(server, okRoutes, { counter = shared, now = () => Date.now() } = {}) {
-  server.onBeforeVerify(async (ctx) => {
+  server.onBeforeVerify(refusingHook(HOOK_NAMES.arcContractWalletGate, async (ctx) => {
     if (ctx?.requirements?.network !== ARC_CAIP2) return undefined;
     if (!(await isContractWalletPayment(ctx?.paymentPayload))) return undefined;
     const req = ctx?.transportContext?.request?.adapter?.req;
@@ -2380,7 +2383,10 @@ export function registerArcContractWalletRouteGate(server, okRoutes, { counter =
       };
     }
     return undefined;
-  });
+  }, {
+    reason: ARC_CONTRACT_WALLET_CHECK_FAILED,
+    message: "The contract-wallet check could not run for this payment. Nothing was charged; retry shortly or pay from an EOA.",
+  }));
   return server;
 }
 
@@ -2398,9 +2404,11 @@ export function registerWalletBlocklistPayerEnrichment(server) {
   });
 }
 
-function registerWalletBlocklistHook(server) {
+// A throw refuses the settlement (the buyer is not charged): a payer the
+// blocklist could not be read for is never settled.
+export function registerWalletBlocklistHook(server) {
   registerWalletBlocklistPayerEnrichment(server);
-  server.onBeforeSettle((ctx) => {
+  server.onBeforeSettle(refusingHook(HOOK_NAMES.walletBlocklist, (ctx) => {
     const blocked = blockedPayerFromPayload(ctx?.paymentPayload);
     if (!blocked) return;
     console.warn(`[payments] BLOCKED wallet refused before settlement: ${blocked} (${ctx?.requirements?.network})`);
@@ -2409,7 +2417,10 @@ function registerWalletBlocklistHook(server) {
       reason: "wallet_blocked",
       message: "This wallet is blocked for terms-of-service violations (see https://agent402.tools/terms). Contact mike@agent402.tools.",
     };
-  });
+  }, {
+    reason: WALLET_CHECK_FAILED,
+    message: "The wallet check could not run for this payment, so it was not settled. Nothing was charged; retry shortly.",
+  }));
 }
 
 /**
@@ -2431,14 +2442,17 @@ function registerWalletBlocklistHook(server) {
  * undefined and the payment settles as before, with the charge booked as owed
  * by the hang-up hook: never a silent free run.
  */
+// A throw passes: the payment settles as it does with no ticket, and the
+// hang-up hook books an undelivered charge as owed. Refusing here would hand
+// out the handler's run unpaid on every failure of this check.
 export function registerClientGoneSettleHook(server) {
-  server.onBeforeSettle((ctx) => {
+  server.onBeforeSettle(passingHook(HOOK_NAMES.clientGone, (ctx) => {
     const req = ctx?.transportContext?.request?.adapter?.req;
     // No ticket (budget spent, or a route that never reserved one): settle as
     // usual; the hang-up hook books the undelivered charge as owed.
     if (!req || !chargeCancelledForClientGone(req)) return;
     return { abort: true, reason: "client_disconnected", message: CLIENT_GONE_TEXT };
-  });
+  }));
 }
 
 /**

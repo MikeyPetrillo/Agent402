@@ -6,7 +6,7 @@ Live at **[agent402.tools](https://agent402.tools)**.
 
 Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent402.tools) · [Why pay here](https://agent402.tools/docs#why) · [Receipts](https://agent402.tools/proof) · [Status](https://agent402.tools/status) · [Security](https://agent402.tools/security) · [Company](https://agent402.tools/company)
 
-**Try it in 30 seconds:** `claude mcp add agent402 -- npx -y agent402-mcp@0.13.27`, or paste `https://agent402.tools/mcp` into any MCP client. The free tier needs no wallet. Verified setup blocks for Cursor, VS Code, Windsurf, Cline, Roo Code, Codex CLI, Gemini CLI, Continue, ElizaOS, Paperclip and AgentCore: [agent402.tools/guides/agent-hosts](https://agent402.tools/guides/agent-hosts) (shortlinks `agent402.sh/<host>`, e.g. `agent402.sh/cursor`).
+**Try it in 30 seconds:** `claude mcp add agent402 -- npx -y agent402-mcp@0.13.28`, or paste `https://agent402.tools/mcp` into any MCP client. The free tier needs no wallet. Verified setup blocks for Cursor, VS Code, Windsurf, Cline, Roo Code, Codex CLI, Gemini CLI, Continue, ElizaOS, Paperclip, HarnessRouter and AgentCore: [agent402.tools/guides/agent-hosts](https://agent402.tools/guides/agent-hosts) (shortlinks `agent402.sh/<host>`, e.g. `agent402.sh/cursor`).
 
 **Who pays:** agents pay per call (from $0.001; models metered under a quoted ceiling and settled at actual usage); people buy finished reports ($2 to $5) and monitors ($5 a month) by card; sites charge crawlers with the tollbooth.
 
@@ -35,8 +35,10 @@ Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent
 > [`/sell`](https://agent402.tools/sell) (`POST /api/index/register`:
 > self-serve, no signup, 0% take). The router sends buyers to a seller once its
 > routes show settled payments from several independent buyers; calls priced at
-> $0.01 or less can be tried before that, marked unproven on the buyer's
-> receipt. Charging crawlers on your own site instead?
+> $0.05 or less on Base (up to $0.25 a day per seller and $5.00 a day in all) or
+> $0.01 or less on Solana can be tried before that, marked unproven on the
+> buyer's receipt.
+> Charging crawlers on your own site instead?
 > [`agent402-tollbooth`](tollbooth) puts a 402 gate in front of it.
 >
 > **What makes it different:** Agent402 is **open-source and self-hostable** - and a
@@ -121,8 +123,8 @@ https://agent402.tools/mcp
 **2. One command - run the MCP server locally** (the pure-CPU tools work with no key; it pays the tiny proof-of-work for you):
 
 ```bash
-npx -y agent402-mcp@0.13.27
-# in Claude Code:  claude mcp add agent402 -- npx -y agent402-mcp@0.13.27
+npx -y agent402-mcp@0.13.28
+# in Claude Code:  claude mcp add agent402 -- npx -y agent402-mcp@0.13.28
 ```
 
 **3. Clone and host the whole thing** (all 500+ tools as an HTTP API + MCP, free mode, no payments):
@@ -297,8 +299,8 @@ Two companion tools close the loop: `POST /api/route/execute` ($0.01, with
 best tool and runs it in one paid call, including, with `include:"external"`,
 tools sold by **other x402 sellers** (it routes on proven on-chain settled
 volume, with one exception - a Base or Solana seller with no history yet is
-tried only after every proven candidate, under a small per-call ceiling, and
-flagged unproven on the receipt - buys the result from them **on the chain you paid
+tried only after every proven candidate, under a small per-call ceiling (on Base,
+also a daily cap per seller), and flagged unproven on the receipt - buys the result from them **on the chain you paid
 on** - Base, Solana, Algorand or Tempo - and sells it to you; see the
 [Smart Order Router guide](https://agent402.tools/guides/smart-order-router)), and
 `POST /api/my-usage` ($0.005) returns the **paying wallet's own** purchase

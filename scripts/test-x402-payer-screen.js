@@ -155,7 +155,7 @@ const STORE = join(TMP, "screen.json");
 writeFileSync(STORE, JSON.stringify({ v: 1, loadedAt: Date.now(), publishDate: "01/01/2026", perAsset: { ETH: 2 }, addresses: [LISTED, OTHER_LISTED] }));
 
 const boot = async (port, storeFile) => {
-  const env = { ...process.env, PORT: String(port), FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
+  const env = { ...process.env, TRUST_PROXY_HOPS: "1", PORT: String(port), FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
     FACILITATOR_URL: FAC, AGENT402_BASE_RPC: `${FAC}/rpc`, PAYMENT_NETWORKS: "base",
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", TEMPO_RELAY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "",
     OPENAI_API_KEY: "sk-test-never-used", OPENROUTER_API_KEY: "", AGENT402_OPERATOR_TOKEN: "payer-screen-test-operator-token-0123456789",

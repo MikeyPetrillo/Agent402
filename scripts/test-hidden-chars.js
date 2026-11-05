@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // No hidden character in an instruction file. The files an agent reads as
-// instructions (CLAUDE.md, the committed .claude agents and skills, the wiki
+// instructions (CLAUDE.md, the committed .claude agents, skills and rules, the wiki
 // and docs sources, the READMEs of every published package and adapter, the
 // npm MCP server's source, and the hosted connector's instructions, server
 // description and tool descriptions in src/mcp-flagship.js, the connector
@@ -44,6 +44,15 @@ ok(tracked.includes("CLAUDE.md") && SOURCE_FILES.every((f) => tracked.includes(f
   "the project map, the MCP instruction modules, the npm server and the wiki source are in the set");
 ok(["mcp/README.md", "client/README.md", "openclaw/README.md", "tollbooth/README.md"].every((f) => tracked.includes(f)) && tracked.filter((f) => /^adapters\/[^/]+\/README\.md$/.test(f)).length >= 5,
   "every published package README and the adapter READMEs are in the set");
+
+// The path-scoped rules, the project skills and the committed agents are
+// instructions too: a session loads a rules file whenever it reads a matching
+// path, and runs a skill or an agent file as its brief. .claude is in PATHS;
+// this pins that each kind is actually read (an ignore-file change that
+// untracks them, or a filter that drops them, fails here).
+ok(tracked.filter((f) => /^\.claude\/rules\/[^/]+\.md$/.test(f)).length >= 5 && tracked.includes(".claude/skills/batch/SKILL.md")
+  && tracked.filter((f) => /^\.claude\/agents\/[^/]+-reviewer\.md$/.test(f)).length >= 4,
+  "the .claude rules files, the batch skill and the reviewer agents are in the set");
 
 // --- the scanner bites before the tree is read -----------------------------------
 const tag = (s) => Array.from(s).map((c) => String.fromCodePoint(0xe0000 + c.codePointAt(0))).join("");

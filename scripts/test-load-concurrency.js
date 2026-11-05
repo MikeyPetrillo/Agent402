@@ -9,7 +9,7 @@
 //
 // Buyers are told apart by address: each sends x-forwarded-for 198.51.100.<n>,
 // which Express turns into req.ip because the server trusts exactly one proxy
-// hop (TRUST_PROXY_HOPS, default 1; src/server.js). Every per-client gate the
+// hop (TRUST_PROXY_HOPS=1 on this boot; the default is 0, src/trust-proxy.js). Every per-client gate the
 // discovery path has (the 30-a-minute uncached-search limiter, the per-client
 // CPU share) keys on that address, so a single loopback address would trip
 // them for all thirty buyers at once and measure the limiter, not the server.
@@ -128,7 +128,7 @@ const SLOW_TOOL_THREAD_SHARE = 0.25;
 // this test touches no upstream, and the CI lane's job-level keys must never
 // reach a server a load test drives.
 const SPEND_KEYS = ["BRAVE_API_KEY", "FRED_API_KEY", "FRED_API_KEY_V2", "E2B_API_KEY", "COINGECKO_API_KEY", "OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "EXA_API_KEY", "OPENAI_API_KEY", "X_BEARER_TOKEN", "STRIPE_SECRET_KEY", "MPP_SECRET_KEY", "TEMPO_API_KEY", "REDIS_URL", "STATE_DATABASE_URL"];
-const childEnv = { ...process.env };
+const childEnv = { ...process.env, TRUST_PROXY_HOPS: "1" }; // buyers are told apart by X-Forwarded-For behind one proxy hop
 for (const k of Object.keys(childEnv)) if (SPEND_KEYS.includes(k) || /_API_KEY$/.test(k)) delete childEnv[k];
 const TOKEN = "load-concurrency-operator-token-0123456789";
 const dir = mkdtempSync(join(tmpdir(), "a402-load-"));

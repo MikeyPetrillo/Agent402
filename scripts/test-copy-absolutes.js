@@ -426,10 +426,22 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
 
   delete process.env.SOR_SVM_UNPROVEN_MAX_USD;   // the shipped defaults
   delete process.env.SOR_BASE_UNPROVEN_MAX_USD;
+  const beforeDay = process.env.SOR_BASE_UNPROVEN_SELLER_DAILY_USD;
+  delete process.env.SOR_BASE_UNPROVEN_SELLER_DAILY_USD;
   const live = mod.routingProofSentence();
   ok(/proven on-chain settlement/.test(live), "the sentence still leads with the proof requirement");
-  ok(/one exception/.test(live) && /\$0\.01/.test(live),
-     "with the tier on its live default the sentence NAMES the exception and its ceiling");
+  ok(/one exception/.test(live) && /\$0\.05 a call on Base/.test(live) && /\$0\.01 a call on Solana/.test(live),
+     "with the tier on its live default the sentence NAMES the exception and each chain's ceiling");
+  ok(/at most \$0\.25 a day per seller, \$5\.00 a day in all/.test(live), "...and Base's per-seller and lane-wide daily caps beside Base's figure");
+  // README cannot call the function, so its typed figures are pinned to the defaults here.
+  {
+    const { BASE_UNPROVEN_DEFAULT_USD, BASE_UNPROVEN_SELLER_DAILY_DEFAULT_USD, BASE_UNPROVEN_LANE_DAILY_DEFAULT_USD } = await import("../src/base-unproven.js");
+    const { svmUnprovenAllowanceAtomic } = await import("../src/solana-buyer.js");
+    const { usdFigure: fig } = await import("../src/price-usd.js");
+    const readme = (read("README.md") || "").replace(/\n> ?/g, " ").replace(/\s+/g, " ");
+    ok(readme.includes(`calls priced at ${fig(BASE_UNPROVEN_DEFAULT_USD)} or less on Base (up to ${fig(BASE_UNPROVEN_SELLER_DAILY_DEFAULT_USD)} a day per seller and ${fig(BASE_UNPROVEN_LANE_DAILY_DEFAULT_USD)} a day in all) or ${fig(Number(svmUnprovenAllowanceAtomic()) / 1e6)} or less on Solana`),
+       "README's seller line quotes the shipped unproven ceilings, the per-seller daily cap and the lane total, each in usdFigure's format");
+  }
   ok(/after every proven candidate/.test(live) && /flagged unproven/.test(live),
      "...and says the two things that make the exception bounded: ordering and the receipt flag");
   ok(/on Base/.test(live) && /on Solana/.test(live), "both chains' tiers are named while both are on");
@@ -445,11 +457,22 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
   delete process.env.SOR_SVM_UNPROVEN_MAX_USD;
   process.env.SOR_BASE_UNPROVEN_MAX_USD = "0.03";
   ok(/\$0\.03 a call on Base/.test(mod.routingProofSentence()), "the Base ceiling is read from its own env too");
+  process.env.SOR_BASE_UNPROVEN_SELLER_DAILY_USD = "0.4";
+  ok(/at most \$0\.40 a day per seller/.test(mod.routingProofSentence()), "the per-seller daily cap is read from its env");
+  process.env.SOR_BASE_UNPROVEN_SELLER_DAILY_USD = "off";
+  ok(!/a day per seller/.test(mod.routingProofSentence()), "switched off, the daily cap is not claimed");
+  process.env.SOR_BASE_UNPROVEN_DAILY_USD = "12";
+  ok(/\$12\.00 a day in all/.test(mod.routingProofSentence()), "the lane-wide daily cap is read from its env");
+  process.env.SOR_BASE_UNPROVEN_DAILY_USD = "off";
+  ok(!/a day in all/.test(mod.routingProofSentence()), "switched off, the lane-wide cap is not claimed");
+  delete process.env.SOR_BASE_UNPROVEN_DAILY_USD;
+  delete process.env.SOR_BASE_UNPROVEN_SELLER_DAILY_USD;
 
   if (before === undefined) delete process.env.SOR_SVM_UNPROVEN_MAX_USD;
   else process.env.SOR_SVM_UNPROVEN_MAX_USD = before;
   if (beforeBase === undefined) delete process.env.SOR_BASE_UNPROVEN_MAX_USD;
   else process.env.SOR_BASE_UNPROVEN_MAX_USD = beforeBase;
+  if (beforeDay !== undefined) process.env.SOR_BASE_UNPROVEN_SELLER_DAILY_USD = beforeDay;
 
   // Every page that makes the claim must call the function. A page that
   // reworded the absolute by hand would pass the regex sweep above.

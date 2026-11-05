@@ -1,6 +1,6 @@
 // The Algorand buyer pays a seller that still advertises the legacy network id
-// (the full genesis hash). @x402/avm 2.29 refuses that spelling when it picks
-// the algod client and asset, so src/x402-buyer.js folds it to the CAIP-2 id
+// (the full genesis hash). The @x402/avm scheme accepts only the CAIP-2 id when
+// it picks the algod client and asset, so src/x402-buyer.js folds it to the CAIP-2 id
 // inside the scheme only; the payment still echoes the seller's own accept.
 // Offline: the real x402 client and scheme, a stub algod client.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)

@@ -9,6 +9,7 @@
 // layout with a real navigation tree - the opposite of what a GitBook-style
 // docs hub should feel like.
 
+import { siteOrgRef } from "./site-org.js";
 import { ledgerShell, ledgerFooterCompact, fmtNum } from "./ledger-chrome.js";
 import { docsLayoutHtml, DOCS_LAYOUT_CSS, docPrevNextHtml, DOCS_SEARCH_SCRIPT } from "./docs.js";
 import { toolList } from "./pages.js";
@@ -80,11 +81,7 @@ export function ledgerDocsPage(baseUrl, catalog) {
     name: "Agent402.Tools Documentation",
     url: canonical,
     description,
-    publisher: {
-      "@type": "Organization",
-      name: "Agent402.Tools",
-      url: baseUrl,
-    },
+    publisher: siteOrgRef(baseUrl),
   };
   // The "Why pay here" points render in full here (#why); the home page shows
   // three short claims that link to them.
@@ -133,7 +130,7 @@ node demo.js
 
 <span style="color:var(--on-panel-faint);"># Claude Code - npm server with a funded EVM key (paid tools settle via x402)
 # Use a new wallet holding only a few dollars of USDC. Never your main wallet.
-</span>claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_FUNDED_KEY -- npx -y agent402-mcp@0.13.27
+</span>claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_FUNDED_KEY -- npx -y agent402-mcp@0.13.28
 
 <span style="color:var(--on-panel-faint);"># Cursor - ~/.cursor/mcp.json
 </span>{

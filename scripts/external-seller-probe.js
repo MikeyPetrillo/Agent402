@@ -4,7 +4,7 @@
 // outreach kit (the seller's OpenAPI documents inputs but not outputs, and
 // "request contracts runtimeVerified:false" was the research's own caveat):
 // before a kit relays a seller's response, one real paid call shows its shape.
-// Dispatch-only (.github/workflows/external-seller-probe.yml); never in CI.
+// Dispatch-only (.github/workflows/spend.yml, job external-seller-probe); never in CI.
 //
 //   BURNER_KEY=0x... PROBE_URL=https://seller/route PROBE_METHOD=POST \
 //   PROBE_BODY='{"...":"..."}' PROBE_HEADERS='{"Idempotency-Key":"..."}' PROBE_MAX_USD=0.01 node scripts/external-seller-probe.js

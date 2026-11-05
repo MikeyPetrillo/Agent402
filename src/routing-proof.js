@@ -10,17 +10,16 @@
 // page that types the exception would be wrong the day the tier is switched
 // off. Derive both from the same function the router reads.
 import { svmUnprovenAllowanceAtomic } from "./solana-buyer.js";
-import { baseUnprovenAllowanceUsd } from "./base-unproven.js";
+import { baseUnprovenAllowanceUsd, baseUnprovenSellerDailyUsd, baseUnprovenLaneDailyUsd } from "./base-unproven.js";
 import { ROUTE_ORDER, routeTiebreakProse } from "./route-order.js";
+import { usdFigure } from "./price-usd.js";
 
 /** The unproven-tier ceiling in dollars, or 0 when the tier is disabled. */
 export function unprovenAllowanceUsd() {
   return Number(svmUnprovenAllowanceAtomic()) / 1e6;
 }
 
-function usd(n) {
-  return n < 0.01 ? `$${n.toFixed(4).replace(/0+$/, "").replace(/\.$/, "")}` : `$${n.toFixed(2)}`;
-}
+const usd = usdFigure;
 
 /**
  * One sentence about what a seller must prove to be paid by our router.
@@ -29,12 +28,17 @@ function usd(n) {
 export function routingProofSentence() {
   const sol = unprovenAllowanceUsd();
   const base = baseUnprovenAllowanceUsd();
+  const baseDay = base > 0 ? baseUnprovenSellerDailyUsd() : null;
+  const baseLane = base > 0 ? baseUnprovenLaneDailyUsd() : null;
   const tiers = [];
   // One figure when both ceilings match ("$0.01 a call on Base and on Solana"),
-  // so the sentence does not read like a repeated typo.
-  if (base > 0 && sol > 0 && usd(base) === usd(sol)) tiers.push(`${usd(base)} a call on Base and on Solana`);
+  // so the sentence does not read like a repeated typo. Base's per-seller
+  // daily cap rides with Base's figure.
+  if (base > 0 && sol > 0 && usd(base) === usd(sol) && !baseDay && !baseLane) tiers.push(`${usd(base)} a call on Base and on Solana`);
   else {
-    if (base > 0) tiers.push(`${usd(base)} a call on Base`);
+    // Base's daily caps ride with Base's figure: per seller, then the lane's total.
+    const caps = [baseDay ? `at most ${usd(baseDay)} a day per seller` : "", baseLane ? `${usd(baseLane)} a day in all` : ""].filter(Boolean).join(", ");
+    if (base > 0) tiers.push(`${usd(base)} a call on Base${caps ? ` (${caps})` : ""}`);
     if (sol > 0) tiers.push(`${usd(sol)} a call on Solana`);
   }
   if (!tiers.length) return "Sellers are routable on proven on-chain settlement.";

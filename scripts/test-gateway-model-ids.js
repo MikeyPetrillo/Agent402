@@ -408,6 +408,36 @@ const expiryOf = (m) => m.expiration_date || m.deprecation_date || null;
 const watched = new Set([...Object.values(AUTO_RANKINGS).flatMap((b) => Object.values(b).flat()), ...Object.values(TIERS).flatMap((t) => t.fallbacks || [])]);
 const expiring = models.filter((m) => watched.has(m.id) && expiryOf(m) && Date.parse(expiryOf(m)) < soon).map((m) => `${m.id} (${expiryOf(m)})`);
 ok(expiring.length === 0, `no ranked/fallback model expires within 14 days${expiring.length ? ` (${expiring.join(", ")})` : ""}`);
+// 5-media. Every image, speech and video chain id, read from whichever
+//     catalog lists it (image ids are mostly absent from the chat list).
+//     Until 2026-11-05 rule 5 watched chat ids only, and gpt-5-image-mini
+//     rode two image chains with a date set, unseen. Image and video links
+//     sit with the defaults: their chains are one to three links and each
+//     link's bound is a private row for that one model, so a successor is a
+//     decided change and ANY upstream date fails now. The speech chain walks
+//     six links across providers, so a speech id meets rule 5's 14-day
+//     horizon, and a later date is printed as a warning.
+{
+  const { TTS_TIERS, TTS_BACKUP_MODELS } = await import("../src/tools/tts-kit.js");
+  const { VIDEOS_MODEL } = await import("../src/tools/llm-images-fast-kit.js");
+  const visualIds = new Set([...Object.values(IMAGE_TIERS).flatMap((t) => t.chain.map((l) => l.model)), VIDEOS_MODEL]);
+  const speechChainIds = new Set([
+    ...SPEECH_MODELS.map((m) => m.id),
+    ...Object.values(TTS_TIERS).flatMap((t) => t.chain || [t.model]),
+    ...TTS_BACKUP_MODELS,
+  ].filter(Boolean));
+  const dated = new Map();
+  for (const m of [...models, ...speech, ...imageModels, ...videoModels]) {
+    if ((visualIds.has(m.id) || speechChainIds.has(m.id)) && expiryOf(m)) dated.set(m.id, expiryOf(m));
+  }
+  ok(visualIds.size >= 5 && speechChainIds.size >= 6, `the expiry watch covers every image and video link (${visualIds.size}) and every speech chain id (${speechChainIds.size})`);
+  const visualDated = [...dated].filter(([id]) => visualIds.has(id));
+  ok(visualDated.length === 0, `no image or video link carries an upstream expiration date${visualDated.length ? ` (${visualDated.map(([id, d]) => `${id} ${d}`).join(", ")}: pick a successor)` : ""}`);
+  const speechDated = [...dated].filter(([id]) => speechChainIds.has(id) && !visualIds.has(id));
+  for (const [id, d] of speechDated) if (Date.parse(d) >= soon) warn(`speech chain id ${id} expires upstream ${d} - choose its successor before then`);
+  const due = speechDated.filter(([, d]) => Date.parse(d) < soon);
+  ok(due.length === 0, `no speech chain id expires within 14 days${due.length ? ` (${due.map(([id, d]) => `${id} ${d}`).join(", ")})` : ""}`);
+}
 // 5a. RETIRING_MODELS maps ids the upstream is removing to a successor. An
 //     entry must describe an id the upstream really is removing (it carries
 //     an expiration date), and its named successor must be live and admitted;

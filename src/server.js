@@ -1,3 +1,4 @@
+import { siteOrgRef, mppOffered } from "./site-org.js";
 import { heapSamplingReport } from "./boot-profile.js"; // diagnostic boot CPU profile - must stay the FIRST import (see the file)
 import "./tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA, process-wide (see the file)
 import { mtaStsPolicy } from "./mta-sts.js";
@@ -59,7 +60,7 @@ import {
   grant, revoke, listGrants, getLog, remember, recall, forget,
   PERSISTENT as memoryPersistent,
 } from "./tools/memory.js";
-import { payerFromRequest, payerFromPaymentResponse, paymentHeaderOf } from "./payer.js";
+import { payerFromRequest, payerFromPaymentResponse, paymentHeaderOf, identityPayerOf, FREE_MODE_IDENTITY_NOTE } from "./payer.js";
 import { paidPriceUsd, quotedOnNetworkUsd, ticketPriceUsd } from "./paid-price.js";
 import { runInAbortableScope, abortInFlightComposites, installDrainAwareFetch, isDrainAbort, drainSignal } from "./drain-abort.js";
 import { sharedClaimRequired, markListening } from "./replay-topology.js";
@@ -340,8 +341,9 @@ import { phaseArrivalMiddleware, markPaidHandlerStart, paidPhaseSummary } from "
 import { slowPaidMsFromEnv, slowPaidVerdict, recentSlowPaidCalls } from "./slow-paid-calls.js";
 import { assertAvmValidityCovers } from "./avm-validity.js";
 import { assertEvmValidityCovers, EVM_RUN_SECONDS, runTimeNote } from "./evm-validity.js";
-import { createAsyncJobs, wantsAsync, LOOPBACK_HEADER as ASYNC_LOOPBACK_HEADER } from "./async-jobs.js";
+import { createAsyncJobs, wantsAsync, isAsyncLoopbackToken, LOOPBACK_HEADER as ASYNC_LOOPBACK_HEADER } from "./async-jobs.js";
 import { cdnClientIpMiddleware, cdnProxyEnabled, cdnOriginStatus, refreshCdnOriginShared } from "./cdn-client-ip.js";
+import { trustProxyHops, replayClientIpMiddleware, forwardedWithoutHopsWarning } from "./trust-proxy.js";
 import { paidNoStoreMiddleware } from "./paid-no-store.js";
 import { cdnSyncDeadlineMiddleware, cdnSyncWindowMiddleware, followsJobAnswer } from "./cdn-sync-window.js";
 import { slowSyncWindowMiddleware } from "./slow-sync-window.js";
@@ -636,7 +638,7 @@ import { toolPage, openapiSpec, toolList, CATEGORIES, faqPage, categoryPage, rel
 import { createIdempotency, implicitReplayAllowed } from "./idempotency.js";
 import { mountMcp, mcpClientsSeenSinceBoot } from "./mcp-http.js";
 import { guidesIndex, guidePage, guideTitles } from "./guides.js";
-import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, buildPromptMessages } from "./skills.js";
+import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, buildPromptMessages, skillPackOfToolSlug } from "./skills.js";
 import { docsPage, docsApi, DOCS_SITE_ROUTES } from "./docs.js";
 import { changelogPage, changelogRss } from "./changelog.js";
 import { playgroundPage } from "./playground.js";
@@ -681,7 +683,7 @@ import { unloadedStores } from "./store-retry.js";
 import { dispatchEligibility, dispatchLegend } from "./dispatch-eligibility.js";
 import { routeExcludedCategory } from "./route-category.js";
 import { tempoCandidateOf, resolvedCandidateOf } from "./sor-candidates.js";
-import { baseUnprovenAllowanceUsd } from "./base-unproven.js";
+import { baseUnprovenAllowanceUsd, configureUnprovenSharedPayTos } from "./base-unproven.js";
 import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
@@ -1424,6 +1426,9 @@ function selfFundingClearedStore() {
 // The shared settlement contracts' outbound is never read (they credit nobody,
 // and they pay out on every payment they forward).
 configureSellerFunding({ cleared: selfFundingClearedStore(), skip: (w) => sharedPayToStore().has(w) });
+// A listed shared payTo is not one seller's wallet: the Base unproven lane's
+// per-seller cap keys a seller paid at one on its origin alone.
+configureUnprovenSharedPayTos((w) => sharedPayToStore().has(w));
 // The new-destination watch over the outbound ledger
 // (src/outbound-destinations.js): read at boot so the first word on
 // /api/gateway-status is the stored body, not an empty memory.
@@ -1841,27 +1846,11 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
   // target was already chosen by a decision; it is not re-judged.
   let judgedSelection = null;
   if (candidates.length && !onlyUrl) {
-    const { judgeReadableListing } = await import("./listing-screen.js");
-    const { judgedOverrideAllowed } = await import("./tools/route-execute.js");
-    const hostOfSeller = (u) => { try { return new URL(u).host; } catch { return String(u || ""); } };
-    let ordered = await orderByJudgment(task, candidates, (r) => {
-      const raw = String(r.description || r.name || "");
-      const clean = !looksLikeListingInjection(raw);
-      return judgeReadableListing({
-        host: hostOfSeller(r.seller || r.url),
-        slug: String(r.slug || ""),
-        description: clean ? raw : "",
-        tags: clean && Array.isArray(r.tags) ? r.tags.map(String) : [],
-      }, { links: false });
-    });
-    // A judged reorder stands only when its pick's own match score meets the
-    // floor (judgedOverrideAllowed, src/tools/route-execute.js); below it the
-    // lexical order is kept and the judge's answer rides on the receipt.
-    if (!ordered.refused && ordered.items?.[0] && ordered.items[0] !== candidates[0]
-      && (ordered.selection?.method === "judged" || ordered.selection?.method === "judged-tie")) {
-      const gate = judgedOverrideAllowed(task, candidates, ordered.items[0]);
-      if (!gate.ok) ordered = { ...ordered, items: candidates, selection: { method: "lexical", judged: { ...ordered.selection }, overrideRefused: { reason: "below_lexical_floor", score: gate.score, floor: gate.floor } } };
-    }
+    // judgeSellerOrder (src/tools/route-execute.js): the screened listing
+    // text the judge reads (sellerJudgeListing) and the floor a judged
+    // reorder is held to (judgedOverrideAllowed).
+    const { judgeSellerOrder } = await import("./tools/route-execute.js");
+    const ordered = await judgeSellerOrder(task, candidates);
     judgedSelection = ordered.selection;
     if (ordered.refused) {
       gateDrops.byReason.judged_no_match = candidates.length;
@@ -2054,8 +2043,23 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
             console.warn(`[sor] skipping unproven Base candidate ${r.seller}: its live payTo could not be read`);
             live = false;
           } else {
-            r.chainProvenPayTo = livePayTo;
-            console.log(`[sor] admitting Base candidate ${r.seller} as UNPROVEN (${r.priceUsd} is within the unproven ceiling) - tried after proven sellers`);
+            // The unproven lane is the label's (withDispatchFields): the same
+            // verdict, read with this origin's evidence and the address its
+            // live 402 names. The pre-probe filter above reads no evidence, so
+            // without this an origin whose withheld history sits at a shared
+            // wallet (evidence_payto_shared, which the label keeps out of the
+            // lane) was paid in it.
+            const lane = dispatchEligibility({ routable: true, networks: r.networks, settled: r.settled, payers: r.payers, priceUsd: r.priceUsd, urlTemplate: !!r.urlTemplate, spendChains: ["base"], minSettled: SOR_MIN_SETTLED_TX, minPayers: SOR_MIN_DISTINCT_PAYERS, routeText: r, usdcDomain: r.evmDomainByNetwork?.["eip155:8453"] || null, evidence: r.binding || undefined, livePayTo });
+            if (lane.chains.base?.unprovenTier !== true) {
+              console.warn(`[sor] skipping unproven Base candidate ${r.seller}: ${lane.chains.base?.detail || lane.reason} at its live payTo`);
+              live = false;
+              gateDrops.total++;
+              const why = lane.chains.base?.reason || "other";
+              gateDrops.byReason[why] = (gateDrops.byReason[why] || 0) + 1;
+            } else {
+              r.chainProvenPayTo = livePayTo;
+              console.log(`[sor] admitting Base candidate ${r.seller} as UNPROVEN (${r.priceUsd} is within the unproven ceiling) - tried after proven sellers`);
+            }
           }
         }
         if (live && chain === "base" && r.binding && !r.unproven) {
@@ -2505,11 +2509,17 @@ app.use((req, _res, next) => {
 // Every request renders inside its own path so the page shell can tell a
 // bearer link from its section canonical (src/ledger-chrome.js renderPathStore).
 app.use((req, _res, next) => renderPathStore.run(req.path, next));
-// Behind Railway's single edge proxy: trust exactly that hop so req.ip is the
-// real client IP (the X-Forwarded-For entry the edge appends), not an
-// attacker-supplied XFF value. This is what the per-IP rate limiters key on,
-// so spoofing it must not mint a fresh bucket. Tune for other topologies.
-app.set("trust proxy", Number(process.env.TRUST_PROXY_HOPS) || 1);
+// TRUST_PROXY_HOPS is the number of proxies in front of this listener whose
+// X-Forwarded-For entries are trusted (production sets 1: the edge appends the
+// real client). Unset, it is 0: a server reached directly takes req.ip from the
+// socket, since a client-written X-Forwarded-For would otherwise mint a fresh
+// bucket in every per-IP limiter (src/trust-proxy.js).
+const TRUST_PROXY_HOPS = trustProxyHops();
+app.set("trust proxy", TRUST_PROXY_HOPS);
+if (TRUST_PROXY_HOPS === 0) {
+  app.use(forwardedWithoutHopsWarning({ isReplay: (req) => isMcpLoopback(req) || isAsyncLoopbackToken(req.headers[ASYNC_LOOPBACK_HEADER]) }));
+  app.use(replayClientIpMiddleware({ isReplay: (req) => isMcpLoopback(req) || isAsyncLoopbackToken(req.headers[ASYNC_LOOPBACK_HEADER]) }));
+}
 // Through the CDN proxy the edge-reported peer is a CDN address and the client
 // is CF-Connecting-IP; from any other peer that header is ignored. req.ip is
 // redefined here, before any reader, so every limiter and attribution keys on
@@ -2897,6 +2907,9 @@ app.use("/__operator", (req, res, next) => {
   res.set("Cache-Control", "no-store, private");
   res.set("Pragma", "no-cache");
   res.set("Vary", "Cookie, Authorization");
+  // No operator surface belongs in a search index, the public sign-in form
+  // included; the page shell repeats it as a robots meta.
+  res.set("X-Robots-Tag", "noindex, nofollow");
   if (operatorWriteRefused(req)) return res.status(403).json({ error: "operator writes from a browser session must come from this site's own pages" });
   if (!OP_SESSION_SHARED) return next();
   syncOperatorSession(req).then(() => next(), () => next());
@@ -3259,8 +3272,9 @@ app.use((req, _res, next) => {
 // turns a POST on a GET-only canonical route into the GET it needs, so a buyer
 // can POST every verb in the namespace without knowing which is which.
 app.use(chainNamespaceMiddleware);
-// Hourly budget on unpaid price checks per client (ip + User-Agent product
-// token): src/unpaid-quote-budget.js. After the traffic classifier (so a 429 is
+// Hourly budget on unpaid price checks per client address (req.ip, an IPv6
+// /64 as one; the User-Agent never makes a new client or an exemption, only
+// our signed probes are exempt): src/unpaid-quote-budget.js. After the traffic classifier (so a 429 is
 // still classed) and the path rewrites above (so an alias counts as the route
 // it serves), BEFORE the body parsers and every payment/PoW gate, so a
 // throttled request costs no parse and no challenge build. Not mounted under
@@ -4050,7 +4064,7 @@ app.get("/reports/public/:publicId", async (req, res, next) => {
     title: headline, description, canonical,
     jsonLd: [
       { "@type": "BreadcrumbList", itemListElement: [{ "@type": "ListItem", position: 1, name: "Agent402", item: `${BASE_URL}/` }, { "@type": "ListItem", position: 2, name: "Reports", item: `${BASE_URL}/reports` }, { "@type": "ListItem", position: 3, name: headline, item: canonical }] },
-      { "@type": "Report", "@id": `${canonical}#report`, headline, name: headline, about: r.input, isAccessibleForFree: true, ...(r.at ? { datePublished: r.at } : {}), author: { "@type": "Organization", name: "Agent402", url: BASE_URL }, publisher: { "@type": "Organization", name: "Agent402", url: BASE_URL }, mainEntityOfPage: canonical, description: description.slice(0, 300) },
+      { "@type": "Report", "@id": `${canonical}#report`, headline, name: headline, about: r.input, isAccessibleForFree: true, ...(r.at ? { datePublished: r.at } : {}), author: siteOrgRef(BASE_URL), publisher: siteOrgRef(BASE_URL), mainEntityOfPage: canonical, description: description.slice(0, 300) },
     ],
   }));
 });
@@ -9323,13 +9337,12 @@ app.get("/tools/:slug", (req, res) => {
   // The method alias (POST on a GET-only path, GET/HEAD on a POST-only path)
   // runs only when the catalog has no route of the other method at this path.
   const otherMethodRouted = !!CATALOG[`${tool.method === "GET" ? "POST" : "GET"} ${tool.path}`];
-  htmlCache(res, 300, 900).send(skillPackCanonical(tool.slug, toolPage(BASE_URL, tool, related, { computePayable: POW_SLUGS.has(tool.slug), powDifficulty: POW_DIFFICULTY, cacheTtl: cachePolicy?.ttl ?? null, otherMethodRouted, mpp: !!(process.env.MPP_SECRET_KEY || "").trim() })));
+  htmlCache(res, 300, 900).send(skillPackCanonical(tool.slug, toolPage(BASE_URL, tool, related, { computePayable: POW_SLUGS.has(tool.slug), powDifficulty: POW_DIFFICULTY, cacheTtl: cachePolicy?.ttl ?? null, otherMethodRouted, mpp: mppOffered() })));
 });
 // A skill pack's catalog page points its canonical at the pack page (/skills/<pack>).
-const SKILL_PACK_SLUGS = new Set(SKILL_PACKS.map((p) => p.slug));
 function skillPackCanonical(toolSlug, html) {
-  const pack = toolSlug.startsWith("skill-") ? toolSlug.slice(6) : null;
-  if (!pack || !SKILL_PACK_SLUGS.has(pack)) return html;
+  const pack = skillPackOfToolSlug(toolSlug);
+  if (!pack) return html;
   const from = `${BASE_URL}/tools/${toolSlug}`, to = `${BASE_URL}/skills/${pack}`;
   return html
     .replace(`<link rel="canonical" href="${from}">`, `<link rel="canonical" href="${to}">`)
@@ -11309,12 +11322,16 @@ app.post("/api/pdf", async (req, res) => {
 // Wallet-keyed memory: the verified payer address is the caller identity.// Wallet-keyed memory: the verified payer address is the caller identity.
 // `actor` is who is calling; `owner` is the namespace being acted on (defaults
 // to the caller's own namespace; a different owner requires a grant).
+// In FREE_MODE nothing verifies a payment header, so identityPayerOf is null
+// there and the only identity is the demo namespace (src/payer.js).
 function memoryActor(req, res) {
-  const payer = payerFromRequest(req);
+  const payer = identityPayerOf(req);
   if (payer) return payer;
   if (FREE_MODE && req.query.ns) return `demo:${req.query.ns}`;
   res.status(400).json({
-    error: "No payer identity found on this request. Pay via x402 - the paying wallet is your identity.",
+    error: FREE_MODE
+      ? `${FREE_MODE_IDENTITY_NOTE} For memory, pass ?ns=<name> to use a demo namespace.`
+      : "No payer identity found on this request. Pay via x402 - the paying wallet is your identity.",
   });
   return null;
 }

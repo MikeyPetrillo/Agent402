@@ -79,7 +79,7 @@ dbStub = createServer((req, res) => {
 await new Promise((r) => dbStub.listen(DB_PORT, "127.0.0.1", r));
 
 proc = spawn("node", ["--import", "./scripts/lib/databento-stub-preload.js", "src/server.js"], {
-  env: { ...process.env, PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: TREASURY, NETWORK: "base",
+  env: { ...process.env, TRUST_PROXY_HOPS: "1", PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: TREASURY, NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`, PAYMENT_NETWORKS: "base",
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: SECRET, TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "",
     DATABENTO_API_KEY: "db-test-key-not-real", DATABENTO_STUB_URL: `http://127.0.0.1:${DB_PORT}`, PAID_TIMING_LOG: "",

@@ -12,7 +12,8 @@
 # The fix is more observations per run, not a looser alarm. Sourced, never
 # executed: it defines probe() and record_observation() and does nothing else.
 #
-# Required env: PROD, RUN_URL, and PROBE_TOKEN (or OP_TOKEN as the fallback). Optional: POW_SECRET,
+# Required env: PROD, RUN_URL, and PROBE_TOKEN (or OP_TOKEN as the fallback). Optional: POW_SECRET
+# (signs the paywall read and the proof-of-work call with X-Heartbeat-Token),
 # ROBINHOOD_FACILITATOR_URL (presence = the operator intends the Robinhood rail).
 #
 # probe() sets the global FAILS to a space-separated list of what failed and
@@ -34,6 +35,58 @@ probe() {
   probe_once
 }
 
+# The paywall read. The unpaid-quote budget (src/unpaid-quote-budget.js) keys
+# on the client address, and this runs from GitHub's shared addresses, so
+# another caller there can spend the budget this unpaid read counts against.
+# The read carries X-Heartbeat-Token (heartbeat_token, signed with POW_SECRET
+# like the proof-of-work call below), so the server reads it as our own probe
+# (isSynthetic) and the budget never counts or refuses it.
+# Without POW_SECRET the read goes unsigned and the budget's 429 (body reason
+# "unpaid-quote-budget") is the fallback case: it says nothing about the
+# paywall, so it is re-read once after its Retry-After, capped at
+# HB_BUDGET_WAIT_MAX seconds (default 10; the hour-long Retry-After is never
+# waited out), and a second budget refusal sets PAYWALL_UNKNOWN=1: paywall and
+# rails are not observed this pass, never failed, never paged. Any other
+# non-402 fails as before. Sets PW (the status) and PAYWALL_UNKNOWN.
+budget_refusal() {
+  [ "$1" = "429" ] && jq -e '.reason == "unpaid-quote-budget"' < /tmp/hb-402.b >/dev/null 2>&1
+}
+# HMAC(POW_SECRET, "heartbeat:" + UTC minute), 32 base64url characters: the
+# token src/pow.js verifies (verifyHeartbeatToken). Prints nothing without
+# POW_SECRET. The secret is read from the environment, never from argv.
+heartbeat_token() {
+  [ -n "${POW_SECRET:-}" ] || return 0
+  node --input-type=module -e '
+    const { createHmac } = await import("node:crypto");
+    process.stdout.write(createHmac("sha256", process.env.POW_SECRET).update("heartbeat:" + Math.floor(Date.now() / 60000)).digest("base64url").slice(0, 32));
+  ' 2>/dev/null || true
+}
+paywall_get() {
+  local HBT
+  HBT=$(heartbeat_token)
+  if [ -n "$HBT" ]; then
+    curl -s --max-time 15 -D /tmp/hb-402.h -o /tmp/hb-402.b -w "%{http_code}" -X POST "$PROD/api/extract" -H 'Content-Type: application/json' -H "X-Heartbeat-Token: $HBT" -d '{"url":"https://example.com"}'
+  else
+    curl -s --max-time 15 -D /tmp/hb-402.h -o /tmp/hb-402.b -w "%{http_code}" -X POST "$PROD/api/extract" -H 'Content-Type: application/json' -d '{"url":"https://example.com"}'
+  fi
+}
+paywall_read() {
+  PAYWALL_UNKNOWN=""
+  PW=$(paywall_get)
+  if budget_refusal "$PW"; then
+    local RA MAX="${HB_BUDGET_WAIT_MAX:-10}"
+    RA=$(tr -d '\r' < /tmp/hb-402.h | awk -F': ' 'tolower($1)=="retry-after"{print $2}' | head -1)
+    case "$RA" in ''|*[!0-9]*) RA="$MAX";; esac
+    [ "$RA" -gt "$MAX" ] && RA="$MAX"
+    sleep "$RA"
+    PW=$(paywall_get)
+    if budget_refusal "$PW"; then
+      PAYWALL_UNKNOWN=1
+      echo "[heartbeat-probe] paywall not observed: the unpaid-quote budget refused the read twice"
+    fi
+  fi
+}
+
 probe_once() {
   FAILS=""
   curl -sf --max-time 15 "$PROD/health" >/dev/null || FAILS="$FAILS /health"
@@ -49,8 +102,8 @@ probe_once() {
   # Paywall must be ENGAGED: a wallet-only tool returns 402 when unpaid.
   # Catches an accidental FREE_MODE / gate regression that would give
   # paid tools away for free (a silent revenue-loss incident).
-  PW=$(curl -s --max-time 15 -D /tmp/hb-402.h -o /dev/null -w "%{http_code}" -X POST "$PROD/api/extract" -H 'Content-Type: application/json' -d '{"url":"https://example.com"}')
-  [ "$PW" = "402" ] || FAILS="$FAILS paywall($PW)"
+  paywall_read
+  [ "$PW" = "402" ] || [ "$PAYWALL_UNKNOWN" = "1" ] || FAILS="$FAILS paywall($PW)"
   # The retired pairwise converters are paid too ($0.001, same as the
   # unit-convert tool that replaced them) but they are NOT catalog
   # routes, so the check above can't see them. They served that exact
@@ -102,7 +155,8 @@ probe_once() {
 # the caller, because a status-page write must not turn a healthy heartbeat
 # red. When prod is down this POST cannot land either, and that absence is the
 # evidence -- /status renders a missing observation as a gap, never as uptime.
-# $1 = "up" | "down", $2 = the FAILS string from that probe.
+# $1 = "up" | "down", $2 = the FAILS string from that probe. With
+# PAYWALL_UNKNOWN=1 (paywall_read) paywall and rails are left out: not observed.
 record_observation() {
   local STATUS="$1" FAILS="$2"
   # PROBE_TOKEN is the narrow credential: it opens POST /api/status/probe and
@@ -123,7 +177,7 @@ record_observation() {
     PAYWALL=$(has "paywall("); RAILS=$(has "rails("); PAID=$(has "pow-paid-call")
   fi
   local BODY
-  BODY=$(jq -nc --arg u "$RUN_URL" --arg d "$FAILS" \
+  BODY=$(jq -nc --arg u "$RUN_URL" --arg d "$FAILS" --arg pu "${PAYWALL_UNKNOWN:-}" \
     --argjson a "$API" --argjson c "$CATALOG" --argjson m "$MCP" \
     --argjson w "$PAYWALL" --argjson r "$RAILS" --argjson p "$PAID" \
     '{source:"heartbeat", ts:(now*1000|floor), url:$u, components:{
@@ -132,7 +186,8 @@ record_observation() {
        "mcp":{ok:$m, detail:(if $m then null else $d end)},
        "paywall":{ok:$w, detail:(if $w then null else $d end)},
        "rails":{ok:$r, detail:(if $r then null else $d end)},
-       "paid-call":{ok:$p, detail:(if $p then null else $d end)}}}')
+       "paid-call":{ok:$p, detail:(if $p then null else $d end)}}}
+     | if $pu == "1" then del(.components.paywall, .components.rails) else . end')
   curl -sf --max-time 20 -X POST "$PROD/api/status/probe" \
     -H "Content-Type: application/json" -H "X-Operator-Token: $TOKEN" \
     -d "$BODY" >/dev/null && echo "probe recorded" || echo "probe not recorded (prod unreachable - the gap is the signal)"

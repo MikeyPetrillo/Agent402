@@ -240,7 +240,7 @@ jobs:
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.29.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.30.0 viem@2.52.2
 
       # Run FIRST (before the slow faucet-funding E2E) for fast iteration. Live
       # proof of the agent402-client 402-inspection preflight (v0.6.0): a real Base
@@ -494,7 +494,7 @@ jobs:
     # (SVM client, settled at the boot order's first facilitator, CDP), so
     # settlement-driven indexes register each tool for Solana and every
     # harvester re-observes the live 402 with the full multi-chain accepts.
-    # The PayAI registry is filled by listing-pass.yml, which asks for PayAI
+    # The PayAI registry is filled by spend.yml's listing-pass job, which asks for PayAI
     # per request. Skips the LLM/image/audio/code proxies (real
     # upstream credit per call). Payments recycle burner -> revenue wallet.
     needs: markers
@@ -513,7 +513,7 @@ jobs:
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.29.0 @x402/core@2.29.0 @x402/evm@2.29.0 @x402/svm@2.29.0 @solana/kit@8.5.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.30.0 @x402/core@2.30.0 @x402/evm@2.30.0 @x402/svm@2.30.0 @solana/kit@8.5.0 viem@2.52.2
       - name: Sweep the catalog via Solana settlement
         env:
           SOLANA_BURNER_KEY: ${{ secrets.SOLANA_BURNER_KEY }}
@@ -538,7 +538,7 @@ jobs:
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.29.0 @x402/core@2.29.0 @x402/evm@2.29.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.30.0 @x402/core@2.30.0 @x402/evm@2.30.0 viem@2.52.2
       - name: Refresh stale Bazaar listings
         env:
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
@@ -576,7 +576,7 @@ jobs:
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.29.0 @x402/core@2.29.0 @x402/evm@2.29.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.30.0 @x402/core@2.30.0 @x402/evm@2.30.0 viem@2.52.2
       - name: Register missing Bazaar routes
         env:
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
@@ -610,7 +610,7 @@ jobs:
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.29.0 @x402/core@2.29.0 @x402/evm@2.29.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.30.0 @x402/core@2.30.0 @x402/evm@2.30.0 viem@2.52.2
       - name: Sweep the catalog via Base settlement (4 batches)
         env:
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
@@ -635,7 +635,7 @@ jobs:
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.29.0 @x402/core@2.29.0 @x402/evm@2.29.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.30.0 @x402/core@2.30.0 @x402/evm@2.30.0 viem@2.52.2
       - name: Drain the burner into the revenue wallet via paid tool calls
         env:
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
@@ -740,7 +740,7 @@ jobs:
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.29.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.30.0 viem@2.52.2
       - name: Run the demo (real paid buys from the burner)
         env:
           AGENT_KEY: ${{ secrets.BURNER_KEY }}
@@ -996,7 +996,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (4 scripts, one process each)
+      - name: Offline suites (5 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -1004,6 +1004,8 @@ jobs:
           t node scripts/test-x402-economy.js
           # /sitemap.xml coverage (every skill pack, sample tools, static surfaces, per-URL lastmod stable across boots)
           t node scripts/test-sitemap-coverage.js
+          # Sitemap URLs are their own canonical; breadcrumb trails match their BreadcrumbList; one site entity in JSON-LD
+          t node scripts/test-seo-structure.js
           # The sitemap lastmod table matches git history (needs the full-depth checkout above)
           t node scripts/test-page-dates.js
           # Bing sitemap registration script: lists then submits only the missing feeds (stubbed, offline)
@@ -1181,6 +1183,8 @@ jobs:
           t node scripts/test-hidden-chars.js
           # US spelling in public copy: README, wiki, docs, package READMEs, legal and guide pages, tool descriptions (offline)
           t node scripts/test-us-spelling.js
+          # CHANGELOG.md and the /changelog page agree: no duplicated page item, and every dated group from 2026-11-05 on is in both with the same item counts (offline)
+          t node scripts/test-changelog-parity.js
           # Seller text on the agent-read JSON surfaces is cleaned and capped at serve time; a flagged listing is marked and served without its description
           t env AGENT402_SHOW_ROUTER=1 node scripts/test-listing-text-serve.js
           # The listing screen's necessary-word hints answer exactly as the unhinted reading (implication per pattern on a generated corpus, agreement on the honest fixture; offline)
@@ -1491,6 +1495,8 @@ jobs:
           t node scripts/test-external-spend-guard-pg.js
           # The per-payer unsettled ceiling holds across replicas: one reservation script on REAL redis (needs this lane's Redis).
           t node scripts/test-external-spend-guard-redis.js
+          # The Base unproven lane's per-seller daily cap is one window across two replicas on one Redis: racing reservations grant exactly the cap.
+          t node scripts/test-base-unproven-cap-redis.js
           # A free (proof-of-work or trial) call drops any payment header riding on it before the handler: a forged header naming our wallet keeps the call on the outside lane of the failure monitor, read from its snapshot on REAL redis (needs this lane's Redis; stub facilitator, offline).
           t node scripts/test-free-call-payment-headers.js
           t node scripts/test-mpp-subscriptions-pg.js
@@ -2723,6 +2729,8 @@ jobs:
           t node scripts/test-path-scoped-sellers.js
           # Live probes go to the origin a seller's manifest is served from; a same-host https upgrade is re-asked once (offline, loopback)
           t node scripts/test-index-probe-redirect.js
+          # A failed paywall verdict expires and is re-probed; a registration probes at once (offline, loopback)
+          t node scripts/test-index-paywall-recheck.js
           # re-registration re-check: per-origin window + hourly route allowance
           t node scripts/test-register-recheck-cooldown.js
           # A registration answers by its deadline (202 pending) and stops starting probes past it.
@@ -2776,9 +2784,18 @@ jobs:
           # Our own listing text (every 402, /api/pricing, /openapi.json, /.well-known/x402) passes
           # the listing screen and the hidden-character scan we hold sellers to (stub facilitator)
           t node scripts/test-own-listing-screen.js
+          # Standing red team (scripts/redteam-corpus.json): injection and tool-abuse payloads against
+          # the MCP connector, the seller judge, decide's planner, the fetch guard, the router's payer
+          # and report prose; fails on any attack that lands (stub judge, model and facilitator, port 0)
+          t node scripts/test-agent-redteam.js
           # Every accept of every 402 asks list plus the chain's premium, raised to its
           # floor, as /api/pricing publishes them (three rails, a stub facilitator).
           t node scripts/test-accept-prices.js
+          # A throw in an x402 beforeVerify / beforeSettle hook answers the hook's declared choice: the
+          # wallet blocklist and the Arc contract-wallet gate refuse with their own reason (402, no settle,
+          # no sale, no idempotency commit, never the handler for a verify refusal), bookkeeping hooks pass;
+          # a payment header decoding to non-object JSON answers 4xx (real resource server + two paid boots)
+          t node scripts/test-x402-hook-throws.js
 
       - name: "Redis integration (the REAL client against a REAL server — cap-of-1, refund, cache round trip; the gap that made a redis major bump undecidable)"
         env:
@@ -3049,7 +3066,8 @@ jobs:
       # runs at all - stricter than the secretless-env install below. Native
       # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
       - name: ffmpeg for the media-kit tests (ubuntu-latest ships none; test-media SKIPPED on every CI run until 2026-09-06)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg >/dev/null && ffmpeg -version | head -1
+        timeout-minutes: 10
+        run: bash scripts/ci-apt-install.sh ffmpeg && ffmpeg -version | head -1
       - name: Restore node_modules
         id: nm-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -4210,7 +4228,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (10 scripts, one process each)
+      - name: Offline suites (11 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -4228,6 +4246,8 @@ jobs:
           t node scripts/test-paid-phase-timing.js
           # A paid run that never gets paid meets a bound: a hang-up whose settle fails is counted, a short EVM authorization on a slow route is refused before the handler, one wallet cannot trip the report pause alone, and concurrent runs must be covered by the balance (boots a paid server against a stub facilitator and a stub OpenRouter - offline)
           t node scripts/test-paytime-bounds.js
+          # Golden trajectories: 56 fixed route-execute tasks through the real paid server, resolver and payer against a stub seller ecosystem, each graded step by step (candidates, order tried, chosen seller, lane, amount and payTo signed, settle, booking, receipt, status) with a per-step pass rate (stub facilitator, chain and sellers - offline)
+          t node scripts/test-golden-trajectories.js
           # One-product MCP endpoint (/mcp/sec): profile lists only the SEC tools, hides the catalog meta tools, /mcp unchanged (boots a free server)
           t node scripts/test-mcp-sec.js
           # MCP wire: a 2026-07-28 client that opens with initialize is served the negotiated revision; tools/call arguments past the element bound are InvalidParams on /mcp and on the stdio package (boots a free server)
@@ -4280,7 +4300,8 @@ jobs:
       # runs at all - stricter than the secretless-env install below. Native
       # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
       - name: ffmpeg for the three media tools in the example sweep (ubuntu-latest ships none; they answered 503 "not installed" once that stopped being a silent 422)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg >/dev/null && ffmpeg -version | head -1
+        timeout-minutes: 10
+        run: bash scripts/ci-apt-install.sh ffmpeg && ffmpeg -version | head -1
       - name: OCR language data for image-ocr in the example sweep (pinned, hash-checked; the server never downloads it)
         run: node scripts/fetch-tessdata.js tessdata eng
       - name: Restore node_modules
@@ -4846,6 +4867,10 @@ jobs:
           t node scripts/test-checkout-limiter.js
           # Client address behind the CDN proxy: CF-Connecting-IP only from a CDN peer and only when valid, IPv4 and IPv6, a forged header never mints a limiter bucket (boots a server, offline)
           t node scripts/test-cdn-client-ip.js
+          # Trust proxy: TRUST_PROXY_HOPS unset trusts no forwarded hop (a spoofed X-Forwarded-For never mints a limiter bucket, boot warning names the variable), 1 behaves as behind the edge (boots two servers, offline)
+          t node scripts/test-trust-proxy.js
+          # FREE_MODE holds no paid fact: a forged payment header names no wallet on the identity-bound routes, and a paid server answers a FREE_MODE sibling's job 404 (boots a FREE_MODE and a paid server on one job store, offline)
+          t node scripts/test-free-mode-isolation.js
           # A refused payment says WHY on the 402 (the vendor answers a bare {} and drops the reason; one client looped ~9/min for 12h) — boots a paid server, offline
           t node scripts/test-payment-reject.js
           # A v1-era client names the price maxAmountRequired; x402 v2 deep-equals the echoed accepts block, so that one rename made a correct payment unmatchable — boots a paid server, offline
@@ -6444,8 +6469,14 @@ jobs:
           # the platform's setting, so a long grace here buys nothing and only
           # keeps two containers running. 120s clears the 75s deadline with
           # margin; scripts/test-drain-on-sigterm.js enforces both bounds.
+          #
+          # TRUST_PROXY_HOPS: production sits behind one trusted edge hop, so
+          # req.ip is the entry that hop appends; unset, the server trusts no
+          # hop and every client shares the edge's address in each per-IP
+          # limiter (src/trust-proxy.js). A config value, not a secret, set
+          # here on every deploy so the repository holds it.
           VARS=$(jq -n --arg w "$WALLET_ADDRESS" --arg n "$NETWORK" --arg f "$FACILITATOR_URL" --arg b "$BASE" \
-            '{WALLET_ADDRESS:$w, NETWORK:$n, FACILITATOR_URL:$f, BASE_URL:$b, RAILWAY_DEPLOYMENT_DRAINING_SECONDS:"120"}')
+            '{WALLET_ADDRESS:$w, NETWORK:$n, FACILITATOR_URL:$f, BASE_URL:$b, RAILWAY_DEPLOYMENT_DRAINING_SECONDS:"120", TRUST_PROXY_HOPS:"1"}')
           if [ -n "$CDP_KEY_ID" ] && [ -n "$CDP_KEY_SECRET" ]; then
             VARS=$(echo "$VARS" | jq --arg i "$CDP_KEY_ID" --arg s "$CDP_KEY_SECRET" '. + {CDP_API_KEY_ID:$i, CDP_API_KEY_SECRET:$s}')
           fi

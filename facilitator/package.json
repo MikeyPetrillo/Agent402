@@ -39,8 +39,8 @@
   },
   "dependencies": {
     "@stellar/stellar-sdk": "16.4.1",
-    "@x402/core": "2.29.0",
-    "@x402/stellar": "2.29.0",
+    "@x402/core": "2.30.0",
+    "@x402/stellar": "2.30.0",
     "express": "^5.0.0"
   },
   "keywords": [

@@ -77,7 +77,7 @@ ok(limiterKey("2001:db8:1:2:aaaa::1|hash") === "2001:db8:1:2:aaaa::1|hash", "a c
 // protected ones do not, and the discovery CPU budget refuses before computing.
 const port = await getFreePort();
 const proc = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, FREE_MODE: "true", PORT: String(port), X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", AGENT402_OPERATOR_TOKEN: "shed-test-operator-token-0123456789", SHED_INFLIGHT: "1" },
+  env: { ...process.env, TRUST_PROXY_HOPS: "1", FREE_MODE: "true", PORT: String(port), X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", AGENT402_OPERATOR_TOKEN: "shed-test-operator-token-0123456789", SHED_INFLIGHT: "1" },
   stdio: ["ignore", "ignore", "inherit"],
 });
 const base = `http://127.0.0.1:${port}`;
@@ -135,7 +135,7 @@ try {
 
 const port2 = await getFreePort();
 const proc2 = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, FREE_MODE: "true", PORT: String(port2), X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", DISCOVERY_CPU_BUDGET_MS: "1" },
+  env: { ...process.env, TRUST_PROXY_HOPS: "1", FREE_MODE: "true", PORT: String(port2), X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", DISCOVERY_CPU_BUDGET_MS: "1" },
   stdio: ["ignore", "ignore", "inherit"],
 });
 const base2 = `http://127.0.0.1:${port2}`;

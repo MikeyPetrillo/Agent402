@@ -26,7 +26,7 @@
 
 // A crawled row's price is a label ("$0.01"), a number or an object: one reader.
 import { priceUsdOf, isPricedAboveZero } from "../price-usd.js";
-import { routerLanes } from "../router-lanes.js";
+import { routerLanes, exampleUnprovenLane } from "../router-lanes.js";
 import { baseUnprovenAllowanceUsd } from "../base-unproven.js";
 // The served display name is cleaned and capped like every agent-read seller
 // surface; the assessment below reads the detail as written.
@@ -114,7 +114,7 @@ export function buildSellerTrustTool({ getSellerDetail, getSettledCalls, getPayT
           routerGate: { settledCalls: 3, settlementThreshold: 50, meetsSettlementThreshold: false, advertisesSettlementNetwork: true, cheapestPaidToolUsd: 0.005, routerUnderlyingCapUsd: 0.005, hasToolWithinRouterCap: true },
           lanes: {
             proven: { eligible: false, chain: "base", toolCount: 0, cheapestUsd: null, cheapestTier: null, tiers: [], blockers: ["fewer than 50 settled calls observed on-chain"] },
-            unproven: { eligible: true, chain: "base", maxUsd: 0.01, toolCount: 1, cheapestUsd: 0.005, cheapestTier: "route-execute", note: "On Base the router may still pay the seller, but only after every proven seller for the task, only at the wallet its own live 402 names, never above that ceiling, and flagged unproven on the buyer's receipt ($0.01 per call)." },
+            unproven: exampleUnprovenLane({ priceUsd: 0.005, execTiers }),
           },
           routableByOurRouter: true,
           routableAsProven: false,

@@ -1,0 +1,170 @@
+// Express "trust proxy" (src/trust-proxy.js). Every per-IP limiter keys on
+// req.ip, so a server reached directly must not read a client-written
+// X-Forwarded-For as the client address:
+//   - TRUST_PROXY_HOPS unset reads 0 (with a boot warning naming the
+//     variable), an explicit 0 is honored, a value that is not a whole number
+//     from 0 to 10 reads 0 with a warning;
+//   - booted with it unset, a spoofed X-Forwarded-For does not mint a fresh
+//     bucket in the MCP transport limiter once the real address is spent;
+//   - booted with TRUST_PROXY_HOPS=1 (behind one edge), the forwarded entry is
+//     the client, as before;
+//   - with no hop trusted, only a genuine loopback replay (the secret its
+//     caller proves) takes the buyer address it carries; anything else keeps
+//     the socket address.
+//
+//   node scripts/test-trust-proxy.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { randomBytes } from "node:crypto";
+import { spawn } from "node:child_process";
+import { getFreePorts } from "./lib/free-port.js";
+import { ownStoreEnv } from "./lib/own-stores.js";
+import { trustProxyHops, replayClientIpMiddleware, forwardedWithoutHopsWarning, isProxyLikePeer } from "../src/trust-proxy.js";
+
+let pass = 0, fail = 0;
+const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// --- 1. the value read
+{
+  const warns = [];
+  const w = (m) => warns.push(m);
+  ok(trustProxyHops({}, w) === 0 && /TRUST_PROXY_HOPS is unset/.test(warns[0] || ""), "unset reads 0 and warns, naming TRUST_PROXY_HOPS");
+  ok(trustProxyHops({ TRUST_PROXY_HOPS: "" }, w) === 0, "empty reads 0");
+  warns.length = 0;
+  ok(trustProxyHops({ TRUST_PROXY_HOPS: "0" }, w) === 0 && warns.length === 0, "an explicit 0 is honored without a warning");
+  ok(trustProxyHops({ TRUST_PROXY_HOPS: "1" }, w) === 1 && warns.length === 0, "1 reads 1");
+  ok(trustProxyHops({ TRUST_PROXY_HOPS: " 2 " }, w) === 2, "whitespace around a number is ignored");
+  for (const bad of ["-1", "1.5", "abc", "11", "true", "0x1"]) {
+    warns.length = 0;
+    ok(trustProxyHops({ TRUST_PROXY_HOPS: bad }, w) === 0 && warns.length === 1, `"${bad}" reads 0 with a warning`);
+  }
+  // Production (src/production-env.js): unset still serves (reads 0, never
+  // throws) but goes to the error channel, naming the variable and the fix.
+  for (const prod of [{ NODE_ENV: "production" }, { RAILWAY_ENVIRONMENT_NAME: "production" }, { RAILWAY_ENVIRONMENT: "production", TRUST_PROXY_HOPS: " " }]) {
+    const quiet = [], loud = [];
+    let hops = null, threw = false;
+    try { hops = trustProxyHops(prod, (m) => quiet.push(m), (m) => loud.push(m)); } catch { threw = true; }
+    ok(!threw && hops === 0, `production ${JSON.stringify(prod)}: unset still boots, trusting no hop`);
+    ok(loud.length === 1 && quiet.length === 0 && /ERROR/.test(loud[0]) && /production/.test(loud[0]) && /TRUST_PROXY_HOPS=1/.test(loud[0]),
+      `production ${JSON.stringify(prod)}: the unset warning is an error-channel alarm naming TRUST_PROXY_HOPS=1`);
+  }
+  {
+    const quiet = [], loud = [];
+    trustProxyHops({ NODE_ENV: "production", FREE_MODE: "true" }, (m) => quiet.push(m), (m) => loud.push(m));
+    ok(loud.length === 0 && quiet.length === 1, "a FREE_MODE boot is not production: the plain warning");
+    quiet.length = 0;
+    ok(trustProxyHops({ NODE_ENV: "production", TRUST_PROXY_HOPS: "1" }, (m) => quiet.push(m), (m) => loud.push(m)) === 1 && loud.length === 0 && quiet.length === 0,
+      "production with TRUST_PROXY_HOPS=1 reads 1 and says nothing");
+  }
+}
+
+// --- 2. the replay middleware
+{
+  const run = (req, isReplay) => { replayClientIpMiddleware({ isReplay })(req, null, () => {}); return req.ip; };
+  const mk = (peer, xff) => ({ socket: { remoteAddress: peer }, headers: xff ? { "x-forwarded-for": xff } : {}, ip: peer });
+  ok(run(mk("127.0.0.1", "198.51.100.7"), () => true) === "198.51.100.7", "a genuine replay on a loopback socket takes the address it carries");
+  ok(run(mk("127.0.0.1", "198.51.100.7"), () => false) === "127.0.0.1", "a loopback request that is not a proven replay keeps the socket address");
+  ok(run(mk("203.0.113.5", "198.51.100.7"), () => true) === "203.0.113.5", "a non-loopback peer keeps its socket address whatever it claims");
+  ok(run(mk("127.0.0.1", "not-an-ip"), () => true) === "127.0.0.1", "a forwarded entry that is not an address is ignored");
+  ok(run(mk("::1", "10.0.0.1, 198.51.100.8"), () => true) === "198.51.100.8", "the last entry (the one our replay appended) is read");
+}
+
+// --- 2b. the once-per-process warning for a proxy hops does not count
+{
+  const mkReq = (peer, xff) => ({ socket: { remoteAddress: peer }, headers: xff === undefined ? {} : { "x-forwarded-for": xff } });
+  ok(["127.0.0.1", "::1", "::ffff:127.0.0.1", "10.1.2.3", "172.20.0.5", "192.168.1.1", "100.64.0.9", "fd00::1", "fe80::1"].every(isProxyLikePeer)
+    && !["203.0.113.5", "8.8.8.8", "2001:db8::1", "::ffff:8.8.8.8", "", "x"].some(isProxyLikePeer), "loopback and private peers read as proxy-like, public ones do not");
+  const lines = [];
+  const mw = forwardedWithoutHopsWarning({ warn: (m) => lines.push(m) });
+  let nexts = 0;
+  const go = (r) => mw(r, null, () => { nexts++; });
+  go(mkReq("10.0.0.2"));
+  go(mkReq("203.0.113.5", "198.51.100.1"));
+  ok(lines.length === 0, "no warning without X-Forwarded-For, nor from a public peer that sends one");
+  for (let i = 0; i < 5; i++) go(mkReq(i % 2 ? "127.0.0.1" : "172.18.0.3", `198.51.100.${i + 1}`));
+  ok(lines.length === 1 && /TRUST_PROXY_HOPS/.test(lines[0]) && /set TRUST_PROXY_HOPS to the number of proxies/.test(lines[0]), `five forwarded requests from private peers warn exactly once, naming TRUST_PROXY_HOPS and what to set (${lines.length})`);
+  ok(nexts === 7, "every request passes through");
+  const replayLines = [];
+  const mwR = forwardedWithoutHopsWarning({ isReplay: () => true, warn: (m) => replayLines.push(m) });
+  mwR(mkReq("127.0.0.1", "198.51.100.9"), null, () => {});
+  ok(replayLines.length === 0, "our own proven loopback replay never fires it");
+}
+
+// --- 3. two boots: TRUST_PROXY_HOPS unset, and 1
+const CAP = 3;
+const [P0, P1] = await getFreePorts(2);
+const procs = [];
+const boot = (port, extra, label) => {
+  const env = { ...process.env, ...ownStoreEnv(label), PORT: String(port), FREE_MODE: "true", X402_SYNC_ON_START: "false",
+    X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", REDIS_URL: "", SHARED_LIMITS: "off",
+    AGENT402_MCP_REQ_PER_MIN: String(CAP), AGENT402_MCP_REQ_PER_HOUR: "1000", ...extra };
+  if (!("TRUST_PROXY_HOPS" in extra)) delete env.TRUST_PROXY_HOPS;
+  const p = spawn(process.execPath, ["src/server.js"], { env, stdio: ["ignore", "pipe", "pipe"] });
+  p.log = [];
+  p.stdout.on("data", (d) => p.log.push(String(d)));
+  p.stderr.on("data", (d) => p.log.push(String(d)));
+  procs.push(p);
+  return p;
+};
+const killAll = () => { for (const p of procs) try { p.kill("SIGKILL"); } catch { /* gone */ } };
+setTimeout(() => { console.error("FAIL - timed out"); killAll(); process.exit(1); }, 150_000).unref();
+
+const initBody = (id) => JSON.stringify({ jsonrpc: "2.0", id, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "trust-proxy-test", version: "1" } } });
+const mcp = (port, id, xff, extra = {}) => fetch(`http://127.0.0.1:${port}/mcp`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", ...(xff ? { "X-Forwarded-For": xff } : {}), ...extra },
+  body: initBody(id),
+}).then(async (r) => { await r.arrayBuffer(); return r.status; });
+const healthy = async (port, p) => {
+  for (let i = 0; i < 200; i++) {
+    if (p.exitCode !== null) return false;
+    try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) return true; } catch { /* booting */ }
+    await sleep(500);
+  }
+  return false;
+};
+
+try {
+  const s0 = boot(P0, {}, "trust-proxy-unset");
+  const s1 = boot(P1, { TRUST_PROXY_HOPS: "1" }, "trust-proxy-one");
+  const [u0, u1] = await Promise.all([healthy(P0, s0), healthy(P1, s1)]);
+  ok(u0 && u1, `both servers booted (unset ${u0}, one hop ${u1})`);
+  if (!u0 || !u1) for (const p of [s0, s1]) console.error(p.log.join("").slice(-1500));
+
+  ok(/TRUST_PROXY_HOPS is unset/.test(s0.log.join("")), "the unset boot logs a warning naming TRUST_PROXY_HOPS");
+  ok(!/TRUST_PROXY_HOPS is unset/.test(s1.log.join("")), "the boot that sets it logs no such warning");
+  const FWD = /carries X-Forwarded-For while TRUST_PROXY_HOPS is 0/;
+  ok(!FWD.test(s0.log.join("")), "unset: no forwarded-header warning before any forwarded request");
+
+  // Unset: spend the real address's transport budget, then rotate the header.
+  const spent0 = [];
+  for (let i = 0; i < CAP; i++) spent0.push(await mcp(P0, i + 1));
+  ok(spent0.every((s) => s !== 429), `the first ${CAP} requests are served (${spent0.join(",")})`);
+  ok((await mcp(P0, 10)) === 429, "the next request from the same address is limited");
+  const spoof0 = [await mcp(P0, 11, "198.51.100.77"), await mcp(P0, 12, "198.51.100.78")];
+  ok(spoof0.every((s) => s === 429), `unset: a spoofed X-Forwarded-For does not mint a fresh bucket (${spoof0.join(",")})`);
+  await sleep(200);
+  ok((s0.log.join("").match(new RegExp(FWD.source, "g")) || []).length === 1, "unset: forwarded requests from a loopback peer log the TRUST_PROXY_HOPS warning exactly once");
+  // A forged replay marker (an async-loopback token or an MCP marker this
+  // process did not mint) must not let a loopback client choose its address.
+  const forged0 = [
+    await mcp(P0, 13, "198.51.100.91", { "x-agent402-async-loopback": randomBytes(24).toString("hex") }),
+    await mcp(P0, 14, "198.51.100.92", { "x-agent402-async-loopback": "" }),
+    await mcp(P0, 15, "198.51.100.93", { "X-Agent402-Via": `mcp;k=${randomBytes(24).toString("hex")}` }),
+    await mcp(P0, 16, "198.51.100.94", { "X-Agent402-Via": "mcp" }),
+  ];
+  ok(forged0.every((s) => s === 429), `unset: a forged async token or MCP marker keeps the socket address (${forged0.join(",")})`);
+
+  // One hop trusted: the forwarded entry is the client, as behind the edge.
+  for (let i = 0; i < CAP; i++) await mcp(P1, i + 1);
+  ok((await mcp(P1, 10)) === 429, "one hop: the loopback address's budget is spent");
+  const fwd1 = [await mcp(P1, 11, "198.51.100.77"), await mcp(P1, 12, "198.51.100.78")];
+  ok(fwd1.every((s) => s !== 429), `one hop: each forwarded client has its own bucket, as before (${fwd1.join(",")})`);
+  await sleep(200);
+  ok(!FWD.test(s1.log.join("")), "one hop: forwarded requests never log the TRUST_PROXY_HOPS warning");
+} finally {
+  killAll();
+}
+
+console.log(`\ntest-trust-proxy: ${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);

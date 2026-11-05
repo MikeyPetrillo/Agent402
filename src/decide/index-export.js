@@ -56,6 +56,13 @@ export function fromPrivateNetwork(req) {
   return host.endsWith(".railway.internal") || host === "localhost" || host === "127.0.0.1" || host === "::1";
 }
 
+/** One outside tool as a decide row, or null when its seller-written text
+ *  (name, description, seller name, category, route) trips the listing
+ *  screen: such a listing never reaches decide's planner or its judge. */
+export function remoteRowOf(t, ctx = {}) {
+  return remoteToolRow(t, { ...ctx, injected: looksLikeListingInjection(`${t?.name || ""} ${t?.description || ""} ${t?.sellerName || ""} ${t?.category || ""} ${t?.route || ""}`) });
+}
+
 /** Rows for every priced local tool, then every routable outside tool. */
 export async function* unifiedRows({ catalog, baseUrl, networks = [], now = Date.now(), remoteExecutable = null, sliceMs = EXPORT_SLICE_MS } = {}) {
   const tick = sliceClock(sliceMs);
@@ -73,9 +80,8 @@ export async function* unifiedRows({ catalog, baseUrl, networks = [], now = Date
   const mppOrigins = new Set(mppDualStackOrigins().map((o) => String(o).replace(/\/+$/, "")));
   for await (const [, tools] of routableRemoteEntriesSliced({ baseUrl, sliceMs })) {
     for (const t of tools) {
-      const row = remoteToolRow(t, {
+      const row = remoteRowOf(t, {
         requestContract: unpackRequestContract(t),
-        injected: looksLikeListingInjection(`${t.name || ""} ${t.description || ""} ${t.sellerName || ""} ${t.category || ""} ${t.route || ""}`),
         lastLiveAt: liveProofAt(t),
         mppOrigins,
         // Unknown (no verdict function) keeps the old behavior; a function

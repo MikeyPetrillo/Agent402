@@ -1,4 +1,5 @@
 import { frontDoorJson } from "./front-door.js";
+import { stripHiddenCharacters, quotedCallerText } from "./hidden-chars.js";
 import { RAILS_PAREN, RAILS_OR, RAILS } from "./rails.js";
 import { gatewayOfferPublic, gatewayOfferNetworkNames } from "./gateway-nanopayments.js";
 import { inputDepthRefusal } from "./handler-input.js";
@@ -104,6 +105,10 @@ const VERSION = `build-${(process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_
 // 3, not 5: a tag or slug-substring match is a SERVED query (see server.js -
 // the old 5 recorded a wish for every tag-served query, a ghost cluster).
 const FIND_WEAK_SCORE = 3;
+// A caller-written name echoed in a refusal: quoted as a JSON string (so a
+// quote in it cannot close the quote and continue as the server's own
+// sentence), hidden characters removed and the length bounded.
+const quotedEcho = (v, max = 80) => quotedCallerText(v, max);
 const WISH_HINT_TEXT = "Nothing matched well? Tell us what you needed via POST /api/wish - we cluster demand and build what keeps coming up.";
 
 // Per-IP sliding-window rate limit for tool executions (search/info are free).
@@ -479,7 +484,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     server.setRequestHandler(GetPromptRequestSchema, async (req) => {
       const { name, arguments: args = {} } = req.params;
       const pack = SKILL_PACKS.find((p) => p.slug === name);
-      if (!pack) throw new Error(`Unknown prompt "${name}". List available with prompts/list.`);
+      if (!pack) throw new Error(`Unknown prompt ${quotedEcho(name)}. List available with prompts/list.`);
       return buildPromptMessages(pack, args, { freeSlugs });
     });
 
@@ -1347,12 +1352,12 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         // After resolveListedName, catalog.call is the envelope path; everything
         // else must be a named flagship (or legacy alias mapped above).
         if (name !== "catalog.call" && !isNamed) {
-          return { content: [{ type: "text", text: `Unknown tool "${rawName}".` }], isError: true };
+          return { content: [{ type: "text", text: `Unknown tool ${quotedEcho(rawName)}.` }], isError: true };
         }
         const resolvedSlug = isNamed ? namedSlug : String(args.slug ?? "");
         const entry = tools.get(resolvedSlug);
         if (!entry) {
-          return { content: [{ type: "text", text: `Unknown slug "${resolvedSlug}". Use catalog.search to find the right slug.` }], isError: true };
+          return { content: [{ type: "text", text: `Unknown slug ${quotedEcho(resolvedSlug)}. Use catalog.search to find the right slug.` }], isError: true };
         }
         if (!entry.free) {
           // Native MPP (2026-08-19): with the MPP gates mounted, a paid tool is
@@ -1576,9 +1581,9 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
   // JSON-RPC message (including initialize) is self-contained, which survives
   // redeploys and needs no sticky routing.
   app.post(path, async (req, res) => {
-    // req.ip is derived via the app's "trust proxy" setting, so it's the real
-    // client IP (the edge-appended XFF hop) — NOT a spoofable client-supplied
-    // X-Forwarded-For value. This is the only abuse control on the free tier,
+    // req.ip is derived via the app's "trust proxy" setting (TRUST_PROXY_HOPS:
+    // the edge-appended XFF hop behind a proxy, the socket address with none
+    // trusted), NOT a spoofable client-supplied X-Forwarded-For value. This is the only abuse control on the free tier,
     // so it must not be bypassable by injecting a header.
     const ip = (req.ip || req.socket.remoteAddress || "?").trim();
     // R-11 outer gate #1: per-IP raw-request cap, BEFORE allocating anything.

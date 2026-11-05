@@ -58,14 +58,14 @@ printf '%s\\x1f' "$@" >> "$GH_LOG"; printf '\\x1e' >> "$GH_LOG"
 await chmod(path.join(dir, "curl"), 0o755);
 await chmod(path.join(dir, "gh"), 0o755);
 
-async function run({ gateway, op = null, token = "t", open = null, body = "", issues = null, script = step.run }) {
+async function run({ gateway, op = null, token = "t", open = null, body = "", issues = null, script = step.run, extraEnv = {} }) {
   const gs = path.join(dir, "gs.json"), opf = path.join(dir, "op.json"), log = path.join(dir, "gh.log");
   await writeFile(gs, JSON.stringify(gateway));
   await writeFile(opf, JSON.stringify(op || {}));
   await writeFile(log, "");
   const r = spawnSync("bash", ["-e", "-c", script], {
     env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, PROD: "https://example.invalid", GITHUB_REPOSITORY: "o/r",
-      OP_TOKEN: token || "", GS_FILE: gs, OP_FILE: opf, GH_LOG: log, OPEN_TITLE: open || "", OPEN_NUM: "41", OPEN_BODY: body, ISSUES_JSON: issues ? JSON.stringify(issues) : "" },
+      OP_TOKEN: token || "", GS_FILE: gs, OP_FILE: opf, GH_LOG: log, OPEN_TITLE: open || "", OPEN_NUM: "41", OPEN_BODY: body, ISSUES_JSON: issues ? JSON.stringify(issues) : "", ...extraEnv },
     encoding: "utf8",
   });
   assert.equal(r.status, 0, r.stderr);
@@ -328,6 +328,33 @@ try {
       assert.match(b, new RegExp(`${field}\\.status=${word}\\.`));
       assert.doesNotMatch(b.replace(/facilitatorFunds/g, ""), /fund|account|free tier|payment method|slug/i, `the Worker body for ${field} carries no detail: ${b}`);
     }
+  });
+
+  // "Paywall not observed": the heartbeat opens it, the status Worker closes
+  // it. Run after run of refused reads (a mismatched POW_SECRET) keeps ONE
+  // issue: an open alarm (exact title, the workflow bot or the owner) gets a
+  // comment; only an outsider's or a near-title issue leaves it to open ours.
+  await check("Paywall not observed: an open alarm gets a comment, never a second issue; an outsider's does not suppress it", async () => {
+    const pw = steps.find((s) => String(s.name || "").startsWith("Paywall observation check"));
+    assert.ok(pw, "heartbeat.yml has the paywall observation step");
+    const T = "Paywall not observed";
+    const { PAYWALL_UNOBSERVED_TITLE } = await import("../workers/status-probe/src/index.js");
+    assert.equal(PAYWALL_UNOBSERVED_TITLE, T, "the step's title is the Worker's");
+    const go = (issues, unknown = "1") => run({ gateway: {}, issues, script: pw.run, extraEnv: { PAYWALL_UNKNOWN: unknown } });
+    const commented = (calls) => calls.filter((c) => c[0] === "issue" && c[1] === "comment");
+    let r = await go([]);
+    assert.deepEqual(created(r.calls).map((c) => c.title), [T], "none open: one issue opened");
+    for (const login of ["github-actions[bot]", "app/github-actions", "O"]) {
+      r = await go([{ number: 41, title: T, author: { login } }]);
+      assert.deepEqual(created(r.calls), [], `open by ${login}: no second issue`);
+      assert.equal(commented(r.calls).length, 1, `open by ${login}: one comment`);
+      assert.equal(commented(r.calls)[0][2], "41", login);
+    }
+    r = await go([{ number: 7, title: T, author: { login: "someone-else" } }, { number: 8, title: `${T} (copy)`, author: { login: "github-actions[bot]" } }]);
+    assert.deepEqual(created(r.calls).map((c) => c.title), [T], "an outsider's or a near-title issue does not suppress the alarm");
+    assert.equal(commented(r.calls).length, 0, "and is never commented on");
+    r = await go([{ number: 41, title: T, author: { login: "github-actions[bot]" } }], "0");
+    assert.equal(created(r.calls).length + commented(r.calls).length, 0, "an observed paywall read does nothing (the Worker closes)");
   });
 } finally {
   await rm(dir, { recursive: true, force: true });

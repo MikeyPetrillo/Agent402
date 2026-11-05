@@ -45,6 +45,15 @@ import { disableVendorSpendControls } from "./x402-spend-controls.js";
 import { assertNotOwnPayout } from "./own-wallets.js";
 import { readBytesCapped, readTextCapped, declaredLength, discardBody, decodeUtf8 } from "./capped-body.js";
 import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
+import { reserveUnprovenSellerSpend, releaseUnprovenSellerSpend } from "./base-unproven.js";
+import { usdFigure } from "./price-usd.js";
+
+/** The buyer-visible 409 when a Base unproven daily cap refuses: every figure
+ *  through usdFigure, as the lane's other sentences print them. */
+export function unprovenCapMessage(payTo, capped) {
+  const which = capped.code === "unproven_lane_daily_cap" ? "daily cap across all sellers" : "daily cap per seller";
+  return `Seller ${String(payTo).slice(0, 10)}… is below the Base settlement floor and has reached the unproven lane's ${which} (${usdFigure(capped.spentUsd)} of ${usdFigure(capped.capUsd)} in 24 h) - not paid`;
+}
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -154,8 +163,8 @@ export function avmBuyerConfigured() {
  *  403s Railway's egress IP outright, so prod cannot reach the public bases. */
 /**
  * The Algorand client scheme, reading a seller's legacy network id (the full
- * genesis hash) as the CAIP-2 one. @x402/avm 2.29 refuses the legacy spelling
- * when it picks the algod client and asset; the id selects only those, so it is
+ * genesis hash) as the CAIP-2 one. The @x402/avm scheme accepts only the CAIP-2
+ * spelling when it picks the algod client and asset; the id selects only those, so it is
  * folded on the way in. The core client still echoes the seller's own accept
  * (`accepted`), so the payment matches the requirement the seller rebuilds.
  */
@@ -811,7 +820,7 @@ export function neverLeftUs(err) {
  * A 200 on the bare request means the endpoint is free — returned with no
  * spend. Only a 402 triggers a payment; anything else is a 502.
  */
-export async function payX402(url, { maxAtomic, method = "GET", body, headers = {}, timeoutMs = 20000, maxBytes = DEFAULT_MAX_BYTES, chain = "base", provenPayTo = null, evidenceWallets = null, sellerProof = null, notDebited = null, allowUnproven = false, refusalMaxWaitMs = refusalMaxWaitMsDefault(), memoizeDelivery = false, slug = null, signBy = null } = {}) {
+export async function payX402(url, { maxAtomic, method = "GET", body, headers = {}, timeoutMs = 20000, maxBytes = DEFAULT_MAX_BYTES, chain = "base", provenPayTo = null, evidenceWallets = null, sellerProof = null, notDebited = null, allowUnproven = false, refusalMaxWaitMs = refusalMaxWaitMsDefault(), memoizeDelivery = false, slug = null, signBy = null, sellerKey = null } = {}) {
   assertSigningAllowed("an external x402 payment");
   if (maxAtomic == null) throw bad("payX402 requires maxAtomic (the margin-guard ceiling)", 500);
   const chainCfg = BUYER_CHAINS[chain];
@@ -1036,6 +1045,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
   // seller below the settlement floor. The ceiling that admitted it is
   // checked against the quote actually being SIGNED, so a seller quoting the
   // probe inside the ceiling and the payment above it is refused here.
+  let unprovenHold = null;
   if (chain === "base" && allowUnproven) {
     const { baseUnprovenAllowanceAtomic } = await import("./base-unproven.js");
     const ceiling = baseUnprovenAllowanceAtomic();
@@ -1051,6 +1061,23 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
   const spendToken = await reserveSpend(quotedAtomic); // F3 belt, before signing (throws 429 if over the window budget)
   let committed = false;
   try {
+    // BASE UNPROVEN DAILY CAPS (src/base-unproven.js): the seller's and the
+    // whole lane's, checked and the signed amount reserved in one step, keyed
+    // on this accept's payTo and the seller's origin, before anything is
+    // signed. A path-scoped seller is keyed on the index's seller key
+    // (origin plus its prefix), handed in as `sellerKey`, not on the host it
+    // shares with other sellers. A refusal here is pre-commit (the finally gives the budget hold
+    // back); the reservation is given back by the same finally only when
+    // nothing could have moved.
+    if (chain === "base" && allowUnproven) {
+      const capped = await reserveUnprovenSellerSpend({ payTo: payable.payTo, origin: url, sellerKey, atomic: quotedAtomic });
+      if (!capped.ok) {
+        const e = new Error(unprovenCapMessage(payable.payTo, capped));
+        e.statusCode = 409;
+        throw e;
+      }
+      unprovenHold = capped.handle;
+    }
     // Normalize v1-style accepts before signing: sellers that quote ONLY via
     // maxAmountRequired (no `amount`) crash the scheme's BigInt(amount) with
     // "Cannot convert undefined to a BigInt" — hit live 2026-07-23 buying
@@ -1458,6 +1485,9 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     // us, or the chain shows the credential expired unused. A seen response
     // (any status) and an unanswered request leave committed=true, so the
     // hold stands.
-    if (!committed) releaseSpend(quotedAtomic, spendToken);
+    if (!committed) {
+      releaseSpend(quotedAtomic, spendToken);
+      releaseUnprovenSellerSpend(unprovenHold);
+    }
   }
 }

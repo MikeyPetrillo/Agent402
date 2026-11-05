@@ -7,11 +7,11 @@
 // Agent402 as its applied layer, with every claim linked to a live surface.
 // Same design system as what-is-mpp.js. No live counts baked into copy:
 // evergreen "500+" only, per the project rule.
+import { siteOrgLd } from "./site-org.js";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { routingProofSentence } from "./routing-proof.js";
 import { resolveRailCountTokens } from "./rails.js";
 
-import { ORG_SAME_AS } from "./repo-link.js";
 // The one-sentence definition: the visible lede and the DefinedTerm description.
 const DEFINITION = "Agentic Finance (AIFI) is software agents paying and getting paid on their own: per request, from a non-custodial wallet, over the open protocols x402 and MPP, with a verifiable receipt for each call.";
 
@@ -41,7 +41,7 @@ export function agenticFinancePage(baseUrl) {
   const description =
     "Agentic Finance (AIFI) is software agents paying and getting paid on their own, per request, over the open protocols x402 and MPP. The definition and where Agent402 fits: tools, reports, routing, selling and on-chain proof.";
 
-  const orgLd = { "@type": "Organization", "@id": `${baseUrl}/#organization`, name: "Agent402", url: baseUrl, logo: { "@type": "ImageObject", url: `${baseUrl}/logo.png` }, sameAs: ORG_SAME_AS, knowsAbout: ["Agentic Finance", "AIFI", "x402", "Machine Payments Protocol", "MPP", "agentic payments", "AI agents"] };
+  const orgLd = siteOrgLd(baseUrl);
   const termLd = { "@type": "DefinedTerm", "@id": `${canonical}#term`, name: "Agentic Finance", alternateName: "AIFI", description: DEFINITION, url: canonical, inDefinedTermSet: { "@type": "DefinedTermSet", "@id": `${baseUrl}/glossary#set`, name: "Agentic Finance (AIFI) glossary", url: `${baseUrl}/glossary` } };
   const breadcrumbLd = { "@type": "BreadcrumbList", itemListElement: [
     { "@type": "ListItem", position: 1, name: "Agent402", item: `${baseUrl}/` },

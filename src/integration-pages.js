@@ -7,6 +7,7 @@
 // update the entry here in the same change. Tool links are resolved against
 // the live catalog at render time, so a retired slug drops off the page
 // instead of linking to a 404.
+import { siteOrgRef } from "./site-org.js";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { repoUrl } from "./repo-link.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
@@ -476,13 +477,13 @@ bun add @x402/fetch @x402/evm viem
     pkg: "agent402-mcp",
     dir: "mcp",
     what: "An MCP server for any MCP client (Claude Desktop, Claude Code, Cursor and others). Flagship tools are listed as first-class MCP tools and the rest of the catalog is reachable through `catalog.search`, `catalog.find` and `catalog.call`, with skill packs surfaced as MCP prompts. The hosted connector at /mcp needs no install at all.",
-    install: "npx -y agent402-mcp@0.13.27",
+    install: "npx -y agent402-mcp@0.13.28",
     lang: "json",
     example: `{
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.13.27"],
+      "args": ["-y", "agent402-mcp@0.13.28"],
       "env": { "AGENT_KEY": "0xYOUR_EVM_PRIVATE_KEY" }
     }
   }
@@ -495,7 +496,7 @@ claude mcp add --transport http agent402 https://agent402.tools/mcp
 
 # Claude Code, local server paying from a wallet
 # Use a new wallet holding only a few dollars of USDC. Never your main wallet.
-claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.13.27
+claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.13.28
 
 # no AGENT_KEY: the local server still runs the pure-CPU tools by proof-of-work`,
     exposes: [
@@ -733,7 +734,7 @@ export function integrationPage(baseUrl, slug, catalog, guideTitles = {}) {
     programmingLanguage: i.registry === "pypi" ? "Python" : "JavaScript",
     license: "https://opensource.org/licenses/MIT",
     sameAs: [registryUrl(i)],
-    author: { "@type": "Organization", name: "Havok Holdings LLC" },
+    author: siteOrgRef(baseUrl),
   };
 
   const toolCards = tools.map((t) => `<a href="/tools/${esc(t.slug)}" style="display:block;border:1px solid var(--hairline);background:var(--card);padding:14px 16px;text-decoration:none;color:var(--ink);">
@@ -746,7 +747,7 @@ export function integrationPage(baseUrl, slug, catalog, guideTitles = {}) {
 
   const body = `
   <div style="max-width:980px;margin:0 auto;padding:50px 30px 64px;">
-    <nav class="ml-crumb" aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:0 0 20px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <a href="/integrations" style="color:var(--muted);text-decoration:none;">integrations</a><span class="ml-crumb-cur"> / <span style="color:var(--ink);">${esc(i.slug)}</span></span></nav>
+    <nav class="ml-crumb" aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:0 0 20px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <a href="/integrations" style="color:var(--muted);text-decoration:none;">integrations</a><span class="ml-crumb-cur"> / <span style="color:var(--ink);">${esc(i.name)}</span></span></nav>
     <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1.02;margin:0 0 10px;">${esc(i.name)}</h1>
     <div style="font-family:var(--font-mono);font-size:var(--fs-md);color:var(--accent);margin-bottom:18px;">${esc(i.pkg)} &middot; ${esc(registryLabel(i))} &middot; MIT</div>
     <p style="color:var(--muted);font-size:var(--fs-lg);line-height:1.7;margin:0 0 34px;max-width:760px;">${inline(i.what)}</p>

@@ -5,7 +5,7 @@
 // necessarily on our own leaderboard - we don't have call/volume data for
 // them), just what the mpp.dev registry advertises plus our own live
 // verification of it (src/mpp-index.js).
-import { ledgerShell, ledgerFooterCompact, esc, safeHref } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc, safeHref, breadcrumbNavFromLd } from "./ledger-chrome.js";
 import { mppChallengeRails } from "./mpp-shim.js";
 import { tempoEnabled } from "./mpp-tempo.js";
 import { mppCrawlIntervalLabel } from "./mpp-index.js";
@@ -323,7 +323,7 @@ export function mppMarketPage(baseUrl, snapshot, leaderboard = null, { host = nu
       "@context": "https://schema.org",
       "@type": "BreadcrumbList",
       itemListElement: [
-        { "@type": "ListItem", position: 1, name: "Agent402.Tools", item: baseUrl },
+        { "@type": "ListItem", position: 1, name: "Home", item: `${baseUrl}/` },
         { "@type": "ListItem", position: 2, name: "MPP marketplace", item: `${baseUrl}/mpp-marketplace` },
       ],
     },
@@ -352,7 +352,7 @@ export function mppMarketPage(baseUrl, snapshot, leaderboard = null, { host = nu
 
   const body = `
 <div style="max-width:1080px;margin:0 auto;padding:36px 24px;">
-  <section>${headerHtml}</section>
+  <section>${breadcrumbNavFromLd(baseUrl, jsonLd)}${headerHtml}</section>
   <section>${leaderboardHtml(leaderboard, host)}</section>
   <section>${rosterHtml}</section>
   <section>${methodSection}</section>

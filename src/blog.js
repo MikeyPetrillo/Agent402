@@ -1,6 +1,7 @@
+import { siteOrgRef } from "./site-org.js";
 import { fitTitle, META_TITLE_MAX } from "./seo-meta.js";
 import { routingProofSentence } from "./routing-proof.js";
-import { ledgerShell, ledgerFooterCompact, esc, decideLive } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc, decideLive, breadcrumbTrail } from "./ledger-chrome.js";
 import { powCostPhrase } from "./pow.js";
 
 import { REPO_URL } from "./repo-link.js";
@@ -36,7 +37,7 @@ export const BLOG_POSTS = [
 <h2>Paying from your agent</h2>
 
 <ul>
-  <li><strong>MCP:</strong> <code>npx -y agent402-mcp@0.13.27</code> gives Claude, Cursor or any MCP client the catalog with a wallet. Set <code>AGENT402_NETWORKS=arc</code> and it pays the Arc offer.</li>
+  <li><strong>MCP:</strong> <code>npx -y agent402-mcp@0.13.28</code> gives Claude, Cursor or any MCP client the catalog with a wallet. Set <code>AGENT402_NETWORKS=arc</code> and it pays the Arc offer.</li>
   <li><strong>SDK:</strong> <code>agent402-client</code> wraps <code>fetch</code>: it reads the 402, signs the offer on your chosen chain and retries. <code>arc</code> is a network name it accepts.</li>
   <li><strong>Any x402 client:</strong> the offer is a standard x402 v2 <code>exact</code> accept on <code>eip155:5042</code>, so a stock x402 client that signs EVM transfers pays it as is.</li>
 </ul>
@@ -401,6 +402,7 @@ export function blogPost(baseUrl, slug) {
   // The blog suffix rides only when the whole title fits the search bar.
   const pageTitle = fitTitle([`${post.title} - Agent402 Blog`, post.title], META_TITLE_MAX);
 
+  const crumbs = breadcrumbTrail(baseUrl, [["Home", "/"], ["Blog", "/blog"], [post.title, `/blog/${post.slug}`]]);
   const jsonLd = {
     "@context": "https://schema.org",
     "@type": "BlogPosting",
@@ -408,16 +410,14 @@ export function blogPost(baseUrl, slug) {
     description: post.excerpt,
     datePublished: post.date,
     url: canonical,
-    author: { "@type": "Organization", name: "Agent402.Tools", url: baseUrl },
+    author: siteOrgRef(baseUrl),
+    publisher: siteOrgRef(baseUrl),
     isPartOf: { "@type": "Blog", name: "Agent402.Tools Blog", url: `${baseUrl}/blog` },
   };
 
   const extraCss = `
 .bp-wrap{max-width:760px;margin:0 auto;padding:56px 30px 48px;}
 .bp-eyebrow{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:10px;}
-.bp-crumb{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);margin-bottom:20px;}
-.bp-crumb a{color:var(--accent);text-decoration:underline;text-underline-offset:3px;text-decoration-thickness:1px;}
-.bp-crumb a:hover{text-decoration:underline;}
 .bp-date{display:inline-block;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:6px;}
 .bp-wrap h1{font-family:var(--font-body);font-weight:800;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:4px 0 28px;color:var(--ink);}
 .post-body{font-size:var(--fs-base);line-height:1.55;color:var(--muted);}
@@ -436,7 +436,7 @@ export function blogPost(baseUrl, slug) {
 `;
 
   const body = `<div class="bp-wrap">
-  <div class="bp-crumb ml-crumb"><a href="/">Home</a> / <a href="/blog">Blog</a><span class="ml-crumb-cur"> / ${esc(post.title)}</span></div>
+  ${crumbs.nav}
   <span class="bp-date">${esc(post.date)}</span>
   <h1>${esc(post.title)}</h1>
   <div class="post-body">
@@ -446,5 +446,5 @@ export function blogPost(baseUrl, slug) {
 </div>
 ${ledgerFooterCompact()}`;
 
-  return ledgerShell({ title: pageTitle, description: post.excerpt, canonical, baseUrl, activePath: "__none__", jsonLd, extraCss, body });
+  return ledgerShell({ title: pageTitle, description: post.excerpt, canonical, baseUrl, activePath: "__none__", jsonLd: [jsonLd, crumbs.ld], extraCss, body });
 }

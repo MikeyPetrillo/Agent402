@@ -9,12 +9,12 @@
 // order come from the kits' own tables (src/tools/tts-kit.js,
 // src/tools/stt-kit.js, src/tools/llm-gateway-kit.js). A table that changes
 // changes this page with it.
+import { siteOrgLd } from "./site-org.js";
 import { ledgerShell, ledgerFooterCompact, esc, breadcrumbLd } from "./ledger-chrome.js";
 import { TTS_TOOLS, TTS_TIERS, VOICES, FORMATS, LITE_FORMATS, ELEVENLABS_VOICE_MAP, ELEVENLABS_VOICES, TTS_BACKUP_MODELS, TTS_DEADLINE_MS } from "./tools/tts-kit.js";
 import { STT_TOOLS, STT_TIERS, DIARIZE_MODEL, MAX_AUDIO_BYTES } from "./tools/stt-kit.js";
 import { DUB_TOOLS, DUB_TIERS, DUB_MAX_CHARS, TRANSLATE_SLUG, dubPriceUsd } from "./tools/dub-kit.js";
 import { SPEECH_MODELS, SPEECH_PATH, SPEECH_MAX_CHARS, SPEECH_FORMATS, OPENAI_SPEECH_VOICES } from "./tools/llm-gateway-kit.js";
-import { ORG_SAME_AS } from "./repo-link.js";
 import { listAnd, mono, eyebrow, h2, h3, p, link, code, pre, section, th, td, row, table as sharedTable } from "./page-html.js";
 
 const fmtInt = (n) => Number(n).toLocaleString("en-US");
@@ -110,8 +110,8 @@ export function speechPage(baseUrl, catalog = null) {
   const transWirePro = sttRows.find((r) => r.def.slug === "v1-audio-transcriptions-pro")?.live || null;
 
   // ---- structured data ---------------------------------------------------------------
-  const orgLd = { "@type": "Organization", "@id": `${baseUrl}/#organization`, name: "Agent402", url: baseUrl, logo: { "@type": "ImageObject", url: `${baseUrl}/logo.png` }, sameAs: ORG_SAME_AS };
-  const crumbsLd = breadcrumbLd(baseUrl, [["Agent402", "/"], ["Speech", "/speech"]]);
+  const orgLd = siteOrgLd(baseUrl);
+  const crumbsLd = breadcrumbLd(baseUrl, [["Agent402", "/"], ["Tools", "/tools"], ["Speech", "/speech"]]);
   const listLd = { "@type": "ItemList", "@id": `${canonical}#tools`, name: "Agent402 speech tools", itemListElement: [...ttsRows.map((r) => r.live), ...(dubDef ? [dubDef] : []), ...sttRows.map((r) => r.live), ...(speechWire ? [speechWire] : [])].map((d, i) => ({ "@type": "ListItem", position: i + 1, name: d.name, url: `${baseUrl}/tools/${d.slug}` })) };
 
   const extraCss = `

@@ -4,11 +4,12 @@
 // from a local boot of this server (Base USDC entry kept, the payTo address
 // replaced with a placeholder); the live 402 lists one accepts entry per
 // accepted chain. Each entry's `summary` is reused verbatim by /llms-full.txt.
+import { siteOrgRef } from "./site-org.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
 // Copy that names a prepaid key as a way in reads the switch that sells it:
 // while sales are off, a key is something a buyer already holds.
 const PREPAID = creditsSalesEnabled() ? "a prepaid key" : "a prepaid key bought earlier";
-import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc, breadcrumbNavFromLd } from "./ledger-chrome.js";
 
 const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 
@@ -284,7 +285,7 @@ export const LEARN = [
     sections: [
       ["Two places payment can happen", [
         P(`The Model Context Protocol lets an assistant discover and call tools. It does not itself say how a tool gets paid for, so there are two practical patterns, and this server supports both.`),
-        `<ol><li><strong>A local MCP server pays underneath.</strong> The assistant talks to a stdio server on your machine (${C("npx -y agent402-mcp@0.13.27")}). When a tool call hits a 402, that server pays it with the key you configured and returns the result. The assistant never sees the payment.</li><li><strong>A hosted connector asks, and the client pays.</strong> The assistant talks to a remote MCP endpoint (${C("https://agent402.tools/mcp")}). A wallet-only tool answers with the payment challenges attached, and a client that speaks MPP pays and repeats the call.</li></ol>`,
+        `<ol><li><strong>A local MCP server pays underneath.</strong> The assistant talks to a stdio server on your machine (${C("npx -y agent402-mcp@0.13.28")}). When a tool call hits a 402, that server pays it with the key you configured and returns the result. The assistant never sees the payment.</li><li><strong>A hosted connector asks, and the client pays.</strong> The assistant talks to a remote MCP endpoint (${C("https://agent402.tools/mcp")}). A wallet-only tool answers with the payment challenges attached, and a client that speaks MPP pays and repeats the call.</li></ol>`,
       ]],
       ["The local server", [
         P(`Configure one of three things: ${C("AGENT_KEY")} (an EVM key holding USDC, signing x402 payments), ${C("AGENT402_CREDITS_KEY")} (${creditsSalesEnabled() ? "a prepaid card-credits key" : "a prepaid card-credits key bought earlier"}, sent as a Bearer token and debited only on success), or nothing, in which case the pure-CPU tools pay with proof-of-work. ${C("AGENT402_MAX_PER_CALL")} and ${C("AGENT402_BUDGET")} are checked before any payment is signed.`),
@@ -292,7 +293,7 @@ export const LEARN = [
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.13.27"],
+      "args": ["-y", "agent402-mcp@0.13.28"],
       "env": { "AGENT_KEY": "0xYOUR_FUNDED_KEY", "AGENT402_MAX_PER_CALL": "0.05" }
     }
   }
@@ -364,14 +365,14 @@ export function learnPage(baseUrl, slug) {
     description: l.description,
     url: canonical,
     about: { "@id": `${canonical}#term` },
-    author: { "@type": "Organization", name: "Havok Holdings LLC" },
-    publisher: { "@type": "Organization", name: "Agent402", url: baseUrl },
+    author: siteOrgRef(baseUrl),
+    publisher: siteOrgRef(baseUrl),
   };
   const sections = l.sections.map(([h, blocks]) => `<h2>${esc(h)}</h2>\n${blocks.map(renderBlock).join("\n")}`).join("\n");
   const others = LEARN.filter((x) => x.slug !== l.slug).map((x) => `<a href="/learn/${x.slug}">${esc(x.term)}</a>`).join(" &middot; ");
   const body = `
   <article style="max-width:1000px;margin:0 auto;padding:50px 30px 60px;">
-    <nav aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:0 0 20px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <a href="/learn" style="color:var(--muted);text-decoration:none;">learn</a> / <span style="color:var(--ink);">${esc(l.slug)}</span></nav>
+    ${breadcrumbNavFromLd(baseUrl, breadcrumbLd)}
     <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1.02;margin:0 0 18px;max-width:860px;">${esc(l.term)}</h1>
     <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--ink);margin:0 0 8px;max-width:780px;">${esc(l.summary)}</p>
     <div class="lp-body">
