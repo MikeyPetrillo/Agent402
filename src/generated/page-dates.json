@@ -124,7 +124,7 @@
     "src/tools/kit.js": "2026-11-04",
     "src/tools/kit2.js": "2026-10-29",
     "src/tools/lazy-deps.js": "2026-11-04",
-    "src/tools/linkedin-article-kit.js": "2026-10-29",
+    "src/tools/linkedin-article-kit.js": "2026-11-05",
     "src/tools/llm-context-kit.js": "2026-10-14",
     "src/tools/llm-gateway-kit.js": "2026-11-05",
     "src/tools/llm-gemini-kit.js": "2026-10-21",
