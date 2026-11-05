@@ -961,9 +961,14 @@ console.log(`payer ready: ${payerKp.publicKey()} (USDC balance: ${payerBalance})
 const payerSigner = createEd25519Signer(payerKp.secret(), NETWORK);
 
 // 4) Spawn the real facilitator server (permissive: no auth, no payTo allowlist).
+// The concurrency case below runs two testnet settles one after the other, and
+// both share one deadline counted from arrival (by design: a queued settle gets
+// only what is left). A testnet settle takes 8 to 25 s, so two can pass the
+// 25 s production default; this server gets room for two. The deadline itself
+// is tested against stub nodes above and the 1 ms server below.
 const proc = spawn(process.execPath, [join(ROOT, "index.js")], {
   cwd: ROOT,
-  env: { ...process.env, FACILITATOR_STELLAR_SECRET: facilitatorKp.secret(), PORT: String(PORT) },
+  env: { ...process.env, FACILITATOR_STELLAR_SECRET: facilitatorKp.secret(), PORT: String(PORT), FACILITATOR_SETTLE_TIMEOUT_MS: "60000" },
   stdio: ["ignore", "inherit", "inherit"],
 });
 process.on("exit", () => { try { proc.kill("SIGKILL"); } catch { /* already dead */ } });
