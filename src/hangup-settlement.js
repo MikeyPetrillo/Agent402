@@ -52,7 +52,7 @@
 // stream that was cut part way through was (partly) delivered.
 
 import { hangupForgiven } from "./hangup-forgiveness.js";
-import { passingHook, HOOK_NAMES } from "./x402-hook-guard.js";
+import { refusingHook, HOOK_NAMES, SETTLE_MARK_FAILED } from "./x402-hook-guard.js";
 import { allowanceServed } from "./allowance-state.js";
 
 export const CLIENT_GONE_TEXT = "The connection closed before the response was ready, so the payment was not settled and nothing was charged.";
@@ -126,10 +126,14 @@ export function markSettleSent(req, { evenIfGone = false } = {}) {
  *  client-gone hook (transportContext.request.adapter.req); if a vendor bump
  *  moves it, nothing is marked and a residual-window close reads as withheld,
  *  which spends forgiveness budget rather than granting a free run. */
-// A throw passes (src/x402-hook-guard.js): the mark is bookkeeping, and an
-// unmarked close reads as withheld, never as a free run.
+// A throw refuses the settlement (src/x402-hook-guard.js): a settle that went
+// on unmarked would read as a forgiven hang-up after a close (charged, no
+// sale, nothing owed), so the facilitator is not called and nothing is charged.
 export function registerSettleSentHook(server) {
-  server.onBeforeSettle(passingHook(HOOK_NAMES.settleSent, (ctx) => { markSettleSent(ctx?.transportContext?.request?.adapter?.req, { evenIfGone: true }); }));
+  server.onBeforeSettle(refusingHook(HOOK_NAMES.settleSent, (ctx) => { markSettleSent(ctx?.transportContext?.request?.adapter?.req, { evenIfGone: true }); }, {
+    reason: SETTLE_MARK_FAILED,
+    message: "This payment could not be recorded before settlement, so it was not settled. Nothing was charged; retry shortly.",
+  }));
   return server;
 }
 

@@ -24,6 +24,20 @@
 // `off` removes this cap (the per-call ceiling and the Base wallet's own daily
 // ceiling still hold); a malformed value reads as the default.
 //
+// A payTo the operator lists as shared (src/shared-paytos.js: a split or
+// router contract many sellers are paid through) is not one seller's wallet,
+// so it is not a ledger key: a seller paid at one is keyed on its origin
+// alone, and the sellers behind it do not share one day's cap. The list is
+// the server's store, handed in with configureUnprovenSharedPayTos.
+//
+// LANE DAILY CAP. The whole lane's unproven spend over a rolling 24 hours,
+// across every seller, is bounded too: env SOR_BASE_UNPROVEN_DAILY_USD,
+// default $5; `0` or `off` removes it; a malformed value reads as the
+// default. It is one more window in the same store, reserved in the same
+// script as the seller's windows and booked and given back under the same
+// rules, so a seller under its own cap is still refused (the same pre-commit
+// 409) once the lane is full, and the router moves on.
+//
 // The cap is checked and the signed amount reserved in ONE step right before
 // payX402 signs; the reservation is given back when the payment provably
 // moved nothing (refused before signing, or the chain shows the credential
@@ -44,6 +58,7 @@ import { withLoopTimeout } from "./loop-deadline.js";
 
 export const BASE_UNPROVEN_DEFAULT_USD = 0.05;
 export const BASE_UNPROVEN_SELLER_DAILY_DEFAULT_USD = 0.25;
+export const BASE_UNPROVEN_LANE_DAILY_DEFAULT_USD = 5;
 export const UNPROVEN_SELLER_WINDOW_MS = 24 * 60 * 60_000;
 
 export function baseUnprovenAllowanceUsd() {
@@ -70,6 +85,16 @@ export function baseUnprovenSellerDailyUsd() {
   return usd === 0 ? null : usd;
 }
 
+/** The lane's rolling 24-hour cap across all sellers in USD, or null when switched off. Read at call time. */
+export function baseUnprovenLaneDailyUsd() {
+  const raw = String(process.env.SOR_BASE_UNPROVEN_DAILY_USD ?? "").trim().toLowerCase();
+  if (raw === "") return BASE_UNPROVEN_LANE_DAILY_DEFAULT_USD;
+  if (raw === "off") return null;
+  const usd = Number(raw);
+  if (!Number.isFinite(usd) || usd < 0) return BASE_UNPROVEN_LANE_DAILY_DEFAULT_USD;
+  return usd === 0 ? null : usd;
+}
+
 // ---- the per-seller ledger ---------------------------------------------------
 const WINDOW = "base-unproven-seller";
 const CONTROL = "base-unproven-seller-cap";
@@ -78,12 +103,27 @@ const PROC = `${process.pid}-${randomBytes(3).toString("hex")}`;
 // key -> [{ id, micro, at }]
 const local = new Map();
 let seq = 0;
+const LANE_KEY = "lane:base";
 
-/** The seller's ledger keys: its EVM payTo (lowercased) and its origin host. */
+// The operator's shared-payTo list (src/shared-paytos.js), handed in by the
+// server. A predicate that throws reads as "not shared", so the seller keeps
+// the stricter pair of keys.
+let sharedPayToCheck = null;
+/** Hand in the shared-payTo predicate (wallet -> boolean); null clears it. */
+export function configureUnprovenSharedPayTos(isShared) {
+  sharedPayToCheck = typeof isShared === "function" ? isShared : null;
+}
+function payToIsShared(w) {
+  if (!sharedPayToCheck) return false;
+  try { return sharedPayToCheck(w) === true; } catch { return false; }
+}
+
+/** The seller's ledger keys: its EVM payTo (lowercased; not when the payTo is
+ *  a listed shared one) and its origin host. */
 export function unprovenSellerKeys({ payTo, origin } = {}) {
   const keys = [];
   const w = typeof payTo === "string" ? payTo.trim() : "";
-  if (/^0x[0-9a-fA-F]{40}$/.test(w)) keys.push(`payto:${w.toLowerCase()}`);
+  if (/^0x[0-9a-fA-F]{40}$/.test(w) && !payToIsShared(w.toLowerCase())) keys.push(`payto:${w.toLowerCase()}`);
   let host = null;
   try { host = origin ? new URL(String(origin)).host.toLowerCase() : null; } catch { host = null; }
   if (host) keys.push(`origin:${host}`);
@@ -97,27 +137,27 @@ function localRows(k, now) {
 }
 const localMicro = (k, now) => localRows(k, now).reduce((s, r) => s + r.micro, 0);
 
-// KEYS[1..n] = the seller's windows; ARGV: cutoff, windowMs, encodedMember,
-// score, capMicro, weightMicro, then one local floor per key. Prunes every
-// window, and adds the entry to all of them only when each one's larger of
-// its shared sum and this process's own stays within the cap.
+// KEYS[1..n] = the windows (the seller's, then the lane's); ARGV: cutoff,
+// windowMs, encodedMember, score, weightMicro, then a local floor and a cap
+// per key. Prunes every window, and adds the entry to all of them only when
+// each one's larger of its shared sum and this process's own stays within its
+// own cap; otherwise answers the first window that refused and its figure.
 const SELLER_RESERVE = `
 local n = #KEYS
-local worst = 0
+local w = tonumber(ARGV[5])
 for i = 1, n do
   redis.call('ZREMRANGEBYSCORE', KEYS[i], '-inf', ARGV[1])
   local items = redis.call('ZRANGE', KEYS[i], 0, -1)
   local sum = 0
   for j = 1, #items do sum = sum + (tonumber(string.match(items[j], '^(%-?%d+)|')) or 1) end
-  local base = math.max(sum, tonumber(ARGV[6 + i]))
-  if base > worst then worst = base end
+  local base = math.max(sum, tonumber(ARGV[4 + 2 * i]))
+  if base + w > tonumber(ARGV[5 + 2 * i]) then return { 0, i, base } end
 end
-if worst + tonumber(ARGV[6]) > tonumber(ARGV[5]) then return { 0, worst } end
 for i = 1, n do
   redis.call('ZADD', KEYS[i], ARGV[4], ARGV[3])
   redis.call('PEXPIRE', KEYS[i], ARGV[2])
 end
-return { 1, worst }`;
+return { 1, 0, 0 }`;
 
 const refusal = (spentMicro, capUsd) => ({
   ok: false,
@@ -126,26 +166,34 @@ const refusal = (spentMicro, capUsd) => ({
   capUsd,
   reason: `this seller has been paid $${(spentMicro / 1e6).toFixed(2)} through the Base unproven lane in the last 24 hours (cap $${capUsd} per seller); it is tried again as that spend ages out`,
 });
+const laneRefusal = (spentMicro, capUsd) => ({
+  ok: false,
+  code: "unproven_lane_daily_cap",
+  spentUsd: spentMicro / 1e6,
+  capUsd,
+  reason: `the Base unproven lane has paid $${(spentMicro / 1e6).toFixed(2)} across all sellers in the last 24 hours (cap $${capUsd}); unproven sellers are tried again as that spend ages out`,
+});
 
 /**
- * Check the seller's daily cap and reserve `atomic` (USDC, 6 decimals) in one
- * step. `{ ok: true, handle }` (handle null when the cap is off or the seller
- * has no readable key) or the refusal above. Never throws.
+ * Check the seller's daily cap and the lane's, and reserve `atomic` (USDC, 6
+ * decimals) against both in one step. `{ ok: true, handle }` (handle null
+ * when both caps are off) or one of the refusals above (the seller's when
+ * both refuse). Never throws.
  */
-export async function reserveUnprovenSellerSpend({ payTo, origin, atomic, now = Date.now(), capUsd = baseUnprovenSellerDailyUsd() } = {}) {
-  if (capUsd == null) return { ok: true, handle: null };
-  const keys = unprovenSellerKeys({ payTo, origin });
+export async function reserveUnprovenSellerSpend({ payTo, origin, atomic, now = Date.now(), capUsd = baseUnprovenSellerDailyUsd(), laneCapUsd = baseUnprovenLaneDailyUsd() } = {}) {
+  if (capUsd == null && laneCapUsd == null) return { ok: true, handle: null };
+  const sellerKeys = capUsd == null ? [] : unprovenSellerKeys({ payTo, origin });
   let micro = 0;
   try { micro = Number(BigInt(String(atomic))); } catch { micro = NaN; }
-  const capMicro = Math.round(capUsd * 1e6);
   // A seller with no key we can read, or an amount we cannot read, is not
   // given the benefit of the doubt: the lane pays only what it can bound.
-  if (!keys.length || !Number.isFinite(micro) || micro <= 0) return refusal(0, capUsd);
-  const floors = keys.map((k) => localMicro(k, now));
+  if ((capUsd != null && !sellerKeys.length) || !Number.isFinite(micro) || micro <= 0) return capUsd != null ? refusal(0, capUsd) : laneRefusal(0, laneCapUsd);
+  const keys = laneCapUsd == null ? sellerKeys : [...sellerKeys, LANE_KEY];
+  const caps = keys.map((k) => Math.round((k === LANE_KEY ? laneCapUsd : capUsd) * 1e6));
+  const refuse = (i, spentMicro) => (keys[i] === LANE_KEY ? laneRefusal(spentMicro, laneCapUsd) : refusal(spentMicro, capUsd));
   const id = ++seq;
   const member = `${PROC}:${id}`;
   const book = () => { for (const k of keys) { const rows = localRows(k, now); rows.push({ id, micro, at: now }); local.set(k, rows); } };
-  const localWorst = Math.max(...floors);
   let sharedOk = false;
   if (SHARED) {
     let c = null;
@@ -155,9 +203,12 @@ export async function reserveUnprovenSellerSpend({ payTo, origin, atomic, now = 
       try {
         const r = await withLoopTimeout(c.eval(SELLER_RESERVE, {
           keys: keys.map((k) => sharedKeyOf(WINDOW, k)),
-          arguments: [now - UNPROVEN_SELLER_WINDOW_MS, UNPROVEN_SELLER_WINDOW_MS, `${micro}|${member}`, now, capMicro, micro, ...keys.map((k) => localMicro(k, now))].map(String),
+          arguments: [now - UNPROVEN_SELLER_WINDOW_MS, UNPROVEN_SELLER_WINDOW_MS, `${micro}|${member}`, now, micro, ...keys.flatMap((k, i) => [localMicro(k, now), caps[i]])].map(String),
         }), OP_MS(), () => new Error("shared-limits: command timed out"));
-        if (Number(r?.[0]) !== 1) return refusal(Math.max(localWorst, Number(r?.[1]) || 0), capUsd);
+        if (Number(r?.[0]) !== 1) {
+          const i = Math.min(keys.length, Math.max(1, Number(r?.[1]) || 1)) - 1;
+          return refuse(i, Math.max(localMicro(keys[i], now), Number(r?.[2]) || 0));
+        }
         sharedOk = true;
       } catch (e) {
         noteSharedLimitsDegraded(CONTROL, { ok: false, error: String(e?.message || e).slice(0, 120) });
@@ -167,8 +218,10 @@ export async function reserveUnprovenSellerSpend({ payTo, origin, atomic, now = 
   // Without the shared store (or when it did not answer) this process's own
   // rows decide. No await between this check and the booking.
   if (!sharedOk) {
-    const nowRows = Math.max(...keys.map((k) => localMicro(k, now)));
-    if (nowRows + micro > capMicro) return refusal(nowRows, capUsd);
+    for (let i = 0; i < keys.length; i++) {
+      const rows = localMicro(keys[i], now);
+      if (rows + micro > caps[i]) return refuse(i, rows);
+    }
   }
   book();
   return { ok: true, handle: { keys, id, micro, member, shared: sharedOk } };
@@ -197,9 +250,20 @@ export async function unprovenSellerSpentUsd({ payTo, origin, now = Date.now() }
   return worst / 1e6;
 }
 
-/** Test-only: forget this process's rows (and, with a shared store, the seller's windows). */
+/** What the lane has paid across all sellers in the last 24 h, in USD (this process's rows, or the shared figure when larger). */
+export async function unprovenLaneSpentUsd({ now = Date.now() } = {}) {
+  let worst = localMicro(LANE_KEY, now);
+  if (SHARED) {
+    const r = await shared.windowReadMany([{ name: WINDOW, key: LANE_KEY, windowMs: UNPROVEN_SELLER_WINDOW_MS }], { now });
+    if (r.ok) for (const s of r.results) worst = Math.max(worst, Number(s?.sum) || 0);
+    else noteSharedLimitsDegraded(CONTROL, r);
+  }
+  return worst / 1e6;
+}
+
+/** Test-only: forget this process's rows (and, with a shared store, the seller's windows and the lane's). */
 export async function __resetUnprovenSellerLedger(sellers = []) {
-  if (SHARED) for (const s of sellers) for (const k of unprovenSellerKeys(s)) await shared.windowClear(WINDOW, k);
+  if (SHARED) { for (const s of sellers) for (const k of unprovenSellerKeys(s)) await shared.windowClear(WINDOW, k); await shared.windowClear(WINDOW, LANE_KEY); }
   local.clear();
   seq = 0;
 }

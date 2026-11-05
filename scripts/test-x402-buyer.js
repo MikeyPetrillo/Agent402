@@ -624,6 +624,121 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
   ok((await BU.reserveUnprovenSellerSpend({ payTo: SELLER_W, origin: "https://roll.example", atomic: 50000n, now: t0 + 20 })).ok === true, "unproven cap (ledger): switched off, the cap refuses nothing");
   delete process.env.SOR_BASE_UNPROVEN_SELLER_DAILY_USD;
 
+  // A COMMITTED buy that then fails stays booked: the paid leg answers 500
+  // after the request was sent and the chain shows the authorization
+  // consumed (the seller took the money), so the seller's $0.05 stands and a
+  // buy past its cap is still refused. Control: the same 500 with the chain
+  // showing the credential expired unused gives the reservation back.
+  {
+    const failing = (payTo) => async (_url, init) => {
+      const h = init?.headers || {};
+      if (!(h["PAYMENT-SIGNATURE"] || h["payment-signature"] || h["X-PAYMENT"])) {
+        return { status: 402, headers: { get: (n) => (String(n).toLowerCase() === "payment-required" ? b64({ x402Version: 2, accepts: [accept(payTo, "50000")] }) : null) }, json: async () => ({}), text: async () => "{}" };
+      }
+      paidRequests++;
+      return new Response(JSON.stringify({ error: "backend down" }), { status: 500, headers: { "content-type": "application/json" } });
+    };
+    const buyFailing = (origin, payTo, notDebited) => {
+      globalThis.fetch = failing(payTo);
+      return payX402(`${origin}/data`, { maxAtomic: 500000n, method: "POST", body: {}, chain: "base", allowUnproven: true, notDebited, refusalMaxWaitMs: 0 }).then((r) => ({ r }), (e) => ({ e }));
+    };
+    await BU.__resetUnprovenSellerLedger();
+    const TAKER_W = "0x" + "7e".repeat(20);
+    signs = 0; paidRequests = 0;
+    const took = await buyFailing("https://taker.example", TAKER_W, async () => ({ debited: true, expired: false, observed: 1 }));
+    ok(took.e && took.e.committed === true && signs === 1 && paidRequests === 1, `unproven cap: a paid leg answering 500 after the payment was sent is a committed failure (${took.e?.statusCode} committed ${took.e?.committed})`);
+    ok(Math.abs(await BU.unprovenSellerSpentUsd({ payTo: TAKER_W, origin: "https://taker.example" }) - 0.05) < 1e-9, "unproven cap: ...and the seller's $0.05 stays booked (the seller took the money)");
+    for (let i = 0; i < 4; i++) await buy("https://taker.example", TAKER_W);
+    signs = 0;
+    const past = await buy("https://taker.example", TAKER_W);
+    ok(past.e && past.e.statusCode === 409 && /daily cap per seller/.test(past.e.message) && signs === 0, `unproven cap: the failed-but-charged buy counts toward the cap, so the next buy past it is refused (${past.e?.message || "paid"})`);
+    const REFUSER_W = "0x" + "8f".repeat(20);
+    const refused = await buyFailing("https://refuser.example", REFUSER_W, async () => ({ debited: false, expired: true, observed: 3 }));
+    ok(refused.e && refused.e.committed === false, `unproven cap (control): a 500 the chain proves unpaid is not committed (${refused.e?.committed})`);
+    ok(await BU.unprovenSellerSpentUsd({ payTo: REFUSER_W, origin: "https://refuser.example" }) === 0, "unproven cap (control): ...and gives the seller's reservation back");
+  }
+
+  // LANE DAILY CAP (SOR_BASE_UNPROVEN_DAILY_USD, default $5): bounds the
+  // lane's spend across all sellers, reserved beside the seller's windows.
+  {
+    const savedLane = process.env.SOR_BASE_UNPROVEN_DAILY_USD;
+    delete process.env.SOR_BASE_UNPROVEN_DAILY_USD;
+    ok(BU.baseUnprovenLaneDailyUsd() === 5 && BU.BASE_UNPROVEN_LANE_DAILY_DEFAULT_USD === 5, "lane cap: defaults to $5");
+    for (const [raw, want, label] of [["off", null, "'off' removes it"], ["0", null, "'0' removes it"], ["junk", 5, "a malformed value reads as the default"], ["-2", 5, "a negative value reads as the default"], ["0.12", 0.12, "a custom cap is honored"]]) {
+      process.env.SOR_BASE_UNPROVEN_DAILY_USD = raw;
+      ok(BU.baseUnprovenLaneDailyUsd() === want, `lane cap: ${label}`);
+    }
+    // $0.12 across the lane: two $0.05 buys from two different sellers fit,
+    // a third seller (under its own cap) is refused 409 before signing.
+    process.env.SOR_BASE_UNPROVEN_DAILY_USD = "0.12";
+    await BU.__resetUnprovenSellerLedger();
+    signs = 0;
+    const l1 = await buy("https://lane-one.example", "0x" + "a1".repeat(20));
+    const l2 = await buy("https://lane-two.example", "0x" + "a2".repeat(20));
+    ok(!l1.e && !l2.e && signs === 2, `lane cap: two sellers' $0.05 buys fit under $0.12 (${l1.e?.message || l2.e?.message || "ok"})`);
+    ok(Math.abs(await BU.unprovenLaneSpentUsd() - 0.10) < 1e-9, "lane cap: the lane reads $0.10 booked across both sellers");
+    signs = 0; paidRequests = 0;
+    const heldBefore = _spentThisWindow();
+    const l3 = await buy("https://lane-three.example", "0x" + "a3".repeat(20));
+    ok(l3.e && l3.e.statusCode === 409 && /daily cap across all sellers/.test(l3.e.message) && signs === 0 && paidRequests === 0, `lane cap: a third seller under its own cap is refused 409 before signing (${l3.e?.statusCode} ${l3.e?.message})`);
+    ok(l3.e && l3.e.committed !== true && _spentThisWindow() === heldBefore, "lane cap: the refusal is pre-commit and gives the budget hold back, so the router moves on");
+    ok(await BU.unprovenSellerSpentUsd({ payTo: "0x" + "a3".repeat(20), origin: "https://lane-three.example" }) === 0, "lane cap: the refused seller's own window holds nothing");
+    signs = 0;
+    const provenPast = await buy("https://lane-three.example", "0x" + "a3".repeat(20), "50000", { allowUnproven: false });
+    ok(!provenPast.e && signs === 1, "lane cap: a proven buy never reads the lane cap");
+    // A release gives the lane's room back too; a refusal before signing books nothing.
+    const t1 = Date.now();
+    await BU.__resetUnprovenSellerLedger();
+    const h1 = await BU.reserveUnprovenSellerSpend({ payTo: "0x" + "b1".repeat(20), origin: "https://r1.example", atomic: 50000n, now: t1 });
+    const h2 = await BU.reserveUnprovenSellerSpend({ payTo: "0x" + "b2".repeat(20), origin: "https://r2.example", atomic: 50000n, now: t1 });
+    const h3 = await BU.reserveUnprovenSellerSpend({ payTo: "0x" + "b3".repeat(20), origin: "https://r3.example", atomic: 50000n, now: t1 });
+    ok(h1.ok && h2.ok && h3.ok === false && h3.code === "unproven_lane_daily_cap", `lane cap (ledger): the third seller's reservation is refused by the lane (${h3.code})`);
+    BU.releaseUnprovenSellerSpend(h1.handle);
+    ok((await BU.reserveUnprovenSellerSpend({ payTo: "0x" + "b3".repeat(20), origin: "https://r3.example", atomic: 50000n, now: t1 + 1 })).ok === true, "lane cap (ledger): a release gives the lane's room back");
+    ok((await BU.reserveUnprovenSellerSpend({ payTo: "0x" + "b4".repeat(20), origin: "https://r4.example", atomic: 50000n, now: t1 + 24 * 3600_000 + 10 })).ok === true, "lane cap (ledger): the lane's window rolls after 24 h");
+    // A seller refused by its own cap and the lane at once reads as the seller's refusal.
+    await BU.__resetUnprovenSellerLedger();
+    process.env.SOR_BASE_UNPROVEN_DAILY_USD = "0.05";
+    process.env.SOR_BASE_UNPROVEN_SELLER_DAILY_USD = "0.05";
+    await BU.reserveUnprovenSellerSpend({ payTo: "0x" + "c1".repeat(20), origin: "https://c1.example", atomic: 50000n, now: t1 });
+    ok((await BU.reserveUnprovenSellerSpend({ payTo: "0x" + "c1".repeat(20), origin: "https://c1.example", atomic: 50000n, now: t1 + 1 })).code === "unproven_seller_daily_cap", "lane cap (ledger): when both refuse, the seller's own cap is named");
+    // Off: the lane cap refuses nothing.
+    process.env.SOR_BASE_UNPROVEN_DAILY_USD = "off";
+    delete process.env.SOR_BASE_UNPROVEN_SELLER_DAILY_USD;
+    await BU.__resetUnprovenSellerLedger();
+    const many = [];
+    for (let i = 0; i < 6; i++) many.push(await BU.reserveUnprovenSellerSpend({ payTo: `0x${String(i).repeat(40)}`, origin: `https://off${i}.example`, atomic: 50000n, now: t1 }));
+    ok(many.every((r) => r.ok), "lane cap (ledger): switched off, six sellers' $0.05 each are all reserved");
+    // Both caps off: no handle at all.
+    process.env.SOR_BASE_UNPROVEN_SELLER_DAILY_USD = "off";
+    const none = await BU.reserveUnprovenSellerSpend({ payTo: "0x" + "d1".repeat(20), origin: "https://d1.example", atomic: 50000n });
+    ok(none.ok && none.handle === null, "lane cap (ledger): with both caps off nothing is reserved");
+    delete process.env.SOR_BASE_UNPROVEN_SELLER_DAILY_USD;
+    if (savedLane === undefined) delete process.env.SOR_BASE_UNPROVEN_DAILY_USD; else process.env.SOR_BASE_UNPROVEN_DAILY_USD = savedLane;
+  }
+
+  // A payTo listed as shared (src/shared-paytos.js) is not one seller's
+  // wallet: sellers paid at it are keyed on their origins alone, so each keeps
+  // its own day; an unlisted payTo still ties its sellers together.
+  {
+    await BU.__resetUnprovenSellerLedger();
+    const SPLIT = "0x" + "e5".repeat(20);
+    BU.configureUnprovenSharedPayTos((w) => w === SPLIT);
+    ok(BU.unprovenSellerKeys({ payTo: SPLIT.toUpperCase().replace("0X", "0x"), origin: "https://t1.example" }).join(",") === "origin:t1.example", "shared payTo: the key is the origin alone");
+    ok(BU.unprovenSellerKeys({ payTo: "0x" + "e6".repeat(20), origin: "https://t1.example" }).length === 2, "shared payTo: an unlisted payTo keeps both keys");
+    const t2 = Date.now();
+    for (let i = 0; i < 5; i++) await BU.reserveUnprovenSellerSpend({ payTo: SPLIT, origin: "https://t1.example", atomic: 50000n, now: t2 });
+    ok((await BU.reserveUnprovenSellerSpend({ payTo: SPLIT, origin: "https://t1.example", atomic: 50000n, now: t2 })).ok === false, "shared payTo: the first tenant still reaches its own $0.25 cap");
+    ok((await BU.reserveUnprovenSellerSpend({ payTo: SPLIT, origin: "https://t2.example", atomic: 50000n, now: t2 })).ok === true, "shared payTo: a second tenant behind the same listed payTo keeps its own day");
+    ok((await BU.reserveUnprovenSellerSpend({ payTo: SPLIT, origin: "not a url", atomic: 50000n, now: t2 })).ok === false, "shared payTo: a tenant with no readable origin has no key and is not paid in the lane");
+    BU.configureUnprovenSharedPayTos(() => { throw new Error("store down"); });
+    ok(BU.unprovenSellerKeys({ payTo: SPLIT, origin: "https://t1.example" }).length === 2, "shared payTo: a predicate that throws keeps both keys (the stricter reading)");
+    BU.configureUnprovenSharedPayTos(null);
+    ok(BU.unprovenSellerKeys({ payTo: SPLIT, origin: "https://t1.example" }).length === 2, "shared payTo: cleared, the payTo is a key again");
+    const srv = await import("node:fs").then((fs) => fs.readFileSync(new URL("../src/server.js", import.meta.url), "utf8"));
+    ok(/configureUnprovenSharedPayTos\(\(w\) => sharedPayToStore\(\)\.has\(w\)\)/.test(srv), "shared payTo: the server hands in its shared-payTo store (pin)");
+  }
+
   evm.client.createPaymentPayload = realSign;
   await BU.__resetUnprovenSellerLedger();
   if (savedMax === undefined) delete process.env.SOR_BASE_UNPROVEN_MAX_USD; else process.env.SOR_BASE_UNPROVEN_MAX_USD = savedMax;

@@ -681,7 +681,7 @@ import { unloadedStores } from "./store-retry.js";
 import { dispatchEligibility, dispatchLegend } from "./dispatch-eligibility.js";
 import { routeExcludedCategory } from "./route-category.js";
 import { tempoCandidateOf, resolvedCandidateOf } from "./sor-candidates.js";
-import { baseUnprovenAllowanceUsd } from "./base-unproven.js";
+import { baseUnprovenAllowanceUsd, configureUnprovenSharedPayTos } from "./base-unproven.js";
 import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
@@ -1424,6 +1424,9 @@ function selfFundingClearedStore() {
 // The shared settlement contracts' outbound is never read (they credit nobody,
 // and they pay out on every payment they forward).
 configureSellerFunding({ cleared: selfFundingClearedStore(), skip: (w) => sharedPayToStore().has(w) });
+// A listed shared payTo is not one seller's wallet: the Base unproven lane's
+// per-seller cap keys a seller paid at one on its origin alone.
+configureUnprovenSharedPayTos((w) => sharedPayToStore().has(w));
 // The new-destination watch over the outbound ledger
 // (src/outbound-destinations.js): read at boot so the first word on
 // /api/gateway-status is the stored body, not an empty memory.
