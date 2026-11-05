@@ -104,5 +104,19 @@ async function crawl(origin, files) {
 ok(/SUCCESSION_PATH = "\/\.well-known\/agent402-succession"/.test(idxSrc) && text.includes("/.well-known/agent402-succession"), "the succession marker the crawler reads is named");
 
 rmSync(dir, { recursive: true, force: true });
+// ---- the unpaid budget is per address, whatever the User-Agent ----------------
+// The sentences the address-keyed budget (src/unpaid-quote-budget.js) relies
+// on: a reader must not take a fresh User-Agent for a fresh budget, and named
+// crawlers read a larger allowance on the same address count.
+{
+  const { NAMED_CLIENT_BUDGET_MULTIPLIER } = await import("../src/unpaid-quote-budget.js");
+  const budget = 250;
+  const on = decodeEntities(stripTags(stripInlineTags(crawlerPage("https://agent402.tools", { unpaidQuoteBudget: budget })))).replace(/\s+/g, " ");
+  ok(on.includes("budgeted per client address, whatever the User-Agent (an IPv6 /64 counts as one address)"), "/crawler says the unpaid budget counts per address, whatever the User-Agent");
+  ok(on.includes(`against ${(budget * NAMED_CLIENT_BUDGET_MULTIPLIER).toLocaleString("en-US")} unpaid requests per address in an hour, on the same count as everything else from that address`), "/crawler quotes the named-crawler allowance on the same address count, derived from the multiplier");
+  ok(!/per User-Agent/i.test(on) && !/crawlers are not budgeted/i.test(on), "/crawler never says the budget is per User-Agent or that named crawlers are exempt");
+  ok(!/whatever the User-Agent/.test(text), "with the budget off, no per-address budget is claimed");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

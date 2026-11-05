@@ -404,5 +404,16 @@ for (const format of ["mp3", "pcm", "wav", "flac", "opus", "aac"]) {
   ok(/language confidence/.test(transcribe.description) && /language_confidence/.test(transcribe.discovery.inputSchema.properties.diarize.description), "the description and the diarize schema name the language confidence it adds");
 }
 
+// wiki/TTS.md names the backup chain the kit walks: the last backup by its
+// current MAI-Voice version (read from TTS_BACKUP_MODELS), never the 2.0 ids.
+{
+  const { readFileSync } = await import("node:fs");
+  const tts = readFileSync(new URL("../wiki/TTS.md", import.meta.url), "utf8");
+  const mai = TTS_BACKUP_MODELS.find((m) => /mai-voice-/i.test(m)) || "";
+  const ver = (mai.match(/mai-voice-([\d.]+)$/i) || [])[1];
+  ok(ver && tts.includes(`then MAI-Voice-${ver} (each of the ten names gets its own English voice)`), `wiki/TTS.md names MAI-Voice-${ver} as the last backup, as TTS_BACKUP_MODELS does (${mai})`);
+  ok(!/MAI-Voice-2(?![.\d])|mai-voice-2(?![.\d])/i.test(tts), "wiki/TTS.md names none of the MAI-Voice-2 (2.0) ids as current");
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
