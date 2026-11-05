@@ -78,7 +78,7 @@ const ctl = createServer(async (req, res) => {
       const unproven = {};
       for (const s of u.searchParams.getAll("seller")) {
         const [origin, payTo] = s.split("|");
-        unproven[origin] = await unprovenSellerSpentUsd({ origin, sellerKey: origin, payTo });
+        unproven[origin] = await unprovenSellerSpentUsd({ origin, payTo });
       }
       return send({ exposureUsd: row ? row.unsettledUsd : 0, unproven, delivery: sellerDeliveryMemoEntries().map((e) => ({ origin: e.origin, strikes: e.strikes, actionable: e.actionable })) });
     }
