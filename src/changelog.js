@@ -3,6 +3,15 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 const ENTRIES = [
   {
     date: "2026-11-05",
+    title: "First-call refusals by new wallet, bounded CI installs",
+    items: [
+      "Operations: the first-call allowance's operator view counts refusals of new wallets (never paid, never granted) by reason and route, apart from returning buyers, so a route a newcomer wanted shows up by name.",
+      "Operations: every Playwright install in CI goes through the bounded apt helper, and a guard fails any workflow step that runs apt directly.",
+      "Packages: viem is 2.57.16.",
+    ],
+  },
+  {
+    date: "2026-11-05",
     title: "Payment libraries on x402 2.30, a wider unproven lane, one spend workflow",
     items: [
       "Payments: the x402 libraries are 2.30.0 and mppx 0.17.1. A money or identity check that runs before verify or settle and fails refuses the payment with a 402 and charges nothing; a Tempo charge whose broadcast is rejected as a replay recovers its receipt instead of answering a new 402.",
