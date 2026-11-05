@@ -143,7 +143,11 @@ for (const [name, j] of Object.entries(jobs)) {
   const mergeStyle = /gh pr merge[^\n]*--squash/.test(mog) ? "squash" : "merge";
   ok(mergeStyle === "merge", "merge-on-green.sh merges with --merge (PR title lands in the BODY)");
   // If either side ever changes, the guidance below is what has to change with it.
-  const claude = readFileSync(new URL("../CLAUDE.md", import.meta.url), "utf8");
+  // The guidance lives in CLAUDE.md or a path-scoped .claude/rules/*.md file,
+  // so read them as one text: a paragraph moved between them stays checked.
+  const rulesDir = new URL("../.claude/rules/", import.meta.url);
+  const claude = [readFileSync(new URL("../CLAUDE.md", import.meta.url), "utf8"),
+    ...readdirSync(rulesDir).filter((f) => f.endsWith(".md")).sort().map((f) => readFileSync(new URL(f, rulesDir), "utf8"))].join("\n");
   ok(/marker in a COMMIT SUBJECT/.test(claude),
      "CLAUDE.md tells the next author to put the marker in a commit SUBJECT, not the PR title");
   ok(!/put the marker in the PR TITLE so the merge commit carries it/.test(claude),

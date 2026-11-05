@@ -20,9 +20,8 @@ LLC: credit the entity, never a personal name.
 - `src/mcp-http.js`: hosted MCP connector at `/mcp` (dotted tool names: `catalog.search`,
   `catalog.find`, `catalog.call`, `payment.info`, `server.describe`, `sellers.list`,
   `demand.request`, flagship aliases). Old snake names remain CallTool aliases only.
-  `src/mcp-mpp.js` makes wallet-only tools payable on the connector by replaying the call as a
-  loopback request to the real paid route; `src/mcp-tasks.js` handles long calls as MCP tasks;
-  `src/mcp-skills.js` serves skill packs over the Skills extension (`MCP_SKILLS=on`, negotiated only).
+- `src/mcp-mpp.js`, `src/mcp-tasks.js`, `src/mcp-skills.js`: connector payments, long calls as tasks,
+  skill packs (see `.claude/rules/mcp.md`).
 - `src/mpp-shim.js`, `src/mpp-tempo.js`, `src/mpp-stripe.js`, `src/mpp-subscriptions.js`: MPP
   wire support. x402 keeps sole settlement authority on the evm path; the shim only translates.
 - `src/credits.js`: prepaid card credits (hold at authorize, debit on a final 200).
@@ -30,49 +29,14 @@ LLC: credit the entity, never a personal name.
   report products and recurring monitors.
 - `src/find.js` (`/api/find`), `src/discovery.js` (`/.well-known/x402`, `/api/reliability`),
   `src/x402-index.js` (crawled seller index), `src/dispatch-eligibility.js` (router labels).
-  Self-serve submissions (`POST /api/index/register`) hold at most `INDEX_MAX_SUBMITTED_SEEDS`
-  slots (default 4000; unset or 0 reads as the default; `INDEX_TUNNEL_SUBMISSION_SHARE`, 0.25,
-  of them for quick tunnels); a slot is released after `INDEX_RELEASE_AFTER_DAYS` (30) with no
-  successful probe, `INDEX_SETTLED_RELEASE_AFTER_DAYS` (90, never below the plain window) for a
-  seller that has settled, `INDEX_TUNNEL_RELEASE_AFTER_DAYS` (3) for a tunnel. The operator
-  seeds past the cap with `POST /__operator/index/seed`. A registration naming one of our own
-  hosts (the base URL, a www or trailing-dot twin, our Railway domain, or a host listed in
-  `SELF_SELLER_HOSTS`) is refused, and no buyer ever pays one of our own wallets
-  (`src/own-wallets.js`, checked by route-execute and again by each buyer before it signs).
+  Submissions, parts, tool cap and the paywall probe: `.claude/rules/index-router.md`.
 - `src/tools/route-execute.js`: route-and-execute, buys from proven external sellers per chain
   (`src/x402-buyer.js`, `src/solana-buyer.js` whose external leg runs under `SOR_SVM_BUDGET_MS`,
   inside a recent blockhash's life, `src/tempo-buyer.js`, `src/algorand-sellers.js`).
-  A Base seller below the settlement floor is tried after every proven candidate in the unproven
-  tier (`src/base-unproven.js`): its signed quote at most `SOR_BASE_UNPROVEN_MAX_USD` (default
-  $0.05), paid only at its live 402's payTo, `sellerProof: "unproven"` on the receipt, and at most
-  `SOR_BASE_UNPROVEN_SELLER_DAILY_USD` (default $0.25) per seller (payTo and origin host) over a
-  rolling 24 h, reserved before signing on the shared-limits window (Redis) and given back only
-  when nothing moved. Solana's tier (`SOR_SVM_UNPROVEN_MAX_USD`, `src/solana-buyer.js`) is separate.
 - `src/refund-ledger.js` + `scripts/refund-run.js`: charged-but-failed is recorded as a debt and
   repaid only after on-chain proof (`src/payment-verify.js`).
-- `src/state-db.js`: the state database (Postgres, schema `state`): documents, records, log
-  lines, leases, imports. `STATE_DATABASE_URL` is the switch (unset: files on the volume as
-  before; a merge never cuts over, the variable does). `src/json-document.js`
-  is the one API a whole-file JSON store uses (file on the volume without a database, the row with
-  one; the file is imported once). Every scheduled loop runs under `leased(name, ...)`, so two
-  containers never run the same tick; a store registers its first load with `trackStoreReady` and
-  the server awaits `stateStoresReady` before it listens. `/api/gateway-status` reports `stateDb`.
-  A seller with more than `PART_TOOLS` tools (`src/index-parts.js`, 2000) is stored as a header row
-  under its origin naming content-addressed part rows (`x402-index-parts`, about 2000 tools each);
-  a save writes only the parts the table lacks and then the header, a reader accepts only the parts
-  the header names (else it re-reads the header or keeps its copy), and unnamed parts are swept after
-  `INDEX_PARTS_ORPHAN_GRACE_MS` (default 10 minutes). `INDEX_PART_TOOLS` moves the threshold. A build
-  from before the parts format reads a header row as a seller with no tools, so before rolling back
-  past it set `INDEX_PART_TOOLS` very high and wait one crawl cycle (each seller rewrites as one row on
-  its next changed save); otherwise fix forward. The index keeps at most `INDEX_SELLER_TOOL_CAP` tools per seller
-  (`src/seller-tool-cap.js`, default 5000; described tools first, then listing order), applied once in
-  `IndexCache.set` before the route index, the persist and the replica read the entry; a cut entry
-  carries `toolsTotal` and `toolsCapped`, shown beside `toolCount` on `/api/index` rows, the `?seller=`
-  detail (with `toolCap` and `toolCapLegend`) and the `index` block of `/__operator/heap.json`
-  (`cappedSellers`, `toolsDropped`). A statement carrying a large single row (the one-row fallback) runs
-  under `largeRowTimeoutMs`: the default limit plus `STATE_DB_MS_PER_MB` (500) per megabyte past the
-  first, at most `STATE_DB_LARGE_ROW_MAX_MS` (120000); after a warm-start page times out, the rows
-  that page covered are read one at a time, then full pages resume.
+- `src/state-db.js`, `src/json-document.js`: the state database (Postgres) and the whole-file JSON
+  store API; leases, store readiness and large rows in `.claude/rules/ops.md`.
 - `src/status.js`, `src/status-store.js`: `/status`, measured from outside production.
 - `src/stats.js`, `src/sales-ledger.js`, `src/seo.js`, `src/pages.js`, `src/guides.js`,
   `src/privacy.js`, `src/terms.js`, `src/security-page.js`, `src/company.js`.
@@ -262,253 +226,17 @@ budget. Refunds stay human-run (`refund.yml`, dry run first); any buyer's owed r
 not be sent, `owedRefunds` in `src/human-checkout.js`, folds into the same word), and the status Worker and
 heartbeat page on it under one issue that closes when nothing is owed.
 
-## Subsystem pointers
-- **Async jobs:** `Prefer: respond-async` on a paid slow route (`runSeconds`, from `EVM_RUN_SECONDS`) answers 202 and a job link (`src/async-jobs.js`, mounted before every payment gate); the call is replayed over 127.0.0.1 with the buyer's payment and settles only on a final 200; `GET /api/jobs/:id` serves it. Jobs report progress: `status` keeps working/completed/failed, `state` is queued/running/succeeded/failed with `stage`, `progress`, `etaSeconds` and `Retry-After` (`src/job-progress.js`); which routes are slow, and what the 402, /api/pricing, /openapi.json and /llms-full.txt say about them, comes from `src/slow-routes.js`.
-  A Tempo push credential's transfer is final before the call, so neither sync window refuses it directly: `src/slow-sync-window.js` and `src/cdn-sync-window.js` park the refusal on the request with `deferSyncWindowRefusal` and the Tempo gate answers it from `syncWindowRefusalOf(req)` in its push input check (the transfer booked as owed until the same credential returns with the header); server.js defers only while `tempoGateMounted` is true, set right after the gate mounts, so with no gate the windows refuse as for any other payment. That deferred answer applies to a slow route that offers Tempo, of which the current catalog has none: every slow route is long-running (`isLongRunningSlug`), so `tempoOfferedFor` is false there and the gate's binding check refuses the push credential first (`routeRefusal`: long-running, identity-bound, priced above the challenge, free), asks the relay whether the transfer pays the challenge and books a confirmed one as owed the same way; `scripts/test-tempo-push-debts.js` pins that no slow route offers Tempo, so a change that adds one is noticed and covers the deferred path there.
-  Through the CDN proxy (`req.viaCdn`), a paid call without the header to a route whose run budget is past `CDN_SYNC_MAX_SECONDS` (default 90) runs as a job only for a client that follows a 202 on its own (agent402-client 0.8.16+) and is otherwise refused with a 504 before any gate, while LLM attempts, image fallback links and route-execute's seller waits are bounded by `cdnSyncLeftMs(req)` (`src/cdn-sync-window.js`).
-- **Client address:** `src/cdn-client-ip.js` redefines `req.ip` right after `trust proxy`: CF-Connecting-IP is the client only when the edge-reported peer is inside the embedded CDN ranges (plus `CF_IP_RANGES_EXTRA`) and the header parses as an address; from any other peer it is ignored. `CDN_PROXY` (`cloudflare` or `on`, default off) turns the resolver and the CDN sync window on, and while on a peer's CF-Connecting-IP counts (and the request is `req.viaCdn`) only when it also carries `CDN_ORIGIN_SECRET` in `X-Origin-Auth` (constant-time compare, stripped before handlers), so off or without the secret `req.ip` is the trust-proxy address. Read the client address only through `req.ip`.
-  `cdnOrigin` on `/api/gateway-status` reads `unauthenticated` while a CDN-range peer reached the origin without the secret inside the window.
-- **Idempotency:** opt-in `Idempotency-Key` (and x402 `payment-identifier` as an alias), bound
-  to credential + route + query + body, committed only after a settled 200. With no explicit key, an
-  x402 EVM payment's identity (network, signed payer, nonce; `paymentNonceIdentityOf`) is the
-  implicit key, so a re-sent signed payment is served from its first answer (`X-Replayed-Answer: 1`,
-  no handler, no settle, no sale), except on a `hasLastingEffect` route, an identity-bound route
-  (a settled header can be rebuilt from chain data) or a streamed call; the store
-  (`src/idempotency-store.js`) is Redis-shared across replicas. Replays are counted per slug on
-  `/__operator/tool-failures.json`.
-- **LLM gateway:** `src/tools/llm-gateway-kit.js` (OpenAI chat wire), `llm-messages-kit.js`
-  (Anthropic Messages), `llm-responses-kit.js` (OpenAI Responses); flat tiers plus a metered
-  tier whose 402 is a per-request quote. `handlerInputOf(req)` (`src/handler-input.js`) is the
-  one input object for pricing and serving; a body nested past `MAX_INPUT_DEPTH` (64) is refused
-  there with a 400 before any handler walks it. Streams commit 200 only on the first `data:` frame.
-  The metered chat route refuses a model id missing from the upstream's live model list with a 400
-  before any payment gate (`src/model-catalog.js`, read every 10 minutes and on a miss at most once a
-  minute; fails open with no read under 30 minutes old; retiring ids and ids with successors are left to their fallback;
-  `MODEL_CATALOG_URL` points the read at a stub).
-  `GATEWAY_METERED_BILLING=on` gates metered settlement, the buffered override and a credits
-  stream's debit on finish alike (`recordStreamedUsage`, `meteredUsdOf` in `src/gateway-meter.js`).
-- **Settle-failure breakers:** `src/gateway-settle-breaker.js` (per wallet and global on `/v1`,
-  per wallet on other wallet-only tools). A wallet is refused only when it holds
-  `GATEWAY_SETTLE_BREAKER_MAX` failures in the window AND they are more than
-  `GATEWAY_SETTLE_BREAKER_MIN_FAIL_SHARE` (default 0.5) of its outcomes there; settled calls
-  stay in the window as outcomes and never erase failures, so a buyer settling hundreds of
-  calls is not cut off by a few replayed authorizations, whatever order the fast reverts and
-  slower settlements land in; `GATEWAY_SETTLE_BREAKER_HARD_MAX` (default 40) failures refuse
-  a wallet whatever it settled, the bound on unpaid handler runs. The `/v1` global pause counts distinct buyers, not
-  failures. Only a refusal whose offer the next 402 withdraws (`isWithdrawnSubcentRefusal`)
-  stays off the buyer's count, and it still feeds the `/v1` global pause, each one counted on
-  its own; every other facilitator billing refusal (`src/payment-reject.js`) counts in both
-  breakers and the composite guard, with a 429 that names it instead of the wallet.
-  The composite guard (`src/composite-spend-guard.js`) reads its window the same way: a settled
-  run stays as an outcome and never erases failures; a payer is blocked at
-  `COMPOSITE_GUARD_MAX_FAILS` only while failures are more than `COMPOSITE_GUARD_MIN_FAIL_SHARE`
-  (default 0.5) of its outcomes, and at `COMPOSITE_GUARD_HARD_MAX` (default 10) whatever it settled.
-- **Replay guard:** `src/replay-guard.js` claims a payment credential (x402 nonce, Tempo, Stripe)
-  in Redis while its call runs; the claim is renewed every 30 s until settle or release, so a
-  route that outlives the claim's expiry cannot run twice on one payment. With Redis configured
-  but unreachable, a paid call is refused 503 with `Retry-After` before any payment is taken (x402
-  dispatcher, Tempo gate and card gate, each through `sharedClaimRequired`) on a long-running or
-  composite route (`isLongRunningSlug`), and on any route while another container may be serving
-  (`src/replay-topology.js`: more than one replica configured, inside `DEPLOY_OVERLAP_SECONDS` of
-  listen, default 120, anchored by `markListening` from the listen callback, else import time, or
-  draining, read from `drainSignal()`); a lone container past that window serves fast routes on a
-  per-process claim, so a store outage does not stop sales. A settled 200's consumed mark keeps the
-  guard's default hold; only a grant that was not settled (`grantedUnsettled` in
-  `src/hangup-settlement.js`: a forgiven hang-up, a first-call allowance) is held to the
-  authorization's own `validBefore` plus a margin, since that authorization is still live on chain
-  (`scripts/test-replay-consumed-hold.js`, on Redis).
-- **Store deadlines:** `src/loop-deadline.js` (`withLoopTimeout`, `withLoopDeadline`, `loopDeadline`)
-  bounds every Redis wait (shared limits, the hang-up ticket, the spend reserve, journals,
-  idempotency, the first-call allowance, the shared Databento and Nominatim reads, the cache, the
-  database ping, lease release) in loop time: a deadline re-arms once for time the loop was held
-  and expires only after a poll phase, so an answer that landed during boot work is read, not
-  booked as a store that did not answer (`scripts/test-loop-deadline.js`, `test-loop-deadline-sites.js`).
-- **Per-chain price floors:** `src/network-floors.js`. Every accept is priced through
-  `priceForNetwork` (`src/payments.js`: list or per-request quote, plus the chain's
-  `NETWORK_PRICE_PREMIUMS` premium, raised to its floor). eip155:4663 has a static floor
-  (`ROBINHOOD_MIN_PRICE_USD`, "0" off; `NETWORK_PRICE_FLOORS` for others) because its settlement
-  can run through our own relayer; it is static so the paid retry re-derives the same amount.
-  A floored network, or one with a premium above zero, is never offered `upto` (the boot gate refuses it). /api/pricing (`minPriceUsdByNetwork`), llms-full.txt,
-  the chain page and the guides read the same floor; `payment.premiumUsdByNetwork` there publishes
-  each chain's premium, and llms.txt, openapi and MCP `payment.info` read the same map. Sales, hang-up debts and charged-failure
-  debts on an x402 settle book what the buyer paid on that chain (`src/paid-price.js`: the
-  amount signed on an EVM rail, else the gated price through `priceForNetwork`), so revenue
-  reads the premium and the floor and a refund repays what was paid.
-- **Solana funding refusals:** `src/svm-funding-refusal.js` words a Solana verify refused for no USDC
-  account or too little USDC (`retry: fund-wallet`, Retry-After `SVM_FUNDING_RETRY_AFTER_S`, default 300)
-  and, after `SVM_FUNDING_HOLD_AFTER` (3) such refusals per wallet and source account in
-  `SVM_FUNDING_WINDOW_MS` (10 min), answers from a beforeVerify hold lasting the Retry-After, shared
-  through shared-limits; a valid verify clears it; `SVM_FUNDING_THROTTLE=off` disables the hold.
-- **Algorand sub-cent offer gate:** `src/avm-sponsorship.js` drops the Algorand accept from
-  sub-cent 402s while the facilitator cannot sponsor sub-cent settlement (fails open;
-  a status row last updated in an earlier UTC month, or with an unreadable `updatedTs`, is
-  not evidence; a pause a settle refusal set holds against headroom reads for
-  `AVM_SPONSORSHIP_REFUSAL_HOLD_MS`; published on `/api/rails`, the only excuse the canaries
-  accept for a missing sub-cent accept; `AVM_SUBCENT_GATE=off`).
-- **First-call allowance:** `src/first-call-allowance.js`, off unless `FIRST_CALL_ALLOWANCE=on`: a wallet with no paid sale gets one unsettled first call (x402 EVM exact, a flagship or `FIRST_CALL_ALLOWANCE_SLUGS` route at or under `FIRST_CALL_ALLOWANCE_MAX_USD`), inside `FIRST_CALL_ALLOWANCE_DAILY_USD` and `FIRST_CALL_ALLOWANCE_IP_PER_DAY` claimed on Redis before a balance read bounded by `FIRST_CALL_ALLOWANCE_BALANCE_MS` (default 1000); a call asking for a share link is never granted; the wallet key expires (`FIRST_CALL_ALLOWANCE_WALLET_TTL_DAYS`, default 400; a claim after 30 minutes), the state record does not; an onBeforeSettle `skip` leaves its 200 unsettled and unbooked; figures on `/__operator/refunds.json`, with `returnedPayers` (granted wallets with a later outside paid sale, and within 7 days; one batched ledger read per chunk, cached `FIRST_CALL_ALLOWANCE_RETURNED_CACHE_MS` (default 5 minutes), reported with the switch off). The `firstCallAllowance` word on `/api/gateway-status` (on, spent, unavailable) pages nothing: a store that does not answer grants nothing, so every call is paid as usual.
-- **Front door:** `src/front-door.js` writes the three lines that lead `/llms.txt`, `/agents.md`
-  and `server.describe`; the access line names coins and wires from the rails list and the MPP
-  config. The unpaid 402 body carries the access line and the `/agents.md` link only with
-  `FRONT_DOOR_402=on` (exactly); otherwise the body is the offer alone.
-- **Shareable answers:** `src/answer-share.js`, off unless `ANSWER_SHARE=on` (exactly); then web.answer takes
-  `share=true` and writes a public page after a settled 200 (`/answers/:id`, record at `/answers/:id.json`);
-  off, no surface offers it and existing pages serve until expiry. `ANSWER_SHARE_TTL_DAYS` (default 30)
-  keeps it (then 410 expired for 90 days), `ANSWER_SHARE_PER_HOUR` (default 60) caps each payer's shares,
-  claimed before the call, and `ANSWER_SHARE_DIR` is the file store without the state database. Takedown:
-  `POST /__operator/answer-shares/delete {id, note}` (410 removed).
-- **External spend guard:** `src/external-spend-guard.js` (per payer and per chain wallet).
-- **Router evidence:** `src/evidence-binding.js` keeps settlement evidence per wallet;
-  `src/seller-funding.js` nets payments made with USDC the paid wallet itself sent the payer
-  (each payer's history read once when it first pays, then incremental; state on `/data`);
-  `src/shared-paytos.js` lists shared settlement contracts. `src/router-purchases.js` records
-  the router's own buys per origin, payTo and chain for 30 days (`SOR_ROUTER_PURCHASES_FILE`),
-  and the evidence rule deducts them from an origin's Bazaar counts: a router buy never proves a seller.
-  The funding reader can be switched off (`LEADERBOARD_FUNDING_SCAN=off`); off, the router reads
-  gross per-wallet evidence with no netting and no verdict.
-- **Report products:** kits under `src/tools/*-report-kit.js`, `src/report-tiers.js`,
-  house style in `src/house-style.js`, samples in `src/sample-reports.js`. Every kit that serves
-  model prose passes it through `sanitizeReportProse` (`src/report-grounding.js`: a link stays a
-  link only to a listed source's host; images and raw HTML are removed) and wraps fetched text in
-  `quotedMaterial`; `scripts/test-report-prose-filter.js` runs each kit.
-- **Facilitators:** boot guard in `src/payments.js` and `src/x402-boot-init.js`; diagnostics in
-  `src/facilitator-diagnostics.js`; Stellar confirm in `src/stellar-confirm.js`; Tempo
-  chain-truth confirm in `src/tempo-confirm.js`. Arc (`eip155:5042`) settles through Circle's
-  facilitator only (`src/circle-facilitator.js`): `CIRCLE_FACILITATOR_API_KEY` is the switch,
-  the client is Arc-only, reduces every upstream error to a status and a reason code, and Arc
-  fails closed on Circle's own `/supported` (`scripts/test-arc-rail.js`).
-  `CIRCLE_FACILITATOR_EVM_FALLBACK` is off by default; with `=on`, the Arc key and
-  `PAYMENT_SETTLE_FALLBACK=true`, the issuer's facilitator is the last settle fallback on Base
-  and Polygon, only for networks its `/supported` lists (re-read every
-  `CIRCLE_EVM_SUPPORTED_REFRESH_MS`, default 10 minutes; a failed read tries none) (`src/circle-facilitator.js`,
-  `src/circle-supported.js`; `scripts/test-circle-evm-fallback.js`).
-  `ROBINHOOD_FACILITATOR_URL` is an ordered list: the first settles, the rest are Robinhood's
-  settle fallback (never routing facilitators), reached after a pre-broadcast refusal or, on
-  `eip155:4663` only, a reverted `transferWithAuthorization` (`isRetryableSettleRefusal`).
-  `src/facilitator-gas.js` reads each listed facilitator's settlement signers (from
-  `/supported`) for gas runway every 10 minutes under a lease (`scripts/test-settle-fallback.js`,
-  `scripts/test-tool-failure-monitor.js`). `ROBINHOOD_RELAYER_KEY` (key present = on) adds our own
-  settler after the listed ones (`src/robinhood-relayer.js`): our 4663 sales only (token, call and
-  treasury fixed), the package's exact EVM facilitator verify and settle, one submission per
-  relayer key across replicas under a lease with the nonce read under it, fee and gas caps, a
-  balance check before signing, and a hash for any send that may have reached the node so a
-  missing receipt stops the chain; its signer joins the gas check (`scripts/test-own-relayer.js`).
-  With it, an ambiguous listed-facilitator failure on 4663 (5xx, timeout, no verdict, no
-  transaction) is read on chain (`src/robinhood-outage.js`): the authorization used with our
-  transfer is served (claimed first), still unused after `ROBINHOOD_AMBIGUOUS_WAIT_MS` (the wait
-  ends inside the authorization's settle deadline and the CDN answer window) goes to our relayer,
-  which is skipped when the buyer left forgiven, the deadline leaves it no time, or a CDN
-  window is shorter than its lock wait plus receipt wait. A read failure (an unreadable receipt
-  included) is a 402 with the authorization booked in the late-settlement book, which never
-  closes a used authorization as not landed (`scripts/test-rh-outage.js`).
-  An EVM exact settle failure (not 4663, Arc, Tempo or Gateway batched) whose answers named a
-  pending tx is read on chain first (`src/pending-settle.js`): every pending answer's tx is noted
-  on the payment (the library's one retry can name another), and a receipt within
-  `PENDING_SETTLE_RECEIPT_WAIT_MS` (default 12000, also inside the CDN window and validBefore)
-  that is status 1, uses this authorization and moves the price from the payer to our payTo, not
-  a recorded sale, is claimed and served (its pending 5xx answers leave the upstream count in
-  their own lane); anything else, or a buyer gone, keeps the 402 and books every noted tx, each
-  pinned to the authorization's nonce so only one can be owed. At most
-  `PENDING_SETTLE_MAX_INFLIGHT` (default 8) reads run per process; past it, or after an RPC 429
-  or rate-limit error, the read ends. Outcomes by network and facilitator are on
-  `/__operator/tool-failures.json` (`pendingSettles`; `scripts/test-pending-settle.js`).
-- **Heap attribution:** `HEAP_SAMPLING=on` (exactly "on"; off by default) starts V8's sampling heap
-  profiler at the first import (`src/boot-profile.js`); `/__operator/heap-sampling.json` reports
-  live sampled bytes by function and file. A read holds the loop about a second on a large heap
-  (concurrent reads share one walk); turn it on for a measurement, then off.
-- **Deploy selectors:** the render worker and `decide` redeploy from CI only when the pushed range
-  touches their paths (`scripts/worker-deploy-paths.js`, `scripts/decide-deploy-paths.js`: image
-  inputs, import closure, and for decide its export row format and kit); an unreadable or capped
-  diff, or a check that fails, redeploys.
-- **Drain:** in-flight composites are aborted on SIGTERM (`src/drain-abort.js`); drain starts
-  immediately (`scripts/test-drain-on-sigterm.js`). An uncaught exception stays fatal, so every
-  scheduled turn that reads seller data (the route index drain and shadow rebuild, the crawl timers,
-  the surface memo and index snapshot rebuilds) runs under `contained(name, fn)`
-  (`src/contained-turn.js`): a throw is counted by name and never escapes, and a listing whose rows
-  cannot be read is dropped alone and counted by origin (`containedTurns`, `brokenListings` on
-  `/__operator/perf.json`; `scripts/test-crash-containment.js`, `scripts/test-contained-turns-sites.js`
-  keeps every timer callback wrapped or allowlisted). The `containedTurns` word on `/api/gateway-status`
-  reads `repeating` while one name has thrown in each of the last three or more consecutive minutes
-  (a per-name minute ring), or on each of its last three or more runs across three distinct minutes
-  with no clean run between (a 30- or 60-minute loop); the heartbeat and the status Worker page on it under one issue.
-  The `brokenListings` word reads `widespread` while the distinct origins whose listings broke in a rolling
-  15 minutes reach both 20 and 5% of the indexed origins (one seller's bad data never does; a code bug that
-  breaks every listing does), paged the same way; both issues close only on the second ok read in a row.
-- **Backups:** `src/backup.js` (encrypted, offsite); restore with `scripts/backup-restore.js`.
-  The `backup` word reads `unencrypted` while `BACKUP_ENCRYPTION_KEY` is unset in production
-  (`NODE_ENV` or the platform's environment name); the heartbeat and the status probe page on it.
-- **Status observers:** GitHub heartbeat plus `workers/status-probe`; a failed check is
-  re-probed once before it is recorded.
-- **Router worker:** `src/router-pool.js` scores route queries in a worker thread
-  (`src/router-worker-thread.js` imports `x402-index.js` and holds a replica of the stores a
-  query reads, fed by the index's replica observer); `routeQueryAsync` stays the entry point and
-  runs in-thread when no worker is loaded. `ROUTER_WORKERS` (default 1; 0 with the crawler off),
-  `ROUTER_QUERY_DEADLINE_MS` (default 10000). Status on `/__operator/perf.json`.
-- **Failure monitor:** `src/tool-failure-monitor.js` counts every catalog answer past the gates by slug, class, origin (outside vs our own synthetic traffic) and payment rail (`outcomeRailOf` in `src/payment-rail.js`; a free proof-of-work or trial outcome counts on its own lane, shown in the detail and read by `toolFailures` only when a tool fails nearly every free call: `TOOL_FREE_FAIL_RATE`, default 0.9, over `TOOL_FREE_FAIL_MIN_CALLS`, default 20, in an hour) and every named upstream's fetch outcomes through the egress meter's observer, in five-minute buckets merged across replicas through Redis; `toolFailures`, `upstreamHealth` and `facilitatorFunds` (also `low` while a facilitator signer is short of gas) are words on `/api/gateway-status`, detail on `/__operator/tool-failures.json`. Every final 200 is also classified by body (`src/answer-shape.js`: ok, empty, error-shaped, unchecked; a tool whose contract allows an empty answer goes in `EMPTY_RESULT_OK` or sets `discovery.emptyOk`) into the `toolAnswers` word; the same detail lists live-data slugs whose sales all returned one response digest. `src/settle-demotion.js` puts Celo's alternates first after consecutive out-of-funds refusals.
-- **Sale paths and cohorts:** each sale records how it arrived (`src/sale-path.js`: the
-  connector's loopback, a client package by its User-Agent product token, or HTTP) in the
-  ledger's `via` column; `/__operator/cohorts.json` lists wallets past a per-day distinct-tool
-  (`COHORT_TOOLS_PER_DAY`) or per-hour call (`COHORT_CALLS_PER_HOUR`, default 300) threshold.
-- **Live view:** `services/live` deploys from this repository with every merge. The page reads
-  one event stream and, with nothing on it after 8 s (a proxy holding it), polls `/api/poll`
-  for the same numbered batches (`LIVE_POLL_KEEP_BATCHES`, default 300; a whole-hour answer at
-  most `LIVE_POLL_HELLO_PER_MIN`, default 30, times a minute per address). Tests:
-  `services/live/test.js`, `test-guard.js`.
-- **Large bodies:** `src/large-body-gate.js` sits before the parsers of the routes that take more
-  than the global 100 KB body: it refuses a Content-Encoding (415), answers an unpaid oversized
-  body whose price does not read it without reading it, rate-limits the unpaid ones that are
-  parsed, and reserves each parse against one in-flight budget (`LARGE_BODY_INFLIGHT_MAX_MB`,
-  default 256; 503 with Retry-After when spent), of which one client address holds at most a
-  quarter (never less than two of the largest route's bodies). A slow body is bounded by the
-  server's `HTTP_REQUEST_TIMEOUT_MS`.
-- **Media and documents:** the OCR language data is baked into the image at build
-  (`scripts/fetch-tessdata.js`, pinned and hash-checked; `OCR_TESSDATA_DIR` overrides the
-  directory), so `image-ocr` never fetches a model at request time; an engine that does not
-  start within `OCR_INIT_TIMEOUT_MS` (default 30000) answers 503. PDF transforms
-  (`src/tools/pdf-ops.js`) run in a fresh worker thread per call (`pdf-offthread.js`,
-  `pdf-worker.js`) with a heap limit, a decoded-stream cap and a deadline that terminates it
-  (422). The Office builders (`xlsx-create`, `docx-create`, `pptx-create`; `src/tools/office-ops.js`)
-  run in a small worker pool (`office-pool.js`, `office-worker.js`): `OFFICE_WORKERS_MAX` workers
-  (default 2), at most `OFFICE_QUEUE_MAX` calls waiting (default 16; past it a 503 with
-  Retry-After), a 15 s deadline that terminates the worker (422), idle workers retired after 30 s.
-  ffmpeg and ffprobe pass an audio-only `-codec_whitelist` before `-i`, so no video decoder
-  opens. html-frames runs in its own jitless browser; a payer's failed documents are bounded to
-  `HTML_FRAMES_FAIL_MAX` (default 5, per replica) per `HTML_FRAMES_FAIL_WINDOW_MS` (10 minutes),
-  then a 429 with Retry-After. ffmpeg, ffprobe and Chromium start with `childEnv()`
-  (`src/tools/child-env.js`), an allowlist of environment variables, so no key reaches a child
-  process (defense in depth: a same-user child can still read its parent's environment).
-- **Seller fields:** every entry the index cache stores (crawl, Bazaar fallback, pull, warm start, the
-  router worker's replica) is cleaned once in `IndexCache.set` (`cleanSellerEntry`): a seller field
-  read as text holds a string (a number or boolean becomes its text, anything else is dropped) and a
-  list field holds strings (`scripts/test-seller-field-types-serve.js`).
-- **Listing screen:** `src/listing-screen.js` (re-exported by `src/x402-index.js`) flags seller
-  listing text that tries to instruct its reader; it depends only on `src/hidden-chars.js`, so
-  a workflow with no install (`wish-issues.yml`) reads the same rules.
-- **Outbound fetches:** every buyer-supplied URL goes through `src/tools/fetch-guard.js`. A name
-  that does not resolve and a private address get one neutral 400; a resolver that cannot answer
-  (EAI_AGAIN and the other transient codes, or a lookup past `DNS_LOOKUP_TIMEOUT_MS`, default 10 s)
-  is a retryable 503 attributed upstream. The MCP connector's loopback replay carries a
-  per-process secret in its marker (`src/mcp-loopback.js`); an inbound marker is stripped by the
-  first middleware, so only the real replay is exempt from the discovery limits.
-- **Unpaid quote budget:** `src/unpaid-quote-budget.js` bounds bursts of unpaid 402 reads. A
-  payment header counts as an attempt (`src/payment-attempt.js`) only when it decodes to an offered
-  network or an MPP credential; bytes that do not decode are an unpaid read.
-- **Robots:** `src/seo.js`; the private disallow list is repeated in every named-crawler group.
-- **Challenge size:** `scripts/test-challenge-size.js` keeps the 402 header under what a buyer
-  can echo back; `scripts/test-bazaar-contracts.js` validates every 402 against the protocol's
-  own schema.
-- **402 body mirror:** `src/payment-required-body.js` copies the decoded PAYMENT-REQUIRED object
-  into the JSON body of every paywall 402 (header authoritative, header keys win, our fields
-  kept); a refusal that explains itself (a `hint`, or a problem's `detail`) gets the offer and
-  no `error`, so `error`-first clients read the explanation. Keyed on the header, so
-  settle-failure, credits and Tempo/Stripe direct 402s are untouched. It wraps `res.send`, so it
-  is mounted before the MPP shim and the Tempo/Stripe gates.
-- **Tempo push refusals:** `src/push-refusal-body.js`: for a push credential the Tempo gate
-  restates a 4xx JSON body's not-charged sentence and sets `charged`, `transferClaimed`, `refundOwed`.
-- **Algorand network id:** `src/avm-network.js`: the CAIP-2 (32-character) id is what every 402
-  carries; the genesis-hash spelling is folded on the paid path (`src/x402-v1-accepts.js`) and read
-  as an alias in seller rows and the buyer.
-- **X posting:** `announce.yml` / `scripts/tweet.js` (workflow dispatch only) and
-  `src/tweet-queue.js`; both sign through `src/x-oauth.js`. Tweet copy is never committed.
+## Path-scoped rules, skills and reviewers
+Subsystem detail lives in `.claude/rules/`, and each file loads only when a file matching its
+`paths:` list is read: `payments.md` (gates, settlement, facilitators, breakers, price floors,
+replay and idempotency, 402 bodies), `index-router.md` (seller index, submissions, parts and tool
+cap, paywall probe, router, route-execute and its buyers), `gateway.md` (LLM gateway, metering,
+model catalog, report products), `ops.md` (state database, scheduled loops, drain and containment,
+monitors, backups, status, live view, workflows and workers), `cdn.md` (CDN and client address,
+async jobs and sync windows, large bodies, outbound fetches), `media.md` (OCR, PDF, Office and
+media workers), `mcp.md` (connector modules, front door, shareable answers). Read the matching
+file before changing a subsystem it names. The batch procedure is the `/batch` skill
+(`.claude/skills/batch/`); the gate's reviewers are `.claude/agents/*-reviewer.md`.
 
 ## Environment
 Configuration and secrets are set on Railway (and, where a workflow needs them, as GitHub
