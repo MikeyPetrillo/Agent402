@@ -3187,9 +3187,10 @@ export const IMAGES_PATH = "/v1/images/generations";
 export const IMAGES_MODEL = "black-forest-labs/flux.2-pro"; // first link; pinned against IMAGE_TIERS in test-images-fast-kit
 export const IMAGES_PRICE = 0.08;
 export const IMAGES_MAX_PROMPT_CHARS = 4_000;
-// Ids a caller may send in `model`: the two links, plus the retired Gemini id
-// so an existing client keeps working (the response names the model served).
-export const IMAGES_ACCEPTED_MODELS = Object.freeze(["black-forest-labs/flux.2-pro", "openai/gpt-5-image-mini", "google/gemini-2.5-flash-image"]);
+// Ids a caller may send in `model`: the two links, plus the retired ids
+// (former links) so an existing client keeps working (the response names the
+// model served).
+export const IMAGES_ACCEPTED_MODELS = Object.freeze(["black-forest-labs/flux.2-pro", "microsoft/mai-image-2.6-flash", "openai/gpt-5-image-mini", "google/gemini-2.5-flash-image"]);
 
 export function validateImagesRequest(input) {
   if (input == null || typeof input !== "object") throw bad("Request body must be a JSON object");
@@ -4064,7 +4065,7 @@ export const LLM_GATEWAY_TOOLS = [
     category: "llm",
     price: "$0.080",
     description:
-      "OpenAI-compatible image generation over x402 - point any OpenAI SDK's images.generate() at base_url https://agent402.tools/v1 and pay $0.08 per image in USDC, no API key, no signup. Served by FLUX.2 Pro with GPT-5 Image Mini as the failover; prompt in (up to 4k chars), one 1024x1024 PNG out as inline base64 (response_format b64_json). One image per call (n locked to 1). Optional zdr:true routes only to zero-data-retention providers.",
+      "OpenAI-compatible image generation over x402 - point any OpenAI SDK's images.generate() at base_url https://agent402.tools/v1 and pay $0.08 per image in USDC, no API key, no signup. Served by FLUX.2 Pro with MAI-Image-2.6 Flash as the failover; prompt in (up to 4k chars), one 1024x1024 PNG out as inline base64 (response_format b64_json). One image per call (n locked to 1). Optional zdr:true routes only to zero-data-retention providers.",
     tags: ["image-generation", "images", "text-to-image", "flux", "png", ...SHARED_TAGS],
     discovery: {
       bodyType: "json",

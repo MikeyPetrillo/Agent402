@@ -1066,7 +1066,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   // Primary down -> the failover link serves (PNG, provider-pinned).
   seen = []; reply = (b) => b.model === "black-forest-labs/flux.2-pro" ? { status: 502, json: { error: { message: "down" } } } : { status: 200, json: { data: [{ b64_json: PNG_B64, media_type: "image/png" }], usage: { cost: 0.012 } } };
   const out2 = await imagesTool.handler({ prompt: "a fox" });
-  ok(seen.length === 2 && seen[1].body.model === "openai/gpt-5-image-mini" && seen[1].body.quality === "medium" && seen[1].body.provider.only[0] === "openai" && out2.model === "openai/gpt-5-image-mini", "flux.2-pro 502 walks to gpt-5-image-mini at its locked quality");
+  ok(seen.length === 2 && seen[1].body.model === "microsoft/mai-image-2.6-flash" && seen[1].body.aspect_ratio === "1:1" && seen[1].body.provider.only[0] === "azure" && out2.model === "microsoft/mai-image-2.6-flash", "flux.2-pro 502 walks to mai-image-2.6-flash, square, on its pinned provider");
 
   seen = []; reply = () => ({ status: 200, json: { data: [] } });
   await imagesTool.handler({ prompt: "a fox" }).then(

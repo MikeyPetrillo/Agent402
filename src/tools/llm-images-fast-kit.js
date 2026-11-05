@@ -22,6 +22,8 @@
 //   flux-3-image-klein     5-7 s  jpeg 1024x1024 (2026-10-17; edits 9-12 s,
 //                                  output follows the reference's aspect)
 //   veo-3.1-lite 4s 720p   40 s   mp4, no audio
+//   recraft-v4.1-flash     2 s    webp 1024x1024 (2026-11-05)
+//   mai-image-2.6-flash   11 s    png  1024x1024 (2026-11-05)
 //
 // Repricing guard: the Image API has no documented `max_price`, so a silent
 // upstream reprice cannot be refused per request the way the chat tiers do.
@@ -97,16 +99,17 @@ export const IMAGE_TIERS = {
       { model: "black-forest-labs/flux.2-klein-4b", provider: "black-forest-labs", params: {},
         listed: { unit: "megapixel" } },
       klein3Link({ aspect_ratio: "1:1" }),
-      // Token-priced: ~1568 image tokens at medium plus text prompt tokens.
-      // gpt-5-image-mini replaced gpt-image-1-mini here 2026-09-02, ahead of the
-      // latter's 2026-12-01 retirement: identical image_output and prompt
-      // pricing on OpenRouter's endpoint listing, read live that day;
-      // gpt-image-2 does not fit under this tier's bound. Verified LIVE in the IMAGE catalog
-      // (/api/v1/images/models); absent from the chat-model list, which is not
-      // the same thing.
-      { model: "openai/gpt-5-image-mini", provider: "openai", params: { quality: "medium" },
-        listed: { unit: "token" } },
+      // Flat per image, a provider outside the two Klein links. Replaced
+      // gpt-5-image-mini 2026-11-05, which the upstream catalog stamps to
+      // expire 2026-12-01: of the live non-expiring image models, this is the
+      // one other provider whose listed per-image price fits under this
+      // tier's bound (measured that day: 2 s, lossless WebP 1024x1024 at 1:1).
+      { model: "recraft/recraft-v4.1-flash", provider: "recraft", params: { aspect_ratio: "1:1" },
+        listed: { unit: "image" } },
     ],
+    // Former links a caller may still name in `model`; the response names the
+    // model actually served.
+    retired: ["openai/gpt-5-image-mini"],
   },
   "v1-images-pro": {
     path: IMAGES_PRO_PATH,
@@ -143,7 +146,12 @@ export const IMAGE_TIERS = {
       // Per-megapixel pricing; the locked 1024x1024 output bills as 1 MP (PNG).
       { model: "black-forest-labs/flux.2-pro", provider: "black-forest-labs", params: { output_format: "png" },
         listed: { unit: "megapixel" } },
-      { model: "openai/gpt-5-image-mini", provider: "openai", params: { quality: "medium" },
+      // Token-priced, about 1024 image tokens per square image plus the text
+      // prompt; answers PNG 1024x1024 at 1:1 natively (measured 2026-11-05,
+      // 11 s). Replaced gpt-5-image-mini that day, ahead of its 2026-12-01
+      // expiry: another provider than the primary, PNG, and within this
+      // route's bound.
+      { model: "microsoft/mai-image-2.6-flash", provider: "azure", params: { aspect_ratio: "1:1" },
         listed: { unit: "token" } },
     ],
   },
@@ -218,7 +226,7 @@ export function validateImageTierRequest(input, tierSlug) {
   if (prompt.length > IMAGE_MAX_PROMPT_CHARS) throw bad(`Prompt too long (${prompt.length} chars). Maximum is ${IMAGE_MAX_PROMPT_CHARS}`);
   if (input.model !== undefined) {
     const m = String(input.model).trim();
-    if (!tier.chain.some((l) => l.model === m)) {
+    if (!tier.chain.some((l) => l.model === m) && !(tier.retired || []).includes(m)) {
       throw bad(`"model" is fixed on this endpoint - omit it, or send ${tier.chain[0].model} (served first; ${tier.chain.slice(1).map((l) => l.model).join(", ")} is the failover)`);
     }
   }
@@ -624,7 +632,7 @@ export const IMAGES_FAST_TOOLS = [
     category: "llm",
     price: "$0.020",
     description:
-      "Budget text-to-image over x402 - OpenAI images wire (prompt in, inline base64 out) at $0.02 per picture, a quarter of the flagship /v1/images/generations price. Served by FLUX.2 Klein 4B (about 2 seconds per image, 1024x1024 JPEG) with FLUX 3 Image Klein, then GPT-5 Image Mini, as the failover. n locked to 1, text-to-image only, size and quality fixed. Point any OpenAI SDK's images.generate() at base_url https://agent402.tools/v1 and call /images/fast.",
+      "Budget text-to-image over x402 - OpenAI images wire (prompt in, inline base64 out) at $0.02 per picture, a quarter of the flagship /v1/images/generations price. Served by FLUX.2 Klein 4B (about 2 seconds per image, 1024x1024 JPEG) with FLUX 3 Image Klein, then Recraft V4.1 Flash (WebP), as the failover. n locked to 1, text-to-image only, size and quality fixed. Point any OpenAI SDK's images.generate() at base_url https://agent402.tools/v1 and call /images/fast.",
     tags: ["image-generation", "images", "text-to-image", "generate", "generate-image", "create-image", "picture", "cheap", "flux", "budget", "fast", ...SHARED_TAGS],
     discovery: {
       bodyType: "json",
