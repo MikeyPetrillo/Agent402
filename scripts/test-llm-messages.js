@@ -44,6 +44,8 @@ for (const [label, body, tier] of [
   ["bad thinking type", { model: "anthropic/claude-sonnet-5", max_tokens: 2000, messages: msg(), thinking: { type: "max" } }, pro],
   ["too many images", { model: "anthropic/claude-haiku-4.5", max_tokens: 10, messages: [{ role: "user", content: Array.from({ length: 5 }, () => ({ type: "image", source: { type: "url", url: "https://x.test/a.png" } })) }] }, base],
   ["input too large", { model: "anthropic/claude-haiku-4.5", max_tokens: 10, messages: msg("x".repeat(TIERS[base].maxInputChars + 1)) }, base],
+  // A citation's text goes upstream with its block, so it counts against the cap like the block's own text.
+  ["citation text over the cap", { model: "anthropic/claude-haiku-4.5", max_tokens: 10, messages: [{ role: "user", content: [{ type: "text", text: "q", citations: [{ type: "char_location", cited_text: "x".repeat(TIERS[base].maxInputChars), document_index: 0, start_char_index: 0, end_char_index: 1 }] }] }] }, base],
   ["bad cache_control", { model: "anthropic/claude-haiku-4.5", max_tokens: 10, messages: msg(), cache_control: { type: "ephemeral", ttl: "1h" } }, base],
 ]) {
   let e = null; try { validateMessagesRequest(body, tier); } catch (x) { e = x; }

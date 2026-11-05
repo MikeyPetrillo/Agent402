@@ -102,7 +102,9 @@ function probeContent(content, where, acc) {
     switch (b.type) {
       case "text":
         if (typeof b.text !== "string") throw bad(`${where}.content[${i}].text must be a string`);
-        acc.chars += b.text.length;
+        // A citation's text goes upstream with the block (forwardCitations),
+        // so it is input like the block's own text and counts against the cap.
+        acc.chars += b.text.length + citationChars(b.citations);
         return b;
       case "image": {
         const src = b.source;
@@ -157,6 +159,20 @@ const CITATION_FIELDS = {
   web_search_result_location: { str: ["encrypted_index", "title", "url"], int: [] },
   search_result_location: { str: ["source", "title"], int: ["search_result_index", "start_block_index", "end_block_index"] },
 };
+/** The characters of a text block's citations that forwardCitations sends
+ *  upstream: the cited text and the documented string fields of each citation
+ *  of a listed type (a citation of another type is dropped and costs nothing). */
+function citationChars(list) {
+  if (!Array.isArray(list)) return 0;
+  let n = 0;
+  for (const c of list) {
+    const spec = c && CITATION_FIELDS[c.type];
+    if (!spec || !str(c.cited_text)) continue;
+    n += c.cited_text.length;
+    for (const k of spec.str) if (str(c[k])) n += c[k].length;
+  }
+  return n;
+}
 function forwardCitations(list) {
   if (!Array.isArray(list)) return null;
   const out = [];
