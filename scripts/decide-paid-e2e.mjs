@@ -13,8 +13,15 @@
 //
 // Every request carries the heartbeat token (HMAC of POW_SECRET), so the
 // ledger records these buys as our own traffic, not outside demand.
+//
+// A slow route (decide-execute: its /api/pricing row's `async` block) is paid
+// with Prefer: respond-async and its job followed to the end
+// (scripts/lib/slow-route-buy.js); a job that ends failed is a failed check. A
+// 400 respond_async_required (refused before payment) is paid once more with
+// the Prefer header its body names.
 
 import { createHmac } from "node:crypto";
+import { asyncAdviceByPath, slowPreferOf, paidCallHonoringSlowRoutes } from "./lib/slow-route-buy.js";
 
 const TARGET = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/+$/, "");
 const pk = (process.env.BURNER_KEY || "").trim();
@@ -44,9 +51,16 @@ console.log(`buyer ${account.address} -> ${TARGET}`);
 const client = disableVendorSpendControls(new x402Client());
 registerExactEvmScheme(client, { signer: account });
 const pay = wrapFetchWithPayment(tagged(fetch), client);
+// Which routes are slow, from the free price list; unreadable, a slow route is
+// known from its 400 respond_async_required instead.
+const asyncByPath = await fetch(`${TARGET}/api/pricing`).then((r) => r.json()).then(asyncAdviceByPath).catch(() => new Map());
+const paidPost = async (path, body) => (await paidCallHonoringSlowRoutes(
+  (extra) => pay(`${TARGET}${path}`, { method: "POST", headers: { "content-type": "application/json", ...extra }, body: JSON.stringify(body) }),
+  { prefer: slowPreferOf(asyncByPath.get(path)), baseUrl: TARGET, fetchImpl: tagged(fetch), slug: path },
+)).res;
 
 // ---- Base: buy a plan ----
-const r1 = await post(pay, "/api/decide", { task: TASK, depth: "plan" });
+const r1 = await paidPost("/api/decide", { task: TASK, depth: "plan" });
 const d = await r1.json().catch(() => ({}));
 const rc1 = receiptOf(r1);
 ok(r1.status === 200 && d.decisionId && Array.isArray(d.plan) && d.plan.length > 0, `decide (plan) answered 200 with a plan (${r1.status}, ${d.plan?.length ?? 0} steps${d.error ? `: ${String(d.error).slice(0, 120)}` : ""})`);
@@ -58,7 +72,7 @@ ok(credit?.token && credit.amountUsd > 0, `an execution credit came with the pla
 
 if (d.decisionId && credit?.token) {
   // The credit activates when the decide payment settles; the 200 above is sent after that.
-  const r2 = await post(pay, "/api/decide/execute", { decisionId: d.decisionId, creditToken: credit.token });
+  const r2 = await paidPost("/api/decide/execute", { decisionId: d.decisionId, creditToken: credit.token });
   const x = await r2.json().catch(() => ({}));
   const rc2 = receiptOf(r2);
   ok(r2.status === 200 && (x.status === "complete" || x.status === "partial"), `execute answered 200, run ${x.status || "?"} (${r2.status}${x.error ? `: ${String(x.error).slice(0, 160)}` : ""})`);

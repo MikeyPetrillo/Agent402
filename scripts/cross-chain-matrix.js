@@ -21,6 +21,7 @@
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
 import { createHmac } from "node:crypto";
 import { openapiReader, resolveReplayableInput } from "./lib/replayable-example.js";
+import { slowPreferOf, paidCallHonoringSlowRoutes } from "./lib/slow-route-buy.js";
 
 const TARGET = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, "");
 const readOpenapi = openapiReader(TARGET);
@@ -53,6 +54,16 @@ function buildRequest(path, example) {
   }
   return { url: `${TARGET}${path}`, init: { method } };
 }
+
+// A slow route (its /api/pricing row's `async` block) is paid with Prefer:
+// respond-async and its job followed to the end (scripts/lib/slow-route-buy.js);
+// a job that ends failed is a red cell. A 400 respond_async_required (refused
+// before payment) is paid once more with the Prefer header its body names.
+const paidCall = (send, ep, init) => paidCallHonoringSlowRoutes(send, {
+  prefer: slowPreferOf(ep.async, { method: init.method, json: init.body === undefined || typeof init.body === "string" }),
+  baseUrl: TARGET, fetchImpl: synthFetch, slug: ep.slug,
+});
+const withHeaders = (init, extra) => ({ ...init, headers: { ...(init.headers || {}), ...extra } });
 
 // A cell is green when the PAID call returns a real payload: 200 + non-empty
 // body. Deep per-tool correctness is CI's job ("answers its own example"); here
@@ -162,20 +173,23 @@ async function main() {
             const accepts = (paymentRequired.accepts || []).filter((a) => String(a.network) === chain.caip2);
             if (!accepts.length) cell.note = "chain not in live accepts";
             else {
-              const payload = await evm.client.createPaymentPayload({ ...paymentRequired, accepts });
-              const payHeaders = evm.http.encodePaymentSignatureHeader(payload);
-              const paid = await synthFetch(url, { ...init, headers: { ...(init.headers || {}), ...payHeaders, "Access-Control-Expose-Headers": "PAYMENT-RESPONSE,X-PAYMENT-RESPONSE" } });
+              const call = await paidCall(async (extra) => {
+                const payHeaders = evm.http.encodePaymentSignatureHeader(await evm.client.createPaymentPayload({ ...paymentRequired, accepts }));
+                return synthFetch(url, withHeaders(init, { ...extra, ...payHeaders, "Access-Control-Expose-Headers": "PAYMENT-RESPONSE,X-PAYMENT-RESPONSE" }));
+              }, ep, init);
+              const paid = call.res;
               cell.ok = await validPayload(paid); cell.tx = txFrom(paid);
-              if (!cell.ok) cell.note = `HTTP ${paid.status}`;
+              if (!cell.ok) cell.note = `${call.jobFailed ? "job failed: " : ""}HTTP ${paid.status}`;
             }
           }
         } else {
           const wp = wrappers[chain.key];
           if (!wp) cell.note = "no burner key";
           else {
-            const paid = await wp.pay(url, init);
+            const call = await paidCall((extra) => wp.pay(url, withHeaders(init, extra)), ep, init);
+            const paid = call.res;
             cell.ok = await validPayload(paid); cell.tx = txFrom(paid);
-            if (!cell.ok) cell.note = `HTTP ${paid.status}`;
+            if (!cell.ok) cell.note = `${call.jobFailed ? "job failed: " : ""}HTTP ${paid.status}`;
           }
         }
       } catch (e) { cell.note = (e?.message || String(e)).slice(0, 70); }
