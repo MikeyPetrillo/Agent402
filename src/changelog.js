@@ -10,7 +10,6 @@ const ENTRIES = [
       "Operations: the operator view of first-call grants counts refusals of wallets that never paid by reason and route, apart from returning buyers, so a route a newcomer wanted shows up by name.",
       "Operations: every Playwright install in CI goes through the bounded apt helper, and a guard fails any workflow step that runs apt directly.",
       "Operations: the listing pass and the other catalog buy scripts send Prefer: respond-async to slow routes and follow the job to its answer; a failed job counts as a failed buy, and records keep a job's state, never its link.",
-      "Packages: viem is 2.57.16.",
     ],
   },
   {

@@ -29,8 +29,6 @@ Operations:
   `Prefer: respond-async` to slow routes and follow the job to its answer; a
   failed job counts as a failed buy, and records keep a job's state, never
   its link.
-Packages:
-- viem is 2.57.16.
 
 ### 2026-11-05 (x402 2.30, a wider unproven lane, one spend workflow)
 Payments:
