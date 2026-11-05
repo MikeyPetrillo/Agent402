@@ -2836,9 +2836,17 @@ export async function promptCacheGetShared(key) {
   return shared;
 }
 
+// Shared writes still in flight (best-effort, never awaited on the serving
+// path); a process that stores and then exits awaits promptCacheWritesSettled.
+const promptCacheShared = new Set();
+/** Resolves once every shared cache write started so far has finished or failed. */
+export async function promptCacheWritesSettled() { await Promise.all([...promptCacheShared]); }
 export function promptCacheStore(key, body) {
   if (!key || body == null) return;
-  if (promptCacheStoreLocal(key, body)) cacheSet(SHARED_PREFIX + key, body, Math.round(PROMPT_CACHE_TTL_MS / 1000)).catch(() => {});
+  if (promptCacheStoreLocal(key, body)) {
+    const done = cacheSet(SHARED_PREFIX + key, body, Math.round(PROMPT_CACHE_TTL_MS / 1000)).catch(() => {}).finally(() => promptCacheShared.delete(done));
+    promptCacheShared.add(done);
+  }
 }
 
 function promptCacheStoreLocal(key, body) {

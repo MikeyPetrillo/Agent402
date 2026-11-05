@@ -62,14 +62,23 @@ export function registerWellKnown(path, body, contentType = "application/json") 
   // Shared with the other containers (Redis), so a directory's fetch is
   // answered whichever replica it reaches. Best-effort: without Redis the
   // document is served by the container that registered it, as before.
-  void cacheSet(SHARED(path), entry, Math.round(TTL_MS / 1000));
+  track(cacheSet(SHARED(path), entry, Math.round(TTL_MS / 1000)));
   return { path, bytes: Buffer.byteLength(text, "utf8"), expiresInMs: TTL_MS };
 }
 
 const SHARED = (path) => `a402:wk:${path}`;
+// The shared writes still in flight (best-effort, never awaited on the serving
+// path); a process that registers and then exits awaits wellKnownWritesSettled.
+const pending = new Set();
+function track(p) {
+  const done = Promise.resolve(p).catch(() => {}).finally(() => pending.delete(done));
+  pending.add(done);
+}
+/** Resolves once every shared write started so far has finished or failed. */
+export async function wellKnownWritesSettled() { await Promise.all([...pending]); }
 export function removeWellKnown(path) {
   // A tombstone, so the other container stops serving its shared copy too.
-  void cacheSet(SHARED(path), { removed: true }, Math.round(TTL_MS / 1000));
+  track(cacheSet(SHARED(path), { removed: true }, Math.round(TTL_MS / 1000)));
   return store.delete(path);
 }
 
