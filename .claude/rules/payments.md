@@ -139,7 +139,8 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   payment header counts as an attempt (`src/payment-attempt.js`) only when it decodes to an offered
   network or an MPP credential; bytes that do not decode are an unpaid read. The key is the client
   address alone (`clientKeyOf`: `limiterKey(req.ip)`, an IPv6 /64 as one); the User-Agent is kept
-  for the log line only. Only our signed probes are exempt (`isSynthetic`, server.js `isSyntheticRequest`: the
+  for the log line only. From Cloudflare's shared Worker egress address (2a06:98c0:3600::103) the key
+  is the address plus the User-Agent token, under a ten-times whole-address ceiling. Only our signed probes are exempt (`isSynthetic`, server.js `isSyntheticRequest`: the
   HMAC `X-Heartbeat-Token`); a User-Agent naming us is counted like any other, and a
   self-declared named indexer or crawler reads against `NAMED_CLIENT_BUDGET_MULTIPLIER` (10) times
   the budget on the same address count, never a pass.

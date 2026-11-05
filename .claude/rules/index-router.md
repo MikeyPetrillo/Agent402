@@ -58,7 +58,9 @@ Loaded when an index, discovery, router or buyer file is read.
 - **Unproven tier:** A Base seller below the settlement floor is tried after every proven candidate in the unproven
   tier (`src/base-unproven.js`): its signed quote at most `SOR_BASE_UNPROVEN_MAX_USD` (default
   $0.05), paid only at its live 402's payTo, `sellerProof: "unproven"` on the receipt, and at most
-  `SOR_BASE_UNPROVEN_SELLER_DAILY_USD` (default $0.25) per seller (payTo and origin host) over a
+  `SOR_BASE_UNPROVEN_SELLER_DAILY_USD` (default $0.25) per seller (payTo and origin key; a path-scoped
+  seller's origin key is its origin plus prefix, passed as `sellerKey`, and a paid URL outside that
+  prefix has no key and is not paid; each window keeps a running sum beside it) over a
   rolling 24 h, reserved before signing on the shared-limits window (Redis) and given back only
   when nothing moved. A rolling 24-hour cap across all sellers (`SOR_BASE_UNPROVEN_DAILY_USD`,
   default 5; `off` or 0 removes it; a malformed value reads as the default) is reserved in the same

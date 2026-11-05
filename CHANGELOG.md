@@ -23,6 +23,8 @@ Router:
   verdict as the public label, at the seller's live payTo.
 - The lane's terms name only the daily caps that are switched on, and the
   seller-trust and seller-dossier examples show the lane as the tool answers.
+- The per-seller cap keys a path-scoped seller on its origin plus prefix, so
+  tenants on one host keep their own day.
 Tools:
 - `linkedin-article` takes images only from fast-tier links its resizer can
   read; the fast tier still serves WebP to buyers.
@@ -35,7 +37,10 @@ Limits:
 - The unpaid price-check budget counts per client address (an IPv6 /64 as
   one) whatever the User-Agent; a named indexer or search crawler reads
   against ten times the budget on its address, and only our signed probes are
-  exempt. Our status observers read that budget's 429 as not observed, never
+  exempt. On the one address Cloudflare Workers share, each User-Agent gets its
+  own budget under a ceiling for the address. The heartbeat signs its paywall
+  read, the status Worker pages "Paywall not observed" after three unobserved
+  runs, and both read that budget's 429 as not observed, never
   as a paywall failure.
 Index:
 - A failed paywall check is re-run after 24 hours and when a seller registers
