@@ -37,6 +37,7 @@ import { cdnSyncLeftMs } from "./cdn-sync-window.js";
 import { SETTLE_RULE_SECONDS } from "./evm-validity.js";
 import { chargeCancelledForClientGone } from "./hangup-settlement.js";
 import { relayerSettings } from "./robinhood-relayer.js";
+import { isPaymentVerdictReason } from "./settle-verdict.js";
 
 export const AUTHORIZATION_USED_TOPIC = keccak256(toHex("AuthorizationUsed(address,bytes32)"));
 const STATE_ABI = parseAbi(["function authorizationState(address authorizer, bytes32 nonce) view returns (bool)"]);
@@ -58,16 +59,11 @@ export function ambiguousWaitMs(env = process.env) {
 
 /**
  * A facilitator verdict about the payment itself (a bad signature, too little
- * balance, an expired window): definite, so nothing is waited on or retried.
- * A reverted transfer with no hash is not ambiguous either (the revert-retry
- * rule in src/payments.js owns it).
+ * balance, an expired window), as a code or in words (src/settle-verdict.js):
+ * definite, so nothing is waited on or retried. A reverted transfer with no
+ * hash is not ambiguous either (the revert-retry rule in src/payments.js owns it).
  */
-function isPaymentVerdict(reason) {
-  const r = String(reason || "");
-  if (!r) return false;
-  if (r === "invalid_exact_evm_transaction_failed") return false;
-  return /^invalid_/.test(r) || /insufficient_funds|unsupported_scheme|unsupported_network|invalid_payload/.test(r);
-}
+const isPaymentVerdict = isPaymentVerdictReason;
 
 /**
  * True for a settle failure whose outcome is unknown: no transaction named,
