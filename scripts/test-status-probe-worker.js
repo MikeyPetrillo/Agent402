@@ -470,6 +470,13 @@ for (const [name, over, detail] of failCases) {
     assert.equal(out.alarms.deferred.length, ALARMS.length - MAX_ISSUE_WRITES, "the remainder waits for the next run");
     assert.ok(calls <= 40, `${calls} subrequests`);
   });
+  // The README states the figure this scenario measures; a change that moves
+  // it moves both.
+  const readme = await readFile(new URL("../workers/status-probe/README.md", import.meta.url), "utf8");
+  check(`the README states the measured worst case (${calls} subrequests)`, () => {
+    assert.equal(calls, 40, "the measured worst case moved: update this pin and the README together");
+    assert.match(readme.replace(/\s+/g, " "), new RegExp(`alarms opening and closing\\) is ${calls}, pinned in`));
+  });
 }
 
 // --- the alarms ------------------------------------------------------------
@@ -779,14 +786,14 @@ for (const [name, over, detail] of failCases) {
     const allOpen = titles.filter((t) => t !== "Upstream buyer wallet LOW (x402)").map((title, i) => ({ number: i + 1, title }));
     const everythingHealthy = { gateway: { ...HEALTHY_GATEWAY, upstreamBuyer: { status: "low", trend: "ok" }, tweetQueue: { status: "ok" }, circlePending: { status: "ok" }, gatewayPending: { status: "ok" }, chargedFailures: { status: "ok" }, refundsOwed: { status: "ok" }, ledgerDeadLetter: { status: "none" }, redisPersistence: { status: "on" }, backup: { status: "ok" }, outboundDestinations: { status: "new" }, upstreamBuyerSvm: { status: "ok" }, stellarFacilitator: { status: "ok" }, upstreamBudgets: { status: "ok" }, upstreamHardCaps: { status: "ok" }, exaAllowance: { status: "ok" }, stateDb: { status: "on" }, sanctions: { status: "ok" }, sanctionsScreen: { status: "fresh" }, email: { status: "ok" }, upstreamCosts: { status: "ok" }, mppReconcile: { status: "ok", window7d: "ok", chargedFailedStatus: "ok" }, toolFailures: { status: "ok" }, upstreamHealth: { status: "ok" }, facilitatorFunds: { status: "ok" }, toolAnswers: { status: "ok" }, containedTurns: { status: "ok" }, brokenListings: { status: "ok" }, buyerRefusals: { status: "ok" }, creditsRefunds: { status: "ok" }, cdnOrigin: { status: "ok" } }, status: HEALTHY_STATUS };
     mkGh(allOpen);
-    const r1 = await syncAlarms(ENV, { ...nosleep, maxWrites: 4, fetchStatus: feed(everythingHealthy, everythingHealthy) });
+    const r1 = await syncAlarms(ENV, { ...nosleep, maxWrites: 4, probe: { paywallObserved: true }, fetchStatus: feed(everythingHealthy, everythingHealthy) });
     assert.deepEqual(r1.opened, ["Upstream buyer wallet LOW (x402)"]);
     assert.equal(r1.closed.length, 3);
     assert.equal(created.length + closed.length, 4, "no more than the cap");
     assert.equal(r1.deferred.length, allOpen.length - 3);
     const stillOpen = allOpen.filter((x) => !r1.closed.includes(x.title));
     mkGh([...stillOpen, { number: 999, title: "Upstream buyer wallet LOW (x402)" }]);
-    const r2 = await syncAlarms(ENV, { ...nosleep, maxWrites: 100, fetchStatus: feed(everythingHealthy, everythingHealthy) });
+    const r2 = await syncAlarms(ENV, { ...nosleep, maxWrites: 100, probe: { paywallObserved: true }, fetchStatus: feed(everythingHealthy, everythingHealthy) });
     assert.deepEqual(r2.opened, [], "the open landed last run and is not repeated");
     // A closeAfterTwoOk alarm's first ok read is a mark (one write), not a close.
     assert.deepEqual(new Set([...r2.closed, ...r2.clearing]), new Set(r1.deferred), "the next run writes exactly what was deferred");
@@ -1106,6 +1113,90 @@ for (const [name, over, detail] of failCases) {
   const src = await readFile(new URL("../workers/status-probe/src/index.js", import.meta.url), "utf8");
   check("no direct !== compare against the trigger token remains", () => {
     assert.ok(!/get\("X-Operator-Token"\) !== want/.test(src));
+  });
+}
+
+// --- Paywall not observed ---------------------------------------------------
+// A caller spending the unpaid-quote budget from the Worker's address keeps
+// every paywall read unobserved. Driven through run() against a production
+// stub whose status store works like the real one: an observed run records a
+// paywall row, and /api/status reports the newest row's age. Five-minute runs:
+// two unobserved in a row do not page, the third pages once, a fourth does not
+// page again, and the next observed read closes it.
+{
+  const { ALARMS, PAYWALL_UNOBSERVED_TITLE: T, PAYWALL_UNOBSERVED_PAGE_AFTER_RUNS, PROBE_CADENCE_MS, judge } = await import("../workers/status-probe/src/index.js");
+  check("the paywall alarm pages after three unobserved runs at the five-minute cadence", () => {
+    assert.equal(T, "Paywall not observed");
+    assert.equal(PAYWALL_UNOBSERVED_PAGE_AFTER_RUNS, 3);
+    assert.equal(PROBE_CADENCE_MS, 5 * 60_000);
+    assert.ok(ALARMS.some((a) => a.title === T));
+  });
+  const budget429 = () => Response.json({ ok: false, error: "rate-limited", reason: "unpaid-quote-budget", retryAfterSeconds: 1800 }, { status: 429, headers: { "retry-after": "1800" } });
+  let clock = 0;            // the stub's own minutes clock
+  let lastPaywallTs = null; // the store's newest paywall row
+  let blind = false;
+  let issues = [];          // open issues by title
+  let created = [], closedNums = [];
+  stub({ extract: () => (blind ? budget429() : new Response("", { status: 402, headers: { "payment-required": offer(["eip155:8453"]) } })) });
+  const prodStub = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    const u = String(url);
+    if (u.endsWith("/api/status/probe")) {
+      const b = JSON.parse(init.body);
+      if (b.components && "paywall" in b.components) lastPaywallTs = clock;
+      return new Response("{}", { status: 200 });
+    }
+    if (u.endsWith("/api/gateway-status")) return Response.json({ status: "ok" });
+    if (u.endsWith("/api/status")) return Response.json({ components: lastPaywallTs == null ? [] : [{ key: "paywall", current: { state: "operational", ageMs: clock - lastPaywallTs } }] });
+    if (u === "https://api.github.com/user") return Response.json({ login: "probe-bot" });
+    if (u.includes("/issues?state=open")) return Response.json(issues.map((x) => ({ number: x.number, title: x.title, body: "", user: { login: "probe-bot" } })));
+    if (u.endsWith("/issues") && init.method === "POST") {
+      const t = JSON.parse(init.body).title; const number = 500 + created.length;
+      created.push(t); issues.push({ number, title: t });
+      return Response.json({ number }, { status: 201 });
+    }
+    const m = u.match(/\/issues\/(\d+)$/);
+    if (m && init.method === "PATCH" && JSON.parse(init.body).state === "closed") {
+      closedNums.push(Number(m[1])); issues = issues.filter((x) => x.number !== Number(m[1]));
+      return Response.json({});
+    }
+    if (u.startsWith("https://api.github.com")) return new Response("{}", { status: 200 });
+    return prodStub(url, init);
+  };
+  const ENV = { PROD, STATUS_PROBE_TOKEN: TOKEN, GITHUB_ISSUES_TOKEN: "t" };
+  const tick = async (isBlind) => { blind = isBlind; const out = await run(ENV, { sleep: async () => {} }); clock += PROBE_CADENCE_MS; return out; };
+  const pages = () => created.filter((t) => t === T).length;
+  const r0 = await tick(false);
+  const r1 = await tick(true);
+  const r2 = await tick(true);
+  check("one and two unobserved runs in a row: no page", () => {
+    assert.equal(r0.paywall.observed, true);
+    assert.equal(r1.paywall.observed, false);
+    assert.equal(r2.paywall.observed, false);
+    assert.equal(pages(), 0, `created ${created.join(", ")}`);
+  });
+  const r3 = await tick(true);
+  check("three unobserved runs in a row: one page, under its own title", () => {
+    assert.equal(pages(), 1);
+    assert.deepEqual(r3.alarms.opened, [T]);
+  });
+  await tick(true);
+  check("a fourth unobserved run: no second page", () => assert.equal(pages(), 1));
+  const r5 = await tick(false);
+  check("the next observed read closes it", () => {
+    assert.deepEqual(r5.alarms.closed, [T]);
+    assert.equal(issues.some((x) => x.title === T), false);
+  });
+  // The verdict on its own: observed is good, no probe facts or no paywall
+  // row is quiet, never a page.
+  check("the verdict: observed good; unobserved under three runs, no row, or no probe facts quiet", () => {
+    const st = (ageMs) => ({ components: [{ key: "paywall", current: { ageMs } }] });
+    assert.equal(judge({ status: st(0), probe: { paywallObserved: true } })[T], "good");
+    assert.equal(judge({ status: st(10 * 60_000), probe: { paywallObserved: false } })[T], "quiet");
+    assert.equal(judge({ status: st(15 * 60_000), probe: { paywallObserved: false } })[T], "bad");
+    assert.equal(judge({ status: { components: [] }, probe: { paywallObserved: false } })[T], "quiet");
+    assert.equal(judge({ status: null, probe: { paywallObserved: false } })[T], "quiet");
+    assert.equal(judge({ status: st(60 * 60_000) })[T], "quiet");
   });
 }
 

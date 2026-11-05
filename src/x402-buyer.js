@@ -812,7 +812,7 @@ export function neverLeftUs(err) {
  * A 200 on the bare request means the endpoint is free — returned with no
  * spend. Only a 402 triggers a payment; anything else is a 502.
  */
-export async function payX402(url, { maxAtomic, method = "GET", body, headers = {}, timeoutMs = 20000, maxBytes = DEFAULT_MAX_BYTES, chain = "base", provenPayTo = null, evidenceWallets = null, sellerProof = null, notDebited = null, allowUnproven = false, refusalMaxWaitMs = refusalMaxWaitMsDefault(), memoizeDelivery = false, slug = null, signBy = null } = {}) {
+export async function payX402(url, { maxAtomic, method = "GET", body, headers = {}, timeoutMs = 20000, maxBytes = DEFAULT_MAX_BYTES, chain = "base", provenPayTo = null, evidenceWallets = null, sellerProof = null, notDebited = null, allowUnproven = false, refusalMaxWaitMs = refusalMaxWaitMsDefault(), memoizeDelivery = false, slug = null, signBy = null, sellerKey = null } = {}) {
   assertSigningAllowed("an external x402 payment");
   if (maxAtomic == null) throw bad("payX402 requires maxAtomic (the margin-guard ceiling)", 500);
   const chainCfg = BUYER_CHAINS[chain];
@@ -1056,11 +1056,13 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     // BASE UNPROVEN DAILY CAPS (src/base-unproven.js): the seller's and the
     // whole lane's, checked and the signed amount reserved in one step, keyed
     // on this accept's payTo and the seller's origin, before anything is
-    // signed. A refusal here is pre-commit (the finally gives the budget hold
+    // signed. A path-scoped seller is keyed on the index's seller key
+    // (origin plus its prefix), handed in as `sellerKey`, not on the host it
+    // shares with other sellers. A refusal here is pre-commit (the finally gives the budget hold
     // back); the reservation is given back by the same finally only when
     // nothing could have moved.
     if (chain === "base" && allowUnproven) {
-      const capped = await reserveUnprovenSellerSpend({ payTo: payable.payTo, origin: url, atomic: quotedAtomic });
+      const capped = await reserveUnprovenSellerSpend({ payTo: payable.payTo, origin: url, sellerKey, atomic: quotedAtomic });
       if (!capped.ok) {
         const which = capped.code === "unproven_lane_daily_cap" ? "daily cap across all sellers" : "daily cap per seller";
         const e = new Error(`Seller ${String(payable.payTo).slice(0, 10)}… is below the Base settlement floor and has reached the unproven lane's ${which} ($${capped.spentUsd.toFixed(2)} of $${capped.capUsd} in 24 h) - not paid`);

@@ -24,6 +24,18 @@
 // `off` removes this cap (the per-call ceiling and the Base wallet's own daily
 // ceiling still hold); a malformed value reads as the default.
 //
+// PATH-SCOPED SELLERS. The index keeps a seller hosted under a path prefix on
+// a shared host (`https://host/app/<name>`) as its own seller, keyed on the
+// origin plus that prefix (src/x402-index.js, normalizeSellerKey). Such a
+// seller's origin key is that same identity, `origin:host/app/<name>`, so two
+// tenants on one host each get their own day and one cannot spend its
+// neighbors' cap. The key comes from the index's seller key (route-execute
+// hands it to payX402 as `sellerKey`), never from the URL being paid, so a
+// tenant cannot buy a fresh day by varying the path below its own prefix; a
+// paid URL that is not at or under that prefix gives the seller no key at
+// all, and the lane does not pay it. A bare origin, or a call with no seller
+// key, keeps the host key exactly as before.
+//
 // A payTo the operator lists as shared (src/shared-paytos.js: a split or
 // router contract many sellers are paid through) is not one seller's wallet,
 // so it is not a ledger key: a seller paid at one is keyed on its origin
@@ -52,7 +64,7 @@
 // not answer. Redis keeps the window across restarts; without one the day is
 // this process's.
 import { randomBytes } from "node:crypto";
-import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded, keyOf as sharedKeyOf, OP_MS } from "./shared-limits.js";
+import { shared, sharedLimitsEnabled, noteSharedLimitsDegraded, keyOf as sharedKeyOf, OP_MS } from "./shared-limits.js";
 import { getSharedRedisClient } from "./shared-limit.js";
 import { withLoopTimeout } from "./loop-deadline.js";
 
@@ -118,15 +130,37 @@ function payToIsShared(w) {
   try { return sharedPayToCheck(w) === true; } catch { return false; }
 }
 
+// The seller's origin key. `url` is what is paid; `sellerKey` is the index's
+// seller key (origin, or origin plus a path prefix). Undefined when the seller
+// cannot be keyed: no readable URL, or a URL outside its own seller key.
+function originKeyOf(url, sellerKey) {
+  let u = null;
+  try { u = url ? new URL(String(url)) : null; } catch { u = null; }
+  if (!sellerKey) return u ? `origin:${u.host.toLowerCase()}` : undefined;
+  let s = null;
+  try { s = new URL(String(sellerKey)); } catch { return undefined; }
+  if (!u) u = s;
+  const host = s.host.toLowerCase();
+  if (u.protocol !== s.protocol || u.host.toLowerCase() !== host) return undefined;
+  const prefix = s.pathname.replace(/\/+$/, "");
+  if (!prefix) return `origin:${host}`;
+  // A segment boundary, never a substring: /app/x does not own /app/x2.
+  if (u.pathname !== prefix && !u.pathname.startsWith(`${prefix}/`)) return undefined;
+  return `origin:${host}${prefix}`;
+}
+
 /** The seller's ledger keys: its EVM payTo (lowercased; not when the payTo is
- *  a listed shared one) and its origin host. */
-export function unprovenSellerKeys({ payTo, origin } = {}) {
+ *  a listed shared one) and its origin key: the host, or for a path-scoped
+ *  seller (`sellerKey` carries a prefix) the host plus that prefix. */
+export function unprovenSellerKeys({ payTo, origin, sellerKey } = {}) {
   const keys = [];
   const w = typeof payTo === "string" ? payTo.trim() : "";
+  const originKey = originKeyOf(origin, sellerKey);
+  // A paid URL outside its own seller key is not bounded by any origin key,
+  // so the seller gets no key at all and the lane refuses it.
+  if (sellerKey && !originKey) return keys;
   if (/^0x[0-9a-fA-F]{40}$/.test(w) && !payToIsShared(w.toLowerCase())) keys.push(`payto:${w.toLowerCase()}`);
-  let host = null;
-  try { host = origin ? new URL(String(origin)).host.toLowerCase() : null; } catch { host = null; }
-  if (host) keys.push(`origin:${host}`);
+  if (originKey) keys.push(originKey);
   return keys;
 }
 
@@ -137,27 +171,107 @@ function localRows(k, now) {
 }
 const localMicro = (k, now) => localRows(k, now).reduce((s, r) => s + r.micro, 0);
 
-// KEYS[1..n] = the windows (the seller's, then the lane's); ARGV: cutoff,
-// windowMs, encodedMember, score, weightMicro, then a local floor and a cap
-// per key. Prunes every window, and adds the entry to all of them only when
-// each one's larger of its shared sum and this process's own stays within its
-// own cap; otherwise answers the first window that refused and its figure.
-const SELLER_RESERVE = `
-local n = #KEYS
+// RUNNING SUMS. Each window (a sorted set of `<micro>|<member>` entries) has
+// a running sum beside it, under its own name (SUM_WINDOW), so a reserve
+// never walks the window: the sum is raised on an add, lowered on a release
+// that removed an entry, and lowered by exactly what the expiry prune takes
+// out (ZRANGEBYSCORE over the expired head only). A reserve is O(log n) plus
+// the entries that expired since the last touch, not O(n): the lane window at
+// 50,000 entries was summed in full on every reserve, holding Redis. A sum
+// that is missing while its window holds entries (the first touch after this
+// shipped) is rebuilt from the window once; an empty window's sum is zero and
+// its key is dropped. Every script that touches a window keeps its sum, and
+// nothing else writes these windows (the reads below prune through SETTLE,
+// not the shared-limits window read, which would prune without lowering the
+// sum).
+const SUM_WINDOW = "base-unproven-seller-sum";
+// settle(window, sum, cutoff, windowMs): prune the expired head, lower the sum
+// by what it held, and answer the window's current sum.
+const SETTLE = `
+local function weight(e) return tonumber(string.match(e, '^(%-?%d+)|')) or 1 end
+local function settle(z, s, cutoff, windowMs)
+  local cur = redis.call('GET', s)
+  if not cur then
+    redis.call('ZREMRANGEBYSCORE', z, '-inf', cutoff)
+    local items = redis.call('ZRANGE', z, 0, -1)
+    if #items == 0 then return 0 end
+    local sum = 0
+    for j = 1, #items do sum = sum + weight(items[j]) end
+    redis.call('SET', s, sum, 'PX', windowMs)
+    return sum
+  end
+  cur = tonumber(cur)
+  local old = redis.call('ZRANGEBYSCORE', z, '-inf', cutoff)
+  if #old > 0 then
+    local d = 0
+    for j = 1, #old do d = d + weight(old[j]) end
+    redis.call('ZREMRANGEBYSCORE', z, '-inf', cutoff)
+    cur = tonumber(redis.call('DECRBY', s, d))
+  end
+  if redis.call('EXISTS', z) == 0 then
+    redis.call('DEL', s)
+    return 0
+  end
+  return cur
+end
+`;
+
+// KEYS[1..n] = the windows (the seller's, then the lane's), KEYS[n+1..2n] =
+// their sums; ARGV: cutoff, windowMs, encodedMember, score, weightMicro, then
+// a local floor and a cap per window. Settles every window, and adds the
+// entry to all of them only when each one's larger of its shared sum and this
+// process's own stays within its own cap; otherwise answers the first window
+// that refused and its figure.
+const SELLER_RESERVE = `${SETTLE}
+local n = #KEYS / 2
 local w = tonumber(ARGV[5])
 for i = 1, n do
-  redis.call('ZREMRANGEBYSCORE', KEYS[i], '-inf', ARGV[1])
-  local items = redis.call('ZRANGE', KEYS[i], 0, -1)
-  local sum = 0
-  for j = 1, #items do sum = sum + (tonumber(string.match(items[j], '^(%-?%d+)|')) or 1) end
+  local sum = settle(KEYS[i], KEYS[n + i], ARGV[1], ARGV[2])
   local base = math.max(sum, tonumber(ARGV[4 + 2 * i]))
   if base + w > tonumber(ARGV[5 + 2 * i]) then return { 0, i, base } end
 end
 for i = 1, n do
-  redis.call('ZADD', KEYS[i], ARGV[4], ARGV[3])
+  if redis.call('ZADD', KEYS[i], ARGV[4], ARGV[3]) == 1 then redis.call('INCRBY', KEYS[n + i], ARGV[5]) end
   redis.call('PEXPIRE', KEYS[i], ARGV[2])
+  redis.call('PEXPIRE', KEYS[n + i], ARGV[2])
 end
 return { 1, 0, 0 }`;
+
+// KEYS as above; ARGV: encodedMember, weightMicro. Removes the entry and
+// lowers each sum only where the entry was still there (a release after the
+// entry expired, or a second release, lowers nothing).
+const SELLER_RELEASE = `
+local n = #KEYS / 2
+for i = 1, n do
+  if redis.call('ZREM', KEYS[i], ARGV[1]) == 1 then
+    if redis.call('EXISTS', KEYS[i]) == 0 then redis.call('DEL', KEYS[n + i])
+    elseif redis.call('EXISTS', KEYS[n + i]) == 1 then redis.call('DECRBY', KEYS[n + i], ARGV[2]) end
+  end
+end
+return 1`;
+
+// KEYS as above; ARGV: cutoff, windowMs. Each window's current sum.
+const SELLER_READ = `${SETTLE}
+local n = #KEYS / 2
+local out = {}
+for i = 1, n do out[i] = settle(KEYS[i], KEYS[n + i], ARGV[1], ARGV[2]) end
+return out`;
+
+const windowKeys = (keys) => [...keys.map((k) => sharedKeyOf(WINDOW, k)), ...keys.map((k) => sharedKeyOf(SUM_WINDOW, k))];
+
+/** The shared sums of these windows at `now` (settling each), or null when the store does not answer. */
+async function sharedSums(keys, now) {
+  let c = null;
+  try { c = await getSharedRedisClient(); } catch { c = null; }
+  if (!c) { noteSharedLimitsDegraded(CONTROL, { ok: false, error: "redis unavailable" }); return null; }
+  try {
+    const r = await withLoopTimeout(c.eval(SELLER_READ, { keys: windowKeys(keys), arguments: [now - UNPROVEN_SELLER_WINDOW_MS, UNPROVEN_SELLER_WINDOW_MS].map(String) }), OP_MS(), () => new Error("shared-limits: command timed out"));
+    return Array.isArray(r) ? r.map((x) => Number(x) || 0) : null;
+  } catch (e) {
+    noteSharedLimitsDegraded(CONTROL, { ok: false, error: String(e?.message || e).slice(0, 120) });
+    return null;
+  }
+}
 
 const refusal = (spentMicro, capUsd) => ({
   ok: false,
@@ -180,9 +294,9 @@ const laneRefusal = (spentMicro, capUsd) => ({
  * when both caps are off) or one of the refusals above (the seller's when
  * both refuse). Never throws.
  */
-export async function reserveUnprovenSellerSpend({ payTo, origin, atomic, now = Date.now(), capUsd = baseUnprovenSellerDailyUsd(), laneCapUsd = baseUnprovenLaneDailyUsd() } = {}) {
+export async function reserveUnprovenSellerSpend({ payTo, origin, sellerKey = null, atomic, now = Date.now(), capUsd = baseUnprovenSellerDailyUsd(), laneCapUsd = baseUnprovenLaneDailyUsd() } = {}) {
   if (capUsd == null && laneCapUsd == null) return { ok: true, handle: null };
-  const sellerKeys = capUsd == null ? [] : unprovenSellerKeys({ payTo, origin });
+  const sellerKeys = capUsd == null ? [] : unprovenSellerKeys({ payTo, origin, sellerKey });
   let micro = 0;
   try { micro = Number(BigInt(String(atomic))); } catch { micro = NaN; }
   // A seller with no key we can read, or an amount we cannot read, is not
@@ -202,7 +316,7 @@ export async function reserveUnprovenSellerSpend({ payTo, origin, atomic, now = 
     else {
       try {
         const r = await withLoopTimeout(c.eval(SELLER_RESERVE, {
-          keys: keys.map((k) => sharedKeyOf(WINDOW, k)),
+          keys: windowKeys(keys),
           arguments: [now - UNPROVEN_SELLER_WINDOW_MS, UNPROVEN_SELLER_WINDOW_MS, `${micro}|${member}`, now, micro, ...keys.flatMap((k, i) => [localMicro(k, now), caps[i]])].map(String),
         }), OP_MS(), () => new Error("shared-limits: command timed out"));
         if (Number(r?.[0]) !== 1) {
@@ -227,25 +341,31 @@ export async function reserveUnprovenSellerSpend({ payTo, origin, atomic, now = 
   return { ok: true, handle: { keys, id, micro, member, shared: sharedOk } };
 }
 
-/** Give a reservation back (the payment provably moved nothing). Idempotent. */
+/** Give a reservation back (the payment provably moved nothing). Idempotent.
+ *  Answers the shared write's promise (callers need not wait on it). */
 export function releaseUnprovenSellerSpend(handle) {
   if (!handle || typeof handle !== "object" || handle.released) return;
   handle.released = true;
   for (const k of handle.keys || []) {
     const rows = (local.get(k) || []).filter((r) => r.id !== handle.id);
     if (rows.length) local.set(k, rows); else local.delete(k);
-    if (handle.shared) void sharedWrite(CONTROL, shared.windowRemove(WINDOW, k, { member: handle.member, weight: handle.micro }));
+  }
+  if (handle.shared && Array.isArray(handle.keys) && handle.keys.length) {
+    return (async () => {
+      const c = await getSharedRedisClient();
+      if (!c) throw new Error("redis unavailable");
+      await withLoopTimeout(c.eval(SELLER_RELEASE, { keys: windowKeys(handle.keys), arguments: [`${handle.micro}|${handle.member}`, String(handle.micro)] }), OP_MS(), () => new Error("shared-limits: command timed out"));
+    })().catch((e) => noteSharedLimitsDegraded(CONTROL, { ok: false, error: String(e?.message || e).slice(0, 120) }));
   }
 }
 
 /** What the lane has paid a seller in the last 24 h, in USD (this process's rows, or the shared figure when larger). */
-export async function unprovenSellerSpentUsd({ payTo, origin, now = Date.now() } = {}) {
-  const keys = unprovenSellerKeys({ payTo, origin });
+export async function unprovenSellerSpentUsd({ payTo, origin, sellerKey = null, now = Date.now() } = {}) {
+  const keys = unprovenSellerKeys({ payTo, origin, sellerKey });
   let worst = Math.max(0, ...keys.map((k) => localMicro(k, now)));
   if (SHARED && keys.length) {
-    const r = await shared.windowReadMany(keys.map((k) => ({ name: WINDOW, key: k, windowMs: UNPROVEN_SELLER_WINDOW_MS })), { now });
-    if (r.ok) for (const s of r.results) worst = Math.max(worst, Number(s?.sum) || 0);
-    else noteSharedLimitsDegraded(CONTROL, r);
+    const sums = await sharedSums(keys, now);
+    if (sums) for (const v of sums) worst = Math.max(worst, v);
   }
   return worst / 1e6;
 }
@@ -254,17 +374,20 @@ export async function unprovenSellerSpentUsd({ payTo, origin, now = Date.now() }
 export async function unprovenLaneSpentUsd({ now = Date.now() } = {}) {
   let worst = localMicro(LANE_KEY, now);
   if (SHARED) {
-    const r = await shared.windowReadMany([{ name: WINDOW, key: LANE_KEY, windowMs: UNPROVEN_SELLER_WINDOW_MS }], { now });
-    if (r.ok) for (const s of r.results) worst = Math.max(worst, Number(s?.sum) || 0);
-    else noteSharedLimitsDegraded(CONTROL, r);
+    const sums = await sharedSums([LANE_KEY], now);
+    if (sums) worst = Math.max(worst, sums[0]);
   }
   return worst / 1e6;
 }
 
 /** Test-only: forget this process's rows (and, with a shared store, the seller's windows and the lane's). */
 export async function __resetUnprovenSellerLedger(sellers = []) {
-  if (SHARED) { for (const s of sellers) for (const k of unprovenSellerKeys(s)) await shared.windowClear(WINDOW, k); await shared.windowClear(WINDOW, LANE_KEY); }
+  if (SHARED) { for (const s of sellers) for (const k of unprovenSellerKeys(s)) { await shared.windowClear(WINDOW, k); await shared.windowClear(SUM_WINDOW, k); } await shared.windowClear(WINDOW, LANE_KEY); await shared.windowClear(SUM_WINDOW, LANE_KEY); }
   local.clear();
   seq = 0;
 }
 export const __sharedUnprovenSellerLedger = SHARED;
+/** Test-only: the shared sums of these ledger keys at `now`, settled (null without the store). */
+export const __unprovenWindowSums = (keys, now = Date.now()) => (SHARED ? sharedSums(keys, now) : Promise.resolve(null));
+/** Test-only: the shared store's key names for a ledger key (its window and its sum). */
+export const __unprovenStoreKeys = (k) => ({ window: sharedKeyOf(WINDOW, k), sum: sharedKeyOf(SUM_WINDOW, k) });

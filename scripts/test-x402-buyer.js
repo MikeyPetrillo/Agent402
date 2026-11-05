@@ -739,6 +739,48 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
     ok(/configureUnprovenSharedPayTos\(\(w\) => sharedPayToStore\(\)\.has\(w\)\)/.test(srv), "shared payTo: the server hands in its shared-payTo store (pin)");
   }
 
+  // PATH-SCOPED SELLERS. The index keeps `https://host/app/<name>` as its own
+  // seller (origin plus prefix); its origin key is that identity, handed in as
+  // sellerKey, so tenants on one host each keep their own day, a bare origin
+  // is keyed as before, and a tenant cannot buy a fresh day by varying the
+  // paid path below its own prefix.
+  {
+    await BU.__resetUnprovenSellerLedger();
+    const TA = "https://shared.example/app/tenant-a", TB = "https://shared.example/app/tenant-b";
+    const WA = "0x" + "a7".repeat(20), WB = "0x" + "b7".repeat(20);
+    // Through payX402, the caller path route-execute takes.
+    for (let i = 0; i < 5; i++) await buy(TA, WA, "50000", { sellerKey: TA });
+    signs = 0;
+    const capA = await buy(TA, WA, "50000", { sellerKey: TA });
+    ok(capA.e && capA.e.statusCode === 409 && /daily cap per seller/.test(capA.e.message) && signs === 0, `path seller: tenant A reaches its own $0.25 cap (${capA.e?.statusCode})`);
+    signs = 0;
+    const tenB = await buy(TB, WB, "50000", { sellerKey: TB });
+    ok(!tenB.e && signs === 1, `path seller: tenant B on the same host keeps its own day (${tenB.e?.message || "ok"})`);
+    ok(Math.abs(await BU.unprovenSellerSpentUsd({ origin: TA, sellerKey: TA }) - 0.25) < 1e-9 && Math.abs(await BU.unprovenSellerSpentUsd({ origin: TB, sellerKey: TB }) - 0.05) < 1e-9, "path seller: each tenant's spend is booked on its own key");
+    ok(BU.unprovenSellerKeys({ payTo: WA, origin: `${TA}/data`, sellerKey: TA }).join(",") === `payto:${WA},origin:shared.example/app/tenant-a`, "path seller: the keys are the payTo and the origin plus prefix");
+    // An ordinary host is unchanged, with or without its seller key.
+    ok(BU.unprovenSellerKeys({ payTo: WA, origin: "https://plain.example/data", sellerKey: "https://plain.example" }).join(",") === `payto:${WA},origin:plain.example`, "path seller: a bare-origin seller keeps its host key");
+    ok(BU.unprovenSellerKeys({ payTo: WA, origin: "https://plain.example/data" }).join(",") === `payto:${WA},origin:plain.example`, "path seller: a call with no seller key keeps the host key");
+    ok(BU.unprovenSellerKeys({ origin: "https://Plain.Example:8443/x", sellerKey: "https://plain.example:8443" }).join(",") === "origin:plain.example:8443", "path seller: the host key carries a non-default port, lowercased");
+    // Varying the paid path below the prefix (and the payTo) buys no fresh day.
+    const t3 = Date.now();
+    const TC = "https://shared.example/app/tenant-c";
+    const paths = [`${TC}/x`, `${TC}/y/z`, TC, `${TC}/`, `${TC}/x?q=1`];
+    for (let i = 0; i < 5; i++) {
+      const r = await BU.reserveUnprovenSellerSpend({ payTo: "0x" + String(i + 1).repeat(40), origin: paths[i], sellerKey: TC, atomic: 50000n, now: t3 });
+      ok(r.ok === true, `path seller: tenant C buy ${i + 1} under ${new URL(paths[i]).pathname} is reserved`);
+    }
+    const sixth = await BU.reserveUnprovenSellerSpend({ payTo: "0x" + "9".repeat(40), origin: `${TC}/deep/er/path`, sellerKey: TC, atomic: 50000n, now: t3 });
+    ok(sixth.ok === false && sixth.code === "unproven_seller_daily_cap", "path seller: a sixth buy at another path below the prefix, from a fresh payTo, is still refused");
+    // A paid URL outside its own prefix gets no key, so the lane refuses it.
+    for (const [url, label] of [["https://shared.example/app/tenant-c2/x", "a sibling sharing the text prefix"], ["https://shared.example/app/other/x", "another tenant's path"], ["https://shared.example/x", "the host root"], ["https://elsewhere.example/app/tenant-c/x", "another host"], ["http://shared.example/app/tenant-c/x", "another scheme"]]) {
+      ok(BU.unprovenSellerKeys({ payTo: WA, origin: url, sellerKey: TC }).length === 0, `path seller: ${label} is not under the seller key, so it has no key`);
+    }
+    const outside = await BU.reserveUnprovenSellerSpend({ payTo: "0x" + "8".repeat(40), origin: "https://shared.example/app/tenant-c2/x", sellerKey: TC, atomic: 50000n, now: t3 });
+    ok(outside.ok === false, "path seller: a buy at a URL outside its own prefix is not paid in the lane");
+    ok(BU.unprovenSellerKeys({ payTo: WA, origin: "https://shared.example/app/tenant-c/../tenant-d/x", sellerKey: TC }).length === 0, "path seller: a dot segment that resolves outside the prefix has no key");
+  }
+
   evm.client.createPaymentPayload = realSign;
   await BU.__resetUnprovenSellerLedger();
   if (savedMax === undefined) delete process.env.SOR_BASE_UNPROVEN_MAX_USD; else process.env.SOR_BASE_UNPROVEN_MAX_USD = savedMax;

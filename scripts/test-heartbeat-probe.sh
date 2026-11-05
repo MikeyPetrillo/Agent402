@@ -128,14 +128,16 @@ fi
 # The paywall read and the unpaid-quote budget's 429 (body reason
 # "unpaid-quote-budget"): one capped re-read; two budget refusals leave paywall
 # and rails unobserved, never failed; a plain 429 or a 500 fails as before.
+# These cases are the unsigned fallback: no POW_SECRET, no token.
+unset POW_SECRET
 BUDGET_BODY='{"ok":false,"error":"rate-limited","reason":"unpaid-quote-budget","retryAfterSeconds":1800}'
 # Each answer is "status|body"; the stub writes the body and a Retry-After header.
 pw_case() {  # $1 = expected PW, $2 = expected PAYWALL_UNKNOWN, $3 = expected reads, $4 = expected sleeps, rest = answers
   local want_pw="$1" want_unknown="$2" want_reads="$3" want_sleeps="$4"; shift 4
-  printf '%s\n' "$@" > "$TMP/answers"; : > "$TMP/reads"; : > "$TMP/sleeps"
+  printf '%s\n' "$@" > "$TMP/answers"; : > "$TMP/reads"; : > "$TMP/sleeps"; : > "$TMP/hdrs"
   curl() {
     local hdr="" out="" ans
-    while [ $# -gt 0 ]; do case "$1" in -D) hdr="$2"; shift 2;; -o) out="$2"; shift 2;; *) shift;; esac; done
+    while [ $# -gt 0 ]; do case "$1" in -D) hdr="$2"; shift 2;; -o) out="$2"; shift 2;; -H) echo "$2" >> "$TMP/hdrs"; shift 2;; *) shift;; esac; done
     echo x >> "$TMP/reads"
     ans=$(sed -n "$(wc -l < "$TMP/reads" | tr -d ' ')p" "$TMP/answers")
     printf 'HTTP/1.1 %s\r\nretry-after: 1800\r\n\r\n' "${ans%%|*}" > "$hdr"
@@ -174,6 +176,47 @@ rm -f "$CAPTURE"; PAYWALL_UNKNOWN=1 record_observation up "" >/dev/null
 PAYWALL_UNKNOWN=""
 rm -f "$CAPTURE"; record_observation up "" >/dev/null
 [ "$(field paywall)" = "true" ] && ok "record: an observed paywall is recorded" || bad "record: an observed paywall is recorded" "$(cat "$CAPTURE")"
+
+# The signed read: with POW_SECRET the paywall read carries X-Heartbeat-Token,
+# the token src/pow.js verifies, so the budget never counts it (isSynthetic).
+echo "heartbeat probe — signed paywall read"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+export POW_SECRET="test-heartbeat-secret-do-not-use-in-prod"
+pw_case 402 "" 1 "" "402|{}" && ok "signed: one read, paywall observed" || bad "signed: one read, paywall observed" "PW=$PW unknown=$PAYWALL_UNKNOWN"
+TOK=$(sed -n 's/^X-Heartbeat-Token: //p' "$TMP/hdrs" | head -1)
+[ "${#TOK}" = "32" ] && ok "signed: the paywall read sends a 32-character X-Heartbeat-Token" || bad "signed: the paywall read sends a 32-character X-Heartbeat-Token" "headers: $(tr '\n' ' ' < "$TMP/hdrs")"
+# The token verifies on the server, and the server's real budget, spent from
+# this address by another caller, lets the signed read through where the same
+# read unsigned gets the budget's 429.
+VERDICT=$(cd "$REPO" && TOK="$TOK" node --input-type=module -e '
+  await import("./scripts/lib/offline-stores.js");
+  const { verifyHeartbeatToken } = await import("./src/pow.js");
+  const { createUnpaidQuoteBudget } = await import("./src/unpaid-quote-budget.js");
+  const b = createUnpaidQuoteBudget({ budget: 1, replicas: 1, isPriced: () => true, isSynthetic: (req) => verifyHeartbeatToken(req.headers["x-heartbeat-token"]), log: () => {} });
+  const run = (headers) => new Promise((resolve) => {
+    const req = { method: "POST", path: "/api/extract", ip: "203.0.113.9", headers: { "user-agent": "curl/8", ...headers }, header(n) { return this.headers[String(n).toLowerCase()]; } };
+    const res = { statusCode: 200, set() { return this; }, once() {}, status(c) { this.statusCode = c; return this; }, json() { resolve(this.statusCode); return this; } };
+    const p = b.middleware(req, res, () => resolve("next"));
+    if (p && typeof p.then === "function") p.catch(() => resolve("threw"));
+  });
+  const other = [await run({}), await run({})];
+  const signed = await run({ "x-heartbeat-token": process.env.TOK });
+  const unsigned = await run({});
+  const forged = await run({ "x-heartbeat-token": "A".repeat(32) });
+  process.stdout.write(JSON.stringify({ verifies: verifyHeartbeatToken(process.env.TOK), other, signed, unsigned, forged }));
+' 2>&1)
+[ "$(jq -r .verifies <<<"$VERDICT" 2>/dev/null)" = "true" ] && ok "signed: the token verifies with src/pow.js" || bad "signed: the token verifies with src/pow.js" "$VERDICT"
+[ "$(jq -c .other <<<"$VERDICT" 2>/dev/null)" = '["next",429]' ] && ok "signed: control, another caller spends the address's budget (429)" || bad "signed: control, another caller spends the address's budget (429)" "$VERDICT"
+[ "$(jq -r .signed <<<"$VERDICT" 2>/dev/null)" = "next" ] && ok "signed: the signed read passes the spent budget (no 429 can occur)" || bad "signed: the signed read passes the spent budget (no 429 can occur)" "$VERDICT"
+[ "$(jq -r .unsigned <<<"$VERDICT" 2>/dev/null)" = "429" ] && [ "$(jq -r .forged <<<"$VERDICT" 2>/dev/null)" = "429" ] && ok "signed: the same read unsigned, or with a forged token, gets the 429" || bad "signed: the same read unsigned, or with a forged token, gets the 429" "$VERDICT"
+# The re-read after a budget refusal is signed too (an old server, or a clock off by minutes).
+pw_case 402 "" 2 10 "429|$BUDGET_BODY" "402|{}" && [ "$(grep -c '^X-Heartbeat-Token: ' "$TMP/hdrs")" = "2" ] \
+  && ok "signed: the fallback re-read carries the token too" || bad "signed: the fallback re-read carries the token too" "$(cat "$TMP/hdrs")"
+unset POW_SECRET
+pw_case 402 "" 1 "" "402|{}" && ! grep -q '^X-Heartbeat-Token' "$TMP/hdrs" \
+  && ok "unsigned: without POW_SECRET no token header is sent" || bad "unsigned: without POW_SECRET no token header is sent" "$(cat "$TMP/hdrs")"
+grep -q 'POW_SECRET: \${{ secrets.POW_SECRET }}' "$REPO/.github/workflows/heartbeat.yml" \
+  && ok "the heartbeat workflow hands POW_SECRET to the probe" || bad "the heartbeat workflow hands POW_SECRET to the probe" "not found"
 
 echo
 if [ "$FAIL" -eq 0 ]; then echo "all passed ($PASS)"; else echo "FAILED ($FAIL of $((PASS+FAIL)))"; fi
