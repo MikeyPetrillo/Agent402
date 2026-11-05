@@ -602,8 +602,18 @@ Auto-closes when nothing is owed.`,
     // threw in each of the last three or more consecutive minutes: repeating
     // pages, ok clears, unknown does neither. Title matches heartbeat.yml's.
     title: "containedTurns: a scheduled turn is throwing every minute",
+    closeAfterTwoOk: true,
     verdict: ({ gateway: b }) => wordVerdict(b.containedTurns?.status, ["repeating"], ["ok"]),
-    body: () => "/api/gateway-status reports containedTurns.status=repeating: a background turn (a drain slice, a rebuild step, a timer tick) has thrown in each of the last three or more consecutive minutes; the throw is caught and counted, so the process stays up and the work it guards is not being done. The names and counts are on the operator endpoint, /__operator/perf.json (containedTurns, operator token), and the server log carries one [contained-turn] line per name per minute. Auto-closes when the word is ok.",
+    body: () => "/api/gateway-status reports containedTurns.status=repeating: a background turn (a drain slice, a rebuild step, a timer tick) has thrown in each of the last three or more consecutive minutes; the throw is caught and counted, so the process stays up and the work it guards is not being done. The names and counts are on the operator endpoint, /__operator/perf.json (containedTurns, operator token), and the server log carries one [contained-turn] line per name per minute. Auto-closes after two ok reads in a row.",
+  },
+  {
+    // Listings of many distinct origins broke while read inside the window
+    // (brokenListings, src/x402-index.js): widespread pages, ok clears,
+    // unknown does neither. Title matches heartbeat.yml's.
+    title: "brokenListings: seller listings are failing to read across many origins",
+    closeAfterTwoOk: true,
+    verdict: ({ gateway: b }) => wordVerdict(b.brokenListings?.status, ["widespread"], ["ok"]),
+    body: () => "/api/gateway-status reports brokenListings.status=widespread: inside the last 15 minutes the seller listings of many distinct origins (past a floor and a share of the indexed origins) threw while they were read and were dropped, which one seller's bad data does not do; a code bug in how listings are read is emptying external routing while the process stays up. The origins and counts are on the operator endpoint, /__operator/perf.json (brokenListings, operator token). Auto-closes after two ok reads in a row.",
   },
   {
     // Redis persistence (redisPersistence on /api/gateway-status,
@@ -856,18 +866,28 @@ export async function issuesLogin(token, env = {}) {
   return login;
 }
 
+// An alarm with closeAfterTwoOk closes on the second consecutive ok read, by
+// this Worker or heartbeat.yml: its word lives in the server's memory, so a
+// restart reads ok at once and one ok read across a deploy is not a recovery.
+// The first ok read appends a line starting CLEARING_MARK to the issue body
+// (the issue list carries the body, so reading it costs nothing); a bad read
+// removes the line; an ok read that finds it closes. The same text as heartbeat.yml's MARK.
+export const CLEARING_MARK = "First ok read at ";
+export const withClearingMark = (body, now) => `${String(body || "")}\n\n${CLEARING_MARK}${now}; closes on the next ok read.`;
+export const withoutClearingMark = (body) => { const s = String(body || ""); const i = s.indexOf(`\n\n${CLEARING_MARK}`); return i < 0 ? s : s.slice(0, i); };
 export async function openIssues(token, env = {}) {
   const self = (await issuesLogin(token, env)).toLowerCase();
   const r = await gh(`/repos/${ISSUES_REPO}/issues?state=open&per_page=100`, token);
   if (!r.ok) throw new Error(`issue list failed (${r.status})`);
   const rows = await r.json();
   const byTitle = new Map();
+  byTitle.bodies = new Map(); // title -> issue body, for the closeAfterTwoOk mark
   for (const x of Array.isArray(rows) ? rows : []) {
     // Pull requests come back on this endpoint too; they are not alarms.
     if (!x || x.pull_request) continue;
     const author = String(x.user?.login || "").toLowerCase();
     if (author !== self && author !== WORKFLOW_BOT_LOGIN) continue;
-    if (!byTitle.has(x.title)) byTitle.set(x.title, x.number);
+    if (!byTitle.has(x.title)) { byTitle.set(x.title, x.number); byTitle.bodies.set(x.title, typeof x.body === "string" ? x.body : ""); }
   }
   return byTitle;
 }
@@ -941,14 +961,19 @@ export async function syncAlarms(env, { fetchStatus, sleep = (ms) => new Promise
   // page is never starved by recoveries and the run never exceeds the limit.
   const toOpen = [];
   const toClose = [];
+  const toReset = []; // closeAfterTwoOk alarms read bad again after a first ok read
+  const clearing = [];
+  const bodyOf = (title) => (open.bodies instanceof Map ? open.bodies.get(title) || "" : "");
+  const marked = (title) => bodyOf(title).includes(`\n\n${CLEARING_MARK}`);
   for (const a of ALARMS) {
     const v = verdicts[a.title];
     if (v === "bad") bad.push(a.title);
     const existing = open.get(a.title);
     if (v === "bad" && !existing) toOpen.push(a);
     else if (v === "good" && existing) toClose.push(a);
+    else if (v === "bad" && existing && a.closeAfterTwoOk && marked(a.title)) toReset.push(a);
   }
-  const writes = [...toOpen, ...toClose];
+  const writes = [...toOpen, ...toClose, ...toReset];
   const deferred = writes.slice(maxWrites).map((a) => a.title);
   for (const a of writes.slice(0, maxWrites)) {
     const v = verdicts[a.title];
@@ -962,6 +987,13 @@ export async function syncAlarms(env, { fetchStatus, sleep = (ms) => new Promise
         }),
       });
       if (r.ok) opened.push(a.title);
+    } else if (v === "bad" && existing) {
+      // The count of ok reads starts again: the mark line comes off.
+      await gh(`/repos/${ISSUES_REPO}/issues/${existing}`, token, { method: "PATCH", body: JSON.stringify({ body: withoutClearingMark(bodyOf(a.title)) }) });
+    } else if (v === "good" && existing && a.closeAfterTwoOk && !marked(a.title)) {
+      // The first ok read: marked, not closed (one subrequest, as a close).
+      const r = await gh(`/repos/${ISSUES_REPO}/issues/${existing}`, token, { method: "PATCH", body: JSON.stringify({ body: withClearingMark(bodyOf(a.title), now) }) });
+      if (r.ok) clearing.push(a.title);
     } else if (v === "good" && existing) {
       // One subrequest per close, not two: a Cloudflare invocation may make 50,
       // and a worst-case run closes every alarm at once. The close itself is
@@ -973,7 +1005,7 @@ export async function syncAlarms(env, { fetchStatus, sleep = (ms) => new Promise
       if (r.ok) closed.push(a.title);
     }
   }
-  return { opened, closed, bad, deferred };
+  return { opened, closed, bad, deferred, clearing };
 }
 
 // Production DOWN. The api check (GET /health) already failed twice 20 s apart

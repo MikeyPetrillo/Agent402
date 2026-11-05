@@ -43,27 +43,28 @@ case "$url" in
 esac
 `);
 await writeFile(path.join(dir, "gh"), `#!/usr/bin/env bash
+if [ "$1 $2" = "issue view" ]; then printf '%s' "$OPEN_BODY"; exit 0; fi
 if [ "$1 $2" = "issue list" ]; then
   for a in "$@"; do case "$a" in *"$OPEN_TITLE"*) [ -n "$OPEN_TITLE" ] && echo "$OPEN_NUM" && exit 0;; esac; done
   exit 0
 fi
-printf '%s\\x1f' "$@" >> "$GH_LOG"; printf '\\n' >> "$GH_LOG"
+printf '%s\\x1f' "$@" >> "$GH_LOG"; printf '\\x1e' >> "$GH_LOG"
 `);
 await chmod(path.join(dir, "curl"), 0o755);
 await chmod(path.join(dir, "gh"), 0o755);
 
-async function run({ gateway, op = null, token = "t", open = null, script = step.run }) {
+async function run({ gateway, op = null, token = "t", open = null, body = "", script = step.run }) {
   const gs = path.join(dir, "gs.json"), opf = path.join(dir, "op.json"), log = path.join(dir, "gh.log");
   await writeFile(gs, JSON.stringify(gateway));
   await writeFile(opf, JSON.stringify(op || {}));
   await writeFile(log, "");
   const r = spawnSync("bash", ["-e", "-c", script], {
     env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, PROD: "https://example.invalid", GITHUB_REPOSITORY: "o/r",
-      OP_TOKEN: token || "", GS_FILE: gs, OP_FILE: opf, GH_LOG: log, OPEN_TITLE: open || "", OPEN_NUM: "41" },
+      OP_TOKEN: token || "", GS_FILE: gs, OP_FILE: opf, GH_LOG: log, OPEN_TITLE: open || "", OPEN_NUM: "41", OPEN_BODY: body },
     encoding: "utf8",
   });
   assert.equal(r.status, 0, r.stderr);
-  const calls = (await readFile(log, "utf8")).split("\n").filter(Boolean).map((l) => l.split("\x1f").filter((x) => x !== ""));
+  const calls = (await readFile(log, "utf8")).split("\x1e").filter((l) => l.trim()).map((l) => l.split("\x1f").filter((x) => x !== ""));
   return { calls, out: r.stdout };
 }
 const created = (calls) => calls.filter((c) => c[0] === "issue" && c[1] === "create").map((c) => ({ title: c[c.indexOf("--title") + 1], body: c[c.indexOf("--body") + 1] }));
@@ -191,6 +192,79 @@ try {
     assert.equal(j({}), "quiet");
     assert.match(ALARMS.find((a) => a.title === CDN_TITLE).body({ gateway: { cdnOrigin: { status: "unauthenticated" } } }), /cdnOrigin\.status=unauthenticated/);
   });
+
+  // Listings failing to read across many origins (src/x402-index.js): its own
+  // step and title; widespread pages, ok closes, unknown and absent do
+  // neither, and the body names no origin or count.
+  const BL_TITLE = "brokenListings: seller listings are failing to read across many origins";
+  const blStep = steps.find((s) => String(s.name || "").startsWith("Broken listings check"));
+  await check("brokenListings: widespread opens one issue, ok closes it, unknown and absent do neither", async () => {
+    assert.ok(blStep, "heartbeat.yml has the broken listings step");
+    assert.match(blStep.run, /\.brokenListings\.status/);
+    assert.doesNotMatch(blStep.run, /curl[^\n]*\/__operator\//, "the step never reads the operator endpoint");
+    assert.equal(blStep.env?.OP_TOKEN, undefined, "no operator token in the step");
+    const { calls } = await run({ gateway: { brokenListings: { status: "widespread" } }, script: blStep.run });
+    const c = created(calls);
+    assert.deepEqual(c.map((x) => x.title), [BL_TITLE]);
+    assert.match(c[0].body, /brokenListings\.status=widespread/);
+    assert.match(c[0].body, /\/__operator\/perf\.json/);
+    assert.doesNotMatch(c[0].body.replace("last 15 minutes", ""), /https?:\/\/|\d/, "no origin or count in the body (the window is the one figure)");
+    let r = await run({ gateway: { brokenListings: { status: "widespread" } }, open: BL_TITLE, script: blStep.run });
+    assert.deepEqual(created(r.calls), [], "an open issue gets a comment, not a second issue");
+    assert.ok(r.calls.some((x) => x[0] === "issue" && x[1] === "comment" && x[2] === "41"));
+    for (const gw of [{ brokenListings: { status: "unknown" } }, {}]) {
+      r = await run({ gateway: gw, open: BL_TITLE, script: blStep.run });
+      assert.equal(closed(r.calls).length, 0, JSON.stringify(gw));
+      assert.deepEqual(created(r.calls), [], JSON.stringify(gw));
+    }
+    const { ALARMS, judge } = await import("../workers/status-probe/src/index.js");
+    const a = ALARMS.find((x) => x.title === BL_TITLE);
+    assert.ok(a, "the Worker carries the same title");
+    assert.equal(a.body({}), c[0].body, "the Worker's body is the step's body");
+    const j = (gw) => judge({ gateway: gw })[BL_TITLE];
+    assert.equal(j({ brokenListings: { status: "widespread" } }), "bad");
+    assert.equal(j({ brokenListings: { status: "ok" } }), "good");
+    assert.equal(j({ brokenListings: { status: "unknown" } }), "quiet");
+    assert.equal(j({}), "quiet");
+  });
+
+  // containedTurns and brokenListings close on the second consecutive ok
+  // read: their words live in memory, so a restart reads ok at once. The
+  // first ok read leaves a mark line in the issue body, a bad read removes
+  // it, an ok read that finds it closes.
+  const CT_TITLE = "containedTurns: a scheduled turn is throwing every minute";
+  const ctStep = steps.find((s) => String(s.name || "").startsWith("Contained turn check"));
+  const edited = (calls) => calls.filter((c) => c[0] === "issue" && c[1] === "edit").map((c) => c[c.indexOf("--body") + 1]);
+  for (const [field, badWord, title, st] of [["containedTurns", "repeating", CT_TITLE, ctStep], ["brokenListings", "widespread", BL_TITLE, blStep]]) {
+    await check(`${field}: closes only on the second ok read in a row; a bad read between starts the count again`, async () => {
+      assert.ok(st, `heartbeat.yml has the ${field} step`);
+      const ISSUE = `/api/gateway-status reports ${field}.status=${badWord}: details.`;
+      // First ok read: marked, not closed.
+      let r = await run({ gateway: { [field]: { status: "ok" } }, open: title, body: ISSUE, script: st.run });
+      assert.equal(closed(r.calls).length, 0, "one ok read does not close");
+      const marked = edited(r.calls);
+      assert.equal(marked.length, 1, "the first ok read marks the issue body");
+      assert.ok(marked[0].startsWith(ISSUE + "\n\nFirst ok read at "), JSON.stringify(marked[0]));
+      // Second ok read: closes.
+      r = await run({ gateway: { [field]: { status: "ok" } }, open: title, body: marked[0], script: st.run });
+      assert.equal(closed(r.calls).length, 1, "the second ok read in a row closes");
+      assert.deepEqual(edited(r.calls), []);
+      // ok, bad, ok: the bad read removes the mark, so the next ok only marks again.
+      r = await run({ gateway: { [field]: { status: badWord } }, open: title, body: marked[0], script: st.run });
+      assert.deepEqual(edited(r.calls), [ISSUE], "a bad read removes the mark line");
+      assert.equal(closed(r.calls).length, 0);
+      assert.deepEqual(created(r.calls), []);
+      r = await run({ gateway: { [field]: { status: badWord } }, open: title, body: ISSUE, script: st.run });
+      assert.deepEqual(edited(r.calls), [], "a bad read with no mark edits nothing");
+      // unknown neither marks nor closes nor unmarks.
+      for (const b of [ISSUE, marked[0]]) {
+        r = await run({ gateway: { [field]: { status: "unknown" } }, open: title, body: b, script: st.run });
+        assert.equal(closed(r.calls).length + edited(r.calls).length + created(r.calls).length, 0);
+      }
+      const { CLEARING_MARK } = await import("../workers/status-probe/src/index.js");
+      assert.ok(st.run.includes(`MARK="${CLEARING_MARK}"`), "the step's mark is the status Worker's, so either observer's ok read counts");
+    });
+  }
 
   await check("the status Worker maps the same three words under the same titles", async () => {
     const { ALARMS, judge } = await import("../workers/status-probe/src/index.js");

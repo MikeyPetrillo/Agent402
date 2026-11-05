@@ -61,6 +61,17 @@ export function capSellerEntry(v, cap = SELLER_TOOL_CAP) {
   return v;
 }
 
+/** An earlier entry as the base of one whose tool list was freshly read (a
+ *  crawl or the registry fallback spreading the entry it replaces): without
+ *  `toolsTotal` and `toolsCapped`, so the cap reads the total from the new
+ *  list. Only an entry re-read as stored (a warm start, a pull) keeps its pair. */
+export function freshListBase(prev) {
+  if (!prev || typeof prev !== "object") return {};
+  if (!("toolsTotal" in prev) && !("toolsCapped" in prev)) return prev;
+  const { toolsTotal: _t, toolsCapped: _c, ...rest } = prev;
+  return rest;
+}
+
 /** The count a seller listed: `toolsTotal` on a capped entry, else the tools held (or `fallback`, the figure a surface shows when it holds none). */
 export function sellerToolsTotal(v, fallback = 0) {
   const held = Array.isArray(v?.tools) ? v.tools.length : 0;

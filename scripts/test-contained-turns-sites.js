@@ -268,5 +268,44 @@ ok(ALLOW.every((a) => typeof a.reason === "string" && a.reason.length >= 12), "e
   ok(word() === "ok", "...and lapses to ok two hours after its last run if it is never scheduled again");
   _resetContainedTurnsForTest();
 }
+
+// --- the brokenListings word: distinct origins in a rolling window ------------
+// ok / widespread on /api/gateway-status (src/x402-index.js): widespread only
+// when the origins whose listings broke inside the window reach the floor AND
+// the share of the indexed origins. One seller's bad data never trips it.
+{
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = mkdtempSync(join(tmpdir(), "a402-broken-word-"));
+  process.env.X402_INDEX_CRAWL = "off";
+  process.env.INDEX_CACHE_FILE = join(dir, "cache.json");
+  process.env.REMOVED_ORIGINS_FILE = join(dir, "removed-origins.json");
+  const x = await import("../src/x402-index.js");
+  const w = x.brokenListingsWord;
+  ok(w(19, 100) === "ok" && w(20, 100) === "widespread", "the floor: 19 origins of 100 read ok, 20 read widespread");
+  ok(w(25, 1000) === "ok" && w(50, 1000) === "widespread", "the share: 25 of 1,000 indexed (2.5%) read ok, 50 (5%) read widespread");
+  ok(w(1, 1) === "ok" && w(0, 0) === "ok", "one broken origin is never widespread, however few are indexed");
+  const seed = Array.from({ length: 200 }, (_, i) => [`https://seller-${i}.example`, { manifest: { name: `s${i}` }, tools: [], fetchedAt: 1, error: null, history: [1] }]);
+  x.__testSeedCache(seed);
+  x._resetBrokenListingsForTest();
+  const t0 = Date.UTC(2026, 10, 5, 12, 0, 0);
+  const word = (now) => x.brokenListingsStatus({ now }).status;
+  for (let i = 0; i < 500; i++) x._noteBrokenListingForTest("https://one-bad-seller.example", t0 + i);
+  ok(word(t0 + 1000) === "ok", "one seller whose rows throw 500 times is one origin: ok");
+  for (let i = 0; i < 18; i++) x._noteBrokenListingForTest(`https://seller-${i}.example`, t0 + 2000);
+  ok(word(t0 + 3000) === "ok" && x.brokenListingsStatus({ full: true, now: t0 + 3000 }).origins === 19, "19 distinct origins of 200 indexed: ok");
+  x._noteBrokenListingForTest("https://seller-18.example", t0 + 4000);
+  ok(word(t0 + 5000) === "widespread", "the 20th distinct origin (10% of 200 indexed): widespread");
+  const full = x.brokenListingsStatus({ full: true, now: t0 + 5000 });
+  ok(full.origins === 20 && full.indexedOrigins >= 200 && full.windowMinutes === 15 && full.widespreadMin === 20 && full.widespreadShare === 0.05, `the operator view carries the counts and the rule (${JSON.stringify(full)})`);
+  ok(Object.keys(x.brokenListingsStatus({ now: t0 + 5000 })).join() === "status", "the public view is the word alone");
+  ok(word(t0 + 15 * 60_000) === "widespread", "...and it holds inside the window");
+  ok(word(t0 + 4000 + 15 * 60_000 + 1) === "ok", "...and lapses to ok once the window passes the breaks");
+  x._noteBrokenListingForTest("https://one-bad-seller.example", t0 + 20 * 60_000);
+  ok(word(t0 + 20 * 60_000) === "ok", "a seller breaking again later is one origin in the new window");
+  x._resetBrokenListingsForTest();
+  rmSync(dir, { recursive: true, force: true });
+}
 console.log(`\ntest-contained-turns-sites: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

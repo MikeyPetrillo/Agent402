@@ -41,6 +41,9 @@ const dir = mkdtempSync(join(tmpdir(), "a402-contain-"));
 const GOOD = "https://good-vision.example";
 const POISON = "https://poison-vision.example";
 const POISON2 = "https://poison-late.example";
+const STATICS = "https://poison-statics.example";
+const STATICS2 = "https://poison-statics-late.example";
+const WIDE = 40; // sellers planted while every row's statics throw
 const TOKEN = "crash-containment-operator-token-0123456789";
 
 // The seller entries, built inside the child (an accessor cannot cross a
@@ -54,6 +57,12 @@ export function poisonTool(origin) {
   return t;
 }
 export const goodEntry = (origin) => entry(origin, [tool(origin)]);
+// A row whose decoration reads fine (the spread copies the price object as
+// is) and whose statics throw: priceRank reads the price as text.
+export function staticsPoisonTool(origin) {
+  return tool(origin, { slug: "ocr-statics", price: { toString() { throw new TypeError("poison-statics: a price that cannot be read as text"); } } });
+}
+export const staticsPoisonEntry = (origin) => entry(origin, [tool(origin, { slug: "ocr-statics-fine" }), staticsPoisonTool(origin)]);
 export const poisonEntry = (origin) => entry(origin, [tool(origin, { slug: "ocr-fine" }), poisonTool(origin)]);
 `;
 writeFileSync(join(dir, "entries.mjs"), ENTRIES_JS);
@@ -104,6 +113,45 @@ if (isMainThread && typeof process.send === "function") {
         let r = null, err = null;
         try { r = x.routeQuery({ query: "ocr a thing from an image", top: 50, include: "external", ...ctx }); } catch (e) { err = String(e && e.message || e); }
         report(m.id, { pendingBefore, err, sellers: (r && r.results || []).map((t) => t.seller) });
+      } else if (m.cmd === "shadow-finish-fault") {
+        // The rebuild's finish throws once: the build is abandoned and the
+        // shadow cleared, so the next rebuild runs and swaps in.
+        const before = x._routeIndexStatsForTest().builds;
+        x._setShadowFinishFaultForTest(new Error("planted shadow finish fault"));
+        x._routeIndexStartShadowForTest();
+        let turns = 0;
+        while (x._routeIndexStatsForTest().rebuilding && turns < 20000) { turns++; await new Promise((r) => setImmediate(r)); }
+        const afterFault = x._routeIndexStatsForTest();
+        const containedAfterFault = ct.containedTurnsSummary().byName["route-index-shadow"] || null;
+        x._routeIndexStartShadowForTest();
+        turns = 0;
+        while (x._routeIndexStatsForTest().rebuilding && turns < 20000) { turns++; await new Promise((r) => setImmediate(r)); }
+        report(m.id, { before, afterFault, containedAfterFault, afterRetry: x._routeIndexStatsForTest() });
+      } else if (m.cmd === "statics-poison") {
+        // A row whose statics throw inside computeToolStatics (not in
+        // decoration): the drain indexes the entry's other row and skips it.
+        const skippedBefore = x.brokenListingsSummary().toolsSkipped;
+        cache.set(${JSON.stringify(STATICS)}, E.staticsPoisonEntry(${JSON.stringify(STATICS)}));
+        const after = await settled();
+        const skippedAfterDrain = x.brokenListingsSummary().toolsSkipped;
+        // A second one queried in the same turn it is planted: the query
+        // meets it in the pending set and skips its broken row there.
+        cache.set(${JSON.stringify(STATICS2)}, E.staticsPoisonEntry(${JSON.stringify(STATICS2)}));
+        const pendingBefore = x._routeIndexStatsForTest().pending;
+        let r = null, err = null;
+        try { r = x.routeQuery({ query: "ocr a thing from an image", top: 50, include: "external", ...ctx }); } catch (e) { err = String(e && e.message || e); }
+        report(m.id, { after, skippedBefore, skippedAfterDrain, pendingBefore, err, results: (r && r.results || []).map((t) => [t.seller, t.slug]) });
+      } else if (m.cmd === "widespread") {
+        // A code bug that breaks every listing: every row's statics throw.
+        x._setToolStaticsFaultForTest(new TypeError("planted statics fault for every row"));
+        for (let i = 0; i < ${WIDE}; i++) cache.set("https://wide-" + i + ".example", E.goodEntry("https://wide-" + i + ".example"));
+        const after = await settled();
+        let r = null, err = null;
+        try { r = x.routeQuery({ query: "ocr a thing from an image", top: 100, include: "external", ...ctx }); } catch (e) { err = String(e && e.message || e); }
+        report(m.id, { after, err, sellers: (r && r.results || []).map((t) => t.seller), indexed: cache.size });
+      } else if (m.cmd === "clear-fault") {
+        x._setToolStaticsFaultForTest(null);
+        report(m.id, {});
       } else if (m.cmd === "fault") {
         x._setRouteQueryFaultForTest(new Error("planted handler fault"));
         report(m.id, {});
@@ -167,6 +215,15 @@ try {
   ok(shadow.stats.indexedTools >= 1, `the rebuilt index still holds the well-formed seller (${shadow.stats.indexedTools} tools)`);
   ok(shadow.contained.total === 0, "the rebuild skipped the dropped listing without a throw");
 
+  // A throw in the rebuild's finish (after its slices) abandons that build
+  // and clears the shadow, so a later rebuild still starts and swaps in.
+  const sf = await ask("shadow-finish-fault");
+  ok(!sf.afterFault.rebuilding && sf.afterFault.builds === sf.before, `a rebuild whose finish throws is abandoned and the shadow cleared (rebuilding ${sf.afterFault.rebuilding}, builds ${sf.before} -> ${sf.afterFault.builds})`);
+  ok(sf.containedAfterFault?.count >= 1 && /planted shadow finish fault/.test(sf.containedAfterFault?.lastMessage || ""), `...the throw counted under route-index-shadow (${JSON.stringify(sf.containedAfterFault)})`);
+  ok(!sf.afterRetry.rebuilding && sf.afterRetry.builds === sf.before + 1 && sf.afterRetry.indexedTools >= 1, `the next rebuild runs and swaps in (builds ${sf.afterRetry.builds}, ${sf.afterRetry.indexedTools} tools)`);
+  ok(proc.exitCode === null && (await alive()), "the process is alive after the rebuild's finish threw");
+  const ctBase = sf.contained.total; // the planted finish fault; nothing after it may add to the count
+
   // Route queries over HTTP answer with the other seller.
   const route = await fetch(`${base}/api/route?q=${encodeURIComponent("ocr a thing from an image")}&include=external&top=20`);
   const routeBody = await route.json().catch(() => null);
@@ -184,6 +241,22 @@ try {
   ok(late.sellers.includes(GOOD) && !late.sellers.includes(POISON2), `that query ranks the well-formed seller and nothing from the pending poison (${late.sellers.join(", ")})`);
   ok(late.broken.byOrigin[POISON2]?.count >= 1, `the late poison is counted by origin too (${late.broken.byOrigin[POISON2]?.count})`);
   ok(proc.exitCode === null && (await alive()), "the process is alive after the query met the pending poison");
+
+  // A row whose statics throw inside computeToolStatics itself (decoration
+  // reads it fine): the sentinel keeps it out of the index and the query,
+  // the entry's other row is indexed and routed, and the poison is counted.
+  const st = await ask("statics-poison");
+  ok(st.after && !st.after.pending && !st.after.partial && st.contained.total === ctBase, `the drain finished over the statics poison with no contained turn (pending ${st.after?.pending}, contained ${st.contained.total - ctBase})`);
+  ok(!st.err && st.results.some(([s]) => s === GOOD), `the query answers and finds the well-formed seller (${st.err || st.results.map(([s, g]) => `${s}#${g}`).join(", ")})`);
+  ok(st.results.some(([s, g]) => s === STATICS && g === "ocr-statics-fine") && !st.results.some(([, g]) => g === "ocr-statics"), "the statics poison's well-formed sibling row is routed; the poison row is not (the entry was not dropped whole)");
+  ok(st.broken.byOrigin[STATICS]?.count >= 1 && /poison-statics/.test(st.broken.byOrigin[STATICS]?.lastMessage || ""), `the statics poison is counted by origin with its message (${JSON.stringify(st.broken.byOrigin[STATICS])})`);
+  ok(st.skippedAfterDrain > st.skippedBefore, `the broken row was skipped by indexing (${st.skippedBefore} -> ${st.skippedAfterDrain})`);
+  ok(st.pendingBefore >= 1 && st.broken.toolsSkipped > st.skippedAfterDrain && st.results.some(([s, g]) => s === STATICS2 && g === "ocr-statics-fine") && !st.results.some(([s, g]) => s === STATICS2 && g === "ocr-statics"),
+    `a statics poison still pending is skipped by the query itself, its sibling row ranked (pending ${st.pendingBefore}, skipped ${st.skippedAfterDrain} -> ${st.broken.toolsSkipped})`);
+  ok(st.broken.byOrigin[STATICS2]?.count >= 1, `the pending statics poison is counted by origin (${st.broken.byOrigin[STATICS2]?.count})`);
+  ok(proc.exitCode === null && (await alive()), "the process is alive after the statics poison");
+  const quiet = await fetch(`${base}/api/gateway-status`).then((r) => r.json()).catch(() => null);
+  ok(quiet?.brokenListings?.status === "ok" && Object.keys(quiet.brokenListings).join() === "status", `four poison sellers leave brokenListings ok, word only (${JSON.stringify(quiet?.brokenListings)})`);
 
   // A handler that rejects answers 500 for that request only.
   await ask("fault");
@@ -204,6 +277,19 @@ try {
   const status = await fetch(`${base}/api/gateway-status`);
   const statusText = await status.text();
   ok(status.status === 200 && !/\d{3,}/.test(statusText.replace(/"[a-zA-Z]+":\s*"[^"]*"/g, "")), "/api/gateway-status still carries words only");
+
+  // A code bug that breaks every listing: statics forced to throw for every
+  // row, then fresh sellers planted. External routing empties and the public
+  // word reads widespread (each throw is caught per row, so no turn sees it).
+  const wide = await ask("widespread");
+  ok(!wide.err && !wide.sellers.some((s) => /wide-/.test(s)), `with every row's statics throwing, no planted seller routes (${wide.err || wide.sellers.length + " results"})`);
+  ok(Object.keys(wide.broken.byOrigin).filter((k) => /wide-/.test(k)).length === WIDE && wide.contained.total === ctBase, `all ${WIDE} planted origins are counted broken, and no contained turn saw it (${wide.contained.total - ctBase})`);
+  const loud = await fetch(`${base}/api/gateway-status`).then((r) => r.json()).catch(() => null);
+  ok(loud?.brokenListings?.status === "widespread" && Object.keys(loud.brokenListings).join() === "status", `brokenListings reads widespread, word only (${JSON.stringify(loud?.brokenListings)}; ${wide.indexed} origins indexed)`);
+  const loudOp = await fetch(`${base}/api/gateway-status`, { headers: { "X-Operator-Token": TOKEN } }).then((r) => r.json()).catch(() => null);
+  ok(loudOp?.brokenListings?.status === "widespread" && loudOp.brokenListings.origins >= WIDE, `the operator view carries the window's origin count (${JSON.stringify(loudOp?.brokenListings)})`);
+  await ask("clear-fault");
+  ok(proc.exitCode === null && (await alive()), "the process is alive with every listing broken");
 } catch (e) {
   ok(false, `section 1 threw: ${e?.stack || e}`);
 } finally {

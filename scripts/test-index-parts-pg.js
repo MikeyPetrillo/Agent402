@@ -318,6 +318,22 @@ async function main() {
     const saveD = await D.ask("save");
     ok(saveD.saved === true && saveD.stats.written === 0 && saveD.stats.skipped === 0, `D's save rewrites no part (${saveD.stats.written} written)`);
     ok((await sdb.records.count(PARTS_COLLECTION)) === 2 * CAP_PARTS, `the parts collection holds the ${2 * CAP_PARTS} named parts and nothing else`);
+
+    // One seller's parted save failing (a test hook throws for that origin)
+    // leaves its row as it was and unrecorded; every other seller's save in
+    // the same batch goes on, and the next save retries the failed one.
+    const FAULTY = "https://seller-faulty.example", OKAY = "https://seller-okay.example", SMALL = "https://seller-small-after.example";
+    A.__testSeedCache([[FAULTY, sellerEntry("faulty", PART_TOOLS + 50, 6_000_000)], [OKAY, sellerEntry("okay", PART_TOOLS + 50, 6_000_001)], [SMALL, sellerEntry("smallafter", 3, 6_000_002)]]);
+    A.__testSetPartedWriteFault(FAULTY);
+    const savedWithFault = await A.persistIndexCacheAsync();
+    const headOkay = await sdb.records.get(COLLECTION, OKAY);
+    ok(savedWithFault === true && headOkay?.parts?.tools === PART_TOOLS + 50, `the batch saved the other large seller in parts beside the failed one (${JSON.stringify(headOkay?.parts && { tools: headOkay.parts.tools })})`);
+    ok((await sdb.records.get(COLLECTION, SMALL))?.fetchedAt === 6_000_002, "...and the one-row seller after it");
+    ok((await sdb.records.get(COLLECTION, FAULTY)) == null && (await partRows(FAULTY)).length === 0, "the failed seller's row is left as it was (absent here) with no part written");
+    A.__testSetPartedWriteFault(null);
+    const retried = await A.persistIndexCacheAsync();
+    const headFaulty = await sdb.records.get(COLLECTION, FAULTY);
+    ok(retried === true && headFaulty?.parts?.tools === PART_TOOLS + 50 && digest(await A._storedEntryForTest(FAULTY)) === digest(projected(FAULTY)), "the next save retries the failed seller (it was not recorded as saved) and stores it whole");
   } catch (e) {
     fail++; console.error("FAIL - threw:", e?.stack || e);
   } finally {

@@ -35,7 +35,7 @@ import { shared, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.j
 import { createListingsStore, listingsStoreEnabled } from "./index-listings-pg.js";
 import { trackStoreReady, leased, stateDbEnabled, stateQuery, stateDbSchema, records, importOnce, pgJsonTextMayChange, largeRowTimeoutMs, isStatementTimeout, withStateTx } from "./state-db.js";
 import { PARTS_COLLECTION, PARTS_ORPHAN_GRACE_MS, isParted, isPartedHeader, headerHashes, partId, splitEntry, assembleEntry } from "./index-parts.js";
-import { SELLER_TOOL_CAP, capSellerEntry, sellerToolsTotal, toolCapLegend } from "./seller-tool-cap.js";
+import { SELLER_TOOL_CAP, capSellerEntry, sellerToolsTotal, toolCapLegend, freshListBase } from "./seller-tool-cap.js";
 import { retryingLoad } from "./store-retry.js";
 
 // The last crawl's probe examples per origin (src/probe-example.js), memory
@@ -2186,7 +2186,8 @@ async function discoverOneSource(source, selfOrigin) {
         const existing = cache.get(o);
         if (!existing || existing.error || existing.source === "bazaar-fallback") {
           cache.set(o, {
-            ...(existing || {}),
+            // A fresh tool list: the total is read from it, not the old entry.
+            ...freshListBase(existing),
             manifest: existing?.manifest || synthManifestFromBazaar(o, arr),
             tools: arr,
             fetchedAt: Date.now(),
@@ -5970,7 +5971,9 @@ async function crawlSeller(originUrl, { deadlineAt = 0 } = {}) {
       // synthesized one is rebuilt so a newly appeared openapi title wins.
       const keepManifest = prev?.manifest && !prev.manifest.synthesized ? prev.manifest : null;
       cache.set(originUrl, {
-        ...(prev || {}),
+        // A fresh tool list: the total is read from it, not the old entry
+        // (a seller that shrank from 77,000 tools to 6,000 reads 6,000).
+        ...freshListBase(prev),
         manifest:
           keepManifest ||
           (openapi
@@ -7752,14 +7755,20 @@ async function rowBodyBytes(line, from, hash, tick = async () => {}) {
 const partStats = { written: 0, skipped: 0, restored: 0, assembled: 0, retries: 0, unreadable: 0, swept: 0, sweeps: 0 };
 /** Test hook: counts of part rows written, skipped and restored, entries assembled, header re-reads, failed assemblies and sweeps. */
 export function __testPartStats() { return { ...partStats }; }
+// Test hook: a parted save of this origin throws before it writes anything.
+let partedWriteFaultForTest = null;
+export function __testSetPartedWriteFault(origin) { partedWriteFaultForTest = origin || null; }
 async function writePartedOrigin(origin, entry, hash, tick) {
+  if (partedWriteFaultForTest && partedWriteFaultForTest === origin) throw new Error(`planted parted write fault for ${origin}`);
   const { header, parts } = await splitEntry(origin, entry, { tick });
   const have = await records.existing(PARTS_COLLECTION, parts.map((p) => p.id));
   for (const p of parts) {
     if (have.has(p.id)) { partStats.skipped++; continue; }
+    // Each part is a statement of a few MB: the size-scaled limit, as the
+    // one-row upsert of a large entry has.
     await stateQuery(
       `INSERT INTO ${recordsTable()} (collection, id, body) VALUES ($1, $2, $3::jsonb) ON CONFLICT (collection, id) DO NOTHING`,
-      [PARTS_COLLECTION, p.id, p.text], { idempotent: true },
+      [PARTS_COLLECTION, p.id, p.text], { idempotent: true, timeoutMs: largeRowTimeoutMs(p.text.length) },
     );
     partStats.written++;
     await new Promise((r) => setImmediate(r));
@@ -7771,7 +7780,11 @@ async function writePartedOrigin(origin, entry, hash, tick) {
   // stamps each named part now, so no sweep reads it as old; a sweep already
   // holding one of the rows waits for this commit and re-reads its condition,
   // and the header then names it. A part a sweep took first is written again
-  // here (restored), so the header never names a row that is not there.
+  // here (restored), so the header never names a row that is not there. The
+  // transaction's statement limit is scaled to its largest statement (a
+  // restored part or the header).
+  const headerBody = bodyWithHash(JSON.stringify(header), hash);
+  const largest = parts.reduce((m, p) => Math.max(m, p.text.length), headerBody.length);
   await withStateTx(async (client) => {
     const ids = [...new Set(parts.map((p) => p.id))];
     const touched = new Set((await client.query(
@@ -7788,9 +7801,9 @@ async function writePartedOrigin(origin, entry, hash, tick) {
       `INSERT INTO ${recordsTable()} AS r (collection, id, body) VALUES ($1, $2, $3::jsonb)
        ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()
        WHERE ${NEWER_OR_SAME_SQL("r.body", "EXCLUDED.body")}`,
-      [INDEX_RECORDS, origin, bodyWithHash(JSON.stringify(header), hash)],
+      [INDEX_RECORDS, origin, headerBody],
     );
-  });
+  }, { timeoutMs: largeRowTimeoutMs(largest) });
   return parts.length;
 }
 /** Delete the part rows no header names (the seller changed, shrank to one
@@ -7880,11 +7893,21 @@ async function persistIndexCacheToStateDb(entries, lines, hashes = []) {
     }
     // A changed entry too large for one row goes as a header and parts (only
     // the parts the table lacks are sent); the batches below skip it.
-    let parted = 0, partRows = 0;
+    // One seller's parted save that fails leaves its row as it was and its
+    // hash unrecorded, so the next save retries it; every other seller's save
+    // goes on.
+    let parted = 0, partRows = 0, partedFailed = 0;
     for (const [origin, h] of changed) {
       const entry = entries[indexOf.get(origin)][1];
       if (!isParted(entry)) continue;
-      partRows += await writePartedOrigin(origin, entry, h, tick);
+      try {
+        partRows += await writePartedOrigin(origin, entry, h, tick);
+      } catch (e) {
+        partedFailed++;
+        console.warn(`[x402-index] state database: parted save of ${origin} failed, retried on the next save: ${String(e?.message || e).slice(0, 120)}`);
+        await new Promise((r) => setImmediate(r));
+        continue;
+      }
       pgOriginHashes.set(origin, h); pgRowHashes.set(origin, h);
       written++; parted++;
       await new Promise((r) => setImmediate(r));
@@ -7934,7 +7957,8 @@ async function persistIndexCacheToStateDb(entries, lines, hashes = []) {
     // row or left) go once they are older than the grace.
     const swept = await sweepOrphanParts();
     console.log(`[x402-index] state database: ${written} origin row(s) written, ${deleted} deleted, ${entries.length - written} unchanged, in ${Math.round(performance.now() - t0)}ms` +
-      (parted || swept ? ` (${parted} in parts, ${partRows} part row(s) named, ${swept} orphan part(s) swept)` : ""));
+      (parted || swept ? ` (${parted} in parts, ${partRows} part row(s) named, ${swept} orphan part(s) swept)` : "") +
+      (partedFailed ? `, ${partedFailed} parted save(s) failed and left for the next save` : ""));
     return true;
   } catch (e) {
     console.warn(`[x402-index] state database persist failed after ${written} row(s): ${String(e?.message || e).slice(0, 120)}`);
@@ -9462,9 +9486,47 @@ const brokenEntries = new WeakSet(); // entries whose indexing threw; skipped un
 // Read inside a catch, so they never throw themselves.
 const entryOriginOf = (v) => { try { const s = Array.isArray(v?.tools) ? v.tools[0]?.seller : null; return typeof s === "string" && s ? s : null; } catch { return null; } };
 const sellerOfTool = (t) => { try { return typeof t?.seller === "string" ? t.seller : null; } catch { return null; } };
-function noteBrokenListing(origin, err) {
+// The public word (brokenListings on /api/gateway-status): the distinct
+// origins whose listings broke inside a rolling window, against the origins
+// the index holds. One seller's bad data is one origin however many of its
+// rows throw, so it never trips the word; a code bug that breaks every
+// listing (statics or decoration throwing for well-formed rows) breaks many
+// origins at once and empties external routing, and reads `widespread`.
+const BROKEN_WINDOW_MS = (() => { const n = Number(process.env.BROKEN_LISTINGS_WINDOW_MS); return Number.isFinite(n) && n > 0 ? n : 15 * 60_000; })();
+const BROKEN_WIDESPREAD_MIN = (() => { const n = Number(process.env.BROKEN_LISTINGS_WIDESPREAD_MIN); return Number.isFinite(n) && n >= 2 ? Math.floor(n) : 20; })();
+const BROKEN_WIDESPREAD_SHARE = (() => { const n = Number(process.env.BROKEN_LISTINGS_WIDESPREAD_SHARE); return Number.isFinite(n) && n > 0 && n <= 1 ? n : 0.05; })();
+const BROKEN_RECENT_MAX = 20_000;
+const brokenRecent = new Map(); // origin -> last broken at, oldest first
+/** The window rule: `widespread` when the distinct origins whose listings
+ *  broke inside the window reach `min` AND `share` of the indexed origins. */
+export function brokenListingsWord(origins, indexed, { min = BROKEN_WIDESPREAD_MIN, share = BROKEN_WIDESPREAD_SHARE } = {}) {
+  const n = Number(origins) || 0;
+  return n >= min && n >= (Number(indexed) || 0) * share ? "widespread" : "ok";
+}
+function noteBrokenRecent(key, now) {
+  brokenRecent.delete(key); // re-inserted last, so the map stays ordered by time
+  brokenRecent.set(key, now);
+  if (brokenRecent.size > BROKEN_RECENT_MAX) brokenRecent.delete(brokenRecent.keys().next().value);
+}
+function pruneBrokenRecent(now) {
+  for (const [k, at] of brokenRecent) { if (now - at <= BROKEN_WINDOW_MS) break; brokenRecent.delete(k); }
+}
+/** brokenListings on /api/gateway-status: ok / widespread publicly; the
+ *  operator view adds the window's origin count, the indexed origins and the rule. */
+export function brokenListingsStatus({ full = false, now = Date.now() } = {}) {
+  pruneBrokenRecent(now);
+  const origins = brokenRecent.size, indexed = cache.size;
+  const status = brokenListingsWord(origins, indexed);
+  return full ? { status, origins, indexedOrigins: indexed, windowMinutes: Math.round(BROKEN_WINDOW_MS / 60_000), widespreadMin: BROKEN_WIDESPREAD_MIN, widespreadShare: BROKEN_WIDESPREAD_SHARE } : { status };
+}
+/** Test hook: note a broken listing for `origin` at `now` (the window's clock). */
+export function _noteBrokenListingForTest(origin, now = Date.now()) { noteBrokenListing(origin, new Error("test"), now); }
+// Rows skipped because their statics threw (the st.broken checks), counted on the operator summary.
+let brokenToolsSkipped = 0;
+function noteBrokenListing(origin, err, now = Date.now()) {
   const key = typeof origin === "string" && origin ? origin.slice(0, 200) : "unknown";
   brokenListingsTotal++;
+  noteBrokenRecent(key, now);
   let row = brokenListings.get(key);
   if (!row) {
     if (brokenListings.size >= BROKEN_LISTINGS_MAX) { brokenListingsOverflow++; return; }
@@ -9472,7 +9534,7 @@ function noteBrokenListing(origin, err) {
     brokenListings.set(key, row);
   }
   row.count++;
-  row.lastAt = Date.now();
+  row.lastAt = now;
   row.lastMessage = String(err instanceof Error ? err.message : err ?? "").replace(/\s+/g, " ").slice(0, 160);
 }
 // An entry whose indexing threw: remembered, counted, never retried as this object.
@@ -9485,9 +9547,9 @@ const isBrokenEntry = (v) => brokenEntries.has(v);
 export function brokenListingsSummary() {
   const byOrigin = {};
   for (const [k, r] of brokenListings) byOrigin[k] = { count: r.count, lastAt: new Date(r.lastAt).toISOString(), lastMessage: r.lastMessage };
-  return { total: brokenListingsTotal, origins: brokenListings.size, overflow: brokenListingsOverflow, byOrigin };
+  return { total: brokenListingsTotal, origins: brokenListings.size, overflow: brokenListingsOverflow, toolsSkipped: brokenToolsSkipped, status: brokenListingsStatus().status, byOrigin };
 }
-export function _resetBrokenListingsForTest() { brokenListings.clear(); brokenListingsTotal = 0; brokenListingsOverflow = 0; }
+export function _resetBrokenListingsForTest() { brokenListings.clear(); brokenRecent.clear(); brokenListingsTotal = 0; brokenListingsOverflow = 0; brokenToolsSkipped = 0; }
 const BROKEN_STATICS = Object.freeze({ broken: true, slug: "", name: "", hay: "", injected: true, excluded: true, priceRank: Infinity, aliases: NO_ALIASES, nameSlug: null, names: Object.freeze([]), nameToks: Object.freeze([]) });
 function toolStatics(t) {
   let st = t[TOOL_STATICS] || toolStaticsMemo.get(t);
@@ -9497,7 +9559,12 @@ function toolStatics(t) {
   if (!setHidden(t, TOOL_STATICS, st)) toolStaticsMemo.set(t, st);
   return st;
 }
+// Test hook: computeToolStatics throws this for every row while set (a code
+// bug that breaks every listing, scripts/test-crash-containment.js).
+let toolStaticsFaultForTest = null;
+export function _setToolStaticsFaultForTest(err) { toolStaticsFaultForTest = err || null; }
 function computeToolStatics(t) {
+  if (toolStaticsFaultForTest) throw toolStaticsFaultForTest;
   let st;
   const name = sellerText(t.name), slug = sellerText(t.slug);
   const tags = Array.isArray(t.tags) ? t.tags.map(sellerText) : [];
@@ -9723,7 +9790,7 @@ function routeIndexAddEntry(origin, v, target = routeIdx, from = 0, until = Infi
     if (pos > from && (pos & 63) === 0 && until !== Infinity && performance.now() >= until) return pos;
     const t = pool[pos];
     const st = toolStatics(t);
-    if (st.broken) continue; // its statics threw: never posted, never scored
+    if (st.broken) { brokenToolsSkipped++; continue; } // its statics threw: never posted, never scored
     // The home record is a property of the tool (its entry and position in
     // that entry's pool), the same whichever shard indexes it.
     t[TOOL_HOME] ? Object.assign(t[TOOL_HOME], { origin, v, pos }) : setHidden(t, TOOL_HOME, { origin, v, pos });
@@ -9763,6 +9830,9 @@ const ROUTE_INDEX_SLICE_MS = 12;
 // ~12 ms between event-loop turns; queries keep reading the current index
 // (its stale postings are filtered by liveness, as always) until the shadow
 // is complete and swapped in.
+// Test hook: the next background rebuild's finish throws this once.
+let shadowFinishFaultForTest = null;
+export function _setShadowFinishFaultForTest(err) { shadowFinishFaultForTest = err || null; }
 function routeIndexStartShadow() {
   if (routeIdx.shadow) return;
   const shadow = { ...newRouteIndexShard(), entries: [...cache].filter(([, v]) => v && typeof v === "object"), i: 0, late: [], cur: null };
@@ -9795,15 +9865,24 @@ function routeIndexStartShadow() {
       }
     }
     if (shadow.cur || shadow.i < shadow.entries.length) { setImmediate(step); return; }
-    // Entries the current index took from `pending` while the shadow was
-    // being filled were set after its snapshot: carry the live ones over.
-    for (const [origin, v] of shadow.late) {
-      if (cache.get(origin) !== v || shadow.indexed.has(v) || isBrokenEntry(v)) continue;
-      try { routeIndexAddEntry(origin, v, shadow); } catch (e) { routeIndexEntryBroken(origin, v, e); }
-    }
+    // The finish. A throw here abandons this build (the live index keeps
+    // answering) and clears routeIdx.shadow, which gates every later rebuild:
+    // left set, no rebuild would ever start again. contained() counts it.
     let stale = 0;
-    for (const [origin, v] of [...shadow.entries, ...shadow.late]) {
-      if (shadow.indexed.has(v) && cache.get(origin) !== v) { stale += (remotePoolMemo.get(v) || []).length; shadow.indexed.delete(v); }
+    try {
+      if (shadowFinishFaultForTest) { const e = shadowFinishFaultForTest; shadowFinishFaultForTest = null; throw e; }
+      // Entries the current index took from `pending` while the shadow was
+      // being filled were set after its snapshot: carry the live ones over.
+      for (const [origin, v] of shadow.late) {
+        if (cache.get(origin) !== v || shadow.indexed.has(v) || isBrokenEntry(v)) continue;
+        try { routeIndexAddEntry(origin, v, shadow); } catch (e) { routeIndexEntryBroken(origin, v, e); }
+      }
+      for (const [origin, v] of [...shadow.entries, ...shadow.late]) {
+        if (shadow.indexed.has(v) && cache.get(origin) !== v) { stale += (remotePoolMemo.get(v) || []).length; shadow.indexed.delete(v); }
+      }
+    } catch (e) {
+      if (routeIdx.shadow === shadow) routeIdx.shadow = null;
+      throw e;
     }
     routeIdx.postings = shadow.postings;
     routeIdx.indexed = shadow.indexed;
@@ -10188,7 +10267,7 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
   const scoreRow = (t) => {
     if (!netOk(t)) return;
     const st = toolStatics(t);
-    if (st.broken) return; // its statics threw: never scored
+    if (st.broken) { brokenToolsSkipped++; return; } // its statics threw: never scored
     if (st.injected) return;
     const { name, hay, names, nameToks } = st;
     let score = 0, mSlug = 0, mName = 0, mText = 0;
@@ -10295,7 +10374,7 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
     for (let k = 0; k < nTerms; k++) if (selecting[k]) selectedBy.push(shortTerm[k] ? ((tok) => tok === terms[k]) : ((tok) => tok.includes(terms[k])));
     const isCandidate = (t) => {
       const st = toolStatics(t);
-      if (st.broken) return false;
+      if (st.broken) { brokenToolsSkipped++; return false; }
       const toks = new Set(splitTokens(st.hay));
       for (const nt of st.nameToks) for (const tok of nt) toks.add(tok);
       for (const tok of toks) for (const sel of selectedBy) if (sel(tok)) return true;
