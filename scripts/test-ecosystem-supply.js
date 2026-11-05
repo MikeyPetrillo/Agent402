@@ -4,6 +4,7 @@
 // true uncapped total is still reported, distinct-seller counts are honest, and
 // the cap is applied per seller per category. No network.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import "./lib/uncapped-sellers.js"; // every seeded tool is kept: the large sellers here are the point
 import assert from "node:assert";
 import { aggregateEcosystemSupply, ecosystemMarket, __testSeedCache, __setMarketMemoTtl } from "../src/x402-index.js";
 

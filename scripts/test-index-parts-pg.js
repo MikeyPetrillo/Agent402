@@ -23,7 +23,9 @@ import { createHash } from "node:crypto";
 import { fork } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { requireTestPg } from "./lib/test-pg.js";
-const IS_B = process.env.INDEX_PARTS_ROLE === "b";
+import "./lib/uncapped-sellers.js"; // every seeded tool is kept: the large sellers here are the point (a child under the default cap sets it explicitly)
+const ROLE = process.env.INDEX_PARTS_ROLE || "a";
+const IS_B = ROLE !== "a"; // a child container: B (uncapped, as A), or C and D (the default per-seller cap)
 let DIR = null;
 if (!IS_B) {
   requireTestPg({ label: "test-index-parts-pg" });
@@ -74,22 +76,34 @@ async function containerB() {
       B.__testSeedCache([[BIG, { ...held, tools, fetchedAt: held.fetchedAt + 1 }]]);
       return { saved: await B.persistIndexCacheAsync(), stats: B.__testPartStats() };
     },
+    // The per-seller cap (src/seller-tool-cap.js), for a child under the default cap.
+    held: async ({ origin }) => { const v = B._cacheForTests().get(origin); return v ? { tools: v.tools?.length ?? null, toolsTotal: v.toolsTotal ?? null, toolsCapped: v.toolsCapped ?? null, digest: heldDigest(B, origin) } : null; },
+    save: async () => ({ saved: await B.persistIndexCacheAsync(), stats: B.__testPartStats() }),
+    seedAndSave: async ({ origin, n, fetchedAt }) => { B.__testSeedCache([[origin, sellerEntry(origin.replace(/^https:\/\/|\.example$/g, ""), n, fetchedAt)]]); return { saved: await B.persistIndexCacheAsync(), stats: B.__testPartStats() }; },
     exit: () => { setImmediate(() => process.exit(0)); },
   };
-  process.on("message", async ({ id, cmd }) => {
-    try { process.send({ id, value: (await commands[cmd]()) ?? null }); } catch (e) { process.send({ id, error: String(e?.stack || e) }); }
+  process.on("message", async ({ id, cmd, args }) => {
+    try { process.send({ id, value: (await commands[cmd](args || {})) ?? null }); } catch (e) { process.send({ id, error: String(e?.stack || e) }); }
   });
   process.send({ id: 0, value: "ready" });
 }
 
-async function main() {
-  const child = fork(fileURLToPath(import.meta.url), [], { env: { ...process.env, INDEX_PARTS_ROLE: "b", INDEX_PARTS_ORPHAN_GRACE_MS: "" }, stdio: ["inherit", "inherit", "inherit", "ipc"] });
+/** A child container, by role, with its own environment; resolves { ask, exit }. */
+async function forkContainer(role, envOver = {}) {
+  const child = fork(fileURLToPath(import.meta.url), [], { env: { ...process.env, INDEX_PARTS_ROLE: role, INDEX_PARTS_ORPHAN_GRACE_MS: "", ...envOver }, stdio: ["inherit", "inherit", "inherit", "ipc"] });
   const waiting = new Map();
   let seq = 0;
   child.on("message", ({ id, value, error }) => { const w = waiting.get(id); if (!w) return; waiting.delete(id); if (error) w.reject(new Error(error)); else w.resolve(value); });
-  child.on("exit", (code) => { for (const w of waiting.values()) w.reject(new Error(`container B exited (${code})`)); waiting.clear(); });
-  const askB = (cmd) => new Promise((resolve, reject) => { const id = ++seq; waiting.set(id, { resolve, reject }); child.send({ id, cmd }); });
+  child.on("exit", (code) => { for (const w of waiting.values()) w.reject(new Error(`container ${role.toUpperCase()} exited (${code})`)); waiting.clear(); });
+  const ask = (cmd, args) => new Promise((resolve, reject) => { const id = ++seq; waiting.set(id, { resolve, reject }); child.send({ id, cmd, args }); });
   await new Promise((resolve, reject) => { waiting.set(0, { resolve, reject }); });
+  return { ask, exit: async () => { try { await ask("exit"); } catch { /* gone */ } } };
+}
+
+async function main() {
+  const containerB = await forkContainer("b");
+  const askB = containerB.ask;
+  const children = [containerB];
   try {
     const A = await import("../src/x402-index.js");
     const N = 77_000;
@@ -253,10 +267,61 @@ async function main() {
     ok(digest(await A._storedEntryForTest(AGAIN)) === digest(projected(AGAIN)), "...that assemble to the entry");
     const stale = await sdb.records.count(PARTS_COLLECTION);
     ok(stale === Math.ceil(N / PART_TOOLS), `no part row remains for any other seller (${stale} rows)`);
+
+    // ---- the per-seller cap (src/seller-tool-cap.js) under the default cap -------
+    // Container C runs with the default cap (A and B keep every tool). It
+    // warm-starts the 77,000-tool seller A stored uncapped: the cache holds
+    // 5,000 (described first) with the listing's count, and its save replaces
+    // the row with a header naming 3 parts; the 39 old parts are orphans C's
+    // grace keeps and A's sweep takes. A fresh 79,000-tool seller saved under
+    // the cap is 3 parts from the start. Container D, also under the cap,
+    // warm-starts the capped rows and its save rewrites nothing.
+    const { SELLER_TOOL_CAP: DEFAULT_CAP } = await import("../src/seller-tool-cap.js");
+    ok(DEFAULT_CAP > N, `A and B keep every tool (cap ${DEFAULT_CAP})`);
+    const CAP = 5000, CAP_PARTS = Math.ceil(CAP / PART_TOOLS);
+    const C = await forkContainer("c", { INDEX_SELLER_TOOL_CAP: String(CAP) });
+    children.push(C);
+    const warmC = await C.ask("warm");
+    const heldC = await C.ask("held", { origin: AGAIN });
+    ok(warmC.n === 22 && heldC?.tools === CAP && heldC.toolsTotal === N && heldC.toolsCapped === true, `C warm-starts every seller and holds the large one at the cap (${heldC?.tools} of ${heldC?.toolsTotal}, capped ${heldC?.toolsCapped})`);
+    ok(warmC.replicaBig === null && JSON.stringify(sellers(A).filter((s) => !s.startsWith(AGAIN))) === JSON.stringify(warmC.sellers.filter((s) => !s.startsWith(AGAIN))) && warmC.sellers.includes(`${AGAIN} ${CAP}`), "C lists the other sellers as A does and the large one at the cap");
+    const partsBefore = await partRows(AGAIN);
+    const saveC = await C.ask("save");
+    // Every tool of this fixture is described, so the kept 5,000 are the
+    // listing's first 5,000 and two of the three parts are rows the table
+    // already holds (content-addressed): they are kept, the third is written.
+    ok(saveC.saved === true && saveC.stats.written + saveC.stats.skipped === CAP_PARTS && saveC.stats.written >= 1, `C's save stores the capped copy in ${CAP_PARTS} parts (${saveC.stats.written} written, ${saveC.stats.skipped} already held)`);
+    const headC = await sdb.records.get(COLLECTION, AGAIN);
+    ok(headC?.parts?.tools === CAP && headC.parts.hashes.length === CAP_PARTS && headC.toolsTotal === N && headC.toolsCapped === true, `the header names ${headC?.parts?.hashes?.length} parts for ${headC?.parts?.tools} tools and carries toolsTotal ${headC?.toolsTotal}, toolsCapped ${headC?.toolsCapped}`);
+    const storedC = await A._storedEntryForTest(AGAIN);
+    ok(storedC?.tools?.length === CAP && storedC.tools.every((t) => typeof t.description === "string" && t.description.length > 0) && digest(storedC) === heldC.digest, "the table assembles to the capped entry C holds, described tools first");
+    const orphans = partsBefore.length + saveC.stats.written - CAP_PARTS;
+    ok((await partRows(AGAIN)).length === partsBefore.length + saveC.stats.written && saveC.stats.swept === 0, `the old parts stay inside C's grace (${partsBefore.length} + ${saveC.stats.written} rows)`);
+    ok((await A.__testSweepOrphanParts()) === orphans && (await partRows(AGAIN)).length === CAP_PARTS, `A's sweep takes the ${orphans} parts no header names; ${CAP_PARTS} named parts remain`);
+    // A pulls the capped copy: the cap is a newer revision of the row, so both
+    // containers hold the 5,000 (A, whose own cap is far above, reads the pair
+    // as a cap it does not apply and drops it, as after a raised cap).
+    await A.pullIndexChanges();
+    ok(A._cacheForTests().get(AGAIN)?.tools?.length === CAP, `A pulls the capped copy (${A._cacheForTests().get(AGAIN)?.tools?.length} tools)`);
+    // A fresh large seller saved under the cap is parts from the start.
+    const FRESH = "https://seller-fresh.example";
+    const seeded = await C.ask("seedAndSave", { origin: FRESH, n: 79_000, fetchedAt: 5_000_000 });
+    const headF = await sdb.records.get(COLLECTION, FRESH);
+    ok(seeded.saved === true && headF?.parts?.tools === CAP && headF.parts.hashes.length === CAP_PARTS && headF.toolsTotal === 79_000 && headF.toolsCapped === true && (await partRows(FRESH)).length === CAP_PARTS,
+      `a 79,000-tool seller saved under the cap stores ${headF?.parts?.tools} tools in ${headF?.parts?.hashes?.length} parts with toolsTotal ${headF?.toolsTotal}`);
+    // D warm-starts the capped rows: not cut again, nothing rewritten.
+    const D = await forkContainer("d", { INDEX_SELLER_TOOL_CAP: String(CAP) });
+    children.push(D);
+    const warmD = await D.ask("warm");
+    const heldD = await D.ask("held", { origin: AGAIN });
+    ok(warmD.n === 23 && heldD?.tools === CAP && heldD.toolsTotal === N && heldD.digest === digest(await A._storedEntryForTest(AGAIN)), "D warm-starts the capped row as stored (not cut again, the same total)");
+    const saveD = await D.ask("save");
+    ok(saveD.saved === true && saveD.stats.written === 0 && saveD.stats.skipped === 0, `D's save rewrites no part (${saveD.stats.written} written)`);
+    ok((await sdb.records.count(PARTS_COLLECTION)) === 2 * CAP_PARTS, `the parts collection holds the ${2 * CAP_PARTS} named parts and nothing else`);
   } catch (e) {
     fail++; console.error("FAIL - threw:", e?.stack || e);
   } finally {
-    try { await askB("exit"); } catch { /* gone */ }
+    for (const c of children) await c.exit();
     await sdb.__dropStateSchema().catch(() => {});
     await sdb.closeStateDb();
     rmSync(DIR, { recursive: true, force: true });

@@ -1439,7 +1439,7 @@ jobs:
           t node scripts/test-index-persist-slices-pg.js
           # A row of tens of megabytes is written and warm-started under a statement limit it outlasts (the one-row fallback)
           t node scripts/test-index-large-row-pg.js
-          # A 77k-tool seller is stored as a header and parts: a second container assembles the same entry, one changed part is rewritten, a save during a read is never mixed in, shrink and removal leave no part behind
+          # A 77k-tool seller is stored as a header and parts: a second container assembles the same entry, one changed part is rewritten, a save during a read is never mixed in, shrink and removal leave no part behind; a container under the per-seller cap stores it at the cap in 3 parts, the old parts swept after the grace, and a later boot rewrites nothing
           t node scripts/test-index-parts-pg.js
           # The tool directory from the state database (INDEX_LISTINGS_STORE=pg): every page the in-memory directory's, row for row; changes and removals written; no in-memory directory built; a page under 50 ms
           t node scripts/test-index-listings-pg.js
@@ -1979,6 +1979,8 @@ jobs:
           t node scripts/test-seller-field-types.js
           # A stored index of sellers with non-text fields boots and serves every seller page and API; entries are cleaned as the cache stores them
           t node scripts/test-seller-field-types-serve.js
+          # The index keeps at most INDEX_SELLER_TOOL_CAP tools per seller, described first, in one funnel: a 12,000-tool seller lists at the cap with toolsTotal and toolsCapped on every surface and routes on its kept tools; a mutation control on a copy of src shows the full count with the cap removed (boots the server; offline)
+          t node scripts/test-seller-tool-cap.js
           # A throw inside a scheduled turn (the drain, a shadow rebuild) or inside one seller's listing is contained: the process stays up, the other sellers answer, the counts reach the operator surface (boots the server; offline)
           t node scripts/test-crash-containment.js
           # Every setImmediate/setTimeout/setInterval callback in the index module and the server runs under contained() or is allowlisted with a reason

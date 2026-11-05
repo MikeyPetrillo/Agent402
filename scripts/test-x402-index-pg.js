@@ -13,6 +13,7 @@ import { mkdtempSync, writeFileSync, rmSync, readFileSync, existsSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTestPg } from "./lib/test-pg.js";
+import "./lib/uncapped-sellers.js"; // every seeded tool is kept: the large sellers here are the point
 requireTestPg({ label: "test-x402-index-pg" });
 
 process.env.X402_INDEX_CRAWL = "off";

@@ -13,6 +13,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTestPg } from "./lib/test-pg.js";
+import "./lib/uncapped-sellers.js"; // every seeded tool is kept: the large sellers here are the point
 
 requireTestPg({ label: "test-index-large-row-pg" });
 const STATEMENT_MS = 250;

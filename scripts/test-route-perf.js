@@ -32,6 +32,7 @@
 // entry's old rows come back), stop enqueueing on cache.set (new sellers never
 // appear), restore the full scan (perf bound), reorder the sort keys (golden).
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import "./lib/uncapped-sellers.js"; // every seeded tool is kept: the large sellers here are the point
 process.env.X402_INDEX_CRAWL = "off";
 import { oursMs, bound, gapMeter } from "./lib/ours-clock.js";
 import { readFileSync } from "node:fs";

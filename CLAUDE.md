@@ -55,7 +55,12 @@ LLC: credit the entity, never a personal name.
   under its origin naming content-addressed part rows (`x402-index-parts`, about 2000 tools each);
   a save writes only the parts the table lacks and then the header, a reader accepts only the parts
   the header names (else it re-reads the header or keeps its copy), and unnamed parts are swept after
-  `INDEX_PARTS_ORPHAN_GRACE_MS`. A statement carrying a large single row (the one-row fallback) runs
+  `INDEX_PARTS_ORPHAN_GRACE_MS`. The index keeps at most `INDEX_SELLER_TOOL_CAP` tools per seller
+  (`src/seller-tool-cap.js`, default 5000; described tools first, then listing order), applied once in
+  `IndexCache.set` before the route index, the persist and the replica read the entry; a cut entry
+  carries `toolsTotal` and `toolsCapped`, shown beside `toolCount` on `/api/index` rows, the `?seller=`
+  detail (with `toolCap` and `toolCapLegend`) and the `index` block of `/__operator/heap.json`
+  (`cappedSellers`, `toolsDropped`). A statement carrying a large single row (the one-row fallback) runs
   under `largeRowTimeoutMs`: the default limit plus `STATE_DB_MS_PER_MB` (500) per megabyte past the
   first, at most `STATE_DB_LARGE_ROW_MAX_MS` (120000); after a warm-start page times out, the rows
   that page covered are read one at a time, then full pages resume.

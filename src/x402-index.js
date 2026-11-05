@@ -35,6 +35,7 @@ import { shared, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.j
 import { createListingsStore, listingsStoreEnabled } from "./index-listings-pg.js";
 import { trackStoreReady, leased, stateDbEnabled, stateQuery, stateDbSchema, records, importOnce, pgJsonTextMayChange, largeRowTimeoutMs, isStatementTimeout, withStateTx } from "./state-db.js";
 import { PARTS_COLLECTION, PARTS_ORPHAN_GRACE_MS, isParted, isPartedHeader, headerHashes, partId, splitEntry, assembleEntry } from "./index-parts.js";
+import { SELLER_TOOL_CAP, capSellerEntry, sellerToolsTotal, toolCapLegend } from "./seller-tool-cap.js";
 import { retryingLoad } from "./store-retry.js";
 
 // The last crawl's probe examples per origin (src/probe-example.js), memory
@@ -647,7 +648,10 @@ export function _cleanSellerEntryForTests(v) { return cleanSellerEntry(v); }
 class IndexCache extends Map {
   set(origin, v) {
     if (isRemovedOrigin(origin)) { this.delete(origin); return this; }
-    v = cleanSellerEntry(v);
+    // The one funnel: every stored entry is capped at SELLER_TOOL_CAP tools
+    // (src/seller-tool-cap.js) and then cleaned, so the route index, the
+    // persist, the replica and every reader hold the same list.
+    v = cleanSellerEntry(capSellerEntry(v));
     cacheVersion++;
     routeIndexNoteSet(origin, super.get(origin), v);
     super.set(origin, v);
@@ -1789,6 +1793,10 @@ function sellerSummary(origin, v) {
   return {
     displayName: v.manifest?.name || origin.replace(/^https?:\/\//, ""),
     toolCount: v.tools?.length || 0,
+    // The count the listing held and whether the index cut it (src/seller-tool-cap.js);
+    // on all three seller projections, so no surface reads toolCount as the listing.
+    toolsTotal: sellerToolsTotal(v),
+    toolsCapped: v.toolsCapped === true,
     networks: [...new Set([...(v.tools || []).flatMap((t) => t.networks || []), ...(bazaarToolsByOrigin.get(origin) || []).flatMap((t) => t.networks || [])])],
     routable: isRoutable(v),
     health: healthScore(v),
@@ -7228,7 +7236,7 @@ async function parseJsonSliced(text, tick) {
 }
 
 // The keys persistedEntryOf writes only when set.
-const ROW_OPTIONAL_KEYS = ["fallbackErrors", "redirectedTo", "updatedAt"];
+const ROW_OPTIONAL_KEYS = ["fallbackErrors", "redirectedTo", "updatedAt", "toolsTotal", "toolsCapped"];
 function persistedEntryOf(v, slimTools = null) {
   {
     // A failure with nothing to show is not re-seeded; the crawl re-decides.
@@ -7253,8 +7261,22 @@ function persistedEntryOf(v, slimTools = null) {
       // Stamped by a change made outside a crawl (a re-price): with fetchedAt
       // it is the entry's revision, what the pull and the upsert compare.
       ...(Number(v.updatedAt) > 0 ? { updatedAt: Number(v.updatedAt) } : {}),
+      // A capped entry's listing count (src/seller-tool-cap.js), so a stored
+      // copy is not cut again and keeps the count its listing held.
+      ...(v.toolsCapped === true && Number(v.toolsTotal) > 0 ? { toolsTotal: Number(v.toolsTotal), toolsCapped: true } : {}),
     });
   }
+}
+/** After a stored copy is folded into the cache: when the row held more tools
+ *  than the cap keeps, the copy the cache holds is a new revision (the cap is a
+ *  change made outside a crawl), so this container's next save replaces the
+ *  row with it and the other container pulls it. True then; the caller holds
+ *  no row hash for the origin, so the save writes it. */
+function noteCapOnFold(origin, body) {
+  const held = cache.get(origin);
+  if (!held || held.toolsCapped !== true || !Array.isArray(body?.tools) || body.tools.length <= (Array.isArray(held.tools) ? held.tools.length : 0)) return false;
+  cache.set(origin, { ...held, updatedAt: nextRev(held) });
+  return true;
 }
 
 /** One origin's row, written now: a re-read a seller asked for reaches the
@@ -7523,8 +7545,9 @@ export async function pullIndexChanges({ pageSize = 1000, maxPages = 20 } = {}) 
         for (const k of ROW_OPTIONAL_KEYS) if (!(k in body)) delete next[k];
         cache.set(id, next);
         // Held as stored (the copy the cache keeps, cleaned), so this
-        // container's next save does not write it back.
-        pgOriginHashes.set(id, await persistedHashSliced(id, cache.get(id) ?? next, tick));
+        // container's next save does not write it back; a row the cap cut
+        // on the way in is held as changed, so the save writes the capped copy.
+        pgOriginHashes.set(id, noteCapOnFold(id, body) ? null : await persistedHashSliced(id, cache.get(id) ?? next, tick));
         pgRowHashes.set(id, typeof bodyHash === "string" ? bodyHash : null);
         if (!held) discoveredSeeds.add(id);
         folded++;
@@ -8041,7 +8064,7 @@ async function warmStartIndexOnce() {
         // what this container changed, never every row over a peer's newer one.
         // The hash of a large catalogue is taken in pieces across turns (the
         // largest seller's took 0.7 s in one call at boot); the same hash.
-        if (foldWarmEntry(id, body)) { n++; pgOriginHashes.set(id, await persistedHashSliced(id, cache.get(id), tick)); pgRowHashes.set(id, typeof rowHash === "string" ? rowHash : null); }
+        if (foldWarmEntry(id, body)) { n++; pgOriginHashes.set(id, noteCapOnFold(id, body) ? null : await persistedHashSliced(id, cache.get(id), tick)); pgRowHashes.set(id, typeof rowHash === "string" ? rowHash : null); }
         else pgOriginHashes.set(id, null);
       }
       maxTurnMs = Math.max(maxTurnMs, performance.now() - turn0);
@@ -8704,6 +8727,8 @@ function* routableSummarySteps() {
       host,
       ...(sellerPrefixOf(origin) ? { pathPrefix: sellerPrefixOf(origin) } : {}),
       toolCount: v.tools?.length || manifestToolCount(v.manifest),
+      toolsTotal: sellerToolsTotal(v, manifestToolCount(v.manifest)),
+      toolsCapped: v.toolsCapped === true,
       // Did the origin ever answer us, or is this a registry listing about it?
       originResponded: v.originResponded !== false,
       // Rides with originResponded on ALL THREE accessors on purpose: this
@@ -8842,6 +8867,13 @@ export function sellerDetail(originOrHost) {
       // The seller's own figure is still published, under its own name, when
       // it differs from what we hold.
       toolCount: (v.tools || []).length,
+      // The count the listing held and whether the index cut it at the
+      // per-seller cap (src/seller-tool-cap.js), with the cap and its legend:
+      // a seller auditing the row reads why toolCount is under its own count.
+      toolsTotal: sellerToolsTotal(v),
+      toolsCapped: v.toolsCapped === true,
+      toolCap: SELLER_TOOL_CAP,
+      toolCapLegend: toolCapLegend(),
       ...(manifestToolCount(v.manifest) > 0 && manifestToolCount(v.manifest) !== (v.tools || []).length
         ? { declaredToolCount: manifestToolCount(v.manifest), declaredToolCountNote: "the tool count the seller's own manifest states (capabilities.tools); toolCount is the routes this index holds and returns" }
         : {}),
@@ -9086,6 +9118,8 @@ function* indexSnapshotSteps({ baseUrl, catalog, prices, network, toolCount, wal
     homepage: v.manifest?.homepage || origin,
     network: v.manifest?.payment?.x402?.primaryNetwork || v.manifest?.payment?.primaryNetwork || null,
     toolCount: v.tools?.length || manifestToolCount(v.manifest),
+    toolsTotal: sellerToolsTotal(v, manifestToolCount(v.manifest)),
+    toolsCapped: v.toolsCapped === true,
     // Did the ORIGIN answer, or is this a registry listing about it? Read by
     // the marketplace label and by totals.respondedOrigins. Added here as well
     // as on the other accessors because /api/index and the market pages read
@@ -9174,6 +9208,8 @@ function* indexSnapshotSteps({ baseUrl, catalog, prices, network, toolCount, wal
         return acc;
       }, {});
     keep.toolCount = Math.max(keep.toolCount || 0, drop.toolCount || 0);
+    keep.toolsTotal = Math.max(keep.toolsTotal || 0, drop.toolsTotal || 0, keep.toolCount);
+    keep.toolsCapped = keep.toolsCapped === true || drop.toolsCapped === true;
     if (keep.paidToolCount != null || drop.paidToolCount != null) {
       keep.paidToolCount = Math.max(keep.paidToolCount ?? 0, drop.paidToolCount ?? 0);
     }
@@ -9199,6 +9235,7 @@ function* indexSnapshotSteps({ baseUrl, catalog, prices, network, toolCount, wal
     asOf: new Date().toISOString(),
     sellers,
     discoverySources,
+    toolCapLegend: toolCapLegend(),
     totals: {
       // NOTE: `sellers` counts indexed ORIGINS, not operators. One operator can
       // publish many hostnames — a custom domain plus the raw platform host it
@@ -9231,6 +9268,12 @@ function* indexSnapshotSteps({ baseUrl, catalog, prices, network, toolCount, wal
           .map((a) => a.toLowerCase())
       ).size,
       tools: sellers.reduce((s, x) => s + (x.toolCount || 0), 0),
+      // `tools` is what the index holds. A seller past the per-seller cap
+      // (src/seller-tool-cap.js) is held at the cap; the listings' own counts
+      // and how many sellers were cut ride beside it, under toolCapLegend.
+      toolsTotal: sellers.reduce((s, x) => s + (x.toolsTotal ?? x.toolCount ?? 0), 0),
+      cappedSellers: sellers.filter((x) => x?.toolsCapped === true).length,
+      toolCap: SELLER_TOOL_CAP,
       // Buyable subset of `tools`. Sellers without paid flags (zero-annotation
       // docs, registry-synthesized) count fully — their rows route today, so
       // presuming them paid keeps this the routing-eligible total rather than
@@ -10657,6 +10700,7 @@ const MEMORY_SAMPLE_ENTRIES = 120;
 const jsonLength = (x) => { try { return x == null ? 0 : JSON.stringify(x).length; } catch { return 0; } };
 export function indexMemoryFigures({ sampleBytes = false } = {}) {
   let entries = 0, tools = 0, openapiTools = 0, openapiRoutes = 0, fullManifests = 0, manifestResources = 0, slimManifests = 0, manifestBodies = 0, manifestBodyBytes = 0, openapiPacked = 0, openapiPackedBytes = 0;
+  let cappedSellers = 0, toolsDropped = 0;
   const stride = Math.max(1, Math.floor(cache.size / MEMORY_SAMPLE_ENTRIES));
   const sampled = { entries: 0, tools: 0, openapiTools: 0, openapiRoutes: 0, manifest: 0, rest: 0 };
   const sampledRows = { tools: 0, openapiTools: 0, openapiRoutes: 0 };
@@ -10674,6 +10718,7 @@ export function indexMemoryFigures({ sampleBytes = false } = {}) {
     }
     entries++;
     tools += Array.isArray(v.tools) ? v.tools.length : 0;
+    if (v.toolsCapped === true) { cappedSellers++; toolsDropped += Math.max(0, sellerToolsTotal(v) - (Array.isArray(v.tools) ? v.tools.length : 0)); }
     openapiTools += Array.isArray(v.openapiTools) ? v.openapiTools.length : 0;
     openapiRoutes += Array.isArray(v.openapiRoutes) ? v.openapiRoutes.length : 0;
     if (Buffer.isBuffer(v.manifestBody)) { manifestBodies++; manifestBodyBytes += v.manifestBody.length; }
@@ -10685,7 +10730,7 @@ export function indexMemoryFigures({ sampleBytes = false } = {}) {
       if (Array.isArray(r)) manifestResources += r.length;
     }
   }
-  const out = { entries, tools, openapiTools, openapiRoutes, openapiPacked, openapiPackedBytes, fullManifests, slimManifests, manifestResources, manifestBodies, manifestBodyBytes, internedTokens: tokenIntern.size, routeIndexedTools: routeIdx.indexedTools };
+  const out = { entries, tools, toolCap: SELLER_TOOL_CAP, cappedSellers, toolsDropped, openapiTools, openapiRoutes, openapiPacked, openapiPackedBytes, fullManifests, slimManifests, manifestResources, manifestBodies, manifestBodyBytes, internedTokens: tokenIntern.size, routeIndexedTools: routeIdx.indexedTools };
   if (!sampleBytes) return out;
   // Serialized size from the sample: a floor on what the heap holds (object
   // headers and hidden classes come on top), comparable across fields. Row

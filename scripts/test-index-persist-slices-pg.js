@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import { PerformanceObserver } from "node:perf_hooks";
 import { Session } from "node:inspector/promises";
 import { requireTestPg } from "./lib/test-pg.js";
+import "./lib/uncapped-sellers.js"; // every seeded tool is kept: the large sellers here are the point
 const IS_B = process.env.INDEX_SLICES_ROLE === "b";
 let DIR = null;
 if (!IS_B) {
