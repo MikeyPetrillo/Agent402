@@ -51,6 +51,26 @@ for (const [value, key] of [["robinhood,solana", "robinhood,solana"], ["solana, 
   const s = render("solana");
   ok(!/Robinhood Chain, the facilitator|On Robinhood Chain, and/.test(s.pt + s.tt), "solana only: neither page names Robinhood for the index");
 }
+{
+  // The paragraph names the publishing facilitator's host, read from the
+  // settle configuration at render time; only a parsed hostname is printed.
+  process.env.ROBINHOOD_FACILITATOR_URL = "https://first.example.test/x402,https://second.example.test";
+  process.env.SOLANA_FALLBACK_FACILITATOR_URL = "https://first.example.test";
+  let r = render("robinhood,solana");
+  ok(r.pt.includes("the facilitator that settles the payment (first.example.test) publishes"), "both chains through one host: the host is named once");
+  ok(!r.pt.includes("second.example.test"), "a later Robinhood fallback is not named as the publisher");
+  process.env.SOLANA_FALLBACK_FACILITATOR_URL = "https://other.example.test";
+  r = render("robinhood,solana");
+  ok(r.pt.includes("(first.example.test, other.example.test) publishes"), "two hosts: both named");
+  r = render("solana");
+  ok(r.pt.includes("(other.example.test) publishes") && !r.pt.includes("first.example.test"), "solana only: only its fallback host is named");
+  process.env.ROBINHOOD_FACILITATOR_URL = "<script>alert(1)</script>";
+  delete process.env.SOLANA_FALLBACK_FACILITATOR_URL;
+  r = render("robinhood");
+  ok(r.pt.includes(PRIVACY.robinhood) && !/script|alert/.test(r.p.slice(r.p.indexOf("public-settlement-index"), r.p.indexOf("public-settlement-index") + 600)), "an unparsable URL names no host and prints nothing of the raw value");
+  delete process.env.ROBINHOOD_FACILITATOR_URL;
+}
+ok(!/named at/.test(render(undefined).pt), "privacy no longer points to a page that does not name the facilitators");
 delete process.env.FACILITATOR_PUBLIC_INDEX_CHAINS;
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

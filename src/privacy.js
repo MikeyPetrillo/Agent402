@@ -237,7 +237,7 @@ so every claim below is verifiable in code.</p>
   bookkeeping; no email or card data is involved in that mirror.</li>
   <li>Hosting is on Railway, and the nightly backups described below are stored in object storage there.
   On-chain settlement is on Base (Coinbase CDP facilitator) and the other
-  facilitators named at <a href="/pricing">/pricing</a>${gatewayBatched ? "; Circle Gateway batched payments settle off chain at Circle Gateway" : ""}.</li>${publicIndex ? `
+  per-chain facilitators${gatewayBatched ? "; Circle Gateway batched payments settle off chain at Circle Gateway" : ""}.</li>${publicIndex ? `
   <li id="${PUBLIC_INDEX_ANCHOR}">${publicIndex}</li>` : ""}
   <li>We do not sell or share data with anyone for advertising or any other purpose.</li>
 </ul>
