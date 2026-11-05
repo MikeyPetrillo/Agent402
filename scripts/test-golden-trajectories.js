@@ -25,7 +25,7 @@
 // Offline: the preload (scripts/lib/golden-preload.js) carries the
 // .golden.test hosts to the stub and refuses every other outside host.
 //
-//   node scripts/test-golden-trajectories.js [--only <task id>] [--verbose]
+//   node scripts/test-golden-trajectories.js [--only <task id>] [--verbose] [--label <seller id>]
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -246,7 +246,6 @@ const outboundRows = () => {
   try { return readFileSync(storeEnv.OUTBOUND_LEDGER_FILE, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; }
 };
 const round6 = (n) => Number(Number(n || 0).toFixed(6));
-let internalPrices = null;
 
 async function runTask(t, i) {
   const payer = `0xb0b0${(i + 1).toString(16).padStart(36, "0")}`;
@@ -277,7 +276,6 @@ async function runTask(t, i) {
   const chosenAttempt = chosen && chosen !== "internal" ? [...attempts].reverse().find((e) => sellerIdOfOrigin(e.origin) === chosen) : null;
   const paid = seen.filter((o) => o.kind === "paid");
   const newlyConsumed = [...consumed].filter((n) => !consumed0.has(n));
-  let underlying = receipt?.underlyingPriceUsd;
   const actual = {
     candidates: candidatesEv ? candidatesEv.list.map((c) => sellerIdOfOrigin(c.origin)) : null,
     tried: { tried: attempts.map((e) => sellerIdOfOrigin(e.origin)), skipped: steps.filter((e) => e.step === "skip").map((e) => [sellerIdOfOrigin(e.origin), e.reason]) },
@@ -291,15 +289,10 @@ async function runTask(t, i) {
       exposureUsd: round6(state.exposureUsd),
       ...(unprovenIds.length ? { unprovenSpentUsd: Object.fromEntries(unprovenIds.map((id) => [id, round6(state.unproven[SELLERS.find((x) => x.id === id).url])])) } : {}),
     },
-    receipt: receipt && r.status === 200 ? { seller: chosen, sellerProof: receipt.sellerProof ?? null, underlyingPriceUsd: underlying, ...(receipt.sellerPaid === false ? { sellerPaid: false } : {}) } : null,
+    receipt: receipt && r.status === 200 ? { seller: chosen, sellerProof: receipt.sellerProof ?? null, underlyingPriceUsd: receipt.underlyingPriceUsd, ...(receipt.sellerPaid === false ? { sellerPaid: false } : {}) } : null,
     status: r.status,
   };
   const e = t.expect;
-  let expReceipt = e.receipt;
-  if (expReceipt && expReceipt.underlyingPriceUsd === "$catalog") {
-    internalPrices ??= Object.fromEntries(((await (await fetch(`${B}/api/pricing`)).json()).tools || []).map((x) => [x.slug, Number(String(x.price).replace("$", ""))]));
-    expReceipt = { ...expReceipt, underlyingPriceUsd: internalPrices[t.slug] };
-  }
   const expected = {
     candidates: e.candidates,
     tried: { tried: e.tried, skipped: e.skipped || [] },
@@ -309,7 +302,7 @@ async function runTask(t, i) {
     payTo: e.signed.map(([w]) => w),
     settle: { buyer: e.settle.buyer, sellerCharged: e.settle.sellerCharged },
     booking: { outbound: e.booking.outbound, exposureUsd: e.booking.exposureUsd, ...(e.booking.unprovenSpentUsd ? { unprovenSpentUsd: e.booking.unprovenSpentUsd } : {}) },
-    receipt: expReceipt,
+    receipt: e.receipt,
     status: e.status,
   };
   return { expected, actual, detail: { status: r.status, error: json?.error, steps, seen } };
