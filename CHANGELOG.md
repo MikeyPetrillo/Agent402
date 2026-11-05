@@ -21,6 +21,11 @@ Router:
   paid server, resolver and payer against stub sellers and check every step
   from the candidate set to the receipt. The unproven lane reads the same
   verdict as the public label, at the seller's live payTo.
+- The lane's terms name only the daily caps that are switched on, and the
+  seller-trust and seller-dossier examples show the lane as the tool answers.
+Tools:
+- `linkedin-article` takes images only from fast-tier links its resizer can
+  read; the fast tier still serves WebP to buyers.
 Security:
 - A standing red-team suite runs in CI against the MCP connector, the seller
   judge, decide, the fetch guard, the router's payer and report prose. MCP
