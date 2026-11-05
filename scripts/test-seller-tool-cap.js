@@ -162,15 +162,17 @@ const CONTROL = join(dir, "control.mjs");
 writeFileSync(CONTROL, `
 import { pathToFileURL } from "node:url";
 const copy = process.argv[2];
+const BIG = process.argv[3];
+const N = Number(process.argv[4]);
 const x = await import(pathToFileURL(copy + "/src/x402-index.js").href);
-const tools = Array.from({ length: ${N} }, (_, k) => ({ seller: ${JSON.stringify(BIG)}, method: "POST", route: "/api/big/" + k, slug: "big-" + k, name: "Big " + k, ...(k % 2 ? { description: "bigseller tool number " + k } : {}), price: 0.001, networks: ["eip155:8453"] }));
-x.__testSeedCache([[${JSON.stringify(BIG)}, { manifest: { name: "Big" }, tools, fetchedAt: 1, error: null, source: "manifest", history: [1] }]]);
+const tools = Array.from({ length: N }, (_, k) => ({ seller: BIG, method: "POST", route: "/api/big/" + k, slug: "big-" + k, name: "Big " + k, ...(k % 2 ? { description: "bigseller tool number " + k } : {}), price: 0.001, networks: ["eip155:8453"] }));
+x.__testSeedCache([[BIG, { manifest: { name: "Big" }, tools, fetchedAt: 1, error: null, source: "manifest", history: [1] }]]);
 const d = x.sellerDetail("big.example");
 console.log(JSON.stringify({ toolCount: d.toolCount, toolsTotal: d.toolsTotal, toolsCapped: d.toolsCapped }));
 `);
 const controlEnv = { ...process.env, ...ownStoreEnv("seller-cap-control"), REDIS_URL: "", STATE_DATABASE_URL: "", X402_INDEX_CRAWL: "off", INDEX_CACHE_FILE: join(dir, "control-cache.json"), INDEX_SELLER_TOOL_CAP: String(CAP) };
 function runControl() {
-  const r = spawnSync(process.execPath, [CONTROL, copy], { cwd: copy, env: controlEnv, encoding: "utf8", timeout: 120_000 });
+  const r = spawnSync(process.execPath, [CONTROL, copy, BIG, String(N)], { cwd: copy, env: controlEnv, encoding: "utf8", timeout: 120_000 });
   let out = null;
   try { out = childJson(r.stdout); } catch { /* no answer line */ }
   return { status: r.status, out, stderr: r.stderr || "" };

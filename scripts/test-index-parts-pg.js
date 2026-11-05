@@ -284,7 +284,8 @@ async function main() {
     const warmC = await C.ask("warm");
     const heldC = await C.ask("held", { origin: AGAIN });
     ok(warmC.n === 22 && heldC?.tools === CAP && heldC.toolsTotal === N && heldC.toolsCapped === true, `C warm-starts every seller and holds the large one at the cap (${heldC?.tools} of ${heldC?.toolsTotal}, capped ${heldC?.toolsCapped})`);
-    ok(warmC.replicaBig === null && JSON.stringify(sellers(A).filter((s) => !s.startsWith(AGAIN))) === JSON.stringify(warmC.sellers.filter((s) => !s.startsWith(AGAIN))) && warmC.sellers.includes(`${AGAIN} ${CAP}`), "C lists the other sellers as A does and the large one at the cap");
+    const notAgain = (s) => s.split(" ")[0] !== AGAIN; // each row is "<origin> <tool count>"
+    ok(warmC.replicaBig === null && JSON.stringify(sellers(A).filter(notAgain)) === JSON.stringify(warmC.sellers.filter(notAgain)) && warmC.sellers.some((s) => s === `${AGAIN} ${CAP}`), "C lists the other sellers as A does and the large one at the cap");
     const partsBefore = await partRows(AGAIN);
     const saveC = await C.ask("save");
     // Every tool of this fixture is described, so the kept 5,000 are the

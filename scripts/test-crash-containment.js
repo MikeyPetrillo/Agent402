@@ -254,7 +254,7 @@ try {
   // A query that meets a poison entry still pending (no drain turn yet).
   const late = await ask("query-pending");
   ok(!late.err && late.pendingBefore >= 1, `an in-thread query over a pending poison listing answers without a throw (pending ${late.pendingBefore}, ${late.err || "no throw"})`);
-  ok(late.sellers.includes(GOOD) && !late.sellers.includes(POISON2), `that query ranks the well-formed seller and nothing from the pending poison (${late.sellers.join(", ")})`);
+  ok(late.sellers.some((s) => s === GOOD) && !late.sellers.some((s) => s === POISON2), `that query ranks the well-formed seller and nothing from the pending poison (${late.sellers.join(", ")})`);
   ok(late.broken.byOrigin[POISON2]?.count >= 1, `the late poison is counted by origin too (${late.broken.byOrigin[POISON2]?.count})`);
   ok(proc.exitCode === null && (await alive()), "the process is alive after the query met the pending poison");
 
@@ -384,7 +384,7 @@ function runControl(label) {
 {
   // Unmutated copy: the same answer the booted server gave.
   const c = runControl("intact");
-  ok(c.status === 0 && c.out?.sellers.includes(GOOD) && c.out.broken.byOrigin[POISON]?.count >= 1 && c.out.contained.total === 0,
+  ok(c.status === 0 && c.out?.sellers.some((s) => s === GOOD) && c.out.broken.byOrigin[POISON]?.count >= 1 && c.out.contained.total === 0,
     `intact copy: exit ${c.status}, finds the well-formed seller, counts the poison listing (${c.out?.broken.byOrigin[POISON]?.count}), no turn had to contain (${c.out?.contained.total})`);
   if (c.status !== 0) console.log(c.stderr.slice(-800));
 }
@@ -392,7 +392,7 @@ function runControl(label) {
   // Per-entry catches rethrow: the drain's turn wrapper is what keeps it up.
   mutate([ENTRY_CATCH]);
   const c = runControl("entry layer removed");
-  ok(c.status === 0 && c.out?.sellers.includes(GOOD),
+  ok(c.status === 0 && c.out?.sellers.some((s) => s === GOOD),
     `entry-level containment removed: exit ${c.status}, the process lives and the well-formed seller is still found (${c.out?.sellers.join(", ")})`);
   ok(c.out?.contained.byName["route-index-drain"]?.count >= 1 && /poison/.test(c.out?.contained.byName["route-index-drain"]?.lastMessage || ""),
     `...because the drain's contained() turn caught the poison (${JSON.stringify(c.out?.contained.byName["route-index-drain"])})`);
