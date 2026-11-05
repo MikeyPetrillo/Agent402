@@ -10,6 +10,8 @@ const ENTRIES = [
       "Index: a failed paywall check is re-run after 24 hours and when a seller registers again, and the check skips a templated route.",
       "Index: the index keeps at most 5000 tools per seller, described tools first, and shows the listed count beside it. A listing that cannot be read is dropped alone; /api/gateway-status gains containedTurns and brokenListings.",
       "Gateway: on the Messages wire, citation text counts against the tier's input cap.",
+      "Gateway: /v1/images/fast now falls over to Recraft V4.1 Flash (WebP) and /v1/images/generations to MAI-Image-2.6 Flash (PNG), ahead of GPT-5 Image Mini's upstream expiry; the former id is still accepted in model.",
+      "Payments: a Tempo payment whose send the node refuses as a replay is served from its mined receipt.",
       "Surfaces: the agent hosts guide adds Agent402 to a HarnessRouter workspace as a remote MCP server under Add-ons, with a harness create that lists the connector, the free proof-of-work tools, and how paid tools answer on the connector.",
       "Packages: agent402-mcp 0.13.28 runs on x402 2.30 and MCP SDK 1.32.2, and every install pin names it.",
     ],

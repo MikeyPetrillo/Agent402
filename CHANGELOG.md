@@ -20,6 +20,12 @@ Router:
 Index:
 - A failed paywall check is re-run after 24 hours and when a seller registers
   again, and the check skips a templated route.
+Gateway:
+- `/v1/images/fast` now falls over to Recraft V4.1 Flash (WebP) and
+  `/v1/images/generations` to MAI-Image-2.6 Flash (PNG), ahead of the GPT-5
+  Image Mini link's upstream expiry; the former id is still accepted in
+  `model`. The live model guard checks every image, video and speech link's
+  upstream expiration date.
 Surfaces:
 - The agent hosts guide adds Agent402 to a HarnessRouter workspace as a
   remote MCP server under Add-ons (`/harnessrouter`).
