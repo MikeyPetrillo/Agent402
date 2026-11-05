@@ -8,8 +8,8 @@ carries its own version on npm.
 
 ### 2026-11-05 (x402 2.30, a wider unproven lane, one spend workflow)
 Payments:
-- The x402 libraries are 2.30.0 and mppx 0.17.1. A check that runs before
-  verify or settle and fails refuses the payment with a 402 and charges
+- The x402 libraries are 2.30.0 and mppx 0.17.1. A money or identity check
+  that runs before verify or settle and fails refuses the payment with a 402 and charges
   nothing. A Tempo charge whose broadcast is rejected as a replay recovers its
   receipt instead of answering a new 402.
 Router:
@@ -50,7 +50,8 @@ Pages:
 - Structured data names one site entity, Agent402, part of Havok Holdings
   LLC, as every page's author and publisher.
 - Report, skill, blog, guide, docs, category and marketplace pages show a
-  breadcrumb trail that matches their structured data.
+  breadcrumb trail that matches their structured data, and seeded SEC report
+  pages carry the date of the newest filing they show.
 Surfaces:
 - The agent hosts guide adds Agent402 to a HarnessRouter workspace as a
   remote MCP server under Add-ons (`/harnessrouter`).
@@ -94,7 +95,8 @@ Index:
   (what the seller lists) and `toolsCapped`; /marketplace shows "N of M tools"
   for a capped seller, and its listing count reads what sellers list.
 - A seller listing that fails to read is skipped on its own; every other
-  seller still routes. `/api/gateway-status` gains `containedTurns`.
+  seller still routes. `/api/gateway-status` gains `containedTurns` and
+  `brokenListings`.
 Gateway:
 - On the Messages wire, a text block's citation text counts against the
   tier's input cap, as its own text does.
