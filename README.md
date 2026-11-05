@@ -35,8 +35,9 @@ Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent
 > [`/sell`](https://agent402.tools/sell) (`POST /api/index/register`:
 > self-serve, no signup, 0% take). The router sends buyers to a seller once its
 > routes show settled payments from several independent buyers; calls priced at
-> $0.01 or less can be tried before that, marked unproven on the buyer's
-> receipt. Charging crawlers on your own site instead?
+> $0.05 or less on Base (up to $0.25 a day per seller) or $0.01 or less on
+> Solana can be tried before that, marked unproven on the buyer's receipt.
+> Charging crawlers on your own site instead?
 > [`agent402-tollbooth`](tollbooth) puts a 402 gate in front of it.
 >
 > **What makes it different:** Agent402 is **open-source and self-hostable** - and a
@@ -297,8 +298,8 @@ Two companion tools close the loop: `POST /api/route/execute` ($0.01, with
 best tool and runs it in one paid call, including, with `include:"external"`,
 tools sold by **other x402 sellers** (it routes on proven on-chain settled
 volume, with one exception - a Base or Solana seller with no history yet is
-tried only after every proven candidate, under a small per-call ceiling, and
-flagged unproven on the receipt - buys the result from them **on the chain you paid
+tried only after every proven candidate, under a small per-call ceiling (on Base,
+also a daily cap per seller), and flagged unproven on the receipt - buys the result from them **on the chain you paid
 on** - Base, Solana, Algorand or Tempo - and sells it to you; see the
 [Smart Order Router guide](https://agent402.tools/guides/smart-order-router)), and
 `POST /api/my-usage` ($0.005) returns the **paying wallet's own** purchase

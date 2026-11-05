@@ -10,7 +10,7 @@
 // page that types the exception would be wrong the day the tier is switched
 // off. Derive both from the same function the router reads.
 import { svmUnprovenAllowanceAtomic } from "./solana-buyer.js";
-import { baseUnprovenAllowanceUsd } from "./base-unproven.js";
+import { baseUnprovenAllowanceUsd, baseUnprovenSellerDailyUsd } from "./base-unproven.js";
 import { ROUTE_ORDER, routeTiebreakProse } from "./route-order.js";
 
 /** The unproven-tier ceiling in dollars, or 0 when the tier is disabled. */
@@ -29,12 +29,14 @@ function usd(n) {
 export function routingProofSentence() {
   const sol = unprovenAllowanceUsd();
   const base = baseUnprovenAllowanceUsd();
+  const baseDay = base > 0 ? baseUnprovenSellerDailyUsd() : null;
   const tiers = [];
   // One figure when both ceilings match ("$0.01 a call on Base and on Solana"),
-  // so the sentence does not read like a repeated typo.
-  if (base > 0 && sol > 0 && usd(base) === usd(sol)) tiers.push(`${usd(base)} a call on Base and on Solana`);
+  // so the sentence does not read like a repeated typo. Base's per-seller
+  // daily cap rides with Base's figure.
+  if (base > 0 && sol > 0 && usd(base) === usd(sol) && baseDay == null) tiers.push(`${usd(base)} a call on Base and on Solana`);
   else {
-    if (base > 0) tiers.push(`${usd(base)} a call on Base`);
+    if (base > 0) tiers.push(`${usd(base)} a call on Base${baseDay != null ? ` (at most ${usd(baseDay)} a day per seller)` : ""}`);
     if (sol > 0) tiers.push(`${usd(sol)} a call on Solana`);
   }
   if (!tiers.length) return "Sellers are routable on proven on-chain settlement.";

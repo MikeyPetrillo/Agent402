@@ -10,6 +10,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getFreePort } from "./lib/free-port.js";
+import { BASE_UNPROVEN_DEFAULT_USD } from "../src/base-unproven.js";
 
 let pass = 0;
 const ok = (c, m) => { if (!c) { console.error(`FAIL - ${m}`); process.exit(1); } pass++; console.log(`ok - ${m}`); };
@@ -19,7 +20,7 @@ const entry = {
   manifest: { name: "Catalog audit", homepage: origin }, fetchedAt: now, source: "manifest", error: null, history: [1, 1, 1, 1, 1],
   payToByNetwork: { "eip155:8453": "0x3D7718d5D868AF1Daae41D757244DE73DF72FB53" },
   evmDomainByNetwork: { "eip155:8453": { name: "USD Coin", version: "2" } },
-  tools: [{ seller: origin, method: "POST", route: "/v1/catalog-audit", slug: "catalog-audit", name: "Catalog audit", description: "Validate a product catalog feed for duplicate ids and GTIN checksum errors", category: "data", tags: [], price: 0.01, networks: ["eip155:8453"] }],
+  tools: [{ seller: origin, method: "POST", route: "/v1/catalog-audit", slug: "catalog-audit", name: "Catalog audit", description: "Validate a product catalog feed for duplicate ids and GTIN checksum errors", category: "data", tags: [], price: 0.05, networks: ["eip155:8453"] }],
 };
 const dir = mkdtempSync(join(tmpdir(), "a402-unproven-"));
 const file = join(dir, "x402-index-cache.json");
@@ -38,7 +39,7 @@ try {
   }
   ok(detail && detail.origin === origin, "the seeded seller is in the index");
   const tool = (detail.tools || [])[0];
-  ok(tool && tool.routerDispatchByChain?.base?.unprovenTier === true && tool.routerDispatchByChain.base.unprovenMaxUsd === 0.01, `the seller's own tool row shows the unproven tier (${JSON.stringify(tool?.routerDispatchByChain?.base)})`);
+  ok(tool && tool.routerDispatchByChain?.base?.unprovenTier === true && tool.routerDispatchByChain.base.unprovenMaxUsd === BASE_UNPROVEN_DEFAULT_USD && BASE_UNPROVEN_DEFAULT_USD === 0.05, `a $0.05 seller's own tool row shows the unproven tier at the $0.05 default ceiling (${JSON.stringify(tool?.routerDispatchByChain?.base)})`);
   ok(tool.executeVia && tool.executeViaCallableNow === true && tool.executeViaLane === "unproven" && tool.executeViaWhenEligible === undefined, `the seller's own tool row carries the same callable-now affordance as the route row (${JSON.stringify({ executeVia: !!tool.executeVia, now: tool.executeViaCallableNow, lane: tool.executeViaLane })})`);
   ok(detail.routerDispatchByChain?.base?.unprovenTier === undefined, "the seller-level verdict (no single price) still carries no tier");
   const rt = await (await fetch(`${base}/api/route?q=${encodeURIComponent("validate product catalog feed GTIN")}&include=external&top=10`)).json();

@@ -45,6 +45,7 @@ import { disableVendorSpendControls } from "./x402-spend-controls.js";
 import { assertNotOwnPayout } from "./own-wallets.js";
 import { readBytesCapped, readTextCapped, declaredLength, discardBody, decodeUtf8 } from "./capped-body.js";
 import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
+import { reserveUnprovenSellerSpend, releaseUnprovenSellerSpend } from "./base-unproven.js";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -1036,6 +1037,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
   // seller below the settlement floor. The ceiling that admitted it is
   // checked against the quote actually being SIGNED, so a seller quoting the
   // probe inside the ceiling and the payment above it is refused here.
+  let unprovenHold = null;
   if (chain === "base" && allowUnproven) {
     const { baseUnprovenAllowanceAtomic } = await import("./base-unproven.js");
     const ceiling = baseUnprovenAllowanceAtomic();
@@ -1051,6 +1053,20 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
   const spendToken = await reserveSpend(quotedAtomic); // F3 belt, before signing (throws 429 if over the window budget)
   let committed = false;
   try {
+    // BASE UNPROVEN PER-SELLER DAILY CAP (src/base-unproven.js): checked and
+    // the signed amount reserved in one step, keyed on this accept's payTo and
+    // the seller's origin, before anything is signed. A refusal here is
+    // pre-commit (the finally gives the budget hold back); the reservation is
+    // given back by the same finally only when nothing could have moved.
+    if (chain === "base" && allowUnproven) {
+      const capped = await reserveUnprovenSellerSpend({ payTo: payable.payTo, origin: url, atomic: quotedAtomic });
+      if (!capped.ok) {
+        const e = new Error(`Seller ${String(payable.payTo).slice(0, 10)}… is below the Base settlement floor and has reached the unproven lane's daily cap per seller ($${capped.spentUsd.toFixed(2)} of $${capped.capUsd} in 24 h) - not paid`);
+        e.statusCode = 409;
+        throw e;
+      }
+      unprovenHold = capped.handle;
+    }
     // Normalize v1-style accepts before signing: sellers that quote ONLY via
     // maxAmountRequired (no `amount`) crash the scheme's BigInt(amount) with
     // "Cannot convert undefined to a BigInt" — hit live 2026-07-23 buying
@@ -1458,6 +1474,9 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     // us, or the chain shows the credential expired unused. A seen response
     // (any status) and an unanswered request leave committed=true, so the
     // hold stands.
-    if (!committed) releaseSpend(quotedAtomic, spendToken);
+    if (!committed) {
+      releaseSpend(quotedAtomic, spendToken);
+      releaseUnprovenSellerSpend(unprovenHold);
+    }
   }
 }

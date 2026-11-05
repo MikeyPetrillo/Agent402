@@ -42,6 +42,12 @@ LLC: credit the entity, never a personal name.
 - `src/tools/route-execute.js`: route-and-execute, buys from proven external sellers per chain
   (`src/x402-buyer.js`, `src/solana-buyer.js` whose external leg runs under `SOR_SVM_BUDGET_MS`,
   inside a recent blockhash's life, `src/tempo-buyer.js`, `src/algorand-sellers.js`).
+  A Base seller below the settlement floor is tried after every proven candidate in the unproven
+  tier (`src/base-unproven.js`): its signed quote at most `SOR_BASE_UNPROVEN_MAX_USD` (default
+  $0.05), paid only at its live 402's payTo, `sellerProof: "unproven"` on the receipt, and at most
+  `SOR_BASE_UNPROVEN_SELLER_DAILY_USD` (default $0.25) per seller (payTo and origin host) over a
+  rolling 24 h, reserved before signing on the shared-limits window (Redis) and given back only
+  when nothing moved. Solana's tier (`SOR_SVM_UNPROVEN_MAX_USD`, `src/solana-buyer.js`) is separate.
 - `src/refund-ledger.js` + `scripts/refund-run.js`: charged-but-failed is recorded as a debt and
   repaid only after on-chain proof (`src/payment-verify.js`).
 - `src/state-db.js`: the state database (Postgres, schema `state`): documents, records, log

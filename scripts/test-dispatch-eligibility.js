@@ -195,6 +195,15 @@ ok(dispatchEligibility({ local: true }).reason === "local_catalog" && dispatchEl
   ok(dispatchEligibility({ ...base, settled: 0, priceUsd: 0.01, unprovenMaxUsd: 0.01, deliveryFailing: { base: true } }).chains.base.unprovenTier === undefined, "a failing delivery memo is something else wrong: no tier");
   ok(dispatchEligibility({ ...base, settled: 0, priceUsd: 0.01, unprovenMaxUsd: 0.01, urlTemplate: true }).chains.base.unprovenTier === undefined, "a path template: no tier");
   ok(typeof dispatchLegend()["routerDispatchByChain.base.unprovenTier"] === "string", "the legend explains unprovenTier");
+  // The shipped default ceiling (2026-11-05: $0.05), read from env as the router reads it.
+  {
+    const saved = process.env.SOR_BASE_UNPROVEN_MAX_USD;
+    delete process.env.SOR_BASE_UNPROVEN_MAX_USD;
+    const at = dispatchEligibility({ ...base, settled: 0, priceUsd: 0.05 });
+    ok(at.chains.base.unprovenTier === true && at.chains.base.unprovenMaxUsd === 0.05, "default ceiling: a $0.05 seller below the floor is in the unproven tier");
+    ok(dispatchEligibility({ ...base, settled: 0, priceUsd: 0.06 }).chains.base.unprovenTier === undefined, "default ceiling: a $0.06 seller is not");
+    if (saved === undefined) delete process.env.SOR_BASE_UNPROVEN_MAX_USD; else process.env.SOR_BASE_UNPROVEN_MAX_USD = saved;
+  }
   // The legend says whether the self-funding reader is on, so a reader can
   // tell a gross count from a netted one; the env switch turns it off.
   {
