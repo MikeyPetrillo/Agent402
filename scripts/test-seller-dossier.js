@@ -18,6 +18,9 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { strict as assert } from "node:assert";
 import { buildSellerDossierTool, composeSellerDossier, hostOf } from "../src/tools/seller-dossier.js";
 import { buildEvidenceBinding } from "../src/evidence-binding.js";
+import { routerLanes } from "../src/router-lanes.js";
+import { baseUnprovenAllowanceUsd } from "../src/base-unproven.js";
+import { EXEC_TIERS } from "../src/tools/route-execute.js";
 
 let passed = 0, failed = 0;
 const check = (name, fn) => {
@@ -426,6 +429,31 @@ check("with no readiness source the tool answers as before", () => {
   const r = build().handler({ origin: "unknown.example" });
   assert.equal(r.listed, false);
   assert.match(String(r.reason), /not in our index/i);
+});
+
+// The published example's unproven lane and its flag are what the tool answers
+// on a default host for the same route, never typed figures.
+check("the example's unproven lane and flag equal the live ones under the default env", () => {
+  const keys = ["SOR_BASE_UNPROVEN_MAX_USD", "SOR_BASE_UNPROVEN_SELLER_DAILY_USD", "SOR_BASE_UNPROVEN_DAILY_USD"];
+  const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+  for (const k of keys) delete process.env[k];
+  try {
+    const ex = build({ execTiers: EXEC_TIERS }).discovery.output.example;
+    const u = ex.router.lanes.unproven;
+    const live = routerLanes({
+      toolVerdicts: [{ price: u.cheapestUsd, routerDispatchByChain: { base: { eligible: false, reason: "settlement_required", unprovenTier: true } } }],
+      unprovenMaxUsd: baseUnprovenAllowanceUsd(), execTiers: EXEC_TIERS,
+    }).unproven;
+    assert.deepEqual(u, live);
+    assert.match(u.note, /lane's daily total/);
+    assert.equal(u.cheapestTier, "route-execute-plus");
+    const flags = composeSellerDossier({ origin: "https://seller.example", detail: DETAIL, lanes: { proven: { eligible: false, tiers: [], blockers: [] }, unproven: live }, dispatch: { routerDispatchEligible: false }, now: NOW }).flags || [];
+    const liveFlag = flags.find((f) => /unproven lane/.test(f));
+    assert.ok(liveFlag, JSON.stringify(flags));
+    assert.ok(ex.flags.includes(liveFlag), `${liveFlag} vs ${JSON.stringify(ex.flags)}`);
+  } finally {
+    for (const k of keys) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+  }
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

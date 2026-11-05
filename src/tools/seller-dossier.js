@@ -21,10 +21,10 @@
 // be read as a verdict we did not measure. Flags are sentences.
 
 // A crawled row's price is a label ("$0.01"), a number or an object: one reader.
-import { priceUsdOf, isPricedAboveZero } from "../price-usd.js";
+import { priceUsdOf, isPricedAboveZero, usdFigure } from "../price-usd.js";
 // Both router lanes, read off the router's own per-route verdicts (one summary,
 // shared with seller-trust).
-import { routerLanes } from "../router-lanes.js";
+import { routerLanes, exampleUnprovenLane } from "../router-lanes.js";
 // The served display name is cleaned and capped like every agent-read seller
 // surface; the listing screen below reads the name as written.
 import { servedSellerName } from "../x402-index.js";
@@ -424,7 +424,7 @@ export function composeSellerDossier(a) {
   if (router.refusals.length) flags.push(`our router's paid retries to one of this seller's routes were refused on ${router.refusals.map((r) => r.chain).join(", ")}; that route is skipped there until the memo expires`);
   for (const f of router.deliveryFailures) flags.push(`our router paid this seller on ${f.chain} and the call did not deliver, so that chain is skipped until the memo expires or a call succeeds (what we observed is not published here; ask us)`);
   if (!self && dispatch && dispatch.routerDispatchEligible !== true && dispatch.routerDispatchReason) flags.push(`router verdict: ${dispatch.routerDispatchReason}`);
-  if (!self && dispatch?.routerDispatchEligible !== true && lanes?.unproven?.eligible === true) flags.push(`${lanes.unproven.toolCount} route(s) can still be paid through the Base unproven lane (up to $${lanes.unproven.maxUsd} per call${lanes.unproven.sellerDailyMaxUsd ? ` and $${lanes.unproven.sellerDailyMaxUsd} a day` : ""}, after every proven seller for the task, flagged unproven on the buyer's receipt)`);
+  if (!self && dispatch?.routerDispatchEligible !== true && lanes?.unproven?.eligible === true) flags.push(unprovenLaneFlag(lanes));
   if (prices.length && thresholds.sorCap != null && prices[0] > thresholds.sorCap) flags.push(`the cheapest priced route ($${prices[0]}) is above the router's $${thresholds.sorCap} underlying cap for the cheapest tier`);
 
   // -------------------------------------------------------- our paid calls
@@ -485,6 +485,13 @@ export const NOTICE = Object.freeze({
   corrections: "A seller who believes a line misreads them can write to mike@agent402.tools and we will re-read the origin and correct or withdraw the line.",
 });
 
+// The flag a seller payable through the Base unproven lane carries; the
+// published example reads it too, so its figures are never typed.
+export function unprovenLaneFlag(lanes) {
+  const u = lanes.unproven;
+  return `${u.toolCount} route(s) can still be paid through the Base unproven lane (up to ${usdFigure(u.maxUsd)} per call${u.sellerDailyMaxUsd ? ` and ${usdFigure(u.sellerDailyMaxUsd)} a day` : ""}, after every proven seller for the task, flagged unproven on the buyer's receipt)`;
+}
+
 export function buildSellerDossierTool({
   getSellerDetail, getSellerEntry, getDispatchRow, getEvidenceBinding, getLeaderboardRow, getBazaarQuality,
   getSolanaEvidence, getMpp, getRefusals, getDeliveryFailures, getRegistration, getDelivery, getSharedClaims, helpers = {},
@@ -522,9 +529,9 @@ export function buildSellerDossierTool({
           catalog: { toolCount: 2, paidToolCount: 2, priceRangeUsd: { min: 0.01, max: 0.04 }, networksAdvertised: ["eip155:8453"], tools: [{ method: "POST", route: "/api/x", name: "X", priceUsd: 0.01, networks: ["eip155:8453"], price: { source: "live-402", observedAt: "2026-09-08T01:00:00.000Z", carriedForward: false, stale: false, originDeclaredUsd: 0.01, disagreesWithOrigin: false, conflict: null }, method_provenance: { inferred: false, correctedFrom: null }, networksVerifiedAt: null, networksVerificationDue: false, urlTemplate: null, dispatch: "settlement_required", ourPaidCalls: null }], toolsTruncated: false, priceProvenance: { stale: 0, carriedForward: 0, disagreeWithOrigin: 0, unpriced: 0, urlTemplates: 0, methodInferred: 0, methodCorrected: 0, networksVerificationDue: 0 } },
           wallets: { advertisedByNetwork: { "eip155:8453": ["0x1111111111111111111111111111111111111111"] }, base: { advertised: "0x1111111111111111111111111111111111111111", ownEvidence: { settled: 12, payers: 4, note: "chain join on this origin's OWN advertised address, plus any committed seed" }, inheritedFrom: [], inheritedNote: null, sharedWithOrigins: [] }, routerDispatchDetail: null },
           settlementEvidence: { base: { source: "on-chain leaderboard (Base USDC, ours)", callsSettled: 12, uniqueBuyers: 4, totalUsd: 0.18, wallets: ["0x1111111111111111111111111111111111111111"], window: null }, bazaar: { source: "Coinbase Bazaar, last 30 days (their measurement, not ours)", calls30d: 30, payers30d: 5, lastCalledAt: "2026-09-07T20:00:00.000Z", payTos: ["0x1111111111111111111111111111111111111111"] }, solana: { source: "Solana SPL leaderboard", observed: false }, mpp: { source: "MPP index", observed: false } },
-          router: { eligible: false, reason: "settlement_required", byChain: { base: { eligible: false, reason: "settlement_required" } }, executeVia: null, executeViaCallableNow: false, lanes: { proven: { eligible: false, chain: "base", toolCount: 0, cheapestUsd: null, cheapestTier: null, tiers: [], blockers: ["settlement_required: on Base the router pays sellers with on-chain settlement history above the floor from enough distinct payers; a seller below it is tried only under the small unproven ceiling when its verdict carries unprovenTier"] }, unproven: { eligible: true, chain: "base", maxUsd: 0.05, sellerDailyMaxUsd: 0.25, toolCount: 1, cheapestUsd: 0.01, cheapestTier: "route-execute-plus", note: "On Base the router may still pay the seller, but only after every proven seller for the task, only at the wallet its own live 402 names, never above that ceiling, never past its daily cap per seller, and flagged unproven on the buyer's receipt ($0.05 per call, at most $0.25 a day per seller)." } }, routable: true, routableVia: "unproven", gate: { settlementThreshold: 50, distinctPayersThreshold: 3, underlyingCapUsd: 0.005, cheapestPaidToolUsd: 0.01 }, refusals: [], deliveryFailures: [] },
+          router: { eligible: false, reason: "settlement_required", byChain: { base: { eligible: false, reason: "settlement_required" } }, executeVia: null, executeViaCallableNow: false, lanes: { proven: { eligible: false, chain: "base", toolCount: 0, cheapestUsd: null, cheapestTier: null, tiers: [], blockers: ["settlement_required: on Base the router pays sellers with on-chain settlement history above the floor from enough distinct payers; a seller below it is tried only under the small unproven ceiling when its verdict carries unprovenTier"] }, unproven: exampleUnprovenLane({ priceUsd: 0.01, execTiers: execTiers || [] }) }, routable: true, routableVia: "unproven", gate: { settlementThreshold: 50, distinctPayersThreshold: 3, underlyingCapUsd: 0.005, cheapestPaidToolUsd: 0.01 }, refusals: [], deliveryFailures: [] },
           delivery: { source: "route-and-execute paid calls (ours)", routesObserved: 0, calls: 0, kept: 0, rows: [] },
-          flags: ["router verdict: settlement_required", "1 route(s) can still be paid through the Base unproven lane (up to $0.05 per call and $0.25 a day, after every proven seller for the task, flagged unproven on the buyer's receipt)", "the cheapest priced route ($0.01) is above the router's $0.005 underlying cap for the cheapest tier"],
+          flags: ["router verdict: settlement_required", unprovenLaneFlag({ unproven: exampleUnprovenLane({ priceUsd: 0.01, execTiers: execTiers || [] }) }), "the cheapest priced route ($0.01) is above the router's $0.005 underlying cap for the cheapest tier"],
           caveats: ["every count here is a floor: it is what our crawl, probes and chain reads have observed, never the seller's total"],
           evidenceSource: "x402 seller crawl + on-chain settlement + Bazaar + MPP index + our own paid calls",
           generatedAt: "2026-09-08T02:00:00.000Z",

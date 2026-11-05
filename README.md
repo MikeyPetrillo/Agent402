@@ -35,7 +35,7 @@ Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent
 > [`/sell`](https://agent402.tools/sell) (`POST /api/index/register`:
 > self-serve, no signup, 0% take). The router sends buyers to a seller once its
 > routes show settled payments from several independent buyers; calls priced at
-> $0.05 or less on Base (up to $0.25 a day per seller and $5 a day in all) or
+> $0.05 or less on Base (up to $0.25 a day per seller and $5.00 a day in all) or
 > $0.01 or less on Solana can be tried before that, marked unproven on the
 > buyer's receipt.
 > Charging crawlers on your own site instead?
