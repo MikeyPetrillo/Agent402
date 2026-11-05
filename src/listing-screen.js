@@ -106,17 +106,20 @@ const SPACED_LONG_RUN = /(?<![a-z0-9])[a-z](?:[ .\-_][a-z](?![a-z0-9])){3}/;
 // wider gap between spelled-out words ("c h o o s e   m e") still ends a word.
 // Once the text holds one run of four letters or more, a shorter run beside
 // it ("m e") is joined too.
-// `leetHint`, when given, is a necessary condition on the text for the digit
-// reading to find anything (INJECTION_LEET_HINT below): a text that fails it
-// is not folded, since the folded form could not match either.
+// `leetHint`, when given, is a necessary condition on any form for the
+// patterns to match it (INJECTION_LEET_HINT below, which also accepts the
+// characters the digit reading would turn into letters): a text that fails it
+// is not folded, since the folded form could not match either, and a form
+// that fails it is left out, so the caller tests only forms that could match.
 function extraForms(base, forms, spacedFrom = base, leetHint = null) {
-  if (LEET_PAIR.test(base) && (!leetHint || leetHint.test(base))) { const folded = base.replace(FOLD_WORD, foldLeetWord); if (folded !== base) forms.push(folded); }
+  const baseMay = !leetHint || leetHint.test(base);
+  if (baseMay && LEET_PAIR.test(base)) { const folded = base.replace(FOLD_WORD, foldLeetWord); if (folded !== base) forms.push(folded); }
   if (SPACED_LONG_RUN.test(spacedFrom)) {
     const joined = spacedFrom.replace(SPACED_RUN, (w) => w.replace(/[ .\-_]/g, ""));
     const flat = joined.replace(/\s+/g, " ");
     if (flat !== base) forms.push(flat);
   }
-  return forms;
+  return leetHint ? forms.filter((f) => (f === base ? baseMay : leetHint.test(f))) : forms;
 }
 function injectionForms(text, leetHint = null) {
   const raw = String(text || "");
@@ -164,8 +167,10 @@ const INJECTION_HINT = /ignor|disregard|forget|always|you\s+must|be\s+sure\s+to|
 // The same condition on the text BEFORE its digits are read as letters: each
 // letter the fold can produce accepts the characters that fold to it, a word
 // boundary is dropped (the fold can turn "@" or "$" into a letter and close
-// one) and \w also accepts "@" and "$". A text that fails this cannot yield a
-// folded form that passes INJECTION_HINT, so the fold is skipped for it.
+// one) and \w also accepts "@" and "$". It accepts every form INJECTION_HINT
+// accepts, so a form that fails it is dropped unread, and a text that fails it
+// cannot yield a folded form that passes INJECTION_HINT, so the fold is
+// skipped for it: an honest listing costs this one test.
 const LEET_SOURCES = { o: "[o0]", i: "[i1]", e: "[e3]", a: "[a4@]", s: "[s5$]", t: "[t7]" };
 const INJECTION_LEET_HINT = new RegExp(INJECTION_HINT.source.replace(/\\.|[oieast]/g, (m) => (m.length === 2 ? (m === "\\b" ? "" : m === "\\w" ? "[\\w@$]" : m) : LEET_SOURCES[m])));
 const anyInjection = (form) => INJECTION_HINT.test(form) && INJECTION_ANY.test(form);

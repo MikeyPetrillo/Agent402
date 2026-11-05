@@ -118,6 +118,11 @@ for (const s of corpus) {
   }
 }
 ok(hintMisses === 0, `every form the alternation matches passes the hint (${anyHits} matching forms of ${formsSeen}, ${hintMisses} missed)`);
+// The leet hint accepts every form the hint accepts (a form it refuses is
+// dropped before the hint and the alternation run).
+let hintPass = 0, leetRefused = 0;
+for (const s of corpus) for (const f of injectionForms(s)) if (INJECTION_HINT.test(f)) { hintPass++; if (!INJECTION_LEET_HINT.test(f)) { leetRefused++; if (leetRefused < 4) ok(false, `the leet hint refused a form the hint accepts: ${JSON.stringify(f).slice(0, 160)}`); } }
+ok(leetRefused === 0 && hintPass > 1000, `the leet hint accepts every form the hint accepts (${hintPass} forms, ${leetRefused} refused)`);
 ok(anyHits >= corpus.length * 0.02, `the corpus exercises the screen (${anyHits} matches over ${corpus.length} texts)`);
 perPattern.forEach((n, i) => ok(n > 0, `pattern ${i} exercised by the corpus (${n} forms)`));
 
