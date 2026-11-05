@@ -18,6 +18,7 @@
 //     cap removed from the funnel the same seller reads 12,000 tools, so the
 //     assertions above are load-bearing.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { childJson } from "./lib/child-json.js";
 import { spawn, spawnSync } from "node:child_process";
 import { cpSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -171,7 +172,7 @@ const controlEnv = { ...process.env, ...ownStoreEnv("seller-cap-control"), REDIS
 function runControl() {
   const r = spawnSync(process.execPath, [CONTROL, copy], { cwd: copy, env: controlEnv, encoding: "utf8", timeout: 120_000 });
   let out = null;
-  try { out = JSON.parse(r.stdout.trim().split("\n").pop()); } catch { /* no answer line */ }
+  try { out = childJson(r.stdout); } catch { /* no answer line */ }
   return { status: r.status, out, stderr: r.stderr || "" };
 }
 {
@@ -222,7 +223,7 @@ const freshEnv = { ...controlEnv, INDEX_SELLER_TOOL_CAP: String(FRESH_CAP), INDE
 function runFresh(root) {
   const r = spawnSync(process.execPath, [FRESH, root], { cwd: root, env: freshEnv, encoding: "utf8", timeout: 120_000 });
   let out = null;
-  try { out = JSON.parse(r.stdout.trim().split("\n").pop()); } catch { /* no answer line */ }
+  try { out = childJson(r.stdout); } catch { /* no answer line */ }
   return { status: r.status, out, stderr: r.stderr || "" };
 }
 {

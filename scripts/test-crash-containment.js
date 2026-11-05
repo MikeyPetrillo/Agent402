@@ -24,6 +24,7 @@
 // the containment removed, step by step, so the suite proves it is the
 // containment that keeps the process up.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { childJson } from "./lib/child-json.js";
 import { spawn, spawnSync } from "node:child_process";
 import { cpSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -377,7 +378,7 @@ const controlEnv = { ...process.env, ...ownStoreEnv("crash-control"), REDIS_URL:
 function runControl(label) {
   const r = spawnSync(process.execPath, [CONTROL, copy], { cwd: copy, env: controlEnv, encoding: "utf8", timeout: 120_000 });
   let out = null;
-  try { out = JSON.parse(r.stdout.trim().split("\n").pop()); } catch { /* no answer line */ }
+  try { out = childJson(r.stdout); } catch { /* no answer line */ }
   return { label, status: r.status, signal: r.signal, out, stderr: r.stderr || "" };
 }
 {
