@@ -13,8 +13,8 @@
 //     the socket address.
 //
 //   node scripts/test-trust-proxy.js
-import { randomBytes } from "node:crypto";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { getFreePorts } from "./lib/free-port.js";
 import { ownStoreEnv } from "./lib/own-stores.js";
