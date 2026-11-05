@@ -180,7 +180,7 @@ const serverLog = [];
 const proc = spawn(process.execPath, ["--import", "./scripts/lib/golden-preload.js", "src/server.js"], {
   cwd: ROOT,
   env: {
-    ...process.env, ...storeEnv,
+    ...process.env, TRUST_PROXY_HOPS: "1", ...storeEnv,
     PORT: "0", FREE_MODE: "", NODE_ENV: "test", WALLET_ADDRESS: TREASURY, NETWORK: "base", PAYMENT_NETWORKS: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`,
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "",

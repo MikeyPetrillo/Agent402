@@ -70,8 +70,8 @@ LLC: credit the entity, never a personal name.
   adversarial strings: `scripts/test-redos-free-tier.js` sends every free tool's and skill's
   string fields a hostile corpus while it times the event loop.
 - **Identity-bound routes** (memory, my-usage, attest, feedback) are keyed on the signed
-  EIP-3009 `authorization.from` (`src/payer.js`); they are EVM-exact only and refused on
-  Tempo/credits gates. Never weaken payer attribution. Never case-fold base58/Stellar addresses.
+  EIP-3009 `authorization.from` (`src/payer.js` `identityPayerOf`: null in FREE_MODE, where no
+  header is verified); they are EVM-exact only and refused on Tempo/credits gates. Never weaken payer attribution. Never case-fold base58/Stellar addresses.
 - Catalog floor: 400 entries, CI-checked by `node scripts/sync-count.js --check`. Marketing and
   static surfaces say **"500+ tools"**, never an exact number; runtime surfaces derive exact counts.
 - Retired routes answer 410 with a replacement: add every retirement to `src/retired-tools.js`.

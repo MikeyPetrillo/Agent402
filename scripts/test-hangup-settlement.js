@@ -672,7 +672,7 @@ await new Promise((r) => orStub.listen(OR_PORT, "127.0.0.1", r));
 // case m stops this server gracefully and boots a second one on the same file.
 const HANGUP_FILE = join(TMP, "hangup-forgiveness.json");
 const bootServer = () => spawn("node", ["--import", "./scripts/lib/openrouter-stub-preload.js", "--import", "./scripts/lib/hold-json-preload.js", "src/server.js"], {
-  env: { ...process.env, SHARED_LIMITS: CALLER_SHARED_LIMITS ?? "", SHARED_LIMITS_PREFIX: RUN_PREFIX, PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: TREASURY, NETWORK: "base",
+  env: { ...process.env, TRUST_PROXY_HOPS: "1", SHARED_LIMITS: CALLER_SHARED_LIMITS ?? "", SHARED_LIMITS_PREFIX: RUN_PREFIX, PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: TREASURY, NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`, PAYMENT_NETWORKS: "base",
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "",
     OPENROUTER_API_KEY: "test-key-never-used", OPENROUTER_MANAGEMENT_KEY: "", OPENROUTER_STUB_URL: `http://127.0.0.1:${OR_PORT}`, OPENROUTER_FLEX: "off",

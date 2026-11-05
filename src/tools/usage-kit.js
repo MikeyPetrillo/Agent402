@@ -8,7 +8,7 @@
 //
 // SVM/Stellar payments carry no signed payer the server can verify, so they
 // get a self-explaining 400 instead of a report.
-import { payerFromRequest } from "../payer.js";
+import { identityPayerOf, freeModeOn, FREE_MODE_IDENTITY_NOTE } from "../payer.js";
 import { payerUsage, payerReceipts, salesLedgerRefresh } from "../sales-ledger.js";
 import { refundsForPayer, refundLedgerRefresh } from "../refund-ledger.js";
 
@@ -81,8 +81,9 @@ export const USAGE_TOOLS = [
       },
     },
     handler: async (input, req) => {
-      const wallet = payerFromRequest(req);
+      const wallet = identityPayerOf(req);
       if (!wallet) {
+        if (freeModeOn()) throw bad(FREE_MODE_IDENTITY_NOTE);
         throw bad(
           "This report is keyed to the wallet that PAYS for it. Pay via x402 with an EIP-3009 authorization (USDC on any EVM chain this route offers) and the response covers that wallet's history. Solana/Stellar payments carry no signed payer the server can verify, so they cannot unlock a report."
         );
@@ -136,8 +137,9 @@ export const USAGE_TOOLS = [
       },
     },
     handler: async (input, req) => {
-      const wallet = payerFromRequest(req);
+      const wallet = identityPayerOf(req);
       if (!wallet) {
+        if (freeModeOn()) throw bad(FREE_MODE_IDENTITY_NOTE);
         throw bad(
           "Receipts are keyed to the wallet that PAYS for the call. Pay via x402 with an EIP-3009 authorization (USDC on any EVM chain this route offers) and the response covers that wallet's own payables. Solana/Stellar payments carry no signed payer the server can verify, so they cannot unlock receipts."
         );

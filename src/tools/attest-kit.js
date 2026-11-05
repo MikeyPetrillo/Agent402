@@ -33,7 +33,7 @@ import { assertSigningAllowed } from "../signing-halt.js";
 import { saleByTxFresh, setAttestation } from "../sales-ledger.js";
 import { withLease } from "../state-db.js";
 import { maySpend, noteSpend, adjustSpend, reserveSpend, composeReserve } from "../external-spend-guard.js";
-import { payerFromRequest } from "../payer.js";
+import { identityPayerOf, freeModeOn, FREE_MODE_IDENTITY_NOTE } from "../payer.js";
 
 // Slugs whose sales are never attestable (memory reads, the usage report):
 // set by server.js from the catalog's own identity-bound predicate.
@@ -239,7 +239,7 @@ export function makeAttestHandler(deps = {}) {
   // Check and book in one step; an injected { maySpend, noteSpend } (tests) composes into the same shape.
   const reserve = spend.reserveSpend || composeReserve(spend.maySpend, spend.noteSpend);
   const getChain = deps.chain ? async () => deps.chain : realChain;
-  const payerOf = deps.payerOf || payerFromRequest;
+  const payerOf = deps.payerOf || identityPayerOf;
   return async (input, req) => {
     const tx = normalizeTx(input?.tx);
     if (!tx) throw bad('Provide "tx": the settlement transaction from the PAYMENT-RESPONSE (or Payment-Receipt) header of a call you paid for - an EVM hash, a Solana or Stellar signature, or an Algorand id.', 400);
@@ -247,6 +247,7 @@ export function makeAttestHandler(deps = {}) {
     // memory family), so the signed EIP-3009 payer is always derivable here
     // and a non-EVM buyer was never offered the route, never charged.
     const caller = payerOf(req);
+    if (!caller && freeModeOn()) throw bad(FREE_MODE_IDENTITY_NOTE, 400);
     if (!caller) throw bad("Attestations are written for the buyer of a sale, so this call must be paid with a signed EVM authorization from the wallet that made the purchase. Nothing was charged.", 403);
     const sale = await lookup(tx);
     // The three refusals below say the same thing on purpose: a wallet that did

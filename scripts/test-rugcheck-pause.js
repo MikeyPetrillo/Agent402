@@ -143,7 +143,7 @@ ok(rugcheckInputKey("https://api.rugcheck.xyz/v1/tokens/MINTA/report/summary") =
   await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
   const child = spawn(process.execPath, ["--import", PRELOAD, "src/server.js"], {
     cwd: ROOT,
-    env: { ...process.env, PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
+    env: { ...process.env, TRUST_PROXY_HOPS: "1", PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
       FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`, PAYMENT_NETWORKS: "base",
       CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "", OPENROUTER_API_KEY: "",
       RUGCHECK_TOOLS: "on", RUGCHECK_PAUSE: "", RUGCHECK_PAUSE_AFTER: "3", RUGCHECK_PAUSE_MS: "300000", SOLANA_RPC_URL: "", JUPITER_API_BASE: "",

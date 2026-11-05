@@ -60,7 +60,7 @@ import {
   grant, revoke, listGrants, getLog, remember, recall, forget,
   PERSISTENT as memoryPersistent,
 } from "./tools/memory.js";
-import { payerFromRequest, payerFromPaymentResponse, paymentHeaderOf } from "./payer.js";
+import { payerFromRequest, payerFromPaymentResponse, paymentHeaderOf, identityPayerOf, FREE_MODE_IDENTITY_NOTE } from "./payer.js";
 import { paidPriceUsd, quotedOnNetworkUsd, ticketPriceUsd } from "./paid-price.js";
 import { runInAbortableScope, abortInFlightComposites, installDrainAwareFetch, isDrainAbort, drainSignal } from "./drain-abort.js";
 import { sharedClaimRequired, markListening } from "./replay-topology.js";
@@ -341,8 +341,9 @@ import { phaseArrivalMiddleware, markPaidHandlerStart, paidPhaseSummary } from "
 import { slowPaidMsFromEnv, slowPaidVerdict, recentSlowPaidCalls } from "./slow-paid-calls.js";
 import { assertAvmValidityCovers } from "./avm-validity.js";
 import { assertEvmValidityCovers, EVM_RUN_SECONDS, runTimeNote } from "./evm-validity.js";
-import { createAsyncJobs, wantsAsync, LOOPBACK_HEADER as ASYNC_LOOPBACK_HEADER } from "./async-jobs.js";
+import { createAsyncJobs, wantsAsync, isAsyncLoopbackToken, LOOPBACK_HEADER as ASYNC_LOOPBACK_HEADER } from "./async-jobs.js";
 import { cdnClientIpMiddleware, cdnProxyEnabled, cdnOriginStatus, refreshCdnOriginShared } from "./cdn-client-ip.js";
+import { trustProxyHops, replayClientIpMiddleware } from "./trust-proxy.js";
 import { paidNoStoreMiddleware } from "./paid-no-store.js";
 import { cdnSyncDeadlineMiddleware, cdnSyncWindowMiddleware, followsJobAnswer } from "./cdn-sync-window.js";
 import { slowSyncWindowMiddleware } from "./slow-sync-window.js";
@@ -2508,11 +2509,16 @@ app.use((req, _res, next) => {
 // Every request renders inside its own path so the page shell can tell a
 // bearer link from its section canonical (src/ledger-chrome.js renderPathStore).
 app.use((req, _res, next) => renderPathStore.run(req.path, next));
-// Behind Railway's single edge proxy: trust exactly that hop so req.ip is the
-// real client IP (the X-Forwarded-For entry the edge appends), not an
-// attacker-supplied XFF value. This is what the per-IP rate limiters key on,
-// so spoofing it must not mint a fresh bucket. Tune for other topologies.
-app.set("trust proxy", Number(process.env.TRUST_PROXY_HOPS) || 1);
+// TRUST_PROXY_HOPS is the number of proxies in front of this listener whose
+// X-Forwarded-For entries are trusted (production sets 1: the edge appends the
+// real client). Unset, it is 0: a server reached directly takes req.ip from the
+// socket, since a client-written X-Forwarded-For would otherwise mint a fresh
+// bucket in every per-IP limiter (src/trust-proxy.js).
+const TRUST_PROXY_HOPS = trustProxyHops();
+app.set("trust proxy", TRUST_PROXY_HOPS);
+if (TRUST_PROXY_HOPS === 0) {
+  app.use(replayClientIpMiddleware({ isReplay: (req) => isMcpLoopback(req) || isAsyncLoopbackToken(req.headers[ASYNC_LOOPBACK_HEADER]) }));
+}
 // Through the CDN proxy the edge-reported peer is a CDN address and the client
 // is CF-Connecting-IP; from any other peer that header is ignored. req.ip is
 // redefined here, before any reader, so every limiter and attribution keys on
@@ -11315,12 +11321,16 @@ app.post("/api/pdf", async (req, res) => {
 // Wallet-keyed memory: the verified payer address is the caller identity.// Wallet-keyed memory: the verified payer address is the caller identity.
 // `actor` is who is calling; `owner` is the namespace being acted on (defaults
 // to the caller's own namespace; a different owner requires a grant).
+// In FREE_MODE nothing verifies a payment header, so identityPayerOf is null
+// there and the only identity is the demo namespace (src/payer.js).
 function memoryActor(req, res) {
-  const payer = payerFromRequest(req);
+  const payer = identityPayerOf(req);
   if (payer) return payer;
   if (FREE_MODE && req.query.ns) return `demo:${req.query.ns}`;
   res.status(400).json({
-    error: "No payer identity found on this request. Pay via x402 - the paying wallet is your identity.",
+    error: FREE_MODE
+      ? `${FREE_MODE_IDENTITY_NOTE} For memory, pass ?ns=<name> to use a demo namespace.`
+      : "No payer identity found on this request. Pay via x402 - the paying wallet is your identity.",
   });
   return null;
 }

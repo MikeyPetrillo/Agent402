@@ -60,7 +60,7 @@ await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
 
 const serverLog = [];
 const proc = spawn(process.execPath, ["--import", "./scripts/lib/hold-json-preload.js", "src/server.js"], {
-  env: { ...process.env, ...ownStoreEnv("replay-hold"), PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
+  env: { ...process.env, TRUST_PROXY_HOPS: "1", ...ownStoreEnv("replay-hold"), PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`,
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYMENT_NETWORKS: "base", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "",
     // X402_INDEX_CRAWL=off also keeps the revenue warm-up (a public-RPC scan)

@@ -104,7 +104,7 @@ async function boot(extraEnv, { preload = null } = {}) {
   const proc = spawn(process.execPath, [...(preload ? ["--import", preload] : []), join(ROOT, "src", "server.js")], {
     cwd: ROOT,
     env: {
-      ...process.env,
+      ...process.env, TRUST_PROXY_HOPS: "1",
       WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", PAYMENT_NETWORKS: "base",
       FACILITATOR_URL: fac, AGENT402_BASE_RPC: `${fac}/rpc`,
       CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "",

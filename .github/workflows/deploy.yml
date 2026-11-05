@@ -4863,6 +4863,10 @@ jobs:
           t node scripts/test-checkout-limiter.js
           # Client address behind the CDN proxy: CF-Connecting-IP only from a CDN peer and only when valid, IPv4 and IPv6, a forged header never mints a limiter bucket (boots a server, offline)
           t node scripts/test-cdn-client-ip.js
+          # Trust proxy: TRUST_PROXY_HOPS unset trusts no forwarded hop (a spoofed X-Forwarded-For never mints a limiter bucket, boot warning names the variable), 1 behaves as behind the edge (boots two servers, offline)
+          t node scripts/test-trust-proxy.js
+          # FREE_MODE holds no paid fact: a forged payment header names no wallet on the identity-bound routes, and a paid server answers a FREE_MODE sibling's job 404 (boots a FREE_MODE and a paid server on one job store, offline)
+          t node scripts/test-free-mode-isolation.js
           # A refused payment says WHY on the 402 (the vendor answers a bare {} and drops the reason; one client looped ~9/min for 12h) — boots a paid server, offline
           t node scripts/test-payment-reject.js
           # A v1-era client names the price maxAmountRequired; x402 v2 deep-equals the echoed accepts block, so that one rename made a correct payment unmatchable — boots a paid server, offline

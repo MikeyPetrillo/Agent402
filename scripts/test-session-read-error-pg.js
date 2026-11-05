@@ -40,7 +40,7 @@ globalThis.fetch = function (input, init) {
 };
 `);
 proc = spawn(process.execPath, ["--import", preload, "src/server.js"], {
-  env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", STRIPE_SECRET_KEY: "sk_test_never_used_offline", STRIPE_WEBHOOK_SECRET: "", POSTHOG_API_KEY: "",
+  env: { ...process.env, TRUST_PROXY_HOPS: "1", PORT: String(PORT), FREE_MODE: "true", STRIPE_SECRET_KEY: "sk_test_never_used_offline", STRIPE_WEBHOOK_SECRET: "", POSTHOG_API_KEY: "",
     STATE_DATABASE_URL: relay.url, STATE_DB_SCHEMA: schema, STATE_DB_CONNECT_TIMEOUT_MS: "1000", STATE_DB_QUERY_TIMEOUT_MS: "2000", REDIS_URL: "", OPENAI_API_KEY: "", OPENROUTER_API_KEY: "",
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
     HUMAN_CHECKOUT_DIR: TMP, REFUND_DB_DIR: TMP, SALES_LEDGER_DB: join(TMP, "sales.db") },

@@ -141,7 +141,7 @@ await new Promise((r) => facilitator.listen(FAC_PORT, r));
 
 proc = spawn("node", ["src/server.js"], {
   env: {
-    ...process.env, ...ownStoreEnv("mcp-mpp"), PORT: String(PORT), FREE_MODE: "",
+    ...process.env, TRUST_PROXY_HOPS: "1", ...ownStoreEnv("mcp-mpp"), PORT: String(PORT), FREE_MODE: "",
     WALLET_ADDRESS: TREASURY, NETWORK: "base",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`,
     MPP_SECRET_KEY: SECRET,
@@ -295,7 +295,7 @@ try {
   const port2 = await getFreePort();
   proc = spawn("node", ["src/server.js"], {
     env: {
-      ...process.env, ...ownStoreEnv("mcp-mpp-deadline"), PORT: String(port2), FREE_MODE: "",
+      ...process.env, TRUST_PROXY_HOPS: "1", ...ownStoreEnv("mcp-mpp-deadline"), PORT: String(port2), FREE_MODE: "",
       WALLET_ADDRESS: TREASURY, NETWORK: "base",
       FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`,
       MPP_SECRET_KEY: SECRET,

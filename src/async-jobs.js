@@ -60,6 +60,16 @@ const sameToken = (a, b) => {
   return x.length === y.length && x.length > 0 && timingSafeEqual(x, y);
 };
 
+// The loopback tokens of this process's job runners, so a middleware mounted
+// before the runner (src/trust-proxy.js) can tell a genuine replay from a
+// client that copied the header name.
+const liveLoopbackTokens = new Set();
+/** True when `value` is the loopback token of a job runner in this process. */
+export function isAsyncLoopbackToken(value) {
+  for (const t of liveLoopbackTokens) if (sameToken(value, t)) return true;
+  return false;
+}
+
 /** What GET /api/jobs/:id returns: no owner, pid or boot id.
  *  `status` keeps its original values (working | completed | failed), so a
  *  poller written for them still finishes; `state` is the lifecycle
@@ -102,6 +112,7 @@ export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store,
   quoteOf = listPriceUsd, paidOf = ({ basePriceUsd, meteredUsd }) => (Number(meteredUsd) > 0 ? Number(meteredUsd) : basePriceUsd) }) {
   if (!port || !store || typeof asyncRouteOf !== "function") throw new Error("createAsyncJobs: port, store and asyncRouteOf are required");
   const loopbackToken = randomBytes(24).toString("hex");
+  liveLoopbackTokens.add(loopbackToken);
   const perIp = new Map();
   const dec = (ip) => { const n = (perIp.get(ip) || 1) - 1; if (n <= 0) perIp.delete(ip); else perIp.set(ip, n); };
 

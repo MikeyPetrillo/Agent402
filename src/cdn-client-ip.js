@@ -1,9 +1,10 @@
 // The client address, whether a request reached us straight through the
 // hosting edge or through a CDN proxy in front of it.
 //
-// "trust proxy" (TRUST_PROXY_HOPS, default 1) makes req.ip the address the
-// hosting edge saw: the last X-Forwarded-For entry, which the edge appends and
-// a caller cannot choose. Reached directly, that is the client. Reached through
+// "trust proxy" (TRUST_PROXY_HOPS, default 0; production sets 1, src/trust-proxy.js)
+// makes req.ip the address the hosting edge saw: with one hop, the last
+// X-Forwarded-For entry, which the edge appends and a caller cannot choose; with
+// none, the socket address. Reached directly, that is the client. Reached through
 // Cloudflare's proxy, it is a Cloudflare address, and the client is the
 // CF-Connecting-IP header Cloudflare sets.
 //

@@ -187,8 +187,13 @@ function writeJsonAtomic(path, obj) {
  *        module-level BOOT_ID (one value per process, which is what makes "a
  *        record claimed by another boot" mean "its run died"). Overridable so a
  *        test can simulate a restart without forking a process.
+ * @param {boolean} [opts.freeMode]  this process serves with payments off
+ *        (FREE_MODE). Stamped on each record it creates; a store that is not
+ *        free mode answers such a record as unknown, so a result a FREE_MODE
+ *        sibling produced unpaid in a shared directory or database is never
+ *        served by a paid instance.
  */
-export function createTaskStore({ dir, now = () => Date.now(), log = console.log, onChargedFailure = null, bootId = BOOT_ID, limits = {}, label = "mcp-tasks" } = {}) {
+export function createTaskStore({ dir, now = () => Date.now(), log = console.log, onChargedFailure = null, bootId = BOOT_ID, limits = {}, label = "mcp-tasks", freeMode = process.env.FREE_MODE === "true" } = {}) {
   const root = dir || DEFAULT_DIR();
   try { mkdirSync(root, { recursive: true }); } catch { /* writes fail loudly below */ }
 
@@ -222,8 +227,11 @@ export function createTaskStore({ dir, now = () => Date.now(), log = console.log
       phase: "queued",
       owner: bootId,
       pid: process.pid,
+      ...(freeMode ? { freeMode: true } : {}),
     };
   };
+  // A record made by a FREE_MODE process is not this paid store's to serve.
+  const servedHere = (rec) => freeMode || rec?.freeMode !== true;
 
   /** Merge a progress patch into a WORKING record in memory; false when the
    *  record is terminal (a terminal record never changes again). */
@@ -356,7 +364,7 @@ export function createTaskStore({ dir, now = () => Date.now(), log = console.log
     /** Read for the wire. Returns null for unknown, "expired" for a TTL'd id. */
     function get(id) {
       const rec = read(id);
-      if (!rec) return null;
+      if (!rec || !servedHere(rec)) return null;
       // `rec` exists, so read() already matched TASK_ID_RE - recPath cannot throw
       // here, and the catch covers the file being gone either way.
       if (expired(rec)) {
@@ -600,7 +608,7 @@ export function createTaskStore({ dir, now = () => Date.now(), log = console.log
     async function get(id) {
       await ready;
       const rec = await rowOf(String(id || ""));
-      if (!rec) return null;
+      if (!rec || !servedHere(rec)) return null;
       if (expired(rec)) { await delRow(id); mine.delete(id); return "expired"; }
       return rec;
     }

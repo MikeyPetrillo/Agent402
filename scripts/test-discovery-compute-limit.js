@@ -40,7 +40,7 @@ ok(Object.isFrozen(a2), "the shared list is frozen, so no caller can mutate anot
 const MCP_MARKER = `mcp;k=${(process.env.MCP_LOOPBACK_TEST_SECRET = "7c".repeat(24))}`;
 const port = await getFreePort();
 const proc = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, FREE_MODE: "true", PORT: String(port), X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", DISCOVERY_COMPUTE_PER_MIN: "5", DISCOVERY_COMPUTE_PER_HOUR: "100" },
+  env: { ...process.env, TRUST_PROXY_HOPS: "1", FREE_MODE: "true", PORT: String(port), X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", DISCOVERY_COMPUTE_PER_MIN: "5", DISCOVERY_COMPUTE_PER_HOUR: "100" },
   stdio: ["ignore", "ignore", "inherit"],
 });
 const base = `http://127.0.0.1:${port}`;
@@ -93,7 +93,7 @@ ok(/if \(!shed\) recordToolCall\(/.test(body), "a shed refusal is not recorded a
 {
   const port2 = await getFreePort();
   const proc2 = spawn(process.execPath, ["src/server.js"], {
-    env: { ...process.env, FREE_MODE: "true", PORT: String(port2), X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", DISCOVERY_CLIENT_CPU_MS: "1", DISCOVERY_COMPUTE_PER_MIN: "100" },
+    env: { ...process.env, TRUST_PROXY_HOPS: "1", FREE_MODE: "true", PORT: String(port2), X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", DISCOVERY_CLIENT_CPU_MS: "1", DISCOVERY_COMPUTE_PER_MIN: "100" },
     stdio: ["ignore", "ignore", "inherit"],
   });
   const base2 = `http://127.0.0.1:${port2}`;

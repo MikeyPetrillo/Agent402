@@ -30,7 +30,7 @@ judge = createServer((req, res) => {
 const [PORT, JUDGE_PORT] = [await getFreePort(), await getFreePort()];
 await new Promise((r) => judge.listen(JUDGE_PORT, "127.0.0.1", r));
 proc = spawn("node", ["src/server.js"], {
-  env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", REDIS_URL: "",
+  env: { ...process.env, TRUST_PROXY_HOPS: "1", PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", REDIS_URL: "",
     TYPESAFE_API_KEY: "test-judge-key", TYPESAFE_API_URL: `http://127.0.0.1:${JUDGE_PORT}/v1/systemone`,
     ROUTE_JUDGE_PER_IP_HOUR: "2" },
   stdio: "ignore",
