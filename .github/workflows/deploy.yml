@@ -6754,9 +6754,9 @@ jobs:
           has() { local body code i; for i in 1 2 3; do body=$(curl -s --max-time 20 -w '\n%{http_code}' "$1"); code=${body##*$'\n'}; body=${body%$'\n'*}; case "$code" in 2??) grep -qF -- "$2" <<<"$body" && return 0 ;; esac; LAST_CODE=$code; [ "$i" -lt 3 ] && sleep "${HAS_RETRY_SLEEP:-10}"; done; return 1; }
           ck() { if eval "$2"; then echo "  $1 ✓"; else echo "  $1 MISSING (last HTTP ${LAST_CODE:-?})"; FAILS=$((FAILS+1)); fi; }
           ck "FAQPage JSON-LD"            'has "$PROD/" "\"FAQPage\""'
-          # The ledger homepage renders the FAQ section with a "$ GET /faq"
-          # kicker (its h2 is styled, so the old <h2>FAQ</h2> literal is gone).
-          ck "visible FAQ"               'has "$PROD/" "GET /faq"'
+          # The homepage renders its questions as <details> rows, each with an
+          # ml-faq-mark toggle (the "$ GET /faq" kicker left with the home trim).
+          ck "visible FAQ"               'has "$PROD/" "ml-faq-mark"'
           ck "AggregateOffer"            'has "$PROD/" AggregateOffer'
           ck "robots welcomes AI crawlers" 'has "$PROD/robots.txt" GPTBot'
           ck "MCP connector on landing"  'has "$PROD/" agent402-mcp'
