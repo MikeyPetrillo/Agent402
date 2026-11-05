@@ -7501,8 +7501,9 @@ export async function pullIndexChanges({ pageSize = 1000, maxPages = 20 } = {}) 
         // kept from the held one, so both containers hold the same content.
         for (const k of ROW_OPTIONAL_KEYS) if (!(k in body)) delete next[k];
         cache.set(id, next);
-        // Held as stored, so this container's next save does not write it back.
-        pgOriginHashes.set(id, await persistedHashSliced(id, next, tick));
+        // Held as stored (the copy the cache keeps, cleaned), so this
+        // container's next save does not write it back.
+        pgOriginHashes.set(id, await persistedHashSliced(id, cache.get(id) ?? next, tick));
         pgRowHashes.set(id, typeof bodyHash === "string" ? bodyHash : null);
         if (!held) discoveredSeeds.add(id);
         folded++;
