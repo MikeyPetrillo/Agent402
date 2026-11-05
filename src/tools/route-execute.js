@@ -733,7 +733,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
               throw lastErr || bad(`Tried ${__paidAttempts} paid seller(s) for this task without a delivered answer. Refusing to sign another payment for one request.`, 502);
             }
             traceStep(req, "attempt", { origin: ext.seller, lane: ext.unproven ? "unproven" : "proven" });
-            paid = await payExternal(extUrl, { method: extMethod, body: extBody, maxAtomic: BigInt(Math.round(cap * 1e6)), chain, provenPayTo: ext.provenPayTo || null, evidenceWallets: ext.evidenceWallets || null, allowUnproven: ext.unproven === true, refusalMaxWaitMs: refusalBudgetMs(), ...(tempoBudgetMs == null && evmSellerSignBy(req) != null ? { signBy: evmSellerSignBy(req) } : {}), ...(windowBudgetMs != null ? { timeoutMs: Math.max(3000, remainingMs()) } : {}) });
+            paid = await payExternal(extUrl, { method: extMethod, body: extBody, maxAtomic: BigInt(Math.round(cap * 1e6)), chain, provenPayTo: ext.provenPayTo || null, evidenceWallets: ext.evidenceWallets || null, allowUnproven: ext.unproven === true, ...(ext.unproven === true && ext.seller ? { sellerKey: ext.seller } : {}), refusalMaxWaitMs: refusalBudgetMs(), ...(tempoBudgetMs == null && evmSellerSignBy(req) != null ? { signBy: evmSellerSignBy(req) } : {}), ...(windowBudgetMs != null ? { timeoutMs: Math.max(3000, remainingMs()) } : {}) });
           } catch (e) {
             // WHAT STAYS BOOKED IS WHAT MAY HAVE LEFT THE WALLET. The payer
             // stamps `committed:true` on every failure after the payment

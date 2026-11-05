@@ -24,6 +24,18 @@
 // `off` removes this cap (the per-call ceiling and the Base wallet's own daily
 // ceiling still hold); a malformed value reads as the default.
 //
+// PATH-SCOPED SELLERS. The index keeps a seller hosted under a path prefix on
+// a shared host (`https://host/app/<name>`) as its own seller, keyed on the
+// origin plus that prefix (src/x402-index.js, normalizeSellerKey). Such a
+// seller's origin key is that same identity, `origin:host/app/<name>`, so two
+// tenants on one host each get their own day and one cannot spend its
+// neighbors' cap. The key comes from the index's seller key (route-execute
+// hands it to payX402 as `sellerKey`), never from the URL being paid, so a
+// tenant cannot buy a fresh day by varying the path below its own prefix; a
+// paid URL that is not at or under that prefix gives the seller no key at
+// all, and the lane does not pay it. A bare origin, or a call with no seller
+// key, keeps the host key exactly as before.
+//
 // A payTo the operator lists as shared (src/shared-paytos.js: a split or
 // router contract many sellers are paid through) is not one seller's wallet,
 // so it is not a ledger key: a seller paid at one is keyed on its origin
@@ -118,15 +130,37 @@ function payToIsShared(w) {
   try { return sharedPayToCheck(w) === true; } catch { return false; }
 }
 
+// The seller's origin key. `url` is what is paid; `sellerKey` is the index's
+// seller key (origin, or origin plus a path prefix). Undefined when the seller
+// cannot be keyed: no readable URL, or a URL outside its own seller key.
+function originKeyOf(url, sellerKey) {
+  let u = null;
+  try { u = url ? new URL(String(url)) : null; } catch { u = null; }
+  if (!sellerKey) return u ? `origin:${u.host.toLowerCase()}` : undefined;
+  let s = null;
+  try { s = new URL(String(sellerKey)); } catch { return undefined; }
+  if (!u) u = s;
+  const host = s.host.toLowerCase();
+  if (u.protocol !== s.protocol || u.host.toLowerCase() !== host) return undefined;
+  const prefix = s.pathname.replace(/\/+$/, "");
+  if (!prefix) return `origin:${host}`;
+  // A segment boundary, never a substring: /app/x does not own /app/x2.
+  if (u.pathname !== prefix && !u.pathname.startsWith(`${prefix}/`)) return undefined;
+  return `origin:${host}${prefix}`;
+}
+
 /** The seller's ledger keys: its EVM payTo (lowercased; not when the payTo is
- *  a listed shared one) and its origin host. */
-export function unprovenSellerKeys({ payTo, origin } = {}) {
+ *  a listed shared one) and its origin key: the host, or for a path-scoped
+ *  seller (`sellerKey` carries a prefix) the host plus that prefix. */
+export function unprovenSellerKeys({ payTo, origin, sellerKey } = {}) {
   const keys = [];
   const w = typeof payTo === "string" ? payTo.trim() : "";
+  const originKey = originKeyOf(origin, sellerKey);
+  // A paid URL outside its own seller key is not bounded by any origin key,
+  // so the seller gets no key at all and the lane refuses it.
+  if (sellerKey && !originKey) return keys;
   if (/^0x[0-9a-fA-F]{40}$/.test(w) && !payToIsShared(w.toLowerCase())) keys.push(`payto:${w.toLowerCase()}`);
-  let host = null;
-  try { host = origin ? new URL(String(origin)).host.toLowerCase() : null; } catch { host = null; }
-  if (host) keys.push(`origin:${host}`);
+  if (originKey) keys.push(originKey);
   return keys;
 }
 
@@ -180,9 +214,9 @@ const laneRefusal = (spentMicro, capUsd) => ({
  * when both caps are off) or one of the refusals above (the seller's when
  * both refuse). Never throws.
  */
-export async function reserveUnprovenSellerSpend({ payTo, origin, atomic, now = Date.now(), capUsd = baseUnprovenSellerDailyUsd(), laneCapUsd = baseUnprovenLaneDailyUsd() } = {}) {
+export async function reserveUnprovenSellerSpend({ payTo, origin, sellerKey = null, atomic, now = Date.now(), capUsd = baseUnprovenSellerDailyUsd(), laneCapUsd = baseUnprovenLaneDailyUsd() } = {}) {
   if (capUsd == null && laneCapUsd == null) return { ok: true, handle: null };
-  const sellerKeys = capUsd == null ? [] : unprovenSellerKeys({ payTo, origin });
+  const sellerKeys = capUsd == null ? [] : unprovenSellerKeys({ payTo, origin, sellerKey });
   let micro = 0;
   try { micro = Number(BigInt(String(atomic))); } catch { micro = NaN; }
   // A seller with no key we can read, or an amount we cannot read, is not
@@ -239,8 +273,8 @@ export function releaseUnprovenSellerSpend(handle) {
 }
 
 /** What the lane has paid a seller in the last 24 h, in USD (this process's rows, or the shared figure when larger). */
-export async function unprovenSellerSpentUsd({ payTo, origin, now = Date.now() } = {}) {
-  const keys = unprovenSellerKeys({ payTo, origin });
+export async function unprovenSellerSpentUsd({ payTo, origin, sellerKey = null, now = Date.now() } = {}) {
+  const keys = unprovenSellerKeys({ payTo, origin, sellerKey });
   let worst = Math.max(0, ...keys.map((k) => localMicro(k, now)));
   if (SHARED && keys.length) {
     const r = await shared.windowReadMany(keys.map((k) => ({ name: WINDOW, key: k, windowMs: UNPROVEN_SELLER_WINDOW_MS })), { now });
