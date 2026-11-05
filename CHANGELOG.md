@@ -44,7 +44,8 @@ Upgrade note:
 - `TRUST_PROXY_HOPS` unset now reads 0 (it read 1), and an explicit 0, which
   used to read as 1, is honored: set `TRUST_PROXY_HOPS=1` behind one edge
   proxy. With no hop trusted, the server warns once when a loopback or private
-  peer sends X-Forwarded-For.
+  peer sends X-Forwarded-For. Without it, every visitor behind the proxy reads
+  as the proxy's one address and shares its rate limits.
 Limits:
 - The unpaid price-check budget counts per client address (an IPv6 /64 as
   one) whatever the User-Agent; a named indexer or search crawler reads
