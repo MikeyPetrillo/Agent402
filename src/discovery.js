@@ -31,6 +31,7 @@ import { creditsSalesEnabled, creditsPrepaymentPhrase } from "./credits-sales.js
 import { IDEM_TTL_MS } from "./idempotency-store.js";
 import { settledHoldText, CONSUMED_VALIDITY_MARGIN_MS } from "./replay-guard.js";
 import { firstCallAllowanceEnabled } from "./first-call-allowance.js";
+import { publicIndexManifest } from "./facilitator-public-index.js";
 const REPO = REPO_URL;
 const MAINTAINER = { name: "Havok Holdings LLC", email: "mike@agent402.tools", url: REPO };
 
@@ -216,6 +217,10 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
         retains: "each sale's payer address, settlement transaction, route and price, in the sales ledger; the ledger's payer list is not published, while pages that show individual on-chain payments show them as the chain records them (shortened payer addresses), see /terms",
         note: "The optional x402 annotation fields description and reason are not read, logged or retained. On a refused payment the resource URL the payment names is recorded in failure telemetry.",
         policy: `${baseUrl}/privacy`,
+        // While FACILITATOR_PUBLIC_INDEX_CHAINS lists a chain: the chains on
+        // which the settling facilitator publishes each settlement on its
+        // public index, its hosts, and the paragraph that describes it.
+        ...(publicIndexManifest(baseUrl) ? { publicSettlementIndex: publicIndexManifest(baseUrl) } : {}),
       },
     },
     capabilities: {

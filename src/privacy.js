@@ -15,7 +15,7 @@ import { settledHoldText, CONSUMED_VALIDITY_MARGIN_MS } from "./replay-guard.js"
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { SHARE_TTL_DAYS, TOMBSTONE_DAYS, answerShareEnabled, sharePagesMayBeLive } from "./answer-share.js";
 import { firstCallAllowanceEnabled } from "./first-call-allowance.js";
-import { publicIndexPrivacyText, PUBLIC_INDEX_ANCHOR } from "./facilitator-public-index.js";
+import { publicIndexPrivacyText, publicIndexNoSaleText, withPublicIndexDate, PUBLIC_INDEX_ANCHOR } from "./facilitator-public-index.js";
 const DAYS = (ms) => Math.round(ms / 86_400_000);
 export function privacyPage(baseUrl) {
   const title = "Privacy - Agent402";
@@ -33,7 +33,10 @@ export function privacyPage(baseUrl) {
   const sharesOffered = answerShareEnabled();
   const allowanceOn = firstCallAllowanceEnabled();
   // A facilitator that publishes the settlements it relays, on the chains
-  // FACILITATOR_PUBLIC_INDEX_CHAINS lists: disclosed only while it applies.
+  // FACILITATOR_PUBLIC_INDEX_CHAINS lists: disclosed only while it applies,
+  // and the no-sale line is then scoped to this list. While it renders, the
+  // printed date is the later of the page's own and the disclosure's
+  // (FACILITATOR_PUBLIC_INDEX_SINCE, withPublicIndexDate).
   const publicIndex = publicIndexPrivacyText();
 
   const extraCss = `
@@ -239,7 +242,7 @@ so every claim below is verifiable in code.</p>
   On-chain settlement is on Base (Coinbase CDP facilitator) and the other
   per-chain facilitators${gatewayBatched ? "; Circle Gateway batched payments settle off chain at Circle Gateway" : ""}.</li>${publicIndex ? `
   <li id="${PUBLIC_INDEX_ANCHOR}">${publicIndex}</li>` : ""}
-  <li>We do not sell or share data with anyone for advertising or any other purpose.</li>
+  <li>${publicIndexNoSaleText()}</li>
 </ul>
 
 <h2>The MCP connector (${baseUrl}/mcp)</h2>
@@ -305,5 +308,5 @@ or <a href="https://x.com/Agent402Tools" rel="noopener">@Agent402Tools on X</a>.
 </div>
 ${ledgerFooterCompact()}`;
 
-  return ledgerShell({ title, description, canonical, baseUrl, activePath: "/privacy", extraCss, body });
+  return ledgerShell({ title, description, canonical, baseUrl, activePath: "/privacy", extraCss, body: withPublicIndexDate(body) });
 }

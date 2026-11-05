@@ -1,59 +1,145 @@
-// FACILITATOR_PUBLIC_INDEX_CHAINS (comma list from robinhood, solana; unset =
-// none): the chains on which a facilitator we settle through publishes each
-// settlement it relays on its own public index. /privacy and /terms read it at
-// render time, so their disclosure appears only while it applies and names
-// exactly the chains listed. Unknown names are ignored.
-const KNOWN = ["robinhood", "solana"];
+// FACILITATOR_PUBLIC_INDEX_CHAINS (comma list; `robinhood` is the one known
+// chain; unset = none): the chains on which a facilitator we settle through
+// publishes each settlement it relays on its own public index. /privacy,
+// /terms, /.well-known/x402, llms.txt and the Robinhood rail page read it at
+// render time, so the disclosure appears only while it applies. Any other
+// value renders nothing and is named in a boot warning.
+//
+// Optional, read with it (each validated; an invalid value is ignored and
+// warned about at boot):
+//   FACILITATOR_PUBLIC_INDEX_NAME        the facilitator's display name, printed escaped
+//   FACILITATOR_PUBLIC_INDEX_POLICY_URL  its privacy policy, linked only as a parsed https URL
+//   FACILITATOR_PUBLIC_INDEX_SINCE       YYYY-MM-DD the disclosure took effect; while it
+//                                        renders, /privacy and /terms print the later of
+//                                        their own date and this one (once it is reached)
+const KNOWN = ["robinhood"];
+const NAME_MAX = 60;
 
 export const PUBLIC_INDEX_ANCHOR = "public-settlement-index";
 
-/** The listed chains, in a fixed order (robinhood, then solana). */
+const listed = (env) => String(env.FACILITATOR_PUBLIC_INDEX_CHAINS || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+
+/** The listed known chains, in a fixed order. */
 export function publicIndexChains(env = process.env) {
-  const listed = new Set(String(env.FACILITATOR_PUBLIC_INDEX_CHAINS || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean));
-  return KNOWN.filter((c) => listed.has(c));
+  const set = new Set(listed(env));
+  return KNOWN.filter((c) => set.has(c));
 }
+
+const escHtml = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 
 // A URL's hostname, or "" when it does not parse. Only a parsed hostname is
 // printed (letters, digits, dots, hyphens), never the raw variable.
 function hostOf(url) {
   try {
-    const h = new URL(String(url || "").trim()).hostname.toLowerCase();
+    const u = new URL(String(url || "").trim());
+    if (u.protocol !== "https:" && u.protocol !== "http:") return "";
+    const h = u.hostname.toLowerCase();
     return /^[a-z0-9.-]+$/.test(h) ? h : "";
   } catch { return ""; }
 }
 
-/** The host of the facilitator each listed chain publishes through: Robinhood's
- *  first listed facilitator (ROBINHOOD_FACILITATOR_URL) and Solana's last
- *  fallback (SOLANA_FALLBACK_FACILITATOR_URL). "" when unset. */
+/** The host each listed chain publishes through: Robinhood's first listed
+ *  http(s) facilitator (ROBINHOOD_FACILITATOR_URL, the one it settles through
+ *  first). "" when unset or unparsable. */
 export function publicIndexHosts(env = process.env) {
-  const first = String(env.ROBINHOOD_FACILITATOR_URL || "").split(",")[0];
-  return { robinhood: hostOf(first), solana: hostOf(env.SOLANA_FALLBACK_FACILITATOR_URL) };
+  const first = String(env.ROBINHOOD_FACILITATOR_URL || "").split(",").map((s) => s.trim()).find((s) => hostOf(s)) || "";
+  return { robinhood: hostOf(first) };
 }
 
-function named(hosts) {
-  const list = [...new Set(hosts.filter(Boolean))];
-  return list.length ? ` (${list.join(", ")})` : "";
+/** The display name, control and invisible characters removed, whitespace
+ *  collapsed, at most NAME_MAX characters; "" when unset. Escape to print. */
+export function publicIndexName(env = process.env) {
+  return String(env.FACILITATOR_PUBLIC_INDEX_NAME || "")
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f-\u009f­​-‏‪-‮⁠-⁤⁦-⁩︀-️﻿]|[\u{e0000}-\u{e007f}]/gu, "")
+    .replace(/\s+/g, " ").trim().slice(0, NAME_MAX).trim();
 }
 
-/** The privacy page's paragraph for `chains`, or "" when none is listed. */
-export function publicIndexPrivacyText(chains = publicIndexChains(), hosts = publicIndexHosts()) {
-  const rh = chains.includes("robinhood");
-  const sol = chains.includes("solana");
-  if (!rh && !sol) return "";
-  const who = `the facilitator that settles the payment${named([rh ? hosts.robinhood : "", sol ? hosts.solana : ""])}`;
-  const where = rh && sol
-    ? `On Robinhood Chain, and on Solana when a settlement falls back past its first facilitators, ${who}`
-    : rh
-      ? `On Robinhood Chain, ${who}`
-      : `On Solana, only for a settlement that falls back past its first facilitators, ${who}`;
-  return `${where} publishes each settlement it relays on its public index: payer and payee wallets, amount, time, transaction hash and the service paid. Pay on another chain to keep a payment off that index.`;
+/** The policy URL as a parsed https href with no credentials; "" otherwise. */
+export function publicIndexPolicyUrl(env = process.env) {
+  const raw = String(env.FACILITATOR_PUBLIC_INDEX_POLICY_URL || "").trim();
+  if (!raw) return "";
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== "https:" || u.username || u.password || !/^[a-z0-9.-]+$/i.test(u.hostname)) return "";
+    return u.href;
+  } catch { return ""; }
 }
 
-/** The terms page's pointer to that paragraph, or "" when none is listed. */
+const ISO_DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
+/** FACILITATOR_PUBLIC_INDEX_SINCE as a real calendar day, or "". */
+export function publicIndexSince(env = process.env) {
+  const raw = String(env.FACILITATOR_PUBLIC_INDEX_SINCE || "").trim();
+  const m = raw.match(ISO_DAY);
+  if (!m) return "";
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  return d.toISOString().slice(0, 10) === raw ? raw : "";
+}
+
+/** True while the disclosure renders on any page. */
+export function publicIndexRenders(env = process.env) {
+  return publicIndexChains(env).length > 0;
+}
+
+/** The date a legal page prints: its own `own`, or, while the disclosure
+ *  renders, FACILITATOR_PUBLIC_INDEX_SINCE when that is later and not after
+ *  `today` (UTC). */
+export function publicIndexPageDate(own, env = process.env, today = new Date().toISOString().slice(0, 10)) {
+  if (!publicIndexRenders(env)) return own;
+  const since = publicIndexSince(env);
+  return since && since > own && since <= today ? since : own;
+}
+
+const DATE_LINE = /last updated (\d{4}-\d{2}-\d{2})\./;
+/** A rendered legal page with its "last updated" date moved to publicIndexPageDate. */
+export function withPublicIndexDate(html, env = process.env) {
+  return String(html).replace(DATE_LINE, (m, own) => `last updated ${publicIndexPageDate(own, env)}.`);
+}
+
+/** The privacy page's paragraph (HTML, every env-supplied value escaped), or
+ *  "" when no chain is listed. */
+export function publicIndexPrivacyText(chains = publicIndexChains(), hosts = publicIndexHosts(), { name = publicIndexName(), policyUrl = publicIndexPolicyUrl() } = {}) {
+  if (!chains.includes("robinhood")) return "";
+  const parts = [name ? escHtml(name) : "", hosts.robinhood ? escHtml(hosts.robinhood) : "", policyUrl ? `<a href="${escHtml(policyUrl)}" rel="noopener">its privacy policy</a>` : ""].filter(Boolean);
+  const who = `the facilitator that settles the payment${parts.length ? ` (${parts.join(", ")})` : ""}`;
+  return `On Robinhood Chain, ${who} publishes each settlement it relays on its public index: payer and payee wallets, amount, time, transaction hash, the service name, and the endpoint host and price paid. It also keeps a page for each seller that lists that seller's frequent payers. Entries on that index are permanent and outside our control, and the data sent to it is processed where that facilitator operates. Pay on another chain to keep a payment off that index.`;
+}
+
+/** The privacy page's no-sale line: scoped to the list while the disclosure renders. */
+export function publicIndexNoSaleText(chains = publicIndexChains()) {
+  return chains.length
+    ? "We do not sell or share data with anyone for advertising, or for any purpose beyond what this list describes."
+    : "We do not sell or share data with anyone for advertising or any other purpose.";
+}
+
+/** The terms page's pointer to that paragraph, or "" when no chain is listed. */
 export function publicIndexTermsText(chains = publicIndexChains()) {
-  const rh = chains.includes("robinhood");
-  const sol = chains.includes("solana");
-  if (!rh && !sol) return "";
-  const where = rh && sol ? "On Robinhood Chain, and on Solana for a settlement that falls back," : rh ? "On Robinhood Chain," : "On Solana, for a settlement that falls back,";
-  return `${where} the facilitator that settles a payment publishes it on its public index, as the <a href="/privacy#${PUBLIC_INDEX_ANCHOR}">privacy policy</a> describes.`;
+  if (!chains.includes("robinhood")) return "";
+  return `On Robinhood Chain, the facilitator that settles a payment publishes it on its public index, as the <a href="/privacy#${PUBLIC_INDEX_ANCHOR}">privacy policy</a> describes.`;
+}
+
+/** The /.well-known/x402 privacy field, or null when no chain is listed. */
+export function publicIndexManifest(baseUrl = "", env = process.env) {
+  const chains = publicIndexChains(env);
+  if (!chains.length) return null;
+  const hosts = publicIndexHosts(env);
+  return { chains, hosts: [...new Set(chains.map((c) => hosts[c]).filter(Boolean))], policy: `${baseUrl}/privacy#${PUBLIC_INDEX_ANCHOR}` };
+}
+
+/** Boot warnings for a switch that cannot do what its value says. */
+export function publicIndexBootWarnings(env = process.env) {
+  const out = [];
+  const unknown = [...new Set(listed(env).filter((c) => !KNOWN.includes(c)))];
+  if (unknown.length) out.push(`WARNING: FACILITATOR_PUBLIC_INDEX_CHAINS lists ${unknown.join(", ")}: only ${KNOWN.join(", ")} is known; nothing renders for ${unknown.length > 1 ? "them" : "it"}`);
+  const chains = publicIndexChains(env);
+  if (chains.includes("robinhood") && !publicIndexHosts(env).robinhood) out.push("WARNING: FACILITATOR_PUBLIC_INDEX_CHAINS lists robinhood but ROBINHOOD_FACILITATOR_URL has no parsable first host; the /privacy paragraph names no host");
+  const set = (k) => String(env[k] || "").trim() !== "";
+  if (set("FACILITATOR_PUBLIC_INDEX_POLICY_URL") && !publicIndexPolicyUrl(env)) out.push("WARNING: FACILITATOR_PUBLIC_INDEX_POLICY_URL is not an https URL; it is not linked");
+  if (set("FACILITATOR_PUBLIC_INDEX_SINCE") && !publicIndexSince(env)) out.push("WARNING: FACILITATOR_PUBLIC_INDEX_SINCE is not a YYYY-MM-DD date; the legal pages keep their own dates");
+  else if (publicIndexSince(env) && publicIndexSince(env) > new Date().toISOString().slice(0, 10)) out.push("WARNING: FACILITATOR_PUBLIC_INDEX_SINCE is after today; the legal pages keep their own dates until that day");
+  if (!chains.length) {
+    const idle = ["FACILITATOR_PUBLIC_INDEX_NAME", "FACILITATOR_PUBLIC_INDEX_POLICY_URL", "FACILITATOR_PUBLIC_INDEX_SINCE"].filter(set);
+    if (idle.length) out.push(`WARNING: ${idle.join(", ")} has no effect while FACILITATOR_PUBLIC_INDEX_CHAINS lists no known chain`);
+  }
+  return out;
 }

@@ -105,17 +105,33 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   and Polygon, only for networks its `/supported` lists (re-read every
   `CIRCLE_EVM_SUPPORTED_REFRESH_MS`, default 10 minutes; a failed read tries none) (`src/circle-facilitator.js`,
   `src/circle-supported.js`; `scripts/test-circle-evm-fallback.js`).
-  `ROBINHOOD_FACILITATOR_URL` is an ordered list: the first settles, the rest are Robinhood's
-  settle fallback (never routing facilitators), reached after a pre-broadcast refusal or, on
-  `eip155:4663` only, a reverted `transferWithAuthorization` (`isRetryableSettleRefusal`).
+  `ROBINHOOD_FACILITATOR_URL` is an ordered list: at boot (more than one listed, not offline) each
+  `/supported` is read at once and the first in list order that confirms exact on `eip155:4663`
+  settles (`firstConfirmedFacilitator`, logged when it is not the first; none confirms = the first,
+  as before); the rest are Robinhood's settle fallback (never routing facilitators), reached after
+  a pre-broadcast refusal or, on `eip155:4663` only, a reverted `transferWithAuthorization`
+  (`isRetryableSettleRefusal`) or a listed facilitator's graceful HTTP 200 `success:false` with no
+  transaction and a reason that is not a verdict about the buyer (`isListedPassOnRefusal`,
+  `markGracefulRefusals`; verdicts as codes or prose in `src/settle-verdict.js`): that one goes to
+  the next LISTED facilitator only, and when none settles it, it is read on chain like an ambiguous
+  failure before our relayer may submit. A buyer verdict (signature, balance, used nonce, expired)
+  is retried nowhere; an HTTP error with the same words keeps the ambiguous path
+  (`scripts/test-rh-boot-primary.js`, `scripts/test-rh-prose-refusal.js`).
   `src/facilitator-gas.js` reads each listed facilitator's settlement signers (from
   `/supported`) for gas runway every 10 minutes under a lease (`scripts/test-settle-fallback.js`,
   `scripts/test-tool-failure-monitor.js`). There is no extra Solana settle fallback by design: a
   Solana payment names the quoted facilitator's fee payer, and any other facilitator refuses it.
-  `FACILITATOR_PUBLIC_INDEX_CHAINS` (comma list of `robinhood`, `solana`; unset = none) renders the
-  /privacy paragraph and the /terms pointer saying the facilitator on those chains publishes each
-  settlement it relays on its public index (`src/facilitator-public-index.js`,
-  `scripts/test-public-index-copy.js`). `ROBINHOOD_RELAYER_KEY` (key present = on) adds our own
+  `FACILITATOR_PUBLIC_INDEX_CHAINS` (`robinhood` is the one known value; unset = none; any other
+  value renders nothing and warns at boot) renders the /privacy paragraph (every field the index
+  publishes, its per-seller payer pages, permanence, where it is processed), scopes the no-sale
+  line to that list, adds the /terms pointer, `payment.dataHandling.publicSettlementIndex` on
+  `/.well-known/x402`, a clause on llms.txt's Robinhood line and a row on /robinhood.
+  `FACILITATOR_PUBLIC_INDEX_NAME` (display name, escaped), `FACILITATOR_PUBLIC_INDEX_POLICY_URL`
+  (linked only as a parsed https URL) and `FACILITATOR_PUBLIC_INDEX_SINCE` (YYYY-MM-DD; /privacy
+  and /terms print the later of their own date and it, once reached) are optional. The boot warns
+  when robinhood is listed and `ROBINHOOD_FACILITATOR_URL` has no parsable first host, and for an
+  invalid URL or date (`publicIndexBootWarnings`); there is no status word for it
+  (`src/facilitator-public-index.js`, `scripts/test-public-index-copy.js`). `ROBINHOOD_RELAYER_KEY` (key present = on) adds our own
   settler after the listed ones (`src/robinhood-relayer.js`): our 4663 sales only (token, call and
   treasury fixed), the package's exact EVM facilitator verify and settle, one submission per
   relayer key across replicas under a lease with the nonce read under it, fee and gas caps, a

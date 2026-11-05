@@ -847,6 +847,12 @@ import { recordRefundOwed, refundByEvidence, refundByEvidenceFresh, voidOwedOnCl
 import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince, statsFlush } from "./stats.js";
 import { timingSafeEqual, createHash, randomUUID, randomBytes } from "node:crypto";
 import { registerMemoryStore, memoryStoreFigures } from "./memory-stores.js";
+import { publicIndexBootWarnings } from "./facilitator-public-index.js";
+
+// FACILITATOR_PUBLIC_INDEX_*: a disclosure switch that cannot say what its
+// value asks (an unknown chain, no host to name, an invalid policy URL or
+// date) is named once at boot.
+for (const w of publicIndexBootWarnings()) console.warn(w);
 
 const PORT = process.env.PORT || 3000;
 const WALLET_ADDRESS = process.env.WALLET_ADDRESS;
