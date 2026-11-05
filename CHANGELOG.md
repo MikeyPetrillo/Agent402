@@ -44,6 +44,13 @@ Gateway:
 - `/v1/audio/speech` and the `/api/tts` backups move to MAI-Voice-2.1 and
   MAI-Voice-2.1-Flash ahead of the 2.0 models' upstream expiry, with a
   distinct English voice per voice name; the former ids are still accepted.
+Pages:
+- Operator pages tell search engines not to index them, and the sitemap lists
+  only pages that are their own canonical.
+- Structured data names one site entity, Agent402, part of Havok Holdings
+  LLC, as every page's author and publisher.
+- Report, skill, blog, guide, docs, category and marketplace pages show a
+  breadcrumb trail that matches their structured data.
 Surfaces:
 - The agent hosts guide adds Agent402 to a HarnessRouter workspace as a
   remote MCP server under Add-ons (`/harnessrouter`).

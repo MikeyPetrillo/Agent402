@@ -16,6 +16,7 @@ const ENTRIES = [
       "Gateway: /v1/images/fast now falls over to Recraft V4.1 Flash (WebP) and /v1/images/generations to MAI-Image-2.6 Flash (PNG), ahead of GPT-5 Image Mini's upstream expiry; the former id is still accepted in model.",
       "Speech: /v1/audio/speech and the /api/tts backups move from MAI-Voice-2 and MAI-Voice-2-Flash (upstream expiry 2026-12-31) to MAI-Voice-2.1 and MAI-Voice-2.1-Flash, with a distinct English voice per voice name; the former model and voice ids are still accepted.",
       "Payments: a Tempo payment whose send the node refuses as a replay is served from its mined receipt.",
+      "Pages: operator pages tell search engines not to index them; the sitemap lists only pages that are their own canonical; structured data names one site entity, Agent402, part of Havok Holdings LLC, as every page's author and publisher; report, skill, blog, guide, docs, category and marketplace pages show a breadcrumb trail that matches their structured data; seeded SEC report pages carry the date of the newest filing they show.",
       "Surfaces: the agent hosts guide adds Agent402 to a HarnessRouter workspace as a remote MCP server under Add-ons, with a harness create that lists the connector, the free proof-of-work tools, and how paid tools answer on the connector.",
       "Packages: agent402-mcp 0.13.28 runs on x402 2.30 and MCP SDK 1.32.2, and every install pin names it.",
     ],
