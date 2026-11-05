@@ -296,6 +296,7 @@ import { routeExcludedCategory } from "./route-category.js";
 import { stripHiddenCharacters } from "./hidden-chars.js";
 import { looksLikeListingInjection, matchesInjectionPhrase, listingInjectionFinding } from "./listing-screen.js";
 import { registerMemoryStore, approxBytes } from "./memory-stores.js";
+import { contained } from "./contained-turn.js";
 
 // A seller manifest is third-party JSON: `capabilities.tools` may be a number
 // or anything else (a string reached a marketplace attribute unescaped, review
@@ -8036,13 +8037,13 @@ export function startCrawler(opts = {}) {
   const scheduleRouteIndexWarm = () => {
     // The caller's own warmers (the tool directory) run once the cache is in.
     try { opts.onWarmed?.(); } catch { /* a warmer never breaks the crawler */ }
-    const t = setTimeout(() => {
+    const t = setTimeout(contained("route-index-warm", () => {
       // In slices: the warm start already queued every entry for the
       // background drain, and indexing a prod-sized backlog in one turn held
       // the loop for seconds. This only makes sure the drain is running.
       try { routeIndexSync({ drain: false }); console.log(`[x402-index] route index: ${routeIdx.indexedTools} tools indexed, ${routeIdx.pending.size + (routeIdx.partial ? 1 : 0)} entries still indexing in the background`); }
       catch (e) { console.warn(`[x402-index] route index warm failed (the first query builds it instead): ${String(e?.message || e).slice(0, 120)}`); }
-    }, ROUTE_INDEX_WARM_DELAY_MS);
+    }), ROUTE_INDEX_WARM_DELAY_MS);
     t.unref?.();
   };
   if (opts.syncWarmStart) {
@@ -8070,12 +8071,14 @@ export function startCrawler(opts = {}) {
   // answer its first health check; the warm-started cache already serves every
   // reader meanwhile. Tests that need it immediately pass firstDelayMs: 0.
   const firstDelayMs = Number.isFinite(opts.firstDelayMs) ? opts.firstDelayMs : Number(process.env.INDEX_FIRST_CRAWL_DELAY_MS ?? 30_000);
-  firstCrawlTimer = setTimeout(() => {
+  // Every scheduled turn here reads other sellers' listings, so each runs
+  // contained (src/contained-turn.js): a throw is counted, never fatal.
+  firstCrawlTimer = setTimeout(contained("index-first-crawl", () => {
     firstCrawlTimer = null;
     runDiscoveryLeased(selfOrigin).then(() => runCrawlLeased()).then(() => persistIndexCacheAsync()).catch(() => {});
-  }, Math.max(0, firstDelayMs));
+  }), Math.max(0, firstDelayMs));
   if (typeof firstCrawlTimer.unref === "function") firstCrawlTimer.unref();
-  crawlerTimer = setInterval(() => {
+  crawlerTimer = setInterval(contained("index-crawl-cycle", () => {
     // Re-check a few recorded successions each cycle. A retirement is a claim
     // about NOW, and the marker that justified it can be taken down; without
     // this the hiding outlives the proof and the seller has no undo.
@@ -8087,10 +8090,10 @@ export function startCrawler(opts = {}) {
       .then(() => discoverSuccessions().catch(() => {}))
       .then(() => persistIndexCacheAsync())
       .catch(() => {});
-  }, CRAWL_INTERVAL_MS);
-  discoveryTimer = setInterval(() => runDiscoveryLeased(selfOrigin), DISCOVERY_INTERVAL_MS);
+  }), CRAWL_INTERVAL_MS);
+  discoveryTimer = setInterval(contained("index-discovery", () => runDiscoveryLeased(selfOrigin)), DISCOVERY_INTERVAL_MS);
   if (stateDbEnabled()) {
-    pullTimer = setInterval(() => { pullIndexChanges().catch(() => {}); }, INDEX_PULL_MS);
+    pullTimer = setInterval(contained("index-pull", () => { pullIndexChanges().catch(() => {}); }), INDEX_PULL_MS);
     if (typeof pullTimer.unref === "function") pullTimer.unref();
   }
   // Don't keep the event loop alive on shutdown.
@@ -9122,10 +9125,10 @@ function setHidden(obj, key, value) {
   Object.defineProperty(obj, key, { value, writable: true, configurable: true, enumerable: false });
   return true;
 }
-function decoratedRemoteTools(v) {
+function decoratedRemoteTools(v, origin = null) {
   const d = remotePoolMemo.get(v);
   if (d) return d;
-  return decorateRemoteToolsStep(v, Infinity);
+  return decorateRemoteToolsStep(v, Infinity, origin);
 }
 // Seller-level facts every decorated row of one entry shares.
 function decorationContext(v) {
@@ -9173,21 +9176,33 @@ function decorateRow(t, c) {
 // the loop 33 ms locally and 185 ms on a CI runner (2026-10-02); the index
 // slices call this so the decoration is cut into slices too.
 const decoratePartial = new WeakMap();
-function decorateRemoteToolsStep(v, until = Infinity) {
+function decorateRemoteToolsStep(v, until = Infinity, origin = null) {
   const memo = remotePoolMemo.get(v);
   if (memo) return memo;
   let p = decoratePartial.get(v);
-  if (!p) { p = { i: 0, out: [], c: decorationContext(v) }; decoratePartial.set(v, p); }
-  const tools = v.tools || [];
-  for (; p.i < tools.length; p.i++) {
-    if ((p.i & 255) === 0 && until !== Infinity && p.i > 0 && performance.now() >= until) return null;
-    const t = tools[p.i];
-    // paid:false = the seller's own doc says this operation is free.
-    // It lists on the marketplace, but it is never a BUY candidate —
-    // route-execute would 402-dance against an endpoint that never
-    // quotes, and "cheapest tool" rankings would fill with $0 rows.
-    if (t.paid === false) continue;
-    p.out.push(decorateRow(t, p.c));
+  try {
+    if (!p) { p = { i: 0, out: [], c: decorationContext(v) }; decoratePartial.set(v, p); }
+    const tools = v.tools || [];
+    for (; p.i < tools.length; p.i++) {
+      if ((p.i & 255) === 0 && until !== Infinity && p.i > 0 && performance.now() >= until) return null;
+      const t = tools[p.i];
+      // paid:false = the seller's own doc says this operation is free.
+      // It lists on the marketplace, but it is never a BUY candidate:
+      // route-execute would 402-dance against an endpoint that never
+      // quotes, and "cheapest tool" rankings would fill with $0 rows.
+      if (t.paid === false) continue;
+      p.out.push(decorateRow(t, p.c));
+    }
+  } catch (e) {
+    // One listing whose rows cannot be read fails alone: the entry is dropped
+    // whole (an empty pool, memoized like a complete one, so it is read once),
+    // remembered as broken and counted by origin; every caller (the drain, a
+    // shadow rebuild, a query, the directory) goes on with the next entry.
+    decoratePartial.delete(v);
+    const empty = [];
+    remotePoolMemo.set(v, empty);
+    routeIndexEntryBroken(origin || entryOriginOf(v), v, e);
+    return empty;
   }
   decoratePartial.delete(v);
   remotePoolMemo.set(v, p.out);
@@ -9222,9 +9237,60 @@ function screenedInjection(text) {
 // A seller field as text: a crawled listing can carry a number, an object or
 // an array where a string belongs, and reading it as one must not throw.
 const sellerText = (v) => (typeof v === "string" ? v : typeof v === "number" || typeof v === "boolean" ? String(v) : "");
+// --- per-listing containment ---------------------------------------------------
+// One seller's listing whose rows cannot be read (a tool whose statics or
+// decoration throws) fails alone. The tool is remembered as broken (a sentinel
+// statics object, memoized like any other, so it is computed once) and skipped
+// by indexing, candidate collection and scoring; an entry whose decoration
+// throws is dropped whole and skipped by the drain, a shadow rebuild and a
+// query's scan until a crawl replaces it (a new entry object is tried afresh).
+// Both are counted by seller origin, read on /__operator/perf.json
+// (brokenListings). Nothing here reaches the process: a throw a step misses is
+// caught by the scheduled turn's contained() wrapper and counted there.
+const BROKEN_LISTINGS_MAX = 500;
+const brokenListings = new Map(); // origin -> { count, lastAt, lastMessage }
+let brokenListingsTotal = 0, brokenListingsOverflow = 0;
+const brokenEntries = new WeakSet(); // entries whose indexing threw; skipped until replaced
+// Read inside a catch, so they never throw themselves.
+const entryOriginOf = (v) => { try { const s = Array.isArray(v?.tools) ? v.tools[0]?.seller : null; return typeof s === "string" && s ? s : null; } catch { return null; } };
+const sellerOfTool = (t) => { try { return typeof t?.seller === "string" ? t.seller : null; } catch { return null; } };
+function noteBrokenListing(origin, err) {
+  const key = typeof origin === "string" && origin ? origin.slice(0, 200) : "unknown";
+  brokenListingsTotal++;
+  let row = brokenListings.get(key);
+  if (!row) {
+    if (brokenListings.size >= BROKEN_LISTINGS_MAX) { brokenListingsOverflow++; return; }
+    row = { count: 0, lastAt: 0, lastMessage: "" };
+    brokenListings.set(key, row);
+  }
+  row.count++;
+  row.lastAt = Date.now();
+  row.lastMessage = String(err instanceof Error ? err.message : err ?? "").replace(/\s+/g, " ").slice(0, 160);
+}
+// An entry whose indexing threw: remembered, counted, never retried as this object.
+function routeIndexEntryBroken(origin, v, err) {
+  if (v && typeof v === "object") brokenEntries.add(v);
+  noteBrokenListing(origin, err);
+}
+const isBrokenEntry = (v) => brokenEntries.has(v);
+/** Seller listings dropped for a throw while they were read, by origin: { total, origins, overflow, byOrigin }. */
+export function brokenListingsSummary() {
+  const byOrigin = {};
+  for (const [k, r] of brokenListings) byOrigin[k] = { count: r.count, lastAt: new Date(r.lastAt).toISOString(), lastMessage: r.lastMessage };
+  return { total: brokenListingsTotal, origins: brokenListings.size, overflow: brokenListingsOverflow, byOrigin };
+}
+export function _resetBrokenListingsForTest() { brokenListings.clear(); brokenListingsTotal = 0; brokenListingsOverflow = 0; }
+const BROKEN_STATICS = Object.freeze({ broken: true, slug: "", name: "", hay: "", injected: true, excluded: true, priceRank: Infinity, aliases: NO_ALIASES, nameSlug: null, names: Object.freeze([]), nameToks: Object.freeze([]) });
 function toolStatics(t) {
   let st = t[TOOL_STATICS] || toolStaticsMemo.get(t);
   if (st) return st;
+  try { st = computeToolStatics(t); }
+  catch (e) { st = BROKEN_STATICS; noteBrokenListing(sellerOfTool(t), e); }
+  if (!setHidden(t, TOOL_STATICS, st)) toolStaticsMemo.set(t, st);
+  return st;
+}
+function computeToolStatics(t) {
+  let st;
   const name = sellerText(t.name), slug = sellerText(t.slug);
   const tags = Array.isArray(t.tags) ? t.tags.map(sellerText) : [];
   const hay = `${name} ${sellerText(t.description)} ${sellerText(t.category)} ${tags.join(" ")}`.toLowerCase();
@@ -9278,7 +9344,6 @@ function toolStatics(t) {
   // single largest thing the router held (63 MB of 164 MB on the
   // production-sized fixture, 2026-09-25).
   st.nameToks = st.names.map((n) => splitTokens(n).map(internToken));
-  if (!setHidden(t, TOOL_STATICS, st)) toolStaticsMemo.set(t, st);
   return st;
 }
 // Whole-token test for a SHORT term (the "ip" rule) without tokenizing the
@@ -9378,25 +9443,36 @@ function routeIndexNoteSet(origin, prev, next) {
 // ~1 s on the query that met it). A query still drains whatever is left, so a
 // result never misses a seller that was set before it.
 let routeDrainScheduled = false;
-function routeIndexScheduleDrain() {
-  if (routeDrainScheduled) return;
-  routeDrainScheduled = true;
-  setImmediate(function drainSlice() {
-    const until = performance.now() + ROUTE_INDEX_SLICE_MS;
+// The slice runs on its own turn, contained: a throw one entry's step did not
+// catch is counted under route-index-drain, the entry it was on is dropped
+// (never retried as this object), and the next slice drains the next entry.
+const ROUTE_INDEX_DRAIN_THREW = "indexing threw outside the entry step";
+const drainSlice = contained("route-index-drain", () => {
+  const until = performance.now() + ROUTE_INDEX_SLICE_MS;
+  let clean = false;
+  try {
     while (performance.now() < until) {
       if (!routeIdx.partial) {
         const first = routeIdx.pending.entries().next().value;
         if (!first) break;
         const [origin, v] = first;
         routeIdx.pending.delete(origin);
-        if (cache.get(origin) !== v || routeIdx.indexed.has(v)) continue;
+        if (cache.get(origin) !== v || routeIdx.indexed.has(v) || isBrokenEntry(v)) continue;
         routeIdx.partial = { origin, v, pos: 0 };
       }
       if (!routeIndexAdvancePartial(until)) break; // out of time inside one seller
     }
+    clean = true;
+  } finally {
+    if (!clean && routeIdx.partial) { const p = routeIdx.partial; routeIdx.partial = null; brokenEntries.add(p.v); noteBrokenListing(p.origin, ROUTE_INDEX_DRAIN_THREW); }
     if (routeIdx.partial || routeIdx.pending.size) setImmediate(drainSlice);
     else { routeDrainScheduled = false; routeIndexCompactIfStale(); }
-  });
+  }
+});
+function routeIndexScheduleDrain() {
+  if (routeDrainScheduled) return;
+  routeDrainScheduled = true;
+  setImmediate(drainSlice);
 }
 function routeIndexReset() {
   routeIdx.postings = new Map();
@@ -9414,7 +9490,9 @@ function routeIndexAdvancePartial(until = Infinity) {
   const p = routeIdx.partial;
   if (!p) return true;
   if (cache.get(p.origin) !== p.v) { routeIdx.partial = null; return true; }
-  const next = routeIndexAddEntry(p.origin, p.v, routeIdx, p.pos, until);
+  let next;
+  try { next = routeIndexAddEntry(p.origin, p.v, routeIdx, p.pos, until); }
+  catch (e) { routeIndexEntryBroken(p.origin, p.v, e); routeIdx.partial = null; return true; }
   if (next !== -1) { p.pos = next; return false; }
   routeIdx.partial = null;
   if (routeIdx.shadow) routeIdx.shadow.late.push([p.origin, p.v]);
@@ -9430,13 +9508,14 @@ function newRouteIndexShard() {
 // tools: the production stall profiler caught a single 4,000-tool entry
 // holding the loop for 1.3 s (2026-09-25).
 function routeIndexAddEntry(origin, v, target = routeIdx, from = 0, until = Infinity) {
-  const pool = decorateRemoteToolsStep(v, until);
+  const pool = decorateRemoteToolsStep(v, until, origin);
   if (!pool) return from; // decoration ran out of time: resume here next slice
   const { postings } = target;
   for (let pos = from; pos < pool.length; pos++) {
     if (pos > from && (pos & 63) === 0 && until !== Infinity && performance.now() >= until) return pos;
     const t = pool[pos];
     const st = toolStatics(t);
+    if (st.broken) continue; // its statics threw: never posted, never scored
     // The home record is a property of the tool (its entry and position in
     // that entry's pool), the same whichever shard indexes it.
     t[TOOL_HOME] ? Object.assign(t[TOOL_HOME], { origin, v, pos }) : setHidden(t, TOOL_HOME, { origin, v, pos });
@@ -9480,23 +9559,40 @@ function routeIndexStartShadow() {
   if (routeIdx.shadow) return;
   const shadow = { ...newRouteIndexShard(), entries: [...cache].filter(([, v]) => v && typeof v === "object"), i: 0, late: [], cur: null };
   routeIdx.shadow = shadow;
-  const step = () => {
+  // Each slice runs contained (a throw an entry's step did not catch is
+  // counted under route-index-shadow, that entry is dropped and the build
+  // goes on with the next); a throw inside one entry's step drops that entry.
+  const step = contained("route-index-shadow", () => {
     if (routeIdx.shadow !== shadow) return; // reset or superseded
     const until = performance.now() + ROUTE_INDEX_SLICE_MS;
-    while (performance.now() < until) {
-      if (!shadow.cur) {
-        if (shadow.i >= shadow.entries.length) break;
-        const [origin, v] = shadow.entries[shadow.i++];
-        if (cache.get(origin) !== v) continue;
-        shadow.cur = { origin, v, pos: 0 };
+    let clean = false;
+    try {
+      while (performance.now() < until) {
+        if (!shadow.cur) {
+          if (shadow.i >= shadow.entries.length) break;
+          const [origin, v] = shadow.entries[shadow.i++];
+          if (cache.get(origin) !== v || isBrokenEntry(v)) continue;
+          shadow.cur = { origin, v, pos: 0 };
+        }
+        let next;
+        try { next = routeIndexAddEntry(shadow.cur.origin, shadow.cur.v, shadow, shadow.cur.pos, until); }
+        catch (e) { routeIndexEntryBroken(shadow.cur.origin, shadow.cur.v, e); shadow.cur = null; continue; }
+        if (next === -1) shadow.cur = null; else { shadow.cur.pos = next; break; }
       }
-      const next = routeIndexAddEntry(shadow.cur.origin, shadow.cur.v, shadow, shadow.cur.pos, until);
-      if (next === -1) shadow.cur = null; else { shadow.cur.pos = next; break; }
+      clean = true;
+    } finally {
+      if (!clean) {
+        if (shadow.cur) { const c = shadow.cur; shadow.cur = null; brokenEntries.add(c.v); noteBrokenListing(c.origin, ROUTE_INDEX_DRAIN_THREW); }
+        if (routeIdx.shadow === shadow) setImmediate(step);
+      }
     }
     if (shadow.cur || shadow.i < shadow.entries.length) { setImmediate(step); return; }
     // Entries the current index took from `pending` while the shadow was
     // being filled were set after its snapshot: carry the live ones over.
-    for (const [origin, v] of shadow.late) if (cache.get(origin) === v && !shadow.indexed.has(v)) routeIndexAddEntry(origin, v, shadow);
+    for (const [origin, v] of shadow.late) {
+      if (cache.get(origin) !== v || shadow.indexed.has(v) || isBrokenEntry(v)) continue;
+      try { routeIndexAddEntry(origin, v, shadow); } catch (e) { routeIndexEntryBroken(origin, v, e); }
+    }
     let stale = 0;
     for (const [origin, v] of [...shadow.entries, ...shadow.late]) {
       if (shadow.indexed.has(v) && cache.get(origin) !== v) { stale += (remotePoolMemo.get(v) || []).length; shadow.indexed.delete(v); }
@@ -9508,9 +9604,11 @@ function routeIndexStartShadow() {
     routeIdx.termCache.clear();
     routeIdx.shadow = null;
     routeIdx.builds++;
-  };
+  });
   setImmediate(step);
 }
+/** Test hook: start a background rebuild now (the stale-share rule starts the real ones). */
+export function _routeIndexStartShadowForTest() { routeIndexStartShadow(); }
 // Stale rows were cleared only by routeIndexSync, which only a route query on
 // this thread and the boot warm-up call. With a router worker loaded this
 // thread answers no queries, so every crawl cycle's replaced entries piled up
@@ -9526,7 +9624,10 @@ function routeIndexSync({ sync = false, drain = true } = {}) {
     if (sync || total <= ROUTE_INDEX_INLINE_REBUILD_MAX_TOOLS) {
       routeIndexReset();
       routeIdx.builds++;
-      for (const [origin, v] of cache) if (v && typeof v === "object") routeIndexAddEntry(origin, v);
+      for (const [origin, v] of cache) {
+        if (!v || typeof v !== "object" || isBrokenEntry(v)) continue;
+        try { routeIndexAddEntry(origin, v); } catch (e) { routeIndexEntryBroken(origin, v, e); }
+      }
       return;
     }
     routeIndexStartShadow();
@@ -9542,8 +9643,8 @@ function routeIndexSync({ sync = false, drain = true } = {}) {
   if (!routeIdx.pending.size) return;
   for (const [origin, v] of routeIdx.pending) {
     if (cache.get(origin) !== v) continue; // replaced again before we got to it
-    if (routeIdx.indexed.has(v)) continue; // already indexed (a swapped-in shadow took it)
-    routeIndexAddEntry(origin, v);
+    if (routeIdx.indexed.has(v) || isBrokenEntry(v)) continue; // already indexed (a swapped-in shadow took it), or dropped
+    try { routeIndexAddEntry(origin, v); } catch (e) { routeIndexEntryBroken(origin, v, e); continue; }
     if (routeIdx.shadow) routeIdx.shadow.late.push([origin, v]);
   }
   routeIdx.pending.clear();
@@ -9555,9 +9656,9 @@ function routeIndexSync({ sync = false, drain = true } = {}) {
 function routeIndexUnindexedLive() {
   const out = new Map();
   const p = routeIdx.partial;
-  if (p && cache.get(p.origin) === p.v && !routeIdx.indexed.has(p.v)) out.set(p.v, p.origin);
+  if (p && cache.get(p.origin) === p.v && !routeIdx.indexed.has(p.v) && !isBrokenEntry(p.v)) out.set(p.v, p.origin);
   for (const [origin, v] of routeIdx.pending) {
-    if (cache.get(origin) === v && !routeIdx.indexed.has(v)) out.set(v, origin);
+    if (cache.get(origin) === v && !routeIdx.indexed.has(v) && !isBrokenEntry(v)) out.set(v, origin);
   }
   return out;
 }
@@ -9776,7 +9877,12 @@ let candidateYields = 0;
 /** Test hook: yields taken while unindexed rows were tested. */
 export function _routeCandidateYieldsForTest() { return candidateYields; }
 const ROUTE_DECORATE_SLICE_MS = 6;
+// Test hook: the next query throws this error at its first step (a request
+// whose handler rejects must answer 500 alone and leave the next request whole).
+let routeQueryFaultForTest = null;
+export function _setRouteQueryFaultForTest(err) { routeQueryFaultForTest = err || null; }
 function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = false, baseUrl, catalog, prices, network, toolCount, walletName, scoredMemo = null, drainBacklog = true }) {
+  if (routeQueryFaultForTest) { const e = routeQueryFaultForTest; routeQueryFaultForTest = null; throw e; }
   const q = String(query || "").slice(0, 500);
   // Unicode-aware (src/query-terms.js): a CJK query used to tokenize to
   // nothing and answer zero rows (reported from outside 2026-09-10).
@@ -9874,6 +9980,7 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
   const scoreRow = (t) => {
     if (!netOk(t)) return;
     const st = toolStatics(t);
+    if (st.broken) return; // its statics threw: never scored
     if (st.injected) return;
     const { name, hay, names, nameToks } = st;
     let score = 0, mSlug = 0, mName = 0, mText = 0;
@@ -9980,6 +10087,7 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
     for (let k = 0; k < nTerms; k++) if (selecting[k]) selectedBy.push(shortTerm[k] ? ((tok) => tok === terms[k]) : ((tok) => tok.includes(terms[k])));
     const isCandidate = (t) => {
       const st = toolStatics(t);
+      if (st.broken) return false;
       const toks = new Set(splitTokens(st.hay));
       for (const nt of st.nameToks) for (const tok of nt) toks.add(tok);
       for (const tok of toks) for (const sel of selectedBy) if (sel(tok)) return true;
@@ -9988,7 +10096,10 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
     for (const [v, origin] of unindexed) {
       if (!okOf(v, origin)) continue;
       let pool;
-      while (!(pool = decorateRemoteToolsStep(v, performance.now() + ROUTE_DECORATE_SLICE_MS))) yield;
+      // An entry whose rows cannot be read is dropped (decoration contains it);
+      // a throw past that drops it here, and the query ranks every other seller.
+      try { while (!(pool = decorateRemoteToolsStep(v, performance.now() + ROUTE_DECORATE_SLICE_MS, origin))) yield; }
+      catch (e) { routeIndexEntryBroken(origin, v, e); continue; }
       const arr = [];
       for (let i = 0; i < pool.length; i++) {
         if (isCandidate(pool[i])) arr.push(pool[i]);
@@ -10456,7 +10567,7 @@ export function* routableRemoteEntries({ baseUrl = "" } = {}) {
   const aliases = computeAliasOrigins(cache);
   for (const [origin, v] of cache) {
     if (!v || typeof v !== "object" || !isRoutable(v) || aliases.has(origin) || isSelfSeller(origin, { baseUrl, redirectedTo: v.redirectedTo }) || isRemovedOrigin(origin)) continue;
-    yield [origin, decoratedRemoteTools(v)];
+    yield [origin, decoratedRemoteTools(v, origin)];
   }
 }
 /** routableRemoteEntries across turns: the same filter, order and pools, with
@@ -10470,7 +10581,7 @@ export async function* routableRemoteEntriesSliced({ baseUrl = "", sliceMs = DIR
     if (!v || typeof v !== "object" || !isRoutable(v) || aliases.has(origin) || isSelfSeller(origin, { baseUrl, redirectedTo: v.redirectedTo }) || isRemovedOrigin(origin)) continue;
     let pool = remotePoolMemo.get(v);
     while (!pool) {
-      pool = decorateRemoteToolsStep(v, performance.now() + sliceMs);
+      pool = decorateRemoteToolsStep(v, performance.now() + sliceMs, origin);
       if (!pool) await yieldTurn();
     }
     yield [origin, pool];
@@ -10988,10 +11099,10 @@ function listingRowsForOrigin(origin) {
 function listingsChanged(origin) {
   listings.markDirty(origin);
   if (!listingsFlushTimer) {
-    listingsFlushTimer = setTimeout(() => {
+    listingsFlushTimer = setTimeout(contained("index-listings-flush", () => {
       listingsFlushTimer = null;
       listings.flush().catch((e) => console.warn(`[listings] flush failed: ${String(e?.message || e).slice(0, 120)}`));
-    }, LISTINGS_FLUSH_MS);
+    }), LISTINGS_FLUSH_MS);
     listingsFlushTimer.unref?.();
   }
 }
@@ -11025,7 +11136,8 @@ export function configureListingsStore({ excludeOrigin = "", ourTools = null } =
     // Stored origins the cache no longer holds are removed: first a few
     // minutes after boot (the backfill has written by then), then hourly.
     const tick = () => { reconcileListings().catch((e) => console.warn(`[listings] reconcile failed: ${String(e?.message || e).slice(0, 120)}`)); };
-    listingsReconcileTimer = setTimeout(function again() { tick(); listingsReconcileTimer = setTimeout(again, LISTINGS_RECONCILE_MS); listingsReconcileTimer.unref?.(); }, LISTINGS_RECONCILE_FIRST_MS);
+    const again = contained("index-listings-reconcile", () => { listingsReconcileTimer = setTimeout(again, LISTINGS_RECONCILE_MS); listingsReconcileTimer.unref?.(); tick(); });
+    listingsReconcileTimer = setTimeout(again, LISTINGS_RECONCILE_FIRST_MS);
     listingsReconcileTimer.unref?.();
   }
   return true;

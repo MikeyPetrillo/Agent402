@@ -402,7 +402,15 @@ heartbeat page on it under one issue that closes when nothing is owed.
   inputs, import closure, and for decide its export row format and kit); an unreadable or capped
   diff, or a check that fails, redeploys.
 - **Drain:** in-flight composites are aborted on SIGTERM (`src/drain-abort.js`); drain starts
-  immediately (`scripts/test-drain-on-sigterm.js`).
+  immediately (`scripts/test-drain-on-sigterm.js`). An uncaught exception stays fatal, so every
+  scheduled turn that reads seller data (the route index drain and shadow rebuild, the crawl timers,
+  the surface memo and index snapshot rebuilds) runs under `contained(name, fn)`
+  (`src/contained-turn.js`): a throw is counted by name and never escapes, and a listing whose rows
+  cannot be read is dropped alone and counted by origin (`containedTurns`, `brokenListings` on
+  `/__operator/perf.json`; `scripts/test-crash-containment.js`, `scripts/test-contained-turns-sites.js`
+  keeps every timer callback wrapped or allowlisted). The `containedTurns` word on `/api/gateway-status`
+  reads `repeating` while one name has thrown in each of the last three or more consecutive minutes
+  (a per-name minute ring); the heartbeat and the status Worker page on it under one issue.
 - **Backups:** `src/backup.js` (encrypted, offsite); restore with `scripts/backup-restore.js`.
   The `backup` word reads `unencrypted` while `BACKUP_ENCRYPTION_KEY` is unset in production
   (`NODE_ENV` or the platform's environment name); the heartbeat and the status probe page on it.

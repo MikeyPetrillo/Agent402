@@ -57,6 +57,8 @@ ok(["ok", "low", "refused", "demoted"].includes(pubBody?.facilitatorFunds?.statu
 ok(Array.isArray(opBody?.toolFailures?.tools) && Array.isArray(opBody?.upstreamHealth?.upstreams) && typeof opBody?.facilitatorFunds?.refusals1h === "number", "the operator view of the failure words carries the rows and counts");
 ok(["ok", "degraded"].includes(pubBody?.toolAnswers?.status) && Object.keys(pubBody.toolAnswers).join(",") === "status", `toolAnswers publishes its word only (${JSON.stringify(pubBody?.toolAnswers)})`);
 ok(Array.isArray(opBody?.toolAnswers?.tools), "the operator view of toolAnswers carries its rows");
+ok(["ok", "repeating"].includes(pubBody?.containedTurns?.status) && Object.keys(pubBody.containedTurns).join(",") === "status", `containedTurns publishes its word only (${JSON.stringify(pubBody?.containedTurns)})`);
+ok(Array.isArray(opBody?.containedTurns?.repeating) && ["ok", "repeating"].includes(opBody?.containedTurns?.status), "the operator view of containedTurns carries the repeating names");
 ok(["ok", "refusing"].includes(pubBody?.buyerRefusals?.status) && Object.keys(pubBody.buyerRefusals).join(",") === "status", `buyerRefusals publishes its word only (${JSON.stringify(pubBody?.buyerRefusals)})`);
 ok(typeof opBody?.buyerRefusals?.refusalsWindow === "number" && typeof opBody?.buyerRefusals?.refusals24h === "number", "the operator view of buyerRefusals carries the counts");
 
