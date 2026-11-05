@@ -26,6 +26,9 @@ Gateway:
   Image Mini link's upstream expiry; the former id is still accepted in
   `model`. The live model guard checks every image, video and speech link's
   upstream expiration date.
+- `/v1/audio/speech` and the `/api/tts` backups move to MAI-Voice-2.1 and
+  MAI-Voice-2.1-Flash ahead of the 2.0 models' upstream expiry, with a
+  distinct English voice per voice name; the former ids are still accepted.
 Surfaces:
 - The agent hosts guide adds Agent402 to a HarnessRouter workspace as a
   remote MCP server under Add-ons (`/harnessrouter`).
