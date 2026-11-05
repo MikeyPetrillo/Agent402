@@ -13,6 +13,7 @@
 //     the socket address.
 //
 //   node scripts/test-trust-proxy.js
+import { randomBytes } from "node:crypto";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { getFreePorts } from "./lib/free-port.js";
@@ -70,9 +71,9 @@ const killAll = () => { for (const p of procs) try { p.kill("SIGKILL"); } catch 
 setTimeout(() => { console.error("FAIL - timed out"); killAll(); process.exit(1); }, 150_000).unref();
 
 const initBody = (id) => JSON.stringify({ jsonrpc: "2.0", id, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "trust-proxy-test", version: "1" } } });
-const mcp = (port, id, xff) => fetch(`http://127.0.0.1:${port}/mcp`, {
+const mcp = (port, id, xff, extra = {}) => fetch(`http://127.0.0.1:${port}/mcp`, {
   method: "POST",
-  headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", ...(xff ? { "X-Forwarded-For": xff } : {}) },
+  headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", ...(xff ? { "X-Forwarded-For": xff } : {}), ...extra },
   body: initBody(id),
 }).then(async (r) => { await r.arrayBuffer(); return r.status; });
 const healthy = async (port, p) => {
@@ -101,6 +102,15 @@ try {
   ok((await mcp(P0, 10)) === 429, "the next request from the same address is limited");
   const spoof0 = [await mcp(P0, 11, "198.51.100.77"), await mcp(P0, 12, "198.51.100.78")];
   ok(spoof0.every((s) => s === 429), `unset: a spoofed X-Forwarded-For does not mint a fresh bucket (${spoof0.join(",")})`);
+  // A forged replay marker (an async-loopback token or an MCP marker this
+  // process did not mint) must not let a loopback client choose its address.
+  const forged0 = [
+    await mcp(P0, 13, "198.51.100.91", { "x-agent402-async-loopback": randomBytes(24).toString("hex") }),
+    await mcp(P0, 14, "198.51.100.92", { "x-agent402-async-loopback": "" }),
+    await mcp(P0, 15, "198.51.100.93", { "X-Agent402-Via": `mcp;k=${randomBytes(24).toString("hex")}` }),
+    await mcp(P0, 16, "198.51.100.94", { "X-Agent402-Via": "mcp" }),
+  ];
+  ok(forged0.every((s) => s === 429), `unset: a forged async token or MCP marker keeps the socket address (${forged0.join(",")})`);
 
   // One hop trusted: the forwarded entry is the client, as behind the edge.
   for (let i = 0; i < CAP; i++) await mcp(P1, i + 1);
