@@ -110,7 +110,16 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `eip155:4663` only, a reverted `transferWithAuthorization` (`isRetryableSettleRefusal`).
   `src/facilitator-gas.js` reads each listed facilitator's settlement signers (from
   `/supported`) for gas runway every 10 minutes under a lease (`scripts/test-settle-fallback.js`,
-  `scripts/test-tool-failure-monitor.js`). `ROBINHOOD_RELAYER_KEY` (key present = on) adds our own
+  `scripts/test-tool-failure-monitor.js`). `SOLANA_FALLBACK_FACILITATOR_URL` (one URL, unset = off)
+  is the LAST settle fallback on Solana mainnet under `PAYMENT_SETTLE_FALLBACK=true`, after the
+  default chain (`lastResortFallbackOverrides`), never a routing facilitator, tried only once the
+  shared boot check (`confirmListedFallback`, also Robinhood's) confirms exact on Solana in its
+  `/supported` and dropped with a warning when it does not; the gas check reads EVM signers only,
+  so its Solana fee payer is not watched (`scripts/test-solana-last-fallback.js`).
+  `FACILITATOR_PUBLIC_INDEX_CHAINS` (comma list of `robinhood`, `solana`; unset = none) renders the
+  /privacy paragraph and the /terms pointer saying the facilitator on those chains publishes each
+  settlement it relays on its public index (`src/facilitator-public-index.js`,
+  `scripts/test-public-index-copy.js`). `ROBINHOOD_RELAYER_KEY` (key present = on) adds our own
   settler after the listed ones (`src/robinhood-relayer.js`): our 4663 sales only (token, call and
   treasury fixed), the package's exact EVM facilitator verify and settle, one submission per
   relayer key across replicas under a lease with the nonce read under it, fee and gas caps, a
