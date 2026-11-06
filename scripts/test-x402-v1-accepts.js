@@ -177,6 +177,42 @@ try {
     ok(facCalls.settle > before, `and it reached the facilitator to settle (${before} -> ${facCalls.settle})`);
   }
 
+  // A payment PAYLOAD of x402 version 1 (not a v2 payload with a v1-era key
+  // in its echoed block) is refused before the paywall: every 402 here offers
+  // version 2 only, and the library matches a v1 payload on scheme and network
+  // alone. The refusal is the ordinary 402 with the offer, plus a hint that
+  // names the version, and nothing reaches the facilitator.
+  {
+    const mint = async () => {
+      const client = new x402Client();
+      registerExactEvmScheme(client, { signer: privateKeyToAccount(generatePrivateKey()) });
+      let minted = null;
+      const capturing = async (input, init) => {
+        const r = input instanceof Request ? input : new Request(input, init);
+        minted = r.headers.get("payment-signature") || r.headers.get("x-payment") || minted;
+        if (minted) return new Response("{}", { status: 402, headers: { "Content-Type": "application/json" } });
+        return fetch(input, init);
+      };
+      await wrapFetchWithPayment(capturing, client)(`${B}/api/uuid`).catch(() => {});
+      return JSON.parse(Buffer.from(minted, "base64").toString("utf8"));
+    };
+    for (const [name, header] of [["payment-signature", "payment-signature"], ["x-payment", "x-payment"]]) {
+      const genuine = await mint();
+      const v1Only = { x402Version: 1, scheme: "exact", network: "eip155:8453", accepted: { scheme: "exact", network: "eip155:8453" }, payload: genuine.payload };
+      const [v0, s0] = [facCalls.verify, facCalls.settle];
+      const r = await fetch(`${B}/api/uuid`, { headers: { [header]: b64(v1Only) } });
+      const body = await r.json().catch(() => ({}));
+      ok(r.status === 402 && !!r.headers.get("payment-required"), `a version 1 payment payload on ${name} is refused with the ordinary 402 offer (${r.status})`);
+      ok(body.reason === "version-mismatch" && /x402Version 1;.*x402Version 2/.test(String(body.hint || "")) && !("error" in body) && Array.isArray(body.accepts), `and its body names the version in a hint, with the offer (${JSON.stringify({ reason: body.reason, hint: body.hint })})`);
+      ok(facCalls.verify === v0 && facCalls.settle === s0, `and nothing reached the facilitator (${v0}/${s0} -> ${facCalls.verify}/${facCalls.settle})`);
+    }
+    // Control: the same genuine credential as a version 2 payload settles.
+    const genuine = await mint();
+    const s0 = facCalls.settle;
+    const r = await fetch(`${B}/api/uuid`, { headers: { "payment-signature": b64(genuine) } });
+    ok(r.status === 200 && facCalls.settle > s0, `control: the genuine version 2 payload settles (${r.status})`);
+  }
+
   const bare = await fetch(`${B}/api/uuid`);
   ok(bare.status === 402 && !!bare.headers.get("payment-required"), "an unpaid request is unchanged");
 
