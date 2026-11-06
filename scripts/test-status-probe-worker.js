@@ -820,8 +820,8 @@ for (const [name, over, detail] of failCases) {
       ["Upstream cost table missing or incomplete in production", "upstreamCosts", ["missing", "partial"], ["ok"]],
       // A paying buyer refused by the settle breaker (src/gateway-settle-breaker.js).
       ["buyerRefusals: a paying buyer was refused by the settle breaker", "buyerRefusals", ["refusing"], ["ok"]],
-      // The direct upstream's cost guard (src/gateway-direct-pricebook.js); starting does neither.
-      ["directUpstream: a direct-upstream model is not cheaper, or its price book is unreadable", "directUpstream", ["not_cheaper", "unreadable"], ["ok", "off"]],
+      // The direct upstream (src/gateway-direct-pricebook.js); starting does neither.
+      ["directUpstream: the direct upstream is degraded", "directUpstream", ["degraded"], ["ok", "off"]],
     ];
     for (const [T, field, bad, good] of cases) {
       assert.ok(ALARMS.some((a) => a.title === T), `the Worker has "${T}"`);

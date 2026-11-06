@@ -914,8 +914,8 @@ jobs:
       # on /api/gateway-status. toolFailures and upstreamHealth page on
       # degraded / failing; facilitatorFunds pages on low / refused / demoted;
       # buyerRefusals pages on refusing; robinhoodSettler pages on relayer (ok
-      # and off close); directUpstream pages on not_cheaper / unreadable (ok
-      # and off close); ok closes; unknown does neither. The issues are public, so a body carries
+      # and off close); directUpstream pages on degraded (ok and off close,
+      # starting does neither); ok closes; unknown does neither. The issues are public, so a body carries
       # the word and the operator endpoint only: slugs, upstreams, facilitators
       # and reasons stay on /__operator/tool-failures.json. The status Worker
       # runs the same checks every five minutes under the same titles.
@@ -960,12 +960,11 @@ jobs:
           # (src/robinhood-order.js): relayer pages, ok and off close.
           TITLE="robinhoodSettler: our own relayer has been settling Robinhood sales for hours"
           check_word robinhoodSettler "relayer" "ok off"
-          # The direct upstream's cost guard (src/gateway-direct-pricebook.js):
-          # not_cheaper (a mapped model is kept on OpenRouter by its listed
-          # prices or its measured cost) and unreadable (its price book is
-          # unread or stale) page; ok and off close; starting does neither.
-          TITLE="directUpstream: a direct-upstream model is not cheaper, or its price book is unreadable"
-          check_word directUpstream "not_cheaper unreadable" "ok off" "/__operator/direct-upstream.json"
+          # The direct upstream (src/gateway-direct-pricebook.js): degraded
+          # pages (the reason code is on the operator read only); ok and off
+          # close; starting does neither.
+          TITLE="directUpstream: the direct upstream is degraded"
+          check_word directUpstream "degraded" "ok off" "/__operator/direct-upstream.json"
 
       # Paid 200s whose body is empty or error-shaped (src/answer-shape.js,
       # counted by src/tool-failure-monitor.js): one word on

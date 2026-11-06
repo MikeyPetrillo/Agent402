@@ -10,11 +10,15 @@
 //   - the minimum saving share is respected, from env and from the cost table;
 //   - an unread, unreadable, stale, unlisted, zero, negative or per-request-fee
 //     listing, or no routable endpoint, keeps the call on OpenRouter;
-//   - the measured backstop sends a model to OpenRouter once both sides hold the
-//     minimum sample and direct does not measure below OpenRouter, and back when it does;
+//   - the measured backstop scores each answer against its own upstream's listed
+//     prices for the same tokens (unlike traffic never blocks a model), scales a
+//     sampled side by its ratio, keeps a probe share flowing, and lets the model back;
+//   - a failed boot read keeps the word starting while retries are left (1, 2, 5
+//     minutes), and a listing body over the byte cap is a failed read;
 //   - nothing is fetched on the request path;
-//   - the refresh logs words only; /api/gateway-status carries the word only;
-//     the figures are on the operator view alone.
+//   - the refresh logs a word and a reason code only; /api/gateway-status carries a
+//     neutral word publicly (off, starting, ok, degraded), the reason on the operator
+//     read only; the figures are on the operator view alone.
 // Every price below is synthetic: a multiple of a unit derived from the tier
 // cap (no rate typed). Offline: no network, no real keys, no spend.
 //
@@ -118,7 +122,7 @@ const setEnv = (vars) => {
 const base = K.LLM_GATEWAY_TOOLS.find((t) => t.slug === "v1-chat");
 ok(!!base, "base chat tool found");
 const msgs = [{ role: "user", content: "hi" }];
-const reset = () => { direct.hits.length = 0; or.hits.length = 0; D._resetDirectUpstreamStatsForTest(); };
+const reset = () => { direct.hits.length = 0; or.hits.length = 0; D._resetDirectUpstreamStatsForTest(); D._resetDirectBreakerForTest(); };
 const call = (extra = {}) => base.handler({ model: MODEL, messages: msgs, max_tokens: 500, ...extra });
 const served = async (extra) => { reset(); await call(extra); return direct.hits.length === 1 && or.hits.length === 0 ? "direct" : direct.hits.length === 0 && or.hits.length === 1 ? "openrouter" : `mixed(${direct.hits.length}/${or.hits.length})`; };
 const skipped = () => D.directUpstreamReport().skipped;
@@ -144,7 +148,7 @@ setEndpoints([[4, 8]]);
   const r = await quietRefresh();
   ok(direct.gets.length === 1 && or.gets.length === 1, "one refresh reads the direct listing once and the model's endpoints once");
   ok(r.word === "ok" && PB.directUpstreamWord() === "ok", "the word reads ok");
-  ok(r.lines.length === 1 && /^\[direct-upstream\] price book: cheaper$/.test(r.lines[0]), `the refresh logs a word only (${r.lines.join(" | ")})`);
+  ok(r.lines.length === 1 && /^\[direct-upstream\] price book: ok$/.test(r.lines[0]), `the refresh logs a word only (${r.lines.join(" | ")})`);
 }
 {
   const gets = direct.gets.length + or.gets.length;
@@ -170,7 +174,8 @@ setListing(listed(1, 30));
 {
   const r = await quietRefresh();
   ok(await served() === "openrouter" && await served({ max_tokens: 50 }) === "openrouter", "dearer at the reference shapes: OpenRouter");
-  ok(r.word === "not_cheaper" && PB.directUpstreamWord() === "not_cheaper" && /^\[direct-upstream\] price book: not_cheaper$/.test(r.lines[0] || ""), "no reference shape undercuts: the word and the log read not_cheaper");
+  ok(r.word === "degraded" && PB.directUpstreamWord() === "degraded" && PB.directUpstreamState().reason === "listed_prices" && /^\[direct-upstream\] price book: degraded \(listed_prices\)$/.test(r.lines[0] || ""), "no reference shape passes: the word reads degraded, the log names the reason code");
+  ok(JSON.stringify(PB.directUpstreamStatus()) === '{"status":"degraded"}' && JSON.stringify(PB.directUpstreamStatus({ full: true })) === '{"status":"degraded","reason":"listed_prices"}', "the public status is the word only; the operator read adds the reason code");
 }
 // Per-call, not per-price: an endpoint cheapest on input but dear on output does not make direct dearer.
 setListing(listed(3, 3));
@@ -209,25 +214,45 @@ ok(PB.minSavingFraction({ DIRECT_UPSTREAM_MIN_SAVING_PCT: "abc" }) === 0 && PB.d
 setEnv(ON);
 
 // ---- fail closed ---------------------------------------------------------------------------
-const failClosed = async (label, prep, word, skip) => {
+const failClosed = async (label, prep, reason, skip) => {
   PB._resetDirectPriceBookForTest();
   setListing(listed(2, 4)); setEndpoints([[4, 8]]);
   await prep();
   const r = await quietRefresh();
   const where = await served();
   ok(where === "openrouter" && skipped()[skip] === 1, `${label}: OpenRouter (${skip}; served by ${where}, skipped ${JSON.stringify(skipped())})`);
-  ok(PB.directUpstreamWord() === word && !/\d/.test(r.lines.join("")), `${label}: the word reads ${word}, the log carries no figure`);
+  if (reason === "book_unreadable") {
+    // A failed read on a fresh book keeps the word starting while retries are left.
+    const words = [PB.directUpstreamWord()];
+    for (let i = 0; i < PB.PRICE_RETRY_BACKOFF_MS.length; i++) words.push((await quietRefresh()).word);
+    ok(words.slice(0, -1).every((w) => w === "starting") && words.at(-1) === "degraded", `${label}: starting through ${PB.PRICE_RETRY_BACKOFF_MS.length} retries, then degraded (${words.join(",")})`);
+  }
+  ok(PB.directUpstreamWord() === "degraded" && PB.directUpstreamState().reason === reason && !/\d/.test(r.lines.join("")), `${label}: the word reads degraded (${reason}), the log carries no figure`);
 };
-await failClosed("listing answers 500", () => setListing(null, { status: 500, raw: { error: "x" } }), "unreadable", "price_unreadable");
-await failClosed("listing is not JSON", () => setListing(null, { raw: "<html>" }), "unreadable", "price_unreadable");
-await failClosed("listing is empty", () => setListing(null, { raw: { data: [] } }), "unreadable", "price_unreadable");
-await failClosed("endpoints answer 500", () => setEndpoints([], { status: 500, raw: {} }), "unreadable", "price_unreadable");
-await failClosed("model missing from the listing", () => setListing(listed(2, 4), { id: "someone-else" }), "not_cheaper", "price_unlisted");
-await failClosed("zero prompt price", () => setListing({ prompt: "0", completion: perToken(4) }), "not_cheaper", "price_bad_price");
-await failClosed("negative completion price", () => setListing({ prompt: perToken(2), completion: `-${perToken(4)}` }), "not_cheaper", "price_bad_price");
-await failClosed("unparsable price", () => setListing({ prompt: "cheap", completion: perToken(4) }), "not_cheaper", "price_bad_price");
-await failClosed("a per-request fee", () => setListing(listed(2, 4, { request: perToken(1) })), "not_cheaper", "price_request_fee");
-await failClosed("only priority endpoints", () => setEndpoints([[4, 8, "p/fast"]]), "not_cheaper", "price_no_endpoint");
+await failClosed("listing answers 500", () => setListing(null, { status: 500, raw: { error: "x" } }), "book_unreadable", "price_unreadable");
+await failClosed("listing is not JSON", () => setListing(null, { raw: "<html>" }), "book_unreadable", "price_unreadable");
+await failClosed("listing is empty", () => setListing(null, { raw: { data: [] } }), "book_unreadable", "price_unreadable");
+await failClosed("endpoints answer 500", () => setEndpoints([], { status: 500, raw: {} }), "book_unreadable", "price_unreadable");
+await failClosed("model missing from the listing", () => setListing(listed(2, 4), { id: "someone-else" }), "listed_prices", "price_unlisted");
+await failClosed("zero prompt price", () => setListing({ prompt: "0", completion: perToken(4) }), "listed_prices", "price_bad_price");
+await failClosed("negative completion price", () => setListing({ prompt: perToken(2), completion: `-${perToken(4)}` }), "listed_prices", "price_bad_price");
+await failClosed("unparsable price", () => setListing({ prompt: "cheap", completion: perToken(4) }), "listed_prices", "price_bad_price");
+await failClosed("a per-request fee", () => setListing(listed(2, 4, { request: perToken(1) })), "listed_prices", "price_request_fee");
+await failClosed("only priority endpoints", () => setEndpoints([[4, 8, "p/fast"]]), "listed_prices", "price_no_endpoint");
+// A listing body over the byte cap is a failed read, whatever it says.
+await failClosed("listing over the byte cap", () => { setEnv({ ...ON, DIRECT_UPSTREAM_PRICE_MAX_BYTES: "2048" }); setListing(null, { raw: { data: [{ id: MAPPED, pricing: listed(2, 4), pad: "x".repeat(4096) }] } }); }, "book_unreadable", "price_unreadable");
+setEnv(ON);
+{
+  // The retry schedule: 1, 2, 5 minutes after consecutive failed refreshes, then none.
+  ok(PB.priceRetryDelayMs(0) === null && PB.priceRetryDelayMs(1) === 60_000 && PB.priceRetryDelayMs(2) === 120_000 && PB.priceRetryDelayMs(3) === 300_000 && PB.priceRetryDelayMs(4) === null, "a failed refresh is retried after 1, 2 and 5 minutes, then the interval resumes");
+  // One failed boot read then a good one: starting, then ok, never degraded.
+  PB._resetDirectPriceBookForTest();
+  setListing(null, { status: 500, raw: {} }); setEndpoints([[4, 8]]);
+  const first = (await quietRefresh()).word;
+  setListing(listed(2, 4));
+  const second = (await quietRefresh()).word;
+  ok(first === "starting" && second === "ok", `one failed boot read does not page: starting, then ok (${first}, ${second})`);
+}
 {
   // A zero request fee, as a string, is no fee.
   PB._resetDirectPriceBookForTest();
@@ -243,7 +268,7 @@ await failClosed("only priority endpoints", () => setEndpoints([[4, 8, "p/fast"]
   PB._setPriceBookNowForTest(() => Date.now() + 3 * interval - 60_000);
   ok(await served() === "direct", "inside three intervals: still served from the book");
   PB._setPriceBookNowForTest(() => Date.now() + 3 * interval + 60_000);
-  ok(await served() === "openrouter" && skipped().price_unreadable === 1 && PB.directUpstreamWord() === "unreadable", "older than three intervals: stale, OpenRouter, word unreadable");
+  ok(await served() === "openrouter" && skipped().price_unreadable === 1 && PB.directUpstreamWord() === "degraded" && PB.directUpstreamState().reason === "book_unreadable", "older than three intervals: stale, OpenRouter, word degraded (book_unreadable)");
   PB._setPriceBookNowForTest(null);
 }
 // Concurrent refreshes share one run.
@@ -278,39 +303,70 @@ await failClosed("only priority endpoints", () => setEndpoints([[4, 8, "p/fast"]
 }
 
 // ---- measured backstop, through the handler ----------------------------------------------------
-setEnv({ ...ON, DIRECT_UPSTREAM_MEASURE_MIN: "30", DIRECT_UPSTREAM_MEASURE_WINDOW: "40" });
-PB._resetDirectPriceBookForTest();
-setListing(listed(2, 4)); setEndpoints([[4, 8]]);
-await quietRefresh();
+// Each stub reports a cost that is a set multiple (the ratio) of its own listed
+// price for the answer's tokens: direct lists (2, 4) units, OpenRouter (4, 8).
 {
-  directMicro = 90; orMicro = 10; // direct measures dearer than OpenRouter (synthetic)
+  const MB = { ...ON, DIRECT_UPSTREAM_MEASURE_MIN: "30", DIRECT_UPSTREAM_MEASURE_WINDOW: "40", DIRECT_UPSTREAM_MEASURE_PROBE_PCT: "0" };
+  setEnv(MB);
+  PB._resetDirectPriceBookForTest();
+  setListing(listed(2, 4)); setEndpoints([[4, 8]]);
+  await quietRefresh();
+  const listedCall = (p, c, u = TOK) => ((u.prompt_tokens * p + u.completion_tokens * c) * UNIT) / 1e6;
+  let directRatio = 1, orRatio = 1;
+  const prevD = direct.plan, prevO = or.plan;
+  direct.plan = (req, res, body) => json(res, 200, answer(body.model, { ...TOK, cost: directRatio * listedCall(2, 4) }));
+  or.plan = (req, res, body) => json(res, 200, answer(body?.model, { ...TOK, cost: orRatio * listedCall(4, 8) }));
+  // Unlike traffic: direct serves short-in long-out calls, OpenRouter input-heavy ones,
+  // each at exactly its own listed price. Not a reason to block (a per-1k figure read
+  // these as direct dearer).
+  const textCall = { prompt_tokens: 100, completion_tokens: 1000 }, toolCall = { prompt_tokens: 10000, completion_tokens: 100 };
+  for (let i = 0; i < 30; i++) { PB.noteDirectMeasure(MODEL, "direct", textCall, listedCall(2, 4, textCall)); PB.noteDirectMeasure(MODEL, "openrouter", toolCall, listedCall(4, 8, toolCall)); }
+  {
+    const m = PB.directPriceBookReport().models[MODEL].measured;
+    ok(Math.abs(m.ratio.direct - 1) < 1e-9 && Math.abs(m.ratio.openrouter - 1) < 1e-9 && m.blocked === false && PB.directUpstreamWord() === "ok", `unlike traffic at each side's own listed price: ratios 1, not blocked, word ok (${JSON.stringify(m.ratio)})`);
+    ok(await served() === "direct", "unlike traffic: the call still goes direct");
+  }
+  PB._resetDirectPriceBookForTest();
+  setListing(listed(2, 4)); setEndpoints([[4, 8]]);
+  await quietRefresh();
+  // Direct bills three times its listing: half the listed cost scaled by three is dearer.
+  directRatio = 3;
   let directServed = 0;
   for (let i = 0; i < 30; i++) if (await served() === "direct") directServed++;
-  ok(directServed === 30, "listed cheaper, OpenRouter not yet sampled: 30 calls go direct");
-  setEnv({ ...ON, DIRECT_UPSTREAM_MEASURE_MIN: "30", DIRECT_UPSTREAM_MEASURE_WINDOW: "40", DIRECT_UPSTREAM_SHARE: "0" });
-  for (let i = 0; i < 29; i++) await served();
-  setEnv({ ...ON, DIRECT_UPSTREAM_MEASURE_MIN: "30", DIRECT_UPSTREAM_MEASURE_WINDOW: "40" });
-  ok(await served() === "direct", "29 OpenRouter samples (under the minimum): the measure does not act yet");
-  setEnv({ ...ON, DIRECT_UPSTREAM_MEASURE_MIN: "30", DIRECT_UPSTREAM_MEASURE_WINDOW: "40", DIRECT_UPSTREAM_SHARE: "0" });
-  await served();
-  setEnv({ ...ON, DIRECT_UPSTREAM_MEASURE_MIN: "30", DIRECT_UPSTREAM_MEASURE_WINDOW: "40" });
-  const m = PB.directPriceBookReport().models[MODEL].measuredPer1k;
-  ok(m.samples.direct >= 30 && m.samples.openrouter >= 30 && m.blocked === true, "both sides at the minimum, direct measured dearer: blocked");
-  ok(await served() === "openrouter" && skipped().measured_not_cheaper === 1, "blocked: the call goes to OpenRouter (a measured_not_cheaper skip)");
-  ok(PB.directUpstreamWord() === "not_cheaper", "blocked: the word reads not_cheaper");
-  // OpenRouter now measures dearer: its window refills and the model goes back.
-  orMicro = 900;
+  ok(directServed === 30, "under the minimum sample the listing stands: 30 calls go direct");
+  ok(await served() === "openrouter" && skipped().measured_not_cheaper === 1, "30 direct samples at three times its listing: OpenRouter (a measured_not_cheaper skip)");
+  ok(PB.directUpstreamWord() === "degraded" && PB.directUpstreamState().reason === "measured_cost" && PB.directPriceBookReport().models[MODEL].measured.blocked === true, "blocked: the word reads degraded (measured_cost)");
+  // OpenRouter's own answers bill twice its cheapest listing: once sampled, it scales too.
+  orRatio = 2;
   let back = -1;
   for (let i = 0; i < 40 && back < 0; i++) if (await served() === "direct") back = i;
-  ok(back > 0, `once OpenRouter measures above direct, the model returns to direct (after ${back} OpenRouter answers)`);
-  ok(PB.directUpstreamWord() === "ok" && PB.directPriceBookReport().models[MODEL].measuredPer1k.blocked === false, "unblocked: the word reads ok");
-  // An equal measure is not below: blocked.
+  ok(back >= 29, `once OpenRouter's ratio is sampled above direct's scaled cost, the model returns to direct (after ${back} OpenRouter answers)`);
+  ok(PB.directUpstreamWord() === "ok", "unblocked: the word reads ok");
+  // The probe share: while blocked, a share still goes direct, and recovers the model.
   PB._resetDirectPriceBookForTest();
-  for (let i = 0; i < 30; i++) { PB.noteDirectMeasure(MODEL, "direct", TOK, 5e-6); PB.noteDirectMeasure(MODEL, "openrouter", TOK, 5e-6); }
-  ok(PB.directPriceBookReport().models[MODEL].measuredPer1k.blocked === true, "an equal measure is not below: blocked");
+  setListing(listed(2, 4)); setEndpoints([[4, 8]]);
+  await quietRefresh();
+  directRatio = 3; orRatio = 1;
+  for (let i = 0; i < 30; i++) await served();
+  ok(await served() === "openrouter", "probe share 0: a blocked model sends nothing direct");
+  setEnv({ ...MB, DIRECT_UPSTREAM_MEASURE_PROBE_PCT: "100" });
+  directRatio = 1;
+  ok(await served() === "direct" && skipped().measure_probe_sent === 1, "probe share 100: a blocked call goes direct as a probe (a measure_probe_sent count)");
+  let probes = 1;
+  for (let i = 1; i < 40; i++) if (await served() === "direct") probes++;
+  ok(probes === 40, `probe share 100: every call goes direct while blocked and after (${probes})`);
+  ok(PB.directPriceBookReport().models[MODEL].measured.blocked === false && PB.directUpstreamWord() === "ok", "the probes' samples bring the direct ratio back: unblocked");
+  setEnv(MB);
+  // A sample without a book to score it against is not kept; an unmapped model is never measured.
+  PB._resetDirectPriceBookForTest();
+  PB.noteDirectMeasure(MODEL, "direct", TOK, 1e-6);
   PB.noteDirectMeasure("fake/unmapped", "direct", TOK, 1);
   ok(!PB.directPriceBookReport().models["fake/unmapped"], "an unmapped model is never measured");
-  directMicro = 10; orMicro = 20;
+  setListing(listed(2, 4)); setEndpoints([[4, 8]]);
+  await quietRefresh();
+  ok(PB.directPriceBookReport().models[MODEL].measured.samples.direct === 0, "a sample taken before the book was read is not kept");
+  direct.plan = prevD; or.plan = prevO;
+  setEnv(ON);
 }
 
 // ---- booted: the word publicly, the figures for the operator ----------------------------------
@@ -343,17 +399,17 @@ setEnv({});
     }
     ok(pub?.directUpstream?.status === "ok" && Object.keys(pub.directUpstream).join(",") === "status", `the background refresh ran at boot; gateway-status carries the word only (${JSON.stringify(pub?.directUpstream)})`);
     const op = await (await realFetch(`${url}/api/gateway-status`, { headers: { "X-Operator-Token": TOKEN } })).json().catch(() => null);
-    ok(op?.directUpstream?.status === "ok" && Object.keys(op.directUpstream).join(",") === "status", "the operator read of gateway-status carries the word only too");
+    ok(op?.directUpstream?.status === "ok" && Object.keys(op.directUpstream).join(",") === "status", "the operator read of gateway-status carries no reason while ok");
     const anon = await realFetch(`${url}/__operator/direct-upstream.json`);
     ok(anon.status === 404, "the operator view answers 404 without the token");
     const r = await realFetch(`${url}/__operator/direct-upstream.json`, { headers: { Authorization: `Bearer ${TOKEN}` } });
     const j = await r.json().catch(() => ({}));
     const row = j.priceBook?.models?.[MODEL];
     ok(r.status === 200 && j.priceBook?.word === "ok" && row?.state === "ok" && Math.abs(row.direct.prompt - 2 * UNIT) < 1e-9 && Math.abs(row.openrouter.cheapestCompletion - 8 * UNIT) < 1e-9, "the operator view carries the listed figures");
-    ok(typeof row?.measuredPer1k?.minSample === "number" && typeof j.priceBook.minSaving === "number", "and the measure and the saving share");
+    ok(typeof row?.measured?.minSample === "number" && typeof j.priceBook.minSaving === "number" && typeof j.breaker?.threshold === "number", "and the measure, the saving share and the breaker");
     ok(!JSON.stringify(pub).includes(perToken(2)) && !/[0-9]\.[0-9]{3,}/.test(JSON.stringify(pub.directUpstream)), "the public view carries no figure");
     const all = log.join("");
-    ok(/\[direct-upstream\] price book: cheaper/.test(all) && ![2, 4, 8].some((u) => all.includes(perToken(u))), "the boot log names the word and no price");
+    ok(/\[direct-upstream\] price book: ok/.test(all) && ![2, 4, 8].some((u) => all.includes(perToken(u))) && !/cheap/i.test(all.split("\n").filter((l) => l.includes("[direct-upstream]")).join("")), "the boot log names the word and no price");
     ok(direct.gets.length > 0 && or.gets.some((u) => u.includes("/endpoints")), "the booted server read both stubs (no other host is reachable under the preload)");
   } finally {
     child.kill("SIGTERM");
@@ -368,7 +424,8 @@ setEnv({});
   const { spawnSync } = await import("node:child_process");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
-  const TITLE = "directUpstream: a direct-upstream model is not cheaper, or its price book is unreadable";
+  const TITLE = "directUpstream: the direct upstream is degraded";
+  ok(!/cheap|undercut|not_cheaper|unreadable/i.test(TITLE), "the title is neutral");
   const wf = yamlLoad(readFileSync(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8"));
   const step = Object.values(wf.jobs).flatMap((j) => j.steps || []).find((st) => String(st.name || "").startsWith("Tool, upstream and facilitator failure checks"));
   ok(!!step, "heartbeat.yml has the failure-words step");
@@ -390,34 +447,35 @@ printf '%s\\x1f' "$@" >> "$GH_LOG"; printf '\\x1e' >> "$GH_LOG"
     if (r.status !== 0) throw new Error(r.stderr);
     return readFileSync(log, "utf8").split("\x1e").filter((l) => l.trim()).map((l) => l.split("\x1f").filter((x) => x !== ""));
   };
-  for (const w of ["not_cheaper", "unreadable"]) {
+  for (const w of ["degraded"]) {
     const made = hb({ ...OKW, directUpstream: { status: w } }).filter((c) => c[1] === "create");
     const body = made[0]?.[made[0].indexOf("--body") + 1] || "";
     ok(made.length === 1 && made[0][made[0].indexOf("--title") + 1] === TITLE, `heartbeat: ${w} opens one issue under the title`);
-    ok(new RegExp(`directUpstream\\.status=${w}\\.`).test(body) && body.includes("/__operator/direct-upstream.json") && !/\d\.\d|\$/.test(body), `heartbeat: the ${w} body names the word and the operator endpoint, no figure`);
+    ok(new RegExp(`directUpstream\\.status=${w}\\.`).test(body) && body.includes("/__operator/direct-upstream.json") && !/\d\.\d|\$|cheap|undercut/i.test(body), `heartbeat: the ${w} body names the word and the operator endpoint, no figure or comparison`);
     ok(hb({ ...OKW, directUpstream: { status: w } }, TITLE).some((c) => c[1] === "comment" && c[2] === "41"), `heartbeat: ${w} with an open issue comments`);
   }
   for (const w of ["ok", "off"]) ok(hb({ ...OKW, directUpstream: { status: w } }, TITLE).filter((c) => c[1] === "close" && c[2] === "41").length === 1, `heartbeat: ${w} closes the issue`);
-  for (const w of ["starting", "unknown"]) ok(hb({ ...OKW, directUpstream: { status: w } }, TITLE).filter((c) => c[1] === "close" || c[1] === "create").length === 0, `heartbeat: ${w} does neither`);
+  for (const w of ["starting", "unknown", "not_cheaper", "unreadable"]) ok(hb({ ...OKW, directUpstream: { status: w } }, TITLE).filter((c) => c[1] === "close" || c[1] === "create").length === 0, `heartbeat: ${w} does neither`);
   ok(hb({ ...OKW, toolFailures: { status: "failing" } }).some((c) => c[1] === "create" && c[c.indexOf("--body") + 1].includes("/__operator/tool-failures.json")), "heartbeat: the other words keep their operator endpoint");
   rmSync(dir, { recursive: true, force: true });
   const { ALARMS, judge } = await import("../workers/status-probe/src/index.js");
   const a = ALARMS.find((x) => x.title === TITLE);
   ok(!!a, "the status Worker carries the same title");
   const j = (gw) => judge({ gateway: gw })[TITLE];
-  ok(j({ directUpstream: { status: "not_cheaper" } }) === "bad" && j({ directUpstream: { status: "unreadable" } }) === "bad" && j({ directUpstream: { status: "ok" } }) === "good" && j({ directUpstream: { status: "off" } }) === "good" && j({ directUpstream: { status: "starting" } }) === "quiet" && j({}) === "quiet", "Worker: not_cheaper and unreadable page, ok and off clear, starting and absent do neither");
-  const wb = a.body({ gateway: { directUpstream: { status: "<b>" } } });
-  ok(/directUpstream\.status=not_cheaper\./.test(wb) && !wb.includes("<b>") && wb.includes("/__operator/direct-upstream.json"), "Worker: the body echoes only a known word and names the operator endpoint");
+  ok(j({ directUpstream: { status: "degraded" } }) === "bad" && j({ directUpstream: { status: "ok" } }) === "good" && j({ directUpstream: { status: "off" } }) === "good" && j({ directUpstream: { status: "starting" } }) === "quiet" && j({}) === "quiet", "Worker: degraded pages, ok and off clear, starting and absent do neither");
+  const wb = a.body({ gateway: { directUpstream: { status: "<b>", reason: "listed_prices" } } });
+  ok(/directUpstream\.status=degraded\./.test(wb) && !wb.includes("<b>") && !wb.includes("listed_prices") && wb.includes("/__operator/direct-upstream.json") && !/cheap|undercut/i.test(wb), "Worker: the body names only the word and the operator endpoint");
 }
 
 // ---- source pins ------------------------------------------------------------------------------
 {
   const kit = readFileSync(new URL("../src/tools/llm-gateway-kit.js", import.meta.url), "utf8");
-  ok(/const price = directPriceDecision\(outbound\.model, \{ inputTokens: estimateInputTokens\(plan\.body, 0\), outputTokens: plan\.body\.max_tokens, maxPrice: outbound\.provider\?\.max_price \}\);\s*if \(!price\.go\) \{ noteDirectSkip\(price\.skip\); return false; \}/.test(kit), "the kit asks the guard before every direct attempt, with the call's own estimate and max_price");
+  ok(/const inputTokens = Number\.isFinite\(outbound\[CLAMP_INPUT_TOKENS\]\) \? outbound\[CLAMP_INPUT_TOKENS\] : estimateInputTokens\(plan\.body, 0\);\s*const price = directPriceDecision\(outbound\.model, \{ inputTokens, outputTokens: plan\.body\.max_tokens, maxPrice: outbound\.provider\?\.max_price \}\);\s*if \(!price\.go\) \{ noteDirectSkip\(price\.skip\); return false; \}/.test(kit), "the kit asks the guard before every direct attempt, with the clamp's estimate (else its own) and max_price");
   ok(!/refreshDirectPriceBook/.test(kit), "the kit never refreshes the book (no fetch on the request path)");
+  ok(/const wait = priceRetryDelayMs\(book\.failStreak\);\s*if \(wait\) setTimeout\(tick, wait\)\.unref\?\.\(\);/.test(readFileSync(new URL("../src/gateway-direct-pricebook.js", import.meta.url), "utf8")), "the background tick schedules the retry after a failed refresh");
   const guard = readFileSync(new URL("../src/gateway-direct-pricebook.js", import.meta.url), "utf8");
   const logs = guard.match(/console\.(log|warn|error)\([^;]*;/g) || [];
-  ok(logs.length === 1 && /price book: \$\{word === "ok" \? "cheaper" : word\}/.test(logs[0]), "the guard's only log line prints a word");
+  ok(logs.length === 1 && /price book: \$\{said\}/.test(logs[0]), "the guard's only log line prints a word and a reason code");
 }
 
 direct.server.close(); or.server.close();

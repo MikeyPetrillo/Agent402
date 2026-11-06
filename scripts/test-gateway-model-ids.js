@@ -615,12 +615,14 @@ for (const [requested, succ] of Object.entries(AVAILABILITY_SUCCESSORS).flatMap(
 // Direct upstream (src/gateway-direct-pricebook.js): with DIRECT_UPSTREAM_URL
 // and DIRECT_UPSTREAM_MODELS set (Actions secrets on model-drift.yml), every
 // mapped model's listed prices on the direct upstream's public listing (no key)
-// must parse, be positive, carry no per-request fee, and undercut the cheapest
-// OpenRouter endpoint each admitting tier can route to (priority endpoints and
-// endpoints above the tier's max_price excluded; the metered tier's bound is
-// the model's own row) at one of the guard's reference call shapes. Serving
-// already keeps such a model on OpenRouter; this opens the drift issue. Lines
-// name the OpenRouter id and a reason word, never a price or the upstream's address.
+// must parse, be positive, carry no per-request fee, and pass the serving
+// guard's listed comparison against the OpenRouter endpoints each admitting
+// tier can route to (priority endpoints and endpoints above the tier's
+// max_price excluded; the metered tier's bound is the model's own row) at one
+// of the guard's reference call shapes. Serving already keeps such a model on
+// OpenRouter; this opens the drift issue. The ids come from a secret, so the
+// lines carry counts and neutral reason codes only: never an id, a price or
+// the upstream's address.
 {
   if (!String(process.env.DIRECT_UPSTREAM_URL || "").trim() || !String(process.env.DIRECT_UPSTREAM_MODELS || "").trim()) {
     console.log("note - DIRECT_UPSTREAM_URL / DIRECT_UPSTREAM_MODELS unset: the direct-upstream listed-price check is skipped");
@@ -638,24 +640,33 @@ for (const [requested, succ] of Object.entries(AVAILABILITY_SUCCESSORS).flatMap(
       ok(!!listing, "direct upstream: the public model listing is readable");
     }
     if (cfg && listing) {
+      const reasons = {};
+      let graded = 0, degraded = 0, unbounded = 0;
       for (const [orId, upId] of cfg.models) {
+        graded++;
+        const found = new Set();
         const m = listing.get(upId);
         const direct = m ? parseDirectPricing(m.pricing) : { reason: "unlisted" };
-        ok(!direct.reason, `direct upstream ${orId}: listed with positive prompt and completion prices and no per-request fee${direct.reason ? ` (${direct.reason})` : ""}`);
-        if (direct.reason) continue;
-        const eps = await endpointPrices(orId);
-        ok(Array.isArray(eps) && eps.length > 0, `direct upstream ${orId}: OpenRouter endpoints readable`);
-        if (!Array.isArray(eps) || !eps.length) continue;
+        if (direct.reason) found.add(direct.reason);
+        const eps = direct.reason ? null : await endpointPrices(orId);
+        if (!direct.reason && !(Array.isArray(eps) && eps.length)) found.add("endpoints_unreadable");
         const slugs = Object.keys(TIERS).filter((sl) => tierAllows(sl, orId));
-        ok(slugs.length > 0, `direct upstream ${orId}: served on at least one tier`);
-        for (const slug of slugs) {
-          const tier = TIERS[slug];
-          const bound = tier.metered ? costFor(orId) : tier.maxPrice;
-          const routable = eps.filter((e) => !PRIORITY_TAG.test(e.tag) && (!bound || (e.p <= bound.prompt + 1e-9 && e.c <= bound.completion + 1e-9))).map((e) => ({ prompt: e.p, completion: e.c }));
-          if (!routable.length) { console.log(`note - direct upstream ${orId} (${slug}): no routable OpenRouter endpoint under the tier's bound`); continue; }
-          ok(!listedNotCheaperAnywhere(direct, routable), `direct upstream ${orId} (${slug}): listed prices undercut the cheapest routable OpenRouter endpoint at a reference call shape`);
+        if (!slugs.length) found.add("no_tier");
+        if (!found.size) {
+          for (const slug of slugs) {
+            const tier = TIERS[slug];
+            const bound = tier.metered ? costFor(orId) : tier.maxPrice;
+            const routable = eps.filter((e) => !PRIORITY_TAG.test(e.tag) && (!bound || (e.p <= bound.prompt + 1e-9 && e.c <= bound.completion + 1e-9))).map((e) => ({ prompt: e.p, completion: e.c }));
+            if (!routable.length) { unbounded++; continue; }
+            if (listedNotCheaperAnywhere(direct, routable)) found.add("listed_prices");
+          }
         }
+        if (found.size) degraded++;
+        for (const r of found) reasons[r] = (reasons[r] || 0) + 1;
       }
+      const codes = Object.entries(reasons).map(([r, n]) => `${r} x${n}`).join(", ");
+      ok(degraded === 0, `direct upstream: ${graded} mapped model(s) graded, ${degraded} degraded${codes ? ` (${codes})` : ""}`);
+      if (unbounded) console.log(`note - direct upstream: ${unbounded} model-tier pair(s) with no routable OpenRouter endpoint under the tier's bound`);
     }
   }
 }

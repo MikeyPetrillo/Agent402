@@ -52,7 +52,7 @@ import { payerFromRequest, paymentHeaderOf } from "../payer.js";
 // module header) - refuses before any upstream call, arms the outcome listener.
 import { gatewaySettleBreakerCheck } from "../gateway-settle-breaker.js";
 import { clientGoneSignal } from "../drain-abort.js";
-import { directUpstreamConfig, withDirectAttempts, directBodyFrom, directShareDraw, directCostUsd, stripVendorExtensions, noteDirectAb, noteDirectSkip, noteDirectAnomaly, failureBucket, directModelFor } from "../gateway-direct-upstream.js";
+import { directUpstreamConfig, withDirectAttempts, directBodyFrom, directShareDraw, directCostUsd, stripVendorExtensions, noteDirectAb, noteDirectSkip, noteDirectAnomaly, failureBucket, directModelFor, directBreakerAllows, noteDirectOutcome } from "../gateway-direct-upstream.js";
 import { directPriceDecision, noteDirectMeasure } from "../gateway-direct-pricebook.js";
 import { clientGoneError } from "../hangup-settlement.js";
 import { evmCredentialSettleableMs } from "../evm-validity.js";
@@ -1630,8 +1630,12 @@ export function reasoningOutsideMaxTokens(model) {
 
 /** Shrinks body.max_tokens so the worst-case upstream bill stays ≤ MARGIN ×
  *  the tier price; throws a self-explaining 400 when the INPUT alone busts
- *  the budget. Exported for the failover chain walk (each fallback model is
+ *  the budget. Returns the input token estimate it priced (undefined on the
+ *  metered tier, which it does not clamp). Exported for the failover chain walk (each fallback model is
  *  re-clamped at its own cost) and for the pricing-margin CI test. */
+/** Key under which the chat chain carries the margin clamp's input estimate
+ *  on an outbound body (a symbol: never serialized). */
+const CLAMP_INPUT_TOKENS = Symbol("clampInputTokens");
 export function clampToMargin(body, tier, imageCount) {
   // Metered tier: the 402 quote IS the worst case times the markup, so there
   // is nothing to clamp against - the ceiling grows with the request. The
@@ -1662,7 +1666,7 @@ export function clampToMargin(body, tier, imageCount) {
         `Shrink the input, lower "n", or use a cheaper model - GET /v1/models lists every model and its tier.`
       );
     }
-    return;
+    return inTokens;
   }
   const affordableOut = Math.floor(((budgetUsd - inUsd - fixedUsd) * 1e6) / cost.completion / n / turns / outFactor);
   if (affordableOut < MIN_OUT_TOKENS) {
@@ -1673,6 +1677,7 @@ export function clampToMargin(body, tier, imageCount) {
     );
   }
   if (body.max_tokens > affordableOut) body.max_tokens = affordableOut;
+  return inTokens;
 }
 
 /** A reasoning or thinking budget the buyer wrote against their own cap can
@@ -3751,7 +3756,7 @@ function makeHandler(routeTier) {
     const providerForLink = structured ? { ...(provider || {}), require_parameters: true } : provider;
     const outboundFor = (model, flex = false) => {
       const attempt = { ...body, model };
-      clampToMargin(attempt, TIERS[tierSlug], imageCount); // throws 400 → caller skips this candidate
+      const clampInputTokens = clampToMargin(attempt, TIERS[tierSlug], imageCount); // throws 400 → caller skips this candidate
       // Reasoning default per link (see REASONING_MODELS): only when the
       // buyer expressed no preference. Deterministic given the model, so it
       // needs no place in the cache key.
@@ -3778,6 +3783,9 @@ function makeHandler(routeTier) {
         ...(plugins.length ? { plugins } : {}),
         // flex / priority / an explicit default on :nitro - see serviceTierFor.
         service_tier: serviceTierFor(model, body, flex),
+        // The clamp's input estimate, for the direct cost guard: a symbol key,
+        // so it is never serialized into a request body.
+        ...(Number.isFinite(clampInputTokens) ? { [CLAMP_INPUT_TOKENS]: clampInputTokens } : {}),
       };
     };
     // Server-tool execution is upstream spend, so it has to be visible to a
@@ -3804,18 +3812,24 @@ function makeHandler(routeTier) {
     // listed model. It is taken only when the request uses nothing outside the
     // direct allowlist, the cost guard (src/gateway-direct-pricebook.js) reads
     // this call as cheaper there than on OpenRouter's cheapest routable
-    // endpoint under this call's provider.max_price, and the A/B draw picks
-    // it; every failure walks on. The guard reads only the background price
-    // book: nothing is fetched here.
+    // endpoint under this call's provider.max_price, the A/B draw picks it,
+    // and the direct breaker is closed (consecutive direct failures open it
+    // for a while); every failure walks on. The guard reads only the
+    // background price book: nothing is fetched here. The input estimate is
+    // the one the margin clamp already made for this link (metered links,
+    // which skip the clamp, estimate the direct body here).
     const directCfg = directUpstreamConfig();
     const attempts = withDirectAttempts(attemptsFor(chain, body).slice(0, TIERS[tierSlug].maxAttempts || Infinity), directCfg);
     const directPlanFor = (direct, outbound, stream) => {
       if (!direct) return null;
       const plan = directBodyFrom(outbound, direct, { stream });
       if (!plan.body) { noteDirectSkip(plan.reason); return false; }
-      const price = directPriceDecision(outbound.model, { inputTokens: estimateInputTokens(plan.body, 0), outputTokens: plan.body.max_tokens, maxPrice: outbound.provider?.max_price });
+      const inputTokens = Number.isFinite(outbound[CLAMP_INPUT_TOKENS]) ? outbound[CLAMP_INPUT_TOKENS] : estimateInputTokens(plan.body, 0);
+      const price = directPriceDecision(outbound.model, { inputTokens, outputTokens: plan.body.max_tokens, maxPrice: outbound.provider?.max_price });
       if (!price.go) { noteDirectSkip(price.skip); return false; }
+      if (price.probe) noteDirectSkip("measure_probe_sent");
       if (!directShareDraw(directCfg)) { noteDirectSkip("share"); return false; }
+      if (!directBreakerAllows()) { noteDirectSkip("breaker_open"); return false; }
       return plan.body;
     };
     if (body.stream === true) {
@@ -3849,9 +3863,11 @@ function makeHandler(routeTier) {
                   out = await retryRateLimited(() => streamOpenRouterTo(outbound, res, { timeoutMs, onUsage: (usage, cost, frame) => { if (frame?.service_tier !== "priority") noteDirectMeasure(model, "openrouter", usage, cost); return recordUsage(usage, cost, frame?.model || model, frame?.service_tier || (flex ? "flex" : "default")); } }), { delays: rateLimitDelaysFor(flex), canRetry: () => !res.headersSent && !client.gone() });
                 }
                 if (abListed) noteDirectAb(directBody ? "direct" : "openrouter", { ok: true, ms: Date.now() - attemptStarted });
+                if (directBody) noteDirectOutcome(true);
                 return out;
               } catch (e) {
                 if (abListed) noteDirectAb(directBody ? "direct" : "openrouter", { ok: false, reason: failureBucket(e) });
+                if (directBody) noteDirectOutcome(false, failureBucket(e));
                 if (res.headersSent || ![502, 503, 504].includes(e?.statusCode)) throw e;
                 if (!directBody || !lastErr) lastErr = e;
                 timeouts.note(e, attemptStarted, timeoutMs);
@@ -3933,6 +3949,7 @@ function makeHandler(routeTier) {
         // shape otherwise untouched (the standard `model` field already names
         // the server, this adds WHY). Streams pass through unannotated.
         if (abListed) noteDirectAb(abLabel, { ok: true, ms: Date.now() - attemptStarted });
+        if (directBody) noteDirectOutcome(true);
         if (routedCategory && data && typeof data === "object") {
           data.agent402_router = { category: routedCategory, quality: routedQuality, served: data.model || model };
         }
@@ -3967,6 +3984,7 @@ function makeHandler(routeTier) {
         return data;
       } catch (e) {
         if (abListed) noteDirectAb(abLabel, { ok: false, reason: failureBucket(e) });
+        if (directBody) noteDirectOutcome(false, failureBucket(e));
         if (![502, 503, 504].includes(e?.statusCode)) throw e;
         if (!directBody || !lastErr) lastErr = e;
         timeouts.note(e, attemptStarted, timeoutMs);

@@ -105,7 +105,7 @@ const cap = K.TIERS["v1-chat"].maxPrice;
 const endpoint = Object.fromEntries(["prompt", "completion"].map((k) => [k, Math.min(cap[k], placeholder[k]) / 2]));
 const cheapDirect = Object.fromEntries(["prompt", "completion"].map((k) => [k, endpoint[k] / 10]));
 const seedBook = () => { PB._resetDirectPriceBookForTest(); PB._seedDirectPriceBookForTest({ [MODEL]: { direct: cheapDirect, endpoints: [endpoint] }, "qwen/qwen3.8-27b": { direct: cheapDirect, endpoints: [endpoint] } }); };
-const reset = () => { direct.hits.length = 0; or.hits.length = 0; direct.plan = null; or.plan = null; spend.length = 0; D._resetDirectUpstreamStatsForTest(); seedBook(); };
+const reset = () => { direct.hits.length = 0; or.hits.length = 0; direct.plan = null; or.plan = null; spend.length = 0; D._resetDirectUpstreamStatsForTest(); D._resetDirectBreakerForTest(); seedBook(); };
 const flush = () => new Promise((r) => setTimeout(r, 30)); // the usage capture is a lazy import off the handler's promise
 const gatewaySpend = () => spend.filter((s) => s.source === "gateway");
 
@@ -244,6 +244,39 @@ for (const [label, finish, completion] of [["an empty refusal", "content_filter"
   try { await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 }); } catch (e) { err = e; }
   ok(err?.statusCode === 504 && or.hits.length === 0, "a direct timeout counts in LLM_MAX_TIMED_OUT_ATTEMPTS (budget 1: no further attempt)");
   delete process.env.LLM_MAX_TIMED_OUT_ATTEMPTS;
+}
+
+// ---- the direct breaker ----------------------------------------------------------
+// Consecutive failed direct attempts open it: no call goes direct while open
+// (no added latency, no timed-out attempt spent), the public word reads
+// degraded, and after the open period one trial closes it on success.
+{
+  setEnv({ ...ON, DIRECT_UPSTREAM_BREAKER_FAILS: "2", DIRECT_UPSTREAM_BREAKER_OPEN_MS: "60000" });
+  reset();
+  const PBk = await import("../src/gateway-direct-pricebook.js");
+  let now = Date.now();
+  D._setDirectBreakerNowForTest(() => now);
+  direct.plan = (req, res) => json(res, 503, { error: { message: "no qualifying worker" } });
+  for (let i = 0; i < 2; i++) await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 });
+  ok(direct.hits.length === 2 && or.hits.length === 2 && D.directBreakerState().open, "two consecutive direct failures open the breaker");
+  ok(PBk.directUpstreamWord() === "degraded" && JSON.stringify(PBk.directUpstreamStatus()) === '{"status":"degraded"}' && PBk.directUpstreamStatus({ full: true }).reason === "breaker_open", "open: the public word is degraded, the reason only on the operator read");
+  D._resetDirectUpstreamStatsForTest();
+  await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 });
+  ok(direct.hits.length === 2 && or.hits.length === 3 && D.directUpstreamReport().skipped.breaker_open === 1, "open: the next call skips the direct upstream (a breaker_open skip)");
+  now += 60_001;
+  await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 });
+  ok(direct.hits.length === 3 && D.directBreakerState().open, "after the open period one trial goes direct; it fails and the breaker stays open");
+  await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 });
+  ok(direct.hits.length === 3, "the failed trial reopens it: the next call skips direct");
+  now += 60_001;
+  direct.plan = (req, res, body) => json(res, 200, answer(body.model, { x_vendor: { charged_micro: DIRECT_MICRO } }));
+  await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 });
+  ok(direct.hits.length === 4 && !D.directBreakerState().open && PBk.directUpstreamWord() === "ok", "a successful trial closes it and the word reads ok");
+  // A buyer who hung up is not the upstream failing.
+  D.noteDirectOutcome(false, "client_gone");
+  ok(D.directBreakerState().fails === 0, "a client that went away does not count");
+  D._setDirectBreakerNowForTest(null);
+  setEnv(ON);
 }
 
 // ---- streams ------------------------------------------------------------------
