@@ -17,7 +17,7 @@ import { rpcHeaderReader } from "./block-clock.js";
 import { standingBand } from "./standing.js";
 import { join } from "node:path";
 import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
-import { RAILS, RAILS_AMP, GATED_RAILS } from "./rails.js";
+import { RAILS, RAILS_AMP } from "./rails.js";
 import { REVENUE_RANGE_PRESETS, REVENUE_RANGE_PRESET_LABELS, windowLabel } from "./revenue-range.js";
 // Pure, main-guarded helpers shared with the daily scanners — one
 // classification rule everywhere: a transfer is external revenue only if the
@@ -2202,9 +2202,13 @@ export function revenuePage(baseUrl, snap) {
 }
 // RAILS import keeps this module honest if the rail set changes: a rail in
 // rails.js with no read-config here is a wiring bug the test below catches.
+// A gated rail (GATED_RAILS, Ink today) has no read-config until it moves into
+// RAILS: an EVM entry here is scanned by the revenue ledger and the seller
+// leaderboard on every boot, offered or not, so it joins at graduation, when
+// this check starts requiring it.
 export function railsCoveredByLiveView() {
   const covered = new Set([...Object.values(EVM).map((c) => c.label), "Solana", "Stellar", "Algorand"]);
-  return [...RAILS, ...GATED_RAILS].every((r) => covered.has(r.name));
+  return RAILS.every((r) => covered.has(r.name));
 }
 
 // Operator heap read (/__operator/heap.json `stores`).

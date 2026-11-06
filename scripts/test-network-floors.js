@@ -80,7 +80,9 @@ await check("402: a metered per-request quote is floored on eip155:4663 only", a
 await check("every surface that states the floor reads the same constant", async () => {
   const { readFileSync } = await import("node:fs");
   const src = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
-  assert.match(src("server.js"), /minPriceUsdByNetwork: \{ robinhood: networkFloorUsd\(RH_FLOOR_CAIP2\) \}/, "/api/pricing");
+  // Every offered chain's floor, by public name (Robinhood's default, or a NETWORK_PRICE_FLOORS entry).
+  assert.match(src("server.js"), /publicNetworks\(\)\.map\(\(n\) => \[n, networkFloorUsd\(PAY_NETWORKS\[n\]\)\]\)\.filter\(\(\[, usd\]\) => usd > 0\)/, "/api/pricing");
+  assert.match(src("server.js"), /\{ minPriceUsdByNetwork: floors \}/, "/api/pricing");
   assert.match(src("server.js"), /floorUsd: caip2 \? networkFloorUsd\(caip2\) : 0/, "chain page extras");
   // llms.txt states every floor once, in the x402 paragraph, from the floors
   // map; the chain list stays chain: asset (CAIP-2) only (test-legal-claims

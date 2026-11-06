@@ -32,10 +32,14 @@ export const RAILS = [
 
 // Gated rails (src/gated-rails.js): settleable by src/payments.js but kept out
 // of RAILS, so no static copy names them. A runtime surface lists one only
-// while it is in the live offer, through liveRails(). Empty while every rail
-// the payment stack settles is in RAILS (Arc graduated once it settled in
-// production); a new rail can start here before static copy names it.
-export const GATED_RAILS = [];
+// while it is in the live offer, through liveRails(). Arc started here and
+// graduated into RAILS once it settled in production. Ink is here until its
+// first live settle: it is offered only with INK_FACILITATOR_URL set and
+// `ink` in PAYMENT_NETWORKS, and moving this entry into RAILS is the step
+// that puts it on static copy.
+export const GATED_RAILS = [
+  { name: "Ink", asset: "USDC", caip2: "eip155:57073", chainId: 57073 },
+];
 
 /** RAILS plus every gated rail that is in the live offer right now. */
 export function liveRails() {

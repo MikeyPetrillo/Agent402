@@ -21,6 +21,11 @@ export const EVM_RPCS = {
   // Arc mainnet public RPC (probe 2026-10-20: chainId 0x13b2, USDC at
   // 0x3600...0000 answers decimals() 6). Refund proof and settle chain proof.
   "eip155:5042": "https://rpc.mainnet.arc.io",
+  // Ink mainnet public RPC (probe 2026-11-06: chainId 0xdef1, USDC at
+  // 0x2D27...AEEd answers decimals() 6). rpc-qnd.inkonchain.com is the
+  // second public host (EVM_RPC_57073 to switch). Its receipts are read at
+  // the sequencer's head, whose pre-confirmations can be revoked.
+  "eip155:57073": "https://rpc-gel.inkonchain.com",
 };
 
 /** The RPC URL for an EVM network (CAIP-2), or null. */
