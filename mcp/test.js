@@ -168,7 +168,16 @@ const text = (result) => result.content?.map((c) => (c.type === "text" ? c.text 
   const stubEnv = { ...process.env, AGENT402_URL: `http://127.0.0.1:${stub.address().port}`, AGENT402_CREDITS_KEY: KEY };
   delete stubEnv.AGENT_KEY; delete stubEnv.SOLANA_AGENT_KEY; delete stubEnv.AGENT402_BUDGET; delete stubEnv.AGENT402_MAX_PER_CALL; delete stubEnv.AGENT402_ASYNC;
   const jobClient = new Client({ name: "agent402-mcp-async-test", version: "0.0.0" });
-  await jobClient.connect(new StdioClientTransport({ command: process.execPath, args: [join(ROOT, "mcp", "index.js")], env: stubEnv, stderr: "ignore" }));
+  const jobTransport = new StdioClientTransport({ command: process.execPath, args: [join(ROOT, "mcp", "index.js")], env: stubEnv, stderr: "ignore" });
+  await jobClient.connect(jobTransport);
+  // Every message the server writes, in the order it arrives. The SDK client
+  // runs a notification handler a microtask later but a response at once, so
+  // when the last progress note and the result share one stdout chunk the
+  // result drops the note's handler first; the wire order is what the server
+  // owes.
+  const wire = [];
+  const deliver = jobTransport.onmessage;
+  jobTransport.onmessage = (m, ...rest) => { wire.push(m); return deliver?.(m, ...rest); };
   try {
     // A credits key does not pay the router (it buys from outside sellers), so
     // credits mode does not list router.execute.
@@ -187,8 +196,12 @@ const text = (result) => result.content?.map((c) => (c.type === "text" ? c.text 
     if (out.isError || !text(out).includes("the answer")) fail(`the job's answer is the tool result: ${text(out).slice(0, 200)}`);
     if (seen.prefer !== "respond-async" || seen.auth !== `Bearer ${KEY}`) fail(`the paid call carries Prefer: respond-async and its credential (${seen.prefer}, ${seen.auth ? "auth" : "no auth"})`);
     if (seen.polls !== 3) fail(`the job link is polled until it is final (${seen.polls})`);
+    const sentPcts = wire.filter((m) => m.method === "notifications/progress").map((m) => m.params.progress);
+    const lastNote = wire.findLastIndex((m) => m.method === "notifications/progress");
+    const resultAt = wire.findIndex((m) => m.id != null && m.result && Array.isArray(m.result.content) && JSON.stringify(m.result).includes("the answer"));
+    if (sentPcts.join(",") !== "0,20,80,100" || !(lastNote >= 0 && resultAt > lastNote)) fail(`progress notifications follow the job stage, only rise, and all precede the result on the wire (${JSON.stringify(sentPcts)}, last note ${lastNote}, result ${resultAt})`);
     const pcts = notes.map((n) => n.progress);
-    if (pcts.join(",") !== "0,20,80,100" || !/writing report \(4 of 5 steps\)/.test(notes[2]?.message || "")) fail(`progress notifications follow the job stage and only rise (${JSON.stringify(notes)})`);
+    if (!/^0,20,80(,100)?$/.test(pcts.join(",")) || !/writing report \(4 of 5 steps\)/.test(notes[2]?.message || "")) fail(`the caller's progress callback sees the job stage in order (${JSON.stringify(notes)})`);
   } finally {
     await jobClient.close().catch(() => {});
     stub.close();
