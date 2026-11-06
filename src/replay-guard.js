@@ -76,9 +76,11 @@ const REDIS_PREFIX = "replay:";
  * nonce are two payments, and so are two networks. A re-encoded-but-equivalent
  * authorization still maps to one identity. The network is read where each
  * wire carries it (v2 on `accepted`, v1 at the top level); an EVM payer is
- * lowercased, any other spelling is kept as signed. Falls back to hashing the
- * raw credential for schemes whose nonce we can't parse (e.g. an SVM signed
- * transaction), where the header bytes themselves are the single-use artifact.
+ * lowercased, any other spelling is kept as signed. A payment whose nonce we
+ * can't parse (e.g. an SVM signed transaction) keys on its signed payload:
+ * "p2:<identity>:<legacy>", <legacy> the raw-credential hash an earlier build
+ * keyed the same header on (honored as for "n2:"). Bytes that do not decode
+ * to a payload key on the raw credential ("c:").
  *
  * A nonce key reads "n2:<identity>:<legacy>": <legacy> is the key an earlier
  * build used for the same credential (network as v1 spells it, nonce only).
@@ -105,10 +107,26 @@ export function paymentReplayKey(req) {
       const legacy = createHash("sha256").update(`${legacyNetwork}:${n}`).digest("hex");
       return `n2:${id}:${legacy}`;
     }
+    // No parseable nonce (a signed Solana transaction, an Algorand group):
+    // the signed payload is the single-use artifact. Keyed on it alone, so
+    // the echoed offer around it (unsigned: a surplus price alias, a network
+    // alias the v1-accept translation folds, its key order) cannot give one
+    // signed payment a second identity.
+    if (p?.payload && typeof p.payload === "object") {
+      const id = createHash("sha256").update(`payload\n${canonicalJson(p.payload)}`).digest("hex");
+      return `p2:${id}:${createHash("sha256").update(cred).digest("hex")}`;
+    }
   } catch {
     /* not base64 JSON, or no parseable nonce — fall through to raw identity */
   }
   return "c:" + createHash("sha256").update(cred).digest("hex");
+}
+
+// JSON with object keys sorted at every depth: one spelling per value.
+function canonicalJson(v) {
+  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(",")}]`;
+  if (v && typeof v === "object") return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson(v[k])}`).join(",")}}`;
+  return JSON.stringify(v) ?? "null";
 }
 
 /**
@@ -123,7 +141,9 @@ export function paymentReplayKey(req) {
  */
 export async function paymentReplayKeyAsync(req) {
   const key = paymentReplayKey(req);
-  if (!key || !key.startsWith("c:")) return key;
+  if (!key || !(key.startsWith("c:") || key.startsWith("p2:"))) return key;
+  // The raw-credential hash an earlier build keyed this header on.
+  const raw = key.startsWith("c:") ? key.slice(2) : key.split(":")[2];
   try {
     const p = decodePaymentHeader(paymentHeaderOf(req));
     const network = p?.accepted?.network || p?.network || p?.payload?.network;
@@ -132,7 +152,7 @@ export async function paymentReplayKeyAsync(req) {
     if (!entries) return key;
     const parts = entries.map((e) => `${e.signer}\n${e.nonce}`).sort();
     const id = createHash("sha256").update(`${network}\n${parts.join("\n")}`).digest("hex");
-    return `s2:${id}:${key.slice(2)}`;
+    return `s2:${id}:${raw}`;
   } catch {
     return key;
   }
@@ -147,14 +167,16 @@ const LEGACY_TAG = "v2|";
 function namesOf(key) {
   const st = /^s2:([0-9a-f]{64}):([0-9a-f]{64})$/.exec(String(key));
   if (st) return { primary: `s2:${st[1]}`, legacy: `c:${st[2]}` };
+  const pl = /^p2:([0-9a-f]{64}):([0-9a-f]{64})$/.exec(String(key));
+  if (pl) return { primary: `p2:${pl[1]}`, legacy: `c:${pl[2]}` };
   const m = /^n2:([0-9a-f]{64}):([0-9a-f]{64})$/.exec(String(key));
   if (!m) return { primary: String(key), legacy: null };
   return { primary: `n2:${m[1]}`, legacy: `n:${m[2]}` };
 }
-// The per-process state keys a Stellar payment on its identity alone: two
-// encodings of one signed entry share it, while their legacy parts (each
+// The per-process state keys a Stellar or payload-keyed payment on its
+// identity alone: two encodings of one signed artifact share it, while their legacy parts (each
 // header's own hash) differ.
-const localKeyOf = (key) => (/^s2:/.test(String(key)) ? namesOf(key).primary : key);
+const localKeyOf = (key) => (/^(?:s2|p2):/.test(String(key)) ? namesOf(key).primary : key);
 const isLegacyEntry = (v) => v != null && !String(v).startsWith(LEGACY_TAG);
 
 // A settled payment's consumed mark is kept this long (the chain refuses its
