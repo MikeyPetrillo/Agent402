@@ -6,6 +6,18 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-06 (Ink rail)
+Payments:
+- Ink (chain 57073) is a listed rail: x402 payments settle in native USDC on
+  Ink, named on every surface that lists the chains, with its own chain page.
+- A chain page links the service's wallet on the chain explorer even before
+  the rail's first revenue reading.
+Packages:
+- The buyer client, MCP server and OpenClaw plugin price and sign Ink USDC
+  accepts, and refuse an Ink accept that names another EIP-712 domain than
+  the token's own (agent402-client 0.8.25, agent402-mcp 0.13.31,
+  agent402-openclaw 0.5.11).
+
 ### 2026-11-06 (EVM router chains, call hints, package limits)
 Router:
 - The router buys from proven sellers on each EVM chain the operator lists,
