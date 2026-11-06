@@ -225,7 +225,7 @@ export function createEdgeTollbooth(config = {}) {
     const resource = origin + u.pathname + u.search;
     // Additionally bind the HTTP METHOD in the PoW challenge (x402 `resource`
     // stays a plain URL for wire compatibility).
-    const powResource = `${request.method || "GET"} ${resource}`;
+    const powResource = `${String(request.method || "GET").toUpperCase()} ${resource}`;
 
     // An x402 payment presented on either header name. @x402/core emits
     // PAYMENT-SIGNATURE while older clients send X-PAYMENT, and a gate that

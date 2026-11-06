@@ -190,3 +190,17 @@ console.log("\nedge tollbooth: all assertions passed ✓");
   if (HOP_BY_HOP_HEADERS.some((h) => CLIENT_TRUST_HEADERS.includes(h))) fail("hop-by-hop and trust lists overlap");
   console.log("16. worker refuses the placeholder secret and strips the shared client-trust header list ✓");
 }
+
+// 17. The proof-of-work binds the method case-insensitively and never across
+// methods: a proof minted for a lowercase method (which the Fetch API does not
+// normalize for PATCH) redeems on the same method in capitals, and a proof for
+// GET does not unlock POST of the same URL.
+{
+  const g = createEdgeTollbooth({ secret: "test-secret", powDifficulty: 10 });
+  const at = (method, extra = {}) => new Request("https://site.test/doc", { method, headers: { "user-agent": BOT, ...extra } });
+  const solved = async (method) => { const r = await g(at(method)); const c = await r.json(); return `${c.proofOfWork.token}:${await solve(c.proofOfWork.challenge, c.proofOfWork.difficulty)}`; };
+  if (await g(at("PATCH", { "x-pow-solution": await solved("patch") })) !== null) fail("a proof for patch must redeem on PATCH (one method, any case)");
+  const other = await g(at("POST", { "x-pow-solution": await solved("GET") }));
+  if (other === null || other.status !== 402) fail("a proof for GET must not unlock POST");
+  console.log("17. edge: the PoW binds the method case-insensitively, never across methods ✓");
+}
