@@ -254,7 +254,7 @@ ${meteredCurl(baseUrl)}
   after the handler and only for a successful response). Retry later. Exception: a
   Tempo transfer sent before the call is final when sent; if the call then fails,
   the amount is recorded as a refund owed to that wallet.
-- **\`X-Cache: hit\`** - a cached repeat served free (prompt cache / embeddings); the payment it carried is not charged, except a Tempo transfer sent before the call, which is final when sent.
+- **\`X-Cache: hit\`** - a cached repeat served free (prompt cache / embeddings / rerank) to the payer that paid for it, on a fresh x402 v2 \`exact\` payment signed by the paying wallet's own key, a verified Tempo sender, or the same credits key; the payment it carried is not charged, except a Tempo transfer sent before the call, which is final when sent. Other payers and payment methods are charged on each call.
 
 On x402 a failed call is not charged by construction: settlement happens AFTER the
 handler and only for a sub-400 response. You can verify that from the headers

@@ -163,7 +163,7 @@ Add `stream: true` on any chat tier for standard OpenAI SSE framing (`data: {chu
 Two policies over one cache (10-minute TTL, served **before** the paywall - a hit costs nothing):
 
 - **Chat tiers - opt-in.** LLM output is sampled, and a resend usually wants a fresh sample, so nothing is cached unless the request carries `cache: true`. A byte-identical opted-in repeat that carries your payment returns the stored response with `X-Cache: hit`, and the payment is not charged (a Tempo transfer sent before the call is final when sent, so it counts); without a payment the request gets the usual 402.
-- **Embeddings - default-on.** Embeddings are deterministic per model, so an identical repeat is free automatically: it carries your payment as usual and the payment is not charged (a Tempo transfer sent before the call is final when sent, so it counts). Opt out with `cache: false`.
+- **Embeddings - default-on.** Embeddings are deterministic per model, so an identical repeat from the payer that paid for it is free automatically: it carries your payment as usual and the payment is not charged (a Tempo transfer sent before the call is final when sent, so it counts). Opt out with `cache: false`.
 
 Keys are computed over the *normalized* body (model aliases and field order collapse; every sampling-relevant field is included), so equivalent requests share one entry, and each entry belongs to the payer that paid for it. An entry is stored, and a repeat served from it, only where that payer is proved before the paywall: an x402 v2 `exact` payment to this server whose EIP-3009 authorization is signed by the paying wallet's own key, inside its validity window, with a fresh authorization each time (one already used reads nothing); a Tempo payment from the same verified sender; or the same credits key. A request from another payer, or paid any other way (x402 v1, Permit2 or `upto`, a smart-contract wallet's signature, a non-EVM network, a card), is a fresh call and is charged as usual, repeats included.
 
@@ -175,7 +175,7 @@ Keys are computed over the *normalized* body (model aliases and field order coll
 
 ## Verified daily
 
-The paid canary buys from the gateway every day with real USDC: a nano completion (exercising the failover chain), a model-less auto completion (asserting the router disclosure), a live SSE stream, an embeddings vector, and both cache behaviors (paid once → identical repeat served free). If any of it breaks, an alarm issue opens on the repo.
+The paid canary buys from the gateway every day with real USDC: a nano completion (exercising the failover chain), a model-less auto completion (asserting the router disclosure), a live SSE stream, an embeddings vector, and both cache behaviors (paid once → the same wallet's identical repeat served free). If any of it breaks, an alarm issue opens on the repo.
 
 ## Upstream service tiers
 
@@ -187,7 +187,7 @@ Every chat call asks the upstream to cache the prompt prefix (a top-level `cache
 
 ## Rerank
 
-`POST /v1/rerank` ($0.002) speaks the Cohere rerank wire: `{query, documents[], top_n}` in, `results[{index, relevance_score, document}]` out, served by `cohere/rerank-v3.5`. Up to 50 documents (1,600 chars each, 40k total) and a 500-char query per call. Deterministic, so a byte-identical repeat within 10 minutes is served free from cache (`cache:false` opts out). Pair it with `/v1/embeddings`: embed, recall your top candidates, rerank them.
+`POST /v1/rerank` ($0.002) speaks the Cohere rerank wire: `{query, documents[], top_n}` in, `results[{index, relevance_score, document}]` out, served by `cohere/rerank-v3.5`. Up to 50 documents (1,600 chars each, 40k total) and a 500-char query per call. Deterministic, so a byte-identical repeat within 10 minutes is served free from cache to the payer that paid for it, under the rules in [Response caching](#response-caching) (`cache:false` opts out). Pair it with `/v1/embeddings`: embed, recall your top candidates, rerank them.
 
 ## Anthropic Messages API
 
