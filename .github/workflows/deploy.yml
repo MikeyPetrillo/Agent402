@@ -1352,7 +1352,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (3 scripts, one process each)
+      - name: Offline suites (4 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -1362,6 +1362,8 @@ jobs:
           t node scripts/test-tollbooth-mpp.js
           # "Buyer wallet trend (a self-funding wallet that FALLS is unexplained; a transient in-flight dip is not — offline)"
           t node scripts/test-buyer-balance-trend.js
+          # "Spending-wallet chain words (five hanging RPCs read side by side under one deadline, unknown not a stall; offline)"
+          t node scripts/test-upstream-buyer-status.js
 
       - name: "Replay guard, cross-replica (REAL redis — two guard instances prove shared claim/settle/release; fails open to local state on a redis outage — 2026-08-16)"
         env:
