@@ -486,6 +486,7 @@ function memoryRedis() {
   const l0 = await avm({ paymentGroup: [lone1], paymentIndex: 0 });
   ok(String(l0).startsWith("t2:") && idOf(await avm({ paymentGroup: [lone1], paymentIndex: 0, pad: [deep(30)] })) === idOf(l0), "chain tx: an ungrouped Algorand payment keys on its transaction id, padding aside");
   ok(idOf(await avm({ paymentGroup: [lone2], paymentIndex: 0 })) !== idOf(l0) && idOf(l0) !== idOf(a0), "chain tx: two ungrouped Algorand payments are two identities");
+  ok(idOf(await avm({ paymentGroup: [lone1, lone2], paymentIndex: 1 })) === idOf(await avm({ paymentGroup: [lone2], paymentIndex: 0 })), "chain tx: the identity is read at paymentIndex, the transaction the facilitator settles");
   ok(!String(await avm({ paymentGroup: g1, paymentIndex: 5 })).startsWith("t2:") && !String(await avm({ paymentGroup: Array(17).fill(g1[0]), paymentIndex: 0 })).startsWith("t2:"), "chain tx: an out-of-range index or an oversized group is not decoded");
   ok(idOf(a0) !== idOf(s0), "chain tx: a Solana and an Algorand payment are two identities");
 
