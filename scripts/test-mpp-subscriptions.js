@@ -30,6 +30,7 @@ import {
   renewalValidForSeconds, withRenewalValidity, RENEWAL_VALID_FOR_DEFAULT_S, RENEWAL_VALID_FOR_MAX_S, SETTLEABLE_SLACK_MS,
   ACTIVATION_VALID_FOR_S, TEMPO_RPC_TIMEOUT_MS,
   guardDestroyedKeys, KEY_GONE_PREFIX, createFileStore, diagnoseError,
+  renewalUnconfirmedAlertHours, renewalsWord, RENEWAL_UNCONFIRMED_ALERT_HOURS_DEFAULT,
 } from "../src/mpp-subscriptions.js";
 import { MONITOR_PRODUCTS } from "../src/stripe-subscriptions.js";
 import { HttpRequestError } from "viem";
@@ -678,6 +679,21 @@ let liveSubId = null, liveHeader = null, liveToken = null, liveBuyer = null;
       advance(Date.parse(e.engine.get(subE.subId).nextChargeAttemptAt) - clock + 1000);
       ok(await e.engine.refreshStatus(subE.subId) === "past_due" && e.calls.charge === chargesE && e.engine.get(subE.subId).unconfirmedCharge,
         `(e:${name}) a verdict that is not a definite answer waits past the settle window and signs nothing`);
+      if (name === "unknown") {
+        // The wait is open-ended, so it is a status word: ok inside the
+        // alert window, unconfirmed past it, off when disabled; the public
+        // read is the word alone.
+        const since = Date.parse(e.engine.get(subE.subId).unconfirmedCharge.at);
+        const H = 3_600_000;
+        ok(e.engine.renewalsStatus({ env: {}, at: since + 3 * H }).status === "ok", "(e) an unconfirmed renewal inside the alert window reads ok");
+        const stuck = e.engine.renewalsStatus({ env: {}, at: since + 3 * H + 1 });
+        ok(JSON.stringify(stuck) === JSON.stringify({ status: "unconfirmed" }), `(e) past MPP_SUB_UNCONFIRMED_ALERT_HOURS (default 3) the word reads unconfirmed, publicly the word only (${JSON.stringify(stuck)})`);
+        const op = e.engine.renewalsStatus({ full: true, env: {}, at: since + 3 * H + 1 });
+        ok(op.status === "unconfirmed" && op.alertHours === 3 && op.unconfirmedCount === 1 && op.oldestAttemptAt === new Date(since).toISOString(), `(e) the operator read has the threshold, the count and the oldest attempt (${JSON.stringify(op)})`);
+        ok(e.engine.renewalsStatus({ env: { MPP_SUB_UNCONFIRMED_ALERT_HOURS: "12" }, at: since + 6 * H }).status === "ok" && e.engine.renewalsStatus({ env: { MPP_SUB_UNCONFIRMED_ALERT_HOURS: "1" }, at: since + 2 * H }).status === "unconfirmed", "(e) the threshold is read from the environment");
+        for (const v of ["0", "off", " OFF "]) ok(e.engine.renewalsStatus({ env: { MPP_SUB_UNCONFIRMED_ALERT_HOURS: v }, at: since + 72 * H }).status === "off", `(e) MPP_SUB_UNCONFIRMED_ALERT_HOURS=${JSON.stringify(v)} turns the word off`);
+        ok((await e.engine.status()).subs.find((x) => x.subId === subE.subId)?.unconfirmedChargeAt === new Date(since).toISOString(), "(e) the operator subscription list names the unconfirmed attempt time");
+      }
     }
     // The extra scenarios above each ran their own periods; put the shared clock back.
     clock = clockAfterFirstD;
@@ -1100,6 +1116,21 @@ let liveSubId = null, liveHeader = null, liveToken = null, liveBuyer = null;
 {
   ok(renewalValidForSeconds(undefined) === 120 && renewalValidForSeconds("") === 120, "renewal window defaults to 120 s");
   ok(renewalValidForSeconds("180") === 180, "TEMPO_SUBSCRIPTION_VALID_FOR_S sets the window");
+  // The unconfirmed-renewal alert threshold: validated, never silently off.
+  ok(RENEWAL_UNCONFIRMED_ALERT_HOURS_DEFAULT === 3 && renewalUnconfirmedAlertHours({}) === 3 && renewalUnconfirmedAlertHours({ MPP_SUB_UNCONFIRMED_ALERT_HOURS: " " }) === 3, "the unconfirmed-renewal alert defaults to 3 hours");
+  ok(renewalUnconfirmedAlertHours({ MPP_SUB_UNCONFIRMED_ALERT_HOURS: "junk" }) === 3 && renewalUnconfirmedAlertHours({ MPP_SUB_UNCONFIRMED_ALERT_HOURS: "-2" }) === 3 && renewalUnconfirmedAlertHours({ MPP_SUB_UNCONFIRMED_ALERT_HOURS: "Infinity" }) === 3, "a value that is not a non-negative number keeps the default");
+  ok(renewalUnconfirmedAlertHours({ MPP_SUB_UNCONFIRMED_ALERT_HOURS: "1.5" }) === 1.5 && renewalUnconfirmedAlertHours({ MPP_SUB_UNCONFIRMED_ALERT_HOURS: "0" }) === null && renewalUnconfirmedAlertHours({ MPP_SUB_UNCONFIRMED_ALERT_HOURS: "Off" }) === null, "a number sets it; 0 or off disables it");
+  {
+    const T = Date.parse("2026-11-01T00:00:00Z"), H = 3_600_000;
+    const u = (status, atMs) => ({ status, unconfirmedCharge: { at: new Date(atMs).toISOString(), periodIndex: 1 } });
+    ok(renewalsWord([], { hours: 3, at: T }).status === "ok" && renewalsWord([{ status: "active" }, { status: "past_due" }], { hours: 3, at: T }).status === "ok", "no unconfirmed renewal reads ok");
+    ok(renewalsWord([u("past_due", T - 4 * H)], { hours: 3, at: T }).status === "unconfirmed" && renewalsWord([u("active", T - 4 * H)], { hours: 3, at: T }).status === "unconfirmed", "an open subscription unconfirmed past the window reads unconfirmed");
+    ok(renewalsWord([u("canceled", T - 40 * H), u("expired", T - 40 * H)], { hours: 3, at: T }).status === "ok", "a canceled or expired record never holds the word");
+    ok(renewalsWord([u("past_due", T - 4 * H)], { hours: null, at: T }).status === "off", "a disabled alert reads off");
+    const f = renewalsWord([u("past_due", T - 4 * H), u("past_due", T - 9 * H), u("past_due", T - H)], { hours: 3, at: T, full: true });
+    ok(f.unconfirmedCount === 2 && f.oldestAttemptAt === new Date(T - 9 * H).toISOString() && f.alertHours === 3, `the full read counts only the stuck ones and names the oldest (${JSON.stringify(f)})`);
+    ok(Object.keys(renewalsWord([u("past_due", T - 4 * H)], { hours: 3, at: T })).join() === "status", "the public read is the word alone");
+  }
   ok(renewalValidForSeconds("1000") === RENEWAL_VALID_FOR_MAX_S && RENEWAL_VALID_FOR_MAX_S === 240, "clamped to <= 240 s (under the 5-minute expiring-nonce cap)");
   ok(renewalValidForSeconds("5") === 25 && ACTIVATION_VALID_FOR_S === 25, "never shorter than the 25 s activation window");
   for (const bad of ["abc", "-3", "12.5", "0", "1e3", "NaN"]) ok(renewalValidForSeconds(bad) === 120, `malformed ${JSON.stringify(bad)} -> default`);

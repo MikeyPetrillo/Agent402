@@ -668,6 +668,16 @@ Auto-closes when nothing is owed.`,
     body: () => `${failureWordBody("robinhoodSettler", "relayer")} relayer means the listed Robinhood Chain facilitator's settlement signer has read dry for longer than ROBINHOOD_RELAYER_FIRST_ALERT_HOURS (default 6), so our own relayer settles every Robinhood sale first and pays its gas; the operator detail (robinhoodOrder) names the facilitator and since when.`,
   },
   {
+    // A wallet-billed monitor renewal unconfirmed (its send's landing
+    // undecided by the chain read, so nothing is signed again) for longer
+    // than MPP_SUB_UNCONFIRMED_ALERT_HOURS (subscriptionRenewals,
+    // src/mpp-subscriptions.js): unconfirmed pages, ok and off clear, unknown
+    // does neither. Title matches heartbeat.yml's.
+    title: "subscriptionRenewals: a monitor renewal has stayed unconfirmed for hours",
+    verdict: ({ gateway: b }) => wordVerdict(b.subscriptionRenewals?.status, ["unconfirmed"], ["ok", "off"]),
+    body: () => "/api/gateway-status reports subscriptionRenewals.status=unconfirmed. The detail is on the operator endpoint, /__operator/monitors.json (operator token). Auto-closes when the word is ok. unconfirmed means a renewal's send has gone undecided on chain for longer than MPP_SUB_UNCONFIRMED_ALERT_HOURS (default 3), so that subscription waits past_due and nothing is signed again until the chain read decides it.",
+  },
+  {
     // The direct upstream (directUpstream, src/gateway-direct-pricebook.js):
     // degraded pages, ok and off clear, starting and anything else do
     // neither. The reason code is on the operator read only. Title matches

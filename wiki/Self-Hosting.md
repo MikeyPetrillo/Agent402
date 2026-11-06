@@ -91,6 +91,7 @@ Set these on your host. None are committed to the repo.
 | `GATEWAY_NANOPAYMENTS` | No | `on` adds the Circle Gateway batched option (below). Off by default |
 | `GATEWAY_NANOPAYMENT_NETWORKS` | No | Which networks carry the batched option: `arc`, `base` or both (default `arc,base`); a network must also be in the plain offer |
 | `GATEWAY_WITHDRAW_ALERT_USD` | No | Gateway balance, in USD, at which `gatewayBalance` reads `withdraw` (default 25) |
+| `MPP_SUB_UNCONFIRMED_ALERT_HOURS` | No | How long a wallet-billed monitor renewal may stay unconfirmed on chain before `subscriptionRenewals` reads `unconfirmed` (default 3; `0` or `off` disables) |
 | `GATEWAY_PENDING_UNRESOLVED_HOURS` | No | How long a batched payment Gateway left pending may stay unresolved before `gatewayPending` raises it (default 24) |
 | `GATEWAY_SETTLE_BREAKER_MAX`, `GATEWAY_SETTLE_BREAKER_WINDOW_MS`, `GATEWAY_SETTLE_BREAKER_MIN_FAIL_SHARE`, `GATEWAY_SETTLE_BREAKER_HARD_MAX`, `GATEWAY_SETTLE_BREAKER_GLOBAL_MAX` | No | The settle-failure breaker on wallet-only routes and `/v1`: a wallet is refused after `_MAX` settle failures (default 3) inside the window (default 15 minutes) only while failures are more than `_MIN_FAIL_SHARE` of its outcomes there (default 0.5), and after `_HARD_MAX` failures (default 40) whatever its settled count; `_GLOBAL_MAX` distinct failing buyers (default 12) pause every `/v1` tier |
 | `X402_UPTO_NETWORKS` | No | `all` or a CSV of CAIP-2 ids that also offer the `upto` scheme; a facilitator must advertise it for that network |

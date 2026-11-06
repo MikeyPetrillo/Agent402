@@ -3956,6 +3956,14 @@ app.get("/api/gateway-status", async (req, res) => {
     // publicly; the clock for the operator, the order on
     // /__operator/tool-failures.json (robinhoodOrder).
     robinhoodSettler: (() => { try { return robinhoodSettlerStatus({ full }); } catch { return { status: "unknown" }; } })(),
+    // subscriptionRenewals reads unconfirmed while a wallet-billed monitor
+    // renewal has stayed unconfirmed (its send's landing undecided by the
+    // chain read, so nothing is signed again) for longer than
+    // MPP_SUB_UNCONFIRMED_ALERT_HOURS (default 3), ok otherwise, off with the
+    // alert disabled or no subscription engine. One word publicly; the
+    // threshold, the count and the oldest attempt for the operator, each
+    // record on /__operator/monitors.json.
+    subscriptionRenewals: (() => { try { return _mppSubs ? _mppSubs.renewalsStatus({ full }) : { status: "off" }; } catch { return { status: "unknown" }; } })(),
     // The direct upstream (src/gateway-direct-pricebook.js): off, starting,
     // ok or degraded (a mapped model is kept on OpenRouter, or the direct
     // breaker is open). The word publicly; the operator read adds a reason
