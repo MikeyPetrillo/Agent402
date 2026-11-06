@@ -146,6 +146,17 @@ for (const [prefix, title] of WALLETS) {
     const blind = await runEvm(undefined, [{ number: 9, title: UNR }]);
     assert.ok(!blind.some((c) => c[1] === "close"), JSON.stringify(blind));
   });
+  const LOW = "EVM chains upstream buyer wallet LOW (x402)";
+  await check("EVM chains: the LOW issue closes on ok, off and unconfigured; never on unknown or a blind read", async () => {
+    for (const status of ["ok", "off", "unconfigured"]) {
+      const calls = await runEvm({ status }, [{ number: 7, title: LOW }]);
+      assert.ok(calls.some((c) => c[1] === "close" && c[2] === "7"), `${status}: ${JSON.stringify(calls)}`);
+    }
+    for (const evm of [{ status: "unknown", unknownForMinutes: 5 }, undefined]) {
+      const calls = await runEvm(evm, [{ number: 7, title: LOW }]);
+      assert.ok(!calls.some((c) => c[1] === "close"), JSON.stringify(calls));
+    }
+  });
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

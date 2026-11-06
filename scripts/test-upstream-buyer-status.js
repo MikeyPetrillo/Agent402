@@ -85,6 +85,52 @@ try {
   t = Date.now();
   const all = await s.upstreamBuyerEvmStatus();
   ok(all.status === "ok" && Date.now() - t < DEADLINE, `five answering RPCs read ok well inside the deadline (${JSON.stringify(all)})`);
+
+  // ---- the unknown-since clock survives a deploy through the shared store ----
+  // A new process (the reset below) reads the first-unknown moment another
+  // process stored, so an hour-long blind spell still pages after a deploy.
+  const { __setTestClient } = await import("../src/shared-limit.js");
+  const store = new Map();
+  let dels = 0;
+  const fake = {
+    async get(k) { return store.has(k) ? store.get(k) : null; },
+    async set(k, v, o = {}) { if (o.NX && store.has(k)) return null; store.set(k, v); return "OK"; },
+    async del(k) { dels++; return store.delete(k) ? 1 : 0; },
+  };
+  const blind = { readBalance: async () => { throw new Error("rpc down"); } };
+  const readable = { readBalance: async () => 40 };
+  const T0 = Date.now();
+  const at = (min, o) => s.upstreamBuyerEvmStatus({ ...o, now: T0 + min * 60_000 });
+  __setTestClient(fake);
+  s.__resetEvmChainStatusForTest();
+  const u0 = await at(0, blind);
+  ok(u0.status === "unknown" && u0.unknownForMinutes === 0 && store.size === 1, `shared clock: the first unknown read stores its moment (${JSON.stringify(u0.unknownForMinutes)})`);
+  s.__resetEvmChainStatusForTest(); // a deploy: a new process, the store kept
+  const u61 = await at(61, blind);
+  ok(u61.status === "unknown" && u61.unknownForMinutes === 61, `shared clock: after a deploy the clock runs on from the stored moment (${u61.unknownForMinutes})`);
+  s.__resetEvmChainStatusForTest();
+  const r = await at(62, readable);
+  ok(r.status === "ok" && r.unknownForMinutes === undefined && store.size === 0, "shared clock: a readable read clears the stored moment");
+  const d = dels;
+  s.__resetEvmChainStatusForTest(); await at(63, readable);
+  await at(64, readable);
+  ok(dels === d + 1, `shared clock: a new process clears once, then not on every read (${dels - d})`);
+  s.__resetEvmChainStatusForTest();
+  const again = await at(70, blind);
+  ok(again.unknownForMinutes === 0, "shared clock: a new blind spell starts its own clock");
+  // A store that does not answer: process memory, inside the store deadline.
+  __setTestClient({ get: () => new Promise(() => {}), set: () => new Promise(() => {}), del: () => new Promise(() => {}) });
+  s.__resetEvmChainStatusForTest();
+  t = Date.now();
+  const hung = await at(80, blind);
+  ok(hung.unknownForMinutes === 0 && Date.now() - t < s.EVM_UNKNOWN_STORE_MS + 500, `shared clock: a hanging store falls back to process memory within its deadline (${Date.now() - t} ms)`);
+  ok((await at(95, blind)).unknownForMinutes === 15, "shared clock: the process clock then runs");
+  // No store: per process, as before.
+  __setTestClient(null);
+  s.__resetEvmChainStatusForTest();
+  await at(0, blind);
+  ok((await at(30, blind)).unknownForMinutes === 30, "no store: the process clock runs");
+  s.__resetEvmChainStatusForTest();
 } finally {
   hang.closeAllConnections(); hang.close();
   answer.closeAllConnections(); answer.close();

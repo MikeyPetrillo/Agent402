@@ -192,8 +192,45 @@ async function readEvmChainStatus(chain, cfg, pk, { readBalance, now, evmBuyerRp
 }
 // First moment the aggregate word read "unknown" (null while readable), so a
 // balance that stays unreadable (a dead RPC) pages on its own instead of
-// silencing the low-water alarm. Per process, as the gateway credits leg.
+// silencing the low-water alarm. Kept in the shared store when one is
+// configured, so a deploy (a new process) carries the clock on instead of
+// restarting it; in process memory otherwise, or when the store does not
+// answer within EVM_UNKNOWN_STORE_MS.
 let evmUnknownSince = null;
+// Whether this process has cleared the shared mark since it last read
+// "unknown" (a readable read clears it once, not on every status read).
+let evmUnknownSharedCleared = false;
+const EVM_UNKNOWN_KEY = "upstream-buyer:evm-unknown-since";
+const EVM_UNKNOWN_TTL_SECONDS = 30 * 24 * 3600;
+export const EVM_UNKNOWN_STORE_MS = 500;
+async function withStore(fn) {
+  let timer;
+  try {
+    const { getSharedRedisClient } = await import("./shared-limit.js");
+    const deadline = new Promise((resolve) => { timer = setTimeout(() => resolve(undefined), EVM_UNKNOWN_STORE_MS); timer.unref?.(); });
+    return await Promise.race([(async () => { const c = await getSharedRedisClient(); return c ? fn(c) : undefined; })(), deadline]);
+  } catch {
+    return undefined;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function markEvmUnknown(now) {
+  evmUnknownSharedCleared = false;
+  if (evmUnknownSince != null) return;
+  const shared = await withStore(async (c) => {
+    await c.set(EVM_UNKNOWN_KEY, String(now), { NX: true, EX: EVM_UNKNOWN_TTL_SECONDS });
+    return Number(await c.get(EVM_UNKNOWN_KEY));
+  });
+  evmUnknownSince ??= Number.isFinite(shared) && shared > 0 && shared <= now ? shared : now;
+}
+async function clearEvmUnknown() {
+  const had = evmUnknownSince != null;
+  evmUnknownSince = null;
+  if (!had && evmUnknownSharedCleared) return;
+  evmUnknownSharedCleared = true;
+  await withStore((c) => c.del(EVM_UNKNOWN_KEY));
+}
 /** One word for every enabled non-Base EVM buyer chain, and one per chain:
  *  "off" when none is enabled, else "low" when any chain reads low, "unknown"
  *  when any is unreadable, otherwise "ok" (or "unconfigured" with no key).
@@ -202,7 +239,7 @@ let evmUnknownSince = null;
 export async function upstreamBuyerEvmStatus({ deadlineMs = EVM_STATUS_DEADLINE_MS, ...opts } = {}) {
   const { enabledEvmBuyerChains } = await import("./evm-buyer-chains.js");
   const chains = enabledEvmBuyerChains().filter((c) => c !== "base");
-  if (!chains.length) { evmUnknownSince = null; return { status: "off" }; }
+  if (!chains.length) { await clearEvmUnknown(); return { status: "off" }; }
   const UNREAD = { configured: true, status: "unknown", attests: "balance-only" };
   let timer;
   const deadline = new Promise((resolve) => { timer = setTimeout(() => resolve(UNREAD), deadlineMs); timer.unref?.(); });
@@ -217,7 +254,7 @@ export async function upstreamBuyerEvmStatus({ deadlineMs = EVM_STATUS_DEADLINE_
   const words = Object.values(out).map((r) => r.status);
   const status = words.includes("low") ? "low" : words.includes("unknown") ? "unknown" : words.every((w) => w === "unconfigured") ? "unconfigured" : "ok";
   const now = opts.now ?? Date.now();
-  if (status === "unknown") evmUnknownSince ??= now; else evmUnknownSince = null;
+  if (status === "unknown") await markEvmUnknown(now); else await clearEvmUnknown();
   return { status, chains: out, ...(evmUnknownSince != null ? { unknownForMinutes: Math.floor((now - evmUnknownSince) / 60_000) } : {}) };
 }
-export function __resetEvmChainStatusForTest() { evmChainStatusCache.clear(); evmChainStatusPending.clear(); evmUnknownSince = null; }
+export function __resetEvmChainStatusForTest() { evmChainStatusCache.clear(); evmChainStatusPending.clear(); evmUnknownSince = null; evmUnknownSharedCleared = false; }
