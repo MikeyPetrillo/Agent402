@@ -895,7 +895,7 @@ for (const [name, over, detail] of failCases) {
     let n = 0;
     for (const s of steps) {
       if (!s.includes("/api/gateway-status")) continue;
-      for (const m of s.matchAll(/TITLE2?="([^"]+)"/g)) { n++; assert.ok(titles.has(m[1]), `heartbeat-only alarm: "${m[1]}"`); }
+      for (const m of s.matchAll(/(?<![A-Z_])TITLE2?="([^"]+)"/g)) { n++; assert.ok(titles.has(m[1]), `heartbeat-only alarm: "${m[1]}"`); }
     }
     assert.ok(n >= 25, `found only ${n} gateway-status titles in heartbeat.yml`);
   });
