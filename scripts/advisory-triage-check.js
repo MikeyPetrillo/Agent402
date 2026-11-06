@@ -8,9 +8,10 @@
 // only); the built-in GITHUB_TOKEN cannot read advisories. Follows Link
 // rel="next" pages on the same origin only, so the token never leaves it.
 //
-// Output is public (the heartbeat posts it to an issue in a public repo): GHSA
-// ids, ages in hours and counts only. Never a summary, description, severity,
-// reporter or the token.
+// The issue body is public (the heartbeat posts it in a public repo), so it is
+// fixed text that points to the Security tab: no GHSA id, age, count, time or
+// read error. Ids, ages, counts and the read error go to the job log only.
+// Never a summary, description, severity, reporter or the token anywhere.
 //
 // Env:
 //   ADVISORY_READ_TOKEN       the read token (missing = unreadable, never a pass)
@@ -18,7 +19,7 @@
 //   GITHUB_API_URL            API base (Actions sets it; default api.github.com)
 //   ADVISORY_TRIAGE_ACK       comma list of GHSA ids an operator acknowledged; they never page
 //   ADVISORY_TRIAGE_MAX_HOURS age past which a triage advisory pages (default 24)
-//   ADVISORY_BODY_FILE        where to write the issue body (markdown), optional
+//   ADVISORY_BODY_FILE        where to write the fixed issue body (markdown), optional
 //
 // Exit: 0 none stale, 1 at least one stale (page), 2 unreadable (page).
 import { writeFileSync, realpathSync } from "node:fs";
@@ -91,17 +92,17 @@ export function classify(advisories, { ack = new Set(), maxHours = 24, now = Dat
 const fmtAge = (h) => (Number.isFinite(h) ? `${Math.floor(h)} h` : "age unknown");
 const fmtId = (id) => id || "(id not in GHSA form)";
 
-export function bodyFor(state, { result, reason, maxHours, at }) {
+// Fixed text per state: the issue is public, and a repeat run posts nothing,
+// so the body never needs to carry what changed.
+export function bodyFor(state) {
   if (state === "unreadable") {
-    return `The heartbeat could not read this repository's security advisories at ${at} (${reason}), so a report waiting in triage would go unseen. The read uses the ADVISORY_READ_TOKEN Actions secret: a fine-grained token on this repository with Security advisories read. Check that it is set and not expired. Auto-closes on the next readable check.\n`;
+    return "The heartbeat could not read this repository's security advisories, so a report waiting in triage would go unseen. The read uses the ADVISORY_READ_TOKEN Actions secret: a fine-grained token on this repository with Security advisories read. Check that it is set and not expired; the heartbeat job log names the read error. Auto-closes on the next readable check.\n";
   }
-  const lines = result.stale.map((r) => `- ${fmtId(r.id)}: in triage ${fmtAge(r.ageHours)}`);
-  return `Checked at ${at}: ${result.stale.length} security ${result.stale.length === 1 ? "advisory has" : "advisories have"} been in triage for more than ${maxHours} h (${result.triage} in triage, ${result.acked} acknowledged).\n\n${lines.join("\n")}\n\nAccept, close or answer each in the repository's Security tab. To stop one paging while it waits on the reporter, add its GHSA id to the repository variable ADVISORY_TRIAGE_ACK (comma list). Auto-closes when none is waiting.\n`;
+  return "A private security report has been waiting in triage past the limit (repository variable ADVISORY_TRIAGE_MAX_HOURS). Accept, close or answer it in the repository's Security tab, under Security advisories. To stop one paging while it waits on the reporter, add its GHSA id to the repository variable ADVISORY_TRIAGE_ACK (comma list). The heartbeat job log lists what is waiting. Auto-closes when none is waiting.\n";
 }
 
 async function main() {
   const maxHours = Number(process.env.ADVISORY_TRIAGE_MAX_HOURS) > 0 ? Number(process.env.ADVISORY_TRIAGE_MAX_HOURS) : 24;
-  const at = new Date().toISOString().replace(/\.\d+Z$/, "Z");
   const bodyFile = process.env.ADVISORY_BODY_FILE;
   let state, result, reason;
   try {
@@ -122,7 +123,7 @@ async function main() {
     console.log(`advisory triage: ${state} (${result.triage} in triage, ${result.acked} acknowledged, ${result.stale.length} past ${maxHours} h)`);
     for (const r of result.stale) console.log(`  ${fmtId(r.id)} ${fmtAge(r.ageHours)}`);
   }
-  if (bodyFile && state !== "clear") writeFileSync(bodyFile, bodyFor(state, { result, reason, maxHours, at }));
+  if (bodyFile && state !== "clear") writeFileSync(bodyFile, bodyFor(state));
   process.exitCode = state === "clear" ? 0 : state === "stale" ? 1 : 2;
 }
 

@@ -250,6 +250,20 @@ reset();
   s.__resetEvmChainStatusForTest();
   const st3 = await s.upstreamBuyerEvmStatus({ readBalance: async () => null });
   ok(st3.status === "unknown", "an unreadable balance is unknown, never low");
+  // A balance that stays unreadable says for how long, so the heartbeat can
+  // page on a dead RPC; a readable read clears it, and "off" carries none.
+  ok(st3.unknownForMinutes === 0, `the first unknown read starts the clock (${JSON.stringify(st3)})`);
+  {
+    s.__resetEvmChainStatusForTest();
+    const t0 = Date.now();
+    await s.upstreamBuyerEvmStatus({ readBalance: async () => null, now: t0 });
+    const st4 = await s.upstreamBuyerEvmStatus({ readBalance: async () => null, now: t0 + 70 * 60_000 });
+    ok(st4.status === "unknown" && st4.unknownForMinutes === 70, `a balance unreadable for 70 minutes says so (${JSON.stringify(st4)})`);
+    const st5 = await s.upstreamBuyerEvmStatus({ readBalance, now: t0 + 200 * 60_000 });
+    ok(st5.status !== "unknown" && !("unknownForMinutes" in st5), `a readable read clears the clock (${JSON.stringify(st5)})`);
+    delete process.env.SOR_EVM_CHAINS;
+    ok(!("unknownForMinutes" in await s.upstreamBuyerEvmStatus()), "off carries no unknown clock");
+  }
   process.env.SOR_EVM_CHAINS = saved;
 }
 

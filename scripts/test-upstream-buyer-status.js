@@ -52,7 +52,9 @@ try {
   const ms = Date.now() - t;
   ok(ms < DEADLINE + 750, `five hanging RPCs: the read returns within the deadline (${ms} ms)`);
   ok(st.status === "unknown" && Object.keys(IDS).every((c) => st.chains?.[c]?.status === "unknown"), `five hanging RPCs: every chain reads unknown (${JSON.stringify(st)})`);
-  ok(!/\d/.test(JSON.stringify(st)), "words only, no figure");
+  // unknownForMinutes is the one number the word carries (how long it has read unknown).
+  const { unknownForMinutes, ...words } = st;
+  ok(!/\d/.test(JSON.stringify(words)) && Number.isInteger(unknownForMinutes), "words only, no figure besides unknownForMinutes");
   ok(hangHits === 5, `each chain's RPC was asked once (${hangHits})`);
   // A second read while those requests are still out waits on them: no new
   // request per chain.

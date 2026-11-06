@@ -435,7 +435,7 @@ for (const [name, over, detail] of failCases) {
   // closing an open issue (a comment and a PATCH each), and the paywall read
   // refused by the unpaid-quote budget once per attempt (one re-read each).
   let calls = 0;
-  const HEALTHY_GW = { status: "ok", upstreamBuyer: { status: "low", trend: "ok" }, upstreamBuyerAvm: { status: "ok" }, upstreamBuyerTempo: { status: "ok" }, subscriptionFeePayer: { status: "ok" }, databases: { leads: { status: "ok" }, analytics: { status: "ok" } }, operatorAuth: { status: "ok" }, tweetQueue: { status: "ok" }, circlePending: { status: "ok" }, gatewayPending: { status: "ok" }, chargedFailures: { status: "ok", windowHours: 6 }, refundsOwed: { status: "ok" }, ledgerDeadLetter: { status: "none" }, redisPersistence: { status: "on" }, backup: { status: "ok" }, outboundDestinations: { status: "ok" },
+  const HEALTHY_GW = { status: "ok", upstreamBuyer: { status: "low", trend: "ok" }, upstreamBuyerAvm: { status: "ok" }, upstreamBuyerEvm: { status: "ok" }, upstreamBuyerTempo: { status: "ok" }, subscriptionFeePayer: { status: "ok" }, databases: { leads: { status: "ok" }, analytics: { status: "ok" } }, operatorAuth: { status: "ok" }, tweetQueue: { status: "ok" }, circlePending: { status: "ok" }, gatewayPending: { status: "ok" }, chargedFailures: { status: "ok", windowHours: 6 }, refundsOwed: { status: "ok" }, ledgerDeadLetter: { status: "none" }, redisPersistence: { status: "on" }, backup: { status: "ok" }, outboundDestinations: { status: "ok" },
     upstreamBuyerSvm: { status: "ok" }, stellarFacilitator: { status: "ok" }, upstreamBudgets: { status: "ok" }, upstreamHardCaps: { status: "ok" }, exaAllowance: { status: "ok" }, stateDb: { status: "on" }, sanctions: { status: "ok" }, sanctionsScreen: { status: "fresh" }, email: { status: "ok" }, upstreamCosts: { status: "ok" },
     mppReconcile: { status: "ok", window7d: "ok", chargedFailedStatus: "ok" },
     toolFailures: { status: "ok" }, upstreamHealth: { status: "ok" }, facilitatorFunds: { status: "ok" }, toolAnswers: { status: "ok" }, containedTurns: { status: "ok" }, brokenListings: { status: "ok" }, buyerRefusals: { status: "ok" }, robinhoodSettler: { status: "ok" }, subscriptionRenewals: { status: "ok" }, directUpstream: { status: "ok" }, creditsRefunds: { status: "ok" }, cdnOrigin: { status: "ok" } };
@@ -496,7 +496,7 @@ for (const [name, over, detail] of failCases) {
   };
   const HEALTHY_GATEWAY = {
     status: "ok",
-    upstreamBuyer: { status: "ok", trend: "ok" },
+    upstreamBuyer: { status: "ok", trend: "ok" }, upstreamBuyerEvm: { status: "ok" },
     upstreamBuyerAvm: { status: "ok" },
     upstreamBuyerTempo: { status: "ok" },
     subscriptionFeePayer: { status: "ok" },
@@ -895,7 +895,7 @@ for (const [name, over, detail] of failCases) {
     let n = 0;
     for (const s of steps) {
       if (!s.includes("/api/gateway-status")) continue;
-      for (const m of s.matchAll(/TITLE2?="([^"]+)"/g)) { n++; assert.ok(titles.has(m[1]), `heartbeat-only alarm: "${m[1]}"`); }
+      for (const m of s.matchAll(/(?<![A-Z_])TITLE2?="([^"]+)"/g)) { n++; assert.ok(titles.has(m[1]), `heartbeat-only alarm: "${m[1]}"`); }
     }
     assert.ok(n >= 25, `found only ${n} gateway-status titles in heartbeat.yml`);
   });
@@ -912,6 +912,22 @@ for (const [name, over, detail] of failCases) {
     for (const a of ALARMS) assert.ok(yml.includes(a.title), `no workflow has "${a.title}"`);
     const { DOWN_TITLE } = await import("../workers/status-probe/src/index.js");
     assert.ok(yml.includes(DOWN_TITLE), `heartbeat.yml has no "${DOWN_TITLE}"`);
+  });
+
+  await acheck("EVM chains wallet: low pages, ok and off clear; unreadable pages only after an hour", async () => {
+    const { judge } = await import("../workers/status-probe/src/index.js");
+    const LOW = "EVM chains upstream buyer wallet LOW (x402)", UNR = "EVM chains upstream buyer wallet UNREADABLE (x402)";
+    const j = (e) => judge({ gateway: { upstreamBuyerEvm: e } });
+    assert.equal(j({ status: "low" })[LOW], "bad");
+    assert.equal(j({ status: "ok" })[LOW], "good");
+    assert.equal(j({ status: "off" })[LOW], "good");
+    assert.equal(j({ status: "unknown", unknownForMinutes: 500 })[LOW], "quiet");
+    assert.equal(j({ status: "unknown", unknownForMinutes: 59 })[UNR], "quiet");
+    assert.equal(j({ status: "unknown", unknownForMinutes: 60 })[UNR], "bad");
+    assert.equal(j({ status: "off" })[UNR], "good");
+    assert.equal(j({ status: "low" })[UNR], "good");
+    assert.equal(judge({ gateway: {} })[UNR], "quiet");
+    assert.equal(judge({ gateway: {} })[LOW], "quiet");
   });
 
   await acheck("charged failures: recent pages, ok clears, unknown or absent does neither", async () => {

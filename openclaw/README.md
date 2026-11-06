@@ -87,6 +87,13 @@ signs; an option in any other asset is not signed while a ceiling is set. Once
 the payment is built, the amount it actually signs is read back and checked
 against the same price and ceiling before it is sent.
 
+A signed payment also has a validity ceiling of 24 hours: a payment option
+that asks to stay redeemable for longer (its `maxTimeoutSeconds`) is not
+signed, and a built payment whose expiry (`validBefore` or the Permit2
+`deadline`) lies more than 24 hours out is refused before it is sent. Any
+refusal happens before the payment leaves the machine, and the call's error
+names the reason.
+
 To run with no ceiling, set `maxPerCallUsd` to `0` or `"off"` together with
 `allowUncappedPayments: true` (or `AGENT402_ALLOW_UNCAPPED_PAYMENTS=true`).
 Without that acknowledgment `off` keeps the default ceiling and the proxy
@@ -124,6 +131,11 @@ treats as a new purchase. Without a key, each call is its own payment.
 The proxy answers native clients on loopback only: requests carrying a browser
 `Origin` header or a non-loopback `Host` are refused, so a web page cannot spend
 the key.
+
+The credits key stays out of what the proxy prints: an upstream or network
+error is logged and answered (the 502 body) with the key cut out as
+`[redacted]`, and `agent402-openclaw doctor` reports the key as `present` or
+`none`, never any part of it.
 
 ## Commands
 

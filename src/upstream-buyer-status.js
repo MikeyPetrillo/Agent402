@@ -190,14 +190,19 @@ async function readEvmChainStatus(chain, cfg, pk, { readBalance, now, evmBuyerRp
   evmChainStatusCache.set(chain, { at: now, result });
   return result;
 }
+// First moment the aggregate word read "unknown" (null while readable), so a
+// balance that stays unreadable (a dead RPC) pages on its own instead of
+// silencing the low-water alarm. Per process, as the gateway credits leg.
+let evmUnknownSince = null;
 /** One word for every enabled non-Base EVM buyer chain, and one per chain:
  *  "off" when none is enabled, else "low" when any chain reads low, "unknown"
  *  when any is unreadable, otherwise "ok" (or "unconfigured" with no key).
- *  Words only: no balance, no address, no threshold. */
+ *  While "unknown", unknownForMinutes says for how long. Words only otherwise:
+ *  no balance, no address, no threshold. */
 export async function upstreamBuyerEvmStatus({ deadlineMs = EVM_STATUS_DEADLINE_MS, ...opts } = {}) {
   const { enabledEvmBuyerChains } = await import("./evm-buyer-chains.js");
   const chains = enabledEvmBuyerChains().filter((c) => c !== "base");
-  if (!chains.length) return { status: "off" };
+  if (!chains.length) { evmUnknownSince = null; return { status: "off" }; }
   const UNREAD = { configured: true, status: "unknown", attests: "balance-only" };
   let timer;
   const deadline = new Promise((resolve) => { timer = setTimeout(() => resolve(UNREAD), deadlineMs); timer.unref?.(); });
@@ -211,6 +216,8 @@ export async function upstreamBuyerEvmStatus({ deadlineMs = EVM_STATUS_DEADLINE_
   });
   const words = Object.values(out).map((r) => r.status);
   const status = words.includes("low") ? "low" : words.includes("unknown") ? "unknown" : words.every((w) => w === "unconfigured") ? "unconfigured" : "ok";
-  return { status, chains: out };
+  const now = opts.now ?? Date.now();
+  if (status === "unknown") evmUnknownSince ??= now; else evmUnknownSince = null;
+  return { status, chains: out, ...(evmUnknownSince != null ? { unknownForMinutes: Math.floor((now - evmUnknownSince) / 60_000) } : {}) };
 }
-export function __resetEvmChainStatusForTest() { evmChainStatusCache.clear(); evmChainStatusPending.clear(); }
+export function __resetEvmChainStatusForTest() { evmChainStatusCache.clear(); evmChainStatusPending.clear(); evmUnknownSince = null; }
