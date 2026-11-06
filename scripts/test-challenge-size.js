@@ -141,9 +141,19 @@ function projectRailsOnly(prodHeader, opts) {
 // would pass every run while judging the old, smaller challenge).
 {
   const sample = Buffer.from(JSON.stringify({ x402Version: 2, accepts: [{ scheme: "exact", network: "eip155:8453", amount: "1000", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } }] })).toString("base64");
-  const grown = projectRailsOnly(sample) + Math.max(0, (projectRailsOnly(sample, { gated: true }) ?? sample.length) - sample.length);
-  if (!(grown > sample.length + 200)) { console.log(`FAIL - control: the projection adds this tree's extra rails to a prod challenge (${sample.length} -> ${grown})`); process.exit(1); }
-  console.log(`ok - control: the projection adds this tree's extra rails to a prod challenge (+${grown - sample.length} bytes for ${TREE_EXTRA_RAILS.length} rail${TREE_EXTRA_RAILS.length === 1 ? "" : "s"})`);
+  // The live and the gated projections are checked SEPARATELY: summed, the
+  // gated rail's growth alone cleared the bar with the live filter broken.
+  // Each set must add at least one rail's worth (an exact accept is ~300
+  // bytes of base64; 200 is the bar) per rail it holds, counted here from
+  // the rail tables, not from the projection under test.
+  const PER_RAIL_MIN = 200;
+  for (const [label, opts, nets] of [["live", undefined, LIVE_NETS], ["gated", { gated: true }, GATED_NETS]]) {
+    const expected = TREE_EXTRA_RAILS.filter((r) => nets.has(r.network)).length;
+    const grown = (projectRailsOnly(sample, opts) ?? sample.length) - sample.length;
+    if (expected && !(grown >= PER_RAIL_MIN * expected)) { console.log(`FAIL - control: the ${label} projection adds this tree's ${expected} ${label} rail${expected === 1 ? "" : "s"} to a prod challenge (+${grown} bytes, at least ${PER_RAIL_MIN * expected} expected)`); process.exit(1); }
+    if (!expected && grown !== 0) { console.log(`FAIL - control: the ${label} projection adds ${grown} bytes with no ${label} rail to add`); process.exit(1); }
+    console.log(`ok - control: the ${label} projection adds this tree's ${label} rails to a prod challenge (+${grown} bytes for ${expected} rail${expected === 1 ? "" : "s"})`);
+  }
 }
 // A buyer's retry carries roughly the challenge plus its own signature and
 // authorization (~700 bytes measured), so budget below the common 8 KB limit.
