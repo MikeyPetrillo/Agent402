@@ -2754,7 +2754,7 @@ app.use(trafficMiddleware(TRAFFIC, { payerOf: (req, res) => payerFromRequest(req
 const CANONICAL_HOST = (() => { try { return new URL(BASE_URL).host.toLowerCase(); } catch { return ""; } })();
 app.use((req, res, next) => {
   const host = String(req.hostname || "").toLowerCase();
-  if (CANONICAL_HOST && host === `www.${CANONICAL_HOST}` && !req.headers["payment-signature"] && !req.headers["x-payment"] && !req.headers.authorization) {
+  if (CANONICAL_HOST && host === `www.${CANONICAL_HOST}` && !req.headers["payment-signature"] && !req.headers["x-payment"] && !req.__paymentHeaderAsSent && !req.headers.authorization) {
     // 308 FOR ANYTHING WITH A BODY. RFC 7231 permits a client to turn a 301
     // into a GET and drop the body; 308 requires method and body to survive.
     // The payment-header guard above is not enough on its own, because the
