@@ -24,7 +24,7 @@ import { createServer } from "node:http";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ownStoreEnv } from "./lib/own-stores.js";
-import { configureHowToCall, howToCallFor, howToCall402Field, MAX_GET_URL_CHARS, MAX_402_CALL_BYTES } from "../src/how-to-call.js";
+import { configureHowToCall, howToCallFor, howToCall402Field, howToCallField, MAX_GET_URL_CHARS, MAX_402_CALL_BYTES, MAX_CALL_BYTES } from "../src/how-to-call.js";
 import { isComputePayable } from "../src/pow.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -65,6 +65,11 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { faile
   const big = howToCall402Field(long).howToCall;
   ok(big && big.method === "POST" && big.url === "https://origin.example/api/long" && Object.keys(big).length === 2 && JSON.stringify(howToCallFor(long)).length > MAX_402_CALL_BYTES,
     `402 form: a call past ${MAX_402_CALL_BYTES} bytes goes out as its method and URL only`);
+  ok(MAX_CALL_BYTES === MAX_402_CALL_BYTES, "one budget for the 400 and the 402");
+  ok(JSON.stringify(howToCallField(post).howToCall) === JSON.stringify(howToCallFor(post)), "400 form: a call that fits the budget goes out whole");
+  const big400 = howToCallField(long).howToCall;
+  ok(big400 && big400.method === "POST" && big400.url === "https://origin.example/api/long" && Object.keys(big400).length === 2,
+    `400 form: a call past ${MAX_CALL_BYTES} bytes goes out as its method and URL only (the 400's example carries the body once)`);
 }
 
 // ---- Part 2: a FREE_MODE boot --------------------------------------------
@@ -118,6 +123,7 @@ try {
   ok(tools.length > 50, `pricing lists the free-tier tools (${tools.length})`);
   let refused = 0, ran = 0, alternates = 0;
   const broken = [];
+  let capped = 0;
   for (const t of tools) {
     const [method, path] = String(t.route || `${t.method} ${t.path}`).split(" ");
     if (!path) continue;
@@ -126,15 +132,20 @@ try {
     const eb = await empty.json();
     refused++;
     if (!eb.howToCall) { broken.push(`${t.slug}: 400 without howToCall`); continue; }
+    if (Buffer.byteLength(JSON.stringify(eb.howToCall), "utf8") > MAX_CALL_BYTES) { broken.push(`${t.slug}: howToCall past ${MAX_CALL_BYTES} bytes`); continue; }
     for (const c of [eb.howToCall, eb.howToCall.alternate].filter(Boolean)) {
-      const res = await send(c);
+      // A call past the budget names its method and URL; the body is the
+      // 400's own example, sent once.
+      const bare = c.method === "POST" && c.body === undefined && c.form === undefined;
+      if (bare) capped++;
+      const res = await send(bare ? { ...c, headers: { "Content-Type": "application/json" }, body: eb.example } : c);
       if (c === eb.howToCall.alternate) alternates++;
       if (res.status === 200) ran++;
       else broken.push(`${t.slug} ${c.method} -> ${res.status}${res.body?.error ? ` (${String(res.body.error).slice(0, 80)})` : ""}`);
     }
   }
   ok(refused > 20 && alternates > 0, `free-tier tools refused an empty call (${refused}); alternates sent (${alternates})`);
-  ok(broken.length === 0, `every howToCall and alternate runs as written (${ran} ran)${broken.length ? `: ${broken.slice(0, 12).join("; ")}` : ""}`);
+  ok(broken.length === 0, `every howToCall and alternate runs as written, a capped call with the 400's example (${ran} ran, ${capped} capped)${broken.length ? `: ${broken.slice(0, 12).join("; ")}` : ""}`);
 } finally {
   proc.kill("SIGTERM");
 }
