@@ -12,8 +12,6 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const PORT = 3005;
-const API = `http://localhost:${PORT}`;
 
 const fail = (msg) => { console.error("FAIL:", msg); process.exit(1); };
 
@@ -168,7 +166,16 @@ const text = (result) => result.content?.map((c) => (c.type === "text" ? c.text 
   const stubEnv = { ...process.env, AGENT402_URL: `http://127.0.0.1:${stub.address().port}`, AGENT402_CREDITS_KEY: KEY };
   delete stubEnv.AGENT_KEY; delete stubEnv.SOLANA_AGENT_KEY; delete stubEnv.AGENT402_BUDGET; delete stubEnv.AGENT402_MAX_PER_CALL; delete stubEnv.AGENT402_ASYNC;
   const jobClient = new Client({ name: "agent402-mcp-async-test", version: "0.0.0" });
-  await jobClient.connect(new StdioClientTransport({ command: process.execPath, args: [join(ROOT, "mcp", "index.js")], env: stubEnv, stderr: "ignore" }));
+  const jobTransport = new StdioClientTransport({ command: process.execPath, args: [join(ROOT, "mcp", "index.js")], env: stubEnv, stderr: "ignore" });
+  await jobClient.connect(jobTransport);
+  // Every message the server writes, in the order it arrives. The SDK client
+  // runs a notification handler a microtask later but a response at once, so
+  // when the last progress note and the result share one stdout chunk the
+  // result drops the note's handler first; the wire order is what the server
+  // owes.
+  const wire = [];
+  const deliver = jobTransport.onmessage;
+  jobTransport.onmessage = (m, ...rest) => { wire.push(m); return deliver?.(m, ...rest); };
   try {
     // A credits key does not pay the router (it buys from outside sellers), so
     // credits mode does not list router.execute.
@@ -187,13 +194,43 @@ const text = (result) => result.content?.map((c) => (c.type === "text" ? c.text 
     if (out.isError || !text(out).includes("the answer")) fail(`the job's answer is the tool result: ${text(out).slice(0, 200)}`);
     if (seen.prefer !== "respond-async" || seen.auth !== `Bearer ${KEY}`) fail(`the paid call carries Prefer: respond-async and its credential (${seen.prefer}, ${seen.auth ? "auth" : "no auth"})`);
     if (seen.polls !== 3) fail(`the job link is polled until it is final (${seen.polls})`);
+    const sentPcts = wire.filter((m) => m.method === "notifications/progress").map((m) => m.params.progress);
+    const lastNote = wire.findLastIndex((m) => m.method === "notifications/progress");
+    const resultAt = wire.findIndex((m) => m.id != null && m.result && Array.isArray(m.result.content) && JSON.stringify(m.result).includes("the answer"));
+    if (sentPcts.join(",") !== "0,20,80,100" || !(lastNote >= 0 && resultAt > lastNote)) fail(`progress notifications follow the job stage, only rise, and all precede the result on the wire (${JSON.stringify(sentPcts)}, last note ${lastNote}, result ${resultAt})`);
     const pcts = notes.map((n) => n.progress);
-    if (pcts.join(",") !== "0,20,80,100" || !/writing report \(4 of 5 steps\)/.test(notes[2]?.message || "")) fail(`progress notifications follow the job stage and only rise (${JSON.stringify(notes)})`);
+    if (!/^0,20,80(,100)?$/.test(pcts.join(",")) || !/writing report \(4 of 5 steps\)/.test(notes[2]?.message || "")) fail(`the caller's progress callback sees the job stage in order (${JSON.stringify(notes)})`);
   } finally {
     await jobClient.close().catch(() => {});
     stub.close();
   }
   console.log("async-job.js ✓ (slow route asks for a job, polls Retry-After, answer delivered, progress notifications rise; other-origin link refused)");
+}
+
+// The policy guardSigning registers drops an accept that asks to stay valid
+// past MAX_VALIDITY_SECONDS before the client selects one: alone it is refused
+// with nothing signed, and listed first beside a valid accept the valid one is
+// selected and signed. A spy scheme stands in for the signer.
+{
+  const { x402Client } = await import("@x402/core/client");
+  const { guardSigning } = await import("./known-assets.js");
+  const check = (c, m) => { if (!c) fail(m); console.log(`${m} ✓`); };
+  const valid = { scheme: "exact", network: "eip155:8453", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", amount: "1000", payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } };
+  const long = { ...valid, maxTimeoutSeconds: 90000 };
+  const sign = async (accepts) => {
+    const signed = [], approved = [], refused = [];
+    const client = new x402Client();
+    client.setSpendControls?.(false);
+    client.register("eip155:8453", { scheme: "exact", createPaymentPayload: async (v, r) => { signed.push(r); return { x402Version: v, payload: { authorization: { value: r.amount, validBefore: String(Math.floor(Date.now() / 1000) + Number(r.maxTimeoutSeconds)) } } }; } });
+    guardSigning(client, { allowance: () => 1, onSign: (usd, r) => approved.push(r), onRefuse: (d) => refused.push(d) });
+    let err = null;
+    try { await client.createPaymentPayload({ x402Version: 2, resource: { url: "https://seller.example/x" }, accepts }); } catch (e) { err = e; }
+    return { signed, approved, refused, err };
+  };
+  const alone = await sign([long]);
+  check(alone.signed.length === 0 && alone.approved.length === 0 && alone.refused.length === 1 && alone.refused[0].reason === "validity" && /every payment option it may sign asks to stay valid for more than 86400 seconds/.test(alone.err?.message || "") && /nothing was signed/.test(alone.err?.message || ""), `a lone accept valid for 90000 seconds is dropped before selection and nothing is signed (${alone.err?.message})`);
+  const mixed = await sign([long, valid]);
+  check(!mixed.err && mixed.signed.length === 1 && mixed.signed[0].maxTimeoutSeconds === 300 && mixed.approved.length === 1 && mixed.approved[0].maxTimeoutSeconds === 300 && mixed.refused.length === 0, `beside a valid accept, the 90000-second one is skipped and the valid one is signed (${mixed.err?.message || mixed.signed.map((r) => r.maxTimeoutSeconds).join(",")})`);
 }
 
 // 0d) The wallet path checks what it signs. A loopback seller records every
@@ -333,20 +370,35 @@ globalThis.fetch = (...a) => { if (!said && String(a[0]?.url || a[0]).includes("
   console.log("secrets never leave the process ✓ (malformed keys are named, not quoted; a seller's echo of any key is redacted in results, errors and stderr)");
 }
 
-// 1) Boot a paywalled API instance (PoW gate live, facilitator not contacted).
+// 1) Boot a paywalled API instance (PoW gate live, facilitator not contacted)
+// on an OS-assigned port (PORT=0, read back from its listening line) with its
+// stores in a temp directory of its own, so two copies of this suite never meet.
+const { ownStoreEnv } = await import("../scripts/lib/own-stores.js");
 const api = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
   cwd: ROOT,
   env: {
     ...process.env,
+    ...ownStoreEnv("mcp-test"),
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD",
     NETWORK: "base",
     FACILITATOR_URL: "https://facilitator.payai.network",
     X402_SYNC_ON_START: "false",
     POW_DIFFICULTY: "12",
-    PORT: String(PORT),
+    PORT: "0",
   },
-  stdio: ["ignore", "inherit", "inherit"],
+  stdio: ["ignore", "pipe", "inherit"],
 });
+// A failed assertion exits the process: the server goes with it.
+process.on("exit", () => { try { api.kill("SIGKILL"); } catch { /* already gone */ } });
+const PORT = await new Promise((resolve) => {
+  let buf = "", done = false;
+  const settle = (v) => { if (!done) { done = true; buf = ""; resolve(v); } };
+  api.stdout.on("data", (c) => { process.stdout.write(c); if (done) return; buf += c; const m = buf.match(/listening on :(\d+)/); if (m) settle(Number(m[1])); });
+  api.on("exit", () => settle(null));
+  setTimeout(() => settle(null), 120_000).unref();
+});
+if (!PORT) fail("the API instance never reported the port it bound");
+const API = `http://localhost:${PORT}`;
 let up = false;
 for (let i = 0; i < 30 && !up; i++) {
   up = await fetch(`${API}/health`).then((r) => r.ok).catch(() => false);

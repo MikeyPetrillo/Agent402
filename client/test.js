@@ -9,16 +9,27 @@ import { dirname, join } from "node:path";
 import { Agent402, OutputValidationError, withNetworkPreference, withPayeeAllowlist, NETWORK_CAIP2, quoted402Usd, acceptUsd, resetRetryFetch, isConnectionReset } from "./index.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const PORT = 3081;
+// The server binds an OS-assigned port (PORT=0) and keeps its stores in a
+// temp directory of its own, so two copies of this suite never meet.
+const { ownStoreEnv } = await import("../scripts/lib/own-stores.js");
 const proc = spawn("node", ["src/server.js"], {
   cwd: ROOT,
-  env: { ...process.env, WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
+  env: { ...process.env, ...ownStoreEnv("client-test"), WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
     FACILITATOR_URL: "https://facilitator.payai.network", X402_SYNC_ON_START: "false",
     // The seller index is not under test: a crawl filling it while the offline
     // cases run would change what route() ranks by the time they finish.
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off",
-    POW_DIFFICULTY: "12", PORT: String(PORT), FREE_MODE: "" },
-  stdio: "ignore",
+    POW_DIFFICULTY: "12", PORT: "0", FREE_MODE: "" },
+  stdio: ["ignore", "pipe", "ignore"],
+});
+// The port the server bound, read back from its listening line (null if it
+// exits or never listens).
+const boundPort = new Promise((resolve) => {
+  let buf = "", done = false;
+  const settle = (v) => { if (!done) { done = true; buf = ""; resolve(v); } };
+  proc.stdout.on("data", (c) => { if (done) return; buf += c; const m = buf.match(/listening on :(\d+)/); if (m) settle(Number(m[1])); });
+  proc.on("exit", () => settle(null));
+  setTimeout(() => settle(null), 120_000).unref();
 });
 const fail = (m) => { console.error("FAIL:", m); proc.kill("SIGKILL"); process.exit(1); };
 let pass = 0; const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m); };
@@ -758,6 +769,31 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     const late = await sent(Math.floor(Date.now() / 1000) + TEN_YEARS);
     ok(late && /not sent/.test(late.message) && /86400-second ceiling/.test(late.message), `a payload signed for ten years is refused before it is sent (${late?.message})`);
     ok(await sent(Math.floor(Date.now() / 1000) + 300) === null, "control: a payload signed for five minutes is sent");
+  }
+
+  // The policy guardSigning registers drops an accept that asks to stay valid
+  // past MAX_VALIDITY_SECONDS before the client selects one: alone it is refused
+  // with nothing signed, and listed first beside a valid accept the valid one is
+  // selected and signed. A spy scheme stands in for the signer.
+  {
+    const { x402Client } = await import("@x402/core/client");
+    const { guardSigning } = await import("./known-assets.js");
+    const valid = { scheme: "exact", network: "eip155:8453", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", amount: "1000", payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } };
+    const long = { ...valid, maxTimeoutSeconds: 90000 };
+    const sign = async (accepts) => {
+      const signed = [], approved = [], refused = [];
+      const client = new x402Client();
+      client.setSpendControls?.(false);
+      client.register("eip155:8453", { scheme: "exact", createPaymentPayload: async (v, r) => { signed.push(r); return { x402Version: v, payload: { authorization: { value: r.amount, validBefore: String(Math.floor(Date.now() / 1000) + Number(r.maxTimeoutSeconds)) } } }; } });
+      guardSigning(client, { allowance: () => 1, onSign: (usd, r) => approved.push(r), onRefuse: (d) => refused.push(d) });
+      let err = null;
+      try { await client.createPaymentPayload({ x402Version: 2, resource: { url: "https://seller.example/x" }, accepts }); } catch (e) { err = e; }
+      return { signed, approved, refused, err };
+    };
+    const alone = await sign([long]);
+    ok(alone.signed.length === 0 && alone.approved.length === 0 && alone.refused.length === 1 && alone.refused[0].reason === "validity" && /every payment option it may sign asks to stay valid for more than 86400 seconds/.test(alone.err?.message || "") && /nothing was signed/.test(alone.err?.message || ""), `a lone accept valid for 90000 seconds is dropped before selection and nothing is signed (${alone.err?.message})`);
+    const mixed = await sign([long, valid]);
+    ok(!mixed.err && mixed.signed.length === 1 && mixed.signed[0].maxTimeoutSeconds === 300 && mixed.approved.length === 1 && mixed.approved[0].maxTimeoutSeconds === 300 && mixed.refused.length === 0, `beside a valid accept, the 90000-second one is skipped and the valid one is signed (${mixed.err?.message || mixed.signed.map((r) => r.maxTimeoutSeconds).join(",")})`);
   }
 
   // A hold ends only when its authorization can no longer settle AND the
@@ -1714,6 +1750,8 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 try {
+  const PORT = await boundPort;
+  if (!PORT) fail("the server never reported the port it bound");
   for (let i = 0; i < 40; i++) { try { if ((await fetch(`http://localhost:${PORT}/api/pow`)).ok) break; } catch {} await sleep(500); }
   const a = new Agent402({ baseUrl: `http://localhost:${PORT}` });
 
