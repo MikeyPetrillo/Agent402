@@ -5,7 +5,7 @@
 //   node scripts/test-chain-logos.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { CHAIN_MARKS, CHAIN_ORDER, chainMark, chainLogoStrip, RAIL_COUNT_WORD } from "../src/chain-logos.js";
-import { RAILS } from "../src/rails.js";
+import { RAILS, GATED_RAILS, railKey, countWord } from "../src/rails.js";
 
 let passed = 0, failed = 0;
 const ok = (cond, msg) => {
@@ -13,7 +13,10 @@ const ok = (cond, msg) => {
   else { failed++; console.error(`FAIL - ${msg}`); }
 };
 
-const CHAINS = ["base", "solana", "polygon", "arbitrum", "monad", "celo", "avalanche", "sei", "optimism", "arc", "stellar", "algorand", "robinhood"];
+// Every rail, and every gated rail too, so a gated rail's mark is ready the
+// day it moves into RAILS.
+const CHAINS = RAILS.map(railKey);
+for (const c of GATED_RAILS.map(railKey)) ok(!!CHAIN_MARKS[c] && chainMark(c).includes('fill="currentColor"'), `gated rail ${c}: its mark is ready (single-tone)`);
 
 // --- every rail has a mark, and it renders to an <svg> ---------------------------
 ok(CHAIN_ORDER.length === RAILS.length && CHAINS.length === RAILS.length, `every rail in CHAIN_ORDER (got ${CHAIN_ORDER.length} of ${RAILS.length})`);
@@ -43,7 +46,7 @@ for (const [slug, name] of CHAIN_ORDER) {
   ok(strip.includes(`>${name}</span>`), `strip labels ${name}`);
 }
 ok((strip.match(/<svg/g) || []).length === RAILS.length, "strip renders one mark per rail");
-ok(strip.includes(`Settles natively on ${RAIL_COUNT_WORD} networks`) && RAIL_COUNT_WORD === "thirteen", `strip label counts the rails (${RAIL_COUNT_WORD})`);
+ok(strip.includes(`Settles natively on ${RAIL_COUNT_WORD} networks`) && RAIL_COUNT_WORD === countWord(RAILS.length), `strip label counts the rails (${RAIL_COUNT_WORD})`);
 ok(chainLogoStrip({ label: "Custom label here" }).includes("Custom label here"), "custom label flows through");
 
 console.log(`\n${failed ? "FAILED" : "OK"}: ${passed} passed, ${failed} failed`);

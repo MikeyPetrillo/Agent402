@@ -41,6 +41,24 @@ export const GATED_RAILS = [
   { name: "Ink", asset: "USDC", caip2: "eip155:57073", chainId: 57073 },
 ];
 
+// Test seam for the graduation suite (scripts/test-ink-graduation.js): with
+// NODE_ENV=test and RAILS_TEST_GRADUATE=<key,...>, each named gated rail is
+// moved into RAILS right after Arc, exactly where the graduation edit puts
+// it, before any copy below is derived. Never read outside NODE_ENV=test.
+if (process.env.NODE_ENV === "test") {
+  const keys = String(process.env.RAILS_TEST_GRADUATE || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  for (const key of keys) {
+    const i = GATED_RAILS.findIndex((r) => r.name.replace(/ Chain$/, "").toLowerCase().replace(/\s+/g, "") === key);
+    if (i < 0) continue;
+    const [rail] = GATED_RAILS.splice(i, 1);
+    const at = RAILS.findIndex((r) => r.name === "Arc");
+    RAILS.splice(at >= 0 ? at + 1 : RAILS.length, 0, rail);
+  }
+}
+
+/** True when `caip2` is a rail static copy names (in RAILS). */
+export const railListed = (caip2) => RAILS.some((r) => r.caip2 === String(caip2 || ""));
+
 /** RAILS plus every gated rail that is in the live offer right now. */
 export function liveRails() {
   const extra = GATED_RAILS.filter((r) => gatedRailOffered(r.caip2));
