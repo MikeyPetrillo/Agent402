@@ -2,6 +2,13 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const ENTRIES = [
   {
+    date: "2026-11-06",
+    title: "Router buyer price binding",
+    items: [
+      "Router: the router's buyer signs exactly the price it checked against its caps, on every challenge version, and refuses a seller accept whose price fields disagree; a live quote with disagreeing fields reads as unpriced.",
+    ],
+  },
+  {
     date: "2026-11-05",
     title: "Robinhood facilitator order, public-index disclosure, job buys",
     items: [

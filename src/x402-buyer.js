@@ -932,6 +932,15 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
       throw e;
     }
   }
+  // x402 v1 signs `maxAmountRequired` and v2 signs `amount`. An accept that
+  // carries both with different values could pass the cap on one figure and be
+  // signed for the other, so it is refused before anything is held or signed.
+  const sameAtomic = (a, b) => { try { return BigInt(String(a)) === BigInt(String(b)); } catch { return false; } };
+  if (payable.amount != null && payable.maxAmountRequired != null && !sameAtomic(payable.amount, payable.maxAmountRequired)) {
+    const e = bad(`Seller accept quotes amount ${payable.amount} but maxAmountRequired ${payable.maxAmountRequired}; refusing to sign an ambiguous price. Nothing was signed.`, 502);
+    e.refused = true;
+    throw e;
+  }
   const quotedAtomic = payable.amount ?? payable.maxAmountRequired;
   if (!quoteWithinCap(quotedAtomic, maxAtomic)) {
     throw bad(`Seller quote ${quotedAtomic} atomic exceeds the ${maxAtomic} cap - refusing to pay`, 402);
@@ -1083,7 +1092,9 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     // "Cannot convert undefined to a BigInt" — hit live 2026-07-23 buying
     // Stelar's /telemetry. quotedAtomic already read either field; sign the
     // same value we cap-checked.
-    const signable = { ...payable, amount: String(quotedAtomic) };
+    // Both price fields carry the value that passed the cap, so the v1 signer
+    // (which reads maxAmountRequired) and the v2 signer (amount) sign it.
+    const signable = { ...payable, amount: String(quotedAtomic), ...(payable.maxAmountRequired != null ? { maxAmountRequired: String(quotedAtomic) } : {}) };
     // SOLANA: build the payload WITHOUT @x402/svm's scheme, whose kit RPC
     // transport throws undici "invalid content-length header" after any
     // custom-dispatcher (ssrf) seller fetch - see createSvmPaymentPayload.
@@ -1108,6 +1119,14 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
       if (signable.maxTimeoutSeconds === undefined) delete accepted.maxTimeoutSeconds;
       else accepted.maxTimeoutSeconds = signable.maxTimeoutSeconds;
       payload.accepted = accepted;
+    }
+    // The signed EVM authorization must move exactly the capped quote; anything
+    // else is refused here, before the payment leaves this process.
+    const signedValue = payload?.payload?.authorization?.value;
+    if (chain === "base" && (signedValue == null || BigInt(String(signedValue)) !== BigInt(String(quotedAtomic)))) {
+      const e = bad(`The signed authorization (${signedValue ?? "missing"}) does not equal the capped quote ${quotedAtomic}; refusing to pay. Nothing was sent.`, 502);
+      e.refused = true;
+      throw e;
     }
     const payHeaders = http.encodePaymentSignatureHeader(payload);
     // Header-name compatibility: @x402/core emits only PAYMENT-SIGNATURE; some
