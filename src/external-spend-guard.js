@@ -199,7 +199,8 @@ function releasePayerShared(pre) {
 // alarms remain the outer backstop.
 //
 // `SOR_WALLET_DAILY_MAX_USD` is the default for every chain;
-// `SOR_WALLET_DAILY_MAX_USD_<CHAIN>` (BASE, SOLANA, ALGORAND, TEMPO) overrides
+// `SOR_WALLET_DAILY_MAX_USD_<CHAIN>` (BASE, SOLANA, ALGORAND, TEMPO, and each
+// EVM buyer chain by name: ARC, CELO, POLYGON, ARBITRUM, ROBINHOOD) overrides
 // one; `0` or `off` disables the ceiling for that scope. A MALFORMED value is
 // treated as unset - a per-chain typo falls through to the global setting, a
 // global typo to the default - never as disabled (a typo must not select the

@@ -47,6 +47,7 @@ import { readBytesCapped, readTextCapped, declaredLength, discardBody, decodeUtf
 import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { reserveUnprovenSellerSpend, releaseUnprovenSellerSpend } from "./base-unproven.js";
 import { usdFigure } from "./price-usd.js";
+import { EVM_BUYER_CHAINS, isEvmBuyerChain, evmBuyerChainEnabled, evmAcceptDomainCheck } from "./evm-buyer-chains.js";
 
 /** The buyer-visible 409 when a Base unproven daily cap refuses: every figure
  *  through usdFigure, as the lane's other sentences print them. */
@@ -75,6 +76,12 @@ export const BUYER_CHAINS = {
     // decoy in USDC and get us to sign an expensive one in another token.
     asset: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
   },
+  // The other EVM chains the same spending wallet pays on (src/evm-buyer-chains.js):
+  // CAIP-2 labels only, and the chain's own stablecoin from that table. Paid
+  // only while SOR_EVM_CHAINS lists the chain (payX402 refuses otherwise).
+  ...Object.fromEntries(Object.values(EVM_BUYER_CHAINS).filter((c) => c.name !== "base").map((c) => [c.name, {
+    caip2: c.caip2, networkLabels: new Set([c.caip2]), asset: c.asset, symbol: c.symbol,
+  }])),
   algorand: {
     caip2: ALGORAND_MAINNET_CAIP2,
     // A seller may spell mainnet as the CAIP-2 id or the full genesis hash
@@ -832,6 +839,14 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
   if (maxAtomic == null) throw bad("payX402 requires maxAtomic (the margin-guard ceiling)", 500);
   const chainCfg = BUYER_CHAINS[chain];
   if (!chainCfg) throw bad(`payX402: unknown chain "${chain}" (known: ${Object.keys(BUYER_CHAINS).join(", ")})`, 500);
+  // THE EVM FAMILY. Every EVM chain the spending wallet pays on gets the same
+  // pre-sign and post-send discipline Base has (the domain check, the split
+  // price refusal, the evidence wallets, the capped validity, the signed
+  // amount assert and the chain-truth refusal read). A chain outside the
+  // operator's SOR_EVM_CHAINS list is not paid at all, whoever calls this.
+  const isEvm = isEvmBuyerChain(chain);
+  if (isEvm && !evmBuyerChainEnabled(chain)) throw bad(`Paying sellers on ${chain} is not enabled on this host. Nothing was signed.`, 409);
+  const chainLabel = chain === "base" ? "Base" : chain;
   if (buyerAddressGuard) {
     // SSRF: paying an arbitrary URL with a real wallet is the same egress-abuse
     // risk as any fetch — resolve + pin to a public address before spending.
@@ -908,7 +923,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
   // hand the client a single validated accept, so what we cap-check is what
   // we sign.
   const payable = pickPayableAccept(paymentRequired.accepts, chain);
-  if (!payable) throw bad(`Seller offers no ${chain}/exact/USDC accept - cannot pay from the ${chain} spending wallet`, 502);
+  if (!payable) throw bad(`Seller offers no ${chain}/exact/${chainCfg.symbol || "USDC"} accept - cannot pay from the ${chain} spending wallet`, 502);
   // THE ACCEPT'S EIP-712 DOMAIN NAME MUST BE THE TOKEN'S OWN (2026-09-10).
   // The scheme signs the authorization under `extra.name` from the accept it
   // is handed, so a Base accept advertising "USDC" (the token signs under
@@ -919,7 +934,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
   // so the resolver skips it for the TTL. Positive mismatch only: another
   // asset or a nameless accept is unknown and the scheme's registry default
   // applies (src/evm-usdc-domain.js).
-  if (chain === "base") {
+  if (isEvm) {
     const domain = usdcDomainVerdict(payable);
     // Both refusing verdicts stop us here - we cannot sign either - but only
     // wrong_domain is the seller's defect. A Gateway-rail accept settles fine
@@ -931,12 +946,26 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
       // accept and changes no routing decision.
       if (memoizeDelivery) noteSellerRefusal(url, chain, 402);
       const e = bad(domain.verdict === "payment_method_unsupported"
-        ? `Seller's Base accept asks for paymentMethod ${JSON.stringify(domain.paymentMethod)} (a transfer proved afterwards), which this stock x402 signer does not make. Nothing was signed.`
+        ? `Seller's ${chainLabel} accept asks for paymentMethod ${JSON.stringify(domain.paymentMethod)} (a transfer proved afterwards), which this stock x402 signer does not make. Nothing was signed.`
         : domain.verdict === "gateway_batched"
-        ? `Seller's Base accept stands on Circle's Gateway rail (extra.name ${JSON.stringify(domain.advertisedName)}${domain.verifyingContract ? `, verifyingContract ${domain.verifyingContract}` : ""}): it is signed under the GatewayWallet domain and settled by a batch facilitator, which this stock x402 signer does not speak. Nothing was signed, and nothing on the seller's side is wrong.`
-        : `Seller's Base USDC accept advertises EIP-712 name ${JSON.stringify(domain.advertisedName)} but the token signs under ${JSON.stringify(domain.expectedName)} - no stock x402 signature can verify against it. Nothing was signed.`, 502);
+        ? `Seller's ${chainLabel} accept stands on Circle's Gateway rail (extra.name ${JSON.stringify(domain.advertisedName)}${domain.verifyingContract ? `, verifyingContract ${domain.verifyingContract}` : ""}): it is signed under the GatewayWallet domain and settled by a batch facilitator, which this stock x402 signer does not speak. Nothing was signed, and nothing on the seller's side is wrong.`
+        : `Seller's ${chainLabel} ${chainCfg.symbol || "USDC"} accept advertises EIP-712 name ${JSON.stringify(domain.advertisedName)} but the token signs under ${JSON.stringify(domain.expectedName)} - no stock x402 signature can verify against it. Nothing was signed.`, 502);
       e.refused = true;
       throw e;
+    }
+    // Off Base the domain is also checked against the token's own from our
+    // table (src/evm-buyer-chains.js): the stock signer signs under whatever
+    // name and version the accept carries, and a chain whose token the
+    // verified table above does not hold (Robinhood's USDG) would otherwise
+    // read "unknown" and be signed under the seller's word.
+    if (chain !== "base") {
+      const own = evmAcceptDomainCheck(payable, chain);
+      if (!own.ok) {
+        if (memoizeDelivery) noteSellerRefusal(url, chain, 402);
+        const e = bad(`Seller's ${chain} ${chainCfg.symbol || "USDC"} accept advertises EIP-712 ${own.field} ${JSON.stringify(own.advertised)} but the token signs under ${JSON.stringify(own.expected)}. Nothing was signed.`, 502);
+        e.refused = true;
+        throw e;
+      }
     }
   }
   // x402 v1 signs `maxAmountRequired` and v2 signs `amount`. An accept that
@@ -1012,7 +1041,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
   // to be it (the same rule baseLiveGate applies to the probe). Base only - the
   // binding is a Base construct. Reports the normalized address or the words
   // "an unreadable address", never the seller's raw string.
-  if (chain === "base" && Array.isArray(evidenceWallets) && evidenceWallets.length) {
+  if (isEvm && Array.isArray(evidenceWallets) && evidenceWallets.length) {
     const bound = new Set(evidenceWallets.map((w) => String(w || "").toLowerCase()));
     const raw = typeof payable.payTo === "string" ? payable.payTo : "";
     const live = /^0x[0-9a-f]{40}$/i.test(raw) ? raw.toLowerCase() : null;
@@ -1068,6 +1097,12 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
   // checked against the quote actually being SIGNED, so a seller quoting the
   // probe inside the ceiling and the payment above it is refused here.
   let unprovenHold = null;
+  // The unproven tier is a Base lane only; no other chain is paid under it.
+  if (allowUnproven && isEvm && chain !== "base") {
+    const e = new Error(`The unproven lane is Base only; a ${chain} seller below the settlement floor is not paid`);
+    e.statusCode = 409;
+    throw e;
+  }
   if (chain === "base" && allowUnproven) {
     const { baseUnprovenAllowanceAtomic } = await import("./base-unproven.js");
     const ceiling = baseUnprovenAllowanceAtomic();
@@ -1123,11 +1158,11 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     // validBefore less the settle rule and the seller allowance). Refused
     // before anything is signed, so nothing is committed and the hold goes back.
     if (Number.isFinite(signBy) && Date.now() > signBy) throw bad("Too little of the buyer's payment authorization is left to pay this seller and still settle. Nothing was signed.", 504);
-    const signAccept = chain === "base" ? capEvmValidity(signable) : signable;
+    const signAccept = isEvm ? capEvmValidity(signable) : signable;
     const payload = chain === "solana"
       ? await (await import("./solana-buyer.js")).createSvmPaymentPayload(buyer.signer, { ...paymentRequired, accepts: [signable] })
       : await client.createPaymentPayload({ ...paymentRequired, accepts: [signAccept] });
-    if (chain === "base" && payload && typeof payload === "object" && payload.accepted && signAccept !== signable) {
+    if (isEvm && payload && typeof payload === "object" && payload.accepted && signAccept !== signable) {
       const accepted = { ...payload.accepted };
       if (signable.maxTimeoutSeconds === undefined) delete accepted.maxTimeoutSeconds;
       else accepted.maxTimeoutSeconds = signable.maxTimeoutSeconds;
@@ -1136,7 +1171,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     // The signed EVM authorization must move exactly the capped quote; anything
     // else is refused here, before the payment leaves this process.
     const signedValue = payload?.payload?.authorization?.value;
-    if (chain === "base" && (signedValue == null || !sameAtomic(signedValue, quotedAtomic))) {
+    if (isEvm && (signedValue == null || !sameAtomic(signedValue, quotedAtomic))) {
       const e = bad(`The signed authorization (${signedValue == null ? "missing" : atomicForMessage(signedValue)}) does not equal the capped quote ${atomicForMessage(quotedAtomic)}; refusing to pay. Nothing was sent.`, 502);
       e.refused = true;
       throw e;
@@ -1187,7 +1222,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     // every error thrown after the paid request is dispatched, so a caller
     // books what may have left the wallet rather than its worst-case cap.
     const signedUsd = Number(quotedAtomic) / 1e6;
-    const evmAuth = chain === "base" ? payload?.payload?.authorization : null;
+    const evmAuth = isEvm ? payload?.payload?.authorization : null;
     const evmCheckable = !!(evmAuth && /^0x[0-9a-fA-F]{64}$/.test(String(evmAuth.nonce || "")) && /^0x[0-9a-fA-F]{40}$/.test(String(signable?.asset || "")) && /^\d+$/.test(String(evmAuth.validBefore || "")));
     const svmBlockhash = chain === "solana" && typeof payload?.recentBlockhash === "string" ? payload.recentBlockhash : null;
     const chainCheckable = chain === "solana" || evmCheckable;

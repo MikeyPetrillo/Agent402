@@ -123,3 +123,72 @@ export async function upstreamBuyerStatus() {
   buyerStatusCache = { at: Date.now(), result };
   return result;
 }
+
+// THE SAME WALLET ON THE OTHER EVM CHAINS (src/evm-buyer-chains.js). One key
+// pays on every chain SOR_EVM_CHAINS enables, and each chain holds its own
+// balance of that chain's stablecoin, so each one gets its own bucketed
+// reading of the same address. Off Base nothing settles back into it (the
+// self-funding payTo is a Base rule), so a chain's balance only falls: the
+// low-water word is the alarm. UPSTREAM_BUYER_LOW_USD_<CHAIN> sets one chain's
+// mark, else UPSTREAM_BUYER_LOW_USD, else the Base default.
+const evmChainStatusCache = new Map(); // chain -> { at, result }
+const lowUsdFor = (chain) => {
+  const raw = String(process.env[`UPSTREAM_BUYER_LOW_USD_${String(chain).toUpperCase()}`] ?? "").trim();
+  const per = Number(raw);
+  return raw !== "" && Number.isFinite(per) && per >= 0 ? per : BUYER_LOW_USD();
+};
+/** Bucketed balance of the spending wallet on one non-Base EVM buyer chain.
+ *  `readBalance` is a test seam (address, cfg, rpc) -> USD or null. */
+export async function evmBuyerChainStatus(chain, { readBalance = null, now = Date.now() } = {}) {
+  const { evmBuyerChain, evmBuyerRpc } = await import("./evm-buyer-chains.js");
+  const cfg = evmBuyerChain(chain);
+  if (!cfg || chain === "base") return { configured: false, status: "unconfigured", attests: "balance-only" };
+  const pk = (process.env.X402_UPSTREAM_BUYER_KEY || "").trim();
+  if (!pk) return { configured: false, status: "unconfigured", attests: "balance-only" };
+  const hit = evmChainStatusCache.get(chain);
+  if (hit && now - hit.at < BUYER_STATUS_CACHE_MS) return hit.result;
+  let result;
+  try {
+    const { privateKeyToAccount } = await import("viem/accounts");
+    const address = privateKeyToAccount(pk.startsWith("0x") ? pk : `0x${pk}`).address;
+    const rpc = evmBuyerRpc(chain);
+    let usd = null;
+    if (readBalance) usd = await readBalance(address, cfg, rpc);
+    else if (rpc) {
+      const data = "0x70a08231" + address.slice(2).toLowerCase().padStart(64, "0");
+      const res = await fetch(rpc, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to: cfg.asset, data }, "latest"] }),
+        signal: AbortSignal.timeout(6000),
+      });
+      const j = await res.json();
+      if (typeof j.result === "string" && /^0x[0-9a-f]*$/i.test(j.result)) usd = Number(BigInt(j.result === "0x" ? "0x0" : j.result)) / 10 ** cfg.decimals;
+    }
+    result = Number.isFinite(usd)
+      ? { configured: true, status: usd < lowUsdFor(chain) ? "low" : "ok", attests: "balance-only" }
+      : { configured: true, status: "unknown", attests: "balance-only" };
+  } catch {
+    result = { configured: true, status: "unknown", attests: "balance-only" };
+  }
+  evmChainStatusCache.set(chain, { at: now, result });
+  return result;
+}
+/** One word for every enabled non-Base EVM buyer chain, and one per chain:
+ *  "off" when none is enabled, else "low" when any chain reads low, "unknown"
+ *  when any is unreadable, otherwise "ok" (or "unconfigured" with no key).
+ *  Words only: no balance, no address, no threshold. */
+export async function upstreamBuyerEvmStatus(opts = {}) {
+  const { enabledEvmBuyerChains } = await import("./evm-buyer-chains.js");
+  const chains = enabledEvmBuyerChains().filter((c) => c !== "base");
+  if (!chains.length) return { status: "off" };
+  const out = {};
+  for (const c of chains) {
+    const r = await evmBuyerChainStatus(c, opts).catch(() => ({ configured: true, status: "unknown", attests: "balance-only" }));
+    out[c] = { configured: r.configured, status: r.status, attests: r.attests };
+  }
+  const words = Object.values(out).map((r) => r.status);
+  const status = words.includes("low") ? "low" : words.includes("unknown") ? "unknown" : words.every((w) => w === "unconfigured") ? "unconfigured" : "ok";
+  return { status, chains: out };
+}
+export function __resetEvmChainStatusForTest() { evmChainStatusCache.clear(); }

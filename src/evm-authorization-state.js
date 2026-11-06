@@ -19,14 +19,16 @@
 //
 // Fails CLOSED: any RPC failure or unreadable result THROWS, and the caller
 // keeps the post-commit stance. Only an explicit false is "not charged".
+import { evmBuyerRpc } from "./evm-buyer-chains.js";
+
 const SELECTOR = "0xe94a0102"; // authorizationState(address,bytes32) - pinned in the test via viem
 
-const RPC_BY_CHAIN = {
-  base: () => (process.env.AGENT402_BASE_RPC || "https://mainnet.base.org").trim(),
-};
+// Every chain the buyer pays on (src/evm-buyer-chains.js): Base reads
+// AGENT402_BASE_RPC first, every chain honors EVM_RPC_<id>.
 export function evmRpcUrlFor(chain) {
-  const f = RPC_BY_CHAIN[String(chain || "").toLowerCase()];
-  return f ? f() : null;
+  const k = String(chain || "").toLowerCase();
+  if (k === "base") return (process.env.AGENT402_BASE_RPC || "https://mainnet.base.org").trim();
+  return evmBuyerRpc(k);
 }
 
 /** The eth_call data for authorizationState(authorizer, nonce). Pure; exported for the test. */

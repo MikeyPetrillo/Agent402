@@ -28,6 +28,7 @@ import { usdcDomainVerdict, usdcDomainMismatchDetail } from "./evm-usdc-domain.j
 import { routeExcludedCategory } from "./route-category.js";
 import { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2 } from "./avm-network.js";
 import { sellerFundingEnabled } from "./leaderboard.js";
+import { EVM_BUYER_CHAINS, isEvmBuyerChain } from "./evm-buyer-chains.js";
 
 // Network label -> the spending chain that pays it. Kept in lockstep with
 // route-execute's EXTERNAL_CHAIN_BY_NETWORK (pinned by test-dispatch-
@@ -42,6 +43,11 @@ export const SPEND_CHAIN_BY_NETWORK = Object.freeze({
   [ALGORAND_MAINNET_CAIP2]: "algorand",
   [ALGORAND_MAINNET_LEGACY_CAIP2]: "algorand",
   "eip155:4217": "tempo",
+  // The other EVM chains the same spending wallet can pay on
+  // (src/evm-buyer-chains.js). A seller's chain counts only when the host
+  // lists it among its spend chains (SOR_EVM_CHAINS), so with the default
+  // list these rows never reach a verdict.
+  ...Object.fromEntries(Object.values(EVM_BUYER_CHAINS).filter((c) => c.name !== "base").map((c) => [c.caip2, c.name])),
 });
 
 // Reason vocabulary. Order = precedence when a seller fails on every chain:
@@ -192,8 +198,9 @@ export function spendChainsOf(networks = []) {
  *                                     category_excluded on every chain, whatever else is true of it. Omit/null
  *                                     = a seller-level verdict, which no single route's category decides.
  */
-export function dispatchEligibility({ routable, networks = [], settled = 0, payers, priceUsd, urlTemplate = false, spendChains = ["base"], minSettled = 50, minPayers = 3, local = false, evidence, livePayTo = null, usdcDomain = null, deliveryFailing = null, unprovenMaxUsd = baseUnprovenAllowanceUsd(), routeText = null } = {}) {
+export function dispatchEligibility({ routable, networks = [], settled = 0, payers, priceUsd, urlTemplate = false, spendChains = ["base"], minSettled = 50, minPayers = 3, local = false, evidence, livePayTo = null, usdcDomain = null, livePayToByChain = null, usdcDomainByChain = null, deliveryFailing = null, unprovenMaxUsd = baseUnprovenAllowanceUsd(), routeText = null } = {}) {
   if (local) return { eligible: true, reason: "local_catalog", chains: {} };
+  const livePayToBase = livePayTo, usdcDomainBase = usdcDomain;
   const byChain = {};
   const advertised = spendChainsOf(networks);
   const have = advertised.filter((c) => spendChains.includes(c));
@@ -234,14 +241,21 @@ export function dispatchEligibility({ routable, networks = [], settled = 0, paye
     // through the operator surface instead: /__operator/router-delivery.json.
     // So the input carries the observation, and the output never echoes it.
     if (failing) { byChain[c] = { eligible: false, reason: "delivery_failing" }; continue; }
-    if (c === "base") {
+    if (isEvmBuyerChain(c)) {
+      // THE EVM FAMILY (Base and every chain src/evm-buyer-chains.js lists):
+      // the same domain refusal and the same settlement gate, read at the
+      // wallet that chain's 402 names. Off Base the observation and the
+      // address come from the per-chain maps; the unproven tier stays Base's.
+      const livePayTo = c === "base" ? livePayToBase : (livePayToByChain && typeof livePayToByChain === "object" ? livePayToByChain[c] ?? null : null);
+      const usdcDomain = c === "base" ? usdcDomainBase : (usdcDomainByChain && typeof usdcDomainByChain === "object" ? usdcDomainByChain[c] ?? null : null);
+      const caip2 = EVM_BUYER_CHAINS[c].caip2;
       // A Base accept advertising the wrong EIP-712 domain name is unpayable by
       // every stock buyer, whatever its history says (the history predates the
       // change, or belongs to a wallet paid over another path): refuse before
       // the settlement gate, and say which name the token actually signs under.
       // Only a POSITIVE mismatch on the chain's own USDC contract refuses;
       // unobserved, another asset or no name is unknown and decides nothing.
-      const domain = usdcDomain ? usdcDomainVerdict(usdcDomain, "eip155:8453") : { verdict: "unknown" };
+      const domain = usdcDomain ? usdcDomainVerdict(usdcDomain, caip2) : { verdict: "unknown" };
       // Two different ineligibilities, not one: a name the token does not sign
       // under is the seller's to fix, while Circle's Gateway rail is ours to
       // learn. Both are "we cannot route a payment here today"; only the first
@@ -279,7 +293,7 @@ export function dispatchEligibility({ routable, networks = [], settled = 0, paye
       // A detail naming a wallet problem (shared, mismatched, unverified)
       // is something else wrong, and so is a self-funded history.
       const b = byChain[c];
-      if (b.reason === "settlement_required" && !Object.hasOwn(DISPATCH_DETAILS, b.detail || "") && unprovenMaxUsd > 0 && Number(priceUsd) > 0 && Number(priceUsd) <= unprovenMaxUsd) {
+      if (c === "base" && b.reason === "settlement_required" && !Object.hasOwn(DISPATCH_DETAILS, b.detail || "") && unprovenMaxUsd > 0 && Number(priceUsd) > 0 && Number(priceUsd) <= unprovenMaxUsd) {
         b.unprovenTier = true;
         b.unprovenMaxUsd = unprovenMaxUsd;
       }
