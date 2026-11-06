@@ -8,8 +8,8 @@ import { join } from "node:path";
 import { buildProvider, setActiveProxy, setCachedRoutes, DEFAULT_PORT, PLUGIN_ID } from "./provider.js";
 import { startProxy, loadRoutes, DEFAULT_UPSTREAM } from "./proxy.js";
 import { stripTrailingSlashes } from "./models.js";
-import { acceptUsd } from "./known-assets.js";
-export { acceptUsd, KNOWN_ASSETS } from "./known-assets.js";
+import { acceptUsd, guardSignedAmount } from "./known-assets.js";
+export { acceptUsd, acceptAmount, signedPaymentProblem, KNOWN_ASSETS } from "./known-assets.js";
 
 export const STATE_DIR = () => join(process.env.AGENT402_OPENCLAW_HOME || join(homedir(), ".openclaw"), "agent402");
 export const CREDITS_KEY_FILE = () => join(STATE_DIR(), "credits.key");
@@ -56,29 +56,46 @@ export const PERMIT2_READY_MIN = 10n ** 12n; // 1,000,000 USDC (6 decimals): a r
  *  carries its own ceiling under its own name. The default is $2, the gateway's
  *  own metered quote cap (GATEWAY_METERED_MAX_QUOTE_USD), so no call the gateway
  *  would serve is refused here while a runaway quote still stops at the wallet.
- *  `maxPerCallUsd` in the plugin config or AGENT402_MAX_PER_CALL_USD; `0`/`off`
- *  disables; a malformed value reads as the default, never as off. */
+ *  `maxPerCallUsd` in the plugin config or AGENT402_MAX_PER_CALL_USD; a
+ *  malformed value reads as the default, never as off. `0`/`off` removes the
+ *  ceiling only beside an explicit acknowledgment, `allowUncappedPayments:
+ *  true` in the plugin config or AGENT402_ALLOW_UNCAPPED_PAYMENTS=true; without
+ *  it `off` reads as the default too (uncappedRefused says so for the log). */
 export const DEFAULT_MAX_PER_CALL_USD = 2;
-export function maxPerCallUsd(pluginConfig = {}) {
+const capOffRequested = (pluginConfig) => {
   const raw = String(pluginConfig.maxPerCallUsd ?? process.env.AGENT402_MAX_PER_CALL_USD ?? "").trim().toLowerCase();
-  if (raw === "0" || raw === "off") return Infinity;
+  return raw === "0" || raw === "off";
+};
+export function uncappedAcknowledged(pluginConfig = {}) {
+  if (pluginConfig.allowUncappedPayments != null) return pluginConfig.allowUncappedPayments === true || String(pluginConfig.allowUncappedPayments).trim().toLowerCase() === "true";
+  return String(process.env.AGENT402_ALLOW_UNCAPPED_PAYMENTS ?? "").trim().toLowerCase() === "true";
+}
+/** True when the config asks for no ceiling without the acknowledgment, so
+ *  the default ceiling applies instead. */
+export const uncappedRefused = (pluginConfig = {}) => capOffRequested(pluginConfig) && !uncappedAcknowledged(pluginConfig);
+export function maxPerCallUsd(pluginConfig = {}) {
+  if (capOffRequested(pluginConfig)) return uncappedAcknowledged(pluginConfig) ? Infinity : DEFAULT_MAX_PER_CALL_USD;
+  const raw = String(pluginConfig.maxPerCallUsd ?? process.env.AGENT402_MAX_PER_CALL_USD ?? "").trim().toLowerCase();
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_MAX_PER_CALL_USD;
 }
 // The dollar value of an accept's quote is acceptUsd (./known-assets.js):
-// `amount` (v2) or `maxAmountRequired` (v1) in base units over the KNOWN
-// decimals of its asset, never a decimals value the seller sends, since the
-// signer signs the raw amount. An accept in an asset outside the table, or
-// with no whole-number amount, reads as null, and null is REFUSED under a
-// finite ceiling: a quote we cannot price is not one we sign.
-export function selectAccept(accepts, { preferUpto = true, maxUsd = Infinity } = {}) {
+// the field the challenge's version signs (`amount` in v2, `maxAmountRequired`
+// in v1) in base units over the KNOWN decimals of its asset, never a decimals
+// value the seller sends, since the signer signs the raw amount. An accept in
+// an asset outside the table, with no whole-number amount, or with both fields
+// at different values, reads as null, and null is REFUSED under a finite
+// ceiling: a quote we cannot price is not one we sign. After the payload is
+// built, guardSignedAmount checks the amount actually signed against the same
+// figure and the ceiling before anything is sent.
+export function selectAccept(accepts, { preferUpto = true, maxUsd = Infinity, x402Version = undefined } = {}) {
   const list = Array.isArray(accepts) ? accepts : [];
   const pick = (preferUpto && list.find((a) => a?.scheme === "upto" && a?.network === BASE_CAIP2))
     || list.find((a) => a?.scheme === "exact" && a?.network === BASE_CAIP2) || list[0];
   if (pick && Number.isFinite(maxUsd)) {
-    const usd = acceptUsd(pick);
+    const usd = acceptUsd(pick, x402Version);
     if (usd == null || usd > maxUsd) {
-      throw new Error(`agent402-openclaw: quote ${usd == null ? "unreadable" : `$${usd}`} exceeds the per-call ceiling $${maxUsd} (maxPerCallUsd / AGENT402_MAX_PER_CALL_USD; 0 disables)`);
+      throw new Error(`agent402-openclaw: quote ${usd == null ? "unreadable" : `$${usd}`} exceeds the per-call ceiling $${maxUsd} (maxPerCallUsd / AGENT402_MAX_PER_CALL_USD; 0 with allowUncappedPayments removes it)`);
     }
   }
   return pick;
@@ -88,6 +105,8 @@ export const uptoReady = (allowance) => { try { return BigInt(allowance ?? 0) >=
 export async function resolvePayFetch(pluginConfig = {}, log = () => {}) {
   const pk = resolveWalletKey(pluginConfig);
   if (!pk) return null;
+  if (uncappedRefused(pluginConfig)) log(`[agent402-openclaw] maxPerCallUsd "off" needs allowUncappedPayments: true (or AGENT402_ALLOW_UNCAPPED_PAYMENTS=true); keeping the $${DEFAULT_MAX_PER_CALL_USD} per-call ceiling`);
+  const maxUsd = maxPerCallUsd(pluginConfig);
   try {
     const [{ wrapFetchWithPayment, x402Client }, { privateKeyToAccount }, { toClientEvmSigner }, { registerExactEvmScheme }] = await Promise.all([
       import("@x402/fetch"), import("viem/accounts"), import("@x402/evm"), import("@x402/evm/exact/client"),
@@ -101,9 +120,9 @@ export async function resolvePayFetch(pluginConfig = {}, log = () => {}) {
       const pub = createPublicClient({ chain: base, transport: http((pluginConfig.baseRpc || process.env.AGENT402_BASE_RPC || DEFAULT_BASE_RPC).trim()) });
       const allowance = await pub.readContract(getPermit2AllowanceReadParams({ tokenAddress: USDC_BASE, ownerAddress: account.address }));
       upto = uptoReady(allowance);
-      const maxUsd = maxPerCallUsd(pluginConfig);
-      const client = new x402Client((v, accepts) => selectAccept(accepts, { preferUpto: upto, maxUsd }));
+      const client = new x402Client((v, accepts) => selectAccept(accepts, { preferUpto: upto, maxUsd, x402Version: v }));
       client.setSpendControls?.(false); // the vendor default ($1, its own default assets only) would refuse USDG and any quote over $1; selectAccept holds the accept that is signed to our own maxPerCallUsd instead
+      guardSignedAmount(client, { allowance: () => maxUsd });
       registerExactEvmScheme(client, { signer });
       if (upto) client.register(BASE_CAIP2, new UptoEvmScheme(signer));
       log(upto
@@ -113,8 +132,9 @@ export async function resolvePayFetch(pluginConfig = {}, log = () => {}) {
     } catch (e) {
       // The allowance read or the upto scheme failed: exact still works.
       log(`[agent402-openclaw] upto unavailable (${String(e?.message || e).slice(0, 120)}) - paying exact`);
-      const client = new x402Client((v, accepts) => selectAccept(accepts, { preferUpto: false, maxUsd: maxPerCallUsd(pluginConfig) }));
+      const client = new x402Client((v, accepts) => selectAccept(accepts, { preferUpto: false, maxUsd, x402Version: v }));
       client.setSpendControls?.(false); // the vendor default ($1, its own default assets only) would refuse USDG and any quote over $1; selectAccept holds the accept that is signed to our own maxPerCallUsd instead
+      guardSignedAmount(client, { allowance: () => maxUsd });
       registerExactEvmScheme(client, { signer });
       return wrapFetchWithPayment(fetch, client);
     }

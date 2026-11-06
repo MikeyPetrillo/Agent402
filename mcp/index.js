@@ -522,6 +522,8 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
 function signingRefusal(tool, d) {
   const text = d.reason === "unknown-asset"
     ? `Refused without paying: "${tool.slug}" asked to be paid in an asset this server cannot price (USDC or USDG on a known network), so nothing was signed.`
+    : d.reason === "signed-amount"
+    ? `Refused without paying: for "${tool.slug}", ${d.detail}, so the payment was not sent.`
     : `Refused without paying: "${tool.slug}" asked for $${d.priceUsd} on the paid request, above the $${Number(d.allowanceUsd.toFixed(6))} this server may sign (AGENT402_MAX_PER_CALL ${MAX_PER_CALL === Infinity ? "off" : `$${MAX_PER_CALL}`}, AGENT402_BUDGET ${BUDGET === Infinity ? "off" : `$${BUDGET}`} with $${spentUsd.toFixed(4)} spent). Nothing was signed.`;
   return { content: [{ type: "text", text }], isError: true };
 }
@@ -940,7 +942,7 @@ server.setRequestHandler(CallToolRequestSchema, withCatalog(async (req, extra) =
           claudeCodeHosted: `claude mcp add --transport http agent402 ${BASE}/mcp`,
           claudeCodeNpm: `claude mcp add agent402 -s user -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}`,
           cursorHosted: { mcpServers: { agent402: { url: `${BASE}/mcp` } } },
-          npm: "npx -y agent402-mcp@0.13.28",
+          npm: "npx -y agent402-mcp@0.13.29",
           maintainer: "Havok Holdings LLC",
         },
         positioning: `Flagship search/answer first, 500+ long-tail tools via catalog.find / catalog.search / catalog.call. Agent402 is the applied layer of Agentic Finance: agents that pay and get paid per request over x402 or MPP (Machine Payments Protocol), both on the same 402 - ${BASE}/agentic-finance, ${BASE}/glossary.`,
@@ -960,7 +962,7 @@ server.setRequestHandler(CallToolRequestSchema, withCatalog(async (req, extra) =
         install: {
           claudeCodeHosted: `claude mcp add --transport http agent402 ${BASE}/mcp`,
           claudeCodeNpm: `claude mcp add agent402 -s user -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}`,
-          npm: "npx -y agent402-mcp@0.13.28",
+          npm: "npx -y agent402-mcp@0.13.29",
           maintainer: "Havok Holdings LLC",
         },
         tools: catalog.size,

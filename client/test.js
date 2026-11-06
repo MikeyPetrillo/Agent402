@@ -558,6 +558,61 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     ok(seen.signed.length === 1 && e?.name === "SpendingLimitError" && e.limit === "dailyLimitUsd" && e.atSigning === true,
       `a second $0.06 signature is refused with $0.04 of the daily cap left (${e?.message})`);
   }
+  // The amount a payload actually signs is read back before it is sent: a
+  // signer that commits to more than the accept it was given asks is refused,
+  // and the seller never sees a signature. Each case records the signed
+  // authorization.value of every payment header that arrives.
+  const { ExactEvmScheme } = await import("@x402/evm/exact/client");
+  const { ExactEvmSchemeV1 } = await import("@x402/evm/exact/v1/client");
+  const rawSeller = (version, accepts) => {
+    const seen = { values: [] };
+    const doc = { x402Version: version, resource: { url: "https://seller.example/v1/chat/completions" }, accepts: accepts.map((a) => ({ scheme: "exact", payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 300, resource: "https://seller.example/v1/chat/completions", extra: { name: "USD Coin", version: "2" }, ...a })) };
+    const answer = () => version === 2
+      ? new Response("{}", { status: 402, headers: { "content-type": "application/json", "payment-required": Buffer.from(JSON.stringify(doc)).toString("base64") } })
+      : new Response(JSON.stringify(doc), { status: 402, headers: { "content-type": "application/json" } });
+    const payInner = async (req) => {
+      const sig = req.headers.get("payment-signature") || req.headers.get("x-payment");
+      if (!sig) return answer();
+      seen.values.push(JSON.parse(Buffer.from(sig, "base64").toString("utf8")).payload?.authorization?.value);
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
+    };
+    return { seen, payInner, preflightFetch: async () => answer() };
+  };
+  const guarded = (s, register) => {
+    const xc = new x402Client();
+    xc.setSpendControls?.(false);
+    register(xc);
+    const c = new Agent402({ baseUrl: "https://seller.example", cache: false, fetch: wrapFetchWithPayment(s.payInner, xc), fetchImpl: s.preflightFetch, x402Client: xc, maxPerCallUsd: 0.1 });
+    c._catalog = new Map([["chat", { method: "POST", path: "/v1/chat/completions", computePayable: false, price: "$0.01" }]]);
+    return c;
+  };
+  {
+    const real = new ExactEvmScheme(account);
+    const over = (xc) => xc.register("eip155:8453", { scheme: "exact", createPaymentPayload: (v, r, ctx) => real.createPaymentPayload(v, { ...r, amount: "5000000" }, ctx) });
+    const s = rawSeller(2, cheap);
+    let e = null; try { await guarded(s, over).call("chat", {}); } catch (err) { e = err; }
+    ok(s.seen.values.length === 0 && e?.name === "SpendingLimitError" && e.atSigning === true && /signed amount \(5000000\)/.test(e.message), `a payload signing $5 for a $0.01 accept is refused before it is sent (${e?.message})`);
+    const honest = rawSeller(2, cheap);
+    await guarded(honest, (xc) => xc.register("eip155:8453", real)).call("chat", {});
+    ok(honest.seen.values.length === 1 && honest.seen.values[0] === "10000", "control: the same guard sends a payload that signs the accept's own amount");
+  }
+  // A v1 signer signs maxAmountRequired, so a v1 accept whose `amount` reads
+  // $0.01 beside a $5 maxAmountRequired is not priced at $0.01. The stock v1
+  // signer takes bare chain names, which the table does not price; this one
+  // names Base by its CAIP-2 id, as a signer mapped to the table would.
+  {
+    const v1 = new ExactEvmSchemeV1(account);
+    const mapped = (xc) => xc.registerV1("eip155:8453", { scheme: "exact", createPaymentPayload: (v, r) => v1.createPaymentPayload(v, { ...r, network: "base" }) });
+    const s = rawSeller(1, [{ network: "eip155:8453", asset: BASE_USDC, amount: "10000", maxAmountRequired: "5000000" }]);
+    let e = null; try { await guarded(s, mapped).call("chat", {}); } catch (err) { e = err; }
+    ok(s.seen.values.length === 0 && e?.name === "SpendingLimitError", `a v1 accept whose two amount fields differ is not signed (${e?.message})`);
+    const honest = rawSeller(1, [{ network: "eip155:8453", asset: BASE_USDC, maxAmountRequired: "10000" }]);
+    await guarded(honest, mapped).call("chat", {});
+    ok(honest.seen.values.length === 1 && honest.seen.values[0] === "10000", "control: a v1 accept priced from maxAmountRequired is signed for that amount");
+    const bare = rawSeller(1, [{ network: "base", asset: BASE_USDC, maxAmountRequired: "10000" }]);
+    let eb = null; try { await guarded(bare, (xc) => registerExactEvmScheme(xc, { signer: account })).call("chat", {}); } catch (err) { eb = err; }
+    ok(bare.seen.values.length === 0 && eb?.name === "SpendingLimitError", `a v1 accept on the bare name "base" is not priced, so not signed (${eb?.message})`);
+  }
 }
 
 // Offline: a paid call never follows a redirect. Two real loopback servers, a

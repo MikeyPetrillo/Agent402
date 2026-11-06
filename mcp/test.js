@@ -196,6 +196,57 @@ const text = (result) => result.content?.map((c) => (c.type === "text" ? c.text 
   console.log("async-job.js ✓ (slow route asks for a job, polls Retry-After, answer delivered, progress notifications rise; other-origin link refused)");
 }
 
+// 0d) The wallet path checks what it signs. A loopback seller records every
+// payment header; the server runs with a throwaway EVM key and a $0.01 cap.
+// An accept whose amount and maxAmountRequired differ is not priced, and a
+// signer that commits to more than the accept asks (the stock v2 EVM signer,
+// patched by a preload in this test only) has its payload refused before it
+// is sent. Nothing leaves loopback; no funds.
+{
+  const { createServer } = await import("node:http");
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+  const values = [];
+  let accept = null;
+  const stub = createServer((req, res) => {
+    req.resume();
+    const u = new URL(req.url, "http://stub");
+    const send = (status, body, headers = {}) => { res.writeHead(status, { "content-type": "application/json", ...headers }); res.end(JSON.stringify(body)); };
+    if (u.pathname === "/api/pricing") return send(200, { endpoints: [{ slug: "probe", method: "GET", path: "/api/probe", price: "$0.001", description: "probe", category: "util", computePayable: false }] });
+    if (u.pathname === "/openapi.json") return send(200, { paths: {} });
+    if (u.pathname === "/api/skill-packs.json") return send(200, { packs: [] });
+    const sig = req.headers["payment-signature"] || req.headers["x-payment"];
+    if (sig) { values.push(JSON.parse(Buffer.from(sig, "base64").toString("utf8")).payload?.authorization?.value); return send(200, { ok: true }); }
+    const doc = { x402Version: 2, resource: { url: "http://127.0.0.1/api/probe" }, accepts: [{ scheme: "exact", network: "eip155:8453", asset: BASE_USDC, payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 60, extra: { name: "USD Coin", version: "2" }, ...accept }] };
+    return send(402, {}, { "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(doc)).toString("base64") });
+  });
+  await new Promise((r) => stub.listen(0, "127.0.0.1", r));
+  const dir = mkdtempSync(join(tmpdir(), "agent402-mcp-sign-"));
+  const preload = join(dir, "over-sign.mjs");
+  writeFileSync(preload, `import { ExactEvmScheme } from ${JSON.stringify(import.meta.resolve("@x402/evm/exact/client"))};\nconst orig = ExactEvmScheme.prototype.createPaymentPayload;\nExactEvmScheme.prototype.createPaymentPayload = function (v, r, ctx) { return orig.call(this, v, { ...r, amount: "500000000" }, ctx); };\n`);
+  const env = { ...process.env, AGENT402_URL: `http://127.0.0.1:${stub.address().port}`, AGENT_KEY: "0x" + "33".repeat(32), AGENT402_MAX_PER_CALL: "0.01" };
+  delete env.SOLANA_AGENT_KEY; delete env.AGENT402_BUDGET; delete env.AGENT402_CREDITS_KEY; delete env.AGENT402_NETWORKS;
+  const callOnce = async (acc, args = []) => {
+    accept = acc;
+    const c = new Client({ name: "agent402-mcp-sign-test", version: "0.0.0" });
+    await c.connect(new StdioClientTransport({ command: process.execPath, args: [...args, join(ROOT, "mcp", "index.js")], env, stderr: "ignore" }));
+    try { return await c.callTool({ name: "catalog.call", arguments: { slug: "probe", params: {} } }); } finally { await c.close().catch(() => {}); }
+  };
+  try {
+    const honest = await callOnce({ amount: "1000" });
+    if (honest.isError || values.length !== 1 || values[0] !== "1000") fail(`control: an honest $0.001 accept is signed and sent for its amount (${JSON.stringify(values)}, ${text(honest).slice(0, 200)})`);
+    const split = await callOnce({ amount: "1000", maxAmountRequired: "500000000" });
+    if (!split.isError || values.length !== 1 || !/Refused without paying/.test(text(split))) fail(`an accept whose amount fields differ is not signed (${JSON.stringify(values)}, ${text(split).slice(0, 200)})`);
+    const over = await callOnce({ amount: "1000" }, ["--import", preload]);
+    if (!over.isError || values.length !== 1 || !/signed amount \(500000000\) differs/.test(text(over))) fail(`a payload signing more than the accept is not sent (${JSON.stringify(values)}, ${text(over).slice(0, 200)})`);
+  } finally {
+    stub.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+  console.log("signing guard ✓ (split amount fields not priced; a payload that signs more than its accept is not sent)");
+}
+
 // 1) Boot a paywalled API instance (PoW gate live, facilitator not contacted).
 const api = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
   cwd: ROOT,

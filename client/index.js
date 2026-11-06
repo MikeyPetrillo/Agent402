@@ -32,7 +32,7 @@ export { AsyncJobPendingError } from "./async-job.js";
 // `User-Agent: agent402-client/<version>` - a standard header, no extra
 // network calls - so a seller can attribute traffic (and settled payments)
 // to this SDK. Product token only; nothing about the caller rides along.
-const VERSION = "0.8.22";
+const VERSION = "0.8.23";
 const USER_AGENT = `agent402-client/${VERSION}`;
 // A package built on this SDK (an adapter) names itself first: its own
 // product token, then this one. Anything that is not one well-formed token
@@ -612,6 +612,8 @@ export class Agent402 {
             const d = ctx.refusal;
             throw new SpendingLimitError(d.reason === "unknown-asset"
               ? `refusing to pay for "${slug}" - no payment option it asked to sign is in a known asset, so none can be priced`
+              : d.reason === "signed-amount"
+              ? `refusing to pay for "${slug}" - ${d.detail}, so the payment was not sent`
               : `refusing to pay $${d.priceUsd} for "${slug}" - the payment it asked to sign is over ${d.limit || "the cap"} ($${d.allowanceUsd} left to sign)`,
             { limit: d.limit || "signing", slug, priceUsd: d.priceUsd, cap: d.allowanceUsd, atSigning: true, cause: e });
           }
@@ -703,7 +705,7 @@ export class Agent402 {
     // The amount the accept asks for, priced from the known-asset table
     // (gatewayAcceptOf keeps only an accept that table can price); the
     // catalog's figure never lowers what the caps are checked against.
-    const usd = Math.max(listUsd, acceptUsd(accept));
+    const usd = Math.max(listUsd, acceptUsd(accept, 2));
     const reservation = this._spendReserve(host, usd, slug, listUsd);
     let header;
     try {
@@ -1035,7 +1037,7 @@ export function gatewayAcceptOf(accepts, networks = null) {
     && EVM_ADDR.test(String(a.payTo || "")) && EVM_ADDR.test(String(a.extra.verifyingContract || ""))
     && typeof a.extra.version === "string" && /^[0-9]{1,4}$/.test(a.extra.version)
     && /^[0-9]{1,78}$/.test(String(a.amount ?? "")) && Number(a.maxTimeoutSeconds) > 0 && Number(a.maxTimeoutSeconds) <= GATEWAY_MAX_TIMEOUT_SECONDS
-    && acceptUsd(a) != null) || null;
+    && acceptUsd(a, 2) != null) || null;
 }
 
 /**

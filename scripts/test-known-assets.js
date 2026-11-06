@@ -64,6 +64,96 @@ ok(acceptUsd({ network: "eip155:8453", asset: BASE, amount: "1500000", extra: { 
 ok(acceptUsd({ network: "eip155:8453", asset: "0x000000000000000000000000000000000000bEEF", amount: "1" }) === null, "an unknown asset cannot be priced");
 ok(knownAsset("eip155:8453", BASE.toLowerCase()) && !knownAsset("stellar:pubnet", KNOWN_ASSETS["stellar:pubnet"][0].asset.toLowerCase()), "EVM addresses match without case; Stellar ones exactly");
 
+// Pricing by version: a v1 signer signs maxAmountRequired and a v2 signer
+// signs amount, so the price is read from the field the challenge's version
+// signs, and an accept that carries both at different values is not priced.
+{
+  const { acceptAmount, quoteOf } = await import(join(ROOT, "client/known-assets.js"));
+  const split = { network: "eip155:8453", asset: BASE, amount: "1000", maxAmountRequired: "500000000" };
+  ok(acceptUsd(split, 1) === null && acceptUsd(split, 2) === null && acceptUsd(split) === null, "an accept whose amount and maxAmountRequired differ is not priced under v1, v2 or no version");
+  ok(acceptUsd({ network: "eip155:8453", asset: BASE, maxAmountRequired: "1000" }, 1) === 0.001 && acceptUsd({ network: "eip155:8453", asset: BASE, amount: "1000" }, 2) === 0.001, "v1 prices maxAmountRequired and v2 prices amount");
+  ok(acceptUsd({ network: "eip155:8453", asset: BASE, amount: "1000" }, 1) === null && acceptUsd({ network: "eip155:8453", asset: BASE, maxAmountRequired: "1000" }, 2) === null, "the field the version does not sign is never the price");
+  ok(acceptUsd({ network: "eip155:8453", asset: BASE, amount: "1000", maxAmountRequired: "1000" }, 1) === 0.001 && acceptUsd({ network: "eip155:8453", asset: BASE, amount: "1000" }, 3) === null, "agreeing fields price; an unknown version does not");
+  ok(acceptAmount(split, 2) === null && acceptAmount({ amount: "1000" }, 2) === "1000", "acceptAmount reads the signed field as digits");
+  ok(quoteOf([split], 2).unknown === 1 && quoteOf([split], 2).max === null, "quoteOf counts a split accept as unpriced");
+  // The table is keyed by CAIP-2 only: a bare v1 network name is not priced
+  // unless the table deliberately lists it.
+  for (const name of ["base", "base-sepolia", "polygon", "solana", "avalanche"]) {
+    ok(!Object.prototype.hasOwnProperty.call(KNOWN_ASSETS, name), `the bare v1 name "${name}" is not a table key`);
+  }
+  ok(acceptUsd({ network: "base", asset: BASE, maxAmountRequired: "1000" }, 1) === null, "a v1 accept on the bare name \"base\" is not priced");
+}
+
+// The signed amount is checked after the payload is built and before it is
+// sent: a signer that commits to more than the priced amount is refused, and
+// the payment-aware fetch never sends it.
+{
+  const { signedAmountOf, signedPaymentProblem, guardSigning } = await import(join(ROOT, "client/known-assets.js"));
+  const req = { scheme: "exact", network: "eip155:8453", asset: BASE, payTo: "0x000000000000000000000000000000000000dEaD", amount: "1000", maxTimeoutSeconds: 60, extra: { name: "USD Coin", version: "2" } };
+  ok((await signedAmountOf({ payload: { authorization: { value: "1000" } } }, "eip155:8453")).amount === "1000", "an EIP-3009 authorization.value is read");
+  ok((await signedAmountOf({ payload: { permit2Authorization: { permitted: { amount: "1000" } } } }, "eip155:8453")).amount === "1000", "a Permit2 permitted.amount is read");
+  ok(await signedAmountOf({ payload: {} }, "eip155:8453") === null && await signedAmountOf({ payload: { authorization: { value: "1" }, permit2Authorization: { permitted: { amount: "1" } } } }, "eip155:8453") === null, "an EVM payload with no amount, or two, is unreadable");
+  ok(await signedPaymentProblem({ payload: { authorization: { value: "1000" } } }, req, 2, 0.01) === null, "a payload that signs the priced amount passes");
+  ok(/differs/.test(await signedPaymentProblem({ payload: { authorization: { value: "500000000" } } }, req, 2, 1e9)), "a payload that signs another amount is refused whatever the cap");
+  ok(/above/.test(await signedPaymentProblem({ payload: { authorization: { value: "1000" } } }, req, 2, 0.0001)), "a payload over the cap is refused");
+  ok(/cannot be read/.test(await signedPaymentProblem({ payload: { authorization: { value: "1000" } } }, { ...req, maxAmountRequired: "500000000" }, 2, 1)), "a split accept is refused after signing too");
+
+  // End to end on a real x402Client and the stock v2 EVM signer, wrapped to
+  // sign more than the accept asks; every send is counted.
+  const { x402Client } = await import("@x402/core/client");
+  const { wrapFetchWithPayment } = await import("@x402/fetch");
+  const { ExactEvmScheme } = await import("@x402/evm/exact/client");
+  const { privateKeyToAccount, generatePrivateKey } = await import("viem/accounts");
+  const offer = Buffer.from(JSON.stringify({ x402Version: 2, resource: { url: "http://127.0.0.1/x" }, accepts: [req] })).toString("base64");
+  const run = async (signAmount) => {
+    let sent = 0;
+    const fake = async (input, init) => {
+      const h = new Headers(init?.headers || (input instanceof Request ? input.headers : undefined));
+      if (h.get("payment-signature") || h.get("x-payment")) { sent++; return new Response("{}", { status: 200 }); }
+      return new Response("{}", { status: 402, headers: { "PAYMENT-REQUIRED": offer } });
+    };
+    const xc = new x402Client();
+    xc.setSpendControls(false);
+    const refusals = [];
+    guardSigning(xc, { allowance: () => 0.01, onRefuse: (d) => refusals.push(d) });
+    const real = new ExactEvmScheme(privateKeyToAccount(generatePrivateKey()));
+    xc.register("eip155:8453", { scheme: "exact", createPaymentPayload: (v, r, ctx) => real.createPaymentPayload(v, { ...r, amount: signAmount }, ctx) });
+    let err = null; try { await wrapFetchWithPayment(fake, xc)("http://127.0.0.1/x"); } catch (e) { err = String(e.message); }
+    return { sent, err, refusals };
+  };
+  const lying = await run("500000000");
+  ok(lying.sent === 0 && /signed amount/.test(lying.err || "") && lying.refusals.some((d) => d.reason === "signed-amount"), `a signer that signs over the priced amount is refused before sending (sent ${lying.sent}, ${lying.err})`);
+  const honest = await run("1000");
+  ok(honest.sent === 1 && honest.err === null, "the same client sends a payload that signs the priced amount");
+
+  // Solana: a real v2 "exact" payload (legacy-v0 and v1 transactions) built by
+  // @x402/svm against a loopback RPC stub, decoded back to its transfer.
+  const http = await import("node:http");
+  const { ExactSvmScheme } = await import("@x402/svm/exact/client");
+  const { generateKeyPairSigner } = await import("@solana/kit");
+  const SOL = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", MINT = KNOWN_ASSETS[SOL][0].asset;
+  const mint = Buffer.alloc(82); mint[44] = 6; mint[45] = 1; // decimals 6, initialized
+  const rpc = http.createServer((q, res) => { let b = ""; q.on("data", (c) => (b += c)); q.on("end", () => {
+    const { id, method } = JSON.parse(b);
+    const result = method === "getAccountInfo"
+      ? { context: { slot: 1 }, value: { data: [mint.toString("base64"), "base64"], executable: false, lamports: 1, owner: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", rentEpoch: 0, space: 82 } }
+      : { context: { slot: 1 }, value: { blockhash: "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi", lastValidBlockHeight: 100 } };
+    res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ jsonrpc: "2.0", id, result }));
+  }); });
+  await new Promise((r) => rpc.listen(0, "127.0.0.1", r));
+  try {
+    const scheme = new ExactSvmScheme(await generateKeyPairSigner(), { rpcUrl: `http://127.0.0.1:${rpc.address().port}` });
+    const sreq = { scheme: "exact", network: SOL, asset: MINT, payTo: (await generateKeyPairSigner()).address, amount: "1000", maxTimeoutSeconds: 60, extra: { feePayer: (await generateKeyPairSigner()).address } };
+    for (const tv of [0, 1]) {
+      const p = await scheme.createPaymentPayload(2, { ...sreq, extra: { ...sreq.extra, transactionVersions: [tv] } });
+      const got = await signedAmountOf(p, SOL);
+      ok(got && got.amount === "1000" && got.decimals === 6, `a Solana v${tv} transaction's TransferChecked amount is read (${JSON.stringify(got)})`);
+      ok(await signedPaymentProblem(p, sreq, 2, 0.01) === null && /differs/.test(await signedPaymentProblem(p, { ...sreq, amount: "999" }, 2, 0.01)), `a Solana v${tv} payload passes at its own amount and is refused against another`);
+    }
+    ok(await signedAmountOf({ payload: { transaction: "AAAA" } }, SOL) === null, "an undecodable Solana transaction is unreadable (refused)");
+  } finally { rpc.close(); }
+}
+
 // A table change ships only with a version bump: scripts/known-assets-pins.json
 // holds the table's sha256 at the package version it was pinned at (no
 // network: the published tarball is not read). A table that differs from its
