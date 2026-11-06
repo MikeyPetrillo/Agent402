@@ -154,8 +154,8 @@ export const MAX_CHARGE_BACKOFF_MS = 24 * 60 * 60_000;
 // A TRANSIENT charge failure retries in minutes, not an hour. Measured
 // 2026-09-02 (tempo-subscription-canary run 33657453172): the renewal's
 // transferWithMemo reached rpc.tempo.xyz's eth_estimateGas with its
-// `validBefore` two seconds in the past - viem's Tempo chain config stamps
-// validBefore = now + 25 s on every request, and that minute our own
+// `validBefore` two seconds in the past - viem's Tempo chain config then
+// stamped validBefore = now + 25 s on every request, and that minute our own
 // tempo-volume run had the RPC answering in 7-20 s. The transfer never
 // existed on chain, nobody was charged, and the next attempt an hour later
 // would have succeeded - but an hour of past_due for a slow RPC is the wrong
@@ -183,7 +183,7 @@ export function isTransientChargeError(err) {
 // (canary run 33659899394): "TimeoutError ... eth_sendRawTransactionSync" -
 // the chain showed it never landed that time, but nothing in the path could
 // know that, and mppx renews with Tempo's EXPIRING nonce (validBefore = now +
-// 25 s), so a retry is a NEW transaction that would land beside an earlier one
+// the renewal window below), so a retry is a NEW transaction that would land beside an earlier one
 // that did. Such a failure is remembered as `unconfirmedCharge` and the next
 // pull first asks the CHAIN whether that period already settled
 // (findRenewalOnChain) - exact, because every mppx renewal carries a memo
@@ -206,20 +206,33 @@ export function isSendPhaseAmbiguity(err) {
 /** How far back the chain is read for an unconfirmed renewal, before the attempt time. A sent transaction can only land before its validBefore, which lies AFTER the attempt; the forward bound is `settleableUntil` below. */
 export const UNCONFIRMED_LOOKBACK_MS = 60_000;
 
-// VALIDITY WINDOW OF A SERVER-SIGNED RENEWAL. viem's Tempo chain config stamps
-// an expiring-nonce transaction with validBefore = now + 25 s (the protocol's
-// old 30 s cap). Tempo's T11 upgrade (mainnet 2026-09-10, TIP-1093) raised the
-// expiring-nonce window to 5 minutes, and a renewal that met a slow RPC on
-// 2026-09-02 expired between signing and eth_estimateGas. mppx 0.11 exposes no
-// validBefore parameter on renewSubscription: it prepares the transfer through
-// `prepareTransactionRequest(client, {..., nonceKey: "expiring"})` on the
-// client we hand it, and viem's chain hook only stamps validBefore when the
-// request carries none. So renewals get their OWN client whose chain hook sets
-// validBefore first (`withRenewalValidity`). Activation and every buyer-side
-// charge credential are untouched: they never see this client.
+// VALIDITY WINDOW OF A SERVER-SIGNED TRANSACTION. Both subscription sends
+// (activation and renewal) are mppx `prepareTransactionRequest(client, {...,
+// nonceKey: "expiring"})` calls with no validBefore, so the window is whatever
+// the client's chain hook stamps. viem's stock Tempo chain stamps its own
+// default and has changed it (25 s through 2.57.13, 270 s from 2.57.16), and
+// the protocol rejects anything past now + 300 s (Tempo T11, TIP-1093; viem
+// `Transaction.expiringNonceMaxExpiry`). An expiring-nonce transaction has no
+// sequence number, so a retry is a NEW transaction and an earlier one stays
+// includable until its validBefore. Neither window may follow viem's default:
+// each client's chain hook stamps validBefore first (`withRenewalValidity`).
+// - Renewal: 120 s by default. A renewal that met a slow RPC on 2026-09-02
+//   expired between signing and eth_estimateGas at 25 s, and a timed-out
+//   renewal is reconciled against the chain until `settleableUntil` (built
+//   from this same window), so a longer window only lengthens that wait.
+// - Activation: 25 s, which must stay under the RPC timeout. A failed
+//   activation answers "Nothing was charged; request a fresh challenge", and
+//   nothing reconciles it, so a send that timed out must already be unable to
+//   land when the error surfaces. validBefore is fixed before the send, and
+//   the sync send is cut off TEMPO_RPC_TIMEOUT_MS (30 s) after it started.
+//   On viem's 270 s default a timed-out activation could land minutes after
+//   that answer, beside the buyer's retry.
+// Buyer-side charge credentials are untouched: mppx's charge client names
+// its own validBefore (25 s) and never sees these clients.
+export const ACTIVATION_VALID_FOR_S = 25;      // under TEMPO_RPC_TIMEOUT_MS; 10 s above the sponsor's 15 s minimum remaining validity
 export const RENEWAL_VALID_FOR_DEFAULT_S = 120;
-export const RENEWAL_VALID_FOR_MAX_S = 240;   // under the 5-minute protocol cap, with margin for clock skew
-export const RENEWAL_VALID_FOR_MIN_S = 25;    // viem's own default; never shorter
+export const RENEWAL_VALID_FOR_MAX_S = 240;   // under the protocol's 300 s cap, with 60 s for clock skew
+export const RENEWAL_VALID_FOR_MIN_S = ACTIVATION_VALID_FOR_S; // never shorter than the window a slow RPC already beat
 /** TEMPO_SUBSCRIPTION_VALID_FOR_S, clamped to [25, 240]; unset or malformed -> 120. */
 export function renewalValidForSeconds(raw = process.env.TEMPO_SUBSCRIPTION_VALID_FOR_S) {
   const txt = String(raw ?? "").trim();
@@ -232,9 +245,9 @@ const MAX_UINT256 = 2n ** 256n - 1n;
 /**
  * A copy of a viem chain whose prepareTransactionRequest hook stamps an
  * expiring-nonce request with validBefore = now + `seconds` before viem's own
- * hook runs (viem then keeps it: it only fills an undefined validBefore). A
- * request that already names validBefore, or does not use the expiring nonce,
- * passes through untouched.
+ * hook runs, so viem's default window never applies (viem then keeps it: it
+ * only fills an undefined validBefore). A request that already names
+ * validBefore, or does not use the expiring nonce, passes through untouched.
  */
 export function withRenewalValidity(chain, seconds, nowMs = () => Date.now()) {
   const hook = chain?.prepareTransactionRequest;
@@ -862,8 +875,9 @@ export function createMppSubscriptions({
     const { tempo: tempoChain } = await import("viem/tempo/chains");
     // Always OUR client, never mppx's default: the default is viem's 10 s
     // request timeout, and a sync send that waits for inclusion outlived it on
-    // a slow day (canary run 33659899394).
-    _client = createClient({ chain: tempoChain, transport: http(process.env.TEMPO_RPC_URL || "https://rpc.tempo.xyz", { timeout: TEMPO_RPC_TIMEOUT_MS }) });
+    // a slow day (canary run 33659899394). Its chain stamps the activation
+    // window, never viem's default (see ACTIVATION_VALID_FOR_S).
+    _client = createClient({ chain: withRenewalValidity(tempoChain, ACTIVATION_VALID_FOR_S), transport: http(process.env.TEMPO_RPC_URL || "https://rpc.tempo.xyz", { timeout: TEMPO_RPC_TIMEOUT_MS }) });
     return _client;
   }
   const clientOverride = () => ({ getClient: () => tempoClient() });
@@ -1716,7 +1730,7 @@ export function createMppSubscriptions({
     ready: () => ready, flush: () => kv.flush(),
     _store: kv, _subStore: subStore, _method: method,
     _feePayer: feePayer, _feePayerPolicy: feePayer ? subscriptionFeePayerPolicy() : null,
-    _client: tempoClient, _renewalClient: tempoRenewalClient, _renewalValidForS: renewalValidForS,
+    _client: tempoClient, _renewalClient: tempoRenewalClient, _renewalValidForS: renewalValidForS, _activationValidForS: ACTIVATION_VALID_FOR_S,
     _currentPeriodIndex: currentPeriodIndex, _paidThroughAt: paidThroughAt, _readRec: readRec, _writeRec: writeRec,
   };
 }
