@@ -31,3 +31,22 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   model prose passes it through `sanitizeReportProse` (`src/report-grounding.js`: a link stays a
   link only to a listed source's host; images and raw HTML are removed) and wraps fetched text in
   `quotedMaterial`; `scripts/test-report-prose-filter.js` runs each kit.
+- **Direct upstream (off by default):** `src/gateway-direct-upstream.js`. With `DIRECT_UPSTREAM_URL`
+  (https; plain http only to loopback), `DIRECT_UPSTREAM_KEY` and `DIRECT_UPSTREAM_MODELS`
+  (`<openrouter id>=<upstream id>,...`) all set, the chat wire (`llm-gateway-kit.js` makeHandler,
+  plain and streamed; Messages and Responses stay on OpenRouter) adds one attempt before the first
+  OpenRouter attempt of each listed model. `DIRECT_UPSTREAM_SHARE` (0-100, default 100; invalid
+  reads 0) is the A/B draw per attempt; `DIRECT_UPSTREAM_TIMEOUT_MS` (default 45000, capped by the
+  payment window) bounds it, and a timeout counts in `LLM_MAX_TIMED_OUT_ATTEMPTS`. Only text
+  messages (system/user/assistant) and `DIRECT_ALLOWED_PARAMS` go there; tools, images,
+  response_format, logprobs, reasoning, service_tier, plugins or any other field keep the call on
+  OpenRouter. Every body carries `provider: { zdr: true }` and the clamped `max_tokens`. Any failure
+  (connect, timeout, 402, 429 without retry, 503, 5xx, other 4xx, an error object in a 200 body
+  after leading whitespace, a non-JSON or messageless body, a missing cost) is a walkable 502/503/504
+  and the same model goes to OpenRouter. The answer's cost (an `x_*` object's integer
+  `charged_micro`, else an `x-*-charged-micro` header, else `usage.cost`) becomes `usage.cost`, so the
+  shared path strips and meters it once; `x_*` fields are removed from bodies and stream frames, and
+  the upstream's model id is relabeled to the buyer's. A/B counts and p50/p90 latency per upstream:
+  `/__operator/direct-upstream.json`; PostHog `gateway_usage.upstream`. While configured, /privacy
+  adds a sentence and prints the later of its date and `DIRECT_UPSTREAM_SINCE` (once reached).
+  Suite: `scripts/test-direct-upstream.js`.
