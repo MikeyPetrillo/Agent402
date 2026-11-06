@@ -103,7 +103,7 @@ const port = await new Promise((resolve, reject) => {
   proc.on("exit", (c) => { clearInterval(tick); clearTimeout(t); reject(new Error(`server exited ${c}: ${out.slice(-800)}`)); });
 });
 const local = `http://127.0.0.1:${port}`;
-const toLocal = (u) => (u.startsWith(ORIGIN) ? local + u.slice(ORIGIN.length) : null);
+const toLocal = (u) => { let x; try { x = new URL(u); } catch { return null; } return x.origin === ORIGIN ? local + x.pathname + x.search : null; };
 async function send(call) {
   const url = toLocal(call.url);
   if (!url) return { status: -1 };

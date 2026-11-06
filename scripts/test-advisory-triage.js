@@ -80,7 +80,7 @@ async function script(sc, extra = {}) {
   scenario = sc;
   const bodyFile = path.join(dir, "body.md");
   await rm(bodyFile, { force: true });
-  const r = await run(process.execPath, [SCRIPT], baseEnv({ ADVISORY_BODY_FILE: bodyFile, ...extra }));
+  const r = await run("node", [SCRIPT], baseEnv({ ADVISORY_BODY_FILE: bodyFile, ...extra }));
   r.body = await readFile(bodyFile, "utf8").catch(() => "");
   return r;
 }
