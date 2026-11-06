@@ -183,12 +183,18 @@ let html = "";
 try { html = String(await ledgerLeaderboardPage({ snapshot: { rows: [], totalSellers: 0, asOf: new Date(clock).toISOString(), windowLabel: "7d" } }) || ""); } catch { html = ""; }
 ok(html.length > 1000 && /every 4 hours/.test(html) && /EVERY 4H/.test(html) && !/\$\{/.test(html), "the rendered leaderboard page says every 4 hours with no unrendered template text");
 
-// The status Worker pages on the word: stale pages, fresh and due clear, cold and absent do neither.
+// The status Worker pages on the word too: stale pages, fresh and due clear, cold and absent do neither.
 {
   const { ALARMS, judge } = await import("../workers/status-probe/src/index.js");
   const TITLE = "Live revenue read is stale";
   const j = (gw) => judge({ gateway: gw })[TITLE];
   ok(ALARMS.some((a) => a.title === TITLE) && j({ revenueLive: { status: "stale" } }) === "bad" && j({ revenueLive: { status: "fresh" } }) === "good" && j({ revenueLive: { status: "due" } }) === "good" && j({ revenueLive: { status: "cold" } }) === "quiet" && j({}) === "quiet", "status Worker: stale pages, fresh and due clear, cold and absent do neither");
+}
+// The heartbeat pages on the word: stale opens one issue, fresh and due close it.
+{
+  const hb = readFileSync(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8");
+  const step = hb.slice(hb.indexOf("- name: Live revenue read check"), hb.indexOf("# Refunds owed (src/refund-ledger.js)"));
+  ok(/jq -r '\.revenueLive\.status \/\/ "unknown"'/.test(step) && /\n\s+stale\)\n\s+if \[ -z "\$OPEN" \]; then\n\s+gh issue create/.test(step) && /fresh\|due\)\n\s+if \[ -n "\$OPEN" \]; then\n\s+gh issue close/.test(step) && !/\$\{\{/.test(step), "heartbeat: stale opens the issue, fresh and due close it, nothing interpolated into the shell");
 }
 
 console.log(`\ntest-revenue-shared-scan: ${pass} passed, ${fail} failed`);

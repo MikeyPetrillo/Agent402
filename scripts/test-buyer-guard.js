@@ -106,7 +106,8 @@ ok(checkAccept(2, sol(), { maxUsd: 0.01, networks: [SOL] }).ok && !checkAccept(2
 ok(!checkAccept(2, sol({ extra: { assetTransferMethod: "eip3009" } }), { maxUsd: 0.01, networks: [SOL] }).ok, "a transfer method named on a non-EVM accept is refused");
 ok(!checkAccept(2, v2({ scheme: "upto" }), opts).ok && checkAccept(2, v2({ scheme: "upto" }), { ...opts, schemes: ["upto"] }).ok, "upto is refused unless the caller allows it");
 ok(!checkAccept(2, v2({ scheme: "upto", extra: { assetTransferMethod: "eip3009" } }), { ...opts, schemes: ["upto"] }).ok && checkAccept(2, v2({ scheme: "upto", extra: { assetTransferMethod: "permit2" } }), { ...opts, schemes: ["upto"] }).ok, "an upto accept signs only through Permit2");
-const INK = "eip155:57073", INK_USDC = "0x2D270e6886d130D724215A266106e6832161EAEd";
+// A chain and asset the shared table does not list (every live rail is in it).
+const INK = "eip155:999001", INK_USDC = "0x00000000000000000000000000000000000A5E71";
 ok(!checkAccept(2, v2({ network: INK, asset: INK_USDC }), { maxUsd: 0.05, networks: [INK] }).ok && checkAccept(2, v2({ network: INK, asset: INK_USDC.toLowerCase() }), { maxUsd: 0.05, networks: [INK], extraAssets: { [INK]: [{ asset: INK_USDC, decimals: 6 }] } }).ok, "an asset the caller names in code prices; a seller cannot add one");
 let legCap = 0.0005;
 ok(!checkAccept(2, v2(), { maxUsd: () => legCap, networks: ["eip155:8453"] }).ok && ((legCap = 0.002), checkAccept(2, v2(), { maxUsd: () => legCap, networks: ["eip155:8453"] }).ok), "a per-purchase cap is read at each check");

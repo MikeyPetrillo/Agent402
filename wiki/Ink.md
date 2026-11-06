@@ -14,7 +14,7 @@ chain's sellers and the service's own wallet on it.
 | Chain id | 57073 (CAIP-2 `eip155:57073`) |
 | RPC | `https://rpc-gel.inkonchain.com` (also `https://rpc-qnd.inkonchain.com`) |
 | Explorer | `explorer.inkonchain.com` |
-| Stablecoin | USDC (native) - `0x2D270e6886d130D724215A266106e6832161EAEd`, 6 decimals |
+| Stablecoin | USDC (native, 6 decimals) - `0x2D270e6886d130D724215A266106e6832161EAEd` |
 | EIP-712 domain | name `"USDC"`, version `"2"` |
 | Gas | paid in ETH by the facilitator; the buyer needs only USDC |
 
