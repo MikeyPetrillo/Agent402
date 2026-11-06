@@ -48,6 +48,7 @@ const CHAINS = [
   { key: "sei",       caip2: "eip155:1329" },
   { key: "optimism",  caip2: "eip155:10" },
   { key: "arc",       caip2: "eip155:5042" },
+  { key: "ink",       caip2: "eip155:57073" }, // skipped while not in the live accepts (gated)
   { key: "robinhood", caip2: "eip155:4663" },
 ];
 const TICKERS = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "JPM"];

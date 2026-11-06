@@ -12,7 +12,7 @@
 // compact roster, per-seller activity switching via ?seller=.
 import { fitTitle, META_TITLE_MAX } from "./seo-meta.js";
 import { ledgerShell, ledgerFooterCompact, decideLive, esc, safeHref, breadcrumbNavFromLd } from "./ledger-chrome.js";
-import { x402RailsFor } from "./rails.js";
+import { x402RailsFor, RAILS } from "./rails.js";
 import { onGatedRailOffered } from "./gated-rails.js";
 import { CATEGORIES } from "./pages.js";
 import { chainMark, CHAIN_ORDER } from "./chain-logos.js";
@@ -321,13 +321,41 @@ export const CHAIN_PAGES = {
 // nav, sitemap or /<chain> route names them, until src/payments.js reports the
 // rail in the live offer; then the entry joins CHAIN_PAGES and every surface
 // that iterates it at request time (nav, sitemap, the /<chain> page) picks it
-// up. Empty while no rail is gated (Arc graduated into CHAIN_PAGES).
-export const GATED_CHAIN_PAGES = {};
-onGatedRailOffered((caip2) => {
+// up. A gated rail that moves into RAILS (src/rails.js) has its page from boot,
+// so graduating needs no edit here. Arc graduated into CHAIN_PAGES.
+export const GATED_CHAIN_PAGES = {
+  ink: {
+    chainName: "Ink",
+    // Ink's gas is paid in ETH.
+    ticker: "ETH",
+    tickerLabel: "INK · MAINNET",
+    caip2: "eip155:57073",
+    asset: "USDC",
+    settledBy: "an x402 facilitator",
+    explorerUrl: "explorer.inkonchain.com",
+    explorerWalletUrl: (wallet) => `https://explorer.inkonchain.com/address/${wallet}?tab=token_transfers`,
+    networkParam: "ink",
+    acceptNetwork: "eip155:57073",
+    // Ink mainnet CAIP-2 is "eip155:57073"; its testnet is a different chain
+    // id, so an exact match can't be fooled.
+    isNetwork: (n) => n === "eip155:57073",
+    honestyNetworkPhrase: "the Ink network",
+    sellExtraHtml: `Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme (native USDC, EIP-712 domain <code>"USDC"</code>, version <code>"2"</code>), or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site.`,
+  },
+};
+// The joined page takes its place in RAILS order (the nav, the sitemap and
+// llms.txt iterate CHAIN_PAGES), the order a graduated rail is listed in.
+const joinGatedChainPage = (caip2) => {
   for (const [key, cfg] of Object.entries(GATED_CHAIN_PAGES)) {
-    if (cfg.caip2 === caip2 && !CHAIN_PAGES[key]) CHAIN_PAGES[key] = cfg;
+    if (cfg.caip2 !== caip2 || CHAIN_PAGES[key]) continue;
+    const order = (k) => { const i = RAILS.findIndex((r) => r.caip2 === (k === key ? cfg : CHAIN_PAGES[k]).caip2); return i < 0 ? RAILS.length : i; };
+    const entries = [...Object.entries(CHAIN_PAGES), [key, cfg]].sort(([a], [b]) => order(a) - order(b));
+    for (const k of Object.keys(CHAIN_PAGES)) delete CHAIN_PAGES[k];
+    for (const [k, v] of entries) CHAIN_PAGES[k] = v;
   }
-});
+};
+for (const r of RAILS) joinGatedChainPage(r.caip2);
+onGatedRailOffered(joinGatedChainPage);
 
 // The x402 seller leaderboard (src/leaderboard.js) reads Base USDC only. A
 // seller's payTo on another EVM chain is usually the same address, so joining

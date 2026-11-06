@@ -431,8 +431,11 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
   }
 
   /** The latest settlement-signer gas readings, replacing the previous set. */
-  function noteRelayerGas(readings = []) {
-    relayerGas = (Array.isArray(readings) ? readings : []).slice(0, 50).map((r) => ({
+  // `network` given: only that network's rows are replaced, so one gas
+  // check per listed-facilitator rail keeps the other's readings.
+  function noteRelayerGas(readings = [], { network = null } = {}) {
+    const keep = network ? relayerGas.filter((r) => r.network !== String(network)) : [];
+    relayerGas = [...keep, ...(Array.isArray(readings) ? readings : []).slice(0, 50).map((r) => ({
       network: String(r?.network || "").slice(0, 64),
       facilitator: String(r?.facilitator || "unknown").slice(0, 120),
       signer: r?.signer ? String(r.signer).slice(0, 64) : null,
@@ -444,7 +447,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       ...(r?.reason ? { reason: String(r.reason).slice(0, 40) } : {}),
       ...(["gasUsd", "floorUsd", "sharePct", "ethUsd"].reduce((o, k) => (Number.isFinite(r?.[k]) ? { ...o, [k]: r[k] } : o), {})),
       at: Number(r?.at) || now(),
-    }));
+    }))].slice(-100);
   }
 
   function noteFacilitatorRefusal({ network, facilitator, reason, at = now() } = {}) {

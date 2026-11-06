@@ -1,4 +1,4 @@
-import { RAILS_AMP, RAILS_OS } from "./rails.js";
+import { RAILS_AMP, RAILS_OS, RAILS, railKey } from "./rails.js";
 import { metaTitle, metaDescription } from "./seo-meta.js";
 import { ogSectionFor } from "./og-cards.js";
 import { REPO_URL } from "./repo-link.js";
@@ -660,24 +660,10 @@ const NAV_ZONES = [
 // Fallback by-chain rows used whenever no live index-snapshot data is wired
 // (offline unit tests, early boot, a throwing/null provider) - the dropdown
 // and footer still get real, crawlable links, just without seller counts.
-// Every rail has a live market page (/base, /solana, /polygon, /arbitrum, /monad,
-// /celo, /avalanche, /sei, /optimism, /arc, /stellar, /algorand, /robinhood) - this
-// fallback must list every one, not just the two that got dedicated routes first.
-const STATIC_CHAINS = [
-  { label: "base", href: "/base" },
-  { label: "solana", href: "/solana" },
-  { label: "polygon", href: "/polygon" },
-  { label: "arbitrum", href: "/arbitrum" },
-  { label: "monad", href: "/monad" },
-  { label: "celo", href: "/celo" },
-  { label: "avalanche", href: "/avalanche" },
-  { label: "sei", href: "/sei" },
-  { label: "optimism", href: "/optimism" },
-  { label: "arc", href: "/arc" },
-  { label: "stellar", href: "/stellar" },
-  { label: "algorand", href: "/algorand" },
-  { label: "robinhood", href: "/robinhood" },
-];
+// Every rail has a live market page (/base, /solana, ..., /robinhood) - this
+// fallback lists every one, read from RAILS in its order, so a rail that
+// graduates (src/rails.js) is listed with no edit here.
+const STATIC_CHAINS = RAILS.map((r) => ({ label: railKey(r), href: `/${railKey(r)}` }));
 
 // Per-chain seller counts/health for the index dropdown + footer are live
 // data (crawler + index snapshot), but nav() renders on every page - including

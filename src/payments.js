@@ -31,7 +31,7 @@ import {
 } from "@x402/extensions/builder-code";
 import { declarePaymentIdentifierExtension, PAYMENT_IDENTIFIER } from "@x402/extensions/payment-identifier";
 import { normalizePayerAddress } from "./payer.js";
-import { x402EvmOnly, RAILS } from "./rails.js";
+import { x402EvmOnly, RAILS, GATED_RAILS } from "./rails.js";
 import { networkPriceFloors, applyNetworkFloor, networkFloorUsd } from "./network-floors.js";
 import { installFacilitatorDiagnostics, labelFacilitatorErrors } from "./facilitator-diagnostics.js";
 import { isAlreadyOnChainSettleError, recoverAlreadyOnChain } from "./settle-onchain-proof.js";
@@ -42,7 +42,7 @@ import { registerLateSettleHook } from "./late-settlements.js";
 import { chargeCancelledForClientGone, registerSettleSentHook, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
 import { markCoveredRunSettled } from "./inflight-cover.js";
 import { ARC_CAIP2, ARC_USDC, ARC_PROFILE, CIRCLE_LABEL, CircleFacilitatorClient, circleClientFromEnv, circleKeyConfigured, withoutArcKinds, arcContractWalletsEnabled, isContractWalletPayment, CIRCLE_EVM_LABEL, CIRCLE_EVM_FALLBACK_NETWORKS, CIRCLE_EVM_FALLBACK_PROFILES, circleEvmFallbackEnabled, circleEvmFallbackFromEnv } from "./circle-facilitator.js";
-import { markGatedRailOffered } from "./gated-rails.js";
+import { markGatedRailOffered, gatedRailOffered } from "./gated-rails.js";
 import { gatedRailWasOffered, recordGatedRailOffered } from "./gated-rail-history.js";
 import { shared } from "./shared-limits.js";
 import { spendsBeforeSettlement, isLongRunningSlug } from "./composite-spend-guard.js";
@@ -109,6 +109,12 @@ const EVM_NETWORKS = {
   // /supported lists exact on eip155:5042. With the key set it joins any
   // multi-chain PAYMENT_NETWORKS list (see enabledNetworks).
   arc: "eip155:5042",
+  // Ink (OP Stack L2, chain 57073). Native Circle USDC with the "USDC" v2
+  // domain (verified on chain 2026-11-06), priced through TIER1_USDC. Settled
+  // only through the operator's ordered INK_FACILITATOR_URL list (no default;
+  // the Robinhood shape without our own relayer): unset, Ink is never offered,
+  // even when listed in PAYMENT_NETWORKS. A gated rail (src/rails.js).
+  ink: "eip155:57073",
 };
 const SVM_NETWORKS = {
   solana: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
@@ -161,6 +167,12 @@ const ROBINHOOD_FALLBACK_RECHECK_MS = Math.max(1000, Number(process.env.ROBINHOO
 // The offer, the scheme and what the buyer signs do not depend on the list.
 const ROBINHOOD_FACILITATOR_URLS = facilitatorUrlList(process.env.ROBINHOOD_FACILITATOR_URL);
 const ROBINHOOD_FACILITATOR_URL = ROBINHOOD_FACILITATOR_URLS[0] || "";
+// Ink (eip155:57073): INK_FACILITATOR_URL is an ordered list with the same
+// meaning as ROBINHOOD_FACILITATOR_URL (the first confirming /supported exact
+// on eip155:57073 at boot settles, the rest are its settle fallback). No
+// default and no own relayer: unset, Ink is not configured.
+const INK_CAIP2 = "eip155:57073";
+const INK_FACILITATOR_URLS = facilitatorUrlList(process.env.INK_FACILITATOR_URL);
 // ROBINHOOD_RELAYER_KEY (our own relayer, src/robinhood-relayer.js): read at
 // boot; a malformed key turns the feature off with a warning, never a crash.
 function robinhoodRelayerKeySafe() {
@@ -266,6 +278,9 @@ const TIER1_USDC = {
   // change can never move the asset or domain the Circle preflight checks.
   // (Same values as ARC_USDC in src/circle-facilitator.js; scripts/test-arc-rail.js pins both.)
   "eip155:5042": { asset: "0x3600000000000000000000000000000000000000", decimals: 6, name: "USDC", version: "2" }, // Arc, native USDC (verified 2026-10-20)
+  // Ink: native Circle USDC, standard EIP-3009 (name() "USDC", version() "2",
+  // decimals 6, TRANSFER_WITH_AUTHORIZATION_TYPEHASH present; verified 2026-11-06).
+  "eip155:57073": { asset: "0x2D270e6886d130D724215A266106e6832161EAEd", decimals: 6, name: "USDC", version: "2" },
 };
 function makeTier1UsdcScheme(caip2) {
   const cfg = TIER1_USDC[caip2];
@@ -334,6 +349,7 @@ function makeCeloUsdcScheme() {
  *  primary `network` is always included and listed first (it carries the Bazaar
  *  resource + is what the facilitator must support). */
 let warnedArcWithoutKey = false;
+let warnedInkWithoutUrl = false;
 // The Arc pending book (src/circle-pending.js), built only when Circle's
 // client is; null otherwise. Read by /api/gateway-status as one word.
 let circlePendingBook = null;
@@ -451,6 +467,16 @@ export function enabledNetworks(network) {
       console.warn("WARNING: PAYMENT_NETWORKS enables `arc` but CIRCLE_FACILITATOR_API_KEY is unset - Arc is not configured (other chains unaffected).");
     }
     for (let i = names.length - 1; i >= 0; i--) if (names[i] === "arc") names.splice(i, 1);
+  }
+  // Ink's switch is INK_FACILITATOR_URL: without a URL an `ink` entry is not
+  // configured (other chains unaffected), so nothing counts a rail nobody
+  // can settle. The primary network is never removed here.
+  if (!INK_FACILITATOR_URLS.length && names.includes("ink") && network !== "ink") {
+    if (!warnedInkWithoutUrl) {
+      warnedInkWithoutUrl = true;
+      console.warn("WARNING: PAYMENT_NETWORKS enables `ink` but INK_FACILITATOR_URL is unset - Ink is not configured (other chains unaffected). Set INK_FACILITATOR_URL to enable it.");
+    }
+    for (let i = names.length - 1; i >= 0; i--) if (names[i] === "ink") names.splice(i, 1);
   }
   const seen = new Set();
   const out = [];
@@ -1040,6 +1066,23 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // spent entirely on markup, and that is why 15 settle failures on
   // 2026-08-07 could not be told apart from an edge refusing our egress.
   const facilitatorUrls = [];
+  // caip2 -> the one routing client that may list it (chooseListedPrimary
+  // with exclusive: true). Read at each /supported call; empty unless such a
+  // rail is enabled, and then only its network is removed elsewhere.
+  const exclusiveNetworkOwners = new Map();
+  const withoutNetworksOwnedElsewhere = (client) => {
+    if (!client || typeof client.getSupported !== "function" || client.__a402ExclusiveStrip) return client;
+    const orig = client.getSupported.bind(client);
+    client.getSupported = async (...args) => {
+      const sup = await orig(...args);
+      if (!exclusiveNetworkOwners.size || !sup || !Array.isArray(sup.kinds)) return sup;
+      const foreign = (n) => exclusiveNetworkOwners.has(n) && exclusiveNetworkOwners.get(n) !== client;
+      if (!sup.kinds.some((k) => foreign(k?.network))) return sup;
+      return { ...sup, kinds: sup.kinds.filter((k) => !foreign(k?.network)) };
+    };
+    client.__a402ExclusiveStrip = true;
+    return client;
+  };
   const addFacilitator = (label, client) => {
     // Name the facilitator in its own errors. The failure hooks log the chain
     // and never the client, so a Polygon failure could read as Coinbase's
@@ -1064,6 +1107,10 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     // the Circle client's preflight. Every other client's answer has the Arc
     // networks removed, so only the Circle client can verify or settle Arc.
     if (!(client instanceof CircleFacilitatorClient)) withoutArcKinds(client);
+    // A network settled only through its operator-listed facilitators (Ink)
+    // is likewise removed from every other routing client's answer, so a
+    // client registered earlier that also lists it cannot take its payments.
+    withoutNetworksOwnedElsewhere(client);
     facilitatorClients.push(memoizeGetSupported(client));
     facilitatorLabels.push(label);
     facilitatorRegistry.push({ label, client: facilitatorClients[facilitatorClients.length - 1] });
@@ -1138,7 +1185,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     console.log(
       `Multi-chain facilitator routing: ${cdpConfig ? "CDP first on every chain its /supported lists (Base, Bazaar; Solana since its table grew), PayAI for the rest and as the settle fallback" : "PayAI (all chains)"}`
     );
-  } else if (network === "robinhood" && ROBINHOOD_FACILITATOR_URL) {
+  } else if ((network === "robinhood" && ROBINHOOD_FACILITATOR_URL) || (network === "ink" && INK_FACILITATOR_URLS.length)) {
     // Robinhood-ONLY server: the dedicated USDG facilitator client (pushed
     // below via robinhoodEnabled) is the only one needed. The generic resolver
     // would demand CDP keys or FACILITATOR_URL — neither settles chain 4663 —
@@ -1148,6 +1195,80 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   } else {
     addFacilitator(`primary (${network})`, new HTTPFacilitatorClient(await resolveFacilitatorConfig(network)));
   }
+  // A rail settled through an operator-listed, ordered facilitator list
+  // (ROBINHOOD_FACILITATOR_URL, INK_FACILITATOR_URL). Which listed facilitator
+  // settles first: with more than one listed, the first (in list order) whose
+  // /supported confirms exact on `caip2` at boot, so a first entry that is
+  // down at boot does not take the rail off the offer while a later one is
+  // healthy (the boot guard below drops a network no routing facilitator
+  // advertises, until the next restart). The rest stay its settle fallback,
+  // in list order, pushed onto `fallbacks` (the array the failure hook reads).
+  // None confirms: the first settles, exactly as before. Skipped offline
+  // (X402_SYNC_ON_START=false). `exclusive`: the primary routes `caip2` only,
+  // and no other routing client may list `caip2`. Two steps, so the caller
+  // registers the chosen client (addFacilitator) between them, in the order
+  // the boot always ran: choose, register, then the fallbacks.
+  const chooseListedPrimary = async ({ caip2, chain, urls, publicIndexChain, exclusive = false }) => {
+    const entries = urls.map((url) => ({ url, client: new HTTPFacilitatorClient({ url }) }));
+    let first = 0;
+    let boot = null;
+    if (entries.length > 1 && process.env.X402_SYNC_ON_START !== "false") {
+      boot = await firstConfirmedFacilitator(entries, { network: caip2 });
+      if (boot.index > 0) {
+        first = boot.index;
+        console.warn(`WARNING: ${chain}: ${entries[0].url} did not confirm exact on ${caip2} at boot; ${entries[first].url} settles first, the rest stay settle fallbacks in list order`);
+      } else if (boot.index < 0) {
+        console.warn(`WARNING: ${chain}: no listed facilitator confirmed exact on ${caip2} at boot; ${entries[0].url} stays first`);
+      }
+      // The boot guard below reads the chosen client's /supported once more:
+      // it is answered from this read instead of a second fetch.
+      if (boot.index >= 0) primeSupportedOnce(entries[first].client, boot.results[first].supported);
+    }
+    const primaryUrl = entries[first].url;
+    // The public-index disclosure names the facilitator that settles first.
+    setPublicIndexBootFacilitator(publicIndexChain, primaryUrl);
+    // Its graceful refusals are told apart from its HTTP errors, which the
+    // library hands the failure hook in the same shape (gracefulRefusalOf).
+    const primary = markGracefulRefusals(entries[first].client);
+    if (exclusive) {
+      // Routes this network only, so it cannot win a chain another client owns.
+      const orig = primary.getSupported.bind(primary);
+      primary.getSupported = async (...args) => {
+        const sup = await orig(...args);
+        return sup && Array.isArray(sup.kinds) ? { ...sup, kinds: sup.kinds.filter((k) => k?.network === caip2) } : sup;
+      };
+      exclusiveNetworkOwners.set(caip2, primary);
+    }
+    return { entries, first, boot, primaryUrl, primary };
+  };
+  const wireListedFallbacks = ({ caip2, chain, label, listName, recheckMs, fallbacks }, { entries, first, boot }) => {
+    entries.forEach(({ url, client }, i) => {
+      if (i === first) return;
+      const name = `${label} fallback (${url})`;
+      labelFacilitatorErrors(name, client);
+      registerFacilitatorUpstream(url);
+      // revertRetry: a reverted transfer may go to this facilitator; the
+      // default chain (PayAI/Solvador) is reached only by a pre-broadcast refusal.
+      fallbacks.push({ name, client, url, revertRetry: true, confirmed: false, bootRead: boot ? boot.results[i] : null });
+    });
+    if (fallbacks.length) {
+      console.log(`${chain}: settle fallback ${fallbacks.map((f) => f.name).join(" -> ")} (PAYMENT_SETTLE_FALLBACK; after a refusal that moved no money)`);
+      // A fallback is tried only once its /supported has answered with exact
+      // on `caip2` (confirmed). One that answers without it could only
+      // fail: dropped, loudly. One that cannot be reached is not tried yet and
+      // is asked again in the background until it answers. A fallback the
+      // boot read above already confirmed is not asked again.
+      for (const f of [...fallbacks]) {
+        const read = f.bootRead;
+        delete f.bootRead;
+        if (read?.confirmed) { f.confirmed = true; continue; }
+        confirmListedFallback(f, {
+          network: caip2, chain, listName, recheckMs,
+          onDrop: () => { const i = fallbacks.indexOf(f); if (i >= 0) fallbacks.splice(i, 1); },
+        });
+      }
+    }
+  };
   // Robinhood Chain / USDG settles through the operator-configured external
   // facilitator (ROBINHOOD_FACILITATOR_URL), added only when the chain is
   // actually enabled, so the default USDC path is untouched. That facilitator
@@ -1182,62 +1303,12 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // chain instead of stopping the chain (src/robinhood-outage.js).
   let robinhoodOutage = null;
   if (robinhoodEnabled) {
-    // Which listed facilitator settles first: with more than one listed, the
-    // first (in list order) whose /supported confirms exact on eip155:4663 at
-    // boot, so a first entry that is down at boot does not take the rail off
-    // the offer while a later one is healthy (the boot guard below drops a
-    // network no routing facilitator advertises, until the next restart). The
-    // rest stay its settle fallback, in list order. None confirms: the first
-    // settles, exactly as before. Skipped offline (X402_SYNC_ON_START=false).
-    const entries = ROBINHOOD_FACILITATOR_URLS.map((url) => ({ url, client: new HTTPFacilitatorClient({ url }) }));
-    let first = 0;
-    let boot = null;
-    if (entries.length > 1 && process.env.X402_SYNC_ON_START !== "false") {
-      boot = await firstConfirmedFacilitator(entries, { network: ROBINHOOD_CAIP2 });
-      if (boot.index > 0) {
-        first = boot.index;
-        console.warn(`WARNING: Robinhood Chain: ${entries[0].url} did not confirm exact on ${ROBINHOOD_CAIP2} at boot; ${entries[first].url} settles first, the rest stay settle fallbacks in list order`);
-      } else if (boot.index < 0) {
-        console.warn(`WARNING: Robinhood Chain: no listed facilitator confirmed exact on ${ROBINHOOD_CAIP2} at boot; ${entries[0].url} stays first`);
-      }
-      // The boot guard below reads the chosen client's /supported once more:
-      // it is answered from this read instead of a second fetch.
-      if (boot.index >= 0) primeSupportedOnce(entries[first].client, boot.results[first].supported);
-    }
-    const robinhoodPrimaryUrl = entries[first].url;
-    // The public-index disclosure names the facilitator that settles first.
-    setPublicIndexBootFacilitator("robinhood", robinhoodPrimaryUrl);
-    // Its graceful refusals are told apart from its HTTP errors, which the
-    // library hands the failure hook in the same shape (gracefulRefusalOf).
-    const robinhoodPrimary = markGracefulRefusals(entries[first].client);
+    const chosen = await chooseListedPrimary({ caip2: ROBINHOOD_CAIP2, chain: "Robinhood Chain", urls: ROBINHOOD_FACILITATOR_URLS, publicIndexChain: "robinhood" });
+    const robinhoodPrimaryUrl = chosen.primaryUrl;
+    const robinhoodPrimary = chosen.primary;
     addFacilitator(`Robinhood (${robinhoodPrimaryUrl})`, robinhoodPrimary);
     console.log(`Robinhood Chain: settling USDG (${USDG.asset}) via facilitator ${robinhoodPrimaryUrl}`);
-    entries.forEach(({ url, client }, i) => {
-      if (i === first) return;
-      const name = `Robinhood fallback (${url})`;
-      labelFacilitatorErrors(name, client);
-      registerFacilitatorUpstream(url);
-      // revertRetry: a reverted transfer may go to this facilitator; the
-      // default chain (PayAI/Solvador) is reached only by a pre-broadcast refusal.
-      robinhoodFallbacks.push({ name, client, url, revertRetry: true, confirmed: false, bootRead: boot ? boot.results[i] : null });
-    });
-    if (robinhoodFallbacks.length) {
-      console.log(`Robinhood Chain: settle fallback ${robinhoodFallbacks.map((f) => f.name).join(" -> ")} (PAYMENT_SETTLE_FALLBACK; after a refusal that moved no money)`);
-      // A fallback is tried only once its /supported has answered with exact
-      // on eip155:4663 (confirmed). One that answers without it could only
-      // fail: dropped, loudly. One that cannot be reached is not tried yet and
-      // is asked again in the background until it answers. A fallback the
-      // boot read above already confirmed is not asked again.
-      for (const f of [...robinhoodFallbacks]) {
-        const read = f.bootRead;
-        delete f.bootRead;
-        if (read?.confirmed) { f.confirmed = true; continue; }
-        confirmListedFallback(f, {
-          network: ROBINHOOD_CAIP2, chain: "Robinhood Chain", listName: "Robinhood's", recheckMs: ROBINHOOD_FALLBACK_RECHECK_MS,
-          onDrop: () => { const i = robinhoodFallbacks.indexOf(f); if (i >= 0) robinhoodFallbacks.splice(i, 1); },
-        });
-      }
-    }
+    wireListedFallbacks({ caip2: ROBINHOOD_CAIP2, chain: "Robinhood Chain", label: "Robinhood", listName: "Robinhood's", recheckMs: ROBINHOOD_FALLBACK_RECHECK_MS, fallbacks: robinhoodFallbacks }, chosen);
     if (robinhoodRelayerKeySafe()) {
       try {
         const { createOwnRelayerClient } = await import("./robinhood-relayer.js");
@@ -1267,6 +1338,31 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
         urls: () => gasCheckUrls(robinhoodPrimaryUrl, robinhoodFallbacks),
         ownSigners: ownRelayer ? [{ label: ownRelayer.name, signer: ownRelayer.client.address }] : [],
         onReadings: robinhoodOrder ? (readings) => robinhoodOrder.update(readings) : null,
+      }).catch((e) => console.warn(`WARNING: facilitator gas check did not start (${String(e?.message || e).slice(0, 120)})`));
+    }
+  }
+  // Ink (chain 57073 / USDC) settles through the operator's ordered
+  // INK_FACILITATOR_URL list, wired exactly like Robinhood's (boot choice,
+  // listed settle fallbacks, graceful refusals passed on, gas runway) with no
+  // relayer of ours. The chosen client routes Ink only, and no other routing
+  // client may list Ink, so the operator's order is the only one. Same
+  // drop-don't-break safety: no URL, no Ink (enabledNetworks already leaves
+  // it unconfigured; this guard covers an `ink` primary).
+  const inkFallbacks = [];
+  const inkEnabled = evmCaip2.includes(INK_CAIP2) && INK_FACILITATOR_URLS.length > 0;
+  if (evmCaip2.includes(INK_CAIP2) && !inkEnabled) {
+    console.warn("WARNING: PAYMENT_NETWORKS enables `ink` but INK_FACILITATOR_URL is unset - dropping Ink from the offered networks (other chains unaffected). Set INK_FACILITATOR_URL to enable it.");
+    evmCaip2 = evmCaip2.filter((c) => c !== INK_CAIP2);
+  }
+  if (inkEnabled) {
+    const listed = await chooseListedPrimary({ caip2: INK_CAIP2, chain: "Ink", urls: INK_FACILITATOR_URLS, publicIndexChain: "ink", exclusive: true });
+    addFacilitator(`Ink (${listed.primaryUrl})`, listed.primary);
+    console.log(`Ink: settling USDC (${TIER1_USDC[INK_CAIP2].asset}) via facilitator ${listed.primaryUrl}`);
+    wireListedFallbacks({ caip2: INK_CAIP2, chain: "Ink", label: "Ink", listName: "Ink's", recheckMs: ROBINHOOD_FALLBACK_RECHECK_MS, fallbacks: inkFallbacks }, listed);
+    if (process.env.X402_SYNC_ON_START !== "false" && !/^off$/i.test(String(process.env.FACILITATOR_GAS_CHECK || "").trim())) {
+      startFacilitatorGasCheck({
+        network: INK_CAIP2,
+        urls: () => gasCheckUrls(listed.primaryUrl, inkFallbacks),
       }).catch((e) => console.warn(`WARNING: facilitator gas check did not start (${String(e?.message || e).slice(0, 120)})`));
     }
   }
@@ -1982,6 +2078,9 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     // exact on 4663), then the chain it had before. Read at settle time: the
     // boot check may still confirm or drop one.
     // Our own relayer, when configured, comes after them.
+    // Ink: its listed fallbacks only (confirmed ones, read at settle time);
+    // no default-chain facilitator settles Ink.
+    ...(inkEnabled ? { [INK_CAIP2]: () => inkFallbacks.filter((f) => f.confirmed) } : {}),
     ...(robinhoodFallbacks.length || ownRelayer ? { [ROBINHOOD_CAIP2]: () => [...robinhoodFallbacks.filter((f) => f.confirmed), ...(ownRelayer ? [ownRelayer] : []), ...fallbackCandidatesFor(ROBINHOOD_CAIP2, payAiClient, solvadorClient)] } : {}),
     // Base and Polygon: the chain they always had, then the issuer's
     // facilitator last, once its /supported listed the network.
@@ -2055,6 +2154,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // A gated rail joins the runtime surfaces (manifest chains, how-to-pay, its
   // chain page, nav, live revenue read) only now, from the FINAL offer.
   if (offeredCaip2.has(ARC_CAIP2)) { markGatedRailOffered(ARC_CAIP2); void recordGatedRailOffered(ARC_CAIP2); }
+  for (const r of GATED_RAILS) if (r.caip2 !== ARC_CAIP2 && offeredCaip2.has(r.caip2)) { markGatedRailOffered(r.caip2); void recordGatedRailOffered(r.caip2); }
   console.log(
     `Accepting USDC on: ${offeredNames.join(", ")} (${[...offeredCaip2].join(", ")})` +
       (robinhoodEnabled ? " - note: robinhood settles USDG, not USDC" : "")
@@ -2769,7 +2869,11 @@ let facilitatorRegistry = [];
 let facilitatorFirstTriedByNetwork = new Map();
 /** { "eip155:8453": "CDP (Base)", ... }: the facilitator @x402 tries first per
  *  network, from the boot /supported probe. Labels only. Empty before the probe. */
-export function facilitatorsByNetworkPublic() { return Object.fromEntries(facilitatorFirstTriedByNetwork); }
+// A gated rail (src/rails.js GATED_RAILS) a facilitator lists is named here
+// only while it is in the live offer, like every other runtime surface.
+export function facilitatorsByNetworkPublic() {
+  return Object.fromEntries([...facilitatorFirstTriedByNetwork].filter(([n]) => !GATED_RAILS.some((r) => r.caip2 === n) || gatedRailOffered(n)));
+}
 export async function facilitatorSupportReport() {
   return Promise.all(facilitatorRegistry.map(async ({ label, client }) => {
     try {
@@ -2942,7 +3046,8 @@ export async function startFacilitatorGasCheck({ network, urls, ownSigners = [],
     const key = list.join(",");
     if (!checkers.has(key)) checkers.set(key, createRelayerGasCheck({ urls: list, network, rpcUrl: evmRpcFor(network), settings, ownSigners, floorCheck }));
     const readings = await checkers.get(key).check();
-    toolFailureMonitor().noteRelayerGas(readings);
+    // Each network's check replaces its own rows only (Robinhood and Ink run one each).
+    toolFailureMonitor().noteRelayerGas(readings, { network });
     if (typeof onReadings === "function") { try { onReadings(readings); } catch { /* the order is advisory */ } }
     for (const r of readings) {
       if ((r.status === "low" || r.status === "unread") && r.facilitator !== "price floor") console.warn(`[facilitator-gas] ${r.facilitator} signer ${r.signer || "(unknown)"} on ${network}: ${r.status}${r.runway !== null && r.runway !== undefined ? ` (runway ${r.runway} settlements)` : ""}${r.error ? ` - ${r.error}` : ""}`);
@@ -3050,7 +3155,7 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
   if (fallbackEnabled) {
     console.log(
       `Settle fallback: ON - chain ${solvadorClient ? "Solvador (first on its advertised networks) -> " : ""}${payAiClient ? "PayAI" : solvadorClient ? "(Solvador only)" : "(no candidates!)"}` +
-        "; fires ONLY on pre-broadcast refusals (an HTTP 402, a billing refusal on our facilitator account, or on Robinhood a reverted transfer or a listed facilitator's graceful refusal with no verdict, to the next listed one), never on buyer-side or ambiguous failures"
+        "; fires ONLY on pre-broadcast refusals (an HTTP 402, a billing refusal on our facilitator account, or on Robinhood and Ink a reverted transfer or a listed facilitator's graceful refusal with no verdict, to the next listed one), never on buyer-side or ambiguous failures"
     );
   }
   server.onSettleFailure(async (ctx) => {
@@ -3492,12 +3597,13 @@ export function isRevertedAuthorizationTransfer(err) {
   return /\btransferWithAuthorization\b"?\s+reverted/i.test(text);
 }
 
-// Networks where the reverted-transfer answer passes to the next facilitator.
-// Robinhood's facilitators settle USDG by EIP-3009 only and each pays its own
-// gas, so a revert there is most often one facilitator's empty gas wallet,
-// which the next one does not share. Elsewhere a revert is left to stop the
-// chain as before.
-const REVERT_RETRY_NETWORKS = new Set([ROBINHOOD_CAIP2]);
+// Networks settled through an operator-listed facilitator list, where the
+// reverted-transfer answer and a graceful refusal with no verdict pass to the
+// next listed facilitator. Their facilitators settle by EIP-3009 only and each
+// pays its own gas, so a revert there is most often one facilitator's empty
+// gas wallet, which the next one does not share. Elsewhere a revert is left
+// to stop the chain as before.
+const REVERT_RETRY_NETWORKS = new Set([ROBINHOOD_CAIP2, INK_CAIP2]);
 
 // The payment's authorization (or the payload) -> true while the last settle
 // answer a client wrapped by markGracefulRefusals gave for it was a graceful
@@ -3539,7 +3645,7 @@ export function isRetryableSettleRefusal(err, network) {
 }
 
 /**
- * On Robinhood (REVERT_RETRY_NETWORKS), a listed facilitator's failed answer
+ * On Robinhood and Ink (REVERT_RETRY_NETWORKS), a listed facilitator's failed answer
  * that names no transaction, carries a reason, and whose reason is not a
  * verdict about the buyer's payment (src/settle-verdict.js: bad signature,
  * balance, a used nonce or authorization, an expired window, as a code or in

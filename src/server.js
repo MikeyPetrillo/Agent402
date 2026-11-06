@@ -454,7 +454,7 @@ import { settlePreferenceMiddleware } from "./settle-preference.js";
 import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, robinhoodOrderView, robinhoodSettlerStatus, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem, gatewayPendingStatus, gatewayPendingBookForOperator } from "./payments.js";
 import { GATEWAY_WIRE, gatewayBalanceStatus, gatewayOfferPublic, gatewayOfferNetworkNames, gatewayOfferedOn, isGatewayBatchedRequest } from "./gateway-nanopayments.js";
 import { isGatewayWire, isGatewayPendingAnswer } from "./gateway-wire.js";
-import { networkFloorUsd, ROBINHOOD_CAIP2 as RH_FLOOR_CAIP2 } from "./network-floors.js";
+import { networkFloorUsd } from "./network-floors.js";
 import { createMppShim } from "./mpp-shim.js";
 import { createTempoChallengeAppender, createTempoGate, tempoTxFromReceiptHeader, isTempoPushCredential } from "./mpp-tempo.js";
 import { createStripeChallengeAppender, createStripeGate, stripeTxFromReceiptHeader } from "./mpp-stripe.js";
@@ -7886,7 +7886,7 @@ async function getActivityForChain(chainKey, wallet, { maxWaitMs = 0 } = {}) {
 // /robinhood replaces the old dedicated robinhood-page.js landing (folded
 // its unique chain-parameter and tollbooth-config copy into this chain's
 // sellParagraphHtml in market-page.js) — same URL, now the shared template.
-const SNAPSHOT_RAIL_LABEL = { base: "Base", solana: "Solana", polygon: "Polygon", arbitrum: "Arbitrum", monad: "Monad", celo: "Celo", avalanche: "Avalanche", sei: "Sei", optimism: "Optimism", arc: "Arc", robinhood: "Robinhood Chain" };
+const SNAPSHOT_RAIL_LABEL = { base: "Base", solana: "Solana", polygon: "Polygon", arbitrum: "Arbitrum", monad: "Monad", celo: "Celo", avalanche: "Avalanche", sei: "Sei", optimism: "Optimism", arc: "Arc", ink: "Ink", robinhood: "Robinhood Chain" };
 // Per-chain wallet source: EVM rails (including Robinhood, chain 4663) all
 // settle to the same WALLET_ADDRESS; Solana has its own env.
 const chainWallet = (chainKey) => (chainKey === "solana" ? (process.env.SOLANA_WALLET_ADDRESS || "").trim() : WALLET_ADDRESS);
@@ -9720,7 +9720,12 @@ app.get("/api/pricing", (_req, res) => {
     payment: { protocol: "x402", version: 2, network: NETWORK, currency: "USDC", networks: publicNetworks(),
       // The least one call costs on a chain with a price floor (its 402
       // quotes max(listed price, floor)); every other chain quotes the list.
-      ...(publicNetworks().includes("robinhood") && networkFloorUsd(RH_FLOOR_CAIP2) > 0 ? { minPriceUsdByNetwork: { robinhood: networkFloorUsd(RH_FLOOR_CAIP2) } } : {}),
+      // Every offered chain with a floor (Robinhood's default, or one
+      // NETWORK_PRICE_FLOORS sets), under its public name.
+      ...(() => {
+        const floors = Object.fromEntries(publicNetworks().map((n) => [n, networkFloorUsd(PAY_NETWORKS[n])]).filter(([, usd]) => usd > 0));
+        return Object.keys(floors).length ? { minPriceUsdByNetwork: floors } : {};
+      })(),
       // The settlement premium a chain adds to every price quoted on it (the
       // same map the accepts builder prices through, src/payments.js), for the
       // offered chains that carry one: a client capping a call at the list

@@ -180,6 +180,9 @@ jobs:
           # dispatches and any run whose gate found Celo stale buy on Celo;
           # the other scheduled runs skip it.
           CANARY_CELO: ${{ github.event_name != 'schedule' || github.event.schedule == '17 13 * * *' || needs.gate.outputs.celo_stale == 'true' }}
+          # The Ink leg and its funding check run while the operator intends
+          # the rail (the Ink facilitator list secret is set; never its value).
+          CANARY_INK: ${{ secrets.INK_FACILITATOR_URL != '' }}
         run: |
           if [ -z "$BURNER_KEY" ]; then
             echo "No BURNER_KEY secret — canary cannot run (configure a funded test wallet)."

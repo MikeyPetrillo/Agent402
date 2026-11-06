@@ -102,12 +102,14 @@ function projectBytes(prodHeader, localHeader) {
   return Buffer.from(JSON.stringify(withTreeRails(merged)), "utf8").toString("base64").length;
 }
 // Rails this tree offers that production may not yet (Arc rides on Circle's
-// key and joins every 402 once it is set). Each is projected into prod's
+// key and joins every 402 once it is set; Ink, a gated rail, joins once its
+// facilitator list is set, so enabling it must fit too). Each is projected into prod's
 // challenge as one more exact accept cloned from prod's Base accept, so the
 // ceiling is judged on the challenge a buyer will get once this tree is live,
 // not on the one production serves today.
 const TREE_EXTRA_RAILS = [
   { network: "eip155:5042", asset: "0x3600000000000000000000000000000000000000", extra: { name: "USDC", version: "2" } },
+  { network: "eip155:57073", asset: "0x2D270e6886d130D724215A266106e6832161EAEd", extra: { name: "USDC", version: "2" } },
 ];
 function withTreeRails(env) {
   if (!env || !Array.isArray(env.accepts)) return env;
@@ -131,7 +133,7 @@ function projectRailsOnly(prodHeader) {
   const sample = Buffer.from(JSON.stringify({ x402Version: 2, accepts: [{ scheme: "exact", network: "eip155:8453", amount: "1000", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } }] })).toString("base64");
   const grown = projectRailsOnly(sample);
   if (!(grown > sample.length + 200)) { console.log(`FAIL - control: the projection adds this tree's extra rails to a prod challenge (${sample.length} -> ${grown})`); process.exit(1); }
-  console.log(`ok - control: the projection adds this tree's extra rails to a prod challenge (+${grown - sample.length} bytes for ${TREE_EXTRA_RAILS.length} rail)`);
+  console.log(`ok - control: the projection adds this tree's extra rails to a prod challenge (+${grown - sample.length} bytes for ${TREE_EXTRA_RAILS.length} rail${TREE_EXTRA_RAILS.length === 1 ? "" : "s"})`);
 }
 // A buyer's retry carries roughly the challenge plus its own signature and
 // authorization (~700 bytes measured), so budget below the common 8 KB limit.
