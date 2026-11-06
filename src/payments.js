@@ -36,7 +36,7 @@ import { networkPriceFloors, applyNetworkFloor, networkFloorUsd } from "./networ
 import { installFacilitatorDiagnostics, labelFacilitatorErrors } from "./facilitator-diagnostics.js";
 import { isAlreadyOnChainSettleError, recoverAlreadyOnChain } from "./settle-onchain-proof.js";
 import { pendingSettleApplies, confirmPendingSettle, notePendingSettleAnswers, takePendingAnswers, peekPendingAnswers, pendingSettleTxOf, pendingTxsOf } from "./pending-settle.js";
-import { registerSettlementClaimHooks, registerSettlementClaimRelease, recoveredTxHeldElsewhere, txServedElsewhere } from "./settlement-claims.js";
+import { ownSettledStellarTx, registerSettlementClaimHooks, registerSettlementClaimRelease, recoveredTxHeldElsewhere, txServedElsewhere } from "./settlement-claims.js";
 import { randomUUID } from "node:crypto";
 import { registerFirstCallAllowanceSettleHook } from "./first-call-allowance.js";
 import { registerLateSettleHook } from "./late-settlements.js";
@@ -1642,10 +1642,15 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
           txHash, sinceMs: startedAt, claimTx,
         }),
       });
-      // A settled transaction is claimed too (best effort; the sale stands),
-      // so a later confirmation cannot reuse it for another request.
-      const settledTx = res && res.success === true ? settleTxOf(res) : null;
-      if (settledTx) await claimTx(settledTx).catch(() => {});
+      // A settled transaction is claimed for this request too, so a later
+      // confirmation cannot reuse it for another; one another request
+      // already serves (a resend that confirmed it first) answers this one
+      // as a failed settle, never a second answer for one payment
+      // (ownSettledStellarTx). The per-entry authorization claim taken
+      // before settle (src/settlement-claims.js) keeps a resend from
+      // reaching here while this request holds the payment.
+      const owned = await ownSettledStellarTx(res, { network, claimTx });
+      if (owned !== res) return owned;
       // A thrown primary that the chain later confirmed comes back as a bare
       // success object; give it the wire shape @x402 expects.
       if (res && res.success === true && !res.network) return { ...res, network };

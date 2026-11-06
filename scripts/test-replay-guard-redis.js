@@ -191,5 +191,41 @@ const key = (suffix) => `replay-guard-redis-test:${runId}:${suffix}`;
   await client.del(legacy);
 }
 
+// --- Stellar: one signed entry, two encodings, two replicas ------------------
+// paymentReplayKeyAsync keys a Stellar payment on (network, signer, nonce) of
+// the payer's signed entry, so a re-encoded copy on another replica is
+// refused; an earlier build's raw-header claim on the same header is honored.
+{
+  const { paymentReplayKeyAsync } = await import("../src/replay-guard.js");
+  const sdk = await import("@stellar/stellar-sdk");
+  const NET = sdk.Networks.PUBLIC;
+  const SAC = new sdk.Asset("USDC", "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN").contractId(NET);
+  const from = sdk.Keypair.random().publicKey(), to = sdk.Keypair.random().publicKey();
+  const nonce = String(Date.now());
+  const args = [new sdk.Address(from).toScVal(), new sdk.Address(to).toScVal(), sdk.nativeToScVal(10000n, { type: "i128" })];
+  const call = new sdk.xdr.InvokeContractArgs({ contractAddress: new sdk.Address(SAC).toScAddress(), functionName: "transfer", args });
+  const entry = new sdk.xdr.SorobanAuthorizationEntry({
+    credentials: sdk.xdr.SorobanCredentials.sorobanCredentialsAddress(new sdk.xdr.SorobanAddressCredentials({
+      address: new sdk.Address(from).toScAddress(), nonce: sdk.xdr.Int64.fromString(nonce), signatureExpirationLedger: 1000, signature: sdk.xdr.ScVal.scvBytes(Buffer.alloc(64, 7)),
+    })),
+    rootInvocation: new sdk.xdr.SorobanAuthorizedInvocation({ function: sdk.xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(call), subInvocations: [] }),
+  });
+  const op = sdk.Operation.invokeContractFunction({ contract: SAC, function: "transfer", args, auth: [entry] });
+  const env = (seq) => new sdk.TransactionBuilder(new sdk.Account(sdk.Keypair.random().publicKey(), seq), { fee: "100", networkPassphrase: NET }).addOperation(op).setTimeout(300).build().toXDR();
+  const reqOf = (x) => { const cred = Buffer.from(JSON.stringify({ x402Version: 2, accepted: { network: "stellar:pubnet" }, payload: { transaction: x } })).toString("base64"); return { header: (n) => (String(n).toLowerCase() === "payment-signature" ? cred : undefined) }; };
+  const ka = await paymentReplayKeyAsync(reqOf(env("1"))), kb = await paymentReplayKeyAsync(reqOf(env("2")));
+  const gA = createReplayGuard(), gB = createReplayGuard();
+  ok(/^s2:/.test(ka) && await gA.begin(ka) === "ok" && await gB.begin(kb) === "inflight", "real redis: a re-encoded copy of one Stellar entry on another replica is refused");
+  await gA.settle(ka);
+  ok(await gB.begin(kb) === "consumed", "real redis: after it settled, the re-encoded copy reads consumed");
+  const kc = await paymentReplayKeyAsync(reqOf(env("3")));
+  const legacy = "replay:f:c:" + kc.split(":")[2];
+  // A fresh identity (another signer) under an earlier build's raw-header claim.
+  const kd = kc.replace(/^s2:[0-9a-f]{64}:/, "s2:" + "0".repeat(64) + ":");
+  await client.set(legacy, String(Date.now()), { EX: 60 });
+  ok(await gA.begin(kd) === "inflight", "real redis: an earlier build's raw-header claim on the same header is honored");
+  await client.del(legacy);
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -352,7 +352,7 @@ import { asyncProfileOf, estimateBasisSeconds, asyncAdvice, asyncAdviceMiddlewar
 import { progressMiddleware, reportHandlerStarted } from "./job-progress.js";
 import { createTaskStore, taskDataDir } from "./mcp-tasks.js";
 import { admitCoveredRun } from "./inflight-cover.js";
-import { paymentReplayKey, paymentValidBeforeMs, createReplayGuard } from "./replay-guard.js";
+import { paymentReplayKeyAsync, paymentValidBeforeMs, createReplayGuard } from "./replay-guard.js";
 import { statusPage, statusSnapshot } from "./status.js";
 import { recordProbes, statusStoreFlush } from "./status-store.js";
 import { tollboothLandingPage } from "./tollbooth-landing.js";
@@ -10756,7 +10756,8 @@ if (FREE_MODE) {
     // mismatch. A version 2 payload whose echoed block uses a v1-era key is
     // translated below.
     if (refuseNonV2PaymentPayload(req)) req.__droppedPaymentAttempt = true;
-    const replayKey = paymentReplayKey(req);
+    // A Stellar payment keys on its signed entries (paymentReplayKeyAsync).
+    const replayKey = await paymentReplayKeyAsync(req);
     if (replayKey) {
       // The shared claim is required whenever another container may be
       // serving (src/replay-topology.js: more than one replica, a deploy's
