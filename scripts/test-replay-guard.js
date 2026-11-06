@@ -388,7 +388,8 @@ function memoryRedis() {
   ok(idOf(await keyAtIntake(svmReordered)) === idOf(kSvm), "nonce-less: a reordered copy of the offer block keys as the original");
   ok(idOf(kSvm) !== idOf(kAvm) && idOf(await keyAtIntake(b64({ x402Version: 2, accepted: svmAccepted, payload: { transaction: Buffer.from("another signed transaction").toString("base64") } }))) !== idOf(kSvm),
     "nonce-less: two signed payloads are two payments");
-  ok(String(kSvm).startsWith("p2:") && paymentReplayKey(fakeReq({ "x-payment": Buffer.from("not json at all").toString("base64") })).startsWith("c:"), "nonce-less: a decoded payload keys as p2:, bytes that do not decode keep the raw identity");
+  ok(String(kSvm).startsWith("t2:") && paymentReplayKey(fakeReq({ "x-payment": Buffer.from("not json at all").toString("base64") })).startsWith("c:"), "nonce-less: a transaction field that does not decode keys as t2: on its bytes, bytes that do not decode as a header keep the raw identity");
+  ok(String(paymentReplayKey(fakeReq({ "x-payment": b64({ x402Version: 2, accepted: svmAccepted, payload: { other: "field" } }) }))).startsWith("p2:"), "nonce-less: a payload with no transaction field keys as p2:");
   {
     const g = createReplayGuard();
     ok(await g.begin(kSvm) === "ok" && await g.begin(await keyAtIntake(svmAlias)) === "inflight" && await g.begin(await keyAtIntake(svmReordered)) === "inflight",
@@ -461,7 +462,11 @@ function memoryRedis() {
   ok(idOf(await svm({ transaction: pt.replace(/=+$/, "") })) === idOf(await svm({ transaction: pt })), "chain tx: an unpadded base64 copy keys as the original");
   ok(idOf(await svm({ transaction: tx2 })) !== idOf(s0), "chain tx: two signed Solana transactions are two identities");
   ok(idOf(await svm({ transaction: await svmTx("pay one", feePayer) })) !== idOf(s0), "chain tx: the same memo from another signer is another identity");
-  ok(!String(await svm({ transaction: "A".repeat(7000) })).startsWith("t2:"), "chain tx: an oversized transaction is not decoded");
+  {
+    const big = await svm({ transaction: "A".repeat(7000) });
+    ok(String(big).startsWith("t2:") && idOf(big) !== idOf(s0) && idOf(await svm({ transaction: "A".repeat(7000), pad: deep(20) })) === idOf(big),
+      "chain tx: an oversized transaction is not decoded and keys on its bytes, not the payload around it");
+  }
 
   // Algorand: a grouped payment (buyer's signed transfer + the facilitator's
   // unsigned fee transaction) and an ungrouped one.
@@ -490,13 +495,89 @@ function memoryRedis() {
   ok(!String(await avm({ paymentGroup: g1, paymentIndex: 5 })).startsWith("t2:") && !String(await avm({ paymentGroup: Array(17).fill(g1[0]), paymentIndex: 0 })).startsWith("t2:"), "chain tx: an out-of-range index or an oversized group is not decoded");
   ok(idOf(a0) !== idOf(s0), "chain tx: a Solana and an Algorand payment are two identities");
 
-  // Nonce-less payloads that do not decode as a transaction keep the payload
-  // key, and nesting past the depth bound keys on the raw credential.
-  ok(String(await keyOf({ x402Version: 2, accepted: svmAccepted, payload: { transaction: "bm90IGEgdHg=", pad: deep(20) } })).startsWith("p2:") && String(await keyOf({ x402Version: 2, accepted: svmAccepted, payload: { transaction: "bm90IGEgdHg=", pad: deep(200) } })).startsWith("c:"),
-    "chain tx: an undecodable transaction keeps the payload key, nesting past the bound keeps the raw identity");
+  // A transaction field that does not decode keys on its bytes, whatever is
+  // nested beside it; a payload with no transaction field keeps the payload
+  // key, and nesting past the depth bound there keys on the raw credential.
+  {
+    const u0 = await keyOf({ x402Version: 2, accepted: svmAccepted, payload: { transaction: "bm90IGEgdHg=" } });
+    const uCopies = [deep(20), deep(40), deep(200)].map((pad) => keyOf({ x402Version: 2, accepted: svmAccepted, payload: { transaction: "bm90IGEgdHg=", pad } }));
+    ok(String(u0).startsWith("t2:") && (await Promise.all(uCopies)).every((x) => idOf(x) === idOf(u0)),
+      "chain tx: an undecodable transaction keys on its bytes, whatever is nested beside it");
+  }
+  ok(String(await keyOf({ x402Version: 2, accepted: svmAccepted, payload: { other: "x", pad: deep(20) } })).startsWith("p2:") && String(await keyOf({ x402Version: 2, accepted: svmAccepted, payload: { other: "x", pad: deep(200) } })).startsWith("c:"),
+    "chain tx: a payload with no transaction field keeps the payload key, nesting past the bound keeps the raw identity");
   // Just past the bound, well short of the stack limit: only the bound turns it raw.
-  ok(String(await keyOf({ x402Version: 2, accepted: svmAccepted, payload: { transaction: "bm90IGEgdHg=", pad: deep(40) } })).startsWith("c:"),
+  ok(String(await keyOf({ x402Version: 2, accepted: svmAccepted, payload: { other: "x", pad: deep(40) } })).startsWith("c:"),
     "chain tx: a payload nested just past the depth bound keys on the raw credential");
+
+  // Spellings a base64 decoder reads as the same bytes: characters outside the
+  // alphabet (skipped), the URL-safe alphabet, anything after the first "=",
+  // and code units whose low byte is an alphabet character. Padding an entry
+  // until its text is past any length cap must not give one signed payment a
+  // second identity.
+  const spell = {
+    punct: (s, n = 7000) => { let out = ""; const per = Math.ceil(n / s.length); for (const ch of s) out += ch + ".".repeat(per); return out; },
+    spaces: (s) => s.replace(/(.{4})/g, "$1 \n\t"),
+    urlSafe: (s) => s.replace(/\+/g, "-").replace(/\//g, "_"),
+    tail: (s) => (s.includes("=") ? s : s + "=") + "=QUJD".repeat(1500),
+    lowByte: (s) => s.replace(/A/g, "Ł"),
+  };
+  const spelled = (s) => Object.values(spell).map((f) => f(s));
+  ok(spelled(g1[0]).every((x) => Buffer.from(x, "base64").equals(Buffer.from(g1[0], "base64"))) && spell.punct(g1[0]).length > 6000,
+    "padding: every spelling decodes to the signed entry's own bytes, and the punctuated one is past the former text cap");
+  {
+    const copies = await Promise.all(spelled(g1[0]).map((e) => avm({ paymentGroup: [e, g1[1]], paymentIndex: 0 })));
+    const other = await Promise.all(spelled(g1[1]).map((e) => avm({ paymentGroup: [g1[0], e], paymentIndex: 0 })));
+    ok(copies.concat(other).every((x) => String(x).startsWith("t2:") && idOf(x) === idOf(a0)),
+      `padding: one signed Algorand group with any entry respelled or padded past the cap is one identity (${copies.concat(other).map((x) => idOf(x) === idOf(a0) ? "=" : "x").join("")})`);
+    const g2copies = await Promise.all(spelled(g2[0]).map((e) => avm({ paymentGroup: [e, g2[1]], paymentIndex: 0 })));
+    ok(g2copies.every((x) => idOf(x) !== idOf(a0)) && new Set(g2copies.map(idOf)).size === 1, "padding: a second Algorand group padded the same way is still its own one identity");
+    const g = createReplayGuard();
+    ok(await g.begin(a0) === "ok" && (await Promise.all(copies.map((x) => g.begin(x)))).every((r) => r === "inflight"),
+      "padding: while the clean Algorand copy runs, every padded copy is refused in flight (one handler run)");
+    await g.settle(a0);
+  }
+  {
+    const copies = await Promise.all(spelled(tx1).map((t) => svm({ transaction: t })));
+    ok(copies.every((x) => String(x).startsWith("t2:") && idOf(x) === idOf(s0)),
+      `padding: one signed Solana transaction respelled or padded past the cap is one identity (${copies.map((x) => idOf(x) === idOf(s0) ? "=" : "x").join("")})`);
+    const t2copies = await Promise.all(spelled(tx2).map((t) => svm({ transaction: t })));
+    ok(t2copies.every((x) => idOf(x) !== idOf(s0)) && new Set(t2copies.map(idOf)).size === 1, "padding: a second Solana transaction padded the same way is still its own one identity");
+    const g = createReplayGuard();
+    ok(await g.begin(s0) === "ok" && (await Promise.all(copies.map((x) => g.begin(x)))).every((r) => r === "inflight"),
+      "padding: while the clean Solana copy runs, every padded copy is refused in flight (one handler run)");
+    await g.settle(s0);
+  }
+  // A transaction field whose bytes are past the cap is not decoded; it keys
+  // on those bytes, so its spellings are one identity and another is another.
+  {
+    const bigA = Buffer.alloc(5000, 1).toString("base64"), bigB = Buffer.alloc(5000, 2).toString("base64");
+    const b0 = await avm({ paymentGroup: [bigA], paymentIndex: 0 });
+    const bCopies = await Promise.all(spelled(bigA).map((e) => avm({ paymentGroup: [e], paymentIndex: 0, pad: deep(10) })));
+    ok(String(b0).startsWith("t2:") && bCopies.every((x) => idOf(x) === idOf(b0)) && idOf(await avm({ paymentGroup: [bigB], paymentIndex: 0 })) !== idOf(b0),
+      "padding: an over-cap Algorand entry keys on its bytes; its spellings are one identity, other bytes another");
+    const sb0 = await svm({ transaction: bigA });
+    const sbCopies = await Promise.all(spelled(bigA).map((t) => svm({ transaction: t, pad: 1 })));
+    ok(String(sb0).startsWith("t2:") && sbCopies.every((x) => idOf(x) === idOf(sb0)) && idOf(await svm({ transaction: bigB })) !== idOf(sb0) && idOf(sb0) !== idOf(b0),
+      "padding: an over-cap Solana transaction keys on its bytes; its spellings are one identity, other bytes another");
+  }
+  // Stellar: an envelope that does not decode keys on its bytes too, so its
+  // spellings and the fields beside it do not fork it.
+  {
+    const stAccepted = { scheme: "exact", network: "stellar:pubnet", amount: "1000", asset: "C" + "A".repeat(55), payTo: "G" + "A".repeat(55), maxTimeoutSeconds: 60 };
+    const env = Buffer.from("not an envelope at all").toString("base64");
+    const st0 = await keyOf({ x402Version: 2, accepted: stAccepted, payload: { transaction: env } });
+    const stCopies = await Promise.all(spelled(env).map((t) => keyOf({ x402Version: 2, accepted: stAccepted, payload: { transaction: t, pad: deep(5) } })));
+    ok(String(st0).startsWith("t2:") && stCopies.every((x) => idOf(x) === idOf(st0)) && idOf(await keyOf({ x402Version: 2, accepted: stAccepted, payload: { transaction: Buffer.from("another").toString("base64") } })) !== idOf(st0),
+      "padding: an undecodable Stellar envelope keys on its bytes; its spellings are one identity, other bytes another");
+  }
+  // The Solana payer read (verify-failure attribution) reads the same bytes.
+  {
+    const { svmRequiredSigners } = await import("../src/svm-payer.js");
+    const want = JSON.stringify(svmRequiredSigners(tx1));
+    ok(want !== "null" && spelled(tx1).every((t) => JSON.stringify(svmRequiredSigners(t)) === want),
+      "padding: the Solana signer read is the same for every spelling of one transaction");
+  }
 
   // The guard and the deploy window: copies are refused in flight and once
   // consumed, and an earlier build's claim under the raw-header name is honored.

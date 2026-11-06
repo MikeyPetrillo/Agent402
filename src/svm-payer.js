@@ -22,6 +22,15 @@
 // wrong payer id is worse than none. svmSignedTransfer also checks the
 // transfer authority's ed25519 signature with node:crypto.
 import { createPublicKey, verify as cryptoVerify } from "node:crypto";
+import { base64BytesOf } from "./base64-bytes.js";
+
+// The largest wire transaction read, on its decoded bytes (src/base64-bytes.js),
+// so characters the decoder skips cannot push one transaction past it.
+const MAX_WIRE_BYTES = 3072;
+function wireBytesOf(txBase64) {
+  const bytes = base64BytesOf(txBase64);
+  return bytes && bytes.length <= MAX_WIRE_BYTES ? bytes : null;
+}
 
 const B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
@@ -55,9 +64,8 @@ function readCompactU16(bytes, at) {
  */
 export function svmRequiredSigners(txBase64) {
   try {
-    if (typeof txBase64 !== "string" || !txBase64 || txBase64.length > 4096) return null;
-    const bytes = Buffer.from(txBase64, "base64");
-    if (!bytes.length) return null;
+    const bytes = wireBytesOf(txBase64);
+    if (!bytes) return null;
     const sigs = readCompactU16(bytes, 0);
     if (!sigs || sigs.value < 1 || sigs.value > 8) return null;
     let at = sigs.next + 64 * sigs.value; // skip the signatures
@@ -96,8 +104,8 @@ const IX_TRANSFER_CHECKED = 12;
 // byte after the signatures section, version prefix included). Null on any
 // shape mismatch.
 function readTransfer(txBase64, index) {
-  if (typeof txBase64 !== "string" || !txBase64 || txBase64.length > 4096) return null;
-  const bytes = Buffer.from(txBase64, "base64");
+  const bytes = wireBytesOf(txBase64);
+  if (!bytes) return null;
   const sigs = readCompactU16(bytes, 0);
   if (!sigs || sigs.value < 1 || sigs.value > 8) return null;
   const messageStart = sigs.next + 64 * sigs.value;
