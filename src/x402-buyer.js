@@ -803,6 +803,13 @@ export function neverLeftUs(err) {
   return false;
 }
 
+/** A seller-written price for an error message a buyer reads: at most 30
+ *  digits, else the words "a non-numeric value". Never the seller's text. */
+export function atomicForMessage(v) {
+  const s = typeof v === "bigint" ? v.toString() : (typeof v === "string" || typeof v === "number") ? String(v) : "";
+  return /^\d{1,30}$/.test(s) ? s : "a non-numeric value";
+}
+
 /**
  * Pay one x402 seller endpoint and return { result, quote, receipt }.
  *
@@ -936,14 +943,20 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
   // carries both with different values could pass the cap on one figure and be
   // signed for the other, so it is refused before anything is held or signed.
   const sameAtomic = (a, b) => { try { return BigInt(String(a)) === BigInt(String(b)); } catch { return false; } };
+  // Memoized like the domain refusal above, so the router benches the route
+  // instead of meeting the same split price on every call.
   if (payable.amount != null && payable.maxAmountRequired != null && !sameAtomic(payable.amount, payable.maxAmountRequired)) {
-    const e = bad(`Seller accept quotes amount ${payable.amount} but maxAmountRequired ${payable.maxAmountRequired}; refusing to sign an ambiguous price. Nothing was signed.`, 502);
+    if (memoizeDelivery) noteSellerRefusal(url, chain, 402);
+    const e = bad(`Seller accept quotes amount ${atomicForMessage(payable.amount)} but maxAmountRequired ${atomicForMessage(payable.maxAmountRequired)}; refusing to sign an ambiguous price. Nothing was signed.`, 502);
     e.refused = true;
     throw e;
   }
   const quotedAtomic = payable.amount ?? payable.maxAmountRequired;
   if (!quoteWithinCap(quotedAtomic, maxAtomic)) {
-    throw bad(`Seller quote ${quotedAtomic} atomic exceeds the ${maxAtomic} cap - refusing to pay`, 402);
+    const shown = atomicForMessage(quotedAtomic);
+    throw bad(shown === "a non-numeric value"
+      ? `Seller quote is a non-numeric value, not within the ${maxAtomic} atomic cap - refusing to pay`
+      : `Seller quote ${shown} atomic exceeds the ${maxAtomic} cap - refusing to pay`, 402);
   }
   // THE ADDRESS THAT EARNED PROVEN-NESS MUST BE THE ADDRESS WE PAY.
   //
@@ -1123,8 +1136,8 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     // The signed EVM authorization must move exactly the capped quote; anything
     // else is refused here, before the payment leaves this process.
     const signedValue = payload?.payload?.authorization?.value;
-    if (chain === "base" && (signedValue == null || BigInt(String(signedValue)) !== BigInt(String(quotedAtomic)))) {
-      const e = bad(`The signed authorization (${signedValue ?? "missing"}) does not equal the capped quote ${quotedAtomic}; refusing to pay. Nothing was sent.`, 502);
+    if (chain === "base" && (signedValue == null || !sameAtomic(signedValue, quotedAtomic))) {
+      const e = bad(`The signed authorization (${signedValue == null ? "missing" : atomicForMessage(signedValue)}) does not equal the capped quote ${atomicForMessage(quotedAtomic)}; refusing to pay. Nothing was sent.`, 502);
       e.refused = true;
       throw e;
     }
