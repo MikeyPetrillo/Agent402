@@ -797,6 +797,37 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
   if (savedCap === undefined) delete process.env.SOR_BASE_UNPROVEN_SELLER_DAILY_USD; else process.env.SOR_BASE_UNPROVEN_SELLER_DAILY_USD = savedCap;
 }
 
+// --- the signed value is the capped value (v1 maxAmountRequired) -----------
+// x402 v1 signs maxAmountRequired and v2 signs amount. A seller that quotes a
+// small `amount` beside a large `maxAmountRequired` must never get a signature
+// for the large figure while the cap and the logs see the small one.
+{
+  const { __resetSellerRefusalsForTest: resetRef, _spentThisWindow: spent } = await import("../src/x402-buyer.js");
+  const run = async (accept, label) => {
+    resetRef();
+    let signed = null, attempts = 0;
+    const body = { x402Version: 1, accepts: [accept] };
+    globalThis.fetch = async (url, init) => {
+      const paid = init?.headers?.["PAYMENT-SIGNATURE"] || init?.headers?.["payment-signature"] || init?.headers?.["X-PAYMENT"];
+      if (!paid) return { status: 402, headers: { get: () => null }, json: async () => body, text: async () => JSON.stringify(body) };
+      attempts++;
+      try { signed = JSON.parse(Buffer.from(paid, "base64").toString("utf8")); } catch { signed = null; }
+      return { status: 402, headers: { get: () => "application/json" }, json: async () => ({ error: "payment_verification_failed" }), text: async () => "{}" };
+    };
+    const held = spent();
+    const err = await payX402(`https://${label}.example/x`, { maxAtomic: 500000n, method: "POST", body: {}, chain: "base", notDebited: async () => ({ debited: false, observed: 1, expired: true }) }).then(() => null, (e) => e);
+    return { err, signed, attempts, heldDelta: spent() - held };
+  };
+  const base = { scheme: "exact", network: "base", asset: USDC, payTo: "0x" + "ab".repeat(20), resource: "https://x.example/x", description: "d", maxTimeoutSeconds: 60, extra: { name: "USD Coin", version: "2" } };
+  const lie = await run({ ...base, amount: "1000", maxAmountRequired: "500000000" }, "lying-seller");
+  ok(lie.attempts === 0 && lie.signed === null, `a v1 accept with amount 1000 and maxAmountRequired 500000000 is never signed (attempts ${lie.attempts}, signed value ${lie.signed?.payload?.authorization?.value ?? "none"})`);
+  ok(lie.err && lie.err.refused === true && /maxAmountRequired/.test(lie.err.message) && lie.heldDelta === 0n, `and it is refused before any hold (${lie.err?.statusCode} ${lie.err?.message?.slice(0, 80)})`);
+  const v1only = await run({ ...base, maxAmountRequired: "1000" }, "v1-seller");
+  ok(v1only.signed?.payload?.authorization?.value === "1000", `a v1 accept priced only by maxAmountRequired signs exactly that value (got ${v1only.signed?.payload?.authorization?.value})`);
+  const same = await run({ ...base, amount: "1000", maxAmountRequired: 1000 }, "both-seller");
+  ok(same.signed?.payload?.authorization?.value === "1000", `both fields with the same value (any spelling) sign that value (got ${same.signed?.payload?.authorization?.value})`);
+}
+
 globalThis.fetch = origFetch;
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

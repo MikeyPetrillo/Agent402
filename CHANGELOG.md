@@ -6,6 +6,12 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-06 (router buyer price binding)
+Router:
+- The router's buyer signs exactly the price it checked against its caps, on
+  every challenge version, and refuses a seller accept whose price fields
+  disagree; a live quote with disagreeing fields reads as unpriced.
+
 ### 2026-11-05 (Robinhood facilitator order, public-index disclosure, job buys)
 Payments:
 - On Robinhood Chain the server settles through the first listed facilitator
