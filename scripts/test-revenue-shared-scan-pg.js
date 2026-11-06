@@ -13,12 +13,15 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const sdb = await import("../src/state-db.js");
 let scans = 0;
-const scan = async () => { scans++; await sleep(50); return { spec: "agent402-revenue/1", asOf: new Date().toISOString(), rails: [{ rail: "Base", balance: scans, recent: [] }] }; };
+// A row for every rail the real scan reads now (a snapshot missing one is due).
+let labels = () => ["Base"];
+const scan = async () => { scans++; await sleep(50); return { spec: "agent402-revenue/1", asOf: new Date().toISOString(), rails: [{ rail: "Base", balance: scans, recent: [] }, ...labels().filter((l) => l !== "Base").map((rail) => ({ rail, balance: 0, recent: [] }))] }; };
 
 try {
   await sdb.stateDb(); // connects and creates the schema
   const A = await import("../src/revenue-live.js?pg=a");
   const B = await import("../src/revenue-live.js?pg=b");
+  labels = A.liveScanRailLabels;
   // Only the scan is replaced: the store and the lease are the real ones.
   A._setRevenueSnapshotDepsForTest({ scan });
   B._setRevenueSnapshotDepsForTest({ scan });
