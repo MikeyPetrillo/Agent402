@@ -975,6 +975,8 @@ jobs:
           t node scripts/test-llm-gateway.js
           # Timed-out attempt budget on chat, Messages and Responses, plain and streamed (offline)
           t node scripts/test-llm-timed-out-budget.js
+          # Direct inference upstream: off by default, ZDR, fallback to OpenRouter, billed once (offline stubs)
+          t node scripts/test-direct-upstream.js
           t node scripts/test-gateway-resilience.js
           t node scripts/test-upstream-refusal.js
           t node scripts/test-llm-kit-spend.js

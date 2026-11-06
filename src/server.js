@@ -848,11 +848,15 @@ import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, dec
 import { timingSafeEqual, createHash, randomUUID, randomBytes } from "node:crypto";
 import { registerMemoryStore, memoryStoreFigures } from "./memory-stores.js";
 import { publicIndexBootWarnings } from "./facilitator-public-index.js";
+import { directUpstreamBootWarnings, directUpstreamReport } from "./gateway-direct-upstream.js";
 
 // FACILITATOR_PUBLIC_INDEX_*: a disclosure switch that cannot say what its
 // value asks (an unknown chain, no host to name, an invalid policy URL or
 // date) is named once at boot.
 for (const w of publicIndexBootWarnings()) console.warn(w);
+// DIRECT_UPSTREAM_*: a partly set or invalid direct-upstream switch is named
+// (never its values) once at boot; the upstream stays off until it is whole.
+for (const w of directUpstreamBootWarnings()) console.warn(w);
 
 const PORT = process.env.PORT || 3000;
 const WALLET_ADDRESS = process.env.WALLET_ADDRESS;
@@ -2948,6 +2952,12 @@ startSharedLimitsProbe();
 app.get("/__operator/tool-failures.json", async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   res.set("Cache-Control", "private, no-store").json({ ...(await toolFailureMonitor().report()), robinhoodOrder: robinhoodOrderView() });
+});
+// Direct-upstream A/B (src/gateway-direct-upstream.js): attempts, failures by
+// bucket and p50/p90 latency per upstream for the listed model ids.
+app.get("/__operator/direct-upstream.json", (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  res.set("Cache-Control", "private, no-store").json(directUpstreamReport());
 });
 app.get("/__operator/tweet-queue.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });

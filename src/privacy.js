@@ -15,6 +15,7 @@ import { settledHoldText, CONSUMED_VALIDITY_MARGIN_MS } from "./replay-guard.js"
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { SHARE_TTL_DAYS, TOMBSTONE_DAYS, answerShareEnabled, sharePagesMayBeLive } from "./answer-share.js";
 import { firstCallAllowanceEnabled } from "./first-call-allowance.js";
+import { directUpstreamPrivacyText, withDirectUpstreamDate } from "./gateway-direct-upstream.js";
 import { publicIndexPrivacyText, publicIndexNoSaleText, withPublicIndexDate, PUBLIC_INDEX_ANCHOR } from "./facilitator-public-index.js";
 const DAYS = (ms) => Math.round(ms / 86_400_000);
 export function privacyPage(baseUrl) {
@@ -38,6 +39,10 @@ export function privacyPage(baseUrl) {
   // printed date is the later of the page's own and the disclosure's
   // (FACILITATOR_PUBLIC_INDEX_SINCE, withPublicIndexDate).
   const publicIndex = publicIndexPrivacyText();
+  // The direct inference upstream (src/gateway-direct-upstream.js): its
+  // sentence renders only while it is configured, and the printed date then
+  // moves to DIRECT_UPSTREAM_SINCE once reached (withDirectUpstreamDate).
+  const directUpstream = directUpstreamPrivacyText();
 
   const extraCss = `
 .pv-wrap{max-width:760px;margin:0 auto;padding:56px 30px}
@@ -156,7 +161,7 @@ so every claim below is verifiable in code.</p>
   via OpenRouter, our account keeps its optional prompt and completion logging off, routes only to
   endpoints that do not train on or publish request data, and does not let OpenRouter use inputs or
   outputs to improve its product. Request metadata such as the model, token counts and cost is still
-  recorded for billing and monitoring, without the prompt or completion text.</li>
+  recorded for billing and monitoring, without the prompt or completion text.${directUpstream}</li>
   <li><b>On-chain payments.</b> For x402 and MPP payments there are no card numbers, names, or emails.
   Payments settle in USDC on the public Base blockchain (or the other chains listed at <a href="/pricing">/pricing</a>,
   USDG on Robinhood Chain, or MPP on Base, Celo or Tempo) via the x402 or MPP protocol; ${gatewayBatched ? "for a payment settled on chain, " : ""}wallet addresses, amounts, and
@@ -308,5 +313,5 @@ or <a href="https://x.com/Agent402Tools" rel="noopener">@Agent402Tools on X</a>.
 </div>
 ${ledgerFooterCompact()}`;
 
-  return ledgerShell({ title, description, canonical, baseUrl, activePath: "/privacy", extraCss, body: withPublicIndexDate(body) });
+  return ledgerShell({ title, description, canonical, baseUrl, activePath: "/privacy", extraCss, body: withDirectUpstreamDate(withPublicIndexDate(body)) });
 }

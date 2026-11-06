@@ -720,7 +720,7 @@ export function capturePostHogCompositeUsage({ slug, upstreamUsd, ok, priceUsd, 
 // that bill through the same provider, "speech", "stt", "image-gen",
 // "embeddings" and "judge" for the model-backed kits that priced their own
 // usage from the private table. One event shape for all of them.
-export function capturePostHogGatewayUsage({ tier, routeTier, model, priceUsd, upstreamUsd, promptTokens, completionTokens, serviceTier, serverToolCalls, serverToolSearches, defaulted, source }) {
+export function capturePostHogGatewayUsage({ tier, routeTier, model, priceUsd, upstreamUsd, promptTokens, completionTokens, serviceTier, serverToolCalls, serverToolSearches, defaulted, source, servedBy }) {
   // Server-side spend meter runs BEFORE the PostHog gate: cost must be
   // recorded even when telemetry is off (see recordUpstreamSpend's header).
   const src = source ? String(source) : "gateway";
@@ -739,6 +739,9 @@ export function capturePostHogGatewayUsage({ tier, routeTier, model, priceUsd, u
     // The caller named no model and the tier's default served (2026-08-28) -
     // the measure of whether defaulting recovers real calls or only probes.
     defaulted: !!defaulted,
+    // Which upstream served (a bucketed label: "openrouter" or "direct"), the
+    // A/B key for src/gateway-direct-upstream.js. Absent for non-gateway sources.
+    ...(servedBy ? { upstream: servedBy === "direct" ? "direct" : "openrouter" } : {}),
     // Which OpenRouter service tier actually served ("flex" = the discounted tier,
     // "default" otherwise) - the measurement behind the flex-first policy.
     serviceTier: String(serviceTier || "default"),
