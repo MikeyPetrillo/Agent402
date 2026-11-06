@@ -11,6 +11,9 @@
 //   DIRECT_UPSTREAM_SHARE    0-100, percent of eligible attempts sent there (the A/B);
 //                            default 100 when the rest is set; invalid reads 0.
 //   DIRECT_UPSTREAM_TIMEOUT_MS  per attempt (default 45000), capped by the payment window.
+//                            A direct timeout does not count in LLM_MAX_TIMED_OUT_ATTEMPTS.
+//   DIRECT_UPSTREAM_MAX_BYTES   bound on a non-stream answer body (default 4 MB, at least
+//                            64 KB); a larger body is a failed (malformed) attempt.
 //   DIRECT_UPSTREAM_BREAKER_FAILS    consecutive counted direct failures that open the
 //                            breaker (default 3; a refusal of the request itself does not
 //                            count, see the breaker section): while open no call goes direct.
