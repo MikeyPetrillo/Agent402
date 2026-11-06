@@ -215,6 +215,26 @@ for (const [label, plan] of TRIGGERS) {
   ok(out?.__meterUpstreamUsd === OR_COST && gatewaySpend().length === 1 && gatewaySpend()[0].usd === OR_COST, `${label}: metered once, at OpenRouter's cost`);
   ok(out && !JSON.stringify(out).includes("cost_details") && !("cost" in (out.usage || {})), `${label}: OpenRouter's billing fields are stripped as before`);
 }
+// An empty direct answer (a safety refusal or a spent output cap) is a direct
+// failure: the SAME model is then tried on OpenRouter, never skipped for
+// another model. An OpenRouter empty answer still skips the model's other attempts.
+for (const [label, finish, completion] of [["an empty refusal", "content_filter", 0], ["an empty length answer", "length", 32]]) {
+  reset();
+  direct.plan = (req, res, body) => json(res, 200, { id: "c", object: "chat.completion", model: body.model, choices: [{ index: 0, message: { role: "assistant", content: "" }, finish_reason: finish }], usage: { prompt_tokens: 3, completion_tokens: completion, total_tokens: 3 + completion }, x_vendor: { charged_micro: DIRECT_MICRO } });
+  let out = null, err = null;
+  try { out = await metered.handler({ model: MODEL, messages: msgs, max_tokens: 32 }); } catch (e) { err = e; }
+  await flush();
+  ok(!err && direct.hits.length === 1 && or.hits.length === 1 && or.hits[0]?.body?.model === MODEL && out?.model === MODEL, `${label} from the direct upstream falls to the same model on OpenRouter (OpenRouter saw ${or.hits[0]?.body?.model}, served ${out?.model})`);
+  ok(gatewaySpend().length === 1 && gatewaySpend()[0].usd === OR_COST, `${label} from the direct upstream: metered once, at OpenRouter's cost`);
+}
+{
+  reset();
+  setEnv({});
+  or.plan = (req, res, body) => json(res, 200, { id: "c", object: "chat.completion", model: body.model, choices: [{ index: 0, message: { role: "assistant", content: "" }, finish_reason: "content_filter" }], usage: { prompt_tokens: 3, completion_tokens: 0, total_tokens: 3, cost: OR_COST } });
+  try { await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 }); } catch { /* every link empty */ }
+  ok(or.hits.filter((h) => h.body?.model === MODEL).length === 1, "an OpenRouter empty refusal still skips the model's remaining attempts");
+  setEnv(ON);
+}
 // A timeout counts in the timed-out-attempt budget: with a budget of 1 the walk ends there.
 {
   reset();

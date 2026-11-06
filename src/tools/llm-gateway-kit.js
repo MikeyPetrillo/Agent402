@@ -3868,7 +3868,10 @@ function makeHandler(routeTier) {
         if (isEmptyRefusal(data)) {
           if (abListed) noteDirectAb(abLabel, { ok: false, reason: "empty_refusal" });
           lastErr = bad("Upstream declined the request (safety filter) - rephrase the prompt, or pick a different model", 502);
-          refusedModel = model;
+          // A direct attempt's empty answer is a direct failure: the same
+          // model is still tried on OpenRouter. Only an OpenRouter empty
+          // answer skips the model's remaining attempts.
+          if (!directBody) refusedModel = model;
           continue;
         }
         if (isEmptyLength(data)) {
@@ -3877,7 +3880,7 @@ function makeHandler(routeTier) {
           // (flex->default first, then the chain); end-to-end empty is a 502.
           if (abListed) noteDirectAb(abLabel, { ok: false, reason: "empty_length" });
           lastErr = bad("Upstream produced no content within the output cap (reasoning consumed it) - raise max_tokens, lower reasoning.effort, or pick a non-reasoning model", 502);
-          refusedModel = model; // same model + same effort on the default tier would be empty too - don't pay twice
+          if (!directBody) refusedModel = model; // same model + same effort on the default tier would be empty too - don't pay twice
           continue;
         }
         // The exact upstream cost is operator telemetry, never a buyer-visible
