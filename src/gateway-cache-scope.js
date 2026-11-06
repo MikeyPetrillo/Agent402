@@ -29,8 +29,10 @@
 //   holds an entry for costs no signature recovery; then the same scope,
 //   proved on the request itself. A credits key or a Tempo sender is proved by its
 //   gate, which runs earlier. An x402 payment is proved here: it must be an
-//   x402 v2 EIP-3009 authorization to this server's receiving wallet, still
-//   inside its validity window, whose signature recovers to its own `from`
+//   x402 v2 EIP-3009 authorization to this server's receiving wallet, on a
+//   network spelled the one way the replay guard keys it ("eip155:<id>", no
+//   leading zero), still inside a validity window no longer than the guard
+//   keeps a settled payment's consumed mark, whose signature recovers to its own `from`
 //   under the token domain its accept names, and whose replay key the replay
 //   guard holds neither in flight nor consumed (a settled authorization is
 //   public on chain, so its bytes prove nothing once used). Anything else
@@ -43,11 +45,24 @@ import { recoverTypedDataAddress } from "viem";
 import { decodeB64Json } from "./payment-reject.js";
 import { identityPayerOf, paymentHeaderOf } from "./payer.js";
 import { allowanceServed } from "./allowance-state.js";
+import { SETTLED_HOLD_MS, CONSUMED_VALIDITY_MARGIN_MS } from "./replay-guard.js";
 
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
 const HEX32 = /^0x[0-9a-fA-F]{64}$/;
 const SIG = /^0x[0-9a-fA-F]{130}$/;
 const UINT = /^\d{1,78}$/;
+// The one spelling of an EVM network the proof reads: the replay guard keys a
+// payment on the network string as sent (src/replay-guard.js
+// paymentReplayKey), so "eip155:08453", which names the same chain to the
+// signature, would be another payment to the guard. A non-canonical spelling
+// proves nothing.
+const CANONICAL_EVM_NETWORK = /^eip155:([1-9]\d{0,11})$/;
+// The longest validity window a read accepts. The guard holds a settled
+// payment's consumed mark for SETTLED_HOLD_MS from its settle, which is after
+// validAfter; a window no longer than that (less a clock margin) has closed
+// before the mark lapses, so a settled authorization can never be read once
+// the guard has let it go.
+const MAX_READ_WINDOW_SEC = BigInt(Math.floor((SETTLED_HOLD_MS - CONSUMED_VALIDITY_MARGIN_MS) / 1000));
 
 const TRANSFER_WITH_AUTHORIZATION_TYPES = {
   TransferWithAuthorization: [
@@ -125,6 +140,36 @@ const provenScopeOf = (req) => (req && typeof req === "object" ? req[PROVEN_SCOP
 let proofRecoveries = 0;
 /** Signature recoveries run so far (a test reads it to prove when none ran). */
 export function proofRecoveryCount() { return proofRecoveries; }
+// Recovered signers, keyed on everything the signature covers (domain,
+// message, signature): a signature copied onto another message is another
+// key and is recovered again. Least recently used first out, bounded.
+export const PROOF_MEMO_MAX = 2_000;
+let proofMemoMax = PROOF_MEMO_MAX;
+const proofMemo = new Map();
+/** Entries in the recovery memo (a test reads its bound). */
+export function proofMemoSize() { return proofMemo.size; }
+/** Test hook: the memo's bound (the default is PROOF_MEMO_MAX). */
+export function __setProofMemoMax(n = PROOF_MEMO_MAX) {
+  proofMemoMax = n;
+  while (proofMemo.size > proofMemoMax) proofMemo.delete(proofMemo.keys().next().value);
+}
+async function recoverMemo(domain, message, signature) {
+  const k = createHash("sha256").update(JSON.stringify([domain.name, domain.version, domain.chainId, domain.verifyingContract.toLowerCase(), message.from.toLowerCase(), message.to.toLowerCase(), String(message.value), String(message.validAfter), String(message.validBefore), message.nonce.toLowerCase(), signature.toLowerCase()])).digest("hex");
+  if (proofMemo.has(k)) {
+    const v = proofMemo.get(k);
+    proofMemo.delete(k);
+    proofMemo.set(k, v);
+    return v;
+  }
+  proofRecoveries++;
+  let signer = null;
+  try {
+    signer = (await recoverTypedDataAddress({ domain, types: TRANSFER_WITH_AUTHORIZATION_TYPES, primaryType: "TransferWithAuthorization", message, signature })).toLowerCase();
+  } catch { signer = null; }
+  proofMemo.set(k, signer);
+  while (proofMemo.size > proofMemoMax) proofMemo.delete(proofMemo.keys().next().value);
+  return signer;
+}
 export async function provenX402Signer(headerValue, { payTo, nowSec = Math.floor(Date.now() / 1000), anyTime = false } = {}) {
   try {
     if (!payTo || !ADDR.test(payTo)) return null;
@@ -135,7 +180,7 @@ export async function provenX402Signer(headerValue, { payTo, nowSec = Math.floor
     const signature = p.payload?.signature;
     if (!accepted || accepted.scheme !== "exact" || !auth || typeof signature !== "string" || !SIG.test(signature)) return null;
     if (p.payload?.permit2Authorization) return null;
-    const m = /^eip155:(\d{1,12})$/.exec(String(accepted.network || ""));
+    const m = typeof accepted.network === "string" ? CANONICAL_EVM_NETWORK.exec(accepted.network) : null;
     if (!m) return null;
     const name = accepted.extra?.name, version = accepted.extra?.version;
     if (typeof name !== "string" || !name || typeof version !== "string" || !version) return null;
@@ -144,16 +189,17 @@ export async function provenX402Signer(headerValue, { payTo, nowSec = Math.floor
     if (!ADDR.test(String(from)) || !ADDR.test(String(to)) || !HEX32.test(String(nonce))) return null;
     if (![value, validAfter, validBefore].every((v) => UINT.test(String(v)))) return null;
     if (String(to).toLowerCase() !== payTo.toLowerCase()) return null;
-    if (!anyTime && (BigInt(validBefore) <= BigInt(nowSec) || BigInt(validAfter) > BigInt(nowSec))) return null;
-    proofRecoveries++;
-    const signer = await recoverTypedDataAddress({
-      domain: { name, version, chainId: Number(m[1]), verifyingContract: accepted.asset },
-      types: TRANSFER_WITH_AUTHORIZATION_TYPES,
-      primaryType: "TransferWithAuthorization",
-      message: { from, to, value: BigInt(value), validAfter: BigInt(validAfter), validBefore: BigInt(validBefore), nonce },
+    if (!anyTime) {
+      const after = BigInt(validAfter), before = BigInt(validBefore), t = BigInt(nowSec);
+      if (before <= t || after > t) return null;
+      if (before - after > MAX_READ_WINDOW_SEC) return null;
+    }
+    const signer = await recoverMemo(
+      { name, version, chainId: Number(m[1]), verifyingContract: accepted.asset },
+      { from, to, value: BigInt(value), validAfter: BigInt(validAfter), validBefore: BigInt(validBefore), nonce },
       signature,
-    });
-    return signer && signer.toLowerCase() === String(from).toLowerCase() ? signer.toLowerCase() : null;
+    );
+    return signer && signer === String(from).toLowerCase() ? signer : null;
   } catch {
     return null;
   }
