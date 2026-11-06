@@ -49,6 +49,7 @@ export function meterUpstreamSpend(source, usd) {
  *  stats table (null restores it). */
 export function setMeterSpendSinkForTest(fn) { __meterSink = typeof fn === "function" ? fn : null; }
 import { isPaidRail } from "./paid-rails.js";
+import { OWN_UA, indexerFor, isBrowserUa } from "./traffic-classifier.js";
 
 const API_KEY = process.env.POSTHOG_API_KEY || "";
 const HOST = process.env.POSTHOG_HOST || "https://us.i.posthog.com";
@@ -588,7 +589,7 @@ export function capturePostHogWrongMethod({ path, method, allow, ua }) {
     path: String(path || "").slice(0, 120),
     method: String(method || ""),
     allow: Array.isArray(allow) ? allow.join(",") : String(allow || ""),
-    uaFamily: String(ua || "").split("/")[0].slice(0, 40) || "(none)",
+    uaFamily: uaFamilyOf(ua),
   });
 }
 
@@ -618,18 +619,70 @@ export function capturePostHogSettleFailed({ slug, status, network, priceUsd, sy
 // to answer ("does anyone still cite these?") is answered: scanners, not
 // buyers. The 410 response itself is never affected.
 const TOOL_GONE_TOP_ROUTES = 50;
+const TOOL_GONE_TAIL_SOURCES = 10;   // the routes past the top rows keep their source, this many rows at most
 const TOOL_GONE_MAX_KEYS = 5_000;   // attacker-chosen paths cannot grow the map past this (review 2026-08-28)
 const TOOL_GONE_MAX_ROUTE_CHARS = 120;
-let toolGoneCounts = new Map(); // route -> { route, replacement, count }
+let toolGoneCounts = new Map(); // route|source -> { route, replacement, source, count }
 
-export function capturePostHogToolGone({ route, replacement }) {
+// WHO still walks a retired route. A route-only rollup said which old routes
+// are cited but not by whom, so an old catalog copy could not be traced to a
+// client. Each field is coarse and closed: the User-Agent's first product token
+// (word characters only, no version), a client-library hint from a fixed list,
+// which payment header family was present (presence only, never its value),
+// the Referer's host (no path or query) and the surface. No address, no
+// wallet, no full User-Agent.
+const TOOL_GONE_CLIENTS = Object.freeze([
+  ["own", OWN_UA],
+  ["agent402-client", /agent402-client/i],
+  ["agent402-mcp", /agent402-mcp/i],
+  ["x402-fetch", /x402[-_/]?fetch/i],
+  ["x402-axios", /x402[-_/]?axios/i],
+  ["mppx", /\bmppx\b/i],
+  ["x402-other", /x402/i],
+]);
+/** The User-Agent's first product token, word characters only (shared with wrong_method). */
+export function uaFamilyOf(ua) {
+  return String(ua || "").trim().split(/[\/\s;(]/)[0].replace(/[^A-Za-z0-9._-]/g, "").slice(0, 40) || "(none)";
+}
+function headerOf(headers, name) {
+  const v = headers?.[name];
+  return Array.isArray(v) ? v[0] : v;
+}
+/** The coarse source of a retired-route hit, from request headers alone. */
+export function toolGoneSourceOf({ headers = {}, surface = "http" } = {}) {
+  const ua = String(headerOf(headers, "user-agent") || "");
+  let client = "other";
+  const named = ua && TOOL_GONE_CLIENTS.find(([, re]) => re.test(ua));
+  if (named) client = named[0];
+  else if (ua && indexerFor(ua)) client = indexerFor(ua).name;
+  else if (ua && isBrowserUa(ua)) client = "browser";
+  const auth = String(headerOf(headers, "authorization") || "");
+  const payment = headerOf(headers, "x-payment") || headerOf(headers, "payment-signature") ? "x402"
+    : /^Payment\s/i.test(auth) ? "mpp"
+    : /^Bearer\s+a402_/.test(auth) ? "credits"
+    : headerOf(headers, "x-pow-solution") ? "pow"
+    : "none";
+  let refererHost = null;
+  try {
+    const u = new URL(String(headerOf(headers, "referer") || ""));
+    if (u.protocol === "https:" || u.protocol === "http:") refererHost = u.hostname.toLowerCase().replace(/[^a-z0-9.:\[\]-]/g, "").slice(0, 80) || null;
+  } catch { refererHost = null; }
+  return { uaFamily: uaFamilyOf(ua), client, payment, refererHost, surface: surface === "mcp" ? "mcp" : "http" };
+}
+const UNATTRIBUTED_SOURCE = Object.freeze({ uaFamily: "(none)", client: "other", payment: "none", refererHost: null, surface: "http" });
+const sourceKeyOf = (s) => `${s.uaFamily}|${s.client}|${s.payment}|${s.refererHost || ""}|${s.surface}`;
+
+export function capturePostHogToolGone({ route, replacement, source = null }) {
   if (!active()) return;
   try {
+    const src = source && typeof source === "object" ? { ...UNATTRIBUTED_SOURCE, ...source } : UNATTRIBUTED_SOURCE;
     let r = String(route || "unknown").slice(0, TOOL_GONE_MAX_ROUTE_CHARS);
-    if (!toolGoneCounts.has(r) && toolGoneCounts.size >= TOOL_GONE_MAX_KEYS) r = "_overflow";
-    const cur = toolGoneCounts.get(r) || { route: r, replacement: String(replacement || ""), count: 0 };
+    let key = `${r}|${sourceKeyOf(src)}`;
+    if (!toolGoneCounts.has(key) && toolGoneCounts.size >= TOOL_GONE_MAX_KEYS) { r = "_overflow"; key = `${r}|${sourceKeyOf(src)}`; }
+    if (!toolGoneCounts.has(key) && toolGoneCounts.size >= TOOL_GONE_MAX_KEYS) key = "_overflow|";
+    const cur = toolGoneCounts.get(key) || { route: r, replacement: String(replacement || ""), source: key === "_overflow|" ? UNATTRIBUTED_SOURCE : src, count: 0 };
     cur.count++;
-    toolGoneCounts.set(r, cur);
+    toolGoneCounts.set(key, cur);
     ensureFunnelTimer();
   } catch { /* never throw from telemetry */ }
 }
@@ -638,10 +691,25 @@ function flushToolGoneRollup() {
   if (!toolGoneCounts.size) return;
   const entries = [...toolGoneCounts.values()].sort((a, b) => b.count - a.count);
   toolGoneCounts = new Map();
-  for (const e of entries.slice(0, TOOL_GONE_TOP_ROUTES)) capture("tool_gone", { route: e.route, replacement: e.replacement, count: e.count });
+  const sourceProps = (s) => ({ uaFamily: s.uaFamily, client: s.client, payment: s.payment, refererHost: s.refererHost, surface: s.surface });
+  for (const e of entries.slice(0, TOOL_GONE_TOP_ROUTES)) capture("tool_gone", { route: e.route, replacement: e.replacement, count: e.count, ...sourceProps(e.source) });
   const rest = entries.slice(TOOL_GONE_TOP_ROUTES);
-  if (rest.length) {
-    capture("tool_gone", { route: "_other", replacement: rest[0].replacement, count: rest.reduce((s, e) => s + e.count, 0), routes: rest.length });
+  if (!rest.length) return;
+  // The tail folds by source, so a client walking many routes stays visible as
+  // one row with its route count; past TOOL_GONE_TAIL_SOURCES sources the
+  // remainder is one unattributed row. Counts stay exact.
+  const bySource = new Map();
+  for (const e of rest) {
+    const k = sourceKeyOf(e.source);
+    const cur = bySource.get(k) || { source: e.source, replacement: e.replacement, count: 0, routes: 0 };
+    cur.count += e.count; cur.routes++;
+    bySource.set(k, cur);
+  }
+  const tail = [...bySource.values()].sort((a, b) => b.count - a.count);
+  for (const t of tail.slice(0, TOOL_GONE_TAIL_SOURCES)) capture("tool_gone", { route: "_other", replacement: t.replacement, count: t.count, routes: t.routes, ...sourceProps(t.source) });
+  const left = tail.slice(TOOL_GONE_TAIL_SOURCES);
+  if (left.length) {
+    capture("tool_gone", { route: "_other", replacement: left[0].replacement, count: left.reduce((s, t) => s + t.count, 0), routes: left.reduce((s, t) => s + t.routes, 0), ...sourceProps({ ...UNATTRIBUTED_SOURCE, uaFamily: "_other", client: "_other", payment: "_other" }) });
   }
 }
 

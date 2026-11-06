@@ -49,6 +49,8 @@
  * failure.
  */
 import { createHash } from "node:crypto";
+import algosdk from "algosdk";
+import { getBase64Encoder, getTransactionDecoder } from "@solana/kit";
 import { paymentHeaderOf } from "./payer.js";
 import { getSharedRedisClient, sharedLimitEnabled } from "./shared-limit.js";
 import { decodePaymentHeader } from "./payment-header.js";
@@ -76,9 +78,12 @@ const REDIS_PREFIX = "replay:";
  * nonce are two payments, and so are two networks. A re-encoded-but-equivalent
  * authorization still maps to one identity. The network is read where each
  * wire carries it (v2 on `accepted`, v1 at the top level); an EVM payer is
- * lowercased, any other spelling is kept as signed. Falls back to hashing the
- * raw credential for schemes whose nonce we can't parse (e.g. an SVM signed
- * transaction), where the header bytes themselves are the single-use artifact.
+ * lowercased, any other spelling is kept as signed. A payment whose nonce we
+ * can't parse keys on the transaction the chain consumes (chainTxIdentityOf):
+ * "t2:<identity>:<legacy>", <legacy> the raw-credential hash an earlier build
+ * keyed the same header on (honored as for "n2:"). A payload with no
+ * transaction we can decode keys on its signed payload ("p2:", same layout).
+ * Bytes that do not decode to a payload key on the raw credential ("c:").
  *
  * A nonce key reads "n2:<identity>:<legacy>": <legacy> is the key an earlier
  * build used for the same credential (network as v1 spells it, nonce only).
@@ -105,10 +110,107 @@ export function paymentReplayKey(req) {
       const legacy = createHash("sha256").update(`${legacyNetwork}:${n}`).digest("hex");
       return `n2:${id}:${legacy}`;
     }
+    // No parseable nonce (a signed Solana transaction, an Algorand group):
+    // key on the transaction the chain consumes, read from the fields the
+    // facilitator reads, so neither the echoed offer around it nor a field
+    // the facilitator ignores can give one signed payment a second identity.
+    const legacy = createHash("sha256").update(cred).digest("hex");
+    const chainId = chainTxIdentityOf(p);
+    if (chainId) return `t2:${createHash("sha256").update(chainId).digest("hex")}:${legacy}`;
+    // No transaction we can decode (the facilitator refuses such a payload
+    // at verify): the signed payload as a whole, sorted and depth-bounded.
+    if (p?.payload && typeof p.payload === "object") {
+      const id = createHash("sha256").update(`payload\n${canonicalJson(p.payload)}`).digest("hex");
+      return `p2:${id}:${legacy}`;
+    }
   } catch {
     /* not base64 JSON, or no parseable nonce — fall through to raw identity */
   }
   return "c:" + createHash("sha256").update(cred).digest("hex");
+}
+
+// JSON with object keys sorted at every depth: one spelling per value. Nesting
+// past CANONICAL_MAX_DEPTH throws, and the caller keys on the raw credential.
+const CANONICAL_MAX_DEPTH = 32;
+function canonicalJson(v, depth = 0) {
+  if (depth > CANONICAL_MAX_DEPTH) throw new Error("payload nested too deep");
+  if (Array.isArray(v)) return `[${v.map((x) => canonicalJson(x, depth + 1)).join(",")}]`;
+  if (v && typeof v === "object") return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson(v[k], depth + 1)}`).join(",")}}`;
+  return JSON.stringify(v) ?? "null";
+}
+
+// The largest encoded transaction read. A Solana wire transaction is at most
+// 4096 bytes (a v1 message; a v0 one 1232); a signed Algorand transaction in
+// an x402 group is far smaller. Anything longer is not decoded.
+const MAX_TX_BASE64_CHARS = 6000;
+// An Algorand group holds at most 16 transactions.
+const MAX_AVM_GROUP = 16;
+const solanaTxDecoder = getTransactionDecoder();
+const base64Bytes = getBase64Encoder();
+
+/**
+ * What the chain consumes for a nonce-less payment, as a string, or null when
+ * the payload is not one we can decode. Only the fields the reference
+ * facilitators read are read, so a field they ignore cannot change it. The
+ * chain family alone is in the identity, not its spelling: a Solana message
+ * names its recent blockhash and an Algorand transaction its genesis hash, so
+ * the bytes already bind the network, and a network alias cannot split one
+ * payment into two.
+ *
+ * Solana (@x402/svm exact): `payload.transaction`, the base64 wire
+ * transaction. The facilitator's fee payer is account 0, so signature slot 0
+ * is the fee payer's and arrives empty (zeros) from the buyer; the buyer fills
+ * slots 1.. over the same message bytes. The facilitator signs slot 0 at
+ * settle, deterministically over the message, so the transaction id the chain
+ * dedupes on follows from the message bytes alone. The identity is the hash
+ * of those bytes, the same key the facilitator's own duplicate-settlement
+ * cache uses; the signature section is never read, so whatever a client puts
+ * in any slot cannot give one message two identities.
+ *
+ * Algorand (@x402/avm exact): `payload.paymentGroup[payload.paymentIndex]`,
+ * decoded signed (else unsigned) with algosdk as the facilitator does. A
+ * grouped transaction keys on its group id, which every member shares and
+ * the chain commits atomically, so pointing paymentIndex at another member
+ * does not change it; an ungrouped one keys on its transaction id. Both are
+ * computed from the transaction's fields, not from its encoding or signature.
+ */
+function chainTxIdentityOf(p) {
+  const network = p?.accepted?.network || p?.network || p?.payload?.network;
+  if (typeof network !== "string") return null;
+  const payload = p?.payload;
+  if (!payload || typeof payload !== "object") return null;
+  if (network.startsWith("solana")) {
+    const tx = payload.transaction;
+    if (typeof tx !== "string" || !tx || tx.length > MAX_TX_BASE64_CHARS) return null;
+    try {
+      const decoded = solanaTxDecoder.decode(base64Bytes.encode(tx));
+      const msg = decoded?.messageBytes;
+      if (!msg || !msg.length) return null;
+      return `solana\n${createHash("sha256").update(Uint8Array.from(msg)).digest("hex")}`;
+    } catch {
+      return null;
+    }
+  }
+  if (network.startsWith("algorand")) {
+    const group = payload.paymentGroup;
+    const idx = payload.paymentIndex;
+    if (!Array.isArray(group) || group.length < 1 || group.length > MAX_AVM_GROUP) return null;
+    if (!Number.isInteger(idx) || idx < 0 || idx >= group.length) return null;
+    const enc = group[idx];
+    if (typeof enc !== "string" || !enc || enc.length > MAX_TX_BASE64_CHARS) return null;
+    try {
+      const bytes = new Uint8Array(Buffer.from(enc, "base64"));
+      let txn;
+      try { txn = algosdk.decodeSignedTransaction(bytes).txn; } catch { txn = algosdk.decodeUnsignedTransaction(bytes); }
+      if (!txn) return null;
+      const g = txn.group;
+      if (g && g.length && g.some((b) => b !== 0)) return `algorand\ngroup\n${Buffer.from(g).toString("hex")}`;
+      return `algorand\ntxn\n${txn.txID()}`;
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 /**
@@ -123,7 +225,9 @@ export function paymentReplayKey(req) {
  */
 export async function paymentReplayKeyAsync(req) {
   const key = paymentReplayKey(req);
-  if (!key || !key.startsWith("c:")) return key;
+  if (!key || !(key.startsWith("c:") || key.startsWith("p2:"))) return key;
+  // The raw-credential hash an earlier build keyed this header on.
+  const raw = key.startsWith("c:") ? key.slice(2) : key.split(":")[2];
   try {
     const p = decodePaymentHeader(paymentHeaderOf(req));
     const network = p?.accepted?.network || p?.network || p?.payload?.network;
@@ -132,7 +236,7 @@ export async function paymentReplayKeyAsync(req) {
     if (!entries) return key;
     const parts = entries.map((e) => `${e.signer}\n${e.nonce}`).sort();
     const id = createHash("sha256").update(`${network}\n${parts.join("\n")}`).digest("hex");
-    return `s2:${id}:${key.slice(2)}`;
+    return `s2:${id}:${raw}`;
   } catch {
     return key;
   }
@@ -147,14 +251,18 @@ const LEGACY_TAG = "v2|";
 function namesOf(key) {
   const st = /^s2:([0-9a-f]{64}):([0-9a-f]{64})$/.exec(String(key));
   if (st) return { primary: `s2:${st[1]}`, legacy: `c:${st[2]}` };
+  const pl = /^p2:([0-9a-f]{64}):([0-9a-f]{64})$/.exec(String(key));
+  if (pl) return { primary: `p2:${pl[1]}`, legacy: `c:${pl[2]}` };
+  const tx = /^t2:([0-9a-f]{64}):([0-9a-f]{64})$/.exec(String(key));
+  if (tx) return { primary: `t2:${tx[1]}`, legacy: `c:${tx[2]}` };
   const m = /^n2:([0-9a-f]{64}):([0-9a-f]{64})$/.exec(String(key));
   if (!m) return { primary: String(key), legacy: null };
   return { primary: `n2:${m[1]}`, legacy: `n:${m[2]}` };
 }
-// The per-process state keys a Stellar payment on its identity alone: two
-// encodings of one signed entry share it, while their legacy parts (each
+// The per-process state keys a Stellar, chain-transaction or payload-keyed
+// payment on its identity alone: two encodings of one signed artifact share it, while their legacy parts (each
 // header's own hash) differ.
-const localKeyOf = (key) => (/^s2:/.test(String(key)) ? namesOf(key).primary : key);
+const localKeyOf = (key) => (/^(?:s2|p2|t2):/.test(String(key)) ? namesOf(key).primary : key);
 const isLegacyEntry = (v) => v != null && !String(v).startsWith(LEGACY_TAG);
 
 // A settled payment's consumed mark is kept this long (the chain refuses its
@@ -338,6 +446,37 @@ export function createReplayGuard({ ttlMs = SETTLED_HOLD_MS, maxEntries = 50_000
       if (inFlight.has(lk)) return "inflight";
       inFlight.add(lk);
       return "ok";
+    },
+    /**
+     * Read-only twin of begin(): what this guard holds for `key`, claiming
+     * nothing. Returns "consumed", "inflight", "unavailable" (a configured
+     * shared store did not answer) or null (nothing held). Read by a gate that
+     * runs before begin() and must not serve a credential begin() would
+     * refuse (src/gateway-cache-scope.js); every non-null answer means "held".
+     */
+    async held(key, now = Date.now()) {
+      if (!key) return null;
+      const lk = localKeyOf(key);
+      if (isConsumedLocal(lk, now)) return "consumed";
+      if (inFlight.has(lk)) return "inflight";
+      let c = null;
+      try { c = await getSharedRedisClient(); } catch { return sharedLimitEnabled() ? "unavailable" : null; }
+      if (!c) return sharedLimitEnabled() ? "unavailable" : null;
+      try {
+        // Every name in one round trip (MGET): this read runs before the
+        // paywall on a gateway cache candidate.
+        const { primary, legacy } = namesOf(key);
+        const names = [REDIS_PREFIX + "c:" + primary, REDIS_PREFIX + "f:" + primary];
+        if (legacy) names.push(REDIS_PREFIX + "c:" + legacy, REDIS_PREFIX + "f:" + legacy);
+        const vals = typeof c.mGet === "function" ? await c.mGet(names) : await Promise.all(names.map((n) => c.get(n)));
+        if (!Array.isArray(vals) || vals.length !== names.length) return "unavailable";
+        const [cP, fP, cL, fL] = vals;
+        if (cP || (legacy && isLegacyEntry(cL))) return "consumed";
+        if (fP || (legacy && isLegacyEntry(fL))) return "inflight";
+        return null;
+      } catch {
+        return "unavailable";
+      }
     },
     /** Mark the nonce consumed: call only when the gated call was granted
      *  (200). `validBeforeMs` (paymentValidBeforeMs) holds the mark until the

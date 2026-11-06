@@ -1352,7 +1352,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (3 scripts, one process each)
+      - name: Offline suites (4 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -1362,6 +1362,8 @@ jobs:
           t node scripts/test-tollbooth-mpp.js
           # "Buyer wallet trend (a self-funding wallet that FALLS is unexplained; a transient in-flight dip is not — offline)"
           t node scripts/test-buyer-balance-trend.js
+          # "Spending-wallet chain words (five hanging RPCs read side by side under one deadline, unknown not a stall; offline)"
+          t node scripts/test-upstream-buyer-status.js
 
       - name: "Replay guard, cross-replica (REAL redis — two guard instances prove shared claim/settle/release; fails open to local state on a redis outage — 2026-08-16)"
         env:
@@ -1625,6 +1627,9 @@ jobs:
       # An input nested past the depth bound is a 400 on HTTP and MCP (boots its own server on port 0)
       - name: Input nesting depth bound
         run: node scripts/test-input-depth.js
+      # Every input-validation 400 carries a ready-to-run howToCall; each free-tier tool's call and alternate are sent as written (boots its own server on port 0)
+      - name: Input 400 carries a ready-to-run call
+        run: node scripts/test-how-to-call.js
 
       # ONE STEP, MANY SCRIPTS (2026-08-25): GitHub spends ~0.7 s of runner setup
       # per step and this lane had over a hundred one-line steps. Each script still
@@ -1900,6 +1905,8 @@ jobs:
           # Base block time across Denim (2 s to 200 ms): windows stay the same wall-clock length (offline)
           t node scripts/test-chain-block-time.js
           t node scripts/test-payai-credit-watch.js
+          # Heartbeat security advisory triage check: script vs a stub GitHub API, and the step's shell with gh stubbed (offline)
+          t node scripts/test-advisory-triage.js
           # Heartbeat 7-day MPP reconciliation window step, run with curl/gh stubbed (offline)
           t node scripts/test-heartbeat-mpp-window.js
           t node scripts/test-revenue-fresh-recent.js
@@ -2608,6 +2615,8 @@ jobs:
           t node scripts/test-idempotency-settlement.js
           t node scripts/test-idempotency-inflight.js
           t node scripts/test-idempotency-pow-binding.js
+          # Gateway response cache is scoped to the payer who paid (a decodable header or another wallet reads nothing; real EIP-3009 signatures, offline)
+          t node scripts/test-gateway-cache-scope.js
           # Image-kit tests (resize, convert, thumbnail — jimp, exact dims)
           t node scripts/test-image.js
           # jimp on the root zod 4 (no nested zod 3; outputs and option checks match the zod 3 baseline)
@@ -3160,6 +3169,8 @@ jobs:
           t node scripts/test-tool-failure-monitor.js
           # heartbeat.yml's failure-word step run against stubbed curl and gh (pages, comments, closes; slugs only, never counts or upstream names) and the Worker's matching alarms - offline
           t node scripts/test-heartbeat-failure-words.js
+          # heartbeat.yml issue lookups keep only the exact alarm title (a title search also finds near-identical titles; the wallet steps never touch each other's issues) - offline
+          t node scripts/test-heartbeat-issue-lookup.js
           # Paid 200 answer classes (ok / empty / error-shaped / unchecked), the toolAnswers word and its heartbeat + Worker alarm, the identical-answer read over a scratch sales ledger, the observer byte-for-byte; boots a paid-mode server against a stub facilitator on free ports
           t node scripts/test-answer-shape.js
           t node scripts/test-charged-failure-leg.js
@@ -4925,6 +4936,8 @@ jobs:
           t node scripts/test-avm-buyer-legacy-network.js
           # Router dispatch eligibility, labelled: one function for the resolver's Base gate and every public row (offline)
           t node scripts/test-dispatch-eligibility.js
+          # The router's buyer on every EVM chain SOR_EVM_CHAINS enables: allowlist, signed amount = quote, split price, known asset, per-chain day and low balance, Robinhood's USDG domain (offline, stub sellers)
+          t node scripts/test-evm-buyer-chains.js
           # Routes that sell personal data about individuals stay listed and are never ranked, labeled eligible or paid; worker thread agrees (in-process pool + a free boot, offline)
           t node scripts/test-router-people-data.js
           # The raw-text gate before the category patterns never skips text the normalized gate would pass (offline)

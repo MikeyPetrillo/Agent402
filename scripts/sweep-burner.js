@@ -72,7 +72,7 @@ async function main() {
   const { x402Client, x402HTTPClient } = await import("@x402/core/client");
   const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
 
-  const { assertOwnPaidTarget } = await import("./lib/buyer-guard.js");
+  const { assertOwnPaidTarget, capFromEnv, guardCappedSigning } = await import("./lib/buyer-guard.js");
   const TARGET = assertOwnPaidTarget((process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, ""), "sweep-burner");
   const KEY_FILE = process.env.KEY_FILE || "/tmp/burner-key";
   const FLOAT_USD = Number(process.env.SWEEP_FLOAT_USD || "5");     // working float to leave in the burner
@@ -99,6 +99,9 @@ async function main() {
 
   const client = disableVendorSpendControls(new x402Client());
   registerExactEvmScheme(client, { signer: account });
+  // Base only, and no single sweep buy above SWEEP_BUY_MAX_USD, whatever the
+  // live 402 asks.
+  guardCappedSigning(client, { maxUsd: capFromEnv("SWEEP_BUY_MAX_USD", 1, { script: "sweep-burner" }), networks: [BASE_CAIP2] });
   const httpc = new x402HTTPClient(client);
   const denomInit = (i) => ({
     method: "POST", headers: { Accept: "application/json", "Content-Type": "application/json" },

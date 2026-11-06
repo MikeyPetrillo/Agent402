@@ -15,7 +15,8 @@ marked.use({ renderer: { heading({ tokens, depth }) { const html = this.parser.p
 import { ledgerShell, ledgerFooterCompact, esc, breadcrumbTrail } from "./ledger-chrome.js";
 import { fitTitle } from "./seo-meta.js";
 import { GUIDE_INTEGRATIONS, integrationBySlug } from "./integration-pages.js";
-import { RAILS_COUNT, RAILS_COUNT_MD, resolveRailCountTokens } from "./rails.js";
+import { RAILS_COUNT, RAILS_COUNT_MD, resolveRailCountTokens, chainDisplayName } from "./rails.js";
+import { routerPayChains } from "./tools/route-execute.js";
 import { TIERS, METERED_MAX_QUOTE_USD, EMBEDDINGS_PRICE } from "./tools/llm-gateway-kit.js";
 import { routingProofSentence, routerRankingSentence } from "./routing-proof.js";
 import { mppEvmDiscoveryRails, mppShimEnabled } from "./mpp-shim.js";
@@ -67,6 +68,12 @@ function resolveGuideTokens(text, catalog) {
       : "answer with payment setup instead of a result"))
     .replace(/\{\{routingProof\}\}/g, () => routingProofSentence())
     .replace(/\{\{routerRanking\}\}/g, () => routerRankingSentence())
+    // The router's other chains, read from route-execute (its fixed map plus
+    // the EVM chains SOR_EVM_CHAINS lists), so the guide names every one.
+    .replace(/\{\{routerOtherLegs\}\}/g, () => {
+      const names = routerPayChains().filter((c) => c !== "base").map((c) => `**${chainDisplayName(c)}**${c === "tempo" ? " (MPP)" : ""}`);
+      return names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : names.join("");
+    })
     .replace(/\{\{mppEvmRails\}\}/g, () => {
       const names = mppEvmDiscoveryRails().map((r) => r.name);
       return names.length ? `(${names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : names[0]} on this instance; [/.well-known/x402](/.well-known/x402) lists them)` : "(listed in [/.well-known/x402](/.well-known/x402) when MPP is on)";
@@ -215,7 +222,7 @@ const res = await fetch("https://agent402.tools/api/hash", {
 
 Or skip all of this: paste \`https://agent402.tools/mcp\` into Claude as a
 custom connector and the free tier just works, or run
-\`npx -y agent402-mcp@0.13.29\` with an \`AGENT_KEY\` for the full catalog with spend
+\`npx -y agent402-mcp@0.13.30\` with an \`AGENT_KEY\` for the full catalog with spend
 caps enforced before any payment is signed.
 
 ## Why this matters
@@ -724,9 +731,8 @@ catalog. Selection is deliberate, and it is intentionally boring:
 ## Chain-matched settlement
 
 The chain you pay on decides where the router spends: pay on **Base** and it
-pays Base sellers, and the same holds for its **Solana**, **Algorand** and
-**Tempo** (MPP) legs, each paid from this server's spending wallet on that
-chain. The buyer's settlement funds the float on the same rail - and if
+pays Base sellers, and the same holds for its {{routerOtherLegs}} legs, each
+paid from this server's spending wallet on that chain. The buyer's settlement funds the float on the same rail - and if
 you pay on a chain without a spending wallet behind it, you get an honest 409
 naming the supported chains, and **you are not charged on x402** (a rejected
 request cancels settlement by design).
@@ -1282,7 +1288,7 @@ claude mcp add --transport http agent402 https://agent402.tools/mcp
 Paid tools from a wallet, through the stdio server:
 
 \`\`\`bash
-claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.13.29
+claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.13.30
 \`\`\`
 
 **Use a new wallet holding only a few dollars of USDC. Never your main wallet.**
@@ -1294,7 +1300,7 @@ Or in \`.mcp.json\` at the project root:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.13.29"],
+      "args": ["-y", "agent402-mcp@0.13.30"],
       "env": { "AGENT_KEY": "\${AGENT_KEY}" }
     }
   }
@@ -1317,7 +1323,7 @@ Paid tools from a wallet:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.13.29"],
+      "args": ["-y", "agent402-mcp@0.13.30"],
       "env": { "AGENT_KEY": "0x..." }
     }
   }
@@ -1540,7 +1546,7 @@ prompted input (VS Code stores it, the file never carries it):
     "agent402": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.13.29"],
+      "args": ["-y", "agent402-mcp@0.13.30"],
       "env": { "AGENT_KEY": "\${input:agent402-key}" }
     }
   }
@@ -1566,7 +1572,7 @@ interpolation is Windsurf's own):
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.13.29"],
+      "args": ["-y", "agent402-mcp@0.13.30"],
       "env": { "AGENT_KEY": "\${env:AGENT_KEY}" }
     }
   }
@@ -1593,7 +1599,7 @@ Paid tools from a wallet:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.13.29"],
+      "args": ["-y", "agent402-mcp@0.13.30"],
       "env": { "AGENT_KEY": "0x..." },
       "disabled": false,
       "autoApprove": []
@@ -1631,7 +1637,7 @@ Paid tools from a wallet:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.13.29"],
+      "args": ["-y", "agent402-mcp@0.13.30"],
       "env": { "AGENT_KEY": "0x..." },
       "alwaysAllow": [],
       "disabled": false
@@ -1655,7 +1661,7 @@ Or in \`~/.codex/config.toml\`, paid tools from a wallet through the stdio serve
 \`\`\`toml
 [mcp_servers.agent402]
 command = "npx"
-args = ["-y", "agent402-mcp@0.13.29"]
+args = ["-y", "agent402-mcp@0.13.30"]
 env = { AGENT_KEY = "0x..." }
 \`\`\`
 
@@ -1699,7 +1705,7 @@ Or in \`~/.gemini/settings.json\` (\`httpUrl\` is the Streamable HTTP key;
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.13.29"],
+      "args": ["-y", "agent402-mcp@0.13.30"],
       "env": { "AGENT_KEY": "0x..." }
     }
   }

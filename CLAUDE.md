@@ -153,6 +153,12 @@ request, inside its 8-hour lifetime; a write carrying the session cookie needs S
   (`scripts/test-deploy-release-order.js` pins the step).
 - `heartbeat.yml` probes prod on a schedule and opens issues for outages and low balances; a
   daily paid canary (`scripts/paid-canary.js`) buys across every rail. No open issues = healthy.
+- The heartbeat also pages (one issue) on a security advisory in triage longer than the repo
+  variable `ADVISORY_TRIAGE_MAX_HOURS` (default 24), and on a read it cannot make
+  (`scripts/advisory-triage-check.js`): it reads with the Actions secret `ADVISORY_READ_TOKEN`
+  (fine-grained, this repo, Security advisories read); a GHSA id in the repo variable
+  `ADVISORY_TRIAGE_ACK` (comma list) does not page. The issue is fixed text pointing to the
+  Security tab (no id, age or count), never commented on while open; ids and ages go to the job log.
 - `model-drift.yml` runs the live-catalog guard (`scripts/test-gateway-model-ids.js`) every 6 hours,
   never on a push, and keeps one issue open while it fails (a cost row under its dearest live
   endpoint, or more than 15% above it for every servable model the row owns); its output is

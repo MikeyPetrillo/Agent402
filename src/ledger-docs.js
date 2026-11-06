@@ -47,7 +47,7 @@ const GATEWAY_ROWS = [
   { slug: "v1-chat-metered-responses", path: "/v1/metered/responses", note: (p) => `from ${p} &middot; the same pricing on the OpenAI Responses wire (Agents SDK, Codex CLI)` },
   { slug: "v1-chat", path: "/v1/chat/completions", note: (p, c) => `${p} &middot; base tier (${c.nano}&ndash;${c.premium} across the nano&hellip;premium paths)` },
   { slug: "v1-chat-auto", path: "/v1/auto/chat/completions", note: (p) => `${p} &middot; model optional, auto-routed` },
-  { slug: "v1-embeddings", path: "/v1/embeddings", note: (p) => `${p} &middot; free repeat within 10 min` },
+  { slug: "v1-embeddings", path: "/v1/embeddings", note: (p) => `${p} &middot; same payer's repeat free within 10 min` },
   { slug: "v1-images", path: "/v1/images/generations", note: (p) => `${p} per image` },
   { slug: "v1-audio-speech", path: "/v1/audio/speech", note: (p) => `${p} &middot; mp3/pcm bytes out` },
 ];
@@ -130,7 +130,7 @@ node demo.js
 
 <span style="color:var(--on-panel-faint);"># Claude Code - npm server with a funded EVM key (paid tools settle via x402)
 # Use a new wallet holding only a few dollars of USDC. Never your main wallet.
-</span>claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_FUNDED_KEY -- npx -y agent402-mcp@0.13.29
+</span>claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_FUNDED_KEY -- npx -y agent402-mcp@0.13.30
 
 <span style="color:var(--on-panel-faint);"># Cursor - ~/.cursor/mcp.json
 </span>{

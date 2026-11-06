@@ -3,6 +3,23 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 const ENTRIES = [
   {
     date: "2026-11-06",
+    title: "EVM router chains, call hints, package limits",
+    items: [
+      "Router: the router buys from proven sellers on each EVM chain the operator lists, with the same price binding, validity cap and spending caps per chain as on Base, and each listed chain counts toward the global unsettled-spend ceiling.",
+      "Agents: an input-validation 400 carries howToCall: the method, URL and a ready request body from the tool's own example, plus a query-string form where the route serves one; the first-contact 402 body carries the same call, or the method and URL alone when the example is large.",
+      "Payments: a cached gateway answer is served only to the payer that settled it, on a payment not already used.",
+      "Payments: a Stellar refund or settle confirmation counts USDC only from its pinned issuer, and a refused settle releases the authorization's claims so the buyer can retry.",
+      "Packages: the buyer client (with an x402Client), MCP server and OpenClaw plugin refuse to sign an authorization valid for longer than 24 hours, except the client's batched payments, which keep their own limit of seven days and an hour; a held amount is released ten minutes after its authorization expires (agent402-client 0.8.24, agent402-mcp 0.13.30, agent402-openclaw 0.5.10).",
+      "Packages: the MCP server redacts its configured keys from every result, error and log line; the OpenClaw proxy removes its credits key from error logs and error answers, and its doctor no longer prints it.",
+      "Packages: Tollbooth grants a charged request only when its payment middleware took a payment; a charged request whose method the middleware does not price is answered with a 402, so price every method served (agent402-tollbooth 0.11.0).",
+      "Operations: the heartbeat opens one issue when a repository security advisory waits in triage for more than a day; the issue names no advisory.",
+      "Agents: a call to a retired tool through catalog.call names its retirement date and replacement, as the HTTP route's 410 does.",
+      "Operations: retired-route answers are counted by coarse source (client family, referring host, payment rail, HTTP or MCP), with no address, wallet or full user agent kept.",
+      "Operations: the EVM wallet alarm also opens when an enabled chain's balance cannot be read for an hour, and the status probe pages on it.",
+    ],
+  },
+  {
+    date: "2026-11-06",
     title: "Stellar settle confirmation",
     items: [
       "Payments: a Stellar settle that the chain confirms is matched to the payment it signed: asset, amount and transaction, and each confirmed transaction serves one request.",

@@ -35,6 +35,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { privateKeyToAccount } from "viem/accounts";
 import { ownStoreEnv } from "./lib/own-stores.js";
+import { EVM_BUYER_CHAIN_BY_NETWORK, EVM_BUYER_CHAINS } from "../src/evm-buyer-chains.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const FIX = JSON.parse(readFileSync(join(ROOT, "scripts", "golden-trajectories.json"), "utf8"));
@@ -74,7 +75,16 @@ const obs = []; // { seller, kind, to, value, nonce }
 const paidCalls = new Map(); // seller id -> paid requests seen
 let txN = 0;
 
+// A seller on another EVM buyer chain (s.networks[0], e.g. Polygon, listed in
+// the boot's SOR_EVM_CHAINS) quotes that chain's stablecoin under its domain.
+const evmOf = (s) => EVM_BUYER_CHAINS[EVM_BUYER_CHAIN_BY_NETWORK[s.networks[0]] || "base"];
 function offerOf(s, payTo, domainName) {
+  const c = evmOf(s);
+  if (c.name !== "base") return {
+    x402Version: 2, error: "Payment required",
+    resource: { url: s.url, description: s.about, mimeType: "application/json" },
+    accepts: [{ scheme: "exact", network: c.caip2, amount: String(s.quote), asset: c.asset, payTo, maxTimeoutSeconds: 300, extra: { name: domainName === "USD Coin" ? c.domain.name : domainName, version: c.domain.version } }],
+  };
   return {
     x402Version: 2,
     error: "Payment required",
@@ -116,7 +126,7 @@ const sellerStub = createServer((req, res) => {
     if (mode === "take-and-fail") return send(500, { error: "backend failed after payment" });
     const tx = `0x${(++txN).toString(16).padStart(64, "0")}`;
     const query = Object.fromEntries(new URL(req.url, "http://x").searchParams);
-    return send(200, { served: s.id, query, body: body ? JSON.parse(body) : null }, { "payment-response": b64({ success: true, transaction: tx, network: "eip155:8453", payer: auth.from }) });
+    return send(200, { served: s.id, query, body: body ? JSON.parse(body) : null }, { "payment-response": b64({ success: true, transaction: tx, network: s.networks[0], payer: auth.from }) });
   });
 });
 
@@ -127,7 +137,7 @@ const facilitator = createServer((req, res) => {
   req.on("data", (c) => { b += c; });
   req.on("end", () => {
     const reply = (obj) => { if (res.destroyed) return; res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(obj)); };
-    if (req.url === "/supported") return reply({ kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} });
+    if (req.url === "/supported") return reply({ kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }, { x402Version: 2, scheme: "exact", network: "eip155:137" }], extensions: [], signers: {} });
     let parsed = {};
     try { parsed = b ? JSON.parse(b) : {}; } catch { /* empty */ }
     if (req.url === "/rpc") {
@@ -142,7 +152,7 @@ const facilitator = createServer((req, res) => {
     if (req.url === "/verify") return reply({ isValid: true, payer });
     if (req.url === "/settle") {
       settles.push({ payer: lc(payer), ok: true });
-      return reply({ success: true, transaction: `0x${(++txN).toString(16).padStart(64, "0")}`, network: "eip155:8453", payer });
+      return reply({ success: true, transaction: `0x${(++txN).toString(16).padStart(64, "0")}`, network: parsed.paymentRequirements?.network || "eip155:8453", payer });
     }
     reply({});
   });
@@ -159,7 +169,7 @@ const now = Date.now();
 const lines = SELLERS.map((s) => {
   const payTo = walletOf(s.payTo);
   const tool = { seller: s.origin, method: s.method, route: `/${s.slug}`, slug: s.slug, name: s.slug.replace(/-/g, " "), description: s.about, category: "data", tags: [], price: `$${s.price}`, networks: s.networks, payToByNetwork: { [s.networks[0]]: payTo } };
-  return JSON.stringify([s.origin, { manifest: { name: s.host, homepage: s.origin }, fetchedAt: now, source: "manifest", error: null, history: [1, 1, 1, 1, 1], payToByNetwork: { [s.networks[0]]: payTo }, evmDomainByNetwork: { "eip155:8453": { name: "USD Coin", version: "2" } }, tools: [tool] }]);
+  return JSON.stringify([s.origin, { manifest: { name: s.host, homepage: s.origin }, fetchedAt: now, source: "manifest", error: null, history: [1, 1, 1, 1, 1], payToByNetwork: { [s.networks[0]]: payTo }, evmDomainByNetwork: { [evmOf(s).caip2]: { name: evmOf(s).domain.name, version: evmOf(s).domain.version } }, tools: [tool] }]);
 });
 writeFileSync(join(indexDir, "x402-index-cache.ndjson"), [JSON.stringify({ savedAt: now, format: "ndjson-v1", origins: lines.length }), ...lines].join("\n") + "\n");
 const leaderboard = [], walletEvidence = {};
@@ -181,7 +191,7 @@ const proc = spawn(process.execPath, ["--import", "./scripts/lib/golden-preload.
   cwd: ROOT,
   env: {
     ...process.env, TRUST_PROXY_HOPS: "1", ...storeEnv,
-    PORT: "0", FREE_MODE: "", NODE_ENV: "test", WALLET_ADDRESS: TREASURY, NETWORK: "base", PAYMENT_NETWORKS: "base",
+    PORT: "0", FREE_MODE: "", NODE_ENV: "test", WALLET_ADDRESS: TREASURY, NETWORK: "base", PAYMENT_NETWORKS: "base,polygon", SOR_EVM_CHAINS: "polygon", EVM_RPC_137: `http://127.0.0.1:${FAC_PORT}/rpc`, PAYAI_FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`,
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`,
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "",
     OPENROUTER_API_KEY: "", TYPESAFE_API_KEY: "", ROUTE_JUDGE: "off", REDIS_URL: "", STATE_DATABASE_URL: "",
@@ -223,8 +233,9 @@ while (!existsSync(ctlFile)) await sleep(50);
 const CTL = `http://127.0.0.1:${readFileSync(ctlFile, "utf8").trim()}`;
 
 const accepts = {};
-const acceptFor = async (path) => {
-  if (accepts[path]) return accepts[path];
+const acceptFor = async (path, network = "eip155:8453") => {
+  const key = `${path}|${network}`;
+  if (accepts[key]) return accepts[key];
   // The payment gate answers 402 once its facilitator's kinds are read at boot.
   let r = null;
   for (let k = 0; k < 120; k++) {
@@ -234,9 +245,9 @@ const acceptFor = async (path) => {
   }
   if (r.status !== 402) die(`unpaid ${path} answered ${r.status}, not 402`);
   const req402 = unb64(r.headers.get("payment-required"));
-  accepts[path] = (req402.accepts || []).find((a) => a.network === "eip155:8453" && a.scheme === "exact");
-  if (!accepts[path]) die(`${path} offers no exact Base accept`);
-  return accepts[path];
+  accepts[key] = (req402.accepts || []).find((a) => a.network === network && a.scheme === "exact");
+  if (!accepts[key]) die(`${path} offers no exact ${network} accept`);
+  return accepts[key];
 };
 const credential = (accepted, payer, nonce, validBefore) => b64({
   x402Version: 2, resource: accepted.resource, accepted,
@@ -255,7 +266,7 @@ async function runTask(t, i) {
   if (t.targetUrl) body.target = t.targetUrl;
   const headers = { "content-type": "application/json", "x-golden-task": t.id, "x-forwarded-for": `10.77.${Math.floor(i / 250)}.${(i % 250) + 1}` };
   if (!t.unpaid) {
-    const accepted = await acceptFor(path);
+    const accepted = await acceptFor(path, t.payNetwork || "eip155:8453");
     headers["payment-signature"] = credential(accepted, payer, "0x" + "9a".repeat(16) + (i + 1).toString(16).padStart(32, "0"), nowS() + (t.validForSeconds || 300));
   }
   const obs0 = obs.length, settles0 = settles.length, out0 = outboundRows().length;

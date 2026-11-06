@@ -145,7 +145,7 @@ ok(dispatchEligibility({ local: true }).reason === "local_catalog" && dispatchEl
   // forbidden by name. The first cut of that refactor wrote `!== false`, which
   // admits an undefined verdict and turns this fail-closed gate fail-open on a
   // spend path; a pin that only checked "calls dispatchEligibility" passed it.
-  ok(/dispatchEligibility\(\{ routable: true, networks: r\.networks, settled: r\.settled, payers: r\.payers/.test(fn) && /\.chains\.base\?\.eligible === true/.test(fn), "resolveExternalSeller's Base gate is dispatchEligibility's Base verdict (label == decision)");
+  ok(/dispatchEligibility\(\{ routable: true, networks: r\.networks, settled: r\.settled, payers: r\.payers/.test(fn) && /\.chains\[chain\]\?\.eligible === true/.test(fn) && /spendChains: \[chain\]/.test(fn), "resolveExternalSeller's EVM gate is dispatchEligibility's verdict for that chain (label == decision)");
   ok(!/\.chains\.base\?\.eligible !== false/.test(fn), "the Base gate compares === true, never !== false (an undefined verdict must not admit a seller)");
   // The floors must be PASSED, not defaulted. dispatchEligibility declares
   // minSettled = 50 / minPayers = 3 in its own signature, so dropping these two
@@ -158,12 +158,12 @@ ok(dispatchEligibility({ local: true }).reason === "local_catalog" && dispatchEl
   // crawl's observation in the pre-probe filter and the public label, and the
   // LIVE accept after the probe (a seller who fixed it since the crawl is
   // admitted; one who broke it since is not).
-  ok(/usdcDomain: r\.evmDomainByNetwork\?\.\["eip155:8453"\] \|\| null \}\)/.test(fn), "the resolver's pre-probe Base gate passes the crawl's domain observation");
+  ok(/usdcDomain: r\.evmDomainByNetwork\?\.\["eip155:8453"\] \|\| null \} : \{ usdcDomainByChain: \{ \[chain\]: r\.evmDomainByNetwork\?\.\[evmCfg\.caip2\] \|\| null \} \}/.test(fn), "the resolver's pre-probe EVM gate passes the crawl's domain observation for the chain it pays on");
   // The gate must go through the shared predicate, not a string compare: a
   // Gateway-rail accept used to pass here as "unknown" and be refused one hop
   // later in payX402, and the next unsignable rail would do the same.
   ok(/usdcDomainVerdict\(liveBase\)/.test(fn) && /unsignableByStockBuyer\(domain\)/.test(fn) && !/domain\.verdict === "wrong_domain"/.test(fn) && /live = false/.test(fn.slice(fn.indexOf("usdcDomainVerdict(liveBase)"))), "the resolver re-reads the LIVE Base accept's domain after the probe and refuses every unsignable verdict through unsignableByStockBuyer, never a bare wrong_domain compare");
-  ok(/const liveBase = pickPayableAccept\(liveAccepts \|\| \[\], "base"\)/.test(fn), "the resolver judges the live Base accept the buyer will sign (the first payable one), not the first listed");
+  ok(/const liveBase = pickPayableAccept\(liveAccepts \|\| \[\], chain\)/.test(fn) && /if \(isEvmBuyerChain\(chain\)\) \{\n\s*await readLivePayTo\(\);/.test(fn), "the resolver judges the live accept the buyer will sign on its chain (the first payable one), not the first listed");
   ok(/usdcDomain: row\.evmDomainByNetwork\?\.\["eip155:8453"\] \|\| null,/.test(server), "withDispatchFields hands the row's observation to the label");
   const buyer = readFileSync(new URL("../src/x402-buyer.js", import.meta.url), "utf8");
   const pay = buyer.slice(buyer.indexOf("export async function payX402("));

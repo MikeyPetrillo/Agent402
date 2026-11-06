@@ -26,8 +26,9 @@
 //                         Robinhood Chain, "base,solana", or a raw CAIP-2 like eip155:4663), optional
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { format } from "node:util";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { quoteOf, guardSigning } from "./known-assets.js";
+import { quoteOf, guardSigning, signedExpirySeconds, MAX_VALIDITY_SECONDS } from "./known-assets.js";
 import { parseNetworkPrefs, withNetworkPreference, distrustFetch } from "./networks.js";
 import { fetchDiscovery, discoveryFailure, getDiscoveryJson } from "./discovery.js";
 import { awaitJob, shouldRequestAsync, AsyncJobPendingError, DEFAULT_ASYNC_TIMEOUT_MS, jobState } from "./async-job.js";
@@ -88,6 +89,62 @@ const CREDITS_KEY = (process.env.AGENT402_CREDITS_KEY || "").trim();
 const SHOW_ROUTER = HAS_WALLET || process.env.AGENT402_SHOW_ROUTER === "1";
 const HIDDEN_WITHOUT_WALLET = new Set(["router.execute", META_MCP_NAMES.list_top_sellers]);
 const HAS_CREDITS = /^a402_[A-Za-z0-9_-]{32,64}$/.test(CREDITS_KEY);
+// The secrets this process holds never leave it in text: every tool result,
+// every protocol error and every console line passes through redactSecrets,
+// which replaces each configured key (and the spellings a library may print
+// it in: without its 0x prefix, in either case, a byte array without spaces)
+// with [redacted]. Key parsing also throws fixed messages that name the
+// variable only (walletKeyError), since a parser's own message can quote its
+// input.
+const SECRET_FORMS = (() => {
+  const out = new Set();
+  for (const raw of [AGENT_KEY, SOLANA_AGENT_KEY, CREDITS_KEY]) {
+    const v = String(raw || "").trim();
+    if (v.length < 8) continue;
+    out.add(v);
+    const hex = v.replace(/^0x/i, "");
+    if (/^[0-9a-f]+$/i.test(hex) && hex.length >= 8) { out.add(hex); out.add(hex.toLowerCase()); out.add(hex.toUpperCase()); }
+    if (v.startsWith("[")) out.add(v.replace(/\s+/g, ""));
+  }
+  return [...out].sort((a, b) => b.length - a.length);
+})();
+function redactSecrets(text) {
+  let t = String(text);
+  for (const f of SECRET_FORMS) if (t.includes(f)) t = t.split(f).join("[redacted]");
+  return t;
+}
+/** A copy of a tool result (or any JSON value) with every string redacted. */
+function redactDeep(v, depth = 0) {
+  if (!SECRET_FORMS.length) return v;
+  if (typeof v === "string") return redactSecrets(v);
+  if (depth > 64 || v == null || typeof v !== "object") return v;
+  if (Array.isArray(v)) return v.map((x) => redactDeep(x, depth + 1));
+  const out = {};
+  for (const [k, x] of Object.entries(v)) out[k] = redactDeep(x, depth + 1);
+  return out;
+}
+/** A handler whose answer, and whose thrown error's message, are redacted. */
+const redacted = (handler) => async (req, extra) => {
+  try {
+    return redactDeep(await handler(req, extra));
+  } catch (e) {
+    if (SECRET_FORMS.length && e && typeof e.message === "string") {
+      try { e.message = redactSecrets(e.message); if (typeof e.stack === "string") e.stack = redactSecrets(e.stack); } catch { /* a frozen error */ throw new Error(redactSecrets(e.message)); }
+    }
+    throw e;
+  }
+};
+// Every console line, a library's included, is redacted before it is written.
+if (SECRET_FORMS.length) {
+  for (const m of ["log", "info", "warn", "error", "debug", "trace"]) {
+    const orig = console[m].bind(console);
+    console[m] = (...a) => orig(redactSecrets(format(...a)));
+  }
+}
+/** A fixed error for a key that does not parse: the variable's name, never
+ *  the parser's message (it can quote the value). */
+const walletKeyError = (name, what) => new Error(`${name} is set but is not ${what}; check the value (it is never printed)`);
+
 // Slow paid routes (async.recommended on their /api/pricing row) are sent with
 // Prefer: respond-async and collected from their job link (./async-job.js).
 // AGENT402_ASYNC=off waits on the connection instead; =always uses a job on
@@ -114,7 +171,7 @@ const capFromEnv = (name, def) => {
   if (raw === "off") return Infinity;
   const n = Number(raw);
   if (Number.isFinite(n) && n >= 0) return n;
-  console.error(`[agent402-mcp] ${name}=${JSON.stringify(process.env[name])} is not a USD amount or "off"; using the default (${def === Infinity ? "no cap" : `$${def}`})`);
+  console.error(`[agent402-mcp] ${name}=${String(process.env[name]).length <= 16 ? JSON.stringify(process.env[name]) : "(a long value, not shown)"} is not a USD amount or "off"; using the default (${def === Infinity ? "no cap" : `$${def}`})`);
   return def;
 };
 const MAX_PER_CALL = capFromEnv("AGENT402_MAX_PER_CALL", DEFAULT_MAX_PER_CALL_USD);
@@ -136,12 +193,13 @@ const holds = []; // [{ usd, until }], until Infinity = the rest of the session
 const holdPayment = (usd, until = Infinity) => { holds.push({ usd, until }); };
 const heldNow = () => { const now = Date.now(); let t = 0; for (const h of holds) if (h.until > now) t += h.usd; return t; };
 /** When a sent payload can no longer settle plus the clock slack: an EIP-3009
- *  validBefore or a Permit2 deadline, in seconds; null when none is readable. */
-function signedValidUntilMs(paymentPayload) {
-  const p = paymentPayload?.payload;
-  const v = p?.authorization?.validBefore ?? p?.permit2Authorization?.deadline;
-  if (v == null || !/^\d{1,15}$/.test(String(v))) return null;
-  return Number(v) * 1000 + HOLD_SLACK_MS;
+ *  validBefore or a Permit2 deadline, in seconds, never later than
+ *  MAX_VALIDITY_SECONDS from now (the signing guard refuses to send a payload
+ *  valid for longer); null when none is readable. */
+function signedValidUntilMs(paymentPayload, nowMs = Date.now()) {
+  const v = signedExpirySeconds(paymentPayload);
+  if (v == null || !Number.isFinite(v)) return null;
+  return Math.min(v * 1000, nowMs + MAX_VALIDITY_SECONDS * 1000) + HOLD_SLACK_MS;
 }
 // Wallet calls in flight, each holding what it may sign until it settles or
 // fails, so concurrent calls cannot each pass against the same budget. The
@@ -248,7 +306,7 @@ function getPayFetch() {
     if (AGENT_KEY) {
       const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
       const { privateKeyToAccount } = await import("viem/accounts");
-      registerExactEvmScheme(client, { signer: privateKeyToAccount(AGENT_KEY) });
+      registerExactEvmScheme(client, { signer: evmAccount(privateKeyToAccount) });
     }
     if (SOLANA_AGENT_KEY) {
       const { registerExactSvmScheme } = await import("@x402/svm/exact/client");
@@ -265,6 +323,11 @@ function getPayFetch() {
   return payFetchPromise;
 }
 
+/** The viem account for AGENT_KEY, or walletKeyError. */
+function evmAccount(privateKeyToAccount) {
+  try { return privateKeyToAccount(AGENT_KEY.trim()); } catch { throw walletKeyError("AGENT_KEY", "a 0x-prefixed 32-byte hex private key"); }
+}
+
 // @solana/kit KeyPairSigner from SOLANA_AGENT_KEY, base58 64-byte secret key
 // (Phantom / solana-keygen export) or a JSON byte array ([12,34,…]).
 let solanaSignerPromise;
@@ -272,10 +335,14 @@ function solanaSigner() {
   solanaSignerPromise ??= (async () => {
     const { createKeyPairSignerFromBytes, getBase58Encoder } = await import("@solana/kit");
     const raw = SOLANA_AGENT_KEY.trim();
-    const bytes = raw.startsWith("[")
-      ? Uint8Array.from(JSON.parse(raw))
-      : new Uint8Array(getBase58Encoder().encode(raw));
-    return createKeyPairSignerFromBytes(bytes);
+    try {
+      const bytes = raw.startsWith("[")
+        ? Uint8Array.from(JSON.parse(raw))
+        : new Uint8Array(getBase58Encoder().encode(raw));
+      return await createKeyPairSignerFromBytes(bytes);
+    } catch {
+      throw walletKeyError("SOLANA_AGENT_KEY", "a base58 or JSON byte-array 64-byte Solana secret key");
+    }
   })();
   return solanaSignerPromise;
 }
@@ -561,8 +628,10 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
 function signingRefusal(tool, d) {
   const text = d.reason === "unknown-asset"
     ? `Refused without paying: "${tool.slug}" asked to be paid in an asset this server cannot price (USDC or USDG on a known network), so nothing was signed.`
-    : d.reason === "signed-amount"
+    : d.reason === "signed-amount" || d.reason === "signed-validity"
     ? `Refused without paying: for "${tool.slug}", ${d.detail}, so the payment was not sent.`
+    : d.reason === "validity"
+    ? `Refused without paying: for "${tool.slug}", ${d.detail}, so nothing was signed.`
     : `Refused without paying: "${tool.slug}" asked for $${d.priceUsd} on the paid request, above the $${Number(d.allowanceUsd.toFixed(6))} this server may sign (AGENT402_MAX_PER_CALL ${MAX_PER_CALL === Infinity ? "off" : `$${MAX_PER_CALL}`}, AGENT402_BUDGET ${BUDGET === Infinity ? "off" : `$${BUDGET}`} with $${spentUsd.toFixed(4)} spent). Nothing was signed.`;
   return { content: [{ type: "text", text }], isError: true };
 }
@@ -689,7 +758,7 @@ const server = new Server(
 // MCP-aware client. The list is fetched once at boot in loadCatalog(); the
 // per-prompt rendering is delegated to the hosted service so the npm package
 // stays thin and prompt text stays canonical with the website at /skills.
-server.setRequestHandler(ListPromptsRequestSchema, async () => ({
+server.setRequestHandler(ListPromptsRequestSchema, redacted(async () => ({
   prompts: skillPacks.map((p) => ({
     name: p.slug,
     title: p.title,
@@ -700,8 +769,8 @@ server.setRequestHandler(ListPromptsRequestSchema, async () => ({
       required: a.required ?? true,
     })),
   })),
-}));
-server.setRequestHandler(GetPromptRequestSchema, async (req) => {
+})));
+server.setRequestHandler(GetPromptRequestSchema, redacted(async (req) => {
   const { name, arguments: args = {} } = req.params;
   const pack = skillPacks.find((p) => p.slug === name);
   if (!pack) throw new Error(`Unknown prompt "${name}". List available with prompts/list.`);
@@ -712,7 +781,7 @@ server.setRequestHandler(GetPromptRequestSchema, async (req) => {
   const { res, attempts } = await fetchDiscovery(url);
   if (!res.ok) throw new Error(`Failed to render prompt "${name}" from ${BASE}: ${discoveryFailure(url, res, attempts)}`);
   return await res.json();
-});
+}));
 
 let curated = [];
 let pricingInfo = null;
@@ -747,7 +816,7 @@ async function ensureCatalog() {
 }
 const withCatalog = (handler) => async (req, extra) => { await ensureCatalog(); return handler(req, extra); };
 
-server.setRequestHandler(ListToolsRequestSchema, withCatalog(async () => {
+server.setRequestHandler(ListToolsRequestSchema, redacted(withCatalog(async () => {
   // Read-only only for lookups that stay on this machine (describe, payment
   // info). Anything that reaches the network or can spend is NET: not read-only,
   // open-world. A host reads readOnlyHint to decide whether to ask first.
@@ -878,9 +947,9 @@ server.setRequestHandler(ListToolsRequestSchema, withCatalog(async () => {
   // AGENT402_SHOW_ROUTER=1 opts in. Calls to them still route when unlisted.
   const listed = SHOW_ROUTER ? tools : tools.filter((t) => !HIDDEN_WITHOUT_WALLET.has(t.name));
   return { tools: listed };
-}));
+})));
 
-server.setRequestHandler(CallToolRequestSchema, withCatalog(async (req, extra) => {
+server.setRequestHandler(CallToolRequestSchema, redacted(withCatalog(async (req, extra) => {
   const { name: rawName, arguments: args = {} } = req.params;
   const name = resolveListedName(rawName);
   const overBound = toolInputBoundRefusal(rawName, args);
@@ -942,7 +1011,7 @@ server.setRequestHandler(CallToolRequestSchema, withCatalog(async (req, extra) =
       let address = null;
       if (AGENT_KEY) {
         const { privateKeyToAccount } = await import("viem/accounts");
-        address = privateKeyToAccount(AGENT_KEY).address;
+        try { address = evmAccount(privateKeyToAccount).address; } catch { address = "invalid AGENT_KEY"; }
       }
       let solanaAddress = null;
       if (SOLANA_AGENT_KEY) {
@@ -982,7 +1051,7 @@ server.setRequestHandler(CallToolRequestSchema, withCatalog(async (req, extra) =
           claudeCodeHosted: `claude mcp add --transport http agent402 ${BASE}/mcp`,
           claudeCodeNpm: `claude mcp add agent402 -s user -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}`,
           cursorHosted: { mcpServers: { agent402: { url: `${BASE}/mcp` } } },
-          npm: "npx -y agent402-mcp@0.13.29",
+          npm: "npx -y agent402-mcp@0.13.30",
           maintainer: "Havok Holdings LLC",
         },
         positioning: `Flagship search/answer first, 500+ long-tail tools via catalog.find / catalog.search / catalog.call. Agent402 is the applied layer of Agentic Finance: agents that pay and get paid per request over x402 or MPP (Machine Payments Protocol), both on the same 402 - ${BASE}/agentic-finance, ${BASE}/glossary.`,
@@ -1002,7 +1071,7 @@ server.setRequestHandler(CallToolRequestSchema, withCatalog(async (req, extra) =
         install: {
           claudeCodeHosted: `claude mcp add --transport http agent402 ${BASE}/mcp`,
           claudeCodeNpm: `claude mcp add agent402 -s user -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}`,
-          npm: "npx -y agent402-mcp@0.13.29",
+          npm: "npx -y agent402-mcp@0.13.30",
           maintainer: "Havok Holdings LLC",
         },
         tools: catalog.size,
@@ -1143,7 +1212,7 @@ server.setRequestHandler(CallToolRequestSchema, withCatalog(async (req, extra) =
   } catch (err) {
     return { content: [{ type: "text", text: `Agent402 call failed: ${err.message}` }], isError: true };
   }
-}));
+})));
 
 // ---------------------------------------------------------------------------
 try {

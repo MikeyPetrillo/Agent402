@@ -519,7 +519,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
 
   <h2 class="tp-h2">From an MCP client</h2>
   <pre class="tp-pre">catalog.call ${e(mcpArgs)}</pre>
-  <p class="tp-sub">${mcpNote} Local install: <code>npx -y agent402-mcp@0.13.29</code>.</p>
+  <p class="tp-sub">${mcpNote} Local install: <code>npx -y agent402-mcp@0.13.30</code>.</p>
 
   <h2 class="tp-h2">Errors and behavior</h2>
   <ul class="tp-facts">${facts.map((f) => `<li>${f}</li>`).join("\n")}</ul>
@@ -814,7 +814,7 @@ export function openapiSpec(baseUrl, catalog) {
             : { "application/json": { schema: responseSchemaFor(path, discovery?.output?.example), example: discovery?.output?.example ?? {}, ...(discovery?.output?.captured ? { "x-example-source": { kind: "captured-paid-answer", capturedAt: discovery.output.captured.capturedAt, modelBacked: discovery.output.captured.modelBacked === true } } : {}) } },
         },
         402: { description: "Payment Required - x402 payment requirements in the PAYMENT-REQUIRED header, mirrored in the JSON body, and MPP challenges (WWW-Authenticate: Payment)" },
-        400: { description: "Invalid input" },
+        400: { description: "Invalid input - the JSON body names the tool's input schema (expected, required), its example, and howToCall: the same example as a ready-to-run request (method, url, and a JSON body, or form parts for a multipart tool), with the other method under alternate where it is served; a call over 1024 bytes carries only method and url" },
       },
       "x-price": tool.price,
       ...(mppFlagshipBySlug.has(tool.slug) ? { "x-mpp-flagship": { order: mppFlagshipBySlug.get(tool.slug).order, why: mppFlagshipBySlug.get(tool.slug).why } } : {}),

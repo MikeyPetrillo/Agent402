@@ -14,8 +14,8 @@ import { toolList } from "./pages.js";
 import { RAILS, RAILS_SHORT } from "./rails.js";
 import { CAIP2_NAMES } from "./stats.js";
 import { chainMark, CHAIN_ORDER } from "./chain-logos.js";
-import { EXTERNAL_CHAIN_BY_NETWORK } from "./tools/route-execute.js";
-import { railKey } from "./rails.js";
+import { routerPayChains } from "./tools/route-execute.js";
+import { railKey, chainDisplayName } from "./rails.js";
 import { tempoEnabled } from "./mpp-tempo.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
@@ -134,8 +134,9 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
   // One noun on every surface: the x402 chains, plus Tempo over MPP when it is
   // on. "N rails" counted Tempo as a chain beside copy that said N-1 chains.
   const railCountLabel = `${RAILS.length} chains${rails.length > RAILS.length ? " + Tempo" : ""} live`;
-  // The chains the router can pay an outside seller on, read from its map.
-  const routerChains = [...new Set(Object.values(EXTERNAL_CHAIN_BY_NETWORK))];
+  // The chains the router can pay an outside seller on right now: its map
+  // plus the EVM chains SOR_EVM_CHAINS lists.
+  const routerChains = routerPayChains();
 
   const canonical = baseUrl + "/";
   // Title <= 70 and description <= 155 (the shell trims, but the homepage
@@ -300,7 +301,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
 <section id="sell" style="max-width:1180px;margin:0 auto;padding:64px 30px 0;">
   <h2 class="hm-h2">Sell to agents.</h2>
   ${sectionMeta(["free listing", "nothing deducted", "buyer wallet → your wallet"], "margin:10px 0 14px;")}
-  <p class="hm-lede ml-measure" style="margin:0 0 18px;text-wrap:pretty;">List an x402 API and the router can send agents your way; it pays you on ${esc(routerChains.map((c) => c[0].toUpperCase() + c.slice(1)).join(", "))}. Or put agent402-tollbooth in front of a site to charge AI crawlers per page. Sellers rank by settled volume on the <a href="/leaderboard" style="color:var(--ink);">leaderboard</a>.</p>
+  <p class="hm-lede ml-measure" style="margin:0 0 18px;text-wrap:pretty;">List an x402 API and the router can send agents your way; it pays you on ${esc(routerChains.map(chainDisplayName).join(", "))}. Or put agent402-tollbooth in front of a site to charge AI crawlers per page. Sellers rank by settled volume on the <a href="/leaderboard" style="color:var(--ink);">leaderboard</a>.</p>
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);"><a href="/sell" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:1px;white-space:nowrap;">everything for sellers → /sell</a></div>
 </section>
 

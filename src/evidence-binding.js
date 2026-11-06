@@ -69,6 +69,7 @@
 // shape can be tested with a fake leaderboard row and a fake 402.
 import { dispatchEligibility, evidencePayToVerdict } from "./dispatch-eligibility.js";
 import { payToFromLive402, meetsRouterGate } from "./settlement-proof.js";
+import { EVM_BUYER_CHAINS } from "./evm-buyer-chains.js";
 
 const norm = (u) => String(u || "").replace(/\/+$/, "").toLowerCase();
 const evmKey = (a) => (typeof a === "string" && /^0x[0-9a-f]{40}$/i.test(a) ? a.toLowerCase() : null);
@@ -326,14 +327,18 @@ export function buildEvidenceBinding({ leaderboardRows = [], walletEvidence = nu
  *
  * `livePayTo` may be passed decoded, or read from the probe's `header` / `body`.
  */
-export function baseLiveGate({ networks, settled, payers, priceUsd, urlTemplate = false, minSettled, minPayers, binding, livePayTo, header, body, usdcDomain = null, routeText = null } = {}) {
-  const live = livePayTo !== undefined ? livePayTo : payToFromLive402({ header, body });
+export function baseLiveGate({ networks, settled, payers, priceUsd, urlTemplate = false, minSettled, minPayers, binding, livePayTo, header, body, usdcDomain = null, routeText = null, chain = "base" } = {}) {
+  // `chain`: any EVM buyer chain (src/evm-buyer-chains.js). The same gate, read
+  // at the wallet THAT chain's live 402 names.
+  const caip2 = EVM_BUYER_CHAINS[chain]?.caip2 || "eip155:8453";
+  const live = livePayTo !== undefined ? livePayTo : payToFromLive402({ header, body, network: caip2 });
   const v = dispatchEligibility({
     routable: true, networks, settled, payers, priceUsd, urlTemplate: !!urlTemplate,
-    spendChains: ["base"], minSettled, minPayers, usdcDomain, routeText,
-    ...(binding ? { evidence: binding, livePayTo: live } : {}),
+    spendChains: [chain], minSettled, minPayers, routeText,
+    ...(chain === "base" ? { usdcDomain } : { usdcDomainByChain: { [chain]: usdcDomain } }),
+    ...(binding ? { evidence: binding, ...(chain === "base" ? { livePayTo: live } : { livePayToByChain: { [chain]: live } }) } : {}),
   });
-  const base = v.chains?.base || {};
+  const base = v.chains?.[chain] || {};
   const verdict = binding ? evidencePayToVerdict({ evidence: binding, livePayTo: live, minSettled, minPayers }) : null;
   if (base.eligible === true) return { ok: true, livePayTo: live, evidenceWallets: verdict?.bound ? [...verdict.payTos] : null };
   return { ok: false, detail: base.detail || base.reason || v.reason, livePayTo: live, payTos: verdict ? [...(verdict.payTos || [])] : [] };

@@ -398,7 +398,10 @@ can still redeem until its `validBefore`, so the error carries `paid: "unknown"`
 and `heldUsd`, and `spendingSummary()` reports it under `heldUsd`. A held
 amount counts for the rolling 24 hours, and longer when the authorization
 stays valid longer (a seven-day Circle Gateway authorization is held until its
-`validBefore` passes). Pass your `x402Client` so the client sees exactly which
+`validBefore` passes). With an `x402Client`, an accept asking to stay valid for
+more than a day (`MAX_VALIDITY_SECONDS`) is refused before anything is signed,
+and a payload signed for longer is refused before it is sent, so no hold
+outlives a day after the send (seven days and an hour for a batched payment). Pass your `x402Client` so the client sees exactly which
 payments were signed; through a pre-wrapped `fetch` alone it cannot tell, so any
 failed paid call is held. A paid HTTP-success response that later fails byte,
 JSON, or output validation remains settled spend. Free proof-of-work calls are

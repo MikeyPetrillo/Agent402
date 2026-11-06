@@ -113,9 +113,9 @@ Run these in order. Do not skip steps.
 
 \`\`\`bash
 # free tier (proof-of-work tools only)
-claude mcp add agent402 -- npx -y agent402-mcp@0.13.29
+claude mcp add agent402 -- npx -y agent402-mcp@0.13.30
 # full catalog: add a wallet (EVM key with USDC) via env
-claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.13.29
+claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.13.30
 \`\`\`
 
 **Use a new wallet holding only a few dollars of USDC. Never your main wallet.**
@@ -123,7 +123,7 @@ claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.13.29
 Generic MCP host config:
 
 \`\`\`json
-{ "mcpServers": { "agent402": { "command": "npx", "args": ["-y", "agent402-mcp@0.13.29"],
+{ "mcpServers": { "agent402": { "command": "npx", "args": ["-y", "agent402-mcp@0.13.30"],
   "env": { "AGENT_KEY": "0x...", "AGENT402_MAX_PER_CALL": "0.05", "AGENT402_BUDGET": "1.00" } } } }
 \`\`\`
 
@@ -254,7 +254,7 @@ ${meteredCurl(baseUrl)}
   after the handler and only for a successful response). Retry later. Exception: a
   Tempo transfer sent before the call is final when sent; if the call then fails,
   the amount is recorded as a refund owed to that wallet.
-- **\`X-Cache: hit\`** - a cached repeat served free (prompt cache / embeddings); the payment it carried is not charged, except a Tempo transfer sent before the call, which is final when sent.
+- **\`X-Cache: hit\`** - a cached repeat served free (prompt cache / embeddings / rerank) to the payer that paid for it, on a fresh x402 v2 \`exact\` payment signed by the paying wallet's own key, a verified Tempo sender, or the same credits key; the payment it carried is not charged, except a Tempo transfer sent before the call, which is final when sent. Other payers and payment methods are charged on each call.
 
 On x402 a failed call is not charged by construction: settlement happens AFTER the
 handler and only for a sub-400 response. You can verify that from the headers

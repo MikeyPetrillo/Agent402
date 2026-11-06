@@ -11,7 +11,7 @@
 // (scripts/lib/slow-route-buy.js); a job that ends failed is a failed run. A
 // 400 respond_async_required (refused before payment) is paid once more with
 // the Prefer header its body names.
-import { assertOwnPaidTarget } from "./lib/buyer-guard.js";
+import { assertOwnPaidTarget, capFromEnv, guardCappedSigning } from "./lib/buyer-guard.js";
 import { createHmac } from "node:crypto";
 import { asyncAdviceByPath, slowPreferOf, paidCallHonoringSlowRoutes } from "./lib/slow-route-buy.js";
 import { writeFileSync } from "node:fs";
@@ -26,6 +26,9 @@ const [{ privateKeyToAccount }, { x402Client }, { registerExactEvmScheme }, { wr
   import("viem/accounts"), import("@x402/core/client"), import("@x402/evm/exact/client"), import("@x402/fetch"), import("../src/x402-spend-controls.js")]);
 const client = disableVendorSpendControls(new x402Client());
 registerExactEvmScheme(client, { signer: privateKeyToAccount(pk) });
+// Base only, and no single payment above DECIDE_CHECK_MAX_USD (default: the
+// execute route's published per-call maximum).
+guardCappedSigning(client, { maxUsd: capFromEnv("DECIDE_CHECK_MAX_USD", 3, { script: "decide-prod-check" }), networks: ["eip155:8453"] });
 const pay = wrapFetchWithPayment(tagged(fetch), client);
 const asyncByPath = await fetch(`${TARGET}/api/pricing`).then((r) => r.json()).then(asyncAdviceByPath).catch(() => new Map());
 const post = async (path, body) => (await paidCallHonoringSlowRoutes(

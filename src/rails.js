@@ -146,6 +146,15 @@ export const RAILS_NOTE =
  *  ?network= query params and CSS-class-safe identifiers. */
 export const railKey = (r) => r.name.replace(/ Chain$/, "").toLowerCase().replace(/\s+/g, "");
 
+/** Display name for a chain slug ("robinhood" -> "Robinhood Chain"): the
+ *  rail's own name (listed or gated), Tempo (MPP, not an x402 rail), else the
+ *  slug capitalized. One map for every page that names a chain by its slug. */
+const CHAIN_DISPLAY = new Map([...RAILS, ...GATED_RAILS].map((r) => [railKey(r), r.name]).concat([["tempo", "Tempo"]]));
+export const chainDisplayName = (slug) => {
+  const k = String(slug || "");
+  return CHAIN_DISPLAY.get(k) || (k ? k[0].toUpperCase() + k.slice(1) : k);
+};
+
 /** True when a route's x402 offer is EVM `exact` only. ONE predicate, read by
  *  src/payments.js acceptsForItem (the live 402) and by every surface that
  *  names the rails a route takes (/openapi.json, /tools/<slug>), so the docs

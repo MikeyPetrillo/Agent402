@@ -438,6 +438,84 @@ ok(html.includes("initProbes") && html.includes("navigator.clipboard"), "probes 
   ok((await good.claim("t1", Date.now() + 60_000)) === false, "and refuses the replay");
 }
 
+// --- x402 middleware mode: a method the middleware does not price is not free ---
+// A real @x402/express v2 middleware priced on "GET /*" (and, like the CLI, on
+// "/*", which its matcher never applies to OPTIONS) calls next() for anything
+// outside its routes. The gate has already decided the request pays, so that
+// next() is not a payment: POST, PUT, OPTIONS, a method-override header or a
+// junk payment header on an unpriced method get the gate's 402, never the
+// handler. Controls: an unpaid GET draws the middleware's lifted 402 and a
+// stock x402 client pays GET through a stub facilitator.
+{
+  const { createServer } = await import("node:http");
+  const { default: express } = await import("express");
+  const { paymentMiddleware } = await import("@x402/express");
+  const { HTTPFacilitatorClient, x402ResourceServer } = await import("@x402/core/server");
+  const { ExactEvmScheme } = await import("@x402/evm/exact/server");
+  const { x402Client } = await import("@x402/core/client");
+  const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
+  const { wrapFetchWithPayment } = await import("@x402/fetch");
+  const { privateKeyToAccount, generatePrivateKey } = await import("viem/accounts");
+  const PAYTO = "0x000000000000000000000000000000000000dEaD";
+  const settles = [];
+  const fac = createServer((req, res) => {
+    let b = ""; req.on("data", (c) => { b += c; });
+    req.on("end", () => {
+      const reply = (o) => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(o)); };
+      const p = b ? JSON.parse(b) : {};
+      if (req.url === "/supported") return reply({ kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} });
+      if (req.url === "/verify") return reply({ isValid: true, payer: p.paymentPayload?.payload?.authorization?.from });
+      if (req.url === "/settle") { settles.push(p); return reply({ success: true, transaction: "0x" + "ab".repeat(32), network: "eip155:8453", payer: p.paymentPayload?.payload?.authorization?.from }); }
+      res.writeHead(404); res.end();
+    });
+  });
+  await new Promise((r) => fac.listen(0, "127.0.0.1", r));
+  const servers = [fac];
+  const boot = async (pattern) => {
+    const rs = new x402ResourceServer(new HTTPFacilitatorClient({ url: `http://127.0.0.1:${fac.address().port}` })).register("eip155:8453", new ExactEvmScheme());
+    const mw = paymentMiddleware({ [pattern]: { accepts: [{ scheme: "exact", network: "eip155:8453", price: "$0.001", payTo: PAYTO }], description: "page", mimeType: "application/json" } }, rs);
+    const e = express();
+    e.use(createTollbooth({ mode: "all", payTo: PAYTO, price: "$0.001", network: "eip155:8453", x402: mw, powSecret: "s", mpp: false }));
+    // A handler that serves the content on every method, as a catch-all or a proxied origin does.
+    e.all("/page", (_req, res) => res.json({ page: "paid content" }));
+    const srv = e.listen(0, "127.0.0.1");
+    await new Promise((r) => srv.once("listening", r));
+    servers.push(srv);
+    return `http://127.0.0.1:${srv.address().port}/page`;
+  };
+  try {
+    for (const pattern of ["GET /*", "/*"]) {
+      const url = await boot(pattern);
+      const unpaid = await fetch(url);
+      ok(unpaid.status === 402 && !!unpaid.headers.get("payment-required"), `${pattern}: control: an unpaid GET draws the 402 with the middleware's PAYMENT-REQUIRED`);
+      const cases = [["OPTIONS", {}], ["POST", { "x-http-method-override": "GET" }], ["OPTIONS", { "x-payment": "junk" }]];
+      if (pattern === "GET /*") cases.push(["POST", {}], ["PUT", {}], ["DELETE", { "payment-signature": "junk" }]);
+      for (const [method, headers] of cases) {
+        const r = await fetch(url, { method, headers });
+        const body = await r.text();
+        ok(r.status === 402 && !body.includes("paid content") && r.headers.get("x-tollbooth-paid") === null, `${pattern}: ${method}${Object.keys(headers).length ? ` with ${Object.keys(headers)[0]}` : ""} on a method the middleware does not price is refused, not served (${r.status} ${r.headers.get("x-tollbooth-error")})`);
+      }
+      const head = await fetch(url, { method: "HEAD" });
+      ok(head.status === 402, `${pattern}: an unpaid HEAD is refused (${head.status})`);
+      const xc = new x402Client(); registerExactEvmScheme(xc, { signer: privateKeyToAccount(generatePrivateKey()) });
+      const before = settles.length;
+      const paid = await wrapFetchWithPayment(fetch, xc)(url);
+      ok(paid.status === 200 && (await paid.json()).page === "paid content" && paid.headers.get("x-tollbooth-paid") === "x402" && settles.length === before + 1, `${pattern}: control: a stock x402 client pays GET and the payment settles (${paid.status})`);
+    }
+  } finally { for (const s of servers) s.close(); }
+}
+
+// The README's x402 example is what operators copy: it prices every method the
+// gate charges, and the upgrade note says an unpriced method now gets the 402.
+{
+  const { readFileSync } = await import("node:fs");
+  const readme = readFileSync(new URL("./README.md", import.meta.url), "utf8");
+  const blocks = [...readme.matchAll(/```js\n([\s\S]*?)```/g)].map((m) => m[1]).filter((b) => b.includes("paymentMiddleware("));
+  ok(blocks.length >= 1, "README: an x402 middleware example exists");
+  ok(blocks.every((b) => !/"(GET|HEAD) \/\*"/.test(b)), "README: the x402 example does not price GET alone");
+  ok(/^## Upgrading from 0\.10\.8 or earlier$/m.test(readme) && /gets the\s+gate's 402/.test(readme), "README: the upgrade note names the 402 on an unpriced method");
+}
+
 console.log(`\n${pass} passed`);
 
 // In-memory SQLite for the shared-store assertions. Prefers the built-in

@@ -95,6 +95,8 @@ import { backfillBrokenPackRefunds } from "./refund-backfill.js";
 import { mppFallbackStatus } from "./mpp-fallback.js";
 import { applyMeteredSettlement, meteredUsdOf } from "./gateway-meter.js";
 import { handlerInputOf, preValidateInput, withIgnoredParams } from "./handler-input.js";
+import { configureHowToCall, howToCall402Field, howToCallField } from "./how-to-call.js";
+import { gatewayCacheGate, commitGatewayCacheWrites } from "./gateway-cache-scope.js";
 import { startModelCatalogRefresh, modelCatalogWanted } from "./model-catalog.js";
 import { toolErrorFields } from "./tool-error-fields.js";
 import { shapeRefusal } from "./input-aliases.js";
@@ -364,7 +366,7 @@ import { databasesStatus } from "./db-status.js";
 import { initWithRetry } from "./db-init-retry.js";
 import { baseNotificationsEnabled } from "./base-notifications.js";
 import { railOf, outcomeRailOf } from "./payment-rail.js";
-import { initPostHog, capturePostHogWrongMethod, capturePostHogToolError, capturePostHogToolCall, telemetryKeyOf, capturePostHogDiscovery, capturePostHogPaywall, capturePostHogPowChallenge, capturePostHogSettlement, capturePostHogChargedFailure, capturePostHogSettleFailed, capturePostHogToolGone, capturePostHogHumanFunnel, shutdownPostHog, posthogEnabled } from "./posthog.js";
+import { initPostHog, capturePostHogWrongMethod, capturePostHogToolError, capturePostHogToolCall, telemetryKeyOf, capturePostHogDiscovery, capturePostHogPaywall, capturePostHogPowChallenge, capturePostHogSettlement, capturePostHogChargedFailure, capturePostHogSettleFailed, capturePostHogToolGone, toolGoneSourceOf, capturePostHogHumanFunnel, shutdownPostHog, posthogEnabled } from "./posthog.js";
 import { analyticsPage } from "./analytics-page.js";
 import { operatorPage, operatorLoginPage } from "./operator.js";
 import { privacyPage } from "./privacy.js";
@@ -493,7 +495,8 @@ import { GEO_TOOLS } from "./tools/geo-kit.js";
 import { OCR_TOOLS } from "./tools/ocr-kit.js";
 import { AGENT_TOOLS } from "./tools/agent-kit.js";
 import { SAMPLE_AGENT_CARD, A2A_WELL_KNOWN_PATHS, buildOurAgentCard, buildAgentRegistration, erc8004AgentId } from "./tools/a2a-card.js";
-import { upstreamBuyerStatus } from "./upstream-buyer-status.js";
+import { upstreamBuyerStatus, upstreamBuyerEvmStatus } from "./upstream-buyer-status.js";
+import { enabledEvmBuyerChains, evmBuyerChain, isEvmBuyerChain, evmAcceptDomainCheck } from "./evm-buyer-chains.js";
 import { CAPTCHA_TOOLS } from "./tools/captcha-kit.js";
 import { SQL_GUARD_TOOLS } from "./tools/sql-guard-kit.js";
 import { BARCODE_TOOLS } from "./tools/barcode-kit.js";
@@ -1524,8 +1527,24 @@ function dispatchEvidence() {
   dispatchEvidenceCache = { at: Date.now(), settled, payers, binding, provenPayTo, advertised };
   return dispatchEvidenceCache;
 }
+// Base first, then each other EVM chain the operator lists in SOR_EVM_CHAINS
+// (src/evm-buyer-chains.js; the same spending wallet), then the other rails.
 function spendChainsConfigured() {
-  return ["base", ...(avmBuyerConfigured() ? ["algorand"] : []), ...(tempoBuyerConfigured() ? ["tempo"] : []), ...(svmBuyerConfigured() ? ["solana"] : [])];
+  return [...enabledEvmBuyerChains(), ...(avmBuyerConfigured() ? ["algorand"] : []), ...(tempoBuyerConfigured() ? ["tempo"] : []), ...(svmBuyerConfigured() ? ["solana"] : [])];
+}
+// What a row's crawl saw per enabled non-Base EVM chain: the payTo and the
+// EIP-712 domain its accept advertised there (label-time stand-ins for the
+// live 402, which the resolver reads before it signs).
+function evmByChainOf(row, spendChains) {
+  const live = {}, domain = {};
+  for (const c of spendChains) {
+    const cfg = c !== "base" ? evmBuyerChain(c) : null;
+    if (!cfg) continue;
+    const a = row?.payToByNetwork?.[cfg.caip2];
+    if (typeof a === "string" && /^0x[0-9a-f]{40}$/i.test(a)) live[c] = a.toLowerCase();
+    if (row?.evmDomainByNetwork?.[cfg.caip2]) domain[c] = row.evmDomainByNetwork[cfg.caip2];
+  }
+  return { livePayToByChain: live, usdcDomainByChain: domain };
 }
 // Row-level decoration: seller-level fields (index) or route-row fields
 // (price + template known). `networks` is ALWAYS an array on the way out and
@@ -1576,6 +1595,7 @@ function withDispatchFields(row, { local = false, rowLevel = false } = {}) {
     // What the seller's Base USDC accept advertised as its EIP-712 domain (the
     // crawl's observation); a wrong name is usdc_domain_mismatch on every row.
     usdcDomain: row.evmDomainByNetwork?.["eip155:8453"] || null,
+    ...evmByChainOf(row, spendChains),
     // The last paid call we made to this seller on each chain, when it did not
     // deliver. Outranks the settlement gate: history cannot see an outage.
     deliveryFailing: local ? null : deliveryFailingByChain(origin, spendChains),
@@ -1783,8 +1803,13 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
       .filter((r) => !onlyUrl || sameUrl(r.url))
       .slice(0, 5)
       .map((r) => ({ ...r, networks: r.networks, wire: "x402" }));
-  } else {
-    const { results } = await routeRows({ query: task, top: onlyUrl ? 200 : 20, include: "external", ...indexCtx() });
+  } else if (isEvmBuyerChain(chain)) {
+    // THE EVM FAMILY: Base, and every other chain src/evm-buyer-chains.js
+    // lists that SOR_EVM_CHAINS enables (route-execute never asks for one it
+    // does not). One gate for all of them, keyed on the chain's CAIP-2 id;
+    // the unproven tier below stays Base's.
+    const evmCfg = evmBuyerChain(chain);
+    const { results } = await routeRows({ query: task, top: onlyUrl ? 200 : 20, include: "external", ...(chain !== "base" ? { networkFilter: evmCfg.caip2, strictNetwork: true } : {}), ...indexCtx() });
     // The SAME evidence object every public label reads (dispatchEvidence):
     // settled and payers (the best single wallet's figures), the chain-join
     // address and the binding (every figure kept against the wallet it was
@@ -1792,7 +1817,7 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
     const ev = dispatchEvidence();
     provenPayToByOrigin = ev.provenPayTo;
     candidates = (results || [])
-      .filter((r) => r.seller && r.url && r.priceUsd > 0 && r.priceUsd <= cap && Array.isArray(r.networks) && r.networks.includes("eip155:8453"))
+      .filter((r) => r.seller && r.url && r.priceUsd > 0 && r.priceUsd <= cap && Array.isArray(r.networks) && r.networks.includes(evmCfg.caip2))
       // Never SPEND against an unsubstituted OpenAPI path template
       // ("/stock/{symbol}"): the request cannot succeed and the money is at
       // risk for nothing. /api/route still SHOWS these rows, flagged
@@ -1821,20 +1846,20 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
       // observation. Only the tally is new; the decision is untouched, and it
       // is computed ONCE per candidate rather than once per branch.
       .filter((r) => {
-        const verdict = dispatchEligibility({ routable: true, networks: r.networks, settled: r.settled, payers: r.payers, priceUsd: r.priceUsd, urlTemplate: !!r.urlTemplate, spendChains: ["base"], minSettled: SOR_MIN_SETTLED_TX, minPayers: SOR_MIN_DISTINCT_PAYERS, routeText: r, usdcDomain: r.evmDomainByNetwork?.["eip155:8453"] || null });
-        const eligible = verdict.chains.base?.eligible === true;
+        const verdict = dispatchEligibility({ routable: true, networks: r.networks, settled: r.settled, payers: r.payers, priceUsd: r.priceUsd, urlTemplate: !!r.urlTemplate, spendChains: [chain], minSettled: SOR_MIN_SETTLED_TX, minPayers: SOR_MIN_DISTINCT_PAYERS, routeText: r, ...(chain === "base" ? { usdcDomain: r.evmDomainByNetwork?.["eip155:8453"] || null } : { usdcDomainByChain: { [chain]: r.evmDomainByNetwork?.[evmCfg.caip2] || null } }) });
+        const eligible = verdict.chains[chain]?.eligible === true;
         // UNPROVEN TIER (src/base-unproven.js): below the floor with nothing
         // else wrong and a price within the ceiling. Kept, marked, and
         // ordered after every proven candidate; paid only at the wallet its
         // own live 402 names (below) and never above the ceiling (payX402).
-        if (!eligible && verdict.chains.base?.unprovenTier === true) {
+        if (!eligible && chain === "base" && verdict.chains.base?.unprovenTier === true) {
           r.unproven = true;
           gateDrops.byReason.unproven_admitted = (gateDrops.byReason.unproven_admitted || 0) + 1;
           return true;
         }
         if (!eligible) {
           gateDrops.total++;
-          const why = verdict.chains.base?.reason || "other";
+          const why = verdict.chains[chain]?.reason || "other";
           gateDrops.byReason[why] = (gateDrops.byReason[why] || 0) + 1;
         }
         return eligible;
@@ -1842,6 +1867,9 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
       // Proven first, most settled first; unproven after every proven one.
       .sort((a, b) => ((a.unproven ? 1 : 0) - (b.unproven ? 1 : 0)) || (b.settled - a.settled))
       .slice(0, 5);
+  } else {
+    // A chain no buyer here pays on resolves nothing.
+    candidates = [];
   }
   if (onlyUrl) candidates = candidates.filter((r) => sameUrl(r.url));
   // What the route sells, on EVERY chain: the Tempo and Algorand candidates
@@ -1990,7 +2018,7 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
           liveRead = true;
           let body = "";
           try { body = await readTextCapped(probe, 4000); } catch { /* header-only quote */ }
-          livePayTo = payToFromLive402({ header: probe.headers.get("payment-required"), body });
+          livePayTo = payToFromLive402({ header: probe.headers.get("payment-required"), body, ...(isEvmBuyerChain(chain) ? { network: evmBuyerChain(chain).caip2 } : {}) });
           liveAccepts = acceptsFromLive402({ header: probe.headers.get("payment-required"), body });
           return livePayTo;
         };
@@ -2000,12 +2028,12 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
         // nobody, the facilitator refuses. The crawl's observation already
         // labelled the row; this reads the LIVE accept so a seller who fixed
         // it since the crawl is admitted and one who broke it since is not.
-        if (chain === "base") {
+        if (isEvmBuyerChain(chain)) {
           await readLivePayTo();
           // The accept the buyer will sign (pickPayableAccept): the first
-          // payable Base USDC entry, so an unsignable one listed ahead of it
-          // does not skip a payable seller.
-          const liveBase = pickPayableAccept(liveAccepts || [], "base");
+          // payable entry in the chain's own stablecoin, so an unsignable one
+          // listed ahead of it does not skip a payable seller.
+          const liveBase = pickPayableAccept(liveAccepts || [], chain);
           const domain = liveBase ? usdcDomainVerdict(liveBase) : { verdict: "unknown" };
           // Both unsignable verdicts skip the seller HERE, before anything is
           // signed - a Gateway-rail accept used to pass this gate as "unknown"
@@ -2013,6 +2041,12 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
           if (unsignableByStockBuyer(domain)) {
             console.warn(`[sor] refusing ${r.seller}: ${usdcDomainMismatchDetail(domain)}`);
             live = false;
+          }
+          // Off Base the domain must also be the token's own from our table
+          // (the payer refuses it again on the accept it signs).
+          if (live && chain !== "base") {
+            const own = liveBase ? evmAcceptDomainCheck(liveBase, chain) : { ok: false, field: "accept" };
+            if (!own.ok) { console.warn(`[sor] refusing ${chain} candidate ${r.seller}: its accept's EIP-712 ${own.field} is not the token's own`); live = false; }
           }
         }
         // ALGORAND, the same rule the Base binding closed on 2026-09-03 and the
@@ -2079,9 +2113,9 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
             }
           }
         }
-        if (live && chain === "base" && r.binding && !r.unproven) {
+        if (live && isEvmBuyerChain(chain) && r.binding && !r.unproven) {
           const livePayTo = await readLivePayTo();
-          const gate = baseLiveGate({ networks: r.networks, settled: r.settled, payers: r.payers, priceUsd: r.priceUsd, urlTemplate: !!r.urlTemplate, minSettled: SOR_MIN_SETTLED_TX, minPayers: SOR_MIN_DISTINCT_PAYERS, routeText: r, binding: r.binding, livePayTo });
+          const gate = baseLiveGate({ chain, networks: r.networks, settled: r.settled, payers: r.payers, priceUsd: r.priceUsd, urlTemplate: !!r.urlTemplate, minSettled: SOR_MIN_SETTLED_TX, minPayers: SOR_MIN_DISTINCT_PAYERS, routeText: r, binding: r.binding, livePayTo });
           if (!gate.ok) {
             console.warn(`[sor] refusing ${r.seller}: ${gate.detail} (evidence wallets ${gate.payTos.length ? gate.payTos.join(",") : "none"}, live ${gate.livePayTo || "unreadable"})`);
             live = false;
@@ -2203,7 +2237,8 @@ for (const tier of EXEC_TIERS) {
     // Chains external routing can SETTLE on: Base always (the proven path);
     // Algorand only once the dedicated AVM spending wallet is configured;
     // Tempo (MPP sellers) only once the dedicated Tempo spending wallet is.
-    externalChains: () => ["base", ...(avmBuyerConfigured() ? ["algorand"] : []), ...(tempoBuyerConfigured() ? ["tempo"] : []), ...(svmBuyerConfigured() ? ["solana"] : [])],
+    // Base and every other EVM chain SOR_EVM_CHAINS lists (one spending wallet).
+    externalChains: () => [...enabledEvmBuyerChains(), ...(avmBuyerConfigured() ? ["algorand"] : []), ...(tempoBuyerConfigured() ? ["tempo"] : []), ...(svmBuyerConfigured() ? ["solana"] : [])],
   });
   if (CATALOG[tool.route]) throw new Error(`Duplicate route: ${tool.route}`);
   CATALOG[tool.route] = tool;
@@ -3767,7 +3802,7 @@ app.get("/api/gateway-status", async (req, res) => {
   // .status); upstreamBuyer adds the x402 spending wallet's bucketed status
   // (src/upstream-buyer-status.js) - same alarm pattern, same
   // numbers-never-leave rule.
-  const [gateway, upstreamBuyer, upstreamBuyerAvm, upstreamBuyerTempo, upstreamBuyerSvm, subscriptionFeePayer, stellarFacilitator, databases] = await Promise.all([gatewayCreditsStatus(), upstreamBuyerStatus(), avmBuyerStatus(), tempoBuyerStatus(), svmBuyerStatus().catch(() => ({ status: "unknown", asset: "USDC", chain: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" })), subscriptionFeePayerStatus(), stellarFacilitatorStatus().catch(() => ({ status: "unknown", asset: "XLM", chain: "stellar:pubnet" })), databasesStatus().catch(() => null)]);
+  const [gateway, upstreamBuyer, upstreamBuyerAvm, upstreamBuyerTempo, upstreamBuyerSvm, subscriptionFeePayer, stellarFacilitator, databases, upstreamBuyerEvm] = await Promise.all([gatewayCreditsStatus(), upstreamBuyerStatus(), avmBuyerStatus(), tempoBuyerStatus(), svmBuyerStatus().catch(() => ({ status: "unknown", asset: "USDC", chain: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" })), subscriptionFeePayerStatus(), stellarFacilitatorStatus().catch(() => ({ status: "unknown", asset: "XLM", chain: "stellar:pubnet" })), databasesStatus().catch(() => null), upstreamBuyerEvmStatus().catch(() => ({ status: "unknown" }))]);
   // `databases`: DATABASE_URL (`leads`) and analytics Postgres reachability, status words only
   // (src/db-status.js) - the heartbeat pages on "unreachable".
   // The operator sees the real figures; everyone else sees the verdict. The
@@ -3782,6 +3817,9 @@ app.get("/api/gateway-status", async (req, res) => {
   const externalSpendGlobal = await globalUnsettledStatus().catch(() => ({ status: "unknown" }));
   const body = {
     ...gateway, upstreamBuyer, upstreamBuyerAvm, upstreamBuyerTempo, upstreamBuyerSvm, subscriptionFeePayer,
+    // The same EVM spending wallet on each other chain SOR_EVM_CHAINS enables:
+    // one word for all of them and one per chain ("off" with none enabled).
+    upstreamBuyerEvm,
     xDataSpend: full ? spend.xDataSpend : publicBucket(spend.xDataSpend),
     exaSpend: full ? spend.exaSpend : publicBucket(spend.exaSpend),
     exaAllowance: full ? spend.exaAllowance : publicBucket(spend.exaAllowance),
@@ -9351,7 +9389,7 @@ const retiredConvertGone = (req, res) => {
   const num = retiredConvertValue(req);
   // Residual demand we can't serve is the product signal worth an event.
   // Fire-and-forget, rate-capped in posthog.js; env-gated no-op like every capture.
-  capturePostHogToolGone({ route: req.path, replacement: "POST /api/unit-convert" });
+  capturePostHogToolGone({ route: req.path, replacement: "POST /api/unit-convert", source: toolGoneSourceOf({ headers: req.headers, surface: "http" }) });
   res.set(retirementHeaders(RETIRED_CONVERTERS_AT, `${BASE_URL}/api/unit-convert`));
   res.status(410).json({
     error: "This pairwise conversion endpoint is retired. Use POST /api/unit-convert with { value, from, to } - the same unit ids and the same math, one route for every pair. Discovery: GET /api/find?q=unit+convert.",
@@ -10423,6 +10461,23 @@ if (FREE_MODE) {
       // Authorization credential such as a Tempo credential or a credits key)
       // keeps its own explanation.
       const firstContact = !req.header("x-payment") && !req.header("payment-signature") && !req.headers.authorization;
+      // The call to make once paid, for a buyer that does not read the Bazaar
+      // extension (src/how-to-call.js): the same request the input-validation
+      // 400 carries, from the tool's own example (its method and URL only when
+      // the example is large: the 402's own fields share a small budget, and
+      // the Bazaar extension carries the example). Body only and additive; the
+      // PAYMENT-REQUIRED header is untouched. First contact only, like the
+      // metered twin below: a refused payment keeps its own explanation.
+      if (firstContact) {
+        const origJson = res.json.bind(res);
+        res.json = (body) => {
+          if (res.statusCode === 402 && body && typeof body === "object" && !Array.isArray(body) && !body.howToCall) {
+            const call = howToCall402Field(def);
+            if (call.howToCall) body = { ...body, ...call };
+          }
+          return origJson(body);
+        };
+      }
       const twinDef = firstContact ? meteredTwinDefOf(def.slug) : null;
       if (twinDef) {
         const origJson = res.json.bind(res);
@@ -10487,42 +10542,37 @@ if (FREE_MODE) {
     next();
   });
   // Gateway response cache, served HERE — before the paywall — so a
-  // byte-identical repeat of an already-paid generation is free. Pre-payment
-  // means buyer-agnostic by construction; only non-streamed 200s are ever
-  // stored (see llm-gateway-kit.js). A hit is served only to a request that
-  // carries a payment (src/payment-attempt.js), which is then never settled;
-  // an unpaid request gets the route's 402. Two policies share the store:
+  // byte-identical repeat of an already-paid generation is free to the payer
+  // who paid for it; only non-streamed 200s are ever stored (see
+  // llm-gateway-kit.js). Each entry is keyed by its payer, and a hit is served
+  // only to a request that proves that payer (src/gateway-cache-scope.js),
+  // which is then never settled; any other request goes on to the paywall.
+  // Two policies share the store:
   //   chat tiers   — explicit `cache: true` opt-in (LLM output is sampled;
   //                  a resend usually WANTS a fresh sample)
   //   /v1/embeddings — default-ON (deterministic output; `cache: false` opts out)
   // Invalid bodies fall through so the normal path produces the real 402/400.
-  app.use(async (req, res, next) => {
-    if (req.method !== "POST" || !carriesPaymentAttempt(req)) return next();
-    try {
-      let key = null;
-      if (req.path === EMBEDDINGS_PATH) {
-        key = embeddingsCacheKey(req.body);
-      } else if (req.path === RERANK_PATH) {
-        key = rerankCacheKey(req.body); // default-ON like embeddings (deterministic ranker)
-      } else if (req.body?.cache === true && req.body?.stream !== true) {
+  // An x402 authorization the replay guard already holds (in flight or
+  // consumed) proves no payer here: read with the guard's own key and store,
+  // claiming nothing; the guard below then answers it as it answers any other.
+  app.use(gatewayCacheGate({
+    carriesPaymentAttempt,
+    payTo: WALLET_ADDRESS,
+    get: promptCacheGetShared,
+    paymentHeld: async (req) => {
+      const key = await paymentReplayKeyAsync(req);
+      return !key || (await replayGuard.held(key)) !== null;
+    },
+    keyOf: (req) => {
+      if (req.path === EMBEDDINGS_PATH) return embeddingsCacheKey(req.body);
+      if (req.path === RERANK_PATH) return rerankCacheKey(req.body); // default-ON like embeddings (deterministic ranker)
+      if (req.body?.cache === true && req.body?.stream !== true) {
         const tierSlug = GATEWAY_TIER_BY_PATH[req.path];
-        if (tierSlug) key = promptCacheKey(tierSlug, req.body);
+        if (tierSlug) return promptCacheKey(tierSlug, req.body);
       }
-      if (key) {
-        // The local store first, then the cache every replica shares.
-        const hit = await promptCacheGetShared(key);
-        if (hit) {
-          // Read by the Tempo and Stripe gates, which run earlier: a gateway
-          // cache hit is never settled on any rail.
-          req.gatewayCacheHit = true;
-          res.setHeader("X-Cache", "hit");
-          res.setHeader("Cache-Control", "no-store, private");
-          return res.status(200).json(hit);
-        }
-      }
-    } catch { /* invalid input — let the paywall + handler answer honestly */ }
-    next();
-  });
+      return null;
+    },
+  }));
 
   // NB (FR4-02): the former "render-credit" feature (F13/R-10) was REMOVED. It
   // assumed x402 settled BEFORE the handler, so a capacity 503 meant
@@ -11478,6 +11528,7 @@ app.post("/api/memory/forget", memHandler((req, actor, owner) => forget(owner, r
 //   2. Analytics write-through: records slug, latency, cache flag, error flag
 //      to Postgres after responding. Fire-and-forget, never blocks the call.
 //      No-op when ANALYTICS_DATABASE_URL (or DATABASE_URL) is unset.
+configureHowToCall({ baseUrl: BASE_URL, catalog: CATALOG });
 for (const tool of ALL_KIT) {
   const [method, path] = tool.route.split(" ");
   const lowerMethod = method.toLowerCase();
@@ -11728,7 +11779,10 @@ for (const tool of ALL_KIT) {
         if (cacheKey && result && typeof result === "object" && !result.error) {
           cacheSet(cacheKey, result, cacheTtlFor(cachePolicy, result) || 300).catch(() => {});
         }
-        for (const w of req.__deferredCache || []) { try { promptCacheStore(w.key, w.body); } catch { /* cache is best-effort */ } }
+        // Stored under the payer that settled it (src/gateway-cache-scope.js);
+        // a call with no proven payer, or one served unsettled, stores nothing.
+        const deferred = req.__deferredCache || [];
+        if (deferred.length) commitGatewayCacheWrites(req, res, deferred, { payTo: WALLET_ADDRESS, store: promptCacheStore }).catch(() => {});
       });
       // Response digest for the attest tool: sha256 of the exact bytes res.json
       // sends. Express serialises with JSON.stringify and the app sets no
@@ -11822,6 +11876,9 @@ for (const tool of ALL_KIT) {
           expected: tool.discovery?.inputSchema?.properties || {},
           required: tool.discovery?.inputSchema?.required || [],
           example: tool.discovery?.input || {},
+          // The same example as a ready-to-run request (src/how-to-call.js):
+          // method, full URL and body, plus the other verb where it is served.
+          ...howToCallField(tool),
         });
       } else {
         res.status(status).json({ error: errorMessage, tool: tool.slug, ...provenance });
@@ -11899,7 +11956,7 @@ app.use((req, res) => {
       if (gone) {
         const rep = gone.replacement ? Object.values(CATALOG).find((d) => d.slug === gone.replacement) : null;
         const replacement = rep ? { slug: rep.slug, route: rep.route, url: `${BASE_URL}${rep.route.split(" ")[1] || rep.route}`, price: rep.price } : null;
-        try { capturePostHogToolGone({ route: req.path, replacement: replacement ? replacement.route : "GET /api/find" }); } catch { /* telemetry never breaks a response */ }
+        try { capturePostHogToolGone({ route: req.path, replacement: replacement ? replacement.route : "GET /api/find", source: toolGoneSourceOf({ headers: req.headers, surface: "http" }) }); } catch { /* telemetry never breaks a response */ }
         res.set(retirementHeaders(gone.retiredAt, replacement?.url));
         return res.status(410).json({
           ok: false, error: "gone", slug: gone.slug, retiredAt: gone.retiredAt, replacement,
@@ -11907,7 +11964,7 @@ app.use((req, res) => {
           find: `${BASE_URL}/api/find?q=${encodeURIComponent(slug)}`, suggestions,
         });
       }
-      try { capturePostHogToolGone({ route: req.path, replacement: "GET /api/find" }); } catch { /* telemetry never breaks a response */ }
+      try { capturePostHogToolGone({ route: req.path, replacement: "GET /api/find", source: toolGoneSourceOf({ headers: req.headers, surface: "http" }) }); } catch { /* telemetry never breaks a response */ }
       return res.status(404).json({ ok: false, error: "not-found", hint: `No tool lives at ${req.path}. It may have been retired; the closest live tools are listed, or ask /api/find?q=<task>.`, find: `${BASE_URL}/api/find?q=${encodeURIComponent(slug)}`, suggestions });
     }
     return res.status(404).json({ ok: false, error: "not-found" });

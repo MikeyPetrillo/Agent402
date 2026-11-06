@@ -45,6 +45,7 @@
     "tc": "0x5e11e700000000000000000000000000000000d3",
     "ra": "0x5e11e700000000000000000000000000000000e1",
     "sa": "0x5e11e700000000000000000000000000000000e2",
+    "pa": "0x5e11e700000000000000000000000000000000c7",
     "ka": "0x5e11e700000000000000000000000000000000f1",
     "kb": "0x5e11e700000000000000000000000000000000f2",
     "ma": "0x5e11e70000000000000000000000000000000101",
@@ -105,6 +106,7 @@
     "ra": { "host": "rho-get", "slug": "rho-quote", "about": "rho quote for a symbol", "price": 0.01, "payTo": "ra", "settled": 300, "payers": 10, "method": "GET" },
 
     "sa": { "host": "sigma-sol", "slug": "sigma-ledger", "about": "sigma ledger rows", "price": 0.01, "payTo": "sa", "settled": 300, "payers": 10, "networks": ["solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"] },
+    "pa": { "host": "pyxis-poly", "slug": "zephyx-lattice", "about": "zephyx lattice readings", "price": 0.01, "payTo": "pa", "settled": 500, "payers": 20, "networks": ["eip155:137"] },
 
     "ka": { "host": "kappa-taker", "slug": "kappa-relay", "about": "kappa relay message", "price": 0.02, "payTo": "ka", "settled": 500, "payers": 20, "paid": "take-and-fail" },
     "kb": { "host": "kappa-fresh", "slug": "kappa-relay", "about": "kappa relay message, fresh", "price": 0.005, "payTo": "kb" },
@@ -196,6 +198,8 @@
     { "id": "target-not-https", "task": "quasar spectrum", "targetUrl": "http://quasar-prime.golden.test/quasar-spectrum", "expect": { "candidates": null, "tried": [], "chosen": null, "lane": null, "signed": [], "settle": { "buyer": "cancelled", "sellerCharged": [] }, "booking": { "outbound": [], "exposureUsd": 0 }, "receipt": null, "status": 400 } },
     { "id": "target-without-external", "task": "quasar spectrum", "targetUrl": "https://quasar-prime.golden.test/quasar-spectrum", "internal": true, "expect": { "candidates": null, "tried": [], "chosen": null, "lane": null, "signed": [], "settle": { "buyer": "cancelled", "sellerCharged": [] }, "booking": { "outbound": [], "exposureUsd": 0 }, "receipt": null, "status": 400 } },
     { "id": "internal-slug", "slug": "uuid", "internal": true, "expect": { "candidates": null, "tried": [], "chosen": "internal", "lane": null, "signed": [], "settle": { "buyer": "settled", "sellerCharged": [] }, "booking": { "outbound": [], "exposureUsd": 0 }, "receipt": { "seller": "internal", "sellerProof": null, "underlyingPriceUsd": 0.001 }, "status": 200 } },
-    { "id": "quasar-after-everything", "task": "quasar spectrum", "expect": { "candidates": ["qa", "qb", "qc"], "tried": ["qa"], "chosen": "qa", "lane": "proven", "signed": [["qa", 20000]], "settle": { "buyer": "settled", "sellerCharged": ["qa"] }, "booking": { "outbound": [["qa", "delivered"]], "exposureUsd": 0 }, "receipt": { "seller": "qa", "sellerProof": null, "underlyingPriceUsd": 0.02 }, "status": 200 } }
+    { "id": "quasar-after-everything", "task": "quasar spectrum", "expect": { "candidates": ["qa", "qb", "qc"], "tried": ["qa"], "chosen": "qa", "lane": "proven", "signed": [["qa", 20000]], "settle": { "buyer": "settled", "sellerCharged": ["qa"] }, "booking": { "outbound": [["qa", "delivered"]], "exposureUsd": 0 }, "receipt": { "seller": "qa", "sellerProof": null, "underlyingPriceUsd": 0.02 }, "status": 200 } },
+    { "id": "polygon-listed-chain-buys", "task": "zephyx lattice", "payNetwork": "eip155:137", "expect": { "candidates": ["pa"], "tried": ["pa"], "chosen": "pa", "lane": "proven", "signed": [["pa", 10000]], "settle": { "buyer": "settled", "sellerCharged": ["pa"] }, "booking": { "outbound": [["pa", "delivered"]], "exposureUsd": 0 }, "receipt": { "seller": "pa", "sellerProof": null, "underlyingPriceUsd": 0.01 }, "status": 200 } },
+    { "id": "polygon-seller-not-bought-from-base", "task": "zephyx lattice", "expect": { "candidates": [], "tried": [], "chosen": null, "lane": null, "signed": [], "settle": { "buyer": "cancelled", "sellerCharged": [] }, "booking": { "outbound": [], "exposureUsd": 0 }, "receipt": null, "status": 404 } }
   ]
 }

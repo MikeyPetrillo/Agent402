@@ -31,7 +31,8 @@ import { isIdentityBoundRoute } from "../payments.js";
 import { evmCredentialBudgetMs, evmCredentialSettleableMs, evmSellerSignBy, EVM_SELLER_ALLOWANCE_MS } from "../evm-validity.js";
 import { cdnSyncLeftMs } from "../cdn-sync-window.js";
 import { spendsBeforeSettlement } from "../composite-spend-guard.js";
-import { upstreamBuyerStatus } from "../upstream-buyer-status.js";
+import { upstreamBuyerStatus, evmBuyerChainStatus } from "../upstream-buyer-status.js";
+import { EVM_BUYER_CHAINS, EVM_BUYER_CHAIN_BY_NETWORK, isEvmBuyerChain, evmBuyerChainEnabled, enabledEvmBuyerChains } from "../evm-buyer-chains.js";
 import { recordRouterPurchase } from "../router-purchases.js";
 import { adaptParamsToExample } from "../mpp-input-examples.js";
 
@@ -266,25 +267,28 @@ export async function judgeSellerOrder(task, candidates, opts = {}) {
   return ordered;
 }
 
-// THE BASE SPENDING WALLET'S LAST READING, for a refusal before signing.
-// upstreamBuyerStatus keeps its own 5 min cache (the one /api/gateway-status
-// fills), so a warm reading lands within one event-loop turn; a cold one
-// finishes in the background and this call goes ahead on what was known.
-let walletStatusSeen = null;
-let walletStatusReading = null;
-export async function cachedSpendingWalletStatus() {
-  if (!walletStatusReading) {
-    walletStatusReading = Promise.resolve()
-      .then(() => upstreamBuyerStatus())
-      .then((st) => { walletStatusSeen = st || null; }, () => {})
-      .finally(() => { walletStatusReading = null; });
+// THE EVM SPENDING WALLET'S LAST READING ON A CHAIN, for a refusal before
+// signing. One key, one balance per chain: Base reads upstreamBuyerStatus and
+// every other EVM buyer chain evmBuyerChainStatus, each with its own 5 min
+// cache (the one /api/gateway-status fills), so a warm reading lands within
+// one event-loop turn; a cold one finishes in the background and this call
+// goes ahead on what was known.
+const walletStatusSeen = new Map(); // chain -> last reading
+const walletStatusReading = new Map(); // chain -> in-flight read
+export async function cachedSpendingWalletStatus(chain = "base") {
+  const c = isEvmBuyerChain(chain) ? chain : "base";
+  if (!walletStatusReading.has(c)) {
+    walletStatusReading.set(c, Promise.resolve()
+      .then(() => (c === "base" ? upstreamBuyerStatus() : evmBuyerChainStatus(c)))
+      .then((st) => { walletStatusSeen.set(c, st || null); }, () => {})
+      .finally(() => { walletStatusReading.delete(c); }));
   }
   await new Promise((r) => setImmediate(r));
-  return walletStatusSeen;
+  return walletStatusSeen.get(c) ?? null;
 }
-/** True only when the reading says the wallet is low. Unknown never blocks. */
-export async function spendingWalletReadsLow(read = cachedSpendingWalletStatus) {
-  try { return (await read())?.status === "low"; } catch { return false; }
+/** True only when the chain's reading says the wallet is low. Unknown never blocks. */
+export async function spendingWalletReadsLow(read = cachedSpendingWalletStatus, chain = "base") {
+  try { return (await read(chain))?.status === "low"; } catch { return false; }
 }
 export const WALLET_LOW_MESSAGE = "Paying outside sellers is temporarily unavailable. Nothing was charged; retry later.";
 
@@ -306,13 +310,32 @@ export const EXTERNAL_CHAIN_BY_NETWORK = {
   // spending wallet, which pays MPP sellers on Tempo (src/tempo-buyer.js).
   "eip155:4217": "tempo",
 };
+// The other EVM chains the same spending wallet pays on (src/evm-buyer-chains.js),
+// each its own leg: a buyer who paid on Polygon is routed to Polygon sellers.
+// Kept OUT of the static map above, which the public pages read as the chains
+// the router pays on: an EVM chain joins only while SOR_EVM_CHAINS lists it.
+/** The chains the router pays outside sellers on right now: every chain in
+ *  the static map, plus each EVM chain SOR_EVM_CHAINS lists. What the public
+ *  pages name, so they neither under- nor over-state the set. */
+export function routerPayChains() {
+  return [...new Set([...Object.values(EXTERNAL_CHAIN_BY_NETWORK), ...enabledEvmBuyerChains().filter((c) => c !== "base")])];
+}
+/** The external chain a buyer's payment network routes to, or undefined. */
+export function externalChainOfNetwork(net) {
+  const fixed = EXTERNAL_CHAIN_BY_NETWORK[net];
+  if (fixed) return fixed;
+  const evm = EVM_BUYER_CHAIN_BY_NETWORK[net];
+  return evm && evmBuyerChainEnabled(evm) ? evm : undefined;
+}
 // Which external chains a buyer on `payNet` may be routed to, in order. The
 // buyer's own chain first (self-funding). Base buyers may ALSO fall through
 // to Tempo/MPP sellers when the operator opts in (SOR_TEMPO_FROM_BASE=true):
 // that spends the Tempo wallet against Base revenue, so it is a treasury
 // float decision, not a default.
 export function externalChainsFor(payNet, supported, { tempoFromBase = process.env.SOR_TEMPO_FROM_BASE === "true" } = {}) {
-  const own = EXTERNAL_CHAIN_BY_NETWORK[payNet];
+  // An EVM chain the operator has not listed in SOR_EVM_CHAINS maps to no
+  // chain at all, so it is never dispatched, whatever `supported` says.
+  const own = externalChainOfNetwork(payNet);
   const chains = [];
   if (own && supported.includes(own)) chains.push(own);
   if (own === "base" && tempoFromBase && supported.includes("tempo")) chains.push("tempo");
@@ -322,6 +345,7 @@ export function externalChainsFor(payNet, supported, { tempoFromBase = process.e
 // above (a chain with an alias lists its canonical id first).
 const EXTERNAL_CHAIN_CAIP2 = {};
 for (const [caip2, chain] of Object.entries(EXTERNAL_CHAIN_BY_NETWORK)) EXTERNAL_CHAIN_CAIP2[chain] ??= caip2;
+for (const c of Object.values(EVM_BUYER_CHAINS)) EXTERNAL_CHAIN_CAIP2[c.name] ??= c.caip2;
 
 // TRAJECTORY SEAM: one listener that hears each step of the external leg (the
 // candidates resolved, each seller tried or skipped, each outcome), so
@@ -577,9 +601,9 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             throw bad(`${excludedOut} outside route(s) matched that task on ${chain}, and the router does not buy them: routes that sell personal data about individuals are listed but not bought by the router. Nothing was spent and nothing is charged.`, 404);
           }
           if (!candidateList.length) throw bad(`No external ${chains.includes("tempo") && chains.length > 1 ? "x402 or MPP" : chains[0] === "tempo" ? "MPP" : "x402"} seller matched that task${chains[0] !== "base" || chains.length > 1 ? ` on ${chains.join("/")}` : ""}. Explore /api/route?q=<task>&include=external.`, 404);
-          // Nothing is signed from a Base wallet that reads low (a cached
-          // reading, never awaited on the network).
-          if (chain === "base" && await spendingWalletReadsLow(spendingWalletStatus)) throw bad(WALLET_LOW_MESSAGE, 503);
+          // Nothing is signed from an EVM wallet that reads low on the chain it
+          // would pay from (a cached reading, never awaited on the network).
+          if (isEvmBuyerChain(chain) && await spendingWalletReadsLow(spendingWalletStatus, chain)) throw bad(WALLET_LOW_MESSAGE, 503);
           // Try candidates in order; keep the last error so an all-fail run
           // reports something real. A 5xx from a seller's paid leg -> next
           // candidate; anything else stops (return on success, throw otherwise).
@@ -596,7 +620,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             if (hasNext) continue; throw lastErr;
           }
           // Any spelling of the chain's id on the seller's row counts.
-          if (!(ext.url && Array.isArray(ext.networks) && ext.networks.some((n) => EXTERNAL_CHAIN_BY_NETWORK[n] === chain))) {
+          if (!(ext.url && Array.isArray(ext.networks) && ext.networks.some((n) => (EXTERNAL_CHAIN_BY_NETWORK[n] || EVM_BUYER_CHAIN_BY_NETWORK[n]) === chain))) {
             traceStep(req, "skip", { origin: ext.seller, reason: "wrong_chain" });
             lastErr = bad(`External seller "${ext.seller}" does not offer ${chain} settlement - cannot pay it from the ${chain} spending wallet.`, 409);
             if (hasNext) continue; throw lastErr;

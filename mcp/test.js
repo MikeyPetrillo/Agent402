@@ -12,8 +12,6 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const PORT = 3005;
-const API = `http://localhost:${PORT}`;
 
 const fail = (msg) => { console.error("FAIL:", msg); process.exit(1); };
 
@@ -168,7 +166,16 @@ const text = (result) => result.content?.map((c) => (c.type === "text" ? c.text 
   const stubEnv = { ...process.env, AGENT402_URL: `http://127.0.0.1:${stub.address().port}`, AGENT402_CREDITS_KEY: KEY };
   delete stubEnv.AGENT_KEY; delete stubEnv.SOLANA_AGENT_KEY; delete stubEnv.AGENT402_BUDGET; delete stubEnv.AGENT402_MAX_PER_CALL; delete stubEnv.AGENT402_ASYNC;
   const jobClient = new Client({ name: "agent402-mcp-async-test", version: "0.0.0" });
-  await jobClient.connect(new StdioClientTransport({ command: process.execPath, args: [join(ROOT, "mcp", "index.js")], env: stubEnv, stderr: "ignore" }));
+  const jobTransport = new StdioClientTransport({ command: process.execPath, args: [join(ROOT, "mcp", "index.js")], env: stubEnv, stderr: "ignore" });
+  await jobClient.connect(jobTransport);
+  // Every message the server writes, in the order it arrives. The SDK client
+  // runs a notification handler a microtask later but a response at once, so
+  // when the last progress note and the result share one stdout chunk the
+  // result drops the note's handler first; the wire order is what the server
+  // owes.
+  const wire = [];
+  const deliver = jobTransport.onmessage;
+  jobTransport.onmessage = (m, ...rest) => { wire.push(m); return deliver?.(m, ...rest); };
   try {
     // A credits key does not pay the router (it buys from outside sellers), so
     // credits mode does not list router.execute.
@@ -187,13 +194,43 @@ const text = (result) => result.content?.map((c) => (c.type === "text" ? c.text 
     if (out.isError || !text(out).includes("the answer")) fail(`the job's answer is the tool result: ${text(out).slice(0, 200)}`);
     if (seen.prefer !== "respond-async" || seen.auth !== `Bearer ${KEY}`) fail(`the paid call carries Prefer: respond-async and its credential (${seen.prefer}, ${seen.auth ? "auth" : "no auth"})`);
     if (seen.polls !== 3) fail(`the job link is polled until it is final (${seen.polls})`);
+    const sentPcts = wire.filter((m) => m.method === "notifications/progress").map((m) => m.params.progress);
+    const lastNote = wire.findLastIndex((m) => m.method === "notifications/progress");
+    const resultAt = wire.findIndex((m) => m.id != null && m.result && Array.isArray(m.result.content) && JSON.stringify(m.result).includes("the answer"));
+    if (sentPcts.join(",") !== "0,20,80,100" || !(lastNote >= 0 && resultAt > lastNote)) fail(`progress notifications follow the job stage, only rise, and all precede the result on the wire (${JSON.stringify(sentPcts)}, last note ${lastNote}, result ${resultAt})`);
     const pcts = notes.map((n) => n.progress);
-    if (pcts.join(",") !== "0,20,80,100" || !/writing report \(4 of 5 steps\)/.test(notes[2]?.message || "")) fail(`progress notifications follow the job stage and only rise (${JSON.stringify(notes)})`);
+    if (!/^0,20,80(,100)?$/.test(pcts.join(",")) || !/writing report \(4 of 5 steps\)/.test(notes[2]?.message || "")) fail(`the caller's progress callback sees the job stage in order (${JSON.stringify(notes)})`);
   } finally {
     await jobClient.close().catch(() => {});
     stub.close();
   }
   console.log("async-job.js ✓ (slow route asks for a job, polls Retry-After, answer delivered, progress notifications rise; other-origin link refused)");
+}
+
+// The policy guardSigning registers drops an accept that asks to stay valid
+// past MAX_VALIDITY_SECONDS before the client selects one: alone it is refused
+// with nothing signed, and listed first beside a valid accept the valid one is
+// selected and signed. A spy scheme stands in for the signer.
+{
+  const { x402Client } = await import("@x402/core/client");
+  const { guardSigning } = await import("./known-assets.js");
+  const check = (c, m) => { if (!c) fail(m); console.log(`${m} ✓`); };
+  const valid = { scheme: "exact", network: "eip155:8453", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", amount: "1000", payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } };
+  const long = { ...valid, maxTimeoutSeconds: 90000 };
+  const sign = async (accepts) => {
+    const signed = [], approved = [], refused = [];
+    const client = new x402Client();
+    client.setSpendControls?.(false);
+    client.register("eip155:8453", { scheme: "exact", createPaymentPayload: async (v, r) => { signed.push(r); return { x402Version: v, payload: { authorization: { value: r.amount, validBefore: String(Math.floor(Date.now() / 1000) + Number(r.maxTimeoutSeconds)) } } }; } });
+    guardSigning(client, { allowance: () => 1, onSign: (usd, r) => approved.push(r), onRefuse: (d) => refused.push(d) });
+    let err = null;
+    try { await client.createPaymentPayload({ x402Version: 2, resource: { url: "https://seller.example/x" }, accepts }); } catch (e) { err = e; }
+    return { signed, approved, refused, err };
+  };
+  const alone = await sign([long]);
+  check(alone.signed.length === 0 && alone.approved.length === 0 && alone.refused.length === 1 && alone.refused[0].reason === "validity" && /every payment option it may sign asks to stay valid for more than 86400 seconds/.test(alone.err?.message || "") && /nothing was signed/.test(alone.err?.message || ""), `a lone accept valid for 90000 seconds is dropped before selection and nothing is signed (${alone.err?.message})`);
+  const mixed = await sign([long, valid]);
+  check(!mixed.err && mixed.signed.length === 1 && mixed.signed[0].maxTimeoutSeconds === 300 && mixed.approved.length === 1 && mixed.approved[0].maxTimeoutSeconds === 300 && mixed.refused.length === 0, `beside a valid accept, the 90000-second one is skipped and the valid one is signed (${mixed.err?.message || mixed.signed.map((r) => r.maxTimeoutSeconds).join(",")})`);
 }
 
 // 0d) The wallet path checks what it signs. A loopback seller records every
@@ -247,20 +284,121 @@ const text = (result) => result.content?.map((c) => (c.type === "text" ? c.text 
   console.log("signing guard ✓ (split amount fields not priced; a payload that signs more than its accept is not sent)");
 }
 
-// 1) Boot a paywalled API instance (PoW gate live, facilitator not contacted).
+// 0e) No configured secret ever leaves the process in text. Recognizable fake
+// keys (malformed, so parsers fail on them, and valid, so a seller echo is
+// the only way in) are set, and every output channel is read: each tool
+// result, each protocol error and all of stderr. A stub seller echoes every
+// key back in its error bodies (and the Authorization header it received),
+// which the boundary must redact; the key parsers must name the variable,
+// never quote the value. Nothing leaves loopback; no funds.
+{
+  const { createServer } = await import("node:http");
+  const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+  const EVM_BAD = "0x" + "c0ffee".repeat(10) + "zzzz";
+  const EVM_GOOD = "0x" + "5eed".repeat(16);
+  const SOL_BAD = "[" + "77,".repeat(12) + "SOLSENTINELSECRET]";
+  const SOL_B58_BAD = "SoLSentinel0OIl" + "x".repeat(40);
+  const CREDITS = "a402_" + "CREDSENTINEL" + "q".repeat(30);
+  let echo = "";
+  const stub = createServer((req, res) => {
+    req.resume();
+    const u = new URL(req.url, "http://stub");
+    const send = (status, body, headers = {}) => { res.writeHead(status, { "content-type": "application/json", ...headers }); res.end(JSON.stringify(body)); };
+    if (u.pathname === "/api/pricing") return send(200, { endpoints: [
+      { slug: "paid", method: "GET", path: "/api/paid", price: "$0.001", description: "paid", category: "util", computePayable: false },
+      { slug: "echo", method: "GET", path: "/api/echo", price: "$0.001", description: "echo", category: "util", computePayable: false },
+    ] });
+    if (u.pathname === "/openapi.json") return send(200, { paths: {} });
+    if (u.pathname === "/api/skill-packs.json") return send(200, { packs: [] });
+    if (u.pathname === "/api/echo") return send(500, { error: `seller echo: ${echo} auth=${req.headers.authorization || ""}`, detail: { nested: [echo] } });
+    if (req.headers["payment-signature"] || req.headers["x-payment"] || req.headers.authorization) return send(200, { ok: true });
+    const doc = { x402Version: 2, resource: { url: "http://127.0.0.1/api/paid" }, accepts: [{ scheme: "exact", network: "eip155:8453", asset: BASE_USDC, amount: "1000", payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 60, extra: { name: "USD Coin", version: "2" } }] };
+    return send(402, {}, { "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(doc)).toString("base64") });
+  });
+  await new Promise((r) => stub.listen(0, "127.0.0.1", r));
+  const forms = (k) => { const v = k.replace(/^0x/i, ""); return [k, v, v.toLowerCase(), v.toUpperCase(), k.replace(/\s+/g, "")]; };
+  const leaks = (out, keys) => keys.flatMap(forms).filter((f) => out.includes(f));
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { pathToFileURL } = await import("node:url");
+  const dir = mkdtempSync(join(tmpdir(), "agent402-mcp-redact-"));
+  const loudLib = pathToFileURL(join(dir, "loud.mjs")).href;
+  writeFileSync(join(dir, "loud.mjs"), `const realFetch = globalThis.fetch; let said = false;
+globalThis.fetch = (...a) => { if (!said && String(a[0]?.url || a[0]).includes("/api/pricing")) { said = true; const k = [process.env.AGENT402_CREDITS_KEY, process.env.AGENT_KEY]; console.error("library says", k.join(" ")); console.warn("library says %s", k[0]); console.error({ libraryKey: k[1].slice(2).toUpperCase() }); } return realFetch(...a); };
+`);
+  const run = async (keys, env, args = []) => {
+    echo = keys.join(" | ");
+    const e = { ...process.env, AGENT402_URL: `http://127.0.0.1:${stub.address().port}`, AGENT_KEY: "", SOLANA_AGENT_KEY: "", AGENT402_CREDITS_KEY: "", AGENT402_MAX_PER_CALL: "1", AGENT402_BUDGET: "", ...env };
+    const t = new StdioClientTransport({ command: process.execPath, args: [...args, join(ROOT, "mcp", "index.js")], env: e, stderr: "pipe" });
+    let err = "";
+    t.stderr.on("data", (d) => { err += d; });
+    const c = new Client({ name: "agent402-mcp-redact-test", version: "0.0.0" });
+    await c.connect(t);
+    const outs = [];
+    try {
+      const calls = [["payment.info", {}], ["server.describe", {}], ["catalog.call", { slug: "paid", params: {} }], ["catalog.call", { slug: "echo", params: {} }], ["catalog.call", { slug: "paid", params: {} }], ["catalog.find", { query: echo }], ["no.such.tool", { x: echo }]];
+      for (const [name, args] of calls) {
+        try { outs.push(JSON.stringify(await c.callTool({ name, arguments: args }))); } catch (x) { outs.push(String(x?.message) + String(x?.stack)); }
+      }
+      outs.push(JSON.stringify(await c.listTools()));
+    } finally { await c.close().catch(() => {}); }
+    await new Promise((r) => setTimeout(r, 100));
+    return { out: outs.join("\n"), err, all: outs.join("\n") + err };
+  };
+  try {
+    const bad = await run([EVM_BAD, SOL_BAD, CREDITS], { AGENT_KEY: EVM_BAD, SOLANA_AGENT_KEY: SOL_BAD, AGENT402_CREDITS_KEY: CREDITS });
+    const l1 = leaks(bad.all, [EVM_BAD, SOL_BAD, CREDITS]).concat(["c0ffeec0ffee", "SOLSENT", "CREDSENTINEL"].filter((x) => bad.all.includes(x)));
+    if (l1.length) fail(`malformed keys must never appear in any output: ${l1.join(", ")}`);
+    if (!/AGENT_KEY is set but is not/.test(bad.out)) fail(`a malformed AGENT_KEY is named, not quoted: ${bad.out.slice(0, 400)}`);
+    const sol = await run([SOL_BAD], { SOLANA_AGENT_KEY: SOL_BAD });
+    if (sol.all.includes("SOLSENT") || leaks(sol.all, [SOL_BAD]).length) fail(`a malformed SOLANA_AGENT_KEY (byte array) must never appear in any output: ${sol.out.slice(0, 400)}`);
+    if (!/SOLANA_AGENT_KEY is set but is not/.test(sol.out)) fail(`a malformed SOLANA_AGENT_KEY is named, not quoted: ${sol.out.slice(0, 400)}`);
+    const b58 = await run([SOL_B58_BAD], { SOLANA_AGENT_KEY: SOL_B58_BAD });
+    if (b58.all.includes("SoLSentinel")) fail(`a malformed SOLANA_AGENT_KEY (base58) must never appear in any output: ${b58.out.slice(0, 400)}`);
+    const good = await run([EVM_GOOD, CREDITS], { AGENT_KEY: EVM_GOOD, AGENT402_CREDITS_KEY: CREDITS });
+    const l4 = leaks(good.all, [EVM_GOOD, CREDITS]).concat(["5eed5eed5eed", "CREDSENTINEL"].filter((x) => good.all.includes(x)));
+    if (l4.length) fail(`a valid key echoed back by a seller must be redacted everywhere: ${l4.join(", ")}`);
+    if (!/seller echo: \[redacted\]/.test(good.out)) fail(`control: the seller's echo reached the boundary and was redacted: ${good.out.slice(0, 400)}`);
+    // A library that writes a configured key to the console (a preload makes
+    // the catalog fetch log every key, through console.error and console.warn,
+    // as a format string and as an object) is redacted too.
+    const logged = await run([CREDITS, EVM_GOOD], { AGENT402_CREDITS_KEY: CREDITS, AGENT_KEY: EVM_GOOD }, [`--import`, loudLib]);
+    if (!/library says/.test(logged.err)) fail(`control: the library's console lines reached stderr: ${logged.err.slice(0, 300)}`);
+    if (leaks(logged.all, [CREDITS, EVM_GOOD]).length || logged.all.includes("CREDSENTINEL") || logged.all.includes("5eed5eed5eed")) fail(`a key a library writes to the console must be redacted: ${logged.err.slice(0, 400)}`);
+    if (!/\\"wallet\\": \\"0x[0-9a-fA-F]{40}\\"/.test(good.out)) fail(`control: payment.info still reports the wallet address: ${good.out.slice(0, 300)}`);
+  } finally { stub.close(); rmSync(dir, { recursive: true, force: true }); }
+  console.log("secrets never leave the process ✓ (malformed keys are named, not quoted; a seller's echo of any key is redacted in results, errors and stderr)");
+}
+
+// 1) Boot a paywalled API instance (PoW gate live, facilitator not contacted)
+// on an OS-assigned port (PORT=0, read back from its listening line) with its
+// stores in a temp directory of its own, so two copies of this suite never meet.
+const { ownStoreEnv } = await import("../scripts/lib/own-stores.js");
 const api = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
   cwd: ROOT,
   env: {
     ...process.env,
+    ...ownStoreEnv("mcp-test"),
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD",
     NETWORK: "base",
     FACILITATOR_URL: "https://facilitator.payai.network",
     X402_SYNC_ON_START: "false",
     POW_DIFFICULTY: "12",
-    PORT: String(PORT),
+    PORT: "0",
   },
-  stdio: ["ignore", "inherit", "inherit"],
+  stdio: ["ignore", "pipe", "inherit"],
 });
+// A failed assertion exits the process: the server goes with it.
+process.on("exit", () => { try { api.kill("SIGKILL"); } catch { /* already gone */ } });
+const PORT = await new Promise((resolve) => {
+  let buf = "", done = false;
+  const settle = (v) => { if (!done) { done = true; buf = ""; resolve(v); } };
+  api.stdout.on("data", (c) => { process.stdout.write(c); if (done) return; buf += c; const m = buf.match(/listening on :(\d+)/); if (m) settle(Number(m[1])); });
+  api.on("exit", () => settle(null));
+  setTimeout(() => settle(null), 120_000).unref();
+});
+if (!PORT) fail("the API instance never reported the port it bound");
+const API = `http://localhost:${PORT}`;
 let up = false;
 for (let i = 0; i < 30 && !up; i++) {
   up = await fetch(`${API}/health`).then((r) => r.ok).catch(() => false);
@@ -462,11 +600,16 @@ try {
     // A signable offer (real address shapes) at `amount` base units of Base
     // USDC, with optional extra fields.
     const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
-    const signable = (path, amount, extra = {}) => Buffer.from(JSON.stringify({
+    const signable = (path, amount, extra = {}, over = {}) => Buffer.from(JSON.stringify({
       x402Version: 2,
       resource: { url: `http://127.0.0.1${path}`, description: "paid", mimeType: "application/json" },
-      accepts: [{ scheme: "exact", network: "eip155:8453", amount: String(amount), asset: BASE_USDC, payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2", ...extra } }],
+      accepts: [{ scheme: "exact", network: "eip155:8453", amount: String(amount), asset: BASE_USDC, payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2", ...extra }, ...over }],
     })).toString("base64");
+    // /api/long-lived quotes an honest $0.001 whose accept asks to stay valid
+    // for ten years; /api/day-lived asks for exactly a day, the ceiling.
+    const VALIDITY = { "/api/long-lived": 10 * 365 * 24 * 3600, "/api/day-lived": 24 * 3600 };
+    const validityRows = Object.keys(VALIDITY).map((path) => ({ slug: path.slice(5), method: "POST", path, price: "$0.001", description: "validity", category: "util", computePayable: false }));
+    seen.validitySigned = { "/api/long-lived": 0, "/api/day-lived": 0 };
     // /api/switch lists at $0.01 and quotes $5 on its 402 (the request the
     // wallet signs for); /api/hinted quotes 5000000 base units of USDC ($5)
     // beside a decimals hint of 18; /api/fixed quotes $0.01. Every unpaid
@@ -542,11 +685,17 @@ try {
     seen.failsPaidSigned = 0;
     const stub = createServer((req, res) => {
       const send = (status, obj, headers = {}) => { res.writeHead(status, { "Content-Type": "application/json", ...headers }); res.end(JSON.stringify(obj)); };
-      if (req.url.startsWith("/api/pricing")) return send(200, { endpoints: [catalogRow, refusedRow, ...plainRows, switchRow, hintedRow, fixedRow, ...redirRows, flooredRow, failsPaidRow], payment: { network: "base" } });
+      if (req.url.startsWith("/api/pricing")) return send(200, { endpoints: [catalogRow, refusedRow, ...plainRows, switchRow, hintedRow, fixedRow, ...redirRows, flooredRow, failsPaidRow, ...validityRows], payment: { network: "base" } });
       if (req.url.startsWith("/api/floored")) {
         req.resume();
         if (req.headers.authorization) { seen.flooredPaid++; return send(200, { ok: true }); }
         return send(402, {}, { "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(flooredOffer)).toString("base64") });
+      }
+      if (VALIDITY[req.url.split("?")[0]]) {
+        req.resume();
+        const path = req.url.split("?")[0];
+        if (req.headers["payment-signature"] || req.headers["x-payment"]) { seen.validitySigned[path]++; return send(200, { ok: true }); }
+        return send(402, {}, { "PAYMENT-REQUIRED": signable(path, 1000, {}, { maxTimeoutSeconds: VALIDITY[path] }) });
       }
       if (req.url.startsWith("/api/redir-first")) { req.resume(); res.writeHead(307, { Location: `${ELSEWHERE}${req.url}` }); return res.end(); }
       if (req.url.startsWith("/api/redir-paid")) {
@@ -690,6 +839,15 @@ try {
       if (seen.signed !== 0) fail("the wallet signed a $5 payment over a $0.10 cap");
       if (!switched.isError || !/Refused without paying/.test(text(switched)) || !/\$5\b/.test(text(switched))) fail(`a 402 quoting above the list price and the cap must be refused at signing: ${text(switched).slice(0, 300)}`);
       console.log("an over-cap 402 is refused at signing ✓");
+
+      // An accept asking to stay valid for ten years is refused unsigned, so
+      // no authorization outlives the day this server signs for; a day is
+      // signed and paid.
+      const long = await wallet.callTool({ name: "catalog.call", arguments: { slug: "long-lived", params: { text: "x" } } });
+      if (seen.validitySigned["/api/long-lived"] !== 0 || !long.isError || !/Refused without paying/.test(text(long)) || !/86400/.test(text(long)) || !/nothing was signed/.test(text(long))) fail(`an accept valid for ten years must be refused at signing: ${text(long).slice(0, 300)}`);
+      const day = await wallet.callTool({ name: "catalog.call", arguments: { slug: "day-lived", params: { text: "x" } } });
+      if (day.isError || seen.validitySigned["/api/day-lived"] !== 1) fail(`an accept valid for a day must be signed and paid: ${text(day).slice(0, 300)}`);
+      console.log("an accept valid for ten years is refused unsigned; a day is paid ✓");
 
       // A seller decimals hint does not lower the price: 5000000 base units of
       // USDC is $5 whatever decimals the accept declares.

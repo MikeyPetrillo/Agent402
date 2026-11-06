@@ -15,7 +15,7 @@
 //
 // Exit codes: 0 saved · 2 config/payment/shape failure.
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
-import { assertOwnPaidTarget } from "./lib/buyer-guard.js";
+import { assertOwnPaidTarget, capFromEnv, guardCappedSigning } from "./lib/buyer-guard.js";
 import { writeFileSync } from "node:fs";
 import { createHmac } from "node:crypto";
 
@@ -40,6 +40,8 @@ const [{ privateKeyToAccount }, { x402Client }, { registerExactEvmScheme }, { wr
 const account = privateKeyToAccount(pk);
 const client = disableVendorSpendControls(new x402Client());
 registerExactEvmScheme(client, { signer: account });
+// One Base buy of a list-priced route: nothing above CAPTURE_MAX_USD is signed.
+guardCappedSigning(client, { maxUsd: capFromEnv("CAPTURE_MAX_USD", 0.01, { script: "capture-bestsellers" }), networks: ["eip155:8453"] });
 
 // Same internal-traffic marker as paid-canary.js: header set on the Request
 // object (rebuilding init would drop the X-PAYMENT header on the paid retry).

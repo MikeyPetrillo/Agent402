@@ -70,6 +70,18 @@ Loaded when an index, discovery, router or buyer file is read.
   (`configureUnprovenSharedPayTos`, wired in server.js). Solana's tier (`SOR_SVM_UNPROVEN_MAX_USD`,
   `src/solana-buyer.js`) is separate.
 - **External spend guard:** `src/external-spend-guard.js` (per payer and per chain wallet).
+- **EVM buyer chains:** `src/evm-buyer-chains.js` lists the EVM chains the one spending wallet
+  (`X402_UPSTREAM_BUYER_KEY`) can pay a seller on: Base, Arc, Celo, Polygon, Arbitrum and Robinhood
+  (USDG), each with its asset, decimals and EIP-712 domain from our own tables, never the seller's.
+  Base is always on; any other chain is dispatched only while `SOR_EVM_CHAINS` lists it (comma
+  separated names or CAIP-2 ids; unset = Base only), and payX402 refuses an unlisted one whoever
+  calls it. Each enabled chain gets Base's domain check, split-price refusal, evidence wallets,
+  capped validity, signed-amount assert and chain-truth refusal read (`EVM_RPC_<id>` overrides the
+  RPC), its own rolling 24 h ceiling (`SOR_WALLET_DAILY_MAX_USD_<CHAIN>`, default $25), and a
+  low-balance refusal on its own reading of the same address (`UPSTREAM_BUYER_LOW_USD_<CHAIN>`,
+  else `UPSTREAM_BUYER_LOW_USD`), one word per chain under `upstreamBuyerEvm` on
+  `/api/gateway-status` ("off" with none enabled). The unproven tier stays Base only. Off Base no
+  buyer payment settles back into the spending wallet, so each chain's balance is funded by hand.
 - **Router evidence:** `src/evidence-binding.js` keeps settlement evidence per wallet;
   `src/seller-funding.js` nets payments made with USDC the paid wallet itself sent the payer
   (each payer's history read once when it first pays, then incremental; state on `/data`);

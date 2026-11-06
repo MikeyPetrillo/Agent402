@@ -163,7 +163,7 @@ jobs:
           RAILS=$(curl -s --max-time 15 "$PROD/api/rails" || echo '{}')
           DEGRADED=$(echo "$RAILS" | jq -r '.degraded // empty' 2>/dev/null || echo "")
           TITLE="Settlement rail DEGRADED"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           # An unreadable surface is NOT evidence of health: say so and stop,
           # rather than closing a real issue on the back of a failed curl.
           if [ -z "$DEGRADED" ]; then
@@ -199,7 +199,7 @@ jobs:
           UNKNOWN_MIN=$(echo "$BODY" | jq -r '.unknownForMinutes // 0' 2>/dev/null || echo 0)
           echo "gateway credits: $STATUS (credits leg: $(echo "$BODY" | jq -r '.credits // "-"' 2>/dev/null), key-limit leg: $(echo "$BODY" | jq -r '.keyLimit // "-"' 2>/dev/null), unknown for ${UNKNOWN_MIN}m)"
           TITLE="Gateway credits LOW (OpenRouter)"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The OpenRouter balance behind the /v1 gateway is below its configured low-water mark (OPENROUTER_LOW_CREDITS_USD) OR the production key's own monthly limit is nearly used (OPENROUTER_LOW_KEY_LIMIT_FRACTION). Either ceiling stops the gateway: upstream refuses, we answer 502, settlement is cancelled, so buyers are NOT charged but every /v1 sale is lost until it is topped up. Auto top-up is on for this account, so a low balance means a refill did not land (declined card, or auto top-up switched off): check https://openrouter.ai/settings/credits. Raise the key limit: https://openrouter.ai/settings/keys (key: Agent402)."
@@ -214,7 +214,7 @@ jobs:
           # several heartbeat runs, well past any OpenRouter blip (server caches
           # the read for 5 min and only goes unknown when BOTH legs are unreadable).
           TITLE2="Gateway balance UNREADABLE (OpenRouter)"
-          OPEN2=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE2\"" --json number --jq '.[0].number // empty')
+          OPEN2=$(ISSUE_TITLE="$TITLE2" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE2\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$STATUS" = "unknown" ] && [ "${UNKNOWN_MIN:-0}" -ge 180 ] 2>/dev/null; then
             if [ -z "$OPEN2" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE2" --body "/api/gateway-status has reported status=unknown for ${UNKNOWN_MIN} minutes: neither OpenRouter /credits nor /key answered readably with the production key. The low-balance alarm is blind while this lasts. Check the key (https://openrouter.ai/settings/keys), OpenRouter status, and the server log for fetch errors."
@@ -242,7 +242,7 @@ jobs:
           set -e
           echo "$OUT" | tail -20
           TITLE="Bazaar listing validation FAILED"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           DETAIL=$(echo "$OUT" | grep -E '^(FAIL|\?\?) ' | head -20 || true)
           if [ "$CODE" = "1" ]; then
             if [ -z "$OPEN" ]; then
@@ -254,6 +254,51 @@ jobs:
             echo "::warning::CDP validate endpoint UNREADABLE for every flagship route - not silently skipping; the listing check is blind this run"
           elif [ "$CODE" = "0" ] && [ -n "$OPEN" ]; then
             gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: every flagship route validates again at $(date -u +%FT%TZ)."
+          fi
+
+      # Security advisories waiting in triage: a private report waits on a
+      # maintainer, and nothing else pages on one. The built-in token cannot
+      # read advisories, so the read uses ADVISORY_READ_TOKEN (fine-grained,
+      # this repository, Security advisories read), passed to the script only.
+      # The issue is public: one fixed body that points to the Security tab (no
+      # GHSA id, age or count; those go to the job log), opened once and never
+      # commented on while it stays open, closed when clear. An id listed in
+      # repo var ADVISORY_TRIAGE_ACK (comma list) does not page; the limit is
+      # repo var ADVISORY_TRIAGE_MAX_HOURS (default 24). A read that fails (no
+      # token, 401/403/5xx) opens its own fixed-text issue, never a pass, and
+      # leaves the triage issue as it was.
+      - name: Security advisory triage check (alarm on a report in triage past the limit)
+        if: always()
+        continue-on-error: true
+        env:
+          ADVISORY_READ_TOKEN: ${{ secrets.ADVISORY_READ_TOKEN }}
+          ADVISORY_TRIAGE_ACK: ${{ vars.ADVISORY_TRIAGE_ACK }}
+          ADVISORY_TRIAGE_MAX_HOURS: ${{ vars.ADVISORY_TRIAGE_MAX_HOURS }}
+        run: |
+          TITLE="Security advisory waiting in triage"
+          TITLE2="Security advisory check cannot read"
+          BODY_FILE="$RUNNER_TEMP/advisory-triage-body.md"
+          rm -f "$BODY_FILE"
+          CODE=0
+          ADVISORY_BODY_FILE="$BODY_FILE" node scripts/advisory-triage-check.js || CODE=$?
+          # Only an open issue with exactly this title, opened by the workflow
+          # bot, is the alarm.
+          find_open() {
+            ALARM_NAME="$1" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$1\"" --json number,title,author --jq '[.[] | select(.title == env.ALARM_NAME) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions")][0].number // empty' 2>/dev/null || echo ""
+          }
+          OPEN=$(find_open "$TITLE")
+          OPEN2=$(find_open "$TITLE2")
+          if [ "$CODE" = "0" ]; then
+            [ -z "$OPEN" ] || gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: no security advisory is waiting in triage past the limit."
+            [ -z "$OPEN2" ] || gh issue close "$OPEN2" --repo "$GITHUB_REPOSITORY" --comment "Recovered: security advisories readable again."
+          elif [ "$CODE" = "1" ] && [ -s "$BODY_FILE" ]; then
+            [ -z "$OPEN2" ] || gh issue close "$OPEN2" --repo "$GITHUB_REPOSITORY" --comment "Recovered: security advisories readable again."
+            # Open once; a repeat run posts nothing while the issue stays open.
+            [ -n "$OPEN" ] || gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body-file "$BODY_FILE"
+          else
+            echo "::warning::security advisory triage check UNREADABLE (exit $CODE) - not silently passing"
+            [ -s "$BODY_FILE" ] || printf 'The heartbeat could not run the security advisory triage check. The heartbeat job log names the error. Auto-closes on the next readable check.\n' > "$BODY_FILE"
+            [ -n "$OPEN2" ] || gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE2" --body-file "$BODY_FILE"
           fi
 
       # Canary burner balance watch: an empty burner once read as a settlement
@@ -272,7 +317,7 @@ jobs:
           USD=$(node -e "console.log((parseInt('$BAL',16)/1e6).toFixed(4))")
           echo "canary burner Base USDC read"
           TITLE="Canary burner LOW (Base)"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           LOW=$(node -e "console.log($USD < $WARN_USD ? 1 : 0)")
           if [ "$LOW" = "1" ]; then
             if [ -z "$OPEN" ]; then
@@ -319,7 +364,7 @@ jobs:
             || { echo "::warning::PayAI credit watch UNREADABLE - /api/revenue/daily missing or unparseable. NOT skipping silently: investigate."; exit 0; }
           echo "PayAI weighted credits since $CUT: $CREDITS (warn at $THRESH)"
           TITLE="PayAI credit allowance HIGH"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if awk -v c="$CREDITS" -v t="$THRESH" 'BEGIN { exit !(c >= t) }'; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "Weighted PayAI credits spent on Avalanche + Sei settlements since $CUT reached the warn threshold (repo var PAYAI_QUOTA_WARN). Past the allowance the facilitator bills its prepaid credits when PAYAI_API_KEY_ID/SECRET are set (top up in its merchant console) and refuses settlement when they are not. Fallback hops onto PayAI are not counted here - this is a lower bound."
@@ -350,7 +395,7 @@ jobs:
           fi
           echo "CDP-first-chain settles, rolling 30d: $COUNT (warn at $THRESH)"
           TITLE="CDP settlement metering HIGH"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$COUNT" -ge "$THRESH" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "Rolling 30-day settlements on CDP-first chains (Base/Solana/Polygon/Arbitrum): $COUNT. Check the CDP account has a working payment method: a billing lapse answers payment-method-required on /settle and takes the Base rail down. Threshold: repo var CDP_METERED_WARN."
@@ -373,7 +418,7 @@ jobs:
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.upstreamBuyer.status // "unknown"' 2>/dev/null || echo unknown)
           echo "upstream buyer wallet: $STATUS"
           TITLE="Upstream buyer wallet LOW (x402)"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The x402 upstream spending wallet (X402_UPSTREAM_BUYER_KEY) is below the low-water mark (UPSTREAM_BUYER_LOW_USD). When it empties, route-execute external buys and seller-payability refuse (buyers are never charged, but those paths go dark). attest signs from the same wallet but pays Base gas in ETH, which this alarm reads nothing about. Top up: send USDC on Base to the upstream buyer address."
@@ -402,7 +447,7 @@ jobs:
           BODY=$(curl -s --max-time 15 "$PROD/api/gateway-status" || echo '{}')
           STATUS=$(echo "$BODY" | jq -r '.upstreamBudgets.status // "unknown"' 2>/dev/null || echo unknown)
           TITLE="Upstream call budget ELEVATED"
-          EXISTING=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number --jq '.[0].number' 2>/dev/null || echo "")
+          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "elevated" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
@@ -422,7 +467,7 @@ jobs:
           BODY=$(curl -s --max-time 15 "$PROD/api/gateway-status" || echo '{}')
           STATUS=$(echo "$BODY" | jq -r '.upstreamHardCaps.status // "unknown"' 2>/dev/null || echo unknown)
           TITLE="Upstream hard ceiling REACHED"
-          EXISTING=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number --jq '.[0].number' 2>/dev/null || echo "")
+          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "capped" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
@@ -444,7 +489,7 @@ jobs:
           # fraction remaining and not "near zero".
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.exaAllowance.status // "unknown"' 2>/dev/null || echo unknown)
           TITLE="Exa prepaid allowance LOW"
-          EXISTING=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number --jq '.[0].number' 2>/dev/null || echo "")
+          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "low" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
@@ -461,7 +506,7 @@ jobs:
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.upstreamBuyerAvm.status // "unknown"' 2>/dev/null || echo unknown)
           echo "algorand upstream buyer wallet: $STATUS"
           TITLE="Algorand upstream buyer wallet LOW (x402)"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The Algorand x402 spending wallet (ALGORAND_UPSTREAM_BUYER_MNEMONIC) behind the SOR's Algorand external routing is below the low-water mark (ALGORAND_UPSTREAM_BUYER_LOW_USD), or not yet opted in to USDC ASA 31566704 (check /api/gateway-status upstreamBuyerAvm.optedIn). When it empties, Algorand external routing fails 502 (buyers are never charged, but the path goes dark). Top up: send USDC on Algorand to the AVM spending wallet address."
@@ -482,7 +527,7 @@ jobs:
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.upstreamBuyerSvm.status // "unknown"' 2>/dev/null || echo unknown)
           echo "solana upstream buyer wallet: $STATUS"
           TITLE="Solana upstream buyer wallet LOW (x402)"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The Solana x402 spending wallet (SOLANA_UPSTREAM_BUYER_KEY) behind the SOR's Solana external routing is below the low-water mark (SOLANA_UPSTREAM_BUYER_LOW_USD). When it empties, Solana external routing fails 502 (buyers are never charged, but the path goes dark). Top up: send USDC on Solana to the SVM spending wallet address."
@@ -491,6 +536,49 @@ jobs:
             fi
           elif [ "$STATUS" = "ok" ] && [ -n "$OPEN" ]; then
             gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: balance back above the low-water mark at $(date -u +%FT%TZ)."
+          fi
+
+      # EVM spending wallet on the other chains SOR_EVM_CHAINS enables - the
+      # same key as the Base wallet, one balance per chain. "low" pages. A
+      # balance unreadable for 60 minutes or more (unknownForMinutes, about
+      # two heartbeat runs) opens its own UNREADABLE issue, so a dead RPC never
+      # silences the low alarm. "off" (no chain enabled) and "unconfigured"
+      # never page and close the LOW issue; an unreadable gateway-status read
+      # changes nothing.
+      - name: EVM chains upstream buyer wallet check (alarm on low balance on an enabled chain)
+        if: always()
+        continue-on-error: true
+        run: |
+          BODY=$(curl -s --max-time 15 "$PROD/api/gateway-status" || echo '{}')
+          STATUS=$(echo "$BODY" | jq -r '.upstreamBuyerEvm.status // "unknown"' 2>/dev/null || echo unknown)
+          LOW=$(echo "$BODY" | jq -r '[.upstreamBuyerEvm.chains // {} | to_entries[] | select(.value.status == "low") | .key] | join(", ")' 2>/dev/null || echo "")
+          echo "evm chains upstream buyer wallet: $STATUS ${LOW:+(low: $LOW)}"
+          TITLE="EVM chains upstream buyer wallet LOW (x402)"
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+          if [ "$STATUS" = "low" ]; then
+            if [ -z "$OPEN" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The x402 spending wallet (X402_UPSTREAM_BUYER_KEY) is below the low-water mark (UPSTREAM_BUYER_LOW_USD_<CHAIN>, else UPSTREAM_BUYER_LOW_USD) on: $LOW. External routing on that chain refuses 503 while it reads low (buyers are never charged). Top up: send that chain's stablecoin to the spending wallet address on that chain."
+            else
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ) on: $LOW."
+            fi
+          elif [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ] || [ "$STATUS" = "unconfigured" ]; then
+            if [ -n "$OPEN" ]; then
+              if [ "$STATUS" = "ok" ]; then
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: every enabled chain back above the low-water mark at $(date -u +%FT%TZ)."
+              else
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Closed: no enabled chain spends from this wallet now (upstreamBuyerEvm.status=$STATUS) at $(date -u +%FT%TZ)."
+              fi
+            fi
+          fi
+          UNKNOWN_MIN=$(echo "$BODY" | jq -r '.upstreamBuyerEvm.unknownForMinutes // 0' 2>/dev/null || echo 0)
+          TITLE2="EVM chains upstream buyer wallet UNREADABLE (x402)"
+          OPEN2=$(ISSUE_TITLE="$TITLE2" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE2\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+          if [ "$STATUS" = "unknown" ] && [ "${UNKNOWN_MIN:-0}" -ge 60 ] 2>/dev/null; then
+            if [ -z "$OPEN2" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE2" --body "/api/gateway-status has reported upstreamBuyerEvm.status=unknown for an hour or more: the spending wallet's balance could not be read on at least one chain SOR_EVM_CHAINS enables, so the low-balance alarm for that chain is blind. Check that chain's RPC (EVM_RPC_<chain id>) and the server log. Auto-closes on the next readable read."
+            fi
+          elif [ -n "$OPEN2" ] && { [ "$STATUS" = "ok" ] || [ "$STATUS" = "low" ] || [ "$STATUS" = "off" ] || [ "$STATUS" = "unconfigured" ]; }; then
+            gh issue close "$OPEN2" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the balance reads again (upstreamBuyerEvm.status=$STATUS)."
           fi
 
       # Tempo (MPP) spending-wallet check - same pattern: this wallet pays MPP
@@ -503,7 +591,7 @@ jobs:
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.upstreamBuyerTempo.status // "unknown"' 2>/dev/null || echo unknown)
           echo "tempo upstream buyer wallet: $STATUS"
           TITLE="Tempo upstream buyer wallet LOW (MPP)"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The Tempo spending wallet (TEMPO_UPSTREAM_BUYER_KEY) behind the SOR's MPP external routing is below the low-water mark (TEMPO_UPSTREAM_BUYER_LOW_USD) in USDC.e on Tempo. When it empties, MPP external routing fails (buyers are never charged, but the path goes dark). Top up: send USDC on Tempo (0x20C0...8b50) to the Tempo spending wallet address."
@@ -532,7 +620,7 @@ jobs:
           if [ "$STATUS" = "degraded" ]; then sleep 30; STATUS=$(read_sdb); fi
           echo "state database: $STATUS"
           TITLE="State database DEGRADED (Postgres)"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$STATUS" = "degraded" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status.stateDb reports **degraded** on two readings 30 s apart: the Postgres behind STATE_DATABASE_URL refused, dropped or hung on a statement, its schema setup failed, or a moved store has not loaded since boot. The moved stores (subscriptions, alerts, monitor runs, listings, leaderboards, logs) cannot be written while it lasts; loops with external effects skip their ticks, internal loops on a container up for more than ten minutes keep running without their lease. Check the Postgres service on Railway and the boot log ([state-db] lines). Auto-closes when the status reads on."
@@ -560,7 +648,7 @@ jobs:
           case "$WORD" in held|failed|stale|unencrypted) sleep 30; WORD=$(read_bk) ;; esac
           echo "offsite backup: $WORD"
           TITLE="Offsite backup is not current"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             held|failed|stale|unencrypted)
               if [ -z "$OPEN" ]; then
@@ -590,7 +678,7 @@ jobs:
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.stellarFacilitator.status // "unknown"' 2>/dev/null || echo unknown)
           echo "stellar facilitator fee account: $STATUS"
           TITLE="Stellar facilitator fee account LOW (XLM)"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The self-hosted Stellar facilitator's signing account is below its low-water mark (FACILITATOR_LOW_BALANCE_XLM on the agent402-facilitator service). That account pays the transaction fee on every Stellar settlement, so when it empties, Stellar settlements stop landing - buyers are never charged, but the rail goes dark and the paid canary reports it as a rail failure rather than as an empty wallet. Top up: send XLM to the address on the facilitator's GET /health (signerAddress). Auto-closes when the balance recovers."
@@ -613,7 +701,7 @@ jobs:
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.sanctions.status // "unknown"' 2>/dev/null || echo unknown)
           echo "sanctions lists: $STATUS"
           TITLE="Sanctions lists STALE or UNLOADED (OFAC SDN)"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || true)
           if [ "$STATUS" = "stale" ] || [ "$STATUS" = "unloaded" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The OFAC SDN list behind sanctions-wallet, sanctions-name and the router's payout screen reads $STATUS on /api/gateway-status. stale: the 12-hourly refresh has failed for over a day and screening is answering from an old copy. unloaded: it never loaded after boot and every screening call is refused 503. The operator view of /api/gateway-status carries the last error; the source is OFAC's SDN.XML export, loaded by src/ofac-sdn.js for src/tools/sanctions-kit.js. Auto-closes when it reads ok."
@@ -640,7 +728,7 @@ jobs:
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.sanctionsScreen.status // "absent"' 2>/dev/null || echo unknown)
           echo "payment-party screen: $STATUS"
           TITLE="Payment-party screen STALE or MISSING (OFAC SDN)"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || true)
           if [ "$STATUS" = "stale" ] || [ "$STATUS" = "missing" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The payment-party screen reads $STATUS on /api/gateway-status (sanctionsScreen.status). stale: no successful refresh in two refresh periods (12 h by default) and the screen is checking payments against the last good set. missing: no list is loaded, so Tempo direct mode offers no tempo challenge and x402 payments are served unscreened until one loads. The operator view of /api/gateway-status carries lastError and lastAttemptAt; the source is OFAC's SDN.XML export (src/ofac-sdn.js, read by src/sanctions-screen.js). Auto-closes when it reads fresh."
@@ -666,7 +754,7 @@ jobs:
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.subscriptionFeePayer.status // "unknown"' 2>/dev/null || echo unknown)
           echo "subscription gas sponsor: $STATUS"
           TITLE="Subscription gas sponsor LOW (PathUSD)"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || true)
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The Tempo subscription gas sponsor (TEMPO_SUBSCRIPTION_FEE_PAYER_KEY) is low on PathUSD. Gas on this rail is paid in PathUSD, NOT the USDC.e the products are priced in, so topping up the wrong token will not fix it. While it is empty, activations fail 402 (nobody is charged) but renewals go past_due, which means existing subscribers are served for free until their grace window ends. Top up via the fund-tempo-fee-payer workflow with token=pathusd."
@@ -689,7 +777,7 @@ jobs:
           FAILS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.operatorAuth.failures1h // "?"' 2>/dev/null || echo "?")
           echo "operator auth: $STATUS ($FAILS wrong credentials in the last hour)"
           TITLE="Operator token guessing ELEVATED"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "elevated" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports operatorAuth.status=elevated: $FAILS wrong operator credentials in the last hour (threshold OPERATOR_AUTH_FAIL_ALERT). The per-IP limiter caps each source; this is the aggregate. If it persists, rotate AGENT402_OPERATOR_TOKEN on Railway and in Actions secrets. Auto-closes when the rate drops." >/dev/null 2>&1 || echo "issue create failed"
@@ -711,7 +799,7 @@ jobs:
           WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.tweetQueue.status // "unknown"' 2>/dev/null || echo unknown)
           echo "tweet queue: $WORD"
           TITLE="Tweet queue needs attention (server poster)"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             halted|no_credentials|refused|in_doubt)
               if [ -z "$OPEN" ]; then
@@ -737,7 +825,7 @@ jobs:
           WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.circlePending.status // "unknown"' 2>/dev/null || echo unknown)
           echo "circle pending: $WORD"
           TITLE="Arc pending settlements need attention"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             unresolved|full)
               if [ -z "$OPEN" ]; then
@@ -765,7 +853,7 @@ jobs:
           WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.gatewayPending.status // "unknown"' 2>/dev/null || echo unknown)
           echo "gateway pending: $WORD"
           TITLE="Gateway pending settlements need attention"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             unresolved|full)
               if [ -z "$OPEN" ]; then
@@ -799,7 +887,7 @@ jobs:
           echo "refunds owed: $WORD"
           WF="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/workflows/refund.yml"
           TITLE="Refunds owed to a buyer are waiting"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             owed|aging|stuck)
               BODY="/api/gateway-status reports refundsOwed.status=$WORD at $(date -u +%FT%TZ). The counts are on /__operator/refunds.json, never in this public issue. owed: a buyer's debt is in the refund ledger - read /__operator/refunds.json, then run the refund workflow ($WF): dry run first, then live (include_repeat_hangups for hang-up debts held for review; void a debt that should not be paid, with a note). A card report whose refund Stripe refused is listed on /__operator/human-checkout.json (refundOwed): refund it in the Stripe dashboard. aging: a debt has been owed longer than REFUND_OWED_ALARM_HOURS (default 48). stuck: a row has been in sending for over 30 minutes - check the refund wallet on chain, then mark it paid with the tx or release it back to owed. Auto-closes when nothing is owed."
@@ -832,7 +920,7 @@ jobs:
           case "$WORD" in owed|ok|unknown) ;; *) WORD=unknown ;; esac
           echo "credits refunds: $WORD"
           TITLE="A refused credits purchase was not refunded"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             owed)
               BODY="/api/gateway-status reports creditsRefunds.status=owed at $(date -u +%FT%TZ): a credits purchase was refused (the daily purchase limit, or an EU or UK billing address without a VAT number), issued no key, and its automatic card refund failed. Read the session ids on /__operator/credits.json (refusalsToRefund), refund each payment in the Stripe dashboard, then POST /__operator/credits/refusal-refunded {\"session\":\"cs_...\"}. Auto-closes when nothing is owed."
@@ -861,7 +949,7 @@ jobs:
           case "$WORD" in unauthenticated|ok|off|unknown) ;; *) WORD=unknown ;; esac
           echo "cdn origin: $WORD"
           TITLE="CDN origin secret: edge traffic reached the origin unauthenticated"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             unauthenticated)
               BODY="/api/gateway-status reports cdnOrigin.status=unauthenticated at $(date -u +%FT%TZ): requests from the CDN's address ranges reached the origin without a valid X-Origin-Auth inside the last hour. While that lasts each such request is keyed on the edge address, not its client, so the per-address limiters, budgets and attribution fold onto a few addresses. Check CDN_ORIGIN_SECRET on Railway against the header rule on the proxy (a rotation on one side only reads exactly like this); the operator view of /api/gateway-status carries the count and whether a secret is configured. Auto-closes when the word is ok."
@@ -894,7 +982,7 @@ jobs:
           if [ "$WORD" = "burst" ]; then sleep 30; WORD=$(read_od); fi
           echo "outbound destinations: $WORD"
           TITLE="Outbound payments reached a burst of NEW destinations"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             burst)
               if [ -z "$OPEN" ]; then
@@ -930,7 +1018,7 @@ jobs:
             FIELD="$1"; BAD="$2"; GOOD="$3"; ENDPOINT="${4:-/__operator/tool-failures.json}"
             WORD=$(echo "$GS" | jq -r ".${FIELD}.status // \"unknown\"" 2>/dev/null || echo unknown)
             echo "$FIELD: $WORD"
-            OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+            OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
             if echo " $BAD " | grep -q " $WORD "; then
               if [ -z "$OPEN" ]; then
                 gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports ${FIELD}.status=$WORD. The detail is on the operator endpoint, $ENDPOINT (operator token). Auto-closes when the word is ok." >/dev/null 2>&1 || echo "issue create failed"
@@ -1092,7 +1180,7 @@ jobs:
           WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.toolAnswers.status // "unknown"' 2>/dev/null || echo unknown)
           echo "toolAnswers: $WORD"
           TITLE="toolAnswers: a tool is answering empty or error-shaped 200s"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             degraded)
               if [ -z "$OPEN" ]; then
@@ -1128,7 +1216,7 @@ jobs:
           if [ "$WORD" = "stuck" ] || [ "$WORD" = "local" ]; then sleep 30; WORD=$(read_dl); fi
           echo "ledger dead-letter: $WORD"
           TITLE="Ledger rows waiting on local disk (dead-letter stuck)"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             stuck|local)
               if [ -z "$OPEN" ]; then
@@ -1161,7 +1249,7 @@ jobs:
           if [ "$WORD" = "off" ] || [ "$WORD" = "degraded" ]; then sleep 30; WORD=$(read_rp); fi
           echo "redis persistence: $WORD"
           TITLE="Redis append-only persistence is not on"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             off|degraded)
               if [ -z "$OPEN" ]; then
@@ -1189,7 +1277,7 @@ jobs:
           WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.email.status // "unknown"' 2>/dev/null || echo unknown)
           echo "email: $WORD"
           TITLE="Transactional email is not sending"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             exhausted|failing)
               if [ -z "$OPEN" ]; then
@@ -1223,7 +1311,7 @@ jobs:
           fi
           echo "mcp pin: $WORD ($OUT)"
           TITLE="Served agent402-mcp version is not on npm"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             missing)
               if [ -z "$OPEN" ]; then
@@ -1254,7 +1342,7 @@ jobs:
           if [ "$WORD" = "missing" ] || [ "$WORD" = "partial" ]; then sleep 30; WORD=$(read_uc); fi
           echo "upstream costs: $WORD"
           TITLE="Upstream cost table missing or incomplete in production"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             partial)
               if [ -z "$OPEN" ]; then
@@ -1316,7 +1404,7 @@ jobs:
           echo "stall culprits: ${CULPRITS:-none named} cause: ${STALL_CAUSE:-none}"
           echo "slow paid calls: ${SLOW_SLUGS:-none}"
           TITLE="Serving health DEGRADED"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "degraded" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/__operator/serving-health.json reported degraded on two readings 30 s apart (reasons: ${REASONS:-none given}).${CULPRIT_NOTE} The figures and thresholds are in the operator response and this run's log. Check [loop-stats], [loop-lag], [stall-profile] and [paid-timing] lines in the Railway log. Auto-closes when it reads ok." >/dev/null 2>&1 || echo "issue create failed"
@@ -1359,7 +1447,7 @@ jobs:
           fi
           echo "postgres: leads=$LEADS analytics=$ANALYTICS"
           TITLE="Postgres UNREACHABLE (leads/analytics)"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || true)
           if [ "$LEADS" = "unreachable" ] || [ "$ANALYTICS" = "unreachable" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A Postgres database is unreachable from production (leads=$LEADS, analytics=$ANALYTICS, per /api/gateway-status). The app keeps serving - the tool-call analytics simply stop being recorded - so this does not show as an outage anywhere else. Check the Postgres services in the Railway project (a stopped container looks exactly like this; the platform's own image updates restart them). The app boot log carries a [leads-db]/[analytics-db] probe line naming the failing family/port."
@@ -1388,7 +1476,7 @@ jobs:
           if [ "$STATUS" = "mismatch" ]; then echo "mpp reconcile: first read mismatch - re-reading in 30s before paging"; sleep 30; STATUS=$(read_rec); fi
           echo "mpp reconcile: $STATUS"
           TITLE="MPP reconciliation MISMATCH"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || true)
           if [ "$STATUS" = "mismatch" ]; then
             CATS=$(curl -s --max-time 20 "$PROD/api/gateway-status" | jq -r '[.mppReconcile.categories // {} | to_entries[] | select(.value=="mismatch") | .key] | join(", ")' 2>/dev/null || echo "")
             DAY=$(curl -s --max-time 20 "$PROD/api/gateway-status" | jq -r '.mppReconcile.day // "?"' 2>/dev/null || echo "?")
@@ -1428,7 +1516,7 @@ jobs:
           if [ "$WIN" = "mismatch" ] && [ "$DAILY" = "ok" ]; then echo "mpp reconcile window: first read mismatch - re-reading in 30s before paging"; sleep 30; read -r WIN DAILY DAY <<< "$(read_win)" || true; WIN=${WIN:-unknown}; DAILY=${DAILY:-unknown}; fi
           echo "mpp reconcile 7-day window: $WIN (latest day: $DAILY)"
           TITLE="MPP reconciliation 7-day window MISMATCH"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || true)
           if [ "$WIN" = "mismatch" ] && [ "$DAILY" = "ok" ]; then
             if [ -z "$OPEN" ]; then
               case "$DAY" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;; *) DAY="the latest day" ;; esac
@@ -1458,7 +1546,7 @@ jobs:
           if [ "$CF" = "charged_failed" ]; then echo "mpp charged-failed: first read positive - re-reading in 30s before paging"; sleep 30; CF=$(read_cf); fi
           echo "mpp charged-failed: $CF"
           TITLE="MPP paid-but-failed call"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || true)
           if [ "$CF" = "charged_failed" ]; then
             ROWS=""
             if [ -n "$OP_TOKEN" ]; then
@@ -1490,7 +1578,7 @@ jobs:
           TREND=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.upstreamBuyer.trend // "unknown"' 2>/dev/null || echo unknown)
           echo "upstream buyer trend: $TREND"
           TITLE="Upstream buyer wallet is DRAINING (unexplained fall)"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$TREND" = "draining" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The x402 upstream spending wallet has fallen below its high-water mark across several consecutive reads.
@@ -1545,7 +1633,7 @@ jobs:
           # evidence we could not look. The prod-down alarm above owns that.
           [ "$STATE" = "unreadable" ] && exit 0
           TITLE="Settlement stale - the paid canary is not buying"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$STATE" = "unknown" ]; then
             if [ -z "$OPEN" ]; then
               gh workflow run paid-canary.yml --repo "$GITHUB_REPOSITORY" --ref main \
@@ -1567,7 +1655,7 @@ jobs:
 
       - name: Alert (open issue) or clear (close issue)
         run: |
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search 'in:title "Heartbeat: production DOWN"' --json number --jq '.[0].number // empty')
+          OPEN=$(ISSUE_TITLE='Heartbeat: production DOWN' gh issue list --repo "$GITHUB_REPOSITORY" --state open --search 'in:title "Heartbeat: production DOWN"' --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "${{ steps.probe.outputs.status }}" = "down" ]; then
             BODY="Heartbeat failed 3 consecutive probes (checks:${{ steps.probe.outputs.fails }}).
           Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID

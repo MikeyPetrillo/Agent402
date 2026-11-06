@@ -186,7 +186,7 @@ import { ExactEvmScheme } from "@x402/evm/exact/server";
 const server = new x402ResourceServer(new HTTPFacilitatorClient({ url: "https://x402.org/facilitator" }))
   .register("eip155:8453", new ExactEvmScheme());
 const x402 = paymentMiddleware(
-  { "GET /*": { accepts: [{ scheme: "exact", network: "eip155:8453", price: "$0.001", payTo: "0xYourWallet" }] } },
+  { "/*": { accepts: [{ scheme: "exact", network: "eip155:8453", price: "$0.001", payTo: "0xYourWallet" }] } },
   server,
 );
 
@@ -211,6 +211,13 @@ What you get on every charged request:
   with the reference client - proven in the parent repo's CI by a real mppx
   purchase through this package.
 - **Proof-of-work first**, unchanged: a walletless agent always has a free path.
+- **Only a taken payment opens the gate.** The middleware calls `next()` for a
+  request it does not price (a method or path outside its routes, OPTIONS on a
+  wildcard). A charged request passes only when it carries a payment and the
+  middleware took it (it buffered the response to settle after the handler, or
+  set a settlement header); anything else gets the gate's 402. Price every
+  method you serve in the middleware's routes (`"/*"` covers every method
+  except OPTIONS).
 
 Set a stable `TOLLBOOTH_SECRET` (or `mppSecret`) so MPP challenge ids verify
 across workers - the same caveat as proof-of-work tokens.
@@ -585,6 +592,22 @@ as drop-in copyable snippets.
   human UA to get the *same free access a human gets* (it gains nothing more). To
   stop relying on detection entirely, use `mode: "all"` / `mode: "strict"`, and
   turn on `adaptive` so high-volume abuse pays escalating proof-of-work.
+
+## Upgrading from 0.10.8 or earlier
+
+In x402 middleware mode, a request the gate charges now needs a payment the
+middleware took. Before, when the middleware did not price the request's method
+it called `next()` and the request passed through unpaid; now it gets the
+gate's 402. With only `"GET /*"` priced, for example, a charged POST, PUT or
+DELETE was served free before and is refused now.
+
+- **Price every method you serve.** `"/*"` prices every method except OPTIONS;
+  list explicit routes (`"POST /*"`, `"PUT /*"`, ...) when a method needs its
+  own price.
+- **OPTIONS:** the middleware's `"/*"` never matches it, so a charged OPTIONS
+  request gets the 402. Price it with an explicit `"OPTIONS /*"` route, or keep
+  it out of the charge with a `charge(req)` predicate.
+- The reverse proxy CLI already prices `"/*"` and needs no change.
 
 ## Notes
 

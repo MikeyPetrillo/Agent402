@@ -20,7 +20,7 @@
 // 400 respond_async_required (refused before payment) is paid once more with
 // the Prefer header its body names.
 
-import { assertOwnPaidTarget } from "./lib/buyer-guard.js";
+import { assertOwnPaidTarget, capFromEnv, guardCappedSigning } from "./lib/buyer-guard.js";
 import { createHmac } from "node:crypto";
 import { asyncAdviceByPath, slowPreferOf, paidCallHonoringSlowRoutes } from "./lib/slow-route-buy.js";
 
@@ -51,6 +51,9 @@ const account = privateKeyToAccount(pkHex);
 console.log(`buyer ${account.address} -> ${TARGET}`);
 const client = disableVendorSpendControls(new x402Client());
 registerExactEvmScheme(client, { signer: account });
+// Base only, and no single payment above DECIDE_E2E_MAX_USD (default: the
+// execute route's published per-call maximum).
+guardCappedSigning(client, { maxUsd: capFromEnv("DECIDE_E2E_MAX_USD", 3, { script: "decide-paid-e2e" }), networks: ["eip155:8453"] });
 const pay = wrapFetchWithPayment(tagged(fetch), client);
 // Which routes are slow, from the free price list; unreadable, a slow route is
 // known from its 400 respond_async_required instead.

@@ -219,15 +219,28 @@ const catalog = {
 // --- claims read from their sources -----------------------------------------
 {
   const { RAILS_SHORT, RAILS } = await import("../src/rails.js");
-  const { EXTERNAL_CHAIN_BY_NETWORK } = await import("../src/tools/route-execute.js");
+  const { routerPayChains } = await import("../src/tools/route-execute.js");
   const { CHAIN_ORDER } = await import("../src/chain-logos.js");
   const html = ledgerHomePage(BASE_URL, catalog, {}, {}, []);
   const text = html.replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ");
   ok(text.includes(RAILS_SHORT) && !/USDC on \d+ chains/.test(text), "the agents card names the rails from RAILS_SHORT, not 'USDC on N chains'");
   ok(!/\d+ rails live/.test(text) && new RegExp(`${RAILS.length} chains( \\+ Tempo)? live`).test(text), "the hero counts chains (plus Tempo), the noun every other surface uses");
   ok(/whole x402 \+ MPP ecosystem/.test(text), "the live panel states its scope in a label that shows at every width");
-  const chains = [...new Set(Object.values(EXTERNAL_CHAIN_BY_NETWORK))].map((c) => c[0].toUpperCase() + c.slice(1)).join(", ");
-  ok(text.includes(`pays you on ${chains}`), "the seller card's router chains are read from the route-execute chain map");
+  const { chainDisplayName } = await import("../src/rails.js");
+  const chains = routerPayChains().map(chainDisplayName).join(", ");
+  ok(text.includes(`pays you on ${chains}`), "the seller card's router chains are read from the live router chain set");
+  // An EVM chain SOR_EVM_CHAINS lists is named by its display name, read per render.
+  {
+    const prev = process.env.SOR_EVM_CHAINS;
+    process.env.SOR_EVM_CHAINS = "robinhood";
+    try {
+      const t = ledgerHomePage(BASE_URL, catalog, {}, {}, []).replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ");
+      const m = t.match(/pays you on ([^.]+)\./);
+      ok(m && /\bRobinhood Chain\b/.test(m[1]), `the seller card names a listed EVM chain by its display name (got: ${m && m[1]})`);
+    } finally {
+      if (prev === undefined) delete process.env.SOR_EVM_CHAINS; else process.env.SOR_EVM_CHAINS = prev;
+    }
+  }
   ok(!/our own \d[\d,]* tools|all \d[\d,]* tools/.test(text), "marketing blocks say 500+, not the exact live count");
   ok(CHAIN_ORDER.length === RAILS.length && CHAIN_ORDER.every(([k, n], i) => n === RAILS[i].name), "the chip row is RAILS, names and order");
   const marks = (html.match(/<div class="hm-marks">[\s\S]*?<\/div>/) || [""])[0];

@@ -1,3 +1,4 @@
+import { howToCallField } from "./how-to-call.js";
 import { applyInputAliases, applyShapeAliases, ignoredShapeParams, shapeRefusal } from "./input-aliases.js";
 // The ONE construction of the object a tool handler is served, shared by the
 // dispatcher and by every place that PRICES a request from its body.
@@ -128,7 +129,7 @@ function aliasInto(req, input, def) {
 /** Cheap input check a paid gate can run BEFORE its payment round trip.
  *  Returns null when the input may proceed, else `{status: 400, body}` with the
  *  same self-correcting envelope the dispatcher's 400 carries (error, tool,
- *  expected, required, example). Two checks only, both of which the handler
+ *  expected, required, example, howToCall). Two checks only, both of which the handler
  *  makes anyway:
  *    - every key the tool's published inputSchema marks `required` is present
  *      (after the accepted input aliases are filled; null/undefined = absent);
@@ -142,7 +143,7 @@ export function preValidateInput(def, req) {
   try { input = handlerInputOf(req, def); }
   catch (e) {
     if (Number(e?.statusCode) !== 400) throw e;
-    return { status: 400, body: { error: e.message, tool: def.slug, expected: def.discovery?.inputSchema?.properties || {}, required: def.discovery?.inputSchema?.required || [], example: def.discovery?.input || {} } };
+    return { status: 400, body: { error: e.message, tool: def.slug, expected: def.discovery?.inputSchema?.properties || {}, required: def.discovery?.inputSchema?.required || [], example: def.discovery?.input || {}, ...howToCallField(def) } };
   }
   const schema = def.discovery?.inputSchema || {};
   const required = Array.isArray(schema.required) ? schema.required : [];
@@ -156,7 +157,7 @@ export function preValidateInput(def, req) {
   if (!message) return null;
   return {
     status: 400,
-    body: { error: message, tool: def.slug, expected: schema.properties || {}, required, example: def.discovery?.input || {} },
+    body: { error: message, tool: def.slug, expected: schema.properties || {}, required, example: def.discovery?.input || {}, ...howToCallField(def) },
   };
 }
 

@@ -21,7 +21,8 @@
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
 import { writeFileSync } from "node:fs";
 import { openapiReader, resolveReplayableInput } from "./lib/replayable-example.js";
-import { assertOwnPaidTarget } from "./lib/buyer-guard.js";
+import { assertOwnPaidTarget, guardCappedSigning } from "./lib/buyer-guard.js";
+import { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2 } from "../src/avm-network.js";
 
 const TARGET = assertOwnPaidTarget((process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, ""), "challenge-sweep");
 const readOpenapi = openapiReader(TARGET);
@@ -61,6 +62,8 @@ if (!DRY) {
   const algorandClient = AlgorandClient.fromConfig({ algodConfig: { server: algodUrl, token: "" } })
     .setDefaultValidityWindow(1000);
   client.register("algorand:*", new ExactAvmScheme(signer, { algorandClient }));
+  // Algorand mainnet USDC only, and no single payment above the per-tool cap.
+  guardCappedSigning(client, { maxUsd: TOOL_MAX_USD, networks: [ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2] });
   http = new x402HTTPClient(client);
   payerAddress = account.addr.toString();
 } else {

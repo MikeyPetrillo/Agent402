@@ -123,3 +123,138 @@ export async function upstreamBuyerStatus() {
   buyerStatusCache = { at: Date.now(), result };
   return result;
 }
+
+// THE SAME WALLET ON THE OTHER EVM CHAINS (src/evm-buyer-chains.js). One key
+// pays on every chain SOR_EVM_CHAINS enables, and each chain holds its own
+// balance of that chain's stablecoin, so each one gets its own bucketed
+// reading of the same address. Off Base nothing settles back into it (the
+// self-funding payTo is a Base rule), so a chain's balance only falls: the
+// low-water word is the alarm. UPSTREAM_BUYER_LOW_USD_<CHAIN> sets one chain's
+// mark, else UPSTREAM_BUYER_LOW_USD, else the Base default.
+const evmChainStatusCache = new Map(); // chain -> { at, result }
+const evmChainStatusPending = new Map(); // chain -> the read in flight
+// The whole multi-chain read answers within this, whatever the RPCs do: a
+// chain still unread then reads "unknown" (its read finishes in the
+// background and fills the cache for the next call). /api/gateway-status
+// awaits it, and the heartbeat gives that page 15 s.
+export const EVM_STATUS_DEADLINE_MS = 5_000;
+const lowUsdFor = (chain) => {
+  const raw = String(process.env[`UPSTREAM_BUYER_LOW_USD_${String(chain).toUpperCase()}`] ?? "").trim();
+  const per = Number(raw);
+  return raw !== "" && Number.isFinite(per) && per >= 0 ? per : BUYER_LOW_USD();
+};
+/** Bucketed balance of the spending wallet on one non-Base EVM buyer chain.
+ *  `readBalance` is a test seam (address, cfg, rpc) -> USD or null. */
+export async function evmBuyerChainStatus(chain, { readBalance = null, now = Date.now() } = {}) {
+  const { evmBuyerChain, evmBuyerRpc } = await import("./evm-buyer-chains.js");
+  const cfg = evmBuyerChain(chain);
+  if (!cfg || chain === "base") return { configured: false, status: "unconfigured", attests: "balance-only" };
+  const pk = (process.env.X402_UPSTREAM_BUYER_KEY || "").trim();
+  if (!pk) return { configured: false, status: "unconfigured", attests: "balance-only" };
+  const hit = evmChainStatusCache.get(chain);
+  if (hit && now - hit.at < BUYER_STATUS_CACHE_MS) return hit.result;
+  // One read per chain at a time: a caller that arrives while a read is out
+  // waits on that read instead of sending another.
+  const pending = evmChainStatusPending.get(chain);
+  if (pending) return pending;
+  const p = readEvmChainStatus(chain, cfg, pk, { readBalance, now, evmBuyerRpc })
+    .finally(() => { if (evmChainStatusPending.get(chain) === p) evmChainStatusPending.delete(chain); });
+  evmChainStatusPending.set(chain, p);
+  return p;
+}
+async function readEvmChainStatus(chain, cfg, pk, { readBalance, now, evmBuyerRpc }) {
+  let result;
+  try {
+    const { privateKeyToAccount } = await import("viem/accounts");
+    const address = privateKeyToAccount(pk.startsWith("0x") ? pk : `0x${pk}`).address;
+    const rpc = evmBuyerRpc(chain);
+    let usd = null;
+    if (readBalance) usd = await readBalance(address, cfg, rpc);
+    else if (rpc) {
+      const data = "0x70a08231" + address.slice(2).toLowerCase().padStart(64, "0");
+      const res = await fetch(rpc, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to: cfg.asset, data }, "latest"] }),
+        signal: AbortSignal.timeout(6000),
+      });
+      const j = await res.json();
+      if (typeof j.result === "string" && /^0x[0-9a-f]*$/i.test(j.result)) usd = Number(BigInt(j.result === "0x" ? "0x0" : j.result)) / 10 ** cfg.decimals;
+    }
+    result = Number.isFinite(usd)
+      ? { configured: true, status: usd < lowUsdFor(chain) ? "low" : "ok", attests: "balance-only" }
+      : { configured: true, status: "unknown", attests: "balance-only" };
+  } catch {
+    result = { configured: true, status: "unknown", attests: "balance-only" };
+  }
+  evmChainStatusCache.set(chain, { at: now, result });
+  return result;
+}
+// First moment the aggregate word read "unknown" (null while readable), so a
+// balance that stays unreadable (a dead RPC) pages on its own instead of
+// silencing the low-water alarm. Kept in the shared store when one is
+// configured, so a deploy (a new process) carries the clock on instead of
+// restarting it; in process memory otherwise, or when the store does not
+// answer within EVM_UNKNOWN_STORE_MS.
+let evmUnknownSince = null;
+// Whether this process has cleared the shared mark since it last read
+// "unknown" (a readable read clears it once, not on every status read).
+let evmUnknownSharedCleared = false;
+const EVM_UNKNOWN_KEY = "upstream-buyer:evm-unknown-since";
+const EVM_UNKNOWN_TTL_SECONDS = 30 * 24 * 3600;
+export const EVM_UNKNOWN_STORE_MS = 500;
+async function withStore(fn) {
+  let timer;
+  try {
+    const { getSharedRedisClient } = await import("./shared-limit.js");
+    const deadline = new Promise((resolve) => { timer = setTimeout(() => resolve(undefined), EVM_UNKNOWN_STORE_MS); timer.unref?.(); });
+    return await Promise.race([(async () => { const c = await getSharedRedisClient(); return c ? fn(c) : undefined; })(), deadline]);
+  } catch {
+    return undefined;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function markEvmUnknown(now) {
+  evmUnknownSharedCleared = false;
+  if (evmUnknownSince != null) return;
+  const shared = await withStore(async (c) => {
+    await c.set(EVM_UNKNOWN_KEY, String(now), { NX: true, EX: EVM_UNKNOWN_TTL_SECONDS });
+    return Number(await c.get(EVM_UNKNOWN_KEY));
+  });
+  evmUnknownSince ??= Number.isFinite(shared) && shared > 0 && shared <= now ? shared : now;
+}
+async function clearEvmUnknown() {
+  const had = evmUnknownSince != null;
+  evmUnknownSince = null;
+  if (!had && evmUnknownSharedCleared) return;
+  evmUnknownSharedCleared = true;
+  await withStore((c) => c.del(EVM_UNKNOWN_KEY));
+}
+/** One word for every enabled non-Base EVM buyer chain, and one per chain:
+ *  "off" when none is enabled, else "low" when any chain reads low, "unknown"
+ *  when any is unreadable, otherwise "ok" (or "unconfigured" with no key).
+ *  While "unknown", unknownForMinutes says for how long. Words only otherwise:
+ *  no balance, no address, no threshold. */
+export async function upstreamBuyerEvmStatus({ deadlineMs = EVM_STATUS_DEADLINE_MS, ...opts } = {}) {
+  const { enabledEvmBuyerChains } = await import("./evm-buyer-chains.js");
+  const chains = enabledEvmBuyerChains().filter((c) => c !== "base");
+  if (!chains.length) { await clearEvmUnknown(); return { status: "off" }; }
+  const UNREAD = { configured: true, status: "unknown", attests: "balance-only" };
+  let timer;
+  const deadline = new Promise((resolve) => { timer = setTimeout(() => resolve(UNREAD), deadlineMs); timer.unref?.(); });
+  // Every chain at once, each raced against the one shared deadline.
+  const reads = await Promise.all(chains.map((c) => Promise.race([evmBuyerChainStatus(c, opts).catch(() => UNREAD), deadline])));
+  clearTimeout(timer);
+  const out = {};
+  chains.forEach((c, i) => {
+    const r = reads[i] || UNREAD;
+    out[c] = { configured: r.configured, status: r.status, attests: r.attests };
+  });
+  const words = Object.values(out).map((r) => r.status);
+  const status = words.includes("low") ? "low" : words.includes("unknown") ? "unknown" : words.every((w) => w === "unconfigured") ? "unconfigured" : "ok";
+  const now = opts.now ?? Date.now();
+  if (status === "unknown") await markEvmUnknown(now); else await clearEvmUnknown();
+  return { status, chains: out, ...(evmUnknownSince != null ? { unknownForMinutes: Math.floor((now - evmUnknownSince) / 60_000) } : {}) };
+}
+export function __resetEvmChainStatusForTest() { evmChainStatusCache.clear(); evmChainStatusPending.clear(); evmUnknownSince = null; evmUnknownSharedCleared = false; }

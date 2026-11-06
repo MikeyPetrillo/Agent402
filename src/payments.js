@@ -36,11 +36,11 @@ import { networkPriceFloors, applyNetworkFloor, networkFloorUsd } from "./networ
 import { installFacilitatorDiagnostics, labelFacilitatorErrors } from "./facilitator-diagnostics.js";
 import { isAlreadyOnChainSettleError, recoverAlreadyOnChain } from "./settle-onchain-proof.js";
 import { pendingSettleApplies, confirmPendingSettle, notePendingSettleAnswers, takePendingAnswers, peekPendingAnswers, pendingSettleTxOf, pendingTxsOf } from "./pending-settle.js";
-import { ownSettledStellarTx, registerSettlementClaimHooks, registerSettlementClaimRelease, recoveredTxHeldElsewhere, txServedElsewhere } from "./settlement-claims.js";
+import { ownSettledStellarTx, registerSettlementClaimHooks, registerSettlementClaimRelease, recoveredTxHeldElsewhere, releasingClaimsOnRefusal, txServedElsewhere } from "./settlement-claims.js";
 import { randomUUID } from "node:crypto";
 import { registerFirstCallAllowanceSettleHook } from "./first-call-allowance.js";
 import { registerLateSettleHook } from "./late-settlements.js";
-import { chargeCancelledForClientGone, registerSettleSentHook, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
+import { chargeCancelledForClientGone, registerSettleSentHook, settleSentWhileConnected, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
 import { markCoveredRunSettled } from "./inflight-cover.js";
 import { ARC_CAIP2, ARC_USDC, ARC_PROFILE, CIRCLE_LABEL, CircleFacilitatorClient, circleClientFromEnv, circleKeyConfigured, withoutArcKinds, arcContractWalletsEnabled, isContractWalletPayment, CIRCLE_EVM_LABEL, CIRCLE_EVM_FALLBACK_NETWORKS, CIRCLE_EVM_FALLBACK_PROFILES, circleEvmFallbackEnabled, circleEvmFallbackFromEnv } from "./circle-facilitator.js";
 import { markGatedRailOffered } from "./gated-rails.js";
@@ -987,7 +987,7 @@ export const BAZAAR_DESCRIPTIONS = Object.freeze({
   "sql-guard": "Review a SQL statement before running it against production: a pass / warn / block verdict naming concrete risks (unbounded UPDATE or DELETE, tautological WHERE, DROP, TRUNCATE, statement stacking, privilege changes, catalog writes) and, on pass, an Ed25519 certificate bound to the statement's SHA-256 that a database layer can verify before executing. Use it as the last check between an agent and a destructive query.",
   "route-execute": "Describe a task in plain language (or name a tool slug) and the Smart Order Router resolves the best-matching tool across this catalog and the open x402/MPP seller index, then runs it in the same call and returns the result with a receipt. Flat price covers any tool listed at $0.005 or less. Use it when an agent wants one paid request that both finds and executes the right capability.",
   "v1-chat-auto": "OpenAI-compatible chat completions with the model chosen server-side: omit model and the gateway routes the prompt to the top-ranked model for its task (code, reasoning, long-context, general) from a fixed eval-derived ranking, failing over automatically on provider errors. Flat price per call, 16k chars in, 1024 tokens out, streaming supported. Use it as a drop-in OpenAI base_url when you want good answers without picking a model.",
-  "v1-embeddings": "OpenAI-compatible text embeddings (text-embedding-3-small by default; 3-large and ada-002 supported), up to 64 inputs or 16k chars per call, returned in the standard OpenAI shape. Identical inputs repeated within 10 minutes are served free from cache. Use it for semantic search, clustering and retrieval from any OpenAI SDK by changing base_url.",
+  "v1-embeddings": "OpenAI-compatible text embeddings (text-embedding-3-small by default; 3-large and ada-002 supported), up to 64 inputs or 16k chars per call, returned in the standard OpenAI shape. A repeat of identical inputs within 10 minutes is free from cache to the payer that paid for it, paying again by its own EVM x402 signature, verified Tempo sender or credits key. Use it for semantic search, clustering and retrieval from any OpenAI SDK by changing base_url.",
   "image-ocr": "Extract text from a PNG or JPEG image - full text, overall confidence and per-line bounding boxes - from a URL or base64 payload, Tesseract on-device (no upstream API). Default English; other ISO 639-2 languages on request. Use it when an agent needs the words in a screenshot, scan or photo.",
   "memory-write": "Persistent key-value memory scoped to the paying wallet: the x402 payment is the authentication, the wallet owns the namespace. Write any JSON value (up to 64KB) under a key, with an optional TTL, or delete it; read it back on any later session with the matching read route. Use it when an agent needs state that survives the session or crosses runs without an account or API key.",
   // 2026-08-22 additions: the new families' flagships. Bazaar is the one surface
@@ -2151,8 +2151,11 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // The charge leaves here: the last hook that can abort or skip a settle is
   // the claim above, so a request this hook sees is one whose facilitator
   // call follows (src/hangup-settlement.js markSettleSent). Nothing that can
-  // end the chain may be registered after it.
-  registerSettleSentHook(server);
+  // end the chain may be registered after it. When the mark refuses the
+  // settle (its throw cancels it before the facilitator call), the
+  // authorization claims taken above are released at once, so the buyer's
+  // retry with the same authorization is not refused as a duplicate.
+  registerSettleSentHook(releasingClaimsOnRefusal(server, { sentBefore: settleSentWhileConnected }));
   registerSettlementClaimRelease(server);
   // A settle failure that names a transaction may still land: booked and
   // read from the chain, and owed if it did (src/late-settlements.js).

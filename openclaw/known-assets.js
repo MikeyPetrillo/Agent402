@@ -134,6 +134,51 @@ export function quoteOf(accepts, x402Version = undefined) {
   return { max, min, unknown, total: accepts.length };
 }
 
+// The longest a signed payment may stay redeemable. An EVM "exact" signer
+// sets validBefore (EIP-3009) or deadline (Permit2) to the moment of signing
+// plus the accept's maxTimeoutSeconds, and the signed payload is a bearer
+// claim until then, so a seller that quotes years gets an authorization it
+// could redeem for years and a held amount that never stops counting. Honest
+// accepts ask for minutes (Agent402's own ask 300 s); a day admits every
+// one of them. An accept that asks for longer is dropped before selection,
+// and a payload signed past it is refused before it is sent.
+export const MAX_VALIDITY_SECONDS = 24 * 3600;
+// Signing reads the clock a moment before the check after it does.
+const VALIDITY_CLOCK_SLACK_SECONDS = 60;
+
+/** True when an accept asks for a validity window past MAX_VALIDITY_SECONDS.
+ *  An accept with no readable maxTimeoutSeconds is left to the check of what
+ *  was signed (signedValidityProblem). */
+export function acceptValidityTooLong(accept, maxSeconds = MAX_VALIDITY_SECONDS) {
+  const raw = accept?.maxTimeoutSeconds;
+  if (raw == null || raw === "") return false;
+  const n = Number(raw);
+  return !Number.isFinite(n) || n > maxSeconds;
+}
+
+/** The expiry a signed payload carries, in unix seconds: an EIP-3009
+ *  `authorization.validBefore` or a Permit2 `deadline`. null when the payload
+ *  names none (a Solana transaction, an unknown scheme). NaN when it names
+ *  one that is not a whole number of seconds. */
+export function signedExpirySeconds(paymentPayload) {
+  const p = paymentPayload?.payload;
+  const v = p?.authorization?.validBefore ?? p?.permit2Authorization?.deadline;
+  if (v == null) return null;
+  return /^\d{1,15}$/.test(String(v)) ? Number(v) : NaN;
+}
+
+/** Why a created payment payload stays redeemable for too long, or null: its
+ *  expiry is past `nowMs` plus `maxSeconds` (and a minute of clock slack), or
+ *  it names an expiry that cannot be read. */
+export function signedValidityProblem(paymentPayload, { maxSeconds = MAX_VALIDITY_SECONDS, nowMs = Date.now() } = {}) {
+  const exp = signedExpirySeconds(paymentPayload);
+  if (exp == null) return null;
+  if (!Number.isFinite(exp)) return "the signed authorization's expiry cannot be read";
+  const left = exp - Math.floor(nowMs / 1000);
+  if (left > maxSeconds + VALIDITY_CLOCK_SLACK_SECONDS) return `the signed authorization stays valid for ${left} seconds, past the ${maxSeconds}-second ceiling`;
+  return null;
+}
+
 /** Enforce a USD allowance at signing on an @x402/core x402Client.
  *
  *  `allowance()` is the most this buyer may sign for the payment being built
@@ -141,8 +186,10 @@ export function quoteOf(accepts, x402Version = undefined) {
  *  for none). A registered policy drops every accept that cannot be priced or
  *  is over the allowance, so the client selects among the ones that fit, and a
  *  hook before payload creation checks the selected accept again and passes
- *  its USD value to `onSign`. A refusal throws (from the policy) or aborts
- *  (from the hook) before any signature exists; `onRefuse` hears why first. */
+ *  its USD value to `onSign`. An accept asking for a validity window past
+ *  MAX_VALIDITY_SECONDS is dropped and refused the same way. A refusal throws
+ *  (from the policy) or aborts (from the hook) before any signature exists;
+ *  `onRefuse` hears why first. */
 export function guardSigning(client, { allowance, onSign = null, onRefuse = null }) {
   if (!client || typeof client.registerPolicy !== "function" || typeof client.onBeforePaymentCreation !== "function") {
     throw new TypeError("guardSigning needs an @x402/core x402Client (registerPolicy and onBeforePaymentCreation)");
@@ -151,7 +198,12 @@ export function guardSigning(client, { allowance, onSign = null, onRefuse = null
   const refuse = (detail) => { try { onRefuse?.(detail); } catch { /* the refusal stands */ } return detail; };
   client.registerPolicy((version, accepts) => {
     const cap = allowance();
-    const kept = accepts.filter((a) => { const usd = acceptUsd(a, version); return usd != null && usd <= cap; });
+    const priced = accepts.filter((a) => { const usd = acceptUsd(a, version); return usd != null && usd <= cap; });
+    const kept = priced.filter((a) => !acceptValidityTooLong(a));
+    if (!kept.length && priced.length) {
+      const d = refuse({ reason: "validity", priceUsd: null, allowanceUsd: cap, detail: `every payment option it may sign asks to stay valid for more than ${MAX_VALIDITY_SECONDS} seconds` });
+      throw new Error(`spending guard: ${d.detail}; nothing was signed`);
+    }
     if (!kept.length) {
       const q = quoteOf(accepts, version);
       const d = refuse({ reason: q && q.min != null ? "over-allowance" : "unknown-asset", priceUsd: q ? q.min : null, allowanceUsd: cap });
@@ -171,6 +223,10 @@ export function guardSigning(client, { allowance, onSign = null, onRefuse = null
     if (usd > cap) {
       refuse({ reason: "over-allowance", priceUsd: usd, allowanceUsd: cap });
       return { abort: true, reason: `spending guard: the selected payment option asks $${usd}, above the $${cap} this buyer may sign; nothing was signed` };
+    }
+    if (acceptValidityTooLong(r)) {
+      const d = refuse({ reason: "validity", priceUsd: usd, allowanceUsd: cap, detail: `the selected payment option asks to stay valid for ${r.maxTimeoutSeconds} seconds, past the ${MAX_VALIDITY_SECONDS}-second ceiling` });
+      return { abort: true, reason: `spending guard: ${d.detail}; nothing was signed` };
     }
     onSign?.(usd, r);
     return undefined;
@@ -252,9 +308,10 @@ export async function signedPaymentProblem(paymentPayload, requirements, x402Ver
 }
 
 /** Refuse to send a payment payload whose signed amount is not the one the
- *  allowance passed: registered after payload creation, so the check reads
- *  what was actually signed, and a throw here stops the payment-aware fetch
- *  before the payload leaves the process. guardSigning registers it; a
+ *  allowance passed, or whose expiry is past MAX_VALIDITY_SECONDS from now
+ *  (signedValidityProblem): registered after payload creation, so the check
+ *  reads what was actually signed, and a throw here stops the payment-aware
+ *  fetch before the payload leaves the process. guardSigning registers it; a
  *  client with its own selector (and no guardSigning) can register it alone. */
 export function guardSignedAmount(client, { allowance = () => Infinity, onRefuse = null } = {}) {
   if (!client || typeof client.onAfterPaymentCreation !== "function") {
@@ -262,9 +319,10 @@ export function guardSignedAmount(client, { allowance = () => Infinity, onRefuse
   }
   client.onAfterPaymentCreation(async ({ paymentRequired, selectedRequirements: r, paymentPayload }) => {
     const cap = allowance();
-    const problem = await signedPaymentProblem(paymentPayload, r, paymentRequired?.x402Version, cap);
+    const amountProblem = await signedPaymentProblem(paymentPayload, r, paymentRequired?.x402Version, cap);
+    const problem = amountProblem || signedValidityProblem(paymentPayload);
     if (!problem) return;
-    try { onRefuse?.({ reason: "signed-amount", priceUsd: null, allowanceUsd: cap, detail: problem }); } catch { /* the refusal stands */ }
+    try { onRefuse?.({ reason: amountProblem ? "signed-amount" : "signed-validity", priceUsd: null, allowanceUsd: cap, detail: problem }); } catch { /* the refusal stands */ }
     throw new Error(`spending guard: ${problem}; the payment was not sent`);
   });
   return client;

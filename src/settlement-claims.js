@@ -292,6 +292,50 @@ export function registerSettlementClaimRelease(server) {
   return server;
 }
 
+/**
+ * Give back this request's authorization claims after a settle was cancelled
+ * before the facilitator call: nothing was sent, so nothing can land, and a
+ * retry with the same signed authorization must not wait out the in-flight
+ * TTL. Only for a refusal before the facilitator call (see
+ * releasingClaimsOnRefusal); a failed settle goes through
+ * registerSettlementClaimRelease, which keeps a claim whose settle may land.
+ */
+export async function releaseRefusedSettleClaims(ctx) {
+  try {
+    const s = settleClaimStateOf(reqOf(ctx));
+    if (!s || !heldKeys(s).length) return;
+    await releaseHeld(s);
+    s.nonceKey = null;
+    s.nonceKeys = [];
+  } catch { /* never touch a payment; the claims expire with their TTL */ }
+}
+
+/**
+ * A view of `server` for registering a beforeSettle hook that runs after the
+ * authorization claim (the settle-sent mark, src/hangup-settlement.js): when
+ * that hook refuses the settle (an abort, so @x402/core cancels it before
+ * the facilitator call and fires no settle-failure hook), the claims this
+ * request took are released before the refusal is answered, so the buyer can
+ * retry with the same authorization. A request whose settle was already sent
+ * once (`sentBefore(req)`, the settle-sent mark set before this hook ran)
+ * keeps its claims.
+ */
+export function releasingClaimsOnRefusal(server, { sentBefore = () => false } = {}) {
+  const view = {
+    onBeforeSettle(hook) {
+      server.onBeforeSettle(async (ctx) => {
+        let wasSent = true;
+        try { wasSent = sentBefore(reqOf(ctx)) === true; } catch { wasSent = true; }
+        const out = await hook(ctx);
+        if (out && out.abort === true && !wasSent) await releaseRefusedSettleClaims(ctx);
+        return out;
+      });
+      return view;
+    },
+  };
+  return view;
+}
+
 /** The settle failed only in the sense that its outcome is not known yet. */
 export const SETTLEMENT_PENDING = "settlement_pending";
 export function isPendingSettlement(ctx) {

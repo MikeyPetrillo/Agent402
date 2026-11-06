@@ -31,6 +31,20 @@
 
 const DEFAULT_HORIZON = "https://horizon.stellar.org";
 
+// USDC on Stellar pubnet is the classic asset USDC issued by this account
+// (its Stellar Asset Contract is the token our 402 offers advertise). Anyone
+// can issue an asset whose code reads "USDC", so a Horizon effect counts as
+// USDC only when its code AND issuer both match.
+export const STELLAR_USDC_CODE = "USDC";
+export const STELLAR_USDC_ISSUER = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+
+/** Is this Horizon effect (or balance) in the asset `code` issued by
+ *  `issuer`? A missing code or issuer is not a match. */
+export function isStellarAsset(e, { code = STELLAR_USDC_CODE, issuer = STELLAR_USDC_ISSUER } = {}) {
+  if (!code || !issuer || !e || e.asset_type === "native") return false;
+  return e.asset_code === code && e.asset_issuer === issuer;
+}
+
 /**
  * Who paid, according to the FACILITATOR — not according to the payload.
  *
@@ -81,14 +95,20 @@ export function settleTxOf(resultOrError) {
 }
 
 /** Confirm ONE named transaction: it must be on-chain, successful, and carry
- *  an account_credited effect to our payTo in the pinned asset. Any miss ->
- *  null (the caller falls back to the payer scan). */
-async function confirmByHash({ txHash, payTo, assetCode, base, fetchImpl, timeoutMs }) {
+ *  an account_credited effect to our payTo in the pinned asset (code and
+ *  issuer). Any miss -> null (the caller falls back to the payer scan). */
+async function confirmByHash({ txHash, payTo, asset, base, fetchImpl, timeoutMs }) {
   const tx = await getJson(`${base}/transactions/${encodeURIComponent(txHash)}`, fetchImpl, timeoutMs);
   if (!tx || tx.successful !== true) return null;
   const txEff = await getJson(`${base}/transactions/${encodeURIComponent(txHash)}/effects?limit=50`, fetchImpl, timeoutMs);
-  const credited = (txEff?._embedded?.records || []).find((e) => e?.type === "account_credited" && e?.account === payTo && (!assetCode || !e?.asset_code || e.asset_code === assetCode));
-  return credited ? { transaction: txHash, amount: credited.amount || null } : null;
+  const credited = (txEff?._embedded?.records || []).find((e) => e?.type === "account_credited" && e?.account === payTo && isStellarAsset(e, asset));
+  return credited ? creditedResult(txHash, credited, null) : null;
+}
+
+/** The refund verifier's answer: the transaction, the amount credited, and
+ *  the asset it was credited in (src/payment-verify.js checks the asset). */
+function creditedResult(transaction, credited, fallbackAmount) {
+  return { transaction, amount: credited.amount || fallbackAmount || null, assetCode: credited.asset_code, assetIssuer: credited.asset_issuer };
 }
 
 // ---- The settle path: confirm THIS payment, and only this payment ----------
@@ -323,13 +343,18 @@ export async function confirmStellarTransfer({
   sinceMs,
   txHash = null,
   horizon = process.env.STELLAR_HORIZON_URL || DEFAULT_HORIZON,
-  assetCode = "USDC",          // pin the asset; see the filter below
+  assetCode = STELLAR_USDC_CODE,      // pin the asset (code AND issuer); see the filter below
+  assetIssuer = STELLAR_USDC_ISSUER,
   waitMs = 8_000,
   stepMs = 1_500,
   timeoutMs = 4_000,
   fetchImpl = fetch,
 } = {}) {
   const base = String(horizon).replace(/\/+$/, "");
+  // No pinned asset, no confirmation: an unpinned match would accept any
+  // token at all.
+  if (!assetCode || !assetIssuer) return null;
+  const asset = { code: assetCode, issuer: assetIssuer };
   // A named transaction is checked first and exactly - no window, no payer
   // matching (the same-buyer-window ambiguity the refund verifier had to
   // close). It is polled for the wait window too: a settle that timed out
@@ -337,7 +362,7 @@ export async function confirmStellarTransfer({
   if (txHash && payTo) {
     const hashDeadline = Date.now() + waitMs;
     for (;;) {
-      const found = await confirmByHash({ txHash, payTo, assetCode, base, fetchImpl, timeoutMs });
+      const found = await confirmByHash({ txHash, payTo, asset, base, fetchImpl, timeoutMs });
       if (found) return found;
       if (Date.now() >= hashDeadline || !payer) break;
       await new Promise((r) => setTimeout(r, stepMs));
@@ -357,11 +382,11 @@ export async function confirmStellarTransfer({
     const recs = eff?._embedded?.records || [];
     const debits = recs.filter((e) => {
       if (e?.type !== "account_debited") return false;
-      if (e?.asset_type === "native") return false;      // XLM fees are not the payment
-      // Pin the ASSET when the caller supplies one. Excluding native alone
-      // accepts ANY non-XLM token, and anyone can issue an asset called
-      // whatever they like on Stellar - so "a token arrived" proves nothing.
-      if (assetCode && e?.asset_code && e.asset_code !== assetCode) return false;
+      // Pin the ASSET by code and issuer. XLM fees are not the payment, and
+      // excluding native alone accepts ANY token: anyone can issue an asset
+      // called whatever they like on Stellar, "USDC" included, so a token
+      // whose code matches proves nothing without its issuer.
+      if (!isStellarAsset(e, asset)) return false;
       const t = Date.parse(e?.created_at || "");
       return Number.isFinite(t) && t >= sinceMs;
     });
@@ -396,12 +421,9 @@ export async function confirmStellarTransfer({
 
       const txEff = await getJson(`${base}/transactions/${txHash}/effects?limit=50`, fetchImpl, timeoutMs);
       const credited = (txEff?._embedded?.records || []).find(
-        (e) => e?.type === "account_credited" && e?.account === payTo,
+        (e) => e?.type === "account_credited" && e?.account === payTo && isStellarAsset(e, asset),
       );
-      if (credited) {
-        if (assetCode && credited.asset_code && credited.asset_code !== assetCode) continue;
-        return { transaction: txHash, amount: credited.amount || d.amount || null };
-      }
+      if (credited) return creditedResult(txHash, credited, d.amount);
     }
 
     if (Date.now() >= deadline) return null;

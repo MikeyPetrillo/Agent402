@@ -13,19 +13,18 @@
 // new visual treatment rather than dropped for a static curl example alone.
 import { siteOrgLd } from "./site-org.js";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
-import { RAILS, RAILS_AMP } from "./rails.js";
+import { RAILS, RAILS_AMP, chainDisplayName } from "./rails.js";
 import { crawlIntervalLabel } from "./crawl-cadence.js";
 import { routingProofSentence } from "./routing-proof.js";
 import { ROUTE_ORDER } from "./route-order.js";
 import { DISPATCH_REASONS } from "./dispatch-eligibility.js";
-import { EXTERNAL_CHAIN_BY_NETWORK } from "./tools/route-execute.js";
+import { routerPayChains } from "./tools/route-execute.js";
 
-// The chains the router can pay an outside seller on, read from route-execute's
-// own map: it pays on the chain the BUYER paid on, from that chain's spending
+// The chains the router can pay an outside seller on, read from route-execute
+// (its map plus the EVM chains SOR_EVM_CHAINS lists, fixed for the process): it pays on the chain the BUYER paid on, from that chain's spending
 // wallet, and never bridges to a seller's other chain. This page said a router
 // "settles with you on your chain" when a buyer paid on one you do not accept.
-const CHAIN_LABEL = { base: "Base", solana: "Solana", algorand: "Algorand", tempo: "Tempo" };
-const ROUTER_PAY_CHAINS = [...new Set(Object.values(EXTERNAL_CHAIN_BY_NETWORK))].map((c) => CHAIN_LABEL[c] || c);
+const ROUTER_PAY_CHAINS = routerPayChains().map(chainDisplayName);
 const listJoin = (a) => (a.length < 2 ? a.join("") : `${a.slice(0, -1).join(", ")} and ${a[a.length - 1]}`);
 const ROUTER_CHAIN_SENTENCE = `When the router buys from a seller to resell the result to an agent, it pays the seller on the chain the agent paid on, so it reaches you only on chains you accept; it holds spending wallets for ${listJoin(ROUTER_PAY_CHAINS)}.`;
 
