@@ -18,6 +18,7 @@
 // gated price unchanged, so those rows are exactly what they were.
 
 import { priceForNetwork } from "./payments.js";
+import { decodePaymentHeader } from "./payment-header.js";
 
 // Every EVM rail we offer settles a 6-decimal stablecoin (USDC, USDG).
 export const EVM_STABLE_DECIMALS = 6;
@@ -30,7 +31,7 @@ const num = (s) => { const v = Number(String(s ?? "").replace(/[^0-9.]/g, "")); 
 export function signedEvmAmountUsd(paymentHeader, caip2, decimals = EVM_STABLE_DECIMALS) {
   if (!paymentHeader || !String(caip2 || "").startsWith("eip155:")) return null;
   try {
-    const p = JSON.parse(Buffer.from(String(paymentHeader), "base64").toString("utf8"));
+    const p = decodePaymentHeader(paymentHeader);
     const net = p?.accepted?.network ?? p?.network ?? null;
     if (net && net !== caip2) return null;
     const v = p?.payload?.authorization?.value;
@@ -60,7 +61,7 @@ export function paidPriceUsd({ basePriceUsd, caip2 = null, meteredUsd = null, pa
 export function paymentHeaderNetwork(paymentHeader) {
   if (typeof paymentHeader !== "string" || !paymentHeader || paymentHeader.length > 65536) return null;
   try {
-    const payload = JSON.parse(Buffer.from(paymentHeader, "base64").toString("utf8"));
+    const payload = decodePaymentHeader(paymentHeader);
     const network = payload?.accepted?.network ?? payload?.network ?? payload?.payload?.network;
     return typeof network === "string" && network ? network.toLowerCase() : null;
   } catch { return null; }

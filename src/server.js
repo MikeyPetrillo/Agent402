@@ -9,6 +9,7 @@ import { retiredEntryFor, assertRetiredRegistryConsistent, retirementHeaders, RE
 import { createTrafficStore, trafficMiddleware } from "./traffic-classifier.js";
 import { redisSharedSettled, createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath } from "./unpaid-quote-budget.js";
 import { stripMcpMarker } from "./mcp-loopback.js";
+import { canonicalizePaymentHeaders, decodePaymentHeader, encodePaymentHeader } from "./payment-header.js";
 import { RAILS_OR, RAILS, x402EvmOnly, x402RailsFor } from "./rails.js";
 import { onGatedRailOffered } from "./gated-rails.js";
 // The networks a PUBLIC surface names (src/public-networks.js): the
@@ -2503,6 +2504,15 @@ let catalogPathByFold = null;
 // else (src/mcp-loopback.js): a client-sent one is dropped, a genuine one is
 // remembered on the request and its secret never reaches a handler.
 app.use(stripMcpMarker);
+// Payment headers (PAYMENT-SIGNATURE, X-PAYMENT) are read once here, through
+// the decoder that matches the paywall's (src/payment-header.js), and
+// rewritten to the canonical base64 of their JSON, so every later reader
+// sees the bytes the paywall reads. A header that does not decode is
+// removed; the paywall then answers its ordinary 402 with the offer.
+app.use((req, _res, next) => {
+  if (canonicalizePaymentHeaders(req) === "dropped") req.__droppedPaymentAttempt = true;
+  next();
+});
 app.use((req, _res, next) => {
   if (!catalogPathByFold) {
     catalogPathByFold = new Map();
@@ -7143,15 +7153,12 @@ function dropUnverifiedPaymentHeaders(req) {
   for (const h of ["payment-signature", "x-payment", "payment-identifier"]) delete req.headers[h];
 }
 // True (and the payment headers dropped) when a payment header decodes to a
-// JSON object whose x402Version is not 2. Bytes that do not decode are left
-// exactly as sent for the paywall to refuse.
+// JSON object whose x402Version is not 2. Read through the shared decoder;
+// intake has already removed a header that does not decode.
 function refuseNonV2PaymentPayload(req) {
   for (const name of ["payment-signature", "x-payment"]) {
-    const raw = req.headers[name];
-    if (typeof raw !== "string" || !raw) continue;
-    let decoded;
-    try { decoded = JSON.parse(Buffer.from(raw, "base64").toString("utf8")); } catch { continue; }
-    if (decoded && typeof decoded === "object" && !Array.isArray(decoded) && decoded.x402Version !== 2) {
+    const decoded = decodePaymentHeader(req.headers[name]);
+    if (decoded && decoded.x402Version !== 2) {
       dropUnverifiedPaymentHeaders(req);
       return true;
     }
@@ -10813,13 +10820,12 @@ if (FREE_MODE) {
       // found because the end-to-end test captured the header the SDK really
       // sends instead of the one assumed.
       for (const name of ["payment-signature", "x-payment"]) {
-        const raw = req.headers[name];
-        if (typeof raw !== "string" || !raw) continue;
+        const decoded = decodePaymentHeader(req.headers[name]);
+        if (!decoded) continue;
         try {
-          const decoded = JSON.parse(Buffer.from(raw, "base64").toString("utf8"));
           const t = translateV1Accepts(decoded);
           if (t) {
-            req.headers[name] = Buffer.from(JSON.stringify(t.payload), "utf8").toString("base64");
+            req.headers[name] = encodePaymentHeader(t.payload);
             req.__x402V1Translated = t.translated.join(",");
           }
         } catch { /* unreadable header: leave it exactly as sent */ }

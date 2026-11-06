@@ -10,6 +10,8 @@
 // as settled off-chain, and its `tx` is Gateway's transaction id, not a chain
 // hash.
 
+import { decodePaymentHeader } from "./payment-header.js";
+
 export const GATEWAY_WIRE = "gateway-batched";
 export const GATEWAY_KIND_NAME = "GatewayWalletBatched";
 export const SETTLEMENT_PENDING_REASON = "settlement_pending";
@@ -36,7 +38,7 @@ export function isGatewayBatchedPayment(payloadOrAccept) {
 /** The same test on a raw base64 payment header value. */
 export function isGatewayBatchedHeader(headerValue) {
   if (typeof headerValue !== "string" || !headerValue) return false;
-  try { return isGatewayBatchedPayment(JSON.parse(Buffer.from(headerValue, "base64").toString("utf8"))); } catch { return false; }
+  try { return isGatewayBatchedPayment(decodePaymentHeader(headerValue)); } catch { return false; }
 }
 
 /** The same test on an Express request (the header the paywall settles from). */

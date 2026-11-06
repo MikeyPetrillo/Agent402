@@ -43,6 +43,7 @@
 import { paymentHeaderOf } from "./payer.js";
 import { EXPENSIVE_COMPOSITE_SLUGS } from "./composite-spend-guard.js";
 import { needsAsyncOrWait, slowSyncWindowSeconds, SLOW_ADVISE_SECONDS } from "./slow-sync-window.js";
+import { decodePaymentHeader } from "./payment-header.js";
 
 /** The reference facilitator refuses at verify AND at settle once validBefore < now + 6 s. */
 export const SETTLE_RULE_SECONDS = 6;
@@ -84,7 +85,7 @@ const UINT = /^\d{1,20}$/;
 export function evmCredentialExpiry(headerValue) {
   if (typeof headerValue !== "string" || !headerValue) return null;
   let payload;
-  try { payload = JSON.parse(Buffer.from(headerValue, "base64").toString("utf8")); } catch { return null; }
+  try { payload = decodePaymentHeader(headerValue); } catch { return null; }
   if (!payload || typeof payload !== "object") return null;
   const network = String(payload?.accepted?.network || payload?.network || "");
   if (network.startsWith("solana:") || network.startsWith("stellar:") || network.startsWith("algorand:")) return null;

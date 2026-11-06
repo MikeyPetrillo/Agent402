@@ -64,6 +64,7 @@ import { isPaymentVerdictReason } from "./payment-reject.js";
 import { paymentHeaderOf } from "./payer.js";
 import { shared, sharedLimitsEnabled, sharedWrite } from "./shared-limits.js";
 import { positiveNum as num } from "./env-num.js";
+import { decodePaymentHeader } from "./payment-header.js";
 
 const PATCHED = Symbol.for("agent402.avmSubcentGate");
 export const ALGORAND_PREFIX = "algorand:";
@@ -375,7 +376,7 @@ function paidRequirementOf(req, offered) {
   const header = paymentHeaderOf(req);
   if (!header || !Array.isArray(offered)) return null;
   let accepted;
-  try { accepted = JSON.parse(Buffer.from(String(header), "base64").toString("utf8"))?.accepted; } catch { return null; }
+  try { accepted = decodePaymentHeader(header)?.accepted; } catch { return null; }
   if (!accepted || typeof accepted !== "object") return null;
   const same = (a, b) => String(a ?? "") === String(b ?? "");
   return offered.find((r) => r && same(r.network, accepted.network) && same(r.scheme, accepted.scheme) && same(r.payTo, accepted.payTo)

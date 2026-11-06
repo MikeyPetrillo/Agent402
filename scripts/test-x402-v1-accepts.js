@@ -81,6 +81,37 @@ ok(translateV1Accepts(avm("algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8"
 const bothPairs = translateV1Accepts(avm(ALGORAND_MAINNET_LEGACY_CAIP2, { maxAmountRequired: "1000" }));
 ok(bothPairs?.payload.accepted.network === ALGORAND_MAINNET_CAIP2 && !("maxAmountRequired" in bothPairs.payload.accepted) && bothPairs.translated.length === 2, "both pairs apply to one payload");
 
+// ---- unit: one reading of the payment header ----
+{
+  const { decodePaymentHeader, canonicalizePaymentHeaders } = await import("../src/payment-header.js");
+  const { paymentReplayKey } = await import("../src/replay-guard.js");
+  const { payerFromRequest, paymentNonceIdentityOf } = await import("../src/payer.js");
+  const pay = { x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453" }, payload: { authorization: { from: "0x" + "ab".repeat(20), nonce: "0x" + "fe".repeat(32), value: "1000" }, signature: "0x01" }, note: "~~~???>>>" };
+  const plain = Buffer.from(JSON.stringify(pay)).toString("base64");
+  const bomBytes = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(JSON.stringify(pay))]).toString("base64");
+  const url = plain.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  ok(/[-_]/.test(url) && url !== plain, "the base64url spelling under test differs from the standard one");
+  const same = (v) => JSON.stringify(decodePaymentHeader(v)) === JSON.stringify(pay);
+  ok(same(plain) && same(bomBytes) && same(url) && same(` ${plain}\t`) && same(`\uFEFF${plain}`) && same(`\u00EF\u00BB\u00BF${plain}`),
+    "plain, a byte order mark in the bytes or before the value, base64url and surrounding whitespace all decode to the same payload");
+  for (const junk of ["", "!!!", "abc", Buffer.from("not json").toString("base64"), Buffer.from("[1]").toString("base64"), Buffer.from("null").toString("base64"), Buffer.from("7").toString("base64"), plain.slice(0, -5) + "=" + plain.slice(-4), null, 42, ["x"]]) {
+    if (decodePaymentHeader(junk) !== null) fail(`junk header ${JSON.stringify(junk)} should not decode`);
+  }
+  pass++; console.log("ok - bytes that are not one base64 JSON object do not decode");
+
+  const req = (h) => { const headers = { ...h }; return { headers, header: (n) => headers[String(n).toLowerCase()] }; };
+  const r1 = req({ "payment-signature": bomBytes });
+  ok(canonicalizePaymentHeaders(r1) === "canonical" && r1.headers["payment-signature"] === plain, "intake rewrites a byte-order-marked header to the canonical bytes");
+  ok(paymentReplayKey(req({ "payment-signature": bomBytes })) === paymentReplayKey(req({ "payment-signature": plain })) && paymentReplayKey(req({ "payment-signature": plain })).startsWith("n2:"),
+    "the replay key reads the nonce through a byte order mark, so both copies share one claim");
+  ok(payerFromRequest(req({ "payment-signature": bomBytes })) === pay.payload.authorization.from && !!paymentNonceIdentityOf(req({ "payment-signature": url })), "the payer and the nonce identity read through every spelling");
+  const r2 = req({ "payment-signature": "!!!garbage", "x-payment": plain });
+  ok(canonicalizePaymentHeaders(r2) === "dropped" && !("payment-signature" in r2.headers) && !("x-payment" in r2.headers) && r2.__paymentHeaderAsSent === "!!!garbage",
+    "a header that does not decode removes both payment headers and keeps the value as sent for the hint");
+  const r3 = req({ accept: "*/*" });
+  ok(canonicalizePaymentHeaders(r3) === "none" && JSON.stringify(r3.headers) === JSON.stringify({ accept: "*/*" }), "a request with no payment header is untouched");
+}
+
 // ---- the wire: does a v1-shaped payment actually settle? ----
 const [PORT, FAC_PORT] = [await getFreePort(), await getFreePort()];
 const B = `http://127.0.0.1:${PORT}`;
@@ -100,7 +131,9 @@ facilitator = createServer((req, res) => {
     if (path === "/evm/settle") facCalls.settle++;
     if (path === "/avm/verify") { facCalls.avmVerify.push(JSON.parse(b)); return res.end(JSON.stringify({ isValid: true, payer: ALGO_TREASURY })); }
     if (path === "/avm/settle") { facCalls.avmSettle.push(JSON.parse(b)); return res.end(JSON.stringify({ success: true, transaction: "TX" + facCalls.avmSettle.length, network: ALGORAND_MAINNET_CAIP2, payer: ALGO_TREASURY })); }
-    res.end(JSON.stringify({ isValid: true, success: true, transaction: `0x${"ab".repeat(32)}`, network: "eip155:8453" }));
+    // A distinct transaction per settle, as a chain gives: a repeated hash
+    // would be refused as a reused receipt and hide a second settle.
+    res.end(JSON.stringify({ isValid: true, success: true, transaction: `0x${facCalls.settle.toString(16).padStart(64, "0")}`, network: "eip155:8453" }));
   });
 });
 await new Promise((r) => facilitator.listen(FAC_PORT, r));
@@ -211,6 +244,87 @@ try {
     const s0 = facCalls.settle;
     const r = await fetch(`${B}/api/uuid`, { headers: { "payment-signature": b64(genuine) } });
     ok(r.status === 200 && facCalls.settle > s0, `control: the genuine version 2 payload settles (${r.status})`);
+  }
+
+  // Header spellings. The paywall's decoder strips a UTF-8 byte order mark
+  // from the decoded bytes, so every reader in front of it has to read the
+  // header the same way, or a check of ours (the version refusal, the replay
+  // key, the payer screen) sees nothing where the paywall sees a payment.
+  // Each header is read once at intake and rewritten to its canonical base64.
+  {
+    const mint = async () => {
+      const client = new x402Client();
+      registerExactEvmScheme(client, { signer: privateKeyToAccount(generatePrivateKey()) });
+      let minted = null;
+      const capturing = async (input, init) => {
+        const r = input instanceof Request ? input : new Request(input, init);
+        minted = r.headers.get("payment-signature") || r.headers.get("x-payment") || minted;
+        if (minted) return new Response("{}", { status: 402, headers: { "Content-Type": "application/json" } });
+        return fetch(input, init);
+      };
+      await wrapFetchWithPayment(capturing, client)(`${B}/api/uuid`).catch(() => {});
+      return JSON.parse(Buffer.from(minted, "base64").toString("utf8"));
+    };
+    const bom = (o) => Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(JSON.stringify(o), "utf8")]).toString("base64");
+    const b64url = (o) => b64(o).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+    for (const header of ["payment-signature", "x-payment"]) {
+      const genuine = await mint();
+      const v1Only = { x402Version: 1, scheme: "exact", network: "eip155:8453", accepted: { scheme: "exact", network: "eip155:8453" }, payload: genuine.payload };
+      const [v0, s0] = [facCalls.verify, facCalls.settle];
+      const r = await fetch(`${B}/api/uuid`, { headers: { [header]: bom(v1Only) } });
+      const body = await r.json().catch(() => ({}));
+      ok(r.status === 402 && !!r.headers.get("payment-required") && body.reason === "version-mismatch", `a version 1 payload behind a byte order mark on ${header} is refused with the 402 offer (${r.status} ${body.reason})`);
+      ok(facCalls.verify === v0 && facCalls.settle === s0, `and nothing reached the facilitator (${v0}/${s0} -> ${facCalls.verify}/${facCalls.settle})`);
+    }
+
+    // One authorization, two spellings: the plain copy settles, the copy
+    // behind a byte order mark is the same payment and never settles again.
+    {
+      const genuine = await mint();
+      const s0 = facCalls.settle;
+      const first = await fetch(`${B}/api/uuid`, { headers: { "payment-signature": b64(genuine) } });
+      ok(first.status === 200 && facCalls.settle === s0 + 1, `the plain copy settles once (${first.status}, ${s0} -> ${facCalls.settle})`);
+      const v1 = facCalls.verify;
+      const second = await fetch(`${B}/api/uuid`, { headers: { "payment-signature": bom(genuine) } });
+      ok(facCalls.settle === s0 + 1 && facCalls.verify === v1 && (second.status === 409 || second.headers.get("x-replayed-answer") === "1"),
+        `the same authorization behind a byte order mark is a replay: no second verify, settle or run (${second.status}, settles ${facCalls.settle - s0})`);
+    }
+    // And the other order, on a route a replay is refused on outright.
+    {
+      const genuine = await mint();
+      const s0 = facCalls.settle;
+      const first = await fetch(`${B}/api/uuid`, { headers: { "payment-signature": bom(genuine) } });
+      ok(first.status === 200 && facCalls.settle === s0 + 1, `a valid version 2 payload behind a byte order mark settles exactly once (${first.status}, ${s0} -> ${facCalls.settle})`);
+      const v1 = facCalls.verify;
+      const second = await fetch(`${B}/api/uuid`, { headers: { "payment-signature": b64(genuine) } });
+      ok(facCalls.settle === s0 + 1 && facCalls.verify === v1 && (second.status === 409 || second.headers.get("x-replayed-answer") === "1"),
+        `its plain copy is the same payment: no second verify or settle (${second.status}, settles ${facCalls.settle - s0})`);
+    }
+    // base64url and whitespace around the value are the same payment too.
+    for (const [label, enc] of [["base64url", b64url], ["padded with whitespace", (o) => ` ${b64(o)}\t`]]) {
+      // Plain ASCII JSON of hex and names never encodes to + or /, so the
+      // payload carries an unsigned memo of > and ? (which do) for the
+      // base64url spelling to be bytes the paywall's own decoder refuses:
+      // only the intake rewrite lets it through.
+      const genuine = { ...(await mint()), memo: ">>>???~~~" };
+      if (label === "base64url") ok(/[-_]/.test(enc(genuine)), "the base64url header differs from the standard spelling");
+      const s0 = facCalls.settle;
+      const r = await fetch(`${B}/api/uuid`, { headers: { "payment-signature": enc(genuine) } });
+      ok(r.status === 200 && facCalls.settle === s0 + 1, `a ${label} header settles once (${r.status}, ${s0} -> ${facCalls.settle})`);
+      const again = await fetch(`${B}/api/uuid`, { headers: { "payment-signature": b64(genuine) } });
+      ok(facCalls.settle === s0 + 1, `and its plain copy is a replay (${again.status})`);
+    }
+    // Bytes that do not decode are no payment: the ordinary 402 offer, and
+    // nothing reaches the facilitator.
+    for (const [junk, named] of [["!!!not base64!!!", true], [Buffer.from("not json").toString("base64"), true], [b64([1, 2, 3]), false]]) {
+      const [v0, s0] = [facCalls.verify, facCalls.settle];
+      const r = await fetch(`${B}/api/uuid`, { headers: { "payment-signature": junk, "x-payment": junk } });
+      const body = await r.json().catch(() => ({}));
+      ok(r.status === 402 && !!r.headers.get("payment-required") && Array.isArray(body.accepts) && facCalls.verify === v0 && facCalls.settle === s0,
+        `an undecodable header (${JSON.stringify(junk.slice(0, 16))}) gets the 402 offer with no facilitator call (${r.status})`);
+      if (named) ok(body.reason === "malformed-header", `and the hint still names the header as sent (${body.reason})`);
+    }
   }
 
   const bare = await fetch(`${B}/api/uuid`);

@@ -51,6 +51,7 @@
 import { createHash } from "node:crypto";
 import { paymentHeaderOf } from "./payer.js";
 import { getSharedRedisClient, sharedLimitEnabled } from "./shared-limit.js";
+import { decodePaymentHeader } from "./payment-header.js";
 
 // The claim's lifetime in Redis without a renewal. A claim is renewed every
 // INFLIGHT_RENEW_MS while its call is open (the slow routes run for minutes),
@@ -90,7 +91,7 @@ export function paymentReplayKey(req) {
     paymentHeaderOf(req);   // middleware order — see src/payer.js
   if (!cred || typeof cred !== "string") return null;
   try {
-    const p = JSON.parse(Buffer.from(cred, "base64").toString("utf-8"));
+    const p = decodePaymentHeader(cred);
     const auth = p?.payload?.authorization;
     const nonce = auth?.nonce;
     if (typeof nonce === "string" && nonce) {
@@ -153,7 +154,7 @@ export function paymentValidBeforeMs(req) {
   const cred = paymentHeaderOf(req);
   if (!cred || typeof cred !== "string") return null;
   try {
-    const p = JSON.parse(Buffer.from(cred, "base64").toString("utf-8"));
+    const p = decodePaymentHeader(cred);
     const raw = p?.payload?.authorization?.validBefore;
     const sec = typeof raw === "string" && /^\d{1,20}$/.test(raw.trim()) ? Number(raw.trim()) : (Number.isSafeInteger(raw) ? raw : NaN);
     return Number.isFinite(sec) && sec > 0 ? Math.min(sec * 1000, Date.now() + MAX_VALIDITY_HOLD_MS) : null;

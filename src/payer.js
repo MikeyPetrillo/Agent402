@@ -1,3 +1,5 @@
+import { decodePaymentHeader } from "./payment-header.js";
+
 /**
  * Extract the verified payer wallet address from the x402 payment header.
  * The payment middleware has already verified the signature before any
@@ -75,7 +77,7 @@ export function payerFromRequest(req) {
   const header = paymentHeaderOf(req);
   if (!header) return null;
   try {
-    const payload = JSON.parse(Buffer.from(header, "base64").toString("utf-8"));
+    const payload = decodePaymentHeader(header);
     // A Permit2 payment is verified on its permit2Authorization, and the
     // facilitator ignores any `authorization` block riding beside it, so that
     // block's `from` is unsigned there. The payer is then the Permit2 signer,
@@ -131,7 +133,7 @@ export function paymentIdentifierOf(req) {
   const header = paymentHeaderOf(req);
   if (!header) return null;
   try {
-    const payload = JSON.parse(Buffer.from(header, "base64").toString("utf-8"));
+    const payload = decodePaymentHeader(header);
     const id = payload?.extensions?.["payment-identifier"]?.info?.id;
     if (typeof id !== "string" || id.length < 16 || id.length > 128 || !/^[A-Za-z0-9_-]+$/.test(id)) return null;
     return id;
@@ -153,7 +155,7 @@ export function paymentNonceIdentityOf(req) {
   const from = payerFromRequest(req);
   if (!from) return null;
   try {
-    const payload = JSON.parse(Buffer.from(header, "base64").toString("utf-8"));
+    const payload = decodePaymentHeader(header);
     const p2 = payload?.payload?.permit2Authorization;
     const nonce = p2 && typeof p2 === "object" ? p2.nonce : payload?.payload?.authorization?.nonce;
     if (typeof nonce !== "string" || !nonce || nonce.length > 128) return null;
@@ -193,7 +195,7 @@ export function paymentSchemeOf(req) {
   const header = paymentHeaderOf(req);
   if (!header) return null;
   try {
-    const payload = JSON.parse(Buffer.from(header, "base64").toString("utf-8"));
+    const payload = decodePaymentHeader(header);
     // v2 first: a v2 payload has no top-level `scheme`, so order costs nothing
     // and reading `accepted` first states which wire is current.
     const scheme = payload?.accepted?.scheme ?? payload?.scheme;

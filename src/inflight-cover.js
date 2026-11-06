@@ -65,6 +65,7 @@
 
 import { paymentHeaderOf } from "./payer.js";
 import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
+import { decodePaymentHeader } from "./payment-header.js";
 
 const CHAIN_BY_CAIP2 = Object.freeze({
   "eip155:8453": "base", "eip155:137": "polygon", "eip155:42161": "arbitrum", "eip155:143": "monad",
@@ -170,7 +171,7 @@ export function inflightCoverEnabled() {
 export function coverTermsOf(headerValue) {
   if (typeof headerValue !== "string" || !headerValue) return null;
   let p;
-  try { p = JSON.parse(Buffer.from(headerValue, "base64").toString("utf8")); } catch { return null; }
+  try { p = decodePaymentHeader(headerValue); } catch { return null; }
   const inner = p?.payload;
   let payer, value;
   if (inner?.authorization && typeof inner.authorization === "object") {
