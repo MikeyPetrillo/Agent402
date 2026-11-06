@@ -128,7 +128,10 @@ if (!REAL) {
   try {
     check(b.up, "graduated boot: the paid-mode server booted");
     const page = await b.get("/ink");
-    check(page.status === 200 && page.text.includes("eip155:57073") && page.text.includes("USDC") && page.text.includes('href="https://explorer.inkonchain.com') && /<title>[^<]*Ink/.test(page.text), `graduated: /ink is a chain page with its title, chain id, asset and explorer link (status ${page.status})`);
+    check(page.status === 200 && page.text.includes("eip155:57073") && page.text.includes("USDC") && /<title>[^<]*Ink/.test(page.text), `graduated: /ink is a chain page with its title, chain id and asset (status ${page.status})`);
+    // The explorer link names the treasury's token transfers on Ink, never the
+    // bare explorer root, whether or not the revenue read has the rail yet.
+    check(page.text.includes('href="https://explorer.inkonchain.com/address/0x000000000000000000000000000000000000dEaD?tab=token_transfers"') && !page.text.includes('href="https://explorer.inkonchain.com"'), "graduated: /ink links the payTo's token transfers on the Ink explorer");
     const home = (await b.get("/")).text;
     check(home.includes('href="/ink"'), "graduated: the home page links /ink (nav and trust strip)");
     const pricing = (await b.get("/pricing")).text;

@@ -635,6 +635,13 @@ await p.close();
   } finally { await down.close(); }
 }
 
+// Ink USDC is priced only under its token's own EIP-712 domain.
+{
+  const INK = { network: "eip155:57073", asset: "0x2D270e6886d130D724215A266106e6832161EAEd", amount: "1000" };
+  ok(acceptUsd({ ...INK, extra: { name: "USDC", version: "2" } }) === 0.001, "an Ink USDC accept under its own domain is priced");
+  ok(acceptUsd({ ...INK, extra: { name: "USD Coin", version: "2" } }) === null && acceptUsd({ ...INK, extra: { name: "USDC", version: "1" } }) === null && acceptUsd(INK) === null, "an Ink accept with a wrong or missing EIP-712 domain is not priced");
+}
+
 stub.close();
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

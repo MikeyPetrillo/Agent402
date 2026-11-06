@@ -12,6 +12,12 @@
 // and a buyer with a cap does not sign it. The table is keyed by CAIP-2 ids
 // only: a bare v1 network name (for example "base") is not priced.
 //
+// An entry may also name its token's EIP-712 domain (`name` and `version`,
+// read from the token's own name() and version()). An EVM "exact" signer
+// signs under the domain the accept's `extra` carries, so for such an entry
+// an accept whose `extra.name` or `extra.version` is not exactly the token's
+// cannot be priced either, and a buyer with a cap does not sign it.
+//
 // The same file ships in agent402-client, agent402-mcp and agent402-openclaw;
 // the parent repo's scripts/test-known-assets.js keeps the copies identical and
 // checks the table against the assets the server offers.
@@ -29,6 +35,7 @@ export const KNOWN_ASSETS = Object.freeze({
   "eip155:1329": [{ asset: "0xe15fC38F6D8c56aF07bbCBe3BAf5708A2Bf42392", decimals: 6, symbol: "USDC" }], // Sei
   "eip155:10": [{ asset: "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85", decimals: 6, symbol: "USDC" }], // Optimism
   "eip155:5042": [{ asset: "0x3600000000000000000000000000000000000000", decimals: 6, symbol: "USDC" }], // Arc
+  "eip155:57073": [{ asset: "0x2D270e6886d130D724215A266106e6832161EAEd", decimals: 6, symbol: "USDC", name: "USDC", version: "2" }], // Ink
   "eip155:4663": [{ asset: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168", decimals: 6, symbol: "USDG" }], // Robinhood Chain
   // Solana: the USDC mint.
   "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp": [{ asset: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", decimals: 6, symbol: "USDC" }],
@@ -56,6 +63,7 @@ export const NETWORK_NAMES = Object.freeze({
   sei: ["eip155:1329"],
   optimism: ["eip155:10"],
   arc: ["eip155:5042"],
+  ink: ["eip155:57073"],
   robinhood: ["eip155:4663"],
   solana: ["solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"],
   "solana-devnet": ["solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1"],
@@ -88,6 +96,15 @@ export function knownAsset(network, asset) {
   return list.find((e) => sameAsset(e.asset, asset)) || null;
 }
 
+/** True when the accept carries the EIP-712 domain the table names for its
+ *  asset (`extra.name` and `extra.version`, exactly), or when the entry names
+ *  none. */
+export function acceptDomainMatches(entry, accept) {
+  if (!entry || (entry.name == null && entry.version == null)) return true;
+  const extra = accept && typeof accept.extra === "object" && accept.extra ? accept.extra : {};
+  return extra.name === entry.name && extra.version === entry.version;
+}
+
 /** The base-unit amount the signer of `x402Version` signs for one accept, as
  *  a string of digits: `maxAmountRequired` under v1, `amount` under v2. With
  *  no version, the one field present (or both, when they agree). null when
@@ -111,12 +128,13 @@ export function acceptAmount(accept, x402Version = undefined) {
 
 /** The USD value of one accept: the base-unit amount its version's signer
  *  signs (acceptAmount) over the KNOWN decimals of its asset. null when the
- *  asset is not known or the amount cannot be read. */
+ *  asset is not known, when the accept names a different EIP-712 domain than
+ *  the table's for that asset, or when the amount cannot be read. */
 export function acceptUsd(accept, x402Version = undefined) {
   const raw = acceptAmount(accept, x402Version);
   if (raw == null) return null;
   const entry = knownAsset(accept.network, accept.asset);
-  if (!entry) return null;
+  if (!entry || !acceptDomainMatches(entry, accept)) return null;
   return Number(raw) / 10 ** entry.decimals;
 }
 

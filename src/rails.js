@@ -25,6 +25,7 @@ export const RAILS = [
   { name: "Sei", asset: "USDC", caip2: "eip155:1329", chainId: 1329 },
   { name: "Optimism", asset: "USDC", caip2: "eip155:10", chainId: 10 },
   { name: "Arc", asset: "USDC", caip2: "eip155:5042", chainId: 5042 },
+  { name: "Ink", asset: "USDC", caip2: "eip155:57073", chainId: 57073 },
   { name: "Stellar", asset: "USDC", caip2: "stellar:pubnet" },
   { name: "Algorand", asset: "USDC", caip2: ALGORAND_MAINNET_CAIP2 },
   { name: "Robinhood Chain", asset: "USDG", caip2: "eip155:4663", chainId: 4663 },
@@ -32,14 +33,10 @@ export const RAILS = [
 
 // Gated rails (src/gated-rails.js): settleable by src/payments.js but kept out
 // of RAILS, so no static copy names them. A runtime surface lists one only
-// while it is in the live offer, through liveRails(). Arc started here and
-// graduated into RAILS once it settled in production. Ink is here until its
-// first live settle: it is offered only with INK_FACILITATOR_URL set and
-// `ink` in PAYMENT_NETWORKS, and moving this entry into RAILS is the step
-// that puts it on static copy.
-export const GATED_RAILS = [
-  { name: "Ink", asset: "USDC", caip2: "eip155:57073", chainId: 57073 },
-];
+// while it is in the live offer, through liveRails(). Arc and Ink started
+// here and graduated into RAILS once each settled in production; a new rail
+// can start here before static copy names it.
+export const GATED_RAILS = [];
 
 // Test seam for the graduation suite (scripts/test-ink-graduation.js): with
 // NODE_ENV=test and RAILS_TEST_GRADUATE=<key,...>, each named gated rail is

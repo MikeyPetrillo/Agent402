@@ -8034,7 +8034,11 @@ async function buildChainPage(chainKey, sellerQuery, all) {
   ]);
   const rail = revSnap?.rails?.find((r) => r.rail === SNAPSHOT_RAIL_LABEL[chainKey]) || null;
   const labelled = await labelledSnapshotAsync(snapshot);
-  return marketPageAsync(chainKey, BASE_URL, { snapshot: labelled, rail, activity, selectedSeller, wallet: rail?.wallet || undefined, leaderboardSnap: getLeaderboardSnapshot(), all, host: hostEntryFigures(chainKey), payable: chainPayable(chainKey), ...chainPageExtras(chainKey) });
+  // The explorer link names this host's payTo on the chain even when the
+  // revenue snapshot has no reading for the rail yet (a rail that joined
+  // after the last scan, or one whose read timed out): the bare explorer
+  // root is the fallback only when no wallet is configured at all.
+  return marketPageAsync(chainKey, BASE_URL, { snapshot: labelled, rail, activity, selectedSeller, wallet: rail?.wallet || chainWallet(chainKey) || undefined, leaderboardSnap: getLeaderboardSnapshot(), all, host: hostEntryFigures(chainKey), payable: chainPayable(chainKey), ...chainPageExtras(chainKey) });
 }
 // How many catalog tools a chain page can say take payment on that chain, by
 // the 402 builder's own rules (identity-bound and long-running tools are EVM
