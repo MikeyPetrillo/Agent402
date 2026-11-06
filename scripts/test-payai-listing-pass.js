@@ -272,7 +272,7 @@ const cov = coverageFor({ pricing, payaiItems: [{ resource: "https://agent402.to
       },
     };
     const memoryArgs = argv.includes("--live") && !argv.includes("--bought") && !argv.includes("--no-memory-arg") ? ["--bought", emptyMemory] : [];
-    const code = await main([...argv.filter((a) => a !== "--no-memory-arg"), ...memoryArgs, "--settle-wait-ms", "0", "--pause-ms", "0"], { TARGET_URL: T, ...env }, deps);
+    const code = await main([...argv.filter((a) => a !== "--no-memory-arg"), ...memoryArgs, "--settle-wait-ms", "0", "--pause-ms", "0"], { TARGET_URL: T, ALLOW_EXTERNAL_PAID_TARGET: "1", ...env }, deps);
     return { code, built, buys, out: out.join("\n"), reads: host.reads };
   };
   const ENV = { BURNER_KEY: "0xevmkey", SOLANA_BURNER_KEY: "solkey", AGENT402_OPERATOR_TOKEN: "op-token" };

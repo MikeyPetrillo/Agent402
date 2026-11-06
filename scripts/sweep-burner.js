@@ -72,7 +72,8 @@ async function main() {
   const { x402Client, x402HTTPClient } = await import("@x402/core/client");
   const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
 
-  const TARGET = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, "");
+  const { assertOwnPaidTarget } = await import("./lib/buyer-guard.js");
+  const TARGET = assertOwnPaidTarget((process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, ""), "sweep-burner");
   const KEY_FILE = process.env.KEY_FILE || "/tmp/burner-key";
   const FLOAT_USD = Number(process.env.SWEEP_FLOAT_USD || "5");     // working float to leave in the burner
   const MAX_CALLS = parseInt(process.env.MAX_CALLS, 10) || 200;     // backstop

@@ -37,10 +37,11 @@ import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
 import { writeFileSync } from "node:fs";
 import { multipartBodyFrom } from "../src/openapi-request.js";
 import { openapiReader, resolveReplayableInput } from "./lib/replayable-example.js";
+import { assertOwnPaidTarget } from "./lib/buyer-guard.js";
 import { createHmac } from "node:crypto";
 import { slowPreferOf, paidCallHonoringSlowRoutes } from "./lib/slow-route-buy.js";
 
-const TARGET = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, "");
+const TARGET = assertOwnPaidTarget((process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, ""), "base-list-sweep");
 const readOpenapi = openapiReader(TARGET);
 const BAZAAR = "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources";
 const BASE_CAIP2 = "eip155:8453";
