@@ -283,6 +283,62 @@ export async function expectedRenewalMemo({ lookupKey, subscriptionId, periodInd
   buf.set(k(`renewal:${subscriptionId}:${periodIndex}`, 7), 25);
   return bytesToHex(buf);
 }
+
+/** Blocks per getLogs request when the chain is searched for an unconfirmed renewal. */
+export const RENEWAL_SCAN_CHUNK_BLOCKS = 5000n;
+/** Past this many blocks the search answers "unknown" (wait), never "not found". */
+export const RENEWAL_SCAN_MAX_BLOCKS = 200_000n;
+
+/**
+ * Decides whether one transaction is THIS renewal: "match" | "no" |
+ * "unknown" | "fallback" (the receipt carries no TransferWithMemo from the
+ * currency, so call again with `tx`). Order of evidence: the receipt's
+ * TransferWithMemo log from the currency (token, from, to, amount and memo all
+ * equal, the same proof mppx itself requires), then the transaction's
+ * `calls[]` (Tempo 0x76: each call to the currency), then a legacy `input`.
+ * An unreadable receipt or a shape it does not know is "unknown", never "no".
+ */
+export async function classifyRenewalEvidence({ receipt, tx, currency, payer, recipient, amount, memo }) {
+  const { decodeEventLog, decodeFunctionData, parseAbi } = await import("viem");
+  const same = (a, b) => typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
+  if (!receipt || !Array.isArray(receipt.logs)) return "unknown";
+  if (receipt.status === "reverted") return "no";
+  if (receipt.status !== "success") return "unknown";
+  const evAbi = parseAbi(["event TransferWithMemo(address indexed from, address indexed to, uint256 amount, bytes32 indexed memo)"]);
+  let sawMemoLog = false;
+  for (const l of receipt.logs) {
+    if (!same(l?.address, currency)) continue;
+    let ev = null;
+    try { ev = decodeEventLog({ abi: evAbi, data: l.data, topics: l.topics }); } catch { ev = null; }
+    if (ev?.eventName !== "TransferWithMemo") continue;
+    sawMemoLog = true;
+    const a = ev.args;
+    if (same(a.from, payer) && same(a.to, recipient) && a.amount === amount && same(a.memo, memo)) return "match";
+  }
+  if (sawMemoLog) return "no";
+  if (tx === undefined) return "fallback";
+  if (!tx || typeof tx !== "object") return "unknown";
+  const fnAbi = parseAbi(["function transferWithMemo(address to, uint256 amount, bytes32 memo)", "function transfer(address to, uint256 amount)"]);
+  const judge = (data) => {
+    let d = null;
+    try { d = decodeFunctionData({ abi: fnAbi, data }); } catch { return "unknown"; }
+    if (d.functionName !== "transferWithMemo") return "no";
+    const [to, value, m] = d.args;
+    return same(to, recipient) && value === amount && same(m, memo) ? "match" : "no";
+  };
+  if (Array.isArray(tx.calls)) {
+    let verdict = "no";
+    for (const c of tx.calls) {
+      if (!same(c?.to, currency)) continue;
+      const v = judge(c.data ?? c.input);
+      if (v === "match") return "match";
+      if (v === "unknown") verdict = "unknown";
+    }
+    return verdict;
+  }
+  if (typeof tx.input === "string" && tx.input !== "0x" && same(tx.to, currency)) return judge(tx.input);
+  return "unknown";
+}
 // Every unpaid 402 mints and PERSISTS a server-owned access key, so an
 // unauthenticated caller can grow the shared offer store by asking for
 // offers it never pays. Bounded two ways: unclaimed offers are swept once their
@@ -893,38 +949,81 @@ export function createMppSubscriptions({
   }
 
   /**
-   * Default chain reader for an unconfirmed renewal: Transfer logs on the
-   * subscription's currency from the payer to our recipient since the
-   * attempt, value equal to the period amount, and the transaction's memo
-   * equal to mppx's attribution for THIS subscription and period. Returns
-   * {found:true, tx} | {found:false}; null when the chain could not be read
-   * (the caller then waits rather than charging - an unreadable chain must
-   * never become a second transfer).
+   * Default chain reader for an unconfirmed renewal. mppx sends a renewal as a
+   * Tempo (0x76) transaction whose transferWithMemo is one of `calls[]`, so the
+   * transaction's own `input` says nothing about it. Candidates are the
+   * currency's TransferWithMemo logs carrying THIS period's memo and its
+   * Transfer logs from the payer to our recipient; each candidate is decided by
+   * classifyRenewalEvidence (receipt log first, then calls[], then input).
+   * Returns {found:true, tx} | {found:false} (every candidate decided, none is
+   * this renewal) | {unknown:true} (something could not be decided) | null
+   * (the chain could not be read). Only {found:false} may ever lead to a new
+   * transfer; the caller waits on anything else.
    */
   async function defaultFindRenewalOnChain({ rec, mppxRec, periodIndex, sinceMs }) {
     try {
       const client = await tempoClient();
       // The chain actions live under viem/actions (the root export has none of them).
-      const { decodeFunctionData, parseAbi } = await import("viem");
-      const { getBlockNumber, getLogs, getTransaction } = await import("viem/actions");
+      const { parseAbi } = await import("viem");
+      const { getBlock, getBlockNumber, getLogs, getTransaction, getTransactionReceipt } = await import("viem/actions");
       // The period amount in BASE UNITS: mppx's record carries request.amount,
       // which its codec already scaled (so "5000000" is $5.00 at 6 decimals),
       // and our record keeps the same figure as amountAtomic. Never re-scale it.
       const rawAmount = String(mppxRec?.amount ?? rec.amountAtomic ?? "");
       if (!/^\d+$/.test(rawAmount)) throw new Error("the period amount is not a base-units integer");
       const amount = BigInt(rawAmount);
+      // Without the lookup key and subscription id the memo is someone else's.
+      if (!mppxRec?.lookupKey || !rec.mppxSubscriptionId) return { unknown: true, reason: "the renewal memo cannot be derived" };
+      const memo = await expectedRenewalMemo({ lookupKey: mppxRec.lookupKey, subscriptionId: rec.mppxSubscriptionId, periodIndex });
+      const [transferEvent, memoEvent] = parseAbi([
+        "event Transfer(address indexed from, address indexed to, uint256 value)",
+        "event TransferWithMemo(address indexed from, address indexed to, uint256 amount, bytes32 indexed memo)",
+      ]);
+      // The scan must reach back past sinceMs: the starting block is checked
+      // by its timestamp (block times are not assumed), widened until covered.
       const head = await getBlockNumber(client);
-      const secondsBack = Math.ceil((now() - sinceMs) / 1000) + 120; // Tempo blocks are ~1 s
-      const fromBlock = head > BigInt(Math.min(secondsBack, 5000)) ? head - BigInt(Math.min(secondsBack, 5000)) : 0n;
-      const abi = parseAbi(["event Transfer(address indexed from, address indexed to, uint256 value)", "function transferWithMemo(address to, uint256 amount, bytes32 memo)"]);
-      const logs = await getLogs(client, { address: rec.currency, event: abi[0], args: { from: rec.payer, to: recipient }, fromBlock, toBlock: "latest" });
-      const memo = await expectedRenewalMemo({ lookupKey: mppxRec?.lookupKey, subscriptionId: rec.mppxSubscriptionId, periodIndex });
-      for (const l of logs) {
-        if (l.args?.value !== amount) continue;
-        const tx = await getTransaction(client, { hash: l.transactionHash });
-        let decoded = null;
-        try { decoded = decodeFunctionData({ abi, data: tx.input }); } catch { decoded = null; }
-        if (decoded?.functionName === "transferWithMemo" && String(decoded.args?.[2]).toLowerCase() === memo.toLowerCase()) return { found: true, tx: l.transactionHash };
+      const tsMs = async (n) => Number((await getBlock(client, { blockNumber: n })).timestamp) * 1000;
+      let back = BigInt(Math.max(0, Math.ceil((now() - sinceMs) / 1000)) + 120);
+      let fromBlock = 0n;
+      for (let i = 0; ; i++) {
+        fromBlock = head > back ? head - back : 0n;
+        if (fromBlock === 0n || (await tsMs(fromBlock)) <= sinceMs) break;
+        if (i >= 20 || back >= RENEWAL_SCAN_MAX_BLOCKS) return { unknown: true, reason: "the attempt's block range could not be located" };
+        back *= 2n;
+      }
+      if (head - fromBlock > RENEWAL_SCAN_MAX_BLOCKS) return { unknown: true, reason: "the attempt is further back than the scan bound" };
+      const hashes = new Set();
+      const sameAddr = (a, b) => typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
+      for (let start = fromBlock; start <= head; start += RENEWAL_SCAN_CHUNK_BLOCKS) {
+        const end = start + RENEWAL_SCAN_CHUNK_BLOCKS - 1n < head ? start + RENEWAL_SCAN_CHUNK_BLOCKS - 1n : head;
+        const range = { address: rec.currency, fromBlock: start, toBlock: end };
+        const [withMemo, plain] = await Promise.all([
+          getLogs(client, { ...range, event: memoEvent, args: { from: rec.payer, to: recipient, memo } }),
+          getLogs(client, { ...range, event: transferEvent, args: { from: rec.payer, to: recipient } }),
+        ]);
+        for (const l of [...withMemo, ...plain]) {
+          if (l.removed || !l.transactionHash || !sameAddr(l.address, rec.currency)) continue;
+          if (!sameAddr(l.args?.from, rec.payer) || !sameAddr(l.args?.to, recipient)) continue;
+          if ((l.args?.amount ?? l.args?.value) !== amount) continue;
+          hashes.add(l.transactionHash);
+        }
+      }
+      let undecided = 0;
+      for (const hash of hashes) {
+        let receipt = null, tx = null;
+        try { receipt = await getTransactionReceipt(client, { hash }); } catch { receipt = null; }
+        const want = { currency: rec.currency, payer: rec.payer, recipient, amount, memo };
+        let verdict = await classifyRenewalEvidence({ receipt, ...want });
+        if (verdict === "fallback") {
+          try { tx = await getTransaction(client, { hash }); } catch { tx = null; }
+          verdict = await classifyRenewalEvidence({ receipt, tx, ...want });
+        }
+        if (verdict === "match") return { found: true, tx: hash };
+        if (verdict !== "no") undecided++;
+      }
+      if (undecided) {
+        log(`[mpp-subs] ${undecided} candidate transfer(s) for an unconfirmed renewal could not be decided (will wait, not re-charge)`);
+        return { unknown: true, reason: "a candidate transfer could not be decided" };
       }
       return { found: false };
     } catch (err) {
@@ -1462,13 +1561,16 @@ export function createMppSubscriptions({
         const mppxRec = await subStore.get(rec.mppxSubscriptionId);
         const find = injectedFindRenewal || defaultFindRenewalOnChain;
         const verdict = await find({ rec, mppxRec, periodIndex: due, sinceMs: Date.parse(rec.unconfirmedCharge.at) - UNCONFIRMED_LOOKBACK_MS });
-        if (verdict === null) {
+        // Only an explicit {found:false} may lead to a new transfer: null (unreadable),
+        // {unknown:true} (undecidable) or any other shape waits and signs nothing.
+        const decided = !!verdict && !verdict.unknown && ((verdict.found === true && typeof verdict.tx === "string" && verdict.tx !== "") || verdict.found === false);
+        if (!decided) {
           const next = { ...rec, status: rec.status === "active" ? "past_due" : rec.status, nextChargeAttemptAt: new Date(at + TRANSIENT_CHARGE_BACKOFF_MS).toISOString() };
           await writeRecKeepingCancel(next);
-          log(`[mpp-subs] ${subId}: unconfirmed period ${due} and the chain is unreadable - waiting, not re-charging`);
+          log(`[mpp-subs] ${subId}: unconfirmed period ${due} and the chain ${verdict === null ? "is unreadable" : `could not decide (${verdict?.reason || "unknown"})`} - waiting, not re-charging`);
           return next.status;
         }
-        if (verdict.found) {
+        if (verdict.found === true) {
           if (mppxRec && (mppxRec.lastChargedPeriod ?? 0) < due) {
             await subStore.put({ ...mppxRec, lastChargedPeriod: due, reference: verdict.tx, timestamp: new Date(at).toISOString(), inFlightPeriod: undefined, inFlightAttempt: undefined, inFlightReference: undefined, inFlightStartedAt: undefined });
           }
