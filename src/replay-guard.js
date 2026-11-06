@@ -143,11 +143,16 @@ function canonicalJson(v, depth = 0) {
 }
 
 // The largest decoded transaction read. A Solana wire transaction is at most
-// 4096 bytes (a v1 message; a v0 one 1232); a signed Algorand transaction in
-// an x402 group is far smaller. A longer one is not decoded. The cap is on the
+// 4096 bytes (a v1 message; a v0 one 1232). A longer Solana one is not decoded
+// (it cannot verify). The cap is on the
 // decoded bytes (src/base64-bytes.js), so characters a decoder skips cannot
 // push a transaction past it.
 const MAX_TX_BYTES = 4500;
+// An Algorand transaction is decoded at any size a request header can carry
+// (Node's 16 KB header limit bounds it): a large multisig transfer is valid
+// past MAX_TX_BYTES, and keying it on its bytes would give each signer subset
+// of one payment its own identity. Its id excludes the signatures.
+const MAX_AVM_TX_BYTES = 16 * 1024;
 // An Algorand group holds at most 16 transactions.
 const MAX_AVM_GROUP = 16;
 const solanaTxDecoder = getTransactionDecoder();
@@ -212,7 +217,7 @@ function chainTxIdentityOf(p) {
     if (!Number.isInteger(idx) || idx < 0 || idx >= group.length) return null;
     const bytes = base64BytesOf(group[idx]);
     if (!bytes) return null;
-    if (bytes.length <= MAX_TX_BYTES) {
+    if (bytes.length <= MAX_AVM_TX_BYTES) {
       try {
         const raw = new Uint8Array(bytes);
         let txn;

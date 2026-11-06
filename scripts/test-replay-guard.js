@@ -685,5 +685,21 @@ try {
   ok(false, `HTTP harness threw: ${e.message}`);
 }
 
+// A large multisig Algorand transfer (past the Solana-sized decode cap, still
+// inside a request header) keys on its transaction id, so two signer subsets of
+// one payment share one identity.
+{
+  const { default: algosdk } = await import("algosdk");
+  const accts = Array.from({ length: 130 }, () => algosdk.generateAccount());
+  const params = { version: 1, threshold: 1, addrs: accts.map((a) => a.addr) };
+  const sp = { fee: 1000, flatFee: true, firstValid: 1000, lastValid: 2000, genesisID: "mainnet-v1.0", genesisHash: new Uint8Array(32).fill(7), minFee: 1000 };
+  const txn = algosdk.makeAssetTransferTxnWithSuggestedParamsFromObject({ sender: algosdk.multisigAddress(params), receiver: accts[0].addr, amount: 1000, assetIndex: 31566704, suggestedParams: sp });
+  const blob = (i) => algosdk.signMultisigTransaction(txn, params, accts[i].sk).blob;
+  const hdr = (b) => Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "exact", network: "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k" }, payload: { paymentGroup: [Buffer.from(b).toString("base64")], paymentIndex: 0 } })).toString("base64");
+  const keyOfHdr = (h) => String(paymentReplayKey({ header: (n) => (n === "payment-signature" ? h : undefined) })).split(":").slice(0, 2).join(":");
+  const a = blob(0), b = blob(1);
+  ok(a.length > 4500 && keyOfHdr(hdr(a)) === keyOfHdr(hdr(b)), `a ${a.length}-byte multisig transfer signed by two subsets is one identity`);
+}
+
 console.log(`\n${failed ? "FAILED" : "OK"}: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
