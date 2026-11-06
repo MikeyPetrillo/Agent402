@@ -152,6 +152,45 @@ function runSmoke(challenge) {
 const pr2 = (accepts) => ({ x402Version: 2, resource: { url: "http://x/y" }, accepts });
 const tail = (r) => r.out.split("\n").filter((l) => /refus|SMOKE|status|rror/.test(l)).slice(-3).join(" | ");
 
+// ---- x402scan-seed pays an outside registry through the same guard ----
+// The real exact signer with a throwaway key: what it would sign, or why not.
+{
+  const { seedPaymentClient } = await import("./x402scan-seed.js");
+  const { ExactEvmScheme } = await import("@x402/evm/exact/client");
+  const signer = privateKeyToAccount(generatePrivateKey());
+  const seedPay = async (challenges, { maxUsd = 0.5 } = {}) => {
+    const { client, spentUsd } = seedPaymentClient(signer, { maxUsd, log: () => {} });
+    const out = [];
+    for (const ch of challenges) {
+      try { out.push(signedEvmValueOf(await client.createPaymentPayload(ch))); } catch (e) { out.push(`refused: ${e.message}`); }
+    }
+    return { out, spent: spentUsd() };
+  };
+  let s = await seedPay([pr2([v2()])]);
+  ok(s.out[0] === "1000" && s.spent === 0.001, `control: a $0.001 Base USDC page is signed for exactly 1000 and counted (${s.out[0]}, ${s.spent})`);
+  s = await seedPay([pr2([v2({ asset: "0x0000000000000000000000000000000000000001" })])]);
+  ok(/^refused/.test(s.out[0]) && s.spent === 0, "seed: an asset the table does not know is never signed");
+  s = await seedPay([pr2([v2({ amount: undefined, maxAmountRequired: "1000" })])]);
+  ok(/^refused/.test(s.out[0]) && s.spent === 0, "seed: a version 2 accept naming only maxAmountRequired is never signed");
+  s = await seedPay([pr2([v2({ maxAmountRequired: "1000000000000" })])]);
+  ok(/^refused/.test(s.out[0]) && s.spent === 0, "seed: an accept whose two amount fields differ is never signed");
+  s = await seedPay([pr2([v2({ amount: "20000" })]), pr2([v2({ amount: "20001" })])]);
+  ok(s.out[0] === "20000" && /^refused/.test(s.out[1]) && s.spent === 0.02, "seed: the per-page cap is exact in base units");
+  s = await seedPay([pr2([v2()]), pr2([v2()])], { maxUsd: 0.0015 });
+  ok(s.out[0] === "1000" && /^refused/.test(s.out[1]) && s.spent === 0.001, "seed: a page is capped by what is left of --max-usd");
+  s = await seedPay([{ x402Version: 1, accepts: [{ scheme: "exact", network: "base", asset: USDC_BASE, payTo, maxAmountRequired: "1000", resource: "http://x/y", description: "", mimeType: "application/json", maxTimeoutSeconds: 60, extra: { name: "USD Coin", version: "2" } }] }]);
+  ok(/^refused/.test(s.out[0]) && s.spent === 0, "seed: a version 1 challenge outside the registered network is never signed");
+  const orig = ExactEvmScheme.prototype.createPaymentPayload;
+  try {
+    ExactEvmScheme.prototype.createPaymentPayload = function (v, r, ctx) { return orig.call(this, v, { ...r, amount: "1000000" }, ctx); };
+    s = await seedPay([pr2([v2()])]);
+    ok(/refused: signed payment refused before sending/.test(s.out[0]) && s.spent === 0, `seed: a payload signing another amount is refused before sending and not counted (${s.out[0]})`);
+  } finally { ExactEvmScheme.prototype.createPaymentPayload = orig; }
+  let maxErr = null;
+  try { seedPaymentClient(signer, { maxUsd: Number("abc") }); } catch (e) { maxErr = e.message; }
+  ok(/must be a positive number/.test(maxErr || ""), "seed: a --max-usd typo refuses instead of paying unbounded");
+}
+
 let r = await runSmoke(pr2([v2()]));
 ok(r.code === 0 && r.signed === "1000", `control: a $0.001 Base accept is signed for exactly 1000 (${r.code}, ${r.signed}; ${tail(r)})`);
 r = await runSmoke(pr2([v2({ amount: "1000000000000", extra: { name: "USD Coin", version: "2", decimals: 18 } })]));
