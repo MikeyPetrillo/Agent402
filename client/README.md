@@ -254,8 +254,9 @@ minutes, longer than many HTTP clients wait. Their `/api/pricing` row carries
 waiting `Retry-After` seconds between polls, until the job has succeeded or
 failed (it reads the job's `state` and falls back to its `status`, working,
 completed or failed, on a server that sends only that). Payment settles only on
-the delivered answer, so a failed job is a
-failed call and its spend is released.
+the delivered answer, so a failed job is a failed call; the payment it carried
+stays held against the caps (see Spending caps), since only the seller knows
+it was not redeemed.
 
 ```js
 const a = new Agent402({
@@ -287,7 +288,7 @@ that runs as one.
 | `await a.collectJob(jobUrl, { timeoutMs?, onProgress? })` | Collect a job link (from `AsyncJobPendingError.jobUrl`) until it has the answer |
 | `Agent402.solvePow(pow)` | Solve a proof-of-work challenge object → an `X-Pow-Solution` value |
 | `a.guardX402Client(client)` | Enforce this client's caps on every payment the given `@x402/core` client signs (the same as passing `x402Client`); returns the client |
-| `a.spendingSummary()` | Rolling-24h paid spend so far: `{ dailyUsd, calls, byHost, limits }` |
+| `a.spendingSummary()` | Rolling-24h paid spend so far: `{ dailyUsd, calls, byHost, heldUsd, heldCalls, heldByHost, limits }`; `dailyUsd`, `calls` and `byHost` are settled calls, the `held*` fields are payments sent without a delivered answer |
 | `a.clearCache()` | Drop the in-memory result cache |
 
 ## Response size ceiling
@@ -388,11 +389,21 @@ try {
 }
 ```
 
-Only **settled** paid calls count against the rolling window. A call refused or
-failed before settlement never consumes budget. A paid HTTP-success response
-that later fails byte, JSON, or output validation remains settled spend. Free
-proof-of-work calls are never counted. Omit a cap (or leave it `null`) for no
-limit; with none set, behavior is unchanged.
+A call refused before any payment header leaves the process never consumes
+budget. Once a header has been sent, its signed amount counts against the caps
+whatever the seller answers. A delivered answer books it **settled**. Anything
+else (an error status, a refused payment, a dropped connection, a redirect, a
+job still running) books it **held**: the seller holds a signed authorization it
+can still redeem until its `validBefore`, so the error carries `paid: "unknown"`
+and `heldUsd`, and `spendingSummary()` reports it under `heldUsd`. A held
+amount counts for the rolling 24 hours, and longer when the authorization
+stays valid longer (a seven-day Circle Gateway authorization is held until its
+`validBefore` passes). Pass your `x402Client` so the client sees exactly which
+payments were signed; through a pre-wrapped `fetch` alone it cannot tell, so any
+failed paid call is held. A paid HTTP-success response that later fails byte,
+JSON, or output validation remains settled spend. Free proof-of-work calls are
+never counted. Omit a cap (or leave it `null`) for no limit; with none set,
+behavior is unchanged.
 
 **Caps are enforced on the payment that is signed.** Pass the `x402Client` your
 `fetch` wraps (or call `a.guardX402Client(client)`) and the client registers a

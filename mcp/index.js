@@ -119,6 +119,11 @@ const capFromEnv = (name, def) => {
 const MAX_PER_CALL = capFromEnv("AGENT402_MAX_PER_CALL", DEFAULT_MAX_PER_CALL_USD);
 const BUDGET = capFromEnv("AGENT402_BUDGET", DEFAULT_BUDGET_USD);
 let spentUsd = 0;
+// Signed payments that were sent without a confirmed answer (an error status,
+// a dropped connection, a redirect, a job still running). The seller holds a
+// signed authorization it may still redeem, so the amount counts against the
+// session budget for the rest of the session, beside what was spent.
+let heldUsd = 0;
 // Wallet calls in flight, each holding what it may sign until it settles or
 // fails, so concurrent calls cannot each pass against the same budget. The
 // signing guard reads the one being signed from signCtx.
@@ -128,7 +133,7 @@ const pendingUsd = (except = null) => { let t = 0; for (const e of pendingSpend)
 /** The most the payment being signed may ask for: the per-call cap and what is
  *  left of the session budget after every other call in flight. */
 function signAllowance() {
-  return Math.max(0, Math.min(MAX_PER_CALL, BUDGET - spentUsd - pendingUsd(signCtx.getStore() || null)));
+  return Math.max(0, Math.min(MAX_PER_CALL, BUDGET - spentUsd - heldUsd - pendingUsd(signCtx.getStore() || null)));
 }
 
 const DEFAULT_CURATED = [
@@ -218,6 +223,9 @@ function getPayFetch() {
       onSign: (usd) => { const e = signCtx.getStore(); if (e) { e.usd = usd; e.signed = true; } },
       onRefuse: (detail) => { const e = signCtx.getStore(); if (e) e.refusal = detail; },
     });
+    // Registered after the guard's check of the signed amount, so it runs only
+    // for a payload about to be sent: from here the payment is outstanding.
+    client.onAfterPaymentCreation(async () => { const e = signCtx.getStore(); if (e && e.signed) e.sent = true; });
     if (AGENT_KEY) {
       const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
       const { privateKeyToAccount } = await import("viem/accounts");
@@ -404,6 +412,7 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
   };
 
   let res;
+  let heldNote = "";
   if (!HAS_WALLET && HAS_CREDITS) {
     // Credits key: same budget guards as the wallet path, against the same
     // number - the credits gate holds and debits what the 402 quotes for THIS
@@ -446,40 +455,45 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
       };
     }
     const inFlight = pendingUsd();
-    if (spentUsd + inFlight + price > BUDGET) {
+    if (spentUsd + heldUsd + inFlight + price > BUDGET) {
       return {
-        content: [{ type: "text", text: `Refused without paying: session budget exhausted ($${spentUsd.toFixed(4)} of $${BUDGET} spent${inFlight ? `, $${inFlight.toFixed(4)} in flight` : ""}; "${tool.slug}" lists at ${tool.price}). Restart the MCP server or raise AGENT402_BUDGET.` }],
+        content: [{ type: "text", text: `Refused without paying: session budget exhausted ($${spentUsd.toFixed(4)} of $${BUDGET} spent${heldUsd ? `, $${heldUsd.toFixed(4)} held for sent payments whose outcome is unknown` : ""}${inFlight ? `, $${inFlight.toFixed(4)} in flight` : ""}; "${tool.slug}" lists at ${tool.price}). Restart the MCP server or raise AGENT402_BUDGET.` }],
         isError: true,
       };
     }
     const payFetch = await getPayFetch();
     // Held until the call settles or fails; the guard replaces `usd` with the
     // amount it lets the wallet sign.
-    const entry = { usd: price, signed: false, refusal: null };
+    const entry = { usd: price, signed: false, sent: false, refusal: null };
     pendingSpend.add(entry);
     try {
       const first = await signCtx.run(entry, () => payFetch(url, { ...paidInit, headers: { ...init.headers, ...asyncHeaders } }));
       if (isRedirect(first)) {
         pendingSpend.delete(entry);
         // A signature already sent leaves that payment's outcome unknown, so
-        // it counts against the session budget.
-        if (entry.signed) spentUsd += entry.usd;
+        // it is held against the session budget.
+        if (entry.sent) heldUsd += entry.usd;
         return redirectRefusal(first);
       }
       res = await collect(first);
     }
     catch (e) {
       pendingSpend.delete(entry);
-      // Still running past the wait: it may yet settle, so it counts as spent.
-      if (e instanceof AsyncJobPendingError) { if (entry.signed) spentUsd += entry.usd; return pendingJobResult(tool, e); }
-      if (entry.refusal) return signingRefusal(tool, entry.refusal);
+      // Once a payment was sent, any failure (a job still running, a dropped
+      // connection) leaves its authorization redeemable, so it is held.
+      if (entry.sent) heldUsd += entry.usd;
+      if (e instanceof AsyncJobPendingError) return pendingJobResult(tool, e);
+      if (entry.refusal && !entry.sent) return signingRefusal(tool, entry.refusal);
       throw e;
     }
     pendingSpend.delete(entry);
-    // Count spend when a payment was signed and the server confirms settlement
-    // (payment receipt header), falling back to any 2xx, conservative in the
-    // buyer's favor.
-    if (entry.signed && (res.headers.get("payment-response") || res.headers.get("x-payment-response") || res.ok)) spentUsd += entry.usd;
+    // A sent payment is spent when the server confirms settlement (payment
+    // receipt header) or answers 2xx; any other answer leaves the signed
+    // authorization with the seller, so it is held, never released.
+    if (entry.sent) {
+      if (res.headers.get("payment-response") || res.headers.get("x-payment-response") || res.ok) spentUsd += entry.usd;
+      else { heldUsd += entry.usd; heldNote = ` A payment of $${entry.usd} was sent with this request, so its outcome is unknown: it stays held against AGENT402_BUDGET for this session.`; }
+    }
   } else if (tool.computePayable) {
     // No wallet: pay with compute up front, solving before the call skips the
     // 402 round-trip entirely (challenges are single-use and tool-scoped).
@@ -503,7 +517,7 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
   }
   const text = await res.text();
   if (res.status >= 400) {
-    return { content: [{ type: "text", text: failureText(res.status, text) }], isError: true };
+    return { content: [{ type: "text", text: failureText(res.status, text) + heldNote }], isError: true };
   }
   let parsed;
   try { parsed = JSON.parse(text); } catch { parsed = { raw: text }; }
@@ -930,7 +944,8 @@ server.setRequestHandler(CallToolRequestSchema, withCatalog(async (req, extra) =
               maxPerCallUsd: MAX_PER_CALL === Infinity ? "unlimited" : MAX_PER_CALL,
               sessionBudgetUsd: BUDGET === Infinity ? "unlimited" : BUDGET,
               spentThisSessionUsd: Number(spentUsd.toFixed(6)),
-              remainingUsd: BUDGET === Infinity ? "unlimited" : Number(Math.max(0, BUDGET - spentUsd).toFixed(6)),
+              heldThisSessionUsd: Number(heldUsd.toFixed(6)),
+              remainingUsd: BUDGET === Infinity ? "unlimited" : Number(Math.max(0, BUDGET - spentUsd - heldUsd).toFixed(6)),
             }
           : "n/a (proof-of-work mode spends CPU, not money)",
         note: HAS_WALLET
