@@ -47,6 +47,15 @@ const PAYMENT_RESPONSE_HEADER = "PAYMENT-RESPONSE";
 /** Challenge meta key carrying the verbatim advertised x402 accepts entry. */
 const META_ACCEPTS_KEY = "x402";
 
+/** The accepts entry as the challenge meta binds it: the raw advertised object
+ *  without `outputSchema` (see challengeHeaderFromPaymentRequired). Exported
+ *  for the shim test. */
+export function acceptForChallengeMeta(rawAccepts) {
+  if (!rawAccepts || typeof rawAccepts !== "object" || !("outputSchema" in rawAccepts)) return rawAccepts;
+  const { outputSchema: _carriedByPaymentRequired, ...rest } = rawAccepts;
+  return rest;
+}
+
 /** All our EVM rails settle 6-decimal stablecoins (Circle USDC + Paxos USDG). */
 const STABLECOIN_DECIMALS = 6;
 
@@ -292,8 +301,14 @@ export function challengeHeaderFromPaymentRequired(paymentRequiredHeader, { secr
         // unknown fields and the paywall's requirement matching deep-equals the
         // full advertised object), HMAC-bound via the challenge id (meta folds
         // into `opaque`, slot 6 of the id binding) and echoed back by the
-        // client — inbound rebuilds `accepted` byte-exact and stateless.
-        meta: { [META_ACCEPTS_KEY]: JSON.stringify(rawAccepts) },
+        // client — inbound rebuilds `accepted` stateless. One field is left
+        // out: `outputSchema` (src/accept-output-schema.js). It is already in
+        // PAYMENT-REQUIRED, escaped and base64'd again here it cost ~700 bytes
+        // of the 402's shared header budget, and the paywall's match seam
+        // restores the advertised schema onto an echoed accept that carries
+        // none (restoreOutputSchemaOnAccepted), the path every strict-codec
+        // x402 client already takes. Every other field stays byte-exact.
+        meta: { [META_ACCEPTS_KEY]: JSON.stringify(acceptForChallengeMeta(rawAccepts)) },
         secretKey,
       })
     );
@@ -360,9 +375,10 @@ export function translateCredentialDetailed(authorizationHeader, { secretKey }) 
   // the paywall deep-equals against the echoed `accepted`. So: validate the
   // shape through mppx exactly as before (a malformed payload still throws
   // here), then emit the same base64-JSON wire with the accept RAW - the
-  // HMAC-bound bytes the client echoed, byte-exact what the paywall
-  // advertised. Found 2026-09-02 by test-mpp-shim's native buy: the schema
-  // strip turned every MPP payment into "no matching requirements".
+  // HMAC-bound bytes the client echoed, what the paywall advertised less the
+  // `outputSchema` the meta leaves out (the match seam restores it). Found
+  // 2026-09-02 by test-mpp-shim's native buy: the schema strip turned every
+  // MPP payment into "no matching requirements".
   const validated = x402.Header.encodePaymentSignature({
     x402Version: 2,
     accepted,

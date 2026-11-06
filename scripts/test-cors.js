@@ -8,7 +8,7 @@
 // that the payment headers a buyer must read are on the expose list.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
-import { corsAllowsPath, corsAllowHeaders, CORS_EXPOSE_HEADERS, CORS_DEFAULT_ALLOW_HEADERS } from "../src/cors.js";
+import { corsAllowsPath, corsAllowHeaders, exposeHeadersFor402, CORS_EXPOSE_HEADERS, CORS_DEFAULT_ALLOW_HEADERS } from "../src/cors.js";
 import { getFreePort } from "./lib/free-port.js";
 
 let pass = 0, fail = 0;
@@ -55,6 +55,14 @@ for (const bad of ["x-a\r\nInjected: 1", "bad header", "a".repeat(2000), Array.f
 // The four headers an x402/MPP buyer cannot act without.
 for (const h of ["PAYMENT-REQUIRED", "PAYMENT-RESPONSE", "WWW-Authenticate", "Payment-Receipt"])
   ok(CORS_EXPOSE_HEADERS.includes(h), `payment header exposed: ${h}`);
+
+// A 402's expose list is the listed headers it carries, in list order (an
+// absent header exposes nothing; the 402 shares a fixed header budget).
+{
+  const carried = new Set(["payment-required", "www-authenticate", "x-async-recommended", "x-request-id"]);
+  ok(exposeHeadersFor402((h) => carried.has(h.toLowerCase())) === "PAYMENT-REQUIRED, WWW-Authenticate, X-Async-Recommended", "a 402 exposes only the listed headers it carries");
+  ok(exposeHeadersFor402(() => false) === "", "a 402 carrying none of them exposes nothing");
+}
 
 // --- booted ---------------------------------------------------------------
 const PORT = await getFreePort();

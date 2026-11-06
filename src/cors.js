@@ -152,13 +152,46 @@ export function corsAllowHeaders(requested) {
  * gate - so a preflight is answered without spending a rate-limit token, being
  * refused by the drain, or being asked to pay.
  */
+/**
+ * The expose list a 402 sends: only the listed headers the response actually
+ * carries when its head is written. Exposing an absent header grants nothing,
+ * and a 402 shares one fixed header budget (a Node client reads at most 16 KB
+ * of response headers; scripts/test-challenge-size.js) with the payment
+ * challenges, so the ~350-byte full list is cut to what is there (typically
+ * PAYMENT-REQUIRED and WWW-Authenticate, plus X-Async-Recommended or Link on
+ * the routes that set them). Other statuses keep the full list. `has(name)`
+ * answers whether the response carries the header.
+ */
+export function exposeHeadersFor402(has) {
+  return CORS_EXPOSE_HEADERS.filter((h) => has(h)).join(", ");
+}
+
 export function corsMiddleware() {
   const expose = CORS_EXPOSE_HEADERS.join(", ");
   return function cors(req, res, next) {
     if (!corsAllowsPath(req.path)) return next();
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Expose-Headers", expose);
-    if (req.method !== "OPTIONS") return next();
+    if (req.method !== "OPTIONS") {
+      // Mounted first, so this wrapper is the innermost: every later gate's
+      // writeHead hook (the MPP challenge, the Tempo challenge) has set its
+      // header by the time this one reads the response.
+      const origWriteHead = res.writeHead;
+      res.writeHead = function corsWriteHead(statusCode, ...rest) {
+        try {
+          const status = typeof statusCode === "number" ? statusCode : res.statusCode;
+          if (status === 402) {
+            const inline = rest.find((a) => a && typeof a === "object") || null;
+            const inlineNames = new Set(inline ? (Array.isArray(inline) ? inline.filter((_, i) => i % 2 === 0) : Object.keys(inline)).map((k) => String(k).toLowerCase()) : []);
+            const list = exposeHeadersFor402((h) => res.hasHeader(h) || inlineNames.has(h.toLowerCase()));
+            if (list) res.setHeader("Access-Control-Expose-Headers", list);
+            else res.removeHeader("Access-Control-Expose-Headers");
+          }
+        } catch { /* the full list stays: never break a response over its expose list */ }
+        return origWriteHead.call(this, statusCode, ...rest);
+      };
+      return next();
+    }
     // A preflight has no Origin-specific answer and never carries a body.
     res.setHeader("Access-Control-Allow-Methods", CORS_METHODS);
     res.setHeader("Access-Control-Allow-Headers", corsAllowHeaders(req.headers["access-control-request-headers"]));
