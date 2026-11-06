@@ -9,16 +9,27 @@ import { dirname, join } from "node:path";
 import { Agent402, OutputValidationError, withNetworkPreference, withPayeeAllowlist, NETWORK_CAIP2, quoted402Usd, acceptUsd, resetRetryFetch, isConnectionReset } from "./index.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const PORT = 3081;
+// The server binds an OS-assigned port (PORT=0) and keeps its stores in a
+// temp directory of its own, so two copies of this suite never meet.
+const { ownStoreEnv } = await import("../scripts/lib/own-stores.js");
 const proc = spawn("node", ["src/server.js"], {
   cwd: ROOT,
-  env: { ...process.env, WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
+  env: { ...process.env, ...ownStoreEnv("client-test"), WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
     FACILITATOR_URL: "https://facilitator.payai.network", X402_SYNC_ON_START: "false",
     // The seller index is not under test: a crawl filling it while the offline
     // cases run would change what route() ranks by the time they finish.
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off",
-    POW_DIFFICULTY: "12", PORT: String(PORT), FREE_MODE: "" },
-  stdio: "ignore",
+    POW_DIFFICULTY: "12", PORT: "0", FREE_MODE: "" },
+  stdio: ["ignore", "pipe", "ignore"],
+});
+// The port the server bound, read back from its listening line (null if it
+// exits or never listens).
+const boundPort = new Promise((resolve) => {
+  let buf = "", done = false;
+  const settle = (v) => { if (!done) { done = true; buf = ""; resolve(v); } };
+  proc.stdout.on("data", (c) => { if (done) return; buf += c; const m = buf.match(/listening on :(\d+)/); if (m) settle(Number(m[1])); });
+  proc.on("exit", () => settle(null));
+  setTimeout(() => settle(null), 120_000).unref();
 });
 const fail = (m) => { console.error("FAIL:", m); proc.kill("SIGKILL"); process.exit(1); };
 let pass = 0; const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m); };
@@ -1739,6 +1750,8 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 try {
+  const PORT = await boundPort;
+  if (!PORT) fail("the server never reported the port it bound");
   for (let i = 0; i < 40; i++) { try { if ((await fetch(`http://localhost:${PORT}/api/pow`)).ok) break; } catch {} await sleep(500); }
   const a = new Agent402({ baseUrl: `http://localhost:${PORT}` });
 

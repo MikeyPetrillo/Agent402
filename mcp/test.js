@@ -12,8 +12,6 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const PORT = 3005;
-const API = `http://localhost:${PORT}`;
 
 const fail = (msg) => { console.error("FAIL:", msg); process.exit(1); };
 
@@ -372,20 +370,35 @@ globalThis.fetch = (...a) => { if (!said && String(a[0]?.url || a[0]).includes("
   console.log("secrets never leave the process ✓ (malformed keys are named, not quoted; a seller's echo of any key is redacted in results, errors and stderr)");
 }
 
-// 1) Boot a paywalled API instance (PoW gate live, facilitator not contacted).
+// 1) Boot a paywalled API instance (PoW gate live, facilitator not contacted)
+// on an OS-assigned port (PORT=0, read back from its listening line) with its
+// stores in a temp directory of its own, so two copies of this suite never meet.
+const { ownStoreEnv } = await import("../scripts/lib/own-stores.js");
 const api = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
   cwd: ROOT,
   env: {
     ...process.env,
+    ...ownStoreEnv("mcp-test"),
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD",
     NETWORK: "base",
     FACILITATOR_URL: "https://facilitator.payai.network",
     X402_SYNC_ON_START: "false",
     POW_DIFFICULTY: "12",
-    PORT: String(PORT),
+    PORT: "0",
   },
-  stdio: ["ignore", "inherit", "inherit"],
+  stdio: ["ignore", "pipe", "inherit"],
 });
+// A failed assertion exits the process: the server goes with it.
+process.on("exit", () => { try { api.kill("SIGKILL"); } catch { /* already gone */ } });
+const PORT = await new Promise((resolve) => {
+  let buf = "", done = false;
+  const settle = (v) => { if (!done) { done = true; buf = ""; resolve(v); } };
+  api.stdout.on("data", (c) => { process.stdout.write(c); if (done) return; buf += c; const m = buf.match(/listening on :(\d+)/); if (m) settle(Number(m[1])); });
+  api.on("exit", () => settle(null));
+  setTimeout(() => settle(null), 120_000).unref();
+});
+if (!PORT) fail("the API instance never reported the port it bound");
+const API = `http://localhost:${PORT}`;
 let up = false;
 for (let i = 0; i < 30 && !up; i++) {
   up = await fetch(`${API}/health`).then((r) => r.ok).catch(() => false);
