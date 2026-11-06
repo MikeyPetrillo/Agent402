@@ -28,6 +28,7 @@ import {
   subscriptionFeePayerPolicy, SUB_FEE_PAYER_MAX_GAS,
   isTransientChargeError, TRANSIENT_CHARGE_BACKOFF_MS, isSendPhaseAmbiguity, expectedRenewalMemo,
   renewalValidForSeconds, withRenewalValidity, RENEWAL_VALID_FOR_DEFAULT_S, RENEWAL_VALID_FOR_MAX_S, SETTLEABLE_SLACK_MS,
+  ACTIVATION_VALID_FOR_S, TEMPO_RPC_TIMEOUT_MS,
   guardDestroyedKeys, KEY_GONE_PREFIX, createFileStore, diagnoseError,
 } from "../src/mpp-subscriptions.js";
 import { MONITOR_PRODUCTS } from "../src/stripe-subscriptions.js";
@@ -917,14 +918,27 @@ let liveSubId = null, liveHeader = null, liveToken = null, liveBuyer = null;
   ok(renewalValidForSeconds(undefined) === 120 && renewalValidForSeconds("") === 120, "renewal window defaults to 120 s");
   ok(renewalValidForSeconds("180") === 180, "TEMPO_SUBSCRIPTION_VALID_FOR_S sets the window");
   ok(renewalValidForSeconds("1000") === RENEWAL_VALID_FOR_MAX_S && RENEWAL_VALID_FOR_MAX_S === 240, "clamped to <= 240 s (under the 5-minute expiring-nonce cap)");
-  ok(renewalValidForSeconds("5") === 25, "never shorter than viem's own 25 s");
+  ok(renewalValidForSeconds("5") === 25 && ACTIVATION_VALID_FOR_S === 25, "never shorter than the 25 s activation window");
   for (const bad of ["abc", "-3", "12.5", "0", "1e3", "NaN"]) ok(renewalValidForSeconds(bad) === 120, `malformed ${JSON.stringify(bad)} -> default`);
 
   const { tempo: tempoChain } = await import("viem/tempo/chains");
   const prep = async (chain, req) => chain.prepareTransactionRequest[0]({ calls: [], chainId: 4217, ...req }, { client: { chain }, phase: "beforeFillTransaction" });
   const nowS = () => Math.floor(Date.now() / 1000);
+  // viem's own default is read, never typed: it was 25 s through 2.57.13 and
+  // 270 s from 2.57.16. Whatever it is, it must sit under the protocol cap and
+  // nothing below may depend on it.
+  const { Transaction: TempoTx } = await import("viem/tempo");
+  const PROTOCOL_CAP_S = TempoTx.expiringNonceMaxExpiry;
+  ok(Number.isInteger(PROTOCOL_CAP_S) && PROTOCOL_CAP_S >= 300, `viem names the protocol's expiring-nonce cap (${PROTOCOL_CAP_S} s)`);
   const stock = await prep(tempoChain, { nonceKey: "expiring" });
-  ok(Math.abs(stock.validBefore - nowS() - 25) <= 2, "control: viem's stock Tempo chain stamps now + 25 s");
+  const STOCK_S = stock.validBefore - nowS();
+  ok(STOCK_S > 0 && STOCK_S <= PROTOCOL_CAP_S, `control: viem's stock Tempo chain stamps a window inside the cap (+${STOCK_S} s)`);
+  ok(RENEWAL_VALID_FOR_MAX_S < PROTOCOL_CAP_S, `the longest renewal window (${RENEWAL_VALID_FOR_MAX_S} s) stays under the protocol cap (${PROTOCOL_CAP_S} s)`);
+  ok(ACTIVATION_VALID_FOR_S * 1000 < TEMPO_RPC_TIMEOUT_MS, `the activation window (${ACTIVATION_VALID_FOR_S} s) is shorter than the RPC timeout (${TEMPO_RPC_TIMEOUT_MS} ms), so a timed-out activation can no longer land`);
+  // Our window wins over ANY stock default, not only today's.
+  const oddDefault = { prepareTransactionRequest: [async (r) => ({ ...r, validBefore: r.validBefore ?? nowS() + 999 }), { runAt: ["beforeFillTransaction"] }] };
+  const overDefault = await withRenewalValidity(oddDefault, 120).prepareTransactionRequest[0]({ nonceKey: "expiring" }, {});
+  ok(Math.abs(overDefault.validBefore - nowS() - 120) <= 2, "the stamped window holds whatever viem's default is");
   const ours = await prep(withRenewalValidity(tempoChain, 120), { nonceKey: "expiring" });
   ok(Math.abs(ours.validBefore - nowS() - 120) <= 2, `the renewal chain stamps now + 120 s through viem's real hook (got +${ours.validBefore - nowS()})`);
   const sponsored = await prep(withRenewalValidity(tempoChain, 200), { feePayer: true });
@@ -943,8 +957,30 @@ let liveSubId = null, liveHeader = null, liveToken = null, liveBuyer = null;
   const viaRenewal = await rc.chain.prepareTransactionRequest[0]({ calls: [], chainId: 4217, nonceKey: "expiring" }, { client: rc, phase: "beforeFillTransaction" });
   const viaShared = await bc.chain.prepareTransactionRequest[0]({ calls: [], chainId: 4217, nonceKey: "expiring" }, { client: bc, phase: "beforeFillTransaction" });
   ok(Math.abs(viaRenewal.validBefore - nowS() - 120) <= 2, "the renewal client carries the longer window");
-  ok(Math.abs(viaShared.validBefore - nowS() - 25) <= 2, "the activation client is unchanged (stock 25 s)");
+  ok(Math.abs(viaShared.validBefore - nowS() - ACTIVATION_VALID_FOR_S) <= 2, `the activation client stamps its own ${ACTIVATION_VALID_FOR_S} s, not viem's default (got +${viaShared.validBefore - nowS()}, stock +${STOCK_S})`);
   ok(rc !== bc, "renewals use their own client");
+  // The caller path: viem's real prepareTransactionRequest on each engine
+  // chain, the way mppx's submitSubscriptionPayment calls it, over a stub RPC.
+  {
+    const { createClient, custom } = await import("viem");
+    const { prepareTransactionRequest } = await import("viem/actions");
+    const { privateKeyToAccount } = await import("viem/accounts");
+    const stubRpc = custom({ async request({ method }) {
+      if (method === "eth_chainId") return "0x1079";
+      if (method === "eth_getBlockByNumber") return { baseFeePerGas: "0x1", number: "0x1", timestamp: "0x1", hash: `0x${"0".repeat(64)}`, transactions: [] };
+      if (method === "eth_estimateGas") return "0x5208";
+      if (method === "eth_maxPriorityFeePerGas" || method === "eth_gasPrice") return "0x1";
+      if (method === "eth_getTransactionCount") return "0x0";
+      const e = new Error(`stub RPC: ${method} unsupported`); e.code = -32601; throw e;
+    } }, { retryCount: 0 });
+    const account = privateKeyToAccount(`0x${"11".repeat(32)}`);
+    const req = { account, calls: [{ to: "0x20c0000000000000000000000000000000000000", data: "0x" }], nonceKey: "expiring" };
+    const viaPrep = async (chain) => (await prepareTransactionRequest(createClient({ chain, transport: stubRpc }), req)).validBefore - nowS();
+    const actS = await viaPrep(bc.chain), renS = await viaPrep(rc.chain), stockS = await viaPrep(tempoChain);
+    ok(Math.abs(actS - ACTIVATION_VALID_FOR_S) <= 2, `activation through prepareTransactionRequest sends validBefore = now + ${ACTIVATION_VALID_FOR_S} s (got +${actS})`);
+    ok(Math.abs(renS - 120) <= 2, `renewal through prepareTransactionRequest sends validBefore = now + 120 s (got +${renS})`);
+    ok(Math.abs(stockS - STOCK_S) <= 2, `control: the stock chain sends viem's default through the same call (+${stockS})`);
+  }
 
   const src = readFileSync(new URL("../src/mpp-subscriptions.js", import.meta.url), "utf8");
   const renewCall = src.slice(src.indexOf("tempoServer.renewSubscription({"));
