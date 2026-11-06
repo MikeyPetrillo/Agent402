@@ -404,6 +404,50 @@ setEnv(ON);
   D._setDirectBreakerNowForTest(null);
   setEnv(ON);
 }
+// A half-open trial granted to a call whose payment window cannot fit an
+// attempt (the 504 is thrown before anything is sent) is released at once:
+// the next eligible call takes the trial, goes direct and reports.
+{
+  setEnv({ ...ON, DIRECT_UPSTREAM_BREAKER_FAILS: "2", DIRECT_UPSTREAM_BREAKER_OPEN_MS: "60000" });
+  for (const stream of [false, true]) {
+    const label = stream ? "stream" : "plain";
+    reset();
+    let now = Date.now();
+    D._setDirectBreakerNowForTest(() => now);
+    direct.plan = (req, res) => json(res, 503, { error: { message: "no qualifying worker" } });
+    for (let i = 0; i < 2; i++) await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 });
+    ok(D.directBreakerState().open, `${label} window trial: opened by two 503s`);
+    now += 60_001;
+    const hitsBefore = direct.hits.length;
+    const orBefore = or.hits.length;
+    let err = null;
+    try {
+      const out = await base.handler({ model: MODEL, messages: msgs, max_tokens: 32, stream }, { headers: {}, cdnSyncDeadlineMs: Date.now() + 2_000 });
+      if (stream) await out.__sse(fakeRes());
+    } catch (e) { err = e; }
+    ok(err?.statusCode === 504 && direct.hits.length === hitsBefore && or.hits.length === orBefore, `${label}: too little window is a 504 with nothing sent upstream`);
+    ok(D.directBreakerState().halfOpen && !D.directBreakerState().trialInFlight, `${label}: the unsent trial is released (still half-open, no trial in flight)`);
+    direct.plan = (req, res, body) => json(res, 200, answer(body.model, { x_vendor: { charged_micro: DIRECT_MICRO } }));
+    await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 });
+    ok(direct.hits.length === hitsBefore + 1 && !D.directBreakerState().open && !D.directBreakerState().halfOpen, `${label}: the next eligible call takes the trial, goes direct and closes it`);
+    D._setDirectBreakerNowForTest(null);
+  }
+  // A release names its own grant: a stale release never frees a later trial.
+  reset();
+  let now = Date.now();
+  D._setDirectBreakerNowForTest(() => now);
+  for (let i = 0; i < 2; i++) D.noteDirectOutcome(false, "server_error");
+  now += 60_001;
+  const first = D.directBreakerTake();
+  D.directBreakerRelease(first);
+  const second = D.directBreakerTake();
+  D.directBreakerRelease(first);
+  ok(first?.trial && second?.trial && D.directBreakerState().trialInFlight && D.directBreakerTake() === null, "a stale release does not free another call's trial");
+  D.directBreakerRelease(second);
+  ok(!D.directBreakerState().trialInFlight && D.directBreakerTake()?.trial === true, "its own release frees it for the next caller");
+  D._setDirectBreakerNowForTest(null);
+  setEnv(ON);
+}
 
 // ---- streams ------------------------------------------------------------------
 reset();

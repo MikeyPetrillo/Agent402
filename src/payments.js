@@ -2153,6 +2153,12 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // offered, is not configured-but-dropped: it is absent on purpose.
   railsConfigured = networks.filter((n) => !(arcDeliberatelyAbsent && NETWORKS[n] === ARC_CAIP2));
   railsOffered = [...offeredNames];
+  railsOfferFinal = true;
+  // A primary network a drop guard took off the offer is not named as the
+  // primary anywhere public: those surfaces name the first offered network
+  // (src/public-networks.js publicPrimaryNetwork). Said once, loudly, with
+  // the variable to set.
+  if (offeredNames.length && !offeredNames.includes(network)) console.warn(primaryNotOfferedWarning(network, offeredNames[0]));
   // The public facilitator map names only what this server offers: each
   // offered network's CAIP-2 id and every v1 name that maps to it.
   // The public-index disclosure names a listed chain only while it is offered.
@@ -2848,6 +2854,15 @@ export function lastResortFallbackOverrides({ networks, payAiClient, solvadorCli
 // decision, it never influences it.
 let railsConfigured = [];
 let railsOffered = [];
+let railsOfferFinal = false;
+/** The offered network names in configured order (primary first), or null
+ *  before the paywall has finalized its offer (free mode, early boot). */
+export function offeredNetworkNames() { return railsOfferFinal ? [...railsOffered] : null; }
+const PRIMARY_DROP_VARIABLES = { ink: "INK_FACILITATOR_URL", robinhood: "ROBINHOOD_FACILITATOR_URL", monad: "MONAD_FACILITATOR_URL", celo: "CELO_FACILITATOR_URL", arc: "CIRCLE_FACILITATOR_API_KEY" };
+export function primaryNotOfferedWarning(configured, named) {
+  const v = PRIMARY_DROP_VARIABLES[configured];
+  return `WARNING: NETWORK is \`${configured}\` but \`${configured}\` is not offered (${v ? `${v} is unset or incomplete` : "its facilitator configuration is incomplete; see the drop warning above"}) - public surfaces name \`${named}\` as the primary network. Set ${v || "the missing facilitator configuration"} or change NETWORK.`;
+}
 let offeredNetworkKeys = new Set();
 // The facilitator clients + labels as built (module-level copy, operator
 // diagnostics only). CDP's facilitator table has grown (Polygon, Arbitrum,

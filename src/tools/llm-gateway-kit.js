@@ -52,7 +52,7 @@ import { payerFromRequest, paymentHeaderOf } from "../payer.js";
 // module header) - refuses before any upstream call, arms the outcome listener.
 import { gatewaySettleBreakerCheck } from "../gateway-settle-breaker.js";
 import { clientGoneSignal } from "../drain-abort.js";
-import { directUpstreamConfig, withDirectAttempts, directBodyFrom, directShareDraw, directCostUsd, stripVendorExtensions, noteDirectAb, noteDirectSkip, noteDirectAnomaly, failureBucket, directModelFor, directBreakerAllows, noteDirectOutcome } from "../gateway-direct-upstream.js";
+import { directUpstreamConfig, withDirectAttempts, directBodyFrom, directShareDraw, directCostUsd, stripVendorExtensions, noteDirectAb, noteDirectSkip, noteDirectAnomaly, failureBucket, directModelFor, directBreakerTake, directBreakerRelease, noteDirectOutcome } from "../gateway-direct-upstream.js";
 import { directPriceDecision, noteDirectMeasure } from "../gateway-direct-pricebook.js";
 import { readBytesCapped, declaredLength, discardBody } from "../capped-body.js";
 import { clientGoneError } from "../hangup-settlement.js";
@@ -3852,8 +3852,18 @@ function makeHandler(routeTier) {
       if (!price.go) { noteDirectSkip(price.skip); return false; }
       if (price.probe) noteDirectSkip("measure_probe_sent");
       if (!directShareDraw(directCfg)) { noteDirectSkip("share"); return false; }
-      if (!directBreakerAllows()) { noteDirectSkip("breaker_open"); return false; }
-      return plan.body;
+      const grant = directBreakerTake();
+      if (!grant) { noteDirectSkip("breaker_open"); return false; }
+      return { body: plan.body, grant };
+    };
+    // The attempt's timeout, read after the breaker grant: a throw here (too
+    // little payment window left) sends nothing, so a half-open trial granted
+    // to this attempt is handed back for the next call instead of holding the
+    // breaker shut for another open period.
+    const attemptTimeoutMs = (directPlan, defaultMs) => {
+      try {
+        return directPlan ? Math.min(directCfg.timeoutMs, paymentWindowTimeoutMs(req, defaultMs)) : paymentWindowTimeoutMs(req, defaultMs);
+      } catch (e) { if (directPlan) directBreakerRelease(directPlan.grant); throw e; }
     };
     if (body.stream === true) {
       // The route binder invokes __sse(res) after the paywall settled.
@@ -3869,10 +3879,11 @@ function makeHandler(routeTier) {
               client.assertPresent();
               let outbound;
               try { outbound = outboundFor(model, flex); } catch (e) { if (!lastErr) lastErr = e; continue; }
-              const directBody = directPlanFor(direct, outbound, true);
-              if (directBody === false) continue;
+              const directPlan = directPlanFor(direct, outbound, true);
+              if (directPlan === false) continue;
+              const directBody = directPlan ? directPlan.body : null;
               const abListed = !!directModelFor(model, directCfg);
-              const timeoutMs = directBody ? Math.min(directCfg.timeoutMs, paymentWindowTimeoutMs(req, STREAM_TIMEOUT_MS)) : paymentWindowTimeoutMs(req, STREAM_TIMEOUT_MS);
+              const timeoutMs = attemptTimeoutMs(directPlan, STREAM_TIMEOUT_MS);
               const attemptStarted = Date.now();
               try {
                 let out;
@@ -3914,11 +3925,12 @@ function makeHandler(routeTier) {
       if (model === refusedModel) continue;
       let outbound;
       try { outbound = outboundFor(model, flex); } catch (e) { if (!lastErr) lastErr = e; continue; }
-      const directBody = directPlanFor(direct, outbound, false);
-      if (directBody === false) continue;
+      const directPlan = directPlanFor(direct, outbound, false);
+      if (directPlan === false) continue;
+      const directBody = directPlan ? directPlan.body : null;
       const abListed = !!directModelFor(model, directCfg);
       const abLabel = directBody ? "direct" : "openrouter";
-      const timeoutMs = directBody ? Math.min(directCfg.timeoutMs, paymentWindowTimeoutMs(req, UPSTREAM_TIMEOUT_MS)) : paymentWindowTimeoutMs(req, UPSTREAM_TIMEOUT_MS);
+      const timeoutMs = attemptTimeoutMs(directPlan, UPSTREAM_TIMEOUT_MS);
       const attemptStarted = Date.now();
       try {
         // usage.include once asked OpenRouter for the exact upstream bill;
