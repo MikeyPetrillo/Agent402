@@ -608,6 +608,27 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     await guarded(honest, (xc) => xc.register("eip155:8453", real)).call("chat", {});
     ok(honest.seen.values.length === 1 && honest.seen.values[0] === "10000", "control: the same guard sends a payload that signs the accept's own amount");
   }
+  // Ink (eip155:57073): native Circle USDC under the token's own EIP-712
+  // domain ("USDC", version "2", as name() and version() read on chain and as
+  // the production accept carries). The accept is priced and signed within the
+  // cap with the stock signer; an accept naming another domain, or an Ink
+  // accept over the cap, is not signed.
+  {
+    const INK_USDC = "0x2D270e6886d130D724215A266106e6832161EAEd";
+    const inkAccept = (extra, amount = "10000") => ({ network: "eip155:57073", asset: INK_USDC, amount, extra });
+    const signs = rawSeller(2, [inkAccept({ name: "USDC", version: "2" })]);
+    const out = await guarded(signs, (xc) => registerExactEvmScheme(xc, { signer: account })).call("chat", {});
+    ok(out?.ok === true && signs.seen.values.length === 1 && signs.seen.values[0] === "10000", "an Ink USDC accept under its own domain is priced at $0.01 and signed within a $0.10 cap");
+    for (const [label, extra] of [["name USD Coin", { name: "USD Coin", version: "2" }], ["version 1", { name: "USDC", version: "1" }], ["no domain", undefined]]) {
+      const s = rawSeller(2, [inkAccept(extra)].map((a) => (extra ? a : { ...a, extra: {} })));
+      let e = null; try { await guarded(s, (xc) => registerExactEvmScheme(xc, { signer: account })).call("chat", {}); } catch (err) { e = err; }
+      ok(s.seen.values.length === 0 && e?.name === "SpendingLimitError", `an Ink accept with a wrong EIP-712 domain (${label}) is refused before anything is signed (${e?.message})`);
+    }
+    const dear = rawSeller(2, [inkAccept({ name: "USDC", version: "2" }, "500000")]);
+    let ed = null; try { await guarded(dear, (xc) => registerExactEvmScheme(xc, { signer: account })).call("chat", {}); } catch (err) { ed = err; }
+    ok(dear.seen.values.length === 0 && ed?.name === "SpendingLimitError", `an Ink accept at $0.50 is refused under a $0.10 cap (${ed?.message})`);
+    ok(NETWORK_CAIP2.ink === "eip155:57073", "NETWORK_CAIP2 knows ink -> eip155:57073");
+  }
   // A v1 signer signs maxAmountRequired, so a v1 accept whose `amount` reads
   // $0.01 beside a $5 maxAmountRequired is not priced at $0.01. The stock v1
   // signer takes bare chain names, which the table does not price; this one

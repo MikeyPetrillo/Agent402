@@ -1365,6 +1365,7 @@ export const NETWORK_CAIP2 = {
   "base-sepolia": "eip155:84532",
   robinhood: "eip155:4663",
   arc: "eip155:5042",
+  ink: "eip155:57073",
   monad: "eip155:143",
   celo: "eip155:42220",
   avalanche: "eip155:43114",

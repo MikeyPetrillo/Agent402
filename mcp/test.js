@@ -233,6 +233,38 @@ const text = (result) => result.content?.map((c) => (c.type === "text" ? c.text 
   check(!mixed.err && mixed.signed.length === 1 && mixed.signed[0].maxTimeoutSeconds === 300 && mixed.approved.length === 1 && mixed.approved[0].maxTimeoutSeconds === 300 && mixed.refused.length === 0, `beside a valid accept, the 90000-second one is skipped and the valid one is signed (${mixed.err?.message || mixed.signed.map((r) => r.maxTimeoutSeconds).join(",")})`);
 }
 
+// Ink (eip155:57073) is a known asset under its token's own EIP-712 domain
+// ("USDC", version "2"): guardSigning approves and signs the accept within the
+// allowance, and refuses one naming another domain, or over the allowance,
+// with nothing signed. A spy scheme stands in for the signer.
+{
+  const { x402Client } = await import("@x402/core/client");
+  const { guardSigning, acceptUsd } = await import("./known-assets.js");
+  const { parseNetworkPrefs } = await import("./networks.js");
+  const check = (c, m) => { if (!c) fail(m); console.log(`${m} ✓`); };
+  const ink = { scheme: "exact", network: "eip155:57073", asset: "0x2D270e6886d130D724215A266106e6832161EAEd", amount: "1000", payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 300, extra: { name: "USDC", version: "2" } };
+  const sign = async (accept, cap = 0.01) => {
+    const signed = [], refused = [];
+    const client = new x402Client();
+    client.setSpendControls?.(false);
+    client.register("eip155:57073", { scheme: "exact", createPaymentPayload: async (v, r) => { signed.push(r); return { x402Version: v, payload: { authorization: { value: r.amount, validBefore: String(Math.floor(Date.now() / 1000) + 300) } } }; } });
+    guardSigning(client, { allowance: () => cap, onRefuse: (d) => refused.push(d) });
+    let err = null;
+    try { await client.createPaymentPayload({ x402Version: 2, resource: { url: "https://seller.example/x" }, accepts: [accept] }); } catch (e) { err = e; }
+    return { signed, refused, err };
+  };
+  check(acceptUsd(ink, 2) === 0.001, "an Ink USDC accept is priced at $0.001");
+  const good = await sign(ink);
+  check(!good.err && good.signed.length === 1 && good.refused.length === 0, `an Ink USDC accept under its own domain is signed within a $0.01 allowance (${good.err?.message || "signed"})`);
+  for (const [label, extra] of [["name USD Coin", { name: "USD Coin", version: "2" }], ["version 1", { name: "USDC", version: "1" }], ["no domain", {}]]) {
+    const r = await sign({ ...ink, extra });
+    check(acceptUsd({ ...ink, extra }, 2) === null && r.signed.length === 0 && r.refused[0]?.reason === "unknown-asset", `an Ink accept with a wrong EIP-712 domain (${label}) is not priced and nothing is signed`);
+  }
+  const dear = await sign({ ...ink, amount: "50000" });
+  check(dear.signed.length === 0 && dear.refused[0]?.reason === "over-allowance", "an Ink accept at $0.05 is refused under a $0.01 allowance");
+  check(parseNetworkPrefs("ink").join() === "eip155:57073", "ink maps to CAIP-2");
+}
+
 // 0d) The wallet path checks what it signs. A loopback seller records every
 // payment header; the server runs with a throwaway EVM key and a $0.01 cap.
 // An accept whose amount and maxAmountRequired differ is not priced, and a
