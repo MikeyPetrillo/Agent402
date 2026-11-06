@@ -3,6 +3,13 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 const ENTRIES = [
   {
     date: "2026-11-06",
+    title: "Stellar settle confirmation",
+    items: [
+      "Payments: a Stellar settle that the chain confirms is matched to the payment it signed: asset, amount and transaction, and each confirmed transaction serves one request.",
+    ],
+  },
+  {
+    date: "2026-11-06",
     title: "Router buyer price binding",
     items: [
       "Router: the router's buyer signs exactly the price it checked against its caps, on every challenge version, and refuses a seller accept whose price fields disagree; a live quote with disagreeing fields reads as unpriced.",
