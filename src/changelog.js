@@ -21,6 +21,7 @@ const ENTRIES = [
     items: [
       "Payments: a payment whose payload declares an x402 version other than the one this server offers is answered with the 402 offer instead of being matched.",
       "Payments: payment headers are read once at intake through one decoder and passed on in canonical form, so every check reads the same payment.",
+      "Payments: a Stellar payment's signed authorization is claimed before it settles, so one signed payment is served once.",
       "Payments: the Tempo buyer pays only challenges whose method details it recognizes.",
       "Payments: MPP subscription renewal reconciliation reads the renewal amount in base units and finds a renewal that landed after a timed-out send.",
       "Payments: MPP subscription activation signs with its own 25 s validity window, so a timed-out activation cannot land after its answer.",
@@ -32,6 +33,7 @@ const ENTRIES = [
       "Operations: the repo's paid buy scripts price offers from a known asset table, sign only the amount that passed their cap, and refuse a target outside this service unless told otherwise.",
       "Packages: viem is 2.57.16.",
       "Packages: agent402-client 0.8.23, agent402-mcp 0.13.29 and agent402-openclaw 0.5.9 price an offer by the field its challenge version signs, check the signed amount before sending, and openclaw removes its per-call cap only with an explicit acknowledgment.",
+      "Packages: agent402-client and agent402-mcp keep a sent payment's signed amount held against their caps until its authorization can no longer settle, and an error after sending reports the payment as unknown rather than unpaid.",
     ],
   },
   {

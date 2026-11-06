@@ -24,6 +24,8 @@ Payments:
   server offers is answered with the 402 offer instead of being matched.
 - Payment headers are read once at intake through one decoder and passed on
   in canonical form, so every check reads the same payment.
+- A Stellar payment's signed authorization is claimed before it settles, so
+  one signed payment is served once.
 - The Tempo buyer pays only challenges whose method details it recognizes.
 - MPP subscription renewal reconciliation reads the renewal amount in base
   units and finds a renewal that landed after a timed-out send.
@@ -57,6 +59,9 @@ Packages:
   price an offer by the field its challenge version signs, check the signed
   amount before sending, and openclaw removes its per-call cap only with an
   explicit acknowledgment.
+- agent402-client and agent402-mcp keep a sent payment's signed amount held
+  against their caps until its authorization can no longer settle, and an
+  error after sending reports the payment as unknown rather than unpaid.
 
 ### 2026-11-05 (Robinhood facilitator order, public-index disclosure, job buys)
 Payments:
