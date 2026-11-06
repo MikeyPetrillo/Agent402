@@ -71,7 +71,7 @@ export function ledgerPricingPage(baseUrl, catalog) {
   const gatewayRows = [
     ["/v1/metered/chat/completions - quoted per request, settles actual usage under the quote", gatewayPrice("/v1/metered/chat/completions", "from ")],
     ["/v1/metered/messages - Anthropic Messages wire, quoted per request", gatewayPrice("/v1/metered/messages", "from ")],
-    ["/v1/embeddings - default-on cache, free repeat", gatewayPrice("/v1/embeddings")],
+    ["/v1/embeddings - default-on cache, same payer's repeat free", gatewayPrice("/v1/embeddings")],
     ["/v1/nano/chat/completions - high-frequency agent loops", gatewayPrice("/v1/nano/chat/completions")],
     ["/v1/auto/chat/completions - model optional, eval-ranked routing", gatewayPrice("/v1/auto/chat/completions")],
     ["/v1/chat/completions - budget/mid models", gatewayPrice("/v1/chat/completions")],

@@ -47,7 +47,7 @@ const GATEWAY_ROWS = [
   { slug: "v1-chat-metered-responses", path: "/v1/metered/responses", note: (p) => `from ${p} &middot; the same pricing on the OpenAI Responses wire (Agents SDK, Codex CLI)` },
   { slug: "v1-chat", path: "/v1/chat/completions", note: (p, c) => `${p} &middot; base tier (${c.nano}&ndash;${c.premium} across the nano&hellip;premium paths)` },
   { slug: "v1-chat-auto", path: "/v1/auto/chat/completions", note: (p) => `${p} &middot; model optional, auto-routed` },
-  { slug: "v1-embeddings", path: "/v1/embeddings", note: (p) => `${p} &middot; free repeat within 10 min` },
+  { slug: "v1-embeddings", path: "/v1/embeddings", note: (p) => `${p} &middot; same payer's repeat free within 10 min` },
   { slug: "v1-images", path: "/v1/images/generations", note: (p) => `${p} per image` },
   { slug: "v1-audio-speech", path: "/v1/audio/speech", note: (p) => `${p} &middot; mp3/pcm bytes out` },
 ];

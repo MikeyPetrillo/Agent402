@@ -250,8 +250,8 @@ price per call whatever the length.
 | `POST /v1/grounded/chat/completions` | $0.03 | the auto router plus a live web search on every call - answers carry OpenAI-wire `url_citation` annotations; never cached |
 | `POST /v1/{nano,auto,pro,premium}/messages`, `POST /v1/messages` | tier price | the **Anthropic Messages wire** on every tier (same allowlist, caps and failover as the chat route); `effort` (low to max) is the depth control on Claude 4.7+, older Claude takes `thinking.budget_tokens` |
 | `POST /v1/{nano,auto,pro,premium}/responses`, `POST /v1/responses` | tier price | the **OpenAI Responses wire** on every tier (function tools only, no server state) |
-| `POST /v1/embeddings` | $0.002 | OpenAI embeddings, batch up to 64 inputs - identical repeats are **free**: the repeat's payment is not charged, except a Tempo transfer sent before the call, which is final when sent (deterministic output, cache default-on) |
-| `POST /v1/rerank` | $0.002 | Cohere-compatible rerank (`{query, documents[], top_n}`), up to 50 documents, cache default-on |
+| `POST /v1/embeddings` | $0.002 | OpenAI embeddings, batch up to 64 inputs - an identical repeat from the payer that paid for it is **free** (deterministic output, cache default-on; scope below) |
+| `POST /v1/rerank` | $0.002 | Cohere-compatible rerank (`{query, documents[], top_n}`), up to 50 documents, cache default-on (scope below) |
 | `POST /v1/images/generations` | $0.08 | image generation (FLUX.2 Pro, 1024x1024 PNG) - OpenAI images wire, inline base64 out |
 | `POST /v1/images/fast` | $0.02 | budget text-to-image, same OpenAI images wire, about two seconds a picture |
 | `POST /v1/images/pro` | $0.05 | higher-fidelity text-to-image, one picture a call |
@@ -259,9 +259,13 @@ price per call whatever the length.
 | `POST /v1/audio/speech` | $0.06 | text-to-speech, OpenAI `audio.speech.create()` wire - up to 2,000 chars in, raw mp3 (default) or pcm bytes out, five-model failover chain |
 
 Streaming (`stream: true`), full tools/function-calling passthrough, an opt-in
-prompt cache on the chat tiers (`cache: true` → byte-identical repeats free for
-10 minutes; the repeat's payment is not charged, except a Tempo transfer sent before
-the call, which is final when sent), upstream failover chains that end in a canary-proven model, and a
+prompt cache on the chat tiers (`cache: true` → a byte-identical repeat within
+10 minutes is free to the payer that paid for it, on a fresh payment of its own: an
+x402 v2 `exact` payment signed by the paying wallet's own key, a verified Tempo sender,
+or the same credits key; the repeat's payment is not charged, except a Tempo transfer
+sent before the call, which is final when sent; other payers and payment methods,
+including Solana, Stellar, Algorand, Permit2/`upto`, x402 v1 and contract wallets, are
+charged on each call; the same rule covers the embeddings and rerank caches), upstream failover chains that end in a canary-proven model, and a
 free [`GET /v1/models`](https://agent402.tools/v1/models) listing every model with
 its tier and caps. A real-money canary buys the core surfaces daily (the chat
 tiers, the messages and responses wires, embeddings, rerank, image generation
