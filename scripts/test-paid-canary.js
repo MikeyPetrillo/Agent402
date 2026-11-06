@@ -159,8 +159,8 @@ ok(classifyRailOutcome({ toolBroken: true, railFailures: [] }) === "broken", "to
   const capped = (src.match(/guardCappedSigning\([a-zA-Z]*[cC]lient, \{ \.\.\.capOpts/g) || []).length;
   ok(built >= 5 && capped === built, `every client built with the library control off gets the capped-signing guard (${capped} of ${built})`);
   ok(/const TARGET = assertOwnPaidTarget\(/.test(src), "the canary pays only our own service");
-  const ink = { scheme: "exact", network: "eip155:57073", asset: CANARY_EXTRA_ASSETS["eip155:57073"][0].asset, payTo: "0x000000000000000000000000000000000000dEaD", amount: "1000", maxTimeoutSeconds: 60, extra: { name: "USDC", version: "2" } };
-  ok(checkAccept(2, ink, { maxUsd: CANARY_MAX_USD_DEFAULT, networks: ["eip155:57073"], extraAssets: CANARY_EXTRA_ASSETS }).ok, "the gated Ink leg prices from the asset the canary names in code");
+  const ink = { scheme: "exact", network: "eip155:57073", asset: "0x2D270e6886d130D724215A266106e6832161EAEd", payTo: "0x000000000000000000000000000000000000dEaD", amount: "1000", maxTimeoutSeconds: 60, extra: { name: "USDC", version: "2" } };
+  ok(checkAccept(2, ink, { maxUsd: CANARY_MAX_USD_DEFAULT, networks: ["eip155:57073"], extraAssets: CANARY_EXTRA_ASSETS }).ok, "the Ink leg prices from the shared known-assets table");
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

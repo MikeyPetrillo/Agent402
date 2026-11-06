@@ -183,5 +183,13 @@ let html = "";
 try { html = String(await ledgerLeaderboardPage({ snapshot: { rows: [], totalSellers: 0, asOf: new Date(clock).toISOString(), windowLabel: "7d" } }) || ""); } catch { html = ""; }
 ok(html.length > 1000 && /every 4 hours/.test(html) && /EVERY 4H/.test(html) && !/\$\{/.test(html), "the rendered leaderboard page says every 4 hours with no unrendered template text");
 
+// The status Worker pages on the word: stale pages, fresh and due clear, cold and absent do neither.
+{
+  const { ALARMS, judge } = await import("../workers/status-probe/src/index.js");
+  const TITLE = "Live revenue read is stale";
+  const j = (gw) => judge({ gateway: gw })[TITLE];
+  ok(ALARMS.some((a) => a.title === TITLE) && j({ revenueLive: { status: "stale" } }) === "bad" && j({ revenueLive: { status: "fresh" } }) === "good" && j({ revenueLive: { status: "due" } }) === "good" && j({ revenueLive: { status: "cold" } }) === "quiet" && j({}) === "quiet", "status Worker: stale pages, fresh and due clear, cold and absent do neither");
+}
+
 console.log(`\ntest-revenue-shared-scan: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

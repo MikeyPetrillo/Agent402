@@ -811,8 +811,8 @@ export const CHAIN_FUNDING = [
   { key: "optimism", label: "Optimism", token: "0x0b2c639c533813f4aa9d7837caf62653d097ff85", rpcs: ["https://mainnet.optimism.io", "https://optimism-rpc.publicnode.com"] },
   { key: "arc", label: "Arc", token: "0x3600000000000000000000000000000000000000", rpcs: ["https://rpc.mainnet.arc.io"] },
   { key: "robinhood", label: "Robinhood Chain (USDG)", token: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168", rpcs: ["https://rpc.mainnet.chain.robinhood.com"] },
-  // Ink (gated rail): read only while CANARY_INK=true (the workflow sets it
-  // from the Ink facilitator list secret), so an unfunded wallet never pages.
+  // Ink: read only while CANARY_INK=true (the workflow sets it from the Ink
+  // facilitator Actions secret), so the leg and its balance check run together.
   ...(process.env.CANARY_INK === "true" ? [{ key: "ink", label: "Ink", token: "0x2D270e6886d130D724215A266106e6832161EAEd", rpcs: ["https://rpc-qnd.inkonchain.com", "https://rpc-gel.inkonchain.com"] }] : []),
   // Tempo: the 2-hourly tempo-volume.yml buys from this burner every day, so
   // its low-water is higher than the one-buy legs use. Funded in USDC.e since
@@ -952,9 +952,9 @@ async function stellarDebitedSince(payer, sinceMs, { waitMs = 20_000, stepMs = 3
 // src/x402-spend-controls.js), so this cap is what bounds a signature; it sits
 // above every leg's list price (scripts/test-paid-canary.js pins that).
 export const CANARY_MAX_USD_DEFAULT = 0.5;
-// Ink is a gated rail the shared known-assets table does not list; its USDC
-// address is the one src/payments.js offers, named here in code.
-export const CANARY_EXTRA_ASSETS = Object.freeze({ "eip155:57073": [{ asset: "0x2D270e6886d130D724215A266106e6832161EAEd", decimals: 6 }] });
+// Extra assets the shared known-assets table does not list (none since Ink
+// joined it; kept for a future rail ahead of its package release).
+export const CANARY_EXTRA_ASSETS = Object.freeze({});
 
 // --- CLI (network). Importing this module for tests does NOT run any of this. ---
 async function main() {
