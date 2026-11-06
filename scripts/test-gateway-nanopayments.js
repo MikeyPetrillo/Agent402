@@ -1549,14 +1549,16 @@ await check("agent402-client with the gateway option pays the batched accept and
     const before = sales(port).length;
     await assert.rejects(buyer.call("demand-radar", { limit: 2 }), (e) => {
       assert.equal(e.status, 402);
-      assert.equal(e.paid, false);
+      // The signed authorization was sent, so the client cannot know it will
+      // never settle: it is reported as unknown and stays held, not unpaid.
+      assert.equal(e.paid, "unknown");
       assert.match(e.message, /Circle Gateway balance holds less than this call costs/, `the server's hint names the Gateway balance (${e.message})`);
       assert.match(e.message, /deposit through Circle's GatewayWallet contract/, "and the client says to deposit first");
       return true;
     });
     assert.equal(st.gwHits.filter((h) => h.url === "/v1/x402/settle").length, 0, "nothing was settled");
     assert.equal(sales(port).length, before, "nothing was booked");
-    assert.equal(buyer.spendingSummary().dailyUsd, Number((rows[0].price_usd * 2).toFixed(6)), "the refused authorization was sent and stays counted against the caps");
+    { const sum = buyer.spendingSummary(); assert.equal(sum.dailyUsd, Number((rows[0].price_usd * 1).toFixed(6)), "settled spend counts only the settled calls"); assert.ok(sum.heldUsd >= rows[0].price_usd - 1e-9, `the refused authorization was sent and stays held against the caps (held ${sum.heldUsd})`); }
     st.gwVerify = "ok";
     // settlement_pending: the server books the payment and asks for the same
     // header after Retry-After; the client resends it and is served once.
