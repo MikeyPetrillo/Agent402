@@ -9,13 +9,14 @@ import { createHash } from "node:crypto";
 
 // The date follows the text a reader sees with every optional switch off: a
 // paragraph shown only while a switch is on (the Circle Gateway batched
-// option, the public settlement index) moves the sha, not the date, until
-// that switch ships on. While the public settlement index disclosure renders,
+// option, the public settlement index, the direct inference upstream's
+// sentence, Third parties item and location exception) moves the sha, not
+// the date, until that switch ships on. While the public settlement index disclosure renders,
 // each page prints the later of this date and FACILITATOR_PUBLIC_INDEX_SINCE
 // (scripts/test-public-index-copy.js).
 const PINS = {
   "src/terms.js": { date: "2026-11-04", sha: "15ae39faaea64526" },
-  "src/privacy.js": { date: "2026-11-05", sha: "8cfbf286520ac8a4" },
+  "src/privacy.js": { date: "2026-11-05", sha: "69d4fcf444dee09f" },
 };
 let pass = 0, fail = 0;
 const TODAY = new Date().toISOString().slice(0, 10);

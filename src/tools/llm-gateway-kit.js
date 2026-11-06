@@ -54,6 +54,7 @@ import { gatewaySettleBreakerCheck } from "../gateway-settle-breaker.js";
 import { clientGoneSignal } from "../drain-abort.js";
 import { directUpstreamConfig, withDirectAttempts, directBodyFrom, directShareDraw, directCostUsd, stripVendorExtensions, noteDirectAb, noteDirectSkip, noteDirectAnomaly, failureBucket, directModelFor, directBreakerAllows, noteDirectOutcome } from "../gateway-direct-upstream.js";
 import { directPriceDecision, noteDirectMeasure } from "../gateway-direct-pricebook.js";
+import { readBytesCapped, declaredLength, discardBody } from "../capped-body.js";
 import { clientGoneError } from "../hangup-settlement.js";
 import { evmCredentialSettleableMs } from "../evm-validity.js";
 import { cdnSyncLeftMs } from "../cdn-sync-window.js";
@@ -2726,18 +2727,37 @@ function directStatusFailure(status) {
   if (status === 503) return directFailure("Direct upstream has no qualifying worker", 503, "unavailable");
   if (status >= 500) return directFailure(`Direct upstream error (HTTP ${status})`, 502, "server_error");
   if (status === 401 || status === 403) return directFailure("Direct upstream auth failed", 502, "auth");
+  // A fixed endpoint that is not there is the upstream's state, not the buyer's request.
+  if (status === 404 || status === 405) return directFailure(`Direct upstream endpoint missing (HTTP ${status})`, 502, "not_found");
+  // Any other 4xx refuses the request itself (a parameter out of range, a
+  // prompt over the context): walked on, and not counted by the breaker.
   return directFailure(`Direct upstream refused the request (HTTP ${status})`, 502, "refused");
+}
+/** Bound on a non-stream direct answer body (DIRECT_UPSTREAM_MAX_BYTES,
+ *  default 4 MB, at least 64 KB). A larger body is a failed attempt. */
+export function directMaxBytes() {
+  const n = parseInt(String(process.env.DIRECT_UPSTREAM_MAX_BYTES ?? "").trim(), 10);
+  return Number.isFinite(n) && n >= 64 * 1024 ? n : 4 * 1024 * 1024;
 }
 export async function callDirectUpstream(body, { timeoutMs, servedModel, cfg = directUpstreamConfig() } = {}) {
   let res;
   try {
     res = await fetchDirectUpstream(body, { timeoutMs, cfg });
-    if (!res.ok) { await res.text().catch(() => ""); throw directStatusFailure(res.status); }
+    if (!res.ok) { discardBody(res); throw directStatusFailure(res.status); }
     // A call running past the upstream's keep-alive threshold answers 200 with
     // leading whitespace and may carry a late error in the BODY: parse the
-    // trimmed text and treat any error object as a failed attempt.
+    // trimmed text and treat any error object as a failed attempt. The body is
+    // read under a byte cap; a larger one is a malformed answer.
+    const cap = directMaxBytes();
+    const declared = declaredLength(res);
+    if (declared !== null && declared > cap) { discardBody(res); throw directFailure("Direct upstream answer over the size cap", 502, "malformed"); }
     let text;
-    try { text = await res.text(); } catch (e) {
+    try {
+      const { bytes, truncated } = await readBytesCapped(res, cap);
+      if (truncated) throw directFailure("Direct upstream answer over the size cap", 502, "malformed");
+      text = bytes.toString("utf8");
+    } catch (e) {
+      if (e?.directFallback) throw e;
       if (e?.name === "TimeoutError" || e?.name === "AbortError") throw directFailure("Direct upstream timed out", 504, "timeout", { upstreamTimeout: true });
       throw directFailure("Direct upstream body read failed", 502, "connect");
     }
@@ -2766,7 +2786,7 @@ export async function streamDirectUpstreamTo(body, res, { onUsage, timeoutMs, cf
       onUsage, timeoutMs, vendorKeys: true, errorFrameFails: true, modelAs,
       fetchUpstream: async (b, { signal }) => {
         const r = await fetchDirectUpstream(b, { signal, cfg });
-        if (!r.ok) { await r.text().catch(() => ""); throw directStatusFailure(r.status); }
+        if (!r.ok) { discardBody(r); throw directStatusFailure(r.status); }
         return r;
       },
     });
@@ -3813,11 +3833,11 @@ function makeHandler(routeTier) {
     // Direct upstream (src/gateway-direct-upstream.js): off unless configured,
     // and then one extra attempt before the first OpenRouter attempt of each
     // listed model. It is taken only when the request uses nothing outside the
-    // direct allowlist, the cost guard (src/gateway-direct-pricebook.js) reads
-    // this call as cheaper there than on OpenRouter's cheapest routable
-    // endpoint under this call's provider.max_price, the A/B draw picks it,
-    // and the direct breaker is closed (consecutive direct failures open it
-    // for a while); every failure walks on. The guard reads only the
+    // direct allowlist, the eligibility check (src/gateway-direct-pricebook.js)
+    // passes for this call against the listed prices of both routes (OpenRouter's
+    // routable endpoints under this call's provider.max_price), the A/B draw
+    // picks it, and the direct breaker lets it through (consecutive counted
+    // direct failures open it for a while); every failure walks on. The guard reads only the
     // background price book: nothing is fetched here. The input estimate is
     // the one the margin clamp already made for this link (metered links,
     // which skip the clamp, estimate the direct body here).
@@ -3873,7 +3893,10 @@ function makeHandler(routeTier) {
                 if (directBody) noteDirectOutcome(false, failureBucket(e));
                 if (res.headersSent || ![502, 503, 504].includes(e?.statusCode)) throw e;
                 if (!directBody || !lastErr) lastErr = e;
-                timeouts.note(e, attemptStarted, timeoutMs);
+                // A direct attempt's timeout is not one of the buyer's timed-out
+                // attempts: it is bounded by its own timeout, the payment window
+                // and the breaker, and OpenRouter keeps its full budget.
+                if (!directBody) timeouts.note(e, attemptStarted, timeoutMs);
                 if (timeouts.spent()) throw e;
               }
             }
@@ -3915,6 +3938,7 @@ function makeHandler(routeTier) {
         // the raw SSE passes through and finish_reason discloses.
         if (isEmptyRefusal(data)) {
           if (abListed) noteDirectAb(abLabel, { ok: false, reason: "empty_refusal" });
+          if (directBody) noteDirectOutcome(false, "empty");
           lastErr = bad("Upstream declined the request (safety filter) - rephrase the prompt, or pick a different model", 502);
           // A direct attempt's empty answer is a direct failure: the same
           // model is still tried on OpenRouter. Only an OpenRouter empty
@@ -3927,6 +3951,7 @@ function makeHandler(routeTier) {
           // output tokens). Never serve a paid empty 200: try the next link
           // (flex->default first, then the chain); end-to-end empty is a 502.
           if (abListed) noteDirectAb(abLabel, { ok: false, reason: "empty_length" });
+          if (directBody) noteDirectOutcome(false, "empty");
           lastErr = bad("Upstream produced no content within the output cap (reasoning consumed it) - raise max_tokens, lower reasoning.effort, or pick a non-reasoning model", 502);
           if (!directBody) refusedModel = model; // same model + same effort on the default tier would be empty too - don't pay twice
           continue;
@@ -3990,7 +4015,8 @@ function makeHandler(routeTier) {
         if (directBody) noteDirectOutcome(false, failureBucket(e));
         if (![502, 503, 504].includes(e?.statusCode)) throw e;
         if (!directBody || !lastErr) lastErr = e;
-        timeouts.note(e, attemptStarted, timeoutMs);
+        // Not counted for a direct attempt (see the stream walk above).
+        if (!directBody) timeouts.note(e, attemptStarted, timeoutMs);
         if (timeouts.spent()) throw e;
       }
     }

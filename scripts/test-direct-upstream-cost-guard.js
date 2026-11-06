@@ -1,13 +1,13 @@
-// The direct upstream's cost guard (src/gateway-direct-pricebook.js) on the
+// The direct upstream's price guard (src/gateway-direct-pricebook.js) on the
 // chat wire (src/tools/llm-gateway-kit.js). Two stubs on 127.0.0.1 (port 0):
 // the direct upstream (its public GET /v1/models listing and its chat route)
 // and OpenRouter (GET /api/v1/models/<id>/endpoints and its chat route).
 // Pins:
-//   - a call cheaper per call on the direct upstream's listed prices goes direct;
-//   - a call cheaper there on input only but dearer per call stays on OpenRouter;
+//   - a call that passes the per-call comparison of listed prices goes direct;
+//   - a call that passes on input only but not per call stays on OpenRouter;
 //   - priority-tier endpoints and endpoints above the call's max_price are not
-//     "the cheapest routable endpoint";
-//   - the minimum saving share is respected, from env and from the cost table;
+//     "the lowest routable endpoint";
+//   - the threshold is respected, from env and from the cost table;
 //   - an unread, unreadable, stale, unlisted, zero, negative or per-request-fee
 //     listing, or no routable endpoint, keeps the call on OpenRouter;
 //   - the measured backstop scores each answer against its own upstream's listed
@@ -141,7 +141,7 @@ ok(PB.directUpstreamWord() === "starting", "configured, no refresh yet: the word
 ok(await served() === "openrouter" && skipped().price_unreadable === 1, "no price book yet: the call goes to OpenRouter (a price_unreadable skip)");
 ok(direct.gets.length === 0 && or.gets.length === 0, "the request path fetched no listing");
 
-// ---- direct cheaper per call --------------------------------------------------------
+// ---- direct passes per call ----------------------------------------------------------
 setListing(listed(2, 4));
 setEndpoints([[4, 8]]);
 {
@@ -153,64 +153,66 @@ setEndpoints([[4, 8]]);
 {
   const gets = direct.gets.length + or.gets.length;
   const mark = fetchLog.length;
-  ok(await served() === "direct", "direct cheaper on both units: the call goes direct");
+  ok(await served() === "direct", "direct passes on both units: the call goes direct");
   ok(await served({ stream: false, max_tokens: 50 }) === "direct", "and at another output size");
   ok(direct.gets.length + or.gets.length === gets && fetchLog.length - mark === 2 && !fetchLog.slice(mark).some((u) => /\/models/.test(u)), "no listing is fetched on the request path (two calls, two chat fetches)");
 }
-// A priority endpoint far cheaper than direct is not routable for a default call.
+// A priority endpoint far below direct is not routable for a default call.
 setEndpoints([[4, 8], [1, 1, "prov/fast"], [1, 1, "prov/priority"], [1, 1, "prov/ultrafast"]]);
 await quietRefresh();
-ok(await served() === "direct", "priority-tier endpoints are not the cheapest routable endpoint");
+ok(await served() === "direct", "priority-tier endpoints are not the lowest routable endpoint");
 
-// ---- cheaper on input only, dearer per call ---------------------------------------------
+// ---- passes on input only, not per call -------------------------------------------------
 setListing(listed(1, 10));
 setEndpoints([[5, 5]]);
 {
   const r = await quietRefresh();
-  ok(await served() === "openrouter" && skipped().not_cheaper === 1, "direct cheaper on input only but dearer per call: OpenRouter (a not_cheaper skip)");
+  ok(await served() === "openrouter" && skipped().not_cheaper === 1, "direct passes on input only but not per call: OpenRouter (a not_cheaper skip)");
   ok(r.word === "ok" && await served({ max_tokens: 1 }) === "direct", "the same prices still win an input-heavy call, so the model-level word stays ok");
 }
 setListing(listed(1, 30));
 {
   const r = await quietRefresh();
-  ok(await served() === "openrouter" && await served({ max_tokens: 50 }) === "openrouter", "dearer at the reference shapes: OpenRouter");
-  ok(r.word === "degraded" && PB.directUpstreamWord() === "degraded" && PB.directUpstreamState().reason === "listed_prices" && /^\[direct-upstream\] price book: degraded \(listed_prices\)$/.test(r.lines[0] || ""), "no reference shape passes: the word reads degraded, the log names the reason code");
-  ok(JSON.stringify(PB.directUpstreamStatus()) === '{"status":"degraded"}' && JSON.stringify(PB.directUpstreamStatus({ full: true })) === '{"status":"degraded","reason":"listed_prices"}', "the public status is the word only; the operator read adds the reason code");
+  ok(await served() === "openrouter" && await served({ max_tokens: 50 }) === "openrouter", "fails at the reference shapes: OpenRouter");
+  // Routing working as designed is not an outage: the word stays ok (nothing
+  // pages), and the reason code is on the operator read and the log only.
+  ok(r.word === "ok" && PB.directUpstreamWord() === "ok" && PB.directUpstreamState().reason === "listed_prices" && /^\[direct-upstream\] price book: ok \(listed_prices\)$/.test(r.lines[0] || ""), `no reference shape passes: the word reads ok, the log names the reason code (${r.word}, ${r.lines[0]})`);
+  ok(JSON.stringify(PB.directUpstreamStatus()) === '{"status":"ok"}' && JSON.stringify(PB.directUpstreamStatus({ full: true })) === '{"status":"ok","reason":"listed_prices"}', "the public status is the word only (ok); the operator read adds the reason code");
 }
-// Per-call, not per-price: an endpoint cheapest on input but dear on output does not make direct dearer.
+// Per-call, not per-price: an endpoint lowest on input but high on output does not fail direct.
 setListing(listed(3, 3));
 setEndpoints([[1, 9], [6, 6]]);
 await quietRefresh();
-ok(await served() === "direct", "direct dearer than the cheapest-input endpoint on prompt, still cheaper per call: direct");
+ok(await served() === "direct", "direct above the lowest-input endpoint on prompt, still passes per call: direct");
 
 // ---- max_price filter (decision unit) ---------------------------------------------------
 PB._resetDirectPriceBookForTest();
 PB._seedDirectPriceBookForTest({ [MODEL]: { direct: { prompt: 4 * UNIT, completion: 4 * UNIT }, endpoints: [{ prompt: UNIT, completion: 20 * UNIT }, { prompt: 5 * UNIT, completion: 5 * UNIT }] } });
 {
   const shape = { inputTokens: 1000, outputTokens: 10 };
-  ok(!PB.directPriceDecision(MODEL, shape).go, "input-heavy call: the input-cheap endpoint wins, direct is not cheaper");
+  ok(!PB.directPriceDecision(MODEL, shape).go, "input-heavy call: the low-input endpoint wins, direct does not pass");
   ok(PB.directPriceDecision(MODEL, { ...shape, maxPrice: { prompt: 10 * UNIT, completion: 10 * UNIT } }).go, "the same call under a max_price that refuses that endpoint: direct");
   ok(PB.directPriceDecision(MODEL, { ...shape, maxPrice: { prompt: UNIT / 2, completion: UNIT / 2 } }).skip === "price_no_endpoint", "a max_price that refuses every endpoint: OpenRouter (price_no_endpoint)");
   ok(PB.directPriceDecision(MODEL, { inputTokens: 0, outputTokens: 10 }).skip === "price_estimate" && PB.directPriceDecision(MODEL, { inputTokens: 10, outputTokens: NaN }).skip === "price_estimate", "a missing or zero estimate: OpenRouter");
 }
 
-// ---- the minimum saving share -------------------------------------------------------------
+// ---- the threshold ------------------------------------------------------------------------
 setListing(listed(2, 4));
 setEndpoints([[4, 8]]); // direct costs half of OpenRouter at every shape
 await quietRefresh();
 setEnv({ ...ON, DIRECT_UPSTREAM_MIN_SAVING_PCT: "40" });
-ok(await served() === "direct", "saving share 40% (env): half the cost clears it, direct");
+ok(await served() === "direct", "threshold 40% (env): half clears it, direct");
 setEnv({ ...ON, DIRECT_UPSTREAM_MIN_SAVING_PCT: "60" });
-ok(await served() === "openrouter" && skipped().not_cheaper === 1, "saving share 60% (env): half the cost does not clear it, OpenRouter");
+ok(await served() === "openrouter" && skipped().not_cheaper === 1, "threshold 60% (env): half does not clear it, OpenRouter");
 const { DIRECT_UPSTREAM_MIN_SAVING_PCT: _drop, ...ON_NO_PCT } = ON;
 setEnv(ON_NO_PCT);
 U.setUpstreamCostsForTest(tableWith(0.6));
-ok(await served() === "openrouter", "saving share from the cost table (no env): above the saving, OpenRouter");
+ok(await served() === "openrouter", "threshold from the cost table (no env): not cleared, OpenRouter");
 U.setUpstreamCostsForTest(tableWith(0.4));
-ok(await served() === "direct", "saving share from the cost table: under it, direct");
+ok(await served() === "direct", "threshold from the cost table: cleared, direct");
 U.setUpstreamCostsForTest(tableWith(undefined));
-ok(PB.minSavingFraction() === 0 && await served() === "direct", "neither env nor table: strictly cheaper is enough");
-ok(PB.minSavingFraction({ DIRECT_UPSTREAM_MIN_SAVING_PCT: "abc" }) === 0 && PB.directPriceBookBootWarnings({ DIRECT_UPSTREAM_MIN_SAVING_PCT: "abc" }).length === 1 && PB.directPriceBookBootWarnings({}).length === 0, "an invalid env share is ignored with a boot warning");
+ok(PB.minSavingFraction() === 0 && await served() === "direct", "neither env nor table: a threshold of 0");
+ok(PB.minSavingFraction({ DIRECT_UPSTREAM_MIN_SAVING_PCT: "abc" }) === 0 && PB.directPriceBookBootWarnings({ DIRECT_UPSTREAM_MIN_SAVING_PCT: "abc" }).length === 1 && PB.directPriceBookBootWarnings({}).length === 0, "an invalid env threshold is ignored with a boot warning");
 setEnv(ON);
 
 // ---- fail closed ---------------------------------------------------------------------------
@@ -227,7 +229,8 @@ const failClosed = async (label, prep, reason, skip) => {
     for (let i = 0; i < PB.PRICE_RETRY_BACKOFF_MS.length; i++) words.push((await quietRefresh()).word);
     ok(words.slice(0, -1).every((w) => w === "starting") && words.at(-1) === "degraded", `${label}: starting through ${PB.PRICE_RETRY_BACKOFF_MS.length} retries, then degraded (${words.join(",")})`);
   }
-  ok(PB.directUpstreamWord() === "degraded" && PB.directUpstreamState().reason === reason && !/\d/.test(r.lines.join("")), `${label}: the word reads degraded (${reason}), the log carries no figure`);
+  const word = PB.DEGRADED_REASONS.includes(reason) ? "degraded" : "ok";
+  ok(PB.directUpstreamWord() === word && PB.directUpstreamState().reason === reason && !/\d/.test(r.lines.join("")), `${label}: the word reads ${word} (${reason}), the log carries no figure`);
 };
 await failClosed("listing answers 500", () => setListing(null, { status: 500, raw: { error: "x" } }), "book_unreadable", "price_unreadable");
 await failClosed("listing is not JSON", () => setListing(null, { raw: "<html>" }), "book_unreadable", "price_unreadable");
@@ -241,6 +244,32 @@ await failClosed("a per-request fee", () => setListing(listed(2, 4, { request: p
 await failClosed("only priority endpoints", () => setEndpoints([[4, 8, "p/fast"]]), "listed_prices", "price_no_endpoint");
 // A listing body over the byte cap is a failed read, whatever it says.
 await failClosed("listing over the byte cap", () => { setEnv({ ...ON, DIRECT_UPSTREAM_PRICE_MAX_BYTES: "2048" }); setListing(null, { raw: { data: [{ id: MAPPED, pricing: listed(2, 4), pad: "x".repeat(4096) }] } }); }, "book_unreadable", "price_unreadable");
+// The cap holds on each of its two checks: a body declaring more than the cap
+// is refused before it is read, and a body with no declared length is cut off
+// at the cap even when the bytes under it would parse. Either way the book keeps
+// its last good read (a listing that would change the decision is not taken).
+{
+  setEnv({ ...ON, DIRECT_UPSTREAM_PRICE_MAX_BYTES: "2048" });
+  PB._resetDirectPriceBookForTest();
+  setListing(listed(2, 4)); setEndpoints([[4, 8]]);
+  await quietRefresh();
+  const good = JSON.stringify(PB.directPriceBookReport().models[MODEL].direct);
+  ok(await served() === "direct", "cap: a good read first, direct");
+  const flipped = JSON.stringify({ data: [{ id: MAPPED, pricing: listed(1, 30) }] });
+  const modelsUrl = `${ON.DIRECT_UPSTREAM_URL}/models`;
+  const refreshWith = async (make) => {
+    const log = console.log; console.log = () => {};
+    try { await PB.refreshDirectPriceBook({ fetchImpl: async (url, init) => (String(url) === modelsUrl ? make() : globalThis.fetch(url, init)) }); } finally { console.log = log; }
+  };
+  const book = () => JSON.stringify(PB.directPriceBookReport().models[MODEL].direct);
+  const streak0 = PB.directPriceBookReport().failStreak;
+  await refreshWith(() => new Response(flipped, { headers: { "content-type": "application/json", "content-length": "999999" } }));
+  ok(book() === good && PB.directPriceBookReport().failStreak === streak0 + 1 && await served() === "direct", "cap: a body declaring more than the cap is a failed read; the book keeps its last good read");
+  await refreshWith(() => new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(flipped + " ".repeat(4096))); c.close(); } }), { headers: { "content-type": "application/json" } }));
+  ok(book() === good && PB.directPriceBookReport().failStreak === streak0 + 2 && await served() === "direct", "cap: a body with no declared length over the cap is a failed read (its first bytes would parse); the book keeps its last good read");
+  await refreshWith(() => new Response(flipped + " ".repeat(64), { headers: { "content-type": "application/json" } }));
+  ok(book() !== good && PB.directPriceBookReport().failStreak === 0 && await served() === "openrouter", "cap control: the same listing under the cap is read and changes the decision");
+}
 setEnv(ON);
 {
   // The retry schedule: 1, 2, 5 minutes after consecutive failed refreshes, then none.
@@ -293,12 +322,12 @@ setEnv(ON);
   await quietRefresh();
   reset();
   await (await call({ stream: true })).__sse(fakeRes());
-  ok(direct.hits.length === 1 && or.hits.length === 0, "stream, cheaper: direct");
+  ok(direct.hits.length === 1 && or.hits.length === 0, "stream, passes: direct");
   setListing(listed(1, 10)); setEndpoints([[5, 5]]);
   await quietRefresh();
   reset();
   await (await call({ stream: true })).__sse(fakeRes());
-  ok(direct.hits.length === 0 && or.hits.length === 1 && skipped().not_cheaper === 1, "stream, dearer per call: OpenRouter");
+  ok(direct.hits.length === 0 && or.hits.length === 1 && skipped().not_cheaper === 1, "stream, fails per call: OpenRouter");
   direct.plan = prevD; or.plan = prevO;
 }
 
@@ -318,7 +347,7 @@ setEnv(ON);
   or.plan = (req, res, body) => json(res, 200, answer(body?.model, { ...TOK, cost: orRatio * listedCall(4, 8) }));
   // Unlike traffic: direct serves short-in long-out calls, OpenRouter input-heavy ones,
   // each at exactly its own listed price. Not a reason to block (a per-1k figure read
-  // these as direct dearer).
+  // these as direct failing).
   const textCall = { prompt_tokens: 100, completion_tokens: 1000 }, toolCall = { prompt_tokens: 10000, completion_tokens: 100 };
   for (let i = 0; i < 30; i++) { PB.noteDirectMeasure(MODEL, "direct", textCall, listedCall(2, 4, textCall)); PB.noteDirectMeasure(MODEL, "openrouter", toolCall, listedCall(4, 8, toolCall)); }
   {
@@ -329,14 +358,14 @@ setEnv(ON);
   PB._resetDirectPriceBookForTest();
   setListing(listed(2, 4)); setEndpoints([[4, 8]]);
   await quietRefresh();
-  // Direct bills three times its listing: half the listed cost scaled by three is dearer.
+  // Direct bills three times its listing: half the listed figure scaled by three fails.
   directRatio = 3;
   let directServed = 0;
   for (let i = 0; i < 30; i++) if (await served() === "direct") directServed++;
   ok(directServed === 30, "under the minimum sample the listing stands: 30 calls go direct");
   ok(await served() === "openrouter" && skipped().measured_not_cheaper === 1, "30 direct samples at three times its listing: OpenRouter (a measured_not_cheaper skip)");
-  ok(PB.directUpstreamWord() === "degraded" && PB.directUpstreamState().reason === "measured_cost" && PB.directPriceBookReport().models[MODEL].measured.blocked === true, "blocked: the word reads degraded (measured_cost)");
-  // OpenRouter's own answers bill twice its cheapest listing: once sampled, it scales too.
+  ok(PB.directUpstreamWord() === "ok" && JSON.stringify(PB.directUpstreamStatus()) === '{"status":"ok"}' && PB.directUpstreamState().reason === "measured_cost" && PB.directPriceBookReport().models[MODEL].measured.blocked === true, "blocked: the word reads ok, the reason (measured_cost) on the operator read only");
+  // OpenRouter's own answers bill twice its lowest listing: once sampled, it scales too.
   orRatio = 2;
   let back = -1;
   for (let i = 0; i < 40 && back < 0; i++) if (await served() === "direct") back = i;
@@ -406,7 +435,7 @@ setEnv({});
     const j = await r.json().catch(() => ({}));
     const row = j.priceBook?.models?.[MODEL];
     ok(r.status === 200 && j.priceBook?.word === "ok" && row?.state === "ok" && Math.abs(row.direct.prompt - 2 * UNIT) < 1e-9 && Math.abs(row.openrouter.cheapestCompletion - 8 * UNIT) < 1e-9, "the operator view carries the listed figures");
-    ok(typeof row?.measured?.minSample === "number" && typeof j.priceBook.minSaving === "number" && typeof j.breaker?.threshold === "number", "and the measure, the saving share and the breaker");
+    ok(typeof row?.measured?.minSample === "number" && typeof j.priceBook.minSaving === "number" && typeof j.breaker?.threshold === "number", "and the measure, the threshold and the breaker");
     ok(!JSON.stringify(pub).includes(perToken(2)) && !/[0-9]\.[0-9]{3,}/.test(JSON.stringify(pub.directUpstream)), "the public view carries no figure");
     const all = log.join("");
     ok(/\[direct-upstream\] price book: ok/.test(all) && ![2, 4, 8].some((u) => all.includes(perToken(u))) && !/cheap/i.test(all.split("\n").filter((l) => l.includes("[direct-upstream]")).join("")), "the boot log names the word and no price");
