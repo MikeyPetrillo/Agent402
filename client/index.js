@@ -131,7 +131,21 @@ export function signedValidUntilMs(paymentPayload) {
 /** A spend-log entry the caps still count at `now`: anything recorded inside
  *  the rolling window, and a held payment whose authorization can still
  *  settle, however long ago it was signed. */
-const countsAt = (e, now) => e.ts >= now - SPEND_WINDOW_MS || (e.state === "held" && e.until != null && e.until > now);
+const countsAt = (e, now) => e.state === "held" && e.ownHost
+  ? e.until > now
+  : e.ts >= now - SPEND_WINDOW_MS || (e.state === "held" && e.until != null && e.until > now);
+
+// The client's built-in seller. It settles a payment only on an answer below
+// 400 (the handler runs first), so a sent payment it answered with an error
+// status was not settled and can be redeemed only until its authorization
+// expires: such a hold ends at that expiry plus HOLD_SLACK_MS, with no 24 h
+// floor, or DEFAULT_HOST_BLIND_HOLD_MS after the answer when the expiry is not
+// readable (its challenges expire in about five minutes). Matched by exact
+// origin; every other seller keeps the rolling-window rule.
+export const DEFAULT_BASE_URL = "https://agent402.tools";
+const DEFAULT_ORIGIN = new URL(DEFAULT_BASE_URL).origin;
+export const DEFAULT_HOST_BLIND_HOLD_MS = 15 * 60 * 1000;
+function isDefaultOrigin(url) { try { return new URL(url).origin === DEFAULT_ORIGIN; } catch { return false; } }
 
 /** Mark an error thrown after a payment header was sent: `paid: "unknown"`
  *  (the seller holds a signed authorization it may still redeem) and
@@ -206,7 +220,7 @@ export class Agent402 {
    * @param {function} [opts.onProgress] called with each job document
    *        ({ status, stage, progress, etaSeconds, ... }) while a job runs
    */
-  constructor({ baseUrl = "https://agent402.tools", fetch: payFetch, cache = true, fetchImpl = undefined, tlsDistrust = true,
+  constructor({ baseUrl = DEFAULT_BASE_URL, fetch: payFetch, cache = true, fetchImpl = undefined, tlsDistrust = true,
     maxPerCallUsd = null, dailyLimitUsd = null, maxPerHostUsd = null, creditsKey = null, x402Client = null, payNetworks = null,
     maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES, outputValidator = null,
     respondAsync = "auto", asyncTimeoutMs = DEFAULT_ASYNC_TIMEOUT_MS, onProgress = null, gateway = null, userAgent = null, retryResets = true } = {}) {
@@ -667,7 +681,7 @@ export class Agent402 {
           // can still redeem, so its signed amount is held, not released. Only
           // a call that sent no payment releases its reservation.
           if (!settled) {
-            if (sentPayment()) markOutcomeUnknown(e, slug, this._spendHold(reservation, guarded ? ctx.sent : null), { seen: guarded });
+            if (sentPayment()) markOutcomeUnknown(e, slug, this._spendHold(reservation, guarded ? ctx.sent : null, { ownHost: this._unsettledAnswer(e) }), { seen: guarded });
             else this._spendRelease(reservation);
           }
           if (ctx.refusal) {
@@ -809,6 +823,7 @@ export class Agent402 {
       if (r.status === 402) throw this._fail(slug, r, gatewayRefusalMessage(slug, body, accept, this.gateway.signer.address));
       if (!r.ok) throw this._fail(slug, r, await this._failureDetail(slug, r));
     } catch (e) {
+      if (this._unsettledAnswer(e)) this._spendHold(reservation, sent, { ownHost: true });
       markOutcomeUnknown(e, slug, heldUsd);
       throw e;
     }
@@ -998,7 +1013,15 @@ export class Agent402 {
     return entry;
   }
   /** Confirm a reservation (or a hold) as settled spend. */
-  _spendSettle(entry) { if (entry) { entry.state = "settled"; entry.until = null; } }
+  _spendSettle(entry) { if (entry) { entry.state = "settled"; entry.until = null; entry.ownHost = false; } }
+  /** True when a paid call failed on an answer the built-in seller does not
+   *  settle: an error status (400 or above) from DEFAULT_BASE_URL's exact
+   *  origin. A Gateway payment still pending, a job still running, a redirect
+   *  or a dropped connection may have settled, so none of them counts. */
+  _unsettledAnswer(e) {
+    return isDefaultOrigin(this.baseUrl) && e instanceof Error && e.paid === false
+      && Number.isInteger(e.status) && e.status >= 400 && !(e instanceof GatewayPendingError);
+  }
   /** Hold a reservation whose payment header was sent: it counts against the
    *  caps until its authorization can no longer settle (`until`) and the
    *  rolling window has passed it. `sent` lists each payload that left the
@@ -1007,10 +1030,15 @@ export class Agent402 {
    *  the one a delivered answer settled, so it is booked settled instead.
    *  null `sent` holds the reservation at its own amount, expiry unknown.
    *  Returns the total now held. */
-  _spendHold(entry, sent = null, { settleLast = false } = {}) {
+  _spendHold(entry, sent = null, { settleLast = false, ownHost = false } = {}) {
     if (!entry) return 0;
     const list = sent && sent.length ? sent : [{ usd: entry.usd, until: null }];
-    const book = (e, p, state) => { e.usd = p.usd; e.state = state; e.until = state === "held" ? p.until ?? null : null; };
+    const blindUntil = Date.now() + DEFAULT_HOST_BLIND_HOLD_MS;
+    const book = (e, p, state) => {
+      e.usd = p.usd; e.state = state;
+      e.ownHost = state === "held" && ownHost;
+      e.until = state !== "held" ? null : p.until ?? (e.ownHost ? blindUntil : null);
+    };
     let held = 0;
     list.forEach((p, i) => {
       const state = settleLast && i === list.length - 1 ? "settled" : "held";

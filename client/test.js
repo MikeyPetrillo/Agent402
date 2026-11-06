@@ -651,12 +651,13 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     };
     return { st, inner, preflight: async () => (st.mode === "unpaid500" ? new Response("{}", { status: 500 }) : answer402()) };
   };
-  const build = ({ guard = true, ...caps } = {}) => {
+  // baseUrl "default" omits the option, so the client's built-in host is used.
+  const build = ({ guard = true, baseUrl = "https://seller.example", ...caps } = {}) => {
     const s = seller();
     const xc = new x402Client();
     xc.setSpendControls?.(false);
     registerExactEvmScheme(xc, { signer: account });
-    const c = new Agent402({ baseUrl: "https://seller.example", cache: false, fetch: wrapFetchWithPayment(s.inner, xc), fetchImpl: s.preflight, ...(guard ? { x402Client: xc } : {}), ...caps });
+    const c = new Agent402({ ...(baseUrl === "default" ? {} : { baseUrl }), cache: false, fetch: wrapFetchWithPayment(s.inner, xc), fetchImpl: s.preflight, ...(guard ? { x402Client: xc } : {}), ...caps });
     c._catalog = new Map([["thing", { method: "POST", path: "/api/thing", computePayable: false, price: "$0.01" }]]);
     return { c, st: s.st };
   };
@@ -725,6 +726,54 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     st.mode = "ok";
     await at(DAY + 60000, () => c.call("thing", {}));
     ok(st.signed.length === 2 && (await at(DAY + 60000, () => c.spendingSummary().heldUsd)) === 0, "once both its validity and the window have passed, the hold is released and the next call pays");
+  }
+
+  // The built-in default host never settles an error status, so a hold for
+  // one of its 500s ends at validBefore plus the clock slack, with no 24h
+  // floor. Matched by exact origin: a look-alike host, or any other baseUrl,
+  // keeps the rule above. Without an x402Client the expiry is not readable,
+  // so the default host's hold is a short fixed window instead.
+  {
+    const { HOLD_SLACK_MS, DEFAULT_HOST_BLIND_HOLD_MS, DEFAULT_BASE_URL } = await import("./index.js");
+    ok(DEFAULT_BASE_URL === "https://agent402.tools" && new Agent402().baseUrl === DEFAULT_BASE_URL, "the built-in baseUrl is DEFAULT_BASE_URL");
+    for (const baseUrl of ["default", "https://agent402.tools", "https://agent402.tools:443/"]) {
+      const { c, st } = build({ baseUrl, dailyLimitUsd: 0.015 });
+      const e = await at(0, () => callErr(c));
+      ok(e?.status === 500 && e.paid === "unknown" && c.spendingSummary().heldUsd === 0.01, `${baseUrl}: a 500 after the signed header is held (${e?.paid} ${c.spendingSummary().heldUsd})`);
+      const releaseAt = Number(st.signed[0].validBefore) * 1000 + HOLD_SLACK_MS;
+      const before = await at(releaseAt - realNow() - 30000, () => callErr(c));
+      ok(before?.name === "SpendingLimitError" && before.limit === "dailyLimitUsd" && st.signed.length === 1, `${baseUrl}: just before validBefore + slack the hold still refuses the next call (${before?.name})`);
+      st.mode = "ok";
+      await at(releaseAt - realNow() + 30000, () => c.call("thing", {}));
+      ok(st.signed.length === 2 && c.spendingSummary().heldUsd === 0 && c.spendingSummary().dailyUsd === 0.01, `${baseUrl}: past validBefore + slack the hold is released and the next call pays (${JSON.stringify(c.spendingSummary())})`);
+    }
+    for (const baseUrl of ["https://agent402.tools.evil.example", "https://evil.example/agent402.tools", "http://agent402.tools", "https://seller.example"]) {
+      const { c, st } = build({ baseUrl, dailyLimitUsd: 0.015 });
+      await at(0, () => callErr(c));
+      const later = await at(60 * 60 * 1000, () => callErr(c));
+      ok(later?.name === "SpendingLimitError" && st.signed.length === 1 && (await at(60 * 60 * 1000, () => c.spendingSummary().heldUsd)) === 0.01, `${baseUrl}: an hour on, past validBefore + slack, the hold still counts (24h rule) (${later?.name})`);
+      ok((await at(DAY - 60000, () => c.spendingSummary().heldUsd)) === 0.01 && (await at(DAY + 60000, () => c.spendingSummary().heldUsd)) === 0, `${baseUrl}: the hold lasts the 24h window`);
+    }
+    // No x402Client: the client cannot read validBefore.
+    {
+      const { c, st } = build({ guard: false, baseUrl: "default", dailyLimitUsd: 0.015 });
+      const e = await at(0, () => callErr(c));
+      ok(e?.paid === "unknown" && c.spendingSummary().heldUsd === 0.01, "default host, no x402Client: a failed paid call is held");
+      ok((await at(DEFAULT_HOST_BLIND_HOLD_MS - 30000, () => c.spendingSummary().heldUsd)) === 0.01, "default host, no x402Client: still held just inside the short window");
+      st.mode = "ok";
+      await at(DEFAULT_HOST_BLIND_HOLD_MS + 30000, () => c.call("thing", {}));
+      ok(c.spendingSummary().heldUsd === 0 && c.spendingSummary().dailyUsd === 0.01, `default host, no x402Client: released after the short window, not 24h (${JSON.stringify(c.spendingSummary())})`);
+      const o = build({ guard: false, baseUrl: "https://agent402.tools.evil.example", dailyLimitUsd: 0.015 });
+      await at(0, () => callErr(o.c));
+      ok((await at(DEFAULT_HOST_BLIND_HOLD_MS + 30000, () => o.c.spendingSummary().heldUsd)) === 0.01, "look-alike host, no x402Client: still held past the short window (24h rule)");
+    }
+    // A dropped connection on the default host may have settled: 24h rule.
+    {
+      const { c, st } = build({ baseUrl: "default", dailyLimitUsd: 0.015 });
+      st.mode = "drop";
+      await at(0, () => callErr(c));
+      ok((await at(60 * 60 * 1000, () => c.spendingSummary().heldUsd)) === 0.01, "default host, dropped connection: still held an hour on (it may have settled)");
+    }
   }
 }
 

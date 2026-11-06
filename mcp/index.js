@@ -57,7 +57,8 @@ import {
   clipToolDescription,
 } from "./output-schemas.js";
 
-const BASE = (process.env.AGENT402_URL || "https://agent402.tools").replace(/\/$/, "");
+const DEFAULT_URL = "https://agent402.tools";
+const BASE = (process.env.AGENT402_URL || DEFAULT_URL).replace(/\/$/, "");
 // Catalog and seller requests (the 402 and the paid retry included) go through
 // a dedicated dispatcher that refuses a TLS chain through a distrusted
 // intermediate CA (networks.js).
@@ -123,7 +124,25 @@ let spentUsd = 0;
 // a dropped connection, a redirect, a job still running). The seller holds a
 // signed authorization it may still redeem, so the amount counts against the
 // session budget for the rest of the session, beside what was spent.
-let heldUsd = 0;
+// The default host (DEFAULT_URL, matched by exact origin) settles a payment
+// only on an answer below 400, so a sent payment it answered with an error
+// status can be redeemed only until its authorization expires: that hold ends
+// at the signed validBefore plus HOLD_SLACK_MS, or OWN_HOST_BLIND_HOLD_MS after
+// the answer when the payload names no readable expiry.
+const HOLD_SLACK_MS = 10 * 60 * 1000;
+const OWN_HOST_BLIND_HOLD_MS = 15 * 60 * 1000;
+const DEFAULT_ORIGIN = new URL(DEFAULT_URL).origin;
+const holds = []; // [{ usd, until }], until Infinity = the rest of the session
+const holdPayment = (usd, until = Infinity) => { holds.push({ usd, until }); };
+const heldNow = () => { const now = Date.now(); let t = 0; for (const h of holds) if (h.until > now) t += h.usd; return t; };
+/** When a sent payload can no longer settle plus the clock slack: an EIP-3009
+ *  validBefore or a Permit2 deadline, in seconds; null when none is readable. */
+function signedValidUntilMs(paymentPayload) {
+  const p = paymentPayload?.payload;
+  const v = p?.authorization?.validBefore ?? p?.permit2Authorization?.deadline;
+  if (v == null || !/^\d{1,15}$/.test(String(v))) return null;
+  return Number(v) * 1000 + HOLD_SLACK_MS;
+}
 // Wallet calls in flight, each holding what it may sign until it settles or
 // fails, so concurrent calls cannot each pass against the same budget. The
 // signing guard reads the one being signed from signCtx.
@@ -133,7 +152,7 @@ const pendingUsd = (except = null) => { let t = 0; for (const e of pendingSpend)
 /** The most the payment being signed may ask for: the per-call cap and what is
  *  left of the session budget after every other call in flight. */
 function signAllowance() {
-  return Math.max(0, Math.min(MAX_PER_CALL, BUDGET - spentUsd - heldUsd - pendingUsd(signCtx.getStore() || null)));
+  return Math.max(0, Math.min(MAX_PER_CALL, BUDGET - spentUsd - heldNow() - pendingUsd(signCtx.getStore() || null)));
 }
 
 const DEFAULT_CURATED = [
@@ -225,7 +244,7 @@ function getPayFetch() {
     });
     // Registered after the guard's check of the signed amount, so it runs only
     // for a payload about to be sent: from here the payment is outstanding.
-    client.onAfterPaymentCreation(async () => { const e = signCtx.getStore(); if (e && e.signed) e.sent = true; });
+    client.onAfterPaymentCreation(async ({ paymentPayload } = {}) => { const e = signCtx.getStore(); if (e && e.signed) { e.sent = true; e.until = signedValidUntilMs(paymentPayload); } });
     if (AGENT_KEY) {
       const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
       const { privateKeyToAccount } = await import("viem/accounts");
@@ -455,6 +474,7 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
       };
     }
     const inFlight = pendingUsd();
+    const heldUsd = heldNow();
     if (spentUsd + heldUsd + inFlight + price > BUDGET) {
       return {
         content: [{ type: "text", text: `Refused without paying: session budget exhausted ($${spentUsd.toFixed(4)} of $${BUDGET} spent${heldUsd ? `, $${heldUsd.toFixed(4)} held for sent payments whose outcome is unknown` : ""}${inFlight ? `, $${inFlight.toFixed(4)} in flight` : ""}; "${tool.slug}" lists at ${tool.price}). Restart the MCP server or raise AGENT402_BUDGET.` }],
@@ -472,7 +492,7 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
         pendingSpend.delete(entry);
         // A signature already sent leaves that payment's outcome unknown, so
         // it is held against the session budget.
-        if (entry.sent) heldUsd += entry.usd;
+        if (entry.sent) holdPayment(entry.usd);
         return redirectRefusal(first);
       }
       res = await collect(first);
@@ -481,7 +501,7 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
       pendingSpend.delete(entry);
       // Once a payment was sent, any failure (a job still running, a dropped
       // connection) leaves its authorization redeemable, so it is held.
-      if (entry.sent) heldUsd += entry.usd;
+      if (entry.sent) holdPayment(entry.usd);
       if (e instanceof AsyncJobPendingError) return pendingJobResult(tool, e);
       if (entry.refusal && !entry.sent) return signingRefusal(tool, entry.refusal);
       throw e;
@@ -492,7 +512,12 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
     // authorization with the seller, so it is held, never released.
     if (entry.sent) {
       if (res.headers.get("payment-response") || res.headers.get("x-payment-response") || res.ok) spentUsd += entry.usd;
-      else { heldUsd += entry.usd; heldNote = ` A payment of $${entry.usd} was sent with this request, so its outcome is unknown: it stays held against AGENT402_BUDGET for this session.`; }
+      else if (res.status >= 400 && url.origin === DEFAULT_ORIGIN) {
+        // The default host did not settle it: held until it expires unused.
+        const until = entry.until ?? Date.now() + OWN_HOST_BLIND_HOLD_MS;
+        holdPayment(entry.usd, until);
+        heldNote = ` A payment of $${entry.usd} was sent with this request and ${new URL(DEFAULT_URL).host} does not settle a failed answer: it stays held against AGENT402_BUDGET until its authorization expires unused (${new Date(until).toISOString()}), then is released, never charged.`;
+      } else { holdPayment(entry.usd); heldNote = ` A payment of $${entry.usd} was sent with this request, so its outcome is unknown: it stays held against AGENT402_BUDGET for this session.`; }
     }
   } else if (tool.computePayable) {
     // No wallet: pay with compute up front, solving before the call skips the
@@ -944,8 +969,8 @@ server.setRequestHandler(CallToolRequestSchema, withCatalog(async (req, extra) =
               maxPerCallUsd: MAX_PER_CALL === Infinity ? "unlimited" : MAX_PER_CALL,
               sessionBudgetUsd: BUDGET === Infinity ? "unlimited" : BUDGET,
               spentThisSessionUsd: Number(spentUsd.toFixed(6)),
-              heldThisSessionUsd: Number(heldUsd.toFixed(6)),
-              remainingUsd: BUDGET === Infinity ? "unlimited" : Number(Math.max(0, BUDGET - spentUsd - heldUsd).toFixed(6)),
+              heldThisSessionUsd: Number(heldNow().toFixed(6)),
+              remainingUsd: BUDGET === Infinity ? "unlimited" : Number(Math.max(0, BUDGET - spentUsd - heldNow()).toFixed(6)),
             }
           : "n/a (proof-of-work mode spends CPU, not money)",
         note: HAS_WALLET

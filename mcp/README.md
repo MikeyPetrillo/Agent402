@@ -72,6 +72,16 @@ report products run $0.60 to $2.00 per report (domain-audit $0.60 up to the tick
 so the default per-call cap of $4 covers every tool; set `AGENT402_MAX_PER_CALL` lower for a
 tighter ceiling.
 
+**Held payments.** `payment.info` reports `heldThisSessionUsd`: money a wallet
+call sent a signed payment for without a confirmed answer (an error status, a
+dropped connection, a redirect, a job still running). It is held, not spent: a
+seller that kept the authorization could still redeem it, so it counts against
+`AGENT402_BUDGET` for the rest of the session. On the default target
+(`https://agent402.tools`, matched by exact origin), an error status is never
+settled, so a hold for one ends at the authorization's `validBefore` plus 10
+minutes (15 minutes after the answer when no `validBefore` is readable). A held
+amount whose authorization expires unused is released, never charged.
+
 ## Advanced
 
 **Hosted connector (no install).** Add `https://agent402.tools/mcp` as a remote MCP server (for example claude.ai → Settings → Connectors → Add custom connector). Pure-CPU tools run free there, rate-limited. Paid tools are payable on the connector over [MPP](https://agent402.tools/what-is-mpp): the connector answers with an `isError` tool result whose text names every way to pay and whose `_meta["org.paymentauth/payment-required"]` carries the challenges. A presented credential that is refused answers JSON-RPC `-32043`, and a call on the tasks path answers `-32042`, both with `data.challenges`. An MCP client wrapped with `mppx`'s `McpClient.wrap()` pays and retries on its own, with the receipt in `_meta`. This package runs locally for no rate limit, or to pay over x402.

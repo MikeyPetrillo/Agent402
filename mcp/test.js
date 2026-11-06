@@ -742,6 +742,70 @@ try {
       } finally { await held.close().catch(() => {}); }
     }
 
+    // The default host (https://agent402.tools, exact origin) never settles an
+    // error status, so a hold for one of its 500s ends at the signed
+    // validBefore plus 10 minutes instead of lasting the session. A preload in
+    // the spawned server maps the named origin onto this stub and shifts
+    // Date.now by the offset in a file, so the real index.js runs unchanged.
+    // A look-alike origin keeps the session hold.
+    {
+      const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+      const { tmpdir } = await import("node:os");
+      const { pathToFileURL } = await import("node:url");
+      const dir = mkdtempSync(join(tmpdir(), "agent402-mcp-hold-"));
+      const preload = join(dir, "preload.mjs");
+      const clock = join(dir, "clock");
+      writeFileSync(preload, `import { readFileSync } from "node:fs";
+const map = JSON.parse(process.env.HOLD_TEST_ORIGINS);
+const realNow = Date.now;
+Date.now = () => { let off = 0; try { off = Number(readFileSync(process.env.HOLD_TEST_CLOCK, "utf8")) || 0; } catch {} return realNow() + off; };
+const realFetch = globalThis.fetch;
+globalThis.fetch = async (input, init) => {
+  const u = new URL(input instanceof Request ? input.url : String(input));
+  const to = map[u.origin];
+  if (!to) return realFetch(input, init);
+  const target = to + u.pathname + u.search;
+  if (!(input instanceof Request)) return realFetch(target, init);
+  const body = input.method === "GET" || input.method === "HEAD" ? undefined : await input.arrayBuffer();
+  return realFetch(target, { ...init, method: input.method, headers: input.headers, body, redirect: input.redirect });
+};
+`);
+      const MIN = 60 * 1000;
+      const runHold = async (origin) => {
+        writeFileSync(clock, "0");
+        const c = new Client({ name: "agent402-mcp-holdtest", version: "0.0.0" });
+        await c.connect(new StdioClientTransport({
+          command: process.execPath,
+          args: ["--import", pathToFileURL(preload).href, join(ROOT, "mcp", "index.js")],
+          env: { ...process.env, AGENT402_URL: origin, AGENT_KEY: "0x" + "11".repeat(32), SOLANA_AGENT_KEY: "", AGENT402_CREDITS_KEY: "", AGENT402_MAX_PER_CALL: "off", AGENT402_BUDGET: "0.015", HOLD_TEST_ORIGINS: JSON.stringify({ [new URL(origin).origin]: STUB }), HOLD_TEST_CLOCK: clock },
+        }));
+        try {
+          seen.failsPaidSigned = 0;
+          const call = (t) => c.callTool({ name: "catalog.call", arguments: { slug: "fails-paid", params: { text: t } } });
+          const held = (async () => JSON.parse(text(await c.callTool({ name: "get_payment_info", arguments: {} }))).spendControls?.heldThisSessionUsd);
+          const first = await call("1");
+          if (seen.failsPaidSigned !== 1 || !first.isError) fail(`${origin}: the first call must sign once and draw the 500 (signed ${seen.failsPaidSigned}): ${text(first).slice(0, 300)}`);
+          if (await held() !== 0.01) fail(`${origin}: the sent payment must be held`);
+          writeFileSync(clock, String(14 * MIN));
+          const inside = await call("2");
+          if (seen.failsPaidSigned !== 1 || !/session budget exhausted/.test(text(inside))) fail(`${origin}: inside validBefore + 10 min the hold must refuse the next call unsigned: ${text(inside).slice(0, 300)}`);
+          writeFileSync(clock, String(16 * MIN));
+          const after = await call("3");
+          return { firstText: text(first), afterText: text(after), signed: seen.failsPaidSigned, heldAfter: await held() };
+        } finally { await c.close().catch(() => {}); }
+      };
+      try {
+        const own = await runHold("https://agent402.tools");
+        if (!/released, never charged/.test(own.firstText)) fail(`the default host's failure must say the hold is released when the authorization expires: ${own.firstText.slice(0, 300)}`);
+        if (own.signed !== 2 || /session budget exhausted/.test(own.afterText)) fail(`default host: past validBefore + 10 min the hold must be released and the next call signed (signed ${own.signed}): ${own.afterText.slice(0, 300)}`);
+        if (own.heldAfter !== 0.01) fail(`default host: only the new call's payment is held (held ${own.heldAfter})`);
+        const look = await runHold("https://agent402.tools.evil.example");
+        if (!/for this session/.test(look.firstText)) fail(`a look-alike origin keeps the session hold note: ${look.firstText.slice(0, 300)}`);
+        if (look.signed !== 1 || !/session budget exhausted/.test(look.afterText) || look.heldAfter !== 0.01) fail(`a look-alike origin keeps the session hold (signed ${look.signed}, held ${look.heldAfter}): ${look.afterText.slice(0, 300)}`);
+        console.log("the default host's 500 is held until validBefore + 10 min, then released; a look-alike origin keeps the session hold ✓");
+      } finally { rmSync(dir, { recursive: true, force: true }); }
+    }
+
     // Defaults: with neither variable set, a $5 quote is refused (the default
     // per-call cap), the default covers the dearest tool in the catalog, and
     // there is no session budget by default, so a heavy session is never refused.

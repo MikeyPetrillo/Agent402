@@ -405,6 +405,17 @@ JSON, or output validation remains settled spend. Free proof-of-work calls are
 never counted. Omit a cap (or leave it `null`) for no limit; with none set,
 behavior is unchanged.
 
+**Held payments.** `heldUsd` is money this client sent a signed payment for
+without getting a delivered answer. It is held, not spent: a seller that kept
+the authorization could still redeem it, so the caps count it until it can no
+longer settle. When the authorization expires unused, the held amount is
+released and was never charged. On the built-in default host
+(`https://agent402.tools`, matched by exact origin), an error status (400 or
+above) is never settled, so a hold for one ends at the authorization's
+`validBefore` plus 10 minutes, with no 24-hour floor, or 15 minutes after the
+answer when the client cannot read `validBefore` (no `x402Client`). Every other
+`baseUrl` keeps the rule above.
+
 **Caps are enforced on the payment that is signed.** Pass the `x402Client` your
 `fetch` wraps (or call `a.guardX402Client(client)`) and the client registers a
 policy on it: every payment option that asks more than the per-call cap, or more
