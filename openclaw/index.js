@@ -8,8 +8,8 @@ import { join } from "node:path";
 import { buildProvider, setActiveProxy, setCachedRoutes, DEFAULT_PORT, PLUGIN_ID } from "./provider.js";
 import { startProxy, loadRoutes, DEFAULT_UPSTREAM } from "./proxy.js";
 import { stripTrailingSlashes } from "./models.js";
-import { acceptUsd, guardSignedAmount } from "./known-assets.js";
-export { acceptUsd, acceptAmount, signedPaymentProblem, KNOWN_ASSETS } from "./known-assets.js";
+import { acceptUsd, guardSignedAmount, acceptValidityTooLong, MAX_VALIDITY_SECONDS } from "./known-assets.js";
+export { acceptUsd, acceptAmount, signedPaymentProblem, signedValidityProblem, KNOWN_ASSETS, MAX_VALIDITY_SECONDS } from "./known-assets.js";
 
 export const STATE_DIR = () => join(process.env.AGENT402_OPENCLAW_HOME || join(homedir(), ".openclaw"), "agent402");
 export const CREDITS_KEY_FILE = () => join(STATE_DIR(), "credits.key");
@@ -87,9 +87,13 @@ export function maxPerCallUsd(pluginConfig = {}) {
 // at different values, reads as null, and null is REFUSED under a finite
 // ceiling: a quote we cannot price is not one we sign. After the payload is
 // built, guardSignedAmount checks the amount actually signed against the same
-// figure and the ceiling before anything is sent.
+// figure and the ceiling before anything is sent. An accept that asks to stay
+// valid past MAX_VALIDITY_SECONDS (a day) is never a candidate, ceiling or no
+// ceiling: the signed authorization would be a bearer claim for that long.
 export function selectAccept(accepts, { preferUpto = true, maxUsd = Infinity, x402Version = undefined } = {}) {
-  const list = Array.isArray(accepts) ? accepts : [];
+  const offered = Array.isArray(accepts) ? accepts : [];
+  const list = offered.filter((a) => !acceptValidityTooLong(a));
+  if (offered.length && !list.length) throw new Error(`agent402-openclaw: every payment option asks to stay valid for more than ${MAX_VALIDITY_SECONDS} seconds; nothing was signed`);
   const pick = (preferUpto && list.find((a) => a?.scheme === "upto" && a?.network === BASE_CAIP2))
     || list.find((a) => a?.scheme === "exact" && a?.network === BASE_CAIP2) || list[0];
   if (pick && Number.isFinite(maxUsd)) {

@@ -270,9 +270,12 @@ export async function startProxy({ upstream = DEFAULT_UPSTREAM, creditsKey = nul
       return json(res, 404, { error: { message: `No route for ${req.method} ${url.pathname}`, type: "invalid_request_error" } });
     } catch (e) {
       stats.errors++;
-      log(`[agent402-openclaw] ${req.method} ${url.pathname}: ${e?.message || e}`);
+      // A thrown message is the payment fetch's or the network's own text,
+      // so the credits key is cut out of it before it is logged or answered.
+      const msg = key ? String(e?.message || e).split(key).join("[redacted]") : String(e?.message || e);
+      log(`[agent402-openclaw] ${req.method} ${url.pathname}: ${msg}`);
       const wire = url.pathname === "/v1/messages" ? ANTHROPIC_WIRE : OPENAI_WIRE;
-      if (!res.headersSent) return json(res, 502, wire.error("upstream_error", `Upstream error: ${String(e?.message || e).slice(0, 200)}`));
+      if (!res.headersSent) return json(res, 502, wire.error("upstream_error", `Upstream error: ${msg.slice(0, 200)}`));
       try { res.end(); } catch { /* ignore */ }
     }
   });
