@@ -145,7 +145,8 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `INK_FACILITATOR_URL`, add `ink` to `PAYMENT_NETWORKS`, list `ink` in
   `FACILITATOR_PUBLIC_INDEX_CHAINS` when its facilitator publishes settlements, then move
   the entry from `GATED_RAILS` to `RAILS` (after Arc) with the static copy that types the
-  chain list (README, wiki, docs, adapter and MCP package text, a wiki page). The
+  chain list (README, wiki including the Self-Hosting Ink paragraph, docs, adapter and MCP
+  package text, a wiki page); no public doc names Ink before that move. The
   NODE_ENV=test `RAILS_TEST_GRADUATE=ink` seam rehearses that move
   (`scripts/test-ink-rail.js`, `scripts/test-ink-graduation.js`).
   `src/facilitator-gas.js` reads each listed facilitator's settlement signers (from
@@ -154,7 +155,9 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `scripts/test-tool-failure-monitor.js`). There is no extra Solana settle fallback by design: a
   Solana payment names the quoted facilitator's fee payer, and any other facilitator refuses it.
   `FACILITATOR_PUBLIC_INDEX_CHAINS` (`robinhood` and `ink` are the known values; unset = none;
-  any other value renders nothing and warns at boot) renders the /privacy paragraph (every field the index
+  any other value renders nothing and warns at boot; a listed chain renders only while the
+  final offer carries it, and one it leaves out is named in a boot warning,
+  `publicIndexUnofferedWarnings`) renders the /privacy paragraph (every field the index
   publishes, its per-seller payer pages, permanence, where it is processed), scopes the no-sale
   line to that list, adds the /terms pointer, `payment.dataHandling.publicSettlementIndex` on
   `/.well-known/x402`, a clause on the listed chains' llms.txt lines and a row on their chain
@@ -177,8 +180,12 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   (`since`) is a state-database document (`robinhood-order:eip155:4663`), so a deploy or another
   replica keeps the clock; `robinhoodSettler` on `/api/gateway-status` reads `relayer` once our
   relayer has been first without a break for longer than `ROBINHOOD_RELAYER_FIRST_ALERT_HOURS`
-  (default 6; 0 or `off` reads `off`), `ok` otherwise, `off` without an order. The heartbeat and
-  the status Worker page on `relayer` under one issue that ok or off closes; the operator view
+  (default 6; 0 or `off` reads `off`), `ok` otherwise, `off` without an order, and `unknown`
+  before a fresh process's first update unless the stored clock (read at creation) already reads
+  `relayer`. A facilitator-first decision taken on a reading stores `resetAt`; a relayer-first
+  start before the latest reset restarts at it, so a lagging replica cannot revive an old clock.
+  The heartbeat and the status Worker page on `relayer` under one issue that ok or off closes
+  (`unknown` does neither); the operator view
   has the clock (`scripts/test-robinhood-settler.js`, `scripts/test-robinhood-settler-pg.js`).
   With it, an ambiguous listed-facilitator failure on 4663 (5xx, timeout, no verdict, no
   transaction) is read on chain (`src/robinhood-outage.js`): the authorization used with our

@@ -36,6 +36,10 @@ const PATH = "/api/demand-radar?limit=1";
 const json = (res, s, o) => { res.writeHead(s, { "Content-Type": "application/json" }); res.end(JSON.stringify(o)); };
 const stub = (h) => createServer((req, res) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => { let body = {}; try { body = JSON.parse(b || "{}"); } catch {} h(req, res, body); }); });
 const payerOf = (b) => b?.paymentPayload?.payload?.authorization?.from;
+// The production /supported shape: each network as a v2 CAIP-2 kind AND a
+// v1 named kind, plus a testnet this server never offers.
+const V1_NAMES = { "eip155:8453": "base", "eip155:57073": "ink" };
+const productionKinds = (nets) => [...nets, "eip155:84532"].flatMap((network) => [{ x402Version: 2, scheme: "exact", network }, { x402Version: 1, scheme: "exact", network: V1_NAMES[network] || (network === "eip155:84532" ? "base-sepolia" : network) }]);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let failed = 0;
 const check = (cond, msg) => { if (cond) console.log(`ok - ${msg}`); else { failed++; console.log(`FAIL - ${msg}`); } };
@@ -63,7 +67,7 @@ function facilitator(name, st, kindsFor) {
   st[name] = { up: true, mode: "ok", settles: 0, verifies: 0 };
   return stub((q, r, b) => {
     const s = st[name];
-    if (q.url === "/supported") return s.up ? json(r, 200, { kinds: kindsFor().map((network) => ({ x402Version: 2, scheme: "exact", network })), extensions: [], signers: {} }) : json(r, 503, { error: "down" });
+    if (q.url === "/supported") return s.up ? json(r, 200, { kinds: productionKinds(kindsFor()), extensions: [], signers: {} }) : json(r, 503, { error: "down" });
     if (q.url === "/verify") { s.verifies++; return json(r, 200, { isValid: true, payer: payerOf(b) }); }
     if (q.url === "/settle") {
       s.settles++;
@@ -123,7 +127,7 @@ async function boot({ inkUrls = (p) => `http://127.0.0.1:${p.INK1},http://127.0.
 const SURFACES = ["/llms.txt", "/llms-full.txt", "/.well-known/x402", "/api/pricing", "/openapi.json", "/pricing", "/how-to-pay", "/api/rails", "/privacy", "/terms", "/"];
 
 // --- 1b/2. gated by default, and listed without a URL -------------------------
-for (const [label, opts] of [["default boot (no ink listed)", { networks: "base", inkUrls: () => "" }], ["ink listed, INK_FACILITATOR_URL unset", { inkUrls: () => "" }]]) {
+for (const [label, opts] of [["default boot (no ink listed)", { networks: "base", inkUrls: () => "" }], ["ink listed, INK_FACILITATOR_URL unset", { inkUrls: () => "", extraEnv: { FACILITATOR_PUBLIC_INDEX_CHAINS: "ink" } }]]) {
   const b = await boot(opts);
   const before = failed;
   try {
@@ -131,6 +135,7 @@ for (const [label, opts] of [["default boot (no ink listed)", { networks: "base"
     check(b.required?.status === 402 && b.required.offer?.accepts?.some((a) => a.network === BASE_NET), `${label}: the paywall answers 402 with the Base accept (status ${b.required?.status})`);
     check(!b.accepted && !b.required?.offer?.accepts?.some((a) => a.network === INK), `${label}: no eip155:57073 accept`);
     if (opts.networks !== "base") check(b.log.join("").includes("INK_FACILITATOR_URL is unset - Ink is not configured"), `${label}: the boot says why Ink is not offered`);
+    if (opts.extraEnv?.FACILITATOR_PUBLIC_INDEX_CHAINS) check(b.log.join("").includes("FACILITATOR_PUBLIC_INDEX_CHAINS lists ink but Ink is not offered"), `${label}: the boot warns that the listed public-index chain is not offered`);
     if (b.up) {
       for (const p of SURFACES) {
         const r = await b.get(p);
@@ -139,6 +144,8 @@ for (const [label, opts] of [["default boot (no ink listed)", { networks: "base"
       }
       const rails = JSON.parse((await b.get("/api/rails")).text);
       check(!JSON.stringify(rails).includes("ink"), `${label}: /api/rails neither configures nor offers ink`);
+      const byNet = Object.keys(JSON.parse((await b.get("/.well-known/x402")).text)?.settlementFacilitators?.byNetwork || {}).sort();
+      check(JSON.stringify(byNet) === '["base","eip155:8453"]', `${label}: the manifest's facilitator map names only offered networks, no Ink (either name) and no testnet (${byNet.join(",")})`);
     }
   } finally { if (failed > before) console.log(b.log.join("").slice(-2500)); b.stop(); }
 }
@@ -167,6 +174,8 @@ for (const [label, opts] of [["default boot (no ink listed)", { networks: "base"
     for (const p of SURFACES) { const r = await b.get(p); check(r.status < 500, `enabled: ${p} renders (status ${r.status})`); }
     const manifest = JSON.parse((await b.get("/.well-known/x402")).text);
     check(JSON.stringify(manifest).includes("eip155:57073"), "enabled: /.well-known/x402 names Ink while it is offered (runtime surface)");
+    const byNet = Object.keys(manifest?.settlementFacilitators?.byNetwork || {}).sort();
+    check(JSON.stringify(byNet) === '["base","eip155:57073","eip155:8453","ink"]', `enabled: the facilitator map names both offered networks by both names and no testnet (${byNet.join(",")})`);
     const llms = (await b.get("/llms.txt")).text;
     check(llms.includes("/ink): USDC (`eip155:57073`)") && (GRADUATED || !/Arc, Ink|Ink, Stellar/.test(llms)), "enabled: llms.txt lists the offered Ink chain page (runtime) while its rail prose, derived from RAILS, does not name Ink");
     check((await b.get("/ink")).status === 200, "enabled: the /ink chain page serves while Ink is offered (gated runtime surface)");

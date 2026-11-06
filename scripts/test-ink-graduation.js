@@ -24,6 +24,10 @@ import { childJson } from "./lib/child-json.js";
 
 const root = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
 const INK = "eip155:57073", BASE_NET = "eip155:8453";
+// The production /supported shape: each network as a v2 CAIP-2 kind AND a
+// v1 named kind, plus a testnet this server never offers.
+const V1_NAMES = { "eip155:8453": "base", "eip155:57073": "ink" };
+const productionKinds = (nets) => [...nets, "eip155:84532"].flatMap((network) => [{ x402Version: 2, scheme: "exact", network }, { x402Version: 1, scheme: "exact", network: V1_NAMES[network] || (network === "eip155:84532" ? "base-sepolia" : network) }]);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let failed = 0;
 const check = (cond, msg) => { if (cond) console.log(`ok - ${msg}`); else { failed++; console.log(`FAIL - ${msg}`); } };
@@ -79,7 +83,7 @@ function stubFacilitator(kinds) {
     let b = ""; req.on("data", (c) => (b += c));
     req.on("end", () => {
       res.writeHead(req.url === "/supported" || req.url === "/rpc" ? 200 : 404, { "Content-Type": "application/json" });
-      if (req.url === "/supported") return res.end(JSON.stringify({ kinds: kinds.map((network) => ({ x402Version: 2, scheme: "exact", network })), extensions: [], signers: {} }));
+      if (req.url === "/supported") return res.end(JSON.stringify({ kinds: productionKinds(kinds), extensions: [], signers: {} }));
       if (req.url === "/rpc") return res.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result: "0x0" }));
       res.end("{}");
     });
@@ -87,7 +91,7 @@ function stubFacilitator(kinds) {
 }
 async function boot(extra) {
   const [PORT, FAC, INKF] = await getFreePorts(3);
-  const fac = stubFacilitator([BASE_NET]), inkFac = stubFacilitator([INK]);
+  const fac = stubFacilitator([BASE_NET, INK]), inkFac = stubFacilitator([INK]);
   await Promise.all([[fac, FAC], [inkFac, INKF]].map(([s, p]) => new Promise((r) => s.listen(p, "127.0.0.1", r))));
   const proc = spawn(process.execPath, ["--import", "./scripts/lib/loopback-only-preload.js", "src/server.js"], { cwd: root, stdio: ["ignore", "pipe", "pipe"], env: { ...cleanEnv(), ...ownStoreEnv("ink-grad"), PORT: String(PORT), FREE_MODE: "",
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", FACILITATOR_URL: `http://127.0.0.1:${FAC}`, PAYAI_FACILITATOR_URL: `http://127.0.0.1:${FAC}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC}/rpc`,

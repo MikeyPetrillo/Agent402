@@ -51,7 +51,7 @@ await check("relayer first for longer than the threshold reads relayer; shorter 
   const clock = { t: T0 };
   const o = mk(clock);
   assert.equal(typeof o.status, "function", "the order has a status word");
-  assert.equal(word(o, clock), "ok", "no reading yet: ok");
+  assert.equal(word(o, clock), "unknown", "no reading yet: unknown (neither pages nor closes)");
   o.update(dry(clock.t));
   assert.equal(o.ownFirst(), true);
   assert.equal(word(o, clock), "ok", "just turned: ok");
@@ -121,6 +121,68 @@ await check("a deploy that finds the facilitator funded writes it, and a later d
   await c.synced();
   assert.equal(word(c, clock), "ok", "a stale start is not adopted after the facilitator was first");
   assert.equal(store.body.since, T0 + 8 * H);
+});
+
+await check("a fresh process reads the stored clock before its first update: relayer or unknown, never ok", async () => {
+  const clock = { t: T0 + 10 * H };
+  for (const [label, body, want] of [
+    ["stored relayer first for 10 hours", { host: HOST, network: RH, ownFirst: true, since: T0 }, "relayer"],
+    ["stored relayer first for 1 hour", { host: HOST, network: RH, ownFirst: true, since: T0 + 9 * H }, "unknown"],
+    ["stored facilitator first", { host: HOST, network: RH, ownFirst: false, since: T0 }, "unknown"],
+    ["stored for another host", { host: "other.example", network: RH, ownFirst: true, since: T0 }, "unknown"],
+    ["stored relayer start before a stored reset", { host: HOST, network: RH, ownFirst: true, since: T0, resetAt: T0 + 9 * H }, "unknown"],
+    ["nothing stored", null, "unknown"],
+  ]) {
+    const store = memStore(); store.body = body;
+    const o = mk(clock, store);
+    assert.notEqual(word(o, clock), "ok", `${label}: never ok before anything is read`);
+    await o.synced();
+    assert.equal(word(o, clock), want, `${label}: ${want} once the stored clock is read`);
+    assert.equal(store.saves, 0, `${label}: nothing is written before the first update`);
+  }
+  // No store at all: unknown until the first update.
+  const bare = mk(clock);
+  assert.equal(word(bare, clock), "unknown");
+  bare.update(dry(clock.t));
+  assert.equal(word(bare, clock), "ok", "after its own first reading: the word is its own");
+});
+
+await check("two processes, one store: a lagging relayer-first replica cannot revive a clock the facilitator reset", async () => {
+  const store = memStore();
+  const ca = { t: T0 }, cb = { t: T0 };
+  const a = mk(ca, store), b = mk(cb, store);
+  a.update(dry(ca.t)); await a.synced();
+  cb.t = T0 + 60_000; b.update(dry(cb.t)); await b.synced();
+  assert.equal(b.status({ full: true, env: ENV, at: cb.t }).since, new Date(T0).toISOString(), "both relayer first: the earlier start is shared");
+  // B reads the facilitator funded; A has not refreshed yet and still reads dry.
+  cb.t = T0 + 1 * H; b.update(funded(cb.t)); await b.synced();
+  assert.equal(store.body.ownFirst, false);
+  assert.equal(store.body.resetAt, T0 + 1 * H, "the facilitator-first write records the reset");
+  ca.t = T0 + 1 * H + 30_000; a.update(dry(ca.t)); await a.synced();
+  assert.notEqual(store.body.since, T0, "the lagging replica does not write its old start back");
+  assert.ok(store.body.since >= T0 + 1 * H, `a relayer-first since is never before the reset (${store.body.since - T0})`);
+  assert.equal(a.status({ full: true, env: ENV, at: ca.t }).since, new Date(T0 + 1 * H).toISOString(), "the lagging replica's own clock restarts at the reset");
+  // B turns relayer first again later: it must not adopt the old start.
+  cb.t = T0 + 2 * H; b.update(dry(cb.t)); await b.synced();
+  cb.t = T0 + 6.5 * H; b.update(dry(cb.t)); await b.synced();
+  ca.t = cb.t; a.update(dry(ca.t)); await a.synced();
+  assert.equal(word(b, cb), "ok", "5.5 hours since the reset: ok, not the revived 6.5-hour clock");
+  assert.equal(word(a, ca), "ok");
+  assert.ok(store.body.since >= T0 + 1 * H, "the stored start stays at or after the reset");
+  cb.t = T0 + 7 * H + 60_000; b.update(dry(cb.t)); await b.synced();
+  assert.equal(word(b, cb), "relayer", "six hours after the reset the clock reads relayer");
+});
+
+await check("facilitator first for want of a reading is not a reset", async () => {
+  const store = memStore();
+  const ca = { t: T0 }, cb = { t: T0 + 7 * H };
+  const a = mk(ca, store);
+  a.update(dry(ca.t)); await a.synced();
+  const b = mk(cb, store);
+  b.update([]); await b.synced(); // a fresh process with no reading yet
+  assert.equal(store.body.resetAt, undefined, "no reset recorded");
+  cb.t += 60_000; b.update(dry(cb.t)); await b.synced();
+  assert.equal(word(b, cb), "relayer", "the stored start still holds once it reads dry");
 });
 
 await check("a store that throws leaves the process's own clock", async () => {
