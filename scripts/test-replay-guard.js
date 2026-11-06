@@ -48,6 +48,15 @@ function evmCred({ network = "eip155:8453", nonce = "0xabc", from = "0x" + "1".r
   const reordered = Buffer.from(JSON.stringify({ payload: { authorization: { from: "0x" + "1".repeat(40), nonce: "0xDEAD" } }, network: "eip155:8453" })).toString("base64");
   ok(paymentReplayKey(fakeReq({ "x-payment": reordered })) === a, "re-encoded same-nonce authorization → same key");
 
+  // The paywall drops a UTF-8 byte order mark from the decoded bytes, so the
+  // key reads the nonce through one, and through base64url, or the copies
+  // would each get a claim of their own.
+  const json = JSON.stringify({ network: "eip155:8453", payload: { authorization: { nonce: "0xDEAD", from: "0x" + "1".repeat(40) } } });
+  const bom = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(json)]).toString("base64");
+  const url = Buffer.from(json).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  ok(paymentReplayKey(fakeReq({ "payment-signature": bom })) === a, "a byte-order-marked copy of the authorization → same key");
+  ok(paymentReplayKey(fakeReq({ "payment-signature": url })) === a, "a base64url copy of the authorization → same key");
+
   // Same nonce on a different network is a distinct identity.
   const otherNet = paymentReplayKey(fakeReq({ "x-payment": evmCred({ nonce: "0xDEAD", network: "eip155:137" }) }));
   ok(otherNet !== a, "same nonce, different network → different key");

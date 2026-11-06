@@ -17,11 +17,12 @@
 // the caller falls back to its next key.
 import { paymentHeaderOf } from "./payer.js";
 import { svmPayerFromPayload } from "./svm-payer.js";
+import { decodePaymentHeader } from "./payment-header.js";
 
 function decodePayload(req) {
   const header = paymentHeaderOf(req);
   if (!header || header.length > 65536) return null;
-  try { return JSON.parse(Buffer.from(header, "base64").toString("utf8")); } catch { return null; }
+  try { return decodePaymentHeader(header); } catch { return null; }
 }
 
 /** The network a decoded payload pays on (v2 `accepted.network`, v1 `network`). */

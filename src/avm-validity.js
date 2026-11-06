@@ -16,6 +16,7 @@
 import algosdk from "algosdk";
 import { paymentHeaderOf } from "./payer.js";
 import { ALGORAND_ALGOD_BASES, getJsonAcross } from "./revenue-live.js";
+import { decodePaymentHeader } from "./payment-header.js";
 
 const AVG_ROUND_SECONDS = 2.8;
 
@@ -68,7 +69,7 @@ export const requiredSecondsFor = (slug) => SLOW_TOOL_SECONDS[slug] ?? DEFAULT_R
 export function lastValidFromPaymentHeader(headerValue) {
   if (typeof headerValue !== "string" || !headerValue) return null;
   try {
-    const payload = JSON.parse(Buffer.from(headerValue, "base64").toString("utf8"));
+    const payload = decodePaymentHeader(headerValue);
     const network = String(payload?.network || "");
     if (network && !network.startsWith("algorand:")) return null;
     const group = payload?.payload?.paymentGroup;

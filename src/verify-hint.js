@@ -27,6 +27,7 @@ import { encodeFunctionData, decodeFunctionResult } from "viem";
 import { classifyPaymentRejection, classifySettlementRefusal, unclassifiedPaymentShape, unclassifiedPaymentHint } from "./payment-reject.js";
 import { classifySvmFundingRefusal, fundingHint, fundingPayerOf, POW_SENTENCE } from "./svm-funding-refusal.js";
 import { classifySettlementPending, isGatewayBatchedPayment, isGatewayBatchedRequest, PENDING_RETRY_AFTER_SECONDS, SETTLEMENT_FAILED_DETAIL, SETTLEMENT_PENDING_DETAIL } from "./gateway-wire.js";
+import { decodePaymentHeader } from "./payment-header.js";
 const decodeB64Json = (v) => { try { return JSON.parse(Buffer.from(String(v), "base64").toString("utf8")); } catch { return null; } };
 const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 const BALANCE_TTL_MS = 60_000;
@@ -55,7 +56,8 @@ export function credentialKeyOf(paymentPayload) {
 /** The same key from the raw request header (payment-signature | x-payment). */
 export function credentialKeyFromHeader(header) {
   if (!header) return null;
-  try { return credentialKeyOf(JSON.parse(Buffer.from(String(header), "base64").toString("utf-8"))); } catch { return null; }
+  const payload = decodePaymentHeader(header);
+  return payload ? credentialKeyOf(payload) : null;
 }
 
 const bounded = (m) => { if (m.size > MAX_ENTRIES) { const first = m.keys().next().value; m.delete(first); } };
@@ -313,7 +315,9 @@ export function hintForCredential(key, { now = Date.now } = {}) {
  *  so a client that reads `error` first reads the hint instead. */
 export function verifyHintMiddleware() {
   return function verifyHint(req, res, next) {
-    const header = req.headers["payment-signature"] || req.headers["x-payment"];
+    // A header that did not decode was removed at intake
+    // (src/payment-header.js); the value as sent is still worded here.
+    const header = req.headers["payment-signature"] || req.headers["x-payment"] || req.__paymentHeaderAsSent;
     if (!header) return next();
     const origJson = res.json.bind(res);
     res.json = function hintedJson(body) {
