@@ -53,6 +53,7 @@ import { payerFromRequest, paymentHeaderOf } from "../payer.js";
 import { gatewaySettleBreakerCheck } from "../gateway-settle-breaker.js";
 import { clientGoneSignal } from "../drain-abort.js";
 import { directUpstreamConfig, withDirectAttempts, directBodyFrom, directShareDraw, directCostUsd, stripVendorExtensions, noteDirectAb, noteDirectSkip, noteDirectAnomaly, failureBucket, directModelFor } from "../gateway-direct-upstream.js";
+import { directPriceDecision, noteDirectMeasure } from "../gateway-direct-pricebook.js";
 import { clientGoneError } from "../hangup-settlement.js";
 import { evmCredentialSettleableMs } from "../evm-validity.js";
 import { cdnSyncLeftMs } from "../cdn-sync-window.js";
@@ -3772,13 +3773,19 @@ function makeHandler(routeTier) {
     // Direct upstream (src/gateway-direct-upstream.js): off unless configured,
     // and then one extra attempt before the first OpenRouter attempt of each
     // listed model. It is taken only when the request uses nothing outside the
-    // direct allowlist and the A/B draw picks it; every failure walks on.
+    // direct allowlist, the cost guard (src/gateway-direct-pricebook.js) reads
+    // this call as cheaper there than on OpenRouter's cheapest routable
+    // endpoint under this call's provider.max_price, and the A/B draw picks
+    // it; every failure walks on. The guard reads only the background price
+    // book: nothing is fetched here.
     const directCfg = directUpstreamConfig();
     const attempts = withDirectAttempts(attemptsFor(chain, body).slice(0, TIERS[tierSlug].maxAttempts || Infinity), directCfg);
     const directPlanFor = (direct, outbound, stream) => {
       if (!direct) return null;
       const plan = directBodyFrom(outbound, direct, { stream });
       if (!plan.body) { noteDirectSkip(plan.reason); return false; }
+      const price = directPriceDecision(outbound.model, { inputTokens: estimateInputTokens(plan.body, 0), outputTokens: plan.body.max_tokens, maxPrice: outbound.provider?.max_price });
+      if (!price.go) { noteDirectSkip(price.skip); return false; }
       if (!directShareDraw(directCfg)) { noteDirectSkip("share"); return false; }
       return plan.body;
     };
@@ -3805,12 +3812,12 @@ function makeHandler(routeTier) {
                 let out;
                 if (directBody) {
                   let costSeen = false;
-                  out = await streamDirectUpstreamTo(directBody, res, { timeoutMs, cfg: directCfg, modelAs: [directBody.model, model], onUsage: (usage, cost) => { if (typeof cost === "number") costSeen = true; recordUsage(usage, cost, model, "default", "direct"); } });
+                  out = await streamDirectUpstreamTo(directBody, res, { timeoutMs, cfg: directCfg, modelAs: [directBody.model, model], onUsage: (usage, cost) => { if (typeof cost === "number") costSeen = true; noteDirectMeasure(model, "direct", usage, cost); recordUsage(usage, cost, model, "default", "direct"); } });
                   if (!costSeen) noteDirectAnomaly("stream_no_cost");
                 } else {
                   // Streams now carry margin telemetry too: the scrubber hands us
                   // the upstream cost it strips from the final usage frame.
-                  out = await retryRateLimited(() => streamOpenRouterTo(outbound, res, { timeoutMs, onUsage: (usage, cost, frame) => recordUsage(usage, cost, frame?.model || model, frame?.service_tier || (flex ? "flex" : "default")) }), { delays: rateLimitDelaysFor(flex), canRetry: () => !res.headersSent && !client.gone() });
+                  out = await retryRateLimited(() => streamOpenRouterTo(outbound, res, { timeoutMs, onUsage: (usage, cost, frame) => { if (frame?.service_tier !== "priority") noteDirectMeasure(model, "openrouter", usage, cost); return recordUsage(usage, cost, frame?.model || model, frame?.service_tier || (flex ? "flex" : "default")); } }), { delays: rateLimitDelaysFor(flex), canRetry: () => !res.headersSent && !client.gone() });
                 }
                 if (abListed) noteDirectAb(directBody ? "direct" : "openrouter", { ok: true, ms: Date.now() - attemptStarted });
                 return out;
@@ -3878,6 +3885,9 @@ function makeHandler(routeTier) {
         // returned. Standard token counts stay (OpenAI wire shape).
         if (data && typeof data === "object" && data.usage && typeof data.usage === "object") {
           const upstreamUsd = stripBilling(data.usage);
+          // The cost guard's measured backstop (mapped models only; a priority
+          // answer bills a multiple and is not a default call's cost).
+          if (data.service_tier !== "priority") noteDirectMeasure(model, abLabel, data.usage, upstreamUsd);
           await recordUsage(data.usage, upstreamUsd, data.model || model, data.service_tier || (flex ? "flex" : "default"), abLabel);
           // METERED SETTLEMENT: hand the real cost to the route binder, which
           // settles that plus the markup instead of the flat tier price when

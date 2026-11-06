@@ -23,6 +23,9 @@
 // malformed body, a missing cost) becomes a walkable 502/503/504 and the chain
 // goes on to OpenRouter; the upstream bills only answered requests, and the
 // buyer is metered once, from the answer that served.
+//
+// A direct attempt is also taken only when src/gateway-direct-pricebook.js
+// reads the call as cheaper there than on OpenRouter (fails closed).
 
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
 const MODEL_ID = /^[a-z0-9][a-z0-9._:\/-]{0,127}$/i;
@@ -79,7 +82,7 @@ export function directUpstreamConfig(env = process.env) {
   const models = parseModels(env.DIRECT_UPSTREAM_MODELS);
   const timeout = parseInt(env.DIRECT_UPSTREAM_TIMEOUT_MS || "", 10);
   const cfg = base && key && models && models.size
-    ? { url: `${base}/chat/completions`, key, models, share: parseShare(env.DIRECT_UPSTREAM_SHARE), timeoutMs: timeout > 0 ? timeout : DIRECT_DEFAULT_TIMEOUT_MS }
+    ? { url: `${base}/chat/completions`, modelsUrl: `${base}/models`, key, models, share: parseShare(env.DIRECT_UPSTREAM_SHARE), timeoutMs: timeout > 0 ? timeout : DIRECT_DEFAULT_TIMEOUT_MS }
     : null;
   memo = { sig, cfg };
   return cfg;

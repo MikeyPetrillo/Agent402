@@ -849,6 +849,7 @@ import { timingSafeEqual, createHash, randomUUID, randomBytes } from "node:crypt
 import { registerMemoryStore, memoryStoreFigures } from "./memory-stores.js";
 import { publicIndexBootWarnings } from "./facilitator-public-index.js";
 import { directUpstreamBootWarnings, directUpstreamReport } from "./gateway-direct-upstream.js";
+import { directPriceBookBootWarnings, directPriceBookReport, directUpstreamWord, startDirectPriceBook } from "./gateway-direct-pricebook.js";
 
 // FACILITATOR_PUBLIC_INDEX_*: a disclosure switch that cannot say what its
 // value asks (an unknown chain, no host to name, an invalid policy URL or
@@ -857,6 +858,11 @@ for (const w of publicIndexBootWarnings()) console.warn(w);
 // DIRECT_UPSTREAM_*: a partly set or invalid direct-upstream switch is named
 // (never its values) once at boot; the upstream stays off until it is whole.
 for (const w of directUpstreamBootWarnings()) console.warn(w);
+for (const w of directPriceBookBootWarnings()) console.warn(w);
+// The direct upstream's cost guard reads a price book refreshed in the
+// background (src/gateway-direct-pricebook.js); a tick does nothing while
+// the upstream is unconfigured.
+startDirectPriceBook();
 
 const PORT = process.env.PORT || 3000;
 const WALLET_ADDRESS = process.env.WALLET_ADDRESS;
@@ -2957,7 +2963,7 @@ app.get("/__operator/tool-failures.json", async (req, res) => {
 // bucket and p50/p90 latency per upstream for the listed model ids.
 app.get("/__operator/direct-upstream.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
-  res.set("Cache-Control", "private, no-store").json(directUpstreamReport());
+  res.set("Cache-Control", "private, no-store").json({ ...directUpstreamReport(), priceBook: directPriceBookReport() });
 });
 app.get("/__operator/tweet-queue.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
@@ -3940,6 +3946,12 @@ app.get("/api/gateway-status", async (req, res) => {
     // publicly; the clock for the operator, the order on
     // /__operator/tool-failures.json (robinhoodOrder).
     robinhoodSettler: (() => { try { return robinhoodSettlerStatus({ full }); } catch { return { status: "unknown" }; } })(),
+    // The direct upstream's cost guard (src/gateway-direct-pricebook.js):
+    // off, starting, ok, not_cheaper (a mapped model is kept on OpenRouter by
+    // its listed prices or its measured cost) or unreadable (its price book is
+    // unread or stale). The word only, on both views: the figures are on
+    // /__operator/direct-upstream.json.
+    directUpstream: (() => { try { return { status: directUpstreamWord() }; } catch { return { status: "unknown" }; } })(),
     ...(await toolFailureMonitor().status({ full }).catch(() => ({ toolFailures: { status: "unknown" }, upstreamHealth: { status: "unknown" }, facilitatorFunds: { status: "unknown" }, toolAnswers: { status: "unknown" }, buyerRefusals: { status: "unknown" } }))),
   };
   // An operator-authed read must not land in a shared cache.

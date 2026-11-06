@@ -977,6 +977,8 @@ jobs:
           t node scripts/test-llm-timed-out-budget.js
           # Direct inference upstream: off by default, ZDR, fallback to OpenRouter, billed once (offline stubs)
           t node scripts/test-direct-upstream.js
+          # Direct upstream cost guard: direct only when cheaper per call than OpenRouter's cheapest routable endpoint; fails closed; measured backstop; word-only status and paging (offline stubs)
+          t node scripts/test-direct-upstream-cost-guard.js
           t node scripts/test-gateway-resilience.js
           t node scripts/test-upstream-refusal.js
           t node scripts/test-llm-kit-spend.js

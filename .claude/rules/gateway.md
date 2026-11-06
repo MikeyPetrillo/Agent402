@@ -50,3 +50,34 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   `/__operator/direct-upstream.json`; PostHog `gateway_usage.upstream`. While configured, /privacy
   adds a sentence and prints the later of its date and `DIRECT_UPSTREAM_SINCE` (once reached).
   Suite: `scripts/test-direct-upstream.js`.
+- **Direct upstream cost guard:** `src/gateway-direct-pricebook.js`. A direct attempt is taken only
+  when the call is estimated cheaper there: the kit's input estimate (`estimateInputTokens` of the
+  direct body) times prompt price plus the clamped `max_tokens` times completion price, on the
+  direct upstream's listed prices, must be below the same sum on OpenRouter's cheapest routable
+  endpoint for the model (priority-tier `*/fast|ultrafast|priority` endpoints and any endpoint
+  above the call's `provider.max_price` excluded; `PRIORITY_ENDPOINT_TAG`, shared with
+  `scripts/test-gateway-model-ids.js`) by the minimum saving share. A price book refreshed in the
+  background (`startDirectPriceBook` at boot; never on a request) reads `<DIRECT_UPSTREAM_URL>/models`
+  (public, no key) and each mapped model's OpenRouter `/endpoints`; a failed read keeps the last
+  good one. Fails closed to OpenRouter: no read yet, older than three intervals, a model missing
+  from the listing, an unparsable, zero or negative prompt or completion price, a non-zero
+  `request` fee, no routable endpoint, a non-positive estimate. Measured backstop: the reported
+  cost per 1k prompt-plus-completion tokens over the last answers per model on each upstream
+  (direct: its own charge; OpenRouter: `usage.cost`, priority answers left out); once both hold
+  the minimum sample and direct does not measure below OpenRouter, the model stays on OpenRouter
+  until it does. Skips are bucketed on the A/B stats (`price_unreadable`, `price_unlisted`,
+  `price_bad_price`, `price_request_fee`, `price_no_endpoint`, `price_estimate`, `not_cheaper`,
+  `measured_not_cheaper`). Env: `DIRECT_UPSTREAM_PRICE_REFRESH_MS` (default one hour),
+  `DIRECT_UPSTREAM_PRICE_TIMEOUT_MS` (default 15 s), `DIRECT_UPSTREAM_MIN_SAVING_PCT` (0 to below
+  100; unset reads the private table's optional `vendor.direct.minSaving` fraction; neither means
+  strictly cheaper; the value is policy and is never written in the repo), `DIRECT_UPSTREAM_MEASURE_WINDOW`
+  (default 200), `DIRECT_UPSTREAM_MEASURE_MIN` (default 30), `DIRECT_UPSTREAM_OR_MODELS_URL` (test
+  stubs). `/api/gateway-status` `directUpstream` is a word only: `off`, `starting`, `ok`,
+  `not_cheaper` (a mapped model's listed prices undercut OpenRouter at none of the reference
+  shapes, its listing is unusable, or its measure blocks it) or `unreadable` (a book unread or
+  stale); heartbeat and the status Worker page on `not_cheaper`/`unreadable` under one title and
+  close on `ok`/`off`. Figures (listed prices, cheapest endpoint per unit, ages, measures, saving
+  share) are on `/__operator/direct-upstream.json` `priceBook` only; logs print the word only.
+  `model-drift.yml` grades the listed prices every 6 hours when the `DIRECT_UPSTREAM_URL` and
+  `DIRECT_UPSTREAM_MODELS` Actions secrets are set (unset: skipped with a note; lines name the
+  OpenRouter id and a reason, never a price). Suite: `scripts/test-direct-upstream-cost-guard.js`.

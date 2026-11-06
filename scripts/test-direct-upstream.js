@@ -86,6 +86,8 @@ P.setMeterSpendSinkForTest((source, usd) => spend.push({ source, usd }));
 const MODEL = "deepseek/deepseek-v4.1-flash-1017";
 const MAPPED = "deepseek-v4.1-flash";
 const ON = { DIRECT_UPSTREAM_URL: DIRECT_BASE, DIRECT_UPSTREAM_KEY: "direct-test-key", DIRECT_UPSTREAM_MODELS: `${MODEL}=${MAPPED},qwen/qwen3.8-27b=qwen3.8-27b`, DIRECT_UPSTREAM_TIMEOUT_MS: "400" };
+// A booted server's background price book reads the stubs only.
+const BOOT_STUBS = { DIRECT_UPSTREAM_OR_MODELS_URL: `http://127.0.0.1:${OR_PORT}/api/v1/models` };
 const setEnv = (vars) => {
   for (const k of Object.keys(process.env)) if (k.startsWith("DIRECT_UPSTREAM_")) delete process.env[k];
   Object.assign(process.env, vars || {});
@@ -94,7 +96,16 @@ const base = K.LLM_GATEWAY_TOOLS.find((t) => t.slug === "v1-chat");
 const metered = K.LLM_GATEWAY_TOOLS.find((t) => t.slug === "v1-chat-metered");
 ok(!!base && !!metered, "base and metered chat tools found");
 const msgs = [{ role: "user", content: "hi" }];
-const reset = () => { direct.hits.length = 0; or.hits.length = 0; direct.plan = null; or.plan = null; spend.length = 0; D._resetDirectUpstreamStatsForTest(); };
+// The cost guard (src/gateway-direct-pricebook.js, its own suite
+// scripts/test-direct-upstream-cost-guard.js) reads a price book; this suite
+// seeds one where the direct upstream undercuts OpenRouter by a wide factor,
+// derived from the tier cap and the placeholder row (no rate typed here).
+const PB = await import("../src/gateway-direct-pricebook.js");
+const cap = K.TIERS["v1-chat"].maxPrice;
+const endpoint = Object.fromEntries(["prompt", "completion"].map((k) => [k, Math.min(cap[k], placeholder[k]) / 2]));
+const cheapDirect = Object.fromEntries(["prompt", "completion"].map((k) => [k, endpoint[k] / 10]));
+const seedBook = () => { PB._resetDirectPriceBookForTest(); PB._seedDirectPriceBookForTest({ [MODEL]: { direct: cheapDirect, endpoints: [endpoint] }, "qwen/qwen3.8-27b": { direct: cheapDirect, endpoints: [endpoint] } }); };
+const reset = () => { direct.hits.length = 0; or.hits.length = 0; direct.plan = null; or.plan = null; spend.length = 0; D._resetDirectUpstreamStatsForTest(); seedBook(); };
 const flush = () => new Promise((r) => setTimeout(r, 30)); // the usage capture is a lazy import off the handler's promise
 const gatewaySpend = () => spend.filter((s) => s.source === "gateway");
 
@@ -269,6 +280,9 @@ ok(direct.hits.length === 0 && or.hits.length === 20, "share 0: nothing is sent 
 ok(D.directUpstreamReport().skipped.share === 20, "share 0: each skip is counted");
 setEnv({ ...ON, DIRECT_UPSTREAM_SHARE: "50" });
 reset();
+// reset() clears the plan: the direct stub answers at its own (lower) cost, so
+// the measured backstop never trips during the split.
+direct.plan = (req, res, body) => json(res, 200, answer(body.model, { x_vendor: { charged_micro: DIRECT_MICRO } }));
 let seed = 42;
 D._setDirectUpstreamRngForTest(() => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 2 ** 32; });
 const N = 200;
@@ -305,7 +319,7 @@ async function boot(extraEnv) {
 }
 const stop = async (b) => { b.child.kill("SIGTERM"); await new Promise((r) => { b.child.once("exit", r); setTimeout(r, 5000); }); };
 {
-  const b = await boot({ ...ON, DIRECT_UPSTREAM_SINCE: "2026-01-01" });
+  const b = await boot({ ...ON, ...BOOT_STUBS, DIRECT_UPSTREAM_SINCE: "2026-01-01" });
   try {
     ok(b.up, "server booted with the direct upstream configured");
     const anon = await realFetch(`${b.url}/__operator/direct-upstream.json`);
