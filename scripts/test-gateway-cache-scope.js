@@ -222,10 +222,10 @@ try {
     ok(proofMemoSize() === 5, `memo: twelve distinct headers past a bound of five keep five (${proofMemoSize()})`);
     const keep = await signedHeader(alice);
     await provenX402Signer(keep, { payTo: PAY_TO });
-    for (let i = 100; i < 103; i++) { await provenX402Signer(keep, { payTo: PAY_TO }); await provenX402Signer(junk(i), { payTo: PAY_TO }); }
     const n = proofRecoveryCount();
+    for (let i = 100; i < 108; i++) { await provenX402Signer(keep, { payTo: PAY_TO }); await provenX402Signer(junk(i), { payTo: PAY_TO }); }
     await provenX402Signer(keep, { payTo: PAY_TO });
-    ok(proofRecoveryCount() === n, "memo: an entry read since is kept over older ones");
+    ok(proofRecoveryCount() === n + 8, `memo: an entry read between eight newer ones is kept over them (${proofRecoveryCount() - n} recoveries for 8 new headers)`);
     __setProofMemoMax();
   }
 
