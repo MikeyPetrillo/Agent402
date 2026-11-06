@@ -185,6 +185,43 @@ export async function stellarSignedPaymentOf(paymentPayload, paymentRequirements
   }
 }
 
+/**
+ * The payer's signed authorization entries in a Stellar payload, as the
+ * network consumes them: [{ signer, nonce }] for each address-credential entry
+ * of the sole transfer call signed by its `from` (nonce as a decimal string,
+ * signer as spelled on chain), or null. A re-encoded copy of the same signed
+ * entry yields the same list, so it names the payment whatever the envelope
+ * around it (src/settlement-claims.js claims each one; src/replay-guard.js
+ * keys the replay on them).
+ */
+export async function stellarAuthorizationsOf(paymentPayload) {
+  try {
+    const envXdr = paymentPayload?.payload?.transaction;
+    if (typeof envXdr !== "string" || !envXdr || envXdr.length > MAX_ENVELOPE_CHARS) return null;
+    const sdk = await import("@stellar/stellar-sdk");
+    const op = soleInvokeOp(sdk.xdr.TransactionEnvelope.fromXDR(envXdr, "base64"));
+    if (!op) return null;
+    const call = transferCallOf(sdk, op);
+    if (!call) return null;
+    const out = [];
+    const seen = new Set();
+    for (const entry of op.auth()) {
+      const cred = entry.credentials();
+      if (cred.switch().name !== "sorobanCredentialsAddress") continue;
+      const a = cred.address();
+      const signer = sdk.Address.fromScAddress(a.address()).toString();
+      if (signer !== call.from) continue;
+      const nonce = a.nonce().toString();
+      if (!/^-?[0-9]{1,20}$/.test(nonce) || seen.has(nonce)) continue;
+      seen.add(nonce);
+      out.push({ signer, nonce });
+    }
+    return out.length ? out : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Asset units as Horizon spells them ("0.0010000"). */
 function unitsToDecimal(n) {
   const scale = 10n ** STELLAR_DECIMALS;

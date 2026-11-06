@@ -74,6 +74,7 @@ import { keyOf, OP_MS } from "./shared-limits.js";
 import { stateDbEnabled, records } from "./state-db.js";
 import { handlerInputOf } from "./handler-input.js";
 import { wantsShare, answerShareEnabled } from "./answer-share.js";
+import { decodePaymentHeader } from "./payment-header.js";
 
 export const ALLOWANCE_HEADER = "X-Agent402-Allowance";
 export const ALLOWANCE_HEADER_VALUE = "first-call";
@@ -252,7 +253,7 @@ function plainEvmExactPayer(req) {
   const header = paymentHeaderOf(req);
   if (!header || paymentSchemeOf(req) !== "exact" || isGatewayBatchedRequest(req)) return { why: "rail" };
   let payload = null;
-  try { payload = JSON.parse(Buffer.from(header, "base64").toString("utf8")); } catch { payload = null; }
+  try { payload = decodePaymentHeader(header); } catch { payload = null; }
   if (!payload?.payload?.authorization || payload?.payload?.permit2Authorization) return { why: "rail" };
   const network = String(payload?.accepted?.network ?? payload?.network ?? "");
   if (!network.startsWith("eip155:")) return { why: "rail" };

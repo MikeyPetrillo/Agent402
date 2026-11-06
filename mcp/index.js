@@ -57,7 +57,8 @@ import {
   clipToolDescription,
 } from "./output-schemas.js";
 
-const BASE = (process.env.AGENT402_URL || "https://agent402.tools").replace(/\/$/, "");
+const DEFAULT_URL = "https://agent402.tools";
+const BASE = (process.env.AGENT402_URL || DEFAULT_URL).replace(/\/$/, "");
 // Catalog and seller requests (the 402 and the paid retry included) go through
 // a dedicated dispatcher that refuses a TLS chain through a distrusted
 // intermediate CA (networks.js).
@@ -119,6 +120,29 @@ const capFromEnv = (name, def) => {
 const MAX_PER_CALL = capFromEnv("AGENT402_MAX_PER_CALL", DEFAULT_MAX_PER_CALL_USD);
 const BUDGET = capFromEnv("AGENT402_BUDGET", DEFAULT_BUDGET_USD);
 let spentUsd = 0;
+// Signed payments that were sent without a confirmed answer (an error status,
+// a dropped connection, a redirect, a job still running). The seller holds a
+// signed authorization it may still redeem, so the amount counts against the
+// session budget for the rest of the session, beside what was spent.
+// The default host (DEFAULT_URL, matched by exact origin) settles a payment
+// only on an answer below 400, so a sent payment it answered with an error
+// status can be redeemed only until its authorization expires: that hold ends
+// at the signed validBefore plus HOLD_SLACK_MS, or OWN_HOST_BLIND_HOLD_MS after
+// the answer when the payload names no readable expiry.
+const HOLD_SLACK_MS = 10 * 60 * 1000;
+const OWN_HOST_BLIND_HOLD_MS = 15 * 60 * 1000;
+const DEFAULT_ORIGIN = new URL(DEFAULT_URL).origin;
+const holds = []; // [{ usd, until }], until Infinity = the rest of the session
+const holdPayment = (usd, until = Infinity) => { holds.push({ usd, until }); };
+const heldNow = () => { const now = Date.now(); let t = 0; for (const h of holds) if (h.until > now) t += h.usd; return t; };
+/** When a sent payload can no longer settle plus the clock slack: an EIP-3009
+ *  validBefore or a Permit2 deadline, in seconds; null when none is readable. */
+function signedValidUntilMs(paymentPayload) {
+  const p = paymentPayload?.payload;
+  const v = p?.authorization?.validBefore ?? p?.permit2Authorization?.deadline;
+  if (v == null || !/^\d{1,15}$/.test(String(v))) return null;
+  return Number(v) * 1000 + HOLD_SLACK_MS;
+}
 // Wallet calls in flight, each holding what it may sign until it settles or
 // fails, so concurrent calls cannot each pass against the same budget. The
 // signing guard reads the one being signed from signCtx.
@@ -128,7 +152,7 @@ const pendingUsd = (except = null) => { let t = 0; for (const e of pendingSpend)
 /** The most the payment being signed may ask for: the per-call cap and what is
  *  left of the session budget after every other call in flight. */
 function signAllowance() {
-  return Math.max(0, Math.min(MAX_PER_CALL, BUDGET - spentUsd - pendingUsd(signCtx.getStore() || null)));
+  return Math.max(0, Math.min(MAX_PER_CALL, BUDGET - spentUsd - heldNow() - pendingUsd(signCtx.getStore() || null)));
 }
 
 const DEFAULT_CURATED = [
@@ -218,6 +242,9 @@ function getPayFetch() {
       onSign: (usd) => { const e = signCtx.getStore(); if (e) { e.usd = usd; e.signed = true; } },
       onRefuse: (detail) => { const e = signCtx.getStore(); if (e) e.refusal = detail; },
     });
+    // Registered after the guard's check of the signed amount, so it runs only
+    // for a payload about to be sent: from here the payment is outstanding.
+    client.onAfterPaymentCreation(async ({ paymentPayload } = {}) => { const e = signCtx.getStore(); if (e && e.signed) { e.sent = true; e.until = signedValidUntilMs(paymentPayload); } });
     if (AGENT_KEY) {
       const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
       const { privateKeyToAccount } = await import("viem/accounts");
@@ -404,6 +431,7 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
   };
 
   let res;
+  let heldNote = "";
   if (!HAS_WALLET && HAS_CREDITS) {
     // Credits key: same budget guards as the wallet path, against the same
     // number - the credits gate holds and debits what the 402 quotes for THIS
@@ -446,40 +474,51 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
       };
     }
     const inFlight = pendingUsd();
-    if (spentUsd + inFlight + price > BUDGET) {
+    const heldUsd = heldNow();
+    if (spentUsd + heldUsd + inFlight + price > BUDGET) {
       return {
-        content: [{ type: "text", text: `Refused without paying: session budget exhausted ($${spentUsd.toFixed(4)} of $${BUDGET} spent${inFlight ? `, $${inFlight.toFixed(4)} in flight` : ""}; "${tool.slug}" lists at ${tool.price}). Restart the MCP server or raise AGENT402_BUDGET.` }],
+        content: [{ type: "text", text: `Refused without paying: session budget exhausted ($${spentUsd.toFixed(4)} of $${BUDGET} spent${heldUsd ? `, $${heldUsd.toFixed(4)} held for sent payments whose outcome is unknown` : ""}${inFlight ? `, $${inFlight.toFixed(4)} in flight` : ""}; "${tool.slug}" lists at ${tool.price}). Restart the MCP server or raise AGENT402_BUDGET.` }],
         isError: true,
       };
     }
     const payFetch = await getPayFetch();
     // Held until the call settles or fails; the guard replaces `usd` with the
     // amount it lets the wallet sign.
-    const entry = { usd: price, signed: false, refusal: null };
+    const entry = { usd: price, signed: false, sent: false, refusal: null };
     pendingSpend.add(entry);
     try {
       const first = await signCtx.run(entry, () => payFetch(url, { ...paidInit, headers: { ...init.headers, ...asyncHeaders } }));
       if (isRedirect(first)) {
         pendingSpend.delete(entry);
         // A signature already sent leaves that payment's outcome unknown, so
-        // it counts against the session budget.
-        if (entry.signed) spentUsd += entry.usd;
+        // it is held against the session budget.
+        if (entry.sent) holdPayment(entry.usd);
         return redirectRefusal(first);
       }
       res = await collect(first);
     }
     catch (e) {
       pendingSpend.delete(entry);
-      // Still running past the wait: it may yet settle, so it counts as spent.
-      if (e instanceof AsyncJobPendingError) { if (entry.signed) spentUsd += entry.usd; return pendingJobResult(tool, e); }
-      if (entry.refusal) return signingRefusal(tool, entry.refusal);
+      // Once a payment was sent, any failure (a job still running, a dropped
+      // connection) leaves its authorization redeemable, so it is held.
+      if (entry.sent) holdPayment(entry.usd);
+      if (e instanceof AsyncJobPendingError) return pendingJobResult(tool, e);
+      if (entry.refusal && !entry.sent) return signingRefusal(tool, entry.refusal);
       throw e;
     }
     pendingSpend.delete(entry);
-    // Count spend when a payment was signed and the server confirms settlement
-    // (payment receipt header), falling back to any 2xx, conservative in the
-    // buyer's favor.
-    if (entry.signed && (res.headers.get("payment-response") || res.headers.get("x-payment-response") || res.ok)) spentUsd += entry.usd;
+    // A sent payment is spent when the server confirms settlement (payment
+    // receipt header) or answers 2xx; any other answer leaves the signed
+    // authorization with the seller, so it is held, never released.
+    if (entry.sent) {
+      if (res.headers.get("payment-response") || res.headers.get("x-payment-response") || res.ok) spentUsd += entry.usd;
+      else if (res.status >= 400 && url.origin === DEFAULT_ORIGIN) {
+        // The default host did not settle it: held until it expires unused.
+        const until = entry.until ?? Date.now() + OWN_HOST_BLIND_HOLD_MS;
+        holdPayment(entry.usd, until);
+        heldNote = ` A payment of $${entry.usd} was sent with this request and ${new URL(DEFAULT_URL).host} does not settle a failed answer: it stays held against AGENT402_BUDGET until its authorization expires unused (${new Date(until).toISOString()}), then is released, never charged.`;
+      } else { holdPayment(entry.usd); heldNote = ` A payment of $${entry.usd} was sent with this request, so its outcome is unknown: it stays held against AGENT402_BUDGET for this session.`; }
+    }
   } else if (tool.computePayable) {
     // No wallet: pay with compute up front, solving before the call skips the
     // 402 round-trip entirely (challenges are single-use and tool-scoped).
@@ -503,7 +542,7 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
   }
   const text = await res.text();
   if (res.status >= 400) {
-    return { content: [{ type: "text", text: failureText(res.status, text) }], isError: true };
+    return { content: [{ type: "text", text: failureText(res.status, text) + heldNote }], isError: true };
   }
   let parsed;
   try { parsed = JSON.parse(text); } catch { parsed = { raw: text }; }
@@ -522,6 +561,8 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
 function signingRefusal(tool, d) {
   const text = d.reason === "unknown-asset"
     ? `Refused without paying: "${tool.slug}" asked to be paid in an asset this server cannot price (USDC or USDG on a known network), so nothing was signed.`
+    : d.reason === "signed-amount"
+    ? `Refused without paying: for "${tool.slug}", ${d.detail}, so the payment was not sent.`
     : `Refused without paying: "${tool.slug}" asked for $${d.priceUsd} on the paid request, above the $${Number(d.allowanceUsd.toFixed(6))} this server may sign (AGENT402_MAX_PER_CALL ${MAX_PER_CALL === Infinity ? "off" : `$${MAX_PER_CALL}`}, AGENT402_BUDGET ${BUDGET === Infinity ? "off" : `$${BUDGET}`} with $${spentUsd.toFixed(4)} spent). Nothing was signed.`;
   return { content: [{ type: "text", text }], isError: true };
 }
@@ -928,7 +969,8 @@ server.setRequestHandler(CallToolRequestSchema, withCatalog(async (req, extra) =
               maxPerCallUsd: MAX_PER_CALL === Infinity ? "unlimited" : MAX_PER_CALL,
               sessionBudgetUsd: BUDGET === Infinity ? "unlimited" : BUDGET,
               spentThisSessionUsd: Number(spentUsd.toFixed(6)),
-              remainingUsd: BUDGET === Infinity ? "unlimited" : Number(Math.max(0, BUDGET - spentUsd).toFixed(6)),
+              heldThisSessionUsd: Number(heldNow().toFixed(6)),
+              remainingUsd: BUDGET === Infinity ? "unlimited" : Number(Math.max(0, BUDGET - spentUsd - heldNow()).toFixed(6)),
             }
           : "n/a (proof-of-work mode spends CPU, not money)",
         note: HAS_WALLET
@@ -940,7 +982,7 @@ server.setRequestHandler(CallToolRequestSchema, withCatalog(async (req, extra) =
           claudeCodeHosted: `claude mcp add --transport http agent402 ${BASE}/mcp`,
           claudeCodeNpm: `claude mcp add agent402 -s user -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}`,
           cursorHosted: { mcpServers: { agent402: { url: `${BASE}/mcp` } } },
-          npm: "npx -y agent402-mcp@0.13.28",
+          npm: "npx -y agent402-mcp@0.13.29",
           maintainer: "Havok Holdings LLC",
         },
         positioning: `Flagship search/answer first, 500+ long-tail tools via catalog.find / catalog.search / catalog.call. Agent402 is the applied layer of Agentic Finance: agents that pay and get paid per request over x402 or MPP (Machine Payments Protocol), both on the same 402 - ${BASE}/agentic-finance, ${BASE}/glossary.`,
@@ -960,7 +1002,7 @@ server.setRequestHandler(CallToolRequestSchema, withCatalog(async (req, extra) =
         install: {
           claudeCodeHosted: `claude mcp add --transport http agent402 ${BASE}/mcp`,
           claudeCodeNpm: `claude mcp add agent402 -s user -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}`,
-          npm: "npx -y agent402-mcp@0.13.28",
+          npm: "npx -y agent402-mcp@0.13.29",
           maintainer: "Havok Holdings LLC",
         },
         tools: catalog.size,

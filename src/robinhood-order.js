@@ -25,6 +25,16 @@
 // answer is not handed back to it. A refusal from our relayer that
 // sent nothing (ownRefusedOf) lets that hook continue to the listed
 // fallbacks and then the facilitator (facilitatorRetryOf).
+//
+// How long our relayer has been first is a status word (robinhoodSettler on
+// /api/gateway-status, settlerStatus below): ok while the facilitator settles
+// first, relayer once our relayer has been first without a break for longer
+// than ROBINHOOD_RELAYER_FIRST_ALERT_HOURS (default 6; 0 or off disables the
+// word, which then reads off). The facilitatorFunds word leaves out a dry
+// facilitator our relayer covers, so without this word a facilitator that
+// stays dry for days pages nobody. The start of the current order (`since`)
+// is kept in the store the caller passes (the state database in production),
+// so a deploy or another replica reads the same clock.
 
 export const ROBINHOOD_ORDER_NETWORK = "eip155:4663";
 
@@ -35,6 +45,31 @@ export function skipDryThreshold(env = process.env) {
 }
 export function readingFreshMs(env = process.env) {
   return num(env.FACILITATOR_GAS_FRESH_MS, 45 * 60_000);
+}
+
+/**
+ * Hours our relayer may stay first before robinhoodSettler reads relayer.
+ * Unset, blank or not a number: 6. 0 or "off": null (the word reads off).
+ */
+export function relayerFirstAlertHours(env = process.env) {
+  const raw = String(env.ROBINHOOD_RELAYER_FIRST_ALERT_HOURS ?? "").trim();
+  if (/^off$/i.test(raw)) return null;
+  if (!raw) return 6;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return 6;
+  return n === 0 ? null : n;
+}
+
+/**
+ * The robinhoodSettler word for an order state: off (no order, or the alert
+ * disabled), relayer (our relayer first since longer than `hours`), ok. The
+ * order itself reads unknown before its first update unless the stored clock
+ * already reads relayer.
+ */
+export function settlerWord({ ownFirst = false, since = null } = {}, { hours = relayerFirstAlertHours(), now = Date.now() } = {}) {
+  if (hours == null) return "off";
+  if (!ownFirst) return "ok";
+  return Number.isFinite(since) && now - since > hours * 3_600_000 ? "relayer" : "ok";
 }
 
 const atOf = (r) => (typeof r?.at === "number" ? r.at : Date.parse(String(r?.at || "")) || 0);
@@ -53,6 +88,14 @@ export function facilitatorIsDry(readings, { host, network = ROBINHOOD_ORDER_NET
   return rows.every((r) => r.runway < threshold);
 }
 
+/** True when `host` has at least one fresh, read gas row on `network`. */
+function facilitatorHasFreshReading(readings, { host, network, freshMs, now }) {
+  return !!host && (Array.isArray(readings) ? readings : []).some((r) =>
+    r && !r.own && r.network === network && r.facilitator === host
+    && (r.status === "ok" || r.status === "low")
+    && Number.isFinite(r.runway) && now - atOf(r) <= freshMs);
+}
+
 /**
  * True when a fresh, read gas row of our own relayer on `network` is low:
  * status low, or a runway below `threshold`. Unread or stale: false.
@@ -66,9 +109,74 @@ export function ownRelayerIsLow(readings, { network = ROBINHOOD_ORDER_NETWORK, t
 /**
  * The order state for one facilitator host. `update(readings)` re-decides it
  * and logs one line when the order changes; `ownFirst()` is read per settle.
+ *
+ * `store` ({ load(): body | null, save(body) }, both may be async) keeps
+ * { host, ownFirst, since } across processes. After each update the stored
+ * body is read again and reconciled: both say our relayer is first, the
+ * earlier since wins (a deploy or a second replica keeps the clock); they
+ * disagree, this process's decision is written with its own since. A store
+ * that throws leaves this process's clock as it is.
+ *
+ * A facilitator-first decision taken on a reading (the facilitator read
+ * funded, or our relayer read low) records `resetAt`, carried in every later
+ * write. A relayer-first clock that started before the latest reset known to
+ * this process restarts at that reset, so a replica that has not yet seen the
+ * facilitator funded can neither write its old since back nor hand it to a
+ * peer that turns relayer-first later.
+ *
+ * The stored body is also read once when the order is created, so the word
+ * reflects the stored clock before the first update: relayer when it already
+ * reads relayer, unknown otherwise (never ok on no reading of its own).
  */
-export function createRobinhoodOrder({ host, network = ROBINHOOD_ORDER_NETWORK, threshold = skipDryThreshold(), freshMs = readingFreshMs(), now = Date.now, log = console.warn } = {}) {
-  const state = { ownFirst: false, since: null, checkedAt: null };
+export function createRobinhoodOrder({ host, network = ROBINHOOD_ORDER_NETWORK, threshold = skipDryThreshold(), freshMs = readingFreshMs(), now = Date.now, log = console.warn, store = null } = {}) {
+  const state = { ownFirst: false, since: null, checkedAt: null, resetAt: null, evidenced: false, stored: null };
+  let syncing = null;
+  let again = false;
+  const timeOf = (v) => { const t = typeof v === "number" ? v : Date.parse(String(v || "")); return Number.isFinite(t) ? t : null; };
+  const sinceOf = (b) => timeOf(b?.since);
+  // The latest reset this process knows of, from its own decisions or the store.
+  const noteReset = (t) => { if (t != null && (state.resetAt == null || t > state.resetAt)) state.resetAt = t; };
+  // A relayer-first clock never starts before the latest reset.
+  const clampSince = () => { if (state.ownFirst && state.resetAt != null && (state.since == null || state.since < state.resetAt)) state.since = state.resetAt; };
+  async function reconcile() {
+    const stored = await store.load();
+    const mine = !!stored && stored.host === host;
+    const sOwn = mine && stored.ownFirst === true;
+    const sSince = mine ? sinceOf(stored) : null;
+    const sReset = mine ? timeOf(stored.resetAt) : null;
+    if (state.checkedAt == null) { // nothing decided yet: never write a guess, only read the stored clock
+      state.stored = mine ? { ownFirst: sOwn, since: sSince } : null;
+      noteReset(sReset);
+      return;
+    }
+    noteReset(sReset);
+    clampSince();
+    // A stored relayer-first start before the latest reset is not a clock to keep.
+    const sLive = sOwn && sSince != null && (state.resetAt == null || sSince >= state.resetAt);
+    if (state.ownFirst && sLive && (state.since == null || sSince < state.since)) {
+      state.since = sSince; // the clock started earlier, in another process
+      if (sReset === state.resetAt) return;
+    }
+    if (state.ownFirst === sOwn && sSince === state.since && sReset === state.resetAt) return;
+    // Facilitator first for want of a reading is a guess: it never overwrites a stored relayer-first clock.
+    if (!state.ownFirst && sOwn && !state.evidenced) return;
+    // Facilitator first in both, and the stored reset is as recent as ours: nothing to keep.
+    if (!state.ownFirst && !sOwn && (state.resetAt == null || (sReset != null && sReset >= state.resetAt))) return;
+    await store.save({ host, network, ownFirst: state.ownFirst, since: state.since, ...(state.resetAt != null ? { resetAt: state.resetAt } : {}) });
+  }
+  function sync() {
+    if (!store) return Promise.resolve();
+    if (syncing) { again = true; return syncing; }
+    syncing = (async () => {
+      do {
+        again = false;
+        try { await reconcile(); } catch { /* the store is advisory: this process keeps its own clock */ }
+      } while (again);
+    })().finally(() => { syncing = null; });
+    return syncing;
+  }
+  // Read the stored clock once at creation, so the first status read reflects it.
+  if (store) void sync();
   return {
     host,
     update(readings) {
@@ -77,9 +185,16 @@ export function createRobinhoodOrder({ host, network = ROBINHOOD_ORDER_NETWORK, 
       const dry = facilitatorIsDry(readings, { host, network, threshold, freshMs, now: t });
       const ownLow = dry && ownRelayerIsLow(readings, { network, threshold, freshMs, now: t });
       const first = dry && !ownLow;
-      if (first === state.ownFirst) return false;
+      // Facilitator first on a reading (funded, or our relayer low), not for
+      // want of one: the first such decision of each era is a reset.
+      const funded = !dry && facilitatorHasFreshReading(readings, { host, network, freshMs, now: t });
+      if (!first && (funded || ownLow) && !state.evidenced) { noteReset(t); state.evidenced = true; }
+      if (first) state.evidenced = false;
+      if (first === state.ownFirst) { clampSince(); void sync(); return false; }
       state.ownFirst = first;
       state.since = t;
+      clampSince();
+      void sync();
       try {
         log(first
           ? `Robinhood: ${host} dry, own relayer first`
@@ -89,6 +204,19 @@ export function createRobinhoodOrder({ host, network = ROBINHOOD_ORDER_NETWORK, 
       return true;
     },
     ownFirst() { return state.ownFirst; },
+    /** Resolves once the store has been reconciled with the latest update. */
+    synced() { return syncing || Promise.resolve(); },
+    /** The robinhoodSettler word: { status } publicly, the clock for the operator.
+     *  Before the first update: relayer when the stored clock reads relayer
+     *  (its start no earlier than the latest stored reset), else unknown. */
+    status({ full = false, env = process.env, at = now() } = {}) {
+      const hours = relayerFirstAlertHours(env);
+      const pre = state.checkedAt == null;
+      const seen = pre ? (state.stored?.ownFirst && (state.resetAt == null || (state.stored.since != null && state.stored.since >= state.resetAt)) ? state.stored : null) : state;
+      const status = hours == null ? "off" : pre ? (seen && settlerWord(seen, { hours, now: at }) === "relayer" ? "relayer" : "unknown") : settlerWord(state, { hours, now: at });
+      const shown = seen || state;
+      return full ? { status, alertHours: hours, first: pre ? (seen ? "own relayer (stored)" : "not read yet") : state.ownFirst ? "own relayer" : "facilitator", since: shown.since ? new Date(shown.since).toISOString() : null } : { status };
+    },
     view() {
       return {
         network, facilitator: host, threshold,
@@ -97,6 +225,21 @@ export function createRobinhoodOrder({ host, network = ROBINHOOD_ORDER_NETWORK, 
         checkedAt: state.checkedAt ? new Date(state.checkedAt).toISOString() : null,
       };
     },
+  };
+}
+
+/**
+ * Where the order's since is kept: one state-database document per network
+ * (robinhood-order:<network>), so a deploy or another replica reads the same
+ * clock. No state database: null (this process's clock only).
+ */
+export async function stateDbOrderStore(network = ROBINHOOD_ORDER_NETWORK, env = process.env) {
+  const { stateDbEnabled, documents } = await import("./state-db.js");
+  if (!stateDbEnabled(env)) return null;
+  const name = `robinhood-order:${network}`;
+  return {
+    async load() { const row = await documents.get(name); return row ? row.body : null; },
+    async save(body) { await documents.put(name, body); },
   };
 }
 

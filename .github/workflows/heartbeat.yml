@@ -75,6 +75,9 @@ jobs:
           # intends the Arc rail, so the rails check requires eip155:5042. Only
           # the comparison reaches the job, never the key.
           ARC_RAIL_INTENDED: ${{ secrets.CIRCLE_FACILITATOR_API_KEY != '' }}
+          # "true" when the Ink facilitator list secret is set: the operator
+          # intends the Ink rail, so the rails check requires eip155:57073.
+          INK_RAIL_INTENDED: ${{ secrets.INK_FACILITATOR_URL != '' }}
         run: |
           . scripts/heartbeat-probe.sh
           for attempt in 1 2 3; do
@@ -910,7 +913,10 @@ jobs:
       # Tool and upstream failures (src/tool-failure-monitor.js): four words
       # on /api/gateway-status. toolFailures and upstreamHealth page on
       # degraded / failing; facilitatorFunds pages on low / refused / demoted;
-      # buyerRefusals pages on refusing; ok closes; unknown does neither. The issues are public, so a body carries
+      # buyerRefusals pages on refusing; robinhoodSettler pages on relayer (ok
+      # and off close); subscriptionRenewals pages on unconfirmed (ok and off
+      # close); directUpstream pages on degraded (ok and off close,
+      # starting does neither); ok closes; unknown does neither. The issues are public, so a body carries
       # the word and the operator endpoint only: slugs, upstreams, facilitators
       # and reasons stay on /__operator/tool-failures.json. The status Worker
       # runs the same checks every five minutes under the same titles.
@@ -921,13 +927,13 @@ jobs:
           GS=$(curl -s --max-time 15 "$PROD/api/gateway-status" || echo '{}')
           # TITLE is set before each call (the Worker test reads it as written).
           check_word() {
-            FIELD="$1"; BAD="$2"; GOOD="$3"
+            FIELD="$1"; BAD="$2"; GOOD="$3"; ENDPOINT="${4:-/__operator/tool-failures.json}"
             WORD=$(echo "$GS" | jq -r ".${FIELD}.status // \"unknown\"" 2>/dev/null || echo unknown)
             echo "$FIELD: $WORD"
             OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
             if echo " $BAD " | grep -q " $WORD "; then
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports ${FIELD}.status=$WORD. The detail is on the operator endpoint, /__operator/tool-failures.json (operator token). Auto-closes when the word is ok." >/dev/null 2>&1 || echo "issue create failed"
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports ${FIELD}.status=$WORD. The detail is on the operator endpoint, $ENDPOINT (operator token). Auto-closes when the word is ok." >/dev/null 2>&1 || echo "issue create failed"
               else
                 gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
               fi
@@ -950,6 +956,22 @@ jobs:
           # window (src/gateway-settle-breaker.js): refusing pages, ok closes.
           TITLE="buyerRefusals: a paying buyer was refused by the settle breaker"
           check_word buyerRefusals "refusing" "ok"
+          # Our own relayer settling Robinhood Chain sales in the listed
+          # facilitator's place for longer than ROBINHOOD_RELAYER_FIRST_ALERT_HOURS
+          # (src/robinhood-order.js): relayer pages, ok and off close.
+          TITLE="robinhoodSettler: our own relayer has been settling Robinhood sales for hours"
+          check_word robinhoodSettler "relayer" "ok off"
+          # A wallet-billed monitor renewal unconfirmed (its send's landing
+          # undecided by the chain read) for longer than
+          # MPP_SUB_UNCONFIRMED_ALERT_HOURS (src/mpp-subscriptions.js):
+          # unconfirmed pages, ok and off close.
+          TITLE="subscriptionRenewals: a monitor renewal has stayed unconfirmed for hours"
+          check_word subscriptionRenewals "unconfirmed" "ok off" "/__operator/monitors.json"
+          # The direct upstream (src/gateway-direct-pricebook.js): degraded
+          # pages (the reason code is on the operator read only); ok and off
+          # close; starting does neither.
+          TITLE="directUpstream: the direct upstream is degraded"
+          check_word directUpstream "degraded" "ok off" "/__operator/direct-upstream.json"
 
       # Paid 200s whose body is empty or error-shaped (src/answer-shape.js,
       # counted by src/tool-failure-monitor.js): one word on
@@ -1578,6 +1600,9 @@ jobs:
           POW_SECRET: ${{ secrets.POW_SECRET }}
           ROBINHOOD_FACILITATOR_URL: ${{ secrets.ROBINHOOD_FACILITATOR_URL }}
           ARC_RAIL_INTENDED: ${{ secrets.CIRCLE_FACILITATOR_API_KEY != '' }}
+          # "true" when the Ink facilitator list secret is set: the operator
+          # intends the Ink rail, so the rails check requires eip155:57073.
+          INK_RAIL_INTENDED: ${{ secrets.INK_FACILITATOR_URL != '' }}
           OP_TOKEN: ${{ secrets.AGENT402_OPERATOR_TOKEN }}
           # Narrow credential for POST /api/status/probe; falls back to OP_TOKEN.
           PROBE_TOKEN: ${{ secrets.STATUS_PROBE_TOKEN }}

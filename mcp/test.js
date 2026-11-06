@@ -196,6 +196,57 @@ const text = (result) => result.content?.map((c) => (c.type === "text" ? c.text 
   console.log("async-job.js ✓ (slow route asks for a job, polls Retry-After, answer delivered, progress notifications rise; other-origin link refused)");
 }
 
+// 0d) The wallet path checks what it signs. A loopback seller records every
+// payment header; the server runs with a throwaway EVM key and a $0.01 cap.
+// An accept whose amount and maxAmountRequired differ is not priced, and a
+// signer that commits to more than the accept asks (the stock v2 EVM signer,
+// patched by a preload in this test only) has its payload refused before it
+// is sent. Nothing leaves loopback; no funds.
+{
+  const { createServer } = await import("node:http");
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+  const values = [];
+  let accept = null;
+  const stub = createServer((req, res) => {
+    req.resume();
+    const u = new URL(req.url, "http://stub");
+    const send = (status, body, headers = {}) => { res.writeHead(status, { "content-type": "application/json", ...headers }); res.end(JSON.stringify(body)); };
+    if (u.pathname === "/api/pricing") return send(200, { endpoints: [{ slug: "probe", method: "GET", path: "/api/probe", price: "$0.001", description: "probe", category: "util", computePayable: false }] });
+    if (u.pathname === "/openapi.json") return send(200, { paths: {} });
+    if (u.pathname === "/api/skill-packs.json") return send(200, { packs: [] });
+    const sig = req.headers["payment-signature"] || req.headers["x-payment"];
+    if (sig) { values.push(JSON.parse(Buffer.from(sig, "base64").toString("utf8")).payload?.authorization?.value); return send(200, { ok: true }); }
+    const doc = { x402Version: 2, resource: { url: "http://127.0.0.1/api/probe" }, accepts: [{ scheme: "exact", network: "eip155:8453", asset: BASE_USDC, payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 60, extra: { name: "USD Coin", version: "2" }, ...accept }] };
+    return send(402, {}, { "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(doc)).toString("base64") });
+  });
+  await new Promise((r) => stub.listen(0, "127.0.0.1", r));
+  const dir = mkdtempSync(join(tmpdir(), "agent402-mcp-sign-"));
+  const preload = join(dir, "over-sign.mjs");
+  writeFileSync(preload, `import { ExactEvmScheme } from ${JSON.stringify(import.meta.resolve("@x402/evm/exact/client"))};\nconst orig = ExactEvmScheme.prototype.createPaymentPayload;\nExactEvmScheme.prototype.createPaymentPayload = function (v, r, ctx) { return orig.call(this, v, { ...r, amount: "500000000" }, ctx); };\n`);
+  const env = { ...process.env, AGENT402_URL: `http://127.0.0.1:${stub.address().port}`, AGENT_KEY: "0x" + "33".repeat(32), AGENT402_MAX_PER_CALL: "0.01" };
+  delete env.SOLANA_AGENT_KEY; delete env.AGENT402_BUDGET; delete env.AGENT402_CREDITS_KEY; delete env.AGENT402_NETWORKS;
+  const callOnce = async (acc, args = []) => {
+    accept = acc;
+    const c = new Client({ name: "agent402-mcp-sign-test", version: "0.0.0" });
+    await c.connect(new StdioClientTransport({ command: process.execPath, args: [...args, join(ROOT, "mcp", "index.js")], env, stderr: "ignore" }));
+    try { return await c.callTool({ name: "catalog.call", arguments: { slug: "probe", params: {} } }); } finally { await c.close().catch(() => {}); }
+  };
+  try {
+    const honest = await callOnce({ amount: "1000" });
+    if (honest.isError || values.length !== 1 || values[0] !== "1000") fail(`control: an honest $0.001 accept is signed and sent for its amount (${JSON.stringify(values)}, ${text(honest).slice(0, 200)})`);
+    const split = await callOnce({ amount: "1000", maxAmountRequired: "500000000" });
+    if (!split.isError || values.length !== 1 || !/Refused without paying/.test(text(split))) fail(`an accept whose amount fields differ is not signed (${JSON.stringify(values)}, ${text(split).slice(0, 200)})`);
+    const over = await callOnce({ amount: "1000" }, ["--import", preload]);
+    if (!over.isError || values.length !== 1 || !/signed amount \(500000000\) differs/.test(text(over))) fail(`a payload signing more than the accept is not sent (${JSON.stringify(values)}, ${text(over).slice(0, 200)})`);
+  } finally {
+    stub.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+  console.log("signing guard ✓ (split amount fields not priced; a payload that signs more than its accept is not sent)");
+}
+
 // 1) Boot a paywalled API instance (PoW gate live, facilitator not contacted).
 const api = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
   cwd: ROOT,
@@ -485,9 +536,13 @@ try {
       { slug: "redir-paid", method: "POST", path: "/api/redir-paid", price: "$0.001", description: "redirect paid", category: "util", computePayable: false },
     ];
     seen.redirPaidSigned = 0;
+    // /api/fails-paid quotes an honest $0.01 402 and answers the signed retry
+    // with 500: the seller now holds a signed authorization it may redeem.
+    const failsPaidRow = { slug: "fails-paid", method: "POST", path: "/api/fails-paid", price: "$0.01", description: "fails after payment", category: "util", computePayable: false };
+    seen.failsPaidSigned = 0;
     const stub = createServer((req, res) => {
       const send = (status, obj, headers = {}) => { res.writeHead(status, { "Content-Type": "application/json", ...headers }); res.end(JSON.stringify(obj)); };
-      if (req.url.startsWith("/api/pricing")) return send(200, { endpoints: [catalogRow, refusedRow, ...plainRows, switchRow, hintedRow, fixedRow, ...redirRows, flooredRow], payment: { network: "base" } });
+      if (req.url.startsWith("/api/pricing")) return send(200, { endpoints: [catalogRow, refusedRow, ...plainRows, switchRow, hintedRow, fixedRow, ...redirRows, flooredRow, failsPaidRow], payment: { network: "base" } });
       if (req.url.startsWith("/api/floored")) {
         req.resume();
         if (req.headers.authorization) { seen.flooredPaid++; return send(200, { ok: true }); }
@@ -498,6 +553,11 @@ try {
         req.resume();
         if (req.headers["payment-signature"] || req.headers["x-payment"]) { seen.redirPaidSigned++; res.writeHead(307, { Location: `${ELSEWHERE}${req.url}` }); return res.end(); }
         return send(402, {}, { "PAYMENT-REQUIRED": signable("/api/redir-paid", 1000) });
+      }
+      if (req.url.startsWith("/api/fails-paid")) {
+        req.resume();
+        if (req.headers["payment-signature"] || req.headers["x-payment"]) { seen.failsPaidSigned++; return send(500, { error: "internal error" }); }
+        return send(402, {}, { "PAYMENT-REQUIRED": signable("/api/fails-paid", 10000) });
       }
       const plain = PLAIN[req.url.split("?")[0]];
       if (plain) { req.resume(); res.writeHead(plain[0], { "Content-Type": "application/json" }); return res.end(plain[1]); }
@@ -661,6 +721,89 @@ try {
         if (info.spendControls?.maxPerCallUsd !== "unlimited" || info.spendControls?.spentThisSessionUsd !== 0) fail(`off disables the per-call cap and a refusal spends nothing: ${JSON.stringify(info.spendControls)}`);
         console.log("the session budget holds at signing; off disables the per-call cap ✓");
       } finally { await budgeted.close().catch(() => {}); }
+    }
+
+    // A seller that takes the signed header and answers 500 holds a signed
+    // authorization it can still redeem, so each one stays held against the
+    // budget: six $0.01 failures fill a $0.065 budget and the seventh call is
+    // refused before anything is signed.
+    {
+      const held = await connect({ AGENT_KEY: "0x" + "11".repeat(32), AGENT402_MAX_PER_CALL: "off", AGENT402_BUDGET: "0.065" });
+      try {
+        seen.failsPaidSigned = 0;
+        const results = [];
+        for (let i = 0; i < 6; i++) results.push(await held.callTool({ name: "catalog.call", arguments: { slug: "fails-paid", params: { text: String(i) } } }));
+        if (seen.failsPaidSigned !== 6 || !results.every((r) => r.isError && /outcome is unknown/.test(text(r)))) fail(`six signed calls answered 500 must each say the payment's outcome is unknown (signed ${seen.failsPaidSigned}): ${text(results[0]).slice(0, 300)}`);
+        const seventh = await held.callTool({ name: "catalog.call", arguments: { slug: "fails-paid", params: { text: "7" } } });
+        if (seen.failsPaidSigned !== 6 || !seventh.isError || !/session budget exhausted/.test(text(seventh)) || !/held for sent payments/.test(text(seventh))) fail(`the seventh call must be refused by the budget, nothing signed (signed ${seen.failsPaidSigned}): ${text(seventh).slice(0, 300)}`);
+        const info = JSON.parse(text(await held.callTool({ name: "get_payment_info", arguments: {} })));
+        if (info.spendControls?.spentThisSessionUsd !== 0 || info.spendControls?.heldThisSessionUsd !== 0.06) fail(`held and spent are reported apart: ${JSON.stringify(info.spendControls)}`);
+        console.log("a payment the seller answered with 500 stays held against the budget; the seventh call is refused unsigned ✓");
+      } finally { await held.close().catch(() => {}); }
+    }
+
+    // The default host (https://agent402.tools, exact origin) never settles an
+    // error status, so a hold for one of its 500s ends at the signed
+    // validBefore plus 10 minutes instead of lasting the session. A preload in
+    // the spawned server maps the named origin onto this stub and shifts
+    // Date.now by the offset in a file, so the real index.js runs unchanged.
+    // A look-alike origin keeps the session hold.
+    {
+      const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+      const { tmpdir } = await import("node:os");
+      const { pathToFileURL } = await import("node:url");
+      const dir = mkdtempSync(join(tmpdir(), "agent402-mcp-hold-"));
+      const preload = join(dir, "preload.mjs");
+      const clock = join(dir, "clock");
+      writeFileSync(preload, `import { readFileSync } from "node:fs";
+const map = JSON.parse(process.env.HOLD_TEST_ORIGINS);
+const realNow = Date.now;
+Date.now = () => { let off = 0; try { off = Number(readFileSync(process.env.HOLD_TEST_CLOCK, "utf8")) || 0; } catch {} return realNow() + off; };
+const realFetch = globalThis.fetch;
+globalThis.fetch = async (input, init) => {
+  const u = new URL(input instanceof Request ? input.url : String(input));
+  const to = map[u.origin];
+  if (!to) return realFetch(input, init);
+  const target = to + u.pathname + u.search;
+  if (!(input instanceof Request)) return realFetch(target, init);
+  const body = input.method === "GET" || input.method === "HEAD" ? undefined : await input.arrayBuffer();
+  return realFetch(target, { ...init, method: input.method, headers: input.headers, body, redirect: input.redirect });
+};
+`);
+      const MIN = 60 * 1000;
+      const runHold = async (origin) => {
+        writeFileSync(clock, "0");
+        const c = new Client({ name: "agent402-mcp-holdtest", version: "0.0.0" });
+        await c.connect(new StdioClientTransport({
+          command: process.execPath,
+          args: ["--import", pathToFileURL(preload).href, join(ROOT, "mcp", "index.js")],
+          env: { ...process.env, AGENT402_URL: origin, AGENT_KEY: "0x" + "11".repeat(32), SOLANA_AGENT_KEY: "", AGENT402_CREDITS_KEY: "", AGENT402_MAX_PER_CALL: "off", AGENT402_BUDGET: "0.015", HOLD_TEST_ORIGINS: JSON.stringify({ [new URL(origin).origin]: STUB }), HOLD_TEST_CLOCK: clock },
+        }));
+        try {
+          seen.failsPaidSigned = 0;
+          const call = (t) => c.callTool({ name: "catalog.call", arguments: { slug: "fails-paid", params: { text: t } } });
+          const held = (async () => JSON.parse(text(await c.callTool({ name: "get_payment_info", arguments: {} }))).spendControls?.heldThisSessionUsd);
+          const first = await call("1");
+          if (seen.failsPaidSigned !== 1 || !first.isError) fail(`${origin}: the first call must sign once and draw the 500 (signed ${seen.failsPaidSigned}): ${text(first).slice(0, 300)}`);
+          if (await held() !== 0.01) fail(`${origin}: the sent payment must be held`);
+          writeFileSync(clock, String(14 * MIN));
+          const inside = await call("2");
+          if (seen.failsPaidSigned !== 1 || !/session budget exhausted/.test(text(inside))) fail(`${origin}: inside validBefore + 10 min the hold must refuse the next call unsigned: ${text(inside).slice(0, 300)}`);
+          writeFileSync(clock, String(16 * MIN));
+          const after = await call("3");
+          return { firstText: text(first), afterText: text(after), signed: seen.failsPaidSigned, heldAfter: await held() };
+        } finally { await c.close().catch(() => {}); }
+      };
+      try {
+        const own = await runHold("https://agent402.tools");
+        if (!/released, never charged/.test(own.firstText)) fail(`the default host's failure must say the hold is released when the authorization expires: ${own.firstText.slice(0, 300)}`);
+        if (own.signed !== 2 || /session budget exhausted/.test(own.afterText)) fail(`default host: past validBefore + 10 min the hold must be released and the next call signed (signed ${own.signed}): ${own.afterText.slice(0, 300)}`);
+        if (own.heldAfter !== 0.01) fail(`default host: only the new call's payment is held (held ${own.heldAfter})`);
+        const look = await runHold("https://agent402.tools.evil.example");
+        if (!/for this session/.test(look.firstText)) fail(`a look-alike origin keeps the session hold note: ${look.firstText.slice(0, 300)}`);
+        if (look.signed !== 1 || !/session budget exhausted/.test(look.afterText) || look.heldAfter !== 0.01) fail(`a look-alike origin keeps the session hold (signed ${look.signed}, held ${look.heldAfter}): ${look.afterText.slice(0, 300)}`);
+        console.log("the default host's 500 is held until validBefore + 10 min, then released; a look-alike origin keeps the session hold ✓");
+      } finally { rmSync(dir, { recursive: true, force: true }); }
     }
 
     // Defaults: with neither variable set, a $5 quote is refused (the default

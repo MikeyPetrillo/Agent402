@@ -176,7 +176,8 @@ const advisoryWarnings = [];
     ok(paid() === 1, "no caps → default behavior, pays any price");
   }
 
-  // a failed paid call does NOT count against the budget (commit only on settle)
+  // a failed paid call is not settled spend, but the payment fetch may have
+  // sent a signed payment, so its amount is held against the budget
   {
     let paid = 0;
     const c = new Agent402({
@@ -185,9 +186,9 @@ const advisoryWarnings = [];
       fetchImpl: async () => okResp,
     });
     c._catalog = new Map([["cheap", { method: "POST", path: "/api/cheap", computePayable: false, price: "$0.01" }]]);
-    let failed = false; try { await c.call("cheap"); } catch { failed = true; }
-    ok(failed && paid === 1, "a failed paid call throws");
-    ok(c.spendingSummary().dailyUsd === 0, "a failed paid call does not count against the budget");
+    let failed = null; try { await c.call("cheap"); } catch (e) { failed = e; }
+    ok(failed && paid === 1 && failed.paid === "unknown", "a failed paid call throws with paid: \"unknown\"");
+    ok(c.spendingSummary().dailyUsd === 0 && c.spendingSummary().heldUsd === 0.01, "a failed paid call is held against the budget, not settled");
   }
 }
 
@@ -557,6 +558,222 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     let e = null; try { await c.call("chat", {}); } catch (err) { e = err; }
     ok(seen.signed.length === 1 && e?.name === "SpendingLimitError" && e.limit === "dailyLimitUsd" && e.atSigning === true,
       `a second $0.06 signature is refused with $0.04 of the daily cap left (${e?.message})`);
+  }
+  // The amount a payload actually signs is read back before it is sent: a
+  // signer that commits to more than the accept it was given asks is refused,
+  // and the seller never sees a signature. Each case records the signed
+  // authorization.value of every payment header that arrives.
+  const { ExactEvmScheme } = await import("@x402/evm/exact/client");
+  const { ExactEvmSchemeV1 } = await import("@x402/evm/exact/v1/client");
+  const rawSeller = (version, accepts) => {
+    const seen = { values: [] };
+    const doc = { x402Version: version, resource: { url: "https://seller.example/v1/chat/completions" }, accepts: accepts.map((a) => ({ scheme: "exact", payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 300, resource: "https://seller.example/v1/chat/completions", extra: { name: "USD Coin", version: "2" }, ...a })) };
+    const answer = () => version === 2
+      ? new Response("{}", { status: 402, headers: { "content-type": "application/json", "payment-required": Buffer.from(JSON.stringify(doc)).toString("base64") } })
+      : new Response(JSON.stringify(doc), { status: 402, headers: { "content-type": "application/json" } });
+    const payInner = async (req) => {
+      const sig = req.headers.get("payment-signature") || req.headers.get("x-payment");
+      if (!sig) return answer();
+      seen.values.push(JSON.parse(Buffer.from(sig, "base64").toString("utf8")).payload?.authorization?.value);
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
+    };
+    return { seen, payInner, preflightFetch: async () => answer() };
+  };
+  const guarded = (s, register) => {
+    const xc = new x402Client();
+    xc.setSpendControls?.(false);
+    register(xc);
+    const c = new Agent402({ baseUrl: "https://seller.example", cache: false, fetch: wrapFetchWithPayment(s.payInner, xc), fetchImpl: s.preflightFetch, x402Client: xc, maxPerCallUsd: 0.1 });
+    c._catalog = new Map([["chat", { method: "POST", path: "/v1/chat/completions", computePayable: false, price: "$0.01" }]]);
+    return c;
+  };
+  {
+    const real = new ExactEvmScheme(account);
+    const over = (xc) => xc.register("eip155:8453", { scheme: "exact", createPaymentPayload: (v, r, ctx) => real.createPaymentPayload(v, { ...r, amount: "5000000" }, ctx) });
+    const s = rawSeller(2, cheap);
+    let e = null; try { await guarded(s, over).call("chat", {}); } catch (err) { e = err; }
+    ok(s.seen.values.length === 0 && e?.name === "SpendingLimitError" && e.atSigning === true && /signed amount \(5000000\)/.test(e.message), `a payload signing $5 for a $0.01 accept is refused before it is sent (${e?.message})`);
+    const honest = rawSeller(2, cheap);
+    await guarded(honest, (xc) => xc.register("eip155:8453", real)).call("chat", {});
+    ok(honest.seen.values.length === 1 && honest.seen.values[0] === "10000", "control: the same guard sends a payload that signs the accept's own amount");
+  }
+  // A v1 signer signs maxAmountRequired, so a v1 accept whose `amount` reads
+  // $0.01 beside a $5 maxAmountRequired is not priced at $0.01. The stock v1
+  // signer takes bare chain names, which the table does not price; this one
+  // names Base by its CAIP-2 id, as a signer mapped to the table would.
+  {
+    const v1 = new ExactEvmSchemeV1(account);
+    const mapped = (xc) => xc.registerV1("eip155:8453", { scheme: "exact", createPaymentPayload: (v, r) => v1.createPaymentPayload(v, { ...r, network: "base" }) });
+    const s = rawSeller(1, [{ network: "eip155:8453", asset: BASE_USDC, amount: "10000", maxAmountRequired: "5000000" }]);
+    let e = null; try { await guarded(s, mapped).call("chat", {}); } catch (err) { e = err; }
+    ok(s.seen.values.length === 0 && e?.name === "SpendingLimitError", `a v1 accept whose two amount fields differ is not signed (${e?.message})`);
+    const honest = rawSeller(1, [{ network: "eip155:8453", asset: BASE_USDC, maxAmountRequired: "10000" }]);
+    await guarded(honest, mapped).call("chat", {});
+    ok(honest.seen.values.length === 1 && honest.seen.values[0] === "10000", "control: a v1 accept priced from maxAmountRequired is signed for that amount");
+    const bare = rawSeller(1, [{ network: "base", asset: BASE_USDC, maxAmountRequired: "10000" }]);
+    let eb = null; try { await guarded(bare, (xc) => registerExactEvmScheme(xc, { signer: account })).call("chat", {}); } catch (err) { eb = err; }
+    ok(bare.seen.values.length === 0 && eb?.name === "SpendingLimitError", `a v1 accept on the bare name "base" is not priced, so not signed (${eb?.message})`);
+  }
+}
+
+// Offline: a payment header that left the process is outstanding until its
+// authorization can no longer settle, whatever the seller answered. A seller
+// that takes the signed header and answers 500 (or drops the connection) can
+// still redeem the authorization before its validBefore, so its signed amount
+// is held against the caps, reported as held (not settled), and the error
+// carries paid: "unknown". A refusal before any header was sent releases at
+// once. Real @x402/fetch wrapper, throwaway key, nothing on chain.
+{
+  const { x402Client } = await import("@x402/core/client");
+  const { wrapFetchWithPayment } = await import("@x402/fetch");
+  const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
+  const { privateKeyToAccount } = await import("viem/accounts");
+  const account = privateKeyToAccount("0x" + "33".repeat(32));
+  const DAY = 24 * 60 * 60 * 1000;
+  const offer = (amount) => Buffer.from(JSON.stringify({
+    x402Version: 2,
+    resource: { url: "https://seller.example/api/thing", description: "thing", mimeType: "application/json" },
+    accepts: [{ scheme: "exact", network: "eip155:8453", asset: BASE_USDC, amount, payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } }],
+  })).toString("base64");
+  // mode: "500" answers a signed request with HTTP 500, "drop" throws as a
+  // dropped connection would, "ok" serves it; "unpaid500" answers the unpaid
+  // request itself with 500 (no 402, so nothing is ever signed).
+  const seller = () => {
+    const st = { mode: "500", amount: "10000", paidAmount: null, signed: [] };
+    const answer402 = (amount = st.amount) => new Response("{}", { status: 402, headers: { "content-type": "application/json", "payment-required": offer(amount) } });
+    const inner = async (req) => {
+      const sig = req.headers.get("payment-signature");
+      if (!sig) return st.mode === "unpaid500" ? new Response(JSON.stringify({ error: "down" }), { status: 500 }) : answer402(st.paidAmount ?? st.amount);
+      st.signed.push(JSON.parse(Buffer.from(sig, "base64").toString("utf8")).payload.authorization);
+      if (st.mode === "drop") throw Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }) });
+      if (st.mode === "ok") return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify({ error: "internal error" }), { status: 500, headers: { "content-type": "application/json" } });
+    };
+    return { st, inner, preflight: async () => (st.mode === "unpaid500" ? new Response("{}", { status: 500 }) : answer402()) };
+  };
+  // baseUrl "default" omits the option, so the client's built-in host is used.
+  const build = ({ guard = true, baseUrl = "https://seller.example", ...caps } = {}) => {
+    const s = seller();
+    const xc = new x402Client();
+    xc.setSpendControls?.(false);
+    registerExactEvmScheme(xc, { signer: account });
+    const c = new Agent402({ ...(baseUrl === "default" ? {} : { baseUrl }), cache: false, fetch: wrapFetchWithPayment(s.inner, xc), fetchImpl: s.preflight, ...(guard ? { x402Client: xc } : {}), ...caps });
+    c._catalog = new Map([["thing", { method: "POST", path: "/api/thing", computePayable: false, price: "$0.01" }]]);
+    return { c, st: s.st };
+  };
+  const callErr = async (c) => { try { await c.call("thing", {}); return null; } catch (e) { return e; } };
+  const realNow = Date.now;
+  const at = async (offsetMs, fn) => { Date.now = () => realNow() + offsetMs; try { return await fn(); } finally { Date.now = realNow; } };
+
+  for (const guard of [true, false]) {
+    const label = guard ? "with the signing guard" : "through a pre-wrapped fetch";
+    // Six calls whose seller takes the signed header and answers 500: each
+    // signed $0.01 stays held, so a $0.065 daily cap refuses the seventh
+    // before anything is signed.
+    const { c, st } = build({ guard, dailyLimitUsd: 0.065 });
+    const errs = [];
+    for (let i = 0; i < 6; i++) errs.push(await callErr(c));
+    ok(st.signed.length === 6 && errs.every((e) => e && e.status === 500), `${label}: six calls each sent a signed header and drew a 500 (${st.signed.length})`);
+    const seventh = await callErr(c);
+    ok(seventh?.name === "SpendingLimitError" && seventh.limit === "dailyLimitUsd" && st.signed.length === 6, `${label}: the seventh call is refused by the daily cap and signs nothing (${seventh?.name}: ${seventh?.message?.slice(0, 120)})`);
+    ok(errs.every((e) => e.paid === "unknown"), `${label}: an error after the header was sent says paid: "unknown", not paid: false (${errs[0]?.paid})`);
+    const sum = c.spendingSummary();
+    ok(sum.dailyUsd === 0 && sum.calls === 0 && sum.heldUsd === 0.06 && sum.heldCalls === 6, `${label}: spendingSummary reports $0.06 held in six calls and nothing settled (${JSON.stringify(sum)})`);
+  }
+
+  // A dropped connection after the header was sent is held the same way.
+  {
+    const { c, st } = build({ dailyLimitUsd: 1 });
+    st.mode = "drop";
+    const e = await callErr(c);
+    ok(st.signed.length === 1 && e && e.paid === "unknown" && c.spendingSummary().heldUsd === 0.01, `a connection dropped after the signed header is held and says paid: "unknown" (${e?.message?.slice(0, 80)})`);
+  }
+
+  // Refusals before any header was sent release at once.
+  {
+    const { c, st } = build({ maxPerCallUsd: 0.02 });
+    st.paidAmount = "50000"; // the paid request's own 402 asks $0.05
+    const e = await callErr(c);
+    ok(e?.name === "SpendingLimitError" && e.atSigning === true && st.signed.length === 0 && c._spend.log.length === 0 && c.spendingSummary().heldUsd === 0, `a refusal at signing holds nothing (${e?.message?.slice(0, 80)})`);
+    const u = build({ dailyLimitUsd: 0.015 });
+    u.st.mode = "unpaid500";
+    const e2 = await callErr(u.c);
+    ok(e2?.status === 500 && e2.paid === false && u.st.signed.length === 0 && u.c._spend.log.length === 0, `a 500 to the unpaid request (no 402, nothing signed) releases its reservation and says paid: false (${e2?.paid})`);
+    u.st.mode = "ok";
+    await u.c.call("thing", {});
+    ok(u.c.spendingSummary().dailyUsd === 0.01 && u.c.spendingSummary().heldUsd === 0, "and the budget it released pays the next call");
+  }
+
+  // Held and settled are reported apart.
+  {
+    const { c, st } = build({ dailyLimitUsd: 1 });
+    st.mode = "ok"; await c.call("thing", {});
+    st.mode = "500"; await callErr(c);
+    const sum = c.spendingSummary();
+    ok(sum.dailyUsd === 0.01 && sum.calls === 1 && sum.heldUsd === 0.01 && sum.heldCalls === 1 && sum.heldByHost["seller.example"] === 0.01, `spendingSummary keeps settled and held apart (${JSON.stringify(sum)})`);
+  }
+
+  // A hold ends only when its authorization can no longer settle AND the
+  // rolling window has passed it: past validBefore the seller may already
+  // have redeemed it, so it stays counted for the window like a settled call.
+  {
+    const { c, st } = build({ dailyLimitUsd: 0.015 });
+    await at(0, () => callErr(c));
+    const validBefore = Number(st.signed[0].validBefore) * 1000;
+    ok(Math.abs(validBefore - (realNow() + 300000)) < 5000, "the held authorization is valid for the accept's 300 seconds");
+    const pastValidity = await at(60 * 60 * 1000, () => callErr(c));
+    ok(pastValidity?.name === "SpendingLimitError" && pastValidity.limit === "dailyLimitUsd" && st.signed.length === 1, `an hour on, past its validBefore, the hold still counts inside the 24h window (${pastValidity?.name})`);
+    st.mode = "ok";
+    await at(DAY + 60000, () => c.call("thing", {}));
+    ok(st.signed.length === 2 && (await at(DAY + 60000, () => c.spendingSummary().heldUsd)) === 0, "once both its validity and the window have passed, the hold is released and the next call pays");
+  }
+
+  // The built-in default host never settles an error status, so a hold for
+  // one of its 500s ends at validBefore plus the clock slack, with no 24h
+  // floor. Matched by exact origin: a look-alike host, or any other baseUrl,
+  // keeps the rule above. Without an x402Client the expiry is not readable,
+  // so the default host's hold is a short fixed window instead.
+  {
+    const { HOLD_SLACK_MS, DEFAULT_HOST_BLIND_HOLD_MS, DEFAULT_BASE_URL } = await import("./index.js");
+    ok(DEFAULT_BASE_URL === "https://agent402.tools" && new Agent402().baseUrl === DEFAULT_BASE_URL, "the built-in baseUrl is DEFAULT_BASE_URL");
+    for (const baseUrl of ["default", "https://agent402.tools", "https://agent402.tools:443/"]) {
+      const { c, st } = build({ baseUrl, dailyLimitUsd: 0.015 });
+      const e = await at(0, () => callErr(c));
+      ok(e?.status === 500 && e.paid === "unknown" && c.spendingSummary().heldUsd === 0.01, `${baseUrl}: a 500 after the signed header is held (${e?.paid} ${c.spendingSummary().heldUsd})`);
+      const releaseAt = Number(st.signed[0].validBefore) * 1000 + HOLD_SLACK_MS;
+      const before = await at(releaseAt - realNow() - 30000, () => callErr(c));
+      ok(before?.name === "SpendingLimitError" && before.limit === "dailyLimitUsd" && st.signed.length === 1, `${baseUrl}: just before validBefore + slack the hold still refuses the next call (${before?.name})`);
+      st.mode = "ok";
+      await at(releaseAt - realNow() + 30000, () => c.call("thing", {}));
+      ok(st.signed.length === 2 && c.spendingSummary().heldUsd === 0 && c.spendingSummary().dailyUsd === 0.01, `${baseUrl}: past validBefore + slack the hold is released and the next call pays (${JSON.stringify(c.spendingSummary())})`);
+    }
+    for (const baseUrl of ["https://agent402.tools.evil.example", "https://evil.example/agent402.tools", "http://agent402.tools", "https://seller.example"]) {
+      const { c, st } = build({ baseUrl, dailyLimitUsd: 0.015 });
+      await at(0, () => callErr(c));
+      const later = await at(60 * 60 * 1000, () => callErr(c));
+      ok(later?.name === "SpendingLimitError" && st.signed.length === 1 && (await at(60 * 60 * 1000, () => c.spendingSummary().heldUsd)) === 0.01, `${baseUrl}: an hour on, past validBefore + slack, the hold still counts (24h rule) (${later?.name})`);
+      ok((await at(DAY - 60000, () => c.spendingSummary().heldUsd)) === 0.01 && (await at(DAY + 60000, () => c.spendingSummary().heldUsd)) === 0, `${baseUrl}: the hold lasts the 24h window`);
+    }
+    // No x402Client: the client cannot read validBefore.
+    {
+      const { c, st } = build({ guard: false, baseUrl: "default", dailyLimitUsd: 0.015 });
+      const e = await at(0, () => callErr(c));
+      ok(e?.paid === "unknown" && c.spendingSummary().heldUsd === 0.01, "default host, no x402Client: a failed paid call is held");
+      ok((await at(DEFAULT_HOST_BLIND_HOLD_MS - 30000, () => c.spendingSummary().heldUsd)) === 0.01, "default host, no x402Client: still held just inside the short window");
+      st.mode = "ok";
+      await at(DEFAULT_HOST_BLIND_HOLD_MS + 30000, () => c.call("thing", {}));
+      ok(c.spendingSummary().heldUsd === 0 && c.spendingSummary().dailyUsd === 0.01, `default host, no x402Client: released after the short window, not 24h (${JSON.stringify(c.spendingSummary())})`);
+      const o = build({ guard: false, baseUrl: "https://agent402.tools.evil.example", dailyLimitUsd: 0.015 });
+      await at(0, () => callErr(o.c));
+      ok((await at(DEFAULT_HOST_BLIND_HOLD_MS + 30000, () => o.c.spendingSummary().heldUsd)) === 0.01, "look-alike host, no x402Client: still held past the short window (24h rule)");
+    }
+    // A dropped connection on the default host may have settled: 24h rule.
+    {
+      const { c, st } = build({ baseUrl: "default", dailyLimitUsd: 0.015 });
+      st.mode = "drop";
+      await at(0, () => callErr(c));
+      ok((await at(60 * 60 * 1000, () => c.spendingSummary().heldUsd)) === 0.01, "default host, dropped connection: still held an hour on (it may have settled)");
+    }
   }
 }
 
@@ -970,7 +1187,7 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     c._catalog = new Map([["t", { method: "POST", path: "/api/t", computePayable: false, price: "$0.01" }]]);
     let err = null;
     try { await c.call("t", { text: "a" }); } catch (e) { err = e; }
-    ok(err && err.message.includes(long) && err.message.endsWith(`(expected: {"text":"string"})`) && !/more characters not shown/.test(err.message), "a 2,600-character seller error reaches the caller whole, nothing sliced, expected block intact");
+    ok(err && err.message.includes(long) && err.message.includes(`${long} (expected: {"text":"string"})`) && !/more characters not shown/.test(err.message), "a 2,600-character seller error reaches the caller whole, nothing sliced, expected block intact");
   }
 
   {
@@ -1191,11 +1408,11 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     ok(seen.prefer[0]?.[1] === null, "respondAsync: false never asks for a job");
     jobFail = true; jobPlan = ["succeeded"];
     let e = null; try { await c.call("slow", { prompt: "y" }); } catch (x) { e = x; }
-    ok(e && e.status === 502 && /upstream down/.test(e.message) && c.spendingSummary().dailyUsd === 0.51, `a failed job is a failed call and its spend is released (${e?.status} ${e?.message?.slice(0, 60)})`);
+    ok(e && e.status === 502 && /upstream down/.test(e.message) && e.paid === "unknown" && c.spendingSummary().dailyUsd === 0.51 && c.spendingSummary().heldUsd === 0.5, `a failed job is a failed call; its amount is held, not settled, since the payment fetch may have sent a payment (${e?.status} ${e?.paid} ${c.spendingSummary().heldUsd})`);
     jobFail = false; jobPlan = ["running"];
     e = null; try { await c.call("slow", { prompt: "z" }, { asyncTimeoutMs: 4500 }); } catch (x) { e = x; }
     ok(e instanceof AsyncJobPendingError && e.jobUrl === `${base}/api/jobs/${"ab".repeat(24)}` && e.mayBeCharged === true, `a job past the timeout throws AsyncJobPendingError with its link (${e?.name})`);
-    ok(c.spendingSummary().dailyUsd === 1.01, "a job still running keeps its spend reserved (it may yet settle)");
+    ok(c.spendingSummary().dailyUsd === 0.51 && c.spendingSummary().heldUsd === 1 && e.paid === "unknown", `a job still running keeps its amount held (it may yet settle) (${JSON.stringify(c.spendingSummary())})`);
     jobPlan = ["succeeded"];
     const collected = await c.collectJob(e.jobUrl);
     ok(collected.clip === "done", "collectJob(jobUrl) collects the answer later");
@@ -1224,7 +1441,7 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
   const { x402Client } = await import("@x402/core/client");
   const { wrapFetchWithPayment } = await import("@x402/fetch");
   const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
-  const { GATEWAY_KIND_NAME, GATEWAY_MAX_TIMEOUT_SECONDS, GatewayPendingError, SpendingLimitError, gatewayAcceptOf, signGatewayPayment } = await import("./index.js");
+  const { GATEWAY_KIND_NAME, GATEWAY_MAX_TIMEOUT_SECONDS, GatewayPendingError, SpendingLimitError, gatewayAcceptOf, signGatewayPayment, HOLD_SLACK_MS } = await import("./index.js");
   const account = privateKeyToAccount("0x" + "44".repeat(32));
   let signs = 0;
   const signer = { address: account.address, signTypedData: (...a) => { signs++; return account.signTypedData(...a); } };
@@ -1249,7 +1466,7 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     if (req.url === "/api/pricing") return send(200, { endpoints: [{ slug: "thing", method: "GET", path: "/api/thing", computePayable: false, price: "$0.005" }] });
     if (!req.url.startsWith("/api/thing")) return send(404, {});
     const accepts = st.offer === "both" ? [plainAccept, batchedAccept] : st.offer === "plain" ? [plainAccept] : st.offer === "long" ? [plainAccept, { ...batchedAccept, maxTimeoutSeconds: 365 * 24 * 3600 }] : st.offer === "dear" ? [plainAccept, { ...batchedAccept, amount: "20000" }] : [plainAccept, arcBatched];
-    const offer = { x402Version: 2, resource: { url: `http://127.0.0.1:${port}/api/thing`, description: "thing", mimeType: "application/json" }, accepts };
+    const offer = { x402Version: st.version ?? 2, resource: { url: `http://127.0.0.1:${port}/api/thing`, description: "thing", mimeType: "application/json" }, accepts };
     const header = req.headers["payment-signature"];
     if (!header) return send(402, {}, { "payment-required": b64(offer) });
     let p = null; try { p = unb64(header); } catch { p = null; }
@@ -1374,6 +1591,17 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
       let e2 = null; try { await longAlone.call("thing", { q: 14 }); } catch (err) { e2 = err; }
       ok(e2 && e2.status === 402 && signs === before + 1 && /no Circle Gateway batched accept/.test(e2.message), "with no other way to pay, an oversized window is refused without a signature");
       st.offer = "both";
+      // A version 1 challenge prices an accept from maxAmountRequired: a
+      // batched accept naming only amount carries no price there and is not signed.
+      st.version = 1;
+      const v1Alone = mk({ gateway: { signer } });
+      let e3 = null; try { await v1Alone.call("thing", { q: 151 }); } catch (err) { e3 = err; }
+      ok(e3 && e3.status === 402 && signs === before + 1 && /no Circle Gateway batched accept/.test(e3.message), `a batched accept the challenge's version does not price is never signed (${e3?.message?.slice(0, 80)})`);
+      st.version = 2;
+      const v2Again = mk({ gateway: { signer } });
+      const out5 = await v2Again.call("thing", { q: 161 });
+      ok(out5.paid === "gateway" && signs === before + 2, "control: the same accept under a version 2 challenge is signed once");
+      st.version = undefined;
     }
     // A signer that throws: nothing was sent, so the reservation is released.
     {
@@ -1389,9 +1617,21 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
       st.mode = "short";
       const c = mk({ gateway: { signer } });
       let e = null; try { await c.call("thing", { q: 10 }); } catch (err) { e = err; }
-      ok(e && e.status === 402 && e.paid === false && /Circle Gateway balance holds less/.test(e.message) && /deposit through Circle's GatewayWallet contract/.test(e.message) && e.message.includes(account.address), `a refusal for a short Gateway balance relays the seller's hint and says to deposit first (${e?.message?.slice(0, 120)})`);
+      ok(e && e.status === 402 && e.paid === "unknown" && /Circle Gateway balance holds less/.test(e.message) && /deposit through Circle's GatewayWallet contract/.test(e.message) && e.message.includes(account.address), `a refusal for a short Gateway balance relays the seller's hint and says to deposit first (${e?.message?.slice(0, 120)})`);
       ok(/stays valid until its validBefore/.test(e.message) && /counts against this client's spending caps/.test(e.message), "and says the sent authorization stays valid and counts against the caps");
-      ok(c.spendingSummary().dailyUsd === 0.005 && c.spendingSummary().calls === 1, `a refused batched authorization was sent, so it stays counted against the caps (${c.spendingSummary().dailyUsd})`);
+      ok(c.spendingSummary().dailyUsd === 0 && c.spendingSummary().heldUsd === 0.005 && c.spendingSummary().heldCalls === 1 && e.heldUsd === 0.005, `a refused batched authorization was sent, so it stays held against the caps, not settled (${JSON.stringify(c.spendingSummary())})`);
+      // Its validity runs past the rolling window (seven days), so the hold
+      // outlives the window and ends only once validBefore has passed.
+      const realNow = Date.now;
+      const validBefore = Number(lastPaid().payload.authorization.validBefore) * 1000;
+      try {
+        Date.now = () => realNow() + 2 * 24 * 3600 * 1000;
+        ok(c.spendingSummary().heldUsd === 0.005, "two days on, past the 24h window, the seven-day authorization is still held");
+        Date.now = () => validBefore - 60_000;
+        ok(c.spendingSummary().heldUsd === 0.005, "a minute before its validBefore it is still held");
+        Date.now = () => validBefore + HOLD_SLACK_MS + 1000;
+        ok(c.spendingSummary().heldUsd === 0 && c.spendingSummary().heldCalls === 0, "once validBefore and the clock slack have passed, the hold is released");
+      } finally { Date.now = realNow; }
       const capped = mk({ gateway: { signer }, dailyLimitUsd: 0.009 });
       let e3 = null; try { await capped.call("thing", { q: 16 }); } catch (err) { e3 = err; }
       let e4 = null; try { await capped.call("thing", { q: 17 }); } catch (err) { e4 = err; }
@@ -1418,7 +1658,7 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
       st.pendingLeft = 99; st.paid.length = 0;
       let e = null; try { await c.call("thing", { q: 12 }); } catch (err) { e = err; }
       ok(e instanceof GatewayPendingError && e.paymentHeader && unb64(e.paymentHeader).payload.authorization.nonce === st.paid[0].payload.authorization.nonce && st.paid.length === 4 && st.paid.every((p) => p.payload.authorization.nonce === st.paid[0].payload.authorization.nonce), `still pending after the resends: GatewayPendingError carries the header that was sent (${st.paid.length} sends, ${e?.name})`);
-      ok(e.status === 402 && e.paid === null && c.spendingSummary().dailyUsd === 0.01, "the unconfirmed payment counts against the caps (Gateway may settle it)");
+      ok(e.status === 402 && e.paid === "unknown" && c.spendingSummary().dailyUsd === 0.005 && c.spendingSummary().heldUsd === 0.005, `the unconfirmed payment is held against the caps (Gateway may settle it) (${JSON.stringify(c.spendingSummary())})`);
       st.mode = "ok";
     }
   } finally { srv.close(); }

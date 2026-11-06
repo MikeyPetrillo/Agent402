@@ -813,6 +813,7 @@ export const CAIP2_NAMES = {
   "eip155:1329": "sei",
   "eip155:10": "optimism",
   "eip155:5042": "arc",
+  "eip155:57073": "ink",
 };
 
 /** Fold a raw CAIP-2 counter key into its friendly name.

@@ -18,6 +18,51 @@ Router:
   every challenge version, and refuses a seller accept whose price fields
   disagree; a live quote with disagreeing fields reads as unpriced.
 
+### 2026-11-06 (settler alarm, direct upstream switch, facilitator map)
+Payments:
+- A payment whose payload declares an x402 version other than the one this
+  server offers is answered with the 402 offer instead of being matched.
+- Payment headers are read once at intake through one decoder and passed on
+  in canonical form, so every check reads the same payment.
+- A Stellar payment's signed authorization is claimed before it settles, so
+  one signed payment is served once.
+- The Tempo buyer pays only challenges whose method details it recognizes.
+- MPP subscription renewal reconciliation reads the renewal amount in base
+  units and finds a renewal that landed after a timed-out send.
+- MPP subscription activation signs with its own 25 s validity window, so a
+  timed-out activation cannot land after its answer.
+Operations:
+- A `subscriptionRenewals` status word reads `unconfirmed` when an MPP
+  subscription renewal has stayed unconfirmed for longer than
+  `MPP_SUB_UNCONFIRMED_ALERT_HOURS`, and the heartbeat and status Worker page
+  on it.
+- A `robinhoodSettler` status word reads `relayer` when our own relayer has
+  settled Robinhood Chain sales in place of the listed facilitator for longer
+  than `ROBINHOOD_RELAYER_FIRST_ALERT_HOURS`, and the heartbeat and status
+  Worker page on it.
+- The manifest's facilitator map names only chains this server offers.
+- A 402 exposes to browsers only the headers it carries, and the MPP charge
+  challenge leaves out the output schema the x402 challenge already holds, so
+  every 402 stays well inside common header limits.
+Gateway:
+- An optional direct inference upstream (`DIRECT_UPSTREAM_*`, off unless set)
+  serves listed models on the chat wire with zero data retention
+  requested on every call, and falls back to the usual route on any failure;
+  while it is configured, the privacy page names it under third parties.
+Operations:
+- The repo's paid buy scripts price offers from a known asset table, sign
+  only the amount that passed their cap, and refuse a target outside this
+  service unless told otherwise.
+Packages:
+- viem is 2.57.16.
+- agent402-client 0.8.23, agent402-mcp 0.13.29 and agent402-openclaw 0.5.9
+  price an offer by the field its challenge version signs, check the signed
+  amount before sending, and openclaw removes its per-call cap only with an
+  explicit acknowledgment.
+- agent402-client and agent402-mcp keep a sent payment's signed amount held
+  against their caps until its authorization can no longer settle, and an
+  error after sending reports the payment as unknown rather than unpaid.
+
 ### 2026-11-05 (Robinhood facilitator order, public-index disclosure, job buys)
 Payments:
 - On Robinhood Chain the server settles through the first listed facilitator

@@ -1,13 +1,16 @@
 // Known payment assets, and the USD value of an x402 accept priced from them.
 //
-// An x402 "exact" signer signs the accept's raw base-unit `amount` for the
-// accept's `asset`. A spending cap therefore has to price that amount with the
-// asset's real decimals, and a decimals hint the seller sends beside it (for
-// example `extra.decimals`) is not evidence of anything. So the price of an
-// accept comes from this table alone: the stablecoins each network settles on
-// the Agent402 rails, with their on-chain decimals. An accept whose
-// (network, asset) pair is not in the table cannot be priced, and a buyer with
-// a cap does not sign it.
+// An x402 "exact" signer signs the accept's raw base-unit amount for the
+// accept's `asset`: `amount` under x402 v2, `maxAmountRequired` under v1. A
+// spending cap therefore has to price the field the signer of that version
+// reads, with the asset's real decimals, and a decimals hint the seller sends
+// beside it (for example `extra.decimals`) is not evidence of anything. So the
+// price of an accept comes from its challenge's version and this table alone:
+// the stablecoins each network settles on the Agent402 rails, with their
+// on-chain decimals. An accept whose (network, asset) pair is not in the table,
+// or that carries both amount fields with different values, cannot be priced,
+// and a buyer with a cap does not sign it. The table is keyed by CAIP-2 ids
+// only: a bare v1 network name (for example "base") is not priced.
 //
 // The same file ships in agent402-client, agent402-mcp and agent402-openclaw;
 // the parent repo's scripts/test-known-assets.js keeps the copies identical and
@@ -85,13 +88,33 @@ export function knownAsset(network, asset) {
   return list.find((e) => sameAsset(e.asset, asset)) || null;
 }
 
-/** The USD value of one accept: its base-unit amount (`amount` in x402 v2,
- *  `maxAmountRequired` in v1) over the KNOWN decimals of its asset. null when
- *  the asset is not known or the amount is not a whole number of base units. */
-export function acceptUsd(accept) {
+/** The base-unit amount the signer of `x402Version` signs for one accept, as
+ *  a string of digits: `maxAmountRequired` under v1, `amount` under v2. With
+ *  no version, the one field present (or both, when they agree). null when
+ *  the field that version signs is missing or not a whole number, when the
+ *  version is neither 1 nor 2, and whenever the accept carries both fields
+ *  with different values: such an accept means one price to one reader and
+ *  another to the next, so it is not priced at all. */
+export function acceptAmount(accept, x402Version = undefined) {
   if (!accept || typeof accept !== "object") return null;
-  const raw = accept.amount ?? accept.maxAmountRequired;
-  if (raw == null || !/^\d+$/.test(String(raw))) return null;
+  const has = (x) => x != null && x !== "";
+  const v2 = accept.amount, v1 = accept.maxAmountRequired;
+  if (has(v2) && has(v1) && String(v2) !== String(v1)) return null;
+  let raw;
+  if (x402Version === 1) raw = v1;
+  else if (x402Version === 2) raw = v2;
+  else if (x402Version == null) raw = has(v2) ? v2 : v1;
+  else return null;
+  if (!has(raw) || !/^\d+$/.test(String(raw))) return null;
+  return String(raw);
+}
+
+/** The USD value of one accept: the base-unit amount its version's signer
+ *  signs (acceptAmount) over the KNOWN decimals of its asset. null when the
+ *  asset is not known or the amount cannot be read. */
+export function acceptUsd(accept, x402Version = undefined) {
+  const raw = acceptAmount(accept, x402Version);
+  if (raw == null) return null;
   const entry = knownAsset(accept.network, accept.asset);
   if (!entry) return null;
   return Number(raw) / 10 ** entry.decimals;
@@ -99,11 +122,11 @@ export function acceptUsd(accept) {
 
 /** The USD values of a 402's accepts: `max` and `min` over the accepts that can
  *  be priced, and `unknown`, the count that cannot. null when there are none. */
-export function quoteOf(accepts) {
+export function quoteOf(accepts, x402Version = undefined) {
   if (!Array.isArray(accepts) || !accepts.length) return null;
   let max = null, min = null, unknown = 0;
   for (const a of accepts) {
-    const usd = acceptUsd(a);
+    const usd = acceptUsd(a, x402Version);
     if (usd == null) { unknown++; continue; }
     if (max == null || usd > max) max = usd;
     if (min == null || usd < min) min = usd;
@@ -128,9 +151,9 @@ export function guardSigning(client, { allowance, onSign = null, onRefuse = null
   const refuse = (detail) => { try { onRefuse?.(detail); } catch { /* the refusal stands */ } return detail; };
   client.registerPolicy((version, accepts) => {
     const cap = allowance();
-    const kept = accepts.filter((a) => { const usd = acceptUsd(a); return usd != null && usd <= cap; });
+    const kept = accepts.filter((a) => { const usd = acceptUsd(a, version); return usd != null && usd <= cap; });
     if (!kept.length) {
-      const q = quoteOf(accepts);
+      const q = quoteOf(accepts, version);
       const d = refuse({ reason: q && q.min != null ? "over-allowance" : "unknown-asset", priceUsd: q ? q.min : null, allowanceUsd: cap });
       throw new Error(d.reason === "unknown-asset"
         ? "spending guard: no payment option is in a known asset, so none can be priced; nothing was signed"
@@ -138,8 +161,8 @@ export function guardSigning(client, { allowance, onSign = null, onRefuse = null
     }
     return kept;
   });
-  client.onBeforePaymentCreation(async ({ selectedRequirements: r }) => {
-    const usd = acceptUsd(r);
+  client.onBeforePaymentCreation(async ({ paymentRequired, selectedRequirements: r }) => {
+    const usd = acceptUsd(r, paymentRequired?.x402Version);
     const cap = allowance();
     if (usd == null) {
       refuse({ reason: "unknown-asset", priceUsd: null, allowanceUsd: cap });
@@ -151,6 +174,98 @@ export function guardSigning(client, { allowance, onSign = null, onRefuse = null
     }
     onSign?.(usd, r);
     return undefined;
+  });
+  guardSignedAmount(client, { allowance, onRefuse: refuse });
+  return client;
+}
+
+// The token programs a Solana "exact" payment moves its asset through, and
+// the TransferChecked instruction's tag.
+const SOLANA_TOKEN_PROGRAMS = new Set(["TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"]);
+const TRANSFER_CHECKED = 12;
+
+/** The amount a Solana payment transaction moves: its one token-program
+ *  instruction, which must be a TransferChecked, read as base units and
+ *  decimals. Decoded with @solana/kit, the peer every Solana x402 signer
+ *  already loads. null when the transaction cannot be read or does not hold
+ *  exactly that one transfer. */
+async function solanaTransferOf(transaction) {
+  if (typeof transaction !== "string" || !transaction) return null;
+  try {
+    const kit = await import("@solana/kit");
+    const tx = kit.getTransactionDecoder().decode(kit.getBase64Encoder().encode(transaction));
+    const msg = kit.getCompiledTransactionMessageDecoder().decode(tx.messageBytes);
+    const keys = msg.staticAccounts || [];
+    const ixs = msg.version === 1
+      ? (msg.instructionHeaders || []).map((h, i) => ({ program: keys[h.programAccountIndex], data: msg.instructionPayloads?.[i]?.instructionData }))
+      : (msg.instructions || []).map((ix) => ({ program: keys[ix.programAddressIndex], data: ix.data }));
+    const token = ixs.filter((ix) => SOLANA_TOKEN_PROGRAMS.has(String(ix.program)));
+    if (token.length !== 1) return null;
+    const d = token[0].data;
+    if (!d || d.length !== 10 || d[0] !== TRANSFER_CHECKED) return null;
+    let amount = 0n;
+    for (let i = 8; i >= 1; i--) amount = (amount << 8n) | BigInt(d[i]);
+    return { amount: amount.toString(), decimals: d[9] };
+  } catch {
+    return null;
+  }
+}
+
+/** The base-unit amount a created x402 payment payload commits the buyer to,
+ *  read from what was signed: an EVM EIP-3009 `authorization.value`, an EVM
+ *  Permit2 `permitted.amount`, or a Solana transaction's transfer. Returns
+ *  `{ amount, decimals? }`, `{ unchecked: true }` for a network whose payload
+ *  this reader does not decode (neither EVM nor Solana), or null when an EVM or
+ *  Solana payload holds no amount it can read. */
+export async function signedAmountOf(paymentPayload, network) {
+  const p = paymentPayload?.payload;
+  const net = String(network || "");
+  if (net.startsWith("eip155:")) {
+    const vals = [p?.authorization?.value, p?.permit2Authorization?.permitted?.amount].filter((x) => x != null);
+    if (vals.length !== 1 || !/^\d+$/.test(String(vals[0]))) return null;
+    return { amount: BigInt(String(vals[0])).toString() };
+  }
+  if (net.startsWith("solana:")) return solanaTransferOf(p?.transaction);
+  return { unchecked: true };
+}
+
+/** Check a created payment payload against the accept it was built for,
+ *  before it is sent: the amount that was signed must be the amount the
+ *  allowance was checked against (acceptAmount under the challenge's
+ *  version), in the known asset's decimals, and within `cap`. Returns null
+ *  when it holds, else why not. */
+export async function signedPaymentProblem(paymentPayload, requirements, x402Version, cap = Infinity) {
+  const expected = acceptAmount(requirements, x402Version);
+  const entry = knownAsset(requirements?.network, requirements?.asset);
+  if (expected == null) return "the selected payment option's amount cannot be read";
+  const signed = await signedAmountOf(paymentPayload, requirements?.network);
+  if (signed == null) return "the signed payment's amount cannot be read";
+  if (signed.unchecked) return null;
+  if (signed.amount !== BigInt(expected).toString()) return `the signed amount (${signed.amount}) differs from the priced amount (${expected})`;
+  if (signed.decimals != null && entry && signed.decimals !== entry.decimals) return "the signed transfer's decimals differ from the known asset's";
+  if (Number.isFinite(cap)) {
+    if (!entry) return "the selected payment option is not in a known asset";
+    const usd = Number(signed.amount) / 10 ** entry.decimals;
+    if (usd > cap) return `the signed amount asks ${usd}, above the ${cap} this buyer may sign`;
+  }
+  return null;
+}
+
+/** Refuse to send a payment payload whose signed amount is not the one the
+ *  allowance passed: registered after payload creation, so the check reads
+ *  what was actually signed, and a throw here stops the payment-aware fetch
+ *  before the payload leaves the process. guardSigning registers it; a
+ *  client with its own selector (and no guardSigning) can register it alone. */
+export function guardSignedAmount(client, { allowance = () => Infinity, onRefuse = null } = {}) {
+  if (!client || typeof client.onAfterPaymentCreation !== "function") {
+    throw new TypeError("guardSignedAmount needs an @x402/core x402Client (onAfterPaymentCreation)");
+  }
+  client.onAfterPaymentCreation(async ({ paymentRequired, selectedRequirements: r, paymentPayload }) => {
+    const cap = allowance();
+    const problem = await signedPaymentProblem(paymentPayload, r, paymentRequired?.x402Version, cap);
+    if (!problem) return;
+    try { onRefuse?.({ reason: "signed-amount", priceUsd: null, allowanceUsd: cap, detail: problem }); } catch { /* the refusal stands */ }
+    throw new Error(`spending guard: ${problem}; the payment was not sent`);
   });
   return client;
 }

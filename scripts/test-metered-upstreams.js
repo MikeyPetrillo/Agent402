@@ -57,6 +57,7 @@ const ALLOWED = {
   "solana-history-rpc.js": { why: "Solana history reads for the leaderboard and ledger, called per new payment by those bounded loops; public nodes first, the keyed provider as fallback, answers cached by signature", bound: /SOLANA_HISTORY_CACHE/ },
   "upstream-hard-caps.js": { why: "names the hosts whose calls it refuses past a ceiling; makes no outbound call itself", bound: /HARDCAP_/ },
   "model-catalog.js": { why: "the public model list (no key sent), read every 10 minutes and on a miss at most once a minute, in production only", bound: /REFRESH_MS/ },
+  "gateway-direct-pricebook.js": { why: "the direct chat upstream's cost guard: OpenRouter's keyless endpoint list per mapped model and the direct upstream's own keyless model listing, read in the background once per refresh interval (default one hour, a short capped backoff after a failed read), never on a request", bound: /DIRECT_UPSTREAM_PRICE_REFRESH_MS/ },
   "verify-hint.js": { why: "payer balance read after a refused payment; public nodes first, the keyed provider last", bound: /MAX_BATCHES_INFLIGHT/ },
   // A file may NAME a metered host without ever calling it - upstream-budgets
   // declares the per-vendor daily call budgets and matches egress-meter rows by

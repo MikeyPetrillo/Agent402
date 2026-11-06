@@ -22,6 +22,7 @@ import { withConnRetry } from "./lib/conn-retry.js";
 import "../src/tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA
 import { legRefusalVerdict } from "./canary-refusal-classify.js";
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
+import { assertOwnPaidTarget, guardCappedSigning, capFromEnv, KNOWN_EVM_NETWORKS } from "./lib/buyer-guard.js";
 import { isSponsorshipRowEvidence, sponsorshipRowMonth, sponsorshipRowUpdatedAt } from "../src/avm-sponsorship.js";
 import { subcentAcceptVerdict } from "./avm-canary-classify.js";
 import { readFileSync, existsSync, appendFileSync } from "node:fs";
@@ -810,6 +811,9 @@ export const CHAIN_FUNDING = [
   { key: "optimism", label: "Optimism", token: "0x0b2c639c533813f4aa9d7837caf62653d097ff85", rpcs: ["https://mainnet.optimism.io", "https://optimism-rpc.publicnode.com"] },
   { key: "arc", label: "Arc", token: "0x3600000000000000000000000000000000000000", rpcs: ["https://rpc.mainnet.arc.io"] },
   { key: "robinhood", label: "Robinhood Chain (USDG)", token: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168", rpcs: ["https://rpc.mainnet.chain.robinhood.com"] },
+  // Ink (gated rail): read only while CANARY_INK=true (the workflow sets it
+  // from the Ink facilitator list secret), so an unfunded wallet never pages.
+  ...(process.env.CANARY_INK === "true" ? [{ key: "ink", label: "Ink", token: "0x2D270e6886d130D724215A266106e6832161EAEd", rpcs: ["https://rpc-qnd.inkonchain.com", "https://rpc-gel.inkonchain.com"] }] : []),
   // Tempo: the 2-hourly tempo-volume.yml buys from this burner every day, so
   // its low-water is higher than the one-buy legs use. Funded in USDC.e since
   // 2026-08-19 (pays USDC.e-first challenges natively, no swap); PathUSD is the
@@ -943,9 +947,20 @@ async function stellarDebitedSince(payer, sinceMs, { waitMs = 20_000, stepMs = 3
   }
 }
 
+// The per-accept ceiling every leg's client signs under (CANARY_MAX_USD
+// overrides). The library's own spend control is off on these clients (see
+// src/x402-spend-controls.js), so this cap is what bounds a signature; it sits
+// above every leg's list price (scripts/test-paid-canary.js pins that).
+export const CANARY_MAX_USD_DEFAULT = 0.5;
+// Ink is a gated rail the shared known-assets table does not list; its USDC
+// address is the one src/payments.js offers, named here in code.
+export const CANARY_EXTRA_ASSETS = Object.freeze({ "eip155:57073": [{ asset: "0x2D270e6886d130D724215A266106e6832161EAEd", decimals: 6 }] });
+
 // --- CLI (network). Importing this module for tests does NOT run any of this. ---
 async function main() {
-  const TARGET = process.env.TARGET_URL || "https://agent402.tools";
+  const TARGET = assertOwnPaidTarget(process.env.TARGET_URL || "https://agent402.tools", "paid-canary");
+  const CANARY_MAX_USD = capFromEnv("CANARY_MAX_USD", CANARY_MAX_USD_DEFAULT, { script: "paid-canary" });
+  const capOpts = { maxUsd: CANARY_MAX_USD, extraAssets: CANARY_EXTRA_ASSETS };
   const KEY_FILE = process.env.KEY_FILE || "/tmp/agent-key";
   const pk = (process.env.BURNER_KEY || "").trim() || (existsSync(KEY_FILE) ? readFileSync(KEY_FILE, "utf8").trim() : "");
   if (!pk) { console.error("paid-canary: no BURNER_KEY / KEY_FILE — cannot run the paid check"); process.exit(2); }
@@ -956,6 +971,7 @@ async function main() {
   const account = privateKeyToAccount(pk);
   const client = disableVendorSpendControls(new x402Client());
   registerExactEvmScheme(client, { signer: account });
+  guardCappedSigning(client, { ...capOpts, networks: [...KNOWN_EVM_NETWORKS, ...Object.keys(CANARY_EXTRA_ASSETS)] });
 
   // Mark every canary request as internal traffic: X-Heartbeat-Token =
   // HMAC(POW_SECRET, UTC minute) — the same unspoofable marker the heartbeat
@@ -1065,6 +1081,7 @@ async function main() {
       // The accept the client signed, so the OK line prints what was paid.
       let signedAccept = null;
       const svmClient = registerExactSvmScheme(disableVendorSpendControls(new SvmClient()), { signer });
+      guardCappedSigning(svmClient, { ...capOpts, networks: ["solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"] });
       svmClient.onAfterPaymentCreation(async (c) => { signedAccept = c?.paymentPayload?.accepted || c?.selectedRequirements || null; });
       const svmPay = wrapSvm(synthFetch, svmClient);
       const res = await svmPay(`${TARGET}/api/skill/decode-blob`, {
@@ -1379,6 +1396,7 @@ async function main() {
       const uptoClient = disableVendorSpendControls(new x402Client((_v, list) => list.find((a) => a?.scheme === "upto" && a?.network === "eip155:8453") || list[0]));
       registerExactEvmScheme(uptoClient, { signer: account });
       uptoClient.register("eip155:8453", new UptoEvmScheme(account));
+      guardCappedSigning(uptoClient, { ...capOpts, schemes: ["upto", "exact"], networks: ["eip155:8453"] });
       let sentScheme = null;
       const capture = (input, reqInit) => {
         const req = new Request(input, reqInit);
@@ -1552,6 +1570,7 @@ async function main() {
     { key: "sei", caip2: "eip155:1329", sym: "USDC", chainLabel: "Sei", tx: (h) => `https://seiscan.io/tx/${h}?chain=pacific-1` },
     { key: "optimism", caip2: "eip155:10", sym: "USDC", chainLabel: "Optimism", tx: (h) => `https://optimistic.etherscan.io/tx/${h}` },
     { key: "arc", caip2: "eip155:5042", sym: "USDC", chainLabel: "Arc", tx: (h) => `https://explorer.arc.io/tx/${h}` },
+    ...(process.env.CANARY_INK === "true" ? [{ key: "ink", caip2: "eip155:57073", sym: "USDC", chainLabel: "Ink", tx: (h) => `https://explorer.inkonchain.com/tx/${h}` }] : []),
   ]) {
     try {
       const { x402HTTPClient } = await import("@x402/core/client");
@@ -1630,6 +1649,7 @@ async function main() {
       const rpcUrl = (process.env.STELLAR_RPC_URL || "https://mainnet.sorobanrpc.com").trim();
       const stellarClient = disableVendorSpendControls(new StellarX402Client());
       stellarClient.register("stellar:*", new ExactStellarScheme(signer, { url: rpcUrl }));
+      guardCappedSigning(stellarClient, { ...capOpts, networks: ["stellar:pubnet"] });
       const stellarPay = wrapStellar(synthFetch, stellarClient);
       // Anchor BEFORE the call, with a small skew allowance, so a late-confirming
       // transfer is still attributable to this attempt. Prior runs are days
@@ -1724,6 +1744,7 @@ async function main() {
       const algorandClient = AlgorandClient.fromConfig({ algodConfig: { server: algodUrl, token: "" } }).setDefaultValidityWindow(1000);
       const avmClient = disableVendorSpendControls(new AvmX402Client());
       avmClient.register("algorand:*", new ExactAvmScheme(signer, { algorandClient }));
+      guardCappedSigning(avmClient, { ...capOpts, networks: ["algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k", "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8="] });
       const avmPay = wrapAvm(synthFetch, avmClient);
       // QUOTA-AWARE ROUTE CHOICE (2026-09-22). The AVM facilitator sponsors the
       // fee on every settlement and gives our payTo a free sponsored

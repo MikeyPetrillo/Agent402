@@ -51,6 +51,8 @@
 import { createHash } from "node:crypto";
 import { paymentHeaderOf } from "./payer.js";
 import { getSharedRedisClient, sharedLimitEnabled } from "./shared-limit.js";
+import { decodePaymentHeader } from "./payment-header.js";
+import { stellarAuthorizationsOf } from "./stellar-confirm.js";
 
 // The claim's lifetime in Redis without a renewal. A claim is renewed every
 // INFLIGHT_RENEW_MS while its call is open (the slow routes run for minutes),
@@ -90,7 +92,7 @@ export function paymentReplayKey(req) {
     paymentHeaderOf(req);   // middleware order — see src/payer.js
   if (!cred || typeof cred !== "string") return null;
   try {
-    const p = JSON.parse(Buffer.from(cred, "base64").toString("utf-8"));
+    const p = decodePaymentHeader(cred);
     const auth = p?.payload?.authorization;
     const nonce = auth?.nonce;
     if (typeof nonce === "string" && nonce) {
@@ -109,6 +111,33 @@ export function paymentReplayKey(req) {
   return "c:" + createHash("sha256").update(cred).digest("hex");
 }
 
+/**
+ * paymentReplayKey, with a Stellar payment keyed on what the network consumes:
+ * its network and the payer's signed authorization entries (signer, nonce),
+ * read from the signed entry (src/stellar-confirm.js stellarAuthorizationsOf),
+ * so a re-encoded copy of one signed entry maps to one identity. The envelope
+ * needs the Stellar SDK to decode, which loads on first use, hence async. A
+ * Stellar key reads "s2:<identity>:<legacy>", <legacy> the raw-credential hash
+ * an earlier build keyed the same header on (honored as for "n2:"). Any other
+ * credential, or a Stellar one that does not decode, keys as paymentReplayKey.
+ */
+export async function paymentReplayKeyAsync(req) {
+  const key = paymentReplayKey(req);
+  if (!key || !key.startsWith("c:")) return key;
+  try {
+    const p = decodePaymentHeader(paymentHeaderOf(req));
+    const network = p?.accepted?.network || p?.network || p?.payload?.network;
+    if (typeof network !== "string" || !network.startsWith("stellar:")) return key;
+    const entries = await stellarAuthorizationsOf(p);
+    if (!entries) return key;
+    const parts = entries.map((e) => `${e.signer}\n${e.nonce}`).sort();
+    const id = createHash("sha256").update(`${network}\n${parts.join("\n")}`).digest("hex");
+    return `s2:${id}:${key.slice(2)}`;
+  } catch {
+    return key;
+  }
+}
+
 // A key's Redis name and, for a nonce key, the name an earlier build used for
 // the same credential. An earlier build's entries hold a bare timestamp; ours
 // at the legacy name hold LEGACY_TAG + our own name, so we skip another
@@ -116,10 +145,16 @@ export function paymentReplayKey(req) {
 // payment, claimed or consumed by the earlier build).
 const LEGACY_TAG = "v2|";
 function namesOf(key) {
+  const st = /^s2:([0-9a-f]{64}):([0-9a-f]{64})$/.exec(String(key));
+  if (st) return { primary: `s2:${st[1]}`, legacy: `c:${st[2]}` };
   const m = /^n2:([0-9a-f]{64}):([0-9a-f]{64})$/.exec(String(key));
   if (!m) return { primary: String(key), legacy: null };
   return { primary: `n2:${m[1]}`, legacy: `n:${m[2]}` };
 }
+// The per-process state keys a Stellar payment on its identity alone: two
+// encodings of one signed entry share it, while their legacy parts (each
+// header's own hash) differ.
+const localKeyOf = (key) => (/^s2:/.test(String(key)) ? namesOf(key).primary : key);
 const isLegacyEntry = (v) => v != null && !String(v).startsWith(LEGACY_TAG);
 
 // A settled payment's consumed mark is kept this long (the chain refuses its
@@ -153,7 +188,7 @@ export function paymentValidBeforeMs(req) {
   const cred = paymentHeaderOf(req);
   if (!cred || typeof cred !== "string") return null;
   try {
-    const p = JSON.parse(Buffer.from(cred, "base64").toString("utf-8"));
+    const p = decodePaymentHeader(cred);
     const raw = p?.payload?.authorization?.validBefore;
     const sec = typeof raw === "string" && /^\d{1,20}$/.test(raw.trim()) ? Number(raw.trim()) : (Number.isSafeInteger(raw) ? raw : NaN);
     return Number.isFinite(sec) && sec > 0 ? Math.min(sec * 1000, Date.now() + MAX_VALIDITY_HOLD_MS) : null;
@@ -298,9 +333,10 @@ export function createReplayGuard({ ttlMs = SETTLED_HOLD_MS, maxEntries = 50_000
         }
       }
       pruneLocal(now);
-      if (isConsumedLocal(key, now)) return "consumed";
-      if (inFlight.has(key)) return "inflight";
-      inFlight.add(key);
+      const lk = localKeyOf(key);
+      if (isConsumedLocal(lk, now)) return "consumed";
+      if (inFlight.has(lk)) return "inflight";
+      inFlight.add(lk);
       return "ok";
     },
     /** Mark the nonce consumed: call only when the gated call was granted
@@ -335,14 +371,15 @@ export function createReplayGuard({ ttlMs = SETTLED_HOLD_MS, maxEntries = 50_000
           console.error("[replay-guard] redis settle failed, falling back to local state:", e.message);
         }
       }
-      inFlight.delete(key);
+      const lk = localKeyOf(key);
+      inFlight.delete(lk);
       while (consumed.size >= maxEntries) {
         const oldest = consumed.keys().next().value;
         if (oldest === undefined) break;
         consumed.delete(oldest);
       }
-      consumed.delete(key);
-      consumed.set(key, now + holdMs);
+      consumed.delete(lk);
+      consumed.set(lk, now + holdMs);
     },
     /** Release the nonce — call when the gated call was NOT granted, so a
      *  legitimate retry of the still-valid authorization can proceed. */
@@ -359,7 +396,7 @@ export function createReplayGuard({ ttlMs = SETTLED_HOLD_MS, maxEntries = 50_000
           console.error("[replay-guard] redis release failed, falling back to local state:", e.message);
         }
       }
-      inFlight.delete(key);
+      inFlight.delete(localKeyOf(key));
     },
     /** Introspection for tests / stats — LOCAL fallback state only; Redis
      *  state is shared and has no single-process notion of "size". */

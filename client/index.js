@@ -32,7 +32,7 @@ export { AsyncJobPendingError } from "./async-job.js";
 // `User-Agent: agent402-client/<version>` - a standard header, no extra
 // network calls - so a seller can attribute traffic (and settled payments)
 // to this SDK. Product token only; nothing about the caller rides along.
-const VERSION = "0.8.22";
+const VERSION = "0.8.23";
 const USER_AGENT = `agent402-client/${VERSION}`;
 // A package built on this SDK (an adapter) names itself first: its own
 // product token, then this one. Anything that is not one well-formed token
@@ -110,6 +110,62 @@ export const GATEWAY_MAX_TIMEOUT_SECONDS = 7 * 24 * 3600 + 3600;
 const GATEWAY_DOCS_URL = "https://github.com/MikeyPetrillo/Agent402/wiki/Circle-Gateway";
 const EVM_ADDR = /^0x[0-9a-fA-F]{40}$/;
 
+// The rolling window the daily and per-host caps count over.
+const SPEND_WINDOW_MS = 24 * 60 * 60 * 1000;
+// Added to a held authorization's own expiry (validBefore, or a Permit2
+// deadline) before the hold may end: the chain judges expiry by block time,
+// which can trail this process's clock.
+export const HOLD_SLACK_MS = 10 * 60 * 1000;
+
+/** When a signed payment payload can no longer settle, in ms since the epoch
+ *  plus HOLD_SLACK_MS: an EIP-3009 `authorization.validBefore` or a Permit2
+ *  `deadline`, in seconds. null when the payload names no expiry this reads
+ *  (a Solana transaction, an unknown scheme). */
+export function signedValidUntilMs(paymentPayload) {
+  const p = paymentPayload?.payload;
+  const v = p?.authorization?.validBefore ?? p?.permit2Authorization?.deadline;
+  if (v == null || !/^\d{1,15}$/.test(String(v))) return null;
+  return Number(v) * 1000 + HOLD_SLACK_MS;
+}
+
+/** A spend-log entry the caps still count at `now`: anything recorded inside
+ *  the rolling window, and a held payment whose authorization can still
+ *  settle, however long ago it was signed. */
+const countsAt = (e, now) => e.state === "held" && e.ownHost
+  ? e.until > now
+  : e.ts >= now - SPEND_WINDOW_MS || (e.state === "held" && e.until != null && e.until > now);
+
+// The client's built-in seller. It settles a payment only on an answer below
+// 400 (the handler runs first), so a sent payment it answered with an error
+// status was not settled and can be redeemed only until its authorization
+// expires: such a hold ends at that expiry plus HOLD_SLACK_MS, with no 24 h
+// floor, or DEFAULT_HOST_BLIND_HOLD_MS after the answer when the expiry is not
+// readable (its challenges expire in about five minutes). Matched by exact
+// origin; every other seller keeps the rolling-window rule.
+export const DEFAULT_BASE_URL = "https://agent402.tools";
+const DEFAULT_ORIGIN = new URL(DEFAULT_BASE_URL).origin;
+export const DEFAULT_HOST_BLIND_HOLD_MS = 15 * 60 * 1000;
+function isDefaultOrigin(url) { try { return new URL(url).origin === DEFAULT_ORIGIN; } catch { return false; } }
+
+/** Mark an error thrown after a payment header was sent: `paid: "unknown"`
+ *  (the seller holds a signed authorization it may still redeem) and
+ *  `heldUsd`, the amount held against the caps for it. An Agent402 refusal
+ *  also says so in its message. */
+function markOutcomeUnknown(e, slug, heldUsd, { seen = true } = {}) {
+  if (!e || typeof e !== "object") return e;
+  try {
+    const own = e.paid === false && e.slug === slug;
+    e.paid = "unknown";
+    e.heldUsd = heldUsd;
+    if (own && typeof e.message === "string" && !/spending caps/.test(e.message)) {
+      e.message += seen
+        ? `. A payment was sent, so its outcome is unknown: its signed amount stays held against this client's spending caps (spendingSummary().heldUsd).`
+        : `. This client cannot see whether its payment fetch sent a payment (pass x402Client to let it see), so the amount stays held against its spending caps (spendingSummary().heldUsd).`;
+    }
+  } catch { /* a frozen error keeps what it says */ }
+  return e;
+}
+
 // A pre-wrapped payment fetch with no x402Client is the one mode where the caps
 // are checked on an unpaid preflight only, not on the payment that is signed.
 // Said once per process, on the first capped paid call in that mode.
@@ -164,7 +220,7 @@ export class Agent402 {
    * @param {function} [opts.onProgress] called with each job document
    *        ({ status, stage, progress, etaSeconds, ... }) while a job runs
    */
-  constructor({ baseUrl = "https://agent402.tools", fetch: payFetch, cache = true, fetchImpl = undefined, tlsDistrust = true,
+  constructor({ baseUrl = DEFAULT_BASE_URL, fetch: payFetch, cache = true, fetchImpl = undefined, tlsDistrust = true,
     maxPerCallUsd = null, dailyLimitUsd = null, maxPerHostUsd = null, creditsKey = null, x402Client = null, payNetworks = null,
     maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES, outputValidator = null,
     respondAsync = "auto", asyncTimeoutMs = DEFAULT_ASYNC_TIMEOUT_MS, onProgress = null, gateway = null, userAgent = null, retryResets = true } = {}) {
@@ -204,13 +260,16 @@ export class Agent402 {
     // failure mode): optional hard ceilings enforced BEFORE any payment is
     // signed. A malicious or misconfigured 402 that quotes an inflated price is
     // refused instead of paid. null = no limit (default - behavior unchanged).
-    // Amounts commit to the rolling window only on a settled paid call, so a
-    // failed/blocked call never counts against the budget.
+    // A call refused before any payment left this process never counts. Once
+    // a payment header has been sent, its signed amount counts whatever the
+    // seller answers: "settled" on a delivered answer, otherwise "held" (the
+    // authorization can still be redeemed) until it can no longer settle and
+    // the rolling window has passed it.
     this._spend = {
       maxPerCall: numOrNull(maxPerCallUsd),
       daily: numOrNull(dailyLimitUsd),
       perHost: numOrNull(maxPerHostUsd),
-      log: [], // [{ ts, host, usd }] - settled paid calls in the last 24h
+      log: [], // [{ ts, host, usd, state: "reserved"|"held"|"settled", until? }]
     };
     // The paid call being signed right now, so the signing guard can tell this
     // call's own reservation from every other one (see guardX402Client).
@@ -254,6 +313,15 @@ export class Agent402 {
         if (ctx) ctx.refusal = { ...detail, limit: this._signAllowance().limit };
       },
     });
+    // Registered after the guard's own check of the signed amount, so it runs
+    // only for a payload that check let through: the payload the payment
+    // fetch sends next. Each one is recorded with its amount and expiry (a
+    // fetch that retries with a fresh payload sends two).
+    client.onAfterPaymentCreation(async ({ paymentPayload }) => {
+      const ctx = this._signCtx.getStore();
+      if (!ctx || ctx.signedUsd == null) return;
+      ctx.sent.push({ usd: ctx.signedUsd, until: signedValidUntilMs(paymentPayload) });
+    });
     this._guarded = true;
     return client;
   }
@@ -263,15 +331,19 @@ export class Agent402 {
    *  (this call's own one is what is being replaced). */
   _signAllowance() {
     const s = this._spend;
-    const own = this._signCtx.getStore()?.reservation || null;
-    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-    const others = s.log.filter((e) => e.ts >= cutoff && e !== own);
+    const ctx = this._signCtx.getStore();
+    const own = ctx?.reservation || null;
+    // A payload this call already sent (a fetch that retries with a fresh
+    // one) is outstanding too, beside every other call's entry.
+    const ownSent = (ctx?.sent || []).reduce((a, p) => a + p.usd, 0);
+    const now = Date.now();
+    const others = s.log.filter((e) => countsAt(e, now) && e !== own);
     const host = hostOf(this.baseUrl);
     let cap = Infinity, limit = null;
     const tighten = (value, name) => { if (value < cap) { cap = value; limit = name; } };
     if (s.maxPerCall != null) tighten(s.maxPerCall, "maxPerCallUsd");
-    if (s.daily != null) tighten(s.daily - others.reduce((a, e) => a + e.usd, 0), "dailyLimitUsd");
-    if (s.perHost != null) tighten(s.perHost - others.filter((e) => e.host === host).reduce((a, e) => a + e.usd, 0), "maxPerHostUsd");
+    if (s.daily != null) tighten(s.daily - ownSent - others.reduce((a, e) => a + e.usd, 0), "dailyLimitUsd");
+    if (s.perHost != null) tighten(s.perHost - ownSent - others.filter((e) => e.host === host).reduce((a, e) => a + e.usd, 0), "maxPerHostUsd");
     return { cap: Math.max(0, cap), limit };
   }
 
@@ -586,34 +658,40 @@ export class Agent402 {
         const usd = await this._quotedUsd(paidSend, listUsd, { slug, mode: guarded ? "guarded" : "wallet" });
         // Reserve the amount synchronously (before the await) so concurrent calls
         // can't each observe the pre-commit total and collectively blow a rolling
-        // cap; release the reservation if the call doesn't settle. With the
-        // signing guard on, the reservation is replaced by the amount actually
-        // signed, and a call that signed nothing spends nothing.
+        // cap. With the signing guard on, the reservation is replaced by the
+        // amount actually signed, and each payload the guard let through is
+        // recorded as sent (ctx.sent). Without it the payment fetch is opaque:
+        // any request it made may have carried a signature.
         const reservation = this._spendReserve(host, usd, slug, listUsd, { always: guarded });
-        const ctx = { reservation, signedUsd: null, refusal: null };
-        const signedNothing = () => guarded && ctx.signedUsd == null;
+        const ctx = { reservation, signedUsd: null, refusal: null, sent: [] };
+        const sentPayment = () => !guarded || ctx.sent.length > 0;
         let settled = false;
         try {
           const r = await collect(await this._signCtx.run(ctx, () => paidSend(asyncHeaders, this.payFetch)));
           if (!r.ok) throw this._fail(slug, r, await this._failureDetail(slug, r));
-          if (signedNothing()) this._spendRelease(reservation);
-          else this._spendSettle(reservation); // confirm the reservation as settled spend
+          if (!sentPayment()) this._spendRelease(reservation);
+          else this._spendHold(reservation, guarded ? ctx.sent : null, { settleLast: true });
           settled = true;
           return this._deliverResponse(slug, r, cacheKey, cache, validator, { maxResponseBytes, paid: true });
         } catch (e) {
           // An invalid or oversized paid HTTP-success body is failed delivery,
-          // not a rollback of money that already moved. A job still running
-          // past the wait may yet settle, so its reservation stands.
-          // A redirect after a signature was sent leaves that payment's outcome
-          // unknown, so it counts against the caps, like a job still running.
-          if ((e instanceof AsyncJobPendingError || e instanceof PaymentRedirectError) && !signedNothing()) this._spendSettle(reservation);
-          else if (!settled) this._spendRelease(reservation);
+          // not a rollback of money that already moved. Any other failure once
+          // a payment header was sent (an error status, a dropped connection,
+          // a redirect, a job still running) leaves an authorization the seller
+          // can still redeem, so its signed amount is held, not released. Only
+          // a call that sent no payment releases its reservation.
+          if (!settled) {
+            if (sentPayment()) markOutcomeUnknown(e, slug, this._spendHold(reservation, guarded ? ctx.sent : null, { ownHost: this._unsettledAnswer(e) }), { seen: guarded });
+            else this._spendRelease(reservation);
+          }
           if (ctx.refusal) {
             const d = ctx.refusal;
             throw new SpendingLimitError(d.reason === "unknown-asset"
               ? `refusing to pay for "${slug}" - no payment option it asked to sign is in a known asset, so none can be priced`
+              : d.reason === "signed-amount"
+              ? `refusing to pay for "${slug}" - ${d.detail}, so the payment was not sent`
               : `refusing to pay $${d.priceUsd} for "${slug}" - the payment it asked to sign is over ${d.limit || "the cap"} ($${d.allowanceUsd} left to sign)`,
-            { limit: d.limit || "signing", slug, priceUsd: d.priceUsd, cap: d.allowanceUsd, atSigning: true, cause: e });
+            { limit: d.limit || "signing", slug, priceUsd: d.priceUsd, cap: d.allowanceUsd, atSigning: true, cause: e, ...(e?.paid === "unknown" ? { paid: "unknown", heldUsd: e.heldUsd } : {}) });
           }
           throw e;
         }
@@ -642,7 +720,8 @@ export class Agent402 {
           settled = true;
           return this._deliverResponse(slug, r, cacheKey, cache, validator, { maxResponseBytes, paid: true });
         } catch (e) {
-          if (e instanceof AsyncJobPendingError) this._spendSettle(reservation);
+          // A job still running may yet be debited, so its amount is held.
+          if (e instanceof AsyncJobPendingError) markOutcomeUnknown(e, slug, this._spendHold(reservation));
           else if (!settled) this._spendRelease(reservation);
           throw e;
         }
@@ -689,8 +768,10 @@ export class Agent402 {
    * which would sign the plain accept). Returns NO_GATEWAY_ACCEPT, with
    * nothing reserved or signed, when the answer is not a 402 or offers no
    * batched accept this signer may pay, so the caller falls back. Once the
-   * signed header has been sent the amount is spent for the caps whatever
-   * comes back; only a signer that throws releases the reservation.
+   * signed header has been sent its amount is held against the caps until a
+   * delivered answer settles it, or until the authorization can no longer
+   * settle and the rolling window has passed it; only a signer that throws
+   * releases the reservation.
    */
   async _gatewayCall(slug, tool, { paidSend, asyncHeaders, collect, cacheKey, cache, validator, maxResponseBytes }) {
     const pre = await paidSend();
@@ -700,14 +781,17 @@ export class Agent402 {
     if (!accept) return NO_GATEWAY_ACCEPT;
     const host = hostOf(this.baseUrl);
     const listUsd = parseUsd(tool.price);
-    // The amount the accept asks for, priced from the known-asset table
-    // (gatewayAcceptOf keeps only an accept that table can price); the
-    // catalog's figure never lowers what the caps are checked against.
-    const usd = Math.max(listUsd, acceptUsd(accept));
+    // The amount the accept asks for, read from the field the challenge's
+    // version names and priced from the known-asset table; an accept that
+    // version does not price is not paid here. The catalog's figure never
+    // lowers what the caps are checked against.
+    const acceptedUsd = acceptUsd(accept, Number(env?.x402Version));
+    if (acceptedUsd == null) return NO_GATEWAY_ACCEPT;
+    const usd = Math.max(listUsd, acceptedUsd);
     const reservation = this._spendReserve(host, usd, slug, listUsd);
-    let header;
+    let header, payload;
     try {
-      ({ header } = await signGatewayPayment(accept, { signer: this.gateway.signer, resource: env?.resource }));
+      ({ header, payload } = await signGatewayPayment(accept, { signer: this.gateway.signer, resource: env?.resource }));
     } catch (e) {
       // Nothing signed: the reservation is the only thing to undo.
       this._spendRelease(reservation);
@@ -715,26 +799,35 @@ export class Agent402 {
     }
     // From here the signed authorization leaves this process. It is a bearer
     // claim on the deposit until its validBefore whatever the seller answers
-    // (a refusal, a failure, a redirect, a job still running), so it counts
-    // as spent against the caps from the first send.
-    this._spendSettle(reservation);
+    // (a refusal, a failure, a redirect, a job still running), so its signed
+    // amount is held against the caps from the first send.
+    const sent = [{ usd: acceptedUsd, until: signedValidUntilMs(payload) }];
+    const heldUsd = this._spendHold(reservation, sent);
     const paidHeaders = { "PAYMENT-SIGNATURE": header, ...asyncHeaders };
-    let r = await collect(await paidSend(paidHeaders));
-    let body = null;
-    for (let resend = 0; ; resend++) {
-      if (r.status !== 402) break;
-      body = await readJsonQuietly(r);
-      const pending = body && typeof body === "object" && (body.reason === "settlement-pending" || body.retry === "same-payment");
-      if (!pending) break;
-      // Gateway may yet settle it: the header is handed back so the same
-      // payment can be resent later.
-      if (resend >= GATEWAY_PENDING_RESENDS) throw new GatewayPendingError(slug, header, body);
-      const retryAfterSec = Number(r.headers?.get?.("retry-after")) || Number(body.retryAfterSeconds) || 10;
-      await this._sleep(Math.min(Math.max(0, retryAfterSec) * 1000, GATEWAY_PENDING_MAX_WAIT_MS));
+    let r;
+    try {
       r = await collect(await paidSend(paidHeaders));
+      let body = null;
+      for (let resend = 0; ; resend++) {
+        if (r.status !== 402) break;
+        body = await readJsonQuietly(r);
+        const pending = body && typeof body === "object" && (body.reason === "settlement-pending" || body.retry === "same-payment");
+        if (!pending) break;
+        // Gateway may yet settle it: the header is handed back so the same
+        // payment can be resent later.
+        if (resend >= GATEWAY_PENDING_RESENDS) throw new GatewayPendingError(slug, header, body);
+        const retryAfterSec = Number(r.headers?.get?.("retry-after")) || Number(body.retryAfterSeconds) || 10;
+        await this._sleep(Math.min(Math.max(0, retryAfterSec) * 1000, GATEWAY_PENDING_MAX_WAIT_MS));
+        r = await collect(await paidSend(paidHeaders));
+      }
+      if (r.status === 402) throw this._fail(slug, r, gatewayRefusalMessage(slug, body, accept, this.gateway.signer.address));
+      if (!r.ok) throw this._fail(slug, r, await this._failureDetail(slug, r));
+    } catch (e) {
+      if (this._unsettledAnswer(e)) this._spendHold(reservation, sent, { ownHost: true });
+      markOutcomeUnknown(e, slug, heldUsd);
+      throw e;
     }
-    if (r.status === 402) throw this._fail(slug, r, gatewayRefusalMessage(slug, body, accept, this.gateway.signer.address));
-    if (!r.ok) throw this._fail(slug, r, await this._failureDetail(slug, r));
+    this._spendSettle(reservation);
     return this._deliverResponse(slug, r, cacheKey, cache, validator, { maxResponseBytes, paid: true });
   }
 
@@ -835,6 +928,8 @@ export class Agent402 {
    *  a caller can see the quote is not the number they budgeted from. */
   _spendCheck(host, usd, slug, listUsd = null) {
     const s = this._spend;
+    const now = Date.now();
+    s.log = s.log.filter((e) => countsAt(e, now));
     if (s.maxPerCall == null && s.daily == null && s.perHost == null) return;
     const quotedNote = listUsd != null && listUsd !== usd
       ? ` (this request is quoted $${usd}; the catalog lists $${listUsd})` : "";
@@ -843,22 +938,27 @@ export class Agent402 {
         `refusing to pay $${usd} for "${slug}" - exceeds maxPerCallUsd $${s.maxPerCall}${quotedNote}`,
         { limit: "maxPerCallUsd", slug, priceUsd: usd, cap: s.maxPerCall, ...(listUsd != null ? { listPriceUsd: listUsd } : {}) });
     }
-    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-    s.log = s.log.filter((e) => e.ts >= cutoff);
+    // Held payments count: each is a signed authorization that was sent and
+    // may still be redeemed. The refusal says how much of the total they are.
+    const heldOf = (entries) => entries.filter((e) => e.state === "held").reduce((a, e) => a + e.usd, 0);
+    const heldNote = (held) => held > 0 ? ` (including $${Number(held.toFixed(6))} held for sent payments whose outcome is unknown)` : "";
     if (s.daily != null) {
       const spent = s.log.reduce((a, e) => a + e.usd, 0);
       if (spent + usd > s.daily) {
+        const held = heldOf(s.log);
         throw new SpendingLimitError(
-          `refusing to pay $${usd} for "${slug}" - would bring 24h spend to $${(spent + usd).toFixed(6)}, over dailyLimitUsd $${s.daily}`,
-          { limit: "dailyLimitUsd", slug, priceUsd: usd, spent, cap: s.daily });
+          `refusing to pay $${usd} for "${slug}" - would bring 24h spend to $${(spent + usd).toFixed(6)}${heldNote(held)}, over dailyLimitUsd $${s.daily}`,
+          { limit: "dailyLimitUsd", slug, priceUsd: usd, spent, heldUsd: Number(held.toFixed(6)), cap: s.daily });
       }
     }
     if (s.perHost != null) {
-      const spentHost = s.log.filter((e) => e.host === host).reduce((a, e) => a + e.usd, 0);
+      const onHost = s.log.filter((e) => e.host === host);
+      const spentHost = onHost.reduce((a, e) => a + e.usd, 0);
       if (spentHost + usd > s.perHost) {
+        const held = heldOf(onHost);
         throw new SpendingLimitError(
-          `refusing to pay $${usd} for "${slug}" - would bring 24h spend to ${host} to $${(spentHost + usd).toFixed(6)}, over maxPerHostUsd $${s.perHost}`,
-          { limit: "maxPerHostUsd", slug, host, priceUsd: usd, spent: spentHost, cap: s.perHost });
+          `refusing to pay $${usd} for "${slug}" - would bring 24h spend to ${host} to $${(spentHost + usd).toFixed(6)}${heldNote(held)}, over maxPerHostUsd $${s.perHost}`,
+          { limit: "maxPerHostUsd", slug, host, priceUsd: usd, spent: spentHost, heldUsd: Number(held.toFixed(6)), cap: s.perHost });
       }
     }
   }
@@ -874,8 +974,9 @@ export class Agent402 {
    *  protected nothing and lost the part of the message an agent needs to
    *  act on. A body that is not JSON contributes nothing but its status. */
   /** A refusal a caller can branch on: `status` (the HTTP status), `slug` and
-   *  `paid: false` ride on the Error, so a 402 is not something to regex out of
-   *  the message. Nothing was spent on any path that reaches this. */
+   *  `paid` ride on the Error, so a 402 is not something to regex out of the
+   *  message. `paid: false` here; a failure after a payment header was sent
+   *  is re-marked `paid: "unknown"` (markOutcomeUnknown) by the paid path. */
   _fail(slug, r, message) {
     return Object.assign(new Error(message), { status: r?.status, slug, paid: false });
   }
@@ -907,29 +1008,74 @@ export class Agent402 {
   _spendReserve(host, usd, slug, listUsd = null, { always = false } = {}) {
     this._spendCheck(host, usd, slug, listUsd);
     if (!(usd > 0) && !always) return null;
-    const entry = { ts: Date.now(), host, usd, pending: true };
+    const entry = { ts: Date.now(), host, usd, state: "reserved" };
     this._spend.log.push(entry);
     return entry;
   }
-  /** Confirm a reservation as settled spend. */
-  _spendSettle(entry) { if (entry) entry.pending = false; }
-  /** Roll back a reservation whose call did not settle (failed / errored). */
+  /** Confirm a reservation (or a hold) as settled spend. */
+  _spendSettle(entry) { if (entry) { entry.state = "settled"; entry.until = null; entry.ownHost = false; } }
+  /** True when a paid call failed on an answer the built-in seller does not
+   *  settle: an error status (400 or above) from DEFAULT_BASE_URL's exact
+   *  origin. A Gateway payment still pending, a job still running, a redirect
+   *  or a dropped connection may have settled, so none of them counts. */
+  _unsettledAnswer(e) {
+    return isDefaultOrigin(this.baseUrl) && e instanceof Error && e.paid === false
+      && Number.isInteger(e.status) && e.status >= 400 && !(e instanceof GatewayPendingError);
+  }
+  /** Hold a reservation whose payment header was sent: it counts against the
+   *  caps until its authorization can no longer settle (`until`) and the
+   *  rolling window has passed it. `sent` lists each payload that left the
+   *  process ({ usd, until }); the reservation holds the first, and each
+   *  further one gets its own entry. With `settleLast`, the last payload is
+   *  the one a delivered answer settled, so it is booked settled instead.
+   *  null `sent` holds the reservation at its own amount, expiry unknown.
+   *  Returns the total now held. */
+  _spendHold(entry, sent = null, { settleLast = false, ownHost = false } = {}) {
+    if (!entry) return 0;
+    const list = sent && sent.length ? sent : [{ usd: entry.usd, until: null }];
+    const blindUntil = Date.now() + DEFAULT_HOST_BLIND_HOLD_MS;
+    const book = (e, p, state) => {
+      e.usd = p.usd; e.state = state;
+      e.ownHost = state === "held" && ownHost;
+      e.until = state !== "held" ? null : p.until ?? (e.ownHost ? blindUntil : null);
+    };
+    let held = 0;
+    list.forEach((p, i) => {
+      const state = settleLast && i === list.length - 1 ? "settled" : "held";
+      if (state === "held") held += p.usd;
+      if (i === 0) book(entry, p, state);
+      else { const e = { ts: entry.ts, host: entry.host }; book(e, p, state); this._spend.log.push(e); }
+    });
+    return Number(held.toFixed(6));
+  }
+  /** Roll back a reservation whose call sent no payment. */
   _spendRelease(entry) {
     if (!entry) return;
     const i = this._spend.log.indexOf(entry);
     if (i >= 0) this._spend.log.splice(i, 1);
   }
 
-  /** Rolling-24h spend summary (settled paid calls only) - for observability. */
+  /** Rolling-24h spend summary, for observability. `dailyUsd`, `calls` and
+   *  `byHost` are settled paid calls; `heldUsd`, `heldCalls` and `heldByHost`
+   *  are payments that were sent without a delivered answer, still counted
+   *  against the caps because their authorizations may yet be redeemed. */
   spendingSummary() {
-    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-    const log = this._spend.log.filter((e) => e.ts >= cutoff && !e.pending);
-    const byHost = {};
-    for (const e of log) byHost[e.host] = Number(((byHost[e.host] || 0) + e.usd).toFixed(6));
+    const now = Date.now();
+    const live = this._spend.log.filter((e) => countsAt(e, now));
+    const tally = (entries) => {
+      const byHost = {};
+      for (const e of entries) byHost[e.host] = Number(((byHost[e.host] || 0) + e.usd).toFixed(6));
+      return { usd: Number(entries.reduce((a, e) => a + e.usd, 0).toFixed(6)), calls: entries.length, byHost };
+    };
+    const settled = tally(live.filter((e) => e.state === "settled"));
+    const held = tally(live.filter((e) => e.state === "held"));
     return {
-      dailyUsd: Number(log.reduce((a, e) => a + e.usd, 0).toFixed(6)),
-      calls: log.length,
-      byHost,
+      dailyUsd: settled.usd,
+      calls: settled.calls,
+      byHost: settled.byHost,
+      heldUsd: held.usd,
+      heldCalls: held.calls,
+      heldByHost: held.byHost,
       limits: { maxPerCallUsd: this._spend.maxPerCall, dailyLimitUsd: this._spend.daily, maxPerHostUsd: this._spend.perHost },
     };
   }
@@ -997,7 +1143,7 @@ export class GatewayPendingError extends Error {
     this.slug = slug;
     this.paymentHeader = paymentHeader;
     this.status = 402;
-    this.paid = null;
+    this.paid = "unknown";
     this.retryAfterSeconds = Number(body?.retryAfterSeconds) || null;
   }
 }
@@ -1035,7 +1181,7 @@ export function gatewayAcceptOf(accepts, networks = null) {
     && EVM_ADDR.test(String(a.payTo || "")) && EVM_ADDR.test(String(a.extra.verifyingContract || ""))
     && typeof a.extra.version === "string" && /^[0-9]{1,4}$/.test(a.extra.version)
     && /^[0-9]{1,78}$/.test(String(a.amount ?? "")) && Number(a.maxTimeoutSeconds) > 0 && Number(a.maxTimeoutSeconds) <= GATEWAY_MAX_TIMEOUT_SECONDS
-    && acceptUsd(a) != null) || null;
+    && acceptUsd(a, 2) != null) || null;
 }
 
 /**

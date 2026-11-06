@@ -3,11 +3,12 @@
 // treasury-avg-rates, gov-data — many times through PROD with the real Base burner,
 // and assert every paid call returns actual data. Pre-fix these failed ~15% of the
 // time (a buyer paying and getting nothing); post-fix it must be 0. Skips w/o a key.
+import { assertOwnPaidTarget } from "./lib/buyer-guard.js";
 import { existsSync, readFileSync } from "node:fs";
 import { createHmac } from "node:crypto";
 import { Agent402 } from "../client/index.js";
 
-const TARGET = process.env.TARGET_URL || "https://agent402.tools";
+const TARGET = assertOwnPaidTarget(process.env.TARGET_URL || "https://agent402.tools", "test-treasury-paid-live");
 const KEY_FILE = process.env.KEY_FILE || "/tmp/agent-key";
 const pk = (process.env.BURNER_KEY || "").trim() || (existsSync(KEY_FILE) ? readFileSync(KEY_FILE, "utf8").trim() : "");
 if (!pk) { console.log("SKIP: no BURNER_KEY / KEY_FILE — real paid test needs a signer"); process.exit(0); }

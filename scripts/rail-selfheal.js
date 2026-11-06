@@ -34,6 +34,7 @@ const FACILITATORS = {
   monad: process.env.MONAD_FACILITATOR_URL || "https://x402-facilitator.molandak.org",
   // The variable is an ordered list; the rail is up while its first answers.
   robinhood: (process.env.ROBINHOOD_FACILITATOR_URL || "").split(",")[0].trim(),
+  ink: (process.env.INK_FACILITATOR_URL || "").split(",")[0].trim(),
   stellar: process.env.STELLAR_FACILITATOR_URL || "https://channels.openzeppelin.com/x402",
   algorand: process.env.ALGORAND_FACILITATOR_URL || "https://facilitator.goplausible.xyz",
   // Solvador-primary (Optimism today). No OPTIMISM_FACILITATOR_URL — Solvador is

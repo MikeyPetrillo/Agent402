@@ -10,6 +10,9 @@
 // example one tracking gas) would make the signed amount disagree with the
 // quote and the payment would be refused. ROBINHOOD_MIN_PRICE_USD tunes it
 // ("0" turns it off); NETWORK_PRICE_FLOORS="caip2=usd,..." sets any other.
+// Ink (eip155:57073) has no floor by default: no settler of ours pays its gas
+// (its listed facilitators do), so it quotes the list price; a fee its
+// facilitator bills per settlement is a NETWORK_PRICE_PREMIUMS entry.
 //
 // No imports: page and guide modules read the floor without loading payments.
 

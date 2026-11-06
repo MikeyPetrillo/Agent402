@@ -113,6 +113,33 @@ const redact = (text) => {
   }
 }
 
+// The direct-upstream lines (scripts/test-gateway-model-ids.js): the mapped
+// ids come from a secret, so a line carries counts and reason codes only; the
+// redactor leaves them as they are, and they carry no id, amount, address or
+// comparison wording.
+{
+  const lines = [
+    "FAIL - direct upstream: 3 mapped model(s) graded, 2 degraded (listed_prices x1, request_fee x1)",
+    "ok - direct upstream: 2 mapped model(s) graded, 0 degraded",
+    "note - direct upstream: 1 model-tier pair(s) with no routable OpenRouter endpoint under the tier's bound",
+    "note - DIRECT_UPSTREAM_URL / DIRECT_UPSTREAM_MODELS unset: the direct-upstream listed-price check is skipped",
+  ];
+  for (const line of lines) {
+    ok(redact(`${line}\n`).trim() === line, `the direct-upstream line passes the redactor unchanged (${line.slice(0, 60)})`);
+    ok(!/\$|https?:|\b0\.\d|\d+e-\d|\/[a-z0-9]/i.test(line.replace("DIRECT_UPSTREAM_URL / DIRECT_UPSTREAM_MODELS", "")) && !/cheap|undercut/i.test(line), "the direct-upstream line carries no id, amount, address or comparison wording");
+  }
+  const guard = readFileSync(new URL("./test-gateway-model-ids.js", import.meta.url), "utf8");
+  const block = guard.slice(guard.indexOf("// Direct upstream (src/gateway-direct-pricebook.js)"), guard.indexOf("// Published examples name a real model."));
+  ok(block.length > 200, "the guard carries the direct-upstream block");
+  const printed = (block.match(/(?:ok|console\.log)\([\s\S]*?\);/g) || []).join("\n");
+  ok(printed.length > 0 && !/modelsUrl|upId|orId|slug|direct\.prompt|direct\.completion|e\.p\b|e\.c\b|DIRECT_UPSTREAM_URL\}/.test(printed.replace(/process\.env\.DIRECT_UPSTREAM_URL/g, "")), "the direct-upstream block prints no model id, tier, price or address");
+  ok(!/cheap|undercut/i.test(printed.replace(/listedNotCheaperAnywhere/g, "")), "the direct-upstream block prints no comparison wording");
+  const drift = readFileSync(new URL("../.github/workflows/model-drift.yml", import.meta.url), "utf8");
+  ok(!/cheap|undercut/i.test(drift), "model-drift.yml carries no comparison wording");
+  ok(/DIRECT_UPSTREAM_URL: \$\{\{ secrets\.DIRECT_UPSTREAM_URL \}\}/.test(wf) && /DIRECT_UPSTREAM_MODELS: \$\{\{ secrets\.DIRECT_UPSTREAM_MODELS \}\}/.test(wf), "model-drift.yml hands the guard step the direct-upstream secrets");
+  ok(!/DIRECT_UPSTREAM_KEY/.test(wf), "model-drift.yml never hands the guard the direct upstream's key");
+}
+
 // Wiring.
 ok(/cron:\s*"53 \*\/6 \* \* \*"/.test(wf), "model-drift.yml runs every 6 hours");
 ok(!/^\s*push:/m.test(wf), "model-drift.yml never runs on a push");

@@ -32,10 +32,32 @@ export const RAILS = [
 
 // Gated rails (src/gated-rails.js): settleable by src/payments.js but kept out
 // of RAILS, so no static copy names them. A runtime surface lists one only
-// while it is in the live offer, through liveRails(). Empty while every rail
-// the payment stack settles is in RAILS (Arc graduated once it settled in
-// production); a new rail can start here before static copy names it.
-export const GATED_RAILS = [];
+// while it is in the live offer, through liveRails(). Arc started here and
+// graduated into RAILS once it settled in production. Ink is here until its
+// first live settle: it is offered only with INK_FACILITATOR_URL set and
+// `ink` in PAYMENT_NETWORKS, and moving this entry into RAILS is the step
+// that puts it on static copy.
+export const GATED_RAILS = [
+  { name: "Ink", asset: "USDC", caip2: "eip155:57073", chainId: 57073 },
+];
+
+// Test seam for the graduation suite (scripts/test-ink-graduation.js): with
+// NODE_ENV=test and RAILS_TEST_GRADUATE=<key,...>, each named gated rail is
+// moved into RAILS right after Arc, exactly where the graduation edit puts
+// it, before any copy below is derived. Never read outside NODE_ENV=test.
+if (process.env.NODE_ENV === "test") {
+  const keys = String(process.env.RAILS_TEST_GRADUATE || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  for (const key of keys) {
+    const i = GATED_RAILS.findIndex((r) => r.name.replace(/ Chain$/, "").toLowerCase().replace(/\s+/g, "") === key);
+    if (i < 0) continue;
+    const [rail] = GATED_RAILS.splice(i, 1);
+    const at = RAILS.findIndex((r) => r.name === "Arc");
+    RAILS.splice(at >= 0 ? at + 1 : RAILS.length, 0, rail);
+  }
+}
+
+/** True when `caip2` is a rail static copy names (in RAILS). */
+export const railListed = (caip2) => RAILS.some((r) => r.caip2 === String(caip2 || ""));
 
 /** RAILS plus every gated rail that is in the live offer right now. */
 export function liveRails() {

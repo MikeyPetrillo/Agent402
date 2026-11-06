@@ -52,6 +52,9 @@ import { payerFromRequest, paymentHeaderOf } from "../payer.js";
 // module header) - refuses before any upstream call, arms the outcome listener.
 import { gatewaySettleBreakerCheck } from "../gateway-settle-breaker.js";
 import { clientGoneSignal } from "../drain-abort.js";
+import { directUpstreamConfig, withDirectAttempts, directBodyFrom, directShareDraw, directCostUsd, stripVendorExtensions, noteDirectAb, noteDirectSkip, noteDirectAnomaly, failureBucket, directModelFor, directBreakerTake, directBreakerRelease, noteDirectOutcome } from "../gateway-direct-upstream.js";
+import { directPriceDecision, noteDirectMeasure } from "../gateway-direct-pricebook.js";
+import { readBytesCapped, declaredLength, discardBody } from "../capped-body.js";
 import { clientGoneError } from "../hangup-settlement.js";
 import { evmCredentialSettleableMs } from "../evm-validity.js";
 import { cdnSyncLeftMs } from "../cdn-sync-window.js";
@@ -1628,8 +1631,12 @@ export function reasoningOutsideMaxTokens(model) {
 
 /** Shrinks body.max_tokens so the worst-case upstream bill stays ≤ MARGIN ×
  *  the tier price; throws a self-explaining 400 when the INPUT alone busts
- *  the budget. Exported for the failover chain walk (each fallback model is
+ *  the budget. Returns the input token estimate it priced (undefined on the
+ *  metered tier, which it does not clamp). Exported for the failover chain walk (each fallback model is
  *  re-clamped at its own cost) and for the pricing-margin CI test. */
+/** Key under which the chat chain carries the margin clamp's input estimate
+ *  on an outbound body (a symbol: never serialized). */
+const CLAMP_INPUT_TOKENS = Symbol("clampInputTokens");
 export function clampToMargin(body, tier, imageCount) {
   // Metered tier: the 402 quote IS the worst case times the markup, so there
   // is nothing to clamp against - the ceiling grows with the request. The
@@ -1660,7 +1667,7 @@ export function clampToMargin(body, tier, imageCount) {
         `Shrink the input, lower "n", or use a cheaper model - GET /v1/models lists every model and its tier.`
       );
     }
-    return;
+    return inTokens;
   }
   const affordableOut = Math.floor(((budgetUsd - inUsd - fixedUsd) * 1e6) / cost.completion / n / turns / outFactor);
   if (affordableOut < MIN_OUT_TOKENS) {
@@ -1671,6 +1678,7 @@ export function clampToMargin(body, tier, imageCount) {
     );
   }
   if (body.max_tokens > affordableOut) body.max_tokens = affordableOut;
+  return inTokens;
 }
 
 /** A reasoning or thinking budget the buyer wrote against their own cap can
@@ -2458,7 +2466,12 @@ export function stripBilling(usage) {
  *  carry no usage pass through byte-for-byte; partial lines are buffered
  *  across chunks so a frame split mid-JSON is never forwarded half-scrubbed.
  *  `onUsage(usage, rawCost)` fires once with the stripped cost for telemetry. */
-export function createSseUsageScrubber({ onUsage } = {}) {
+export function createSseUsageScrubber({ onUsage, vendorKeys = false, modelAs } = {}) {
+  // modelAs [from, to]: a frame's `"model":"<from>"` is relabeled to the id the
+  // buyer asked for (the direct upstream names its own ids).
+  const rename = Array.isArray(modelAs) && modelAs[0] && modelAs[1] && modelAs[0] !== modelAs[1]
+    ? { re: new RegExp(`"model":\\s?${JSON.stringify(String(modelAs[0])).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "g"), to: `"model":${JSON.stringify(String(modelAs[1]))}` }
+    : null;
   let buf = "";
   // fetch's body yields Uint8Array chunks, NOT Buffers: String(Uint8Array) is
   // "100,97,116,97" - the comma-joined bytes - so the old `Buffer.isBuffer(chunk)
@@ -2476,23 +2489,56 @@ export function createSseUsageScrubber({ onUsage } = {}) {
   // Anthropic message_start carries message.usage. Every one of those is
   // scrubbed; the first (top-level or nested) usage object feeds telemetry.
   const usageSites = (obj) => [obj?.usage, obj?.response?.usage, obj?.message?.usage].filter((u) => u && typeof u === "object");
-  const processLine = (line) => {
+  // vendorKeys: a charge can arrive in a frame of its own, before or after the
+  // usage frame. One seen first is carried to the usage frame; a usage frame
+  // with no cost is held until a later charge (or the end of the stream), so
+  // the call is metered once, at the upstream's own charge.
+  let carriedMicro = null, heldUsage = null, usageReported = false;
+  const report = (u, rawCost, obj) => {
+    usageReported = true;
+    try { onUsage?.(u, rawCost, obj); } catch { /* telemetry never breaks a stream */ }
+  };
+  const releaseHeld = (micro) => {
+    if (!heldUsage) return;
+    const { u, obj } = heldUsage;
+    heldUsage = null;
+    report(u, micro === null ? null : micro / 1e6, obj);
+  };
+  const processLine = (raw) => {
+    const line = rename && raw.includes('"model"') ? raw.replace(rename.re, rename.to) : raw;
     // SSE allows "data:" with OR without the space (the spec strips one
     // optional leading space); OpenRouter emits "data: " today, but a format
     // change must not silently re-open the stream billing leak.
     const m = /^data:\s?/.exec(line);
-    if (!m || !line.includes('"usage"')) return line;
+    if (!m || (!line.includes('"usage"') && !(vendorKeys && line.includes('"x_')))) return line;
     let obj;
     try { obj = JSON.parse(line.slice(m[0].length)); } catch { return line; }
+    // A direct upstream's top-level `x_*` extension fields (its billing) are
+    // removed from every frame; a charge one carried stands in for a missing
+    // usage.cost so the stream is metered from the upstream's own figure.
+    const hasVendor = vendorKeys && obj && typeof obj === "object" && Object.keys(obj).some((k) => /^x_/.test(k));
+    const micro = hasVendor ? stripVendorExtensions(obj) : null;
     const sites = obj && typeof obj === "object" ? usageSites(obj) : [];
-    if (!sites.length) return line;
-    let had = false, reported = false;
+    if (!sites.length) {
+      if (micro !== null) {
+        if (heldUsage) releaseHeld(micro);
+        else if (!usageReported && carriedMicro === null) carriedMicro = micro;
+      }
+      return hasVendor ? `data: ${JSON.stringify(obj)}` : line;
+    }
+    const charge = micro !== null ? micro : (vendorKeys && !usageReported ? carriedMicro : null);
+    if (charge !== null && typeof sites[0].cost !== "number") sites[0].cost = charge / 1e6;
+    let had = hasVendor, reported = false;
     for (const u of sites) {
       if (BILLING_USAGE_FIELDS.some((k) => k in u)) had = true;
       const rawCost = stripBilling(u);
-      if (!reported && (rawCost !== null || typeof u.prompt_tokens === "number" || typeof u.input_tokens === "number")) {
+      if (!reported && !(vendorKeys && usageReported) && (rawCost !== null || typeof u.prompt_tokens === "number" || typeof u.input_tokens === "number")) {
         reported = true;
-        try { onUsage?.(u, rawCost, obj); } catch { /* telemetry never breaks a stream */ }
+        // A direct upstream may repeat usage on every chunk and send its charge
+        // only with the last one: a later usage frame replaces the held one, and
+        // a frame carrying its own charge reports at that charge, once.
+        if (vendorKeys && rawCost === null) heldUsage = { u, obj };
+        else { heldUsage = null; report(u, rawCost, obj); }
       }
     }
     return had ? `data: ${JSON.stringify(obj)}` : line;
@@ -2509,8 +2555,13 @@ export function createSseUsageScrubber({ onUsage } = {}) {
     flush() {
       buf += decoder.decode(); // drain a trailing partial multibyte sequence
       const rest = buf; buf = "";
-      return rest ? processLine(rest) : "";
+      const out = rest ? processLine(rest) : "";
+      releaseHeld(null);
+      return out;
     },
+    /** End of a stream that did not reach flush (dropped mid-stream): a
+     *  usage frame still held is reported without a charge. */
+    finish() { releaseHeld(null); },
   };
 }
 
@@ -2637,6 +2688,116 @@ async function callOpenRouter(body, { timeoutMs } = {}) {
   return data;
 }
 
+// ---------------------------------------------------------------------------
+// Direct upstream (src/gateway-direct-upstream.js): an OpenAI-compatible
+// endpoint tried before OpenRouter for the listed model ids. Every failure is
+// turned into a walkable 502/503/504 marked with a bucketed `directReason`, so
+// the chain walk below moves on to OpenRouter; a client-gone 499 is rethrown
+// as is. The answer it returns is normalized to what callOpenRouter returns:
+// the buyer's model id, vendor `x_*` fields removed, and the upstream's own
+// cost in usage.cost, which the shared success path strips (BILLING_USAGE_FIELDS)
+// and meters exactly as it does OpenRouter's.
+function directFailure(message, statusCode, reason, extra = {}) {
+  return Object.assign(bad(message, statusCode), { directReason: reason, directFallback: true }, extra);
+}
+async function fetchDirectUpstream(body, { signal, timeoutMs, cfg = directUpstreamConfig() } = {}) {
+  if (!cfg) throw directFailure("Direct upstream not configured", 502, "unconfigured");
+  const gone = clientGoneSignal();
+  if (gone?.aborted) throw gone.reason;
+  const own = signal ?? AbortSignal.timeout(timeoutMs ?? cfg.timeoutMs);
+  try {
+    return await fetch(cfg.url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${cfg.key}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: gone ? AbortSignal.any([own, gone]) : own,
+    });
+  } catch (e) {
+    if (gone?.aborted) throw gone.reason;
+    if (e?.name === "TimeoutError") throw directFailure("Direct upstream timed out", 504, "timeout", { upstreamTimeout: true });
+    // An abort from the stream relay's own controller (its first-frame timer,
+    // which then marks upstreamTimeout itself, or the buyer leaving).
+    if (e?.name === "AbortError") throw directFailure("Direct upstream request aborted", 504, "aborted");
+    throw directFailure("Direct upstream unreachable", 502, "connect");
+  }
+}
+function directStatusFailure(status) {
+  if (status === 429) return directFailure("Direct upstream at capacity", 503, "rate_limited");
+  if (status === 402) return directFailure("Direct upstream balance exhausted", 502, "quota");
+  if (status === 503) return directFailure("Direct upstream has no qualifying worker", 503, "unavailable");
+  if (status >= 500) return directFailure(`Direct upstream error (HTTP ${status})`, 502, "server_error");
+  if (status === 401 || status === 403) return directFailure("Direct upstream auth failed", 502, "auth");
+  // A fixed endpoint that is not there is the upstream's state, not the buyer's request.
+  if (status === 404 || status === 405) return directFailure(`Direct upstream endpoint missing (HTTP ${status})`, 502, "not_found");
+  // Any other 4xx refuses the request itself (a parameter out of range, a
+  // prompt over the context): walked on, and not counted by the breaker.
+  return directFailure(`Direct upstream refused the request (HTTP ${status})`, 502, "refused");
+}
+/** Bound on a non-stream direct answer body (DIRECT_UPSTREAM_MAX_BYTES,
+ *  default 4 MB, at least 64 KB). A larger body is a failed attempt. */
+export function directMaxBytes() {
+  const n = parseInt(String(process.env.DIRECT_UPSTREAM_MAX_BYTES ?? "").trim(), 10);
+  return Number.isFinite(n) && n >= 64 * 1024 ? n : 4 * 1024 * 1024;
+}
+export async function callDirectUpstream(body, { timeoutMs, servedModel, cfg = directUpstreamConfig() } = {}) {
+  let res;
+  try {
+    res = await fetchDirectUpstream(body, { timeoutMs, cfg });
+    if (!res.ok) { discardBody(res); throw directStatusFailure(res.status); }
+    // A call running past the upstream's keep-alive threshold answers 200 with
+    // leading whitespace and may carry a late error in the BODY: parse the
+    // trimmed text and treat any error object as a failed attempt. The body is
+    // read under a byte cap; a larger one is a malformed answer.
+    const cap = directMaxBytes();
+    const declared = declaredLength(res);
+    if (declared !== null && declared > cap) { discardBody(res); throw directFailure("Direct upstream answer over the size cap", 502, "malformed"); }
+    let text;
+    try {
+      const { bytes, truncated } = await readBytesCapped(res, cap);
+      if (truncated) throw directFailure("Direct upstream answer over the size cap", 502, "malformed");
+      text = bytes.toString("utf8");
+    } catch (e) {
+      if (e?.directFallback) throw e;
+      if (e?.name === "TimeoutError" || e?.name === "AbortError") throw directFailure("Direct upstream timed out", 504, "timeout", { upstreamTimeout: true });
+      throw directFailure("Direct upstream body read failed", 502, "connect");
+    }
+    let data;
+    try { data = JSON.parse(String(text).trimStart()); } catch { throw directFailure("Direct upstream returned non-JSON", 502, "malformed"); }
+    if (!data || typeof data !== "object" || Array.isArray(data)) throw directFailure("Direct upstream returned non-JSON", 502, "malformed");
+    if (data.error) throw directFailure("Direct upstream answered 200 with an error", 502, "late_error");
+    if (!hasChatMessage(data)) throw directFailure("Direct upstream returned no message", 502, "malformed");
+    const cost = directCostUsd(data, res.headers);
+    if (cost === null) throw directFailure("Direct upstream reported no cost", 502, "no_cost");
+    stripVendorExtensions(data);
+    if (!data.usage || typeof data.usage !== "object") data.usage = {};
+    data.usage.cost = cost;
+    if (servedModel) data.model = servedModel;
+    return data;
+  } catch (e) {
+    if (e?.directFallback || e?.statusCode === 499) throw e;
+    throw directFailure("Direct upstream failed", 502, "other");
+  }
+}
+/** Stream through the shared relay with the direct fetcher: vendor fields are
+ *  scrubbed from every frame, and an error first frame fails the attempt. */
+export async function streamDirectUpstreamTo(body, res, { onUsage, timeoutMs, cfg = directUpstreamConfig(), modelAs } = {}) {
+  try {
+    return await streamOpenRouterTo(body, res, {
+      onUsage, timeoutMs, vendorKeys: true, errorFrameFails: true, modelAs,
+      fetchUpstream: async (b, { signal }) => {
+        const r = await fetchDirectUpstream(b, { signal, cfg });
+        if (!r.ok) { discardBody(r); throw directStatusFailure(r.status); }
+        return r;
+      },
+    });
+  } catch (e) {
+    if (e?.directFallback && e.upstreamTimeout) e.directReason = "timeout";
+    if (res.headersSent || e?.directFallback || e?.statusCode === 499) throw e;
+    if (e?.errorFrame) throw directFailure("Direct upstream stream opened with an error", 502, "late_error");
+    throw directFailure(e?.message || "Direct upstream stream failed", e?.statusCode === 504 ? 504 : 502, e?.upstreamTimeout ? "timeout" : "stream", e?.upstreamTimeout ? { upstreamTimeout: true } : {});
+  }
+}
+
 /** True when a chat completion carries a first choice with a message object.
  *  An empty message (a tool-loop end) still counts; no message at all does not. */
 export function hasChatMessage(data) {
@@ -2675,7 +2836,7 @@ export const STREAM_TIMEOUT_MS = 180_000;
 /** The one SSE frame a committed stream ends with when upstream drops it
  *  mid-answer: an error object on the wire every SSE client parses. */
 export const STREAM_DROPPED_FRAME = 'data: {"error":{"message":"upstream stream dropped"}}\n\n';
-export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = STREAM_TIMEOUT_MS } = {}) {
+export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = STREAM_TIMEOUT_MS, fetchUpstream = fetchOpenRouter, vendorKeys = false, errorFrameFails = false, modelAs } = {}) {
   // One controller covers connect AND the whole body read; client disconnect
   // aborts the upstream so a closed tab never keeps burning tokens.
   // `timeoutMs` bounds the wait for the first data frame (it may be shorter
@@ -2692,7 +2853,7 @@ export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = 
   res.on?.("close", () => ctrl.abort());
   try {
     let upstream;
-    try { upstream = await fetchOpenRouter(body, { signal: ctrl.signal, url }); } catch (e) {
+    try { upstream = await fetchUpstream(body, { signal: ctrl.signal, url }); } catch (e) {
       if (firstFrameTimedOut && e && typeof e === "object" && e.statusCode === 504) e.upstreamTimeout = true;
       throw e;
     }
@@ -2710,7 +2871,7 @@ export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = 
     // cost the usage frame carried is metered onto the request for a gate
     // that debits on finish (a credits hold, src/gateway-meter.js), and
     // handed to the caller's telemetry.
-    const scrub = createSseUsageScrubber({ onUsage: (usage, rawCost, frame) => {
+    const scrub = createSseUsageScrubber({ vendorKeys, modelAs, onUsage: (usage, rawCost, frame) => {
       if (typeof rawCost === "number") recordStreamedUsage({ req: res.req, upstreamUsd: rawCost });
       onUsage?.(usage, rawCost, frame);
     } });
@@ -2733,6 +2894,19 @@ export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = 
     const offer = (out) => {
       if (committed) { res.write(out); return; }
       pending += out;
+      // errorFrameFails (the direct upstream): a first data frame that is an
+      // error object with no output is a failed attempt, not a committed 200,
+      // so the chain walks on before any byte reaches the buyer.
+      if (errorFrameFails) {
+        const first = /^data:\s?(.*)$/m.exec(pending);
+        if (first && first[1].trim() !== "[DONE]") {
+          let f = null;
+          try { f = JSON.parse(first[1]); } catch { /* a partial line is buffered by the scrubber; anything else commits */ }
+          if (f && typeof f === "object" && f.error && !(Array.isArray(f.choices) && f.choices.length)) {
+            throw Object.assign(bad("Upstream stream opened with an error frame", 502), { errorFrame: true });
+          }
+        }
+      }
       if (/^data:/m.test(pending) || pending.length > 64_000) commit();
     };
     try {
@@ -2741,6 +2915,7 @@ export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = 
       for await (const chunk of upstream.body) { const out = scrub.push(chunk); if (out) offer(out); }
       const tail = scrub.flush(); if (tail) offer(tail);
     } catch (e) {
+      if (e?.errorFrame && !committed) throw e;
       // Upstream dropped mid-stream: end what we have once something real was
       // sent; before that, it is an upstream failure the chain can walk. The
       // cause is logged either way - a bare catch hid a relay-side throw for a
@@ -2755,6 +2930,7 @@ export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = 
       // cut rather than handed a silent end that reads like a finished answer.
       // Every wire that relays through here (chat, Messages, Responses) gets
       // the same frame.
+      scrub.finish();
       try { res.write(STREAM_DROPPED_FRAME); } catch { /* the buyer may be gone too */ }
     }
     if (!committed) throw bad("Upstream stream ended before producing any data frame (no tokens) - nothing was charged", 502);
@@ -3603,7 +3779,7 @@ function makeHandler(routeTier) {
     const providerForLink = structured ? { ...(provider || {}), require_parameters: true } : provider;
     const outboundFor = (model, flex = false) => {
       const attempt = { ...body, model };
-      clampToMargin(attempt, TIERS[tierSlug], imageCount); // throws 400 → caller skips this candidate
+      const clampInputTokens = clampToMargin(attempt, TIERS[tierSlug], imageCount); // throws 400 → caller skips this candidate
       // Reasoning default per link (see REASONING_MODELS): only when the
       // buyer expressed no preference. Deterministic given the model, so it
       // needs no place in the cache key.
@@ -3630,6 +3806,9 @@ function makeHandler(routeTier) {
         ...(plugins.length ? { plugins } : {}),
         // flex / priority / an explicit default on :nitro - see serviceTierFor.
         service_tier: serviceTierFor(model, body, flex),
+        // The clamp's input estimate, for the direct cost guard: a symbol key,
+        // so it is never serialized into a request body.
+        ...(Number.isFinite(clampInputTokens) ? { [CLAMP_INPUT_TOKENS]: clampInputTokens } : {}),
       };
     };
     // Server-tool execution is upstream spend, so it has to be visible to a
@@ -3638,8 +3817,9 @@ function makeHandler(routeTier) {
     // web_search_requests} (and usage.cost is documented as "the total amount
     // charged to your account", i.e. the fee is already inside upstreamUsd -
     // the counts are what say WHY a margin moved).
-    const recordUsage = (usage, upstreamUsd, served, serviceTier) => import("../posthog.js")
+    const recordUsage = (usage, upstreamUsd, served, serviceTier, upstream = "openrouter") => import("../posthog.js")
       .then(({ capturePostHogGatewayUsage }) => capturePostHogGatewayUsage({
+        servedBy: upstream,
         tier: tierSlug, routeTier, model: served, priceUsd: (TIERS[tierSlug].metered && Number.isFinite(req?.__meteredQuoteUsd) && req.__meteredQuoteUsd > 0) ? req.__meteredQuoteUsd : TIERS[tierSlug].price, upstreamUsd,
         promptTokens: usage?.prompt_tokens, completionTokens: usage?.completion_tokens, serviceTier,
         serverToolCalls: usage?.server_tool_use_details?.tool_calls_executed ?? usage?.server_tool_use?.tool_calls_executed,
@@ -3650,7 +3830,41 @@ function makeHandler(routeTier) {
     // Flex-eligible links are tried on the flex tier first, then default (see
     // FLEX_MODELS): any upstream failure on the flex attempt falls to the same
     // model's default attempt before the chain moves on.
-    const attempts = attemptsFor(chain, body).slice(0, TIERS[tierSlug].maxAttempts || Infinity);
+    // Direct upstream (src/gateway-direct-upstream.js): off unless configured,
+    // and then one extra attempt before the first OpenRouter attempt of each
+    // listed model. It is taken only when the request uses nothing outside the
+    // direct allowlist, the eligibility check (src/gateway-direct-pricebook.js)
+    // passes for this call against the listed prices of both routes (OpenRouter's
+    // routable endpoints under this call's provider.max_price), the A/B draw
+    // picks it, and the direct breaker lets it through (consecutive counted
+    // direct failures open it for a while); every failure walks on. The guard reads only the
+    // background price book: nothing is fetched here. The input estimate is
+    // the one the margin clamp already made for this link (metered links,
+    // which skip the clamp, estimate the direct body here).
+    const directCfg = directUpstreamConfig();
+    const attempts = withDirectAttempts(attemptsFor(chain, body).slice(0, TIERS[tierSlug].maxAttempts || Infinity), directCfg);
+    const directPlanFor = (direct, outbound, stream) => {
+      if (!direct) return null;
+      const plan = directBodyFrom(outbound, direct, { stream });
+      if (!plan.body) { noteDirectSkip(plan.reason); return false; }
+      const inputTokens = Number.isFinite(outbound[CLAMP_INPUT_TOKENS]) ? outbound[CLAMP_INPUT_TOKENS] : estimateInputTokens(plan.body, 0);
+      const price = directPriceDecision(outbound.model, { inputTokens, outputTokens: plan.body.max_tokens, maxPrice: outbound.provider?.max_price });
+      if (!price.go) { noteDirectSkip(price.skip); return false; }
+      if (price.probe) noteDirectSkip("measure_probe_sent");
+      if (!directShareDraw(directCfg)) { noteDirectSkip("share"); return false; }
+      const grant = directBreakerTake();
+      if (!grant) { noteDirectSkip("breaker_open"); return false; }
+      return { body: plan.body, grant };
+    };
+    // The attempt's timeout, read after the breaker grant: a throw here (too
+    // little payment window left) sends nothing, so a half-open trial granted
+    // to this attempt is handed back for the next call instead of holding the
+    // breaker shut for another open period.
+    const attemptTimeoutMs = (directPlan, defaultMs) => {
+      try {
+        return directPlan ? Math.min(directCfg.timeoutMs, paymentWindowTimeoutMs(req, defaultMs)) : paymentWindowTimeoutMs(req, defaultMs);
+      } catch (e) { if (directPlan) directBreakerRelease(directPlan.grant); throw e; }
+    };
     if (body.stream === true) {
       // The route binder invokes __sse(res) after the paywall settled.
       // streamOpenRouterTo throws only BEFORE headers are written, so the
@@ -3661,20 +3875,39 @@ function makeHandler(routeTier) {
           const timeouts = timedOutBudget();
           const client = streamClientWatch(res);
           try {
-            for (const { model, flex } of attempts) {
+            for (const { model, flex, direct } of attempts) {
               client.assertPresent();
               let outbound;
               try { outbound = outboundFor(model, flex); } catch (e) { if (!lastErr) lastErr = e; continue; }
-              const timeoutMs = paymentWindowTimeoutMs(req, STREAM_TIMEOUT_MS);
+              const directPlan = directPlanFor(direct, outbound, true);
+              if (directPlan === false) continue;
+              const directBody = directPlan ? directPlan.body : null;
+              const abListed = !!directModelFor(model, directCfg);
+              const timeoutMs = attemptTimeoutMs(directPlan, STREAM_TIMEOUT_MS);
               const attemptStarted = Date.now();
               try {
-                // Streams now carry margin telemetry too: the scrubber hands us
-                // the upstream cost it strips from the final usage frame.
-                return await retryRateLimited(() => streamOpenRouterTo(outbound, res, { timeoutMs, onUsage: (usage, cost, frame) => recordUsage(usage, cost, frame?.model || model, frame?.service_tier || (flex ? "flex" : "default")) }), { delays: rateLimitDelaysFor(flex), canRetry: () => !res.headersSent && !client.gone() });
+                let out;
+                if (directBody) {
+                  let costSeen = false;
+                  out = await streamDirectUpstreamTo(directBody, res, { timeoutMs, cfg: directCfg, modelAs: [directBody.model, model], onUsage: (usage, cost) => { if (typeof cost === "number") costSeen = true; noteDirectMeasure(model, "direct", usage, cost); recordUsage(usage, cost, model, "default", "direct"); } });
+                  if (!costSeen) noteDirectAnomaly("stream_no_cost");
+                } else {
+                  // Streams now carry margin telemetry too: the scrubber hands us
+                  // the upstream cost it strips from the final usage frame.
+                  out = await retryRateLimited(() => streamOpenRouterTo(outbound, res, { timeoutMs, onUsage: (usage, cost, frame) => { if (frame?.service_tier !== "priority") noteDirectMeasure(model, "openrouter", usage, cost); return recordUsage(usage, cost, frame?.model || model, frame?.service_tier || (flex ? "flex" : "default")); } }), { delays: rateLimitDelaysFor(flex), canRetry: () => !res.headersSent && !client.gone() });
+                }
+                if (abListed) noteDirectAb(directBody ? "direct" : "openrouter", { ok: true, ms: Date.now() - attemptStarted });
+                if (directBody) noteDirectOutcome(true);
+                return out;
               } catch (e) {
+                if (abListed) noteDirectAb(directBody ? "direct" : "openrouter", { ok: false, reason: failureBucket(e) });
+                if (directBody) noteDirectOutcome(false, failureBucket(e));
                 if (res.headersSent || ![502, 503, 504].includes(e?.statusCode)) throw e;
-                lastErr = e;
-                timeouts.note(e, attemptStarted, timeoutMs);
+                if (!directBody || !lastErr) lastErr = e;
+                // A direct attempt's timeout is not one of the buyer's timed-out
+                // attempts: it is bounded by its own timeout, the payment window
+                // and the breaker, and OpenRouter keeps its full budget.
+                if (!directBody) timeouts.note(e, attemptStarted, timeoutMs);
                 if (timeouts.spent()) throw e;
               }
             }
@@ -3687,12 +3920,17 @@ function makeHandler(routeTier) {
     let lastErr;
     let refusedModel = null;
     const timeouts = timedOutBudget();
-    for (const { model, flex } of attempts) {
+    for (const { model, flex, direct } of attempts) {
       // A model that refused on flex will refuse on default too - don't pay twice.
       if (model === refusedModel) continue;
       let outbound;
       try { outbound = outboundFor(model, flex); } catch (e) { if (!lastErr) lastErr = e; continue; }
-      const timeoutMs = paymentWindowTimeoutMs(req, UPSTREAM_TIMEOUT_MS);
+      const directPlan = directPlanFor(direct, outbound, false);
+      if (directPlan === false) continue;
+      const directBody = directPlan ? directPlan.body : null;
+      const abListed = !!directModelFor(model, directCfg);
+      const abLabel = directBody ? "direct" : "openrouter";
+      const timeoutMs = attemptTimeoutMs(directPlan, UPSTREAM_TIMEOUT_MS);
       const attemptStarted = Date.now();
       try {
         // usage.include once asked OpenRouter for the exact upstream bill;
@@ -3701,22 +3939,33 @@ function makeHandler(routeTier) {
         // injected at call time (like provider), never part of the normalized
         // body or cache keys. Streams get the same accounting via the SSE
         // scrubber in streamOpenRouterTo.
-        const data = await retryRateLimited(() => callOpenRouter({ ...outbound, usage: { include: true } }, { timeoutMs }), { delays: rateLimitDelaysFor(flex) });
+        // The direct upstream is never retried on a 429: the chain's next
+        // attempt (the same model on OpenRouter) is the retry.
+        const data = directBody
+          ? await callDirectUpstream(directBody, { timeoutMs, servedModel: model, cfg: directCfg })
+          : await retryRateLimited(() => callOpenRouter({ ...outbound, usage: { include: true } }, { timeoutMs }), { delays: rateLimitDelaysFor(flex) });
         // An empty safety refusal (HTTP 200, no content) walks the chain like
         // a provider error — a buyer must never pay for nothing. See
         // isEmptyRefusal above. Streams can't be inspected this way; there
         // the raw SSE passes through and finish_reason discloses.
         if (isEmptyRefusal(data)) {
+          if (abListed) noteDirectAb(abLabel, { ok: false, reason: "empty_refusal" });
+          if (directBody) noteDirectOutcome(false, "empty");
           lastErr = bad("Upstream declined the request (safety filter) - rephrase the prompt, or pick a different model", 502);
-          refusedModel = model;
+          // A direct attempt's empty answer is a direct failure: the same
+          // model is still tried on OpenRouter. Only an OpenRouter empty
+          // answer skips the model's remaining attempts.
+          if (!directBody) refusedModel = model;
           continue;
         }
         if (isEmptyLength(data)) {
           // The output cap was spent before any content (reasoning tokens are
           // output tokens). Never serve a paid empty 200: try the next link
           // (flex->default first, then the chain); end-to-end empty is a 502.
+          if (abListed) noteDirectAb(abLabel, { ok: false, reason: "empty_length" });
+          if (directBody) noteDirectOutcome(false, "empty");
           lastErr = bad("Upstream produced no content within the output cap (reasoning consumed it) - raise max_tokens, lower reasoning.effort, or pick a non-reasoning model", 502);
-          refusedModel = model; // same model + same effort on the default tier would be empty too - don't pay twice
+          if (!directBody) refusedModel = model; // same model + same effort on the default tier would be empty too - don't pay twice
           continue;
         }
         // The exact upstream cost is operator telemetry, never a buyer-visible
@@ -3724,7 +3973,10 @@ function makeHandler(routeTier) {
         // returned. Standard token counts stay (OpenAI wire shape).
         if (data && typeof data === "object" && data.usage && typeof data.usage === "object") {
           const upstreamUsd = stripBilling(data.usage);
-          await recordUsage(data.usage, upstreamUsd, data.model || model, data.service_tier || (flex ? "flex" : "default"));
+          // The cost guard's measured backstop (mapped models only; a priority
+          // answer bills a multiple and is not a default call's cost).
+          if (data.service_tier !== "priority") noteDirectMeasure(model, abLabel, data.usage, upstreamUsd);
+          await recordUsage(data.usage, upstreamUsd, data.model || model, data.service_tier || (flex ? "flex" : "default"), abLabel);
           // METERED SETTLEMENT: hand the real cost to the route binder, which
           // settles that plus the markup instead of the flat tier price when
           // the buyer paid over `upto`. Stripped before the body is returned,
@@ -3736,6 +3988,8 @@ function makeHandler(routeTier) {
         // Routed requests disclose the decision: additive key, OpenAI wire
         // shape otherwise untouched (the standard `model` field already names
         // the server, this adds WHY). Streams pass through unannotated.
+        if (abListed) noteDirectAb(abLabel, { ok: true, ms: Date.now() - attemptStarted });
+        if (directBody) noteDirectOutcome(true);
         if (routedCategory && data && typeof data === "object") {
           data.agent402_router = { category: routedCategory, quality: routedQuality, served: data.model || model };
         }
@@ -3769,9 +4023,12 @@ function makeHandler(routeTier) {
         }
         return data;
       } catch (e) {
+        if (abListed) noteDirectAb(abLabel, { ok: false, reason: failureBucket(e) });
+        if (directBody) noteDirectOutcome(false, failureBucket(e));
         if (![502, 503, 504].includes(e?.statusCode)) throw e;
-        lastErr = e;
-        timeouts.note(e, attemptStarted, timeoutMs);
+        if (!directBody || !lastErr) lastErr = e;
+        // Not counted for a direct attempt (see the stream walk above).
+        if (!directBody) timeouts.note(e, attemptStarted, timeoutMs);
         if (timeouts.spent()) throw e;
       }
     }

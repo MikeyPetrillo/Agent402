@@ -8,6 +8,7 @@
 //   ROBINHOOD_FACILITATOR_URL=<facilitator-url> NETWORK=robinhood \
 //   PAYMENT_NETWORKS=robinhood WALLET_ADDRESS=<revenue-evm> PORT=3790 node src/server.js &
 //   TARGET_URL=http://127.0.0.1:3790 KEY_FILE=/tmp/burner-key node scripts/rh-settle-test.js
+import { assertOwnPaidTarget } from "./lib/buyer-guard.js";
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
 import { readFileSync } from "node:fs";
 import { privateKeyToAccount } from "viem/accounts";
@@ -15,7 +16,7 @@ import { x402Client } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { wrapFetchWithPayment } from "@x402/fetch";
 
-const TARGET = process.env.TARGET_URL || "http://127.0.0.1:3790";
+const TARGET = assertOwnPaidTarget(process.env.TARGET_URL || "http://127.0.0.1:3790", "rh-settle-test");
 const USDG = "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168";
 const RH_RPC = process.env.ROBINHOOD_RPC_URL || "https://rpc.mainnet.chain.robinhood.com";
 const account = privateKeyToAccount(readFileSync(process.env.KEY_FILE, "utf8").trim());

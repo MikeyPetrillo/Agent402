@@ -55,6 +55,11 @@ const OTHER_LISTED = "0x" + "77".repeat(20);
   ok(x402ScreenedAddressesOf(req({ "payment-signature": b64({ x402Version: 2, accepted: { network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" }, payload: { transaction: "AQAB" } }) })).length === 0, "a Solana payload names no EVM address");
   ok(x402ScreenedAddressesOf(req({ "payment-signature": b64({ x402Version: 2, accepted: { network: "stellar:pubnet" }, payload: { transaction: "AAAA" } }) })).length === 0, "a Stellar payload names no EVM address");
   ok(x402ScreenedAddressesOf(req({ "payment-signature": b64({ x402Version: 2, accepted: { network: "algorand:mainnet" }, payload: { paymentGroup: ["gqNzaWc="], paymentIndex: 0 } }) })).length === 0, "an Algorand payload names no EVM address");
+  // The paywall drops a UTF-8 byte order mark from the decoded bytes and
+  // settles the payment, so the screen has to read the payer through one too.
+  const withBom = (o) => Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(JSON.stringify(o))]).toString("base64");
+  ok(x402ScreenedAddressesOf(req({ "payment-signature": withBom({ x402Version: 2, payload: { authorization: { from: LISTED } } }) })).join() === LISTED, "a payer behind a byte order mark is screened");
+  ok(x402ScreenedAddressesOf(req({ "x-payment": eip3009(LISTED).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "") })).join() === LISTED, "a base64url header is screened");
   ok(x402ScreenedAddressesOf(req({})).length === 0 && x402ScreenedAddressesOf(req({ "payment-signature": "not-json!" })).length === 0, "no header, or an unreadable one: nothing to screen");
   ok(x402ScreenedAddressesOf(req({ "payment-signature": b64({ payload: { authorization: { from: "0xNOTHEX" } }, from: LISTED }) })).length === 0, "a malformed from, or an address outside the payload, is not read");
 }

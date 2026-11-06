@@ -154,14 +154,50 @@ export const MAX_CHARGE_BACKOFF_MS = 24 * 60 * 60_000;
 // A TRANSIENT charge failure retries in minutes, not an hour. Measured
 // 2026-09-02 (tempo-subscription-canary run 33657453172): the renewal's
 // transferWithMemo reached rpc.tempo.xyz's eth_estimateGas with its
-// `validBefore` two seconds in the past - viem's Tempo chain config stamps
-// validBefore = now + 25 s on every request, and that minute our own
+// `validBefore` two seconds in the past - viem's Tempo chain config then
+// stamped validBefore = now + 25 s on every request, and that minute our own
 // tempo-volume run had the RPC answering in 7-20 s. The transfer never
 // existed on chain, nobody was charged, and the next attempt an hour later
 // would have succeeded - but an hour of past_due for a slow RPC is the wrong
 // price, and for the canary it read as "the pull half of the rail is broken".
 // A refused transfer (insufficient funds, revoked key) keeps the hour.
 export const TRANSIENT_CHARGE_BACKOFF_MS = 2 * 60_000;
+
+/**
+ * Hours a renewal may stay unconfirmed (a send whose landing the chain read
+ * has not decided) before the subscriptionRenewals word reads unconfirmed.
+ * Unset, blank or not a positive number: 3. 0 or "off": null (the word reads off).
+ */
+export const RENEWAL_UNCONFIRMED_ALERT_HOURS_DEFAULT = 3;
+export function renewalUnconfirmedAlertHours(env = process.env) {
+  const raw = String(env.MPP_SUB_UNCONFIRMED_ALERT_HOURS ?? "").trim();
+  if (/^off$/i.test(raw)) return null;
+  if (!raw) return RENEWAL_UNCONFIRMED_ALERT_HOURS_DEFAULT;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return RENEWAL_UNCONFIRMED_ALERT_HOURS_DEFAULT;
+  return n === 0 ? null : n;
+}
+
+/**
+ * The subscriptionRenewals word over a set of subscription records: off (the
+ * alert disabled), unconfirmed (a record that is neither canceled nor expired
+ * has carried the same unconfirmed renewal for longer than `hours`), ok.
+ * Publicly { status }; the operator view adds the threshold, the count and the
+ * oldest attempt time.
+ */
+export function renewalsWord(recs, { hours = renewalUnconfirmedAlertHours(), at = Date.now(), full = false } = {}) {
+  if (hours == null) return full ? { status: "off", alertHours: null } : { status: "off" };
+  let stuck = 0, oldest = null;
+  for (const rec of recs || []) {
+    if (!rec || rec.status === "canceled" || rec.status === "expired") continue;
+    const since = Date.parse(rec.unconfirmedCharge?.at || "");
+    if (!Number.isFinite(since) || at - since <= hours * 3_600_000) continue;
+    stuck++;
+    if (oldest == null || since < oldest) oldest = since;
+  }
+  const status = stuck ? "unconfirmed" : "ok";
+  return full ? { status, alertHours: hours, unconfirmedCount: stuck, oldestAttemptAt: oldest == null ? null : new Date(oldest).toISOString() } : { status };
+}
 const TRANSIENT_CHARGE_RE = /transaction expired|validBefore|timed? ?out|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|fetch failed|socket hang up|\b(?:429|502|503|504)\b|rate.?limit|temporarily unavailable|UND_ERR/i;
 /** True when the failed charge looks like RPC/network trouble rather than a refused transfer. */
 export function isTransientChargeError(err) {
@@ -183,7 +219,7 @@ export function isTransientChargeError(err) {
 // (canary run 33659899394): "TimeoutError ... eth_sendRawTransactionSync" -
 // the chain showed it never landed that time, but nothing in the path could
 // know that, and mppx renews with Tempo's EXPIRING nonce (validBefore = now +
-// 25 s), so a retry is a NEW transaction that would land beside an earlier one
+// the renewal window below), so a retry is a NEW transaction that would land beside an earlier one
 // that did. Such a failure is remembered as `unconfirmedCharge` and the next
 // pull first asks the CHAIN whether that period already settled
 // (findRenewalOnChain) - exact, because every mppx renewal carries a memo
@@ -206,20 +242,33 @@ export function isSendPhaseAmbiguity(err) {
 /** How far back the chain is read for an unconfirmed renewal, before the attempt time. A sent transaction can only land before its validBefore, which lies AFTER the attempt; the forward bound is `settleableUntil` below. */
 export const UNCONFIRMED_LOOKBACK_MS = 60_000;
 
-// VALIDITY WINDOW OF A SERVER-SIGNED RENEWAL. viem's Tempo chain config stamps
-// an expiring-nonce transaction with validBefore = now + 25 s (the protocol's
-// old 30 s cap). Tempo's T11 upgrade (mainnet 2026-09-10, TIP-1093) raised the
-// expiring-nonce window to 5 minutes, and a renewal that met a slow RPC on
-// 2026-09-02 expired between signing and eth_estimateGas. mppx 0.11 exposes no
-// validBefore parameter on renewSubscription: it prepares the transfer through
-// `prepareTransactionRequest(client, {..., nonceKey: "expiring"})` on the
-// client we hand it, and viem's chain hook only stamps validBefore when the
-// request carries none. So renewals get their OWN client whose chain hook sets
-// validBefore first (`withRenewalValidity`). Activation and every buyer-side
-// charge credential are untouched: they never see this client.
+// VALIDITY WINDOW OF A SERVER-SIGNED TRANSACTION. Both subscription sends
+// (activation and renewal) are mppx `prepareTransactionRequest(client, {...,
+// nonceKey: "expiring"})` calls with no validBefore, so the window is whatever
+// the client's chain hook stamps. viem's stock Tempo chain stamps its own
+// default and has changed it (25 s through 2.57.13, 270 s from 2.57.16), and
+// the protocol rejects anything past now + 300 s (Tempo T11, TIP-1093; viem
+// `Transaction.expiringNonceMaxExpiry`). An expiring-nonce transaction has no
+// sequence number, so a retry is a NEW transaction and an earlier one stays
+// includable until its validBefore. Neither window may follow viem's default:
+// each client's chain hook stamps validBefore first (`withRenewalValidity`).
+// - Renewal: 120 s by default. A renewal that met a slow RPC on 2026-09-02
+//   expired between signing and eth_estimateGas at 25 s, and a timed-out
+//   renewal is reconciled against the chain until `settleableUntil` (built
+//   from this same window), so a longer window only lengthens that wait.
+// - Activation: 25 s, which must stay under the RPC timeout. A failed
+//   activation answers "Nothing was charged; request a fresh challenge", and
+//   nothing reconciles it, so a send that timed out must already be unable to
+//   land when the error surfaces. validBefore is fixed before the send, and
+//   the sync send is cut off TEMPO_RPC_TIMEOUT_MS (30 s) after it started.
+//   On viem's 270 s default a timed-out activation could land minutes after
+//   that answer, beside the buyer's retry.
+// Buyer-side charge credentials are untouched: mppx's charge client names
+// its own validBefore (25 s) and never sees these clients.
+export const ACTIVATION_VALID_FOR_S = 25;      // under TEMPO_RPC_TIMEOUT_MS; 10 s above the sponsor's 15 s minimum remaining validity
 export const RENEWAL_VALID_FOR_DEFAULT_S = 120;
-export const RENEWAL_VALID_FOR_MAX_S = 240;   // under the 5-minute protocol cap, with margin for clock skew
-export const RENEWAL_VALID_FOR_MIN_S = 25;    // viem's own default; never shorter
+export const RENEWAL_VALID_FOR_MAX_S = 240;   // under the protocol's 300 s cap, with 60 s for clock skew
+export const RENEWAL_VALID_FOR_MIN_S = ACTIVATION_VALID_FOR_S; // never shorter than the window a slow RPC already beat
 /** TEMPO_SUBSCRIPTION_VALID_FOR_S, clamped to [25, 240]; unset or malformed -> 120. */
 export function renewalValidForSeconds(raw = process.env.TEMPO_SUBSCRIPTION_VALID_FOR_S) {
   const txt = String(raw ?? "").trim();
@@ -232,9 +281,9 @@ const MAX_UINT256 = 2n ** 256n - 1n;
 /**
  * A copy of a viem chain whose prepareTransactionRequest hook stamps an
  * expiring-nonce request with validBefore = now + `seconds` before viem's own
- * hook runs (viem then keeps it: it only fills an undefined validBefore). A
- * request that already names validBefore, or does not use the expiring nonce,
- * passes through untouched.
+ * hook runs, so viem's default window never applies (viem then keeps it: it
+ * only fills an undefined validBefore). A request that already names
+ * validBefore, or does not use the expiring nonce, passes through untouched.
  */
 export function withRenewalValidity(chain, seconds, nowMs = () => Date.now()) {
   const hook = chain?.prepareTransactionRequest;
@@ -269,6 +318,62 @@ export async function expectedRenewalMemo({ lookupKey, subscriptionId, periodInd
   buf.set(k(lookupKey, 10), 5);
   buf.set(k(`renewal:${subscriptionId}:${periodIndex}`, 7), 25);
   return bytesToHex(buf);
+}
+
+/** Blocks per getLogs request when the chain is searched for an unconfirmed renewal. */
+export const RENEWAL_SCAN_CHUNK_BLOCKS = 5000n;
+/** Past this many blocks the search answers "unknown" (wait), never "not found". */
+export const RENEWAL_SCAN_MAX_BLOCKS = 200_000n;
+
+/**
+ * Decides whether one transaction is THIS renewal: "match" | "no" |
+ * "unknown" | "fallback" (the receipt carries no TransferWithMemo from the
+ * currency, so call again with `tx`). Order of evidence: the receipt's
+ * TransferWithMemo log from the currency (token, from, to, amount and memo all
+ * equal, the same proof mppx itself requires), then the transaction's
+ * `calls[]` (Tempo 0x76: each call to the currency), then a legacy `input`.
+ * An unreadable receipt or a shape it does not know is "unknown", never "no".
+ */
+export async function classifyRenewalEvidence({ receipt, tx, currency, payer, recipient, amount, memo }) {
+  const { decodeEventLog, decodeFunctionData, parseAbi } = await import("viem");
+  const same = (a, b) => typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
+  if (!receipt || !Array.isArray(receipt.logs)) return "unknown";
+  if (receipt.status === "reverted") return "no";
+  if (receipt.status !== "success") return "unknown";
+  const evAbi = parseAbi(["event TransferWithMemo(address indexed from, address indexed to, uint256 amount, bytes32 indexed memo)"]);
+  let sawMemoLog = false;
+  for (const l of receipt.logs) {
+    if (!same(l?.address, currency)) continue;
+    let ev = null;
+    try { ev = decodeEventLog({ abi: evAbi, data: l.data, topics: l.topics }); } catch { ev = null; }
+    if (ev?.eventName !== "TransferWithMemo") continue;
+    sawMemoLog = true;
+    const a = ev.args;
+    if (same(a.from, payer) && same(a.to, recipient) && a.amount === amount && same(a.memo, memo)) return "match";
+  }
+  if (sawMemoLog) return "no";
+  if (tx === undefined) return "fallback";
+  if (!tx || typeof tx !== "object") return "unknown";
+  const fnAbi = parseAbi(["function transferWithMemo(address to, uint256 amount, bytes32 memo)", "function transfer(address to, uint256 amount)"]);
+  const judge = (data) => {
+    let d = null;
+    try { d = decodeFunctionData({ abi: fnAbi, data }); } catch { return "unknown"; }
+    if (d.functionName !== "transferWithMemo") return "no";
+    const [to, value, m] = d.args;
+    return same(to, recipient) && value === amount && same(m, memo) ? "match" : "no";
+  };
+  if (Array.isArray(tx.calls)) {
+    let verdict = "no";
+    for (const c of tx.calls) {
+      if (!same(c?.to, currency)) continue;
+      const v = judge(c.data ?? c.input);
+      if (v === "match") return "match";
+      if (v === "unknown") verdict = "unknown";
+    }
+    return verdict;
+  }
+  if (typeof tx.input === "string" && tx.input !== "0x" && same(tx.to, currency)) return judge(tx.input);
+  return "unknown";
 }
 // Every unpaid 402 mints and PERSISTS a server-owned access key, so an
 // unauthenticated caller can grow the shared offer store by asking for
@@ -862,8 +967,9 @@ export function createMppSubscriptions({
     const { tempo: tempoChain } = await import("viem/tempo/chains");
     // Always OUR client, never mppx's default: the default is viem's 10 s
     // request timeout, and a sync send that waits for inclusion outlived it on
-    // a slow day (canary run 33659899394).
-    _client = createClient({ chain: tempoChain, transport: http(process.env.TEMPO_RPC_URL || "https://rpc.tempo.xyz", { timeout: TEMPO_RPC_TIMEOUT_MS }) });
+    // a slow day (canary run 33659899394). Its chain stamps the activation
+    // window, never viem's default (see ACTIVATION_VALID_FOR_S).
+    _client = createClient({ chain: withRenewalValidity(tempoChain, ACTIVATION_VALID_FOR_S), transport: http(process.env.TEMPO_RPC_URL || "https://rpc.tempo.xyz", { timeout: TEMPO_RPC_TIMEOUT_MS }) });
     return _client;
   }
   const clientOverride = () => ({ getClient: () => tempoClient() });
@@ -879,31 +985,81 @@ export function createMppSubscriptions({
   }
 
   /**
-   * Default chain reader for an unconfirmed renewal: Transfer logs on the
-   * subscription's currency from the payer to our recipient since the
-   * attempt, value equal to the period amount, and the transaction's memo
-   * equal to mppx's attribution for THIS subscription and period. Returns
-   * {found:true, tx} | {found:false}; null when the chain could not be read
-   * (the caller then waits rather than charging - an unreadable chain must
-   * never become a second transfer).
+   * Default chain reader for an unconfirmed renewal. mppx sends a renewal as a
+   * Tempo (0x76) transaction whose transferWithMemo is one of `calls[]`, so the
+   * transaction's own `input` says nothing about it. Candidates are the
+   * currency's TransferWithMemo logs carrying THIS period's memo and its
+   * Transfer logs from the payer to our recipient; each candidate is decided by
+   * classifyRenewalEvidence (receipt log first, then calls[], then input).
+   * Returns {found:true, tx} | {found:false} (every candidate decided, none is
+   * this renewal) | {unknown:true} (something could not be decided) | null
+   * (the chain could not be read). Only {found:false} may ever lead to a new
+   * transfer; the caller waits on anything else.
    */
   async function defaultFindRenewalOnChain({ rec, mppxRec, periodIndex, sinceMs }) {
     try {
       const client = await tempoClient();
-      const { getBlockNumber, getLogs, getTransaction, decodeFunctionData, parseAbi, parseUnits } = await import("viem");
+      // The chain actions live under viem/actions (the root export has none of them).
+      const { parseAbi } = await import("viem");
+      const { getBlock, getBlockNumber, getLogs, getTransaction, getTransactionReceipt } = await import("viem/actions");
+      // The period amount in BASE UNITS: mppx's record carries request.amount,
+      // which its codec already scaled (so "5000000" is $5.00 at 6 decimals),
+      // and our record keeps the same figure as amountAtomic. Never re-scale it.
+      const rawAmount = String(mppxRec?.amount ?? rec.amountAtomic ?? "");
+      if (!/^\d+$/.test(rawAmount)) throw new Error("the period amount is not a base-units integer");
+      const amount = BigInt(rawAmount);
+      // Without the lookup key and subscription id the memo is someone else's.
+      if (!mppxRec?.lookupKey || !rec.mppxSubscriptionId) return { unknown: true, reason: "the renewal memo cannot be derived" };
+      const memo = await expectedRenewalMemo({ lookupKey: mppxRec.lookupKey, subscriptionId: rec.mppxSubscriptionId, periodIndex });
+      const [transferEvent, memoEvent] = parseAbi([
+        "event Transfer(address indexed from, address indexed to, uint256 value)",
+        "event TransferWithMemo(address indexed from, address indexed to, uint256 amount, bytes32 indexed memo)",
+      ]);
+      // The scan must reach back past sinceMs: the starting block is checked
+      // by its timestamp (block times are not assumed), widened until covered.
       const head = await getBlockNumber(client);
-      const secondsBack = Math.ceil((now() - sinceMs) / 1000) + 120; // Tempo blocks are ~1 s
-      const fromBlock = head > BigInt(Math.min(secondsBack, 5000)) ? head - BigInt(Math.min(secondsBack, 5000)) : 0n;
-      const amount = parseUnits(String(mppxRec?.amount ?? rec.priceUsd), Number(mppxRec?.decimals ?? decimals));
-      const abi = parseAbi(["event Transfer(address indexed from, address indexed to, uint256 value)", "function transferWithMemo(address to, uint256 amount, bytes32 memo)"]);
-      const logs = await getLogs(client, { address: rec.currency, event: abi[0], args: { from: rec.payer, to: recipient }, fromBlock, toBlock: "latest" });
-      const memo = await expectedRenewalMemo({ lookupKey: mppxRec?.lookupKey, subscriptionId: rec.mppxSubscriptionId, periodIndex });
-      for (const l of logs) {
-        if (l.args?.value !== amount) continue;
-        const tx = await getTransaction(client, { hash: l.transactionHash });
-        let decoded = null;
-        try { decoded = decodeFunctionData({ abi, data: tx.input }); } catch { decoded = null; }
-        if (decoded?.functionName === "transferWithMemo" && String(decoded.args?.[2]).toLowerCase() === memo.toLowerCase()) return { found: true, tx: l.transactionHash };
+      const tsMs = async (n) => Number((await getBlock(client, { blockNumber: n })).timestamp) * 1000;
+      let back = BigInt(Math.max(0, Math.ceil((now() - sinceMs) / 1000)) + 120);
+      let fromBlock = 0n;
+      for (let i = 0; ; i++) {
+        fromBlock = head > back ? head - back : 0n;
+        if (fromBlock === 0n || (await tsMs(fromBlock)) <= sinceMs) break;
+        if (i >= 20 || back >= RENEWAL_SCAN_MAX_BLOCKS) return { unknown: true, reason: "the attempt's block range could not be located" };
+        back *= 2n;
+      }
+      if (head - fromBlock > RENEWAL_SCAN_MAX_BLOCKS) return { unknown: true, reason: "the attempt is further back than the scan bound" };
+      const hashes = new Set();
+      const sameAddr = (a, b) => typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
+      for (let start = fromBlock; start <= head; start += RENEWAL_SCAN_CHUNK_BLOCKS) {
+        const end = start + RENEWAL_SCAN_CHUNK_BLOCKS - 1n < head ? start + RENEWAL_SCAN_CHUNK_BLOCKS - 1n : head;
+        const range = { address: rec.currency, fromBlock: start, toBlock: end };
+        const [withMemo, plain] = await Promise.all([
+          getLogs(client, { ...range, event: memoEvent, args: { from: rec.payer, to: recipient, memo } }),
+          getLogs(client, { ...range, event: transferEvent, args: { from: rec.payer, to: recipient } }),
+        ]);
+        for (const l of [...withMemo, ...plain]) {
+          if (l.removed || !l.transactionHash || !sameAddr(l.address, rec.currency)) continue;
+          if (!sameAddr(l.args?.from, rec.payer) || !sameAddr(l.args?.to, recipient)) continue;
+          if ((l.args?.amount ?? l.args?.value) !== amount) continue;
+          hashes.add(l.transactionHash);
+        }
+      }
+      let undecided = 0;
+      for (const hash of hashes) {
+        let receipt = null, tx = null;
+        try { receipt = await getTransactionReceipt(client, { hash }); } catch { receipt = null; }
+        const want = { currency: rec.currency, payer: rec.payer, recipient, amount, memo };
+        let verdict = await classifyRenewalEvidence({ receipt, ...want });
+        if (verdict === "fallback") {
+          try { tx = await getTransaction(client, { hash }); } catch { tx = null; }
+          verdict = await classifyRenewalEvidence({ receipt, tx, ...want });
+        }
+        if (verdict === "match") return { found: true, tx: hash };
+        if (verdict !== "no") undecided++;
+      }
+      if (undecided) {
+        log(`[mpp-subs] ${undecided} candidate transfer(s) for an unconfirmed renewal could not be decided (will wait, not re-charge)`);
+        return { unknown: true, reason: "a candidate transfer could not be decided" };
       }
       return { found: false };
     } catch (err) {
@@ -1441,13 +1597,16 @@ export function createMppSubscriptions({
         const mppxRec = await subStore.get(rec.mppxSubscriptionId);
         const find = injectedFindRenewal || defaultFindRenewalOnChain;
         const verdict = await find({ rec, mppxRec, periodIndex: due, sinceMs: Date.parse(rec.unconfirmedCharge.at) - UNCONFIRMED_LOOKBACK_MS });
-        if (verdict === null) {
+        // Only an explicit {found:false} may lead to a new transfer: null (unreadable),
+        // {unknown:true} (undecidable) or any other shape waits and signs nothing.
+        const decided = !!verdict && !verdict.unknown && ((verdict.found === true && typeof verdict.tx === "string" && verdict.tx !== "") || verdict.found === false);
+        if (!decided) {
           const next = { ...rec, status: rec.status === "active" ? "past_due" : rec.status, nextChargeAttemptAt: new Date(at + TRANSIENT_CHARGE_BACKOFF_MS).toISOString() };
           await writeRecKeepingCancel(next);
-          log(`[mpp-subs] ${subId}: unconfirmed period ${due} and the chain is unreadable - waiting, not re-charging`);
+          log(`[mpp-subs] ${subId}: unconfirmed period ${due} and the chain ${verdict === null ? "is unreadable" : `could not decide (${verdict?.reason || "unknown"})`} - waiting, not re-charging`);
           return next.status;
         }
-        if (verdict.found) {
+        if (verdict.found === true) {
           if (mppxRec && (mppxRec.lastChargedPeriod ?? 0) < due) {
             await subStore.put({ ...mppxRec, lastChargedPeriod: due, reference: verdict.tx, timestamp: new Date(at).toISOString(), inFlightPeriod: undefined, inFlightAttempt: undefined, inFlightReference: undefined, inFlightStartedAt: undefined });
           }
@@ -1695,16 +1854,25 @@ export function createMppSubscriptions({
     } catch { return get(subId); }
   }
 
+  /** The subscriptionRenewals word, read from the mirror (re-read in the
+   *  background like listActive). */
+  function renewalsStatus({ full = false, env = process.env, at = now() } = {}) {
+    refreshMirror();
+    return renewalsWord([...cache.values()], { hours: renewalUnconfirmedAlertHours(env), at, full });
+  }
+
   async function status() {
     await warm();
     return {
       enabled: true, recipient, currency, chainId: TEMPO_MAINNET_CHAIN_ID,
       periodSeconds: PERIOD_MS / 1000,
+      renewals: renewalsWord([...cache.values()], { hours: renewalUnconfirmedAlertHours(), at: now(), full: true }),
       subs: [...cache.values()].map((rec) => ({
         ...publicView(rec),
         email: rec.email ? `${rec.email.slice(0, 2)}***` : null,
         chargeFailures: rec.chargeFailures || 0, lastChargeError: rec.lastChargeError || null,
         nextChargeAttemptAt: rec.nextChargeAttemptAt || null,
+        unconfirmedChargeAt: rec.unconfirmedCharge?.at || null,
         accessKeyAddress: rec.accessKeyAddress,
       })),
     };
@@ -1712,11 +1880,11 @@ export function createMppSubscriptions({
 
   return {
     offerInfo, mintOffer, activateFromCredential, refreshStatus, cancel, isCanarySub, sweepStaleCanaries,
-    listActive, get, getFresh, isMine, status, warm, warmSync, refreshMirror, manageToken, manageTokenOk, publicView,
+    listActive, get, getFresh, isMine, status, renewalsStatus, warm, warmSync, refreshMirror, manageToken, manageTokenOk, publicView,
     ready: () => ready, flush: () => kv.flush(),
     _store: kv, _subStore: subStore, _method: method,
     _feePayer: feePayer, _feePayerPolicy: feePayer ? subscriptionFeePayerPolicy() : null,
-    _client: tempoClient, _renewalClient: tempoRenewalClient, _renewalValidForS: renewalValidForS,
+    _client: tempoClient, _renewalClient: tempoRenewalClient, _renewalValidForS: renewalValidForS, _activationValidForS: ACTIVATION_VALID_FOR_S,
     _currentPeriodIndex: currentPeriodIndex, _paidThroughAt: paidThroughAt, _readRec: readRec, _writeRec: writeRec,
   };
 }

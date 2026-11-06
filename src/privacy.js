@@ -15,6 +15,7 @@ import { settledHoldText, CONSUMED_VALIDITY_MARGIN_MS } from "./replay-guard.js"
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { SHARE_TTL_DAYS, TOMBSTONE_DAYS, answerShareEnabled, sharePagesMayBeLive } from "./answer-share.js";
 import { firstCallAllowanceEnabled } from "./first-call-allowance.js";
+import { directUpstreamPrivacyText, directUpstreamThirdPartyText, directUpstreamLocationText, withDirectUpstreamDate } from "./gateway-direct-upstream.js";
 import { publicIndexPrivacyText, publicIndexNoSaleText, withPublicIndexDate, PUBLIC_INDEX_ANCHOR } from "./facilitator-public-index.js";
 const DAYS = (ms) => Math.round(ms / 86_400_000);
 export function privacyPage(baseUrl) {
@@ -38,6 +39,14 @@ export function privacyPage(baseUrl) {
   // printed date is the later of the page's own and the disclosure's
   // (FACILITATOR_PUBLIC_INDEX_SINCE, withPublicIndexDate).
   const publicIndex = publicIndexPrivacyText();
+  // The direct inference upstream (src/gateway-direct-upstream.js): its
+  // sentence, its Third parties item (DIRECT_UPSTREAM_NAME and
+  // DIRECT_UPSTREAM_POLICY_URL, escaped) and the location sentence's
+  // exception render only while it is configured, and the printed date then
+  // moves to DIRECT_UPSTREAM_SINCE once reached (withDirectUpstreamDate).
+  const directUpstream = directUpstreamPrivacyText();
+  const directUpstreamParty = directUpstreamThirdPartyText();
+  const directUpstreamWhere = directUpstreamLocationText();
 
   const extraCss = `
 .pv-wrap{max-width:760px;margin:0 auto;padding:56px 30px}
@@ -156,7 +165,7 @@ so every claim below is verifiable in code.</p>
   via OpenRouter, our account keeps its optional prompt and completion logging off, routes only to
   endpoints that do not train on or publish request data, and does not let OpenRouter use inputs or
   outputs to improve its product. Request metadata such as the model, token counts and cost is still
-  recorded for billing and monitoring, without the prompt or completion text.</li>
+  recorded for billing and monitoring, without the prompt or completion text.${directUpstream}</li>
   <li><b>On-chain payments.</b> For x402 and MPP payments there are no card numbers, names, or emails.
   Payments settle in USDC on the public Base blockchain (or the other chains listed at <a href="/pricing">/pricing</a>,
   USDG on Robinhood Chain, or MPP on Base, Celo or Tempo) via the x402 or MPP protocol; ${gatewayBatched ? "for a payment settled on chain, " : ""}wallet addresses, amounts, and
@@ -240,7 +249,8 @@ so every claim below is verifiable in code.</p>
   bookkeeping; no email or card data is involved in that mirror.</li>
   <li>Hosting is on Railway, and the nightly backups described below are stored in object storage there.
   On-chain settlement is on Base (Coinbase CDP facilitator) and the other
-  per-chain facilitators${gatewayBatched ? "; Circle Gateway batched payments settle off chain at Circle Gateway" : ""}.</li>${publicIndex ? `
+  per-chain facilitators${gatewayBatched ? "; Circle Gateway batched payments settle off chain at Circle Gateway" : ""}.</li>${directUpstreamParty ? `
+  <li id="direct-inference">${directUpstreamParty}</li>` : ""}${publicIndex ? `
   <li id="${PUBLIC_INDEX_ANCHOR}">${publicIndex}</li>` : ""}
   <li>${publicIndexNoSaleText()}</li>
 </ul>
@@ -286,7 +296,7 @@ elsewhere it is set until you say no, and the choice is yours to make either way
 receive it in a portable form, to object to processing based on our legitimate interest, to withdraw
 consent, and to complain to your supervisory authority. To exercise a right, email
 <a href="mailto:mike@agent402.tools">mike@agent402.tools</a>; we answer within one month. The service is
-operated from the United States, and the data described here is processed and stored there.</p>
+operated from the United States, and the data described here is processed and stored there${directUpstreamWhere}.</p>
 
 <h2>Children</h2>
 <p>The service is for people 18 and older (see the <a href="/terms">terms</a>) and is not directed at
@@ -308,5 +318,5 @@ or <a href="https://x.com/Agent402Tools" rel="noopener">@Agent402Tools on X</a>.
 </div>
 ${ledgerFooterCompact()}`;
 
-  return ledgerShell({ title, description, canonical, baseUrl, activePath: "/privacy", extraCss, body: withPublicIndexDate(body) });
+  return ledgerShell({ title, description, canonical, baseUrl, activePath: "/privacy", extraCss, body: withDirectUpstreamDate(withPublicIndexDate(body)) });
 }

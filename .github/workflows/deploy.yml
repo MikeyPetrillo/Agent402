@@ -975,6 +975,10 @@ jobs:
           t node scripts/test-llm-gateway.js
           # Timed-out attempt budget on chat, Messages and Responses, plain and streamed (offline)
           t node scripts/test-llm-timed-out-budget.js
+          # Direct inference upstream: off by default, ZDR, fallback to OpenRouter, billed once (offline stubs)
+          t node scripts/test-direct-upstream.js
+          # Direct upstream price guard (offline): a per-call eligibility check against the listed prices of both routes and a private threshold; fails closed; measured backstop; word-only status and paging (offline stubs)
+          t node scripts/test-direct-upstream-cost-guard.js
           t node scripts/test-gateway-resilience.js
           t node scripts/test-upstream-refusal.js
           t node scripts/test-llm-kit-spend.js
@@ -1495,6 +1499,8 @@ jobs:
           # The grant's record on Postgres keeps the claim time, so a paid call booked while a slow free call ran reads as a return (REAL redis + postgres, in-process).
           t node scripts/test-first-call-allowance-record-pg.js
           t node scripts/test-external-spend-guard-pg.js
+          # The Robinhood order's since on REAL postgres: a fresh process keeps the robinhoodSettler clock, one that finds the facilitator first resets it.
+          t node scripts/test-robinhood-settler-pg.js
           # The per-payer unsettled ceiling holds across replicas: one reservation script on REAL redis (needs this lane's Redis).
           t node scripts/test-external-spend-guard-redis.js
           # The Base unproven lane's per-seller daily cap is one window across two replicas on one Redis: racing reservations grant exactly the cap.
@@ -1909,6 +1915,12 @@ jobs:
           t node scripts/test-rh-fallback-confirm.js
           # Robinhood boot order: the first listed facilitator whose /supported confirms eip155:4663 settles first; a 200 refusal in words with no verdict goes to the next listed, a verdict nowhere (paid-mode boots vs stub facilitators - offline)
           t node scripts/test-rh-boot-primary.js
+          # Ink (eip155:57073) gated rail: absent from every public surface by default and without INK_FACILITATOR_URL (paywall intact); enabled, the 402 offers native USDC with the "USDC" v2 domain at the floor, the first listed facilitator settles, a no-verdict refusal goes to the next listed, a verdict nowhere; boot choice named by the disclosure; gas readings kept per network (paid-mode boots vs stub facilitators - offline)
+          t node scripts/test-ink-rail.js
+          # Ink graduation rehearsal: gated, no surface names Ink (/ink 404, nav, strip, chain list, llms.txt, openapi, manifest, pricing, sitemap; revenue entry inert); through the NODE_ENV=test seam that moves it into RAILS, every one lists it, counts include it and its revenue entry is scanned and ranked (paid-mode boots vs stubs, loopback only - offline)
+          t node scripts/test-ink-graduation.js
+          # Every 402 fits with Ink graduated: worst routes project 300+ bytes under 16,200 total header bytes; a 402 exposes exactly the listed headers it carries; the MPP evm challenge binds the accept without outputSchema while PAYMENT-REQUIRED keeps it and the bazaar extension (paid-mode boot vs stubs, loopback only - offline)
+          t node scripts/test-challenge-fit.js
           # Robinhood refusals in words: no-verdict passes to the next listed before our relayer and is read on chain when none settles; buyer verdicts retried nowhere; 5xx and other networks unchanged (real hook, stubs - offline)
           t node scripts/test-rh-prose-refusal.js
           # A settle failure that names a transaction is booked and read from the chain: landed after a 402 -> owed once; reverted, foreign or never mined -> nothing owed (stub RPC, real refund ledger - offline)
@@ -1919,6 +1931,10 @@ jobs:
           t node scripts/test-own-relayer.js
           # Robinhood settle order follows the listed facilitator's relayer gas: dry -> our relayer first, funded -> facilitator first, unread never moves it (offline)
           t node scripts/test-robinhood-order.js
+          # robinhoodSettler: relayer once our relayer has settled first past ROBINHOOD_RELAYER_FIRST_ALERT_HOURS, ok shorter or after the facilitator is first again, off disabled; the stored since survives a fresh process; heartbeat and Worker page on relayer, close on ok / off (offline)
+          t node scripts/test-robinhood-settler.js
+          # subscriptionRenewals: gateway-status carries the engine's word (full only for the operator, off without an engine); heartbeat and Worker page on unconfirmed, close on ok / off (offline)
+          t node scripts/test-subscription-renewals.js
           # Robinhood outage: an ambiguous facilitator failure is read on chain (used with our transfer -> served once; unused -> our relayer; read failure -> 402 and the authorization booked owed if it lands; other networks and no relayer key unchanged) (stub chain - offline)
           t node scripts/test-rh-outage.js
           # Arc rail via Circle's facilitator: Arc-only /supported, reduced errors (no key or upstream body anywhere), cross-chain refusal, fail-closed boot (offline stubs)
@@ -2781,6 +2797,10 @@ jobs:
           t node scripts/test-coingecko-rate.js
           # Paid smoke buyer preflight (external targets require an outcome assertion before key/client/network work)
           t node scripts/test-smoke-buy.js
+          # Paying scripts: signed amount priced from the known-assets table, own-target guard
+          t node scripts/test-buyer-guard.js
+          # Every script that signs a payment checks its target or is listed with its reason and cap (static scan, offline)
+          t node scripts/test-paid-scripts-guarded.js
           # "Every paid route's PAYMENT-REQUIRED document parses under the OFFICIAL @x402/core
           #  schemas. Our live challenges did not: 557 of 560 published more than the protocol's
           #  five-tag maximum, so a buyer validating before paying got an invalid document
@@ -3248,6 +3268,8 @@ jobs:
           t node scripts/test-dub-kit.js
           # Stellar late-settle confirmation (a confirmed transfer overrides the facilitator; a payment to anyone else never does — offline)
           t node scripts/test-stellar-confirm.js
+          # Stellar one payment, one answer: the signed entry claimed before settle, a re-encoded copy refused, the success-path tx claim, the replay key (offline)
+          t node scripts/test-stellar-nonce-claim.js
           # SVM settle-reason clarity (a measured empty wallet becomes "insufficient_funds"; specific reasons and funded wallets never rewritten — offline)
           t node scripts/test-svm-clarify.js
           # Refund ledger + planner (idempotent debts, evidence-gated resolution, caps, canary excluded, no silent chain drops — offline)
@@ -4119,7 +4141,10 @@ jobs:
           grep -i "Accepting USDC" /tmp/mc.log
           NETS=$(curl -s localhost:3002/api/pricing | jq -c '.payment.networks')
           echo "pricing.payment.networks = $NETS"
-          [ "$NETS" = '["base","solana","polygon","arbitrum","stellar"]' ] || { echo "code did not register all chains"; exit 1; }
+          # Stellar is configured here without its wallet or facilitator, so it is
+          # dropped from the offer and /api/pricing lists only what can settle.
+          [ "$NETS" = '["base","solana","polygon","arbitrum"]' ] || { echo "code did not register all chains"; exit 1; }
+          grep -q "dropping stellar:pubnet from the offered networks" /tmp/mc.log || { echo "a configured chain with no facilitator was not reported as dropped"; exit 1; }
           echo "--- live 402 against PayAI (informational status; hard gate on the accepts below) ---"
           # RETRY LOOP, not one shot: @x402/express syncs the facilitator's
           # /supported lazily — a request that lands before the first sync

@@ -76,8 +76,15 @@ const cases = [
     error: KEY_ERROR,
   },
   {
-    name: "TARGET_URL alone with empty expectation",
+    // TARGET_URL is the own-service mode: another origin is refused before
+    // any key is read (SMOKE_TARGET is the outside-seller mode).
+    name: "TARGET_URL naming another origin",
     env: { TARGET_URL: "https://samedaydesk.example", SMOKE_EXPECT: "" },
+    error: 'smoke-buy: refusing to pay "https://samedaydesk.example": not our service. Set ALLOW_EXTERNAL_PAID_TARGET=1 to pay another origin.',
+  },
+  {
+    name: "TARGET_URL on loopback with empty expectation",
+    env: { TARGET_URL: "http://127.0.0.1:9", SMOKE_EXPECT: "" },
     error: KEY_ERROR,
   },
 ];

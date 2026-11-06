@@ -5,7 +5,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { lastGoodSnapshot } from "../src/revenue-live.js";
-import { RAILS } from "../src/rails.js";
+import { RAILS, GATED_RAILS } from "../src/rails.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.log("FAIL -", m); } };
@@ -19,7 +19,7 @@ const src = readFileSync(new URL("../src/revenue-live.js", import.meta.url), "ut
 const fn = src.slice(src.indexOf("export async function revenueSnapshot"), src.indexOf("export function lastGoodSnapshot"));
 ok(fn.indexOf("if (diskLastGood?.rails?.length) return lastGoodSnapshot(diskLastGood);") > fn.indexOf("if (cached) return cached;") && fn.indexOf("return lastGoodSnapshot(diskLastGood)") < fn.indexOf("Promise.race"), "a cold snapshot serves the saved reading before it would wait on the scan");
 const refresh = src.slice(src.indexOf("async function refreshSnapshot"));
-ok((refresh.match(/\bevm\("/g) || []).length === RAILS.filter((r) => r.caip2.startsWith("eip155:")).length && /bounded\("Solana", solanaRail/.test(refresh) && /bounded\("Stellar", stellarRail/.test(refresh) && /bounded\("Algorand", algorandRail/.test(refresh), "every rail is bounded as a whole");
+ok((refresh.match(/\bevm\("/g) || []).length === [...RAILS, ...GATED_RAILS].filter((r) => r.caip2.startsWith("eip155:")).length && /bounded\("Solana", solanaRail/.test(refresh) && /bounded\("Stellar", stellarRail/.test(refresh) && /bounded\("Algorand", algorandRail/.test(refresh), "every rail is bounded as a whole");
 
 console.log(`\ntest-revenue-cold: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

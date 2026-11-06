@@ -26,9 +26,12 @@ import {
   signedOfferReceiptFromSettlement,
   writeSignedOfferReceipt,
 } from "./lib/smoke-receipt.js";
+import { assertOwnPaidTarget, guardCappedSigning } from "./lib/buyer-guard.js";
 
 const EXTERNAL_TARGET = (process.env.SMOKE_TARGET || "").trim().replace(/\/+$/, "");
-const TARGET = EXTERNAL_TARGET || process.env.TARGET_URL || "https://agent402.tools";
+// SMOKE_TARGET is the explicit outside-seller mode (capped below); TARGET_URL
+// pays only our own service.
+const TARGET = EXTERNAL_TARGET || assertOwnPaidTarget(process.env.TARGET_URL || "https://agent402.tools", "smoke-buy");
 const KEY_FILE = process.env.KEY_FILE || "/tmp/agent-key";
 const ROUTE = (process.env.SMOKE_ROUTE || "").trim();
 const METHOD = (process.env.SMOKE_METHOD || "GET").trim().toUpperCase();
@@ -52,27 +55,25 @@ if (EXTERNAL_TARGET && !EXPECT) { console.error("smoke-buy: SMOKE_EXPECT is requ
 const pk = (process.env.BURNER_KEY || "").trim() || (existsSync(KEY_FILE) ? readFileSync(KEY_FILE, "utf8").trim() : "");
 if (!pk) { console.error("smoke-buy: no BURNER_KEY / KEY_FILE — cannot run the paid check"); process.exit(2); }
 
-const [{ privateKeyToAccount }, { x402Client }, { registerExactEvmScheme }, { wrapFetchWithPayment }] = await Promise.all([
+const SMOKE_MAX_USD = Number(process.env.SMOKE_MAX_USD || 0.05);
+if (!(Number.isFinite(SMOKE_MAX_USD) && SMOKE_MAX_USD > 0)) { console.error(`SMOKE_MAX_USD must be a positive number, got ${JSON.stringify(process.env.SMOKE_MAX_USD)}; not paying`); process.exit(2); }
+
+const [{ privateKeyToAccount }, { x402Client }, { ExactEvmScheme }, { wrapFetchWithPayment }] = await Promise.all([
   import("viem/accounts"), import("@x402/core/client"), import("@x402/evm/exact/client"), import("@x402/fetch"),
 ]);
 const account = privateKeyToAccount(pk);
 console.log(`buyer: ${account.address}`);
 const client = disableVendorSpendControls(new x402Client());
-registerExactEvmScheme(client, { signer: account });
-// Cap on the accept actually SIGNED (the same policy external-seller-probe
-// uses): with the vendor spend controls off, this was the one paying script
-// with no ceiling of ours, and SMOKE_TARGET points it at an outside seller
-// whose second 402 can quote anything. SMOKE_MAX_USD (default 0.05); an accept
-// over it, or one whose amount cannot be read, is filtered out before signing.
-const SMOKE_MAX_USD = Number(process.env.SMOKE_MAX_USD || 0.05);
-if (!(Number.isFinite(SMOKE_MAX_USD) && SMOKE_MAX_USD > 0)) { console.error(`SMOKE_MAX_USD must be a positive number, got ${JSON.stringify(process.env.SMOKE_MAX_USD)}; not paying`); process.exit(2); }
-client.registerPolicy((_version, reqs) => reqs.filter((r) => {
-  const dec = Number(r?.extra?.decimals ?? 6);
-  if (!/^\d+$/.test(String(r?.amount ?? r?.maxAmountRequired ?? "")) || !Number.isInteger(dec)) { console.error(`refusing accept ${r?.scheme}/${r?.network}: unreadable amount`); return false; }
-  const usd = Number(r.amount ?? r.maxAmountRequired) / 10 ** dec;
-  if (usd > SMOKE_MAX_USD) { console.error(`refusing accept ${r.scheme}/${r.network} $${usd}: over SMOKE_MAX_USD ${SMOKE_MAX_USD}`); return false; }
-  return true;
-}));
+// Base only, x402 v2 only: the exact scheme is registered for the one CAIP-2
+// network this check pays on, so no v1 network name and no other chain can be
+// selected. Cap on the accept actually SIGNED: SMOKE_MAX_USD (default 0.05),
+// priced from the known-assets table (never the seller's decimals hint), with
+// the signed authorization's value checked before the payment is sent
+// (scripts/lib/buyer-guard.js).
+const SMOKE_NETWORKS = ["eip155:8453"];
+const evmScheme = new ExactEvmScheme(account);
+for (const network of SMOKE_NETWORKS) client.register(network, evmScheme);
+guardCappedSigning(client, { maxUsd: SMOKE_MAX_USD, networks: SMOKE_NETWORKS });
 
 const secret = EXTERNAL_TARGET ? "" : (process.env.POW_SECRET || "").trim();
 if (!secret && !EXTERNAL_TARGET) console.warn("WARN  POW_SECRET not set — this buy records as EXTERNAL demand in the ledger");

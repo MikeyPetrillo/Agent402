@@ -29,6 +29,7 @@
 import { createHash, createHmac } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { assertOwnPaidTarget } from "./lib/buyer-guard.js";
 
 const TARGET = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, "");
 const MAX_BUYS = Math.max(1, Math.min(5, Number(process.env.MPP_PROBE_MAX_BUYS) || 4));
@@ -51,6 +52,7 @@ export const PROBES = [
 ];
 
 async function main() {
+  assertOwnPaidTarget(TARGET, "mpp-probe");
   const key = (process.env.BURNER_KEY || "").trim();
   if (!key) { console.error("REFUSING to run: no BURNER_KEY"); process.exit(2); }
   const secret = (process.env.POW_SECRET || "").trim();

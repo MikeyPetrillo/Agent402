@@ -18,6 +18,7 @@
 // Common proxy limits sit at 8 KB per header and 16 KB total.
 
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { RAILS, GATED_RAILS } from "../src/rails.js";
 import { createHmac } from "node:crypto";
 
 const TARGET = process.env.TARGET_URL || "http://127.0.0.1:3000";
@@ -64,7 +65,11 @@ if (LOCAL_BOOT) {
   localProc = spawn("node", ["src/server.js"], { env: {
     ...process.env, PORT: String(PORT), FREE_MODE: "", TARGET_URL: "",
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
-    FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYMENT_NETWORKS: "base", MPP_SECRET_KEY: "",
+    FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYMENT_NETWORKS: "base",
+    // MPP on, so the evm challenges in WWW-Authenticate are this tree's (they
+    // are built from this tree's PAYMENT-REQUIRED); projectTotal swaps them
+    // into production's header chain by chain (scripts/lib/mpp-challenge-merge.js).
+    MPP_SECRET_KEY: "challenge-size-local-mpp-secret",
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
     // Routes production serves behind a key (X, Farcaster, Exa, judge, RugCheck,
     // speech): placeholder keys mount them so their 402 is this tree's, not
@@ -102,36 +107,53 @@ function projectBytes(prodHeader, localHeader) {
   return Buffer.from(JSON.stringify(withTreeRails(merged)), "utf8").toString("base64").length;
 }
 // Rails this tree offers that production may not yet (Arc rides on Circle's
-// key and joins every 402 once it is set). Each is projected into prod's
+// key and joins every 402 once it is set; Ink, a gated rail, joins once its
+// facilitator list is set, so enabling it must fit too). Each is projected into prod's
 // challenge as one more exact accept cloned from prod's Base accept, so the
 // ceiling is judged on the challenge a buyer will get once this tree is live,
 // not on the one production serves today.
 const TREE_EXTRA_RAILS = [
   { network: "eip155:5042", asset: "0x3600000000000000000000000000000000000000", extra: { name: "USDC", version: "2" } },
+  { network: "eip155:57073", asset: "0x2D270e6886d130D724215A266106e6832161EAEd", extra: { name: "USDC", version: "2" } },
 ];
-function withTreeRails(env) {
+// A rail in RAILS is judged by the hard ceiling; a gated rail is projected
+// separately and only warns, because enabling it waits until its challenge
+// fits (moving it into RAILS puts it under the hard ceiling here).
+const LIVE_NETS = new Set(RAILS.map((r) => r.caip2));
+const GATED_NETS = new Set(GATED_RAILS.map((r) => r.caip2));
+function withTreeRails(env, { gated = false } = {}) {
   if (!env || !Array.isArray(env.accepts)) return env;
   const evm = env.accepts.find((a) => a?.scheme === "exact" && a?.network === "eip155:8453");
   if (!evm) return env;
   const { outputSchema: _drop, ...base } = evm;
-  const add = TREE_EXTRA_RAILS.filter((r) => !env.accepts.some((a) => a?.network === r.network))
+  const add = TREE_EXTRA_RAILS.filter((r) => (gated ? GATED_NETS.has(r.network) : LIVE_NETS.has(r.network)) && !env.accepts.some((a) => a?.network === r.network))
     .map((r) => ({ ...base, network: r.network, asset: r.asset, extra: { ...(base.extra || {}), ...r.extra } }));
   return add.length ? { ...env, accepts: [...env.accepts, ...add] } : env;
 }
 /** prod's own challenge with this tree's extra rails added (no local boot). */
-function projectRailsOnly(prodHeader) {
+function projectRailsOnly(prodHeader, opts) {
   try {
     const env = JSON.parse(Buffer.from(prodHeader, "base64").toString("utf8"));
-    return Buffer.from(JSON.stringify(withTreeRails(env)), "utf8").toString("base64").length;
+    return Buffer.from(JSON.stringify(withTreeRails(env, opts)), "utf8").toString("base64").length;
   } catch { return null; }
 }
 // Control: the projection must actually add the rail (a no-op projection
 // would pass every run while judging the old, smaller challenge).
 {
   const sample = Buffer.from(JSON.stringify({ x402Version: 2, accepts: [{ scheme: "exact", network: "eip155:8453", amount: "1000", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } }] })).toString("base64");
-  const grown = projectRailsOnly(sample);
-  if (!(grown > sample.length + 200)) { console.log(`FAIL - control: the projection adds this tree's extra rails to a prod challenge (${sample.length} -> ${grown})`); process.exit(1); }
-  console.log(`ok - control: the projection adds this tree's extra rails to a prod challenge (+${grown - sample.length} bytes for ${TREE_EXTRA_RAILS.length} rail)`);
+  // The live and the gated projections are checked SEPARATELY: summed, the
+  // gated rail's growth alone cleared the bar with the live filter broken.
+  // Each set must add at least one rail's worth (an exact accept is ~300
+  // bytes of base64; 200 is the bar) per rail it holds, counted here from
+  // the rail tables, not from the projection under test.
+  const PER_RAIL_MIN = 200;
+  for (const [label, opts, nets] of [["live", undefined, LIVE_NETS], ["gated", { gated: true }, GATED_NETS]]) {
+    const expected = TREE_EXTRA_RAILS.filter((r) => nets.has(r.network)).length;
+    const grown = (projectRailsOnly(sample, opts) ?? sample.length) - sample.length;
+    if (expected && !(grown >= PER_RAIL_MIN * expected)) { console.log(`FAIL - control: the ${label} projection adds this tree's ${expected} ${label} rail${expected === 1 ? "" : "s"} to a prod challenge (+${grown} bytes, at least ${PER_RAIL_MIN * expected} expected)`); process.exit(1); }
+    if (!expected && grown !== 0) { console.log(`FAIL - control: the ${label} projection adds ${grown} bytes with no ${label} rail to add`); process.exit(1); }
+    console.log(`ok - control: the ${label} projection adds this tree's ${label} rails to a prod challenge (+${grown} bytes for ${expected} rail${expected === 1 ? "" : "s"})`);
+  }
 }
 // A buyer's retry carries roughly the challenge plus its own signature and
 // authorization (~700 bytes measured), so budget below the common 8 KB limit.
@@ -177,6 +199,7 @@ function read402(url, { method = "GET", headers = {}, body, timeoutMs = 20000 } 
 const bodyFor = (t) => (t.method !== "POST" ? undefined : /^\/v1\//.test(t.path) ? GATEWAY_BODY : "{}");
 const headerBytes = (res) => { let n = 20; res.headers.forEach((v, k) => { n += k.length + v.length + 4; }); return n; };
 const headerMap = (res) => { const m = new Map(); res.headers.forEach((v, k) => m.set(k, v.length)); return m; };
+import { mergeEvmChallenges } from "./lib/mpp-challenge-merge.js";
 // The projected total: this tree's headers where the local boot answered
 // them, prod's for what only prod carries (the MPP challenge, the edge's own
 // headers), and the projected challenge in place of either payment-required.
@@ -185,6 +208,12 @@ function projectTotal(prodRes, localRes, projectedPR) {
   let n = 20;
   for (const k of new Set([...prod.keys(), ...local.keys()])) {
     if (k === "payment-required") { n += k.length + projectedPR + 4; continue; }
+    // Production's challenges, with each evm one this tree issues swapped in
+    // (the Tempo challenges and any chain the local boot lacks stay prod's).
+    if (k === "www-authenticate") {
+      if (prod.has(k)) { const v = mergeEvmChallenges(prodRes.headers.get(k), localRes.headers.get(k) || ""); if (v) n += k.length + v.length + 4; }
+      continue;
+    }
     if (local.has(k)) { n += k.length + local.get(k) + 4; continue; }
     if (prod.has(k) && !LOCAL_DECIDES.has(k)) n += k.length + prod.get(k) + 4;
   }
@@ -272,7 +301,8 @@ async function worker() {
     }
     // The total is projected the same way: prod's other headers stay, the
     // challenge is this tree's.
-    rows.push({ slug: t.slug, bytes: h.length, projected, total, projectedTotal: projectedTotalLocal });
+    const gatedOnly = projectRailsOnly(h, { gated: true });
+    rows.push({ slug: t.slug, bytes: h.length, projected, total, projectedTotal: projectedTotalLocal, gatedExtra: gatedOnly != null ? Math.max(0, gatedOnly - h.length) : 0 });
   }
 }
 await Promise.all(Array.from({ length: CONCURRENCY }, worker));
@@ -313,6 +343,15 @@ if (overOnProd.length) console.log(`WARNING: production currently serves ${overO
 const judgedTotal = (r) => (r.projectedTotal != null ? r.projectedTotal : r.total);
 const overTotal = sized.filter((r) => judgedTotal(r) > MAX_TOTAL_HEADER_BYTES);
 ok(overTotal.length === 0, `no 402 over ${MAX_TOTAL_HEADER_BYTES} total header bytes${localBase ? " (projected with this tree's challenge)" : ""}${overTotal.length ? `: ${overTotal.slice(0, 5).map((r) => `${r.slug} ${judgedTotal(r)}`).join(", ")}` : ""}`);
+// Gated rails: report what enabling them would do, without failing. Enabling
+// one moves it into RAILS, and from then on the hard ceilings above judge it.
+if (GATED_NETS.size) {
+  const gatedOver = sized.filter((r) => r.gatedExtra > 0 && judgedTotal(r) + r.gatedExtra > MAX_TOTAL_HEADER_BYTES);
+  const gatedOverChallenge = sized.filter((r) => r.gatedExtra > 0 && judged(r) + r.gatedExtra > MAX_HEADER_BYTES);
+  const names = [...GATED_NETS].join(", ");
+  if (gatedOver.length || gatedOverChallenge.length) console.log(`WARNING: gated rail(s) ${names} cannot be enabled yet: ${gatedOver.length} 402(s) would exceed ${MAX_TOTAL_HEADER_BYTES} total header bytes and ${gatedOverChallenge.length} challenge(s) ${MAX_HEADER_BYTES} bytes (worst: ${[...gatedOver].sort((a, b) => (judgedTotal(b) + b.gatedExtra) - (judgedTotal(a) + a.gatedExtra)).slice(0, 3).map((r) => `${r.slug} ${judgedTotal(r) + r.gatedExtra}`).join(", ")})`);
+  else console.log(`ok - gated rail(s) ${names} would fit every 402 once enabled`);
+}
 const overTotalOnProd = sized.filter((r) => r.total > MAX_TOTAL_HEADER_BYTES && judgedTotal(r) <= MAX_TOTAL_HEADER_BYTES);
 if (overTotalOnProd.length) console.log(`WARNING: production currently serves ${overTotalOnProd.length} 402(s) over ${MAX_TOTAL_HEADER_BYTES} total header bytes (${overTotalOnProd.slice(0, 3).map((r) => `${r.slug} ${r.total} -> ${r.projectedTotal}`).join(", ")}) - this tree brings them under`);
 const warnTotal = sized.filter((r) => judgedTotal(r) > WARN_TOTAL_HEADER_BYTES && judgedTotal(r) <= MAX_TOTAL_HEADER_BYTES);

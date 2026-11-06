@@ -13,6 +13,7 @@
 //
 // --out writes {tool, method, chain, quote, receipt, result} for a card
 // renderer to consume. Exit 1 on usage, 2 on a failed buy.
+import { guardCappedSigning } from "./lib/buyer-guard.js";
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
 import { writeFileSync } from "node:fs";
 
@@ -91,6 +92,12 @@ if (CHAIN.startsWith("eip155:")) {
   console.error(`paid-demo: unsupported chain namespace "${CHAIN}"`);
   process.exit(1);
 }
+// The cap on what is signed (scripts/lib/buyer-guard.js): the pinned chain
+// only, an asset the known-assets table prices with its real decimals, the
+// field the signer signs for the version, at or under MAX_USD, checked again
+// on the selected accept and on the signed payload. The quote check below is
+// a readable early refusal; this is the bound.
+guardCappedSigning(client, { maxUsd: MAX_USD, networks: [CHAIN] });
 const http = new x402HTTPClient(client);
 
 const reqInit = {

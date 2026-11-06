@@ -15,6 +15,7 @@
 //
 // Exit codes: 0 saved · 2 config/payment/shape failure.
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
+import { assertOwnPaidTarget } from "./lib/buyer-guard.js";
 import { writeFileSync } from "node:fs";
 import { createHmac } from "node:crypto";
 
@@ -25,7 +26,7 @@ const arg = (name, dflt = null) => {
 };
 const OUT = arg("--out", "bestsellers-response.json");
 const QUERY = arg("--query", "sort=buyers&days=30&limit=10");
-const TARGET = process.env.TARGET_URL || "https://agent402.tools";
+const TARGET = assertOwnPaidTarget(process.env.TARGET_URL || "https://agent402.tools", "capture-bestsellers");
 
 const pk = (process.env.BURNER_KEY || "").trim();
 if (!pk) {

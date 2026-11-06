@@ -76,6 +76,8 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `NETWORK_PRICE_PREMIUMS` premium, raised to its floor). eip155:4663 has a static floor
   (`ROBINHOOD_MIN_PRICE_USD`, "0" off; `NETWORK_PRICE_FLOORS` for others) because its settlement
   can run through our own relayer; it is static so the paid retry re-derives the same amount.
+  Ink (eip155:57073) has none by default: only its listed facilitators pay its gas, so the
+  floor rule (a settler of ours may pay) does not apply; a per-settlement fee is a premium.
   A floored network, or one with a premium above zero, is never offered `upto` (the boot gate refuses it). /api/pricing (`minPriceUsdByNetwork`), llms-full.txt,
   the chain page and the guides read the same floor; `payment.premiumUsdByNetwork` there publishes
   each chain's premium, and llms.txt, openapi and MCP `payment.info` read the same map. Sales, hang-up debts and charged-failure
@@ -120,19 +122,51 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   facilitator's own earlier submission may have used it; an HTTP error with the same words keeps
   the ambiguous path (`scripts/test-rh-boot-primary.js`, `scripts/test-rh-prose-refusal.js`,
   `scripts/test-rh-outage.js`).
+  `INK_FACILITATOR_URL` (Ink, `eip155:57073`, native Circle USDC `0x2D27...AEEd`, domain
+  "USDC" v2 in `TIER1_USDC`) is the same ordered list with the same boot choice
+  (`chooseListedPrimary`), listed fallbacks (`wireListedFallbacks`) and pass-on rules
+  (`REVERT_RETRY_NETWORKS` holds both chains), but no own relayer and no outage read: an
+  ambiguous or passed-on Ink failure that no listed facilitator settles stops as a 402 (the
+  pending-settle read still applies; `EVM_RPC_57073` overrides the RPC, whose receipts are
+  read at the sequencer's head). Its fallback override is the listed ones only (no
+  PayAI/Solvador). The chosen client routes Ink only and every other routing client has
+  Ink removed from its `/supported` (`exclusiveNetworkOwners`), so the operator's order is
+  the only one. Unset, `enabledNetworks` leaves `ink` unconfigured (warned once). Ink is a
+  gated rail (`GATED_RAILS` in `src/rails.js`): static copy and counts derive from RAILS
+  and never name it; runtime surfaces (manifest chains, network lists, how-to-pay,
+  `facilitators.byNetwork`) name it only while it is in the live offer. No price floor
+  by default (no settler of ours pays its gas); `NETWORK_PRICE_FLOORS` sets one and
+  /api/pricing `minPriceUsdByNetwork` publishes any offered chain's floor. Every surface
+  a RAILS rail carries is built and waits behind the gate: the /ink chain page and mark
+  (`GATED_CHAIN_PAGES`, `chain-logos.js`), the revenue read-config (`GATED_EVM` in
+  `src/revenue-live.js`, inert, so no boot scans it), block time, log lanes, router name,
+  stats, refund and heartbeat entries (the heartbeat and canary read Ink while the
+  `INK_FACILITATOR_URL` Actions secret is set). Enabling after a live settle: set
+  `INK_FACILITATOR_URL`, add `ink` to `PAYMENT_NETWORKS`, list `ink` in
+  `FACILITATOR_PUBLIC_INDEX_CHAINS` when its facilitator publishes settlements, then move
+  the entry from `GATED_RAILS` to `RAILS` (after Arc) with the static copy that types the
+  chain list (README, wiki including the Self-Hosting Ink paragraph, docs, adapter and MCP
+  package text, a wiki page); no public doc names Ink before that move. The
+  NODE_ENV=test `RAILS_TEST_GRADUATE=ink` seam rehearses that move
+  (`scripts/test-ink-rail.js`, `scripts/test-ink-graduation.js`).
   `src/facilitator-gas.js` reads each listed facilitator's settlement signers (from
-  `/supported`) for gas runway every 10 minutes under a lease (`scripts/test-settle-fallback.js`,
+  `/supported`) for gas runway every 10 minutes under a lease, one check per listed-facilitator
+  rail whose readings replace only that network's rows (`scripts/test-settle-fallback.js`,
   `scripts/test-tool-failure-monitor.js`). There is no extra Solana settle fallback by design: a
   Solana payment names the quoted facilitator's fee payer, and any other facilitator refuses it.
-  `FACILITATOR_PUBLIC_INDEX_CHAINS` (`robinhood` is the one known value; unset = none; any other
-  value renders nothing and warns at boot) renders the /privacy paragraph (every field the index
+  `FACILITATOR_PUBLIC_INDEX_CHAINS` (`robinhood` and `ink` are the known values; unset = none;
+  any other value renders nothing and warns at boot; a listed chain renders only while the
+  final offer carries it, and one it leaves out is named in a boot warning,
+  `publicIndexUnofferedWarnings`) renders the /privacy paragraph (every field the index
   publishes, its per-seller payer pages, permanence, where it is processed), scopes the no-sale
   line to that list, adds the /terms pointer, `payment.dataHandling.publicSettlementIndex` on
-  `/.well-known/x402`, a clause on llms.txt's Robinhood line and a row on /robinhood.
+  `/.well-known/x402`, a clause on the listed chains' llms.txt lines and a row on their chain
+  pages; each chain names the facilitator it settles through first, from its own list (one
+  shared host is named once, different hosts each with their chain).
   `FACILITATOR_PUBLIC_INDEX_NAME` (display name, escaped), `FACILITATOR_PUBLIC_INDEX_POLICY_URL`
   (linked only as a parsed https URL) and `FACILITATOR_PUBLIC_INDEX_SINCE` (YYYY-MM-DD; /privacy
   and /terms print the later of their own date and it, once reached) are optional. The boot warns
-  when robinhood is listed and `ROBINHOOD_FACILITATOR_URL` has no parsable first host, and for an
+  when a listed chain's facilitator list (`ROBINHOOD_FACILITATOR_URL`, `INK_FACILITATOR_URL`) has no parsable first host, and for an
   invalid URL or date (`publicIndexBootWarnings`); there is no status word for it
   (`src/facilitator-public-index.js`, `scripts/test-public-index-copy.js`). `ROBINHOOD_RELAYER_KEY` (key present = on) adds our own
   settler after the listed ones (`src/robinhood-relayer.js`): our 4663 sales only (token, call and
@@ -140,6 +174,19 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   relayer key across replicas under a lease with the nonce read under it, fee and gas caps, a
   balance check before signing, and a hash for any send that may have reached the node so a
   missing receipt stops the chain; its signer joins the gas check (`scripts/test-own-relayer.js`).
+  While every fresh gas reading of the first listed facilitator's signer is under
+  `ROBINHOOD_SKIP_DRY_BELOW_SETTLEMENTS` (default 50) settlements, our relayer settles first
+  (`src/robinhood-order.js`; facilitatorFunds leaves that covered row out). The order's start
+  (`since`) is a state-database document (`robinhood-order:eip155:4663`), so a deploy or another
+  replica keeps the clock; `robinhoodSettler` on `/api/gateway-status` reads `relayer` once our
+  relayer has been first without a break for longer than `ROBINHOOD_RELAYER_FIRST_ALERT_HOURS`
+  (default 6; 0 or `off` reads `off`), `ok` otherwise, `off` without an order, and `unknown`
+  before a fresh process's first update unless the stored clock (read at creation) already reads
+  `relayer`. A facilitator-first decision taken on a reading stores `resetAt`; a relayer-first
+  start before the latest reset restarts at it, so a lagging replica cannot revive an old clock.
+  The heartbeat and the status Worker page on `relayer` under one issue that ok or off closes
+  (`unknown` does neither); the operator view
+  has the clock (`scripts/test-robinhood-settler.js`, `scripts/test-robinhood-settler-pg.js`).
   With it, an ambiguous listed-facilitator failure on 4663 (5xx, timeout, no verdict, no
   transaction) is read on chain (`src/robinhood-outage.js`): the authorization used with our
   transfer is served (claimed first), still unused after `ROBINHOOD_AMBIGUOUS_WAIT_MS` (the wait

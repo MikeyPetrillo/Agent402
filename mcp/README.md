@@ -9,7 +9,7 @@ Pick one setup. Both run locally through `npx`.
 **1. Free, no wallet.** Pure-CPU tools (no outbound calls, keys or models) run free. Each call solves a proof-of-work puzzle with your CPU, typically well under a second on a laptop. Tools that reach the network or a model ask for a wallet.
 
 ```
-claude mcp add agent402 -s user -- npx -y agent402-mcp@0.13.28
+claude mcp add agent402 -s user -- npx -y agent402-mcp@0.13.29
 ```
 
 **2. Paid, with a wallet.** Paid tools are settled in USDC on each call.
@@ -19,7 +19,7 @@ claude mcp add agent402 -s user -- npx -y agent402-mcp@0.13.28
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.13.28"],
+      "args": ["-y", "agent402-mcp@0.13.29"],
       "env": { "AGENT_KEY": "0xYOUR_PRIVATE_KEY" }
     }
   }
@@ -30,7 +30,7 @@ claude mcp add agent402 -s user -- npx -y agent402-mcp@0.13.28
 
 Use `SOLANA_AGENT_KEY` instead for USDC on Solana. Each call is capped at $4 by default; there is no session budget unless you set `AGENT402_BUDGET`.
 
-Claude Code with a wallet: `claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_PRIVATE_KEY -- npx -y agent402-mcp@0.13.28`
+Claude Code with a wallet: `claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_PRIVATE_KEY -- npx -y agent402-mcp@0.13.29`
 (use a new wallet holding only a few dollars of USDC; never your main wallet).
 
 Advanced setup (chains, MPP, error codes, the hosted connector) is in [Advanced](#advanced).
@@ -71,6 +71,16 @@ at $3.30 (`route-execute-pro`); multi-tool skill packs run $0.003 to $0.101; and
 report products run $0.60 to $2.00 per report (domain-audit $0.60 up to the ticker pack at $2.00),
 so the default per-call cap of $4 covers every tool; set `AGENT402_MAX_PER_CALL` lower for a
 tighter ceiling.
+
+**Held payments.** `payment.info` reports `heldThisSessionUsd`: money a wallet
+call sent a signed payment for without a confirmed answer (an error status, a
+dropped connection, a redirect, a job still running). It is held, not spent: a
+seller that kept the authorization could still redeem it, so it counts against
+`AGENT402_BUDGET` for the rest of the session. On the default target
+(`https://agent402.tools`, matched by exact origin), an error status is never
+settled, so a hold for one ends at the authorization's `validBefore` plus 10
+minutes (15 minutes after the answer when no `validBefore` is readable). A held
+amount whose authorization expires unused is released, never charged.
 
 ## Advanced
 

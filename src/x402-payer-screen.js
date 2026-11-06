@@ -43,6 +43,7 @@ import { paymentHeaderOf } from "./payer.js";
 import { screenAddresses, maskAddress } from "./sanctions-screen.js";
 import { nonEvmPayerFromRequest } from "./non-evm-payer.js";
 import { screenAddressForPayment } from "./tools/sanctions-kit.js";
+import { decodePaymentHeader } from "./payment-header.js";
 
 const EVM_RE = /^0x[0-9a-fA-F]{40}$/;
 
@@ -57,7 +58,7 @@ export function x402ScreenedAddressesOf(req) {
   const header = paymentHeaderOf(req);
   if (!header) return [];
   let payload;
-  try { payload = JSON.parse(Buffer.from(String(header), "base64").toString("utf-8")); } catch { return []; }
+  try { payload = decodePaymentHeader(header); } catch { return []; }
   const inner = payload?.payload;
   if (!inner || typeof inner !== "object") return [];
   const out = new Set();

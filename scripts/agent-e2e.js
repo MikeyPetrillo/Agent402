@@ -9,8 +9,12 @@ import { writeFileSync, readFileSync, existsSync } from "node:fs";
 import { x402Client } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { wrapFetchWithPayment } from "@x402/fetch";
+import { assertOwnPaidTarget, guardCappedSigning, capFromEnv } from "./lib/buyer-guard.js";
 
-const TARGET = process.env.TARGET_URL || "https://agent402.tools";
+const TARGET = assertOwnPaidTarget(process.env.TARGET_URL || "https://agent402.tools", "agent-e2e");
+// Per-accept ceiling on what one signature may pay (AGENT_E2E_MAX_USD): above
+// the dearest tool in the suite, far below the suite budget.
+const MAX_USD = capFromEnv("AGENT_E2E_MAX_USD", 0.6, { script: "agent-e2e" });
 const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"; // USDC on Base
 const KEY_FILE = process.env.KEY_FILE || "/tmp/agent-key";
 const SUITE_BUDGET = 1300000n; // full 63-tool suite costs ~$1.22; require $1.30 (includes premium packs $0.50+$0.25+$0.30)
@@ -59,6 +63,7 @@ console.log(`FUNDED: $${formatUnits(bal, 6)} USDC. Buying the verification catal
 
 const client = disableVendorSpendControls(new x402Client());
 registerExactEvmScheme(client, { signer: account });
+guardCappedSigning(client, { maxUsd: MAX_USD, networks: ["eip155:8453"] });
 // Mark every e2e purchase as internal traffic: X-Heartbeat-Token =
 // HMAC(POW_SECRET, UTC minute), the same unspoofable marker paid-canary.js
 // sends. Without it a full-suite run (63 real buys) shows up as an organic

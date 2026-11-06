@@ -44,6 +44,7 @@
 // Usage:
 //   CANARY_DRY=1 node scripts/algorand-rail-canary.js                 # preview, no keys, no spend
 //   ALGORAND_BURNER_MNEMONIC=… node scripts/algorand-rail-canary.js --out report.json
+import { assertOwnPaidTarget } from "./lib/buyer-guard.js";
 import "../src/tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
 import { writeFileSync } from "node:fs";
@@ -58,7 +59,7 @@ import { openapiReader, resolveReplayableInput } from "./lib/replayable-example.
 
 import { FAST_REJECT_MS, isThrottle, isUpstreamOutage, isOurSettleBreaker, outcomeOf, subcentBudget, rotateSubcent } from "./avm-canary-classify.js";
 
-const TARGET = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, "");
+const TARGET = assertOwnPaidTarget((process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, ""), "algorand-rail-canary");
 const AVM_CAIP2_PREFIX = "algorand:";
 
 const args = process.argv.slice(2);

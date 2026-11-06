@@ -26,9 +26,11 @@ import {
   OFFER_SWEEP_AFTER_MS, MAX_OPEN_OFFERS,
   CANARY_PRODUCT_KEY, CANARY_PRODUCT, CANARY_PERIOD_SECONDS, productDefFor, isCanaryProduct,
   subscriptionFeePayerPolicy, SUB_FEE_PAYER_MAX_GAS,
-  isTransientChargeError, TRANSIENT_CHARGE_BACKOFF_MS, isSendPhaseAmbiguity, expectedRenewalMemo,
+  isTransientChargeError, TRANSIENT_CHARGE_BACKOFF_MS, isSendPhaseAmbiguity, expectedRenewalMemo, RENEWAL_SCAN_MAX_BLOCKS,
   renewalValidForSeconds, withRenewalValidity, RENEWAL_VALID_FOR_DEFAULT_S, RENEWAL_VALID_FOR_MAX_S, SETTLEABLE_SLACK_MS,
+  ACTIVATION_VALID_FOR_S, TEMPO_RPC_TIMEOUT_MS,
   guardDestroyedKeys, KEY_GONE_PREFIX, createFileStore, diagnoseError,
+  renewalUnconfirmedAlertHours, renewalsWord, RENEWAL_UNCONFIRMED_ALERT_HOURS_DEFAULT,
 } from "../src/mpp-subscriptions.js";
 import { MONITOR_PRODUCTS } from "../src/stripe-subscriptions.js";
 import { HttpRequestError } from "viem";
@@ -104,7 +106,7 @@ function makeEngine(opts = {}) {
     secretKey: SECRET, realm: REALM,
     storePath: join(tmp, `${opts.name || "store"}.json`),
     now: () => clock,
-    log: () => {},
+    log: opts.log || (() => {}),
     onCharge: (s) => calls.sales.push(s),
     validateTarget: opts.validateTarget,
     activate: async (header, ctx) => {
@@ -130,7 +132,7 @@ function makeEngine(opts = {}) {
       });
       return { receipt: { method: "tempo", status: "success", reference: "0xactivation", timestamp: new Date(clock).toISOString() } };
     },
-    findRenewalOnChain: async (args) => { calls.find = (calls.find || 0) + 1; return typeof findBehaviour === "function" ? findBehaviour(args) : findBehaviour; },
+    findRenewalOnChain: opts.chainReader ? undefined : async (args) => { calls.find = (calls.find || 0) + 1; return typeof findBehaviour === "function" ? findBehaviour(args) : findBehaviour; },
     chargePeriod: async (rec, { periodIndex }) => {
       calls.charge++;
       const r = await chargeBehaviour(rec, periodIndex);
@@ -497,6 +499,204 @@ let liveSubId = null, liveHeader = null, liveToken = null, liveBuyer = null;
     advance(TRANSIENT_CHARGE_BACKOFF_MS + 1000);
     ok(await c.engine.refreshStatus(subC.subId) === "past_due" && c.calls.charge === chargesC, "(c) an unreadable chain waits and signs nothing");
     ok(Date.parse(c.engine.get(subC.subId).nextChargeAttemptAt) - clock <= TRANSIENT_CHARGE_BACKOFF_MS + 1000, "(c) and retries the chain read on the short backoff");
+
+    let clockAfterFirstD = null;
+    // (d) read by the DEFAULT chain reader (no injected finder) from a stub
+    // JSON-RPC on a loopback port that honours getLogs' address and topic
+    // filters. mppx sends a renewal as a Tempo 0x76 transaction whose
+    // transferWithMemo is one of calls[] (its top-level input is empty), and
+    // the token emits Transfer + TransferWithMemo. mppx's record carries the
+    // amount in BASE UNITS ("3000000" for $3); the reader never re-scales it.
+    {
+      const { encodeFunctionData, parseAbi, pad, toHex, keccak256, toBytes } = await import("viem");
+      const http = await import("node:http");
+      const abi = parseAbi(["function transferWithMemo(address to, uint256 amount, bytes32 memo)"]);
+      const TRANSFER = keccak256(toBytes("Transfer(address,address,uint256)"));
+      const TRANSFER_MEMO = keccak256(toBytes("TransferWithMemo(address,address,uint256,bytes32)"));
+      const OTHER = "0x000000000000000000000000000000000000bEEF";
+      const OTHER_TOKEN = "0x20C0000000000000000000000000000000000001";
+      const HEAD = 0x1000000;
+      const TXH = "0x" + "ab".repeat(32);
+      const BH = "0x" + "cd".repeat(32);
+      // landed: { payer, value, memo, shape, logTo, logValue, logMemo, logToken, callTo, receipt }
+      let landed = null;
+      const rpcCalls = [];
+      const logsOf = () => {
+        if (!landed) return [];
+        const L = landed, token = L.logToken || CURRENCY, to = L.logTo || RECIPIENT, value = L.logValue ?? L.value, memo = L.logMemo || L.memo;
+        // The landed block sits where the chain's block time puts the attempt.
+        const landedBlock = HEAD - Math.floor((clock - L.atMs) / (L.blockMs || 1000));
+        const base = { blockNumber: toHex(landedBlock), blockHash: BH, transactionHash: TXH, transactionIndex: "0x0", removed: false };
+        // The plain Transfer the candidate search finds is always to us for the full amount;
+        // the memo log carries the variant under test.
+        return [
+          { ...base, address: CURRENCY, topics: [TRANSFER, pad(L.payer), pad(RECIPIENT)], data: pad(toHex(L.value)), logIndex: "0x0" },
+          ...(L.noMemoLog ? [] : [{ ...base, address: token, topics: [TRANSFER_MEMO, pad(L.payer), pad(to), memo], data: pad(toHex(value)), logIndex: "0x1" }]),
+        ];
+      };
+      const topicOk = (want, got) => want == null || (Array.isArray(want) ? want.some((w) => w.toLowerCase() === String(got).toLowerCase()) : want.toLowerCase() === String(got).toLowerCase());
+      const filterLogs = (f) => logsOf().filter((l) => (!f.address || [].concat(f.address).some((a) => a.toLowerCase() === l.address.toLowerCase()))
+        && (f.topics || []).every((t, i) => topicOk(t, l.topics[i]))
+        && (f.fromBlock == null || f.fromBlock === "latest" || Number(l.blockNumber) >= Number(f.fromBlock))
+        && (f.toBlock == null || f.toBlock === "latest" || Number(l.blockNumber) <= Number(f.toBlock)));
+      const sig = { r: "0x" + "11".repeat(32), s: "0x" + "22".repeat(32), yParity: "0x0" };
+      const txOf = () => {
+        const L = landed;
+        // callMatches: the calldata pays us exactly while the receipt says otherwise (a held transfer).
+        const data = L.callMatches
+          ? encodeFunctionData({ abi, functionName: "transferWithMemo", args: [RECIPIENT, L.value, L.memo] })
+          : encodeFunctionData({ abi, functionName: "transferWithMemo", args: [L.logTo || RECIPIENT, L.logValue ?? L.value, L.logMemo || L.memo] });
+        const common = { hash: TXH, from: L.payer, nonce: "0x1", gas: "0x5208", blockNumber: "0xfff0", blockHash: BH, transactionIndex: "0x0", chainId: toHex(TEMPO_MAINNET_CHAIN_ID) };
+        if (L.shape === "legacy") return { ...common, to: CURRENCY, input: data, value: "0x0", gasPrice: "0x1", type: "0x0", v: "0x1b", r: sig.r, s: sig.s };
+        return { ...common, to: null, input: "0x", value: "0x0", type: "0x76", maxFeePerGas: "0x1", maxPriorityFeePerGas: "0x1", accessList: [],
+          calls: [{ to: L.callTo || CURRENCY, value: "0x0", input: data }], nonceKey: "0x0", signature: { type: "secp256k1", ...sig } };
+      };
+      const srv = http.createServer((req, res) => {
+        let body = ""; req.on("data", (d) => (body += d)); req.on("end", () => {
+          const parsed = JSON.parse(body);
+          const out = [].concat(parsed).map(({ id, method, params }) => {
+            rpcCalls.push(method);
+            let result = null;
+            if (method === "eth_blockNumber") result = toHex(HEAD);
+            else if (method === "eth_chainId") result = toHex(TEMPO_MAINNET_CHAIN_ID);
+            else if (method === "eth_getBlockByNumber") {
+              const n = Number(params[0]);
+              result = { number: toHex(n), hash: "0x" + n.toString(16).padStart(64, "0"), parentHash: BH, timestamp: toHex(Math.floor((clock - (HEAD - n) * (landed?.blockMs || 1000)) / 1000)), transactions: [], gasLimit: "0x1", gasUsed: "0x0", baseFeePerGas: "0x1", logsBloom: "0x" + "00".repeat(256), miner: RECIPIENT, extraData: "0x", difficulty: "0x0", size: "0x1", uncles: [] };
+            }
+            else if (method === "eth_getLogs") result = filterLogs(params[0] || {});
+            else if (method === "eth_getTransactionReceipt") {
+              if (landed?.receipt === "unreadable") return { jsonrpc: "2.0", id, error: { code: -32000, message: "header not found" } };
+              result = { transactionHash: TXH, transactionIndex: "0x0", blockHash: BH, blockNumber: "0xfff0", from: landed.payer, to: null, cumulativeGasUsed: "0x5208", gasUsed: "0x5208", effectiveGasPrice: "0x1", contractAddress: null, logs: logsOf(), logsBloom: "0x" + "00".repeat(256), status: "0x1", type: landed.shape === "legacy" ? "0x0" : "0x76" };
+            }
+            else if (method === "eth_getTransactionByHash") result = txOf();
+            return { jsonrpc: "2.0", id, result };
+          });
+          res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(Array.isArray(parsed) ? out : out[0]));
+        });
+      });
+      await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+      const savedRpc = process.env.TEMPO_RPC_URL;
+      process.env.TEMPO_RPC_URL = `http://127.0.0.1:${srv.address().port}`;
+      // One subscription per scenario: a send-phase timeout for period 1, the
+      // chain then shows `variant`, and the pull runs after the settle window.
+      async function scenario(name, variant, extraMs = 0) {
+        const logsD = [];
+        const d = makeEngine({ name: `ambiguous-default-reader-${name}`, chainReader: true, log: (m) => logsD.push(m) });
+        const offD = await d.engine.mintOffer({ product: "fund-monitor", target: "Some Manager LP" });
+        const cD = await signCredential(Challenge.deserialize(offD.header));
+        const subD = await d.engine.activateFromCredential(cD.header);
+        await d.engine.warm();
+        d.setCharge(() => sendTimeout);
+        advance(PERIOD);
+        ok(await d.engine.refreshStatus(subD.subId) === "past_due", `(d:${name}) send-phase failure -> past_due`);
+        const recD = d.engine.get(subD.subId);
+        const mppxD = await d.engine._subStore.get(recD.mppxSubscriptionId);
+        const memo = await expectedRenewalMemo({ lookupKey: mppxD.lookupKey, subscriptionId: recD.mppxSubscriptionId, periodIndex: 1 });
+        landed = { payer: cD.account.address, value: BigInt(mppxD.amount), memo, atMs: clock, ...variant(memo) };
+        const charges = d.calls.charge;
+        d.setCharge(() => ({ reference: "0xsecond-charge" }));
+        advance(Date.parse(recD.nextChargeAttemptAt) - clock + 1000 + extraMs);
+        const status = await d.engine.refreshStatus(subD.subId);
+        return { d, subD, recD, mppxD, status, charges, logsD, after: d.engine.get(subD.subId) };
+      }
+      try {
+        // Tempo 0x76: the receipt's TransferWithMemo proves it -> recorded, never re-sent.
+        {
+          const r = await scenario("tempo", () => ({ shape: "tempo" }));
+          ok(/^\d+$/.test(String(r.mppxD.amount)) && BigInt(r.mppxD.amount) >= 1000000n && String(r.recD.amountAtomic) === String(r.mppxD.amount), `(d) mppx's record and ours both hold the period amount in base units (${r.mppxD.amount})`);
+          ok(r.status === "active", `(d) the default reader finds the landed 0x76 renewal (calls[], empty input) -> active (rpc: ${[...new Set(rpcCalls)].join(",")}; ${r.logsD.filter((m) => /chain|unconfirmed/.test(m)).slice(-2).join(" | ")})`);
+          ok(r.after.lastChargedPeriod === 1 && r.after.lastChargeTx === TXH && !r.after.unconfirmedCharge, "(d) the landed transaction is recorded as period 1's charge");
+          ok(r.d.calls.charge === r.charges, "(d) and no second transfer was signed for the same period");
+          clockAfterFirstD = clock; // the later groups run on the timeline the first scenario leaves
+        }
+        // A 0x76 renewal with the receipt read ONLY through calls[] (token emitted no memo log).
+        {
+          const r = await scenario("tempo-calls-only", () => ({ shape: "tempo", noMemoLog: true }));
+          ok(r.status === "active" && r.after.lastChargeTx === TXH && r.d.calls.charge === r.charges, "(d) a receipt with no memo log falls back to calls[] and finds the renewal -> no second transfer");
+        }
+        // Legacy shape: transferWithMemo in the top-level input still counts.
+        {
+          const r = await scenario("legacy", () => ({ shape: "legacy", noMemoLog: true }));
+          ok(r.status === "active" && r.after.lastChargeTx === TXH && r.d.calls.charge === r.charges, "(d) the legacy 0x0 input shape is still read -> no second transfer");
+        }
+        // Blocks four times faster than one a second: the scan widens by block
+        // timestamp until it reaches back past the attempt, so the renewal is found.
+        {
+          const r = await scenario("fast-blocks", () => ({ shape: "tempo", blockMs: 250 }));
+          ok(r.status === "active" && r.after.lastChargeTx === TXH && r.d.calls.charge === r.charges, "(d) with 250 ms blocks the scan still reaches the attempt's block -> no second transfer");
+        }
+        // The pull runs so late that the attempt lies past the scan bound: that
+        // is UNKNOWN (wait), never "not found".
+        {
+          const r = await scenario("beyond-scan-bound", () => ({ shape: "tempo" }), (Number(RENEWAL_SCAN_MAX_BLOCKS) + 10_000) * 1000);
+          ok(r.status === "past_due" && r.d.calls.charge === r.charges && r.after.unconfirmedCharge?.periodIndex === 1,
+            `(d) an attempt further back than the scan bound waits and signs nothing (${r.logsD.filter((m) => /decide/.test(m)).slice(-1).join("")})`);
+        }
+        // Not this renewal: a different recipient, amount, token or memo in the receipt is not counted.
+        for (const [name, variant] of [
+          ["other-recipient", () => ({ shape: "tempo", logTo: OTHER })],
+          ["other-amount", () => ({ shape: "tempo", logValue: 1n })],
+          ["other-memo", () => ({ shape: "tempo", logMemo: "0x" + "99".repeat(32) })],
+          ["other-token", () => ({ shape: "tempo", logToken: OTHER_TOKEN, callTo: OTHER_TOKEN })],
+          // A receive policy held the funds: the call names us, the receipt credits the guard.
+          ["held-by-receive-policy", () => ({ shape: "tempo", logTo: OTHER, callMatches: true })],
+        ]) {
+          const r = await scenario(name, variant);
+          ok(r.status === "active" && r.after.lastChargeTx === "0xsecond-charge" && r.d.calls.charge === r.charges + 1,
+            `(d:${name}) a transfer that is not this renewal is not counted; past the settle window the period is charged once`);
+        }
+        // Unreadable receipt: undecidable -> waits, never a second transfer, even long after the window.
+        {
+          const r = await scenario("receipt-unreadable", () => ({ shape: "tempo", receipt: "unreadable" }));
+          ok(r.status === "past_due" && r.d.calls.charge === r.charges && r.after.unconfirmedCharge?.periodIndex === 1,
+            `(d) an unreadable receipt is UNKNOWN: past_due, unconfirmed kept, nothing signed (${r.logsD.filter((m) => /decide|unconfirmed/.test(m)).slice(-1).join("")})`);
+          advance(Date.parse(r.after.nextChargeAttemptAt) - clock + 1000);
+          ok(await r.d.engine.refreshStatus(r.subD.subId) === "past_due" && r.d.calls.charge === r.charges, "(d) and a later pull still signs nothing while the receipt cannot be read");
+          landed.receipt = "ok";
+          advance(Date.parse(r.d.engine.get(r.subD.subId).nextChargeAttemptAt) - clock + 1000);
+          ok(await r.d.engine.refreshStatus(r.subD.subId) === "active" && r.d.engine.get(r.subD.subId).lastChargeTx === TXH && r.d.calls.charge === r.charges, "(d) once the receipt reads, the landed renewal is recorded, still one transfer");
+        }
+      } finally {
+        if (savedRpc === undefined) delete process.env.TEMPO_RPC_URL; else process.env.TEMPO_RPC_URL = savedRpc;
+        srv.close();
+      }
+    }
+
+    // (e) the pull signs again ONLY on an explicit {found:false}: an unknown or
+    // malformed verdict from any reader waits, even past the settle window.
+    for (const [name, verdict] of [["unknown", { unknown: true, reason: "test" }], ["found-false-but-unknown", { found: false, unknown: true }], ["empty", {}], ["found-no-tx", { found: true }], ["string", "nope"]]) {
+      const e = makeEngine({ name: `ambiguous-verdict-${name}` });
+      const offE = await e.engine.mintOffer({ product: "fund-monitor", target: "Some Manager LP" });
+      const cE = await signCredential(Challenge.deserialize(offE.header));
+      const subE = await e.engine.activateFromCredential(cE.header);
+      await e.engine.warm();
+      e.setCharge(() => sendTimeout);
+      advance(PERIOD);
+      await e.engine.refreshStatus(subE.subId);
+      const chargesE = e.calls.charge;
+      e.setFind(verdict);
+      e.setCharge(() => ({ reference: "0xMUST-NOT-HAPPEN" }));
+      advance(Date.parse(e.engine.get(subE.subId).nextChargeAttemptAt) - clock + 1000);
+      ok(await e.engine.refreshStatus(subE.subId) === "past_due" && e.calls.charge === chargesE && e.engine.get(subE.subId).unconfirmedCharge,
+        `(e:${name}) a verdict that is not a definite answer waits past the settle window and signs nothing`);
+      if (name === "unknown") {
+        // The wait is open-ended, so it is a status word: ok inside the
+        // alert window, unconfirmed past it, off when disabled; the public
+        // read is the word alone.
+        const since = Date.parse(e.engine.get(subE.subId).unconfirmedCharge.at);
+        const H = 3_600_000;
+        ok(e.engine.renewalsStatus({ env: {}, at: since + 3 * H }).status === "ok", "(e) an unconfirmed renewal inside the alert window reads ok");
+        const stuck = e.engine.renewalsStatus({ env: {}, at: since + 3 * H + 1 });
+        ok(JSON.stringify(stuck) === JSON.stringify({ status: "unconfirmed" }), `(e) past MPP_SUB_UNCONFIRMED_ALERT_HOURS (default 3) the word reads unconfirmed, publicly the word only (${JSON.stringify(stuck)})`);
+        const op = e.engine.renewalsStatus({ full: true, env: {}, at: since + 3 * H + 1 });
+        ok(op.status === "unconfirmed" && op.alertHours === 3 && op.unconfirmedCount === 1 && op.oldestAttemptAt === new Date(since).toISOString(), `(e) the operator read has the threshold, the count and the oldest attempt (${JSON.stringify(op)})`);
+        ok(e.engine.renewalsStatus({ env: { MPP_SUB_UNCONFIRMED_ALERT_HOURS: "12" }, at: since + 6 * H }).status === "ok" && e.engine.renewalsStatus({ env: { MPP_SUB_UNCONFIRMED_ALERT_HOURS: "1" }, at: since + 2 * H }).status === "unconfirmed", "(e) the threshold is read from the environment");
+        for (const v of ["0", "off", " OFF "]) ok(e.engine.renewalsStatus({ env: { MPP_SUB_UNCONFIRMED_ALERT_HOURS: v }, at: since + 72 * H }).status === "off", `(e) MPP_SUB_UNCONFIRMED_ALERT_HOURS=${JSON.stringify(v)} turns the word off`);
+        ok((await e.engine.status()).subs.find((x) => x.subId === subE.subId)?.unconfirmedChargeAt === new Date(since).toISOString(), "(e) the operator subscription list names the unconfirmed attempt time");
+      }
+    }
+    // The extra scenarios above each ran their own periods; put the shared clock back.
+    clock = clockAfterFirstD;
   }
 
   // Recovery.
@@ -916,15 +1116,43 @@ let liveSubId = null, liveHeader = null, liveToken = null, liveBuyer = null;
 {
   ok(renewalValidForSeconds(undefined) === 120 && renewalValidForSeconds("") === 120, "renewal window defaults to 120 s");
   ok(renewalValidForSeconds("180") === 180, "TEMPO_SUBSCRIPTION_VALID_FOR_S sets the window");
+  // The unconfirmed-renewal alert threshold: validated, never silently off.
+  ok(RENEWAL_UNCONFIRMED_ALERT_HOURS_DEFAULT === 3 && renewalUnconfirmedAlertHours({}) === 3 && renewalUnconfirmedAlertHours({ MPP_SUB_UNCONFIRMED_ALERT_HOURS: " " }) === 3, "the unconfirmed-renewal alert defaults to 3 hours");
+  ok(renewalUnconfirmedAlertHours({ MPP_SUB_UNCONFIRMED_ALERT_HOURS: "junk" }) === 3 && renewalUnconfirmedAlertHours({ MPP_SUB_UNCONFIRMED_ALERT_HOURS: "-2" }) === 3 && renewalUnconfirmedAlertHours({ MPP_SUB_UNCONFIRMED_ALERT_HOURS: "Infinity" }) === 3, "a value that is not a non-negative number keeps the default");
+  ok(renewalUnconfirmedAlertHours({ MPP_SUB_UNCONFIRMED_ALERT_HOURS: "1.5" }) === 1.5 && renewalUnconfirmedAlertHours({ MPP_SUB_UNCONFIRMED_ALERT_HOURS: "0" }) === null && renewalUnconfirmedAlertHours({ MPP_SUB_UNCONFIRMED_ALERT_HOURS: "Off" }) === null, "a number sets it; 0 or off disables it");
+  {
+    const T = Date.parse("2026-11-01T00:00:00Z"), H = 3_600_000;
+    const u = (status, atMs) => ({ status, unconfirmedCharge: { at: new Date(atMs).toISOString(), periodIndex: 1 } });
+    ok(renewalsWord([], { hours: 3, at: T }).status === "ok" && renewalsWord([{ status: "active" }, { status: "past_due" }], { hours: 3, at: T }).status === "ok", "no unconfirmed renewal reads ok");
+    ok(renewalsWord([u("past_due", T - 4 * H)], { hours: 3, at: T }).status === "unconfirmed" && renewalsWord([u("active", T - 4 * H)], { hours: 3, at: T }).status === "unconfirmed", "an open subscription unconfirmed past the window reads unconfirmed");
+    ok(renewalsWord([u("canceled", T - 40 * H), u("expired", T - 40 * H)], { hours: 3, at: T }).status === "ok", "a canceled or expired record never holds the word");
+    ok(renewalsWord([u("past_due", T - 4 * H)], { hours: null, at: T }).status === "off", "a disabled alert reads off");
+    const f = renewalsWord([u("past_due", T - 4 * H), u("past_due", T - 9 * H), u("past_due", T - H)], { hours: 3, at: T, full: true });
+    ok(f.unconfirmedCount === 2 && f.oldestAttemptAt === new Date(T - 9 * H).toISOString() && f.alertHours === 3, `the full read counts only the stuck ones and names the oldest (${JSON.stringify(f)})`);
+    ok(Object.keys(renewalsWord([u("past_due", T - 4 * H)], { hours: 3, at: T })).join() === "status", "the public read is the word alone");
+  }
   ok(renewalValidForSeconds("1000") === RENEWAL_VALID_FOR_MAX_S && RENEWAL_VALID_FOR_MAX_S === 240, "clamped to <= 240 s (under the 5-minute expiring-nonce cap)");
-  ok(renewalValidForSeconds("5") === 25, "never shorter than viem's own 25 s");
+  ok(renewalValidForSeconds("5") === 25 && ACTIVATION_VALID_FOR_S === 25, "never shorter than the 25 s activation window");
   for (const bad of ["abc", "-3", "12.5", "0", "1e3", "NaN"]) ok(renewalValidForSeconds(bad) === 120, `malformed ${JSON.stringify(bad)} -> default`);
 
   const { tempo: tempoChain } = await import("viem/tempo/chains");
   const prep = async (chain, req) => chain.prepareTransactionRequest[0]({ calls: [], chainId: 4217, ...req }, { client: { chain }, phase: "beforeFillTransaction" });
   const nowS = () => Math.floor(Date.now() / 1000);
+  // viem's own default is read, never typed: it was 25 s through 2.57.13 and
+  // 270 s from 2.57.16. Whatever it is, it must sit under the protocol cap and
+  // nothing below may depend on it.
+  const { Transaction: TempoTx } = await import("viem/tempo");
+  const PROTOCOL_CAP_S = TempoTx.expiringNonceMaxExpiry;
+  ok(Number.isInteger(PROTOCOL_CAP_S) && PROTOCOL_CAP_S >= 300, `viem names the protocol's expiring-nonce cap (${PROTOCOL_CAP_S} s)`);
   const stock = await prep(tempoChain, { nonceKey: "expiring" });
-  ok(Math.abs(stock.validBefore - nowS() - 25) <= 2, "control: viem's stock Tempo chain stamps now + 25 s");
+  const STOCK_S = stock.validBefore - nowS();
+  ok(STOCK_S > 0 && STOCK_S <= PROTOCOL_CAP_S, `control: viem's stock Tempo chain stamps a window inside the cap (+${STOCK_S} s)`);
+  ok(RENEWAL_VALID_FOR_MAX_S < PROTOCOL_CAP_S, `the longest renewal window (${RENEWAL_VALID_FOR_MAX_S} s) stays under the protocol cap (${PROTOCOL_CAP_S} s)`);
+  ok(ACTIVATION_VALID_FOR_S * 1000 < TEMPO_RPC_TIMEOUT_MS, `the activation window (${ACTIVATION_VALID_FOR_S} s) is shorter than the RPC timeout (${TEMPO_RPC_TIMEOUT_MS} ms), so a timed-out activation can no longer land`);
+  // Our window wins over ANY stock default, not only today's.
+  const oddDefault = { prepareTransactionRequest: [async (r) => ({ ...r, validBefore: r.validBefore ?? nowS() + 999 }), { runAt: ["beforeFillTransaction"] }] };
+  const overDefault = await withRenewalValidity(oddDefault, 120).prepareTransactionRequest[0]({ nonceKey: "expiring" }, {});
+  ok(Math.abs(overDefault.validBefore - nowS() - 120) <= 2, "the stamped window holds whatever viem's default is");
   const ours = await prep(withRenewalValidity(tempoChain, 120), { nonceKey: "expiring" });
   ok(Math.abs(ours.validBefore - nowS() - 120) <= 2, `the renewal chain stamps now + 120 s through viem's real hook (got +${ours.validBefore - nowS()})`);
   const sponsored = await prep(withRenewalValidity(tempoChain, 200), { feePayer: true });
@@ -943,8 +1171,30 @@ let liveSubId = null, liveHeader = null, liveToken = null, liveBuyer = null;
   const viaRenewal = await rc.chain.prepareTransactionRequest[0]({ calls: [], chainId: 4217, nonceKey: "expiring" }, { client: rc, phase: "beforeFillTransaction" });
   const viaShared = await bc.chain.prepareTransactionRequest[0]({ calls: [], chainId: 4217, nonceKey: "expiring" }, { client: bc, phase: "beforeFillTransaction" });
   ok(Math.abs(viaRenewal.validBefore - nowS() - 120) <= 2, "the renewal client carries the longer window");
-  ok(Math.abs(viaShared.validBefore - nowS() - 25) <= 2, "the activation client is unchanged (stock 25 s)");
+  ok(Math.abs(viaShared.validBefore - nowS() - ACTIVATION_VALID_FOR_S) <= 2, `the activation client stamps its own ${ACTIVATION_VALID_FOR_S} s, not viem's default (got +${viaShared.validBefore - nowS()}, stock +${STOCK_S})`);
   ok(rc !== bc, "renewals use their own client");
+  // The caller path: viem's real prepareTransactionRequest on each engine
+  // chain, the way mppx's submitSubscriptionPayment calls it, over a stub RPC.
+  {
+    const { createClient, custom } = await import("viem");
+    const { prepareTransactionRequest } = await import("viem/actions");
+    const { privateKeyToAccount } = await import("viem/accounts");
+    const stubRpc = custom({ async request({ method }) {
+      if (method === "eth_chainId") return "0x1079";
+      if (method === "eth_getBlockByNumber") return { baseFeePerGas: "0x1", number: "0x1", timestamp: "0x1", hash: `0x${"0".repeat(64)}`, transactions: [] };
+      if (method === "eth_estimateGas") return "0x5208";
+      if (method === "eth_maxPriorityFeePerGas" || method === "eth_gasPrice") return "0x1";
+      if (method === "eth_getTransactionCount") return "0x0";
+      const e = new Error(`stub RPC: ${method} unsupported`); e.code = -32601; throw e;
+    } }, { retryCount: 0 });
+    const account = privateKeyToAccount(`0x${"11".repeat(32)}`);
+    const req = { account, calls: [{ to: "0x20c0000000000000000000000000000000000000", data: "0x" }], nonceKey: "expiring" };
+    const viaPrep = async (chain) => (await prepareTransactionRequest(createClient({ chain, transport: stubRpc }), req)).validBefore - nowS();
+    const actS = await viaPrep(bc.chain), renS = await viaPrep(rc.chain), stockS = await viaPrep(tempoChain);
+    ok(Math.abs(actS - ACTIVATION_VALID_FOR_S) <= 2, `activation through prepareTransactionRequest sends validBefore = now + ${ACTIVATION_VALID_FOR_S} s (got +${actS})`);
+    ok(Math.abs(renS - 120) <= 2, `renewal through prepareTransactionRequest sends validBefore = now + 120 s (got +${renS})`);
+    ok(Math.abs(stockS - STOCK_S) <= 2, `control: the stock chain sends viem's default through the same call (+${stockS})`);
+  }
 
   const src = readFileSync(new URL("../src/mpp-subscriptions.js", import.meta.url), "utf8");
   const renewCall = src.slice(src.indexOf("tempoServer.renewSubscription({"));

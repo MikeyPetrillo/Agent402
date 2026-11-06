@@ -105,6 +105,8 @@ ok(rankTempoResources(cat, "", { capUsd: 1 }).length === 0, "empty task ranks no
     ["another currency", { method: "tempo", intent: "charge", request: { currency: "0x" + "2".repeat(40), amount: "1" } }],
     ["another chain", { method: "tempo", intent: "charge", request: { currency: TEMPO_USDC, amount: "1", methodDetails: { chainId: TEMPO_CHAIN_ID + 1 } } }],
     ["split recipients", { method: "tempo", intent: "charge", request: { currency: TEMPO_USDC, amount: "1", methodDetails: { splits: [{ recipient: "0x" + "3".repeat(40) }] } } }],
+    ["a machine-token route", { method: "tempo", intent: "charge", request: { currency: TEMPO_USDC, amount: "1", methodDetails: { machineTokenEnabled: true } } }],
+    ["a method detail this wallet does not know", { method: "tempo", intent: "charge", request: { currency: TEMPO_USDC, amount: "1", methodDetails: { feeToken: "0x" + "5".repeat(40) } } }],
   ]) ok(pickTempoChallenge([{ method: "stripe", intent: "charge" }, bad, good]) === good, `first payable challenge: ${label} listed first is skipped`);
   const only = { method: "tempo", intent: "charge", request: { currency: "0xother" } };
   ok(pickTempoChallenge([only]) === only, "with no payable challenge the first tempo/charge one is returned, so the refusal names it");
@@ -115,9 +117,9 @@ ok(rankTempoResources(cat, "", { capUsd: 1 }).length === 0, "empty task ranks no
 // ---- stub MPP seller ----
 const RECIPIENT = "0x1111111111111111111111111111111111111111";
 let sellerMode = "ok"; let paidHits = 0; let lastAuth = null;
-const challengeHeader = ({ currency = TEMPO_USDC, amount = "2000", chainId = 4217, supportedModes, splits } = {}) => Challenge.serialize(Challenge.from({
+const challengeHeader = ({ currency = TEMPO_USDC, amount = "2000", chainId = 4217, supportedModes, splits, extraDetails } = {}) => Challenge.serialize(Challenge.from({
   realm: "seller.test", method: "tempo", intent: "charge", expires: new Date(Date.now() + 60_000),
-  request: { amount, currency, recipient: RECIPIENT, methodDetails: { chainId, feePayer: true, ...(supportedModes ? { supportedModes } : {}), ...(splits ? { splits } : {}) } }, secretKey: "seller-secret",
+  request: { amount, currency, recipient: RECIPIENT, methodDetails: { chainId, feePayer: true, ...(supportedModes ? { supportedModes } : {}), ...(splits ? { splits } : {}), ...(extraDetails || {}) } }, secretKey: "seller-secret",
 }));
 const seller = createServer((req, res) => {
   let body = ""; req.on("data", (c) => (body += c)); req.on("end", () => {
@@ -138,7 +140,9 @@ const seller = createServer((req, res) => {
       return res.end(JSON.stringify({ scraped: true, echo: body ? JSON.parse(body) : null }));
     }
     const opts = sellerMode === "pathusd" ? { currency: PATH_USD } : sellerMode === "expensive" ? { amount: "900000" } : sellerMode === "wrong-chain" ? { chainId: 42431 }
-      : sellerMode === "splits" ? { splits: [{ recipient: "0x" + "4c".repeat(20), amount: "1900" }] } : sellerMode === "push-only" ? { supportedModes: ["push"] } : sellerMode === "pull-push" ? { supportedModes: ["pull", "push"] } : {};
+      : sellerMode === "splits" ? { splits: [{ recipient: "0x" + "4c".repeat(20), amount: "1900" }] } : sellerMode === "push-only" ? { supportedModes: ["push"] } : sellerMode === "pull-push" ? { supportedModes: ["pull", "push"] }
+      : sellerMode === "machine-token" ? { extraDetails: { machineTokenEnabled: true } } : sellerMode === "machine-token-off" ? { extraDetails: { machineTokenEnabled: false } }
+      : sellerMode === "unknown-detail" ? { extraDetails: { feeToken: "0x" + "5".repeat(40) } } : {};
     res.writeHead(402, { "www-authenticate": challengeHeader(opts) });
     res.end("{}");
   });
@@ -171,6 +175,13 @@ await refuse("expensive", { proof: proofOk }, /exceeds this call's ceiling/, "li
 await refuse("wrong-chain", { proof: proofOk }, /not Tempo mainnet/, "challenge targets another chain");
 await refuse("ok", { proof: proofLow }, /not routable yet/, "seller below the proven-settlement floor");
 await refuse("splits", { proof: proofOk }, /splits the payment across other recipients/, "challenge splits the payment to an unscreened recipient");
+await refuse("machine-token", { proof: proofOk }, /machine-token route, which pays from another token/, "challenge enables a machine-token route that pays through another token");
+await refuse("unknown-detail", { proof: proofOk }, /method detail this wallet does not know \(feeToken\)/, "challenge carries a method detail this wallet does not vet");
+{
+  sellerMode = "machine-token-off"; const before = minted;
+  const r = await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, createCredential: mint, proof: proofOk });
+  ok(r.result?.scraped === true && minted === before + 1, "control: machineTokenEnabled false pays as usual");
+}
 {
   const src = readFileSync(new URL("../src/tempo-buyer.js", import.meta.url), "utf8");
   ok(/defaultCredentialFactory\(recipient\)/.test(src) && /expectedRecipients: \[recipient\]/.test(src), "the stock signer is pinned to the screened recipient, so mppx itself refuses any other payee");

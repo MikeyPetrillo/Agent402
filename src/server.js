@@ -9,13 +9,14 @@ import { retiredEntryFor, assertRetiredRegistryConsistent, retirementHeaders, RE
 import { createTrafficStore, trafficMiddleware } from "./traffic-classifier.js";
 import { redisSharedSettled, createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath } from "./unpaid-quote-budget.js";
 import { stripMcpMarker } from "./mcp-loopback.js";
+import { canonicalizePaymentHeaders, decodePaymentHeader, encodePaymentHeader } from "./payment-header.js";
 import { RAILS_OR, RAILS, x402EvmOnly, x402RailsFor } from "./rails.js";
 import { onGatedRailOffered } from "./gated-rails.js";
 // The networks a PUBLIC surface names (src/public-networks.js): the
 // configured ones minus any gated rail that is not in the live offer.
 // Operator views read the full configured list (enabledNetworks) so a
 // dropped rail stays visible there.
-import { publicNetworks, publicPremiumUsdByNetwork } from "./public-networks.js";
+import { publicNetworks, publicPremiumUsdByNetwork, publicPrimaryNetwork } from "./public-networks.js";
 // Railway's egress has NO working IPv6 (every AAAA is ENETUNREACH). Node's
 // happy-eyeballs races the IPv6 address on dual-stack upstreams and fails ~15% of
 // the time (UND_ERR_SOCKET / "could not connect"). Force IPv4 process-wide for the
@@ -351,7 +352,7 @@ import { asyncProfileOf, estimateBasisSeconds, asyncAdvice, asyncAdviceMiddlewar
 import { progressMiddleware, reportHandlerStarted } from "./job-progress.js";
 import { createTaskStore, taskDataDir } from "./mcp-tasks.js";
 import { admitCoveredRun } from "./inflight-cover.js";
-import { paymentReplayKey, paymentValidBeforeMs, createReplayGuard } from "./replay-guard.js";
+import { paymentReplayKeyAsync, paymentValidBeforeMs, createReplayGuard } from "./replay-guard.js";
 import { statusPage, statusSnapshot } from "./status.js";
 import { recordProbes, statusStoreFlush } from "./status-store.js";
 import { tollboothLandingPage } from "./tollbooth-landing.js";
@@ -451,10 +452,10 @@ const decideLedger = () => {
 // from the file runs before the first request, not inside it.
 if (stateDbEnabled()) decideLedger();
 import { settlePreferenceMiddleware } from "./settle-preference.js";
-import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, robinhoodOrderView, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem, gatewayPendingStatus, gatewayPendingBookForOperator } from "./payments.js";
+import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, robinhoodOrderView, robinhoodSettlerStatus, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem, gatewayPendingStatus, gatewayPendingBookForOperator } from "./payments.js";
 import { GATEWAY_WIRE, gatewayBalanceStatus, gatewayOfferPublic, gatewayOfferNetworkNames, gatewayOfferedOn, isGatewayBatchedRequest } from "./gateway-nanopayments.js";
 import { isGatewayWire, isGatewayPendingAnswer } from "./gateway-wire.js";
-import { networkFloorUsd, ROBINHOOD_CAIP2 as RH_FLOOR_CAIP2 } from "./network-floors.js";
+import { networkFloorUsd } from "./network-floors.js";
 import { createMppShim } from "./mpp-shim.js";
 import { createTempoChallengeAppender, createTempoGate, tempoTxFromReceiptHeader, isTempoPushCredential } from "./mpp-tempo.js";
 import { createStripeChallengeAppender, createStripeGate, stripeTxFromReceiptHeader } from "./mpp-stripe.js";
@@ -848,11 +849,21 @@ import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, dec
 import { timingSafeEqual, createHash, randomUUID, randomBytes } from "node:crypto";
 import { registerMemoryStore, memoryStoreFigures } from "./memory-stores.js";
 import { publicIndexBootWarnings } from "./facilitator-public-index.js";
+import { directUpstreamBootWarnings, directUpstreamReport } from "./gateway-direct-upstream.js";
+import { directPriceBookBootWarnings, directPriceBookReport, directUpstreamStatus, startDirectPriceBook } from "./gateway-direct-pricebook.js";
 
 // FACILITATOR_PUBLIC_INDEX_*: a disclosure switch that cannot say what its
 // value asks (an unknown chain, no host to name, an invalid policy URL or
 // date) is named once at boot.
 for (const w of publicIndexBootWarnings()) console.warn(w);
+// DIRECT_UPSTREAM_*: a partly set or invalid direct-upstream switch is named
+// (never its values) once at boot; the upstream stays off until it is whole.
+for (const w of directUpstreamBootWarnings()) console.warn(w);
+for (const w of directPriceBookBootWarnings()) console.warn(w);
+// The direct upstream's cost guard reads a price book refreshed in the
+// background (src/gateway-direct-pricebook.js); a tick does nothing while
+// the upstream is unconfigured.
+startDirectPriceBook();
 
 const PORT = process.env.PORT || 3000;
 const WALLET_ADDRESS = process.env.WALLET_ADDRESS;
@@ -2493,6 +2504,15 @@ let catalogPathByFold = null;
 // else (src/mcp-loopback.js): a client-sent one is dropped, a genuine one is
 // remembered on the request and its secret never reaches a handler.
 app.use(stripMcpMarker);
+// Payment headers (PAYMENT-SIGNATURE, X-PAYMENT) are decoded once here
+// (src/payment-header.js) and rewritten to the canonical base64 of their
+// JSON, so every later reader, the paywall included, reads the same bytes.
+// A header that does not decode is removed; the paywall then answers its
+// ordinary 402 with the offer.
+app.use((req, _res, next) => {
+  if (canonicalizePaymentHeaders(req) === "dropped") req.__droppedPaymentAttempt = true;
+  next();
+});
 app.use((req, _res, next) => {
   if (!catalogPathByFold) {
     catalogPathByFold = new Map();
@@ -2734,7 +2754,7 @@ app.use(trafficMiddleware(TRAFFIC, { payerOf: (req, res) => payerFromRequest(req
 const CANONICAL_HOST = (() => { try { return new URL(BASE_URL).host.toLowerCase(); } catch { return ""; } })();
 app.use((req, res, next) => {
   const host = String(req.hostname || "").toLowerCase();
-  if (CANONICAL_HOST && host === `www.${CANONICAL_HOST}` && !req.headers["payment-signature"] && !req.headers["x-payment"] && !req.headers.authorization) {
+  if (CANONICAL_HOST && host === `www.${CANONICAL_HOST}` && !req.headers["payment-signature"] && !req.headers["x-payment"] && !req.__paymentHeaderAsSent && !req.headers.authorization) {
     // 308 FOR ANYTHING WITH A BODY. RFC 7231 permits a client to turn a 301
     // into a GET and drop the body; 308 requires method and body to survive.
     // The payment-header guard above is not enough on its own, because the
@@ -2948,6 +2968,12 @@ startSharedLimitsProbe();
 app.get("/__operator/tool-failures.json", async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   res.set("Cache-Control", "private, no-store").json({ ...(await toolFailureMonitor().report()), robinhoodOrder: robinhoodOrderView() });
+});
+// Direct-upstream A/B (src/gateway-direct-upstream.js): attempts, failures by
+// bucket and p50/p90 latency per upstream for the listed model ids.
+app.get("/__operator/direct-upstream.json", (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  res.set("Cache-Control", "private, no-store").json({ ...directUpstreamReport(), priceBook: directPriceBookReport() });
 });
 app.get("/__operator/tweet-queue.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
@@ -3921,6 +3947,28 @@ app.get("/api/gateway-status", async (req, res) => {
     // the indexed origins and the rule are on the operator view; origins on
     // /__operator/perf.json.
     brokenListings: (() => { try { return brokenListingsStatus({ full }); } catch { return { status: "unknown" }; } })(),
+    // robinhoodSettler reads ok while the listed Robinhood Chain facilitator
+    // settles first, relayer once our own relayer has settled first in its
+    // place (src/robinhood-order.js: its signer read dry) for longer than
+    // ROBINHOOD_RELAYER_FIRST_ALERT_HOURS (default 6), off without an order
+    // or with the alert disabled. facilitatorFunds leaves out a dry row our
+    // relayer covers, so this is the word that pages on it. One word
+    // publicly; the clock for the operator, the order on
+    // /__operator/tool-failures.json (robinhoodOrder).
+    robinhoodSettler: (() => { try { return robinhoodSettlerStatus({ full }); } catch { return { status: "unknown" }; } })(),
+    // subscriptionRenewals reads unconfirmed while a wallet-billed monitor
+    // renewal has stayed unconfirmed (its send's landing undecided by the
+    // chain read, so nothing is signed again) for longer than
+    // MPP_SUB_UNCONFIRMED_ALERT_HOURS (default 3), ok otherwise, off with the
+    // alert disabled or no subscription engine. One word publicly; the
+    // threshold, the count and the oldest attempt for the operator, each
+    // record on /__operator/monitors.json.
+    subscriptionRenewals: (() => { try { return _mppSubs ? _mppSubs.renewalsStatus({ full }) : { status: "off" }; } catch { return { status: "unknown" }; } })(),
+    // The direct upstream (src/gateway-direct-pricebook.js): off, starting,
+    // ok or degraded (a mapped model is kept on OpenRouter, or the direct
+    // breaker is open). The word publicly; the operator read adds a reason
+    // code while degraded; the figures are on /__operator/direct-upstream.json.
+    directUpstream: (() => { try { return directUpstreamStatus({ full }); } catch { return { status: "unknown" }; } })(),
     ...(await toolFailureMonitor().status({ full }).catch(() => ({ toolFailures: { status: "unknown" }, upstreamHealth: { status: "unknown" }, facilitatorFunds: { status: "unknown" }, toolAnswers: { status: "unknown" }, buyerRefusals: { status: "unknown" } }))),
   };
   // An operator-authed read must not land in a shared cache.
@@ -6692,7 +6740,7 @@ app.get("/docs/:slug", (req, res) => {
 // Rebuilt once more when a gated rail (src/gated-rails.js) joins the live
 // offer, so its chain is named only after the boot offer kept it.
 const buildManifest = () => serviceManifest({
-  baseUrl: BASE_URL, network: NETWORK, networks: publicNetworks(),
+  baseUrl: BASE_URL, network: publicPrimaryNetwork(NETWORK), networks: publicNetworks(),
   wallet: WALLET_ADDRESS, walletName: WALLET_ENS, catalog: CATALOG,
   payToByNetwork: Object.fromEntries([
     ["evm", WALLET_ADDRESS], ["solana", (process.env.SOLANA_WALLET_ADDRESS || "").trim()],
@@ -6844,6 +6892,10 @@ app.get("/api/rails", (_req, res) => {
   res.set("Cache-Control", "no-store");
   res.json({
     asOf: new Date().toISOString(),
+    // The primary network buyers are pointed at: the configured one while it
+    // is offered, else the first offered one (a dropped primary stays listed
+    // below as a configured rail that is not offered).
+    primary: publicPrimaryNetwork(NETWORK),
     configured: rails.length,
     offered: offered.length,
     degraded: rails.length - offered.length,
@@ -6888,7 +6940,7 @@ app.get("/acp/feed", (_req, res) =>
 );
 app.get("/acp/manifest", (_req, res) =>
   res.set("Cache-Control", "public, max-age=3600").json(acpManifest({
-    baseUrl: BASE_URL, network: NETWORK, networks: publicNetworks(),
+    baseUrl: BASE_URL, network: publicPrimaryNetwork(NETWORK), networks: publicNetworks(),
     wallet: WALLET_ADDRESS, toolCount: Object.keys(CATALOG).length, powDifficulty: POW_DIFFICULTY,
   }))
 );
@@ -7107,6 +7159,20 @@ function isOwnWallet(payer) {
 // own wallets' traffic is counted apart from outside traffic).
 function dropUnverifiedPaymentHeaders(req) {
   for (const h of ["payment-signature", "x-payment", "payment-identifier"]) delete req.headers[h];
+}
+// True (and the payment headers dropped) when a payment header decodes to a
+// JSON object whose x402Version is not 2: only version 2 payloads reach the
+// paywall. Read through the shared decoder; intake has already removed a
+// header that does not decode.
+function refuseNonV2PaymentPayload(req) {
+  for (const name of ["payment-signature", "x-payment"]) {
+    const decoded = decodePaymentHeader(req.headers[name]);
+    if (decoded && decoded.x402Version !== 2) {
+      dropUnverifiedPaymentHeaders(req);
+      return true;
+    }
+  }
+  return false;
 }
 function isSyntheticRequest(req) {
   try { return !!(req && (ownTrue(req, "statusProbePow") || verifyHeartbeatToken(req.header("x-heartbeat-token")))); }
@@ -7867,7 +7933,7 @@ async function getActivityForChain(chainKey, wallet, { maxWaitMs = 0 } = {}) {
 // /robinhood replaces the old dedicated robinhood-page.js landing (folded
 // its unique chain-parameter and tollbooth-config copy into this chain's
 // sellParagraphHtml in market-page.js) — same URL, now the shared template.
-const SNAPSHOT_RAIL_LABEL = { base: "Base", solana: "Solana", polygon: "Polygon", arbitrum: "Arbitrum", monad: "Monad", celo: "Celo", avalanche: "Avalanche", sei: "Sei", optimism: "Optimism", arc: "Arc", robinhood: "Robinhood Chain" };
+const SNAPSHOT_RAIL_LABEL = { base: "Base", solana: "Solana", polygon: "Polygon", arbitrum: "Arbitrum", monad: "Monad", celo: "Celo", avalanche: "Avalanche", sei: "Sei", optimism: "Optimism", arc: "Arc", ink: "Ink", robinhood: "Robinhood Chain" };
 // Per-chain wallet source: EVM rails (including Robinhood, chain 4663) all
 // settle to the same WALLET_ADDRESS; Solana has its own env.
 const chainWallet = (chainKey) => (chainKey === "solana" ? (process.env.SOLANA_WALLET_ADDRESS || "").trim() : WALLET_ADDRESS);
@@ -9698,10 +9764,15 @@ app.get("/api/pricing", (_req, res) => {
         .map((t) => ({ ...t, note: V1_TIER_NOTES[t.path] || undefined })),
       docs: `${BASE_URL}/tools/category/llm`,
     },
-    payment: { protocol: "x402", version: 2, network: NETWORK, currency: "USDC", networks: publicNetworks(),
+    payment: { protocol: "x402", version: 2, network: publicPrimaryNetwork(NETWORK), currency: "USDC", networks: publicNetworks(),
       // The least one call costs on a chain with a price floor (its 402
       // quotes max(listed price, floor)); every other chain quotes the list.
-      ...(publicNetworks().includes("robinhood") && networkFloorUsd(RH_FLOOR_CAIP2) > 0 ? { minPriceUsdByNetwork: { robinhood: networkFloorUsd(RH_FLOOR_CAIP2) } } : {}),
+      // Every offered chain with a floor (Robinhood's default, or one
+      // NETWORK_PRICE_FLOORS sets), under its public name.
+      ...(() => {
+        const floors = Object.fromEntries(publicNetworks().map((n) => [n, networkFloorUsd(PAY_NETWORKS[n])]).filter(([, usd]) => usd > 0));
+        return Object.keys(floors).length ? { minPriceUsdByNetwork: floors } : {};
+      })(),
       // The settlement premium a chain adds to every price quoted on it (the
       // same map the accepts builder prices through, src/payments.js), for the
       // offered chains that carry one: a client capping a call at the list
@@ -10391,7 +10462,7 @@ if (FREE_MODE) {
           // couldn't); its absence means a first-contact quote (no wallet /
           // crawl / looked-and-left). This is the couldn't-pay vs wouldn't-pay
           // split — the single most useful cut on the 402→settle drop-off.
-          const paidAttempt = req.header("x-payment") || req.header("payment-signature");
+          const paidAttempt = req.header("x-payment") || req.header("payment-signature") || ownTrue(req, "__droppedPaymentAttempt");
           const powAttempt = req.header("x-pow-solution");
           const attempt = paidAttempt ? "usdc_failed" : powAttempt ? "pow_failed" : "none";
           capturePostHogPaywall({
@@ -10679,7 +10750,14 @@ if (FREE_MODE) {
     // any non-200 releases it so a legitimate retry of the still-valid
     // authorization proceeds. Requests without a payment header (unpaid 402
     // challenges, discovery crawls) return a null key and are never guarded.
-    const replayKey = paymentReplayKey(req);
+    // Only version 2 payloads reach the paywall; any other version is
+    // answered with the 402 offer. Its payment headers are dropped here, and
+    // the verify hint (read from the header as sent) names the version
+    // mismatch. A version 2 payload whose echoed block uses a v1-era key is
+    // translated below.
+    if (refuseNonV2PaymentPayload(req)) req.__droppedPaymentAttempt = true;
+    // A Stellar payment keys on its signed entries (paymentReplayKeyAsync).
+    const replayKey = await paymentReplayKeyAsync(req);
     if (replayKey) {
       // The shared claim is required whenever another container may be
       // serving (src/replay-topology.js: more than one replica, a deploy's
@@ -10749,13 +10827,12 @@ if (FREE_MODE) {
       // found because the end-to-end test captured the header the SDK really
       // sends instead of the one assumed.
       for (const name of ["payment-signature", "x-payment"]) {
-        const raw = req.headers[name];
-        if (typeof raw !== "string" || !raw) continue;
+        const decoded = decodePaymentHeader(req.headers[name]);
+        if (!decoded) continue;
         try {
-          const decoded = JSON.parse(Buffer.from(raw, "base64").toString("utf8"));
           const t = translateV1Accepts(decoded);
           if (t) {
-            req.headers[name] = Buffer.from(JSON.stringify(t.payload), "utf8").toString("base64");
+            req.headers[name] = encodePaymentHeader(t.payload);
             req.__x402V1Translated = t.translated.join(",");
           }
         } catch { /* unreadable header: leave it exactly as sent */ }
