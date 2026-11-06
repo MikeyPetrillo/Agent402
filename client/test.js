@@ -1304,7 +1304,7 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     if (req.url === "/api/pricing") return send(200, { endpoints: [{ slug: "thing", method: "GET", path: "/api/thing", computePayable: false, price: "$0.005" }] });
     if (!req.url.startsWith("/api/thing")) return send(404, {});
     const accepts = st.offer === "both" ? [plainAccept, batchedAccept] : st.offer === "plain" ? [plainAccept] : st.offer === "long" ? [plainAccept, { ...batchedAccept, maxTimeoutSeconds: 365 * 24 * 3600 }] : st.offer === "dear" ? [plainAccept, { ...batchedAccept, amount: "20000" }] : [plainAccept, arcBatched];
-    const offer = { x402Version: 2, resource: { url: `http://127.0.0.1:${port}/api/thing`, description: "thing", mimeType: "application/json" }, accepts };
+    const offer = { x402Version: st.version ?? 2, resource: { url: `http://127.0.0.1:${port}/api/thing`, description: "thing", mimeType: "application/json" }, accepts };
     const header = req.headers["payment-signature"];
     if (!header) return send(402, {}, { "payment-required": b64(offer) });
     let p = null; try { p = unb64(header); } catch { p = null; }
@@ -1429,6 +1429,17 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
       let e2 = null; try { await longAlone.call("thing", { q: 14 }); } catch (err) { e2 = err; }
       ok(e2 && e2.status === 402 && signs === before + 1 && /no Circle Gateway batched accept/.test(e2.message), "with no other way to pay, an oversized window is refused without a signature");
       st.offer = "both";
+      // A version 1 challenge prices an accept from maxAmountRequired: a
+      // batched accept naming only amount carries no price there and is not signed.
+      st.version = 1;
+      const v1Alone = mk({ gateway: { signer } });
+      let e3 = null; try { await v1Alone.call("thing", { q: 151 }); } catch (err) { e3 = err; }
+      ok(e3 && e3.status === 402 && signs === before + 1 && /no Circle Gateway batched accept/.test(e3.message), `a batched accept the challenge's version does not price is never signed (${e3?.message?.slice(0, 80)})`);
+      st.version = 2;
+      const v2Again = mk({ gateway: { signer } });
+      const out5 = await v2Again.call("thing", { q: 161 });
+      ok(out5.paid === "gateway" && signs === before + 2, "control: the same accept under a version 2 challenge is signed once");
+      st.version = undefined;
     }
     // A signer that throws: nothing was sent, so the reservation is released.
     {

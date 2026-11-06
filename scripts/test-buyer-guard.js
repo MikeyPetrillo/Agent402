@@ -69,6 +69,36 @@ ok(await payloadWith(null) === "sent", "a payload signing the checked amount is 
 ok(/refused before sending/.test(await payloadWith("1000000000000")), "a payload signing more than the checked amount is refused before sending");
 ok(/refused before sending/.test(await payloadWith("999")), "a payload signing a different amount is refused before sending");
 
+// The installed guard, end to end through the client: the scheme default, the
+// recheck of the selected accept before the signer runs, and the payload
+// version after it.
+async function guarded({ accepts, guardOpts = opts, schemes = ["exact"], payloadVersion = null }) {
+  const client = new x402Client();
+  if (typeof client.setSpendControls === "function") client.setSpendControls(false);
+  let signerRuns = 0;
+  for (const scheme of schemes) {
+    client.register("eip155:8453", { scheme, async createPaymentPayload(version, r) {
+      signerRuns++;
+      return { x402Version: payloadVersion ?? version, payload: { authorization: { value: r.amount }, signature: "0x" } };
+    } });
+  }
+  guardCappedSigning(client, { ...guardOpts, log: () => {} });
+  try { await client.createPaymentPayload({ x402Version: 2, resource: { url: "http://x/y" }, accepts }); return { result: "sent", signerRuns }; }
+  catch (e) { return { result: e.message, signerRuns }; }
+}
+ok(!checkAccept(2, v2({ scheme: "upto", extra: { name: "USD Coin", version: "2", assetTransferMethod: "permit2" } }), opts).ok, "with no schemes option only exact is allowed");
+let g = await guarded({ accepts: [v2({ scheme: "upto", extra: { name: "USD Coin", version: "2", assetTransferMethod: "permit2" } })], schemes: ["upto"] });
+ok(g.result !== "sent" && g.signerRuns === 0, `the installed guard signs only exact by default (${g.result})`);
+g = await guarded({ accepts: [v2({ scheme: "upto", extra: { name: "USD Coin", version: "2", assetTransferMethod: "permit2" } })], schemes: ["upto"], guardOpts: { ...opts, schemes: ["upto"] } });
+ok(g.result === "sent" && g.signerRuns === 1, `control: an upto accept is signed when the caller allows upto (${g.result})`);
+let reads = 0;
+g = await guarded({ accepts: [v2()], guardOpts: { maxUsd: () => (++reads === 1 ? 0.05 : 0.0001), networks: ["eip155:8453"] } });
+ok(/selected accept refused/.test(g.result) && g.signerRuns === 0, `the selected accept is checked again before the signer runs (${g.result}; signer runs ${g.signerRuns})`);
+g = await guarded({ accepts: [v2()], payloadVersion: 1 });
+ok(/payload version differs from the challenge/.test(g.result) && g.signerRuns === 1, `a payload whose version is not the challenge's is refused before sending (${g.result})`);
+g = await guarded({ accepts: [v2()] });
+ok(g.result === "sent" && g.signerRuns === 1, "control: the same accept and version is sent");
+
 // ---- the options the own-service buyers use ----
 const SOL = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const sol = (over = {}) => ({ scheme: "exact", network: SOL, asset: SOL_USDC, payTo: "x", amount: "1000", maxTimeoutSeconds: 60, extra: { feePayer: "y" }, ...over });
@@ -121,6 +151,45 @@ function runSmoke(challenge) {
 }
 const pr2 = (accepts) => ({ x402Version: 2, resource: { url: "http://x/y" }, accepts });
 const tail = (r) => r.out.split("\n").filter((l) => /refus|SMOKE|status|rror/.test(l)).slice(-3).join(" | ");
+
+// ---- x402scan-seed pays an outside registry through the same guard ----
+// The real exact signer with a throwaway key: what it would sign, or why not.
+{
+  const { seedPaymentClient } = await import("./x402scan-seed.js");
+  const { ExactEvmScheme } = await import("@x402/evm/exact/client");
+  const signer = privateKeyToAccount(generatePrivateKey());
+  const seedPay = async (challenges, { maxUsd = 0.5 } = {}) => {
+    const { client, spentUsd } = seedPaymentClient(signer, { maxUsd, log: () => {} });
+    const out = [];
+    for (const ch of challenges) {
+      try { out.push(signedEvmValueOf(await client.createPaymentPayload(ch))); } catch (e) { out.push(`refused: ${e.message}`); }
+    }
+    return { out, spent: spentUsd() };
+  };
+  let s = await seedPay([pr2([v2()])]);
+  ok(s.out[0] === "1000" && s.spent === 0.001, `control: a $0.001 Base USDC page is signed for exactly 1000 and counted (${s.out[0]}, ${s.spent})`);
+  s = await seedPay([pr2([v2({ asset: "0x0000000000000000000000000000000000000001" })])]);
+  ok(/^refused/.test(s.out[0]) && s.spent === 0, "seed: an asset the table does not know is never signed");
+  s = await seedPay([pr2([v2({ amount: undefined, maxAmountRequired: "1000" })])]);
+  ok(/^refused/.test(s.out[0]) && s.spent === 0, "seed: a version 2 accept naming only maxAmountRequired is never signed");
+  s = await seedPay([pr2([v2({ maxAmountRequired: "1000000000000" })])]);
+  ok(/^refused/.test(s.out[0]) && s.spent === 0, "seed: an accept whose two amount fields differ is never signed");
+  s = await seedPay([pr2([v2({ amount: "20000" })]), pr2([v2({ amount: "20001" })])]);
+  ok(s.out[0] === "20000" && /^refused/.test(s.out[1]) && s.spent === 0.02, "seed: the per-page cap is exact in base units");
+  s = await seedPay([pr2([v2()]), pr2([v2()])], { maxUsd: 0.0015 });
+  ok(s.out[0] === "1000" && /^refused/.test(s.out[1]) && s.spent === 0.001, "seed: a page is capped by what is left of --max-usd");
+  s = await seedPay([{ x402Version: 1, accepts: [{ scheme: "exact", network: "base", asset: USDC_BASE, payTo, maxAmountRequired: "1000", resource: "http://x/y", description: "", mimeType: "application/json", maxTimeoutSeconds: 60, extra: { name: "USD Coin", version: "2" } }] }]);
+  ok(/^refused/.test(s.out[0]) && s.spent === 0, "seed: a version 1 challenge outside the registered network is never signed");
+  const orig = ExactEvmScheme.prototype.createPaymentPayload;
+  try {
+    ExactEvmScheme.prototype.createPaymentPayload = function (v, r, ctx) { return orig.call(this, v, { ...r, amount: "1000000" }, ctx); };
+    s = await seedPay([pr2([v2()])]);
+    ok(/refused: signed payment refused before sending/.test(s.out[0]) && s.spent === 0, `seed: a payload signing another amount is refused before sending and not counted (${s.out[0]})`);
+  } finally { ExactEvmScheme.prototype.createPaymentPayload = orig; }
+  let maxErr = null;
+  try { seedPaymentClient(signer, { maxUsd: Number("abc") }); } catch (e) { maxErr = e.message; }
+  ok(/must be a positive number/.test(maxErr || ""), "seed: a --max-usd typo refuses instead of paying unbounded");
+}
 
 let r = await runSmoke(pr2([v2()]));
 ok(r.code === 0 && r.signed === "1000", `control: a $0.001 Base accept is signed for exactly 1000 (${r.code}, ${r.signed}; ${tail(r)})`);

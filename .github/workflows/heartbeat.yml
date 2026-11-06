@@ -914,7 +914,8 @@ jobs:
       # on /api/gateway-status. toolFailures and upstreamHealth page on
       # degraded / failing; facilitatorFunds pages on low / refused / demoted;
       # buyerRefusals pages on refusing; robinhoodSettler pages on relayer (ok
-      # and off close); directUpstream pages on degraded (ok and off close,
+      # and off close); subscriptionRenewals pages on unconfirmed (ok and off
+      # close); directUpstream pages on degraded (ok and off close,
       # starting does neither); ok closes; unknown does neither. The issues are public, so a body carries
       # the word and the operator endpoint only: slugs, upstreams, facilitators
       # and reasons stay on /__operator/tool-failures.json. The status Worker
@@ -960,6 +961,12 @@ jobs:
           # (src/robinhood-order.js): relayer pages, ok and off close.
           TITLE="robinhoodSettler: our own relayer has been settling Robinhood sales for hours"
           check_word robinhoodSettler "relayer" "ok off"
+          # A wallet-billed monitor renewal unconfirmed (its send's landing
+          # undecided by the chain read) for longer than
+          # MPP_SUB_UNCONFIRMED_ALERT_HOURS (src/mpp-subscriptions.js):
+          # unconfirmed pages, ok and off close.
+          TITLE="subscriptionRenewals: a monitor renewal has stayed unconfirmed for hours"
+          check_word subscriptionRenewals "unconfirmed" "ok off" "/__operator/monitors.json"
           # The direct upstream (src/gateway-direct-pricebook.js): degraded
           # pages (the reason code is on the operator read only); ok and off
           # close; starting does neither.

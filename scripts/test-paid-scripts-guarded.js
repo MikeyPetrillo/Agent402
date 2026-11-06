@@ -50,9 +50,16 @@ const EXTERNAL_BY_DESIGN = {
   // smoke-buy's SMOKE_TARGET mode buys from a named outside seller; its
   // TARGET_URL mode is also guarded (and so checked by rule 1 as well).
   "smoke-buy.js": [/guardCappedSigning\(client, \{ maxUsd: SMOKE_MAX_USD/],
-  // Pays a fixed public registry for its paid resource pages; the selector
-  // refuses a page above the per-page cap, and --max-usd bounds the run.
-  "x402scan-seed.js": [/PAGE_QUOTE_CAP_ATOMIC/, /--max-usd/],
+  // Pays a fixed public registry for its paid resource pages through the
+  // shared capped guard: each page is capped at the smaller of the per-page
+  // cap and what is left of --max-usd.
+  "x402scan-seed.js": [/guardCappedSigning\(client, \{ maxUsd: \(\) => Math\.min\(pageCapUsd, maxUsd - spentUsd\(\)\), networks: SEED_NETWORKS/, /const SEED_NETWORKS = \["eip155:8453"\];/, /--max-usd must be a positive number/],
+};
+// An outside-seller script whose accepts all pass the shared guard must not
+// also pick them with a selector of its own (one the guard's version and
+// asset checks would not see first).
+const EXTERNAL_FORBIDDEN = {
+  "x402scan-seed.js": [/new\s+x402Client\s*\(\s*\(/],
 };
 
 // Scripts whose payee is fixed in code and is not a seller's HTTP route.
@@ -98,7 +105,9 @@ export function verdictFor(file, rawSrc) {
   if (sign < 0) return null;
   if (EXTERNAL_BY_DESIGN[file]) {
     const missing = EXTERNAL_BY_DESIGN[file].filter((re) => !re.test(src));
-    return missing.length ? `pays outside sellers on purpose but lacks its cap (${missing.map(String).join(", ")})` : null;
+    if (missing.length) return `pays outside sellers on purpose but lacks its cap (${missing.map(String).join(", ")})`;
+    const present = (EXTERNAL_FORBIDDEN[file] || []).filter((re) => re.test(src));
+    return present.length ? `pays outside sellers on purpose but selects accepts outside the shared guard (${present.map(String).join(", ")})` : null;
   }
   if (FIXED_TARGET[file]) return null;
   const env = ENV_TARGET.test(src);
@@ -143,6 +152,13 @@ ok(verdictFor("x.js", `const T = assertOwnPaidTarget(process.env.TARGET_URL, "x"
 ok(verdictFor("x.js", `const T = assertOwnPaidTarget(process.env.TARGET_URL, "x");\nconst c = disableVendorSpendControls(new x402Client()); registerExactEvmScheme(c, {}); guardCappedSigning(c, { maxUsd: 1, networks: ["eip155:8453"] });`) === null, "fixture: spend control off with the capped guard passes");
 ok(verdictFor("drain-burner.js", `const T = assertOwnPaidTarget(process.env.TARGET_URL, "x");\nconst c = disableVendorSpendControls(new x402Client()); registerExactEvmScheme(c, {}); guardCappedSigning(c, { maxUsd: 1, networks: ["eip155:8453"] });`) !== null, "fixture: a pending entry that gains a cap must leave the list");
 ok(verdictFor("paid-demo.js", `const T = process.env.TARGET_URL;\n${pay}`) !== null, "fixture: an outside-seller script without its cap marker fails");
+{
+  const seed = readFileSync(join(HERE, "x402scan-seed.js"), "utf8");
+  ok(verdictFor("x402scan-seed.js", seed) === null, "x402scan-seed.js pays through the shared capped guard");
+  ok(verdictFor("x402scan-seed.js", seed.replace("guardCappedSigning(client, {", "void (client, {")) !== null, "fixture: x402scan-seed.js without the shared guard fails");
+  ok(verdictFor("x402scan-seed.js", `${seed}\nconst c2 = new x402Client((v, a) => a[0]);`) !== null, "fixture: x402scan-seed.js with a selector of its own fails");
+  ok(verdictFor("x402scan-seed.js", `const PAGE_QUOTE_CAP_ATOMIC = 1n; const flagName = "--max-usd";\n${pay}`) !== null, "fixture: the old selector-only cap markers no longer pass");
+}
 
 // demo-payment.js (served as /demo.js) carries its own copy of the USDC table.
 {

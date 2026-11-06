@@ -2504,11 +2504,11 @@ let catalogPathByFold = null;
 // else (src/mcp-loopback.js): a client-sent one is dropped, a genuine one is
 // remembered on the request and its secret never reaches a handler.
 app.use(stripMcpMarker);
-// Payment headers (PAYMENT-SIGNATURE, X-PAYMENT) are read once here, through
-// the decoder that matches the paywall's (src/payment-header.js), and
-// rewritten to the canonical base64 of their JSON, so every later reader
-// sees the bytes the paywall reads. A header that does not decode is
-// removed; the paywall then answers its ordinary 402 with the offer.
+// Payment headers (PAYMENT-SIGNATURE, X-PAYMENT) are decoded once here
+// (src/payment-header.js) and rewritten to the canonical base64 of their
+// JSON, so every later reader, the paywall included, reads the same bytes.
+// A header that does not decode is removed; the paywall then answers its
+// ordinary 402 with the offer.
 app.use((req, _res, next) => {
   if (canonicalizePaymentHeaders(req) === "dropped") req.__droppedPaymentAttempt = true;
   next();
@@ -3956,6 +3956,14 @@ app.get("/api/gateway-status", async (req, res) => {
     // publicly; the clock for the operator, the order on
     // /__operator/tool-failures.json (robinhoodOrder).
     robinhoodSettler: (() => { try { return robinhoodSettlerStatus({ full }); } catch { return { status: "unknown" }; } })(),
+    // subscriptionRenewals reads unconfirmed while a wallet-billed monitor
+    // renewal has stayed unconfirmed (its send's landing undecided by the
+    // chain read, so nothing is signed again) for longer than
+    // MPP_SUB_UNCONFIRMED_ALERT_HOURS (default 3), ok otherwise, off with the
+    // alert disabled or no subscription engine. One word publicly; the
+    // threshold, the count and the oldest attempt for the operator, each
+    // record on /__operator/monitors.json.
+    subscriptionRenewals: (() => { try { return _mppSubs ? _mppSubs.renewalsStatus({ full }) : { status: "off" }; } catch { return { status: "unknown" }; } })(),
     // The direct upstream (src/gateway-direct-pricebook.js): off, starting,
     // ok or degraded (a mapped model is kept on OpenRouter, or the direct
     // breaker is open). The word publicly; the operator read adds a reason
@@ -7153,8 +7161,9 @@ function dropUnverifiedPaymentHeaders(req) {
   for (const h of ["payment-signature", "x-payment", "payment-identifier"]) delete req.headers[h];
 }
 // True (and the payment headers dropped) when a payment header decodes to a
-// JSON object whose x402Version is not 2. Read through the shared decoder;
-// intake has already removed a header that does not decode.
+// JSON object whose x402Version is not 2: only version 2 payloads reach the
+// paywall. Read through the shared decoder; intake has already removed a
+// header that does not decode.
 function refuseNonV2PaymentPayload(req) {
   for (const name of ["payment-signature", "x-payment"]) {
     const decoded = decodePaymentHeader(req.headers[name]);
@@ -10741,14 +10750,11 @@ if (FREE_MODE) {
     // any non-200 releases it so a legitimate retry of the still-valid
     // authorization proceeds. Requests without a payment header (unpaid 402
     // challenges, discovery crawls) return a null key and are never guarded.
-    // Every 402 here offers x402 version 2 only, and the library matches a
-    // version 1 payload on scheme and network alone, never on the terms its
-    // echoed block states. So a payment header whose payload declares any
-    // version other than 2 is never handed to the paywall: its headers are
-    // dropped and the paywall answers the ordinary 402 with the offer, which
-    // the verify hint (read from the header as sent) words as a version
+    // Only version 2 payloads reach the paywall; any other version is
+    // answered with the 402 offer. Its payment headers are dropped here, and
+    // the verify hint (read from the header as sent) names the version
     // mismatch. A version 2 payload whose echoed block uses a v1-era key is
-    // not this case; it is translated below.
+    // translated below.
     if (refuseNonV2PaymentPayload(req)) req.__droppedPaymentAttempt = true;
     const replayKey = paymentReplayKey(req);
     if (replayKey) {

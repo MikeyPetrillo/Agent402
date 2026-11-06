@@ -617,7 +617,13 @@ const near = (a, b) => Math.abs(a - b) < 1e-9;
     "both refusal-memo writes in the payer are gated on the router's opt-in and keyed by the route; the paid-retry one also on a 402/401 carrying the seller's offer");
   ok(/if \(memoizeDelivery\) clearSellerDeliveryFailure\(sellerOrigin, chain\);/.test(pay) && !/^\s*clearSellerDeliveryFailure\(sellerOrigin, chain\);/m.test(pay),
     "the chain-proven refusal clears the delivery memo only on the router's opt-in");
-  ok((pay.match(/noteSellerRefusal\(/g) || []).length === 3, "no other refusal-memo write exists in the payer (definition + two gated calls)");
+  ok(/if \(payable\.amount != null && payable\.maxAmountRequired != null && !sameAtomic\(payable\.amount, payable\.maxAmountRequired\)\) \{\n\s*if \(memoizeDelivery\) noteSellerRefusal\(url, chain, 402\);/.test(pay),
+    "the split-price refusal memo in the payer is gated on the router's opt-in and keyed by the route");
+  const refusalCalls = pay.match(/^.*noteSellerRefusal\(.*$/gm) || [];
+  const gatedCalls = refusalCalls.filter((l) => /^\s*if \((memoizeDelivery|memoize)\) noteSellerRefusal\(/.test(l));
+  const definitions = refusalCalls.filter((l) => /^export function noteSellerRefusal\(/.test(l));
+  ok(refusalCalls.length === 4 && gatedCalls.length === 3 && definitions.length === 1,
+    "no other refusal-memo write exists in the payer (definition + three gated calls: domain refusal, split price, paid retry)");
 }
 
 loud();

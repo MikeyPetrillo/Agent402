@@ -162,6 +162,42 @@ export const MAX_CHARGE_BACKOFF_MS = 24 * 60 * 60_000;
 // price, and for the canary it read as "the pull half of the rail is broken".
 // A refused transfer (insufficient funds, revoked key) keeps the hour.
 export const TRANSIENT_CHARGE_BACKOFF_MS = 2 * 60_000;
+
+/**
+ * Hours a renewal may stay unconfirmed (a send whose landing the chain read
+ * has not decided) before the subscriptionRenewals word reads unconfirmed.
+ * Unset, blank or not a positive number: 3. 0 or "off": null (the word reads off).
+ */
+export const RENEWAL_UNCONFIRMED_ALERT_HOURS_DEFAULT = 3;
+export function renewalUnconfirmedAlertHours(env = process.env) {
+  const raw = String(env.MPP_SUB_UNCONFIRMED_ALERT_HOURS ?? "").trim();
+  if (/^off$/i.test(raw)) return null;
+  if (!raw) return RENEWAL_UNCONFIRMED_ALERT_HOURS_DEFAULT;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return RENEWAL_UNCONFIRMED_ALERT_HOURS_DEFAULT;
+  return n === 0 ? null : n;
+}
+
+/**
+ * The subscriptionRenewals word over a set of subscription records: off (the
+ * alert disabled), unconfirmed (a record that is neither canceled nor expired
+ * has carried the same unconfirmed renewal for longer than `hours`), ok.
+ * Publicly { status }; the operator view adds the threshold, the count and the
+ * oldest attempt time.
+ */
+export function renewalsWord(recs, { hours = renewalUnconfirmedAlertHours(), at = Date.now(), full = false } = {}) {
+  if (hours == null) return full ? { status: "off", alertHours: null } : { status: "off" };
+  let stuck = 0, oldest = null;
+  for (const rec of recs || []) {
+    if (!rec || rec.status === "canceled" || rec.status === "expired") continue;
+    const since = Date.parse(rec.unconfirmedCharge?.at || "");
+    if (!Number.isFinite(since) || at - since <= hours * 3_600_000) continue;
+    stuck++;
+    if (oldest == null || since < oldest) oldest = since;
+  }
+  const status = stuck ? "unconfirmed" : "ok";
+  return full ? { status, alertHours: hours, unconfirmedCount: stuck, oldestAttemptAt: oldest == null ? null : new Date(oldest).toISOString() } : { status };
+}
 const TRANSIENT_CHARGE_RE = /transaction expired|validBefore|timed? ?out|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|fetch failed|socket hang up|\b(?:429|502|503|504)\b|rate.?limit|temporarily unavailable|UND_ERR/i;
 /** True when the failed charge looks like RPC/network trouble rather than a refused transfer. */
 export function isTransientChargeError(err) {
@@ -1818,16 +1854,25 @@ export function createMppSubscriptions({
     } catch { return get(subId); }
   }
 
+  /** The subscriptionRenewals word, read from the mirror (re-read in the
+   *  background like listActive). */
+  function renewalsStatus({ full = false, env = process.env, at = now() } = {}) {
+    refreshMirror();
+    return renewalsWord([...cache.values()], { hours: renewalUnconfirmedAlertHours(env), at, full });
+  }
+
   async function status() {
     await warm();
     return {
       enabled: true, recipient, currency, chainId: TEMPO_MAINNET_CHAIN_ID,
       periodSeconds: PERIOD_MS / 1000,
+      renewals: renewalsWord([...cache.values()], { hours: renewalUnconfirmedAlertHours(), at: now(), full: true }),
       subs: [...cache.values()].map((rec) => ({
         ...publicView(rec),
         email: rec.email ? `${rec.email.slice(0, 2)}***` : null,
         chargeFailures: rec.chargeFailures || 0, lastChargeError: rec.lastChargeError || null,
         nextChargeAttemptAt: rec.nextChargeAttemptAt || null,
+        unconfirmedChargeAt: rec.unconfirmedCharge?.at || null,
         accessKeyAddress: rec.accessKeyAddress,
       })),
     };
@@ -1835,7 +1880,7 @@ export function createMppSubscriptions({
 
   return {
     offerInfo, mintOffer, activateFromCredential, refreshStatus, cancel, isCanarySub, sweepStaleCanaries,
-    listActive, get, getFresh, isMine, status, warm, warmSync, refreshMirror, manageToken, manageTokenOk, publicView,
+    listActive, get, getFresh, isMine, status, renewalsStatus, warm, warmSync, refreshMirror, manageToken, manageTokenOk, publicView,
     ready: () => ready, flush: () => kv.flush(),
     _store: kv, _subStore: subStore, _method: method,
     _feePayer: feePayer, _feePayerPolicy: feePayer ? subscriptionFeePayerPolicy() : null,

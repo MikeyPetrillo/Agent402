@@ -156,6 +156,64 @@ const upstream = `http://127.0.0.1:${stub.address().port}`;
   }
 }
 
+// ---- the installed selector prices by the challenge's version -------------------
+// A version 2 challenge whose accept names only maxAmountRequired carries no
+// price for the v2 signer: the selector the wallet installs refuses it before
+// the signer runs. A spy on the stock signer counts every signature.
+{
+  const { ExactEvmScheme } = await import("@x402/evm/exact/client");
+  const { generatePrivateKey } = await import("viem/accounts");
+  const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+  const sent = [];
+  let accept = null;
+  const seller = createServer((req, res) => {
+    req.resume();
+    const sig = req.headers["payment-signature"] || req.headers["x-payment"];
+    if (sig) { sent.push(sig); res.writeHead(200, { "content-type": "application/json" }); return res.end("{}"); }
+    const doc = { x402Version: 2, resource: { url: "http://127.0.0.1/v1/x" }, accepts: [accept] };
+    res.writeHead(402, { "content-type": "application/json", "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(doc)).toString("base64") }); res.end("{}");
+  });
+  await new Promise((r) => seller.listen(0, "127.0.0.1", r));
+  const url = `http://127.0.0.1:${seller.address().port}/v1/x`;
+  const base = { scheme: "exact", network: "eip155:8453", asset: BASE_USDC, payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 60, extra: { name: "USD Coin", version: "2" } };
+  const { UptoEvmScheme } = await import("@x402/evm/upto/client");
+  const orig = ExactEvmScheme.prototype.createPaymentPayload, origUpto = UptoEvmScheme.prototype.createPaymentPayload;
+  let signerRuns = 0;
+  ExactEvmScheme.prototype.createPaymentPayload = function (...a) { signerRuns++; return orig.apply(this, a); };
+  UptoEvmScheme.prototype.createPaymentPayload = function (...a) { signerRuns++; return origUpto.apply(this, a); };
+  // A loopback RPC that reports a full Permit2 allowance, so the wallet builds
+  // the client that prefers upto; the unreachable one builds the exact-only client.
+  const rpc = createServer((req, res) => {
+    let body = ""; req.on("data", (d) => (body += d));
+    req.on("end", () => {
+      const one = (m) => ({ jsonrpc: "2.0", id: m.id, result: m.method === "eth_chainId" ? "0x2105" : "0x" + "f".repeat(64) });
+      let msg; try { msg = JSON.parse(body); } catch { msg = {}; }
+      res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(Array.isArray(msg) ? msg.map(one) : one(msg)));
+    });
+  });
+  await new Promise((r) => rpc.listen(0, "127.0.0.1", r));
+  const RPCS = { exact: "http://127.0.0.1:9", upto: `http://127.0.0.1:${rpc.address().port}` };
+  const pay = async (baseRpc) => { const logs = []; const pf = await resolvePayFetch({ walletKey: generatePrivateKey(), baseRpc }, (m) => logs.push(m)); try { await pf(url); return { err: null, logs }; } catch (e) { return { err: String(e.message), logs }; } };
+  try {
+    for (const [path, baseRpc] of Object.entries(RPCS)) {
+      const runs0 = signerRuns, sent0 = sent.length;
+      const scheme = path === "upto" ? "upto" : "exact";
+      const extra = path === "upto" ? { ...base.extra, facilitatorAddress: "0x000000000000000000000000000000000000bEEF" } : base.extra;
+      accept = { ...base, scheme, extra, amount: "1000" };
+      const good = await pay(baseRpc);
+      ok(good.err === null && signerRuns === runs0 + 1 && sent.length === sent0 + 1 && good.logs.some((m) => (path === "upto" ? /paying actual usage/ : /paying exact|per-request quote/).test(m)), `control (${path} client): a version 2 accept naming amount is signed and sent`);
+      accept = { ...base, scheme, extra, maxAmountRequired: "1000" };
+      const { err } = await pay(baseRpc);
+      ok(/quote unreadable exceeds the per-call ceiling/.test(err || "") && signerRuns === runs0 + 1 && sent.length === sent0 + 1, `${path} client: a version 2 accept naming only maxAmountRequired is refused by the selector before the signer runs (${err}; signer runs after the control ${signerRuns - runs0 - 1})`);
+    }
+  } finally {
+    ExactEvmScheme.prototype.createPaymentPayload = orig;
+    UptoEvmScheme.prototype.createPaymentPayload = origUpto;
+    seller.close();
+    rpc.close();
+  }
+}
+
 // ---- models.js ------------------------------------------------------------
 {
   {
