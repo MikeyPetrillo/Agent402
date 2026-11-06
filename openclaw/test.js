@@ -117,6 +117,14 @@ const upstream = `http://127.0.0.1:${stub.address().port}`;
     let ev1 = null; try { selectAccept([v1], { maxUsd: 1, x402Version: 1 }); } catch (e) { ev1 = String(e.message); }
     ok(/\$3 exceeds/.test(ev1 || ""), `a v1 accept is priced from maxAmountRequired (got ${ev1})`);
   }
+  // A seller asking for an authorization valid past a day is never signed.
+  {
+    const long = { scheme: "exact", network: "eip155:8453", amount: "1000", asset: BASE_USDC, maxTimeoutSeconds: 10 * 365 * 24 * 3600 };
+    const day = { ...long, maxTimeoutSeconds: 24 * 3600 };
+    let el = null; try { selectAccept([long]); } catch (e) { el = String(e.message); }
+    ok(/more than 86400 seconds/.test(el || ""), `an accept valid for ten years is refused before signing, with no ceiling set (got ${el})`);
+    ok(selectAccept([long, day], { maxUsd: 1 }) === day && selectAccept([day]) === day, "a day is a candidate, and a long accept beside it is skipped");
+  }
   ok(uptoReady(PERMIT2_READY_MIN) && uptoReady("115792089237316195423570985008687907853269984665640564039457584007913129639935") && !uptoReady(0n) && !uptoReady(999n) && !uptoReady("garbage"), "uptoReady: a max-uint (or any >= 1M USDC) Permit2 allowance counts; dust, zero and junk do not");
 }
 
@@ -147,6 +155,11 @@ const upstream = `http://127.0.0.1:${stub.address().port}`;
     ok(values.length === 1 && /signed amount \(500000000\) differs/.test(err || ""), `a payload that signs more than the priced amount is not sent (${err})`);
     const errOff = await pay({ maxPerCallUsd: "off", allowUncappedPayments: true });
     ok(values.length === 1 && /differs/.test(errOff || ""), "even with no ceiling, a payload that signs another amount than the accept is not sent");
+    // A signer that writes its own long validBefore (whatever the accept's
+    // window) is caught on what it signed, before the payload is sent.
+    ExactEvmScheme.prototype.createPaymentPayload = async function (v, r, ctx) { return orig.call(this, v, { ...r, maxTimeoutSeconds: 10 * 365 * 24 * 3600 }, ctx); };
+    const errLong = await pay({});
+    ok(values.length === 1 && /86400-second ceiling/.test(errLong || ""), `a payload signed for ten years is not sent (${errLong})`);
     const logs = [];
     await resolvePayFetch({ walletKey: generatePrivateKey(), baseRpc: "http://127.0.0.1:9", maxPerCallUsd: "off" }, (m) => logs.push(m));
     ok(logs.some((m) => /allowUncappedPayments/.test(m)), "off without the acknowledgment says why the ceiling stays");
@@ -301,6 +314,18 @@ await p.close();
   const j2 = await r2.json();
   ok(r2.status === 402 && j2.reason === "insufficient", "the gateway's own 402 (insufficient credits) passes through unchanged");
   await d.close();
+}
+
+// ---- proxy: a thrown fetch error never echoes the credits key ------------------
+{
+  const secret = "a402_" + "ECHOSENTINEL" + "z".repeat(20);
+  const lines = [];
+  const thrower = async (url) => { if (String(url).endsWith("/v1/models")) return fetch(url); throw new Error(`connect failed with authorization: Bearer ${secret}`); };
+  const e = await startProxy({ upstream, creditsKey: secret, fetch: thrower, port: 0, log: (m) => lines.push(m) });
+  const r = await fetch(`${e.baseUrl}/v1/chat/completions`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ messages: [] }) });
+  const raw = await r.text();
+  ok(r.status === 502 && /\[redacted\]/.test(raw) && !raw.includes("ECHOSENTINEL") && !lines.join("\n").includes("ECHOSENTINEL"), `a fetch error quoting the credits key is redacted in the 502 and the log (${raw.slice(0, 160)})`);
+  await e.close();
 }
 
 // ---- proxy: x402 wallet mode via injected payFetch --------------------------

@@ -630,17 +630,17 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
   const { privateKeyToAccount } = await import("viem/accounts");
   const account = privateKeyToAccount("0x" + "33".repeat(32));
   const DAY = 24 * 60 * 60 * 1000;
-  const offer = (amount) => Buffer.from(JSON.stringify({
+  const offer = (amount, maxTimeoutSeconds = 300) => Buffer.from(JSON.stringify({
     x402Version: 2,
     resource: { url: "https://seller.example/api/thing", description: "thing", mimeType: "application/json" },
-    accepts: [{ scheme: "exact", network: "eip155:8453", asset: BASE_USDC, amount, payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } }],
+    accepts: [{ scheme: "exact", network: "eip155:8453", asset: BASE_USDC, amount, payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds, extra: { name: "USD Coin", version: "2" } }],
   })).toString("base64");
   // mode: "500" answers a signed request with HTTP 500, "drop" throws as a
   // dropped connection would, "ok" serves it; "unpaid500" answers the unpaid
   // request itself with 500 (no 402, so nothing is ever signed).
   const seller = () => {
-    const st = { mode: "500", amount: "10000", paidAmount: null, signed: [] };
-    const answer402 = (amount = st.amount) => new Response("{}", { status: 402, headers: { "content-type": "application/json", "payment-required": offer(amount) } });
+    const st = { mode: "500", amount: "10000", paidAmount: null, signed: [], validity: 300 };
+    const answer402 = (amount = st.amount) => new Response("{}", { status: 402, headers: { "content-type": "application/json", "payment-required": offer(amount, st.validity) } });
     const inner = async (req) => {
       const sig = req.headers.get("payment-signature");
       if (!sig) return st.mode === "unpaid500" ? new Response(JSON.stringify({ error: "down" }), { status: 500 }) : answer402(st.paidAmount ?? st.amount);
@@ -711,6 +711,53 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     st.mode = "500"; await callErr(c);
     const sum = c.spendingSummary();
     ok(sum.dailyUsd === 0.01 && sum.calls === 1 && sum.heldUsd === 0.01 && sum.heldCalls === 1 && sum.heldByHost["seller.example"] === 0.01, `spendingSummary keeps settled and held apart (${JSON.stringify(sum)})`);
+  }
+
+  // A seller that asks for an authorization valid for ten years is refused
+  // before anything is signed, so no hold can outlive the client's ceiling;
+  // a day (the ceiling) is signed. Without an x402Client the payload is not
+  // visible, and the hold is the 24h window from the send.
+  {
+    const { MAX_VALIDITY_SECONDS, signedValidUntilMs, HOLD_SLACK_MS, GATEWAY_MAX_TIMEOUT_SECONDS } = await import("./index.js");
+    const { guardSignedAmount } = await import("./known-assets.js");
+    ok(MAX_VALIDITY_SECONDS === 24 * 3600, "the validity ceiling is a day");
+    const TEN_YEARS = 10 * 365 * 24 * 3600;
+    for (const mode of ["500", "ok"]) {
+      const { c, st } = build({ dailyLimitUsd: 1 });
+      st.validity = TEN_YEARS; st.mode = mode;
+      const e = await callErr(c);
+      ok(e?.name === "SpendingLimitError" && e.atSigning === true && st.signed.length === 0 && c._spend.log.length === 0 && /86400/.test(e.message) && /nothing was signed/.test(e.message), `seller answering ${mode}: an accept valid for ten years is refused unsigned and holds nothing (${e?.message?.slice(0, 160)})`);
+    }
+    {
+      const { c, st } = build({});
+      st.validity = TEN_YEARS;
+      const e = await callErr(c);
+      ok(e?.name === "SpendingLimitError" && st.signed.length === 0, `with no cap set, the validity ceiling still refuses a ten-year accept (${e?.name})`);
+      st.validity = MAX_VALIDITY_SECONDS; st.mode = "ok";
+      await c.call("thing", {});
+      ok(st.signed.length === 1 && Number(st.signed[0].validBefore) - Math.floor(realNow() / 1000) <= MAX_VALIDITY_SECONDS + 5, "control: an accept valid for exactly a day is signed and paid");
+    }
+    {
+      const { c, st } = build({ guard: false, dailyLimitUsd: 0.015 });
+      st.validity = TEN_YEARS;
+      await at(0, () => callErr(c));
+      ok(st.signed.length === 1 && (await at(DAY - 60000, () => c.spendingSummary().heldUsd)) === 0.01 && (await at(DAY + 60000, () => c.spendingSummary().heldUsd)) === 0, "no x402Client: a payment the client cannot read is held for the 24h window, then released");
+    }
+    const now = realNow();
+    const tenYearsOn = { payload: { authorization: { validBefore: String(Math.floor(now / 1000) + TEN_YEARS) } } };
+    ok(signedValidUntilMs(tenYearsOn, { nowMs: now }) === now + MAX_VALIDITY_SECONDS * 1000 + HOLD_SLACK_MS, "signedValidUntilMs never holds past the ceiling after the send");
+    ok(signedValidUntilMs(tenYearsOn, { nowMs: now, maxSeconds: GATEWAY_MAX_TIMEOUT_SECONDS }) === now + GATEWAY_MAX_TIMEOUT_SECONDS * 1000 + HOLD_SLACK_MS, "a batched payment's hold is capped at the batched ceiling");
+    const fiveMin = { payload: { permit2Authorization: { deadline: String(Math.floor(now / 1000) + 300) } } };
+    ok(signedValidUntilMs(fiveMin, { nowMs: now }) === (Math.floor(now / 1000) + 300) * 1000 + HOLD_SLACK_MS, "a short deadline is held to the deadline plus the slack");
+    // A payload signed past the ceiling (a scheme that ignores the accept's
+    // window) is refused after signing, before it is sent.
+    let hook = null;
+    guardSignedAmount({ onAfterPaymentCreation: (h) => { hook = h; } });
+    const req = { scheme: "exact", network: "eip155:8453", asset: BASE_USDC, amount: "1000", maxTimeoutSeconds: 300 };
+    const sent = (validBefore) => hook({ paymentRequired: { x402Version: 2 }, selectedRequirements: req, paymentPayload: { payload: { authorization: { value: "1000", validBefore: String(validBefore) } } } }).then(() => null, (e) => e);
+    const late = await sent(Math.floor(Date.now() / 1000) + TEN_YEARS);
+    ok(late && /not sent/.test(late.message) && /86400-second ceiling/.test(late.message), `a payload signed for ten years is refused before it is sent (${late?.message})`);
+    ok(await sent(Math.floor(Date.now() / 1000) + 300) === null, "control: a payload signed for five minutes is sent");
   }
 
   // A hold ends only when its authorization can no longer settle AND the

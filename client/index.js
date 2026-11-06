@@ -19,8 +19,8 @@
 //   const a = new Agent402({ fetch: payFetch });
 import { createHash, randomBytes } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { quoteOf, guardSigning, networkIdsOf, acceptUsd } from "./known-assets.js";
-export { KNOWN_ASSETS, NETWORK_NAMES, knownAsset, acceptUsd, networkIdsOf } from "./known-assets.js";
+import { quoteOf, guardSigning, networkIdsOf, acceptUsd, signedExpirySeconds, MAX_VALIDITY_SECONDS } from "./known-assets.js";
+export { KNOWN_ASSETS, NETWORK_NAMES, knownAsset, acceptUsd, networkIdsOf, MAX_VALIDITY_SECONDS } from "./known-assets.js";
 import { distrustFetch } from "./tls-distrust.js";
 export { distrustFetch, distrustDispatcher, distrustCheckServerIdentity, DISTRUSTED_SPKI_SHA256 } from "./tls-distrust.js";
 export { resetRetryFetch, isConnectionReset } from "./reset-retry.js";
@@ -32,7 +32,7 @@ export { AsyncJobPendingError } from "./async-job.js";
 // `User-Agent: agent402-client/<version>` - a standard header, no extra
 // network calls - so a seller can attribute traffic (and settled payments)
 // to this SDK. Product token only; nothing about the caller rides along.
-const VERSION = "0.8.23";
+const VERSION = "0.8.24";
 const USER_AGENT = `agent402-client/${VERSION}`;
 // A package built on this SDK (an adapter) names itself first: its own
 // product token, then this one. Anything that is not one well-formed token
@@ -119,13 +119,15 @@ export const HOLD_SLACK_MS = 10 * 60 * 1000;
 
 /** When a signed payment payload can no longer settle, in ms since the epoch
  *  plus HOLD_SLACK_MS: an EIP-3009 `authorization.validBefore` or a Permit2
- *  `deadline`, in seconds. null when the payload names no expiry this reads
- *  (a Solana transaction, an unknown scheme). */
-export function signedValidUntilMs(paymentPayload) {
-  const p = paymentPayload?.payload;
-  const v = p?.authorization?.validBefore ?? p?.permit2Authorization?.deadline;
-  if (v == null || !/^\d{1,15}$/.test(String(v))) return null;
-  return Number(v) * 1000 + HOLD_SLACK_MS;
+ *  `deadline`, in seconds, never later than `maxSeconds` after `nowMs` (the
+ *  longest window this client signs: MAX_VALIDITY_SECONDS, or
+ *  GATEWAY_MAX_TIMEOUT_SECONDS for a batched payment), so no hold outlives
+ *  the ceiling a payload must pass to be sent. null when the payload names no
+ *  expiry this reads (a Solana transaction, an unknown scheme). */
+export function signedValidUntilMs(paymentPayload, { maxSeconds = MAX_VALIDITY_SECONDS, nowMs = Date.now() } = {}) {
+  const v = signedExpirySeconds(paymentPayload);
+  if (v == null || !Number.isFinite(v)) return null;
+  return Math.min(v * 1000, nowMs + maxSeconds * 1000) + HOLD_SLACK_MS;
 }
 
 /** A spend-log entry the caps still count at `now`: anything recorded inside
@@ -688,8 +690,10 @@ export class Agent402 {
             const d = ctx.refusal;
             throw new SpendingLimitError(d.reason === "unknown-asset"
               ? `refusing to pay for "${slug}" - no payment option it asked to sign is in a known asset, so none can be priced`
-              : d.reason === "signed-amount"
+              : d.reason === "signed-amount" || d.reason === "signed-validity"
               ? `refusing to pay for "${slug}" - ${d.detail}, so the payment was not sent`
+              : d.reason === "validity"
+              ? `refusing to pay for "${slug}" - ${d.detail}, so nothing was signed`
               : `refusing to pay $${d.priceUsd} for "${slug}" - the payment it asked to sign is over ${d.limit || "the cap"} ($${d.allowanceUsd} left to sign)`,
             { limit: d.limit || "signing", slug, priceUsd: d.priceUsd, cap: d.allowanceUsd, atSigning: true, cause: e, ...(e?.paid === "unknown" ? { paid: "unknown", heldUsd: e.heldUsd } : {}) });
           }
@@ -801,7 +805,7 @@ export class Agent402 {
     // claim on the deposit until its validBefore whatever the seller answers
     // (a refusal, a failure, a redirect, a job still running), so its signed
     // amount is held against the caps from the first send.
-    const sent = [{ usd: acceptedUsd, until: signedValidUntilMs(payload) }];
+    const sent = [{ usd: acceptedUsd, until: signedValidUntilMs(payload, { maxSeconds: GATEWAY_MAX_TIMEOUT_SECONDS }) }];
     const heldUsd = this._spendHold(reservation, sent);
     const paidHeaders = { "PAYMENT-SIGNATURE": header, ...asyncHeaders };
     let r;

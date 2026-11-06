@@ -187,7 +187,7 @@ async function main() {
     const key = resolveCreditsKey();
     const walletPk = resolveWalletKey();
     out(`upstream: ${upstream}`);
-    out(`credits key: ${key ? `present (${key.slice(0, 8)}…)` : "none"}`);
+    out(`credits key: ${key ? "present" : "none"}`);
     out(`wallet key: ${walletPk ? "present" : "none"}`);
     if (walletPk) {
       try {

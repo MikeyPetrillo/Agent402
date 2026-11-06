@@ -507,7 +507,24 @@ export function createTollbooth(config = {}) {
       res.json = guard(realJson);
       res.send = guard(realSend);
       res.end = guard(realEnd);
+      const guardedEnd = res.end;
+      // The middleware calls next() for a request it does not price at all
+      // (@x402/express: a method or path outside its routes, OPTIONS on a
+      // wildcard), not only for a verified payment. This gate has already
+      // decided the request pays, so next() grants only with a payment on the
+      // request AND evidence the middleware took it: it buffered the response
+      // to settle after the handler (res.end wrapped), or set a settlement
+      // header already. Anything else is answered with the gate's 402.
+      const credentialSent = !!(req.headers["payment-signature"] || req.headers["x-payment"]);
+      const paymentTaken = () => res.end !== guardedEnd
+        || !!(res.getHeader("PAYMENT-RESPONSE") || res.getHeader("X-PAYMENT-RESPONSE"));
       const grant = () => {
+        if (!credentialSent || !paymentTaken()) {
+          if (granted || res.headersSent) return undefined;
+          restore();
+          res.setHeader("X-Tollbooth-Error", credentialSent ? "x402-payment-not-taken" : "x402-route-not-priced");
+          return send402();
+        }
         granted = true;
         intercepting = false;
         incr(viaMpp ? "mppPaid" : "x402Paid");

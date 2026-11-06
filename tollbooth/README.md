@@ -211,6 +211,13 @@ What you get on every charged request:
   with the reference client - proven in the parent repo's CI by a real mppx
   purchase through this package.
 - **Proof-of-work first**, unchanged: a walletless agent always has a free path.
+- **Only a taken payment opens the gate.** The middleware calls `next()` for a
+  request it does not price (a method or path outside its routes, OPTIONS on a
+  wildcard). A charged request passes only when it carries a payment and the
+  middleware took it (it buffered the response to settle after the handler, or
+  set a settlement header); anything else gets the gate's 402. Price every
+  method you serve in the middleware's routes (`"/*"` covers every method
+  except OPTIONS).
 
 Set a stable `TOLLBOOTH_SECRET` (or `mppSecret`) so MPP challenge ids verify
 across workers - the same caveat as proof-of-work tokens.
