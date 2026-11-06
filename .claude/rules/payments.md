@@ -145,7 +145,8 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `INK_FACILITATOR_URL`, add `ink` to `PAYMENT_NETWORKS`, list `ink` in
   `FACILITATOR_PUBLIC_INDEX_CHAINS` when its facilitator publishes settlements, then move
   the entry from `GATED_RAILS` to `RAILS` (after Arc) with the static copy that types the
-  chain list (README, wiki, docs, adapter and MCP package text, a wiki page). The
+  chain list (README, wiki including the Self-Hosting Ink paragraph, docs, adapter and MCP
+  package text, a wiki page); no public doc names Ink before that move. The
   NODE_ENV=test `RAILS_TEST_GRADUATE=ink` seam rehearses that move
   (`scripts/test-ink-rail.js`, `scripts/test-ink-graduation.js`).
   `src/facilitator-gas.js` reads each listed facilitator's settlement signers (from
@@ -154,7 +155,9 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `scripts/test-tool-failure-monitor.js`). There is no extra Solana settle fallback by design: a
   Solana payment names the quoted facilitator's fee payer, and any other facilitator refuses it.
   `FACILITATOR_PUBLIC_INDEX_CHAINS` (`robinhood` and `ink` are the known values; unset = none;
-  any other value renders nothing and warns at boot) renders the /privacy paragraph (every field the index
+  any other value renders nothing and warns at boot; a listed chain renders only while the
+  final offer carries it, and one it leaves out is named in a boot warning,
+  `publicIndexUnofferedWarnings`) renders the /privacy paragraph (every field the index
   publishes, its per-seller payer pages, permanence, where it is processed), scopes the no-sale
   line to that list, adds the /terms pointer, `payment.dataHandling.publicSettlementIndex` on
   `/.well-known/x402`, a clause on the listed chains' llms.txt lines and a row on their chain
