@@ -147,14 +147,21 @@ for (const [label, opts] of [
     } else if (opts.networks !== "base") check(b.log.join("").includes("INK_FACILITATOR_URL is unset - Ink is not configured"), `${label}: the boot says why Ink is not offered`);
     if (opts.extraEnv?.FACILITATOR_PUBLIC_INDEX_CHAINS) check(b.log.join("").includes("FACILITATOR_PUBLIC_INDEX_CHAINS lists ink but Ink is not offered"), `${label}: the boot warns that the listed public-index chain is not offered`);
     if (b.up && opts.caip2Drop) {
-      // An Ink primary is still the configured primary (named as such on the
-      // manifest, /api/pricing and /api/rails): what the guard owes is that
-      // nothing offers or advertises it as a network a buyer can pay on.
+      // A dropped Ink primary is not named as the primary anywhere public:
+      // the manifest, /api/pricing and /api/rails name the first offered
+      // network (base), and the boot says why, naming the variable.
       const manifest = JSON.parse((await b.get("/.well-known/x402")).text);
       const offered = manifest?.payment?.x402?.networks || [];
       check(offered.length > 0 && !offered.some((n) => n === "ink" || n === INK), `${label}: the manifest's offered networks leave Ink out (${offered.join(",")})`);
-      const inkRail = (JSON.parse((await b.get("/api/rails")).text)?.rails || []).find((r) => r.caip2 === INK);
-      check(!inkRail || inkRail.offered === false, `${label}: /api/rails does not offer eip155:57073 (${JSON.stringify(inkRail)})`);
+      check(manifest?.payment?.x402?.primaryNetwork === "base", `${label}: the manifest's primaryNetwork is the first offered network (${manifest?.payment?.x402?.primaryNetwork})`);
+      const pricingText = (await b.get("/api/pricing")).text;
+      const pay = JSON.parse(pricingText)?.payment || {};
+      check(pay.network === "base" && Array.isArray(pay.networks) && !pay.networks.includes("ink") && !/"ink"|eip155:57073/.test(pricingText), `${label}: /api/pricing names base as the network and nothing names Ink (${pay.network}; ${JSON.stringify(pay.networks)})`);
+      const railsBody = JSON.parse((await b.get("/api/rails")).text);
+      const inkRail = (railsBody?.rails || []).find((r) => r.caip2 === INK);
+      check(railsBody?.primary === "base" && (!inkRail || inkRail.offered === false), `${label}: /api/rails names base as the primary and does not offer eip155:57073 (${railsBody?.primary}; ${JSON.stringify(inkRail)})`);
+      const warned = b.log.join("").split("\n").filter((l) => l.includes("NETWORK is `ink` but `ink` is not offered"));
+      check(warned.length === 1 && warned[0].includes("INK_FACILITATOR_URL") && warned[0].includes("name `base` as the primary network"), `${label}: one boot warning names the misconfiguration by variable (${warned.length})`);
       const byNet = Object.keys(manifest?.settlementFacilitators?.byNetwork || {}).sort();
       check(JSON.stringify(byNet) === '["base","eip155:8453"]', `${label}: the manifest's facilitator map names no Ink (${byNet.join(",")})`);
     } else if (b.up) {

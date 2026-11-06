@@ -15,7 +15,7 @@ import { onGatedRailOffered } from "./gated-rails.js";
 // configured ones minus any gated rail that is not in the live offer.
 // Operator views read the full configured list (enabledNetworks) so a
 // dropped rail stays visible there.
-import { publicNetworks, publicPremiumUsdByNetwork } from "./public-networks.js";
+import { publicNetworks, publicPremiumUsdByNetwork, publicPrimaryNetwork } from "./public-networks.js";
 // Railway's egress has NO working IPv6 (every AAAA is ENETUNREACH). Node's
 // happy-eyeballs races the IPv6 address on dual-stack upstreams and fails ~15% of
 // the time (UND_ERR_SOCKET / "could not connect"). Force IPv4 process-wide for the
@@ -6722,7 +6722,7 @@ app.get("/docs/:slug", (req, res) => {
 // Rebuilt once more when a gated rail (src/gated-rails.js) joins the live
 // offer, so its chain is named only after the boot offer kept it.
 const buildManifest = () => serviceManifest({
-  baseUrl: BASE_URL, network: NETWORK, networks: publicNetworks(),
+  baseUrl: BASE_URL, network: publicPrimaryNetwork(NETWORK), networks: publicNetworks(),
   wallet: WALLET_ADDRESS, walletName: WALLET_ENS, catalog: CATALOG,
   payToByNetwork: Object.fromEntries([
     ["evm", WALLET_ADDRESS], ["solana", (process.env.SOLANA_WALLET_ADDRESS || "").trim()],
@@ -6874,6 +6874,10 @@ app.get("/api/rails", (_req, res) => {
   res.set("Cache-Control", "no-store");
   res.json({
     asOf: new Date().toISOString(),
+    // The primary network buyers are pointed at: the configured one while it
+    // is offered, else the first offered one (a dropped primary stays listed
+    // below as a configured rail that is not offered).
+    primary: publicPrimaryNetwork(NETWORK),
     configured: rails.length,
     offered: offered.length,
     degraded: rails.length - offered.length,
@@ -6918,7 +6922,7 @@ app.get("/acp/feed", (_req, res) =>
 );
 app.get("/acp/manifest", (_req, res) =>
   res.set("Cache-Control", "public, max-age=3600").json(acpManifest({
-    baseUrl: BASE_URL, network: NETWORK, networks: publicNetworks(),
+    baseUrl: BASE_URL, network: publicPrimaryNetwork(NETWORK), networks: publicNetworks(),
     wallet: WALLET_ADDRESS, toolCount: Object.keys(CATALOG).length, powDifficulty: POW_DIFFICULTY,
   }))
 );
@@ -9728,7 +9732,7 @@ app.get("/api/pricing", (_req, res) => {
         .map((t) => ({ ...t, note: V1_TIER_NOTES[t.path] || undefined })),
       docs: `${BASE_URL}/tools/category/llm`,
     },
-    payment: { protocol: "x402", version: 2, network: NETWORK, currency: "USDC", networks: publicNetworks(),
+    payment: { protocol: "x402", version: 2, network: publicPrimaryNetwork(NETWORK), currency: "USDC", networks: publicNetworks(),
       // The least one call costs on a chain with a price floor (its 402
       // quotes max(listed price, floor)); every other chain quotes the list.
       // Every offered chain with a floor (Robinhood's default, or one

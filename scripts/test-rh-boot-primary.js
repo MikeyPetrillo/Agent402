@@ -80,7 +80,7 @@ async function boot(setup, { firstHost = "127.0.0.1", extraEnv = {} } = {}) {
   };
   const stop = () => { proc.kill("SIGKILL"); for (const [s] of servers) s.close(); rmSync(tmp, { recursive: true, force: true }); };
   const get = async (path) => { const r = await fetch(`${B}${path}`); return r.text(); };
-  return { up, accepted, pay, st, log, stop, RH2, get };
+  return { up, accepted, pay, st, log, stop, RH2, get, base: B };
 }
 
 // 1. The first listed facilitator is down at boot.
@@ -118,6 +118,32 @@ async function boot(setup, { firstHost = "127.0.0.1", extraEnv = {} } = {}) {
     b.st.rh1.mode = "signature";
     status = b.accepted ? await b.pay() : 0;
     check(status === 402 && b.st.rh1.settles === 3 && b.st.rh2.settles === 1, `boot 2: a signature verdict in words -> 402, the second never asked (status ${status}, rh1 ${b.st.rh1.settles}, rh2 ${b.st.rh2.settles})`);
+  } finally { if (failed > before) console.log(b.log.join("").slice(-2500)); b.stop(); }
+}
+// 3. A Robinhood primary with no ROBINHOOD_FACILITATOR_URL: the drop guard
+// takes eip155:4663 off the offer, and no public surface names robinhood as
+// the primary or as a network to pay on; the boot names the variable once.
+// 4. The live control: with the URL set, the same primary is offered and named.
+for (const [label, urlSet] of [["boot 3 (robinhood primary, no URL)", false], ["boot 4 (robinhood primary, URL set)", true]]) {
+  const before = failed;
+  const b = await boot(() => {}, { extraEnv: { NETWORK: "robinhood", PAYMENT_NETWORKS: "robinhood,base", ...(urlSet ? {} : { ROBINHOOD_FACILITATOR_URL: "" }) } });
+  try {
+    check(b.up, `${label}: the paid-mode server booted`);
+    if (b.up) {
+      const r402 = await fetch(`${b.base}/api/demand-radar?limit=1`);
+      const h = r402.headers.get("payment-required");
+      const nets = h ? JSON.parse(Buffer.from(h, "base64").toString()).accepts.map((a) => a.network) : [];
+      const manifest = JSON.parse(await b.get("/.well-known/x402"));
+      const pricing = JSON.parse(await b.get("/api/pricing"))?.payment || {};
+      const rails = JSON.parse(await b.get("/api/rails"));
+      const warned = b.log.join("").split("\n").filter((l) => l.includes("NETWORK is `robinhood` but `robinhood` is not offered"));
+      const want = urlSet ? "robinhood" : "base";
+      check(r402.status === 402 && nets.includes("eip155:8453") && nets.includes(RH) === urlSet, `${label}: the 402 offers Base${urlSet ? " and" : ", not"} eip155:4663 (${r402.status} ${nets.join(",")})`);
+      check(manifest?.payment?.x402?.primaryNetwork === want && (manifest?.payment?.x402?.networks || []).includes("robinhood") === urlSet, `${label}: the manifest's primaryNetwork is ${want} (${manifest?.payment?.x402?.primaryNetwork}; ${JSON.stringify(manifest?.payment?.x402?.networks)})`);
+      check(pricing.network === want && (pricing.networks || []).includes("robinhood") === urlSet && ("robinhood" in (pricing.minPriceUsdByNetwork || {})) === urlSet, `${label}: /api/pricing names ${want} (${pricing.network}; ${JSON.stringify(pricing.networks)}; floors ${JSON.stringify(pricing.minPriceUsdByNetwork)})`);
+      check(rails?.primary === want, `${label}: /api/rails names ${want} as the primary (${rails?.primary})`);
+      check(warned.length === (urlSet ? 0 : 1) && (urlSet || warned[0].includes("ROBINHOOD_FACILITATOR_URL")), `${label}: ${urlSet ? "no" : "one"} primary-not-offered boot warning (${warned.length})`);
+    }
   } finally { if (failed > before) console.log(b.log.join("").slice(-2500)); b.stop(); }
 }
 console.log(`test-rh-boot-primary: ${failed ? `FAILED (${failed})` : "all passed"}`);
