@@ -6,6 +6,12 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-06 (Stellar settle confirmation)
+Payments:
+- A Stellar settle that the chain confirms is matched to the payment it
+  signed: asset, amount and transaction, and each confirmed transaction
+  serves one request.
+
 ### 2026-11-06 (router buyer price binding)
 Router:
 - The router's buyer signs exactly the price it checked against its caps, on
