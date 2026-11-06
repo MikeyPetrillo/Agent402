@@ -114,7 +114,7 @@ const CALLS = {
     I("x402 audit: asserted, pinned, needs the 402 and headers"),
   ],
   "src/transparency.js": [F("code host traffic API"), F("code host traffic API")],
-  "src/upstream-buyer-status.js": [F("Base RPC list")],
+  "src/upstream-buyer-status.js": [F("Base RPC list"), F("EVM buyer chain RPC from src/evm-rpcs.js")],
   "src/worker-client.js": [F("render worker from configuration")],
   "src/x402-buyer.js": [
     I("seller bare leg: reqInit carries the pinned dispatcher, redirect manual and the timeout", { t: "init", g: "init" }),
