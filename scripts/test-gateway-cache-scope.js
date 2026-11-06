@@ -18,6 +18,8 @@
 //   - an authorization the replay guard holds (settled, or in flight) reads no
 //     scope, through the guard's own key and store (local and a shared-store
 //     stand-in), and the read claims nothing;
+//   - a body no payer holds an entry for runs no signature recovery (the
+//     presence marker the commit writes beside each entry);
 //   - server.js mounts the gate and commits deferred writes through the scope.
 // Offline: no facilitator, no upstream.
 //
@@ -27,7 +29,7 @@ import { readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import express from "express";
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
-import { gatewayCacheGate, scopedCacheKey, writerCacheScope, readerCacheScope, provenX402Signer } from "../src/gateway-cache-scope.js";
+import { gatewayCacheGate, scopedCacheKey, writerCacheScope, readerCacheScope, provenX402Signer, presenceCacheKey, commitGatewayCacheWrites, proofRecoveryCount } from "../src/gateway-cache-scope.js";
 import { carriesPaymentAttempt } from "../src/payment-attempt.js";
 import { stableStringify, promptCacheGetShared, promptCacheStore, EMBEDDINGS_PATH } from "../src/tools/llm-gateway-kit.js";
 import { ALLOWANCE_STATE } from "../src/allowance-state.js";
@@ -72,7 +74,10 @@ const paymentHeld = async (req) => {
 const notHeld = async () => false;
 // The reader then the writer on one request: what the gate and the route
 // binder's finish hook do in turn.
-const readThenWrite = async (req, env = {}) => { await readerCacheScope(req, { payTo: PAY_TO, paymentHeld: notHeld }); return writerCacheScope(req, null, env); };
+const readThenWrite = async (req, env = {}) => { await readerCacheScope(req, { payTo: PAY_TO, paymentHeld: notHeld }); return writerCacheScope(req, null, env, { payTo: PAY_TO }); };
+const W = (req, res = null, env = {}) => writerCacheScope(req, res, env, { payTo: PAY_TO });
+// What the binder's commit stores: the scoped entry and its presence marker.
+const storeFor = (scope, key, body = ANSWER) => { promptCacheStore(scopedCacheKey(key, scope), body); promptCacheStore(presenceCacheKey(key), { present: true }); };
 
 const alice = privateKeyToAccount(generatePrivateKey());
 const mallory = privateKeyToAccount(generatePrivateKey());
@@ -87,16 +92,19 @@ const baseKey = keyOfBody(BODY);
 // ---- writer --------------------------------------------------------------
 {
   const aliceReq = fakeReq({ "payment-signature": await signedHeader(alice) });
-  ok(writerCacheScope(fakeReq({ "payment-signature": await signedHeader(alice) }), null, {}) === null, "writer: an EVM payer the reader never proved on this request stores nothing");
+  ok((await W(fakeReq({ "payment-signature": await signedHeader(alice) }))) === `evm:${alice.address.toLowerCase()}`, "writer: with no read on the request (no entry for the body yet), the writer runs the reader's proof itself");
+  ok((await writerCacheScope(fakeReq({ "payment-signature": await signedHeader(alice, { to: OTHER_PAY_TO }) }), null, {}, { payTo: PAY_TO })) === null && (await writerCacheScope(fakeReq({ "payment-signature": await signedHeader(alice) }), null, {}, {})) === null,
+    "writer: a payment to another payee, or no payee configured, stores nothing");
+  ok((await W(fakeReq({ "payment-signature": await signedHeader(alice, { validBefore: now() - 1, validAfter: now() - 600 }) }))) === `evm:${alice.address.toLowerCase()}`, "writer: the validity window binds a read, not an entry (a long call settles near its end)");
   ok((await readThenWrite(aliceReq)) === `evm:${alice.address.toLowerCase()}`, "writer: a settled EVM x402 payment the reader proved stores under its signer");
-  ok(writerCacheScope(aliceReq, null, { FREE_MODE: "true" }) === null, "writer: FREE_MODE (nothing verified) stores nothing");
-  ok(writerCacheScope(aliceReq, { getHeader: (h) => (h === "X-Trial-Accepted" ? "true" : undefined) }, {}) === null, "writer: a trial answer stores nothing");
+  ok((await writerCacheScope(aliceReq, null, { FREE_MODE: "true" })) === null, "writer: FREE_MODE (nothing verified) stores nothing");
+  ok((await writerCacheScope(aliceReq, { getHeader: (h) => (h === "X-Trial-Accepted" ? "true" : undefined) }, {}, { payTo: PAY_TO })) === null, "writer: a trial answer stores nothing");
   const granted = fakeReq({ "payment-signature": await signedHeader(alice) }); granted[ALLOWANCE_STATE] = { state: "served" };
-  ok(writerCacheScope(granted, null, {}) === null, "writer: a first-call allowance grant (never settled) stores nothing");
-  ok(writerCacheScope(fakeReq({}, { creditsSettled: true, creditsKeyId: "k1" }), null, {}) === "credits:k1", "writer: a credits debit stores under its key id");
-  ok(writerCacheScope(fakeReq({}, { mppTempoCredential: true, tempoSettled: true, mppTempoSender: alice.address }), null, {}) === `tempo:${alice.address.toLowerCase()}`, "writer: a settled Tempo call stores under its verified sender");
-  ok(writerCacheScope(fakeReq({}, { mppTempoCredential: true, tempoSettled: true, mppTempoSender: null }), null, {}) === null, "writer: a Tempo call with no verified sender stores nothing");
-  ok(writerCacheScope(fakeReq({ "x-payment": b64({ x402Version: 2, accepted: { scheme: "exact", network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" }, payload: { transaction: "AAAA" } }) }), null, {}) === null, "writer: a non-EVM x402 payment (no signed payer before settle) stores nothing");
+  ok((await writerCacheScope(granted, null, {}, { payTo: PAY_TO })) === null, "writer: a first-call allowance grant (never settled) stores nothing");
+  ok((await writerCacheScope(fakeReq({}, { creditsSettled: true, creditsKeyId: "k1" }), null, {})) === "credits:k1", "writer: a credits debit stores under its key id");
+  ok((await writerCacheScope(fakeReq({}, { mppTempoCredential: true, tempoSettled: true, mppTempoSender: alice.address }), null, {})) === `tempo:${alice.address.toLowerCase()}`, "writer: a settled Tempo call stores under its verified sender");
+  ok((await writerCacheScope(fakeReq({}, { mppTempoCredential: true, tempoSettled: true, mppTempoSender: null }), null, {})) === null, "writer: a Tempo call with no verified sender stores nothing");
+  ok((await writerCacheScope(fakeReq({ "x-payment": b64({ x402Version: 2, accepted: { scheme: "exact", network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" }, payload: { transaction: "AAAA" } }) }), null, {}, { payTo: PAY_TO })) === null, "writer: a non-EVM x402 payment (no signed payer before settle) stores nothing");
   // Payers the facilitator verifies but the reader cannot prove: their entry
   // could never be read, so it is never stored (identityPayerOf names each).
   const v2 = JSON.parse(Buffer.from(await signedHeader(alice), "base64").toString());
@@ -111,9 +119,9 @@ const baseKey = keyOfBody(BODY);
   }
   ok(scopedCacheKey(baseKey, null) === null && scopedCacheKey(baseKey, "evm:a") !== scopedCacheKey(baseKey, "evm:b") && scopedCacheKey(baseKey, "evm:a") !== baseKey, "keys: no scope no key; two payers two keys; never the bare key");
   // Alice paid for BODY: the binder's commit, through the same functions.
-  promptCacheStore(scopedCacheKey(baseKey, await readThenWrite(aliceReq)), ANSWER);
-  promptCacheStore(scopedCacheKey(baseKey, "credits:k1"), ANSWER);
-  promptCacheStore(scopedCacheKey(baseKey, `tempo:${alice.address.toLowerCase()}`), ANSWER);
+  storeFor(await readThenWrite(aliceReq), baseKey);
+  storeFor("credits:k1", baseKey);
+  storeFor(`tempo:${alice.address.toLowerCase()}`, baseKey);
 }
 
 // A shared-store stand-in with the calls the replay guard makes.
@@ -176,6 +184,31 @@ try {
     "proof: with no replay-guard reader an x402 payment proves nothing");
   ok((await readerCacheScope(fakeReq({ "payment-signature": await signedHeader(alice) }), { payTo: PAY_TO, paymentHeld: async () => { throw new Error("store down"); } })) === null, "proof: a replay-guard read that throws proves nothing");
 
+  // ---- no entry for the body: no signature recovery before the paywall -------
+  {
+    const empty = { ...BODY, input: `${BODY.input} nobody paid for this` };
+    const header = await signedHeader(alice);
+    const before = proofRecoveryCount();
+    const r = await call({ "payment-signature": header }, empty);
+    ok(r.status === 402 && proofRecoveryCount() === before, `presence: a body no payer holds an entry for runs no recovery (${proofRecoveryCount() - before})`);
+    const many = proofRecoveryCount();
+    await Promise.all(Array.from({ length: 20 }, async (_, i) => call({ "payment-signature": await signedHeader(mallory) }, { ...empty, input: `${empty.input} ${i}` })));
+    ok(proofRecoveryCount() === many, "presence: twenty self-signed headers on fresh bodies run no recovery");
+    const withEntry = proofRecoveryCount();
+    const hit = await call({ "payment-signature": await signedHeader(alice) });
+    ok(hit.status === 200 && hit.cache === "hit" && proofRecoveryCount() === withEntry + 1, "presence: with an entry for the body, the payer's proof runs once and is a hit");
+    // The binder's commit writes the marker beside the scoped entry.
+    const committed = { ...BODY, input: `${BODY.input} committed` };
+    const req = fakeReq({ "payment-signature": await signedHeader(alice) });
+    await commitGatewayCacheWrites(req, null, [{ key: keyOfBody(committed), body: ANSWER }], { payTo: PAY_TO, store: promptCacheStore, env: {} });
+    ok((await promptCacheGetShared(presenceCacheKey(keyOfBody(committed))))?.present === true && (await promptCacheGetShared(scopedCacheKey(keyOfBody(committed), `evm:${alice.address.toLowerCase()}`))) != null,
+      "presence: the commit stores the scoped entry and its marker");
+    ok((await call({ "payment-signature": await signedHeader(alice) }, committed)).cache === "hit", "presence: a committed entry reads back for its payer");
+    const none = { ...BODY, input: `${BODY.input} unproven` };
+    await commitGatewayCacheWrites(fakeReq({ "x-payment": b64({ x402Version: 1, scheme: "exact", network: "base", payload: JSON.parse(Buffer.from(await signedHeader(alice), "base64").toString()).payload }) }), null, [{ key: keyOfBody(none), body: ANSWER }], { payTo: PAY_TO, store: promptCacheStore, env: {} });
+    ok((await promptCacheGetShared(presenceCacheKey(keyOfBody(none)))) == null, "presence: a payer the writer cannot prove leaves no marker either");
+  }
+
   // ---- an authorization the replay guard holds reads no scope ---------------
   // The writer's request: the gate misses (a new body), then the guard claims
   // and settles it as the paywall path does, and the binder stores under it.
@@ -186,8 +219,8 @@ try {
     const verdict = await guard.begin(key);
     if (verdict !== "ok") return { verdict };
     await guard.settle(key);
-    const w = writerCacheScope(req, null, {});
-    if (store) promptCacheStore(scopedCacheKey(keyOfBody(body), w), ANSWER);
+    const w = await W(req);
+    if (store) await commitGatewayCacheWrites(req, null, [{ key: keyOfBody(body), body: ANSWER }], { payTo: PAY_TO, store: promptCacheStore, env: {} });
     return { verdict, scope, w };
   }
   for (const [label, fake] of [["local", null], ["shared", fakeRedis()]]) {
@@ -232,7 +265,7 @@ try {
   const gate = src.slice(src.indexOf("app.use(gatewayCacheGate({"), src.indexOf("app.use(gatewayCacheGate({") + 900);
   ok(/paymentHeld: async \(req\) => \{\s*const key = await paymentReplayKeyAsync\(req\);\s*return !key \|\| \(await replayGuard\.held\(key\)\) !== null;/.test(gate), "server.js gives the gate the replay guard's own key and store");
   ok(src.indexOf("const replayGuard = createReplayGuard();") > 0 && src.indexOf("const replayGuard = createReplayGuard();") < src.indexOf("app.use(gatewayCacheGate({"), "the replay guard the gate reads is the one the paywall path claims with");
-  ok(/const scope = deferred\.length \? writerCacheScope\(req, res\) : null;[\s\S]{0,200}scopedCacheKey\(w\.key, scope\);\s*if \(k\) promptCacheStore\(k, w\.body\)/.test(src), "the route binder commits deferred cache writes under the writer scope only");
+  ok(/const deferred = req\.__deferredCache \|\| \[\];\s*if \(deferred\.length\) commitGatewayCacheWrites\(req, res, deferred, \{ payTo: WALLET_ADDRESS, store: promptCacheStore \}\)/.test(src), "the route binder commits deferred cache writes through the writer scope, to the receiving wallet");
   ok(!/promptCacheStore\(w\.key, w\.body\)/.test(src), "no unscoped commit of a deferred write remains in server.js");
 }
 console.log(`\n${failed ? "FAILED" : "OK"}: ${pass} passed, ${failed} failed`);

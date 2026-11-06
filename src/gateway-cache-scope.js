@@ -24,8 +24,10 @@
 //   call served without settling (a trial, a first-call allowance grant)
 //   stores nothing.
 //
-//   reader (pre-paywall, before anything is verified): the same scope, proved
-//   on the request itself. A credits key or a Tempo sender is proved by its
+//   reader (pre-paywall, before anything is verified): first a payer-neutral
+//   presence marker the writer stores beside each entry, so a body nobody
+//   holds an entry for costs no signature recovery; then the same scope,
+//   proved on the request itself. A credits key or a Tempo sender is proved by its
 //   gate, which runs earlier. An x402 payment is proved here: it must be an
 //   x402 v2 EIP-3009 authorization to this server's receiving wallet, still
 //   inside its validity window, whose signature recovers to its own `from`
@@ -67,21 +69,51 @@ export function scopedCacheKey(key, scope) {
 const tempoScope = (sender) => (typeof sender === "string" && ADDR.test(sender) ? `tempo:${sender.toLowerCase()}` : null);
 const creditsScope = (keyId) => (typeof keyId === "string" && keyId ? `credits:${keyId}` : null);
 
-/** The scope of the payer a settled final 200 was paid by, or null. */
-export function writerCacheScope(req, res, env = process.env) {
+// The payer-neutral marker stored beside every scoped entry: "some payer
+// holds an answer for this body". The read checks it first, so a body nobody
+// has an entry for costs no signature recovery before the paywall. A scope
+// never reads it (scopes are "evm:", "tempo:" and "credits:").
+export function presenceCacheKey(key) {
+  if (!key) return null;
+  return createHash("sha256").update(`present\n${key}`).digest("hex");
+}
+const PRESENT = Object.freeze({ present: true });
+
+/** The scope of the payer a settled final 200 was paid by, or null. `payTo`
+ *  is the EVM receiving wallet (as for the reader). */
+export async function writerCacheScope(req, res, env = process.env, { payTo } = {}) {
   if (!req) return null;
   if (String(res?.getHeader?.("X-Trial-Accepted") || "") === "true") return null;
   if (allowanceServed(req)) return null;
   if (req.creditsSettled === true) return creditsScope(req.creditsKeyId);
   if (req.tempoSettled === true || req.mppTempoCredential === true) return req.tempoSettled === true ? tempoScope(req.mppTempoSender) : null;
   // identityPayerOf: the EVM signer the facilitator verified (null in
-  // FREE_MODE, where nothing is verified). Stored only under the scope the
-  // reader proved on this request (provenScopeOf), so the writer and the
-  // reader share one predicate.
+  // FREE_MODE, where nothing is verified). Stored only under a payer the
+  // reader's own proof names (provenX402Signer, without the validity window,
+  // which binds a read and not an entry): the scope the reader proved on this
+  // request, else the same proof run here. One predicate for both sides.
   const from = identityPayerOf(req, env);
   if (!from) return null;
   const scope = `evm:${String(from).toLowerCase()}`;
-  return provenScopeOf(req) === scope ? scope : null;
+  if (provenScopeOf(req) === scope) return scope;
+  const signer = await provenX402Signer(paymentHeaderOf(req), { payTo, anyTime: true });
+  return signer && `evm:${signer}` === scope ? scope : null;
+}
+
+/** The route binder's finish-hook commit of a settled 200's deferred cache
+ *  writes: each under the writer scope, with its presence marker. */
+export async function commitGatewayCacheWrites(req, res, deferred, { payTo, store, env = process.env } = {}) {
+  if (!Array.isArray(deferred) || !deferred.length) return;
+  const scope = await writerCacheScope(req, res, env, { payTo });
+  if (!scope) return;
+  for (const w of deferred) {
+    try {
+      const k = scopedCacheKey(w.key, scope);
+      if (!k) continue;
+      store(k, w.body);
+      store(presenceCacheKey(w.key), PRESENT);
+    } catch { /* cache is best-effort */ }
+  }
 }
 
 // The EVM scope the reader proved on a request, kept for the writer.
@@ -90,7 +122,10 @@ const provenScopeOf = (req) => (req && typeof req === "object" ? req[PROVEN_SCOP
 
 /** The EVM signer an x402 v2 exact authorization to `payTo` proves, or null.
  *  Never throws. */
-export async function provenX402Signer(headerValue, { payTo, nowSec = Math.floor(Date.now() / 1000) } = {}) {
+let proofRecoveries = 0;
+/** Signature recoveries run so far (a test reads it to prove when none ran). */
+export function proofRecoveryCount() { return proofRecoveries; }
+export async function provenX402Signer(headerValue, { payTo, nowSec = Math.floor(Date.now() / 1000), anyTime = false } = {}) {
   try {
     if (!payTo || !ADDR.test(payTo)) return null;
     const p = decodeB64Json(headerValue);
@@ -109,7 +144,8 @@ export async function provenX402Signer(headerValue, { payTo, nowSec = Math.floor
     if (!ADDR.test(String(from)) || !ADDR.test(String(to)) || !HEX32.test(String(nonce))) return null;
     if (![value, validAfter, validBefore].every((v) => UINT.test(String(v)))) return null;
     if (String(to).toLowerCase() !== payTo.toLowerCase()) return null;
-    if (BigInt(validBefore) <= BigInt(nowSec) || BigInt(validAfter) > BigInt(nowSec)) return null;
+    if (!anyTime && (BigInt(validBefore) <= BigInt(nowSec) || BigInt(validAfter) > BigInt(nowSec))) return null;
+    proofRecoveries++;
     const signer = await recoverTypedDataAddress({
       domain: { name, version, chainId: Number(m[1]), verifyingContract: accepted.asset },
       types: TRANSFER_WITH_AUTHORIZATION_TYPES,
@@ -154,7 +190,8 @@ export async function readerCacheScope(req, { payTo, nowSec, paymentHeld } = {})
  *  Tempo and Stripe gates and before the x402 paywall.
  *    keyOf(req)  the payer-neutral cache key of the body, or null (throws on
  *                an invalid body: the request then goes on unanswered here)
- *    get(key)    the stored answer under a scoped key, or null
+ *    get(key)    the stored answer under a scoped key (or a presence
+ *                marker, presenceCacheKey), or null
  *    payTo       the EVM receiving wallet an x402 proof must pay
  *    paymentHeld(req)  true when the replay guard holds this request's
  *                payment in flight or consumed (claims nothing) */
@@ -163,6 +200,9 @@ export function gatewayCacheGate({ carriesPaymentAttempt, keyOf, get, payTo, pay
     if (req.method !== "POST" || !carriesPaymentAttempt(req)) return next();
     try {
       let key = keyOf(req);
+      // No payer holds an answer for this body: nothing to prove, no
+      // signature recovery, straight on to the paywall.
+      if (key && !(await get(presenceCacheKey(key)))) key = null;
       // Scoped to the payer this request proves: an entry is read only by the
       // payer who paid for it. No proven payer, no read: the request goes on
       // to the paywall like any other.

@@ -96,7 +96,7 @@ import { mppFallbackStatus } from "./mpp-fallback.js";
 import { applyMeteredSettlement, meteredUsdOf } from "./gateway-meter.js";
 import { handlerInputOf, preValidateInput, withIgnoredParams } from "./handler-input.js";
 import { configureHowToCall, howToCall402Field, howToCallField } from "./how-to-call.js";
-import { gatewayCacheGate, scopedCacheKey, writerCacheScope } from "./gateway-cache-scope.js";
+import { gatewayCacheGate, commitGatewayCacheWrites } from "./gateway-cache-scope.js";
 import { startModelCatalogRefresh, modelCatalogWanted } from "./model-catalog.js";
 import { toolErrorFields } from "./tool-error-fields.js";
 import { shapeRefusal } from "./input-aliases.js";
@@ -11782,8 +11782,7 @@ for (const tool of ALL_KIT) {
         // Stored under the payer that settled it (src/gateway-cache-scope.js);
         // a call with no proven payer, or one served unsettled, stores nothing.
         const deferred = req.__deferredCache || [];
-        const scope = deferred.length ? writerCacheScope(req, res) : null;
-        for (const w of deferred) { try { const k = scopedCacheKey(w.key, scope); if (k) promptCacheStore(k, w.body); } catch { /* cache is best-effort */ } }
+        if (deferred.length) commitGatewayCacheWrites(req, res, deferred, { payTo: WALLET_ADDRESS, store: promptCacheStore }).catch(() => {});
       });
       // Response digest for the attest tool: sha256 of the exact bytes res.json
       // sends. Express serialises with JSON.stringify and the app sets no
