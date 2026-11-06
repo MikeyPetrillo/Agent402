@@ -60,6 +60,10 @@ const ok = (c, m) => { if (c) console.log(`ok - ${m}`); else { assertFail++; con
   calls = [];
   const r2 = await eftsSearchWith({ forms: "S-1" }, { getJson: reader([empty, empty, empty, empty, full]), pauseMs: 0, budget: null });
   ok(calls.length === 5 && r2.hits.hits.length === 0 && calls[4] !== calls[0] && /forms=10-K/.test(calls[4]), "a search empty on every read answers empty once a control query confirms the index is answering");
+  ok(calls[1] === calls[0] && calls[2] === calls[0] && calls[3] === `${calls[0]}&from=0`, "the last re-read asks the same search under another URL (explicit first-page offset)");
+  calls = [];
+  const rAlt = await eftsSearchWith({ forms: "S-1" }, { getJson: reader([empty, empty, empty, full]), pauseMs: 0, budget: null });
+  ok(calls.length === 4 && rAlt.hits.hits.length === 2, "hits under the other URL are the answer, with no control read (one URL answering empty)");
   calls = [];
   let dead = null;
   try { await eftsSearchWith({ forms: "S-1" }, { getJson: reader([empty, empty, empty, empty, empty]), pauseMs: 0, budget: null }); } catch (e) { dead = e; }
