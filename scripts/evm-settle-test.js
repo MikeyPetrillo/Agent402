@@ -8,7 +8,7 @@
 //
 // CHAIN must be "polygon" or "arbitrum". The server should already be booted
 // with PAYMENT_NETWORKS=<chain> so the buyer's only option is that chain.
-import { assertOwnPaidTarget } from "./lib/buyer-guard.js";
+import { assertOwnPaidTarget, capFromEnv, guardCappedSigning } from "./lib/buyer-guard.js";
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
 import { readFileSync } from "node:fs";
 import { privateKeyToAccount } from "viem/accounts";
@@ -74,6 +74,8 @@ if (bal === 0n) {
 //    ExactEvmScheme will sign a transferWithAuthorization for that network.
 const client = disableVendorSpendControls(new x402Client());
 registerExactEvmScheme(client, { signer: account });
+// One cheap call on the chain under test: nothing above SETTLE_TEST_MAX_USD.
+guardCappedSigning(client, { maxUsd: capFromEnv("SETTLE_TEST_MAX_USD", 0.01, { script: "evm-settle-test" }), networks: [cfg.caip2] });
 const payFetch = wrapFetchWithPayment(fetch, client);
 
 let res;

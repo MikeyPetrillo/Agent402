@@ -37,7 +37,7 @@ import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
 import { writeFileSync } from "node:fs";
 import { multipartBodyFrom } from "../src/openapi-request.js";
 import { openapiReader, resolveReplayableInput } from "./lib/replayable-example.js";
-import { assertOwnPaidTarget } from "./lib/buyer-guard.js";
+import { assertOwnPaidTarget, guardCappedSigning } from "./lib/buyer-guard.js";
 import { createHmac } from "node:crypto";
 import { slowPreferOf, paidCallHonoringSlowRoutes } from "./lib/slow-route-buy.js";
 
@@ -150,6 +150,8 @@ let client, http;
       import("viem/accounts"), import("@x402/evm/exact/client"),
     ]);
     registerExactEvmScheme(client, { signer: privateKeyToAccount(pk) });
+    // Base only, and no single payment above the per-tool cap.
+    guardCappedSigning(client, { maxUsd: TOOL_MAX_USD, networks: ["eip155:8453"] });
   }
 }
 

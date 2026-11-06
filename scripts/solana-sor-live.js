@@ -29,7 +29,7 @@ if (!ROUTE_ALLOWED.has(ROUTE)) { console.error(`refusing ROUTE=${JSON.stringify(
 const TASK = process.env.TASK || "api v1 exa search";
 const PARAMS = process.env.PARAMS ? JSON.parse(process.env.PARAMS) : { query: "bitcoin" };
 const EXPECT_TEXT = process.env.EXPECT_TEXT || "results";
-import { assertOwnPaidTarget } from "./lib/buyer-guard.js";
+import { assertOwnPaidTarget, capFromEnv, guardCappedSigning } from "./lib/buyer-guard.js";
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
 import { createHmac } from "node:crypto";
 const raw = (process.env.SOLANA_BURNER_KEY || "").trim();
@@ -66,7 +66,12 @@ const synthFetch = (input, init) => {
   if (t) req.headers.set("X-Heartbeat-Token", t);
   return fetch(req);
 };
-const pay = wrapFetchWithPayment(synthFetch, registerExactSvmScheme(disableVendorSpendControls(new x402Client()), { signer }));
+// Solana mainnet only, and nothing above the chosen route's price
+// (SOR_LIVE_MAX_USD overrides).
+const ROUTE_MAX_USD = { "/api/route/execute": 0.01, "/api/route/execute-plus": 0.05, "/api/route/execute-pro": 3.3 };
+const svmClient = registerExactSvmScheme(disableVendorSpendControls(new x402Client()), { signer });
+guardCappedSigning(svmClient, { maxUsd: capFromEnv("SOR_LIVE_MAX_USD", ROUTE_MAX_USD[ROUTE], { script: "solana-sor-live" }), networks: ["solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"] });
+const pay = wrapFetchWithPayment(synthFetch, svmClient);
 const url = `${TARGET}${ROUTE}`;
 if (new URL(url).origin !== new URL(TARGET).origin) { console.error("refusing: target origin changed"); process.exit(2); }
 const body = JSON.stringify({ task: TASK, include: "external", params: PARAMS });
