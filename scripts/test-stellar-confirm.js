@@ -16,6 +16,10 @@ const PAYER = "GBA2DDJ4KQXQCGNB7RUU5I2BK5SXROJFUNZV7EZ4XUS7RXFOXEPNY6O4";
 const PAYTO = "GDNJXCKW7ZM7GEEVP674TWPU26YJNBQ2FI4ZIPRKTPTNUEJMDHFJWWRL";
 const OTHER = "GCXKG6RN4ONIEPCMNFB732A436Z5PPNCLKINVBYFCLXQ2VCM7YKN2VCM";
 const T0 = Date.parse("2026-08-03T17:10:40Z");
+// USDC on pubnet: code USDC from its issuer. LOOKALIKE issues an asset whose
+// code also reads USDC.
+const USDC_ISSUER = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+const LOOKALIKE = "GBLOOKALIKEXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
 
 /** Build a Horizon stub. `plan` maps a URL fragment to a JSON body (or throws). */
 function horizon({ debits = [], tx = {}, txEffects = {}, failOn = null } = {}) {
@@ -52,17 +56,17 @@ function horizon({ debits = [], tx = {}, txEffects = {}, failOn = null } = {}) {
 // the dash. Keeping the fixture honest is what makes this suite mean anything.
 const OP_TO_TX = {};
 let opSeq = 1000;
-const debit = (hash, at, assetType = "credit_alphanum4") => {
+const debit = (hash, at, assetType = "credit_alphanum4", issuer = USDC_ISSUER) => {
   const opId = String(++opSeq);
   OP_TO_TX[opId] = hash;
   return {
-    type: "account_debited", asset_type: assetType, asset_code: "USDC",
+    type: "account_debited", asset_type: assetType, asset_code: "USDC", asset_issuer: issuer,
     amount: "0.0010000", created_at: at,
     id: `${opId}-0000000001`,
     _links: { operation: { href: `https://horizon.stellar.org/operations/${opId}` } },
   };
 };
-const credit = (acct) => ({ type: "account_credited", account: acct, amount: "0.0010000", asset_code: "USDC" });
+const credit = (acct, issuer = USDC_ISSUER) => ({ type: "account_credited", account: acct, amount: "0.0010000", asset_type: "credit_alphanum4", asset_code: "USDC", asset_issuer: issuer });
 
 const run = (opts, extra = {}) => confirmStellarTransfer({
   payer: PAYER, payTo: PAYTO, sinceMs: T0, waitMs: 0, stepMs: 1, fetchImpl: horizon(opts), ...extra,
@@ -251,7 +255,7 @@ const run = (opts, extra = {}) => confirmStellarTransfer({
   const fetchByHash = async (url) => {
     hits.push(String(url));
     if (url.endsWith(`/transactions/${H}`)) return { ok: true, json: async () => ({ hash: H, successful: true }) };
-    if (url.endsWith(`/transactions/${H}/effects?limit=50`)) return { ok: true, json: async () => ({ _embedded: { records: [{ type: "account_debited", account: "GPAYER", asset_code: "USDC", amount: "0.0010000" }, { type: "account_credited", account: PAYTO, asset_code: "USDC", amount: "0.0010000" }] } }) };
+    if (url.endsWith(`/transactions/${H}/effects?limit=50`)) return { ok: true, json: async () => ({ _embedded: { records: [{ type: "account_debited", account: "GPAYER", asset_type: "credit_alphanum4", asset_code: "USDC", asset_issuer: USDC_ISSUER, amount: "0.0010000" }, { type: "account_credited", account: PAYTO, asset_type: "credit_alphanum4", asset_code: "USDC", asset_issuer: USDC_ISSUER, amount: "0.0010000" }] } }) };
     return { ok: false, status: 404, json: async () => ({}) };
   };
   const byHash = await confirmStellarTransfer({ payer: null, payTo: PAYTO, sinceMs: Date.now(), txHash: H, fetchImpl: fetchByHash, waitMs: 10, stepMs: 1 });
@@ -431,5 +435,61 @@ const run = (opts, extra = {}) => confirmStellarTransfer({
   ok(/confirmStellarPayment\(\{\s*signed: await stellarSignedPaymentOf\(paymentPayload,/.test(src) && /claimTx/.test(src) && !/confirmStellarTransfer\(/.test(src), "src/payments.js confirms a Stellar settle with the request's signed payment and a transaction claim");
 }
 
+
+// ---- The refund lookup matches USDC by code AND issuer -----------------------
+// Anyone can issue a Stellar asset whose code reads "USDC". A credit in such a
+// look-alike, or an effect that names no issuer, is never proof of a payment.
+{
+  const { STELLAR_USDC_ISSUER, STELLAR_USDC_CODE, isStellarAsset } = await import("../src/stellar-confirm.js");
+  const sdk = await import("@stellar/stellar-sdk");
+  const { USDC_PUBNET_ADDRESS } = await import("@x402/stellar");
+  ok(STELLAR_USDC_ISSUER === USDC_ISSUER && STELLAR_USDC_CODE === "USDC", "the pinned asset is USDC from its issuer");
+  ok(new sdk.Asset(STELLAR_USDC_CODE, STELLAR_USDC_ISSUER).contractId(sdk.Networks.PUBLIC) === USDC_PUBNET_ADDRESS, "the pinned asset's contract is the USDC token our Stellar offers advertise");
+  const { readFileSync } = await import("node:fs");
+  const live = readFileSync(new URL("../src/revenue-live.js", import.meta.url), "utf8").match(/export const USDC_ISSUER = "([A-Z2-7]{56})"/)?.[1];
+  ok(live === STELLAR_USDC_ISSUER, "the revenue scan and the refund lookup pin the same issuer");
+  ok(isStellarAsset(credit(PAYTO)) && !isStellarAsset(credit(PAYTO, LOOKALIKE)) && !isStellarAsset({ ...credit(PAYTO), asset_issuer: undefined }) && !isStellarAsset({ ...credit(PAYTO), asset_type: "native" }) && !isStellarAsset({ ...credit(PAYTO), asset_code: "USDT" }), "isStellarAsset needs the code and the issuer");
+
+  // Scan path: the payer's debit and our credit are both a look-alike.
+  const fake = await run({
+    debits: [debit("TXF", "2026-08-03T17:10:52Z", "credit_alphanum4", LOOKALIKE)],
+    tx: { TXF: { successful: true } },
+    txEffects: { TXF: [debit("TXF", "2026-08-03T17:10:52Z", "credit_alphanum4", LOOKALIKE), credit(PAYTO, LOOKALIKE)] },
+  });
+  ok(fake === null, "a look-alike USDC debit and credit is not a payment");
+  // A real USDC debit whose transaction credited us only the look-alike.
+  const swapped = await run({
+    debits: [debit("TXS", "2026-08-03T17:10:52Z")],
+    tx: { TXS: { successful: true } },
+    txEffects: { TXS: [debit("TXS", "2026-08-03T17:10:52Z"), credit(PAYTO, LOOKALIKE)] },
+  });
+  ok(swapped === null, "a transaction that credited our payTo only a look-alike USDC is not a payment");
+  // A look-alike credit listed first does not hide a real one in the same transaction.
+  const both = await run({
+    debits: [debit("TXB", "2026-08-03T17:10:52Z")],
+    tx: { TXB: { successful: true } },
+    txEffects: { TXB: [credit(PAYTO, LOOKALIKE), credit(PAYTO)] },
+  });
+  ok(both?.transaction === "TXB" && both.assetIssuer === USDC_ISSUER && both.assetCode === "USDC", "a real USDC credit is found and reported with its asset");
+  const noIssuer = await run({
+    debits: [debit("TXN", "2026-08-03T17:10:52Z")],
+    tx: { TXN: { successful: true } },
+    txEffects: { TXN: [{ type: "account_credited", account: PAYTO, amount: "0.0010000", asset_code: "USDC" }] },
+  });
+  ok(noIssuer === null, "a credit that names no issuer is not proof");
+  ok((await run({ debits: [debit("TX1", "2026-08-03T17:10:52Z")], tx: { TX1: { successful: true } }, txEffects: { TX1: [credit(PAYTO)] } }, { assetIssuer: null })) === null, "an unpinned issuer confirms nothing");
+
+  // Named-hash path.
+  const H = "e".repeat(64);
+  const byHash = (records) => async (url) => {
+    if (url.endsWith(`/transactions/${H}`)) return { ok: true, json: async () => ({ hash: H, successful: true }) };
+    if (url.endsWith(`/transactions/${H}/effects?limit=50`)) return { ok: true, json: async () => ({ _embedded: { records } }) };
+    return { ok: false, status: 404, json: async () => ({}) };
+  };
+  ok((await confirmStellarTransfer({ payer: null, payTo: PAYTO, sinceMs: Date.now(), txHash: H, fetchImpl: byHash([credit(PAYTO, LOOKALIKE)]), waitMs: 0, stepMs: 1 })) === null, "a named hash that credited a look-alike USDC is not ours");
+  ok((await confirmStellarTransfer({ payer: null, payTo: PAYTO, sinceMs: Date.now(), txHash: H, fetchImpl: byHash([{ type: "account_credited", account: PAYTO, amount: "0.0010000" }]), waitMs: 0, stepMs: 1 })) === null, "a named hash whose credit names no asset is not ours");
+  const real = await confirmStellarTransfer({ payer: null, payTo: PAYTO, sinceMs: Date.now(), txHash: H, fetchImpl: byHash([credit(PAYTO, LOOKALIKE), credit(PAYTO)]), waitMs: 0, stepMs: 1 });
+  ok(real?.transaction === H && real.assetIssuer === USDC_ISSUER, "a named hash with a real USDC credit confirms, with its asset");
+}
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

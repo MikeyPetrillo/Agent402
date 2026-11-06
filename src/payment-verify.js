@@ -32,6 +32,7 @@ export const TIP20_TRANSFER_WITH_MEMO_TOPIC = "0x57bc7354aa85aed339e000bccffabbc
 export const TEMPO_NETWORK = "eip155:4217";
 
 import { isGatewayWire } from "./gateway-wire.js";
+import { STELLAR_USDC_CODE, STELLAR_USDC_ISSUER } from "./stellar-confirm.js";
 
 /** Circle Gateway's API (the batched x402 option, src/gateway-nanopayments.js). */
 export const GATEWAY_API_BASE_URL = "https://gateway-api.circle.com";
@@ -367,6 +368,7 @@ export async function verifyInboundPayment({
       // recorded so a late confirmation still counts.
       const found = await stellarConfirm({
         payer, payTo, sinceMs: Number(createdAt || 0) - 120_000, waitMs: 0,
+        assetCode: STELLAR_USDC_CODE, assetIssuer: STELLAR_USDC_ISSUER,
       });
       if (!found) return fail("no confirmed transfer from this payer to our payTo");
       // BIND IT TO THIS DEBT, UNCONDITIONALLY. The confirmer answers "did this
@@ -383,6 +385,12 @@ export async function verifyInboundPayment({
       }
       if (String(found.transaction) !== recorded) {
         return fail("the confirmed transfer is a different transaction than this debt recorded");
+      }
+      // USDC BY ISSUER. Anyone can issue a Stellar asset whose code reads
+      // "USDC"; a credit counts only in the asset our offers name, by code and
+      // issuer, as the confirmer reports what it found.
+      if (found.assetCode !== STELLAR_USDC_CODE || found.assetIssuer !== STELLAR_USDC_ISSUER) {
+        return fail("the confirmed transfer is not USDC from its issuer");
       }
       // COMPARE THE AMOUNT. Every other rail enforces "at least the amount";
       // this branch carried found.amount and never checked it, so a dust
