@@ -1,7 +1,8 @@
-// Cost guard for the direct upstream (src/gateway-direct-upstream.js): a call
-// goes there ONLY when it is estimated to cost less there than on OpenRouter's
-// cheapest routable endpoint for the same model. Everything here fails closed:
-// a doubt of any kind sends the call to OpenRouter.
+// Per-call eligibility check for the direct upstream
+// (src/gateway-direct-upstream.js): a call goes there ONLY when it passes a
+// comparison of the listed prices of both routes for that call, against a
+// private threshold. Everything here fails closed: a doubt of any kind sends
+// the call to OpenRouter.
 //
 // Three parts:
 //   1. A price book, refreshed in the background (never on a request): the
@@ -13,14 +14,14 @@
 //      from here), and at call time an endpoint above the call's own
 //      provider.max_price is dropped too.
 //   2. A per-call comparison: input tokens (the kit's own estimate) at each
-//      upstream's prompt price plus the clamped max_tokens at its completion
-//      price. Direct must be below OpenRouter's cheapest routable endpoint by
-//      the minimum saving share (below), or the call stays on OpenRouter.
+//      route's prompt price plus the clamped max_tokens at its completion
+//      price, direct against the lowest routable OpenRouter endpoint, with the
+//      threshold (below) applied; a call that does not pass stays on OpenRouter.
 //   3. A measured backstop: each served answer's reported cost is scored
-//      against what that same upstream's listed prices (the book at the time)
+//      against what that same route's listed prices (the book at the time)
 //      charge for the same prompt and completion tokens, a realized-to-listed
-//      ratio per upstream per model. A side holding the minimum sample scales
-//      its listed per-call cost by its own ratio before the comparison above,
+//      ratio per route per model. A side holding the minimum sample scales
+//      its listed per-call figure by its own ratio before the comparison above,
 //      so unlike traffic (direct serves text-only calls, OpenRouter also the
 //      model's tool calls) is never compared as is. A call the scaled
 //      comparison keeps on OpenRouter still goes direct on a small probe share,
@@ -37,25 +38,27 @@
 // refresh reads everything once, or the retries are spent, the word stays
 // starting, so one failed read at boot does not page.
 //
-// Env (all optional; the guard is active whenever the direct upstream is configured):
+// Env (all optional; the check is active whenever the direct upstream is configured):
 //   DIRECT_UPSTREAM_PRICE_REFRESH_MS   refresh interval (default one hour).
 //   DIRECT_UPSTREAM_PRICE_TIMEOUT_MS   bound on each listing read (default 15 s).
 //   DIRECT_UPSTREAM_PRICE_MAX_BYTES    bound on each listing body (default 4 MB).
-//   DIRECT_UPSTREAM_MIN_SAVING_PCT     the share direct must undercut OpenRouter by,
-//                                      0 to below 100. Unset: the private cost table's
-//                                      vendor.direct.minSaving (a fraction); neither: 0,
-//                                      so direct is taken only when strictly cheaper.
-//   DIRECT_UPSTREAM_MEASURE_WINDOW     answers kept per model per upstream (default 200).
+//   DIRECT_UPSTREAM_MIN_SAVING_PCT     the threshold, 0 to below 100. Unset: the private
+//                                      cost table's vendor.direct.minSaving (a fraction);
+//                                      neither: 0.
+//   DIRECT_UPSTREAM_MEASURE_WINDOW     answers kept per model per route (default 200).
 //   DIRECT_UPSTREAM_MEASURE_MIN        sample a side needs before its ratio applies (default 30).
 //   DIRECT_UPSTREAM_MEASURE_PROBE_PCT  percent of calls the measure keeps on OpenRouter that
 //                                      go direct anyway, to keep sampling it (default 2, 0-100).
 //   DIRECT_UPSTREAM_OR_MODELS_URL      OpenRouter's models base, for a test stub.
 //
 // The public word (/api/gateway-status directUpstream.status) is off,
-// starting, ok or degraded; the reason code (book_unreadable, listed_prices,
-// measured_cost, breaker_open) is on the operator read only. Logs carry the
-// word and the code, never a price, an estimate or a figure; the figures are
-// on /__operator/direct-upstream.json only.
+// starting, ok or degraded. It reads degraded only when something is wrong:
+// the book cannot be read (book_unreadable) or the breaker is open
+// (breaker_open). A model the check keeps on OpenRouter (listed_prices,
+// measured_cost) is routing working as designed: the word stays ok and the
+// code is on the operator read only. Logs carry the word and the code, never
+// a price, an estimate or a figure; the figures are on
+// /__operator/direct-upstream.json only.
 
 import { directUpstreamConfig, directBreakerState } from "./gateway-direct-upstream.js";
 import { OPENROUTER_ATTRIBUTION } from "./openrouter-attribution.js";
@@ -89,8 +92,8 @@ function parsePct(raw) {
   const n = Number(s);
   return n >= 0 && n < 100 ? n / 100 : null;
 }
-/** The fraction direct must undercut OpenRouter by: env, else the private
- *  table, else 0 (strictly cheaper). */
+/** The comparison's threshold as a fraction: env, else the private table,
+ *  else 0. */
 export function minSavingFraction(env = process.env) {
   const fromEnv = parsePct(env.DIRECT_UPSTREAM_MIN_SAVING_PCT);
   if (fromEnv !== null) return fromEnv;
@@ -251,8 +254,8 @@ function bookEntry(orId) {
 }
 
 const callCost = (row, inTok, outTok) => inTok * row.prompt + outTok * row.completion;
-/** Listed comparison for one call shape: true when direct undercuts the
- *  cheapest of `endpoints` by the minimum saving share. */
+/** Listed comparison for one call shape: true when direct's per-call figure
+ *  passes the threshold against the lowest of `endpoints`. */
 export function listedCheaper(direct, endpoints, inTok, outTok, saving = minSavingFraction()) {
   if (!direct || !Array.isArray(endpoints) || !endpoints.length) return false;
   const or = Math.min(...endpoints.map((e) => callCost(e, inTok, outTok)));
@@ -261,7 +264,7 @@ export function listedCheaper(direct, endpoints, inTok, outTok, saving = minSavi
 }
 /** Input-to-output shapes the model-level verdict (and the drift guard) reads. */
 export const REFERENCE_SHAPES = Object.freeze([[4, 1], [1, 1], [1, 4]]);
-/** A model whose listed prices undercut OpenRouter at none of the reference shapes. */
+/** A model whose listed prices pass the comparison at none of the reference shapes. */
 export function listedNotCheaperAnywhere(direct, endpoints, saving = minSavingFraction()) {
   return !REFERENCE_SHAPES.some(([i, o]) => listedCheaper(direct, endpoints, i, o, saving));
 }
@@ -356,22 +359,28 @@ function modelState(orId) {
   if (measureBlocks(orId, e.direct, e.endpoints)) return "measured_cost";
   return "ok";
 }
-/** The word and, when degraded, the reason code: off (unconfigured), starting
- *  (no refresh has read everything yet and retries are left), degraded
- *  (breaker_open, book_unreadable, listed_prices or measured_cost), ok. */
+/** Reason codes that read degraded: something is wrong. */
+export const DEGRADED_REASONS = Object.freeze(["breaker_open", "book_unreadable"]);
+/** Reason codes of correct routing (a model kept on OpenRouter): the word stays ok. */
+export const ROUTING_REASONS = Object.freeze(["listed_prices", "measured_cost"]);
+/** The word and the reason code: off (unconfigured), starting (no refresh has
+ *  read everything yet and retries are left), degraded (breaker_open or
+ *  book_unreadable), ok (with listed_prices or measured_cost as the reason
+ *  while a model is kept on OpenRouter, else no reason). */
 export function directUpstreamState() {
   const cfg = directUpstreamConfig();
   if (!cfg) return { word: "off", reason: null };
   if (directBreakerState().open) return { word: "degraded", reason: "breaker_open" };
   if (!book.okRuns && (!book.refreshes || priceRetryDelayMs(book.failStreak) !== null)) return { word: "starting", reason: null };
   const states = [...cfg.models.keys()].map(modelState);
-  for (const r of ["book_unreadable", "listed_prices", "measured_cost"]) if (states.includes(r)) return { word: "degraded", reason: r };
+  if (states.includes("book_unreadable")) return { word: "degraded", reason: "book_unreadable" };
+  for (const r of ROUTING_REASONS) if (states.includes(r)) return { word: "ok", reason: r };
   return { word: "ok", reason: null };
 }
 /** The public word: off, starting, ok or degraded. */
 export function directUpstreamWord() { return directUpstreamState().word; }
 /** /api/gateway-status directUpstream: the word publicly; the reason code too
- *  on the operator read, while degraded. */
+ *  on the operator read, whenever there is one. */
 export function directUpstreamStatus({ full = false } = {}) {
   const { word, reason } = directUpstreamState();
   return full && reason ? { status: word, reason } : { status: word };

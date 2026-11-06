@@ -98,7 +98,7 @@ ok(!!base && !!metered, "base and metered chat tools found");
 const msgs = [{ role: "user", content: "hi" }];
 // The cost guard (src/gateway-direct-pricebook.js, its own suite
 // scripts/test-direct-upstream-cost-guard.js) reads a price book; this suite
-// seeds one where the direct upstream undercuts OpenRouter by a wide factor,
+// seeds one where the direct upstream passes the comparison by a wide factor,
 // derived from the tier cap and the placeholder row (no rate typed here).
 const PB = await import("../src/gateway-direct-pricebook.js");
 const cap = K.TIERS["v1-chat"].maxPrice;
@@ -235,16 +235,71 @@ for (const [label, finish, completion] of [["an empty refusal", "content_filter"
   ok(or.hits.filter((h) => h.body?.model === MODEL).length === 1, "an OpenRouter empty refusal still skips the model's remaining attempts");
   setEnv(ON);
 }
-// A timeout counts in the timed-out-attempt budget: with a budget of 1 the walk ends there.
+// A direct timeout does not spend one of the buyer's timed-out attempts: with a
+// budget of 1, a hung direct upstream still leaves OpenRouter its one attempt
+// (plain and streamed), and an OpenRouter timeout still spends the budget.
 {
-  reset();
   process.env.LLM_MAX_TIMED_OUT_ATTEMPTS = "1";
+  reset();
   direct.plan = TRIGGERS.find(([l]) => l === "a timeout")[1];
-  let err = null;
-  try { await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 }); } catch (e) { err = e; }
-  ok(err?.statusCode === 504 && or.hits.length === 0, "a direct timeout counts in LLM_MAX_TIMED_OUT_ATTEMPTS (budget 1: no further attempt)");
+  let out = null, err = null;
+  try { out = await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 }); } catch (e) { err = e; }
+  ok(!err && direct.hits.length === 1 && or.hits.length === 1 && out?.choices?.[0]?.message?.content === "hello", `a direct timeout is not counted in LLM_MAX_TIMED_OUT_ATTEMPTS (budget 1: OpenRouter still serves${err ? `; threw ${err.statusCode}` : ""})`);
+  reset();
+  direct.plan = (req, res) => { res.writeHead(200, { "content-type": "text/event-stream" }); res.write(": keep-alive\n\n"); };
+  or.plan = (req, res, body) => sse(res, [{ id: "g1", object: "chat.completion.chunk", model: body.model, choices: [{ index: 0, delta: { content: "fallback" }, finish_reason: "stop" }] }, { id: "g1", object: "chat.completion.chunk", model: body.model, choices: [], usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5, cost: OR_COST } }, "[DONE]"]);
+  const so = await base.handler({ model: MODEL, messages: msgs, max_tokens: 32, stream: true });
+  const sres = fakeRes();
+  let serr = null;
+  try { await so.__sse(sres); } catch (e) { serr = e; }
+  ok(!serr && direct.hits.length === 1 && or.hits.length === 1 && sres.chunks.join("").includes("fallback"), `stream: a direct timeout is not counted either (budget 1: OpenRouter still streams${serr ? `; threw ${serr.statusCode}` : ""})`);
+  const budget = K.timedOutBudget();
+  ok(typeof budget.note === "function" && typeof budget.spent === "function", "the timed-out budget is the kit's own (an OpenRouter timeout still counts there: scripts/test-llm-timed-out-budget.js)");
   delete process.env.LLM_MAX_TIMED_OUT_ATTEMPTS;
 }
+
+// ---- the non-stream body cap ---------------------------------------------------
+// A direct answer over DIRECT_UPSTREAM_MAX_BYTES is a failed attempt (malformed,
+// counted by the breaker) whether or not it declares its length, and the call
+// falls back to OpenRouter once, metered once.
+for (const [label, plan] of [
+  ["declared over the cap", (req, res, body) => json(res, 200, answer(body.model, { pad: "x".repeat(100_000), x_vendor: { charged_micro: DIRECT_MICRO } }))],
+  ["undeclared (chunked) over the cap", (req, res, body) => { res.writeHead(200, { "content-type": "application/json" }); res.write(JSON.stringify(answer(body.model, { x_vendor: { charged_micro: DIRECT_MICRO } }))); res.write(" ".repeat(100_000)); res.end(); }],
+]) {
+  setEnv({ ...ON, DIRECT_UPSTREAM_MAX_BYTES: "65536" });
+  reset();
+  direct.plan = plan;
+  let out = null, err = null;
+  try { out = await metered.handler({ model: MODEL, messages: msgs, max_tokens: 64 }); } catch (e) { err = e; }
+  await flush();
+  ok(!err && direct.hits.length === 1 && or.hits.length === 1 && out?.__meterUpstreamUsd === OR_COST && gatewaySpend().length === 1, `a direct body ${label}: falls back to OpenRouter once, metered once at its cost${err ? ` (threw ${err.statusCode})` : ""}`);
+  ok(D.directUpstreamReport().upstreams.direct.failed.malformed === 1 && D.directBreakerState().fails === 1, `a direct body ${label}: a malformed failure, counted by the breaker`);
+}
+// A declared length over the cap is refused before the body is read, even when
+// the body that follows is small and would parse.
+{
+  setEnv({ ...ON, DIRECT_UPSTREAM_MAX_BYTES: "65536" });
+  reset();
+  const prevFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url) === `${DIRECT_BASE}/chat/completions`) {
+      direct.hits.push({ url: String(url), body: JSON.parse(init.body) });
+      return new Response(JSON.stringify(answer(MAPPED, { x_vendor: { charged_micro: DIRECT_MICRO } })), { status: 200, headers: { "content-type": "application/json", "content-length": "9999999" } });
+    }
+    return prevFetch(url, init);
+  };
+  let out = null, err = null;
+  try { out = await metered.handler({ model: MODEL, messages: msgs, max_tokens: 64 }); } catch (e) { err = e; } finally { globalThis.fetch = prevFetch; }
+  ok(!err && direct.hits.length === 1 && or.hits.length === 1 && out?.__meterUpstreamUsd === OR_COST && D.directUpstreamReport().upstreams.direct.failed.malformed === 1, "a direct answer declaring more than the cap is refused unread (malformed) and OpenRouter serves");
+}
+setEnv({ ...ON, DIRECT_UPSTREAM_MAX_BYTES: "65536" });
+reset();
+direct.plan = (req, res, body) => { res.writeHead(200, { "content-type": "application/json" }); res.write(JSON.stringify(answer(body.model, { x_vendor: { charged_micro: DIRECT_MICRO } }))); res.write(" ".repeat(1000)); res.end(); };
+{
+  const out = await metered.handler({ model: MODEL, messages: msgs, max_tokens: 64 });
+  ok(direct.hits.length === 1 && or.hits.length === 0 && out.__meterUpstreamUsd === DIRECT_MICRO / 1e6, "control: an undeclared body under the cap is served direct");
+}
+setEnv(ON);
 
 // ---- the direct breaker ----------------------------------------------------------
 // Consecutive failed direct attempts open it: no call goes direct while open
@@ -275,6 +330,77 @@ for (const [label, finish, completion] of [["an empty refusal", "content_filter"
   // A buyer who hung up is not the upstream failing.
   D.noteDirectOutcome(false, "client_gone");
   ok(D.directBreakerState().fails === 0, "a client that went away does not count");
+  D._setDirectBreakerNowForTest(null);
+  setEnv(ON);
+}
+// A refusal of the request itself (any 4xx but auth, quota, capacity and a
+// missing endpoint) is the buyer's request, which OpenRouter refuses too: it
+// never opens the breaker, the word stays ok, honest traffic keeps going direct.
+{
+  setEnv({ ...ON, DIRECT_UPSTREAM_BREAKER_FAILS: "2", DIRECT_UPSTREAM_BREAKER_OPEN_MS: "60000" });
+  const PBk = await import("../src/gateway-direct-pricebook.js");
+  for (const status of [400, 409, 413, 422]) {
+    reset();
+    direct.plan = (req, res) => json(res, status, { error: { message: "temperature out of range", type: "invalid_request_error" } });
+    or.plan = (req, res) => json(res, 400, { error: { message: "temperature out of range" } });
+    for (let i = 0; i < 4; i++) { try { await base.handler({ model: MODEL, messages: msgs, max_tokens: 32, temperature: 1.5 }); } catch { /* refused by both */ } }
+    ok(direct.hits.length === 4 && !D.directBreakerState().open && D.directBreakerState().fails === 0 && D.directUpstreamReport().upstreams.direct.failed.refused === 4, `four HTTP ${status} refusals from both upstreams: the breaker stays closed (direct hits ${direct.hits.length}, fails ${D.directBreakerState().fails})`);
+    ok(PBk.directUpstreamWord() === "ok", `HTTP ${status} refusals: the public word stays ok`);
+  }
+  for (const [status, bucket] of [[401, "auth"], [403, "auth"], [402, "quota"], [429, "rate_limited"], [404, "not_found"], [500, "server_error"]]) {
+    reset();
+    direct.plan = (req, res) => json(res, status, { error: { message: "x" } });
+    for (let i = 0; i < 2; i++) await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 });
+    ok(D.directBreakerState().open && D.directUpstreamReport().upstreams.direct.failed[bucket] === 2, `two HTTP ${status} failures (${bucket}) still open the breaker`);
+  }
+  // A refused call on the half-open trial hands the trial to the next call
+  // instead of holding the breaker shut for another period.
+  reset();
+  let now = Date.now();
+  D._setDirectBreakerNowForTest(() => now);
+  direct.plan = (req, res) => json(res, 503, { error: { message: "no qualifying worker" } });
+  for (let i = 0; i < 2; i++) await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 });
+  ok(D.directBreakerState().open, "refusal trial: opened by two 503s");
+  now += 60_001;
+  direct.plan = (req, res) => json(res, 400, { error: { message: "bad request" } });
+  or.plan = (req, res) => json(res, 400, { error: { message: "bad request" } });
+  try { await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 }); } catch { /* refused by both */ }
+  ok(direct.hits.length === 3 && !D.directBreakerState().open && D.directBreakerState().halfOpen && !D.directBreakerState().trialInFlight, "a refused trial does not reopen the breaker: still half-open, the trial released");
+  direct.plan = (req, res, body) => json(res, 200, answer(body.model, { x_vendor: { charged_micro: DIRECT_MICRO } }));
+  or.plan = null;
+  await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 });
+  ok(direct.hits.length === 4 && !D.directBreakerState().open && !D.directBreakerState().halfOpen, "the next call takes the trial and closes it");
+  D._setDirectBreakerNowForTest(null);
+  setEnv(ON);
+}
+// Degraded lasts only as long as the open period: once it lapses the breaker
+// is half-open and reads ok, with or without traffic; one trial at a time; a
+// call the price check keeps on OpenRouter never takes (or starves) the trial.
+{
+  setEnv({ ...ON, DIRECT_UPSTREAM_BREAKER_FAILS: "2", DIRECT_UPSTREAM_BREAKER_OPEN_MS: "60000" });
+  const PBk = await import("../src/gateway-direct-pricebook.js");
+  reset();
+  let now = Date.now();
+  D._setDirectBreakerNowForTest(() => now);
+  direct.plan = (req, res) => json(res, 503, { error: { message: "no qualifying worker" } });
+  for (let i = 0; i < 2; i++) await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 });
+  ok(D.directBreakerState().open && PBk.directUpstreamWord() === "degraded", "lapse: open and degraded inside the open period");
+  now += 60_001;
+  ok(!D.directBreakerState().open && D.directBreakerState().halfOpen && D.directBreakerState().reopensInMs === null && PBk.directUpstreamWord() === "ok", "lapse: past the open period with no traffic the breaker is half-open and the word reads ok");
+  now += 24 * 3600_000;
+  ok(PBk.directUpstreamWord() === "ok" && JSON.stringify(PBk.directUpstreamStatus()) === '{"status":"ok"}', "lapse: a day later with no traffic it still reads ok, not degraded");
+  // A call kept on OpenRouter by the price check leaves the trial untouched.
+  PBk._resetDirectPriceBookForTest();
+  PBk._seedDirectPriceBookForTest({ [MODEL]: { direct: endpoint, endpoints: [cheapDirect] }, "qwen/qwen3.8-27b": { direct: cheapDirect, endpoints: [endpoint] } });
+  const hitsBefore = direct.hits.length;
+  await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 });
+  ok(direct.hits.length === hitsBefore && !D.directBreakerState().trialInFlight && D.directBreakerState().halfOpen && PBk.directUpstreamWord() === "ok", "a price-kept call does not take the trial; the breaker is not the reason for any word");
+  seedBook();
+  ok(D.directBreakerAllows() === true && D.directBreakerAllows() === false && D.directBreakerState().trialInFlight, "one trial at a time: the second caller is held while the first is in flight");
+  now += 60_001;
+  ok(D.directBreakerAllows() === true, "a trial that never reports is released after one open period");
+  D.noteDirectOutcome(true);
+  ok(!D.directBreakerState().open && !D.directBreakerState().halfOpen, "a success closes it");
   D._setDirectBreakerNowForTest(null);
   setEnv(ON);
 }
@@ -403,7 +529,7 @@ async function boot(extraEnv) {
 }
 const stop = async (b) => { b.child.kill("SIGTERM"); await new Promise((r) => { b.child.once("exit", r); setTimeout(r, 5000); }); };
 {
-  const b = await boot({ ...ON, ...BOOT_STUBS, DIRECT_UPSTREAM_SINCE: "2026-01-01" });
+  const b = await boot({ ...ON, ...BOOT_STUBS, DIRECT_UPSTREAM_SINCE: "2026-01-01", DIRECT_UPSTREAM_NAME: "Example <Inference> & Co", DIRECT_UPSTREAM_POLICY_URL: "https://example.com/privacy?a=1&b=2" });
   try {
     ok(b.up, "server booted with the direct upstream configured");
     const anon = await realFetch(`${b.url}/__operator/direct-upstream.json`);
@@ -414,6 +540,10 @@ const stop = async (b) => { b.child.kill("SIGTERM"); await new Promise((r) => { 
     ok(r.status === 200 && j.configured === true && j.upstreams?.direct && /no-store/.test(r.headers.get("cache-control") || ""), "with the token: the report, never cached");
     const html = await (await realFetch(`${b.url}/privacy`)).text();
     ok(html.includes("direct inference provider") && html.includes("Zero data retention is requested on every such call") && html.includes("calls to listed models") && !/open-weight/i.test(html), "/privacy carries the sentence while configured, naming listed models (the switch takes any id)");
+    const item = (html.match(/<li id="direct-inference">([\s\S]*?)<\/li>/) || [])[1] || "";
+    ok(item.includes("Example &lt;Inference&gt; &amp; Co") && item.includes('<a href="https://example.com/privacy?a=1&amp;b=2" rel="noopener">its privacy policy</a>') && /zero data retention is requested on every such call/.test(item) && !html.includes("<Inference>"), `/privacy Third parties names the provider, escaped, with its policy link (${item.slice(0, 80)})`);
+    ok(/processed and stored there, except where a provider listed under Third parties operates elsewhere, as noted there\./.test(html), "/privacy: the location sentence carries its exception while configured");
+    ok(!/the provider's gateway stores no prompts/.test(html) && /serves such a request only from workers that keep no prompts or outputs, or refuses it/.test(html), "/privacy claims no more than the zero-retention request and its refusal");
     ok(!b.log.join("").includes("direct-test-key"), "the boot log never prints the key");
   } finally { await stop(b); }
 }
@@ -421,10 +551,22 @@ const stop = async (b) => { b.child.kill("SIGTERM"); await new Promise((r) => { 
   const b = await boot({});
   try {
     const html = await (await realFetch(`${b.url}/privacy`)).text();
-    ok(b.up && !html.includes("direct inference provider"), "/privacy leaves the sentence out while unconfigured");
+    ok(b.up && !html.includes("direct inference provider") && !html.includes('id="direct-inference"') && /processed and stored there\.<\/p>/.test(html), "/privacy leaves the sentence, the Third parties item and the location exception out while unconfigured");
     const r = await realFetch(`${b.url}/__operator/direct-upstream.json`, { headers: { Authorization: `Bearer ${TOKEN}` } });
     ok((await r.json()).configured === false, "the operator view reads configured false while off");
   } finally { await stop(b); }
+}
+// The Third parties item without a name or with a policy URL that is not https,
+// and the boot warnings that say why the page does not move or name anyone.
+{
+  ok(/served by a direct inference provider instead of OpenRouter/.test(D.directUpstreamThirdPartyText(ON)) && !D.directUpstreamThirdPartyText(ON).includes("<a "), "no name, no policy: the item says a direct inference provider, no link");
+  ok(!D.directUpstreamThirdPartyText({ ...ON, DIRECT_UPSTREAM_POLICY_URL: "http://example.com/p" }).includes("<a ") && !D.directUpstreamThirdPartyText({ ...ON, DIRECT_UPSTREAM_POLICY_URL: "javascript:alert(1)" }).includes("<a "), "a policy URL that is not https is never linked");
+  ok(D.directUpstreamThirdPartyText({}) === "" && D.directUpstreamLocationText({}) === "" && D.directUpstreamLocationText(ON) !== "", "unconfigured: no item and no location exception");
+  ok(D.directUpstreamName({ DIRECT_UPSTREAM_NAME: "A\u200bB\u0007  C" }) === "AB C" && D.directUpstreamName({ DIRECT_UPSTREAM_NAME: "x".repeat(200) }).length === 60, "the name drops invisible and control characters and is capped");
+  const w = (env) => D.directUpstreamBootWarnings(env).join("\n");
+  ok(/without a valid DIRECT_UPSTREAM_SINCE/.test(w(ON)) && /without a valid DIRECT_UPSTREAM_SINCE/.test(w({ ...ON, DIRECT_UPSTREAM_SINCE: "2026-02-30" })) && !/DIRECT_UPSTREAM_SINCE/.test(w({ ...ON, DIRECT_UPSTREAM_SINCE: "2026-01-01" })), "boot warning: configured without a valid DIRECT_UPSTREAM_SINCE (the date then does not move)");
+  ok(/DIRECT_UPSTREAM_POLICY_URL is not an https URL/.test(w({ ...ON, DIRECT_UPSTREAM_POLICY_URL: "http://x.example" })) && !/DIRECT_UPSTREAM_POLICY_URL/.test(w({ ...ON, DIRECT_UPSTREAM_POLICY_URL: "https://x.example/p" })), "boot warning: a policy URL that is not https");
+  ok(!/SINCE|POLICY|NAME/.test(w({})), "boot warnings: none while unconfigured");
 }
 // The printed date: the later of the page's own and DIRECT_UPSTREAM_SINCE, only while configured and once reached.
 {
@@ -453,6 +595,10 @@ globalThis.fetch = realFetch;
   ok(d.length === 1 && d[0].tok === 5 && Math.abs(d[0].cost - 0.004321) < 1e-12, `usage on every chunk, charge on the last frame: metered once at that charge (${JSON.stringify(d)})`);
   const e = runScrub([chunk(1), chunk(3)]);
   ok(e.length === 1 && e[0].tok === 3 && e[0].cost === null, `usage on every chunk with no charge: the last usage reports, uncharged (${JSON.stringify(e)})`);
+  // The charge rides a usage frame, and another usage frame follows it: the
+  // charged frame reports once, and the trailing one is never a second report.
+  const f = runScrub([{ choices: [], usage: { prompt_tokens: 10, completion_tokens: 5 }, x_vendor: { charged_micro: 4321 } }, chunk(5)]);
+  ok(f.length === 1 && f[0].tok === 5 && Math.abs(f[0].cost - 0.004321) < 1e-12, `a charged usage frame then a trailing usage frame: one report, at the charge (${JSON.stringify(f)})`);
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

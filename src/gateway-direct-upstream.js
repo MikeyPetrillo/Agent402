@@ -11,14 +11,18 @@
 //   DIRECT_UPSTREAM_SHARE    0-100, percent of eligible attempts sent there (the A/B);
 //                            default 100 when the rest is set; invalid reads 0.
 //   DIRECT_UPSTREAM_TIMEOUT_MS  per attempt (default 45000), capped by the payment window.
-//   DIRECT_UPSTREAM_BREAKER_FAILS    consecutive failed direct attempts that open the
-//                            breaker (default 3): while open no call goes direct.
-//   DIRECT_UPSTREAM_BREAKER_OPEN_MS  how long it stays open (default 5 minutes); then one
-//                            trial attempt goes direct: a success closes it, a failure
-//                            opens it again.
+//   DIRECT_UPSTREAM_BREAKER_FAILS    consecutive counted direct failures that open the
+//                            breaker (default 3; a refusal of the request itself does not
+//                            count, see the breaker section): while open no call goes direct.
+//   DIRECT_UPSTREAM_BREAKER_OPEN_MS  how long it stays open (default 5 minutes); then the next
+//                            eligible call is one trial: a success closes it, a counted
+//                            failure opens it again.
 //   DIRECT_UPSTREAM_SINCE    YYYY-MM-DD the privacy disclosure took effect; while the
 //                            upstream is configured, /privacy prints the later of its own
-//                            date and this one (once reached).
+//                            date and this one (once reached). Configured without a valid
+//                            one, the date does not move (a boot warning says so).
+//   DIRECT_UPSTREAM_NAME     the provider's display name on /privacy (printed escaped).
+//   DIRECT_UPSTREAM_POLICY_URL  its privacy policy, linked only as a parsed https URL.
 //
 // Every outbound body carries provider: { zdr: true } (zero data retention: the
 // upstream serves only from zero-retention workers or answers 503) and an
@@ -29,8 +33,9 @@
 // goes on to OpenRouter; the upstream bills only answered requests, and the
 // buyer is metered once, from the answer that served.
 //
-// A direct attempt is also taken only when src/gateway-direct-pricebook.js
-// reads the call as cheaper there than on OpenRouter (fails closed).
+// A direct attempt is also taken only when the per-call eligibility check in
+// src/gateway-direct-pricebook.js passes (listed prices of both routes, a
+// measured backstop, a private threshold; fails closed).
 
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
 const MODEL_ID = /^[a-z0-9][a-z0-9._:\/-]{0,127}$/i;
@@ -106,6 +111,12 @@ export function directUpstreamBootWarnings(env = process.env) {
   const missing = keys.filter((k) => !set(k));
   if (missing.length) out.push(`WARNING: the direct upstream is off: ${missing.join(", ")} unset`);
   if (set("DIRECT_UPSTREAM_SHARE") && parseShare(env.DIRECT_UPSTREAM_SHARE) === 0 && String(env.DIRECT_UPSTREAM_SHARE).trim() !== "0") out.push("WARNING: DIRECT_UPSTREAM_SHARE is not an integer 0-100; read as 0 (nothing is sent)");
+  if (directUpstreamConfigured(env)) {
+    if (!directUpstreamSince(env)) out.push("WARNING: the direct upstream is configured without a valid DIRECT_UPSTREAM_SINCE (YYYY-MM-DD); /privacy keeps its own date");
+    else if (directUpstreamSince(env) > new Date().toISOString().slice(0, 10)) out.push("WARNING: DIRECT_UPSTREAM_SINCE is after today; /privacy keeps its own date until that day");
+    if (set("DIRECT_UPSTREAM_POLICY_URL") && !directUpstreamPolicyUrl(env)) out.push("WARNING: DIRECT_UPSTREAM_POLICY_URL is not an https URL; it is not linked");
+    if (!directUpstreamName(env)) out.push("WARNING: DIRECT_UPSTREAM_NAME is unset; /privacy names the provider only as a direct inference provider");
+  }
   return out;
 }
 
@@ -145,7 +156,7 @@ function textOnlyContent(c) {
 }
 
 /** The body for the direct upstream built from a gateway attempt (the outbound
- *  OpenRouter body after the margin clamp), or { reason } when the attempt uses
+ *  OpenRouter body after the max_tokens clamp), or { reason } when the attempt uses
  *  a feature this upstream is not trusted with. */
 export function directBodyFrom(attempt, target, { stream = false } = {}) {
   for (const [k, v] of Object.entries(attempt || {})) {
@@ -202,45 +213,64 @@ export function stripVendorExtensions(obj) {
 
 // ---- breaker (per process) ---------------------------------------------------
 // A hung or failing direct upstream would otherwise add its whole timeout to
-// every call of a mapped model and spend one of the call's timed-out attempts.
-// Every failed direct attempt counts (a client that went away does not); an
-// answered one resets the count. An empty answer is neither.
+// every call of a mapped model. A failure that says the upstream is unwell
+// counts: auth (401/403), quota (402), capacity (429), 5xx, a timeout, a
+// connect error, a malformed or oversized body, a late error in a 200, a
+// missing cost. A refusal of the request itself (any other 4xx: a parameter
+// out of range, a prompt over the context) is the buyer's request, which
+// OpenRouter would refuse too, and does not count; nor does a client that went
+// away or an empty answer. An answered attempt resets the count.
+//
+// States: closed; open (no call goes direct) while now < openUntil; half-open
+// once that passes, when the next call that would go direct (it passed the
+// price guard and the share draw) takes the one trial. A counted failure on
+// the trial opens it again; a success closes it; an uncounted outcome hands
+// the trial to the next call. Only open reads degraded.
 const breakerEnv = (name, dflt, min) => {
   const n = parseInt(String(process.env[name] ?? "").trim(), 10);
   return Number.isFinite(n) && n >= min ? n : dflt;
 };
 const breakerFails = () => breakerEnv("DIRECT_UPSTREAM_BREAKER_FAILS", 3, 1);
 const breakerOpenMs = () => breakerEnv("DIRECT_UPSTREAM_BREAKER_OPEN_MS", 5 * 60_000, 1000);
-const NOT_COUNTED = new Set(["client_gone", "aborted"]);
-const blankBreaker = () => ({ fails: 0, openUntil: 0, opens: 0 });
+/** Failure buckets that say nothing about the upstream's health. */
+export const DIRECT_BREAKER_NOT_COUNTED = Object.freeze(["client_gone", "aborted", "refused", "empty"]);
+const NOT_COUNTED = new Set(DIRECT_BREAKER_NOT_COUNTED);
+const blankBreaker = () => ({ fails: 0, openUntil: 0, opens: 0, trialAt: 0 });
 let breaker = blankBreaker();
 let breakerNow = Date.now;
 export function _resetDirectBreakerForTest() { breaker = blankBreaker(); breakerNow = Date.now; }
 export function _setDirectBreakerNowForTest(fn) { breakerNow = typeof fn === "function" ? fn : Date.now; }
 /** True when a direct attempt may be made now. Once the open period ends one
- *  caller takes the trial (the period is pushed out for everyone else). */
+ *  caller takes the trial; a trial that never reports holds it for at most
+ *  one open period. */
 export function directBreakerAllows() {
   if (!breaker.openUntil) return true;
   const now = breakerNow();
   if (now < breaker.openUntil) return false;
-  breaker.openUntil = now + breakerOpenMs();
+  if (breaker.trialAt && now - breaker.trialAt < breakerOpenMs()) return false;
+  breaker.trialAt = now;
   return true;
 }
 /** The outcome of one direct attempt: ok, or the failure's bucket. */
 export function noteDirectOutcome(ok, reason) {
-  if (ok) { breaker.fails = 0; breaker.openUntil = 0; return; }
-  if (NOT_COUNTED.has(String(reason))) return;
+  if (ok) { breaker.fails = 0; breaker.openUntil = 0; breaker.trialAt = 0; return; }
+  if (NOT_COUNTED.has(String(reason))) { breaker.trialAt = 0; return; }
   breaker.fails++;
   if (breaker.fails >= breakerFails()) {
-    if (!breaker.openUntil || breakerNow() >= breaker.openUntil) breaker.opens++;
-    breaker.openUntil = breakerNow() + breakerOpenMs();
+    const now = breakerNow();
+    if (!breaker.openUntil || now >= breaker.openUntil) breaker.opens++;
+    breaker.openUntil = now + breakerOpenMs();
+    breaker.trialAt = 0;
   }
 }
-/** { open, fails, opens, threshold, openMs, reopensInMs }: counts only. */
+/** { open, halfOpen, trialInFlight, fails, opens, threshold, openMs, reopensInMs }:
+ *  counts only. open is true only before openUntil; after it the breaker is
+ *  half-open (a trial is pending) and does not read degraded. */
 export function directBreakerState() {
   const now = breakerNow();
-  const open = !!breaker.openUntil;
-  return { open, fails: breaker.fails, opens: breaker.opens, threshold: breakerFails(), openMs: breakerOpenMs(), reopensInMs: open ? Math.max(0, breaker.openUntil - now) : null };
+  const open = !!breaker.openUntil && now < breaker.openUntil;
+  const halfOpen = !!breaker.openUntil && !open;
+  return { open, halfOpen, trialInFlight: halfOpen && !!breaker.trialAt && now - breaker.trialAt < breakerOpenMs(), fails: breaker.fails, opens: breaker.opens, threshold: breakerFails(), openMs: breakerOpenMs(), reopensInMs: open ? breaker.openUntil - now : null };
 }
 
 // ---- A/B telemetry (operator view only) ------------------------------------
@@ -328,8 +358,42 @@ export function withDirectUpstreamDate(html, env = process.env, today = new Date
   const since = directUpstreamSince(env);
   return String(html).replace(DATE_LINE, (m, own) => `last updated ${since && since > own && since <= today ? since : own}.`);
 }
-/** The privacy page's sentence while the upstream is configured, else "". */
+const NAME_MAX = 60;
+const escHtml = (v) => String(v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+/** DIRECT_UPSTREAM_NAME with control and invisible characters removed,
+ *  whitespace collapsed, at most NAME_MAX characters; "" when unset. Escape to print. */
+export function directUpstreamName(env = process.env) {
+  return String(env.DIRECT_UPSTREAM_NAME || "")
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f-\u009f\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufe00-\ufe0f\ufeff]|[\u{e0000}-\u{e007f}]/gu, "")
+    .replace(/\s+/g, " ").trim().slice(0, NAME_MAX).trim();
+}
+/** DIRECT_UPSTREAM_POLICY_URL as a parsed https href with no credentials; "" otherwise. */
+export function directUpstreamPolicyUrl(env = process.env) {
+  const raw = String(env.DIRECT_UPSTREAM_POLICY_URL || "").trim();
+  if (!raw) return "";
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== "https:" || u.username || u.password || !/^[a-z0-9.-]+$/i.test(u.hostname)) return "";
+    return u.href;
+  } catch { return ""; }
+}
+/** The privacy page's sentence (AI gateway inputs) while the upstream is configured, else "". */
 export function directUpstreamPrivacyText(env = process.env) {
   if (!directUpstreamConfigured(env)) return "";
-  return " Some calls to listed models are served by a direct inference provider instead of OpenRouter. Zero data retention is requested on every such call, so it is served only by workers that keep no prompts or outputs, and the provider's gateway stores no prompts or outputs, only usage metadata such as token counts and cost.";
+  return " Some chat calls to listed models are served by a direct inference provider instead of OpenRouter (see Third parties). Zero data retention is requested on every such call, and the provider serves such a request only from workers that keep no prompts or outputs, or refuses it, in which case the call goes to OpenRouter.";
+}
+/** The privacy page's Third parties item (HTML, every env-supplied value
+ *  escaped) while the upstream is configured, else "". */
+export function directUpstreamThirdPartyText(env = process.env) {
+  if (!directUpstreamConfigured(env)) return "";
+  const name = directUpstreamName(env), policy = directUpstreamPolicyUrl(env);
+  const link = policy ? `<a href="${escHtml(policy)}" rel="noopener">its privacy policy</a>` : "";
+  const who = name ? `${escHtml(name)}${link ? ` (${link})` : ""}` : `a direct inference provider${link ? ` (${link})` : ""}`;
+  return `Chat calls to the listed models on the <code>/v1</code> chat endpoints may be served by ${who} instead of OpenRouter. It receives the messages and the generation settings of the call, which it processes where it operates, and zero data retention is requested on every such call.`;
+}
+/** The location sentence's exception while the upstream is configured, else "". */
+export function directUpstreamLocationText(env = process.env) {
+  if (!directUpstreamConfigured(env)) return "";
+  return ", except where a provider listed under Third parties operates elsewhere, as noted there";
 }
