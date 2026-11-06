@@ -553,11 +553,17 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
     // (b, b3, b4 drive the behavior), so a mutation there fails on behavior
     // first and the pin stays an extra.
   }
-  ok(/registerSettlementClaimHooks\(server\);\s*\n(\s*\/\/[^\n]*\n)*\s*registerSettleSentHook\(server\);/.test(payments), "payments.js registers the settle-sent mark hook right after the authorization claim, the last hook that can end the chain");
+  // The mark hook is registered on the server itself or through the wrapper
+  // that releases the authorization claims when the mark refuses a settle
+  // (src/settlement-claims.js releasingClaimsOnRefusal): either way on this
+  // server, and either way the same position in the chain.
+  const MARK_HOOK = /registerSettleSentHook\((?:server|releasingClaimsOnRefusal\(server(?:, \{[^{}]*\})?\))\);/;
+  const markAt = (() => { const m = MARK_HOOK.exec(payments); return m ? m.index : -1; })();
+  ok(new RegExp(/registerSettlementClaimHooks\(server\);\s*\n(\s*\/\/[^\n]*\n)*\s*/.source + MARK_HOOK.source).test(payments), "payments.js registers the settle-sent mark hook right after the authorization claim, the last hook that can end the chain");
   {
-    const order = ["registerWalletBlocklistHook(server);", "registerClientGoneSettleHook(server);", "registerFirstCallAllowanceSettleHook(server);", "registerSettlementClaimHooks(server);", "registerSettleSentHook(server);", "registerPhaseTimingHooks(server);"].map((s) => payments.indexOf(s));
+    const order = ["registerWalletBlocklistHook(server);", "registerClientGoneSettleHook(server);", "registerFirstCallAllowanceSettleHook(server);", "registerSettlementClaimHooks(server);", MARK_HOOK, "registerPhaseTimingHooks(server);"].map((s) => (typeof s === "string" ? payments.indexOf(s) : markAt));
     ok(order.every((i, n) => i > 0 && (n === 0 || i > order[n - 1])), `every hook that can abort or skip a settle is registered before the mark hook, and only the timing hook after it (${JSON.stringify(order)})`);
-    const afterMark = payments.slice(payments.indexOf("registerSettleSentHook(server);"));
+    const afterMark = payments.slice(markAt);
     ok(!/server\.onBeforeSettle\(/.test(afterMark.slice(0, afterMark.indexOf("registerPhaseTimingHooks(server);"))), "nothing registers an onBeforeSettle between the mark hook and the timing hook");
     ok(/registerClientGoneSettleHook\(server\);\s*\n\s*registerInflightCoverSettleHook\(server\);\s*\n(\s*\/\/[^\n]*\n)*\s*registerFirstCallAllowanceSettleHook\(server\);\s*\n(\s*\/\/[^\n]*\n)*\s*registerSettlementClaimHooks\(server\);/.test(payments), "the client-gone hook, the allowance skip and the authorization claim keep their order");
   }

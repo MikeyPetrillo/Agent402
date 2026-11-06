@@ -20,6 +20,10 @@
 //     stand-in), and the read claims nothing;
 //   - a body no payer holds an entry for runs no signature recovery (the
 //     presence marker the commit writes beside each entry);
+//   - the proof reads the network in the one spelling the replay guard keys
+//     on, and a validity window no longer than the guard's settled hold;
+//   - recoveries are memoized on everything the signature covers (bounded,
+//     least recently used out), and the guard's read is one MGET;
 //   - server.js mounts the gate and commits deferred writes through the scope.
 // Offline: no facilitator, no upstream.
 //
@@ -29,12 +33,12 @@ import { readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import express from "express";
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
-import { gatewayCacheGate, scopedCacheKey, writerCacheScope, readerCacheScope, provenX402Signer, presenceCacheKey, commitGatewayCacheWrites, proofRecoveryCount } from "../src/gateway-cache-scope.js";
+import { gatewayCacheGate, scopedCacheKey, writerCacheScope, readerCacheScope, provenX402Signer, presenceCacheKey, commitGatewayCacheWrites, proofRecoveryCount, proofMemoSize, PROOF_MEMO_MAX, __setProofMemoMax } from "../src/gateway-cache-scope.js";
 import { carriesPaymentAttempt } from "../src/payment-attempt.js";
 import { stableStringify, promptCacheGetShared, promptCacheStore, EMBEDDINGS_PATH } from "../src/tools/llm-gateway-kit.js";
 import { ALLOWANCE_STATE } from "../src/allowance-state.js";
 import { identityPayerOf } from "../src/payer.js";
-import { createReplayGuard, paymentReplayKeyAsync } from "../src/replay-guard.js";
+import { createReplayGuard, paymentReplayKey, paymentReplayKeyAsync, SETTLED_HOLD_MS } from "../src/replay-guard.js";
 import { __setTestClient } from "../src/shared-limit.js";
 
 let pass = 0, failed = 0;
@@ -45,8 +49,11 @@ const OTHER_PAY_TO = "0x00000000000000000000000000000000000b4020";
 const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 const now = () => Math.floor(Date.now() / 1000);
 const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64");
+const unb64 = (h) => JSON.parse(Buffer.from(h, "base64").toString());
+// The same signed bytes under another spelling of the accept's network.
+const respelled = (h, network) => { const p = unb64(h); p.accepted.network = network; return b64(p); };
 
-async function signedHeader(account, { to = PAY_TO, from = account.address, validAfter = now() - 60, validBefore = now() + 300, name = "USD Coin" } = {}) {
+async function signedHeader(account, { to = PAY_TO, from = account.address, validAfter = now() - 60, validBefore = now() + 300, name = "USD Coin", network = "eip155:8453" } = {}) {
   const authorization = { from, to, value: "2000", validAfter: String(validAfter), validBefore: String(validBefore), nonce: `0x${randomBytes(32).toString("hex")}` };
   const signature = await account.signTypedData({
     domain: { name, version: "2", chainId: 8453, verifyingContract: USDC_BASE },
@@ -59,7 +66,7 @@ async function signedHeader(account, { to = PAY_TO, from = account.address, vali
   });
   return b64({
     x402Version: 2,
-    accepted: { scheme: "exact", network: "eip155:8453", asset: USDC_BASE, amount: "2000", payTo: to, maxTimeoutSeconds: 60, extra: { name: "USD Coin", version: "2" } },
+    accepted: { scheme: "exact", network, asset: USDC_BASE, amount: "2000", payTo: to, maxTimeoutSeconds: 60, extra: { name: "USD Coin", version: "2" } },
     payload: { signature, authorization },
   });
 }
@@ -183,6 +190,77 @@ try {
   ok((await readerCacheScope(fakeReq({ "payment-signature": await signedHeader(alice) }), { payTo: PAY_TO })) === null && (await call({ "payment-signature": await signedHeader(alice), "x-test-no-held-reader": "1" })).status === 402,
     "proof: with no replay-guard reader an x402 payment proves nothing");
   ok((await readerCacheScope(fakeReq({ "payment-signature": await signedHeader(alice) }), { payTo: PAY_TO, paymentHeld: async () => { throw new Error("store down"); } })) === null, "proof: a replay-guard read that throws proves nothing");
+  // The proof's network is the replay guard's: the key the gate looks up for
+  // a proven payment is the key the paywall path claims under.
+  {
+    const h = await signedHeader(alice);
+    ok(paymentReplayKey(fakeReq({ "payment-signature": h })) === paymentReplayKey(fakeReq({ "payment-signature": respelled(h, "eip155:8453") })) && paymentReplayKey(fakeReq({ "payment-signature": h })) !== paymentReplayKey(fakeReq({ "payment-signature": respelled(h, "eip155:08453") })),
+      "proof: the guard keys a payment on its network as spelled (why the proof reads one spelling)");
+    for (const net of ["eip155:08453", "eip155:0", "eip155:", "eip155:1234567890123"]) ok((await provenX402Signer(respelled(h, net), { payTo: PAY_TO })) === null, `proof: network ${JSON.stringify(net)} proves nothing`);
+  }
+
+  // ---- recovery memo --------------------------------------------------------
+  {
+    const h = await signedHeader(alice);
+    const before = proofRecoveryCount();
+    const a = await provenX402Signer(h, { payTo: PAY_TO });
+    const b = await provenX402Signer(h, { payTo: PAY_TO });
+    const c = await provenX402Signer(h, { payTo: PAY_TO, anyTime: true });
+    ok(a === alice.address.toLowerCase() && b === a && c === a && proofRecoveryCount() === before + 1, `memo: one header proved three times runs one recovery (${proofRecoveryCount() - before})`);
+    // The signature copied onto another message is another memo key.
+    const p = unb64(h); p.payload.authorization.nonce = `0x${randomBytes(32).toString("hex")}`;
+    const moved = await provenX402Signer(b64(p), { payTo: PAY_TO });
+    ok(moved === null && proofRecoveryCount() === before + 2, "memo: the same signature on another nonce is recovered again and proves nothing");
+    const q = unb64(h); q.payload.authorization.value = "1";
+    ok((await provenX402Signer(b64(q), { payTo: PAY_TO })) === null && proofRecoveryCount() === before + 3, "memo: the same signature on another value is recovered again and proves nothing");
+    ok((await provenX402Signer(await signedHeader(mallory, { from: alice.address }), { payTo: PAY_TO })) === null, "memo: a forged header is not served from another header's entry");
+    // Bounded, least recently used first out.
+    ok(PROOF_MEMO_MAX === 2000 && proofMemoSize() <= PROOF_MEMO_MAX, `memo: bounded at ${PROOF_MEMO_MAX}`);
+    __setProofMemoMax(5);
+    const junk = (i) => { const r = unb64(h); r.payload.signature = `0x${randomBytes(65).toString("hex")}`; r.payload.authorization.nonce = `0x${i.toString(16).padStart(64, "0")}`; return b64(r); };
+    for (let i = 0; i < 12; i++) await provenX402Signer(junk(i), { payTo: PAY_TO });
+    ok(proofMemoSize() === 5, `memo: twelve distinct headers past a bound of five keep five (${proofMemoSize()})`);
+    const keep = await signedHeader(alice);
+    await provenX402Signer(keep, { payTo: PAY_TO });
+    const n = proofRecoveryCount();
+    for (let i = 100; i < 108; i++) { await provenX402Signer(keep, { payTo: PAY_TO }); await provenX402Signer(junk(i), { payTo: PAY_TO }); }
+    await provenX402Signer(keep, { payTo: PAY_TO });
+    ok(proofRecoveryCount() === n + 8, `memo: an entry read between eight newer ones is kept over them (${proofRecoveryCount() - n} recoveries for 8 new headers)`);
+    __setProofMemoMax();
+  }
+
+  // ---- the guard's read is one round trip ----------------------------------
+  {
+    const calls = [];
+    const m = new Map();
+    __setTestClient({
+      async get(k) { calls.push("get"); return m.has(k) ? m.get(k) : null; },
+      async mGet(ks) { calls.push("mGet"); return ks.map((k) => (m.has(k) ? m.get(k) : null)); },
+      async set(k, v, o = {}) { calls.push("set"); if (o.NX && m.has(k)) return null; m.set(k, v); return "OK"; },
+      async del(k) { calls.push("del"); return m.delete(k) ? 1 : 0; },
+      async expire() { return 1; },
+    });
+    const g = createReplayGuard();
+    const key = await paymentReplayKeyAsync(fakeReq({ "payment-signature": await signedHeader(alice) }));
+    calls.length = 0;
+    ok((await g.held(key)) === null && calls.join() === "mGet", `held: nothing held reads in one round trip (${calls.join()})`);
+    await g.begin(key); calls.length = 0;
+    ok((await g.held(key)) === "inflight" && calls.join() === "mGet", "held: in flight, one round trip");
+    await g.settle(key); calls.length = 0;
+    ok((await g.held(key)) === "consumed" && calls.join() === "mGet", "held: consumed, one round trip");
+    // A legacy-name entry an earlier build wrote (untagged) is held; our own
+    // tagged entry for another payment there is not.
+    const legacyName = `replay:c:n:${key.split(":")[2]}`;
+    const g2 = createReplayGuard();
+    const key2 = await paymentReplayKeyAsync(fakeReq({ "payment-signature": await signedHeader(alice) }));
+    m.set(`replay:c:n:${key2.split(":")[2]}`, String(Date.now()));
+    ok((await g2.held(key2)) === "consumed", "held: an earlier build's untagged consumed mark at the legacy name is held");
+    const key3 = await paymentReplayKeyAsync(fakeReq({ "payment-signature": await signedHeader(alice) }));
+    m.set(`replay:f:n:${key3.split(":")[2]}`, "v2|n2:someone-else");
+    ok((await g2.held(key3)) === null, "held: another payment's tagged claim at the legacy name is not held");
+    ok(m.has(legacyName), "held: settle wrote the tagged legacy mark");
+    __setTestClient(null);
+  }
 
   // ---- no entry for the body: no signature recovery before the paywall -------
   {
@@ -232,6 +310,14 @@ try {
     ok(s1.verdict === "ok" && s1.scope === `evm:${alice.address.toLowerCase()}` && s1.w === s1.scope, `replay (${label}): the writer settles once and stores under its proven payer`);
     const again = await call({ "payment-signature": settled }, body);
     ok(again.status === 402 && again.cache === null, `replay (${label}): the same settled authorization again is not served the cached answer`);
+    // A copy of the settled authorization under another spelling of the same
+    // chain (the signature still verifies under chainId 8453): the replay
+    // guard keys the payment on the network string, so the proof reads the
+    // canonical spelling only.
+    for (const net of ["eip155:08453", "eip155:008453", "eip155:8453 ", " eip155:8453", "EIP155:8453", "eip155:+8453", "eip155:8453.0"]) {
+      const copy = await call({ "payment-signature": respelled(settled, net) }, body);
+      ok(copy.status === 402 && copy.cache === null, `replay (${label}): the settled authorization re-sent as network ${JSON.stringify(net)} is not served`);
+    }
     const fresh = await call({ "payment-signature": await signedHeader(alice) }, body);
     ok(fresh.status === 200 && fresh.cache === "hit", `replay (${label}): a fresh authorization from the same payer is a hit`);
     // In flight: claimed by the guard, not yet settled.
@@ -247,6 +333,28 @@ try {
     const uk = await paymentReplayKeyAsync(fakeReq({ "payment-signature": unclaimed }));
     ok((await guard.held(uk)) === null && (await guard.begin(uk)) === "ok", `replay (${label}): the cache read claimed nothing`);
     await guard.release(uk);
+  }
+  // An authorization valid for longer than the guard keeps a settled payment's
+  // consumed mark: once the mark lapses the guard no longer holds it, so the
+  // proof refuses any validity span past the hold (less a clock margin).
+  {
+    __setTestClient(null);
+    guard = createReplayGuard({ ttlMs: 1 }); // the hold lapsed
+    const body = { ...BODY, input: `${BODY.input} long validity` };
+    storeFor(`evm:${alice.address.toLowerCase()}`, keyOfBody(body));
+    const holdSec = Math.floor(SETTLED_HOLD_MS / 1000);
+    const long = await signedHeader(alice, { validBefore: now() + holdSec + 60 });
+    const lk = await paymentReplayKeyAsync(fakeReq({ "payment-signature": long }));
+    ok((await guard.begin(lk)) === "ok", "long validity: claimed");
+    await guard.settle(lk);
+    await new Promise((r) => setTimeout(r, 5));
+    ok((await guard.held(lk)) === null, "long validity: the guard's settled hold has lapsed");
+    ok((await call({ "payment-signature": long }, body)).status === 402, "long validity: a settled authorization valid past the hold is not served after the hold lapses");
+    const spanned = await signedHeader(alice, { validAfter: now() - holdSec + 120, validBefore: now() + 600 });
+    ok((await call({ "payment-signature": spanned }, body)).status === 402, "long validity: a window that ends inside the hold from now but spans more than the hold is not served");
+    ok((await call({ "payment-signature": await signedHeader(alice, { validAfter: now() - 600, validBefore: now() + 300 }) }, body)).cache === "hit", "long validity: a stock window (ten minutes back, five ahead) is a hit");
+    ok((await provenX402Signer(long, { payTo: PAY_TO, anyTime: true })) === alice.address.toLowerCase(), "long validity: the writer's proof (no window) still names the payer");
+    guard = createReplayGuard();
   }
   // A configured shared store that does not answer holds everything.
   __setTestClient({ get: async () => { throw new Error("down"); }, set: async () => { throw new Error("down"); }, del: async () => { throw new Error("down"); }, expire: async () => 0 });

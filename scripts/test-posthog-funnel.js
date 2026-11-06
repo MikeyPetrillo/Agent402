@@ -255,6 +255,22 @@ const goneTotal = got.reduce((s, e) => s + e.properties.count, 0);
 ok(got.length === 51 && goneOther?.properties.routes === 10 && goneTotal === 120,
   `60 retired routes flush as 50 rows + one _other (10 routes) with the exact total (got ${got.length} rows, other routes ${goneOther?.properties.routes}, total ${goneTotal})`);
 
+// --- unit: tool_gone map bound (route x source keys are caller-shaped) -------------
+// A caller chooses the retired path and its User-Agent and Referer, so each
+// request can mint a new key; the window's map stops at 5,000 keys and folds
+// the rest into one overflow row, with the total still exact.
+{
+  const N = 7_000;
+  for (let i = 0; i < N; i++) capturePostHogToolGone({ route: `/api/gone-bound-${i}`, replacement: "POST /api/x", source: { uaFamily: `ua${i}`, client: "other", payment: "none", refererHost: `h${i}.example`, surface: "http" } });
+  _flushPaywallRollupForTest();
+  const rows = take().filter((e) => e.event === "tool_gone");
+  const total = rows.reduce((s, e) => s + e.properties.count, 0);
+  const keys = rows.reduce((s, e) => s + (e.properties.route === "_other" ? e.properties.routes : 1), 0);
+  const overflow = rows.find((e) => e.properties.route === "_overflow");
+  ok(total === N && keys <= 5_001 && overflow?.properties.count === N - 5_000,
+    `tool_gone: ${N} caller-shaped keys hold at most 5,000 map keys plus one overflow row, total exact (keys ${keys}, overflow ${overflow?.properties.count}, total ${total})`);
+}
+
 // --- unit: tool_gone source attribution (who still walks an old catalog) ---------
 // Coarse, closed-vocabulary fields only: never an address, a wallet, a full
 // User-Agent, a Referer path or query.

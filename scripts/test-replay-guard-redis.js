@@ -227,5 +227,33 @@ const key = (suffix) => `replay-guard-redis-test:${runId}:${suffix}`;
   await client.del(legacy);
 }
 
+// --- held(): the read-only twin, one MGET on the real client ----------------
+// Read by the gateway cache before the paywall (src/gateway-cache-scope.js):
+// every state another replica wrote, in one round trip, claiming nothing.
+{
+  const reqOf = (nonce) => {
+    const cred = Buffer.from(JSON.stringify({ network: "eip155:8453", payload: { authorization: { nonce, from: "0x" + "c".repeat(40) } } })).toString("base64");
+    return { header: (n) => (String(n).toLowerCase() === "x-payment" ? cred : undefined) };
+  };
+  const gA = createReplayGuard(), gB = createReplayGuard();
+  const k = paymentReplayKey(reqOf("0x" + runId + "d"));
+  ok(await gB.held(k) === null, "real redis: held() reads nothing held for a fresh payment");
+  await gA.begin(k);
+  ok(await gB.held(k) === "inflight", "real redis: held() on another replica reads the claim in flight");
+  await gA.settle(k);
+  ok(await gB.held(k) === "consumed", "real redis: held() on another replica reads the settled mark");
+  const kl = paymentReplayKey(reqOf("0x" + runId + "e"));
+  const legacyC = "replay:c:n:" + kl.split(":")[2], legacyF = "replay:f:n:" + kl.split(":")[2];
+  await client.set(legacyF, String(Date.now()), { EX: 60 });
+  ok(await gB.held(kl) === "inflight", "real redis: held() honors an earlier build's untagged claim at the legacy name");
+  await client.set(legacyF, "v2|n2:" + "0".repeat(64), { EX: 60 });
+  ok(await gB.held(kl) === null, "real redis: held() skips another payment's tagged claim at the legacy name");
+  await client.set(legacyC, String(Date.now()), { EX: 60 });
+  ok(await gB.held(kl) === "consumed", "real redis: held() honors an earlier build's consumed mark at the legacy name");
+  await client.del(legacyC); await client.del(legacyF);
+  ok(await gB.begin(kl) === "ok", "real redis: held() claimed nothing");
+  await gB.release(kl);
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -355,11 +355,16 @@ export function createReplayGuard({ ttlMs = SETTLED_HOLD_MS, maxEntries = 50_000
       try { c = await getSharedRedisClient(); } catch { return sharedLimitEnabled() ? "unavailable" : null; }
       if (!c) return sharedLimitEnabled() ? "unavailable" : null;
       try {
+        // Every name in one round trip (MGET): this read runs before the
+        // paywall on a gateway cache candidate.
         const { primary, legacy } = namesOf(key);
-        if (await c.get(REDIS_PREFIX + "c:" + primary)) return "consumed";
-        if (legacy && isLegacyEntry(await c.get(REDIS_PREFIX + "c:" + legacy))) return "consumed";
-        if (await c.get(REDIS_PREFIX + "f:" + primary)) return "inflight";
-        if (legacy && isLegacyEntry(await c.get(REDIS_PREFIX + "f:" + legacy))) return "inflight";
+        const names = [REDIS_PREFIX + "c:" + primary, REDIS_PREFIX + "f:" + primary];
+        if (legacy) names.push(REDIS_PREFIX + "c:" + legacy, REDIS_PREFIX + "f:" + legacy);
+        const vals = typeof c.mGet === "function" ? await c.mGet(names) : await Promise.all(names.map((n) => c.get(n)));
+        if (!Array.isArray(vals) || vals.length !== names.length) return "unavailable";
+        const [cP, fP, cL, fL] = vals;
+        if (cP || (legacy && isLegacyEntry(cL))) return "consumed";
+        if (fP || (legacy && isLegacyEntry(fL))) return "inflight";
         return null;
       } catch {
         return "unavailable";
