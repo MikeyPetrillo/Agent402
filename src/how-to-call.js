@@ -92,24 +92,32 @@ export function howToCallFor(def) {
   return alt;
 }
 
-/** `{ howToCall }` for spreading into a 400 envelope, or `{}` when none. */
-export function howToCallField(def) {
+// A howToCall shares one small budget wherever it rides: the 400 envelope
+// already carries the tool's example as `example`, and the 402's Bazaar
+// extension carries it as the request body (scripts/test-bazaar-contracts.js),
+// so a call whose example is large (an image as base64, a long schema) goes
+// out as its method and URL only, and the example is not sent twice.
+export const MAX_CALL_BYTES = 1024;
+export const MAX_402_CALL_BYTES = MAX_CALL_BYTES;
+
+/** The call for `def` within MAX_CALL_BYTES: the full call when it fits, else
+ *  `{ method, url }`; null when it has no route. */
+export function boundedHowToCall(def) {
   const call = howToCallFor(def);
+  if (!call) return null;
+  let bytes = Infinity;
+  try { bytes = Buffer.byteLength(JSON.stringify(call), "utf8"); } catch { /* sized as too large */ }
+  return bytes <= MAX_CALL_BYTES ? call : { method: call.method, url: call.url };
+}
+
+/** `{ howToCall }` for spreading into a 400 envelope (bounded as above), or
+ *  `{}` when none. */
+export function howToCallField(def) {
+  const call = boundedHowToCall(def);
   return call ? { howToCall: call } : {};
 }
 
-// A 402 body's own fields share one small budget (scripts/
-// test-bazaar-contracts.js); a call whose example is large (an image as base64,
-// a long schema) goes out as its method and URL only there, since the 402's
-// Bazaar extension carries the same example as the request body.
-export const MAX_402_CALL_BYTES = 1024;
-
-/** `{ howToCall }` for a 402 body: the full call when it fits
- *  MAX_402_CALL_BYTES, else `{ method, url }`; `{}` when none. */
+/** `{ howToCall }` for a 402 body (bounded as above); `{}` when none. */
 export function howToCall402Field(def) {
-  const call = howToCallFor(def);
-  if (!call) return {};
-  let bytes = Infinity;
-  try { bytes = Buffer.byteLength(JSON.stringify(call), "utf8"); } catch { /* sized as too large */ }
-  return { howToCall: bytes <= MAX_402_CALL_BYTES ? call : { method: call.method, url: call.url } };
+  return howToCallField(def);
 }

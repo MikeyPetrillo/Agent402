@@ -96,7 +96,7 @@ import { mppFallbackStatus } from "./mpp-fallback.js";
 import { applyMeteredSettlement, meteredUsdOf } from "./gateway-meter.js";
 import { handlerInputOf, preValidateInput, withIgnoredParams } from "./handler-input.js";
 import { configureHowToCall, howToCall402Field, howToCallField } from "./how-to-call.js";
-import { gatewayCacheGate, scopedCacheKey, writerCacheScope } from "./gateway-cache-scope.js";
+import { gatewayCacheGate, commitGatewayCacheWrites } from "./gateway-cache-scope.js";
 import { startModelCatalogRefresh, modelCatalogWanted } from "./model-catalog.js";
 import { toolErrorFields } from "./tool-error-fields.js";
 import { shapeRefusal } from "./input-aliases.js";
@@ -10552,10 +10552,17 @@ if (FREE_MODE) {
   //                  a resend usually WANTS a fresh sample)
   //   /v1/embeddings — default-ON (deterministic output; `cache: false` opts out)
   // Invalid bodies fall through so the normal path produces the real 402/400.
+  // An x402 authorization the replay guard already holds (in flight or
+  // consumed) proves no payer here: read with the guard's own key and store,
+  // claiming nothing; the guard below then answers it as it answers any other.
   app.use(gatewayCacheGate({
     carriesPaymentAttempt,
     payTo: WALLET_ADDRESS,
     get: promptCacheGetShared,
+    paymentHeld: async (req) => {
+      const key = await paymentReplayKeyAsync(req);
+      return !key || (await replayGuard.held(key)) !== null;
+    },
     keyOf: (req) => {
       if (req.path === EMBEDDINGS_PATH) return embeddingsCacheKey(req.body);
       if (req.path === RERANK_PATH) return rerankCacheKey(req.body); // default-ON like embeddings (deterministic ranker)
@@ -11775,8 +11782,7 @@ for (const tool of ALL_KIT) {
         // Stored under the payer that settled it (src/gateway-cache-scope.js);
         // a call with no proven payer, or one served unsettled, stores nothing.
         const deferred = req.__deferredCache || [];
-        const scope = deferred.length ? writerCacheScope(req, res) : null;
-        for (const w of deferred) { try { const k = scopedCacheKey(w.key, scope); if (k) promptCacheStore(k, w.body); } catch { /* cache is best-effort */ } }
+        if (deferred.length) commitGatewayCacheWrites(req, res, deferred, { payTo: WALLET_ADDRESS, store: promptCacheStore }).catch(() => {});
       });
       // Response digest for the attest tool: sha256 of the exact bytes res.json
       // sends. Express serialises with JSON.stringify and the app sets no
