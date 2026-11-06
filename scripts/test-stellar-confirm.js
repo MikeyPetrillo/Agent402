@@ -380,6 +380,17 @@ const run = (opts, extra = {}) => confirmStellarTransfer({
   ok((await confirm(own, { txHash: earlier.hash, fetchImpl: horizonFor({ txs: [earlier] }) })) === null, "a different transaction from the payer, named by a facilitator, is refused");
   ok((await confirm(own, { fetchImpl: horizonFor({ txs: [earlier], debits: [earlier.hash] }) })) === null, "a different transaction from the payer, found by the lookup, is refused");
 
+  // The signed entry alone is not enough: the landed call must be the signed one.
+  {
+    const ownOp = sdk.TransactionBuilder.fromXDR(own, NET).operations[0];
+    const dustOp = sdk.TransactionBuilder.fromXDR(signedXdr({ amount: 1n, nonce: 9 }), NET).operations[0];
+    const ch = sdk.Keypair.random();
+    const spliced = new sdk.TransactionBuilder(new sdk.Account(ch.publicKey(), "7"), { fee: "100", networkPassphrase: NET })
+      .addOperation(sdk.Operation.invokeHostFunction({ func: dustOp.func, auth: ownOp.auth })).setTimeout(60).build();
+    const sp = { hash: spliced.hash().toString("hex"), envelope_xdr: spliced.toXDR() };
+    ok((await confirm(own, { txHash: sp.hash, fetchImpl: horizonFor({ txs: [sp] }) })) === null, "a landed call other than the signed one is refused, whatever entry it carries");
+  }
+
   // An unsuccessful landing moves nothing.
   ok((await confirm(own, { txHash: ownLanded.hash, fetchImpl: horizonFor({ txs: [{ ...ownLanded, successful: false }] }) })) === null, "the payment's transaction that failed on-chain is not confirmed");
 
