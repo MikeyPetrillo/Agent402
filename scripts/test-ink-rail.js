@@ -39,18 +39,23 @@ const payerOf = (b) => b?.paymentPayload?.payload?.authorization?.from;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let failed = 0;
 const check = (cond, msg) => { if (cond) console.log(`ok - ${msg}`); else { failed++; console.log(`FAIL - ${msg}`); } };
+// After graduation (Ink moved from GATED_RAILS to RAILS, for real or through
+// the NODE_ENV=test seam) static copy names Ink by design; the checks that
+// pin the gated state no longer apply and say so.
+const GRADUATED = (await import("../src/rails.js")).RAILS.some((r) => r.caip2 === INK);
+const gatedCheck = (cond, msg) => (GRADUATED ? console.log(`ok - graduated, not applicable: ${msg}`) : check(cond, msg));
 
 // --- 1a. offline: the rail tables --------------------------------------------
 {
   const rails = await import("../src/rails.js");
   const { NETWORKS } = await import("../src/payments.js");
   check(NETWORKS.ink === INK, "payments.js knows the ink network as eip155:57073");
-  check(rails.GATED_RAILS.some((r) => r.caip2 === INK && r.name === "Ink" && r.asset === "USDC" && r.chainId === 57073), "Ink is a gated rail");
-  check(!rails.RAILS.some((r) => r.caip2 === INK || /ink/i.test(r.name)), "Ink is not in RAILS, so no static copy names it");
+  gatedCheck(rails.GATED_RAILS.some((r) => r.caip2 === INK && r.name === "Ink" && r.asset === "USDC" && r.chainId === 57073), "Ink is a gated rail");
+  gatedCheck(!rails.RAILS.some((r) => r.caip2 === INK || /ink/i.test(r.name)), "Ink is not in RAILS, so no static copy names it");
   const statics = [rails.RAILS_AMP, rails.RAILS_OR, rails.RAILS_PAREN, rails.RAILS_SHORT, rails.RAILS_COUNT, rails.RAILS_OS, rails.RAILS_TICKER, rails.RAILS_NOTE, rails.RAIL_CHAIN_NAMES.join(",")];
-  check(statics.every((t) => !/\bInk\b|INK|57073/.test(t)), "no RAILS-derived string names Ink");
-  check(rails.RAILS_COUNT === `USDC or USDG on ${rails.countWord(rails.RAILS.length)} chains` && rails.liveRails() === rails.RAILS, `the rail count is RAILS' own (${rails.RAILS_COUNT}) and liveRails() is RAILS while Ink is not offered`);
-  check(rails.resolveRailCountTokens("{{railCount}}|{{gatedRailBullets}}") === `${rails.countWord(rails.RAILS.length)}|`, "served rail tokens count RAILS only and list no gated bullet");
+  gatedCheck(statics.every((t) => !/\bInk\b|INK|57073/.test(t)), "no RAILS-derived string names Ink");
+  gatedCheck(rails.RAILS_COUNT === `USDC or USDG on ${rails.countWord(rails.RAILS.length)} chains` && rails.liveRails() === rails.RAILS, `the rail count is RAILS' own (${rails.RAILS_COUNT}) and liveRails() is RAILS while Ink is not offered`);
+  gatedCheck(rails.resolveRailCountTokens("{{railCount}}|{{gatedRailBullets}}") === `${rails.countWord(rails.RAILS.length)}|`, "served rail tokens count RAILS only and list no gated bullet");
 }
 
 /** A facilitator stub: /supported up or 503, /verify valid, /settle by mode. */
@@ -87,7 +92,7 @@ async function boot({ inkUrls = (p) => `http://127.0.0.1:${p.INK1},http://127.0.
   await Promise.all(servers.map(([s, p]) => new Promise((r) => s.listen(p, "127.0.0.1", r))));
   const urls = inkUrls({ INK1, INK2 });
   const env = { ...process.env }; delete env.STATE_DATABASE_URL; delete env.REDIS_URL; delete env.SOLVADOR_KEY; delete env.ROBINHOOD_RELAYER_KEY; delete env.INK_FACILITATOR_URL; delete env.NETWORK_PRICE_FLOORS; delete env.FACILITATOR_PUBLIC_INDEX_CHAINS;
-  const proc = spawn(process.execPath, ["src/server.js"], { cwd: root, stdio: ["ignore", "pipe", "pipe"], env: { ...env, ...ownStoreEnv("ink-rail"), PORT: String(PORT), FREE_MODE: "", NODE_ENV: "test",
+  const proc = spawn(process.execPath, ["--import", "./scripts/lib/loopback-only-preload.js", "src/server.js"], { cwd: root, stdio: ["ignore", "pipe", "pipe"], env: { ...env, ...ownStoreEnv("ink-rail"), PORT: String(PORT), FREE_MODE: "", NODE_ENV: "test",
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", FACILITATOR_URL: `http://127.0.0.1:${BASE_FAC}`, PAYAI_FACILITATOR_URL: `http://127.0.0.1:${BASE_FAC}`, AGENT402_BASE_RPC: `http://127.0.0.1:${BASE_FAC}/rpc`,
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", MPP_SECRET_KEY: "", PAYMENT_NETWORKS: networks,
     ...(urls ? { INK_FACILITATOR_URL: urls } : {}), ROBINHOOD_FALLBACK_RECHECK_MS: "60000", ...extraEnv,
@@ -130,7 +135,7 @@ for (const [label, opts] of [["default boot (no ink listed)", { networks: "base"
       for (const p of SURFACES) {
         const r = await b.get(p);
         const m = /\bInk\b|eip155:57073|"ink"|\/ink\b/.exec(r.text);
-        check(r.status < 500 && !m, `${label}: ${p} does not name Ink (status ${r.status}${m ? `; names it: ${r.text.slice(Math.max(0, m.index - 80), m.index + 40)}` : ""})`);
+        gatedCheck(r.status < 500 && !m, `${label}: ${p} does not name Ink (status ${r.status}${m ? `; names it: ${r.text.slice(Math.max(0, m.index - 80), m.index + 40)}` : ""})`);
       }
       const rails = JSON.parse((await b.get("/api/rails")).text);
       check(!JSON.stringify(rails).includes("ink"), `${label}: /api/rails neither configures nor offers ink`);
@@ -162,7 +167,9 @@ for (const [label, opts] of [["default boot (no ink listed)", { networks: "base"
     for (const p of SURFACES) { const r = await b.get(p); check(r.status < 500, `enabled: ${p} renders (status ${r.status})`); }
     const manifest = JSON.parse((await b.get("/.well-known/x402")).text);
     check(JSON.stringify(manifest).includes("eip155:57073"), "enabled: /.well-known/x402 names Ink while it is offered (runtime surface)");
-    check(!/\bInk\b/.test((await b.get("/llms.txt")).text), "enabled: llms.txt (static rail copy) still does not name Ink");
+    const llms = (await b.get("/llms.txt")).text;
+    check(llms.includes("/ink): USDC (`eip155:57073`)") && (GRADUATED || !/Arc, Ink|Ink, Stellar/.test(llms)), "enabled: llms.txt lists the offered Ink chain page (runtime) while its rail prose, derived from RAILS, does not name Ink");
+    check((await b.get("/ink")).status === 200, "enabled: the /ink chain page serves while Ink is offered (gated runtime surface)");
     let status = a ? await b.pay() : 0;
     check(status === 200 && b.st.ink1.settles === 1 && b.st.ink2.settles === 0 && b.st.base.settles === 0 && b.st.base.verifies === 0, `enabled: the first listed facilitator verifies and settles; the generic one that also lists Ink is never asked (status ${status}, ink1 ${b.st.ink1.settles}, ink2 ${b.st.ink2.settles}, generic ${b.st.base.verifies}/${b.st.base.settles})`);
     b.st.ink1.mode = "prose";

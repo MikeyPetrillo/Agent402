@@ -142,6 +142,8 @@ for (const value of ["robinhood", " Robinhood ,solana", "robinhood,stellar"]) {
 // --- ink: the same disclosure on Ink, alone or with Robinhood ----------------
 {
   const { CHAIN_PAGES } = await import("../src/market-page.js");
+  // Ink's rail page exists once Ink is in RAILS (graduated); before that it is absent.
+  const inkPage = !!CHAIN_PAGES.ink;
   const TERMS_INK = "On Ink, the facilitator that settles a payment publishes it on its public index, as the privacy policy describes.";
   const TERMS_BOTH = "On Robinhood Chain and Ink, the facilitator that settles a payment publishes it on its public index, as the privacy policy describes.";
   // Ink alone: its own list names the host; the Robinhood list is not read for it.
@@ -149,7 +151,7 @@ for (const value of ["robinhood", " Robinhood ,solana", "robinhood,stellar"]) {
   ok(r.pt.includes(`On Ink, the facilitator that settles the payment (ink1.example.test) ${FIELDS}`) && !/Robinhood Chain, the facilitator|rh\.example\.test|ink2\.example\.test/.test(r.pt), "ink: the paragraph names Ink and the first listed Ink host only");
   ok(r.pt.includes(NO_SALE_ON) && r.tt.includes(TERMS_INK) && (r.tt.match(/public index/g) || []).length === 1, "ink: the scoped no-sale line and the terms sentence");
   ok(JSON.stringify(r.m.payment.dataHandling.publicSettlementIndex) === JSON.stringify({ chains: ["ink"], hosts: ["ink1.example.test"], policy: `${BASE}/privacy#public-settlement-index` }), `ink: /.well-known/x402 publicSettlementIndex ${JSON.stringify(r.m.payment.dataHandling.publicSettlementIndex)}`);
-  ok(!/public index/.test(r.llms) && !/public index/.test(pageText(r.rail)), "ink: Robinhood's llms.txt line and rail page say nothing");
+  ok((r.llms.match(/public index/g) || []).length === (inkPage ? 1 : 0) && !/eip155:4663`\); the facilitator/.test(r.llms) && !/public index/.test(pageText(r.rail)), "ink: Robinhood's llms.txt line and rail page say nothing (Ink's own line says it once Ink has a page)");
   // The boot chose a later listed Ink facilitator: every surface names it.
   setPublicIndexBootFacilitator("ink", "https://ink2.example.test");
   r = render({ FACILITATOR_PUBLIC_INDEX_CHAINS: "ink", INK_FACILITATOR_URL: "https://ink1.example.test/x402,https://ink2.example.test" });
@@ -164,16 +166,17 @@ for (const value of ["robinhood", " Robinhood ,solana", "robinhood,stellar"]) {
   r = render({ FACILITATOR_PUBLIC_INDEX_CHAINS: "robinhood,ink", ROBINHOOD_FACILITATOR_URL: "https://rh.example.test", INK_FACILITATOR_URL: "https://ink1.example.test", FACILITATOR_PUBLIC_INDEX_NAME: "Example Relay" });
   ok(r.pt.includes(`On Robinhood Chain and Ink, the facilitator that settles the payment (Example Relay, rh.example.test on Robinhood Chain, ink1.example.test on Ink) ${FIELDS}`), "both, two facilitators: each host named with its chain");
   ok(JSON.stringify(r.m.payment.dataHandling.publicSettlementIndex.hosts) === JSON.stringify(["rh.example.test", "ink1.example.test"]), "both, two facilitators: the manifest names both hosts");
-  ok(r.llms.includes("(`eip155:4663`); the facilitator that settles it publishes each settlement on its public index") && (r.llms.match(/public index/g) || []).length === 1, "both: llms.txt says it on the Robinhood line only while Ink has no rail page (gated)");
+  ok(r.llms.includes("(`eip155:4663`); the facilitator that settles it publishes each settlement on its public index") && (r.llms.match(/public index/g) || []).length === (inkPage ? 2 : 1), "both: llms.txt says it on the Robinhood line, and on Ink's once Ink has a rail page");
   // Once Ink has a rail page (at graduation), its llms.txt line and page say it too.
-  CHAIN_PAGES.ink = { ...CHAIN_PAGES.robinhood, chainName: "Ink", ticker: "ETH", tickerLabel: "INK · MAINNET", caip2: "eip155:57073", asset: "USDC", networkParam: "ink", acceptNetwork: "eip155:57073", isNetwork: (n) => n === "eip155:57073", honestyNetworkPhrase: "the Ink network" };
+  const realInk = CHAIN_PAGES.ink;
+  if (!realInk) CHAIN_PAGES.ink = { ...CHAIN_PAGES.robinhood, chainName: "Ink", ticker: "ETH", tickerLabel: "INK · MAINNET", caip2: "eip155:57073", asset: "USDC", networkParam: "ink", acceptNetwork: "eip155:57073", isNetwork: (n) => n === "eip155:57073", honestyNetworkPhrase: "the Ink network" };
   try {
     r = render({ FACILITATOR_PUBLIC_INDEX_CHAINS: "robinhood,ink", ROBINHOOD_FACILITATOR_URL: "https://rh.example.test", INK_FACILITATOR_URL: "https://ink1.example.test" });
     ok(r.llms.includes(`(\`eip155:57073\`); the facilitator that settles it publishes each settlement on its public index (${BASE}/privacy#public-settlement-index)`) && (r.llms.match(/public index/g) || []).length === 2, "with an Ink rail page: its llms.txt line says it too");
     ok(marketPage("ink", BASE, { snapshot: { sellers: [] }, rail: null, activity: null }).includes('href="/privacy#public-settlement-index"'), "with an Ink rail page: its manifest links the disclosure");
     r = render({ FACILITATOR_PUBLIC_INDEX_CHAINS: "robinhood", ROBINHOOD_FACILITATOR_URL: "https://rh.example.test", INK_FACILITATOR_URL: "https://ink1.example.test" });
     ok(!marketPage("ink", BASE, { snapshot: { sellers: [] }, rail: null, activity: null }).includes("public-settlement-index") && (r.llms.match(/public index/g) || []).length === 1, "ink not listed: its page and line say nothing");
-  } finally { delete CHAIN_PAGES.ink; }
+  } finally { if (!realInk) delete CHAIN_PAGES.ink; }
   for (const [name, html] of [["privacy", r.p], ["terms", r.t]]) ok(!/—/.test(html), `${name} with ink: no em dash`);
 }
 setEnv({});

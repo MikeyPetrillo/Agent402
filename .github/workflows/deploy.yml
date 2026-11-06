@@ -1911,6 +1911,8 @@ jobs:
           t node scripts/test-rh-boot-primary.js
           # Ink (eip155:57073) gated rail: absent from every public surface by default and without INK_FACILITATOR_URL (paywall intact); enabled, the 402 offers native USDC with the "USDC" v2 domain at the floor, the first listed facilitator settles, a no-verdict refusal goes to the next listed, a verdict nowhere; boot choice named by the disclosure; gas readings kept per network (paid-mode boots vs stub facilitators - offline)
           t node scripts/test-ink-rail.js
+          # Ink graduation rehearsal: gated, no surface names Ink (/ink 404, nav, strip, chain list, llms.txt, openapi, manifest, pricing, sitemap; revenue entry inert); through the NODE_ENV=test seam that moves it into RAILS, every one lists it, counts include it and its revenue entry is scanned and ranked (paid-mode boots vs stubs, loopback only - offline)
+          t node scripts/test-ink-graduation.js
           # Robinhood refusals in words: no-verdict passes to the next listed before our relayer and is read on chain when none settles; buyer verdicts retried nowhere; 5xx and other networks unchanged (real hook, stubs - offline)
           t node scripts/test-rh-prose-refusal.js
           # A settle failure that names a transaction is booked and read from the chain: landed after a 402 -> owed once; reverted, foreign or never mined -> nothing owed (stub RPC, real refund ledger - offline)
