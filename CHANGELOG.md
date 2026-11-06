@@ -16,12 +16,18 @@ Router:
 Payments:
 - A payment whose payload declares an x402 version other than the one this
   server offers is answered with the 402 offer instead of being matched.
+- Payment headers are read once at intake through one decoder and passed on
+  in canonical form, so every check reads the same payment.
 - The Tempo buyer pays only challenges whose method details it recognizes.
 - MPP subscription renewal reconciliation reads the renewal amount in base
   units and finds a renewal that landed after a timed-out send.
 - MPP subscription activation signs with its own 25 s validity window, so a
   timed-out activation cannot land after its answer.
 Operations:
+- A `subscriptionRenewals` status word reads `unconfirmed` when an MPP
+  subscription renewal has stayed unconfirmed for longer than
+  `MPP_SUB_UNCONFIRMED_ALERT_HOURS`, and the heartbeat and status Worker page
+  on it.
 - A `robinhoodSettler` status word reads `relayer` when our own relayer has
   settled Robinhood Chain sales in place of the listed facilitator for longer
   than `ROBINHOOD_RELAYER_FIRST_ALERT_HOURS`, and the heartbeat and status

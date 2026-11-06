@@ -13,9 +13,11 @@ const ENTRIES = [
     title: "Settler alarm, direct upstream switch, facilitator map",
     items: [
       "Payments: a payment whose payload declares an x402 version other than the one this server offers is answered with the 402 offer instead of being matched.",
+      "Payments: payment headers are read once at intake through one decoder and passed on in canonical form, so every check reads the same payment.",
       "Payments: the Tempo buyer pays only challenges whose method details it recognizes.",
       "Payments: MPP subscription renewal reconciliation reads the renewal amount in base units and finds a renewal that landed after a timed-out send.",
       "Payments: MPP subscription activation signs with its own 25 s validity window, so a timed-out activation cannot land after its answer.",
+      "Operations: a subscriptionRenewals status word reads unconfirmed when an MPP subscription renewal has stayed unconfirmed for longer than its alert window, and the heartbeat and status Worker page on it.",
       "Operations: a robinhoodSettler status word reads relayer when our own relayer has settled Robinhood Chain sales in place of the listed facilitator for longer than its alert window, and the heartbeat and status Worker page on it.",
       "Operations: the manifest's facilitator map names only chains this server offers.",
       "Payments: a 402 exposes to browsers only the headers it carries, and the MPP charge challenge leaves out the output schema the x402 challenge already holds, so every 402 stays well inside common header limits.",
