@@ -157,6 +157,12 @@ for (const [label, opts] of [["default boot (no ink listed)", { networks: "base"
     check(/Accepting USDC on: [^\n]*\bink\b/.test(b.log.join("")), "enabled: the boot log lists ink in the offer");
     const pricing = JSON.parse((await b.get("/api/pricing")).text);
     check(pricing?.payment?.minPriceUsdByNetwork?.ink === FLOOR, `enabled: /api/pricing publishes the floor the 402 quotes (${JSON.stringify(pricing?.payment?.minPriceUsdByNetwork)})`);
+    // Offered, Ink is named only where a runtime surface lists the live offer,
+    // and every surface still renders; static copy derived from RAILS does not change.
+    for (const p of SURFACES) { const r = await b.get(p); check(r.status < 500, `enabled: ${p} renders (status ${r.status})`); }
+    const manifest = JSON.parse((await b.get("/.well-known/x402")).text);
+    check(JSON.stringify(manifest).includes("eip155:57073"), "enabled: /.well-known/x402 names Ink while it is offered (runtime surface)");
+    check(!/\bInk\b/.test((await b.get("/llms.txt")).text), "enabled: llms.txt (static rail copy) still does not name Ink");
     let status = a ? await b.pay() : 0;
     check(status === 200 && b.st.ink1.settles === 1 && b.st.ink2.settles === 0 && b.st.base.settles === 0 && b.st.base.verifies === 0, `enabled: the first listed facilitator verifies and settles; the generic one that also lists Ink is never asked (status ${status}, ink1 ${b.st.ink1.settles}, ink2 ${b.st.ink2.settles}, generic ${b.st.base.verifies}/${b.st.base.settles})`);
     b.st.ink1.mode = "prose";
