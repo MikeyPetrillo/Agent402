@@ -586,8 +586,8 @@ const stop = async (b) => { b.child.kill("SIGTERM"); await new Promise((r) => { 
     ok(html.includes("direct inference provider") && html.includes("Zero data retention is requested on every such call") && html.includes("calls to listed models") && !/open-weight/i.test(html), "/privacy carries the sentence while configured, naming listed models (the switch takes any id)");
     const item = (html.match(/<li id="direct-inference">([\s\S]*?)<\/li>/) || [])[1] || "";
     ok(item.includes("Example &lt;Inference&gt; &amp; Co") && item.includes('<a href="https://example.com/privacy?a=1&amp;b=2" rel="noopener">its privacy policy</a>') && /zero data retention is requested on every such call/.test(item) && !html.includes("<Inference>"), `/privacy Third parties names the provider, escaped, with its policy link (${item.slice(0, 80)})`);
-    ok(/processed and stored there, except where a provider listed under Third parties operates elsewhere, as noted there\./.test(html), "/privacy: the location sentence carries its exception while configured");
-    ok(!/the provider's gateway stores no prompts/.test(html) && /serves such a request only from workers that keep no prompts or outputs, or refuses it/.test(html), "/privacy claims no more than the zero-retention request and its refusal");
+    ok(/processed and stored there, except where a provider listed under Third parties operates elsewhere\./.test(html) && !/as noted there/.test(html), "/privacy: the location sentence carries its exception while configured, pointing at nothing the item does not say");
+    ok(/Zero data retention is requested on every such call\./.test(html) && !/the provider's gateway stores no prompts|keep no prompts or outputs|or refuses it/.test(html), "/privacy claims the zero-retention request and nothing about how the provider serves or refuses");
     ok(!b.log.join("").includes("direct-test-key"), "the boot log never prints the key");
   } finally { await stop(b); }
 }
