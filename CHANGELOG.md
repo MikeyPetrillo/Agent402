@@ -15,20 +15,25 @@ Router:
 Agents:
 - An input-validation 400 carries howToCall: the method, URL and a ready
   request body from the tool's own example, plus a query-string form where the
-  route serves one; the first-contact 402 body carries the same call.
+  route serves one; the first-contact 402 body carries the same call, or the
+  method and URL alone when the example is large.
 Payments:
-- A cached gateway answer is served only to the payer that settled it.
+- A cached gateway answer is served only to the payer that settled it, on a
+  payment not already used.
 - A Stellar refund or settle confirmation counts USDC only from its pinned
   issuer, and a refused settle releases the authorization's claims so the
   buyer can retry.
 Packages:
-- The buyer client, MCP server and OpenClaw plugin refuse to sign an
-  authorization valid for longer than 24 hours, and a held amount always
-  releases inside that window.
-- The MCP server and OpenClaw plugin redact configured keys from every result,
-  error and log line.
-- Tollbooth grants a request only when its payment middleware took a payment;
-  any other request is answered with a 402.
+- The buyer client (with an x402Client), MCP server and OpenClaw plugin refuse
+  to sign an authorization valid for longer than 24 hours, and a held amount
+  releases inside that window, or within seven days and an hour for a batched
+  payment.
+- The MCP server redacts its configured keys from every result, error and log
+  line; the OpenClaw proxy removes its credits key from error logs and error
+  answers, and its doctor no longer prints it.
+- Tollbooth grants a charged request only when its payment middleware took a
+  payment; a charged request whose method the middleware does not price is
+  answered with a 402, so price every method served.
 Operations:
 - The heartbeat opens one issue when a repository security advisory waits in
   triage for more than a day.
