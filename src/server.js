@@ -95,7 +95,7 @@ import { backfillBrokenPackRefunds } from "./refund-backfill.js";
 import { mppFallbackStatus } from "./mpp-fallback.js";
 import { applyMeteredSettlement, meteredUsdOf } from "./gateway-meter.js";
 import { handlerInputOf, preValidateInput, withIgnoredParams } from "./handler-input.js";
-import { configureHowToCall, howToCallField } from "./how-to-call.js";
+import { configureHowToCall, howToCall402Field, howToCallField } from "./how-to-call.js";
 import { gatewayCacheGate, scopedCacheKey, writerCacheScope } from "./gateway-cache-scope.js";
 import { startModelCatalogRefresh, modelCatalogWanted } from "./model-catalog.js";
 import { toolErrorFields } from "./tool-error-fields.js";
@@ -10427,14 +10427,16 @@ if (FREE_MODE) {
       const firstContact = !req.header("x-payment") && !req.header("payment-signature") && !req.headers.authorization;
       // The call to make once paid, for a buyer that does not read the Bazaar
       // extension (src/how-to-call.js): the same request the input-validation
-      // 400 carries, from the tool's own example. Body only and additive; the
+      // 400 carries, from the tool's own example (its method and URL only when
+      // the example is large: the 402's own fields share a small budget, and
+      // the Bazaar extension carries the example). Body only and additive; the
       // PAYMENT-REQUIRED header is untouched. First contact only, like the
       // metered twin below: a refused payment keeps its own explanation.
       if (firstContact) {
         const origJson = res.json.bind(res);
         res.json = (body) => {
           if (res.statusCode === 402 && body && typeof body === "object" && !Array.isArray(body) && !body.howToCall) {
-            const call = howToCallField(def);
+            const call = howToCall402Field(def);
             if (call.howToCall) body = { ...body, ...call };
           }
           return origJson(body);

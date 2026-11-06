@@ -97,3 +97,19 @@ export function howToCallField(def) {
   const call = howToCallFor(def);
   return call ? { howToCall: call } : {};
 }
+
+// A 402 body's own fields share one small budget (scripts/
+// test-bazaar-contracts.js); a call whose example is large (an image as base64,
+// a long schema) goes out as its method and URL only there, since the 402's
+// Bazaar extension carries the same example as the request body.
+export const MAX_402_CALL_BYTES = 1024;
+
+/** `{ howToCall }` for a 402 body: the full call when it fits
+ *  MAX_402_CALL_BYTES, else `{ method, url }`; `{}` when none. */
+export function howToCall402Field(def) {
+  const call = howToCallFor(def);
+  if (!call) return {};
+  let bytes = Infinity;
+  try { bytes = Buffer.byteLength(JSON.stringify(call), "utf8"); } catch { /* sized as too large */ }
+  return { howToCall: bytes <= MAX_402_CALL_BYTES ? call : { method: call.method, url: call.url } };
+}

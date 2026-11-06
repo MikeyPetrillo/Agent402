@@ -24,7 +24,7 @@ import { createServer } from "node:http";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ownStoreEnv } from "./lib/own-stores.js";
-import { configureHowToCall, howToCallFor, MAX_GET_URL_CHARS } from "../src/how-to-call.js";
+import { configureHowToCall, howToCallFor, howToCall402Field, MAX_GET_URL_CHARS, MAX_402_CALL_BYTES } from "../src/how-to-call.js";
 import { isComputePayable } from "../src/pow.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -60,6 +60,11 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { faile
   ok(m.method === "POST" && m.form?.file && !m.body && !m.alternate && /multipart/.test(m.headers["Content-Type"]), "a multipart tool: a form part, never a JSON body or a query string");
   ok(!howToCallFor(long).alternate, `a GET form past ${MAX_GET_URL_CHARS} characters is left out`);
   ok(howToCallFor({ route: "nonsense" }) === null && howToCallFor({}) === null, "no route, no call");
+  const small = howToCall402Field(post).howToCall;
+  ok(JSON.stringify(small) === JSON.stringify(howToCallFor(post)), "402 form: a call that fits the budget goes out whole");
+  const big = howToCall402Field(long).howToCall;
+  ok(big && big.method === "POST" && big.url === "https://origin.example/api/long" && Object.keys(big).length === 2 && JSON.stringify(howToCallFor(long)).length > MAX_402_CALL_BYTES,
+    `402 form: a call past ${MAX_402_CALL_BYTES} bytes goes out as its method and URL only`);
 }
 
 // ---- Part 2: a FREE_MODE boot --------------------------------------------
