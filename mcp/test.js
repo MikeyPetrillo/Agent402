@@ -536,9 +536,13 @@ try {
       { slug: "redir-paid", method: "POST", path: "/api/redir-paid", price: "$0.001", description: "redirect paid", category: "util", computePayable: false },
     ];
     seen.redirPaidSigned = 0;
+    // /api/fails-paid quotes an honest $0.01 402 and answers the signed retry
+    // with 500: the seller now holds a signed authorization it may redeem.
+    const failsPaidRow = { slug: "fails-paid", method: "POST", path: "/api/fails-paid", price: "$0.01", description: "fails after payment", category: "util", computePayable: false };
+    seen.failsPaidSigned = 0;
     const stub = createServer((req, res) => {
       const send = (status, obj, headers = {}) => { res.writeHead(status, { "Content-Type": "application/json", ...headers }); res.end(JSON.stringify(obj)); };
-      if (req.url.startsWith("/api/pricing")) return send(200, { endpoints: [catalogRow, refusedRow, ...plainRows, switchRow, hintedRow, fixedRow, ...redirRows, flooredRow], payment: { network: "base" } });
+      if (req.url.startsWith("/api/pricing")) return send(200, { endpoints: [catalogRow, refusedRow, ...plainRows, switchRow, hintedRow, fixedRow, ...redirRows, flooredRow, failsPaidRow], payment: { network: "base" } });
       if (req.url.startsWith("/api/floored")) {
         req.resume();
         if (req.headers.authorization) { seen.flooredPaid++; return send(200, { ok: true }); }
@@ -549,6 +553,11 @@ try {
         req.resume();
         if (req.headers["payment-signature"] || req.headers["x-payment"]) { seen.redirPaidSigned++; res.writeHead(307, { Location: `${ELSEWHERE}${req.url}` }); return res.end(); }
         return send(402, {}, { "PAYMENT-REQUIRED": signable("/api/redir-paid", 1000) });
+      }
+      if (req.url.startsWith("/api/fails-paid")) {
+        req.resume();
+        if (req.headers["payment-signature"] || req.headers["x-payment"]) { seen.failsPaidSigned++; return send(500, { error: "internal error" }); }
+        return send(402, {}, { "PAYMENT-REQUIRED": signable("/api/fails-paid", 10000) });
       }
       const plain = PLAIN[req.url.split("?")[0]];
       if (plain) { req.resume(); res.writeHead(plain[0], { "Content-Type": "application/json" }); return res.end(plain[1]); }
@@ -712,6 +721,25 @@ try {
         if (info.spendControls?.maxPerCallUsd !== "unlimited" || info.spendControls?.spentThisSessionUsd !== 0) fail(`off disables the per-call cap and a refusal spends nothing: ${JSON.stringify(info.spendControls)}`);
         console.log("the session budget holds at signing; off disables the per-call cap ✓");
       } finally { await budgeted.close().catch(() => {}); }
+    }
+
+    // A seller that takes the signed header and answers 500 holds a signed
+    // authorization it can still redeem, so each one stays held against the
+    // budget: six $0.01 failures fill a $0.065 budget and the seventh call is
+    // refused before anything is signed.
+    {
+      const held = await connect({ AGENT_KEY: "0x" + "11".repeat(32), AGENT402_MAX_PER_CALL: "off", AGENT402_BUDGET: "0.065" });
+      try {
+        seen.failsPaidSigned = 0;
+        const results = [];
+        for (let i = 0; i < 6; i++) results.push(await held.callTool({ name: "catalog.call", arguments: { slug: "fails-paid", params: { text: String(i) } } }));
+        if (seen.failsPaidSigned !== 6 || !results.every((r) => r.isError && /outcome is unknown/.test(text(r)))) fail(`six signed calls answered 500 must each say the payment's outcome is unknown (signed ${seen.failsPaidSigned}): ${text(results[0]).slice(0, 300)}`);
+        const seventh = await held.callTool({ name: "catalog.call", arguments: { slug: "fails-paid", params: { text: "7" } } });
+        if (seen.failsPaidSigned !== 6 || !seventh.isError || !/session budget exhausted/.test(text(seventh)) || !/held for sent payments/.test(text(seventh))) fail(`the seventh call must be refused by the budget, nothing signed (signed ${seen.failsPaidSigned}): ${text(seventh).slice(0, 300)}`);
+        const info = JSON.parse(text(await held.callTool({ name: "get_payment_info", arguments: {} })));
+        if (info.spendControls?.spentThisSessionUsd !== 0 || info.spendControls?.heldThisSessionUsd !== 0.06) fail(`held and spent are reported apart: ${JSON.stringify(info.spendControls)}`);
+        console.log("a payment the seller answered with 500 stays held against the budget; the seventh call is refused unsigned ✓");
+      } finally { await held.close().catch(() => {}); }
     }
 
     // Defaults: with neither variable set, a $5 quote is refused (the default
