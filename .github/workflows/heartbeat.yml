@@ -256,6 +256,54 @@ jobs:
             gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: every flagship route validates again at $(date -u +%FT%TZ)."
           fi
 
+      # Security advisories waiting in triage: a private report waits on a
+      # maintainer, and nothing else pages on one. The built-in token cannot
+      # read advisories, so the read uses ADVISORY_READ_TOKEN (fine-grained,
+      # this repository, Security advisories read), passed to the script only.
+      # The issue carries GHSA ids and ages, never advisory text. An id listed
+      # in repo var ADVISORY_TRIAGE_ACK (comma list) does not page. A read that
+      # fails (no token, 401/403/5xx) opens its own issue, never a pass, and
+      # leaves the triage issue as it was.
+      - name: Security advisory triage check (alarm on a report in triage past 24 h)
+        if: always()
+        continue-on-error: true
+        env:
+          ADVISORY_READ_TOKEN: ${{ secrets.ADVISORY_READ_TOKEN }}
+          ADVISORY_TRIAGE_ACK: ${{ vars.ADVISORY_TRIAGE_ACK }}
+        run: |
+          TITLE="Security advisory waiting in triage"
+          TITLE2="Security advisory check cannot read"
+          BODY_FILE="$RUNNER_TEMP/advisory-triage-body.md"
+          rm -f "$BODY_FILE"
+          CODE=0
+          ADVISORY_BODY_FILE="$BODY_FILE" node scripts/advisory-triage-check.js || CODE=$?
+          # Only an open issue with exactly this title, opened by the workflow
+          # bot, is the alarm.
+          find_open() {
+            ALARM_NAME="$1" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$1\"" --json number,title,author --jq '[.[] | select(.title == env.ALARM_NAME) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions")][0].number // empty' 2>/dev/null || echo ""
+          }
+          OPEN=$(find_open "$TITLE")
+          OPEN2=$(find_open "$TITLE2")
+          if [ "$CODE" = "0" ]; then
+            [ -z "$OPEN" ] || gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: no security advisory has been in triage past the limit at $(date -u +%FT%TZ)."
+            [ -z "$OPEN2" ] || gh issue close "$OPEN2" --repo "$GITHUB_REPOSITORY" --comment "Recovered: security advisories readable again at $(date -u +%FT%TZ)."
+          elif [ "$CODE" = "1" ] && [ -s "$BODY_FILE" ]; then
+            [ -z "$OPEN2" ] || gh issue close "$OPEN2" --repo "$GITHUB_REPOSITORY" --comment "Recovered: security advisories readable again at $(date -u +%FT%TZ)."
+            if [ -n "$OPEN" ]; then
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body-file "$BODY_FILE"
+            else
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body-file "$BODY_FILE"
+            fi
+          else
+            echo "::warning::security advisory triage check UNREADABLE (exit $CODE) - not silently passing"
+            [ -s "$BODY_FILE" ] || printf 'The heartbeat could not run the security advisory triage check at %s. Read the run log.\n' "$(date -u +%FT%TZ)" > "$BODY_FILE"
+            if [ -n "$OPEN2" ]; then
+              gh issue comment "$OPEN2" --repo "$GITHUB_REPOSITORY" --body-file "$BODY_FILE"
+            else
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE2" --body-file "$BODY_FILE"
+            fi
+          fi
+
       # Canary burner balance watch: an empty burner once read as a settlement
       # outage on the status page. Warn before it runs dry. Public RPC, no keys;
       # an unreadable balance warns loudly rather than silently passing.

@@ -1900,6 +1900,8 @@ jobs:
           # Base block time across Denim (2 s to 200 ms): windows stay the same wall-clock length (offline)
           t node scripts/test-chain-block-time.js
           t node scripts/test-payai-credit-watch.js
+          # Heartbeat security advisory triage check: script vs a stub GitHub API, and the step's shell with gh stubbed (offline)
+          t node scripts/test-advisory-triage.js
           # Heartbeat 7-day MPP reconciliation window step, run with curl/gh stubbed (offline)
           t node scripts/test-heartbeat-mpp-window.js
           t node scripts/test-revenue-fresh-recent.js
