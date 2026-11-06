@@ -36,11 +36,11 @@ import { networkPriceFloors, applyNetworkFloor, networkFloorUsd } from "./networ
 import { installFacilitatorDiagnostics, labelFacilitatorErrors } from "./facilitator-diagnostics.js";
 import { isAlreadyOnChainSettleError, recoverAlreadyOnChain } from "./settle-onchain-proof.js";
 import { pendingSettleApplies, confirmPendingSettle, notePendingSettleAnswers, takePendingAnswers, peekPendingAnswers, pendingSettleTxOf, pendingTxsOf } from "./pending-settle.js";
-import { ownSettledStellarTx, registerSettlementClaimHooks, registerSettlementClaimRelease, recoveredTxHeldElsewhere, txServedElsewhere } from "./settlement-claims.js";
+import { ownSettledStellarTx, registerSettlementClaimHooks, registerSettlementClaimRelease, recoveredTxHeldElsewhere, releasingClaimsOnRefusal, txServedElsewhere } from "./settlement-claims.js";
 import { randomUUID } from "node:crypto";
 import { registerFirstCallAllowanceSettleHook } from "./first-call-allowance.js";
 import { registerLateSettleHook } from "./late-settlements.js";
-import { chargeCancelledForClientGone, registerSettleSentHook, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
+import { chargeCancelledForClientGone, registerSettleSentHook, settleSentWhileConnected, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
 import { markCoveredRunSettled } from "./inflight-cover.js";
 import { ARC_CAIP2, ARC_USDC, ARC_PROFILE, CIRCLE_LABEL, CircleFacilitatorClient, circleClientFromEnv, circleKeyConfigured, withoutArcKinds, arcContractWalletsEnabled, isContractWalletPayment, CIRCLE_EVM_LABEL, CIRCLE_EVM_FALLBACK_NETWORKS, CIRCLE_EVM_FALLBACK_PROFILES, circleEvmFallbackEnabled, circleEvmFallbackFromEnv } from "./circle-facilitator.js";
 import { markGatedRailOffered } from "./gated-rails.js";
@@ -2151,8 +2151,11 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // The charge leaves here: the last hook that can abort or skip a settle is
   // the claim above, so a request this hook sees is one whose facilitator
   // call follows (src/hangup-settlement.js markSettleSent). Nothing that can
-  // end the chain may be registered after it.
-  registerSettleSentHook(server);
+  // end the chain may be registered after it. When the mark refuses the
+  // settle (its throw cancels it before the facilitator call), the
+  // authorization claims taken above are released at once, so the buyer's
+  // retry with the same authorization is not refused as a duplicate.
+  registerSettleSentHook(releasingClaimsOnRefusal(server, { sentBefore: settleSentWhileConnected }));
   registerSettlementClaimRelease(server);
   // A settle failure that names a transaction may still land: booked and
   // read from the chain, and owed if it did (src/late-settlements.js).

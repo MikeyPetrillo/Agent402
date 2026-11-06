@@ -138,6 +138,7 @@ const run = (over = {}, rpcOpts = {}) => verifyInboundPayment({
 // 12. Stellar routes to the injected confirmer, and an unconfirmed one holds.
 {
   const netS = "stellar:pubnet";
+  const STELLAR_USDC = { assetCode: "USDC", assetIssuer: "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN" };
   const acc = { [netS]: { payTo: "GPAYTO" } };
   // A recorded transaction is now REQUIRED (see the unbound-path case below),
   // so the happy path supplies one - this test used to pass without any tx,
@@ -145,7 +146,7 @@ const run = (over = {}, rpcOpts = {}) => verifyInboundPayment({
   const H = "c".repeat(64);
   const yes = await verifyInboundPayment({
     network: netS, payer: "GBUYER", amountUsd: 0.001, tx: H, createdAt: Date.now(),
-    acceptsFor: (n) => acc[n], stellarConfirm: async () => ({ transaction: H, amount: "0.001" }),
+    acceptsFor: (n) => acc[n], stellarConfirm: async () => ({ ...STELLAR_USDC, transaction: H, amount: "0.001" }),
   });
   ok(yes.verified === true && yes.tx === H, "stellar verifies through the shared confirmer");
   const no = await verifyInboundPayment({
@@ -161,13 +162,13 @@ const run = (over = {}, rpcOpts = {}) => verifyInboundPayment({
   const A = "a".repeat(64), B = "b".repeat(64);
   const mismatch = await verifyInboundPayment({
     network: netS, payer: "GBUYER", amountUsd: 0.001, tx: A, createdAt: Date.now(),
-    acceptsFor: (n) => acc[n], stellarConfirm: async () => ({ transaction: B, amount: "0.001" }),
+    acceptsFor: (n) => acc[n], stellarConfirm: async () => ({ ...STELLAR_USDC, transaction: B, amount: "0.001" }),
   });
   ok(mismatch.verified === false && /different transaction/.test(mismatch.reason),
     "a confirmed payment that is NOT this debt's transaction cannot vouch for it");
   const match = await verifyInboundPayment({
     network: netS, payer: "GBUYER", amountUsd: 0.001, tx: A, createdAt: Date.now(),
-    acceptsFor: (n) => acc[n], stellarConfirm: async () => ({ transaction: A, amount: "0.001" }),
+    acceptsFor: (n) => acc[n], stellarConfirm: async () => ({ ...STELLAR_USDC, transaction: A, amount: "0.001" }),
   });
   ok(match.verified === true, "the debt's own transaction verifies it");
 
@@ -176,13 +177,13 @@ const run = (over = {}, rpcOpts = {}) => verifyInboundPayment({
   // satisfied a debt of any size.
   const dust = await verifyInboundPayment({
     network: netS, payer: "GBUYER", amountUsd: 5, tx: A, createdAt: Date.now(),
-    acceptsFor: (n) => acc[n], stellarConfirm: async () => ({ transaction: A, amount: "0.0000001" }),
+    acceptsFor: (n) => acc[n], stellarConfirm: async () => ({ ...STELLAR_USDC, transaction: A, amount: "0.0000001" }),
   });
   ok(dust.verified === false && /short/.test(dust.reason),
     "a dust transfer cannot satisfy a larger debt");
   const exact = await verifyInboundPayment({
     network: netS, payer: "GBUYER", amountUsd: 0.001, tx: A, createdAt: Date.now(),
-    acceptsFor: (n) => acc[n], stellarConfirm: async () => ({ transaction: A, amount: "0.0010000" }),
+    acceptsFor: (n) => acc[n], stellarConfirm: async () => ({ ...STELLAR_USDC, transaction: A, amount: "0.0010000" }),
   });
   ok(exact.verified === true, "7-decimal Stellar amounts compare correctly in stroops");
 
@@ -191,10 +192,33 @@ const run = (over = {}, rpcOpts = {}) => verifyInboundPayment({
   // two such rows plus one payment verified both, each repaid in full.
   const unbound = await verifyInboundPayment({
     network: netS, payer: "GBUYER", amountUsd: 0.001, createdAt: Date.now(),
-    acceptsFor: (n) => acc[n], stellarConfirm: async () => ({ transaction: A, amount: "0.001" }),
+    acceptsFor: (n) => acc[n], stellarConfirm: async () => ({ ...STELLAR_USDC, transaction: A, amount: "0.001" }),
   });
   ok(unbound.verified === false && /cannot bind/.test(unbound.reason),
     "a row with no recorded transaction is HELD, never verified by a time-window match");
+
+  // USDC BY ISSUER. A Stellar asset whose code reads "USDC" from any other
+  // issuer, or a confirmer that does not say which asset it found, is not
+  // proof of a payment.
+  const asked = [];
+  const lookalike = await verifyInboundPayment({
+    network: netS, payer: "GBUYER", amountUsd: 0.001, tx: A, createdAt: Date.now(),
+    acceptsFor: (n) => acc[n], stellarConfirm: async (o) => { asked.push(o); return { assetCode: "USDC", assetIssuer: "GCXKG6RN4ONIEPCMNFB732A436Z5PPNCLKINVBYFCLXQ2VCM7YKN2VCM", transaction: A, amount: "0.001" }; },
+  });
+  ok(lookalike.verified === false && /issuer/.test(lookalike.reason), `a look-alike USDC from another issuer is not proof (${lookalike.reason})`);
+  ok(asked[0]?.assetCode === "USDC" && asked[0]?.assetIssuer === STELLAR_USDC.assetIssuer, "the verifier asks the confirmer for USDC by code and issuer");
+  const unnamed = await verifyInboundPayment({
+    network: netS, payer: "GBUYER", amountUsd: 0.001, tx: A, createdAt: Date.now(),
+    acceptsFor: (n) => acc[n], stellarConfirm: async () => ({ transaction: A, amount: "0.001" }),
+  });
+  ok(unnamed.verified === false, "a confirmation that names no asset is not proof");
+  const otherCode = await verifyInboundPayment({
+    network: netS, payer: "GBUYER", amountUsd: 0.001, tx: A, createdAt: Date.now(),
+    acceptsFor: (n) => acc[n], stellarConfirm: async () => ({ assetCode: "USDX", assetIssuer: STELLAR_USDC.assetIssuer, transaction: A, amount: "0.001" }),
+  });
+  ok(otherCode.verified === false, "another asset code from the USDC issuer is not proof");
+  const { STELLAR_USDC_ISSUER } = await import("../src/stellar-confirm.js");
+  ok(STELLAR_USDC_ISSUER === STELLAR_USDC.assetIssuer, "the pinned issuer is the USDC issuer");
 }
 
 // 13. SOLANA. Balances are compared per OWNER pre/post, because a payer may
