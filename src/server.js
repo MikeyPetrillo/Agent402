@@ -95,6 +95,7 @@ import { backfillBrokenPackRefunds } from "./refund-backfill.js";
 import { mppFallbackStatus } from "./mpp-fallback.js";
 import { applyMeteredSettlement, meteredUsdOf } from "./gateway-meter.js";
 import { handlerInputOf, preValidateInput, withIgnoredParams } from "./handler-input.js";
+import { configureHowToCall, howToCallField } from "./how-to-call.js";
 import { startModelCatalogRefresh, modelCatalogWanted } from "./model-catalog.js";
 import { toolErrorFields } from "./tool-error-fields.js";
 import { shapeRefusal } from "./input-aliases.js";
@@ -10423,6 +10424,21 @@ if (FREE_MODE) {
       // Authorization credential such as a Tempo credential or a credits key)
       // keeps its own explanation.
       const firstContact = !req.header("x-payment") && !req.header("payment-signature") && !req.headers.authorization;
+      // The call to make once paid, for a buyer that does not read the Bazaar
+      // extension (src/how-to-call.js): the same request the input-validation
+      // 400 carries, from the tool's own example. Body only and additive; the
+      // PAYMENT-REQUIRED header is untouched. First contact only, like the
+      // metered twin below: a refused payment keeps its own explanation.
+      if (firstContact) {
+        const origJson = res.json.bind(res);
+        res.json = (body) => {
+          if (res.statusCode === 402 && body && typeof body === "object" && !Array.isArray(body) && !body.howToCall) {
+            const call = howToCallField(def);
+            if (call.howToCall) body = { ...body, ...call };
+          }
+          return origJson(body);
+        };
+      }
       const twinDef = firstContact ? meteredTwinDefOf(def.slug) : null;
       if (twinDef) {
         const origJson = res.json.bind(res);
@@ -11478,6 +11494,7 @@ app.post("/api/memory/forget", memHandler((req, actor, owner) => forget(owner, r
 //   2. Analytics write-through: records slug, latency, cache flag, error flag
 //      to Postgres after responding. Fire-and-forget, never blocks the call.
 //      No-op when ANALYTICS_DATABASE_URL (or DATABASE_URL) is unset.
+configureHowToCall({ baseUrl: BASE_URL, catalog: CATALOG });
 for (const tool of ALL_KIT) {
   const [method, path] = tool.route.split(" ");
   const lowerMethod = method.toLowerCase();
@@ -11822,6 +11839,9 @@ for (const tool of ALL_KIT) {
           expected: tool.discovery?.inputSchema?.properties || {},
           required: tool.discovery?.inputSchema?.required || [],
           example: tool.discovery?.input || {},
+          // The same example as a ready-to-run request (src/how-to-call.js):
+          // method, full URL and body, plus the other verb where it is served.
+          ...howToCallField(tool),
         });
       } else {
         res.status(status).json({ error: errorMessage, tool: tool.slug, ...provenance });

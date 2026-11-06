@@ -1625,6 +1625,9 @@ jobs:
       # An input nested past the depth bound is a 400 on HTTP and MCP (boots its own server on port 0)
       - name: Input nesting depth bound
         run: node scripts/test-input-depth.js
+      # Every input-validation 400 carries a ready-to-run howToCall; each free-tier tool's call and alternate are sent as written (boots its own server on port 0)
+      - name: Input 400 carries a ready-to-run call
+        run: node scripts/test-how-to-call.js
 
       # ONE STEP, MANY SCRIPTS (2026-08-25): GitHub spends ~0.7 s of runner setup
       # per step and this lane had over a hundred one-line steps. Each script still
