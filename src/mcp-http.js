@@ -56,7 +56,8 @@ import { routableSellerSummaries, screenSellerNameOn } from "./x402-index.js";
 import { logSafe } from "./log-safe.js";
 import { withoutPaymentRequired } from "./payment-required-body.js";
 import { recordWish } from "./wish.js";
-import { capturePostHogDiscovery } from "./posthog.js";
+import { capturePostHogDiscovery, capturePostHogToolGone, toolGoneSourceOf } from "./posthog.js";
+import { retiredEntryForSlug } from "./retired-tools.js";
 import { rankBy as rankLeaderboard } from "./leaderboard.js";
 import { SKILL_PACKS, PACK_PRICE_RANGE, buildPromptMessages, rankSkillPacks } from "./skills.js";
 import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
@@ -431,7 +432,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
   // shows capabilities), and for every other request while skills are armed,
   // so resources/list and resources/read are answered for a client that saw
   // the declaration on its own initialize.
-  function buildServer(ip, signal, heartbeatToken = null, { skillsCaps = false } = {}) {
+  function buildServer(ip, signal, heartbeatToken = null, { skillsCaps = false, reqHeaders = {} } = {}) {
     const server = new Server(
       {
         name: profile?.serverName || "agent402",
@@ -1357,6 +1358,16 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         const resolvedSlug = isNamed ? namedSlug : String(args.slug ?? "");
         const entry = tools.get(resolvedSlug);
         if (!entry) {
+          // A slug we RETIRED is named as retired, with its replacement, and
+          // counted like the HTTP 410 (tool_gone, surface mcp), so an old
+          // catalog copy walked over the connector is visible too.
+          const gone = retiredEntryForSlug(resolvedSlug);
+          if (gone) {
+            const rep = gone.replacement ? tools.get(gone.replacement) : null;
+            try { capturePostHogToolGone({ route: gone.route, replacement: rep ? rep.def.route : "GET /api/find", source: toolGoneSourceOf({ headers: reqHeaders, surface: "mcp" }) }); } catch { /* telemetry never breaks a response */ }
+            const what = gone.kind === "pack" ? "Skill pack" : "Tool";
+            return { content: [{ type: "text", text: `${what} ${gone.slug} was retired on ${gone.retiredAt}. ${rep ? `Use slug ${rep.def.slug} instead (${rep.def.route}).` : "There is no direct replacement; use catalog.search to find the closest live tool."}` }], isError: true };
+          }
           return { content: [{ type: "text", text: `Unknown slug ${quotedEcho(resolvedSlug)}. Use catalog.search to find the right slug.` }], isError: true };
         }
         if (!entry.free) {
@@ -1637,7 +1648,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       // Client disconnect: abort in-flight handler work AND close the transport
       // (F14) — not just close the transport while the handler keeps running.
       res.on("close", () => { ac.abort(); try { transport.close(); } catch { /* already closing */ } });
-      await buildServer(ip, ac.signal, typeof req.headers["x-heartbeat-token"] === "string" ? req.headers["x-heartbeat-token"] : null, { skillsCaps }).connect(transport);
+      await buildServer(ip, ac.signal, typeof req.headers["x-heartbeat-token"] === "string" ? req.headers["x-heartbeat-token"] : null, { skillsCaps, reqHeaders: req.headers }).connect(transport);
       run = transport.handleRequest(req, res, req.body);
       // R-11/F14: per-request deadline. On fire, abort the handler and close the
       // transport so it settles, then (in finally) await that settle before the

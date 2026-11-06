@@ -366,7 +366,7 @@ import { databasesStatus } from "./db-status.js";
 import { initWithRetry } from "./db-init-retry.js";
 import { baseNotificationsEnabled } from "./base-notifications.js";
 import { railOf, outcomeRailOf } from "./payment-rail.js";
-import { initPostHog, capturePostHogWrongMethod, capturePostHogToolError, capturePostHogToolCall, telemetryKeyOf, capturePostHogDiscovery, capturePostHogPaywall, capturePostHogPowChallenge, capturePostHogSettlement, capturePostHogChargedFailure, capturePostHogSettleFailed, capturePostHogToolGone, capturePostHogHumanFunnel, shutdownPostHog, posthogEnabled } from "./posthog.js";
+import { initPostHog, capturePostHogWrongMethod, capturePostHogToolError, capturePostHogToolCall, telemetryKeyOf, capturePostHogDiscovery, capturePostHogPaywall, capturePostHogPowChallenge, capturePostHogSettlement, capturePostHogChargedFailure, capturePostHogSettleFailed, capturePostHogToolGone, toolGoneSourceOf, capturePostHogHumanFunnel, shutdownPostHog, posthogEnabled } from "./posthog.js";
 import { analyticsPage } from "./analytics-page.js";
 import { operatorPage, operatorLoginPage } from "./operator.js";
 import { privacyPage } from "./privacy.js";
@@ -9389,7 +9389,7 @@ const retiredConvertGone = (req, res) => {
   const num = retiredConvertValue(req);
   // Residual demand we can't serve is the product signal worth an event.
   // Fire-and-forget, rate-capped in posthog.js; env-gated no-op like every capture.
-  capturePostHogToolGone({ route: req.path, replacement: "POST /api/unit-convert" });
+  capturePostHogToolGone({ route: req.path, replacement: "POST /api/unit-convert", source: toolGoneSourceOf({ headers: req.headers, surface: "http" }) });
   res.set(retirementHeaders(RETIRED_CONVERTERS_AT, `${BASE_URL}/api/unit-convert`));
   res.status(410).json({
     error: "This pairwise conversion endpoint is retired. Use POST /api/unit-convert with { value, from, to } - the same unit ids and the same math, one route for every pair. Discovery: GET /api/find?q=unit+convert.",
@@ -11950,7 +11950,7 @@ app.use((req, res) => {
       if (gone) {
         const rep = gone.replacement ? Object.values(CATALOG).find((d) => d.slug === gone.replacement) : null;
         const replacement = rep ? { slug: rep.slug, route: rep.route, url: `${BASE_URL}${rep.route.split(" ")[1] || rep.route}`, price: rep.price } : null;
-        try { capturePostHogToolGone({ route: req.path, replacement: replacement ? replacement.route : "GET /api/find" }); } catch { /* telemetry never breaks a response */ }
+        try { capturePostHogToolGone({ route: req.path, replacement: replacement ? replacement.route : "GET /api/find", source: toolGoneSourceOf({ headers: req.headers, surface: "http" }) }); } catch { /* telemetry never breaks a response */ }
         res.set(retirementHeaders(gone.retiredAt, replacement?.url));
         return res.status(410).json({
           ok: false, error: "gone", slug: gone.slug, retiredAt: gone.retiredAt, replacement,
@@ -11958,7 +11958,7 @@ app.use((req, res) => {
           find: `${BASE_URL}/api/find?q=${encodeURIComponent(slug)}`, suggestions,
         });
       }
-      try { capturePostHogToolGone({ route: req.path, replacement: "GET /api/find" }); } catch { /* telemetry never breaks a response */ }
+      try { capturePostHogToolGone({ route: req.path, replacement: "GET /api/find", source: toolGoneSourceOf({ headers: req.headers, surface: "http" }) }); } catch { /* telemetry never breaks a response */ }
       return res.status(404).json({ ok: false, error: "not-found", hint: `No tool lives at ${req.path}. It may have been retired; the closest live tools are listed, or ask /api/find?q=<task>.`, find: `${BASE_URL}/api/find?q=${encodeURIComponent(slug)}`, suggestions });
     }
     return res.status(404).json({ ok: false, error: "not-found" });

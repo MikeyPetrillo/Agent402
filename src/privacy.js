@@ -71,7 +71,7 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-05.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-06.</p>
 </section>
 
 <section>
@@ -194,7 +194,9 @@ so every claim below is verifiable in code.</p>
   <li><b>Operational telemetry.</b> The server records service events (tool called, payment settled,
   errors) with metadata - tool name, HTTP status, price, settlement chain, the paying wallet
   address (already public on-chain) and, on a settled payment, the first word of the caller's
-  User-Agent - in a server-side analytics tool (PostHog). This is used to run
+  User-Agent; a call to a retired route carries the first word of the User-Agent, the host name of the
+  Referer (no path or query) and which kind of payment header was present (never its value) - in a
+  server-side analytics tool (PostHog). This is used to run
   the service: reliability, abuse prevention, and knowing what sells. It does not include tool inputs,
   prompts, outputs, cookies, or browser fingerprints, with these exceptions: a tool call can carry a keyed
   hash of one declared input field (for example the ticker), so repeat use is countable without the value;

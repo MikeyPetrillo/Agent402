@@ -32,6 +32,7 @@ const {
   capturePostHogSettlement,
   capturePostHogToolError,
   capturePostHogToolGone,
+  toolGoneSourceOf,
   capturePostHogToolCall,
   _flushPaywallRollupForTest,
   _testEventsForTest,
@@ -253,6 +254,64 @@ const goneOther = got.find((e) => e.properties.route === "_other");
 const goneTotal = got.reduce((s, e) => s + e.properties.count, 0);
 ok(got.length === 51 && goneOther?.properties.routes === 10 && goneTotal === 120,
   `60 retired routes flush as 50 rows + one _other (10 routes) with the exact total (got ${got.length} rows, other routes ${goneOther?.properties.routes}, total ${goneTotal})`);
+
+// --- unit: tool_gone source attribution (who still walks an old catalog) ---------
+// Coarse, closed-vocabulary fields only: never an address, a wallet, a full
+// User-Agent, a Referer path or query.
+{
+  const src = toolGoneSourceOf({
+    headers: {
+      "user-agent": "x402-fetch/0.6.1 (node; contact me@example.org) extra free text",
+      referer: "https://Catalog.Example.org/list/old?key=secret#frag",
+      "x-payment": "eyJhbGciOi",
+      "x-forwarded-for": "203.0.113.9",
+    },
+    surface: "http",
+  });
+  ok(src.uaFamily === "x402-fetch" && src.client === "x402-fetch" && src.payment === "x402" && src.refererHost === "catalog.example.org" && src.surface === "http",
+    `the source is UA family, client hint, payment presence, Referer host and surface (got ${JSON.stringify(src)})`);
+  ok(Object.keys(src).sort().join(",") === "client,payment,refererHost,surface,uaFamily", `the source carries exactly those five fields (got ${Object.keys(src).sort().join(",")})`);
+  const flat = JSON.stringify(src);
+  ok(!/203\.0\.113|secret|\/list|contact|me@|0\.6\.1|frag/.test(flat), "no address, Referer path or query, UA version or UA free text leaks into the source");
+  const bare = toolGoneSourceOf({ headers: {}, surface: "mcp" });
+  ok(bare.uaFamily === "(none)" && bare.client === "other" && bare.payment === "none" && bare.refererHost === null && bare.surface === "mcp", `a bare request reads as none/other/null (got ${JSON.stringify(bare)})`);
+  ok(toolGoneSourceOf({ headers: { "user-agent": "agent402-heartbeat" } }).client === "own", "our own probe User-Agent reads as own");
+  ok(toolGoneSourceOf({ headers: { "user-agent": "agent402-client/0.9.0" } }).client === "agent402-client", "the buyer SDK reads as agent402-client");
+  ok(toolGoneSourceOf({ headers: { "user-agent": "mppx/0.9.2" } }).client === "mppx", "an MPP client library reads as mppx");
+  ok(toolGoneSourceOf({ headers: { "user-agent": "Mozilla/5.0 (Macintosh) AppleWebKit Chrome/130 Safari" } }).client === "browser", "a browser reads as browser");
+  ok(toolGoneSourceOf({ headers: { "payment-signature": "x" } }).payment === "x402" && toolGoneSourceOf({ headers: { authorization: "Payment abc" } }).payment === "mpp"
+    && toolGoneSourceOf({ headers: { "x-pow-solution": "a:b" } }).payment === "pow" && toolGoneSourceOf({ headers: { authorization: "Bearer a402_xyz" } }).payment === "credits",
+    "payment presence is named by rail family, from header presence alone");
+  ok(toolGoneSourceOf({ headers: { referer: "not a url" } }).refererHost === null && toolGoneSourceOf({ headers: { referer: "javascript:alert(1)" } }).refererHost === null, "an unparseable or non-web Referer is null");
+  ok(toolGoneSourceOf({ headers: { "user-agent": "evil<script>/1" } }).uaFamily === "evilscript", "the UA family keeps word characters only");
+  ok(toolGoneSourceOf({ surface: "carrier-pigeon" }).surface === "http", "an unknown surface reads as http");
+
+  // Rolled up per route AND source: one client's walk is one groupable set of rows.
+  const a = toolGoneSourceOf({ headers: { "user-agent": "python-requests/2.31" }, surface: "http" });
+  const b = toolGoneSourceOf({ headers: { "user-agent": "node" }, surface: "mcp" });
+  for (let i = 0; i < 3; i++) capturePostHogToolGone({ route: "/api/workday-count", replacement: "POST /api/business-days", source: a });
+  capturePostHogToolGone({ route: "/api/workday-count", replacement: "POST /api/business-days", source: b });
+  capturePostHogToolGone({ route: "/api/soundex", replacement: "GET /api/find" });
+  _flushPaywallRollupForTest();
+  const rows = take().filter((e) => e.event === "tool_gone");
+  const ra = rows.find((e) => e.properties.route === "/api/workday-count" && e.properties.uaFamily === "python-requests");
+  const rb = rows.find((e) => e.properties.route === "/api/workday-count" && e.properties.surface === "mcp");
+  const rc = rows.find((e) => e.properties.route === "/api/soundex");
+  ok(rows.length === 3 && ra?.properties.count === 3 && rb?.properties.count === 1 && ra.properties.surface === "http",
+    `one row per route and source, counts exact (got ${rows.length} rows: ${rows.map((e) => `${e.properties.route}:${e.properties.uaFamily}:${e.properties.count}`).join(" ")})`);
+  ok(ourKeys(ra?.properties) === "client,count,payment,refererHost,replacement,route,surface,uaFamily", `a row carries the source fields and nothing else (got ${ourKeys(ra?.properties)})`);
+  ok(rc?.properties.uaFamily === "(none)" && rc?.properties.surface === "http", "a capture without a source still rolls up, as an unattributed http row");
+
+  // Bounded: 60 routes from 15 sources still flush at most 50 rows + the
+  // per-source remainder (capped), and the total is exact.
+  for (let r = 0; r < 60; r++) capturePostHogToolGone({ route: `/api/gone-${r}`, replacement: "GET /api/find", source: toolGoneSourceOf({ headers: { "user-agent": `client${r % 15}/1` } }) });
+  _flushPaywallRollupForTest();
+  const many = take().filter((e) => e.event === "tool_gone");
+  const manyTotal = many.reduce((s, e) => s + e.properties.count, 0);
+  const others = many.filter((e) => e.properties.route === "_other");
+  ok(many.length <= 61 && manyTotal === 60 && others.length >= 1 && others.every((e) => typeof e.properties.uaFamily === "string" && e.properties.routes >= 1),
+    `the tail keeps its source per row, bounded (got ${many.length} rows, total ${manyTotal}, ${others.length} _other rows)`);
+}
 
 // --- integration: the real funnel through a paid-mode server ----------------------
 const [FAC_PORT, PORT] = await getFreePorts(2), B = `http://127.0.0.1:${PORT}`;
