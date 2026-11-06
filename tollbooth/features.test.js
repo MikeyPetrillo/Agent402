@@ -505,6 +505,17 @@ ok(html.includes("initProbes") && html.includes("navigator.clipboard"), "probes 
   } finally { for (const s of servers) s.close(); }
 }
 
+// The README's x402 example is what operators copy: it prices every method the
+// gate charges, and the upgrade note says an unpriced method now gets the 402.
+{
+  const { readFileSync } = await import("node:fs");
+  const readme = readFileSync(new URL("./README.md", import.meta.url), "utf8");
+  const blocks = [...readme.matchAll(/```js\n([\s\S]*?)```/g)].map((m) => m[1]).filter((b) => b.includes("paymentMiddleware("));
+  ok(blocks.length >= 1, "README: an x402 middleware example exists");
+  ok(blocks.every((b) => !/"(GET|HEAD) \/\*"/.test(b)), "README: the x402 example does not price GET alone");
+  ok(/^## Upgrading from 0\.10\.8 or earlier$/m.test(readme) && /gets the\s+gate's 402/.test(readme), "README: the upgrade note names the 402 on an unpriced method");
+}
+
 console.log(`\n${pass} passed`);
 
 // In-memory SQLite for the shared-store assertions. Prefers the built-in
