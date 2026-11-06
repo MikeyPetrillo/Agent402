@@ -75,6 +75,9 @@ jobs:
           # intends the Arc rail, so the rails check requires eip155:5042. Only
           # the comparison reaches the job, never the key.
           ARC_RAIL_INTENDED: ${{ secrets.CIRCLE_FACILITATOR_API_KEY != '' }}
+          # "true" when the Ink facilitator list secret is set: the operator
+          # intends the Ink rail, so the rails check requires eip155:57073.
+          INK_RAIL_INTENDED: ${{ secrets.INK_FACILITATOR_URL != '' }}
         run: |
           . scripts/heartbeat-probe.sh
           for attempt in 1 2 3; do
@@ -1578,6 +1581,9 @@ jobs:
           POW_SECRET: ${{ secrets.POW_SECRET }}
           ROBINHOOD_FACILITATOR_URL: ${{ secrets.ROBINHOOD_FACILITATOR_URL }}
           ARC_RAIL_INTENDED: ${{ secrets.CIRCLE_FACILITATOR_API_KEY != '' }}
+          # "true" when the Ink facilitator list secret is set: the operator
+          # intends the Ink rail, so the rails check requires eip155:57073.
+          INK_RAIL_INTENDED: ${{ secrets.INK_FACILITATOR_URL != '' }}
           OP_TOKEN: ${{ secrets.AGENT402_OPERATOR_TOKEN }}
           # Narrow credential for POST /api/status/probe; falls back to OP_TOKEN.
           PROBE_TOKEN: ${{ secrets.STATUS_PROBE_TOKEN }}
