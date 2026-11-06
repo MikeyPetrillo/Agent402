@@ -212,7 +212,7 @@ async function runStep(sc, { open1 = "", open2 = "", env = {} } = {}) {
   await writeFile(path.join(dir, "open2"), open2);
   await rm(path.join(dir, "gh.log"), { force: true });
   const r = await run("bash", ["-eo", "pipefail", "-c", step.run], baseEnv({
-    PATH: `${dir}:${path.dirname(process.execPath)}:${process.env.PATH}`, RUNNER_TEMP: dir, GH_TOKEN: "x", ...env,
+    PATH: `${dir}:${process.env.PATH}`, RUNNER_TEMP: dir, GH_TOKEN: "x", ...env,
   }));
   r.log = await readFile(path.join(dir, "gh.log"), "utf8").catch(() => "");
   return r;
