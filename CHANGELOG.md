@@ -6,12 +6,8 @@ carries its own version on npm.
 
 ## Unreleased
 
-### 2026-11-06 (Ink rail behind its gate, settler alarm, direct upstream switch)
+### 2026-11-06 (settler alarm, direct upstream switch, facilitator map)
 Payments:
-- Ink (USDC on eip155:57073) is built as a rail settled through an ordered
-  facilitator list (`INK_FACILITATOR_URL`) and stays off every public
-  surface until it is enabled; its chain page, revenue reads and status rows
-  join the live set at that step.
 - MPP subscription activation signs with its own 25 s validity window, so a
   timed-out activation cannot land after its answer.
 Operations:
@@ -22,7 +18,7 @@ Operations:
 - The manifest's facilitator map names only chains this server offers.
 Gateway:
 - An optional direct inference upstream (`DIRECT_UPSTREAM_*`, off unless set)
-  serves listed open-weight models on the chat wire with zero data retention
+  serves listed models on the chat wire with zero data retention
   requested on every call, and falls back to the usual route on any failure.
 Packages:
 - viem is 2.57.16.

@@ -3,13 +3,12 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 const ENTRIES = [
   {
     date: "2026-11-06",
-    title: "Ink rail behind its gate, settler alarm, direct upstream switch",
+    title: "Settler alarm, direct upstream switch, facilitator map",
     items: [
-      "Payments: Ink (USDC on eip155:57073) is built as a rail settled through an ordered facilitator list and stays off every public surface until it is enabled; its chain page, revenue reads and status rows join the live set at that step.",
       "Payments: MPP subscription activation signs with its own 25 s validity window, so a timed-out activation cannot land after its answer.",
       "Operations: a robinhoodSettler status word reads relayer when our own relayer has settled Robinhood Chain sales in place of the listed facilitator for longer than its alert window, and the heartbeat and status Worker page on it.",
       "Operations: the manifest's facilitator map names only chains this server offers.",
-      "Gateway: an optional direct inference upstream, off unless set, serves listed open-weight models on the chat wire with zero data retention requested on every call, and falls back to the usual route on any failure.",
+      "Gateway: an optional direct inference upstream, off unless set, serves listed models on the chat wire with zero data retention requested on every call, and falls back to the usual route on any failure.",
       "Packages: viem is 2.57.16.",
     ],
   },
