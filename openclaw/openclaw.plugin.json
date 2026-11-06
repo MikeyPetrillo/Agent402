@@ -42,7 +42,11 @@
           "number",
           "string"
         ],
-        "description": "Per-call ceiling in USD for wallet (x402) payments, checked before signing (default 2, the gateway's metered quote cap; 0 or \"off\" disables). Also AGENT402_MAX_PER_CALL_USD."
+        "description": "Per-call ceiling in USD for wallet (x402) payments, checked before signing and again on the signed amount before sending (default 2, the gateway's metered quote cap; 0 or \"off\" removes it only with allowUncappedPayments: true). Also AGENT402_MAX_PER_CALL_USD."
+      },
+      "allowUncappedPayments": {
+        "type": "boolean",
+        "description": "Set true to let maxPerCallUsd 0 or \"off\" remove the per-call ceiling; without it the default ceiling stays. Also AGENT402_ALLOW_UNCAPPED_PAYMENTS=true."
       }
     }
   },
