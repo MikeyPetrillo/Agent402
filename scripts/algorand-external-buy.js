@@ -40,6 +40,7 @@ import { writeFileSync } from "node:fs";
 import { algorandCatalog } from "../src/algorand-sellers.js";
 import { getJsonAcross, ALGORAND_INDEXER_BASES } from "../src/revenue-live.js";
 import { makeBudget, verifySettlement } from "./spend-budget.js";
+import { guardCappedSigning } from "./lib/buyer-guard.js";
 
 const OUR_TARGET = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, "");
 const OUR_ORIGIN = new URL(OUR_TARGET).origin.toLowerCase();
@@ -79,6 +80,9 @@ let client, http, payerAddress = "(dry)";
     // A seller on the legacy network id (full genesis hash) is paid as the router pays it.
     const { avmSchemeAcceptingLegacyNetwork } = await import("../src/x402-buyer.js");
     client.register("algorand:*", avmSchemeAcceptingLegacyNetwork(new ExactAvmScheme(signer, { algorandClient })));
+    // The per-buy cap on what is signed: Algorand USDC priced from the
+    // known-assets table and the version's own amount field (scripts/lib/buyer-guard.js).
+    guardCappedSigning(client, { maxUsd: PER_BUY_USD, networks: ["algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k", "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8="] });
     payerAddress = account.addr.toString();
   }
   http = new x402HTTPClient(client);

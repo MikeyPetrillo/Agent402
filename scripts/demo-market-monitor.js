@@ -16,8 +16,13 @@
 
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
 import { Agent402 } from "../client/index.js";
+import { assertOwnPaidTarget, guardCappedSigning, capFromEnv } from "./lib/buyer-guard.js";
 
 const TARGET = process.env.TARGET_URL || "https://agent402.tools";
+// With AGENT_KEY the demo pays only our own service, and each signature is
+// capped at DEMO_MAX_USD (default $0.05), above every tool it calls.
+if (process.env.AGENT_KEY) assertOwnPaidTarget(TARGET, "demo-market-monitor");
+const DEMO_MAX_USD = process.env.AGENT_KEY ? capFromEnv("DEMO_MAX_USD", 0.05, { script: "demo-market-monitor" }) : 0;
 const AGENT_KEY = process.env.AGENT_KEY;
 
 // Parse --loop flag and optional interval
@@ -61,6 +66,7 @@ if (AGENT_KEY) {
   const { privateKeyToAccount } = await import("viem/accounts");
   const xClient = disableVendorSpendControls(new x402Client());
   registerExactEvmScheme(xClient, { signer: privateKeyToAccount(AGENT_KEY) });
+  guardCappedSigning(xClient, { maxUsd: DEMO_MAX_USD, networks: ["eip155:8453"] });
   const payFetch = wrapFetchWithPayment(fetch, xClient);
   client = new Agent402({ baseUrl: TARGET, fetch: payFetch });
 } else {

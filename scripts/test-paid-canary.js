@@ -1,7 +1,8 @@
 // Unit tests for the paid-canary's decision logic — proves the canary pages on
 // real BUYING failures and only warns on upstream/data hiccups (the chronic
 // false-alarm fix). Pure, no network, no wallet.
-import { classifyResult, decideCanary, settleRejectReason, settleRejectDetail, classifyRailOutcome, errText, cacheRepeatOk } from "./paid-canary.js";
+import { classifyResult, decideCanary, settleRejectReason, settleRejectDetail, classifyRailOutcome, errText, cacheRepeatOk, TOOLS, CANARY_MAX_USD_DEFAULT, CANARY_EXTRA_ASSETS } from "./paid-canary.js";
+import { checkAccept } from "./lib/buyer-guard.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -148,6 +149,18 @@ ok(classifyRailOutcome({ toolBroken: true, railFailures: [] }) === "broken", "to
   ok(other?.message === "HTTP 402" && calls === 1, "any other error is not retried");
   const src = (await import("node:fs")).readFileSync(new URL("./paid-canary.js", import.meta.url), "utf8");
   ok(/withConnRetry\(\(\) => mpp\.rawFetch\(url, \{ headers: heartbeatHeaders\(\) \}\)/.test(src) && /withConnRetry\(\(\) => mpp\.rawFetch\(url, \{ headers: \{ \.\.\.heartbeatHeaders\(\), Authorization: credential \} \}\)/.test(src), "the MPP leg's probe and its paid call both retry a reset");
+}
+// --- the per-accept cap on every paying client ---
+{
+  const over = TOOLS.filter((t) => !(t.priceUsd > 0 && t.priceUsd <= CANARY_MAX_USD_DEFAULT));
+  ok(over.length === 0, `every leg's list price sits under the canary cap of $${CANARY_MAX_USD_DEFAULT} (${over.map((t) => t.path).join(", ") || "none over"})`);
+  const src = (await import("node:fs")).readFileSync(new URL("./paid-canary.js", import.meta.url), "utf8");
+  const built = (src.match(/disableVendorSpendControls\(new /g) || []).length;
+  const capped = (src.match(/guardCappedSigning\([a-zA-Z]*[cC]lient, \{ \.\.\.capOpts/g) || []).length;
+  ok(built >= 5 && capped === built, `every client built with the library control off gets the capped-signing guard (${capped} of ${built})`);
+  ok(/const TARGET = assertOwnPaidTarget\(/.test(src), "the canary pays only our own service");
+  const ink = { scheme: "exact", network: "eip155:57073", asset: CANARY_EXTRA_ASSETS["eip155:57073"][0].asset, payTo: "0x000000000000000000000000000000000000dEaD", amount: "1000", maxTimeoutSeconds: 60, extra: { name: "USDC", version: "2" } };
+  ok(checkAccept(2, ink, { maxUsd: CANARY_MAX_USD_DEFAULT, networks: ["eip155:57073"], extraAssets: CANARY_EXTRA_ASSETS }).ok, "the gated Ink leg prices from the asset the canary names in code");
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

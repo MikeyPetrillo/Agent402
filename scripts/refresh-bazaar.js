@@ -61,6 +61,7 @@
 // for (spend/price cap, batch stride) · 2 = misconfigured.
 
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
+import { assertOwnPaidTarget, guardCappedSigning, capFromEnv } from "./lib/buyer-guard.js";
 import { createHmac } from "node:crypto";
 // The keep-alive pays production from our own burner. It sends the signed
 // X-Heartbeat-Token (when the job holds POW_SECRET) so every accounting
@@ -539,11 +540,22 @@ export async function buyOnce(payFetch, url, init, { plainFetch = fetch, target 
   return { status: 504, text: "", note: `the job did not finish within ${maxSeconds + 60} s` };
 }
 
+// The ceiling one signature may pay (REFRESH_MAX_ACCEPT_USD overrides): the
+// per-tool list ceiling plus room for a per-chain settlement premium, never
+// above the run's spend ceiling. The library's own spend control is off, so
+// this cap is what bounds each signature (scripts/lib/buyer-guard.js).
+function acceptCapUsd() {
+  const fallback = Number.isFinite(MAX_PRICE_USD) && MAX_PRICE_USD > 0 ? Math.min(MAX_PRICE_USD + 0.05, MAX_SPEND_USD) : MAX_SPEND_USD;
+  return capFromEnv("REFRESH_MAX_ACCEPT_USD", fallback, { script: "refresh-bazaar" });
+}
+
 // One pay-capable fetch for whichever chain PAY_NETWORK selects.
 async function buildPayFetch() {
+  assertOwnPaidTarget(TARGET, "refresh-bazaar");
   const { x402Client } = await import("@x402/core/client");
   const { wrapFetchWithPayment } = await import("@x402/fetch");
   const client = disableVendorSpendControls(new x402Client());
+  const maxUsd = acceptCapUsd();
   if (PAY_NETWORK === "solana") {
     const raw = (process.env.SOLANA_BURNER_KEY || "").trim();
     if (!raw) {
@@ -555,12 +567,14 @@ async function buildPayFetch() {
     const signer = await kit.createKeyPairSignerFromBytes(bytes);
     const { registerExactSvmScheme } = await import("@x402/svm/exact/client");
     registerExactSvmScheme(client, { signer });
+    guardCappedSigning(client, { maxUsd, networks: ["solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"] });
     console.log(`Paying via Solana from ${signer.address} …`);
   } else {
     const { privateKeyToAccount } = await import("viem/accounts");
     const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
     const account = privateKeyToAccount(loadKey());
     registerExactEvmScheme(client, { signer: account });
+    guardCappedSigning(client, { maxUsd, networks: ["eip155:8453"] });
     console.log(`Paying via Base from ${account.address} …`);
   }
   return wrapFetchWithPayment(fetch, client);
@@ -604,9 +618,11 @@ async function main() {
   const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
   const { wrapFetchWithPayment } = await import("@x402/fetch");
 
+  assertOwnPaidTarget(TARGET, "refresh-bazaar");
   const account = privateKeyToAccount(loadKey());
   const client = disableVendorSpendControls(new x402Client());
   registerExactEvmScheme(client, { signer: account });
+  guardCappedSigning(client, { maxUsd: acceptCapUsd(), networks: ["eip155:8453"] });
   const payFetch = wrapFetchWithPayment(fetch, client);
 
   console.log(`Paying from ${account.address} …`);

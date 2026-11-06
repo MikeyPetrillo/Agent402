@@ -11,12 +11,13 @@
 // (scripts/lib/slow-route-buy.js); a job that ends failed is a failed run. A
 // 400 respond_async_required (refused before payment) is paid once more with
 // the Prefer header its body names.
+import { assertOwnPaidTarget } from "./lib/buyer-guard.js";
 import { createHmac } from "node:crypto";
 import { asyncAdviceByPath, slowPreferOf, paidCallHonoringSlowRoutes } from "./lib/slow-route-buy.js";
 import { writeFileSync } from "node:fs";
 import { GOLDEN } from "./decide-golden-eval.mjs";
 import { validateParams } from "../src/decide/params.js";
-const TARGET = "https://agent402.tools";
+const TARGET = assertOwnPaidTarget("https://agent402.tools", "decide-prod-check");
 const pk = process.env.BURNER_KEY.startsWith("0x") ? process.env.BURNER_KEY : `0x${process.env.BURNER_KEY}`;
 const secret = process.env.POW_SECRET;
 const heartbeat = () => createHmac("sha256", secret).update(`heartbeat:${Math.floor(Date.now() / 60_000)}`).digest("base64url").slice(0, 32);

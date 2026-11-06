@@ -38,13 +38,17 @@
 // Env: BURNER_KEY (or KEY_FILE), POW_SECRET (marks the buys internal so they do
 // not read as external demand in the ledger), TARGET_URL (default prod).
 
-// Runs OUT OF TREE (copied to a temp dir by its workflow), so no import from src/:
-// the vendor client default since @x402/core 2.23 is a $1 pegged-assets cap and
-// this script bounds spend itself; the same line src/x402-spend-controls.js wraps.
+// Runs OUT OF TREE (its workflow copies it with scripts/lib/buyer-guard.js and
+// client/known-assets.js, in the same layout), so no import from src/: the
+// vendor client default since @x402/core 2.23 is a $1 pegged-assets cap and
+// this script bounds spend itself, the same line src/x402-spend-controls.js
+// wraps. Each signature is capped at its leg's stated price plus a quarter
+// (a drifted price buys; nothing far above it is signed).
 import { readFileSync, existsSync, writeFileSync, renameSync } from "node:fs";
 import { createHmac } from "node:crypto";
+import { assertOwnPaidTarget, guardCappedSigning } from "./lib/buyer-guard.js";
 
-const TARGET = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/+$/, "");
+const TARGET = assertOwnPaidTarget((process.env.TARGET_URL || "https://agent402.tools").replace(/\/+$/, ""), "mint-bazaar-rows");
 const LIVE = process.argv.includes("--live");
 const EXPENSIVE = process.argv.includes("--expensive");
 const OUT = (() => {
@@ -206,6 +210,8 @@ async function main() {
   const client = new x402Client();
   client.setSpendControls?.(false);
   registerExactEvmScheme(client, { signer: account });
+  let legCapUsd = 0; // set per leg below; zero refuses every accept
+  guardCappedSigning(client, { maxUsd: () => legCapUsd, networks: ["eip155:8453"] });
 
   // Mark the buys internal, or they read as external demand in our own ledger
   // and quietly inflate the number we publish about ourselves.
@@ -247,6 +253,7 @@ async function main() {
     records.push(rec);
     writeRecords();
     let res;
+    legCapUsd = leg.priceUsd * 1.25;
     try { res = await payFetch(url, init); }
     catch (e) { rec.error = String(e.message || e).slice(0, 160); writeRecords(); console.log(`FAIL  ${leg.slug} - request threw: ${e.message}`); failed++; continue; }
     rec.status = res.status;

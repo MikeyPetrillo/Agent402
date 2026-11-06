@@ -5,11 +5,12 @@
 // gates end-to-end. Spends a few cents of burner USDC. Skips cleanly with no key,
 // so it never fails CI without a signer. Marks itself internal (heartbeat token)
 // so the buy doesn't pollute the external sales ledger.
+import { assertOwnPaidTarget } from "./lib/buyer-guard.js";
 import { existsSync, readFileSync } from "node:fs";
 import { createHmac } from "node:crypto";
 import { Agent402, SpendingLimitError } from "../client/index.js";
 
-const TARGET = process.env.TARGET_URL || "https://agent402.tools";
+const TARGET = assertOwnPaidTarget(process.env.TARGET_URL || "https://agent402.tools", "test-client-paid-live");
 const KEY_FILE = process.env.KEY_FILE || "/tmp/agent-key";
 const pk = (process.env.BURNER_KEY || "").trim() || (existsSync(KEY_FILE) ? readFileSync(KEY_FILE, "utf8").trim() : "");
 if (!pk) { console.log("SKIP: no BURNER_KEY / KEY_FILE — live paid test needs a signer"); process.exit(0); }

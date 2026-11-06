@@ -8,10 +8,11 @@
 // receipt.wire === "mpp", settleNetwork eip155:4217 and a settle tx, a
 // Payment-Receipt on our response, and the spending wallet's USDC.e balance
 // dropping by the seller's price. Dispatch-only (tempo-sor-live.yml).
+import { assertOwnPaidTarget } from "./lib/buyer-guard.js";
 import { createHmac } from "node:crypto";
 import { privateKeyToAccount } from "viem/accounts";
 
-const TARGET = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/+$/, "");
+const TARGET = assertOwnPaidTarget((process.env.TARGET_URL || "https://agent402.tools").replace(/\/+$/, ""), "tempo-sor-live");
 const RPC = process.env.TEMPO_RPC_URL || "https://rpc.tempo.xyz";
 const USDCE = "0x20C000000000000000000000b9537d11c60E8b50";
 const SPENDER = (process.env.TEMPO_SPENDING_ADDRESS || "0xaF13AA07E7360cC56B3dAbf649fFeF087c0cD5A6").toLowerCase();

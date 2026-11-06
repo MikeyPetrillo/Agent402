@@ -659,8 +659,10 @@ jobs:
           node-version: 22
       - name: Install the PINNED client tree (x402 client + viem)
         run: |
-          mkdir -p /tmp/mint && cp "$GITHUB_WORKSPACE"/scripts/agentkit-live/package.json "$GITHUB_WORKSPACE"/scripts/agentkit-live/package-lock.json /tmp/mint/
-          cp "$GITHUB_WORKSPACE"/scripts/mint-bazaar-rows.js /tmp/mint/
+          mkdir -p /tmp/mint/scripts/lib /tmp/mint/client && cp "$GITHUB_WORKSPACE"/scripts/agentkit-live/package.json "$GITHUB_WORKSPACE"/scripts/agentkit-live/package-lock.json /tmp/mint/
+          cp "$GITHUB_WORKSPACE"/scripts/mint-bazaar-rows.js /tmp/mint/scripts/
+          cp "$GITHUB_WORKSPACE"/scripts/lib/buyer-guard.js /tmp/mint/scripts/lib/
+          cp "$GITHUB_WORKSPACE"/client/known-assets.js /tmp/mint/client/
           cd /tmp/mint && npm ci --ignore-scripts --no-audit --no-fund
       - name: Buy each unlisted tool once and verify what came back
         env:
@@ -679,7 +681,7 @@ jobs:
           [ -n "$MINT_ONLY" ] && ARGS="$ARGS --only $MINT_ONLY"
           cd /tmp/mint && env -i PATH="$PATH" HOME="$HOME" \
             BURNER_KEY="$BURNER_KEY" POW_SECRET="${POW_SECRET}" \
-            node mint-bazaar-rows.js $ARGS
+            node scripts/mint-bazaar-rows.js $ARGS
       - name: Keep the mint records (route, status, tx; never a key)
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

@@ -26,10 +26,12 @@ import {
   signedOfferReceiptFromSettlement,
   writeSignedOfferReceipt,
 } from "./lib/smoke-receipt.js";
-import { guardCappedSigning } from "./lib/buyer-guard.js";
+import { assertOwnPaidTarget, guardCappedSigning } from "./lib/buyer-guard.js";
 
 const EXTERNAL_TARGET = (process.env.SMOKE_TARGET || "").trim().replace(/\/+$/, "");
-const TARGET = EXTERNAL_TARGET || process.env.TARGET_URL || "https://agent402.tools";
+// SMOKE_TARGET is the explicit outside-seller mode (capped below); TARGET_URL
+// pays only our own service.
+const TARGET = EXTERNAL_TARGET || assertOwnPaidTarget(process.env.TARGET_URL || "https://agent402.tools", "smoke-buy");
 const KEY_FILE = process.env.KEY_FILE || "/tmp/agent-key";
 const ROUTE = (process.env.SMOKE_ROUTE || "").trim();
 const METHOD = (process.env.SMOKE_METHOD || "GET").trim().toUpperCase();
