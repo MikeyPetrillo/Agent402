@@ -76,7 +76,7 @@ curl -A "ClaudeBot/1.0" localhost:4021/article   # bot   -> 402 Payment Required
   from env; `TOLLBOOTH_PAYTO` alone only advertises a quote.
 - **Price every method you serve** in the middleware's routes: use `"/*"`
   (every method except OPTIONS) rather than `"GET /*"`. A request the gate
-  charges passes only with a payment the middleware took, so since 0.10.9 a
+  charges passes only with a payment the middleware took, so since 0.11.0 a
   charged method the middleware does not price (POST under `"GET /*"`, or
   OPTIONS under `"/*"`) gets a 402 instead of passing through. Price OPTIONS
   with an explicit `"OPTIONS /*"` route or exempt it with a `charge(req)`
