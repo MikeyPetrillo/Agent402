@@ -16,10 +16,14 @@ Operations:
   than `ROBINHOOD_RELAYER_FIRST_ALERT_HOURS`, and the heartbeat and status
   Worker page on it.
 - The manifest's facilitator map names only chains this server offers.
+- A 402 exposes to browsers only the headers it carries, and the MPP charge
+  challenge leaves out the output schema the x402 challenge already holds, so
+  every 402 stays well inside common header limits.
 Gateway:
 - An optional direct inference upstream (`DIRECT_UPSTREAM_*`, off unless set)
   serves listed models on the chat wire with zero data retention
-  requested on every call, and falls back to the usual route on any failure.
+  requested on every call, and falls back to the usual route on any failure;
+  while it is configured, the privacy page names it under third parties.
 Packages:
 - viem is 2.57.16.
 
