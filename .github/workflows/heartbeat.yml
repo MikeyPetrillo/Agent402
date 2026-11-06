@@ -539,8 +539,11 @@ jobs:
           fi
 
       # EVM spending wallet on the other chains SOR_EVM_CHAINS enables - the
-      # same key as the Base wallet, one balance per chain. "off" (no chain
-      # enabled), "unknown" and "unconfigured" never page.
+      # same key as the Base wallet, one balance per chain. "low" pages. A
+      # balance unreadable for 60 minutes or more (unknownForMinutes, about
+      # two heartbeat runs) opens its own UNREADABLE issue, so a dead RPC never
+      # silences the low alarm. "off" (no chain enabled) and "unconfigured"
+      # never page; an unreadable gateway-status read changes nothing.
       - name: EVM chains upstream buyer wallet check (alarm on low balance on an enabled chain)
         if: always()
         continue-on-error: true
@@ -561,6 +564,16 @@ jobs:
             if [ -n "$OPEN" ]; then
               gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: every enabled chain back above the low-water mark at $(date -u +%FT%TZ)."
             fi
+          fi
+          UNKNOWN_MIN=$(echo "$BODY" | jq -r '.upstreamBuyerEvm.unknownForMinutes // 0' 2>/dev/null || echo 0)
+          TITLE2="EVM chains upstream buyer wallet UNREADABLE (x402)"
+          OPEN2=$(ISSUE_TITLE="$TITLE2" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE2\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+          if [ "$STATUS" = "unknown" ] && [ "${UNKNOWN_MIN:-0}" -ge 60 ] 2>/dev/null; then
+            if [ -z "$OPEN2" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE2" --body "/api/gateway-status has reported upstreamBuyerEvm.status=unknown for an hour or more: the spending wallet's balance could not be read on at least one chain SOR_EVM_CHAINS enables, so the low-balance alarm for that chain is blind. Check that chain's RPC (EVM_RPC_<chain id>) and the server log. Auto-closes on the next readable read."
+            fi
+          elif [ -n "$OPEN2" ] && { [ "$STATUS" = "ok" ] || [ "$STATUS" = "low" ] || [ "$STATUS" = "off" ] || [ "$STATUS" = "unconfigured" ]; }; then
+            gh issue close "$OPEN2" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the balance reads again (upstreamBuyerEvm.status=$STATUS)."
           fi
 
       # Tempo (MPP) spending-wallet check - same pattern: this wallet pays MPP

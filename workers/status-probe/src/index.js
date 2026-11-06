@@ -431,6 +431,31 @@ export const ALARMS = [
     body: () =>
       "The x402 upstream spending wallet (X402_UPSTREAM_BUYER_KEY) is below the low-water mark (UPSTREAM_BUYER_LOW_USD). When it empties, route-execute external buys and seller-payability refuse (x402 buyers are never charged, but those paths go dark). attest signs from the same wallet but pays Base gas in ETH, which this alarm reads nothing about. Top up: send USDC on Base to the upstream buyer address (see CLAUDE.md env docs).",
   },
+  // The same wallet on each other chain SOR_EVM_CHAINS enables: one word for
+  // all of them ("off" with none enabled never pages). Titles match
+  // heartbeat.yml's exactly.
+  {
+    title: "EVM chains upstream buyer wallet LOW (x402)",
+    verdict: ({ gateway: b }) => {
+      const s = b.upstreamBuyerEvm?.status;
+      return s === "low" ? "bad" : s === "ok" || s === "off" ? "good" : "quiet";
+    },
+    body: () =>
+      "The x402 spending wallet (X402_UPSTREAM_BUYER_KEY) is below the low-water mark (UPSTREAM_BUYER_LOW_USD_<CHAIN>, else UPSTREAM_BUYER_LOW_USD) on at least one chain SOR_EVM_CHAINS enables; the operator view of /api/gateway-status names which. External routing on that chain refuses 503 while it reads low (buyers are never charged). Top up: send that chain's stablecoin to the spending wallet address on that chain.",
+  },
+  {
+    title: "EVM chains upstream buyer wallet UNREADABLE (x402)",
+    // A balance we cannot read is its own alarm once it persists, so a dead
+    // RPC never silences the low alarm above.
+    verdict: ({ gateway: b }) => {
+      const e = b.upstreamBuyerEvm;
+      if (!e?.status) return "quiet";
+      if (e.status === "unknown") return Number(e.unknownForMinutes || 0) >= 60 ? "bad" : "quiet";
+      return "good";
+    },
+    body: () =>
+      "/api/gateway-status has reported upstreamBuyerEvm.status=unknown for an hour or more: the spending wallet's balance could not be read on at least one chain SOR_EVM_CHAINS enables, so the low-balance alarm for that chain is blind. Check that chain's RPC (EVM_RPC_<chain id>) and the server log. Auto-closes on the next readable read.",
+  },
   {
     title: "Upstream buyer wallet is DRAINING (unexplained fall)",
     // The route-execute tiers that spend from that wallet also settle into it,

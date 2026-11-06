@@ -112,5 +112,41 @@ for (const [prefix, title] of WALLETS) {
   });
 }
 
+// The EVM chains step's own UNREADABLE alarm: a balance unknown for an hour
+// or more pages under its own title, a shorter spell does not, a readable
+// read closes it, and "off" never pages.
+{
+  const step = steps.find((s) => String(s.name || "").startsWith("EVM chains upstream buyer wallet"));
+  const UNR = "EVM chains upstream buyer wallet UNREADABLE (x402)";
+  const runEvm = async (evm, issues = []) => {
+    const log = path.join(dir, "gh.log");
+    await writeFile(log, "");
+    const r = spawnSync("bash", ["-c", step.run], {
+      env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, PROD: "https://example.invalid", GITHUB_REPOSITORY: "o/r", GS_BODY: JSON.stringify(evm === undefined ? {} : { upstreamBuyerEvm: evm }), ISSUES_JSON: JSON.stringify(issues), GH_LOG: log },
+      encoding: "utf8",
+    });
+    assert.equal(r.status, 0, r.stderr);
+    return (await readFile(log, "utf8")).split("\x1e").filter((l) => l.trim()).map((l) => l.split("\x1f").filter((x) => x !== ""));
+  };
+  const titlesCreated = (calls) => calls.filter((c) => c[1] === "create").map((c) => c[c.indexOf("--title") + 1]);
+  await check("EVM chains: unknown for an hour or more opens the UNREADABLE issue, once", async () => {
+    assert.deepEqual(titlesCreated(await runEvm({ status: "unknown", unknownForMinutes: 70 })), [UNR]);
+    assert.deepEqual(await runEvm({ status: "unknown", unknownForMinutes: 70 }, [{ number: 9, title: UNR }]), [], "an open issue is not duplicated or commented on");
+  });
+  await check("EVM chains: a short unknown spell, an unreadable gateway-status and off page nothing", async () => {
+    assert.deepEqual(await runEvm({ status: "unknown", unknownForMinutes: 20 }), []);
+    assert.deepEqual(await runEvm(undefined), []);
+    assert.deepEqual(await runEvm({ status: "off" }), []);
+  });
+  await check("EVM chains: a readable read closes the UNREADABLE issue; a blind read never does", async () => {
+    for (const status of ["ok", "low", "off"]) {
+      const calls = await runEvm({ status }, [{ number: 9, title: UNR }]);
+      assert.ok(calls.some((c) => c[1] === "close" && c[2] === "9"), `${status}: ${JSON.stringify(calls)}`);
+    }
+    const blind = await runEvm(undefined, [{ number: 9, title: UNR }]);
+    assert.ok(!blind.some((c) => c[1] === "close"), JSON.stringify(blind));
+  });
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
