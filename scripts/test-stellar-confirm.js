@@ -266,5 +266,170 @@ const run = (opts, extra = {}) => confirmStellarTransfer({
   ok(seen?.txHash === H && seen?.payer === "GPAYER" && r.success === true && r.transaction === H, "settleWithStellarFallback confirms by the facilitator's named hash and honours the settlement");
 }
 
+// ---- The settle path: a confirmation is matched to the payment it signed ----
+// confirmStellarPayment accepts only a successful transaction whose single
+// operation repeats this request's signed transfer call and the payer's signed
+// authorization entry, where that call pays the advertised token contract, our
+// payTo, at least the price; each confirmed transaction is claimed once.
+{
+  const sdk = await import("@stellar/stellar-sdk");
+  const { confirmStellarPayment, stellarSignedPaymentOf } = await import("../src/stellar-confirm.js");
+  const { txServedElsewhere, __resetSettlementClaims } = await import("../src/settlement-claims.js");
+  const NET = sdk.Networks.PUBLIC;
+  const ISSUER = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+  const SAC = new sdk.Asset("USDC", ISSUER).contractId(NET);
+  ok(SAC === "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75", "the fixture's token contract is the USDC contract the Stellar accept names");
+  const buyer = sdk.Keypair.random().publicKey();
+  const ours = sdk.Keypair.random().publicKey();
+  const someoneElse = sdk.Keypair.random().publicKey();
+  const REQ = { scheme: "exact", network: "stellar:pubnet", asset: SAC, payTo: ours, amount: "10000" };
+
+  // A buyer's signed payload: one transfer call plus the buyer's signed
+  // address-credential authorization entry (unique nonce).
+  const signedXdr = ({ from = buyer, to = ours, amount = 10000n, contract = SAC, nonce }) => {
+    const args = [new sdk.Address(from).toScVal(), new sdk.Address(to).toScVal(), sdk.nativeToScVal(amount, { type: "i128" })];
+    const call = new sdk.xdr.InvokeContractArgs({ contractAddress: new sdk.Address(contract).toScAddress(), functionName: "transfer", args });
+    const entry = new sdk.xdr.SorobanAuthorizationEntry({
+      credentials: sdk.xdr.SorobanCredentials.sorobanCredentialsAddress(new sdk.xdr.SorobanAddressCredentials({
+        address: new sdk.Address(from).toScAddress(), nonce: sdk.xdr.Int64.fromString(String(nonce)),
+        signatureExpirationLedger: 1000, signature: sdk.xdr.ScVal.scvBytes(Buffer.alloc(64, nonce % 251)),
+      })),
+      rootInvocation: new sdk.xdr.SorobanAuthorizedInvocation({ function: sdk.xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(call), subInvocations: [] }),
+    });
+    const op = sdk.Operation.invokeContractFunction({ contract, function: "transfer", args, auth: [entry] });
+    return new sdk.TransactionBuilder(new sdk.Account(sdk.Keypair.random().publicKey(), "1"), { fee: "100", networkPassphrase: NET })
+      .addOperation(op).setTimeout(300).build().toXDR();
+  };
+  // What lands: the facilitator rebuilds the operation around its own source
+  // account (optionally fee-bumped), so the landed hash differs from the payload's.
+  const landed = (payloadXdr, { feeBump = false } = {}) => {
+    const t = sdk.TransactionBuilder.fromXDR(payloadXdr, NET);
+    const op = t.operations[0];
+    const ch = sdk.Keypair.random();
+    const inner = new sdk.TransactionBuilder(new sdk.Account(ch.publicKey(), "7"), { fee: "100", networkPassphrase: NET })
+      .addOperation(sdk.Operation.invokeHostFunction({ func: op.func, auth: op.auth })).setTimeout(60).build();
+    inner.sign(ch);
+    if (!feeBump) return { hash: inner.hash().toString("hex"), envelope_xdr: inner.toXDR() };
+    const fb = sdk.Keypair.random();
+    const outer = sdk.TransactionBuilder.buildFeeBumpTransaction(fb.publicKey(), "200", inner, NET);
+    outer.sign(fb);
+    return { hash: outer.hash().toString("hex"), envelope_xdr: outer.toXDR() };
+  };
+  const payloadOf = (x) => ({ x402Version: 2, accepted: { ...REQ }, payload: { transaction: x } });
+  const nowIso = () => new Date().toISOString();
+  // Horizon stub: `txs` (hash -> landed, plus `successful`), `debits` (hashes
+  // the payer's recent effects point at, through their operation).
+  const horizonFor = ({ txs = [], debits = [], down = false, status = 200 } = {}) => {
+    const byHash = new Map(txs.map((t) => [t.hash, t]));
+    const ops = new Map(debits.map((h, i) => [String(5000 + i), h]));
+    return async (url) => {
+      if (down) throw new Error("horizon down");
+      if (status !== 200) return { ok: false, status, json: async () => ({}) };
+      if (url.includes("/effects?order=desc")) return { ok: true, json: async () => ({ _embedded: { records: [...ops.keys()].map((id) => ({ type: "account_debited", asset_type: "credit_alphanum4", asset_code: "USDC", amount: "0.0010000", created_at: nowIso(), id: `${id}-1`, _links: { operation: { href: `https://horizon.stellar.org/operations/${id}` } } })) } }) };
+      const om = url.match(/\/operations\/(\d+)$/);
+      if (om && ops.has(om[1])) return { ok: true, json: async () => ({ transaction_hash: ops.get(om[1]), transaction_successful: true }) };
+      const tm = url.match(/\/transactions\/([0-9a-f]{64})$/);
+      if (tm && byHash.has(tm[1])) { const t = byHash.get(tm[1]); return { ok: true, json: async () => ({ hash: t.hash, successful: t.successful !== false, envelope_xdr: t.envelope_xdr }) }; }
+      return { ok: false, status: 404, json: async () => ({}) };
+    };
+  };
+  let holderSeq = 0;
+  const claimFor = (holder = `test-${++holderSeq}`) => async (tx) => !(await txServedElsewhere("stellar:pubnet", tx, holder));
+  const confirm = async (payloadXdr, opts = {}) => confirmStellarPayment({
+    signed: await stellarSignedPaymentOf(payloadOf(payloadXdr), REQ),
+    sinceMs: Date.now() - 60_000, waitMs: 0, stepMs: 1, claimTx: claimFor(), ...opts,
+  });
+
+  // The payment's own transaction, right asset and amount: confirmed.
+  __resetSettlementClaims();
+  const own = signedXdr({ nonce: 1 });
+  const ownLanded = landed(own);
+  const signed = await stellarSignedPaymentOf(payloadOf(own), REQ);
+  ok(signed && signed.payer === buyer && signed.amount === 10000n && signed.auth.length === 1, "the signed payment is read from the request's own payload");
+  const r1 = await confirm(own, { txHash: ownLanded.hash, fetchImpl: horizonFor({ txs: [ownLanded] }) });
+  ok(r1 && r1.transaction === ownLanded.hash && r1.amount === "0.0010000", `the payment's own transaction is confirmed (${r1 && r1.amount})`);
+  __resetSettlementClaims();
+  const fbLanded = landed(own, { feeBump: true });
+  const r1b = await confirm(own, { txHash: fbLanded.hash, fetchImpl: horizonFor({ txs: [fbLanded] }) });
+  ok(r1b && r1b.transaction === fbLanded.hash, "a fee-bumped landing of the same payment is confirmed");
+  __resetSettlementClaims();
+  const r1c = await confirm(own, { fetchImpl: horizonFor({ txs: [ownLanded], debits: [ownLanded.hash] }) });
+  ok(r1c && r1c.transaction === ownLanded.hash, "with no hash named, the payer's debits are a lookup that finds the payment's own transaction");
+
+  // Dust: a payload paying less than the price never yields a signed payment,
+  // and a dust transfer on-chain is not this payment.
+  __resetSettlementClaims();
+  ok((await stellarSignedPaymentOf(payloadOf(signedXdr({ amount: 1n, nonce: 2 })), REQ)) === null, "a payload paying less than the price is refused");
+  const dust = landed(signedXdr({ amount: 1n, nonce: 3 }));
+  ok((await confirm(own, { txHash: dust.hash, fetchImpl: horizonFor({ txs: [dust], debits: [dust.hash] }) })) === null, "a dust transfer on-chain does not confirm the payment");
+
+  // Self-issued asset named USDC: a different token contract.
+  const fakeSac = new sdk.Asset("USDC", buyer).contractId(NET);
+  ok((await stellarSignedPaymentOf(payloadOf(signedXdr({ contract: fakeSac, nonce: 4 })), REQ)) === null, "a payload paying a self-issued asset named USDC is refused");
+  const fake = landed(signedXdr({ contract: fakeSac, nonce: 5 }));
+  ok((await confirm(own, { txHash: fake.hash, fetchImpl: horizonFor({ txs: [fake], debits: [fake.hash] }) })) === null, "a self-issued USDC transfer on-chain does not confirm the payment");
+
+  // Correct asset, wrong payTo.
+  ok((await stellarSignedPaymentOf(payloadOf(signedXdr({ to: someoneElse, nonce: 6 })), REQ)) === null, "a payload paying another account is refused");
+  const elsewhere = landed(signedXdr({ to: someoneElse, nonce: 7 }));
+  ok((await confirm(own, { txHash: elsewhere.hash, fetchImpl: horizonFor({ txs: [elsewhere], debits: [elsewhere.hash] }) })) === null, "a USDC transfer to another account does not confirm the payment");
+
+  // A different earlier transaction from the same payer, same asset, amount
+  // and payTo (another signed authorization): not this payment.
+  const earlier = landed(signedXdr({ nonce: 8 }));
+  ok((await confirm(own, { txHash: earlier.hash, fetchImpl: horizonFor({ txs: [earlier] }) })) === null, "a different transaction from the payer, named by a facilitator, is refused");
+  ok((await confirm(own, { fetchImpl: horizonFor({ txs: [earlier], debits: [earlier.hash] }) })) === null, "a different transaction from the payer, found by the lookup, is refused");
+
+  // The signed entry alone is not enough: the landed call must be the signed one.
+  {
+    const ownOp = sdk.TransactionBuilder.fromXDR(own, NET).operations[0];
+    const dustOp = sdk.TransactionBuilder.fromXDR(signedXdr({ amount: 1n, nonce: 9 }), NET).operations[0];
+    const ch = sdk.Keypair.random();
+    const spliced = new sdk.TransactionBuilder(new sdk.Account(ch.publicKey(), "7"), { fee: "100", networkPassphrase: NET })
+      .addOperation(sdk.Operation.invokeHostFunction({ func: dustOp.func, auth: ownOp.auth })).setTimeout(60).build();
+    const sp = { hash: spliced.hash().toString("hex"), envelope_xdr: spliced.toXDR() };
+    ok((await confirm(own, { txHash: sp.hash, fetchImpl: horizonFor({ txs: [sp] }) })) === null, "a landed call other than the signed one is refused, whatever entry it carries");
+  }
+
+  // An unsuccessful landing moves nothing.
+  ok((await confirm(own, { txHash: ownLanded.hash, fetchImpl: horizonFor({ txs: [{ ...ownLanded, successful: false }] }) })) === null, "the payment's transaction that failed on-chain is not confirmed");
+
+  // One transaction confirms one request: sequential and concurrent.
+  __resetSettlementClaims();
+  const h = horizonFor({ txs: [ownLanded], debits: [ownLanded.hash] });
+  const first = await confirm(own, { txHash: ownLanded.hash, fetchImpl: h, claimTx: claimFor("req-A") });
+  const second = await confirm(own, { txHash: ownLanded.hash, fetchImpl: h, claimTx: claimFor("req-B") });
+  ok(first && first.transaction === ownLanded.hash && second === null, "the same transaction does not confirm a second request");
+  const again = await confirm(own, { txHash: ownLanded.hash, fetchImpl: h, claimTx: claimFor("req-A") });
+  ok(again && again.transaction === ownLanded.hash, "the request that owns the transaction may read it again (fallback re-check)");
+  __resetSettlementClaims();
+  const both = await Promise.all(["req-C", "req-D", "req-E"].map((k) => confirm(own, { txHash: ownLanded.hash, fetchImpl: h, claimTx: claimFor(k) })));
+  ok(both.filter(Boolean).length === 1, `concurrent requests on one transaction: exactly one confirmed (${both.filter(Boolean).length})`);
+
+  // Any doubt returns null.
+  __resetSettlementClaims();
+  ok((await confirm(own, { txHash: ownLanded.hash, fetchImpl: horizonFor({ down: true }) })) === null, "Horizon unreachable -> null");
+  ok((await confirm(own, { txHash: ownLanded.hash, fetchImpl: horizonFor({ status: 500 }) })) === null, "Horizon 500 -> null");
+  ok((await confirm(own, { txHash: ownLanded.hash, fetchImpl: horizonFor({ txs: [{ ...ownLanded, envelope_xdr: "not-xdr" }] }) })) === null, "an envelope that does not decode -> null");
+  ok((await confirm(own, { txHash: ownLanded.hash, fetchImpl: horizonFor({ txs: [ownLanded] }), claimTx: undefined })) === null, "no claim store -> null");
+  ok((await confirm(own, { txHash: ownLanded.hash, fetchImpl: horizonFor({ txs: [ownLanded] }), claimTx: async () => { throw new Error("store down"); } })) === null, "a claim that throws -> null");
+  ok((await confirmStellarPayment({ signed: null, txHash: ownLanded.hash, sinceMs: Date.now(), claimTx: claimFor(), fetchImpl: horizonFor({ txs: [ownLanded] }), waitMs: 0 })) === null, "no signed payment -> null");
+  ok((await stellarSignedPaymentOf(payloadOf(own), { ...REQ, amount: "abc" })) === null && (await stellarSignedPaymentOf({ payload: {} }, REQ)) === null && (await stellarSignedPaymentOf(payloadOf("AAAA"), REQ)) === null, "missing or malformed payload or price -> null");
+
+  // Through the orchestrator, as src/payments.js wires it.
+  __resetSettlementClaims();
+  const viaSettle = await settleWithStellarFallback({
+    primary: async () => ({ success: false, errorReason: "settle_timed_out", payer: buyer, transaction: earlier.hash }),
+    confirm: async ({ txHash }) => confirmStellarPayment({ signed: await stellarSignedPaymentOf(payloadOf(own), REQ), txHash, sinceMs: Date.now() - 60_000, waitMs: 0, stepMs: 1, claimTx: claimFor(), fetchImpl: horizonFor({ txs: [earlier] }) }),
+    log: () => {},
+  });
+  ok(viaSettle.success === false, "a failed settle naming another transaction stays a failure");
+
+  // The caller path: payments.js confirms with the signed payment and a claim.
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../src/payments.js", import.meta.url), "utf8");
+  ok(/confirmStellarPayment\(\{\s*signed: await stellarSignedPaymentOf\(paymentPayload,/.test(src) && /claimTx/.test(src) && !/confirmStellarTransfer\(/.test(src), "src/payments.js confirms a Stellar settle with the request's signed payment and a transaction claim");
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

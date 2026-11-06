@@ -15,9 +15,17 @@
 //                            settles, released when the settle fails and
 //                            nothing recovered it, so a legitimate retry of an
 //                            unsettled authorization still goes through.
+//   nonce:<network>:<signer>:<nonce>
+//                            the same claim for a Stellar payment: one per
+//                            signed Soroban authorization entry of the payer
+//                            (the network consumes each (address, nonce)
+//                            once), read from the signed entry itself, so a
+//                            re-encoded copy of one payment takes the same
+//                            keys.
 //   tx:<network>:<tx>        taken by the request that served the
-//                            transaction, on a normal settle (onAfterSettle)
-//                            or a recovery.
+//                            transaction, on a normal settle (onAfterSettle;
+//                            on Stellar, ownSettledStellarTx in the settle
+//                            itself) or a recovery.
 //
 // A claim is a SET NX with a TTL on the shared Redis when REDIS_URL is set, so
 // two replicas cannot both own one key; without Redis, or when it does not
@@ -25,6 +33,7 @@
 import { GATEWAY_PENDING_BOOKED } from "./gateway-wire.js";
 import { randomUUID } from "node:crypto";
 import { getSharedRedisClient } from "./shared-limit.js";
+import { settleTxOf, stellarAuthorizationsOf } from "./stellar-confirm.js";
 
 const PREFIX = "settle-claim:";
 // Past any handler plus settle; a holder that dies mid-request frees the
@@ -155,6 +164,9 @@ export async function releaseSettlementKey(key, holder, { now = Date.now() } = {
 }
 
 export const nonceClaimKey = (network, nonce) => `nonce:${String(network)}:${String(nonce).toLowerCase()}`;
+// A Stellar address is kept as signed (never case-folded); the nonce is an
+// int64 in decimal.
+export const stellarNonceClaimKey = (network, signer, nonce) => `nonce:${String(network)}:${String(signer)}:${String(nonce)}`;
 // EVM tx hashes are hex: lowercasing is exact for them.
 export const txClaimKey = (network, tx) => `tx:${String(network)}:${String(tx).toLowerCase()}`;
 
@@ -169,7 +181,7 @@ export function settleClaimStateOf(req) {
 function stamp(req) {
   if (!req || typeof req !== "object") return null;
   if (Object.hasOwn(req, STATE)) return req[STATE];
-  const s = { seenAt: Date.now(), id: randomUUID(), nonceKey: null };
+  const s = { seenAt: Date.now(), id: randomUUID(), nonceKey: null, nonceKeys: [] };
   try { Object.defineProperty(req, STATE, { value: s, enumerable: false, configurable: true, writable: true }); } catch { return null; }
   return s;
 }
@@ -180,6 +192,22 @@ function evmAuthorizationOf(ctx) {
   if (!network.startsWith("eip155:") || typeof nonce !== "string" || !nonce) return null;
   return { network, nonce };
 }
+
+/** The claim keys of a Stellar payment's signed entries, or null. */
+async function stellarAuthorizationOf(ctx) {
+  const network = String(ctx?.requirements?.network || "");
+  if (!network.startsWith("stellar:")) return null;
+  const entries = await stellarAuthorizationsOf(ctx?.paymentPayload);
+  if (!entries) return null;
+  return [...new Set(entries.map((e) => stellarNonceClaimKey(network, e.signer, e.nonce)))];
+}
+
+/** Every authorization key this request holds. */
+function heldKeys(s) {
+  return [...new Set([s?.nonceKey, ...(Array.isArray(s?.nonceKeys) ? s.nonceKeys : [])].filter(Boolean))];
+}
+const extendHeld = async (s) => { for (const k of heldKeys(s)) await extendSettlementKey(k, s.id); };
+const releaseHeld = async (s) => { for (const k of heldKeys(s)) await releaseSettlementKey(k, s.id); };
 
 export const DUPLICATE_AUTHORIZATION = "duplicate_authorization";
 
@@ -194,12 +222,20 @@ export function registerSettlementClaimHooks(server) {
     let refuse = false;
     try {
       const s = stamp(reqOf(ctx));
+      if (!s) return;
       const a = evmAuthorizationOf(ctx);
-      if (!s || !a) return;
-      const key = nonceClaimKey(a.network, a.nonce);
-      const r = await claimSettlementKey(key, s.id, { ttlSeconds: INFLIGHT_TTL_SECONDS });
-      if (r.claimed) s.nonceKey = key;
-      else refuse = true;
+      const keys = a ? [nonceClaimKey(a.network, a.nonce)] : await stellarAuthorizationOf(ctx);
+      if (!keys?.length) return;
+      if (!Array.isArray(s.nonceKeys)) s.nonceKeys = [];
+      // Every key or none: a request refused on one key gives back the
+      // others it took, so a refused request holds nothing.
+      for (const key of keys) {
+        const r = await claimSettlementKey(key, s.id, { ttlSeconds: INFLIGHT_TTL_SECONDS });
+        if (!r.claimed) { refuse = true; break; }
+        if (!s.nonceKey) s.nonceKey = key;
+        if (!s.nonceKeys.includes(key)) s.nonceKeys.push(key);
+      }
+      if (refuse) { await releaseHeld(s); s.nonceKey = null; s.nonceKeys = []; }
     } catch { return; /* never touch a payment */ }
     if (refuse) {
       return { abort: true, reason: DUPLICATE_AUTHORIZATION, message: "This payment authorization is already settling or settled for another request. Sign a new payment to retry." };
@@ -210,7 +246,10 @@ export function registerSettlementClaimHooks(server) {
       const r = ctx?.result;
       if (!r || r.success !== true) return;
       const s = stamp(reqOf(ctx));
-      if (s?.nonceKey) await extendSettlementKey(s.nonceKey, s.id);
+      if (s) await extendHeld(s);
+      // A Stellar settle claims its own transaction inside the settle
+      // (ownSettledStellarTx), where a transaction another request already
+      // serves can still be refused; this claim is the EVM one.
       const network = String(r.network || ctx?.requirements?.network || "");
       if (typeof r.transaction === "string" && r.transaction && network.startsWith("eip155:")) {
         await claimSettlementKey(txClaimKey(network, r.transaction), s?.id || `settled:${randomUUID()}`);
@@ -240,9 +279,14 @@ export function registerSettlementClaimRelease(server) {
       // transfer record before any verify or settle, and lets one request
       // serve it), so the claim is released for that resend to take.
       const req = reqOf(ctx);
-      if (isPendingSettlement(ctx) && req && req[GATEWAY_PENDING_BOOKED] === true) { await releaseSettlementKey(s.nonceKey, s.id); return; }
-      if (isPendingSettlement(ctx) || namesUnsettledTx(ctx)) { await extendSettlementKey(s.nonceKey, s.id); return; }
-      await releaseSettlementKey(s.nonceKey, s.id);
+      if (isPendingSettlement(ctx) && req && req[GATEWAY_PENDING_BOOKED] === true) { await releaseHeld(s); return; }
+      if (isPendingSettlement(ctx) || namesUnsettledTx(ctx)) { await extendHeld(s); return; }
+      // A Stellar failure releases its entries too, even one that names a
+      // transaction that may still land: this request's answer is final
+      // (a 402) by now, so a resend that takes the entries is the only
+      // request that can be served, and it is served only if it confirms a
+      // landed transaction it then owns (the tx claim, confirmStellarPayment).
+      await releaseHeld(s);
     } catch { /* never touch a payment */ }
   });
   return server;
@@ -283,7 +327,7 @@ export async function recoveredTxHeldElsewhere(ctx, result) {
     if (typeof tx !== "string" || !tx || !network.startsWith("eip155:")) return false;
     const s = stamp(reqOf(ctx));
     const r = await claimSettlementKey(txClaimKey(network, tx), s?.id || `settled:${randomUUID()}`);
-    if (r.claimed && s?.nonceKey) await extendSettlementKey(s.nonceKey, s.id);
+    if (r.claimed && s) await extendHeld(s);
     return !r.claimed;
   } catch { return false; /* never touch a payment */ }
 }
@@ -293,6 +337,35 @@ export async function recoveredTxHeldElsewhere(ctx, result) {
 export async function txServedElsewhere(network, tx, holder) {
   const r = await claimSettlementKey(txClaimKey(network, tx), holder);
   return !r.claimed;
+}
+
+export const TX_SERVED_ELSEWHERE = "transaction_served_elsewhere";
+
+/**
+ * A Stellar settle that succeeded claims its transaction for this request
+ * (`claimTx(tx)` resolves true when this request owns it). A transaction
+ * another request already holds was confirmed and served for that request
+ * (a resend whose settle failed and whose confirmation found this one), so
+ * this request is answered as a failed settle instead of a second answer for
+ * one payment. A claim store that throws leaves the sale standing: the
+ * per-entry claim taken before settle is the primary guard, and a store
+ * that does not answer falls back to this process (claimSettlementKey).
+ */
+export async function ownSettledStellarTx(res, { network, claimTx, log = console.warn } = {}) {
+  const tx = res && res.success === true ? settleTxOf(res) : null;
+  if (!tx || typeof claimTx !== "function") return res;
+  let owned = true;
+  try { owned = (await claimTx(tx)) !== false; } catch { owned = true; }
+  if (owned) return res;
+  log(`[settlement-claims] stellar transaction ${tx} settled but another request already serves it; not answering twice for one payment`);
+  return {
+    success: false,
+    errorReason: TX_SERVED_ELSEWHERE,
+    errorMessage: "This payment's transaction already answered another request.",
+    network: res.network || network,
+    ...(res.payer ? { payer: res.payer } : {}),
+    transaction: "",
+  };
 }
 
 /** Test-only. */

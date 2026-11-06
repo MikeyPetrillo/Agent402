@@ -16,10 +16,14 @@
 // ever consulted AFTER a settle failure, so the happy path pays nothing for it.
 //
 // SAFETY - the only dangerous mistake here is confirming a payment that did not
-// happen, which would hand out the tool for free. So:
-//   * a transfer counts only if the PAYER was debited and OUR payTo was
-//     credited in the SAME transaction, after this attempt began
+// happen, which would hand out the tool for free. So, on the settle path
+// (confirmStellarPayment):
+//   * a transaction counts only if it carries THIS request's signed payment:
+//     the same token transfer call and the payer's signed authorization entry,
+//     where that call pays the advertised token contract, to our payTo, at
+//     least the price
 //   * the transaction must be `successful` on-chain
+//   * each confirmed transaction is claimed once, so it confirms one request
 //   * any error, timeout, or unparseable response returns null, which leaves
 //     the original failure standing. Never "assume paid" on a flake.
 // Being wrong in the other direction (missing a real payment) costs us the sale
@@ -87,6 +91,232 @@ async function confirmByHash({ txHash, payTo, assetCode, base, fetchImpl, timeou
   return credited ? { transaction: txHash, amount: credited.amount || null } : null;
 }
 
+// ---- The settle path: confirm THIS payment, and only this payment ----------
+//
+// A settle the chain confirms is matched to the payment it signed: asset,
+// amount and transaction. The facilitator rebuilds the buyer's transaction
+// around its own source account before submitting it, so the hash of the
+// payload's envelope is not the hash that lands. What survives the rebuild
+// byte for byte is the single invokeHostFunction operation: the token
+// `transfer(from, to, amount)` call and the buyer's signed Soroban
+// authorization entry (address credentials: nonce, expiration, signature).
+// The network consumes that (address, nonce) once, so a confirmed transaction
+// carrying this entry is this payment's own transaction and no other.
+//
+// So the payment is read from the request's own signed payload and checked
+// against the requirements (the token contract we advertise, our payTo, at
+// least the price in the asset's units), and an on-chain transaction counts
+// only when it succeeded and its operation carries the same call and the same
+// signed entry. Each confirmed transaction is then claimed (src/settlement-
+// claims.js, shared across replicas), so one transaction confirms one request.
+// Any doubt returns null and the original settle failure stands.
+
+const STELLAR_DECIMALS = 7n;
+const MAX_ENVELOPE_CHARS = 32_768;
+const TX_HASH = /^[0-9a-f]{64}$/;
+
+/** The one invokeHostFunction operation of an envelope, or null. A fee bump
+ *  is unwrapped to its inner transaction. */
+function soleInvokeOp(env) {
+  const kind = env?.switch?.().name;
+  let tx = null;
+  if (kind === "envelopeTypeTx") tx = env.v1().tx();
+  else if (kind === "envelopeTypeTxFeeBump") {
+    const inner = env.feeBump().tx().innerTx();
+    if (inner.switch().name !== "envelopeTypeTx") return null;
+    tx = inner.v1().tx();
+  } else return null;
+  const ops = tx.operations();
+  if (!Array.isArray(ops) || ops.length !== 1) return null;
+  const body = ops[0].body();
+  if (body.switch().name !== "invokeHostFunction") return null;
+  return body.invokeHostFunctionOp();
+}
+
+/** `transfer(from, to, amount)` on a contract, or null. */
+function transferCallOf(sdk, op) {
+  const fn = op.hostFunction();
+  if (fn.switch().name !== "hostFunctionTypeInvokeContract") return null;
+  const call = fn.invokeContract();
+  if (call.functionName().toString() !== "transfer") return null;
+  const args = call.args();
+  if (args.length !== 3) return null;
+  const contract = sdk.Address.fromScAddress(call.contractAddress()).toString();
+  const from = sdk.scValToNative(args[0]);
+  const to = sdk.scValToNative(args[1]);
+  const amount = sdk.scValToNative(args[2]);
+  if (typeof from !== "string" || typeof to !== "string" || typeof amount !== "bigint") return null;
+  return { contract, from, to, amount };
+}
+
+/**
+ * What the request's own signed payload pays, checked against its
+ * requirements, or null when it does not pay them exactly enough:
+ *   { payer, payTo, asset, amount (bigint, asset units), hostFunction, auth[] }
+ * `hostFunction` and `auth` are base64 XDR: the call and the payer's signed
+ * address-credential entries, which an on-chain transaction must repeat.
+ */
+export async function stellarSignedPaymentOf(paymentPayload, paymentRequirements) {
+  try {
+    const envXdr = paymentPayload?.payload?.transaction;
+    if (typeof envXdr !== "string" || !envXdr || envXdr.length > MAX_ENVELOPE_CHARS) return null;
+    const asset = String(paymentRequirements?.asset || "");
+    const payTo = String(paymentRequirements?.payTo || "");
+    if (!/^C[A-Z2-7]{55}$/.test(asset) || !/^G[A-Z2-7]{55}$/.test(payTo)) return null;
+    if (!/^[0-9]+$/.test(String(paymentRequirements?.amount ?? ""))) return null;
+    const price = BigInt(String(paymentRequirements.amount));
+    if (price <= 0n) return null;
+    const sdk = await import("@stellar/stellar-sdk");
+    const op = soleInvokeOp(sdk.xdr.TransactionEnvelope.fromXDR(envXdr, "base64"));
+    if (!op) return null;
+    const call = transferCallOf(sdk, op);
+    if (!call || call.contract !== asset || call.to !== payTo || call.amount < price) return null;
+    const auth = [];
+    for (const entry of op.auth()) {
+      const cred = entry.credentials();
+      if (cred.switch().name !== "sorobanCredentialsAddress") continue;
+      if (sdk.Address.fromScAddress(cred.address().address()).toString() !== call.from) continue;
+      auth.push(entry.toXDR("base64"));
+    }
+    if (!auth.length) return null;
+    return { payer: call.from, payTo, asset, amount: call.amount, hostFunction: op.hostFunction().toXDR("base64"), auth };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The payer's signed authorization entries in a Stellar payload, as the
+ * network consumes them: [{ signer, nonce }] for each address-credential entry
+ * of the sole transfer call signed by its `from` (nonce as a decimal string,
+ * signer as spelled on chain), or null. A re-encoded copy of the same signed
+ * entry yields the same list, so it names the payment whatever the envelope
+ * around it (src/settlement-claims.js claims each one; src/replay-guard.js
+ * keys the replay on them).
+ */
+export async function stellarAuthorizationsOf(paymentPayload) {
+  try {
+    const envXdr = paymentPayload?.payload?.transaction;
+    if (typeof envXdr !== "string" || !envXdr || envXdr.length > MAX_ENVELOPE_CHARS) return null;
+    const sdk = await import("@stellar/stellar-sdk");
+    const op = soleInvokeOp(sdk.xdr.TransactionEnvelope.fromXDR(envXdr, "base64"));
+    if (!op) return null;
+    const call = transferCallOf(sdk, op);
+    if (!call) return null;
+    const out = [];
+    const seen = new Set();
+    for (const entry of op.auth()) {
+      const cred = entry.credentials();
+      if (cred.switch().name !== "sorobanCredentialsAddress") continue;
+      const a = cred.address();
+      const signer = sdk.Address.fromScAddress(a.address()).toString();
+      if (signer !== call.from) continue;
+      const nonce = a.nonce().toString();
+      if (!/^-?[0-9]{1,20}$/.test(nonce) || seen.has(nonce)) continue;
+      seen.add(nonce);
+      out.push({ signer, nonce });
+    }
+    return out.length ? out : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Asset units as Horizon spells them ("0.0010000"). */
+function unitsToDecimal(n) {
+  const scale = 10n ** STELLAR_DECIMALS;
+  return `${n / scale}.${(n % scale).toString().padStart(Number(STELLAR_DECIMALS), "0")}`;
+}
+
+/** Does this on-chain transaction carry the signed payment? true (it does),
+ *  false (it is on-chain and does not), null (not readable yet). */
+async function txCarriesPayment({ hash, signed, base, fetchImpl, timeoutMs }) {
+  const tx = await getJson(`${base}/transactions/${encodeURIComponent(hash)}`, fetchImpl, timeoutMs);
+  if (!tx) return null;
+  if (typeof tx.hash === "string" && tx.hash.toLowerCase() !== hash) return false;
+  if (tx.successful !== true) return false;
+  if (typeof tx.envelope_xdr !== "string" || !tx.envelope_xdr || tx.envelope_xdr.length > MAX_ENVELOPE_CHARS * 2) return false;
+  try {
+    const sdk = await import("@stellar/stellar-sdk");
+    const op = soleInvokeOp(sdk.xdr.TransactionEnvelope.fromXDR(tx.envelope_xdr, "base64"));
+    if (!op) return false;
+    if (op.hostFunction().toXDR("base64") !== signed.hostFunction) return false;
+    const onChain = new Set(op.auth().map((e) => e.toXDR("base64")));
+    return signed.auth.every((a) => onChain.has(a));
+  } catch {
+    return false;
+  }
+}
+
+/** Candidate transactions from the payer's recent debits (a lookup only:
+ *  every candidate must still carry the signed payment). */
+async function payerCandidates({ payer, sinceMs, base, fetchImpl, timeoutMs }) {
+  const eff = await getJson(`${base}/accounts/${encodeURIComponent(payer)}/effects?order=desc&limit=25`, fetchImpl, timeoutMs);
+  const out = [];
+  for (const d of eff?._embedded?.records || []) {
+    if (d?.type !== "account_debited" || d?.asset_type === "native") continue;
+    const t = Date.parse(d?.created_at || "");
+    if (!Number.isFinite(t) || t < sinceMs) continue;
+    const opHref = d?._links?.operation?.href;
+    const opId = String(d?.id || "").split("-")[0];
+    const opUrl = (typeof opHref === "string" && opHref) || (/^\d+$/.test(opId) ? `${base}/operations/${encodeURIComponent(opId)}` : null);
+    if (!opUrl) continue;
+    const op = await getJson(opUrl, fetchImpl, timeoutMs);
+    const h = typeof op?.transaction_hash === "string" ? op.transaction_hash.toLowerCase() : "";
+    if (op && op.transaction_successful !== false && TX_HASH.test(h)) out.push(h);
+  }
+  return out;
+}
+
+/**
+ * Confirm the signed payment on-chain after a failed settle. `signed` is
+ * stellarSignedPaymentOf(...) for this request; `txHash` a hash a facilitator
+ * named; `claimTx(hash)` resolves true only when this request now owns that
+ * transaction. Returns { transaction, amount } or null.
+ */
+export async function confirmStellarPayment({
+  signed,
+  txHash = null,
+  sinceMs,
+  claimTx,
+  horizon = process.env.STELLAR_HORIZON_URL || DEFAULT_HORIZON,
+  waitMs = 8_000,
+  stepMs = 1_500,
+  timeoutMs = 4_000,
+  fetchImpl = fetch,
+} = {}) {
+  if (!signed || typeof signed.hostFunction !== "string" || !Array.isArray(signed.auth) || !signed.auth.length) return null;
+  if (typeof claimTx !== "function") return null;
+  const base = String(horizon).replace(/\/+$/, "");
+  const named = typeof txHash === "string" && TX_HASH.test(txHash.toLowerCase()) ? txHash.toLowerCase() : null;
+  const scan = typeof signed.payer === "string" && signed.payer && Number.isFinite(sinceMs);
+  if (!named && !scan) return null;
+  const settledNo = new Set();   // on-chain and not this payment: never re-read
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    const candidates = named ? [named] : [];
+    if (scan) {
+      for (const h of await payerCandidates({ payer: signed.payer, sinceMs, base, fetchImpl, timeoutMs })) {
+        if (!candidates.includes(h)) candidates.push(h);
+      }
+    }
+    for (const hash of candidates) {
+      if (settledNo.has(hash)) continue;
+      const verdict = await txCarriesPayment({ hash, signed, base, fetchImpl, timeoutMs });
+      if (verdict === false) { settledNo.add(hash); continue; }
+      if (verdict !== true) continue;
+      let owned = false;
+      try { owned = (await claimTx(hash)) === true; } catch { owned = false; }
+      return owned ? { transaction: hash, amount: unitsToDecimal(signed.amount) } : null;
+    }
+    if (Date.now() >= deadline) return null;
+    await new Promise((r) => setTimeout(r, stepMs));
+  }
+}
+
+// ---- The refund verifier's lookup (src/payment-verify.js) ------------------
+// Not used on the settle path. The refund verifier binds what this returns to
+// the transaction and amount its debt recorded.
 export async function confirmStellarTransfer({
   payer,
   payTo,
@@ -199,7 +429,7 @@ export async function confirmStellarTransfer({
  * @param {object} p
  * @param {() => Promise<object>} p.primary          settle via the primary
  * @param {(() => Promise<object>)|null} p.fallback  settle via the fallback (null = none configured)
- * @param {(o:{payer:string|null}) => Promise<object|null>} p.confirm  Horizon check for a confirmed transfer
+ * @param {(o:{payer:string|null, txHash:string|null}) => Promise<object|null>} p.confirm  Horizon check that this payment landed
  * @param {(msg:string) => void} [p.log]
  * @returns {Promise<object>} an x402 settle result
  */
@@ -214,8 +444,9 @@ export async function settleWithStellarFallback({ primary, fallback = null, conf
   const failure = primaryErr || primaryRes;
   const payer = settlePayerOf(failure);
   const txHash = settleTxOf(failure);
-  // 1. Did the primary's submission land anyway? (the settle-late race) - by
-  //    the exact hash when the facilitator named one, else by the payer scan.
+  // 1. Did the primary's submission land anyway? (the settle-late race) - the
+  //    confirmer accepts only a transaction carrying this request's signed
+  //    payment; a hash the facilitator named is a candidate, not proof.
   let found = await confirm({ payer, txHash });
   if (found) return honour(primaryRes, found, primaryErr ? `settle threw (${String(primaryErr?.message || primaryErr).slice(0, 120)})` : `facilitator said ${JSON.stringify(primaryRes?.errorReason || "failed")}`);
   // 2. Not on chain: same signed envelope through the fallback facilitator.

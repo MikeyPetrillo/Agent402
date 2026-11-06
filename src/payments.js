@@ -17,7 +17,7 @@ import { ExactStellarScheme } from "@x402/stellar/exact/server";
 import { ExactAvmScheme } from "@x402/avm/exact/server";
 import { ALGORAND_MAINNET_CAIP2 } from "./avm-network.js";
 import { convertToTokenAmount, numberToDecimalString } from "@x402/core/utils";
-import { confirmStellarTransfer, settlePayerOf, settleWithStellarFallback } from "./stellar-confirm.js";
+import { confirmStellarPayment, settlePayerOf, settleTxOf, settleWithStellarFallback, stellarSignedPaymentOf } from "./stellar-confirm.js";
 import { clarifySvmSettleFailure } from "./svm-clarify.js";
 import {
   bazaarResourceServerExtension,
@@ -36,7 +36,8 @@ import { networkPriceFloors, applyNetworkFloor, networkFloorUsd } from "./networ
 import { installFacilitatorDiagnostics, labelFacilitatorErrors } from "./facilitator-diagnostics.js";
 import { isAlreadyOnChainSettleError, recoverAlreadyOnChain } from "./settle-onchain-proof.js";
 import { pendingSettleApplies, confirmPendingSettle, notePendingSettleAnswers, takePendingAnswers, peekPendingAnswers, pendingSettleTxOf, pendingTxsOf } from "./pending-settle.js";
-import { registerSettlementClaimHooks, registerSettlementClaimRelease, recoveredTxHeldElsewhere } from "./settlement-claims.js";
+import { ownSettledStellarTx, registerSettlementClaimHooks, registerSettlementClaimRelease, recoveredTxHeldElsewhere, txServedElsewhere } from "./settlement-claims.js";
+import { randomUUID } from "node:crypto";
 import { registerFirstCallAllowanceSettleHook } from "./first-call-allowance.js";
 import { registerLateSettleHook } from "./late-settlements.js";
 import { chargeCancelledForClientGone, registerSettleSentHook, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
@@ -1598,12 +1599,15 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // work, took the money, and threw the answer away. Measured 2026-08-03 on ten
   // consecutive canary runs, deterministic because it is a race nobody can win.
   //
-  // So on failure we poll Horizon for a confirmed transfer from this payer to
-  // our payTo and, if one exists, report the settlement that actually happened.
-  // This is verification, never a re-settle: nothing new is broadcast, so it
-  // cannot double-charge. confirmStellarTransfer returns null on any error or
-  // timeout, leaving the original failure exactly as it was - the only unsafe
-  // direction is claiming a payment that did not occur, and it never guesses.
+  // So on failure we ask Horizon whether THIS payment landed: a settle the
+  // chain confirms is matched to the payment it signed, by asset, amount and
+  // transaction (confirmStellarPayment: the request's own signed transfer and
+  // authorization entry, at least the price in the advertised token contract,
+  // to our payTo, and each confirmed transaction claimed once across
+  // replicas). This is verification, never a re-settle: nothing new is
+  // broadcast, so it cannot double-charge. Any error, timeout or shape it does
+  // not understand returns null, leaving the original failure exactly as it
+  // was - the only unsafe direction is claiming a payment that did not occur.
   // Plus a FALLBACK facilitator (2026-08-26): when the primary fails and the
   // transfer is NOT on-chain, the same signed payload is re-submitted through
   // it (settleWithStellarFallback, src/stellar-confirm.js - the decision is a
@@ -1622,14 +1626,31 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       const startedAt = Date.now() - 5_000;   // skew allowance for Horizon clocks
       const payTo = paymentRequirements?.payTo || stellarWallet;
       const network = paymentRequirements?.network || "stellar:pubnet";
-      // The payer comes from the FACILITATOR's own settle result/error, never
-      // from the payload — see settlePayerOf(). Reading it from the payload is
-      // what made the first version of this a no-op in production.
+      // One holder per settle: a transaction this request confirms or settles
+      // is claimed for it (src/settlement-claims.js), so no other request can
+      // be confirmed by the same transaction.
+      const holder = `stellar-settle:${randomUUID()}`;
+      const claimTx = async (tx) => !(await txServedElsewhere(network, tx, holder));
       const res = await settleWithStellarFallback({
         primary: () => super.settle(paymentPayload, paymentRequirements),
         fallback: stellarFallbackClient ? () => stellarFallbackClient.settle(paymentPayload, paymentRequirements) : null,
-        confirm: ({ payer, txHash }) => confirmStellarTransfer({ payer, payTo, sinceMs: startedAt, txHash }),
+        // The payment is read from this request's own signed payload, never
+        // from the facilitator's failure; a hash the facilitator named is only
+        // a candidate that must carry that signed payment.
+        confirm: async ({ txHash }) => confirmStellarPayment({
+          signed: await stellarSignedPaymentOf(paymentPayload, { ...paymentRequirements, payTo }),
+          txHash, sinceMs: startedAt, claimTx,
+        }),
       });
+      // A settled transaction is claimed for this request too, so a later
+      // confirmation cannot reuse it for another; one another request
+      // already serves (a resend that confirmed it first) answers this one
+      // as a failed settle, never a second answer for one payment
+      // (ownSettledStellarTx). The per-entry authorization claim taken
+      // before settle (src/settlement-claims.js) keeps a resend from
+      // reaching here while this request holds the payment.
+      const owned = await ownSettledStellarTx(res, { network, claimTx });
+      if (owned !== res) return owned;
       // A thrown primary that the chain later confirmed comes back as a bare
       // success object; give it the wire shape @x402 expects.
       if (res && res.success === true && !res.network) return { ...res, network };
