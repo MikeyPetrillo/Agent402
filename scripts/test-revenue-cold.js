@@ -19,7 +19,7 @@ const src = readFileSync(new URL("../src/revenue-live.js", import.meta.url), "ut
 const fn = src.slice(src.indexOf("export async function revenueSnapshot"), src.indexOf("export function lastGoodSnapshot"));
 ok(fn.indexOf("if (diskLastGood?.rails?.length) return lastGoodSnapshot(diskLastGood);") > fn.indexOf("if (cached) return cached;") && fn.indexOf("return lastGoodSnapshot(diskLastGood)") < fn.indexOf("Promise.race"), "a cold snapshot serves the saved reading before it would wait on the scan");
 const refresh = src.slice(src.indexOf("async function refreshSnapshot"));
-ok((refresh.match(/\bevm\("/g) || []).length === [...RAILS, ...GATED_RAILS].filter((r) => r.caip2.startsWith("eip155:")).length && /bounded\("Solana", solanaRail/.test(refresh) && /bounded\("Stellar", stellarRail/.test(refresh) && /bounded\("Algorand", algorandRail/.test(refresh), "every rail is bounded as a whole");
+ok(/const evmKeys = Object\.keys\(EVM\);/.test(refresh) && /Promise\.all\(evmKeys\.map\(evm\)\)/.test(refresh) && /const evm = \(name\) => bounded\(/.test(refresh) && [...RAILS, ...GATED_RAILS].filter((r) => r.caip2.startsWith("eip155:")).length > 0 && /bounded\("Solana", solanaRail/.test(refresh) && /bounded\("Stellar", stellarRail/.test(refresh) && /bounded\("Algorand", algorandRail/.test(refresh), "every rail is bounded as a whole");
 
 console.log(`\ntest-revenue-cold: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
