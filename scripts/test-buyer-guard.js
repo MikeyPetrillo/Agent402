@@ -69,6 +69,36 @@ ok(await payloadWith(null) === "sent", "a payload signing the checked amount is 
 ok(/refused before sending/.test(await payloadWith("1000000000000")), "a payload signing more than the checked amount is refused before sending");
 ok(/refused before sending/.test(await payloadWith("999")), "a payload signing a different amount is refused before sending");
 
+// The installed guard, end to end through the client: the scheme default, the
+// recheck of the selected accept before the signer runs, and the payload
+// version after it.
+async function guarded({ accepts, guardOpts = opts, schemes = ["exact"], payloadVersion = null }) {
+  const client = new x402Client();
+  if (typeof client.setSpendControls === "function") client.setSpendControls(false);
+  let signerRuns = 0;
+  for (const scheme of schemes) {
+    client.register("eip155:8453", { scheme, async createPaymentPayload(version, r) {
+      signerRuns++;
+      return { x402Version: payloadVersion ?? version, payload: { authorization: { value: r.amount }, signature: "0x" } };
+    } });
+  }
+  guardCappedSigning(client, { ...guardOpts, log: () => {} });
+  try { await client.createPaymentPayload({ x402Version: 2, resource: { url: "http://x/y" }, accepts }); return { result: "sent", signerRuns }; }
+  catch (e) { return { result: e.message, signerRuns }; }
+}
+ok(!checkAccept(2, v2({ scheme: "upto", extra: { name: "USD Coin", version: "2", assetTransferMethod: "permit2" } }), opts).ok, "with no schemes option only exact is allowed");
+let g = await guarded({ accepts: [v2({ scheme: "upto", extra: { name: "USD Coin", version: "2", assetTransferMethod: "permit2" } })], schemes: ["upto"] });
+ok(g.result !== "sent" && g.signerRuns === 0, `the installed guard signs only exact by default (${g.result})`);
+g = await guarded({ accepts: [v2({ scheme: "upto", extra: { name: "USD Coin", version: "2", assetTransferMethod: "permit2" } })], schemes: ["upto"], guardOpts: { ...opts, schemes: ["upto"] } });
+ok(g.result === "sent" && g.signerRuns === 1, `control: an upto accept is signed when the caller allows upto (${g.result})`);
+let reads = 0;
+g = await guarded({ accepts: [v2()], guardOpts: { maxUsd: () => (++reads === 1 ? 0.05 : 0.0001), networks: ["eip155:8453"] } });
+ok(/selected accept refused/.test(g.result) && g.signerRuns === 0, `the selected accept is checked again before the signer runs (${g.result}; signer runs ${g.signerRuns})`);
+g = await guarded({ accepts: [v2()], payloadVersion: 1 });
+ok(/payload version differs from the challenge/.test(g.result) && g.signerRuns === 1, `a payload whose version is not the challenge's is refused before sending (${g.result})`);
+g = await guarded({ accepts: [v2()] });
+ok(g.result === "sent" && g.signerRuns === 1, "control: the same accept and version is sent");
+
 // ---- the options the own-service buyers use ----
 const SOL = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const sol = (over = {}) => ({ scheme: "exact", network: SOL, asset: SOL_USDC, payTo: "x", amount: "1000", maxTimeoutSeconds: 60, extra: { feePayer: "y" }, ...over });
