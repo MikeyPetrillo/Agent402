@@ -110,3 +110,10 @@ example: [`0xae8e3e40…f826`](https://robinhoodchain.blockscout.com/tx/0xae8e3e
   `/api/gateway-status`; the detail is on the operator endpoint.
   `FACILITATOR_GAS_CHECK=off` turns the check off. Your own relayer, when
   `ROBINHOOD_RELAYER_KEY` is set, is read the same way, as its own entry.
+- **Relayer first**: while the first listed facilitator's signer reads under
+  `ROBINHOOD_SKIP_DRY_BELOW_SETTLEMENTS` (default 50) settlements, your own
+  relayer settles first. Once it has been first for longer than
+  `ROBINHOOD_RELAYER_FIRST_ALERT_HOURS` (default 6; `0` or `off` disables),
+  `robinhoodSettler` reads `relayer` on `/api/gateway-status` (`ok`
+  otherwise, `off` without your own relayer). The clock is kept in the
+  state database, so a deploy does not restart it.

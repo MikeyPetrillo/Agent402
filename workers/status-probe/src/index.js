@@ -658,6 +658,16 @@ Auto-closes when nothing is owed.`,
     body: () => `${failureWordBody("buyerRefusals", "refusing")} refusing means a wallet, Tempo sender, credits key or address that had settled at least one call inside the breaker's window was then refused for its settle failures; the operator detail has the count, the server log the [gateway-breaker] line.`,
   },
   {
+    // Our own relayer settling Robinhood Chain sales in the listed
+    // facilitator's place (its signer read dry) for longer than
+    // ROBINHOOD_RELAYER_FIRST_ALERT_HOURS (robinhoodSettler,
+    // src/robinhood-order.js): relayer pages, ok and off clear, unknown does
+    // neither. Title matches heartbeat.yml's.
+    title: "robinhoodSettler: our own relayer has been settling Robinhood sales for hours",
+    verdict: ({ gateway: b }) => wordVerdict(b.robinhoodSettler?.status, ["relayer"], ["ok", "off"]),
+    body: () => `${failureWordBody("robinhoodSettler", "relayer")} relayer means the listed Robinhood Chain facilitator's settlement signer has read dry for longer than ROBINHOOD_RELAYER_FIRST_ALERT_HOURS (default 6), so our own relayer settles every Robinhood sale first and pays its gas; the operator detail (robinhoodOrder) names the facilitator and since when.`,
+  },
+  {
     // Paid 200s whose body is empty or error-shaped (toolAnswers,
     // src/answer-shape.js): degraded pages, ok clears, unknown does neither.
     // Title matches heartbeat.yml's.

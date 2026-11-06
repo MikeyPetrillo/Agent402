@@ -140,6 +140,15 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   relayer key across replicas under a lease with the nonce read under it, fee and gas caps, a
   balance check before signing, and a hash for any send that may have reached the node so a
   missing receipt stops the chain; its signer joins the gas check (`scripts/test-own-relayer.js`).
+  While every fresh gas reading of the first listed facilitator's signer is under
+  `ROBINHOOD_SKIP_DRY_BELOW_SETTLEMENTS` (default 50) settlements, our relayer settles first
+  (`src/robinhood-order.js`; facilitatorFunds leaves that covered row out). The order's start
+  (`since`) is a state-database document (`robinhood-order:eip155:4663`), so a deploy or another
+  replica keeps the clock; `robinhoodSettler` on `/api/gateway-status` reads `relayer` once our
+  relayer has been first without a break for longer than `ROBINHOOD_RELAYER_FIRST_ALERT_HOURS`
+  (default 6; 0 or `off` reads `off`), `ok` otherwise, `off` without an order. The heartbeat and
+  the status Worker page on `relayer` under one issue that ok or off closes; the operator view
+  has the clock (`scripts/test-robinhood-settler.js`, `scripts/test-robinhood-settler-pg.js`).
   With it, an ambiguous listed-facilitator failure on 4663 (5xx, timeout, no verdict, no
   transaction) is read on chain (`src/robinhood-outage.js`): the authorization used with our
   transfer is served (claimed first), still unused after `ROBINHOOD_AMBIGUOUS_WAIT_MS` (the wait
