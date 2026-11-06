@@ -4133,7 +4133,10 @@ jobs:
           grep -i "Accepting USDC" /tmp/mc.log
           NETS=$(curl -s localhost:3002/api/pricing | jq -c '.payment.networks')
           echo "pricing.payment.networks = $NETS"
-          [ "$NETS" = '["base","solana","polygon","arbitrum","stellar"]' ] || { echo "code did not register all chains"; exit 1; }
+          # Stellar is configured here without its wallet or facilitator, so it is
+          # dropped from the offer and /api/pricing lists only what can settle.
+          [ "$NETS" = '["base","solana","polygon","arbitrum"]' ] || { echo "code did not register all chains"; exit 1; }
+          grep -q "dropping stellar:pubnet from the offered networks" /tmp/mc.log || { echo "a configured chain with no facilitator was not reported as dropped"; exit 1; }
           echo "--- live 402 against PayAI (informational status; hard gate on the accepts below) ---"
           # RETRY LOOP, not one shot: @x402/express syncs the facilitator's
           # /supported lazily — a request that lands before the first sync
