@@ -75,8 +75,9 @@ function facilitator(name, st, kindsFor) {
 async function boot({ inkUrls = (p) => `http://127.0.0.1:${p.INK1},http://127.0.0.1:${p.INK2}`, setup = () => {}, extraEnv = {}, networks = "base,ink" } = {}) {
   const [PORT, BASE_FAC, INK1, INK2] = await getFreePorts(4);
   const st = {};
-  // The generic facilitator (PayAI's slot in this keyless boot, registered
-  // first) also lists Ink: it must never take an Ink payment.
+  // The generic facilitator (PayAI's client, pointed here so no request
+  // leaves 127.0.0.1, registered first) also lists Ink: it must never take
+  // an Ink payment.
   const servers = [
     [facilitator("base", st, () => [BASE_NET, INK]), BASE_FAC],
     [facilitator("ink1", st, () => [INK, BASE_NET]), INK1],
@@ -87,7 +88,7 @@ async function boot({ inkUrls = (p) => `http://127.0.0.1:${p.INK1},http://127.0.
   const urls = inkUrls({ INK1, INK2 });
   const env = { ...process.env }; delete env.STATE_DATABASE_URL; delete env.REDIS_URL; delete env.SOLVADOR_KEY; delete env.ROBINHOOD_RELAYER_KEY; delete env.INK_FACILITATOR_URL; delete env.NETWORK_PRICE_FLOORS; delete env.FACILITATOR_PUBLIC_INDEX_CHAINS;
   const proc = spawn(process.execPath, ["src/server.js"], { cwd: root, stdio: ["ignore", "pipe", "pipe"], env: { ...env, ...ownStoreEnv("ink-rail"), PORT: String(PORT), FREE_MODE: "", NODE_ENV: "test",
-    WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", FACILITATOR_URL: `http://127.0.0.1:${BASE_FAC}`, AGENT402_BASE_RPC: `http://127.0.0.1:${BASE_FAC}/rpc`,
+    WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", FACILITATOR_URL: `http://127.0.0.1:${BASE_FAC}`, PAYAI_FACILITATOR_URL: `http://127.0.0.1:${BASE_FAC}`, AGENT402_BASE_RPC: `http://127.0.0.1:${BASE_FAC}/rpc`,
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", MPP_SECRET_KEY: "", PAYMENT_NETWORKS: networks,
     ...(urls ? { INK_FACILITATOR_URL: urls } : {}), ROBINHOOD_FALLBACK_RECHECK_MS: "60000", ...extraEnv,
     PAYMENT_SETTLE_FALLBACK: "true", FACILITATOR_GAS_CHECK: "off", STATS_ALLOW_EPHEMERAL: "true",
