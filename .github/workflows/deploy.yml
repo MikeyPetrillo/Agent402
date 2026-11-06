@@ -2611,6 +2611,8 @@ jobs:
           t node scripts/test-idempotency-settlement.js
           t node scripts/test-idempotency-inflight.js
           t node scripts/test-idempotency-pow-binding.js
+          # Gateway response cache is scoped to the payer who paid (a decodable header or another wallet reads nothing; real EIP-3009 signatures, offline)
+          t node scripts/test-gateway-cache-scope.js
           # Image-kit tests (resize, convert, thumbnail — jimp, exact dims)
           t node scripts/test-image.js
           # jimp on the root zod 4 (no nested zod 3; outputs and option checks match the zod 3 baseline)

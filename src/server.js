@@ -96,6 +96,7 @@ import { mppFallbackStatus } from "./mpp-fallback.js";
 import { applyMeteredSettlement, meteredUsdOf } from "./gateway-meter.js";
 import { handlerInputOf, preValidateInput, withIgnoredParams } from "./handler-input.js";
 import { configureHowToCall, howToCallField } from "./how-to-call.js";
+import { gatewayCacheGate, scopedCacheKey, writerCacheScope } from "./gateway-cache-scope.js";
 import { startModelCatalogRefresh, modelCatalogWanted } from "./model-catalog.js";
 import { toolErrorFields } from "./tool-error-fields.js";
 import { shapeRefusal } from "./input-aliases.js";
@@ -10503,42 +10504,30 @@ if (FREE_MODE) {
     next();
   });
   // Gateway response cache, served HERE — before the paywall — so a
-  // byte-identical repeat of an already-paid generation is free. Pre-payment
-  // means buyer-agnostic by construction; only non-streamed 200s are ever
-  // stored (see llm-gateway-kit.js). A hit is served only to a request that
-  // carries a payment (src/payment-attempt.js), which is then never settled;
-  // an unpaid request gets the route's 402. Two policies share the store:
+  // byte-identical repeat of an already-paid generation is free to the payer
+  // who paid for it; only non-streamed 200s are ever stored (see
+  // llm-gateway-kit.js). Each entry is keyed by its payer, and a hit is served
+  // only to a request that proves that payer (src/gateway-cache-scope.js),
+  // which is then never settled; any other request goes on to the paywall.
+  // Two policies share the store:
   //   chat tiers   — explicit `cache: true` opt-in (LLM output is sampled;
   //                  a resend usually WANTS a fresh sample)
   //   /v1/embeddings — default-ON (deterministic output; `cache: false` opts out)
   // Invalid bodies fall through so the normal path produces the real 402/400.
-  app.use(async (req, res, next) => {
-    if (req.method !== "POST" || !carriesPaymentAttempt(req)) return next();
-    try {
-      let key = null;
-      if (req.path === EMBEDDINGS_PATH) {
-        key = embeddingsCacheKey(req.body);
-      } else if (req.path === RERANK_PATH) {
-        key = rerankCacheKey(req.body); // default-ON like embeddings (deterministic ranker)
-      } else if (req.body?.cache === true && req.body?.stream !== true) {
+  app.use(gatewayCacheGate({
+    carriesPaymentAttempt,
+    payTo: WALLET_ADDRESS,
+    get: promptCacheGetShared,
+    keyOf: (req) => {
+      if (req.path === EMBEDDINGS_PATH) return embeddingsCacheKey(req.body);
+      if (req.path === RERANK_PATH) return rerankCacheKey(req.body); // default-ON like embeddings (deterministic ranker)
+      if (req.body?.cache === true && req.body?.stream !== true) {
         const tierSlug = GATEWAY_TIER_BY_PATH[req.path];
-        if (tierSlug) key = promptCacheKey(tierSlug, req.body);
+        if (tierSlug) return promptCacheKey(tierSlug, req.body);
       }
-      if (key) {
-        // The local store first, then the cache every replica shares.
-        const hit = await promptCacheGetShared(key);
-        if (hit) {
-          // Read by the Tempo and Stripe gates, which run earlier: a gateway
-          // cache hit is never settled on any rail.
-          req.gatewayCacheHit = true;
-          res.setHeader("X-Cache", "hit");
-          res.setHeader("Cache-Control", "no-store, private");
-          return res.status(200).json(hit);
-        }
-      }
-    } catch { /* invalid input — let the paywall + handler answer honestly */ }
-    next();
-  });
+      return null;
+    },
+  }));
 
   // NB (FR4-02): the former "render-credit" feature (F13/R-10) was REMOVED. It
   // assumed x402 settled BEFORE the handler, so a capacity 503 meant
@@ -11745,7 +11734,11 @@ for (const tool of ALL_KIT) {
         if (cacheKey && result && typeof result === "object" && !result.error) {
           cacheSet(cacheKey, result, cacheTtlFor(cachePolicy, result) || 300).catch(() => {});
         }
-        for (const w of req.__deferredCache || []) { try { promptCacheStore(w.key, w.body); } catch { /* cache is best-effort */ } }
+        // Stored under the payer that settled it (src/gateway-cache-scope.js);
+        // a call with no proven payer, or one served unsettled, stores nothing.
+        const deferred = req.__deferredCache || [];
+        const scope = deferred.length ? writerCacheScope(req, res) : null;
+        for (const w of deferred) { try { const k = scopedCacheKey(w.key, scope); if (k) promptCacheStore(k, w.body); } catch { /* cache is best-effort */ } }
       });
       // Response digest for the attest tool: sha256 of the exact bytes res.json
       // sends. Express serialises with JSON.stringify and the app sets no

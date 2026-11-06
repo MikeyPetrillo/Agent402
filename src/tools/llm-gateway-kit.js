@@ -2953,8 +2953,9 @@ export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = 
 // Keying: sha256 over the tier + the NORMALIZED body (validateRequest output,
 // stable-stringified), so model aliases (gpt-4o-mini vs openai/gpt-4o-mini)
 // and caller field order collapse to one entry, and every sampling-relevant
-// field (temperature, seed, max_tokens, …) is part of the key. Pre-paywall
-// service is necessarily buyer-agnostic — identical requests share entries.
+// field (temperature, seed, max_tokens, …) is part of the key. The server
+// scopes every key to the payer that paid for it (src/gateway-cache-scope.js),
+// so identical requests share an entry only within one payer.
 // Streamed requests are never cached. Values are our own 200 responses.
 const PROMPT_CACHE_TTL_MS = 10 * 60 * 1000;
 const PROMPT_CACHE_MAX_ENTRIES = 5000;

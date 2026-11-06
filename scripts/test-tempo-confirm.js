@@ -412,7 +412,8 @@ async function listen(app) {
   ok(carriesPaymentAttempt(R({ "x-pow-solution": "abc" })), "attempt: a proof-of-work solution is one");
   const { readFileSync } = await import("node:fs");
   const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-  ok(/if \(req\.method !== "POST" \|\| !carriesPaymentAttempt\(req\)\) return next\(\);[\s\S]{0,900}req\.gatewayCacheHit = true;/.test(src), "wiring: the gateway cache serves only a request that carries a payment, and flags the hit for the earlier gates");
+  const gateSrc = readFileSync(new URL("../src/gateway-cache-scope.js", import.meta.url), "utf8");
+  ok(/if \(req\.method !== "POST" \|\| !carriesPaymentAttempt\(req\)\) return next\(\);[\s\S]{0,1200}req\.gatewayCacheHit = true;/.test(gateSrc) && /app\.use\(gatewayCacheGate\(\{\s*carriesPaymentAttempt,/.test(src), "wiring: the gateway cache serves only a request that carries a payment, and flags the hit for the earlier gates");
 }
 
 // ---------------------------------------------------------------------------
