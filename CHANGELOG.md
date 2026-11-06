@@ -17,6 +17,8 @@ Agents:
   request body from the tool's own example, plus a query-string form where the
   route serves one; the first-contact 402 body carries the same call, or the
   method and URL alone when the example is large.
+- A call to a retired tool through catalog.call names its retirement date and
+  replacement, as the HTTP route's 410 does.
 Payments:
 - A cached gateway answer is served only to the payer that settled it, on a
   payment not already used.
@@ -36,7 +38,12 @@ Packages:
   answered with a 402, so price every method served.
 Operations:
 - The heartbeat opens one issue when a repository security advisory waits in
-  triage for more than a day.
+  triage for more than a day; the issue names no advisory.
+- Retired-route answers are counted by coarse source (client family, referring
+  host, payment rail, HTTP or MCP), with no address, wallet or full user agent
+  kept.
+- The EVM wallet alarm also opens when an enabled chain's balance cannot be
+  read for an hour, and the status probe pages on it.
 
 ### 2026-11-06 (Stellar settle confirmation)
 Payments:
