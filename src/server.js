@@ -7142,6 +7142,22 @@ function isOwnWallet(payer) {
 function dropUnverifiedPaymentHeaders(req) {
   for (const h of ["payment-signature", "x-payment", "payment-identifier"]) delete req.headers[h];
 }
+// True (and the payment headers dropped) when a payment header decodes to a
+// JSON object whose x402Version is not 2. Bytes that do not decode are left
+// exactly as sent for the paywall to refuse.
+function refuseNonV2PaymentPayload(req) {
+  for (const name of ["payment-signature", "x-payment"]) {
+    const raw = req.headers[name];
+    if (typeof raw !== "string" || !raw) continue;
+    let decoded;
+    try { decoded = JSON.parse(Buffer.from(raw, "base64").toString("utf8")); } catch { continue; }
+    if (decoded && typeof decoded === "object" && !Array.isArray(decoded) && decoded.x402Version !== 2) {
+      dropUnverifiedPaymentHeaders(req);
+      return true;
+    }
+  }
+  return false;
+}
 function isSyntheticRequest(req) {
   try { return !!(req && (ownTrue(req, "statusProbePow") || verifyHeartbeatToken(req.header("x-heartbeat-token")))); }
   catch { return false; }
@@ -10430,7 +10446,7 @@ if (FREE_MODE) {
           // couldn't); its absence means a first-contact quote (no wallet /
           // crawl / looked-and-left). This is the couldn't-pay vs wouldn't-pay
           // split — the single most useful cut on the 402→settle drop-off.
-          const paidAttempt = req.header("x-payment") || req.header("payment-signature");
+          const paidAttempt = req.header("x-payment") || req.header("payment-signature") || ownTrue(req, "__droppedPaymentAttempt");
           const powAttempt = req.header("x-pow-solution");
           const attempt = paidAttempt ? "usdc_failed" : powAttempt ? "pow_failed" : "none";
           capturePostHogPaywall({
@@ -10718,6 +10734,15 @@ if (FREE_MODE) {
     // any non-200 releases it so a legitimate retry of the still-valid
     // authorization proceeds. Requests without a payment header (unpaid 402
     // challenges, discovery crawls) return a null key and are never guarded.
+    // Every 402 here offers x402 version 2 only, and the library matches a
+    // version 1 payload on scheme and network alone, never on the terms its
+    // echoed block states. So a payment header whose payload declares any
+    // version other than 2 is never handed to the paywall: its headers are
+    // dropped and the paywall answers the ordinary 402 with the offer, which
+    // the verify hint (read from the header as sent) words as a version
+    // mismatch. A version 2 payload whose echoed block uses a v1-era key is
+    // not this case; it is translated below.
+    if (refuseNonV2PaymentPayload(req)) req.__droppedPaymentAttempt = true;
     const replayKey = paymentReplayKey(req);
     if (replayKey) {
       // The shared claim is required whenever another container may be

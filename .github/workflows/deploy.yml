@@ -2795,6 +2795,8 @@ jobs:
           t node scripts/test-coingecko-rate.js
           # Paid smoke buyer preflight (external targets require an outcome assertion before key/client/network work)
           t node scripts/test-smoke-buy.js
+          # Paying scripts: signed amount priced from the known-assets table, own-target guard
+          t node scripts/test-buyer-guard.js
           # "Every paid route's PAYMENT-REQUIRED document parses under the OFFICIAL @x402/core
           #  schemas. Our live challenges did not: 557 of 560 published more than the protocol's
           #  five-tag maximum, so a buyer validating before paying got an invalid document

@@ -123,6 +123,7 @@ import { measureCoverage, missingIn, renderTable, examplesFromOpenapi, multipart
 import { multipartBodyFrom } from "../src/openapi-request.js";
 import { awaitJob, DEFAULT_ASYNC_TIMEOUT_MS } from "../client/async-job.js";
 import { redactJobLinks, slowPreferOf, asyncRefusalPreferOf } from "./lib/slow-route-buy.js";
+import { assertOwnPaidTarget } from "./lib/buyer-guard.js";
 
 export const SETTLE_VIA = "payai";
 export const REGISTRIES = ["bazaar", "payai"];
@@ -561,6 +562,7 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
   const err = deps.error || ((m) => console.error(m));
   const opts = parseArgs(argv);
   const target = String(env.TARGET_URL || "https://agent402.tools").replace(/\/+$/, "");
+  try { assertOwnPaidTarget(target, "payai-listing-pass", { env, throwOnRefuse: true }); } catch (e) { err(e.message); return 2; }
   const chain = chainOf(opts.chain);
   const registry = opts.registry;
   const leg = `${registry} / ${chain?.name || opts.chain}`;

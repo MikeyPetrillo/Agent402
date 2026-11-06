@@ -27,8 +27,9 @@ import { privateKeyToAccount } from "viem/accounts";
 import { readFileSync } from "node:fs";
 import { x402Client, x402HTTPClient } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
+import { assertOwnPaidTarget } from "./lib/buyer-guard.js";
 
-const TARGET = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, "");
+const TARGET = assertOwnPaidTarget((process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, ""), "drain-burner");
 const KEY_FILE = process.env.KEY_FILE || "/tmp/agent-key";
 const MAX_CALLS_PER_CHAIN = parseInt(process.env.MAX_CALLS, 10) || 100; // backstop; the 402 stop ends it first
 const STOP_AFTER_FAILS = 3; // consecutive non-settles = drained (<$0.50) or facilitator unavailable

@@ -105,7 +105,7 @@ function makeEngine(opts = {}) {
     secretKey: SECRET, realm: REALM,
     storePath: join(tmp, `${opts.name || "store"}.json`),
     now: () => clock,
-    log: () => {},
+    log: opts.log || (() => {}),
     onCharge: (s) => calls.sales.push(s),
     validateTarget: opts.validateTarget,
     activate: async (header, ctx) => {
@@ -131,7 +131,7 @@ function makeEngine(opts = {}) {
       });
       return { receipt: { method: "tempo", status: "success", reference: "0xactivation", timestamp: new Date(clock).toISOString() } };
     },
-    findRenewalOnChain: async (args) => { calls.find = (calls.find || 0) + 1; return typeof findBehaviour === "function" ? findBehaviour(args) : findBehaviour; },
+    findRenewalOnChain: opts.chainReader ? undefined : async (args) => { calls.find = (calls.find || 0) + 1; return typeof findBehaviour === "function" ? findBehaviour(args) : findBehaviour; },
     chargePeriod: async (rec, { periodIndex }) => {
       calls.charge++;
       const r = await chargeBehaviour(rec, periodIndex);
@@ -498,6 +498,63 @@ let liveSubId = null, liveHeader = null, liveToken = null, liveBuyer = null;
     advance(TRANSIENT_CHARGE_BACKOFF_MS + 1000);
     ok(await c.engine.refreshStatus(subC.subId) === "past_due" && c.calls.charge === chargesC, "(c) an unreadable chain waits and signs nothing");
     ok(Date.parse(c.engine.get(subC.subId).nextChargeAttemptAt) - clock <= TRANSIENT_CHARGE_BACKOFF_MS + 1000, "(c) and retries the chain read on the short backoff");
+
+    // (d) landed, read by the DEFAULT chain reader (no injected finder) from a
+    // stub JSON-RPC on a loopback port. mppx's record carries the amount in
+    // BASE UNITS ("3000000" for $3), the transfer's value on chain; the reader
+    // must search for exactly that value, never re-scale it as a decimal.
+    {
+      const { encodeFunctionData, parseAbi, pad, toHex, keccak256, toBytes } = await import("viem");
+      const http = await import("node:http");
+      const abi = parseAbi(["function transferWithMemo(address to, uint256 amount, bytes32 memo)"]);
+      const TRANSFER = keccak256(toBytes("Transfer(address,address,uint256)"));
+      let landed = null; // { payer, value, memo }
+      const rpcCalls = [];
+      const logsD = [];
+      const TXH = "0x" + "ab".repeat(32);
+      const srv = http.createServer((req, res) => {
+        let body = ""; req.on("data", (d) => (body += d)); req.on("end", () => {
+          const msgs = [].concat(JSON.parse(body));
+          const out = msgs.map(({ id, method }) => {
+            rpcCalls.push(method);
+            let result = null;
+            if (method === "eth_blockNumber") result = "0x10000";
+            else if (method === "eth_chainId") result = toHex(TEMPO_MAINNET_CHAIN_ID);
+            else if (method === "eth_getLogs") result = landed ? [{ address: CURRENCY, topics: [TRANSFER, pad(landed.payer), pad(RECIPIENT)], data: pad(toHex(landed.value)), blockNumber: "0xfff0", blockHash: "0x" + "cd".repeat(32), transactionHash: TXH, transactionIndex: "0x0", logIndex: "0x0", removed: false }] : [];
+            else if (method === "eth_getTransactionByHash") result = { hash: TXH, from: landed.payer, to: CURRENCY, input: encodeFunctionData({ abi, functionName: "transferWithMemo", args: [RECIPIENT, landed.value, landed.memo] }), nonce: "0x1", value: "0x0", gas: "0x5208", gasPrice: "0x1", type: "0x0", blockNumber: "0xfff0", blockHash: "0x" + "cd".repeat(32), transactionIndex: "0x0", chainId: toHex(TEMPO_MAINNET_CHAIN_ID), v: "0x1b", r: "0x" + "11".repeat(32), s: "0x" + "22".repeat(32) };
+            return { jsonrpc: "2.0", id, result };
+          });
+          res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(Array.isArray(JSON.parse(body)) ? out : out[0]));
+        });
+      });
+      await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+      const savedRpc = process.env.TEMPO_RPC_URL;
+      process.env.TEMPO_RPC_URL = `http://127.0.0.1:${srv.address().port}`;
+      try {
+        const d = makeEngine({ name: "ambiguous-landed-default-reader", chainReader: true, log: (m) => logsD.push(m) });
+        const offD = await d.engine.mintOffer({ product: "fund-monitor", target: "Some Manager LP" });
+        const cD = await signCredential(Challenge.deserialize(offD.header));
+        const subD = await d.engine.activateFromCredential(cD.header);
+        await d.engine.warm();
+        d.setCharge(() => sendTimeout);
+        advance(PERIOD);
+        ok(await d.engine.refreshStatus(subD.subId) === "past_due", "(d) send-phase failure -> past_due");
+        const recD = d.engine.get(subD.subId);
+        const mppxD = await d.engine._subStore.get(recD.mppxSubscriptionId);
+        ok(/^\d+$/.test(String(mppxD.amount)) && BigInt(mppxD.amount) >= 1000000n && String(recD.amountAtomic) === String(mppxD.amount), `(d) mppx's record and ours both hold the period amount in base units (${mppxD.amount})`);
+        landed = { payer: cD.account.address, value: BigInt(mppxD.amount), memo: await expectedRenewalMemo({ lookupKey: mppxD.lookupKey, subscriptionId: recD.mppxSubscriptionId, periodIndex: 1 }) };
+        const chargesD = d.calls.charge;
+        d.setCharge(() => ({ reference: "0xMUST-NOT-HAPPEN" }));
+        advance(Date.parse(recD.nextChargeAttemptAt) - clock + 1000);
+        ok(await d.engine.refreshStatus(subD.subId) === "active", `(d) the default reader finds the landed transfer of ${mppxD.amount} base units -> active (rpc: ${[...new Set(rpcCalls)].join(",")}; ${logsD.filter((m) => /chain|unconfirmed/.test(m)).slice(-2).join(" | ")})`);
+        const afterD = d.engine.get(subD.subId);
+        ok(afterD.lastChargedPeriod === 1 && afterD.lastChargeTx === TXH && !afterD.unconfirmedCharge, "(d) the landed transaction is recorded as period 1's charge");
+        ok(d.calls.charge === chargesD, "(d) and no second transfer was signed for the same period");
+      } finally {
+        if (savedRpc === undefined) delete process.env.TEMPO_RPC_URL; else process.env.TEMPO_RPC_URL = savedRpc;
+        srv.close();
+      }
+    }
   }
 
   // Recovery.

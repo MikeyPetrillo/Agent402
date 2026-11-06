@@ -21,9 +21,10 @@
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
 import { createHmac } from "node:crypto";
 import { openapiReader, resolveReplayableInput } from "./lib/replayable-example.js";
+import { assertOwnPaidTarget } from "./lib/buyer-guard.js";
 import { slowPreferOf, paidCallHonoringSlowRoutes } from "./lib/slow-route-buy.js";
 
-const TARGET = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, "");
+const TARGET = assertOwnPaidTarget((process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, ""), "cross-chain-matrix");
 const readOpenapi = openapiReader(TARGET);
 const TOP_N = Number(process.argv[2] || process.env.MATRIX_TOP_N || 15);
 const DRY = process.env.MATRIX_DRY_RUN === "1" || process.env.MATRIX_DRY_RUN === "true";

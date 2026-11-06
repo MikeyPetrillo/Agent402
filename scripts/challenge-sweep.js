@@ -21,8 +21,9 @@
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
 import { writeFileSync } from "node:fs";
 import { openapiReader, resolveReplayableInput } from "./lib/replayable-example.js";
+import { assertOwnPaidTarget } from "./lib/buyer-guard.js";
 
-const TARGET = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, "");
+const TARGET = assertOwnPaidTarget((process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, ""), "challenge-sweep");
 const readOpenapi = openapiReader(TARGET);
 const GP_RESOURCES = "https://facilitator.goplausible.xyz/discovery/resources";
 const AVM_CAIP2_PREFIX = "algorand:";

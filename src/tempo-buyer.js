@@ -44,6 +44,27 @@ import { readBytesCapped, decodeUtf8 } from "./capped-body.js";
  *  tempo/charge one so the refusal names what was offered. An unpayable entry
  *  listed ahead of a payable one never decides the purchase. Pure; exported
  *  for tests. */
+// The method details this wallet has vetted, and nothing else. mppx's charge
+// client reads each of these and none changes the token paid or the payee
+// beyond what the checks here pin (chain, splits, modes; the fee payer
+// sponsors gas; mppx writes its own memo). `machineTokenEnabled: true` makes
+// mppx pay through a machine-token swap route, from another token than the
+// USDC.e the refusal proof watches, so it is refused, and so is any key not
+// listed: a detail this wallet does not understand may change what is paid.
+const VETTED_METHOD_DETAILS = new Set(["chainId", "feePayer", "splits", "supportedModes", "memo", "machineTokenEnabled"]);
+
+/** Why a charge request's method details cannot be paid by this wallet, or
+ *  null when they can. Pure; exported for tests. */
+export function methodDetailsRefusal(req) {
+  const md = req?.methodDetails;
+  if (md === undefined || md === null) return null;
+  if (typeof md !== "object" || Array.isArray(md)) return "Seller's challenge carries unreadable method details; nothing was signed";
+  if (md.machineTokenEnabled !== undefined && md.machineTokenEnabled !== false) return "Seller's challenge enables a machine-token route, which pays from another token than USDC.e; nothing was signed";
+  const unknown = Object.keys(md).filter((k) => !VETTED_METHOD_DETAILS.has(k));
+  if (unknown.length) return `Seller's challenge carries a method detail this wallet does not know (${unknown.slice(0, 3).join(", ").slice(0, 80)}); nothing was signed`;
+  return null;
+}
+
 export function pickTempoChallenge(challenges) {
   const charges = (Array.isArray(challenges) ? challenges : []).filter((c) => c?.method === "tempo" && c?.intent === "charge");
   const payable = (c) => {
@@ -51,6 +72,7 @@ export function pickTempoChallenge(challenges) {
     if (String(req.currency || "").toLowerCase() !== TEMPO_USDC_LC) return false;
     const chainId = req.methodDetails?.chainId;
     if (chainId !== undefined && Number(chainId) !== TEMPO_CHAIN_ID) return false;
+    if (methodDetailsRefusal(req)) return false;
     const splits = req.methodDetails?.splits;
     return splits === undefined || splits === null || (Array.isArray(splits) && splits.length === 0);
   };
@@ -388,6 +410,8 @@ export async function payTempo(url, {
   // is refused before anything is signed.
   const splits = req.methodDetails?.splits;
   if (splits !== undefined && splits !== null && !(Array.isArray(splits) && splits.length === 0)) throw bad("Seller's challenge splits the payment across other recipients, which this wallet does not pay; nothing was signed", 409);
+  const detailsRefused = methodDetailsRefusal(req);
+  if (detailsRefused) throw bad(detailsRefused, 409);
   // 4. PROVEN-SELLER GATE (fail closed).
   let inbound;
   let inboundPayers;

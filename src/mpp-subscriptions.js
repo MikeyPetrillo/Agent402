@@ -904,11 +904,18 @@ export function createMppSubscriptions({
   async function defaultFindRenewalOnChain({ rec, mppxRec, periodIndex, sinceMs }) {
     try {
       const client = await tempoClient();
-      const { getBlockNumber, getLogs, getTransaction, decodeFunctionData, parseAbi, parseUnits } = await import("viem");
+      // The chain actions live under viem/actions (the root export has none of them).
+      const { decodeFunctionData, parseAbi } = await import("viem");
+      const { getBlockNumber, getLogs, getTransaction } = await import("viem/actions");
+      // The period amount in BASE UNITS: mppx's record carries request.amount,
+      // which its codec already scaled (so "5000000" is $5.00 at 6 decimals),
+      // and our record keeps the same figure as amountAtomic. Never re-scale it.
+      const rawAmount = String(mppxRec?.amount ?? rec.amountAtomic ?? "");
+      if (!/^\d+$/.test(rawAmount)) throw new Error("the period amount is not a base-units integer");
+      const amount = BigInt(rawAmount);
       const head = await getBlockNumber(client);
       const secondsBack = Math.ceil((now() - sinceMs) / 1000) + 120; // Tempo blocks are ~1 s
       const fromBlock = head > BigInt(Math.min(secondsBack, 5000)) ? head - BigInt(Math.min(secondsBack, 5000)) : 0n;
-      const amount = parseUnits(String(mppxRec?.amount ?? rec.priceUsd), Number(mppxRec?.decimals ?? decimals));
       const abi = parseAbi(["event Transfer(address indexed from, address indexed to, uint256 value)", "function transferWithMemo(address to, uint256 amount, bytes32 memo)"]);
       const logs = await getLogs(client, { address: rec.currency, event: abi[0], args: { from: rec.payer, to: recipient }, fromBlock, toBlock: "latest" });
       const memo = await expectedRenewalMemo({ lookupKey: mppxRec?.lookupKey, subscriptionId: rec.mppxSubscriptionId, periodIndex });

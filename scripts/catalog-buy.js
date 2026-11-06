@@ -96,6 +96,7 @@ import { requestExampleOf, multipartBodyFrom, MULTIPART_TYPE } from "../src/open
 import { captureRecord, CAPTURE_MAX_BYTES } from "./catalog-buy-capture.js";
 import { slowPreferOf, paidCallHonoringSlowRoutes, redactJobLinks } from "./lib/slow-route-buy.js";
 import { DEFAULT_ASYNC_TIMEOUT_MS } from "../client/async-job.js";
+import { assertOwnPaidTarget } from "./lib/buyer-guard.js";
 
 export const BASE_CAIP2 = "eip155:8453";
 export const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
@@ -616,7 +617,7 @@ async function main() {
   const only = arg("--only", process.env.CATALOG_BUY_ONLY || "");
   const out = arg("--out");
   const outputsOut = arg("--outputs");
-  const target = process.env.TARGET_URL || "https://agent402.tools";
+  const target = assertOwnPaidTarget(process.env.TARGET_URL || "https://agent402.tools", "catalog-buy");
   const pk = (process.env.BURNER_KEY || "").trim();
   if (!pk && !dry) { console.error("catalog-buy: BURNER_KEY is not set (use --dry to plan without buying)"); process.exit(2); }
   const payer = dry ? { address: null } : await realPayer(pk);
