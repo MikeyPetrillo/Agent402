@@ -28,7 +28,7 @@ const tmp = mkdtempSync(join(tmpdir(), "a402-unconf-"));
 const env = { ...process.env }; delete env.STATE_DATABASE_URL; delete env.REDIS_URL; delete env.SOLVADOR_KEY;
 const proc = spawn(process.execPath, ["src/server.js"], { cwd: root, stdio: ["ignore", "pipe", "pipe"], env: { ...env, PORT: String(PORT), FREE_MODE: "",
   WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", FACILITATOR_URL: `http://127.0.0.1:${BASE_FAC}`, AGENT402_BASE_RPC: `http://127.0.0.1:${BASE_FAC}/rpc`,
-  CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", MPP_SECRET_KEY: "", PAYMENT_NETWORKS: "base,robinhood",
+  CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", PAYAI_FACILITATOR_URL: `http://127.0.0.1:${BASE_FAC}`, MPP_SECRET_KEY: "", PAYMENT_NETWORKS: "base,robinhood",
   ROBINHOOD_FACILITATOR_URL: `http://127.0.0.1:${RH1},http://127.0.0.1:${RH2}`, ROBINHOOD_FALLBACK_RECHECK_MS: "1500",
   PAYMENT_SETTLE_FALLBACK: "true", SALES_LEDGER_DB: join(tmp, "sales.db"), REFUND_DB_DIR: tmp, FACILITATOR_GAS_CHECK: "off",
   X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off" } });

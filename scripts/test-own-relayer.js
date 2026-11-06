@@ -576,7 +576,7 @@ async function bootAndPay({ withKey, primary = "revert", cdn = false, outageWait
   const preload = settledStatus ? ["--import", "./scripts/lib/settled-status-preload.js"] : [];
   const proc = spawn(process.execPath, [...preload, "src/server.js"], { cwd: new URL("..", import.meta.url).pathname, stdio: ["ignore", "pipe", "pipe"], env: { ...env, PORT: String(PORT), FREE_MODE: "", ...(settledStatus ? { SETTLED_STATUS_TEST: "1" } : {}),
     WALLET_ADDRESS: TREASURY, NETWORK: "base", FACILITATOR_URL: `http://127.0.0.1:${BASE_FAC}`, AGENT402_BASE_RPC: `http://127.0.0.1:${BASE_FAC}/rpc`,
-    CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", MPP_SECRET_KEY: "", PAYMENT_NETWORKS: "base,robinhood",
+    CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", PAYAI_FACILITATOR_URL: `http://127.0.0.1:${BASE_FAC}`, MPP_SECRET_KEY: "", PAYMENT_NETWORKS: "base,robinhood",
     ROBINHOOD_FACILITATOR_URL: `http://127.0.0.1:${RH1}`, EVM_RPC_4663: RPC, ...(withKey ? { ROBINHOOD_RELAYER_KEY: relayerKey } : {}),
     PAYMENT_SETTLE_FALLBACK: "true", SALES_LEDGER_DB: join(tmp, "sales.db"), REFUND_DB_DIR: tmp, FACILITATOR_GAS_CHECK: "off",
     LATE_SETTLE_FILE: join(tmp, "late.json"), ...(outageWait ? { ROBINHOOD_AMBIGUOUS_WAIT_MS: outageWait } : {}),
