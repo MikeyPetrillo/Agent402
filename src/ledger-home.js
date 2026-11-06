@@ -15,7 +15,7 @@ import { RAILS, RAILS_SHORT } from "./rails.js";
 import { CAIP2_NAMES } from "./stats.js";
 import { chainMark, CHAIN_ORDER } from "./chain-logos.js";
 import { routerPayChains } from "./tools/route-execute.js";
-import { railKey } from "./rails.js";
+import { railKey, chainDisplayName } from "./rails.js";
 import { tempoEnabled } from "./mpp-tempo.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
@@ -301,7 +301,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
 <section id="sell" style="max-width:1180px;margin:0 auto;padding:64px 30px 0;">
   <h2 class="hm-h2">Sell to agents.</h2>
   ${sectionMeta(["free listing", "nothing deducted", "buyer wallet → your wallet"], "margin:10px 0 14px;")}
-  <p class="hm-lede ml-measure" style="margin:0 0 18px;text-wrap:pretty;">List an x402 API and the router can send agents your way; it pays you on ${esc(routerChains.map((c) => c[0].toUpperCase() + c.slice(1)).join(", "))}. Or put agent402-tollbooth in front of a site to charge AI crawlers per page. Sellers rank by settled volume on the <a href="/leaderboard" style="color:var(--ink);">leaderboard</a>.</p>
+  <p class="hm-lede ml-measure" style="margin:0 0 18px;text-wrap:pretty;">List an x402 API and the router can send agents your way; it pays you on ${esc(routerChains.map(chainDisplayName).join(", "))}. Or put agent402-tollbooth in front of a site to charge AI crawlers per page. Sellers rank by settled volume on the <a href="/leaderboard" style="color:var(--ink);">leaderboard</a>.</p>
   <div style="font-family:var(--font-mono);font-size:var(--fs-sm);"><a href="/sell" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:1px;white-space:nowrap;">everything for sellers → /sell</a></div>
 </section>
 

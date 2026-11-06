@@ -148,6 +148,30 @@ ok(!html.includes("—"), "no em dashes anywhere in the page copy");
   const faq = FAQ_TEXT_OF(html);
   ok(/settlement floor/i.test(faq) && !/\b(50|3) (settle|payer|transaction)/i.test(faq), "the floor FAQ explains it without a figure");
 }
+// --- the router's chains are route-execute's, including SOR_EVM_CHAINS ----
+// The page names every chain the router holds a spending wallet on. A fresh
+// copy of the module, loaded with EVM chains listed, must name them under
+// their display names (a static list or a slug-capitalizer would not).
+{
+  const prev = process.env.SOR_EVM_CHAINS;
+  process.env.SOR_EVM_CHAINS = "polygon,robinhood";
+  try {
+    const { sellPage: freshSellPage } = await import("../src/sell.js?evm-chains");
+    const t = decodeEntities(stripTags(freshSellPage("https://agent402.tools", CATALOG))).replace(/\s+/g, " ");
+    const m = t.match(/it holds spending wallets for ([^.]+)\./);
+    ok(m && /\bPolygon\b/.test(m[1]) && /\bRobinhood Chain\b/.test(m[1]) && /\bSolana\b/.test(m[1]), `the router sentence names the SOR_EVM_CHAINS chains by display name (got: ${m && m[1]})`);
+    const base = text.match(/it holds spending wallets for ([^.]+)\./);
+    ok(base && !/Polygon/.test(base[1]), `with no EVM chains listed, Polygon is not named (got: ${base && base[1]})`);
+    // The router guide names the same legs, read at render time.
+    const { guidePage } = await import("../src/guides.js");
+    const g = decodeEntities(stripTags(guidePage("https://agent402.tools", "smart-order-router"))).replace(/\s+/g, " ");
+    const legs = g.match(/the same holds for its (.+?) legs/);
+    ok(legs && ["Solana", "Algorand", "Tempo", "Polygon", "Robinhood Chain"].every((n) => legs[1].includes(n)) && !/\{\{/.test(g), `the router guide names every router chain besides Base (got: ${legs && legs[1]})`);
+  } finally {
+    if (prev === undefined) delete process.env.SOR_EVM_CHAINS; else process.env.SOR_EVM_CHAINS = prev;
+  }
+}
+
 function FAQ_TEXT_OF(h) { const i = h.indexOf("What is the settlement floor"); return i < 0 ? "" : h.slice(i, i + 1500); }
 
 console.log(`\n${pass} passed, ${fail} failed`);

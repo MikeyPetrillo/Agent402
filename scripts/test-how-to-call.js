@@ -65,6 +65,16 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { faile
   const big = howToCall402Field(long).howToCall;
   ok(big && big.method === "POST" && big.url === "https://origin.example/api/long" && Object.keys(big).length === 2 && JSON.stringify(howToCallFor(long)).length > MAX_402_CALL_BYTES,
     `402 form: a call past ${MAX_402_CALL_BYTES} bytes goes out as its method and URL only`);
+
+  // /openapi.json documents the 400 the server sends: every operation's 400
+  // names howToCall and each field the builder can put in it.
+  const { openapiSpec } = await import("../src/pages.js");
+  const mk = (slug) => ({ name: slug, slug, category: "x", price: "$0.001", description: "d", discovery: { inputSchema: { type: "object", properties: {} }, input: { text: "x" } } });
+  const spec = openapiSpec("https://example.test", { "POST /api/oa": mk("oa"), "GET /api/ob": mk("ob") });
+  const ops = Object.values(spec.paths).flatMap((p) => Object.values(p)).filter((op) => op?.responses?.[402]); // the paid tool operations
+  const fields = [...new Set([...Object.keys(p), ...Object.keys(g), ...Object.keys(m)])].filter((k) => k !== "headers");
+  ok(ops.length >= 2 && ops.every((op) => /\bhowToCall\b/.test(op.responses?.[400]?.description || "")), "openapi: every paid operation's 400 names howToCall");
+  ok(ops.every((op) => fields.every((k) => (op.responses[400].description || "").includes(k))), `openapi: the 400 names each howToCall field the builder sends (${fields.join(", ")})`);
 }
 
 // ---- Part 2: a FREE_MODE boot --------------------------------------------
