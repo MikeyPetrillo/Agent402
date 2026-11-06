@@ -6,6 +6,33 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-06 (EVM router chains, call hints, package limits)
+Router:
+- The router buys from proven sellers on each EVM chain the operator lists,
+  with the same price binding, validity cap and spending caps per chain as on
+  Base, and each listed chain counts toward the global unsettled-spend
+  ceiling.
+Agents:
+- An input-validation 400 carries howToCall: the method, URL and a ready
+  request body from the tool's own example, plus a query-string form where the
+  route serves one; the first-contact 402 body carries the same call.
+Payments:
+- A cached gateway answer is served only to the payer that settled it.
+- A Stellar refund or settle confirmation counts USDC only from its pinned
+  issuer, and a refused settle releases the authorization's claims so the
+  buyer can retry.
+Packages:
+- The buyer client, MCP server and OpenClaw plugin refuse to sign an
+  authorization valid for longer than 24 hours, and a held amount always
+  releases inside that window.
+- The MCP server and OpenClaw plugin redact configured keys from every result,
+  error and log line.
+- Tollbooth grants a request only when its payment middleware took a payment;
+  any other request is answered with a 402.
+Operations:
+- The heartbeat opens one issue when a repository security advisory waits in
+  triage for more than a day.
+
 ### 2026-11-06 (Stellar settle confirmation)
 Payments:
 - A Stellar settle that the chain confirms is matched to the payment it
