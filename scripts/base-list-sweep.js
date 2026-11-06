@@ -24,6 +24,12 @@
 //   - SWEEP_DRY=1 quotes everything and signs nothing.
 //   - Marks every request internal with the heartbeat token, so these buys do
 //     not read as outside demand in the sales ledger or PostHog.
+//   - A slow route (its 402 body carries an `async` block) is paid with
+//     Prefer: respond-async and its job followed to the end
+//     (scripts/lib/slow-route-buy.js): the job settles only on its final 200,
+//     and a job that ends failed is a failed buy. A 400
+//     respond_async_required (refused before payment) is signed and sent once
+//     more with the Prefer header its body names.
 //
 // Usage (CI, BURNER_KEY in env):
 //   node scripts/base-list-sweep.js [--out report.json] [--max-usd 25] [--limit N]
@@ -32,6 +38,7 @@ import { writeFileSync } from "node:fs";
 import { multipartBodyFrom } from "../src/openapi-request.js";
 import { openapiReader, resolveReplayableInput } from "./lib/replayable-example.js";
 import { createHmac } from "node:crypto";
+import { slowPreferOf, paidCallHonoringSlowRoutes } from "./lib/slow-route-buy.js";
 
 const TARGET = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, "");
 const readOpenapi = openapiReader(TARGET);
@@ -176,7 +183,7 @@ for (const entry of ROUTES) {
   const [method, path] = entry.split(" ");
   if (listed.has(path) && !ALWAYS_BUY.has(path)) { report.skipped.push({ entry, reason: "already listed" }); continue; }
 
-  let paymentRequired, example;
+  let paymentRequired, example, asyncAdvice = null;
   try {
     const bare = await fetch(`${TARGET}${path}`, {
       method,
@@ -187,6 +194,8 @@ for (const entry of ROUTES) {
     if (bare.status !== 402) { report.failed.push({ entry, reason: `bare request HTTP ${bare.status}` }); continue; }
     const body = await bare.json().catch(() => undefined);
     paymentRequired = http.getPaymentRequiredResponse((n) => bare.headers.get(n), body);
+    // A slow route's 402 body carries its async block (src/slow-routes.js).
+    asyncAdvice = body?.async && typeof body.async === "object" ? body.async : null;
     example = await resolveReplayableInput(paymentRequired?.extensions?.bazaar?.info?.input || {}, { method, path, readOpenapi });
     if (!example) { report.failed.push({ entry, reason: "shortened 402 example with no full example on /openapi.json" }); continue; }
   } catch (e) { report.failed.push({ entry, reason: `challenge: ${e.message}` }); continue; }
@@ -218,9 +227,15 @@ for (const entry of ROUTES) {
 
   const t0 = Date.now();
   try {
-    const payload = await client.createPaymentPayload({ ...paymentRequired, accepts });
-    const payHeaders = http.encodePaymentSignatureHeader(payload);
-    const paid = await fetch(url, { ...init, headers: { ...init.headers, ...payHeaders } });
+    const call = await paidCallHonoringSlowRoutes(
+      async (extra) => {
+        const payHeaders = http.encodePaymentSignatureHeader(await client.createPaymentPayload({ ...paymentRequired, accepts }));
+        return fetch(url, { ...init, headers: { ...init.headers, ...extra, ...payHeaders } });
+      },
+      { prefer: slowPreferOf(asyncAdvice, { method: payMethod, json: typeof init.body === "string" }), baseUrl: TARGET, fetchImpl: (u, i) => fetch(u, { ...i, headers: stamp(i?.headers || {}) }), slug: path },
+    );
+    const paid = call.res;
+    const job = call.job ? `  job ${call.job.state}` : "";
     const hdr = paid.headers.get("payment-response") || paid.headers.get("x-payment-response");
     let tx = null;
     if (hdr) { try { tx = JSON.parse(Buffer.from(hdr, "base64").toString("utf8")).transaction; } catch { /* best effort */ } }
@@ -228,12 +243,12 @@ for (const entry of ROUTES) {
     if (paid.status !== 200) {
       // A >=400 cancels settlement, so nothing was charged and nothing listed.
       const b = await paid.text().catch(() => "");
-      report.failed.push({ entry, reason: `HTTP ${paid.status} after ${secs}s: ${b.slice(0, 140)}` });
-      console.warn(`FAIL ${entry}  HTTP ${paid.status} (${secs}s)`);
+      report.failed.push({ entry, reason: `${call.jobFailed ? "job failed: " : ""}HTTP ${paid.status} after ${secs}s: ${b.slice(0, 140)}`, ...(call.prefer ? { prefer: call.prefer } : {}) });
+      console.warn(`FAIL ${entry}  HTTP ${paid.status} (${secs}s)${job}`);
     } else {
-      report.bought.push({ entry, usd, tx: tx || null, secs: Number(secs) });
+      report.bought.push({ entry, usd, tx: tx || null, secs: Number(secs), ...(call.prefer ? { prefer: call.prefer } : {}) });
       report.spentUsd += usd;
-      console.log(`OK   ${entry}  $${usd}  ${secs}s${tx ? `  tx ${tx.slice(0, 12)}...` : "  (no receipt header)"}  [${report.bought.length}]`);
+      console.log(`OK   ${entry}  $${usd}  ${secs}s${tx ? `  tx ${tx.slice(0, 12)}...` : "  (no receipt header)"}${job}  [${report.bought.length}]`);
     }
   } catch (e) { report.failed.push({ entry, reason: `pay: ${String(e.message).slice(0, 140)}` }); console.warn(`FAIL ${entry}  ${String(e.message).slice(0, 90)}`); }
 

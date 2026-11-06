@@ -118,7 +118,7 @@ jobs:
         if: steps.pick.outputs.due == 'true' && steps.pick.outputs.card != ''
         run: |
           npm ci --ignore-scripts
-          npx playwright install --with-deps chromium
+          bash scripts/ci-apt-install.sh --playwright-chromium
       - name: Render the proof receipt card from live /api/proof
         if: steps.pick.outputs.due == 'true' && steps.pick.outputs.card == 'proof'
         run: |

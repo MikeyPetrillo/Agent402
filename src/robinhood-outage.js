@@ -37,6 +37,7 @@ import { cdnSyncLeftMs } from "./cdn-sync-window.js";
 import { SETTLE_RULE_SECONDS } from "./evm-validity.js";
 import { chargeCancelledForClientGone } from "./hangup-settlement.js";
 import { relayerSettings } from "./robinhood-relayer.js";
+import { isPaymentVerdictCode, isPaymentVerdictReason, isUsedAuthorizationReason } from "./settle-verdict.js";
 
 export const AUTHORIZATION_USED_TOPIC = keccak256(toHex("AuthorizationUsed(address,bytes32)"));
 const STATE_ABI = parseAbi(["function authorizationState(address authorizer, bytes32 nonce) view returns (bool)"]);
@@ -59,27 +60,32 @@ export function ambiguousWaitMs(env = process.env) {
 /**
  * A facilitator verdict about the payment itself (a bad signature, too little
  * balance, an expired window): definite, so nothing is waited on or retried.
- * A reverted transfer with no hash is not ambiguous either (the revert-retry
- * rule in src/payments.js owns it).
+ * Read as a code (src/settle-verdict.js), and in words only on a graceful
+ * HTTP 200 answer (`graceful`): an HTTP error or a transport failure with the
+ * same words may still have broadcast, so it keeps the ambiguous path. A
+ * used (or canceled) authorization, as a code or in words, is never a verdict
+ * here: the facilitator's own earlier submission may be what used it, so the
+ * read looks for our transfer (our relayer re-reads authorizationState under
+ * its lock and never sends a used one). A reverted transfer with no hash is
+ * not ambiguous either (the revert-retry rule in src/payments.js owns it).
  */
-function isPaymentVerdict(reason) {
-  const r = String(reason || "");
-  if (!r) return false;
-  if (r === "invalid_exact_evm_transaction_failed") return false;
-  return /^invalid_/.test(r) || /insufficient_funds|unsupported_scheme|unsupported_network|invalid_payload/.test(r);
+function isPaymentVerdict(reason, graceful) {
+  if (isUsedAuthorizationReason(reason)) return false;
+  return isPaymentVerdictCode(reason) || (graceful === true && isPaymentVerdictReason(reason));
 }
 
 /**
  * True for a settle failure whose outcome is unknown: no transaction named,
  * and either a transport failure, an HTTP 5xx, or a failed answer that carries
  * no payment verdict. `isPreBroadcast` and `isRevertRetry` are the payments
- * module's own classifiers, passed in so this module never disagrees with them.
+ * module's own classifiers, passed in so this module never disagrees with them;
+ * `graceful` is true when the failure is a facilitator's HTTP 200 answer.
  */
-export function isAmbiguousSettleFailure(err, { isPreBroadcast = () => false, isRevertRetry = () => false } = {}) {
+export function isAmbiguousSettleFailure(err, { isPreBroadcast = () => false, isRevertRetry = () => false, graceful = false } = {}) {
   if (!err || typeof err !== "object") return false;
   if (typeof err.transaction === "string" && err.transaction.trim()) return false;
   if (isPreBroadcast(err) || isRevertRetry(err)) return false;
-  return !isPaymentVerdict(err.errorReason);
+  return !isPaymentVerdict(err.errorReason, graceful);
 }
 
 const authOf = (payload) => {

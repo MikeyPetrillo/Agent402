@@ -43,11 +43,15 @@ unmodified client that takes the first accept it can pay settles on Base. The pr
   chain keeps serving. See [[Self-Hosting]].
 - **Settle fallback**: the variable also takes an ordered, comma-separated
   list, `ROBINHOOD_FACILITATOR_URL=<primary-url>,<fallback-url>`. The first
-  settles every payment; the rest are tried, in order, only when the one
-  before refused without moving money (an HTTP 402, a billing refusal, or a
-  reverted transfer with no transaction), and only with
-  `PAYMENT_SETTLE_FALLBACK=true`. A fallback is used once its `/supported`
-  lists exact on `eip155:4663`. A single URL behaves exactly as before.
+  whose `/supported` confirms exact on `eip155:4663` at boot settles every
+  payment (the first listed, unless it does not answer then); the rest are
+  tried, in order, only when the one before refused without moving money (an
+  HTTP 402, a billing refusal, a reverted transfer with no transaction, or an
+  HTTP 200 refusal with no transaction whose reason is not a verdict about
+  the buyer), and only with `PAYMENT_SETTLE_FALLBACK=true`. A buyer verdict
+  (a bad signature, too little balance, a used or expired authorization) is
+  not retried. A fallback is used once its `/supported` lists exact on
+  `eip155:4663`. A single URL behaves exactly as before.
 - **Your own settler (optional)**: `ROBINHOOD_RELAYER_KEY=<a dedicated relayer private key>`
   adds a settler you run after every listed facilitator. It submits the
   buyer's signed authorization from that wallet and pays the gas, only when

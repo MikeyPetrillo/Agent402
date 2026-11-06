@@ -99,7 +99,7 @@ jobs:
         if: github.event.inputs.card != ''
         run: |
           npm ci --ignore-scripts
-          npx playwright install --with-deps chromium
+          bash scripts/ci-apt-install.sh --playwright-chromium
       - name: Buy the live bestsellers response (internal-marked)
         if: github.event.inputs.card == 'bestsellers'
         env:

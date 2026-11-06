@@ -19,7 +19,10 @@
 //     for the long TTL;
 //   - a granted wallet and a spent daily cap cost no balance read; the read is
 //     bounded, and a short or late balance gives the claim back;
-//   - with the store hung, the status and a claim answer within the op bound.
+//   - with the store hung, the status and a claim answer within the op bound;
+//   - refusals are counted for new wallets only, by reason and slug: a
+//     returning payer or our own wallet is never counted, an async ledger
+//     seam is never called on a refusal, and a grant makes one ledger call.
 // Requires REDIS_URL (under CI a missing one fails).
 import { randomBytes } from "node:crypto";
 
@@ -268,6 +271,70 @@ try {
     } finally { sl.__setTestClient(null); delete process.env.SHARED_LIMITS_OP_MS; }
     const st = await m.firstCallAllowanceStatus();
     ok(st.status === "on" || st.status === "spent", `with the store back the status reads it (${st.status})`);
+  }
+  // 13. Refusal counts for NEW wallets: a returning buyer refused on an
+  // ineligible route is not counted there; a new one is, by reason and slug.
+  // The ledger read on a refusal is the synchronous one only, and a grant
+  // makes the same single ledger call as before.
+  {
+    m._resetFirstCallAllowance();
+    const OTHER = { route: "POST /api/word-count", slug: "word-count", price: "$0.001" };
+    const counting = (v) => { const f = () => { f.calls++; return v; }; f.calls = 0; return f; };
+    const refuse = async (def, from, hasPaidSale, ip = "10.9.3.1") => {
+      const { req, res } = fakeCall(payment(from));
+      return m.claimFirstCallAllowance(req, res, def, { ip, hasPaidSale, readBalance: async () => 10n ** 12n });
+    };
+    const returning = wallet(), fresh = wallet();
+    const paidYes = counting(true), paidNo = counting(false);
+    const r1 = await refuse(OTHER, returning, paidYes);
+    const r2 = await refuse(OTHER, fresh, paidNo);
+    let st = await m.firstCallAllowanceStatus();
+    ok(r1.reason === "route not eligible" && r2.reason === "route not eligible", `both refused as route not eligible (${r1.reason}, ${r2.reason})`);
+    ok(st.deniedToday["route not eligible"] === 2, `deniedToday still counts every refusal (${st.deniedToday["route not eligible"]})`);
+    const row = st.newWalletDeniedToday?.["route not eligible"];
+    ok(row?.total === 1, `a returning payer on an ineligible route is not counted as a new wallet (${JSON.stringify(row)})`);
+    ok(row?.bySlug?.["word-count"] === 1 && Object.keys(row.bySlug).length === 1, `a new payer on an ineligible route is counted under its slug (${JSON.stringify(row?.bySlug)})`);
+    ok(paidYes.calls === 1 && paidNo.calls === 1, `a route refusal makes one synchronous ledger read (${paidYes.calls}, ${paidNo.calls})`);
+    // An async ledger seam is never called on a refusal: the payer is unclassified.
+    let asyncCalls = 0;
+    const asyncPaid = async () => { asyncCalls++; return false; };
+    await refuse(OTHER, wallet(), asyncPaid);
+    st = await m.firstCallAllowanceStatus();
+    ok(asyncCalls === 0 && st.newWalletDeniedToday["route not eligible"].total === 1 && st.unclassifiedDeniedToday["route not eligible"] === 1, `an async ledger seam is not called on a refusal and the payer reads unclassified (${asyncCalls}, ${JSON.stringify(st.unclassifiedDeniedToday)})`);
+    // Our own wallet is never a new wallet.
+    const ours = [...(await import("../src/revenue-live.js")).OUR_EVM_WALLETS][0];
+    const paidOurs = counting(false);
+    await refuse(OTHER, ours, paidOurs);
+    st = await m.firstCallAllowanceStatus();
+    ok(st.newWalletDeniedToday["route not eligible"].total === 1 && paidOurs.calls === 0, "our own wallet refused on an ineligible route is not counted and costs no ledger read");
+    // A grant on an eligible route: one ledger call, as before; a returning
+    // payer on it is refused "paid before" with one call and not counted.
+    const grantPaid = counting(false);
+    const g = fakeCall(payment(wallet()));
+    const ga = await m.claimFirstCallAllowance(g.req, g.res, DEF, { ip: "10.9.3.2", hasPaidSale: grantPaid, readBalance: async () => 10n ** 12n });
+    ok(ga.granted === true && grantPaid.calls === 1, `a grant on an eligible route still grants with one ledger call (${ga.reason || "granted"}, ${grantPaid.calls})`);
+    const before = counting(true);
+    const pb = await refuse(DEF, wallet(), before, "10.9.3.3");
+    st = await m.firstCallAllowanceStatus();
+    ok(pb.reason === "paid before" && before.calls === 1 && !st.newWalletDeniedToday["paid before"], `a returning payer on an eligible route: one ledger call, not counted as new (${pb.reason}, ${before.calls})`);
+    // The same wallet again: the store's wallet key refuses it, not as new.
+    const again = fakeCall(payment(ga.payer));
+    const aa = await m.claimFirstCallAllowance(again.req, again.res, DEF, { ip: "10.9.3.2", hasPaidSale: () => false, readBalance: async () => 10n ** 12n });
+    st = await m.firstCallAllowanceStatus();
+    ok(aa.reason === "wallet already granted" && !st.newWalletDeniedToday["wallet already granted"], `a wallet granted before is not counted as new (${aa.reason})`);
+    // A new wallet refused after the ledger check (here: the balance) is counted with its slug.
+    const low = fakeCall(payment(wallet()));
+    const la = await m.claimFirstCallAllowance(low.req, low.res, DEF, { ip: "10.9.3.4", hasPaidSale: () => false, readBalance: async () => 1n });
+    st = await m.firstCallAllowanceStatus();
+    ok(la.reason === "balance" && st.newWalletDeniedToday.balance?.bySlug?.hash === 1, `a new wallet refused on the balance is counted under its slug (${la.reason}, ${JSON.stringify(st.newWalletDeniedToday.balance)})`);
+    await m.finishFirstCallAllowance(g.req);
+    // Slug cardinality is bounded per reason ("word-count" already holds one
+    // of the NEW_WALLET_SLUG_CAP places, so eleven of the sixty fold).
+    for (let i = 0; i < m.NEW_WALLET_SLUG_CAP + 10; i++) await refuse({ route: `POST /api/x${i}`, slug: `x-${i}`, price: "$0.001" }, wallet(), () => false);
+    st = await m.firstCallAllowanceStatus();
+    const slugs = st.newWalletDeniedToday["route not eligible"].bySlug;
+    ok(Object.keys(slugs).length === m.NEW_WALLET_SLUG_CAP + 1 && slugs.other === 11, `slugs per reason are capped and the rest fold into "other" (${Object.keys(slugs).length}, ${slugs.other})`);
+    ok(!/0x[0-9a-f]{40}/i.test(JSON.stringify(st.newWalletDeniedToday) + JSON.stringify(st.unclassifiedDeniedToday)), "no payer address appears in the counts");
   }
 } catch (e) {
   failed++;

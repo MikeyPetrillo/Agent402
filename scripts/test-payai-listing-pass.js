@@ -265,7 +265,7 @@ const cov = coverageFor({ pricing, payaiItems: [{ resource: "https://agent402.to
           address: "0xburner",
           payFetch: async (url, init) => {
             buys.push({ path: new URL(url).pathname, headers: init.headers, body: init.body, ceiling: getCeiling() });
-            if (answer) return answer(new URL(url).pathname, buys.length);
+            if (answer) return answer(new URL(url).pathname, buys.length, init);
             return new Response("{}", { status: 200, headers: { "payment-response": enc({ success: true, transaction: `tx-${buys.length}` }) } });
           },
         };
@@ -406,6 +406,135 @@ const cov = coverageFor({ pricing, payaiItems: [{ resource: "https://agent402.to
     // A retry on the first route can hold a later route back.
     const two = await runLeg(["--registry", "bazaar", "--chain", "base", "--live", "--include-upstream", "--only", "hash,memory-write", "--max-spend", "0.003"], { env: ENV, answer: (p, n) => (n === 1 ? new Response("", { status: 503 }) : okAnswer()) });
     ok(two.buys.map((x) => x.path).join() === "/api/hash,/api/hash" && /SKIP\s+POST \/api\/memory\s.*not attempted: the attempt would pass --max-spend/.test(two.out), `signed retries count toward the ceiling a later route must fit under (${two.buys.map((x) => x.path).join()})`);
+  }
+
+  // --- slow routes: Prefer: respond-async up front, the job followed to the end
+  {
+    const ASYNC = { recommended: true, expectedSeconds: 90, maxSeconds: 180, prefer: "respond-async", accepted: 202, statusUrl: "/api/jobs/{id}", preferWait: "wait=180", withoutPrefer: 400 };
+    const slowPricing = {
+      payment: { networks: ["base", "solana"] },
+      endpoints: [
+        { method: "POST", path: "/api/hash", slug: "hash", price: "$0.001", computePayable: true },
+        { method: "POST", path: "/v1/research", slug: "research", price: "$0.10", async: ASYNC },
+        // Slow on the server, but its row carries no async block: only the
+        // 400 refusal says so.
+        { method: "POST", path: "/v1/unmarked", slug: "unmarked", price: "$0.20" },
+        // A cheap slow route that is not a report: a 504 would earn it a retry
+        // on a synchronous buy.
+        { method: "POST", path: "/api/slow-cheap", slug: "slow-cheap", price: "$0.01", async: ASYNC },
+      ],
+    };
+    const slowPaths = new Set(["/v1/research", "/v1/unmarked", "/api/slow-cheap"]);
+    const slowCov = coverageFor({ pricing: slowPricing, origin: T, chains: ["base", "solana"] });
+    ok(slowCov.routes.find((x) => x.path === "/v1/research").async?.withoutPrefer === 400 && slowCov.routes.find((x) => x.path === "/api/hash").async === null, "a coverage row carries the pricing row's async block (null when it has none)");
+    const refusal = (path) => new Response(JSON.stringify({ error: "respond_async_required", slug: path.split("/").pop(), maxSeconds: 180, syncWindowSeconds: 20, prefer: "respond-async", preferWait: "wait=180", statusUrl: "/api/jobs/{id}" }), { status: 400, headers: { "content-type": "application/json" } });
+    // A stub server: a slow route refuses a paid call without the header
+    // (400, before payment), answers 202 and a job with it; each job is
+    // polled once running, then ends the way `ending` says.
+    // A job id as the server mints it: 48 hex characters, a bearer link to the paid answer.
+    const jobIdOf = (n) => `${n.toString(16)}`.padStart(48, "c");
+    const slowServer = ({ ending = () => "succeeded", refuseEvenWithHeader = false } = {}) => {
+      const host = hostFetch();
+      const jobs = new Map();
+      const polls = [];
+      const f = async (url, init = {}) => {
+        const u = new URL(url);
+        const m = u.pathname.match(/^\/api\/jobs\/(\w+)$/);
+        if (!m) {
+          const ep = slowPricing.endpoints.find((e) => e.path === u.pathname);
+          if (!ep) return host.f(url, init);
+          return new Response("", { status: 402, headers: { "payment-required": enc({ x402Version: 2, accepts: [{ scheme: "exact", network: BASE, amount: String(Math.round(Number(ep.price.slice(1)) * 1e6)) }] }) } });
+        }
+        polls.push({ url: String(url), headers: init.headers || {} });
+        const j = jobs.get(m[1]);
+        if (!j) return new Response(JSON.stringify({ error: "job_not_found" }), { status: 404 });
+        j.polls++;
+        if (j.polls < 2) return new Response(JSON.stringify({ jobId: m[1], status: "working", state: "running", slug: j.slug, statusUrl: `/api/jobs/${m[1]}`, pollIntervalSeconds: 1 }), { status: 200, headers: { "retry-after": "1" } });
+        const end = ending(j.slug);
+        // Still pending to the buyer: the link stops answering, or forgets the job.
+        if (end === "unreadable") return new Response(JSON.stringify({ error: "busy" }), { status: 503 });
+        if (end === "unknown") return new Response(JSON.stringify({ error: "job_not_found" }), { status: 404 });
+        if (end === "succeeded") return new Response(JSON.stringify({ jobId: m[1], status: "completed", state: "succeeded", slug: j.slug, result: { httpStatus: 200, headers: { "payment-response": enc({ success: true, transaction: `tx-job-${j.slug}` }) }, body: { report: "done" } } }), { status: 200 });
+        if (end === "failed") return new Response(JSON.stringify({ jobId: m[1], status: "failed", state: "failed", slug: j.slug, message: "The call ended with HTTP 500 and nothing was charged.", error: { httpStatus: 500, body: { error: "upstream_failed" } } }), { status: 200 });
+        if (end === "failed-echo") return new Response(JSON.stringify({ jobId: m[1], status: "failed", state: "failed", slug: j.slug, message: `The call did not finish; see /api/jobs/${m[1]}.`, error: { httpStatus: 500, body: { error: "upstream_failed", statusUrl: `/api/jobs/${m[1]}`, jobId: m[1] } } }), { status: 200 });
+        return new Response(JSON.stringify({ jobId: m[1], status: "failed", state: "failed", slug: j.slug, message: "The call did not finish.", error: { httpStatus: 504, message: "The run did not finish in time." } }), { status: 200 });
+      };
+      const answer = (path, n, init) => {
+        if (!slowPaths.has(path)) return okAnswer();
+        const prefer = String(init?.headers?.Prefer || "");
+        if (refuseEvenWithHeader || !/respond-async/.test(prefer)) return refusal(path);
+        const id = jobIdOf(n);
+        jobs.set(id, { slug: path.split("/").pop(), polls: 0 });
+        return new Response(JSON.stringify({ jobId: id, status: "working", state: "queued", statusUrl: `/api/jobs/${id}`, pollIntervalSeconds: 1 }), { status: 202, headers: { location: `/api/jobs/${id}`, "retry-after": "1", "preference-applied": "respond-async" } });
+      };
+      return { host: { f, reads: host.reads }, answer, polls, jobs };
+    };
+    const runSlow = async (only, server, extra = []) => {
+      const dir = mkdtempSync(join(tmpdir(), "listing-slow-"));
+      const outFile = join(dir, "pass.json");
+      const r = await runLeg(["--registry", "bazaar", "--chain", "base", "--live", "--include-upstream", "--only", only, "--out", outFile, ...extra], { env: ENV, cov: slowCov, host: server.host, answer: server.answer });
+      return { ...r, records: JSON.parse(readFileSync(outFile, "utf8")).records };
+    };
+
+    const s1 = slowServer();
+    const a = await runSlow("hash,research", s1);
+    const research = a.buys.filter((b) => b.path === "/v1/research");
+    const hashBuys = a.buys.filter((b) => b.path === "/api/hash");
+    ok(a.code === 0, `a slow route marked async is bought through its job and the leg exits 0 (${a.code})${a.code ? `: ${a.out.slice(-300)}` : ""}`);
+    ok(research.length === 1 && research[0].headers.Prefer === "respond-async", `the slow route's paid call carries Prefer: respond-async up front, one attempt (${research.map((b) => b.headers.Prefer).join()})`);
+    ok(hashBuys.length === 1 && !Object.keys(hashBuys[0].headers).some((k) => k.toLowerCase() === "prefer"), "a route that is not slow sends no Prefer header");
+    const rRec = a.records.find((x) => x.path === "/v1/research");
+    ok(rRec.charged === true && rRec.tx === "tx-job-research" && rRec.status === 200 && JSON.stringify(rRec.job) === JSON.stringify({ state: "succeeded" }) && rRec.prefer === "respond-async" && rRec.chargeUnknown === false, `the record keeps the job's settlement tx, the charge, the job's state (never its id) and the header sent (${JSON.stringify({ tx: rRec.tx, job: rRec.job })})`);
+    ok(s1.polls.length === 2 && s1.polls.every((p) => p.url === `${T}/api/jobs/${jobIdOf(2)}`), `the job link is polled on the target with the plain fetch, to its terminal state (${s1.polls.length} polls)`);
+    ok(/OK\s+POST \/v1\/research\s.*tx tx-job-research\s+job succeeded/.test(a.out), "the OK line names the job's state");
+
+    // Fallback: a slow route the catalog does not mark answers 400
+    // respond_async_required before payment, and is sent once more with the
+    // header its body names.
+    const s2 = slowServer();
+    const b = await runSlow("unmarked", s2);
+    const un = b.buys.filter((x) => x.path === "/v1/unmarked");
+    ok(b.code === 0 && un.length === 2 && !un[0].headers.Prefer && un[1].headers.Prefer === "respond-async", `a 400 respond_async_required is retried once with Prefer: respond-async (${un.map((x) => x.headers.Prefer || "none").join()})`);
+    const uRec = b.records.find((x) => x.path === "/v1/unmarked");
+    ok(uRec.charged === true && uRec.tx === "tx-job-unmarked" && uRec.attempts === 2, "...and the retried buy is recorded charged, with its tx");
+    // Once only: a refusal that repeats with the header is not retried again.
+    const s3 = slowServer({ refuseEvenWithHeader: true });
+    const c = await runSlow("unmarked", s3);
+    ok(c.code === 1 && c.buys.length === 2 && c.records[0].charged === false && /HTTP 400/.test(c.records[0].error), `the fallback happens once (${c.buys.length} attempts) and the buy is a failure`);
+    const s3b = slowServer({ refuseEvenWithHeader: true });
+    const c2 = await runSlow("research", s3b);
+    ok(c2.code === 1 && c2.buys.length === 1, `a route that already sent the header gets no fallback retry (${c2.buys.length} attempts)`);
+    // No other 4xx is retried.
+    const d = await runLeg(["--registry", "bazaar", "--chain", "base", "--live", "--include-upstream", "--only", "hash"], { env: ENV, answer: () => new Response(JSON.stringify({ error: "invalid_input", prefer: "respond-async" }), { status: 400 }) });
+    ok(d.code === 1 && d.buys.length === 1 && !d.buys[0].headers.Prefer, `a 400 that is not respond_async_required is not retried (${d.buys.length} attempts)`);
+
+    // A job that ends failed is a failed buy, not OK, and is never retried.
+    const s4 = slowServer({ ending: () => "failed" });
+    const e = await runSlow("research", s4);
+    const eRec = e.records[0];
+    ok(e.code === 1 && e.buys.length === 1 && eRec.charged === false && eRec.tx === null && eRec.status === 500 && /^job failed: HTTP 500/.test(eRec.error) && eRec.chargeUnknown === false && /FAIL\s+POST \/v1\/research/.test(e.out) && !/OK\s+POST \/v1\/research/.test(e.out), `a failed job is recorded failed with the route's status, charge known (${eRec.error})`);
+    const s5 = slowServer({ ending: () => "lost" });
+    const g = await runSlow("research", s5);
+    const cheap = await runSlow("slow-cheap", slowServer({ ending: () => "lost" }));
+    ok(mayRetry({ slug: "slow-cheap", priceUsd: 0.01 }, 504) && cheap.code === 1 && cheap.buys.length === 1 && cheap.records[0].status === 504, `a failed job is never retried, even with a status a synchronous buy would retry on (${cheap.buys.length} attempts)`);
+    ok(g.code === 1 && g.buys.length === 1 && g.records[0].charged === false && g.records[0].chargeUnknown === true && /^job failed: HTTP 504/.test(g.records[0].error), "a job that ended without the route's answer is failed with its charge unknown (held back by the memory)");
+
+    // No job id or job link reaches the records file or the log, for a job
+    // that finished (succeeded or failed, its answer echoing the link) or one
+    // still pending to the buyer (its error names where to collect it).
+    const leaks = (r) => {
+      const text = `${JSON.stringify(r.records)}\n${r.out}`;
+      return [...new Set([...r.buys.keys()].map((i) => jobIdOf(i + 1)))].filter((id) => text.includes(id)).concat(/\/api\/jobs\/(?!<redacted>)[^\s"'<>{]/.test(text) ? ["a /api/jobs/ link"] : []);
+    };
+    for (const [name, r] of [["succeeded", a], ["failed", e], ["lost", g]]) ok(!leaks(r).length, `a ${name} job leaves no job id or link in the records or the log (${leaks(r).join() || "none"})`);
+    const echo = await runSlow("research", slowServer({ ending: () => "failed-echo" }));
+    ok(echo.code === 1 && echo.records[0].status === 500 && /\/api\/jobs\/<redacted>/.test(echo.records[0].error) && /<redacted>/.test(echo.records[0].body) && !leaks(echo).length, `a failed job whose message and body echo its link is kept redacted (${echo.records[0].error}; ${leaks(echo).join() || "no leak"})`);
+    for (const ending of ["unreadable", "unknown"]) {
+      const p = await runSlow("research", slowServer({ ending: () => ending }));
+      const rec = p.records[0];
+      ok(p.code === 1 && rec.charged === false && rec.chargeUnknown === true && rec.job?.state === "running" && !("id" in rec.job) && /<redacted>/.test(rec.error) && /FAIL\s+POST \/v1\/research/.test(p.out), `a job still pending (link ${ending}) is a failure with its charge unknown, its state kept (${rec.error})`);
+      ok(!leaks(p).length, `a pending job (link ${ending}) leaves no job id or link in the records or the log (${leaks(p).join() || "none"})`);
+    }
   }
 
   // --- records are written after every attempt, so a cut-short run keeps them

@@ -7,6 +7,7 @@ import { REPO_URL } from "./repo-link.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { creditsSalesEnabled, creditsDailyMaxCents } from "./credits-sales.js";
 import { answerShareEnabled, sharePagesMayBeLive } from "./answer-share.js";
+import { publicIndexTermsText, withPublicIndexDate } from "./facilitator-public-index.js";
 export function termsPage(baseUrl) {
   // Prepaid credits wording follows the sales switch and the purchase limit.
   const creditsOnSale = creditsSalesEnabled();
@@ -23,6 +24,10 @@ export function termsPage(baseUrl) {
   // paragraph reads in the past tense.
   const sharesOn = sharePagesMayBeLive();
   const sharesOffered = answerShareEnabled();
+  // The public settlement index disclosure (FACILITATOR_PUBLIC_INDEX_CHAINS),
+  // pointed to only while a chain is listed; the printed date then follows
+  // FACILITATOR_PUBLIC_INDEX_SINCE when that is later (withPublicIndexDate).
+  const publicIndex = publicIndexTermsText();
 
   const extraCss = `
 .tm-wrap{max-width:760px;margin:0 auto;padding:56px 30px}
@@ -137,7 +142,7 @@ closes after a payment has settled and before the response is delivered, we reco
 back to the paying wallet, and repay it as described under refunds below. Micropayments are per call and, once settled on-chain, are final and
 non-refundable except as described in these terms or where required by law. Metered routes quote a ceiling before
 payment and settle at or under it. You are responsible for your own wallet and keys; we never receive or
-hold your private key.</p>${gatewayBatched ? `
+hold your private key.${publicIndex ? ` ${publicIndex}` : ""}</p>${gatewayBatched ? `
 <p><b>Circle Gateway batched payments.</b> A Circle Gateway batched payment settles off chain at Gateway.
 If Gateway settles one after its request was answered pending and the request is never served, we record
 the amount as owed and repay it on chain after confirming it in Gateway's records.</p>` : ""}
@@ -252,5 +257,5 @@ or <a href="https://x.com/Agent402Tools" rel="noopener">@Agent402Tools on X</a>.
 </div>
 ${ledgerFooterCompact()}`;
 
-  return ledgerShell({ title, description, canonical, baseUrl, activePath: "/terms", extraCss, body });
+  return ledgerShell({ title, description, canonical, baseUrl, activePath: "/terms", extraCss, body: withPublicIndexDate(body) });
 }

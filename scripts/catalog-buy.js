@@ -50,7 +50,13 @@
 //   a 5xx: settlement runs after the handler) and the second answer is graded.
 //   A 402 after paying is `unsettled`. A tool with no usable published example
 //   is `no-example` and fails the run (a tool nobody can check is not a tool
-//   that passed). A tool cut by the spend cap is `cap`: NOT a failure, it is
+//   that passed). A slow route (its /api/pricing `async` block) is paid with
+//   Prefer: respond-async and its job followed to the end
+//   (scripts/lib/slow-route-buy.js); a job that ends failed is graded on its
+//   error status and is never retried, and one still running at the deadline
+//   is `job-pending` (its charge is unknown, so its quote stays reserved).
+//   A 400 respond_async_required is sent once more with the Prefer header its
+//   body names. A tool cut by the spend cap is `cap`: NOT a failure, it is
 //   counted apart as cap-deferred in the headline, the issue and the exit code,
 //   because a tool the budget skipped says nothing about the tool.
 //
@@ -88,6 +94,8 @@ import { fileURLToPath } from "node:url";
 import { missingDocumentedKeys, emptyPromisedArrays } from "./sweep-shape.js";
 import { requestExampleOf, multipartBodyFrom, MULTIPART_TYPE } from "../src/openapi-request.js";
 import { captureRecord, CAPTURE_MAX_BYTES } from "./catalog-buy-capture.js";
+import { slowPreferOf, paidCallHonoringSlowRoutes, redactJobLinks } from "./lib/slow-route-buy.js";
+import { DEFAULT_ASYNC_TIMEOUT_MS } from "../client/async-job.js";
 
 export const BASE_CAIP2 = "eip155:8453";
 export const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
@@ -214,6 +222,9 @@ export function catalogFromSurfaces(pricing, spec) {
       rows.push({
         slug, path, method, usd, op, example: exampleOf(method, op), modelBacked: ep?.modelBacked === true,
         identityBound: ep?.identityBound === true,
+        // The row's async block (src/slow-routes.js asyncAdvice): a slow
+        // route's paid call is sent with Prefer: respond-async.
+        async: ep?.async && typeof ep.async === "object" ? ep.async : null,
         binary: types.length > 0 && !types.includes("application/json"),
         // quoted: the list price is a floor and maxUsd the documented ceiling;
         // fixed: both are the list price.
@@ -415,6 +426,7 @@ export async function runCatalogBuy({
   target, payer, fetchImpl = fetch, readBalanceUsd = null, powSecret = "", tier = "daily", only = "", skip = [],
   capUsd = DEFAULT_CAP_USD, floorUsd = DEFAULT_FLOOR_USD, concurrency = DEFAULT_CONCURRENCY, paceMs = DEFAULT_PACE_MS, timeoutMs = 260_000,
   slowTimeoutMs = 330_000, retryBackoffMs = 5_000, now = new Date(), dry = false, log = console,
+  jobTimeoutMs = DEFAULT_ASYNC_TIMEOUT_MS, jobSleep = undefined,
   capture = true, captureMaxBytes = CAPTURE_MAX_BYTES,
 } = {}) {
   const base = String(target).replace(/\/+$/, "");
@@ -464,8 +476,10 @@ export async function runCatalogBuy({
 
   async function requestFor(row, ex = row.example) {
     let url = `${base}${row.path}`;
-    // Slow routes answer 400 respond_async_required unless the caller waits: ask for the answer synchronously, up to 240 s (the longest published maxSeconds).
-    const init = { method: row.method.toUpperCase(), headers: { Accept: "application/json", Prefer: "wait=240" } };
+    // No Prefer: wait here: through the CDN a run budget past its bound is
+    // refused whatever wait the client names. A slow route's paid call gets
+    // Prefer: respond-async in attempt().
+    const init = { method: row.method.toUpperCase(), headers: { Accept: "application/json" } };
     if (ex.kind === "query") {
       const qs = new URLSearchParams(ex.query).toString();
       if (qs) url += `?${qs}`;
@@ -497,13 +511,23 @@ export async function runCatalogBuy({
     if (reserved + quoted > cap) return { status: 402, grade: "cap", quotedUsd: quoted / 1e6 };
     reserved += quoted;
     try {
-      const payHeaders = await payer.pay({ ...pr, accepts });
-      const paid = await fetchImpl(url, { ...init, headers: { ...stamp(init.headers), ...payHeaders }, signal: AbortSignal.timeout(timeout) });
+      // A slow route is paid with Prefer: respond-async and its job followed;
+      // a 400 respond_async_required (refused before payment) is signed and
+      // sent once more with the header its body names.
+      const json = init.body === undefined || typeof init.body === "string";
+      const call = await paidCallHonoringSlowRoutes(
+        async (extra) => fetchImpl(url, { ...init, headers: { ...stamp(init.headers), ...extra, ...(await payer.pay({ ...pr, accepts })) }, signal: AbortSignal.timeout(timeout) }),
+        { prefer: slowPreferOf(row.async, { method: init.method, json }), baseUrl: base, fetchImpl, slug: row.slug, timeoutMs: jobTimeoutMs, sleep: jobSleep },
+      );
+      // The report keeps the job's final state, never its id: the id is a
+      // bearer link to the paid answer, and the report is a run artifact.
+      const paid = call.res;
       const b = await readBody(paid);
       if (paid.status !== 200) reserved -= quoted; // a non-200 cancels settlement: nothing was charged
-      return { status: paid.status, ...b, paid: true, quotedUsd: quoted / 1e6, tx: txFromReceiptHeader(paid.headers.get("payment-response") || paid.headers.get("x-payment-response")) };
+      return { status: paid.status, ...b, paid: true, quotedUsd: quoted / 1e6, tx: txFromReceiptHeader(paid.headers.get("payment-response") || paid.headers.get("x-payment-response")), prefer: call.prefer, asyncFallback: call.fallback, job: call.job };
     } catch (e) {
-      reserved -= quoted;
+      // A job still running at the deadline may yet settle: its quote stays reserved.
+      if (e?.mayBeCharged !== true) reserved -= quoted;
       throw e;
     }
   }
@@ -523,7 +547,8 @@ export async function runCatalogBuy({
       const { url, init } = await requestFor(row, sale ? withOwnSale(row.example, sale.tx) : row.example);
       sentBody = String(init?.body ?? "").slice(0, 300); // what production received, for a failing run to show
       r = await attempt(row, url, init, timeout); attempts = 1;
-      if (!r.grade && r.status >= 500 && r.status <= 599) {
+      // A job's failure is never retried: the job already ran the paid call.
+      if (!r.grade && !r.job && r.status >= 500 && r.status <= 599) {
         log.warn(`  retry ${row.slug} after HTTP ${r.status}`);
         await sleep(retryBackoffMs);
         r = await attempt(row, url, init, timeout); attempts = 2;
@@ -533,10 +558,12 @@ export async function runCatalogBuy({
       // the price: name it, because every stock Node x402 client fails the same way.
       const overflow = e?.cause?.code === "UND_ERR_HEADERS_OVERFLOW";
       r = { threw: overflow ? "headers-overflow: the response headers exceed the 16 KB a Node client reads" : String(e?.name === "TimeoutError" ? "timeout" : [e?.message, e?.cause?.code || e?.cause?.message].filter(Boolean).join(": ") || e) }; attempts = attempts || 1;
+      if (e?.name === "AsyncJobPendingError") r.grade = "job-pending";
     }
     const { pass, grade } = gradeAnswer(row, r);
-    const errorBody = r.threw ? String(r.threw).slice(0, 300) : r.status >= 400 ? String(JSON.stringify(r.body ?? r.text ?? "")).slice(0, 300) : null;
-    const out = { slug: row.slug, path: row.path, usd: row.usd, quotedUsd: r.quotedUsd ?? null, status: r.status ?? null, grade, pass, ms: Date.now() - t0, attempts, tx: r.tx || null, sentBody, errorBody, ...(sale ? { ownSaleOf: sale.slug } : {}) };
+    // Redacted before the cut, so no job link (a bearer id) reaches the report, even in part.
+    const errorBody = r.threw ? redactJobLinks(r.threw).slice(0, 300) : r.status >= 400 ? redactJobLinks(JSON.stringify(r.body ?? r.text ?? "")).slice(0, 300) : null;
+    const out = { slug: row.slug, path: row.path, usd: row.usd, quotedUsd: r.quotedUsd ?? null, status: r.status ?? null, grade, pass, ms: Date.now() - t0, attempts, tx: r.tx || null, sentBody, errorBody, ...(r.prefer ? { prefer: r.prefer } : {}), ...(r.asyncFallback ? { asyncFallback: true } : {}), ...(r.job ? { job: { state: r.job.state } } : {}), ...(sale ? { ownSaleOf: sale.slug } : {}) };
     noteSale(row, r, out);
     // The paid answer itself goes to the separate outputs file (redacted,
     // bounded, guarded: scripts/catalog-buy-capture.js), never into the

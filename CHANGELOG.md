@@ -6,6 +6,30 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-05 (Robinhood facilitator order, public-index disclosure, job buys)
+Payments:
+- On Robinhood Chain the server settles through the first listed facilitator
+  whose `/supported` confirms exact at boot, so a primary that does not answer
+  then leaves the rail on the next one. A listed facilitator's refusal that is
+  not about the buyer's payment moves to the next listed facilitator before
+  our own relayer; a refusal about the payment itself is never retried.
+Privacy:
+- When the facilitator that settles Robinhood Chain publishes settlements on a
+  public index (`FACILITATOR_PUBLIC_INDEX_CHAINS`), the privacy page names it
+  and what it publishes, the terms, `/.well-known/x402`, llms.txt and the
+  Robinhood page point there, and the pages print the date it began.
+Operations:
+- The operator view of first-call grants counts refusals of wallets that
+  never paid by reason and route, apart from returning buyers, so a route a
+  newcomer wanted shows up by name.
+- Every Playwright install in CI goes through the bounded apt helper
+  (`scripts/ci-apt-install.sh --playwright-chromium`), and a guard fails any
+  workflow step that runs apt directly.
+- The listing pass and the other catalog buy scripts send
+  `Prefer: respond-async` to slow routes and follow the job to its answer; a
+  failed job counts as a failed buy, and records keep a job's state, never
+  its link.
+
 ### 2026-11-05 (x402 2.30, a wider unproven lane, one spend workflow)
 Payments:
 - The x402 libraries are 2.30.0 and mppx 0.17.1. A money or identity check

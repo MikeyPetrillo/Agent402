@@ -103,6 +103,11 @@
 // effect (hasLastingEffect, the route-execute tiers), a report product, or a
 // route priced at $0.25 or more: those get one attempt. A request that threw
 // may have settled, so it is never retried and its record says chargeUnknown.
+// A slow route (its /api/pricing `async` block) is bought with Prefer:
+// respond-async and its job followed to the end; a job that ends failed is a
+// failed buy and is never retried. A 400 respond_async_required (refused
+// before payment) is sent once more with the Prefer header its body names; no
+// other 4xx is retried.
 //
 // Exit: 0 nothing missing, nothing selected, or every selected buy settled
 // (registry ingestion lag is theirs); 1 a selected buy failed; 2 misconfigured
@@ -116,6 +121,8 @@ import { hasLastingEffect } from "../src/hangup-forgiveness.js";
 import { REPORT_TIERS } from "../src/report-tiers.js";
 import { measureCoverage, missingIn, renderTable, examplesFromOpenapi, multipartKeysFromOpenapi, chainOf, CHAINS } from "./listing-coverage.js";
 import { multipartBodyFrom } from "../src/openapi-request.js";
+import { awaitJob, DEFAULT_ASYNC_TIMEOUT_MS } from "../client/async-job.js";
+import { redactJobLinks, slowPreferOf, asyncRefusalPreferOf } from "./lib/slow-route-buy.js";
 
 export const SETTLE_VIA = "payai";
 export const REGISTRIES = ["bazaar", "payai"];
@@ -291,6 +298,19 @@ export function oneAttemptOnly(r) {
 
 /** Pure: may a buy that answered `status` be tried once more? */
 export const mayRetry = (r, status) => RETRY_STATUSES.includes(status) && !oneAttemptOnly(r);
+
+// --- slow routes ----------------------------------------------------------------
+// A slow route (its /api/pricing row carries an `async` block that is
+// recommended, or says a paid call without the header is refused with 400)
+// is bought with Prefer: respond-async: the paid call answers 202 with a job
+// link, the server replays it with this payment and settles only on the job's
+// final 200, and the pass polls the link (free) to the end. The job's answer
+// carries the route's own status and its payment receipt, so the record reads
+// exactly as a synchronous buy's. Prefer: wait=<maxSeconds> is not used: a
+// run budget past the CDN's synchronous bound is refused on that connection
+// whatever wait the client names, and a held connection past it is cut.
+// slowPreferOf and asyncRefusalPreferOf are the shared ones
+// (scripts/lib/slow-route-buy.js).
 
 /**
  * Pure: the amount a decoded 402 envelope asks on one chain's exact accept,
@@ -701,8 +721,13 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
     const r = plan.selected[i];
     const { url, body } = await urlFor(r);
     ceiling = { caip2: chain.caip2, atomic: r.ceilingAtomic };
-    const rec = { registry, chain: chain.name, slug: r.slug, method: r.method, path: r.path, priceUsd: r.priceUsd, quoted: r.quotedAtomic != null, input: purposefulInputFor(r, inputs) ? "purposeful" : "example", status: null, tx: null, charged: false, chargeUnknown: false, attempts: 0, boughtAt: null, error: null, latencyMs: null, responseHeaders: null, body: null, bodyBytes: null, bodyTruncated: null };
+    const rec = { registry, chain: chain.name, slug: r.slug, method: r.method, path: r.path, priceUsd: r.priceUsd, quoted: r.quotedAtomic != null, input: purposefulInputFor(r, inputs) ? "purposeful" : "example", status: null, tx: null, charged: false, chargeUnknown: false, attempts: 0, boughtAt: null, error: null, prefer: null, job: null, latencyMs: null, responseHeaders: null, body: null, bodyBytes: null, bodyTruncated: null };
     records.push(rec);
+    // Prefer: respond-async for a slow route, from its catalog row; a 400
+    // respond_async_required answer (refused before payment) sets it for the
+    // one retry that answer earns.
+    let prefer = slowPreferOf(r?.async, { method: r?.method });
+    let asyncFallback = false;
     for (let attempt = 1; attempt <= 2; attempt++) {
       if (signedAtomic + r.ceilingAtomic > maxSpendAtomic) {
         rec.error = attempt === 1 ? "not attempted: the attempt would pass --max-spend" : `${rec.error}; not retried: the retry would pass --max-spend`;
@@ -710,18 +735,26 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
       }
       signedAtomic += r.ceilingAtomic;
       rec.attempts = attempt;
+      rec.prefer = prefer;
       rec.boughtAt = new Date().toISOString();
       // Until an answer arrives the attempt may have settled.
       rec.chargeUnknown = true;
       writeRecords();
       const t0 = Date.now();
       try {
-        const res = await payFetch(url, {
+        const first = await payFetch(url, {
           method: r.method,
-          headers: { Accept: "application/json", ...tagHeaders, ...hb, ...jsonHeader(body) },
+          headers: { Accept: "application/json", ...tagHeaders, ...hb, ...jsonHeader(body), ...(prefer ? { Prefer: prefer } : {}) },
           body,
           signal: AbortSignal.timeout(180_000),
         });
+        // A 202 is the job this payment runs as: follow it to its final
+        // answer (the route's status, receipt and body). A job that never
+        // ends throws, and the record keeps chargeUnknown.
+        let job = null;
+        const res = first.status === 202 && prefer
+          ? await awaitJob(first, { baseUrl: target, fetchImpl, sleep, slug: r.slug, timeoutMs: DEFAULT_ASYNC_TIMEOUT_MS, onProgress: (d) => { job = d; rec.job = { state: d?.state ?? d?.status ?? null }; } })
+          : first;
         rec.status = res.status;
         const receipt = receiptOf(res);
         // What came back, kept for grading: never a request header.
@@ -729,10 +762,28 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
         const bytes = new Uint8Array(await res.arrayBuffer().catch(() => new ArrayBuffer(0)));
         rec.latencyMs = Date.now() - t0;
         Object.assign(rec, keptBody(bytes, res.headers.get("content-type") || ""));
+        // A job's answer (its message header, its body) is kept with no job
+        // link in it: the id is a bearer link to the paid answer, and the
+        // records are a public run artifact.
+        if (job) {
+          for (const k of Object.keys(rec.responseHeaders)) if (typeof rec.responseHeaders[k] === "string") rec.responseHeaders[k] = redactJobLinks(rec.responseHeaders[k]);
+          if (typeof rec.body === "string") rec.body = redactJobLinks(rec.body);
+        }
         rec.chargeUnknown = false;
         if (res.status === 200 && receipt?.success === true && receipt.transaction) { rec.tx = receipt.transaction; rec.charged = true; break; }
         if (res.status === 200) { rec.error = "200 without a settlement receipt: served unpaid, no row"; break; }
         rec.error = `HTTP ${res.status}${receipt?.errorReason ? ` ${receipt.errorReason}` : ""}`;
+        if (job) {
+          // A failed job is a failed buy, never retried. One that ended
+          // without the route's own answer (a run that timed out or broke)
+          // may have settled first, so its charge is unknown.
+          const answered = job?.error && typeof job.error === "object" && job.error.body !== undefined;
+          if (!answered) rec.chargeUnknown = true;
+          rec.error = `job ${rec.job?.state || "failed"}: ${rec.error}${job?.message ? ` (${redactJobLinks(job.message).slice(0, 120)})` : ""}`;
+          break;
+        }
+        const named = !prefer && !asyncFallback ? asyncRefusalPreferOf(res.status, bytes?.length ? Buffer.from(bytes).toString("utf8") : "") : null;
+        if (attempt < 2 && named) { prefer = named; asyncFallback = true; rec.error = `${rec.error} respond_async_required, retried with Prefer: ${named}`; writeRecords(); continue; }
         if (attempt < 2 && mayRetry(r, res.status)) { writeRecords(); await sleep(5000); continue; }
         break;
       } catch (e) {
@@ -740,13 +791,13 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
         // on the server, so it is never paid a second time: the record keeps
         // chargeUnknown, the next run's memory skips the route, and the
         // coverage read at the end shows the row.
-        rec.error = String(e?.message || e).slice(0, 160);
+        rec.error = redactJobLinks(e?.message || e).slice(0, 160);
         rec.latencyMs = Date.now() - t0;
         break;
       }
     }
     writeRecords();
-    if (rec.charged) { settled++; spent += r.priceUsd; log(`  OK    ${r.method.padEnd(4)} ${r.path.padEnd(40)} $${r.priceUsd.toFixed(3)}  tx ${String(rec.tx).slice(0, 16)}`); }
+    if (rec.charged) { settled++; spent += r.priceUsd; log(`  OK    ${r.method.padEnd(4)} ${r.path.padEnd(40)} $${r.priceUsd.toFixed(3)}  tx ${String(rec.tx).slice(0, 16)}${rec.job ? `  job ${rec.job.state}` : ""}`); }
     else if (!rec.attempts) { held++; log(`  SKIP  ${r.method.padEnd(4)} ${r.path.padEnd(40)} ${rec.error}`); }
     else { failed++; log(`  FAIL  ${r.method.padEnd(4)} ${r.path.padEnd(40)} ${rec.error}`); }
     if (i < plan.selected.length - 1 && opts.pauseMs) await sleep(opts.pauseMs);

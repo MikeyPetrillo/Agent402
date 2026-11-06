@@ -3,6 +3,17 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 const ENTRIES = [
   {
     date: "2026-11-05",
+    title: "Robinhood facilitator order, public-index disclosure, job buys",
+    items: [
+      "Payments: on Robinhood Chain the server settles through the first listed facilitator whose /supported confirms exact at boot, so a primary that does not answer then leaves the rail on the next one; a listed facilitator's refusal that is not about the buyer's payment moves to the next listed facilitator before our own relayer, and a refusal about the payment itself is never retried.",
+      "Privacy: when the facilitator that settles Robinhood Chain publishes settlements on a public index, the privacy page names it and what it publishes, the terms, /.well-known/x402, llms.txt and the Robinhood page point there, and the pages print the date it began.",
+      "Operations: the operator view of first-call grants counts refusals of wallets that never paid by reason and route, apart from returning buyers, so a route a newcomer wanted shows up by name.",
+      "Operations: every Playwright install in CI goes through the bounded apt helper, and a guard fails any workflow step that runs apt directly.",
+      "Operations: the listing pass and the other catalog buy scripts send Prefer: respond-async to slow routes and follow the job to its answer; a failed job counts as a failed buy, and records keep a job's state, never its link.",
+    ],
+  },
+  {
+    date: "2026-11-05",
     title: "Payment libraries on x402 2.30, a wider unproven lane, one spend workflow",
     items: [
       "Payments: the x402 libraries are 2.30.0 and mppx 0.17.1. A money or identity check that runs before verify or settle and fails refuses the payment with a 402 and charges nothing; a Tempo charge whose broadcast is rejected as a replay recovers its receipt instead of answering a new 402.",

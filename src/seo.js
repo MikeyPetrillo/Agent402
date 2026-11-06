@@ -31,6 +31,7 @@ import { REPO_URL } from "./repo-link.js";
 import { slowRouteMarker } from "./slow-routes.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
 import { frontDoorMarkdown, AGENTS_MD_PATH, LATE_SETTLE_EXCEPTION } from "./front-door.js";
+import { publicIndexChains, PUBLIC_INDEX_ANCHOR } from "./facilitator-public-index.js";
 // A catalog line's price: a route quoted per request lists its floor as "from".
 const priceOfLine = (t) => (t.quoteRange && t.quoteRange.maxUsd > t.quoteRange.minUsd ? `from ${t.price}` : t.price);
 // The registration id the registration file publishes (same setting), or null.
@@ -557,8 +558,11 @@ function llmsFullBody(baseUrl, catalog) {
   // operating detail, not something a buyer needs to pay. What a chain adds
   // to a price (its floor, its settlement premium) is stated once, in the
   // x402 paragraph, from the same maps the 402 prices through.
+  // A chain whose settling facilitator publishes each settlement on its
+  // public index (FACILITATOR_PUBLIC_INDEX_CHAINS) says so on its line.
+  const indexed = new Set(publicIndexChains());
   const chainItems = Object.entries(CHAIN_PAGES)
-    .map(([key, c]) => `- [${c.chainName}](${baseUrl}/${key}): ${c.asset} (\`${c.caip2}\`)`)
+    .map(([key, c]) => `- [${c.chainName}](${baseUrl}/${key}): ${c.asset} (\`${c.caip2}\`)${indexed.has(key) ? `; the facilitator that settles it publishes each settlement on its public index (${baseUrl}/privacy#${PUBLIC_INDEX_ANCHOR})` : ""}`)
     .join("\n");
 
   return `# Agent402.Tools

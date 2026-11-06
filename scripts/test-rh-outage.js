@@ -18,7 +18,7 @@ import { keccak256, toHex, decodeFunctionData, parseAbi, encodeEventTopics, pad 
 const dir = mkdtempSync(join(tmpdir(), "a402-rh-outage-"));
 process.env.PAYMENT_SETTLE_FALLBACK = "true";
 process.env.LATE_SETTLE_FILE = join(dir, "late.json");
-const { registerFacilitatorFailureHooks } = await import("../src/payments.js");
+const { registerFacilitatorFailureHooks, markGracefulRefusals } = await import("../src/payments.js");
 const { createRobinhoodOutage, isAmbiguousSettleFailure } = await import("../src/robinhood-outage.js");
 const { createLateSettleBook, registerLateSettleHook } = await import("../src/late-settlements.js");
 const { namesUnsettledTx, __resetSettlementClaims, txServedElsewhere } = await import("../src/settlement-claims.js");
@@ -338,6 +338,58 @@ await check("a CDN answer window shorter than our relayer's worst case -> relaye
   const ok2 = await settleFails({ p: p2, error: ambiguous5xx(), outage: outageWith(relayer2, 100, { relayerWorstMs: 45_000 }), req: { cdnSyncDeadlineMs: Date.now() + 80_000 } });
   assert.ok(ok2.recovered?.result?.success, "served when the window is wide enough");
   assert.equal(relayer2.sends, 1);
+});
+
+// A refusal's words. An HTTP error never makes them a verdict (it may have
+// broadcast), and a used authorization is never one: the read finds the
+// transfer that used it (the facilitator's own earlier submission).
+/** The error core hands the hook for the primary's graceful HTTP 200 refusal, marked as the boot wrapper marks it. */
+async function gracefulError(p, errorReason) {
+  const result = { success: false, errorReason, transaction: "", network: RH };
+  await markGracefulRefusals({ settle: async () => result }).settle(p.paymentPayload, p.requirements);
+  return new SettleError(500, { ...result });
+}
+await check("HTTP 502 whose reason has verdict words (expired, signature) -> still read on chain; a landed transfer is served", async () => {
+  for (const reason of ["Broadcast succeeded but receipt wait expired", "Relay signature service unavailable"]) {
+    __resetSettlementClaims();
+    const p = payment(); const relayer = makeRelayer("settles", p);
+    const tx = land({ payer: p.payer, nonce: p.nonce, tx: txh(`fac5xx-${reason}-${p.nonce}`) });
+    const { recovered, ctx } = await settleFails({ p, error: new SettleError(502, { success: false, errorReason: reason, transaction: "", network: RH }), outage: outageWith(relayer) });
+    assert.equal(recovered?.result?.transaction, tx.toLowerCase(), reason);
+    assert.equal(relayer.sends, 0, reason);
+    assert.equal(ctx.__a402LateAuth, undefined, reason);
+  }
+});
+for (const reason of ["FiatTokenV2: authorization is used or canceled", "EIP3009: authorization is used or canceled", "Authorization already used", "nonce has already been used", "invalid_exact_evm_nonce_already_used"]) {
+  await check(`HTTP 200 "${reason}" with our transfer landed -> read on chain and served; nobody else asked`, async () => {
+    __resetSettlementClaims();
+    const p = payment(); const relayer = makeRelayer("settles", p);
+    const tx = land({ payer: p.payer, nonce: p.nonce, tx: txh(`facused-${reason}-${p.nonce}`) });
+    const { recovered, asked } = await settleFails({ p, error: await gracefulError(p, reason), outage: outageWith(relayer), listed: [{ name: "RH2", answer: () => ({ success: true, transaction: txh(`rh2-${p.nonce}`), network: RH }) }] });
+    assert.equal(recovered?.result?.transaction, tx.toLowerCase());
+    assert.equal(relayer.sends, 0);
+    assert.deepEqual(asked, [], "a used authorization is never handed to another settler");
+  });
+}
+await check("HTTP 200 used-authorization words, but no transfer of ours -> 402, our relayer sends nothing", async () => {
+  __resetSettlementClaims();
+  const p = payment(); const relayer = makeRelayer("settles", p);
+  land({ payer: p.payer, nonce: p.nonce, to: OTHER });
+  const { recovered } = await settleFails({ p, error: await gracefulError(p, "FiatTokenV2: authorization is used or canceled"), outage: outageWith(relayer) });
+  assert.equal(recovered, null);
+  assert.equal(relayer.sends, 0);
+});
+await check("a graceful buyer verdict (signature in words, or a code) -> no chain read, no relayer", async () => {
+  for (const reason of ['Signature does not authorize this transfer for 0x0 (EIP-712 domain "Global Dollar" v1 on chain 4663)', "Transfer amount exceeds balance", "invalid_exact_evm_payload_signature"]) {
+    __resetSettlementClaims();
+    const p = payment(); const relayer = makeRelayer("settles", p);
+    const reads = chain.reads;
+    const { recovered, ctx } = await settleFails({ p, error: await gracefulError(p, reason), outage: outageWith(relayer, 100) });
+    assert.equal(recovered, null, reason);
+    assert.equal(relayer.sends, 0, reason);
+    assert.equal(chain.reads, reads, `${reason}: nothing read`);
+    assert.equal(ctx.__a402LateAuth, undefined, reason);
+  }
 });
 
 rmSync(dir, { recursive: true, force: true });
