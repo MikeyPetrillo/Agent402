@@ -127,7 +127,7 @@ async function boot({ inkUrls = (p) => `http://127.0.0.1:${p.INK1},http://127.0.
 const SURFACES = ["/llms.txt", "/llms-full.txt", "/.well-known/x402", "/api/pricing", "/openapi.json", "/pricing", "/how-to-pay", "/api/rails", "/privacy", "/terms", "/"];
 
 // --- 1b/2. gated by default, and listed without a URL -------------------------
-for (const [label, opts] of [["default boot (no ink listed)", { networks: "base", inkUrls: () => "" }], ["ink listed, INK_FACILITATOR_URL unset", { inkUrls: () => "" }]]) {
+for (const [label, opts] of [["default boot (no ink listed)", { networks: "base", inkUrls: () => "" }], ["ink listed, INK_FACILITATOR_URL unset", { inkUrls: () => "", extraEnv: { FACILITATOR_PUBLIC_INDEX_CHAINS: "ink" } }]]) {
   const b = await boot(opts);
   const before = failed;
   try {
@@ -135,6 +135,7 @@ for (const [label, opts] of [["default boot (no ink listed)", { networks: "base"
     check(b.required?.status === 402 && b.required.offer?.accepts?.some((a) => a.network === BASE_NET), `${label}: the paywall answers 402 with the Base accept (status ${b.required?.status})`);
     check(!b.accepted && !b.required?.offer?.accepts?.some((a) => a.network === INK), `${label}: no eip155:57073 accept`);
     if (opts.networks !== "base") check(b.log.join("").includes("INK_FACILITATOR_URL is unset - Ink is not configured"), `${label}: the boot says why Ink is not offered`);
+    if (opts.extraEnv?.FACILITATOR_PUBLIC_INDEX_CHAINS) check(b.log.join("").includes("FACILITATOR_PUBLIC_INDEX_CHAINS lists ink but Ink is not offered"), `${label}: the boot warns that the listed public-index chain is not offered`);
     if (b.up) {
       for (const p of SURFACES) {
         const r = await b.get(p);

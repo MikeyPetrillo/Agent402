@@ -3,7 +3,9 @@
 // through publishes each settlement it relays on its own public index.
 // /privacy, /terms, /.well-known/x402, llms.txt and the listed chains' rail
 // pages read it at render time, so the disclosure appears only while it
-// applies. Any other value renders nothing and is named in a boot warning.
+// applies: a listed chain renders only while this server offers it (the
+// payments boot reports the offer); a listed chain that is not offered is
+// named in a boot warning. Any other value renders nothing and is named in a boot warning.
 // Each known chain names the facilitator that settles it first, read from
 // its own ordered list (ROBINHOOD_FACILITATOR_URL, INK_FACILITATOR_URL).
 //
@@ -26,10 +28,32 @@ export const PUBLIC_INDEX_ANCHOR = "public-settlement-index";
 
 const listed = (env) => String(env.FACILITATOR_PUBLIC_INDEX_CHAINS || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
 
-/** The listed known chains, in a fixed order. */
-export function publicIndexChains(env = process.env) {
+/** The listed known chains, in a fixed order, offered or not. */
+function listedKnown(env) {
   const set = new Set(listed(env));
   return KNOWN.filter((c) => set.has(c));
+}
+
+// The known chains this server offers, set by the payments boot from its
+// final offer. Empty until then (and in free mode, which offers no chain).
+const offered = new Set();
+/** Called by the payments boot with the known chains in its final offer. */
+export function setPublicIndexOfferedChains(chains) {
+  offered.clear();
+  for (const c of chains || []) if (KNOWN.includes(c)) offered.add(c);
+}
+
+/** The listed known chains this server offers, in a fixed order: the only
+ *  ones any disclosure names. */
+export function publicIndexChains(env = process.env) {
+  return listedKnown(env).filter((c) => offered.has(c));
+}
+
+/** Warnings for listed chains the final offer left out (nothing renders for
+ *  them); read once the offer is known. */
+export function publicIndexUnofferedWarnings(env = process.env) {
+  return listedKnown(env).filter((c) => !offered.has(c))
+    .map((c) => `WARNING: FACILITATOR_PUBLIC_INDEX_CHAINS lists ${c} but ${CHAIN_NAMES[c]} is not offered; nothing renders for it while it is not`);
 }
 
 const escHtml = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
@@ -160,7 +184,7 @@ export function publicIndexBootWarnings(env = process.env) {
   const out = [];
   const unknown = [...new Set(listed(env).filter((c) => !KNOWN.includes(c)))];
   if (unknown.length) out.push(`WARNING: FACILITATOR_PUBLIC_INDEX_CHAINS lists ${unknown.join(", ")}: only ${andList(KNOWN)} are known; nothing renders for ${unknown.length > 1 ? "them" : "it"}`);
-  const chains = publicIndexChains(env);
+  const chains = listedKnown(env);
   const hosts = publicIndexHosts(env);
   for (const c of chains) if (!hosts[c]) out.push(`WARNING: FACILITATOR_PUBLIC_INDEX_CHAINS lists ${c} but ${URL_VARS[c]} has no parsable first host; the /privacy paragraph names no host${chains.length > 1 ? ` for ${CHAIN_NAMES[c]}` : ""}`);
   const set = (k) => String(env[k] || "").trim() !== "";

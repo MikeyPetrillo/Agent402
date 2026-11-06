@@ -51,7 +51,7 @@ import { withSettleDemotion, isFundsRefusal, demotedList, settleAttemptOf } from
 import { createRobinhoodOrder, stateDbOrderStore, withRobinhoodGasOrder, ownFirstAttemptOf, ownRefusedOf, facilitatorRetryOf, withOwnRefusalMemo } from "./robinhood-order.js";
 import { toolFailureMonitor, setDemotedReader } from "./tool-failure-monitor.js";
 import { isPaymentVerdictReason, isUsedAuthorizationReason } from "./settle-verdict.js";
-import { setPublicIndexBootFacilitator } from "./facilitator-public-index.js";
+import { setPublicIndexBootFacilitator, setPublicIndexOfferedChains, publicIndexUnofferedWarnings } from "./facilitator-public-index.js";
 import { isGatewayBatchedPayment } from "./gateway-wire.js";
 import { GatewayNanopaymentsClient, createGatewayPendingBook, gatewayAcceptFields, gatewayNanopaymentNetworks, gatewayNanopaymentsEnabled, gatewayPendingFile, installGatewayRouting, setGatewayOffer, startGatewayBalanceWatch, startGatewayPendingResolver, byTransferIdAnyCase, gatewayTransferId, GATEWAY_DOMAINS } from "./gateway-nanopayments.js";
 import { existsSync } from "node:fs";
@@ -2153,6 +2153,9 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   railsOffered = [...offeredNames];
   // The public facilitator map names only what this server offers: each
   // offered network's CAIP-2 id and every v1 name that maps to it.
+  // The public-index disclosure names a listed chain only while it is offered.
+  setPublicIndexOfferedChains([offeredCaip2.has(ROBINHOOD_CAIP2) && "robinhood", offeredCaip2.has(INK_CAIP2) && "ink"].filter(Boolean));
+  for (const w of publicIndexUnofferedWarnings()) console.warn(w);
   offeredNetworkKeys = new Set([...offeredCaip2, ...Object.keys(NETWORKS).filter((n) => offeredCaip2.has(NETWORKS[n]))]);
   // A gated rail joins the runtime surfaces (manifest chains, how-to-pay, its
   // chain page, nav, live revenue read) only now, from the FINAL offer.

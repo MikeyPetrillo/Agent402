@@ -21,7 +21,7 @@ const { termsPage } = await import("../src/terms.js");
 const { serviceManifest } = await import("../src/discovery.js");
 const { llmsTxt } = await import("../src/seo.js");
 const { marketPage } = await import("../src/market-page.js");
-const { publicIndexBootWarnings, publicIndexPageDate, setPublicIndexBootFacilitator } = await import("../src/facilitator-public-index.js");
+const { publicIndexBootWarnings, publicIndexPageDate, setPublicIndexBootFacilitator, setPublicIndexOfferedChains, publicIndexUnofferedWarnings } = await import("../src/facilitator-public-index.js");
 
 const ENV = ["FACILITATOR_PUBLIC_INDEX_CHAINS", "FACILITATOR_PUBLIC_INDEX_NAME", "FACILITATOR_PUBLIC_INDEX_POLICY_URL", "FACILITATOR_PUBLIC_INDEX_SINCE", "ROBINHOOD_FACILITATOR_URL", "INK_FACILITATOR_URL"];
 const setEnv = (vars) => { for (const k of ENV) { if (vars[k] === undefined) delete process.env[k]; else process.env[k] = vars[k]; } };
@@ -30,8 +30,10 @@ const DATE_LINE = /last updated (\d{4}-\d{2}-\d{2})\./;
 const ownDate = (file) => (readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8").match(DATE_LINE) || [])[1];
 const PRIVACY_OWN = ownDate("privacy.js"), TERMS_OWN = ownDate("terms.js");
 const manifest = () => serviceManifest({ baseUrl: BASE, network: "base", networks: ["base", "robinhood"], wallet: "0x000000000000000000000000000000000000dEaD", walletName: null, catalog: {}, toolCount: 0, powSlugs: [], powDifficulty: 20, prices: {} });
-const render = (vars) => {
+// Every case below renders with both chains offered unless it names the offer.
+const render = (vars, offered = ["robinhood", "ink"]) => {
   setEnv(vars);
+  setPublicIndexOfferedChains(offered);
   const p = privacyPage(BASE), t = termsPage(BASE);
   return { p, t, pt: pageText(p), tt: pageText(t), m: manifest(), llms: llmsTxt(BASE, {}), rail: marketPage("robinhood", BASE, { snapshot: { sellers: [] }, rail: null, activity: null }) };
 };
@@ -179,6 +181,30 @@ for (const value of ["robinhood", " Robinhood ,solana", "robinhood,stellar"]) {
   } finally { if (!realInk) delete CHAIN_PAGES.ink; }
   for (const [name, html] of [["privacy", r.p], ["terms", r.t]]) ok(!/—/.test(html), `${name} with ink: no em dash`);
 }
+// --- offered: a listed chain renders only while this server offers it -------
+{
+  const URLS = { ROBINHOOD_FACILITATOR_URL: "https://rh.example.test", INK_FACILITATOR_URL: "https://ink1.example.test" };
+  const said = (r) => [/public index/.test(r.pt), /public index/.test(r.tt), !!r.m.payment.dataHandling.publicSettlementIndex, /public index/.test(r.llms), /public index/.test(pageText(r.rail))];
+  for (const [list, offered, expect] of [
+    ["ink", [], null], ["ink", ["robinhood"], null], ["ink", ["ink"], ["ink"]],
+    ["robinhood", [], null], ["robinhood", ["ink"], null], ["robinhood", ["robinhood"], ["robinhood"]],
+    ["robinhood,ink", [], null], ["robinhood,ink", ["robinhood"], ["robinhood"]], ["robinhood,ink", ["ink"], ["ink"]], ["robinhood,ink", ["robinhood", "ink"], ["robinhood", "ink"]],
+  ]) {
+    const r = render({ FACILITATOR_PUBLIC_INDEX_CHAINS: list, ...URLS }, offered);
+    const tag = `listed ${list}, offered [${offered.join(",")}]`;
+    const idx = r.m.payment.dataHandling.publicSettlementIndex;
+    if (!expect) {
+      ok(said(r).every((x) => !x) && r.pt.includes(NO_SALE_OFF) && dateOf(r.t) === TERMS_OWN, `${tag}: no surface discloses anything (${said(r)})`);
+    } else {
+      const names = { robinhood: "Robinhood Chain", ink: "Ink" };
+      const lead = `On ${expect.map((c) => names[c]).join(" and ")}, `;
+      ok(r.pt.includes(`${lead}the facilitator`) && r.tt.includes(`${lead}the facilitator`) && (r.pt.match(/public index/g) || []).length === 1 && JSON.stringify(idx?.chains) === JSON.stringify(expect), `${tag}: privacy, terms and the manifest name only the offered chains, exactly (${JSON.stringify(idx?.chains)})`);
+    }
+    const warned = publicIndexUnofferedWarnings().join("\n");
+    for (const c of list.split(",")) ok(offered.includes(c) ? !warned.includes(`lists ${c} `) : warned.includes(`lists ${c} but`) && warned.includes("is not offered"), `${tag}: ${c} ${offered.includes(c) ? "is not warned about" : "is named in the boot warning"}`);
+  }
+}
+setPublicIndexOfferedChains([]);
 setEnv({});
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
