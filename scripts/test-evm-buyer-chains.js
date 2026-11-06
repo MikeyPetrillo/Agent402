@@ -255,6 +255,47 @@ reset();
   ok(dom.chains.polygon?.reason === "usdc_domain_mismatch", "Polygon accept with the wrong domain name: usdc_domain_mismatch");
 }
 
+// --- the global unsettled ceiling covers every listed chain --------------------
+{
+  const guard = await import("../src/external-spend-guard.js");
+  const saved = process.env.SOR_EVM_CHAINS;
+  delete process.env.EXTERNAL_MAX_UNSETTLED_GLOBAL_USD;
+  delete process.env.SOR_EVM_CHAINS;
+  const before = guard.defaultGlobalUnsettledUsd();
+  process.env.SOR_EVM_CHAINS = "polygon";
+  ok(guard.defaultGlobalUnsettledUsd() === before + 25, `the default global ceiling adds Polygon's $25 day once Polygon is listed (${before} -> ${guard.defaultGlobalUnsettledUsd()})`);
+  process.env.SOR_WALLET_DAILY_MAX_USD_POLYGON = "40";
+  ok(guard.defaultGlobalUnsettledUsd() === before + 40, "and follows Polygon's own day ceiling");
+  delete process.env.SOR_WALLET_DAILY_MAX_USD_POLYGON;
+  guard.__reset();
+  const g0 = guard.globalExposureUsd();
+  guard.noteSpend("0x" + "c1".repeat(20), 2, { chain: "polygon" });
+  ok(Math.abs(guard.globalExposureUsd() - g0 - 2) < 1e-9, "an unsettled Polygon spend counts toward the global ceiling");
+  process.env.EXTERNAL_MAX_UNSETTLED_GLOBAL_USD = "3";
+  const r = await guard.reserveSpend("0x" + "c2".repeat(20), 2, { chain: "polygon" });
+  ok(r.ok === false && r.code === "global_unsettled_ceiling", `a Polygon spend past the global ceiling is refused (${r.code})`);
+  delete process.env.EXTERNAL_MAX_UNSETTLED_GLOBAL_USD;
+  guard.__reset();
+  process.env.SOR_EVM_CHAINS = saved;
+}
+
+// --- the public "pays you on" list follows the live router chain set ----------
+{
+  const { routerPayChains } = await import("../src/tools/route-execute.js");
+  const { ledgerHomePage } = await import("../src/ledger-home.js");
+  const saved = process.env.SOR_EVM_CHAINS;
+  delete process.env.SOR_EVM_CHAINS;
+  const off = routerPayChains();
+  ok(!off.includes("polygon") && off.includes("base"), `unlisted: the router chain set has no Polygon (${off.join(",")})`);
+  const text = (h) => h.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+  ok(!/pays you on [^.]*Polygon/.test(text(ledgerHomePage("https://example.test", {}, {}, {}, []))), "home page: Polygon is not named while unlisted");
+  process.env.SOR_EVM_CHAINS = "polygon,robinhood";
+  const on = routerPayChains();
+  ok(on.includes("polygon") && on.includes("robinhood") && !on.includes("celo"), `listed: Polygon and Robinhood join, Celo does not (${on.join(",")})`);
+  ok(/pays you on [^.]*Polygon[^.]*Robinhood/.test(text(ledgerHomePage("https://example.test", {}, {}, {}, []))), "home page: the listed chains are named on the page");
+  process.env.SOR_EVM_CHAINS = saved;
+}
+
 globalThis.fetch = undefined;
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

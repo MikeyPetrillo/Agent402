@@ -32,7 +32,7 @@ import { evmCredentialBudgetMs, evmCredentialSettleableMs, evmSellerSignBy, EVM_
 import { cdnSyncLeftMs } from "../cdn-sync-window.js";
 import { spendsBeforeSettlement } from "../composite-spend-guard.js";
 import { upstreamBuyerStatus, evmBuyerChainStatus } from "../upstream-buyer-status.js";
-import { EVM_BUYER_CHAINS, EVM_BUYER_CHAIN_BY_NETWORK, isEvmBuyerChain, evmBuyerChainEnabled } from "../evm-buyer-chains.js";
+import { EVM_BUYER_CHAINS, EVM_BUYER_CHAIN_BY_NETWORK, isEvmBuyerChain, evmBuyerChainEnabled, enabledEvmBuyerChains } from "../evm-buyer-chains.js";
 import { recordRouterPurchase } from "../router-purchases.js";
 import { adaptParamsToExample } from "../mpp-input-examples.js";
 
@@ -314,6 +314,12 @@ export const EXTERNAL_CHAIN_BY_NETWORK = {
 // each its own leg: a buyer who paid on Polygon is routed to Polygon sellers.
 // Kept OUT of the static map above, which the public pages read as the chains
 // the router pays on: an EVM chain joins only while SOR_EVM_CHAINS lists it.
+/** The chains the router pays outside sellers on right now: every chain in
+ *  the static map, plus each EVM chain SOR_EVM_CHAINS lists. What the public
+ *  pages name, so they neither under- nor over-state the set. */
+export function routerPayChains() {
+  return [...new Set([...Object.values(EXTERNAL_CHAIN_BY_NETWORK), ...enabledEvmBuyerChains().filter((c) => c !== "base")])];
+}
 /** The external chain a buyer's payment network routes to, or undefined. */
 export function externalChainOfNetwork(net) {
   const fixed = EXTERNAL_CHAIN_BY_NETWORK[net];
