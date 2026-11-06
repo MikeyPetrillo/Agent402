@@ -702,10 +702,13 @@ export class Agent402 {
     if (!accept) return NO_GATEWAY_ACCEPT;
     const host = hostOf(this.baseUrl);
     const listUsd = parseUsd(tool.price);
-    // The amount the accept asks for, priced from the known-asset table
-    // (gatewayAcceptOf keeps only an accept that table can price); the
-    // catalog's figure never lowers what the caps are checked against.
-    const usd = Math.max(listUsd, acceptUsd(accept, 2));
+    // The amount the accept asks for, read from the field the challenge's
+    // version names and priced from the known-asset table; an accept that
+    // version does not price is not paid here. The catalog's figure never
+    // lowers what the caps are checked against.
+    const acceptedUsd = acceptUsd(accept, Number(env?.x402Version));
+    if (acceptedUsd == null) return NO_GATEWAY_ACCEPT;
+    const usd = Math.max(listUsd, acceptedUsd);
     const reservation = this._spendReserve(host, usd, slug, listUsd);
     let header;
     try {
