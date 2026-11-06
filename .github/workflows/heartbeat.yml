@@ -260,16 +260,20 @@ jobs:
       # maintainer, and nothing else pages on one. The built-in token cannot
       # read advisories, so the read uses ADVISORY_READ_TOKEN (fine-grained,
       # this repository, Security advisories read), passed to the script only.
-      # The issue carries GHSA ids and ages, never advisory text. An id listed
-      # in repo var ADVISORY_TRIAGE_ACK (comma list) does not page. A read that
-      # fails (no token, 401/403/5xx) opens its own issue, never a pass, and
+      # The issue is public: one fixed body that points to the Security tab (no
+      # GHSA id, age or count; those go to the job log), opened once and never
+      # commented on while it stays open, closed when clear. An id listed in
+      # repo var ADVISORY_TRIAGE_ACK (comma list) does not page; the limit is
+      # repo var ADVISORY_TRIAGE_MAX_HOURS (default 24). A read that fails (no
+      # token, 401/403/5xx) opens its own fixed-text issue, never a pass, and
       # leaves the triage issue as it was.
-      - name: Security advisory triage check (alarm on a report in triage past 24 h)
+      - name: Security advisory triage check (alarm on a report in triage past the limit)
         if: always()
         continue-on-error: true
         env:
           ADVISORY_READ_TOKEN: ${{ secrets.ADVISORY_READ_TOKEN }}
           ADVISORY_TRIAGE_ACK: ${{ vars.ADVISORY_TRIAGE_ACK }}
+          ADVISORY_TRIAGE_MAX_HOURS: ${{ vars.ADVISORY_TRIAGE_MAX_HOURS }}
         run: |
           TITLE="Security advisory waiting in triage"
           TITLE2="Security advisory check cannot read"
@@ -285,23 +289,16 @@ jobs:
           OPEN=$(find_open "$TITLE")
           OPEN2=$(find_open "$TITLE2")
           if [ "$CODE" = "0" ]; then
-            [ -z "$OPEN" ] || gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: no security advisory has been in triage past the limit at $(date -u +%FT%TZ)."
-            [ -z "$OPEN2" ] || gh issue close "$OPEN2" --repo "$GITHUB_REPOSITORY" --comment "Recovered: security advisories readable again at $(date -u +%FT%TZ)."
+            [ -z "$OPEN" ] || gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: no security advisory is waiting in triage past the limit."
+            [ -z "$OPEN2" ] || gh issue close "$OPEN2" --repo "$GITHUB_REPOSITORY" --comment "Recovered: security advisories readable again."
           elif [ "$CODE" = "1" ] && [ -s "$BODY_FILE" ]; then
-            [ -z "$OPEN2" ] || gh issue close "$OPEN2" --repo "$GITHUB_REPOSITORY" --comment "Recovered: security advisories readable again at $(date -u +%FT%TZ)."
-            if [ -n "$OPEN" ]; then
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body-file "$BODY_FILE"
-            else
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body-file "$BODY_FILE"
-            fi
+            [ -z "$OPEN2" ] || gh issue close "$OPEN2" --repo "$GITHUB_REPOSITORY" --comment "Recovered: security advisories readable again."
+            # Open once; a repeat run posts nothing while the issue stays open.
+            [ -n "$OPEN" ] || gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body-file "$BODY_FILE"
           else
             echo "::warning::security advisory triage check UNREADABLE (exit $CODE) - not silently passing"
-            [ -s "$BODY_FILE" ] || printf 'The heartbeat could not run the security advisory triage check at %s. Read the run log.\n' "$(date -u +%FT%TZ)" > "$BODY_FILE"
-            if [ -n "$OPEN2" ]; then
-              gh issue comment "$OPEN2" --repo "$GITHUB_REPOSITORY" --body-file "$BODY_FILE"
-            else
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE2" --body-file "$BODY_FILE"
-            fi
+            [ -s "$BODY_FILE" ] || printf 'The heartbeat could not run the security advisory triage check. The heartbeat job log names the error. Auto-closes on the next readable check.\n' > "$BODY_FILE"
+            [ -n "$OPEN2" ] || gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE2" --body-file "$BODY_FILE"
           fi
 
       # Canary burner balance watch: an empty burner once read as a settlement
