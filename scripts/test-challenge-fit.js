@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Every 402 fits a Node client's 16 KB response-header limit with the gated
-// Ink rail enabled, offline.
+// Every 402 fits a Node client's 16 KB response-header limit with the Ink
+// rail enabled, offline.
 //
 // scripts/test-challenge-size.js is the live judge: it reads production and
 // projects this tree onto it. This suite is its offline half, for the change

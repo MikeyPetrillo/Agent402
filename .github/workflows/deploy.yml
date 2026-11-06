@@ -2095,6 +2095,7 @@ jobs:
           # FACILITATOR_PUBLIC_INDEX_CHAINS: the privacy paragraph and terms pointer appear only for the listed chains, with their exact wording (offline)
           t node scripts/test-public-index-copy.js
           t node scripts/test-wire-count-copy.js
+          t node scripts/test-chain-list-copy.js
           t node scripts/test-pack-copy-retired.js
           # Retired hosted tollbooth: no surface offers it; retired URLs 301, the intake 410s; the operator leads page is gone (boots a server)
           t node scripts/test-tollbooth-cloud-retired.js

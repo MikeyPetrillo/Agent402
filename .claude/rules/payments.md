@@ -132,7 +132,10 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   PayAI/Solvador). The chosen client routes Ink only and every other routing client has
   Ink removed from its `/supported` (`exclusiveNetworkOwners`), so the operator's order is
   the only one. Unset, `enabledNetworks` leaves `ink` unconfigured (warned once). Ink is in
-  RAILS (graduated after its first live settle). No price floor by default (no settler of
+  RAILS (graduated after its first live settle). A new rail can start in `GATED_RAILS`
+  (`src/rails.js`) with its read-config in `GATED_EVM` (`src/revenue-live.js`); graduating it
+  after a live settle moves both entries, and every typed chain list and count follows
+  (`scripts/test-chain-list-copy.js`). No price floor by default (no settler of
   ours pays its gas); `NETWORK_PRICE_FLOORS` sets one and /api/pricing
   `minPriceUsdByNetwork` publishes any offered chain's floor (`scripts/test-ink-rail.js`,
   `scripts/test-ink-graduation.js`).
