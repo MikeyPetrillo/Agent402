@@ -58,6 +58,7 @@
 // on /__operator/direct-upstream.json only.
 
 import { directUpstreamConfig, directBreakerState } from "./gateway-direct-upstream.js";
+import { OPENROUTER_ATTRIBUTION } from "./openrouter-attribution.js";
 import { vendorRate } from "./upstream-costs.js";
 import { readBytesCapped, declaredLength, discardBody } from "./capped-body.js";
 
@@ -161,8 +162,8 @@ export function _seedDirectPriceBookForTest(entries, at = nowFn()) {
 }
 
 /** A listing body as JSON, read under the byte cap (a larger body is a failed read). */
-async function readJson(url, fetchImpl) {
-  const res = await fetchImpl(url, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(priceTimeoutMs()) });
+async function readJson(url, fetchImpl, extraHeaders = {}) {
+  const res = await fetchImpl(url, { headers: { ...extraHeaders, Accept: "application/json" }, signal: AbortSignal.timeout(priceTimeoutMs()) });
   if (!res.ok) { discardBody(res); throw new Error("http"); }
   const cap = priceMaxBytes();
   const declared = declaredLength(res);
@@ -175,6 +176,9 @@ async function readJson(url, fetchImpl) {
 /** One refresh of the book: the direct listing once, then each mapped model's
  *  OpenRouter endpoints. A read that fails keeps the previous entry (which
  *  goes stale after three intervals). Concurrent callers share one run. */
+// The catalog read carries the app attribution every OpenRouter request sends.
+const orHeaders = { headers: { ...OPENROUTER_ATTRIBUTION } }.headers;
+
 export function refreshDirectPriceBook({ fetchImpl } = {}) {
   const cfg = directUpstreamConfig();
   if (!cfg) return Promise.resolve("off");
@@ -195,7 +199,7 @@ export function refreshDirectPriceBook({ fetchImpl } = {}) {
     } catch { allRead = false; /* keep the previous read */ }
     for (const orId of cfg.models.keys()) {
       try {
-        const eps = parseOrEndpoints(await readJson(`${OR_MODELS_URL()}/${orId}/endpoints`, f));
+        const eps = parseOrEndpoints(await readJson(`${OR_MODELS_URL()}/${orId}/endpoints`, f, orHeaders));
         if (eps) book.or.set(orId, { at: nowFn(), endpoints: eps });
         else allRead = false;
       } catch { allRead = false; /* keep the previous read */ }

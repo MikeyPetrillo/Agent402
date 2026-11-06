@@ -58,12 +58,12 @@ const listed = (p, c, extra = {}) => ({ prompt: perToken(p), completion: perToke
 
 // ---- stubs ---------------------------------------------------------------------
 function stub() {
-  const s = { hits: [], plan: null, gets: [] };
+  const s = { hits: [], plan: null, gets: [], getHeaders: [] };
   s.server = createServer((req, res) => {
     let raw = "";
     req.on("data", (c) => { raw += c; });
     req.on("end", async () => {
-      if (req.method === "GET") { s.gets.push(req.url); try { await s.get(req, res); } catch { try { res.destroy(); } catch { /* gone */ } } return; }
+      if (req.method === "GET") { s.gets.push(req.url); s.getHeaders.push({ url: req.url, title: req.headers["x-title"] || null }); try { await s.get(req, res); } catch { try { res.destroy(); } catch { /* gone */ } } return; }
       let body = null;
       try { body = JSON.parse(raw); } catch { /* recorded as null */ }
       s.hits.push({ url: req.url, body });
@@ -411,6 +411,7 @@ setEnv({});
     const all = log.join("");
     ok(/\[direct-upstream\] price book: ok/.test(all) && ![2, 4, 8].some((u) => all.includes(perToken(u))) && !/cheap/i.test(all.split("\n").filter((l) => l.includes("[direct-upstream]")).join("")), "the boot log names the word and no price");
     ok(direct.gets.length > 0 && or.gets.some((u) => u.includes("/endpoints")), "the booted server read both stubs (no other host is reachable under the preload)");
+    ok(or.getHeaders.filter((h) => h.url.includes("/endpoints")).every((h) => h.title) && direct.getHeaders.every((h) => !h.title), "the catalog read carries the app attribution; the direct listing read does not");
   } finally {
     child.kill("SIGTERM");
     await new Promise((r) => { child.once("exit", r); setTimeout(r, 5000); });
