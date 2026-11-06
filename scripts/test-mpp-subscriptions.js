@@ -26,7 +26,7 @@ import {
   OFFER_SWEEP_AFTER_MS, MAX_OPEN_OFFERS,
   CANARY_PRODUCT_KEY, CANARY_PRODUCT, CANARY_PERIOD_SECONDS, productDefFor, isCanaryProduct,
   subscriptionFeePayerPolicy, SUB_FEE_PAYER_MAX_GAS,
-  isTransientChargeError, TRANSIENT_CHARGE_BACKOFF_MS, isSendPhaseAmbiguity, expectedRenewalMemo,
+  isTransientChargeError, TRANSIENT_CHARGE_BACKOFF_MS, isSendPhaseAmbiguity, expectedRenewalMemo, RENEWAL_SCAN_MAX_BLOCKS,
   renewalValidForSeconds, withRenewalValidity, RENEWAL_VALID_FOR_DEFAULT_S, RENEWAL_VALID_FOR_MAX_S, SETTLEABLE_SLACK_MS,
   ACTIVATION_VALID_FOR_S, TEMPO_RPC_TIMEOUT_MS,
   guardDestroyedKeys, KEY_GONE_PREFIX, createFileStore, diagnoseError,
@@ -499,62 +499,188 @@ let liveSubId = null, liveHeader = null, liveToken = null, liveBuyer = null;
     ok(await c.engine.refreshStatus(subC.subId) === "past_due" && c.calls.charge === chargesC, "(c) an unreadable chain waits and signs nothing");
     ok(Date.parse(c.engine.get(subC.subId).nextChargeAttemptAt) - clock <= TRANSIENT_CHARGE_BACKOFF_MS + 1000, "(c) and retries the chain read on the short backoff");
 
-    // (d) landed, read by the DEFAULT chain reader (no injected finder) from a
-    // stub JSON-RPC on a loopback port. mppx's record carries the amount in
-    // BASE UNITS ("3000000" for $3), the transfer's value on chain; the reader
-    // must search for exactly that value, never re-scale it as a decimal.
+    let clockAfterFirstD = null;
+    // (d) read by the DEFAULT chain reader (no injected finder) from a stub
+    // JSON-RPC on a loopback port that honours getLogs' address and topic
+    // filters. mppx sends a renewal as a Tempo 0x76 transaction whose
+    // transferWithMemo is one of calls[] (its top-level input is empty), and
+    // the token emits Transfer + TransferWithMemo. mppx's record carries the
+    // amount in BASE UNITS ("3000000" for $3); the reader never re-scales it.
     {
       const { encodeFunctionData, parseAbi, pad, toHex, keccak256, toBytes } = await import("viem");
       const http = await import("node:http");
       const abi = parseAbi(["function transferWithMemo(address to, uint256 amount, bytes32 memo)"]);
       const TRANSFER = keccak256(toBytes("Transfer(address,address,uint256)"));
-      let landed = null; // { payer, value, memo }
-      const rpcCalls = [];
-      const logsD = [];
+      const TRANSFER_MEMO = keccak256(toBytes("TransferWithMemo(address,address,uint256,bytes32)"));
+      const OTHER = "0x000000000000000000000000000000000000bEEF";
+      const OTHER_TOKEN = "0x20C0000000000000000000000000000000000001";
+      const HEAD = 0x1000000;
       const TXH = "0x" + "ab".repeat(32);
+      const BH = "0x" + "cd".repeat(32);
+      // landed: { payer, value, memo, shape, logTo, logValue, logMemo, logToken, callTo, receipt }
+      let landed = null;
+      const rpcCalls = [];
+      const logsOf = () => {
+        if (!landed) return [];
+        const L = landed, token = L.logToken || CURRENCY, to = L.logTo || RECIPIENT, value = L.logValue ?? L.value, memo = L.logMemo || L.memo;
+        // The landed block sits where the chain's block time puts the attempt.
+        const landedBlock = HEAD - Math.floor((clock - L.atMs) / (L.blockMs || 1000));
+        const base = { blockNumber: toHex(landedBlock), blockHash: BH, transactionHash: TXH, transactionIndex: "0x0", removed: false };
+        // The plain Transfer the candidate search finds is always to us for the full amount;
+        // the memo log carries the variant under test.
+        return [
+          { ...base, address: CURRENCY, topics: [TRANSFER, pad(L.payer), pad(RECIPIENT)], data: pad(toHex(L.value)), logIndex: "0x0" },
+          ...(L.noMemoLog ? [] : [{ ...base, address: token, topics: [TRANSFER_MEMO, pad(L.payer), pad(to), memo], data: pad(toHex(value)), logIndex: "0x1" }]),
+        ];
+      };
+      const topicOk = (want, got) => want == null || (Array.isArray(want) ? want.some((w) => w.toLowerCase() === String(got).toLowerCase()) : want.toLowerCase() === String(got).toLowerCase());
+      const filterLogs = (f) => logsOf().filter((l) => (!f.address || [].concat(f.address).some((a) => a.toLowerCase() === l.address.toLowerCase()))
+        && (f.topics || []).every((t, i) => topicOk(t, l.topics[i]))
+        && (f.fromBlock == null || f.fromBlock === "latest" || Number(l.blockNumber) >= Number(f.fromBlock))
+        && (f.toBlock == null || f.toBlock === "latest" || Number(l.blockNumber) <= Number(f.toBlock)));
+      const sig = { r: "0x" + "11".repeat(32), s: "0x" + "22".repeat(32), yParity: "0x0" };
+      const txOf = () => {
+        const L = landed;
+        // callMatches: the calldata pays us exactly while the receipt says otherwise (a held transfer).
+        const data = L.callMatches
+          ? encodeFunctionData({ abi, functionName: "transferWithMemo", args: [RECIPIENT, L.value, L.memo] })
+          : encodeFunctionData({ abi, functionName: "transferWithMemo", args: [L.logTo || RECIPIENT, L.logValue ?? L.value, L.logMemo || L.memo] });
+        const common = { hash: TXH, from: L.payer, nonce: "0x1", gas: "0x5208", blockNumber: "0xfff0", blockHash: BH, transactionIndex: "0x0", chainId: toHex(TEMPO_MAINNET_CHAIN_ID) };
+        if (L.shape === "legacy") return { ...common, to: CURRENCY, input: data, value: "0x0", gasPrice: "0x1", type: "0x0", v: "0x1b", r: sig.r, s: sig.s };
+        return { ...common, to: null, input: "0x", value: "0x0", type: "0x76", maxFeePerGas: "0x1", maxPriorityFeePerGas: "0x1", accessList: [],
+          calls: [{ to: L.callTo || CURRENCY, value: "0x0", input: data }], nonceKey: "0x0", signature: { type: "secp256k1", ...sig } };
+      };
       const srv = http.createServer((req, res) => {
         let body = ""; req.on("data", (d) => (body += d)); req.on("end", () => {
-          const msgs = [].concat(JSON.parse(body));
-          const out = msgs.map(({ id, method }) => {
+          const parsed = JSON.parse(body);
+          const out = [].concat(parsed).map(({ id, method, params }) => {
             rpcCalls.push(method);
             let result = null;
-            if (method === "eth_blockNumber") result = "0x10000";
+            if (method === "eth_blockNumber") result = toHex(HEAD);
             else if (method === "eth_chainId") result = toHex(TEMPO_MAINNET_CHAIN_ID);
-            else if (method === "eth_getLogs") result = landed ? [{ address: CURRENCY, topics: [TRANSFER, pad(landed.payer), pad(RECIPIENT)], data: pad(toHex(landed.value)), blockNumber: "0xfff0", blockHash: "0x" + "cd".repeat(32), transactionHash: TXH, transactionIndex: "0x0", logIndex: "0x0", removed: false }] : [];
-            else if (method === "eth_getTransactionByHash") result = { hash: TXH, from: landed.payer, to: CURRENCY, input: encodeFunctionData({ abi, functionName: "transferWithMemo", args: [RECIPIENT, landed.value, landed.memo] }), nonce: "0x1", value: "0x0", gas: "0x5208", gasPrice: "0x1", type: "0x0", blockNumber: "0xfff0", blockHash: "0x" + "cd".repeat(32), transactionIndex: "0x0", chainId: toHex(TEMPO_MAINNET_CHAIN_ID), v: "0x1b", r: "0x" + "11".repeat(32), s: "0x" + "22".repeat(32) };
+            else if (method === "eth_getBlockByNumber") {
+              const n = Number(params[0]);
+              result = { number: toHex(n), hash: "0x" + n.toString(16).padStart(64, "0"), parentHash: BH, timestamp: toHex(Math.floor((clock - (HEAD - n) * (landed?.blockMs || 1000)) / 1000)), transactions: [], gasLimit: "0x1", gasUsed: "0x0", baseFeePerGas: "0x1", logsBloom: "0x" + "00".repeat(256), miner: RECIPIENT, extraData: "0x", difficulty: "0x0", size: "0x1", uncles: [] };
+            }
+            else if (method === "eth_getLogs") result = filterLogs(params[0] || {});
+            else if (method === "eth_getTransactionReceipt") {
+              if (landed?.receipt === "unreadable") return { jsonrpc: "2.0", id, error: { code: -32000, message: "header not found" } };
+              result = { transactionHash: TXH, transactionIndex: "0x0", blockHash: BH, blockNumber: "0xfff0", from: landed.payer, to: null, cumulativeGasUsed: "0x5208", gasUsed: "0x5208", effectiveGasPrice: "0x1", contractAddress: null, logs: logsOf(), logsBloom: "0x" + "00".repeat(256), status: "0x1", type: landed.shape === "legacy" ? "0x0" : "0x76" };
+            }
+            else if (method === "eth_getTransactionByHash") result = txOf();
             return { jsonrpc: "2.0", id, result };
           });
-          res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(Array.isArray(JSON.parse(body)) ? out : out[0]));
+          res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(Array.isArray(parsed) ? out : out[0]));
         });
       });
       await new Promise((r) => srv.listen(0, "127.0.0.1", r));
       const savedRpc = process.env.TEMPO_RPC_URL;
       process.env.TEMPO_RPC_URL = `http://127.0.0.1:${srv.address().port}`;
-      try {
-        const d = makeEngine({ name: "ambiguous-landed-default-reader", chainReader: true, log: (m) => logsD.push(m) });
+      // One subscription per scenario: a send-phase timeout for period 1, the
+      // chain then shows `variant`, and the pull runs after the settle window.
+      async function scenario(name, variant, extraMs = 0) {
+        const logsD = [];
+        const d = makeEngine({ name: `ambiguous-default-reader-${name}`, chainReader: true, log: (m) => logsD.push(m) });
         const offD = await d.engine.mintOffer({ product: "fund-monitor", target: "Some Manager LP" });
         const cD = await signCredential(Challenge.deserialize(offD.header));
         const subD = await d.engine.activateFromCredential(cD.header);
         await d.engine.warm();
         d.setCharge(() => sendTimeout);
         advance(PERIOD);
-        ok(await d.engine.refreshStatus(subD.subId) === "past_due", "(d) send-phase failure -> past_due");
+        ok(await d.engine.refreshStatus(subD.subId) === "past_due", `(d:${name}) send-phase failure -> past_due`);
         const recD = d.engine.get(subD.subId);
         const mppxD = await d.engine._subStore.get(recD.mppxSubscriptionId);
-        ok(/^\d+$/.test(String(mppxD.amount)) && BigInt(mppxD.amount) >= 1000000n && String(recD.amountAtomic) === String(mppxD.amount), `(d) mppx's record and ours both hold the period amount in base units (${mppxD.amount})`);
-        landed = { payer: cD.account.address, value: BigInt(mppxD.amount), memo: await expectedRenewalMemo({ lookupKey: mppxD.lookupKey, subscriptionId: recD.mppxSubscriptionId, periodIndex: 1 }) };
-        const chargesD = d.calls.charge;
-        d.setCharge(() => ({ reference: "0xMUST-NOT-HAPPEN" }));
-        advance(Date.parse(recD.nextChargeAttemptAt) - clock + 1000);
-        ok(await d.engine.refreshStatus(subD.subId) === "active", `(d) the default reader finds the landed transfer of ${mppxD.amount} base units -> active (rpc: ${[...new Set(rpcCalls)].join(",")}; ${logsD.filter((m) => /chain|unconfirmed/.test(m)).slice(-2).join(" | ")})`);
-        const afterD = d.engine.get(subD.subId);
-        ok(afterD.lastChargedPeriod === 1 && afterD.lastChargeTx === TXH && !afterD.unconfirmedCharge, "(d) the landed transaction is recorded as period 1's charge");
-        ok(d.calls.charge === chargesD, "(d) and no second transfer was signed for the same period");
+        const memo = await expectedRenewalMemo({ lookupKey: mppxD.lookupKey, subscriptionId: recD.mppxSubscriptionId, periodIndex: 1 });
+        landed = { payer: cD.account.address, value: BigInt(mppxD.amount), memo, atMs: clock, ...variant(memo) };
+        const charges = d.calls.charge;
+        d.setCharge(() => ({ reference: "0xsecond-charge" }));
+        advance(Date.parse(recD.nextChargeAttemptAt) - clock + 1000 + extraMs);
+        const status = await d.engine.refreshStatus(subD.subId);
+        return { d, subD, recD, mppxD, status, charges, logsD, after: d.engine.get(subD.subId) };
+      }
+      try {
+        // Tempo 0x76: the receipt's TransferWithMemo proves it -> recorded, never re-sent.
+        {
+          const r = await scenario("tempo", () => ({ shape: "tempo" }));
+          ok(/^\d+$/.test(String(r.mppxD.amount)) && BigInt(r.mppxD.amount) >= 1000000n && String(r.recD.amountAtomic) === String(r.mppxD.amount), `(d) mppx's record and ours both hold the period amount in base units (${r.mppxD.amount})`);
+          ok(r.status === "active", `(d) the default reader finds the landed 0x76 renewal (calls[], empty input) -> active (rpc: ${[...new Set(rpcCalls)].join(",")}; ${r.logsD.filter((m) => /chain|unconfirmed/.test(m)).slice(-2).join(" | ")})`);
+          ok(r.after.lastChargedPeriod === 1 && r.after.lastChargeTx === TXH && !r.after.unconfirmedCharge, "(d) the landed transaction is recorded as period 1's charge");
+          ok(r.d.calls.charge === r.charges, "(d) and no second transfer was signed for the same period");
+          clockAfterFirstD = clock; // the later groups run on the timeline the first scenario leaves
+        }
+        // A 0x76 renewal with the receipt read ONLY through calls[] (token emitted no memo log).
+        {
+          const r = await scenario("tempo-calls-only", () => ({ shape: "tempo", noMemoLog: true }));
+          ok(r.status === "active" && r.after.lastChargeTx === TXH && r.d.calls.charge === r.charges, "(d) a receipt with no memo log falls back to calls[] and finds the renewal -> no second transfer");
+        }
+        // Legacy shape: transferWithMemo in the top-level input still counts.
+        {
+          const r = await scenario("legacy", () => ({ shape: "legacy", noMemoLog: true }));
+          ok(r.status === "active" && r.after.lastChargeTx === TXH && r.d.calls.charge === r.charges, "(d) the legacy 0x0 input shape is still read -> no second transfer");
+        }
+        // Blocks four times faster than one a second: the scan widens by block
+        // timestamp until it reaches back past the attempt, so the renewal is found.
+        {
+          const r = await scenario("fast-blocks", () => ({ shape: "tempo", blockMs: 250 }));
+          ok(r.status === "active" && r.after.lastChargeTx === TXH && r.d.calls.charge === r.charges, "(d) with 250 ms blocks the scan still reaches the attempt's block -> no second transfer");
+        }
+        // The pull runs so late that the attempt lies past the scan bound: that
+        // is UNKNOWN (wait), never "not found".
+        {
+          const r = await scenario("beyond-scan-bound", () => ({ shape: "tempo" }), (Number(RENEWAL_SCAN_MAX_BLOCKS) + 10_000) * 1000);
+          ok(r.status === "past_due" && r.d.calls.charge === r.charges && r.after.unconfirmedCharge?.periodIndex === 1,
+            `(d) an attempt further back than the scan bound waits and signs nothing (${r.logsD.filter((m) => /decide/.test(m)).slice(-1).join("")})`);
+        }
+        // Not this renewal: a different recipient, amount, token or memo in the receipt is not counted.
+        for (const [name, variant] of [
+          ["other-recipient", () => ({ shape: "tempo", logTo: OTHER })],
+          ["other-amount", () => ({ shape: "tempo", logValue: 1n })],
+          ["other-memo", () => ({ shape: "tempo", logMemo: "0x" + "99".repeat(32) })],
+          ["other-token", () => ({ shape: "tempo", logToken: OTHER_TOKEN, callTo: OTHER_TOKEN })],
+          // A receive policy held the funds: the call names us, the receipt credits the guard.
+          ["held-by-receive-policy", () => ({ shape: "tempo", logTo: OTHER, callMatches: true })],
+        ]) {
+          const r = await scenario(name, variant);
+          ok(r.status === "active" && r.after.lastChargeTx === "0xsecond-charge" && r.d.calls.charge === r.charges + 1,
+            `(d:${name}) a transfer that is not this renewal is not counted; past the settle window the period is charged once`);
+        }
+        // Unreadable receipt: undecidable -> waits, never a second transfer, even long after the window.
+        {
+          const r = await scenario("receipt-unreadable", () => ({ shape: "tempo", receipt: "unreadable" }));
+          ok(r.status === "past_due" && r.d.calls.charge === r.charges && r.after.unconfirmedCharge?.periodIndex === 1,
+            `(d) an unreadable receipt is UNKNOWN: past_due, unconfirmed kept, nothing signed (${r.logsD.filter((m) => /decide|unconfirmed/.test(m)).slice(-1).join("")})`);
+          advance(Date.parse(r.after.nextChargeAttemptAt) - clock + 1000);
+          ok(await r.d.engine.refreshStatus(r.subD.subId) === "past_due" && r.d.calls.charge === r.charges, "(d) and a later pull still signs nothing while the receipt cannot be read");
+          landed.receipt = "ok";
+          advance(Date.parse(r.d.engine.get(r.subD.subId).nextChargeAttemptAt) - clock + 1000);
+          ok(await r.d.engine.refreshStatus(r.subD.subId) === "active" && r.d.engine.get(r.subD.subId).lastChargeTx === TXH && r.d.calls.charge === r.charges, "(d) once the receipt reads, the landed renewal is recorded, still one transfer");
+        }
       } finally {
         if (savedRpc === undefined) delete process.env.TEMPO_RPC_URL; else process.env.TEMPO_RPC_URL = savedRpc;
         srv.close();
       }
     }
+
+    // (e) the pull signs again ONLY on an explicit {found:false}: an unknown or
+    // malformed verdict from any reader waits, even past the settle window.
+    for (const [name, verdict] of [["unknown", { unknown: true, reason: "test" }], ["found-false-but-unknown", { found: false, unknown: true }], ["empty", {}], ["found-no-tx", { found: true }], ["string", "nope"]]) {
+      const e = makeEngine({ name: `ambiguous-verdict-${name}` });
+      const offE = await e.engine.mintOffer({ product: "fund-monitor", target: "Some Manager LP" });
+      const cE = await signCredential(Challenge.deserialize(offE.header));
+      const subE = await e.engine.activateFromCredential(cE.header);
+      await e.engine.warm();
+      e.setCharge(() => sendTimeout);
+      advance(PERIOD);
+      await e.engine.refreshStatus(subE.subId);
+      const chargesE = e.calls.charge;
+      e.setFind(verdict);
+      e.setCharge(() => ({ reference: "0xMUST-NOT-HAPPEN" }));
+      advance(Date.parse(e.engine.get(subE.subId).nextChargeAttemptAt) - clock + 1000);
+      ok(await e.engine.refreshStatus(subE.subId) === "past_due" && e.calls.charge === chargesE && e.engine.get(subE.subId).unconfirmedCharge,
+        `(e:${name}) a verdict that is not a definite answer waits past the settle window and signs nothing`);
+    }
+    // The extra scenarios above each ran their own periods; put the shared clock back.
+    clock = clockAfterFirstD;
   }
 
   // Recovery.
