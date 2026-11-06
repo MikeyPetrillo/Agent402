@@ -437,5 +437,22 @@ const stop = async (b) => { b.child.kill("SIGTERM"); await new Promise((r) => { 
 
 direct.server.close(); or.server.close();
 globalThis.fetch = realFetch;
+// Streams that repeat usage on every chunk and carry the charge only on the
+// last frame are metered at that charge, once (and the last usage, not the
+// first, is what reports when no charge ever arrives).
+{
+  const runScrub = (frames) => {
+    const calls = [];
+    const sc = K.createSseUsageScrubber({ vendorKeys: true, onUsage: (u, c) => calls.push({ tok: u?.completion_tokens, cost: c }) });
+    for (const f of frames) sc.push(`data: ${JSON.stringify(f)}\n\n`);
+    sc.flush();
+    return calls;
+  };
+  const chunk = (t) => ({ choices: [{ delta: { content: "x" } }], usage: { prompt_tokens: 10, completion_tokens: t } });
+  const d = runScrub([chunk(1), chunk(2), { choices: [], usage: { prompt_tokens: 10, completion_tokens: 5 }, x_vendor: { charged_micro: 4321 } }]);
+  ok(d.length === 1 && d[0].tok === 5 && Math.abs(d[0].cost - 0.004321) < 1e-12, `usage on every chunk, charge on the last frame: metered once at that charge (${JSON.stringify(d)})`);
+  const e = runScrub([chunk(1), chunk(3)]);
+  ok(e.length === 1 && e[0].tok === 3 && e[0].cost === null, `usage on every chunk with no charge: the last usage reports, uncharged (${JSON.stringify(e)})`);
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

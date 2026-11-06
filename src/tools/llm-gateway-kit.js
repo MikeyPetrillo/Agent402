@@ -2531,10 +2531,13 @@ export function createSseUsageScrubber({ onUsage, vendorKeys = false, modelAs } 
     for (const u of sites) {
       if (BILLING_USAGE_FIELDS.some((k) => k in u)) had = true;
       const rawCost = stripBilling(u);
-      if (!reported && !(vendorKeys && (usageReported || heldUsage)) && (rawCost !== null || typeof u.prompt_tokens === "number" || typeof u.input_tokens === "number")) {
+      if (!reported && !(vendorKeys && usageReported) && (rawCost !== null || typeof u.prompt_tokens === "number" || typeof u.input_tokens === "number")) {
         reported = true;
+        // A direct upstream may repeat usage on every chunk and send its charge
+        // only with the last one: a later usage frame replaces the held one, and
+        // a frame carrying its own charge reports at that charge, once.
         if (vendorKeys && rawCost === null) heldUsage = { u, obj };
-        else report(u, rawCost, obj);
+        else { heldUsage = null; report(u, rawCost, obj); }
       }
     }
     return had ? `data: ${JSON.stringify(obj)}` : line;
