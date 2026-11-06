@@ -42,7 +42,7 @@ import { registerLateSettleHook } from "./late-settlements.js";
 import { chargeCancelledForClientGone, registerSettleSentHook, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
 import { markCoveredRunSettled } from "./inflight-cover.js";
 import { ARC_CAIP2, ARC_USDC, ARC_PROFILE, CIRCLE_LABEL, CircleFacilitatorClient, circleClientFromEnv, circleKeyConfigured, withoutArcKinds, arcContractWalletsEnabled, isContractWalletPayment, CIRCLE_EVM_LABEL, CIRCLE_EVM_FALLBACK_NETWORKS, CIRCLE_EVM_FALLBACK_PROFILES, circleEvmFallbackEnabled, circleEvmFallbackFromEnv } from "./circle-facilitator.js";
-import { markGatedRailOffered, gatedRailOffered } from "./gated-rails.js";
+import { markGatedRailOffered } from "./gated-rails.js";
 import { gatedRailWasOffered, recordGatedRailOffered } from "./gated-rail-history.js";
 import { shared } from "./shared-limits.js";
 import { spendsBeforeSettlement, isLongRunningSlug } from "./composite-spend-guard.js";
@@ -2151,6 +2151,9 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // offered, is not configured-but-dropped: it is absent on purpose.
   railsConfigured = networks.filter((n) => !(arcDeliberatelyAbsent && NETWORKS[n] === ARC_CAIP2));
   railsOffered = [...offeredNames];
+  // The public facilitator map names only what this server offers: each
+  // offered network's CAIP-2 id and every v1 name that maps to it.
+  offeredNetworkKeys = new Set([...offeredCaip2, ...Object.keys(NETWORKS).filter((n) => offeredCaip2.has(NETWORKS[n]))]);
   // A gated rail joins the runtime surfaces (manifest chains, how-to-pay, its
   // chain page, nav, live revenue read) only now, from the FINAL offer.
   if (offeredCaip2.has(ARC_CAIP2)) { markGatedRailOffered(ARC_CAIP2); void recordGatedRailOffered(ARC_CAIP2); }
@@ -2840,6 +2843,7 @@ export function lastResortFallbackOverrides({ networks, payAiClient, solvadorCli
 // decision, it never influences it.
 let railsConfigured = [];
 let railsOffered = [];
+let offeredNetworkKeys = new Set();
 // The facilitator clients + labels as built (module-level copy, operator
 // diagnostics only). CDP's facilitator table has grown (Polygon, Arbitrum,
 // Solana, World) and CDP is FIRST in facilitatorClients, so it may now be
@@ -2869,10 +2873,11 @@ let facilitatorRegistry = [];
 let facilitatorFirstTriedByNetwork = new Map();
 /** { "eip155:8453": "CDP (Base)", ... }: the facilitator @x402 tries first per
  *  network, from the boot /supported probe. Labels only. Empty before the probe. */
-// A gated rail (src/rails.js GATED_RAILS) a facilitator lists is named here
-// only while it is in the live offer, like every other runtime surface.
+// A network a facilitator lists is named here only while this server offers
+// it (CAIP-2 id or v1 name): a gated rail, a testnet or a chain this
+// deployment does not accept is left out, like every other runtime surface.
 export function facilitatorsByNetworkPublic() {
-  return Object.fromEntries([...facilitatorFirstTriedByNetwork].filter(([n]) => !GATED_RAILS.some((r) => r.caip2 === n) || gatedRailOffered(n)));
+  return Object.fromEntries([...facilitatorFirstTriedByNetwork].filter(([n]) => offeredNetworkKeys.has(n)));
 }
 export async function facilitatorSupportReport() {
   return Promise.all(facilitatorRegistry.map(async ({ label, client }) => {
