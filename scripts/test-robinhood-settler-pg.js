@@ -69,6 +69,38 @@ function twoReplicas(t0) {
   return childJson(r.stdout);
 }
 
+/** Two replicas, one row: A's relayer-first write is held across B's reset and
+ *  lands after it, so the row holds a start older than the reset B knows. */
+function lateWrite(t0) {
+  const code = `
+    const O = await import(${JSON.stringify(MOD)});
+    const { closeStateDb } = await import(${JSON.stringify(DB)});
+    const H = 3600000, t0 = ${t0}, HOST = "facilitator.example";
+    const row = (at, runway) => [{ network: "eip155:4663", facilitator: HOST, runway, status: runway < 50 ? "low" : "ok", balanceEth: 0.001, at }];
+    const real = await O.stateDbOrderStore();
+    let release; const held = new Promise((r) => { release = r; });
+    const aStore = { load: () => real.load(), async save(body) { await held; return real.save(body); } };
+    const ca = { t: t0 }, cb = { t: t0 };
+    const a = O.createRobinhoodOrder({ host: HOST, now: () => ca.t, log: () => {}, store: aStore });
+    const b = O.createRobinhoodOrder({ host: HOST, now: () => cb.t, log: () => {}, store: await O.stateDbOrderStore() });
+    await a.synced(); await b.synced();
+    a.update(row(ca.t, 3));
+    cb.t = t0 + H; b.update(row(cb.t, 2000)); await b.synced();
+    release(); await a.synced();
+    const stale = await real.load();
+    cb.t = t0 + 2 * H; b.update(row(cb.t, 3)); await b.synced();
+    const since = b.status({ full: true, env: {}, at: cb.t }).since;
+    const after = await real.load();
+    cb.t = t0 + 6.5 * H; b.update(row(cb.t, 3)); await b.synced();
+    const word = b.status({ env: {}, at: cb.t }).status;
+    await closeStateDb();
+    console.log(JSON.stringify({ stale, since, after, word }));
+  `;
+  const r = spawnSync(process.execPath, ["--input-type=module", "-e", code], { env: { ...process.env, ROBINHOOD_RELAYER_FIRST_ALERT_HOURS: "" }, encoding: "utf8", timeout: 60_000 });
+  if (r.status !== 0) throw new Error(`child exited ${r.status}: ${r.stderr.slice(-600)}`);
+  return childJson(r.stdout);
+}
+
 try {
   const a = proc(T0, true);
   ok(a.hasStore, "the state database gives the order a store");
@@ -88,6 +120,12 @@ try {
   ok(r.afterLag?.ownFirst === true && r.afterLag?.since >= T1 + H, `two replicas: the lagging relayer-first replica writes no start before the reset (${JSON.stringify(r.afterLag)})`);
   ok(r.word === "ok", `two replicas: the peer that turns relayer first later does not adopt the old start (${r.word})`);
   ok(r.freshWord === "relayer", `a fresh process reads the stored clock before its first update (${r.freshWord})`);
+  await __dropStateSchema();
+  const T2 = Date.now() - 24 * H;
+  const l = lateWrite(T2);
+  ok(l.stale?.ownFirst === true && l.stale?.since === T2 && l.stale?.resetAt === undefined, `late write: the row holds a relayer-first start before the reset (${JSON.stringify(l.stale)})`);
+  ok(l.since === new Date(T2 + 2 * H).toISOString() && l.after?.since === T2 + 2 * H && l.after?.resetAt === T2 + H, `late write: the peer keeps its own start and writes it with the reset (${l.since}, ${JSON.stringify(l.after)})`);
+  ok(l.word === "ok", `late write: 4.5 hours relayer first reads ok, not the stale clock (${l.word})`);
 } catch (e) {
   fail++; console.error(`FAIL - ${e.message}`);
 } finally {

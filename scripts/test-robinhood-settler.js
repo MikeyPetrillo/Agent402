@@ -173,6 +173,34 @@ await check("two processes, one store: a lagging relayer-first replica cannot re
   assert.equal(word(b, cb), "relayer", "six hours after the reset the clock reads relayer");
 });
 
+await check("two processes, one store: a late write of a start older than the reset is not adopted on load", async () => {
+  // A's relayer-first write is in flight across B's reset and lands after it,
+  // so the store holds a relayer-first start older than the reset B knows.
+  const store = memStore();
+  let release;
+  const held = new Promise((r) => { release = r; });
+  const aStore = { load: () => store.load(), async save(body) { await held; return store.save(body); } };
+  const ca = { t: T0 }, cb = { t: T0 };
+  const a = mk(ca, aStore), b = mk(cb, store);
+  await a.synced(); await b.synced();
+  a.update(dry(ca.t)); // A loads nothing and starts its save of since T0
+  cb.t = T0 + 1 * H; b.update(funded(cb.t)); await b.synced();
+  assert.equal(store.body.resetAt, T0 + 1 * H, "B records the reset");
+  release(); await a.synced();
+  assert.equal(store.body.ownFirst, true);
+  assert.equal(store.body.since, T0, "the late write left a start before the reset in the store");
+  assert.equal(store.body.resetAt, undefined, "and carries no reset");
+  // B turns relayer first after the reset and loads that stale start.
+  cb.t = T0 + 2 * H; b.update(dry(cb.t)); await b.synced();
+  assert.equal(b.status({ full: true, env: ENV, at: cb.t }).since, new Date(T0 + 2 * H).toISOString(), "B keeps its own start, not the stored one before the reset");
+  assert.equal(store.body.since, T0 + 2 * H, "B writes its own start back");
+  assert.equal(store.body.resetAt, T0 + 1 * H, "with the reset it knows");
+  cb.t = T0 + 6.5 * H; b.update(dry(cb.t)); await b.synced();
+  assert.equal(word(b, cb), "ok", "4.5 hours relayer first: ok, not the stale 6.5-hour clock");
+  cb.t = T0 + 8 * H + 60_000; b.update(dry(cb.t)); await b.synced();
+  assert.equal(word(b, cb), "relayer", "six hours after its own start: relayer");
+});
+
 await check("facilitator first for want of a reading is not a reset", async () => {
   const store = memStore();
   const ca = { t: T0 }, cb = { t: T0 + 7 * H };
