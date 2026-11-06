@@ -814,7 +814,7 @@ export function openapiSpec(baseUrl, catalog) {
             : { "application/json": { schema: responseSchemaFor(path, discovery?.output?.example), example: discovery?.output?.example ?? {}, ...(discovery?.output?.captured ? { "x-example-source": { kind: "captured-paid-answer", capturedAt: discovery.output.captured.capturedAt, modelBacked: discovery.output.captured.modelBacked === true } } : {}) } },
         },
         402: { description: "Payment Required - x402 payment requirements in the PAYMENT-REQUIRED header, mirrored in the JSON body, and MPP challenges (WWW-Authenticate: Payment)" },
-        400: { description: "Invalid input" },
+        400: { description: "Invalid input - the JSON body names the tool's input schema (expected, required), its example, and howToCall: the same example as a ready-to-run request (method, url, body), with the other method under alternate where it is served" },
       },
       "x-price": tool.price,
       ...(mppFlagshipBySlug.has(tool.slug) ? { "x-mpp-flagship": { order: mppFlagshipBySlug.get(tool.slug).order, why: mppFlagshipBySlug.get(tool.slug).why } } : {}),
