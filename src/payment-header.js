@@ -1,13 +1,11 @@
 // One reading of an x402 payment header (PAYMENT-SIGNATURE, X-PAYMENT).
 //
-// The paywall (@x402/core decodePaymentSignatureHeader) decodes the base64
-// with atob and a TextDecoder, which drops a leading UTF-8 byte order mark,
-// then JSON.parse. Buffer's utf8 decode keeps that mark, so JSON.parse throws
-// on bytes the paywall reads as a payment. Every reader of these headers goes
-// through decodePaymentHeader, and the intake middleware rewrites each header
-// to the canonical base64 of its parsed JSON before any other middleware runs,
-// so every later reader, ours and the library's, sees the same bytes. A header
-// that does not decode is removed, and the paywall answers its ordinary 402.
+// It decodes a header the same way the paywall's own decoder does. Every
+// reader of these headers goes through decodePaymentHeader, and the intake
+// middleware rewrites each header to the canonical base64 of its parsed JSON
+// before any other middleware runs, so every later reader, ours and the
+// library's, sees the same bytes. A header that does not decode is removed,
+// and the paywall answers its ordinary 402.
 
 export const PAYMENT_HEADER_NAMES = Object.freeze(["payment-signature", "x-payment"]);
 
