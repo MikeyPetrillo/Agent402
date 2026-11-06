@@ -96,6 +96,11 @@ await check("a used authorization, as a code or in words, is its own class", () 
   for (const r of [NONCE_USED, FIAT_USED, "EIP3009: authorization is used or canceled", "Authorization already used", "nonce has already been used", "invalid_exact_evm_nonce_already_used"]) assert.equal(isUsedAuthorizationReason(r), true, r);
   for (const r of [SIGNATURE, BALANCE, EXPIRED, NO_VERDICT, "invalid_exact_evm_payload_signature", "nonce too low", "already known", ""]) assert.equal(isUsedAuthorizationReason(r), false, r);
 });
+await check("isListedPassOnRefusal: a used authorization is handed to no other settler, in any spelling", () => {
+  for (const r of ["nonce_already_used", "authorization_used", "invalid_exact_evm_nonce_already_used", "FiatTokenV2: authorization is used or canceled", "Authorization already used", "nonce has already been used"]) {
+    assert.equal(isListedPassOnRefusal(asCoreError(graceful(r)), RH), false, r);
+  }
+});
 await check("isListedPassOnRefusal: a no-verdict refusal with no transaction, on 4663 only", () => {
   assert.equal(isListedPassOnRefusal(asCoreError(graceful(NO_VERDICT)), RH), true);
   assert.equal(isListedPassOnRefusal(asCoreError(graceful(GAS)), RH), true, "the settler's gas is not the buyer's verdict");

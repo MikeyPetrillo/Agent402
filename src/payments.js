@@ -50,7 +50,7 @@ import { hasLastingEffect } from "./hangup-forgiveness.js";
 import { withSettleDemotion, isFundsRefusal, demotedList, settleAttemptOf } from "./settle-demotion.js";
 import { createRobinhoodOrder, withRobinhoodGasOrder, ownFirstAttemptOf, ownRefusedOf, facilitatorRetryOf, withOwnRefusalMemo } from "./robinhood-order.js";
 import { toolFailureMonitor, setDemotedReader } from "./tool-failure-monitor.js";
-import { isPaymentVerdictReason } from "./settle-verdict.js";
+import { isPaymentVerdictReason, isUsedAuthorizationReason } from "./settle-verdict.js";
 import { setPublicIndexBootFacilitator } from "./facilitator-public-index.js";
 import { isGatewayBatchedPayment } from "./gateway-wire.js";
 import { GatewayNanopaymentsClient, createGatewayPendingBook, gatewayAcceptFields, gatewayNanopaymentNetworks, gatewayNanopaymentsEnabled, gatewayPendingFile, installGatewayRouting, setGatewayOffer, startGatewayBalanceWatch, startGatewayPendingResolver, byTransferIdAnyCase, gatewayTransferId, GATEWAY_DOMAINS } from "./gateway-nanopayments.js";
@@ -3552,6 +3552,9 @@ export function isListedPassOnRefusal(err, network) {
   const reason = String(err.errorReason || "").trim();
   if (!reason) return false;
   if (isRetryableSettleRefusal(err, network)) return false;
+  // A used or canceled authorization goes to no other settler, whatever its
+  // spelling; the outage read finds the transfer on chain.
+  if (isUsedAuthorizationReason(reason)) return false;
   return !isPaymentVerdictReason(reason);
 }
 
