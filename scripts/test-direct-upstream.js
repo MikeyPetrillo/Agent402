@@ -268,6 +268,37 @@ direct.plan = (req, res, body) => sse(res, [
   ok(!text.includes(`"model":"${MAPPED}"`) && text.includes(`"model":"${MODEL}"`), "stream: frames name the buyer's model id");
   ok(gatewaySpend().length === 1 && gatewaySpend()[0].usd === DIRECT_MICRO / 1e6, "stream: metered once, at the direct cost");
 }
+// The charge in a frame of its own, before or after a usage frame that has no
+// cost: stripped from the buyer's stream and metered once, at that charge.
+for (const [label, order] of [["before", ["charge", "usage"]], ["after", ["usage", "charge"]]]) {
+  reset();
+  direct.plan = (req, res, body) => {
+    const frames = [{ id: "c1", object: "chat.completion.chunk", model: body.model, choices: [{ index: 0, delta: { role: "assistant", content: "hello" }, finish_reason: "stop" }] }];
+    for (const k of order) frames.push(k === "charge" ? { id: "c1", object: "chat.completion.chunk", model: body.model, choices: [], x_vendor: { charged_micro: DIRECT_MICRO } } : { id: "c1", object: "chat.completion.chunk", model: body.model, choices: [], usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 } });
+    sse(res, [...frames, "[DONE]"]);
+  };
+  const out = await base.handler({ model: MODEL, messages: msgs, max_tokens: 32, stream: true });
+  const res = fakeRes();
+  await out.__sse(res);
+  await flush();
+  const text = res.chunks.join("");
+  ok(text.includes("hello") && !text.includes("x_vendor") && !text.includes("charged_micro") && !/"cost"/.test(text), `stream, charge frame ${label} the usage frame: no billing field reaches the buyer`);
+  ok(gatewaySpend().length === 1 && gatewaySpend()[0].usd === DIRECT_MICRO / 1e6, `stream, charge frame ${label} the usage frame: metered once, at the direct charge (${JSON.stringify(gatewaySpend())})`);
+  ok(!D.directUpstreamReport().anomalies.stream_no_cost, `stream, charge frame ${label} the usage frame: not counted as a stream without a cost`);
+}
+{
+  reset();
+  direct.plan = (req, res, body) => sse(res, [
+    { id: "c1", object: "chat.completion.chunk", model: body.model, choices: [{ index: 0, delta: { content: "hello" }, finish_reason: "stop" }] },
+    { id: "c1", object: "chat.completion.chunk", model: body.model, choices: [], usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 } },
+    "[DONE]",
+  ]);
+  const out = await base.handler({ model: MODEL, messages: msgs, max_tokens: 32, stream: true });
+  const res = fakeRes();
+  await out.__sse(res);
+  await flush();
+  ok(D.directUpstreamReport().anomalies.stream_no_cost === 1 && !gatewaySpend().some((x) => typeof x.usd === "number" && x.usd > 0), "stream with no charge anywhere: the usage frame is still reported once, as a stream without a cost");
+}
 for (const [label, plan] of [
   ["503", (req, res) => json(res, 503, { error: { message: "no qualifying worker" } })],
   ["an error first frame", (req, res) => sse(res, [{ error: { message: "capacity", code: "capacity" } }])],

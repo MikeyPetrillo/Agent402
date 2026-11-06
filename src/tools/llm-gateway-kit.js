@@ -2483,6 +2483,21 @@ export function createSseUsageScrubber({ onUsage, vendorKeys = false, modelAs } 
   // Anthropic message_start carries message.usage. Every one of those is
   // scrubbed; the first (top-level or nested) usage object feeds telemetry.
   const usageSites = (obj) => [obj?.usage, obj?.response?.usage, obj?.message?.usage].filter((u) => u && typeof u === "object");
+  // vendorKeys: a charge can arrive in a frame of its own, before or after the
+  // usage frame. One seen first is carried to the usage frame; a usage frame
+  // with no cost is held until a later charge (or the end of the stream), so
+  // the call is metered once, at the upstream's own charge.
+  let carriedMicro = null, heldUsage = null, usageReported = false;
+  const report = (u, rawCost, obj) => {
+    usageReported = true;
+    try { onUsage?.(u, rawCost, obj); } catch { /* telemetry never breaks a stream */ }
+  };
+  const releaseHeld = (micro) => {
+    if (!heldUsage) return;
+    const { u, obj } = heldUsage;
+    heldUsage = null;
+    report(u, micro === null ? null : micro / 1e6, obj);
+  };
   const processLine = (raw) => {
     const line = rename && raw.includes('"model"') ? raw.replace(rename.re, rename.to) : raw;
     // SSE allows "data:" with OR without the space (the spec strips one
@@ -2498,15 +2513,23 @@ export function createSseUsageScrubber({ onUsage, vendorKeys = false, modelAs } 
     const hasVendor = vendorKeys && obj && typeof obj === "object" && Object.keys(obj).some((k) => /^x_/.test(k));
     const micro = hasVendor ? stripVendorExtensions(obj) : null;
     const sites = obj && typeof obj === "object" ? usageSites(obj) : [];
-    if (!sites.length) return hasVendor ? `data: ${JSON.stringify(obj)}` : line;
-    if (micro !== null && typeof sites[0].cost !== "number") sites[0].cost = micro / 1e6;
+    if (!sites.length) {
+      if (micro !== null) {
+        if (heldUsage) releaseHeld(micro);
+        else if (!usageReported && carriedMicro === null) carriedMicro = micro;
+      }
+      return hasVendor ? `data: ${JSON.stringify(obj)}` : line;
+    }
+    const charge = micro !== null ? micro : (vendorKeys && !usageReported ? carriedMicro : null);
+    if (charge !== null && typeof sites[0].cost !== "number") sites[0].cost = charge / 1e6;
     let had = hasVendor, reported = false;
     for (const u of sites) {
       if (BILLING_USAGE_FIELDS.some((k) => k in u)) had = true;
       const rawCost = stripBilling(u);
-      if (!reported && (rawCost !== null || typeof u.prompt_tokens === "number" || typeof u.input_tokens === "number")) {
+      if (!reported && !(vendorKeys && (usageReported || heldUsage)) && (rawCost !== null || typeof u.prompt_tokens === "number" || typeof u.input_tokens === "number")) {
         reported = true;
-        try { onUsage?.(u, rawCost, obj); } catch { /* telemetry never breaks a stream */ }
+        if (vendorKeys && rawCost === null) heldUsage = { u, obj };
+        else report(u, rawCost, obj);
       }
     }
     return had ? `data: ${JSON.stringify(obj)}` : line;
@@ -2523,8 +2546,13 @@ export function createSseUsageScrubber({ onUsage, vendorKeys = false, modelAs } 
     flush() {
       buf += decoder.decode(); // drain a trailing partial multibyte sequence
       const rest = buf; buf = "";
-      return rest ? processLine(rest) : "";
+      const out = rest ? processLine(rest) : "";
+      releaseHeld(null);
+      return out;
     },
+    /** End of a stream that did not reach flush (dropped mid-stream): a
+     *  usage frame still held is reported without a charge. */
+    finish() { releaseHeld(null); },
   };
 }
 
@@ -2874,6 +2902,7 @@ export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = 
       // cut rather than handed a silent end that reads like a finished answer.
       // Every wire that relays through here (chat, Messages, Responses) gets
       // the same frame.
+      scrub.finish();
       try { res.write(STREAM_DROPPED_FRAME); } catch { /* the buyer may be gone too */ }
     }
     if (!committed) throw bad("Upstream stream ended before producing any data frame (no tokens) - nothing was charged", 502);
