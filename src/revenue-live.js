@@ -281,6 +281,9 @@ export const EVM = {
 // offer (src/gated-rails.js), and every reader picks it up from there.
 // Arc and Ink started here and graduated into EVM.
 export const GATED_EVM = {};
+// NODE_ENV=test seam: one synthetic gated read-config (JSON map), so a suite can
+// rehearse an offer after every real rail has graduated. Never read in production.
+if (process.env.NODE_ENV === "test" && process.env.REVENUE_TEST_GATED_EVM) Object.assign(GATED_EVM, JSON.parse(process.env.REVENUE_TEST_GATED_EVM));
 /** Move a gated rail's read-config into EVM (once). */
 // When a read-config last became active in this process: a snapshot still
 // missing that rail a grace period later reads stale (revenueSnapshotFreshness).

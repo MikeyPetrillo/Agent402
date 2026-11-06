@@ -39,6 +39,10 @@ const store = { read: async () => (shared.body ? JSON.parse(JSON.stringify(share
 let held = false;
 const lease = async (fn) => { if (held) return { skipped: "leased", reason: "held" }; held = true; try { return await fn(); } finally { held = false; } };
 
+// Every real rail has graduated, so the offer below rehearses on a synthetic
+// gated read-config (the NODE_ENV=test seam in src/revenue-live.js).
+process.env.NODE_ENV = "test";
+process.env.REVENUE_TEST_GATED_EVM = JSON.stringify({ testgated: { caip2: "eip155:999001", label: "Testgated", asset: "USDC", span: 1000, token: "0x0000000000000000000000000000000000000001", rpcs: ["http://127.0.0.1:9"], explorer: (a) => a, tx: (h) => h } });
 const A = await import("../src/revenue-live.js?replica=a");
 const B = await import("../src/revenue-live.js?replica=b");
 EVM_OF = A.EVM;
