@@ -17,7 +17,8 @@ import { rpcHeaderReader } from "./block-clock.js";
 import { standingBand } from "./standing.js";
 import { join } from "node:path";
 import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
-import { RAILS, RAILS_AMP } from "./rails.js";
+import { RAILS, RAILS_AMP, GATED_RAILS } from "./rails.js";
+import { onGatedRailOffered } from "./gated-rails.js";
 import { REVENUE_RANGE_PRESETS, REVENUE_RANGE_PRESET_LABELS, windowLabel } from "./revenue-range.js";
 // Pure, main-guarded helpers shared with the daily scanners — one
 // classification rule everywhere: a transfer is external revenue only if the
@@ -250,6 +251,43 @@ export const EVM = {
     tx: (h) => `https://robinhoodchain.blockscout.com/tx/${h}`,
   },
 };
+
+// Read-config for gated rails (src/rails.js GATED_RAILS). Inert while the rail
+// is gated: it is not in EVM, so the live read, the revenue ledger, the
+// seller leaderboard and the in-flight cover never scan it and a boot costs
+// nothing. It joins EVM once the rail is in RAILS (graduated) or in the live
+// offer (src/gated-rails.js), and every reader picks it up from there.
+// Cost once active (Ink): each live refresh reads one balance and the
+// window's transfer logs in 9,000-block chunks (12 reads for its 100,000-block
+// window, about 28 hours at 1 s blocks), and each ledger tick reads the tail
+// since its cursor; with ALCHEMY_API_KEY those go to the keyed lane first.
+export const GATED_EVM = {
+  ink: {
+    // Ink (OP Stack L2, chain 57073), native Circle USDC. 1 s blocks
+    // (measured 2026-11-06). rpc-qnd caps getLogs at 10,000 blocks and
+    // rpc-gel at 1,000, so the scan reads 9,000-block chunks from rpc-qnd
+    // first. The treasury was never offered Ink before this block, so no
+    // scan reads below it.
+    caip2: "eip155:57073",
+    label: "Ink", asset: "USDC", span: 100000, chunkBlocks: 9000,
+    fromBlock: 60_400_000,
+    token: "0x2D270e6886d130D724215A266106e6832161EAEd",
+    // Alchemy first when the key is set (the network must be enabled on the
+    // Alchemy app; a not-enabled network falls through to the public RPCs).
+    rpcs: [
+      ...(process.env.ALCHEMY_API_KEY ? [`https://ink-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []),
+      "https://rpc-qnd.inkonchain.com", "https://rpc-gel.inkonchain.com",
+    ],
+    explorer: (a) => `https://explorer.inkonchain.com/address/${a}?tab=token_transfers`,
+    tx: (h) => `https://explorer.inkonchain.com/tx/${h}`,
+  },
+};
+/** Move a gated rail's read-config into EVM (once). */
+function activateGatedEvm(caip2) {
+  for (const [key, cfg] of Object.entries(GATED_EVM)) if (cfg.caip2 === caip2 && !EVM[key]) EVM[key] = cfg;
+}
+for (const r of RAILS) activateGatedEvm(r.caip2);
+onGatedRailOffered(activateGatedEvm);
 // Fallback matters: the card's per-tx decodes and the all-time ledger's
 // backfill share these endpoints, and the public mainnet-beta RPC 429s under
 // that contention - without a second lane the card loses its amount/external
@@ -1703,14 +1741,15 @@ async function refreshSnapshot({ walletAddress, solanaWallet }) {
     new Promise((resolve) => setTimeout(() => resolve({ rail: label, balance: null, recent: [], error: `timed out after ${Math.round(RAIL_DEADLINE_MS / 1000)} s` }), RAIL_DEADLINE_MS).unref?.()),
   ]);
   const evm = (name) => bounded(EVM[name]?.label || name, evmRail(name, walletAddress));
-  const [base, polygon, arbitrum, monad, celo, avalanche, sei, optimism, arc, robinhood, solana, stellar, algorand] = await Promise.all([
+  // A gated rail is read only once its config is active (GATED_EVM above).
+  const [base, polygon, arbitrum, monad, celo, avalanche, sei, optimism, arc, ink, robinhood, solana, stellar, algorand] = await Promise.all([
     evm("base"), evm("polygon"), evm("arbitrum"), evm("monad"), evm("celo"),
-    evm("avalanche"), evm("sei"), evm("optimism"), evm("arc"), evm("robinhood"),
+    evm("avalanche"), evm("sei"), evm("optimism"), evm("arc"), EVM.ink ? evm("ink") : null, evm("robinhood"),
     bounded("Solana", solanaRail(solanaWallet)),
     bounded("Stellar", stellarRail(stellarWallet)),
     bounded("Algorand", algorandRail(algorandWallet)),
   ]);
-  const rails = [base, solana, polygon, arbitrum, monad, celo, avalanche, sei, optimism, arc, stellar, algorand, robinhood].filter(Boolean);
+  const rails = [base, solana, polygon, arbitrum, monad, celo, avalanche, sei, optimism, arc, ink, stellar, algorand, robinhood].filter(Boolean);
   // Per-rail last-good balance carry-forward. The non-EVM reads (Solana,
   // Stellar, Algorand) hit public endpoints that throttle Railway's datacenter
   // IP and intermittently time out; a wallet balance barely moves between
@@ -2202,13 +2241,11 @@ export function revenuePage(baseUrl, snap) {
 }
 // RAILS import keeps this module honest if the rail set changes: a rail in
 // rails.js with no read-config here is a wiring bug the test below catches.
-// A gated rail (GATED_RAILS, Ink today) has no read-config until it moves into
-// RAILS: an EVM entry here is scanned by the revenue ledger and the seller
-// leaderboard on every boot, offered or not, so it joins at graduation, when
-// this check starts requiring it.
+// A gated rail's config waits in GATED_EVM (inert until it graduates or is
+// offered), so it counts as covered from there.
 export function railsCoveredByLiveView() {
-  const covered = new Set([...Object.values(EVM).map((c) => c.label), "Solana", "Stellar", "Algorand"]);
-  return RAILS.every((r) => covered.has(r.name));
+  const covered = new Set([...Object.values(EVM).map((c) => c.label), ...Object.values(GATED_EVM).map((c) => c.label), "Solana", "Stellar", "Algorand"]);
+  return [...RAILS, ...GATED_RAILS].every((r) => covered.has(r.name));
 }
 
 // Operator heap read (/__operator/heap.json `stores`).

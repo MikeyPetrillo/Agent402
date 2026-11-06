@@ -26,6 +26,8 @@
 export const NOMINAL_BLOCK_MS = Object.freeze({
   base: 2000, "base-sepolia": 2000, polygon: 2100, arbitrum: 250, robinhood: 150,
   monad: 300, celo: 1000, avalanche: 1140, sei: 450, optimism: 2000, arc: 500,
+  // Ink: 1 s blocks (10,000 blocks over 10,000 s, measured 2026-11-06).
+  ink: 1000,
 });
 
 export const DENIM_BLOCK_MS = 200;
