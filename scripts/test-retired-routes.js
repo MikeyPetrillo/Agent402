@@ -6,7 +6,9 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { getFreePort } from "./lib/free-port.js";
-import { RETIRED_TOOLS, RETIRED_PACKS, RETIRED_CONVERTERS_AT, retiredEntryFor, assertRetiredRegistryConsistent, retirementHeaders } from "../src/retired-tools.js";
+import { RETIRED_TOOLS, RETIRED_PACKS, RETIRED_CONVERTERS_AT, retiredEntryFor, retiredEntryForSlug, assertRetiredRegistryConsistent, retirementHeaders } from "../src/retired-tools.js";
+import { execFileSync } from "node:child_process";
+import { readFileSync as readTextSync } from "node:fs";
 import { loadSnapshot, envGatedSegments, segmentsOf, accountFor } from "./published-slugs.js";
 
 let pass = 0;
@@ -56,6 +58,38 @@ ok(retiredEntryFor("/api/skill/options-chain") === null, "a tool slug under /api
 ok(retiredEntryFor("/api/market-open") === null, "a pack slug under /api/ is not a retired tool");
 ok(retiredEntryFor("/api/nope-nope") === null && retiredEntryFor("/v1/options-chain") === null, "unknown and off-prefix paths resolve to nothing");
 
+// --- slug resolution (the MCP connector's catalog.call takes slugs) --------------
+ok(retiredEntryForSlug("workday-count")?.route === "/api/workday-count" && retiredEntryForSlug("workday-count")?.replacement === "business-days", "a retired tool slug resolves to its route and replacement");
+ok(retiredEntryForSlug("skill-a11y-audit")?.route === "/api/skill/a11y-audit" && retiredEntryForSlug("skill-a11y-audit")?.kind === "pack", "skill-<pack> resolves as a retired pack");
+ok(retiredEntryForSlug("color-palette")?.kind === "tool" && retiredEntryForSlug("skill-color-palette")?.kind === "pack", "a slug retired as both tool and pack reads by its form");
+ok(retiredEntryForSlug("business-days") === null && retiredEntryForSlug("skill-company-dossier") === null && retiredEntryForSlug("../x") === null && retiredEntryForSlug("") === null, "live, malformed and empty slugs resolve to nothing");
+
+// --- no surface we control advertises a retired route -----------------------------
+// Old catalog copies keep calling retired routes, so every listing we publish
+// (machine surfaces on the wire below, the docs trees and package manifests
+// here) must carry only live ones. A mention in the retirement registry, the
+// published-routes snapshot, a changelog or a test is history, not an offer.
+const RETIRED_ROUTE_PATTERNS = [
+  ...Object.keys(RETIRED_TOOLS).map((s) => [`/api/${s}`, new RegExp(`/api/${s}(?![a-z0-9-])`)]),
+  ...Object.keys(RETIRED_PACKS).map((s) => [`/api/skill/${s}`, new RegExp(`(?:/api/skill/|/skills/|/api/skill-packs/)${s}(?![a-z0-9-])|["'\`]skill-${s}["'\`]`)]),
+  ["/api/convert/<a>-to-<b>", /\/api\/convert[-/][a-z0-9]+(?:-[a-z0-9]+)*-to-[a-z0-9-]+/],
+];
+const advertisedRetired = (text) => RETIRED_ROUTE_PATTERNS.filter(([, re]) => re.test(text)).map(([name]) => name);
+ok(advertisedRetired('see "/api/workday-count" and /api/skill/savings-goal, slug "skill-a11y-audit", /api/convert/feet-to-meters').length === 4, "control: the scan finds planted retired tool, pack, pack-slug and converter routes");
+ok(advertisedRetired("/api/business-days /api/skill/company-dossier /api/unit-convert /api/color /api/workday-counts").length === 0, "control: live routes and longer slugs are not retired routes");
+{
+  const tracked = execFileSync("git", ["ls-files"], { cwd: new URL("..", import.meta.url), encoding: "utf8" }).split("\n").filter(Boolean);
+  const advertised = tracked.filter((f) => /^(wiki|docs|adapters|examples|client|mcp|openclaw|tollbooth|\.claude-plugin|\.codex-plugin|\.cursor-plugin)\/|^(README\.md|glama\.json|server\.json|llms-install\.md)$/.test(f))
+    .filter((f) => !/(^|\/)CHANGELOG\.md$|(^|\/)test[^/]*\.(m?js|py)$|\.(png|jpe?g|gif|ico|webp|woff2?|lock)$|package-lock\.json$/.test(f));
+  const found = [];
+  for (const f of advertised) {
+    let text; try { text = readTextSync(new URL(`../${f}`, import.meta.url), "utf8"); } catch { continue; }
+    for (const name of advertisedRetired(text)) found.push(`${f}: ${name}`);
+  }
+  ok(advertised.length >= 50, `the docs trees and manifests are read (${advertised.length} files)`);
+  ok(found.length === 0, `no doc, package or manifest advertises a retired route (found: ${found.join(", ") || "none"})`);
+}
+
 // --- the published-routes snapshot rule (scripts/published-slugs.js) --------------
 // Drive the accounting with planted cases first, so a clean run below means
 // something: a published route that is neither live nor retired is reported,
@@ -88,6 +122,33 @@ try {
   let up = false;
   for (let i = 0; i < 180 && !up; i++) { try { up = (await fetch(`${base}/health`)).ok; } catch { await new Promise((r) => setTimeout(r, 500)); } }
   ok(up, "server booted (the boot guard accepted the registry against the real catalog)");
+  // Every machine surface and listing page we serve names live routes only.
+  {
+    const found = [];
+    for (const p of ["/openapi.json", "/llms.txt", "/llms-full.txt", "/.well-known/x402", "/api/pricing", "/api/index", "/sitemap.xml", "/api/skill-packs.json", "/skills", "/tools", "/.well-known/agent.json", "/.well-known/glama.json", "/robots.txt"]) {
+      const r = await fetch(`${base}${p}`);
+      if (r.status !== 200) { found.push(`${p} answered ${r.status}`); continue; }
+      for (const name of advertisedRetired(await r.text())) found.push(`${p}: ${name}`);
+    }
+    const mcp = await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }) });
+    const mcpText = await mcp.text();
+    ok(mcp.status === 200 && /catalog\.call/.test(mcpText), `the MCP tool list is read (${mcp.status})`);
+    for (const name of advertisedRetired(mcpText)) found.push(`mcp tools/list: ${name}`);
+    let slugsRead = 0;
+    for (const q of ["workday count", "color contrast", "savings goal", "polymarket", "pyth price"]) {
+      const r = await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "catalog.search", arguments: { query: q } } }) });
+      const t = await r.text();
+      for (const name of advertisedRetired(t)) found.push(`mcp catalog.search "${q}": ${name}`);
+      const slugs = [...t.matchAll(/\\?"slug\\?":\s*\\?"([a-z0-9-]+)/g)].map((m) => m[1]);
+      slugsRead += slugs.length;
+      for (const slug of slugs) if (retiredEntryForSlug(slug)) found.push(`mcp catalog.search "${q}": slug ${slug}`);
+    }
+    ok(slugsRead >= 5, `catalog.search answers are read slug by slug (${slugsRead} slugs)`);
+    ok(found.length === 0, `no served surface or MCP listing advertises a retired route (found: ${found.join(", ") || "none"})`);
+    const mc = await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "catalog.call", arguments: { slug: "skill-checksum-suite", params: {} } } }) });
+    const mct = await mc.text();
+    ok(/Skill pack checksum-suite was retired on 2026-07-06/.test(mct) && /Use slug checksum instead/.test(mct), `catalog.call on a retired pack slug names the retirement and the replacement (got ${mct.slice(0, 140)})`);
+  }
   const get = await fetch(`${base}/api/options-chain`);
   const gb = await get.json();
   ok(get.status === 410 && gb.error === "gone" && gb.slug === "options-chain", `GET /api/options-chain is 410 gone (got ${get.status} ${JSON.stringify(gb).slice(0, 80)})`);

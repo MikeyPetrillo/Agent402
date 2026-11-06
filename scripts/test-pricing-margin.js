@@ -348,8 +348,8 @@ console.log("\n# tool_gone — retired-route telemetry");
   ok(got.length === 1 && got[0].event === "tool_gone" && got[0].properties.count === 2, "flush emits one tool_gone event per route with the hit count");
   ok(got[0].properties.route === "/api/convert-meters-to-feet" && got[0].properties.replacement === "POST /api/unit-convert",
     "event carries route + replacement");
-  ok(Object.keys(got[0].properties).filter((k) => !k.startsWith("$")).sort().join(",") === "count,replacement,route",
-    "properties are exactly {count, route, replacement} — nothing about the caller");
+  ok(Object.keys(got[0].properties).filter((k) => !k.startsWith("$")).sort().join(",") === "client,count,payment,refererHost,replacement,route,surface,uaFamily",
+    "properties are {count, route, replacement} plus the coarse source fields only (no address, wallet or full User-Agent)");
 
   // Integration: a real retired-route hit on a booted server fires the event.
   const PORT = 3179, B = `http://127.0.0.1:${PORT}`;
@@ -394,6 +394,28 @@ console.log("\n# tool_gone — retired-route telemetry");
     ok(routes.filter((r) => r === "/api/convert/kilograms-to-pounds").length === 1 && captured.find((e) => e.properties.route === "/api/convert/kilograms-to-pounds")?.properties.count === 1,
       "only the unservable (410) hit emits tool_gone (one rolled-up row, count 1)");
     ok(captured.every((e) => e.properties.replacement === "POST /api/unit-convert"), "every tool_gone names the replacement route");
+
+    // Source attribution on the wire: a retired-tool hit names its client
+    // coarsely (UA family, library hint, payment header family, Referer host,
+    // surface), and nothing finer.
+    const gone = await fetch(`${B}/api/workday-count`, { headers: { "User-Agent": "x402-fetch/0.6.1 (node)", Referer: "https://list.example.org/old/catalog?k=v", "X-PAYMENT": "eyJub3QiOiJyZWFsIn0" } });
+    ok(gone.status === 410, `a retired tool answers 410 (got ${gone.status})`);
+    // ...and a retired slug over the MCP connector is named as retired, with the
+    // replacement, and counted on the mcp surface.
+    const mcpCall = await fetch(`${B}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "User-Agent": "python-httpx/0.27" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "catalog.call", arguments: { slug: "workday-count", params: {} } } }) });
+    const mcpText = await mcpCall.text();
+    ok(/retired on 2026-08-25/.test(mcpText) && /business-days/.test(mcpText), `catalog.call on a retired slug names the retirement and the replacement (got ${mcpText.slice(0, 160)})`);
+    await sleep(1800);
+    const rows = serverLog.split("\n").filter((l) => l.includes("[posthog-test]"))
+      .map((l) => { try { return JSON.parse(l.slice(l.indexOf("{"))); } catch { return null; } })
+      .filter((e) => e && e.event === "tool_gone" && e.properties.route === "/api/workday-count");
+    const http = rows.find((e) => e.properties.surface === "http");
+    const mcp = rows.find((e) => e.properties.surface === "mcp");
+    ok(http && http.properties.uaFamily === "x402-fetch" && http.properties.client === "x402-fetch" && http.properties.payment === "x402" && http.properties.refererHost === "list.example.org",
+      `the HTTP hit carries its coarse source (got ${JSON.stringify(http?.properties || null)})`);
+    ok(mcp && mcp.properties.uaFamily === "python-httpx" && mcp.properties.payment === "none", `the MCP hit is counted on the mcp surface (got ${JSON.stringify(mcp?.properties || null)})`);
+    ok(!/127\.0\.0\.1|\/old\/catalog|k=v|0\.6\.1|eyJub3Qi/.test(JSON.stringify(rows)), "no address, Referer path or query, UA version or payment value in any row");
   } catch (e) {
     ok(false, `tool_gone integration leg threw: ${e.message}`);
   } finally {

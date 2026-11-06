@@ -134,6 +134,19 @@ export function retiredEntryFor(path) {
   return Object.hasOwn(RETIRED_TOOLS, slug) ? { kind: "tool", slug, ...RETIRED_TOOLS[slug] } : null;
 }
 
+/** The retired entry a catalog SLUG names (the MCP connector's catalog.call
+ *  takes slugs, not paths), or null: `skill-<pack>` reads as a pack, any other
+ *  slug as a tool. `route` is the path the HTTP 410 answers on, so a hit counts
+ *  against the same route either way. */
+export function retiredEntryForSlug(slug) {
+  const s = String(slug || "").toLowerCase();
+  if (!/^[a-z0-9-]{1,80}$/.test(s)) return null;
+  const pack = /^skill-(.+)$/.exec(s);
+  if (pack && Object.hasOwn(RETIRED_PACKS, pack[1])) return { kind: "pack", slug: pack[1], route: `/api/skill/${pack[1]}`, ...RETIRED_PACKS[pack[1]] };
+  if (Object.hasOwn(RETIRED_TOOLS, s)) return { kind: "tool", slug: s, route: `/api/${s}`, ...RETIRED_TOOLS[s] };
+  return null;
+}
+
 /** Boot guard. `liveSlugs` is the set of catalog slugs (packs as `skill-<slug>`). */
 export function assertRetiredRegistryConsistent(liveSlugs) {
   const live = liveSlugs instanceof Set ? liveSlugs : new Set(liveSlugs || []);

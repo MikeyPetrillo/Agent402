@@ -110,10 +110,12 @@ probe_once() {
   # output for FREE until 2026-07-25 because their handlers were
   # registered above the paywall middleware — a gap no probe noticed
   # for weeks. A servable request must 402; an unservable one must
-  # still get the free teaching 410, so both halves are asserted.
-  RC=$(curl -s --max-time 15 -o /dev/null -w "%{http_code}" -X POST "$PROD/api/convert/feet-to-meters" -H 'Content-Type: application/json' -d '{"value":10}')
+  # still get the free teaching 410, so both halves are asserted. Both name
+  # the probe in their User-Agent, so the retired-route telemetry (tool_gone)
+  # files the teaching-410 half as our own traffic, not a stale caller.
+  RC=$(curl -s -A "agent402-heartbeat" --max-time 15 -o /dev/null -w "%{http_code}" -X POST "$PROD/api/convert/feet-to-meters" -H 'Content-Type: application/json' -d '{"value":10}')
   [ "$RC" = "402" ] || FAILS="$FAILS retired-convert-paywall($RC)"
-  RG=$(curl -s --max-time 15 -o /dev/null -w "%{http_code}" -X POST "$PROD/api/convert/feet-to-meters" -H 'Content-Type: application/json' -d '{}')
+  RG=$(curl -s -A "agent402-heartbeat" --max-time 15 -o /dev/null -w "%{http_code}" -X POST "$PROD/api/convert/feet-to-meters" -H 'Content-Type: application/json' -d '{}')
   [ "$RG" = "410" ] || FAILS="$FAILS retired-convert-teaching($RG)"
   # Payment RAILS must stay in the offer. A rail silently dropping
   # out of the 402 accepts loses that chain's revenue with no error
