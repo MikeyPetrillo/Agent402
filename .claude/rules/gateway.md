@@ -69,7 +69,7 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   `price_bad_price`, `price_request_fee`, `price_no_endpoint`, `price_estimate`, `not_cheaper`,
   `measured_not_cheaper`). Env: `DIRECT_UPSTREAM_PRICE_REFRESH_MS` (default one hour),
   `DIRECT_UPSTREAM_PRICE_TIMEOUT_MS` (default 15 s), `DIRECT_UPSTREAM_MIN_SAVING_PCT` (0 to below
-  100; unset reads the private table's optional `vendor.direct.minSaving` fraction; neither means
+  100; unset reads the private table's `vendor.direct.minSaving` fraction (a required key: a table without it reads `partial`); neither means
   strictly cheaper; the value is policy and is never written in the repo), `DIRECT_UPSTREAM_MEASURE_WINDOW`
   (default 200), `DIRECT_UPSTREAM_MEASURE_MIN` (default 30), `DIRECT_UPSTREAM_OR_MODELS_URL` (test
   stubs). `/api/gateway-status` `directUpstream` is a word only: `off`, `starting`, `ok`,
