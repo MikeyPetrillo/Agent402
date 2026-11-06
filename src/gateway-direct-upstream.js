@@ -282,5 +282,5 @@ export function withDirectUpstreamDate(html, env = process.env, today = new Date
 /** The privacy page's sentence while the upstream is configured, else "". */
 export function directUpstreamPrivacyText(env = process.env) {
   if (!directUpstreamConfigured(env)) return "";
-  return " Some calls to open-weight models are served by a direct inference provider instead of OpenRouter. Zero data retention is requested on every such call, so it is served only by workers that keep no prompts or outputs, and the provider's gateway stores no prompts or outputs, only usage metadata such as token counts and cost.";
+  return " Some calls to listed models are served by a direct inference provider instead of OpenRouter. Zero data retention is requested on every such call, so it is served only by workers that keep no prompts or outputs, and the provider's gateway stores no prompts or outputs, only usage metadata such as token counts and cost.";
 }

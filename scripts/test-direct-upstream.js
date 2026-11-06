@@ -380,7 +380,7 @@ const stop = async (b) => { b.child.kill("SIGTERM"); await new Promise((r) => { 
     const j = await r.json().catch(() => ({}));
     ok(r.status === 200 && j.configured === true && j.upstreams?.direct && /no-store/.test(r.headers.get("cache-control") || ""), "with the token: the report, never cached");
     const html = await (await realFetch(`${b.url}/privacy`)).text();
-    ok(html.includes("direct inference provider") && html.includes("Zero data retention is requested on every such call"), "/privacy carries the sentence while configured");
+    ok(html.includes("direct inference provider") && html.includes("Zero data retention is requested on every such call") && html.includes("calls to listed models") && !/open-weight/i.test(html), "/privacy carries the sentence while configured, naming listed models (the switch takes any id)");
     ok(!b.log.join("").includes("direct-test-key"), "the boot log never prints the key");
   } finally { await stop(b); }
 }
