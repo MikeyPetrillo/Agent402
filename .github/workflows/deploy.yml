@@ -1495,6 +1495,8 @@ jobs:
           # The grant's record on Postgres keeps the claim time, so a paid call booked while a slow free call ran reads as a return (REAL redis + postgres, in-process).
           t node scripts/test-first-call-allowance-record-pg.js
           t node scripts/test-external-spend-guard-pg.js
+          # The Robinhood order's since on REAL postgres: a fresh process keeps the robinhoodSettler clock, one that finds the facilitator first resets it.
+          t node scripts/test-robinhood-settler-pg.js
           # The per-payer unsettled ceiling holds across replicas: one reservation script on REAL redis (needs this lane's Redis).
           t node scripts/test-external-spend-guard-redis.js
           # The Base unproven lane's per-seller daily cap is one window across two replicas on one Redis: racing reservations grant exactly the cap.
@@ -1919,6 +1921,8 @@ jobs:
           t node scripts/test-own-relayer.js
           # Robinhood settle order follows the listed facilitator's relayer gas: dry -> our relayer first, funded -> facilitator first, unread never moves it (offline)
           t node scripts/test-robinhood-order.js
+          # robinhoodSettler: relayer once our relayer has settled first past ROBINHOOD_RELAYER_FIRST_ALERT_HOURS, ok shorter or after the facilitator is first again, off disabled; the stored since survives a fresh process; heartbeat and Worker page on relayer, close on ok / off (offline)
+          t node scripts/test-robinhood-settler.js
           # Robinhood outage: an ambiguous facilitator failure is read on chain (used with our transfer -> served once; unused -> our relayer; read failure -> 402 and the authorization booked owed if it lands; other networks and no relayer key unchanged) (stub chain - offline)
           t node scripts/test-rh-outage.js
           # Arc rail via Circle's facilitator: Arc-only /supported, reduced errors (no key or upstream body anywhere), cross-chain refusal, fail-closed boot (offline stubs)

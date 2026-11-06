@@ -49,6 +49,10 @@ ok(["sales", "refunds", "checkoutFinals", "subscriptions", "decide", "outbound"]
 ok(["ok", "new", "burst", "unknown"].includes(pubBody?.outboundDestinations?.status) && Object.keys(pubBody.outboundDestinations).join(",") === "status", `outboundDestinations publishes its word only (${JSON.stringify(pubBody?.outboundDestinations)})`);
 ok(typeof opBody?.outboundDestinations?.windowHours === "number" && typeof opBody?.outboundDestinations?.burstOver === "number" && !JSON.stringify(opBody.outboundDestinations).match(/0x[0-9a-f]{40}/i), `the operator view of outboundDestinations carries the window and the threshold and no address (${JSON.stringify(opBody?.outboundDestinations)})`);
 
+// --- the Robinhood settler word: one word publicly; off without an order (no relayer key here) ---
+ok(pubBody?.robinhoodSettler?.status === "off" && Object.keys(pubBody.robinhoodSettler).join(",") === "status", `robinhoodSettler publishes its word only (${JSON.stringify(pubBody?.robinhoodSettler)})`);
+ok(opBody?.robinhoodSettler?.status === "off", `the operator view reads the same word without an order (${JSON.stringify(opBody?.robinhoodSettler)})`);
+
 // --- tool and upstream failure words: one word each publicly, rows for the operator ---
 for (const k of ["toolFailures", "upstreamHealth"]) {
   ok(["ok", "degraded", "failing"].includes(pubBody?.[k]?.status) && Object.keys(pubBody[k]).join(",") === "status", `${k} publishes its word only (${JSON.stringify(pubBody?.[k])})`);

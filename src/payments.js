@@ -48,7 +48,7 @@ import { shared } from "./shared-limits.js";
 import { spendsBeforeSettlement, isLongRunningSlug } from "./composite-spend-guard.js";
 import { hasLastingEffect } from "./hangup-forgiveness.js";
 import { withSettleDemotion, isFundsRefusal, demotedList, settleAttemptOf } from "./settle-demotion.js";
-import { createRobinhoodOrder, withRobinhoodGasOrder, ownFirstAttemptOf, ownRefusedOf, facilitatorRetryOf, withOwnRefusalMemo } from "./robinhood-order.js";
+import { createRobinhoodOrder, stateDbOrderStore, withRobinhoodGasOrder, ownFirstAttemptOf, ownRefusedOf, facilitatorRetryOf, withOwnRefusalMemo } from "./robinhood-order.js";
 import { toolFailureMonitor, setDemotedReader } from "./tool-failure-monitor.js";
 import { isPaymentVerdictReason, isUsedAuthorizationReason } from "./settle-verdict.js";
 import { setPublicIndexBootFacilitator } from "./facilitator-public-index.js";
@@ -1252,7 +1252,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
         // While the listed facilitator's settlement signer reads dry, our
         // relayer settles first and the facilitator is not asked; a reading
         // that shows it funded again puts it first (src/robinhood-order.js).
-        robinhoodOrder = createRobinhoodOrder({ host: hostOfUrl(robinhoodPrimaryUrl) });
+        robinhoodOrder = createRobinhoodOrder({ host: hostOfUrl(robinhoodPrimaryUrl), store: await stateDbOrderStore(ROBINHOOD_CAIP2) });
         withRobinhoodGasOrder(robinhoodPrimary, { order: robinhoodOrder, relayer: client });
         startRobinhoodOrderRefresh(robinhoodOrder);
       } catch (e) {
@@ -2903,6 +2903,13 @@ let robinhoodOrder = null;
 const hostOfUrl = (url) => { try { return new URL(String(url)).host; } catch { return ""; } };
 /** The current Robinhood settle order (operator detail), or null. */
 export function robinhoodOrderView() { return robinhoodOrder ? robinhoodOrder.view() : null; }
+/**
+ * The robinhoodSettler word (src/robinhood-order.js): off without an order
+ * (Robinhood not offered, or no relayer key), else ok / relayer.
+ */
+export function robinhoodSettlerStatus({ full = false } = {}) {
+  return robinhoodOrder ? robinhoodOrder.status({ full }) : { status: "off" };
+}
 // The container running the leased gas check updates the order as it reads
 // (onReadings); every container also re-reads the merged readings (other
 // containers' snapshots included) on a short timer, so the order follows the
