@@ -1324,6 +1324,8 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
         // relayer settles first and the facilitator is not asked; a reading
         // that shows it funded again puts it first (src/robinhood-order.js).
         robinhoodOrder = createRobinhoodOrder({ host: hostOfUrl(robinhoodPrimaryUrl), store: await stateDbOrderStore(ROBINHOOD_CAIP2) });
+        // The stored clock is read before the first status read (bounded: the store is advisory).
+        await Promise.race([robinhoodOrder.synced(), new Promise((r) => setTimeout(r, 3000).unref?.())]);
         withRobinhoodGasOrder(robinhoodPrimary, { order: robinhoodOrder, relayer: client });
         startRobinhoodOrderRefresh(robinhoodOrder);
       } catch (e) {

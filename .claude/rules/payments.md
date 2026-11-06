@@ -180,8 +180,12 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   (`since`) is a state-database document (`robinhood-order:eip155:4663`), so a deploy or another
   replica keeps the clock; `robinhoodSettler` on `/api/gateway-status` reads `relayer` once our
   relayer has been first without a break for longer than `ROBINHOOD_RELAYER_FIRST_ALERT_HOURS`
-  (default 6; 0 or `off` reads `off`), `ok` otherwise, `off` without an order. The heartbeat and
-  the status Worker page on `relayer` under one issue that ok or off closes; the operator view
+  (default 6; 0 or `off` reads `off`), `ok` otherwise, `off` without an order, and `unknown`
+  before a fresh process's first update unless the stored clock (read at creation) already reads
+  `relayer`. A facilitator-first decision taken on a reading stores `resetAt`; a relayer-first
+  start before the latest reset restarts at it, so a lagging replica cannot revive an old clock.
+  The heartbeat and the status Worker page on `relayer` under one issue that ok or off closes
+  (`unknown` does neither); the operator view
   has the clock (`scripts/test-robinhood-settler.js`, `scripts/test-robinhood-settler-pg.js`).
   With it, an ambiguous listed-facilitator failure on 4663 (5xx, timeout, no verdict, no
   transaction) is read on chain (`src/robinhood-outage.js`): the authorization used with our

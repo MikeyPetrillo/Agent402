@@ -115,5 +115,8 @@ example: [`0xae8e3e40…f826`](https://robinhoodchain.blockscout.com/tx/0xae8e3e
   relayer settles first. Once it has been first for longer than
   `ROBINHOOD_RELAYER_FIRST_ALERT_HOURS` (default 6; `0` or `off` disables),
   `robinhoodSettler` reads `relayer` on `/api/gateway-status` (`ok`
-  otherwise, `off` without your own relayer). The clock is kept in the
-  state database, so a deploy does not restart it.
+  otherwise, `off` without your own relayer, `unknown` before a fresh
+  process has read the gas readings, unless the stored clock already reads
+  `relayer`). The clock is kept in the state database, so a deploy does not
+  restart it, and a reading that shows the facilitator funded restarts it
+  for every replica.

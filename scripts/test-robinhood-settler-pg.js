@@ -37,6 +37,38 @@ function proc(at, readingDry) {
   return childJson(r.stdout);
 }
 
+/** Two orders (two replicas) on their own store handles to the same row, one lagging. */
+function twoReplicas(t0) {
+  const code = `
+    const O = await import(${JSON.stringify(MOD)});
+    const { closeStateDb } = await import(${JSON.stringify(DB)});
+    const H = 3600000, t0 = ${t0}, HOST = "facilitator.example";
+    const row = (at, runway) => [{ network: "eip155:4663", facilitator: HOST, runway, status: runway < 50 ? "low" : "ok", balanceEth: 0.001, at }];
+    const ca = { t: t0 }, cb = { t: t0 };
+    const a = O.createRobinhoodOrder({ host: HOST, now: () => ca.t, log: () => {}, store: await O.stateDbOrderStore() });
+    const b = O.createRobinhoodOrder({ host: HOST, now: () => cb.t, log: () => {}, store: await O.stateDbOrderStore() });
+    a.update(row(ca.t, 3)); await a.synced();
+    cb.t = t0 + 60000; b.update(row(cb.t, 3)); await b.synced();
+    cb.t = t0 + H; b.update(row(cb.t, 2000)); await b.synced();
+    const store = await O.stateDbOrderStore();
+    const afterReset = await store.load();
+    ca.t = t0 + H + 30000; a.update(row(ca.t, 3)); await a.synced();
+    const afterLag = await store.load();
+    cb.t = t0 + 2 * H; b.update(row(cb.t, 3)); await b.synced();
+    cb.t = t0 + 6.5 * H; b.update(row(cb.t, 3)); await b.synced();
+    const word = b.status({ env: {}, at: cb.t }).status;
+    // A fresh process (a deploy) reads the stored clock before its first update.
+    const fresh = O.createRobinhoodOrder({ host: HOST, now: () => t0 + 12 * H, log: () => {}, store: await O.stateDbOrderStore() });
+    await fresh.synced();
+    const freshWord = fresh.status({ env: {}, at: t0 + 12 * H }).status;
+    await closeStateDb();
+    console.log(JSON.stringify({ afterReset, afterLag, word, freshWord }));
+  `;
+  const r = spawnSync(process.execPath, ["--input-type=module", "-e", code], { env: { ...process.env, ROBINHOOD_RELAYER_FIRST_ALERT_HOURS: "" }, encoding: "utf8", timeout: 60_000 });
+  if (r.status !== 0) throw new Error(`child exited ${r.status}: ${r.stderr.slice(-600)}`);
+  return childJson(r.stdout);
+}
+
 try {
   const a = proc(T0, true);
   ok(a.hasStore, "the state database gives the order a store");
@@ -49,6 +81,13 @@ try {
   ok(d.word === "ok" && d.row?.since === T0 + 9 * H, `dry again: a fresh clock, not the old start (${d.word}, ${JSON.stringify(d.row)})`);
   const e = proc(T0 + 15 * H + 60_000, true);
   ok(e.word === "relayer", `six hours on from the fresh start: relayer (${e.word})`);
+  const { __dropStateSchema } = await import("../src/state-db.js"); await __dropStateSchema();
+  const T1 = Date.now() - 24 * H;
+  const r = twoReplicas(T1);
+  ok(r.afterReset?.ownFirst === false && r.afterReset?.resetAt === T1 + H, `two replicas: the facilitator-first write records the reset (${JSON.stringify(r.afterReset)})`);
+  ok(r.afterLag?.ownFirst === true && r.afterLag?.since >= T1 + H, `two replicas: the lagging relayer-first replica writes no start before the reset (${JSON.stringify(r.afterLag)})`);
+  ok(r.word === "ok", `two replicas: the peer that turns relayer first later does not adopt the old start (${r.word})`);
+  ok(r.freshWord === "relayer", `a fresh process reads the stored clock before its first update (${r.freshWord})`);
 } catch (e) {
   fail++; console.error(`FAIL - ${e.message}`);
 } finally {
