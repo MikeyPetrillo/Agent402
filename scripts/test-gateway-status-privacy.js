@@ -52,6 +52,7 @@ ok(typeof opBody?.outboundDestinations?.windowHours === "number" && typeof opBod
 // --- the Robinhood settler word: one word publicly; off without an order (no relayer key here) ---
 ok(pubBody?.robinhoodSettler?.status === "off" && Object.keys(pubBody.robinhoodSettler).join(",") === "status", `robinhoodSettler publishes its word only (${JSON.stringify(pubBody?.robinhoodSettler)})`);
 ok(opBody?.robinhoodSettler?.status === "off", `the operator view reads the same word without an order (${JSON.stringify(opBody?.robinhoodSettler)})`);
+ok(pubBody?.directUpstream?.status === "off" && Object.keys(pubBody.directUpstream).join(",") === "status" && opBody?.directUpstream?.status === "off" && Object.keys(opBody.directUpstream).join(",") === "status", `directUpstream publishes its word only, on both views (${JSON.stringify(pubBody?.directUpstream)})`);
 
 // --- tool and upstream failure words: one word each publicly, rows for the operator ---
 for (const k of ["toolFailures", "upstreamHealth"]) {

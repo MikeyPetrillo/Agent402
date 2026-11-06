@@ -1,5 +1,5 @@
 {
-  "_readme": "FORMAT EXAMPLE ONLY. Every number here is a placeholder, not a real or suggested rate. Copy it outside the repo, replace every value with your own providers' list prices, and load it with UPSTREAM_COSTS_FILE=/path/to/file or UPSTREAM_COSTS_JSON (raw JSON or base64). Units: models in USD per 1M tokens (longest prefix wins; optional tiers list the long-context prices a model bills from aboveTokens prompt tokens on, ascending, each at or above the row and the tier before it), speech in USD per character, embeddings in USD per 1M input tokens, sttPerMinute in USD per audio minute, everything else in USD per call or unit. scripts/test-upstream-costs.js keeps this file in step with the loader's required keys. The named model and media rows past the prefixes are shaped so the gateway suites (scripts/test-llm-messages.js, test-llm-responses.js, test-paytime-bounds.js, test-messages-sdk-alias.js) reach their cap, clamp and video branches on this file; their numbers are placeholders like the rest.",
+  "_readme": "FORMAT EXAMPLE ONLY. Every number here is a placeholder, not a real or suggested rate. Copy it outside the repo, replace every value with your own providers' list prices, and load it with UPSTREAM_COSTS_FILE=/path/to/file or UPSTREAM_COSTS_JSON (raw JSON or base64). Units: models in USD per 1M tokens (longest prefix wins; optional tiers list the long-context prices a model bills from aboveTokens prompt tokens on, ascending, each at or above the row and the tier before it), speech in USD per character, embeddings in USD per 1M input tokens, sttPerMinute in USD per audio minute, vendor.direct.minSaving (optional) a fraction from 0 to below 1, everything else in USD per call or unit. scripts/test-upstream-costs.js keeps this file in step with the loader's required keys. The named model and media rows past the prefixes are shaped so the gateway suites (scripts/test-llm-messages.js, test-llm-responses.js, test-paytime-bounds.js, test-messages-sdk-alias.js) reach their cap, clamp and video branches on this file; their numbers are placeholders like the rest.",
   "models": [
     ["openai/", { "prompt": 1, "completion": 2 }],
     ["openai/gpt-6.1-terra", { "prompt": 1, "completion": 2 }],
@@ -23,6 +23,7 @@
     "x": { "postRead": 1, "userRead": 1 },
     "decisions": { "luna": 1, "decisionOne": 1,
       "jev": 1, "maxShare": 1 },
-    "cdp": { "sqlQuery": 1 }
+    "cdp": { "sqlQuery": 1 },
+    "direct": { "minSaving": 0.5 }
   }
 }

@@ -19,7 +19,10 @@
 //     meter: { markup },
 //     vendor: { exa: { search, instant, answer, content }, x: { postRead, userRead },
 //               decisions: { luna, decisionOne, jev, maxShare },      luna, decisionOne, jev: USD per 1M input tokens; maxShare: largest share of the price a call may cost
-//               cdp: { sqlQuery } } }                                 USD per query sent to the SQL query service
+//               cdp: { sqlQuery },                                    USD per query sent to the SQL query service
+//               direct: { minSaving? } } }                            optional: the fraction (0 to below 1) a call must
+//                                                                     cost less on the direct upstream than on OpenRouter
+//                                                                     (src/gateway-direct-pricebook.js; unset reads 0)
 //
 // docs/example-upstream-costs.json shows the format with placeholder numbers.
 //
