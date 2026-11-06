@@ -11,6 +11,7 @@
 //
 // Offline: per-process claim and replay stores, no Horizon, no facilitator.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { createHash } from "node:crypto";
 
 const sdk = await import("@stellar/stellar-sdk");
 const claims = await import("../src/settlement-claims.js");
@@ -86,7 +87,7 @@ const nextNonce = () => String(++seq);
   ok(/^s2:[0-9a-f]{64}:[0-9a-f]{64}$/.test(String(ka)), `a Stellar payment keys on its signed entry (${String(ka).slice(0, 8)})`);
   ok(ka.split(":")[1] === kb.split(":")[1], "a re-encoded copy keys to the same replay identity");
   ok(ka.split(":")[1] !== kc.split(":")[1] && ka.split(":")[1] !== kd.split(":")[1], "another nonce, or the same nonce from another signer, is another identity");
-  ok(ka.split(":")[2] === paymentReplayKey(fakeReq({ "payment-signature": header(a) })).slice(2), "the key carries the earlier build's raw-header key as its legacy part");
+  ok(ka.split(":")[2] === createHash("sha256").update(header(a)).digest("hex") && ka.split(":")[2] === paymentReplayKey(fakeReq({ "payment-signature": header(a) })).split(":")[2], "the key carries the earlier build's raw-header key as its legacy part");
   const evm = Buffer.from(JSON.stringify({ network: "eip155:8453", payload: { authorization: { nonce: "0xabc", from: "0x" + "1".repeat(40) } } })).toString("base64");
   ok((await paymentReplayKeyAsync(fakeReq({ "x-payment": evm }))) === paymentReplayKey(fakeReq({ "x-payment": evm })), "an EVM payment keys exactly as before");
   const guard = createReplayGuard();

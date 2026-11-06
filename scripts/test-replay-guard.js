@@ -355,6 +355,66 @@ function memoryRedis() {
   } finally { __setTestClient(null); }
 }
 
+// ---- A6. A payment with no parseable nonce (a signed Solana transaction, an
+// Algorand group) keys on its signed payload, not on the echoed offer around
+// it: the copies the v1-accept translation folds (a surplus price alias, the
+// Algorand full-hash network id), and a reordered or padded offer block, are
+// one payment to the guard, read in the order the server reads them (intake
+// canonicalization, then the key, then the translation).
+{
+  const { canonicalizePaymentHeaders, decodePaymentHeader, encodePaymentHeader } = await import("../src/payment-header.js");
+  const { translateV1Accepts } = await import("../src/x402-v1-accepts.js");
+  const { paymentReplayKeyAsync } = await import("../src/replay-guard.js");
+  const { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2 } = await import("../src/avm-network.js");
+  const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64");
+  const keyAtIntake = async (header) => { const h = { "payment-signature": header }; canonicalizePaymentHeaders({ headers: h }); return paymentReplayKeyAsync(fakeReq(h)); };
+  const translated = (header) => { const t = translateV1Accepts(decodePaymentHeader(header)); return t ? encodePaymentHeader(t.payload) : header; };
+  const svmAccepted = { scheme: "exact", network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", amount: "1000", asset: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", payTo: "So11111111111111111111111111111111111111112", maxTimeoutSeconds: 60, extra: { feePayer: "FeePayer1111111111111111111111111111111111" } };
+  const svmPayload = { transaction: Buffer.from("one signed transaction").toString("base64") };
+  const svm = b64({ x402Version: 2, accepted: svmAccepted, payload: svmPayload });
+  const svmAlias = b64({ x402Version: 2, accepted: { ...svmAccepted, maxAmountRequired: "1000" }, payload: svmPayload });
+  const svmReordered = b64({ payload: svmPayload, accepted: Object.fromEntries(Object.entries(svmAccepted).reverse()), x402Version: 2 });
+  const avmAccepted = { scheme: "exact", network: ALGORAND_MAINNET_CAIP2, amount: "1000", asset: "31566704", payTo: "ALGOPAYTO", maxTimeoutSeconds: 60 };
+  const avmPayload = { paymentGroup: ["c2lnbmVkIGdyb3Vw", "ZmVlIHR4bg=="], paymentIndex: 0 };
+  const avm = b64({ x402Version: 2, accepted: avmAccepted, payload: avmPayload });
+  const avmLegacyNet = b64({ x402Version: 2, accepted: { ...avmAccepted, network: ALGORAND_MAINNET_LEGACY_CAIP2 }, payload: avmPayload });
+  ok(translated(svmAlias) === translated(svm) && translated(avmLegacyNet) === translated(avm), "nonce-less: the translation folds each copy to the bytes of the original (one payment at the paywall)");
+  // The identity the guard claims under (a key's last part is the name an
+  // earlier build used, the header's own hash, which differs per copy).
+  const idOf = (k) => String(k).split(":").slice(0, 2).join(":");
+  const kSvm = await keyAtIntake(svm), kAvm = await keyAtIntake(avm);
+  ok(idOf(await keyAtIntake(svmAlias)) === idOf(kSvm), "nonce-less: a surplus price alias copy of one Solana payment keys as the original");
+  ok(idOf(await keyAtIntake(avmLegacyNet)) === idOf(kAvm), "nonce-less: an Algorand payment re-sent under the full-hash network id keys as the original");
+  ok(idOf(await keyAtIntake(svmReordered)) === idOf(kSvm), "nonce-less: a reordered copy of the offer block keys as the original");
+  ok(idOf(kSvm) !== idOf(kAvm) && idOf(await keyAtIntake(b64({ x402Version: 2, accepted: svmAccepted, payload: { transaction: Buffer.from("another signed transaction").toString("base64") } }))) !== idOf(kSvm),
+    "nonce-less: two signed payloads are two payments");
+  ok(String(kSvm).startsWith("p2:") && paymentReplayKey(fakeReq({ "x-payment": Buffer.from("not json at all").toString("base64") })).startsWith("c:"), "nonce-less: a decoded payload keys as p2:, bytes that do not decode keep the raw identity");
+  {
+    const g = createReplayGuard();
+    ok(await g.begin(kSvm) === "ok" && await g.begin(await keyAtIntake(svmAlias)) === "inflight" && await g.begin(await keyAtIntake(svmReordered)) === "inflight",
+      "nonce-less: while one copy runs, the alias and reordered copies are refused in flight (one handler run per signed payment)");
+    await g.settle(kSvm);
+    ok(await g.begin(await keyAtIntake(svmAlias)) === "consumed", "nonce-less: after it settles, the alias copy is refused consumed");
+  }
+  // The deploy window: an earlier build keyed this payment on its header's
+  // own hash ("c:"); its claim and its consumed mark are honored, and this
+  // build writes its own there, tagged.
+  const mem = memoryRedis();
+  __setTestClient(mem);
+  try {
+    const g = createReplayGuard();
+    const rawOf = (k) => "c:" + String(k).split(":")[2];
+    const ka = await keyAtIntake(svmAlias);
+    await mem.set("replay:f:" + rawOf(ka), String(Date.now()), { NX: true, EX: 120 });
+    ok(await g.begin(ka) === "inflight", "nonce-less deploy window: a copy an earlier build holds in flight is refused");
+    const kb = await keyAtIntake(avm);
+    ok(await g.begin(kb) === "ok" && Boolean(await mem.get("replay:f:" + rawOf(kb))), "nonce-less deploy window: this build's claim is visible to an earlier build");
+    ok(await g.begin(await keyAtIntake(avmLegacyNet)) === "inflight", "nonce-less redis path: the full-hash copy is refused while the original runs");
+    await g.settle(kb);
+    ok(Boolean(await mem.get("replay:c:" + rawOf(kb))) && await g.begin(await keyAtIntake(avmLegacyNet)) === "consumed", "nonce-less redis path: the consumed mark covers both copies and an earlier build's name");
+  } finally { __setTestClient(null); }
+}
+
 // ---- B. HTTP harness: the real guard code path in an Express app -------------
 // Replicates server.js's wrapping of the paywall: begin → 409 on duplicate →
 // settle/release on finish. The stub "paywall" stands in for x402mw.

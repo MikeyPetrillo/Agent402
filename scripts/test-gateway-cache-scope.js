@@ -183,6 +183,27 @@ try {
   ok((await call({ "x-test-tempo": alice.address })).status === 200 && (await call({ "x-test-tempo": mallory.address })).status === 402 && (await call({ "x-test-tempo": "" })).status === 402,
     "reader: a verified Tempo sender reads its own entry; another sender, or none verified, does not");
   ok((await call({})).status === 402, "reader: an unpaid request gets the paywall");
+  // The reported markers, each exactly as sent, alone and together, while the
+  // payer's entry for this body is stored: every one reaches the paywall with
+  // no cached body and no X-Cache header.
+  {
+    const unsigned = b64({ x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453", asset: USDC_BASE, payTo: PAY_TO, extra: { name: "USD Coin", version: "2" } }, payload: { authorization: { from: alice.address, to: PAY_TO, value: "2000", validAfter: String(now() - 60), validBefore: String(now() + 300), nonce: `0x${randomBytes(32).toString("hex")}` } } });
+    const junkSig = b64({ ...unb64(unsigned), payload: { ...unb64(unsigned).payload, signature: `0x${randomBytes(65).toString("hex")}` } });
+    const markers = [
+      ["X-Pow-Solution: x", { "x-pow-solution": "x" }],
+      ["an empty Bearer a402_", { authorization: "Bearer a402_" }],
+      ["an unsigned payment header naming the payer", { "payment-signature": unsigned }],
+      ["the same header on X-PAYMENT", { "x-payment": unsigned }],
+      ["a payment header with a garbage signature", { "payment-signature": junkSig }],
+      ["bytes that do not decode", { "payment-signature": "garbage" }],
+      ["all of them at once", { "x-pow-solution": "x", authorization: "Bearer a402_", "payment-signature": junkSig, "x-payment": unsigned }],
+    ];
+    for (const [label, headers] of markers) {
+      const r = await call(headers);
+      ok(r.status === 402 && r.cache === null && r.body?.paywall === true && !r.body?.data, `reader: ${label} is not served the cached paid answer (402, no body)`);
+    }
+    ok((await call({ "payment-signature": await signedHeader(alice) })).cache === "hit", "reader: control, the payer's own fresh payment still reads the entry the markers were refused");
+  }
   // Direct reads of the proof.
   ok((await provenX402Signer(await signedHeader(alice), { payTo: PAY_TO })) === alice.address.toLowerCase() && (await provenX402Signer("not base64 json", { payTo: PAY_TO })) === null && (await provenX402Signer(await signedHeader(alice), { payTo: "" })) === null,
     "proof: recovers the signer of a well-formed authorization, null for junk or with no payee configured");
