@@ -20,9 +20,10 @@
 //     vendor: { exa: { search, instant, answer, content }, x: { postRead, userRead },
 //               decisions: { luna, decisionOne, jev, maxShare },      luna, decisionOne, jev: USD per 1M input tokens; maxShare: largest share of the price a call may cost
 //               cdp: { sqlQuery },                                    USD per query sent to the SQL query service
-//               direct: { minSaving? } } }                            optional: the fraction (0 to below 1) a call must
-//                                                                     cost less on the direct upstream than on OpenRouter
-//                                                                     (src/gateway-direct-pricebook.js; unset reads 0)
+//               direct: { minSaving? } } }                            optional: the price-guard margin, a fraction from 0
+//                                                                     to below 1, that the direct pricebook's per-call
+//                                                                     comparison applies (src/gateway-direct-pricebook.js;
+//                                                                     unset reads 0)
 //
 // docs/example-upstream-costs.json shows the format with placeholder numbers.
 //
@@ -59,9 +60,9 @@ const REQUIRED = [
   // SQL_QUERY_BUDGET per call), which the margin test prices against the
   // tool's list price.
   ["vendor", "cdp", "sqlQuery"],
-  // The share the direct chat upstream must undercut OpenRouter by, a fraction
-  // from 0 to below 1 (src/gateway-direct-pricebook.js minSavingFraction),
-  // read on the serving path whenever the direct upstream is configured.
+  // The direct chat upstream's price-guard margin, a fraction from 0 to below 1
+  // (src/gateway-direct-pricebook.js minSavingFraction), read on the serving
+  // path whenever the direct upstream is configured.
   ["vendor", "direct", "minSaving"],
 ];
 const NONEMPTY = ["speech", "embeddings", "openai", "sttPerMinute", "media"];

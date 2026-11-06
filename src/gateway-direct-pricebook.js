@@ -336,13 +336,13 @@ export function directPriceDecision(orId, { inputTokens, outputTokens, maxPrice 
   const cap = maxPrice && typeof maxPrice === "object" ? maxPrice : null;
   const routable = cap ? e.endpoints.filter((x) => !(x.prompt > Number(cap.prompt) + 1e-9) && !(x.completion > Number(cap.completion) + 1e-9)) : e.endpoints;
   if (!routable.length) return { go: false, skip: "price_no_endpoint" };
-  if (!listedCheaper(e.direct, routable, inputTokens, outputTokens)) return { go: false, skip: "not_cheaper" };
+  if (!listedCheaper(e.direct, routable, inputTokens, outputTokens)) return { go: false, skip: "price_guard" };
   if (measured(orId).scales) {
     const sc = scaledRows(orId, e.direct, routable);
     if (!listedCheaper(sc.direct, sc.endpoints, inputTokens, outputTokens)) {
       // The probe share keeps direct sampled while the measure holds it off.
       if (rng() * 100 < probePct()) return { go: true, probe: true };
-      return { go: false, skip: "measured_not_cheaper" };
+      return { go: false, skip: "measured_guard" };
     }
   }
   return { go: true };
