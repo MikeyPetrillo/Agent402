@@ -184,7 +184,9 @@ const HEADER = Buffer.from(JSON.stringify({ x402Version: 2, accepts: [REAL_ACCEP
   const q = quoteFromAccepts([v1]);
   ok(q && q.price === 0.025, `a v1 accept prices from maxAmountRequired (got ${q && q.price})`);
   const both = quoteFromAccepts([{ ...v1, amount: "10000" }]);
-  ok(both && both.price === 0.01, "amount wins when an accept carries both fields");
+  ok(!both || both.price == null, `an accept whose amount and maxAmountRequired disagree has no price (got ${both && both.price}); v1 signs maxAmountRequired, so the smaller figure must never stand as the quote`);
+  const agree = quoteFromAccepts([{ ...v1, amount: "25000" }]);
+  ok(agree && agree.price === 0.025, "both fields with the same value price normally");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

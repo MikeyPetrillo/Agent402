@@ -140,7 +140,10 @@ export function quoteFromAccepts(accepts) {
     : isUsdc(preferred) ? USDC_DECIMALS
       : null;
   // x402 v1 names the amount `maxAmountRequired`; v2 renamed it `amount`.
-  const atomic = preferred?.amount ?? preferred?.maxAmountRequired;
+  // An accept carrying both fields with different values has no single price;
+  // it is read as unpriced rather than at its smaller figure.
+  const bothDiffer = preferred?.amount != null && preferred?.maxAmountRequired != null && String(preferred.amount) !== String(preferred.maxAmountRequired);
+  const atomic = bothDiffer ? null : (preferred?.amount ?? preferred?.maxAmountRequired);
   if (decimals != null && atomic != null) {
     const n = Number(atomic);
     // A negative or non-finite amount is corrupt, not free.

@@ -3,6 +3,13 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 const ENTRIES = [
   {
     date: "2026-11-06",
+    title: "Router buyer price binding",
+    items: [
+      "Router: the router's buyer signs exactly the price it checked against its caps, on every challenge version, and refuses a seller accept whose price fields disagree; a live quote with disagreeing fields reads as unpriced.",
+    ],
+  },
+  {
+    date: "2026-11-06",
     title: "Settler alarm, direct upstream switch, facilitator map",
     items: [
       "Payments: MPP subscription activation signs with its own 25 s validity window, so a timed-out activation cannot land after its answer.",
