@@ -64,8 +64,19 @@ const seller = (accepts, { paid = "ok" } = {}) => async (_url, init) => {
 const evm = await getUpstreamBuyer();
 const realSign = evm.client.createPaymentPayload.bind(evm.client);
 let signs = 0;
-evm.client.createPaymentPayload = async (...a) => { signs++; return realSign(...a); };
-const reset = () => { signs = 0; paidRequests = 0; bareRequests = 0; lastPayload = null; __resetSellerRefusalsForTest(); };
+// The clock just before and just after the signing call: the scheme stamps
+// validBefore = its own now + the accept's maxTimeoutSeconds inside that call,
+// so a bound on validBefore is read against this window, never against a
+// clock read taken before the seller's 402 (slow under load).
+let signWindow = null;
+evm.client.createPaymentPayload = async (...a) => {
+  signs++;
+  const before = Math.floor(Date.now() / 1000);
+  const out = await realSign(...a);
+  signWindow = { before, after: Math.floor(Date.now() / 1000) };
+  return out;
+};
+const reset = () => { signs = 0; signWindow = null; paidRequests = 0; bareRequests = 0; lastPayload = null; __resetSellerRefusalsForTest(); };
 const buy = (chain, accepts, extra = {}, sellerOpts = {}) => {
   globalThis.fetch = seller(accepts, sellerOpts);
   return payX402(`https://${chain}-seller.example/x`, { maxAtomic: 500000n, method: "POST", body: {}, chain, ...extra }).then((r) => ({ r }), (e) => ({ e }));
@@ -82,13 +93,14 @@ process.env.SOR_EVM_CHAINS = "polygon,celo,arbitrum,arc,robinhood";
 // --- a Polygon seller is bought; the signed amount is the quote ---------------
 reset();
 {
-  const t0 = Math.floor(Date.now() / 1000);
   const p = await buy("polygon", [acceptOn("polygon", { amount: "2500" })]);
   const auth = lastPayload?.payload?.authorization;
   ok(!p.e && p.r?.result?.answer === 42 && signs === 1 && paidRequests === 1, `polygon listed: signed once and settled (${p.e ? p.e.message : "ok"})`);
   ok(auth?.value === "2500" && p.r?.quote?.atomic === "2500" && p.r?.quote?.network === "eip155:137", `polygon: the signed value equals the quote (${auth?.value} / ${p.r?.quote?.atomic}) on ${p.r?.quote?.network}`);
   const vb = Number(auth?.validBefore);
-  ok(Number.isFinite(vb) && vb <= t0 + 32 && lastPayload?.accepted?.maxTimeoutSeconds === 300, `polygon: validBefore is capped at the refusal window (+${vb - t0}s) and the echoed accept keeps the seller's 300`);
+  const win = buyer.refusalWindowSeconds();
+  ok(signWindow && Number.isFinite(vb) && vb >= signWindow.before + win && vb <= signWindow.after + win && lastPayload?.accepted?.maxTimeoutSeconds === 300,
+    `polygon: validBefore is the signing time plus the ${win} s refusal window (+${signWindow ? vb - signWindow.before : "?"}s from the signing call, ${signWindow ? signWindow.after - signWindow.before : "?"}s inside it) and the echoed accept keeps the seller's 300`);
 }
 
 // --- the signed-amount assert runs off Base too --------------------------------
