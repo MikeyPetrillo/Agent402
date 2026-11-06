@@ -14,6 +14,11 @@ Router:
 
 ### 2026-11-06 (settler alarm, direct upstream switch, facilitator map)
 Payments:
+- A payment whose payload declares an x402 version other than the one this
+  server offers is answered with the 402 offer instead of being matched.
+- The Tempo buyer pays only challenges whose method details it recognizes.
+- MPP subscription renewal reconciliation reads the renewal amount in base
+  units and finds a renewal that landed after a timed-out send.
 - MPP subscription activation signs with its own 25 s validity window, so a
   timed-out activation cannot land after its answer.
 Operations:
@@ -30,8 +35,16 @@ Gateway:
   serves listed models on the chat wire with zero data retention
   requested on every call, and falls back to the usual route on any failure;
   while it is configured, the privacy page names it under third parties.
+Operations:
+- The repo's paid buy scripts price offers from a known asset table, sign
+  only the amount that passed their cap, and refuse a target outside this
+  service unless told otherwise.
 Packages:
 - viem is 2.57.16.
+- agent402-client 0.8.23, agent402-mcp 0.13.29 and agent402-openclaw 0.5.9
+  price an offer by the field its challenge version signs, check the signed
+  amount before sending, and openclaw removes its per-call cap only with an
+  explicit acknowledgment.
 
 ### 2026-11-05 (Robinhood facilitator order, public-index disclosure, job buys)
 Payments:
