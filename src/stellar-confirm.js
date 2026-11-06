@@ -29,6 +29,8 @@
 // Being wrong in the other direction (missing a real payment) costs us the sale
 // and is already the status quo, so it is the safe way to fail.
 
+import { base64BytesOf } from "./base64-bytes.js";
+
 const DEFAULT_HORIZON = "https://horizon.stellar.org";
 
 // USDC on Stellar pubnet is the classic asset USDC issued by this account
@@ -133,6 +135,14 @@ function creditedResult(transaction, credited, fallbackAmount) {
 
 const STELLAR_DECIMALS = 7n;
 const MAX_ENVELOPE_CHARS = 32_768;
+// A buyer's envelope is capped on the bytes it decodes to (src/base64-bytes.js),
+// as the XDR reader decodes it, so characters the decoder skips cannot push
+// one signed envelope past the cap.
+const MAX_ENVELOPE_BYTES = 24_576;
+function envelopeBytesOf(paymentPayload) {
+  const bytes = base64BytesOf(paymentPayload?.payload?.transaction);
+  return bytes && bytes.length <= MAX_ENVELOPE_BYTES ? bytes : null;
+}
 const TX_HASH = /^[0-9a-f]{64}$/;
 
 /** The one invokeHostFunction operation of an envelope, or null. A fee bump
@@ -178,8 +188,8 @@ function transferCallOf(sdk, op) {
  */
 export async function stellarSignedPaymentOf(paymentPayload, paymentRequirements) {
   try {
-    const envXdr = paymentPayload?.payload?.transaction;
-    if (typeof envXdr !== "string" || !envXdr || envXdr.length > MAX_ENVELOPE_CHARS) return null;
+    const envBytes = envelopeBytesOf(paymentPayload);
+    if (!envBytes) return null;
     const asset = String(paymentRequirements?.asset || "");
     const payTo = String(paymentRequirements?.payTo || "");
     if (!/^C[A-Z2-7]{55}$/.test(asset) || !/^G[A-Z2-7]{55}$/.test(payTo)) return null;
@@ -187,7 +197,7 @@ export async function stellarSignedPaymentOf(paymentPayload, paymentRequirements
     const price = BigInt(String(paymentRequirements.amount));
     if (price <= 0n) return null;
     const sdk = await import("@stellar/stellar-sdk");
-    const op = soleInvokeOp(sdk.xdr.TransactionEnvelope.fromXDR(envXdr, "base64"));
+    const op = soleInvokeOp(sdk.xdr.TransactionEnvelope.fromXDR(envBytes, "raw"));
     if (!op) return null;
     const call = transferCallOf(sdk, op);
     if (!call || call.contract !== asset || call.to !== payTo || call.amount < price) return null;
@@ -216,10 +226,10 @@ export async function stellarSignedPaymentOf(paymentPayload, paymentRequirements
  */
 export async function stellarAuthorizationsOf(paymentPayload) {
   try {
-    const envXdr = paymentPayload?.payload?.transaction;
-    if (typeof envXdr !== "string" || !envXdr || envXdr.length > MAX_ENVELOPE_CHARS) return null;
+    const envBytes = envelopeBytesOf(paymentPayload);
+    if (!envBytes) return null;
     const sdk = await import("@stellar/stellar-sdk");
-    const op = soleInvokeOp(sdk.xdr.TransactionEnvelope.fromXDR(envXdr, "base64"));
+    const op = soleInvokeOp(sdk.xdr.TransactionEnvelope.fromXDR(envBytes, "raw"));
     if (!op) return null;
     const call = transferCallOf(sdk, op);
     if (!call) return null;

@@ -50,11 +50,12 @@
  */
 import { createHash } from "node:crypto";
 import algosdk from "algosdk";
-import { getBase64Encoder, getTransactionDecoder } from "@solana/kit";
+import { getTransactionDecoder } from "@solana/kit";
 import { paymentHeaderOf } from "./payer.js";
 import { getSharedRedisClient, sharedLimitEnabled } from "./shared-limit.js";
 import { decodePaymentHeader } from "./payment-header.js";
 import { stellarAuthorizationsOf } from "./stellar-confirm.js";
+import { base64BytesOf } from "./base64-bytes.js";
 
 // The claim's lifetime in Redis without a renewal. A claim is renewed every
 // INFLIGHT_RENEW_MS while its call is open (the slow routes run for minutes),
@@ -81,8 +82,10 @@ const REDIS_PREFIX = "replay:";
  * lowercased, any other spelling is kept as signed. A payment whose nonce we
  * can't parse keys on the transaction the chain consumes (chainTxIdentityOf):
  * "t2:<identity>:<legacy>", <legacy> the raw-credential hash an earlier build
- * keyed the same header on (honored as for "n2:"). A payload with no
- * transaction we can decode keys on its signed payload ("p2:", same layout).
+ * keyed the same header on (honored as for "n2:"). A transaction field that is
+ * present but not decoded keys on its decoded bytes, under "t2:" too. A
+ * payload with no transaction field keys on its signed payload ("p2:", same
+ * layout).
  * Bytes that do not decode to a payload key on the raw credential ("c:").
  *
  * A nonce key reads "n2:<identity>:<legacy>": <legacy> is the key an earlier
@@ -117,8 +120,8 @@ export function paymentReplayKey(req) {
     const legacy = createHash("sha256").update(cred).digest("hex");
     const chainId = chainTxIdentityOf(p);
     if (chainId) return `t2:${createHash("sha256").update(chainId).digest("hex")}:${legacy}`;
-    // No transaction we can decode (the facilitator refuses such a payload
-    // at verify): the signed payload as a whole, sorted and depth-bounded.
+    // No transaction field (the facilitator refuses such a payload at
+    // verify): the signed payload as a whole, sorted and depth-bounded.
     if (p?.payload && typeof p.payload === "object") {
       const id = createHash("sha256").update(`payload\n${canonicalJson(p.payload)}`).digest("hex");
       return `p2:${id}:${legacy}`;
@@ -139,23 +142,25 @@ function canonicalJson(v, depth = 0) {
   return JSON.stringify(v) ?? "null";
 }
 
-// The largest encoded transaction read. A Solana wire transaction is at most
+// The largest decoded transaction read. A Solana wire transaction is at most
 // 4096 bytes (a v1 message; a v0 one 1232); a signed Algorand transaction in
-// an x402 group is far smaller. Anything longer is not decoded.
-const MAX_TX_BASE64_CHARS = 6000;
+// an x402 group is far smaller. A longer one is not decoded. The cap is on the
+// decoded bytes (src/base64-bytes.js), so characters a decoder skips cannot
+// push a transaction past it.
+const MAX_TX_BYTES = 4500;
 // An Algorand group holds at most 16 transactions.
 const MAX_AVM_GROUP = 16;
 const solanaTxDecoder = getTransactionDecoder();
-const base64Bytes = getBase64Encoder();
 
 /**
  * What the chain consumes for a nonce-less payment, as a string, or null when
- * the payload is not one we can decode. Only the fields the reference
- * facilitators read are read, so a field they ignore cannot change it. The
- * chain family alone is in the identity, not its spelling: a Solana message
- * names its recent blockhash and an Algorand transaction its genesis hash, so
- * the bytes already bind the network, and a network alias cannot split one
- * payment into two.
+ * the payload carries no transaction field the facilitators read. Only the
+ * fields the reference facilitators read are read, so a field they ignore
+ * cannot change it. The chain family alone is in the identity, not its
+ * spelling: a Solana message names its recent blockhash and an Algorand
+ * transaction its genesis hash, so the bytes already bind the network, and a
+ * network alias cannot split one payment into two. Every encoded field is
+ * read as the bytes it decodes to (base64BytesOf), never as its text.
  *
  * Solana (@x402/svm exact): `payload.transaction`, the base64 wire
  * transaction. The facilitator's fee payer is account 0, so signature slot 0
@@ -173,6 +178,16 @@ const base64Bytes = getBase64Encoder();
  * the chain commits atomically, so pointing paymentIndex at another member
  * does not change it; an ungrouped one keys on its transaction id. Both are
  * computed from the transaction's fields, not from its encoding or signature.
+ *
+ * A transaction field that is present but does not decode, or decodes past
+ * MAX_TX_BYTES, keys on its decoded bytes (txBytesIdentity), never on the
+ * payload around it, so fields beside it cannot fork it. Such a transaction is
+ * keyed rather than refused here: the facilitator's verify, which runs before
+ * the handler, refuses a transaction it cannot decode or that is larger than
+ * any valid one, so it never runs a handler either way, and a key that one
+ * spelling of it cannot leave keeps its retries to one claim. Stellar keys
+ * here the same way, on its envelope's bytes; paymentReplayKeyAsync replaces
+ * that with the signed authorization entries when the envelope decodes.
  */
 function chainTxIdentityOf(p) {
   const network = p?.accepted?.network || p?.network || p?.payload?.network;
@@ -180,37 +195,48 @@ function chainTxIdentityOf(p) {
   const payload = p?.payload;
   if (!payload || typeof payload !== "object") return null;
   if (network.startsWith("solana")) {
-    const tx = payload.transaction;
-    if (typeof tx !== "string" || !tx || tx.length > MAX_TX_BASE64_CHARS) return null;
-    try {
-      const decoded = solanaTxDecoder.decode(base64Bytes.encode(tx));
-      const msg = decoded?.messageBytes;
-      if (!msg || !msg.length) return null;
-      return `solana\n${createHash("sha256").update(Uint8Array.from(msg)).digest("hex")}`;
-    } catch {
-      return null;
+    const bytes = base64BytesOf(payload.transaction);
+    if (!bytes) return null;
+    if (bytes.length <= MAX_TX_BYTES) {
+      try {
+        const msg = solanaTxDecoder.decode(Uint8Array.from(bytes))?.messageBytes;
+        if (msg && msg.length) return `solana\n${createHash("sha256").update(Uint8Array.from(msg)).digest("hex")}`;
+      } catch { /* keyed on its bytes below */ }
     }
+    return txBytesIdentity("solana", bytes);
   }
   if (network.startsWith("algorand")) {
     const group = payload.paymentGroup;
     const idx = payload.paymentIndex;
     if (!Array.isArray(group) || group.length < 1 || group.length > MAX_AVM_GROUP) return null;
     if (!Number.isInteger(idx) || idx < 0 || idx >= group.length) return null;
-    const enc = group[idx];
-    if (typeof enc !== "string" || !enc || enc.length > MAX_TX_BASE64_CHARS) return null;
-    try {
-      const bytes = new Uint8Array(Buffer.from(enc, "base64"));
-      let txn;
-      try { txn = algosdk.decodeSignedTransaction(bytes).txn; } catch { txn = algosdk.decodeUnsignedTransaction(bytes); }
-      if (!txn) return null;
-      const g = txn.group;
-      if (g && g.length && g.some((b) => b !== 0)) return `algorand\ngroup\n${Buffer.from(g).toString("hex")}`;
-      return `algorand\ntxn\n${txn.txID()}`;
-    } catch {
-      return null;
+    const bytes = base64BytesOf(group[idx]);
+    if (!bytes) return null;
+    if (bytes.length <= MAX_TX_BYTES) {
+      try {
+        const raw = new Uint8Array(bytes);
+        let txn;
+        try { txn = algosdk.decodeSignedTransaction(raw).txn; } catch { txn = algosdk.decodeUnsignedTransaction(raw); }
+        if (txn) {
+          const g = txn.group;
+          if (g && g.length && g.some((b) => b !== 0)) return `algorand\ngroup\n${Buffer.from(g).toString("hex")}`;
+          return `algorand\ntxn\n${txn.txID()}`;
+        }
+      } catch { /* keyed on its bytes below */ }
     }
+    return txBytesIdentity(`algorand\n${idx}`, bytes);
+  }
+  if (network.startsWith("stellar")) {
+    const bytes = base64BytesOf(payload.transaction);
+    return bytes ? txBytesIdentity("stellar", bytes) : null;
   }
   return null;
+}
+
+// A transaction field that is not decoded, keyed on its family (with, for an
+// Algorand group, the index read) and the bytes it decodes to.
+function txBytesIdentity(scope, bytes) {
+  return `${scope}\nbytes\n${createHash("sha256").update(bytes).digest("hex")}`;
 }
 
 /**
@@ -225,7 +251,7 @@ function chainTxIdentityOf(p) {
  */
 export async function paymentReplayKeyAsync(req) {
   const key = paymentReplayKey(req);
-  if (!key || !(key.startsWith("c:") || key.startsWith("p2:"))) return key;
+  if (!key || !(key.startsWith("c:") || key.startsWith("p2:") || key.startsWith("t2:"))) return key;
   // The raw-credential hash an earlier build keyed this header on.
   const raw = key.startsWith("c:") ? key.slice(2) : key.split(":")[2];
   try {
