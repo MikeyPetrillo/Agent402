@@ -339,6 +339,32 @@ export function createReplayGuard({ ttlMs = SETTLED_HOLD_MS, maxEntries = 50_000
       inFlight.add(lk);
       return "ok";
     },
+    /**
+     * Read-only twin of begin(): what this guard holds for `key`, claiming
+     * nothing. Returns "consumed", "inflight", "unavailable" (a configured
+     * shared store did not answer) or null (nothing held). Read by a gate that
+     * runs before begin() and must not serve a credential begin() would
+     * refuse (src/gateway-cache-scope.js); every non-null answer means "held".
+     */
+    async held(key, now = Date.now()) {
+      if (!key) return null;
+      const lk = localKeyOf(key);
+      if (isConsumedLocal(lk, now)) return "consumed";
+      if (inFlight.has(lk)) return "inflight";
+      let c = null;
+      try { c = await getSharedRedisClient(); } catch { return sharedLimitEnabled() ? "unavailable" : null; }
+      if (!c) return sharedLimitEnabled() ? "unavailable" : null;
+      try {
+        const { primary, legacy } = namesOf(key);
+        if (await c.get(REDIS_PREFIX + "c:" + primary)) return "consumed";
+        if (legacy && isLegacyEntry(await c.get(REDIS_PREFIX + "c:" + legacy))) return "consumed";
+        if (await c.get(REDIS_PREFIX + "f:" + primary)) return "inflight";
+        if (legacy && isLegacyEntry(await c.get(REDIS_PREFIX + "f:" + legacy))) return "inflight";
+        return null;
+      } catch {
+        return "unavailable";
+      }
+    },
     /** Mark the nonce consumed: call only when the gated call was granted
      *  (200). `validBeforeMs` (paymentValidBeforeMs) holds the mark until the
      *  authorization itself expires when that is later than ttlMs. Pass it

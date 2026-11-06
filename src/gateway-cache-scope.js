@@ -16,18 +16,24 @@
 //   writer (on the final 200, after settlement, in the route binder's finish
 //   hook): the rail's VERIFIED payer. A prepaid credits key (its id), a Tempo
 //   sender the gate proved (req.mppTempoSender), or the EVM x402 signer the
-//   facilitator verified before settling (payerFromRequest). A rail with no
-//   proven payer (a non-EVM x402 payment, a card) stores nothing, and a call
-//   served without settling (a trial, a first-call allowance grant) stores
-//   nothing.
+//   facilitator verified before settling (payerFromRequest), and that signer
+//   only when the reader's own proof (below) named the same payer on this
+//   same request: an entry no later request could read is never stored. A
+//   rail with no proven payer (a non-EVM x402 payment, a card, an x402 v1 or
+//   Permit2 payment, a contract wallet's signature) stores nothing, and a
+//   call served without settling (a trial, a first-call allowance grant)
+//   stores nothing.
 //
 //   reader (pre-paywall, before anything is verified): the same scope, proved
 //   on the request itself. A credits key or a Tempo sender is proved by its
 //   gate, which runs earlier. An x402 payment is proved here: it must be an
 //   x402 v2 EIP-3009 authorization to this server's receiving wallet, still
 //   inside its validity window, whose signature recovers to its own `from`
-//   under the token domain its accept names. Anything else reads no scope, and
-//   the request goes on to the paywall and is charged as any other.
+//   under the token domain its accept names, and whose replay key the replay
+//   guard holds neither in flight nor consumed (a settled authorization is
+//   public on chain, so its bytes prove nothing once used). Anything else
+//   reads no scope, and the request goes on to the paywall and is charged as
+//   any other.
 //
 // The repeat stays free for the buyer who paid; it is no longer anyone else's.
 import { createHash } from "node:crypto";
@@ -69,10 +75,18 @@ export function writerCacheScope(req, res, env = process.env) {
   if (req.creditsSettled === true) return creditsScope(req.creditsKeyId);
   if (req.tempoSettled === true || req.mppTempoCredential === true) return req.tempoSettled === true ? tempoScope(req.mppTempoSender) : null;
   // identityPayerOf: the EVM signer the facilitator verified (null in
-  // FREE_MODE, where nothing is verified).
+  // FREE_MODE, where nothing is verified). Stored only under the scope the
+  // reader proved on this request (provenScopeOf), so the writer and the
+  // reader share one predicate.
   const from = identityPayerOf(req, env);
-  return from ? `evm:${from}` : null;
+  if (!from) return null;
+  const scope = `evm:${String(from).toLowerCase()}`;
+  return provenScopeOf(req) === scope ? scope : null;
 }
+
+// The EVM scope the reader proved on a request, kept for the writer.
+const PROVEN_SCOPE = Symbol("gatewayCacheProvenScope");
+const provenScopeOf = (req) => (req && typeof req === "object" ? req[PROVEN_SCOPE] || null : null);
 
 /** The EVM signer an x402 v2 exact authorization to `payTo` proves, or null.
  *  Never throws. */
@@ -110,17 +124,30 @@ export async function provenX402Signer(headerValue, { payTo, nowSec = Math.floor
 }
 
 /** The scope a pre-paywall request proves, or null. `payTo` is the EVM
- *  receiving wallet the gateway routes settle to. */
-export async function readerCacheScope(req, { payTo, nowSec } = {}) {
+ *  receiving wallet the gateway routes settle to. `paymentHeld(req)` answers
+ *  whether the replay guard already holds this request's payment (in flight
+ *  or consumed); it is required for an x402 proof, and a held payment, a
+ *  throw or a missing reader proves nothing. */
+export async function readerCacheScope(req, { payTo, nowSec, paymentHeld } = {}) {
   if (!req) return null;
   // The credits and Tempo gates ran first and set these only on acceptance
   // (and stripped any payment header riding alongside).
   if (req.creditsSettled === true) return creditsScope(req.creditsKeyId);
   if (req.mppTempoCredential === true) return tempoScope(req.mppTempoSender);
   const header = paymentHeaderOf(req);
-  if (!header) return null;
+  if (!header || typeof paymentHeld !== "function") return null;
   const signer = await provenX402Signer(header, { payTo, nowSec });
-  return signer ? `evm:${signer}` : null;
+  if (!signer) return null;
+  const scope = `evm:${signer}`;
+  // Proved for the writer before the held check: the request that settles
+  // this payment is the one the guard holds next.
+  if (typeof req === "object") req[PROVEN_SCOPE] = scope;
+  try {
+    if (await paymentHeld(req)) return null;
+  } catch {
+    return null;
+  }
+  return scope;
 }
 
 /** The pre-paywall cache read, mounted by src/server.js after the credits,
@@ -128,8 +155,10 @@ export async function readerCacheScope(req, { payTo, nowSec } = {}) {
  *    keyOf(req)  the payer-neutral cache key of the body, or null (throws on
  *                an invalid body: the request then goes on unanswered here)
  *    get(key)    the stored answer under a scoped key, or null
- *    payTo       the EVM receiving wallet an x402 proof must pay */
-export function gatewayCacheGate({ carriesPaymentAttempt, keyOf, get, payTo }) {
+ *    payTo       the EVM receiving wallet an x402 proof must pay
+ *    paymentHeld(req)  true when the replay guard holds this request's
+ *                payment in flight or consumed (claims nothing) */
+export function gatewayCacheGate({ carriesPaymentAttempt, keyOf, get, payTo, paymentHeld }) {
   return async (req, res, next) => {
     if (req.method !== "POST" || !carriesPaymentAttempt(req)) return next();
     try {
@@ -137,7 +166,7 @@ export function gatewayCacheGate({ carriesPaymentAttempt, keyOf, get, payTo }) {
       // Scoped to the payer this request proves: an entry is read only by the
       // payer who paid for it. No proven payer, no read: the request goes on
       // to the paywall like any other.
-      if (key) key = scopedCacheKey(key, await readerCacheScope(req, { payTo }));
+      if (key) key = scopedCacheKey(key, await readerCacheScope(req, { payTo, paymentHeld }));
       if (key) {
         // The local store first, then the cache every replica shares.
         const hit = await get(key);

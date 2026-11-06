@@ -10552,10 +10552,17 @@ if (FREE_MODE) {
   //                  a resend usually WANTS a fresh sample)
   //   /v1/embeddings — default-ON (deterministic output; `cache: false` opts out)
   // Invalid bodies fall through so the normal path produces the real 402/400.
+  // An x402 authorization the replay guard already holds (in flight or
+  // consumed) proves no payer here: read with the guard's own key and store,
+  // claiming nothing; the guard below then answers it as it answers any other.
   app.use(gatewayCacheGate({
     carriesPaymentAttempt,
     payTo: WALLET_ADDRESS,
     get: promptCacheGetShared,
+    paymentHeld: async (req) => {
+      const key = await paymentReplayKeyAsync(req);
+      return !key || (await replayGuard.held(key)) !== null;
+    },
     keyOf: (req) => {
       if (req.path === EMBEDDINGS_PATH) return embeddingsCacheKey(req.body);
       if (req.path === RERANK_PATH) return rerankCacheKey(req.body); // default-ON like embeddings (deterministic ranker)
