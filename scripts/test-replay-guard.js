@@ -494,6 +494,9 @@ function memoryRedis() {
   // key, and nesting past the depth bound keys on the raw credential.
   ok(String(await keyOf({ x402Version: 2, accepted: svmAccepted, payload: { transaction: "bm90IGEgdHg=", pad: deep(20) } })).startsWith("p2:") && String(await keyOf({ x402Version: 2, accepted: svmAccepted, payload: { transaction: "bm90IGEgdHg=", pad: deep(5000) } })).startsWith("c:"),
     "chain tx: an undecodable transaction keeps the payload key, nesting past the bound keeps the raw identity");
+  // Just past the bound, well short of the stack limit: only the bound turns it raw.
+  ok(String(await keyOf({ x402Version: 2, accepted: svmAccepted, payload: { transaction: "bm90IGEgdHg=", pad: deep(40) } })).startsWith("c:"),
+    "chain tx: a payload nested just past the depth bound keys on the raw credential");
 
   // The guard and the deploy window: copies are refused in flight and once
   // consumed, and an earlier build's claim under the raw-header name is honored.
