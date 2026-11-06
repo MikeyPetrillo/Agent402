@@ -136,12 +136,18 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   and never name it; runtime surfaces (manifest chains, network lists, how-to-pay,
   `facilitators.byNetwork`) name it only while it is in the live offer. No price floor
   by default (no settler of ours pays its gas); `NETWORK_PRICE_FLOORS` sets one and
-  /api/pricing `minPriceUsdByNetwork` publishes any offered chain's floor. Enabling
-  after a live settle: set `INK_FACILITATOR_URL`, add `ink` to `PAYMENT_NETWORKS`, list
-  `ink` in `FACILITATOR_PUBLIC_INDEX_CHAINS` when its facilitator publishes settlements,
-  then move the entry from `GATED_RAILS` to `RAILS` and add what a RAILS rail carries (a
-  `src/revenue-live.js` EVM entry, which `railsCoveredByLiveView` then requires, a chain
-  page and logo, a wiki page) (`scripts/test-ink-rail.js`).
+  /api/pricing `minPriceUsdByNetwork` publishes any offered chain's floor. Every surface
+  a RAILS rail carries is built and waits behind the gate: the /ink chain page and mark
+  (`GATED_CHAIN_PAGES`, `chain-logos.js`), the revenue read-config (`GATED_EVM` in
+  `src/revenue-live.js`, inert, so no boot scans it), block time, log lanes, router name,
+  stats, refund and heartbeat entries (the heartbeat and canary read Ink while the
+  `INK_FACILITATOR_URL` Actions secret is set). Enabling after a live settle: set
+  `INK_FACILITATOR_URL`, add `ink` to `PAYMENT_NETWORKS`, list `ink` in
+  `FACILITATOR_PUBLIC_INDEX_CHAINS` when its facilitator publishes settlements, then move
+  the entry from `GATED_RAILS` to `RAILS` (after Arc) with the static copy that types the
+  chain list (README, wiki, docs, adapter and MCP package text, a wiki page). The
+  NODE_ENV=test `RAILS_TEST_GRADUATE=ink` seam rehearses that move
+  (`scripts/test-ink-rail.js`, `scripts/test-ink-graduation.js`).
   `src/facilitator-gas.js` reads each listed facilitator's settlement signers (from
   `/supported`) for gas runway every 10 minutes under a lease, one check per listed-facilitator
   rail whose readings replace only that network's rows (`scripts/test-settle-fallback.js`,
