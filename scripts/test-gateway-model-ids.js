@@ -47,6 +47,8 @@ import { TOKEN_RISK_MODELS } from "../src/tools/token-risk-kit.js";
 import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
 import { noteOwnedPrice, staleHighRows, describeStaleHigh, STALE_HIGH_TOLERANCE, overridesOf, longContextGaps, describeLongContext } from "./lib/cost-row-drift.js";
 import { modelCostRows } from "../src/tools/llm-gateway-kit.js";
+import { PRIORITY_ENDPOINT_TAG, parseDirectPricing, listedNotCheaperAnywhere } from "../src/gateway-direct-pricebook.js";
+import { directUpstreamConfig } from "../src/gateway-direct-upstream.js";
 requireUpstreamCosts("test-gateway-model-ids");
 
 // STEALTH listings (stealth/ox-alpha) are the ONE id class this guard must not
@@ -257,7 +259,8 @@ for (const link of SPEECH_MODELS) ok(speechIds.has(link.id), `speech chain link 
 // endpoint: a service tier a request must ask for, and the gateway refuses
 // every service_tier value except priority/fast/default/auto, so no call can
 // reach it. Grading it as a routable endpoint would push the row to its price.
-const PRIORITY_TAG = /\/(fast|ultrafast|priority)$/;
+// One definition, shared with the direct upstream's cost guard.
+const PRIORITY_TAG = PRIORITY_ENDPOINT_TAG;
 async function endpointPrices(id) {
   try {
     const r = await fetch(`https://openrouter.ai/api/v1/models/${id}/endpoints`, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(30_000) });
@@ -606,6 +609,54 @@ for (const [requested, succ] of Object.entries(AVAILABILITY_SUCCESSORS).flatMap(
     ok(covered, `${succ}'s own row covers its dearest routable endpoint, so the per-link clamp holds where it costs more than ${requested}'s row${covered ? "" : brief(" (amounts withheld in CI)", ` (live ${dear("prompt")}/${dear("completion")} per 1M vs row ${succRow ? `${succRow.prompt}/${succRow.completion}` : "none"})`)}`);
     ok(capped.length > 0, `${succ} keeps live endpoints inside ${requested}'s row for the metered cap to route to (${capped.length} of ${graded.length})`);
     ok(!tools(reqEps) || tools(capped), `${succ} supports tools on an endpoint inside ${requested}'s row wherever ${requested} supports tools`);
+  }
+}
+
+// Direct upstream (src/gateway-direct-pricebook.js): with DIRECT_UPSTREAM_URL
+// and DIRECT_UPSTREAM_MODELS set (Actions secrets on model-drift.yml), every
+// mapped model's listed prices on the direct upstream's public listing (no key)
+// must parse, be positive, carry no per-request fee, and undercut the cheapest
+// OpenRouter endpoint each admitting tier can route to (priority endpoints and
+// endpoints above the tier's max_price excluded; the metered tier's bound is
+// the model's own row) at one of the guard's reference call shapes. Serving
+// already keeps such a model on OpenRouter; this opens the drift issue. Lines
+// name the OpenRouter id and a reason word, never a price or the upstream's address.
+{
+  if (!String(process.env.DIRECT_UPSTREAM_URL || "").trim() || !String(process.env.DIRECT_UPSTREAM_MODELS || "").trim()) {
+    console.log("note - DIRECT_UPSTREAM_URL / DIRECT_UPSTREAM_MODELS unset: the direct-upstream listed-price check is skipped");
+  } else {
+    // The listing needs no key; a placeholder only satisfies the config parser and is sent nowhere.
+    const cfg = directUpstreamConfig({ ...process.env, DIRECT_UPSTREAM_KEY: process.env.DIRECT_UPSTREAM_KEY || "listing-read-sends-no-key" });
+    ok(!!cfg, "direct upstream: DIRECT_UPSTREAM_URL and DIRECT_UPSTREAM_MODELS parse");
+    let listing = null;
+    if (cfg) {
+      try {
+        const r = await fetch(cfg.modelsUrl, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(30_000) });
+        const j = r.ok ? await r.json() : null;
+        listing = Array.isArray(j?.data) && j.data.length ? new Map(j.data.filter((m) => typeof m?.id === "string").map((m) => [m.id, m])) : null;
+      } catch { listing = null; }
+      ok(!!listing, "direct upstream: the public model listing is readable");
+    }
+    if (cfg && listing) {
+      for (const [orId, upId] of cfg.models) {
+        const m = listing.get(upId);
+        const direct = m ? parseDirectPricing(m.pricing) : { reason: "unlisted" };
+        ok(!direct.reason, `direct upstream ${orId}: listed with positive prompt and completion prices and no per-request fee${direct.reason ? ` (${direct.reason})` : ""}`);
+        if (direct.reason) continue;
+        const eps = await endpointPrices(orId);
+        ok(Array.isArray(eps) && eps.length > 0, `direct upstream ${orId}: OpenRouter endpoints readable`);
+        if (!Array.isArray(eps) || !eps.length) continue;
+        const slugs = Object.keys(TIERS).filter((sl) => tierAllows(sl, orId));
+        ok(slugs.length > 0, `direct upstream ${orId}: served on at least one tier`);
+        for (const slug of slugs) {
+          const tier = TIERS[slug];
+          const bound = tier.metered ? costFor(orId) : tier.maxPrice;
+          const routable = eps.filter((e) => !PRIORITY_TAG.test(e.tag) && (!bound || (e.p <= bound.prompt + 1e-9 && e.c <= bound.completion + 1e-9))).map((e) => ({ prompt: e.p, completion: e.c }));
+          if (!routable.length) { console.log(`note - direct upstream ${orId} (${slug}): no routable OpenRouter endpoint under the tier's bound`); continue; }
+          ok(!listedNotCheaperAnywhere(direct, routable), `direct upstream ${orId} (${slug}): listed prices undercut the cheapest routable OpenRouter endpoint at a reference call shape`);
+        }
+      }
+    }
   }
 }
 
