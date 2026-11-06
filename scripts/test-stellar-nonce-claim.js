@@ -93,6 +93,36 @@ const nextNonce = () => String(++seq);
   ok((await guard.begin(ka)) === "ok" && (await guard.begin(kb)) === "inflight", "the replay guard refuses the re-encoded copy while the first runs");
 }
 
+// ---- The s2: replay key in ONE process, no shared store ----------------------
+// offline-stores cleared REDIS_URL, so every verdict below is the per-process
+// path (src/replay-guard.js localKeyOf: a Stellar key on its identity alone).
+{
+  const { sharedLimitEnabled } = await import("../src/shared-limit.js");
+  ok(!sharedLimitEnabled(), "no shared store: the replay guard runs on per-process state");
+  const keyOf = async (xdr) => paymentReplayKeyAsync(fakeReq({ "payment-signature": header(xdr) }));
+  const nonce = nextNonce();
+  const op = signedOp({ nonce });
+  const xdr = envelope([op], { seq: "1" });
+  const first = await keyOf(xdr);
+  const same = await keyOf(xdr);
+  const reencoded = await keyOf(envelope([op], { seq: "41" }));
+  const other = await keyOf(envelope([signedOp({ nonce: nextNonce() })]));
+  const otherSigner = await keyOf(envelope([signedOp({ from: otherBuyer, nonce })]));
+  ok(first === same && first !== reencoded && first.split(":")[1] === reencoded.split(":")[1], "the same payment keys alike; a re-encoded copy shares its identity, not its legacy part");
+  const g = createReplayGuard();
+  ok((await g.begin(first)) === "ok", "the first presentation of a signed Stellar payment runs");
+  ok((await g.begin(same)) === "inflight" && (await g.begin(reencoded)) === "inflight", "presented again while the first runs: refused (byte-identical and re-encoded)");
+  ok((await g.begin(other)) === "ok" && (await g.begin(otherSigner)) === "ok", "two different payments do not collide (another nonce; the same nonce from another signer)");
+  await g.settle(first);
+  ok((await g.begin(same)) === "consumed" && (await g.begin(reencoded)) === "consumed", "presented again after it was served: refused as consumed (byte-identical and re-encoded)");
+  await g.release(other);
+  ok((await g.begin(other)) === "ok", "another payment released unserved runs again, untouched by the served one");
+  const g2 = createReplayGuard();
+  ok((await g2.begin(reencoded)) === "ok" && (await g2.begin(first)) === "inflight", "a re-encoded copy presented first holds the payment against the original");
+  await g2.release(reencoded);
+  ok((await g2.begin(first)) === "ok", "a released payment can be presented again");
+}
+
 // ---- The claim hooks on a fake resource server ------------------------------
 const hooks = { beforeVerify: [], beforeSettle: [], afterSettle: [], settleFailure: [] };
 claims.registerSettlementClaimHooks({
@@ -183,6 +213,55 @@ async function settleRequest(ctx, { lands, between = null }) {
   ok((await settleRequest(R, { lands: true })) === true, "after a definite refusal the claim is released and a retry of the same entry settles");
 }
 
+// A settle the settle-sent mark refused (src/hangup-settlement.js, wired in
+// src/payments.js through releasingClaimsOnRefusal) was cancelled before the
+// facilitator call: the entry claims it took are given back at once, so the
+// buyer's retry with the same signed entry is not refused as a duplicate. A
+// settle already sent keeps its claims.
+{
+  const { _setHookFaultsForTest, HOOK_NAMES, SETTLE_MARK_FAILED } = await import("../src/x402-hook-guard.js");
+  const hangup = await import("../src/hangup-settlement.js");
+  const h = { beforeVerify: [], beforeSettle: [], afterSettle: [], settleFailure: [] };
+  const fake = {
+    onBeforeVerify: (f) => h.beforeVerify.push(f), onBeforeSettle: (f) => h.beforeSettle.push(f),
+    onAfterSettle: (f) => h.afterSettle.push(f), onSettleFailure: (f) => h.settleFailure.push(f),
+  };
+  claims.registerSettlementClaimHooks(fake);
+  hangup.registerSettleSentHook(claims.releasingClaimsOnRefusal(fake, { sentBefore: hangup.settleSentWhileConnected }));
+  claims.registerSettlementClaimRelease(fake);
+  // @x402/core stops the chain at the first abort.
+  const chainRun = async (ctx) => { for (const f of h.beforeSettle) { const r = await f(ctx); if (r?.abort) return r; } return null; };
+  const quiet = async (fn) => { const e = console.error; console.error = () => {}; try { return await fn(); } finally { console.error = e; } };
+
+  claims.__resetSettlementClaims();
+  const op = signedOp({ nonce: nextNonce() });
+  const A = ctxFor(envelope([op], { seq: "1" }));
+  _setHookFaultsForTest([HOOK_NAMES.settleSent]);
+  const refused = await quiet(() => chainRun(A));
+  _setHookFaultsForTest(null);
+  ok(refused?.abort === true && refused.reason === SETTLE_MARK_FAILED, `the settle-sent mark's throw refuses the settle (${refused?.reason})`);
+  const st = claims.settleClaimStateOf(A.transportContext.request.adapter.req);
+  ok(st && !st.nonceKey && st.nonceKeys.length === 0, "the refused request holds no entry claim");
+  const retry = ctxFor(envelope([op], { seq: "2" }));
+  const r2 = await chainRun(retry);
+  ok(r2 === null && hangup.settleSentWhileConnected(retry.transportContext.request.adapter.req), `a retry with the same signed entry reaches the settle at once (${r2?.reason || "settles"})`);
+  const r3 = await chainRun(ctxFor(envelope([op], { seq: "3" })));
+  ok(r3?.abort === true && r3.reason === claims.DUPLICATE_AUTHORIZATION, "while the retry holds the entry, a third copy is still refused");
+
+  // A request whose settle was already sent once keeps its claims, even if a
+  // later pass through the mark refuses.
+  claims.__resetSettlementClaims();
+  const op2 = signedOp({ nonce: nextNonce() });
+  const S = ctxFor(envelope([op2]));
+  ok((await chainRun(S)) === null, "a first settle pass is sent");
+  _setHookFaultsForTest([HOOK_NAMES.settleSent]);
+  const again = await quiet(() => chainRun(S));
+  _setHookFaultsForTest(null);
+  ok(again?.abort === true, "a later refused pass on the same request");
+  const held = await chainRun(ctxFor(envelope([op2], { seq: "5" })));
+  ok(held?.abort === true && held.reason === claims.DUPLICATE_AUTHORIZATION, "a settle that may have been sent keeps its entry claims");
+}
+
 // The success-path claim: a transaction another request already serves is not
 // answered again. Here B's confirmation took A's transaction first (as when B
 // reached settle outside A's claim), so A's own success must not answer.
@@ -207,6 +286,7 @@ async function settleRequest(ctx, { lands, between = null }) {
   ok(/const owned = await ownSettledStellarTx\(res, \{ network, claimTx \}\);\s*if \(owned !== res\) return owned;/.test(body), "the Stellar settle in src/payments.js answers through the success-path claim");
   const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   ok(/const replayKey = await paymentReplayKeyAsync\(req\);/.test(server), "src/server.js keys the replay guard with paymentReplayKeyAsync");
+  ok(/registerSettleSentHook\(releasingClaimsOnRefusal\(server, \{ sentBefore: settleSentWhileConnected \}\)\);/.test(src), "src/payments.js registers the settle-sent mark through releasingClaimsOnRefusal");
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);

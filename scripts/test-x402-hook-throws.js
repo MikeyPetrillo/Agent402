@@ -125,6 +125,29 @@ async function withLogs(fn) {
 }
 
 {
+  // Settle-sent mark refusing after the authorization claim, wired as
+  // src/payments.js wires it: the settle was cancelled before the
+  // facilitator call, so the claim is released at once and the same signed
+  // authorization settles on the retry instead of waiting out the claim's TTL.
+  const claims = await import("../src/settlement-claims.js");
+  claims.__resetSettlementClaims();
+  const { server, fac } = await resourceServer((s) => {
+    claims.registerSettlementClaimHooks(s);
+    hangup.registerSettleSentHook(claims.releasingClaimsOnRefusal(s, { sentBefore: hangup.settleSentWhileConnected }));
+    claims.registerSettlementClaimRelease(s);
+  });
+  const payload = payloadFor(BASE_NET);
+  _setHookFaultsForTest([HOOK_NAMES.settleSent]);
+  const { out } = await withLogs(() => settleOf(server, payload, { headers: {} }));
+  _setHookFaultsForTest(null);
+  ok(out.thrown && out.errorReason === SETTLE_MARK_FAILED && fac.calls.settle === 0, `claim + settle-sent: the mark's throw refuses before any settle call (${out.errorReason}, settles ${fac.calls.settle})`);
+  const retry = await settleOf(server, payload, { headers: {} });
+  ok(retry.success === true && fac.calls.settle === 1, `claim + settle-sent: the same authorization settles on the retry (${retry.errorReason || "settled"})`);
+  const dup = await settleOf(server, payload, { headers: {} });
+  ok(dup.thrown && dup.errorReason === claims.DUPLICATE_AUTHORIZATION && fac.calls.settle === 1, `claim + settle-sent: once settled, the authorization is still refused (${dup.errorReason})`);
+}
+
+{
   // Arc contract-wallet gate (beforeVerify), through the real middleware: a
   // throw is a 402 naming its reason, before the handler and before verify.
   const fac = stubFacilitator();
@@ -302,8 +325,13 @@ try {
     await sleep(500);
     ok(salesRows(mrk).length === 0, `settle-sent fault: no sale is booked (${JSON.stringify(salesRows(mrk))})`);
     const again = await fetch(`${mrk.base}/api/uuid`, { headers: { [pay.name]: pay.value, "Idempotency-Key": key } });
-    await again.text();
+    const againText = await again.text();
     ok(again.status === 402 && !again.headers.get("x-replayed-answer") && !again.headers.get("x-idempotent-replay") && fac.settle - s0 === 0, `settle-sent fault: nothing was committed (resend ${again.status})`);
+    // The refused settle gave its authorization claim back, so the resend
+    // reached the settle-sent mark again rather than a duplicate refusal.
+    const againResp = again.headers.get("payment-response") || again.headers.get("x-payment-response") || "";
+    const againAll = `${againText} ${againResp ? Buffer.from(againResp, "base64").toString() : ""}`;
+    ok(againAll.includes(SETTLE_MARK_FAILED) && !againAll.includes("duplicate_authorization"), `settle-sent fault: the resend is not refused as a duplicate (${againAll.slice(0, 240)})`);
     ok(mrk.log.join("").includes(`${HOOK_NAMES.settleSent} failed, payment refused`), "settle-sent fault: the server logged the refusal by name");
   }
 
