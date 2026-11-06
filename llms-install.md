@@ -125,7 +125,7 @@ math, validators, converters, geo math) are free via proof-of-work and
 need no wallet; `GET /api/pow` lists them. Paid tools (browser rendering,
 web search, PDF tooling, live data, crypto reads) start at $0.001 per call
 in USDC over x402 on Base or any other chain the 402 lists (Solana, Polygon,
-Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Arc, Stellar, Algorand,
+Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Arc, Ink, Stellar, Algorand,
 and USDG on Robinhood Chain), over MPP, or from a prepaid card credits key.
 Multi-tool skill packs cost the sum of the tools they run, less a bundle
 discount. The finished report products under `/v1` (deep research, company

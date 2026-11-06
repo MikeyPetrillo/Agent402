@@ -238,6 +238,28 @@ export const EVM = {
     explorer: (a) => `https://explorer.arc.io/address/${a}?tab=token_transfers`,
     tx: (h) => `https://explorer.arc.io/tx/${h}`,
   },
+  ink: {
+    // Ink (OP Stack L2, chain 57073), native Circle USDC. 1 s blocks
+    // (measured 2026-11-06). rpc-qnd caps getLogs at 10,000 blocks and
+    // rpc-gel at 1,000, so the scan reads 9,000-block chunks from rpc-qnd
+    // first. The treasury was never offered Ink before this block, so no
+    // scan reads below it. Each live refresh reads one balance and the
+    // window's transfer logs (12 reads for its 100,000-block window, about
+    // 28 hours at 1 s blocks); each ledger tick reads the tail since its
+    // cursor; with ALCHEMY_API_KEY those go to the keyed lane first.
+    caip2: "eip155:57073",
+    label: "Ink", asset: "USDC", span: 100000, chunkBlocks: 9000,
+    fromBlock: 60_400_000,
+    token: "0x2D270e6886d130D724215A266106e6832161EAEd",
+    // Alchemy first when the key is set (the network must be enabled on the
+    // Alchemy app; a not-enabled network falls through to the public RPCs).
+    rpcs: [
+      ...(process.env.ALCHEMY_API_KEY ? [`https://ink-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []),
+      "https://rpc-qnd.inkonchain.com", "https://rpc-gel.inkonchain.com",
+    ],
+    explorer: (a) => `https://explorer.inkonchain.com/address/${a}?tab=token_transfers`,
+    tx: (h) => `https://explorer.inkonchain.com/tx/${h}`,
+  },
   robinhood: {
     // Measured ~0.15s blocks (not the 2s Orbit default) — 30k blocks was only
     // ~76 real minutes; 600k ≈ 25h so the daily canary settle stays visible.
@@ -257,31 +279,8 @@ export const EVM = {
 // seller leaderboard and the in-flight cover never scan it and a boot costs
 // nothing. It joins EVM once the rail is in RAILS (graduated) or in the live
 // offer (src/gated-rails.js), and every reader picks it up from there.
-// Cost once active (Ink): each live refresh reads one balance and the
-// window's transfer logs in 9,000-block chunks (12 reads for its 100,000-block
-// window, about 28 hours at 1 s blocks), and each ledger tick reads the tail
-// since its cursor; with ALCHEMY_API_KEY those go to the keyed lane first.
-export const GATED_EVM = {
-  ink: {
-    // Ink (OP Stack L2, chain 57073), native Circle USDC. 1 s blocks
-    // (measured 2026-11-06). rpc-qnd caps getLogs at 10,000 blocks and
-    // rpc-gel at 1,000, so the scan reads 9,000-block chunks from rpc-qnd
-    // first. The treasury was never offered Ink before this block, so no
-    // scan reads below it.
-    caip2: "eip155:57073",
-    label: "Ink", asset: "USDC", span: 100000, chunkBlocks: 9000,
-    fromBlock: 60_400_000,
-    token: "0x2D270e6886d130D724215A266106e6832161EAEd",
-    // Alchemy first when the key is set (the network must be enabled on the
-    // Alchemy app; a not-enabled network falls through to the public RPCs).
-    rpcs: [
-      ...(process.env.ALCHEMY_API_KEY ? [`https://ink-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []),
-      "https://rpc-qnd.inkonchain.com", "https://rpc-gel.inkonchain.com",
-    ],
-    explorer: (a) => `https://explorer.inkonchain.com/address/${a}?tab=token_transfers`,
-    tx: (h) => `https://explorer.inkonchain.com/tx/${h}`,
-  },
-};
+// Arc and Ink started here and graduated into EVM.
+export const GATED_EVM = {};
 /** Move a gated rail's read-config into EVM (once). */
 function activateGatedEvm(caip2) {
   for (const [key, cfg] of Object.entries(GATED_EVM)) if (cfg.caip2 === caip2 && !EVM[key]) EVM[key] = cfg;
@@ -1741,10 +1740,9 @@ async function refreshSnapshot({ walletAddress, solanaWallet }) {
     new Promise((resolve) => setTimeout(() => resolve({ rail: label, balance: null, recent: [], error: `timed out after ${Math.round(RAIL_DEADLINE_MS / 1000)} s` }), RAIL_DEADLINE_MS).unref?.()),
   ]);
   const evm = (name) => bounded(EVM[name]?.label || name, evmRail(name, walletAddress));
-  // A gated rail is read only once its config is active (GATED_EVM above).
   const [base, polygon, arbitrum, monad, celo, avalanche, sei, optimism, arc, ink, robinhood, solana, stellar, algorand] = await Promise.all([
     evm("base"), evm("polygon"), evm("arbitrum"), evm("monad"), evm("celo"),
-    evm("avalanche"), evm("sei"), evm("optimism"), evm("arc"), EVM.ink ? evm("ink") : null, evm("robinhood"),
+    evm("avalanche"), evm("sei"), evm("optimism"), evm("arc"), evm("ink"), evm("robinhood"),
     bounded("Solana", solanaRail(solanaWallet)),
     bounded("Stellar", stellarRail(stellarWallet)),
     bounded("Algorand", algorandRail(algorandWallet)),
