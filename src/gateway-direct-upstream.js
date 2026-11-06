@@ -11,6 +11,11 @@
 //   DIRECT_UPSTREAM_SHARE    0-100, percent of eligible attempts sent there (the A/B);
 //                            default 100 when the rest is set; invalid reads 0.
 //   DIRECT_UPSTREAM_TIMEOUT_MS  per attempt (default 45000), capped by the payment window.
+//   DIRECT_UPSTREAM_BREAKER_FAILS    consecutive failed direct attempts that open the
+//                            breaker (default 3): while open no call goes direct.
+//   DIRECT_UPSTREAM_BREAKER_OPEN_MS  how long it stays open (default 5 minutes); then one
+//                            trial attempt goes direct: a success closes it, a failure
+//                            opens it again.
 //   DIRECT_UPSTREAM_SINCE    YYYY-MM-DD the privacy disclosure took effect; while the
 //                            upstream is configured, /privacy prints the later of its own
 //                            date and this one (once reached).
@@ -195,6 +200,49 @@ export function stripVendorExtensions(obj) {
   return micro;
 }
 
+// ---- breaker (per process) ---------------------------------------------------
+// A hung or failing direct upstream would otherwise add its whole timeout to
+// every call of a mapped model and spend one of the call's timed-out attempts.
+// Every failed direct attempt counts (a client that went away does not); an
+// answered one resets the count. An empty answer is neither.
+const breakerEnv = (name, dflt, min) => {
+  const n = parseInt(String(process.env[name] ?? "").trim(), 10);
+  return Number.isFinite(n) && n >= min ? n : dflt;
+};
+const breakerFails = () => breakerEnv("DIRECT_UPSTREAM_BREAKER_FAILS", 3, 1);
+const breakerOpenMs = () => breakerEnv("DIRECT_UPSTREAM_BREAKER_OPEN_MS", 5 * 60_000, 1000);
+const NOT_COUNTED = new Set(["client_gone", "aborted"]);
+const blankBreaker = () => ({ fails: 0, openUntil: 0, opens: 0 });
+let breaker = blankBreaker();
+let breakerNow = Date.now;
+export function _resetDirectBreakerForTest() { breaker = blankBreaker(); breakerNow = Date.now; }
+export function _setDirectBreakerNowForTest(fn) { breakerNow = typeof fn === "function" ? fn : Date.now; }
+/** True when a direct attempt may be made now. Once the open period ends one
+ *  caller takes the trial (the period is pushed out for everyone else). */
+export function directBreakerAllows() {
+  if (!breaker.openUntil) return true;
+  const now = breakerNow();
+  if (now < breaker.openUntil) return false;
+  breaker.openUntil = now + breakerOpenMs();
+  return true;
+}
+/** The outcome of one direct attempt: ok, or the failure's bucket. */
+export function noteDirectOutcome(ok, reason) {
+  if (ok) { breaker.fails = 0; breaker.openUntil = 0; return; }
+  if (NOT_COUNTED.has(String(reason))) return;
+  breaker.fails++;
+  if (breaker.fails >= breakerFails()) {
+    if (!breaker.openUntil || breakerNow() >= breaker.openUntil) breaker.opens++;
+    breaker.openUntil = breakerNow() + breakerOpenMs();
+  }
+}
+/** { open, fails, opens, threshold, openMs, reopensInMs }: counts only. */
+export function directBreakerState() {
+  const now = breakerNow();
+  const open = !!breaker.openUntil;
+  return { open, fails: breaker.fails, opens: breaker.opens, threshold: breakerFails(), openMs: breakerOpenMs(), reopensInMs: open ? Math.max(0, breaker.openUntil - now) : null };
+}
+
 // ---- A/B telemetry (operator view only) ------------------------------------
 const LAT_KEEP = 500;
 const blank = () => ({ attempts: 0, ok: 0, failed: {}, latMs: [] });
@@ -259,6 +307,7 @@ export function directUpstreamReport() {
     since: new Date(stats.since).toISOString(),
     upstreams: { direct: view(stats.direct), openrouter: view(stats.openrouter) },
     skipped: { ...stats.skipped },
+    breaker: directBreakerState(),
     anomalies: { ...stats.anomalies },
   };
 }
@@ -282,5 +331,5 @@ export function withDirectUpstreamDate(html, env = process.env, today = new Date
 /** The privacy page's sentence while the upstream is configured, else "". */
 export function directUpstreamPrivacyText(env = process.env) {
   if (!directUpstreamConfigured(env)) return "";
-  return " Some calls to open-weight models are served by a direct inference provider instead of OpenRouter. Zero data retention is requested on every such call, so it is served only by workers that keep no prompts or outputs, and the provider's gateway stores no prompts or outputs, only usage metadata such as token counts and cost.";
+  return " Some calls to listed models are served by a direct inference provider instead of OpenRouter. Zero data retention is requested on every such call, so it is served only by workers that keep no prompts or outputs, and the provider's gateway stores no prompts or outputs, only usage metadata such as token counts and cost.";
 }

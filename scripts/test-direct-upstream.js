@@ -105,7 +105,7 @@ const cap = K.TIERS["v1-chat"].maxPrice;
 const endpoint = Object.fromEntries(["prompt", "completion"].map((k) => [k, Math.min(cap[k], placeholder[k]) / 2]));
 const cheapDirect = Object.fromEntries(["prompt", "completion"].map((k) => [k, endpoint[k] / 10]));
 const seedBook = () => { PB._resetDirectPriceBookForTest(); PB._seedDirectPriceBookForTest({ [MODEL]: { direct: cheapDirect, endpoints: [endpoint] }, "qwen/qwen3.8-27b": { direct: cheapDirect, endpoints: [endpoint] } }); };
-const reset = () => { direct.hits.length = 0; or.hits.length = 0; direct.plan = null; or.plan = null; spend.length = 0; D._resetDirectUpstreamStatsForTest(); seedBook(); };
+const reset = () => { direct.hits.length = 0; or.hits.length = 0; direct.plan = null; or.plan = null; spend.length = 0; D._resetDirectUpstreamStatsForTest(); D._resetDirectBreakerForTest(); seedBook(); };
 const flush = () => new Promise((r) => setTimeout(r, 30)); // the usage capture is a lazy import off the handler's promise
 const gatewaySpend = () => spend.filter((s) => s.source === "gateway");
 
@@ -215,6 +215,26 @@ for (const [label, plan] of TRIGGERS) {
   ok(out?.__meterUpstreamUsd === OR_COST && gatewaySpend().length === 1 && gatewaySpend()[0].usd === OR_COST, `${label}: metered once, at OpenRouter's cost`);
   ok(out && !JSON.stringify(out).includes("cost_details") && !("cost" in (out.usage || {})), `${label}: OpenRouter's billing fields are stripped as before`);
 }
+// An empty direct answer (a safety refusal or a spent output cap) is a direct
+// failure: the SAME model is then tried on OpenRouter, never skipped for
+// another model. An OpenRouter empty answer still skips the model's other attempts.
+for (const [label, finish, completion] of [["an empty refusal", "content_filter", 0], ["an empty length answer", "length", 32]]) {
+  reset();
+  direct.plan = (req, res, body) => json(res, 200, { id: "c", object: "chat.completion", model: body.model, choices: [{ index: 0, message: { role: "assistant", content: "" }, finish_reason: finish }], usage: { prompt_tokens: 3, completion_tokens: completion, total_tokens: 3 + completion }, x_vendor: { charged_micro: DIRECT_MICRO } });
+  let out = null, err = null;
+  try { out = await metered.handler({ model: MODEL, messages: msgs, max_tokens: 32 }); } catch (e) { err = e; }
+  await flush();
+  ok(!err && direct.hits.length === 1 && or.hits.length === 1 && or.hits[0]?.body?.model === MODEL && out?.model === MODEL, `${label} from the direct upstream falls to the same model on OpenRouter (OpenRouter saw ${or.hits[0]?.body?.model}, served ${out?.model})`);
+  ok(gatewaySpend().length === 1 && gatewaySpend()[0].usd === OR_COST, `${label} from the direct upstream: metered once, at OpenRouter's cost`);
+}
+{
+  reset();
+  setEnv({});
+  or.plan = (req, res, body) => json(res, 200, { id: "c", object: "chat.completion", model: body.model, choices: [{ index: 0, message: { role: "assistant", content: "" }, finish_reason: "content_filter" }], usage: { prompt_tokens: 3, completion_tokens: 0, total_tokens: 3, cost: OR_COST } });
+  try { await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 }); } catch { /* every link empty */ }
+  ok(or.hits.filter((h) => h.body?.model === MODEL).length === 1, "an OpenRouter empty refusal still skips the model's remaining attempts");
+  setEnv(ON);
+}
 // A timeout counts in the timed-out-attempt budget: with a budget of 1 the walk ends there.
 {
   reset();
@@ -224,6 +244,39 @@ for (const [label, plan] of TRIGGERS) {
   try { await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 }); } catch (e) { err = e; }
   ok(err?.statusCode === 504 && or.hits.length === 0, "a direct timeout counts in LLM_MAX_TIMED_OUT_ATTEMPTS (budget 1: no further attempt)");
   delete process.env.LLM_MAX_TIMED_OUT_ATTEMPTS;
+}
+
+// ---- the direct breaker ----------------------------------------------------------
+// Consecutive failed direct attempts open it: no call goes direct while open
+// (no added latency, no timed-out attempt spent), the public word reads
+// degraded, and after the open period one trial closes it on success.
+{
+  setEnv({ ...ON, DIRECT_UPSTREAM_BREAKER_FAILS: "2", DIRECT_UPSTREAM_BREAKER_OPEN_MS: "60000" });
+  reset();
+  const PBk = await import("../src/gateway-direct-pricebook.js");
+  let now = Date.now();
+  D._setDirectBreakerNowForTest(() => now);
+  direct.plan = (req, res) => json(res, 503, { error: { message: "no qualifying worker" } });
+  for (let i = 0; i < 2; i++) await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 });
+  ok(direct.hits.length === 2 && or.hits.length === 2 && D.directBreakerState().open, "two consecutive direct failures open the breaker");
+  ok(PBk.directUpstreamWord() === "degraded" && JSON.stringify(PBk.directUpstreamStatus()) === '{"status":"degraded"}' && PBk.directUpstreamStatus({ full: true }).reason === "breaker_open", "open: the public word is degraded, the reason only on the operator read");
+  D._resetDirectUpstreamStatsForTest();
+  await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 });
+  ok(direct.hits.length === 2 && or.hits.length === 3 && D.directUpstreamReport().skipped.breaker_open === 1, "open: the next call skips the direct upstream (a breaker_open skip)");
+  now += 60_001;
+  await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 });
+  ok(direct.hits.length === 3 && D.directBreakerState().open, "after the open period one trial goes direct; it fails and the breaker stays open");
+  await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 });
+  ok(direct.hits.length === 3, "the failed trial reopens it: the next call skips direct");
+  now += 60_001;
+  direct.plan = (req, res, body) => json(res, 200, answer(body.model, { x_vendor: { charged_micro: DIRECT_MICRO } }));
+  await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 });
+  ok(direct.hits.length === 4 && !D.directBreakerState().open && PBk.directUpstreamWord() === "ok", "a successful trial closes it and the word reads ok");
+  // A buyer who hung up is not the upstream failing.
+  D.noteDirectOutcome(false, "client_gone");
+  ok(D.directBreakerState().fails === 0, "a client that went away does not count");
+  D._setDirectBreakerNowForTest(null);
+  setEnv(ON);
 }
 
 // ---- streams ------------------------------------------------------------------
@@ -247,6 +300,37 @@ direct.plan = (req, res, body) => sse(res, [
   ok(!text.includes("x_vendor") && !text.includes("charged_micro") && !/"cost"/.test(text), "stream: no billing field reaches the buyer");
   ok(!text.includes(`"model":"${MAPPED}"`) && text.includes(`"model":"${MODEL}"`), "stream: frames name the buyer's model id");
   ok(gatewaySpend().length === 1 && gatewaySpend()[0].usd === DIRECT_MICRO / 1e6, "stream: metered once, at the direct cost");
+}
+// The charge in a frame of its own, before or after a usage frame that has no
+// cost: stripped from the buyer's stream and metered once, at that charge.
+for (const [label, order] of [["before", ["charge", "usage"]], ["after", ["usage", "charge"]]]) {
+  reset();
+  direct.plan = (req, res, body) => {
+    const frames = [{ id: "c1", object: "chat.completion.chunk", model: body.model, choices: [{ index: 0, delta: { role: "assistant", content: "hello" }, finish_reason: "stop" }] }];
+    for (const k of order) frames.push(k === "charge" ? { id: "c1", object: "chat.completion.chunk", model: body.model, choices: [], x_vendor: { charged_micro: DIRECT_MICRO } } : { id: "c1", object: "chat.completion.chunk", model: body.model, choices: [], usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 } });
+    sse(res, [...frames, "[DONE]"]);
+  };
+  const out = await base.handler({ model: MODEL, messages: msgs, max_tokens: 32, stream: true });
+  const res = fakeRes();
+  await out.__sse(res);
+  await flush();
+  const text = res.chunks.join("");
+  ok(text.includes("hello") && !text.includes("x_vendor") && !text.includes("charged_micro") && !/"cost"/.test(text), `stream, charge frame ${label} the usage frame: no billing field reaches the buyer`);
+  ok(gatewaySpend().length === 1 && gatewaySpend()[0].usd === DIRECT_MICRO / 1e6, `stream, charge frame ${label} the usage frame: metered once, at the direct charge (${JSON.stringify(gatewaySpend())})`);
+  ok(!D.directUpstreamReport().anomalies.stream_no_cost, `stream, charge frame ${label} the usage frame: not counted as a stream without a cost`);
+}
+{
+  reset();
+  direct.plan = (req, res, body) => sse(res, [
+    { id: "c1", object: "chat.completion.chunk", model: body.model, choices: [{ index: 0, delta: { content: "hello" }, finish_reason: "stop" }] },
+    { id: "c1", object: "chat.completion.chunk", model: body.model, choices: [], usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 } },
+    "[DONE]",
+  ]);
+  const out = await base.handler({ model: MODEL, messages: msgs, max_tokens: 32, stream: true });
+  const res = fakeRes();
+  await out.__sse(res);
+  await flush();
+  ok(D.directUpstreamReport().anomalies.stream_no_cost === 1 && !gatewaySpend().some((x) => typeof x.usd === "number" && x.usd > 0), "stream with no charge anywhere: the usage frame is still reported once, as a stream without a cost");
 }
 for (const [label, plan] of [
   ["503", (req, res) => json(res, 503, { error: { message: "no qualifying worker" } })],
@@ -329,7 +413,7 @@ const stop = async (b) => { b.child.kill("SIGTERM"); await new Promise((r) => { 
     const j = await r.json().catch(() => ({}));
     ok(r.status === 200 && j.configured === true && j.upstreams?.direct && /no-store/.test(r.headers.get("cache-control") || ""), "with the token: the report, never cached");
     const html = await (await realFetch(`${b.url}/privacy`)).text();
-    ok(html.includes("direct inference provider") && html.includes("Zero data retention is requested on every such call"), "/privacy carries the sentence while configured");
+    ok(html.includes("direct inference provider") && html.includes("Zero data retention is requested on every such call") && html.includes("calls to listed models") && !/open-weight/i.test(html), "/privacy carries the sentence while configured, naming listed models (the switch takes any id)");
     ok(!b.log.join("").includes("direct-test-key"), "the boot log never prints the key");
   } finally { await stop(b); }
 }

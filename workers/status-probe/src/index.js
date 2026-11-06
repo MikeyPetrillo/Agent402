@@ -668,16 +668,13 @@ Auto-closes when nothing is owed.`,
     body: () => `${failureWordBody("robinhoodSettler", "relayer")} relayer means the listed Robinhood Chain facilitator's settlement signer has read dry for longer than ROBINHOOD_RELAYER_FIRST_ALERT_HOURS (default 6), so our own relayer settles every Robinhood sale first and pays its gas; the operator detail (robinhoodOrder) names the facilitator and since when.`,
   },
   {
-    // The direct upstream's cost guard (directUpstream,
-    // src/gateway-direct-pricebook.js): not_cheaper and unreadable page, ok
-    // and off clear, starting and anything else do neither. Title matches
+    // The direct upstream (directUpstream, src/gateway-direct-pricebook.js):
+    // degraded pages, ok and off clear, starting and anything else do
+    // neither. The reason code is on the operator read only. Title matches
     // heartbeat.yml's.
-    title: "directUpstream: a direct-upstream model is not cheaper, or its price book is unreadable",
-    verdict: ({ gateway: b }) => wordVerdict(b.directUpstream?.status, ["not_cheaper", "unreadable"], ["ok", "off"]),
-    body: ({ gateway: b }) => {
-      const w = ["not_cheaper", "unreadable"].includes(b?.directUpstream?.status) ? b.directUpstream.status : "not_cheaper";
-      return `/api/gateway-status reports directUpstream.status=${w}. The detail is on the operator endpoint, /__operator/direct-upstream.json (operator token). not_cheaper means a mapped model is kept on OpenRouter by its listed prices or its measured cost; unreadable means its price book is unread or older than three refresh intervals. Either way every call to that model is served by OpenRouter. Auto-closes when the word is ok.`;
-    },
+    title: "directUpstream: the direct upstream is degraded",
+    verdict: ({ gateway: b }) => wordVerdict(b.directUpstream?.status, ["degraded"], ["ok", "off"]),
+    body: () => "/api/gateway-status reports directUpstream.status=degraded. The detail is on the operator endpoint, /__operator/direct-upstream.json (operator token). Auto-closes when the word is ok.",
   },
   {
     // Paid 200s whose body is empty or error-shaped (toolAnswers,

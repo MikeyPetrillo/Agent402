@@ -59,6 +59,10 @@ const REQUIRED = [
   // SQL_QUERY_BUDGET per call), which the margin test prices against the
   // tool's list price.
   ["vendor", "cdp", "sqlQuery"],
+  // The share the direct chat upstream must undercut OpenRouter by, a fraction
+  // from 0 to below 1 (src/gateway-direct-pricebook.js minSavingFraction),
+  // read on the serving path whenever the direct upstream is configured.
+  ["vendor", "direct", "minSaving"],
 ];
 const NONEMPTY = ["speech", "embeddings", "openai", "sttPerMinute", "media"];
 // Model rows a serving path needs by their own prefix: a model admitted on a
