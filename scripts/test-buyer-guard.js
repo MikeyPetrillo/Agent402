@@ -16,7 +16,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { x402Client } from "@x402/core/client";
-import { isOwnPaidTarget, assertOwnPaidTarget, signedAtomicOf, checkAccept, guardCappedSigning } from "./lib/buyer-guard.js";
+import { isOwnPaidTarget, assertOwnPaidTarget, signedAtomicOf, checkAccept, guardCappedSigning, capFromEnv, signedEvmValueOf } from "./lib/buyer-guard.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TMP = mkdtempSync(join(tmpdir(), "a402-buyer-guard-"));
@@ -69,6 +69,34 @@ ok(await payloadWith(null) === "sent", "a payload signing the checked amount is 
 ok(/refused before sending/.test(await payloadWith("1000000000000")), "a payload signing more than the checked amount is refused before sending");
 ok(/refused before sending/.test(await payloadWith("999")), "a payload signing a different amount is refused before sending");
 
+// ---- the options the own-service buyers use ----
+const SOL = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const sol = (over = {}) => ({ scheme: "exact", network: SOL, asset: SOL_USDC, payTo: "x", amount: "1000", maxTimeoutSeconds: 60, extra: { feePayer: "y" }, ...over });
+ok(checkAccept(2, sol(), { maxUsd: 0.01, networks: [SOL] }).ok && !checkAccept(2, sol({ amount: "10001" }), { maxUsd: 0.01, networks: [SOL] }).ok, "a Solana USDC accept is priced from the table and capped");
+ok(!checkAccept(2, sol({ extra: { assetTransferMethod: "eip3009" } }), { maxUsd: 0.01, networks: [SOL] }).ok, "a transfer method named on a non-EVM accept is refused");
+ok(!checkAccept(2, v2({ scheme: "upto" }), opts).ok && checkAccept(2, v2({ scheme: "upto" }), { ...opts, schemes: ["upto"] }).ok, "upto is refused unless the caller allows it");
+ok(!checkAccept(2, v2({ scheme: "upto", extra: { assetTransferMethod: "eip3009" } }), { ...opts, schemes: ["upto"] }).ok && checkAccept(2, v2({ scheme: "upto", extra: { assetTransferMethod: "permit2" } }), { ...opts, schemes: ["upto"] }).ok, "an upto accept signs only through Permit2");
+const INK = "eip155:57073", INK_USDC = "0x2D270e6886d130D724215A266106e6832161EAEd";
+ok(!checkAccept(2, v2({ network: INK, asset: INK_USDC }), { maxUsd: 0.05, networks: [INK] }).ok && checkAccept(2, v2({ network: INK, asset: INK_USDC.toLowerCase() }), { maxUsd: 0.05, networks: [INK], extraAssets: { [INK]: [{ asset: INK_USDC, decimals: 6 }] } }).ok, "an asset the caller names in code prices; a seller cannot add one");
+let legCap = 0.0005;
+ok(!checkAccept(2, v2(), { maxUsd: () => legCap, networks: ["eip155:8453"] }).ok && ((legCap = 0.002), checkAccept(2, v2(), { maxUsd: () => legCap, networks: ["eip155:8453"] }).ok), "a per-purchase cap is read at each check");
+ok(!checkAccept(2, v2(), { maxUsd: () => 0, networks: ["eip155:8453"] }).ok, "a zero cap refuses everything");
+ok(signedEvmValueOf({ payload: { permit2Authorization: { permitted: { amount: "77" } } } }) === "77" && signedEvmValueOf({ payload: { authorization: { value: "5" } } }) === "5" && signedEvmValueOf({ payload: { transaction: "AA" } }) === null, "the signed EVM value is read from EIP-3009 or Permit2, nothing else");
+ok(capFromEnv("X", 0.5, { env: {} }) === 0.5 && capFromEnv("X", 0.5, { env: { X: "0.2" } }) === 0.2, "an env cap falls back to its default");
+let capErr = null;
+try { capFromEnv("X", 0.5, { env: { X: "abc" }, throwOnRefuse: true }); } catch (e) { capErr = e.message; }
+ok(/must be a positive number/.test(capErr || ""), "a cap typo refuses instead of paying uncapped");
+async function nonEvmSigned(signedAmount) {
+  const client = new x402Client();
+  if (typeof client.setSpendControls === "function") client.setSpendControls(false);
+  client.register(SOL, { scheme: "exact", async createPaymentPayload(version) { return { x402Version: version, payload: { transaction: "AA" } }; } });
+  guardCappedSigning(client, { maxUsd: 0.01, networks: [SOL], log: () => {} });
+  try { await client.createPaymentPayload({ x402Version: 2, resource: { url: "http://x/y" }, accepts: [sol({ amount: signedAmount })] }); return "sent"; }
+  catch (e) { return e.message; }
+}
+ok(await nonEvmSigned("1000") === "sent", "a Solana payload under the cap is sent (its amount has no plaintext field)");
+ok(/filtered out|refused/.test(await nonEvmSigned("20000")), "a Solana accept over the cap is never signed");
+
 // ---- smoke-buy end to end against a stub seller ----
 function runSmoke(challenge) {
   return new Promise((resolve) => {
@@ -106,20 +134,26 @@ r = await runSmoke(pr2([v2({ network: "eip155:137", asset: USDC_POLYGON })]));
 ok(r.code !== 0 && r.signed === null, `an accept on a chain the check does not register is never signed (${r.code}, ${r.signed}; ${tail(r)})`);
 
 // ---- own-target guard on the scripts that buy from our service ----
-const SCRIPTS = ["capture-bestsellers.js", "base-list-sweep.js", "challenge-sweep.js", "cross-chain-matrix.js", "catalog-buy.js", "payai-listing-pass.js", "drain-burner.js", "sweep-burner.js"];
+const SCRIPTS = ["capture-bestsellers.js", "base-list-sweep.js", "challenge-sweep.js", "cross-chain-matrix.js", "catalog-buy.js", "payai-listing-pass.js", "drain-burner.js", "sweep-burner.js",
+  "paid-canary.js", "agent-e2e.js", "mint-bazaar-rows.js", "mpp-probe.js", "tempo-volume.js", "mpp-new-agent-e2e.js", "tempo-canary-verify.js",
+  "algorand-rail-canary.js", "decide-paid-e2e.mjs", "evm-settle-test.js", "rh-settle-test.js", "solana-sor-live.js", "tempo-sor-live.js",
+  "tempo-subscription-canary.js", "test-client-paid-live.js", "test-treasury-paid-live.js", "smoke-buy.js"];
+// The demos check the target only when they hold a key to pay with.
+const WITH_KEY = ["demo-payment.js", "demo-company-onepager.js", "demo-market-monitor.js"];
 function runScript(file, extraEnv) {
   return new Promise((resolve) => {
-    const env = { PATH: process.env.PATH, HOME: process.env.HOME, TARGET_URL: "https://seller.example", KEY_FILE: join(TMP, "missing-key"), ...extraEnv };
+    const env = { PATH: process.env.PATH, HOME: process.env.HOME, TARGET_URL: "https://seller.example", KEY_FILE: join(TMP, "missing-key"), FUND_WAIT_MINUTES: "0", ...extraEnv };
     const ch = spawn(process.execPath, ["--import", join(ROOT, "scripts/lib/loopback-only-preload.js"), join(ROOT, "scripts", file)], { env, stdio: ["ignore", "pipe", "pipe"] });
     let out = ""; ch.stdout.on("data", (d) => (out += d)); ch.stderr.on("data", (d) => (out += d));
     const timer = setTimeout(() => ch.kill("SIGKILL"), 30_000);
     ch.on("exit", (code) => { clearTimeout(timer); resolve({ code, out }); });
   });
 }
-for (const f of SCRIPTS) {
-  const res = await runScript(f, {});
+for (const f of [...SCRIPTS, ...WITH_KEY]) {
+  const keyEnv = WITH_KEY.includes(f) ? { AGENT_KEY: generatePrivateKey() } : {};
+  const res = await runScript(f, keyEnv);
   ok(res.code === 2 && /refusing to pay "https:\/\/seller\.example": not our service/.test(res.out), `${f} refuses an outside TARGET_URL (${res.code}; ${res.out.trim().split("\n").slice(-1)[0]})`);
-  const allowed = await runScript(f, { ALLOW_EXTERNAL_PAID_TARGET: "1" });
+  const allowed = await runScript(f, { ...keyEnv, ALLOW_EXTERNAL_PAID_TARGET: "1" });
   ok(!/refusing to pay/.test(allowed.out), `${f} passes the target guard with the explicit flag`);
 }
 

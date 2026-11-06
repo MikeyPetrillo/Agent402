@@ -24,8 +24,9 @@
 // funding sweep pages at its own low-water mark for the same wallet.
 import { createHmac } from "node:crypto";
 import { privateKeyToAccount } from "viem/accounts";
+import { assertOwnPaidTarget } from "./lib/buyer-guard.js";
 
-const TARGET = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, "");
+const TARGET = assertOwnPaidTarget((process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, ""), "tempo-volume");
 const ROUTE = process.env.TEMPO_VOLUME_ROUTE || "/api/uuid";
 // Dispatch input is free text: a non-number must refuse, not run 0 buys green.
 const countRaw = Number(process.env.TEMPO_VOLUME_TX || 17);

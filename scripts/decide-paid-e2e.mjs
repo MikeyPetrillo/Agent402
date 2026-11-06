@@ -20,10 +20,11 @@
 // 400 respond_async_required (refused before payment) is paid once more with
 // the Prefer header its body names.
 
+import { assertOwnPaidTarget } from "./lib/buyer-guard.js";
 import { createHmac } from "node:crypto";
 import { asyncAdviceByPath, slowPreferOf, paidCallHonoringSlowRoutes } from "./lib/slow-route-buy.js";
 
-const TARGET = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/+$/, "");
+const TARGET = assertOwnPaidTarget((process.env.TARGET_URL || "https://agent402.tools").replace(/\/+$/, ""), "decide-paid-e2e");
 const pk = (process.env.BURNER_KEY || "").trim();
 if (!pk) { console.error("decide-paid-e2e: BURNER_KEY is required"); process.exit(2); }
 const secret = (process.env.POW_SECRET || "").trim();

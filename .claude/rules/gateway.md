@@ -86,8 +86,8 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   comparison (unlike traffic on the two sides is never compared as is), and a call the scaled
   comparison keeps on OpenRouter still goes direct on `DIRECT_UPSTREAM_MEASURE_PROBE_PCT` (default
   2) so the direct ratio keeps its samples (bucket `measure_probe_sent`). Skips are bucketed on the A/B stats (`price_unreadable`, `price_unlisted`,
-  `price_bad_price`, `price_request_fee`, `price_no_endpoint`, `price_estimate`, `not_cheaper`,
-  `measured_not_cheaper`, `breaker_open`). Env: `DIRECT_UPSTREAM_PRICE_REFRESH_MS` (default one hour),
+  `price_bad_price`, `price_request_fee`, `price_no_endpoint`, `price_estimate`, `price_guard`,
+  `measured_guard`, `breaker_open`). Env: `DIRECT_UPSTREAM_PRICE_REFRESH_MS` (default one hour),
   `DIRECT_UPSTREAM_PRICE_TIMEOUT_MS` (default 15 s), `DIRECT_UPSTREAM_MIN_SAVING_PCT` (0 to below
   100; unset reads the private table's `vendor.direct.minSaving` fraction (a required key: a table
   without it reads `partial`); neither means 0; the value is policy and is never written in the repo), `DIRECT_UPSTREAM_MEASURE_WINDOW`

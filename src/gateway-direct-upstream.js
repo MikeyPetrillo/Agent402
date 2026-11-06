@@ -397,7 +397,7 @@ export function directUpstreamPolicyUrl(env = process.env) {
 /** The privacy page's sentence (AI gateway inputs) while the upstream is configured, else "". */
 export function directUpstreamPrivacyText(env = process.env) {
   if (!directUpstreamConfigured(env)) return "";
-  return " Some chat calls to listed models are served by a direct inference provider instead of OpenRouter (see Third parties). Zero data retention is requested on every such call, and the provider serves such a request only from workers that keep no prompts or outputs, or refuses it, in which case the call goes to OpenRouter.";
+  return " Some chat calls to listed models are served by a direct inference provider instead of OpenRouter (see Third parties). Zero data retention is requested on every such call.";
 }
 /** The privacy page's Third parties item (HTML, every env-supplied value
  *  escaped) while the upstream is configured, else "". */
@@ -411,5 +411,5 @@ export function directUpstreamThirdPartyText(env = process.env) {
 /** The location sentence's exception while the upstream is configured, else "". */
 export function directUpstreamLocationText(env = process.env) {
   if (!directUpstreamConfigured(env)) return "";
-  return ", except where a provider listed under Third parties operates elsewhere, as noted there";
+  return ", except where a provider listed under Third parties operates elsewhere";
 }

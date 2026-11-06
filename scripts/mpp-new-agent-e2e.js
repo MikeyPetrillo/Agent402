@@ -28,8 +28,9 @@ import { Challenge, Receipt } from "mppx";
 import { McpClient } from "mppx/mcp/client";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { assertOwnPaidTarget } from "./lib/buyer-guard.js";
 
-const TARGET = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/+$/, "");
+const TARGET = assertOwnPaidTarget((process.env.TARGET_URL || "https://agent402.tools").replace(/\/+$/, ""), "mpp-new-agent-e2e");
 const RPC = process.env.TEMPO_RPC_URL || "https://rpc.tempo.xyz";
 const USDC_E = "0x20C000000000000000000000b9537d11c60E8b50";
 const HARD_FUND_CAP = 0.30;

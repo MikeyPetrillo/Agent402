@@ -10,7 +10,7 @@
 // Dispatch-only (solana-sor-live.yml). A 404/409 from the router (no candidate
 // cleared the pay-time proven-seller gate) exits 1 with the router's own words
 // - that is a truthful "not proven yet", not a harness failure.
-const TARGET = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/+$/, "");
+const TARGET = assertOwnPaidTarget((process.env.TARGET_URL || "https://agent402.tools").replace(/\/+$/, ""), "solana-sor-live");
 const RPC = process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const SPENDER = process.env.SOLANA_SPENDING_ADDRESS || "8KqQG8MefNvQEQmp9gBjov39DXcWsUpSeqjL9pPCGKKE";
@@ -29,6 +29,7 @@ if (!ROUTE_ALLOWED.has(ROUTE)) { console.error(`refusing ROUTE=${JSON.stringify(
 const TASK = process.env.TASK || "api v1 exa search";
 const PARAMS = process.env.PARAMS ? JSON.parse(process.env.PARAMS) : { query: "bitcoin" };
 const EXPECT_TEXT = process.env.EXPECT_TEXT || "results";
+import { assertOwnPaidTarget } from "./lib/buyer-guard.js";
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
 import { createHmac } from "node:crypto";
 const raw = (process.env.SOLANA_BURNER_KEY || "").trim();

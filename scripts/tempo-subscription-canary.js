@@ -30,12 +30,13 @@
 //
 // Cost per run: 2 x $0.01 from the canary burner to our own payTo, plus Tempo
 // fees. The money is ours on both ends; the fees are the real spend.
+import { assertOwnPaidTarget } from "./lib/buyer-guard.js";
 import "../src/tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA
 import { createHmac } from "node:crypto";
 import { privateKeyToAccount } from "viem/accounts";
 import { Mppx, tempo } from "mppx/client";
 
-const TARGET = process.env.TARGET_URL || "https://agent402.tools";
+const TARGET = assertOwnPaidTarget(process.env.TARGET_URL || "https://agent402.tools", "tempo-subscription-canary");
 const pk = (process.env.BURNER_KEY || "").trim();
 if (!pk) {
   console.error("tempo-subscription-canary: no BURNER_KEY - cannot run");

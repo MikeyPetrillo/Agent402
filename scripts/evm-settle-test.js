@@ -8,6 +8,7 @@
 //
 // CHAIN must be "polygon" or "arbitrum". The server should already be booted
 // with PAYMENT_NETWORKS=<chain> so the buyer's only option is that chain.
+import { assertOwnPaidTarget } from "./lib/buyer-guard.js";
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
 import { readFileSync } from "node:fs";
 import { privateKeyToAccount } from "viem/accounts";
@@ -16,7 +17,7 @@ import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { wrapFetchWithPayment } from "@x402/fetch";
 
 const CHAIN = (process.env.CHAIN || "polygon").toLowerCase();
-const TARGET = process.env.TARGET_URL || "http://127.0.0.1:3791";
+const TARGET = assertOwnPaidTarget(process.env.TARGET_URL || "http://127.0.0.1:3791", "evm-settle-test");
 
 const CHAINS = {
   polygon: {

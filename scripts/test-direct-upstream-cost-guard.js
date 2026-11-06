@@ -167,7 +167,7 @@ setListing(listed(1, 10));
 setEndpoints([[5, 5]]);
 {
   const r = await quietRefresh();
-  ok(await served() === "openrouter" && skipped().not_cheaper === 1, "direct passes on input only but not per call: OpenRouter (a not_cheaper skip)");
+  ok(await served() === "openrouter" && skipped().price_guard === 1, "direct passes on input only but not per call: OpenRouter (a price_guard skip)");
   ok(r.word === "ok" && await served({ max_tokens: 1 }) === "direct", "the same prices still win an input-heavy call, so the model-level word stays ok");
 }
 setListing(listed(1, 30));
@@ -203,7 +203,7 @@ await quietRefresh();
 setEnv({ ...ON, DIRECT_UPSTREAM_MIN_SAVING_PCT: "40" });
 ok(await served() === "direct", "threshold 40% (env): half clears it, direct");
 setEnv({ ...ON, DIRECT_UPSTREAM_MIN_SAVING_PCT: "60" });
-ok(await served() === "openrouter" && skipped().not_cheaper === 1, "threshold 60% (env): half does not clear it, OpenRouter");
+ok(await served() === "openrouter" && skipped().price_guard === 1, "threshold 60% (env): half does not clear it, OpenRouter");
 const { DIRECT_UPSTREAM_MIN_SAVING_PCT: _drop, ...ON_NO_PCT } = ON;
 setEnv(ON_NO_PCT);
 U.setUpstreamCostsForTest(tableWith(0.6));
@@ -327,7 +327,7 @@ setEnv(ON);
   await quietRefresh();
   reset();
   await (await call({ stream: true })).__sse(fakeRes());
-  ok(direct.hits.length === 0 && or.hits.length === 1 && skipped().not_cheaper === 1, "stream, fails per call: OpenRouter");
+  ok(direct.hits.length === 0 && or.hits.length === 1 && skipped().price_guard === 1, "stream, fails per call: OpenRouter");
   direct.plan = prevD; or.plan = prevO;
 }
 
@@ -363,7 +363,7 @@ setEnv(ON);
   let directServed = 0;
   for (let i = 0; i < 30; i++) if (await served() === "direct") directServed++;
   ok(directServed === 30, "under the minimum sample the listing stands: 30 calls go direct");
-  ok(await served() === "openrouter" && skipped().measured_not_cheaper === 1, "30 direct samples at three times its listing: OpenRouter (a measured_not_cheaper skip)");
+  ok(await served() === "openrouter" && skipped().measured_guard === 1, "30 direct samples at three times its listing: OpenRouter (a measured_guard skip)");
   ok(PB.directUpstreamWord() === "ok" && JSON.stringify(PB.directUpstreamStatus()) === '{"status":"ok"}' && PB.directUpstreamState().reason === "measured_cost" && PB.directPriceBookReport().models[MODEL].measured.blocked === true, "blocked: the word reads ok, the reason (measured_cost) on the operator read only");
   // OpenRouter's own answers bill twice its lowest listing: once sampled, it scales too.
   orRatio = 2;
@@ -456,6 +456,12 @@ setEnv({});
   const { join } = await import("node:path");
   const TITLE = "directUpstream: the direct upstream is degraded";
   ok(!/cheap|undercut|not_cheaper|unreadable/i.test(TITLE), "the title is neutral");
+  {
+    // The skip codes land on the operator view and in logs: mechanism names only.
+    const pb = readFileSync(new URL("../src/gateway-direct-pricebook.js", import.meta.url), "utf8");
+    const codes = [...pb.matchAll(/skip: "([a-z_]+)"/g)].map((m) => m[1]);
+    ok(codes.length >= 3 && codes.includes("price_guard") && codes.includes("measured_guard") && codes.every((c) => !/cheap|undercut|saving|cost/i.test(c)), `the skip codes are neutral (${codes.join(", ")})`);
+  }
   const wf = yamlLoad(readFileSync(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8"));
   const step = Object.values(wf.jobs).flatMap((j) => j.steps || []).find((st) => String(st.name || "").startsWith("Tool, upstream and facilitator failure checks"));
   ok(!!step, "heartbeat.yml has the failure-words step");
@@ -485,7 +491,7 @@ printf '%s\\x1f' "$@" >> "$GH_LOG"; printf '\\x1e' >> "$GH_LOG"
     ok(hb({ ...OKW, directUpstream: { status: w } }, TITLE).some((c) => c[1] === "comment" && c[2] === "41"), `heartbeat: ${w} with an open issue comments`);
   }
   for (const w of ["ok", "off"]) ok(hb({ ...OKW, directUpstream: { status: w } }, TITLE).filter((c) => c[1] === "close" && c[2] === "41").length === 1, `heartbeat: ${w} closes the issue`);
-  for (const w of ["starting", "unknown", "not_cheaper", "unreadable"]) ok(hb({ ...OKW, directUpstream: { status: w } }, TITLE).filter((c) => c[1] === "close" || c[1] === "create").length === 0, `heartbeat: ${w} does neither`);
+  for (const w of ["starting", "unknown", "price_guard", "unreadable"]) ok(hb({ ...OKW, directUpstream: { status: w } }, TITLE).filter((c) => c[1] === "close" || c[1] === "create").length === 0, `heartbeat: ${w} does neither`);
   ok(hb({ ...OKW, toolFailures: { status: "failing" } }).some((c) => c[1] === "create" && c[c.indexOf("--body") + 1].includes("/__operator/tool-failures.json")), "heartbeat: the other words keep their operator endpoint");
   rmSync(dir, { recursive: true, force: true });
   const { ALARMS, judge } = await import("../workers/status-probe/src/index.js");
