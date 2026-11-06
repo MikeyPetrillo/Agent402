@@ -4927,6 +4927,8 @@ jobs:
           t node scripts/test-avm-buyer-legacy-network.js
           # Router dispatch eligibility, labelled: one function for the resolver's Base gate and every public row (offline)
           t node scripts/test-dispatch-eligibility.js
+          # The router's buyer on every EVM chain SOR_EVM_CHAINS enables: allowlist, signed amount = quote, split price, known asset, per-chain day and low balance, Robinhood's USDG domain (offline, stub sellers)
+          t node scripts/test-evm-buyer-chains.js
           # Routes that sell personal data about individuals stay listed and are never ranked, labeled eligible or paid; worker thread agrees (in-process pool + a free boot, offline)
           t node scripts/test-router-people-data.js
           # The raw-text gate before the category patterns never skips text the normalized gate would pass (offline)

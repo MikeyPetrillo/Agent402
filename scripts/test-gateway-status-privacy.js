@@ -26,7 +26,7 @@ const PORT = await getFreePort();
 const TOKEN = "privacy-test-operator-token-0123456789";
 const child = spawn(process.execPath, ["src/server.js"], {
   env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false",
-         AGENT402_OPERATOR_TOKEN: TOKEN, EXA_KEY: "k", EXA_CREDITS_USD: "10", X_BEARER_TOKEN: "t" },
+         AGENT402_OPERATOR_TOKEN: TOKEN, SOR_EVM_CHAINS: "", EXA_KEY: "k", EXA_CREDITS_USD: "10", X_BEARER_TOKEN: "t" },
   stdio: ["ignore", "pipe", "pipe"],
 });
 const base = `http://127.0.0.1:${PORT}`;
@@ -48,6 +48,9 @@ ok(["sales", "refunds", "checkoutFinals", "subscriptions", "decide", "outbound"]
 // --- first-time payment recipients: one word publicly, the window and counts for the operator, an address nowhere ---
 ok(["ok", "new", "burst", "unknown"].includes(pubBody?.outboundDestinations?.status) && Object.keys(pubBody.outboundDestinations).join(",") === "status", `outboundDestinations publishes its word only (${JSON.stringify(pubBody?.outboundDestinations)})`);
 ok(typeof opBody?.outboundDestinations?.windowHours === "number" && typeof opBody?.outboundDestinations?.burstOver === "number" && !JSON.stringify(opBody.outboundDestinations).match(/0x[0-9a-f]{40}/i), `the operator view of outboundDestinations carries the window and the threshold and no address (${JSON.stringify(opBody?.outboundDestinations)})`);
+
+// --- the EVM spending wallet off Base: "off" with no chain in SOR_EVM_CHAINS, one word only ---
+ok(pubBody?.upstreamBuyerEvm?.status === "off" && Object.keys(pubBody.upstreamBuyerEvm).join(",") === "status", `upstreamBuyerEvm reads off with no chain enabled (${JSON.stringify(pubBody?.upstreamBuyerEvm)})`);
 
 // --- the Robinhood settler word: one word publicly; off without an order (no relayer key here) ---
 ok(pubBody?.robinhoodSettler?.status === "off" && Object.keys(pubBody.robinhoodSettler).join(",") === "status", `robinhoodSettler publishes its word only (${JSON.stringify(pubBody?.robinhoodSettler)})`);

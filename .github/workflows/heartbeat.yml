@@ -541,6 +541,31 @@ jobs:
             gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: balance back above the low-water mark at $(date -u +%FT%TZ)."
           fi
 
+      # EVM spending wallet on the other chains SOR_EVM_CHAINS enables - the
+      # same key as the Base wallet, one balance per chain. "off" (no chain
+      # enabled), "unknown" and "unconfigured" never page.
+      - name: EVM chains upstream buyer wallet check (alarm on low balance on an enabled chain)
+        if: always()
+        continue-on-error: true
+        run: |
+          BODY=$(curl -s --max-time 15 "$PROD/api/gateway-status" || echo '{}')
+          STATUS=$(echo "$BODY" | jq -r '.upstreamBuyerEvm.status // "unknown"' 2>/dev/null || echo unknown)
+          LOW=$(echo "$BODY" | jq -r '[.upstreamBuyerEvm.chains // {} | to_entries[] | select(.value.status == "low") | .key] | join(", ")' 2>/dev/null || echo "")
+          echo "evm chains upstream buyer wallet: $STATUS ${LOW:+(low: $LOW)}"
+          TITLE="EVM chains upstream buyer wallet LOW (x402)"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          if [ "$STATUS" = "low" ]; then
+            if [ -z "$OPEN" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The x402 spending wallet (X402_UPSTREAM_BUYER_KEY) is below the low-water mark (UPSTREAM_BUYER_LOW_USD_<CHAIN>, else UPSTREAM_BUYER_LOW_USD) on: $LOW. External routing on that chain refuses 503 while it reads low (buyers are never charged). Top up: send that chain's stablecoin to the spending wallet address on that chain."
+            else
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ) on: $LOW."
+            fi
+          elif [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; then
+            if [ -n "$OPEN" ]; then
+              gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: every enabled chain back above the low-water mark at $(date -u +%FT%TZ)."
+            fi
+          fi
+
       # Tempo (MPP) spending-wallet check - same pattern: this wallet pays MPP
       # sellers on Tempo for the SOR's external leg (src/tempo-buyer.js), in
       # USDC.e. "unknown"/"unconfigured" never page.

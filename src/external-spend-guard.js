@@ -6,6 +6,7 @@ import { stateDbEnabled, stateDbSchema, withStateTx, trackStoreReady } from "./s
 import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded, keyOf as sharedKeyOf, OP_MS } from "./shared-limits.js";
 import { getSharedRedisClient } from "./shared-limit.js";
 import { withLoopTimeout } from "./loop-deadline.js";
+import { enabledEvmBuyerChains } from "./evm-buyer-chains.js";
 // Bound what a single buyer can make us spend upstream before they have paid us.
 //
 // THE HOLE. @x402/express runs the handler FIRST and settles AFTER, and a <400
@@ -199,7 +200,8 @@ function releasePayerShared(pre) {
 // alarms remain the outer backstop.
 //
 // `SOR_WALLET_DAILY_MAX_USD` is the default for every chain;
-// `SOR_WALLET_DAILY_MAX_USD_<CHAIN>` (BASE, SOLANA, ALGORAND, TEMPO) overrides
+// `SOR_WALLET_DAILY_MAX_USD_<CHAIN>` (BASE, SOLANA, ALGORAND, TEMPO, and each
+// EVM buyer chain by name: ARC, CELO, POLYGON, ARBITRUM, ROBINHOOD) overrides
 // one; `0` or `off` disables the ceiling for that scope. A MALFORMED value is
 // treated as unset - a per-chain typo falls through to the global setting, a
 // global typo to the default - never as disabled (a typo must not select the
@@ -462,9 +464,12 @@ export function globalUnsettledCeilingUsd() {
   const v = parseCeiling(process.env.EXTERNAL_MAX_UNSETTLED_GLOBAL_USD);
   return v === undefined ? defaultGlobalUnsettledUsd() : v;
 }
-/** The default global ceiling: the sum of the chain wallets' daily ceilings. */
+/** The default global ceiling: the sum of the chain wallets' daily ceilings,
+ *  every EVM chain SOR_EVM_CHAINS lists included (read at call time), so a
+ *  listed chain never pays out past a ceiling that left it out. */
 export function defaultGlobalUnsettledUsd() {
-  return WALLET_CHAINS.reduce((sum, c) => sum + (walletDailyCeilingUsd(c) ?? DEFAULT_WALLET_DAILY_MAX_USD), 0);
+  const chains = [...new Set([...WALLET_CHAINS, ...enabledEvmBuyerChains()])];
+  return chains.reduce((sum, c) => sum + (walletDailyCeilingUsd(c) ?? DEFAULT_WALLET_DAILY_MAX_USD), 0);
 }
 
 /**

@@ -493,7 +493,8 @@ import { GEO_TOOLS } from "./tools/geo-kit.js";
 import { OCR_TOOLS } from "./tools/ocr-kit.js";
 import { AGENT_TOOLS } from "./tools/agent-kit.js";
 import { SAMPLE_AGENT_CARD, A2A_WELL_KNOWN_PATHS, buildOurAgentCard, buildAgentRegistration, erc8004AgentId } from "./tools/a2a-card.js";
-import { upstreamBuyerStatus } from "./upstream-buyer-status.js";
+import { upstreamBuyerStatus, upstreamBuyerEvmStatus } from "./upstream-buyer-status.js";
+import { enabledEvmBuyerChains, evmBuyerChain, isEvmBuyerChain, evmAcceptDomainCheck } from "./evm-buyer-chains.js";
 import { CAPTCHA_TOOLS } from "./tools/captcha-kit.js";
 import { SQL_GUARD_TOOLS } from "./tools/sql-guard-kit.js";
 import { BARCODE_TOOLS } from "./tools/barcode-kit.js";
@@ -1524,8 +1525,24 @@ function dispatchEvidence() {
   dispatchEvidenceCache = { at: Date.now(), settled, payers, binding, provenPayTo, advertised };
   return dispatchEvidenceCache;
 }
+// Base first, then each other EVM chain the operator lists in SOR_EVM_CHAINS
+// (src/evm-buyer-chains.js; the same spending wallet), then the other rails.
 function spendChainsConfigured() {
-  return ["base", ...(avmBuyerConfigured() ? ["algorand"] : []), ...(tempoBuyerConfigured() ? ["tempo"] : []), ...(svmBuyerConfigured() ? ["solana"] : [])];
+  return [...enabledEvmBuyerChains(), ...(avmBuyerConfigured() ? ["algorand"] : []), ...(tempoBuyerConfigured() ? ["tempo"] : []), ...(svmBuyerConfigured() ? ["solana"] : [])];
+}
+// What a row's crawl saw per enabled non-Base EVM chain: the payTo and the
+// EIP-712 domain its accept advertised there (label-time stand-ins for the
+// live 402, which the resolver reads before it signs).
+function evmByChainOf(row, spendChains) {
+  const live = {}, domain = {};
+  for (const c of spendChains) {
+    const cfg = c !== "base" ? evmBuyerChain(c) : null;
+    if (!cfg) continue;
+    const a = row?.payToByNetwork?.[cfg.caip2];
+    if (typeof a === "string" && /^0x[0-9a-f]{40}$/i.test(a)) live[c] = a.toLowerCase();
+    if (row?.evmDomainByNetwork?.[cfg.caip2]) domain[c] = row.evmDomainByNetwork[cfg.caip2];
+  }
+  return { livePayToByChain: live, usdcDomainByChain: domain };
 }
 // Row-level decoration: seller-level fields (index) or route-row fields
 // (price + template known). `networks` is ALWAYS an array on the way out and
@@ -1576,6 +1593,7 @@ function withDispatchFields(row, { local = false, rowLevel = false } = {}) {
     // What the seller's Base USDC accept advertised as its EIP-712 domain (the
     // crawl's observation); a wrong name is usdc_domain_mismatch on every row.
     usdcDomain: row.evmDomainByNetwork?.["eip155:8453"] || null,
+    ...evmByChainOf(row, spendChains),
     // The last paid call we made to this seller on each chain, when it did not
     // deliver. Outranks the settlement gate: history cannot see an outage.
     deliveryFailing: local ? null : deliveryFailingByChain(origin, spendChains),
@@ -1783,8 +1801,13 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
       .filter((r) => !onlyUrl || sameUrl(r.url))
       .slice(0, 5)
       .map((r) => ({ ...r, networks: r.networks, wire: "x402" }));
-  } else {
-    const { results } = await routeRows({ query: task, top: onlyUrl ? 200 : 20, include: "external", ...indexCtx() });
+  } else if (isEvmBuyerChain(chain)) {
+    // THE EVM FAMILY: Base, and every other chain src/evm-buyer-chains.js
+    // lists that SOR_EVM_CHAINS enables (route-execute never asks for one it
+    // does not). One gate for all of them, keyed on the chain's CAIP-2 id;
+    // the unproven tier below stays Base's.
+    const evmCfg = evmBuyerChain(chain);
+    const { results } = await routeRows({ query: task, top: onlyUrl ? 200 : 20, include: "external", ...(chain !== "base" ? { networkFilter: evmCfg.caip2, strictNetwork: true } : {}), ...indexCtx() });
     // The SAME evidence object every public label reads (dispatchEvidence):
     // settled and payers (the best single wallet's figures), the chain-join
     // address and the binding (every figure kept against the wallet it was
@@ -1792,7 +1815,7 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
     const ev = dispatchEvidence();
     provenPayToByOrigin = ev.provenPayTo;
     candidates = (results || [])
-      .filter((r) => r.seller && r.url && r.priceUsd > 0 && r.priceUsd <= cap && Array.isArray(r.networks) && r.networks.includes("eip155:8453"))
+      .filter((r) => r.seller && r.url && r.priceUsd > 0 && r.priceUsd <= cap && Array.isArray(r.networks) && r.networks.includes(evmCfg.caip2))
       // Never SPEND against an unsubstituted OpenAPI path template
       // ("/stock/{symbol}"): the request cannot succeed and the money is at
       // risk for nothing. /api/route still SHOWS these rows, flagged
@@ -1821,20 +1844,20 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
       // observation. Only the tally is new; the decision is untouched, and it
       // is computed ONCE per candidate rather than once per branch.
       .filter((r) => {
-        const verdict = dispatchEligibility({ routable: true, networks: r.networks, settled: r.settled, payers: r.payers, priceUsd: r.priceUsd, urlTemplate: !!r.urlTemplate, spendChains: ["base"], minSettled: SOR_MIN_SETTLED_TX, minPayers: SOR_MIN_DISTINCT_PAYERS, routeText: r, usdcDomain: r.evmDomainByNetwork?.["eip155:8453"] || null });
-        const eligible = verdict.chains.base?.eligible === true;
+        const verdict = dispatchEligibility({ routable: true, networks: r.networks, settled: r.settled, payers: r.payers, priceUsd: r.priceUsd, urlTemplate: !!r.urlTemplate, spendChains: [chain], minSettled: SOR_MIN_SETTLED_TX, minPayers: SOR_MIN_DISTINCT_PAYERS, routeText: r, ...(chain === "base" ? { usdcDomain: r.evmDomainByNetwork?.["eip155:8453"] || null } : { usdcDomainByChain: { [chain]: r.evmDomainByNetwork?.[evmCfg.caip2] || null } }) });
+        const eligible = verdict.chains[chain]?.eligible === true;
         // UNPROVEN TIER (src/base-unproven.js): below the floor with nothing
         // else wrong and a price within the ceiling. Kept, marked, and
         // ordered after every proven candidate; paid only at the wallet its
         // own live 402 names (below) and never above the ceiling (payX402).
-        if (!eligible && verdict.chains.base?.unprovenTier === true) {
+        if (!eligible && chain === "base" && verdict.chains.base?.unprovenTier === true) {
           r.unproven = true;
           gateDrops.byReason.unproven_admitted = (gateDrops.byReason.unproven_admitted || 0) + 1;
           return true;
         }
         if (!eligible) {
           gateDrops.total++;
-          const why = verdict.chains.base?.reason || "other";
+          const why = verdict.chains[chain]?.reason || "other";
           gateDrops.byReason[why] = (gateDrops.byReason[why] || 0) + 1;
         }
         return eligible;
@@ -1842,6 +1865,9 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
       // Proven first, most settled first; unproven after every proven one.
       .sort((a, b) => ((a.unproven ? 1 : 0) - (b.unproven ? 1 : 0)) || (b.settled - a.settled))
       .slice(0, 5);
+  } else {
+    // A chain no buyer here pays on resolves nothing.
+    candidates = [];
   }
   if (onlyUrl) candidates = candidates.filter((r) => sameUrl(r.url));
   // What the route sells, on EVERY chain: the Tempo and Algorand candidates
@@ -1990,7 +2016,7 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
           liveRead = true;
           let body = "";
           try { body = await readTextCapped(probe, 4000); } catch { /* header-only quote */ }
-          livePayTo = payToFromLive402({ header: probe.headers.get("payment-required"), body });
+          livePayTo = payToFromLive402({ header: probe.headers.get("payment-required"), body, ...(isEvmBuyerChain(chain) ? { network: evmBuyerChain(chain).caip2 } : {}) });
           liveAccepts = acceptsFromLive402({ header: probe.headers.get("payment-required"), body });
           return livePayTo;
         };
@@ -2000,12 +2026,12 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
         // nobody, the facilitator refuses. The crawl's observation already
         // labelled the row; this reads the LIVE accept so a seller who fixed
         // it since the crawl is admitted and one who broke it since is not.
-        if (chain === "base") {
+        if (isEvmBuyerChain(chain)) {
           await readLivePayTo();
           // The accept the buyer will sign (pickPayableAccept): the first
-          // payable Base USDC entry, so an unsignable one listed ahead of it
-          // does not skip a payable seller.
-          const liveBase = pickPayableAccept(liveAccepts || [], "base");
+          // payable entry in the chain's own stablecoin, so an unsignable one
+          // listed ahead of it does not skip a payable seller.
+          const liveBase = pickPayableAccept(liveAccepts || [], chain);
           const domain = liveBase ? usdcDomainVerdict(liveBase) : { verdict: "unknown" };
           // Both unsignable verdicts skip the seller HERE, before anything is
           // signed - a Gateway-rail accept used to pass this gate as "unknown"
@@ -2013,6 +2039,12 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
           if (unsignableByStockBuyer(domain)) {
             console.warn(`[sor] refusing ${r.seller}: ${usdcDomainMismatchDetail(domain)}`);
             live = false;
+          }
+          // Off Base the domain must also be the token's own from our table
+          // (the payer refuses it again on the accept it signs).
+          if (live && chain !== "base") {
+            const own = liveBase ? evmAcceptDomainCheck(liveBase, chain) : { ok: false, field: "accept" };
+            if (!own.ok) { console.warn(`[sor] refusing ${chain} candidate ${r.seller}: its accept's EIP-712 ${own.field} is not the token's own`); live = false; }
           }
         }
         // ALGORAND, the same rule the Base binding closed on 2026-09-03 and the
@@ -2079,9 +2111,9 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
             }
           }
         }
-        if (live && chain === "base" && r.binding && !r.unproven) {
+        if (live && isEvmBuyerChain(chain) && r.binding && !r.unproven) {
           const livePayTo = await readLivePayTo();
-          const gate = baseLiveGate({ networks: r.networks, settled: r.settled, payers: r.payers, priceUsd: r.priceUsd, urlTemplate: !!r.urlTemplate, minSettled: SOR_MIN_SETTLED_TX, minPayers: SOR_MIN_DISTINCT_PAYERS, routeText: r, binding: r.binding, livePayTo });
+          const gate = baseLiveGate({ chain, networks: r.networks, settled: r.settled, payers: r.payers, priceUsd: r.priceUsd, urlTemplate: !!r.urlTemplate, minSettled: SOR_MIN_SETTLED_TX, minPayers: SOR_MIN_DISTINCT_PAYERS, routeText: r, binding: r.binding, livePayTo });
           if (!gate.ok) {
             console.warn(`[sor] refusing ${r.seller}: ${gate.detail} (evidence wallets ${gate.payTos.length ? gate.payTos.join(",") : "none"}, live ${gate.livePayTo || "unreadable"})`);
             live = false;
@@ -2203,7 +2235,8 @@ for (const tier of EXEC_TIERS) {
     // Chains external routing can SETTLE on: Base always (the proven path);
     // Algorand only once the dedicated AVM spending wallet is configured;
     // Tempo (MPP sellers) only once the dedicated Tempo spending wallet is.
-    externalChains: () => ["base", ...(avmBuyerConfigured() ? ["algorand"] : []), ...(tempoBuyerConfigured() ? ["tempo"] : []), ...(svmBuyerConfigured() ? ["solana"] : [])],
+    // Base and every other EVM chain SOR_EVM_CHAINS lists (one spending wallet).
+    externalChains: () => [...enabledEvmBuyerChains(), ...(avmBuyerConfigured() ? ["algorand"] : []), ...(tempoBuyerConfigured() ? ["tempo"] : []), ...(svmBuyerConfigured() ? ["solana"] : [])],
   });
   if (CATALOG[tool.route]) throw new Error(`Duplicate route: ${tool.route}`);
   CATALOG[tool.route] = tool;
@@ -3767,7 +3800,7 @@ app.get("/api/gateway-status", async (req, res) => {
   // .status); upstreamBuyer adds the x402 spending wallet's bucketed status
   // (src/upstream-buyer-status.js) - same alarm pattern, same
   // numbers-never-leave rule.
-  const [gateway, upstreamBuyer, upstreamBuyerAvm, upstreamBuyerTempo, upstreamBuyerSvm, subscriptionFeePayer, stellarFacilitator, databases] = await Promise.all([gatewayCreditsStatus(), upstreamBuyerStatus(), avmBuyerStatus(), tempoBuyerStatus(), svmBuyerStatus().catch(() => ({ status: "unknown", asset: "USDC", chain: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" })), subscriptionFeePayerStatus(), stellarFacilitatorStatus().catch(() => ({ status: "unknown", asset: "XLM", chain: "stellar:pubnet" })), databasesStatus().catch(() => null)]);
+  const [gateway, upstreamBuyer, upstreamBuyerAvm, upstreamBuyerTempo, upstreamBuyerSvm, subscriptionFeePayer, stellarFacilitator, databases, upstreamBuyerEvm] = await Promise.all([gatewayCreditsStatus(), upstreamBuyerStatus(), avmBuyerStatus(), tempoBuyerStatus(), svmBuyerStatus().catch(() => ({ status: "unknown", asset: "USDC", chain: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" })), subscriptionFeePayerStatus(), stellarFacilitatorStatus().catch(() => ({ status: "unknown", asset: "XLM", chain: "stellar:pubnet" })), databasesStatus().catch(() => null), upstreamBuyerEvmStatus().catch(() => ({ status: "unknown" }))]);
   // `databases`: DATABASE_URL (`leads`) and analytics Postgres reachability, status words only
   // (src/db-status.js) - the heartbeat pages on "unreachable".
   // The operator sees the real figures; everyone else sees the verdict. The
@@ -3782,6 +3815,9 @@ app.get("/api/gateway-status", async (req, res) => {
   const externalSpendGlobal = await globalUnsettledStatus().catch(() => ({ status: "unknown" }));
   const body = {
     ...gateway, upstreamBuyer, upstreamBuyerAvm, upstreamBuyerTempo, upstreamBuyerSvm, subscriptionFeePayer,
+    // The same EVM spending wallet on each other chain SOR_EVM_CHAINS enables:
+    // one word for all of them and one per chain ("off" with none enabled).
+    upstreamBuyerEvm,
     xDataSpend: full ? spend.xDataSpend : publicBucket(spend.xDataSpend),
     exaSpend: full ? spend.exaSpend : publicBucket(spend.exaSpend),
     exaAllowance: full ? spend.exaAllowance : publicBucket(spend.exaAllowance),

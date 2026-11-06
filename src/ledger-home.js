@@ -14,7 +14,7 @@ import { toolList } from "./pages.js";
 import { RAILS, RAILS_SHORT } from "./rails.js";
 import { CAIP2_NAMES } from "./stats.js";
 import { chainMark, CHAIN_ORDER } from "./chain-logos.js";
-import { EXTERNAL_CHAIN_BY_NETWORK } from "./tools/route-execute.js";
+import { routerPayChains } from "./tools/route-execute.js";
 import { railKey } from "./rails.js";
 import { tempoEnabled } from "./mpp-tempo.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
@@ -134,8 +134,9 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
   // One noun on every surface: the x402 chains, plus Tempo over MPP when it is
   // on. "N rails" counted Tempo as a chain beside copy that said N-1 chains.
   const railCountLabel = `${RAILS.length} chains${rails.length > RAILS.length ? " + Tempo" : ""} live`;
-  // The chains the router can pay an outside seller on, read from its map.
-  const routerChains = [...new Set(Object.values(EXTERNAL_CHAIN_BY_NETWORK))];
+  // The chains the router can pay an outside seller on right now: its map
+  // plus the EVM chains SOR_EVM_CHAINS lists.
+  const routerChains = routerPayChains();
 
   const canonical = baseUrl + "/";
   // Title <= 70 and description <= 155 (the shell trims, but the homepage
