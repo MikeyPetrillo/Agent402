@@ -21,13 +21,16 @@
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
 import { createHmac } from "node:crypto";
 import { openapiReader, resolveReplayableInput } from "./lib/replayable-example.js";
-import { assertOwnPaidTarget } from "./lib/buyer-guard.js";
+import { assertOwnPaidTarget, capFromEnv, guardCappedSigning } from "./lib/buyer-guard.js";
+import { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2 } from "../src/avm-network.js";
 import { slowPreferOf, paidCallHonoringSlowRoutes } from "./lib/slow-route-buy.js";
 
 const TARGET = assertOwnPaidTarget((process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, ""), "cross-chain-matrix");
 const readOpenapi = openapiReader(TARGET);
 const TOP_N = Number(process.argv[2] || process.env.MATRIX_TOP_N || 15);
 const DRY = process.env.MATRIX_DRY_RUN === "1" || process.env.MATRIX_DRY_RUN === "true";
+// No single cell signs more than this (every rail's client carries the guard).
+const CELL_MAX_USD = DRY ? 0 : capFromEnv("MATRIX_CELL_MAX_USD", 3.5, { script: "cross-chain-matrix" });
 
 const secret = (process.env.POW_SECRET || "").trim();
 const heartbeat = () =>
@@ -95,6 +98,7 @@ async function setupEvm() {
   const account = privateKeyToAccount(pk);
   const client = disableVendorSpendControls(new x402Client());
   registerExactEvmScheme(client, { signer: account });
+  guardCappedSigning(client, { maxUsd: CELL_MAX_USD, networks: CHAINS.filter((c) => c.kind === "evm").map((c) => c.caip2) });
   return { client, http: new x402HTTPClient(client), payer: account.address };
 }
 
@@ -106,7 +110,9 @@ async function setupWrappers() {
       import("@x402/core/client"), import("@x402/svm/exact/client"), import("@x402/fetch"), import("@solana/kit")]);
     const bytes = raw.startsWith("[") ? Uint8Array.from(JSON.parse(raw)) : new Uint8Array(kit.getBase58Encoder().encode(raw));
     const signer = await kit.createKeyPairSignerFromBytes(bytes);
-    w.solana = { pay: wrap(synthFetch, registerExactSvmScheme(disableVendorSpendControls(new C()), { signer })), payer: signer.address };
+    const sc = registerExactSvmScheme(disableVendorSpendControls(new C()), { signer });
+    guardCappedSigning(sc, { maxUsd: CELL_MAX_USD, networks: ["solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"] });
+    w.solana = { pay: wrap(synthFetch, sc), payer: signer.address };
   })().catch((e) => console.warn(`solana setup skipped: ${e.message}`));
   await (async () => {
     const sec = (process.env.STELLAR_BURNER_SECRET || "").trim(); if (!sec) return;
@@ -115,6 +121,7 @@ async function setupWrappers() {
     const kp = sdk.Keypair.fromSecret(sec);
     const signer = { address: kp.publicKey(), ...sdk.contract.basicNodeSigner(kp, sdk.Networks.PUBLIC) };
     const c = disableVendorSpendControls(new C()); c.register("stellar:*", new ExactStellarScheme(signer, { url: (process.env.STELLAR_RPC_URL || "https://mainnet.sorobanrpc.com").trim() }));
+    guardCappedSigning(c, { maxUsd: CELL_MAX_USD, networks: ["stellar:pubnet"] });
     w.stellar = { pay: wrap(synthFetch, c), payer: kp.publicKey() };
   })().catch((e) => console.warn(`stellar setup skipped: ${e.message}`));
   await (async () => {
@@ -123,6 +130,7 @@ async function setupWrappers() {
       import("@x402/core/client"), import("@x402/avm/exact/client"), import("@x402/fetch"), import("@x402/avm"), import("algosdk")]);
     const acct = algosdk.mnemonicToSecretKey(mn);
     const c = disableVendorSpendControls(new C()); c.register("algorand:*", new ExactAvmScheme(toClientAvmSigner(Buffer.from(acct.sk).toString("base64")), { algodUrl: (process.env.ALGORAND_ALGOD_URL || "https://mainnet-api.algonode.cloud").trim() }));
+    guardCappedSigning(c, { maxUsd: CELL_MAX_USD, networks: [ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2] });
     w.algorand = { pay: wrap(synthFetch, c), payer: acct.addr.toString() };
   })().catch((e) => console.warn(`algorand setup skipped: ${e.message}`));
   return w;

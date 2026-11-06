@@ -44,7 +44,8 @@
 // Usage:
 //   CANARY_DRY=1 node scripts/algorand-rail-canary.js                 # preview, no keys, no spend
 //   ALGORAND_BURNER_MNEMONIC=… node scripts/algorand-rail-canary.js --out report.json
-import { assertOwnPaidTarget } from "./lib/buyer-guard.js";
+import { assertOwnPaidTarget, guardCappedSigning } from "./lib/buyer-guard.js";
+import { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2 } from "../src/avm-network.js";
 import "../src/tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
 import { writeFileSync } from "node:fs";
@@ -147,6 +148,8 @@ if (!DRY) {
     .setDefaultValidityWindow(1000);
   client = disableVendorSpendControls(new x402Client());
   client.register("algorand:*", new ExactAvmScheme(signer, { algorandClient }));
+  // Algorand mainnet USDC only, and no single payment above the per-tool cap.
+  guardCappedSigning(client, { maxUsd: TOOL_MAX_USD, networks: [ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2] });
   http = new x402HTTPClient(client);
   payerAddress = account.addr.toString();
   // The wallet's USDC holding, read before anything is bought. A wallet that

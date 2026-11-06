@@ -27,7 +27,7 @@ const hit = await K.promptCacheGetShared(key);
 ok(JSON.stringify(hit) === JSON.stringify(body), "the shared read finds the other process's entry");
 ok(JSON.stringify(K.promptCacheGet(key)) === JSON.stringify(body), "...and keeps a local copy, so the next read stays local");
 const src = (await import("node:fs")).readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-ok(/const hit = await promptCacheGetShared\(key\);/.test(src), "the pre-paywall cache check reads the shared cache");
+ok(/app\.use\(gatewayCacheGate\(\{[\s\S]{0,200}get: promptCacheGetShared,/.test(src), "the pre-paywall cache check reads the shared cache");
 // Operator verification files (src/well-known-store.js), the same rule.
 {
   const W = await import("../src/well-known-store.js");

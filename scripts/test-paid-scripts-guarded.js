@@ -17,10 +17,8 @@
 //
 // And a guarded script that turns the library's own spend control off must
 // install a per-accept cap of its own (guardCappedSigning, a signing policy or
-// hook, or a mechanism named in OWN_CAP), so no signature is unbounded. The
-// scripts in PENDING_CAP are bounded today by run-level budgets and fixed
-// routes only; the list may only shrink (an entry that gains a cap fails
-// until it is removed), and a new script cannot join it silently.
+// hook, or a mechanism named in OWN_CAP), so no signature is unbounded. There
+// is no exception list: every such script is capped.
 //
 // It also keeps demo-payment.js's inline USDC table (the served demo.js,
 // which imports nothing) in step with client/known-assets.js.
@@ -77,13 +75,6 @@ const OWN_CAP = {
   "catalog-buy.js": /quote-over-ceiling/,
 };
 
-// Guarded scripts with no per-accept cap yet (see the header): each pays only
-// our own service, from a burner, under its own run budget.
-const PENDING_CAP = new Set([
-  "algorand-rail-canary.js", "base-list-sweep.js", "capture-bestsellers.js", "challenge-sweep.js",
-  "cross-chain-matrix.js", "decide-paid-e2e.mjs", "decide-prod-check.mjs", "drain-burner.js",
-  "evm-settle-test.js", "rh-settle-test.js", "solana-sor-live.js", "sweep-burner.js",
-]);
 
 // Signing calls, and the environment reads that choose a target.
 const SIGN = /wrapFetchWithPayment\s*\(|\.createPaymentPayload\s*\(|registerExact\w*Scheme\s*\(|new\s+Exact(?:Evm|Svm|Stellar|Avm)Scheme\s*\(|new\s+UptoEvmScheme\s*\(|Mppx\.create\s*\(|\b(?:tempo|evm)\.(?:charge|subscription)\s*\(/;
@@ -114,10 +105,9 @@ export function verdictFor(file, rawSrc) {
   if (/^test-/.test(file) && !env) return null;
   if (!GUARD_CALL.test(src)) return env ? "signs against an env-chosen target with no assertOwnPaidTarget call" : "signs with a target fixed in code but is not listed in FIXED_TARGET";
   const capped = OWN_POLICY.test(src) || !!(OWN_CAP[file] && OWN_CAP[file].test(src));
-  if (VENDOR_OFF.test(src) && !capped && !PENDING_CAP.has(file)) {
+  if (VENDOR_OFF.test(src) && !capped) {
     return "turns the library spend control off with no per-accept cap (guardCappedSigning, a signing policy, or an OWN_CAP entry)";
   }
-  if (PENDING_CAP.has(file) && capped) return "is capped now: remove it from PENDING_CAP";
   return null;
 }
 
@@ -134,7 +124,7 @@ ok(signers >= 40, `the scan sees the signing scripts (${signers})`);
 ok(fail === 0, "every signing script checks its target, is listed with its reason, or signs only against what it boots");
 
 // The lists stay honest: every entry still exists and still signs.
-for (const f of [...Object.keys(EXTERNAL_BY_DESIGN), ...Object.keys(FIXED_TARGET), ...Object.keys(OWN_CAP), ...PENDING_CAP]) {
+for (const f of [...Object.keys(EXTERNAL_BY_DESIGN), ...Object.keys(FIXED_TARGET), ...Object.keys(OWN_CAP)]) {
   const p = join(HERE, f);
   ok(existsSync(p) && SIGN.test(stripComments(readFileSync(p, "utf8"))), `listed ${f} exists and signs`);
 }
@@ -150,7 +140,12 @@ ok(verdictFor("test-x.js", `const port = 0;\n${pay}`) === null, "fixture: a suit
 ok(verdictFor("test-x.js", `const T = process.env.TARGET_URL || "https://agent402.tools";\n${pay}`) !== null, "fixture: a suite with a production fallback is held to the guard");
 ok(verdictFor("x.js", `const T = assertOwnPaidTarget(process.env.TARGET_URL, "x");\nconst c = disableVendorSpendControls(new x402Client()); registerExactEvmScheme(c, {});`) !== null, "fixture: spend control off with no cap fails");
 ok(verdictFor("x.js", `const T = assertOwnPaidTarget(process.env.TARGET_URL, "x");\nconst c = disableVendorSpendControls(new x402Client()); registerExactEvmScheme(c, {}); guardCappedSigning(c, { maxUsd: 1, networks: ["eip155:8453"] });`) === null, "fixture: spend control off with the capped guard passes");
-ok(verdictFor("drain-burner.js", `const T = assertOwnPaidTarget(process.env.TARGET_URL, "x");\nconst c = disableVendorSpendControls(new x402Client()); registerExactEvmScheme(c, {}); guardCappedSigning(c, { maxUsd: 1, networks: ["eip155:8453"] });`) !== null, "fixture: a pending entry that gains a cap must leave the list");
+ok(verdictFor("drain-burner.js", `const T = assertOwnPaidTarget(process.env.TARGET_URL, "x");\nconst c = disableVendorSpendControls(new x402Client()); registerExactEvmScheme(c, {});`) !== null, "fixture: a script once excepted fails with no cap (there is no exception list)");
+for (const f of ["algorand-rail-canary.js", "base-list-sweep.js", "capture-bestsellers.js", "challenge-sweep.js", "cross-chain-matrix.js", "decide-paid-e2e.mjs", "decide-prod-check.mjs", "drain-burner.js", "evm-settle-test.js", "rh-settle-test.js", "solana-sor-live.js", "sweep-burner.js"]) {
+  const src = stripComments(readFileSync(join(HERE, f), "utf8"));
+  ok(VENDOR_OFF.test(src) && /guardCappedSigning\(\w+, \{ maxUsd: [^\n]+, networks: [^\n]+\}\);/.test(src) && verdictFor(f, src.replace(/guardCappedSigning\(/g, "void (")) !== null,
+    `${f}: its signing client carries the per-accept cap, and fails this scan without it`);
+}
 ok(verdictFor("paid-demo.js", `const T = process.env.TARGET_URL;\n${pay}`) !== null, "fixture: an outside-seller script without its cap marker fails");
 {
   const seed = readFileSync(join(HERE, "x402scan-seed.js"), "utf8");

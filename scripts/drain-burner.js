@@ -27,7 +27,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { readFileSync } from "node:fs";
 import { x402Client, x402HTTPClient } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
-import { assertOwnPaidTarget } from "./lib/buyer-guard.js";
+import { assertOwnPaidTarget, capFromEnv, guardCappedSigning } from "./lib/buyer-guard.js";
 
 const TARGET = assertOwnPaidTarget((process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, ""), "drain-burner");
 const KEY_FILE = process.env.KEY_FILE || "/tmp/agent-key";
@@ -68,6 +68,9 @@ console.log(`Draining ~$0.50/call per chain until settlement fails (<$0.50/chain
 
 const client = disableVendorSpendControls(new x402Client());
 registerExactEvmScheme(client, { signer: account });
+// Each drain buy is one skill-pack call on a listed chain: no single payment
+// above DRAIN_CALL_MAX_USD (an asset outside the known-assets table is refused).
+guardCappedSigning(client, { maxUsd: capFromEnv("DRAIN_CALL_MAX_USD", 0.5, { script: "drain-burner" }), networks: CHAINS.map((c) => c.caip2) });
 const httpc = new x402HTTPClient(client);
 
 // One forced-chain paid call. Returns { settled } — settled=false only on an

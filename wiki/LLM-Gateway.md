@@ -165,7 +165,7 @@ Two policies over one cache (10-minute TTL, served **before** the paywall - a hi
 - **Chat tiers - opt-in.** LLM output is sampled, and a resend usually wants a fresh sample, so nothing is cached unless the request carries `cache: true`. A byte-identical opted-in repeat that carries your payment returns the stored response with `X-Cache: hit`, and the payment is not charged (a Tempo transfer sent before the call is final when sent, so it counts); without a payment the request gets the usual 402.
 - **Embeddings - default-on.** Embeddings are deterministic per model, so an identical repeat is free automatically: it carries your payment as usual and the payment is not charged (a Tempo transfer sent before the call is final when sent, so it counts). Opt out with `cache: false`.
 
-Keys are computed over the *normalized* body (model aliases and field order collapse; every sampling-relevant field is included), so equivalent requests share one entry.
+Keys are computed over the *normalized* body (model aliases and field order collapse; every sampling-relevant field is included), so equivalent requests share one entry, and each entry belongs to the payer that paid for it: a repeat is served from it only to a request from that same payer (an EVM x402 payment signed by the same wallet, the same verified Tempo sender, or the same credits key). A request from another payer, or on a rail with no verified payer before the paywall, is a fresh call and is charged as usual.
 
 ## Related paid surfaces
 
