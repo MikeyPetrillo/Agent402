@@ -27,15 +27,17 @@ Payments:
   buyer can retry.
 Packages:
 - The buyer client (with an x402Client), MCP server and OpenClaw plugin refuse
-  to sign an authorization valid for longer than 24 hours, and a held amount
-  releases inside that window, or within seven days and an hour for a batched
-  payment.
+  to sign an authorization valid for longer than 24 hours, except the client's
+  batched payments, which keep their own limit of seven days and an hour; a
+  held amount is released ten minutes after its authorization expires
+  (agent402-client 0.8.24, agent402-mcp 0.13.30, agent402-openclaw 0.5.10).
 - The MCP server redacts its configured keys from every result, error and log
   line; the OpenClaw proxy removes its credits key from error logs and error
   answers, and its doctor no longer prints it.
 - Tollbooth grants a charged request only when its payment middleware took a
   payment; a charged request whose method the middleware does not price is
-  answered with a 402, so price every method served.
+  answered with a 402, so price every method served (agent402-tollbooth
+  0.11.0).
 Operations:
 - The heartbeat opens one issue when a repository security advisory waits in
   triage for more than a day; the issue names no advisory.
