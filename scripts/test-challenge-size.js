@@ -65,7 +65,11 @@ if (LOCAL_BOOT) {
   localProc = spawn("node", ["src/server.js"], { env: {
     ...process.env, PORT: String(PORT), FREE_MODE: "", TARGET_URL: "",
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
-    FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYMENT_NETWORKS: "base", MPP_SECRET_KEY: "",
+    FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYMENT_NETWORKS: "base",
+    // MPP on, so the evm challenges in WWW-Authenticate are this tree's (they
+    // are built from this tree's PAYMENT-REQUIRED); projectTotal swaps them
+    // into production's header chain by chain (scripts/lib/mpp-challenge-merge.js).
+    MPP_SECRET_KEY: "challenge-size-local-mpp-secret",
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
     // Routes production serves behind a key (X, Farcaster, Exa, judge, RugCheck,
     // speech): placeholder keys mount them so their 402 is this tree's, not
@@ -185,6 +189,7 @@ function read402(url, { method = "GET", headers = {}, body, timeoutMs = 20000 } 
 const bodyFor = (t) => (t.method !== "POST" ? undefined : /^\/v1\//.test(t.path) ? GATEWAY_BODY : "{}");
 const headerBytes = (res) => { let n = 20; res.headers.forEach((v, k) => { n += k.length + v.length + 4; }); return n; };
 const headerMap = (res) => { const m = new Map(); res.headers.forEach((v, k) => m.set(k, v.length)); return m; };
+import { mergeEvmChallenges } from "./lib/mpp-challenge-merge.js";
 // The projected total: this tree's headers where the local boot answered
 // them, prod's for what only prod carries (the MPP challenge, the edge's own
 // headers), and the projected challenge in place of either payment-required.
@@ -193,6 +198,12 @@ function projectTotal(prodRes, localRes, projectedPR) {
   let n = 20;
   for (const k of new Set([...prod.keys(), ...local.keys()])) {
     if (k === "payment-required") { n += k.length + projectedPR + 4; continue; }
+    // Production's challenges, with each evm one this tree issues swapped in
+    // (the Tempo challenges and any chain the local boot lacks stay prod's).
+    if (k === "www-authenticate") {
+      if (prod.has(k)) { const v = mergeEvmChallenges(prodRes.headers.get(k), localRes.headers.get(k) || ""); if (v) n += k.length + v.length + 4; }
+      continue;
+    }
     if (local.has(k)) { n += k.length + local.get(k) + 4; continue; }
     if (prod.has(k) && !LOCAL_DECIDES.has(k)) n += k.length + prod.get(k) + 4;
   }

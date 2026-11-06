@@ -1919,6 +1919,8 @@ jobs:
           t node scripts/test-ink-rail.js
           # Ink graduation rehearsal: gated, no surface names Ink (/ink 404, nav, strip, chain list, llms.txt, openapi, manifest, pricing, sitemap; revenue entry inert); through the NODE_ENV=test seam that moves it into RAILS, every one lists it, counts include it and its revenue entry is scanned and ranked (paid-mode boots vs stubs, loopback only - offline)
           t node scripts/test-ink-graduation.js
+          # Every 402 fits with Ink graduated: worst routes project 300+ bytes under 16,200 total header bytes; a 402 exposes exactly the listed headers it carries; the MPP evm challenge binds the accept without outputSchema while PAYMENT-REQUIRED keeps it and the bazaar extension (paid-mode boot vs stubs, loopback only - offline)
+          t node scripts/test-challenge-fit.js
           # Robinhood refusals in words: no-verdict passes to the next listed before our relayer and is read on chain when none settles; buyer verdicts retried nowhere; 5xx and other networks unchanged (real hook, stubs - offline)
           t node scripts/test-rh-prose-refusal.js
           # A settle failure that names a transaction is booked and read from the chain: landed after a 402 -> owed once; reverted, foreign or never mined -> nothing owed (stub RPC, real refund ledger - offline)

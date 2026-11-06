@@ -103,8 +103,13 @@ try {
   const meta = Challenge.meta(ch) ?? (ch.opaque ? PaymentRequest.deserialize(ch.opaque) : undefined);
   const advertised = x402.Header.decodePaymentRequiredEnvelope(prHeader).accepts
     .find((a) => a.network === "eip155:8453");
-  ok(JSON.stringify(JSON.parse(meta.x402)) === JSON.stringify(advertised),
-    "challenge meta carries the advertised accepts entry verbatim");
+  // The meta binds the advertised entry less its outputSchema (that rides in
+  // PAYMENT-REQUIRED; the paywall's match seam restores it on the way in), so
+  // the native buy below is the proof that the restore path settles.
+  ok(advertised.outputSchema && typeof advertised.outputSchema === "object", "the advertised Base accept declares outputSchema (the restore path is exercised)");
+  const { outputSchema: _advertisedSchema, ...advertisedLessSchema } = advertised;
+  ok(JSON.stringify(JSON.parse(meta.x402)) === JSON.stringify(advertisedLessSchema),
+    "challenge meta carries the advertised accepts entry verbatim, without outputSchema");
   ok(ch.request.amount === advertised.amount && ch.request.recipient === advertised.payTo
     && ch.request.currency === advertised.asset && ch.request.methodDetails.chainId === 8453,
     "native ChargeRequest mirrors the accepts entry");
