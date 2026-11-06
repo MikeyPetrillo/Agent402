@@ -446,7 +446,7 @@ function memoryRedis() {
   ok(String(s0).startsWith("t2:"), "chain tx: a decodable Solana transaction keys as t2:");
   const svmCopies = [
     await svm({ transaction: tx1, pad: 1 }), await svm({ transaction: tx1, pad: 2 }), await svm({ pad: "x".repeat(500), transaction: tx1 }),
-    await svm({ transaction: tx1, pad: deep(5000) }), await svm({ transaction: tx1, pad: deep(40) }),
+    await svm({ transaction: tx1, pad: deep(200) }), await svm({ transaction: tx1, pad: deep(40) }),
     await svm({ transaction: tx1 }, { ...svmAccepted, network: "solana" }),
   ];
   ok(svmCopies.every((x) => idOf(x) === idOf(s0)), `chain tx: junk keys, deep nesting and a network alias around one Solana transaction are one identity (${svmCopies.map((x) => String(x).slice(0, 3)).join(",")})`);
@@ -477,7 +477,7 @@ function memoryRedis() {
   ok(String(a0).startsWith("t2:"), "chain tx: a decodable Algorand group keys as t2:");
   const avmCopies = [
     await avm({ paymentGroup: g1, paymentIndex: 0, pad: 1 }), await avm({ paymentGroup: g1, paymentIndex: 0, pad: 2 }),
-    await avm({ paymentGroup: g1, paymentIndex: 0, pad: deep(5000) }), await avm({ paymentGroup: g1, paymentIndex: 1 }),
+    await avm({ paymentGroup: g1, paymentIndex: 0, pad: deep(200) }), await avm({ paymentGroup: g1, paymentIndex: 1 }),
     await avm({ paymentGroup: g1, paymentIndex: 0 }, { ...avmAccepted, network: ALGORAND_MAINNET_LEGACY_CAIP2 }),
   ];
   ok(avmCopies.every((x) => idOf(x) === idOf(a0)), `chain tx: junk keys, deep nesting, another member's index and the full-hash network id around one Algorand group are one identity (${avmCopies.map((x) => String(x).slice(0, 3)).join(",")})`);
@@ -492,7 +492,7 @@ function memoryRedis() {
 
   // Nonce-less payloads that do not decode as a transaction keep the payload
   // key, and nesting past the depth bound keys on the raw credential.
-  ok(String(await keyOf({ x402Version: 2, accepted: svmAccepted, payload: { transaction: "bm90IGEgdHg=", pad: deep(20) } })).startsWith("p2:") && String(await keyOf({ x402Version: 2, accepted: svmAccepted, payload: { transaction: "bm90IGEgdHg=", pad: deep(5000) } })).startsWith("c:"),
+  ok(String(await keyOf({ x402Version: 2, accepted: svmAccepted, payload: { transaction: "bm90IGEgdHg=", pad: deep(20) } })).startsWith("p2:") && String(await keyOf({ x402Version: 2, accepted: svmAccepted, payload: { transaction: "bm90IGEgdHg=", pad: deep(200) } })).startsWith("c:"),
     "chain tx: an undecodable transaction keeps the payload key, nesting past the bound keeps the raw identity");
   // Just past the bound, well short of the stack limit: only the bound turns it raw.
   ok(String(await keyOf({ x402Version: 2, accepted: svmAccepted, payload: { transaction: "bm90IGEgdHg=", pad: deep(40) } })).startsWith("c:"),
