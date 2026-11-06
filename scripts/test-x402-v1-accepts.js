@@ -303,7 +303,12 @@ try {
     }
     // base64url and whitespace around the value are the same payment too.
     for (const [label, enc] of [["base64url", b64url], ["padded with whitespace", (o) => ` ${b64(o)}\t`]]) {
-      const genuine = await mint();
+      // Plain ASCII JSON of hex and names never encodes to + or /, so the
+      // payload carries an unsigned memo of > and ? (which do) for the
+      // base64url spelling to be bytes the paywall's own decoder refuses:
+      // only the intake rewrite lets it through.
+      const genuine = { ...(await mint()), memo: ">>>???~~~" };
+      if (label === "base64url") ok(/[-_]/.test(enc(genuine)), "the base64url header differs from the standard spelling");
       const s0 = facCalls.settle;
       const r = await fetch(`${B}/api/uuid`, { headers: { "payment-signature": enc(genuine) } });
       ok(r.status === 200 && facCalls.settle === s0 + 1, `a ${label} header settles once (${r.status}, ${s0} -> ${facCalls.settle})`);
