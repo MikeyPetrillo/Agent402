@@ -188,6 +188,7 @@ const TRIGGERS = [
   ["500", (req, res) => json(res, 500, { error: { message: "boom", type: "server_error" } })],
   ["a timeout", (req, res, body) => setTimeout(() => { try { json(res, 200, answer(body.model, { x_vendor: { charged_micro: DIRECT_MICRO } })); } catch { /* aborted */ } }, 1500)],
   ["a 200 with a late error after leading whitespace", (req, res) => { res.writeHead(200, { "content-type": "application/json" }); res.write("   \n  \n"); setTimeout(() => res.end(JSON.stringify({ error: { message: "worker lost", type: "server_error", param: null, code: "worker_lost" } })), 20); }],
+  ["a 200 with a late error beside partial output", (req, res, body) => { res.writeHead(200, { "content-type": "application/json" }); res.write("  \n"); res.end(JSON.stringify({ ...answer(body.model, { x_vendor: { charged_micro: DIRECT_MICRO } }), error: { message: "worker lost mid-answer", type: "server_error", param: null, code: "worker_lost" } })); }],
   ["a 200 without a cost", (req, res, body) => json(res, 200, answer(body.model))],
   ["a 200 with a negative cost", (req, res, body) => json(res, 200, answer(body.model, { x_vendor: { charged_micro: -5 } }))],
   ["a non-JSON 200", (req, res) => json(res, 200, "<html>gateway</html>")],
