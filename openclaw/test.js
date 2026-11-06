@@ -128,6 +128,31 @@ const upstream = `http://127.0.0.1:${stub.address().port}`;
   ok(uptoReady(PERMIT2_READY_MIN) && uptoReady("115792089237316195423570985008687907853269984665640564039457584007913129639935") && !uptoReady(0n) && !uptoReady(999n) && !uptoReady("garbage"), "uptoReady: a max-uint (or any >= 1M USDC) Permit2 allowance counts; dust, zero and junk do not");
 }
 
+// The policy guardSigning registers drops an accept that asks to stay valid
+// past MAX_VALIDITY_SECONDS before the client selects one: alone it is refused
+// with nothing signed, and listed first beside a valid accept the valid one is
+// selected and signed. A spy scheme stands in for the signer.
+{
+  const { x402Client } = await import("@x402/core/client");
+  const { guardSigning } = await import("./known-assets.js");
+  const valid = { scheme: "exact", network: "eip155:8453", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", amount: "1000", payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } };
+  const long = { ...valid, maxTimeoutSeconds: 90000 };
+  const sign = async (accepts) => {
+    const signed = [], approved = [], refused = [];
+    const client = new x402Client();
+    client.setSpendControls?.(false);
+    client.register("eip155:8453", { scheme: "exact", createPaymentPayload: async (v, r) => { signed.push(r); return { x402Version: v, payload: { authorization: { value: r.amount, validBefore: String(Math.floor(Date.now() / 1000) + Number(r.maxTimeoutSeconds)) } } }; } });
+    guardSigning(client, { allowance: () => 1, onSign: (usd, r) => approved.push(r), onRefuse: (d) => refused.push(d) });
+    let err = null;
+    try { await client.createPaymentPayload({ x402Version: 2, resource: { url: "https://seller.example/x" }, accepts }); } catch (e) { err = e; }
+    return { signed, approved, refused, err };
+  };
+  const alone = await sign([long]);
+  ok(alone.signed.length === 0 && alone.approved.length === 0 && alone.refused.length === 1 && alone.refused[0].reason === "validity" && /every payment option it may sign asks to stay valid for more than 86400 seconds/.test(alone.err?.message || "") && /nothing was signed/.test(alone.err?.message || ""), `a lone accept valid for 90000 seconds is dropped before selection and nothing is signed (${alone.err?.message})`);
+  const mixed = await sign([long, valid]);
+  ok(!mixed.err && mixed.signed.length === 1 && mixed.signed[0].maxTimeoutSeconds === 300 && mixed.approved.length === 1 && mixed.approved[0].maxTimeoutSeconds === 300 && mixed.refused.length === 0, `beside a valid accept, the 90000-second one is skipped and the valid one is signed (${mixed.err?.message || mixed.signed.map((r) => r.maxTimeoutSeconds).join(",")})`);
+}
+
 // ---- the signed amount is checked before the payment is sent -------------------
 // The stock v2 EVM signer, made to sign 500000000 base units whatever the
 // accept asks, against a loopback seller that records every payment header;

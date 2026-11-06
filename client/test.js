@@ -760,6 +760,31 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     ok(await sent(Math.floor(Date.now() / 1000) + 300) === null, "control: a payload signed for five minutes is sent");
   }
 
+  // The policy guardSigning registers drops an accept that asks to stay valid
+  // past MAX_VALIDITY_SECONDS before the client selects one: alone it is refused
+  // with nothing signed, and listed first beside a valid accept the valid one is
+  // selected and signed. A spy scheme stands in for the signer.
+  {
+    const { x402Client } = await import("@x402/core/client");
+    const { guardSigning } = await import("./known-assets.js");
+    const valid = { scheme: "exact", network: "eip155:8453", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", amount: "1000", payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } };
+    const long = { ...valid, maxTimeoutSeconds: 90000 };
+    const sign = async (accepts) => {
+      const signed = [], approved = [], refused = [];
+      const client = new x402Client();
+      client.setSpendControls?.(false);
+      client.register("eip155:8453", { scheme: "exact", createPaymentPayload: async (v, r) => { signed.push(r); return { x402Version: v, payload: { authorization: { value: r.amount, validBefore: String(Math.floor(Date.now() / 1000) + Number(r.maxTimeoutSeconds)) } } }; } });
+      guardSigning(client, { allowance: () => 1, onSign: (usd, r) => approved.push(r), onRefuse: (d) => refused.push(d) });
+      let err = null;
+      try { await client.createPaymentPayload({ x402Version: 2, resource: { url: "https://seller.example/x" }, accepts }); } catch (e) { err = e; }
+      return { signed, approved, refused, err };
+    };
+    const alone = await sign([long]);
+    ok(alone.signed.length === 0 && alone.approved.length === 0 && alone.refused.length === 1 && alone.refused[0].reason === "validity" && /every payment option it may sign asks to stay valid for more than 86400 seconds/.test(alone.err?.message || "") && /nothing was signed/.test(alone.err?.message || ""), `a lone accept valid for 90000 seconds is dropped before selection and nothing is signed (${alone.err?.message})`);
+    const mixed = await sign([long, valid]);
+    ok(!mixed.err && mixed.signed.length === 1 && mixed.signed[0].maxTimeoutSeconds === 300 && mixed.approved.length === 1 && mixed.approved[0].maxTimeoutSeconds === 300 && mixed.refused.length === 0, `beside a valid accept, the 90000-second one is skipped and the valid one is signed (${mixed.err?.message || mixed.signed.map((r) => r.maxTimeoutSeconds).join(",")})`);
+  }
+
   // A hold ends only when its authorization can no longer settle AND the
   // rolling window has passed it: past validBefore the seller may already
   // have redeemed it, so it stays counted for the window like a settled call.
