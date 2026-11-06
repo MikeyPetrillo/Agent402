@@ -238,7 +238,7 @@ const breakerOpenMs = () => breakerEnv("DIRECT_UPSTREAM_BREAKER_OPEN_MS", 5 * 60
 /** Failure buckets that say nothing about the upstream's health. */
 export const DIRECT_BREAKER_NOT_COUNTED = Object.freeze(["client_gone", "aborted", "refused", "empty"]);
 const NOT_COUNTED = new Set(DIRECT_BREAKER_NOT_COUNTED);
-const blankBreaker = () => ({ fails: 0, openUntil: 0, opens: 0, trialAt: 0 });
+const blankBreaker = () => ({ fails: 0, openUntil: 0, opens: 0, trialAt: 0, trialId: 0 });
 let breaker = blankBreaker();
 let breakerNow = Date.now;
 export function _resetDirectBreakerForTest() { breaker = blankBreaker(); breakerNow = Date.now; }
@@ -246,13 +246,26 @@ export function _setDirectBreakerNowForTest(fn) { breakerNow = typeof fn === "fu
 /** True when a direct attempt may be made now. Once the open period ends one
  *  caller takes the trial; a trial that never reports holds it for at most
  *  one open period. */
-export function directBreakerAllows() {
-  if (!breaker.openUntil) return true;
+export function directBreakerAllows() { return directBreakerTake() !== null; }
+/** The same decision as a grant: null when no direct attempt may be made,
+ *  else { trial } (trial true when this caller took the half-open trial).
+ *  A caller that exits before its direct attempt is sent hands the grant to
+ *  directBreakerRelease, so an unsent trial never holds the breaker shut. */
+let trialSeq = 0;
+export function directBreakerTake() {
+  if (!breaker.openUntil) return { trial: false, id: 0 };
   const now = breakerNow();
-  if (now < breaker.openUntil) return false;
-  if (breaker.trialAt && now - breaker.trialAt < breakerOpenMs()) return false;
+  if (now < breaker.openUntil) return null;
+  if (breaker.trialAt && now - breaker.trialAt < breakerOpenMs()) return null;
   breaker.trialAt = now;
-  return true;
+  breaker.trialId = ++trialSeq;
+  return { trial: true, id: breaker.trialId };
+}
+/** Releases a trial that was granted and never sent; a no-op for a closed
+ *  grant, a trial that already reported, or a later caller's trial. */
+export function directBreakerRelease(grant) {
+  if (!grant?.trial || breaker.trialId !== grant.id || !breaker.trialAt) return;
+  breaker.trialAt = 0;
 }
 /** The outcome of one direct attempt: ok, or the failure's bucket. */
 export function noteDirectOutcome(ok, reason) {
