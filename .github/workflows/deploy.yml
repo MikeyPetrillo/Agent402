@@ -3511,6 +3511,8 @@ jobs:
           t node scripts/test-sweep-burner.js
           # x-data kit (offline)
           t node scripts/test-x-data-kit.js
+          # x-search-recent author and post histogram: counted on the final response, counts only (offline)
+          t node scripts/test-x-search-stats.js
           # Exa kit (env-gated on EXA_API_KEY; offline, stubbed fetch, nothing spent)
           t node scripts/test-exa-kit.js
           # b2b-enrich kit (offline)
