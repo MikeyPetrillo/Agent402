@@ -352,6 +352,77 @@ try {
   stub(() => Promise.resolve(jsonRes({ schemaVersion: "1.0.0", pairs: [] })));
   r = await h("sol-token-search")({ query: "zzzz" });
   ok(r.totalSolanaPairs === 0 && r.pairs.length === 0, "search: no match -> empty list, not an error");
+  ok(r.fallback.ran === true && r.fallback.status === "nothing-found" && r.complete === true, "search: an empty fallback that answered is a complete empty answer");
+
+  // A matching Solana row in the search: no fallback read at all.
+  stub((url) => url.startsWith("https://api.dexscreener.com/latest/dex/search?q=JUP")
+    ? Promise.resolve(jsonRes({ schemaVersion: "1.0.0", pairs: [DS_PAIR({ pairAddress: "a" }), DS_PAIR({ pairAddress: "b" }), DS_PAIR({ pairAddress: "c" })] }))
+    : Promise.reject(new Error("bad url " + url)));
+  r = await h("sol-token-search")({ query: "JUP", limit: 2 });
+  ok(calls.length === 1 && r.fallback.ran === false && r.fallback.status === "not-needed", `search: Solana hits -> one read, no fallback (${calls.length} call(s))`);
+  ok(r.returned === 2 && r.matched === 3 && r.complete === false && r.truncated === true && r.totalSolanaPairs === 3, "search: partial fields count the limit cut");
+  ok(/relevance order/.test(r.note), "search: relevance-order note when no fallback ran");
+
+  // The ticker is busy on other chains: the search holds no Solana pair, so the
+  // mints come from the token index (verified first) and pairs are read by mint.
+  {
+    const WIF = "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm";
+    const KWIF = "6Rwcmkz9yiYVM5EzyMcr4JsQPGEAWhcUvLvfBperYnUt";
+    const SWORD = "5tCju6YNxHq5zrA6tGndr6F7TK42mpUFmeE31cSFpump";
+    const BONK = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263";
+    const tok = (id, symbol, name, isVerified) => ({ ...JUP_TOKEN, id, symbol, name, isVerified, tags: isVerified ? ["verified"] : ["unknown"] });
+    const JUP_WIF = [tok(SWORD, "swordcat", "cat wif sword", undefined), tok(WIF, "$WIF", "dogwifhat", true), tok(KWIF, "KWIF", "Kitten Wif Hat", true), { id: "not a mint" }];
+    const base = (addr, symbol, name) => ({ baseToken: { address: addr, symbol, name }, quoteToken: { address: SOL, name: "Wrapped SOL", symbol: "SOL" } });
+    const OTHER_CHAINS = [DS_PAIR({ chainId: "robinhood", pairAddress: "rh", ...base("0xrh", "WIF", "dogwifhat") }), DS_PAIR({ chainId: "ethereum", pairAddress: "eth", ...base("0xeth", "WIF", "WIF") })];
+    const TOP = [DS_PAIR({ pairAddress: "w1", liquidity: { usd: 100 }, ...base(WIF, "$WIF", "dogwifhat") }), DS_PAIR({ pairAddress: "k1", liquidity: { usd: 9e9 }, ...base(KWIF, "KWIF", "Kitten Wif Hat") }), DS_PAIR({ pairAddress: "s1", ...base(SWORD, "swordcat", "cat wif sword") })];
+    const ALL = [DS_PAIR({ pairAddress: "w1", liquidity: { usd: 100 }, ...base(WIF, "$WIF", "dogwifhat") }), DS_PAIR({ pairAddress: "w2", liquidity: { usd: 5000 }, ...base(WIF, "$WIF", "dogwifhat") }), DS_PAIR({ pairAddress: "wq", liquidity: { usd: 1e12 }, baseToken: { address: BONK, symbol: "Bonk", name: "Bonk" }, quoteToken: { address: WIF, symbol: "$WIF" } })];
+    const route = ({ search = OTHER_CHAINS, jup = () => Promise.resolve(jsonRes(JUP_WIF)), top = () => Promise.resolve(jsonRes(TOP)), all = () => Promise.resolve(jsonRes(ALL)) } = {}) => (url) => {
+      if (url.startsWith("https://api.dexscreener.com/latest/dex/search?q=")) return Promise.resolve(jsonRes({ schemaVersion: "1.0.0", pairs: search }));
+      if (url.startsWith("https://lite-api.jup.ag/tokens/v2/search?query=")) return jup(url);
+      if (url.startsWith("https://api.dexscreener.com/tokens/v1/solana/")) return top(url);
+      if (url.startsWith("https://api.dexscreener.com/token-pairs/v1/solana/")) return all(url);
+      return Promise.reject(new Error("bad url " + url));
+    };
+    stub(route());
+    r = await h("sol-token-search")({ query: "wif", limit: 10 });
+    const order = r.pairs.map((p) => p.pairAddress).join(",");
+    ok(order === "w2,w1,k1,s1,wq", `search fallback: the first mint's pairs by liquidity, then the other mints in rank order, then quote-side pairs (got ${order})`);
+    ok(r.totalSolanaPairs === 5 && r.returned === 5 && r.matched === 5 && r.complete === true, "search fallback: w1 from both reads is deduped by pair address");
+    ok(r.fallback.ran === true && r.fallback.why === "no-solana-pairs" && r.fallback.status === "found", `search fallback: says why it ran (${JSON.stringify(r.fallback).slice(0, 120)})`);
+    ok(r.fallback.mints.map((m) => m.mint).join(",") === [WIF, KWIF, SWORD].join(",") && r.fallback.mints[0].isVerified === true && r.fallback.mints[0].symbol === "$WIF", "search fallback: verified mints first, invalid ids dropped");
+    ok(calls.some((c) => c.url === `https://api.dexscreener.com/tokens/v1/solana/${WIF},${KWIF},${SWORD}`) && calls.some((c) => c.url === `https://api.dexscreener.com/token-pairs/v1/solana/${WIF}`), "search fallback: pairs read by mint for Solana");
+    ok(calls.length === 4 && /token index/.test(r.note), "search fallback: four reads, and the note explains the order");
+
+    // Solana rows that do not match the query: they follow the mints' pairs.
+    stub(route({ search: [...OTHER_CHAINS, DS_PAIR({ pairAddress: "d1", ...base(BONK, "DOGE", "not it") }), DS_PAIR({ pairAddress: "w2", ...base(WIF, "XYZ", "relabeled") })] }));
+    r = await h("sol-token-search")({ query: "WIF", limit: 30 });
+    ok(r.pairs.map((p) => p.pairAddress).join(",") === "w2,w1,k1,s1,d1,wq" && r.fallback.why === "no-matching-solana-pairs", `search fallback: unmatched search rows after the mints' pairs, deduped (got ${r.pairs.map((p) => p.pairAddress).join(",")})`);
+
+    // Matching is folded: "$WIF" answers "wif", a word of the query counts.
+    ok(__test.pairMatchesQuery({ base: { symbol: "$WIF", name: "dogwifhat" } }, "wif") && __test.pairMatchesQuery({ base: { symbol: "WIF" } }, "WIF/SOL") && __test.pairMatchesQuery({ base: { address: WIF } }, WIF) && !__test.pairMatchesQuery({ base: { symbol: "KWIF", name: "Kitten Wif Hat" } }, "wif"), "search: query match folds case and symbols, reads words, and takes a mint");
+
+    // Fallback upstream failure with Solana rows in hand: answer them, flagged.
+    stub(route({ search: [DS_PAIR({ pairAddress: "d1", ...base(BONK, "DOGE", "not it") })], jup: () => Promise.resolve(textRes("x", 500)) }));
+    r = await h("sol-token-search")({ query: "wif" });
+    ok(r.pairs.length === 1 && r.pairs[0].pairAddress === "d1" && r.fallback.status === "unavailable" && r.fallback.unavailable.upstream === "Jupiter" && r.fallback.unavailable.reason === "upstream-error", `search fallback: Jupiter 500 -> the search's rows, fallback marked unavailable (${JSON.stringify(r.fallback.unavailable)})`);
+    ok(r.complete === false && r.truncated === true && /relevance order/.test(r.note), "search fallback: an unavailable fallback is never a complete answer");
+
+    // Nothing found and the fallback did not answer: a 5xx, never a hollow 200.
+    stub(route({ jup: () => Promise.reject(Object.assign(new Error("timeout"), { name: "TimeoutError" })) }));
+    try { await h("sol-token-search")({ query: "wif" }); ok(false, "search fallback: Jupiter deadline with no rows resolved"); }
+    catch (e) { ok(e.statusCode === 503 && /^Jupiter did not answer the token search read/.test(e.message), `search fallback: Jupiter deadline with no rows -> 503 (got ${e.statusCode} "${e.message}")`); }
+    stub(route({ jup: () => Promise.resolve(textRes("x", 500)) }));
+    await throws(h("sol-token-search")({ query: "wif" }), 502, "search fallback: Jupiter 500 with no rows -> 502");
+    stub(route({ top: () => Promise.resolve(textRes("x", 502)), all: () => Promise.resolve(textRes("x", 429)) }));
+    await throws(h("sol-token-search")({ query: "wif" }), 502, "search fallback: both pair reads fail with no rows -> 5xx");
+    stub(route({ jup: () => Promise.resolve(jsonRes({ error: "bad" }, 400)) }));
+    await throws(h("sol-token-search")({ query: "wif" }), 503, "search fallback: Jupiter 4xx with no rows -> 503, not a 422 blaming the query");
+
+    // One pair read fails: what the other read gave, flagged partial.
+    stub(route({ all: () => Promise.resolve(textRes("x", 500)) }));
+    r = await h("sol-token-search")({ query: "wif" });
+    ok(r.pairs.map((p) => p.pairAddress).join(",") === "w1,k1,s1" && r.fallback.status === "partial" && r.fallback.unavailable.step === "token pairs" && r.complete === false, `search fallback: one pair read down -> partial answer, not complete (got ${r.pairs.map((p) => p.pairAddress).join(",")} ${r.fallback.status})`);
+  }
 
   // --------------------------------------------------------------------------
   // sol-trending

@@ -6,6 +6,13 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-07
+Tools:
+- sol-token-search finds a Solana token whose ticker is busy on other chains:
+  when the pair search holds no matching Solana pair, the mints come from a
+  Solana token index (verified first) and their pairs are read by mint. The
+  answer says whether that fallback ran and carries the partial-answer fields.
+
 ### 2026-11-06 (Ink rail)
 Payments:
 - Ink (chain 57073) is a listed rail: x402 payments settle in native USDC on
