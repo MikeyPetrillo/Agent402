@@ -3,16 +3,18 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 const ENTRIES = [
   {
     date: "2026-11-07",
-    title: "onchain-sql price, X data tools, Solana token search",
+    title: "onchain-sql price, X data tools, Solana token search, metered chat, OCR and fetch errors",
     items: [
       "Tools: onchain-sql is $0.030 a call (was $0.040), and a call still sends the query service at most 3 queries. The onchain-analyst pack follows the tool's price.",
-      "Tools: x-tweet no longer reads the author: it carries authorId, null author username, name and verified fields, and the /i/web/status link. x-user-tweets is $0.09; looked up by username the profile fills each row's author, looked up by id rows carry authorId and the /i/web/status link. x-search-recent is unchanged.",
-      "Tools: sol-token-search finds a Solana token whose ticker is busy on other chains: when the pair search holds no matching Solana pair, the mints come from a Solana token index (verified first) and their pairs are read by mint. The answer says whether that fallback ran and carries the partial-answer fields.",
+      "Tools: x-tweet no longer reads the author: the tweet carries authorId, its author username, name and verified fields are null, and its link is the /i/web/status form.",
+      "Tools: x-user-tweets is $0.09. Looked up by username, the account's profile still fills user and each row's author. Looked up by id, the author is not read: rows carry authorId, null author fields and the /i/web/status link, and user carries the id with null username, name and verified.",
+      "Tools: x-search-recent is unchanged.",
+      "Tools: sol-token-search finds a Solana token whose ticker is busy on other chains: when the pair search holds no matching Solana pair, the mints come from a Solana token index (verified first) and their pairs are read by mint. The answer says whether that fallback ran, names both sources when it did, and carries the partial-answer fields. No pair found while a fallback read did not answer is a 5xx, never an empty answer.",
+      "Tools: image-ocr answers 422 for a body that is not an image it reads (a PDF, a webpage, an SVG), naming what it got and the formats it reads (PNG, JPEG, GIF, BMP, TIFF, WebP, PNM), and 422 for an image that does not decode or whose header does not give its size, where it answered 500 \"OCR failed: unknown\". An image over 40 megapixels or 32,767 pixels a side is a 422 (image-too-large) before it is decoded.",
+      "Tools: a tool that fetches a URL answers a source host that times out or refuses the connection with a 504 carrying attribution \"upstream\" and the hint source-timeout or source-unreachable, so a caller can retry later or pick another host.",
       "Gateway: a metered model id written with a hyphenated version (v4-1 for v4.1) is served as the dotted id when that exact id is on the upstream's live list; any other unknown part is still refused. The unknown-model 400 carries suggestions (the closest served ids, at most three) and a howToCall that retries with the first.",
       "Gateway: the metered routes take 200k input chars on every model and more on a model with a larger context window (three chars per window token, up to 1,000,000), each request still quoted from its own body. An input over the cap is refused with maxInputChars, inputChars, a trim-input hint and models whose window takes it, before payment on /v1/metered/chat/completions.",
       "Operations: a /v1/metered/chat/completions input refusal answered before payment is logged and counted like a handler 400, marked pre-payment.",
-      "Tools: image-ocr answers 422 for a body that is not an image it reads (a PDF, a webpage, an SVG), naming what it got and the formats it reads (PNG, JPEG, GIF, BMP, TIFF, WebP), and 422 for an image that does not decode, where it answered 500 \"OCR failed: unknown\".",
-      "Tools: a tool that fetches a URL answers a source host that times out or refuses the connection with a 504 carrying attribution \"upstream\" and the hint source-timeout or source-unreachable, so a caller can retry later or pick another host.",
     ],
   },
   {
