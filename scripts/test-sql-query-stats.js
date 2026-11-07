@@ -47,7 +47,8 @@ const isHealth = (sql) => Object.values(QUERY_HEALTH_SQL).includes(sql);
 const isMeasure = (q) => /countIf\(length\(toString\(tuple\(\*\)\)\)/.test(String(q || ""));
 let answer = null, sent = 0;
 globalThis.fetch = async (url, init = {}) => {
-  if (!String(url).includes("api.cdp.coinbase.com")) return realFetch(url, init);
+  const host = (() => { try { return new URL(String(url)).hostname; } catch { return ""; } })();
+  if (host !== "api.cdp.coinbase.com") return realFetch(url, init);
   const q = JSON.parse(init.body || "{}").sql;
   if (isHealth(q)) return J(200, { result: [{ block_number: 1 }] });
   sent++;

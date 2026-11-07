@@ -71,6 +71,10 @@ regexes = [
   # path), read as a key by generic-api-key and reported again under every
   # merge commit that carries the file. Pinned exactly.
   '''^forecast/hourly$''',
+  # scripts/test-how-to-call.js: a test reading a response field
+  # (`megapixels: b422.megapixels`), captured by generic-api-key on the
+  # word before it. An identifier, not a value. Pinned exactly.
+  '''^b422\.megapixels$''',
   # scripts/test-front-door.js: an earlier placeholder MPP key for a local
   # paid boot (replaced by a plain literal), still in the merge diffs of its
   # branch history. A fixture, not a credential. Pinned exactly.

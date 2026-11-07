@@ -56,7 +56,8 @@ const page = (posts, authors) => ({
 });
 let answer = null;
 globalThis.fetch = async (url, init = {}) => {
-  if (!String(url).includes("api.x.com") && !String(url).includes("api.twitter.com")) return realFetch(url, init);
+  const host = (() => { try { return new URL(String(url)).hostname; } catch { return ""; } })();
+  if (host !== "api.x.com" && host !== "api.twitter.com") return realFetch(url, init);
   return answer();
 };
 
