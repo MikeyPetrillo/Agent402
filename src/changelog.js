@@ -3,9 +3,11 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 const ENTRIES = [
   {
     date: "2026-11-07",
-    title: "onchain-sql price",
+    title: "onchain-sql price, X data tools, Solana token search",
     items: [
       "Tools: onchain-sql is $0.030 a call (was $0.040), and a call still sends the query service at most 3 queries. The onchain-analyst pack follows the tool's price.",
+      "Tools: x-tweet no longer reads the author: it carries authorId, null author username, name and verified fields, and the /i/web/status link. x-user-tweets is $0.09; looked up by username the profile fills each row's author, looked up by id rows carry authorId and the /i/web/status link. x-search-recent is unchanged.",
+      "Tools: sol-token-search finds a Solana token whose ticker is busy on other chains: when the pair search holds no matching Solana pair, the mints come from a Solana token index (verified first) and their pairs are read by mint. The answer says whether that fallback ran and carries the partial-answer fields.",
     ],
   },
   {
