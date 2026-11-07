@@ -469,6 +469,7 @@ const byLiquidity = (a, b) => (b.liquidityUsd || 0) - (a.liquidityUsd || 0);
 // index by mint, in parallel: each listed mint's top pair in one read, and
 // the first mint's full pair list in another.
 const SEARCH_FALLBACK_MINTS = 5;
+const SEARCH_FALLBACK_SOURCES = ["dexscreener", "jupiter"];
 const SEARCH_NOTE = "Rows keep DexScreener relevance order. Several tokens can share a ticker; check hasProfile, liquidity and age, then confirm the mint with sol-token-safety.";
 const FALLBACK_NOTE = "No Solana pair in DexScreener's search matched the query, so the mints came from a Solana token index (verified first, listed in fallback.mints). Row order: the first mint's pairs where it is the base token, by liquidity; the other mints' pairs in that order; the search's own Solana rows in relevance order; then pairs that hold a listed mint only as the quote token. Several tokens can share a ticker; check hasProfile, liquidity and age, then confirm the mint with sol-token-safety.";
 
@@ -1050,10 +1051,12 @@ export const SOLANA_INTEL_TOOLS = [
       const why = searchRows.length ? "no-matching-solana-pairs" : "no-solana-pairs";
       const fb = await searchFallback(query, budget);
       const rows = mergeFallbackRows(searchRows, fb);
-      if (!rows.length && fb.status === "unavailable") {
-        // Nothing found, and a read that could have found it did not answer:
-        // an empty 200 would read as "no such token". Answer the upstream's
-        // 5xx instead (never charged, settlement runs after the handler).
+      if (!rows.length && fb.unavailable) {
+        // Nothing found, and a read that could have found it did not answer
+        // (the whole fallback, or one of its two pair reads while the other
+        // held no Solana pair): an empty 200 would read as "no such token".
+        // Answer the upstream's 5xx instead (never charged, settlement runs
+        // after the handler).
         const e = fb.error;
         if (e && e.statusCode >= 500) throw e;
         throw Object.assign(bad(`Solana token search found no pairs and the ${fb.unavailable.upstream} ${fb.unavailable.step} read did not answer - retry shortly`, 503), { attribution: "upstream" });
@@ -1069,7 +1072,9 @@ export const SOLANA_INTEL_TOOLS = [
         ...(incomplete ? { complete: false, truncated: true } : {}),
         fallback: { ran: true, why, status: fb.status, mints: fb.mints, ...(fb.unavailable ? { unavailable: fb.unavailable } : {}) },
         note: fb.status === "found" || fb.status === "partial" ? FALLBACK_NOTE : SEARCH_NOTE,
-        source: "dexscreener",
+        // The fallback asked the Solana token index for the mints, then the
+        // pair index for their pairs: the answer names both.
+        source: [...SEARCH_FALLBACK_SOURCES],
         fetchedAt: stamp(),
       };
     },
