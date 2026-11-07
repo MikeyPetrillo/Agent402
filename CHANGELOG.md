@@ -6,6 +6,12 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-07 (onchain-sql price)
+Tools:
+- onchain-sql is $0.030 a call (was $0.040), and a call still sends the query
+  service at most 3 queries. The onchain-analyst pack follows the tool's
+  price.
+
 ### 2026-11-06 (Ink rail)
 Payments:
 - Ink (chain 57073) is a listed rail: x402 payments settle in native USDC on
