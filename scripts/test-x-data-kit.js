@@ -117,10 +117,17 @@ globalThis.fetch = async (url, init) => { fetchCalls++; lastUrl = new URL(String
 
 {
   fetchCalls = 0;
-  const out = await h("x-search-recent")({ query: "x402 -is:retweet", max_results: 10, sort_order: "relevancy" });
+  // Default (includeAuthors absent): no author expansion; rows carry authorId and the /i/web link.
+  const plain = await h("x-search-recent")({ query: "x402 -is:retweet" });
+  ok(lastUrl.searchParams.get("expansions") === null && lastUrl.searchParams.get("user.fields") === null, "search default: no author expansion and no user.fields on the wire");
+  ok(plain.tweets[0].authorId === "111" && plain.tweets[0].author.username === null && plain.tweets[0].author.name === null && plain.tweets[0].author.verified === null, "search default: authorId kept, author fields present and null");
+  ok(plain.tweets[0].url === "https://x.com/i/web/status/1800000000000000001", "search default: the /i/web/status link needs no username");
+  await throws(h("x-search-recent")({ query: "x402", includeAuthors: "maybe" }), 400, "search: non-boolean includeAuthors");
+  fetchCalls = 0;
+  const out = await h("x-search-recent")({ query: "x402 -is:retweet", max_results: 10, sort_order: "relevancy", includeAuthors: true });
   ok(lastUrl.origin + lastUrl.pathname === "https://api.x.com/2/tweets/search/recent", "search: hits /2/tweets/search/recent");
   ok(lastUrl.searchParams.get("query") === "x402 -is:retweet" && lastUrl.searchParams.get("max_results") === "10" && lastUrl.searchParams.get("sort_order") === "relevancy", "search: query/max_results/sort_order on the wire");
-  ok(lastUrl.searchParams.get("expansions") === "author_id" && /public_metrics/.test(lastUrl.searchParams.get("tweet.fields")) && /username/.test(lastUrl.searchParams.get("user.fields")), "search: author expansion + tweet/user fields requested");
+  ok(lastUrl.searchParams.get("expansions") === "author_id" && /public_metrics/.test(lastUrl.searchParams.get("tweet.fields")) && /username/.test(lastUrl.searchParams.get("user.fields")), "search includeAuthors: author expansion + tweet/user fields requested");
   ok(lastInit.headers.Authorization === "Bearer test-bearer-token-0123456789", "search: app-only bearer on the request");
   ok(lastInit.signal instanceof AbortSignal, "search: request carries an abort signal (timeout)");
   ok(out.source === "x-api-v2" && typeof out.fetchedAt === "string" && !Number.isNaN(Date.parse(out.fetchedAt)), "search: source + fetchedAt");
@@ -131,7 +138,7 @@ globalThis.fetch = async (url, init) => { fetchCalls++; lastUrl = new URL(String
   ok(t0.metrics.likes === 12 && t0.metrics.retweets === 3 && t0.metrics.replies === 1 && t0.metrics.quotes === 0 && t0.metrics.bookmarks === 2 && t0.metrics.impressions === 1400, "search: public_metrics mapped");
   ok(t0.url === "https://x.com/example_dev/status/1800000000000000001", "search: status URL built from author + id");
   const t1 = out.tweets[1];
-  ok(t1.author === null && t1.url === "https://x.com/i/status/1800000000000000002" && t1.metrics.impressions === null, "search: missing author -> null author + /i/status URL; missing metric -> null");
+  ok(t1.author.username === null && t1.authorId === "999" && t1.url === "https://x.com/i/web/status/1800000000000000002" && t1.metrics.impressions === null, "search: missing author -> null author fields + /i/web/status URL; missing metric -> null");
   ok(fetchCalls === 1, "search: exactly one upstream call");
 }
 
@@ -178,8 +185,27 @@ globalThis.fetch = async (url) => {
   fetchCalls = 0; urls = [];
   const out = await h("x-user-tweets")({ id: "574032254" });
   ok(urls.length === 1 && urls[0].pathname === "/2/users/574032254/tweets" && urls[0].searchParams.get("exclude") === null && urls[0].searchParams.get("max_results") === "10", "x-user-tweets by id: no resolve hop, default max_results 10, no exclude");
-  ok(out.user.username === "coinbase", "x-user-tweets by id: username filled from the author expansion");
-  ok(urls[0].searchParams.get("expansions") === "author_id", "x-user-tweets by id: the author expansion is kept (a lookup by id carries no profile)");
+  ok(urls[0].searchParams.get("expansions") === null, "x-user-tweets by id, default: no author expansion");
+  ok(out.user.id === "574032254" && out.user.username === null && out.user.verified === null && out.tweets[0].author.username === null && out.tweets[0].url === "https://x.com/i/web/status/1800000000000000005", "x-user-tweets by id, default: username fields null, /i/web/status link");
+}
+{
+  fetchCalls = 0; urls = [];
+  const out = await h("x-user-tweets")({ id: "574032254", includeAuthors: true });
+  ok(urls.length === 1 && urls[0].searchParams.get("expansions") === "author_id", "x-user-tweets by id, includeAuthors: the author expansion is requested");
+  ok(out.user.username === "coinbase" && out.tweets[0].author.username === "coinbase" && out.tweets[0].url === "https://x.com/coinbase/status/1800000000000000005", "x-user-tweets by id, includeAuthors: username filled from the expansion");
+}
+{
+  fetchCalls = 0; urls = [];
+  await h("x-user-tweets")({ username: "coinbase", includeAuthors: true });
+  ok(urls.length === 2 && urls[1].searchParams.get("expansions") === null, "x-user-tweets by username, includeAuthors: the resolved profile serves, no expansion");
+}
+{
+  const q = X_DATA_TOOLS.find((t) => t.slug === "x-user-tweets").quote;
+  const s = X_DATA_TOOLS.find((t) => t.slug === "x-search-recent").quote;
+  ok(s({ query: "q" }) === 0.08 && s({ query: "q", includeAuthors: false }) === 0.08 && s({ query: "q", includeAuthors: true }) > 0.08 && s({ query: "q", includeAuthors: "true" }) === s({ query: "q", includeAuthors: true }), "search quote: list price by default, higher with includeAuthors (string form too)");
+  ok(s({ query: "q", includeAuthors: "maybe" }) === 0.08 && s(null) === 0.08, "search quote: a body the handler refuses is quoted at the list price, never throws");
+  ok(q({ id: "1" }) === 0.08 && q({ id: "1", includeAuthors: true }) > 0.08 && q({ username: "u" }) === q({ id: "1", includeAuthors: true }) && q({ id: "1", username: "u" }) === 0.08, "timeline quote: list price by id, higher when a user is read (username or includeAuthors)");
+  ok(X_DATA_TOOLS.find((t) => t.slug === "x-tweet").quote === undefined, "x-tweet: a flat price, no quote");
 }
 
 // x-tweet
@@ -187,8 +213,8 @@ const TWEET_FIXTURE = { data: { id: "1800000000000000001", text: "x402 is neat",
 globalThis.fetch = async (url) => { fetchCalls++; lastUrl = new URL(String(url)); return jsonRes(200, TWEET_FIXTURE); };
 {
   const out = await h("x-tweet")({ id: 1800000000000000001n.toString() });
-  ok(lastUrl.pathname === "/2/tweets/1800000000000000001" && lastUrl.searchParams.get("expansions") === "author_id", "x-tweet: /2/tweets/:id with author expansion");
-  ok(out.tweet.id === "1800000000000000001" && out.tweet.author.username === "example_dev" && out.tweet.metrics.likes === 12 && out.tweet.url === "https://x.com/example_dev/status/1800000000000000001", "x-tweet: tweet + author + metrics + url");
+  ok(lastUrl.pathname === "/2/tweets/1800000000000000001" && lastUrl.searchParams.get("expansions") === null && lastUrl.searchParams.get("user.fields") === null, "x-tweet: /2/tweets/:id with no author expansion");
+  ok(out.tweet.id === "1800000000000000001" && out.tweet.authorId === "111" && out.tweet.author.username === null && out.tweet.author.name === null && out.tweet.metrics.likes === 12 && out.tweet.url === "https://x.com/i/web/status/1800000000000000001", "x-tweet: tweet + authorId + null author fields + metrics + /i/web/status url");
 }
 // x-tweet: 200 with no data (deleted / protected) -> 404
 globalThis.fetch = async () => jsonRes(200, { errors: [{ title: "Not Found Error", resource_type: "tweet" }] });
@@ -335,14 +361,14 @@ if (fail) process.exit(1);
 
 // --- expanded objects are billed (X notice 2026-11-05): includes.* metered at the card rate of their kind --
 {
-  const { estimateXReadUsd, actualXReadUsd, xDataSpendStatus, _xSpendReset, xToolWorstCaseUsd } = await import("../src/tools/x-data-kit.js");
+  const { estimateXReadUsd, actualXReadUsd, xDataSpendStatus, _xSpendReset, xToolWorstCases } = await import("../src/tools/x-data-kit.js");
   let p = 0, f = 0; const ok = (c, m) => { if (c) { p++; console.log(`ok - expansions: ${m}`); } else { f++; console.error(`FAIL - expansions: ${m}`); } };
   const P = upstreamCosts().vendor.x.postRead, U = upstreamCosts().vendor.x.userRead;
   const near = (a, b, e = 1e-9) => Math.abs(a - b) < e;
   const AUTHOR = { expansions: "author_id", "user.fields": "username,name,verified" };
   // Estimate: the worst case is one expanded author per post requested.
   ok(near(estimateXReadUsd("/tweets/search/recent", { max_results: 10, ...AUTHOR }), 10 * P + 10 * U), "search estimate: 10 posts plus up to 10 expanded authors");
-  ok(near(estimateXReadUsd("/users/1/tweets", { max_results: 5, ...AUTHOR }), 5 * P + 5 * U), "timeline estimate: 5 posts plus up to 5 expanded authors");
+  ok(near(estimateXReadUsd("/users/1/tweets", { max_results: 5, ...AUTHOR }), 5 * P + U), "timeline estimate: 5 posts plus the one author they all share");
   ok(near(estimateXReadUsd("/tweets/1", AUTHOR), P + U), "tweet estimate: one post plus its author");
   ok(near(estimateXReadUsd("/tweets/1", { expansions: "author_id,referenced_tweets.id" }), 2 * P + U), "a referenced-post expansion is priced as a post read");
   ok(near(estimateXReadUsd("/tweets/1", { expansions: "attachments.media_keys" }), P + Math.max(P, U)), "an unknown expansion is priced at the dearer read");
@@ -358,8 +384,8 @@ if (fail) process.exit(1);
   try {
     _xSpendReset();
     globalThis.fetch = async (url) => { fetched++; lastUrl = new URL(String(url)); return reply({ data: [{ id: "11", author_id: "7" }, { id: "12", author_id: "7" }], includes: { users: [{ id: "7", username: "u7" }] }, meta: {} }); };
-    await X_DATA_TOOLS.find((t) => t.slug === "x-search-recent").handler({ query: "x402" });
-    ok(lastUrl.searchParams.get("expansions") === "author_id", "search keeps the author expansion (author username on every row)");
+    await X_DATA_TOOLS.find((t) => t.slug === "x-search-recent").handler({ query: "x402", includeAuthors: true });
+    ok(lastUrl.searchParams.get("expansions") === "author_id", "search with includeAuthors requests the author expansion");
     ok(near(xDataSpendStatus().spentUsd, 2 * P + U, 1e-4), "search books the posts and the expanded user");
     // The daily cap refuses a read whose worst case passes it only once its expansions are counted.
     process.env.X_DATA_DAILY_MAX_USD = String(10 * P + 5 * U);
@@ -370,8 +396,10 @@ if (fail) process.exit(1);
     await __test.xGet("/tweets/search/recent", { max_results: 10 });
     ok(fetched === 1, "cap: the same read without the expansion fits");
     // The margin helper prices the expansions each tool sends.
-    ok(near(xToolWorstCaseUsd("x-tweet"), P + U) && near(xToolWorstCaseUsd("x-search-recent"), 10 * P + 10 * U), "worst case per tool counts the author expansion");
-    ok(near(xToolWorstCaseUsd("x-user-tweets"), Math.max(U + 10 * P, 10 * P + 10 * U)), "timeline worst case: the larger of the resolve hop plus a plain page, or a page by id with its authors");
+    const worst = (slug) => xToolWorstCases(slug).map((c) => c.usd);
+    ok(near(worst("x-tweet")[0], P), "x-tweet worst case: one post, no expansion");
+    ok(near(worst("x-search-recent")[0], 10 * P) && near(worst("x-search-recent")[1], 10 * P + 10 * U), "search worst cases: a plain page, and a page with one expanded author per post");
+    ok(worst("x-user-tweets").every((u, k) => near(u, k === 0 ? 10 * P : 10 * P + U)), "timeline worst cases: a plain page by id, else the page plus one user read");
   } finally { globalThis.fetch = realFetch; delete process.env.X_BEARER_TOKEN; delete process.env.X_DATA_DAILY_MAX_USD; _xSpendReset(); }
   console.log(`expansions: ${p} passed, ${f} failed`); if (f) process.exitCode = 1;
 }

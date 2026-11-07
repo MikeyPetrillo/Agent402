@@ -6,6 +6,18 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-07 (X data tools)
+Tools:
+- x-tweet no longer reads the author: the tweet carries authorId, its author
+  username, name and verified fields are null, and its link is the
+  /i/web/status form.
+- x-search-recent and x-user-tweets take `includeAuthors` (default false).
+  Without it, rows carry authorId, null author fields and the /i/web/status
+  link; with it, author usernames are filled as before. Both routes are now
+  quoted per request: includeAuthors on search, and a username lookup or
+  includeAuthors on the timeline, quote above the list price (the range is on
+  /api/pricing). A timeline looked up by username still fills its authors.
+
 ### 2026-11-06 (Ink rail)
 Payments:
 - Ink (chain 57073) is a listed rail: x402 payments settle in native USDC on
