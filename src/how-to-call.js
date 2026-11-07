@@ -102,9 +102,15 @@ export const MAX_402_CALL_BYTES = MAX_CALL_BYTES;
 
 /** The call for `def` within MAX_CALL_BYTES: the full call when it fits, else
  *  `{ method, url }`; null when it has no route. */
-export function boundedHowToCall(def) {
-  const call = howToCallFor(def);
+export function boundedHowToCall(def, { bodyFields = null } = {}) {
+  let call = howToCallFor(def);
   if (!call) return null;
+  // A refusal that names a fix (the closest model id) carries the example
+  // with that fix applied, on the JSON body form only.
+  if (bodyFields && typeof bodyFields === "object" && call.body && typeof call.body === "object") {
+    call = { ...call, body: { ...call.body, ...bodyFields } };
+    delete call.alternate;
+  }
   let bytes = Infinity;
   try { bytes = Buffer.byteLength(JSON.stringify(call), "utf8"); } catch { /* sized as too large */ }
   return bytes <= MAX_CALL_BYTES ? call : { method: call.method, url: call.url };
@@ -112,8 +118,8 @@ export function boundedHowToCall(def) {
 
 /** `{ howToCall }` for spreading into a 400 envelope (bounded as above), or
  *  `{}` when none. */
-export function howToCallField(def) {
-  const call = boundedHowToCall(def);
+export function howToCallField(def, opts = {}) {
+  const call = boundedHowToCall(def, opts);
   return call ? { howToCall: call } : {};
 }
 

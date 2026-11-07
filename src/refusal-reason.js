@@ -30,6 +30,7 @@ export const REFUSAL_REASONS = Object.freeze([
   "out_of_range",         // a number or length past a documented bound
   "too_large",            // body or field over a size cap
   "model_not_allowed",    // the gateway allowlist refused the model
+  "unknown_model",        // a model id the upstream's live list does not carry
   "model_wrong_tier",     // real model, served by a different tier
   "quote_mismatch",       // metered: the served body is not the quoted one
   "over_cap",             // metered: quote above the per-call ceiling
@@ -78,6 +79,7 @@ const RULES = [
   [/\bexternal routing on .{0,24} is paused\b|\bexternal routing is paused\b/i, "routing_paused"],
   [/\bused (?:the Tempo|this payment's) time budget\b|\bcredentials expire\b/i, "routing_budget_spent"],
   [/\bis not in the gateway allowlist\b/i, "model_not_allowed"],
+  [/\bis not a chat model id the upstream serves\b/i, "unknown_model"],
   [/\bis served by the .* tier\b|\bcall \/v1\/[a-z0-9/-]+ .*instead\b/i, "model_wrong_tier"],
   [/\bbut the body being served quotes\b|\bresend the request exactly as it should be served\b/i, "quote_mismatch"],
   [/\babove the \$[0-9.]+ per-call cap\b|\bper-call cap of\b/i, "over_cap"],

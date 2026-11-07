@@ -17,7 +17,7 @@ import { fitTitle } from "./seo-meta.js";
 import { GUIDE_INTEGRATIONS, integrationBySlug } from "./integration-pages.js";
 import { RAILS_COUNT, RAILS_COUNT_MD, resolveRailCountTokens, chainDisplayName } from "./rails.js";
 import { routerPayChains } from "./tools/route-execute.js";
-import { TIERS, METERED_MAX_QUOTE_USD, EMBEDDINGS_PRICE } from "./tools/llm-gateway-kit.js";
+import { TIERS, METERED_MAX_QUOTE_USD, EMBEDDINGS_PRICE, METERED_MAX_INPUT_CHARS_CEILING } from "./tools/llm-gateway-kit.js";
 import { routingProofSentence, routerRankingSentence } from "./routing-proof.js";
 import { mppEvmDiscoveryRails, mppShimEnabled } from "./mpp-shim.js";
 import { FLAGSHIP_SLUGS, FLAGSHIP_MCP_NAMES } from "./mcp-flagship.js";
@@ -1273,7 +1273,7 @@ claude --model anthropic/claude-sonnet-5.5
 Verified 2026-08-27 with claude-cli 2.1.250: a full turn (110 KB system
 prompt + 22 tool schemas, adaptive thinking, streaming) and a tool-use round
 trip both complete; each turn is quoted from its own body (\`/v1/metered\`
-accepts bodies to 1 MB / 200k input chars) and settles at actual usage, so an
+accepts bodies to 1 MB, with at least 200k input chars) and settles at actual usage, so an
 idle turn costs cents, never the ceiling. Not carried on this wire:
 \`output_config\`, \`context_management\` (dropped, the model default applies)
 and server-side tools (web search, computer use) - Claude Code's own tools are
@@ -1417,8 +1417,9 @@ mcpServers:
 
 Any id from \`/v1/models\` works as \`model\`. With a credits key you already
 hold, use \`apiBase: https://agent402.tools/v1/metered\` and the key as
-\`apiKey\` instead. The metered route takes up to
-${TIERS["v1-chat-metered"].maxInputChars.toLocaleString("en-US")} characters of input per request.
+\`apiKey\` instead. The metered route takes
+${TIERS["v1-chat-metered"].maxInputChars.toLocaleString("en-US")} characters of input per request on every model, and more on a
+model with a larger context window, up to ${METERED_MAX_INPUT_CHARS_CEILING.toLocaleString("en-US")}.
 
 ## ElizaOS
 

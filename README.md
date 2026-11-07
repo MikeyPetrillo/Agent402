@@ -241,7 +241,7 @@ price per call whatever the length.
 
 | Endpoint | Price | Serves |
 |---|---|---|
-| `POST /v1/metered/chat/completions` | from $0.001 | **the default** - every explicit model the flat chat tiers serve, quoted per request from the body (up to 200k chars in, 8,192 tokens out) |
+| `POST /v1/metered/chat/completions` | from $0.001 | **the default** - every explicit model the flat chat tiers serve, quoted per request from the body (200k chars in on every model and more on a larger context window, 8,192 tokens out) |
 | `POST /v1/nano/chat/completions` | $0.003 | nano models - priced for high-frequency agent loops |
 | `POST /v1/auto/chat/completions` | $0.01 | **no model needed** - deterministic eval-ranked routing (code / reasoning / long / general), optional `quality: fast \| balanced \| best` at the same price, decision disclosed via `agent402_router` |
 | `POST /v1/chat/completions` | $0.02 | budget/mid models (gpt-4o-mini, claude haiku, gemini flash, deepseek, llama…) |

@@ -123,6 +123,40 @@ for (const [slug, tier] of Object.entries(TIERS)) {
 }
 
 // ---------------------------------------------------------------------------
+// 1b. Metered input past the 200k floor: a model whose live context window is
+//     large takes up to the 1 MB body bound (maxInputCharsFor). At that size
+//     the quote must still cover the worst case x the markup (long-context
+//     rows included), or the body is refused pre-spend at the per-call cap.
+console.log("\n# metered tier at the raised input cap (large context windows)");
+{
+  const { _setModelCatalogForTest } = await import("../src/model-catalog.js");
+  const { maxInputCharsFor, METERED_MAX_INPUT_CHARS_CEILING, canonicalModel } = await import("../src/tools/llm-gateway-kit.js");
+  const tier = TIERS["v1-chat-metered"];
+  const models = [...new Set(repModels(tier).filter((m) => !m.endsWith("family-representative")).map((m) => canonicalModel(m)))];
+  const ids = [...models]; for (let i = 0; i < 120; i++) ids.push(`filler/m-${i}`);
+  _setModelCatalogForTest(ids, Date.now(), Object.fromEntries(models.map((m) => [m, 2_000_000])));
+  let quoted = 0, refusedCap = 0;
+  for (const model of models) {
+    const cap = maxInputCharsFor("v1-chat-metered", model);
+    ok(cap === METERED_MAX_INPUT_CHARS_CEILING, `${model} takes the ceiling with a large window (${cap})`);
+    for (const content of [denseText(cap), "the quick brown fox. ".repeat(Math.ceil(cap / 21)).slice(0, cap)]) {
+      let v;
+      try { v = validateRequest({ model, messages: [{ role: "user", content }], max_tokens: 999999 }, "v1-chat-metered"); }
+      catch (e) { if (e.statusCode !== 400 || !/per-call cap/.test(e.message)) throw e; refusedCap++; continue; }
+      const wc = worstCaseUpstreamCost(v, tier, 0);
+      const q = meteredQuoteUsd({ model, messages: [{ role: "user", content }], max_tokens: 999999 });
+      ok(!q.invalid && !q.overCap && q.usd >= wc.totalUsd * METER_MARKUP - 1e-9, `metered ${model} at ${content.length} chars: quote covers worst-case x METER_MARKUP`);
+      quoted++;
+    }
+    let over = null;
+    try { validateRequest({ model, messages: [{ role: "user", content: "x".repeat(cap + 1) }], max_tokens: 5 }, "v1-chat-metered", { clamp: false }); } catch (e) { over = e; }
+    ok(over?.statusCode === 400 && over?.maxInputChars === cap, `${model}: one char past its cap is refused with the cap named`);
+  }
+  ok(quoted > 0, `some full-ceiling bodies quote under the per-call cap (${quoted} quoted, ${refusedCap} refused at the cap pre-spend)`);
+  _setModelCatalogForTest(null);
+}
+
+// ---------------------------------------------------------------------------
 // 2. Failover chain — the margin must hold on EVERY link, not just the
 //    requested model. Pre-fix, the clamp ran once against the requested
 //    model's cost, so a cheap-model clamp (a no-op) rode unchanged to a

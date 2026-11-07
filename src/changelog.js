@@ -8,6 +8,9 @@ const ENTRIES = [
       "Tools: onchain-sql is $0.030 a call (was $0.040), and a call still sends the query service at most 3 queries. The onchain-analyst pack follows the tool's price.",
       "Tools: x-tweet no longer reads the author: it carries authorId, null author username, name and verified fields, and the /i/web/status link. x-user-tweets is $0.09; looked up by username the profile fills each row's author, looked up by id rows carry authorId and the /i/web/status link. x-search-recent is unchanged.",
       "Tools: sol-token-search finds a Solana token whose ticker is busy on other chains: when the pair search holds no matching Solana pair, the mints come from a Solana token index (verified first) and their pairs are read by mint. The answer says whether that fallback ran and carries the partial-answer fields.",
+      "Gateway: a metered model id written with a hyphenated version (v4-1 for v4.1) is served as the dotted id when that exact id is on the upstream's live list; any other unknown part is still refused. The unknown-model 400 carries suggestions (the closest served ids, at most three) and a howToCall that retries with the first.",
+      "Gateway: the metered routes take 200k input chars on every model and more on a model with a larger context window (three chars per window token, up to 1,000,000), each request still quoted from its own body. An input over the cap is refused with maxInputChars, inputChars, a trim-input hint and models whose window takes it, before payment on /v1/metered/chat/completions.",
+      "Operations: a /v1/metered/chat/completions input refusal answered before payment is logged and counted like a handler 400, marked pre-payment.",
     ],
   },
   {
