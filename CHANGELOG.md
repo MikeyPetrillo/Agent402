@@ -6,7 +6,7 @@ carries its own version on npm.
 
 ## Unreleased
 
-### 2026-11-07 (onchain-sql price, X data tools, Solana token search)
+### 2026-11-07 (onchain-sql price, X data tools, Solana token search, metered chat, OCR and fetch errors)
 Tools:
 - onchain-sql is $0.030 a call (was $0.040), and a call still sends the query
   service at most 3 queries. The onchain-analyst pack follows the tool's
@@ -22,11 +22,15 @@ Tools:
 - sol-token-search finds a Solana token whose ticker is busy on other chains:
   when the pair search holds no matching Solana pair, the mints come from a
   Solana token index (verified first) and their pairs are read by mint. The
-  answer says whether that fallback ran and carries the partial-answer fields.
+  answer says whether that fallback ran, names both sources when it did, and
+  carries the partial-answer fields. No pair found while a fallback read did
+  not answer is a 5xx, never an empty answer.
 - image-ocr answers 422 for a body that is not an image it reads (a PDF, a
   webpage, an SVG), naming what it got and the formats it reads (PNG, JPEG,
-  GIF, BMP, TIFF, WebP), and 422 for an image that does not decode, where it
-  answered 500 "OCR failed: unknown".
+  GIF, BMP, TIFF, WebP, PNM), and 422 for an image that does not decode or
+  whose header does not give its size, where it answered 500 "OCR failed:
+  unknown". An image over 40 megapixels or 32,767 pixels a side is a 422
+  (image-too-large) before it is decoded.
 - A tool that fetches a URL answers a source host that times out or refuses
   the connection with a 504 carrying attribution "upstream" and the hint
   source-timeout or source-unreachable, so a caller can retry later or pick

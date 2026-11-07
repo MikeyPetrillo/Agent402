@@ -601,7 +601,9 @@ export function dedupeByAccession(hits) {
 // searches share one control read in flight. A control read that errors is
 // never kept. The buyer's own search results are never cached.
 export const EFTS_EMPTY_READS = 4;
-export const EFTS_CONTROL_YES_TTL_MS = 60_000;
+// "Answering" is kept only briefly: an index that stops answering mid-window
+// would otherwise have its empties believed (and charged) for the whole TTL.
+export const EFTS_CONTROL_YES_TTL_MS = 20_000;
 export const EFTS_CONTROL_NO_TTL_MS = 15_000;
 // reader (getJson) -> { answering, at } or { pending: Promise<boolean> }
 const eftsControlVerdicts = new WeakMap();

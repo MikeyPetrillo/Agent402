@@ -422,6 +422,25 @@ try {
     stub(route({ all: () => Promise.resolve(textRes("x", 500)) }));
     r = await h("sol-token-search")({ query: "wif" });
     ok(r.pairs.map((p) => p.pairAddress).join(",") === "w1,k1,s1" && r.fallback.status === "partial" && r.fallback.unavailable.step === "token pairs" && r.complete === false, `search fallback: one pair read down -> partial answer, not complete (got ${r.pairs.map((p) => p.pairAddress).join(",")} ${r.fallback.status})`);
+    ok(JSON.stringify(r.source) === JSON.stringify(["dexscreener", "jupiter"]), `search fallback: the answer names both sources when the fallback ran (got ${JSON.stringify(r.source)})`);
+
+    // One pair read fails and the one that answered holds no Solana pair:
+    // zero rows with a read down is a 5xx (not charged), never an empty 200
+    // that reads as "no such token" (status "partial", 2026-11-07 review).
+    const NON_SOL = [DS_PAIR({ chainId: "ethereum", pairAddress: "e1", ...base("0xe1", "WIF", "WIF") })];
+    stub(route({ top: () => Promise.resolve(jsonRes(NON_SOL)), all: () => Promise.resolve(textRes("x", 500)) }));
+    await throws(h("sol-token-search")({ query: "wif" }), 502, "search fallback: token pairs read down and the other read holds no Solana pair -> 5xx, not an empty 200");
+    stub(route({ top: () => Promise.resolve(textRes("x", 502)), all: () => Promise.resolve(jsonRes([])) }));
+    await throws(h("sol-token-search")({ query: "wif" }), 502, "search fallback: pairs-by-mint read down and the other read empty -> 5xx");
+    stub(route({ top: () => Promise.reject(Object.assign(new Error("timeout"), { name: "TimeoutError" })), all: () => Promise.resolve(jsonRes([])) }));
+    try { await h("sol-token-search")({ query: "wif" }); ok(false, "search fallback: a pair read deadline with no rows resolved"); }
+    catch (e) { ok(e.statusCode >= 500 && e.statusCode < 600, `search fallback: a pair read deadline with no rows -> 5xx (got ${e.statusCode})`); }
+
+    // Fallback ran and found nothing, every read answering: a complete empty
+    // 200 that still names both sources.
+    stub(route({ jup: () => Promise.resolve(jsonRes([])) }));
+    r = await h("sol-token-search")({ query: "wif" });
+    ok(r.pairs.length === 0 && r.complete === true && r.fallback.status === "nothing-found" && JSON.stringify(r.source) === '["dexscreener","jupiter"]', `search fallback: nothing found with every read answering -> complete empty 200 naming both sources (${JSON.stringify(r.source)})`);
   }
 
   // --------------------------------------------------------------------------
