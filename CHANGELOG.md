@@ -23,6 +23,14 @@ Tools:
   when the pair search holds no matching Solana pair, the mints come from a
   Solana token index (verified first) and their pairs are read by mint. The
   answer says whether that fallback ran and carries the partial-answer fields.
+- image-ocr answers 422 for a body that is not an image it reads (a PDF, a
+  webpage, an SVG), naming what it got and the formats it reads (PNG, JPEG,
+  GIF, BMP, TIFF, WebP), and 422 for an image that does not decode, where it
+  answered 500 "OCR failed: unknown".
+- A tool that fetches a URL answers a source host that times out or refuses
+  the connection with a 504 carrying attribution "upstream" and the hint
+  source-timeout or source-unreachable, so a caller can retry later or pick
+  another host.
 
 ### 2026-11-06 (Ink rail)
 Payments:

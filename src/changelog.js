@@ -8,6 +8,8 @@ const ENTRIES = [
       "Tools: onchain-sql is $0.030 a call (was $0.040), and a call still sends the query service at most 3 queries. The onchain-analyst pack follows the tool's price.",
       "Tools: x-tweet no longer reads the author: it carries authorId, null author username, name and verified fields, and the /i/web/status link. x-user-tweets is $0.09; looked up by username the profile fills each row's author, looked up by id rows carry authorId and the /i/web/status link. x-search-recent is unchanged.",
       "Tools: sol-token-search finds a Solana token whose ticker is busy on other chains: when the pair search holds no matching Solana pair, the mints come from a Solana token index (verified first) and their pairs are read by mint. The answer says whether that fallback ran and carries the partial-answer fields.",
+      "Tools: image-ocr answers 422 for a body that is not an image it reads (a PDF, a webpage, an SVG), naming what it got and the formats it reads (PNG, JPEG, GIF, BMP, TIFF, WebP), and 422 for an image that does not decode, where it answered 500 \"OCR failed: unknown\".",
+      "Tools: a tool that fetches a URL answers a source host that times out or refuses the connection with a 504 carrying attribution \"upstream\" and the hint source-timeout or source-unreachable, so a caller can retry later or pick another host.",
     ],
   },
   {
