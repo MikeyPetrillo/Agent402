@@ -22,6 +22,8 @@ import { markUntrusted } from "./provenance.js";
 import { upstreamCosts } from "../upstream-costs.js";
 import { meterUpstreamSpend } from "../posthog.js";
 import { createSharedDailySpend } from "../shared-limits.js";
+import { onFinalResponse } from "../request-timing.js";
+import { noteXSearchCall, countsOf as xSearchCountsOf } from "../x-search-stats.js";
 // The upstream bills per POST RETURNED, not per request, so the page size is
 // the real cost lever: a 100-post page at our per-call price would be sold far
 // below cost. Priced 2026-08-27 against X's published pay-per-use rate card
@@ -442,6 +444,13 @@ export const X_DATA_TOOLS = [
         "tweet.fields": TWEET_FIELDS,
         ...AUTHOR_EXPANSION,
       });
+      // Counted on the request's FINAL response (src/x-search-stats.js):
+      // distinct authors and posts X returned, for a final 200 only. Counts
+      // only; a call outside a request is not counted.
+      try {
+        const seen = xSearchCountsOf(data);
+        onFinalResponse((status, scope) => noteXSearchCall({ status, ...seen, synthetic: !!scope?.synthetic }));
+      } catch { /* bookkeeping only */ }
       const authors = authorIndex(data.includes);
       const tweets = (Array.isArray(data.data) ? data.data : []).map((t) => shapeTweet(t, authors)).filter(Boolean);
       return {

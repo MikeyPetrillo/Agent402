@@ -683,6 +683,7 @@ import { sharedLimitsStatus, startSharedLimitsProbe, shared as sharedLimits, sha
 import { createRegistrationLimiter } from "./registration-limits.js";
 import { flushJsonDocuments } from "./json-document.js";
 import { flushSqlQueryStats, sqlQueryStatsReport } from "./sql-query-stats.js";
+import { flushXSearchStats, xSearchStatsReport } from "./x-search-stats.js";
 import { loadRemovedOrigins } from "./x402-index.js";
 import { unloadedStores } from "./store-retry.js";
 import { dispatchEligibility, dispatchLegend } from "./dispatch-eligibility.js";
@@ -3003,11 +3004,14 @@ startSharedLimitsProbe();
 // slugs, classes, last messages, upstream outcomes, facilitator refusals.
 // onchainSqlQueries: per UTC day, how many upstream queries onchain-sql calls
 // that answered a final 200 used, and the budget refusals (counts only;
-// src/sql-query-stats.js).
+// src/sql-query-stats.js). xSearchAuthors: per UTC day, how many distinct
+// authors and posts x-search-recent calls that answered a final 200 returned,
+// bucketed (counts only; src/x-search-stats.js).
 app.get("/__operator/tool-failures.json", async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   const onchainSqlQueries = await sqlQueryStatsReport().catch(() => null);
-  res.set("Cache-Control", "private, no-store").json({ ...(await toolFailureMonitor().report()), robinhoodOrder: robinhoodOrderView(), onchainSqlQueries });
+  const xSearchAuthors = await xSearchStatsReport().catch(() => null);
+  res.set("Cache-Control", "private, no-store").json({ ...(await toolFailureMonitor().report()), robinhoodOrder: robinhoodOrderView(), onchainSqlQueries, xSearchAuthors });
 });
 // Direct-upstream A/B (src/gateway-direct-upstream.js): attempts, failures by
 // bucket and p50/p90 latency per upstream for the listed model ids.
@@ -12390,7 +12394,7 @@ let shuttingDown = false;
 // reads held; the flush round below waits on that write with the others.
 let boardSaveAtDrain = false;
 function flushStateQueues({ timeoutMs = 10_000 } = {}) {
-  const flushes = [salesLedgerFlush, refundLedgerFlush, flushJournals, statsFlush, statusStoreFlush, economyHistoryFlush, powReplayFlush, () => boardSaveAtDrain, () => flushSqlQueryStats().then(() => flushJsonDocuments({ timeoutMs }))]
+  const flushes = [salesLedgerFlush, refundLedgerFlush, flushJournals, statsFlush, statusStoreFlush, economyHistoryFlush, powReplayFlush, () => boardSaveAtDrain, () => Promise.all([flushSqlQueryStats(), flushXSearchStats()]).then(() => flushJsonDocuments({ timeoutMs }))]
     .map((fn) => { try { return Promise.resolve(fn()); } catch (e) { return Promise.reject(e); } });
   let timer;
   const deadline = new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs); timer.unref?.(); });
