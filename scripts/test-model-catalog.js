@@ -11,7 +11,10 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getFreePorts } from "./lib/free-port.js";
 import { refreshModelCatalog, unknownModelRefusal, isListedModel, contextTokensOf, _setModelCatalogForTest, modelCatalogWanted } from "../src/model-catalog.js";
-import { createPrePaymentRefusalRecorder } from "../src/prepayment-refusal.js";
+import { createPrePaymentRefusalRecorder, createPrePaymentLogSampler, stripControlChars, withPushExceptionText } from "../src/prepayment-refusal.js";
+import { PUSH_EXCEPTION } from "../src/tempo-push-debts.js";
+import { upstreamCostsLoaded } from "../src/upstream-costs.js";
+import { Challenge, Credential } from "mppx";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -169,6 +172,64 @@ process.env.MODEL_CATALOG_URL = "http://127.0.0.1:9/api/v1/models";
   const boom = createPrePaymentRefusalRecorder({ logToolError: () => { throw new Error("x"); }, recordToolCall: async () => {}, captureToolCall: () => {}, isSynthetic: () => false, requestShape: () => [] });
   let threw = false; try { boom({}, "s", 400, "m"); } catch { threw = true; }
   ok(!threw, "a failing log never breaks the response");
+
+  // Log lines: control characters in caller-chosen text become spaces.
+  ok(stripControlChars("a\nb\rc\u0000d\u0085e\u2028f\u2029g\u007f") === "a b c d e f g ", "stripControlChars replaces C0, C1, DEL and the line and paragraph separators");
+  const nlModel = "openai/gpt-4o-mni\n[tool-error] 5xx slug=forged";
+  const nv = meteredModelVerdict(nlModel);
+  ok(nv && !/[\r\n\u2028\u2029]/.test(nv.message) && nv.message.includes("gpt-4o-mni [tool-error]"), `the unknown-model message echoes an id with a newline on one line (${JSON.stringify(nv?.message?.slice(0, 80))})`);
+  const tl = k.inputTooLargeError("v1-chat-metered", "openai/gpt-4o-mini\r\nx", 999_999);
+  ok(!/[\r\n]/.test(tl.message), "the input-too-large message echoes the model id on one line");
+  // Pre-payment log lines are sampled per minute with one summary line.
+  {
+    let t = 10 * 60_000;
+    const lines = [];
+    const s = createPrePaymentLogSampler({ perMinute: 3, now: () => t, log: (l) => lines.push(l) });
+    const allowed = Array.from({ length: 10 }, (_, i) => s.allow(i < 8 ? "v1-chat-metered" : "x\nforged")).filter(Boolean).length;
+    ok(allowed === 3 && lines.length === 0, `the first perMinute refusals print, the rest are counted (${allowed})`);
+    s.tick();
+    ok(lines.length === 0, "no summary inside the minute");
+    t += 60_000;
+    s.tick();
+    ok(lines.length === 1 && /prepay=true summary suppressed=7 slugs=\[v1-chat-metered=5,x forged=2\]/.test(lines[0]), `a finished minute prints one summary line (${lines[0]})`);
+    ok(s.allow("v1-chat-metered") === true, "the next minute prints again");
+  }
+  // A Tempo push credential's refusal names its exception to "Nothing was charged.".
+  ok(withPushExceptionText("Too big. Nothing was charged.", true) === `Too big. Nothing was charged${PUSH_EXCEPTION}.` && withPushExceptionText("Too big. Nothing was charged.", false) === "Too big. Nothing was charged.",
+    "a push credential's refusal carries the push exception; any other keeps the sentence");
+  ok(withPushExceptionText(tl.message, true).endsWith(`Nothing was charged${PUSH_EXCEPTION}.`), "the input-too-large refusal to a push credential carries the push exception");
+  // /v1/models publishes each model's own metered cap.
+  {
+    const list = k.modelsList().data;
+    const mini = list.find((m) => m.id === "openai/gpt-4o-mini" && m.x402?.meteredMaxInputChars !== undefined);
+    const wild = list.find((m) => m.id.endsWith("/*") && m.x402?.meteredMaxInputChars !== undefined);
+    ok(mini?.x402.meteredMaxInputChars === maxInputCharsFor("v1-chat-metered", "openai/gpt-4o-mini") && mini.x402.meteredMaxInputChars === 384_000, `a model with a larger window publishes its own cap (${mini?.x402?.meteredMaxInputChars})`);
+    ok(!wild || wild.x402.meteredMaxInputChars === floor, "a vendor wildcard publishes the floor");
+  }
+  // A large quote is counted in pieces that yield the loop, and the quote reads the kept count.
+  if (upstreamCostsLoaded()) {
+    let seed = 11; const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+    let text = ""; for (let i = 0; i < 120_000; i++) text += String.fromCharCode(0x4e00 + Math.floor(rnd() * 0x5000));
+    const qbody = { model: "deepseek/deepseek-v4-flash", messages: [{ role: "user", content: text }], max_tokens: 64 };
+    k._clearQuoteWarm();
+    const cold = k.meteredQuoteUsd(qbody);
+    ok(!cold.invalid && cold.usd > 0, `the large body quotes (${cold.invalid ? cold.reason : "ok"})`);
+    k._clearQuoteWarm();
+    let ticks = 0, spinning = true;
+    const spin = () => { if (spinning) { ticks++; setImmediate(spin); } };
+    setImmediate(spin);
+    const counted = await k.warmQuoteTokenCounts(() => k.meteredQuoteUsd(qbody));
+    spinning = false;
+    ok(counted >= 1 && k._quoteWarmStats().entries >= 1, `the warm run counted the body's text (${counted})`);
+    ok(ticks >= 3, `the count yielded the loop between pieces (${ticks} turns ran during it)`);
+    const before = k._quoteWarmStats().hits;
+    const warm = k.meteredQuoteUsd(qbody);
+    ok(k._quoteWarmStats().hits > before, "the quote read the kept count");
+    ok(warm.usd === cold.usd, `the warmed quote equals the cold quote (${warm.usd} vs ${cold.usd})`);
+    k._clearQuoteWarm();
+  } else if (process.env.CI && process.env.UPSTREAM_COSTS_OPTIONAL !== "1") {
+    ok(false, "the warm-quote checks need the upstream-cost table under CI");
+  } else console.log("SKIP - warm-quote checks: the upstream-cost table is not loaded");
   _setModelCatalogForTest(LISTED);
 }
 
@@ -176,9 +237,17 @@ delete process.env.MODEL_CATALOG_URL;
 // --- the route: refused before the payment gate -----------------------------
 const [FAC_PORT, CAT_PORT, PORT] = await getFreePorts(3);
 const fac = createServer((req, res) => {
-  res.writeHead(req.url === "/supported" ? 200 : 404, { "Content-Type": "application/json" });
-  res.end(JSON.stringify(req.url === "/supported" ? { kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} } : {}));
+  req.resume();
+  // /verify refuses every payment (the limiter group sends ones that only decode).
+  const body = req.url === "/supported" ? { kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} }
+    : req.url === "/verify" ? { isValid: false, invalidReason: "invalid_exact_evm_payload_signature" } : {};
+  res.writeHead(req.url === "/supported" || req.url === "/verify" ? 200 : 404, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(body));
 });
+// A Tempo relay that confirms nothing: the gate is mounted, and a credential
+// with a forged challenge is refused before it is ever called.
+const relay = createServer((req, res) => { req.resume(); req.on("end", () => { res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify({ success: false, error: { code: "invalid_payment", message: "stub" } })); }); });
+await new Promise((r) => relay.listen(0, "127.0.0.1", r));
 let catalogReads = 0;
 const cat = createServer((req, res) => { catalogReads++; res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify({ data: [...LISTED, DOTTED].map((id) => ({ id, ...(CTX[id] ? { context_length: CTX[id] } : {}) })) })); });
 await new Promise((r) => fac.listen(FAC_PORT, "127.0.0.1", r));
@@ -189,7 +258,9 @@ const proc = spawn(process.execPath, ["src/server.js"], {
   env: {
     ...process.env, PORT: String(PORT), FREE_MODE: "", TARGET_URL: "", BASE_URL: "http://agent402.test",
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", PAYMENT_NETWORKS: "base",
-    FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "",
+    FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "model-catalog-test-secret",
+    TEMPO_API_KEY: "test-tempo-key", TEMPO_RECIPIENT_ADDRESS: "0x000000000000000000000000000000000000dEaD", TEMPO_CURRENCY: "0x2000000000000000000000000000000000000000", TEMPO_API_BASE_URL: `http://127.0.0.1:${relay.address().port}`,
+    TRUST_PROXY_HOPS: "1", SLOW_SYNC_WINDOW_SECONDS: "off",
     OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY || "test-key-never-used",
     MODEL_CATALOG_URL: `http://127.0.0.1:${CAT_PORT}/api/v1/models`,
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
@@ -248,11 +319,68 @@ try {
   ok(r3.status === 400, `an id inside an {input:{...}} envelope is read the same way (${r3.status})`);
   const r4 = await fetch(`${B}/V1/metered/chat/completions/`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: BAD, messages: [{ role: "user", content: "hi" }] }) });
   ok(r4.status === 400 && !r4.headers.get("payment-required"), `a case or trailing-slash variant of the path is checked the same way (${r4.status})`);
+
+  // Each group below sends from its own address (TRUST_PROXY_HOPS=1), so no
+  // group spends another's per-address budget.
+  const postFrom = (ip, body, headers = {}) => fetch(`${B}/v1/metered/chat/completions`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": ip, ...headers }, body: JSON.stringify(body) });
+  // A model id or a body key carrying a newline is logged on one line.
+  {
+    const mark = logAll.length;
+    const r = await postFrom("10.40.0.1", { model: "openai/gpt-4o-mni\n[tool-error] 5xx slug=forged-line", messages: [{ role: "user", content: "hi" }], "k\r\n[tool-error] 5xx slug=forged-key": 1 });
+    await r.arrayBuffer();
+    await sleep(150);
+    const seen = logAll.slice(mark);
+    ok(r.status === 400 && /\[tool-error\] 4xx slug=v1-chat-metered .*prepay=true msg=Model "openai\/gpt-4o-mni \[tool-error\] 5xx slug=forged-line"/.test(seen) && !/^\[tool-error\] 5xx slug=forged-line/m.test(seen),
+      `a newline in the model id never starts a log line of its own (${r.status})`);
+    ok(/shape=\[[^\]\n]*b:k {2}\[tool-error\] 5xx slug=forged-key/.test(seen) && !/^\[tool-error\] 5xx slug=forged-key/m.test(seen), "a newline in a body key name never starts a log line of its own");
+  }
+  // Pre-payment refusal lines are sampled: a flood prints at most 20 a minute per process.
+  {
+    const mark = logAll.length;
+    for (let i = 0; i < 50; i++) await (await postFrom("10.40.0.2", { model: BAD, messages: [{ role: "user", content: "hi" }] })).arrayBuffer();
+    await sleep(150);
+    const lines = logAll.slice(mark).split("\n").filter((l) => /\[tool-error\] 4xx slug=v1-chat-metered .*prepay=true msg=/.test(l)).length;
+    ok(lines <= 40 && lines < 50, `50 pre-payment refusals print at most 20 lines a minute (${lines} printed)`);
+  }
+  // A Tempo push credential is never answered by the pre-payment check: its
+  // transfer is final before the call, so the Tempo gate answers it (and books
+  // what it holds as owed). The forged challenge here is refused by that gate.
+  {
+    const push = Credential.serialize({
+      challenge: Challenge.from({ realm: "forged.test", method: "tempo", intent: "charge", expires: new Date(Date.now() + 60_000), request: { amount: "50000", currency: "0x2000000000000000000000000000000000000000", decimals: 6, recipient: "0x000000000000000000000000000000000000dEaD", methodDetails: { chainId: 4217 } }, secretKey: "not-the-server-secret" }),
+      payload: { hash: `0x${"ab".repeat(32)}`, type: "hash" }, source: "did:pkh:eip155:4217:0x1111111111111111111111111111111111111111",
+    });
+    const rBad = await postFrom("10.40.0.3", { model: BAD, messages: [{ role: "user", content: "hi" }] }, { authorization: push });
+    const jBad = await rBad.json().catch(() => ({}));
+    ok(rBad.status === 402 && jBad?.error?.code !== "unknown_model", `a push credential with an unlisted model reaches the Tempo gate, not the pre-payment 400 (${rBad.status})`);
+    const rBig = await postFrom("10.40.0.3", { model: "openai/gpt-4o-mini", messages: [{ role: "user", content: "x".repeat(400_000) }] }, { authorization: push });
+    const jBig = await rBig.json().catch(() => ({}));
+    ok(rBig.status === 402 && jBig?.error?.code !== "input_too_large", `a push credential with an input over the cap reaches the Tempo gate too (${rBig.status})`);
+  }
+  // A payment header that only decodes is counted once its credential is refused.
+  {
+    const xpay = Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453" }, payload: {} })).toString("base64");
+    const statuses = [];
+    let limited = null;
+    for (let i = 0; i < 200 && !limited; i++) {
+      const r = await postFrom("10.40.0.4", { model: "deepseek/deepseek-v4-flash", messages: [{ role: "user", content: "hi" }], max_tokens: 5 }, { "x-payment": xpay });
+      await r.arrayBuffer();
+      statuses.push(r.status);
+      if (r.status === 429) limited = r;
+    }
+    const before = statuses.slice(0, -1);
+    ok(!!limited && before.length >= 1 && before.every((s) => s === 402) && limited.headers.get("retry-after") === "60",
+      `refused payment headers are limited per address after ${before.length} refusals, with Retry-After (${JSON.stringify([...new Set(statuses)])})`);
+    const unpaid = await postFrom("10.40.0.4", { model: "deepseek/deepseek-v4-flash", messages: [{ role: "user", content: "hi" }], max_tokens: 5 });
+    ok(unpaid.status === 402, `the unpaid quote budget is separate: an unpaid quote from the same address still gets its 402 (${unpaid.status})`);
+    const other = await postFrom("10.40.0.5", { model: "deepseek/deepseek-v4-flash", messages: [{ role: "user", content: "hi" }], max_tokens: 5 }, { "x-payment": xpay });
+    ok(other.status === 402, `another address is not limited (${other.status})`);
+  }
 } catch (e) {
   fail++; console.log(`FAIL - ${e.message}`);
 } finally {
   if (fail) console.log(errTail.join("").slice(-3000));
-  proc.kill("SIGKILL"); fac.close(); cat.close();
+  proc.kill("SIGKILL"); fac.close(); cat.close(); relay.close();
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

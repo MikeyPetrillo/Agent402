@@ -92,5 +92,38 @@ const populated = () => ({
   ok(partial.topTools === undefined && partial.enabled === true, "an empty table is withheld like a full one");
 }
 
+// --- pre-payment refusals stay out of the published figures ------------------
+// An input refusal answered before any payment gate is free to send, so it is
+// left out of every aggregate the way probes are (getAnalytics). The queries
+// are read through a stubbed pg Pool: a fresh module instance with a database
+// URL set records every statement and answers each with one empty row.
+{
+  const pg = (await import("pg")).default;
+  const statements = [];
+  const realQuery = pg.Pool.prototype.query;
+  const realOn = pg.Pool.prototype.on;
+  pg.Pool.prototype.query = async function (sql) { statements.push(String(sql)); return { rows: [{}] }; };
+  pg.Pool.prototype.on = function () { return this; };
+  const savedUrl = process.env.ANALYTICS_DATABASE_URL;
+  process.env.ANALYTICS_DATABASE_URL = "postgres://analytics@127.0.0.1:9/never";
+  try {
+    const mod = await import(`../src/analytics-db.js?prepay-${Date.now()}`);
+    statements.length = 0;
+    const data = await mod.getAnalytics({ windowHours: 24, top: 5 });
+    const reads = (list) => list.filter((s) => /^\s*(SELECT|WITH)\b/.test(s) && /tool_calls/.test(s));
+    const aggregates = reads(statements).filter((s) => !/AND (synthetic|probe|pre_payment)\s*$/.test(s.trim()));
+    ok(data.ok === true && aggregates.length >= 4, `the stubbed pool answered the aggregate queries (${aggregates.length})`);
+    ok(aggregates.every((s) => /NOT (t\.)?pre_payment/.test(s)), "every aggregate (totals, per-tool, errors, timeseries) leaves pre-payment refusals out");
+    ok(statements.some((s) => /WHERE ts >= .* AND pre_payment\b/.test(s)) && "prePaymentHidden" in data, "the hidden pre-payment count is read and reported");
+    statements.length = 0;
+    await mod.getAnalytics({ windowHours: 24, top: 5, includePrePayment: true });
+    ok(reads(statements).every((s) => !/NOT (t\.)?pre_payment/.test(s)), "includePrePayment puts them back");
+  } finally {
+    pg.Pool.prototype.query = realQuery;
+    pg.Pool.prototype.on = realOn;
+    if (savedUrl === undefined) delete process.env.ANALYTICS_DATABASE_URL; else process.env.ANALYTICS_DATABASE_URL = savedUrl;
+  }
+}
+
 console.log(`\n${failed ? "FAILED" : "OK"}: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

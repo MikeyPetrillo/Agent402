@@ -171,7 +171,11 @@ export async function recordToolCall({ slug, latencyMs, cached, errored, status,
 // HMAC-signed X-Heartbeat-Token) are excluded so that CI canaries or manual
 // smoke tests can never inflate the public error rate. Pass true to see the
 // full picture (useful when verifying that synthetic traffic is being tagged).
-export async function getAnalytics({ windowHours = 24, top = 25, includeSynthetic = false, includeProbes = false } = {}) {
+// `includePrePayment` defaults to false the same way: an input refusal answered
+// before any payment gate (an unknown model id, an input over the cap) is free
+// traffic anyone can send, so it is counted apart (`prePaymentHidden`) and
+// never moves the published call count or error rate.
+export async function getAnalytics({ windowHours = 24, top = 25, includeSynthetic = false, includeProbes = false, includePrePayment = false } = {}) {
   // "Never configured" and "configured but the connection failed" are the same
   // shape to a reader and mean opposite things: one is a deliberate choice, the
   // other is an outage wearing its costume. Both used to return a bare
@@ -192,8 +196,8 @@ export async function getAnalytics({ windowHours = 24, top = 25, includeSyntheti
     const since = `now() - interval '${hours} hours'`;
     // SQL fragments — inlined (no parameterization) because they're a fixed
     // boolean toggled by the caller, not user input.
-    const realOnly = (includeSynthetic ? "" : "AND NOT synthetic") + (includeProbes ? "" : " AND NOT probe");
-    const realOnlyJoin = (includeSynthetic ? "" : "AND NOT t.synthetic") + (includeProbes ? "" : " AND NOT t.probe");
+    const realOnly = (includeSynthetic ? "" : "AND NOT synthetic") + (includeProbes ? "" : " AND NOT probe") + (includePrePayment ? "" : " AND NOT pre_payment");
+    const realOnlyJoin = (includeSynthetic ? "" : "AND NOT t.synthetic") + (includeProbes ? "" : " AND NOT t.probe") + (includePrePayment ? "" : " AND NOT t.pre_payment");
 
     // `client_errored` (4xx) = caller mistake (missing field, bad shape) —
     // tool is fine. `server_errored` (5xx) = handler or upstream failure —
@@ -232,6 +236,12 @@ export async function getAnalytics({ windowHours = 24, top = 25, includeSyntheti
       SELECT count(*)::int AS probe_calls
       FROM tool_calls
       WHERE ts >= ${since} AND probe
+    `);
+
+    const pre = await p.query(`
+      SELECT count(*)::int AS pre_payment_calls
+      FROM tool_calls
+      WHERE ts >= ${since} AND pre_payment
     `);
 
     const byTool = await p.query(
@@ -307,6 +317,8 @@ export async function getAnalytics({ windowHours = 24, top = 25, includeSyntheti
       includeProbes,
       syntheticHidden: includeSynthetic ? 0 : (syn.rows[0]?.synthetic_calls || 0),
       probesHidden: includeProbes ? 0 : (prb.rows[0]?.probe_calls || 0),
+      includePrePayment,
+      prePaymentHidden: includePrePayment ? 0 : (pre.rows[0]?.pre_payment_calls || 0),
       totals: totals.rows[0],
       topTools: byTool.rows,
       errorTools: errorTools.rows,
