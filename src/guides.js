@@ -1763,8 +1763,10 @@ OpenClaw sends roughly 70k characters of system prompt and tool schemas before
 your first word, so the model it talks to must accept that much input. The
 routed \`auto\` tier caps input at ${TIERS["v1-chat-auto"].maxInputChars.toLocaleString("en-US")} characters and OpenClaw refuses it
 as a context overflow before any call is made; the metered route
-(\`${TIERS["v1-chat-metered"].route.split(" ")[1].replace("/chat/completions", "")}\`, up to ${TIERS["v1-chat-metered"].maxInputChars.toLocaleString("en-US")} characters, each request quoted from its
-body from $${TIERS["v1-chat-metered"].price}) is the one to point OpenClaw at:
+(\`${TIERS["v1-chat-metered"].route.split(" ")[1].replace("/chat/completions", "")}\`, at least ${TIERS["v1-chat-metered"].maxInputChars.toLocaleString("en-US")} characters and more on a model
+with a larger context window, up to ${METERED_MAX_INPUT_CHARS_CEILING.toLocaleString("en-US")}, each model's cap read from
+\`meteredMaxInputChars\` on GET /v1/models; each request is quoted from its body from
+$${TIERS["v1-chat-metered"].price}) is the one to point OpenClaw at:
 
 \`\`\`json5
 // ~/.openclaw/openclaw.json

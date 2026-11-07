@@ -61,6 +61,7 @@ import { cdnSyncLeftMs } from "../cdn-sync-window.js";
 import { audioProviderPolicy, AUDIO_ZDR_MODELS } from "../openrouter-audio-policy.js";
 import { cacheGet, cacheSet } from "../cache.js";
 import { unknownModelVerdict, isListedModel, contextTokensOf, listedModelsWithContext, MAX_SUGGESTIONS } from "../model-catalog.js";
+import { stripControlChars } from "../prepayment-refusal.js";
 
 const OPENROUTER_KEY = () => (process.env.OPENROUTER_API_KEY || "").trim();
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
@@ -908,7 +909,10 @@ export function meteredModelVerdict(model) {
   const base = id.split(":")[0];
   if (Object.hasOwn(RETIRING_MODELS, base) || Object.hasOwn(RETIRING_MODELS, base.replace(/-\d{4}-\d{2}-\d{2}$/, ""))) return null;
   if (successorsOf(base).length) return null;
-  return unknownModelVerdict(model, { suggest: (x) => tierAllows("v1-chat-metered", x) });
+  const v = unknownModelVerdict(model, { suggest: (x) => tierAllows("v1-chat-metered", x) });
+  // The message echoes the id as sent; a control character in it would split
+  // the log line that carries the message (stripControlChars).
+  return v ? { ...v, message: stripControlChars(v.message) } : v;
 }
 
 /** Same-family successors for models whose whole upstream can vanish at once
@@ -1549,6 +1553,88 @@ function countInPieces(count, text) {
   return n + (pieces - 1);
 }
 const countTokensBounded = (text) => countInPieces(countTokens, text);
+
+// A large quote, counted before the gates without holding the loop. Even in
+// 1 KB pieces a 330k-char CJK body is ~250 ms of BPE in one synchronous run,
+// and the quote is priced inside the payment gate's synchronous price
+// function. warmQuoteTokenCounts runs the quote once with the counter in
+// collect mode (each large text is recorded and answered with its length),
+// counts those texts with the same cut points, yielding with setImmediate
+// after every QUOTE_WARM_YIELD_CHARS (64 KB of UTF-16) or QUOTE_WARM_SLICE_MS
+// of counting, whichever comes first (a 64 KB run of CJK alone is ~50 ms of
+// BPE), and keeps each count for a short while; the
+// real quote then reads the kept count. A text that is not kept (evicted,
+// expired, or one the collect run did not reach) is counted in place, as
+// before, so the warm path changes timing only, never a count.
+export const QUOTE_WARM_MIN_CHARS = 16 * 1024;
+const QUOTE_WARM_YIELD_CHARS = 32 * 1024;
+const QUOTE_WARM_SLICE_MS = 8;
+const QUOTE_WARM_TTL_MS = 60_000;
+const QUOTE_WARM_MAX_CHARS = 8_000_000;
+const warmCounts = new Map(); // text -> { n, at }, oldest first
+let warmChars = 0, warmHits = 0;
+let collecting = null;
+function forgetWarm(text) {
+  const e = warmCounts.get(text);
+  if (!e) return;
+  warmCounts.delete(text);
+  warmChars -= text.length;
+}
+function keepWarm(text, n, now = Date.now()) {
+  if (text.length > QUOTE_WARM_MAX_CHARS) return;
+  forgetWarm(text);
+  for (const [t, e] of warmCounts) {
+    if (warmChars + text.length <= QUOTE_WARM_MAX_CHARS && now - e.at < QUOTE_WARM_TTL_MS) break;
+    forgetWarm(t);
+  }
+  warmCounts.set(text, { n, at: now });
+  warmChars += text.length;
+}
+function countQuoteTokens(text) {
+  if (text.length >= QUOTE_WARM_MIN_CHARS) {
+    const e = warmCounts.get(text);
+    if (e && Date.now() - e.at < QUOTE_WARM_TTL_MS) { warmHits++; return e.n; }
+    if (collecting) { collecting.push(text); return text.length; }
+  }
+  return countTokensBounded(text);
+}
+const yieldTurn = () => new Promise((r) => setImmediate(r));
+async function countInPiecesYielding(count, text) {
+  if (text.length <= TOKEN_COUNT_PIECE) return count(text);
+  let n = 0, pieces = 0, sinceYield = 0, sliceAt = performance.now();
+  for (let i = 0; i < text.length;) {
+    let j = Math.min(text.length, i + TOKEN_COUNT_PIECE);
+    const c = text.charCodeAt(j - 1);
+    if (c >= 0xd800 && c <= 0xdbff && j < text.length) j++;
+    n += count(text.slice(i, j));
+    pieces++;
+    sinceYield += j - i;
+    i = j;
+    if (i < text.length && (sinceYield >= QUOTE_WARM_YIELD_CHARS || performance.now() - sliceAt >= QUOTE_WARM_SLICE_MS)) {
+      await yieldTurn();
+      sinceYield = 0; sliceAt = performance.now();
+    }
+  }
+  return n + (pieces - 1);
+}
+/** Runs `quote()` once in collect mode, then counts every large text it
+ *  priced, yielding the loop between pieces, and keeps the counts for the
+ *  real quote. Resolves to the number of texts counted; never throws. */
+export async function warmQuoteTokenCounts(quote) {
+  let texts = [];
+  collecting = texts;
+  try { quote(); } catch { /* the real quote answers the refusal */ } finally { collecting = null; }
+  let counted = 0;
+  for (const t of new Set(texts)) {
+    const n = await countInPiecesYielding(countTokens, t);
+    keepWarm(t, n);
+    counted++;
+  }
+  return counted;
+}
+/** Test seam: the kept counts' size, and a clear. */
+export function _quoteWarmStats() { return { entries: warmCounts.size, chars: warmChars, hits: warmHits }; }
+export function _clearQuoteWarm() { warmCounts.clear(); warmChars = 0; warmHits = 0; }
 // Same bound for the embeddings encoder (cl100k): one 16k-char unbroken item
 // was a single quadratic chunk, 353 ms measured, on a default-on cache path.
 const countEmbeddingTokensBounded = (text) => countInPieces(countEmbeddingTokens, text);
@@ -1563,7 +1649,7 @@ function estimateInputTokens(body, imageCount) {
   const probe = { ...body };
   delete probe.max_tokens;
   const text = JSON.stringify(probe, (k, v) => (k === "image_url" ? undefined : v));
-  return Math.ceil(countTokensBounded(text) * TOKEN_SAFETY) + imageCount * imageTokensFor(body.model);
+  return Math.ceil(countQuoteTokens(text) * TOKEN_SAFETY) + imageCount * imageTokensFor(body.model);
 }
 
 /** The prompt size, in the upstream's own tokens, that picks a long-context
@@ -1928,7 +2014,7 @@ export function inputTooLargeError(tierSlug, model, chars) {
     return Object.assign(e, { maxInputChars: max, inputChars: chars, hint: "trim-input" });
   }
   const suggestions = largerWindowSuggestions(model, chars);
-  const e = bad(`Input too large (${chars} chars). ${model ? `"${String(model).slice(0, 200)}" on ` : ""}${route} takes up to ${max} chars` +
+  const e = bad(`Input too large (${chars} chars). ${model ? `"${stripControlChars(String(model).slice(0, 200))}" on ` : ""}${route} takes up to ${max} chars` +
     ` (${tier.maxInputChars} on every model, more on a model with a larger context window, up to ${METERED_MAX_INPUT_CHARS_CEILING}).` +
     ` Trim older turns or long tool results` +
     (suggestions.length ? `, or name a model with a larger context window: ${suggestions.join(", ")}.` : ".") +
@@ -4565,11 +4651,12 @@ export function modelsList() {
     // `meteredEndpoint`, the route that quotes the same model per request.
     if (tier.metered) continue;
     for (const p of tier.prefixes) {
+      // A family prefix that is not itself an upstream id is advertised as
+      // the concrete model it resolves to (PREFIX_CANONICAL) - an agent
+      // must be able to send any id on this list verbatim.
+      const id = p.endsWith("/") ? `${p}*` : (PREFIX_CANONICAL[p.toLowerCase()] || p);
       data.push({
-        // A family prefix that is not itself an upstream id is advertised as
-        // the concrete model it resolves to (PREFIX_CANONICAL) - an agent
-        // must be able to send any id on this list verbatim.
-        id: p.endsWith("/") ? `${p}*` : (PREFIX_CANONICAL[p.toLowerCase()] || p),
+        id,
         object: "model",
         owned_by: p.split("/")[0],
         x402: {
@@ -4585,7 +4672,9 @@ export function modelsList() {
               // tier's: a client deriving a context window from this entry must
               // not carry the flat cap onto the metered route (agent402-openclaw
               // did, and OpenClaw refused every turn as a context overflow).
-              meteredMaxInputChars: TIERS["v1-chat-metered"].maxInputChars, meteredMaxTokens: TIERS["v1-chat-metered"].maxTokens,
+              // Each model's own cap (maxInputCharsFor: the floor, raised by a
+              // larger live context window); a vendor wildcard reads the floor.
+              meteredMaxInputChars: maxInputCharsFor("v1-chat-metered", p.endsWith("/") ? null : id), meteredMaxTokens: TIERS["v1-chat-metered"].maxTokens,
               // What a metered call naming no model gets (the metered tier is
               // not listed on its own): the default, and the compat model a
               // default call carrying a parameter the default does not take gets.
