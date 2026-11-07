@@ -6,7 +6,7 @@ carries its own version on npm.
 
 ## Unreleased
 
-### 2026-11-07 (onchain-sql price, X data tools)
+### 2026-11-07 (onchain-sql price, X data tools, Solana token search)
 Tools:
 - onchain-sql is $0.030 a call (was $0.040), and a call still sends the query
   service at most 3 queries. The onchain-analyst pack follows the tool's
@@ -19,6 +19,10 @@ Tools:
   rows carry authorId, null author fields and the /i/web/status link, and
   user carries the id with null username, name and verified.
 - x-search-recent is unchanged.
+- sol-token-search finds a Solana token whose ticker is busy on other chains:
+  when the pair search holds no matching Solana pair, the mints come from a
+  Solana token index (verified first) and their pairs are read by mint. The
+  answer says whether that fallback ran and carries the partial-answer fields.
 
 ### 2026-11-06 (Ink rail)
 Payments:
