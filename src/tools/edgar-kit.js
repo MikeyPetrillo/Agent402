@@ -593,7 +593,18 @@ export function dedupeByAccession(hits) {
 // answering and the empty answer stands; when the control is empty too, or
 // cannot be read, the search answers a 503 saying the upstream search is not
 // answering, which is never charged. A really empty search costs one read more.
+//
+// The control's verdict (index answering or not) is kept in process, per
+// reader, so a burst of empty searches spends one control read, not one each:
+// "answering" stands for EFTS_CONTROL_YES_TTL_MS, "serving empties" for only
+// EFTS_CONTROL_NO_TTL_MS so a recovering index is noticed quickly. Concurrent
+// searches share one control read in flight. A control read that errors is
+// never kept. The buyer's own search results are never cached.
 export const EFTS_EMPTY_READS = 4;
+export const EFTS_CONTROL_YES_TTL_MS = 60_000;
+export const EFTS_CONTROL_NO_TTL_MS = 15_000;
+// reader (getJson) -> { answering, at } or { pending: Promise<boolean> }
+const eftsControlVerdicts = new WeakMap();
 export function eftsControlParams(now = Date.now()) {
   return { forms: "10-K", startdt: isoDate(now - 365 * 86400 * 1000), enddt: isoDate(now) };
 }
@@ -601,7 +612,7 @@ const eftsEmpty = (j) => !(j?.hits?.hits?.length) && !(j?.hits?.total?.value);
 function eftsNotAnswering(detail) {
   return Object.assign(bad(`SEC EDGAR full-text search is not answering (${detail}); try again later`, 503), { upstream: "EDGAR", eftsNotAnswering: true });
 }
-export async function eftsSearchWith(params, { getJson = edgarGetJson, pauseMs = 750, reads = EFTS_EMPTY_READS, budget = currentBudget(), control = eftsControlParams } = {}) {
+export async function eftsSearchWith(params, { getJson = edgarGetJson, pauseMs = 750, reads = EFTS_EMPTY_READS, budget = currentBudget(), control = eftsControlParams, controlCache = eftsControlVerdicts, clock = Date.now } = {}) {
   const url = eftsUrl(params);
   let last = await getJson(url);
   // A later page that is empty ends paging: it is not re-read or confirmed.
@@ -622,11 +633,29 @@ export async function eftsSearchWith(params, { getJson = edgarGetJson, pauseMs =
     if (!eftsEmpty(last)) return last;
   }
   if (budget && budget.remaining() < EDGAR_RETRY_MIN_LEFT_MS) throw eftsNotAnswering("an empty answer could not be confirmed in time");
-  let check;
-  try { check = await getJson(eftsUrl(typeof control === "function" ? control() : control)); }
-  catch { throw eftsNotAnswering("the confirming read failed"); }
-  if (eftsEmpty(check)) throw eftsNotAnswering("a query that always has results came back empty");
+  if (!(await eftsIndexAnswering(getJson, control, controlCache, clock))) throw eftsNotAnswering("a query that always has results came back empty");
   return last;
+}
+
+// The control query's verdict: true when the index answers it with hits. A
+// kept verdict is reused within its TTL; a read in flight is shared; a read
+// that fails throws the 503 and leaves nothing kept.
+async function eftsIndexAnswering(getJson, control, cache, clock) {
+  const kept = cache ? cache.get(getJson) : null;
+  if (kept?.pending) {
+    try { return await kept.pending; } catch { throw eftsNotAnswering("the confirming read failed"); }
+  }
+  if (kept && clock() - kept.at < (kept.answering ? EFTS_CONTROL_YES_TTL_MS : EFTS_CONTROL_NO_TTL_MS)) return kept.answering;
+  const pending = (async () => !eftsEmpty(await getJson(eftsUrl(typeof control === "function" ? control() : control))))();
+  if (cache) cache.set(getJson, { pending });
+  let answering;
+  try { answering = await pending; }
+  catch {
+    if (cache && cache.get(getJson)?.pending === pending) cache.delete(getJson);
+    throw eftsNotAnswering("the confirming read failed");
+  }
+  if (cache && cache.get(getJson)?.pending === pending) cache.set(getJson, { answering, at: clock() });
+  return answering;
 }
 
 // Tests only: the reader every eftsSearch caller goes through (null restores
