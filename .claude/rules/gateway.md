@@ -34,8 +34,8 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   `maxInputChars`, `inputChars`, `hint: trim-input`, larger-window `suggestions`) before any
   payment gate, as the unknown-model refusal is; Messages and Responses refuse it in the handler
   (never charged). A Tempo push credential skips the pre-payment check and is answered by its
-  gate, which books the transfer as owed; any refusal saying "Nothing was charged." to one
-  carries `PUSH_EXCEPTION` (`withPushException` in server.js).
+  gate, which books the transfer as owed; a refusal to one names that exception in its charge
+  sentence (`PUSH_EXCEPTION`, `withPushException` in server.js).
   **Large quotes:** a /v1/metered body of 16k chars or more is counted before the gates by
   `warmQuoteTokenCounts`, which yields the loop every 64 KB or 8 ms of BPE and keeps each count
   for 60 s (8M chars at most); the synchronous quote reads the kept count. An unpaid quote is
