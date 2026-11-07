@@ -2,6 +2,7 @@
 // version in mcp/package.json: the package's own AGENT402_MCP_VERSION and
 // every `agent402-mcp@x.y.z` pin in the shipped trees, docs and pages.
 // Changelog history is a record and is not read.
+import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { AGENT402_MCP_VERSION } from "../mcp/output-schemas.js";
@@ -10,7 +11,7 @@ let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 const version = JSON.parse(readFileSync(new URL("../mcp/package.json", import.meta.url), "utf8")).version;
 ok(AGENT402_MCP_VERSION === version, `AGENT402_MCP_VERSION (${AGENT402_MCP_VERSION}) matches mcp/package.json (${version})`);
-const root = new URL("..", import.meta.url).pathname;
+const root = fileURLToPath(new URL("..", import.meta.url));
 const files = execFileSync("git", ["ls-files", "--", ".", ":!CHANGELOG.md", ":!src/changelog.js", ":!**/package-lock.json", ":!package-lock.json"], { cwd: root, encoding: "utf8" }).split("\n").filter((f) => /\.(js|mjs|md|json|html|txt)$/.test(f));
 const stale = [];
 for (const f of files) {

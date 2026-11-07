@@ -62,6 +62,7 @@
 // Solana (REFUND_SOLANA_KEY, an SPL USDC transfer + memo to the payer's
 // existing USDC account).
 
+import { pathToFileURL } from "node:url";
 import { createHash, createHmac } from "node:crypto";
 import { hasLastingEffect } from "../src/hangup-forgiveness.js";
 import { EVM_RPCS } from "../src/evm-rpcs.js";
@@ -902,6 +903,6 @@ async function main() {
 }
 
 // Importing for tests must not run the CLI.
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((e) => { console.error(e); process.exit(1); });
 }

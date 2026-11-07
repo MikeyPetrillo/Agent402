@@ -5,7 +5,7 @@
       "slug": "x-tweet", "name": "the first tweet ever posted, by id", "requires": "X_BEARER_TOKEN",
       "input": { "id": "20" },
       "expect": {
-        "equals": { "tweet.id": "20", "tweet.text": "just setting up my twttr", "tweet.author.username": "jack" },
+        "equals": { "tweet.id": "20", "tweet.text": "just setting up my twttr", "tweet.authorId": "12", "tweet.author.username": null },
         "populated": ["tweet.createdAt", "tweet.metrics"]
       }
     },

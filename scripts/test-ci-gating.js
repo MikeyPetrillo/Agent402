@@ -97,7 +97,7 @@ const bareImportsIn = (file, seen = new Set()) => {
     if (spec.startsWith("node:")) continue;
     if (!spec.startsWith(".")) return true;           // a real package
     const rel = new URL(spec, path);
-    const relFile = rel.pathname.slice(new URL("../", import.meta.url).pathname.length);
+    const relFile = rel.href.slice(new URL("../", import.meta.url).href.length);
     if (bareImportsIn(relFile, seen)) return true;
   }
   return false;

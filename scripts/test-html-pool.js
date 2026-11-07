@@ -6,11 +6,12 @@
 // a time; a tool's own 400s stay 400s; idle workers never hold the process
 // open. Each scenario is its own process (scripts/lib/html-pool-driver.js)
 // because the pool reads its limits from the environment at load. Offline.
+import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
-const DRIVER = new URL("./lib/html-pool-driver.js", import.meta.url).pathname;
+const DRIVER = fileURLToPath(new URL("./lib/html-pool-driver.js", import.meta.url));
 
 function scenario(name, env = {}, { waitMs = 120_000 } = {}) {
   return new Promise((resolve) => {

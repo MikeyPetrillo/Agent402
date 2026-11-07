@@ -283,5 +283,17 @@ try {
   delete process.env.CACHE_PROBE_API_KEY;
 }
 
+// The [tool-error] console line strips control characters from the message as
+// well as the key names, so a caller-chosen message is always one log line.
+{
+  const { stripControlChars } = await import("../src/prepayment-refusal.js");
+  const { readFileSync: rf } = await import("node:fs");
+  ok(!/[\n\r\u2028\u2029\u0007]/.test(stripControlChars("a\nb\r\u2028c\u2029d\u0007e")), "stripControlChars leaves no newline, carriage return, line or paragraph separator or bell");
+  const server = rf(new URL("../src/server.js", import.meta.url), "utf8");
+  const at = server.indexOf("function logToolError(");
+  const fn = server.slice(at, at + 4000);
+  ok(/console\.error\(`\[tool-error\][^`]*msg=\$\{stripControlChars\(message/.test(fn), "logToolError prints the message through stripControlChars");
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

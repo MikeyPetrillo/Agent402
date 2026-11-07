@@ -123,6 +123,40 @@ for (const [slug, tier] of Object.entries(TIERS)) {
 }
 
 // ---------------------------------------------------------------------------
+// 1b. Metered input past the 200k floor: a model whose live context window is
+//     large takes up to the 1 MB body bound (maxInputCharsFor). At that size
+//     the quote must still cover the worst case x the markup (long-context
+//     rows included), or the body is refused pre-spend at the per-call cap.
+console.log("\n# metered tier at the raised input cap (large context windows)");
+{
+  const { _setModelCatalogForTest } = await import("../src/model-catalog.js");
+  const { maxInputCharsFor, METERED_MAX_INPUT_CHARS_CEILING, canonicalModel } = await import("../src/tools/llm-gateway-kit.js");
+  const tier = TIERS["v1-chat-metered"];
+  const models = [...new Set(repModels(tier).filter((m) => !m.endsWith("family-representative")).map((m) => canonicalModel(m)))];
+  const ids = [...models]; for (let i = 0; i < 120; i++) ids.push(`filler/m-${i}`);
+  _setModelCatalogForTest(ids, Date.now(), Object.fromEntries(models.map((m) => [m, 2_000_000])));
+  let quoted = 0, refusedCap = 0;
+  for (const model of models) {
+    const cap = maxInputCharsFor("v1-chat-metered", model);
+    ok(cap === METERED_MAX_INPUT_CHARS_CEILING, `${model} takes the ceiling with a large window (${cap})`);
+    for (const content of [denseText(cap), "the quick brown fox. ".repeat(Math.ceil(cap / 21)).slice(0, cap)]) {
+      let v;
+      try { v = validateRequest({ model, messages: [{ role: "user", content }], max_tokens: 999999 }, "v1-chat-metered"); }
+      catch (e) { if (e.statusCode !== 400 || !/per-call cap/.test(e.message)) throw e; refusedCap++; continue; }
+      const wc = worstCaseUpstreamCost(v, tier, 0);
+      const q = meteredQuoteUsd({ model, messages: [{ role: "user", content }], max_tokens: 999999 });
+      ok(!q.invalid && !q.overCap && q.usd >= wc.totalUsd * METER_MARKUP - 1e-9, `metered ${model} at ${content.length} chars: quote covers worst-case x METER_MARKUP`);
+      quoted++;
+    }
+    let over = null;
+    try { validateRequest({ model, messages: [{ role: "user", content: "x".repeat(cap + 1) }], max_tokens: 5 }, "v1-chat-metered", { clamp: false }); } catch (e) { over = e; }
+    ok(over?.statusCode === 400 && over?.maxInputChars === cap, `${model}: one char past its cap is refused with the cap named`);
+  }
+  ok(quoted > 0, `some full-ceiling bodies quote under the per-call cap (${quoted} quoted, ${refusedCap} refused at the cap pre-spend)`);
+  _setModelCatalogForTest(null);
+}
+
+// ---------------------------------------------------------------------------
 // 2. Failover chain — the margin must hold on EVERY link, not just the
 //    requested model. Pre-fix, the clamp ran once against the requested
 //    model's cost, so a cheap-model clamp (a no-op) rode unchanged to a
@@ -295,14 +329,22 @@ console.log("\n# STT — cap-before-spend (local duration probe)");
 
 // ---------------------------------------------------------------------------
 // 5b. onchain-sql: the query service meters every query, and one call may
-//     send SQL_QUERY_BUDGET of them (the buyer's query, its retry, the
-//     recovery runs). That many at the table's rate, plus one facilitator
-//     settlement when the table prices one, must sit within the same MARGIN
-//     bound as every other section (worst-case upstream at most MARGIN x the
-//     price). The onchain-analyst pack runs the tool once, so its bundle
-//     price is held to the same bound. Figures stay in the process: the rate
-//     is private, and only PASS/FAIL/SKIP is printed.
+//     send SQL_QUERY_BUDGET of them (the buyer's query, then the row-size
+//     measure and the filtered run or one small re-run). That many at the
+//     table's rate, plus one facilitator settlement when the table prices
+//     one, must sit within SQL_WORST_CASE_BOUND x the price. The
+//     onchain-analyst pack runs the tool once and its price follows the
+//     tool's through the pack rule, so its bundle price is held to the same
+//     bound. Figures stay in the process: the rate is private, and only
+//     PASS/FAIL/SKIP is printed.
 console.log("\n# onchain-sql: the call's query budget vs price");
+// Owner decision (2026-11-07): onchain-sql is the one tool held to its own
+// worst-case bound instead of the shared MARGIN. Its worst case (every query
+// of SQL_QUERY_BUDGET spent, plus a settlement) must keep at least 15% of the
+// list price: cost <= 0.85 x price. Queries 2 and 3 run only for the 64 KB
+// row-size recovery, so a typical call sends one query and sits far inside
+// MARGIN. Every other tool keeps MARGIN.
+const SQL_WORST_CASE_BOUND = 0.85;
 {
   const { CDP_TOOLS, SQL_QUERY_BUDGET } = await import("../src/tools/cdp-kit.js");
   const { PACK_PRICES, SKILL_PACKS } = await import("../src/skills.js");
@@ -318,7 +360,7 @@ console.log("\n# onchain-sql: the call's query budget vs price");
     const cost = SQL_QUERY_BUDGET * rate + settle;
     const sqlPrice = priceOf("onchain-sql");
     ok(SQL_QUERY_BUDGET >= 3 && Number.isFinite(sqlPrice) && sqlPrice > 0, `onchain-sql: a list price and a query budget of ${SQL_QUERY_BUDGET} to price against`);
-    ok(cost <= MARGIN * sqlPrice + 1e-12, `onchain-sql: ${SQL_QUERY_BUDGET} queries at the table rate plus a settlement sit within the margin bound of the list price: ${cost <= MARGIN * sqlPrice + 1e-12 ? "PASS" : "FAIL"}`);
+    ok(cost <= SQL_WORST_CASE_BOUND * sqlPrice + 1e-12, `onchain-sql: ${SQL_QUERY_BUDGET} queries at the table rate plus a settlement keep at least 15% of the list price: ${cost <= SQL_WORST_CASE_BOUND * sqlPrice + 1e-12 ? "PASS" : "FAIL"}`);
     table.push({ tier: "onchain-sql", price: sqlPrice, worst: cost, model: `${SQL_QUERY_BUDGET} queries (query service)` });
     // The only other route that sends a buyer's query to the query service is
     // the onchain-analyst pack (skill-runner.js runs onchain-sql once); the
@@ -327,9 +369,87 @@ console.log("\n# onchain-sql: the call's query budget vs price");
     ok(packs.length === 1 && packs[0].slug === "onchain-analyst", `one skill pack runs onchain-sql (${packs.map((p) => p.slug).join(", ") || "none"})`);
     for (const p of packs) {
       const packPrice = Number(PACK_PRICES[p.slug]);
-      ok(cost <= MARGIN * packPrice + 1e-12, `${p.slug} pack: ${SQL_QUERY_BUDGET} queries plus a settlement sit within the margin bound of its bundle price: ${cost <= MARGIN * packPrice + 1e-12 ? "PASS" : "FAIL"}`);
+      ok(cost <= SQL_WORST_CASE_BOUND * packPrice + 1e-12, `${p.slug} pack: ${SQL_QUERY_BUDGET} queries plus a settlement keep at least 15% of its bundle price: ${cost <= SQL_WORST_CASE_BOUND * packPrice + 1e-12 ? "PASS" : "FAIL"}`);
       table.push({ tier: p.slug, price: packPrice, worst: cost, model: `${SQL_QUERY_BUDGET} queries (one onchain-sql step)` });
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 5c. X data tools: X bills per object returned, the objects under
+//     `includes` from an expansion among them (X notice, 2026-11-05). Each
+//     tool's worst case for each body shape that changes what it reads (every
+//     read its handler sends, at its largest page, one expanded author per
+//     post) comes from the kit's own estimator (xToolWorstCases) and must sit
+//     within the MARGIN bound of the tool's fixed price. Every X tool stays
+//     fixed-price. Figures stay in the process: only PASS/FAIL is printed.
+//
+//     DATED EXCEPTION (2026-11-07), x-search-recent: its rows carry author
+//     usernames from the author expansion, and with one expanded user per
+//     post billed at the user-read rate its worst case falls under MARGIN at
+//     the current price. X's notice of 2026-11-05 says expansions will count
+//     toward usage but gives no effective date and no rate, and X's billing
+//     docs still meter posts only. Until then only the worst case WITHOUT
+//     expansion billing is held to MARGIN here. The exception EXPIRES: X bills
+//     expansions from 2026-11-22, and from 2026-11-21 on this test fails until
+//     x-search-recent is repriced from the real rate and the exception removed.
+//     While it stands, the output says plainly (yes/no, never a figure)
+//     whether the worst case with expansions billed is above the list price
+//     itself. The kit's daily cap and spend meter already count expanded
+//     objects either way.
+const X_EXPANSION_BILLING_PENDING = new Map([
+  ["x-search-recent", { dated: "2026-11-07", expires: "2026-11-21", billingStarts: "2026-11-22" }],
+]);
+/** Whether a dated exception still stands on `today` (YYYY-MM-DD, UTC). */
+function expansionExceptionStands(entry, today) {
+  return typeof entry?.expires === "string" && today < entry.expires;
+}
+const UTC_TODAY = new Date().toISOString().slice(0, 10);
+// The expiry itself is checked against fixed dates, so it is proven before the
+// real expiry date arrives.
+{
+  const e = X_EXPANSION_BILLING_PENDING.get("x-search-recent");
+  ok(expansionExceptionStands(e, "2026-11-20") === true, "x-search-recent expansion exception stands on 2026-11-20");
+  ok(expansionExceptionStands(e, "2026-11-21") === false && expansionExceptionStands(e, "2026-12-01") === false, "x-search-recent expansion exception has expired on and after 2026-11-21");
+  ok(e.expires < e.billingStarts, "the exception expires before X starts billing expansions");
+}
+console.log("\n# X data tools: worst-case reads, expansions included, vs price");
+{
+  const { X_DATA_TOOLS, xToolWorstCases } = await import("../src/tools/x-data-kit.js");
+  if (upstreamCosts().vendor?.x?.postRead == null || upstreamCosts().vendor?.x?.userRead == null) {
+    if (process.env.CI && process.env.UPSTREAM_COSTS_OPTIONAL !== "1") ok(false, "x data: the private table has no vendor.x rates (required under CI)");
+    else console.log("SKIP - x data margin: the private table has no vendor.x rates");
+  } else {
+    for (const t of X_DATA_TOOLS) {
+      const price = Number(String(t.price).replace(/[^0-9.]/g, ""));
+      ok(Number.isFinite(price) && price > 0 && t.quote === undefined && t.tierQuote === undefined, `${t.slug}: a fixed list price`);
+      const cases = xToolWorstCases(t.slug);
+      ok(cases.length >= 1, `${t.slug}: at least one worst-case body`);
+      const pending = X_EXPANSION_BILLING_PENDING.get(t.slug);
+      if (pending) {
+        const stands = expansionExceptionStands(pending, UTC_TODAY);
+        ok(stands, stands
+          ? `${t.slug}: the expansion-billing exception stands until ${pending.expires} (X bills expansions from ${pending.billingStarts})`
+          : `${t.slug}: the expansion-billing exception expired on ${pending.expires}: ${t.slug} must be repriced before X bills expansions on ${pending.billingStarts}, and the exception removed`);
+      }
+      for (const { body, usd, usdWithoutExpansions } of cases) {
+        const label = `${t.slug} ${JSON.stringify(body)}`;
+        if (pending) {
+          ok(Number.isFinite(usdWithoutExpansions) && usdWithoutExpansions < usd, `${label}: the worst case without expansion billing is computed`);
+          const within = usdWithoutExpansions <= MARGIN * price + 1e-12;
+          ok(within, `${label}: worst-case reads without expansion billing within the margin bound of the list price: ${within ? "PASS" : "FAIL"}`);
+          const aboveList = usd > price;
+          console.log(`EXCEPTION - ${label}: expansion billing not yet priced (dated ${pending.dated}, expires ${pending.expires}; X bills expansions from ${pending.billingStarts}): with expansions billed, the worst case is ${usd <= MARGIN * price + 1e-12 ? "within" : "outside"} the margin bound, and above the list price itself: ${aboveList ? "YES" : "no"}`);
+          table.push({ tier: t.slug, price, worst: usdWithoutExpansions, model: "X reads (expansions unbilled, dated exception)" });
+        } else {
+          const within = usd <= MARGIN * price + 1e-12;
+          ok(within, `${label}: worst-case reads, expansions included, within the margin bound of the list price: ${within ? "PASS" : "FAIL"}`);
+          table.push({ tier: t.slug, price, worst: usd, model: `X reads ${JSON.stringify(body)}` });
+        }
+      }
+    }
+    // The exception list names only live X tools.
+    for (const slug of X_EXPANSION_BILLING_PENDING.keys()) ok(X_DATA_TOOLS.some((t) => t.slug === slug), `expansion-billing exception names a live X tool (${slug})`);
   }
 }
 

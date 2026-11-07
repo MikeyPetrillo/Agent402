@@ -99,6 +99,7 @@ import { configureHowToCall, howToCall402Field, howToCallField } from "./how-to-
 import { gatewayCacheGate, commitGatewayCacheWrites } from "./gateway-cache-scope.js";
 import { startModelCatalogRefresh, modelCatalogWanted } from "./model-catalog.js";
 import { toolErrorFields } from "./tool-error-fields.js";
+import { createPrePaymentRefusalRecorder, createPrePaymentLogSampler, stripControlChars, withPushExceptionText } from "./prepayment-refusal.js";
 import { shapeRefusal } from "./input-aliases.js";
 import { setSettlementOverrides } from "@x402/express";
 // Metered settlement ships DARK, like the upto scheme it rides on: it changes
@@ -554,7 +555,7 @@ import { LLM_GEMINI_TOOLS, GEMINI_PATH_BY_TIER } from "./tools/llm-gemini-kit.js
 import { refusalReason } from "./refusal-reason.js";
 import { setKnownProductKeys } from "./posthog.js";
 import { LLM_RESPONSES_TOOLS } from "./tools/llm-responses-kit.js";
-import { LLM_GATEWAY_TOOLS, TIERS, PRICED_BY_MODEL_NOTE, modelsList, promptCacheKey, promptCacheGetShared, promptCacheStore, GATEWAY_TIER_BY_PATH, embeddingsCacheKey, EMBEDDINGS_PATH, rerankCacheKey, RERANK_PATH, gatewayCreditsStatus, oxAlphaAvailable, probeOxAlphaAvailability, canonicalModel, meteredModelRefusal, OX_ROUTE, oxUpstreamIsFree, isFlatTier, METERED_MAX_QUOTE_USD } from "./tools/llm-gateway-kit.js";
+import { LLM_GATEWAY_TOOLS, TIERS, PRICED_BY_MODEL_NOTE, modelsList, promptCacheKey, promptCacheGetShared, promptCacheStore, GATEWAY_TIER_BY_PATH, embeddingsCacheKey, EMBEDDINGS_PATH, rerankCacheKey, RERANK_PATH, gatewayCreditsStatus, oxAlphaAvailable, probeOxAlphaAvailability, canonicalModel, meteredModelVerdict, meteredInputSizeRefusal, OX_ROUTE, oxUpstreamIsFree, isFlatTier, METERED_MAX_QUOTE_USD, warmQuoteTokenCounts, QUOTE_WARM_MIN_CHARS } from "./tools/llm-gateway-kit.js";
 // /v1/audio/speech stays behind OPENROUTER_TTS_ENABLED as a rollout gate:
 // @x402/express (v2.16) runs the handler first and settles only a <400
 // response, so a 502 is never charged — but an UNLISTED route returns no 402
@@ -682,6 +683,8 @@ import { startRedisPersistenceMonitor, redisPersistenceStatus } from "./redis-pe
 import { sharedLimitsStatus, startSharedLimitsProbe, shared as sharedLimits, sharedLimitsEnabled, sharedWrite as sharedLimitsWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { createRegistrationLimiter } from "./registration-limits.js";
 import { flushJsonDocuments } from "./json-document.js";
+import { flushSqlQueryStats, sqlQueryStatsReport } from "./sql-query-stats.js";
+import { flushXSearchStats, xSearchStatsReport } from "./x-search-stats.js";
 import { loadRemovedOrigins } from "./x402-index.js";
 import { unloadedStores } from "./store-retry.js";
 import { dispatchEligibility, dispatchLegend } from "./dispatch-eligibility.js";
@@ -3000,9 +3003,16 @@ startRedisPersistenceMonitor();
 startSharedLimitsProbe();
 // Per-tool and per-upstream failure detail (src/tool-failure-monitor.js):
 // slugs, classes, last messages, upstream outcomes, facilitator refusals.
+// onchainSqlQueries: per UTC day, how many upstream queries onchain-sql calls
+// that answered a final 200 used, and the budget refusals (counts only;
+// src/sql-query-stats.js). xSearchAuthors: per UTC day, how many distinct
+// authors and posts x-search-recent calls that answered a final 200 returned,
+// bucketed (counts only; src/x-search-stats.js).
 app.get("/__operator/tool-failures.json", async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
-  res.set("Cache-Control", "private, no-store").json({ ...(await toolFailureMonitor().report()), robinhoodOrder: robinhoodOrderView() });
+  const onchainSqlQueries = await sqlQueryStatsReport().catch(() => null);
+  const xSearchAuthors = await xSearchStatsReport().catch(() => null);
+  res.set("Cache-Control", "private, no-store").json({ ...(await toolFailureMonitor().report()), robinhoodOrder: robinhoodOrderView(), onchainSqlQueries, xSearchAuthors });
 });
 // Direct-upstream A/B (src/gateway-direct-upstream.js): attempts, failures by
 // bucket and p50/p90 latency per upstream for the listed model ids.
@@ -3434,6 +3444,7 @@ app.use("/__operator/seller-verification", (req, res, next) => {
 // per 190k CJK chars): bound unauthenticated quote requests per IP so the
 // quoter cannot be used as free CPU. Paid retries carry a credential and pass.
 const meteredQuoteLimiter = createRateLimiter("metered-quote", { perMin: 60, perHour: 1200 });
+const meteredUnverifiedLimiter = createRateLimiter("metered-quote-refused-credential", { perMin: 60, perHour: 1200 });
 app.use("/v1/metered", (req, res, next) => {
   // GET/HEAD too: the method alias below turns them into the POST quote path
   // (review 2026-08-28: 70 HEADs with a 180 KB body reached the quoter past
@@ -3448,6 +3459,18 @@ app.use("/v1/metered", (req, res, next) => {
   // read a credential exactly the same way, and two copies of this rule drift.
   const paid = looksLikePayment(req.headers);
   if (!paid && meteredQuoteLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many unpaid quote requests from this address; send the paid retry, or slow down." });
+  if (paid) {
+    // A header that only decodes as a payment still buys a quote: the gate
+    // prices the body before it verifies. Such a request is counted once its
+    // credential is refused (a final 401 or 402), so a verified payment never
+    // spends this budget and a refused one cannot stand in for an unpaid quote.
+    const ip = clientIp(req);
+    if (meteredUnverifiedLimiter.peek(ip).limited) {
+      res.set("Retry-After", "60");
+      return res.status(429).json({ error: "Too many refused payment credentials from this address; send a payment that verifies, or slow down.", retryAfterSeconds: 60 });
+    }
+    res.once("finish", () => { if (res.statusCode === 401 || res.statusCode === 402) meteredUnverifiedLimiter.check(ip); });
+  }
   next();
 });
 // Rate-check the Stripe-session endpoints BEFORE the body parser, so a request
@@ -6864,7 +6887,9 @@ function refreshPerf24hInBackground() {
             // (503) are not recorded in this store, so they are not in calls or
             // errorRate (~120 a day were missing from a published 0, truth
             // audit 2026-10-02).
-            errorRateScope: "tool handler errors over recorded calls; discovery requests refused by load shedding (503) are not recorded and not counted",
+            // Input refusals answered before any payment gate are left out of
+            // both, the way probes are (getAnalytics includePrePayment).
+            errorRateScope: "tool handler errors over recorded calls; discovery requests refused by load shedding (503) are not recorded and not counted, and input refusals answered before payment are not counted",
             p50LatencyMs: t.p50_latency_ms,
             p95LatencyMs: t.p95_latency_ms,
             dashboardUrl: `${BASE_URL}/analytics`,
@@ -7149,11 +7174,15 @@ const computeFind = async (q, k, meter = null, ip = null) => {
 const findCachePath = "/api/find";
 const findCachePolicy = CACHEABLE_ROUTES[findCachePath];
 
+// Pre-payment refusals are free to send: their console lines are sampled per
+// minute with one summary line for the rest (src/prepayment-refusal.js).
+const prePaymentLogSampler = createPrePaymentLogSampler({ perMinute: 20 });
+setInterval(contained("prepayment-log-sampler", () => prePaymentLogSampler.tick()), 15_000).unref();
 // Diagnostic log for tool errors. Lets us spot patterns like "100% of /api/whois
 // calls fail in 1ms" without leaking PII — only slug + HTTP status + the error
 // message we already serialize to the response body. No body, no IP, no UA.
 // 4xx = caller sent bad input; 5xx = our tool or its upstream broke.
-function logToolError(slug, status, message, shape, synthetic, probe) {
+function logToolError(slug, status, message, shape, synthetic, probe, { prePayment = false } = {}) {
   // Every caller's message is scrubbed of configured secrets and credential-
   // bearing URLs before the log line, PostHog and the failure monitor read it.
   message = redactSecrets(message || "");
@@ -7166,18 +7195,22 @@ function logToolError(slug, status, message, shape, synthetic, probe) {
   // line for those (PostHog still captures the probe-tagged event for
   // dashboards); probe 5xx still logs — a server bug is our bug no matter who
   // triggered it.
-  const skipConsole = probe && status < 500;
+  const skipConsole = (probe && status < 500) || (prePayment && status < 500 && !prePaymentLogSampler.allow(slug));
   // Log the request's TOP-LEVEL KEYS (no values, no IPs, no payment info) on
   // 4xx so we can spot shape-mismatch patterns the schema didn't anticipate.
   // Keys are bounded — privacy-safe and small.
-  const shapeStr = shape && Array.isArray(shape) && shape.length ? ` shape=[${shape.slice(0, 12).join(",")}]` : "";
+  // Key names and the message are caller-chosen text: control characters are
+  // stripped so one error is always one log line.
+  const shapeStr = shape && Array.isArray(shape) && shape.length ? ` shape=[${shape.slice(0, 12).map((k) => stripControlChars(k).slice(0, 64)).join(",")}]` : "";
   const synthStr = synthetic ? " synthetic=true" : "";
   const probeStr = probe ? " probe=true" : "";
-  if (!skipConsole) console.error(`[tool-error] ${klass} slug=${slug} status=${status}${shapeStr}${synthStr}${probeStr} msg=${message.slice(0, 200)}`);
+  // A refusal answered before any payment gate (no credential was asked for).
+  const prepayStr = prePayment ? " prepay=true" : "";
+  if (!skipConsole) console.error(`[tool-error] ${klass} slug=${slug} status=${status}${shapeStr}${synthStr}${probeStr}${prepayStr} msg=${stripControlChars(message.slice(0, 200))}`);
   // PostHog mirrors the same payload as a "tool_error" event with slug/
   // status/errorClass/shape properties. Same privacy posture, a no-op when
   // POSTHOG_API_KEY is unset.
-  capturePostHogToolError({ slug, status, message, shape, synthetic, probe });
+  capturePostHogToolError({ slug, status, message, shape, synthetic, probe, prePayment });
   // The last 5xx message per slug, for /__operator/tool-failures.json.
   try { toolFailureMonitor().noteToolMessage(slug, status, message, { synthetic }); } catch { /* bookkeeping only */ }
 }
@@ -7220,6 +7253,12 @@ function isSyntheticRequest(req) {
   try { return !!(req && (ownTrue(req, "statusProbePow") || verifyHeartbeatToken(req.header("x-heartbeat-token")))); }
   catch { return false; }
 }
+// A /v1 input refusal answered BEFORE any payment gate records what a handler
+// 400 records, marked pre-payment (src/prepayment-refusal.js).
+const recordPrePaymentRefusal = createPrePaymentRefusalRecorder({
+  logToolError, recordToolCall, captureToolCall: capturePostHogToolCall,
+  isSynthetic: isSyntheticRequest, requestShape, redact: redactSecrets, refusalReason,
+});
 function requestShape(req) {
   // Return the top-level keys of body + query, deduped and bounded. Values
   // are never read — this is purely "what fields did the caller send", which
@@ -9601,6 +9640,8 @@ app.get("/api/analytics", async (req, res) => {
   // `?include_probes=1` opts in to seeing empty-input scanning calls. Default
   // hides them — they inflate the 4xx rate without representing real callers.
   const includeProbes = req.query.include_probes === "1" || req.query.include_probes === "true";
+  // `?include_pre_payment=1`: input refusals answered before any payment gate.
+  const includePrePayment = req.query.include_pre_payment === "1" || req.query.include_pre_payment === "true";
   // The per-tool table is a ranked demand-and-failure map: which tools have
   // traffic, which are erroring, and how slow each upstream is. That is the
   // same class of data /api/sales and /api/stats were reduced to stop giving
@@ -9611,7 +9652,7 @@ app.get("/api/analytics", async (req, res) => {
   // any comment claiming the endpoint is dormant will eventually be wrong and
   // will be believed. The payload's `reason` field is the observable state;
   // this branch does not consult it.
-  const data = await getAnalytics({ windowHours, top, includeSynthetic, includeProbes });
+  const data = await getAnalytics({ windowHours, top, includeSynthetic, includeProbes, includePrePayment });
   res.json(redactAnalytics(data, operatorView(req, res)));
 });
 
@@ -9631,10 +9672,12 @@ app.get("/analytics", async (req, res) => {
   const windowHours = Math.max(1, Math.min(720, parseInt(req.query.hours, 10) || 24));
   const includeSynthetic = req.query.include_synthetic === "1" || req.query.include_synthetic === "true";
   const includeProbes = req.query.include_probes === "1" || req.query.include_probes === "true";
+  // `?include_pre_payment=1`: input refusals answered before any payment gate.
+  const includePrePayment = req.query.include_pre_payment === "1" || req.query.include_pre_payment === "true";
   // Redacted the same way as the JSON route. Gating only the JSON surface would
   // have been cosmetic: this page renders topTools and errorTools as tables, so
   // the identical ranking stayed one HTML request away.
-  const data = await getAnalytics({ windowHours, top: 25, includeSynthetic, includeProbes });
+  const data = await getAnalytics({ windowHours, top: 25, includeSynthetic, includeProbes, includePrePayment });
   res.type("html").send(analyticsPage(redactAnalytics(data, true), {
     baseUrl: BASE_URL,
     // Link a slug only when the live catalog carries it - to its tool page,
@@ -9984,6 +10027,11 @@ const isInternalReplay = (req) => isMcpLoopback(req)
 // mounted below; with no gate the window refuses as for any other payment.
 let tempoGateMounted = false;
 const isTempoPush = (req) => tempoGateMounted && isTempoPushCredential(req.headers.authorization);
+// "Nothing was charged." is true of every payment but a Tempo push credential
+// answered by the Tempo gate: its transfer is final before the call and is
+// recorded as owed, so a refusal to one says so (PUSH_EXCEPTION), as the
+// sync-window refusals do.
+const withPushException = (req, message) => withPushExceptionText(message, isTempoPush(req));
 // Through the CDN proxy, a paid call to a route that can outlast the proxy's
 // wait runs as a job when the client follows a 202 on its own, and is
 // refused before any gate otherwise (src/cdn-sync-window.js).
@@ -10006,13 +10054,49 @@ app.use((req, res, next) => {
   // folded above), so the variants are checked too.
   const def = CATALOG[`POST ${req.path}`];
   if (def?.slug !== "v1-chat-metered") return next();
-  let refusal = null;
+  const startedAt = Date.now();
+  let verdict = null, tooLarge = null;
   try {
-    const model = canonicalModel(handlerInputOf(req, def)?.model);
-    refusal = model ? meteredModelRefusal(model) : null;
+    const input = handlerInputOf(req, def);
+    const model = canonicalModel(input?.model);
+    verdict = model ? meteredModelVerdict(model) : null;
+    // An input over the model's character cap is refused here too, with the
+    // cap, the size read and models whose window takes it.
+    if (!verdict) tooLarge = meteredInputSizeRefusal(input);
   } catch { return next(); }
-  if (!refusal) return next();
-  return res.status(400).json({ error: { message: refusal, type: "invalid_request_error", code: "unknown_model" }, tool: def.slug });
+  if (verdict) {
+    recordPrePaymentRefusal(req, def.slug, 400, verdict.message, startedAt);
+    const suggestions = verdict.suggestions || [];
+    return res.status(400).json({
+      error: { message: verdict.message, type: "invalid_request_error", code: "unknown_model", ...(suggestions.length ? { suggestions } : {}) },
+      tool: def.slug,
+      ...(suggestions.length ? { suggestions, ...howToCallField(def, { bodyFields: { model: suggestions[0] } }) } : howToCallField(def)),
+    });
+  }
+  if (tooLarge) {
+    recordPrePaymentRefusal(req, def.slug, 400, tooLarge.message, startedAt);
+    const fields = toolErrorFields(tooLarge);
+    return res.status(400).json({
+      error: { message: tooLarge.message, type: "invalid_request_error", code: "input_too_large", ...fields },
+      tool: def.slug,
+      ...fields,
+      ...(fields.suggestions ? howToCallField(def, { bodyFields: { model: fields.suggestions[0] } }) : {}),
+    });
+  }
+  return next();
+});
+// A large metered body's token count is taken here, in pieces that yield the
+// loop, before the gates price it synchronously (warmQuoteTokenCounts in
+// src/tools/llm-gateway-kit.js). A body under the smallest text worth warming
+// is never read; a failure leaves the gates to count in place, as before.
+app.use(async (req, res, next) => {
+  if (req.method !== "POST" || !String(req.path).startsWith("/v1/metered/")) return next();
+  const def = CATALOG[`POST ${req.path}`];
+  const quoteFn = priceFnOf(def);
+  const declared = Number(req.headers["content-length"]);
+  if (!quoteFn || (Number.isFinite(declared) && declared > 0 && declared < QUOTE_WARM_MIN_CHARS)) return next();
+  try { await warmQuoteTokenCounts(() => quoteFn(handlerInputOf(req, def))); } catch { /* counted in place */ }
+  return next();
 });
 
 // Tempo push-transfer debts (src/tempo-push-debts.js), built with the Tempo
@@ -10160,7 +10244,11 @@ if (!FREE_MODE) {
     },
     // Input check before the relay round trip (see createTempoGate). Same
     // envelope the dispatcher's 400 carries, so the caller corrects itself.
-    preValidate: (req) => preValidateInput(CATALOG[`${req.method} ${req.path}`], req),
+    preValidate: (req) => {
+      const bad = preValidateInput(CATALOG[`${req.method} ${req.path}`], req);
+      if (bad?.body && typeof bad.body.error === "string") bad.body.error = withPushException(req, bad.body.error);
+      return bad;
+    },
     // A push transfer the relay confirmed pays this challenge but that could
     // not be claimed for the request (and was not already claimed for an
     // earlier one): nothing was delivered, the money is ours, book it owed.
@@ -11848,7 +11936,7 @@ for (const tool of ALL_KIT) {
       // What a handler throws is answered and logged, so a configured secret
       // or a credential-bearing URL an error quotes (an upstream echo, a
       // database driver's connection string) is scrubbed first, on every status.
-      const errorMessage = redactSecrets(err?.message);
+      const errorMessage = withPushException(req, redactSecrets(err?.message));
       logToolError(tool.slug, status, errorMessage, shape, synthetic, probe);
       // WHOSE FAILURE IS THIS? Every 4xx carried the self-correction envelope -
       // the tool's input schema, its required keys and a working example - which
@@ -11886,7 +11974,14 @@ for (const tool of ALL_KIT) {
           example: tool.discovery?.input || {},
           // The same example as a ready-to-run request (src/how-to-call.js):
           // method, full URL and body, plus the other verb where it is served.
-          ...howToCallField(tool),
+          // An unknown model id gets the example retried with the closest
+          // served id the refusal suggests.
+          // A refusal whose fix the example cannot show carries a note
+          // beside the call (image-ocr: resend the image downscaled).
+          ...howToCallField(tool, {
+            ...(err?.code === "unknown_model" && provenance.suggestions ? { bodyFields: { model: provenance.suggestions[0] } } : {}),
+            ...(typeof err?.howToCallNote === "string" ? { note: err.howToCallNote } : {}),
+          }),
         });
       } else {
         res.status(status).json({ error: errorMessage, tool: tool.slug, ...provenance });
@@ -12385,7 +12480,7 @@ let shuttingDown = false;
 // reads held; the flush round below waits on that write with the others.
 let boardSaveAtDrain = false;
 function flushStateQueues({ timeoutMs = 10_000 } = {}) {
-  const flushes = [salesLedgerFlush, refundLedgerFlush, flushJournals, statsFlush, statusStoreFlush, economyHistoryFlush, powReplayFlush, () => boardSaveAtDrain, () => flushJsonDocuments({ timeoutMs })]
+  const flushes = [salesLedgerFlush, refundLedgerFlush, flushJournals, statsFlush, statusStoreFlush, economyHistoryFlush, powReplayFlush, () => boardSaveAtDrain, () => Promise.all([flushSqlQueryStats(), flushXSearchStats()]).then(() => flushJsonDocuments({ timeoutMs }))]
     .map((fn) => { try { return Promise.resolve(fn()); } catch (e) { return Promise.reject(e); } });
   let timer;
   const deadline = new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs); timer.unref?.(); });

@@ -34,7 +34,7 @@ import {
   substitutedFrom, TIERS, AUTO_RANKINGS, classifyPrompt, canonicalModel, tierAllows, tierFor,
   isFlatTier, flatTierQuoteUsd, servedTierFor, crossTierDisclosure, AUTO_MODEL, AUTO_TIER,
   clampToMargin, fitBudgetBelowCap, assertMeteredAvailable, attemptsFor, serviceTierFor, validateServiceTier, cacheControlPref, upstreamUserId, PROVIDER_SORT_ENABLED,
-  fetchOpenRouter, throwUpstreamError, streamOpenRouterTo, bad, MAX_IMAGES,
+  fetchOpenRouter, throwUpstreamError, streamOpenRouterTo, bad, MAX_IMAGES, maxInputCharsFor, inputTooLargeError,
   failoverChain, modelFallbackPref, availabilitySubstitution, retryRateLimited,
   rateLimitDelaysFor, paymentWindowTimeoutMs, timedOutBudget, streamClientWatch, STREAM_TIMEOUT_MS, UPSTREAM_TIMEOUT_MS,
   refuseCostVariants, checkBlockCacheControl, meteredQuoteForProbe, meteredBoundFor,
@@ -296,7 +296,7 @@ export function validateMessagesRequest(input, tierSlug) {
     else if (Array.isArray(input.system)) { system = probeContent(input.system, "system", acc); }
     else throw bad('"system" must be a string or an array of text blocks');
   }
-  if (acc.chars > tier.maxInputChars) throw bad(`Input too large (${acc.chars} chars). The ${tierSlug} tier allows up to ${tier.maxInputChars} chars`);
+  if (acc.chars > tier.maxInputChars && acc.chars > maxInputCharsFor(tierSlug, model)) throw inputTooLargeError(tierSlug, model, acc.chars);
   if (acc.images > MAX_IMAGES) throw bad(`Too many images (${acc.images}). Maximum is ${MAX_IMAGES} per request`);
   // max_tokens: required by the Anthropic wire; clamp to the tier cap (drop-in friendliness, like the chat wire)
   let maxTokens = parseInt(input.max_tokens, 10);

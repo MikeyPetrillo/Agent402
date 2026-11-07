@@ -30,5 +30,8 @@ export function ownStoreEnv(label = "server") {
     TRAFFIC_DIR: join(dir, "traffic"),
     HANGUP_FORGIVE_FILE: join(dir, "hangup-forgiveness.json"),
     LATE_SETTLE_FILE: join(dir, "late-settlements.json"),
+    // The per-call count documents (src/sql-query-stats.js, src/x-search-stats.js).
+    SQL_QUERY_STATS_FILE: join(dir, "onchain-sql-query-stats.json"),
+    X_SEARCH_STATS_FILE: join(dir, "x-search-author-stats.json"),
   };
 }

@@ -23,6 +23,7 @@
 // canonical JSON against its documents row's, one hash each. A file with no
 // row yet is SKIP (it is imported when its feature first runs, and
 // state-migration-verify.js reports it); a file that is not JSON differs.
+import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -166,7 +167,7 @@ export function printChecksums(results, log = console.log) {
   return bad;
 }
 
-const isMain = process.argv[1] && resolve(process.argv[1]) === new URL(import.meta.url).pathname;
+const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain) {
   const args = process.argv.slice(2);
   const opt = (n) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : null; };

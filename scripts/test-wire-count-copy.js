@@ -3,6 +3,7 @@
 // tier while /why, the README, the wiki and three pages kept saying three
 // (truth audit 2026-10-02). The count is derived from the kits' own routes.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { fileURLToPath } from "node:url";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { LLM_GATEWAY_TOOLS } from "../src/tools/llm-gateway-kit.js";
@@ -23,7 +24,7 @@ const WORDS = ["zero", "one", "two", "three", "four", "five", "six"];
 const COUNT = /\btiers? on (two|three|four|five|six) wires\b|\b(two|three|four|five|six) wires (?:on every\s+tier|\(OpenAI)/gi;
 ok(wires === 4, `the gateway serves ${wires} wires`);
 ok([..."five tiers on three wires".matchAll(COUNT)].length === 1, "control: the pattern finds a wire count in prose");
-const root = new URL("..", import.meta.url).pathname;
+const root = fileURLToPath(new URL("..", import.meta.url));
 const files = [];
 const walk = (d) => { for (const f of readdirSync(d)) { const p = join(d, f); if (statSync(p).isDirectory()) { if (!/node_modules|\.git/.test(f)) walk(p); } else if (/\.(js|md)$/.test(f)) files.push(p); } };
 for (const d of ["src", "wiki", "docs"]) walk(join(root, d));

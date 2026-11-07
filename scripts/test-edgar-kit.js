@@ -92,6 +92,85 @@ const ok = (c, m) => { if (c) console.log(`ok - ${m}`); else { assertFail++; con
   ok(calls.length === 1 && /from=100/.test(calls[0]), "a later empty page ends paging without a second read");
 }
 
+// --- the control query's verdict is kept per reader: 20 s for "answering",
+// 15 s for "serving empties", never for an errored read (offline, stubbed) ---
+{
+  const { eftsSearchWith, EFTS_CONTROL_YES_TTL_MS, EFTS_CONTROL_NO_TTL_MS } = await import("../src/tools/edgar-kit.js");
+  const empty = { hits: { total: { value: 0 }, hits: [] } };
+  const CTRL = { hits: { total: { value: 9000 }, hits: [{ _id: "c" }] } };
+  const isCtl = (url) => /forms=10-K&/.test(url) && !/q=/.test(url);
+  ok(EFTS_CONTROL_YES_TTL_MS === 20_000 && EFTS_CONTROL_NO_TTL_MS === 15_000, "control verdict TTLs are 20 s (answering) and 15 s (serving empties)");
+  let t = 1_000_000;
+  const clock = () => t;
+  // ctlAnswer: what the control read gives (an object, or a function that throws).
+  const mk = (ctlAnswer) => {
+    const st = { reads: 0, ctl: 0 };
+    st.getJson = async (url) => {
+      st.reads++;
+      if (isCtl(url)) { st.ctl++; if (st.slowMs) await new Promise((r) => setTimeout(r, st.slowMs)); return typeof ctlAnswer === "function" ? ctlAnswer() : ctlAnswer; }
+      return empty;
+    };
+    return st;
+  };
+  const search = (st, q = "S-1") => eftsSearchWith({ forms: q }, { getJson: st.getJson, pauseMs: 0, budget: null, clock });
+  const run = async (fn) => { try { return { r: await fn() }; } catch (e) { return { e }; } };
+
+  // Two empty searches inside 20 s: one control read; both answer empty.
+  let st = mk(CTRL);
+  let a = await run(() => search(st));
+  t += 19_000;
+  let b = await run(() => search(st, "S-3"));
+  ok(st.ctl === 1 && !a.e && !b.e && a.r.hits.hits.length === 0 && b.r.hits.hits.length === 0, `two empty searches within 20 s make one control read (${st.ctl})`);
+  ok(st.reads === 9, `the buyer's own query is never cached: each search still makes its four reads (${st.reads} reads)`);
+  // Past the 20 s TTL: a second control read (an "answering" verdict is
+  // never believed for a full minute).
+  t += 1_001;
+  await run(() => search(st));
+  ok(st.ctl === 2, `after the 20 s TTL a second control read happens (${st.ctl})`);
+
+  // A cached "not answering" stands 15 s, then is read again.
+  st = mk(empty);
+  a = await run(() => search(st));
+  t += 14_000;
+  b = await run(() => search(st));
+  ok(a.e?.statusCode === 503 && b.e?.statusCode === 503 && st.ctl === 1, `a "not answering" verdict is reused inside 15 s (503 both times, ${st.ctl} control read)`);
+  t += 1_001;
+  b = await run(() => search(st));
+  ok(b.e?.statusCode === 503 && st.ctl === 2, `a cached "not answering" expires after 15 s (${st.ctl} control reads)`);
+
+  // A recovering index: "no" for 15 s, then the control answers and searches stand.
+  let ctlNow = empty;
+  st = mk(() => ctlNow);
+  a = await run(() => search(st));
+  ctlNow = CTRL;
+  t += 15_001;
+  b = await run(() => search(st));
+  ok(a.e?.statusCode === 503 && !b.e && st.ctl === 2, "a recovering index is noticed once the 15 s verdict expires");
+
+  // An errored control read is not cached: the next search reads the control again.
+  let fail = true;
+  st = mk(() => { if (fail) throw Object.assign(new Error("EDGAR upstream HTTP 500"), { statusCode: 502 }); return CTRL; });
+  a = await run(() => search(st));
+  fail = false;
+  b = await run(() => search(st));
+  ok(a.e?.statusCode === 503 && /not answering/.test(a.e?.message || "") && !b.e && st.ctl === 2, `an errored control read is not cached (${st.ctl} control reads, then ${b.e ? b.e.statusCode : "answered"})`);
+
+  // Concurrent empty searches share one control read in flight.
+  st = mk(CTRL);
+  st.slowMs = 50; // the control read is still in flight when the others reach it
+  const both = await Promise.all([run(() => search(st)), run(() => search(st, "S-3")), run(() => search(st, "S-4"))]);
+  ok(st.ctl === 1 && both.every((x) => !x.e), `concurrent empty searches share one control read (${st.ctl})`);
+
+  // A concurrent burst whose shared control read fails: every search answers the 503, nothing kept.
+  fail = true;
+  st = mk(() => { if (fail) throw new Error("boom"); return CTRL; });
+  st.slowMs = 50;
+  const burst = await Promise.all([run(() => search(st)), run(() => search(st, "S-3"))]);
+  fail = false;
+  b = await run(() => search(st));
+  ok(burst.every((x) => x.e?.statusCode === 503) && !b.e && st.ctl === 2, `a failed shared control read answers the 503 to each waiter and is not kept (${st.ctl})`);
+}
+
 // --- every eftsSearch caller, through the shared reader: truly empty, flaky
 // empty then hits, and the index serving empty pages (offline, stubbed) ---
 {

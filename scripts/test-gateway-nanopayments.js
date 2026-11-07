@@ -47,6 +47,7 @@
 // /supported and a /supported without a chain each remove the accept there
 // and leave the plain accepts alone.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { createServer, request as httpRequest } from "node:http";
 import { spawn } from "node:child_process";
@@ -1265,7 +1266,7 @@ async function boot(extraEnv = {}) {
   const env = { ...process.env };
   for (const k of ["STATE_DATABASE_URL", "REDIS_URL", "CIRCLE_FACILITATOR_API_KEY", "GATEWAY_NANOPAYMENTS", "GATEWAY_NANOPAYMENT_NETWORKS", "GATEWAY_WITHDRAW_ALERT_USD", "GATEWAY_PENDING_WAIT_MS"]) delete env[k];
   const proc = spawn(process.execPath, ["--import", preload, "src/server.js"], {
-    cwd: new URL("..", import.meta.url).pathname,
+    cwd: fileURLToPath(new URL("..", import.meta.url)),
     env: {
       ...env, PORT: String(port), FREE_MODE: "",
       WALLET_ADDRESS: TREASURY, NETWORK: "base", PAYMENT_NETWORKS: "base,polygon,arc",

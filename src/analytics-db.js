@@ -80,6 +80,7 @@ async function ensureSchema() {
     ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS status SMALLINT NOT NULL DEFAULT 0;
     ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS synthetic BOOLEAN NOT NULL DEFAULT FALSE;
     ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS probe BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS pre_payment BOOLEAN NOT NULL DEFAULT FALSE;
     CREATE INDEX IF NOT EXISTS tool_calls_ts_idx ON tool_calls (ts DESC);
     CREATE INDEX IF NOT EXISTS tool_calls_slug_ts_idx ON tool_calls (slug, ts DESC);
   `);
@@ -138,7 +139,9 @@ export async function initAnalyticsDb() {
 // status lets the dashboard distinguish "agent sent bad input" from "our tool
 // or its upstream is broken" — the same `errored: true` would otherwise hide
 // the difference. Defaults to 0 when not provided (older callers).
-export async function recordToolCall({ slug, latencyMs, cached, errored, status, synthetic, probe }) {
+// `prePayment`: a refusal answered before any payment gate (server.js
+// recordPrePaymentRefusal); the buyer was never asked to pay for it.
+export async function recordToolCall({ slug, latencyMs, cached, errored, status, synthetic, probe, prePayment = false }) {
   if (!ANALYTICS_URL || unavailable()) return;
   if (!slug) return;
   try {
@@ -152,8 +155,8 @@ export async function recordToolCall({ slug, latencyMs, cached, errored, status,
     if (!p) return;
     const statusInt = Math.max(0, Math.min(599, status | 0));
     await p.query(
-      "INSERT INTO tool_calls (slug, latency_ms, cached, errored, status, synthetic, probe) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-      [String(slug).slice(0, 128), Math.max(0, latencyMs | 0), !!cached, !!errored, statusInt, !!synthetic, !!probe]
+      "INSERT INTO tool_calls (slug, latency_ms, cached, errored, status, synthetic, probe, pre_payment) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+      [String(slug).slice(0, 128), Math.max(0, latencyMs | 0), !!cached, !!errored, statusInt, !!synthetic, !!probe, !!prePayment]
     );
   } catch (e) {
     // Swallow.
@@ -168,7 +171,11 @@ export async function recordToolCall({ slug, latencyMs, cached, errored, status,
 // HMAC-signed X-Heartbeat-Token) are excluded so that CI canaries or manual
 // smoke tests can never inflate the public error rate. Pass true to see the
 // full picture (useful when verifying that synthetic traffic is being tagged).
-export async function getAnalytics({ windowHours = 24, top = 25, includeSynthetic = false, includeProbes = false } = {}) {
+// `includePrePayment` defaults to false the same way: an input refusal answered
+// before any payment gate (an unknown model id, an input over the cap) is free
+// traffic anyone can send, so it is counted apart (`prePaymentHidden`) and
+// never moves the published call count or error rate.
+export async function getAnalytics({ windowHours = 24, top = 25, includeSynthetic = false, includeProbes = false, includePrePayment = false } = {}) {
   // "Never configured" and "configured but the connection failed" are the same
   // shape to a reader and mean opposite things: one is a deliberate choice, the
   // other is an outage wearing its costume. Both used to return a bare
@@ -189,8 +196,8 @@ export async function getAnalytics({ windowHours = 24, top = 25, includeSyntheti
     const since = `now() - interval '${hours} hours'`;
     // SQL fragments — inlined (no parameterization) because they're a fixed
     // boolean toggled by the caller, not user input.
-    const realOnly = (includeSynthetic ? "" : "AND NOT synthetic") + (includeProbes ? "" : " AND NOT probe");
-    const realOnlyJoin = (includeSynthetic ? "" : "AND NOT t.synthetic") + (includeProbes ? "" : " AND NOT t.probe");
+    const realOnly = (includeSynthetic ? "" : "AND NOT synthetic") + (includeProbes ? "" : " AND NOT probe") + (includePrePayment ? "" : " AND NOT pre_payment");
+    const realOnlyJoin = (includeSynthetic ? "" : "AND NOT t.synthetic") + (includeProbes ? "" : " AND NOT t.probe") + (includePrePayment ? "" : " AND NOT t.pre_payment");
 
     // `client_errored` (4xx) = caller mistake (missing field, bad shape) —
     // tool is fine. `server_errored` (5xx) = handler or upstream failure —
@@ -229,6 +236,12 @@ export async function getAnalytics({ windowHours = 24, top = 25, includeSyntheti
       SELECT count(*)::int AS probe_calls
       FROM tool_calls
       WHERE ts >= ${since} AND probe
+    `);
+
+    const pre = await p.query(`
+      SELECT count(*)::int AS pre_payment_calls
+      FROM tool_calls
+      WHERE ts >= ${since} AND pre_payment
     `);
 
     const byTool = await p.query(
@@ -304,6 +317,8 @@ export async function getAnalytics({ windowHours = 24, top = 25, includeSyntheti
       includeProbes,
       syntheticHidden: includeSynthetic ? 0 : (syn.rows[0]?.synthetic_calls || 0),
       probesHidden: includeProbes ? 0 : (prb.rows[0]?.probe_calls || 0),
+      includePrePayment,
+      prePaymentHidden: includePrePayment ? 0 : (pre.rows[0]?.pre_payment_calls || 0),
       totals: totals.rows[0],
       topTools: byTool.rows,
       errorTools: errorTools.rows,

@@ -1175,7 +1175,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (12 scripts, one process each)
+      - name: Offline suites (13 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -1189,6 +1189,8 @@ jobs:
           t node scripts/test-hidden-chars.js
           # US spelling in public copy: README, wiki, docs, package READMEs, legal and guide pages, tool descriptions (offline)
           t node scripts/test-us-spelling.js
+          # No filesystem path built from a URL pathname (percent-encoded: a checkout path with a space breaks) and no hand-made file:// entry check, in every source tree (offline)
+          t node scripts/test-no-url-pathname.js
           # CHANGELOG.md and the /changelog page agree: no duplicated page item, and every dated group from 2026-11-05 on is in both with the same item counts (offline)
           t node scripts/test-changelog-parity.js
           # Seller text on the agent-read JSON surfaces is cleaned and capped at serve time; a flagged listing is marked and served without its description
@@ -3324,6 +3326,8 @@ jobs:
           t node scripts/test-invariants.js
           # CDP kit unit tests (JWT signing both key formats, validation, faucet gate — offline)
           t node scripts/test-cdp-kit.js
+          # onchain-sql query-count histogram: counted on the final response, stored as counts only (offline)
+          t node scripts/test-sql-query-stats.js
           # CDP facilitator config built on the kit's JWT minter (header groups, claims, wire path; offline)
           t node scripts/test-cdp-facilitator.js
           # Seller-trust honesty invariants (no evidence never reads as a bad verdict; advertised ≠ settled — offline)
@@ -3507,6 +3511,8 @@ jobs:
           t node scripts/test-sweep-burner.js
           # x-data kit (offline)
           t node scripts/test-x-data-kit.js
+          # x-search-recent author and post histogram: counted on the final response, counts only (offline)
+          t node scripts/test-x-search-stats.js
           # Exa kit (env-gated on EXA_API_KEY; offline, stubbed fetch, nothing spent)
           t node scripts/test-exa-kit.js
           # b2b-enrich kit (offline)

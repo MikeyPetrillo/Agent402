@@ -6,6 +6,7 @@
 //
 //   node scripts/test-submit-sitemaps.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { createSearchData } from "../src/search-data.js";
 import { DEFAULT_SITEMAPS, missingFeeds, sameFeed, syncSitemaps } from "./submit-sitemaps.js";
@@ -79,7 +80,7 @@ function stub(held, { failSubmit = false } = {}) {
 // ---------- the CLI refuses without a key and prints nothing secret ----------
 {
   let out = "", code = 0;
-  try { out = execFileSync(process.execPath, [new URL("./submit-sitemaps.js", import.meta.url).pathname, "--dry-run"], { env: { PATH: process.env.PATH }, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); }
+  try { out = execFileSync(process.execPath, [fileURLToPath(new URL("./submit-sitemaps.js", import.meta.url)), "--dry-run"], { env: { PATH: process.env.PATH }, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); }
   catch (e) { code = e.status; out = `${e.stdout || ""}${e.stderr || ""}`; }
   ok(code === 2 && /BING_WEBMASTER_API_KEY is not set/.test(out), `without a key the CLI exits 2 (got ${code})`);
 }

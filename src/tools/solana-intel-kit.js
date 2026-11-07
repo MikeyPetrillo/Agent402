@@ -34,7 +34,7 @@
 import { markUntrusted } from "./provenance.js";
 import { partialFields } from "../partial-answer.js";
 import { createTtlCache } from "./ttl-dedupe.js";
-import { HANDLER_BUDGET_MS, budgetOf, upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, capOf, currentBudget } from "../upstream-deadline.js";
+import { HANDLER_BUDGET_MS, OPTIONAL_READ_FLOOR_MS, budgetOf, upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, capOf, currentBudget } from "../upstream-deadline.js";
 import { RUGCHECK_SLUGS, rugcheckEnabled } from "../rugcheck-switch.js";
 import { rugcheckPause, rugcheckFailureKind, rugcheckInputKey } from "../rugcheck-pause.js";
 export { RUGCHECK_SLUGS, rugcheckEnabled };
@@ -461,6 +461,97 @@ function shapePair(p) {
 }
 
 const byLiquidity = (a, b) => (b.liquidityUsd || 0) - (a.liquidityUsd || 0);
+
+// sol-token-search fallback. The pair index's search answers its top 30 pairs
+// across every chain, so a ticker busy elsewhere can leave Solana with no row.
+// The fallback asks a Solana token index for the query's mints (verified
+// first, at most SEARCH_FALLBACK_MINTS), then reads their pairs from the pair
+// index by mint, in parallel: each listed mint's top pair in one read, and
+// the first mint's full pair list in another.
+const SEARCH_FALLBACK_MINTS = 5;
+const SEARCH_FALLBACK_SOURCES = ["dexscreener", "jupiter"];
+const SEARCH_NOTE = "Rows keep DexScreener relevance order. Several tokens can share a ticker; check hasProfile, liquidity and age, then confirm the mint with sol-token-safety.";
+const FALLBACK_NOTE = "No Solana pair in DexScreener's search matched the query, so the mints came from a Solana token index (verified first, listed in fallback.mints). Row order: the first mint's pairs where it is the base token, by liquidity; the other mints' pairs in that order; the search's own Solana rows in relevance order; then pairs that hold a listed mint only as the quote token. Several tokens can share a ticker; check hasProfile, liquidity and age, then confirm the mint with sol-token-safety.";
+
+const searchKey = (v) => String(v ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+/** The whole query and each word of it, folded to letters and digits. */
+function searchKeys(query) {
+  const keys = new Set([searchKey(query)]);
+  for (const w of String(query).split(/[\s/,|]+/)) keys.add(searchKey(w));
+  keys.delete("");
+  return keys;
+}
+/** A row answers the query when its base token is the queried mint, or its
+ *  base symbol or name equals the query or one word of it ("$WIF" is "wif"). */
+function pairMatchesQuery(row, query, keys = searchKeys(query)) {
+  if (row?.base?.address && row.base.address === query) return true;
+  return keys.has(searchKey(row?.base?.symbol)) || keys.has(searchKey(row?.base?.name));
+}
+
+function fallbackFailure(err, upstream, step) {
+  const reason = err?.upstreamFailure || (err?.statusCode === 503 ? "rate-limited" : "upstream-error");
+  return { upstream, step, reason };
+}
+
+/** Resolve the query's mints and read their pairs. Never throws: a read that
+ *  does not answer is reported in the result (status "unavailable" when no
+ *  pair could be read, "partial" when one of the two pair reads failed). */
+async function searchFallback(query, budget) {
+  if (budget && budget.remaining() < OPTIONAL_READ_FLOOR_MS) {
+    return { status: "unavailable", mints: [], pairs: [], unavailable: { upstream: "Jupiter", step: "token search", reason: "budget" }, error: null };
+  }
+  let list;
+  try {
+    list = await upstreamJson(`${jupiterBase()}/tokens/v2/search?query=${encodeURIComponent(query)}`, { label: "Jupiter", step: "token search", timeoutMs: JUPITER_MS, budget });
+  } catch (err) {
+    return { status: "unavailable", mints: [], pairs: [], unavailable: fallbackFailure(err, "Jupiter", "token search"), error: err };
+  }
+  const mints = (Array.isArray(list) ? list : [])
+    .filter((t) => typeof t?.id === "string" && BASE58_RE.test(t.id))
+    .map((t, rank) => ({ t, rank, verified: t.isVerified === true || (Array.isArray(t.tags) && t.tags.includes("verified")) }))
+    .sort((a, b) => (b.verified - a.verified) || (a.rank - b.rank))
+    .slice(0, SEARCH_FALLBACK_MINTS)
+    .map(({ t, verified }) => ({ mint: t.id, symbol: t.symbol ?? null, name: t.name ?? null, isVerified: verified }));
+  if (!mints.length) return { status: "nothing-found", mints, pairs: [], unavailable: null, error: null };
+  if (budget && budget.remaining() < OPTIONAL_READ_FLOOR_MS) {
+    return { status: "unavailable", mints, pairs: [], unavailable: { upstream: "DexScreener", step: "pairs by mint", reason: "budget" }, error: null };
+  }
+  const ids = mints.map((m) => m.mint);
+  const [top, all] = await Promise.allSettled([
+    upstreamJson(`${DEXSCREENER}/tokens/v1/solana/${ids.join(",")}`, { label: "DexScreener", step: "pairs by mint", timeoutMs: DEXSCREENER_MS, budget }),
+    upstreamJson(`${DEXSCREENER}/token-pairs/v1/solana/${ids[0]}`, { label: "DexScreener", step: "token pairs", timeoutMs: DEXSCREENER_MS, budget }),
+  ]);
+  const read = (r) => (r.status === "fulfilled" && Array.isArray(r.value) ? r.value : []);
+  const pairs = [...read(all), ...read(top)].filter((p) => p?.chainId === "solana").map(shapePair);
+  const failed = [top, all].filter((r) => r.status === "rejected");
+  if (failed.length === 2) {
+    return { status: "unavailable", mints, pairs: [], unavailable: fallbackFailure(failed[0].reason, "DexScreener", "pairs by mint"), error: failed[0].reason };
+  }
+  if (failed.length === 1) {
+    const step = top.status === "rejected" ? "pairs by mint" : "token pairs";
+    return { status: "partial", mints, pairs, unavailable: fallbackFailure(failed[0].reason, "DexScreener", step), error: failed[0].reason };
+  }
+  return { status: pairs.length ? "found" : "nothing-found", mints, pairs, unavailable: null, error: null };
+}
+
+/** Row order: the listed mints' pairs as base token, by mint order and then
+ *  liquidity (one token per group, so a liquidity sort cannot lift an
+ *  impostor), the search's Solana rows in relevance order, then pairs holding a
+ *  listed mint only as the quote. Deduped by pair address, first seen wins. */
+function mergeFallbackRows(searchRows, fb) {
+  const rank = new Map(fb.mints.map((m, k) => [m.mint, k]));
+  const asBase = fb.pairs.filter((p) => rank.has(p.base.address))
+    .sort((a, b) => (rank.get(a.base.address) - rank.get(b.base.address)) || byLiquidity(a, b));
+  const asQuote = fb.pairs.filter((p) => !rank.has(p.base.address)).sort(byLiquidity);
+  const seen = new Set();
+  const out = [];
+  for (const r of [...asBase, ...searchRows, ...asQuote]) {
+    const key = r.pairAddress;
+    if (key != null) { if (seen.has(key)) continue; seen.add(key); }
+    out.push(r);
+  }
+  return out;
+}
 
 function sumPairs(rows) {
   return {
@@ -905,7 +996,7 @@ export const SOLANA_INTEL_TOOLS = [
     category: "crypto",
     price: "$0.003",
     description:
-      "Find Solana tokens and pairs by name, ticker or address across every DEX a public pair index covers, filtered to Solana only, in the index's relevance order: base and quote token, mint addresses, DEX, price, liquidity, 24h volume and change, transaction counts, pair age and whether the token has a filled-in profile (ticker impostors usually do not). Resolve a ticker to a mint before calling sol-token-safety or sol-swap-quote. Keyless.",
+      "Find Solana tokens and pairs by name, ticker or address across every DEX a public pair index covers, filtered to Solana only, in the index's relevance order. When that search holds no matching Solana pair (a ticker busy on other chains), the mints come from a Solana token index, verified first, and their pairs are read by mint. Each row: base and quote token, mint addresses, DEX, price, liquidity, 24h volume and change, transaction counts, pair age and whether the token has a filled-in profile (ticker impostors usually do not). Resolve a ticker to a mint before calling sol-token-safety or sol-swap-quote. Keyless.",
     tags: ["solana", "search", "token", "ticker", "dex", "memecoin", "spl"],
     discovery: {
       bodyType: "json",
@@ -921,6 +1012,8 @@ export const SOLANA_INTEL_TOOLS = [
         example: {
           query: "JUP", totalSolanaPairs: 28,
           pairs: [{ pairAddress: "EoFt...", dex: "meteora", labels: ["DLMM"], base: { address: MINTS.JUP, symbol: "JUP", name: "Jupiter" }, quote: { address: MINTS.SOL, symbol: "SOL" }, priceUsd: 0.2034, priceNative: 0.00217, liquidityUsd: 1260729.15, fdv: 1395785031, marketCap: 675335464, volume: { m5: 1000, h1: 20000, h6: 100000, h24: 500000 }, priceChangePct: { m5: 0, h1: -0.3, h6: 0.2, h24: -2.4 }, txns24h: { buys: 900, sells: 850 }, txns1h: { buys: 30, sells: 28 }, pairCreatedAt: "2025-01-01T00:00:00.000Z", ageHours: 14000, hasProfile: true, url: "https://dexscreener.com/solana/eoft..." }],
+          returned: 5, matched: 28, complete: false, truncated: true,
+          fallback: { ran: false, why: null, status: "not-needed", mints: [] },
           note: "Rows keep DexScreener relevance order.",
           source: "dexscreener", fetchedAt: "2026-08-22T12:00:00.000Z",
         },
@@ -931,18 +1024,57 @@ export const SOLANA_INTEL_TOOLS = [
       const query = i.query.trim();
       if (query.length > 80) throw bad('"query" must be 80 characters or fewer');
       const limit = takeLimit(i.limit, 10, 30);
-      const data = await upstreamJson(`${DEXSCREENER}/latest/dex/search?q=${encodeURIComponent(query)}`, { label: "DexScreener", step: "pair search", timeoutMs: DEXSCREENER_MS });
+      const budget = budgetOf();
+      const data = await upstreamJson(`${DEXSCREENER}/latest/dex/search?q=${encodeURIComponent(query)}`, { label: "DexScreener", step: "pair search", timeoutMs: DEXSCREENER_MS, budget });
       // Upstream relevance order is kept on purpose: re-sorting by liquidity
       // put ticker impostors with spoofed nine-figure liquidity above the real
       // token (measured live on "JUP"). hasProfile + liquidity let the caller
       // rank further.
-      const rows = (Array.isArray(data?.pairs) ? data.pairs : []).filter((p) => p?.chainId === "solana").map(shapePair);
+      const searchRows = (Array.isArray(data?.pairs) ? data.pairs : []).filter((p) => p?.chainId === "solana").map(shapePair);
+      // The index's search answers only its top 30 pairs across every chain,
+      // so a ticker busy on other chains can leave no Solana row at all
+      // (measured 2026-11-07: "WIF" answered 30 pairs, none on Solana). When
+      // no Solana row's base token matches the query, the mints come from a
+      // Solana token index instead and their pairs are read by mint.
+      if (searchRows.some((r) => pairMatchesQuery(r, query))) {
+        return {
+          query,
+          totalSolanaPairs: searchRows.length,
+          pairs: searchRows.slice(0, limit),
+          ...partialFields(searchRows.length, Math.min(searchRows.length, limit)),
+          fallback: { ran: false, why: null, status: "not-needed", mints: [] },
+          note: SEARCH_NOTE,
+          source: "dexscreener",
+          fetchedAt: stamp(),
+        };
+      }
+      const why = searchRows.length ? "no-matching-solana-pairs" : "no-solana-pairs";
+      const fb = await searchFallback(query, budget);
+      const rows = mergeFallbackRows(searchRows, fb);
+      if (!rows.length && fb.unavailable) {
+        // Nothing found, and a read that could have found it did not answer
+        // (the whole fallback, or one of its two pair reads while the other
+        // held no Solana pair): an empty 200 would read as "no such token".
+        // Answer the upstream's 5xx instead (never charged, settlement runs
+        // after the handler).
+        const e = fb.error;
+        if (e && e.statusCode >= 500) throw e;
+        throw Object.assign(bad(`Solana token search found no pairs and the ${fb.unavailable.upstream} ${fb.unavailable.step} read did not answer - retry shortly`, 503), { attribution: "upstream" });
+      }
+      const incomplete = fb.status === "unavailable" || fb.status === "partial";
       return {
         query,
         totalSolanaPairs: rows.length,
         pairs: rows.slice(0, limit),
-        note: "Rows keep DexScreener relevance order. Several tokens can share a ticker; check hasProfile, liquidity and age, then confirm the mint with sol-token-safety.",
-        source: "dexscreener",
+        ...partialFields(rows.length, Math.min(rows.length, limit)),
+        // A mint read that did not answer leaves pairs unread: this answer is
+        // not the whole list, whatever its row count says.
+        ...(incomplete ? { complete: false, truncated: true } : {}),
+        fallback: { ran: true, why, status: fb.status, mints: fb.mints, ...(fb.unavailable ? { unavailable: fb.unavailable } : {}) },
+        note: fb.status === "found" || fb.status === "partial" ? FALLBACK_NOTE : SEARCH_NOTE,
+        // The fallback asked the Solana token index for the mints, then the
+        // pair index for their pairs: the answer names both.
+        source: [...SEARCH_FALLBACK_SOURCES],
         fetchedAt: stamp(),
       };
     },
@@ -1191,11 +1323,11 @@ export const SOLANA_INTEL_TOOLS = [
 // that read Jupiter end their description with it; the vendor-name check in
 // scripts/test-no-third-party-names.js allows it there and nowhere else.
 export const JUPITER_ATTRIBUTION = "Powered by Jupiter.";
-const JUPITER_SLUGS = new Set(["sol-token-safety", "sol-price", "sol-swap-quote", "sol-token-lookup"]);
+const JUPITER_SLUGS = new Set(["sol-token-safety", "sol-price", "sol-swap-quote", "sol-token-lookup", "sol-token-search"]);
 for (const t of SOLANA_INTEL_TOOLS) if (JUPITER_SLUGS.has(t.slug)) t.description = `${t.description} ${JUPITER_ATTRIBUTION}`;
 
 // Exported for offline unit tests (pure shaping, no network).
-export const __test = { takeMint, takeLimit, shapeHolders, shapeMarkets, shapePair, shapeJupToken, authorityState, riskCounts, BASE58_RE, budgetOf, topAccountsFromRpc,
+export const __test = { takeMint, takeLimit, searchKeys, pairMatchesQuery, mergeFallbackRows, shapeHolders, shapeMarkets, shapePair, shapeJupToken, authorityState, riskCounts, BASE58_RE, budgetOf, topAccountsFromRpc,
   DEADLINES: Object.freeze({ HANDLER_BUDGET_MS, RUGCHECK_SUMMARY_MS, RUGCHECK_REPORT_MS, JUPITER_MS, DEXSCREENER_MS, RPC_MS, RPC_FLOOR_MS, FULL_REPORT_FLOOR_MS, RUGCHECK_FALLBACK_MS }), reportReadsInflight: () => reportReads.inflightSize() };
 
 // Free text in these results is written by third parties (headlines, posts,

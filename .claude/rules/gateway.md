@@ -23,7 +23,25 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   The metered chat route refuses a model id missing from the upstream's live model list with a 400
   before any payment gate (`src/model-catalog.js`, read every 10 minutes and on a miss at most once a
   minute; fails open with no read under 30 minutes old; retiring ids and ids with successors are left to their fallback;
-  `MODEL_CATALOG_URL` points the read at a stub).
+  `MODEL_CATALOG_URL` points the read at a stub). A hyphenated version in an id (`v4-1`) is read
+  as its dotted form only when that exact dotted id is on the fresh live list.
+  **Per-model input cap:** `maxInputCharsFor(tier, model)`: the metered tier's floor (200,000
+  chars) on every model, raised to `METERED_CHARS_PER_CONTEXT_TOKEN` (3) chars per token of a
+  larger live context window, up to `METERED_MAX_INPUT_CHARS_CEILING` (1,000,000, the
+  /v1/metered body bound); `/v1/models` publishes each model's own value as
+  `meteredMaxInputChars` (a vendor wildcard reads the floor). **Pre-payment size refusal:** a
+  metered chat body over its model's cap is refused with a 400 (`input_too_large`,
+  `maxInputChars`, `inputChars`, `hint: trim-input`, larger-window `suggestions`) before any
+  payment gate, as the unknown-model refusal is; Messages and Responses refuse it in the handler
+  (never charged). A Tempo push credential skips the pre-payment check and is answered by its
+  gate, which books the transfer as owed; a refusal to one names that exception in its charge
+  sentence (`PUSH_EXCEPTION`, `withPushException` in server.js).
+  **Large quotes:** a /v1/metered body of 16k chars or more is counted before the gates by
+  `warmQuoteTokenCounts`, which yields the loop every 64 KB or 8 ms of BPE and keeps each count
+  for 60 s (8M chars at most); the synchronous quote reads the kept count. An unpaid quote is
+  limited per address (60/min); a request carrying a payment-shaped header is counted against a
+  separate budget of the same size once its credential is refused (a final 401 or 402), so a
+  verified payment never spends it.
   `GATEWAY_METERED_BILLING=on` gates metered settlement, the buffered override and a credits
   stream's debit on finish alike (`recordStreamedUsage`, `meteredUsdOf` in `src/gateway-meter.js`).
 - **Report products:** kits under `src/tools/*-report-kit.js`, `src/report-tiers.js`,

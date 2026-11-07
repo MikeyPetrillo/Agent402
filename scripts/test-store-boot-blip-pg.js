@@ -7,6 +7,7 @@
 // write and read, the shared PoW replay pull, the Stripe shadow enqueue, the
 // wish board and append, the revenue ledger's first load).
 // Requires STATE_DATABASE_URL (CI fails without it).
+import { fileURLToPath } from "node:url";
 import net from "node:net";
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -18,7 +19,7 @@ const sdb = await import("../src/state-db.js");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const target = new URL(url);
 
 // A wish already on the board before the boot: the rebuild must find it.

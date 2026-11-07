@@ -16,6 +16,7 @@
 // before the user's first word and its precheck refuses a model whose
 // contextWindow cannot hold that. No stub can see that; only the host can.
 // Network: npm registry only (the model gateway is a loopback stub; no money).
+import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
 import { mkdtempSync, rmSync, existsSync, readFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,7 +25,7 @@ import { spawn } from "node:child_process";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - ${m}`); };
-const pkgDir = new URL(".", import.meta.url).pathname;
+const pkgDir = fileURLToPath(new URL(".", import.meta.url));
 // PINNED, deliberately. This lane installs the host from npm, so tracking
 // @latest hands a third party a veto over every merge in this repo: OpenClaw
 // published 2026.8.1 overnight on 2026-08-30 and the lane went red with no

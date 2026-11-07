@@ -2,6 +2,7 @@
 // safe path every caller takes without it. Offline, and the table here is
 // FAKE: no real rate belongs in this repo.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { fileURLToPath } from "node:url";
 delete process.env.UPSTREAM_COSTS_JSON;
 delete process.env.UPSTREAM_COSTS_FILE;
 
@@ -256,7 +257,7 @@ U.setUpstreamCostsForTest(null);
   const { join } = await import("node:path");
   const { walk } = await import("./lib/shipped-files.js");
   const files = [];
-  const root = new URL("..", import.meta.url).pathname;
+  const root = fileURLToPath(new URL("..", import.meta.url));
   for (const d of ["src", "scripts", "wiki", "docs", "openclaw", "mcp", "client", "adapters", "tollbooth", "workers"]) { try { if (statSync(join(root, d)).isDirectory()) files.push(...walk(join(root, d)).filter((f) => /\.(js|mjs|md|json)$/.test(f))); } catch { /* absent */ } }
   const SHAPES = [
     [/\{ ?prompt: ?[0-9.]+, ?(cached: ?[0-9.]+, ?)?completion: ?[0-9.]+ ?\}/, (l) => !/maxPrice|max_price/.test(l)], // a model rate row (tier caps are ours)
@@ -269,7 +270,7 @@ U.setUpstreamCostsForTest(null);
   ];
   const hits = [];
   // Fake tables in tests are named as such: this file, and rows under "fake/".
-  const self = new URL(import.meta.url).pathname;
+  const self = fileURLToPath(import.meta.url);
   for (const f of files) {
     if (f === self) continue;
     const lines = readFileSync(f, "utf8").split("\n");

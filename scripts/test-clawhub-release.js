@@ -1,12 +1,13 @@
 // scripts/clawhub-release.js against a fake `clawhub` executable: already
 // published, not found then published, rate limited then ok, rate limited past
 // the budget, and an unrelated error. Offline; time is scaled down.
+import { fileURLToPath } from "node:url";
 import { mkdtempSync, writeFileSync, chmodSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 
-const script = new URL("./clawhub-release.js", import.meta.url).pathname;
+const script = fileURLToPath(new URL("./clawhub-release.js", import.meta.url));
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 

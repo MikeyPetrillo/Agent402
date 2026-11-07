@@ -1,12 +1,13 @@
 // scripts/sync-dev-branch.sh moves the dev branch to main only when nothing on
 // it would be lost. Offline: every case builds a throwaway bare "origin" and a
 // clone in the OS temp dir and runs the real script against it.
+import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const SCRIPT = new URL("./sync-dev-branch.sh", import.meta.url).pathname;
+const SCRIPT = fileURLToPath(new URL("./sync-dev-branch.sh", import.meta.url));
 const DEV = "dev";
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };

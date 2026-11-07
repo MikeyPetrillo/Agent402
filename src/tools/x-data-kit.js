@@ -22,6 +22,8 @@ import { markUntrusted } from "./provenance.js";
 import { upstreamCosts } from "../upstream-costs.js";
 import { meterUpstreamSpend } from "../posthog.js";
 import { createSharedDailySpend } from "../shared-limits.js";
+import { onFinalResponse } from "../request-timing.js";
+import { noteXSearchCall, countsOf as xSearchCountsOf } from "../x-search-stats.js";
 // The upstream bills per POST RETURNED, not per request, so the page size is
 // the real cost lever: a 100-post page at our per-call price would be sold far
 // below cost. Priced 2026-08-27 against X's published pay-per-use rate card
@@ -41,6 +43,10 @@ const USER_AGENT = "Agent402/1.0 (+https://agent402.tools)";
 
 const TWEET_FIELDS = "created_at,public_metrics,author_id,lang,conversation_id,possibly_sensitive";
 const USER_FIELDS = "created_at,description,public_metrics,verified,verified_type,location,url,protected,profile_image_url";
+// The author expansion: each tweet row carries the author's username, name and
+// verification, and its status URL is built from the username. Billed per
+// expanded user (see EXPANSION_INCLUDES below).
+const AUTHOR_EXPANSION = Object.freeze({ expansions: "author_id", "user.fields": "username,name,verified" });
 
 const USERNAME_RE = /^[A-Za-z0-9_]{1,15}$/;
 const ID_RE = /^\d{1,20}$/;
@@ -122,19 +128,78 @@ const xSpend = { day: "", micro: 0, refused: 0 };
 const xShared = createSharedDailySpend("xdata-day", "x-data");
 const utcDay = (now = Date.now()) => new Date(now).toISOString().slice(0, 10);
 const xSpendToday = (now = Date.now()) => { const d = utcDay(now); if (xSpend.day !== d) { xSpend.day = d; xSpend.micro = 0; xSpend.refused = 0; } return xSpend.micro / 1e6; };
-/** Worst-case cost of one read at X's card, from the path and params. */
+// Objects returned through `expansions` are billed too (X notice,
+// 2026-11-05): each one under `includes` is metered at the card rate of its
+// kind, a user read for `includes.users`, a post read for `includes.tweets`.
+// Each expansion below fills one `includes` array with at most one object per
+// primary item, which is the worst case the estimate reserves. An expansion
+// this table does not know is priced at the dearer read per primary item.
+const EXPANSION_INCLUDES = {
+  author_id: "users",
+  in_reply_to_user_id: "users",
+  "referenced_tweets.id.author_id": "users",
+  "referenced_tweets.id": "tweets",
+  pinned_tweet_id: "tweets",
+};
+const INCLUDE_RATE = { users: "userRead", tweets: "postRead" };
+const expansionsOf = (params) => String(params?.expansions || "").split(",").map((s) => s.trim()).filter(Boolean);
+/** Worst-case cost of one read at X's card, from the path and params, expanded objects included. */
 export function estimateXReadUsd(path, params = {}) {
-  if (/^\/tweets\/search\/recent$/.test(path) || /^\/users\/[^/]+\/tweets$/.test(path)) return (Math.max(1, Number(params.max_results) || 10)) * xRate("postRead");
-  if (/^\/tweets\/[^/]+$/.test(path)) return xRate("postRead");
-  if (path === "/users/by") return (String(params.usernames || "").split(",").filter(Boolean).length || 1) * xRate("userRead");
-  if (/^\/users\/by\/username\//.test(path)) return xRate("userRead");
-  return xRate("userRead"); // an endpoint this table does not know is priced as a user read
+  let items, perItem;
+  const timeline = /^\/users\/[^/]+\/tweets$/.test(path);
+  if (/^\/tweets\/search\/recent$/.test(path) || timeline) { items = Math.max(1, Number(params.max_results) || 10); perItem = xRate("postRead"); }
+  else if (/^\/tweets\/[^/]+$/.test(path)) { items = 1; perItem = xRate("postRead"); }
+  else if (path === "/users/by") { items = String(params.usernames || "").split(",").filter(Boolean).length || 1; perItem = xRate("userRead"); }
+  else { items = 1; perItem = xRate("userRead"); } // one user, or an endpoint this table does not know, priced as a user read
+  let usd = items * perItem;
+  for (const exp of expansionsOf(params)) {
+    const kind = EXPANSION_INCLUDES[exp];
+    // Every post on a user's timeline is that user's, and `includes` holds
+    // each object once, so its author expansion returns one user at most.
+    const objects = timeline && exp === "author_id" ? 1 : items;
+    usd += objects * (kind ? xRate(INCLUDE_RATE[kind]) : Math.max(xRate("postRead"), xRate("userRead")));
+  }
+  return usd;
 }
-/** Actual cost of what came back: X bills per item returned. */
+/** Actual cost of what came back: X bills per item returned, expanded objects included. */
 export function actualXReadUsd(path, data) {
   const n = Array.isArray(data?.data) ? data.data.length : (data?.data ? 1 : 0);
   const perItem = (/^\/tweets/.test(path) || /\/tweets$/.test(path)) ? xRate("postRead") : xRate("userRead");
-  return n * perItem;
+  let usd = n * perItem;
+  for (const [kind, key] of Object.entries(INCLUDE_RATE)) {
+    const arr = data?.includes?.[kind];
+    if (Array.isArray(arr) && arr.length) usd += arr.length * xRate(key);
+  }
+  return usd;
+}
+/**
+ * Worst-case X spend of one call to a tool, for each body shape that changes
+ * what the handler reads: every read it sends, at the largest page it accepts,
+ * priced by estimateXReadUsd from the same params it puts on the wire.
+ * `usdWithoutExpansions` is the same reads with expanded objects unbilled (the
+ * card before X's 2026-11-05 notice). scripts/test-pricing-margin.js holds
+ * each case under the margin bound of the tool's fixed price.
+ */
+export function xToolWorstCases(slug) {
+  const page = Math.max(10, X_MAX_POSTS_PER_CALL());
+  const timeline = { max_results: X_MAX_POSTS_PER_CALL(), "tweet.fields": TWEET_FIELDS };
+  const userRead = () => estimateXReadUsd("/users/by/username/u", { "user.fields": USER_FIELDS });
+  const searchParams = { max_results: page, "tweet.fields": TWEET_FIELDS };
+  switch (slug) {
+    case "x-search-recent": return [{
+      body: { query: "q" },
+      usd: estimateXReadUsd("/tweets/search/recent", { ...searchParams, ...AUTHOR_EXPANSION }),
+      usdWithoutExpansions: estimateXReadUsd("/tweets/search/recent", searchParams),
+    }];
+    case "x-user": return [{ body: { username: "u" }, usd: userRead() }];
+    case "x-user-tweets": return [
+      { body: { id: "1" }, usd: estimateXReadUsd("/users/1/tweets", timeline) },
+      { body: { username: "u" }, usd: userRead() + estimateXReadUsd("/users/1/tweets", timeline) },
+    ];
+    case "x-tweet": return [{ body: { id: "1" }, usd: estimateXReadUsd("/tweets/1", { "tweet.fields": TWEET_FIELDS }) }];
+    case "x-users-lookup": return [{ body: { usernames: ["u"] }, usd: estimateXReadUsd("/users/by", { usernames: Array.from({ length: X_MAX_USERS_PER_LOOKUP }, (_, i) => `u${i}`).join(","), "user.fields": USER_FIELDS }) }];
+    default: throw new Error(`no worst case for ${slug}`);
+  }
 }
 /** Counts only - never a token or a buyer. */
 export function xDataSpendStatus(now = Date.now()) {
@@ -267,15 +332,22 @@ function shapeTweet(t, authors) {
     createdAt: t.created_at ?? null,
     lang: t.lang ?? null,
     authorId: t.author_id ?? null,
-    author: a ? { username: a.username ?? null, name: a.name ?? null, verified: Boolean(a.verified) } : null,
+    // No author source (`authors` null: the tool reads none) keeps the fields,
+    // null; an author the expansion did not return is null, as before.
+    author: a ? { username: a.username ?? null, name: a.name ?? null, verified: Boolean(a.verified) } : authors ? null : { username: null, name: null, verified: null },
     conversationId: t.conversation_id ?? null,
     possiblySensitive: Boolean(t.possibly_sensitive),
     metrics: shapeMetrics(t.public_metrics),
-    url: a?.username && t.id ? `https://x.com/${a.username}/status/${t.id}` : (t.id ? `https://x.com/i/status/${t.id}` : null),
+    url: a?.username && t.id ? `https://x.com/${a.username}/status/${t.id}` : (t.id ? (authors ? `https://x.com/i/status/${t.id}` : `https://x.com/i/web/status/${t.id}`) : null),
   };
 }
 
 const nowIso = () => new Date().toISOString();
+
+// x-tweet and a timeline looked up by id read no author: X bills each object
+// an expansion returns, so they carry authorId, null author fields and an
+// /i/web/status link. Search keeps its author expansion.
+const TIMELINE_USD = 0.09;
 
 async function resolveUserId(username) {
   const data = await xGet(`/users/by/username/${encodeURIComponent(username)}`, { "user.fields": USER_FIELDS });
@@ -301,6 +373,8 @@ const TWEET_EXAMPLE = {
   metrics: { likes: 180000, retweets: 120000, replies: 10000, quotes: 30000, bookmarks: 5000, impressions: 0 },
   url: "https://x.com/jack/status/20",
 };
+// The same row without the author expansion: authorId and the /i/web link only.
+const TWEET_NO_AUTHOR_EXAMPLE = { ...TWEET_EXAMPLE, author: { username: null, name: null, verified: null }, url: "https://x.com/i/web/status/20" };
 
 const USER_EXAMPLE = {
   id: "574032254",
@@ -368,9 +442,15 @@ export const X_DATA_TOOLS = [
         sort_order: sort,
         next_token: nextToken,
         "tweet.fields": TWEET_FIELDS,
-        expansions: "author_id",
-        "user.fields": "username,name,verified",
+        ...AUTHOR_EXPANSION,
       });
+      // Counted on the request's FINAL response (src/x-search-stats.js):
+      // distinct authors and posts X returned, for a final 200 only. Counts
+      // only; a call outside a request is not counted.
+      try {
+        const seen = xSearchCountsOf(data);
+        onFinalResponse((status, scope) => noteXSearchCall({ status, ...seen, synthetic: !!scope?.synthetic }));
+      } catch { /* bookkeeping only */ }
       const authors = authorIndex(data.includes);
       const tweets = (Array.isArray(data.data) ? data.data : []).map((t) => shapeTweet(t, authors)).filter(Boolean);
       return {
@@ -416,9 +496,9 @@ export const X_DATA_TOOLS = [
     name: "X user timeline",
     slug: "x-user-tweets",
     category: "web",
-    price: "$0.08",
+    price: `$${TIMELINE_USD}`,
     description:
-      "Fetch an X (Twitter) account's most recent tweets by user id or username (username is resolved first). Options to exclude retweets and replies, page with pagination_token, or fetch only tweets newer than since_id. Each tweet carries text, created time, language and engagement metrics.",
+      "Fetch an X (Twitter) account's most recent tweets by user id or username (username is resolved first). Options to exclude retweets and replies, page with pagination_token, or fetch only tweets newer than since_id. Each tweet carries text, created time, language, engagement metrics, the author id and a status link. By username, the account's profile fills user and each row's author; by id, the author is not read, so the username, name and verified fields are null and the link is the /i/web/status form.",
     tags: [...SHARED_TAGS, "timeline", "user-tweets"],
     discovery: {
       bodyType: "json",
@@ -457,28 +537,24 @@ export const X_DATA_TOOLS = [
 
       let user;
       if (hasId) {
-        user = { id: takeId(i.id, "id"), username: null, name: null, verified: false };
+        user = { id: takeId(i.id, "id"), username: null, name: null, verified: null };
       } else {
         const u = await resolveUserId(takeUsername(i.username));
         user = { id: u.id, username: u.username ?? null, name: u.name ?? null, verified: Boolean(u.verified) };
       }
 
       const exclude = [excludeRetweets && "retweets", excludeReplies && "replies"].filter(Boolean).join(",");
+      // Every post on a timeline is the path user's, so a username lookup
+      // already holds the author; a lookup by id asks for no expansion (X
+      // bills each expanded object) and leaves the username fields null.
       const data = await xGet(`/users/${encodeURIComponent(user.id)}/tweets`, {
         max_results: maxResults,
         exclude: exclude || undefined,
         since_id: sinceId,
         pagination_token: paginationToken,
         "tweet.fields": TWEET_FIELDS,
-        expansions: "author_id",
-        "user.fields": "username,name,verified",
       });
-      const authors = authorIndex(data.includes);
-      // A lookup by id carries no profile; take it from the expansion when present.
-      if (!user.username) {
-        const a = authors.get(user.id);
-        if (a) user = { id: user.id, username: a.username ?? null, name: a.name ?? null, verified: Boolean(a.verified) };
-      }
+      const authors = hasId ? null : new Map([[user.id, user]]);
       const tweets = (Array.isArray(data.data) ? data.data : []).map((t) => shapeTweet(t, authors)).filter(Boolean);
       return {
         source: "x-api-v2",
@@ -498,7 +574,7 @@ export const X_DATA_TOOLS = [
     category: "web",
     price: "$0.008",
     description:
-      "Fetch one public tweet on X (Twitter) by id: text, created time, language, conversation id, engagement metrics (likes, retweets, replies, quotes, bookmarks, impressions) and the author's username, name and verification.",
+      "Fetch one public tweet on X (Twitter) by id: text, created time, language, conversation id, engagement metrics (likes, retweets, replies, quotes, bookmarks, impressions), the author id and an /i/web/status link. The author's username, name and verification are not read and come back null.",
     tags: [...SHARED_TAGS, "tweet", "status"],
     discovery: {
       bodyType: "json",
@@ -509,17 +585,14 @@ export const X_DATA_TOOLS = [
         },
         required: ["id"],
       },
-      output: { example: { source: "x-api-v2", fetchedAt: "2026-08-20T14:10:00.000Z", tweet: TWEET_EXAMPLE } },
+      output: { example: { source: "x-api-v2", fetchedAt: "2026-08-20T14:10:00.000Z", tweet: TWEET_NO_AUTHOR_EXAMPLE } },
     },
     handler: async (i) => {
       const id = takeId(i.id, "id");
-      const data = await xGet(`/tweets/${encodeURIComponent(id)}`, {
-        "tweet.fields": TWEET_FIELDS,
-        expansions: "author_id",
-        "user.fields": "username,name,verified",
-      });
+      // No author expansion: X bills each expanded user, and the row carries authorId.
+      const data = await xGet(`/tweets/${encodeURIComponent(id)}`, { "tweet.fields": TWEET_FIELDS });
       if (!data.data?.id) throw notFoundOnX("/tweets/:id", 200, data);
-      const tweet = shapeTweet(data.data, authorIndex(data.includes));
+      const tweet = shapeTweet(data.data, null);
       return { source: "x-api-v2", fetchedAt: nowIso(), tweet };
     },
   },

@@ -48,6 +48,7 @@
 // recipient and the signer, a random salt and no hook data. The attestation
 // Gateway answers is submitted to GatewayMinter.gatewayMint on the destination
 // chain by the recipient-side signer.
+import { pathToFileURL } from "node:url";
 import { privateKeyToAccount } from "viem/accounts";
 import { createPublicClient, createWalletClient, http, pad, parseUnits, formatUnits, zeroAddress, encodeFunctionData } from "viem";
 import { randomBytes } from "node:crypto";
@@ -208,6 +209,6 @@ export async function runWithdraw({ argv = process.argv.slice(2), env = process.
   return 0;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   runWithdraw().then((code) => { process.exitCode = code; }, (e) => { console.error(String(e?.message || e).slice(0, 200)); process.exitCode = 1; });
 }

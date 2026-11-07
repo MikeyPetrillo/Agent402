@@ -17,6 +17,7 @@
 // credential (409) or the same recovered transaction on the next run. Every
 // server here runs on in-process state whatever the calling shell exports.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { fileURLToPath } from "node:url";
 import "./lib/file-mode.js";
 import { strict as assert } from "node:assert";
 import { readFileSync, mkdtempSync, rmSync } from "node:fs";
@@ -366,7 +367,7 @@ await (async () => {
   // guard (keyed on the nonce) would keep them consumed for that suite too.
   delete env.STATE_DATABASE_URL; delete env.REDIS_URL;
   const proc = spawn(process.execPath, ["src/server.js"], {
-    cwd: new URL("..", import.meta.url).pathname,
+    cwd: fileURLToPath(new URL("..", import.meta.url)),
     env: {
       ...env, PORT: String(PORT), FREE_MODE: "",
       WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
@@ -506,7 +507,7 @@ await (async () => {
   const env = { ...process.env };
   delete env.STATE_DATABASE_URL; delete env.REDIS_URL;
   const proc = spawn(process.execPath, ["src/server.js"], {
-    cwd: new URL("..", import.meta.url).pathname,
+    cwd: fileURLToPath(new URL("..", import.meta.url)),
     env: {
       ...env, PORT: String(PORT), FREE_MODE: "",
       WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
@@ -633,7 +634,7 @@ await (async () => {
   const env = { ...process.env };
   delete env.STATE_DATABASE_URL; delete env.REDIS_URL;
   const proc = spawn(process.execPath, ["src/server.js"], {
-    cwd: new URL("..", import.meta.url).pathname,
+    cwd: fileURLToPath(new URL("..", import.meta.url)),
     env: {
       ...env, PORT: String(PORT), FREE_MODE: "",
       WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
@@ -771,7 +772,7 @@ await (async () => {
   const env = { ...process.env };
   delete env.STATE_DATABASE_URL; delete env.REDIS_URL;
   const proc = spawn(process.execPath, ["src/server.js"], {
-    cwd: new URL("..", import.meta.url).pathname,
+    cwd: fileURLToPath(new URL("..", import.meta.url)),
     env: {
       ...env, PORT: String(PORT), FREE_MODE: "",
       WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", PAYMENT_NETWORKS: "base",
@@ -1040,7 +1041,7 @@ await (async () => {
   const env = { ...process.env };
   delete env.STATE_DATABASE_URL; delete env.REDIS_URL; delete env.SOLVADOR_KEY;
   const proc = spawn(process.execPath, ["src/server.js"], {
-    cwd: new URL("..", import.meta.url).pathname,
+    cwd: fileURLToPath(new URL("..", import.meta.url)),
     env: {
       ...env, PORT: String(PORT), FREE_MODE: "",
       WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",

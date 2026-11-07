@@ -83,7 +83,8 @@ function getWorkerEntry(lang) {
     // would let one bad image crash the whole server (a DoS). Providing a
     // handler routes that error here instead of throwing; the same error
     // still rejects recognize(), which the caller below try/catches into a
-    // clean 500. So this contains the stray throw without hiding the failure.
+    // clean 422 (undecodable image) or 500 (engine failure). So this contains
+    // the stray throw without hiding the failure.
     errorHandler: (e) => {
       console.error("[ocr] tesseract worker error (contained):", (e && e.message) || e);
     },
@@ -112,6 +113,8 @@ function getWorkerEntry(lang) {
 /** Test hook: how many language workers are held, and terminate them all. */
 export const __ocrTest = {
   workerCount: () => workers.size,
+  /** Put a stand-in engine in a language's slot (fault-path tests). */
+  inject(lang, worker) { workers.set(lang, { promise: Promise.resolve(worker), active: 0, retired: false }); },
   async shutdown() { for (const [lang, entry] of [...workers]) dropEntry(lang, entry); },
 };
 
@@ -137,7 +140,321 @@ export const SUPPORTED_LANGS = new Set([
   "chi_sim", "chi_tra", "jpn", "kor", "ara", "hin", "tha", "vie", "ukr", "ell",
 ]);
 
-async function doRecognize(buf, lang) {
+// The image formats the bundled Leptonica reads, by magic bytes. Anything
+// else is refused before the engine sees it: Leptonica answers a PDF, a
+// webpage or an SVG with a bare decode failure, which used to surface as a
+// 500 "OCR failed: unknown" (2026-11-05).
+export function imageFormatOf(buf) {
+  if (!buf || buf.length < 8) return null;
+  const b = buf;
+  if (b[0] === 0x89 && b.subarray(1, 4).toString("latin1") === "PNG") return "png";
+  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "jpeg";
+  const s4 = b.subarray(0, 4).toString("latin1");
+  if (s4 === "GIF8") return "gif";
+  if (b[0] === 0x42 && b[1] === 0x4d) return "bmp";
+  if (s4 === "II*\0" || s4 === "MM\0*") return "tiff";
+  if (s4 === "RIFF" && b.length >= 12 && b.subarray(8, 12).toString("latin1") === "WEBP") return "webp";
+  if (b[0] === 0x50 && b[1] >= 0x31 && b[1] <= 0x36 && /\s/.test(String.fromCharCode(b[2]))) return "pnm";
+  return null;
+}
+
+export const OCR_FORMATS_TEXT = "PNG, JPEG, GIF, BMP, TIFF, WebP or PNM";
+
+// The engine decodes the whole image into memory before it reads a line, and a
+// small file can declare a huge canvas (a 150 KB PNG declaring 30000x30000
+// grew the process by about 400 MB and kept it). The header's dimensions are
+// read here and an image over the cap is refused before the engine sees it.
+export const OCR_MAX_PIXELS = 64_000_000; // 64 megapixels, e.g. 8000x8000 or 9792x6528
+export const OCR_MAX_SIDE = 32_767;
+const OCR_MAX_MEGAPIXELS = OCR_MAX_PIXELS / 1e6;
+
+/**
+ * The longest side, in pixels, to downscale an image to so that it fits both
+ * caps at its own aspect ratio. A resizer rounds the short side to a whole
+ * pixel, so it is taken as rounded up, which keeps the result under the cap
+ * whichever way the caller's resizer rounds.
+ */
+export function ocrDownscaleSide(width, height) {
+  const long = Math.max(width, height), short = Math.min(width, height);
+  // One above the floating-point estimate, then down to the first side that fits.
+  let side = Math.min(OCR_MAX_SIDE, long, Math.floor(long * Math.sqrt(OCR_MAX_PIXELS / (width * height))) + 1);
+  while (side > 1 && side * Math.max(1, Math.ceil((short * side) / long)) > OCR_MAX_PIXELS) side--;
+  return side;
+}
+
+/** The 422 for an image over the cap: the limits, the image's own size and the
+ *  side to downscale to, in fields and in the message (a connector shows the
+ *  message alone). */
+function tooLarge(width, height) {
+  const megapixels = Math.round((width * height) / 1e4) / 100;
+  const side = ocrDownscaleSide(width, height);
+  const fix = `Downscale the image so its longest side is at most ${side} pixels (that keeps its aspect ratio and lands under ${OCR_MAX_MEGAPIXELS} megapixels) and send it again. Text that stays about 20 pixels tall or more reads as well at that size as at full size.`;
+  return Object.assign(
+    bad(`the image is ${width}x${height} pixels (${megapixels} megapixels); image-ocr reads images up to ${OCR_MAX_MEGAPIXELS} megapixels and ${OCR_MAX_SIDE} pixels a side. ${fix} Nothing was charged.`, 422),
+    {
+      hint: "image-too-large",
+      width, height, megapixels,
+      maxMegapixels: OCR_MAX_MEGAPIXELS, maxSide: OCR_MAX_SIDE, maxPixels: OCR_MAX_PIXELS,
+      downscaleToLongestSide: side,
+      fix,
+      howToCallNote: `Send this request again with the image downscaled so its longest side is at most ${side} pixels.`,
+    },
+  );
+}
+
+/** A 422 for bytes that start like an image and do not hold a readable one. */
+function undecodable(fmt, why) {
+  return Object.assign(
+    bad(`the image could not be decoded: it starts like a ${fmt.toUpperCase()} file but ${why}`, 422),
+    { hint: "image-decode-failed" },
+  );
+}
+
+const u16le = (b, o) => (o + 2 <= b.length ? b.readUInt16LE(o) : null);
+const u16be = (b, o) => (o + 2 <= b.length ? b.readUInt16BE(o) : null);
+const u32le = (b, o) => (o + 4 <= b.length ? b.readUInt32LE(o) : null);
+const u32be = (b, o) => (o + 4 <= b.length ? b.readUInt32BE(o) : null);
+
+function pngSize(b) {
+  if (b.length < 24 || b.subarray(12, 16).toString("latin1") !== "IHDR") return null;
+  return { width: b.readUInt32BE(16), height: b.readUInt32BE(20) };
+}
+
+function jpegSize(b) {
+  let o = 2;
+  while (o + 4 <= b.length) {
+    if (b[o] !== 0xff) return null;
+    const m = b[o + 1];
+    if (m === 0xff) { o++; continue; } // fill byte
+    if (m === 0xd8 || m === 0x01 || (m >= 0xd0 && m <= 0xd7)) { o += 2; continue; } // no length
+    if (m === 0xd9 || m === 0xda) return null; // end, or scan data before any frame header
+    const len = b.readUInt16BE(o + 2);
+    if (len < 2) return null;
+    if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) {
+      if (o + 9 > b.length) return null;
+      return { height: b.readUInt16BE(o + 5), width: b.readUInt16BE(o + 7) };
+    }
+    o += 2 + len;
+  }
+  return null;
+}
+
+// The logical screen and the first image's own size (the engine reads the
+// first image; take the larger of the two).
+function gifSize(b) {
+  if (b.length < 13) return null;
+  let width = b.readUInt16LE(6), height = b.readUInt16LE(8);
+  let o = 13;
+  if (b[10] & 0x80) o += 3 * (1 << ((b[10] & 7) + 1));
+  while (o < b.length) {
+    const t = b[o];
+    if (t === 0x2c) {
+      const w = u16le(b, o + 5), h = u16le(b, o + 7);
+      if (w == null || h == null) return null;
+      return { width: Math.max(width, w), height: Math.max(height, h) };
+    }
+    if (t !== 0x21) break; // trailer or junk before any image
+    o += 2;
+    while (o < b.length && b[o] !== 0) o += b[o] + 1; // sub-blocks
+    o++;
+  }
+  return null; // no image in the file
+}
+
+// tesseract.js converts every BMP with bmp-js before the engine sees it, and
+// bmp-js reads a 40-byte info header, then a palette, then pixel rows from the
+// end of the palette, allocating width x height x 4 bytes first. So a BMP is
+// checked against what that reader will touch: an unchecked one answered 500
+// with the reader's RangeError text (2026-11-07).
+const BMP_DEPTHS = new Set([1, 4, 8, 16, 24, 32]);
+function bmpCheck(b) {
+  if (b.length < 54) return { problem: "is shorter than a BMP header" };
+  const headerSize = b.readUInt32LE(14);
+  if (headerSize < 40 || headerSize > 124) return { problem: "its header type is not one this reader takes" };
+  const width = b.readInt32LE(18);
+  const rawHeight = b.readInt32LE(22);
+  const height = Math.abs(rawHeight);
+  const bpp = b.readUInt16LE(28);
+  const compress = b.readUInt32LE(30);
+  const colors = b.readUInt32LE(46);
+  if (width <= 0 || height === 0) return { problem: "its header gives no width or height" };
+  if (!BMP_DEPTHS.has(bpp)) return { problem: `its bit depth (${bpp}) is not one this reader takes` };
+  let pos = 54;
+  if (bpp < 15) {
+    const entries = colors === 0 ? 1 << bpp : colors;
+    if (entries > 1 << bpp) return { problem: "its palette is larger than its bit depth allows" };
+    pos += entries * 4;
+    if (pos > b.length) return { problem: "is truncated (the palette runs past the end)" };
+  }
+  const rle = (bpp === 8 && compress === 1) || (bpp === 4 && compress === 2);
+  if (!rle) {
+    if (compress !== 0 && compress !== 3) return { problem: "uses a compression this reader does not take" };
+    const stride = Math.ceil((width * bpp) / 32) * 4;
+    if (pos + stride * height > b.length) return { problem: "is truncated (its pixel rows run past the end)", width, height };
+  }
+  return { width, height };
+}
+
+function tiffSize(b) {
+  const le = b[0] === 0x49;
+  const r16 = le ? u16le : u16be, r32 = le ? u32le : u32be;
+  const ifd = r32(b, 4);
+  if (ifd == null) return null;
+  const n = r16(b, ifd);
+  if (n == null) return null;
+  let width = null, height = null;
+  for (let i = 0; i < n; i++) {
+    const e = ifd + 2 + i * 12;
+    const tag = r16(b, e), type = r16(b, e + 2);
+    if (tag == null || type == null) return null;
+    if (tag !== 256 && tag !== 257) continue;
+    const v = type === 3 ? r16(b, e + 8) : type === 4 ? r32(b, e + 8) : null;
+    if (v == null) return null;
+    if (tag === 256) width = v; else height = v;
+  }
+  return width != null && height != null ? { width, height } : null;
+}
+
+function webpSize(b) {
+  if (b.length < 30) return null;
+  const kind = b.subarray(12, 16).toString("latin1");
+  if (kind === "VP8 ") {
+    if (b[23] !== 0x9d || b[24] !== 0x01 || b[25] !== 0x2a) return null;
+    return { width: b.readUInt16LE(26) & 0x3fff, height: b.readUInt16LE(28) & 0x3fff };
+  }
+  if (kind === "VP8L") {
+    if (b[20] !== 0x2f) return null;
+    const bits = b.readUInt32LE(21);
+    return { width: (bits & 0x3fff) + 1, height: ((bits >>> 14) & 0x3fff) + 1 };
+  }
+  if (kind === "VP8X") {
+    return { width: b.readUIntLE(24, 3) + 1, height: b.readUIntLE(27, 3) + 1 };
+  }
+  return null;
+}
+
+function pnmSize(b) {
+  const head = b.subarray(2, 1024).toString("latin1").replace(/#[^\n]*/g, " ");
+  const m = /^\s+(\d{1,9})\s+(\d{1,9})/.exec(head);
+  return m ? { width: Number(m[1]), height: Number(m[2]) } : null;
+}
+
+/**
+ * Read the dimensions an image declares, and refuse one that the engine would
+ * choke on: a header that does not give its size, a BMP the converter would
+ * read past the end of, or a canvas over OCR_MAX_PIXELS / OCR_MAX_SIDE.
+ */
+export function checkImageHeader(buf, fmt) {
+  let size;
+  if (fmt === "bmp") {
+    const r = bmpCheck(buf);
+    if (r.problem) throw undecodable(fmt, r.problem);
+    size = r;
+  } else {
+    const read = { png: pngSize, jpeg: jpegSize, gif: gifSize, tiff: tiffSize, webp: webpSize, pnm: pnmSize }[fmt];
+    size = read ? read(buf) : null;
+    if (!size) throw undecodable(fmt, "its header does not give the image's size");
+  }
+  const { width, height } = size;
+  if (!(width > 0) || !(height > 0)) throw undecodable(fmt, "its header gives no width or height");
+  if (width > OCR_MAX_SIDE || height > OCR_MAX_SIDE || width * height > OCR_MAX_PIXELS) throw tooLarge(width, height);
+  return { width, height };
+}
+
+/** What a non-image body looks like, for the refusal's wording. */
+function describeNonImage(buf) {
+  const head = buf.subarray(0, 512).toString("latin1").trimStart();
+  if (head.startsWith("%PDF-")) return "a PDF (use pdf-to-markdown for a PDF's text)";
+  if (/^<\?xml[\s\S]*<svg|^<svg/i.test(head)) return "an SVG (a vector format; render it to PNG first)";
+  if (/^<(!doctype html|html|head|body)/i.test(head)) return "an HTML page, not an image";
+  if (/^[{[]/.test(head)) return "JSON, not an image";
+  if (buf.subarray(4, 8).toString("latin1") === "ftyp") return "an HEIC/AVIF or video file (convert it to PNG or JPEG first)";
+  return "not a recognized image";
+}
+
+/** A 422 for a body that is not an image the engine reads. */
+function notAnImage(buf, from) {
+  return Object.assign(
+    bad(`${from} is ${describeNonImage(buf)}; image-ocr reads ${OCR_FORMATS_TEXT}`, 422),
+    { hint: "unsupported-image-format" },
+  );
+}
+
+// tesseract.js rejects with a STRING (its worker posts err.toString()), so a
+// rejection has no .message: read both shapes.
+const rejectionText = (e) => String((e && typeof e === "object" && e.message) || e || "").slice(0, 200);
+// Leptonica's read failure, the WASM abort a malformed body causes (a
+// truncated PNG aborts libpng) and the BMP converter reading past the end of
+// its buffer: the bytes start like an image but do not decode. A bare WASM
+// RuntimeError (a trap) is not here: on an image whose header checked out it
+// is an engine fault, a 5xx, never the caller's.
+export const DECODE_FAILURE = /attempting to read image|pixRead|Aborted\(|ERR_OUT_OF_RANGE|ERR_BUFFER_OUT_OF_BOUNDS/i;
+
+// A large image costs the engine several bytes a pixel while it reads (a 64 MP
+// photo grew the process by about 560 MB), and the language workers (one per
+// language, OCR_WORKER_MAX of them) run side by side, so three at once would
+// hold gigabytes. Only one image above OCR_LARGE_PIXELS is in the engine at a
+// time; the next waits up to OCR_LARGE_WAIT_MS for its turn (at most
+// OCR_LARGE_QUEUE_MAX waiting), then answers 503 with Retry-After. Smaller
+// images never wait here.
+export const OCR_LARGE_PIXELS = 16_000_000;
+export const OCR_LARGE_WAIT_MS = 15_000;
+export const OCR_LARGE_QUEUE_MAX = 2;
+let largeBusy = false;
+const largeWaiters = [];
+
+function largeBusyError() {
+  return Object.assign(
+    bad(`image-ocr is reading another image over ${OCR_LARGE_PIXELS / 1e6} megapixels; retry in a minute, or send this one downscaled below ${OCR_LARGE_PIXELS / 1e6} megapixels to be read at once. Nothing was charged.`, 503),
+    { retryAfter: 60, shed: true, hint: "large-image-busy" },
+  );
+}
+
+/** Wait for the large-image slot; resolves to its release function. */
+function acquireLargeSlot(waitMs = OCR_LARGE_WAIT_MS) {
+  if (!largeBusy) { largeBusy = true; return Promise.resolve(releaseLargeSlot); }
+  if (largeWaiters.length >= OCR_LARGE_QUEUE_MAX) return Promise.reject(largeBusyError());
+  return new Promise((resolve, reject) => {
+    const waiter = { resolve: () => { clearTimeout(waiter.timer); resolve(releaseLargeSlot); } };
+    waiter.timer = setTimeout(() => {
+      const i = largeWaiters.indexOf(waiter);
+      if (i >= 0) largeWaiters.splice(i, 1);
+      reject(largeBusyError());
+    }, waitMs);
+    largeWaiters.push(waiter);
+  });
+}
+
+function releaseLargeSlot() {
+  const next = largeWaiters.shift();
+  if (next) next.resolve(); // the slot passes straight to the next waiter
+  else largeBusy = false;
+}
+
+/** Test hook for the large-image slot. */
+export const __ocrLargeTest = {
+  acquire: acquireLargeSlot,
+  state: () => ({ busy: largeBusy, waiting: largeWaiters.length }),
+  recognize: doRecognize,
+};
+
+async function doRecognize(buf, lang, fmt, pixels = 0) {
+  const release = pixels > OCR_LARGE_PIXELS ? await acquireLargeSlot() : null;
+  try {
+    return await recognizeOn(buf, lang, fmt);
+  } finally {
+    if (release) {
+      // The engine's WASM memory grows to fit the largest image it read and
+      // never shrinks (a 64 MP image left a worker about 560 MB larger), so
+      // the worker that read a large image is retired once its calls finish.
+      const entry = workers.get(lang);
+      if (entry) dropEntry(lang, entry);
+      release();
+    }
+  }
+}
+
+async function recognizeOn(buf, lang, fmt) {
   const entry = getWorkerEntry(lang);
   entry.active++;
   try {
@@ -149,7 +466,12 @@ async function doRecognize(buf, lang) {
     // gets a fresh one; this avoids one bad input poisoning the process.
     dropEntry(lang, entry);
     if (e?.statusCode === 503) throw e;
-    throw bad(`OCR failed: ${e.message || "unknown"}`, 500);
+    const why = rejectionText(e);
+    if (DECODE_FAILURE.test(why)) throw undecodable(fmt, "is corrupt or truncated");
+    // An engine fault on an image that passed the header check: the reason
+    // goes to the log, the caller gets a 5xx (not charged) without it.
+    console.error("[ocr] engine failed:", why || "no reason given");
+    throw bad("OCR engine failed on this image; retry the call", 500);
   } finally {
     entry.active--;
     if (entry.retired) retireEntry(entry);
@@ -164,15 +486,15 @@ export const OCR_TOOLS = [
     category: "data",
     price: "$0.01",
     description:
-      "Extract text from an image (PNG/JPEG): returns the full text, overall confidence (0-100), and per-line bounding boxes. Send either {image: base64} or {url: 'https://…'}. Pure-CPU Tesseract via tesseract.js - no upstream API, no keys. Default lang 'eng'; pass 'lang' (ISO 639-2) for others.",
+      `Extract text from an image (${OCR_FORMATS_TEXT}, up to ${OCR_MAX_MEGAPIXELS} megapixels and ${OCR_MAX_SIDE.toLocaleString("en-US")} pixels a side): returns the full text, overall confidence (0-100), and per-line bounding boxes. Send either {image: base64} or {url: 'https://…'}. Pure-CPU Tesseract via tesseract.js - no upstream API, no keys. Default lang 'eng'; pass 'lang' (ISO 639-2) for others.`,
     tags: ["ocr", "image", "text-extraction", "tesseract", "scanned-document", "receipt", "extract", "text"],
     discovery: {
       bodyType: "json",
       input: { url: "https://agent402.tools/fixtures/sample-text.png" },
       inputSchema: {
         properties: {
-          image: { type: "string", description: "Base64 PNG/JPEG (data: URL prefix accepted). Either this or url is required." },
-          url: { type: "string", description: "HTTPS URL to fetch the image from (max 8 MB). Either this or image is required." },
+          image: { type: "string", description: `Base64 ${OCR_FORMATS_TEXT} (data: URL prefix accepted), up to ${OCR_MAX_MEGAPIXELS} megapixels and ${OCR_MAX_SIDE} pixels a side. Either this or url is required.` },
+          url: { type: "string", description: `HTTPS URL to fetch the image from (max 8 MB, same pixel limits). Either this or image is required.` },
           lang: { type: "string", description: "Language code, ISO 639-2. Default 'eng'. Supported: eng, spa, fra, deu, ita, por, nld, rus, pol, tur, chi_sim, chi_tra, jpn, kor, ara, hin, tha, vie, ukr, ell." },
         },
       },
@@ -197,19 +519,25 @@ export const OCR_TOOLS = [
       }
 
       let buf;
+      let from;
       if (i.image) {
         buf = decodeImageInput(i.image);
+        from = '"image"';
       } else if (i.url) {
         const url = String(i.url).trim();
         if (!/^https?:\/\//i.test(url)) throw bad('"url" must be http(s)');
         const { buffer } = await safeFetch(url, { binary: true, maxBytes: MAX_FETCH });
         if (!buffer || buffer.length < 8) throw bad("fetched image too small or empty", 502);
         buf = buffer;
+        from = "The file at that URL";
       } else {
         throw bad('Provide either "image" (base64) or "url"');
       }
 
-      const data = await doRecognize(buf, lang);
+      const fmt = imageFormatOf(buf);
+      if (!fmt) throw notAnImage(buf, from);
+      const { width, height } = checkImageHeader(buf, fmt);
+      const data = await doRecognize(buf, lang, fmt, width * height);
       const lines = (data.lines ?? []).map((l) => ({
         text: (l.text ?? "").replace(/\s+$/g, ""),
         confidence: typeof l.confidence === "number" ? +l.confidence.toFixed(2) : null,

@@ -490,13 +490,16 @@ export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, 
     // telemetry can tell egress problems from slow upstreams.
     let code = null;
     for (let e = err.cause; e && !code; e = e.cause) code = e.code || null;
+    // The source host, not the caller's input: attributed upstream with a
+    // code the caller can branch on (retry later, or try another host),
+    // since nothing about the request body would change the outcome.
     throw Object.assign(
       new Error(
         timedOut
           ? `Source URL did not respond within ${Math.round(timeoutMs / 1000)}s - host may be slow or unreachable`
           : `Could not connect to source URL: ${err.message}${code ? ` (${code})` : ""}`
       ),
-      { statusCode: 504 }
+      { statusCode: 504, attribution: "upstream", hint: timedOut ? "source-timeout" : "source-unreachable" }
     );
   }
 
@@ -532,7 +535,7 @@ export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, 
       step = await reader.read();
     } catch (err) {
       if (controller.signal.aborted) {
-        throw Object.assign(new Error(`Source URL did not finish sending within ${Math.round(timeoutMs / 1000)}s - host may be slow or unreachable`), { statusCode: 504 });
+        throw Object.assign(new Error(`Source URL did not finish sending within ${Math.round(timeoutMs / 1000)}s - host may be slow or unreachable`), { statusCode: 504, attribution: "upstream", hint: "source-timeout" });
       }
       throw err;
     }

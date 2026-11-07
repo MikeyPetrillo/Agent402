@@ -8,6 +8,7 @@
 //      take, and stored rows that are not wish records, are skipped while
 //      the rest of the board is rebuilt.
 // Requires STATE_DATABASE_URL (CI fails without it).
+import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync, appendFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,7 +19,7 @@ const { url, schema } = requireTestPg({ label: "test-wish-pg" });
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const DIR = mkdtempSync(join(tmpdir(), "wish-pg-"));
 const pg = (await import("pg")).default;
 const sql = async (text, params = []) => { const c = new pg.Client({ connectionString: url }); await c.connect(); try { return await c.query(text, params); } finally { await c.end(); } };

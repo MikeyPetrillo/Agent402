@@ -16,13 +16,14 @@
 // nothing is read from a chain (the revenue read is checked offline only).
 //   node scripts/test-ink-graduation.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
 import { spawn, spawnSync } from "node:child_process";
 import { getFreePorts } from "./lib/free-port.js";
 import { ownStoreEnv } from "./lib/own-stores.js";
 import { childJson } from "./lib/child-json.js";
 
-const root = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
+const root = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/, "");
 const INK = "eip155:57073", BASE_NET = "eip155:8453";
 // The production /supported shape: each network as a v2 CAIP-2 kind AND a
 // v1 named kind, plus a testnet this server never offers.
