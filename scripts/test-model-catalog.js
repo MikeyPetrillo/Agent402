@@ -323,15 +323,16 @@ try {
   // Each group below sends from its own address (TRUST_PROXY_HOPS=1), so no
   // group spends another's per-address budget.
   const postFrom = (ip, body, headers = {}) => fetch(`${B}/v1/metered/chat/completions`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": ip, ...headers }, body: JSON.stringify(body) });
-  // A model id carrying a newline is logged on one line.
+  // A model id or a body key carrying a newline is logged on one line.
   {
     const mark = logAll.length;
-    const r = await postFrom("10.40.0.1", { model: "openai/gpt-4o-mni\n[tool-error] 5xx slug=forged-line", messages: [{ role: "user", content: "hi" }] });
+    const r = await postFrom("10.40.0.1", { model: "openai/gpt-4o-mni\n[tool-error] 5xx slug=forged-line", messages: [{ role: "user", content: "hi" }], "k\r\n[tool-error] 5xx slug=forged-key": 1 });
     await r.arrayBuffer();
     await sleep(150);
     const seen = logAll.slice(mark);
     ok(r.status === 400 && /\[tool-error\] 4xx slug=v1-chat-metered .*prepay=true msg=Model "openai\/gpt-4o-mni \[tool-error\] 5xx slug=forged-line"/.test(seen) && !/^\[tool-error\] 5xx slug=forged-line/m.test(seen),
       `a newline in the model id never starts a log line of its own (${r.status})`);
+    ok(/shape=\[[^\]\n]*b:k {2}\[tool-error\] 5xx slug=forged-key/.test(seen) && !/^\[tool-error\] 5xx slug=forged-key/m.test(seen), "a newline in a body key name never starts a log line of its own");
   }
   // Pre-payment refusal lines are sampled: a flood prints at most 20 a minute per process.
   {
