@@ -20,8 +20,10 @@ const MIN_ENTRIES = 100;
 const REFRESH_MS = 10 * 60_000;
 const MAX_AGE_MS = 30 * 60_000;
 const MISS_REFRESH_MS = 60_000;
+// A stated context window above this is not plausible and is not read.
+const MAX_CONTEXT_TOKENS = 100_000_000;
 
-let state = null; // { ids: Set<string>, at }
+let state = null; // { ids: Set<string>, ctx: Map<string, number>, at }
 let lastMissRead = 0;
 let lastFailedAt = 0;
 let inflight = null;
@@ -41,9 +43,17 @@ export async function refreshModelCatalog({ fetchImpl = globalThis.fetch, now = 
     const res = await fetchImpl(catalogUrl(), { headers: { ...OPENROUTER_ATTRIBUTION, Accept: "application/json" }, signal: AbortSignal.timeout(15_000), [NO_OUTCOME]: true });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const j = await res.json();
-    const ids = Array.isArray(j?.data) ? j.data.map((m) => String(m?.id || "").toLowerCase()).filter(Boolean) : [];
+    const rows = Array.isArray(j?.data) ? j.data : [];
+    const ids = rows.map((m) => String(m?.id || "").toLowerCase()).filter(Boolean);
     if (ids.length < MIN_ENTRIES) throw new Error(`implausible list (${ids.length} entries)`);
-    state = { ids: new Set(ids), at: now };
+    // Each id's context window in tokens, where the list states a plausible one.
+    const ctx = new Map();
+    for (const m of rows) {
+      const id = String(m?.id || "").toLowerCase();
+      const n = Number(m?.context_length);
+      if (id && Number.isInteger(n) && n > 0 && n <= MAX_CONTEXT_TOKENS) ctx.set(id, n);
+    }
+    state = { ids: new Set(ids), ctx, at: now };
     lastFailedAt = 0;
     return true;
   } catch (e) {
@@ -67,7 +77,34 @@ export function startModelCatalogRefresh() {
   timer.unref?.();
 }
 
-export function _setModelCatalogForTest(ids, at = Date.now()) { state = ids ? { ids: new Set(ids.map((x) => String(x).toLowerCase())), at } : null; lastMissRead = 0; lastFailedAt = 0; }
+/** Test seam: `ids` is a list of ids, `ctx` an optional { id: tokens } map. */
+export function _setModelCatalogForTest(ids, at = Date.now(), ctx = {}) {
+  state = ids ? { ids: new Set(ids.map((x) => String(x).toLowerCase())), ctx: new Map(Object.entries(ctx).map(([k, v]) => [k.toLowerCase(), v])), at } : null;
+  lastMissRead = 0; lastFailedAt = 0;
+}
+
+const fresh = (now) => !!state && now - state.at < MAX_AGE_MS;
+/** True only when a fresh live list carries this exact id (case folded). */
+export function isListedModel(id, now = Date.now()) {
+  return fresh(now) && state.ids.has(String(id || "").toLowerCase());
+}
+/** The context window (tokens) the fresh live list states for an id, judged
+ *  by its base id when it carries a ":variant"; null when unknown. */
+export function contextTokensOf(id, now = Date.now()) {
+  if (!fresh(now)) return null;
+  const s = String(id || "").toLowerCase();
+  const base = s.includes(":") ? s.slice(0, s.indexOf(":")) : s;
+  return state.ctx.get(s) ?? state.ctx.get(base) ?? null;
+}
+/** Ids on the fresh list (no ":variant" ids) whose stated window is at least
+ *  `minTokens` and that `keep(id)` admits, as { id, contextTokens }; empty
+ *  with no fresh list. */
+export function listedModelsWithContext(minTokens, keep = () => true, now = Date.now()) {
+  if (!fresh(now)) return [];
+  const out = [];
+  for (const [id, n] of state.ctx) if (n >= minTokens && !id.includes(":") && keep(id)) out.push({ id, contextTokens: n });
+  return out;
+}
 
 const tokens = (id) => new Set(id.split(/[-/.:_]/).filter(Boolean));
 // Edit distance, the closeness of two ids. Both loops run at most
@@ -86,14 +123,23 @@ function distance(a, b) {
 }
 const MAX_ECHO = 200;
 
+// The id with every digit-hyphen-digit read as a dotted version ("v4-1" as
+// "v4.1"), so a caller who hyphenated a version is ranked against the id it
+// most likely meant. Linear: one character class and a lookahead.
+const dotted = (id) => id.replace(/(\d)-(?=\d)/g, "$1.");
+/** At most this many machine-readable suggestions ride on a refusal. */
+export const MAX_SUGGESTIONS = 3;
+
 /**
  * The refusal for a canonical model id the fresh live list does not carry,
- * or null (listed, or no fresh list to judge by). A ":variant" suffix is
- * judged by its base id. `suggest(id)` keeps only ids the caller's route
- * serves; up to five, closest first, are named.
+ * or null (listed, or no fresh list to judge by): `{ message, suggestions }`
+ * with `suggestions` the closest ids first (at most MAX_SUGGESTIONS). A
+ * ":variant" suffix is judged by its base id. `suggest(id)` keeps only ids
+ * the caller's route serves; up to five, closest first, are named in the
+ * message.
  */
-export function unknownModelRefusal(model, { now = Date.now(), suggest = () => true, refreshOnMiss = true } = {}) {
-  if (!state || !(now - state.at < MAX_AGE_MS)) return null;
+export function unknownModelVerdict(model, { now = Date.now(), suggest = () => true, refreshOnMiss = true } = {}) {
+  if (!fresh(now)) return null;
   const id = String(model || "").toLowerCase();
   if (!id) return null;
   const base = id.includes(":") ? id.slice(0, id.indexOf(":")) : id;
@@ -102,12 +148,20 @@ export function unknownModelRefusal(model, { now = Date.now(), suggest = () => t
   const vendor = base.includes("/") ? base.slice(0, base.indexOf("/") + 1) : "";
   const want = tokens(base.slice(vendor.length));
   const near = vendor ? [...state.ids].filter((x) => x.startsWith(vendor) && !x.includes(":") && suggest(x)) : [];
-  // Closest first: edit distance, then shared name parts.
-  const scored = near.map((x) => ({ x, d: distance(base, x), n: [...tokens(x.slice(vendor.length))].filter((w) => want.has(w)).length }))
+  // Closest first: edit distance (to the id as sent, or to it with its
+  // hyphenated versions dotted, whichever is nearer), then shared name parts.
+  const alt = base.length <= DISTANCE_MAX_CHARS ? dotted(base) : base;
+  const scored = near.map((x) => ({ x, d: alt === base ? distance(base, x) : Math.min(distance(base, x), distance(alt, x)), n: [...tokens(x.slice(vendor.length))].filter((w) => want.has(w)).length }))
     .sort((a, b) => a.d - b.d || b.n - a.n || a.x.localeCompare(b.x));
   const list = scored.slice(0, 5).map((s) => s.x);
   const shown = String(model).length > MAX_ECHO ? `${String(model).slice(0, MAX_ECHO)}…` : String(model);
-  return `Model "${shown}" is not a chat model id the upstream serves, so this request cannot be served and was not priced.` +
+  const message = `Model "${shown}" is not a chat model id the upstream serves, so this request cannot be served and was not priced.` +
     (list.length ? ` Ids this route serves from ${vendor.slice(0, -1)} include: ${list.join(", ")}.` : "") +
     " GET /v1/models lists what this route serves. Nothing was charged.";
+  return { message, suggestions: list.slice(0, MAX_SUGGESTIONS) };
+}
+
+/** The refusal message alone (unknownModelVerdict), or null. */
+export function unknownModelRefusal(model, opts = {}) {
+  return unknownModelVerdict(model, opts)?.message ?? null;
 }

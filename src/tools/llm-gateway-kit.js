@@ -60,7 +60,7 @@ import { evmCredentialSettleableMs } from "../evm-validity.js";
 import { cdnSyncLeftMs } from "../cdn-sync-window.js";
 import { audioProviderPolicy, AUDIO_ZDR_MODELS } from "../openrouter-audio-policy.js";
 import { cacheGet, cacheSet } from "../cache.js";
-import { unknownModelRefusal } from "../model-catalog.js";
+import { unknownModelVerdict, isListedModel, contextTokensOf, listedModelsWithContext, MAX_SUGGESTIONS } from "../model-catalog.js";
 
 const OPENROUTER_KEY = () => (process.env.OPENROUTER_API_KEY || "").trim();
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
@@ -708,8 +708,42 @@ export const PREFIX_CANONICAL = Object.freeze({
   "google/gemini-3.1-pro": "google/gemini-3.1-pro-preview",
 });
 
+// A hyphenated version ("deepseek-v4-1-flash" for "deepseek-v4.1-flash") is
+// read as its dotted form ONLY when that exact dotted id is on the fresh live
+// list (src/model-catalog.js): the version is the one part changed, nothing
+// is dropped or added, so an id with any other unknown part (a suffix the
+// upstream does not list) stays as sent and is refused, never served as a
+// different model. No fresh list, no mapping.
+const HYPHEN_VERSION_MAX_CHARS = 200;
+const HYPHEN_VERSION_MAX_SITES = 4;
+function dottedListedId(id) {
+  if (!id || id.length > HYPHEN_VERSION_MAX_CHARS || !id.includes("/")) return null;
+  const colon = id.indexOf(":");
+  const base = colon < 0 ? id : id.slice(0, colon);
+  const variant = colon < 0 ? "" : id.slice(colon);
+  if (isListedModel(base)) return null;
+  const sites = [];
+  for (let i = 1; i < base.length - 1; i++) {
+    if (base[i] === "-" && base[i - 1] >= "0" && base[i - 1] <= "9" && base[i + 1] >= "0" && base[i + 1] <= "9") sites.push(i);
+  }
+  if (!sites.length || sites.length > HYPHEN_VERSION_MAX_SITES) return null;
+  // Every subset of the sites, fewest changes first (at most 15 lookups).
+  const subsets = [];
+  for (let mask = 1; mask < 1 << sites.length; mask++) subsets.push(mask);
+  subsets.sort((a, b) => bitCount(a) - bitCount(b) || a - b);
+  for (const mask of subsets) {
+    const chars = base.split("");
+    sites.forEach((pos, k) => { if (mask & (1 << k)) chars[pos] = "."; });
+    const candidate = chars.join("");
+    if (isListedModel(candidate)) return `${candidate}${variant}`;
+  }
+  return null;
+}
+const bitCount = (n) => { let c = 0; for (; n; n &= n - 1) c++; return c; };
+
 export function canonicalModel(model) {
-  const c = canonicalModelRaw(model);
+  const raw = canonicalModelRaw(model);
+  const c = dottedListedId(raw) || raw;
   const p = Object.hasOwn(PREFIX_CANONICAL, c.toLowerCase()) ? PREFIX_CANONICAL[c.toLowerCase()] : c;
   // A retiring id is served by its named successor rather than refused: the
   // caller asked for a model, the successor is the provider's own replacement
@@ -864,12 +898,17 @@ export function retiringModel(model) {
  *  "default") keep their own answers, and an id this gateway retires or can
  *  serve through a successor is never refused here: its own fallback decides. */
 export function meteredModelRefusal(model) {
+  return meteredModelVerdict(model)?.message ?? null;
+}
+/** The same refusal as `{ message, suggestions }` (closest servable ids
+ *  first, at most three), or null. */
+export function meteredModelVerdict(model) {
   const id = String(model || "").toLowerCase();
   if (!id.includes("/")) return null;
   const base = id.split(":")[0];
   if (Object.hasOwn(RETIRING_MODELS, base) || Object.hasOwn(RETIRING_MODELS, base.replace(/-\d{4}-\d{2}-\d{2}$/, ""))) return null;
   if (successorsOf(base).length) return null;
-  return unknownModelRefusal(model, { suggest: (x) => tierAllows("v1-chat-metered", x) });
+  return unknownModelVerdict(model, { suggest: (x) => tierAllows("v1-chat-metered", x) });
 }
 
 /** Same-family successors for models whose whole upstream can vanish at once
@@ -1839,6 +1878,79 @@ export function validateToolEntry(t, tier) {
 // clamped: both the pre-paywall read and the deferred write derive it the same
 // way, so hits are unchanged, and the clamp still runs in the handler, i.e.
 // only once a 402 has been cleared.
+// ---- metered input size ----------------------------------------------------
+// The metered tier's `maxInputChars` (200k) is the floor every model on it is
+// held to. A model whose live context window (src/model-catalog.js) is larger
+// takes up to METERED_CHARS_PER_CONTEXT_TOKEN chars per window token, never
+// past METERED_MAX_INPUT_CHARS_CEILING, which is the /v1/metered body
+// parser's own 1 MB bound (server.js), so the largest input stays what the
+// body limit already admitted to the quoter. Safe on money because the quote
+// prices this exact body's tokens (long-context rows included) times the
+// markup, the per-call cap still refuses anything quoting above it, and the
+// settle breakers bound unpaid runs per call, not per character. With no
+// fresh list every model is held to the floor.
+export const METERED_MAX_INPUT_CHARS_CEILING = 1_000_000;
+export const METERED_CHARS_PER_CONTEXT_TOKEN = 3;
+/** The input-character cap for `model` on `tierSlug` (see above). */
+export function maxInputCharsFor(tierSlug, model) {
+  const tier = TIERS[tierSlug];
+  const floor = tier?.maxInputChars ?? 0;
+  if (!tier?.metered || !model) return floor;
+  const ctx = contextTokensOf(canonicalModel(model));
+  if (!ctx) return floor;
+  return Math.max(floor, Math.min(METERED_MAX_INPUT_CHARS_CEILING, ctx * METERED_CHARS_PER_CONTEXT_TOKEN));
+}
+/** Up to three ids the metered route serves whose own cap takes `chars`:
+ *  the requested model's vendor first, then the closest name, then the
+ *  smallest window that fits. Empty when none (or no fresh list). */
+export function largerWindowSuggestions(model, chars) {
+  if (!(chars <= METERED_MAX_INPUT_CHARS_CEILING)) return [];
+  const want = String(model || "").toLowerCase();
+  const vendor = want.includes("/") ? want.slice(0, want.indexOf("/") + 1) : "";
+  const parts = new Set(want.slice(vendor.length).split(/[-/.:_]/).filter(Boolean));
+  const minTokens = Math.ceil(chars / METERED_CHARS_PER_CONTEXT_TOKEN);
+  return listedModelsWithContext(minTokens, (id) => id !== want && tierAllows("v1-chat-metered", id))
+    .map(({ id, contextTokens }) => ({ id, contextTokens, same: vendor && id.startsWith(vendor) ? 1 : 0, shared: id.split(/[-/.:_]/).filter((w) => parts.has(w)).length }))
+    .sort((a, b) => b.same - a.same || b.shared - a.shared || a.contextTokens - b.contextTokens || a.id.localeCompare(b.id))
+    .slice(0, MAX_SUGGESTIONS)
+    .map((s) => s.id);
+}
+/** The 400 for an input over its cap, carrying the machine-readable fields
+ *  (maxInputChars, inputChars, hint, suggestions) on every wire. */
+export function inputTooLargeError(tierSlug, model, chars) {
+  const tier = TIERS[tierSlug];
+  const max = maxInputCharsFor(tierSlug, model);
+  const route = tier.route.split(" ")[1];
+  if (!tier.metered) {
+    const m = TIERS["v1-chat-metered"];
+    const e = bad(`Input too large (${chars} chars). The ${tierSlug} tier allows up to ${max} chars` +
+      (m ? `; ${m.route.split(" ")[1]} takes at least ${m.maxInputChars} chars (more on a model with a larger context window, up to ${METERED_MAX_INPUT_CHARS_CEILING}) and is priced from the body` : ""));
+    return Object.assign(e, { maxInputChars: max, inputChars: chars, hint: "trim-input" });
+  }
+  const suggestions = largerWindowSuggestions(model, chars);
+  const e = bad(`Input too large (${chars} chars). ${model ? `"${String(model).slice(0, 200)}" on ` : ""}${route} takes up to ${max} chars` +
+    ` (${tier.maxInputChars} on every model, more on a model with a larger context window, up to ${METERED_MAX_INPUT_CHARS_CEILING}).` +
+    ` Trim older turns or long tool results` +
+    (suggestions.length ? `, or name a model with a larger context window: ${suggestions.join(", ")}.` : ".") +
+    " Nothing was charged.");
+  return Object.assign(e, { maxInputChars: max, inputChars: chars, hint: "trim-input", ...(suggestions.length ? { suggestions } : {}) });
+}
+/** The metered chat body's input size refusal, read before any payment gate
+ *  (server.js), or null: under the cap, or a body the handler's own
+ *  validation refuses for another reason. Counts characters only. */
+export function meteredInputSizeRefusal(input) {
+  const tier = TIERS["v1-chat-metered"];
+  if (!tier || !input || typeof input !== "object" || !Array.isArray(input.messages)) return null;
+  let chars = 0;
+  try {
+    for (const m of input.messages) if (m && m.content != null) chars += contentChars(m.content).chars;
+  } catch { return null; }
+  if (chars <= tier.maxInputChars) return null;
+  const model = canonicalModel(input.model) || tier.defaultModel;
+  if (chars <= maxInputCharsFor("v1-chat-metered", model)) return null;
+  return inputTooLargeError("v1-chat-metered", model, chars);
+}
+
 export function validateRequest(input, tierSlug, { clamp = true } = {}) {
   const tier = TIERS[tierSlug];
   assertMeteredAvailable(tier);
@@ -1916,8 +2028,8 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
   // The metered route takes any id under its vendor prefixes; one the live
   // list does not carry is refused here (and before payment, server.js).
   if (tier.metered) {
-    const unknown = meteredModelRefusal(model);
-    if (unknown) { const e = bad(unknown); e.code = "unknown_model"; throw e; }
+    const unknown = meteredModelVerdict(model);
+    if (unknown) { const e = bad(unknown.message); e.code = "unknown_model"; e.suggestions = unknown.suggestions; throw e; }
   }
 
   const messages = input.messages;
@@ -1939,7 +2051,7 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
       totalImages += images;
     }
   }
-  if (totalChars > tier.maxInputChars) throw bad(`Input too large (${totalChars} chars). The ${tierSlug} tier allows up to ${tier.maxInputChars} chars${tierSlug === "v1-chat-metered" ? "" : "; POST /v1/metered/chat/completions takes up to 200k chars and is priced from the body"}`);
+  if (totalChars > tier.maxInputChars && totalChars > maxInputCharsFor(tierSlug, model)) throw inputTooLargeError(tierSlug, model, totalChars);
   if (totalImages > MAX_IMAGES) throw bad(`Too many images (${totalImages}). Maximum is ${MAX_IMAGES} per request`);
 
   // OpenAI's newer SDKs send max_completion_tokens (reasoning-model wire);

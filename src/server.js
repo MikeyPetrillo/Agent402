@@ -99,6 +99,7 @@ import { configureHowToCall, howToCall402Field, howToCallField } from "./how-to-
 import { gatewayCacheGate, commitGatewayCacheWrites } from "./gateway-cache-scope.js";
 import { startModelCatalogRefresh, modelCatalogWanted } from "./model-catalog.js";
 import { toolErrorFields } from "./tool-error-fields.js";
+import { createPrePaymentRefusalRecorder } from "./prepayment-refusal.js";
 import { shapeRefusal } from "./input-aliases.js";
 import { setSettlementOverrides } from "@x402/express";
 // Metered settlement ships DARK, like the upto scheme it rides on: it changes
@@ -554,7 +555,7 @@ import { LLM_GEMINI_TOOLS, GEMINI_PATH_BY_TIER } from "./tools/llm-gemini-kit.js
 import { refusalReason } from "./refusal-reason.js";
 import { setKnownProductKeys } from "./posthog.js";
 import { LLM_RESPONSES_TOOLS } from "./tools/llm-responses-kit.js";
-import { LLM_GATEWAY_TOOLS, TIERS, PRICED_BY_MODEL_NOTE, modelsList, promptCacheKey, promptCacheGetShared, promptCacheStore, GATEWAY_TIER_BY_PATH, embeddingsCacheKey, EMBEDDINGS_PATH, rerankCacheKey, RERANK_PATH, gatewayCreditsStatus, oxAlphaAvailable, probeOxAlphaAvailability, canonicalModel, meteredModelRefusal, OX_ROUTE, oxUpstreamIsFree, isFlatTier, METERED_MAX_QUOTE_USD } from "./tools/llm-gateway-kit.js";
+import { LLM_GATEWAY_TOOLS, TIERS, PRICED_BY_MODEL_NOTE, modelsList, promptCacheKey, promptCacheGetShared, promptCacheStore, GATEWAY_TIER_BY_PATH, embeddingsCacheKey, EMBEDDINGS_PATH, rerankCacheKey, RERANK_PATH, gatewayCreditsStatus, oxAlphaAvailable, probeOxAlphaAvailability, canonicalModel, meteredModelVerdict, meteredInputSizeRefusal, OX_ROUTE, oxUpstreamIsFree, isFlatTier, METERED_MAX_QUOTE_USD } from "./tools/llm-gateway-kit.js";
 // /v1/audio/speech stays behind OPENROUTER_TTS_ENABLED as a rollout gate:
 // @x402/express (v2.16) runs the handler first and settles only a <400
 // response, so a 502 is never charged — but an UNLISTED route returns no 402
@@ -7162,7 +7163,7 @@ const findCachePolicy = CACHEABLE_ROUTES[findCachePath];
 // calls fail in 1ms" without leaking PII — only slug + HTTP status + the error
 // message we already serialize to the response body. No body, no IP, no UA.
 // 4xx = caller sent bad input; 5xx = our tool or its upstream broke.
-function logToolError(slug, status, message, shape, synthetic, probe) {
+function logToolError(slug, status, message, shape, synthetic, probe, { prePayment = false } = {}) {
   // Every caller's message is scrubbed of configured secrets and credential-
   // bearing URLs before the log line, PostHog and the failure monitor read it.
   message = redactSecrets(message || "");
@@ -7182,11 +7183,13 @@ function logToolError(slug, status, message, shape, synthetic, probe) {
   const shapeStr = shape && Array.isArray(shape) && shape.length ? ` shape=[${shape.slice(0, 12).join(",")}]` : "";
   const synthStr = synthetic ? " synthetic=true" : "";
   const probeStr = probe ? " probe=true" : "";
-  if (!skipConsole) console.error(`[tool-error] ${klass} slug=${slug} status=${status}${shapeStr}${synthStr}${probeStr} msg=${message.slice(0, 200)}`);
+  // A refusal answered before any payment gate (no credential was asked for).
+  const prepayStr = prePayment ? " prepay=true" : "";
+  if (!skipConsole) console.error(`[tool-error] ${klass} slug=${slug} status=${status}${shapeStr}${synthStr}${probeStr}${prepayStr} msg=${message.slice(0, 200)}`);
   // PostHog mirrors the same payload as a "tool_error" event with slug/
   // status/errorClass/shape properties. Same privacy posture, a no-op when
   // POSTHOG_API_KEY is unset.
-  capturePostHogToolError({ slug, status, message, shape, synthetic, probe });
+  capturePostHogToolError({ slug, status, message, shape, synthetic, probe, prePayment });
   // The last 5xx message per slug, for /__operator/tool-failures.json.
   try { toolFailureMonitor().noteToolMessage(slug, status, message, { synthetic }); } catch { /* bookkeeping only */ }
 }
@@ -7229,6 +7232,12 @@ function isSyntheticRequest(req) {
   try { return !!(req && (ownTrue(req, "statusProbePow") || verifyHeartbeatToken(req.header("x-heartbeat-token")))); }
   catch { return false; }
 }
+// A /v1 input refusal answered BEFORE any payment gate records what a handler
+// 400 records, marked pre-payment (src/prepayment-refusal.js).
+const recordPrePaymentRefusal = createPrePaymentRefusalRecorder({
+  logToolError, recordToolCall, captureToolCall: capturePostHogToolCall,
+  isSynthetic: isSyntheticRequest, requestShape, redact: redactSecrets, refusalReason,
+});
 function requestShape(req) {
   // Return the top-level keys of body + query, deduped and bounded. Values
   // are never read — this is purely "what fields did the caller send", which
@@ -10015,13 +10024,36 @@ app.use((req, res, next) => {
   // folded above), so the variants are checked too.
   const def = CATALOG[`POST ${req.path}`];
   if (def?.slug !== "v1-chat-metered") return next();
-  let refusal = null;
+  const startedAt = Date.now();
+  let verdict = null, tooLarge = null;
   try {
-    const model = canonicalModel(handlerInputOf(req, def)?.model);
-    refusal = model ? meteredModelRefusal(model) : null;
+    const input = handlerInputOf(req, def);
+    const model = canonicalModel(input?.model);
+    verdict = model ? meteredModelVerdict(model) : null;
+    // An input over the model's character cap is refused here too, with the
+    // cap, the size read and models whose window takes it.
+    if (!verdict) tooLarge = meteredInputSizeRefusal(input);
   } catch { return next(); }
-  if (!refusal) return next();
-  return res.status(400).json({ error: { message: refusal, type: "invalid_request_error", code: "unknown_model" }, tool: def.slug });
+  if (verdict) {
+    recordPrePaymentRefusal(req, def.slug, 400, verdict.message, startedAt);
+    const suggestions = verdict.suggestions || [];
+    return res.status(400).json({
+      error: { message: verdict.message, type: "invalid_request_error", code: "unknown_model", ...(suggestions.length ? { suggestions } : {}) },
+      tool: def.slug,
+      ...(suggestions.length ? { suggestions, ...howToCallField(def, { bodyFields: { model: suggestions[0] } }) } : howToCallField(def)),
+    });
+  }
+  if (tooLarge) {
+    recordPrePaymentRefusal(req, def.slug, 400, tooLarge.message, startedAt);
+    const fields = toolErrorFields(tooLarge);
+    return res.status(400).json({
+      error: { message: tooLarge.message, type: "invalid_request_error", code: "input_too_large", ...fields },
+      tool: def.slug,
+      ...fields,
+      ...(fields.suggestions ? howToCallField(def, { bodyFields: { model: fields.suggestions[0] } }) : {}),
+    });
+  }
+  return next();
 });
 
 // Tempo push-transfer debts (src/tempo-push-debts.js), built with the Tempo
@@ -11895,7 +11927,9 @@ for (const tool of ALL_KIT) {
           example: tool.discovery?.input || {},
           // The same example as a ready-to-run request (src/how-to-call.js):
           // method, full URL and body, plus the other verb where it is served.
-          ...howToCallField(tool),
+          // An unknown model id gets the example retried with the closest
+          // served id the refusal suggests.
+          ...howToCallField(tool, err?.code === "unknown_model" && provenance.suggestions ? { bodyFields: { model: provenance.suggestions[0] } } : {}),
         });
       } else {
         res.status(status).json({ error: errorMessage, tool: tool.slug, ...provenance });

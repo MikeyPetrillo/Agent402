@@ -27,6 +27,8 @@ const CASES = [
   ['"generationConfig" must be an object', "wrong_type"],
   ['"parts" is capped at 64', "out_of_range"],
   ['Model "x" is not in the gateway allowlist. GET /v1/models lists every supported model and its tier.', "model_not_allowed"],
+  ['Model "deepseek/x" is not a chat model id the upstream serves, so this request cannot be served and was not priced. Nothing was charged.', "unknown_model"],
+  ["Input too large (205000 chars). /v1/metered/chat/completions takes up to 200000 chars. Nothing was charged.", "too_large"],
   ['Model "google/gemini-2.5-flash" is served by the v1-chat tier - call /v1/gemini (price $0.02/call) instead.', "model_wrong_tier"],
   ["This request was quoted at $0.001 but the body being served quotes $0.4. Nothing was charged; resend the request exactly as it should be served.", "quote_mismatch"],
   ["This request would cost $8.1000 metered, above the $2 per-call cap of /v1/metered/messages - lower max_tokens or the input.", "over_cap"],

@@ -141,7 +141,7 @@ export function posthogEnabled() {
 
 // Capture a tool-handler error as a PostHog event (slug, status, errorClass,
 // keys-only shape). Never blocks, never throws.
-export function capturePostHogToolError({ slug, status, message, shape, synthetic, probe }) {
+export function capturePostHogToolError({ slug, status, message, shape, synthetic, probe, prePayment = false }) {
   if (!active()) return;
   // Probe calls (a 4xx where the caller sent zero meaningful input keys) are
   // scanners/agents poking endpoints without arguments — discovery behavior,
@@ -170,6 +170,8 @@ export function capturePostHogToolError({ slug, status, message, shape, syntheti
     // calls — not real schema mismatches — and inflate the error rate
     // if counted alongside genuine caller mistakes.
     probe: !!probe,
+    // Answered before any payment gate: the buyer was never asked to pay.
+    ...(prePayment ? { prePayment: true } : {}),
   });
 }
 
@@ -202,7 +204,7 @@ export function telemetryKeyOf(tool, input) {
   } catch { return null; }
 }
 
-export function capturePostHogToolCall({ slug, latencyMs, cached, errored, status, synthetic, probe, payer, refusalReason, rail, inputKey }) {
+export function capturePostHogToolCall({ slug, latencyMs, cached, errored, status, synthetic, probe, payer, refusalReason, rail, inputKey, prePayment = false }) {
   if (!active()) return;
   if (ROLLED_UP_SLUG_RE.test(String(slug || ""))) {
     try {
@@ -237,6 +239,7 @@ export function capturePostHogToolCall({ slug, latencyMs, cached, errored, statu
     // The payment rail the request presented (src/payment-rail.js), so error
     // rate and latency split by x402 / MPP / credits / proof-of-work.
     ...(rail ? { rail } : {}),
+    ...(prePayment ? { prePayment: true } : {}),
   });
 }
 

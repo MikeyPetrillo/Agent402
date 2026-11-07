@@ -80,6 +80,7 @@ async function ensureSchema() {
     ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS status SMALLINT NOT NULL DEFAULT 0;
     ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS synthetic BOOLEAN NOT NULL DEFAULT FALSE;
     ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS probe BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS pre_payment BOOLEAN NOT NULL DEFAULT FALSE;
     CREATE INDEX IF NOT EXISTS tool_calls_ts_idx ON tool_calls (ts DESC);
     CREATE INDEX IF NOT EXISTS tool_calls_slug_ts_idx ON tool_calls (slug, ts DESC);
   `);
@@ -138,7 +139,9 @@ export async function initAnalyticsDb() {
 // status lets the dashboard distinguish "agent sent bad input" from "our tool
 // or its upstream is broken" — the same `errored: true` would otherwise hide
 // the difference. Defaults to 0 when not provided (older callers).
-export async function recordToolCall({ slug, latencyMs, cached, errored, status, synthetic, probe }) {
+// `prePayment`: a refusal answered before any payment gate (server.js
+// recordPrePaymentRefusal); the buyer was never asked to pay for it.
+export async function recordToolCall({ slug, latencyMs, cached, errored, status, synthetic, probe, prePayment = false }) {
   if (!ANALYTICS_URL || unavailable()) return;
   if (!slug) return;
   try {
@@ -152,8 +155,8 @@ export async function recordToolCall({ slug, latencyMs, cached, errored, status,
     if (!p) return;
     const statusInt = Math.max(0, Math.min(599, status | 0));
     await p.query(
-      "INSERT INTO tool_calls (slug, latency_ms, cached, errored, status, synthetic, probe) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-      [String(slug).slice(0, 128), Math.max(0, latencyMs | 0), !!cached, !!errored, statusInt, !!synthetic, !!probe]
+      "INSERT INTO tool_calls (slug, latency_ms, cached, errored, status, synthetic, probe, pre_payment) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+      [String(slug).slice(0, 128), Math.max(0, latencyMs | 0), !!cached, !!errored, statusInt, !!synthetic, !!probe, !!prePayment]
     );
   } catch (e) {
     // Swallow.
