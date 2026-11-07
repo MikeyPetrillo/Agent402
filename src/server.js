@@ -7177,7 +7177,7 @@ const findCachePolicy = CACHEABLE_ROUTES[findCachePath];
 // Pre-payment refusals are free to send: their console lines are sampled per
 // minute with one summary line for the rest (src/prepayment-refusal.js).
 const prePaymentLogSampler = createPrePaymentLogSampler({ perMinute: 20 });
-setInterval(() => prePaymentLogSampler.tick(), 15_000).unref();
+setInterval(contained("prepayment-log-sampler", () => prePaymentLogSampler.tick()), 15_000).unref();
 // Diagnostic log for tool errors. Lets us spot patterns like "100% of /api/whois
 // calls fail in 1ms" without leaking PII — only slug + HTTP status + the error
 // message we already serialize to the response body. No body, no IP, no UA.
