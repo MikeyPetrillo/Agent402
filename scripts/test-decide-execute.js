@@ -4,6 +4,7 @@
 //   node scripts/test-decide-execute.js
 
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { fileURLToPath } from "node:url";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -894,7 +895,7 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   const { isLongRunningSlug } = await import("../src/composite-spend-guard.js");
   const { tempoOfferedFor } = await import("../src/mpp-tempo.js");
   ok(isLongRunningSlug("decide-execute") && !tempoOfferedFor({ longRunning: isLongRunningSlug("decide-execute") }), "decide-execute is long-running, so no Tempo credential is offered for it");
-  const ROOT = new URL("..", import.meta.url).pathname;
+  const ROOT = fileURLToPath(new URL("..", import.meta.url));
   const sites = ["src/tools/decide-kit.js", "README.md", "src/blog.js", "src/decide-page.js", "src/plan-sketch.js", "wiki/Decide.md"];
   const bad = [];
   for (const rel of sites) {

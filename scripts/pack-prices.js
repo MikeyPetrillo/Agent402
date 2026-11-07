@@ -17,6 +17,7 @@
 // candidates still buys one answer; the extra attempts are our cost).
 //
 //   TARGET_URL=http://127.0.0.1:PORT node scripts/pack-prices.js [--write] [--quiet]
+import { pathToFileURL } from "node:url";
 import { readFileSync, writeFileSync } from "node:fs";
 import { SKILL_PACKS, PACK_PRICES } from "../src/skills.js";
 
@@ -75,4 +76,4 @@ async function main() {
   if (drift) { console.error(`\nFAIL: ${drift} pack price(s) off the rule. Run: TARGET_URL=... node scripts/pack-prices.js --write`); process.exit(1); }
   console.log("OK: every pack price follows the rule");
 }
-if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith("pack-prices.js")) main().catch((e) => { console.error(e); process.exit(2); });
+if ((process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) || process.argv[1]?.endsWith("pack-prices.js")) main().catch((e) => { console.error(e); process.exit(2); });

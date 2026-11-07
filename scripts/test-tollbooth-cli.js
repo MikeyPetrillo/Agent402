@@ -283,7 +283,7 @@ child.kill("SIGTERM"); facilitator.close();
   const dir = mkdtempSync(join(tmpdir(), "tb-symlink-"));
   mkdirSync(join(dir, "bin"));
   const link = join(dir, "bin", "agent402-tollbooth");
-  symlinkSync(new URL("../tollbooth/index.js", import.meta.url).pathname, link);
+  symlinkSync(fileURLToPath(new URL("../tollbooth/index.js", import.meta.url)), link);
 
   const child = spawn(process.execPath, [link], { env: { ...process.env, PORT: "0", TOLLBOOTH_SECRET: "t" }, stdio: ["ignore", "pipe", "pipe"] });
   let out = "";

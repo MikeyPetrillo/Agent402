@@ -7,6 +7,7 @@
 //
 //   node scripts/lib/state-fixture.mjs seed <dir> [salesN] [refundsN]
 // (run with STATE_DATABASE_URL unset; prints one JSON line of what it wrote)
+import { fileURLToPath } from "node:url";
 import { mkdirSync, writeFileSync, appendFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { bootStores, SQLITE_STORES } from "./state-stores.mjs";
@@ -82,7 +83,7 @@ export async function seedFixture(dir, { salesN = 600, refundsN = 260 } = {}) {
   return out;
 }
 
-const isMain = process.argv[1] && resolve(process.argv[1]) === new URL(import.meta.url).pathname;
+const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain && process.argv[2] === "seed") {
   const out = await seedFixture(process.argv[3], { salesN: Number(process.argv[4]) || 600, refundsN: Number(process.argv[5]) || 260 });
   console.log(JSON.stringify(out));

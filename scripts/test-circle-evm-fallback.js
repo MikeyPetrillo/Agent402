@@ -20,6 +20,7 @@
 // Part 1 drives the real hook and the real client against fetch stubs; part 2
 // boots a paid server against stub facilitators to prove the caller path.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { fileURLToPath } from "node:url";
 import { strict as assert } from "node:assert";
 import { randomBytes } from "node:crypto";
 import { inspect } from "node:util";
@@ -497,7 +498,7 @@ async function boot(port, extraEnv) {
   const env = { ...process.env };
   for (const k of ["STATE_DATABASE_URL", "REDIS_URL", "SOLVADOR_KEY", "CIRCLE_FACILITATOR_API_KEY", "CIRCLE_FACILITATOR_EVM_FALLBACK"]) delete env[k];
   const proc = spawn(process.execPath, ["--import", preload, "src/server.js"], {
-    cwd: new URL("..", import.meta.url).pathname,
+    cwd: fileURLToPath(new URL("..", import.meta.url)),
     env: {
       ...env, PORT: String(port), FREE_MODE: "",
       WALLET_ADDRESS: TREASURY, NETWORK: "base", PAYMENT_NETWORKS: "base,polygon",

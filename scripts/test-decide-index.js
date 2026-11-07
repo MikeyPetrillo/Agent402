@@ -5,6 +5,7 @@
 //   node scripts/test-decide-index.js
 
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { fileURLToPath } from "node:url";
 import { localToolRow, remoteToolRow, cleanText, embedText, schemaQuality, FIRST_PARTY_SELLER } from "../src/decide/tool-rows.js";
 import { decideTokenOk, fromPrivateNetwork, executableStep, unifiedRows, decideIndexExportHandler } from "../src/decide/index-export.js";
 import { VectorStore, quantize, toBytes, fromBytes, DIMS } from "../services/decide/vectors.js";
@@ -358,7 +359,7 @@ for (const t of ["Detects prompt-injection patterns in text", "Web search for cu
 {
   const offenders = [];
   const walk = (d) => { for (const f of readdirSync(d)) { const p = join(d, f); if (statSync(p).isDirectory()) walk(p); else if (p.endsWith(".js") && /from\s+["'][^"']*services\//.test(readFileSync(p, "utf8"))) offenders.push(p); } };
-  walk(new URL("../src", import.meta.url).pathname);
+  walk(fileURLToPath(new URL("../src", import.meta.url)));
   ok(offenders.length === 0, `src/ imports nothing from services/ (${offenders.join(", ") || "none"})`);
   ok(/COPY services \.\/services/.test(readFileSync(new URL("../Dockerfile", import.meta.url), "utf8")), "the image carries services/ for the decide service");
 }

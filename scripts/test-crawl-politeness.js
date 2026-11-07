@@ -12,7 +12,6 @@ import { childJson } from "./lib/child-json.js";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { originsDueThisCycle, operatorKey } from "../src/x402-index.js";
 
 let pass = 0, fail = 0;
@@ -111,7 +110,7 @@ ok(/export function startCrawler\(opts = \{\}\) \{[\s\S]*?loadCrawlCycle\(\);/.t
    "the crawler loads the stored rotation index at boot");
 const dir = mkdtempSync(join(tmpdir(), "crawl-cycle-"));
 const cycleFile = join(dir, "x402-crawl-cycle.json");
-const moduleUrl = pathToFileURL(new URL("../src/x402-index.js", import.meta.url).pathname).href;
+const moduleUrl = new URL("../src/x402-index.js", import.meta.url).href;
 // One process: load the store, run `advances` cycles, print the index. When
 // `nested` is given it runs as a second process between the load and the
 // advance, the shape of two containers taking the crawl lease in turn.

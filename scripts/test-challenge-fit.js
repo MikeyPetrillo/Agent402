@@ -30,6 +30,7 @@
 //     extension are untouched.
 //   node scripts/test-challenge-fit.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { fileURLToPath } from "node:url";
 import { createServer, request } from "node:http";
 import { spawn } from "node:child_process";
 import { getFreePorts } from "./lib/free-port.js";
@@ -38,7 +39,7 @@ import { CORS_EXPOSE_HEADERS } from "../src/cors.js";
 import { splitChallenges, evmChainOf, mergeEvmChallenges } from "./lib/mpp-challenge-merge.js";
 import { Challenge, PaymentRequest } from "mppx";
 
-const root = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
+const root = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/, "");
 // The ceiling test-challenge-size enforces, and the headroom a rail change
 // must leave under it on the worst route.
 const MAX_TOTAL_HEADER_BYTES = 16_200;

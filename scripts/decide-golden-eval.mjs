@@ -8,6 +8,7 @@
 //
 //   TARGET_URL=http://127.0.0.1:PORT node scripts/decide-golden-eval.mjs [--depth plan] [--out file.json]
 
+import { pathToFileURL } from "node:url";
 import { writeFileSync } from "node:fs";
 import { validateParams } from "../src/decide/params.js";
 
@@ -120,4 +121,4 @@ async function main() {
   if (OUT) writeFileSync(OUT, JSON.stringify({ summary, rows }, null, 2));
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) main().catch((e) => { console.error(e); process.exit(1); });
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main().catch((e) => { console.error(e); process.exit(1); });

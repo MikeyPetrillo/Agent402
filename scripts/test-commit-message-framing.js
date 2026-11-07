@@ -22,6 +22,7 @@
 // string match found one of them. And every rule is pinned in BOTH
 // directions below, because a rule that flags honest engineering prose gets
 // suppressed by the next author and becomes decoration.
+import { pathToFileURL } from "node:url";
 import { execFileSync } from "node:child_process";
 
 // Naming a seller is not framing: "a seller's middleware tolerated it" is
@@ -175,7 +176,7 @@ const MUST_PASS = [
   ["Set the rotated ALCHEMY_API_KEY on Railway and delete the old one", "a rotation performed, not declined"],
 ];
 
-const isMain = import.meta.url === `file://${process.argv[1]}`;
+const isMain = Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMain) {
   let pass = 0, failed = 0;
   const ok = (c, m) => { if (c) { pass++; } else { failed++; console.error(`FAIL - ${m}`); } };

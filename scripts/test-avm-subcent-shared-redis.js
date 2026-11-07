@@ -6,6 +6,7 @@
 //
 //   REDIS_URL=redis://127.0.0.1:6379 node scripts/test-avm-subcent-shared-redis.js
 // Deliberately does not skip without REDIS_URL (CI provides the service container).
+import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { childJson } from "./lib/child-json.js";
 
@@ -21,7 +22,7 @@ const req = { scheme: "exact", network: "algorand:mainnet", amount: "1000", payT
 
 // One child process = one container: scripts/lib/avm-subcent-driver.js runs one
 // named operation (data only, never code) and prints its JSON result as one line.
-const DRIVER = new URL("./lib/avm-subcent-driver.js", import.meta.url).pathname;
+const DRIVER = fileURLToPath(new URL("./lib/avm-subcent-driver.js", import.meta.url));
 function container(op, env = {}) {
   return new Promise((resolve) => {
     const p = spawn(process.execPath, [DRIVER, JSON.stringify({ op, payTo: PAYTO, req })], { env: { ...process.env, SHARED_LIMITS_PREFIX: PREFIX, SHARED_LIMITS: "on", ...env }, stdio: ["ignore", "pipe", "pipe"] });

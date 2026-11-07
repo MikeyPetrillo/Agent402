@@ -9,6 +9,7 @@
 //   node scripts/why-wiki.js --check    exit 1 when the file differs
 //
 // scripts/test-why-wiki.js runs --check in CI.
+import { pathToFileURL } from "node:url";
 import { readFileSync, writeFileSync } from "node:fs";
 import { WHY_POINTS } from "../src/why.js";
 
@@ -44,7 +45,7 @@ Add the hosted MCP connector, pay per call in USDC from a wallet, or buy a finis
   return `${head}\n${points}\n${tail}`;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const want = whyWikiMarkdown();
   if (process.argv.includes("--write")) {
     writeFileSync(FILE, want);
