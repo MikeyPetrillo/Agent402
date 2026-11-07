@@ -2,6 +2,13 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const ENTRIES = [
   {
+    date: "2026-11-07",
+    title: "onchain-sql price",
+    items: [
+      "Tools: onchain-sql is $0.030 a call (was $0.040), and a call still sends the query service at most 3 queries. The onchain-analyst pack follows the tool's price.",
+    ],
+  },
+  {
     date: "2026-11-06",
     title: "Ink rail",
     items: [

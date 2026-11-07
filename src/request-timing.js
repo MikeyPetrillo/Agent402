@@ -46,6 +46,17 @@ let fetchInstalled = false;
  *  mark it (the failure monitor reads `synthetic`); timing reads only its own field. */
 export function currentRequestScope() { return als.getStore() || null; }
 
+/** Run `fn(status, scope)` once the current request's response has ended,
+ *  with its FINAL status (after any settlement turned it into a 402), or 499
+ *  when the connection closed before the response finished. False outside a
+ *  request. A throw in `fn` is swallowed: bookkeeping never fails a response. */
+export function onFinalResponse(fn) {
+  const store = als.getStore();
+  if (!store || typeof fn !== "function") return false;
+  (store.finalHooks ||= []).push(fn);
+  return true;
+}
+
 // Catalog routes are RESERVED: they always get their own ring, so a caller
 // minting arbitrary paths can fill the free slots but never push a paid route
 // into "(other)".
@@ -106,6 +117,10 @@ export function requestTimingMiddleware(keyOf, isPaid = () => false) {
       if (ended.length > ENDED_RING) ended.shift();
       recordTiming(key, performance.now() - t0, store.upstreamMs, reserved);
       noteResponse(res.headersSent ? res.statusCode : 499, paid, Date.now(), !!res.locals?.shed);
+      if (store.finalHooks) {
+        const status = res.writableFinished ? res.statusCode : 499;
+        for (const fn of store.finalHooks.splice(0)) { try { fn(status, store); } catch { /* bookkeeping only */ } }
+      }
     };
     res.on("finish", end);
     res.on("close", end);

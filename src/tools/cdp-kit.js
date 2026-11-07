@@ -12,7 +12,7 @@
 //                            a shared per-account CDP budget)
 //   onramp-link      $0.001  single-use Coinbase Onramp URL that lets a human
 //                            fund an agent's wallet with a card / Apple Pay
-//   onchain-sql      $0.040  read-only ClickHouse-dialect SQL over Coinbase's
+//   onchain-sql      $0.030  read-only ClickHouse-dialect SQL over Coinbase's
 //                            indexed DECODED chain data (Base events/txs/
 //                            blocks/user-ops/builder-code attributions,
 //                            Solana token instructions) — no indexer to run
@@ -27,6 +27,8 @@ import { createPrivateKey, createSign, randomBytes, sign as edSign, createHash }
 import { redactSecrets } from "./redact.js";
 import { partialFields } from "../partial-answer.js";
 import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, currentBudget, isUpstreamFailure, OPTIONAL_READ_FLOOR_MS } from "../upstream-deadline.js";
+import { onFinalResponse } from "../request-timing.js";
+import { noteSqlCall } from "../sql-query-stats.js";
 
 const CDP_HOST = "api.cdp.coinbase.com";
 
@@ -971,7 +973,7 @@ export const CDP_TOOLS = [
     name: "Onchain SQL (query Base with SQL)",
     slug: "onchain-sql",
     category: "wallet",
-    price: "$0.040",
+    price: "$0.030",
     description:
       "Run read-only SQL against indexed, DECODED blockchain data - base.events (decoded logs with parameters), base.transactions, base.blocks, base.decoded_user_operations, base.transaction_attributions (builder codes), plus solana.instructions (filter it by block_time). ClickHouse-dialect SELECTs, server-side grammar validation, up to 1,000 rows per call (a larger result is cut at 1,000 and says so). Ask Base anything - token flows, event analytics, gas studies - in one call, no indexer to run.",
     tags: [...SHARED_TAGS, "sql", "analytics", "onchain-data", "base", "events", "clickhouse", "data-science"],
@@ -1012,7 +1014,7 @@ export const CDP_TOOLS = [
       // One query budget for the call: the buyer's query, its retry, and
       // every recovery run spend it where they are sent.
       const queries = newQueryBudget();
-      let res;
+      let res, budgetSpent = false;
       try {
         try {
           try { res = await cdpFetch("POST", "/platform/v2/data/query/run", body, { idempotent: true, buyerQuery: true, lineOffset: capped.lineOffset, queries }); }
@@ -1092,7 +1094,19 @@ export const CDP_TOOLS = [
             }
           }
         }
-      } finally { buyerQueriesInflight--; if (queries.sent > maxQueriesPerCall) maxQueriesPerCall = queries.sent; }
+      } catch (e) {
+        if (e?.queryBudgetSpent) budgetSpent = true;
+        throw e;
+      } finally {
+        buyerQueriesInflight--;
+        if (queries.sent > maxQueriesPerCall) maxQueriesPerCall = queries.sent;
+        // Counted on the request's FINAL response (src/sql-query-stats.js): a
+        // query count only for a final 200, a budget refusal whenever its
+        // answer finished. A call outside a request (the economy panel's
+        // refresh) is not counted.
+        const used = queries.sent;
+        onFinalResponse((status, scope) => noteSqlCall({ status, queries: used, budgetSpent, synthetic: !!scope?.synthetic }));
+      }
       const rows = res?.result ?? res?.rows ?? res?.data ?? res;
       const all = Array.isArray(rows) ? rows : [];
       const list = all.length > SQL_MAX_ROWS ? all.slice(0, SQL_MAX_ROWS) : all;
