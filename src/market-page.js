@@ -258,6 +258,24 @@ export const CHAIN_PAGES = {
     honestyNetworkPhrase: "the Arc network",
     sellExtraHtml: `Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site.`,
   },
+  ink: {
+    chainName: "Ink",
+    // Ink's gas is paid in ETH.
+    ticker: "ETH",
+    tickerLabel: "INK · MAINNET",
+    caip2: "eip155:57073",
+    asset: "USDC",
+    settledBy: "an x402 facilitator",
+    explorerUrl: "explorer.inkonchain.com",
+    explorerWalletUrl: (wallet) => `https://explorer.inkonchain.com/address/${wallet}?tab=token_transfers`,
+    networkParam: "ink",
+    acceptNetwork: "eip155:57073",
+    // Ink mainnet CAIP-2 is "eip155:57073"; its testnet is a different chain
+    // id, so an exact match can't be fooled.
+    isNetwork: (n) => n === "eip155:57073",
+    honestyNetworkPhrase: "the Ink network",
+    sellExtraHtml: `Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme (native USDC, EIP-712 domain <code>"USDC"</code>, version <code>"2"</code>), or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site.`,
+  },
   stellar: {
     chainName: "Stellar",
     ticker: "XLM",
@@ -322,27 +340,8 @@ export const CHAIN_PAGES = {
 // rail in the live offer; then the entry joins CHAIN_PAGES and every surface
 // that iterates it at request time (nav, sitemap, the /<chain> page) picks it
 // up. A gated rail that moves into RAILS (src/rails.js) has its page from boot,
-// so graduating needs no edit here. Arc graduated into CHAIN_PAGES.
-export const GATED_CHAIN_PAGES = {
-  ink: {
-    chainName: "Ink",
-    // Ink's gas is paid in ETH.
-    ticker: "ETH",
-    tickerLabel: "INK · MAINNET",
-    caip2: "eip155:57073",
-    asset: "USDC",
-    settledBy: "an x402 facilitator",
-    explorerUrl: "explorer.inkonchain.com",
-    explorerWalletUrl: (wallet) => `https://explorer.inkonchain.com/address/${wallet}?tab=token_transfers`,
-    networkParam: "ink",
-    acceptNetwork: "eip155:57073",
-    // Ink mainnet CAIP-2 is "eip155:57073"; its testnet is a different chain
-    // id, so an exact match can't be fooled.
-    isNetwork: (n) => n === "eip155:57073",
-    honestyNetworkPhrase: "the Ink network",
-    sellExtraHtml: `Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme (native USDC, EIP-712 domain <code>"USDC"</code>, version <code>"2"</code>), or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site.`,
-  },
-};
+// so graduating needs no edit here. Arc and Ink graduated into CHAIN_PAGES.
+export const GATED_CHAIN_PAGES = {};
 // The joined page takes its place in RAILS order (the nav, the sitemap and
 // llms.txt iterate CHAIN_PAGES), the order a graduated rail is listed in.
 const joinGatedChainPage = (caip2) => {

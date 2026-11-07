@@ -581,21 +581,60 @@ export function dedupeByAccession(hits) {
 // 2026-10-30: two empty reads, then hits), so an empty first page is read up to
 // EFTS_EMPTY_READS times in all, pausing longer before each re-read. A search
 // that is really empty costs EFTS_EMPTY_READS reads; a page with hits costs one.
+//
+// The index can also keep answering one URL empty while it has hits (CI,
+// 2026-10-30 and 2026-11-06, and a local run on 2026-11-06: four empty reads
+// of one URL while the same search under another URL had well over a thousand
+// hits), or serve empty pages for every query. So the last re-read asks the
+// same search under another URL (an explicit first-page offset, which changes
+// nothing in the answer), and an answer that is still empty is believed only
+// after one confirming read of a control query that always has hits (annual
+// reports filed in the last year): when the control has hits the index is
+// answering and the empty answer stands; when the control is empty too, or
+// cannot be read, the search answers a 503 saying the upstream search is not
+// answering, which is never charged. A really empty search costs one read more.
 export const EFTS_EMPTY_READS = 4;
-export async function eftsSearchWith(params, { getJson = edgarGetJson, pauseMs = 750, reads = EFTS_EMPTY_READS } = {}) {
+export function eftsControlParams(now = Date.now()) {
+  return { forms: "10-K", startdt: isoDate(now - 365 * 86400 * 1000), enddt: isoDate(now) };
+}
+const eftsEmpty = (j) => !(j?.hits?.hits?.length) && !(j?.hits?.total?.value);
+function eftsNotAnswering(detail) {
+  return Object.assign(bad(`SEC EDGAR full-text search is not answering (${detail}); try again later`, 503), { upstream: "EDGAR", eftsNotAnswering: true });
+}
+export async function eftsSearchWith(params, { getJson = edgarGetJson, pauseMs = 750, reads = EFTS_EMPTY_READS, budget = currentBudget(), control = eftsControlParams } = {}) {
   const url = eftsUrl(params);
   let last = await getJson(url);
-  for (let i = 1; i < reads; i++) {
-    const empty = !(last?.hits?.hits?.length) && !(last?.hits?.total?.value);
-    if (!empty || params.from) return last;
-    await new Promise((r) => setTimeout(r, pauseMs * i));
+  // A later page that is empty ends paging: it is not re-read or confirmed.
+  if (!eftsEmpty(last) || params.from) return last;
+  const left = () => (budget ? budget.remaining() : Infinity);
+  const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+  // Same-URL re-reads leave room in the handler budget for the other-URL read
+  // and the confirming read.
+  for (let i = 1; i < reads - 1; i++) {
+    if (left() < pauseMs * i + 3 * EDGAR_RETRY_MIN_LEFT_MS) break;
+    await pause(pauseMs * i);
     last = await getJson(url);
+    if (!eftsEmpty(last)) return last;
   }
+  if (reads > 1 && left() >= 2 * EDGAR_RETRY_MIN_LEFT_MS) {
+    if (left() >= pauseMs * (reads - 1) + 2 * EDGAR_RETRY_MIN_LEFT_MS) await pause(pauseMs * (reads - 1));
+    last = await getJson(`${url}&from=0`);
+    if (!eftsEmpty(last)) return last;
+  }
+  if (budget && budget.remaining() < EDGAR_RETRY_MIN_LEFT_MS) throw eftsNotAnswering("an empty answer could not be confirmed in time");
+  let check;
+  try { check = await getJson(eftsUrl(typeof control === "function" ? control() : control)); }
+  catch { throw eftsNotAnswering("the confirming read failed"); }
+  if (eftsEmpty(check)) throw eftsNotAnswering("a query that always has results came back empty");
   return last;
 }
 
+// Tests only: the reader every eftsSearch caller goes through (null restores
+// the real one). The stub reads with no pause between re-reads.
+let eftsTestReader = null;
+export function _setEftsReaderForTest(fn) { eftsTestReader = fn || null; }
 async function eftsSearch(params) {
-  return eftsSearchWith(params);
+  return eftsTestReader ? eftsSearchWith(params, { getJson: eftsTestReader, pauseMs: 0, budget: null }) : eftsSearchWith(params);
 }
 
 function eftsUrl({ q, forms, ciks, startdt, enddt, locationCode, from = 0 }) {

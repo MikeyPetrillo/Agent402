@@ -148,6 +148,6 @@ dossier, fund, SEC filing, domain audit, token risk, recall, insider) run
 $0.60 to $2.00 over x402 or MPP, or $2 to $5 by card at
 https://agent402.tools/reports, where the price includes payment processing.
 Networks: Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei,
-Optimism, Arc, Stellar and Algorand (USDC), plus Robinhood Chain (USDG) - 13 in
+Optimism, Arc, Ink, Stellar and Algorand (USDC), plus Robinhood Chain (USDG) - 14 in
 total. MPP (Machine Payments Protocol) is accepted on the same 402 (Base/Celo,
 or natively on Tempo).

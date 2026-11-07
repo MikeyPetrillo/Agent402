@@ -51,7 +51,7 @@ export const EVM_LOGS_PUBLICS = Object.freeze({
   // Refuses 10,000-block ranges; serves 4,900. A rate-limit answer cools it.
   arc: [{ url: "https://rpc.mainnet.arc.io", maxRange: 4_900 }],
   // rpc-qnd serves 10,000-block ranges, rpc-gel 1,000 (both stated in their
-  // refusals, 2026-11-06). Read only once Ink is active (src/revenue-live.js GATED_EVM).
+  // refusals, 2026-11-06).
   ink: [{ url: "https://rpc-qnd.inkonchain.com", maxRange: 9_000 }, { url: "https://rpc-gel.inkonchain.com", maxRange: 1_000 }],
 });
 

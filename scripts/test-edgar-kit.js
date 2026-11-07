@@ -58,8 +58,29 @@ const ok = (c, m) => { if (c) console.log(`ok - ${m}`); else { assertFail++; con
   const r1 = await eftsSearchWith({ forms: "S-1" }, { getJson: reader([empty, full]), pauseMs: 0 });
   ok(calls.length === 2 && calls[0] === calls[1] && r1.hits.hits.length === 2, "an empty first page is read again with the same URL, and the second answer is used");
   calls = [];
-  const r2 = await eftsSearchWith({ forms: "S-1" }, { getJson: reader([empty, empty, empty, empty]), pauseMs: 0 });
-  ok(calls.length === 4 && r2.hits.hits.length === 0, "a search that is empty on every read answers empty after the bounded reads");
+  const r2 = await eftsSearchWith({ forms: "S-1" }, { getJson: reader([empty, empty, empty, empty, full]), pauseMs: 0, budget: null });
+  ok(calls.length === 5 && r2.hits.hits.length === 0 && calls[4] !== calls[0] && /forms=10-K/.test(calls[4]), "a search empty on every read answers empty once a control query confirms the index is answering");
+  ok(calls[1] === calls[0] && calls[2] === calls[0] && calls[3] === `${calls[0]}&from=0`, "the last re-read asks the same search under another URL (explicit first-page offset)");
+  calls = [];
+  const rAlt = await eftsSearchWith({ forms: "S-1" }, { getJson: reader([empty, empty, empty, full]), pauseMs: 0, budget: null });
+  ok(calls.length === 4 && rAlt.hits.hits.length === 2, "hits under the other URL are the answer, with no control read (one URL answering empty)");
+  calls = [];
+  let dead = null;
+  try { await eftsSearchWith({ forms: "S-1" }, { getJson: reader([empty, empty, empty, empty, empty]), pauseMs: 0, budget: null }); } catch (e) { dead = e; }
+  ok(calls.length === 5 && dead?.statusCode === 503 && /not answering/.test(dead?.message || ""), `when the control query is empty too the search answers a 503, never a confident empty (${dead?.statusCode} ${dead?.message})`);
+  calls = [];
+  dead = null;
+  const throwing = async (url) => { calls.push(url); if (calls.length === 5) throw Object.assign(new Error("EDGAR upstream HTTP 500"), { statusCode: 502, upstreamStatus: 500 }); return empty; };
+  try { await eftsSearchWith({ forms: "S-1" }, { getJson: throwing, pauseMs: 0, budget: null }); } catch (e) { dead = e; }
+  ok(dead?.statusCode === 503 && /not answering/.test(dead?.message || ""), "a control read that fails also answers the 503");
+  calls = [];
+  dead = null;
+  try { await eftsSearchWith({ forms: "S-1" }, { getJson: reader([empty, full]), pauseMs: 0, budget: { remaining: () => 5_000 } }); } catch (e) { dead = e; }
+  ok(calls.length === 2 && !dead, `with little budget left the re-reads stop early and the confirming read still runs (${calls.length} reads)`);
+  calls = [];
+  dead = null;
+  try { await eftsSearchWith({ forms: "S-1" }, { getJson: reader([empty, full]), pauseMs: 0, budget: { remaining: () => 1_000 } }); } catch (e) { dead = e; }
+  ok(calls.length === 1 && dead?.statusCode === 503, "with no budget left to confirm, an empty answer is a 503, not a confident empty");
   calls = [];
   const r3 = await eftsSearchWith({ forms: "S-1" }, { getJson: reader([empty, empty, full]), pauseMs: 0 });
   ok(calls.length === 3 && r3.hits.hits.length === 2, "an empty answer twice, then hits, returns the hits (the 2026-10-30 CI case)");
@@ -69,6 +90,48 @@ const ok = (c, m) => { if (c) console.log(`ok - ${m}`); else { assertFail++; con
   calls = [];
   await eftsSearchWith({ forms: "S-1", from: 100 }, { getJson: reader([empty]), pauseMs: 0 });
   ok(calls.length === 1 && /from=100/.test(calls[0]), "a later empty page ends paging without a second read");
+}
+
+// --- every eftsSearch caller, through the shared reader: truly empty, flaky
+// empty then hits, and the index serving empty pages (offline, stubbed) ---
+{
+  const kit = await import("../src/tools/edgar-kit.js");
+  const { probeInsiderFilings } = await import("../src/tools/insider-flow-kit.js");
+  const { probeHolders, probe13G } = await import("../src/tools/ticker-pack-kit.js");
+  const empty = { hits: { total: { value: 0 }, hits: [] } };
+  const CTRL = { hits: { total: { value: 9000 }, hits: [{ _id: "0000000000-26-000001:x.htm", _source: { form: "10-K" } }] } };
+  const ISSUER = "0000320193", OWNER = "0001214128";
+  const hit = (form, ciks, id = "0001127602-26-000001:doc.htm") => ({ _id: id, _source: { form, root_forms: [form], ciks, display_names: ciks.map((c) => `BERKSHIRE HATHAWAY INC (CIK ${c})`), file_date: "2026-11-01", period_ending: "2026-09-30", adsh: id.split(":")[0] } });
+  const hitsOf = (h) => ({ hits: { total: { value: 1 }, hits: [h] } });
+  // [label, run(), its hits page, check on the answer with hits]
+  const callers = [
+    ["edgar-search", () => h("edgar-search")({ q: "going concern", forms: "10-Q", days: 90, limit: 5 }), hitsOf(hit("10-Q", [ISSUER])), (r) => r.hits.length === 1],
+    ["edgar-recent-ipos (recent filings)", () => h("edgar-recent-ipos")({ form: "S-1", days: 30, limit: 5 }), hitsOf(hit("S-1", [ISSUER])), (r) => r.filings.length === 1],
+    ["edgar-insider-trades", () => h("edgar-insider-trades")({ cik: ISSUER, days: 90, limit: 5 }), hitsOf(hit("4", [OWNER, ISSUER])), (r) => r.trades.length === 1],
+    ["13F manager resolve", () => kit.resolveManager({ name: "Berkshire Hathaway" }), hitsOf(hit("13F-HR", ["0001067983"])), (r) => r.cik === "0001067983"],
+    ["insider flow probe", () => probeInsiderFilings({ cik: ISSUER, days: 90 }), hitsOf(hit("4", [OWNER, ISSUER])), (r) => r.filings.length === 1],
+    ["ticker pack 13F holders", () => probeHolders({ name: "Apple Inc.", fetchImpl: async () => { throw new Error("no fetch in this test"); } }), hitsOf(hit("13F-HR", ["0001067983"], "0000950123-26-000001:")), (r) => r != null],
+    ["ticker pack 13G", () => probe13G({ cik: ISSUER, fetchText: async () => { throw new Error("no fetch in this test"); } }), hitsOf(hit("SCHEDULE 13G", [OWNER, ISSUER], "0000950123-26-000002:legacy.htm")), (r) => r != null],
+  ];
+  const run = async (fn) => { try { return { r: await fn() }; } catch (e) { return { e }; } };
+  for (const [label, fn, page, check] of callers) {
+    // Truly empty: four empty reads, the control has hits -> the empty answer stands (no 5xx).
+    let n = 0, ctl = 0;
+    kit._setEftsReaderForTest(async (url) => { n++; if (/forms=10-K&/.test(url) && !/q=/.test(url) && n > 4) { ctl++; return CTRL; } return empty; });
+    let out = await run(fn);
+    ok(ctl === 1 && !(out.e?.statusCode >= 500), `${label}: truly empty is confirmed by one control read and is not a 5xx (${out.e ? out.e.statusCode + " " + out.e.message : "answered"})`);
+    // Flaky: two empty reads, then hits -> the hits, no control read.
+    n = 0; ctl = 0;
+    kit._setEftsReaderForTest(async (url) => { n++; if (/forms=10-K&/.test(url) && !/q=/.test(url) && n > 4) { ctl++; return CTRL; } return n <= 2 ? empty : page; });
+    out = await run(fn);
+    ok(!out.e && ctl === 0 && check(out.r), `${label}: empty twice then hits answers the hits without a control read (${out.e ? out.e.statusCode + " " + out.e.message : "ok"})`);
+    // Index dead: every read empty, the control too -> a 503 saying the upstream search is not answering.
+    n = 0;
+    kit._setEftsReaderForTest(async () => { n++; return empty; });
+    out = await run(fn);
+    ok(out.e?.statusCode === 503 && /not answering/.test(out.e?.message || "") && n === 5, `${label}: an index serving empty pages answers a 503, never a confident empty (${out.e ? out.e.statusCode : "answered"}, ${n} reads)`);
+  }
+  kit._setEftsReaderForTest(null);
 }
 
 // --- deterministic validation (no network) ---

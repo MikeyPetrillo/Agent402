@@ -92,6 +92,23 @@ const nextNonce = () => String(++seq);
   ok((await paymentReplayKeyAsync(fakeReq({ "x-payment": evm }))) === paymentReplayKey(fakeReq({ "x-payment": evm })), "an EVM payment keys exactly as before");
   const guard = createReplayGuard();
   ok((await guard.begin(ka)) === "ok" && (await guard.begin(kb)) === "inflight", "the replay guard refuses the re-encoded copy while the first runs");
+
+  // Spellings the XDR reader decodes to the same bytes (characters outside the
+  // alphabet, URL-safe alphabet, a tail after "="), one padded past the
+  // envelope's former text cap: the same signed entry, the same identity.
+  const per = Math.ceil(40_000 / a.length);
+  const spellings = [
+    [...a].map((ch) => ch + ".".repeat(per)).join(""),
+    a.replace(/\+/g, "-").replace(/\//g, "_"),
+    (a.includes("=") ? a : a + "=") + "=QUJD".repeat(500),
+  ];
+  ok(spellings[0].length > 32_768 && spellings.every((s) => Buffer.from(s, "base64").equals(Buffer.from(a, "base64"))), "padding: each spelling decodes to the envelope's bytes, one past the former text cap");
+  const ep = await Promise.all(spellings.map((s) => stellarAuthorizationsOf(payloadOf(s))));
+  ok(ep.every((e) => JSON.stringify(e) === JSON.stringify(ea)), "padding: every spelling reads the same signed entry");
+  ok((await Promise.all(spellings.map((s) => stellarSignedPaymentOf(payloadOf(s), REQ)))).every((x) => x && x.payer === buyer), "padding: every spelling reads as the same signed payment");
+  const kp = await Promise.all(spellings.map((s) => paymentReplayKeyAsync(fakeReq({ "payment-signature": header(s) }))));
+  ok(kp.every((k) => String(k).startsWith("s2:") && k.split(":")[1] === ka.split(":")[1]), "padding: every spelling keys to the same replay identity");
+  ok((await Promise.all(kp.map((k) => guard.begin(k)))).every((r) => r === "inflight"), "padding: the replay guard refuses every padded copy while the first runs");
 }
 
 // ---- The s2: replay key in ONE process, no shared store ----------------------

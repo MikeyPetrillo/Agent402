@@ -869,6 +869,31 @@ jobs:
               ;;
           esac
 
+      # Live revenue snapshot (src/revenue-live.js): one word on
+      # /api/gateway-status. stale (past its period plus grace, or missing an
+      # offered rail past the grace) pages; fresh and due close; cold and
+      # unknown do neither.
+      - name: Live revenue read check (alarm when the snapshot is stale)
+        if: always()
+        continue-on-error: true
+        run: |
+          WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.revenueLive.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "revenue live: $WORD"
+          TITLE="Live revenue read is stale"
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          case "$WORD" in
+            stale)
+              if [ -z "$OPEN" ]; then
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports revenueLive.status=stale: the live revenue snapshot (/api/revenue asOf) is past its refresh period and grace, or misses a rail that is offered. Read /api/revenue freshness and the server log for the scan; a failed scan retries after a short backoff. Auto-closes when the word reads fresh or due." >/dev/null 2>&1 || echo "issue create failed"
+              fi
+              ;;
+            fresh|due)
+              if [ -n "$OPEN" ]; then
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: revenueLive reads $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+          esac
+
       # Refunds owed (src/refund-ledger.js): one word on /api/gateway-status.
       # owed (any buyer's debt past a 15 min grace) / aging / stuck page; ok
       # closes; unknown does neither. The status Worker runs the same check

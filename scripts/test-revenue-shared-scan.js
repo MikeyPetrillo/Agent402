@@ -29,14 +29,23 @@ ok(cad.cadenceWords(4 * H) === "every 4 hours" && cad.cadenceWords(H) === "hourl
 let clock = Date.parse("2026-10-23T04:00:00Z");
 const now = () => clock;
 let scans = 0;
-const scan = async () => { scans++; return { spec: "agent402-revenue/1", asOf: new Date(clock).toISOString(), rails: [{ rail: "Base", balance: scans, recent: Array.from({ length: 80 }, (_, i) => ({ when: i, tx: "0x" + i })) }] }; };
+// A stub scan returns a row for every rail the real scan reads now (Base
+// first, the rest empty), the way refreshSnapshot does.
+let EVM_OF = null; // set once the first module instance is imported
+const liveLabels = () => [...Object.values(EVM_OF).map((c) => c.label), "Solana", "Stellar", "Algorand"];
+const scan = async () => { scans++; return { spec: "agent402-revenue/1", asOf: new Date(clock).toISOString(), rails: [{ rail: "Base", balance: scans, recent: Array.from({ length: 80 }, (_, i) => ({ when: i, tx: "0x" + i })) }, ...liveLabels().filter((l) => l !== "Base").map((rail) => ({ rail, balance: 0, recent: [] }))] }; };
 const shared = { body: null, saves: 0 };
 const store = { read: async () => (shared.body ? JSON.parse(JSON.stringify(shared.body)) : null), save: async (s) => { shared.saves++; shared.body = JSON.parse(JSON.stringify(s)); return true; } };
 let held = false;
 const lease = async (fn) => { if (held) return { skipped: "leased", reason: "held" }; held = true; try { return await fn(); } finally { held = false; } };
 
+// Every real rail has graduated, so the offer below rehearses on a synthetic
+// gated read-config (the NODE_ENV=test seam in src/revenue-live.js).
+process.env.NODE_ENV = "test";
+process.env.REVENUE_TEST_GATED_EVM = JSON.stringify({ testgated: { caip2: "eip155:999001", label: "Testgated", asset: "USDC", span: 1000, token: "0x0000000000000000000000000000000000000001", rpcs: ["http://127.0.0.1:9"], explorer: (a) => a, tx: (h) => h } });
 const A = await import("../src/revenue-live.js?replica=a");
 const B = await import("../src/revenue-live.js?replica=b");
+EVM_OF = A.EVM;
 A._setRevenueSnapshotDepsForTest({ scan, store, lease, now });
 B._setRevenueSnapshotDepsForTest({ scan, store, lease, now });
 // A cold process may first answer the saved last-good reading (a local file)
@@ -96,9 +105,70 @@ const before = scans;
 await settle(E); await settle(F);
 ok(scans === before + 2, "without a shared store each process scans for itself");
 
+// --- a failed scan keeps the last snapshot and retries after a pause, not on every request
+{
+  const M = await import("../src/revenue-live.js?replica=fail");
+  let tries = 0, failing = false;
+  const flaky = async (o) => { tries++; if (failing) throw new Error("rpc down"); return scan(o); };
+  M._setRevenueSnapshotDepsForTest({ scan: flaky, store: null, now });
+  const first = await settle(M);
+  clock += 5 * H; failing = true;
+  const tries0 = tries;
+  const kept = await M.revenueSnapshot({}); await sleep(20);
+  await M.revenueSnapshot({}); await sleep(20);
+  await M.revenueSnapshot({}); await sleep(20);
+  ok(kept.asOf === first.asOf && tries === tries0 + 1, `a failed scan keeps serving the last snapshot and does not rescan on every request (${tries - tries0} tries)`);
+  clock += 31_000; failing = false;
+  await M.revenueSnapshot({}); await sleep(20);
+  const after = await M.revenueSnapshot({});
+  ok(tries === tries0 + 2 && after.asOf !== first.asOf, "...and scans again once the pause is over");
+}
+
+// --- a rail offered after a snapshot was taken makes that snapshot due, a
+// boot's adopted copy included (production 2026-11-06: a deploy that offered a
+// gated rail adopted a saved snapshot younger than the period, so the live
+// read carried no row for that rail until the period ran out).
+{
+  const { GATED_EVM } = A;
+  const [gKey, gCfg] = Object.entries(GATED_EVM).find(([k]) => !A.EVM[k]) || [];
+  ok(Boolean(gKey), "a gated rail with a read-config is available to offer in this test");
+  const { markGatedRailOffered } = await import("../src/gated-rails.js");
+  // One replica's saved snapshot, taken before the offer, inside its period.
+  clock += 5 * H;
+  const G = await import("../src/revenue-live.js?replica=g");
+  G._setRevenueSnapshotDepsForTest({ scan, store, lease, now });
+  const g0 = await settle(G);
+  const preScans = scans;
+  ok(g0.rails.every((r) => r.rail !== gCfg.label), "the saved snapshot predates the gated rail");
+  ok(typeof G.revenueSnapshotFreshness === "function" && G.revenueSnapshotFreshness(g0, clock) === "fresh", "before the offer the saved snapshot reads fresh");
+  clock += 60_000;
+  markGatedRailOffered(gCfg.caip2);
+  ok(Boolean(G.EVM[gKey]), "the offer activates the rail's read-config");
+  ok(G.revenueSnapshotFreshness?.(g0, clock) === "due", `inside the grace a snapshot missing the newly offered rail reads due (${G.revenueSnapshotFreshness?.(g0, clock)})`);
+  ok(G.revenueCadenceFields(g0, clock).nextRefreshAt === new Date(clock).toISOString(), "its nextRefreshAt is now, not the end of its period");
+  // A booting replica must not adopt the saved copy that lacks the rail.
+  const H2 = await import("../src/revenue-live.js?replica=h");
+  H2._setRevenueSnapshotDepsForTest({ scan, store, lease, now });
+  const h1 = await settle(H2);
+  ok(scans === preScans + 1 && h1.rails.some((r) => r.rail === gCfg.label), `a boot after the offer rescans instead of adopting the saved copy without the rail (${scans - preScans} scan(s))`);
+  // A running replica whose own copy predates the offer adopts that rescan.
+  await G.revenueSnapshot({}); await sleep(20);
+  const g1 = await G.revenueSnapshot({});
+  ok(scans === preScans + 1 && g1.rails.some((r) => r.rail === gCfg.label), "a running replica's copy without the rail is replaced (adopted, no second scan)");
+  ok(G.revenueSnapshotFreshness(g1, clock) === "fresh" && G.revenueLiveStatus().status === "fresh", "and its freshness reads fresh again");
+  // Past the grace with no refresh landing, the word reads stale.
+  ok(G.revenueSnapshotFreshness(g0, clock + G.REVENUE_SNAPSHOT_GRACE_MS) === "stale", "a copy still missing the rail past the grace reads stale");
+  ok(G.revenueSnapshotFreshness(g1, clock + 4 * H + 10 * 60_000) === "due" && G.revenueSnapshotFreshness(g1, clock + 4 * H + G.REVENUE_SNAPSHOT_GRACE_MS) === "stale", "past its period it reads due, then stale past the grace");
+  ok(G.revenueSnapshotFreshness(null, clock) === "cold", "nothing read yet reads cold");
+  const pub = G.publicRevenueBody(g0, {});
+  ok(pub.freshness === "due" && typeof pub.freshness === "string", "the public /api/revenue body carries the freshness word");
+}
+
 // --- the copy states the cadence from the constant
 const { readFileSync } = await import("node:fs");
 const src = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
+ok(/revenueLive: \(\(\) => \{ try \{ return revenueLiveStatus\(\); \}/.test(src("server.js")), "/api/gateway-status carries the revenueLive word");
+ok(!/EVM\.ink \?/.test(src("revenue-live.js")) && /Object\.keys\(EVM\)/.test(src("revenue-live.js")), "the live scan reads every active EVM read-config, not a typed list");
 ok(/refreshed \$\{revenueSnapshotCadence\(\)\}/.test(src("revenue-live.js")), "/revenue prints the live scan's cadence from the constant");
 ok(/refreshed \$\{revenueLedgerCadence\(\)\}/.test(src("revenue-live.js")), "/revenue prints the ledger's cadence from the constant");
 ok(/allCaughtUp \? REVENUE_LEDGER_SYNC_MS :/.test(src("revenue-ledger.js")), "the ledger waits the constant the page prints");
@@ -112,6 +182,20 @@ const { ledgerLeaderboardPage } = await import("../src/ledger-leaderboard.js");
 let html = "";
 try { html = String(await ledgerLeaderboardPage({ snapshot: { rows: [], totalSellers: 0, asOf: new Date(clock).toISOString(), windowLabel: "7d" } }) || ""); } catch { html = ""; }
 ok(html.length > 1000 && /every 4 hours/.test(html) && /EVERY 4H/.test(html) && !/\$\{/.test(html), "the rendered leaderboard page says every 4 hours with no unrendered template text");
+
+// The status Worker pages on the word too: stale pages, fresh and due clear, cold and absent do neither.
+{
+  const { ALARMS, judge } = await import("../workers/status-probe/src/index.js");
+  const TITLE = "Live revenue read is stale";
+  const j = (gw) => judge({ gateway: gw })[TITLE];
+  ok(ALARMS.some((a) => a.title === TITLE) && j({ revenueLive: { status: "stale" } }) === "bad" && j({ revenueLive: { status: "fresh" } }) === "good" && j({ revenueLive: { status: "due" } }) === "good" && j({ revenueLive: { status: "cold" } }) === "quiet" && j({}) === "quiet", "status Worker: stale pages, fresh and due clear, cold and absent do neither");
+}
+// The heartbeat pages on the word: stale opens one issue, fresh and due close it.
+{
+  const hb = readFileSync(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8");
+  const step = hb.slice(hb.indexOf("- name: Live revenue read check"), hb.indexOf("# Refunds owed (src/refund-ledger.js)"));
+  ok(/jq -r '\.revenueLive\.status \/\/ "unknown"'/.test(step) && /\n\s+stale\)\n\s+if \[ -z "\$OPEN" \]; then\n\s+gh issue create/.test(step) && /fresh\|due\)\n\s+if \[ -n "\$OPEN" \]; then\n\s+gh issue close/.test(step) && !/\$\{\{/.test(step), "heartbeat: stale opens the issue, fresh and due close it, nothing interpolated into the shell");
+}
 
 console.log(`\ntest-revenue-shared-scan: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

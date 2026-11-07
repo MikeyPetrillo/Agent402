@@ -37,7 +37,7 @@ claim below is served live; verify prices against `/api/pricing` before pasting.
   wire, so any OpenAI SDK works against base_url `https://agent402.tools/v1`;
   priced per picture or per clip rather than per token.
 - **Pay any way:** x402 (USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo,
-  Avalanche, Sei, Optimism, Arc, Stellar, Algorand; USDG on Robinhood Chain - 13 chains),
+  Avalanche, Sei, Optimism, Arc, Ink, Stellar, Algorand; USDG on Robinhood Chain - 14 chains),
   MPP (Machine Payments Protocol) on the same 402 (Base/Celo, or natively on Tempo),
   free proof-of-work on the pure-CPU tools. A prepaid credits key, where sold or
   already issued (agent402.tools/credits says whether credits are on sale), pays Agent402's own

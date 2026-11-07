@@ -34,6 +34,9 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   one; the file is imported once). Every scheduled loop runs under `leased(name, ...)`, so two
   containers never run the same tick; a store registers its first load with `trackStoreReady` and
   the server awaits `stateStoresReady` before it listens. `/api/gateway-status` reports `stateDb`.
+  The live revenue snapshot (`src/revenue-live.js`) reports `revenueLive` (fresh, due, stale,
+  cold): a snapshot missing an offered rail rescans at once, a failed scan backs off 30 s, and
+  the status Worker pages on stale (`scripts/test-revenue-shared-scan.js`).
 - **Large rows:** A statement carrying a large single row (the one-row fallback) runs
   under `largeRowTimeoutMs`: the default limit plus `STATE_DB_MS_PER_MB` (500) per megabyte past the
   first, at most `STATE_DB_LARGE_ROW_MAX_MS` (120000); after a warm-start page times out, the rows

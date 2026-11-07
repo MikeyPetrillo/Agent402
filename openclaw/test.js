@@ -7,14 +7,19 @@ import { mkdtempSync, readFileSync, rmSync, symlinkSync, mkdirSync, chmodSync, s
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 
 // Async spawn: a synchronous spawn would block this process's event loop, and
 // the stub gateway the CLI needs to reach lives in this process.
 const run = (cliArgs, env) => new Promise((resolve) => {
-  const child = spawn(process.execPath, cliArgs, { cwd: new URL(".", import.meta.url).pathname, env });
+  // fileURLToPath, not URL.pathname: a pathname stays percent-encoded, so a
+  // checkout path with a space or other escaped character is a cwd that does
+  // not exist and the spawn fails ENOENT.
+  const child = spawn(process.execPath, cliArgs, { cwd: fileURLToPath(new URL(".", import.meta.url)), env });
   let stdout = "", stderr = "";
   child.stdout.on("data", (c) => { stdout += c; }); child.stderr.on("data", (c) => { stderr += c; });
+  child.on("error", (e) => resolve({ status: -1, stdout, stderr: `${stderr}spawn failed: ${e.code || e.message}` }));
   child.on("close", (status) => resolve({ status, stdout, stderr }));
 });
 import { startProxy } from "./proxy.js";
@@ -489,7 +494,7 @@ await p.close();
   const home = mkdtempSync(join(tmpdir(), "a402-oc-bin-"));
   const bin = join(home, "node_modules", ".bin"); mkdirSync(bin, { recursive: true });
   const link = join(bin, "agent402-openclaw");
-  symlinkSync(new URL("./cli.js", import.meta.url).pathname, link);
+  symlinkSync(fileURLToPath(new URL("./cli.js", import.meta.url)), link);
   const viaLink = await run([link, "help"], { ...process.env, AGENT402_OPENCLAW_HOME: home });
   ok(viaLink.status === 0 && /setup/.test(viaLink.stdout), `the CLI runs when invoked through a bin symlink (got status ${viaLink.status}, stdout ${JSON.stringify(viaLink.stdout.slice(0, 40))})`);
   const spaced = join(home, "sp ace"); mkdirSync(spaced, { recursive: true });
@@ -633,6 +638,13 @@ await p.close();
     ok(oc.status === 502 && !("type" in oj) && oj.error?.type === "upstream_error" && /ECONNREFUSED/.test(oj.error.message),
       `...and a chat completions call with a 502 in the OpenAI error shape (${oc.status} ${JSON.stringify(oj).slice(0, 160)})`);
   } finally { await down.close(); }
+}
+
+// Ink USDC is priced only under its token's own EIP-712 domain.
+{
+  const INK = { network: "eip155:57073", asset: "0x2D270e6886d130D724215A266106e6832161EAEd", amount: "1000" };
+  ok(acceptUsd({ ...INK, extra: { name: "USDC", version: "2" } }) === 0.001, "an Ink USDC accept under its own domain is priced");
+  ok(acceptUsd({ ...INK, extra: { name: "USD Coin", version: "2" } }) === null && acceptUsd({ ...INK, extra: { name: "USDC", version: "1" } }) === null && acceptUsd(INK) === null, "an Ink accept with a wrong or missing EIP-712 domain is not priced");
 }
 
 stub.close();

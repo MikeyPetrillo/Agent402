@@ -599,6 +599,19 @@ Auto-closes when the word is ok.`;
     },
   },
   {
+    // The live revenue read (revenueLive on /api/gateway-status): stale means a
+    // snapshot is past its period plus grace, or still misses an offered rail
+    // past the grace (2026-11-06: a deploy adopted a saved copy without a newly
+    // offered rail). stale pages; fresh and due clear; cold or absent does neither.
+    title: "Live revenue read is stale",
+    verdict: ({ gateway: b }) => {
+      const w = b.revenueLive?.status;
+      if (w === "stale") return "bad";
+      return w === "fresh" || w === "due" ? "good" : "quiet";
+    },
+    body: () => "/api/gateway-status reports revenueLive.status=stale: the live revenue snapshot (/api/revenue asOf) is past its refresh period and grace, or misses a rail that is offered. Read /api/revenue freshness and the server log for the scan; a failed scan retries after a short backoff. Auto-closes when the word reads fresh or due.",
+  },
+  {
     // A prepaid credits purchase refused by the daily limit or the EU/UK tax
     // ID rule issues no key and is refunded by card; a refund that failed is
     // owed by hand (creditsRefunds on /api/gateway-status). owed pages; ok

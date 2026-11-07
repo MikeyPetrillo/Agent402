@@ -3,6 +3,15 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 const ENTRIES = [
   {
     date: "2026-11-06",
+    title: "Ink rail",
+    items: [
+      "Payments: Ink (chain 57073) is a listed rail: x402 payments settle in native USDC on Ink, named on every surface that lists the chains, with its own chain page.",
+      "Payments: a chain page links the service's wallet on the chain explorer even before the rail's first revenue reading.",
+      "Packages: the buyer client, MCP server and OpenClaw plugin price and sign Ink USDC accepts, and refuse an Ink accept that names another EIP-712 domain than the token's own (agent402-client 0.8.25, agent402-mcp 0.13.31, agent402-openclaw 0.5.11).",
+    ],
+  },
+  {
+    date: "2026-11-06",
     title: "EVM router chains, call hints, package limits",
     items: [
       "Router: the router buys from proven sellers on each EVM chain the operator lists, with the same price binding, validity cap and spending caps per chain as on Base, and each listed chain counts toward the global unsettled-spend ceiling.",

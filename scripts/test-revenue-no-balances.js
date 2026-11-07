@@ -6,7 +6,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import express from "express";
-import { revenueApiHandlers, publicRevenueSnapshot, lastGoodSnapshot, revenuePage, revenueCadenceFields, REVENUE_API_MAX_AGE_S } from "../src/revenue-live.js";
+import { revenueApiHandlers, publicRevenueSnapshot, lastGoodSnapshot, revenuePage, revenueCadenceFields, liveScanRailLabels, REVENUE_API_MAX_AGE_S } from "../src/revenue-live.js";
 import { REVENUE_SNAPSHOT_TTL_MS } from "../src/refresh-cadence.js";
 
 let pass = 0, fail = 0;
@@ -72,7 +72,7 @@ try {
 // nextRefreshAt is the snapshot's read time plus the scan cadence.
 {
   const asOf = new Date(Date.now() - 60_000).toISOString();
-  const f = revenueCadenceFields({ asOf });
+  const f = revenueCadenceFields({ asOf, rails: liveScanRailLabels().map((rail) => ({ rail })) });
   ok(f.nextRefreshAt === new Date(Date.parse(asOf) + REVENUE_SNAPSHOT_TTL_MS).toISOString(), "a fresh snapshot's next refresh is its read time plus the cadence");
   ok(lastGoodSnapshot({ asOf, rails: [] }).cacheSeconds === REVENUE_API_MAX_AGE_S, "the saved-reading snapshot carries the same cacheSeconds");
   const src = readFileSync(new URL("../src/revenue-live.js", import.meta.url), "utf8");

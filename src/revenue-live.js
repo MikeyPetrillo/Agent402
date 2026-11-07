@@ -238,6 +238,28 @@ export const EVM = {
     explorer: (a) => `https://explorer.arc.io/address/${a}?tab=token_transfers`,
     tx: (h) => `https://explorer.arc.io/tx/${h}`,
   },
+  ink: {
+    // Ink (OP Stack L2, chain 57073), native Circle USDC. 1 s blocks
+    // (measured 2026-11-06). rpc-qnd caps getLogs at 10,000 blocks and
+    // rpc-gel at 1,000, so the scan reads 9,000-block chunks from rpc-qnd
+    // first. The treasury was never offered Ink before this block, so no
+    // scan reads below it. Each live refresh reads one balance and the
+    // window's transfer logs (12 reads for its 100,000-block window, about
+    // 28 hours at 1 s blocks); each ledger tick reads the tail since its
+    // cursor; with ALCHEMY_API_KEY those go to the keyed lane first.
+    caip2: "eip155:57073",
+    label: "Ink", asset: "USDC", span: 100000, chunkBlocks: 9000,
+    fromBlock: 60_400_000,
+    token: "0x2D270e6886d130D724215A266106e6832161EAEd",
+    // Alchemy first when the key is set (the network must be enabled on the
+    // Alchemy app; a not-enabled network falls through to the public RPCs).
+    rpcs: [
+      ...(process.env.ALCHEMY_API_KEY ? [`https://ink-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []),
+      "https://rpc-qnd.inkonchain.com", "https://rpc-gel.inkonchain.com",
+    ],
+    explorer: (a) => `https://explorer.inkonchain.com/address/${a}?tab=token_transfers`,
+    tx: (h) => `https://explorer.inkonchain.com/tx/${h}`,
+  },
   robinhood: {
     // Measured ~0.15s blocks (not the 2s Orbit default) — 30k blocks was only
     // ~76 real minutes; 600k ≈ 25h so the daily canary settle stays visible.
@@ -257,34 +279,22 @@ export const EVM = {
 // seller leaderboard and the in-flight cover never scan it and a boot costs
 // nothing. It joins EVM once the rail is in RAILS (graduated) or in the live
 // offer (src/gated-rails.js), and every reader picks it up from there.
-// Cost once active (Ink): each live refresh reads one balance and the
-// window's transfer logs in 9,000-block chunks (12 reads for its 100,000-block
-// window, about 28 hours at 1 s blocks), and each ledger tick reads the tail
-// since its cursor; with ALCHEMY_API_KEY those go to the keyed lane first.
-export const GATED_EVM = {
-  ink: {
-    // Ink (OP Stack L2, chain 57073), native Circle USDC. 1 s blocks
-    // (measured 2026-11-06). rpc-qnd caps getLogs at 10,000 blocks and
-    // rpc-gel at 1,000, so the scan reads 9,000-block chunks from rpc-qnd
-    // first. The treasury was never offered Ink before this block, so no
-    // scan reads below it.
-    caip2: "eip155:57073",
-    label: "Ink", asset: "USDC", span: 100000, chunkBlocks: 9000,
-    fromBlock: 60_400_000,
-    token: "0x2D270e6886d130D724215A266106e6832161EAEd",
-    // Alchemy first when the key is set (the network must be enabled on the
-    // Alchemy app; a not-enabled network falls through to the public RPCs).
-    rpcs: [
-      ...(process.env.ALCHEMY_API_KEY ? [`https://ink-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []),
-      "https://rpc-qnd.inkonchain.com", "https://rpc-gel.inkonchain.com",
-    ],
-    explorer: (a) => `https://explorer.inkonchain.com/address/${a}?tab=token_transfers`,
-    tx: (h) => `https://explorer.inkonchain.com/tx/${h}`,
-  },
-};
+// Arc and Ink started here and graduated into EVM.
+export const GATED_EVM = {};
+// NODE_ENV=test seam: one synthetic gated read-config (JSON map), so a suite can
+// rehearse an offer after every real rail has graduated. Never read in production.
+if (process.env.NODE_ENV === "test" && process.env.REVENUE_TEST_GATED_EVM) Object.assign(GATED_EVM, JSON.parse(process.env.REVENUE_TEST_GATED_EVM));
 /** Move a gated rail's read-config into EVM (once). */
+// When a read-config last became active in this process: a snapshot still
+// missing that rail a grace period later reads stale (revenueSnapshotFreshness).
+let railsChangedAt = 0;
+// The live snapshot's injectable scan, shared store, lease and clock (tests
+// replace them with _setRevenueSnapshotDepsForTest).
+const snapDeps = { scan: null, store: undefined, lease: null, now: () => Date.now() };
 function activateGatedEvm(caip2) {
-  for (const [key, cfg] of Object.entries(GATED_EVM)) if (cfg.caip2 === caip2 && !EVM[key]) EVM[key] = cfg;
+  for (const [key, cfg] of Object.entries(GATED_EVM)) {
+    if (cfg.caip2 === caip2 && !EVM[key]) { EVM[key] = cfg; railsChangedAt = snapDeps.now(); }
+  }
 }
 for (const r of RAILS) activateGatedEvm(r.caip2);
 onGatedRailOffered(activateGatedEvm);
@@ -669,10 +679,12 @@ export const REVENUE_API_MAX_AGE_S = 30;
  * behind it runs, and `nextRefreshAt` when this snapshot's scan is due (now
  * when it is already due: a read past it starts the scan in the background).
  */
-export function revenueCadenceFields(snap, now = Date.now()) {
+export function revenueCadenceFields(snap, now = snapDeps.now()) {
   const at = Date.parse(snap?.asOf || "");
-  const due = Number.isFinite(at) ? Math.max(at + REVENUE_SNAPSHOT_TTL_MS, now) : null;
-  return { cacheSeconds: REVENUE_API_MAX_AGE_S, refreshesEverySeconds: Math.round(REVENUE_SNAPSHOT_TTL_MS / 1000), nextRefreshAt: due == null ? null : new Date(due).toISOString() };
+  const freshness = revenueSnapshotFreshness(snap, now);
+  // A snapshot missing a rail read now is due at once, whatever its age.
+  const due = !Number.isFinite(at) ? null : freshness === "fresh" ? Math.max(at + REVENUE_SNAPSHOT_TTL_MS, now) : now;
+  return { cacheSeconds: REVENUE_API_MAX_AGE_S, refreshesEverySeconds: Math.round(REVENUE_SNAPSHOT_TTL_MS / 1000), nextRefreshAt: due == null ? null : new Date(due).toISOString(), freshness };
 }
 
 /** The operator view: the full snapshot, balances and totalUsd included. */
@@ -1617,7 +1629,6 @@ const SHARED_RETRY_MS = 30_000;
 const SHARED_RECENT_ROWS = 50; // per rail, in the saved copy (the page lists far fewer)
 const sharedSnapDoc = createJsonDocument({ name: "revenue-snapshot", log: () => {} });
 const scanLeased = leased("revenue-snapshot-refresh", { ttlMs: 10 * 60_000, failOpen: true, log: () => {} }, (fn) => fn());
-const snapDeps = { scan: null, store: undefined, lease: null, now: () => Date.now() };
 let sharedRetryAt = 0;
 function sharedSnapshotStore() {
   if (snapDeps.store !== undefined) return snapDeps.store;
@@ -1633,7 +1644,45 @@ export function sharedSnapshotBody(snap) {
 }
 function sharedSnapshotFresh(s, now) {
   const at = Date.parse(s?.asOf || "");
-  return Boolean(s && Array.isArray(s.rails) && Number.isFinite(at) && now - at < SNAPSHOT_TTL_MS && (!cached || at > cachedAt));
+  return Boolean(s && Array.isArray(s.rails) && Number.isFinite(at) && now - at < SNAPSHOT_TTL_MS && (!cached || at > cachedAt) && snapshotCoversLiveRails(s));
+}
+/** The rail labels the live scan reads now: every active EVM read-config
+ *  (a gated rail once offered) plus the three non-EVM rails. */
+export function liveScanRailLabels() {
+  return [...Object.values(EVM).map((c) => c.label), "Solana", "Stellar", "Algorand"];
+}
+/** Whether a snapshot carries a row for every rail the scan reads now. One
+ *  taken before a rail was offered (a saved copy adopted at boot, or this
+ *  process's own copy when the offer lands later) does not, and is due for a
+ *  refresh whatever its age. */
+export function snapshotCoversLiveRails(snap) {
+  if (!snap || !Array.isArray(snap.rails)) return false;
+  const have = new Set(snap.rails.map((r) => r && r.rail));
+  return liveScanRailLabels().every((l) => have.has(l));
+}
+// How long past its due time a snapshot may go unrefreshed before the
+// freshness word reads stale: the keep-warm tick runs every 5 minutes, each
+// rail's read is bounded, and the scan lease lasts 10 minutes.
+export const REVENUE_SNAPSHOT_GRACE_MS = 30 * 60_000;
+/**
+ * The live snapshot's freshness as one word, never a number: "fresh" (inside
+ * its period and covering every rail read now), "due" (past its period, or
+ * missing a newly offered rail, inside the grace a refresh needs), "stale"
+ * (past that grace: the refresh is not landing), "cold" (nothing read yet).
+ */
+export function revenueSnapshotFreshness(snap = cached, now = snapDeps.now()) {
+  const at = Date.parse(snap?.asOf || "");
+  if (!snap || !Number.isFinite(at)) return "cold";
+  const age = now - at;
+  const covers = snapshotCoversLiveRails(snap);
+  if (age < SNAPSHOT_TTL_MS && covers) return "fresh";
+  if (age >= SNAPSHOT_TTL_MS + REVENUE_SNAPSHOT_GRACE_MS) return "stale";
+  if (!covers && now - (railsChangedAt || at) >= REVENUE_SNAPSHOT_GRACE_MS) return "stale";
+  return "due";
+}
+/** The revenueLive word on /api/gateway-status: this process's snapshot. */
+export function revenueLiveStatus() {
+  return { status: revenueSnapshotFreshness(cached, snapDeps.now()) };
 }
 async function refreshShared(opts) {
   const scan = snapDeps.scan || refreshSnapshot;
@@ -1680,10 +1729,14 @@ const RAIL_DEADLINE_MS = parseInt(process.env.REVENUE_RAIL_DEADLINE_MS, 10) || 4
 const SCAN_TIMED_OUT = Symbol("revenue-scan-timeout");
 export async function revenueSnapshot(opts) {
   const now = snapDeps.now();
-  if (cached && (now - cachedAt < SNAPSHOT_TTL_MS || now < sharedRetryAt)) return cached;
+  // A copy inside its period is served as is only while it covers every rail
+  // the scan reads now: a rail offered after it was taken makes it due.
+  if (cached && ((now - cachedAt < SNAPSHOT_TTL_MS && snapshotCoversLiveRails(cached)) || now < sharedRetryAt)) return cached;
   if (!refreshing) {
     refreshing = refreshShared(opts)
-      .catch(() => cached) // a failed scan keeps serving the last snapshot
+      // A failed scan keeps serving the last snapshot and tries again after a
+      // short pause, not on every request.
+      .catch(() => { sharedRetryAt = snapDeps.now() + SHARED_RETRY_MS; return cached; })
       .finally(() => { refreshing = null; });
   }
   // Stale-while-revalidate: never block a visitor on the multi-chain scan if we
@@ -1741,15 +1794,19 @@ async function refreshSnapshot({ walletAddress, solanaWallet }) {
     new Promise((resolve) => setTimeout(() => resolve({ rail: label, balance: null, recent: [], error: `timed out after ${Math.round(RAIL_DEADLINE_MS / 1000)} s` }), RAIL_DEADLINE_MS).unref?.()),
   ]);
   const evm = (name) => bounded(EVM[name]?.label || name, evmRail(name, walletAddress));
-  // A gated rail is read only once its config is active (GATED_EVM above).
-  const [base, polygon, arbitrum, monad, celo, avalanche, sei, optimism, arc, ink, robinhood, solana, stellar, algorand] = await Promise.all([
-    evm("base"), evm("polygon"), evm("arbitrum"), evm("monad"), evm("celo"),
-    evm("avalanche"), evm("sei"), evm("optimism"), evm("arc"), EVM.ink ? evm("ink") : null, evm("robinhood"),
+  // Every EVM rail with an active read-config is read, a gated rail included
+  // once it is offered (GATED_EVM above): the scan reads exactly the set
+  // liveScanRailLabels() says a snapshot must cover.
+  const evmKeys = Object.keys(EVM);
+  const [evmRows, solana, stellar, algorand] = await Promise.all([
+    Promise.all(evmKeys.map(evm)),
     bounded("Solana", solanaRail(solanaWallet)),
     bounded("Stellar", stellarRail(stellarWallet)),
     bounded("Algorand", algorandRail(algorandWallet)),
   ]);
-  const rails = [base, solana, polygon, arbitrum, monad, celo, avalanche, sei, optimism, arc, ink, stellar, algorand, robinhood].filter(Boolean);
+  const byKey = Object.fromEntries(evmKeys.map((k, i) => [k, evmRows[i]]));
+  const middle = evmKeys.filter((k) => k !== "base" && k !== "robinhood").map((k) => byKey[k]);
+  const rails = [byKey.base, solana, ...middle, stellar, algorand, byKey.robinhood].filter(Boolean);
   // Per-rail last-good balance carry-forward. The non-EVM reads (Solana,
   // Stellar, Algorand) hit public endpoints that throttle Railway's datacenter
   // IP and intermittently time out; a wallet balance barely moves between
