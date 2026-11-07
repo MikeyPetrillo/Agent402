@@ -24,6 +24,7 @@
 // Deliberately keyword-based. A model could read these better, but this has to
 // run unattended, cost nothing, and never spend upstream to decide whether to
 // page - and at one signal a month the recall of a regex is sufficient.
+import { pathToFileURL } from "node:url";
 
 const TARGET = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/+$/, "");
 const TOKEN = process.env.AGENT402_OPERATOR_TOKEN || "";
@@ -67,7 +68,7 @@ export function unjudgedReports(reports, judgedText) {
   return { fresh, judged: seen };
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   if (!TOKEN) {
     console.error("::error::AGENT402_OPERATOR_TOKEN is not set - refusing to report a clean board it cannot read");
     process.exit(1);

@@ -3,10 +3,11 @@
 // health checks such as Glama, and mcp/Dockerfile) must copy every local
 // file the server imports, or the image builds and then fails to start.
 // Also checks the npm package's "files" list the same way.
+import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 import { join, dirname, normalize } from "node:path";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.log(`FAIL - ${m}`); } };
 

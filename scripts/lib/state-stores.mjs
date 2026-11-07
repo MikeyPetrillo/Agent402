@@ -29,6 +29,7 @@
 // their paths and backend once, at import.
 //
 //   node scripts/lib/state-stores.mjs boot <dir>     (prints one JSON line)
+import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
 import { mkdirSync } from "node:fs";
 
@@ -117,7 +118,7 @@ export async function bootStores(dir, { log = () => {} } = {}) {
   return { pg, modules: { sales, refunds, revenue, stats, status, economy, pow, memory, decide, shadow, credits, checkout, outbound, wish } };
 }
 
-const isMain = process.argv[1] && resolve(process.argv[1]) === new URL(import.meta.url).pathname;
+const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain && process.argv[2] === "boot") {
   const dir = process.argv[3];
   if (!dir) { console.error("usage: node scripts/lib/state-stores.mjs boot <dir>"); process.exit(2); }

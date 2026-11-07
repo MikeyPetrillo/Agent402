@@ -7,6 +7,7 @@
 // The shared base tables (state-db's own) are created by the parent first:
 // this test is about the stores' DDL.
 // Requires STATE_DATABASE_URL (CI fails without it).
+import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,7 +18,7 @@ const { url } = requireTestPg({ label: "test-store-ddl-race-pg" });
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const ROUNDS = Number(process.env.DDL_RACE_ROUNDS || 5);
 const boot = `
   const res = {};

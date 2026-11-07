@@ -4,6 +4,7 @@
 // page: no <form action> naming another origin, and no formaction attribute.
 //
 // Run: node scripts/test-csp-form-action.js
+import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -22,7 +23,7 @@ ok(fa.includes("'self'") && fa.every((s) => s === "'self'" || s === "mailto:"), 
 ok((directives["style-src"] || []).includes("'unsafe-inline'") && (directives["script-src"] || []).every((s) => s !== "'unsafe-inline'"), "the other directives are unchanged (style-src keeps 'unsafe-inline', script-src has none)");
 
 // Every form in the shipped tree submits inside form-action.
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const files = [];
 const walk = (d) => {
   for (const n of readdirSync(d)) {

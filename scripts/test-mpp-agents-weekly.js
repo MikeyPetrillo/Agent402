@@ -2,6 +2,7 @@
 // against a throwaway DB, then a booted half for the operator route.
 //
 //   node scripts/test-mpp-agents-weekly.js
+import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -102,7 +103,7 @@ const SCAN_LOG = join(dir, "history-scans.log");
 const PRELOAD = join(dir, "count-history-scans.mjs");
 writeFileSync(PRELOAD, `import { createRequire } from "node:module";
 import { appendFileSync } from "node:fs";
-const Database = createRequire(${JSON.stringify(new URL("../package.json", import.meta.url).pathname)})("better-sqlite3");
+const Database = createRequire(${JSON.stringify(fileURLToPath(new URL("../package.json", import.meta.url)))})("better-sqlite3");
 const prepare = Database.prototype.prepare;
 let patched = false;
 Database.prototype.prepare = function (sql) {

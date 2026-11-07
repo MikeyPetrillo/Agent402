@@ -24,6 +24,7 @@
 // matter: the tables have no foreign keys. Run with the app stopped, or
 // accept that rows written since the backup stay (DO NOTHING never
 // overwrites them).
+import { fileURLToPath } from "node:url";
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -163,7 +164,7 @@ export async function restoreStateDir(dir, { replace = false, schema, key = pars
 }
 const readName = (f) => f.replace(/\.enc$/, "").replace(/\.gz$/, "");
 
-const isMain = process.argv[1] && new URL(import.meta.url).pathname === resolve(process.argv[1]);
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
 if (isMain) {
   const args = process.argv.slice(2);
   const opt = (name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : null; };

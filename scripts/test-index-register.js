@@ -1,5 +1,6 @@
 // Offline unit tests for self-serve listing: origin validation + the
 // registerOrigin flow with an injected fake crawler. No network, no /data.
+import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { validateOriginInput, registerOrigin, isSelfSeller, _selfCheckHostMemoForTest, __testResetSubmitted, __testSetSubmittedCap, __resetForcedCrawlForTest } from "../src/x402-index.js";
@@ -42,7 +43,7 @@ ok(validateOriginInput("https://agent402.tools:8443", { selfOrigin: "https://age
   const { execFileSync } = await import("node:child_process");
   const probe = `import "./scripts/lib/offline-stores.js"; const { validateOriginInput } = await import("./src/x402-index.js"); const s = { selfOrigin: "https://agent402.tools", allowPath: true }; console.log(JSON.stringify(["https://our-svc-production.up.railway.app", "https://our-svc-production.up.railway.app/api/x", "https://other-svc.up.railway.app/api/x", "https://mirror.example.net"].map((o) => validateOriginInput(o, s))));`;
   const { childJson } = await import("./lib/child-json.js");
-  const run = (env) => childJson(execFileSync(process.execPath, ["--input-type=module", "-e", probe], { cwd: new URL("..", import.meta.url).pathname, env: { ...process.env, X402_INDEX_CRAWL: "off", ...env }, encoding: "utf8" }));
+  const run = (env) => childJson(execFileSync(process.execPath, ["--input-type=module", "-e", probe], { cwd: fileURLToPath(new URL("..", import.meta.url)), env: { ...process.env, X402_INDEX_CRAWL: "off", ...env }, encoding: "utf8" }));
   const withEnv = run({ RAILWAY_PUBLIC_DOMAIN: "our-svc-production.up.railway.app", SELF_SELLER_HOSTS: "mirror.example.net" });
   ok(/local catalog/.test(withEnv[0].error || "") && /local catalog/.test(withEnv[1].error || ""), "our platform hostname (RAILWAY_PUBLIC_DOMAIN), bare or with a path, is the local catalog");
   ok(withEnv[2].origin === "https://other-svc.up.railway.app/api/x", "another service on the same platform domain is an outside seller");

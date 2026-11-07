@@ -14,6 +14,7 @@
 //      published packages, adapters) says so, with an exempt list for the
 //      documentation snippets that only SHOW a client to a reader.
 // Offline; signs with a throwaway key; nothing is sent anywhere.
+import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -24,7 +25,7 @@ import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
 
 let pass = 0;
 const ok = (c, m) => { if (!c) { console.error("FAIL:", m); process.exit(1); } pass++; };
-const ROOT = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
+const ROOT = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/, "");
 
 // Throwaway key: never funded, never used anywhere else.
 const signer = privateKeyToAccount("0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d");

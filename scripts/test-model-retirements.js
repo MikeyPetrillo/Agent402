@@ -6,6 +6,7 @@
 // a caller naming the retired id served by its successor, so it stays.
 //
 //   node scripts/test-model-retirements.js
+import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -26,7 +27,7 @@ function sources(dir, out = []) {
   }
   return out;
 }
-const files = sources(new URL("../src", import.meta.url).pathname);
+const files = sources(fileURLToPath(new URL("../src", import.meta.url)));
 const RETIREMENT_KEY = /(["'`])[^"'`\n]+\1:\s*\{\s*until:/g;
 const text = new Map(files.map((f) => [f, readFileSync(f, "utf8").replace(RETIREMENT_KEY, "")]));
 const now = Date.now();

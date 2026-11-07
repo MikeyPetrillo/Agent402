@@ -23,6 +23,7 @@
 // cap (no rate typed). Offline: no network, no real keys, no spend.
 //
 //   node scripts/test-direct-upstream-cost-guard.js
+import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
@@ -406,7 +407,7 @@ setEnv({});
   const TOKEN = "cost-guard-test-operator-token-0123456789";
   const log = [];
   const child = spawn(process.execPath, ["--import", "./scripts/lib/loopback-only-preload.js", "src/server.js"], {
-    cwd: new URL("..", import.meta.url).pathname,
+    cwd: fileURLToPath(new URL("..", import.meta.url)),
     env: { ...process.env, ...ownStoreEnv("direct-cost-guard"), PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", AGENT402_OPERATOR_TOKEN: TOKEN, ...ON },
     stdio: ["ignore", "pipe", "pipe"],
   });

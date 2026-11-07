@@ -10,6 +10,7 @@
 //  3. The pin table covers exactly the languages the tool accepts.
 // Needs eng, spa, fra and deu installed (node scripts/fetch-tessdata.js tessdata
 // eng spa fra deu); a missing file is a failure, not a skip.
+import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { mkdtempSync, readdirSync, rmSync, copyFileSync, writeFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
@@ -21,7 +22,7 @@ import { TESSDATA_SHA256 } from "./fetch-tessdata.js";
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 
-const SOURCE_DIR = process.env.OCR_TESSDATA_DIR || new URL("../tessdata", import.meta.url).pathname;
+const SOURCE_DIR = process.env.OCR_TESSDATA_DIR || fileURLToPath(new URL("../tessdata", import.meta.url));
 const LANGS = ["eng", "spa", "fra", "deu"];
 
 // A private data directory holding the four languages and nothing else, so the

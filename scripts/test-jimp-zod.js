@@ -17,6 +17,7 @@
 //      before jimp sees it, so no buyer reaches these refusals.
 // Offline.
 //   node scripts/test-jimp-zod.js
+import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
@@ -28,7 +29,7 @@ const ok = (cond, msg) => {
   if (cond) { passed++; console.log(`ok - ${msg}`); }
   else { failed++; console.error(`FAIL - ${msg}`); }
 };
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
 const lock = JSON.parse(readFileSync(join(ROOT, "package-lock.json"), "utf8"));
 const rootZod = JSON.parse(readFileSync(join(ROOT, "node_modules/zod/package.json"), "utf8")).version;

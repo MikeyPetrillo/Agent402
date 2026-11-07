@@ -7,6 +7,7 @@
 // Offline: the scan, the store and the lease are injected; two module
 // instances stand in for two replicas.
 
+import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.log("FAIL -", m); } };
@@ -21,7 +22,7 @@ ok(cad.cadenceWords(4 * H) === "every 4 hours" && cad.cadenceWords(H) === "hourl
 {
   const { execFileSync } = await import("node:child_process");
   const out = execFileSync(process.execPath, ["--input-type=module", "-e", 'const c = await import("./src/refresh-cadence.js"); console.log(JSON.stringify([c.REVENUE_SNAPSHOT_TTL_MS, c.LEADERBOARD_REFRESH_MS, c.leaderboardCadence(), c.revenueSnapshotCadence()]));'],
-    { cwd: new URL("..", import.meta.url).pathname, env: { ...process.env, REVENUE_SNAPSHOT_TTL_MS: String(2 * H), LEADERBOARD_REFRESH_MS: String(H) } }).toString().trim();
+    { cwd: fileURLToPath(new URL("..", import.meta.url)), env: { ...process.env, REVENUE_SNAPSHOT_TTL_MS: String(2 * H), LEADERBOARD_REFRESH_MS: String(H) } }).toString().trim();
   ok(out === JSON.stringify([2 * H, H, "hourly", "every 2 hours"]), `REVENUE_SNAPSHOT_TTL_MS and LEADERBOARD_REFRESH_MS override the defaults, and the copy follows (${out})`);
 }
 

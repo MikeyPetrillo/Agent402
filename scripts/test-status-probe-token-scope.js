@@ -4,6 +4,7 @@
 // calls statusProbeAuthed().
 //
 // Run: node scripts/test-status-probe-token-scope.js
+import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -11,7 +12,7 @@ import { join } from "node:path";
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const src = readFileSync(join(ROOT, "src/server.js"), "utf8");
 
 // The env value is read in exactly one place in the shipped tree.

@@ -9,8 +9,9 @@
 //     payment; when its words are a verdict about the buyer (a bad signature),
 //     the buyer gets 402 and the second is never asked.
 //   node scripts/test-rh-boot-primary.js
+import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-const root = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
+const root = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/, "");
 const { getFreePorts } = await import(root + "/scripts/lib/free-port.js");
 const { createServer } = await import("node:http");
 const { spawn } = await import("node:child_process");

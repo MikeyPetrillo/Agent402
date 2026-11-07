@@ -4,6 +4,7 @@
 // facilitator/ - a src/ change can then never break what the gate proves.
 // This pins both halves: the import closure never leaves facilitator/, and
 // the workflow step still carries the scope + fail-open logic.
+import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 import { readFileSync, existsSync, mkdtempSync, writeFileSync } from "node:fs";
@@ -12,7 +13,7 @@ import { tmpdir } from "node:os";
 
 let passed = 0;
 const ok = (c, m) => { assert.ok(c, m); passed++; };
-const ROOT = resolve(new URL("..", import.meta.url).pathname);
+const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 
 // Every relative import/require reachable from `entry`, as absolute paths.
 export function importClosure(entry) {

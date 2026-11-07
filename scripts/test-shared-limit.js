@@ -108,7 +108,7 @@ const makeStore = () => {
 {
   const { execFileSync } = await import("node:child_process");
   const probe = `
-    import { sharedLimitEnabled, spend, connectionState } from "${new URL("../src/shared-limit.js", import.meta.url).pathname}";
+    import { sharedLimitEnabled, spend, connectionState } from "${new URL("../src/shared-limit.js", import.meta.url).href}";
     // Order matters, and it is the order production actually sees: the FIRST
     // request finds the flag clear, its spend fails and marks the store
     // unavailable, and the SECOND request is the one that used to be told

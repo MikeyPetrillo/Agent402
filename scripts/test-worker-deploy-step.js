@@ -2,6 +2,7 @@
 // code. Checks the path selector (the worker's import closure plus its image
 // inputs) on real repository files, and that the deploy job carries the step
 // that uses it, after the main app's rollout is confirmed.
+import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -24,7 +25,7 @@ ok(touchesWorker(["src/tools/html-worker.js"]) && paths.includes("src/tools/html
 ok(!touchesWorker(["src/server.js", "README.md", "scripts/test-all.js"]), "a change outside the worker leaves it alone");
 ok(!touchesWorker([""]), "an empty diff leaves it alone");
 
-const cli = (input) => spawnSync(process.execPath, [new URL("./worker-deploy-paths.js", import.meta.url).pathname, "--check"], { input, encoding: "utf8" }).stdout.trim();
+const cli = (input) => spawnSync(process.execPath, [fileURLToPath(new URL("./worker-deploy-paths.js", import.meta.url)), "--check"], { input, encoding: "utf8" }).stdout.trim();
 ok(cli("src/server.js\nsrc/tools/media-kit.js\n") === "yes" && cli("src/server.js\n") === "no", "the --check CLI answers yes/no from stdin");
 
 // The diff base is the last SUCCESSFUL deploy run's head, never the push's
@@ -40,7 +41,7 @@ ok(lastDeployedBase(RUNS, 300) === sha("a"), "after a failed deploy the base is 
 ok(lastDeployedBase(RUNS, "300") === sha("a"), "the current run id matches as a string too");
 ok(lastDeployedBase([{ databaseId: 1, headSha: "not-a-sha", conclusion: "success" }], 9) === "", "a malformed head is no base (fail-open)");
 ok(lastDeployedBase(null, 1) === "" && lastDeployedBase([], 1) === "", "no runs is no base (fail-open)");
-const baseCli = (input, id) => spawnSync(process.execPath, [new URL("./worker-deploy-paths.js", import.meta.url).pathname, "--base", String(id)], { input, encoding: "utf8" }).stdout.trim();
+const baseCli = (input, id) => spawnSync(process.execPath, [fileURLToPath(new URL("./worker-deploy-paths.js", import.meta.url)), "--base", String(id)], { input, encoding: "utf8" }).stdout.trim();
 ok(baseCli(JSON.stringify(RUNS), 300) === sha("a") && baseCli("not json", 300) === "", "the --base CLI reads gh run list JSON and prints nothing on bad input");
 const changedSince = (base) => (base === sha("a") ? ["README.md", "worker/server.js"] : ["README.md"]);
 ok(touchesWorker(changedSince(lastDeployedBase(RUNS, 300))), "a worker change in the failed push still selects the worker on the next push");

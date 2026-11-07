@@ -6,6 +6,7 @@
 // nothing broadcast).
 //
 // Run: node scripts/test-mpp-manage-token.js
+import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -37,7 +38,7 @@ ok(MANAGE_RESPONSE_HEADERS["Cache-Control"] === "no-store" && MANAGE_RESPONSE_HE
 const PORT = await getFreePort();
 const B = `http://127.0.0.1:${PORT}`;
 const proc = spawn(process.execPath, ["src/server.js"], {
-  cwd: new URL("..", import.meta.url).pathname,
+  cwd: fileURLToPath(new URL("..", import.meta.url)),
   env: {
     ...process.env, PORT: String(PORT), FREE_MODE: "true",
     MPP_SECRET_KEY: "test-mpp-manage-secret", POW_SECRET: "test-mpp-manage-pow",

@@ -24,6 +24,7 @@
 // state database left over from an earlier run would answer this run's fixed
 // wallets and nonces (429/409 before any handler), so the child runs on its own
 // in-process state whatever the calling shell exports.
+import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import "./lib/file-mode.js";
 import { spawn } from "node:child_process";
@@ -79,7 +80,7 @@ proc = spawn("node", ["--import", "./scripts/lib/upstream-stub-preload.js", "src
     // server reads the committed placeholder table, never the private one from
     // the caller's environment, so the /v1 half runs the same with or without
     // the secret (a fork PR, a local shell) and never depends on a real rate.
-    UPSTREAM_COSTS_JSON: "", UPSTREAM_COSTS_FILE: new URL("../docs/example-upstream-costs.json", import.meta.url).pathname,
+    UPSTREAM_COSTS_JSON: "", UPSTREAM_COSTS_FILE: fileURLToPath(new URL("../docs/example-upstream-costs.json", import.meta.url)),
   },
   stdio: ["ignore", "pipe", "pipe"],
 });

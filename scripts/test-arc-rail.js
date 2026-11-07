@@ -20,6 +20,7 @@
 // for the other rails, Arc still fails closed), malformed /supported. Every
 // leg asserts the key and the upstream body never appear in a response or a
 // log line.
+import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -990,7 +991,7 @@ async function boot(extraEnv) {
   delete env.STATE_DATABASE_URL;
   delete env.CIRCLE_FACILITATOR_API_KEY;
   const proc = spawn(process.execPath, ["--import", preload, "src/server.js"], {
-    cwd: new URL("..", import.meta.url).pathname,
+    cwd: fileURLToPath(new URL("..", import.meta.url)),
     env: {
       ...env, PORT: String(port), FREE_MODE: "",
       WALLET_ADDRESS: TREASURY, NETWORK: "base", PAYMENT_NETWORKS: "base,arc",

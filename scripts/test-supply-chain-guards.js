@@ -16,6 +16,7 @@
 //
 // Offline (reads the workflow + package manifests; no network, no installs).
 //   node scripts/test-supply-chain-guards.js
+import { fileURLToPath } from "node:url";
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
@@ -25,7 +26,7 @@ const ok = (cond, msg) => {
   else { failed++; console.error(`FAIL - ${msg}`); }
 };
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const wf = readFileSync(join(ROOT, ".github/workflows/deploy.yml"), "utf8");
 
 // --- 1. token isolation ----------------------------------------------------

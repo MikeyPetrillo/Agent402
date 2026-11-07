@@ -15,6 +15,7 @@
 // our relayer; and a paid server with the key set settles a Robinhood payment
 // through it after the primary reverts, while one without the key does not.
 
+import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { createServer, request as httpRequest } from "node:http";
@@ -574,7 +575,7 @@ async function bootAndPay({ withKey, primary = "revert", cdn = false, outageWait
   const env = { ...process.env };
   for (const k of ["STATE_DATABASE_URL", "REDIS_URL", "SOLVADOR_KEY", "ROBINHOOD_RELAYER_KEY"]) delete env[k];
   const preload = settledStatus ? ["--import", "./scripts/lib/settled-status-preload.js"] : [];
-  const proc = spawn(process.execPath, [...preload, "src/server.js"], { cwd: new URL("..", import.meta.url).pathname, stdio: ["ignore", "pipe", "pipe"], env: { ...env, PORT: String(PORT), FREE_MODE: "", ...(settledStatus ? { SETTLED_STATUS_TEST: "1" } : {}),
+  const proc = spawn(process.execPath, [...preload, "src/server.js"], { cwd: fileURLToPath(new URL("..", import.meta.url)), stdio: ["ignore", "pipe", "pipe"], env: { ...env, PORT: String(PORT), FREE_MODE: "", ...(settledStatus ? { SETTLED_STATUS_TEST: "1" } : {}),
     WALLET_ADDRESS: TREASURY, NETWORK: "base", FACILITATOR_URL: `http://127.0.0.1:${BASE_FAC}`, AGENT402_BASE_RPC: `http://127.0.0.1:${BASE_FAC}/rpc`,
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", PAYAI_FACILITATOR_URL: `http://127.0.0.1:${BASE_FAC}`, MPP_SECRET_KEY: "", PAYMENT_NETWORKS: "base,robinhood",
     ROBINHOOD_FACILITATOR_URL: `http://127.0.0.1:${RH1}`, EVM_RPC_4663: RPC, ...(withKey ? { ROBINHOOD_RELAYER_KEY: relayerKey } : {}),

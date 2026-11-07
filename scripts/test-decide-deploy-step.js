@@ -3,6 +3,7 @@
 // and its contract with the main app) on real repository files, and that the
 // deploy job gates the decide deploy on it with the worker's base and
 // fail-open rules.
+import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -26,7 +27,7 @@ ok(touchesDecide(["src/db-ssl.js"]), "a change to an import of decide's server s
 ok(!touchesDecide(["src/server.js", "src/revenue-live.js", "README.md", "scripts/test-all.js"]), "a change outside decide leaves it alone");
 ok(!touchesDecide([""]), "an empty diff leaves it alone");
 
-const cli = (input) => spawnSync(process.execPath, [new URL("./decide-deploy-paths.js", import.meta.url).pathname, "--check"], { input, encoding: "utf8" }).stdout.trim();
+const cli = (input) => spawnSync(process.execPath, [fileURLToPath(new URL("./decide-deploy-paths.js", import.meta.url)), "--check"], { input, encoding: "utf8" }).stdout.trim();
 ok(cli("src/server.js\nservices/decide/rank.js\n") === "yes" && cli("src/server.js\n") === "no", "the --check CLI answers yes/no from stdin");
 const sha = (c) => c.repeat(40);
 const RUNS = [
@@ -34,7 +35,7 @@ const RUNS = [
   { databaseId: 200, headSha: sha("b"), conclusion: "failure" },
   { databaseId: 100, headSha: sha("a"), conclusion: "success" },
 ];
-const baseCli = (input, id) => spawnSync(process.execPath, [new URL("./decide-deploy-paths.js", import.meta.url).pathname, "--base", String(id)], { input, encoding: "utf8" }).stdout.trim();
+const baseCli = (input, id) => spawnSync(process.execPath, [fileURLToPath(new URL("./decide-deploy-paths.js", import.meta.url)), "--base", String(id)], { input, encoding: "utf8" }).stdout.trim();
 ok(baseCli(JSON.stringify(RUNS), 300) === sha("a") && baseCli("not json", 300) === "", "the --base CLI takes the last successful deploy run's head and prints nothing on bad input");
 
 const wf = load(readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8"));

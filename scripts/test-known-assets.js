@@ -7,12 +7,13 @@
 //   - every EVM asset address is the one src/payments.js or @x402/evm's own
 //     default table names for that chain, with the same decimals,
 //   - Solana, Stellar and Algorand match their @x402 scheme packages.
+import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createRequire } from "node:module";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.log(`FAIL - ${m}`); } };
 

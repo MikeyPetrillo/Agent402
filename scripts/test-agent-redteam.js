@@ -21,6 +21,7 @@
 //   6. report prose (src/report-grounding.js sanitizeReportProse, quotedMaterial).
 //
 //   node scripts/test-agent-redteam.js
+import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import "./lib/file-mode.js"; // file backends: never the caller's database or Redis
 import { readFileSync, mkdtempSync } from "node:fs";
@@ -411,7 +412,7 @@ section("1. MCP connector, 402 challenge and 404 on a booted server");
   await new Promise((r) => fac.listen(facPort, "127.0.0.1", r));
   let log = "";
   const child = spawn(process.execPath, ["src/server.js"], {
-    cwd: new URL("..", import.meta.url).pathname,
+    cwd: fileURLToPath(new URL("..", import.meta.url)),
     env: { ...process.env, ...ownStoreEnv("redteam"), PORT: String(port), BASE_URL, FREE_MODE: "", NODE_ENV: "test", NETWORK: "base", PAYMENT_NETWORKS: "base",
       WALLET_ADDRESS: OWN, FACILITATOR_URL: `http://127.0.0.1:${facPort}`, CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", TYPESAFE_API_KEY: "", X402_UPSTREAM_BUYER_KEY: "",
       X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", STATS_ALLOW_EPHEMERAL: "true",

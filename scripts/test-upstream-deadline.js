@@ -34,9 +34,10 @@ process.env.CDP_API_KEY_SECRET = generateKeyPairSync("ec", { namedCurve: "P-256"
 // enforce their spend caps). With no table configured, the placeholder table
 // stands in: the stalled reads are never booked, so no rate is ever read back.
 if (!process.env.UPSTREAM_COSTS_JSON && !process.env.UPSTREAM_COSTS_FILE) {
-  process.env.UPSTREAM_COSTS_FILE = new URL("../docs/example-upstream-costs.json", import.meta.url).pathname;
+  process.env.UPSTREAM_COSTS_FILE = fileURLToPath(new URL("../docs/example-upstream-costs.json", import.meta.url));
 }
 
+import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { generateKeyPairSync } from "node:crypto";
 import {

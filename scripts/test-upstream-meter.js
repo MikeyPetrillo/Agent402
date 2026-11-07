@@ -10,6 +10,7 @@
 //
 // Offline, no network. Uses a unique upstream name per run so the shared
 // dev-machine /tmp stats DB cannot pollute the assertions.
+import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawnSync } from "node:child_process";
 import { childJson } from "./lib/child-json.js";
@@ -22,7 +23,7 @@ const run = (code) => {
   const r = spawnSync(process.execPath, ["--input-type=module", "-e", code], {
     env: { ...process.env, FREE_MODE: "true" },
     encoding: "utf8",
-    cwd: new URL("..", import.meta.url).pathname,
+    cwd: fileURLToPath(new URL("..", import.meta.url)),
   });
   if (r.status !== 0) throw new Error(`child failed: ${r.stderr}`);
   return childJson(r.stdout);

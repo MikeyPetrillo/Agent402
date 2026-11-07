@@ -25,6 +25,7 @@
 // ledger could not be read - which is NOT "clean", because an unreadable
 // ledger and an empty one look identical and that confusion is how the
 // charged-failure alarm sat dead for months.
+import { pathToFileURL } from "node:url";
 
 const TARGET = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/+$/, "");
 const TOKEN = (process.env.AGENT402_OPERATOR_TOKEN || "").trim();
@@ -114,6 +115,6 @@ async function main() {
   process.exit(1);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((e) => { console.error(e); process.exit(2); });
 }

@@ -21,13 +21,14 @@
 //  5. The gas runway check keeps each listed-facilitator rail's readings:
 //     Ink's check does not erase Robinhood's.
 //   node scripts/test-ink-rail.js
+import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { getFreePorts } from "./lib/free-port.js";
 import { ownStoreEnv } from "./lib/own-stores.js";
 
-const root = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
+const root = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/, "");
 const INK = "eip155:57073", BASE_NET = "eip155:8453";
 const INK_USDC = "0x2D270e6886d130D724215A266106e6832161EAEd";
 const SIGNATURE = 'Signature does not authorize this transfer for 0x0000000000000000000000000000000000000e01 (EIP-712 domain "USDC" v2 on chain 57073)';

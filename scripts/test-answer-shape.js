@@ -17,6 +17,7 @@
 //            the same word under the same title.
 //   booted   a paid-mode server (stub facilitator) counts a paid empty answer
 //            and a paid ok answer by class on the operator endpoint.
+import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
@@ -349,7 +350,7 @@ await check("booted (paid mode, stub facilitator): a paid empty answer and a pai
   await new Promise((r) => facilitator.listen(FAC_PORT, "127.0.0.1", r));
   const log = [];
   const proc = spawn(process.execPath, ["src/server.js"], {
-    cwd: new URL("..", import.meta.url).pathname,
+    cwd: fileURLToPath(new URL("..", import.meta.url)),
     env: { ...process.env, PORT: String(PORT), FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", PAYMENT_NETWORKS: "base",
       FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`,
       CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "", REDIS_URL: "",

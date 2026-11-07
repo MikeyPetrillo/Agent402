@@ -11,13 +11,14 @@
 // imports a name the overridden version lacks fails here, not at a buyer's
 // first Solana payment), the overrides must match the direct deps, and exactly
 // one kit must be reachable from our code and from @x402/svm. Offline.
+import { fileURLToPath } from "node:url";
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 
 let pass = 0;
 const ok = (c, m) => { if (!c) { console.error("FAIL:", m); process.exit(1); } pass++; };
-const ROOT = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
+const ROOT = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/, "");
 const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
 const version = (p) => JSON.parse(readFileSync(p, "utf8")).version;
 const major = (v) => Number(String(v).replace(/^[^\d]*/, "").split(".")[0]);

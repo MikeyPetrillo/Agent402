@@ -18,6 +18,7 @@
 //     an offered currency and the amount, counting a Transfer and its
 //     TransferWithMemo twin once;
 //   - the job reads our Tempo payTo and currencies from the live challenge.
+import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import http from "node:http";
 import { readFileSync } from "node:fs";
@@ -379,7 +380,7 @@ const planOptions = { senders: ALL_SENDERS, maxEachUsd: 0.25, maxTotalUsd: 2, ma
     const env = { ...process.env, TARGET_URL: `http://127.0.0.1:${stub.address().port}`, AGENT402_OPERATOR_TOKEN: "t", REFUND_TEMPO_KEY: "0x" + "11".repeat(32), REFUND_SOLANA_KEY: "x", REFUND_EVM_KEY: "0x" + "22".repeat(32) };
     if (live === undefined) delete env.REFUND_LIVE; else env.REFUND_LIVE = live;
     const out = await new Promise((resolve) => {
-      const c = spawn(process.execPath, [new URL("./refund-run.js", import.meta.url).pathname], { env, stdio: ["ignore", "pipe", "pipe"] });
+      const c = spawn(process.execPath, [fileURLToPath(new URL("./refund-run.js", import.meta.url))], { env, stdio: ["ignore", "pipe", "pipe"] });
       let s = ""; c.stdout.on("data", (d) => { s += d; }); c.stderr.on("data", (d) => { s += d; });
       c.on("exit", (code) => resolve({ code, s }));
     });
