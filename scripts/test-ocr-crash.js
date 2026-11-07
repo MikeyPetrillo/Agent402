@@ -25,7 +25,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { Jimp } from "jimp";
 import { deflateSync, crc32 } from "node:zlib";
-import { OCR_TOOLS, imageFormatOf, checkImageHeader, tessdataInstalled, __ocrTest } from "../src/tools/ocr-kit.js";
+import { OCR_TOOLS, OCR_MAX_PIXELS, OCR_MAX_SIDE, OCR_LARGE_PIXELS, OCR_LARGE_QUEUE_MAX, __ocrLargeTest, ocrDownscaleSide, imageFormatOf, checkImageHeader, tessdataInstalled, __ocrTest } from "../src/tools/ocr-kit.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -128,6 +128,42 @@ async function call(input) {
     const r = sizeOf(buf);
     ok(r?.statusCode === 422 && r?.hint === "image-too-large" && /megapixels/.test(r.message), `${what} over the cap is a 422 image-too-large (got ${r?.statusCode} ${r?.hint})`);
   }
+  // The cap's edge: exactly 64 MP passes the header check, one pixel more is
+  // refused with the limits, the image's size and the side to downscale to.
+  ok(OCR_MAX_PIXELS === 64_000_000 && OCR_MAX_SIDE === 32_767, "the caps are 64 megapixels and 32,767 pixels a side");
+  for (const [w, h] of [[8000, 8000], [16000, 4000], [32000, 2000]]) {
+    const r = sizeOf(pngHead(w, h));
+    ok(r && r.width === w && r.height === h, `exactly 64 MP (${w}x${h}) passes the pre-check (got ${r instanceof Error ? r.message : `${r?.width}x${r?.height}`})`);
+  }
+  {
+    const r = sizeOf(pngHead(12277, 5213)); // 64,000,001 pixels
+    ok(r?.statusCode === 422 && r?.hint === "image-too-large", `64 MP plus one pixel (12277x5213) is a 422 image-too-large (got ${r?.statusCode} ${r?.hint})`);
+    ok(r?.maxMegapixels === 64 && r?.maxSide === 32767 && r?.width === 12277 && r?.height === 5213 && r?.megapixels === 64,
+      `...naming maxMegapixels, maxSide, width, height and megapixels (${JSON.stringify({ maxMegapixels: r?.maxMegapixels, maxSide: r?.maxSide, width: r?.width, height: r?.height, megapixels: r?.megapixels })})`);
+    ok(Number.isInteger(r?.downscaleToLongestSide) && r.downscaleToLongestSide < 12277 && r.fix.includes(`at most ${r.downscaleToLongestSide} pixels`) && r.message.includes(r.fix),
+      `...and the side to downscale to (${r?.downscaleToLongestSide}), in the fix and the message`);
+    ok(/Nothing was charged\.$/.test(r?.message) && /downscaled/.test(r?.howToCallNote || ""), "...ending 'Nothing was charged.', with a howToCall note to resend it downscaled");
+  }
+  // The hint's longest side lands under the cap at the image's own aspect
+  // ratio, whichever way a resizer rounds the short side, and is the largest
+  // such side (one pixel more would not fit).
+  {
+    const fitsAt = (w, h, side) => {
+      const long = Math.max(w, h), short = Math.min(w, h);
+      return side <= OCR_MAX_SIDE && side * Math.ceil((short * side) / long) <= OCR_MAX_PIXELS;
+    };
+    const shapes = [[12277, 5213], [9000, 9000], [12000, 9000], [9000, 12000], [16000, 9000], [30000, 30000], [32767, 32767], [32767, 3000], [40000, 10], [100000, 40000], [65000, 65000], [10001, 6400], [8001, 8000]];
+    const bad = [];
+    for (const [w, h] of shapes) {
+      const side = ocrDownscaleSide(w, h);
+      const long = Math.max(w, h), short = Math.min(w, h);
+      const fl = Math.floor((short * side) / long), rnd = Math.round((short * side) / long);
+      if (!fitsAt(w, h, side) || side * fl > OCR_MAX_PIXELS || side * rnd > OCR_MAX_PIXELS) bad.push(`${w}x${h} -> ${side} does not fit`);
+      else if (side < OCR_MAX_SIDE && side < long && fitsAt(w, h, side + 1)) bad.push(`${w}x${h} -> ${side} is not the largest side that fits`);
+      else if (w * h <= OCR_MAX_PIXELS && w <= OCR_MAX_SIDE && h <= OCR_MAX_SIDE && side !== long) bad.push(`${w}x${h} already fits but -> ${side}`);
+    }
+    ok(bad.length === 0, `the downscale side lands under 64 MP for ${shapes.length} aspect ratios, and is the largest that does${bad.length ? `: ${bad.join("; ")}` : ""}`);
+  }
   // A BMP declaring a huge canvas with no rows behind it: bmp-js would allocate
   // width x height x 4 bytes before reading a row.
   const bmpBomb = sizeOf(bmpHead(40000, 30000, 24, false));
@@ -171,10 +207,15 @@ async function call(input) {
     const before = process.memoryUsage().rss;
     let peak = before;
     const t = setInterval(() => { peak = Math.max(peak, process.memoryUsage().rss); }, 10);
-    const { err } = await call({ image: png.toString("base64") });
+    const image = png.toString("base64");
+    const t0 = process.hrtime.bigint();
+    const { err } = await call({ image });
+    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
     clearInterval(t);
     ok(err?.statusCode === 422 && err?.hint === "image-too-large" && err?.width === W, `a ${png.length}-byte PNG declaring 30000x30000 is a 422 image-too-large (got ${err?.statusCode} ${err?.hint})`);
     ok(peak - before < 64 * 1048576, `the refusal grew RSS by under 64 MB (${((peak - before) / 1048576).toFixed(1)} MB)`);
+    ok(ms < 25, `...refused in ${ms.toFixed(2)} ms, before any decode (under 25 ms)`);
+    ok(err?.maxMegapixels === 64 && err?.megapixels === 900 && err?.downscaleToLongestSide === 8000, `...naming 900 megapixels against 64 and a longest side of 8000 (got ${err?.megapixels}, ${err?.downscaleToLongestSide})`);
   }
 
   // An engine fault on an image whose header checked out is the server's: a
@@ -190,6 +231,49 @@ async function call(input) {
     __ocrTest.inject("ell", { recognize: () => Promise.reject("RangeError [ERR_OUT_OF_RANGE]: The value of \"offset\" is out of range."), terminate: async () => {} });
     const { err } = await call({ image: good.toString("base64"), lang: "ell" });
     ok(err?.statusCode === 422 && err?.hint === "image-decode-failed" && !/RangeError|ERR_/.test(String(err?.message)), `a reader running past the end of the bytes is a 422 without its text (got ${err?.statusCode})`);
+  }
+
+  // --- the large-image slot: one image over 16 MP in the engine at a time ---
+  {
+    ok(OCR_LARGE_PIXELS === 16_000_000, "the large-image threshold is 16 megapixels");
+    const first = await __ocrLargeTest.acquire(50);
+    ok(__ocrLargeTest.state().busy, "the first large image takes the slot at once");
+    const order = [];
+    const second = __ocrLargeTest.acquire(5_000).then((rel) => { order.push("second"); return rel; });
+    const third = __ocrLargeTest.acquire(5_000).then((rel) => { order.push("third"); return rel; });
+    ok(__ocrLargeTest.state().waiting === OCR_LARGE_QUEUE_MAX, `two more wait for it (waiting ${__ocrLargeTest.state().waiting})`);
+    const overflow = await __ocrLargeTest.acquire(5_000).then(() => null, (e) => e);
+    ok(overflow?.statusCode === 503 && overflow.retryAfter === 60 && overflow.shed === true && overflow.hint === "large-image-busy" && /Nothing was charged\./.test(overflow.message),
+      `past ${OCR_LARGE_QUEUE_MAX} waiting, a large image is a 503 at once with Retry-After 60 (got ${overflow?.statusCode})`);
+    first();
+    const r2 = await second;
+    ok(order.join() === "second" && __ocrLargeTest.state().busy, "release passes the slot to the next waiter, in order");
+    r2();
+    const r3 = await third;
+    r3();
+    ok(!__ocrLargeTest.state().busy && __ocrLargeTest.state().waiting === 0, "the last release frees the slot");
+    const hold = await __ocrLargeTest.acquire(50);
+    const t0 = Date.now();
+    const late = await __ocrLargeTest.acquire(80).then(() => null, (e) => e);
+    ok(late?.statusCode === 503 && Date.now() - t0 >= 70 && __ocrLargeTest.state().waiting === 0, `a waiter past its wait is a 503 and leaves the queue (after ${Date.now() - t0} ms)`);
+    hold();
+
+    // A small image never waits on the slot; a large one does, and the worker
+    // that read it is retired (its grown WASM memory released).
+    let terminated = 0;
+    const stand = () => ({ recognize: async () => ({ data: { text: "x", lines: [] } }), terminate: async () => { terminated++; } });
+    const png16 = pngHead(16, 16);
+    __ocrTest.inject("tur", stand());
+    const blocker = await __ocrLargeTest.acquire(50);
+    const small = await Promise.race([__ocrLargeTest.recognize(png16, "tur", "png", 4_000_000).then(() => "ran"), new Promise((r) => setTimeout(() => r("waited"), 200))]);
+    ok(small === "ran", "an image at or under 16 MP runs while the large-image slot is held");
+    const big = __ocrLargeTest.recognize(png16, "tur", "png", 16_000_001).then(() => "ran");
+    const early = await Promise.race([big, new Promise((r) => setTimeout(() => r("waiting"), 100))]);
+    ok(early === "waiting", "an image over 16 MP waits while the slot is held");
+    blocker();
+    ok(await big === "ran", "...and runs once it is released");
+    await new Promise((r) => setTimeout(r, 20));
+    ok(terminated === 1 && !__ocrLargeTest.state().busy, `the worker that read the large image is retired (terminated ${terminated}), the slot freed`);
   }
 
   // --- engine-backed ---

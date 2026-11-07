@@ -71,6 +71,11 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { faile
   ok(big400 && big400.method === "POST" && big400.url === "https://origin.example/api/long" && Object.keys(big400).length === 2,
     `400 form: a call past ${MAX_CALL_BYTES} bytes goes out as its method and URL only (the 400's example carries the body once)`);
 
+  const noted = howToCallField(post, { note: "Send this again with a smaller image." }).howToCall;
+  ok(noted?.note === "Send this again with a smaller image." && noted.method === "POST" && JSON.stringify(noted.body) === JSON.stringify(post.discovery.input), "a refusal's note rides beside the full call");
+  ok(howToCallField(long, { note: "resend" }).howToCall?.note === "resend", "...and beside a call capped to its method and URL");
+  ok(!("note" in howToCallField(post, { note: "x".repeat(201) }).howToCall) && !("note" in howToCallField(post, { note: "a\nb" }).howToCall), "a note past 200 characters or with a control character is left out");
+
   // /openapi.json documents the 400 the server sends: every operation's 400
   // names howToCall and each field the builder can put in it.
   const { openapiSpec } = await import("../src/pages.js");
@@ -125,6 +130,25 @@ try {
   for (const c of [b.howToCall, b.howToCall?.alternate].filter(Boolean)) {
     const res = await send(c);
     ok(res.status === 200 && typeof res.body?.result === "string", `the ${c.method} form runs as written (${res.status})`);
+  }
+
+  // A refusal whose fix is in the input (image-ocr over its pixel cap): a 422
+  // carrying the caps, the image's size, the side to downscale to, and the
+  // same call with a note to resend the image downscaled.
+  {
+    const head = Buffer.alloc(33);
+    Buffer.from("89504e470d0a1a0a0000000d49484452", "hex").copy(head, 0);
+    head.writeUInt32BE(12000, 16); head.writeUInt32BE(9000, 20); head[24] = 8;
+    const r422 = await fetch(`${local}/api/image-ocr`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ image: head.toString("base64") }) });
+    const b422 = await r422.json();
+    ok(r422.status === 422 && b422.hint === "image-too-large" && b422.maxMegapixels === 64 && b422.maxSide === 32767 && b422.width === 12000 && b422.height === 9000 && b422.megapixels === 108,
+      `image-ocr over the cap: 422 with maxMegapixels, maxSide, width, height and megapixels (got ${r422.status} ${JSON.stringify({ hint: b422.hint, maxMegapixels: b422.maxMegapixels, maxSide: b422.maxSide, width: b422.width, height: b422.height, megapixels: b422.megapixels })})`);
+    const side = b422.downscaleToLongestSide;
+    ok(Number.isInteger(side) && side * Math.ceil((9000 * side) / 12000) <= 64e6 && typeof b422.fix === "string" && b422.fix.includes(`${side} pixels`),
+      `...the side to downscale to (${side}) lands under 64 MP, and the fix names it`);
+    ok(b422.howToCall?.method === "POST" && b422.howToCall.url === `${ORIGIN}/api/image-ocr` && /downscaled/.test(b422.howToCall.note || "") && b422.howToCall.note.includes(String(side)),
+      "...and howToCall is the same call with a note to resend the image downscaled");
+    ok(/Nothing was charged\./.test(b422.error || ""), "...and the message says nothing was charged (a 422 is never settled)");
   }
 
   // Every free-tier tool whose empty call is refused: run what the 400 says.
