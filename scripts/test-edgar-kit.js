@@ -92,14 +92,14 @@ const ok = (c, m) => { if (c) console.log(`ok - ${m}`); else { assertFail++; con
   ok(calls.length === 1 && /from=100/.test(calls[0]), "a later empty page ends paging without a second read");
 }
 
-// --- the control query's verdict is kept per reader: 60 s for "answering",
+// --- the control query's verdict is kept per reader: 20 s for "answering",
 // 15 s for "serving empties", never for an errored read (offline, stubbed) ---
 {
   const { eftsSearchWith, EFTS_CONTROL_YES_TTL_MS, EFTS_CONTROL_NO_TTL_MS } = await import("../src/tools/edgar-kit.js");
   const empty = { hits: { total: { value: 0 }, hits: [] } };
   const CTRL = { hits: { total: { value: 9000 }, hits: [{ _id: "c" }] } };
   const isCtl = (url) => /forms=10-K&/.test(url) && !/q=/.test(url);
-  ok(EFTS_CONTROL_YES_TTL_MS === 60_000 && EFTS_CONTROL_NO_TTL_MS === 15_000, "control verdict TTLs are 60 s (answering) and 15 s (serving empties)");
+  ok(EFTS_CONTROL_YES_TTL_MS === 20_000 && EFTS_CONTROL_NO_TTL_MS === 15_000, "control verdict TTLs are 20 s (answering) and 15 s (serving empties)");
   let t = 1_000_000;
   const clock = () => t;
   // ctlAnswer: what the control read gives (an object, or a function that throws).
@@ -115,17 +115,18 @@ const ok = (c, m) => { if (c) console.log(`ok - ${m}`); else { assertFail++; con
   const search = (st, q = "S-1") => eftsSearchWith({ forms: q }, { getJson: st.getJson, pauseMs: 0, budget: null, clock });
   const run = async (fn) => { try { return { r: await fn() }; } catch (e) { return { e }; } };
 
-  // Two empty searches inside 60 s: one control read; both answer empty.
+  // Two empty searches inside 20 s: one control read; both answer empty.
   let st = mk(CTRL);
   let a = await run(() => search(st));
-  t += 30_000;
+  t += 19_000;
   let b = await run(() => search(st, "S-3"));
-  ok(st.ctl === 1 && !a.e && !b.e && a.r.hits.hits.length === 0 && b.r.hits.hits.length === 0, `two empty searches within 60 s make one control read (${st.ctl})`);
+  ok(st.ctl === 1 && !a.e && !b.e && a.r.hits.hits.length === 0 && b.r.hits.hits.length === 0, `two empty searches within 20 s make one control read (${st.ctl})`);
   ok(st.reads === 9, `the buyer's own query is never cached: each search still makes its four reads (${st.reads} reads)`);
-  // Past the 60 s TTL: a second control read.
-  t += 30_001;
+  // Past the 20 s TTL: a second control read (an "answering" verdict is
+  // never believed for a full minute).
+  t += 1_001;
   await run(() => search(st));
-  ok(st.ctl === 2, `after the 60 s TTL a second control read happens (${st.ctl})`);
+  ok(st.ctl === 2, `after the 20 s TTL a second control read happens (${st.ctl})`);
 
   // A cached "not answering" stands 15 s, then is read again.
   st = mk(empty);
