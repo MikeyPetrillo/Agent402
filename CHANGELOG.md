@@ -6,11 +6,19 @@ carries its own version on npm.
 
 ## Unreleased
 
-### 2026-11-07 (onchain-sql price)
+### 2026-11-07 (onchain-sql price, X data tools)
 Tools:
 - onchain-sql is $0.030 a call (was $0.040), and a call still sends the query
   service at most 3 queries. The onchain-analyst pack follows the tool's
   price.
+- x-tweet no longer reads the author: the tweet carries authorId, its author
+  username, name and verified fields are null, and its link is the
+  /i/web/status form.
+- x-user-tweets is $0.09. Looked up by username, the account's profile still
+  fills user and each row's author. Looked up by id, the author is not read:
+  rows carry authorId, null author fields and the /i/web/status link, and
+  user carries the id with null username, name and verified.
+- x-search-recent is unchanged.
 
 ### 2026-11-06 (Ink rail)
 Payments:

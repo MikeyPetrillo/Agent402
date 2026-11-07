@@ -342,6 +342,59 @@ const SQL_WORST_CASE_BOUND = 0.85;
 }
 
 // ---------------------------------------------------------------------------
+// 5c. X data tools: X bills per object returned, the objects under
+//     `includes` from an expansion among them (X notice, 2026-11-05). Each
+//     tool's worst case for each body shape that changes what it reads (every
+//     read its handler sends, at its largest page, one expanded author per
+//     post) comes from the kit's own estimator (xToolWorstCases) and must sit
+//     within the MARGIN bound of the tool's fixed price. Every X tool stays
+//     fixed-price. Figures stay in the process: only PASS/FAIL is printed.
+//
+//     DATED EXCEPTION (2026-11-07), x-search-recent: its rows carry author
+//     usernames from the author expansion, and with one expanded user per
+//     post billed at the user-read rate its worst case falls under MARGIN at
+//     the current price. X's notice of 2026-11-05 says expansions will count
+//     toward usage but gives no effective date and no rate, and X's billing
+//     docs still meter posts only. Until X publishes both, only the worst case
+//     WITHOUT expansion billing is held to MARGIN here. When X publishes an
+//     effective date and rate, reprice x-search-recent from those real numbers
+//     and remove this exception. The kit's daily cap and spend meter already
+//     count expanded objects either way.
+const X_EXPANSION_BILLING_PENDING = new Map([["x-search-recent", "2026-11-07"]]);
+console.log("\n# X data tools: worst-case reads, expansions included, vs price");
+{
+  const { X_DATA_TOOLS, xToolWorstCases } = await import("../src/tools/x-data-kit.js");
+  if (upstreamCosts().vendor?.x?.postRead == null || upstreamCosts().vendor?.x?.userRead == null) {
+    if (process.env.CI && process.env.UPSTREAM_COSTS_OPTIONAL !== "1") ok(false, "x data: the private table has no vendor.x rates (required under CI)");
+    else console.log("SKIP - x data margin: the private table has no vendor.x rates");
+  } else {
+    for (const t of X_DATA_TOOLS) {
+      const price = Number(String(t.price).replace(/[^0-9.]/g, ""));
+      ok(Number.isFinite(price) && price > 0 && t.quote === undefined && t.tierQuote === undefined, `${t.slug}: a fixed list price`);
+      const cases = xToolWorstCases(t.slug);
+      ok(cases.length >= 1, `${t.slug}: at least one worst-case body`);
+      const pending = X_EXPANSION_BILLING_PENDING.get(t.slug);
+      for (const { body, usd, usdWithoutExpansions } of cases) {
+        const label = `${t.slug} ${JSON.stringify(body)}`;
+        if (pending) {
+          ok(Number.isFinite(usdWithoutExpansions) && usdWithoutExpansions < usd, `${label}: the worst case without expansion billing is computed`);
+          const within = usdWithoutExpansions <= MARGIN * price + 1e-12;
+          ok(within, `${label}: worst-case reads without expansion billing within the margin bound of the list price: ${within ? "PASS" : "FAIL"}`);
+          console.log(`EXCEPTION - ${label}: expansion billing not yet priced (dated ${pending}; reprice when X publishes an effective date and rate): ${usd <= MARGIN * price + 1e-12 ? "within" : "outside"} the bound with expansions`);
+          table.push({ tier: t.slug, price, worst: usdWithoutExpansions, model: "X reads (expansions unbilled, dated exception)" });
+        } else {
+          const within = usd <= MARGIN * price + 1e-12;
+          ok(within, `${label}: worst-case reads, expansions included, within the margin bound of the list price: ${within ? "PASS" : "FAIL"}`);
+          table.push({ tier: t.slug, price, worst: usd, model: `X reads ${JSON.stringify(body)}` });
+        }
+      }
+    }
+    // The exception list names only live X tools.
+    for (const slug of X_EXPANSION_BILLING_PENDING.keys()) ok(X_DATA_TOOLS.some((t) => t.slug === slug), `expansion-billing exception names a live X tool (${slug})`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 6. tool_gone telemetry — every retired-route hit (transparently served 200
 // or teaching 410) must be visible in PostHog.
 console.log("\n# tool_gone — retired-route telemetry");
