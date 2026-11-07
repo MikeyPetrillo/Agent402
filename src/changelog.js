@@ -11,6 +11,8 @@ const ENTRIES = [
       "Gateway: a metered model id written with a hyphenated version (v4-1 for v4.1) is served as the dotted id when that exact id is on the upstream's live list; any other unknown part is still refused. The unknown-model 400 carries suggestions (the closest served ids, at most three) and a howToCall that retries with the first.",
       "Gateway: the metered routes take 200k input chars on every model and more on a model with a larger context window (three chars per window token, up to 1,000,000), each request still quoted from its own body. An input over the cap is refused with maxInputChars, inputChars, a trim-input hint and models whose window takes it, before payment on /v1/metered/chat/completions.",
       "Operations: a /v1/metered/chat/completions input refusal answered before payment is logged and counted like a handler 400, marked pre-payment.",
+      "Tools: image-ocr answers 422 for a body that is not an image it reads (a PDF, a webpage, an SVG), naming what it got and the formats it reads (PNG, JPEG, GIF, BMP, TIFF, WebP), and 422 for an image that does not decode, where it answered 500 \"OCR failed: unknown\".",
+      "Tools: a tool that fetches a URL answers a source host that times out or refuses the connection with a 504 carrying attribution \"upstream\" and the hint source-timeout or source-unreachable, so a caller can retry later or pick another host.",
     ],
   },
   {

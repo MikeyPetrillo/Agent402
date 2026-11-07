@@ -83,7 +83,8 @@ function getWorkerEntry(lang) {
     // would let one bad image crash the whole server (a DoS). Providing a
     // handler routes that error here instead of throwing; the same error
     // still rejects recognize(), which the caller below try/catches into a
-    // clean 500. So this contains the stray throw without hiding the failure.
+    // clean 422 (undecodable image) or 500 (engine failure). So this contains
+    // the stray throw without hiding the failure.
     errorHandler: (e) => {
       console.error("[ocr] tesseract worker error (contained):", (e && e.message) || e);
     },
@@ -137,7 +138,53 @@ export const SUPPORTED_LANGS = new Set([
   "chi_sim", "chi_tra", "jpn", "kor", "ara", "hin", "tha", "vie", "ukr", "ell",
 ]);
 
-async function doRecognize(buf, lang) {
+// The image formats the bundled Leptonica reads, by magic bytes. Anything
+// else is refused before the engine sees it: Leptonica answers a PDF, a
+// webpage or an SVG with a bare decode failure, which used to surface as a
+// 500 "OCR failed: unknown" (2026-11-05).
+export function imageFormatOf(buf) {
+  if (!buf || buf.length < 8) return null;
+  const b = buf;
+  if (b[0] === 0x89 && b.subarray(1, 4).toString("latin1") === "PNG") return "png";
+  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "jpeg";
+  const s4 = b.subarray(0, 4).toString("latin1");
+  if (s4 === "GIF8") return "gif";
+  if (b[0] === 0x42 && b[1] === 0x4d) return "bmp";
+  if (s4 === "II*\0" || s4 === "MM\0*") return "tiff";
+  if (s4 === "RIFF" && b.length >= 12 && b.subarray(8, 12).toString("latin1") === "WEBP") return "webp";
+  if (b[0] === 0x50 && b[1] >= 0x31 && b[1] <= 0x36 && /\s/.test(String.fromCharCode(b[2]))) return "pnm";
+  return null;
+}
+
+export const OCR_FORMATS_TEXT = "PNG, JPEG, GIF, BMP, TIFF, WebP or PNM";
+
+/** What a non-image body looks like, for the refusal's wording. */
+function describeNonImage(buf) {
+  const head = buf.subarray(0, 512).toString("latin1").trimStart();
+  if (head.startsWith("%PDF-")) return "a PDF (use pdf-to-markdown for a PDF's text)";
+  if (/^<\?xml[\s\S]*<svg|^<svg/i.test(head)) return "an SVG (a vector format; render it to PNG first)";
+  if (/^<(!doctype html|html|head|body)/i.test(head)) return "an HTML page, not an image";
+  if (/^[{[]/.test(head)) return "JSON, not an image";
+  if (buf.subarray(4, 8).toString("latin1") === "ftyp") return "an HEIC/AVIF or video file (convert it to PNG or JPEG first)";
+  return "not a recognized image";
+}
+
+/** A 422 for a body that is not an image the engine reads. */
+function notAnImage(buf, from) {
+  return Object.assign(
+    bad(`${from} is ${describeNonImage(buf)}; image-ocr reads ${OCR_FORMATS_TEXT}`, 422),
+    { hint: "unsupported-image-format" },
+  );
+}
+
+// tesseract.js rejects with a STRING (its worker posts err.toString()), so a
+// rejection has no .message: read both shapes.
+const rejectionText = (e) => String((e && typeof e === "object" && e.message) || e || "").slice(0, 200);
+// Leptonica's read failure and the WASM abort a malformed body causes (a
+// truncated PNG aborts libpng): the bytes start like an image but do not decode.
+const DECODE_FAILURE = /attempting to read image|pixRead|Aborted\(|RuntimeError/i;
+
+async function doRecognize(buf, lang, fmt) {
   const entry = getWorkerEntry(lang);
   entry.active++;
   try {
@@ -149,7 +196,14 @@ async function doRecognize(buf, lang) {
     // gets a fresh one; this avoids one bad input poisoning the process.
     dropEntry(lang, entry);
     if (e?.statusCode === 503) throw e;
-    throw bad(`OCR failed: ${e.message || "unknown"}`, 500);
+    const why = rejectionText(e);
+    if (DECODE_FAILURE.test(why)) {
+      throw Object.assign(
+        bad(`the image could not be decoded: it starts like a ${fmt.toUpperCase()} file but is corrupt, truncated or too large to decode`, 422),
+        { hint: "image-decode-failed" },
+      );
+    }
+    throw bad(`OCR engine failed: ${why || "no reason given"}`, 500);
   } finally {
     entry.active--;
     if (entry.retired) retireEntry(entry);
@@ -164,14 +218,14 @@ export const OCR_TOOLS = [
     category: "data",
     price: "$0.01",
     description:
-      "Extract text from an image (PNG/JPEG): returns the full text, overall confidence (0-100), and per-line bounding boxes. Send either {image: base64} or {url: 'https://…'}. Pure-CPU Tesseract via tesseract.js - no upstream API, no keys. Default lang 'eng'; pass 'lang' (ISO 639-2) for others.",
+      "Extract text from an image (PNG, JPEG, GIF, BMP, TIFF or WebP): returns the full text, overall confidence (0-100), and per-line bounding boxes. Send either {image: base64} or {url: 'https://…'}. Pure-CPU Tesseract via tesseract.js - no upstream API, no keys. Default lang 'eng'; pass 'lang' (ISO 639-2) for others.",
     tags: ["ocr", "image", "text-extraction", "tesseract", "scanned-document", "receipt", "extract", "text"],
     discovery: {
       bodyType: "json",
       input: { url: "https://agent402.tools/fixtures/sample-text.png" },
       inputSchema: {
         properties: {
-          image: { type: "string", description: "Base64 PNG/JPEG (data: URL prefix accepted). Either this or url is required." },
+          image: { type: "string", description: "Base64 PNG, JPEG, GIF, BMP, TIFF or WebP (data: URL prefix accepted). Either this or url is required." },
           url: { type: "string", description: "HTTPS URL to fetch the image from (max 8 MB). Either this or image is required." },
           lang: { type: "string", description: "Language code, ISO 639-2. Default 'eng'. Supported: eng, spa, fra, deu, ita, por, nld, rus, pol, tur, chi_sim, chi_tra, jpn, kor, ara, hin, tha, vie, ukr, ell." },
         },
@@ -197,19 +251,24 @@ export const OCR_TOOLS = [
       }
 
       let buf;
+      let from;
       if (i.image) {
         buf = decodeImageInput(i.image);
+        from = '"image"';
       } else if (i.url) {
         const url = String(i.url).trim();
         if (!/^https?:\/\//i.test(url)) throw bad('"url" must be http(s)');
         const { buffer } = await safeFetch(url, { binary: true, maxBytes: MAX_FETCH });
         if (!buffer || buffer.length < 8) throw bad("fetched image too small or empty", 502);
         buf = buffer;
+        from = "The file at that URL";
       } else {
         throw bad('Provide either "image" (base64) or "url"');
       }
 
-      const data = await doRecognize(buf, lang);
+      const fmt = imageFormatOf(buf);
+      if (!fmt) throw notAnImage(buf, from);
+      const data = await doRecognize(buf, lang, fmt);
       const lines = (data.lines ?? []).map((l) => ({
         text: (l.text ?? "").replace(/\s+$/g, ""),
         confidence: typeof l.confidence === "number" ? +l.confidence.toFixed(2) : null,
