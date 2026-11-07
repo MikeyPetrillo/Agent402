@@ -41,6 +41,10 @@ const USER_AGENT = "Agent402/1.0 (+https://agent402.tools)";
 
 const TWEET_FIELDS = "created_at,public_metrics,author_id,lang,conversation_id,possibly_sensitive";
 const USER_FIELDS = "created_at,description,public_metrics,verified,verified_type,location,url,protected,profile_image_url";
+// The author expansion: each tweet row carries the author's username, name and
+// verification, and its status URL is built from the username. Billed per
+// expanded user (see EXPANSION_INCLUDES below).
+const AUTHOR_EXPANSION = Object.freeze({ expansions: "author_id", "user.fields": "username,name,verified" });
 
 const USERNAME_RE = /^[A-Za-z0-9_]{1,15}$/;
 const ID_RE = /^\d{1,20}$/;
@@ -122,19 +126,66 @@ const xSpend = { day: "", micro: 0, refused: 0 };
 const xShared = createSharedDailySpend("xdata-day", "x-data");
 const utcDay = (now = Date.now()) => new Date(now).toISOString().slice(0, 10);
 const xSpendToday = (now = Date.now()) => { const d = utcDay(now); if (xSpend.day !== d) { xSpend.day = d; xSpend.micro = 0; xSpend.refused = 0; } return xSpend.micro / 1e6; };
-/** Worst-case cost of one read at X's card, from the path and params. */
+// Objects returned through `expansions` are billed too (X notice,
+// 2026-11-05): each one under `includes` is metered at the card rate of its
+// kind, a user read for `includes.users`, a post read for `includes.tweets`.
+// Each expansion below fills one `includes` array with at most one object per
+// primary item, which is the worst case the estimate reserves. An expansion
+// this table does not know is priced at the dearer read per primary item.
+const EXPANSION_INCLUDES = {
+  author_id: "users",
+  in_reply_to_user_id: "users",
+  "referenced_tweets.id.author_id": "users",
+  "referenced_tweets.id": "tweets",
+  pinned_tweet_id: "tweets",
+};
+const INCLUDE_RATE = { users: "userRead", tweets: "postRead" };
+const expansionsOf = (params) => String(params?.expansions || "").split(",").map((s) => s.trim()).filter(Boolean);
+/** Worst-case cost of one read at X's card, from the path and params, expanded objects included. */
 export function estimateXReadUsd(path, params = {}) {
-  if (/^\/tweets\/search\/recent$/.test(path) || /^\/users\/[^/]+\/tweets$/.test(path)) return (Math.max(1, Number(params.max_results) || 10)) * xRate("postRead");
-  if (/^\/tweets\/[^/]+$/.test(path)) return xRate("postRead");
-  if (path === "/users/by") return (String(params.usernames || "").split(",").filter(Boolean).length || 1) * xRate("userRead");
-  if (/^\/users\/by\/username\//.test(path)) return xRate("userRead");
-  return xRate("userRead"); // an endpoint this table does not know is priced as a user read
+  let items, perItem;
+  if (/^\/tweets\/search\/recent$/.test(path) || /^\/users\/[^/]+\/tweets$/.test(path)) { items = Math.max(1, Number(params.max_results) || 10); perItem = xRate("postRead"); }
+  else if (/^\/tweets\/[^/]+$/.test(path)) { items = 1; perItem = xRate("postRead"); }
+  else if (path === "/users/by") { items = String(params.usernames || "").split(",").filter(Boolean).length || 1; perItem = xRate("userRead"); }
+  else { items = 1; perItem = xRate("userRead"); } // one user, or an endpoint this table does not know, priced as a user read
+  let usd = items * perItem;
+  for (const exp of expansionsOf(params)) {
+    const kind = EXPANSION_INCLUDES[exp];
+    usd += items * (kind ? xRate(INCLUDE_RATE[kind]) : Math.max(xRate("postRead"), xRate("userRead")));
+  }
+  return usd;
 }
-/** Actual cost of what came back: X bills per item returned. */
+/** Actual cost of what came back: X bills per item returned, expanded objects included. */
 export function actualXReadUsd(path, data) {
   const n = Array.isArray(data?.data) ? data.data.length : (data?.data ? 1 : 0);
   const perItem = (/^\/tweets/.test(path) || /\/tweets$/.test(path)) ? xRate("postRead") : xRate("userRead");
-  return n * perItem;
+  let usd = n * perItem;
+  for (const [kind, key] of Object.entries(INCLUDE_RATE)) {
+    const arr = data?.includes?.[kind];
+    if (Array.isArray(arr) && arr.length) usd += arr.length * xRate(key);
+  }
+  return usd;
+}
+/**
+ * Worst-case X spend of one call to a tool: every read the handler sends, at
+ * the largest page it accepts, priced by estimateXReadUsd from the same
+ * params the handler puts on the wire. scripts/test-pricing-margin.js holds
+ * it under the margin bound of the list price.
+ */
+export function xToolWorstCaseUsd(slug) {
+  const page = Math.max(10, X_MAX_POSTS_PER_CALL());
+  const timeline = { max_results: X_MAX_POSTS_PER_CALL(), "tweet.fields": TWEET_FIELDS };
+  switch (slug) {
+    case "x-search-recent": return estimateXReadUsd("/tweets/search/recent", { max_results: page, "tweet.fields": TWEET_FIELDS, ...AUTHOR_EXPANSION });
+    case "x-user": return estimateXReadUsd("/users/by/username/u", { "user.fields": USER_FIELDS });
+    case "x-user-tweets": return Math.max(
+      estimateXReadUsd("/users/by/username/u", { "user.fields": USER_FIELDS }) + estimateXReadUsd("/users/1/tweets", timeline),
+      estimateXReadUsd("/users/1/tweets", { ...timeline, ...AUTHOR_EXPANSION }),
+    );
+    case "x-tweet": return estimateXReadUsd("/tweets/1", { "tweet.fields": TWEET_FIELDS, ...AUTHOR_EXPANSION });
+    case "x-users-lookup": return estimateXReadUsd("/users/by", { usernames: Array.from({ length: X_MAX_USERS_PER_LOOKUP }, (_, i) => `u${i}`).join(","), "user.fields": USER_FIELDS });
+    default: throw new Error(`no worst case for ${slug}`);
+  }
 }
 /** Counts only - never a token or a buyer. */
 export function xDataSpendStatus(now = Date.now()) {
@@ -368,8 +419,7 @@ export const X_DATA_TOOLS = [
         sort_order: sort,
         next_token: nextToken,
         "tweet.fields": TWEET_FIELDS,
-        expansions: "author_id",
-        "user.fields": "username,name,verified",
+        ...AUTHOR_EXPANSION,
       });
       const authors = authorIndex(data.includes);
       const tweets = (Array.isArray(data.data) ? data.data : []).map((t) => shapeTweet(t, authors)).filter(Boolean);
@@ -464,16 +514,18 @@ export const X_DATA_TOOLS = [
       }
 
       const exclude = [excludeRetweets && "retweets", excludeReplies && "replies"].filter(Boolean).join(",");
+      // Every post on a timeline is the path user's, so a username lookup
+      // already holds the author: the expansion (billed per object) is asked
+      // only on a lookup by id, which carries no profile.
       const data = await xGet(`/users/${encodeURIComponent(user.id)}/tweets`, {
         max_results: maxResults,
         exclude: exclude || undefined,
         since_id: sinceId,
         pagination_token: paginationToken,
         "tweet.fields": TWEET_FIELDS,
-        expansions: "author_id",
-        "user.fields": "username,name,verified",
+        ...(hasId ? AUTHOR_EXPANSION : {}),
       });
-      const authors = authorIndex(data.includes);
+      const authors = hasId ? authorIndex(data.includes) : new Map([[user.id, user]]);
       // A lookup by id carries no profile; take it from the expansion when present.
       if (!user.username) {
         const a = authors.get(user.id);
@@ -515,8 +567,7 @@ export const X_DATA_TOOLS = [
       const id = takeId(i.id, "id");
       const data = await xGet(`/tweets/${encodeURIComponent(id)}`, {
         "tweet.fields": TWEET_FIELDS,
-        expansions: "author_id",
-        "user.fields": "username,name,verified",
+        ...AUTHOR_EXPANSION,
       });
       if (!data.data?.id) throw notFoundOnX("/tweets/:id", 200, data);
       const tweet = shapeTweet(data.data, authorIndex(data.includes));

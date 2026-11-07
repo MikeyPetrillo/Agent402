@@ -170,12 +170,16 @@ globalThis.fetch = async (url) => {
   ok(urls[1].searchParams.get("exclude") === "retweets,replies" && urls[1].searchParams.get("max_results") === "5" && urls[1].searchParams.get("since_id") === "1700000000000000000", "x-user-tweets: exclude/max_results/since_id on the wire");
   ok(out.user.id === "574032254" && out.user.username === "coinbase" && out.user.verified === true, "x-user-tweets: resolved user echoed");
   ok(out.count === 1 && out.tweets[0].text === "hello from coinbase" && out.tweets[0].author.username === "coinbase" && out.nextToken === "7140dibdnow9c7btw4", "x-user-tweets: tweets + nextToken");
+  // Expanded objects are billed: a username lookup already holds the author, so the timeline read asks for none.
+  ok(urls[1].searchParams.get("expansions") === null && urls[1].searchParams.get("user.fields") === null, "x-user-tweets by username: no author expansion on the timeline read");
+  ok(out.tweets[0].author.name === "Coinbase" && out.tweets[0].author.verified === true && out.tweets[0].url === "https://x.com/coinbase/status/1800000000000000005", "x-user-tweets by username: author and status URL filled from the resolved user");
 }
 {
   fetchCalls = 0; urls = [];
   const out = await h("x-user-tweets")({ id: "574032254" });
   ok(urls.length === 1 && urls[0].pathname === "/2/users/574032254/tweets" && urls[0].searchParams.get("exclude") === null && urls[0].searchParams.get("max_results") === "10", "x-user-tweets by id: no resolve hop, default max_results 10, no exclude");
   ok(out.user.username === "coinbase", "x-user-tweets by id: username filled from the author expansion");
+  ok(urls[0].searchParams.get("expansions") === "author_id", "x-user-tweets by id: the author expansion is kept (a lookup by id carries no profile)");
 }
 
 // x-tweet
@@ -327,4 +331,47 @@ if (fail) process.exit(1);
     ok(xDataSpendStatus().spentUsd === 0, "an empty page corrects the reservation down to zero");
   } finally { globalThis.fetch = realFetch; delete process.env.X_BEARER_TOKEN; delete process.env.X_DATA_DAILY_MAX_USD; _xSpendReset(); }
   console.log(`reserve: ${p} passed, ${f} failed`); if (f) process.exitCode = 1;
+}
+
+// --- expanded objects are billed (X notice 2026-11-05): includes.* metered at the card rate of their kind --
+{
+  const { estimateXReadUsd, actualXReadUsd, xDataSpendStatus, _xSpendReset, xToolWorstCaseUsd } = await import("../src/tools/x-data-kit.js");
+  let p = 0, f = 0; const ok = (c, m) => { if (c) { p++; console.log(`ok - expansions: ${m}`); } else { f++; console.error(`FAIL - expansions: ${m}`); } };
+  const P = upstreamCosts().vendor.x.postRead, U = upstreamCosts().vendor.x.userRead;
+  const near = (a, b, e = 1e-9) => Math.abs(a - b) < e;
+  const AUTHOR = { expansions: "author_id", "user.fields": "username,name,verified" };
+  // Estimate: the worst case is one expanded author per post requested.
+  ok(near(estimateXReadUsd("/tweets/search/recent", { max_results: 10, ...AUTHOR }), 10 * P + 10 * U), "search estimate: 10 posts plus up to 10 expanded authors");
+  ok(near(estimateXReadUsd("/users/1/tweets", { max_results: 5, ...AUTHOR }), 5 * P + 5 * U), "timeline estimate: 5 posts plus up to 5 expanded authors");
+  ok(near(estimateXReadUsd("/tweets/1", AUTHOR), P + U), "tweet estimate: one post plus its author");
+  ok(near(estimateXReadUsd("/tweets/1", { expansions: "author_id,referenced_tweets.id" }), 2 * P + U), "a referenced-post expansion is priced as a post read");
+  ok(near(estimateXReadUsd("/tweets/1", { expansions: "attachments.media_keys" }), P + Math.max(P, U)), "an unknown expansion is priced at the dearer read");
+  // Actual: every object under includes.users / includes.tweets is billed.
+  const page = { data: [{ id: "1" }, { id: "2" }, { id: "3" }], includes: { users: [{ id: "a" }, { id: "b" }], tweets: [{ id: "9" }] } };
+  ok(near(actualXReadUsd("/tweets/search/recent", page), 3 * P + 2 * U + P), "actual counts 3 posts, 2 expanded users, 1 expanded post");
+  ok(near(actualXReadUsd("/tweets/search/recent", { data: [{ id: "1" }] }), P), "no includes adds nothing");
+  ok(near(actualXReadUsd("/users/by/username/x", { data: { id: "1" }, includes: { tweets: [{ id: "2" }] } }), U + P), "a user read with an expanded post bills both");
+  // Booked through the handler: the search fixture returns 2 posts and 1 expanded user.
+  process.env.X_BEARER_TOKEN = "test-bearer";
+  const realFetch = globalThis.fetch; let fetched = 0, lastUrl = null;
+  const reply = (body) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+  try {
+    _xSpendReset();
+    globalThis.fetch = async (url) => { fetched++; lastUrl = new URL(String(url)); return reply({ data: [{ id: "11", author_id: "7" }, { id: "12", author_id: "7" }], includes: { users: [{ id: "7", username: "u7" }] }, meta: {} }); };
+    await X_DATA_TOOLS.find((t) => t.slug === "x-search-recent").handler({ query: "x402" });
+    ok(lastUrl.searchParams.get("expansions") === "author_id", "search keeps the author expansion (author username on every row)");
+    ok(near(xDataSpendStatus().spentUsd, 2 * P + U, 1e-4), "search books the posts and the expanded user");
+    // The daily cap refuses a read whose worst case passes it only once its expansions are counted.
+    process.env.X_DATA_DAILY_MAX_USD = String(10 * P + 5 * U);
+    _xSpendReset(); fetched = 0;
+    let threw = null; try { await __test.xGet("/tweets/search/recent", { max_results: 10, ...AUTHOR }); } catch (e) { threw = e; }
+    ok(threw?.statusCode === 503 && /usage cap/.test(threw.message) && fetched === 0, "cap: a read that fits without its expansions but not with them is refused before any fetch");
+    ok(xDataSpendStatus().spentUsd === 0 && xDataSpendStatus().refusedToday === 1, "cap: the refusal books nothing");
+    await __test.xGet("/tweets/search/recent", { max_results: 10 });
+    ok(fetched === 1, "cap: the same read without the expansion fits");
+    // The margin helper prices the expansions each tool sends.
+    ok(near(xToolWorstCaseUsd("x-tweet"), P + U) && near(xToolWorstCaseUsd("x-search-recent"), 10 * P + 10 * U), "worst case per tool counts the author expansion");
+    ok(near(xToolWorstCaseUsd("x-user-tweets"), Math.max(U + 10 * P, 10 * P + 10 * U)), "timeline worst case: the larger of the resolve hop plus a plain page, or a page by id with its authors");
+  } finally { globalThis.fetch = realFetch; delete process.env.X_BEARER_TOKEN; delete process.env.X_DATA_DAILY_MAX_USD; _xSpendReset(); }
+  console.log(`expansions: ${p} passed, ${f} failed`); if (f) process.exitCode = 1;
 }
