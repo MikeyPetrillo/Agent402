@@ -164,8 +164,43 @@ export const OCR_FORMATS_TEXT = "PNG, JPEG, GIF, BMP, TIFF, WebP or PNM";
 // small file can declare a huge canvas (a 150 KB PNG declaring 30000x30000
 // grew the process by about 400 MB and kept it). The header's dimensions are
 // read here and an image over the cap is refused before the engine sees it.
-export const OCR_MAX_PIXELS = 40_000_000; // 40 megapixels, e.g. 8000x5000
+export const OCR_MAX_PIXELS = 64_000_000; // 64 megapixels, e.g. 8000x8000 or 9792x6528
 export const OCR_MAX_SIDE = 32_767;
+const OCR_MAX_MEGAPIXELS = OCR_MAX_PIXELS / 1e6;
+
+/**
+ * The longest side, in pixels, to downscale an image to so that it fits both
+ * caps at its own aspect ratio. A resizer rounds the short side to a whole
+ * pixel, so it is taken as rounded up, which keeps the result under the cap
+ * whichever way the caller's resizer rounds.
+ */
+export function ocrDownscaleSide(width, height) {
+  const long = Math.max(width, height), short = Math.min(width, height);
+  // One above the floating-point estimate, then down to the first side that fits.
+  let side = Math.min(OCR_MAX_SIDE, long, Math.floor(long * Math.sqrt(OCR_MAX_PIXELS / (width * height))) + 1);
+  while (side > 1 && side * Math.max(1, Math.ceil((short * side) / long)) > OCR_MAX_PIXELS) side--;
+  return side;
+}
+
+/** The 422 for an image over the cap: the limits, the image's own size and the
+ *  side to downscale to, in fields and in the message (a connector shows the
+ *  message alone). */
+function tooLarge(width, height) {
+  const megapixels = Math.round((width * height) / 1e4) / 100;
+  const side = ocrDownscaleSide(width, height);
+  const fix = `Downscale the image so its longest side is at most ${side} pixels (that keeps its aspect ratio and lands under ${OCR_MAX_MEGAPIXELS} megapixels) and send it again. Text that stays about 20 pixels tall or more reads as well at that size as at full size.`;
+  return Object.assign(
+    bad(`the image is ${width}x${height} pixels (${megapixels} megapixels); image-ocr reads images up to ${OCR_MAX_MEGAPIXELS} megapixels and ${OCR_MAX_SIDE} pixels a side. ${fix} Nothing was charged.`, 422),
+    {
+      hint: "image-too-large",
+      width, height, megapixels,
+      maxMegapixels: OCR_MAX_MEGAPIXELS, maxSide: OCR_MAX_SIDE, maxPixels: OCR_MAX_PIXELS,
+      downscaleToLongestSide: side,
+      fix,
+      howToCallNote: `Send this request again with the image downscaled so its longest side is at most ${side} pixels.`,
+    },
+  );
+}
 
 /** A 422 for bytes that start like an image and do not hold a readable one. */
 function undecodable(fmt, why) {
@@ -322,12 +357,7 @@ export function checkImageHeader(buf, fmt) {
   }
   const { width, height } = size;
   if (!(width > 0) || !(height > 0)) throw undecodable(fmt, "its header gives no width or height");
-  if (width > OCR_MAX_SIDE || height > OCR_MAX_SIDE || width * height > OCR_MAX_PIXELS) {
-    throw Object.assign(
-      bad(`the image declares ${width}x${height} pixels; image-ocr reads images up to ${OCR_MAX_PIXELS / 1e6} megapixels and ${OCR_MAX_SIDE} pixels a side (scale it down first)`, 422),
-      { hint: "image-too-large", width, height, maxPixels: OCR_MAX_PIXELS },
-    );
-  }
+  if (width > OCR_MAX_SIDE || height > OCR_MAX_SIDE || width * height > OCR_MAX_PIXELS) throw tooLarge(width, height);
   return { width, height };
 }
 
@@ -360,7 +390,71 @@ const rejectionText = (e) => String((e && typeof e === "object" && e.message) ||
 // is an engine fault, a 5xx, never the caller's.
 export const DECODE_FAILURE = /attempting to read image|pixRead|Aborted\(|ERR_OUT_OF_RANGE|ERR_BUFFER_OUT_OF_BOUNDS/i;
 
-async function doRecognize(buf, lang, fmt) {
+// A large image costs the engine several bytes a pixel while it reads (a 64 MP
+// photo grew the process by about 560 MB), and the language workers (one per
+// language, OCR_WORKER_MAX of them) run side by side, so three at once would
+// hold gigabytes. Only one image above OCR_LARGE_PIXELS is in the engine at a
+// time; the next waits up to OCR_LARGE_WAIT_MS for its turn (at most
+// OCR_LARGE_QUEUE_MAX waiting), then answers 503 with Retry-After. Smaller
+// images never wait here.
+export const OCR_LARGE_PIXELS = 16_000_000;
+export const OCR_LARGE_WAIT_MS = 15_000;
+export const OCR_LARGE_QUEUE_MAX = 2;
+let largeBusy = false;
+const largeWaiters = [];
+
+function largeBusyError() {
+  return Object.assign(
+    bad(`image-ocr is reading another image over ${OCR_LARGE_PIXELS / 1e6} megapixels; retry in a minute, or send this one downscaled below ${OCR_LARGE_PIXELS / 1e6} megapixels to be read at once. Nothing was charged.`, 503),
+    { retryAfter: 60, shed: true, hint: "large-image-busy" },
+  );
+}
+
+/** Wait for the large-image slot; resolves to its release function. */
+function acquireLargeSlot(waitMs = OCR_LARGE_WAIT_MS) {
+  if (!largeBusy) { largeBusy = true; return Promise.resolve(releaseLargeSlot); }
+  if (largeWaiters.length >= OCR_LARGE_QUEUE_MAX) return Promise.reject(largeBusyError());
+  return new Promise((resolve, reject) => {
+    const waiter = { resolve: () => { clearTimeout(waiter.timer); resolve(releaseLargeSlot); } };
+    waiter.timer = setTimeout(() => {
+      const i = largeWaiters.indexOf(waiter);
+      if (i >= 0) largeWaiters.splice(i, 1);
+      reject(largeBusyError());
+    }, waitMs);
+    largeWaiters.push(waiter);
+  });
+}
+
+function releaseLargeSlot() {
+  const next = largeWaiters.shift();
+  if (next) next.resolve(); // the slot passes straight to the next waiter
+  else largeBusy = false;
+}
+
+/** Test hook for the large-image slot. */
+export const __ocrLargeTest = {
+  acquire: acquireLargeSlot,
+  state: () => ({ busy: largeBusy, waiting: largeWaiters.length }),
+  recognize: doRecognize,
+};
+
+async function doRecognize(buf, lang, fmt, pixels = 0) {
+  const release = pixels > OCR_LARGE_PIXELS ? await acquireLargeSlot() : null;
+  try {
+    return await recognizeOn(buf, lang, fmt);
+  } finally {
+    if (release) {
+      // The engine's WASM memory grows to fit the largest image it read and
+      // never shrinks (a 64 MP image left a worker about 560 MB larger), so
+      // the worker that read a large image is retired once its calls finish.
+      const entry = workers.get(lang);
+      if (entry) dropEntry(lang, entry);
+      release();
+    }
+  }
+}
+
+async function recognizeOn(buf, lang, fmt) {
   const entry = getWorkerEntry(lang);
   entry.active++;
   try {
@@ -392,15 +486,15 @@ export const OCR_TOOLS = [
     category: "data",
     price: "$0.01",
     description:
-      `Extract text from an image (${OCR_FORMATS_TEXT}, up to ${OCR_MAX_PIXELS / 1e6} megapixels): returns the full text, overall confidence (0-100), and per-line bounding boxes. Send either {image: base64} or {url: 'https://…'}. Pure-CPU Tesseract via tesseract.js - no upstream API, no keys. Default lang 'eng'; pass 'lang' (ISO 639-2) for others.`,
+      `Extract text from an image (${OCR_FORMATS_TEXT}, up to ${OCR_MAX_MEGAPIXELS} megapixels and ${OCR_MAX_SIDE.toLocaleString("en-US")} pixels a side): returns the full text, overall confidence (0-100), and per-line bounding boxes. Send either {image: base64} or {url: 'https://…'}. Pure-CPU Tesseract via tesseract.js - no upstream API, no keys. Default lang 'eng'; pass 'lang' (ISO 639-2) for others.`,
     tags: ["ocr", "image", "text-extraction", "tesseract", "scanned-document", "receipt", "extract", "text"],
     discovery: {
       bodyType: "json",
       input: { url: "https://agent402.tools/fixtures/sample-text.png" },
       inputSchema: {
         properties: {
-          image: { type: "string", description: `Base64 ${OCR_FORMATS_TEXT} (data: URL prefix accepted). Either this or url is required.` },
-          url: { type: "string", description: "HTTPS URL to fetch the image from (max 8 MB). Either this or image is required." },
+          image: { type: "string", description: `Base64 ${OCR_FORMATS_TEXT} (data: URL prefix accepted), up to ${OCR_MAX_MEGAPIXELS} megapixels and ${OCR_MAX_SIDE} pixels a side. Either this or url is required.` },
+          url: { type: "string", description: `HTTPS URL to fetch the image from (max 8 MB, same pixel limits). Either this or image is required.` },
           lang: { type: "string", description: "Language code, ISO 639-2. Default 'eng'. Supported: eng, spa, fra, deu, ita, por, nld, rus, pol, tur, chi_sim, chi_tra, jpn, kor, ara, hin, tha, vie, ukr, ell." },
         },
       },
@@ -442,8 +536,8 @@ export const OCR_TOOLS = [
 
       const fmt = imageFormatOf(buf);
       if (!fmt) throw notAnImage(buf, from);
-      checkImageHeader(buf, fmt);
-      const data = await doRecognize(buf, lang, fmt);
+      const { width, height } = checkImageHeader(buf, fmt);
+      const data = await doRecognize(buf, lang, fmt, width * height);
       const lines = (data.lines ?? []).map((l) => ({
         text: (l.text ?? "").replace(/\s+$/g, ""),
         confidence: typeof l.confidence === "number" ? +l.confidence.toFixed(2) : null,

@@ -11976,7 +11976,12 @@ for (const tool of ALL_KIT) {
           // method, full URL and body, plus the other verb where it is served.
           // An unknown model id gets the example retried with the closest
           // served id the refusal suggests.
-          ...howToCallField(tool, err?.code === "unknown_model" && provenance.suggestions ? { bodyFields: { model: provenance.suggestions[0] } } : {}),
+          // A refusal whose fix the example cannot show carries a note
+          // beside the call (image-ocr: resend the image downscaled).
+          ...howToCallField(tool, {
+            ...(err?.code === "unknown_model" && provenance.suggestions ? { bodyFields: { model: provenance.suggestions[0] } } : {}),
+            ...(typeof err?.howToCallNote === "string" ? { note: err.howToCallNote } : {}),
+          }),
         });
       } else {
         res.status(status).json({ error: errorMessage, tool: tool.slug, ...provenance });

@@ -102,7 +102,15 @@ export const MAX_402_CALL_BYTES = MAX_CALL_BYTES;
 
 /** The call for `def` within MAX_CALL_BYTES: the full call when it fits, else
  *  `{ method, url }`; null when it has no route. */
-export function boundedHowToCall(def, { bodyFields = null } = {}) {
+export function boundedHowToCall(def, { bodyFields = null, note = null } = {}) {
+  const call = boundedCall(def, bodyFields);
+  // A refusal whose fix is in the input the example cannot show (an image to
+  // downscale) says so beside the call; the note survives the byte budget.
+  return call && typeof note === "string" && NOTE_RE.test(note) ? { ...call, note } : call;
+}
+const NOTE_RE = /^[\x20-\x7e]{1,200}$/;
+
+function boundedCall(def, bodyFields) {
   let call = howToCallFor(def);
   if (!call) return null;
   // A refusal that names a fix (the closest model id) carries the example
