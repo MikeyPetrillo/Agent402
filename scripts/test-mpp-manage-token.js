@@ -6,8 +6,8 @@
 // nothing broadcast).
 //
 // Run: node scripts/test-mpp-manage-token.js
-import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { manageTokenFrom, MANAGE_RESPONSE_HEADERS } from "../src/manage-token.js";

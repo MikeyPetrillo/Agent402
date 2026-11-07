@@ -18,8 +18,8 @@
 //     an offered currency and the amount, counting a Transfer and its
 //     TransferWithMemo twin once;
 //   - the job reads our Tempo payTo and currencies from the live challenge.
-import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { fileURLToPath } from "node:url";
 import http from "node:http";
 import { readFileSync } from "node:fs";
 import { load } from "js-yaml";

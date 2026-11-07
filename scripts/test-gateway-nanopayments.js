@@ -46,8 +46,8 @@
 // settles nothing; the status words are words; the switch off, an unreadable
 // /supported and a /supported without a chain each remove the accept there
 // and leave the plain accepts alone.
-import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { createServer, request as httpRequest } from "node:http";
 import { spawn } from "node:child_process";

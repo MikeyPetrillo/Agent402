@@ -1,7 +1,7 @@
 // Offline unit tests for self-serve listing: origin validation + the
 // registerOrigin flow with an injected fake crawler. No network, no /data.
-import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 import { validateOriginInput, registerOrigin, isSelfSeller, _selfCheckHostMemoForTest, __testResetSubmitted, __testSetSubmittedCap, __resetForcedCrawlForTest } from "../src/x402-index.js";
 

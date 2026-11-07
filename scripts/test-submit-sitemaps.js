@@ -5,8 +5,8 @@
 // loudly on an API error. Offline; nothing reaches Bing.
 //
 //   node scripts/test-submit-sitemaps.js
-import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { createSearchData } from "../src/search-data.js";
 import { DEFAULT_SITEMAPS, missingFeeds, sameFeed, syncSitemaps } from "./submit-sitemaps.js";

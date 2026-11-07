@@ -4,8 +4,8 @@
 // while RH2 is unconfirmed a reverted settle is not sent to it and the buyer
 // gets 402; once it answers and the background recheck confirms it, the same
 // flow settles once through RH2 (paid-mode boot vs stub facilitators, offline).
-import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/, "");
 const { getFreePorts } = await import(root + "/scripts/lib/free-port.js");
 const { createServer } = await import("node:http");

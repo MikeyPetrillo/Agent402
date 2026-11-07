@@ -24,8 +24,8 @@
 // state database left over from an earlier run would answer this run's fixed
 // wallets and nonces (429/409 before any handler), so the child runs on its own
 // in-process state whatever the calling shell exports.
-import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { fileURLToPath } from "node:url";
 import "./lib/file-mode.js";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";

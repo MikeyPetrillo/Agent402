@@ -21,8 +21,8 @@
 //   6. report prose (src/report-grounding.js sanitizeReportProse, quotedMaterial).
 //
 //   node scripts/test-agent-redteam.js
-import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { fileURLToPath } from "node:url";
 import "./lib/file-mode.js"; // file backends: never the caller's database or Redis
 import { readFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";

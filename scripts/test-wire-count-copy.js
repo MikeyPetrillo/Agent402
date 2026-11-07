@@ -2,8 +2,8 @@
 // must match the wires the gateway serves. A Gemini wire went live on every
 // tier while /why, the README, the wiki and three pages kept saying three
 // (truth audit 2026-10-02). The count is derived from the kits' own routes.
-import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { fileURLToPath } from "node:url";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { LLM_GATEWAY_TOOLS } from "../src/tools/llm-gateway-kit.js";

@@ -2,8 +2,8 @@
 // code. Checks the path selector (the worker's import closure plus its image
 // inputs) on real repository files, and that the deploy job carries the step
 // that uses it, after the main app's rollout is confirmed.
-import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { load } from "js-yaml";

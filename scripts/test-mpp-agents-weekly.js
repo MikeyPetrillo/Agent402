@@ -2,8 +2,8 @@
 // against a throwaway DB, then a booted half for the operator route.
 //
 //   node scripts/test-mpp-agents-weekly.js
-import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js";
+import { fileURLToPath } from "node:url";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";

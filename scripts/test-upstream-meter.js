@@ -10,8 +10,8 @@
 //
 // Offline, no network. Uses a unique upstream name per run so the shared
 // dev-machine /tmp stats DB cannot pollute the assertions.
-import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { childJson } from "./lib/child-json.js";
 

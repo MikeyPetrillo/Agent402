@@ -14,8 +14,8 @@
 //      published packages, adapters) says so, with an exempt list for the
 //      documentation snippets that only SHOW a client to a reader.
 // Offline; signs with a throwaway key; nothing is sent anywhere.
-import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { fileURLToPath } from "node:url";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { x402Client, DEFAULT_MAX_AMOUNT_PER_PAYMENT } from "@x402/core/client";

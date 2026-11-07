@@ -16,8 +16,8 @@
 // Offline: no network, no real keys, no spend.
 //
 //   node scripts/test-direct-upstream.js
-import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
 import { spawn } from "node:child_process";

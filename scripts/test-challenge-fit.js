@@ -29,8 +29,8 @@
 //     while PAYMENT-REQUIRED's accepts[0].outputSchema and the bazaar
 //     extension are untouched.
 //   node scripts/test-challenge-fit.js
-import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { fileURLToPath } from "node:url";
 import { createServer, request } from "node:http";
 import { spawn } from "node:child_process";
 import { getFreePorts } from "./lib/free-port.js";

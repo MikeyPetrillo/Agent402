@@ -4,8 +4,8 @@
 // facilitator/ - a src/ change can then never break what the gate proves.
 // This pins both halves: the import closure never leaves facilitator/, and
 // the workflow step still carries the scope + fail-open logic.
-import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { readFileSync, existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";

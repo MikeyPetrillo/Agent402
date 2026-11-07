@@ -17,8 +17,8 @@
 //            the same word under the same title.
 //   booted   a paid-mode server (stub facilitator) counts a paid empty answer
 //            and a paid ok answer by class on the operator endpoint.
-import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { childJson } from "./lib/child-json.js";

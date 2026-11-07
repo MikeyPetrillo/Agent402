@@ -15,8 +15,8 @@
 // Paid-mode boots against stub facilitators on 127.0.0.1 (free ports), offline;
 // nothing is read from a chain (the revenue read is checked offline only).
 //   node scripts/test-ink-graduation.js
-import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
 import { spawn, spawnSync } from "node:child_process";
 import { getFreePorts } from "./lib/free-port.js";

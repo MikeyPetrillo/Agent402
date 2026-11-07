@@ -4,8 +4,8 @@
 // calls statusProbeAuthed().
 //
 // Run: node scripts/test-status-probe-token-scope.js
-import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { fileURLToPath } from "node:url";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 

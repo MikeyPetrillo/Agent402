@@ -3,8 +3,8 @@
 // and its contract with the main app) on real repository files, and that the
 // deploy job gates the decide deploy on it with the worker's base and
 // fail-open rules.
-import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { load } from "js-yaml";

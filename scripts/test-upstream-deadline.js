@@ -37,8 +37,8 @@ if (!process.env.UPSTREAM_COSTS_JSON && !process.env.UPSTREAM_COSTS_FILE) {
   process.env.UPSTREAM_COSTS_FILE = fileURLToPath(new URL("../docs/example-upstream-costs.json", import.meta.url));
 }
 
-import { fileURLToPath } from "node:url";
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { fileURLToPath } from "node:url";
 import { generateKeyPairSync } from "node:crypto";
 import {
   HANDLER_BUDGET_MS, PAYMENT_WINDOW_BUDGET_MS, OPTIONAL_READ_FLOOR_MS, budgetOf, capOf, currentBudget, underBudget, withBudget, budgetSpent,
