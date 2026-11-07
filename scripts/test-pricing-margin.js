@@ -334,6 +334,30 @@ console.log("\n# onchain-sql: the call's query budget vs price");
 }
 
 // ---------------------------------------------------------------------------
+// 5c. X data tools: X bills per object returned, the objects under
+//     `includes` from an expansion among them (X notice, 2026-11-05). Each
+//     tool's worst case (every read its handler sends, at its largest page,
+//     one expanded author per post) comes from the kit's own estimator
+//     (xToolWorstCaseUsd) and must sit within the MARGIN bound of its list
+//     price. Figures stay in the process: only PASS/FAIL is printed.
+console.log("\n# X data tools: worst-case reads, expansions included, vs price");
+{
+  const { X_DATA_TOOLS, xToolWorstCaseUsd } = await import("../src/tools/x-data-kit.js");
+  if (upstreamCosts().vendor?.x?.postRead == null || upstreamCosts().vendor?.x?.userRead == null) {
+    if (process.env.CI && process.env.UPSTREAM_COSTS_OPTIONAL !== "1") ok(false, "x data: the private table has no vendor.x rates (required under CI)");
+    else console.log("SKIP - x data margin: the private table has no vendor.x rates");
+  } else {
+    for (const t of X_DATA_TOOLS) {
+      const price = Number(String(t.price).replace(/[^0-9.]/g, ""));
+      const worst = xToolWorstCaseUsd(t.slug);
+      const within = worst <= MARGIN * price + 1e-12;
+      ok(Number.isFinite(price) && price > 0 && within, `${t.slug}: worst-case reads, expansions included, within the margin bound of the list price: ${within ? "PASS" : "FAIL"}`);
+      table.push({ tier: t.slug, price, worst, model: "X reads (expansions included)" });
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 6. tool_gone telemetry — every retired-route hit (transparently served 200
 // or teaching 410) must be visible in PostHog.
 console.log("\n# tool_gone — retired-route telemetry");
