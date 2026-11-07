@@ -29,8 +29,13 @@ Tools:
   webpage, an SVG), naming what it got and the formats it reads (PNG, JPEG,
   GIF, BMP, TIFF, WebP, PNM), and 422 for an image that does not decode or
   whose header does not give its size, where it answered 500 "OCR failed:
-  unknown". An image over 40 megapixels or 32,767 pixels a side is a 422
-  (image-too-large) before it is decoded.
+  unknown". An image over 64 megapixels or 32,767 pixels a side is a 422
+  (image-too-large) before it is decoded, naming maxMegapixels, maxSide, the
+  image's width, height and megapixels, the longest side to downscale to
+  (downscaleToLongestSide, also in fix) and a howToCall with a note to resend
+  the image downscaled. One image over 16 megapixels is read at a time;
+  another waits up to 15 s, then answers 503 (large-image-busy) with
+  Retry-After.
 - A tool that fetches a URL answers a source host that times out or refuses
   the connection with a 504 carrying attribution "upstream" and the hint
   source-timeout or source-unreachable, so a caller can retry later or pick
