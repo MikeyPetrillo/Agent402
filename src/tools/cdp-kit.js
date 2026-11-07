@@ -27,6 +27,8 @@ import { createPrivateKey, createSign, randomBytes, sign as edSign, createHash }
 import { redactSecrets } from "./redact.js";
 import { partialFields } from "../partial-answer.js";
 import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, currentBudget, isUpstreamFailure, OPTIONAL_READ_FLOOR_MS } from "../upstream-deadline.js";
+import { onFinalResponse } from "../request-timing.js";
+import { noteSqlCall } from "../sql-query-stats.js";
 
 const CDP_HOST = "api.cdp.coinbase.com";
 
@@ -1012,7 +1014,7 @@ export const CDP_TOOLS = [
       // One query budget for the call: the buyer's query, its retry, and
       // every recovery run spend it where they are sent.
       const queries = newQueryBudget();
-      let res;
+      let res, budgetSpent = false;
       try {
         try {
           try { res = await cdpFetch("POST", "/platform/v2/data/query/run", body, { idempotent: true, buyerQuery: true, lineOffset: capped.lineOffset, queries }); }
@@ -1092,7 +1094,19 @@ export const CDP_TOOLS = [
             }
           }
         }
-      } finally { buyerQueriesInflight--; if (queries.sent > maxQueriesPerCall) maxQueriesPerCall = queries.sent; }
+      } catch (e) {
+        if (e?.queryBudgetSpent) budgetSpent = true;
+        throw e;
+      } finally {
+        buyerQueriesInflight--;
+        if (queries.sent > maxQueriesPerCall) maxQueriesPerCall = queries.sent;
+        // Counted on the request's FINAL response (src/sql-query-stats.js): a
+        // query count only for a final 200, a budget refusal whenever its
+        // answer finished. A call outside a request (the economy panel's
+        // refresh) is not counted.
+        const used = queries.sent;
+        onFinalResponse((status, scope) => noteSqlCall({ status, queries: used, budgetSpent, synthetic: !!scope?.synthetic }));
+      }
       const rows = res?.result ?? res?.rows ?? res?.data ?? res;
       const all = Array.isArray(rows) ? rows : [];
       const list = all.length > SQL_MAX_ROWS ? all.slice(0, SQL_MAX_ROWS) : all;
