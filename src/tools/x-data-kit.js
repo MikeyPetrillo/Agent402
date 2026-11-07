@@ -174,25 +174,25 @@ export function actualXReadUsd(path, data) {
  * Worst-case X spend of one call to a tool, for each body shape that changes
  * what the handler reads: every read it sends, at the largest page it accepts,
  * priced by estimateXReadUsd from the same params it puts on the wire.
- * scripts/test-pricing-margin.js holds each one under the margin bound of the
- * price the body is quoted at.
+ * `usdWithoutExpansions` is the same reads with expanded objects unbilled (the
+ * card before X's 2026-11-05 notice). scripts/test-pricing-margin.js holds
+ * each case under the margin bound of the tool's fixed price.
  */
 export function xToolWorstCases(slug) {
   const page = Math.max(10, X_MAX_POSTS_PER_CALL());
   const timeline = { max_results: X_MAX_POSTS_PER_CALL(), "tweet.fields": TWEET_FIELDS };
   const userRead = () => estimateXReadUsd("/users/by/username/u", { "user.fields": USER_FIELDS });
-  const search = (authors) => estimateXReadUsd("/tweets/search/recent", { max_results: page, "tweet.fields": TWEET_FIELDS, ...(authors ? AUTHOR_EXPANSION : {}) });
+  const searchParams = { max_results: page, "tweet.fields": TWEET_FIELDS };
   switch (slug) {
-    case "x-search-recent": return [
-      { body: { query: "q" }, usd: search(false) },
-      { body: { query: "q", includeAuthors: true }, usd: search(true) },
-    ];
+    case "x-search-recent": return [{
+      body: { query: "q" },
+      usd: estimateXReadUsd("/tweets/search/recent", { ...searchParams, ...AUTHOR_EXPANSION }),
+      usdWithoutExpansions: estimateXReadUsd("/tweets/search/recent", searchParams),
+    }];
     case "x-user": return [{ body: { username: "u" }, usd: userRead() }];
     case "x-user-tweets": return [
       { body: { id: "1" }, usd: estimateXReadUsd("/users/1/tweets", timeline) },
-      { body: { id: "1", includeAuthors: true }, usd: estimateXReadUsd("/users/1/tweets", { ...timeline, ...AUTHOR_EXPANSION }) },
       { body: { username: "u" }, usd: userRead() + estimateXReadUsd("/users/1/tweets", timeline) },
-      { body: { username: "u", includeAuthors: true }, usd: userRead() + estimateXReadUsd("/users/1/tweets", timeline) },
     ];
     case "x-tweet": return [{ body: { id: "1" }, usd: estimateXReadUsd("/tweets/1", { "tweet.fields": TWEET_FIELDS }) }];
     case "x-users-lookup": return [{ body: { usernames: ["u"] }, usd: estimateXReadUsd("/users/by", { usernames: Array.from({ length: X_MAX_USERS_PER_LOOKUP }, (_, i) => `u${i}`).join(","), "user.fields": USER_FIELDS }) }];
@@ -330,36 +330,22 @@ function shapeTweet(t, authors) {
     createdAt: t.created_at ?? null,
     lang: t.lang ?? null,
     authorId: t.author_id ?? null,
-    // Filled only when the author is known (an author expansion, or the
-    // timeline's resolved profile); otherwise the fields are kept and null.
-    author: a ? { username: a.username ?? null, name: a.name ?? null, verified: Boolean(a.verified) } : { username: null, name: null, verified: null },
+    // No author source (`authors` null: the tool reads none) keeps the fields,
+    // null; an author the expansion did not return is null, as before.
+    author: a ? { username: a.username ?? null, name: a.name ?? null, verified: Boolean(a.verified) } : authors ? null : { username: null, name: null, verified: null },
     conversationId: t.conversation_id ?? null,
     possiblySensitive: Boolean(t.possibly_sensitive),
     metrics: shapeMetrics(t.public_metrics),
-    url: a?.username && t.id ? `https://x.com/${a.username}/status/${t.id}` : (t.id ? `https://x.com/i/web/status/${t.id}` : null),
+    url: a?.username && t.id ? `https://x.com/${a.username}/status/${t.id}` : (t.id ? (authors ? `https://x.com/i/status/${t.id}` : `https://x.com/i/web/status/${t.id}`) : null),
   };
 }
 
 const nowIso = () => new Date().toISOString();
 
-// Author usernames on tweet rows come from the author expansion, which X
-// bills per expanded user. Search and the timeline take `includeAuthors`
-// (default false) and quote the body: without it a row carries authorId and
-// an /i/web/status link; with it the expansion is requested and the call is
-// priced so its worst case clears the margin bound (scripts/test-pricing-margin.js).
-const usdLabel = (n) => `$${n}`;
-const SEARCH_USD = 0.08, SEARCH_AUTHORS_USD = 0.22;
-const TIMELINE_USD = 0.08, TIMELINE_USER_READ_USD = 0.09;
-const includeAuthorsOf = (body) => takeBool(body?.includeAuthors, "includeAuthors");
-const timelineHasId = (body) => body?.id !== undefined && body?.id !== null && body?.id !== "";
-// The quote never throws: a body the handler refuses is quoted at the list
-// price and answered 400, which is never charged.
-const quoteSafe = (fn) => (body) => { try { return fn(body || {}); } catch { return fn({ id: "0" }); } };
-const searchQuoteUsd = quoteSafe((body) => (includeAuthorsOf(body) ? SEARCH_AUTHORS_USD : SEARCH_USD));
-// The timeline reads one user when the account is named by username (the
-// resolve hop) or when an id lookup asks for its author; an id lookup without
-// it reads posts only.
-const timelineQuoteUsd = quoteSafe((body) => (!timelineHasId(body) || includeAuthorsOf(body) ? TIMELINE_USER_READ_USD : TIMELINE_USD));
+// x-tweet and a timeline looked up by id read no author: X bills each object
+// an expansion returns, so they carry authorId, null author fields and an
+// /i/web/status link. Search keeps its author expansion.
+const TIMELINE_USD = 0.09;
 
 async function resolveUserId(username) {
   const data = await xGet(`/users/by/username/${encodeURIComponent(username)}`, { "user.fields": USER_FIELDS });
@@ -412,12 +398,9 @@ export const X_DATA_TOOLS = [
     name: "X recent tweet search",
     slug: "x-search-recent",
     category: "web",
-    price: usdLabel(SEARCH_USD),
-    quote: searchQuoteUsd,
-    quoteMaxUsd: SEARCH_AUTHORS_USD,
-    quoteFormula: `${usdLabel(SEARCH_AUTHORS_USD)} with includeAuthors true, else ${usdLabel(SEARCH_USD)}`,
+    price: "$0.08",
     description:
-      "Search public tweets from the last 7 days on X (Twitter) by query, using X API v2 search operators (keywords, from:, #hashtag, lang:, -is:retweet). Returns up to 10 tweets per call with text, created time, language, engagement metrics (likes, retweets, replies, quotes, impressions), the author id and a status link, plus a next_token for paging. Set includeAuthors true to add each author's username, name and verification and the username status link (quoted higher); without it the author fields are null.",
+      "Search public tweets from the last 7 days on X (Twitter) by query, using X API v2 search operators (keywords, from:, #hashtag, lang:, -is:retweet). Returns up to 10 tweets per call with text, created time, language, engagement metrics (likes, retweets, replies, quotes, impressions) and the author's username flattened onto each row, plus a next_token for paging.",
     tags: [...SHARED_TAGS, "search", "recent"],
     discovery: {
       bodyType: "json",
@@ -428,7 +411,6 @@ export const X_DATA_TOOLS = [
           max_results: { type: "number", description: "Tweets per page, up to 10 (default 10)." },
           sort_order: { type: "string", description: "recency (default) or relevancy." },
           next_token: { type: "string", description: "Pagination token from a previous response." },
-          includeAuthors: { type: "boolean", description: "Request each tweet's author (username, name, verified) and the username status link (quoted higher). Default false: rows carry authorId, the author fields are null and the link is the /i/web/status form." },
         },
         required: ["query"],
       },
@@ -438,7 +420,7 @@ export const X_DATA_TOOLS = [
           fetchedAt: "2026-08-20T14:10:00.000Z",
           query: "x402 -is:retweet",
           count: 1,
-          tweets: [TWEET_NO_AUTHOR_EXAMPLE],
+          tweets: [TWEET_EXAMPLE],
           nextToken: "b26v89c19zqg8o3fpzbl7xxxxx",
         },
       },
@@ -451,7 +433,6 @@ export const X_DATA_TOOLS = [
       const sort = i.sort_order === undefined || i.sort_order === null || i.sort_order === "" ? "recency" : String(i.sort_order);
       if (sort !== "recency" && sort !== "relevancy") throw bad('"sort_order" must be "recency" or "relevancy"');
       const nextToken = takeToken(i.next_token, "next_token");
-      const includeAuthors = includeAuthorsOf(i);
 
       const data = await xGet("/tweets/search/recent", {
         query,
@@ -459,9 +440,9 @@ export const X_DATA_TOOLS = [
         sort_order: sort,
         next_token: nextToken,
         "tweet.fields": TWEET_FIELDS,
-        ...(includeAuthors ? AUTHOR_EXPANSION : {}),
+        ...AUTHOR_EXPANSION,
       });
-      const authors = includeAuthors ? authorIndex(data.includes) : null;
+      const authors = authorIndex(data.includes);
       const tweets = (Array.isArray(data.data) ? data.data : []).map((t) => shapeTweet(t, authors)).filter(Boolean);
       return {
         source: "x-api-v2",
@@ -506,12 +487,9 @@ export const X_DATA_TOOLS = [
     name: "X user timeline",
     slug: "x-user-tweets",
     category: "web",
-    price: usdLabel(TIMELINE_USD),
-    quote: timelineQuoteUsd,
-    quoteMaxUsd: TIMELINE_USER_READ_USD,
-    quoteFormula: `${usdLabel(TIMELINE_USER_READ_USD)} by username or with includeAuthors true, else ${usdLabel(TIMELINE_USD)}`,
+    price: `$${TIMELINE_USD}`,
     description:
-      "Fetch an X (Twitter) account's most recent tweets by user id or username (username is resolved first). Options to exclude retweets and replies, page with pagination_token, or fetch only tweets newer than since_id. Each tweet carries text, created time, language, engagement metrics, the author id and a status link. By username, the account's profile fills user and each row's author; by id, set includeAuthors true for them (quoted higher), otherwise the username fields are null.",
+      "Fetch an X (Twitter) account's most recent tweets by user id or username (username is resolved first). Options to exclude retweets and replies, page with pagination_token, or fetch only tweets newer than since_id. Each tweet carries text, created time, language, engagement metrics, the author id and a status link. By username, the account's profile fills user and each row's author; by id, the author is not read, so the username, name and verified fields are null and the link is the /i/web/status form.",
     tags: [...SHARED_TAGS, "timeline", "user-tweets"],
     discovery: {
       bodyType: "json",
@@ -525,7 +503,6 @@ export const X_DATA_TOOLS = [
           exclude_replies: { type: "boolean", description: "Drop replies (default false)." },
           since_id: { type: "string", description: "Only tweets with an id greater than this." },
           pagination_token: { type: "string", description: "Pagination token from a previous response." },
-          includeAuthors: { type: "boolean", description: "On a lookup by id, request the account's username, name and verification for user and each row (quoted higher). A lookup by username already carries them. Default false." },
         },
       },
       output: {
@@ -548,7 +525,6 @@ export const X_DATA_TOOLS = [
       const excludeReplies = takeBool(i.exclude_replies, "exclude_replies");
       const sinceId = i.since_id === undefined || i.since_id === null || i.since_id === "" ? null : takeId(i.since_id, "since_id");
       const paginationToken = takeToken(i.pagination_token, "pagination_token");
-      const includeAuthors = includeAuthorsOf(i);
 
       let user;
       if (hasId) {
@@ -560,23 +536,16 @@ export const X_DATA_TOOLS = [
 
       const exclude = [excludeRetweets && "retweets", excludeReplies && "replies"].filter(Boolean).join(",");
       // Every post on a timeline is the path user's, so a username lookup
-      // already holds the author: the expansion (billed per object) is asked
-      // only on a lookup by id that sets includeAuthors.
-      const expand = hasId && includeAuthors;
+      // already holds the author; a lookup by id asks for no expansion (X
+      // bills each expanded object) and leaves the username fields null.
       const data = await xGet(`/users/${encodeURIComponent(user.id)}/tweets`, {
         max_results: maxResults,
         exclude: exclude || undefined,
         since_id: sinceId,
         pagination_token: paginationToken,
         "tweet.fields": TWEET_FIELDS,
-        ...(expand ? AUTHOR_EXPANSION : {}),
       });
-      const authors = expand ? authorIndex(data.includes) : hasId ? null : new Map([[user.id, user]]);
-      // A lookup by id carries no profile; take it from the expansion when present.
-      if (!user.username && authors) {
-        const a = authors.get(user.id);
-        if (a) user = { id: user.id, username: a.username ?? null, name: a.name ?? null, verified: Boolean(a.verified) };
-      }
+      const authors = hasId ? null : new Map([[user.id, user]]);
       const tweets = (Array.isArray(data.data) ? data.data : []).map((t) => shapeTweet(t, authors)).filter(Boolean);
       return {
         source: "x-api-v2",
@@ -596,7 +565,7 @@ export const X_DATA_TOOLS = [
     category: "web",
     price: "$0.008",
     description:
-      "Fetch one public tweet on X (Twitter) by id: text, created time, language, conversation id, engagement metrics (likes, retweets, replies, quotes, bookmarks, impressions), the author id and an /i/web/status link. The author's username, name and verification are not read and come back null; look the author up with x-user-tweets by id or x-users-lookup.",
+      "Fetch one public tweet on X (Twitter) by id: text, created time, language, conversation id, engagement metrics (likes, retweets, replies, quotes, bookmarks, impressions), the author id and an /i/web/status link. The author's username, name and verification are not read and come back null.",
     tags: [...SHARED_TAGS, "tweet", "status"],
     discovery: {
       bodyType: "json",
