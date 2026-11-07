@@ -83,6 +83,23 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   independent (each seller and the lane can be paid up to one cap per build), and on the next
   roll-forward each sum's next rebuild (within a day) folds in that window's unexpired entries.
 - **Failure monitor:** `src/tool-failure-monitor.js` counts every catalog answer past the gates by slug, class, origin (outside vs our own synthetic traffic) and payment rail (`outcomeRailOf` in `src/payment-rail.js`; a free proof-of-work or trial outcome counts on its own lane, shown in the detail and read by `toolFailures` only when a tool fails nearly every free call: `TOOL_FREE_FAIL_RATE`, default 0.9, over `TOOL_FREE_FAIL_MIN_CALLS`, default 20, in an hour) and every named upstream's fetch outcomes through the egress meter's observer, in five-minute buckets merged across replicas through Redis; `toolFailures`, `upstreamHealth` and `facilitatorFunds` (also `low` while a facilitator signer is short of gas; a dry Robinhood signer our relayer covers is left out and pages as `robinhoodSettler=relayer` instead, `.claude/rules/payments.md`) are words on `/api/gateway-status`, detail on `/__operator/tool-failures.json`. Every final 200 is also classified by body (`src/answer-shape.js`: ok, empty, error-shaped, unchecked; a tool whose contract allows an empty answer goes in `EMPTY_RESULT_OK` or sets `discovery.emptyOk`) into the `toolAnswers` word; the same detail lists live-data slugs whose sales all returned one response digest. `src/settle-demotion.js` puts Celo's alternates first after consecutive out-of-funds refusals.
+- **Per-call count documents:** `src/sql-query-stats.js` (onchain-sql queries per call) and
+  `src/x-search-stats.js` (x-search-recent authors and posts per call) keep per-UTC-day
+  histograms as state documents (`src/json-document.js`), counted on a final 200 and folded
+  into the document on a timer and at shutdown. Env: `SQL_QUERY_STATS_FILE` (default
+  `/data/onchain-sql-query-stats.json`), `SQL_QUERY_STATS_FLUSH_MS` (default 60000, at least
+  1000), `X_SEARCH_STATS_FILE` (default `/data/x-search-author-stats.json`),
+  `X_SEARCH_STATS_FLUSH_MS` (default 60000, at least 1000). The files are used only without a
+  state database; `ownStoreEnv` (`scripts/lib/own-stores.js`) points both into a booted test
+  server's own directory.
+- **Pre-payment refusal logs:** an input refusal answered before any payment gate
+  (`src/prepayment-refusal.js`) writes its `[tool-error] ... prepay=true` line for the first 20
+  in a clock minute per process; the rest print one summary line per minute (count and top
+  slugs). The `tool_calls` row (`pre_payment`), PostHog and the failure monitor see every one,
+  and `getAnalytics` leaves `pre_payment` rows out of the totals, tables and the perf
+  `calls`/`errorRate` unless `include_pre_payment=1` (`prePaymentHidden` counts them).
+  `logToolError` replaces control characters in the message and the key names
+  (`stripControlChars`), so one error is one line.
 - **Sale paths and cohorts:** each sale records how it arrived (`src/sale-path.js`: the
   connector's loopback, a client package by its User-Agent product token, or HTTP) in the
   ledger's `via` column; `/__operator/cohorts.json` lists wallets past a per-day distinct-tool
