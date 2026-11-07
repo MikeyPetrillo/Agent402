@@ -30,6 +30,11 @@ import { OCR_TOOLS, OCR_MAX_PIXELS, OCR_MAX_SIDE, OCR_LARGE_PIXELS, OCR_LARGE_QU
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 
+// A wait that never settles empties the event loop and would end the run
+// with exit 0 before the summary: an early exit is a failure.
+let finished = false;
+process.on("exit", (code) => { if (!finished && code === 0) { console.error("FAIL - the run ended before its summary (a wait never settled)"); process.exitCode = 1; } });
+
 let sawUncaught = false;
 process.on("uncaughtException", (e) => { sawUncaught = true; console.error("UNCAUGHT (should not happen):", e?.message); });
 
@@ -133,7 +138,7 @@ async function call(input) {
   ok(OCR_MAX_PIXELS === 64_000_000 && OCR_MAX_SIDE === 32_767, "the caps are 64 megapixels and 32,767 pixels a side");
   for (const [w, h] of [[8000, 8000], [16000, 4000], [32000, 2000]]) {
     const r = sizeOf(pngHead(w, h));
-    ok(r && r.width === w && r.height === h, `exactly 64 MP (${w}x${h}) passes the pre-check (got ${r instanceof Error ? r.message : `${r?.width}x${r?.height}`})`);
+    ok(r && !(r instanceof Error) && r.width === w && r.height === h, `exactly 64 MP (${w}x${h}) passes the pre-check (got ${r instanceof Error ? r.message : `${r?.width}x${r?.height}`})`);
   }
   {
     const r = sizeOf(pngHead(12277, 5213)); // 64,000,001 pixels
@@ -242,8 +247,9 @@ async function call(input) {
     const second = __ocrLargeTest.acquire(5_000).then((rel) => { order.push("second"); return rel; });
     const third = __ocrLargeTest.acquire(5_000).then((rel) => { order.push("third"); return rel; });
     ok(__ocrLargeTest.state().waiting === OCR_LARGE_QUEUE_MAX, `two more wait for it (waiting ${__ocrLargeTest.state().waiting})`);
+    const tOver = Date.now();
     const overflow = await __ocrLargeTest.acquire(5_000).then(() => null, (e) => e);
-    ok(overflow?.statusCode === 503 && overflow.retryAfter === 60 && overflow.shed === true && overflow.hint === "large-image-busy" && /Nothing was charged\./.test(overflow.message),
+    ok(Date.now() - tOver < 100 && overflow?.statusCode === 503 && overflow.retryAfter === 60 && overflow.shed === true && overflow.hint === "large-image-busy" && /Nothing was charged\./.test(overflow.message),
       `past ${OCR_LARGE_QUEUE_MAX} waiting, a large image is a 503 at once with Retry-After 60 (got ${overflow?.statusCode})`);
     first();
     const r2 = await second;
@@ -320,6 +326,7 @@ async function call(input) {
   ok(!sawUncaught, "no uncaughtException escaped the OCR path (the DoS is contained)");
   await __ocrTest.shutdown();
 
+  finished = true;
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();
