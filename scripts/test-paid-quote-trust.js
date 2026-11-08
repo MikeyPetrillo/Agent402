@@ -222,6 +222,27 @@ function fakeStore() {
   ok(wiki.includes(wikiCeiling) && wiki.includes("PAID_QUOTE_TRUST_MINUTES") && wiki.includes("PAID_CLIENT_QUOTE_MULTIPLIER"), "the wiki page quotes the same ceiling and window and names their constants");
   ok(!/not limited for|not counted for/.test(wiki), "and never says a paid address is not limited");
   ok(PAID_CLIENT_METERED_QUOTES_PER_MIN === METERED_UNPAID_QUOTES_PER_MIN * 10 && PAID_CLIENT_METERED_QUOTES_PER_HOUR === METERED_UNPAID_QUOTES_PER_HOUR * 10, "the raised metered ceiling is ten times each plain figure");
+
+  // The limits that get no paid-address raise are quoted from their own code.
+  const { _compositeGuardState } = await import("../src/composite-spend-guard.js");
+  const g = _compositeGuardState();
+  const guardRow = `blocked for ${Math.round(g.BLOCK_MS / 60_000)} minutes at ${g.MAX_FAILS} in ${Math.round(g.WINDOW_MS / 60_000)} minutes while they are more than half of the buyer's outcomes there, or at ${g.HARD_MAX_FAILS} whatever it settled`;
+  ok(html.replace(/&#39;/g, "'").includes(guardRow), `the guide quotes the report guard: ${guardRow}`);
+  ok(wiki.includes(`blocked for ${Math.round(g.BLOCK_MS / 60_000)} minutes`) && wiki.includes(`at ${g.MAX_FAILS} in ${Math.round(g.WINDOW_MS / 60_000)} minutes`) && wiki.includes(`or at ${g.HARD_MAX_FAILS} whatever it settled`), "the wiki page quotes the same report guard");
+  const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  const lb = /createRateLimiter\("large-body-unpaid",\s*\{\s*perMin:\s*(\d+),\s*perHour:\s*(\d+)\s*\}\)/.exec(server);
+  ok(lb, "server.js names the large-body unpaid limiter's figures");
+  if (lb) {
+    const lbRow = `${lb[1]} a minute and ${Number(lb[2]).toLocaleString("en-US")} an hour per client address, the same once that address has paid`;
+    ok(html.includes(lbRow), `the guide quotes the large-body limit with no paid raise: ${lbRow}`);
+    ok(wiki.includes(`${lb[1]} a minute, ${Number(lb[2]).toLocaleString("en-US")} an hour`) && wiki.includes("no raise once the address has paid"), "the wiki page quotes the same large-body limit");
+  }
+  ok(!/each one sets `Retry-After`|names its wait in <code>Retry-After/.test(html + wiki), "neither page says every limit sets Retry-After (the report guard does not)");
+
+  // The content pipeline's job column is read from the route's async profile.
+  const pipeline = String(guidePage("https://x.test", "content-pipeline") || "").replace(/\s+/g, " ");
+  ok(/<td>Research report<\/td>.*?<td>yes, required<\/td>/.test(pipeline), "the research row reads 'yes, required' from the slow-sync window");
+  ok(!pipeline.includes("{{jobs:"), "no jobs token is left unresolved");
 }
 
 // ---- booted half ---------------------------------------------------------------

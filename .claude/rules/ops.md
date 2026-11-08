@@ -114,8 +114,11 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   `src/tweet-queue.js`; both sign through `src/x-oauth.js`. Tweet copy is never committed.
 - **Money-state sweeps and books (batch 2026-11-08a):** `TEMPO_PUSH_HELD_MAX_MINUTES` (default 30)
   is the age past which a leased sweep reopens a held Tempo push debt whose run never finished;
-  `TEMPO_LATE_CONFIRM_DELAYS_MS` and `TEMPO_LATE_CONFIRM_MAX_WATCHES` bound the re-reads that book a
-  Tempo pull landing after its 402 as owed; `GATEWAY_RESUME_RENEW_MS` renews a Gateway resend hold.
+  `TEMPO_LATE_CONFIRM_DELAYS_MS` (comma list of delays, default 15000,45000,120000; at most 6, each
+  at most 30 minutes; `off` disables) and `TEMPO_LATE_CONFIRM_MAX_WATCHES` (default 200 per process)
+  bound the re-reads that book a Tempo pull landing after its 402 as owed (`src/mpp-tempo.js`);
+  `GATEWAY_RESUME_RENEW_MS` (default a third of the 10-minute resume lease, 200000; for tests) is how
+  often a Gateway resend renews its hold, for at most 30 minutes (`src/gateway-nanopayments.js`).
   The held-claim sweep walks every refund row created before its cutoff by createdAt window,
   with a cursor kept across ticks (at most 5000 rows a tick; a window whose page fills is halved),
   so a stranded hold is found however many newer rows exist; the same walk logs owed rows unpaid

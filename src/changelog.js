@@ -7,8 +7,14 @@ const ENTRIES = [
     items: [
       "Docs: a buying-at-volume guide (/guides/buying-at-volume, wiki page Buying-at-Volume) for agents that buy in bursts: the per-address limits and their Retry-After, retries that never pay twice, async jobs, spend caps in agent402-client, agent402-mcp and agent402-openclaw, which rails settle when, metered model ids and input caps, and the errors to handle. llms.txt and the three package pages link it.",
       "Gateway: the /v1/metered unpaid-quote 429 carries Retry-After: 60, retryAfterSeconds and a guide link.",
-      "Gateway: once a client address has paid (a final 200 that settled on any rail, or a credits debit), its unpaid quotes are not limited for 10 minutes after each paid call; a refused payment credential still counts.",
+      "Gateway: once a client address has paid (a final 200 that settled on any rail, or a credits debit), its unpaid quotes read against 10 times each limit for 10 minutes after each paid call; a refused payment credential still counts.",
       "Docs: a content-pipeline guide (/guides/content-pipeline, wiki page Content-Pipeline): research, script, voiceover, images, transcription, subtitles, dubbing and media checks as paid calls from one wallet, with a runnable example per stage, an end-to-end flow, the stages that run as jobs, spend caps and Tempo pull and push. llms.txt and the buying-at-volume guide link it.",
+      "Payments: a resend of a payment whose answer was charged but never delivered gets a 503 (replay_pending, Retry-After: 10) while the ledger has not yet confirmed that answer as served; nothing more is charged, and a retry with the same payment receives it.",
+      "Payments: when the Tempo relay does not answer whether it claimed a push transfer, the 503 says so (transferClaimed: null), the transfer is booked as owed (refundOwed: true), and a retry with the same credential that pays for the request voids that debt.",
+      "Payments: a Tempo pull payment answered 402 after its broadcast failed is read on chain again (by default 15 s, 45 s and 2 minutes later); a transfer that lands after the 402 is booked as owed, to be refunded.",
+      "Operations: /api/gateway-status reports lateSettlements (ok, near_capacity, full, unresolved) for settlements whose outcome was not known when the call was answered, and replayStore (ok, pending) while a settled payment's consumed mark waits to reach the shared store.",
+      "Operations: an operator closes an unresolved late settlement as booked owed, paid (with its refund transaction) or dismissed, and each resolution is recorded before the entry is dropped; unresolved entries are read on chain again every 6 hours and close once the chain answers.",
+      "Privacy: the shared record that an address paid recently is keyed by a keyed hash of the address, never the address or a plain hash of it, and expires within the hour; /privacy names it.",
     ],
   },
   {
