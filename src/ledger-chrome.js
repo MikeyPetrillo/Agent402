@@ -329,7 +329,7 @@ body { transition: background-color .18s ease, color .18s ease; }
    overlapping the burger too late - kept as two literals, both cited here so
    they can't drift apart if one is edited without the other. */
 @media (max-width:1100px){
-  .ml-nav-links, .ml-nav-gh { display:none !important; }
+  .ml-nav-links { display:none !important; }
   .ml-burger { display:inline-flex; }
   html.ml-menu-open .ml-mobile-menu { display:block; }
   html.ml-menu-open .ml-burger-open { display:none; }
@@ -481,7 +481,6 @@ a { color: inherit; }
     scrollbar-width: thin;
   }
   .ml-nav-links > * { flex: none !important; }
-  .ml-nav-gh  { display: none !important; }
   .ml-h1      { font-size: var(--fs-3xl) !important; }
   .ml-hero-h1 { font-size: var(--fs-3xl) !important; }
   .ml-spec-cell { border-right: none !important; }
@@ -745,6 +744,7 @@ function marketPanelNav(chainInfo) {
                 <a href="/mpp-marketplace" class="mlnav-row"><span style="font-weight:700;">MPP marketplace</span><span class="mlnav-faint">verified sellers</span></a>
                 <a href="/leaderboard" class="mlnav-row"><span style="font-weight:700;">leaderboard</span><span class="mlnav-faint">settled on-chain</span></a>
                 <a href="/revenue" class="mlnav-row"><span style="font-weight:700;">transactions</span><span class="mlnav-faint">every settlement on our rails</span></a>
+                <a href="https://live.agent402.tools" class="mlnav-row"><span style="font-weight:700;">live payments</span><span class="mlnav-faint">x402 and MPP, as they settle</span></a>
                 <a href="/marketplace/tools" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">every tool indexed</span><span class="mlnav-faint">ours + third-party</span></a>
                 <a href="/marketplace" class="mlnav-row"><span style="font-weight:700;">Marketplace by chain</span><span class="mlnav-faint">every chain, one directory</span></a>
                 <a href="/guides/smart-order-router" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;background:var(--panel);color:var(--on-panel);"><span style="font-weight:700;">route a task to a proven seller</span><span style="opacity:.7;">→</span></a>
@@ -766,13 +766,15 @@ function docsPanelNav() {
                 <a href="/how-to-pay" class="mlnav-row"><span style="font-weight:700;">how to pay</span><span class="mlnav-faint">every rail, step by step</span></a>
                 <a href="/guides" class="mlnav-row"><span style="font-weight:700;">guides</span><span class="mlnav-faint">hosts, router, selling</span></a>
                 <a href="/integrations" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">integrations</span><span class="mlnav-faint">frameworks</span></a>
-                <a href="/x402-test" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">test your client</span><span class="mlnav-faint">refusal diagnostics</span></a>
+                <a href="/x402-test" class="mlnav-row"><span style="font-weight:700;">test your client</span><span class="mlnav-faint">refusal diagnostics</span></a>
+                <a href="/llms.txt" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">llms.txt</span><span class="mlnav-faint">for agents</span></a>
                 <a href="/blog" class="mlnav-row"><span style="font-weight:700;">blog</span><span class="mlnav-faint"></span></a>
                 <a href="/changelog" class="mlnav-row"><span style="font-weight:700;">changelog</span><span class="mlnav-faint">what shipped</span></a>
                 </span>
                 <span style="display:block;">
                 <span class="mlnav-label">PROOF</span>
-                <a href="/proof" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">receipts</span><span class="mlnav-faint">calls vs quotes</span></a>
+                <a href="/proof" class="mlnav-row"><span style="font-weight:700;">receipts</span><span class="mlnav-faint">calls vs quotes</span></a>
+                <a href="/status" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">status</span><span class="mlnav-faint">uptime from outside probes</span></a>
                 <span class="mlnav-label">WHAT THIS IS</span>
                 <a href="/101" class="mlnav-row"><span style="font-weight:700;">x402 &amp; MPP 101</span><span class="mlnav-faint">walkthrough</span></a>
                 <a href="/what-is-x402" class="mlnav-row"><span style="font-weight:700;">what is x402</span><span class="mlnav-faint">HTTP 402</span></a>
@@ -924,7 +926,7 @@ function nav(activePath) {
     // its own top-level item (not folded into this set) since it's no longer
     // inside the marketplace panel either.
     marketplace: new Set(["/marketplace", "/mpp-marketplace", "/leaderboard", "/revenue", "/marketplace/tools", ...chainInfo.chains.map((c) => c.href)]),
-    docs: new Set(["/docs", "/quickstart", "/how-to-pay", "/guides", "/integrations", "/blog", "/changelog", "/proof", "/101", "/what-is-x402", "/what-is-mpp", "/agentic-finance", "/glossary"]),
+    docs: new Set(["/docs", "/quickstart", "/how-to-pay", "/guides", "/integrations", "/blog", "/changelog", "/proof", "/status", "/101", "/what-is-x402", "/what-is-mpp", "/agentic-finance", "/glossary"]),
     sell: new Set(["/sell", "/tollbooth", "/contribute"]),
     tools: new Set(["/tools", "/skills", "/speech", "/playground", "/pricing"]),
   };
@@ -945,9 +947,6 @@ function nav(activePath) {
       ${zone2}
     </div>
     <div style="margin-left:auto;display:flex;align-items:center;gap:12px;">
-      <a class="ml-nav-gh ml-nav-live" href="https://live.agent402.tools" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);text-decoration:none;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;padding:6px 11px;border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);" title="Watch x402 and MPP payments settle, read from the chain"><svg width="15" height="13" viewBox="0 0 24 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="20" height="13" rx="2"/><path d="M8 19h8"/><path d="M10.5 6.2v4.6l4-2.3z" fill="currentColor" stroke="none"/></svg>live</a>
-      <a class="ml-nav-gh" href="/status" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);text-decoration:none;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;" title="Uptime from two outside observers"><span aria-hidden="true" style="width:7px;height:7px;border-radius:50%;background:var(--ok);display:inline-block;"></span>status</a>
-      <a class="ml-nav-gh" href="/llms.txt" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);text-decoration:none;padding:8px 13px;border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);white-space:nowrap;">llms.txt</a>
       <button type="button" class="ml-theme-toggle" aria-label="Switch between dark and light theme" title="Theme">
         <svg class="ml-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
         <svg class="ml-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
