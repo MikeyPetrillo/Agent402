@@ -682,7 +682,7 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
     const budget = { allow: () => { if (fullCount >= MAX_FULL_PER_TICK) { summary.deferred++; return false; } fullCount++; return true; } };
     // A record without its own id is never run: every such record would
     // share one state entry (the key "undefined"), so one would be served
-    // and the rest billed for nothing. It is skipped and named loudly.
+    // and the rest not served. It is skipped and named loudly.
     const listed = subs.listActive();
     const noId = listed.filter((r) => typeof r?.subId !== "string" || !r.subId);
     if (noId.length) {

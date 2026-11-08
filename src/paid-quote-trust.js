@@ -10,8 +10,7 @@
 // each new paid 200 slides the window. While trusted, its unpaid quotes are
 // counted on their own count against PAID_CLIENT_QUOTE_MULTIPLIER (10) times
 // the plain figures, by the metered limiter (PAID_CLIENT_METERED_QUOTES_PER_MIN
-// and _PER_HOUR) and by the unpaid price-check budget: one settled $0.001 call
-// once bought unbounded free quotes for the window.
+// and _PER_HOUR) and by the unpaid price-check budget.
 //
 // What does NOT trust an address: a free call (proof of work, the trial, a
 // first-call allowance grant whose settle was skipped, a forgiven hang-up), a

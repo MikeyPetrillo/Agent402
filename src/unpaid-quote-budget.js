@@ -68,9 +68,9 @@ export const METERED_UNPAID_QUOTES_PER_HOUR = 1200;
 // unpaid-quote figure: the price-check budget's hourly figure and the metered
 // limiter's per-minute and per-hour ones. A stock client quotes before every
 // paid call, so the plain figure capped a paying buyer near that many paid
-// calls; no ceiling at all let one settled $0.001 call buy unbounded free
-// quotes (measured: 600 of 600 large metered quotes in a burst). Named here
-// so the limiters and the buying-at-volume guide read one figure.
+// calls, so a recently paid address gets a raised ceiling, not an unlimited
+// one. Named here so the limiters and the buying-at-volume guide read one
+// figure.
 export const PAID_CLIENT_QUOTE_MULTIPLIER = 10;
 export const PAID_CLIENT_METERED_QUOTES_PER_MIN = METERED_UNPAID_QUOTES_PER_MIN * PAID_CLIENT_QUOTE_MULTIPLIER;
 export const PAID_CLIENT_METERED_QUOTES_PER_HOUR = METERED_UNPAID_QUOTES_PER_HOUR * PAID_CLIENT_QUOTE_MULTIPLIER;

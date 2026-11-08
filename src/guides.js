@@ -322,7 +322,7 @@ before any payment is taken, and the last column says how long to wait.
 
 | What is counted | Limit | Answer |
 |---|---|---|
-| Unpaid price checks (a request with no payment) to priced catalog routes | ${unpaidQuoteBudgetPerHour().toLocaleString("en-US")} an hour per client address; ${(unpaidQuoteBudgetPerHour() * PAID_CLIENT_QUOTE_MULTIPLIER).toLocaleString("en-US")} an hour for the rest of the hour once that address settles a payment | 429, \`Retry-After\` until the hour turns |
+| Unpaid price checks (a request with no payment) to priced catalog routes | ${unpaidQuoteBudgetPerHour().toLocaleString("en-US")} an hour per client address; ${(unpaidQuoteBudgetPerHour() * PAID_CLIENT_QUOTE_MULTIPLIER).toLocaleString("en-US")} an hour for the rest of the clock hour once that address settles a payment, and for ${PAID_QUOTE_TRUST_MINUTES} minutes after each paid call | 429, \`Retry-After\` until the hour turns |
 | Unpaid quotes on \`/v1/metered\` | ${METERED_UNPAID_QUOTES_PER_MIN} a minute and ${METERED_UNPAID_QUOTES_PER_HOUR.toLocaleString("en-US")} an hour per client address; ${PAID_CLIENT_METERED_QUOTES_PER_MIN} a minute and ${PAID_CLIENT_METERED_QUOTES_PER_HOUR.toLocaleString("en-US")} an hour for ${PAID_QUOTE_TRUST_MINUTES} minutes after each paid call from that address | 429, \`Retry-After: 60\` |
 | Refused payment credentials on \`/v1/metered\` | the same figures, counted once a credential is refused | 429, \`Retry-After: 60\` |
 | Payments that verified and then failed to settle, per wallet | refused at ${SETTLE_BREAKER_MAX_FAILS} in ${Math.round(SETTLE_BREAKER_WINDOW_MS / 60_000)} minutes while they are more than half of the wallet's outcomes there, or at ${SETTLE_BREAKER_HARD_MAX} whatever it settled | 429 naming when it lifts |
@@ -335,9 +335,13 @@ An IPv6 /64 is one address. A request carrying a payment, a credits key or a
 proof-of-work solution is never counted as an unpaid price check. The report
 and media guard keys a buyer by its signed payer, its verified Tempo sender,
 its credits key or, for any other payment, its address. Once an
-address has paid, its quotes read against ${PAID_CLIENT_QUOTE_MULTIPLIER} times each figure for ${PAID_QUOTE_TRUST_MINUTES} minutes
-after each paid call (a final 200 that settled on any rail, or a credits debit); a
-payment credential that is refused still counts.
+address has paid (a final 200 that settled on any rail, or a credits debit), its
+unpaid price checks read against ${PAID_CLIENT_QUOTE_MULTIPLIER} times the figure for the rest of that clock hour
+and for ${PAID_QUOTE_TRUST_MINUTES} minutes after each paid call, and its \`/v1/metered\` quotes read against
+${PAID_CLIENT_QUOTE_MULTIPLIER} times each figure for ${PAID_QUOTE_TRUST_MINUTES} minutes after each paid call; a payment credential
+that is refused still counts. \`Retry-After: 60\` on a \`/v1/metered\` 429 is the
+minute window; an address past the hourly figure waits until its oldest quote in
+the last hour ages out, so a retry loop backs off further after repeated 429s.
 
 How to plan a burst around them:
 

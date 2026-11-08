@@ -49,6 +49,7 @@ import { evmRpcFor } from "./evm-rpcs.js";
 import { authorizationUsed, findAuthorizationTx, blockNear } from "./robinhood-outage.js";
 import { ownFirstAttemptOf } from "./robinhood-order.js";
 import { pendingNotedTxsFor, takePendingAnswers, peekPendingAnswers, receiptUsesAuthorization } from "./pending-settle.js";
+import { stripControlChars as oneLine } from "./prepayment-refusal.js";
 
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
 const TX = /^0x[0-9a-fA-F]{64}$/;
@@ -448,7 +449,7 @@ export function createLateSettleBook({
       try { dropped = await change((p) => { if (p[e.key]?.state === "unresolved") delete p[e.key]; }); } catch { dropped = false; }
       if (!dropped) return { ok: false, error: "the book could not be written; the entry is kept" };
       wordCache = { at: 0, word: null };
-      log(`[late-settle] operator resolved ${e.network} ${labelOf(e)} as ${outcome}: ${row.note.slice(0, 200)}`);
+      log(`[late-settle] operator resolved ${e.network} ${labelOf(e)} as ${outcome}: ${oneLine(row.note).slice(0, 200)}`);
       return { ok: true, key: e.key, outcome };
     },
     /** An operator acknowledges this process's unrecorded bookings (each one
@@ -459,7 +460,7 @@ export function createLateSettleBook({
       if (!(await recordResolution({ key: "unrecorded", network: null, tx: null, outcome: "acknowledged", note: note.trim().slice(0, 300), at: now() }).catch(() => false))) return { ok: false, error: "the acknowledgement could not be recorded" };
       unrecordedAt = [];
       wordCache = { at: 0, word: null };
-      log(`[late-settle] operator acknowledged ${count} unrecorded booking(s): ${note.trim().slice(0, 200)}`);
+      log(`[late-settle] operator acknowledged ${count} unrecorded booking(s): ${oneLine(note.trim()).slice(0, 200)}`);
       return { ok: true, acknowledged: count };
     },
     /**

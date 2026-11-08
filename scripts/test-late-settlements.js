@@ -480,7 +480,9 @@ await check("an operator resolves an unresolved entry (dismissed, paid, booked_o
   assert.equal((await book.resolve(key(701), { outcome: "paid", note: "repaid" })).ok, false, "paid needs the refund tx");
   assert.equal(book.list().length, 3, "nothing dropped by a refused resolution");
   // Dismissed and paid close without touching the ledger.
-  assert.deepEqual(await book.resolve(key(700), { outcome: "dismissed", note: "explorer: never mined" }), { ok: true, key: `${RH}|${txh(700)}`, outcome: "dismissed" });
+  assert.deepEqual(await book.resolve(key(700), { outcome: "dismissed", note: "explorer: never mined\n[late-settle] forged line\r" }), { ok: true, key: `${RH}|${txh(700)}`, outcome: "dismissed" });
+  const resolvedLine = logs.find((m) => /operator resolved .* as dismissed/.test(m));
+  assert.ok(resolvedLine && !/[\r\n]/.test(resolvedLine), "an operator note is logged on one line, its control characters replaced");
   assert.equal((await book.resolve(key(701), { outcome: "paid", note: "repaid by hand", tx: txh(7011) })).ok, true);
   assert.equal(await refundByEvidenceFresh(txh(700)), null, "dismissed writes no debt");
   assert.equal(await book.alarmStatus({ ttlMs: 0 }), "unresolved", "one still waits");
