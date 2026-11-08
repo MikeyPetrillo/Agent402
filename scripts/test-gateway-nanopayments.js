@@ -66,7 +66,7 @@ import {
   installGatewayRouting, isGatewayBatchedPayment, preflightGatewayPayment, createGatewayPendingBook, gatewayBalanceStatus,
   refreshGatewayBalance, _resetGatewayBalanceForTests, startGatewayBalanceWatch, gatewayNanopaymentNetworks, gatewayNanopaymentsEnabled,
   CDN_PENDING_RESERVE_MS, pendingKey, createGatewayPendingResolver, gatewayResourceOf,
-  gatewayPendingLost, _resetGatewayPendingLostForTests, byTransferIdAnyCase, gatewayTransferMatches, normalizeGatewayTransfer,
+  gatewayPendingLost, _resetGatewayPendingLostForTests, notePendingLost, retryLostPending, byTransferIdAnyCase, gatewayTransferMatches, normalizeGatewayTransfer,
 } from "../src/gateway-nanopayments.js";
 import { GATEWAY_MAX_TIMEOUT_SECONDS } from "../client/index.js";
 import { classifySettlementPending, settlementKindOf, isGatewayBatchedHeader, isGatewayBatchedRequest, isGatewayWire } from "../src/gateway-wire.js";
@@ -461,6 +461,45 @@ await check("the pending book: a store write that fails is journaled (\"journale
   assert.equal(alarms.length, 1);
   rmSync(dir, { recursive: true, force: true });
 });
+await check("a booking neither the book nor its journal took survives a restart: written beside the book, read back by the next process's book (the word still pages), and landed by the resolver once the store takes it, keeping when it happened", async () => {
+  _resetGatewayPendingLostForTests();
+  const { existsSync } = await import("node:fs");
+  const dir = mkdtempSync(join(tmpdir(), "a402-gw-lost-restart-"));
+  const file = join(dir, "r.json");
+  const deafJournal = { add: () => null, state: () => ({ total: 0 }), drain: async () => 0 };
+  const first = createGatewayPendingBook({ file, log: () => {}, alarm: () => {}, journal: deafJournal });
+  await first.ready;
+  mkdirSync(file, { recursive: true }); // the store refuses every write
+  const n = nonce();
+  const entry = { payer: acct.address, network: "eip155:8453", nonce: n, amount: "5000", payTo: TREASURY, resource: "GET /api/x", origin: "pending", cause: "settlement_pending" };
+  assert.equal(await first.book(entry), false, "book and journal both refuse");
+  const errs = [];
+  notePendingLost(entry, (m) => errs.push(m));
+  assert.ok(existsSync(`${file}.lost.json`), "written beside the book");
+  const at0 = gatewayPendingLost()[0].at;
+  // The process restarts: its memory is gone, the file is not.
+  _resetGatewayPendingLostForTests({ disk: false });
+  assert.equal(gatewayPendingLost().length, 0);
+  const second = createGatewayPendingBook({ file, log: () => {}, alarm: () => {}, journal: deafJournal });
+  await second.ready;
+  assert.equal(gatewayPendingLost().length, 1, "read back by the next process's book");
+  assert.equal(await second.alarmStatus(), "unresolved", "and it still pages");
+  assert.equal(await retryLostPending(second), 0, "a retry while the store still refuses keeps it held");
+  assert.equal(gatewayPendingLost().length, 1);
+  rmSync(file, { recursive: true, force: true }); // the store answers again
+  const rc = new GatewayNanopaymentsClient({ fetchImpl: fetchStub, networks: ["eip155:8453"] });
+  const resolver = createGatewayPendingResolver({ book: second, client: rc, recordOwed: async () => true, owedExists: async () => false, log: () => {} });
+  const origWarn = console.warn; console.warn = () => {};
+  try { await resolver.tick(); } finally { console.warn = origWarn; }
+  const landed = await second.get(pendingKey("eip155:8453", acct.address, n));
+  assert.ok(landed, "the resolver's tick landed it in the book");
+  assert.equal(landed.at, at0, "booked at the time it happened");
+  assert.equal(landed.origin, "pending");
+  assert.equal(gatewayPendingLost().length, 0, "no longer held");
+  assert.ok(!existsSync(`${file}.lost.json`), "and its file is gone");
+  _resetGatewayPendingLostForTests();
+  rmSync(dir, { recursive: true, force: true });
+});
 await check("client: the balance read is keyless by address and sums the domains", async () => {
   gw.calls.length = 0;
   const b = await client.balances({ depositor: TREASURY, domains: [6, 26] });
@@ -712,14 +751,42 @@ await check("a resend whose transfer already has an owed refund row is refused (
     chmodSync(dir, 0o555);
     assert.ok(await book.get(qkey), "still readable");
     assert.equal(await book.releaseResume(qkey, "me"), false, "a hand-back that did not land answers false");
-    const r = await book.resolve(qkey, { outcome: "served" });
+    const r = await book.resolve(qkey, { outcome: "served", owner: "me" });
     assert.equal(r.ok, false, "a drop that did not land answers not ok");
     chmodSync(dir, 0o755);
     assert.equal((await book.get(qkey)).state, "resuming", "nothing changed");
-    assert.equal((await book.resolve(qkey, { outcome: "served" })).ok, true, "control: the same drop lands once the store takes writes");
+    assert.equal((await book.resolve(qkey, { outcome: "served" })).ok, false, "a drop by anyone but the holder is refused while its hold is live");
+    assert.equal((await book.get(qkey)).state, "resuming", "and leaves the entry with its holder");
+    assert.equal((await book.resolve(qkey, { outcome: "served", owner: "me" })).ok, true, "control: the holder's drop lands once the store takes writes");
   } finally { gw.mode = "ok"; try { chmodSync(dir, 0o755); } catch { /* removed */ } rmSync(dir, { recursive: true, force: true }); }
 });
 
+await check("a resend's hold is renewed while it runs, so the resolver never takes an entry a slow handler may still serve; a hold renewed by another owner, or one lapsed, is not", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "a402-gw-renew-"));
+  let t = 1_700_000_000_000;
+  const book = createGatewayPendingBook({ file: join(dir, "p.json"), log: () => {}, now: () => t });
+  await book.ready;
+  const q = nonce();
+  assert.equal(await book.book({ payer: acct.address, network: "eip155:8453", nonce: q, amount: "5000" }), true);
+  const key = pendingKey("eip155:8453", acct.address, q);
+  assert.equal(await book.claimResume(key, "resend"), true);
+  t += 9 * 60_000;
+  assert.equal(await book.renewResume(key, "resend"), true, "the holder renews");
+  assert.equal(await book.renewResume(key, "someone-else"), false, "another owner cannot");
+  t += 9 * 60_000;
+  assert.equal(await book.claimResume(key, "resolver"), false, "18 minutes after the claim, the renewed hold still stands");
+  assert.equal((await book.resolve(key, { outcome: "owed", owner: "resolver" })).ok, false, "and no other owner drops it");
+  t += 11 * 60_000;
+  assert.equal((await book.resolve(key, { outcome: "not_charged" })).ok, true, "a lapsed hold no longer guards the entry");
+  rmSync(dir, { recursive: true, force: true });
+});
+await check("installGatewayRouting renews a resend's hold on a timer until the request ends", async () => {
+  const src = (await import("node:fs")).readFileSync(new URL("../src/gateway-nanopayments.js", import.meta.url), "utf8");
+  const body = src.slice(src.indexOf("async function resolvePending("), src.indexOf("server.verifyPayment = async"));
+  assert.match(body, /setInterval\(\(\) => \{[\s\S]{0,240}pendingBook\.renewResume\?\.\(key, owner\)/, "the resend renews with its own owner");
+  assert.match(body, /const finish = async \(served\) => \{[\s\S]{0,120}clearInterval\(renew\)/, "and stops at the request's end");
+  assert.match(body, /pendingBook\.resolve\(key, \{ outcome: "served", note: "resent and served on Gateway's transfer record", owner \}\)/, "the served drop names the holder");
+});
 await check("the resolver: a drop that does not land is counted kept, never owed or served; the owed row carries the slug booked with the entry, else the path (never the last segment); an ambiguous entry Gateway never took is dropped after the grace, a settlement_pending one never on a missing record; an unrecognized record is unreadable", async () => {
   const dir = mkdtempSync(join(tmpdir(), "a402-gw-resolver2-"));
   let t = Date.now();
