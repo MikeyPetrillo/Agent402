@@ -559,6 +559,12 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
   reset();
   const unpaid = await run({});
   ok(!unpaid.err && calls.length === 1 && calls[0].timeoutMs === undefined && calls[0].refusalMaxWaitMs > 200_000, "control: a request with no payment header is unchanged");
+  // Through the CDN proxy the seller call shares the proxy's wait: with 15 s
+  // of it left, the payer's own 20 s timeout is narrowed to what is left
+  // (less the 5 s answer margin), so the request ends before the proxy cuts it.
+  reset();
+  const viaCdn = await run({ ...reqWith(hdr(nowS() + 299)), cdnSyncDeadlineMs: Date.now() + 15_000 });
+  ok(!viaCdn.err && calls.length === 1 && calls[0].timeoutMs >= 3000 && calls[0].timeoutMs <= 10_000 && calls[0].refusalMaxWaitMs <= 10_000, `through the CDN with 15 s left, the seller call and the wait end inside it (timeout ${calls[0]?.timeoutMs} ms, wait ${calls[0]?.refusalMaxWaitMs} ms)`);
 
   // Controls on the other rails: a Solana payment is signed against a recent
   // blockhash, so its seller call and wait are budgeted under that life; Tempo keeps its
