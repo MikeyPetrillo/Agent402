@@ -826,16 +826,20 @@ export function atomicForMessage(v) {
  *                   the margin guard. A quote above it fails 502, never signs.
  * @param method/body  request shape (POST body is a JSON-serializable object).
  * @param timeoutMs / maxBytes  bounds.
- * @param refusalMaxWaitMs  the most the refusal branch may wait for the
- *                   credential to expire before it gives up on proving "not
- *                   charged" (the caller's remaining request budget); a wait
- *                   that hits the bound keeps the hold.
+ * @param refusalMaxWaitMs  the caller's remaining request budget, from this
+ *                   call's start: the refusal branch's wait for the
+ *                   credential to expire ends by then, whatever the seller
+ *                   legs before it took; a wait that hits the bound keeps
+ *                   the hold.
  *
  * A 200 on the bare request means the endpoint is free — returned with no
  * spend. Only a 402 triggers a payment; anything else is a 502.
  */
 export async function payX402(url, { maxAtomic, method = "GET", body, headers = {}, timeoutMs = 20000, maxBytes = DEFAULT_MAX_BYTES, chain = "base", provenPayTo = null, evidenceWallets = null, sellerProof = null, notDebited = null, allowUnproven = false, refusalMaxWaitMs = refusalMaxWaitMsDefault(), memoizeDelivery = false, slug = null, signBy = null, sellerKey = null } = {}) {
   assertSigningAllowed("an external x402 payment");
+  // The refusal wait ends at a fixed time from this call's start, so a seller
+  // that never answers the paid request cannot add its timeout on top of it.
+  const refusalEndAt = Date.now() + Math.max(0, Number(refusalMaxWaitMs) || 0);
   if (maxAtomic == null) throw bad("payX402 requires maxAtomic (the margin-guard ceiling)", 500);
   const chainCfg = BUYER_CHAINS[chain];
   if (!chainCfg) throw bad(`payX402: unknown chain "${chain}" (known: ${Object.keys(BUYER_CHAINS).join(", ")})`, 500);
@@ -1228,7 +1232,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     const chainCheckable = chain === "solana" || evmCheckable;
     const readChainVerdict = async (where) => {
       if (!chainCheckable) return null;
-      const maxWaitMs = Math.max(0, Number(refusalMaxWaitMs) || 0);
+      const maxWaitMs = Math.max(0, refusalEndAt - Date.now());
       try {
         const check = notDebited || (chain === "solana"
           ? (await import("./solana-buyer.js")).confirmSvmNotDebited
@@ -1467,7 +1471,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
       // checker that could not attach an expiry) keeps it too - only
       // expired + unused releases the hold and falls through.
       if (chainCheckable) {
-        const maxWaitMs = Math.max(0, Number(refusalMaxWaitMs) || 0);
+        const maxWaitMs = Math.max(0, refusalEndAt - Date.now());
         const verdict = await readChainVerdict(where);
         if (evmCheckable && verdict && verdict.debited === true) strikeChargedFailure("the signed authorization was consumed on chain");
         if (verdict && verdict.debited === false && verdict.expired === true) {

@@ -358,7 +358,7 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
   const vb = Number(sentPayload?.payload?.authorization?.validBefore);
   ok(Number.isFinite(vb) && vb <= t1 + 30 && vb >= t0 + 25, `the SIGNED validBefore is now + the 30 s refusal window (got +${vb - t0}s) even though the accept said maxTimeoutSeconds 300`);
   ok(sentPayload?.accepted?.maxTimeoutSeconds === 300, "the ECHOED accept keeps the seller's own maxTimeoutSeconds (the facilitator's requirements match)");
-  ok(asked.untilUnix === vb + 5 && asked.maxWaitMs === 12345, "the chain check is told to wait until the signed validBefore (+ slack), bounded by the caller's refusalMaxWaitMs");
+  ok(asked.untilUnix === vb + 5 && asked.maxWaitMs <= 12345 && asked.maxWaitMs > 12345 - 5000, `the chain check is told to wait until the signed validBefore (+ slack), bounded by what is left of the caller's refusalMaxWaitMs (${asked.maxWaitMs} of 12345 ms)`);
   ok(!sellerRefusedRecently("https://refuser.example", "base"), "one refusal is recorded and benches nothing yet");
   await buy(async () => ({ debited: false, observed: 1, expired: true }));
   ok(sellerRefusedRecently("https://refuser.example", "base")?.status === 402 && !sellerRefusedRecently("https://refuser.example", "solana"), "the second benches the refusing route on base only");
@@ -880,6 +880,30 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
       evm.client.createPaymentPayload = realSign;
     }
   }
+}
+
+// The refusal wait is a deadline from the call's start: a seller that never
+// answers the paid request does not add its timeout on top of the caller's
+// remaining budget (route-execute hands that budget in as refusalMaxWaitMs).
+{
+  const { payX402: pay, __resetSellerRefusalsForTest: resetRefusals } = await import("../src/x402-buyer.js");
+  resetRefusals?.();
+  const acc = { scheme: "exact", network: "eip155:8453", asset: USDC, amount: "1000", payTo: "0x" + "ef".repeat(20), maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } };
+  const h = Buffer.from(JSON.stringify({ x402Version: 2, accepts: [acc] })).toString("base64");
+  globalThis.fetch = async (url, init) => {
+    const paidHdr = init?.headers?.["PAYMENT-SIGNATURE"] || init?.headers?.["payment-signature"] || init?.headers?.["X-PAYMENT"];
+    if (!paidHdr) return { status: 402, headers: { get: (k) => (k.toLowerCase() === "payment-required" ? h : null) }, json: async () => ({}), text: async () => "{}" };
+    return new Promise((_, rej) => init.signal.addEventListener("abort", () => rej(init.signal.reason)));
+  };
+  const waits = [];
+  const notDebited = async ({ maxWaitMs }) => { waits.push(maxWaitMs); await new Promise((r) => setTimeout(r, maxWaitMs)); return { debited: false, expired: false, observed: 0 }; };
+  const keep = setInterval(() => {}, 1000);
+  const t0 = Date.now();
+  const err = await pay("https://hangs.example/x", { maxAtomic: 500000n, method: "POST", body: {}, chain: "base", notDebited, timeoutMs: 600, refusalMaxWaitMs: 1000 }).then(() => null, (e) => e);
+  const took = Date.now() - t0;
+  clearInterval(keep);
+  ok(err?.statusCode === 502 && err?.paidUnanswered === true && err?.committed === true, `an unanswered paid request keeps the hold (${err?.message})`);
+  ok(took < 1300 && waits[0] <= 450, `the refusal wait ends inside the caller's budget from the call's start: 1000 ms budget, 600 ms seller timeout, took ${took} ms (chain wait ${waits[0]} ms)`);
 }
 
 globalThis.fetch = origFetch;
