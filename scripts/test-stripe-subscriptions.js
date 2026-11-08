@@ -177,6 +177,53 @@ ok(invoices.length === 1 && invoices[0].amountUsd === 9 && invoices[0].product =
   ok(reversed.length === 3 && reversed[2].pi === "pi_pack" && reversed[2].reversal.amountRefundedCents === 2500 && reversed[2].reversal.fullyRefunded === false, "a partial refund reaches the clawback hook with its amount and that it is partial");
 }
 
+// Every record carries its id: one created by a webhook alone (the thanks
+// page never loaded) has it, and a stored record without one takes it from
+// its key on load, while a record that has it loads byte for byte unchanged.
+{
+  const { writeFileSync, readFileSync, statSync } = await import("node:fs");
+  const P = join("/tmp", `test-subs-id-${process.pid}.json`);
+  try { rmSync(P); } catch { /* first run */ }
+  const ws = createStripeSubscriptions({ stripe, baseUrl: "https://agent402.tools", storePath: P });
+  let into = ws; // the instance the next event is delivered to
+  const send = (id, type, obj, created) => into.handleWebhook(Buffer.from(JSON.stringify({ id, type, ...(created ? { created } : {}), data: { object: obj } })), "goodsig");
+  await send("evt_w1", "checkout.session.completed", { mode: "subscription", subscription: "sub_w1", customer: "cus_w1", customer_details: { email: "w1@x.com" }, metadata: { product: "domain-monitor", target: "w1.com" } });
+  await send("evt_w2", "customer.subscription.created", { id: "sub_w2", customer: "cus_w2", status: "active", metadata: { product: "domain-monitor", target: "w2.com" } });
+  const onDisk = JSON.parse(readFileSync(P, "utf8"));
+  ok(onDisk.sub_w1?.subId === "sub_w1" && onDisk.sub_w2?.subId === "sub_w2", "a record created by a webhook alone is stored with its subId");
+  ok(ws.listActive("domain").map((r) => r.subId).sort().join() === "sub_w1,sub_w2", "listActive names each webhook-only subscription by its own id");
+
+  // Backfill: a legacy record without the id; a current one with it.
+  const legacy = { sub_old: { status: "active", product: "domain-monitor", target: "old.com", customer: "cus_old" }, sub_new: { subId: "sub_new", status: "active", product: "domain-monitor", target: "new.com", customer: "cus_new", updatedAt: "2026-11-01T00:00:00.000Z" } };
+  writeFileSync(P, JSON.stringify(legacy));
+  const before = readFileSync(P, "utf8"), mtime = statSync(P).mtimeMs;
+  const lb = createStripeSubscriptions({ stripe, baseUrl: "https://agent402.tools", storePath: P });
+  ok(lb.get("sub_old")?.subId === "sub_old" && lb.listActive("domain").every((r) => typeof r.subId === "string"), "a stored record without a subId takes it from its key on load");
+  ok(JSON.stringify(lb.get("sub_new")) === JSON.stringify(legacy.sub_new), "a record that has its subId loads unchanged");
+  ok(readFileSync(P, "utf8") === before && statSync(P).mtimeMs === mtime, "loading writes nothing (the backfill is in memory; the next write carries the id)");
+  into = lb;
+
+  // Status events out of order: a late update created before the
+  // cancellation does not reactivate the subscription.
+  await send("evt_o1", "customer.subscription.deleted", { id: "sub_new" }, 2_000_000_200);
+  await send("evt_o2", "customer.subscription.updated", { id: "sub_new", customer: "cus_new", status: "active", metadata: {} }, 2_000_000_100);
+  ok(lb.get("sub_new")?.status === "canceled" && !lb.listActive("domain").some((r) => r.subId === "sub_new"), "a status event older than the cancellation does not reactivate it");
+  await send("evt_o3", "customer.subscription.updated", { id: "sub_old", customer: "cus_old", status: "past_due", metadata: {} }, 2_000_000_300);
+  await send("evt_o4", "customer.subscription.updated", { id: "sub_old", customer: "cus_old", status: "active", metadata: {} }, 2_000_000_400);
+  ok(lb.get("sub_old")?.status === "active", "a newer status event applies");
+
+  // A dispute on an earlier month's payment, after a later invoice was paid,
+  // still finds the subscription (by payment, or by charge).
+  await send("evt_p1", "invoice.paid", { id: "in_m1", subscription: "sub_old", customer: "cus_old", amount_paid: 500, payment_intent: "pi_m1", charge: "ch_m1" });
+  await send("evt_p2", "invoice.paid", { id: "in_m2", subscription: "sub_old", customer: "cus_old", amount_paid: 500, payment_intent: "pi_m2", charge: "ch_m2" });
+  await send("evt_p3", "charge.dispute.created", { id: "dp_m1", payment_intent: "pi_m1" });
+  ok(lb.get("sub_old")?.disputed === true && !lb.listActive("domain").some((r) => r.subId === "sub_old"), "a dispute on an earlier month's payment holds the subscription");
+  await send("evt_p4", "charge.dispute.closed", { id: "dp_m1", payment_intent: "pi_m1", status: "won" });
+  await send("evt_p5", "charge.dispute.created", { id: "dp_m2", charge: "ch_m1" });
+  ok(lb.get("sub_old")?.disputed === true, "a dispute naming only the earlier charge holds it too");
+  try { rmSync(P); } catch { /* ignore */ }
+}
+
 try { rmSync(STORE); } catch { /* ignore */ }
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

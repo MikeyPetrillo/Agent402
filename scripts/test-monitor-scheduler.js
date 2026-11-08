@@ -219,6 +219,64 @@ const capRow = capSch.status().subs.find((x) => x.subId === "sub_c");
 ok(fulls === MAX_FULL_PER_SUB_30D && capRow.capReached === true && capRow.fullsLast30d === MAX_FULL_PER_SUB_30D, `a flapping target is capped at ${MAX_FULL_PER_SUB_30D} paid runs per 30 days; further changes are alert-only`);
 active.delete("sub_c");
 
+// The cap holds when alert-only runs outnumber paid ones: the run log is kept
+// by age, so no paid run inside the window is pushed out of the count. A
+// target that changes at every check, checked every 13 hours for 61 days.
+{
+  active.set("sub_c2", { subId: "sub_c2", status: "active", product: "domain-monitor", target: "c2.example.com", email: null });
+  let k = 0;
+  const paidAt = [];
+  const flapSch = mk({ probeDomain: async (dm) => { const s = { ...signals, mx: 100 + (++k) }; return { domain: dm, signals: s, fingerprint: fpOf(s) }; }, generate: async (kind) => { paidAt.push(clock); return { report: `r ${kind}` }; } });
+  const start = clock;
+  for (let h = 0; h < 61 * 24; h += 13) { clock = start + h * HOUR; await flapSch.tick({ force: true, subId: "sub_c2" }); }
+  let worst = 0;
+  for (const t of paidAt) worst = Math.max(worst, paidAt.filter((x) => x > t - 30 * DAY && x <= t).length);
+  const runs = flapSch._store().subs.sub_c2.runs;
+  ok(worst <= MAX_FULL_PER_SUB_30D && paidAt.length > MAX_FULL_PER_SUB_30D, `alert-heavy target: at most ${MAX_FULL_PER_SUB_30D} paid runs in any 30 days (worst ${worst}, ${paidAt.length} over 61 days)`);
+  ok(runs.length > 24 && runs.every((x) => Date.parse(x.at) >= clock - 31 * DAY), `the run log is trimmed by age, not count (${runs.length} kept, none older than 31 days)`);
+  active.delete("sub_c2");
+}
+
+// A subscription record without its own id is never run: such records would
+// share one state entry, so one would be served and the rest billed for
+// nothing. The tick skips them, says so loudly, and runs the rest.
+{
+  const logs = [];
+  const noIdSch = mk({ log: (s) => logs.push(s) });
+  const g0 = calls.generate.length;
+  active.set("noid_1", { status: "active", product: "domain-monitor", target: "n1.example.com", email: "n1@x.com" });
+  active.set("noid_2", { subId: undefined, status: "active", product: "domain-monitor", target: "n2.example.com", email: "n2@x.com" });
+  active.set("sub_ok", { subId: "sub_ok", status: "active", product: "domain-monitor", target: "ok.example.com", email: "ok@x.com" });
+  const rr = await noIdSch.tick();
+  const st = noIdSch._store().subs;
+  ok(!Object.hasOwn(st, "undefined") && !Object.hasOwn(st, "null"), "no scheduler state is keyed by a missing id");
+  const ran = calls.generate.slice(g0).map((x) => x.input);
+  ok(ran.includes("ok.example.com") && !ran.some((x) => /^n[12]\./.test(x)) && rr.noId === 2, `records without an id are not run; the one with an id is (${rr.noId} skipped; ran ${ran.join(", ")})`);
+  ok(logs.some((l) => /ALERT: 2 active subscription record\(s\) without a subscription id/.test(l)), "the skip is logged as an alert");
+  ok(noIdSch.status().withoutId === 2, "the status view counts them");
+  active.delete("noid_1"); active.delete("noid_2"); active.delete("sub_ok");
+}
+
+// End to end: two subscriptions recorded by the webhook alone (no thanks
+// page) are each served under their own id in one tick.
+{
+  const { createStripeSubscriptions } = await import("../src/stripe-subscriptions.js");
+  const SP = join("/tmp", `test-monitors-subs-${process.pid}.json`);
+  const RP = join("/tmp", `test-monitors-runs-${process.pid}.json`);
+  for (const f of [SP, RP]) { try { rmSync(f); } catch { /* first run */ } }
+  process.env.STRIPE_WEBHOOK_SECRET = "whsec_test";
+  const ws = createStripeSubscriptions({ stripe: { subscriptions: { retrieve: async (id) => ({ id, status: "active" }) }, webhooks: { constructEvent: (b) => JSON.parse(b.toString()) } }, baseUrl: "https://agent402.tools", storePath: SP });
+  for (const [id, t] of [["sub_wa", "wa.example.com"], ["sub_wb", "wb.example.com"]]) {
+    await ws.handleWebhook(Buffer.from(JSON.stringify({ id: `evt_${id}`, type: "checkout.session.completed", data: { object: { mode: "subscription", subscription: id, customer: `cus_${id}`, customer_details: { email: `${id}@x.com` }, metadata: { product: "domain-monitor", target: t } } } })), "sig");
+  }
+  const g0 = calls.generate.length;
+  const wsch = mk({ subs: ws, storePath: RP, refreshStatus: ws.refreshStatus });
+  const rr = await wsch.tick();
+  const inputs = calls.generate.slice(g0).map((x) => x.input).sort();
+  ok(rr.full === 2 && inputs.join() === "wa.example.com,wb.example.com" && Object.keys(wsch._store().subs).sort().join() === "sub_wa,sub_wb", `webhook-only subscriptions each get their welcome report under their own id (${inputs.join(", ")})`);
+  for (const f of [SP, RP, SP + ".webhooks.json"]) { try { rmSync(f); } catch { /* ignore */ } }
+}
+
 // --- failure notice (once): at the welcome run's first failure, else at the fifth in a row -------
 active.set("sub_p", { subId: "sub_p", status: "active", product: "fund-monitor", target: "Nonexistent Fund", email: "p@x.com" });
 const failSch = mk({ resolveManager: async () => { const e = new Error("Could not confidently resolve"); e.statusCode = 404; throw e; } });
