@@ -36,16 +36,21 @@ import { AGENT402_MCP_VERSION } from "./mcp-flagship.js";
 import { OCR_LARGE_PIXELS } from "./tools/ocr-kit.js";
 import { asyncProfileOf } from "./slow-routes.js";
 import { needsAsyncOrWait } from "./slow-sync-window.js";
-import { _compositeGuardState } from "./composite-spend-guard.js";
-import { UNPAID_BODY_MAX_BYTES } from "./large-body-gate.js";
+import { COMPOSITE_GUARD_LIMITS } from "./composite-spend-guard.js";
+import { UNPAID_BODY_MAX_BYTES, UNPAID_LIMITS as LARGE_BODY_UNPAID } from "./large-body-gate.js";
 // The report and media routes' per-buyer guard, read from the module that
 // enforces it (its env overrides included).
-const COMPOSITE_GUARD = (({ WINDOW_MS, MAX_FAILS, HARD_MAX_FAILS, BLOCK_MS }) => ({ WINDOW_MS, MAX_FAILS, HARD_MAX_FAILS, BLOCK_MS }))(_compositeGuardState());
-// The large-body gate's unpaid limiter (server.js "large-body-unpaid"); it is
-// keyed on the client address alone and has no paid-address raise.
-// scripts/test-paid-quote-trust.js pins these to the server's figures.
-const LARGE_BODY_UNPAID_PER_MIN = 60;
-const LARGE_BODY_UNPAID_PER_HOUR = 1200;
+const COMPOSITE_GUARD = COMPOSITE_GUARD_LIMITS;
+/** A failure share in prose: 0.5 reads "half", so the guide says "more than half"
+ *  from the limit itself (other shares read as a percentage). */
+export function failShareWords(share) {
+  const words = { 0.25: "a quarter", 0.5: "half", 0.75: "three quarters" };
+  return words[share] ?? `${Math.round(share * 100)} percent`;
+}
+// The large-body gate's unpaid limiter (server.js "large-body-unpaid") reads the
+// same export; it is keyed on the client address alone and has no paid-address raise.
+const LARGE_BODY_UNPAID_PER_MIN = LARGE_BODY_UNPAID.PER_MIN;
+const LARGE_BODY_UNPAID_PER_HOUR = LARGE_BODY_UNPAID.PER_HOUR;
 // The content-pipeline guide reads the speech and transcription caps from their kits.
 import { TTS_TIERS, VOICES as TTS_VOICES, FORMATS as TTS_FORMATS, LITE_FORMATS as TTS_LITE_FORMATS } from "./tools/tts-kit.js";
 import { STT_TIERS, MAX_AUDIO_BYTES as STT_MAX_AUDIO_BYTES } from "./tools/stt-kit.js";
@@ -321,7 +326,7 @@ before any payment is taken, and the last column says how long to wait.
 | Unpaid quotes on \`/v1/metered\` | ${METERED_UNPAID_QUOTES_PER_MIN} a minute and ${METERED_UNPAID_QUOTES_PER_HOUR.toLocaleString("en-US")} an hour per client address; ${PAID_CLIENT_METERED_QUOTES_PER_MIN} a minute and ${PAID_CLIENT_METERED_QUOTES_PER_HOUR.toLocaleString("en-US")} an hour for ${PAID_QUOTE_TRUST_MINUTES} minutes after each paid call from that address | 429, \`Retry-After: 60\` |
 | Refused payment credentials on \`/v1/metered\` | the same figures, counted once a credential is refused | 429, \`Retry-After: 60\` |
 | Payments that verified and then failed to settle, per wallet | refused at ${SETTLE_BREAKER_MAX_FAILS} in ${Math.round(SETTLE_BREAKER_WINDOW_MS / 60_000)} minutes while they are more than half of the wallet's outcomes there, or at ${SETTLE_BREAKER_HARD_MAX} whatever it settled | 429 naming when it lifts |
-| Report and media runs that failed to settle or failed after the run, per buyer | blocked for ${Math.round(COMPOSITE_GUARD.BLOCK_MS / 60_000)} minutes at ${COMPOSITE_GUARD.MAX_FAILS} in ${Math.round(COMPOSITE_GUARD.WINDOW_MS / 60_000)} minutes while they are more than half of the buyer's outcomes there, or at ${COMPOSITE_GUARD.HARD_MAX_FAILS} whatever it settled | 429 without \`Retry-After\`; the block lifts on its own |
+| Report and media runs that failed to settle or failed after the run, per buyer | blocked for ${Math.round(COMPOSITE_GUARD.BLOCK_MS / 60_000)} minutes at ${COMPOSITE_GUARD.MAX_FAILS} in ${Math.round(COMPOSITE_GUARD.WINDOW_MS / 60_000)} minutes while they are more than ${failShareWords(COMPOSITE_GUARD.MIN_FAIL_SHARE)} of the buyer's outcomes there, or at ${COMPOSITE_GUARD.HARD_MAX_FAILS} whatever it settled | 429 without \`Retry-After\`; the block lifts on its own |
 | Unpaid requests with a body over ${Math.round(UNPAID_BODY_MAX_BYTES / 1024)} KB to a route that reads its price from the body | ${LARGE_BODY_UNPAID_PER_MIN} a minute and ${LARGE_BODY_UNPAID_PER_HOUR.toLocaleString("en-US")} an hour per client address, the same once that address has paid | 429, \`Retry-After: 60\` |
 | Concurrent runs of the report and media routes from one wallet | the wallet's balance covers every run in flight plus the new one | 429, \`Retry-After: 30\` |
 | Jobs per client address | ${ASYNC_JOBS_PER_CLIENT} running at once | 429, \`Retry-After: 30\` |

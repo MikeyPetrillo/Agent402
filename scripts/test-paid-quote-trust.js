@@ -221,22 +221,29 @@ function fakeStore() {
   const wikiCeiling = `${PAID_CLIENT_METERED_QUOTES_PER_MIN} a minute and ${PAID_CLIENT_METERED_QUOTES_PER_HOUR.toLocaleString("en-US")} an hour for ${phrase}`;
   ok(wiki.includes(wikiCeiling) && wiki.includes("PAID_QUOTE_TRUST_MINUTES") && wiki.includes("PAID_CLIENT_QUOTE_MULTIPLIER"), "the wiki page quotes the same ceiling and window and names their constants");
   ok(!/not limited for|not counted for/.test(wiki), "and never says a paid address is not limited");
+  // The changelog entries (both files, which test-changelog-parity keeps equal) and the home monitor line.
+  const changelogMd = readFileSync(new URL("../CHANGELOG.md", import.meta.url), "utf8");
+  const changelogJs = readFileSync(new URL("../src/changelog.js", import.meta.url), "utf8");
+  ok(!/not limited for|not counted for/.test(changelogMd) && !/not limited for|not counted for/.test(changelogJs), "the changelog (CHANGELOG.md and src/changelog.js) never says a paid address is not limited");
+  const homeSrc = readFileSync(new URL("../src/ledger-home.js", import.meta.url), "utf8");
+  ok(/emails up to \$\{MAX_FULL_PER_SUB_30D\} fresh reports in any 30 days/.test(homeSrc), "the home monitor line reads MAX_FULL_PER_SUB_30D, not a typed count");
   ok(PAID_CLIENT_METERED_QUOTES_PER_MIN === METERED_UNPAID_QUOTES_PER_MIN * 10 && PAID_CLIENT_METERED_QUOTES_PER_HOUR === METERED_UNPAID_QUOTES_PER_HOUR * 10, "the raised metered ceiling is ten times each plain figure");
 
   // The limits that get no paid-address raise are quoted from their own code.
-  const { _compositeGuardState } = await import("../src/composite-spend-guard.js");
-  const g = _compositeGuardState();
-  const guardRow = `blocked for ${Math.round(g.BLOCK_MS / 60_000)} minutes at ${g.MAX_FAILS} in ${Math.round(g.WINDOW_MS / 60_000)} minutes while they are more than half of the buyer's outcomes there, or at ${g.HARD_MAX_FAILS} whatever it settled`;
+  const { COMPOSITE_GUARD_LIMITS: g } = await import("../src/composite-spend-guard.js");
+  const { failShareWords } = await import("../src/guides.js");
+  const guardRow = `blocked for ${Math.round(g.BLOCK_MS / 60_000)} minutes at ${g.MAX_FAILS} in ${Math.round(g.WINDOW_MS / 60_000)} minutes while they are more than ${failShareWords(g.MIN_FAIL_SHARE)} of the buyer's outcomes there, or at ${g.HARD_MAX_FAILS} whatever it settled`;
+  ok(g.MIN_FAIL_SHARE === 0.5 && guardRow.includes("more than half"), "the guard's share reads 'more than half' from MIN_FAIL_SHARE");
+  ok(Object.isFrozen(g), "COMPOSITE_GUARD_LIMITS is frozen");
   ok(html.replace(/&#39;/g, "'").includes(guardRow), `the guide quotes the report guard: ${guardRow}`);
   ok(wiki.includes(`blocked for ${Math.round(g.BLOCK_MS / 60_000)} minutes`) && wiki.includes(`at ${g.MAX_FAILS} in ${Math.round(g.WINDOW_MS / 60_000)} minutes`) && wiki.includes(`or at ${g.HARD_MAX_FAILS} whatever it settled`), "the wiki page quotes the same report guard");
+  // The large-body unpaid limiter and the guide both read UNPAID_LIMITS (no drift check needed).
+  const { UNPAID_LIMITS } = await import("../src/large-body-gate.js");
   const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-  const lb = /createRateLimiter\("large-body-unpaid",\s*\{\s*perMin:\s*(\d+),\s*perHour:\s*(\d+)\s*\}\)/.exec(server);
-  ok(lb, "server.js names the large-body unpaid limiter's figures");
-  if (lb) {
-    const lbRow = `${lb[1]} a minute and ${Number(lb[2]).toLocaleString("en-US")} an hour per client address, the same once that address has paid`;
-    ok(html.includes(lbRow), `the guide quotes the large-body limit with no paid raise: ${lbRow}`);
-    ok(wiki.includes(`${lb[1]} a minute, ${Number(lb[2]).toLocaleString("en-US")} an hour`) && wiki.includes("no raise once the address has paid"), "the wiki page quotes the same large-body limit");
-  }
+  ok(/perMin:\s*LARGE_BODY_UNPAID_LIMITS\.PER_MIN,\s*perHour:\s*LARGE_BODY_UNPAID_LIMITS\.PER_HOUR/.test(server), "server.js builds the large-body unpaid limiter from UNPAID_LIMITS");
+  const lbRow = `${UNPAID_LIMITS.PER_MIN} a minute and ${UNPAID_LIMITS.PER_HOUR.toLocaleString("en-US")} an hour per client address, the same once that address has paid`;
+  ok(html.includes(lbRow), `the guide quotes the large-body limit with no paid raise: ${lbRow}`);
+  ok(wiki.includes(`${UNPAID_LIMITS.PER_MIN} a minute, ${UNPAID_LIMITS.PER_HOUR.toLocaleString("en-US")} an hour`) && wiki.includes("no raise once the address has paid"), "the wiki page quotes the same large-body limit");
   ok(!/each one sets `Retry-After`|names its wait in <code>Retry-After/.test(html + wiki), "neither page says every limit sets Retry-After (the report guard does not)");
 
   // The content pipeline's job column is read from the route's async profile.

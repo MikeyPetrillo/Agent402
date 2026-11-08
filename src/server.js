@@ -3,7 +3,7 @@ import { heapSamplingReport } from "./boot-profile.js"; // diagnostic boot CPU p
 import "./tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA, process-wide (see the file)
 import { mtaStsPolicy } from "./mta-sts.js";
 import { securityHeaders } from "./security-headers.js";
-import { createLargeBodyGate, largeBodyInflightMaxBytes, unlessBodyUnread } from "./large-body-gate.js";
+import { createLargeBodyGate, largeBodyInflightMaxBytes, unlessBodyUnread, UNPAID_LIMITS as LARGE_BODY_UNPAID_LIMITS } from "./large-body-gate.js";
 import { carriesPaymentAttempt, registerOfferedNetworks } from "./payment-attempt.js";
 import { retiredEntryFor, assertRetiredRegistryConsistent, retirementHeaders, RETIRED_CONVERTERS_AT } from "./retired-tools.js";
 import { createTrafficStore, trafficMiddleware } from "./traffic-classifier.js";
@@ -3395,7 +3395,7 @@ const LARGE_BODY_ROUTES = [
   // (OFFICE_LIMITS.requestBytes), past the global parser once JSON-escaped.
   ["/api/xlsx-create", 2 * MB], ["/api/docx-create", 2 * MB], ["/api/pptx-create", 2 * MB],
 ];
-const largeBodyUnpaidLimiter = createRateLimiter("large-body-unpaid", { perMin: 60, perHour: 1200 });
+const largeBodyUnpaidLimiter = createRateLimiter("large-body-unpaid", { perMin: LARGE_BODY_UNPAID_LIMITS.PER_MIN, perHour: LARGE_BODY_UNPAID_LIMITS.PER_HOUR });
 app.use(createLargeBodyGate({
   routes: LARGE_BODY_ROUTES,
   isPaid: (req) => looksLikePayment(req.headers),

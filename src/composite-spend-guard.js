@@ -20,8 +20,10 @@ import { AsyncLocalStorage } from "node:async_hooks";
 // window per payer and a shared global window, a block and the pause are
 // shared flags, and the two consults read them with this process's own state
 // as the floor (synchronous without a shared store, a promise with one; the
-// dispatcher awaits both). Tune via env. Only the EVM EIP-3009 payer is guarded
-// (that is the rail the reusable-nonce mechanic applies to).
+// dispatcher awaits both). Tune via env. The key is the payer (the EVM
+// EIP-3009 authorization's from, the rail the reusable-nonce mechanic applies
+// to), else the Tempo sender, else the credits key, else the client IP (see
+// guardKey in server.js), so every buyer has a key.
 import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 const WINDOW_MS = Number(process.env.COMPOSITE_GUARD_WINDOW_MS) || 15 * 60_000;
 const MAX_FAILS = Number(process.env.COMPOSITE_GUARD_MAX_FAILS) || 3;
@@ -31,6 +33,9 @@ const BLOCK_MS = Number(process.env.COMPOSITE_GUARD_BLOCK_MS) || 30 * 60_000;
 const MIN_FAIL_SHARE = (() => { const n = Number(process.env.COMPOSITE_GUARD_MIN_FAIL_SHARE); return Number.isFinite(n) && n >= 0 && n < 1 ? n : 0.5; })();
 /** Failures in the window that block a payer whatever it settled. */
 const HARD_MAX_FAILS = Number(process.env.COMPOSITE_GUARD_HARD_MAX) || 10;
+/** The guard's limits, frozen. The guide, the tests and the state helper read
+ *  this one object; it carries no spend or upstream figure. */
+export const COMPOSITE_GUARD_LIMITS = Object.freeze({ WINDOW_MS, MAX_FAILS, MIN_FAIL_SHARE, HARD_MAX_FAILS, BLOCK_MS });
 /** Settled outcomes kept per payer (the rule needs a count, not every stamp). */
 const MAX_OKS_KEPT = 5000;
 function tripped(nFails, nOks) {
@@ -350,7 +355,7 @@ export function compositeUsageSnapshot() {
 export const _compositeGuardShared = SHARED;
 /** Test/ops introspection. */
 export function _compositeGuardState() {
-  return { fails: fails.size, oks: oks.size, blocked: blockedUntil.size, WINDOW_MS, MAX_FAILS, MIN_FAIL_SHARE, HARD_MAX_FAILS, BLOCK_MS, globalFails: globalFailCount(Date.now()), globalPausedUntil, GLOBAL_MAX_FAILS, GLOBAL_PAUSE_MS, usage: { ...usage, upstreamUsd: Math.round(usage.upstreamUsd * 1e4) / 1e4 } };
+  return { fails: fails.size, oks: oks.size, blocked: blockedUntil.size, ...COMPOSITE_GUARD_LIMITS, globalFails: globalFailCount(Date.now()), globalPausedUntil, GLOBAL_MAX_FAILS, GLOBAL_PAUSE_MS, usage: { ...usage, upstreamUsd: Math.round(usage.upstreamUsd * 1e4) / 1e4 } };
 }
 export function _compositeGuardReset() {
   if (SHARED) {
