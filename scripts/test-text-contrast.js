@@ -14,7 +14,8 @@
 // Rules: WCAG AA - 4.5:1 for text under 24px (18.66px if bold), 3:1 at or
 // above. Backdrop = the nearest ancestor with an opaque background-color;
 // an ancestor painting a background-image (gradient) is unknowable here and
-// the element is skipped, as are transparent, hidden, empty and off-DOM text.
+// the element is skipped, as are transparent, hidden, empty and off-DOM text,
+// and screen-reader-only text (a 1px box or a zero clip, never painted).
 //
 //   TARGET_URL=http://127.0.0.1:3000 node scripts/test-text-contrast.js
 import { chromium } from "playwright";
@@ -46,7 +47,7 @@ const AUDIT = `(() => {
     for (let i = layers.length - 2; i >= 0; i--) out = blend(layers[i], out);
     return out;
   };
-  const visible = (el) => { const s = getComputedStyle(el); if (s.display === "none" || s.visibility === "hidden" || Number(s.opacity) === 0) return false; const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+  const visible = (el) => { const s = getComputedStyle(el); if (s.display === "none" || s.visibility === "hidden" || Number(s.opacity) === 0) return false; const r = el.getBoundingClientRect(); if (r.width <= 1 && r.height <= 1) return false; for (let n = el; n && n.nodeType === 1; n = n.parentElement) { const c = getComputedStyle(n); if ((c.clip && c.clip !== "auto" && /rect\(0(px)?,? 0(px)?,? 0(px)?,? 0(px)?\)/.test(c.clip)) || c.clipPath === "inset(50%)") return false; } return r.width > 0 && r.height > 0; };
   const out = [];
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
   const seen = new Set();
