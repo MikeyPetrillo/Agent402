@@ -652,6 +652,63 @@ for (const [label, headers, status, error, tail] of [
   ok(slow.length > 0 && offered.length === 0, `every slow route (${slow.length}) is long-running, so none offers Tempo and the deferred sync-window refusal has no live route today${offered.length ? `: ${offered.join(", ")} now offers Tempo on a slow route` : ""}`);
 }
 
+// The held-claim sweep reads EVERY row created before its cutoff, never only
+// the newest page: a stranded hold older than 2000 newer void rows is found
+// (it was missed while the sweep read the newest 2000 void rows), the walk is
+// bounded per tick and resumes from its cursor, a millisecond holding a full
+// page is read whole, and owed rows unpaid too long are named once a pass.
+{
+  const { ledgerHeldPage, PUSH_HELD_SWEEP_ROWS_PER_TICK } = await import("../src/tempo-push-debts.js");
+  const strandedOld = hashFor(5000);
+  await post(pushCred(strandedOld), {});
+  ok((await debts.claimForServe({ tempoSettled: true, mppTempoPushHash: strandedOld })) === true, "setup: an old hold");
+  const heldNote = ledger.refundByEvidence(strandedOld)?.note;
+  ok(heldNote === `${PUSH_INPUT_REFUSED_NOTE}; ${PUSH_CLAIMED_NOTE}`, `setup: held note (${heldNote})`);
+  await new Promise((r) => setTimeout(r, 5));
+  const FILL = 2100;
+  for (let i = 0; i < FILL; i++) {
+    const h = hashFor(6000 + i);
+    ledger.recordRefundOwed({ slug: "filler", network: "tempo", payer: SENDER, priceUsd: 0.01, tx: h, httpStatus: 400, wire: "mpp-tempo", note: "filler" });
+    ledger.voidOwedOnClaim(h, PUSH_CLAIMED_NOTE);
+  }
+  const newest = ledger.listRefunds({ status: "void", limit: 2000 });
+  ok(newest.length === 2000 && !newest.some((r) => r.evidence === strandedOld), "reproduced: the newest 2000 void rows do not include the old hold");
+  const t0 = Date.now() + 3_600_000; // every hold reads as an hour old
+  const mk = (over = {}) => createHeldClaimSweep({ listPage: ledgerHeldPage(ledger), reopenHeld: async () => false, renoteVoid: async () => false, saleFor: async () => null, now: () => t0, maxAgeMs: 30 * 60_000, log: () => {}, alarm: () => {}, ...over });
+  // Bounded per tick, resuming from the cursor: the hold is found by the pass, wherever it sits.
+  const seen = [];
+  const reopenSpy = async (ev, o) => { seen.push(ev); return ledger.reopenHeldClaim(ev, o); };
+  const small = mk({ rowsPerTick: 600, reopenHeld: async (ev, o) => { seen.push(ev); return false; } });
+  let ticks = 0, rows = 0, last;
+  do { last = await small.sweep(); ticks++; rows += last.rows; ok(last.rows <= 600 + 500, `tick ${ticks} reads at most a tick's rows plus one page (${last.rows})`); } while (!last.passComplete && ticks < 50);
+  ok(last.passComplete && ticks >= 2, `a pass over ${rows} rows takes several bounded ticks (${ticks})`);
+  ok(rows >= FILL + 1 && seen.includes(strandedOld), `every row is read once a pass and the old hold is found (${rows} rows)`);
+  // A page size smaller than one millisecond's rows: the millisecond is read whole, nothing skipped.
+  const seenTiny = [];
+  const tiny = mk({ pageSize: 3, rowsPerTick: 1e9, reopenHeld: async (ev) => { seenTiny.push(ev); return false; } });
+  const tinyOut = await tiny.sweep();
+  ok(tinyOut.passComplete && tinyOut.rows >= FILL + 1 && seenTiny.includes(strandedOld), `with a three-row page every row is still read (${tinyOut.rows} rows, ${tinyOut.reads} reads)`);
+  // The real reopen: the old stranded hold is owed again.
+  const real = mk({ rowsPerTick: PUSH_HELD_SWEEP_ROWS_PER_TICK, reopenHeld: reopenSpy });
+  let r;
+  do { r = await real.sweep(); } while (!r.passComplete);
+  ok(ledger.refundByEvidence(strandedOld)?.status === "owed" && ledger.refundByEvidence(strandedOld)?.note === `${PUSH_INPUT_REFUSED_NOTE}; ${PUSH_RUN_UNFINISHED_NOTE}`, "the old stranded hold is owed again");
+  // Owed rows unpaid past the escalation age are named once a pass, at most once a day.
+  const alarms = [];
+  const esc = mk({ owedAgeMs: 60_000, alarm: (m) => alarms.push(m) });
+  do { r = await esc.sweep(); } while (!r.passComplete);
+  ok(r.owedAged >= 1 && alarms.length === 1 && /owed refund row\(s\) unpaid past/.test(alarms[0]) && !/0x[0-9a-f]{40}/i.test(alarms[0]), `owed rows past the age are named once, no addresses (${alarms[0]})`);
+  do { r = await esc.sweep(); } while (!r.passComplete);
+  ok(alarms.length === 1, "not again inside the day");
+  const none = [];
+  const fresh = mk({ owedAgeMs: 365 * 86_400_000, alarm: (m) => none.push(m) });
+  do { r = await fresh.sweep(); } while (!r.passComplete);
+  ok(r.owedAged === 0 && none.length === 0, "nothing named when no owed row is that old");
+  const { readFileSync } = await import("node:fs");
+  const startSrc = readFileSync(new URL("../src/tempo-push-debts.js", import.meta.url), "utf8").split("export function startTempoHeldClaimSweep")[1] || "";
+  ok(/listPage: ledgerHeldPage\(ledger\)/.test(startSrc) && !/listVoid|listRefunds/.test(startSrc), "the production sweep walks the ledger page by page, never one newest-first list");
+}
+
 server.close();
 console.log(`\n${pass} passed, 0 failed`);
 process.exit(0);
