@@ -34,6 +34,9 @@ import { IDEM_MAX_BODY_LABEL } from "./idempotency-limits.js";
 import { LATE_SETTLE_EXCEPTION } from "./front-door.js";
 import { AGENT402_MCP_VERSION } from "./mcp-flagship.js";
 import { OCR_LARGE_PIXELS } from "./tools/ocr-kit.js";
+// The content-pipeline guide reads the speech and transcription caps from their kits.
+import { TTS_TIERS, VOICES as TTS_VOICES, FORMATS as TTS_FORMATS, LITE_FORMATS as TTS_LITE_FORMATS } from "./tools/tts-kit.js";
+import { STT_TIERS, MAX_AUDIO_BYTES as STT_MAX_AUDIO_BYTES } from "./tools/stt-kit.js";
 /** Where the buying-at-volume guide lives (the metered quote limiter's 429 links it). */
 export const BUYING_AT_VOLUME_PATH = "/guides/buying-at-volume";
 // Whether prepaid credits are sold now. Copy that tells a reader to buy a pack
@@ -501,7 +504,353 @@ console.log(await call("/api/hash", { text: "hello world" }));
 \`\`\`
 
 The recovery contract in brief is at [/agents.md](https://agent402.tools/agents.md),
-and the whole service at [/llms.txt](https://agent402.tools/llms.txt).
+and the whole service at [/llms.txt](https://agent402.tools/llms.txt). A worked
+chain of paid stages, from research to subtitles, is in
+[content pipelines](/guides/content-pipeline).
+`,
+  },
+  {
+    slug: "content-pipeline",
+    title: "Content pipelines: research, script, voice, images and subtitles from one wallet",
+    seoTitle: "A content pipeline for AI agents, paid per call",
+    description:
+      "A recipe for podcast, short-video and voiceover pipelines: research, script, speech, images, transcripts, subtitles, dubbing and media checks, each stage one paid call from one wallet, no API keys.",
+    md: `
+A content pipeline turns a topic into a finished piece: find the facts, write
+the script, voice it, illustrate it, transcribe it, subtitle it, dub it and
+check the files. Here each stage is one paid call to the same service, paid
+from one wallet over x402 or MPP, with no API key and no account to open.
+
+Most stages are model-backed: a model answers, writes, speaks, draws, listens
+or translates. Subtitle conversion and the media checks are deterministic code.
+
+## The stages
+
+| Stage | Slug | Price | Model-backed | Runs as a job |
+|---|---|---|---|---|
+| Answer with citations | \`answer\` | {{price:answer}} | yes | no |
+| Research report | \`research\` | {{price:research}} | yes | yes, required |
+| Script | \`v1-chat-metered\` | quoted per request, from {{price:v1-chat-metered}} | yes | no |
+| Voiceover | \`tts-lite\` | {{price:tts-lite}} | yes | no |
+| Voiceover | \`tts\`, \`tts-hd\` | quoted from the text, from {{price:tts}} and {{price:tts-hd}} | yes | no |
+| Images | \`v1-images-fast\`, \`v1-images-pro\` | {{price:v1-images-fast}}, {{price:v1-images-pro}} | yes | on request |
+| Image edit | \`v1-images-edit\` | {{price:v1-images-edit}} | yes | no |
+| Transcription | \`transcribe\`, \`transcribe-pro\` | {{price:transcribe}}, {{price:transcribe-pro}} | yes | no |
+| Subtitles | \`srt-convert\` | {{price:srt-convert}}, or free with proof-of-work | no | no |
+| Subtitles in one call | \`skill-subtitle-pipeline\` | {{price:skill-subtitle-pipeline}} | yes | no |
+| Dubbing | \`dub\` | quoted by tier, from {{price:dub}} | yes | no |
+| Media probe | \`media-info\` | {{price:media-info}} | no | no |
+| Audio track to MP3 | \`audio-convert\` | {{price:audio-convert}} | no | no |
+| Loudness | \`audio-normalize\` | {{price:audio-normalize}} | no | no |
+
+Prices are read from [/api/pricing](https://agent402.tools/api/pricing) when
+this page renders. Each example below is the tool's published example.
+
+## Set up once
+
+One client pays every stage. The caps are checked before each payment is
+signed, against the quote for that request.
+
+\`\`\`js
+import { Agent402 } from "agent402-client";
+import { wrapFetchWithPayment } from "@x402/fetch";
+import { x402Client } from "@x402/core/client";
+import { registerExactEvmScheme } from "@x402/evm/exact/client";
+import { privateKeyToAccount } from "viem/accounts";
+
+const client = new x402Client();
+client.setSpendControls?.(false); // the caps below replace the library default
+registerExactEvmScheme(client, { signer: privateKeyToAccount(process.env.AGENT_KEY) });
+const payFetch = wrapFetchWithPayment(fetch, client);
+
+const a = new Agent402({
+  fetch: payFetch,
+  x402Client: client,  // the caps are checked on the payment that is signed
+  maxPerCallUsd: 1,    // refuse any single quote above this
+  dailyLimitUsd: 25,   // rolling 24 hours, this instance
+});
+\`\`\`
+
+Over plain HTTP, the same request without a payment answers 402 with the
+quote, and your x402 or MPP client pays it:
+
+\`\`\`bash
+curl -i -X POST https://agent402.tools/api/tts \\
+  -H 'Content-Type: application/json' \\
+  -d '{"text":"Hello from Agent402!","voice":"alloy","format":"mp3"}'
+# HTTP/2 402, the x402 accepts in PAYMENT-REQUIRED and the MPP challenges in WWW-Authenticate
+\`\`\`
+
+## 1. Research
+
+\`answer\` (\`GET /api/answer\`) returns a short answer grounded in live web
+search, with its citations:
+
+\`\`\`js
+const brief = await a.call("answer", { q: "what is the x402 payment protocol?" });
+// { query, answer, citations: [{ url, snippet, number }], citationCount }
+\`\`\`
+
+\`research\` (\`POST /v1/research\`) plans sub-questions, runs several searches
+and returns one cited report. It runs as a job: the client sends
+\`Prefer: respond-async\` and collects the report from the job link.
+
+\`\`\`js
+const report = await a.call("research", { query: "What are the leading agentic-payment protocols in 2026 and how do they differ?", recency: "year" });
+// { report, sources: [{ n, title, url, snippet }], sub_questions, meta }
+\`\`\`
+
+## 2. Script
+
+The metered chat route quotes each request from its input and \`max_tokens\`,
+so a short script costs what a short script uses. Name any id from
+[/v1/models](https://agent402.tools/v1/models) in \`model\`, or leave it out for
+the default.
+
+\`\`\`js
+const messages = [
+  { role: "system", content: "Write a 60-second voiceover script in plain sentences." },
+  { role: "user", content: brief.answer },
+];
+const draft = await a.call("v1-chat-metered", { max_tokens: 600, messages });
+const script = draft.choices[0].message.content;
+\`\`\`
+
+The flat tiers take the same body at one price per call, from
+\`/v1/nano/chat/completions\` ({{price:v1-chat-nano}}) up.
+
+## 3. Voiceover
+
+\`\`\`js
+const voice = await a.call("tts", { text: "Hello from Agent402!", voice: "alloy", format: "mp3" });
+const audio = Buffer.from(voice.audio, "base64"); // { model, voice, format, audio, chars }
+\`\`\`
+
+- **Tiers.** \`tts-lite\` for high-volume narration where timbre matters less,
+  \`tts\` for natural speech, \`tts-hd\` for the most expressive delivery (it
+  reads inline tags such as \`[whispering]\` as cues). One request shape for all three.
+- **Length.** ${TTS_TIERS.tts.maxChars.toLocaleString("en-US")} characters a call on \`tts\` and \`tts-hd\`,
+  ${TTS_TIERS["tts-lite"].maxChars.toLocaleString("en-US")} on \`tts-lite\`. Split a longer script at sentence ends and send one call per part.
+- **Voices.** The ten standard names on every tier: ${[...TTS_VOICES].map((v) => "`" + v + "`").join(", ")}.
+  \`tts\` and \`tts-hd\` also take the named voices listed on [/speech](https://agent402.tools/speech).
+- **Formats.** ${[...TTS_FORMATS].map((f) => "`" + f + "`").join(", ")} on \`tts\` and \`tts-hd\`; ${[...TTS_LITE_FORMATS].map((f) => "`" + f + "`").join(" or ")} on \`tts-lite\`.
+
+## 4. Images
+
+\`/v1/images/fast\` and \`/v1/images/pro\` take a prompt and return one picture
+inline on the OpenAI images wire; pro is the higher-fidelity tier.
+
+\`\`\`js
+const cover = await a.call("v1-images-fast", { prompt: "A minimalist line drawing of a lighthouse at dawn" });
+const jpeg = Buffer.from(cover.data[0].b64_json, "base64");
+\`\`\`
+
+\`/v1/images/edits\` changes a picture you already have: send one to four PNG
+or JPEG references (base64 or \`data:\` URLs) and describe the change in the
+prompt. The output follows the first reference's aspect ratio.
+
+\`\`\`js
+const ref = "data:image/jpeg;base64," + cover.data[0].b64_json;
+const edited = await a.call("v1-images-edit", { prompt: "Add a warm sunrise glow behind the lighthouse", image: ref });
+\`\`\`
+
+## 5. Transcription
+
+\`transcribe\` reads audio from a public URL, up to ${STT_TIERS.transcribe.maxMinutes} minutes
+(\`transcribe-pro\` up to ${STT_TIERS["transcribe-pro"].maxMinutes}) and ${Math.round(STT_MAX_AUDIO_BYTES / 1024 / 1024)} MB. Add
+\`diarize: true\` for speaker labels and word timestamps, which the subtitle
+stage turns into timed cues.
+
+\`\`\`js
+const t = await a.call("transcribe", { url: "https://agent402.tools/fixtures/sample-speech.wav", diarize: true });
+// { text, language, duration, speakers, words: [{ word, start, end, speaker }] }
+\`\`\`
+
+For audio you hold as bytes, \`POST /v1/audio/transcriptions\` takes the same
+models as a multipart \`file\` upload (\`/v1/pro/audio/transcriptions\` for the
+longer cap).
+
+## 6. Subtitles
+
+\`srt-convert\` turns timed cues into SRT, WebVTT, plain text or JSON. It is
+pure CPU, so agent402-client pays it with a proof-of-work solution and no
+wallet.
+
+\`\`\`js
+const words = t.words.filter((w) => w.word.trim() && w.start != null);
+const cues = [];
+for (let i = 0; i < words.length; i += 7) {
+  const line = words.slice(i, i + 7);
+  cues.push({ start: Math.round(line[0].start * 1000), end: Math.round(line.at(-1).end * 1000), text: line.map((w) => w.word).join(" ") });
+}
+const subs = await a.call("srt-convert", { cues, to: "srt" });
+// { detected, to, count, result }: result is the SRT file
+\`\`\`
+
+The subtitle-pipeline skill pack runs transcribe, srt-convert and text-stats
+in one payment. Its file is one cue spanning the clip, so use the diarized
+words above when each line needs its own timing.
+
+\`\`\`js
+const pack = await a.call("skill-subtitle-pipeline", { url: "https://agent402.tools/fixtures/sample-speech.wav", format: "vtt" });
+\`\`\`
+
+## 7. Dubbing
+
+\`dub\` translates a text and speaks the translation in one call. \`tier\`
+\`"hd"\` speaks it on the tts-hd voice, and the quote is the sum of the two
+steps. The text cap applies to the translation.
+
+\`\`\`js
+const es = await a.call("dub", { text: "Hello from Agent402! Every tool is paid per call.", targetLanguage: "es", voice: "nova", format: "mp3", json: true });
+// { translation, detectedSourceLanguage, targetLanguage, tier, voice, format, audio, chars }
+\`\`\`
+
+Without \`json: true\` the answer is the audio bytes, with the translation in
+the \`X-Dub-Translation\` header (base64 JSON).
+
+## 8. Media checks
+
+Each reads a public URL and runs ffprobe or ffmpeg on it.
+
+\`\`\`js
+const info = await a.call("media-info", { url: "https://agent402.tools/fixtures/sample-audio.wav" });
+// { formatName, durationSec, bitrate, bytes, streams: [{ type, codec, sampleRate, channels }] }
+const level = await a.call("audio-normalize", { url: "https://agent402.tools/fixtures/sample-audio.wav", targetLufs: -16 });
+// { format: "mp3", targetLufs, truePeakDb, bytes, mp3Base64 }
+const track = await a.call("audio-convert", { url: "https://agent402.tools/fixtures/sample-audio.wav", bitrate: "192k" });
+// { format: "mp3", bitrate, bytes, mp3Base64 }: the audio track of a video, as MP3
+\`\`\`
+
+## End to end
+
+The stages that read a URL (transcription, the media checks) need the audio
+at a public address, so the flow puts each file where your pipeline already
+keeps its media. Stages that need only the script run side by side.
+
+\`\`\`js
+// Your storage: put the bytes somewhere public and return the URL.
+async function publish(name, bytes) {
+  throw new Error("upload " + name + " (" + bytes.length + " bytes) and return its public URL");
+}
+
+const topic = "what is the x402 payment protocol?";
+const brief = await a.call("answer", { q: topic });
+
+const messages = [
+  { role: "system", content: "Write a 60-second voiceover script in plain sentences." },
+  { role: "user", content: brief.answer },
+];
+const draft = await a.call("v1-chat-metered", { max_tokens: 600, messages });
+const script = draft.choices[0].message.content;
+
+const [voice, cover, es] = await Promise.all([
+  a.call("tts", { text: script, voice: "nova", format: "mp3" }),
+  a.call("v1-images-fast", { prompt: "Cover art as a minimalist line drawing: " + topic }),
+  a.call("dub", { text: script, targetLanguage: "es", voice: "nova", format: "mp3", json: true }),
+]);
+
+const rawUrl = await publish("episode-raw.mp3", Buffer.from(voice.audio, "base64"));
+const level = await a.call("audio-normalize", { url: rawUrl, targetLufs: -16 });
+const episodeUrl = await publish("episode.mp3", Buffer.from(level.mp3Base64, "base64"));
+const info = await a.call("media-info", { url: episodeUrl });
+
+const t = await a.call("transcribe", { url: episodeUrl, diarize: true });
+const words = t.words.filter((w) => w.word.trim() && w.start != null);
+const cues = [];
+for (let i = 0; i < words.length; i += 7) {
+  const line = words.slice(i, i + 7);
+  cues.push({ start: Math.round(line[0].start * 1000), end: Math.round(line.at(-1).end * 1000), text: line.map((w) => w.word).join(" ") });
+}
+const subs = await a.call("srt-convert", { cues, to: "srt" });
+
+console.log(info.durationSec, subs.count, es.translation, a.spendingSummary());
+\`\`\`
+
+The citations from \`brief.citations\` travel with the episode as its show
+notes; \`a.spendingSummary()\` totals what the run spent.
+
+## Pipeline notes
+
+### Slow stages and jobs
+
+A route runs as a job when its [/api/pricing](https://agent402.tools/api/pricing)
+row carries an \`async\` block. In this recipe:
+
+- \`research\` requires one: send \`Prefer: respond-async\` (202 and a job
+  link at once) or \`Prefer: wait=<maxSeconds>\`; a paid call with neither
+  is answered 400 before any payment. agent402-client sends the header for you.
+- \`v1-images-fast\` and \`v1-images-pro\` take \`Prefer: respond-async\` on
+  request. They answer in seconds, so waiting on the connection also works.
+- Every other stage answers on the connection, and the header is ignored there.
+
+Poll \`GET /api/jobs/{id}\` (free), waiting \`Retry-After\` between polls,
+until \`status\` is \`completed\` or \`failed\`. A client address runs
+${ASYNC_JOBS_PER_CLIENT} jobs at once, so a batch of research reports is a queue
+on your side.
+
+### Spend caps
+
+\`maxPerCallUsd\`, \`dailyLimitUsd\` and \`maxPerHostUsd\` are checked before a
+payment is signed. On the quoted stages (\`tts\`, \`tts-hd\`, \`dub\`, metered
+chat) the check reads the quote for that request, so a longer script meets
+the cap before it is paid. A refused call throws \`SpendingLimitError\`.
+The caps live in one client instance: give each worker its own.
+
+In agent402-mcp, \`AGENT402_MAX_PER_CALL\` and \`AGENT402_BUDGET\` set the
+per-call and session ceilings.
+
+### At volume
+
+A pipeline that renders hundreds of episodes meets the per-address limits,
+retries and replay rules on [buying at volume](/guides/buying-at-volume):
+send an \`Idempotency-Key\` per stage so a retried stage returns its first
+answer instead of paying twice, and wait \`Retry-After\` on a 429 or 503.
+
+### Choosing a rail
+
+\`research\` and the image routes run long enough that they take x402 exact on
+EVM chains only; their /api/pricing rows list those \`networks\`. Every other
+stage here takes every offered chain, over x402 or MPP.
+
+| Rail | When it settles | A stage that fails |
+|---|---|---|
+| x402 exact on an EVM chain | after the tool answers, only for a response under 400 | not charged |
+| x402 exact on Solana | after the tool answers, only for a response under 400 | not charged |
+| MPP \`evm\` charge | the same x402 settlement underneath | not charged |
+| MPP Tempo pull (a signed transaction) | broadcast after the tool answers, only for a response under 400 | not charged on Tempo pull: the transaction is never broadcast |
+| MPP Tempo push (a transfer already sent) | final before the call runs | the transfer is booked as a refund owed to the paying wallet, repaid after on-chain proof |
+
+Tempo is offered on every stage except \`research\` and the image routes. A
+pull credential (\`payload\` type \`transaction\`) is a signed transaction
+the relay broadcasts only once the stage has answered under 400, so a stage
+that fails is never broadcast. A push credential (\`payload\` type \`hash\`)
+is a transfer you already sent: it is final before the stage runs, so a stage
+that fails then is repaid from the refund ledger. For a pipeline, pay with
+pull credentials: pin \`mode: "pull"\` on the Tempo charge method, since a
+JSON-RPC wallet account sends push by default. If your connection closes
+before the answer, a pull payment can still be broadcast, and it is then
+booked as owed in the same way.
+
+\`\`\`js
+import { Mppx, tempo } from "mppx/client";
+import { privateKeyToAccount } from "viem/accounts";
+
+const account = privateKeyToAccount(process.env.AGENT_KEY);
+const mpp = Mppx.create({ methods: [tempo.charge({ account, mode: "pull" })], polyfill: false });
+const res = await mpp.fetch("https://agent402.tools/api/tts", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ text: "Hello from Agent402!", voice: "alloy", format: "mp3" }),
+});
+console.log(res.status, res.headers.get("payment-receipt"));
+\`\`\`
+
+The agent402-client caps read x402 quotes. On Tempo, compare each
+challenge's amount with your own ceiling before your MPP client pays it. The
+MPP methods this instance offers are listed at
+[/.well-known/x402](https://agent402.tools/.well-known/x402), and the wire
+itself is in [x402 and MPP](/guides/x402-and-mpp).
 `,
   },
   {

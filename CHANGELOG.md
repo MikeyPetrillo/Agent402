@@ -19,6 +19,12 @@ Docs:
 - Once a client address has paid (a final 200 that settled on any rail, or a
   credits debit), its unpaid quotes are not limited for 10 minutes after each
   paid call; a refused payment credential still counts.
+- A content-pipeline guide (/guides/content-pipeline, wiki page
+  Content-Pipeline): research, script, voiceover, images, transcription,
+  subtitles, dubbing and media checks as paid calls from one wallet, with a
+  runnable example per stage, an end-to-end flow, the stages that run as jobs,
+  spend caps and Tempo pull and push. llms.txt and the buying-at-volume guide
+  link it.
 
 ### 2026-11-07 (onchain-sql price, X data tools, Solana token search, metered chat, OCR and fetch errors)
 Tools:
