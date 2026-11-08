@@ -63,7 +63,7 @@ const catalog = {
   ok(/href="\/leaderboard"/.test(sellSec) && !/Seller-One\.example|seller-two\.example|OTHER SELLERS/.test(html), "the home page links the seller board instead of rendering its rows");
   // The free tier is two lines in the agents card, pointing at the playground
   // where the free tools run; the in-page demo and its shell snippet are gone.
-  ok(/The pure-CPU tools are free[^<]*<a href="\/playground"/.test(html.replace(/\(.*?\)/g, "")) && !/id="hm-demo-/.test(html), "the free tier is stated in the agents card and links /playground");
+  ok(/The pure-CPU tools are free:[\s\S]{0,400}<a class="btn btn-secondary btn-sm" href="\/playground"/.test(html) && !/id="hm-demo-/.test(html), "the free tier is stated in the agents card and links /playground");
 }
 
 // --- honest fallback when no data is available -------------------------------
@@ -139,7 +139,7 @@ const catalog = {
   // stronger invariant now is its absence.
   ok(!/<script src="https?:\/\//.test(html), "homepage loads no third-party script (no CDN tags)");
   ok(html.includes('<script src="/js/home-hero.js">'), "homepage behavior script is first-party");
-  ok(/Web search, browser rendering, SEC filings and market data, plus [\d,]+ utilities\./.test(html) && html.includes("An agent sends a request, gets a price back"), "hero headline names what the tools do (N utilities derived from the catalog); the payment line is the subheading");
+  ok(html.includes("500+ tools: web search, browser rendering, SEC filings, market data and more.") && !/plus [\d,]+ utilities/.test(html) && html.includes("An agent sends a request, gets a price back"), "hero headline says 500+ tools and names what they do (no category count beside the marketing figure); the payment line is the subheading");
   const withExt = ledgerHomePage(BASE_URL, catalog, { toolCallsServed: { viaUSDC: 35138, viaProofOfWork: 1, viaMPPWire: 0, viaRouter: 0, viaUSDCByNetwork: {} } }, { leaderboard: [] }, [], { settledOnChain: 46007, external: { count: 40000, usd: 1234.5 } });
   ok(/external payments/.test(withExt) && withExt.includes("40,000") && /of our own test purchases are not counted/.test(withExt) && !/>46,007</.test(withExt),
     "with the external split the counter leads with external payments and footnotes our own test purchases");
