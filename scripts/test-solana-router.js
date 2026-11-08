@@ -457,6 +457,9 @@ const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
     "`accepted.extra` carries the feePayer/blockhash the facilitator needs");
   ok(p.payload && typeof p.payload.transaction === "string" && p.payload.transaction.length > 0,
     "the payload still carries the signed base64 wire transaction");
+  // An accept naming our own signing wallet as the fee payer is refused before signing.
+  const selfFee = await createSvmPaymentPayload(signer, { x402Version: 2, accepts: [{ ...req, extra: { ...req.extra, feePayer: String(signer.address) } }] }).then(() => null, (e) => e);
+  ok(selfFee && selfFee.refused === true && /own wallet as the fee payer/.test(selfFee.message), `an accept naming our own wallet as the fee payer is refused before signing (${selfFee?.message?.slice(0, 70)})`);
   // The v2 wrap must match the STOCK client's: `resource` + `extensions` from
   // the 402 ride beside `accepted`. a seller's stock middleware tolerated
   // their absence; one seller's own verifier answered payment_payload_invalid to an
