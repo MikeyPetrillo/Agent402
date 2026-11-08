@@ -23,6 +23,28 @@ export function implicitReplayAllowed(def, req, { hasLastingEffect, isIdentityBo
   return Boolean(def) && !hasLastingEffect(def.slug) && !isIdentityBound(def) && req?.body?.stream !== true;
 }
 
+/** What a resend of a charged-but-undelivered answer gets (src/server.js
+ *  onReplay). Its debt is voided BEFORE the answer goes out, so a buyer is
+ *  served once, never both served and refunded:
+ *   - "serve": the void landed, or there is no row, or the row is already void;
+ *   - "refunded": the refund run has claimed or paid the row (`row`);
+ *   - "pending": the void did not land and the row still reads owed. The
+ *     ledger write failed or is queued (a queued void lands later), so
+ *     refusing as refunded would leave the buyer neither served nor repaid;
+ *     the resend is asked to retry, and then reads whichever landed.
+ *  voidOnClaim(tx) and rowOf(tx) are the ledger's voidOwedOnClaim and
+ *  refundByEvidenceFresh; either may throw or answer a promise. */
+export async function chargedReplayVerdict(tx, { voidOnClaim, rowOf }) {
+  let voided = false;
+  try { voided = (await voidOnClaim(tx)) === true; } catch { voided = false; }
+  if (voided) return { verdict: "serve", voided: true };
+  let row = null;
+  try { row = await rowOf(tx); } catch { row = null; }
+  if (!row || row.status === "void") return { verdict: "serve", voided: false };
+  if (row.status === "owed") return { verdict: "pending", row };
+  return { verdict: "refunded", row };
+}
+
 /** isCatalogRoute(req): true for a priced catalog route. freeMode: dev/test boot with no paywall.
  *  implicitReplay(req): true when a re-sent x402 payment on this route may be
  *  answered from its first answer (the server excludes routes with a lasting
@@ -30,8 +52,9 @@ export function implicitReplayAllowed(def, req, { hasLastingEffect, isIdentityBo
  *  onReplay(req, { implicit, key, charged }): awaited once per stored answer
  *  before it is served; `charged` names the charge ({ tx, network, wire }) when
  *  the stored answer was charged and never delivered (see below), else null.
- *  Resolving { serve: false, status, body } answers that instead of the stored
- *  body (the charge was refunded); any other result serves it. */
+ *  Resolving { serve: false, status, body, retryAfter? } answers that instead
+ *  of the stored body (the charge was refunded, or its debt's void has not
+ *  landed yet); any other result serves it. */
 export function createIdempotency({ isCatalogRoute, freeMode = false, store = createIdempotencyStore(), implicitReplay = null, onReplay = null }) {
   // Opt-in idempotency (safe retry for paid/proven calls). If a client sends an
   // `Idempotency-Key`, a successful gated call is cached keyed by that key + the
@@ -138,6 +161,7 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
         let verdict;
         try { verdict = await onReplay(req, { implicit, key, charged }); } catch { verdict = undefined; }
         if (verdict && typeof verdict === "object" && verdict.serve === false) {
+          if (Number(verdict.retryAfter) > 0) res.setHeader("Retry-After", String(Math.ceil(Number(verdict.retryAfter))));
           return res.status(Number(verdict.status) || 402).json(verdict.body && typeof verdict.body === "object" ? verdict.body : { error: "replay_refused" });
         }
       }

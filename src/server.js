@@ -641,7 +641,7 @@ import { corsMiddleware } from "./cors.js";
 import { MODERATE_TOOLS } from "./tools/moderate-kit.js";
 import { CDP_TOOLS } from "./tools/cdp-kit.js";
 import { toolPage, openapiSpec, toolList, CATEGORIES, faqPage, categoryPage, relatedTools } from "./pages.js";
-import { createIdempotency, implicitReplayAllowed } from "./idempotency.js";
+import { createIdempotency, implicitReplayAllowed, chargedReplayVerdict } from "./idempotency.js";
 import { mountMcp, mcpClientsSeenSinceBoot } from "./mcp-http.js";
 import { guidesIndex, guidePage, guideTitles, BUYING_AT_VOLUME_PATH } from "./guides.js";
 import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, buildPromptMessages, skillPackOfToolSlug } from "./skills.js";
@@ -10412,13 +10412,24 @@ app.use(createIdempotency({
     // Tempo push claim (tempoPushDebts.claimForServe): a row the refund run
     // has already claimed or paid is not voided, and then the answer is not
     // served either, so a buyer is served once, never both served and
-    // refunded. No row, or one already void, serves.
-    let voided = false;
-    try { voided = (await voidOwedOnClaim(charged.tx, "served on the resend of the same payment")) === true; } catch { voided = false; }
-    if (voided) { console.log(`[hangup] undelivered answer served on resend (${req.method} ${req.path} tx=${charged.tx}); its debt is void`); return; }
-    let row = null;
-    try { row = await refundByEvidenceFresh(charged.tx); } catch { row = null; }
-    if (!row || row.status === "void") return;
+    // refunded. No row, or one already void, serves. A void that did not land
+    // while the row still reads owed (a failed or queued ledger write, which
+    // lands later) asks for a retry instead of refusing as refunded.
+    const { verdict, voided, row } = await chargedReplayVerdict(charged.tx, {
+      voidOnClaim: (tx) => voidOwedOnClaim(tx, "served on the resend of the same payment"),
+      rowOf: (tx) => refundByEvidenceFresh(tx),
+    });
+    if (verdict === "serve") {
+      if (voided) console.log(`[hangup] undelivered answer served on resend (${req.method} ${req.path} tx=${charged.tx}); its debt is void`);
+      return;
+    }
+    if (verdict === "pending") {
+      console.warn(`[hangup] resend of an undelivered answer held: its debt's void has not landed (${req.method} ${req.path} tx=${charged.tx}; refund #${row.id})`);
+      return { serve: false, status: 503, retryAfter: 10, body: {
+        error: "replay_pending",
+        hint: "The answer this payment bought is stored, and the ledger has not yet confirmed it as served. Nothing more is charged. Retry shortly with the same payment to receive it.",
+      } };
+    }
     console.warn(`[hangup] resend of a refunded payment not served (${req.method} ${req.path} tx=${charged.tx}; refund #${row.id} ${row.status})`);
     return { serve: false, status: 402, body: {
       error: "payment_refunded",

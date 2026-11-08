@@ -193,5 +193,35 @@ try {
   } finally { s7.close(); rmSync(DIR7, { recursive: true, force: true }); }
 }
 
+// 8. A resend of a charged-but-undelivered answer: its debt's void decides.
+// A void whose ledger write failed or is queued resolves false while the row
+// still reads owed; the queued void lands later. Refusing that resend as
+// refunded left the buyer neither served nor repaid, so it is asked to retry.
+{
+  const { chargedReplayVerdict } = await import("../src/idempotency.js");
+  const v = (voidOnClaim, rowOf) => chargedReplayVerdict("0xtx", { voidOnClaim, rowOf });
+  ok((await v(async () => true, async () => null)).verdict === "serve", "a void that landed serves");
+  ok((await v(async () => false, async () => null)).verdict === "serve", "no debt row serves");
+  ok((await v(async () => false, async () => ({ id: 1, status: "void" }))).verdict === "serve", "a row already void serves");
+  ok((await v(async () => false, async () => ({ id: 1, status: "owed" }))).verdict === "pending", "a void that did not land on a row still owed is pending, not refunded");
+  ok((await v(async () => { throw new Error("db"); }, async () => ({ id: 1, status: "owed" }))).verdict === "pending", "a void that threw on a row still owed is pending");
+  ok((await v(async () => false, async () => ({ id: 1, status: "sending" }))).verdict === "refunded", "a row the refund run claimed is refunded");
+  ok((await v(async () => false, async () => ({ id: 1, status: "paid" }))).verdict === "refunded", "a paid row is refunded");
+
+  // The middleware carries a refusal's Retry-After.
+  const store = { get: async () => ({ __a402Stored: 1, body: { ok: 1 }, charged: { tx: "0xtx" } }), claim: async () => true, renew: async () => true, release: async () => {}, set: async () => true };
+  const app8 = express();
+  app8.use(express.json());
+  app8.use(createIdempotency({ isCatalogRoute: () => true, store, onReplay: async () => ({ serve: false, status: 503, retryAfter: 10, body: { error: "replay_pending" } }) }));
+  app8.post("/api/x", (req, res) => res.json({ ran: true }));
+  const s8 = app8.listen(0);
+  await new Promise((r) => s8.once("listening", r));
+  try {
+    const r = await fetch(`http://127.0.0.1:${s8.address().port}/api/x`, { method: "POST", headers: { "content-type": "application/json", "idempotency-key": "k", "x-pow-solution": "t:1" }, body: "{}" });
+    const b = await r.json();
+    ok(r.status === 503 && r.headers.get("retry-after") === "10" && b.error === "replay_pending", `a pending replay answers 503 with Retry-After (got ${r.status}, ${r.headers.get("retry-after")})`);
+  } finally { s8.close(); }
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
