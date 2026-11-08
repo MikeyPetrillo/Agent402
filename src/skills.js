@@ -213,7 +213,7 @@ export const SKILL_PACKS = [
     slug: "security-audit",
     title: "Security audit",
     tagline:
-      "Enumerate a domain's external attack surface in one workflow: certs, DNS posture, email auth, HTTP security headers, and tech stack.",
+      "Security audit skill: one call runs the external checks side by side and returns each step's own result: certificate transparency log, DNS records, SPF, DMARC, HTTP security headers, TLS certificate and tech stack. Per-step findings with no grade or written report.",
     useCase:
       "Before a pentest, an acquisition diligence call, or a quarterly review - you want a fast read on what an attacker sees from the outside.",
     promptArgs: [
@@ -243,7 +243,7 @@ export const SKILL_PACKS = [
     slug: "email-deliverability",
     title: "Email deliverability",
     tagline:
-      "Diagnose why a domain's email lands in spam: SPF posture, DMARC policy, DKIM key strength, MX targets, and a composite 0–100 score.",
+      "Email deliverability skill: one chained call runs every mail check as its own step and returns each step's output, so a failing piece is visible on its own: SPF, DMARC, DKIM key strength, the combined 0-100 score, a postmaster address validation and the domain's mail servers.",
     useCase:
       "Marketing or transactional email is landing in spam, or you're rolling out a new sending domain and want to verify the auth posture before the first campaign.",
     promptArgs: [
@@ -884,7 +884,7 @@ export const SKILL_PACKS = [
     slug: "location-intel",
     title: "Location intel",
     tagline:
-      "Point at an address (or even a rough place name) and assemble the situational brief: precise coordinates, the canonical postal address, what's within walking distance, the live weather forecast, active NWS hazard alerts, and recent seismic activity. The deterministic 'what should I know about this place right now?' workup.",
+      "Location intel skill: one call turns an address or place name into a situational brief: coordinates, the postal address, nearby places, the weather forecast, active hazard alerts and recent earthquakes.",
     useCase:
       "A field-ops agent (sales rep about to visit a customer, contractor scoping a job site, traveler arriving in a new city, emergency-response coordinator) hands the pack an address and needs the full pre-arrival brief in one workup. Geocode pins the spot, reverse-geocode confirms the canonical postal form (catches stale addresses where the building number changed), place-search surfaces nearby POIs (gas, coffee, hospital, supplies), weather-forecast covers the next 24-48h conditions, weather-alerts surfaces any active NWS warning (red flag / flood / heat / tornado), and earthquakes filters recent seismic activity in the region. US-centric for hazards/forecast; geocoding works globally.",
     promptArgs: [
@@ -1063,7 +1063,7 @@ export const SKILL_PACKS = [
     slug: "regulatory-watch",
     title: "SEC regulatory monitoring",
     tagline:
-      "The 'who just filed / who just bought / what just IPO'd / what does the full-text search say' monitoring loop. Five EDGAR tools composed: full-text search for a keyword, surface recent filings on the matched companies, pull insider Form 4 transactions, pull 13F institutional holdings changes, and check the IPO calendar. Different from sec-filings-deep-dive (which goes deep on one company's earnings) - this is the wide-and-recent radar.",
+      "Regulatory watch skill: one call searches recent SEC filings for a theme, then pulls the top match's filings and insider trades, a reference institutional holdings report and recent S-1 IPO registrations. A wide, recent radar across companies; sec-filings-deep-dive goes deep on one.",
     useCase:
       "Most EDGAR workflows fall into two modes: 'tell me everything about company X' (covered by sec-filings-deep-dive) or 'what just happened across the universe that I care about?' (this pack). The monitoring mode powers competitor watch, M&A signal scanning, insider-buying screens, and 'is the IPO window open' market-timing checks. The full-text search seeds the watch list; insider trades + 13F changes are the canonical informed-money signals; the IPO calendar is the supply-side gauge. All five tools are egress to SEC EDGAR (free upstream, but counted as paid for the deterministic-tool wrapper).",
     toolSlugs: [
@@ -1102,7 +1102,7 @@ export const SKILL_PACKS = [
     slug: "search-and-cite",
     title: "Answer-a-question with sources",
     tagline:
-      "The 'research a question, return an answer with citations' workflow. answer for the AI-synthesized take with citations, search for the canonical SERP, search-news for time-sensitive context, then a deterministic web-fetch + extract pass on the top citations to verify the answer hasn't hallucinated. Five tools, one cited paragraph, every claim traced back to a fetched URL.",
+      "Search and cite skill: one call returns a cited answer to a question (the answer step is model-backed) beside web and news results for it, then fetches the top citation and extracts its entities, so each claim can be traced to a fetched page.",
     useCase:
       "Most agent research workflows have the same failure mode: an LLM answer with confident-sounding citations that don't actually contain the claim. This pack solves that by separating the *answer-generating* surface (the answer tool) from the *evidence-fetching* surface (web-fetch + extract on the citations). The agent's final response cites only claims that survive both the search-answer hit AND a deterministic re-fetch of the cited page. Pairs with macro-context for time-sensitive 'is this still current' questions.",
     toolSlugs: [
@@ -1171,7 +1171,7 @@ export const SKILL_PACKS = [
     slug: "schema-evolution",
     title: "API contract drift check",
     tagline:
-      "The 'did this API contract change in a way that breaks our integration?' workflow. Diff two OpenAPI snapshots structurally, lint the new one for agent-readiness regressions, extract the endpoint surface for inventory comparison, validate a known-good payload against the new contract, and summarize security-relevant changes. Six tools, one go/no-go answer on whether the upstream API broke us.",
+      "Schema evolution check skill: one call compares two OpenAPI snapshots and returns the structural diff, the new spec's lint score, its endpoint list, the first endpoint's required params, an empty request body checked against that endpoint, and a security summary, so an agent can judge whether the change breaks an integration.",
     useCase:
       "Every integration eventually hits the 'upstream changed something and now our requests 422' incident. The fix-time is dominated by figuring out *what* changed: was it a renamed field, a tightened enum, a new required parameter, a moved endpoint, a security scheme change? This pack runs that diagnosis deterministically the moment a new OpenAPI snapshot lands - before traffic breaks. Pairs with api-investigation when you don't yet have an OpenAPI snapshot (that pack discovers one); this pack assumes you have two snapshots (yesterday's and today's) and want to know what changed and whether it matters.",
     toolSlugs: [
@@ -1529,7 +1529,7 @@ export const SKILL_PACKS = [
     slug: "company-dossier",
     title: "Company dossier",
     tagline:
-      "Comprehensive company research report in one call: latest close, financials, SEC filings, insider trades, and recent news - all in parallel.",
+      "Raw company data in one parallel call: latest close, financials, recent SEC filings, insider trades over the past 90 days and past-month web results on its news, each as its own tool's answer with no written report.",
     useCase:
       "Building an investment thesis, preparing for a board presentation, or doing acquisition diligence - you want the full public picture of a company without leaving the agent loop.",
     promptArgs: [
@@ -1687,7 +1687,7 @@ export const SKILL_PACKS = [
     slug: "yield-dashboard",
     title: "Yield dashboard",
     tagline:
-      "Current yield curve snapshot: full Treasury curve, key spreads, and average rates in one call.",
+      "Yield dashboard skill: one parallel call returns the latest Treasury yields at every maturity, the gaps between key maturities with the inversion flag, and the average interest the Treasury pays by security type.",
     useCase:
       "Quick fixed-income read - is the curve inverted, what are spreads doing, and where are average rates.",
     promptArgs: [],
@@ -1709,7 +1709,7 @@ export const SKILL_PACKS = [
     slug: "inflation-check",
     title: "Inflation check",
     tagline:
-      "Is the economy in recession territory? CPI, fed funds, unemployment, and Sahm rule in one call.",
+      "Inflation check skill: one parallel call reads the headline consumer price index change over twelve months, the effective fed funds level, the jobless figure and a recession signal, so price pressure and the labor market are read together.",
     useCase:
       "Quick macro health check - the four numbers that answer 'are we in a recession?'",
     promptArgs: [],
@@ -1850,7 +1850,7 @@ export const SKILL_PACKS = [
     slug: "ssl-audit",
     title: "SSL audit",
     tagline:
-      "TLS/SSL security posture check: live certificate inspection, HTTP security headers, and CAA DNS records.",
+      "SSL audit skill: one parallel call returns the site's SSL details (issuer, expiry, names), its HTTP security headers and the CAA DNS records that say who may issue for it.",
     useCase:
       "Verifying a domain's TLS posture - cert validity, security headers, and who's authorized to issue certs.",
     promptArgs: [
@@ -1874,7 +1874,7 @@ export const SKILL_PACKS = [
     slug: "email-security",
     title: "Email security",
     tagline:
-      "Full email auth posture: SPF, DMARC, DKIM, and composite deliverability score in one call.",
+      "Email security skill: one parallel call returns SPF, DMARC and DKIM checks each as its own result, beside the combined mail score, to judge whether the domain can be spoofed.",
     useCase:
       "Diagnosing email authentication - can this domain be spoofed, and is its mail configuration complete.",
     promptArgs: [
@@ -2093,7 +2093,7 @@ export const SKILL_PACKS = [
     slug: "world-data",
     title: "World Bank country data",
     tagline:
-      "GDP and population for a country - two key World Bank indicators in one call.",
+      "World data skill: one parallel call returns a nation's gross domestic product in current US dollars and its total population side by side, year by year, from open development data.",
     useCase:
       "An agent needs basic economic context for a country: what's the GDP and how many people live there? These are the two most-requested World Bank indicators and together they give GDP per capita as a derived metric.",
     promptArgs: [
@@ -2113,7 +2113,7 @@ export const SKILL_PACKS = [
     slug: "fred-snapshot",
     title: "Fed economic snapshot",
     tagline:
-      "Key Federal Reserve economic indicators - fed funds rate, unemployment, and CPI - in one call.",
+      "Economic snapshot skill: one parallel call returns the fed funds rate, the unemployment rate and the consumer price index series together.",
     useCase:
       "An agent providing economic context needs the three most-watched Fed indicators: where rates are (FEDFUNDS), how tight the labor market is (UNRATE), and where inflation stands (CPIAUCSL). Three FRED series calls bundled into one payment.",
     promptArgs: [],
@@ -2228,7 +2228,7 @@ export const SKILL_PACKS = [
     slug: "entity-enrich",
     title: "Entity enrichment",
     tagline:
-      "Company name → verified identity + web footprint dossier: Wikidata facts, the official LEI legal-entity record, the SEC EDGAR filer, domain registration, tech stack, and brand favicon - in one pass.",
+      "Enrich a company name in one parallel call: public knowledge-base facts, the LEI legal-entity record, the SEC filer record, domain registration, tech stack and favicon, each as its own step's result.",
     useCase:
       "KYB, lead enrichment, or counterparty checks - an agent has a company name (maybe a domain and ticker) and needs to establish that the entity is real, who it legally is, and what its web presence looks like.",
     promptArgs: [
@@ -2340,7 +2340,7 @@ export const SKILL_PACKS = [
     slug: "text-analyze",
     title: "Text analysis",
     tagline:
-      "Full text analysis - word/sentence stats, keyword extraction, and token count in one pass.",
+      "Text analyze skill: one parallel call returns word and sentence stats, top keyword phrases and a token count for the same text.",
     useCase:
       "An agent evaluating text content needs the complete picture: how long is it (words, sentences, paragraphs), what are the key topics (keyword extraction), and how many LLM tokens would it consume? Useful for content pipelines, RAG prep, and prompt budgeting.",
     promptArgs: [
@@ -2399,7 +2399,7 @@ export const SKILL_PACKS = [
     slug: "json-pipeline",
     title: "JSON pipeline",
     tagline:
-      "Validate, pretty-print, and convert JSON to CSV in one pass - the complete JSON processing workflow.",
+      "JSON pipeline skill: one parallel call validates a JSON document, pretty-prints it at 2-space indent and converts it to CSV, returning each result.",
     useCase:
       "An agent receives raw JSON (from an API response, a webhook body, or user input) and needs to validate it's well-formed, format it for readability, and convert it to CSV for a spreadsheet or data pipeline. Three tools in one payment.",
     promptArgs: [
@@ -2541,7 +2541,7 @@ export const SKILL_PACKS = [
     slug: "webhook-intake",
     title: "Webhook secure intake",
     tagline:
-      "The production ingest path for every incoming webhook: verify the provider signature (GitHub / Stripe / Shopify / Slack, constant-time, replay-window enforced), schema-validate the now-trusted body against the provider envelope, fingerprint the raw bytes for redelivery dedup, normalize the event timestamp to UTC + epoch, and redact PII before anything hits a log. Five pure-CPU tools - the accept-or-reject gate, run on every event.",
+      "Webhook intake skill: one chained call runs the accept-or-reject gate for an incoming event: provider signature check, schema check of the body, a raw-bytes fingerprint for redelivery dedup, the event time normalized to UTC and epoch, and PII redaction before logging. Pure CPU.",
     useCase:
       "This pack is the gate an agent executes on EVERY incoming webhook in production. Step 1 is the security decision (reject on an invalid signature; Stripe and Slack timestamps get replay-window enforcement), and only then is the body treated as trusted: an envelope schema check catches provider API-version drift before it breaks your handler three layers down, a sha256 content fingerprint gives you the dedup key for provider redeliveries (or an Idempotency-Key for downstream calls), the event time is normalized to UTC ISO + epoch for storage, and PII is redacted so the audit log stays clean. One deterministic pass from raw bytes to a storable, loggable, deduplicated event.",
     toolSlugs: [

@@ -918,7 +918,7 @@ export const CONTRACT_TOOLS = [
     category: "crypto",
     price: "$0.005",
     description:
-      "Dry-run a prospective smart-contract call or transaction without broadcasting it: executes eth_call and eth_estimateGas against the latest block over the same keyless multi-endpoint public RPC pool as /api/evm-rpc (ethereum, base, polygon, arbitrum, optimism). Returns the return data and a gas estimate on success, or {success:false} with the revert reason when the call would fail. Strictly read-only - nothing is signed or broadcast.",
+      "Simulate a transaction before sending it: a dry run of a smart-contract call that executes eth_call and eth_estimateGas against the latest block over a keyless multi-endpoint public node pool. Returns the return data and a gas estimate on success, or {success:false} with the revert reason when the call would fail. Strictly read-only - nothing is signed or broadcast.",
     tags: ["crypto", "simulation", "eth_call", "gas", "transaction", "evm", "dry-run", "smart-contract"],
     discovery: {
       bodyType: "json",

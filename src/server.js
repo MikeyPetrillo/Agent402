@@ -952,7 +952,7 @@ const CATALOG = {
     slug: "dns",
     category: "network",
     price: "$0.001",
-    description: "Live DNS lookup for a domain: returns name, type and records[]. Supported record types: A, AAAA (addresses as strings), MX ({exchange, priority} objects), TXT (each record an array of its strings), NS and CNAME (hostnames). For SPF, DMARC or a full mail-security read use spf-check, dmarc-check or email-deliverability.",
+    description: "Resolve one common DNS record type for a domain: answers name, type and records[] as the resolver returns them. Types: A, AAAA (addresses as strings), MX ({exchange, priority} objects), TXT (each record an array of its strings), NS and CNAME (hostnames). For SPF, DMARC or a full mail-security read use spf-check, dmarc-check or email-deliverability.",
     tags: ["dns", "domains", "networking"],
     discovery: {
       input: { name: "example.com", type: "A" },
@@ -1249,7 +1249,7 @@ const CATALOG = {
     slug: "memory-forget",
     category: "memory",
     price: "$0.001",
-    description: "Delete a remembered document by id from the recall store.",
+    description: "Forget one stored entry: deletes a document from the wallet-scoped semantic memory by the id it was saved under, and answers deleted: true, or false when no entry had that id.",
     tags: ["memory", "semantic", "delete"],
     discovery: {
       bodyType: "json",
