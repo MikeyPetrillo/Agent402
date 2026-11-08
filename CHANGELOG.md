@@ -28,6 +28,9 @@ Docs:
   runnable example per stage, an end-to-end flow, the stages that run as jobs,
   spend caps and Tempo pull and push. llms.txt and the buying-at-volume guide
   link it.
+- inception/mercury-2.5 reached its upstream expiration and is no longer
+  listed; a call naming it is served by google/gemini-3.1-flash-lite with the
+  swap named.
 Payments:
 - A resend of a payment whose answer was charged but never delivered gets a
   503 (replay_pending, Retry-After: 10) while the ledger has not yet confirmed
