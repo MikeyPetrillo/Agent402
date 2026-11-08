@@ -204,6 +204,49 @@ async function listen(app) {
 }
 
 {
+  // Not confirmed in the request, then the transaction lands after the 402:
+  // the late-landing watch reads the chain again on its own and books the
+  // landed transaction as owed (a charged failure), once; a watch that never
+  // finds it books nothing; a replay refusal is not watched.
+  process.env.TEMPO_LATE_CONFIRM_DELAYS_MS = "40,120";
+  const { _lateTempoWatchCount, LATE_LANDED_CLASS } = await import("../src/mpp-tempo.js");
+  let landed = false;
+  const reads = [];
+  const booked = [];
+  let cls = "unknown";
+  const app = express();
+  app.use(createTempoGate({
+    ...GATE,
+    validate: async () => ({ ok: true, validation: {} }),
+    broadcast: async () => ({ ok: false, cls, error: "relay timed out", reason: "relay timed out" }),
+    confirmSettlement: async (_auth, opts) => { reads.push(opts?.attempts ?? "request"); return landed && opts ? { txId: REAL_TXID.toUpperCase().replace(/^0X/, "0x"), amountAtomic: 1000n } : null; },
+    onPushNotClaimed: async (_req, info) => { booked.push(info); return true; },
+  }));
+  app.get("/paid", (req, res) => res.status(200).json({ result: "ok" }));
+  const { server, url } = await listen(app);
+  const res = await fetch(`${url}/paid`, { headers: { Authorization: buildCredential() } });
+  ok(res.status === 402 && booked.length === 0 && reads.length === 1, `late: the request itself is answered 402 with nothing booked (${res.status})`);
+  landed = true;
+  for (let i = 0; i < 50 && !booked.length; i++) await new Promise((r) => setTimeout(r, 20));
+  ok(booked.length === 1 && booked[0].hash === REAL_TXID.toLowerCase() && booked[0].cls === LATE_LANDED_CLASS && booked[0].amountAtomic === "1000" && booked[0].amountUsd === 0.001,
+    `late: a pull transaction that lands after the 402 is booked owed, keyed on its transaction (${JSON.stringify(booked[0] || null, (_k, v) => (typeof v === "bigint" ? String(v) : v))})`);
+  await new Promise((r) => setTimeout(r, 200));
+  ok(booked.length === 1 && reads.filter((x) => x === 1).length === 1 && _lateTempoWatchCount() === 0, `late: once found, the watch stops (reads ${reads.join(",")})`);
+  // Never lands: every delay is read, nothing is booked.
+  landed = false; reads.length = 0;
+  await fetch(`${url}/paid`, { headers: { Authorization: buildCredential() } });
+  await new Promise((r) => setTimeout(r, 300));
+  ok(booked.length === 1 && reads.filter((x) => x === 1).length === 2 && _lateTempoWatchCount() === 0, `late: a transaction that never lands is read once per delay and books nothing (reads ${reads.join(",")})`);
+  // A replay refusal is not watched.
+  cls = "replay"; reads.length = 0;
+  await fetch(`${url}/paid`, { headers: { Authorization: buildCredential() } });
+  await new Promise((r) => setTimeout(r, 300));
+  ok(reads.filter((x) => x === 1).length === 0, "late: a replay refusal starts no watch");
+  delete process.env.TEMPO_LATE_CONFIRM_DELAYS_MS;
+  server.close();
+}
+
+{
   // A confirm that THROWS must not change the verdict (fail closed).
   const app = express();
   app.use(createTempoGate({

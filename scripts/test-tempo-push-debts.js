@@ -39,7 +39,7 @@ const { createTempoGate, PUSH_SENDER_WAIT_MS, isTempoPushCredential, tempoOffere
 const { EVM_RUN_SECONDS } = await import("../src/evm-validity.js");
 const { SLOW_ADVISE_SECONDS } = await import("../src/slow-routes.js");
 const { isLongRunningSlug } = await import("../src/composite-spend-guard.js");
-const { createTempoPushDebts, createHeldClaimSweep, PUSH_FINALIZE_UNANSWERED_NOTE, PUSH_RUN_UNFINISHED_NOTE, PUSH_INPUT_REFUSED_NOTE, PUSH_CLAIMED_NOTE, PUSH_SERVED_NOTE, PUSH_FINALIZE_FAILURE_STATUS, PUSH_HANGUP_AFTER_CLAIM_NOTE, PUSH_HANDLER_FAILED_AFTER_CLAIM_NOTE, PUSH_EXCEPTION, whenTempoLedgerPayerKnown } = await import("../src/tempo-push-debts.js");
+const { createTempoPushDebts, createHeldClaimSweep, PULL_LANDED_AFTER_402_NOTE, PUSH_FINALIZE_UNANSWERED_NOTE, PUSH_RUN_UNFINISHED_NOTE, PUSH_INPUT_REFUSED_NOTE, PUSH_CLAIMED_NOTE, PUSH_SERVED_NOTE, PUSH_FINALIZE_FAILURE_STATUS, PUSH_HANGUP_AFTER_CLAIM_NOTE, PUSH_HANDLER_FAILED_AFTER_CLAIM_NOTE, PUSH_EXCEPTION, whenTempoLedgerPayerKnown } = await import("../src/tempo-push-debts.js");
 const { slowSyncWindowMiddleware, SYNC_WINDOW_RETRY } = await import("../src/slow-sync-window.js");
 const { cdnSyncWindowMiddleware } = await import("../src/cdn-sync-window.js");
 const { wantsAsync } = await import("../src/async-jobs.js");
@@ -594,6 +594,15 @@ for (const [label, headers, status, error, tail] of [
   failNext = { ok: false, cls: "replay", error: "Transaction hash has already been used", reason: "x" };
   const r3 = await post(cred3, { text: "x" });
   ok(r3.status === 402 && r3.body.details?.refundOwed === true && rowsFor(h3).length === 1 && rowsFor(h3)[0].status === "owed", `...a retry refused as a replay leaves the debt owed and says so (${r3.status} ${JSON.stringify(r3.body.details)})`);
+}
+
+// A pull transaction that landed after its 402 (the gate's late-landing
+// watch) is booked through notClaimed under its own note, as a charged failure.
+{
+  const h = hashFor(91);
+  const before = failures.length;
+  ok((await debts.notClaimed({ method: "GET", path: "/paid" }, { hash: h, payer: SENDER, amountAtomic: "50000", amountUsd: 0.05, cls: "landed-after-402" })) === true, "a pull landed after its 402 is booked owed");
+  ok(rowsFor(h)[0].note === PULL_LANDED_AFTER_402_NOTE && rowsFor(h)[0].httpStatus === 402 && failures.length === before + 1, `...under its own note, counted as a charged failure ("${rowsFor(h)[0].note}")`);
 }
 
 // The held-claim sweep: a claim held for a run whose process died (void with

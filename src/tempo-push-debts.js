@@ -32,6 +32,9 @@ export const PUSH_FINALIZE_UNANSWERED_NOTE = "push unclaimed: finalize unanswere
 // The notes of a debt whose transfer may still be claimed by a retry.
 export const PUSH_CLAIMABLE_NOTES = Object.freeze([PUSH_INPUT_REFUSED_NOTE, PUSH_FINALIZE_UNANSWERED_NOTE]);
 export const PUSH_FINALIZE_REFUSED_NOTE = "push unclaimed: finalize refused";
+// A PULL transaction that landed on chain after its request was answered 402
+// (src/mpp-tempo.js watchLateTempoLanding): booked through notClaimed.
+export const PULL_LANDED_AFTER_402_NOTE = "pull landed after its 402";
 export const PUSH_CLAIMED_NOTE = "claimed on retry";
 export const PUSH_SERVED_NOTE = "served";
 export const PUSH_HANGUP_AFTER_CLAIM_NOTE = "claimed on retry, then disconnected";
@@ -68,7 +71,7 @@ export function createTempoPushDebts({ recordOwed, voidOnClaim, voidForServe = n
     async notClaimed(req, info) {
       if (!info?.hash) return false;
       const b = base(req, info);
-      const created = await recordOwed({ ...b, httpStatus: 402, note: PUSH_FINALIZE_REFUSED_NOTE });
+      const created = await recordOwed({ ...b, httpStatus: 402, note: info.cls === "landed-after-402" ? PULL_LANDED_AFTER_402_NOTE : PUSH_FINALIZE_REFUSED_NOTE });
       // A claimable row for the same hash becomes this row, once.
       let promoted = false;
       for (const from of PUSH_CLAIMABLE_NOTES) {
