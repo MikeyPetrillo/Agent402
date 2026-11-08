@@ -112,3 +112,9 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
 - **Robots:** `src/seo.js`; the private disallow list is repeated in every named-crawler group.
 - **X posting:** `announce.yml` / `scripts/tweet.js` (workflow dispatch only) and
   `src/tweet-queue.js`; both sign through `src/x-oauth.js`. Tweet copy is never committed.
+- **Money-state sweeps and books (batch 2026-11-08a):** `TEMPO_PUSH_HELD_MAX_MINUTES` (default 30)
+  is the age past which a leased sweep reopens a held Tempo push debt whose run never finished;
+  `TEMPO_LATE_CONFIRM_DELAYS_MS` and `TEMPO_LATE_CONFIRM_MAX_WATCHES` bound the re-reads that book a
+  Tempo pull landing after its 402 as owed; `GATEWAY_RESUME_RENEW_MS` renews a Gateway resend hold.
+  The late-settlement book reports `lateSettlements` (ok, unresolved, full) on /api/gateway-status,
+  paged by the status Worker and the heartbeat.
