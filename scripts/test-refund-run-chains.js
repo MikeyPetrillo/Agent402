@@ -121,6 +121,21 @@ const planOptions = { senders: ALL_SENDERS, maxEachUsd: 0.25, maxTotalUsd: 2, ma
   ok(again.executed === false && calls.send.length === 3, "a rerun after a clean run sends nothing");
 }
 
+// ---- the recipient is screened like every payout -------------------------------------
+{
+  const ledger = fakeLedger(ROWS());
+  const { calls, deps } = stubDeps(ledger);
+  const screened = [];
+  const screen = async (row) => { screened.push(row.id); if (row.id === 2) throw new Error("listed address"); };
+  const out = await executeRefunds(planRefunds(ROWS(), planOptions).send, { ...deps, screen, log: quiet });
+  ok(screened.join(",") === "1,2,3" && !calls.order.includes("claim:2") && !calls.send.includes(2) && ledger.status.get(2) === "owed", `a refund to an address the screen refuses is held: never claimed or sent, still owed (screened ${screened.join(",")}, sent ${calls.send.join(",")})`);
+  ok(out.ok === 2 && calls.send.join(",") === "1,3", "and the other refunds in the run are paid");
+  const src = readFileSync(fileURLToPath(new URL("./refund-run.js", import.meta.url)), "utf8");
+  ok(/screen: async \(row\) => \{\s*const \{ loadSanctions, assertPayoutScreened \} = await import\("\.\.\/src\/tools\/sanctions-kit\.js"\);\s*await loadSanctions\(\);\s*await assertPayoutScreened\(row\.payer/.test(src), "the live run screens every recipient against a freshly loaded list");
+  const sol = readFileSync(fileURLToPath(new URL("./solana-refund-send.js", import.meta.url)), "utf8");
+  ok(sol.indexOf("assertPayoutScreened(TO)") > 0 && sol.indexOf("assertPayoutScreened(TO)") < sol.indexOf("SOLANA_BURNER_KEY ||"), "the Solana refund sender screens its recipient before it reads a key");
+}
+
 // ---- crash between send and proof ---------------------------------------------------
 {
   const ledger = fakeLedger(ROWS());

@@ -679,6 +679,9 @@ export async function proveRefundSent(row, tx, prep, { verify, attempts = 10, de
  */
 export async function executeRefunds(rows, {
   verifyInbound, claim, send, markPaid,
+  // The recipient is screened like every payout we make; a refusal or a
+  // screen that cannot run HOLDS the row (still owed, never sent).
+  screen = null,
   prepare = async () => null,
   prove = async () => ({ verified: false, reason: "no outbound verifier" }),
   release = null,
@@ -704,6 +707,13 @@ export async function executeRefunds(rows, {
         continue;
       }
       log.log(`      #${row.id} inbound payment confirmed on-chain`);
+      if (screen) {
+        try { await screen(row); } catch (e) {
+          log.warn(`HOLD  #${row.id} $${row.priceUsd} -> ${tag(row.payer)}: payout screen refused (${String(e?.message || e).slice(0, 160)}); held for a human, still owed`);
+          unverified++;
+          continue;
+        }
+      }
       // Reads that can refuse (balances, the payer's token account) run
       // before the claim, so a refusal leaves the row owed for the next run.
       const prep = await prepare(row, proof);
@@ -862,6 +872,11 @@ async function main() {
       }),
       claim: claimForSend,
       release: releaseClaim,
+      screen: async (row) => {
+        const { loadSanctions, assertPayoutScreened } = await import("../src/tools/sanctions-kit.js");
+        await loadSanctions();
+        await assertPayoutScreened(row.payer, { label: tag(row.payer) });
+      },
       prepare: (row, proof) => {
         const family = familyOf(row.network);
         if (family === "tempo") return prepareTempo(row, proof, accepts[row.network]);
