@@ -2093,7 +2093,7 @@ export const SKILL_PACKS = [
     slug: "world-data",
     title: "World Bank country data",
     tagline:
-      "World data skill: one parallel call returns a nation's gross domestic product in current US dollars and its total population side by side, year by year, from open development data.",
+      "World data skill: one parallel call returns a nation's gross domestic product in current US dollars and its total population side by side, year by year, from World Bank open data.",
     useCase:
       "An agent needs basic economic context for a country: what's the GDP and how many people live there? These are the two most-requested World Bank indicators and together they give GDP per capita as a derived metric.",
     promptArgs: [
