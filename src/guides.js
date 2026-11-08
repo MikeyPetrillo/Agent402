@@ -24,6 +24,17 @@ import { FLAGSHIP_SLUGS, FLAGSHIP_MCP_NAMES } from "./mcp-flagship.js";
 import { creditsSalesEnabled, creditsPrepaymentPhrase } from "./credits-sales.js";
 import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
 import { meteredRoutesInline, meteredFromPrice, meteredQuoteSentence, meteredDefaultModel, flatTiersLine } from "./metered-lead.js";
+// The buying-at-volume guide quotes each limit from the code that enforces it.
+import { unpaidQuoteBudgetPerHour, METERED_UNPAID_QUOTES_PER_MIN, METERED_UNPAID_QUOTES_PER_HOUR } from "./unpaid-quote-budget.js";
+import { MAX_FAILS as SETTLE_BREAKER_MAX_FAILS, WINDOW_MS as SETTLE_BREAKER_WINDOW_MS, HARD_MAX_FAILS as SETTLE_BREAKER_HARD_MAX } from "./gateway-settle-breaker.js";
+import { ASYNC_JOBS_PER_CLIENT } from "./async-jobs.js";
+import { IDEM_TTL_MS } from "./idempotency-store.js";
+import { IDEM_MAX_BODY_LABEL } from "./idempotency-limits.js";
+import { LATE_SETTLE_EXCEPTION } from "./front-door.js";
+import { AGENT402_MCP_VERSION } from "./mcp-flagship.js";
+import { OCR_LARGE_PIXELS } from "./tools/ocr-kit.js";
+/** Where the buying-at-volume guide lives (the metered quote limiter's 429 links it). */
+export const BUYING_AT_VOLUME_PATH = "/guides/buying-at-volume";
 // Whether prepaid credits are sold now. Copy that tells a reader to buy a pack
 // is only true while they are; read once at module load, like the env it reads.
 const CREDITS_ON = creditsSalesEnabled();
@@ -232,6 +243,259 @@ the moment it discovers it needs them - and the seller can prove every cent of
 revenue on-chain. Every claim in this guide is verifiable: the server is
 [open source](${REPO_URL}) and settled calls land
 at a [public wallet](https://agent402.tools/api/stats).
+`,
+  },
+  {
+    slug: "buying-at-volume",
+    title: "Buying at volume: limits, retries and spend caps for AI agents",
+    seoTitle: "Buying at volume from an AI agent",
+    description:
+      "Run hundreds or thousands of paid calls in a burst: the limits and their Retry-After, retries that never pay twice, spend caps, job links and the errors to handle.",
+    md: `
+An agent that buys a thousand calls in an hour needs what a buyer of one call
+needs, at a larger scale: a price it can check before it pays, a retry that
+never pays twice, a ceiling on what it spends, and limits it can plan around.
+The limits on this page are rendered from the code that enforces them.
+
+## Before the burst: read the prices
+
+Every route and its list price is in [/api/pricing](https://agent402.tools/api/pricing)
+(free). Each row also names the chains it takes (\`networks\`, null for every
+offered chain) and, on a route that runs as a job, its \`async\` block. Read it
+at the start of each burst rather than from memory: list prices change, and
+each change is on the [changelog](https://agent402.tools/changelog).
+
+\`\`\`bash
+curl -s https://agent402.tools/api/pricing \\
+  | jq -c '.endpoints[] | select(.slug=="onchain-sql") | {path, price, networks}'
+\`\`\`
+
+The 402 is the quote for the request in hand: each \`accepts\` entry carries
+the amount in the asset's smallest unit on that chain, with any settlement
+premium or price floor of the chain included (\`/api/pricing\` lists them under
+\`payment.premiumUsdByNetwork\` and \`payment.minPriceUsdByNetwork\` for the chains
+that have one). On the metered model routes the quote is computed from the
+request body, and the paid retry is priced again from its own body, so send the
+paid retry with the body you were quoted for. Compare the quote with your
+ceiling before you sign; the clients below do that on their own.
+
+## Throughput limits
+
+Paid calls are not counted per wallet. The limits below bound unpaid reads,
+failed settlements and concurrent heavy runs. Each one answers
+before any payment is taken and names its wait in \`Retry-After\`.
+
+| What is counted | Limit | Answer |
+|---|---|---|
+| Unpaid price checks (a request with no payment) to priced catalog routes | ${unpaidQuoteBudgetPerHour().toLocaleString("en-US")} an hour per client address; an address that settled a payment this hour is not counted for the rest of it | 429, \`Retry-After\` until the hour turns |
+| Unpaid quotes on \`/v1/metered\` | ${METERED_UNPAID_QUOTES_PER_MIN} a minute and ${METERED_UNPAID_QUOTES_PER_HOUR.toLocaleString("en-US")} an hour per client address | 429, \`Retry-After: 60\` |
+| Refused payment credentials on \`/v1/metered\` | the same figures, counted once a credential is refused | 429, \`Retry-After: 60\` |
+| Payments that verified and then failed to settle, per wallet | refused at ${SETTLE_BREAKER_MAX_FAILS} in ${Math.round(SETTLE_BREAKER_WINDOW_MS / 60_000)} minutes while they are more than half of the wallet's outcomes there, or at ${SETTLE_BREAKER_HARD_MAX} whatever it settled | 429 naming when it lifts |
+| Concurrent runs of the report and media routes from one wallet | the wallet's balance covers every run in flight plus the new one | 429, \`Retry-After: 30\` |
+| Jobs per client address | ${ASYNC_JOBS_PER_CLIENT} running at once | 429, \`Retry-After: 30\` |
+
+An IPv6 /64 is one address. A request carrying a payment, a credits key or a
+proof-of-work solution is never counted as an unpaid price check.
+
+How to plan a burst around them:
+
+- A stock x402 client reads the 402 and then sends the paid retry, so each
+  call is one unpaid read plus one paid request, and only the unpaid read is
+  counted. On \`/v1/metered\` that makes ${METERED_UNPAID_QUOTES_PER_MIN} calls a
+  minute per client address the pace to plan for.
+- Keep the paying wallet funded above everything in flight. Each payment is
+  verified on its own; a wallet that runs dry partway through a burst turns its
+  later calls into failed settlements, which is what the per-wallet limit counts.
+- On a 429 or a 503, wait \`Retry-After\` and send the call again.
+
+## Retries that never pay twice
+
+On x402 a response of 400 or above is not settled, so a retry after one costs
+nothing extra. For a call that may have succeeded (a timeout, a dropped
+connection), use the replay rules:
+
+- **Send an \`Idempotency-Key\`.** The same key with the same credential (the
+  same signed payment), route, query and body returns the first 200 answer (up
+  to ${IDEM_MAX_BODY_LABEL}, kept ${Math.round(IDEM_TTL_MS / 60_000)} minutes) with
+  \`X-Idempotent-Replay: true\`: the tool does not run again and nothing settles
+  again. A copy that arrives while the first is still running gets 409
+  \`idempotent_request_in_flight\` with \`Retry-After: 2\`; on x402 it is not charged.
+- **On an EVM payment the signed payment is the key.** Send the same request
+  again with the same payment header within ${Math.round(IDEM_TTL_MS / 60_000)} minutes
+  and the first answer comes back marked \`X-Replayed-Answer: 1\`, with no
+  second settlement (identity-bound routes, routes with a lasting effect and
+  streamed calls excepted).
+- **On Solana, send the key yourself.** A Solana payment has no implicit key,
+  so pair an \`Idempotency-Key\` with the exact payment header that went out the
+  first time.
+- **A fresh signature is a new payment.** Sign again only after an answer of
+  400 or above.
+
+Each answer says whether it settled:
+
+- No \`PAYMENT-RESPONSE\` header: nothing settled.
+- \`PAYMENT-RESPONSE\` whose receipt reads \`success: false\`: settlement was
+  refused, nothing moved.
+- \`PAYMENT-RESPONSE\` with a status under 400: charged and served.
+
+${LATE_SETTLE_EXCEPTION}
+
+## Long or slow calls: take a job link
+
+Every route whose \`/api/pricing\` row has an \`async\` block runs as a job: the
+report products, video, the premium image tier, the router's execute tiers and
+the rest the rows mark. Send the paid call with \`Prefer: respond-async\` and it
+answers 202 at once with a \`Location\` job link. Poll \`GET /api/jobs/{id}\`
+(free), waiting \`Retry-After\` between polls, until \`status\` is \`completed\` or
+\`failed\`; \`state\`, \`stage\`, \`progress\` and \`etaSeconds\` say where it is. The
+payment settles only when the result is ready, and on x402 a failed run is not
+charged. A row whose block carries \`preferWait\` also takes
+\`Prefer: wait=<maxSeconds>\` to wait on the connection, and a paid call there
+with neither header is answered 400 before any payment.
+
+With ${ASYNC_JOBS_PER_CLIENT} jobs per client address at once, a burst of slow
+calls is a queue on your side: collect a finished job before you start the
+next. agent402-client and agent402-mcp switch to jobs on their own.
+
+## Spend caps in the clients
+
+Every cap below is checked before a payment is signed, so a quote above it is
+refused with nothing sent.
+
+**agent402-client.** The caps are constructor options, held in the client
+instance's memory; give each worker its own instance with its own share.
+
+\`\`\`js
+import { Agent402 } from "agent402-client";
+import { wrapFetchWithPayment } from "@x402/fetch";
+import { x402Client } from "@x402/core/client";
+import { registerExactEvmScheme } from "@x402/evm/exact/client";
+import { privateKeyToAccount } from "viem/accounts";
+
+const client = new x402Client();
+client.setSpendControls?.(false); // the caps below replace the library default
+registerExactEvmScheme(client, { signer: privateKeyToAccount(process.env.AGENT_KEY) });
+const payFetch = wrapFetchWithPayment(fetch, client);
+
+const a = new Agent402({
+  fetch: payFetch,
+  x402Client: client,   // the caps are checked on the payment that is signed
+  maxPerCallUsd: 0.05,  // refuse any single quote above this
+  dailyLimitUsd: 25,    // rolling 24 hours, this instance
+  maxPerHostUsd: 10,    // rolling 24 hours, per seller host
+});
+const out = await a.call("extract", { url: "https://example.com/article" });
+\`\`\`
+
+A refused call throws \`SpendingLimitError\` naming the cap, the quote and the
+list price. A payment that was sent and answered with an error counts as held
+until its authorization can no longer settle.
+
+**agent402-mcp.** The per-call cap is on by default (\`off\` removes it); the
+session budget is opt-in.
+
+\`\`\`bash
+export AGENT_KEY=0x...                # or SOLANA_AGENT_KEY for a Solana wallet
+export AGENT402_MAX_PER_CALL=0.10     # USD per call
+export AGENT402_BUDGET=20             # USD for the whole session
+export AGENT402_NETWORKS=solana       # pay only on these chains, in this order
+npx -y agent402-mcp@${AGENT402_MCP_VERSION}
+\`\`\`
+
+**agent402-openclaw.** \`maxPerCallUsd\` in the plugin config, or
+\`AGENT402_MAX_PER_CALL_USD\`, defaults to the metered per-call cap below;
+\`off\` removes it only beside \`allowUncappedPayments: true\`.
+
+All three refuse an accept that asks for a signing validity longer than a day,
+and refuse to send a payload signed past it.
+
+## Choosing a rail for volume
+
+| Rail | When it settles | When the call fails |
+|---|---|---|
+| x402 exact on an EVM chain | after the tool answers, only for a response under 400 | not charged; the signed payment is its own replay key |
+| x402 exact on Solana | after the tool answers, only for a response under 400 | not charged; send an \`Idempotency-Key\` for replays |
+| MPP \`evm\` charge | the same x402 settlement underneath | not charged |
+| MPP Tempo pull (a signed transaction the relay broadcasts) | broadcast after the tool answers, only for a response under 400 | not charged |
+| MPP Tempo push (a transfer you already sent) | final before the call runs | booked as a refund owed to the paying wallet, repaid after on-chain proof |
+
+- The report products and other long routes take x402 exact on EVM chains
+  only: their run outlives a Solana payment's recent blockhash, an Algorand
+  transaction's rounds and a Tempo credential. Tempo is also not offered on the
+  identity-bound routes.
+- A Solana payment embeds a recent blockhash that lives about a minute, so sign
+  each payment right before you send it rather than signing a batch ahead.
+- A Solana payment refused for a missing USDC account or too little USDC
+  answers with \`retry: "fund-wallet"\` and a \`Retry-After\`; fund the wallet
+  before the next call.
+- MPP methods appear in the 402 while this instance offers them;
+  [/.well-known/x402](https://agent402.tools/.well-known/x402) lists them.
+- On the metered routes, a 402 carrying an \`upto\` accept lets a wallet with a
+  one-time Permit2 approval for USDC sign the quote as a ceiling and settle
+  actual usage under it.
+
+## Metered chat at volume
+
+- **Model ids.** \`GET /v1/models\` lists every id; send one verbatim. An id the
+  upstream does not list is refused with a 400 before any payment, carrying
+  \`suggestions\` (the closest served ids, at most three) and a \`howToCall\`
+  retried with the first. A version written with a hyphen (\`v4-1\`) is served
+  as the dotted id when that exact id is listed.
+- **Input size.** Every model takes ${TIERS["v1-chat-metered"].maxInputChars.toLocaleString("en-US")} input characters,
+  and a model with a larger context window takes three characters per window
+  token, up to ${METERED_MAX_INPUT_CHARS_CEILING.toLocaleString("en-US")}. \`/v1/models\` publishes each model's
+  own figure as \`x402.meteredMaxInputChars\`. A body over it is refused before
+  payment with code \`input_too_large\`, \`maxInputChars\`, \`inputChars\`,
+  \`hint: "trim-input"\` and \`suggestions\` of models whose window takes it.
+- **Per-call cap.** A request quoting above $${METERED_MAX_QUOTE_USD} is refused
+  with a 400 before any upstream call: lower \`max_tokens\` or the input. On
+  x402 it is not charged.
+
+\`\`\`bash
+curl -s https://agent402.tools/v1/models \\
+  | jq -c '.data[] | select(.x402.meteredMaxInputChars) | {id, maxInputChars: .x402.meteredMaxInputChars}'
+\`\`\`
+
+## Errors to handle
+
+| Status | What it means | What to do |
+|---|---|---|
+| 400 | the input was refused before the tool ran; the body carries \`expected\`, \`required\`, \`example\` and \`howToCall\` (method, URL and a ready body) | fix the request from \`howToCall\`; not charged on x402 |
+| 402 | the quote, or a refused payment; the first-contact 402 body carries the offer, \`howToCall\` and, on a job route, \`async\` | pay, or fund the wallet the refusal names |
+| 409 | the same keyed call is still running | wait \`Retry-After\`, send the same key and payment |
+| 422 | the tool cannot serve this input (an image too large to read, a body that is not an image) | read \`error\` and the \`howToCall\` note; not charged on x402 |
+| 429 | one of the limits above | wait \`Retry-After\` |
+| 503 | busy or briefly paused; image-ocr reading another image over ${OCR_LARGE_PIXELS / 1e6} megapixels answers \`hint: "large-image-busy"\` | wait \`Retry-After\`, or send a smaller image, which is read at once |
+| 502, 504 with \`attribution: "upstream"\` | a source the tool reads failed (a host timed out or refused the connection) | not your input: retry later or pick another source; not charged on x402 |
+
+A loop that honors all of it, shown with plain \`fetch\` (pass your payment
+\`fetch\` in its place):
+
+\`\`\`js
+const BASE = process.env.AGENT402_URL || "https://agent402.tools";
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function call(path, body, { pay = fetch, tries = 5 } = {}) {
+  const key = crypto.randomUUID(); // one key per logical call, reused on every retry
+  for (let i = 0; i < tries; i++) {
+    const res = await pay(BASE + path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": key },
+      body: JSON.stringify(body),
+    });
+    if (res.ok) return res.json();
+    if (![409, 429, 502, 503, 504].includes(res.status)) throw new Error(JSON.stringify(await res.json()));
+    const wait = Number(res.headers.get("retry-after")) || 2 ** i;
+    await sleep(wait * 1000);
+  }
+  throw new Error("gave up after " + tries + " tries");
+}
+
+console.log(await call("/api/hash", { text: "hello world" }));
+\`\`\`
+
+The recovery contract in brief is at [/agents.md](https://agent402.tools/agents.md),
+and the whole service at [/llms.txt](https://agent402.tools/llms.txt).
 `,
   },
   {

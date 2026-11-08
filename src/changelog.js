@@ -2,6 +2,14 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const ENTRIES = [
   {
+    date: "2026-11-08",
+    title: "Buying at volume",
+    items: [
+      "Docs: a buying-at-volume guide (/guides/buying-at-volume, wiki page Buying-at-Volume) for agents that buy in bursts: the per-address limits and their Retry-After, retries that never pay twice, async jobs, spend caps in agent402-client, agent402-mcp and agent402-openclaw, which rails settle when, metered model ids and input caps, and the errors to handle. llms.txt and the three package pages link it.",
+      "Gateway: the /v1/metered unpaid-quote 429 carries Retry-After: 60, retryAfterSeconds and a guide link.",
+    ],
+  },
+  {
     date: "2026-11-07",
     title: "onchain-sql price, X data tools, Solana token search, metered chat, OCR and fetch errors",
     items: [

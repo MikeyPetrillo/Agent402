@@ -512,7 +512,7 @@ claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.13.31
       "`AGENT402_MAX_PER_CALL` is on by default ($4 per call, `off` disables it) and `AGENT402_BUDGET` is an opt-in session cap; both are enforced on the payment that is signed. The hosted /mcp connector is also payable over MPP from an mppx-wrapped MCP client.",
     ],
     tools: ["search", "answer", "search-news", "render", "stock-quote", "transcribe"],
-    guides: ["agent-hosts", "x402-and-mpp"],
+    guides: ["agent-hosts", "x402-and-mpp", "buying-at-volume"],
     learn: ["mcp-payments", "mpp"],
   },
   {
@@ -560,7 +560,7 @@ const verdict = await a.call("sql-guard", { sql: "UPDATE users SET plan = 'pro' 
       `\`creditsKey\`: ${CREDITS_HELD} (\`a402_...\`) pays from its balance, debited only on a 200.`,
     ],
     tools: ["extract", "hash", "sql-guard", "whois", "search"],
-    guides: ["x402-in-5-minutes", "x402-and-mpp"],
+    guides: ["x402-in-5-minutes", "x402-and-mpp", "buying-at-volume"],
     learn: ["pay-per-call-api", "agent-payments"],
   },
   {
@@ -650,7 +650,7 @@ npx agent402-openclaw proxy   # http://127.0.0.1:8412/v1, model "auto"`,
       "The proxy answers loopback only and refuses browser-originated requests, so a web page cannot spend the key.",
     ],
     tools: ["v1-chat-metered", "v1-chat", "v1-embeddings", "search", "answer"],
-    guides: ["openclaw-model-provider", "agent-hosts"],
+    guides: ["openclaw-model-provider", "agent-hosts", "buying-at-volume"],
     learn: ["pay-per-call-api", "agent-payments"],
   },
 ];
