@@ -195,6 +195,17 @@ function fakeStore() {
   ok((await drive(b3, "203.0.113.53")).code === 429, "with the store down the budget limits normally");
 }
 
+// The buying-at-volume guide and its wiki page quote the window the code enforces.
+{
+  const { guidePage } = await import("../src/guides.js");
+  const { readFileSync } = await import("node:fs");
+  const html = String(guidePage("https://x.test", "buying-at-volume") || "").replace(/\s+/g, " ");
+  const phrase = `${PAID_QUOTE_TRUST_MINUTES} minutes after each paid call`;
+  ok(html.includes(phrase) && html.includes("not limited for"), `the guide says quotes are not limited for ${phrase}`);
+  const wiki = readFileSync(new URL("../wiki/Buying-at-Volume.md", import.meta.url), "utf8");
+  ok(wiki.includes(phrase) && wiki.includes("PAID_QUOTE_TRUST_MINUTES"), "the wiki page quotes the same window and names its constant");
+}
+
 // ---- booted half ---------------------------------------------------------------
 const [PORT, FAC] = await getFreePorts(2);
 let settles = 0;
