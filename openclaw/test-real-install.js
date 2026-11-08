@@ -36,7 +36,7 @@ const pkgDir = fileURLToPath(new URL(".", import.meta.url));
 // that watcher goes red and the plugin has been fixed to match. deploy.yml also
 // runs this file once against the previous pin (OPENCLAW_SPEC), so a raise never
 // drops the host most users still run.
-const OPENCLAW_SPEC = process.env.OPENCLAW_SPEC || "openclaw@2026.10.1";
+const OPENCLAW_SPEC = process.env.OPENCLAW_SPEC || "openclaw@2026.11.2";
 
 // ASYNC spawn only: the stub gateway lives in this process, and a synchronous
 // spawn blocks the event loop so nothing the child asks the stub is answered
@@ -62,9 +62,16 @@ const judgeDoctor = (out, installSource) => {
   return { pass, verdict: clean ? "clean" : notices.length ? `only the host's provenance notice (installSource=${installSource})` : "no verdict", other: [...other, ...wrongSource] };
 };
 // inspect prints "Trust: reason=..." from 2026.10.1 on; older hosts print none.
+// 2026.11.2 names an outside plugin installed from npm by its package name
+// "third-party-npm" (checked before its provenance-invalid fall-through, with
+// the remedy "Reinstalling the same package will not change that"): the same
+// untrusted verdict, more precisely labeled. So an npm install may read either
+// reason; an archive install still reads provenance-invalid, and every other
+// reason fails.
+const TRUST_REASONS = { npm: ["provenance-invalid", "third-party-npm"], archive: ["provenance-invalid"] };
 const judgeTrust = (out, installSource) => {
   const m = /^Trust: reason=([a-z-]+);.*installSource="([a-z]+)"/m.exec(out);
-  return !m ? { pass: true, verdict: "no trust line on this host" } : { pass: m[1] === "provenance-invalid" && m[2] === installSource, verdict: `reason=${m[1]} installSource=${m[2]}` };
+  return !m ? { pass: true, verdict: "no trust line on this host" } : { pass: m[2] === installSource && (TRUST_REASONS[installSource] || []).includes(m[1]), verdict: `reason=${m[1]} installSource=${m[2]}` };
 };
 
 const sh = (cmd, args, opts = {}) => new Promise((resolve) => {

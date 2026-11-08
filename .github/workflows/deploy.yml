@@ -925,7 +925,7 @@ jobs:
       # the host most installed users still run. Same key shadowing as above.
       - name: OpenClaw provider plugin against the previous OpenClaw pin
         env:
-          OPENCLAW_SPEC: openclaw@2026.9.3
+          OPENCLAW_SPEC: openclaw@2026.10.1
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
