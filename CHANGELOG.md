@@ -31,9 +31,9 @@ Payments:
   that answer as served; nothing more is charged, and a retry with the same
   payment receives it.
 - When the Tempo relay does not answer whether it claimed a push transfer, the
-  503 says so (transferClaimed: null), the transfer is booked as owed
-  (refundOwed: true), and a retry with the same credential that pays for the
-  request voids that debt.
+  503 says so (transferClaimed: null); when the ledger records the transfer as
+  owed, the 503 also carries refundOwed: true, and a retry with the same
+  credential that pays for the request voids that debt.
 - A Tempo pull payment answered 402 after its broadcast failed is read on chain
   again (by default 15 s, 45 s and 2 minutes later); a transfer that lands
   after the 402 is booked as owed, to be refunded.
