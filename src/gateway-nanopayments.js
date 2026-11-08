@@ -65,7 +65,7 @@ import { createJsonDocument } from "./json-document.js";
 import { trackStoreReady, leased } from "./state-db.js";
 import { ADDR, TX as TX_HASH, UUID, UINT, B32, REASON, SECP256K1_HALF_N, isObj, lc } from "./circle-shapes.js";
 import { randomUUID } from "node:crypto";
-import { readFileSync, writeFileSync, renameSync, mkdirSync, rmSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync, mkdirSync, rmSync, mkdtempSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { cdnSyncLeftMs } from "./cdn-sync-window.js";
@@ -829,9 +829,11 @@ export function installGatewayRouting(server, client, networks, { pendingBook = 
 // a file beside the book's (or in the temp directory when that one is not
 // writable) so a restart reads it back, offered to the book and the journal
 // again every LOST_RETRY_MS until one takes it, logged as an error and listed
-// on the operator view. The word reads "unresolved" (it pages) while any
-// booking sits in the journal or is held this way, so a booking outside the
-// book is never silent.
+// on the operator view. With a state database it is also written, keyed by
+// its authorization, to a document of its own (gateway-pending-lost), so a
+// deploy (a new container with no volume) reads it back. The word reads
+// "unresolved" (it pages) while any booking sits in the journal or is held
+// this way, so a booking outside the book is never silent.
 // ---------------------------------------------------------------------------
 export const PENDING_MAX_ENTRIES = 2000;
 /** How long one resend may hold a pending entry before another may take it. */
@@ -857,29 +859,53 @@ export function gatewayPendingFile(env = process.env) { return env.GATEWAY_PENDI
 // Bookings neither the book nor its journal took, held in this process
 // (bounded) until the book or the journal takes one on a retry, or an
 // operator resolves it by key. Each one pages. Written to a local file on
-// every change (the book's file name plus ".lost.json", or the same name in
-// the temp directory when the book's directory is not writable) and read
-// back when a book is created, so a restart of the process keeps them.
+// every change (the book's file name plus ".lost.json", or, when the book's
+// directory is not writable, a file in a directory private to this process,
+// made with mkdtemp and written 0600) and read back when a book is created,
+// so a restart keeps them; with a state database each is also kept in the
+// durable store below, so a deploy keeps them too.
 const LOST_MAX = 200;
+/** The durable store's bound (it also keeps what memory had to let go). */
+export const LOST_DURABLE_MAX = 2000;
+/** The word reads unresolved this long after a held booking was let go from
+ *  memory (each is logged as an error, naming it). */
+export const LOST_EVICTED_WINDOW_MS = 24 * 3600_000;
 export const LOST_RETRY_MS = 60_000;
 let lostPending = [];
 let lostPaths = [];
 const knownLostPaths = new Set();
 let lostLander = null;
 let lostRetryTimer = null;
-const lostPathsFor = (file) => [`${file}.lost.json`, join(tmpdir(), `agent402-${String(file).replace(/[^A-Za-z0-9._-]+/g, "_")}.lost.json`)];
+let lostEvictedAt = 0;
+let lostEvictedCount = 0;
+// { load(): entries, put(entry): bool, del(keys): bool }, or null.
+let lostDurable = null;
+let lostDurableWrites = Promise.resolve();
+let privateLostDir = null;
+// The fallback path: a directory only this process made (mkdtemp, mode 0700),
+// so its name cannot be guessed or planted in advance.
+function privateLostPath(file) {
+  try {
+    if (!privateLostDir) privateLostDir = mkdtempSync(join(tmpdir(), "agent402-gw-lost-"));
+    return join(privateLostDir, `${String(file).replace(/[^A-Za-z0-9._-]+/g, "_").slice(-120)}.lost.json`);
+  } catch { return null; }
+}
+const lostPathsFor = (file) => [`${file}.lost.json`, { privateFor: file }];
 function persistLost(log = console.error) {
   if (!lostPending.length) {
     for (const p of knownLostPaths) { try { rmSync(p, { force: true }); } catch { /* best effort */ } }
     return true;
   }
   const body = JSON.stringify({ lost: lostPending });
-  for (const p of lostPaths) {
+  for (const p0 of lostPaths) {
+    const p = typeof p0 === "string" ? p0 : privateLostPath(p0.privateFor);
+    if (!p) continue;
     try {
-      mkdirSync(dirname(p), { recursive: true });
+      mkdirSync(dirname(p), { recursive: true, mode: 0o700 });
       const tmp = `${p}.${process.pid}.tmp`;
       writeFileSync(tmp, body, { mode: 0o600 });
       renameSync(tmp, p);
+      knownLostPaths.add(p);
       // Written: the other path, if it holds an older copy, is cleared.
       for (const q of knownLostPaths) if (q !== p) { try { rmSync(q, { force: true }); } catch { /* best effort */ } }
       return true;
@@ -891,12 +917,75 @@ function persistLost(log = console.error) {
 function readLost(paths) {
   const out = [];
   for (const p of paths) {
+    if (typeof p !== "string") continue;
     try {
       const b = JSON.parse(readFileSync(p, "utf8"));
       for (const e of Array.isArray(b?.lost) ? b.lost : []) if (isObj(e) && typeof e.key === "string" && !out.some((x) => x.key === e.key)) out.push(e);
     } catch { /* absent or unreadable */ }
   }
   return out;
+}
+// Durable writes run one at a time, in order; a failure is logged as an
+// error (the booking is still held in memory and on disk).
+function durableWrite(label, fn, log = console.error) {
+  const d = lostDurable;
+  if (!d) return Promise.resolve(true);
+  const run = lostDurableWrites.then(() => fn(d)).then((ok) => {
+    if (ok !== true) { try { log(`[gateway] the durable store of bookings held outside the pending book did not take a ${label}; it is still held in memory and on local disk`); } catch { /* logging never throws */ } }
+    return ok === true;
+  }, () => { try { log(`[gateway] the durable store of bookings held outside the pending book failed a ${label}`); } catch { /* logging never throws */ } return false; });
+  lostDurableWrites = run.catch(() => {});
+  return run;
+}
+const lostEntryValid = (e) => isObj(e) && typeof e.key === "string" && e.key.length < 300;
+// Hold one booking in memory; past LOST_MAX the oldest is let go from memory
+// (it stays in the durable store when there is one), logged as an error that
+// names it, and the word pages for LOST_EVICTED_WINDOW_MS.
+function holdLost(e, log = console.error) {
+  if (lostPending.some((x) => x.key === e.key)) return false;
+  lostPending = [...lostPending, e];
+  while (lostPending.length > LOST_MAX) {
+    const [gone] = lostPending;
+    lostPending = lostPending.slice(1);
+    lostEvictedAt = Date.now();
+    lostEvictedCount++;
+    try { log(`[gateway] EVICTED from memory (more than ${LOST_MAX} bookings held outside the pending book): ${gone.key} on ${gone.network}, buyer ${gone.payer}, amount ${gone.amount ?? "?"}, nonce ${gone.nonce}; ${lostDurable ? "still in the durable store, offered to the book once memory has room" : "no durable store: resolve it by hand from this line"}`); } catch { /* logging never throws */ }
+  }
+  return true;
+}
+/** Whether a held booking was let go from memory inside the window. */
+export function gatewayPendingLostEvictedRecently(t = Date.now()) { return lostEvictedAt > 0 && t - lostEvictedAt < LOST_EVICTED_WINDOW_MS; }
+/** A durable store of held bookings on a JSON document (the state database). */
+export function gatewayLostDurableStore(doc) {
+  const ready = Promise.resolve(doc.load(null)).catch(() => null);
+  const mapOf = (b) => (isObj(b) && isObj(b.lost) ? { ...b.lost } : {});
+  return {
+    async load() {
+      await ready;
+      const r = await doc.read();
+      if (!r?.ok) throw new Error("unreadable");
+      return Object.values(mapOf(r.body)).filter(lostEntryValid).sort((a, b) => Number(a.at || 0) - Number(b.at || 0));
+    },
+    async put(e) {
+      await ready;
+      const r = await doc.update((b) => {
+        const lost = mapOf(b);
+        lost[e.key] = e;
+        const keys = Object.keys(lost);
+        if (keys.length > LOST_DURABLE_MAX) {
+          const drop = keys.sort((x, y) => Number(lost[x]?.at || 0) - Number(lost[y]?.at || 0)).slice(0, keys.length - LOST_DURABLE_MAX);
+          for (const k of drop) { try { console.error(`[gateway] EVICTED from the durable store of held bookings (more than ${LOST_DURABLE_MAX}): ${k}`); } catch { /* logging never throws */ } delete lost[k]; }
+        }
+        return { lost };
+      }, { fallback: null });
+      return !!r?.ok;
+    },
+    async del(keys) {
+      await ready;
+      const r = await doc.update((b) => { const lost = mapOf(b); for (const k of keys) delete lost[k]; return { lost }; }, { fallback: null });
+      return !!r?.ok;
+    },
+  };
 }
 function scheduleLostRetry() {
   if (lostRetryTimer || !lostPending.length || !lostLander) return;
@@ -906,20 +995,41 @@ function scheduleLostRetry() {
   }, LOST_RETRY_MS);
   if (typeof lostRetryTimer.unref === "function") lostRetryTimer.unref();
 }
+// Bookings the durable store holds that memory does not (an earlier
+// container's, or ones memory let go) come back while memory has room.
+async function adoptDurable(log = console.error) {
+  if (!lostDurable || lostPending.length >= LOST_MAX) return 0;
+  let list;
+  try { list = await lostDurable.load(); } catch { return 0; }
+  let n = 0;
+  for (const e of list) {
+    if (lostPending.length >= LOST_MAX) break;
+    if (lostPending.some((x) => x.key === e.key)) continue;
+    lostPending = [...lostPending, e];
+    n++;
+  }
+  if (n) { persistLost(log); scheduleLostRetry(); }
+  return n;
+}
 /** Offer every held booking to the book (and its journal) again; one either
  *  takes is no longer held. Resolves how many landed. */
 export async function retryLostPending(book = lostLander) {
-  if (!book || !lostPending.length) return 0;
+  if (!book) return 0;
+  await adoptDurable();
+  if (!lostPending.length) return 0;
   let landed = 0;
+  const gone = [];
   for (const e of [...lostPending]) {
     let r = false;
     try { r = await book.book(e.booking || e, { quiet: true, at: e.at }); } catch { r = false; }
     if (r === true || r === "journaled") {
       lostPending = lostPending.filter((x) => x.key !== e.key);
+      gone.push(e.key);
       landed++;
     }
   }
   if (landed) {
+    await durableWrite("removal", (d) => d.del(gone));
     persistLost();
     try { console.warn(`[gateway] ${landed} pending booking(s) held outside the book landed on a retry`); } catch { /* logging never throws */ }
   }
@@ -937,34 +1047,50 @@ export function notePendingLost(entry, log = console.error) {
       slug: entry?.slug, validBefore: entry?.validBefore, origin: entry?.origin, cause: entry?.cause,
     },
   };
-  if (!lostPending.some((x) => x.key === e.key)) lostPending = [...lostPending, e].slice(-LOST_MAX);
+  // Logged first, so a line naming the booking always comes before any
+  // eviction line it causes.
+  try { log(`[gateway] a batched settlement on ${e.network} left unresolved could NOT be booked (book and journal both refused); if Gateway settled it the buyer ${e.payer} is owed ${e.amount ?? "?"} (nonce ${e.nonce}). Kept on local disk${lostDurable ? " and in the durable store" : ""} and offered to the book again every ${Math.round(LOST_RETRY_MS / 1000)} s; resolve it by hand on /__operator/gateway-pending.json`); } catch { /* logging never throws */ }
+  if (holdLost(e, log)) void durableWrite("booking", (d) => d.put(e), log);
   persistLost(log);
   scheduleLostRetry();
-  try { log(`[gateway] a batched settlement on ${e.network} left unresolved could NOT be booked (book and journal both refused); if Gateway settled it the buyer ${e.payer} is owed ${e.amount ?? "?"} (nonce ${e.nonce}). Kept on local disk and offered to the book again every ${Math.round(LOST_RETRY_MS / 1000)} s; resolve it by hand on /__operator/gateway-pending.json`); } catch { /* logging never throws */ }
 }
 /** The bookings held outside the book (operator view; the word reads them). */
 export function gatewayPendingLost() { return lostPending.map(({ booking: _b, ...e }) => ({ ...e })); }
 /** Test-only: forget the held bookings in memory (a restart), or also on disk. */
 export function _resetGatewayPendingLostForTests({ disk = true } = {}) {
+  lostDurable = null;
+  lostDurableWrites = Promise.resolve();
   if (disk) { lostPending = []; persistLost(() => {}); }
   lostPending = [];
   lostPaths = [];
   knownLostPaths.clear();
   lostLander = null;
+  lostEvictedAt = 0;
+  lostEvictedCount = 0;
+  privateLostDir = null;
   if (lostRetryTimer) { clearTimeout(lostRetryTimer); lostRetryTimer = null; }
 }
+/** Test-only: the local files held bookings were written to. */
+export function _gatewayLostPathsForTests() { return [...knownLostPaths]; }
+/** Test-only: wait for the durable writes queued so far. */
+export function _gatewayLostDurableSettled() { return lostDurableWrites; }
 
-export function createGatewayPendingBook({ file = gatewayPendingFile(), now = () => Date.now(), log = console.warn, maxEntries = PENDING_MAX_ENTRIES, unresolvedMs = gatewayPendingUnresolvedMs(), journal = null, alarm = console.error, onChange = null } = {}) {
+export function createGatewayPendingBook({ file = gatewayPendingFile(), now = () => Date.now(), log = console.warn, maxEntries = PENDING_MAX_ENTRIES, unresolvedMs = gatewayPendingUnresolvedMs(), journal = null, alarm = console.error, onChange = null, lostStore = undefined } = {}) {
   let state = { pending: {} };
   const absorb = (s) => { if (isObj(s) && isObj(s.pending)) state = { pending: { ...s.pending } }; };
   const doc = createJsonDocument({ name: "gateway-pending", file, log: () => {} });
   absorb(doc.loadSync(null));
   const PG = doc.backend === "pg";
   const ready = trackStoreReady(PG ? doc.load(null).then(absorb) : Promise.resolve(), "gateway-pending");
-  // Bookings an earlier process held outside the book come back.
+  // Bookings an earlier process held outside the book come back: from the
+  // local file now, and from the durable store (a state database: a deploy
+  // starts a container with no volume) once it is read.
   lostPaths = lostPathsFor(file);
-  for (const p of lostPaths) knownLostPaths.add(p);
-  for (const e of readLost(lostPaths)) if (!lostPending.some((x) => x.key === e.key)) lostPending = [...lostPending, e].slice(-LOST_MAX);
+  for (const p of lostPaths) if (typeof p === "string") knownLostPaths.add(p);
+  for (const e of readLost(lostPaths)) holdLost(e, alarm);
+  if (lostStore !== undefined) lostDurable = lostStore;
+  else lostDurable = PG ? gatewayLostDurableStore(createJsonDocument({ name: "gateway-pending-lost", file: `${file}.lost-store.json`, log: () => {} })) : null;
+  const durableReady = lostDurable ? adoptDurable(alarm).catch(() => 0) : Promise.resolve(0);
   const refresh = async () => {
     try {
       const b = PG ? await doc.load(null) : doc.loadSync(null);
@@ -1082,6 +1208,7 @@ export function createGatewayPendingBook({ file = gatewayPendingFile(), now = ()
       if (!state.pending[key]) await refresh();
       if (!state.pending[key]) {
         if (lostPending.some((e) => e.key === key)) {
+          if (lostDurable && !(await durableWrite("resolution", (d) => d.del([key]), alarm))) return { ok: false, error: "the durable store of held bookings could not be written; the booking is kept" };
           lostPending = lostPending.filter((e) => e.key !== key);
           persistLost(log);
           log(`[gateway] pending entry ${key} (held in memory only) resolved as ${outcome}${note ? ` (${String(note).slice(0, 200)})` : ""}`);
@@ -1163,7 +1290,7 @@ export function createGatewayPendingBook({ file = gatewayPendingFile(), now = ()
       const list = entries();
       const n = list.length;
       if (n >= maxEntries) return "full";
-      if (lostPending.length) return "unresolved";
+      if (lostPending.length || gatewayPendingLostEvictedRecently()) return "unresolved";
       let journaled = 0;
       try { journaled = await journalCount(); } catch { journaled = 1; }
       if (journaled > 0) return "unresolved";
@@ -1175,10 +1302,18 @@ export function createGatewayPendingBook({ file = gatewayPendingFile(), now = ()
       await refresh();
       let journaled = null;
       try { journaled = await journalCount(); } catch { journaled = null; }
-      return { status: await this.alarmStatus(), count: entries().length, journaled, entries: entries().sort((a, b) => a.at - b.at), heldInMemory: gatewayPendingLost() };
+      // heldInMemory stays the list a rollback reads: an older build ignores
+      // the durable store, so the operator view always names what is held.
+      let heldDurable = null;
+      if (lostDurable) { try { heldDurable = (await lostDurable.load()).length; } catch { heldDurable = null; } }
+      return {
+        status: await this.alarmStatus(), count: entries().length, journaled, entries: entries().sort((a, b) => a.at - b.at), heldInMemory: gatewayPendingLost(),
+        heldDurable, evictedFromMemory: lostEvictedCount, lastEvictedAt: lostEvictedAt || null,
+      };
     },
   };
   lostLander = book;
+  book.lostReady = durableReady;
   scheduleLostRetry();
   return book;
 }
