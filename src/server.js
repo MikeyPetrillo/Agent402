@@ -6587,6 +6587,24 @@ app.post("/__operator/circle-pending", express.json(), async (req, res) => {
     return res.status(r.ok ? 200 : 400).set("Cache-Control", "no-store").json(r);
   } catch { return res.status(503).json({ error: "the pending book could not be written" }); }
 });
+// The late-settlement book (src/late-settlements.js): an operator resolves an
+// UNRESOLVED entry (booked_owed, paid or dismissed, with a note; recorded
+// before the entry is dropped) or acknowledges this process's unrecorded
+// bookings, which clears the lateSettlements word. Listed on refunds.json
+// (unconfirmedSettlements).
+app.post("/__operator/late-settlements", express.json({ limit: "8kb" }), async (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  const { action, key, outcome, note, tx, decimals } = req.body || {};
+  let book;
+  try { book = await lateSettleBookForOperator(); } catch { return res.status(503).json({ error: "the late-settlement book could not be read" }); }
+  try {
+    let r;
+    if (action === "resolve") r = await book.resolve(typeof key === "string" ? key : "", { outcome, note, tx: typeof tx === "string" ? tx : null, decimals: decimals ?? null });
+    else if (action === "acknowledge_unrecorded") r = await book.acknowledgeUnrecorded({ note });
+    else return res.status(400).json({ error: 'pass {"action":"resolve","key":"<entry key>","outcome":"booked_owed"|"paid"|"dismissed","note":"what was checked","tx":"0x... (paid: the refund transfer)"} or {"action":"acknowledge_unrecorded","note":"what was checked"}' });
+    return res.status(r.ok ? 200 : 400).set("Cache-Control", "no-store").json({ ...r, status: await book.alarmStatus({ ttlMs: 0 }).catch(() => "unknown") });
+  } catch { return res.status(503).json({ error: "the late-settlement book could not be written" }); }
+});
 app.post("/__operator/seller-funding", express.json(), async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   const { action, wallet, note } = req.body || {};

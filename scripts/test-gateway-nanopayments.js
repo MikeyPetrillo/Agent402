@@ -53,7 +53,7 @@ import { createServer, request as httpRequest } from "node:http";
 import { spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { randomBytes } from "node:crypto";
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import Database from "better-sqlite3";
@@ -66,7 +66,7 @@ import {
   installGatewayRouting, isGatewayBatchedPayment, preflightGatewayPayment, createGatewayPendingBook, gatewayBalanceStatus,
   refreshGatewayBalance, _resetGatewayBalanceForTests, startGatewayBalanceWatch, gatewayNanopaymentNetworks, gatewayNanopaymentsEnabled,
   CDN_PENDING_RESERVE_MS, pendingKey, createGatewayPendingResolver, gatewayResourceOf,
-  gatewayPendingLost, _resetGatewayPendingLostForTests, notePendingLost, retryLostPending, byTransferIdAnyCase, gatewayTransferMatches, normalizeGatewayTransfer,
+  gatewayPendingLost, _resetGatewayPendingLostForTests, notePendingLost, retryLostPending, gatewayLostDurableStore, _gatewayLostDurableSettled, _gatewayLostPathsForTests, LOST_EVICTED_WINDOW_MS, byTransferIdAnyCase, gatewayTransferMatches, normalizeGatewayTransfer,
 } from "../src/gateway-nanopayments.js";
 import { GATEWAY_MAX_TIMEOUT_SECONDS } from "../client/index.js";
 import { classifySettlementPending, settlementKindOf, isGatewayBatchedHeader, isGatewayBatchedRequest, isGatewayWire } from "../src/gateway-wire.js";
@@ -498,6 +498,106 @@ await check("a booking neither the book nor its journal took survives a restart:
   assert.equal(gatewayPendingLost().length, 0, "no longer held");
   assert.ok(!existsSync(`${file}.lost.json`), "and its file is gone");
   _resetGatewayPendingLostForTests();
+  rmSync(dir, { recursive: true, force: true });
+});
+await check("a booking held outside the book is also written to the durable store: a deploy (new container, no local file) reads it back, it pages, and an operator resolution removes it from the store", async () => {
+  _resetGatewayPendingLostForTests();
+  const { createJsonDocument } = await import("../src/json-document.js");
+  const dir = mkdtempSync(join(tmpdir(), "a402-gw-durable-"));
+  // The real store over a JSON document (the state database in production; a file here).
+  const store = gatewayLostDurableStore(createJsonDocument({ name: "gateway-pending-lost-test", file: join(dir, "durable.json"), log: () => {} }));
+  const deafJournal = { add: () => null, state: () => ({ total: 0 }), drain: async () => 0 };
+  const file = join(dir, "d.json");
+  const first = createGatewayPendingBook({ file, log: () => {}, alarm: () => {}, journal: deafJournal, lostStore: store });
+  await first.ready;
+  const n = nonce();
+  const entry = { payer: acct.address, network: "eip155:8453", nonce: n, amount: "5000", payTo: TREASURY, resource: "GET /api/x", origin: "pending", cause: "settlement_pending" };
+  notePendingLost(entry, () => {});
+  await _gatewayLostDurableSettled();
+  assert.equal((await store.load()).length, 1, "in the durable store");
+  // The deploy: memory and the local file are gone (a new container).
+  _resetGatewayPendingLostForTests({ disk: true });
+  assert.equal(gatewayPendingLost().length, 0);
+  const second = createGatewayPendingBook({ file, log: () => {}, alarm: () => {}, journal: deafJournal, lostStore: store });
+  await second.ready;
+  await second.lostReady;
+  assert.deepEqual(gatewayPendingLost().map((e) => e.nonce), [n.toLowerCase()], "read back from the durable store");
+  assert.equal(await second.alarmStatus(), "unresolved", "and it still pages");
+  const view = await second.operatorView();
+  assert.equal(view.heldInMemory.length, 1, "heldInMemory stays on the operator view (what a rolled-back build reads)");
+  assert.equal(view.heldDurable, 1);
+  const key = pendingKey("eip155:8453", acct.address, n);
+  assert.equal((await second.resolve(key, { outcome: "not_charged", note: "checked Gateway by hand" })).ok, true);
+  assert.equal((await store.load()).length, 0, "the resolution removes it from the durable store");
+  assert.equal(await second.alarmStatus(), "ok");
+  // A durable store that refuses: the resolution is refused and the booking kept.
+  notePendingLost(entry, () => {});
+  await _gatewayLostDurableSettled();
+  const broken = { ...store, del: async () => false };
+  const third = createGatewayPendingBook({ file, log: () => {}, alarm: () => {}, journal: deafJournal, lostStore: broken });
+  await third.ready;
+  assert.equal((await third.resolve(key, { outcome: "not_charged", note: "x" })).ok, false);
+  assert.equal(gatewayPendingLost().length, 1, "kept");
+  _resetGatewayPendingLostForTests();
+  rmSync(dir, { recursive: true, force: true });
+});
+await check("past the in-memory bound a held booking is never dropped in silence: an error names it, the word pages for the window, and with a durable store it is offered to the book once memory has room", async () => {
+  _resetGatewayPendingLostForTests();
+  const { createJsonDocument } = await import("../src/json-document.js");
+  const dir = mkdtempSync(join(tmpdir(), "a402-gw-evict-"));
+  const store = gatewayLostDurableStore(createJsonDocument({ name: "gateway-pending-lost-evict", file: join(dir, "durable.json"), log: () => {} }));
+  const deafJournal = { add: () => null, state: () => ({ total: 0 }), drain: async () => 0 };
+  const file = join(dir, "e.json");
+  const book = createGatewayPendingBook({ file, log: () => {}, alarm: () => {}, journal: deafJournal, lostStore: store });
+  await book.ready;
+  mkdirSync(file, { recursive: true }); // the store refuses every write
+  const errs = [];
+  const nonces = Array.from({ length: 201 }, () => nonce());
+  for (const n of nonces) notePendingLost({ payer: acct.address, network: "eip155:8453", nonce: n, amount: "5000", payTo: TREASURY }, (m) => errs.push(m));
+  await _gatewayLostDurableSettled();
+  assert.equal(gatewayPendingLost().length, 200, "memory is bounded");
+  const first = pendingKey("eip155:8453", acct.address, nonces[0]);
+  const ev = errs.filter((m) => /EVICTED from memory/.test(m));
+  assert.equal(ev.length, 1, "one error line per eviction");
+  assert.ok(ev[0].includes(first) && ev[0].includes("5000"), "the line names the booking and its amount");
+  assert.equal((await store.load()).length, 201, "the evicted one is still in the durable store");
+  assert.equal((await book.operatorView()).evictedFromMemory, 1);
+  // Every in-memory booking resolved by hand: the eviction still pages inside its window.
+  for (const e of gatewayPendingLost()) assert.equal((await book.resolve(e.key, { outcome: "not_charged", note: "checked" })).ok, true);
+  rmSync(file, { recursive: true, force: true });
+  const realNow = Date.now;
+  try {
+    // Memory has room again: the next retry adopts the evicted booking from the durable store and lands it.
+    assert.equal(await retryLostPending(book), 1, "the evicted booking lands from the durable store");
+    assert.ok(await book.get(first), "in the book");
+    assert.equal((await book.resolve(first, { outcome: "not_charged", note: "checked" })).ok, true);
+    assert.equal(gatewayPendingLost().length, 0);
+    assert.equal(await book.alarmStatus(), "unresolved", "the eviction pages inside its window, with nothing else open");
+    Date.now = () => realNow() + LOST_EVICTED_WINDOW_MS + 1000;
+    assert.equal(await book.alarmStatus(), "ok", "and clears after it");
+  } finally { Date.now = realNow; }
+  _resetGatewayPendingLostForTests();
+  rmSync(dir, { recursive: true, force: true });
+});
+await check("the local fallback file is private to the process: an unpredictable mkdtemp directory (0700) and a 0600 file, never a fixed name in the temp directory", async () => {
+  _resetGatewayPendingLostForTests();
+  const { statSync, writeFileSync: wf, existsSync } = await import("node:fs");
+  const dir = mkdtempSync(join(tmpdir(), "a402-gw-private-"));
+  const blocker = join(dir, "blocker");
+  wf(blocker, "not a directory");
+  const file = join(blocker, "p.json"); // the path beside the book cannot be written
+  createGatewayPendingBook({ file, log: () => {}, alarm: () => {}, journal: { add: () => null, state: () => ({ total: 0 }), drain: async () => 0 } });
+  notePendingLost({ payer: acct.address, network: "eip155:8453", nonce: nonce(), amount: "5000" }, () => {});
+  const paths = _gatewayLostPathsForTests().filter((p) => existsSync(p));
+  assert.equal(paths.length, 1, JSON.stringify(paths));
+  const p = paths[0];
+  assert.ok(p.startsWith(tmpdir()) && /agent402-gw-lost-[A-Za-z0-9]{6}/.test(p), p);
+  assert.equal(statSync(p).mode & 0o777, 0o600, "the file is 0600");
+  assert.equal(statSync(dirname(p)).mode & 0o777, 0o700, "its directory is 0700");
+  const fixed = join(tmpdir(), `agent402-${String(file).replace(/[^A-Za-z0-9._-]+/g, "_")}.lost.json`);
+  assert.ok(!existsSync(fixed), "nothing at the old predictable name");
+  _resetGatewayPendingLostForTests();
+  assert.ok(!existsSync(p), "cleared once nothing is held");
   rmSync(dir, { recursive: true, force: true });
 });
 await check("client: the balance read is keyless by address and sums the domains", async () => {

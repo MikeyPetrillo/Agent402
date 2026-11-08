@@ -75,6 +75,19 @@ export const MAX_PASS_MS = 60_000;
 /** The lease: the pass budget, plus one RPC read that started inside it, plus margin. */
 export const RECONCILE_LEASE_MS = MAX_PASS_MS + 60_000;
 const RPC_TIMEOUT_MS = 8_000;
+/** An unresolved entry is read on chain again this often (a slow cadence), so
+ *  one that later shows as settled, reverted or absent resolves itself. */
+export const UNRESOLVED_RECHECK_MS = 6 * 3600_000;
+/** At most this many unresolved entries are re-read per pass. */
+export const UNRESOLVED_RECHECK_PER_PASS = 5;
+/** A booking recorded nowhere reads `unresolved` for this long after it
+ *  happened, unless an operator acknowledges it first. */
+export const UNRECORDED_WINDOW_MS = 24 * 3600_000;
+/** How many operator resolutions the resolution record keeps. */
+export const RESOLUTIONS_KEPT = 500;
+/** What an operator may resolve an unresolved entry as. */
+export const OPERATOR_OUTCOMES = Object.freeze(["booked_owed", "paid", "dismissed"]);
+const KEY_RE = /^eip155:[0-9]{1,12}\|(?:0x[0-9a-f]{64}|auth\|0x[0-9a-f]{40}\|0x[0-9a-f]{64})$/;
 
 /** The route slug a refund row names, from the resource URL the buyer paid. */
 function slugOf(resourceUrl) {
@@ -230,8 +243,33 @@ export function createLateSettleBook({
   const entries = () => Object.values(state.pending);
   const openCount = (pending = state.pending) => Object.values(pending).filter((e) => e?.state !== "unresolved").length;
   // Bookings neither the store nor the journal took, in this process (the
-  // alarm line names each one). The word reads unresolved while any is held.
-  let unrecorded = 0;
+  // alarm line names each one): when each happened. The word reads
+  // unresolved while one is inside UNRECORDED_WINDOW_MS and not acknowledged.
+  let unrecordedAt = [];
+  const unrecordedRecent = () => {
+    const cut = now() - UNRECORDED_WINDOW_MS;
+    unrecordedAt = unrecordedAt.filter((t) => t > cut);
+    return unrecordedAt.length;
+  };
+  // Every operator resolution, kept in its own document (the book's body is
+  // { pending } only, so an older build's writes never drop the record).
+  const resolutionsDoc = createJsonDocument({ name: "late-settlements-resolutions", file: `${file}.resolutions.json`, log: () => {} });
+  const resolutionsReady = resolutionsDoc.backend === "pg" ? resolutionsDoc.load(null).catch(() => null) : Promise.resolve();
+  const recordResolution = async (row) => {
+    await resolutionsReady;
+    const r = await resolutionsDoc.update((b) => {
+      const list = Array.isArray(b?.resolutions) ? b.resolutions : [];
+      return { resolutions: [...list, row].slice(-RESOLUTIONS_KEPT) };
+    }, { fallback: null });
+    return !!r?.ok;
+  };
+  const readResolutions = async () => {
+    try {
+      await resolutionsReady;
+      const b = resolutionsDoc.backend === "pg" ? await resolutionsDoc.load(null) : resolutionsDoc.loadSync(null);
+      return Array.isArray(b?.resolutions) ? b.resolutions : [];
+    } catch { return []; }
+  };
   let wordCache = { at: 0, word: null };
   let journalImpl = journal;
   const journalOf = async () => {
@@ -313,7 +351,7 @@ export function createLateSettleBook({
       let id = null;
       try { const j = await journalOf(); id = j ? j.add("late", entry) : null; } catch { id = null; }
       if (id == null) {
-        unrecorded++;
+        unrecordedAt.push(now());
         alarm(`[late-settle] ${network} ${byAuth ? `auth ${c.payer}/${c.nonce}` : `tx ${c.tx}`} failed and could NOT be recorded (store and journal both refused); if it lands the buyer is owed ${entry.amount} of ${entry.asset} from ${entry.payer}`);
         return false;
       }
@@ -340,7 +378,7 @@ export function createLateSettleBook({
       try { journaled = await journalCount(); } catch { journaled = 1; }
       let word = "ok";
       if (open >= maxEntries) word = "full";
-      else if (unrecorded > 0 || journaled > 0 || entries().some((e) => e.state === "unresolved")) word = "unresolved";
+      else if (unrecordedRecent() > 0 || journaled > 0 || entries().some((e) => e.state === "unresolved")) word = "unresolved";
       else if (open >= Math.ceil(maxEntries * NEAR_CAPACITY_SHARE)) word = "near_capacity";
       wordCache = { at: t, word };
       return word;
@@ -357,9 +395,72 @@ export function createLateSettleBook({
         bound: maxEntries,
         unresolved: all.filter((e) => e.state === "unresolved").length,
         journaled,
-        unrecordedInMemory: unrecorded,
-        open: all.map((e) => ({ key: e.key, network: e.network, tx: e.tx, slug: e.slug, via: e.via, state: e.state, at: e.at, checks: e.checks })),
+        unrecordedInMemory: unrecordedRecent(),
+        open: all.map((e) => ({ key: e.key, network: e.network, tx: e.tx, slug: e.slug, via: e.via, state: e.state, at: e.at, checks: e.checks, ...(e.state === "unresolved" ? { unresolvedAt: e.unresolvedAt ?? null, recheckAt: e.recheckAt ?? null } : {}) })),
+        // The latest operator resolutions (no amounts), newest last.
+        resolutions: (await readResolutions()).slice(-20).map((r) => ({ key: r.key, outcome: r.outcome, tx: r.tx ?? null, note: r.note, at: r.at })),
+        resolve: 'POST /__operator/late-settlements {"action":"resolve","key":"<open[].key>","outcome":"booked_owed"|"paid"|"dismissed","note":"what was checked","tx":"0x... (paid: the refund transfer; booked_owed: the landed transfer when the entry names none)"} or {"action":"acknowledge_unrecorded","note":"..."}',
       };
+    },
+    /**
+     * An operator resolves an UNRESOLVED entry, with a note saying what was
+     * checked: booked_owed (the transfer landed: the debt is written to the
+     * refund ledger, keyed by the transfer, and the entry closes only once
+     * the ledger holds it), paid (the buyer was already repaid: `tx` is the
+     * refund transfer), or dismissed (nothing moved to us). Every resolution
+     * is written to the resolution record before the entry is dropped, and
+     * logged. A pending entry is the reconcile pass's, never an operator's.
+     */
+    async resolve(key, { outcome, note, tx = null, decimals = null } = {}) {
+      if (typeof note !== "string" || !note.trim()) return { ok: false, error: "a note saying what was checked is required" };
+      if (!OPERATOR_OUTCOMES.includes(outcome)) return { ok: false, error: `outcome must be ${OPERATOR_OUTCOMES.join(", ")}` };
+      const k = String(key || "");
+      await refresh();
+      const e = KEY_RE.test(k) && Object.hasOwn(state.pending, k) ? state.pending[k] : null;
+      if (!e) return { ok: false, error: "no such entry" };
+      if (e.state !== "unresolved") return { ok: false, error: "the entry is still pending: the reconcile pass resolves it" };
+      const given = tx == null || tx === "" ? null : String(tx).toLowerCase();
+      if (given != null && !TX.test(given)) return { ok: false, error: "tx must be a 0x-prefixed 32-byte transaction hash" };
+      if (outcome === "paid" && !given) return { ok: false, error: "paid needs tx: the refund transfer" };
+      let evidence = null;
+      if (outcome === "booked_owed") {
+        evidence = e.tx || given;
+        if (!evidence) return { ok: false, error: "booked_owed needs tx: the transfer that landed (the entry names none)" };
+        let dec = decimals == null || decimals === "" ? null : Number(decimals);
+        if (dec != null && !(Number.isInteger(dec) && dec >= 0 && dec <= 36)) return { ok: false, error: "decimals must be an integer from 0 to 36" };
+        if (dec == null) {
+          try {
+            const url = rpcFor(e.network);
+            dec = Number(BigInt(await call(url, "eth_call", [{ to: e.asset, data: "0x313ce567" }, "latest"]) || "0x0"));
+          } catch { dec = null; }
+          if (!(Number.isInteger(dec) && dec >= 0 && dec <= 36)) return { ok: false, error: "the token's decimals could not be read; pass decimals" };
+        }
+        await recordOwed({
+          slug: e.slug, network: e.network, payer: e.payer, priceUsd: Number(e.amount) / 10 ** dec,
+          tx: evidence, httpStatus: 402, wire: "x402",
+          note: `${SETTLED_AFTER_402}: booked by an operator: ${note.trim().slice(0, 120)}`,
+        });
+        if (!(await owedRecorded(evidence).catch(() => false))) return { ok: false, error: "the refund ledger did not take the debt; the entry is kept" };
+      }
+      const row = { key: e.key, network: e.network, tx: outcome === "paid" ? given : evidence || e.tx || null, outcome, note: note.trim().slice(0, 300), at: now() };
+      if (!(await recordResolution(row).catch(() => false))) return { ok: false, error: "the resolution could not be recorded; the entry is kept" };
+      let dropped = false;
+      try { dropped = await change((p) => { if (p[e.key]?.state === "unresolved") delete p[e.key]; }); } catch { dropped = false; }
+      if (!dropped) return { ok: false, error: "the book could not be written; the entry is kept" };
+      wordCache = { at: 0, word: null };
+      log(`[late-settle] operator resolved ${e.network} ${labelOf(e)} as ${outcome}: ${row.note.slice(0, 200)}`);
+      return { ok: true, key: e.key, outcome };
+    },
+    /** An operator acknowledges this process's unrecorded bookings (each one
+     *  was named in its alarm line); recorded like a resolution. */
+    async acknowledgeUnrecorded({ note } = {}) {
+      if (typeof note !== "string" || !note.trim()) return { ok: false, error: "a note saying what was checked is required" };
+      const count = unrecordedRecent();
+      if (!(await recordResolution({ key: "unrecorded", network: null, tx: null, outcome: "acknowledged", note: note.trim().slice(0, 300), at: now() }).catch(() => false))) return { ok: false, error: "the acknowledgement could not be recorded" };
+      unrecordedAt = [];
+      wordCache = { at: 0, word: null };
+      log(`[late-settle] operator acknowledged ${count} unrecorded booking(s): ${note.trim().slice(0, 200)}`);
+      return { ok: true, acknowledged: count };
     },
     /**
      * One reconcile pass over the entries whose next check is due, oldest
@@ -368,7 +469,7 @@ export function createLateSettleBook({
      * continues with the next.
      */
     async reconcile({ maxChecks = 50, maxPassMs = MAX_PASS_MS } = {}) {
-      const out = { checked: 0, owed: 0, served: 0, reverted: 0, notOurs: 0, absent: 0, pending: 0, unreadable: 0, unresolved: 0, errors: 0, journaled: 0 };
+      const out = { checked: 0, owed: 0, served: 0, reverted: 0, notOurs: 0, absent: 0, pending: 0, unreadable: 0, unresolved: 0, rechecked: 0, errors: 0, journaled: 0 };
       out.journaled = await drainJournal();
       await refresh();
       const started = now();
@@ -376,19 +477,31 @@ export function createLateSettleBook({
         .filter((e) => e.state === "pending" && (e.nextCheckAt || 0) <= started)
         .sort((a, b) => (a.nextCheckAt || 0) - (b.nextCheckAt || 0) || a.at - b.at)
         .slice(0, maxChecks);
-      for (const e of due) {
+      // Unresolved entries are read again on a slow cadence, a few per pass,
+      // so one that later shows as settled (or reverted, or absent) resolves
+      // itself.
+      const recheckAt = (e) => Number(e.recheckAt ?? (Number(e.unresolvedAt || e.at || 0) + UNRESOLVED_RECHECK_MS));
+      const rechecks = entries()
+        .filter((e) => e.state === "unresolved" && recheckAt(e) <= started)
+        .sort((a, b) => recheckAt(a) - recheckAt(b))
+        .slice(0, UNRESOLVED_RECHECK_PER_PASS);
+      for (const e of [...due, ...rechecks]) {
         if (now() - started >= maxPassMs) break;
         out.checked++;
         try {
           await this._one(e, out);
         } catch {
           out.errors++;
+          if (e.state === "unresolved") {
+            try { await change((p) => { if (p[e.key]) p[e.key] = { ...p[e.key], recheckAt: now() + UNRESOLVED_RECHECK_MS }; }); } catch { /* the next pass retries */ }
+            continue;
+          }
           const failures = (e.failures || 0) + 1;
           const stuck = failures >= FAILURE_LIMIT;
           try {
             await change((p) => {
               if (!p[e.key]) return;
-              p[e.key] = { ...p[e.key], failures, nextCheckAt: now() + backoff(failures), ...(stuck ? { state: "unresolved", unresolvedAt: now() } : {}) };
+              p[e.key] = { ...p[e.key], failures, nextCheckAt: now() + backoff(failures), ...(stuck ? { state: "unresolved", unresolvedAt: now(), recheckAt: now() + UNRESOLVED_RECHECK_MS } : {}) };
             });
           } catch { /* the store itself is failing: the next pass retries */ }
           if (stuck) { out.unresolved++; log(`[late-settle] ${e.network} ${labelOf(e)} unresolved after ${failures} failed passes; operator action needed`); }
@@ -470,7 +583,7 @@ export function createLateSettleBook({
           out.owed++;
           log(`[late-settle] ${e.network} tx ${e.tx} landed after a 402; booked owed (${SETTLED_AFTER_402})`);
         } else {
-          await change((p) => { if (p[e.key]) p[e.key] = { ...p[e.key], failures: 0, nextCheckAt: now() + FIRST_CHECK_MS }; });
+          await change((p) => { if (p[e.key]) p[e.key] = { ...p[e.key], failures: 0, nextCheckAt: now() + FIRST_CHECK_MS, ...(p[e.key].state === "unresolved" ? { recheckAt: now() + FIRST_CHECK_MS } : {}) }; });
           out.pending++;
         }
         return;
@@ -488,10 +601,17 @@ export function createLateSettleBook({
         log(`[late-settle] ${e.network} ${labelOf(e)} never mined within ${Math.round(WINDOW_MS / 60_000)} min and its authorization has expired; closed as not landed`);
         return;
       }
+      if (e.state === "unresolved") {
+        // A slow re-read of an unresolved entry that still proves nothing:
+        // kept for a human, read again after UNRESOLVED_RECHECK_MS.
+        await change((p) => { if (p[e.key]) p[e.key] = { ...p[e.key], checks, unreadable, recheckAt: t + UNRESOLVED_RECHECK_MS }; });
+        out.rechecked++;
+        return;
+      }
       if (t - e.at >= MAX_AGE_MS) {
         // Absence never proven (reads failing, or an authorization still
         // valid): kept for a human, never dropped.
-        await change((p) => { if (p[e.key]) p[e.key] = { ...p[e.key], checks, unreadable, state: "unresolved", unresolvedAt: t }; });
+        await change((p) => { if (p[e.key]) p[e.key] = { ...p[e.key], checks, unreadable, state: "unresolved", unresolvedAt: t, recheckAt: t + UNRESOLVED_RECHECK_MS }; });
         out.unresolved++;
         log(`[late-settle] ${e.network} ${labelOf(e)} unresolved after ${checks} checks (${unreadable} unreadable); operator action needed`);
         return;

@@ -172,6 +172,14 @@ export function whenTempoLedgerPayerKnown(req, label, fn) {
 // a sale is booked for the transfer (then it is marked served). It does
 // nothing while the refund ledger's journal holds writes waiting to land: a
 // served note queued there would otherwise be read as a run that never ended.
+//
+// The sweep pages through EVERY row created before the cutoff (a hold's
+// createdAt is never after its resolvedAt), oldest first, by createdAt
+// window with a cursor that persists across ticks, at most
+// PUSH_HELD_SWEEP_ROWS_PER_TICK rows a tick; a window that fills its page is
+// halved until it does not, so no row is skipped however many share a
+// range. At the cutoff the cursor starts over. The same walk notes owed rows
+// left unpaid past OWED_ESCALATE_DAYS (an error line, at most once a day).
 // ---------------------------------------------------------------------------
 export const PUSH_RUN_UNFINISHED_NOTE = "claimed on retry, then the run never finished";
 export const PUSH_HELD_SWEEP_LEASE = "tempo-push-held-sweep";
@@ -182,33 +190,103 @@ export function pushHeldMaxMs(env = process.env) {
   return (Number.isFinite(m) && m >= 5 && m <= 24 * 60 ? m : 30) * 60_000;
 }
 export const PUSH_HELD_SWEEP_INTERVAL_MS = 5 * 60_000;
+/** Rows one page of the walk reads, and rows one tick reads at most. */
+export const PUSH_HELD_SWEEP_PAGE = 500;
+export const PUSH_HELD_SWEEP_ROWS_PER_TICK = 5000;
+/** An owed row unpaid this long is named in the pass's escalation line:
+ *  OWED_ESCALATE_DAYS (default 7, 1 to 365). */
+export function owedEscalateMs(env = process.env) {
+  const d = Number(env.OWED_ESCALATE_DAYS);
+  return (Number.isFinite(d) && d >= 1 && d <= 365 ? d : 7) * 86_400_000;
+}
 
-export function createHeldClaimSweep({ listVoid, reopenHeld, renoteVoid, saleFor = async () => null, journalWaiting = () => 0, now = () => Date.now(), maxAgeMs = pushHeldMaxMs(), log = console.warn } = {}) {
+/** The ledger read the walk uses: rows created in [from, to), at most
+ *  `limit`, each the full row (note, resolvedAt) for a void Tempo one. */
+export function ledgerHeldPage(ledger) {
+  return ({ from, to, limit }) => ledger.refundsCreatedBetween(from, to, { limit }).map((r) => (r?.status === "void" && r.network === "tempo" ? (ledger.refundByEvidence(r.evidence) || r) : r));
+}
+
+export function createHeldClaimSweep({ listVoid = null, listPage = null, reopenHeld, renoteVoid, saleFor = async () => null, journalWaiting = () => 0, now = () => Date.now(), maxAgeMs = pushHeldMaxMs(), log = console.warn, alarm = console.error, pageSize = PUSH_HELD_SWEEP_PAGE, rowsPerTick = PUSH_HELD_SWEEP_ROWS_PER_TICK, owedAgeMs = owedEscalateMs(), escalateEveryMs = 24 * 3600_000 } = {}) {
   const heldFrom = new Map(PUSH_CLAIMABLE_NOTES.map((from) => [`${from}; ${PUSH_CLAIMED_NOTE}`, from]));
+  // The walk's cursor (createdAt) and window width, kept across ticks.
+  let cursor = 0;
+  let width = 0;
+  let aged = { n: 0, oldest: null };
+  let lastEscalationAt = -Infinity;
+  const handle = async (row, cutoff, out) => {
+    const from = heldFrom.get(row?.note);
+    if (!from || row.network !== "tempo" || typeof row.evidence !== "string") return;
+    const at = Number(row.resolvedAt ?? row.resolved_at);
+    if (!Number.isFinite(at) || at > cutoff) return;
+    let sale = null;
+    try { sale = await saleFor(row.evidence); } catch { return; }
+    if (sale) {
+      if ((await renoteVoid(row.evidence, row.note, `${row.note}; ${PUSH_SERVED_NOTE}`)) === true) out.served++;
+      return;
+    }
+    if ((await reopenHeld(row.evidence, { held: row.note, httpStatus: 500, note: `${from}; ${PUSH_RUN_UNFINISHED_NOTE}` })) === true) {
+      out.reopened++;
+      log(`[mpp-tempo] push transfer ${row.evidence} was held for a run that never finished; owed again`);
+    }
+  };
+  // One page of the walk: the rows in [cursor, to) for the widest window
+  // (from the last width, at most up to the cutoff) whose page is not full.
+  const page = async (cutoff, out) => {
+    let to = width > 0 ? Math.min(cutoff, cursor + width) : cutoff;
+    for (;;) {
+      out.reads++;
+      const rows = (await listPage({ from: cursor, to, limit: pageSize })) || [];
+      if (rows.length < pageSize) {
+        // Room to spare: the next window may be wider.
+        width = rows.length < pageSize / 4 ? Math.max(1, (to - cursor) * 2) : Math.max(1, to - cursor);
+        return { rows, to };
+      }
+      if (to - cursor <= 1) {
+        // One millisecond holds a full page: read all of it.
+        out.reads++;
+        return { rows: (await listPage({ from: cursor, to, limit: Number.MAX_SAFE_INTEGER })) || [], to };
+      }
+      to = cursor + Math.floor((to - cursor) / 2);
+    }
+  };
   return {
     async sweep() {
-      const out = { reopened: 0, served: 0, waiting: false };
+      const out = { reopened: 0, served: 0, waiting: false, rows: 0, reads: 0, passComplete: false };
       let waiting = 0;
       try { waiting = Number(await journalWaiting()) || 0; } catch { waiting = 1; }
       if (waiting > 0) { out.waiting = true; return out; }
-      let rows = [];
-      try { rows = (await listVoid()) || []; } catch { return out; }
-      const cutoff = now() - maxAgeMs;
-      for (const row of rows) {
-        const from = heldFrom.get(row?.note);
-        if (!from || row.network !== "tempo" || typeof row.evidence !== "string") continue;
-        const at = Number(row.resolvedAt ?? row.resolved_at);
-        if (!Number.isFinite(at) || at > cutoff) continue;
-        let sale = null;
-        try { sale = await saleFor(row.evidence); } catch { continue; }
-        if (sale) {
-          if ((await renoteVoid(row.evidence, row.note, `${row.note}; ${PUSH_SERVED_NOTE}`)) === true) out.served++;
-          continue;
+      const t = now();
+      const cutoff = t - maxAgeMs;
+      if (!listPage) {
+        // A caller that hands one list (tests of the row rules).
+        let rows = [];
+        try { rows = (await listVoid?.()) || []; } catch { return out; }
+        for (const row of rows) await handle(row, cutoff, out);
+        out.rows = rows.length;
+        return out;
+      }
+      try {
+        while (cursor < cutoff && out.rows < rowsPerTick) {
+          const { rows, to } = await page(cutoff, out);
+          for (const row of rows) {
+            out.rows++;
+            if (row?.status === "owed" && Number(row.createdAt) <= t - owedAgeMs) {
+              aged.n++;
+              if (aged.oldest == null || Number(row.createdAt) < aged.oldest) aged.oldest = Number(row.createdAt);
+            }
+            await handle(row, cutoff, out);
+          }
+          cursor = to;
         }
-        if ((await reopenHeld(row.evidence, { held: row.note, httpStatus: 500, note: `${from}; ${PUSH_RUN_UNFINISHED_NOTE}` })) === true) {
-          out.reopened++;
-          log(`[mpp-tempo] push transfer ${row.evidence} was held for a run that never finished; owed again`);
-        }
+      } catch { return out; }
+      if (cursor >= cutoff) {
+        // A full pass: start over, and name owed rows left unpaid too long.
+        out.passComplete = true;
+        out.owedAged = aged.n;
+        if (aged.n > 0 && t - lastEscalationAt >= escalateEveryMs) { lastEscalationAt = t; try { alarm(`[refunds] ${aged.n} owed refund row(s) unpaid past ${Math.round(owedAgeMs / 86_400_000)} day(s), oldest created ${new Date(aged.oldest).toISOString()}; run the refund workflow or resolve them on /__operator/refunds.json`); } catch { /* logging never throws */ } }
+        cursor = 0;
+        width = 0;
+        aged = { n: 0, oldest: null };
       }
       return out;
     },
@@ -223,7 +301,7 @@ export function startTempoHeldClaimSweep({ intervalMs = PUSH_HELD_SWEEP_INTERVAL
   const ready = (async () => {
     const [{ leased }, ledger, { saleByTxFresh }] = await Promise.all([import("./state-db.js"), import("./refund-ledger.js"), import("./sales-ledger.js")]);
     const sweeper = createHeldClaimSweep({
-      listVoid: () => ledger.listRefunds({ status: "void", limit: 2000 }),
+      listPage: ledgerHeldPage(ledger),
       reopenHeld: ledger.reopenHeldClaim,
       renoteVoid: ledger.renoteVoidRefund,
       saleFor: (tx) => saleByTxFresh(tx),

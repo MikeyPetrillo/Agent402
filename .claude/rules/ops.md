@@ -116,5 +116,24 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   is the age past which a leased sweep reopens a held Tempo push debt whose run never finished;
   `TEMPO_LATE_CONFIRM_DELAYS_MS` and `TEMPO_LATE_CONFIRM_MAX_WATCHES` bound the re-reads that book a
   Tempo pull landing after its 402 as owed; `GATEWAY_RESUME_RENEW_MS` renews a Gateway resend hold.
-  The late-settlement book reports `lateSettlements` (ok, unresolved, full) on /api/gateway-status,
-  paged by the status Worker and the heartbeat.
+  The held-claim sweep walks every refund row created before its cutoff by createdAt window,
+  with a cursor kept across ticks (at most 5000 rows a tick; a window whose page fills is halved),
+  so a stranded hold is found however many newer rows exist; the same walk logs owed rows unpaid
+  past `OWED_ESCALATE_DAYS` (default 7) as an error, at most once a day (no addresses).
+  The late-settlement book reports `lateSettlements` on /api/gateway-status: ok, near_capacity
+  (80% of the open bound), full, unresolved (an entry waits for a human, a booking sits in the
+  journal, or one could not be recorded anywhere in the last 24 hours). The status Worker and the
+  heartbeat page on unresolved and full and close on ok or near_capacity. Unresolved entries are
+  read on chain again every 6 hours (five a pass) and close themselves once the chain answers; an
+  operator clears one with `POST /__operator/late-settlements`
+  `{"action":"resolve","key","outcome":"booked_owed"|"paid"|"dismissed","note","tx"}`
+  (booked_owed writes the refund debt, paid needs the refund tx) or the unrecorded count with
+  `{"action":"acknowledge_unrecorded","note"}`; each is recorded in the
+  `late-settlements-resolutions` document before the entry is dropped and listed on
+  `/__operator/refunds.json` (`unconfirmedSettlements.resolutions`).
+  A Gateway booking held outside its pending book is also written to the `gateway-pending-lost`
+  state document (with a state database), read back by the next container; past 200 in memory the
+  oldest is logged as an error naming it, the `gatewayPending` word pages for 24 hours, and it
+  stays in the document (bound 2000) until memory has room. Without a volume the local copy is a
+  0600 file in a per-process mkdtemp directory. Rollback: an older build ignores the document, so
+  `heldInMemory` on `/__operator/gateway-pending.json` stays the list of what is held.

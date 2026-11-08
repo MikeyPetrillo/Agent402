@@ -6,6 +6,9 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { getFreePort } from "./lib/free-port.js";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -15,8 +18,17 @@ const TOKEN = "operator-test-secret-123";
 const PORT = await getFreePort();
 const base = `http://127.0.0.1:${PORT}`;
 
+// The late-settlement book starts with one UNRESOLVED entry: it pages, the
+// operator action resolves it, and the word reads ok again.
+const LATE_DIR = mkdtempSync(join(tmpdir(), "a402-opauth-late-"));
+const LATE_FILE = join(LATE_DIR, "late.json");
+const LATE_KEY = `eip155:4663|0x${"ab".repeat(32)}`;
+writeFileSync(LATE_FILE, JSON.stringify({ pending: { [LATE_KEY]: {
+  key: LATE_KEY, network: "eip155:4663", tx: `0x${"ab".repeat(32)}`, payer: `0x${"11".repeat(20)}`, payTo: `0x${"22".repeat(20)}`, asset: `0x${"33".repeat(20)}`,
+  amount: "2500", validBefore: null, slug: "stock-history", via: "primary", at: 1, nextCheckAt: 1, checks: 9, unreadable: 9, failures: 0, state: "unresolved", unresolvedAt: 2, recheckAt: 9e15,
+} } }));
 const child = spawn(process.execPath, ["src/server.js"], {
-  env: { ...process.env, FREE_MODE: "true", PORT: String(PORT), AGENT402_OPERATOR_TOKEN: TOKEN },
+  env: { ...process.env, FREE_MODE: "true", PORT: String(PORT), AGENT402_OPERATOR_TOKEN: TOKEN, LATE_SETTLE_FILE: LATE_FILE, LATE_SETTLE_RECONCILE: "off" },
   stdio: ["ignore", "pipe", "pipe"],
 });
 let serverLog = "";
@@ -75,6 +87,32 @@ const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.
     const meta = (html.match(/<meta name="robots" content="([^"]*)"/) || [])[1] || "";
     ok(r.status === 200 && /noindex/.test(r.headers.get("x-robots-tag") || "") && /nofollow/.test(r.headers.get("x-robots-tag") || ""), `${path} answers X-Robots-Tag noindex, nofollow`);
     ok(/noindex/.test(meta) && !/(^|,\s*)index\b/.test(meta), `${path} carries a noindex robots meta (got "${meta}")`);
+  }
+  // 4a. The late-settlement resolution is an operator write: hidden without a
+  //     credential, refused from another origin on a cookie, and with the
+  //     header token it resolves an unresolved entry, after which the public
+  //     word reads ok.
+  {
+    const LS = "/__operator/late-settlements";
+    const json = { "content-type": "application/json" };
+    const word = async () => (await (await fetch(`${base}/api/gateway-status`)).json())?.lateSettlements?.status;
+    ok((await word()) === "unresolved", "an unresolved late settlement pages (lateSettlements=unresolved)");
+    const body = (o) => JSON.stringify(o);
+    ok((await status(LS, { method: "POST", headers: json, body: body({ action: "resolve", key: LATE_KEY, outcome: "dismissed", note: "x" }) })) === 404, `${LS} without a credential is hidden (404)`);
+    ok((await status(LS, { method: "POST", headers: { ...json, cookie, origin: "https://evil.example", "sec-fetch-site": "cross-site" }, body: body({ action: "acknowledge_unrecorded", note: "x" }) })) === 403, `${LS} from another origin on the session cookie is refused (403)`);
+    ok((await status(LS, { method: "POST", headers: { ...json, "x-operator-token": TOKEN }, body: body({ action: "nope" }) })) === 400, `${LS} names its actions on a bad body (400)`);
+    const noNote = await fetch(`${base}${LS}`, { method: "POST", headers: { ...json, "x-operator-token": TOKEN }, body: body({ action: "resolve", key: LATE_KEY, outcome: "dismissed" }) });
+    ok(noNote.status === 400 && /note/.test((await noNote.json()).error || ""), "a resolution without a note is refused");
+    ok((await word()) === "unresolved", "...and the entry is still there");
+    const r = await fetch(`${base}${LS}`, { method: "POST", headers: { ...json, cookie, origin: base, "sec-fetch-site": "same-origin" }, body: body({ action: "resolve", key: LATE_KEY, outcome: "dismissed", note: "explorer: the transaction never mined" }) });
+    const rb = await r.json().catch(() => ({}));
+    ok(r.status === 200 && rb.ok === true && rb.status === "ok" && /no-store/.test(r.headers.get("cache-control") || ""), `a same-origin session resolves the entry (${r.status} ${JSON.stringify(rb)})`);
+    ok((await word()) === "ok", "the word returns to ok once the entry is resolved");
+    const again = await fetch(`${base}${LS}`, { method: "POST", headers: { ...json, "x-operator-token": TOKEN }, body: body({ action: "resolve", key: LATE_KEY, outcome: "dismissed", note: "again" }) });
+    ok(again.status === 400, "a second resolution of the same entry finds nothing");
+    const view = await (await fetch(`${base}/__operator/refunds.json`, { headers: { "x-operator-token": TOKEN } })).json().catch(() => null);
+    const rec = view?.unconfirmedSettlements?.resolutions || [];
+    ok(rec.some((x) => x.key === LATE_KEY && x.outcome === "dismissed" && /never mined/.test(x.note)), "the resolution is recorded and listed on refunds.json");
   }
   // A forged/random session id must NOT authenticate.
   ok((await status("/__operator", { headers: { cookie: "a402_op=deadbeefdeadbeef" } })) === 404, "a random session id does not authenticate");

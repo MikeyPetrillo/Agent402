@@ -568,16 +568,17 @@ The server log carries a [tweet-queue] line for every outcome (ids and status co
     // (src/late-settlements.js): the reconcile pass reads each on chain and
     // books a landed, unserved one as an owed debt (refundsOwed covers it).
     // unresolved (kept for a human, or outside the book) and full page; ok
-    // clears; near_capacity and unknown do neither. Same title as heartbeat.yml.
+    // and near_capacity clear (an operator resolution can leave the book near
+    // its bound); unknown does neither. Same title as heartbeat.yml.
     title: "Late settlements need attention",
     verdict: ({ gateway: b }) => {
       const w = b.lateSettlements?.status;
       if (w === "unresolved" || w === "full") return "bad";
-      return w === "ok" ? "good" : "quiet";
+      return w === "ok" || w === "near_capacity" ? "good" : "quiet";
     },
     body: ({ gateway: b }) => {
       const w = b.lateSettlements?.status === "full" ? "full" : "unresolved";
-      return `/api/gateway-status reports lateSettlements.status=${w}. unresolved: an EVM settlement that failed naming a transaction or an authorization could not be proven landed or absent within a day (or the reads kept failing); it is kept, never dropped, or a booking sits in the journal outside the book. Read it on /__operator/refunds.json (unconfirmedSettlements), look the transaction up on the chain's explorer, and book a refund if it moved the buyer's funds to us. full: the book holds its bound of open entries, and new bookings wait in the journal until there is room (the server log names each). Auto-closes when the word is ok.`;
+      return `/api/gateway-status reports lateSettlements.status=${w}. unresolved: an EVM settlement that failed naming a transaction or an authorization could not be proven landed or absent within a day (or the reads kept failing) and is kept, never dropped; or a booking sits in the journal outside the book; or a booking could not be recorded anywhere in the last day. Unresolved entries are read on chain again every few hours and close themselves once the chain answers. Read them on /__operator/refunds.json (unconfirmedSettlements) and look each transaction up on the chain's explorer, then clear each one with POST /__operator/late-settlements: action resolve, the entry key, an outcome (booked_owed writes the refund debt, paid needs the refund transaction, dismissed when nothing moved to us) and a note saying what was checked. An unrecorded booking (the server log names it) is cleared with action acknowledge_unrecorded and a note. full: the book holds its bound of open entries, and new bookings wait in the journal until there is room (the server log names each). Auto-closes when the word is ok or near_capacity.`;
     },
   },
   {
