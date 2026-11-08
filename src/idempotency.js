@@ -4,7 +4,7 @@
 import { createHash } from "node:crypto";
 import { paymentHeaderOf, paymentIdentifierOf, paymentNonceIdentityOf } from "./payer.js";
 import { IDEM_MAX_BODY_BYTES } from "./idempotency-limits.js";
-import { createIdempotencyStore, IDEM_TTL_MS, INFLIGHT_RENEW_MS } from "./idempotency-store.js";
+import { createIdempotencyStore, IDEM_TTL_MS, INFLIGHT_RENEW_MS, INFLIGHT_MAX_MS } from "./idempotency-store.js";
 import { onResponseEnd } from "./hangup-settlement.js";
 import { allowanceServed } from "./allowance-state.js";
 
@@ -23,6 +23,28 @@ export function implicitReplayAllowed(def, req, { hasLastingEffect, isIdentityBo
   return Boolean(def) && !hasLastingEffect(def.slug) && !isIdentityBound(def) && req?.body?.stream !== true;
 }
 
+/** What a resend of a charged-but-undelivered answer gets (src/server.js
+ *  onReplay). Its debt is voided BEFORE the answer goes out, so a buyer is
+ *  served once, never both served and refunded:
+ *   - "serve": the void landed, or there is no row, or the row is already void;
+ *   - "refunded": the refund run has claimed or paid the row (`row`);
+ *   - "pending": the void did not land and the row still reads owed. The
+ *     ledger write failed or is queued (a queued void lands later), so
+ *     refusing as refunded would leave the buyer neither served nor repaid;
+ *     the resend is asked to retry, and then reads whichever landed.
+ *  voidOnClaim(tx) and rowOf(tx) are the ledger's voidOwedOnClaim and
+ *  refundByEvidenceFresh; either may throw or answer a promise. */
+export async function chargedReplayVerdict(tx, { voidOnClaim, rowOf }) {
+  let voided = false;
+  try { voided = (await voidOnClaim(tx)) === true; } catch { voided = false; }
+  if (voided) return { verdict: "serve", voided: true };
+  let row = null;
+  try { row = await rowOf(tx); } catch { row = null; }
+  if (!row || row.status === "void") return { verdict: "serve", voided: false };
+  if (row.status === "owed") return { verdict: "pending", row };
+  return { verdict: "refunded", row };
+}
+
 /** isCatalogRoute(req): true for a priced catalog route. freeMode: dev/test boot with no paywall.
  *  implicitReplay(req): true when a re-sent x402 payment on this route may be
  *  answered from its first answer (the server excludes routes with a lasting
@@ -30,8 +52,9 @@ export function implicitReplayAllowed(def, req, { hasLastingEffect, isIdentityBo
  *  onReplay(req, { implicit, key, charged }): awaited once per stored answer
  *  before it is served; `charged` names the charge ({ tx, network, wire }) when
  *  the stored answer was charged and never delivered (see below), else null.
- *  Resolving { serve: false, status, body } answers that instead of the stored
- *  body (the charge was refunded); any other result serves it. */
+ *  Resolving { serve: false, status, body, retryAfter? } answers that instead
+ *  of the stored body (the charge was refunded, or its debt's void has not
+ *  landed yet); any other result serves it. */
 export function createIdempotency({ isCatalogRoute, freeMode = false, store = createIdempotencyStore(), implicitReplay = null, onReplay = null }) {
   // Opt-in idempotency (safe retry for paid/proven calls). If a client sends an
   // `Idempotency-Key`, a successful gated call is cached keyed by that key + the
@@ -138,6 +161,7 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
         let verdict;
         try { verdict = await onReplay(req, { implicit, key, charged }); } catch { verdict = undefined; }
         if (verdict && typeof verdict === "object" && verdict.serve === false) {
+          if (Number(verdict.retryAfter) > 0) res.setHeader("Retry-After", String(Math.ceil(Number(verdict.retryAfter))));
           return res.status(Number(verdict.status) || 402).json(verdict.body && typeof verdict.body === "object" ? verdict.body : { error: "replay_refused" });
         }
       }
@@ -163,9 +187,47 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
           : "A call with this Idempotency-Key, credential and body is still running. Retry shortly with the same Idempotency-Key to receive its answer; this request was not charged.",
       });
     }
+    // The claim lives as long as the RUN, not the connection. A client that
+    // times out closes its socket while the handler is still going; releasing
+    // on that close let its retry (same key, same reusable credential) find no
+    // answer and a free claim, so the handler ran twice and a credits key was
+    // debited twice. The run ends when the response is ended (the handler, or
+    // the gate after it settles, calls res.end). The claim is released only
+    // after the answer that run committed has been written, so a retry finds
+    // the claim (409) or the stored answer, never neither. Renewals stop at the
+    // same point; INFLIGHT_MAX_MS bounds a run that never ends, and the store's
+    // claim TTL bounds a process that dies.
+    let pendingSet = null;
+    let ended = false;
+    let released = false;
     const renew = setInterval(() => { store.renew(key).catch(() => {}); }, INFLIGHT_RENEW_MS);
     renew.unref?.();
-    res.once("close", () => { clearInterval(renew); store.release(key).catch(() => {}); });
+    let maxTimer = null;
+    const releaseClaim = () => {
+      if (released) return;
+      released = true;
+      clearInterval(renew);
+      clearTimeout(maxTimer);
+      Promise.resolve(pendingSet).catch(() => {}).then(() => store.release(key)).catch(() => {});
+    };
+    maxTimer = setTimeout(releaseClaim, INFLIGHT_MAX_MS);
+    maxTimer.unref?.();
+    const socketGone = () => Boolean(res.destroyed || !res.socket || res.socket.destroyed);
+    const priorEnd = res.end;
+    res.end = function idempotencyAwareEnd(...args) {
+      const out = priorEnd.apply(this, args);
+      if (!ended) {
+        ended = true;
+        // Ended on a live socket: "finish" commits, then releases. Ended after
+        // the client left (no "finish" comes): an undelivered commit ran inside
+        // the call above, so release once its write lands.
+        if (socketGone()) setImmediate(releaseClaim);
+      }
+      return out;
+    };
+    // The socket closed after the response was ended (its "finish" may never
+    // come): the run is over. A close before the end leaves the claim held.
+    res.once("close", () => { if (ended) setImmediate(releaseClaim); });
     // Settlement-aware caching (FR4-01). @x402/express (v2.16) runs the handler
     // FIRST, then settles, and ONLY on a <400 response; on settlement FAILURE it
     // replaces the buffered 200 with a 402. So committing to the cache at
@@ -214,9 +276,9 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
       let bytes = 0;
       try { bytes = Buffer.byteLength(JSON.stringify(stored), "utf8"); } catch { bytes = 0; }
       if (!bytes || bytes > IDEM_MAX_BODY_BYTES) return;
-      store.set(key, stored, bytes).catch(() => {});
+      pendingSet = store.set(key, stored, bytes).catch(() => {});
     };
-    res.on("finish", () => commit());
+    res.on("finish", () => { commit(); releaseClaim(); });
     // CHARGED BUT NEVER DELIVERED. A buyer that leaves before the first byte
     // while its payment settles is charged (no ticket, or the close landed
     // inside the settle call) and Node emits no "finish" for the response the

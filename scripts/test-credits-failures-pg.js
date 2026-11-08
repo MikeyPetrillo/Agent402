@@ -17,7 +17,7 @@ import { requireTestPg } from "./lib/test-pg.js";
 requireTestPg({ label: "test-credits-failures-pg" });
 process.env.CREDITS_ABANDONED_HOLD_MS = "1500";
 const sdb = await import("../src/state-db.js");
-const { createCredits, hashKey } = await import("../src/credits.js");
+const { createCredits, hashKey, holdRefreshMaxMs } = await import("../src/credits.js");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -100,6 +100,34 @@ try {
     const back = await B.sweepAbandonedHolds();
     const end = await row();
     ok(a.ok && back.released === 1 && end.heldMicro === 0 && end.balanceMicro === 4_000_000, `a hold no request holds is still returned (released ${back.released}, balance ${end.balanceMicro})`);
+  }
+
+  // ---- the refresher follows the run, up to a bound ----
+  // It used to stop after a fixed hour, so a run past it (a long stream) had
+  // its hold returned by another container's sweep and then booked $0. It now
+  // runs until the hold is decided, bounded by CREDITS_HOLD_REFRESH_MAX_MS
+  // (default 6 hours, never under the abandoned window) for a response that
+  // never ends.
+  {
+    delete process.env.CREDITS_HOLD_REFRESH_MAX_MS;
+    ok(holdRefreshMaxMs() === 6 * 60 * 60 * 1000, `the default bound is 6 hours, past any run's life (${holdRefreshMaxMs()})`);
+    await seed(5_000_000);
+    process.env.CREDITS_HOLD_REFRESH_MAX_MS = "1500";
+    const A = createCredits({ stripe: null, baseUrl: "http://x", storeDir: mkdtempSync(join(tmpdir(), "credits-fail-a-")), log: () => {} });
+    const B = createCredits({ stripe: null, baseUrl: "http://x", storeDir: mkdtempSync(join(tmpdir(), "credits-fail-b-")), log: () => {} });
+    await A.ready(); await B.ready();
+    const gate = A.gate(() => ({ priceUsd: 1, slug: "t" }));
+    const { req, res } = mkReqRes();
+    await gate(req, res, () => {});
+    await wait(1200);
+    const early = await B.sweepAbandonedHolds();
+    ok(early.released === 0, `inside the bound the running request keeps its hold (released ${early.released})`);
+    await wait(3000); // past the bound, then past the abandoned window
+    const late = await B.sweepAbandonedHolds();
+    const end = await row();
+    ok(late.released === 1 && end.heldMicro === 0 && end.balanceMicro === 5_000_000, `past the bound a response that never ends is left to the sweep (released ${late.released}, held ${end.heldMicro})`);
+    delete process.env.CREDITS_HOLD_REFRESH_MAX_MS;
+    void req; void res;
   }
 } finally {
   try { await sdb.stateQuery(`DROP SCHEMA IF EXISTS ${sdb.stateDbSchema()} CASCADE`); } catch (e) { console.error("drop failed", e.message); }

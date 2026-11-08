@@ -641,7 +641,7 @@ import { corsMiddleware } from "./cors.js";
 import { MODERATE_TOOLS } from "./tools/moderate-kit.js";
 import { CDP_TOOLS } from "./tools/cdp-kit.js";
 import { toolPage, openapiSpec, toolList, CATEGORIES, faqPage, categoryPage, relatedTools } from "./pages.js";
-import { createIdempotency, implicitReplayAllowed } from "./idempotency.js";
+import { createIdempotency, implicitReplayAllowed, chargedReplayVerdict } from "./idempotency.js";
 import { mountMcp, mcpClientsSeenSinceBoot } from "./mcp-http.js";
 import { guidesIndex, guidePage, guideTitles, BUYING_AT_VOLUME_PATH } from "./guides.js";
 import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, buildPromptMessages, skillPackOfToolSlug } from "./skills.js";
@@ -10350,54 +10350,18 @@ if (!FREE_MODE) {
   }
 }
 
-// Opt-in idempotency (safe paid retry): src/idempotency.js. Mounted after the
-// credits gate and before the paywall, so a replay hit skips settlement.
-// A re-sent x402 EVM payment (same nonce, route and body) with no explicit key
-// replays its first answer the same way, except on a route whose effect
-// outlives the answer (hasLastingEffect), on an identity-bound route (its
-// answer is one payer's own data, and a settled payment header can be rebuilt
-// from public chain data, so only a key the buyer chose may replay it), and on
-// a streamed call, which the store never holds. Replays are counted per slug on the operator detail
-// (/__operator/tool-failures.json), never per payer.
-app.use(createIdempotency({
-  isCatalogRoute: (req) => Boolean(CATALOG[`${req.method} ${req.path}`]),
-  freeMode: FREE_MODE,
-  implicitReplay: (req) => implicitReplayAllowed(CATALOG[`${req.method} ${req.path}`], req, { hasLastingEffect, isIdentityBound: isIdentityBoundRoute }),
-  onReplay: async (req, { implicit, charged }) => {
-    const def = CATALOG[`${req.method} ${req.path}`];
-    if (def) toolFailureMonitor().noteReplay(def.slug, { implicit });
-    if (!(charged && typeof charged.tx === "string" && charged.tx)) return;
-    // The stored answer was charged but never delivered (the buyer left while
-    // it settled). Its debt is voided BEFORE the answer goes out, like the
-    // Tempo push claim (tempoPushDebts.claimForServe): a row the refund run
-    // has already claimed or paid is not voided, and then the answer is not
-    // served either, so a buyer is served once, never both served and
-    // refunded. No row, or one already void, serves.
-    let voided = false;
-    try { voided = (await voidOwedOnClaim(charged.tx, "served on the resend of the same payment")) === true; } catch { voided = false; }
-    if (voided) { console.log(`[hangup] undelivered answer served on resend (${req.method} ${req.path} tx=${charged.tx}); its debt is void`); return; }
-    let row = null;
-    try { row = await refundByEvidenceFresh(charged.tx); } catch { row = null; }
-    if (!row || row.status === "void") return;
-    console.warn(`[hangup] resend of a refunded payment not served (${req.method} ${req.path} tx=${charged.tx}; refund #${row.id} ${row.status})`);
-    return { serve: false, status: 402, body: {
-      error: "payment_refunded",
-      hint: "The payment this request carries was refunded (or is being refunded) because its first answer was never delivered, so it no longer pays for a request. Request the resource again with a fresh payment.",
-      refund: { status: ["owed", "sending", "paid"].includes(row.status) ? row.status : "owed", lookup: `${BASE_URL}/api/refunds/lookup?tx=${encodeURIComponent(charged.tx)}` },
-    } };
-  },
-}));
-
-// x402 paywall for the catalog routes
 // POST on a GET-only tool is served, not 405'd (2026-08-28): agents POST
 // JSON to every route they discover - a buyer that had just paid for one
 // tool walked the catalog POSTing and got 405 on search, search-news,
 // search-images, search-videos, search-suggest, ip-info, card-validate ...
 // and stopped. The method is rewritten to GET for the IDENTICAL gate chain
-// (funnel, PoW, replay guard, x402 paywall keyed "GET /path"), the parsed
-// JSON body is the input (handlerInputOf merges query + body, and the GET
-// cache keys on that merged input), and Allow/405 remain for a GET sent to
-// a POST-only tool (a GET cannot carry the body those handlers need).
+// (idempotency, funnel, PoW, replay guard, x402 paywall keyed "GET /path"),
+// the parsed JSON body is the input (handlerInputOf merges query + body, and
+// the GET cache keys on that merged input), and Allow/405 remain for a GET
+// sent to a POST-only tool (a GET cannot carry the body those handlers need).
+// Mounted BEFORE idempotency, so the store sees one canonical request: an
+// aliased call's re-sent payment or keyed retry replays its stored answer
+// instead of running into the replay guard (or a second credits debit).
 app.use((req, res, next) => {
   if (req.method === "POST" && !CATALOG[`POST ${req.path}`] && CATALOG[`GET ${req.path}`]) {
     req.__methodAliased = "POST";
@@ -10424,6 +10388,58 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+// Opt-in idempotency (safe paid retry): src/idempotency.js. Mounted after the
+// credits gate and the method alias, and before the paywall, so a replay hit
+// skips settlement.
+// A re-sent x402 EVM payment (same nonce, route and body) with no explicit key
+// replays its first answer the same way, except on a route whose effect
+// outlives the answer (hasLastingEffect), on an identity-bound route (its
+// answer is one payer's own data, and a settled payment header can be rebuilt
+// from public chain data, so only a key the buyer chose may replay it), and on
+// a streamed call, which the store never holds. Replays are counted per slug on the operator detail
+// (/__operator/tool-failures.json), never per payer.
+app.use(createIdempotency({
+  isCatalogRoute: (req) => Boolean(CATALOG[`${req.method} ${req.path}`]),
+  freeMode: FREE_MODE,
+  implicitReplay: (req) => implicitReplayAllowed(CATALOG[`${req.method} ${req.path}`], req, { hasLastingEffect, isIdentityBound: isIdentityBoundRoute }),
+  onReplay: async (req, { implicit, charged }) => {
+    const def = CATALOG[`${req.method} ${req.path}`];
+    if (def) toolFailureMonitor().noteReplay(def.slug, { implicit });
+    if (!(charged && typeof charged.tx === "string" && charged.tx)) return;
+    // The stored answer was charged but never delivered (the buyer left while
+    // it settled). Its debt is voided BEFORE the answer goes out, like the
+    // Tempo push claim (tempoPushDebts.claimForServe): a row the refund run
+    // has already claimed or paid is not voided, and then the answer is not
+    // served either, so a buyer is served once, never both served and
+    // refunded. No row, or one already void, serves. A void that did not land
+    // while the row still reads owed (a failed or queued ledger write, which
+    // lands later) asks for a retry instead of refusing as refunded.
+    const { verdict, voided, row } = await chargedReplayVerdict(charged.tx, {
+      voidOnClaim: (tx) => voidOwedOnClaim(tx, "served on the resend of the same payment"),
+      rowOf: (tx) => refundByEvidenceFresh(tx),
+    });
+    if (verdict === "serve") {
+      if (voided) console.log(`[hangup] undelivered answer served on resend (${req.method} ${req.path} tx=${charged.tx}); its debt is void`);
+      return;
+    }
+    if (verdict === "pending") {
+      console.warn(`[hangup] resend of an undelivered answer held: its debt's void has not landed (${req.method} ${req.path} tx=${charged.tx}; refund #${row.id})`);
+      return { serve: false, status: 503, retryAfter: 10, body: {
+        error: "replay_pending",
+        hint: "The answer this payment bought is stored, and the ledger has not yet confirmed it as served. Nothing more is charged. Retry shortly with the same payment to receive it.",
+      } };
+    }
+    console.warn(`[hangup] resend of a refunded payment not served (${req.method} ${req.path} tx=${charged.tx}; refund #${row.id} ${row.status})`);
+    return { serve: false, status: 402, body: {
+      error: "payment_refunded",
+      hint: "The payment this request carries was refunded (or is being refunded) because its first answer was never delivered, so it no longer pays for a request. Request the resource again with a fresh payment.",
+      refund: { status: ["owed", "sending", "paid"].includes(row.status) ? row.status : "owed", lookup: `${BASE_URL}/api/refunds/lookup?tx=${encodeURIComponent(charged.tx)}` },
+    } };
+  },
+}));
+
+// x402 paywall for the catalog routes
 if (FREE_MODE) {
   console.warn("FREE_MODE=true - payments are DISABLED. Do not run this in production.");
 } else {

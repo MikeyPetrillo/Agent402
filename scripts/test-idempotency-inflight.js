@@ -144,5 +144,111 @@ try {
   } finally { s2.close(); }
 }
 
+// 7. A client that times out (closes its socket) while its keyed call is still
+// running, then retries with the same key: the claim is held until the RUN
+// ends, not until the socket closes. Mounted as the server mounts it: the
+// hang-up hook, the credits gate, then idempotency. The retry during the run
+// gets 409 (no second run, no second debit); once the run ends, the abandoned
+// answer was committed under its booked hang-up debt and the next retry
+// replays it.
+{
+  const DIR7 = mkdtempSync(join(tmpdir(), "test-idem-close-"));
+  const debits7 = [];
+  const cr7 = createCredits({ stripe, baseUrl: "https://agent402.tools", storeDir: DIR7, onDebit: (d) => debits7.push(d), onLoad: () => {}, log: () => {} });
+  const KEY7 = (await cr7.claim("cs_paid")).key;
+  const { createHangupSettlementHook } = await import("../src/hangup-settlement.js");
+  let runs7 = 0, open = false;
+  const waiting = [];
+  const app7 = express();
+  app7.use(express.json());
+  // What server.js recordHangupDebt does for a credits hold debited on close.
+  app7.use(createHangupSettlementHook({ onUndelivered: (req) => {
+    if (req.creditsSettled && Number(req.creditsChargedOnClose) > 0) req.__a402HangupDebt = { tx: `credits-hangup:${runs7}`, network: "credits", wire: "credits" };
+  } }));
+  app7.use(cr7.gate((method, path) => (path === "/api/slow" ? { priceUsd: PRICE, slug: "slow" } : null)));
+  app7.use(createIdempotency({ isCatalogRoute: (req) => req.path === "/api/slow", freeMode: false }));
+  app7.post("/api/slow", async (req, res) => { const n = ++runs7; if (!open) await new Promise((r) => waiting.push(r)); res.json({ run: n }); });
+  const s7 = app7.listen(0);
+  await new Promise((r) => s7.once("listening", r));
+  const U = `http://127.0.0.1:${s7.address().port}/api/slow`;
+  const hdr = { "content-type": "application/json", authorization: `Bearer ${KEY7}`, "idempotency-key": "k-close" };
+  try {
+    const ac = new AbortController();
+    const first = fetch(U, { method: "POST", headers: hdr, body: "{}", signal: ac.signal }).then((r) => r.status, () => "aborted");
+    await waitFor(() => waiting.length === 1);
+    ac.abort();
+    await new Promise((r) => setTimeout(r, 50)); // the server has seen the close
+    const during = await fetch(U, { method: "POST", headers: hdr, body: "{}" });
+    ok(during.status === 409 && (await during.json()).error === "idempotent_request_in_flight", `a retry after the client closed, while the run still goes, gets 409 in_flight (got ${during.status})`);
+    ok(runs7 === 1, `the retry never reached the handler (runs ${runs7})`);
+    open = true; waiting.forEach((r) => r());
+    ok((await first) === "aborted", "the first client had left");
+    await waitFor(() => debits7.length >= 1);
+    await new Promise((r) => setTimeout(r, 30)); // the claim is released after the commit lands
+    const after = await fetch(U, { method: "POST", headers: hdr, body: "{}" });
+    const afterBody = await after.json();
+    ok(after.status === 200 && after.headers.get("x-idempotent-replay") === "true" && afterBody.run === 1, `a retry after the run replays its answer (status ${after.status}, replay ${after.headers.get("x-idempotent-replay")}, run ${afterBody.run})`);
+    await new Promise((r) => setTimeout(r, 30));
+    ok(runs7 === 1 && debits7.length === 1, `one run and one debit for the whole sequence (runs ${runs7}, debits ${debits7.length})`);
+  } finally { s7.close(); rmSync(DIR7, { recursive: true, force: true }); }
+}
+
+// 8. A resend of a charged-but-undelivered answer: its debt's void decides.
+// A void whose ledger write failed or is queued resolves false while the row
+// still reads owed; the queued void lands later. Refusing that resend as
+// refunded left the buyer neither served nor repaid, so it is asked to retry.
+{
+  const { chargedReplayVerdict } = await import("../src/idempotency.js");
+  const v = (voidOnClaim, rowOf) => chargedReplayVerdict("0xtx", { voidOnClaim, rowOf });
+  ok((await v(async () => true, async () => null)).verdict === "serve", "a void that landed serves");
+  ok((await v(async () => false, async () => null)).verdict === "serve", "no debt row serves");
+  ok((await v(async () => false, async () => ({ id: 1, status: "void" }))).verdict === "serve", "a row already void serves");
+  ok((await v(async () => false, async () => ({ id: 1, status: "owed" }))).verdict === "pending", "a void that did not land on a row still owed is pending, not refunded");
+  ok((await v(async () => { throw new Error("db"); }, async () => ({ id: 1, status: "owed" }))).verdict === "pending", "a void that threw on a row still owed is pending");
+  ok((await v(async () => false, async () => ({ id: 1, status: "sending" }))).verdict === "refunded", "a row the refund run claimed is refunded");
+  ok((await v(async () => false, async () => ({ id: 1, status: "paid" }))).verdict === "refunded", "a paid row is refunded");
+
+  // The middleware carries a refusal's Retry-After.
+  const store = { get: async () => ({ __a402Stored: 1, body: { ok: 1 }, charged: { tx: "0xtx" } }), claim: async () => true, renew: async () => true, release: async () => {}, set: async () => true };
+  const app8 = express();
+  app8.use(express.json());
+  app8.use(createIdempotency({ isCatalogRoute: () => true, store, onReplay: async () => ({ serve: false, status: 503, retryAfter: 10, body: { error: "replay_pending" } }) }));
+  app8.post("/api/x", (req, res) => res.json({ ran: true }));
+  const s8 = app8.listen(0);
+  await new Promise((r) => s8.once("listening", r));
+  try {
+    const r = await fetch(`http://127.0.0.1:${s8.address().port}/api/x`, { method: "POST", headers: { "content-type": "application/json", "idempotency-key": "k", "x-pow-solution": "t:1" }, body: "{}" });
+    const b = await r.json();
+    ok(r.status === 503 && r.headers.get("retry-after") === "10" && b.error === "replay_pending", `a pending replay answers 503 with Retry-After (got ${r.status}, ${r.headers.get("retry-after")})`);
+  } finally { s8.close(); }
+}
+
+// 9. The claim is released only after the run's answer is written: a store
+// whose write is slow (a Redis round trip) must not leave a gap in which a
+// retry finds neither the claim nor the answer and runs again.
+{
+  const { createLocalIdempotencyStore } = await import("../src/idempotency-store.js");
+  const local = createLocalIdempotencyStore();
+  const slow = { ...local, get: (k) => local.get(k), claim: (k) => local.claim(k), renew: (k) => local.renew(k), release: (k) => local.release(k),
+    set: (k, b, n) => new Promise((r) => setTimeout(() => r(local.set(k, b, n)), 300)) };
+  let runs9 = 0;
+  const app9 = express();
+  app9.use(express.json());
+  app9.use(createIdempotency({ isCatalogRoute: () => true, freeMode: true, store: slow }));
+  app9.post("/api/y", (req, res) => { runs9++; res.json({ run: runs9 }); });
+  const s9 = app9.listen(0);
+  await new Promise((r) => s9.once("listening", r));
+  const send = () => fetch(`http://127.0.0.1:${s9.address().port}/api/y`, { method: "POST", headers: { "content-type": "application/json", "idempotency-key": "k9", "x-pow-solution": "t:9" }, body: "{}" });
+  try {
+    const a = await send(); await a.text();
+    await new Promise((r) => setTimeout(r, 50)); // the run has ended; its write is still landing
+    const b = await send(); await b.text();
+    ok(runs9 === 1 && (b.status === 409 || b.headers.get("x-idempotent-replay") === "true"), `a retry while the answer is being written gets 409 or the answer, never a second run (status ${b.status}, runs ${runs9})`);
+    await new Promise((r) => setTimeout(r, 400));
+    const c = await send(); await c.text();
+    ok(c.status === 200 && c.headers.get("x-idempotent-replay") === "true" && runs9 === 1, `once written, the retry replays it (status ${c.status}, runs ${runs9})`);
+  } finally { s9.close(); local.stop(); }
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
