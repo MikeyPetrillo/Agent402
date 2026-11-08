@@ -53,6 +53,10 @@ import { salePathOf } from "./sale-path.js";
 // ends; one that nothing ends within this long is released (call-time read,
 // CREDITS_ABANDONED_HOLD_MS, default 10 minutes).
 const abandonedHoldMs = () => { const n = Number(process.env.CREDITS_ABANDONED_HOLD_MS); return Number.isFinite(n) && n > 0 ? n : 10 * 60 * 1000; };
+// The longest a running request keeps its hold fresh against the sweep (a
+// response that never ends); never under the abandoned window. Call-time read,
+// CREDITS_HOLD_REFRESH_MAX_MS, default 6 hours.
+export const holdRefreshMaxMs = () => { const n = Number(process.env.CREDITS_HOLD_REFRESH_MAX_MS); return Math.max(abandonedHoldMs(), Number.isFinite(n) && n > 0 ? n : 6 * 60 * 60 * 1000); };
 
 export const CREDIT_PACKS = {
   "credits-20": { label: "Starter", cents: 2000 },
@@ -220,8 +224,10 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
     if (!usePg || !holdId || holdRefreshers.has(holdId)) return;
     const started = Date.now();
     const t = setInterval(() => {
-      // No request runs this long: a hold whose response never ended is left to the sweep.
-      if (Date.now() - started > 60 * 60_000) { stopHoldFresh(holdId); return; }
+      // Refreshed for the run's whole life: the settle or release that decides
+      // the hold stops it (later()). Only a hold whose response never ends is
+      // left to the sweep, after holdRefreshMaxMs().
+      if (Date.now() - started > holdRefreshMaxMs()) { stopHoldFresh(holdId); return; }
       mutatePgNow(hash, (rec) => {
         const h = rec?.holds?.[holdId];
         if (!h) return { result: false };
@@ -891,7 +897,9 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
       // Debit ONLY when the response actually finished with a 200 (Node's default
       // statusCode is 200 before anything is written, so a client abort before
       // the first byte would otherwise read as a served 200 and be charged).
-      res.on("finish", () => {
+      // The same rule decides a response whose client left after its headers
+      // went out (decideAfterHeaders below).
+      const decideFinal = () => {
         if (done) return; done = true;
         // A prompt-cache hit answered BEFORE the paywall (req.gatewayCacheHit)
         // cost nothing upstream and is served free to x402 buyers - credits
@@ -912,10 +920,17 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
         const metered = meteredUsdOf(req, res);
         if (res.statusCode === 200 && !cacheHit) settleHold(Number.isFinite(metered) && metered > 0 ? metered : null);
         else releaseHold();
-      });
+      };
+      res.on("finish", decideFinal);
       // A client that drops the socket before the response finished (`finish`
       // never fires on a destroyed socket). After the first byte (a stream
-      // that began) the response was partly delivered: the hold settles, once.
+      // that began) the response was partly delivered, and the hold is decided
+      // when the response ENDS by the finish rule above: a >= 400, an
+      // idempotent replay or a cache hit is not charged, and a metered call
+      // takes its metered amount (the stream writer records it on the request
+      // as it ends), never the whole hold. A close after the end decides at
+      // once; a response nobody ends within CREDITS_ABANDONED_HOLD_MS is
+      // decided then, on what it had sent.
       //
       // Before the FIRST byte the close alone decides nothing: the handler may
       // still be running, and what happens to the hold is the same rule every
@@ -949,17 +964,25 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
         if (c) { req.creditsCharged = c.chargedUsd; req.creditsChargedOnClose = c.chargedUsd; }
       };
       const priorEnd = res.end;
+      let goneAfterHeaders = false;
       res.end = function creditsAwareEnd(...args) {
         if (goneEarly) decideGone();
         else if (usePg && a.holdId && !done && res.statusCode === 200 && !servedWithoutRun(req, res)) {
           const metered = meteredUsdOf(req, res);
           markSettling(a.hash, a.holdId, Number.isFinite(metered) && metered > 0 ? metered : null, slug, via).catch(() => { /* the settle that follows retries */ });
         }
-        return priorEnd.apply(this, args);
+        if (!goneAfterHeaders) return priorEnd.apply(this, args);
+        try { return priorEnd.apply(this, args); } finally { decideFinal(); }
       };
       res.on("close", () => {
         if (done) return;
-        if (res.headersSent) { done = true; settleHold(); return; }
+        if (res.headersSent) {
+          if (res.writableEnded) { decideFinal(); return; }
+          goneAfterHeaders = true;
+          const t = setTimeout(decideFinal, abandonedHoldMs());
+          t.unref?.();
+          return;
+        }
         goneEarly = true;
         const t = setTimeout(() => { if (!done) { done = true; releaseHold(); } }, abandonedHoldMs());
         t.unref?.();
