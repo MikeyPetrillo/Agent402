@@ -225,6 +225,7 @@ function fakeStore() {
   const changelogMd = readFileSync(new URL("../CHANGELOG.md", import.meta.url), "utf8");
   const changelogJs = readFileSync(new URL("../src/changelog.js", import.meta.url), "utf8");
   ok(!/not limited for|not counted for/.test(changelogMd) && !/not limited for|not counted for/.test(changelogJs), "the changelog (CHANGELOG.md and src/changelog.js) never says a paid address is not limited");
+  ok(!/is booked as owed \(refundOwed: true\)/.test(changelogMd + changelogJs) && /the 503 also carries refundOwed: true/.test(changelogMd) && /the 503 also carries refundOwed: true/.test(changelogJs), "the Tempo entry says refundOwed comes only when the ledger records the debt (both files)");
   const homeSrc = readFileSync(new URL("../src/ledger-home.js", import.meta.url), "utf8");
   ok(/emails up to \$\{MAX_FULL_PER_SUB_30D\} fresh reports in any 30 days/.test(homeSrc), "the home monitor line reads MAX_FULL_PER_SUB_30D, not a typed count");
   ok(PAID_CLIENT_METERED_QUOTES_PER_MIN === METERED_UNPAID_QUOTES_PER_MIN * 10 && PAID_CLIENT_METERED_QUOTES_PER_HOUR === METERED_UNPAID_QUOTES_PER_HOUR * 10, "the raised metered ceiling is ten times each plain figure");
