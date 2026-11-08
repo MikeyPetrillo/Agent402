@@ -356,7 +356,7 @@ import { asyncProfileOf, estimateBasisSeconds, asyncAdvice, asyncAdviceMiddlewar
 import { progressMiddleware, reportHandlerStarted } from "./job-progress.js";
 import { createTaskStore, taskDataDir } from "./mcp-tasks.js";
 import { admitCoveredRun } from "./inflight-cover.js";
-import { paymentReplayKeyAsync, paymentValidBeforeMs, createReplayGuard } from "./replay-guard.js";
+import { paymentReplayKeyAsync, paymentValidBeforeMs, createReplayGuard, replayGuardStoreStatus } from "./replay-guard.js";
 import { statusPage, statusSnapshot } from "./status.js";
 import { recordProbes, statusStoreFlush } from "./status-store.js";
 import { tollboothLandingPage } from "./tollbooth-landing.js";
@@ -4049,6 +4049,12 @@ app.get("/api/gateway-status", async (req, res) => {
     // publicly; the clock for the operator, the order on
     // /__operator/tool-failures.json (robinhoodOrder).
     robinhoodSettler: (() => { try { return robinhoodSettlerStatus({ full }); } catch { return { status: "unknown" }; } })(),
+    // replayStore reads pending while a settled payment's consumed mark that
+    // the shared store missed is held on this process only and written again
+    // by the replay guard's retry loop (src/replay-guard.js), ok otherwise.
+    // One word publicly; the counts (pending, missed, recovered, abandoned)
+    // for the operator.
+    replayStore: (() => { try { return replayGuardStoreStatus({ full }); } catch { return { status: "unknown" }; } })(),
     // subscriptionRenewals reads unconfirmed while a wallet-billed monitor
     // renewal has stayed unconfirmed (its send's landing undecided by the
     // chain read, so nothing is signed again) for longer than
