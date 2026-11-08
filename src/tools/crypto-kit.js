@@ -326,7 +326,7 @@ export const CRYPTO_TOOLS = [
     category: "data",
     price: "$0.015",
     description:
-      "Historical price, market cap, and volume time series for a coin. Granularity is automatic: <=1 day = 5-min bars, 2-90 days = hourly, >90 days = daily. Days: 1, 7, 14, 30, 90, 180, 365, or \"max\". Returns aligned arrays of {time, price, marketCap, volume}.",
+      "Crypto price chart series over a window of days: bars[] of {time, price, marketCap, volume} for charts and backtests. Granularity is automatic: <=1 day = 5-min bars, 2-90 days = hourly, >90 days = daily. Days: 1, 7, 14, 30, 90, 180, 365, or \"max\".",
     tags: ["crypto", "history", "chart", "backtest", "timeseries"],
     discovery: {
       input: { coin: "BTC", days: "7", currency: "usd" },

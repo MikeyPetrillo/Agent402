@@ -1059,7 +1059,7 @@ const RWA_TOOLS = [
     category: "crypto",
     price: "$0.006",
     description:
-      "Market data for tokenized real-world assets - tokenized stocks (Nvidia, Tesla, pre-IPO names), ETFs and commodities like gold - ranked by market cap or volume: price, market cap, 24h volume, 24h high/low and change, in your currency. Filter by type or a list of ids. Note these are the ONCHAIN wrappers' figures (what is tokenized and trading), not the underlying's exchange listing. Cached in-process for 60 seconds.",
+      "Live market rows for tokenized real-world assets (stocks, ETFs and commodities such as gold), ranked by market cap or volume a page at a time: price, market cap, 24h volume, 24h high and low and change, in your currency. Filter by type or pass ids. Figures are the onchain wrappers' markets (what is tokenized and trading), not the underlying's exchange listing. Cached in-process for 60 seconds.",
     tags: ["crypto", "rwa", "tokenized", "stocks", "etf", "commodities", "market-data", "price"],
     discovery: {
       input: { type: "stock", order: "market_cap_desc", perPage: 10 },

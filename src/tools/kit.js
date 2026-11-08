@@ -382,7 +382,7 @@ const encodingTools = [
     slug: "uuid", aliases: ["unique-id", "unique-identifiers", "time-ordered-id", "sortable-id", "uuid-v7", "timestamp-id", "embedded-timestamp"],
     category: "identifiers",
     price: "$0.001",
-    description: "Generate UUIDs: returns version and uuids[] (lowercase, hyphenated). ?version=4 (default, random) or 7 (time-ordered, sortable by creation time - the better choice for database keys), ?count=1..100.",
+    description: "Generate UUIDs, the standard unique identifier format: returns version and uuids[] (lowercase, hyphenated). ?version=4 (default) or 7 (time-ordered, sortable by creation time - the better choice for database keys), ?count=1..100.",
     tags: ["uuid", "id", "identifier", "unique", "generator"],
     discovery: {
       input: { version: "7", count: "3" },
@@ -426,7 +426,7 @@ const encodingTools = [
     slug: "password", aliases: ["join-code", "invite-code", "one-time-code", "random-code"],
     category: "identifiers",
     price: "$0.001",
-    description: "Generate cryptographically random passwords. ?length=8..128 (default 24), ?symbols=true|false (default true), ?count=1..20.",
+    description: "Generate passwords from a cryptographically secure source: letters and digits plus symbols (on by default), returned as passwords[] with their entropyBits. ?length=8..128 (default 24), ?symbols=true|false, ?count=1..20.",
     tags: ["password", "random", "generator", "security"],
     discovery: {
       input: { length: "32", symbols: "true", count: "1" },
@@ -2339,7 +2339,7 @@ const networkTools = [
     slug: "robots-check",
     category: "network",
     price: "$0.001",
-    description: "Fetch a site's robots.txt and answer: may this user-agent crawl this path? Returns the matched rule and all declared sitemaps.",
+    description: "Check one URL against its robots.txt: answers allowed true or false for a user-agent (default *), with the Allow or Disallow rule that decided it and the sitemaps the file declares. Reads only robots.txt.",
     tags: ["robots", "crawling", "scraping", "compliance"],
     discovery: {
       bodyType: "json",

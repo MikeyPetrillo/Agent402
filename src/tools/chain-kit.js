@@ -843,7 +843,7 @@ export const CHAIN_TOOLS = [
     category: "crypto",
     price: "$0.001",
     description:
-      "One-call chain state snapshot: chain id, latest block number, and current gas price (wei + gwei) for Ethereum, Base, Polygon, Arbitrum, or Optimism. Keyless multi-endpoint failover. ?network=base",
+      "Chain info in one call: chain id, gas price (wei and gwei) and the current block for Ethereum, Base, Polygon, Arbitrum, or Optimism, as chainId, latestBlock, gasPriceWei and gasPriceGwei. Keyless multi-endpoint failover. ?network=base",
     tags: ["crypto", "chain", "info", "chainid", "gas", "price", "block", "rpc", "evm"],
     discovery: {
       input: { network: "base" },
