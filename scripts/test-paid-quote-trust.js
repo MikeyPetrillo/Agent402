@@ -180,7 +180,8 @@ function fakeStore() {
   trust.mark("203.0.113.51");
   const got = [];
   for (let i = 0; i < 5; i++) got.push((await drive(b, "203.0.113.51")).nexted);
-  ok(got.every(Boolean), "a trusted address is not counted by the price-check budget");
+  ok(got.every(Boolean), "a trusted address is served past the price-check budget");
+  ok(b.stats().clientsThisHour === 1, `and is never counted: it is not among the clients seen this hour (${b.stats().clientsThisHour})`);
   // Trusted on another replica: read on the refusal path.
   const other = createPaidQuoteTrust({ store });
   other.mark("203.0.113.52");
