@@ -869,6 +869,33 @@ jobs:
               ;;
           esac
 
+      # EVM settlements that failed naming a transaction or an authorization
+      # (src/late-settlements.js): one word on /api/gateway-status. A landed,
+      # unserved one becomes an owed debt (refundsOwed covers it).
+      # unresolved / full page; ok closes; near_capacity and unknown do neither.
+      - name: Late settlements check (alarm when one needs an operator)
+        if: always()
+        continue-on-error: true
+        run: |
+          WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.lateSettlements.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "late settlements: $WORD"
+          TITLE="Late settlements need attention"
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          case "$WORD" in
+            unresolved|full)
+              if [ -z "$OPEN" ]; then
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports lateSettlements.status=$WORD. unresolved: an EVM settlement that failed naming a transaction or an authorization could not be proven landed or absent within a day (or the reads kept failing); it is kept, never dropped, or a booking sits in the journal outside the book. Read it on /__operator/refunds.json (unconfirmedSettlements), look the transaction up on the chain's explorer, and book a refund if it moved the buyer's funds to us. full: the book holds its bound of open entries, and new bookings wait in the journal until there is room (the server log names each). Auto-closes when the word is ok." >/dev/null 2>&1 || echo "issue create failed"
+              else
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+            ok)
+              if [ -n "$OPEN" ]; then
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: lateSettlements reads $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+          esac
+
       # Live revenue snapshot (src/revenue-live.js): one word on
       # /api/gateway-status. stale (past its period plus grace, or missing an
       # offered rail past the grace) pages; fresh and due close; cold and

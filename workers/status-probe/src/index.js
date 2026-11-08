@@ -564,6 +564,23 @@ The server log carries a [tweet-queue] line for every outcome (ids and status co
     },
   },
   {
+    // EVM settlements that failed naming a transaction or an authorization
+    // (src/late-settlements.js): the reconcile pass reads each on chain and
+    // books a landed, unserved one as an owed debt (refundsOwed covers it).
+    // unresolved (kept for a human, or outside the book) and full page; ok
+    // clears; near_capacity and unknown do neither. Same title as heartbeat.yml.
+    title: "Late settlements need attention",
+    verdict: ({ gateway: b }) => {
+      const w = b.lateSettlements?.status;
+      if (w === "unresolved" || w === "full") return "bad";
+      return w === "ok" ? "good" : "quiet";
+    },
+    body: ({ gateway: b }) => {
+      const w = b.lateSettlements?.status === "full" ? "full" : "unresolved";
+      return `/api/gateway-status reports lateSettlements.status=${w}. unresolved: an EVM settlement that failed naming a transaction or an authorization could not be proven landed or absent within a day (or the reads kept failing); it is kept, never dropped, or a booking sits in the journal outside the book. Read it on /__operator/refunds.json (unconfirmedSettlements), look the transaction up on the chain's explorer, and book a refund if it moved the buyer's funds to us. full: the book holds its bound of open entries, and new bookings wait in the journal until there is room (the server log names each). Auto-closes when the word is ok.`;
+    },
+  },
+  {
     // A buyer paid and got an error. The server keeps the log and publishes one
     // word (chargedFailures on /api/gateway-status, 402 refusals excluded); the
     // charged-failure workflow ran every 4-6 h in practice (measured

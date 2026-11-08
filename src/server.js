@@ -3926,6 +3926,10 @@ app.get("/api/gateway-status", async (req, res) => {
     // GATEWAY_WITHDRAW_ALERT_USD). One word each publicly; the figure and
     // the per-domain split on the operator view only.
     gatewayPending: { status: await gatewayPendingStatus() },
+    // EVM settlements that failed naming a transaction or an authorization
+    // (src/late-settlements.js): ok / near_capacity / full / unresolved. One
+    // word; the heartbeat and the status Worker page on unresolved and full.
+    lateSettlements: { status: await lateSettleBookForOperator().then((b) => b.alarmStatus()).catch(() => "unknown") },
     gatewayBalance: (() => { try { return gatewayBalanceStatus({ full }); } catch { return { status: "unknown" }; } })(),
     // Redis persistence (src/redis-persistence.js): on / degraded / off /
     // unknown. One word publicly; the operator also gets the INFO fields.
