@@ -613,8 +613,8 @@ const near = (a, b) => Math.abs(a - b) < 1e-9;
   ok(/payExternal: \(url, opts\) => \{ const o = \{ \.\.\.opts, memoizeDelivery: true \}; return opts\?\.chain === "tempo" \? payTempo\(url, o\) : payX402\(url, o\); \}/.test(server),
     "only the router's own purchases opt into the memos, on both rails (server.js payExternal)");
   const pay = readFileSync(new URL("../src/x402-buyer.js", import.meta.url), "utf8");
-  ok(/if \(memoizeDelivery\) noteSellerRefusal\(url, chain, 402\)/.test(pay) && /const memoize = memoizeDelivery && \(paid\.status === 402 \|\| paid\.status === 401\) && paidRefusalCarriesChallenge\(paid\.headers, refusalText\);\n\s*if \(memoize\) noteSellerRefusal\(url, chain, paid\.status\)/.test(pay),
-    "both refusal-memo writes in the payer are gated on the router's opt-in and keyed by the route; the paid-retry one also on a 402/401 carrying the seller's offer");
+  ok(/if \(memoizeDelivery\) noteSellerRefusal\(url, chain, 402\)/.test(pay) && /const memoize = memoizeDelivery && \(paid\.status === 402 \|\| paid\.status === 401\) && paidRefusalCarriesChallenge\(paid\.headers, refusalText\) && postSendRefusalIsSellers\(url, chain\);\n\s*if \(memoize\) noteSellerRefusal\(url, chain, paid\.status\)/.test(pay),
+    "both refusal-memo writes in the payer are gated on the router's opt-in and keyed by the route; the paid-retry one also on a 402/401 carrying the seller's offer and on the refusal not being a chain-wide pattern");
   ok(/if \(memoizeDelivery\) clearSellerDeliveryFailure\(sellerOrigin, chain\);/.test(pay) && !/^\s*clearSellerDeliveryFailure\(sellerOrigin, chain\);/m.test(pay),
     "the chain-proven refusal clears the delivery memo only on the router's opt-in");
   ok(/if \(payable\.amount != null && payable\.maxAmountRequired != null && !sameAtomic\(payable\.amount, payable\.maxAmountRequired\)\) \{\n\s*if \(memoizeDelivery\) noteSellerRefusal\(url, chain, 402\);/.test(pay),

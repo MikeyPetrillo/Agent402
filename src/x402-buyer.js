@@ -468,6 +468,43 @@ export function noteSellerRefusal(url, chain, status) {
   sellerRefusals.set(key, entry);
   memoShare(REFUSAL_MEMO, key, SELLER_REFUSAL_TTL_MS, status, now, entry);
 }
+// WHOSE REFUSAL IS IT? A refusal of a payment we sent is the seller's only if
+// sellers on that chain take our payments otherwise. When many DIFFERENT
+// sellers on one chain refuse our paid retries inside a short window with no
+// settle on that chain between them, the shared factor is our side (how we
+// sign on that chain), and noting each route would bench every seller there
+// for the TTL. So past that point no route strike is written for the chain
+// until a payment on it settles again; the refusals still release their holds.
+const CHAIN_REFUSAL_WINDOW_MS = Number(process.env.SOR_CHAIN_REFUSAL_WINDOW_MS) > 0 ? Number(process.env.SOR_CHAIN_REFUSAL_WINDOW_MS) : 30 * 60_000;
+const CHAIN_REFUSAL_OURS_MIN = Number.isInteger(Number(process.env.SOR_CHAIN_REFUSAL_OURS_MIN)) && Number(process.env.SOR_CHAIN_REFUSAL_OURS_MIN) >= 2 ? Number(process.env.SOR_CHAIN_REFUSAL_OURS_MIN) : 5;
+const chainRefusals = new Map(); // chain -> Map(origin -> last refusal at)
+const chainSettledAt = new Map(); // chain -> last settled delivery at
+const chainOursLogged = new Map(); // chain -> window start already logged
+/** Record a refusal of a payment we sent; false when the pattern says it is ours. */
+export function postSendRefusalIsSellers(url, chain, now = Date.now()) {
+  const origin = originOf(url);
+  if (!origin || !chain) return true;
+  let m = chainRefusals.get(chain);
+  if (!m) { m = new Map(); chainRefusals.set(chain, m); }
+  const since = Math.max(now - CHAIN_REFUSAL_WINDOW_MS, chainSettledAt.get(chain) || 0);
+  for (const [o, at] of m) if (at < since) m.delete(o);
+  m.delete(origin); m.set(origin, now);
+  while (m.size > 200) m.delete(m.keys().next().value);
+  if (m.size < CHAIN_REFUSAL_OURS_MIN) return true;
+  if (chainOursLogged.get(chain) !== since) {
+    chainOursLogged.set(chain, since);
+    console.warn(`[x402-buyer] ${m.size} sellers on ${chain} refused our paid retries with no settle on ${chain} between them: not noting their routes as refusing until a payment on ${chain} settles`);
+  }
+  return false;
+}
+/** A settled payment on a chain: refusals before it are each seller's own again. */
+export function noteChainSettled(chain, now = Date.now()) {
+  if (!chain) return;
+  chainSettledAt.set(chain, now);
+  chainRefusals.delete(chain);
+}
+/** Test seam. */
+export function __resetChainRefusalsForTest() { chainRefusals.clear(); chainSettledAt.clear(); chainOursLogged.clear(); }
 /** A settled delivery from the route forgets its strikes. */
 export function clearSellerRefusal(url, chain) {
   const route = refusalRoute(url);
@@ -1509,7 +1546,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
           // whose URL and body a caller chose is not the router's purchase at
           // all. All of them still release the hold on the chain's word; none
           // of them decides where anyone else's money goes.
-          const memoize = memoizeDelivery && (paid.status === 402 || paid.status === 401) && paidRefusalCarriesChallenge(paid.headers, refusalText);
+          const memoize = memoizeDelivery && (paid.status === 402 || paid.status === 401) && paidRefusalCarriesChallenge(paid.headers, refusalText) && postSendRefusalIsSellers(url, chain);
           if (memoize) noteSellerRefusal(url, chain, paid.status);
           console.warn(`[x402-buyer] ${where} refused the payment and the chain shows no debit after the credential expired (${verdict.observed} tx read) - not charged${memoize ? `, route noted as refusing on ${chain}` : ""}`);
           const e = bad(`Seller refused the payment (HTTP ${paid.status}); the credential expired unused, nothing charged`, 502);
@@ -1563,6 +1600,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     // and because the key is origin-wide they could clear it using a different
     // route from the one that fails. Gated on the same opt-in as the record,
     // so a diagnostic can never clear what the router learned.
+    if (tx) noteChainSettled(chain);
     if (memoizeDelivery && tx) { clearSellerDeliveryFailure(sellerOrigin, chain); clearSellerRefusal(url, chain); }
     recordUpstreamSpend("x402-buyer", Number(quotedAtomic) / 1e6);
     // The aggregate above answers "what did upstream cost". This answers

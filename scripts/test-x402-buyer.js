@@ -928,6 +928,36 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
   ok(forOrigin("https://fails-500.example").map((l) => l.result).join() === "undelivered", `a paid 5xx is recorded once, as undelivered (${JSON.stringify(forOrigin("https://fails-500.example").map((l) => l.result))})`);
 }
 
+// Whose refusal is it: when many different sellers on one chain refuse our
+// paid retries with no settle between them, no route is noted as refusing
+// (the shared factor is our side); a settle on the chain restores the notes.
+{
+  const { payX402: pay, sellerRouteRefusedRecently: benched, __resetSellerRefusalsForTest: resetR, __resetChainRefusalsForTest: resetC, noteChainSettled } = await import("../src/x402-buyer.js");
+  resetR?.(); resetC();
+  const acc = { scheme: "exact", network: "eip155:8453", asset: USDC, amount: "1000", payTo: "0x" + "ad".repeat(20), maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } };
+  const h = Buffer.from(JSON.stringify({ x402Version: 2, accepts: [acc] })).toString("base64");
+  globalThis.fetch = async (url, init) => {
+    const paidHdr = init?.headers?.["PAYMENT-SIGNATURE"] || init?.headers?.["payment-signature"] || init?.headers?.["X-PAYMENT"];
+    if (!paidHdr) return { status: 402, headers: { get: (k) => (k.toLowerCase() === "payment-required" ? h : null) }, json: async () => ({}), text: async () => "{}" };
+    return { status: 402, headers: { get: (k) => (k.toLowerCase() === "payment-required" ? h : "application/json") }, json: async () => ({ error: "payment_verification_failed" }), text: async () => JSON.stringify({ error: "payment_verification_failed" }) };
+  };
+  const refuse = (o) => pay(`https://${o}.example/x`, { maxAtomic: 500000n, method: "POST", body: {}, chain: "base", memoizeDelivery: true, notDebited: async () => ({ debited: false, expired: true, observed: 1 }) }).then(() => null, (e) => e);
+  // Control: one seller refusing twice is benched.
+  await refuse("solo"); await refuse("solo");
+  ok(!!benched("https://solo.example/x", "base"), "control: one seller that refuses our payment twice is benched");
+  resetR?.(); resetC();
+  // Five different sellers refuse, then each refuses again: none is benched.
+  const many = ["r1", "r2", "r3", "r4", "r5"];
+  for (const o of many) await refuse(o);
+  for (const o of many) await refuse(o);
+  ok(many.every((o) => !benched(`https://${o}.example/x`, "base")), "five sellers on one chain refusing our payments with no settle between: none is benched");
+  // After a settle on the chain, a refusing seller is the seller's own again.
+  noteChainSettled("base");
+  await refuse("after"); await refuse("after");
+  ok(!!benched("https://after.example/x", "base"), "after a settle on the chain, a seller refusing twice is benched again");
+  resetR?.(); resetC();
+}
+
 globalThis.fetch = origFetch;
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
