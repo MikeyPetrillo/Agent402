@@ -107,6 +107,15 @@ if (process.env.CI && !REDIS_URL) fail("CI must run this with REDIS_URL (the cro
   otherReplica();
   let rb = await recoverAlreadyOnChain(b, { prove: provedTx(runTx("c1")), saleByTx: unsold });
   ok(!rb.recovered && /another request owns this authorization/.test(rb.reason), `claims: the replay's recovery is refused (${rb.reason})`);
+  // Another wallet's authorization with the same nonce is a different payment:
+  // its recovery claims its own signer-keyed name, not the first wallet's.
+  {
+    const other = { ...ctxFor(nonce), paymentPayload: { payload: { authorization: { nonce, from: "0x" + "b2".repeat(20) } } } };
+    await run(hooks.beforeVerify, other);
+    otherReplica();
+    const ro = await recoverAlreadyOnChain(other, { prove: provedTx(runTx("c9")), saleByTx: unsold });
+    ok(!/another request owns this authorization/.test(ro.reason || ""), `claims: another wallet's same nonce is not refused as the first wallet's (${ro.reason || "recovered"})`);
+  }
   // The original settles normally; a later replay still cannot recover.
   await run(hooks.afterSettle, { ...a, result: { success: true, transaction: runTx("c1"), network: NET } });
   otherReplica();
