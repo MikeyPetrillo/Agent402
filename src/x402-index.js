@@ -238,6 +238,9 @@ const URL_TEMPLATE_RE_G = /\{([^{}/]{1,200})\}|%7[Bb]([^/]{0,200}?)%7[Dd]|\/:([A
 // "=YOUR_KEY" value): the router appends the caller's params after it, so the
 // seller would get the placeholder first. Those read as templates too; a real
 // query value ("?product=basic") does not.
+/** Whether a route (path and query) still holds an unsubstituted placeholder.
+ *  The one test every surface reads, so a label never disagrees with the router. */
+export function isUrlTemplateRoute(route) { return URL_TEMPLATE_RE.test(String(route || "")); }
 // Route text is seller-controlled and unbounded, so every form is bounded: a
 // placeholder name is at most 200 characters and cannot hold its own opening
 // token, which keeps a test linear on a hostile route (unbounded, 100k "{"
@@ -4294,7 +4297,7 @@ let paywallRecheckBudget = PAYWALL_RECHECKS_PER_CYCLE;
 /** Was this stored failure taken at a URL that is still a template? */
 function paywallVerdictOnTemplate(pw) {
   if (typeof pw?.url !== "string") return false;
-  try { return URL_TEMPLATE_RE.test(new URL(pw.url).pathname); } catch { return false; }
+  try { const u = new URL(pw.url); return URL_TEMPLATE_RE.test(u.pathname + u.search); } catch { return false; }
 }
 /** Is this stored paywall verdict a failure due a fresh probe? A missing
  *  verdict is the rotation's business; a passing one is not expired here. */

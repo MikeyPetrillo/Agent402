@@ -56,6 +56,11 @@ for (const [label, p] of [["{ x 100k", "/a/" + "{".repeat(100000)], ["%7B x 33k"
   ok(ms < 250, `a hostile route (${label}) is tested in bounded time (${ms.toFixed(1)} ms)`);
 }
 
+// One predicate for every surface: the seller detail's dispatch label reads
+// the same test the router does, never its own inline regex.
+const serverSrc = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+ok(!/\/\[\{\}\]\/\.test\(/.test(serverSrc) && /urlTemplate: isUrlTemplateRoute\(t\.route\)/.test(serverSrc), "the seller detail labels templates with the shared isUrlTemplateRoute");
+
 // The row still has to SAY which parameters it wants - we return the row rather
 // than hiding the seller, so the agent needs to know what to substitute.
 const g = /const URL_TEMPLATE_RE_G = \/(.*)\/g;/.exec(src);

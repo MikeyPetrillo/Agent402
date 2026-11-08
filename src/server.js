@@ -423,7 +423,7 @@ import { findTools, findRelatedSellers, markWeakMatches, markMissRows } from "./
 import { buildPlanSketch } from "./plan-sketch.js";
 import { recordWish, getWishesAggregate, annotateServedAsync, WISH_SERVED_MIN_SCORE, startWishRotation } from "./wish.js";
 import { setAlgorandCrawlSources } from "./algorand-sellers.js";
-import { priceToMicroUsd, sellerRouteUrl } from "./x402-index.js";
+import { priceToMicroUsd, sellerRouteUrl, isUrlTemplateRoute } from "./x402-index.js";
 import { priceUsdOf } from "./price-usd.js";
 import { submissionSlotStatus } from "./x402-index.js";
 import { startRouterPool, routerPoolStatus } from "./router-pool.js";
@@ -1639,7 +1639,7 @@ function sellerToolVerdicts(detail) {
   if (!detail || !Array.isArray(detail.tools)) return [];
   const positiveUsd = (p) => { const n = priceUsdOf(p); return n != null && n > 0 ? n : null; };
   return detail.tools.map((t) => {
-    const v = withDispatchFields({ ...t, seller: detail.origin, origin: detail.origin, routable: detail.routable, networks: Array.isArray(t.networks) && t.networks.length ? t.networks : detail.networks, priceUsd: positiveUsd(t.price), urlTemplate: /[{}]/.test(String(t.route || "")), payToByNetwork: detail.payToByNetwork, evmDomainByNetwork: detail.evmDomainByNetwork }, { rowLevel: true });
+    const v = withDispatchFields({ ...t, seller: detail.origin, origin: detail.origin, routable: detail.routable, networks: Array.isArray(t.networks) && t.networks.length ? t.networks : detail.networks, priceUsd: positiveUsd(t.price), urlTemplate: isUrlTemplateRoute(t.route), payToByNetwork: detail.payToByNetwork, evmDomainByNetwork: detail.evmDomainByNetwork }, { rowLevel: true });
     // The affordance fields travel with the verdict: a row the router pays
     // now (proven, or the unproven lane) says so, a row it would pay once the
     // seller proves out says that, as the route rows do (2026-11-03: a
