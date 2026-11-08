@@ -52,9 +52,14 @@ Every cap is checked before a payment is signed. All three packages refuse an ac
 |---|---|---|
 | x402 exact, EVM chain | after the tool answers, only under 400 | not charged |
 | x402 exact, Solana | after the tool answers, only under 400 | not charged |
+| x402 exact, Stellar | after the tool answers, only under 400 | not charged |
+| x402 exact, Algorand | after the tool answers, only under 400 | not charged |
+| x402 exact, Gateway batched (where offered; paid from a Circle Gateway deposit) | settled off chain by Circle Gateway after the tool answers, only under 400 | not charged |
 | MPP `evm` charge | the same x402 settlement | not charged |
 | MPP Tempo pull | broadcast after the tool answers, only under 400 | not charged |
 | MPP Tempo push | final before the call runs | booked as a refund owed, repaid after on-chain proof |
+
+On the EVM chains and Tempo pull, a settlement whose outcome is not known when the call is answered is read on chain again; one that lands after a failed answer is booked as a refund owed and repaid after on-chain proof.
 
 The long routes (report products, video, the slow media tiers) take x402 exact on EVM chains only, and Tempo is not offered on identity-bound or long-running routes. A Solana payment embeds a recent blockhash that lives about a minute, so sign each one right before it is sent. A Solana payment refused for a missing or underfunded USDC account answers `retry: "fund-wallet"` with `Retry-After` (`src/svm-funding-refusal.js`).
 

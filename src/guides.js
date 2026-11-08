@@ -464,9 +464,16 @@ and refuse to send a payload signed past it.
 |---|---|---|
 | x402 exact on an EVM chain | after the tool answers, only for a response under 400 | not charged; the signed payment is its own replay key |
 | x402 exact on Solana | after the tool answers, only for a response under 400 | not charged; send an \`Idempotency-Key\` for replays |
+| x402 exact on Stellar | after the tool answers, only for a response under 400 | not charged |
+| x402 exact on Algorand | after the tool answers, only for a response under 400 | not charged |
+| x402 exact, Gateway batched (where offered; paid from a Circle Gateway deposit) | settled off chain by Circle Gateway after the tool answers, only for a response under 400 | not charged |
 | MPP \`evm\` charge | the same x402 settlement underneath | not charged |
 | MPP Tempo pull (a signed transaction the relay broadcasts) | broadcast after the tool answers, only for a response under 400 | not charged |
 | MPP Tempo push (a transfer you already sent) | final before the call runs | booked as a refund owed to the paying wallet, repaid after on-chain proof |
+
+On the EVM chains and Tempo pull, a settlement whose outcome is not known when
+the call is answered is read on chain again; one that lands after a failed
+answer is booked as a refund owed and repaid after on-chain proof.
 
 - The report products and other long routes take x402 exact on EVM chains
   only: their run outlives a Solana payment's recent blockhash, an Algorand
