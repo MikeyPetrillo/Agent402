@@ -83,6 +83,7 @@ for (const h of [db, fileDb]) if (h) h.exec(`
     resolvedAt INTEGER
   );
   CREATE INDEX IF NOT EXISTS refunds_status ON refunds (status);
+  CREATE INDEX IF NOT EXISTS refunds_created ON refunds (createdAt);
 `);
 // Additive column (2026-09-24): which payment wire carried the charge
 // ("x402", "mpp", "mpp-tempo", "mpp-stripe"). The MPP reconciliation job
@@ -847,6 +848,12 @@ const selectCreatedBetween = db.prepare(
 // Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
 export function refundsCreatedBetween(sinceMs, untilMs = Date.now(), { limit = 5000 } = {}) {
   try { return selectCreatedBetween.all(Number(sinceMs) || 0, Number(untilMs) || Date.now(), limit); } catch { return []; }
+}
+const selectOldestCreated = db.prepare("SELECT MIN(createdAt) AS t FROM refunds");
+/** The oldest row's createdAt, or null for an empty ledger: where a walk by
+ *  createdAt starts, instead of the epoch. Same mirror as refundsCreatedBetween. */
+export function oldestRefundCreatedAt() {
+  try { const t = selectOldestCreated.get()?.t; return Number.isFinite(Number(t)) && t != null ? Number(t) : null; } catch { return null; }
 }
 
 // A payer's OWN rows, for identity-bound surfaces only (my-usage, the weekly

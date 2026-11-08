@@ -206,7 +206,7 @@ export function ledgerHeldPage(ledger) {
   return ({ from, to, limit }) => ledger.refundsCreatedBetween(from, to, { limit }).map((r) => (r?.status === "void" && r.network === "tempo" ? (ledger.refundByEvidence(r.evidence) || r) : r));
 }
 
-export function createHeldClaimSweep({ listVoid = null, listPage = null, reopenHeld, renoteVoid, saleFor = async () => null, journalWaiting = () => 0, now = () => Date.now(), maxAgeMs = pushHeldMaxMs(), log = console.warn, alarm = console.error, pageSize = PUSH_HELD_SWEEP_PAGE, rowsPerTick = PUSH_HELD_SWEEP_ROWS_PER_TICK, owedAgeMs = owedEscalateMs(), escalateEveryMs = 24 * 3600_000 } = {}) {
+export function createHeldClaimSweep({ listVoid = null, listPage = null, oldestCreatedAt = null, reopenHeld, renoteVoid, saleFor = async () => null, journalWaiting = () => 0, now = () => Date.now(), maxAgeMs = pushHeldMaxMs(), log = console.warn, alarm = console.error, pageSize = PUSH_HELD_SWEEP_PAGE, rowsPerTick = PUSH_HELD_SWEEP_ROWS_PER_TICK, owedAgeMs = owedEscalateMs(), escalateEveryMs = 24 * 3600_000 } = {}) {
   const heldFrom = new Map(PUSH_CLAIMABLE_NOTES.map((from) => [`${from}; ${PUSH_CLAIMED_NOTE}`, from]));
   // The walk's cursor (createdAt) and window width, kept across ticks.
   let cursor = 0;
@@ -266,7 +266,16 @@ export function createHeldClaimSweep({ listVoid = null, listPage = null, reopenH
         return out;
       }
       try {
+        // A pass starts at the oldest row, not the epoch, so its first pages
+        // are not spent halving across empty years.
+        if (cursor === 0 && oldestCreatedAt) {
+          const first = Number(await oldestCreatedAt());
+          if (Number.isFinite(first) && first > 0) cursor = Math.min(first, cutoff);
+        }
         while (cursor < cutoff && out.rows < rowsPerTick) {
+          // Each page reads a synchronous store: yield between pages so one
+          // tick never holds the event loop for the whole walk.
+          if (out.reads > 0) await new Promise((r) => setImmediate(r));
           const { rows, to } = await page(cutoff, out);
           for (const row of rows) {
             out.rows++;
@@ -303,6 +312,7 @@ export function startTempoHeldClaimSweep({ intervalMs = PUSH_HELD_SWEEP_INTERVAL
     const [{ leased }, ledger] = await Promise.all([import("./state-db.js"), import("./refund-ledger.js")]);
     const sweeper = createHeldClaimSweep({
       listPage: ledgerHeldPage(ledger),
+      oldestCreatedAt: ledger.oldestRefundCreatedAt,
       reopenHeld: ledger.reopenHeldClaim,
       renoteVoid: ledger.renoteVoidRefund,
       saleFor,

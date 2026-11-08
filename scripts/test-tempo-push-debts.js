@@ -708,6 +708,27 @@ for (const [label, headers, status, error, tail] of [
   const startSrc = readFileSync(new URL("../src/tempo-push-debts.js", import.meta.url), "utf8").split("export function startTempoHeldClaimSweep")[1] || "";
   ok(/listPage: ledgerHeldPage\(ledger\)/.test(startSrc) && !/listVoid|listRefunds/.test(startSrc), "the production sweep walks the ledger page by page, never one newest-first list");
   ok(!/sales-ledger/.test(readFileSync(new URL("../src/tempo-push-debts.js", import.meta.url), "utf8")) && /saleFor,/.test(startSrc), "the sweep takes saleFor from its caller and does not import the sales ledger");
+  ok(/oldestCreatedAt: ledger\.oldestRefundCreatedAt/.test(startSrc), "the production sweep starts each pass at the ledger's oldest row");
+}
+// A pass starts at the oldest row, not the epoch, and yields the event loop
+// between pages: each page reads a synchronous store.
+{
+  const T0 = 1_790_000_000_000;
+  const froms = [];
+  let immediateRan = false;
+  let pagesAfterYield = 0;
+  const listPage = ({ from, limit }) => {
+    froms.push(from);
+    if (immediateRan) pagesAfterYield++;
+    // Every page is full, so the walk halves its window and reads many pages.
+    return Array.from({ length: Math.min(limit, 4) }, (_, i) => ({ status: "paid", createdAt: from + i, evidence: `e${from}-${i}` }));
+  };
+  const sw = createHeldClaimSweep({ listPage, oldestCreatedAt: () => T0, reopenHeld: async () => false, renoteVoid: async () => false, saleFor: async () => null, now: () => T0 + 40 * 60_000, maxAgeMs: 30 * 60_000, log: () => {}, alarm: () => {}, pageSize: 4, rowsPerTick: 40 });
+  // Queued before the tick: it runs during the tick only if the walk yields.
+  setImmediate(() => { immediateRan = true; });
+  const out = await sw.sweep();
+  ok(froms[0] === T0, `the first page starts at the oldest row's createdAt, not 0 (from ${froms[0]})`);
+  ok(out.reads > 3 && pagesAfterYield > 0, `a callback queued before the tick runs while it walks ${out.reads} pages: the walk yields between pages (${pagesAfterYield} pages read after it ran)`);
 }
 
 server.close();
