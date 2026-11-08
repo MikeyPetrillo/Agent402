@@ -923,7 +923,7 @@ async function withWarnings(fn) {
   // The relay could not be reached to claim the hash: 503, the hash is NOT
   // claimed, the handler does not run, and the SAME credential then works.
   order.length = 0;
-  failNext = { ok: false, cls: "relay-unreachable", error: "relay down", reason: "relay down" };
+  failNext = { ok: false, cls: "relay-unreachable", connectPhase: true, error: "relay down", reason: "relay down" };
   const same = buildTempoCredential({ push: true });
   const r4 = await post(same, "x");
   const b4 = await r4.json();
@@ -944,6 +944,74 @@ async function withWarnings(fn) {
   const b7 = await r7.json();
   ok(r7.status === 402 && !order.includes("handler") && notClaimed.length === 1 && notClaimed[0].hash === `0x${"ab".repeat(32)}` && notClaimed[0].payer === PUSH_FROM && notClaimed[0].amountUsd === 0.05 && b7.details?.refundOwed === true,
     `case S: a push transfer the relay confirmed but could not claim is booked as owed (hash, chain sender, amount) before the 402 (${JSON.stringify(notClaimed)} ${JSON.stringify(b7.details)})`);
+  server.close();
+}
+
+// Case S2: a push finalize whose answer is lost after the relay claimed the
+// hash (a connection reset after the request was sent). The retry is refused
+// as a replay, so the first answer must already have booked the transfer as
+// owed; a reset before any byte was sent proves nothing was claimed and books
+// nothing; an unanswered finalize that had NOT claimed is served on the retry.
+{
+  const order = [];
+  let claimed = false, script = [];
+  const booked = [];
+  const rows = new Map();
+  const app = express();
+  app.use(express.json());
+  app.use(createTempoGate({
+    ...GATE, replayGuard: createReplayGuard(),
+    validate: async () => ({ ok: true, validation: {} }),
+    broadcast: async () => {
+      order.push("broadcast");
+      const step = script.shift() || "ok";
+      if (step === "claim-then-reset") { claimed = true; return { ok: false, cls: "relay-unreachable", connectPhase: false, error: "relay /v1/mpp/broadcast NETWORK ERROR after 30000ms: UND_ERR_SOCKET (attempts 1)", reason: "x" }; }
+      if (step === "reset-unclaimed") return { ok: false, cls: "relay-unreachable", connectPhase: false, error: "reset", reason: "x" };
+      if (step === "connect-refused") return { ok: false, cls: "relay-unreachable", connectPhase: true, error: "ECONNREFUSED", reason: "x" };
+      if (step === "relay-502") return { ok: false, cls: "relay-unavailable", relayStatus: 502, error: "HTTP 502", reason: "x" };
+      if (step === "relay-401") return { ok: false, cls: "relay-unavailable", relayStatus: 401, error: "HTTP 401", reason: "x" };
+      if (claimed) return { ok: false, cls: "replay", error: "Transaction hash has already been used", reason: "x" };
+      claimed = true;
+      return { ok: true, receipt: { method: "tempo", status: "success", reference: "0xs2", timestamp: new Date().toISOString() } };
+    },
+    pushSender: async () => "0x5555555555555555555555555555555555555555",
+    onPushInputRefused: async (_req, info) => { booked.push(info); rows.set(info.hash, { status: "owed", unanswered: info.unanswered === true }); return true; },
+    onPushNotClaimed: async (_req, info) => { booked.push({ ...info, notClaimed: true }); return true; },
+    pushRowOf: (hash) => rows.get(hash) || null,
+  }));
+  app.use(paywallStub);
+  app.post("/paid", (_req, res) => { order.push("handler"); res.json({ ok: 1 }); });
+  const { server, url } = await listen(app);
+  const post = (cred) => fetch(`${url}/paid`, { method: "POST", headers: { "content-type": "application/json", Authorization: cred }, body: JSON.stringify({ text: "x" }) });
+  const reset = () => { order.length = 0; claimed = false; booked.length = 0; rows.clear(); };
+  // Claimed, answer lost, then the retry is a replay: charged, never served, and owed.
+  reset(); script = ["claim-then-reset"];
+  const cred = buildTempoCredential({ push: true });
+  const a1 = await post(cred);
+  const j1 = await a1.json();
+  ok(a1.status === 503 && !order.includes("handler") && booked.length === 1 && booked[0].unanswered === true && booked[0].status === 503 && j1.details?.transferClaimed === null && j1.details?.refundOwed === true,
+    `case S2: an unanswered push finalize books the transfer as owed before the 503 and does not say it was not claimed (${a1.status} ${JSON.stringify(j1.details)} booked ${booked.length})`);
+  const a2 = await post(cred);
+  const j2 = await a2.json();
+  ok(a2.status === 402 && !order.includes("handler") && j2.details?.reason === "replay" && j2.details?.refundOwed === true && rows.get(booked[0].hash)?.status === "owed" && booked.length === 1,
+    `case S2: ...the retry is refused as a replay and the debt from the first answer stands (refundOwed) (${a2.status} ${JSON.stringify(j2.details)})`);
+  // Unanswered but NOT claimed: the retry claims and is served (server.js voids the row before the handler).
+  reset(); script = ["reset-unclaimed"];
+  const cred2 = buildTempoCredential({ push: true });
+  const b1 = await post(cred2);
+  const b2 = await post(cred2);
+  ok(b1.status === 503 && booked.length === 1 && b2.status === 200 && order.filter((x) => x === "handler").length === 1, `case S2: an unanswered finalize that had not claimed is served on the retry (${b1.status}, ${b2.status})`);
+  // A 5xx from the relay is as ambiguous as a reset after send.
+  reset(); script = ["relay-502"];
+  const c1 = await post(buildTempoCredential({ push: true }));
+  ok(c1.status === 503 && booked.length === 1 && booked[0].unanswered === true, `case S2: a relay 5xx at finalize books the transfer as owed (${c1.status}, booked ${booked.length})`);
+  // Never reached the relay, or the relay refused our own key: nothing claimed, nothing booked.
+  for (const step of ["connect-refused", "relay-401"]) {
+    reset(); script = [step];
+    const d1 = await post(buildTempoCredential({ push: true }));
+    const jd = await d1.json();
+    ok(d1.status === 503 && booked.length === 0 && jd.details?.transferClaimed === false, `case S2: ${step} at finalize books nothing and says the transfer was not claimed (${d1.status} ${JSON.stringify(jd.details)})`);
+  }
   server.close();
 }
 

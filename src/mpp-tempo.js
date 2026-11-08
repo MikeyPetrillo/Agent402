@@ -1117,6 +1117,23 @@ export async function validateTempoCredential(authorizationHeader) {
   }
 }
 
+/**
+ * A push finalize failure whose answer cannot say whether the relay claimed
+ * the hash. Only a failure before any request byte was sent (a connect-phase
+ * error) or a refusal of our own credentials or rate (401, 403, 429) proves
+ * the relay never acted on the broadcast; a connection lost after the request
+ * was written, or a 5xx, may follow a claim the answer never reached us for.
+ * A result that does not say which (connectPhase or relayStatus missing) is
+ * read as ambiguous: booking a debt that a later served claim voids is the
+ * safe side, a transfer charged and recorded nowhere is not.
+ */
+export function pushFinalizeAmbiguous(f) {
+  if (!f || f.ok) return false;
+  if (f.cls === "relay-unreachable") return f.connectPhase !== true;
+  if (f.cls === "relay-unavailable") return ![401, 403, 429].includes(Number(f.relayStatus));
+  return false;
+}
+
 /** Terminal — actually settles via Tempo's relay. Callers MUST only invoke
  *  this after a successful (<400) handler response; see the server wiring
  *  in server.js for the buffer-then-decide discipline this depends on. */
@@ -1130,7 +1147,8 @@ export async function broadcastTempoCredential(authorizationHeader) {
     const [receipt] = await withRelayTrace(() => Method.broadcastCredential(tempoMethod(), authorizationHeader));
     return { ok: true, receipt };
   } catch (e) {
-    return { ok: false, error: describeRelayFailure(e), reason: buyerReason(e), cls: classifyTempoRefusal(e), ...relayRefusalFields(e) };
+    const trace = e?.__relayTrace || {};
+    return { ok: false, error: describeRelayFailure(e), reason: buyerReason(e), cls: classifyTempoRefusal(e), ...relayRefusalFields(e), connectPhase: trace.connectPhase === true, relayStatus: Number(trace.relayUnavailable) || null };
   }
 }
 
@@ -1598,9 +1616,27 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
           const fcls = f.cls || "unknown";
           logTempoRefusal(req, { cls: `finalize:${fcls}`, amountAtomic: binding.amountAtomic, timings: { validate: tValidated - t0, finalize: Date.now() - tFinal0, total: Date.now() - tStart }, detail: f.error || "", requestId: f.requestId });
           const fc = TEMPO_REFUSAL_CLASSES[fcls] || TEMPO_REFUSAL_CLASSES.unknown;
+          if (fc.status === 503 && pushFinalizeAmbiguous(f)) {
+            // The request may have reached the relay and the hash may be
+            // claimed, with the answer lost on the way back. A retry of a
+            // claimed hash is refused as a replay, so the transfer is booked
+            // as owed now (a later claim that is served voids the row, as
+            // after an input refusal) and the key is released so the same
+            // credential can still pay if the hash was not claimed.
+            releaseReplay();
+            let owed = false;
+            if (typeof onPushInputRefused === "function") {
+              const payer = await readPushSender();
+              try { owed = (await onPushInputRefused(req, { hash: pushHash, payer, amountAtomic: String(binding.amountAtomic), amountUsd: pushAmountUsd, status: 503, unanswered: true })) === true; } catch { owed = false; }
+            }
+            console.warn(`[mpp-tempo] push finalize unanswered (${req.method} ${req.path} tx=${pushHash || "?"} reason=${fcls}${f.relayStatus ? ` status=${f.relayStatus}` : ""}): the relay may have claimed the transfer - ${owed ? "recorded as owed until a claim is served" : "NOT recorded"}`);
+            res.setHeader("Retry-After", String(fc.retryAfter || 5));
+            return sendMppProblem(res, mppProblem(fc.kind, `The Tempo payment relay did not answer whether it claimed the transfer you sent. Retry the same request with the same credential: if the transfer was not claimed it pays for that request${owed ? "; if it was, it is recorded as owed to the sender, to be refunded" : ""}.`, { status: 503, hint: "Retry the same request with the same credential in a few seconds.", details: { reason: fcls, transferClaimed: null, ...(owed ? { refundOwed: true } : {}) } }));
+          }
           if (fc.status === 503) {
-            // The relay could not be reached: the hash is NOT claimed, so the
-            // same credential can be presented again.
+            // The relay was never reached (or refused our own credentials):
+            // the hash is NOT claimed, so the same credential can be
+            // presented again.
             releaseReplay();
             res.setHeader("Retry-After", String(fc.retryAfter || 5));
             return sendMppProblem(res, mppProblem(fc.kind, "The Tempo payment relay could not be reached to claim the transfer you sent. It has not been claimed, so it still pays for this request.", { status: 503, hint: "Retry the same request with the same credential in a few seconds.", details: { reason: fcls, transferClaimed: false } }));
@@ -1619,6 +1655,11 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
             const hash = pushHash;
             try { owed = (await onPushNotClaimed(req, { hash, payer, amountAtomic: String(binding.amountAtomic), amountUsd: pushAmountUsd, cls: fcls })) === true; } catch { owed = false; }
             console.warn(`[mpp-tempo] CHARGED-BUT-NOT-SERVED: push transfer confirmed by the relay could not be claimed (${req.method} ${req.path} tx=${hash || "?"} reason=${fcls}) - ${owed ? "recorded as owed in the refund ledger" : "NOT recorded"}`);
+          }
+          // A replay refusal for a hash an earlier unanswered finalize booked
+          // as owed: that debt stands (the claim the answer was lost for).
+          if (fcls === "replay" && typeof pushRowOf === "function" && pushHash) {
+            try { owed = (await pushRowOf(pushHash))?.status === "owed"; } catch { owed = false; }
           }
           return sendMppProblem(res, mppProblem(fc.kind, `The transfer this credential names could not be claimed for this request: ${fc.detail}${owed ? " The transfer was received and is recorded as owed to the sender." : ""}`, { status: 402, hint: fc.hint, details: { reason: fcls, ...(owed ? { refundOwed: true } : {}) } }));
         }

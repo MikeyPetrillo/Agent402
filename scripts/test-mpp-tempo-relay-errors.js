@@ -175,6 +175,12 @@ ok(/relay \/v1\/mpp\/validate NETWORK ERROR after \d+ms/.test(e.error), `socket-
   __testResetMethodCache();
   const b1 = await broadcastTempoCredential(credentialFor("theta.test"));
   ok(broadcasts === 1 && !b1.ok, `broadcast: a connection dropped after the request was sent is not retried (relay saw ${broadcasts} broadcast)`);
+  {
+    const { pushFinalizeAmbiguous } = await import("../src/mpp-tempo.js");
+    ok(b1.cls === "relay-unreachable" && b1.connectPhase === false && pushFinalizeAmbiguous(b1) === true, `broadcast: a connection dropped after the request was sent is ambiguous (the relay may have claimed the hash) (cls ${b1.cls}, connectPhase ${b1.connectPhase})`);
+    ok(pushFinalizeAmbiguous({ ok: false, cls: "relay-unreachable", connectPhase: true }) === false && pushFinalizeAmbiguous({ ok: false, cls: "relay-unavailable", relayStatus: 403 }) === false && pushFinalizeAmbiguous({ ok: false, cls: "relay-unavailable", relayStatus: 504 }) === true && pushFinalizeAmbiguous({ ok: false, cls: "replay" }) === false,
+      "broadcast: only a connect-phase failure or our own key, rate or scope refusal proves nothing was claimed");
+  }
   allDead.close(); flaky.close(); dropBroadcast.close();
 
   // ...but a connect-phase failure (nothing reached the relay) is retried once.
