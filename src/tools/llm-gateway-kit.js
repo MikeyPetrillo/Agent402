@@ -335,8 +335,7 @@ export const TIERS = {
       // from OpenRouter entirely (verified against the live models list).
       // gemini-2.5-flash-lite left 2026-09-29 (upstream expiration 2026-10-20): served by its successor via RETIRING_MODELS.
       "google/gemini-3.1-flash-lite", // inside this tier's max_price
-      // inception/mercury-2.5: served as itself until its upstream expiration on 2026-11-08 (its whole family), then by gemini-3.1-flash-lite (RETIRING_MODELS, scheduled). In no ranking, fallback or default; this prefix goes on that day.
-      "inception/mercury-2.5",
+      // inception/mercury-2.5 left 2026-11-08 (upstream expiration): served by gemini-3.1-flash-lite via RETIRING_MODELS.
       "meta-llama/llama-3.2-1b-instruct", "meta-llama/llama-3.2-3b-instruct",
       // ministral-3b/8b were renamed upstream to the -2512 ids (the bare ids
       // 404 at OpenRouter; live-verified 2026-08-19). Listed with the live id so
@@ -823,10 +822,10 @@ export const RETIRING_MODELS = Object.freeze({
   "poolside/laguna-xs-2.1": { until: "2026-10-31", use: "mistralai/ministral-3b-2512" },
   "poolside/laguna-s-2.1": { until: "2026-10-31", use: "mistralai/ministral-8b-2512" },
   // Mercury 2.5 (OpenRouter expiration_date 2026-11-08, as for every model of
-  // its family, so none is a successor). SCHEDULED: it left the fast band
-  // 2026-11-04 and is served as itself on the tiers that admit it until that
-  // day, then by the fast band's other budget link on nano.
-  "inception/mercury-2.5": { until: "2026-11-08", use: "google/gemini-3.1-flash-lite", asItselfUntil: true },
+  // its family, so none is a successor). It left the fast band 2026-11-04 and
+  // every tier list on its expiration; a call naming it is served by the fast
+  // band's other budget link on nano.
+  "inception/mercury-2.5": { until: "2026-11-08", use: "google/gemini-3.1-flash-lite" },
   // Claude Sonnet 4 (OpenRouter expiration_date 2026-10-15). The pro tier's
   // family prefix still admits the id; its successor is the same family's
   // current model, priced below it.
@@ -2453,9 +2452,6 @@ export const REASONING_MODELS = [
   // default_enabled for it: `adaptive` tells the live guard so). The budget
   // tiers inject "low", pro "low".
   { id: "anthropic/claude-haiku-5.5", efforts: ["low", "medium", "high", "xhigh", "max"], adaptive: true },
-  // Mercury 2.5: reasoning default-on at medium, "none" supported (live 2026-09-29).
-  // Kept while the id is served as itself (scheduled retirement, 2026-11-08).
-  { id: "inception/mercury-2.5", efforts: ["none", "low", "medium", "high"] },
   { id: "anthropic/claude-opus-5", efforts: ["low", "medium", "high", "xhigh", "max"] },
   // Claude Opus 5.5: reasoning MANDATORY, default effort high (live catalog
   // 2026-09-24). Same treatment as opus-5: premium leaves the model default,
