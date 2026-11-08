@@ -6,8 +6,10 @@
 // transaction is this request's own; a replayed payload must never be served
 // twice. These claims make ownership explicit:
 //
-//   nonce:<network>:<nonce>  taken by the first request to reach settle with
-//                            that authorization (onBeforeSettle). While one
+//   nonce:<network>:<from>:<nonce>
+//                            taken by the first request to reach settle with
+//                            that EVM authorization (onBeforeSettle), <from>
+//                            its signer lowercased. While one
 //                            request holds it, another request carrying the
 //                            same authorization is refused before it calls the
 //                            facilitator (402, nothing charged). Held for a
@@ -15,6 +17,9 @@
 //                            settles, released when the settle fails and
 //                            nothing recovered it, so a legitimate retry of an
 //                            unsettled authorization still goes through.
+//                            An earlier build's name without the signer,
+//                            nonce:<network>:<nonce>, is honored and written
+//                            tagged (legacyNonceClaimKey).
 //   nonce:<network>:<signer>:<nonce>
 //                            the same claim for a Stellar payment: one per
 //                            signed Soroban authorization entry of the payer
@@ -80,6 +85,12 @@ function within(p) {
 
 const local = new Map(); // key -> { holder, until }
 
+// A claim this build writes at a name an earlier build also reads (the EVM
+// nonce key without the signer) holds LEGACY_TAG + the holder, so this build
+// tells it from an earlier build's claim there; the holder still owns it.
+export const LEGACY_TAG = "v2|";
+const owns = (owner, holder) => owner === holder || owner === LEGACY_TAG + holder;
+
 function localGet(key, now) {
   const hit = local.get(key);
   if (hit && hit.until > now) return hit;
@@ -111,7 +122,7 @@ export async function claimSettlementKey(key, holder, { ttlSeconds = SETTLED_TTL
       // and another holder is refused, so one key never has two owners in
       // one process because the backend changed between two claims.
       const mine = localGet(key, now);
-      if (mine && mine.holder !== holder) {
+      if (mine && !owns(mine.holder, holder)) {
         await within(c.set(k, mine.holder, { NX: true, EX: Math.max(1, Math.ceil((mine.until - now) / 1000)) })).catch(() => {});
         return { claimed: false, holder: mine.holder };
       }
@@ -120,13 +131,13 @@ export async function claimSettlementKey(key, holder, { ttlSeconds = SETTLED_TTL
         return { claimed: true, holder };
       }
       const owner = await within(c.get(k));
-      return { claimed: owner === holder, holder: owner };
+      return { claimed: owns(owner, holder), holder: owner };
     } catch (e) {
       console.error("[settlement-claims] redis claim failed, falling back to local state:", e.message);
     }
   }
   const hit = localGet(key, now);
-  if (hit) return { claimed: hit.holder === holder, holder: hit.holder };
+  if (hit) return { claimed: owns(hit.holder, holder), holder: hit.holder };
   localSet(key, holder, ttlSeconds, now);
   return { claimed: true, holder };
 }
@@ -138,32 +149,56 @@ export async function extendSettlementKey(key, holder, { ttlSeconds = SETTLED_TT
     try {
       const k = PREFIX + key;
       const owner = await within(c.get(k));
-      if (owner === null || owner === holder) await within(c.set(k, holder, { EX: ttlSeconds }));
-      if (owner === null || owner === holder) localSet(key, holder, ttlSeconds, now);
+      // Kept as written (a tagged claim stays tagged).
+      if (owner === null || owns(owner, holder)) {
+        await within(c.set(k, owner ?? holder, { EX: ttlSeconds }));
+        localSet(key, owner ?? holder, ttlSeconds, now);
+      }
       return;
     } catch (e) {
       console.error("[settlement-claims] redis extend failed, falling back to local state:", e.message);
     }
   }
   const hit = localGet(key, now);
-  if (!hit || hit.holder === holder) localSet(key, holder, ttlSeconds, now);
+  if (!hit || owns(hit.holder, holder)) localSet(key, hit ? hit.holder : holder, ttlSeconds, now);
 }
 
+const DEL_IF_OWNER = "local v = redis.call('get', KEYS[1]) if v == ARGV[1] or v == ARGV[2] then return redis.call('del', KEYS[1]) else return 0 end";
 /** Drop a key this holder owns. No-op for another holder's key. */
 export async function releaseSettlementKey(key, holder, { now = Date.now() } = {}) {
   const hit = localGet(key, now);
-  if (hit && hit.holder === holder) local.delete(key);
+  if (hit && owns(hit.holder, holder)) local.delete(key);
   const c = await getSharedRedisClient();
   if (!c) return;
   try {
     const k = PREFIX + key;
-    if ((await within(c.get(k))) === holder) await within(c.del(k));
+    // One compare-and-delete on a real Redis, so a claim that lapsed and was
+    // taken by another holder between a read and the delete is left to it.
+    if (typeof c.eval === "function") await within(c.eval(DEL_IF_OWNER, { keys: [k], arguments: [String(holder), LEGACY_TAG + holder] }));
+    else if (owns(await within(c.get(k)), holder)) await within(c.del(k));
   } catch (e) {
     console.error("[settlement-claims] redis release failed:", e.message);
   }
 }
 
-export const nonceClaimKey = (network, nonce) => `nonce:${String(network)}:${String(nonce).toLowerCase()}`;
+// An EVM payment's claim names its network, signer and nonce: the chain
+// consumes a nonce per (token, signer), so two wallets that sign the same
+// nonce are two payments. An EVM address is lowercased; any other signer is
+// kept as signed. With no signer it is the earlier build's name.
+const signerPart = (from) => {
+  const raw = typeof from === "string" ? from.trim() : "";
+  return /^0x[0-9a-fA-F]{40}$/.test(raw) ? raw.toLowerCase() : raw;
+};
+export const nonceClaimKey = (network, nonce, from = "") => {
+  const signer = signerPart(from);
+  return signer ? `nonce:${String(network)}:${signer}:${String(nonce).toLowerCase()}` : legacyNonceClaimKey(network, nonce);
+};
+// The name an earlier build claimed an EVM authorization under (network and
+// nonce only). Read and written during the deploy window and for as long as
+// its settled claims last (SETTLED_TTL_SECONDS): an untagged claim there is an
+// earlier build's and is honored; this build's own is tagged (LEGACY_TAG), so
+// another signer's claim on the same nonce is not.
+export const legacyNonceClaimKey = (network, nonce) => `nonce:${String(network)}:${String(nonce).toLowerCase()}`;
 // A Stellar address is kept as signed (never case-folded); the nonce is an
 // int64 in decimal.
 export const stellarNonceClaimKey = (network, signer, nonce) => `nonce:${String(network)}:${String(signer)}:${String(nonce)}`;
@@ -188,9 +223,10 @@ function stamp(req) {
 
 function evmAuthorizationOf(ctx) {
   const network = String(ctx?.requirements?.network || "");
-  const nonce = ctx?.paymentPayload?.payload?.authorization?.nonce;
+  const auth = ctx?.paymentPayload?.payload?.authorization;
+  const nonce = auth?.nonce;
   if (!network.startsWith("eip155:") || typeof nonce !== "string" || !nonce) return null;
-  return { network, nonce };
+  return { network, nonce, from: typeof auth?.from === "string" ? auth.from : "" };
 }
 
 /** The claim keys of a Stellar payment's signed entries, or null. */
@@ -224,7 +260,7 @@ export function registerSettlementClaimHooks(server) {
       const s = stamp(reqOf(ctx));
       if (!s) return;
       const a = evmAuthorizationOf(ctx);
-      const keys = a ? [nonceClaimKey(a.network, a.nonce)] : await stellarAuthorizationOf(ctx);
+      const keys = a ? [nonceClaimKey(a.network, a.nonce, a.from)] : await stellarAuthorizationOf(ctx);
       if (!keys?.length) return;
       if (!Array.isArray(s.nonceKeys)) s.nonceKeys = [];
       // Every key or none: a request refused on one key gives back the
@@ -234,6 +270,16 @@ export function registerSettlementClaimHooks(server) {
         if (!r.claimed) { refuse = true; break; }
         if (!s.nonceKey) s.nonceKey = key;
         if (!s.nonceKeys.includes(key)) s.nonceKeys.push(key);
+      }
+      // The earlier build's name for the same authorization: its claim there
+      // (untagged) is honored, and this request's claim is written there
+      // tagged, so neither build serves the other's payment twice. Another
+      // signer's tagged claim on the same nonce is a different payment.
+      const legacy = a && !refuse ? legacyNonceClaimKey(a.network, a.nonce) : null;
+      if (legacy && legacy !== keys[0]) {
+        const r = await claimSettlementKey(legacy, LEGACY_TAG + s.id, { ttlSeconds: INFLIGHT_TTL_SECONDS });
+        if (r.claimed) { if (!s.nonceKeys.includes(legacy)) s.nonceKeys.push(legacy); }
+        else if (r.holder != null && !String(r.holder).startsWith(LEGACY_TAG)) refuse = true;
       }
       if (refuse) { await releaseHeld(s); s.nonceKey = null; s.nonceKeys = []; }
     } catch { return; /* never touch a payment */ }
