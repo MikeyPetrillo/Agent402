@@ -86,7 +86,7 @@ Every pack is **also a single paid endpoint**, `POST /api/skill/{slug}`, which r
 | [**macro-economics**](https://agent402.tools/skills/macro-economics) | $0.032 | Pull the canonical US macro dataset - yield curve, CPI, unemployment, fed funds, Sahm rule. |
 | [**macro-context**](https://agent402.tools/skills/macro-context) | $0.036 | "Is the economic backdrop you're modeling against still current?" - refresh the macro snapshot. |
 | [**sec-filings-deep-dive**](https://agent402.tools/skills/sec-filings-deep-dive) | $0.028 | Full EDGAR picture of one company: filings, key financial time series, insider trades, full-text search. |
-| [**regulatory-watch**](https://agent402.tools/skills/regulatory-watch) | $0.023 | "Who just filed / bought / IPO'd?" - EDGAR full-text search, recent filings, Form 4s, 13F, IPO calendar. |
+| [**regulatory-watch**](https://agent402.tools/skills/regulatory-watch) | $0.023 | "Who just filed / bought / IPO'd?" - EDGAR full-text search, recent filings, Form 4s, a reference 13F holdings report, IPO calendar. |
 | [**ipo-watch**](https://agent402.tools/skills/ipo-watch) | $0.023 | What's going public? Recent S-1/IPO filings from EDGAR plus a web search for IPO news. |
 | [**yield-dashboard**](https://agent402.tools/skills/yield-dashboard) | $0.014 | Current yield-curve snapshot: full Treasury curve, key spreads, and average rates. |
 | [**fixed-income-desk**](https://agent402.tools/skills/fixed-income-desk) | $0.017 | Read the rate environment and price a bond in one workflow: live Treasury curve, the recession-signal spread, inflation context, then bond price and yield at current rates. |
