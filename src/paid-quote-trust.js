@@ -1,5 +1,5 @@
-// Paid-quote trust: a client address that has just paid is not held to the
-// unpaid-quote limiters.
+// Paid-quote trust: a client address that has just paid reads against a
+// raised ceiling on the unpaid-quote limiters, never none.
 //
 // A stock x402 client fetches an unpaid quote before every paid call, so the
 // metered gateway's unpaid-quote limiter (METERED_UNPAID_QUOTES_PER_MIN in
@@ -7,8 +7,11 @@
 // minute. A client address whose call ended in a final 200 that settled on any
 // rail (an x402 settle receipt on any chain, an MPP or Tempo receipt, a card
 // capture, a credits debit) is trusted for PAID_QUOTE_TRUST_MS after that call;
-// each new paid 200 slides the window. While trusted, its unpaid quotes are not
-// counted by the metered limiter nor by the unpaid price-check budget.
+// each new paid 200 slides the window. While trusted, its unpaid quotes are
+// counted on their own count against PAID_CLIENT_QUOTE_MULTIPLIER (10) times
+// the plain figures, by the metered limiter (PAID_CLIENT_METERED_QUOTES_PER_MIN
+// and _PER_HOUR) and by the unpaid price-check budget: one settled $0.001 call
+// once bought unbounded free quotes for the window.
 //
 // What does NOT trust an address: a free call (proof of work, the trial, a
 // first-call allowance grant whose settle was skipped, a forgiven hang-up), a
@@ -24,15 +27,16 @@
 // Storage: the process keeps its own bounded map (at most `keyCap` addresses,
 // least recently marked dropped first, entries expire with their window), and
 // writes each mark through to the shared store (src/shared-limits.js, a flag
-// with the window's expiry, keyed by a digest of the address, never the
-// address). Another replica reads the shared flag only on the refusal path, so
+// with the window's expiry, keyed by a keyed HMAC of the address,
+// quoteKeyDigest in src/unpaid-quote-budget.js, never the address nor a plain
+// hash of it). Another replica reads the shared flag only on the refusal path, so
 // an unpaid quote costs no store round trip; a negative answer is held briefly
 // so a flood of refused quotes cannot become a flood of store reads. A store
 // that does not answer reads as not trusted: the limiters then limit normally.
 //
 // Counts leave this module bucketed (`stats`), never an address.
-import { createHash } from "node:crypto";
 import { shared as sharedStore } from "./shared-limits.js";
+import { quoteKeyDigest, PAID_CLIENT_QUOTE_MULTIPLIER, PAID_CLIENT_METERED_QUOTES_PER_MIN, PAID_CLIENT_METERED_QUOTES_PER_HOUR } from "./unpaid-quote-budget.js";
 import { allowanceServed } from "./allowance-state.js";
 
 export const PAID_QUOTE_TRUST_MINUTES = 10;
@@ -41,6 +45,8 @@ export const PAID_QUOTE_TRUST_KEY_CAP = 20_000;
 // How long a "not trusted" answer from the shared store is held per address.
 export const PAID_QUOTE_TRUST_NEGATIVE_MS = 5_000;
 const STORE_NAME = "paid-quote-trust";
+// The raised ceiling a trusted address reads against (src/unpaid-quote-budget.js).
+export { PAID_CLIENT_QUOTE_MULTIPLIER, PAID_CLIENT_METERED_QUOTES_PER_MIN, PAID_CLIENT_METERED_QUOTES_PER_HOUR };
 
 /** Bucket a count so the operator view never carries an exact figure. */
 export function trustBucket(n) {
@@ -52,7 +58,7 @@ export function trustBucket(n) {
   return "1000+";
 }
 
-const digest = (key) => createHash("sha256").update(String(key)).digest("hex").slice(0, 32);
+const digest = (key) => quoteKeyDigest(key);
 
 /**
  * @param {object} [o]

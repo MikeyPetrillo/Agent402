@@ -7,7 +7,7 @@ import { createLargeBodyGate, largeBodyInflightMaxBytes, unlessBodyUnread } from
 import { carriesPaymentAttempt, registerOfferedNetworks } from "./payment-attempt.js";
 import { retiredEntryFor, assertRetiredRegistryConsistent, retirementHeaders, RETIRED_CONVERTERS_AT } from "./retired-tools.js";
 import { createTrafficStore, trafficMiddleware } from "./traffic-classifier.js";
-import { redisSharedSettled, createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath, METERED_UNPAID_QUOTES_PER_MIN, METERED_UNPAID_QUOTES_PER_HOUR, clientKeyOf as quoteClientKeyOf } from "./unpaid-quote-budget.js";
+import { redisSharedSettled, createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath, METERED_UNPAID_QUOTES_PER_MIN, METERED_UNPAID_QUOTES_PER_HOUR, PAID_CLIENT_METERED_QUOTES_PER_MIN, PAID_CLIENT_METERED_QUOTES_PER_HOUR, clientKeyOf as quoteClientKeyOf } from "./unpaid-quote-budget.js";
 import { createPaidQuoteTrust, paidAndSettled } from "./paid-quote-trust.js";
 import { stripMcpMarker } from "./mcp-loopback.js";
 import { canonicalizePaymentHeaders, decodePaymentHeader, encodePaymentHeader } from "./payment-header.js";
@@ -3362,9 +3362,10 @@ app.use(chainNamespaceMiddleware);
 // divides, like every limiter in src/rate-limit.js).
 const UNPAID_QUOTE_BUDGET = FREE_MODE ? 0 : unpaidQuoteBudgetPerHour();
 // Client addresses that completed a settled paid call in the last
-// PAID_QUOTE_TRUST_MINUTES (src/paid-quote-trust.js): their unpaid quotes are
-// not counted by the price-check budget below nor by the metered quote
-// limiter. Marked only from the settlement-outcome hook further down.
+// PAID_QUOTE_TRUST_MINUTES (src/paid-quote-trust.js): their unpaid quotes
+// read against PAID_CLIENT_QUOTE_MULTIPLIER times the plain figures, on the
+// price-check budget below and on the metered quote limiter. Marked only from
+// the settlement-outcome hook further down.
 const QUOTE_TRUST = createPaidQuoteTrust();
 const UNPAID_BUDGET = UNPAID_QUOTE_BUDGET > 0 ? createUnpaidQuoteBudget({
   paidTrust: QUOTE_TRUST,
@@ -3452,6 +3453,10 @@ app.use("/__operator/seller-verification", (req, res, next) => {
 // quoter cannot be used as free CPU. Paid retries carry a credential and pass.
 const meteredQuoteLimiter = createRateLimiter("metered-quote", { perMin: METERED_UNPAID_QUOTES_PER_MIN, perHour: METERED_UNPAID_QUOTES_PER_HOUR });
 const meteredUnverifiedLimiter = createRateLimiter("metered-quote-refused-credential", { perMin: METERED_UNPAID_QUOTES_PER_MIN, perHour: METERED_UNPAID_QUOTES_PER_HOUR });
+// An address in the paid-quote trust window reads against a raised ceiling
+// (src/unpaid-quote-budget.js PAID_CLIENT_METERED_QUOTES_*), on its own count
+// keyed like the trust (quoteClientKeyOf): trust raises the cap, never lifts it.
+const meteredTrustedQuoteLimiter = createRateLimiter("metered-quote-paid-client", { perMin: PAID_CLIENT_METERED_QUOTES_PER_MIN, perHour: PAID_CLIENT_METERED_QUOTES_PER_HOUR });
 app.use("/v1/metered", (req, res, next) => {
   // GET/HEAD too: the method alias below turns them into the POST quote path
   // (review 2026-08-28: 70 HEADs with a 180 KB body reached the quoter past
@@ -3471,14 +3476,16 @@ app.use("/v1/metered", (req, res, next) => {
     return res.status(429).json({ error: "Too many unpaid quote requests from this address; send the paid retry, or slow down.", retryAfterSeconds: 60, guide: `${BASE_URL.replace(/\/$/, "")}${BUYING_AT_VOLUME_PATH}` });
   };
   if (!paid) {
-    // An address that settled a paid call in the trust window is not counted
-    // (src/paid-quote-trust.js): a stock client quotes before every paid call.
-    // This process's record is read first; the shared store only on a refusal.
+    // An address that settled a paid call in the trust window reads against
+    // the raised ceiling (src/paid-quote-trust.js): a stock client quotes
+    // before every paid call. This process's record is read first; the shared
+    // store only on a refusal.
     const trustKey = quoteClientKeyOf(req);
-    if (QUOTE_TRUST.trustedLocal(trustKey)) return next();
+    const trustedQuote = () => (meteredTrustedQuoteLimiter.check(trustKey).limited ? refuseQuote() : next());
+    if (QUOTE_TRUST.trustedLocal(trustKey)) return trustedQuote();
     const ip = clientIp(req);
     if (meteredQuoteLimiter.peek(ip).limited) {
-      return QUOTE_TRUST.trusted(trustKey).then((t) => (t ? next() : refuseQuote()), () => refuseQuote());
+      return QUOTE_TRUST.trusted(trustKey).then((t) => (t ? trustedQuote() : refuseQuote()), () => refuseQuote());
     }
     meteredQuoteLimiter.check(ip);
     return next();
