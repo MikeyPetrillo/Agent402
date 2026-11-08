@@ -24,6 +24,10 @@ const PREFIX = "idem:";
 // for minutes); a crashed holder's claim lapses within this.
 const INFLIGHT_TTL_SECONDS = 120;
 export const INFLIGHT_RENEW_MS = 30_000;
+// The longest a claim is held for a run whose response never ends (the
+// middleware releases it when the run ends; this bounds a handler that hangs).
+// IDEM_INFLIGHT_MAX_MS overrides it.
+export const INFLIGHT_MAX_MS = (() => { const n = Number(process.env.IDEM_INFLIGHT_MAX_MS); return Number.isFinite(n) && n >= 1000 ? n : 2 * 60 * 60 * 1000; })();
 
 export function createLocalIdempotencyStore({ ttlMs = IDEM_TTL_MS, maxEntries = IDEM_MAX_ENTRIES, maxBytes = IDEM_MAX_BYTES } = {}) {
   const entries = new Map(); // key -> { at, body, bytes }

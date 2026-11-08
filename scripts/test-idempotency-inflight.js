@@ -144,5 +144,54 @@ try {
   } finally { s2.close(); }
 }
 
+// 7. A client that times out (closes its socket) while its keyed call is still
+// running, then retries with the same key: the claim is held until the RUN
+// ends, not until the socket closes. Mounted as the server mounts it: the
+// hang-up hook, the credits gate, then idempotency. The retry during the run
+// gets 409 (no second run, no second debit); once the run ends, the abandoned
+// answer was committed under its booked hang-up debt and the next retry
+// replays it.
+{
+  const DIR7 = mkdtempSync(join(tmpdir(), "test-idem-close-"));
+  const debits7 = [];
+  const cr7 = createCredits({ stripe, baseUrl: "https://agent402.tools", storeDir: DIR7, onDebit: (d) => debits7.push(d), onLoad: () => {}, log: () => {} });
+  const KEY7 = (await cr7.claim("cs_paid")).key;
+  const { createHangupSettlementHook } = await import("../src/hangup-settlement.js");
+  let runs7 = 0, open = false;
+  const waiting = [];
+  const app7 = express();
+  app7.use(express.json());
+  // What server.js recordHangupDebt does for a credits hold debited on close.
+  app7.use(createHangupSettlementHook({ onUndelivered: (req) => {
+    if (req.creditsSettled && Number(req.creditsChargedOnClose) > 0) req.__a402HangupDebt = { tx: `credits-hangup:${runs7}`, network: "credits", wire: "credits" };
+  } }));
+  app7.use(cr7.gate((method, path) => (path === "/api/slow" ? { priceUsd: PRICE, slug: "slow" } : null)));
+  app7.use(createIdempotency({ isCatalogRoute: (req) => req.path === "/api/slow", freeMode: false }));
+  app7.post("/api/slow", async (req, res) => { const n = ++runs7; if (!open) await new Promise((r) => waiting.push(r)); res.json({ run: n }); });
+  const s7 = app7.listen(0);
+  await new Promise((r) => s7.once("listening", r));
+  const U = `http://127.0.0.1:${s7.address().port}/api/slow`;
+  const hdr = { "content-type": "application/json", authorization: `Bearer ${KEY7}`, "idempotency-key": "k-close" };
+  try {
+    const ac = new AbortController();
+    const first = fetch(U, { method: "POST", headers: hdr, body: "{}", signal: ac.signal }).then((r) => r.status, () => "aborted");
+    await waitFor(() => waiting.length === 1);
+    ac.abort();
+    await new Promise((r) => setTimeout(r, 50)); // the server has seen the close
+    const during = await fetch(U, { method: "POST", headers: hdr, body: "{}" });
+    ok(during.status === 409 && (await during.json()).error === "idempotent_request_in_flight", `a retry after the client closed, while the run still goes, gets 409 in_flight (got ${during.status})`);
+    ok(runs7 === 1, `the retry never reached the handler (runs ${runs7})`);
+    open = true; waiting.forEach((r) => r());
+    ok((await first) === "aborted", "the first client had left");
+    await waitFor(() => debits7.length >= 1);
+    await new Promise((r) => setTimeout(r, 30)); // the claim is released after the commit lands
+    const after = await fetch(U, { method: "POST", headers: hdr, body: "{}" });
+    const afterBody = await after.json();
+    ok(after.status === 200 && after.headers.get("x-idempotent-replay") === "true" && afterBody.run === 1, `a retry after the run replays its answer (status ${after.status}, replay ${after.headers.get("x-idempotent-replay")}, run ${afterBody.run})`);
+    await new Promise((r) => setTimeout(r, 30));
+    ok(runs7 === 1 && debits7.length === 1, `one run and one debit for the whole sequence (runs ${runs7}, debits ${debits7.length})`);
+  } finally { s7.close(); rmSync(DIR7, { recursive: true, force: true }); }
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
