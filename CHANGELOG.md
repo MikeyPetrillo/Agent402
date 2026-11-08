@@ -17,8 +17,11 @@ Docs:
 - The /v1/metered unpaid-quote 429 carries Retry-After: 60, retryAfterSeconds
   and a guide link.
 - Once a client address has paid (a final 200 that settled on any rail, or a
-  credits debit), its unpaid quotes read against 10 times each limit for 10
-  minutes after each paid call; a refused payment credential still counts.
+  credits debit), its unpaid price checks read against 10 times the hourly
+  figure for the rest of that clock hour and for 10 minutes after each paid
+  call, and its /v1/metered quotes against 10 times each figure for 10 minutes
+  after each paid call; on the shared Worker egress address the whole address
+  keeps its ceiling; a refused payment credential still counts.
 - A content-pipeline guide (/guides/content-pipeline, wiki page
   Content-Pipeline): research, script, voiceover, images, transcription,
   subtitles, dubbing and media checks as paid calls from one wallet, with a
@@ -37,6 +40,17 @@ Payments:
 - A Tempo pull payment answered 402 after its broadcast failed is read on chain
   again (by default 15 s, 45 s and 2 minutes later); a transfer that lands
   after the 402 is booked as owed, to be refunded.
+- A keyed call whose client closes its connection keeps its claim until the
+  run ends, so a retry with the same key gets 409 idempotent_request_in_flight,
+  then the stored answer, never a second run.
+- A credits call whose client leaves after the response headers is decided
+  when the response ends: a response of 400 or above, a replay or a cache hit
+  is not debited, and a metered call is debited its metered amount, never the
+  whole hold.
+- A card subscription status event that arrives late never reactivates a
+  canceled subscription.
+Site:
+- The navigation puts live, status and llms.txt in the menus.
 Operations:
 - /api/gateway-status reports lateSettlements (ok, near_capacity, full,
   unresolved) for settlements whose outcome was not known when the call was

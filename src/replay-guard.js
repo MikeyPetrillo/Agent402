@@ -743,7 +743,7 @@ export function createReplayGuard({
         console.error("[replay-guard] redis release failed; the claim expires with its TTL:", e.message);
       }
     },
-    /** Introspection for tests / stats — LOCAL state only; Redis state is
+    /** Introspection for tests / stats: LOCAL state only; Redis state is
      *  shared and has no single-process notion of "size". */
     _state() {
       return { consumed: consumed.size, inFlight: inFlight.size, renewing: renewers.size, pendingConsumed: pending.size };

@@ -512,5 +512,24 @@ async function listen(app) {
   ok(await run(cred({ payload: { signature: "0x76ab", type: "transaction" } })) === null && await tempoPushSender("Payment junk", { fetchImpl }) === null && asked.length === n, "push sender: a pull credential or junk is not read at all");
 }
 
+// The late-landing watches are bounded per process: past
+// TEMPO_LATE_CONFIRM_MAX_WATCHES a new one is refused and logged, never queued.
+{
+  const { watchLateTempoLanding, _lateTempoWatchCount } = await import("../src/mpp-tempo.js");
+  process.env.TEMPO_LATE_CONFIRM_MAX_WATCHES = "3";
+  const logs = [];
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const confirm = async () => { await gate; return null; };
+  const started = [];
+  for (let i = 0; i < 4; i++) started.push(watchLateTempoLanding({ i }, { confirm, onLanded: async () => {}, delays: [0], log: (m) => logs.push(m) }));
+  ok(started.slice(0, 3).every(Boolean) && started[3] === false && _lateTempoWatchCount() === 3, `late: the fourth watch past a bound of 3 is refused (started ${started.join(",")}, running ${_lateTempoWatchCount()})`);
+  ok(logs.some((m) => /per-process bound is reached/.test(m)), "late: and the refusal is logged");
+  release();
+  for (let i = 0; i < 50 && _lateTempoWatchCount() > 0; i++) await new Promise((r) => setTimeout(r, 5));
+  ok(_lateTempoWatchCount() === 0, "late: the watches release their slots when they end");
+  delete process.env.TEMPO_LATE_CONFIRM_MAX_WATCHES;
+}
+
 console.log(`\n${pass} passed, 0 failed`);
 process.exit(0);

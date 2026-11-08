@@ -511,7 +511,7 @@ curl -s https://agent402.tools/v1/models \\
 |---|---|---|
 | 400 | the input was refused before the tool ran; the body carries \`expected\`, \`required\`, \`example\` and \`howToCall\` (method, URL and a ready body) | fix the request from \`howToCall\`; not charged on x402 |
 | 402 | the quote, or a refused payment; the first-contact 402 body carries the offer, \`howToCall\` and, on a job route, \`async\` | pay, or fund the wallet the refusal names |
-| 409 | the same keyed call is still running | wait \`Retry-After\`, send the same key and payment |
+| 409 | the same keyed call is still running | wait \`Retry-After\`, then resend the same key with the same payment header to get its answer |
 | 422 | the tool cannot serve this input (an image too large to read, a body that is not an image) | read \`error\` and the \`howToCall\` note; not charged on x402 |
 | 429 | one of the limits above | wait \`Retry-After\` |
 | 503 | busy or briefly paused; image-ocr reading another image over ${OCR_LARGE_PIXELS / 1e6} megapixels answers \`hint: "large-image-busy"\` | wait \`Retry-After\`, or send a smaller image, which is read at once |
@@ -525,7 +525,10 @@ const BASE = process.env.AGENT402_URL || "https://agent402.tools";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function call(path, body, { pay = fetch, tries = 5 } = {}) {
-  const key = crypto.randomUUID(); // one key per logical call, reused on every retry
+  // The key replays a stored answer only with the same signed payment; a payment
+  // client signs afresh on each retry, so each retry here is its own paid call.
+  // This loop retries only answers that are not charged on x402.
+  const key = crypto.randomUUID();
   for (let i = 0; i < tries; i++) {
     const res = await pay(BASE + path, {
       method: "POST",
