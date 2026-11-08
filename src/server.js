@@ -10280,7 +10280,7 @@ if (!FREE_MODE) {
     slugOf: (req) => CATALOG[`${req.method} ${req.path}`]?.slug,
   });
   // A claim held for a run whose process died is owed again (leased sweep).
-  void startTempoHeldClaimSweep();
+  void startTempoHeldClaimSweep({ saleFor: async (tx) => (await import("./sales-ledger.js")).saleByTxFresh(tx) });
   const tempoGate = createTempoGate({
     replayGuard: tempoReplayGuard,
     // Chain-truth fallback on relay broadcast failure (2026-08-20): a relay

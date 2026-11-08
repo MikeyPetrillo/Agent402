@@ -294,17 +294,18 @@ export function createHeldClaimSweep({ listVoid = null, listPage = null, reopenH
 }
 
 let heldSweepTimer = null;
-/** Start the held-claim sweep under its lease (once per process). */
-export function startTempoHeldClaimSweep({ intervalMs = PUSH_HELD_SWEEP_INTERVAL_MS } = {}) {
+/** Start the held-claim sweep under its lease (once per process). `saleFor(tx)` reads a
+ *  sale by its transaction; the caller passes it so this module never imports the sales ledger. */
+export function startTempoHeldClaimSweep({ intervalMs = PUSH_HELD_SWEEP_INTERVAL_MS, saleFor } = {}) {
   if (heldSweepTimer) return null;
   heldSweepTimer = "starting";
   const ready = (async () => {
-    const [{ leased }, ledger, { saleByTxFresh }] = await Promise.all([import("./state-db.js"), import("./refund-ledger.js"), import("./sales-ledger.js")]);
+    const [{ leased }, ledger] = await Promise.all([import("./state-db.js"), import("./refund-ledger.js")]);
     const sweeper = createHeldClaimSweep({
       listPage: ledgerHeldPage(ledger),
       reopenHeld: ledger.reopenHeldClaim,
       renoteVoid: ledger.renoteVoidRefund,
-      saleFor: (tx) => saleByTxFresh(tx),
+      saleFor,
       journalWaiting: () => ledger.refundDeadLetterState().waiting,
     });
     const tick = leased(PUSH_HELD_SWEEP_LEASE, { ttlMs: Math.max(intervalMs, 120_000) }, () => sweeper.sweep());

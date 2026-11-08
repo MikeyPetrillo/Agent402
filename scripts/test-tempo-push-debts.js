@@ -405,7 +405,7 @@ const rowsFor = (hash) => ledger.listRefunds({ status: "all", limit: 1000 }).fil
   ok(/tx: req\.tempoSettled \? \(tempoPushHashOf\(req\) \|\|/.test(hang), "a push disconnect is keyed on the credential's (lowercased) hash, the evidence the input-refused row used");
   ok(/if \(!made && req\.tempoSettled && tempoPushHashOf\(req\) === row\.tx\) void tempoPushDebts\?\.hungUp\(row\.tx, hangupReason\)/.test(hang), "recordHangupDebt promotes an existing input-refused row instead of ignoring it (on the write's verdict)");
   ok(/promoteToHangup: promoteOwedToHangup/.test(src), "server.js wires the promotion to the refund ledger");
-  ok(/createTempoPushDebts\(\{[\s\S]{0,800}\}\);[\s\S]{0,200}void startTempoHeldClaimSweep\(\);/.test(src), "server.js starts the held-claim sweep where it builds the push-debt hooks");
+  ok(/createTempoPushDebts\(\{[\s\S]{0,800}\}\);[\s\S]{0,200}void startTempoHeldClaimSweep\(\{ saleFor: /.test(src), "server.js starts the held-claim sweep where it builds the push-debt hooks, with its saleFor");
   ok(/voidForServe: voidOwedForServe, reopenHeld: reopenHeldClaim, renoteVoid: renoteVoidRefund/.test(src), "server.js wires the claim hold, its reopen and its served note to the refund ledger");
   ok(/app\.use\(tempoGate\);[\s\S]{0,900}await tempoPushDebts\.claimForServe\(req\)/.test(src), "server.js holds the claim right after the Tempo gate, before any handler");
   ok(/res\.statusCode >= 400 && !req\.tempoPushRefunded\)/.test(src), "a push refused as refunded books no second debt or charged failure");
@@ -707,6 +707,7 @@ for (const [label, headers, status, error, tail] of [
   const { readFileSync } = await import("node:fs");
   const startSrc = readFileSync(new URL("../src/tempo-push-debts.js", import.meta.url), "utf8").split("export function startTempoHeldClaimSweep")[1] || "";
   ok(/listPage: ledgerHeldPage\(ledger\)/.test(startSrc) && !/listVoid|listRefunds/.test(startSrc), "the production sweep walks the ledger page by page, never one newest-first list");
+  ok(!/sales-ledger/.test(readFileSync(new URL("../src/tempo-push-debts.js", import.meta.url), "utf8")) && /saleFor,/.test(startSrc), "the sweep takes saleFor from its caller and does not import the sales ledger");
 }
 
 server.close();
