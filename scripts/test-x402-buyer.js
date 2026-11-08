@@ -904,6 +904,28 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
   clearInterval(keep);
   ok(err?.statusCode === 502 && err?.paidUnanswered === true && err?.committed === true, `an unanswered paid request keeps the hold (${err?.message})`);
   ok(took < 1300 && waits[0] <= 450, `the refusal wait ends inside the caller's budget from the call's start: 1000 ms budget, 600 ms seller timeout, took ${took} ms (chain wait ${waits[0]} ms)`);
+  // Every signed payment gets one outbound line, whatever ended it.
+  const { readFileSync: rf, existsSync: ex } = await import("node:fs");
+  const lines = () => (ex(process.env.OUTBOUND_LEDGER_FILE) ? rf(process.env.OUTBOUND_LEDGER_FILE, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
+  const forOrigin = (o) => lines().filter((l) => l.origin === new URL(o).host);
+  ok(forOrigin("https://hangs.example").length === 1 && forOrigin("https://hangs.example")[0].result === "unknown", `an unanswered paid request is recorded once, as unknown (${JSON.stringify(forOrigin("https://hangs.example").map((l) => l.result))})`);
+  // A refusal the chain proves unused: one "refused" line, which pays nobody.
+  globalThis.fetch = async (url, init) => {
+    const paidHdr = init?.headers?.["PAYMENT-SIGNATURE"] || init?.headers?.["payment-signature"] || init?.headers?.["X-PAYMENT"];
+    if (!paidHdr) return { status: 402, headers: { get: (k) => (k.toLowerCase() === "payment-required" ? h : null) }, json: async () => ({}), text: async () => "{}" };
+    return { status: 402, headers: { get: (k) => (k.toLowerCase() === "payment-required" ? h : "application/json") }, json: async () => ({ error: "payment_verification_failed" }), text: async () => JSON.stringify({ error: "payment_verification_failed" }) };
+  };
+  resetRefusals?.();
+  const refusedErr = await pay("https://refuses-once.example/x", { maxAtomic: 500000n, method: "POST", body: {}, chain: "base", notDebited: async () => ({ debited: false, expired: true, observed: 1 }) }).then(() => null, (e) => e);
+  ok(refusedErr?.refused === true && forOrigin("https://refuses-once.example").map((l) => l.result).join() === "refused", `a refusal the chain proves unused is recorded once, as refused (${JSON.stringify(forOrigin("https://refuses-once.example").map((l) => l.result))})`);
+  // A 5xx already recorded as undelivered is not recorded twice.
+  globalThis.fetch = async (url, init) => {
+    const paidHdr = init?.headers?.["PAYMENT-SIGNATURE"] || init?.headers?.["payment-signature"] || init?.headers?.["X-PAYMENT"];
+    if (!paidHdr) return { status: 402, headers: { get: (k) => (k.toLowerCase() === "payment-required" ? h : null) }, json: async () => ({}), text: async () => "{}" };
+    return { status: 500, headers: { get: (k) => (k.toLowerCase() === "content-type" ? "application/json" : null) }, json: async () => ({ error: "boom" }), text: async () => "{\"error\":\"boom\"}" };
+  };
+  await pay("https://fails-500.example/x", { maxAtomic: 500000n, method: "POST", body: {}, chain: "base", notDebited: async () => ({ debited: false, expired: false, observed: 1 }), refusalMaxWaitMs: 0 }).then(() => null, (e) => e);
+  ok(forOrigin("https://fails-500.example").map((l) => l.result).join() === "undelivered", `a paid 5xx is recorded once, as undelivered (${JSON.stringify(forOrigin("https://fails-500.example").map((l) => l.result))})`);
 }
 
 globalThis.fetch = origFetch;

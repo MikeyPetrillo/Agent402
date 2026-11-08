@@ -835,7 +835,9 @@ export function atomicForMessage(v) {
  * A 200 on the bare request means the endpoint is free — returned with no
  * spend. Only a 402 triggers a payment; anything else is a 502.
  */
-export async function payX402(url, { maxAtomic, method = "GET", body, headers = {}, timeoutMs = 20000, maxBytes = DEFAULT_MAX_BYTES, chain = "base", provenPayTo = null, evidenceWallets = null, sellerProof = null, notDebited = null, allowUnproven = false, refusalMaxWaitMs = refusalMaxWaitMsDefault(), memoizeDelivery = false, slug = null, signBy = null, sellerKey = null } = {}) {
+/** payX402's own timeout for each seller request when the caller gives none. */
+export const PAY_X402_TIMEOUT_MS = 20000;
+export async function payX402(url, { maxAtomic, method = "GET", body, headers = {}, timeoutMs = PAY_X402_TIMEOUT_MS, maxBytes = DEFAULT_MAX_BYTES, chain = "base", provenPayTo = null, evidenceWallets = null, sellerProof = null, notDebited = null, allowUnproven = false, refusalMaxWaitMs = refusalMaxWaitMsDefault(), memoizeDelivery = false, slug = null, signBy = null, sellerKey = null } = {}) {
   assertSigningAllowed("an external x402 payment");
   // The refusal wait ends at a fixed time from this call's start, so a seller
   // that never answers the paid request cannot add its timeout on top of it.
@@ -1121,6 +1123,9 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
   }
   const spendToken = await reserveSpend(quotedAtomic); // F3 belt, before signing (throws 429 if over the window budget)
   let committed = false;
+  // Set once a line for this payment is in the outbound ledger; a post-commit
+  // failure no other path recorded is recorded in the catch below.
+  let outboundRecorded = false;
   try {
     // BASE UNPROVEN DAILY CAPS (src/base-unproven.js): the seller's and the
     // whole lane's, checked and the signed amount reserved in one step, keyed
@@ -1267,6 +1272,16 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
       const unused = !!(verdict && verdict.debited === false && verdict.expired === true);
       if (unused) committed = false; // provably unpaid: the finally releases the hold
       console.warn(`[x402-buyer] ${where} did not answer the paid request (${what}) - ${unused ? "the credential expired unused, nothing charged" : "the payment may have settled, hold kept"}`);
+      if (!outboundRecorded) {
+        outboundRecorded = true;
+        try {
+          recordOutbound({
+            chain, payTo: payable?.payTo ?? null, amountAtomic: quotedAtomic,
+            asset: payable?.asset ?? null, usd: Number(quotedAtomic) / 1e6,
+            slug: slug || null, origin: sellerOrigin, result: unused ? "refused" : "unknown", tx: null,
+          });
+        } catch { /* bookkeeping never throws into the payment path */ }
+      }
       // Worded for any caller: what a caller does next (route-execute tries
       // no other seller) is the caller's to say.
       const e = bad(unused
@@ -1408,7 +1423,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
       // most to explain afterwards was the one that recorded least. Recorded
       // for every caller; only the steering memo is the router's own.
       if (paid.status >= 500 && !(paid.headers.get("payment-response") || paid.headers.get("x-payment-response"))) {
-        recordOutbound({
+        outboundRecorded = true; recordOutbound({
           chain, payTo: payable?.payTo ?? null, amountAtomic: quotedAtomic,
           asset: payable?.asset ?? null, usd: Number(quotedAtomic) / 1e6,
           slug: slug || null, origin: sellerOrigin, result: "undelivered", tx: null,
@@ -1434,7 +1449,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
       const strikeChargedFailure = (how) => {
         if (deliveryStruck || !(paid.status >= 400 && paid.status < 500) || isCallerInputStatus(paid.status)) return;
         deliveryStruck = true;
-        recordOutbound({
+        outboundRecorded = true; recordOutbound({
           chain, payTo: payable?.payTo ?? null, amountAtomic: quotedAtomic,
           asset: payable?.asset ?? null, usd: Number(quotedAtomic) / 1e6,
           slug: slug || null, origin: sellerOrigin, result: "undelivered", tx: null,
@@ -1517,6 +1532,20 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
       // literal here let a mutation that never flipped the variable pass the
       // suite - the error said "not committed" while the hold stood.)
       if (postCommitErr && typeof postCommitErr === "object") { postCommitErr.committed = committed; postCommitErr.signedUsd = signedUsd; }
+      // Every signed payment gets one outbound line: a paid request that got
+      // no answer, or a refusal, is recorded here unless a path above already
+      // recorded it ("refused" once the chain proved the credential unused,
+      // "unknown" while it may still settle).
+      if (!outboundRecorded) {
+        outboundRecorded = true;
+        try {
+          recordOutbound({
+            chain, payTo: payable?.payTo ?? null, amountAtomic: quotedAtomic,
+            asset: payable?.asset ?? null, usd: Number(quotedAtomic) / 1e6,
+            slug: slug || null, origin: (() => { try { return new URL(url).origin; } catch { return null; } })(), result: committed ? "unknown" : "refused", tx: null,
+          });
+        } catch { /* bookkeeping never throws into the payment path */ }
+      }
       throw postCommitErr;
     }
 
