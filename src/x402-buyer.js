@@ -36,6 +36,8 @@ import { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2, canonicalAvmNetw
 export const ROUTER_UA =
   "Mozilla/5.0 (compatible; Agent402-Router/1.0; +https://agent402.tools/crawler)";
 import { recordOutbound } from "./outbound-ledger.js";
+import { PAY_X402_TIMEOUT_MS } from "./buyer-timeouts.js";
+export { PAY_X402_TIMEOUT_MS };
 import { assertSigningAllowed } from "./signing-halt.js";
 import { recordUpstreamSpend } from "./stats.js";
 import { provenPayToMatches } from "./settlement-proof.js";
@@ -835,8 +837,6 @@ export function atomicForMessage(v) {
  * A 200 on the bare request means the endpoint is free — returned with no
  * spend. Only a 402 triggers a payment; anything else is a 502.
  */
-/** payX402's own timeout for each seller request when the caller gives none. */
-export const PAY_X402_TIMEOUT_MS = 20000;
 export async function payX402(url, { maxAtomic, method = "GET", body, headers = {}, timeoutMs = PAY_X402_TIMEOUT_MS, maxBytes = DEFAULT_MAX_BYTES, chain = "base", provenPayTo = null, evidenceWallets = null, sellerProof = null, notDebited = null, allowUnproven = false, refusalMaxWaitMs = refusalMaxWaitMsDefault(), memoizeDelivery = false, slug = null, signBy = null, sellerKey = null } = {}) {
   assertSigningAllowed("an external x402 payment");
   // The refusal wait ends at a fixed time from this call's start, so a seller

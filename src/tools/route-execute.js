@@ -30,7 +30,7 @@ import { observeDelivery } from "../response-observation.js";
 import { isIdentityBoundRoute } from "../payments.js";
 import { evmCredentialBudgetMs, evmCredentialSettleableMs, evmSellerSignBy, EVM_SELLER_ALLOWANCE_MS } from "../evm-validity.js";
 import { cdnSyncLeftMs } from "../cdn-sync-window.js";
-import { PAY_X402_TIMEOUT_MS } from "../x402-buyer.js";
+import { PAY_X402_TIMEOUT_MS } from "../buyer-timeouts.js";
 import { spendsBeforeSettlement } from "../composite-spend-guard.js";
 import { upstreamBuyerStatus, evmBuyerChainStatus } from "../upstream-buyer-status.js";
 import { EVM_BUYER_CHAINS, EVM_BUYER_CHAIN_BY_NETWORK, isEvmBuyerChain, evmBuyerChainEnabled, enabledEvmBuyerChains } from "../evm-buyer-chains.js";
