@@ -574,5 +574,19 @@ await check("a booking recorded nowhere pages for its window, then clears; an op
   assert.equal((await refusing.operatorView()).unrecordedInMemory, 0, "acknowledged");
 });
 
+await check("a booking recorded nowhere still pages after a restart, until an operator acknowledges it", async () => {
+  const journal = { add: () => null, size: () => 0, drain: async () => 0 };
+  const file = bookFile();
+  const mk = (over = {}) => createLateSettleBook({ file, now, log: () => {}, alarm: () => {}, fetchImpl, rpcFor: (net) => (net === RH ? RPC : null), journal, ...over });
+  // The book is full and the journal refuses: recorded nowhere.
+  const before = mk({ maxEntries: 0 });
+  assert.equal(await before.book(entry(760)), false);
+  // A restart (a deploy): a fresh book on the same store, with room.
+  const after = mk();
+  assert.equal(await after.alarmStatus({ ttlMs: 0 }), "unresolved", "the unrecorded booking outlives the process that saw it");
+  assert.equal((await after.acknowledgeUnrecorded({ note: "checked the alarm line" })).acknowledged, 1);
+  assert.equal(await mk().alarmStatus({ ttlMs: 0 }), "ok", "an acknowledgement clears it for every later process");
+});
+
 console.log(`test-late-settlements: ${failures ? `FAILED (${failures})` : "all passed"}`);
 process.exit(failures ? 1 : 0);

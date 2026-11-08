@@ -125,7 +125,9 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   past `OWED_ESCALATE_DAYS` (default 7) as an error, at most once a day (no addresses).
   The late-settlement book reports `lateSettlements` on /api/gateway-status: ok, near_capacity
   (80% of the open bound), full, unresolved (an entry waits for a human, a booking sits in the
-  journal, or one could not be recorded anywhere in the last 24 hours). The status Worker and the
+  journal, or one could not be recorded anywhere in the last 24 hours; that time is also written
+  to the resolutions document, retried on the next status read when the write fails, so it outlives
+  a restart until it ages out or is acknowledged). The status Worker and the
   heartbeat page on unresolved and full and close on ok or near_capacity. Unresolved entries are
   read on chain again every 6 hours (five a pass) and close themselves once the chain answers; an
   operator clears one with `POST /__operator/late-settlements`
@@ -138,5 +140,6 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   state document (with a state database), read back by the next container; past 200 in memory the
   oldest is logged as an error naming it, the `gatewayPending` word pages for 24 hours, and it
   stays in the document (bound 2000) until memory has room. Without a volume the local copy is a
-  0600 file in a per-process mkdtemp directory. Rollback: an older build ignores the document, so
-  `heldInMemory` on `/__operator/gateway-pending.json` stays the list of what is held.
+  0600 file in a per-process mkdtemp directory. Rollback: an older build ignores the document and starts
+  with empty memory, so before rolling back read `heldInMemory` and `heldDurable` on
+  `/__operator/gateway-pending.json` and resolve what is held.

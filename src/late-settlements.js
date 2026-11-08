@@ -84,6 +84,8 @@ export const UNRESOLVED_RECHECK_PER_PASS = 5;
 /** A booking recorded nowhere reads `unresolved` for this long after it
  *  happened, unless an operator acknowledges it first. */
 export const UNRECORDED_WINDOW_MS = 24 * 3600_000;
+// Most unrecorded-booking times the resolutions document keeps.
+const UNRECORDED_KEPT = 200;
 /** How many operator resolutions the resolution record keeps. */
 export const RESOLUTIONS_KEPT = 500;
 /** What an operator may resolve an unresolved entry as. */
@@ -256,13 +258,41 @@ export function createLateSettleBook({
   // { pending } only, so an older build's writes never drop the record).
   const resolutionsDoc = createJsonDocument({ name: "late-settlements-resolutions", file: `${file}.resolutions.json`, log: () => {} });
   const resolutionsReady = resolutionsDoc.backend === "pg" ? resolutionsDoc.load(null).catch(() => null) : Promise.resolve();
-  const recordResolution = async (row) => {
+  const recordResolution = async (row, { clearUnrecorded = false } = {}) => {
     await resolutionsReady;
     const r = await resolutionsDoc.update((b) => {
-      const list = Array.isArray(b?.resolutions) ? b.resolutions : [];
-      return { resolutions: [...list, row].slice(-RESOLUTIONS_KEPT) };
+      const body = b && typeof b === "object" ? b : {};
+      const list = Array.isArray(body.resolutions) ? body.resolutions : [];
+      return { ...body, resolutions: [...list, row].slice(-RESOLUTIONS_KEPT), ...(clearUnrecorded ? { unrecorded: [] } : {}) };
     }, { fallback: null });
     return !!r?.ok;
+  };
+  // An unrecorded booking's time is also written to the resolutions document,
+  // so the word outlives a restart or deploy. When it fires the store is
+  // usually refusing too, so a write that did not land is retried on the next
+  // status read; until it lands, this process's memory holds it.
+  let unrecordedUnsaved = false;
+  const saveUnrecorded = async () => {
+    try {
+      await resolutionsReady;
+      const cut = now() - UNRECORDED_WINDOW_MS;
+      const mine = unrecordedAt.slice();
+      const r = await resolutionsDoc.update((b) => {
+        const body = b && typeof b === "object" ? b : {};
+        const had = Array.isArray(body.unrecorded) ? body.unrecorded : [];
+        const merged = [...new Set([...had, ...mine].map(Number))].filter((t) => Number.isFinite(t) && t > cut).sort((x, y) => x - y).slice(-UNRECORDED_KEPT);
+        return { ...body, unrecorded: merged };
+      }, { fallback: null });
+      unrecordedUnsaved = !r?.ok;
+    } catch { unrecordedUnsaved = true; }
+  };
+  const savedUnrecordedRecent = async () => {
+    try {
+      await resolutionsReady;
+      const b = resolutionsDoc.backend === "pg" ? await resolutionsDoc.load(null) : resolutionsDoc.loadSync(null);
+      const cut = now() - UNRECORDED_WINDOW_MS;
+      return (Array.isArray(b?.unrecorded) ? b.unrecorded : []).filter((t) => Number(t) > cut).length;
+    } catch { return 0; }
   };
   const readResolutions = async () => {
     try {
@@ -353,6 +383,8 @@ export function createLateSettleBook({
       try { const j = await journalOf(); id = j ? j.add("late", entry) : null; } catch { id = null; }
       if (id == null) {
         unrecordedAt.push(now());
+        unrecordedUnsaved = true;
+        saveUnrecorded().catch(() => {});
         alarm(`[late-settle] ${network} ${byAuth ? `auth ${c.payer}/${c.nonce}` : `tx ${c.tx}`} failed and could NOT be recorded (store and journal both refused); if it lands the buyer is owed ${entry.amount} of ${entry.asset} from ${entry.payer}`);
         return false;
       }
@@ -378,8 +410,10 @@ export function createLateSettleBook({
       let journaled = 0;
       try { journaled = await journalCount(); } catch { journaled = 1; }
       let word = "ok";
+      if (unrecordedUnsaved && unrecordedRecent() > 0) await saveUnrecorded();
+      const unrecorded = Math.max(unrecordedRecent(), await savedUnrecordedRecent());
       if (open >= maxEntries) word = "full";
-      else if (unrecordedRecent() > 0 || journaled > 0 || entries().some((e) => e.state === "unresolved")) word = "unresolved";
+      else if (unrecorded > 0 || journaled > 0 || entries().some((e) => e.state === "unresolved")) word = "unresolved";
       else if (open >= Math.ceil(maxEntries * NEAR_CAPACITY_SHARE)) word = "near_capacity";
       wordCache = { at: t, word };
       return word;
@@ -456,9 +490,10 @@ export function createLateSettleBook({
      *  was named in its alarm line); recorded like a resolution. */
     async acknowledgeUnrecorded({ note } = {}) {
       if (typeof note !== "string" || !note.trim()) return { ok: false, error: "a note saying what was checked is required" };
-      const count = unrecordedRecent();
-      if (!(await recordResolution({ key: "unrecorded", network: null, tx: null, outcome: "acknowledged", note: note.trim().slice(0, 300), at: now() }).catch(() => false))) return { ok: false, error: "the acknowledgement could not be recorded" };
+      const count = Math.max(unrecordedRecent(), await savedUnrecordedRecent());
+      if (!(await recordResolution({ key: "unrecorded", network: null, tx: null, outcome: "acknowledged", note: note.trim().slice(0, 300), at: now() }, { clearUnrecorded: true }).catch(() => false))) return { ok: false, error: "the acknowledgement could not be recorded" };
       unrecordedAt = [];
+      unrecordedUnsaved = false;
       wordCache = { at: 0, word: null };
       log(`[late-settle] operator acknowledged ${count} unrecorded booking(s): ${oneLine(note.trim()).slice(0, 200)}`);
       return { ok: true, acknowledged: count };
