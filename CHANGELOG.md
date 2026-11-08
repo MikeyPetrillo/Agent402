@@ -6,6 +6,17 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-08 (buying at volume)
+Docs:
+- A buying-at-volume guide (/guides/buying-at-volume, wiki page
+  Buying-at-Volume) for agents that buy in bursts: the per-address limits and
+  their Retry-After, retries that never pay twice, async jobs, spend caps in
+  agent402-client, agent402-mcp and agent402-openclaw, which rails settle when,
+  metered model ids and input caps, and the errors to handle. llms.txt and the
+  three package pages link it.
+- The /v1/metered unpaid-quote 429 carries Retry-After: 60, retryAfterSeconds
+  and a guide link.
+
 ### 2026-11-07 (onchain-sql price, X data tools, Solana token search, metered chat, OCR and fetch errors)
 Tools:
 - onchain-sql is $0.030 a call (was $0.040), and a call still sends the query

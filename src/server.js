@@ -7,7 +7,7 @@ import { createLargeBodyGate, largeBodyInflightMaxBytes, unlessBodyUnread } from
 import { carriesPaymentAttempt, registerOfferedNetworks } from "./payment-attempt.js";
 import { retiredEntryFor, assertRetiredRegistryConsistent, retirementHeaders, RETIRED_CONVERTERS_AT } from "./retired-tools.js";
 import { createTrafficStore, trafficMiddleware } from "./traffic-classifier.js";
-import { redisSharedSettled, createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath } from "./unpaid-quote-budget.js";
+import { redisSharedSettled, createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath, METERED_UNPAID_QUOTES_PER_MIN, METERED_UNPAID_QUOTES_PER_HOUR } from "./unpaid-quote-budget.js";
 import { stripMcpMarker } from "./mcp-loopback.js";
 import { canonicalizePaymentHeaders, decodePaymentHeader, encodePaymentHeader } from "./payment-header.js";
 import { RAILS_OR, RAILS, x402EvmOnly, x402RailsFor } from "./rails.js";
@@ -642,7 +642,7 @@ import { CDP_TOOLS } from "./tools/cdp-kit.js";
 import { toolPage, openapiSpec, toolList, CATEGORIES, faqPage, categoryPage, relatedTools } from "./pages.js";
 import { createIdempotency, implicitReplayAllowed } from "./idempotency.js";
 import { mountMcp, mcpClientsSeenSinceBoot } from "./mcp-http.js";
-import { guidesIndex, guidePage, guideTitles } from "./guides.js";
+import { guidesIndex, guidePage, guideTitles, BUYING_AT_VOLUME_PATH } from "./guides.js";
 import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, buildPromptMessages, skillPackOfToolSlug } from "./skills.js";
 import { docsPage, docsApi, DOCS_SITE_ROUTES } from "./docs.js";
 import { changelogPage, changelogRss } from "./changelog.js";
@@ -3443,8 +3443,8 @@ app.use("/__operator/seller-verification", (req, res, next) => {
 // An unpaid POST here tokenizes the body for its 402 quote (measured 28 ms
 // per 190k CJK chars): bound unauthenticated quote requests per IP so the
 // quoter cannot be used as free CPU. Paid retries carry a credential and pass.
-const meteredQuoteLimiter = createRateLimiter("metered-quote", { perMin: 60, perHour: 1200 });
-const meteredUnverifiedLimiter = createRateLimiter("metered-quote-refused-credential", { perMin: 60, perHour: 1200 });
+const meteredQuoteLimiter = createRateLimiter("metered-quote", { perMin: METERED_UNPAID_QUOTES_PER_MIN, perHour: METERED_UNPAID_QUOTES_PER_HOUR });
+const meteredUnverifiedLimiter = createRateLimiter("metered-quote-refused-credential", { perMin: METERED_UNPAID_QUOTES_PER_MIN, perHour: METERED_UNPAID_QUOTES_PER_HOUR });
 app.use("/v1/metered", (req, res, next) => {
   // GET/HEAD too: the method alias below turns them into the POST quote path
   // (review 2026-08-28: 70 HEADs with a 180 KB body reached the quoter past
@@ -3458,7 +3458,11 @@ app.use("/v1/metered", (req, res, next) => {
   // src/unpaid-quote-budget.js because the unpaid price-check budget has to
   // read a credential exactly the same way, and two copies of this rule drift.
   const paid = looksLikePayment(req.headers);
-  if (!paid && meteredQuoteLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many unpaid quote requests from this address; send the paid retry, or slow down." });
+  // The 429 names its wait and links the guide to buying in bursts.
+  if (!paid && meteredQuoteLimiter.check(clientIp(req)).limited) {
+    res.set("Retry-After", "60");
+    return res.status(429).json({ error: "Too many unpaid quote requests from this address; send the paid retry, or slow down.", retryAfterSeconds: 60, guide: `${BASE_URL.replace(/\/$/, "")}${BUYING_AT_VOLUME_PATH}` });
+  }
   if (paid) {
     // A header that only decodes as a payment still buys a quote: the gate
     // prices the body before it verifies. Such a request is counted once its

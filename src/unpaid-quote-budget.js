@@ -54,6 +54,13 @@ import { createHash } from "node:crypto";
 import { isMcpLoopback } from "./mcp-loopback.js";
 
 export const DEFAULT_UNPAID_QUOTE_BUDGET_PER_HOUR = 3000;
+// The metered gateway's own unpaid-quote limiter (server.js, /v1/metered): an
+// unpaid request there tokenizes the body for its quote, so each client address
+// gets this many unpaid quotes a minute and an hour. A request carrying a
+// plausible payment is not counted. Exported so the buying-at-volume guide
+// quotes the figures the limiter enforces.
+export const METERED_UNPAID_QUOTES_PER_MIN = 60;
+export const METERED_UNPAID_QUOTES_PER_HOUR = 1200;
 export const UNPAID_QUOTE_BUDGET_KEY_CAP = 20_000;
 // A self-declared named indexer or crawler reads against this many times the
 // budget, on the same per-address count as everything else from that address.

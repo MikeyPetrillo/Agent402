@@ -108,7 +108,9 @@ const listPriceUsd = (def) => Number(String(def?.price ?? "").replace(/[^0-9.]/g
  * @param {(o) => number} [o.paidOf]  the USD that quote came to on the chain
  *   the receipt names (premium, floor) or that the meter settled.
  */
-export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store, fetchImpl = fetch, maxPerIp = 4, basePath = "/api/jobs", log = console.log, onChargedFailure = null, profileOfSlug = () => null,
+/** Jobs one client address may have running at once (the default below). */
+export const ASYNC_JOBS_PER_CLIENT = 4;
+export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store, fetchImpl = fetch, maxPerIp = ASYNC_JOBS_PER_CLIENT,basePath = "/api/jobs", log = console.log, onChargedFailure = null, profileOfSlug = () => null,
   quoteOf = listPriceUsd, paidOf = ({ basePriceUsd, meteredUsd }) => (Number(meteredUsd) > 0 ? Number(meteredUsd) : basePriceUsd) }) {
   if (!port || !store || typeof asyncRouteOf !== "function") throw new Error("createAsyncJobs: port, store and asyncRouteOf are required");
   const loopbackToken = randomBytes(24).toString("hex");
