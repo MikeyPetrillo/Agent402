@@ -3065,6 +3065,8 @@ jobs:
           t node scripts/test-safefetch-body-timeout.js
           # yaml-to-json refuses aliases that expand past the JSON size cap (offline)
           t node scripts/test-yaml-alias-cap.js
+          # every call into the outside-seller buyers is a listed caller that books against the shared spending ceilings (offline, source read)
+          t node scripts/test-buyer-callers.js
 
   test-unit-d:
     # The second half of test-unit-b (2026-08-25). That lane was 200 steps
