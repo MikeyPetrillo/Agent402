@@ -223,5 +223,32 @@ try {
   } finally { s8.close(); }
 }
 
+// 9. The claim is released only after the run's answer is written: a store
+// whose write is slow (a Redis round trip) must not leave a gap in which a
+// retry finds neither the claim nor the answer and runs again.
+{
+  const { createLocalIdempotencyStore } = await import("../src/idempotency-store.js");
+  const local = createLocalIdempotencyStore();
+  const slow = { ...local, get: (k) => local.get(k), claim: (k) => local.claim(k), renew: (k) => local.renew(k), release: (k) => local.release(k),
+    set: (k, b, n) => new Promise((r) => setTimeout(() => r(local.set(k, b, n)), 300)) };
+  let runs9 = 0;
+  const app9 = express();
+  app9.use(express.json());
+  app9.use(createIdempotency({ isCatalogRoute: () => true, freeMode: true, store: slow }));
+  app9.post("/api/y", (req, res) => { runs9++; res.json({ run: runs9 }); });
+  const s9 = app9.listen(0);
+  await new Promise((r) => s9.once("listening", r));
+  const send = () => fetch(`http://127.0.0.1:${s9.address().port}/api/y`, { method: "POST", headers: { "content-type": "application/json", "idempotency-key": "k9", "x-pow-solution": "t:9" }, body: "{}" });
+  try {
+    const a = await send(); await a.text();
+    await new Promise((r) => setTimeout(r, 50)); // the run has ended; its write is still landing
+    const b = await send(); await b.text();
+    ok(runs9 === 1 && (b.status === 409 || b.headers.get("x-idempotent-replay") === "true"), `a retry while the answer is being written gets 409 or the answer, never a second run (status ${b.status}, runs ${runs9})`);
+    await new Promise((r) => setTimeout(r, 400));
+    const c = await send(); await c.text();
+    ok(c.status === 200 && c.headers.get("x-idempotent-replay") === "true" && runs9 === 1, `once written, the retry replays it (status ${c.status}, runs ${runs9})`);
+  } finally { s9.close(); local.stop(); }
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
