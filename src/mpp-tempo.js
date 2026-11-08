@@ -1117,6 +1117,71 @@ export async function validateTempoCredential(authorizationHeader) {
   }
 }
 
+/**
+ * A push finalize failure whose answer cannot say whether the relay claimed
+ * the hash. Only a failure before any request byte was sent (a connect-phase
+ * error) or a refusal of our own credentials or rate (401, 403, 429) proves
+ * the relay never acted on the broadcast; a connection lost after the request
+ * was written, or a 5xx, may follow a claim the answer never reached us for.
+ * A result that does not say which (connectPhase or relayStatus missing) is
+ * read as ambiguous: booking a debt that a later served claim voids is the
+ * safe side, a transfer charged and recorded nowhere is not.
+ */
+/**
+ * The late-landing watch for a PULL credential answered 402 after its
+ * broadcast failed and the chain check found nothing. The relay may still
+ * submit the transaction (its own retry, a queue) inside the credential's
+ * validity, after the check's last read: a charge with no record. So the
+ * chain is read again on its own after the answer, once per delay in
+ * TEMPO_LATE_CONFIRM_DELAYS_MS (default 15 s, 45 s, 2 min: past any pull
+ * credential's validity, after which the transaction can no longer land),
+ * and a transaction found is handed to `onLanded` (booked owed as a charged
+ * failure). At most TEMPO_LATE_CONFIRM_MAX_WATCHES run at once per process;
+ * a process that stops mid-watch takes its watches with it.
+ */
+export const LATE_LANDED_CLASS = "landed-after-402";
+function lateConfirmDelays(env = process.env) {
+  const raw = String(env.TEMPO_LATE_CONFIRM_DELAYS_MS ?? "").trim();
+  if (raw === "off") return [];
+  const list = raw ? raw.split(",").map((x) => Number(x.trim())).filter((n) => Number.isFinite(n) && n >= 0 && n <= 30 * 60_000) : [];
+  return list.length ? list.slice(0, 6) : [15_000, 45_000, 120_000];
+}
+function lateConfirmMaxWatches(env = process.env) {
+  const n = Number(env.TEMPO_LATE_CONFIRM_MAX_WATCHES);
+  return Number.isInteger(n) && n >= 0 ? n : 200;
+}
+let lateWatches = 0;
+export function watchLateTempoLanding(auth, { confirm, onLanded, delays = lateConfirmDelays(), log = console.warn } = {}) {
+  if (typeof confirm !== "function" || typeof onLanded !== "function" || !delays.length) return false;
+  if (lateWatches >= lateConfirmMaxWatches()) { log("[mpp-tempo] late-landing watch skipped: the per-process bound is reached"); return false; }
+  lateWatches++;
+  const sorted = [...delays].sort((a, b) => a - b);
+  const started = Date.now();
+  void (async () => {
+    try {
+      for (const at of sorted) {
+        const wait = Math.max(0, started + at - Date.now());
+        await new Promise((r) => { const t = setTimeout(r, wait); if (typeof t.unref === "function") t.unref(); });
+        let found = null;
+        try { found = await confirm(auth, { attempts: 1, delayMs: 0 }); } catch { found = null; }
+        if (found?.txId) { await onLanded(found); return; }
+      }
+    } catch (e) {
+      log(`[mpp-tempo] late-landing watch failed: ${String(e?.message || e).slice(0, 120)}`);
+    } finally { lateWatches--; }
+  })();
+  return true;
+}
+/** Test seam: how many late-landing watches are running. */
+export function _lateTempoWatchCount() { return lateWatches; }
+
+export function pushFinalizeAmbiguous(f) {
+  if (!f || f.ok) return false;
+  if (f.cls === "relay-unreachable") return f.connectPhase !== true;
+  if (f.cls === "relay-unavailable") return ![401, 403, 429].includes(Number(f.relayStatus));
+  return false;
+}
+
 /** Terminal — actually settles via Tempo's relay. Callers MUST only invoke
  *  this after a successful (<400) handler response; see the server wiring
  *  in server.js for the buffer-then-decide discipline this depends on. */
@@ -1130,7 +1195,8 @@ export async function broadcastTempoCredential(authorizationHeader) {
     const [receipt] = await withRelayTrace(() => Method.broadcastCredential(tempoMethod(), authorizationHeader));
     return { ok: true, receipt };
   } catch (e) {
-    return { ok: false, error: describeRelayFailure(e), reason: buyerReason(e), cls: classifyTempoRefusal(e), ...relayRefusalFields(e) };
+    const trace = e?.__relayTrace || {};
+    return { ok: false, error: describeRelayFailure(e), reason: buyerReason(e), cls: classifyTempoRefusal(e), ...relayRefusalFields(e), connectPhase: trace.connectPhase === true, relayStatus: Number(trace.relayUnavailable) || null };
   }
 }
 
@@ -1598,9 +1664,27 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
           const fcls = f.cls || "unknown";
           logTempoRefusal(req, { cls: `finalize:${fcls}`, amountAtomic: binding.amountAtomic, timings: { validate: tValidated - t0, finalize: Date.now() - tFinal0, total: Date.now() - tStart }, detail: f.error || "", requestId: f.requestId });
           const fc = TEMPO_REFUSAL_CLASSES[fcls] || TEMPO_REFUSAL_CLASSES.unknown;
+          if (fc.status === 503 && pushFinalizeAmbiguous(f)) {
+            // The request may have reached the relay and the hash may be
+            // claimed, with the answer lost on the way back. A retry of a
+            // claimed hash is refused as a replay, so the transfer is booked
+            // as owed now (a later claim that is served voids the row, as
+            // after an input refusal) and the key is released so the same
+            // credential can still pay if the hash was not claimed.
+            releaseReplay();
+            let owed = false;
+            if (typeof onPushInputRefused === "function") {
+              const payer = await readPushSender();
+              try { owed = (await onPushInputRefused(req, { hash: pushHash, payer, amountAtomic: String(binding.amountAtomic), amountUsd: pushAmountUsd, status: 503, unanswered: true })) === true; } catch { owed = false; }
+            }
+            console.warn(`[mpp-tempo] push finalize unanswered (${req.method} ${req.path} tx=${pushHash || "?"} reason=${fcls}${f.relayStatus ? ` status=${f.relayStatus}` : ""}): the relay may have claimed the transfer - ${owed ? "recorded as owed until a claim is served" : "NOT recorded"}`);
+            res.setHeader("Retry-After", String(fc.retryAfter || 5));
+            return sendMppProblem(res, mppProblem(fc.kind, `The Tempo payment relay did not answer whether it claimed the transfer you sent. Retry the same request with the same credential: if the transfer was not claimed it pays for that request${owed ? "; if it was, it is recorded as owed to the sender, to be refunded" : ""}.`, { status: 503, hint: "Retry the same request with the same credential in a few seconds.", details: { reason: fcls, transferClaimed: null, ...(owed ? { refundOwed: true } : {}) } }));
+          }
           if (fc.status === 503) {
-            // The relay could not be reached: the hash is NOT claimed, so the
-            // same credential can be presented again.
+            // The relay was never reached (or refused our own credentials):
+            // the hash is NOT claimed, so the same credential can be
+            // presented again.
             releaseReplay();
             res.setHeader("Retry-After", String(fc.retryAfter || 5));
             return sendMppProblem(res, mppProblem(fc.kind, "The Tempo payment relay could not be reached to claim the transfer you sent. It has not been claimed, so it still pays for this request.", { status: 503, hint: "Retry the same request with the same credential in a few seconds.", details: { reason: fcls, transferClaimed: false } }));
@@ -1619,6 +1703,11 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
             const hash = pushHash;
             try { owed = (await onPushNotClaimed(req, { hash, payer, amountAtomic: String(binding.amountAtomic), amountUsd: pushAmountUsd, cls: fcls })) === true; } catch { owed = false; }
             console.warn(`[mpp-tempo] CHARGED-BUT-NOT-SERVED: push transfer confirmed by the relay could not be claimed (${req.method} ${req.path} tx=${hash || "?"} reason=${fcls}) - ${owed ? "recorded as owed in the refund ledger" : "NOT recorded"}`);
+          }
+          // A replay refusal for a hash an earlier unanswered finalize booked
+          // as owed: that debt stands (the claim the answer was lost for).
+          if (fcls === "replay" && typeof pushRowOf === "function" && pushHash) {
+            try { owed = (await pushRowOf(pushHash))?.status === "owed"; } catch { owed = false; }
           }
           return sendMppProblem(res, mppProblem(fc.kind, `The transfer this credential names could not be claimed for this request: ${fc.detail}${owed ? " The transfer was received and is recorded as owed to the sender." : ""}`, { status: 402, hint: fc.hint, details: { reason: fcls, ...(owed ? { refundOwed: true } : {}) } }));
         }
@@ -1827,6 +1916,20 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
         // it stays spent: presenting it again must not run the handler again.
         // The 402 above carries a fresh challenge to pay instead.
         settleReplay();
+        // The transaction can still land after the chain check's last read:
+        // watched on its own, and booked owed if it does (the credential is
+        // spent, so it is never also served).
+        if (confirmSettlement && typeof onPushNotClaimed === "function" && !["screen-rejected", "screen-unavailable", "replay"].includes(bcls)) {
+          watchLateTempoLanding(auth, {
+            confirm: confirmSettlement,
+            onLanded: async (found) => {
+              const amountUsd = Number(found.amountAtomic ?? binding.amountAtomic) / 10 ** envDecimals();
+              let owed = false;
+              try { owed = (await onPushNotClaimed(req, { hash: String(found.txId).toLowerCase(), payer: req.mppTempoLedgerPayer || null, amountAtomic: String(found.amountAtomic ?? binding.amountAtomic), amountUsd, cls: LATE_LANDED_CLASS })) === true; } catch { owed = false; }
+              console.warn(`[mpp-tempo] CHARGED-BUT-NOT-SERVED: a pull transaction landed after its 402 (${req.method} ${req.path} tx=${found.txId}) - ${owed ? "recorded as owed in the refund ledger" : "NOT recorded"}`);
+            },
+          });
+        }
         return;
       }
       console.log(`[mpp-tempo] settled ${req.method} ${req.path} tx=${b.receipt?.reference || "?"} [${timing}]`);

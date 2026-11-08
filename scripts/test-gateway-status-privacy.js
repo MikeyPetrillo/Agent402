@@ -75,6 +75,9 @@ ok(opBody?.brokenListings?.status === "ok" && typeof opBody.brokenListings.origi
 ok(["ok", "refusing"].includes(pubBody?.buyerRefusals?.status) && Object.keys(pubBody.buyerRefusals).join(",") === "status", `buyerRefusals publishes its word only (${JSON.stringify(pubBody?.buyerRefusals)})`);
 ok(typeof opBody?.buyerRefusals?.refusalsWindow === "number" && typeof opBody?.buyerRefusals?.refusals24h === "number", "the operator view of buyerRefusals carries the counts");
 
+// --- the late-settlement book: one word publicly, on both views ---
+ok(["ok", "near_capacity", "full", "unresolved"].includes(pubBody?.lateSettlements?.status) && Object.keys(pubBody.lateSettlements).join(",") === "status" && Object.keys(opBody?.lateSettlements || {}).join(",") === "status", `lateSettlements publishes its word only (${JSON.stringify(pubBody?.lateSettlements)})`);
+
 // --- the CDN origin secret: one word publicly (off without CDN_PROXY), counts and the secret's presence for the operator ---
 ok(pubBody?.cdnOrigin?.status === "off" && Object.keys(pubBody.cdnOrigin).join(",") === "status", `cdnOrigin publishes its word only (${JSON.stringify(pubBody?.cdnOrigin)})`);
 ok(opBody?.cdnOrigin?.status === "off", "the operator view of cdnOrigin carries the same word while the resolver is off");

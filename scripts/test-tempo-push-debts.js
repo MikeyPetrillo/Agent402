@@ -39,7 +39,7 @@ const { createTempoGate, PUSH_SENDER_WAIT_MS, isTempoPushCredential, tempoOffere
 const { EVM_RUN_SECONDS } = await import("../src/evm-validity.js");
 const { SLOW_ADVISE_SECONDS } = await import("../src/slow-routes.js");
 const { isLongRunningSlug } = await import("../src/composite-spend-guard.js");
-const { createTempoPushDebts, PUSH_INPUT_REFUSED_NOTE, PUSH_CLAIMED_NOTE, PUSH_SERVED_NOTE, PUSH_FINALIZE_FAILURE_STATUS, PUSH_HANGUP_AFTER_CLAIM_NOTE, PUSH_HANDLER_FAILED_AFTER_CLAIM_NOTE, PUSH_EXCEPTION, whenTempoLedgerPayerKnown } = await import("../src/tempo-push-debts.js");
+const { createTempoPushDebts, createHeldClaimSweep, PULL_LANDED_AFTER_402_NOTE, PUSH_FINALIZE_UNANSWERED_NOTE, PUSH_RUN_UNFINISHED_NOTE, PUSH_INPUT_REFUSED_NOTE, PUSH_CLAIMED_NOTE, PUSH_SERVED_NOTE, PUSH_FINALIZE_FAILURE_STATUS, PUSH_HANGUP_AFTER_CLAIM_NOTE, PUSH_HANDLER_FAILED_AFTER_CLAIM_NOTE, PUSH_EXCEPTION, whenTempoLedgerPayerKnown } = await import("../src/tempo-push-debts.js");
 const { slowSyncWindowMiddleware, SYNC_WINDOW_RETRY } = await import("../src/slow-sync-window.js");
 const { cdnSyncWindowMiddleware } = await import("../src/cdn-sync-window.js");
 const { wantsAsync } = await import("../src/async-jobs.js");
@@ -405,6 +405,7 @@ const rowsFor = (hash) => ledger.listRefunds({ status: "all", limit: 1000 }).fil
   ok(/tx: req\.tempoSettled \? \(tempoPushHashOf\(req\) \|\|/.test(hang), "a push disconnect is keyed on the credential's (lowercased) hash, the evidence the input-refused row used");
   ok(/if \(!made && req\.tempoSettled && tempoPushHashOf\(req\) === row\.tx\) void tempoPushDebts\?\.hungUp\(row\.tx, hangupReason\)/.test(hang), "recordHangupDebt promotes an existing input-refused row instead of ignoring it (on the write's verdict)");
   ok(/promoteToHangup: promoteOwedToHangup/.test(src), "server.js wires the promotion to the refund ledger");
+  ok(/createTempoPushDebts\(\{[\s\S]{0,800}\}\);[\s\S]{0,200}void startTempoHeldClaimSweep\(\);/.test(src), "server.js starts the held-claim sweep where it builds the push-debt hooks");
   ok(/voidForServe: voidOwedForServe, reopenHeld: reopenHeldClaim, renoteVoid: renoteVoidRefund/.test(src), "server.js wires the claim hold, its reopen and its served note to the refund ledger");
   ok(/app\.use\(tempoGate\);[\s\S]{0,900}await tempoPushDebts\.claimForServe\(req\)/.test(src), "server.js holds the claim right after the Tempo gate, before any handler");
   ok(/res\.statusCode >= 400 && !req\.tempoPushRefunded\)/.test(src), "a push refused as refunded books no second debt or charged failure");
@@ -562,6 +563,81 @@ for (const [label, headers, status, error, tail] of [
   ok(r.status === 402 && rowsFor(h).length === 0, `a route refusal that throws after claiming books nothing (${r.status})`);
   const served = await post(cred, { text: "x" });
   ok(served.status === 200 && sales.filter((s) => s === h).length === 1, `...and releases its claim: the credential is then served on a Tempo route, not refused as a replay (${served.status} ${served.body.details?.reason || ""})`);
+}
+
+// A finalize whose answer was lost (reset after the request was sent): the
+// transfer may be claimed, so it is booked owed under its own note; a retry
+// the relay claims is held and served (void, noted served); one claimed and
+// then failed is owed again; a retry refused as a replay leaves the debt.
+{
+  const h = hashFor(71);
+  const cred = pushCred(h);
+  failNext = { ok: false, cls: "relay-unreachable", connectPhase: false, error: "reset after send", reason: "x" };
+  const w0 = console.warn; console.warn = () => {};
+  let r1;
+  try { r1 = await post(cred, { text: "x" }); } finally { console.warn = w0; }
+  ok(r1.status === 503 && rowsFor(h).length === 1 && rowsFor(h)[0].status === "owed" && rowsFor(h)[0].note === PUSH_FINALIZE_UNANSWERED_NOTE && rowsFor(h)[0].payer === SENDER,
+    `an unanswered finalize books the transfer owed under its own note (${r1.status} ${JSON.stringify(rowsFor(h)[0])})`);
+  const r2 = await post(cred, { text: "x" });
+  ok(r2.status === 200 && rowsFor(h)[0].status === "void" && rowsFor(h)[0].note === `${PUSH_FINALIZE_UNANSWERED_NOTE}; ${PUSH_CLAIMED_NOTE}; ${PUSH_SERVED_NOTE}`, `...the retry the relay claims is served and the debt void, noted served ("${rowsFor(h)[0].note}")`);
+  const h2 = hashFor(72);
+  failNext = { ok: false, cls: "relay-unavailable", relayStatus: 502, error: "HTTP 502", reason: "x" };
+  console.warn = () => {};
+  try { await post(pushCred(h2), { text: "x" }); } finally { console.warn = w0; }
+  ok((await debts.claimForServe({ tempoSettled: true, mppTempoPushHash: h2 })) === true && rowsFor(h2)[0].status === "void", "an unanswered finalize's debt is held by a later claim");
+  ok((await debts.handlerFailed(h2, 500)) === true && rowsFor(h2)[0].status === "owed" && rowsFor(h2)[0].httpStatus === 500 && rowsFor(h2)[0].note.startsWith(PUSH_FINALIZE_UNANSWERED_NOTE), `...and owed again when that run fails ("${rowsFor(h2)[0].note}")`);
+  const h3 = hashFor(73);
+  const cred3 = pushCred(h3);
+  failNext = { ok: false, cls: "relay-unreachable", connectPhase: false, error: "reset", reason: "x" };
+  console.warn = () => {};
+  try { await post(cred3, { text: "x" }); } finally { console.warn = w0; }
+  failNext = { ok: false, cls: "replay", error: "Transaction hash has already been used", reason: "x" };
+  const r3 = await post(cred3, { text: "x" });
+  ok(r3.status === 402 && r3.body.details?.refundOwed === true && rowsFor(h3).length === 1 && rowsFor(h3)[0].status === "owed", `...a retry refused as a replay leaves the debt owed and says so (${r3.status} ${JSON.stringify(r3.body.details)})`);
+}
+
+// A pull transaction that landed after its 402 (the gate's late-landing
+// watch) is booked through notClaimed under its own note, as a charged failure.
+{
+  const h = hashFor(91);
+  const before = failures.length;
+  ok((await debts.notClaimed({ method: "GET", path: "/paid" }, { hash: h, payer: SENDER, amountAtomic: "50000", amountUsd: 0.05, cls: "landed-after-402" })) === true, "a pull landed after its 402 is booked owed");
+  ok(rowsFor(h)[0].note === PULL_LANDED_AFTER_402_NOTE && rowsFor(h)[0].httpStatus === 402 && failures.length === before + 1, `...under its own note, counted as a charged failure ("${rowsFor(h)[0].note}")`);
+}
+
+// The held-claim sweep: a claim held for a run whose process died (void with
+// the hold's note, never marked served or reopened) is owed again once it is
+// older than a run can take; a hold with a sale booked is marked served; a
+// young hold, a served one, and any hold while the ledger's journal holds
+// waiting writes are left alone.
+{
+  const stranded = hashFor(81), young = hashFor(82), sold = hashFor(83), unanswered = hashFor(84);
+  for (const h of [stranded, young, sold]) {
+    await post(pushCred(h), {});
+    ok((await debts.claimForServe({ tempoSettled: true, mppTempoPushHash: h })) === true, `setup: ${h.slice(-2)} held`);
+  }
+  failNext = { ok: false, cls: "relay-unreachable", connectPhase: false, error: "reset", reason: "x" };
+  const w0 = console.warn; console.warn = () => {};
+  try { await post(pushCred(unanswered), { text: "x" }); } finally { console.warn = w0; }
+  await debts.claimForServe({ tempoSettled: true, mppTempoPushHash: unanswered });
+  const held = () => ledger.listRefunds({ status: "void", limit: 2000 });
+  const atOf = (h) => Number(rowsFor(h)[0].resolvedAt);
+  const base = Math.max(atOf(stranded), atOf(sold), atOf(unanswered));
+  // `young` is read as just held; the others as an hour old.
+  const listVoid = () => held().map((r) => (r.evidence === young ? r : { ...r, resolvedAt: Number(r.resolvedAt) - 3_600_000 }));
+  const logs = [];
+  const sweep = createHeldClaimSweep({ listVoid, reopenHeld: ledger.reopenHeldClaim, renoteVoid: ledger.renoteVoidRefund, saleFor: async (tx) => (tx === sold ? { tx } : null), now: () => base + 1000, maxAgeMs: 30 * 60_000, log: (m) => logs.push(m) });
+  const waiting = await createHeldClaimSweep({ listVoid, reopenHeld: ledger.reopenHeldClaim, renoteVoid: ledger.renoteVoidRefund, journalWaiting: () => 1, now: () => base + 1000 }).sweep();
+  ok(waiting.waiting === true && waiting.reopened === 0 && rowsFor(stranded)[0].status === "void", "the sweep does nothing while the refund journal holds waiting writes");
+  const out = await sweep.sweep();
+  ok(out.reopened === 2 && out.served === 1, `the sweep reopens the stranded holds and marks the sold one served (${JSON.stringify(out)})`);
+  ok(rowsFor(stranded)[0].status === "owed" && rowsFor(stranded)[0].httpStatus === 500 && rowsFor(stranded)[0].note === `${PUSH_INPUT_REFUSED_NOTE}; ${PUSH_RUN_UNFINISHED_NOTE}`, `...stranded: owed again, noted why ("${rowsFor(stranded)[0].note}")`);
+  ok(rowsFor(unanswered)[0].status === "owed" && rowsFor(unanswered)[0].note === `${PUSH_FINALIZE_UNANSWERED_NOTE}; ${PUSH_RUN_UNFINISHED_NOTE}`, "...an unanswered finalize's stranded hold too");
+  ok(rowsFor(sold)[0].status === "void" && rowsFor(sold)[0].note.endsWith(PUSH_SERVED_NOTE) && rowsFor(young)[0].status === "void", "...the sold hold is void and noted served; the young hold is untouched");
+  ok(ledger.claimRefundForSend(rowsFor(stranded)[0].id, "refund-run") === true, "...and a refund send can claim the reopened debt");
+  const again = await sweep.sweep();
+  ok(again.reopened === 0 && again.served === 0, "a second pass changes nothing");
+  ok(logs.length === 2, "each reopen is logged once");
 }
 
 // Catalog state the paths above depend on: every slow route (run budget past

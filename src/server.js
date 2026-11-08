@@ -850,7 +850,7 @@ const OX_TRIAL_LIMITS_LABEL = `${OX_TRIAL_PER_HOUR} per hour, ${OX_TRIAL_PER_DAY
 import { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, settleSentWhileConnected, grantedUnsettled, clientGoneError, isClientGoneAbort, onSettleOutcome, onResponseEnd } from "./hangup-settlement.js";
 import { firstCallAllowanceEnabled, claimFirstCallAllowance, finishFirstCallAllowance, firstCallAllowanceStatus, allowanceServed } from "./first-call-allowance.js";
 import { hangupForgiven, hangupTicketDenial, reserveHangupForgiveness, settleHangupTicket, hangupForgivenessStatus, loadHangupForgiveness, flushHangupForgiveness, hasLastingEffect } from "./hangup-forgiveness.js";
-import { createTempoPushDebts, tempoLedgerPayerPending, whenTempoLedgerPayerKnown } from "./tempo-push-debts.js";
+import { createTempoPushDebts, startTempoHeldClaimSweep, tempoLedgerPayerPending, whenTempoLedgerPayerKnown } from "./tempo-push-debts.js";
 import { recordRefundOwed, refundByEvidence, refundByEvidenceFresh, voidOwedOnClaim, voidOwedForServe, reopenHeldClaim, renoteVoidRefund, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
 import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince, statsFlush } from "./stats.js";
 import { timingSafeEqual, createHash, randomUUID, randomBytes } from "node:crypto";
@@ -3926,6 +3926,10 @@ app.get("/api/gateway-status", async (req, res) => {
     // GATEWAY_WITHDRAW_ALERT_USD). One word each publicly; the figure and
     // the per-domain split on the operator view only.
     gatewayPending: { status: await gatewayPendingStatus() },
+    // EVM settlements that failed naming a transaction or an authorization
+    // (src/late-settlements.js): ok / near_capacity / full / unresolved. One
+    // word; the heartbeat and the status Worker page on unresolved and full.
+    lateSettlements: { status: await lateSettleBookForOperator().then((b) => b.alarmStatus()).catch(() => "unknown") },
     gatewayBalance: (() => { try { return gatewayBalanceStatus({ full }); } catch { return { status: "unknown" }; } })(),
     // Redis persistence (src/redis-persistence.js): on / degraded / off /
     // unknown. One word publicly; the operator also gets the INFO fields.
@@ -10244,6 +10248,8 @@ if (!FREE_MODE) {
     recordChargedFailure, isSynthetic: isSyntheticRequest,
     slugOf: (req) => CATALOG[`${req.method} ${req.path}`]?.slug,
   });
+  // A claim held for a run whose process died is owed again (leased sweep).
+  void startTempoHeldClaimSweep();
   const tempoGate = createTempoGate({
     replayGuard: tempoReplayGuard,
     // Chain-truth fallback on relay broadcast failure (2026-08-20): a relay

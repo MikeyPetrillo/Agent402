@@ -24,7 +24,17 @@
 export const PUSH_EXCEPTION = ", except a Tempo transfer sent before the call, which is recorded as owed";
 
 export const PUSH_INPUT_REFUSED_NOTE = "push unclaimed: input refused";
+// A finalize whose answer was lost (a connection dropped after the request
+// was sent, or a relay 5xx): the relay may or may not have claimed the hash.
+// Booked owed like an input refusal, and voided the same way by a later
+// claim that is served.
+export const PUSH_FINALIZE_UNANSWERED_NOTE = "push unclaimed: finalize unanswered";
+// The notes of a debt whose transfer may still be claimed by a retry.
+export const PUSH_CLAIMABLE_NOTES = Object.freeze([PUSH_INPUT_REFUSED_NOTE, PUSH_FINALIZE_UNANSWERED_NOTE]);
 export const PUSH_FINALIZE_REFUSED_NOTE = "push unclaimed: finalize refused";
+// A PULL transaction that landed on chain after its request was answered 402
+// (src/mpp-tempo.js watchLateTempoLanding): booked through notClaimed.
+export const PULL_LANDED_AFTER_402_NOTE = "pull landed after its 402";
 export const PUSH_CLAIMED_NOTE = "claimed on retry";
 export const PUSH_SERVED_NOTE = "served";
 export const PUSH_HANGUP_AFTER_CLAIM_NOTE = "claimed on retry, then disconnected";
@@ -36,9 +46,10 @@ export const PUSH_HANDLER_FAILED_AFTER_CLAIM_NOTE = "claimed on retry, then the 
 export const PUSH_FINALIZE_FAILURE_STATUS = 502;
 
 export function createTempoPushDebts({ recordOwed, voidOnClaim, voidForServe = null, reopenHeld = () => false, renoteVoid = () => false, renoteOwed, refundByEvidence, promoteToHangup = () => false, restateHandlerFailure = () => false, recordChargedFailure, isSynthetic = () => false, slugOf = () => "unknown" }) {
-  // The note a held claim leaves on an input-refused row (the void appends
+  // The note a held claim leaves on a claimable row (the void appends
   // PUSH_CLAIMED_NOTE to it); reopenHeld matches it exactly.
-  const HELD_NOTE = `${PUSH_INPUT_REFUSED_NOTE}; ${PUSH_CLAIMED_NOTE}`;
+  const heldNoteOf = (from) => `${from}; ${PUSH_CLAIMED_NOTE}`;
+  const HELD_NOTES = PUSH_CLAIMABLE_NOTES.map(heldNoteOf);
   const base = (req, { hash, payer, amountUsd }) => ({
     slug: slugOf(req) || "unknown",
     network: "tempo",
@@ -49,19 +60,24 @@ export function createTempoPushDebts({ recordOwed, voidOnClaim, voidForServe = n
     wire: "mpp-tempo",
   });
   return {
-    /** Input refused before finalize. True when a debt stands for the hash. */
+    /** Input refused before finalize, or (`info.unanswered`) a finalize whose
+     *  answer was lost. True when a debt stands for the hash. */
     async inputRefused(req, info) {
       if (!info?.hash) return false;
-      await recordOwed({ ...base(req, info), httpStatus: Number(info.status) || 400, note: PUSH_INPUT_REFUSED_NOTE });
+      await recordOwed({ ...base(req, info), httpStatus: Number(info.status) || 400, note: info.unanswered === true ? PUSH_FINALIZE_UNANSWERED_NOTE : PUSH_INPUT_REFUSED_NOTE });
       return refundByEvidence(info.hash)?.status === "owed";
     },
     /** Finalize refused. True when a debt stands for the hash. */
     async notClaimed(req, info) {
       if (!info?.hash) return false;
       const b = base(req, info);
-      const created = await recordOwed({ ...b, httpStatus: 402, note: PUSH_FINALIZE_REFUSED_NOTE });
-      // An input-refused row for the same hash becomes this row, once.
-      const promoted = !created && (await renoteOwed(info.hash, PUSH_INPUT_REFUSED_NOTE, PUSH_FINALIZE_REFUSED_NOTE));
+      const created = await recordOwed({ ...b, httpStatus: 402, note: info.cls === "landed-after-402" ? PULL_LANDED_AFTER_402_NOTE : PUSH_FINALIZE_REFUSED_NOTE });
+      // A claimable row for the same hash becomes this row, once.
+      let promoted = false;
+      for (const from of PUSH_CLAIMABLE_NOTES) {
+        if (created || promoted) break;
+        promoted = (await renoteOwed(info.hash, from, PUSH_FINALIZE_REFUSED_NOTE)) === true;
+      }
       if ((created || promoted) && !b.synthetic) recordChargedFailure(b.slug, PUSH_FINALIZE_FAILURE_STATUS);
       return refundByEvidence(info.hash)?.status === "owed";
     },
@@ -73,9 +89,14 @@ export function createTempoPushDebts({ recordOwed, voidOnClaim, voidForServe = n
      *  never touched. True when the row changed. */
     async hungUp(hash, hangupReason) {
       if (typeof hash !== "string" || !hash) return false;
-      if ((await promoteToHangup(hash, { from: PUSH_INPUT_REFUSED_NOTE, hangupReason, append: PUSH_HANGUP_AFTER_CLAIM_NOTE })) === true) return true;
+      for (const from of PUSH_CLAIMABLE_NOTES) {
+        if ((await promoteToHangup(hash, { from, hangupReason, append: PUSH_HANGUP_AFTER_CLAIM_NOTE })) === true) return true;
+      }
       // The claim was held (the row voided before the handler): owed again.
-      return (await reopenHeld(hash, { held: HELD_NOTE, httpStatus: 499, hangupReason, note: `${PUSH_INPUT_REFUSED_NOTE}; ${PUSH_HANGUP_AFTER_CLAIM_NOTE}` })) === true;
+      for (const from of PUSH_CLAIMABLE_NOTES) {
+        if ((await reopenHeld(hash, { held: heldNoteOf(from), httpStatus: 499, hangupReason, note: `${from}; ${PUSH_HANGUP_AFTER_CLAIM_NOTE}` })) === true) return true;
+      }
+      return false;
     },
     /** A claimed push whose handler then answered >= 400 (not a disconnect)
      *  on a hash that already carries an OWED input-refused row: the row takes
@@ -84,8 +105,13 @@ export function createTempoPushDebts({ recordOwed, voidOnClaim, voidForServe = n
      *  touched. True when the row changed. */
     async handlerFailed(hash, httpStatus) {
       if (typeof hash !== "string" || !hash) return false;
-      if ((await restateHandlerFailure(hash, { from: PUSH_INPUT_REFUSED_NOTE, httpStatus, append: PUSH_HANDLER_FAILED_AFTER_CLAIM_NOTE })) === true) return true;
-      return (await reopenHeld(hash, { held: HELD_NOTE, httpStatus, note: `${PUSH_INPUT_REFUSED_NOTE}; ${PUSH_HANDLER_FAILED_AFTER_CLAIM_NOTE}` })) === true;
+      for (const from of PUSH_CLAIMABLE_NOTES) {
+        if ((await restateHandlerFailure(hash, { from, httpStatus, append: PUSH_HANDLER_FAILED_AFTER_CLAIM_NOTE })) === true) return true;
+      }
+      for (const from of PUSH_CLAIMABLE_NOTES) {
+        if ((await reopenHeld(hash, { held: heldNoteOf(from), httpStatus, note: `${from}; ${PUSH_HANDLER_FAILED_AFTER_CLAIM_NOTE}` })) === true) return true;
+      }
+      return false;
     },
     /** BEFORE the handler, for a claimed push: may this run serve it? The
      *  transfer's owed debt (if any) is voided first, in one statement that a
@@ -110,7 +136,7 @@ export function createTempoPushDebts({ recordOwed, voidOnClaim, voidForServe = n
         const row = refundByEvidence(hash);
         // Held before the handler (claimForServe) and now served: say so, so a
         // later reopen (hungUp, handlerFailed) never turns it back to owed.
-        if (row && row.status === "void" && row.note === HELD_NOTE) return (await renoteVoid(hash, HELD_NOTE, `${HELD_NOTE}; ${PUSH_SERVED_NOTE}`)) === true;
+        if (row && row.status === "void" && HELD_NOTES.includes(row.note)) return (await renoteVoid(hash, row.note, `${row.note}; ${PUSH_SERVED_NOTE}`)) === true;
         if (row && (row.status === "sending" || row.status === "paid")) console.error(`[mpp-tempo] REFUNDED-AND-SERVED: push transfer ${hash} was claimed and served while its debt was already ${row.status}; review refund #${row.id}`);
       }
       return voided;
@@ -134,4 +160,78 @@ export function whenTempoLedgerPayerKnown(req, label, fn) {
   const run = () => { try { fn(); } catch (e) { console.error(`[${label}] deferred booking failed: ${e?.message || e}`); } };
   req.mppTempoLedgerPayerRead.then(run, run);
   return undefined;
+}
+
+// ---------------------------------------------------------------------------
+// The held-claim sweep. claimForServe voids a claimable debt BEFORE its
+// handler runs; the run's end then marks it served (served) or owed again
+// (hungUp, handlerFailed). A process that dies in between leaves the row void
+// with the hold's note forever: a buyer charged and possibly never served,
+// with nothing owed. Under a lease, the sweep reopens a row still held past
+// the longest a run can take (owed again, with a note that says why), unless
+// a sale is booked for the transfer (then it is marked served). It does
+// nothing while the refund ledger's journal holds writes waiting to land: a
+// served note queued there would otherwise be read as a run that never ended.
+// ---------------------------------------------------------------------------
+export const PUSH_RUN_UNFINISHED_NOTE = "claimed on retry, then the run never finished";
+export const PUSH_HELD_SWEEP_LEASE = "tempo-push-held-sweep";
+/** How long a hold may stand before the sweep reads its run as dead:
+ *  TEMPO_PUSH_HELD_MAX_MINUTES (default 30; a run is bounded well under it). */
+export function pushHeldMaxMs(env = process.env) {
+  const m = Number(env.TEMPO_PUSH_HELD_MAX_MINUTES);
+  return (Number.isFinite(m) && m >= 5 && m <= 24 * 60 ? m : 30) * 60_000;
+}
+export const PUSH_HELD_SWEEP_INTERVAL_MS = 5 * 60_000;
+
+export function createHeldClaimSweep({ listVoid, reopenHeld, renoteVoid, saleFor = async () => null, journalWaiting = () => 0, now = () => Date.now(), maxAgeMs = pushHeldMaxMs(), log = console.warn } = {}) {
+  const heldFrom = new Map(PUSH_CLAIMABLE_NOTES.map((from) => [`${from}; ${PUSH_CLAIMED_NOTE}`, from]));
+  return {
+    async sweep() {
+      const out = { reopened: 0, served: 0, waiting: false };
+      let waiting = 0;
+      try { waiting = Number(await journalWaiting()) || 0; } catch { waiting = 1; }
+      if (waiting > 0) { out.waiting = true; return out; }
+      let rows = [];
+      try { rows = (await listVoid()) || []; } catch { return out; }
+      const cutoff = now() - maxAgeMs;
+      for (const row of rows) {
+        const from = heldFrom.get(row?.note);
+        if (!from || row.network !== "tempo" || typeof row.evidence !== "string") continue;
+        const at = Number(row.resolvedAt ?? row.resolved_at);
+        if (!Number.isFinite(at) || at > cutoff) continue;
+        let sale = null;
+        try { sale = await saleFor(row.evidence); } catch { continue; }
+        if (sale) {
+          if ((await renoteVoid(row.evidence, row.note, `${row.note}; ${PUSH_SERVED_NOTE}`)) === true) out.served++;
+          continue;
+        }
+        if ((await reopenHeld(row.evidence, { held: row.note, httpStatus: 500, note: `${from}; ${PUSH_RUN_UNFINISHED_NOTE}` })) === true) {
+          out.reopened++;
+          log(`[mpp-tempo] push transfer ${row.evidence} was held for a run that never finished; owed again`);
+        }
+      }
+      return out;
+    },
+  };
+}
+
+let heldSweepTimer = null;
+/** Start the held-claim sweep under its lease (once per process). */
+export function startTempoHeldClaimSweep({ intervalMs = PUSH_HELD_SWEEP_INTERVAL_MS } = {}) {
+  if (heldSweepTimer) return null;
+  heldSweepTimer = "starting";
+  const ready = (async () => {
+    const [{ leased }, ledger, { saleByTxFresh }] = await Promise.all([import("./state-db.js"), import("./refund-ledger.js"), import("./sales-ledger.js")]);
+    const sweeper = createHeldClaimSweep({
+      listVoid: () => ledger.listRefunds({ status: "void", limit: 2000 }),
+      reopenHeld: ledger.reopenHeldClaim,
+      renoteVoid: ledger.renoteVoidRefund,
+      saleFor: (tx) => saleByTxFresh(tx),
+      journalWaiting: () => ledger.refundDeadLetterState().waiting,
+    });
+    const tick = leased(PUSH_HELD_SWEEP_LEASE, { ttlMs: Math.max(intervalMs, 120_000) }, () => sweeper.sweep());
+    heldSweepTimer = setInterval(() => { tick().catch(() => {}); }, intervalMs);
+    if (typeof heldSweepTimer.unref === "function") heldSweepTimer.unref();
+  })().catch((e) => { heldSweepTimer = null; console.warn(`[mpp-tempo] held-claim sweep did not start: ${String(e?.message || e).slice(0, 120)}`); });
+  return ready;
 }

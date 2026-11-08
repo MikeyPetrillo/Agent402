@@ -224,6 +224,69 @@ await check("an RPC that never answers keeps the entry, then marks it unresolved
   assert.ok(!("amount" in view.open[0]), "no amounts on the operator view");
 });
 
+await check("the status word: ok, near_capacity, then full at the open bound, where a new booking is journaled (never refused) and lands once there is room; unresolved entries never count toward the bound and read unresolved", async () => {
+  const held = [];
+  const journal = {
+    add: (kind, payload) => { held.push({ id: held.length + 1, kind, payload }); return held.length; },
+    size: () => held.length,
+    drain: async (apply) => { let n = 0; for (const e of [...held]) { const r = await apply(e); if (r === "stop") break; if (r === "landed" || r === "drop") { held.splice(held.indexOf(e), 1); if (r === "landed") n++; } } return n; },
+  };
+  const logs = [];
+  const alarms = [];
+  const book = makeBook({ maxEntries: 5, journal, log: (m) => logs.push(m), alarm: (m) => alarms.push(m) });
+  assert.equal(await book.alarmStatus({ ttlMs: 0 }), "ok");
+  for (let i = 0; i < 4; i++) assert.equal(await book.book(entry(500 + i)), true);
+  assert.equal(await book.alarmStatus({ ttlMs: 0 }), "near_capacity");
+  assert.equal(await book.book(entry(504)), true);
+  assert.equal(await book.alarmStatus({ ttlMs: 0 }), "full");
+  // At the bound: kept in the journal, never refused, and the word stays full.
+  assert.equal(await book.book(entry(505)), true, "a booking at the bound is kept");
+  assert.equal(held.length, 1, "in the journal");
+  assert.ok(logs.some((m) => /book is full \(5 open\).*kept in the journal/.test(m)), "and the log says so");
+  assert.equal(alarms.length, 0);
+  assert.equal(await book.alarmStatus({ ttlMs: 0 }), "full");
+  // Every open entry ages out to unresolved (reads fail): they no longer hold the bound.
+  for (let i = 500; i < 505; i++) receipts.set(txh(i), "fail");
+  clock += MAX_AGE_MS + 60_000;
+  const r = await book.reconcile();
+  assert.equal(r.unresolved, 5);
+  assert.equal(book.list().filter((e) => e.state === "unresolved").length, 5);
+  // The journaled booking landed on the pass after it (the drain runs first).
+  const r2 = await book.reconcile();
+  assert.equal(r2.journaled, 1, "the journaled booking lands once the bound has room");
+  assert.equal(held.length, 0);
+  assert.ok(r2.checked >= 1 && r2.absent === 1, "and is then read like any booking (never mined, authorization expired: closed)");
+  assert.equal(await book.book(entry(506)), true);
+  assert.ok(book.list().some((e) => e.tx === txh(506)), "a new booking lands beside five unresolved entries");
+  assert.equal(await book.alarmStatus({ ttlMs: 0 }), "unresolved", "unresolved entries page");
+  const view = await book.operatorView();
+  assert.equal(view.status, "unresolved");
+  assert.equal(view.unresolved, 5);
+  for (let i = 500; i < 507; i++) receipts.delete(txh(i));
+});
+
+await check("the status word reads unresolved while a booking sits in the journal, or could not be recorded anywhere, and the read is reused for its ttl", async () => {
+  const held = [{ id: 1, kind: "late", payload: { key: "x" } }];
+  const journal = { add: () => null, size: () => held.length, drain: async () => 0 };
+  const book = makeBook({ journal, alarm: () => {} });
+  assert.equal(await book.alarmStatus({ ttlMs: 0 }), "unresolved", "a journaled booking outside the book pages");
+  held.length = 0;
+  assert.equal(await book.alarmStatus({ ttlMs: 0 }), "ok");
+  const { writeFileSync } = await import("node:fs");
+  const blocker = join(dir, `blocker-word-${Date.now()}`);
+  writeFileSync(blocker, "not a directory");
+  const lost = createLateSettleBook({ file: join(blocker, "late.json"), now, log: () => {}, alarm: () => {}, fetchImpl, rpcFor: (net) => (net === RH ? RPC : null), journal });
+  assert.equal(await lost.alarmStatus({ ttlMs: 0 }), "ok");
+  assert.equal(await lost.book(entry(520)), false);
+  assert.equal(await lost.alarmStatus(), "unresolved", "a booking recorded nowhere pages (and the booking reset the cached word)");
+  const cached = makeBook({ journal });
+  assert.equal(await cached.alarmStatus(), "ok");
+  held.push({ id: 2 });
+  assert.equal(await cached.alarmStatus(), "ok", "reused inside its ttl");
+  clock += 11_000;
+  assert.equal(await cached.alarmStatus(), "unresolved", "read again after it");
+});
+
 await check("a transfer served after all (a sale or a held claim for the tx) is never also owed", async () => {
   const owed = [];
   const book = makeBook({ recordOwed: async (row) => { owed.push(row); return true; }, owedRecorded: async () => true, wasServed: async ({ tx }) => tx === txh(9) });

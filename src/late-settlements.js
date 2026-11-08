@@ -55,7 +55,13 @@ const TX = /^0x[0-9a-fA-F]{64}$/;
 const TEMPO_NETWORK = "eip155:4217";
 
 export const SETTLED_AFTER_402 = "settled_after_402";
+/** The bound on OPEN (pending) entries. Unresolved entries wait for a human
+ *  and never count toward it, so they cannot crowd out a new booking. */
 export const MAX_ENTRIES = 2000;
+/** The word reads near_capacity from this share of the bound. */
+export const NEAR_CAPACITY_SHARE = 0.8;
+/** How long the status word's read of the shared store is reused. */
+export const STATUS_TTL_MS = 10_000;
 /** How long an absent transaction is looked for before it is closed. */
 export const WINDOW_MS = 60 * 60_000;
 export const FIRST_CHECK_MS = 30_000;
@@ -222,6 +228,11 @@ export function createLateSettleBook({
     return !!r.ok;
   };
   const entries = () => Object.values(state.pending);
+  const openCount = (pending = state.pending) => Object.values(pending).filter((e) => e?.state !== "unresolved").length;
+  // Bookings neither the store nor the journal took, in this process (the
+  // alarm line names each one). The word reads unresolved while any is held.
+  let unrecorded = 0;
+  let wordCache = { at: 0, word: null };
   let journalImpl = journal;
   const journalOf = async () => {
     if (journalImpl) return journalImpl;
@@ -230,8 +241,26 @@ export function createLateSettleBook({
     journalImpl = createDeadLetter({ file: `${file}.pending.ndjson`, name: "lateSettlements", journalKey: PG ? `${stateDbSchema()}:lateSettlements` : "" });
     return journalImpl;
   };
-  const write = async (entry) => {
-    try { return await change((p) => { if (!p[entry.key]) p[entry.key] = entry; }); } catch { return false; }
+  // One entry into the store: "made" (or already there), "full" (the open
+  // bound is reached), or "failed" (the write did not land).
+  const put = async (entry) => {
+    let out = "failed";
+    let wrote = false;
+    try {
+      wrote = await change((p) => {
+        if (p[entry.key]) { out = "made"; return; }
+        if (openCount(p) >= maxEntries) { out = "full"; return; }
+        p[entry.key] = entry;
+        out = "made";
+      });
+    } catch { wrote = false; }
+    if (out === "full") return "full";
+    return out === "made" && wrote === true ? "made" : "failed";
+  };
+  const journalCount = async () => {
+    const j = await journalOf();
+    const st = typeof j?.state === "function" ? j.state() : null;
+    return Number(st?.total ?? (typeof j?.size === "function" ? j.size() : 0)) || 0;
   };
   // Lands what the journal holds (a booking whose store write failed earlier,
   // in this process or one that has since stopped).
@@ -239,7 +268,7 @@ export function createLateSettleBook({
     let j;
     try { j = await journalOf(); } catch { return 0; }
     if (!j || !(j.size?.() > 0)) return 0;
-    try { return await j.drain(async (e) => (e?.payload?.key ? ((await write(e.payload)) ? "landed" : "stop") : "drop")); } catch { return 0; }
+    try { return await j.drain(async (e) => (e?.payload?.key ? ((await put(e.payload)) === "made" ? "landed" : "stop") : "drop")); } catch { return 0; }
   };
   const call = (url, method, params) => rpc(url, method, params, fetchImpl, RPC_TIMEOUT_MS, []);
 
@@ -263,10 +292,6 @@ export function createLateSettleBook({
       const key = byAuth ? lateAuthKey(network, c.payer, c.nonce) : lateKey(network, c.tx);
       await refresh();
       if (state.pending[key]) return true;
-      if (entries().length >= maxEntries) {
-        log(`[late-settle] book is full (${maxEntries}); ${network} ${byAuth ? `auth ${c.payer}/${c.nonce}` : `tx ${c.tx}`} NOT booked - resolve the unresolved entries`);
-        return false;
-      }
       const t = now();
       const entry = {
         key, network, tx: byAuth ? null : String(c.tx).toLowerCase(), ...(byAuth ? { nonce: String(c.nonce).toLowerCase() } : {}), payer: String(c.payer), payTo: String(c.payTo), asset: String(c.asset),
@@ -274,33 +299,65 @@ export function createLateSettleBook({
         ...(!byAuth && NONCE.test(String(c.authNonce || "")) ? { authNonce: String(c.authNonce).toLowerCase() } : {}),
         at: t, nextCheckAt: t + FIRST_CHECK_MS, checks: 0, unreadable: 0, failures: 0, state: "pending",
       };
-      if (await write(entry)) {
+      const r = await put(entry);
+      if (r === "made") {
         log(byAuth
           ? `[late-settle] ${network} authorization ${c.payer} nonce ${c.nonce} (via ${entry.via}): outcome unknown; booked until it is read on chain`
           : `[late-settle] ${network} settlement failed naming tx ${c.tx} (via ${entry.via}); booked until its receipt is read`);
         return true;
       }
-      // The store did not take it: kept in the journal and landed by the next
-      // reconcile pass, never dropped in silence.
+      // The store did not take it (its write failed, or the open bound is
+      // reached): kept in the journal and landed by a later reconcile pass
+      // once the store takes it, never dropped in silence.
+      wordCache = { at: 0, word: null };
       let id = null;
       try { const j = await journalOf(); id = j ? j.add("late", entry) : null; } catch { id = null; }
       if (id == null) {
+        unrecorded++;
         alarm(`[late-settle] ${network} ${byAuth ? `auth ${c.payer}/${c.nonce}` : `tx ${c.tx}`} failed and could NOT be recorded (store and journal both refused); if it lands the buyer is owed ${entry.amount} of ${entry.asset} from ${entry.payer}`);
         return false;
       }
-      log(`[late-settle] ${network} ${byAuth ? `auth ${c.payer}/${c.nonce}` : `tx ${c.tx}`} (via ${entry.via}): the store write failed; kept in the journal until the next reconcile lands it`);
+      log(r === "full"
+        ? `[late-settle] book is full (${maxEntries} open); ${network} ${byAuth ? `auth ${c.payer}/${c.nonce}` : `tx ${c.tx}`} (via ${entry.via}) kept in the journal until there is room`
+        : `[late-settle] ${network} ${byAuth ? `auth ${c.payer}/${c.nonce}` : `tx ${c.tx}`} (via ${entry.via}): the store write failed; kept in the journal until the next reconcile lands it`);
       return true;
     },
     /** The entries as last read; call refresh() first for the shared view. */
     list() { return entries(); },
+    /**
+     * One word for /api/gateway-status, read from the shared store (reused
+     * for STATUS_TTL_MS): full (the open bound is reached, so new bookings
+     * wait in the journal), unresolved (an entry waits for a human, a booking
+     * sits in the journal outside the book, or one could not be recorded
+     * anywhere), near_capacity, or ok. Never a number.
+     */
+    async alarmStatus({ ttlMs = STATUS_TTL_MS } = {}) {
+      const t = now();
+      if (wordCache.word && t - wordCache.at < ttlMs) return wordCache.word;
+      await refresh();
+      const open = openCount();
+      let journaled = 0;
+      try { journaled = await journalCount(); } catch { journaled = 1; }
+      let word = "ok";
+      if (open >= maxEntries) word = "full";
+      else if (unrecorded > 0 || journaled > 0 || entries().some((e) => e.state === "unresolved")) word = "unresolved";
+      else if (open >= Math.ceil(maxEntries * NEAR_CAPACITY_SHARE)) word = "near_capacity";
+      wordCache = { at: t, word };
+      return word;
+    },
     /** Operator view from the shared store: every open entry, no amounts. */
     async operatorView() {
       await refresh();
       const all = entries();
+      let journaled = null;
+      try { journaled = await journalCount(); } catch { journaled = null; }
       return {
+        status: await this.alarmStatus({ ttlMs: 0 }),
         total: all.length,
         bound: maxEntries,
         unresolved: all.filter((e) => e.state === "unresolved").length,
+        journaled,
+        unrecordedInMemory: unrecorded,
         open: all.map((e) => ({ key: e.key, network: e.network, tx: e.tx, slug: e.slug, via: e.via, state: e.state, at: e.at, checks: e.checks })),
       };
     },
