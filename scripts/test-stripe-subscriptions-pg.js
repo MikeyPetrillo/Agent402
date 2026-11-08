@@ -185,6 +185,36 @@ try {
     await dA.reload();
     const rd = (await sdb.stateQuery(`SELECT body -> 'sub_cs_three' AS r FROM ${sdb.stateDbSchema()}.documents WHERE name = $1`, [docName])).rows[0]?.r;
     ok(dA.get("sub_cs_three")?.disputed === false && rd?.disputed === false && rd?.disputeOutcome === "won", `A reads the release after a reload; the row carries the outcome (${rd?.disputeOutcome})`);
+
+    // Deploy overlap: B loaded the record before A marked a dispute, and B
+    // (never reloaded) then applies a status webhook. The write merges only
+    // the fields that webhook sets onto the row's record, so the dispute
+    // stands, on the row and in B's copy, and the subscription stays held.
+    const oA = mkD(), oB = mkD();
+    await wait(300);
+    await Promise.all([oA.reload(), oB.reload()]);
+    await sendTo(oA, { id: "evt_ov_inv", type: "invoice.paid", data: { object: { id: "in_ov", subscription: "sub_cs_three", amount_paid: 900, customer: "cus_1", payment_intent: "pi_ov" } } });
+    await oB.reload();
+    await sendTo(oA, { id: "evt_ov_disp", type: "charge.dispute.created", data: { object: { id: "dp_ov", payment_intent: "pi_ov", amount: 900 } } });
+    ok(oB.get("sub_cs_three")?.disputed !== true, "B's copy predates the dispute (the overlap under test)");
+    const code = await sendTo(oB, { id: "evt_ov_upd", type: "customer.subscription.updated", data: { object: { id: "sub_cs_three", customer: "cus_1", status: "active", cancel_at_period_end: true, metadata: {} } } });
+    const ro = (await sdb.stateQuery(`SELECT body -> 'sub_cs_three' AS r FROM ${sdb.stateDbSchema()}.documents WHERE name = $1`, [docName])).rows[0]?.r;
+    ok(code === 200 && ro?.disputed === true && ro?.cancelAtPeriodEnd === true && ro?.lastPaymentIntent === "pi_ov" && ro?.subId === "sub_cs_three", `a webhook on the container with the older copy keeps the dispute on the row (disputed ${ro?.disputed}, cancelAtPeriodEnd ${ro?.cancelAtPeriodEnd})`);
+    ok(oB.get("sub_cs_three")?.disputed === true && !oB.listActive("domain").some((r) => r.subId === "sub_cs_three"), "...and B's copy takes the row's record, so it does not list the held subscription");
+
+    // A change journaled while the database was away lands as the fields it
+    // set: a dispute another container wrote meanwhile is kept.
+    relay.cut();
+    const jcode = await sendTo(oB, { id: "evt_ov_upd2", type: "customer.subscription.updated", data: { object: { id: "sub_cs_three", customer: "cus_1", status: "past_due", cancel_at_period_end: false, metadata: {} } } });
+    const direct2 = new (await import("pg")).default.Client({ connectionString: realUrl });
+    await direct2.connect();
+    try {
+      await direct2.query(`UPDATE ${sdb.stateDbSchema()}.documents SET body = jsonb_set(body, '{sub_cs_three,disputeOutcome}', '"needs_response"'::jsonb, true), version = version + 1 WHERE name = $1`, [docName]);
+    } finally { await direct2.end(); }
+    relay.heal();
+    await oB.replayPending();
+    const rj = (await sdb.stateQuery(`SELECT body -> 'sub_cs_three' AS r FROM ${sdb.stateDbSchema()}.documents WHERE name = $1`, [docName])).rows[0]?.r;
+    ok(jcode === 503 && rj?.status === "past_due" && rj?.disputed === true && rj?.disputeOutcome === "needs_response", `a journaled change lands its own fields and keeps the other container's (status ${rj?.status}, disputeOutcome ${rj?.disputeOutcome})`);
   }
 
   // A replayed record never overwrites a newer copy.
