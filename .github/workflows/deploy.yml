@@ -4926,6 +4926,8 @@ jobs:
           t node scripts/test-traffic-classifier.js
           # Hourly budget on unpaid price checks per client: 429 past it, never for payments, named indexers, our probes or discovery (boots paid + FREE_MODE servers, offline)
           t node scripts/test-unpaid-quote-budget.js
+          # An address that paid is not held to the unpaid-quote limiters for the trust window; free calls, 4xx and unverified headers still count (paid boot, stub facilitator)
+          t node scripts/test-paid-quote-trust.js
           # A rejected payment is answered in the buyer's terms (balance vs stale authorization) on the 402 (offline)
           t node scripts/test-verify-hint.js
           t node scripts/test-verify-hint-live.js

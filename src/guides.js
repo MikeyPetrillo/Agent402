@@ -26,6 +26,7 @@ import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
 import { meteredRoutesInline, meteredFromPrice, meteredQuoteSentence, meteredDefaultModel, flatTiersLine } from "./metered-lead.js";
 // The buying-at-volume guide quotes each limit from the code that enforces it.
 import { unpaidQuoteBudgetPerHour, METERED_UNPAID_QUOTES_PER_MIN, METERED_UNPAID_QUOTES_PER_HOUR } from "./unpaid-quote-budget.js";
+import { PAID_QUOTE_TRUST_MINUTES } from "./paid-quote-trust.js";
 import { MAX_FAILS as SETTLE_BREAKER_MAX_FAILS, WINDOW_MS as SETTLE_BREAKER_WINDOW_MS, HARD_MAX_FAILS as SETTLE_BREAKER_HARD_MAX } from "./gateway-settle-breaker.js";
 import { ASYNC_JOBS_PER_CLIENT } from "./async-jobs.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
@@ -288,21 +289,26 @@ before any payment is taken and names its wait in \`Retry-After\`.
 | What is counted | Limit | Answer |
 |---|---|---|
 | Unpaid price checks (a request with no payment) to priced catalog routes | ${unpaidQuoteBudgetPerHour().toLocaleString("en-US")} an hour per client address; an address that settled a payment this hour is not counted for the rest of it | 429, \`Retry-After\` until the hour turns |
-| Unpaid quotes on \`/v1/metered\` | ${METERED_UNPAID_QUOTES_PER_MIN} a minute and ${METERED_UNPAID_QUOTES_PER_HOUR.toLocaleString("en-US")} an hour per client address | 429, \`Retry-After: 60\` |
+| Unpaid quotes on \`/v1/metered\` | ${METERED_UNPAID_QUOTES_PER_MIN} a minute and ${METERED_UNPAID_QUOTES_PER_HOUR.toLocaleString("en-US")} an hour per client address; not counted for ${PAID_QUOTE_TRUST_MINUTES} minutes after each paid call from that address | 429, \`Retry-After: 60\` |
 | Refused payment credentials on \`/v1/metered\` | the same figures, counted once a credential is refused | 429, \`Retry-After: 60\` |
 | Payments that verified and then failed to settle, per wallet | refused at ${SETTLE_BREAKER_MAX_FAILS} in ${Math.round(SETTLE_BREAKER_WINDOW_MS / 60_000)} minutes while they are more than half of the wallet's outcomes there, or at ${SETTLE_BREAKER_HARD_MAX} whatever it settled | 429 naming when it lifts |
 | Concurrent runs of the report and media routes from one wallet | the wallet's balance covers every run in flight plus the new one | 429, \`Retry-After: 30\` |
 | Jobs per client address | ${ASYNC_JOBS_PER_CLIENT} running at once | 429, \`Retry-After: 30\` |
 
 An IPv6 /64 is one address. A request carrying a payment, a credits key or a
-proof-of-work solution is never counted as an unpaid price check.
+proof-of-work solution is never counted as an unpaid price check. Once an
+address has paid, its quotes are not limited for ${PAID_QUOTE_TRUST_MINUTES} minutes after
+each paid call (a final 200 that settled on any rail, or a credits debit); a
+payment credential that is refused still counts.
 
 How to plan a burst around them:
 
 - A stock x402 client reads the 402 and then sends the paid retry, so each
   call is one unpaid read plus one paid request, and only the unpaid read is
-  counted. On \`/v1/metered\` that makes ${METERED_UNPAID_QUOTES_PER_MIN} calls a
-  minute per client address the pace to plan for.
+  counted. On \`/v1/metered\` an address that has not paid yet gets
+  ${METERED_UNPAID_QUOTES_PER_MIN} quotes a minute; after its first paid call its quotes are not
+  limited for ${PAID_QUOTE_TRUST_MINUTES} minutes after each paid call, so a steady
+  buyer is paced by its own calls.
 - Keep the paying wallet funded above everything in flight. Each payment is
   verified on its own; a wallet that runs dry partway through a burst turns its
   later calls into failed settlements, which is what the per-wallet limit counts.

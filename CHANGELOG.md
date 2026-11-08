@@ -16,6 +16,9 @@ Docs:
   three package pages link it.
 - The /v1/metered unpaid-quote 429 carries Retry-After: 60, retryAfterSeconds
   and a guide link.
+- Once a client address has paid (a final 200 that settled on any rail, or a
+  credits debit), its unpaid quotes are not limited for 10 minutes after each
+  paid call; a refused payment credential still counts.
 
 ### 2026-11-07 (onchain-sql price, X data tools, Solana token search, metered chat, OCR and fetch errors)
 Tools:
