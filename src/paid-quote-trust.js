@@ -21,7 +21,9 @@
 //
 // The key is the unpaid budget's client key (`clientKeyOf`: the address, an
 // IPv6 /64 as one; from Cloudflare's shared Worker egress address, the address
-// plus the User-Agent token), so one paying Worker never trusts every Worker.
+// plus the User-Agent token). Any Worker can send that token, so on that address
+// the trusted counts also share the whole-address ceiling (src/unpaid-quote-budget.js,
+// and the metered gate in server.js): borrowing it never lifts the address past it.
 //
 // Storage: the process keeps its own bounded map (at most `keyCap` addresses,
 // least recently marked dropped first, entries expire with their window), and

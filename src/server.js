@@ -7,7 +7,7 @@ import { createLargeBodyGate, largeBodyInflightMaxBytes, unlessBodyUnread, UNPAI
 import { carriesPaymentAttempt, registerOfferedNetworks } from "./payment-attempt.js";
 import { retiredEntryFor, assertRetiredRegistryConsistent, retirementHeaders, RETIRED_CONVERTERS_AT } from "./retired-tools.js";
 import { createTrafficStore, trafficMiddleware } from "./traffic-classifier.js";
-import { redisSharedSettled, createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath, METERED_UNPAID_QUOTES_PER_MIN, METERED_UNPAID_QUOTES_PER_HOUR, PAID_CLIENT_METERED_QUOTES_PER_MIN, PAID_CLIENT_METERED_QUOTES_PER_HOUR, clientKeyOf as quoteClientKeyOf } from "./unpaid-quote-budget.js";
+import { redisSharedSettled, createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath, METERED_UNPAID_QUOTES_PER_MIN, METERED_UNPAID_QUOTES_PER_HOUR, PAID_CLIENT_METERED_QUOTES_PER_MIN, PAID_CLIENT_METERED_QUOTES_PER_HOUR, clientKeyOf as quoteClientKeyOf, workerEgressAddressKeyOf } from "./unpaid-quote-budget.js";
 import { createPaidQuoteTrust, paidAndSettled } from "./paid-quote-trust.js";
 import { stripMcpMarker } from "./mcp-loopback.js";
 import { canonicalizePaymentHeaders, decodePaymentHeader, encodePaymentHeader } from "./payment-header.js";
@@ -3457,6 +3457,10 @@ const meteredUnverifiedLimiter = createRateLimiter("metered-quote-refused-creden
 // (src/unpaid-quote-budget.js PAID_CLIENT_METERED_QUOTES_*), on its own count
 // keyed like the trust (quoteClientKeyOf): trust raises the cap, never lifts it.
 const meteredTrustedQuoteLimiter = createRateLimiter("metered-quote-paid-client", { perMin: PAID_CLIENT_METERED_QUOTES_PER_MIN, perHour: PAID_CLIENT_METERED_QUOTES_PER_HOUR });
+// On Cloudflare's shared Worker egress address the trust key carries a
+// User-Agent token any Worker can send, so the trusted counts there also share
+// one whole-address count at the same raised figures.
+const meteredTrustedEgressLimiter = createRateLimiter("metered-quote-paid-egress", { perMin: PAID_CLIENT_METERED_QUOTES_PER_MIN, perHour: PAID_CLIENT_METERED_QUOTES_PER_HOUR });
 app.use("/v1/metered", (req, res, next) => {
   // GET/HEAD too: the method alias below turns them into the POST quote path
   // (review 2026-08-28: 70 HEADs with a 180 KB body reached the quoter past
@@ -3481,7 +3485,12 @@ app.use("/v1/metered", (req, res, next) => {
     // before every paid call. This process's record is read first; the shared
     // store only on a refusal.
     const trustKey = quoteClientKeyOf(req);
-    const trustedQuote = () => (meteredTrustedQuoteLimiter.check(trustKey).limited ? refuseQuote() : next());
+    const egressKey = workerEgressAddressKeyOf(req);
+    const trustedQuote = () => {
+      if (meteredTrustedQuoteLimiter.check(trustKey).limited) return refuseQuote();
+      if (egressKey && meteredTrustedEgressLimiter.check(egressKey).limited) return refuseQuote();
+      return next();
+    };
     if (QUOTE_TRUST.trustedLocal(trustKey)) return trustedQuote();
     const ip = clientIp(req);
     if (meteredQuoteLimiter.peek(ip).limited) {

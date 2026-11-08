@@ -41,7 +41,7 @@ process.env.POW_SECRET = POW_SECRET;
 const {
   PAID_QUOTE_TRUST_MINUTES, PAID_QUOTE_TRUST_MS, PAID_QUOTE_TRUST_NEGATIVE_MS, createPaidQuoteTrust, paidAndSettled, trustBucket,
 } = await import("../src/paid-quote-trust.js");
-const { createUnpaidQuoteBudget, METERED_UNPAID_QUOTES_PER_MIN, METERED_UNPAID_QUOTES_PER_HOUR, PAID_CLIENT_QUOTE_MULTIPLIER, PAID_CLIENT_METERED_QUOTES_PER_MIN, PAID_CLIENT_METERED_QUOTES_PER_HOUR, quoteKeyDigest } = await import("../src/unpaid-quote-budget.js");
+const { createUnpaidQuoteBudget, METERED_UNPAID_QUOTES_PER_MIN, METERED_UNPAID_QUOTES_PER_HOUR, PAID_CLIENT_QUOTE_MULTIPLIER, PAID_CLIENT_METERED_QUOTES_PER_MIN, PAID_CLIENT_METERED_QUOTES_PER_HOUR, quoteKeyDigest, clientKeyOf: quoteClientKeyOf } = await import("../src/unpaid-quote-budget.js");
 const { ALLOWANCE_STATE } = await import("../src/allowance-state.js");
 
 let pass = 0;
@@ -191,6 +191,23 @@ function fakeStore() {
   ok(PAID_CLIENT_QUOTE_MULTIPLIER === 10 && got.every(Boolean), `a trusted address is served past the price-check budget, up to ${PAID_CLIENT_QUOTE_MULTIPLIER} times it (${got.filter(Boolean).length} of ${raised})`);
   const over = await drive(b, "203.0.113.51");
   ok(over.code === 429 && !over.nexted, `and is refused past the raised ceiling: trust raises the cap, never lifts it (got ${over.code})`);
+  // The shared Worker egress address: the trust key is the address plus a
+  // User-Agent token any Worker can send, so the whole-address ceiling still
+  // counts on the trusted path. Ten untrusted User-Agents fill it (2 x 10),
+  // then a Worker that never paid sends the payer's token: refused.
+  {
+    const EGRESS = "2a06:98c0:3600::103";
+    const ereq = (ua) => ({ method: "GET", path: "/api/uuid", ip: EGRESS, headers: { "user-agent": ua }, socket: { remoteAddress: EGRESS } });
+    const edrive = async (bb, ua) => { const res = mkRes(); let nexted = false; await bb.middleware(ereq(ua), res, () => { nexted = true; }); return { nexted, code: res.code }; };
+    const etrust = createPaidQuoteTrust({ store: null });
+    const eb = createUnpaidQuoteBudget({ budget: 2, isPriced: () => true, replicas: 1, paidTrust: etrust, log: () => {} });
+    let filled = 0;
+    for (let u = 0; u < 10; u++) for (let i = 0; i < 2; i++) if ((await edrive(eb, `worker${u}/1`)).nexted) filled++;
+    ok(filled === 20 && (await edrive(eb, "fresh/1")).code === 429, `control: ten User-Agents fill the egress address's whole ceiling (${filled} of 20), then a fresh one is refused`);
+    etrust.mark(quoteClientKeyOf(ereq("node")));
+    const borrowed = await edrive(eb, "node");
+    ok(!borrowed.nexted && borrowed.code === 429, `a Worker sending a payer's User-Agent token on the egress address is refused past the whole-address ceiling (got ${borrowed.code})`);
+  }
   // Trusted on another replica: read on the refusal path.
   const other = createPaidQuoteTrust({ store });
   other.mark("203.0.113.52");
@@ -354,6 +371,24 @@ try {
     const junk = { "payment-signature": Buffer.from(JSON.stringify({ x402Version: 2, resource: bad.resource, accepted: bad, payload: { signature: "0x11", authorization: { from: "nope", to: bad.payTo, value: bad.amount, validAfter: "0", validBefore: "9999999999", nonce: "0x01" } } })).toString("base64") };
     const refused = await quotes(ip, N + 1, junk);
     ok(refused.slice(0, N).every((s) => s === 402 || s === 401) && refused[N] === 429, `from a trusted address, a payment that does not verify is still refused after ${N} (statuses ${[...new Set(refused.slice(0, N))].join(",")} then ${refused[N]})`);
+  }
+  // Two paying Workers on the shared egress address share one raised metered
+  // ceiling: a trust key there carries a User-Agent token any Worker can send.
+  {
+    const EG = "2a06:98c0:3600::103";
+    const payAs = async (ua) => {
+      const accept = await acceptFor(EG, "/api/uuid");
+      const s0 = settles;
+      const r = await fetch(`${B}/api/uuid`, { headers: from(EG, { "user-agent": ua, "payment-signature": credential(accept, freshNonce()) }) });
+      ok(r.status === 200 && settles === s0 + 1, `a Worker (${ua}) on the egress address pays and is served (status ${r.status})`);
+    };
+    await payAs("payer-a/1");
+    await payAs("payer-b/1");
+    await sleep(50);
+    const M = PAID_CLIENT_METERED_QUOTES_PER_MIN;
+    const a = await quotes(EG, M - 100, { "user-agent": "payer-a/1" });
+    const b = await quotes(EG, 101, { "user-agent": "payer-b/1" });
+    ok(a.every((s) => s === 402) && b.slice(0, 100).every((s) => s === 402) && b[100] === 429, `trusted Workers on the egress address share ${M} metered quotes a minute, then a 429 (A ${[...new Set(a)].join(",")}, B ${[...new Set(b.slice(0, 100))].join(",")} then ${b[100]})`);
   }
   // A free (proof-of-work) call trusts nothing.
   {

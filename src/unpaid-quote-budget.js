@@ -390,6 +390,23 @@ export function createUnpaidQuoteBudget({ budget, isPriced, isSynthetic = () => 
         retryAfterSeconds: verdict.retryAfterSeconds,
       });
     };
+    // A recently paid client counts on its own raised ceiling. On the shared
+    // Worker egress address its key is the address plus a User-Agent token any
+    // Worker can send, so the whole address still counts against its ceiling:
+    // the raised figure never lifts that address past WORKER_EGRESS_ADDRESS_MULTIPLIER
+    // times the budget.
+    const paidCount = () => {
+      verdict = hit(paidKeyOf(key), now(), paidLimit);
+      scope = "paid";
+      if (!verdict.limited) {
+        addressKey = workerEgressAddressKeyOf(req);
+        if (addressKey) {
+          const whole = hit(addressKey, now(), limit * WORKER_EGRESS_ADDRESS_MULTIPLIER);
+          if (whole.limited) { verdict = whole; scope = "egress"; }
+        }
+      }
+      return verdict.limited ? refuse() : next();
+    };
     try {
       const path = normalizeCatalogPath(req.path);
       if (!isCountablePath(req, path)) return next();
@@ -406,11 +423,7 @@ export function createUnpaidQuoteBudget({ budget, isPriced, isSynthetic = () => 
       // reads against the raised ceiling on its own count.
       let paidRecently = settled.has(key);
       if (!paidRecently) { try { paidRecently = Boolean(paidTrust?.trustedLocal?.(key)); } catch { paidRecently = false; } }
-      if (paidRecently) {
-        verdict = hit(paidKeyOf(key), now(), paidLimit);
-        scope = "paid";
-        return verdict.limited ? refuse() : next();
-      }
+      if (paidRecently) return paidCount();
       named = isNamedClientUserAgent(req.headers?.["user-agent"]);
       verdict = hit(key, now(), named ? namedLimit : limit);
       // From the shared Worker egress address the whole address also counts,
@@ -430,11 +443,7 @@ export function createUnpaidQuoteBudget({ budget, isPriced, isSynthetic = () => 
     const paidElsewhere = () => (sharedSettled?.has ? Promise.resolve().then(() => sharedSettled.has(key)).catch(() => false) : Promise.resolve(false));
     const trustedElsewhere = () => (paidTrust?.trusted ? Promise.resolve().then(() => paidTrust.trusted(key)).catch(() => false) : Promise.resolve(false));
     // Paid elsewhere: counted against the raised ceiling instead.
-    const paidPass = () => {
-      verdict = hit(paidKeyOf(key), now(), paidLimit);
-      scope = "paid";
-      return verdict.limited ? refuse() : next();
-    };
+    const paidPass = paidCount;
     return paidElsewhere().then((paid) => {
       if (paid) { noteSettled(key); return paidPass(); }
       return trustedElsewhere().then((t) => (t ? paidPass() : refuse()));
