@@ -325,6 +325,27 @@ try {
   ok(usage.status === 200 && settles === s0 + 1, `my-usage (identity-bound) settles (status ${usage.status})`);
   const usageCopy = await pay("/api/my-usage", cred4, { method: "POST", body: usageBody });
   ok(usageCopy.status !== 200 && !replayed(usageCopy), `its re-sent copy is never served from the store (got ${usageCopy.status}, replay ${usageCopy.headers.get("x-replayed-answer")})`);
+  // j. A POST to a GET-only tool (served through the method alias) is one
+  // canonical request to the store: its re-sent payment is answered from the
+  // first answer, not refused as a consumed authorization, and the key it is
+  // stored under is the same for an explicit Idempotency-Key.
+  const postBody = JSON.stringify({ limit: 1 });
+  const postAccept = await acceptFor("/api/demand-radar", "POST", postBody);
+  const cred5 = credential(postAccept, freshNonce());
+  const s1st = settles;
+  const viaPost = await pay("/api/demand-radar", cred5, { method: "POST", body: postBody });
+  const viaPostBody = await viaPost.text();
+  ok(viaPost.status === 200 && settles === s1st + 1 && !replayed(viaPost), `POST on a GET-only tool settles once (status ${viaPost.status}, settles ${settles - s1st})`);
+  const viaPostCopy = await pay("/api/demand-radar", cred5, { method: "POST", body: postBody });
+  const viaPostCopyBody = await viaPostCopy.text();
+  ok(viaPostCopy.status === 200 && replayed(viaPostCopy) && viaPostCopyBody === viaPostBody && settles === s1st + 1,
+    `its re-sent payment is answered from the first answer (status ${viaPostCopy.status}, replay ${viaPostCopy.headers.get("x-replayed-answer")}, settles ${settles - s1st})`);
+  const cred6 = credential(postAccept, freshNonce());
+  const keyedPost = await pay("/api/demand-radar", cred6, { method: "POST", body: postBody, headers: { "Idempotency-Key": "k-post-alias" } });
+  await keyedPost.text();
+  const keyedPostAgain = await pay("/api/demand-radar", cred6, { method: "POST", body: postBody, headers: { "Idempotency-Key": "k-post-alias" } });
+  ok(keyedPost.status === 200 && keyedPostAgain.status === 200 && keyedPostAgain.headers.get("x-idempotent-replay") === "true" && settles === s1st + 2,
+    `an explicit key on the aliased call replays too (status ${keyedPostAgain.status}, settles ${settles - s1st})`);
 
   console.log(`\n${pass} passed`);
   proc.kill("SIGKILL");

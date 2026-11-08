@@ -10350,8 +10350,48 @@ if (!FREE_MODE) {
   }
 }
 
+// POST on a GET-only tool is served, not 405'd (2026-08-28): agents POST
+// JSON to every route they discover - a buyer that had just paid for one
+// tool walked the catalog POSTing and got 405 on search, search-news,
+// search-images, search-videos, search-suggest, ip-info, card-validate ...
+// and stopped. The method is rewritten to GET for the IDENTICAL gate chain
+// (idempotency, funnel, PoW, replay guard, x402 paywall keyed "GET /path"),
+// the parsed JSON body is the input (handlerInputOf merges query + body, and
+// the GET cache keys on that merged input), and Allow/405 remain for a GET
+// sent to a POST-only tool (a GET cannot carry the body those handlers need).
+// Mounted BEFORE idempotency, so the store sees one canonical request: an
+// aliased call's re-sent payment or keyed retry replays its stored answer
+// instead of running into the replay guard (or a second credits debit).
+app.use((req, res, next) => {
+  if (req.method === "POST" && !CATALOG[`POST ${req.path}`] && CATALOG[`GET ${req.path}`]) {
+    req.__methodAliased = "POST";
+    req.method = "GET";
+  } else if ((req.method === "GET" || req.method === "HEAD") && !CATALOG[`GET ${req.path}`] && CATALOG[`POST ${req.path}`]) {
+    // The other direction (2026-08-28 sweep): trust and uptime indexers send
+    // GET or HEAD to POST-only tools and skill packs and were answered 405,
+    // which reads as "not payable" / "down" in their listings. Run the POST
+    // gate chain instead: unpaid -> the 402 with its challenges (the paywall
+    // is visible); paid or free -> the handler sees an empty body and answers
+    // its own 400 naming the field it needs. A HEAD gets the same headers
+    // and no body (RFC 9110), like the HEAD-on-GET rewrite below.
+    if (req.method === "HEAD") {
+      const origEnd = res.end;
+      res.end = function headEnd(chunk, encoding, cb) {
+        if (typeof chunk === "function") { cb = chunk; chunk = null; }
+        else if (typeof encoding === "function") { cb = encoding; encoding = undefined; }
+        return origEnd.call(this, null, cb);
+      };
+    }
+    req.__methodAliased = req.method;
+    req.method = "POST";
+    if (!req.body || typeof req.body !== "object") req.body = {};
+  }
+  next();
+});
+
 // Opt-in idempotency (safe paid retry): src/idempotency.js. Mounted after the
-// credits gate and before the paywall, so a replay hit skips settlement.
+// credits gate and the method alias, and before the paywall, so a replay hit
+// skips settlement.
 // A re-sent x402 EVM payment (same nonce, route and body) with no explicit key
 // replays its first answer the same way, except on a route whose effect
 // outlives the answer (hasLastingEffect), on an identity-bound route (its
@@ -10389,41 +10429,6 @@ app.use(createIdempotency({
 }));
 
 // x402 paywall for the catalog routes
-// POST on a GET-only tool is served, not 405'd (2026-08-28): agents POST
-// JSON to every route they discover - a buyer that had just paid for one
-// tool walked the catalog POSTing and got 405 on search, search-news,
-// search-images, search-videos, search-suggest, ip-info, card-validate ...
-// and stopped. The method is rewritten to GET for the IDENTICAL gate chain
-// (funnel, PoW, replay guard, x402 paywall keyed "GET /path"), the parsed
-// JSON body is the input (handlerInputOf merges query + body, and the GET
-// cache keys on that merged input), and Allow/405 remain for a GET sent to
-// a POST-only tool (a GET cannot carry the body those handlers need).
-app.use((req, res, next) => {
-  if (req.method === "POST" && !CATALOG[`POST ${req.path}`] && CATALOG[`GET ${req.path}`]) {
-    req.__methodAliased = "POST";
-    req.method = "GET";
-  } else if ((req.method === "GET" || req.method === "HEAD") && !CATALOG[`GET ${req.path}`] && CATALOG[`POST ${req.path}`]) {
-    // The other direction (2026-08-28 sweep): trust and uptime indexers send
-    // GET or HEAD to POST-only tools and skill packs and were answered 405,
-    // which reads as "not payable" / "down" in their listings. Run the POST
-    // gate chain instead: unpaid -> the 402 with its challenges (the paywall
-    // is visible); paid or free -> the handler sees an empty body and answers
-    // its own 400 naming the field it needs. A HEAD gets the same headers
-    // and no body (RFC 9110), like the HEAD-on-GET rewrite below.
-    if (req.method === "HEAD") {
-      const origEnd = res.end;
-      res.end = function headEnd(chunk, encoding, cb) {
-        if (typeof chunk === "function") { cb = chunk; chunk = null; }
-        else if (typeof encoding === "function") { cb = encoding; encoding = undefined; }
-        return origEnd.call(this, null, cb);
-      };
-    }
-    req.__methodAliased = req.method;
-    req.method = "POST";
-    if (!req.body || typeof req.body !== "object") req.body = {};
-  }
-  next();
-});
 if (FREE_MODE) {
   console.warn("FREE_MODE=true - payments are DISABLED. Do not run this in production.");
 } else {
