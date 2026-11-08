@@ -9,6 +9,7 @@ import { trackStoreReady, stateDbEnabled } from "./state-db.js";
 import { upgradeOffer } from "./report-upgrade.js";
 import { REPORT_MODEL_NOTE, reportIsModelWritten } from "./report-disclosure.js";
 import { headerText, escapeHtml } from "./email-text.js";
+import { MAX_FULL_PER_SUB_30D } from "./monitor-scheduler.js";
 
 const RESEND_URL = "https://api.resend.com/emails";
 // ZeptoMail region base (api.zeptomail.com default; .eu / .in for those regions).
@@ -202,10 +203,10 @@ export function buildReportReadyEmail({ reportUrl, productLabel, subjectOf, kind
   const up = upgradeOffer(kind, subjectOf, baseUrl || originOf(reportUrl));
   const note = modelNoteParts(kind);
   const upHtml = up
-    ? `<p style="color:#3A3F45;border-top:1px solid #D9DDE1;padding-top:16px;margin-top:26px">Want this kept current? Our ${escapeHtml(up.label)} re-checks ${escapeHtml(hdr(up.target || "it"))} on a schedule and emails you a fresh report the moment it changes, ${escapeHtml(up.priceUsd)} a month, cancel any time. <a href="${escapeAttr(up.url)}" style="color:#0F5E43;font-weight:600">Start monitoring →</a></p>`
+    ? `<p style="color:#3A3F45;border-top:1px solid #D9DDE1;padding-top:16px;margin-top:26px">Want this kept current? Our ${escapeHtml(up.label)} re-checks ${escapeHtml(hdr(up.target || "it"))} on a schedule and emails you up to ${MAX_FULL_PER_SUB_30D} fresh reports in any 30 days, ${escapeHtml(up.priceUsd)} a month, cancel any time. <a href="${escapeAttr(up.url)}" style="color:#0F5E43;font-weight:600">Start monitoring →</a></p>`
     : "";
   const upText = up
-    ? `\nWant this kept current? Our ${up.label} re-checks ${hdr(up.target || "it")} on a schedule and emails you a fresh report when it changes, ${up.priceUsd} a month, cancel any time:\n${up.url}\n`
+    ? `\nWant this kept current? Our ${up.label} re-checks ${hdr(up.target || "it")} on a schedule and emails you up to ${MAX_FULL_PER_SUB_30D} fresh reports in any 30 days, ${up.priceUsd} a month, cancel any time:\n${up.url}\n`
     : "";
   const html = `<div style="font-family:system-ui,-apple-system,sans-serif;max-width:520px;margin:0 auto;color:#111315">
     <h2 style="font-weight:500;color:#111315">Your ${escapeHtml(productLabel || "report")} is ready</h2>
