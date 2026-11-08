@@ -44,6 +44,7 @@ import { createServer } from "node:http";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import { getFreePorts } from "./lib/free-port.js";
 
 const POW_SECRET = "test-unpaid-quote-budget-secret";
@@ -56,7 +57,7 @@ const MCP_MARKER = `mcp;k=${(process.env.MCP_LOOPBACK_TEST_SECRET = "6b".repeat(
 const {
   DEFAULT_UNPAID_QUOTE_BUDGET_PER_HOUR, UNPAID_QUOTE_BUDGET_LOG_CAP, createUnpaidQuoteBudget, unpaidQuoteBudgetPerHour,
   hasCredentialHeader, looksLikePayment, looksLikePowSolution, hasSettlementReceipt, normalizeCatalogPath,
-  isNamedClientUserAgent, clientKeyOf, NAMED_CLIENT_BUDGET_MULTIPLIER, isWorkerEgressAddress, WORKER_EGRESS_ADDRESSES, WORKER_EGRESS_ADDRESS_MULTIPLIER, isMcpLoopback, isExemptPath, secondsToHourBoundary,
+  isNamedClientUserAgent, clientKeyOf, NAMED_CLIENT_BUDGET_MULTIPLIER, isWorkerEgressAddress, WORKER_EGRESS_ADDRESSES, WORKER_EGRESS_ADDRESS_MULTIPLIER, isMcpLoopback, isExemptPath, secondsToHourBoundary, PAID_CLIENT_QUOTE_MULTIPLIER, quoteKeyDigest,
 } = await import("../src/unpaid-quote-budget.js");
 const { crawlerPage, catalogCrawlSection } = await import("../src/crawler-page.js");
 const { perReplica } = await import("../src/rate-limit.js");
@@ -326,7 +327,7 @@ ok(isExemptPath("/mcp") && isExemptPath("/api/pricing") && isExemptPath("/openap
     b.middleware(req, res, () => { nexted = true; });
     if (before) before(res);
     res.finish();
-    return { nexted, status: res.statusCode };
+    return { nexted, status: res.statusCode, body: res.body };
   };
   const budget = () => createUnpaidQuoteBudget({ budget: 2, isPriced: () => true });
   // Control first: with no settlement the third unpaid request IS a 429, so a
@@ -365,8 +366,23 @@ ok(isExemptPath("/mcp") && isExemptPath("/api/pricing") && isExemptPath("/openap
     before: (res) => res.setHeader("PAYMENT-RESPONSE", receiptHeader({ success: true, transaction: "0xabc" })),
   });
   ok(paid.nexted, "the paid retry itself is never counted");
-  ok(drive(warm).nexted && drive(warm).nexted, "after one settlement the same client is not counted for the rest of the hour");
+  ok(drive(warm).nexted && drive(warm).nexted, "after one settlement the same client passes the plain budget for the rest of the hour");
   ok(warm.stats().clientsSettledThisHour === 1, "the operator read counts the settled client");
+  // A raised ceiling, never a pass: one cheap settlement bought unbounded
+  // free price checks for the hour.
+  const raisedTo = 2 * PAID_CLIENT_QUOTE_MULTIPLIER;
+  let served = 2;
+  while (served < raisedTo && drive(warm).nexted) served++;
+  const past = drive(warm);
+  ok(served === raisedTo && past.status === 429, `a settled client reads against ${PAID_CLIENT_QUOTE_MULTIPLIER} times the budget (${served} of ${raisedTo} served), then a 429 (${past.status})`);
+  ok(/paid recently reads against 20 per hour/.test(String(past.body?.hint || "")), `the 429 names the raised ceiling (${String(past.body?.hint || "").slice(0, 120)})`);
+  // The shared "paid this hour" record is keyed by a keyed HMAC, never a
+  // plain hash an IPv4 brute force reverses.
+  {
+    const digest = quoteKeyDigest("10.0.0.7");
+    const plain = createHash("sha256").update("10.0.0.7").digest("hex").slice(0, 32);
+    ok(/^[0-9a-f]{32}$/.test(digest) && digest !== plain, "the shared settled flag's key is a keyed digest, not a plain sha256 of the address");
+  }
 
   const refused = budget();
   drive(refused); drive(refused);

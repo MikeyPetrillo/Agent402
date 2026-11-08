@@ -14,14 +14,14 @@ Paid calls are not counted per wallet. Every limit below answers before any paym
 
 | What is counted | Default | Source |
 |---|---|---|
-| Unpaid price checks to priced catalog routes, per client address | 3,000 an hour; an address that settled a payment this hour is not counted for the rest of it | `src/unpaid-quote-budget.js` |
-| Unpaid quotes on `/v1/metered`, per client address | 60 a minute, 1,200 an hour (429, `Retry-After: 60`, with a `guide` link); not counted for 10 minutes after each paid call from that address | `METERED_UNPAID_QUOTES_PER_MIN` / `_PER_HOUR` in `src/unpaid-quote-budget.js`, enforced in `src/server.js` |
+| Unpaid price checks to priced catalog routes, per client address | 3,000 an hour; 30,000 an hour for the rest of the hour once that address settles a payment | `src/unpaid-quote-budget.js` (`PAID_CLIENT_QUOTE_MULTIPLIER`) |
+| Unpaid quotes on `/v1/metered`, per client address | 60 a minute, 1,200 an hour (429, `Retry-After: 60`, with a `guide` link); 600 a minute and 12,000 an hour for 10 minutes after each paid call from that address | `METERED_UNPAID_QUOTES_PER_MIN` / `_PER_HOUR` and `PAID_CLIENT_METERED_QUOTES_PER_MIN` / `_PER_HOUR` in `src/unpaid-quote-budget.js`, enforced in `src/server.js` |
 | Refused payment credentials on `/v1/metered` | the same figures, counted once a credential is refused | `src/server.js` |
 | Payments that verified and then failed to settle, per wallet | 3 in 15 minutes while failures are more than half of the wallet's outcomes, or 40 whatever it settled | `src/gateway-settle-breaker.js` |
 | Concurrent report and media runs, per wallet | the balance must cover every run in flight plus the new one (429, `Retry-After: 30`) | `src/inflight-cover.js` |
 | Jobs per client address | 4 at once (429, `Retry-After: 30`) | `ASYNC_JOBS_PER_CLIENT` in `src/async-jobs.js` |
 
-An IPv6 /64 is one address. A stock x402 client sends one unpaid read and one paid retry per call, and only the unpaid read is counted. Once an address has paid, its quotes are not limited for 10 minutes after each paid call (a final 200 that settled on any rail, or a credits debit; `PAID_QUOTE_TRUST_MINUTES` in `src/paid-quote-trust.js`), so the per-address unpaid-quote limit paces only an address that has not paid yet. A payment credential that is refused still counts.
+An IPv6 /64 is one address. A stock x402 client sends one unpaid read and one paid retry per call, and only the unpaid read is counted. Once an address has paid, its quotes read against 10 times each figure for 10 minutes after each paid call (a final 200 that settled on any rail, or a credits debit; `PAID_QUOTE_TRUST_MINUTES` in `src/paid-quote-trust.js`, `PAID_CLIENT_QUOTE_MULTIPLIER` in `src/unpaid-quote-budget.js`), so a steady buyer is paced by its own calls and one cheap paid call never lifts the limit. A payment credential that is refused still counts.
 
 ## Retries that never pay twice
 

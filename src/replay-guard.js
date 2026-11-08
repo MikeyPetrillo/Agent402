@@ -421,7 +421,8 @@ export function createReplayGuard({
   const claims = new Map();
   // key -> interval renewing this process's Redis claim on it.
   const renewers = new Map();
-  // key -> interval writing a consumed mark the store missed.
+  // key -> { settledAt, until, claim }: a consumed mark the store missed,
+  // oldest first, written again by one shared retry loop (schedulePending).
   const pending = new Map();
 
   function startRenew(key) {
@@ -524,17 +525,52 @@ export function createReplayGuard({
     return { written: true };
   }
 
+  // One retry loop for every consumed mark the store missed, over a bounded
+  // queue (`pending`, insertion order, at most `maxEntries`): a timer per
+  // mark held one closure and one interval each, so an outage that missed
+  // tens of thousands of marks grew the heap with them. Every pendingRetryMs
+  // the loop walks the queue oldest first, drops a mark whose hold has ended
+  // (abandoned), and writes the rest again; the pass stops at the first write
+  // the store refuses, since the store is still down for the ones after it.
+  let pendingTimer = null;
+  let pendingBusy = false;
+  function stopPendingLoop() {
+    if (pendingTimer) { clearInterval(pendingTimer); pendingTimer = null; }
+  }
   function clearPending(key) {
-    const t = pending.get(key);
-    if (!t) return false;
-    clearInterval(t);
-    pending.delete(key);
+    if (!pending.delete(key)) return false;
     storeHealth.pending = Math.max(0, storeHealth.pending - 1);
+    if (pending.size === 0) stopPendingLoop();
     return true;
   }
-  // A consumed mark the store did not take: written again every
-  // pendingRetryMs until it lands or its hold ends. This process refuses the
-  // payment meanwhile (its local mark).
+  async function retryPendingPass() {
+    if (pendingBusy) return;
+    pendingBusy = true;
+    try {
+      const t0 = Date.now();
+      for (const [key, entry] of [...pending]) {
+        if (entry.until <= t0) { if (pending.get(key) === entry && clearPending(key)) storeHealth.consumedWritesAbandoned++; }
+      }
+      if (pending.size === 0) return;
+      let c = null;
+      try { c = await getSharedRedisClient(); } catch { c = null; }
+      if (!c) return;
+      for (const [key, entry] of [...pending]) {
+        if (pending.get(key) !== entry) continue;
+        if (Date.now() >= entry.until) { if (clearPending(key)) storeHealth.consumedWritesAbandoned++; continue; }
+        let r;
+        try { r = await writeConsumed(c, key, entry.settledAt, entry.until, entry.claim, []); } catch (e) { r = { written: false, error: e }; }
+        if (!r.written) break;
+        if (pending.get(key) === entry && clearPending(key)) {
+          storeHealth.consumedWritesRecovered++;
+          console.warn("[replay-guard] a consumed mark the shared store missed is now written");
+        }
+      }
+    } catch { /* the next tick retries */ } finally { pendingBusy = false; }
+  }
+  // A consumed mark the store did not take: queued, and written again by the
+  // shared loop every pendingRetryMs until it lands or its hold ends. This
+  // process refuses the payment meanwhile (its local mark).
   function schedulePending(key, settledAt, until, claim) {
     clearPending(key);
     while (pending.size >= maxEntries) {
@@ -543,24 +579,11 @@ export function createReplayGuard({
       storeHealth.consumedWritesAbandoned++;
     }
     storeHealth.pending++;
-    let busy = false;
-    const t = setInterval(async () => {
-      if (busy) return;
-      if (Date.now() >= until) { clearPending(key); storeHealth.consumedWritesAbandoned++; return; }
-      busy = true;
-      try {
-        const c = await getSharedRedisClient();
-        if (!c) return;
-        const r = await writeConsumed(c, key, settledAt, until, claim, []);
-        if (r.written && pending.get(key) === t) {
-          clearPending(key);
-          storeHealth.consumedWritesRecovered++;
-          console.warn("[replay-guard] a consumed mark the shared store missed is now written");
-        }
-      } catch { /* the next tick retries */ } finally { busy = false; }
-    }, pendingRetryMs);
-    t.unref?.();
-    pending.set(key, t);
+    pending.set(key, { settledAt, until, claim });
+    if (!pendingTimer) {
+      pendingTimer = setInterval(() => { void retryPendingPass(); }, pendingRetryMs);
+      pendingTimer.unref?.();
+    }
   }
 
   return {

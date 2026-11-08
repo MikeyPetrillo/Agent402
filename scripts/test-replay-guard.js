@@ -804,5 +804,59 @@ const { replayGuardStoreStatus } = await import("../src/replay-guard.js");
   } finally { __setTestClient(null); }
 }
 
+{
+  // Missed consumed marks share ONE retry loop over a bounded queue: a timer
+  // per mark grew the heap with the outage (20k marks, RSS 102 -> 226 MB).
+  // Pinned: one interval for many marks, a pass that stops at the first
+  // write the store refuses, every mark written once the store answers, the
+  // loop stopped when the queue empties, and a mark whose hold ended dropped.
+  const r = switchableRedis();
+  __setTestClient(r);
+  const realSetInterval = globalThis.setInterval;
+  const realClearInterval = globalThis.clearInterval;
+  const RETRY_MS = 37; // unique, so only this guard's loop is counted
+  let started = 0, live = 0;
+  const ours = new Set();
+  globalThis.setInterval = (fn, ms, ...a) => { const t = realSetInterval(fn, ms, ...a); if (ms === RETRY_MS) { started++; live++; ours.add(t); } return t; };
+  globalThis.clearInterval = (t) => { if (ours.delete(t)) live--; return realClearInterval(t); };
+  try {
+    const g = createReplayGuard({ consumedRetryDelaysMs: [], pendingRetryMs: RETRY_MS });
+    const N = 400;
+    for (let i = 0; i < N; i++) await g.begin(`n:q${i}`);
+    const before = replayGuardStoreStatus({ full: true });
+    r.setDown(true);
+    for (let i = 0; i < N; i++) await g.settle(`n:q${i}`);
+    ok(g._state().pendingConsumed === N && replayGuardStoreStatus().status === "pending", `pending queue: ${N} missed marks are queued and read pending`);
+    ok(started === 1 && live === 1, `pending queue: one shared retry loop for ${N} missed marks (intervals started ${started})`);
+    // While the store is down a pass stops at its first refused write.
+    const set0 = r.set;
+    let tries = 0;
+    r.set = async (...a) => { tries++; return set0(...a); };
+    await new Promise((res) => setTimeout(res, RETRY_MS * 3 + 10));
+    ok(tries > 0 && tries <= 4, `pending queue: a pass stops at the first write the store refuses (${tries} writes tried over about three passes)`);
+    r.set = set0;
+    r.setDown(false);
+    for (let i = 0; i < 200 && g._state().pendingConsumed > 0; i++) await new Promise((res) => setTimeout(res, 10));
+    let written = 0;
+    for (let i = 0; i < N; i++) if (r.kv.has(`replay:c:n:q${i}`)) written++;
+    const after = replayGuardStoreStatus({ full: true });
+    ok(written === N && g._state().pendingConsumed === 0 && after.consumedWritesRecovered === before.consumedWritesRecovered + N, `pending queue: every queued mark is written once the store answers (${written}/${N})`);
+    ok(after.status === "ok" && live === 0, `pending queue: the loop stops when the queue empties (live intervals ${live})`);
+    // A mark whose hold ends while the store is down is dropped, counted abandoned.
+    const short = createReplayGuard({ ttlMs: 60, consumedRetryDelaysMs: [], pendingRetryMs: RETRY_MS });
+    await short.begin("n:qshort");
+    r.setDown(true);
+    const ab0 = replayGuardStoreStatus({ full: true }).consumedWritesAbandoned;
+    await short.settle("n:qshort");
+    for (let i = 0; i < 100 && short._state().pendingConsumed > 0; i++) await new Promise((res) => setTimeout(res, 10));
+    ok(short._state().pendingConsumed === 0 && replayGuardStoreStatus({ full: true }).consumedWritesAbandoned === ab0 + 1 && live === 0, "pending queue: a mark whose hold ended is dropped as abandoned and the loop stops");
+    r.setDown(false);
+  } finally {
+    globalThis.setInterval = realSetInterval;
+    globalThis.clearInterval = realClearInterval;
+    __setTestClient(null);
+  }
+}
+
 console.log(`\n${failed ? "FAILED" : "OK"}: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

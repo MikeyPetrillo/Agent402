@@ -41,7 +41,7 @@ process.env.POW_SECRET = POW_SECRET;
 const {
   PAID_QUOTE_TRUST_MINUTES, PAID_QUOTE_TRUST_MS, PAID_QUOTE_TRUST_NEGATIVE_MS, createPaidQuoteTrust, paidAndSettled, trustBucket,
 } = await import("../src/paid-quote-trust.js");
-const { createUnpaidQuoteBudget, METERED_UNPAID_QUOTES_PER_MIN } = await import("../src/unpaid-quote-budget.js");
+const { createUnpaidQuoteBudget, METERED_UNPAID_QUOTES_PER_MIN, METERED_UNPAID_QUOTES_PER_HOUR, PAID_CLIENT_QUOTE_MULTIPLIER, PAID_CLIENT_METERED_QUOTES_PER_MIN, PAID_CLIENT_METERED_QUOTES_PER_HOUR, quoteKeyDigest } = await import("../src/unpaid-quote-budget.js");
 const { ALLOWANCE_STATE } = await import("../src/allowance-state.js");
 
 let pass = 0;
@@ -97,6 +97,13 @@ function fakeStore() {
   t += 60_000;
   ok(!q.trustedLocal("203.0.113.2"), "and it ends ten minutes after the last paid call");
   ok(store.keys().every((k) => !k.includes("203.0.113")), "the shared store is keyed by a digest, never the address");
+  // The digest is a keyed HMAC: a plain sha256 of an IPv4 address is
+  // reversed by walking the 2^32 space.
+  const plain = createHash("sha256").update("203.0.113.1").digest("hex").slice(0, 32);
+  ok(store.keys().every((k) => !k.includes(plain)), "the shared store key is not a plain hash of the address");
+  ok(store.keys().some((k) => k.endsWith(`:${quoteKeyDigest("203.0.113.1")}`)), "it is the keyed digest (quoteKeyDigest)");
+  ok(quoteKeyDigest("203.0.113.1", { POW_SECRET: "one" }) !== quoteKeyDigest("203.0.113.1", { POW_SECRET: "two" }) && quoteKeyDigest("203.0.113.1", { POW_SECRET: "one" }) === quoteKeyDigest("203.0.113.1", { POW_SECRET: "one" }), "the digest depends on the server's secret and is stable under it (every replica reads the same key)");
+  ok(quoteKeyDigest("203.0.113.1", { HANGUP_FORGIVE_SALT: "s", POW_SECRET: "one" }) === quoteKeyDigest("203.0.113.1", { HANGUP_FORGIVE_SALT: "s", POW_SECRET: "two" }), "the secret follows the hang-up digest's order (HANGUP_FORGIVE_SALT first)");
 }
 // Another replica: no local record, the shared flag is read on a miss; a
 // negative answer is held so a refused flood is not a flood of store reads.
@@ -179,9 +186,11 @@ function fakeStore() {
   ok((await drive(b, "203.0.113.50")).code === 429, "control: an untrusted address is refused past the budget");
   trust.mark("203.0.113.51");
   const got = [];
-  for (let i = 0; i < 5; i++) got.push((await drive(b, "203.0.113.51")).nexted);
-  ok(got.every(Boolean), "a trusted address is served past the price-check budget");
-  ok(b.stats().clientsThisHour === 1, `and is never counted: it is not among the clients seen this hour (${b.stats().clientsThisHour})`);
+  const raised = 2 * PAID_CLIENT_QUOTE_MULTIPLIER;
+  for (let i = 0; i < raised; i++) got.push((await drive(b, "203.0.113.51")).nexted);
+  ok(PAID_CLIENT_QUOTE_MULTIPLIER === 10 && got.every(Boolean), `a trusted address is served past the price-check budget, up to ${PAID_CLIENT_QUOTE_MULTIPLIER} times it (${got.filter(Boolean).length} of ${raised})`);
+  const over = await drive(b, "203.0.113.51");
+  ok(over.code === 429 && !over.nexted, `and is refused past the raised ceiling: trust raises the cap, never lifts it (got ${over.code})`);
   // Trusted on another replica: read on the refusal path.
   const other = createPaidQuoteTrust({ store });
   other.mark("203.0.113.52");
@@ -189,6 +198,9 @@ function fakeStore() {
   const b2 = createUnpaidQuoteBudget({ budget: 1, isPriced: () => true, replicas: 1, paidTrust: createPaidQuoteTrust({ store }), log: () => {} });
   await drive(b2, "203.0.113.52");
   ok((await drive(b2, "203.0.113.52")).nexted, "an address trusted on another replica passes where it would be refused");
+  const seen2 = [];
+  for (let i = 0; i < PAID_CLIENT_QUOTE_MULTIPLIER + 2; i++) seen2.push((await drive(b2, "203.0.113.52")).code ?? 200);
+  ok(seen2.includes(429), `and it too reads against the raised ceiling (statuses ${[...new Set(seen2)].join(",")})`);
   const downStore = fakeStore(); downStore.down = true;
   const b3 = createUnpaidQuoteBudget({ budget: 1, isPriced: () => true, replicas: 1, paidTrust: createPaidQuoteTrust({ store: downStore }), log: () => {} });
   createPaidQuoteTrust({ store: downStore }).mark("203.0.113.53");
@@ -202,9 +214,14 @@ function fakeStore() {
   const { readFileSync } = await import("node:fs");
   const html = String(guidePage("https://x.test", "buying-at-volume") || "").replace(/\s+/g, " ");
   const phrase = `${PAID_QUOTE_TRUST_MINUTES} minutes after each paid call`;
-  ok(html.includes(phrase) && html.includes("not limited for"), `the guide says quotes are not limited for ${phrase}`);
+  const ceiling = `${PAID_CLIENT_METERED_QUOTES_PER_MIN} a minute and ${PAID_CLIENT_METERED_QUOTES_PER_HOUR.toLocaleString("en-US")} an hour for ${phrase}`;
+  ok(html.includes(ceiling), `the guide quotes the raised ceiling: ${ceiling}`);
+  ok(!html.includes("not limited for") && !html.includes("not counted for"), "and never says a paid address is not limited");
   const wiki = readFileSync(new URL("../wiki/Buying-at-Volume.md", import.meta.url), "utf8");
-  ok(wiki.includes(phrase) && wiki.includes("PAID_QUOTE_TRUST_MINUTES"), "the wiki page quotes the same window and names its constant");
+  const wikiCeiling = `${PAID_CLIENT_METERED_QUOTES_PER_MIN} a minute and ${PAID_CLIENT_METERED_QUOTES_PER_HOUR.toLocaleString("en-US")} an hour for ${phrase}`;
+  ok(wiki.includes(wikiCeiling) && wiki.includes("PAID_QUOTE_TRUST_MINUTES") && wiki.includes("PAID_CLIENT_QUOTE_MULTIPLIER"), "the wiki page quotes the same ceiling and window and names their constants");
+  ok(!/not limited for|not counted for/.test(wiki), "and never says a paid address is not limited");
+  ok(PAID_CLIENT_METERED_QUOTES_PER_MIN === METERED_UNPAID_QUOTES_PER_MIN * 10 && PAID_CLIENT_METERED_QUOTES_PER_HOUR === METERED_UNPAID_QUOTES_PER_HOUR * 10, "the raised metered ceiling is ten times each plain figure");
 }
 
 // ---- booted half ---------------------------------------------------------------
@@ -298,6 +315,11 @@ try {
     await sleep(50);
     const got = await quotes(ip, N + 10);
     ok(got.every((s) => s === 402), `after a paid 200 the address's ${N + 1}st and later quotes in a minute are answered, not 429 (statuses ${[...new Set(got)].join(",")})`);
+    // Up to the raised ceiling, then a 429: trust raises the cap, never lifts it.
+    const rest = await quotes(ip, PAID_CLIENT_METERED_QUOTES_PER_MIN - got.length + 1);
+    const all = [...got, ...rest];
+    const M = PAID_CLIENT_METERED_QUOTES_PER_MIN;
+    ok(all.slice(0, M).every((s) => s === 402) && all[M] === 429, `a trusted address gets ${M} quotes in a minute (${PAID_CLIENT_QUOTE_MULTIPLIER} times ${N}), then a 429 (statuses ${[...new Set(all.slice(0, M))].join(",")} then ${all[M]})`);
     // A payment header that does not verify still counts against its own budget.
     const bad = (await acceptFor("203.0.113.21", "/api/uuid"));
     const junk = { "payment-signature": Buffer.from(JSON.stringify({ x402Version: 2, resource: bad.resource, accepted: bad, payload: { signature: "0x11", authorization: { from: "nope", to: bad.payTo, value: bad.amount, validAfter: "0", validBefore: "9999999999", nonce: "0x01" } } })).toString("base64") };

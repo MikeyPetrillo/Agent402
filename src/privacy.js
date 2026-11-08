@@ -71,7 +71,7 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-06.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-08.</p>
 </section>
 
 <section>
@@ -153,7 +153,8 @@ so every claim below is verifiable in code.</p>
   /64 prefix) in the counter's key, for one hour, or 24 hours for the per-client daily allowance. We also
   keep keyed hashes of addresses, never the addresses themselves: in daily traffic statistics (request
   classes, paths and User-Agent product names; each day is deleted after ${TRAFFIC_DEFAULTS.retentionDays} days), in the record that limits how often a dropped
-  connection is excused from payment (24 hours), and on the demand board (combined with the day).
+  connection is excused from payment (24 hours), in the record that an address paid recently, which
+  raises its limit on unpaid price quotes (one hour at most), and on the demand board (combined with the day).
   The tollbooth waitlist form is closed, and every record it collected has been deleted from our
   database; those records were never part of our offsite backups.</li>
   <li><b>AI gateway inputs.</b> Prompts and inputs sent to the <code>/v1</code> endpoints (chat in the
