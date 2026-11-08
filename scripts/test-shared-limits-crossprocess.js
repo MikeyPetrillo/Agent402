@@ -308,6 +308,19 @@ ok((await A.ready) && (await B.ready), "two control replicas started");
   ok(r.admitted, "every run released on both: the wallet's next run is admitted on its own proof");
   await B.send({ op: "ic.release", run: "b4" });
 }
+// --- the paid-quote trust (an address that paid on one container is not held to the unpaid-quote limiters on the other) ---
+{
+  const K = "203.0.113.77";
+  let r = await B.send({ op: "qt.trusted", key: "203.0.113.78" });
+  ok(r.trusted === false, "quote trust control: an address that never paid is not trusted on B");
+  await A.send({ op: "qt.mark", key: K });
+  r = await B.send({ op: "qt.trusted", key: K });
+  ok(r.local === false && r.trusted === true, `a paid call marked on A trusts the address on B, read from the shared store (local ${r.local}, trusted ${r.trusted})`);
+  r = await A.send({ op: "qt.trusted", key: "203.0.113.78" });
+  ok(r.trusted === false, "and a different address stays untrusted on A");
+  const s = await B.send({ op: "qt.stats" });
+  ok(s.shared === true && !/203\.0\.113/.test(JSON.stringify(s)), `the trust reports the shared store and no address (${JSON.stringify(s)})`);
+}
 A.exit(); B.exit();
 await wait(200);
 // Clean up this run's keys.

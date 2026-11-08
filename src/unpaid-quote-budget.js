@@ -230,7 +230,7 @@ export function redisSharedSettled(now = Date.now) {
   };
 }
 
-export function createUnpaidQuoteBudget({ budget, isPriced, isSynthetic = () => false, policyUrl = "/crawler", keyCap = UNPAID_QUOTE_BUDGET_KEY_CAP, now = Date.now, log = console.warn, replicas = null , sharedSettled = null} = {}) {
+export function createUnpaidQuoteBudget({ budget, isPriced, isSynthetic = () => false, policyUrl = "/crawler", keyCap = UNPAID_QUOTE_BUDGET_KEY_CAP, now = Date.now, log = console.warn, replicas = null, sharedSettled = null, paidTrust = null } = {}) {
   // `published` is the configured, system-wide figure; `limit` is this
   // process's share of it (RATE_LIMIT_REPLICAS, or `replicas` when given).
   const published = Number(budget) || 0;
@@ -354,6 +354,9 @@ export function createUnpaidQuoteBudget({ budget, isPriced, isSynthetic = () => 
       // out on the PAID retry, which carries a credential and is never counted.
       if (!settled.has(key)) res.once?.("finish", () => { if (hasSettlementReceipt(res)) noteSettled(key); });
       if (settled.has(key)) return next();
+      // An address that settled a paid call in the last few minutes (any rail,
+      // credits included; src/paid-quote-trust.js) is not counted either.
+      try { if (paidTrust?.trustedLocal?.(key)) return next(); } catch { /* not trusted */ }
       if (hasCredentialHeader(req.headers)) return next();
       if (isMcpLoopback(req)) return next();
       try { if (isSynthetic(req)) return next(); } catch { /* an unreadable token is not ours */ }
@@ -370,11 +373,14 @@ export function createUnpaidQuoteBudget({ budget, isPriced, isSynthetic = () => 
       if (!verdict.limited) return next();
     } catch { return next(); }
     // About to refuse: this client may have paid on another container. The
-    // shared check runs only here, on the rare refusal path.
-    if (!sharedSettled?.has) return refuse();
-    return Promise.resolve().then(() => sharedSettled.has(key)).catch(() => false).then((paidElsewhere) => {
-      if (paidElsewhere) { noteSettled(key); return next(); }
-      return refuse();
+    // shared checks run only here, on the rare refusal path; a store that does
+    // not answer reads as not paid.
+    if (!sharedSettled?.has && !paidTrust?.trusted) return refuse();
+    const paidElsewhere = () => (sharedSettled?.has ? Promise.resolve().then(() => sharedSettled.has(key)).catch(() => false) : Promise.resolve(false));
+    const trustedElsewhere = () => (paidTrust?.trusted ? Promise.resolve().then(() => paidTrust.trusted(key)).catch(() => false) : Promise.resolve(false));
+    return paidElsewhere().then((paid) => {
+      if (paid) { noteSettled(key); return next(); }
+      return trustedElsewhere().then((t) => (t ? next() : refuse()));
     });
   }
 

@@ -7,7 +7,8 @@ import { createLargeBodyGate, largeBodyInflightMaxBytes, unlessBodyUnread } from
 import { carriesPaymentAttempt, registerOfferedNetworks } from "./payment-attempt.js";
 import { retiredEntryFor, assertRetiredRegistryConsistent, retirementHeaders, RETIRED_CONVERTERS_AT } from "./retired-tools.js";
 import { createTrafficStore, trafficMiddleware } from "./traffic-classifier.js";
-import { redisSharedSettled, createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath, METERED_UNPAID_QUOTES_PER_MIN, METERED_UNPAID_QUOTES_PER_HOUR } from "./unpaid-quote-budget.js";
+import { redisSharedSettled, createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath, METERED_UNPAID_QUOTES_PER_MIN, METERED_UNPAID_QUOTES_PER_HOUR, clientKeyOf as quoteClientKeyOf } from "./unpaid-quote-budget.js";
+import { createPaidQuoteTrust, paidAndSettled } from "./paid-quote-trust.js";
 import { stripMcpMarker } from "./mcp-loopback.js";
 import { canonicalizePaymentHeaders, decodePaymentHeader, encodePaymentHeader } from "./payment-header.js";
 import { RAILS_OR, RAILS, x402EvmOnly, x402RailsFor } from "./rails.js";
@@ -3360,7 +3361,13 @@ app.use(chainNamespaceMiddleware);
 // each container enforces its RATE_LIMIT_REPLICAS share of it (the factory
 // divides, like every limiter in src/rate-limit.js).
 const UNPAID_QUOTE_BUDGET = FREE_MODE ? 0 : unpaidQuoteBudgetPerHour();
+// Client addresses that completed a settled paid call in the last
+// PAID_QUOTE_TRUST_MINUTES (src/paid-quote-trust.js): their unpaid quotes are
+// not counted by the price-check budget below nor by the metered quote
+// limiter. Marked only from the settlement-outcome hook further down.
+const QUOTE_TRUST = createPaidQuoteTrust();
 const UNPAID_BUDGET = UNPAID_QUOTE_BUDGET > 0 ? createUnpaidQuoteBudget({
+  paidTrust: QUOTE_TRUST,
   budget: UNPAID_QUOTE_BUDGET,
   isPriced: (method, path) => Boolean(CATALOG[`${method} ${path}`]),
   isSynthetic: isSyntheticRequest,
@@ -3459,9 +3466,22 @@ app.use("/v1/metered", (req, res, next) => {
   // read a credential exactly the same way, and two copies of this rule drift.
   const paid = looksLikePayment(req.headers);
   // The 429 names its wait and links the guide to buying in bursts.
-  if (!paid && meteredQuoteLimiter.check(clientIp(req)).limited) {
+  const refuseQuote = () => {
     res.set("Retry-After", "60");
     return res.status(429).json({ error: "Too many unpaid quote requests from this address; send the paid retry, or slow down.", retryAfterSeconds: 60, guide: `${BASE_URL.replace(/\/$/, "")}${BUYING_AT_VOLUME_PATH}` });
+  };
+  if (!paid) {
+    // An address that settled a paid call in the trust window is not counted
+    // (src/paid-quote-trust.js): a stock client quotes before every paid call.
+    // This process's record is read first; the shared store only on a refusal.
+    const trustKey = quoteClientKeyOf(req);
+    if (QUOTE_TRUST.trustedLocal(trustKey)) return next();
+    const ip = clientIp(req);
+    if (meteredQuoteLimiter.peek(ip).limited) {
+      return QUOTE_TRUST.trusted(trustKey).then((t) => (t ? next() : refuseQuote()), () => refuseQuote());
+    }
+    meteredQuoteLimiter.check(ip);
+    return next();
   }
   if (paid) {
     // A header that only decodes as a payment still buys a quote: the gate
@@ -6007,6 +6027,8 @@ app.get("/__operator/traffic.json", (req, res) => {
   res.set("Cache-Control", "no-store").json({
     ...TRAFFIC.report({ days: Math.min(14, parseInt(req.query.days, 10) || 2), top: Math.min(100, parseInt(req.query.top, 10) || 15) }),
     unpaidQuoteBudget: UNPAID_BUDGET ? UNPAID_BUDGET.stats() : { budget: 0 },
+    // Bucketed counts of addresses trusted after a paid call, never an address.
+    paidQuoteTrust: QUOTE_TRUST.stats(),
   });
 });
 // Serving health for the heartbeat: one verdict plus the counts behind it,
@@ -11043,6 +11065,14 @@ app.use((req, res, next) => {
       // X-PAYMENT-RESPONSE was the v1 name (kept for old middleware versions).
       // getHeader is case-insensitive but NOT prefix-insensitive, so check both.
       const settleReceipt = res.getHeader("PAYMENT-RESPONSE") || res.getHeader("X-PAYMENT-RESPONSE");
+      // A final 200 that settled on any rail (or a credits debit) trusts this
+      // client address for the paid-quote window (src/paid-quote-trust.js).
+      // Never in FREE_MODE, never for a free call: paidAndSettled reads the
+      // settle evidence, and this hook skips allowance grants and forgiven
+      // hang-ups before it runs.
+      if (!FREE_MODE && res.statusCode === 200 && res.getHeader("X-Pow-Accepted") !== "true" && res.getHeader("X-Trial-Accepted") !== "true" && paidAndSettled(req, res, { settleReceipt })) {
+        try { QUOTE_TRUST.mark(quoteClientKeyOf(req)); } catch { /* trust is a convenience, never a reason to fail */ }
+      }
       if (res.statusCode === 200) {
         const powAccepted = res.getHeader("X-Pow-Accepted") === "true";
         const trialAccepted = res.getHeader("X-Trial-Accepted") === "true";
