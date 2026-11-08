@@ -220,8 +220,8 @@ const LOCAL_SELLER = "self";
 // TWO regexes on purpose: `.test()` on a /g regex is STATEFUL (it advances
 // lastIndex and alternates true/false across calls), so the predicate is
 // non-global and only the extraction is global.
-const URL_TEMPLATE_RE = /\{[^}/]+\}|%7[Bb][^/]*?%7[Dd]|\/:[A-Za-z_][A-Za-z0-9_]*(?=\/|$)/;
-const URL_TEMPLATE_RE_G = /\{([^}/]+)\}|%7[Bb](.*?)%7[Dd]|\/:([A-Za-z_][A-Za-z0-9_]*)(?=\/|$)/g;
+const URL_TEMPLATE_RE = /\{[^{}/]{1,200}\}|%7[Bb][^/]{0,200}?%7[Dd]|\/:[A-Za-z_][A-Za-z0-9_]*(?=\/|$)|<[^<>/&=?]{1,200}>|%3[Cc][^/&=?]{1,200}?%3[Ee]|=YOUR_[A-Za-z0-9_]{0,200}(?=&|$)/;
+const URL_TEMPLATE_RE_G = /\{([^{}/]{1,200})\}|%7[Bb]([^/]{0,200}?)%7[Dd]|\/:([A-Za-z_][A-Za-z0-9_]*)(?=\/|$)|<([^<>/&=?]{1,200})>|%3[Cc]([^/&=?]{1,200}?)%3[Ee]|=(YOUR_[A-Za-z0-9_]{0,200})(?=&|$)/g;
 // THREE dialects, not one. The brace form is what OpenAPI writes, but a seller
 // documenting with Express-style ":domain", or a manifest that URL-encoded its
 // own braces into "%7Bdomain%7D", produces a path that is just as uncallable and
@@ -233,6 +233,15 @@ const URL_TEMPLATE_RE_G = /\{([^}/]+)\}|%7[Bb](.*?)%7[Dd]|\/:([A-Za-z_][A-Za-z0-
 //
 // The colon form is anchored to a whole segment (/:name) so an ordinary path
 // containing a colon, or a scheme, is not mistaken for a template.
+// A placeholder can also ride in the query a manifest endpoint keeps
+// ("?payloads=<url-encoded-json-array>", raw or %3C..%3E encoded, or a
+// "=YOUR_KEY" value): the router appends the caller's params after it, so the
+// seller would get the placeholder first. Those read as templates too; a real
+// query value ("?product=basic") does not.
+// Route text is seller-controlled and unbounded, so every form is bounded: a
+// placeholder name is at most 200 characters and cannot hold its own opening
+// token, which keeps a test linear on a hostile route (unbounded, 100k "{"
+// held the loop for seconds).
 const SELF_BAZAAR_ORIGIN = "https://agent402.tools"; // the origin our Bazaar listing is keyed under
 const SELF_HOST = canonicalHost(SELF_BAZAAR_ORIGIN);
 // The canonical host of each string the whole-cache walks have seen: the self
@@ -2266,7 +2275,7 @@ function urlTemplateProjection(t) {
   if (!URL_TEMPLATE_RE.test(route)) return {};
   return {
     urlTemplate: true,
-    pathParams: [...route.matchAll(URL_TEMPLATE_RE_G)].map((m) => m[1] || m[2] || m[3]).filter(Boolean),
+    pathParams: [...route.matchAll(URL_TEMPLATE_RE_G)].map((m) => m[1] || m[2] || m[3] || m[4] || m[5] || m[6]).filter(Boolean),
   };
 }
 
