@@ -171,6 +171,13 @@ export function paidPhaseSummary() {
       verifyMs: phase("verifyMs"), handlerMs: phase("handlerMs"), settleMs: phase("settleMs"),
       gateMs: phase("gateMs"), afterMs: phase("afterMs"), totalMs: phase("totalMs"),
       slowestSlugs: [...ring].sort((a, b) => (b.totalMs ?? 0) - (a.totalMs ?? 0)).slice(0, 5).map((r) => ({ slug: r.slug, totalMs: r.totalMs, handlerMs: r.handlerMs, settleMs: r.settleMs })),
+      // One rail settles on several networks at very different speeds (a
+      // Solana settle is not a Base one), so each network gets its own figures.
+      byNetwork: Object.fromEntries([...new Set(ring.map((r) => r.network || "-"))].map((net) => {
+        const rows = ring.filter((r) => (r.network || "-") === net);
+        const ph = (k) => ({ p50: pct(rows.map((r) => r[k]), 50), p95: pct(rows.map((r) => r[k]), 95) });
+        return [net, { calls: rows.length, gone: rows.filter((r) => r.gone !== "no").length, handlerMs: ph("handlerMs"), settleMs: ph("settleMs"), totalMs: ph("totalMs") }];
+      })),
     };
   }
   return out;
