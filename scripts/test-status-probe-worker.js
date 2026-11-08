@@ -759,13 +759,17 @@ for (const [name, over, detail] of failCases) {
   const LS = "Late settlements need attention";
   await acheck("each late-settlement word maps to page, clear or quiet; the body echoes only known words", async () => {
     for (const w of ["unresolved", "full"]) assert.equal(judge(withGateway({ lateSettlements: { status: w } }))[LS], "bad", w);
-    assert.equal(judge(withGateway({ lateSettlements: { status: "ok" } }))[LS], "good");
-    for (const w of ["near_capacity", "unknown", "something-new"]) assert.equal(judge(withGateway({ lateSettlements: { status: w } }))[LS], "quiet", w);
+    for (const w of ["ok", "near_capacity"]) assert.equal(judge(withGateway({ lateSettlements: { status: w } }))[LS], "good", w);
+    for (const w of ["unknown", "something-new"]) assert.equal(judge(withGateway({ lateSettlements: { status: w } }))[LS], "quiet", w);
     assert.equal(judge({ gateway: {} })[LS], "quiet", "a gateway without the field (an older build) changes nothing");
     const a = ALARMS.find((x) => x.title === LS);
     assert.doesNotMatch(a.body({ gateway: { lateSettlements: { status: "<script>" } } }), /<script/i);
     assert.match(a.body({ gateway: { lateSettlements: { status: "full" } } }), /lateSettlements\.status=full\./);
     assert.doesNotMatch(a.body({ gateway: { lateSettlements: { status: "unresolved" } } }), /[0-9]/, "the body carries no figure");
+    const named = a.body({ gateway: { lateSettlements: { status: "unresolved" } } });
+    assert.match(named, /POST \/__operator\/late-settlements: action resolve/, "the body names the operator action that clears it");
+    assert.match(named, /booked_owed/);
+    assert.match(named, /acknowledge_unrecorded/);
   });
   await acheck("an unresolved late settlement opens the issue; ok closes it", async () => {
     mkGh();
@@ -783,6 +787,7 @@ for (const [name, over, detail] of failCases) {
     assert.ok(step.includes(`TITLE="${LS}"`), "same title");
     const body = ALARMS.find((x) => x.title === LS).body({ gateway: { lateSettlements: { status: "full" } } }).replace("status=full.", "status=$WORD.");
     assert.ok(step.includes(body), "same body");
+    assert.match(step, /\n\s+ok\|near_capacity\)\n/, "ok and near_capacity close the issue, as in the Worker");
   });
   await acheck("an in-doubt tweet post confirmed by a second read opens the issue", async () => {
     mkGh();
