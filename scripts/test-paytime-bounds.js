@@ -789,6 +789,10 @@ try {
     or.chatDelayMs = 1_200;
     const s0 = fac.settled;
     for (let i = 1; i <= 4; i++) { await hangUpMidRun(CHAT, W, `10.1.2.${i}`, "chat"); await sleep(1_800); }
+    // A settle lands after its handler ends, which a loaded host can push past
+    // the fixed pause above: wait for the third, then confirm no fourth follows.
+    for (const until = Date.now() + 15_000; fac.settled < s0 + 3 && Date.now() < until;) await sleep(100);
+    await sleep(1_500);
     ok(fac.settled === s0 + 3, `c. one hang-up forgiven, three settled (settled +${fac.settled - s0})`);
     or.chatDelayMs = 0;
     const r = await pay(CHAT, W, "10.1.2.9");
