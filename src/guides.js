@@ -34,6 +34,18 @@ import { IDEM_MAX_BODY_LABEL } from "./idempotency-limits.js";
 import { LATE_SETTLE_EXCEPTION } from "./front-door.js";
 import { AGENT402_MCP_VERSION } from "./mcp-flagship.js";
 import { OCR_LARGE_PIXELS } from "./tools/ocr-kit.js";
+import { asyncProfileOf } from "./slow-routes.js";
+import { needsAsyncOrWait } from "./slow-sync-window.js";
+import { _compositeGuardState } from "./composite-spend-guard.js";
+import { UNPAID_BODY_MAX_BYTES } from "./large-body-gate.js";
+// The report and media routes' per-buyer guard, read from the module that
+// enforces it (its env overrides included).
+const COMPOSITE_GUARD = (({ WINDOW_MS, MAX_FAILS, HARD_MAX_FAILS, BLOCK_MS }) => ({ WINDOW_MS, MAX_FAILS, HARD_MAX_FAILS, BLOCK_MS }))(_compositeGuardState());
+// The large-body gate's unpaid limiter (server.js "large-body-unpaid"); it is
+// keyed on the client address alone and has no paid-address raise.
+// scripts/test-paid-quote-trust.js pins these to the server's figures.
+const LARGE_BODY_UNPAID_PER_MIN = 60;
+const LARGE_BODY_UNPAID_PER_HOUR = 1200;
 // The content-pipeline guide reads the speech and transcription caps from their kits.
 import { TTS_TIERS, VOICES as TTS_VOICES, FORMATS as TTS_FORMATS, LITE_FORMATS as TTS_LITE_FORMATS } from "./tools/tts-kit.js";
 import { STT_TIERS, MAX_AUDIO_BYTES as STT_MAX_AUDIO_BYTES } from "./tools/stt-kit.js";
@@ -62,6 +74,20 @@ function resolveGuideTokens(text, catalog) {
   return resolveRailCountTokens(String(text))
     .replace(/\{\{price:([a-z0-9-]+)\}\}/g, (_, slug) => (bySlug ? def(slug).price : "(price on /api/pricing)"))
     .replace(/\{\{amount:([a-z0-9-]+)\}\}/g, (_, slug) => (bySlug ? String(Math.round(priceUsd(def(slug).price) * 1e6)) : "<amount>"))
+    // {{jobs:<slug>[,<slug>]}}: whether a route runs as a job, read from the
+    // async profile the catalog carries (src/slow-routes.js) and the slow-sync
+    // window (SLOW_SYNC_WINDOW_SECONDS): "yes, required" when a paid call
+    // without Prefer: respond-async (or a long enough Prefer: wait) is refused,
+    // "on request" when the route takes the header, "no" otherwise. The slugs
+    // on one row must agree.
+    .replace(/\{\{jobs:([a-z0-9,-]+)\}\}/g, (_, list) => {
+      const answers = [...new Set(list.split(",").map((slug) => {
+        const profile = asyncProfileOf(bySlug ? def(slug) : { slug });
+        return !profile ? "no" : needsAsyncOrWait(profile) ? "yes, required" : "on request";
+      }))];
+      if (answers.length !== 1) throw new Error(`guide token {{jobs:${list}}} names routes that run differently`);
+      return answers[0];
+    })
     .replace(/\{\{routerTiers\}\}/g, () => {
       if (!bySlug) return "The tiers and their prices are listed at [/api/pricing](https://agent402.tools/api/pricing).";
       const rows = [...bySlug.values()]
@@ -287,7 +313,7 @@ ceiling before you sign; the clients below do that on their own.
 
 Paid calls are not counted per wallet. The limits below bound unpaid reads,
 failed settlements and concurrent heavy runs. Each one answers
-before any payment is taken and names its wait in \`Retry-After\`.
+before any payment is taken, and the last column says how long to wait.
 
 | What is counted | Limit | Answer |
 |---|---|---|
@@ -295,11 +321,15 @@ before any payment is taken and names its wait in \`Retry-After\`.
 | Unpaid quotes on \`/v1/metered\` | ${METERED_UNPAID_QUOTES_PER_MIN} a minute and ${METERED_UNPAID_QUOTES_PER_HOUR.toLocaleString("en-US")} an hour per client address; ${PAID_CLIENT_METERED_QUOTES_PER_MIN} a minute and ${PAID_CLIENT_METERED_QUOTES_PER_HOUR.toLocaleString("en-US")} an hour for ${PAID_QUOTE_TRUST_MINUTES} minutes after each paid call from that address | 429, \`Retry-After: 60\` |
 | Refused payment credentials on \`/v1/metered\` | the same figures, counted once a credential is refused | 429, \`Retry-After: 60\` |
 | Payments that verified and then failed to settle, per wallet | refused at ${SETTLE_BREAKER_MAX_FAILS} in ${Math.round(SETTLE_BREAKER_WINDOW_MS / 60_000)} minutes while they are more than half of the wallet's outcomes there, or at ${SETTLE_BREAKER_HARD_MAX} whatever it settled | 429 naming when it lifts |
+| Report and media runs that failed to settle or failed after the run, per buyer | blocked for ${Math.round(COMPOSITE_GUARD.BLOCK_MS / 60_000)} minutes at ${COMPOSITE_GUARD.MAX_FAILS} in ${Math.round(COMPOSITE_GUARD.WINDOW_MS / 60_000)} minutes while they are more than half of the buyer's outcomes there, or at ${COMPOSITE_GUARD.HARD_MAX_FAILS} whatever it settled | 429 without \`Retry-After\`; the block lifts on its own |
+| Unpaid requests with a body over ${Math.round(UNPAID_BODY_MAX_BYTES / 1024)} KB to a route that reads its price from the body | ${LARGE_BODY_UNPAID_PER_MIN} a minute and ${LARGE_BODY_UNPAID_PER_HOUR.toLocaleString("en-US")} an hour per client address, the same once that address has paid | 429, \`Retry-After: 60\` |
 | Concurrent runs of the report and media routes from one wallet | the wallet's balance covers every run in flight plus the new one | 429, \`Retry-After: 30\` |
 | Jobs per client address | ${ASYNC_JOBS_PER_CLIENT} running at once | 429, \`Retry-After: 30\` |
 
 An IPv6 /64 is one address. A request carrying a payment, a credits key or a
-proof-of-work solution is never counted as an unpaid price check. Once an
+proof-of-work solution is never counted as an unpaid price check. The report
+and media guard keys a buyer by its signed payer, its verified Tempo sender,
+its credits key or, for any other payment, its address. Once an
 address has paid, its quotes read against ${PAID_CLIENT_QUOTE_MULTIPLIER} times each figure for ${PAID_QUOTE_TRUST_MINUTES} minutes
 after each paid call (a final 200 that settled on any rail, or a credits debit); a
 payment credential that is refused still counts.
@@ -315,7 +345,8 @@ How to plan a burst around them:
 - Keep the paying wallet funded above everything in flight. Each payment is
   verified on its own; a wallet that runs dry partway through a burst turns its
   later calls into failed settlements, which is what the per-wallet limit counts.
-- On a 429 or a 503, wait \`Retry-After\` and send the call again.
+- On a 429 or a 503, wait \`Retry-After\` (or the block named above) and send
+  the call again.
 
 ## Retries that never pay twice
 
@@ -528,20 +559,20 @@ or translates. Subtitle conversion and the media checks are deterministic code.
 
 | Stage | Slug | Price | Model-backed | Runs as a job |
 |---|---|---|---|---|
-| Answer with citations | \`answer\` | {{price:answer}} | yes | no |
-| Research report | \`research\` | {{price:research}} | yes | yes, required |
-| Script | \`v1-chat-metered\` | quoted per request, from {{price:v1-chat-metered}} | yes | no |
-| Voiceover | \`tts-lite\` | {{price:tts-lite}} | yes | no |
-| Voiceover | \`tts\`, \`tts-hd\` | quoted from the text, from {{price:tts}} and {{price:tts-hd}} | yes | no |
-| Images | \`v1-images-fast\`, \`v1-images-pro\` | {{price:v1-images-fast}}, {{price:v1-images-pro}} | yes | on request |
-| Image edit | \`v1-images-edit\` | {{price:v1-images-edit}} | yes | no |
-| Transcription | \`transcribe\`, \`transcribe-pro\` | {{price:transcribe}}, {{price:transcribe-pro}} | yes | no |
-| Subtitles | \`srt-convert\` | {{price:srt-convert}}, or free with proof-of-work | no | no |
-| Subtitles in one call | \`skill-subtitle-pipeline\` | {{price:skill-subtitle-pipeline}} | yes | no |
-| Dubbing | \`dub\` | quoted by tier, from {{price:dub}} | yes | no |
-| Media probe | \`media-info\` | {{price:media-info}} | no | no |
-| Audio track to MP3 | \`audio-convert\` | {{price:audio-convert}} | no | no |
-| Loudness | \`audio-normalize\` | {{price:audio-normalize}} | no | no |
+| Answer with citations | \`answer\` | {{price:answer}} | yes | {{jobs:answer}} |
+| Research report | \`research\` | {{price:research}} | yes | {{jobs:research}} |
+| Script | \`v1-chat-metered\` | quoted per request, from {{price:v1-chat-metered}} | yes | {{jobs:v1-chat-metered}} |
+| Voiceover | \`tts-lite\` | {{price:tts-lite}} | yes | {{jobs:tts-lite}} |
+| Voiceover | \`tts\`, \`tts-hd\` | quoted from the text, from {{price:tts}} and {{price:tts-hd}} | yes | {{jobs:tts,tts-hd}} |
+| Images | \`v1-images-fast\`, \`v1-images-pro\` | {{price:v1-images-fast}}, {{price:v1-images-pro}} | yes | {{jobs:v1-images-fast,v1-images-pro}} |
+| Image edit | \`v1-images-edit\` | {{price:v1-images-edit}} | yes | {{jobs:v1-images-edit}} |
+| Transcription | \`transcribe\`, \`transcribe-pro\` | {{price:transcribe}}, {{price:transcribe-pro}} | yes | {{jobs:transcribe,transcribe-pro}} |
+| Subtitles | \`srt-convert\` | {{price:srt-convert}}, or free with proof-of-work | no | {{jobs:srt-convert}} |
+| Subtitles in one call | \`skill-subtitle-pipeline\` | {{price:skill-subtitle-pipeline}} | yes | {{jobs:skill-subtitle-pipeline}} |
+| Dubbing | \`dub\` | quoted by tier, from {{price:dub}} | yes | {{jobs:dub}} |
+| Media probe | \`media-info\` | {{price:media-info}} | no | {{jobs:media-info}} |
+| Audio track to MP3 | \`audio-convert\` | {{price:audio-convert}} | no | {{jobs:audio-convert}} |
+| Loudness | \`audio-normalize\` | {{price:audio-normalize}} | no | {{jobs:audio-normalize}} |
 
 Prices are read from [/api/pricing](https://agent402.tools/api/pricing) when
 this page renders. Each example below is the tool's published example.

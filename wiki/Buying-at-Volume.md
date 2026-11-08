@@ -10,7 +10,7 @@ An agent that buys hundreds or thousands of calls in a burst, over x402 or MPP, 
 
 ## Throughput limits
 
-Paid calls are not counted per wallet. Every limit below answers before any payment is taken, and each one sets `Retry-After`.
+Paid calls are not counted per wallet. Every limit below answers before any payment is taken; the default column says how long to wait.
 
 | What is counted | Default | Source |
 |---|---|---|
@@ -18,6 +18,8 @@ Paid calls are not counted per wallet. Every limit below answers before any paym
 | Unpaid quotes on `/v1/metered`, per client address | 60 a minute, 1,200 an hour (429, `Retry-After: 60`, with a `guide` link); 600 a minute and 12,000 an hour for 10 minutes after each paid call from that address | `METERED_UNPAID_QUOTES_PER_MIN` / `_PER_HOUR` and `PAID_CLIENT_METERED_QUOTES_PER_MIN` / `_PER_HOUR` in `src/unpaid-quote-budget.js`, enforced in `src/server.js` |
 | Refused payment credentials on `/v1/metered` | the same figures, counted once a credential is refused | `src/server.js` |
 | Payments that verified and then failed to settle, per wallet | 3 in 15 minutes while failures are more than half of the wallet's outcomes, or 40 whatever it settled | `src/gateway-settle-breaker.js` |
+| Report and media runs that failed to settle or failed after the run, per buyer (signed payer, verified Tempo sender, credits key, else address) | blocked for 30 minutes (429, no `Retry-After`) at 3 in 15 minutes while failures are more than half of the buyer's outcomes, or at 10 whatever it settled | `COMPOSITE_GUARD_*` in `src/composite-spend-guard.js` |
+| Unpaid requests with a body over 100 KB to a route that reads its price from the body, per client address | 60 a minute, 1,200 an hour (429, `Retry-After: 60`); no raise once the address has paid | `src/large-body-gate.js`, limiter in `src/server.js` |
 | Concurrent report and media runs, per wallet | the balance must cover every run in flight plus the new one (429, `Retry-After: 30`) | `src/inflight-cover.js` |
 | Jobs per client address | 4 at once (429, `Retry-After: 30`) | `ASYNC_JOBS_PER_CLIENT` in `src/async-jobs.js` |
 

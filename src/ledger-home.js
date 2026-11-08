@@ -19,6 +19,7 @@ import { railKey, chainDisplayName } from "./rails.js";
 import { tempoEnabled } from "./mpp-tempo.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
+import { MAX_FULL_PER_SUB_30D } from "./monitor-scheduler.js";
 
 import { REPO_URL } from "./repo-link.js";
 import { powCostPhrase } from "./pow.js";
@@ -293,7 +294,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
       </div>
       <ul class="ml-ticks">
         <li>A report that fails is refunded to your card automatically.</li>
-        <li>A monitor re-checks its target on a schedule and emails you a fresh report when something changes.</li>
+        <li>A monitor re-checks its target on a schedule and emails up to ${MAX_FULL_PER_SUB_30D} fresh reports in any 30 days.</li>
         <li>Cancel a monitor anytime from the link in its emails.</li>
       </ul>
       <div class="hm-door-act"><a class="btn btn-secondary btn-sm" href="/reports">Browse reports</a><a class="btn btn-secondary btn-sm" href="/monitors">See monitors</a></div>
