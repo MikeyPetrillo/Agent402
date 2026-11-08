@@ -283,8 +283,7 @@ ceiling before you sign; the clients below do that on their own.
 
 Paid calls are not counted per wallet. The limits below bound unpaid reads,
 failed settlements and concurrent heavy runs. Each one answers
-before any payment is taken, so the refusal is never charged, and each one
-names its wait in \`Retry-After\`.
+before any payment is taken and names its wait in \`Retry-After\`.
 
 | What is counted | Limit | Answer |
 |---|---|---|
@@ -320,7 +319,7 @@ connection), use the replay rules:
   to ${IDEM_MAX_BODY_LABEL}, kept ${Math.round(IDEM_TTL_MS / 60_000)} minutes) with
   \`X-Idempotent-Replay: true\`: the tool does not run again and nothing settles
   again. A copy that arrives while the first is still running gets 409
-  \`idempotent_request_in_flight\` with \`Retry-After: 2\` and is not charged.
+  \`idempotent_request_in_flight\` with \`Retry-After: 2\`; on x402 it is not charged.
 - **On an EVM payment the signed payment is the key.** Send the same request
   again with the same payment header within ${Math.round(IDEM_TTL_MS / 60_000)} minutes
   and the first answer comes back marked \`X-Replayed-Answer: 1\`, with no
@@ -373,13 +372,14 @@ import { x402Client } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { privateKeyToAccount } from "viem/accounts";
 
-const signer = new x402Client();
-signer.setSpendControls?.(false); // the caps below replace the library default
-registerExactEvmScheme(signer, { signer: privateKeyToAccount(process.env.AGENT_KEY) });
+const client = new x402Client();
+client.setSpendControls?.(false); // the caps below replace the library default
+registerExactEvmScheme(client, { signer: privateKeyToAccount(process.env.AGENT_KEY) });
+const payFetch = wrapFetchWithPayment(fetch, client);
 
 const a = new Agent402({
-  fetch: wrapFetchWithPayment(fetch, signer),
-  x402Client: signer,   // the caps are checked on the payment that is signed
+  fetch: payFetch,
+  x402Client: client,   // the caps are checked on the payment that is signed
   maxPerCallUsd: 0.05,  // refuse any single quote above this
   dailyLimitUsd: 25,    // rolling 24 hours, this instance
   maxPerHostUsd: 10,    // rolling 24 hours, per seller host
@@ -448,8 +448,8 @@ and refuse to send a payload signed past it.
   payment with code \`input_too_large\`, \`maxInputChars\`, \`inputChars\`,
   \`hint: "trim-input"\` and \`suggestions\` of models whose window takes it.
 - **Per-call cap.** A request quoting above $${METERED_MAX_QUOTE_USD} is refused
-  with a 400 before any upstream call: lower \`max_tokens\` or the input. It is
-  not charged.
+  with a 400 before any upstream call: lower \`max_tokens\` or the input. On
+  x402 it is not charged.
 
 \`\`\`bash
 curl -s https://agent402.tools/v1/models \\
@@ -460,13 +460,13 @@ curl -s https://agent402.tools/v1/models \\
 
 | Status | What it means | What to do |
 |---|---|---|
-| 400 | the input was refused before the tool ran; the body carries \`expected\`, \`required\`, \`example\` and \`howToCall\` (method, URL and a ready body) | fix the request from \`howToCall\`; not charged |
+| 400 | the input was refused before the tool ran; the body carries \`expected\`, \`required\`, \`example\` and \`howToCall\` (method, URL and a ready body) | fix the request from \`howToCall\`; not charged on x402 |
 | 402 | the quote, or a refused payment; the first-contact 402 body carries the offer, \`howToCall\` and, on a job route, \`async\` | pay, or fund the wallet the refusal names |
 | 409 | the same keyed call is still running | wait \`Retry-After\`, send the same key and payment |
-| 422 | the tool cannot serve this input (an image too large to read, a body that is not an image) | read \`error\` and the \`howToCall\` note; not charged |
+| 422 | the tool cannot serve this input (an image too large to read, a body that is not an image) | read \`error\` and the \`howToCall\` note; not charged on x402 |
 | 429 | one of the limits above | wait \`Retry-After\` |
 | 503 | busy or briefly paused; image-ocr reading another image over ${OCR_LARGE_PIXELS / 1e6} megapixels answers \`hint: "large-image-busy"\` | wait \`Retry-After\`, or send a smaller image, which is read at once |
-| 502, 504 with \`attribution: "upstream"\` | a source the tool reads failed (a host timed out or refused the connection) | not your input: retry later or pick another source; not charged |
+| 502, 504 with \`attribution: "upstream"\` | a source the tool reads failed (a host timed out or refused the connection) | not your input: retry later or pick another source; not charged on x402 |
 
 A loop that honors all of it, shown with plain \`fetch\` (pass your payment
 \`fetch\` in its place):

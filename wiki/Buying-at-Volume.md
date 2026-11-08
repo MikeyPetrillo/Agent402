@@ -10,7 +10,7 @@ An agent that buys hundreds or thousands of calls in a burst, over x402 or MPP, 
 
 ## Throughput limits
 
-Paid calls are not counted per wallet. Every limit below answers before any payment is taken, so the refusal is never charged, and each one sets `Retry-After`.
+Paid calls are not counted per wallet. Every limit below answers before any payment is taken, and each one sets `Retry-After`.
 
 | What is counted | Default | Source |
 |---|---|---|
@@ -64,7 +64,7 @@ The long routes (report products, video, the slow media tiers) take x402 exact o
 
 ## Errors
 
-- 400, 422: input refused; the body carries `howToCall` (method, URL, ready body). Not charged.
+- 400, 422: input refused; the body carries `howToCall` (method, URL, ready body). Not charged on x402.
 - 402: the first-contact body carries the offer, `howToCall` and, on a job route, `async`.
 - 409: the same keyed call is still running; resend after `Retry-After`.
 - 429, 503: a limit or a busy route; wait `Retry-After`. image-ocr answers 503 `large-image-busy` while it reads another large image.
