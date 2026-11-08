@@ -30,6 +30,9 @@
 // A route's own parser still enforces its limit with a 413; a body declared
 // over that limit is left to it and reserves nothing.
 export const UNPAID_BODY_MAX_BYTES = 100 * 1024;
+// The unpaid limiter server.js builds over these bodies (per client address; no
+// raise once the address has paid). Read by server.js and the buying-at-volume guide.
+export const UNPAID_LIMITS = Object.freeze({ PER_MIN: 60, PER_HOUR: 1200 });
 export const DEFAULT_INFLIGHT_MAX_BYTES = 256 * 1024 * 1024;
 
 export function largeBodyInflightMaxBytes(env = process.env) {

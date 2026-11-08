@@ -199,6 +199,15 @@ ok(em.html.includes(MONITOR_PRODUCTS["domain-monitor"].label) && em.html.include
 const emNone = buildReportReadyEmail({ reportUrl: "https://agent402.tools/r/cs_2", productLabel: "Deep research report", subjectOf: "anything", kind: "research", baseUrl: "https://agent402.tools" });
 ok(/monitors\?product=research-monitor/.test(emNone.html) && /monitors\?product=research-monitor/.test(emNone.text), "a research delivery email offers the research watch");
 const emHostile = buildReportReadyEmail({ reportUrl: "https://agent402.tools/r/cs_3", productLabel: "Domain security audit", subjectOf: HOSTILE, kind: "domain", baseUrl: "https://agent402.tools" });
+// The offer promises what the monitor does past its cap: up to MAX_FULL_PER_SUB_30D
+// fresh reports in 30 days (the home page's wording, the same constant), never an
+// unconditional "the moment it changes" (a monitor past the cap sends no new report).
+{
+  const { MAX_FULL_PER_SUB_30D } = await import("../src/monitor-scheduler.js");
+  const want = `emails you up to ${MAX_FULL_PER_SUB_30D} fresh reports in any 30 days`;
+  ok(em.html.includes(want) && em.text.includes(want), `the monitor offer reads "${want}" in both bodies`);
+  ok(!/the moment it changes|when it changes/.test(em.html + em.text), "the monitor offer never promises a fresh report on every change");
+}
 ok(!emHostile.html.includes("<script>alert(1)</script>") && emHostile.html.includes("&lt;script&gt;"), "a hostile target is HTML-escaped in the email body");
 ok(!/href="[^"]*<|href="[^"]*"[^>]*onerror/.test(emHostile.html), "a hostile target cannot break out of the email's href");
 const emNoBase = buildReportReadyEmail({ reportUrl: "https://agent402.tools/r/cs_4", productLabel: "Insider flow report (Form 4)", subjectOf: "AAPL", kind: "insider" });
