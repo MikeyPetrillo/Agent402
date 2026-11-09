@@ -486,8 +486,9 @@ export function createLateSettleBook({
       log(`[late-settle] operator resolved ${e.network} ${labelOf(e)} as ${outcome}: ${oneLine(row.note).slice(0, 200)}`);
       return { ok: true, key: e.key, outcome };
     },
-    /** An operator acknowledges this process's unrecorded bookings (each one
-     *  was named in its alarm line); recorded like a resolution. */
+    /** An operator acknowledges every unrecorded booking: this process's
+     *  memory and the saved times every replica reads (each one was named in
+     *  its alarm line); recorded like a resolution. */
     async acknowledgeUnrecorded({ note } = {}) {
       if (typeof note !== "string" || !note.trim()) return { ok: false, error: "a note saying what was checked is required" };
       const count = Math.max(unrecordedRecent(), await savedUnrecordedRecent());

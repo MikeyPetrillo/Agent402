@@ -229,5 +229,8 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
 - **Replay store word:** `/api/gateway-status` reports `replayStore` (ok or pending). pending means a
   settled payment's consumed mark could not be written to the shared store yet; one shared retry loop
   writes it, and the local consumed mark keeps the payment from running again meanwhile.
-- **Paid-quote trust:** an address with a settled paid 200 gets 10x the unpaid-quote figures for 10
-  minutes after each paid call (`PAID_CLIENT_QUOTE_MULTIPLIER`), keyed by an HMAC of the client key.
+- **Paid-quote trust:** an address with a settled paid 200 gets 10x the unpaid price-check figures for
+  10 minutes after each paid call (`PAID_CLIENT_QUOTE_MULTIPLIER`), keyed by an HMAC of the client key.
+  On `/v1/metered` the raise is earned per call: past the plain figure each settled `/v1/metered` call
+  grants `METERED_QUOTE_CREDITS_PER_CALL` (2) quotes, held up to the raised per-minute figure for the
+  window, on this process only (`src/paid-quote-trust.js` `creditMetered`).
