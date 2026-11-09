@@ -2047,6 +2047,8 @@ jobs:
           t node scripts/test-rugcheck-pause.js
           # MPP recurring subscriptions (tempo/subscription challenge shape, binding refuses forged/foreign/expired/underpriced before any settlement, period accounting, dunning, cancellation - offline)
           t node scripts/test-mpp-subscriptions.js
+          # Subscription gas sponsor: a rolling 24 h count and fee ceiling refuses a sponsored send past it before the RPC (offline, stub RPC)
+          t node scripts/test-tempo-sponsor-ceiling.js
 
       - name: Socket supply-chain scan (dependency behaviour, not just versions)
         env:
