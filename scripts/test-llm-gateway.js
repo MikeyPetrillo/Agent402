@@ -1911,6 +1911,8 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   ok(!Object.values(AUTO_RANKINGS).flatMap((b) => Object.values(b).flat()).some((m) => m.startsWith("inception/")), "no auto ranking names an inception/ model");
   ok(!K.FLEX_MODELS.some((m) => m.startsWith("inception/")) && !tierFor("inception/mercury-2") && !tierFor("inception/mercury-3"), "no flex entry names an inception/ model; mercury-2 and mercury-3 are admitted nowhere");
   ok(!rp(MER) || rp(MER).id !== MER, "mercury-2.5 has no reasoning row of its own");
+  ok(Array.isArray(K.REASONING_MODELS) && K.REASONING_MODELS.length > 5 && !K.REASONING_MODELS.some((r) => Object.keys(RETIRING_MODELS).some((m) => RETIRING_MODELS[m].until <= new Date().toISOString().slice(0, 10) && (r.id === m || (r.prefix && m.startsWith(r.prefix))))),
+    "no reasoning row names a model past its retirement date (read from the list itself, not through the substitution)");
   ok(Object.values(AUTO_RANKINGS.fast).every((l) => l.length >= 4 && l[0] === "openai/gpt-6-luna" && l[1] === MER_USE && l.every((m) => tierAllows("v1-chat-auto", m))), "every fast category keeps a chain of four or more links, each admitted on auto");
   ok(Object.keys(TIERS).every((t) => tierAllows(t, MER) === tierAllows(t, MER_USE)), "mercury-2.5 is admitted only where its successor is");
   for (const tier of ["v1-chat-nano", "v1-chat", "v1-chat-metered"]) {

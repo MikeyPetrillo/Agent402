@@ -249,6 +249,21 @@ function fakeStore() {
   ok(!q.takeMeteredCredit("") && !q.takeMeteredCredit(null), "an empty key never holds a credit");
 }
 
+// The metered gate past the plain figure: a credit first, then the per-client
+// raised ceiling, then the whole-egress-address ceiling (every Worker with
+// credits on the shared address together). The last bites only past
+// PAID_CLIENT_METERED_QUOTES_PER_MIN credit-backed quotes a minute, which a
+// booted test would need hundreds of paid calls to reach, so its place in the
+// gate is pinned here and its limiter's figures beside it.
+{
+  const { readFileSync } = await import("node:fs");
+  const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  ok(/if \(!QUOTE_TRUST\.takeMeteredCredit\(trustKey\)\) return refuseQuote\(\);\n\s*if \(meteredTrustedQuoteLimiter\.check\(trustKey\)\.limited\) return refuseQuote\(\);\n\s*if \(egressKey && meteredTrustedEgressLimiter\.check\(egressKey\)\.limited\) return refuseQuote\(\);\n\s*return next\(\);/.test(server),
+    "past the plain figure a metered quote needs a credit, then the client's raised ceiling, then the whole egress address's");
+  ok(/const meteredTrustedEgressLimiter = createRateLimiter\("metered-quote-paid-egress", \{ perMin: PAID_CLIENT_METERED_QUOTES_PER_MIN, perHour: PAID_CLIENT_METERED_QUOTES_PER_HOUR \}\);/.test(server) && /const egressKey = workerEgressAddressKeyOf\(req\);/.test(server),
+    "the egress ceiling is keyed on the shared address alone, at the raised figures");
+}
+
 // The buying-at-volume guide and its wiki page quote the window the code enforces.
 {
   const { guidePage } = await import("../src/guides.js");

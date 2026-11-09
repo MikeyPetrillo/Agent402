@@ -919,6 +919,15 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
   resetRefusals?.();
   const refusedErr = await pay("https://refuses-once.example/x", { maxAtomic: 500000n, method: "POST", body: {}, chain: "base", notDebited: async () => ({ debited: false, expired: true, observed: 1 }) }).then(() => null, (e) => e);
   ok(refusedErr?.refused === true && forOrigin("https://refuses-once.example").map((l) => l.result).join() === "refused", `a refusal the chain proves unused is recorded once, as refused (${JSON.stringify(forOrigin("https://refuses-once.example").map((l) => l.result))})`);
+  // An unanswered paid request that the chain proves unused: recorded as refused, not unknown.
+  globalThis.fetch = async (url, init) => {
+    const paidHdr = init?.headers?.["PAYMENT-SIGNATURE"] || init?.headers?.["payment-signature"] || init?.headers?.["X-PAYMENT"];
+    if (!paidHdr) return { status: 402, headers: { get: (k) => (k.toLowerCase() === "payment-required" ? h : null) }, json: async () => ({}), text: async () => "{}" };
+    throw Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+  };
+  resetRefusals?.();
+  const droppedErr = await pay("https://drops-unused.example/x", { maxAtomic: 500000n, method: "POST", body: {}, chain: "base", notDebited: async () => ({ debited: false, expired: true, observed: 1 }) }).then(() => null, (e) => e);
+  ok(droppedErr && forOrigin("https://drops-unused.example").map((l) => l.result).join() === "refused", `an unanswered paid request the chain proves unused is recorded once, as refused (${JSON.stringify(forOrigin("https://drops-unused.example").map((l) => l.result))}; ${droppedErr?.message})`);
   // A 5xx already recorded as undelivered is not recorded twice.
   globalThis.fetch = async (url, init) => {
     const paidHdr = init?.headers?.["PAYMENT-SIGNATURE"] || init?.headers?.["payment-signature"] || init?.headers?.["X-PAYMENT"];
@@ -972,8 +981,14 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
   for (const o of fresh.slice(1)) await refuseUnproven(o);
   for (const o of fresh) await refuseUnproven(o);
   ok(fresh.every((o) => !!benched(`https://${o}.example/x`, "base")) && chainRefusalHolds().length === 0, `five unproven sellers refusing twice are each benched and hold nothing (first: ${firstErr?.message || "no error"})`);
+  resetR?.(); resetC();
   // After a payment on the chain settles (a real paid call answering 200 with
-  // its settle receipt), a refusing seller is the seller's own again.
+  // its settle receipt), a refusing seller is the seller's own again. The
+  // chain is held first, so the settle is what lifts it.
+  const warnKeep = console.warn; console.warn = () => {};
+  try { for (const o of many) await refuse(o); } finally { console.warn = warnKeep; }
+  await refuse("held1"); await refuse("held1");
+  ok(chainRefusalHolds().length === 1 && !benched("https://held1.example/x", "base"), "setup: the chain is held again, and a seller refusing twice inside the hold is not benched");
   const refusingFetch = globalThis.fetch;
   globalThis.fetch = async (url, init) => {
     const paidHdr = init?.headers?.["PAYMENT-SIGNATURE"] || init?.headers?.["payment-signature"] || init?.headers?.["X-PAYMENT"];
@@ -985,6 +1000,7 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
   ok(settledOk && !(settledOk instanceof Error), `setup: a paid call on the chain settles (${settledOk instanceof Error ? settledOk.message : "200"})`);
   void noteChainSettled; // the reset is reached through the settled call above, not called directly
   await refuse("after"); await refuse("after");
+  ok(chainRefusalHolds().length === 0, "the settle lifts the chain's hold");
   ok(!!benched("https://after.example/x", "base"), "after a settle on the chain, a seller refusing twice is benched again");
   resetR?.(); resetC();
 }
