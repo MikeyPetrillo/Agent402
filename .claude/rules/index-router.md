@@ -44,7 +44,13 @@ Loaded when an index, discovery, router or buyer file is read.
   `IndexCache.set` before the route index, the persist and the replica read the entry; a cut entry
   carries `toolsTotal` and `toolsCapped`, shown beside `toolCount` on `/api/index` rows, the `?seller=`
   detail (with `toolCap` and `toolCapLegend`) and the `index` block of `/__operator/heap.json`
-  (`cappedSellers`, `toolsDropped`).
+  (`cappedSellers`, `toolsDropped`). A registry-only fallback crawl whose listing passes the cap takes
+  the same rows before its whole-list passes (`registryRowsUnderCap`: a step of rows at a time in the
+  crawl lane, replacing a row a probe drops) and hands `IndexCache.set` the cut list with its
+  `toolsTotal`; any fallback list past 2,000 rows runs each pass in the lane. Such a crawl logs one
+  `[x402-index] fallback passes <listed> rows (kept <n>) <origin hash>: pick= copy= vouch= stamp= carry=
+  quotes= total= longest=` line when its listing was cut, its passes total over 200 ms or one pass is
+  over 100 ms (`scripts/test-fallback-crawl-turn.js`).
 - **Paywall probe:** one unpaid request per seller checks that its paid route answers a 402,
   on a rotation capped at `X402_PAYWALL_PROBES_PER_CYCLE` sellers per crawl cycle (default 25; 0 turns
   every paywall probe off, re-checks included). The verdict is kept apart from crawl health: it reports

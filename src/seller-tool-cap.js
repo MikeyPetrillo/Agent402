@@ -13,7 +13,10 @@
 //
 // The cap is applied in one place, IndexCache.set (src/x402-index.js), which
 // every stored entry passes through: the crawl, the registry fallback, a warm
-// start, a pull from the other container and the router worker's replica. The
+// start, a pull from the other container and the router worker's replica. (A
+// registry-only fallback crawl of a listing past the cap takes the same rows
+// before its passes, registryRowsUnderCap there, and hands over the cut list
+// with its pair, which this cap then keeps as it is.) The
 // capped entry carries `toolsTotal` (the count the listing held) and
 // `toolsCapped: true`; both are persisted, so an entry stored capped is not cut
 // again and keeps its total. An entry whose tools are under the cap carries
