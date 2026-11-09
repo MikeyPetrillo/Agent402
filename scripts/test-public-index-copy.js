@@ -56,7 +56,7 @@ for (const value of [undefined, "", " , ", "base,stellar", "solana", "Solana"]) 
   ok(!ANY.test(r.llms) && !/public index/.test(pageText(r.rail)), `llms.txt and /robinhood ${tag}: nothing said`);
   ok(dateOf(r.p) === PRIVACY_OWN && dateOf(r.t) === TERMS_OWN, `${tag}: both pages keep their own dates though _SINCE is set`);
 }
-ok(TERMS_OWN === "2026-11-04", "terms keeps its own date: its ungated text did not change");
+ok(TERMS_OWN === "2026-11-09", "terms keeps its own date: the late-landing and repayment screening lines");
 
 // --- robinhood: the paragraph, scoped no-sale line, terms, machine surfaces ---
 for (const value of ["robinhood", " Robinhood ,solana", "robinhood,stellar"]) {
@@ -114,7 +114,7 @@ for (const value of ["robinhood", " Robinhood ,solana", "robinhood,stellar"]) {
   const later = "2026-11-05";
   let r = render({ FACILITATOR_PUBLIC_INDEX_CHAINS: "robinhood", ROBINHOOD_FACILITATOR_URL: "https://first.example.test", FACILITATOR_PUBLIC_INDEX_SINCE: later });
   ok(dateOf(r.t) === (later > TERMS_OWN ? later : TERMS_OWN) && dateOf(r.p) === (later > PRIVACY_OWN ? later : PRIVACY_OWN), `_SINCE ${later}: each page prints the later date (terms ${dateOf(r.t)}, privacy ${dateOf(r.p)})`);
-  ok(dateOf(r.t) === "2026-11-05", "terms moves to the disclosure's date while it renders");
+  ok(publicIndexPageDate("2026-11-04", { FACILITATOR_PUBLIC_INDEX_CHAINS: "robinhood", FACILITATOR_PUBLIC_INDEX_SINCE: later }, "2026-11-09") === later, "a page dated before the disclosure moves to the disclosure's date while it renders");
   r = render({ FACILITATOR_PUBLIC_INDEX_CHAINS: "robinhood", FACILITATOR_PUBLIC_INDEX_SINCE: "2026-01-01" });
   ok(dateOf(r.t) === TERMS_OWN && dateOf(r.p) === PRIVACY_OWN, "an earlier _SINCE leaves both dates");
   for (const bad of ["2026-02-30", "11/05/2026", "2026-11-5", "soon"]) {
