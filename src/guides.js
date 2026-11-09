@@ -329,7 +329,7 @@ ceiling before you sign; the clients below do that on their own.
 
 ## Throughput limits
 
-Paid calls are not counted per wallet. The limits below bound unpaid reads,
+There is no per-wallet rate limit on paid calls. The limits below bound unpaid reads,
 failed settlements and concurrent heavy runs. Each one answers
 before any payment is taken, and the last column says how long to wait.
 
@@ -829,8 +829,8 @@ const subs = await a.call("srt-convert", { cues, to: "srt" });
 console.log(info.durationSec, subs.count, es.translation, a.spendingSummary());
 \`\`\`
 
-The citations from \`brief.citations\` travel with the episode as its show
-notes; \`a.spendingSummary()\` totals what the run spent.
+Cite the sources \`brief.citations\` names in the episode's show notes;
+\`a.spendingSummary()\` totals what the run spent.
 
 ## Pipeline notes
 

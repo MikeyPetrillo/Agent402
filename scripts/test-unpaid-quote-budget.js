@@ -368,8 +368,8 @@ ok(isExemptPath("/mcp") && isExemptPath("/api/pricing") && isExemptPath("/openap
   ok(paid.nexted, "the paid retry itself is never counted");
   ok(drive(warm).nexted && drive(warm).nexted, "after one settlement the same client passes the plain budget for the rest of the hour");
   ok(warm.stats().clientsSettledThisHour === 1, "the operator read counts the settled client");
-  // A raised ceiling, never a pass: one cheap settlement bought unbounded
-  // free price checks for the hour.
+  // A raised ceiling, never a pass: a settled client still reads against a
+  // bounded figure for the hour.
   const raisedTo = 2 * PAID_CLIENT_QUOTE_MULTIPLIER;
   let served = 2;
   while (served < raisedTo && drive(warm).nexted) served++;

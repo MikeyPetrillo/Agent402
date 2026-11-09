@@ -10,7 +10,7 @@ An agent that buys hundreds or thousands of calls in a burst, over x402 or MPP, 
 
 ## Throughput limits
 
-Paid calls are not counted per wallet. Every limit below answers before any payment is taken; the default column says how long to wait.
+There is no per-wallet rate limit on paid calls. Every limit below answers before any payment is taken; the default column says how long to wait.
 
 | What is counted | Default | Source |
 |---|---|---|
