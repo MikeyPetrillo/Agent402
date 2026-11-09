@@ -24,7 +24,7 @@
 // funding sweep pages at its own low-water mark for the same wallet.
 import { createHmac } from "node:crypto";
 import { privateKeyToAccount } from "viem/accounts";
-import { assertOwnPaidTarget } from "./lib/buyer-guard.js";
+import { assertOwnPaidTarget, tempoCappedChargeOptions } from "./lib/buyer-guard.js";
 
 const TARGET = assertOwnPaidTarget((process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, ""), "tempo-volume");
 const ROUTE = process.env.TEMPO_VOLUME_ROUTE || "/api/uuid";
@@ -59,7 +59,8 @@ async function erc20(token) {
 }
 
 const [{ Mppx, tempo }, { Challenge, Receipt }] = await Promise.all([import("mppx/client"), import("mppx")]);
-const client = Mppx.create({ methods: [tempo.charge({ account, autoSwap: true })], polyfill: false });
+// Capped: mppx refuses a challenge above the per-call ceiling before signing (scripts/lib/buyer-guard.js).
+const client = Mppx.create({ methods: [tempo.charge({ account, ...tempoCappedChargeOptions({ autoSwap: true }) })], polyfill: false });
 const url = `${TARGET}${ROUTE}`;
 
 const usdce = await erc20(USDCE), pathusd = await erc20(PATHUSD);

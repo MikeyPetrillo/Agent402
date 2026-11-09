@@ -65,6 +65,45 @@ export function methodDetailsRefusal(req) {
   return null;
 }
 
+/**
+ * Why a minted pull credential does not pay exactly what was checked, or null
+ * when it does: the credential must be a sender-signed Tempo transaction with
+ * ONE call, to USDC.e, a `transfer` or `transferWithMemo` of exactly
+ * `amountAtomic` to `recipient`, carrying no native value. The Tempo
+ * counterpart of payX402's signed-value assert: whatever built the
+ * credential, what leaves this process is what the quote, the ceiling and the
+ * recipient checks were applied to. Exported for tests.
+ */
+export async function credentialPaymentRefusal(credential, { amountAtomic, recipient }) {
+  let tx;
+  try {
+    const { Credential } = await import("mppx");
+    const payload = Credential.deserialize(String(credential)).payload;
+    if (payload?.type !== "transaction" || typeof payload.signature !== "string") return "the credential is not a signed transaction";
+    const { TxEnvelopeTempo } = await import("ox/tempo");
+    tx = TxEnvelopeTempo.deserialize(payload.signature);
+  } catch { return "the credential does not decode"; }
+  const calls = Array.isArray(tx?.calls) ? tx.calls : [];
+  if (calls.length !== 1) return `the credential carries ${calls.length} calls, not one transfer`;
+  const [call] = calls;
+  if (String(call?.to || "").toLowerCase() !== TEMPO_USDC_LC) return "the credential's transfer is not in USDC.e";
+  try { if (call.value !== undefined && call.value !== null && BigInt(call.value) !== 0n) return "the credential's call carries native value"; }
+  catch { return "the credential's call carries an unreadable value"; }
+  let decoded;
+  try {
+    const { decodeFunctionData } = await import("viem");
+    const { Abis } = await import("viem/tempo");
+    decoded = decodeFunctionData({ abi: Abis.tip20, data: call.data || "0x" });
+  } catch { return "the credential's call does not decode as a transfer"; }
+  if (decoded.functionName !== "transfer" && decoded.functionName !== "transferWithMemo") return `the credential's call is ${decoded.functionName}, not a transfer`;
+  const [to, amount] = decoded.args || [];
+  if (String(to || "").toLowerCase() !== String(recipient || "").toLowerCase()) return "the credential pays another recipient than the one checked";
+  let want;
+  try { want = BigInt(amountAtomic); } catch { return "the capped quote is not an integer"; }
+  if (typeof amount !== "bigint" || amount !== want) return `the credential moves ${typeof amount === "bigint" ? Number(amount) / 1e6 : "an unreadable amount of"} USDC, not the capped quote ${Number(want) / 1e6}`;
+  return null;
+}
+
 export function pickTempoChallenge(challenges) {
   const charges = (Array.isArray(challenges) ? challenges : []).filter((c) => c?.method === "tempo" && c?.intent === "charge");
   const payable = (c) => {
@@ -449,6 +488,14 @@ export async function payTempo(url, {
     throw bad(`Could not create an MPP credential (${why.slice(0, 120)}); nothing was sent`, 502);
   }
   if (typeof credential !== "string" || !/^Payment\s/i.test(credential)) throw bad("Could not create an MPP credential", 502);
+  // The credential must move exactly the capped quote to the checked
+  // recipient; anything else is refused here, before it leaves this process.
+  const carried = await credentialPaymentRefusal(credential, { amountAtomic: quotedAtomic, recipient });
+  if (carried) {
+    const e = bad(`The signed credential does not match the checked payment (${carried}); refusing to pay. Nothing was sent.`, 502);
+    e.refused = true;
+    throw e;
+  }
   const startBlock = await headRead;
   // A pull credential moves nothing until the seller submits it, so when
   // signing used up the budget the request is not sent at all.

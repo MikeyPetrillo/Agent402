@@ -82,6 +82,18 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   build books in its own unversioned window, so for as long as it serves the two builds' caps are
   independent (each seller and the lane can be paid up to one cap per build), and on the next
   roll-forward each sum's next rebuild (within a day) folds in that window's unexpired entries.
+- **Subscription sponsor ceiling:** `src/tempo-sponsor-ceiling.js` wraps the RPC transport of both
+  Tempo subscription clients (`src/mpp-subscriptions.js`): every raw send carrying a fee-payer
+  signature is admitted into a rolling 24 h window (`src/shared-limits.js`, shared across replicas;
+  this process's own window decides when the store does not answer) counted by transactions and
+  summed by fee bound (gas limit x maxFeePerGas), or refused before it leaves the process.
+  `MPP_SUB_SPONSOR_DAILY_MAX_TX` (default 100) and `MPP_SUB_SPONSOR_DAILY_MAX_USD` (default 2); a
+  malformed or non-positive value keeps the default. A refusal logs the knob that bounds it, is a
+  definite pre-send failure (a renewal goes past_due as with any failed charge, an activation is a
+  402) and reads `ceiling=reached` on `subscriptionFeePayer` in `/api/gateway-status`; a send stays
+  counted whatever the RPC answers, so the window only over-counts.
+  `ceiling=reached` pages (the status Worker and `heartbeat.yml`, one issue "Subscription gas sponsor
+  CEILING reached"), and `ok` closes it.
 - **Failure monitor:** `src/tool-failure-monitor.js` counts every catalog answer past the gates by slug, class, origin (outside vs our own synthetic traffic) and payment rail (`outcomeRailOf` in `src/payment-rail.js`; a free proof-of-work or trial outcome counts on its own lane, shown in the detail and read by `toolFailures` only when a tool fails nearly every free call: `TOOL_FREE_FAIL_RATE`, default 0.9, over `TOOL_FREE_FAIL_MIN_CALLS`, default 20, in an hour) and every named upstream's fetch outcomes through the egress meter's observer, in five-minute buckets merged across replicas through Redis; `toolFailures`, `upstreamHealth` and `facilitatorFunds` (also `low` while a facilitator signer is short of gas; a dry Robinhood signer our relayer covers is left out and pages as `robinhoodSettler=relayer` instead, `.claude/rules/payments.md`) are words on `/api/gateway-status`, detail on `/__operator/tool-failures.json`. Every final 200 is also classified by body (`src/answer-shape.js`: ok, empty, error-shaped, unchecked; a tool whose contract allows an empty answer goes in `EMPTY_RESULT_OK` or sets `discovery.emptyOk`) into the `toolAnswers` word; the same detail lists live-data slugs whose sales all returned one response digest. `src/settle-demotion.js` puts Celo's alternates first after consecutive out-of-funds refusals.
 - **Per-call count documents:** `src/sql-query-stats.js` (onchain-sql queries per call) and
   `src/x-search-stats.js` (x-search-recent authors and posts per call) keep per-UTC-day

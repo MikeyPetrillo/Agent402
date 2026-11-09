@@ -18,7 +18,9 @@
 // chain), --amount <usd> (requires --from: an amount names one source domain,
 // never every domain at once; default: the whole available balance of the
 // source domain), --recipient <0x address> (default: the seller address
-// itself), --max-fee <usd> (the ceiling the burn intent carries; below),
+// itself; any other address must be one of our own wallets, src/own-wallets.js,
+// unless --allow-external-recipient is given, and the dry run says which),
+// --max-fee <usd> (the ceiling the burn intent carries; below),
 // --expiry-blocks <n> (the burn intent's validity window, below), --execute.
 //
 // Fee: Gateway takes its fee from the source balance on top of the value
@@ -54,6 +56,7 @@ import { createPublicClient, createWalletClient, http, pad, parseUnits, formatUn
 import { randomBytes } from "node:crypto";
 import { GATEWAY_API_BASE, GATEWAY_DOMAINS, GATEWAY_NETWORK_NAMES, GatewayNanopaymentsClient, DEFAULT_WITHDRAW_ALERT_USD } from "../src/gateway-nanopayments.js";
 import { evmRpcFor } from "../src/evm-rpcs.js";
+import { ownWalletMatch } from "../src/own-wallets.js";
 
 // Mainnet Gateway contracts (Circle's published addresses; the same on every
 // EVM chain Gateway serves) and the USDC each of our chains settles.
@@ -136,6 +139,22 @@ export async function runWithdraw({ argv = process.argv.slice(2), env = process.
   const seller = account.address;
   const recipient = flag("recipient") || seller;
   if (!/^0x[0-9a-fA-F]{40}$/.test(recipient)) { error("--recipient must be a 0x address"); return 2; }
+  // The recipient is one of our own wallets (the seller address itself, or
+  // the own-wallet list src/own-wallets.js reads), unless the operator says
+  // otherwise with --allow-external-recipient. An own-wallet list that cannot
+  // be read never clears an address.
+  let recipientKind;
+  if (recipient.toLowerCase() === seller.toLowerCase()) recipientKind = "the seller address itself";
+  else {
+    const own = await ownWalletMatch(recipient, { env });
+    if (own === true) recipientKind = "one of our own wallets";
+    else if (!has("allow-external-recipient")) {
+      error(own === null
+        ? "--recipient could not be checked against our own wallets (the own-wallet list did not load); nothing was signed. Pass --allow-external-recipient to send to it anyway."
+        : "--recipient is not one of our own wallets (the seller address, WALLET_ADDRESS and the other own-wallet addresses, OUR_WALLETS); nothing was signed. Pass --allow-external-recipient to send to an outside address.");
+      return 2;
+    } else recipientKind = "an EXTERNAL address, allowed by --allow-external-recipient";
+  }
 
   const client = new GatewayNanopaymentsClient({ fetchImpl });
   const domainsWanted = fromNet ? [GATEWAY_DOMAINS[fromNet]] : Object.values(GATEWAY_DOMAINS);
@@ -176,6 +195,7 @@ export async function runWithdraw({ argv = process.argv.slice(2), env = process.
     plans.push({ source, dest, amountUsd, head, burnIntent: { maxBlockHeight: head + expiryBlocks, maxFee: parseUnits(maxFeeUsd.toFixed(6), 6), spec } });
   }
   if (!plans.length) { log("nothing to withdraw"); return 0; }
+  log(`recipient ${recipient}: ${recipientKind}`);
   for (const p of plans) log(`plan: ${p.amountUsd} USDC from the ${p.source} domain to ${recipient} on ${p.dest} (max fee ${maxFeeUsd} USDC; the intent expires at ${p.source} block ${p.burnIntent.maxBlockHeight}, ${expiryBlocks} blocks past ${p.head})`);
   if (!execute) { log("dry run: pass --execute to sign the burn intent, fetch the attestation and mint on the destination chain"); return 0; }
 

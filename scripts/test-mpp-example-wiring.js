@@ -9,6 +9,7 @@
 // next piece's input, so a break in the hand-off between them passed every
 // one of them.
 import "./lib/file-mode.js";
+import { mintTempoTestCredential } from "./lib/tempo-test-credential.js";
 import { createServer } from "node:http";
 import { readFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -91,7 +92,7 @@ async function run({ llms = LLMS, params = { url: "https://example.com" } } = {}
     getCatalog: () => ({}), tier, resolveExternal,
     // The real MPP payer; only the host moves to the local stub (the index
     // admits https origins only) and the chain proof is answered.
-    payExternal: (url, opts) => { paidUrl = url; return payTempo(url.replace(ORIGIN, STUB), { ...opts, createCredential: async () => "Payment ZmFrZQ", proof: async () => 4000 }); },
+    payExternal: (url, opts) => { paidUrl = url; return payTempo(url.replace(ORIGIN, STUB), { ...opts, createCredential: async (res402) => mintTempoTestCredential(res402), proof: async () => 4000 }); },
     externalEnabled: () => true, externalChains: () => ["tempo"],
   });
   const req = { ip: "192.0.2.10", headers: {}, header: () => undefined, mppTempoCredential: true };

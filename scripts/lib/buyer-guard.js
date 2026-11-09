@@ -160,3 +160,24 @@ export function capFromEnv(name, fallback, { env = process.env, script = name, t
   console.error(msg);
   process.exit(2);
 }
+
+// The tempo/charge ceiling our own paying scripts sign under: the same
+// per-call figure the canary's other MPP legs pass mppx (`maxAmount: "0.01"`),
+// in the two Tempo stablecoins our host quotes. mppx checks it when choosing a
+// challenge and again before any signing, so a wrong quote from our own host
+// cannot sign more. The auto-swap leg (a PathUSD-funded payer meeting a
+// USDC.e challenge) is held to the same figure of input.
+export const TEMPO_SCRIPT_MAX_AMOUNT = "0.01";
+export const TEMPO_SCRIPT_CURRENCIES = Object.freeze([
+  "0x20C000000000000000000000b9537d11c60E8b50", // USDC.e
+  "0x20c0000000000000000000000000000000000000", // PathUSD
+]);
+export function tempoCappedChargeOptions({ autoSwap = false, maxAmount = TEMPO_SCRIPT_MAX_AMOUNT } = {}) {
+  const decimals = 6;
+  const [whole, frac = ""] = String(maxAmount).split(".");
+  const maxAtomic = BigInt(whole || "0") * 10n ** BigInt(decimals) + BigInt((frac + "0".repeat(decimals)).slice(0, decimals) || "0");
+  return {
+    currencies: [...TEMPO_SCRIPT_CURRENCIES], decimals, maxAmount,
+    ...(autoSwap ? { autoSwap: { maxAmountIn: maxAtomic } } : {}),
+  };
+}
