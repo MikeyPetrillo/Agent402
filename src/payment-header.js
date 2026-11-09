@@ -24,29 +24,39 @@ export function isEvmNetworkName(network) {
   return !NON_EVM_V1.test(network);
 }
 
-/** Remove a `payload.authorization` block no signature covers. That block is
- *  what the facilitator verifies only for a plain EIP-3009 payment on an EVM
- *  network; beside a Permit2 authorization, or on a network that settles a
- *  signed transaction, the facilitator ignores it, so its from, nonce and
- *  value are whatever the sender typed. Every network the header names (v2
- *  `accepted.network`, v1 `network`, `payload.network`) must be an EVM one for
- *  the block to stay: whichever of them the paywall reads, it then verified
- *  that block. Mutates and returns `decoded`. */
+/** Remove the EVM authorization blocks no signature covers. A payload carries
+ *  two: `authorization` (EIP-3009) and `permit2Authorization` (Permit2). The
+ *  facilitator verifies one of them, and only on an EVM network: Permit2 when
+ *  that block is present, EIP-3009 otherwise. On a network that settles a
+ *  signed transaction it reads neither, so there both are whatever the sender
+ *  typed, and both are removed; beside a Permit2 block the EIP-3009 block is
+ *  removed. Every network the header names (v2 `accepted.network`, v1
+ *  `network`, `payload.network`) must be an EVM one for a block to stay:
+ *  whichever of them the paywall reads, it then verified that block. A header
+ *  naming no network matches no offer and is never verified, so nothing
+ *  downstream of a verify reads it. Mutates and returns `decoded`. */
 export function dropUnsignedAuthorization(decoded) {
   const inner = decoded?.payload;
-  if (!inner || typeof inner !== "object" || Array.isArray(inner) || !Object.hasOwn(inner, "authorization")) return decoded;
+  if (!inner || typeof inner !== "object" || Array.isArray(inner)) return decoded;
+  const has = (k) => Object.hasOwn(inner, k);
+  if (!has("authorization") && !has("permit2Authorization")) return decoded;
   const named = [decoded?.accepted?.network, decoded?.network, inner.network].filter((n) => n !== undefined && n !== null);
-  // A header naming no network matches no offer and is never verified, so
-  // nothing downstream of a verify reads it; only a named non-EVM network
-  // (or Permit2) marks the block as one the facilitator did not check.
-  const evm = named.every(isEvmNetworkName);
-  const permit2 = inner.permit2Authorization !== undefined && inner.permit2Authorization !== null;
-  if (!evm || permit2) delete inner.authorization;
+  if (!named.every(isEvmNetworkName)) { delete inner.authorization; delete inner.permit2Authorization; return decoded; }
+  if (inner.permit2Authorization !== undefined && inner.permit2Authorization !== null) delete inner.authorization;
   return decoded;
 }
 
+/** One spelling of a signed nonce: a decimal or 0x integer in its decimal
+ *  form ("7", "07" and "0x7" are one nonce to the contract that consumes it),
+ *  anything else lowercased as sent. */
+export function canonicalNonce(nonce) {
+  const raw = String(nonce ?? "").trim();
+  if (/^(?:0x[0-9a-fA-F]{1,64}|[0-9]{1,78})$/.test(raw)) { try { return BigInt(raw).toString(); } catch { /* fall through */ } }
+  return raw.toLowerCase();
+}
+
 /** The payment header's JSON object, or null when it does not decode to one.
- *  A `payload.authorization` no signature covers is removed (see
+ *  An authorization block no signature covers is removed (see
  *  dropUnsignedAuthorization), so no reader takes an identity, nonce or
  *  amount from it, and the intake rewrite below sends the header on without it.
  *  Accepts standard base64 or base64url, padded or not, with surrounding
