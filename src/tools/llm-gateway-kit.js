@@ -2144,7 +2144,7 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
   const requestedMax = input.max_tokens != null ? input.max_tokens : input.max_completion_tokens;
   // `defaultMaxTokens` lets a tier whose model REASONS before it speaks hand
   // out a bigger default than the historical 1024 (see v1-chat-ox).
-  const tierDefaultMax = Math.min(tier.defaultMaxTokens || 1024, tier.maxTokens);
+  const tierDefaultMax = Math.min(tier.defaultMaxTokens || DEFAULT_MAX_TOKENS, tier.maxTokens);
   let maxTokens = requestedMax != null ? parseInt(requestedMax, 10) : tierDefaultMax;
   if (Number.isNaN(maxTokens) || maxTokens < 1) maxTokens = tierDefaultMax;
   if (maxTokens > tier.maxTokens) maxTokens = tier.maxTokens; // clamp, don't reject - drop-in friendliness
@@ -2420,8 +2420,12 @@ export function attemptsFor(chain, body) {
 // default effort (budget tiers: the lowest non-"none" effort it supports;
 // pro: "low"; premium: the model's own default - those buyers bought depth
 // and the 8k cap leaves room), (b) a buyer `reasoning`/`reasoning_effort` is
-// validated and passed through (it changes the answer -> normalized body ->
-// cache key), and (c) an answer that is "length" + empty is treated like an
+// validated and kept in the normalized body (it changes the answer -> cache
+// key); on the outbound link an effort or budget that leaves no room for an
+// answer inside a small cap is lowered by the small-budget rule and
+// disclosed in agent402_reasoning_adjusted (reasoningForLink), and (c) an
+// answer that is "length" + empty gets one same-model run at the lowest
+// supported effort (retryEmptyAtLowestEffort) and is then treated like an
 // empty refusal: the chain walks on, and a chain exhausted end-to-end is a
 // 502 (settlement cancelled), never a paid empty 200.
 // Table is live-verified by scripts/test-gateway-model-ids.js against
@@ -2531,15 +2535,165 @@ export function reasoningProfile(model) {
  *  (defaultMaxTokens): "low" where the model takes it, else null. Reasoning
  *  tokens count against max_tokens, so a model left at its own default effort
  *  (high on Claude Opus 5, medium on Gemini 3.1 Pro) can spend a small budget
- *  thinking and come back cut off or empty. A buyer reasoning preference
- *  always wins; the callers only ask when the buyer set none. */
+ *  thinking and come back cut off or empty. The callers only ask when the
+ *  buyer set none; a buyer's own effort is fitted by the same threshold
+ *  (fitEffortToBudget). */
 export function smallBudgetEffort(model, tierSlug, maxTokens) {
   const tier = TIERS[tierSlug];
   if (tier?.reasoningDefault !== "model" || !tier.defaultMaxTokens) return null;
   const n = Number(maxTokens);
-  if (!Number.isFinite(n) || n >= tier.defaultMaxTokens) return null;
+  if (!Number.isFinite(n) || n >= smallBudgetThreshold(tierSlug)) return null;
   const prof = reasoningProfile(model);
-  return prof && prof.efforts.includes("low") ? "low" : null;
+  return prof && prof.efforts.includes(SMALL_BUDGET_EFFORT) ? SMALL_BUDGET_EFFORT : null;
+}
+/** The output cap a tier hands a call that names none; the historical 1024
+ *  unless the tier sets defaultMaxTokens. */
+export const DEFAULT_MAX_TOKENS = 1024;
+/** The effort the small-budget rule asks for. */
+export const SMALL_BUDGET_EFFORT = "low";
+/** An output budget under this is "small" on the tier: the room the tier
+ *  itself gives a call that names no cap (its default, within its maximum).
+ *  On a "model"-policy tier this is the defaultMaxTokens smallBudgetEffort
+ *  reads; the other tiers use the same definition of their default. */
+export function smallBudgetThreshold(tierSlug) {
+  const tier = TIERS[tierSlug];
+  if (!tier || !tier.maxTokens) return null;
+  return Math.min(tier.defaultMaxTokens || DEFAULT_MAX_TOKENS, tier.maxTokens);
+}
+const effortRank = (e) => REASONING_EFFORTS.indexOf(e);
+/** The lowest effort a table model supports ("none" where its row lists it);
+ *  null for a model with no row. `floor` skips efforts below it (the Messages
+ *  wire's `effort` field has no "none"). */
+export function lowestEffortFor(model, { floor = "none" } = {}) {
+  const prof = reasoningProfile(model);
+  if (!prof) return null;
+  return REASONING_EFFORTS.find((e) => effortRank(e) >= effortRank(floor) && prof.efforts.includes(e)) || null;
+}
+/** A buyer's own effort, fitted to the link's output budget by the
+ *  small-budget rule the gateway applies when the buyer set none
+ *  (smallBudgetEffort): under the tier's small-budget threshold an effort
+ *  above "low" is sent as "low", so the reasoning leaves room for an answer.
+ *  Unchanged for a model with no table row, for one whose reasoning bills
+ *  outside the cap (the cap bounds only its answer), at or above the
+ *  threshold, and for an effort already at or below "low". Only ever lowers,
+ *  so the request can only get cheaper upstream. */
+export function fitEffortToBudget(model, tierSlug, effort, maxTokens) {
+  if (typeof effort !== "string" || effortRank(effort) <= effortRank(SMALL_BUDGET_EFFORT)) return effort;
+  const prof = reasoningProfile(model);
+  if (!prof || prof.reasoningOutsideMaxTokens || !prof.efforts.includes(SMALL_BUDGET_EFFORT)) return effort;
+  const threshold = smallBudgetThreshold(tierSlug);
+  const n = Number(maxTokens);
+  if (!threshold || !Number.isFinite(n) || n >= threshold) return effort;
+  return SMALL_BUDGET_EFFORT;
+}
+/** The share of an output cap kept for the answer when a reasoning or
+ *  thinking budget is lowered to leave room: a quarter, the share the
+ *  Messages validator keeps when it fits a budget under its own clamp. */
+export const ANSWER_ROOM_DIVISOR = 4;
+/** A buyer's reasoning or thinking budget, lowered so a quarter of the cap is
+ *  left for the answer; never below `floor` (the provider's minimum budget)
+ *  and never raised. */
+export function fitBudgetForAnswer(budget, cap, { floor = 1 } = {}) {
+  const b = Number(budget);
+  const c = Number(cap);
+  if (!Number.isInteger(b) || !Number.isFinite(c) || !(c > 1)) return budget;
+  const most = Math.max(floor, c - Math.max(1, Math.floor(c / ANSWER_ROOM_DIVISOR)));
+  return b > most ? most : b;
+}
+/** Symbol keys an outbound body carries for its own chain walk (never
+ *  serialized): the disclosure for a fitted reasoning setting, the buyer's
+ *  setting it replaced, and the clamped probe the link was priced on. */
+export const REASONING_ADJUSTED = Symbol("reasoningAdjusted");
+export const LINK_PROBE = Symbol("linkProbe");
+/** The `agent402_reasoning_adjusted` disclosure: which request field was
+ *  changed, what the buyer asked for ("default" when they set none), what was
+ *  sent, and why (the cap field's name for a pre-call fit, or
+ *  "empty_answer_retry"). */
+export function reasoningAdjustedNote(field, requested, used, reason) {
+  return { field, requested, used, reason };
+}
+/** The `reasoning` object for one chain link on the chat and Responses wires,
+ *  with its disclosure when a buyer setting was fitted. A buyer who set none
+ *  gets the tier default (defaultReasoningFor); a buyer budget follows the
+ *  clamped cap (fitReasoningToCap, which may refuse the link); then the
+ *  buyer's effort and budget are fitted to the answer (fitEffortToBudget,
+ *  fitBudgetForAnswer). `capField` names the wire's cap in the disclosure. */
+export function reasoningForLink(buyerReasoning, model, tierSlug, cap, capField = "max_tokens") {
+  if (buyerReasoning === undefined) return { reasoning: defaultReasoningFor(model, tierSlug, cap), note: null };
+  let reasoning = fitReasoningToCap(buyerReasoning, cap);
+  let note = null;
+  if (!reasoning || typeof reasoning !== "object" || reasoningOutsideMaxTokens(model)) return { reasoning, note };
+  if (reasoning.effort !== undefined) {
+    const used = fitEffortToBudget(model, tierSlug, reasoning.effort, cap);
+    if (used !== reasoning.effort) {
+      note = reasoningAdjustedNote("reasoning.effort", reasoning.effort, used, capField);
+      reasoning = { ...reasoning, effort: used };
+    }
+  }
+  if (reasoning.max_tokens !== undefined) {
+    const used = fitBudgetForAnswer(reasoning.max_tokens, cap);
+    if (used !== reasoning.max_tokens) {
+      if (!note) note = reasoningAdjustedNote("reasoning.max_tokens", buyerReasoning.max_tokens, used, capField);
+      reasoning = { ...reasoning, max_tokens: used };
+    }
+  }
+  return { reasoning, note };
+}
+/** The one recovery try after an answer came back empty for length: the same
+ *  model at its lowest supported effort. Returns {reasoning, note}, or null
+ *  when the model has no table row, reasoning was already off, or the
+ *  attempt was already at that effort (the same request would be empty
+ *  again). A budget is replaced by the effort. */
+export function lowestEffortRetry(sentReasoning, buyerReasoning, model) {
+  const lowest = lowestEffortFor(model);
+  if (!lowest) return null;
+  if (sentReasoning?.enabled === false) return null;
+  const sent = sentReasoning?.effort;
+  if (sent !== undefined && effortRank(sent) <= effortRank(lowest)) return null;
+  const reasoning = { ...(sentReasoning?.exclude !== undefined ? { exclude: sentReasoning.exclude } : {}), effort: lowest };
+  const note = buyerReasoning?.effort !== undefined ? reasoningAdjustedNote("reasoning.effort", buyerReasoning.effort, lowest, "empty_answer_retry")
+    : buyerReasoning?.max_tokens !== undefined ? reasoningAdjustedNote("reasoning.max_tokens", buyerReasoning.max_tokens, lowest, "empty_answer_retry")
+    : reasoningAdjustedNote("reasoning.effort", "default", lowest, "empty_answer_retry");
+  return { reasoning, note };
+}
+/** Whether one more run of a link fits what the call's price covers once the
+ *  empty run's reported cost is counted: on a flat tier the margin budget the
+ *  clamp holds every link to, on the metered tier the call's quote. An
+ *  unreported cost counts as the link's worst case. */
+export function recoveryRunAffordable(probe, tier, imageCount, spentUsd, quotedUsd) {
+  let worst;
+  try { worst = worstCaseUpstreamCost(probe, tier, imageCount).totalUsd; } catch { return false; }
+  if (!Number.isFinite(worst)) return false;
+  let budget;
+  if (tier.metered) {
+    let quote;
+    try { quote = meteredQuoteFromNormalized(probe, imageCount); } catch { return false; }
+    budget = Number.isFinite(quotedUsd) && quotedUsd > 0 ? Math.min(quotedUsd, quote) : quote;
+  } else budget = tier.price * MARGIN;
+  const spent = typeof spentUsd === "number" && Number.isFinite(spentUsd) && spentUsd >= 0 ? spentUsd : worst;
+  return spent + worst <= budget;
+}
+/** Runs the one recovery try of a call (see lowestEffortRetry). `once` is the
+ *  call's own {used} flag: no second recovery try on any later link. Skipped,
+ *  returning null, when there is no plan, the price does not cover another
+ *  run, the payment window or the timed-out budget leaves no time, or the
+ *  buyer has gone. A walkable upstream failure or an unusable answer also
+ *  returns null and the caller's chain walk goes on as before. */
+export async function retryEmptyAtLowestEffort({ once, plan, affordable, req, timeouts, run, usable, defaultMs = UPSTREAM_TIMEOUT_MS }) {
+  if (!once || once.used || !plan || timeouts.spent() || !affordable()) return null;
+  let timeoutMs;
+  try { timeoutMs = paymentWindowTimeoutMs(req, defaultMs); } catch { return null; }
+  once.used = true;
+  const started = Date.now();
+  try {
+    const data = await run(plan, timeoutMs);
+    return usable(data) ? data : null;
+  } catch (e) {
+    if (![502, 503, 504].includes(e?.statusCode)) throw e;
+    timeouts.note(e, started, timeoutMs);
+    if (timeouts.spent()) throw e;
+    return null;
+  }
 }
 /** The reasoning object to inject for a chain link when the buyer set none:
  *  null = leave the model's default alone. `maxTokens` is the link's output
@@ -2596,6 +2750,21 @@ export function isEmptyLength(data) {
   const hasText = typeof m.content === "string" && m.content.trim() !== "";
   const hasToolCalls = Array.isArray(m.tool_calls) && m.tool_calls.length > 0;
   return !hasText && !hasToolCalls;
+}
+
+/** The end-to-end empty answer's 502 (not settled). */
+export const EMPTY_LENGTH_MESSAGE = "Upstream produced no content within the output cap (reasoning consumed it, after any effort fit and lowest-effort retry by the gateway) - raise max_tokens, lower reasoning.effort, or pick a non-reasoning model";
+/** Response header carrying the agent402_reasoning_adjusted object as JSON
+ *  on a streamed answer (a stream has no envelope for the field). */
+export const REASONING_ADJUSTED_HEADER = "X-Agent402-Reasoning-Adjusted";
+/** Set (or clear, for a link that adjusted nothing) the stream header before
+ *  the link's first byte; a no-op once headers are out. */
+export function setReasoningAdjustedHeader(res, note) {
+  if (!res || res.headersSent) return;
+  try {
+    if (note) res.setHeader?.(REASONING_ADJUSTED_HEADER, JSON.stringify(note));
+    else res.removeHeader?.(REASONING_ADJUSTED_HEADER);
+  } catch { /* a header is never worth a failed answer */ }
 }
 
 /** Per-buyer identity for OpenRouter's `user` field. OpenRouter scopes provider
@@ -3979,8 +4148,10 @@ function makeHandler(routeTier) {
       // buyer expressed no preference. Deterministic given the model, so it
       // needs no place in the cache key.
       // A buyer budget is fitted under THIS link's clamped cap (a pricier
-      // fallback clamps lower than the requested model did).
-      const reasoning = body.reasoning !== undefined ? fitReasoningToCap(body.reasoning, attempt.max_tokens) : defaultReasoningFor(model, tierSlug, attempt.max_tokens);
+      // fallback clamps lower than the requested model did), and a buyer
+      // effort or budget that leaves no room for an answer inside that cap
+      // is lowered by the small-budget rule and disclosed (reasoningForLink).
+      const { reasoning, note: reasoningNote } = reasoningForLink(body.reasoning, model, tierSlug, attempt.max_tokens);
       const plugins = [
         ...(TIERS[tierSlug].web ? [{ ...TIERS[tierSlug].web }] : []),
         ...(structured && body.stream !== true ? [{ id: "response-healing" }] : []),
@@ -4004,6 +4175,8 @@ function makeHandler(routeTier) {
         // The clamp's input estimate, for the direct cost guard: a symbol key,
         // so it is never serialized into a request body.
         ...(Number.isFinite(clampInputTokens) ? { [CLAMP_INPUT_TOKENS]: clampInputTokens } : {}),
+        ...(reasoningNote ? { [REASONING_ADJUSTED]: reasoningNote } : {}),
+        [LINK_PROBE]: attempt,
       };
     };
     // Server-tool execution is upstream spend, so it has to be visible to a
@@ -4080,6 +4253,9 @@ function makeHandler(routeTier) {
               const abListed = !!directModelFor(model, directCfg);
               const timeoutMs = attemptTimeoutMs(directPlan, STREAM_TIMEOUT_MS);
               const attemptStarted = Date.now();
+              // A stream has no envelope for agent402_reasoning_adjusted: the
+              // same object rides in a response header, set per link.
+              setReasoningAdjustedHeader(res, directBody ? null : outbound[REASONING_ADJUSTED]);
               try {
                 let out;
                 if (directBody) {
@@ -4115,6 +4291,7 @@ function makeHandler(routeTier) {
     let lastErr;
     let refusedModel = null;
     const timeouts = timedOutBudget();
+    const recovery = { used: false }; // one lowest-effort recovery try per call
     for (const { model, flex, direct } of attempts) {
       // A model that refused on flex will refuse on default too - don't pay twice.
       if (model === refusedModel) continue;
@@ -4136,9 +4313,24 @@ function makeHandler(routeTier) {
         // scrubber in streamOpenRouterTo.
         // The direct upstream is never retried on a 429: the chain's next
         // attempt (the same model on OpenRouter) is the retry.
-        const data = directBody
+        let data = directBody
           ? await callDirectUpstream(directBody, { timeoutMs, servedModel: model, cfg: directCfg })
           : await retryRateLimited(() => callOpenRouter({ ...outbound, usage: { include: true } }, { timeoutMs }), { delays: rateLimitDelaysFor(flex) });
+        let reasoningAdjusted = directBody ? null : (outbound[REASONING_ADJUSTED] || null);
+        // An OpenRouter answer that spent its whole cap before any content
+        // gets one more run of the same model at its lowest supported effort
+        // before the chain walks on: once per call, only while the price
+        // still covers another run and the payment window leaves time.
+        if (!directBody && isEmptyLength(data)) {
+          const plan = lowestEffortRetry(outbound.reasoning, body.reasoning, model);
+          const again = await retryEmptyAtLowestEffort({
+            once: recovery, plan, req, timeouts,
+            affordable: () => recoveryRunAffordable(outbound[LINK_PROBE], TIERS[tierSlug], imageCount, data?.usage?.cost, req?.__meteredQuoteUsd),
+            run: (p, ms) => retryRateLimited(() => callOpenRouter({ ...outbound, reasoning: p.reasoning, usage: { include: true } }, { timeoutMs: ms }), { delays: rateLimitDelaysFor(flex) }),
+            usable: (d) => !isEmptyLength(d) && !isEmptyRefusal(d),
+          });
+          if (again) { data = again; reasoningAdjusted = plan.note; }
+        }
         // An empty safety refusal (HTTP 200, no content) walks the chain like
         // a provider error — a buyer must never pay for nothing. See
         // isEmptyRefusal above. Streams can't be inspected this way; there
@@ -4159,7 +4351,7 @@ function makeHandler(routeTier) {
           // (flex->default first, then the chain); end-to-end empty is a 502.
           if (abListed) noteDirectAb(abLabel, { ok: false, reason: "empty_length" });
           if (directBody) noteDirectOutcome(false, "empty");
-          lastErr = bad("Upstream produced no content within the output cap (reasoning consumed it) - raise max_tokens, lower reasoning.effort, or pick a non-reasoning model", 502);
+          lastErr = bad(EMPTY_LENGTH_MESSAGE, 502);
           if (!directBody) refusedModel = model; // same model + same effort on the default tier would be empty too - don't pay twice
           continue;
         }
@@ -4189,6 +4381,9 @@ function makeHandler(routeTier) {
           data.agent402_router = { category: routedCategory, quality: routedQuality, served: data.model || model };
         }
         if (body.__defaultedModel) data.agent402_default_model = body.__defaultedModel; // the caller sent no model; say what served
+        // The buyer's reasoning setting was lowered to leave room for the
+        // answer (before the call, or on the one recovery try): say so.
+        if (reasoningAdjusted && data && typeof data === "object") data.agent402_reasoning_adjusted = reasoningAdjusted;
         if (body.__substitutedFrom) data.agent402_model_substituted = { requested: body.__substitutedFrom, served: body.model, reason: "the requested model is retired upstream; its named successor served instead" };
         else { const sub = availabilitySubstitution(body.model, model); if (sub) data.agent402_model_substituted = sub; }
         // Served under another flat tier's config at that tier's price: say
@@ -4345,7 +4540,7 @@ const INPUT_SCHEMA = {
     zdr: { type: "boolean", description: "Optional - true routes only to zero-data-retention providers (OpenRouter provider.zdr); the only provider preference a caller may set." },
     model_fallback: { type: "boolean", description: "Optional, default true - when the requested model has no available upstream host, a same-family successor costing no more (or the tier's own fallback model) serves instead, and the reply names a successor in agent402_model_substituted. false: serve only the requested model, never a fallback, and return the error." },
     cache_control: { description: 'Optional - prompt caching preference. Default ON ({type:"ephemeral"}, 5-minute TTL): repeated prefixes across your turns are served from the provider cache (same price to you). Send false to disable. ttl:"1h" is not offered.' },
-    reasoning: { type: "object", description: 'Optional - {effort: "none"|"minimal"|"low"|"medium"|"high"|"xhigh"|"max", max_tokens?, exclude?, enabled?}. Reasoning tokens count against max_tokens. Omitted: low effort on the budget tiers, the model default on premium. reasoning_effort (string) is accepted as an alias.' },
+    reasoning: { type: "object", description: 'Optional - {effort: "none"|"minimal"|"low"|"medium"|"high"|"xhigh"|"max", max_tokens?, exclude?, enabled?}. Reasoning tokens count against max_tokens. Omitted: low effort on the budget tiers, the model default on premium. reasoning_effort (string) is accepted as an alias. An effort above "low", or a reasoning.max_tokens budget, that leaves no room for an answer inside a small max_tokens is lowered before the call (the cap and the price stay as they are), and an answer that still comes back empty for length is retried once on the same model at its lowest supported effort when the call\'s price and time allow. Either change is named in agent402_reasoning_adjusted {field, requested, used, reason}, sent as the X-Agent402-Reasoning-Adjusted header on a stream.' },
     max_completion_tokens: { type: "integer", description: "Optional - alias of max_tokens (newer OpenAI SDKs send this)." },
     tools: { type: "array", description: 'Optional - OpenAI function tools {type:"function", function:{...}}, or a tool namespace {type:"namespace", name, tools:[...]} (flattened into its functions). The pro and premium routes also accept the bounded server tools openrouter:web_search, openrouter:web_fetch and openrouter:datetime with server-owned limits (GET /v1/models lists them); stop_server_tools_when and max_tool_calls are refused. A request with a server tool is never served from the prompt cache.' },
   },

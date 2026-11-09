@@ -93,8 +93,11 @@ seen = [];
 await bySlug("v1-chat-nano-responses").handler({ model: "openai/gpt-5-nano", input: "hi", max_output_tokens: 64 }, fakeReq);
 ok(seen[0].b.reasoning?.effort === "minimal" && seen[0].b.provider?.sort === "price" && seen[0].b.service_tier === "flex", "nano + gpt-5-nano: default reasoning effort minimal, price sort, flex-first");
 seen = [];
-await bySlug("v1-chat-nano-responses").handler({ model: "openai/gpt-5-nano", input: "hi", max_output_tokens: 64, reasoning: { effort: "high" } }, fakeReq);
-ok(seen[0].b.reasoning?.effort === "high", "buyer reasoning preference wins");
+const rFits = await bySlug("v1-chat-nano-responses").handler({ model: "openai/gpt-5-nano", input: "hi", max_output_tokens: TIERS["v1-chat-nano"].maxTokens, reasoning: { effort: "high" } }, fakeReq);
+ok(seen[0].b.reasoning?.effort === "high" && rFits.agent402_reasoning_adjusted === undefined, "a buyer reasoning effort that fits its cap is sent as given, with no adjustment field");
+seen = [];
+const rSmall = await bySlug("v1-chat-nano-responses").handler({ model: "openai/gpt-5-nano", input: "hi", max_output_tokens: 64, reasoning: { effort: "high" } }, fakeReq);
+ok(seen[0].b.reasoning?.effort === "low" && seen[0].b.max_output_tokens === 64 && JSON.stringify(rSmall.agent402_reasoning_adjusted) === '{"field":"reasoning.effort","requested":"high","used":"low","reason":"max_output_tokens"}', `a buyer effort too high for a small cap is sent at the fitted effort and disclosed (${JSON.stringify(rSmall.agent402_reasoning_adjusted)})`);
 // Premium leaves a reasoning model at its own effort unless the budget is
 // under the tier's reasoning room; then effort low (smallBudgetEffort).
 seen = [];
@@ -126,7 +129,7 @@ await baseTool.handler({ model: "openai/gpt-4o-mini", input: "hi" }, fakeReq).th
   const { meteredResponsesQuoteUsd } = await import("../src/tools/llm-responses-kit.js");
   const { costFor, meteredQuoteForProbe } = await import("../src/tools/llm-gateway-kit.js");
   const metered = bySlug("v1-chat-metered-responses");
-  ok(!!metered && metered.route === "POST /v1/metered/responses" && metered.price === "$0.001" && typeof metered.quote === "function" && LLM_RESPONSES_TOOLS.filter((t) => typeof t.quote === "function").length === 1, "only the metered Responses route carries a per-request quote() and the floor price");
+  ok(!!metered && metered.route === "POST /v1/metered/responses" && metered.price === `$${TIERS["v1-chat-metered"].price}` && typeof metered.quote === "function" && LLM_RESPONSES_TOOLS.filter((t) => typeof t.quote === "function").length === 1, "only the metered Responses route carries a per-request quote() and the floor price");
   ok(Object.keys(RESPONSES_PATH_BY_TIER).at(-1) === "v1-chat-metered", "the metered tier is LAST in the path map (tierFor keeps home tiers first)");
   const small = { model: "anthropic/claude-haiku-4.5", max_output_tokens: 16, input: "hi" };
   const bigger = { model: "anthropic/claude-opus-5", max_output_tokens: 4096, instructions: "x ".repeat(20_000), input: "y ".repeat(5_000) };
@@ -310,7 +313,7 @@ delete process.env.OPENROUTER_API_KEY;
     seen = [];
     globalThis.fetch = async (url, init) => { const b = JSON.parse(init.body); seen.push(b); return { ok: true, status: 200, text: async () => JSON.stringify(reply(b.model)) }; };
     await premiumR.handler({ model: MODEL, input: content, max_output_tokens: 8192, reasoning: { max_tokens: 8000 } }, fakeReq);
-    ok(seen[0]?.model === MODEL && seen[0].max_output_tokens < 8000 && seen[0].reasoning?.max_tokens === seen[0].max_output_tokens - 1, `Responses: the outbound reasoning budget sits one under the clamped cap (max_output_tokens ${seen[0]?.max_output_tokens}, reasoning ${seen[0]?.reasoning?.max_tokens})`);
+    ok(seen[0]?.model === MODEL && seen[0].max_output_tokens < 8000 && seen[0].reasoning?.max_tokens === seen[0].max_output_tokens - Math.floor(seen[0].max_output_tokens / 4), `Responses: the outbound reasoning budget follows the clamped cap and leaves a quarter of it for the answer (max_output_tokens ${seen[0]?.max_output_tokens}, reasoning ${seen[0]?.reasoning?.max_tokens})`);
   }
 }
 

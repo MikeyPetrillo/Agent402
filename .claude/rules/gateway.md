@@ -44,6 +44,20 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   verified payment never spends it.
   `GATEWAY_METERED_BILLING=on` gates metered settlement, the buffered override and a credits
   stream's debit on finish alike (`recordStreamedUsage`, `meteredUsdOf` in `src/gateway-meter.js`).
+- **Reasoning fitted to the output cap** (chat, Messages, Responses; `reasoningForLink`,
+  `fitEffortToBudget`, `fitBudgetForAnswer` in `llm-gateway-kit.js`): on each outbound link a
+  buyer effort above "low" is sent as "low" when the link's cap is under `smallBudgetThreshold`
+  (the tier's default output budget, the threshold `smallBudgetEffort` reads), and a reasoning or
+  thinking budget is lowered to leave a quarter of the cap (never under the provider floor). A model
+  flagged `reasoningOutsideMaxTokens` is left as sent. The normalized body, the cache key, the
+  clamp and the metered quote read the buyer's own values; only the outbound link changes, and it
+  only gets cheaper. An empty-for-length answer from OpenRouter gets one same-model run at the
+  model's lowest effort (`retryEmptyAtLowestEffort`: once per call, only when
+  `recoveryRunAffordable` holds, the payment window leaves time and the timed-out budget is not
+  spent), metered at the served run alone; then the walk is as before. Disclosure:
+  `agent402_reasoning_adjusted {field, requested, used, reason}` on the answer, the same JSON in
+  `X-Agent402-Reasoning-Adjusted` on a stream. It adds no refusal. Suite:
+  `scripts/test-llm-answer-fit.js`.
 - **Report products:** kits under `src/tools/*-report-kit.js`, `src/report-tiers.js`,
   house style in `src/house-style.js`, samples in `src/sample-reports.js`. Every kit that serves
   model prose passes it through `sanitizeReportProse` (`src/report-grounding.js`: a link stays a
