@@ -6446,12 +6446,39 @@ const CONTROL_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g;
 // "Array<string>") stays as written.
 const ACTIVE_ELEMENTS = "script|style|iframe|frame|frameset|object|embed|applet|svg|math|form|img|image|video|audio|template|noscript|textarea|input|button|select|marquee|meta|base|portal";
 const HTML_TAG = new RegExp(`<(?:/?(?:${ACTIVE_ELEMENTS})(?:[\\s/][^<>]*)?|[a-zA-Z][a-zA-Z0-9-]*[\\s/]+[a-zA-Z_:][\\w:.-]*\\s*=[^<>]*)>`, "gi");
+/** Markdown links and images removed in one pass over the text. An image
+ *  ("![label](target)") is dropped whole; a link ("[label](target)") keeps its
+ *  label. A label runs from the first opening bracket since the last closing
+ *  bracket or line break; a target ends at the first ")" on the same line.
+ *  The positions of the next ")" and line break are remembered between
+ *  candidates, so the cost is linear in the text however many brackets it
+ *  holds (a pattern that rescans from each bracket is quadratic on seller
+ *  text made of brackets). */
+function stripMarkdownTargets(s, images) {
+  if (s.indexOf("](") < 0) return s;
+  let out = "", last = 0, open = -1, closeAt = -2, breakAt = -2;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s.charCodeAt(i);
+    if (ch === 10) { open = -1; continue; }
+    if (ch === 91) { if (open < 0 && (!images || (i > last && s.charCodeAt(i - 1) === 33))) open = i; continue; }
+    if (ch !== 93) continue;
+    const start = open;
+    open = -1;
+    if (start < 0 || s.charCodeAt(i + 1) !== 40) continue;
+    const from = i + 2;
+    if (closeAt !== -1 && closeAt < from) closeAt = s.indexOf(")", from);
+    if (closeAt === -1) break; // no target can close from here on
+    if (breakAt !== -1 && breakAt < from) breakAt = s.indexOf("\n", from);
+    if (breakAt !== -1 && breakAt < closeAt) continue;
+    out += images ? s.slice(last, start - 1) : s.slice(last, start) + s.slice(start + 1, i);
+    last = closeAt + 1;
+    i = closeAt;
+  }
+  return last ? out + s.slice(last) : s;
+}
 function stripListingMarkup(s) {
   if (!/[<[]/.test(s)) return s;
-  return s
-    .replace(/<!--[\s\S]*?(?:-->|$)/g, "")
-    .replace(/!\[[^\]\n]*\]\([^)\n]*\)/g, "")
-    .replace(/\[([^\]\n]*)\]\([^)\n]*\)/g, "$1")
+  return stripMarkdownTargets(stripMarkdownTargets(s.replace(/<!--[\s\S]*?(?:-->|$)/g, ""), true), false)
     .replace(/<((?:https?|mailto):[^<>\s]*)>/gi, "$1")
     .replace(HTML_TAG, "")
     .replace(/[ \t]{2,}/g, " ")
