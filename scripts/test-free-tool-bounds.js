@@ -8,6 +8,7 @@
 //   node scripts/test-free-tool-bounds.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { API_TOOLS, RESOLVE_REFS_MAX_BYTES } from "../src/tools/api-kit.js";
+import { KIT2 } from "../src/tools/kit2.js";
 
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) { pass++; console.log(`ok - ${msg}`); } else { fail++; console.error(`FAIL - ${msg}`); } };
@@ -137,6 +138,70 @@ function rng(seed) {
   for (let i = 0; i < 300; i++) shared.paths["/r" + i] = { get: { responses: { 400: { schema: { $ref: "#/components/schemas/Err" } }, 500: { schema: { $ref: "#/components/schemas/Err" } } } } };
   const rs = tool.handler({ spec: shared });
   ok(rs.resolved === 600 && JSON.stringify(rs) === JSON.stringify(oldAnswer(shared)), "resolve-refs: one schema referenced 600 times is served and counted 600 times");
+}
+
+// ---------------------------------------------------------------------------
+// business-days: counted by arithmetic, equal to the day-by-day walk.
+// ---------------------------------------------------------------------------
+{
+  const tool = KIT2.find((t) => t.slug === "business-days");
+  const parseDate = (v) => {
+    if (v === undefined || v === null || v === "now") return new Date();
+    if (typeof v === "number" || /^\d+$/.test(String(v))) { const n = Number(v); return new Date(n < 1e12 ? n * 1000 : n); }
+    return new Date(String(v));
+  };
+  // The walk as it was.
+  const oldAnswer = (i) => {
+    const from = parseDate(i.from), to = parseDate(i.to);
+    const holidays = new Set((Array.isArray(i.holidays) ? i.holidays : []).map((h) => new Date(h).toISOString().slice(0, 10)));
+    const start = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate()));
+    const end = new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), to.getUTCDate()));
+    let days = 0, cur = new Date(start);
+    const dir = end >= start ? 1 : -1;
+    while (dir > 0 ? cur < end : cur > end) {
+      const dow = cur.getUTCDay();
+      if (dow !== 0 && dow !== 6 && !holidays.has(cur.toISOString().slice(0, 10))) days++;
+      cur.setUTCDate(cur.getUTCDate() + dir);
+    }
+    return { businessDays: days * dir < 0 ? -days : days, calendarDays: Math.round((end - start) / 86400000) };
+  };
+  ok(JSON.stringify(tool.handler(tool.discovery.input)) === JSON.stringify(tool.discovery.output.example), "business-days: the published example answers as published");
+
+  const rand = rng(1109);
+  const int = (lo, hi) => lo + Math.floor(rand() * (hi - lo + 1));
+  const iso = (ms) => new Date(ms).toISOString();
+  // Anchor years: ordinary, two-digit, before year zero, past 9999, and both ends of the date range.
+  const anchors = [() => Date.UTC(int(1900, 2100), int(0, 11), int(1, 28)), () => Date.UTC(int(1900, 2100), int(0, 11), int(1, 28)), () => new Date("00" + int(10, 99) + "-06-15T00:00:00Z").getTime(), () => Date.UTC(-int(1, 500), int(0, 11), int(1, 28)), () => Date.UTC(int(9990, 10010), int(0, 11), int(1, 28)), () => 8.64e15 - int(0, 4000) * 86400000, () => -8.64e15 + int(0, 4000) * 86400000];
+  const shape = (ms) => { const r = rand(); return r < 0.5 ? iso(ms).slice(0, ms >= -62167219200000 && ms < 253402300800000 ? 10 : 13) : r < 0.75 ? iso(ms + int(0, 86399999)) : r < 0.9 && ms > 1e12 ? ms : iso(ms); };
+  let same = 0, backward = 0, withHoliday = 0, hit = 0;
+  const RUNS = 4000;
+  for (let run = 0; run < RUNS; run++) {
+    const a = anchors[int(0, anchors.length - 1)]();
+    const span = int(0, 9) === 0 ? int(0, 3) : int(0, 2500);
+    let b = a + (rand() < 0.3 ? -span : span) * 86400000;
+    if (Math.abs(b) > 8.64e15) b = a;
+    const input = { from: shape(a), to: shape(b) };
+    if (rand() < 0.6) {
+      input.holidays = Array.from({ length: int(0, 12) }, () => { const h = Math.min(8.64e15, Math.max(-8.64e15, Math.min(a, b) + int(-40, Math.abs(span) + 40) * 86400000)); const r = rand(); return r < 0.7 ? iso(h).slice(0, h >= -62167219200000 && h < 253402300800000 ? 10 : 13) : r < 0.85 ? iso(h) : h; });
+      if (input.holidays.length && rand() < 0.2) input.holidays.push(input.holidays[0]);
+    }
+    const want = oldAnswer(input), got = tool.handler(input);
+    if (JSON.stringify(got) === JSON.stringify(want) && Object.is(got.businessDays, want.businessDays)) same++;
+    else if (same === run) console.error(`  first difference on run ${run}: ${JSON.stringify(input)} walk ${JSON.stringify(want)} count ${JSON.stringify(got)}`);
+    if (b < a) backward++;
+    if (input.holidays?.length) { withHoliday++; if (JSON.stringify(oldAnswer({ ...input, holidays: [] })) !== JSON.stringify(want)) hit++; }
+  }
+  ok(same === RUNS, `business-days: ${same}/${RUNS} random ranges count as the walk did (${backward} backward, ${withHoliday} with holidays, ${hit} where a holiday changed the count)`);
+  ok(backward > 500 && hit > 500, "business-days: the random ranges cover backward spans and holidays that land on weekdays");
+  for (const input of [{ from: 1e30, to: "2026-01-01" }, { from: "2026-01-01", to: 1e30 }, { from: "2026-06-08", to: "2026-06-01" }, { from: "2026-06-06", to: "2026-06-07" }, { from: "2026-06-07", to: "2026-06-06" }]) {
+    ok(JSON.stringify(tool.handler(input)) === JSON.stringify(oldAnswer(input)), `business-days: ${JSON.stringify(input)} answers as the walk did (${JSON.stringify(tool.handler(input))})`);
+  }
+  const far = await bestOf(() => tool.handler({ from: "0001-01-01", to: "+275000-01-01", holidays: ["2026-01-01", "+010000-01-05"] }));
+  ok(far.ms < 20 && far.out?.calendarDays > 99_000_000, `business-days: the widest range answers in ${far.ms.toFixed(2)}ms (${JSON.stringify(far.out)})`);
+  const many = await bestOf(() => tool.handler({ from: "-271821-04-20", to: "+275760-09-13", holidays: Array.from({ length: 7000 }, (_, k) => new Date(Date.UTC(2000, 0, 1 + k)).toISOString().slice(0, 10)) }));
+  ok(many.ms < BOUND_MS, `business-days: the widest range with 7,000 holidays answers in ${many.ms.toFixed(1)}ms`);
+  let refused; try { tool.handler({ from: "2026-01-01", to: "2026-02-01", holidays: ["not a date"] }); } catch (e2) { refused = e2; }
+  ok(refused?.statusCode === 400, `business-days: a holiday that is not a date is a 400 (${refused?.statusCode})`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
