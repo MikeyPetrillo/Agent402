@@ -21,13 +21,12 @@ import { countSentenceEnds } from "./sentence-ends.js";
 // v5, so this stays correct across the upgrade.
 import { load as yamlLoad, dump as yamlDump, JSON_SCHEMA as YAML_JSON_SCHEMA } from "js-yaml";
 import { renderMarkdown, MARKDOWN_INLINE_MAX_CHARS } from "./markdown-render.js";
+import { runMarkdown } from "./markdown-pool.js";
 import QRCode from "qrcode";
 import { assertPublicUrl, safeFetch, ssrfDispatcher, isSsrfBlock, UNRESOLVED_OR_PRIVATE, isTransientLookupError, lookupUnavailable } from "./fetch-guard.js";
 
 const REGEX_WORKER = fileURLToPath(new URL("./regex-worker.js", import.meta.url));
 const REGEX_TIMEOUT_MS = 750;
-// Time one markdown render gets in the HTML worker (see markdown-to-html).
-const MARKDOWN_TIMEOUT_MS = 2000;
 
 // Run a user regex in a worker thread with a hard timeout. ReDoS patterns are
 // contained to a single terminated worker instead of freezing the event loop.
@@ -835,7 +834,7 @@ const dataTools = [
     slug: "markdown-to-html",
     category: "conversion",
     price: "$0.001",
-    description: "Render CommonMark + GFM markdown to HTML. A render that runs past 2 s is stopped and answers 400.",
+    description: "Render CommonMark + GFM markdown to HTML; headings carry id attributes. A render that runs past 3 s is stopped: 400 when the document's own markers are the cause, 503 otherwise, never charged.",
     tags: ["markdown", "html", "convert", "render"],
     discovery: {
       bodyType: "json",
@@ -848,16 +847,11 @@ const dataTools = [
     },
     handler: (input) => {
       const text = capText(need(input, "markdown"), 100_000, "markdown");
-      // A short document renders here; a longer one renders in the HTML worker
-      // under a deadline, since the renderer's cost can grow with the square
-      // of the input. A render stopped at the deadline is the document's own
-      // shape, so it answers 400.
+      // A short document renders here; a longer one renders in a markdown
+      // worker (./markdown-pool.js), since the renderer's cost can grow with
+      // the square of the input.
       if (text.length <= MARKDOWN_INLINE_MAX_CHARS) return renderMarkdown(text);
-      return runHtml("markdownToHtml", { text }, 0, {
-        large: true,
-        timeoutMs: MARKDOWN_TIMEOUT_MS,
-        onTimeout: () => bad(`"markdown" took longer than ${MARKDOWN_TIMEOUT_MS / 1000} s to render and was stopped (long runs of unclosed emphasis or code markers are the usual cause)`),
-      });
+      return runMarkdown(text);
     },
   },
   {

@@ -8,6 +8,7 @@ paths:
   - "src/tools/frame-diff.js"
   - "src/tools/child-env.js"
   - "src/tools/image-*.js"
+  - "src/tools/markdown-*.js"
   - "scripts/fetch-tessdata.js"
   - "Dockerfile"
 ---
@@ -32,6 +33,14 @@ Loaded when a media, document or worker-pool tool file is read.
   then a 429 with Retry-After. ffmpeg, ffprobe and Chromium start with `childEnv()`
   (`src/tools/child-env.js`), an allowlist of environment variables, so no key reaches a child
   process (defense in depth: a same-user child can still read its parent's environment).
+- **Markdown:** one renderer configuration (`src/tools/markdown-render.js`: heading ids) serves
+  `markdown-to-html`, the guide pages and the docs pages, so a document renders to the same bytes
+  everywhere. The tool renders a document of up to `MARKDOWN_INLINE_MAX_CHARS` (2,500) characters
+  on the serving thread and a longer one in its own two-worker pool (`markdown-pool.js`,
+  `markdown-worker.js`), never in the HTML pool: one lane for ordinary documents, one for those a
+  one-pass estimate reads as costly, up to 512 documents waiting (past it a 503). A render gets
+  3 s counted from the worker's start signal; past it the worker is terminated and the answer is
+  400 in the costly lane (the document's markers are the cause) and 503 in the ordinary lane.
 - **Image headers:** the source-pixel cap is read from the container header, so
   `src/tools/image-headers.js` holds each format to the field its decoder sizes from: one PNG
   IHDR, and it comes first; one JPEG frame header on the marker chain, with the cap also handed

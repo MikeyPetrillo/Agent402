@@ -4,14 +4,11 @@
 import { siteOrgRef } from "./site-org.js";
 import { REPO_URL, repoUrl } from "./repo-link.js";
 import { networkFloorUsd, ROBINHOOD_CAIP2 } from "./network-floors.js";
-import { marked } from "marked";
-// Headings carry ids (GitHub-style slugs) so the dev shortlinks (/claude ->
-// /guides/agent-hosts#claude-code) and readers can deep-link a section.
-// The id is computed from the heading's PLAIN TEXT (the tokens' text, never
-// the rendered html), so no markup is ever part of the id.
-export const headingId = (text) => String(text || "").toLowerCase().replace(/[^a-z0-9\s-]/g, "").trim().replace(/\s+/g, "-");
-const tokenText = (tokens) => (tokens || []).map((t) => (t.tokens ? tokenText(t.tokens) : (t.text ?? ""))).join("");
-marked.use({ renderer: { heading({ tokens, depth }) { const html = this.parser.parseInline(tokens); return `<h${depth} id="${headingId(tokenText(tokens))}">${html}</h${depth}>\n`; } } });
+// The renderer and its heading ids (GitHub-style slugs, so the dev shortlinks
+// such as /claude -> /guides/agent-hosts#claude-code can deep-link a section)
+// are configured in one place, shared with the markdown-to-html tool.
+import { marked, headingId } from "./tools/markdown-render.js";
+export { headingId };
 import { ledgerShell, ledgerFooterCompact, esc, breadcrumbTrail } from "./ledger-chrome.js";
 import { fitTitle } from "./seo-meta.js";
 import { GUIDE_INTEGRATIONS, integrationBySlug } from "./integration-pages.js";

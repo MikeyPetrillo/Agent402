@@ -99,10 +99,10 @@ function assign(slot, job) {
   clearTimeout(slot.idleTimer);
   slot.worker.ref();
   job.timer = setTimeout(() => {
-    settle(slot, job.reject, job.onTimeout ? job.onTimeout() : unavailable(`HTML processing took longer than ${Math.round(JOB_TIMEOUT_MS / 1000)} s and was stopped (very deeply nested markup is the usual cause)`));
+    settle(slot, job.reject, unavailable(`HTML processing took longer than ${Math.round(JOB_TIMEOUT_MS / 1000)} s and was stopped (very deeply nested markup is the usual cause)`));
     retire(slot);
     pump();
-  }, job.timeoutMs || JOB_TIMEOUT_MS);
+  }, JOB_TIMEOUT_MS);
   slot.worker.postMessage({ id: job.id, op: job.op, payload: job.payload });
 }
 
@@ -121,20 +121,15 @@ function pump() {
  * Run one named HTML operation (see ./html-worker.js) off the main thread.
  * `bytes` is the size of the HTML it parses, used for the large-job bound.
  * Resolves with the operation's result; rejects with its error and statusCode.
- * Options, for an operation with its own time budget:
- *  - timeoutMs: stop the worker after this long instead of JOB_TIMEOUT_MS.
- *  - onTimeout: returns the error the caller gets when that happens.
- *  - large: count the job against the large-job bound whatever its size, so
- *    at most LARGE_MAX such jobs run at once and a worker stays free for the rest.
  */
-export async function runHtml(op, payload, bytes = 0, opts = {}) {
+export async function runHtml(op, payload, bytes = 0) {
   if (!isMainThread) {
     directOps ||= (await import("./html-worker-ops.js")).runOp;
     return directOps(op, payload);
   }
   if (queue.length >= QUEUE_MAX) throw unavailable("HTML workers are busy, retry shortly");
   return new Promise((resolve, reject) => {
-    queue.push({ id: nextJobId++, op, payload, large: bytes > LARGE_BYTES || opts.large === true, timeoutMs: opts.timeoutMs, onTimeout: opts.onTimeout, resolve, reject, timer: null });
+    queue.push({ id: nextJobId++, op, payload, large: bytes > LARGE_BYTES, resolve, reject, timer: null });
     pump();
   });
 }
