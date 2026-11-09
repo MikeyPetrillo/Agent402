@@ -95,6 +95,15 @@ try {
     const ct = res.headers.get("content-type") || "";
     ok(ct.includes("text/html"), `${path} content-type is text/html (got ${ct})`);
     const body = await res.text();
+    // A CDN that rewrites email-shaped text would rewrite a pinned package
+    // name ("name@1.2.3") in the served HTML, which a reader that runs no
+    // script then sees broken. The shell wraps the whole body in the
+    // no-rewrite markers, so every "@" on the page sits inside them.
+    {
+      const open = body.indexOf("<!--email_off-->"), close = body.lastIndexOf("<!--/email_off-->");
+      const bodyAt = body.indexOf("<body"), endAt = body.lastIndexOf("</body>");
+      ok(open > bodyAt && bodyAt >= 0 && close > open && close < endAt && body.slice(bodyAt, open).indexOf("@") < 0 && body.slice(close, endAt).indexOf("@") < 0, `${path} wraps its body in the no-rewrite markers`);
+    }
     // 1KB floor — every page in this set carries a layout shell, head, nav,
     // and substantial content; a blank-template regression renders well
     // under this.
