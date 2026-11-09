@@ -528,8 +528,11 @@ const encodingTools = [
 // Data conversion
 // ---------------------------------------------------------------------------
 
-// The largest sheet whose conversion stays near 100 ms on the serving thread.
-export const JSON_TO_CSV_MAX_CELLS = 500_000;
+// A sheet is written in slices that hand the event loop back, so its size is
+// bounded by what one answer can reasonably carry, not by the serving thread.
+export const JSON_TO_CSV_MAX_CELLS = 10_000_000;
+export const JSON_TO_CSV_MAX_BYTES = 16_000_000;
+const JSON_TO_CSV_SLICE_MS = 4;
 
 function flatten(obj, prefix = "", out = {}) {
   for (const [k, v] of Object.entries(obj)) {
@@ -677,7 +680,7 @@ const dataTools = [
     slug: "json-to-csv",
     category: "conversion",
     price: "$0.002",
-    description: "Convert a JSON array of objects to CSV. Nested objects are flattened to dot-path columns. Up to 10,000 rows and 500,000 cells (rows times columns); split a larger table into several calls.",
+    description: "Convert a JSON array of objects to CSV. Nested objects are flattened to dot-path columns. Up to 10,000 rows, 10,000,000 cells (rows times columns) and 16 MB of CSV per call; split a larger table into several calls.",
     tags: ["json", "csv", "convert", "spreadsheet"],
     discovery: {
       bodyType: "json",
@@ -700,9 +703,22 @@ const dataTools = [
       const columns = [...new Set(flat.flatMap((r) => Object.keys(r)))];
       // Every row is written under every column, so rows that share no keys
       // grow the sheet with the square of the input.
-      if (data.length * columns.length > JSON_TO_CSV_MAX_CELLS) throw bad(`Max ${JSON_TO_CSV_MAX_CELLS} cells (rows times columns); this input makes ${data.length} rows of ${columns.length} columns. Send fewer rows per call, or convert rows that share columns together`);
+      const shape = `this input makes ${data.length} rows of ${columns.length} columns`;
+      const split = "Send fewer rows per call, or convert rows that share columns together";
+      if (data.length * columns.length > JSON_TO_CSV_MAX_CELLS) throw bad(`Max ${JSON_TO_CSV_MAX_CELLS} cells (rows times columns); ${shape}. ${split}`);
       const lines = [columns.map(csvEscape).join(delimiter)];
-      for (const r of flat) lines.push(columns.map((c) => csvEscape(r[c])).join(delimiter));
+      let bytes = lines[0].length + 1, sliceStart = performance.now(), sinceCheck = 0;
+      for (const r of flat) {
+        const line = columns.map((c) => csvEscape(r[c])).join(delimiter);
+        bytes += line.length + 1;
+        if (bytes > JSON_TO_CSV_MAX_BYTES) throw Object.assign(bad(`Max ${JSON_TO_CSV_MAX_BYTES / 1_000_000} MB of CSV per call; ${shape}. ${split}`), { statusCode: 413 });
+        lines.push(line);
+        // The clock is read every 20,000 cells; a slice that has run its time ends here.
+        if ((sinceCheck += columns.length) >= 20_000) {
+          sinceCheck = 0;
+          if (performance.now() - sliceStart > JSON_TO_CSV_SLICE_MS) { await new Promise((done) => setImmediate(done)); sliceStart = performance.now(); }
+        }
+      }
       return { csv: lines.join("\n") + "\n", rows: data.length, columns: columns.length };
     },
   },
