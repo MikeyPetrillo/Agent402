@@ -10,10 +10,10 @@
 // jimp loads with the first decode (./lazy-deps.js), not at boot: on the main
 // thread that keeps its evaluation off the startup path; the worker preloads it.
 import { loadJimp } from "./lazy-deps.js";
-import { assertGifHeader, gifFirstFrame } from "./image-headers.js";
+import { assertGifHeader, gifFirstFrame, assertPngHeader, assertInflateWithinDeclared } from "./image-headers.js";
 
-// Re-exported with the rest of the header readers.
-export { gifFirstFrame };
+// Re-exported for the other decoders of buyer images (barcode-kit, frame-diff).
+export { gifFirstFrame, assertPngHeader, assertInflateWithinDeclared };
 
 export function bad(message) {
   return Object.assign(new Error(message), { statusCode: 400 });
@@ -130,6 +130,7 @@ export function assertDeclaredWithinPixelCap(buf, maxPixels) {
   }
   const format = sniffFormat(buf);
   if (format === "gif") assertGifHeader(buf);
+  if (format === "png") assertPngHeader(buf);
 }
 
 export async function readImage(buf, { maxPixels = MAX_SRC_PIXELS } = {}) {
@@ -141,6 +142,9 @@ export async function readImage(buf, { maxPixels = MAX_SRC_PIXELS } = {}) {
   // A container whose size cannot be read from its header is refused: the
   // decoder would otherwise allocate the full canvas before any check runs.
   if (!declaredDimensions(buf)) throw bad("unsupported or unreadable image container (png, jpeg, gif, bmp, webp, tiff with a readable header)");
+  // Where the decoder inflates with no output bound, the same inflate runs
+  // here first, under the declared size.
+  assertInflateWithinDeclared(buf, sniffFormat(buf));
   const { Jimp } = await loadJimp();
   let img;
   try { img = await Jimp.read(buf); }

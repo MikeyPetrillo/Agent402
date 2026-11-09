@@ -303,5 +303,44 @@ const hex = (n) => (n >>> 0).toString(16).padStart(8, "0");
   ok(ms < 150, `a 5 MB GIF of 312,500 frames is checked in ${ms.toFixed(1)} ms (< 150 ms)`);
 }
 
+// PNG. The decoder takes its size from the LAST IHDR chunk it meets, and it
+// inflates an interlaced image with no output bound. So the chunk list is
+// walked (one IHDR, and it comes first), and an interlaced image's data is
+// inflated in the worker under the size its header declares before the
+// decoder sees it.
+{
+  const crc32 = (b) => { let crc = 0xffffffff; for (let n = 0; n < b.length; n++) { let c = (crc ^ b[n]) & 0xff; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; crc = (crc >>> 8) ^ c; } return (crc ^ 0xffffffff) >>> 0; };
+  const chunk = (t, d) => { const l = Buffer.alloc(4); l.writeUInt32BE(d.length); const td = Buffer.concat([Buffer.from(t), d]); const c = Buffer.alloc(4); c.writeUInt32BE(crc32(td)); return Buffer.concat([l, td, c]); };
+  const ihdr = (w, h, interlace = 0) => { const b = Buffer.alloc(13); b.writeUInt32BE(w, 0); b.writeUInt32BE(h, 4); b[8] = 8; b[12] = interlace; return chunk("IHDR", b); };
+  const png = (...chunks) => Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), ...chunks, chunk("IEND", Buffer.alloc(0))]);
+  const idat = (raw) => chunk("IDAT", zlibMod.deflateSync(raw, { level: 9 }));
+  const everyDecoder = [...TRANSFORMS.map(([slug, extra]) => [slug, tool(slug), extra]), ["barcode-decode", barcodeDecode, {}]];
+
+  const twoHeaders = png(ihdr(4, 4), ihdr(9000, 9000), idat(Buffer.alloc(4 * 5)));
+  await refusedBy("a PNG with a second IHDR", twoHeaders, /^png carries 2 IHDR chunks/, everyDecoder);
+  await refusedBy("a PNG whose IHDR is not first", png(chunk("tEXt", Buffer.from("a\0b")), ihdr(4, 4), idat(Buffer.alloc(4 * 5))), /IHDR|unreadable header/, everyDecoder);
+  const { assertPngWithin } = await import("../src/tools/frame-diff.js");
+  let fd = null; try { assertPngWithin(twoHeaders, { maxWidth: 100, maxHeight: 100, label: "still" }); } catch (e) { fd = e; }
+  ok(fd && fd.statusCode === 400 && /^still: png carries 2 IHDR chunks/.test(fd.message), `the frame check refuses a PNG with a second IHDR (got ${fd && fd.message})`);
+
+  // Interlaced, 4x4, with image data that inflates to 64 MB. The refusal comes
+  // from the worker (it inflates), so the 500 ms bound does not apply here.
+  const swollen = png(ihdr(4, 4, 1), idat(Buffer.alloc(64e6)));
+  for (const [name, handler, extra] of [["image-convert", tool("image-convert"), { format: "png" }], ["image-crop", tool("image-crop"), { width: 2, height: 2 }], ["barcode-decode", barcodeDecode, {}]]) {
+    const a = await attempt(handler, swollen, extra);
+    ok(a.code === 400 && /^interlaced png inflates past the 4x4 image its header declares/.test(a.msg || ""), `${name} refuses an interlaced PNG that inflates past its declared size (${swollen.length} bytes in; got ${a.code} "${a.msg}")`);
+  }
+
+  // Interlaced PNGs keep working: 5x5 gray, seven Adam7 passes, 11 rows in all
+  // (pass widths 1,1,2,1,3,2,5 over 1,1,1,2,1,3,2 rows), every sample 0x40.
+  const rows = [[1, 1], [1, 1], [2, 1], [1, 2], [3, 1], [2, 3], [5, 2]].flatMap(([w, n]) => Array(n).fill(Buffer.from([0, ...Array(w).fill(0x40)])));
+  const interlaced = png(ihdr(5, 5, 1), idat(Buffer.concat(rows)));
+  const p = await decoded(interlaced);
+  ok(p.width === 5 && p.height === 5 && hex(p.getPixelColor(0, 0)) === "404040ff" && hex(p.getPixelColor(4, 4)) === "404040ff", `an interlaced PNG still decodes to its pixels (${p.width}x${p.height}, ${hex(p.getPixelColor(4, 4))})`);
+  // A text chunk that spells IHDR in its data is not a second header.
+  const q = await decoded(png(ihdr(4, 4), chunk("tEXt", Buffer.from("Comment\0IHDR IHDR")), idat(Buffer.alloc(4 * 5))));
+  ok(q.width === 4 && q.height === 4, `a PNG with "IHDR" inside a text chunk still decodes (${q.width}x${q.height})`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
