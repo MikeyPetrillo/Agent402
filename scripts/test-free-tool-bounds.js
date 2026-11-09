@@ -12,6 +12,7 @@ import { KIT2 } from "../src/tools/kit2.js";
 import { KIT, JSON_TO_CSV_MAX_CELLS } from "../src/tools/kit.js";
 import { TEXT_ANALYSIS_TOOLS } from "../src/tools/text-analysis-kit.js";
 import { emailGuard } from "../src/tools/email-guard-kit.js";
+import { splitSteps } from "../src/plan-sketch.js";
 import { runHtml } from "../src/tools/html-pool.js";
 import { MARKDOWN_INLINE_MAX_CHARS } from "../src/tools/markdown-render.js";
 import { marked } from "marked";
@@ -375,6 +376,42 @@ function rng(seed) {
   }
   const atCap = await bestOf(() => tool.handler({ json: Array.from({ length: 500 }, (_, i) => ({ ["c" + i]: i })) }));
   ok(atCap.ms < BOUND_MS && JSON.stringify(atCap.out).length < 1_000_000, "json-to-csv: a table at the cap converts in " + atCap.ms.toFixed(1) + "ms to " + JSON.stringify(atCap.out).length + " bytes");
+}
+
+// ---------------------------------------------------------------------------
+// Plan sketch (/api/find, /api/route, catalog.find): steps split in one pass.
+// ---------------------------------------------------------------------------
+{
+  const OLD_SPLIT = /\s*(?:;|\n|->|→|=>|,?\s*\band then\b|,?\s*\bthen\b|,?\s*\bafter that\b|,?\s*\bafterwards\b|,?\s*\bfinally\b|,?\s*\bnext,)\s*/i;
+  const NUMBERED = /(?:^|\s)(?:\(?\d{1,2}[.)]|step\s+\d{1,2}:?)\s+/gi;
+  const LEAD = /^(?:and|first|firstly|also|please|,)\s+/i;
+  const oldSplit = (query) => {
+    let q = String(query ?? "").slice(0, 500).trim();
+    if (!q) return [];
+    const numbered = q.match(NUMBERED);
+    if (numbered && numbered.length >= 2) q = q.replace(NUMBERED, " ; ").trim();
+    const parts = q.split(OLD_SPLIT).map((p) => p.replace(LEAD, "").replace(/[\s,.;:]+$/g, "").trim()).filter((p) => p.length >= 3 && /[a-z]/i.test(p));
+    return parts.length >= 2 ? parts : [];
+  };
+  const real = ["get the bitcoin price, then compute RSI", "bitcoin and ethereum price", "fetch the page; extract links; summarize", "1. get the price 2. compute rsi 3. chart it", "step 1: search news step 2: summarize", "first get the quote and then convert to EUR, after that email it", "resolve the domain -> check tls => report", "search the web\nread the top result\nfinally write a brief", "next, hash the file, then sign it", "authenticate then, and then, , then retry", "Then what? and then... finally.", "a, then b ,then c , then d,then e", "and first also please get the weather then also tell me", "price→chart→report", "do x afterwards do y afterwards", "then", "  ", "", "thenthen and thens next,x", "A; ; ;B", "get then:\tthen;:., then . done"];
+  const tokens = [" ", " ", "  ", ",", ";", "\n", "->", "=>", "→", "then", "and then", "after that", "afterwards", "finally", "next,", "and", "first", "get price", "1.", "2)", "(3)", "step 1:", "rsi", ".", ":", "\t", "also", "please", "x", "Then", "AND THEN", " ", "authen", "then's"];
+  const rand = rng(404);
+  const corpus = [...real];
+  for (let i = 0; i < 20000; i++) corpus.push(Array.from({ length: Math.floor(rand() * 14) }, () => tokens[Math.floor(rand() * tokens.length)]).join(rand() < 0.5 ? " " : ""));
+  let same = 0, plans = 0;
+  for (const q of corpus) {
+    const want = oldSplit(q), got = splitSteps(q);
+    if (want.length) plans++;
+    if (JSON.stringify(got) === JSON.stringify(want)) same++;
+    else if (same + 1 === corpus.indexOf(q) + 1) console.error("  first split difference: " + JSON.stringify(q) + " was " + JSON.stringify(want) + " now " + JSON.stringify(got));
+  }
+  ok(same === corpus.length && plans > 2000, "plan sketch: " + same + "/" + corpus.length + " tasks split into the same steps (" + plans + " multi-step)");
+  for (const [name, fill] of [["spaces", " "], ["tabs", "\t"], ["comma-space", ", "], ["space-comma", " ,"], ["newline-space", "\n "], ["dots", "."], ["then", " then"]]) {
+    const q = "a" + fill.repeat(Math.floor(498 / fill.length)) + "b";
+    const r = await bestOf(() => splitSteps(q));
+    ok(r.ms < 5, "plan sketch: a 500-character run of " + name + " splits in " + r.ms.toFixed(2) + "ms");
+    ok(JSON.stringify(splitSteps(q)) === JSON.stringify(oldSplit(q)), "plan sketch: the run of " + name + " splits as before");
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
