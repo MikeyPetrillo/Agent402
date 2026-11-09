@@ -99,10 +99,16 @@ console.log("2. stats returns 400 (not 500) on bad input ✓");
     // the hostile input, not the spawn.
     try { await call(slug, slug === "html-links" ? { html: "<a href=\"x\">x</a>" } : slug === "json-validate" ? { data: "a", schema: { type: "string" } } : { pattern: "a", text: "a", flags: "" }); } catch { /* the warm-up's answer is not under test */ }
     const t0 = Date.now();
+    let refused = false;
     try { await call(slug, input); } catch (e) {
       if (e.statusCode === undefined || e.statusCode < 400 || e.statusCode >= 500) fail(`${slug} ReDoS input must 4xx, got statusCode ${e.statusCode}`);
+      refused = true;
     }
     const ms = Date.now() - t0;
+    // The guarded tools must REFUSE the pattern (compileUserRegex): a timing
+    // alone proves nothing, since the engine can run this pattern quickly on
+    // some inputs. Only the worker-sandboxed regex tool may run it.
+    if (slug !== "regex" && !refused) fail(`${slug} ReDoS: the (a+)+$ pattern was run, not refused (compileUserRegex guard missing)`);
     if (ms > 2000) fail(`${slug} ReDoS: ${ms}ms on hostile input (>2s = event-loop DoS)`);
     console.log(`6. ${slug} bounded on (a+)+$ hostile input (${ms}ms) ✓`);
   }
