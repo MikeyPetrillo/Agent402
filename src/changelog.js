@@ -21,7 +21,7 @@ const ENTRIES = [
       "Tools: wallet-audit looks up metadata for a token the wallet holds, not for the wallet address; a wallet holding no tokens gets a 422 on that step.",
       "Tools: report products, the image edit route and the subtitle-pipeline and search-and-cite packs say model-backed in their descriptions.",
       "Router: a seller's 402 must name the URL requested (the same origin, the same path or the route mounted under a path prefix, and the same query); one naming another resource is refused before anything is signed.",
-      "Router: a GET seller is probed at its bare listing URL first; the caller's inputs reach it unpaid only when that probe answers 400 or 422.",
+      "Router: a GET seller is probed at its bare listing URL first; while candidates are compared, the caller's inputs reach one only when that probe answers 400 or 422.",
       "Router: Algorand sellers are paid only at the address their settlement proof names.",
       "Router: when several proven sellers on one chain refuse our payments with no settle between them, routes on that chain are not benched until a payment there settles.",
       "Site: the navigation puts live, status and llms.txt in the menus.",
@@ -30,7 +30,7 @@ const ENTRIES = [
       "Operations: Tempo subscription gas sponsorship has a rolling 24 h ceiling on transactions and fees, with a fifth of each held for renewals; past it a send is refused before broadcast, and /api/gateway-status reads subscriptionFeePayer.ceiling=reached.",
       "Privacy: the shared record that an address paid recently is keyed by a keyed hash of the address, never the address or a plain hash of it, and expires within the hour; /privacy names it.",
       "Privacy: /privacy says a candidate seller may receive a request's inputs unpaid before it is paid, sometimes more than once.",
-      "Privacy: /terms says a payment that lands on chain after an error answer is recorded as owed and repaid, and that a repayment is checked against the published sanctions lists first.",
+      "Privacy: /terms says an x402 payment on an EVM chain, or a Tempo transaction, that lands on chain after an error answer is recorded as owed and repaid, and that a repayment is checked against the published sanctions lists first.",
     ],
   },
   {

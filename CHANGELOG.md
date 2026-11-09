@@ -66,8 +66,9 @@ Router:
 - A seller's 402 must name the URL requested (the same origin, the same path
   or the route mounted under a path prefix, and the same query); one naming
   another resource is refused before anything is signed.
-- A GET seller is probed at its bare listing URL first; the caller's inputs
-  reach it unpaid only when that probe answers 400 or 422.
+- A GET seller is probed at its bare listing URL first; while candidates are
+  compared, the caller's inputs reach one only when that probe answers 400 or
+  422.
 - Algorand sellers are paid only at the address their settlement proof names.
 - When several proven sellers on one chain refuse our payments with no settle
   between them, routes on that chain are not benched until a payment there
@@ -93,8 +94,8 @@ Privacy:
   hour; /privacy names it.
 - /privacy says a candidate seller may receive a request's inputs unpaid
   before it is paid, sometimes more than once.
-- /terms says a payment that lands on chain after an error answer is recorded
-  as owed and repaid, and that a repayment is checked against the published
+- /terms says an x402 payment on an EVM chain, or a Tempo transaction, that
+  lands on chain after an error answer is recorded as owed and repaid, and that a repayment is checked against the published
   sanctions lists first.
 
 ### 2026-11-07 (onchain-sql price, X data tools, Solana token search, metered chat, OCR and fetch errors)

@@ -129,9 +129,12 @@ ok(/payerBalanceBucket/.test(posthog) && /coarse balance bucket/.test(privacy), 
   // "If an x402 payment or a Tempo transaction lands on chain after we answered the call with an error, we record the amount as owed."
   const tempo = readFileSync(new URL("../src/mpp-tempo.js", import.meta.url), "utf8");
   const late = readFileSync(new URL("../src/late-settlements.js", import.meta.url), "utf8");
-  ok(/If an x402 payment or a Tempo transaction lands on chain after we answered the call with an error, we record the amount as owed back to the paying wallet and repay it the same way/.test(terms)
+  ok(/If an x402 payment on an EVM chain, or a Tempo transaction, lands on chain after we answered the call with an error, we record the amount as owed back to the paying wallet and repay it the same way/.test(terms)
     && /TEMPO_LATE_CONFIRM_DELAYS_MS/.test(tempo) && /booked_owed/.test(late),
     "/terms names the late landing booked as owed, which the Tempo late watch and the late-settlement book do");
+  // The book takes EVM networks only (not Tempo, which has its own watch), so the sentence is scoped to them.
+  ok(/if \(!network\.startsWith\("eip155:"\) \|\| network === TEMPO_NETWORK\)/.test(late) && !/If an x402 payment (or|lands)/.test(terms),
+    "/terms scopes the late landing to the networks the book takes (EVM) and Tempo's own watch");
 }
 
 // CSP: no inline script on pages, except the one sandbox route the page names.

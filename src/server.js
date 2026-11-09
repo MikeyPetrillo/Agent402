@@ -3516,9 +3516,13 @@ app.use("/v1/metered", (req, res, next) => {
       meteredQuoteLimiter.check(ip);
       return next();
     }
+    // The raised ceilings are read before a credit is spent, so a quote they
+    // refuse keeps its credit.
+    if (meteredTrustedQuoteLimiter.peek(trustKey).limited) return refuseQuote();
+    if (egressKey && meteredTrustedEgressLimiter.peek(egressKey).limited) return refuseQuote();
     if (!QUOTE_TRUST.takeMeteredCredit(trustKey)) return refuseQuote();
-    if (meteredTrustedQuoteLimiter.check(trustKey).limited) return refuseQuote();
-    if (egressKey && meteredTrustedEgressLimiter.check(egressKey).limited) return refuseQuote();
+    meteredTrustedQuoteLimiter.check(trustKey);
+    if (egressKey) meteredTrustedEgressLimiter.check(egressKey);
     return next();
   }
   if (paid) {

@@ -221,6 +221,11 @@ ok(invoices.length === 1 && invoices[0].amountUsd === 9 && invoices[0].product =
   stripe.subscriptions.retrieve = retrieveBefore;
   await send("evt_s1", "customer.subscription.updated", { id: "sub_skew", customer: "cus_skew", status: "unpaid", metadata: {} }, Math.floor(Date.now() / 1000) - 30);
   ok(lb.get("sub_skew")?.status === "unpaid", "a status update stamped 30 s behind our clock still applies after a live read (the read is stamped LIVE_READ_SKEW_S early)");
+  // The thanks page's live read (recordFromSession) is stamped the same way.
+  sessions.cs_skew2 = { id: "cs_skew2", mode: "subscription", payment_status: "paid", status: "complete", subscription: "sub_skew2", customer: "cus_skew2", customer_details: { email: "s2@x.com" }, metadata: { product: "domain-monitor", target: "skew2.com" } };
+  ok((await lb.recordFromSession("cs_skew2")).status === "active", "setup: the thanks page provisions from a live read");
+  await send("evt_s2", "customer.subscription.updated", { id: "sub_skew2", customer: "cus_skew2", status: "unpaid", metadata: {} }, Math.floor(Date.now() / 1000) - 30);
+  ok(lb.get("sub_skew2")?.status === "unpaid", "a status update stamped 30 s behind our clock still applies after the thanks page's live read");
 
   // A dispute on an earlier month's payment, after a later invoice was paid,
   // still finds the subscription (by payment, or by charge).

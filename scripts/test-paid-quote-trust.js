@@ -258,8 +258,8 @@ function fakeStore() {
 {
   const { readFileSync } = await import("node:fs");
   const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-  ok(/if \(!QUOTE_TRUST\.takeMeteredCredit\(trustKey\)\) return refuseQuote\(\);\n\s*if \(meteredTrustedQuoteLimiter\.check\(trustKey\)\.limited\) return refuseQuote\(\);\n\s*if \(egressKey && meteredTrustedEgressLimiter\.check\(egressKey\)\.limited\) return refuseQuote\(\);\n\s*return next\(\);/.test(server),
-    "past the plain figure a metered quote needs a credit, then the client's raised ceiling, then the whole egress address's");
+  ok(/if \(meteredTrustedQuoteLimiter\.peek\(trustKey\)\.limited\) return refuseQuote\(\);\n\s*if \(egressKey && meteredTrustedEgressLimiter\.peek\(egressKey\)\.limited\) return refuseQuote\(\);\n\s*if \(!QUOTE_TRUST\.takeMeteredCredit\(trustKey\)\) return refuseQuote\(\);\n\s*meteredTrustedQuoteLimiter\.check\(trustKey\);\n\s*if \(egressKey\) meteredTrustedEgressLimiter\.check\(egressKey\);\n\s*return next\(\);/.test(server),
+    "past the plain figure a metered quote reads the client's raised ceiling and the whole egress address's, then needs a credit, then counts against both (a refused quote keeps its credit)");
   ok(/const meteredTrustedEgressLimiter = createRateLimiter\("metered-quote-paid-egress", \{ perMin: PAID_CLIENT_METERED_QUOTES_PER_MIN, perHour: PAID_CLIENT_METERED_QUOTES_PER_HOUR \}\);/.test(server) && /const egressKey = workerEgressAddressKeyOf\(req\);/.test(server),
     "the egress ceiling is keyed on the shared address alone, at the raised figures");
 }
