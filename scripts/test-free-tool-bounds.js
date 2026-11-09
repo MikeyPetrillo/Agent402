@@ -140,7 +140,7 @@ function rng(seed) {
   ok(JSON.stringify(tool.handler({ spec: small })) === JSON.stringify(oldAnswer(small)), "resolve-refs: eight doubling levels answer as the full walk did");
   for (const depth of [18, 24, 400]) {
     const r = await bestOf(() => tool.handler({ spec: doubling(depth) }));
-    ok(r.err?.statusCode === 413 && /4 MB/.test(r.err.message), `resolve-refs: ${depth} doubling levels are refused with a 413 naming the cap (${r.err?.statusCode} ${r.err?.message})`);
+    ok(r.err?.statusCode === 413 && /4 MB/.test(r.err.message) && /in parts/.test(r.err.message), `resolve-refs: ${depth} doubling levels are refused with a 413 naming the cap (${r.err?.statusCode} ${r.err?.message})`);
     ok(r.ms < BOUND_MS, `resolve-refs: ${depth} doubling levels are refused in ${r.ms.toFixed(1)}ms`);
   }
   // The same fan-out closed into a cycle: nothing is reusable, the budget still stops it.
@@ -370,15 +370,15 @@ function rng(seed) {
   }
   ok(same === RUNS, "json-to-csv: " + same + "/" + RUNS + " random tables convert as before");
   // A wide sparse table under the cap is served; the widest dense table a 100 KB body can carry is far under it.
-  const wide = Array.from({ length: 500 }, (_, i) => ({ ["c" + i]: i }));
-  ok(tool.handler({ json: wide }).columns === 500 && 500 * 500 <= JSON_TO_CSV_MAX_CELLS, "json-to-csv: 500 rows with 500 distinct keys are served");
+  const wide = Array.from({ length: 700 }, (_, i) => ({ ["c" + i]: i }));
+  ok(tool.handler({ json: wide }).columns === 700 && 700 * 700 <= JSON_TO_CSV_MAX_CELLS, "json-to-csv: 700 rows with 700 distinct keys are served");
   for (const n of [1000, 7000, 10_000]) {
     const r = await bestOf(() => tool.handler({ json: Array.from({ length: n }, (_, i) => ({ [i]: 1 })) }));
-    ok(r.err?.statusCode === 400 && /250000 cells/.test(r.err.message), "json-to-csv: " + n + " rows with " + n + " distinct keys are refused naming the cap (" + r.err?.statusCode + " " + r.err?.message + ")");
+    ok(r.err?.statusCode === 400 && /500000 cells/.test(r.err.message) && /fewer rows per call/.test(r.err.message), "json-to-csv: " + n + " rows with " + n + " distinct keys are refused naming the cap (" + r.err?.statusCode + " " + r.err?.message + ")");
     ok(r.ms < BOUND_MS, "json-to-csv: refused in " + r.ms.toFixed(1) + "ms");
   }
-  const atCap = await bestOf(() => tool.handler({ json: Array.from({ length: 500 }, (_, i) => ({ ["c" + i]: i })) }));
-  ok(atCap.ms < BOUND_MS && JSON.stringify(atCap.out).length < 1_000_000, "json-to-csv: a table at the cap converts in " + atCap.ms.toFixed(1) + "ms to " + JSON.stringify(atCap.out).length + " bytes");
+  const atCap = await bestOf(() => tool.handler({ json: Array.from({ length: 707 }, (_, i) => ({ ["c" + i]: i })) }));
+  ok(atCap.ms < BOUND_MS / 2 && JSON.stringify(atCap.out).length < 1_000_000, "json-to-csv: a table at the cap converts in " + atCap.ms.toFixed(1) + "ms to " + JSON.stringify(atCap.out).length + " bytes");
 }
 
 // ---------------------------------------------------------------------------

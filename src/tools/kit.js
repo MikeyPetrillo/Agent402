@@ -529,7 +529,8 @@ const encodingTools = [
 // Data conversion
 // ---------------------------------------------------------------------------
 
-export const JSON_TO_CSV_MAX_CELLS = 250_000;
+// The largest sheet whose conversion stays near 100 ms on the serving thread.
+export const JSON_TO_CSV_MAX_CELLS = 500_000;
 
 function flatten(obj, prefix = "", out = {}) {
   for (const [k, v] of Object.entries(obj)) {
@@ -677,7 +678,7 @@ const dataTools = [
     slug: "json-to-csv",
     category: "conversion",
     price: "$0.002",
-    description: "Convert a JSON array of objects to CSV. Nested objects are flattened to dot-path columns. Up to 10,000 rows and 250,000 cells (rows times columns).",
+    description: "Convert a JSON array of objects to CSV. Nested objects are flattened to dot-path columns. Up to 10,000 rows and 500,000 cells (rows times columns); split a larger table into several calls.",
     tags: ["json", "csv", "convert", "spreadsheet"],
     discovery: {
       bodyType: "json",
@@ -700,7 +701,7 @@ const dataTools = [
       const columns = [...new Set(flat.flatMap((r) => Object.keys(r)))];
       // Every row is written under every column, so rows that share no keys
       // grow the sheet with the square of the input.
-      if (data.length * columns.length > JSON_TO_CSV_MAX_CELLS) throw bad(`Max ${JSON_TO_CSV_MAX_CELLS} cells (rows times columns); this input makes ${data.length} rows of ${columns.length} columns`);
+      if (data.length * columns.length > JSON_TO_CSV_MAX_CELLS) throw bad(`Max ${JSON_TO_CSV_MAX_CELLS} cells (rows times columns); this input makes ${data.length} rows of ${columns.length} columns. Send fewer rows per call, or convert rows that share columns together`);
       const lines = [columns.map(csvEscape).join(delimiter)];
       for (const r of flat) lines.push(columns.map((c) => csvEscape(r[c])).join(delimiter));
       return { csv: lines.join("\n") + "\n", rows: data.length, columns: columns.length };

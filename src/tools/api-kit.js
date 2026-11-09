@@ -1036,7 +1036,7 @@ export const API_TOOLS = [
   {
     route: "POST /api/openapi-resolve-refs", name: "OpenAPI $ref resolver", slug: "openapi-resolve-refs", category: "conversion", price: "$0.001",
     description:
-      "Inline every local `$ref` in an OpenAPI 3.x or Swagger 2.x document so downstream tools see a self-contained spec. Resolves `#/components/...` (OpenAPI) and `#/definitions/...` (Swagger) JSON-pointer refs anywhere in the document, including inside components themselves. Per-branch cycle detection: if A→B→A, the second A is left as a `$ref` and recorded under `circular`. External refs (http://, file://, ./other.yaml) are never fetched - they're reported under `external` and left as-is. Sibling keys of `$ref` (e.g. a `description` next to a `$ref`) are dropped to match JSON Schema Draft 7 / OpenAPI 3.0 semantics. Returns the dereffed spec plus `resolved` (count inlined) and arrays of any refs that couldn't be inlined. A resolved document over 4 MB is refused with a 413. Pure CPU - deterministic, no network.",
+      "Inline every local `$ref` in an OpenAPI 3.x or Swagger 2.x document so downstream tools see a self-contained spec. Resolves `#/components/...` (OpenAPI) and `#/definitions/...` (Swagger) JSON-pointer refs anywhere in the document, including inside components themselves. Per-branch cycle detection: if A→B→A, the second A is left as a `$ref` and recorded under `circular`. External refs (http://, file://, ./other.yaml) are never fetched - they're reported under `external` and left as-is. Sibling keys of `$ref` (e.g. a `description` next to a `$ref`) are dropped to match JSON Schema Draft 7 / OpenAPI 3.0 semantics. Returns the dereffed spec plus `resolved` (count inlined) and arrays of any refs that couldn't be inlined. A resolved document over 4 MB is refused with a 413; send fewer paths or schemas per call to resolve a larger spec in parts. Pure CPU - deterministic, no network.",
     tags: ["openapi", "swagger", "ref", "dereference", "resolve", "api"],
     discovery: {
       bodyType: "json",
@@ -1692,7 +1692,7 @@ function jsonPointerLookup(root, ref) {
 export const RESOLVE_REFS_MAX_BYTES = 4_000_000;
 
 function resolveRefsTooLarge() {
-  const err = new Error(`The resolved document is over the ${RESOLVE_REFS_MAX_BYTES / 1_000_000} MB cap; resolve a smaller part of the spec`);
+  const err = new Error(`The resolved document is over the ${RESOLVE_REFS_MAX_BYTES / 1_000_000} MB cap; send fewer paths or schemas per call and resolve the spec in parts`);
   err.statusCode = 413;
   return err;
 }
