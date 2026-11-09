@@ -11,7 +11,7 @@ import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import { Transaction } from "viem/tempo";
 import {
   sponsorCeilingLimits, sponsoredFeeBound, admitSponsoredSend, sponsorCeilingWord, _resetSponsorCeiling,
-  SPONSOR_DAILY_MAX_TX_DEFAULT, SPONSOR_DAILY_MAX_USD_DEFAULT,
+  SPONSOR_DAILY_MAX_TX_DEFAULT, SPONSOR_DAILY_MAX_USD_DEFAULT, RENEWAL_RESERVE_FRACTION,
 } from "../src/tempo-sponsor-ceiling.js";
 
 let pass = 0;
@@ -69,7 +69,7 @@ process.env.MPP_SECRET_KEY = "test-mpp-secret";
 process.env.TEMPO_RECIPIENT_ADDRESS = "0x000000000000000000000000000000000000dEaD";
 process.env.TEMPO_CURRENCY = "usdc";
 process.env.TEMPO_SUBSCRIPTION_FEE_PAYER_KEY = "0x" + "11".repeat(32);
-process.env.MPP_SUB_SPONSOR_DAILY_MAX_TX = "2";
+process.env.MPP_SUB_SPONSOR_DAILY_MAX_TX = "5";
 process.env.MPP_SUB_SPONSOR_DAILY_MAX_USD = "1";
 
 const { createMppSubscriptions, isTransientChargeError, isSendPhaseAmbiguity, subscriptionFeePayerStatus } = await import("../src/mpp-subscriptions.js");
@@ -86,50 +86,64 @@ try {
   await renewal.request({ method: "eth_sendRawTransactionSync", params: [a] });
   await renewal.request({ method: "eth_sendRawTransactionSync", params: [a] });
   ok(received.length === 2, "a retried send of the same transaction is one entry and goes through");
-  await activation.request({ method: "eth_sendRawTransaction", params: [await signed()] });
-  ok(received.length === 3, "the activation client's send is admitted under the ceiling");
+  for (let i = 0; i < 3; i++) await activation.request({ method: "eth_sendRawTransaction", params: [await signed()] });
+  ok(received.length === 5, "the activation client's sends are admitted under the activation share");
+  ok(RENEWAL_RESERVE_FRACTION === 0.2, "a fifth of each ceiling is held for renewals");
+  let errA = null;
+  try { await activation.request({ method: "eth_sendRawTransactionSync", params: [await signed()] }); } catch (e) { errA = e; }
+  ok(errA?.sponsorCeiling === true || /activation share/.test(String(errA?.details || errA?.message)), "an activation past its share (4 of 5) is refused");
+  ok(received.length === 5 && logs.some((l) => /activation send refused: the activation share/.test(l)), "it never reaches the RPC and the log says the rest is held for renewals");
+  ok(await sponsorCeilingWord() === "ok", "with only the activation share spent the word still reads ok");
+  await renewal.request({ method: "eth_sendRawTransactionSync", params: [await signed()] });
+  ok(received.length === 6, "a renewal still goes through on the reserved share");
   ok(await sponsorCeilingWord() === "reached", "the word reads reached at the count ceiling");
 
   let err = null;
   try { await renewal.request({ method: "eth_sendRawTransactionSync", params: [await signed()] }); } catch (e) { err = e; }
   ok(err, "a renewal send past the count ceiling is refused");
-  ok(received.length === 3, "the refused send never reached the RPC");
+  ok(received.length === 6, "the refused send never reached the RPC");
   ok(/MPP_SUB_SPONSOR_DAILY_MAX_TX/.test(String(err?.details || err?.message)), "the refusal names the knob that bounds it");
   ok(logs.some((l) => /sponsor ceiling \(MPP_SUB_SPONSOR_DAILY_MAX_TX\)/.test(l)), "a log line names the cause");
   ok(!isTransientChargeError(err) && !isSendPhaseAmbiguity(err), "the refusal is a definite pre-send failure, never a send-phase ambiguity");
 
   let err2 = null;
   try { await activation.request({ method: "eth_sendRawTransactionSync", params: [await signed()] }); } catch (e) { err2 = e; }
-  ok(err2 && received.length === 3, "an activation send past the ceiling is refused before the RPC too");
+  ok(err2 && received.length === 6, "an activation send past the ceiling is refused before the RPC too");
   const st = await subscriptionFeePayerStatus();
   ok(st.ceiling === "reached", "subscriptionFeePayer on /api/gateway-status carries the ceiling word");
-  received.length = 3; // the status read's eth_call is not a send
+  received.length = 6; // the status read's eth_call is not a send
 
   await activation.request({ method: "eth_sendRawTransactionSync", params: [await signed({ sponsored: false })] });
-  ok(received.length === 4, "an unsponsored transaction is not ours to bound");
+  ok(received.length === 7, "an unsponsored transaction is not ours to bound");
   await renewal.request({ method: "eth_chainId", params: [] });
-  ok(received.length === 5, "reads pass straight through");
+  ok(received.length === 8, "reads pass straight through");
 
   // The fee ceiling, on its own: $1 a day, each send bounded at $0.60.
   await _resetSponsorCeiling();
   process.env.MPP_SUB_SPONSOR_DAILY_MAX_TX = "100";
   const dear = { gas: 600_000n, maxFeePerGas: 1_000_000_000_000n }; // 6e17 atto = $0.60
   await renewal.request({ method: "eth_sendRawTransactionSync", params: [await signed(dear)] });
-  ok(received.length === 6, "a send inside the fee ceiling goes through");
+  ok(received.length === 9, "a send inside the fee ceiling goes through");
   let err3 = null;
   try { await renewal.request({ method: "eth_sendRawTransactionSync", params: [await signed(dear)] }); } catch (e) { err3 = e; }
-  ok(err3 && received.length === 6 && /MPP_SUB_SPONSOR_DAILY_MAX_USD/.test(String(err3?.details || err3?.message)), "a send that would pass the 24 h fee ceiling is refused by name");
+  ok(err3 && received.length === 9 && /MPP_SUB_SPONSOR_DAILY_MAX_USD/.test(String(err3?.details || err3?.message)), "a send that would pass the 24 h fee ceiling is refused by name");
 
   ok(logs.filter((l) => /MPP_SUB_SPONSOR_DAILY_MAX_USD/.test(l)).length === 1, "one refusal is one attempt: the refused send is not retried by the transport");
   // The refused send left nothing behind: a cheaper one that fits still goes.
   await renewal.request({ method: "eth_sendRawTransactionSync", params: [await signed({ gas: 300_000n, maxFeePerGas: 1_000_000_000_000n })] }); // $0.30
-  ok(received.length === 7, "a refused send is taken back out of the window, so a send that fits is admitted");
+  ok(received.length === 10, "a refused send is taken back out of the window, so a send that fits is admitted");
+  // The fee share on its own: $0.90 spent of $1, an activation bounded at $0.05 would pass the $0.80 share.
+  let errFee = null;
+  try { await activation.request({ method: "eth_sendRawTransactionSync", params: [await signed({ gas: 50_000n, maxFeePerGas: 1_000_000_000_000n })] }); } catch (e) { errFee = e; }
+  ok(errFee && received.length === 10 && /MPP_SUB_SPONSOR_DAILY_MAX_USD/.test(String(errFee?.details || errFee?.message)), "an activation past the fee share is refused while a renewal of the same size would fit");
+  await renewal.request({ method: "eth_sendRawTransactionSync", params: [await signed({ gas: 50_000n, maxFeePerGas: 1_000_000_000_000n })] });
+  ok(received.length === 11, "and the renewal of that size goes through");
 
   // The window rolls over 24 h: inside it the budget stays spent, a day later it is open.
   let inside = null;
-  try { await admitSponsoredSend(await signed(dear), { now: Date.now() + 23 * 3_600_000, log: () => {} }); } catch (e) { inside = e; }
+  try { await admitSponsoredSend(await signed(dear), { now: Date.now() + 23 * 3_600_000, log: () => {}, kind: "renewal" }); } catch (e) { inside = e; }
   ok(inside?.sponsorCeiling === true, "entries younger than 24 h still count");
-  const r = await admitSponsoredSend(await signed(dear), { now: Date.now() + 24 * 3_600_000 + 60_000, log: () => {} });
+  const r = await admitSponsoredSend(await signed(dear), { now: Date.now() + 24 * 3_600_000 + 60_000, log: () => {}, kind: "renewal" });
   ok(r.admitted === true, "the window is rolling: entries older than 24 h no longer count");
 } finally {
   rpc.close();

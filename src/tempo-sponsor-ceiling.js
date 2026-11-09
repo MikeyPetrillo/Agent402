@@ -24,6 +24,11 @@
 // ceiling. A transaction is counted once it is handed to the send, and stays
 // counted whatever the RPC answers (a send that timed out may have landed), so
 // the window can only over-count, the safe direction.
+//
+// Renewal headroom: an activation is admitted only while the window is under
+// (1 - RENEWAL_RESERVE_FRACTION) of each ceiling, so new sign-ups can never
+// spend the share that keeps existing subscribers' renewals going. A renewal
+// reads against the whole ceiling.
 import { keccak256 } from "viem";
 import { Transaction } from "viem/tempo";
 import { shared, sharedLimitsEnabled, createMemoryLimits, noteSharedLimitsDegraded } from "./shared-limits.js";
@@ -31,6 +36,7 @@ import { shared, sharedLimitsEnabled, createMemoryLimits, noteSharedLimitsDegrad
 export const SPONSOR_WINDOW_MS = 24 * 3_600_000;
 export const SPONSOR_DAILY_MAX_TX_DEFAULT = 100;
 export const SPONSOR_DAILY_MAX_USD_DEFAULT = 2;
+export const RENEWAL_RESERVE_FRACTION = 0.2;
 const NAME = "tempo-sub-sponsor";
 const KEY = "all";
 const CONTROL = "tempo-sub-sponsor";
@@ -100,10 +106,14 @@ async function addToWindow(member, weight, now) {
  * A transaction with no fee-payer signature is not ours to bound and passes.
  * The same transaction sent twice (a retry) is one entry.
  */
-export async function admitSponsoredSend(serialized, { now = Date.now(), env = process.env, log = console.warn } = {}) {
+export async function admitSponsoredSend(serialized, { now = Date.now(), env = process.env, log = console.warn, kind = "activation" } = {}) {
   const bound = sponsoredFeeBound(serialized);
   if (!bound || !bound.sponsored) return { admitted: false, sponsored: false };
-  const { maxTx, maxUsd } = sponsorCeilingLimits(env);
+  const full = sponsorCeilingLimits(env);
+  // Anything not named a renewal reads against the activation share.
+  const share = kind === "renewal" ? 1 : 1 - RENEWAL_RESERVE_FRACTION;
+  const maxTx = kind === "renewal" ? full.maxTx : Math.floor(full.maxTx * share);
+  const maxUsd = full.maxUsd * share;
   const { r, store } = await addToWindow(bound.hash, bound.feeMicroUsd, now);
   const count = Number(r?.count) || 0;
   const sumMicro = Number(r?.sum) || 0;
@@ -114,8 +124,9 @@ export async function admitSponsoredSend(serialized, { now = Date.now(), env = p
     await store.windowRemove(NAME, KEY, entry);
     if (store !== local) await local.windowRemove(NAME, KEY, entry);
     const cause = overCount ? "MPP_SUB_SPONSOR_DAILY_MAX_TX" : "MPP_SUB_SPONSOR_DAILY_MAX_USD";
-    log(`[mpp-subs] sponsored send refused: the 24 h sponsor ceiling (${cause}) is reached; nothing broadcast`);
-    throw new SponsorCeilingError(`subscription gas sponsorship refused: the 24 h sponsor ceiling (${cause}) is reached`);
+    const which = kind === "renewal" ? "the 24 h sponsor ceiling" : "the activation share of the 24 h sponsor ceiling (the rest is held for renewals)";
+    log(`[mpp-subs] sponsored ${kind === "renewal" ? "renewal" : "activation"} send refused: ${which} (${cause}) is reached; nothing broadcast`);
+    throw new SponsorCeilingError(`subscription gas sponsorship refused: ${which} (${cause}) is reached`);
   }
   return { admitted: true, sponsored: true, count, feeMicroUsd: bound.feeMicroUsd };
 }

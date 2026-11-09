@@ -970,7 +970,7 @@ export function createMppSubscriptions({
     // request timeout, and a sync send that waits for inclusion outlived it on
     // a slow day (canary run 33659899394). Its chain stamps the activation
     // window, never viem's default (see ACTIVATION_VALID_FOR_S).
-    _client = createClient({ chain: withRenewalValidity(tempoChain, ACTIVATION_VALID_FOR_S), transport: withSponsorCeiling(http(process.env.TEMPO_RPC_URL || "https://rpc.tempo.xyz", { timeout: TEMPO_RPC_TIMEOUT_MS }), { log }) });
+    _client = createClient({ chain: withRenewalValidity(tempoChain, ACTIVATION_VALID_FOR_S), transport: withSponsorCeiling(http(process.env.TEMPO_RPC_URL || "https://rpc.tempo.xyz", { timeout: TEMPO_RPC_TIMEOUT_MS }), { log, kind: "activation" }) });
     return _client;
   }
   const clientOverride = () => ({ getClient: () => tempoClient() });
@@ -981,7 +981,7 @@ export function createMppSubscriptions({
     if (_renewalClient) return _renewalClient;
     const { createClient, http } = await import("viem");
     const { tempo: tempoChain } = await import("viem/tempo/chains");
-    _renewalClient = createClient({ chain: withRenewalValidity(tempoChain, renewalValidForS), transport: withSponsorCeiling(http(process.env.TEMPO_RPC_URL || "https://rpc.tempo.xyz", { timeout: TEMPO_RPC_TIMEOUT_MS }), { log }) });
+    _renewalClient = createClient({ chain: withRenewalValidity(tempoChain, renewalValidForS), transport: withSponsorCeiling(http(process.env.TEMPO_RPC_URL || "https://rpc.tempo.xyz", { timeout: TEMPO_RPC_TIMEOUT_MS }), { log, kind: "renewal" }) });
     return _renewalClient;
   }
 

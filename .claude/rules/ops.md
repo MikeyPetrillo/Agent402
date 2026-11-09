@@ -88,7 +88,9 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   this process's own window decides when the store does not answer) counted by transactions and
   summed by fee bound (gas limit x maxFeePerGas), or refused before it leaves the process.
   `MPP_SUB_SPONSOR_DAILY_MAX_TX` (default 100) and `MPP_SUB_SPONSOR_DAILY_MAX_USD` (default 2); a
-  malformed or non-positive value keeps the default. A refusal logs the knob that bounds it, is a
+  malformed or non-positive value keeps the default. Activations read against 80% of each ceiling
+  (`RENEWAL_RESERVE_FRACTION`), so the rest is held for renewals; a send not named a renewal reads
+  as an activation. A refusal logs the knob that bounds it, is a
   definite pre-send failure (a renewal goes past_due as with any failed charge, an activation is a
   402) and reads `ceiling=reached` on `subscriptionFeePayer` in `/api/gateway-status`; a send stays
   counted whatever the RPC answers, so the window only over-counts.
