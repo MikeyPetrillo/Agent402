@@ -179,6 +179,14 @@ try {
   const nets = Object.entries(x.byNetwork || {});
   ok(nets.length >= 1 && nets.reduce((a, [, v]) => a + v.calls, 0) === x.calls && nets.every(([n, v]) => n && v.settleMs && v.totalMs), `the x402 summary splits its calls by network, each with its own settle and total figures (${JSON.stringify(Object.fromEntries(nets.map(([n, v]) => [n, v.calls])))})`);
   ok(near(x.verifyMs.p50, VERIFY_MS) && near(x.settleMs.p50, SETTLE_MS) && x.handlerMs.p95 >= DATA_MS, `the x402 summary carries p50/p95 per phase (${JSON.stringify({ v: x.verifyMs, h: x.handlerMs, s: x.settleMs })})`);
+  // e. (2026-11-09) the departure is kept apart from the rolling window, with
+  // how long the buyer waited and which phase it left in: the figure that
+  // names a buyer client's timeout.
+  const hg = Object.values(p.paidPhases?.hangups || {});
+  const dep = hg.flatMap((h) => h.recent || []).find((r) => r.slug === "stock-quote");
+  ok(hg.length >= 1 && hg.reduce((a2, h) => a2 + h.count, 0) === 1, `e. one buyer departure is listed under its network (${JSON.stringify(p.paidPhases?.hangups ? Object.fromEntries(Object.entries(p.paidPhases.hangups).map(([k, v]) => [k, v.count])) : null)})`);
+  ok(dep && dep.during === "handler" && dep.waitedMs >= 150 && dep.waitedMs < 1500, `e. it left during the handler, after the time the buyer actually waited (${JSON.stringify(dep)})`);
+  ok(hg[0]?.minWaitMs === dep?.waitedMs && hg[0]?.byPhase?.handler === 1, "e. the network's summary carries the shortest wait and a count by phase");
   ok(p.stockQuoteWarmer && p.stockQuoteWarmer.running === true && typeof p.stockQuoteWarmer.background.calls === "number", "the warmer's counts ride the same operator surface");
   ok(!JSON.stringify(p.paidPhases).includes(PAYER.slice(2)) && !JSON.stringify(p.paidPhases).includes("MSFT"), "d. the summary carries no payer and no input");
   const anon = await perf(false);

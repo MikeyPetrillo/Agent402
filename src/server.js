@@ -282,7 +282,10 @@ function recordHangupDebt(req, res) {
   const created = whenVerdict(recordRefundOwed({ slug: def.slug, ...row, httpStatus: 499, synthetic, hangupReason }), (made) => {
     if (!made && req.tempoSettled && tempoPushHashOf(req) === row.tx) void tempoPushDebts?.hungUp(row.tx, hangupReason);
   });
-  console.warn(`[hangup] CHARGED-BUT-NOT-SERVED: client disconnected before the settled response was delivered (${req.method} ${req.path} rail=${row.wire} tx=${row.tx || "?"}) - ${created ? "recorded as owed in the refund ledger" : "already on the books"}${denied ? `; not forgiven: ${denied}` : ""}`);
+  // How long the buyer waited and which phase it left in: the figure that
+  // names the client's own timeout (src/paid-phase-timing.js hangupWaitOf).
+  const wait = (() => { try { return hangupWaitOf(req); } catch { return null; } })();
+  console.warn(`[hangup] CHARGED-BUT-NOT-SERVED: client disconnected before the settled response was delivered (${req.method} ${req.path} rail=${row.wire} tx=${row.tx || "?"}${wait ? ` net=${wait.network || "-"} waited=${wait.waitedMs ?? "-"}ms left-during=${wait.during}` : ""}) - ${created ? "recorded as owed in the refund ledger" : "already on the books"}${denied ? `; not forgiven: ${denied}` : ""}`);
   return row;
 }
 // Every close-before-the-first-byte on a paid request ends here (the hang-up
@@ -342,7 +345,7 @@ import { createSearchData } from "./search-data.js";
 import { operatorSearchPage } from "./operator-search.js";
 import { datasetStatus, datasetRecorded, runDatasetSnapshot, startDatasetScheduler } from "./dataset-snapshot.js";
 import { startQuoteWarmer, quoteWarmerStatus } from "./tools/databento.js";
-import { phaseArrivalMiddleware, markPaidHandlerStart, paidPhaseSummary } from "./paid-phase-timing.js";
+import { phaseArrivalMiddleware, markPaidHandlerStart, paidPhaseSummary, hangupWaitOf } from "./paid-phase-timing.js";
 import { slowPaidMsFromEnv, slowPaidVerdict, recentSlowPaidCalls } from "./slow-paid-calls.js";
 import { assertAvmValidityCovers } from "./avm-validity.js";
 import { assertEvmValidityCovers, EVM_RUN_SECONDS, runTimeNote } from "./evm-validity.js";
