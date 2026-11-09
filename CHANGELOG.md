@@ -6,6 +6,43 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-09 (tool and payment bounds)
+Tools:
+- Image-crop and image-dominant-color decode in the image worker pool, like
+  image-resize, image-convert and image-thumbnail, with a 15 s deadline; a
+  busy pool answers 503 and nothing is charged.
+- The image tools read each format's header the way its decoder does (a GIF's
+  first frame, a PNG's chunk list, a JPEG's frame headers, every page of a
+  TIFF) and answer 400, naming what was wrong, when a file's header and
+  contents disagree. An interlaced PNG is inflated under a bound for its
+  declared size. JPEG-compressed and CCITT TIFFs, TIFFs of more than 32 pages
+  and TIFFs whose pages together pass the source-pixel cap are not decoded.
+- Business-days counts by arithmetic, so a range of any length answers at
+  once.
+- Markdown-to-html renders documents over 2,000 characters in the HTML worker
+  pool; a render that runs past 2 s answers 400.
+- Json-to-csv writes up to 500,000 cells and openapi-resolve-refs up to a 4 MB
+  resolved document; past either, the answer says the size and how to split
+  the input.
+- A field a pure-CPU tool cannot read as text or a number answers 400 with the
+  field named.
+Payments:
+- A payment that settles a signed transaction (Solana, Algorand, Stellar) or a
+  Permit2 authorization is identified by that signed transaction or permit
+  alone, for retries, payer attribution and payer screening; fields beside it
+  in the header are not read.
+Router:
+- Seller-written names and descriptions are cleaned of markdown links and
+  images in a single pass, in time linear in their length.
+- Route-and-execute names no paying chain for a payment header that names two
+  different networks, and answers its ordinary refusal.
+- A registry-only listing larger than the per-seller tool cap is cut to the
+  cap before the crawl's passes run; stored tools and reported totals are
+  unchanged.
+Site:
+- Pinned install commands such as agent402-mcp@0.13.31 arrive intact in page
+  HTML for readers that run no script.
+
 ### 2026-11-08 (buying at volume)
 Docs:
 - A buying-at-volume guide (/guides/buying-at-volume, wiki page
