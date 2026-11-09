@@ -875,6 +875,14 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
       "`/api/gateway-status.exaAllowance` reports **low**: cumulative spend on that upstream has passed the configured share of its funded total. Top up in the upstream's console and raise `EXA_CREDITS_USD` on Railway to the new funded total. Note the counter is in memory and resets on deploy, so real remaining credit is at or below what is reported.",
   },
   {
+    title: "X data daily spend OVER its ceiling",
+    // over: past the alarm ceiling and still serving. capped: the hard
+    // ceiling refuses. off is the owner's switch and does not page.
+    verdict: ({ gateway: b }) => wordVerdict(b.xDataSpend?.status, ["over", "capped"], ["ok", "off"]),
+    body: () =>
+      "`/api/gateway-status.xDataSpend` reports **over** or **capped**: the day's booked spend on the X data tools passed `X_DATA_DAILY_MAX_USD`. On **over** every call is still served (each one is paid for by its buyer); on **capped** it reached `X_DATA_DAILY_HARD_MAX_USD` and the tools answer 503 (uncharged) until 00:00 UTC. Read the day's X calls on the operator view, check the prepaid balance in the upstream's console, then raise the ceilings on Railway or leave them. Closes when the word reads ok (the next UTC day) or off.",
+  },
+  {
     title: "State database DEGRADED (Postgres)",
     verdict: ({ gateway: b }) => wordVerdict(b.stateDb?.status, ["degraded"], ["on"]),
     body: () =>

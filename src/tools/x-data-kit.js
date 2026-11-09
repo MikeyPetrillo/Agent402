@@ -105,10 +105,18 @@ function takeBool(raw, field) {
 // --- upstream --------------------------------------------------------------
 // ---- daily upstream spend cap ----------------------------------------------
 // X's pay-per-use plan draws down a PREPAID balance and that same balance
-// pays for our own posts, so buyers must not be able to drain it. Every read
-// is priced BEFORE the call at X's card, refused 503 (uncharged)
-// once the UTC day's booked spend would pass X_DATA_DAILY_MAX_USD, and booked
-// AFTER the call at what X actually returned (it bills per item returned).
+// pays for our own posts. Every read is priced BEFORE the call at X's card
+// and booked AFTER it at what X actually returned (it bills per item
+// returned). Two ceilings on the UTC day's booked spend:
+//   X_DATA_DAILY_MAX_USD (default 1): the alarm. Past it every call is still
+//     served, since each one is paid for by its buyer; `xDataSpend` on
+//     /api/gateway-status reads `over`, which pages. 0 is the switch: it
+//     refuses every call (the word reads `off`).
+//   X_DATA_DAILY_HARD_MAX_USD (default 5 times the alarm ceiling; a blank,
+//     malformed or non-positive value reads as the default, and a value under
+//     the alarm ceiling reads as the alarm ceiling): the stop for a runaway.
+//     A read that would take the day past it is refused 503 (uncharged) and
+//     the word reads `capped`, which pages too.
 // In memory: a restart resets the day, like the other spend guards; the
 // prepaid balance itself is the outer bound.
 // X's card (per post read, per user read) is private: src/upstream-costs.js,
@@ -120,14 +128,16 @@ function xRate(k) {
 }
 // 0 refuses every call; blank or malformed reads as the default, never as off.
 const X_DATA_DAILY_MAX_USD = () => { const raw = String(process.env.X_DATA_DAILY_MAX_USD ?? "").trim(); const n = raw === "" ? NaN : Number(raw); return Number.isFinite(n) && n >= 0 ? n : 1; };
-const xSpend = { day: "", micro: 0, refused: 0 };
+const X_DATA_HARD_MULTIPLIER = 5;
+const X_DATA_DAILY_HARD_MAX_USD = (soft = X_DATA_DAILY_MAX_USD()) => { const raw = String(process.env.X_DATA_DAILY_HARD_MAX_USD ?? "").trim(); const n = raw === "" ? NaN : Number(raw); return Number.isFinite(n) && n > 0 ? Math.max(n, soft) : soft * X_DATA_HARD_MULTIPLIER; };
+const xSpend = { day: "", micro: 0, refused: 0, overLogged: "" };
 // Shared across replicas (src/shared-limits.js): the day's spend is also a
 // shared counter per UTC day, reserved before the call and corrected after,
-// and a reserve that takes the shared total past the cap is given back and
-// refused. The local counter stays the floor when the store does not answer.
+// and a reserve that takes the shared total past the hard ceiling is given
+// back and refused. The local counter stays the floor when the store does not answer.
 const xShared = createSharedDailySpend("xdata-day", "x-data");
 const utcDay = (now = Date.now()) => new Date(now).toISOString().slice(0, 10);
-const xSpendToday = (now = Date.now()) => { const d = utcDay(now); if (xSpend.day !== d) { xSpend.day = d; xSpend.micro = 0; xSpend.refused = 0; } return xSpend.micro / 1e6; };
+const xSpendToday = (now = Date.now()) => { const d = utcDay(now); if (xSpend.day !== d) { xSpend.day = d; xSpend.micro = 0; xSpend.refused = 0; xSpend.overLogged = ""; } return xSpend.micro / 1e6; };
 // Objects returned through `expansions` are billed too (X notice,
 // 2026-11-05): each one under `includes` is metered at the card rate of its
 // kind, a user read for `includes.users`, a post read for `includes.tweets`.
@@ -205,9 +215,14 @@ export function xToolWorstCases(slug) {
 export function xDataSpendStatus(now = Date.now()) {
   const spent = xSpendToday(now);
   const cap = X_DATA_DAILY_MAX_USD();
-  return { day: xSpend.day, spentUsd: Number(spent.toFixed(4)), capUsd: cap, refusedToday: xSpend.refused, status: spent >= cap ? "capped" : "ok" };
+  const hard = X_DATA_DAILY_HARD_MAX_USD(cap);
+  // off: the switch refuses every call. capped: the hard ceiling refuses.
+  // over: past the alarm ceiling and still serving. over and capped page.
+  const at = (ceiling) => xSpend.micro >= Math.round(ceiling * 1e6);
+  const status = cap === 0 ? "off" : at(hard) ? "capped" : at(cap) ? "over" : "ok";
+  return { day: xSpend.day, spentUsd: Number(spent.toFixed(4)), capUsd: cap, hardCapUsd: cap === 0 ? 0 : hard, refusedToday: xSpend.refused, status };
 }
-export function _xSpendReset() { xSpend.day = ""; xSpend.micro = 0; xSpend.refused = 0; xShared.reset(); }
+export function _xSpendReset() { xSpend.day = ""; xSpend.micro = 0; xSpend.refused = 0; xSpend.overLogged = ""; xShared.reset(); }
 export function _xSpendBook(usd) { xSpendToday(); xSpend.micro += Math.round(usd * 1e6); }
 
 // "Not found on X" comes in two shapes - an HTTP 404, or a 200 whose body
@@ -228,15 +243,23 @@ function notFoundOnX(path, upstreamStatus, body) {
 
 async function xGet(path, params = {}) {
   const token = requireBearer();
-  const cap = X_DATA_DAILY_MAX_USD();
+  const soft = X_DATA_DAILY_MAX_USD();
+  // The refusing ceiling: the hard one, or nothing at all while the switch is 0.
+  const cap = soft === 0 ? 0 : X_DATA_DAILY_HARD_MAX_USD(soft);
   const estimate = estimateXReadUsd(path, params);
   const capped = () => { xSpend.refused++; return bad(`X data tools have reached today's usage cap - retry after 00:00 UTC. This call is not charged on x402.`, 503); };
   // The shared reserve first (an atomic add on the store, awaited only when
-  // there is one): over the cap there, nothing is booked here. Then this
+  // there is one): over the hard ceiling there, nothing is booked here. Then this
   // process's check and booking, with no await between them, so concurrent
   // reads cannot all pass the check before any of them books.
   if (xShared.enabled && !(await xShared.reserve(estimate, cap))) throw capped();
   if (xSpendToday() + estimate > cap) { xShared.book(-estimate); throw capped(); }
+  // Past the alarm ceiling the call is served: its buyer pays for it. One
+  // log line a day; the status word carries the alarm (no figure here).
+  if (xSpendToday() + estimate > soft && xSpend.overLogged !== xSpend.day) {
+    xSpend.overLogged = xSpend.day;
+    console.warn("[x-data] the day's spend passed X_DATA_DAILY_MAX_USD: still serving, xDataSpend reads over until 00:00 UTC (X_DATA_DAILY_HARD_MAX_USD is the stop)");
+  }
   // Reserve the estimate before the call; corrected to the actual cost after,
   // released on a clean refusal. A timeout or 5xx keeps the reservation.
   _xSpendBook(estimate);

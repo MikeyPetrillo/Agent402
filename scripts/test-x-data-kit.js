@@ -282,6 +282,8 @@ if (fail) process.exit(1);
   ok(near(actualXReadUsd("/tweets/search/recent", { data: [1, 2, 3] }), 3 * P) && actualXReadUsd("/tweets/search/recent", { data: [] }) === 0, "actual bills per item returned, an empty page costs nothing");
   // Cap at 12 post reads with 4 already booked: a 5-post estimate fits, a 10-post one does not.
   process.env.X_BEARER_TOKEN = "test-bearer"; process.env.X_DATA_DAILY_MAX_USD = String(12 * P);
+  // The refusing ceiling is the hard one; held at the alarm ceiling here so this block reads one figure (scripts/test-x-data-ceilings.js covers the two apart).
+  process.env.X_DATA_DAILY_HARD_MAX_USD = String(12 * P);
   _xSpendReset(); _xSpendBook(4 * P);
   const realFetch = globalThis.fetch; let fetched = 0; globalThis.fetch = async () => { fetched++; return new Response(JSON.stringify({ data: [{ id: "1" }] }), { status: 200, headers: { "content-type": "application/json" } }); };
   try {
@@ -294,7 +296,7 @@ if (fail) process.exit(1);
     ok(threw?.statusCode === 503 && fetched === 1, "cap 0 refuses every read; it never disables the guard");
     process.env.X_DATA_DAILY_MAX_USD = "junk"; _xSpendReset(); _xSpendBook(0.99); threw = null; try { await __test.xGet("/tweets/search/recent", { max_results: 10 }); } catch (e) { threw = e; }
     ok(threw?.statusCode === 503, "a malformed cap reads as the $1 default, never as disabled");
-  } finally { globalThis.fetch = realFetch; delete process.env.X_BEARER_TOKEN; delete process.env.X_DATA_DAILY_MAX_USD; _xSpendReset(); }
+  } finally { globalThis.fetch = realFetch; delete process.env.X_BEARER_TOKEN; delete process.env.X_DATA_DAILY_MAX_USD; delete process.env.X_DATA_DAILY_HARD_MAX_USD; _xSpendReset(); }
   console.log(`cap: ${p} passed, ${f} failed`); if (f) process.exitCode = 1;
 }
 
@@ -305,6 +307,7 @@ if (fail) process.exit(1);
   const est = estimateXReadUsd("/tweets/search/recent", { max_results: 10 });
   process.env.X_BEARER_TOKEN = "test-bearer";
   process.env.X_DATA_DAILY_MAX_USD = String(est * 1.01);
+  process.env.X_DATA_DAILY_HARD_MAX_USD = String(est * 1.01);
   const realFetch = globalThis.fetch; let fetched = 0;
   const page = () => new Response(JSON.stringify({ data: Array.from({ length: 10 }, (_, i) => ({ id: String(1e10 + i), text: "t" })), meta: {} }), { status: 200, headers: { "content-type": "application/json" } });
   try {
@@ -332,7 +335,7 @@ if (fail) process.exit(1);
     globalThis.fetch = async () => new Response(JSON.stringify({ data: [] }), { status: 200, headers: { "content-type": "application/json" } });
     await __test.xGet("/tweets/search/recent", { max_results: 10 });
     ok(xDataSpendStatus().spentUsd === 0, "an empty page corrects the reservation down to zero");
-  } finally { globalThis.fetch = realFetch; delete process.env.X_BEARER_TOKEN; delete process.env.X_DATA_DAILY_MAX_USD; _xSpendReset(); }
+  } finally { globalThis.fetch = realFetch; delete process.env.X_BEARER_TOKEN; delete process.env.X_DATA_DAILY_MAX_USD; delete process.env.X_DATA_DAILY_HARD_MAX_USD; _xSpendReset(); }
   console.log(`reserve: ${p} passed, ${f} failed`); if (f) process.exitCode = 1;
 }
 
@@ -366,6 +369,7 @@ if (fail) process.exit(1);
     ok(near(xDataSpendStatus().spentUsd, 2 * P + U, 1e-4), "search books the posts and the expanded user");
     // The daily cap refuses a read whose worst case passes it only once its expansions are counted.
     process.env.X_DATA_DAILY_MAX_USD = String(10 * P + 5 * U);
+    process.env.X_DATA_DAILY_HARD_MAX_USD = String(10 * P + 5 * U);
     _xSpendReset(); fetched = 0;
     let threw = null; try { await __test.xGet("/tweets/search/recent", { max_results: 10, ...AUTHOR }); } catch (e) { threw = e; }
     ok(threw?.statusCode === 503 && /usage cap/.test(threw.message) && fetched === 0, "cap: a read that fits without its expansions but not with them is refused before any fetch");
@@ -378,6 +382,6 @@ if (fail) process.exit(1);
     const sc = xToolWorstCases("x-search-recent");
     ok(sc.length === 1 && near(sc[0].usd, 10 * P + 10 * U) && near(sc[0].usdWithoutExpansions, 10 * P), "search worst case: a page with one expanded author per post; without expansion billing, the page alone");
     ok(near(worst("x-user-tweets")[0], 10 * P) && near(worst("x-user-tweets")[1], 10 * P + U), "timeline worst cases: a page by id, and a page plus the resolve hop by username");
-  } finally { globalThis.fetch = realFetch; delete process.env.X_BEARER_TOKEN; delete process.env.X_DATA_DAILY_MAX_USD; _xSpendReset(); }
+  } finally { globalThis.fetch = realFetch; delete process.env.X_BEARER_TOKEN; delete process.env.X_DATA_DAILY_MAX_USD; delete process.env.X_DATA_DAILY_HARD_MAX_USD; _xSpendReset(); }
   console.log(`expansions: ${p} passed, ${f} failed`); if (f) process.exitCode = 1;
 }

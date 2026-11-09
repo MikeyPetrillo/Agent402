@@ -107,6 +107,12 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   `X_SEARCH_STATS_FLUSH_MS` (default 60000, at least 1000). The files are used only without a
   state database; `ownStoreEnv` (`scripts/lib/own-stores.js`) points both into a booted test
   server's own directory.
+- **X data ceilings:** `X_DATA_DAILY_MAX_USD` (default 1) is the alarm: past it the X data tools
+  keep serving and `xDataSpend` on `/api/gateway-status` reads `over`; `0` refuses every call
+  (`off`). `X_DATA_DAILY_HARD_MAX_USD` (default 5 times the alarm ceiling; never under it) is
+  where a read is refused 503 and the word reads `capped`. The status Worker and `heartbeat.yml`
+  page on `over` and `capped` under one issue ("X data daily spend OVER its ceiling") and close it
+  on `ok` or `off` (`scripts/test-x-data-ceilings.js`).
 - **Pre-payment refusal logs:** an input refusal answered before any payment gate
   (`src/prepayment-refusal.js`) writes its `[tool-error] ... prepay=true` line for the first 20
   in a clock minute per process; the rest print one summary line per minute (count and top

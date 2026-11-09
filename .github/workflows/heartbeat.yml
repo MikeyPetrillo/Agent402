@@ -499,6 +499,28 @@ jobs:
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "exaAllowance is ${STATUS}; closing." || true
           fi
 
+      # X data daily spend (src/tools/x-data-kit.js): over = past the alarm
+      # ceiling and still serving; capped = the hard ceiling refuses. off is
+      # the switch and never pages.
+      - name: X data daily spend over its ceiling
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.xDataSpend.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "x data spend: $STATUS"
+          TITLE="X data daily spend OVER its ceiling"
+          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          if [ "$STATUS" = "over" ] || [ "$STATUS" = "capped" ]; then
+            if [ -z "$EXISTING" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+                --body "\`/api/gateway-status.xDataSpend\` reports **over** or **capped**: the day's booked spend on the X data tools passed \`X_DATA_DAILY_MAX_USD\`. On **over** every call is still served (each one is paid for by its buyer); on **capped** it reached \`X_DATA_DAILY_HARD_MAX_USD\` and the tools answer 503 (uncharged) until 00:00 UTC. Read the day's X calls on the operator view, check the prepaid balance in the upstream's console, then raise the ceilings on Railway or leave them. Closes when the word reads ok (the next UTC day) or off."
+            fi
+          elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "xDataSpend is ${STATUS}; closing." || true
+          fi
+
       - name: Algorand upstream buyer wallet check (alarm on low AVM spending balance)
         if: always()
         continue-on-error: true
