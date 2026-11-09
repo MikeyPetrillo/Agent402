@@ -166,7 +166,8 @@ function rng(seed) {
   for (const depth of [20, 24, 400]) {
     const r = await bestOf(() => tool.handler({ spec: doubling(depth) }));
     ok(r.err?.statusCode === 413 && /16 MB/.test(r.err.message) && /in parts/.test(r.err.message), "resolve-refs: " + depth + " doubling levels are refused with a 413 naming the cap (" + r.err?.statusCode + " " + r.err?.message + ")");
-    ok(r.ms < BOUND_MS, "resolve-refs: " + depth + " doubling levels are refused in " + r.ms.toFixed(1) + "ms of CPU");
+    // Reuse makes this a few milliseconds; a walk that reuses nothing spends hundreds reaching the cap.
+    ok(r.ms < BOUND_MS / 4, "resolve-refs: " + depth + " doubling levels are refused in " + r.ms.toFixed(1) + "ms of CPU");
   }
   // The same fan-out closed into a cycle: nothing is reusable, so the walk
   // runs to the budget. It gives the event loop back as it goes.
