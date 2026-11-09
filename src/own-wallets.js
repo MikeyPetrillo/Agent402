@@ -54,6 +54,15 @@ export async function isOwnPayoutAddress(addr, { sets = null, env = process.env 
   if (isEvm) return s.evm.has(a.toLowerCase());
   return s.other.some((set) => set.has(a));
 }
+/** Is `addr` positively one of our own wallets: true or false, or null when
+ *  the internal wallet list cannot be loaded. The strict reading for a check
+ *  that ALLOWS an address because it is ours (a withdrawal recipient), where
+ *  an unreadable list must never read as "ours". */
+export async function ownWalletMatch(addr, { sets = null, env = process.env } = {}) {
+  const s = sets || await loadOwnWalletSets();
+  if (!s) return null;
+  return isOwnPayoutAddress(addr, { sets: s, env });
+}
 /** Throws a 502 (nothing signed) when `addr` is one of our own wallets, and a
  *  503 (nothing signed) when the internal wallet list cannot be loaded. */
 export async function assertNotOwnPayout(addr) {

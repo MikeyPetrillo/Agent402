@@ -130,4 +130,42 @@ await check("a whole-balance withdrawal leaves room for Gateway's fee: value = a
   assert.match(tiny.out, /nothing to withdraw/);
 });
 
+await check("--recipient is limited to our own wallets unless --allow-external-recipient is given, and the dry run says which", async () => {
+  const OUTSIDE = privateKeyToAccount(generatePrivateKey()).address;
+  const OURS = privateKeyToAccount(generatePrivateKey()).address;
+  const own = await run(["--from", "base"]);
+  assert.equal(own.code, 0, own.err);
+  assert.match(own.out, new RegExp(`recipient ${SELLER}: the seller address itself`));
+
+  const outside = await run(["--from", "base", "--recipient", OUTSIDE, "--execute"]);
+  assert.equal(outside.code, 2, "an outside address is refused");
+  assert.match(outside.err, /not one of our own wallets.*--allow-external-recipient/);
+  assert.ok(!outside.calls.length, "refused before any read, block or signature");
+
+  const ours = await run(["--from", "base", "--recipient", OURS.toLowerCase()], { envOver: { WALLET_ADDRESS: OURS } });
+  assert.equal(ours.code, 0, ours.err);
+  assert.match(ours.out, /: one of our own wallets/);
+  assert.match(ours.out, new RegExp(`to ${OURS.toLowerCase()} on eip155:8453`));
+  const listed = [...(await import("../src/revenue-live.js")).OUR_EVM_WALLETS][0];
+  const fromList = await run(["--from", "base", "--recipient", listed]);
+  assert.equal(fromList.code, 0, fromList.err);
+  assert.match(fromList.out, /: one of our own wallets/, "an address on the internal wallet list is ours");
+
+  const allowed = await run(["--from", "base", "--recipient", OUTSIDE, "--allow-external-recipient"]);
+  assert.equal(allowed.code, 0, allowed.err);
+  assert.match(allowed.out, /: an EXTERNAL address, allowed by --allow-external-recipient/);
+  const intent = await run(["--from", "base", "--recipient", OUTSIDE, "--allow-external-recipient", "--execute"]);
+  assert.equal(intent.calls.find((c) => c.url === `${GATEWAY_API_BASE}/v1/transfer`).body[0].burnIntent.spec.destinationRecipient.slice(-40), OUTSIDE.slice(2).toLowerCase(), "the flag carries the outside address into the intent");
+
+  const { setOwnWalletImportForTest } = await import("../src/own-wallets.js");
+  setOwnWalletImportForTest(async () => { throw new Error("list unavailable"); });
+  try {
+    const blind = await run(["--from", "base", "--recipient", OUTSIDE]);
+    assert.equal(blind.code, 2, "an unreadable own-wallet list never clears an address");
+    assert.match(blind.err, /could not be checked against our own wallets/);
+    const self = await run(["--from", "base"]);
+    assert.equal(self.code, 0, "the seller address itself needs no list");
+  } finally { setOwnWalletImportForTest(null); }
+});
+
 console.log(process.exitCode ? `FAILED (${pass} passed)` : `${pass} passed`);
