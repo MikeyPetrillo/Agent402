@@ -765,6 +765,27 @@ jobs:
             gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: PathUSD back above the low-water mark at $(date -u +%FT%TZ)."
           fi
 
+      # Subscription gas sponsor ceiling (src/tempo-sponsor-ceiling.js): our own
+      # rolling 24 h count and fee ceiling on sponsored sends. While it reads
+      # reached, renewals are refused before broadcast and go past_due.
+      - name: Subscription gas sponsor ceiling check (alarm while reached)
+        if: always()
+        continue-on-error: true
+        run: |
+          WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.subscriptionFeePayer.ceiling // "unknown"' 2>/dev/null || echo unknown)
+          echo "subscription gas sponsor ceiling: $WORD"
+          TITLE="Subscription gas sponsor CEILING reached"
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || true)
+          if [ "$WORD" = "reached" ]; then
+            if [ -z "$OPEN" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The Tempo subscription gas sponsor reached its rolling 24 h ceiling (MPP_SUB_SPONSOR_DAILY_MAX_TX or MPP_SUB_SPONSOR_DAILY_MAX_USD, src/tempo-sponsor-ceiling.js): every sponsored send is refused before broadcast until the window rolls, so activations fail 402 (nobody charged) and RENEWALS go past_due, which means existing subscribers are served for free until their grace window ends. The server log names the knob that refused. Read the sponsored-send pattern before raising the knob on Railway; the issue closes when subscriptionFeePayer.ceiling reads ok."
+            else
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still reached at $(date -u +%FT%TZ)."
+            fi
+          elif [ "$WORD" = "ok" ] && [ -n "$OPEN" ]; then
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the sponsor window is back under its ceiling at $(date -u +%FT%TZ)."
+          fi
+
       # Operator-token guessing: the per-IP limiter caps one source; this is the
       # aggregate. "elevated" = OPERATOR_AUTH_FAIL_ALERT (default 100) wrong
       # operator credentials in the last hour. Counts only; rotate the token if

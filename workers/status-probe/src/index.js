@@ -490,6 +490,17 @@ export const ALARMS = [
       "The Tempo subscription gas sponsor (TEMPO_SUBSCRIPTION_FEE_PAYER_KEY) is below the low-water mark (TEMPO_SUBSCRIPTION_FEE_PAYER_LOW_USD, default $0.25) in PATHUSD - the token Tempo charges sponsored fees in, NOT the USDC.e the products are priced in. An empty sponsor fails subscription activations loudly (402, nobody charged) but sends RENEWALS to past_due, so existing subscribers keep being served for free until their grace window ends. Top up with fund-tempo-fee-payer.yml and token=pathusd.",
   },
   {
+    title: "Subscription gas sponsor CEILING reached",
+    // Our own 24 h ceiling on sponsored subscription sends: while it holds,
+    // renewals are refused before broadcast and go past_due, so it pages.
+    verdict: ({ gateway: b }) => {
+      const w = b.subscriptionFeePayer?.ceiling;
+      return w === "reached" ? "bad" : w === "ok" ? "good" : "quiet";
+    },
+    body: () =>
+      "The Tempo subscription gas sponsor reached its rolling 24 h ceiling (MPP_SUB_SPONSOR_DAILY_MAX_TX or MPP_SUB_SPONSOR_DAILY_MAX_USD, src/tempo-sponsor-ceiling.js): every sponsored send is refused before broadcast until the window rolls, so activations fail 402 (nobody charged) and RENEWALS go past_due, which means existing subscribers are served for free until their grace window ends. The server log names the knob that refused. Read the sponsored-send pattern before raising the knob on Railway; the issue closes when subscriptionFeePayer.ceiling reads ok.",
+  },
+  {
     title: "Postgres UNREACHABLE (leads/analytics)",
     verdict: ({ gateway: b }) => {
       const leads = b.databases?.leads?.status;
