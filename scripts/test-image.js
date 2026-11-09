@@ -513,5 +513,39 @@ const hex = (n) => (n >>> 0).toString(16).padStart(8, "0");
   ok(w.code === 400 && /does not support decoding/.test(w.msg || ""), `a WebP is refused before any decoder runs (got ${w.code} "${w.msg}")`);
 }
 
+// The pool ends a job at ITS deadline. A 16M-pixel decode takes hundreds of
+// milliseconds, so a job given 40 ms is terminated (503, not charged) well
+// before the 5 s default would have let it finish.
+{
+  const { runImageOffThread } = await import("../src/tools/image-pool.js");
+  const big = Buffer.from(await new Jimp({ width: 4000, height: 4000, color: 0x3366ffff }).getBuffer(JimpMime.png));
+  const t0 = Date.now(); let out = null;
+  try { await runImageOffThread({ op: "resize", buffer: big, params: { width: 64 }, timeoutMs: 40 }); out = { code: 200 }; } catch (e) { out = { code: e.statusCode, msg: e.message }; }
+  const ms = Date.now() - t0;
+  ok(out.code === 503 && /timed out \(>40ms\)/.test(out.msg || "") && ms < 1500, `a job given timeoutMs 40 is terminated at that deadline (got ${out.code} "${out.msg || ""}" in ${ms}ms)`);
+  const after = await runImageOffThread({ op: "resize", buffer: Buffer.from(srcB64, "base64"), params: { width: 10 } });
+  ok(after.__binary.length > 0, "the pool serves the next job after ending one at its deadline");
+}
+
+// The wallet-only tools admit the larger source cap. A 4100x4100 image (16.81M
+// pixels) sits between the free cap (16M) and the wallet cap (40M): the free
+// resize refuses it from the header, crop and dominant-color decode it.
+{
+  const zl = await import("node:zlib");
+  const crc32 = (b) => { let crc = 0xffffffff; for (let n = 0; n < b.length; n++) { let c = (crc ^ b[n]) & 0xff; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; crc = (crc >>> 8) ^ c; } return (crc ^ 0xffffffff) >>> 0; };
+  const chunk = (t, d) => { const l = Buffer.alloc(4); l.writeUInt32BE(d.length); const td = Buffer.concat([Buffer.from(t), d]); const c = Buffer.alloc(4); c.writeUInt32BE(crc32(td)); return Buffer.concat([l, td, c]); };
+  const W = 4100; const head = Buffer.alloc(13); head.writeUInt32BE(W, 0); head.writeUInt32BE(W, 4); head[8] = 8;
+  const raw = Buffer.alloc((W + 1) * W, 0x80); for (let y = 0; y < W; y++) raw[y * (W + 1)] = 0; // filter byte per row
+  const between = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", head), chunk("IDAT", zl.deflateSync(raw, { level: 1 })), chunk("IEND", Buffer.alloc(0))]).toString("base64");
+  let code = 200, msg = "";
+  try { await tool("image-resize")({ image: between, width: 64 }); } catch (e) { code = e.statusCode; msg = e.message; }
+  ok(code === 400 && /^source image too large \(4100x4100; max 16000000 pixels\)/.test(msg), `image-resize refuses a 16.81M-pixel image at the free cap (got ${code} "${msg}")`);
+  const run = async (slug, input) => { try { return await tool(slug)(input); } catch (e) { return { error: `${e.statusCode} ${e.message}` }; } };
+  const d = await run("image-dominant-color", { image: between, colors: 1 });
+  ok(d.width === W && d.height === W && d.colors?.[0]?.hex === "#808080", `image-dominant-color accepts it under the wallet cap (${d.error || `${d.width}x${d.height} ${d.colors[0].hex}`})`);
+  const c = await run("image-crop", { image: between, left: 4000, top: 4000, width: 32, height: 32, dataUri: true });
+  ok(c.width === 32 && c.height === 32, `image-crop accepts it under the wallet cap (${c.error || `${c.width}x${c.height}`})`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
