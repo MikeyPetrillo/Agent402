@@ -9,7 +9,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { API_TOOLS, RESOLVE_REFS_MAX_BYTES } from "../src/tools/api-kit.js";
 import { KIT2 } from "../src/tools/kit2.js";
-import { KIT } from "../src/tools/kit.js";
+import { KIT, JSON_TO_CSV_MAX_CELLS } from "../src/tools/kit.js";
 import { TEXT_ANALYSIS_TOOLS } from "../src/tools/text-analysis-kit.js";
 import { emailGuard } from "../src/tools/email-guard-kit.js";
 import { runHtml } from "../src/tools/html-pool.js";
@@ -343,6 +343,38 @@ function rng(seed) {
   ok(ends.every((e) => e?.statusCode === 400), "markdown-to-html: both slow renders end as 400s");
   const after = await tool.handler({ markdown: "# still here\n\n" + "text ".repeat(600) });
   ok(after.html.startsWith("<h1>still here</h1>"), "markdown-to-html: the next document renders after a stopped one");
+}
+
+// ---------------------------------------------------------------------------
+// json-to-csv: rows times columns is capped.
+// ---------------------------------------------------------------------------
+{
+  const tool = KIT.find((t) => t.slug === "json-to-csv");
+  ok(JSON.stringify(tool.handler(tool.discovery.input)) === JSON.stringify(tool.discovery.output.example), "json-to-csv: the published example answers as published");
+  // The conversion as it was, for inputs under the cap.
+  const flatten = (obj, prefix = "", out = {}) => { for (const [k, v] of Object.entries(obj)) { const key = prefix ? prefix + "." + k : k; if (v && typeof v === "object" && !Array.isArray(v)) flatten(v, key, out); else out[key] = Array.isArray(v) ? JSON.stringify(v) : v; } return out; };
+  const esc = (v) => { const str = v === null || v === undefined ? "" : String(v); return /[",\n\r]/.test(str) ? '"' + str.replace(/"/g, '""') + '"' : str; };
+  const oldAnswer = (data, delimiter = ",") => { const flat = data.map((row) => flatten(row && typeof row === "object" ? row : { value: row })); const columns = [...new Set(flat.flatMap((r) => Object.keys(r)))]; const lines = [columns.map(esc).join(delimiter)]; for (const r of flat) lines.push(columns.map((c) => esc(r[c])).join(delimiter)); return { csv: lines.join("\n") + "\n", rows: data.length, columns: columns.length }; };
+  const rand = rng(5);
+  const cell = () => [1, "text", "a,b", 'say "hi"', null, true, [1, 2], { x: 1, y: { z: "deep\nline" } }, 3.5, ""][Math.floor(rand() * 10)];
+  let same = 0;
+  const RUNS = 200;
+  for (let i = 0; i < RUNS; i++) {
+    const keys = Array.from({ length: 1 + Math.floor(rand() * 30) }, (_, k) => "k" + k);
+    const data = Array.from({ length: 1 + Math.floor(rand() * 200) }, () => rand() < 0.05 ? cell() : Object.fromEntries(keys.filter(() => rand() < 0.6).map((k) => [k, cell()])));
+    if (JSON.stringify(tool.handler({ json: data })) === JSON.stringify(oldAnswer(data))) same++;
+  }
+  ok(same === RUNS, "json-to-csv: " + same + "/" + RUNS + " random tables convert as before");
+  // A wide sparse table under the cap is served; the widest dense table a 100 KB body can carry is far under it.
+  const wide = Array.from({ length: 500 }, (_, i) => ({ ["c" + i]: i }));
+  ok(tool.handler({ json: wide }).columns === 500 && 500 * 500 <= JSON_TO_CSV_MAX_CELLS, "json-to-csv: 500 rows with 500 distinct keys are served");
+  for (const n of [1000, 7000, 10_000]) {
+    const r = await bestOf(() => tool.handler({ json: Array.from({ length: n }, (_, i) => ({ [i]: 1 })) }));
+    ok(r.err?.statusCode === 400 && /250000 cells/.test(r.err.message), "json-to-csv: " + n + " rows with " + n + " distinct keys are refused naming the cap (" + r.err?.statusCode + " " + r.err?.message + ")");
+    ok(r.ms < BOUND_MS, "json-to-csv: refused in " + r.ms.toFixed(1) + "ms");
+  }
+  const atCap = await bestOf(() => tool.handler({ json: Array.from({ length: 500 }, (_, i) => ({ ["c" + i]: i })) }));
+  ok(atCap.ms < BOUND_MS && JSON.stringify(atCap.out).length < 1_000_000, "json-to-csv: a table at the cap converts in " + atCap.ms.toFixed(1) + "ms to " + JSON.stringify(atCap.out).length + " bytes");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
