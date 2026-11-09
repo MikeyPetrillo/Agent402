@@ -38,6 +38,9 @@ parentPort.on("message", async (job) => {
       buffer: Buffer.from(job.buffer.buffer, job.buffer.byteOffset, job.buffer.byteLength),
       maxPixels: job.maxPixels,
       params: job.params,
+      // The job's own deadline, so a decode this hands to a child process
+      // ends inside it.
+      deadlineMs: job.deadlineMs,
     });
     if (out.result !== undefined) { parentPort.postMessage({ id: job.id, result: out.result }); return; } // a JSON answer (op "dominant-color")
     parentPort.postMessage({ id: job.id, buffer: out.__binary, contentType: out.contentType, width: out.width, height: out.height });

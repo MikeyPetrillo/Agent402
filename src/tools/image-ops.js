@@ -6,13 +6,17 @@
 // second copy of the resize/convert/thumbnail logic would drift.
 //
 // Nothing here may touch the network or the filesystem: this module is loaded in
-// a worker thread where safeFetch's SSRF guard is not the gate that ran.
+// a worker thread where safeFetch's SSRF guard is not the gate that ran. The
+// one process it starts is its own decoder child (decodeInChild, below).
 // jimp loads with the first decode (./lazy-deps.js), not at boot: on the main
 // thread that keeps its evaluation off the startup path; the worker preloads it.
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { loadJimp } from "./lazy-deps.js";
+import { childEnv } from "./child-env.js";
 import {
   assertGifHeader, gifFirstFrame, assertPngHeader, assertInflateWithinDeclared,
-  assertJpegHeader, jpegFrameHeaders, assertTiffHeader,
+  assertJpegHeader, jpegFrameHeaders, assertTiffHeader, tiffLayout, tiffDecoderView, assertTiffStreams,
 } from "./image-headers.js";
 
 // Re-exported for the other decoders of buyer images (barcode-kit, frame-diff).
@@ -130,7 +134,7 @@ export function assertDeclaredWithinPixelCap(buf, maxPixels) {
   if (format === "tiff") assertTiffHeader(buf, maxPixels);
 }
 
-export async function readImage(buf, { maxPixels = MAX_SRC_PIXELS } = {}) {
+export async function readImage(buf, { maxPixels = MAX_SRC_PIXELS, deadlineMs } = {}) {
   // The header check runs first because the post-decode check below arrives too
   // late to protect the thread doing the decoding: Jimp's decode is pure JS and
   // synchronous, so a small file declaring a huge canvas costs seconds of solid
@@ -141,16 +145,62 @@ export async function readImage(buf, { maxPixels = MAX_SRC_PIXELS } = {}) {
   if (!declaredDimensions(buf)) throw bad("unsupported or unreadable image container (png, jpeg, gif, bmp, webp, tiff with a readable header)");
   // Where the decoder inflates with no output bound, the same inflate runs
   // here first, under the declared size.
-  assertInflateWithinDeclared(buf, sniffFormat(buf));
+  const format = sniffFormat(buf);
+  assertInflateWithinDeclared(buf, format);
+  // A TIFF is decoded from a view in which the image the tools use is the
+  // only directory; its strip data is bounded first.
+  let source = buf, isolated = false;
+  if (format === "tiff") {
+    const layout = tiffLayout(buf, maxPixels);
+    assertTiffStreams(buf, layout, maxPixels);
+    source = tiffDecoderView(buf, layout);
+    isolated = Boolean(layout.page?.fax);
+  }
   const { Jimp } = await loadJimp();
   let img;
-  // fromBuffer is what Jimp.read runs for a Buffer; called directly because it
-  // is the form that hands per-format options to the decoder. The JPEG decoder
-  // then enforces the pixel cap itself on whichever frame header it acts on.
-  try { img = await Jimp.fromBuffer(buf, { "image/jpeg": { maxResolutionInMP: maxPixels / 1e6 } }); }
-  catch (e) { throw bad(`could not decode image: ${e.message}`); }
+  if (isolated) img = Jimp.fromBitmap(decodeInChild(source, maxPixels, deadlineMs));
+  else {
+    // fromBuffer is what Jimp.read runs for a Buffer; called directly because it
+    // is the form that hands per-format options to the decoder. The JPEG decoder
+    // then enforces the pixel cap itself on whichever frame header it acts on.
+    try { img = await Jimp.fromBuffer(source, { "image/jpeg": { maxResolutionInMP: maxPixels / 1e6 } }); }
+    catch (e) { throw bad(`could not decode image: ${e.message}`); }
+  }
   if (img.width * img.height > maxPixels) throw bad(`source image too large (${img.width}x${img.height})`);
   return img;
+}
+
+// CCITT (fax) TIFF data is decoded in a one-shot child process. That decoder
+// builds each row in an array that grows with the strip data, not with the
+// page width, so no header bounds its memory; the child's heap ceiling does,
+// and reaching it ends the child alone. The child gets the decoder's view of
+// the file on stdin, an allowlisted environment, and a deadline inside the
+// job's own; it answers width, height and RGBA on stdout.
+const IMAGE_CHILD = fileURLToPath(new URL("./image-child.js", import.meta.url));
+// Heap only: the page's own buffers are typed arrays the header already
+// bounds. A 6300x6300 fax page decodes under this with room to spare.
+const CHILD_HEAP_MB = 96;
+const CHILD_DEADLINE_MS = 4000;
+
+function decodeInChild(view, maxPixels, deadlineMs) {
+  const r = spawnSync(process.execPath, [`--max-old-space-size=${CHILD_HEAP_MB}`, IMAGE_CHILD], {
+    input: view, env: childEnv(), timeout: Math.max(500, (deadlineMs || CHILD_DEADLINE_MS + 750) - 750),
+    killSignal: "SIGKILL", maxBuffer: maxPixels * 4 + 65536, windowsHide: true,
+  });
+  if (r.error?.code === "ETIMEDOUT") throw Object.assign(new Error("image transform timed out (fax data did not decode within its deadline)"), { statusCode: 503 });
+  if (r.status === 0 && r.stdout.length >= 8) {
+    const width = r.stdout.readUInt32LE(0), height = r.stdout.readUInt32LE(4);
+    if (r.stdout.length === 8 + width * height * 4) {
+      // A buffer of its own: fromBitmap reads the whole ArrayBuffer behind it.
+      const data = Buffer.alloc(width * height * 4);
+      r.stdout.copy(data, 0, 8);
+      return { width, height, data };
+    }
+  }
+  if (r.status === 2) throw bad(`could not decode image: ${String(r.stderr || "").slice(0, 200) || "decoder error"}`);
+  if (r.error && r.error.code !== "ENOBUFS") throw Object.assign(new Error(`image decoder process could not start: ${r.error.code || r.error.message}`), { statusCode: 503 });
+  // Ended by its heap ceiling (or wrote more than the page allows).
+  throw bad("tiff fax data does not decode within the memory its page size allows");
 }
 
 export async function toBuffer(img, format, quality) {
@@ -168,8 +218,8 @@ export async function toBuffer(img, format, quality) {
  *  would leave part of the cost back on the event loop. Validation order matches
  *  what the handlers did inline before the move (decode errors surface before
  *  parameter errors), so caller-visible behaviour is unchanged. */
-export async function runImageOp({ op, buffer, maxPixels = FREE_MAX_SRC_PIXELS, params = {} }) {
-  const img = await readImage(buffer, { maxPixels });
+export async function runImageOp({ op, buffer, maxPixels = FREE_MAX_SRC_PIXELS, params = {}, deadlineMs }) {
+  const img = await readImage(buffer, { maxPixels, deadlineMs });
   if (op === "resize") {
     let w = posInt(params.width), h = posInt(params.height);
     if (!w && !h) throw bad("provide width and/or height");

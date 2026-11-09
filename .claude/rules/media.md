@@ -45,11 +45,21 @@ Loaded when a media, document or worker-pool tool file is read.
   `src/tools/image-headers.js` holds each format to the field its decoder sizes from: one PNG
   IHDR, and it comes first; one JPEG frame header on the marker chain, with the cap also handed
   to the JPEG decoder (`maxResolutionInMP`), which applies it to whichever frame header it acts
-  on; GIF frame 0 inside its screen, read with the omggif copy jimp loads; for TIFF every
-  directory the decoder reads, with the cap on the page total (at most 32 pages) and on the
-  decoded sample bytes. TIFF decodes compressions 1, 5, 8, 32946 and 32773; any other, a camera
-  maker note in a vendor layout, or a tag declaring more values than the file holds answers 400.
-  `assertInflateWithinDeclared` runs in the worker before the decode and bounds the inflate of
-  an interlaced PNG and of each deflate TIFF strip or tile. No WebP decoder is installed. A new
-  decoder path gets a header walk that follows the decoder, a small-file test and a decode of
-  the format's ordinary shapes (`scripts/test-image.js`).
+  on; GIF frame 0 inside its screen, read with the omggif copy jimp loads.
+  `assertInflateWithinDeclared` runs in the worker and bounds the inflate of an interlaced PNG.
+  No WebP decoder is installed.
+- **TIFF:** the tools use the first image, so `tiffLayout` reads that one directory the way the
+  decoder does and bounds it (pixels, sample bytes, tile, tag value counts against the file's
+  length), and the decoder is given `tiffDecoderView`: a copy of the file in which that
+  directory is the only one, sub-directory and maker-note tags carry an unused tag number
+  (stored, never followed), and byte counts stop at the end of the file. Multi-page files,
+  maker notes and raw-sensor pages decode to the same pixels as before. In the worker,
+  `assertTiffStreams` inflates each deflate strip under the page's size and caps every frame
+  header an embedded-JPEG decoder could read (compression 6, 7, 34892; a raw byte scan of the
+  ranges the decoder copies). CCITT pages (2, 3, 4) are decoded in a one-shot child process
+  (`image-child.js`, started with `childEnv()`, a 96 MB heap ceiling and a deadline inside the
+  job's): that decoder's row buffer grows with the data, so only the ceiling bounds it, and
+  reaching it ends the child alone (400). Compressions 9 and 34316 answer 400: their decoders
+  size buffers from fields inside their own stream. A new decoder path gets a reader that
+  follows the decoder, a small-file test and a decode of the format's ordinary shapes
+  (`scripts/test-image.js`).

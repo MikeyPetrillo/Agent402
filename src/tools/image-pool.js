@@ -117,7 +117,7 @@ function assign(slot, job) {
     retire(slot);
     pump();
   }, job.timeoutMs);
-  slot.worker.postMessage({ id: job.id, op: job.op, buffer: job.buffer, maxPixels: job.maxPixels, params: job.params });
+  slot.worker.postMessage({ id: job.id, op: job.op, buffer: job.buffer, maxPixels: job.maxPixels, params: job.params, deadlineMs: job.timeoutMs });
 }
 
 function pump() {

@@ -154,68 +154,84 @@ export function assertGifHeader(buf) {
 }
 
 // ---------------------------------------------------------------- TIFF -----
+//
+// The image tools use one image of a TIFF: the first directory the decoder
+// keeps. The decoder itself reads every directory in the chain and decodes
+// each page, follows sub-directories and maker notes, loops once per value a
+// tag declares, and sizes buffers from the sample layout, the tile size and
+// (for JPEG and deflate data) from fields inside the compressed stream. So:
+//  - tiffLayout reads that one directory the way the decoder does and bounds
+//    what it declares;
+//  - tiffDecoderView hands the decoder a copy of the file in which that
+//    directory is the only one, the tags that start a further walk carry an
+//    unused tag number, and no strip or tile runs past the end of the file.
+//    None of that changes the pixels of the image the tools use;
+//  - assertTiffStreams (worker) bounds the data whose size the directory does
+//    not state: deflate output and embedded JPEG frame headers.
+// CCITT data is the one kind the header cannot bound (the decoder's row buffer
+// grows with the data, not with the page width), so readImage decodes those in
+// a one-shot child process with its own heap ceiling and deadline.
 
 // Bytes per value for the tag types the decoder reads; any other type is skipped.
 const TIFF_UNIT = { 1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 7: 1, 8: 2, 9: 4, 10: 8, 11: 4, 12: 8, 13: 4 };
 // Types the decoder reads with one loop turn per declared value.
 const TIFF_LOOPED = new Set([3, 4, 5, 8, 9, 10, 11, 12, 13]);
-// Tags whose first value sizes an allocation or picks a code path.
-const TIFF_SCALAR = new Set([256, 257, 258, 259, 262, 277, 278, 322, 323]);
-const TIFF_OFFSETS = new Set([273, 279, 324, 325]);
-// Tags whose values the decoder follows as further directories.
-const TIFF_POINTER = new Set([330, 34665, 34853, 61440]);
-// Compressions whose decoder holds nothing but the buffer the directory sized:
-// none, LZW, deflate (inflated under a bound first), PackBits. The others keep
-// state that grows with the data (the CCITT schemes build each row as an
-// array with no width limit) or carry size fields of their own (JPEG, the
-// camera raw schemes), so the header does not bound them.
-const TIFF_COMPRESSION = new Set([1, 5, 8, 32946, 32773]);
-export const TIFF_MAX_PAGES = 32;
-const TIFF_MAX_DIRECTORIES = 64;
+// Tags whose first value sizes an allocation or picks a code path, and tags
+// that hold file offsets or byte counts. Each must be BYTE, SHORT or LONG, so
+// this reader and the decoder take the same number from it.
+const TIFF_SCALAR = new Set([256, 257, 258, 259, 262, 277, 278, 322, 323, 513, 514, 50885]);
+const TIFF_OFFSETS = new Set([273, 279, 324, 325, 519, 520, 521]);
+// Tags that make the decoder read further directories or parse a maker note.
+// Nothing they lead to feeds the pixels of the first image.
+const TIFF_WALKED = new Set([330, 34665, 34853, 61440, 50740, 37500]);
+const TIFF_INERT_TAG = 65000;
+const TIFF_FAX = new Set([2, 3, 4]);
+const TIFF_JPEG = new Set([6, 7, 34892]);
+// Compressions whose decoder sizes its buffers from fields inside its own
+// stream, with no reader here: CineForm (9) and Panasonic raw (34316).
+const TIFF_UNBOUNDED = new Set([9, 34316]);
+// Directories the decoder may drop before the one it keeps.
+const TIFF_MAX_SKIPPED = 64;
 // Decoded sample bytes allowed per pixel of the cap (16-bit RGBA).
 const TIFF_BYTES_PER_CAP_PIXEL = 8;
 
-/** Every directory the TIFF decoder will read, walked the way it walks them:
- *  the page chain (next-directory offsets), plus the sub-directories it
- *  follows. Returns { pages, pixels, bytes }: per page its size, compression
- *  and strip or tile table, the pixel total and the decoded-sample byte total
- *  across pages. Throws a 400 for a layout whose decode is not bounded by
- *  those totals: a looping or over-long chain, tags declaring more values
- *  than the file holds, a size tag that is not SHORT or LONG, a strip or tile
- *  that runs past the end of the file, a tile larger than `maxPixels`, a
- *  compression or maker note read by a decoder with its own size fields. */
+/** The first image of a TIFF as the decoder will read it. Returns
+ *  { directory, next, renames, clamps, page }: the directory's offset, where
+ *  its next-directory offset sits, the entries tiffDecoderView renames or
+ *  clamps, and for a directory with a width the page's size, compression and
+ *  strip or tile table (null otherwise). Throws a 400 for a directory whose
+ *  decode the header cannot bound: tags declaring more values than the file
+ *  holds, a size tag of a non-integer type, a page, tile or sample layout
+ *  past `maxPixels`, or a compression with size fields no reader here covers. */
 export function tiffLayout(buf, maxPixels = Infinity) {
   const le = buf[0] === 0x49;
   // Reads past the end answer zero, as the decoder's do.
   const g = (p) => (p >= 0 && p < buf.length ? buf[p] : 0);
   const u16 = (p) => (le ? (g(p + 1) << 8) | g(p) : (g(p) << 8) | g(p + 1));
   const u32 = (p) => (le ? (g(p) | (g(p + 1) << 8) | (g(p + 2) << 16) | (g(p + 3) << 24)) : ((g(p) << 24) | (g(p + 1) << 16) | (g(p + 2) << 8) | g(p + 3))) >>> 0;
-  let directories = 0;
-  // Bytes of tag values the decoder copies out of the file, across every
-  // directory. Values do not overlap in a real file, so the file's own length
-  // bounds them; BYTE and UNDEFINED values are views, never copies.
-  let valueBytes = 0;
+  let renames = [];
 
   // One directory. Returns its tags (tag -> { type, num, at }), or null when
   // the decoder drops it (an unreadable first entry).
   const readDirectory = (offset) => {
-    if (++directories > TIFF_MAX_DIRECTORIES) throw bad(`tiff holds more than ${TIFF_MAX_DIRECTORIES} directories`);
     const count = u16(offset);
     const tags = new Map();
+    renames = [];
+    // Bytes of tag values the decoder copies out of the file. Values do not
+    // overlap in a real file, so the file's own length bounds them; BYTE and
+    // UNDEFINED values are views, never copies.
+    let valueBytes = 0;
     for (let k = 0; k < count; k++) {
       const e = offset + 2 + k * 12;
       if (e >= buf.length) break; // the rest read as empty entries
       const tag = u16(e), type = u16(e + 2), num = u32(e + 4), voff = u32(e + 8);
       const unit = TIFF_UNIT[type];
-      // A tag that sizes an allocation or names an offset must be the integer
-      // type the format gives it, so this reader and the decoder see one value.
-      if ((TIFF_SCALAR.has(tag) || TIFF_OFFSETS.has(tag)) && ((type !== 3 && type !== 4) || num < 1)) {
-        throw bad(`tiff tag ${tag} is not a SHORT or LONG value`);
+      // Renamed whatever its type: the decoder follows these even when it
+      // could not read their value.
+      if (TIFF_WALKED.has(tag) && e + 2 <= buf.length) renames.push(e);
+      if ((TIFF_SCALAR.has(tag) || TIFF_OFFSETS.has(tag)) && ((type !== 1 && type !== 3 && type !== 4) || num < 1)) {
+        throw bad(`tiff tag ${tag} is not a BYTE, SHORT or LONG value`);
       }
-      if (TIFF_POINTER.has(tag) && ((type !== 4 && type !== 13) || num < 1)) {
-        throw bad(`tiff tag ${tag} is not a directory offset`);
-      }
-      if (tag === 37500 && type !== 1 && type !== 7) throw bad("tiff maker note is not a byte field");
       if (!unit) { if (num !== 0 && k === 0) return null; continue; }
       if (TIFF_LOOPED.has(type) && num * unit > buf.length) {
         throw bad(`tiff tag ${tag} declares ${num} values, more than the file holds`);
@@ -226,91 +242,227 @@ export function tiffLayout(buf, maxPixels = Infinity) {
       }
       // Where the values sit: inline when they fit the 4-byte field.
       const inline = type === 3 || type === 8 ? num < 3 : type === 4 || type === 9 || type === 13 ? num < 2 : num < 5;
-      const at = inline ? e + 8 : voff;
-      tags.set(tag, { type, num, at });
-      if (tag === 45 || tag === 50740 || tag === 50885) throw bad(`tiff tag ${tag} marks a camera raw file, which is not supported; send png or jpeg`);
-      if (TIFF_POINTER.has(tag)) {
-        for (let j = 0; j < num; j++) readDirectory(u32(at + 4 * j));
-      }
-      if (tag === 37500) {
-        const head = buf.toString("latin1", Math.min(at, buf.length), Math.min(at + Math.min(num, 9), buf.length));
-        if (head.startsWith("Nikon") || head.startsWith("OLYMP") || head.startsWith("OM SYSTEM")) {
-          throw bad("tiff carries a camera maker note in a layout that is not supported; send png or jpeg");
-        }
-        if (u16(voff) < 300 && u16(voff + 4) <= 12) readDirectory(voff);
-      }
+      tags.set(tag, { type, num, at: inline ? e + 8 : voff });
     }
     return tags;
   };
-
   const value = (tags, tag, j = 0) => {
     const t = tags.get(tag);
     if (!t || j >= t.num) return undefined;
-    return t.type === 3 ? u16(t.at + 2 * j) : u32(t.at + 4 * j);
+    return t.type === 1 ? g(t.at + j) : t.type === 3 ? u16(t.at + 2 * j) : u32(t.at + 4 * j);
   };
+  // Where value j of an integer tag sits, and how wide it is.
+  const slot = (tags, tag, j) => { const t = tags.get(tag); const size = t.type === 1 ? 1 : t.type === 3 ? 2 : 4; return { at: t.at + size * j, size }; };
 
-  const pages = [];
+  // The decoder returns the first directory it keeps; a chain start it cannot
+  // read ends the file there.
+  let offset = u32(4), directory = -1, tags = null, count = 0;
   const seen = new Set();
-  let offset = u32(4);
-  for (;;) {
-    const count = u16(offset), firstType = u16(offset + 4);
-    if (count !== 0 && (firstType < 1 || firstType > 13)) break;
-    if (seen.has(offset)) throw bad("tiff directory chain loops back on itself");
+  while (!tags) {
+    count = u16(offset);
+    const firstType = u16(offset + 4);
+    if ((count !== 0 && (firstType < 1 || firstType > 13)) || seen.has(offset) || seen.size >= TIFF_MAX_SKIPPED) break;
     seen.add(offset);
-    if (seen.size > TIFF_MAX_PAGES) throw bad(`tiff holds more than ${TIFF_MAX_PAGES} pages`);
-    const tags = readDirectory(offset);
-    if (tags && tags.has(256)) pages.push(tags);
+    tags = readDirectory(offset);
+    if (tags) { directory = offset; break; }
     offset = u32(offset + 2 + count * 12);
     if (offset === 0) break;
   }
+  if (!tags) throw bad("tiff has no readable image directory");
+  const layout = { le, directory, next: directory + 2 + count * 12, renames, clamps: [], page: null };
+  if (!tags.has(256)) return layout; // the decoder answers "no image width"
 
-  let pixels = 0, bytes = 0;
-  const out = [];
-  for (const tags of pages) {
-    const width = value(tags, 256), height = value(tags, 257) ?? 0;
-    const compression = value(tags, 259) ?? 1;
-    if (!TIFF_COMPRESSION.has(compression)) throw bad(`tiff compression ${compression} is not supported; send png or jpeg`);
-    const photometric = value(tags, 262);
-    if (photometric === 32803 || photometric === 34892) throw bad("tiff holds raw sensor data, which is not supported; send png or jpeg");
-    const bitsPerPixel = (value(tags, 258) ?? 1) * (value(tags, 277) ?? 1);
-    const sampleBytes = height * Math.ceil((width * bitsPerPixel) / 8);
-    const tiled = tags.has(322);
-    let tileBytes = 0, tiles = 0;
-    if (tiled) {
-      const tw = value(tags, 322), th = value(tags, 323) ?? 0;
-      if (tw < 1 || th < 1) throw bad("tiff tile size is zero");
-      if (tw * th > maxPixels) throw bad(`source image too large (tiff tile ${tw}x${th}; max ${maxPixels} pixels)`);
-      tileBytes = Math.ceil((tw * th * bitsPerPixel) / 8);
-      tiles = Math.floor((width + tw - 1) / tw) * Math.floor((height + th - 1) / th);
-    }
-    pixels += width * height;
-    bytes += sampleBytes + tileBytes;
-    // The decoder takes strip offsets from 273 and byte counts from 279, and
-    // the tile tables (324, 325) when the page is tiled or those are absent.
-    const offsetsTag = !tags.has(273) || tiled ? 324 : 273;
-    const countsTag = !tags.has(279) || tiled ? 325 : 279;
-    const parts = tiled ? Math.min(tiles, tags.get(offsetsTag)?.num ?? 0) : tags.get(offsetsTag)?.num ?? 0;
-    const part = (j) => ({ offset: value(tags, offsetsTag, j), length: value(tags, countsTag, j) });
-    // Each strip or tile is read for as many bytes as its count says. One
-    // uncompressed strip is the exception: the decoder sizes it from the page.
-    if (tags.has(countsTag) && !(compression === 1 && !tiled && parts === 1)) {
-      for (let j = 0; j < parts; j++) {
-        const { offset: at, length } = part(j);
-        if (length === undefined) throw bad(`tiff ${tiled ? "tile" : "strip"} ${j} has no byte count`);
-        if (at + length > buf.length) throw bad(`tiff ${tiled ? "tile" : "strip"} ${j} runs past the end of the file`);
-      }
-    }
-    out.push({ width, height, compression, sampleBytes, tileBytes, tiled, parts, part });
+  const width = value(tags, 256), height = value(tags, 257) ?? 0;
+  const compression = value(tags, 259) ?? 1;
+  // Tag 45 switches the decoder to the Panasonic raw scheme whatever tag 259 says.
+  if (TIFF_UNBOUNDED.has(compression) || tags.has(45)) {
+    throw bad(`tiff compression ${tags.has(45) ? 34316 : compression} is not supported; send png or jpeg`);
   }
-  return { pages: out, pixels, bytes };
+  const bitsPerSample = value(tags, 258) ?? 1, samples = value(tags, 277) ?? 1;
+  // Bits per pixel, with the two overrides the decoder applies for raw files.
+  let bitsPerPixel = bitsPerSample * samples;
+  if (compression === 1 && tags.has(279) && tags.has(278) && value(tags, 262) === 32803) {
+    bitsPerPixel = Math.round((value(tags, 279) * 8) / (width * value(tags, 278)));
+  }
+  if (value(tags, 50885) === 4) bitsPerPixel = bitsPerSample * 3;
+  if (!(bitsPerPixel >= 0)) bitsPerPixel = Infinity;
+  const sampleBytes = height * Math.ceil((width * bitsPerPixel) / 8);
+  const tiled = tags.has(322);
+  let tileBytes = 0, tiles = 0;
+  if (tiled) {
+    const tw = value(tags, 322), th = value(tags, 323) ?? 0;
+    if (tw < 1 || th < 1) throw bad("tiff tile size is zero");
+    if (tw * th > maxPixels) throw bad(`source image too large (tiff tile ${tw}x${th}; max ${maxPixels} pixels)`);
+    tileBytes = Math.ceil((tw * th * bitsPerPixel) / 8);
+    tiles = Math.floor((width + tw - 1) / tw) * Math.floor((height + th - 1) / th);
+  }
+  if (width * height > maxPixels) throw bad(`source image too large (${width}x${height}; max ${maxPixels} pixels)`);
+  const maxBytes = maxPixels * TIFF_BYTES_PER_CAP_PIXEL;
+  if (sampleBytes + tileBytes > maxBytes) throw bad(`source image too large (tiff samples decode to ${sampleBytes + tileBytes} bytes; max ${maxBytes})`);
+
+  // The decoder takes strip offsets from 273 and byte counts from 279, and
+  // the tile tables (324, 325) when the page is tiled or those are absent.
+  const offsetsTag = !tags.has(273) || tiled ? 324 : 273;
+  const countsTag = !tags.has(279) || tiled ? 325 : 279;
+  const parts = tiled ? Math.min(tiles, tags.get(offsetsTag)?.num ?? 0) : tags.get(offsetsTag)?.num ?? 0;
+  // Each strip or tile is read for as many bytes as its count says, so a count
+  // that runs past the end of the file is clamped to the file in the decoder's
+  // view. One uncompressed strip is sized from the page instead.
+  const lengths = new Map();
+  if (tags.has(countsTag) && !(compression === 1 && !tiled && parts === 1)) {
+    for (let j = 0; j < parts; j++) {
+      const at = value(tags, offsetsTag, j), length = value(tags, countsTag, j);
+      if (length === undefined || at + length <= buf.length) continue;
+      const kept = Math.max(0, buf.length - at);
+      lengths.set(j, kept);
+      layout.clamps.push({ ...slot(tags, countsTag, j), value: kept });
+    }
+  }
+  const part = (j) => ({ offset: value(tags, offsetsTag, j), length: lengths.get(j) ?? value(tags, countsTag, j) });
+  let jpeg = null;
+  if (TIFF_JPEG.has(compression)) {
+    const list = (tag) => Array.from({ length: tags.get(tag)?.num ?? 0 }, (_, j) => value(tags, tag, j));
+    // JPEGTables, a byte field the decoder puts ahead of every strip.
+    const tables = tags.get(347);
+    if (tables && tables.type !== 1 && tables.type !== 7) throw bad("tiff tag 347 is not a byte field");
+    jpeg = {
+      old: compression === 6,
+      tables: tables ? { at: tables.at, length: tables.num } : null,
+      interchange: tags.has(513) ? { offset: value(tags, 513), length: value(tags, 514) ?? 0 } : null,
+      quant: list(519), huffman: [...list(520), ...list(521)],
+      scanHeader: value(tags, 324) ?? value(tags, 273) ?? value(tags, 513),
+    };
+    // The old-style decoder copies the interchange stream into a buffer of its
+    // declared length and writes a frame header with one entry per sample.
+    if (jpeg.old && jpeg.interchange && jpeg.interchange.offset + jpeg.interchange.length > buf.length) {
+      throw bad("tiff jpeg interchange stream runs past the end of the file");
+    }
+    if (jpeg.old && samples > 4) throw bad(`tiff jpeg page declares ${samples} samples per pixel; at most 4 can be decoded`);
+  }
+  layout.page = { width, height, compression, sampleBytes, tileBytes, tiled, parts, part, jpeg, fax: TIFF_FAX.has(compression) };
+  return layout;
 }
 
-/** The pixel cap applied to everything a TIFF makes the decoder allocate. */
+/** The cap applied to everything the first image makes the decoder allocate. */
 export function assertTiffHeader(buf, maxPixels) {
-  const { pixels, bytes } = tiffLayout(buf, maxPixels);
-  if (pixels > maxPixels) throw bad(`source image too large (tiff pages total ${pixels} pixels; max ${maxPixels} pixels)`);
-  const maxBytes = maxPixels * TIFF_BYTES_PER_CAP_PIXEL;
-  if (bytes > maxBytes) throw bad(`source image too large (tiff samples decode to ${bytes} bytes; max ${maxBytes})`);
+  tiffLayout(buf, maxPixels);
+}
+
+/** The file as the decoder is shown it: a copy in which the chain ends at the
+ *  directory the tools use (its next-directory offset is zero),
+ *  sub-directory and maker-note tags carry an unused tag number so the decoder
+ *  stores them without following them, and byte counts stop at the end of the
+ *  file. The caller's buffer is not written to. */
+export function tiffDecoderView(buf, layout = tiffLayout(buf)) {
+  const view = Buffer.from(buf);
+  const w16 = (v, at) => (layout.le ? view.writeUInt16LE(v, at) : view.writeUInt16BE(v, at));
+  const w32 = (v, at) => (layout.le ? view.writeUInt32LE(v, at) : view.writeUInt32BE(v, at));
+  if (layout.next + 4 <= view.length) w32(0, layout.next);
+  for (const e of layout.renames) w16(TIFF_INERT_TAG, e);
+  for (const { at, size, value } of layout.clamps) {
+    if (at + size > view.length) continue;
+    if (size === 1) view[at] = Math.min(value, 255); else if (size === 2) w16(Math.min(value, 65535), at); else w32(value, at);
+  }
+  return view;
+}
+
+// Every place in [start, end) where a JPEG decoder could read a frame header:
+// the two bytes 0xFF, SOFn. This is a scan of raw bytes on purpose. It sees a
+// superset of what any marker walk sees, and a false match costs nothing
+// unless it also declares a frame past the cap. The first byte is also read as
+// if 0xFF came before it, since the decoder joins this range to other bytes.
+function eachFrameHeader(buf, start, end, visit) {
+  start = Math.max(0, start); end = Math.min(end, buf.length);
+  if (!(end > start)) return 0;
+  const at = (p) => {
+    // A frame header the range ends inside would take its size from bytes
+    // this scan cannot place.
+    if (p + 10 > end) throw bad("tiff jpeg data ends inside a frame header");
+    visit({ height: buf.readUInt16BE(p + 5), width: buf.readUInt16BE(p + 7), components: buf[p + 9] });
+  };
+  if (isFrameHeader(buf[start])) at(start - 1);
+  for (let i = start; ;) {
+    const ff = buf.indexOf(0xff, i);
+    if (ff < 0 || ff + 1 >= end) break;
+    if (isFrameHeader(buf[ff + 1])) at(ff);
+    i = ff + 1;
+  }
+  return end - start;
+}
+
+/** Bounds the data whose decoded size the directory does not state, and throws
+ *  a 400 when it passes what the page allows: each deflate strip or tile is
+ *  inflated under the page's own size, and every frame header in the bytes an
+ *  embedded-JPEG decoder is given must fit `maxPixels` with at most four
+ *  components. This reads the strip data, so it runs in the worker. */
+export function assertTiffStreams(buf, layout, maxPixels) {
+  const page = layout.page;
+  if (!page) return;
+  if (page.compression === 8 || page.compression === 32946) {
+    const bound = (page.tiled ? page.tileBytes : page.sampleBytes) + INFLATE_SLACK;
+    for (let j = 0; j < page.parts; j++) {
+      // The decoder inflates the bytes between a 2-byte head and a 4-byte tail.
+      const { offset, length } = page.part(j);
+      const start = offset + 2, n = (length ?? NaN) - 6;
+      if (!(n >= 0) || start + n > buf.length) break; // the decoder stops here on its own
+      if (!inflatesWithin(buf.subarray(start, start + n), bound, true)) {
+        throw bad(`tiff ${page.tiled ? "tile" : "strip"} ${j} inflates past the ${page.width}x${page.height} page its directory declares`);
+      }
+    }
+  }
+  if (page.jpeg) {
+    const { old, tables, interchange, quant, huffman, scanHeader } = page.jpeg;
+    const visit = ({ width, height, components }) => {
+      if (width * height > maxPixels) throw bad(`source image too large (tiff embedded jpeg frame ${width}x${height}; max ${maxPixels} pixels)`);
+      if (components > 4) throw bad(`tiff embedded jpeg frame declares ${components} components; at most 4 can be decoded`);
+    };
+    // Strips may share bytes, but not without limit: the scan stops once it
+    // has read the file sixteen times over.
+    let scanned = 0;
+    const scan = (start, end) => {
+      scanned += eachFrameHeader(buf, start, end, visit);
+      if (scanned > buf.length * 16 + 65536) throw bad("tiff jpeg strips cover the same bytes too many times");
+    };
+    const g = (p) => (p >= 0 && p < buf.length ? buf[p] : 0);
+    // Each range below is one run of file bytes the decoder copies into the
+    // stream it parses, with the same start and end the decoder uses.
+    if (!old) {
+      if (tables) {
+        // The tables, up to their end-of-image marker (or less their last byte).
+        const n = Math.max(0, Math.min(tables.length, buf.length - tables.at));
+        let end = tables.at + Math.max(0, n - 1);
+        for (let k = 0; k < n - 1; k++) if (buf[tables.at + k] === 0xff && buf[tables.at + k + 1] === 0xd9) { end = tables.at + k; break; }
+        scan(tables.at, end);
+      }
+      for (let j = 0; j < page.parts; j++) {
+        const { offset, length } = page.part(j);
+        if (offset === undefined || length === undefined) continue;
+        // Behind tables, a leading start-of-image marker is dropped.
+        const start = tables && g(offset) === 0xff && g(offset + 1) === 0xd8 ? offset + 2 : offset;
+        scan(start, offset + length);
+      }
+    } else {
+      if (scanHeader !== undefined && g(scanHeader) === 0xff && g(scanHeader + 1) === 0xda) {
+        scan(scanHeader, scanHeader + 2 + ((g(scanHeader + 2) << 8) | g(scanHeader + 3)));
+      }
+      for (let j = 0; j < page.parts; j++) {
+        const { offset, length } = page.part(j);
+        if (offset === undefined || length === undefined) continue;
+        scan(offset, offset + length);
+        // The old-style decoder reads its tables relative to each strip.
+        if (interchange) {
+          const from = offset + interchange.offset, n = interchange.length;
+          scan(from, offset + length);
+          scan(from, from + (g(from + n - 2) === 0xff && g(from + n - 1) === 0xd8 ? n - 2 : n));
+        }
+        for (const q of quant) scan(offset + q, offset + q + 64);
+        for (const h of huffman) {
+          let codes = 19; for (let k = 0; k < 16; k++) codes += g(offset + h + k);
+          scan(offset + h, offset + h + 16 + codes);
+        }
+      }
+    }
+  }
 }
 
 // ---------------------------------------------------------------- inflate --
@@ -318,7 +470,8 @@ export function assertTiffHeader(buf, maxPixels) {
 /** Where a decoder inflates with no output bound, runs the same inflate first
  *  under the size the header declares, and throws a 400 when the data inflates
  *  past it. `format` is sniffFormat's answer. This is real work (it inflates),
- *  so it runs in the worker, never on the main thread. */
+ *  so it runs in the worker, never on the main thread. A deflate TIFF is
+ *  bounded the same way by assertTiffStreams. */
 export function assertInflateWithinDeclared(buf, format) {
   // pngjs bounds its inflate by the image size only when the PNG is not interlaced.
   if (format === "png" && buf.length >= 29 && buf[28] === 1) {
@@ -327,22 +480,6 @@ export function assertInflateWithinDeclared(buf, format) {
     const { idat } = pngChunks(buf);
     if (!inflatesWithin(Buffer.concat(idat), size + INFLATE_SLACK, false)) {
       throw bad(`interlaced png inflates past the ${buf.readUInt32BE(16)}x${buf.readUInt32BE(20)} image its header declares`);
-    }
-  }
-  // utif2 inflates each strip or tile of a deflate TIFF whole.
-  if (format === "tiff") {
-    for (const page of tiffLayout(buf).pages) {
-      if (page.compression !== 8 && page.compression !== 32946) continue;
-      const bound = (page.tiled ? page.tileBytes : page.sampleBytes) + INFLATE_SLACK;
-      for (let j = 0; j < page.parts; j++) {
-        // The decoder inflates the bytes between a 2-byte head and a 4-byte tail.
-        const { offset, length } = page.part(j);
-        const start = offset + 2, n = (length ?? NaN) - 6;
-        if (!(n >= 0) || start + n > buf.length) break; // the decoder stops here on its own
-        if (!inflatesWithin(buf.subarray(start, start + n), bound, true)) {
-          throw bad(`tiff ${page.tiled ? "tile" : "strip"} ${j} inflates past the ${page.width}x${page.height} page its directory declares`);
-        }
-      }
     }
   }
 }
