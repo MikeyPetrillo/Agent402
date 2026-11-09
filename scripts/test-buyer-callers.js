@@ -41,6 +41,35 @@ const ALLOWED = [
   { name: "flights", match: /^pay: async \(url, opts\) => \(await import\("\.\/x402-buyer\.js"\)\)\.payX402\(url, opts\),$/, kit: "src/tools/flights-kit.js", reserve: /await reserve\(spendPayer, /, },
 ];
 
+// Imports, not call text: outside server.js (the one wiring hub) no module may
+// reach the paying functions however it spells them - a named import or its
+// alias, a namespace import, a re-export, or a dynamic import of a buyer.
+// Constant imports (ROUTER_UA, TEMPO_USDC) are fine.
+const PAYING = /\b(payX402|payTempo)\b/;
+const BUYER_SPEC = /(?:^["'`]|\/)(x402|tempo)-buyer(?:\.m?js)?["'`]$/;
+const importLeaks = [];
+const walkAll = (d) => readdirSync(d).flatMap((n) => {
+  const p = join(d, n);
+  return statSync(p).isDirectory() ? walkAll(p) : /\.(m?js|cjs)$/.test(p) ? [p] : [];
+});
+for (const f of walkAll(join(ROOT, "src"))) {
+  const rel = relative(ROOT, f);
+  if (BUYERS.has(rel) || rel === "src/server.js") continue;
+  const src = readFileSync(f, "utf8");
+  // Static imports and re-exports of a buyer module.
+  for (const m of src.matchAll(/(?:import|export)\s*(\*\s*as\s+\w+|\{[^}]*\}|\w+)?\s*(?:,\s*\{[^}]*\})?\s*from\s*(["'][^"']+["'])/g)) {
+    if (!BUYER_SPEC.test(m[2])) continue;
+    const what = m[0];
+    if (/\*\s*as\s+\w+/.test(what) || PAYING.test(what) || /^export\s*\*/.test(what)) importLeaks.push(`${rel}: ${what.replace(/\s+/g, " ").slice(0, 90)}`);
+  }
+  // Any dynamic import of a buyer module.
+  for (const m of src.matchAll(/import\(\s*(["'`][^"'`]+["'`])\s*\)/g)) if (BUYER_SPEC.test(m[1])) importLeaks.push(`${rel}: dynamic import ${m[1]}`);
+}
+ok(importLeaks.length === 0, `no module outside server.js imports a paying buyer function, by any name${importLeaks.length ? `:\n  ${importLeaks.join("\n  ")}` : ""}`);
+// In server.js the paying functions come in under their own names only.
+const serverSrc = readFileSync(join(ROOT, "src/server.js"), "utf8");
+ok(!/\b(payX402|payTempo)\s+as\s+\w+/.test(serverSrc) && !/\{\s*[^}]*\b(payX402|payTempo)\s*:\s*\w+/.test(serverSrc), "server.js does not rename the paying functions");
+
 const unknown = sites.filter((s) => !(s.rel === "src/server.js" && ALLOWED.some((a) => a.match.test(s.text))));
 ok(unknown.length === 0, `every call into the outside-seller buyers is a listed caller${unknown.length ? `:\n  ${unknown.map((s) => `${s.rel}:${s.line} ${s.text.slice(0, 100)}`).join("\n  ")}` : ""}`);
 const serverCalls = sites.filter((s) => s.rel === "src/server.js").length;
