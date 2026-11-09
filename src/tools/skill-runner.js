@@ -30,7 +30,7 @@
 import { SKILL_PACKS, PACK_PRICES } from "../skills.js";
 import { safeFetch } from "./fetch-guard.js";
 import { capturePostHogPackStep } from "../posthog.js";
-import { callerInputError, holdsUncoercible } from "../caller-input-errors.js";
+import { callerInputError } from "../caller-input-errors.js";
 
 // Cap for the media-pipeline URL→base64 bridge below. Must route through
 // safeFetch (SSRF guard + size cap), never raw fetch — the URL is caller-supplied.
@@ -2110,15 +2110,16 @@ async function runPack(packSlug, args, ctx) {
       // while every other step in the pack was 100% - a coin flip on the
       // publisher, charged to the buyer as a missing step. Falling back to
       // the next search result costs one more attempt and no upstream money.
-      // A step's input is mapped from the caller's args; an arg that will not
-      // coerce (an object where text is expected) is the caller's 400.
+      // A step's input is mapped from the caller's args; an arg that cannot be
+      // coerced (an object whose toString is not a function) is the caller's
+      // 400, with the arg named. Any other error here stays what it is.
       let candidates;
       try {
         candidates = typeof step.mapInputs === "function"
           ? await step.mapInputs(args, prior)
           : [await step.mapInput(args, prior)];
       } catch (mapErr) {
-        throw holdsUncoercible(args) ? callerInputError(mapErr) : mapErr;
+        throw callerInputError(mapErr, args);
       }
       const inputs = (Array.isArray(candidates) ? candidates : [candidates]).filter((i) => i != null);
       if (!inputs.length) {

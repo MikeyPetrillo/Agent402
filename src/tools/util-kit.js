@@ -187,6 +187,7 @@ export const UTIL_TOOLS = [
       const payload = parseMaybeJson(i.payload, "payload");
       if (typeof payload !== "object" || payload === null || Array.isArray(payload)) throw bad('"payload" must be a JSON object');
       const secret = need(i, "secret");
+      if (i.alg && typeof i.alg !== "string") throw bad('"alg" must be a string');
       const alg = (i.alg || "HS256").toUpperCase();
       if (!HS[alg]) throw bad(`unsupported alg "${alg}" (HS256 | HS384 | HS512)`);
       const head = b64url(JSON.stringify({ alg, typ: "JWT" }));

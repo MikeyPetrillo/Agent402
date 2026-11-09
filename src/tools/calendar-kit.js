@@ -276,6 +276,7 @@ export const CALENDAR_TOOLS = [
       if (input.epoch !== undefined && input.epoch !== null) {
         const ep = Number(input.epoch);
         if (!Number.isFinite(ep)) throw bad('"epoch" must be a finite number');
+        if (input.unit && typeof input.unit !== "string") throw bad('"unit" must be a string');
         const unit = (input.unit || "seconds").toLowerCase();
         if (unit !== "seconds" && unit !== "milliseconds")
           throw bad('"unit" must be "seconds" or "milliseconds"');

@@ -2425,8 +2425,9 @@ for (const tool of buildFlightTools({
 // fully-assembled catalog, so the paywall offers EVM rails only for these
 // routes. Every other tool is untouched and keeps all configured chains.
 for (const def of Object.values(CATALOG)) {
-  // A pure-CPU tool answers 400, not 500, for a field it cannot coerce
-  // (src/caller-input-errors.js). Wrapped here, over the assembled catalog,
+  // A proof-of-work tool answers 400, with the field named, when its input
+  // holds a value that cannot be coerced (src/caller-input-errors.js); any
+  // other bare error stays a 500. Wrapped here, over the assembled catalog,
   // so the HTTP route, the connector and the skill packs share it.
   if (isComputePayable(def) && typeof def.handler === "function") def.handler = withCallerInputErrors(def.handler);
   if (isIdentityBoundRoute(def)) def.identityBound = true;

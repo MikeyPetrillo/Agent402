@@ -186,6 +186,7 @@ const encodingTools = [
     },
     handler: (input) => {
       const text = capText(need(input, "text"));
+      if (input.algo && typeof input.algo !== "string") throw bad('"algo" must be a string');
       const algo = (input.algo || "sha256").toLowerCase();
       if (!HASH_ALGOS.includes(algo)) throw bad(`algo must be one of: ${HASH_ALGOS.join(", ")}`);
       const h = createHash(algo).update(text);
@@ -217,6 +218,7 @@ const encodingTools = [
     handler: (input) => {
       const text = capText(need(input, "text"));
       const key = need(input, "key");
+      if (input.algo && typeof input.algo !== "string") throw bad('"algo" must be a string');
       const algo = (input.algo || "sha256").toLowerCase();
       if (!["sha256", "sha512", "sha1"].includes(algo)) throw bad("algo must be sha256, sha512, or sha1");
       const buf = createHmac(algo, key).update(text).digest();
@@ -483,6 +485,7 @@ const encodingTools = [
       const min = parseInt(input.min, 10);
       const max = parseInt(input.max, 10);
       if (Number.isNaN(min) || Number.isNaN(max) || max <= min) throw bad("Provide ?bytes= or integer ?min= and ?max= with max > min");
+      if (!Number.isSafeInteger(min) || !Number.isSafeInteger(max + 1) || max - min >= 2 ** 48) throw bad("min and max must be safe integers less than 2^48 apart");
       return { integers: Array.from({ length: count }, () => randomInt(min, max + 1)) };
     },
   },
@@ -694,7 +697,7 @@ const dataTools = [
       },
       output: { example: { csv: "name,role.title\nAda,Engineer\n", rows: 1, columns: 2 } },
     },
-    handler: (input) => {
+    handler: async (input) => {
       const data = parseMaybeJson(need(input, "json", "any"), "json");
       if (!Array.isArray(data) || !data.length) throw bad('"json" must be a non-empty array of objects');
       if (data.length > 10_000) throw bad("Max 10000 rows");
@@ -859,7 +862,7 @@ const dataTools = [
         properties: { markdown: { type: "string", description: "Markdown text (max 100KB)" } },
         required: ["markdown"],
       },
-      output: { example: { html: "<h1>Hi</h1>\n<p><strong>bold</strong></p>\n" } },
+      output: { example: { html: "<h1 id=\"hi\">Hi</h1>\n<p><strong>bold</strong></p>\n" } },
     },
     handler: (input) => {
       const text = capText(need(input, "markdown"), 100_000, "markdown");

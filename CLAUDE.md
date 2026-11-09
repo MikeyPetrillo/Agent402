@@ -69,6 +69,14 @@ LLC: credit the entity, never a personal name.
   a tested invariant (`scripts/test-free-tier-egress.js`), and so is a bounded run on long
   adversarial strings: `scripts/test-redos-free-tier.js` sends every free tool's and skill's
   string fields a hostile corpus while it times the event loop.
+- The same guard sends every field of every free tool a structured corpus (rows that share no
+  key, a spec whose schemas each reference the next twice, dates at the ends of the range, an
+  object whose `toString` is not a function), bounds the size of each answer, and fails when a
+  proof-of-work tool answers 500 or 502 to any of it.
+- A proof-of-work tool whose input holds a value that cannot be coerced (an object whose own
+  `toString` or `valueOf` is not a function) answers 400 with the field named: the catalog wraps
+  those handlers once (`src/caller-input-errors.js`). Every other bare TypeError or RangeError
+  stays a 500 and is counted as a tool failure; a tool checks its own inputs for everything else.
 - **Identity-bound routes** (memory, my-usage, attest, feedback) are keyed on the signed
   EIP-3009 `authorization.from` (`src/payer.js` `identityPayerOf`: null in FREE_MODE, where no
   header is verified); they are EVM-exact only and refused on Tempo/credits gates. Never weaken payer attribution. Never case-fold base58/Stellar addresses.

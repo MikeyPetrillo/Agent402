@@ -1,60 +1,77 @@
-// A caller's malformed input is a 400, wherever a pure-CPU tool notices it.
+// A field that cannot be coerced is the caller's 400, with the field named.
 //
-// A tool on the proof-of-work tier (src/free-tier.js) is a function of its
-// input alone: no network, no key, no model, no stored state. Its handlers
-// coerce fields as they go (String(x), Number(x), new Date(x).toISOString(),
-// "x".repeat(n)), and JavaScript reports a field it cannot coerce by throwing
-// a TypeError or a RangeError: an object whose "toString" is not a function,
-// a date outside the range a Date holds, a structure nested past the stack.
-// Thrown bare, that reads as a 500, a tool failure, when the tool did what it
-// should and the input is the caller's to fix.
+// JSON can carry an object whose own "toString" or "valueOf" is not a
+// function ({"toString": 1}). JavaScript cannot turn such a value into text
+// or a number: String(x), Number(x), `${x}` and x + "" all throw a TypeError.
+// A tool that reads the field as a scalar then fails with a bare TypeError,
+// which reads as a 500, a tool failure, when the input is the caller's to fix.
 //
-// The catalog wraps each such tool's handler once (src/server.js), so the
-// HTTP route, the MCP connector and the skill packs all answer the same 400.
-// A handler's own errors (anything carrying a statusCode) pass through, and
-// so does every error on a tool that reaches the network or a model, where a
-// TypeError can be a fault on our side.
+// The catalog wraps each proof-of-work tool's handler once (src/server.js),
+// so the HTTP route, the MCP connector and the skill packs answer alike. The
+// rule is narrow on purpose: a bare TypeError or RangeError becomes a 400 ONLY
+// when the input holds such a value, and the answer names where. Any other
+// bare error stays what it is, a 500 that the failure monitor counts, so a
+// defect in a tool is never dressed as bad input.
 //
 // Pure module: no imports.
 
-/** The 400 a caller reads for `err`, or `err` itself when it is not a coercion failure. */
-export function callerInputError(err) {
-  if (!err) return err;
+const MAX_NODES = 10_000;
+const keyPath = (path, key) => (typeof key === "number" ? `${path}[${key}]` : path ? (/^[A-Za-z_$][\w$]*$/.test(key) ? `${path}.${key}` : `${path}[${JSON.stringify(key)}]`) : String(key));
+
+/**
+ * Where `value` holds an object whose own "toString" or "valueOf" is not a
+ * function: { path, key } for the first one found (path "" is the value
+ * itself), or null. Reads at most MAX_NODES nodes.
+ */
+export function uncoercibleAt(value, max = MAX_NODES) {
+  const stack = [{ v: value, path: "" }];
+  let seen = 0;
+  while (stack.length && seen++ < max) {
+    const { v, path } = stack.pop();
+    if (v === null || typeof v !== "object") continue;
+    if (Array.isArray(v)) {
+      for (let i = v.length - 1; i >= 0; i--) if (v[i] !== null && typeof v[i] === "object") stack.push({ v: v[i], path: keyPath(path, i) });
+      continue;
+    }
+    for (const k of ["toString", "valueOf"]) if (Object.hasOwn(v, k) && typeof v[k] !== "function") return { path, key: k };
+    const keys = Object.keys(v);
+    for (let i = keys.length - 1; i >= 0; i--) { const c = v[keys[i]]; if (c !== null && typeof c === "object") stack.push({ v: c, path: keyPath(path, keys[i]) }); }
+  }
+  return null;
+}
+
+/** True when `value` holds such an object at any depth. */
+export function holdsUncoercible(value, max = MAX_NODES) {
+  return uncoercibleAt(value, max) !== null;
+}
+
+const isBare = (err) => !!err && (err.statusCode
   // A worker pool hands an error back as a plain Error with a 500 and the
   // name it was thrown under (`threw`), set only when it carried no status.
-  const bare = err.statusCode ? (err.statusCode === 500 && (err.threw === "TypeError" || err.threw === "RangeError")) : (err instanceof TypeError || err instanceof RangeError);
-  if (!bare) return err;
-  const out = new Error(`Invalid input: ${String(err.message || err.name).split("\n")[0].slice(0, 200)}`);
+  ? err.statusCode === 500 && (err.threw === "TypeError" || err.threw === "RangeError")
+  : err instanceof TypeError || err instanceof RangeError);
+
+/**
+ * The 400 a caller reads when `err` is a bare TypeError or RangeError AND
+ * `input` holds a value that cannot be coerced; otherwise `err` itself.
+ */
+export function callerInputError(err, input) {
+  if (!isBare(err)) return err;
+  const at = uncoercibleAt(input);
+  if (!at) return err;
+  const out = new Error(`${at.path ? `"${at.path}"` : "The input"} holds an object whose "${at.key}" is not a function, so it cannot be read as text or a number; send a string or a number there`);
   out.statusCode = 400;
+  out.field = at.path;
   out.cause = err;
   return out;
 }
 
-/** `handler`, with a coercion failure answered as a 400. */
+/** `handler`, with that failure answered as a 400. */
 export function withCallerInputErrors(handler) {
   return async (input, ctx) => {
     try { return await handler(input, ctx); }
-    catch (err) { throw callerInputError(err); }
+    catch (err) { throw callerInputError(err, input); }
   };
-}
-
-/**
- * True when `value` holds, at any depth, an object whose own "toString" or
- * "valueOf" is not a function: the shape String() and Number() throw on.
- * Reads at most `max` nodes.
- */
-export function holdsUncoercible(value, max = 10_000) {
-  const stack = [value];
-  let seen = 0;
-  while (stack.length && seen++ < max) {
-    const v = stack.pop();
-    if (v === null || typeof v !== "object") continue;
-    if (!Array.isArray(v)) {
-      for (const k of ["toString", "valueOf"]) if (Object.hasOwn(v, k) && typeof v[k] !== "function") return true;
-    }
-    for (const child of Array.isArray(v) ? v : Object.values(v)) stack.push(child);
-  }
-  return false;
 }
 
 /** `v`, or undefined when it cannot be read as text (String(v) throws). */

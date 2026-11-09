@@ -148,6 +148,7 @@ const HTML_TOOL_DEFS = [
       const html = need(i, "html");
       const selector = (i.selector || "table").toString();
       await validateSelector(selector);
+      if (i.format && typeof i.format !== "string") throw bad('"format" must be a string');
       const format = (i.format || "json").toLowerCase();
       if (format !== "json" && format !== "csv") throw bad(`"format" must be "json" or "csv"`);
 

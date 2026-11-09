@@ -1359,7 +1359,9 @@ const time = [
       if (!matches.length) throw bad('Cannot parse "duration" (e.g. "2d 3h")');
       const mult = { w: 604800, d: 86400, h: 3600, m: 60, s: 1 };
       const secs = matches.reduce((a, mt) => a + Number(mt[1]) * mult[mt[2]], 0) * sign;
-      return { result: new Date(base.getTime() + secs * 1000).toISOString(), addedSeconds: secs };
+      const result = new Date(base.getTime() + secs * 1000);
+      if (Number.isNaN(result.getTime())) throw bad("The result is outside the range of dates that can be written");
+      return { result: result.toISOString(), addedSeconds: secs };
     },
   },
 ];
