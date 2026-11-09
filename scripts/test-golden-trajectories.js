@@ -117,7 +117,7 @@ const sellerStub = createServer((req, res) => {
     seenRequests.push([s.id, kind, search]);
     // A route that needs its query refuses a request without it, paid or not.
     const sp = new URLSearchParams(search);
-    if ((s.requiresQuery || []).some((k) => !sp.get(k))) { obs.push({ seller: s.id, kind }); return send(400, { error: "missing query input" }); }
+    if ((s.requiresQuery || []).some((k) => !sp.get(k))) { obs.push({ seller: s.id, kind }); return send(s.missingQueryStatus || 400, { error: "missing query input" }); }
     if (s.delayMs) await sleep(s.delayMs);
     if (kind === "probe" && s.probeDelayMs) await sleep(s.probeDelayMs);
     if (kind === "bare" && s.bare === 200) { obs.push({ seller: s.id, kind }); return send(200, { served: s.id, free: true }); }
