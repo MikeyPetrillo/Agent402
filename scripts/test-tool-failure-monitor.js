@@ -803,6 +803,7 @@ try {
     assert.ok(["ok", "degraded", "failing"].includes(j.toolFailures));
     assert.ok(Array.isArray(j.tools) && Array.isArray(j.upstreams) && j.thresholds && j.issueSummary);
     assert.equal(j.scope, "instance");
+    assert.ok(Array.isArray(j.chainRefusalHolds) && j.chainRefusalHolds.length === 0, "the chain refusal holds are listed (none on a fresh boot)");
   });
   await check("a worker cold start that ends in an answer counts as one success; a wake that fails counts once", async () => {
     const opRead = async () => {
