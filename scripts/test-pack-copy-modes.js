@@ -3,6 +3,7 @@
 // independent) must not be sold as a sequence. wallet-audit's metadata step
 // reads a token the wallet holds, never the wallet address, and refuses with a
 // 422 when the wallet holds no tokens. Offline.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports
 const { SKILL_PACKS } = await import("../src/skills.js");
 const { PACK_STEPS } = await import("../src/tools/skill-runner.js");
 
