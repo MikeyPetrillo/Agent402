@@ -342,5 +342,62 @@ const hex = (n) => (n >>> 0).toString(16).padStart(8, "0");
   ok(q.width === 4 && q.height === 4, `a PNG with "IHDR" inside a text chunk still decodes (${q.width}x${q.height})`);
 }
 
+// JPEG. The decoder keeps the last frame header (SOF) it meets. The marker
+// chain is walked by segment length, with entropy-coded data skipped to the
+// next real marker, and a second frame header is refused; the decoder is also
+// handed the pixel cap, so it applies the cap itself to whichever frame header
+// it acts on. A thumbnail inside an EXIF segment has a frame header of its own and is not
+// part of the chain.
+{
+  const seg = (marker, data) => { const b = Buffer.alloc(4); b[0] = 0xff; b[1] = marker; b.writeUInt16BE(data.length + 2, 2); return Buffer.concat([b, data]); };
+  const small = Buffer.from(await new Jimp({ width: 16, height: 16, color: 0x336699ff }).getBuffer(JimpMime.jpeg));
+  let at = 2; while (small[at + 1] !== 0xc0) at += 2 + small.readUInt16BE(at + 2);
+  const sofEnd = at + 2 + small.readUInt16BE(at + 2);
+  const bigSof = Buffer.from(small.subarray(at, sofEnd)); bigSof.writeUInt16BE(9000, 5); bigSof.writeUInt16BE(9000, 7);
+  const everyDecoder = [...TRANSFORMS.map(([slug, extra]) => [slug, tool(slug), extra]), ["barcode-decode", barcodeDecode, {}]];
+  await refusedBy("a JPEG with a second frame header", Buffer.concat([small.subarray(0, sofEnd), bigSof, small.subarray(sofEnd)]), /^jpeg carries more than one frame header/, everyDecoder);
+
+  // A frame header the marker chain does not show: the decoder ends the scan at
+  // a restart marker, takes the two bytes after it for a damaged APP1 and jumps
+  // by the length that follows, landing inside an APP2 segment. The chain has
+  // one frame header, so this one is stopped by the decoder's own cap.
+  const inside = Buffer.concat([Buffer.alloc(4), bigSof, Buffer.alloc(4)]);
+  const offChain = Buffer.concat([small.subarray(0, small.length - 2), Buffer.from([0xff, 0xd0, 0x00, 0xe1, 0x00, 0x0a]), seg(0xe2, inside), Buffer.from([0xff, 0xd9])]);
+  for (const [name, handler, extra] of [["image-convert", tool("image-convert"), { format: "png" }], ["image-crop", tool("image-crop"), { width: 2, height: 2 }], ["barcode-decode", barcodeDecode, {}]]) {
+    const a = await attempt(handler, offChain, extra);
+    ok(a.code === 400 && /maxResolutionInMP limit exceeded/.test(a.msg || "") && a.ms < 2000, `${name}: the decoder applies the pixel cap to a frame header off the marker chain (got ${a.code} "${a.msg}" in ${a.ms}ms)`);
+  }
+
+  // Ordinary JPEGs. A 200x100 picture with a real EXIF block whose second
+  // directory points at a 160x120 JPEG thumbnail (tags 0x0201 and 0x0202).
+  const picture = new Jimp({ width: 200, height: 100, color: 0x3366ccff });
+  const photo = Buffer.from(await picture.getBuffer(JimpMime.jpeg));
+  const thumb = Buffer.from(await new Jimp({ width: 160, height: 120, color: 0xcc6633ff }).getBuffer(JimpMime.jpeg));
+  const t = Buffer.alloc(54); t.write("II"); t.writeUInt16LE(42, 2); t.writeUInt32LE(8, 4);
+  t.writeUInt16LE(1, 8); t.writeUInt16LE(0x0112, 10); t.writeUInt16LE(3, 12); t.writeUInt32LE(1, 14); t.writeUInt16LE(1, 18); t.writeUInt32LE(26, 22);
+  t.writeUInt16LE(2, 26); t.writeUInt16LE(0x0201, 28); t.writeUInt16LE(4, 30); t.writeUInt32LE(1, 32); t.writeUInt32LE(54, 36);
+  t.writeUInt16LE(0x0202, 40); t.writeUInt16LE(4, 42); t.writeUInt32LE(1, 44); t.writeUInt32LE(thumb.length, 48);
+  const withThumb = Buffer.concat([photo.subarray(0, 2), seg(0xe1, Buffer.concat([Buffer.from("Exif\0\0"), t, thumb])), photo.subarray(2)]);
+  const meta = await tool("image-exif")({ image: withThumb.toString("base64") });
+  ok(meta.width === 200 && meta.height === 100 && meta.exif.Orientation === 1, `a JPEG with an EXIF thumbnail reports the picture's size, not the thumbnail's (${meta.width}x${meta.height})`);
+  let j = await decoded(withThumb);
+  ok(j.width === 200 && j.height === 100, `a JPEG with an EXIF thumbnail (its own SOF inside APP1) still decodes (${j.width}x${j.height})`);
+  const bc = await attempt(barcodeDecode, withThumb);
+  ok(bc.code === 200 && bc.r.found === false, `barcode-decode still reads a JPEG with an EXIF thumbnail (got ${bc.code} ${bc.msg || ""})`);
+  j = await decoded(Buffer.concat([photo.subarray(0, 2), seg(0xfe, Buffer.concat([Buffer.from("note "), bigSof])), photo.subarray(2)]));
+  ok(j.width === 200 && j.height === 100, `a JPEG whose comment segment holds SOF bytes still decodes (${j.width}x${j.height})`);
+  j = await decoded(Buffer.concat([photo, thumb]));
+  ok(j.width === 200 && j.height === 100, `a JPEG followed by a second picture (multi-picture file) still decodes as the first (${j.width}x${j.height})`);
+  // Bytes after the end-of-image marker are not part of the picture, whatever they spell.
+  j = await decoded(Buffer.concat([photo, Buffer.from([0, 2]), bigSof]));
+  ok(j.width === 200 && j.height === 100, `a JPEG with frame-header bytes after its end marker still decodes (${j.width}x${j.height})`);
+  // Progressive: one SOF2, then a DC scan and an AC scan (8x8 gray, hand-built).
+  const table = (cls) => seg(0xc4, Buffer.from([cls << 4, 1, ...Array(15).fill(0), 0]));
+  const scan = (from, to) => Buffer.concat([seg(0xda, Buffer.from([1, 1, 0, from, to, 0])), Buffer.from([0x7f])]);
+  const progressive = Buffer.concat([Buffer.from([0xff, 0xd8]), seg(0xdb, Buffer.from([0, ...Array(64).fill(1)])), seg(0xc2, Buffer.from([8, 0, 8, 0, 8, 1, 1, 0x11, 0])), table(0), scan(0, 0), table(1), scan(1, 63), Buffer.from([0xff, 0xd9])]);
+  j = await decoded(progressive);
+  ok(j.width === 8 && j.height === 8 && hex(j.getPixelColor(3, 3)) === "808080ff", `a progressive JPEG (one SOF2, two scans) still decodes (${j.width}x${j.height}, ${hex(j.getPixelColor(3, 3))})`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

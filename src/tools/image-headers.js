@@ -71,6 +71,52 @@ function inflatesWithin(data, bound, raw) {
 
 const INFLATE_SLACK = 64;
 
+// ---------------------------------------------------------------- JPEG -----
+
+const isFrameHeader = (m) => m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc;
+
+/** Frame headers (SOFn) on a JPEG's top-level marker chain, in order, up to
+ *  `max` of them: [{ width, height }]. Segments are skipped by their length, so
+ *  a thumbnail inside an APPn segment is never read as a frame of this image;
+ *  after a start-of-scan the entropy-coded data is skipped to the next marker
+ *  (0xFF followed by anything but a stuffed zero or a restart marker). Stops at
+ *  the end-of-image marker, as the decoder does. */
+export function jpegFrameHeaders(buf, max = Infinity) {
+  const frames = [];
+  let i = 2;
+  while (i + 3 < buf.length && frames.length < max) {
+    if (buf[i] !== 0xff) { i++; continue; }
+    const marker = buf[i + 1];
+    if (marker === 0xff) { i++; continue; } // fill byte
+    if (marker === 0x00 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd8)) { i += 2; continue; }
+    if (marker === 0xd9) break;
+    const len = buf.readUInt16BE(i + 2);
+    if (isFrameHeader(marker) && i + 9 <= buf.length) {
+      frames.push({ height: buf.readUInt16BE(i + 5), width: buf.readUInt16BE(i + 7) });
+    }
+    if (len < 2) break;
+    i += 2 + len;
+    if (marker === 0xda) {
+      // Entropy-coded data: hop between 0xFF bytes (native search) to the next
+      // real marker.
+      for (;;) {
+        const ff = buf.indexOf(0xff, i);
+        if (ff < 0 || ff + 1 >= buf.length) { i = buf.length; break; }
+        const next = buf[ff + 1];
+        if (next !== 0x00 && !(next >= 0xd0 && next <= 0xd7)) { i = ff; break; }
+        i = ff + 2;
+      }
+    }
+  }
+  return frames;
+}
+
+/** The decoder keeps the last frame header it meets, so more than one is refused. */
+export function assertJpegHeader(buf) {
+  const frames = jpegFrameHeaders(buf, 2);
+  if (frames.length > 1) throw bad("jpeg carries more than one frame header (SOF); exactly one is allowed");
+}
+
 // ---------------------------------------------------------------- GIF ------
 
 // The parser the decoder itself uses: the omggif copy that jimp's GIF codec

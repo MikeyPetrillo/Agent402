@@ -10,7 +10,7 @@
 // jimp loads with the first decode (./lazy-deps.js), not at boot: on the main
 // thread that keeps its evaluation off the startup path; the worker preloads it.
 import { loadJimp } from "./lazy-deps.js";
-import { assertGifHeader, gifFirstFrame, assertPngHeader, assertInflateWithinDeclared } from "./image-headers.js";
+import { assertGifHeader, gifFirstFrame, assertPngHeader, assertInflateWithinDeclared, assertJpegHeader, jpegFrameHeaders } from "./image-headers.js";
 
 // Re-exported for the other decoders of buyer images (barcode-kit, frame-diff).
 export { gifFirstFrame, assertPngHeader, assertInflateWithinDeclared };
@@ -50,7 +50,8 @@ export function sniffFormat(buf) {
 
 /** Declared pixel dimensions from the container HEADER, without decoding.
  *  Returns null when the format carries no cheap size field (readImage refuses
- *  those). PNG: the first chunk's IHDR. JPEG: the first SOF marker found. BMP: the DIB header. GIF: the logical screen descriptor.
+ *  those). PNG: the first chunk's IHDR. JPEG: the first frame header on the
+ *  marker chain. BMP: the DIB header. GIF: the logical screen descriptor.
  *  TIFF: the first directory. This reports a size; whether the decoder is
  *  held to it is assertDeclaredWithinPixelCap's job. */
 export function declaredDimensions(buf) {
@@ -93,21 +94,10 @@ export function declaredDimensions(buf) {
       if (chunk === "VP8L") { const b = buf.readUInt32LE(21); return { width: (b & 0x3fff) + 1, height: ((b >> 14) & 0x3fff) + 1 }; }
     }
     if (format === "jpeg") {
-      // Walk the marker chain to the first Start-Of-Frame; bounded by length.
-      let i = 2;
-      while (i + 9 < buf.length) {
-        if (buf[i] !== 0xff) { i++; continue; }
-        const marker = buf[i + 1];
-        if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { i += 2; continue; }
-        const len = buf.readUInt16BE(i + 2);
-        // SOF0/1/2/3/5/6/7/9/10/11/13/14/15: every non-differential and
-        // differential frame header carries height then width at +5.
-        if ((marker >= 0xc0 && marker <= 0xcf) && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
-          return { height: buf.readUInt16BE(i + 5), width: buf.readUInt16BE(i + 7) };
-        }
-        if (len < 2) break;
-        i += 2 + len;
-      }
+      // The first Start-Of-Frame on the marker chain (segments skipped by their
+      // length, so an EXIF thumbnail's own frame header is never read).
+      const [frame] = jpegFrameHeaders(buf, 1);
+      if (frame) return { height: frame.height, width: frame.width };
     }
   } catch { /* malformed header, so fall through to the decoder's own error */ }
   return null;
@@ -131,6 +121,7 @@ export function assertDeclaredWithinPixelCap(buf, maxPixels) {
   const format = sniffFormat(buf);
   if (format === "gif") assertGifHeader(buf);
   if (format === "png") assertPngHeader(buf);
+  if (format === "jpeg") assertJpegHeader(buf);
 }
 
 export async function readImage(buf, { maxPixels = MAX_SRC_PIXELS } = {}) {
@@ -147,7 +138,10 @@ export async function readImage(buf, { maxPixels = MAX_SRC_PIXELS } = {}) {
   assertInflateWithinDeclared(buf, sniffFormat(buf));
   const { Jimp } = await loadJimp();
   let img;
-  try { img = await Jimp.read(buf); }
+  // fromBuffer is what Jimp.read runs for a Buffer; called directly because it
+  // is the form that hands per-format options to the decoder. The JPEG decoder
+  // then enforces the pixel cap itself on whichever frame header it acts on.
+  try { img = await Jimp.fromBuffer(buf, { "image/jpeg": { maxResolutionInMP: maxPixels / 1e6 } }); }
   catch (e) { throw bad(`could not decode image: ${e.message}`); }
   if (img.width * img.height > maxPixels) throw bad(`source image too large (${img.width}x${img.height})`);
   return img;

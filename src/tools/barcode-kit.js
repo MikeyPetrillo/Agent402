@@ -62,7 +62,8 @@ function toRgba(buf) {
       const png = PNG.sync.read(buf);
       img = { data: png.data, width: png.width, height: png.height };
     } else {
-      const j = jpeg.decode(buf, { useTArray: true, maxMemoryUsageInMB: 64 });
+      // The decoder applies the pixel cap to whichever frame header it acts on.
+      const j = jpeg.decode(buf, { useTArray: true, maxMemoryUsageInMB: 64, maxResolutionInMP: MAX_PIXELS / 1e6 });
       img = { data: j.data, width: j.width, height: j.height };
     }
   } catch (e) {
