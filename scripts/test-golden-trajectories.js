@@ -18,6 +18,8 @@
 //                unproven lane's per-seller spend
 //   receipt      seller, sellerProof, underlyingPriceUsd (and sellerPaid)
 //   status       the final HTTP status
+//   requests     (graded only for a task that lists it) each request a seller
+//                saw, with its kind (probe, bare, paid) and query string
 //
 // A divergence prints the task, the step, expected and actual. A per-step pass
 // rate closes the run. Tasks run in file order on one server, so a task can
@@ -73,22 +75,31 @@ const sellerIdOfOrigin = (o) => { try { return sellerByHost.get(new URL(o).host)
 const consumed = new Set(); // nonces the stub chain reports used
 const obs = []; // { seller, kind, to, value, nonce }
 const paidCalls = new Map(); // seller id -> paid requests seen
+const seenRequests = []; // [seller id, kind, query string] per request
 let txN = 0;
 
 // A seller on another EVM buyer chain (s.networks[0], e.g. Polygon, listed in
 // the boot's SOR_EVM_CHAINS) quotes that chain's stablecoin under its domain.
 const evmOf = (s) => EVM_BUYER_CHAINS[EVM_BUYER_CHAIN_BY_NETWORK[s.networks[0]] || "base"];
-function offerOf(s, payTo, domainName) {
+// The resource a seller's 402 names: its own URL with the query it was asked
+// for (in reverse order when the fixture says so, the same parameters), or
+// another path when the fixture says so.
+function resourceOf(s, search) {
+  const base = s.resourcePath ? `${s.origin}${s.resourcePath}` : s.url;
+  if (s.resourceQuery !== "reversed" || !search) return base;
+  return `${base}?${[...new URLSearchParams(search)].reverse().map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&")}`;
+}
+function offerOf(s, payTo, domainName, search = "") {
   const c = evmOf(s);
   if (c.name !== "base") return {
     x402Version: 2, error: "Payment required",
-    resource: { url: s.url, description: s.about, mimeType: "application/json" },
+    resource: { url: resourceOf(s, search), description: s.about, mimeType: "application/json" },
     accepts: [{ scheme: "exact", network: c.caip2, amount: String(s.quote), asset: c.asset, payTo, maxTimeoutSeconds: 300, extra: { name: domainName === "USD Coin" ? c.domain.name : domainName, version: c.domain.version } }],
   };
   return {
     x402Version: 2,
     error: "Payment required",
-    resource: { url: s.url, description: s.about, mimeType: "application/json" },
+    resource: { url: resourceOf(s, search), description: s.about, mimeType: "application/json" },
     accepts: [{ scheme: "exact", network: "eip155:8453", amount: String(s.quote), asset: BASE_USDC, payTo, maxTimeoutSeconds: 300, extra: { name: domainName, version: "2" } }],
   };
 }
@@ -101,6 +112,12 @@ const sellerStub = createServer((req, res) => {
     if (!s || new URL(req.url, "http://x").pathname !== `/${s.slug}`) return send(404, { error: "no such route" });
     const sig = req.headers["payment-signature"] || req.headers["x-payment"];
     const kind = sig ? "paid" : req.headers["x-agent402-via"] === "router" ? "bare" : "probe";
+    const search = new URL(req.url, "http://x").search;
+    // Every request a seller sees, with the query it was asked for.
+    seenRequests.push([s.id, kind, search]);
+    // A route that needs its query refuses a request without it, paid or not.
+    const sp = new URLSearchParams(search);
+    if ((s.requiresQuery || []).some((k) => !sp.get(k))) { obs.push({ seller: s.id, kind }); return send(400, { error: "missing query input" }); }
     if (s.delayMs) await sleep(s.delayMs);
     if (kind === "probe" && s.probeDelayMs) await sleep(s.probeDelayMs);
     if (kind === "bare" && s.bare === 200) { obs.push({ seller: s.id, kind }); return send(200, { served: s.id, free: true }); }
@@ -108,7 +125,7 @@ const sellerStub = createServer((req, res) => {
     if (kind !== "paid") {
       obs.push({ seller: s.id, kind });
       const payTo = walletOf(kind === "bare" ? (s.routerPayTo || s.livePayTo || s.payTo) : (s.livePayTo || s.payTo));
-      const offer = offerOf(s, payTo, kind === "probe" || kind === "bare" ? (s.liveDomainName || "USD Coin") : "USD Coin");
+      const offer = offerOf(s, payTo, kind === "probe" || kind === "bare" ? (s.liveDomainName || "USD Coin") : "USD Coin", search);
       return send(402, offer, { "payment-required": b64(offer) });
     }
     let p = null;
@@ -269,7 +286,7 @@ async function runTask(t, i) {
     const accepted = await acceptFor(path, t.payNetwork || "eip155:8453");
     headers["payment-signature"] = credential(accepted, payer, "0x" + "9a".repeat(16) + (i + 1).toString(16).padStart(32, "0"), nowS() + (t.validForSeconds || 300));
   }
-  const obs0 = obs.length, settles0 = settles.length, out0 = outboundRows().length;
+  const obs0 = obs.length, settles0 = settles.length, out0 = outboundRows().length, req0 = seenRequests.length;
   const consumed0 = new Set(consumed);
   const r = await fetch(`${B}${path}`, { method: "POST", headers, body: JSON.stringify(body) });
   const json = await r.json().catch(() => ({}));
@@ -302,6 +319,8 @@ async function runTask(t, i) {
     },
     receipt: receipt && r.status === 200 ? { seller: chosen, sellerProof: receipt.sellerProof ?? null, underlyingPriceUsd: receipt.underlyingPriceUsd, ...(receipt.sellerPaid === false ? { sellerPaid: false } : {}) } : null,
     status: r.status,
+    // Only graded for a task that names it: what each seller was asked for.
+    ...(t.expect.requests ? { requests: seenRequests.slice(req0) } : {}),
   };
   const e = t.expect;
   const expected = {
@@ -315,6 +334,7 @@ async function runTask(t, i) {
     booking: { outbound: e.booking.outbound, exposureUsd: e.booking.exposureUsd, ...(e.booking.unprovenSpentUsd ? { unprovenSpentUsd: e.booking.unprovenSpentUsd } : {}) },
     receipt: e.receipt,
     status: e.status,
+    ...(e.requests ? { requests: e.requests } : {}),
   };
   return { expected, actual, detail: { status: r.status, error: json?.error, steps, seen } };
 }
@@ -333,6 +353,7 @@ try {
       if (stable(ex) === stable(ac)) perStep[step].pass++;
       else { perStep[step].fail++; bad.push({ step, expected: ex, actual: ac }); }
     }
+    if (expected.requests && stable(expected.requests) !== stable(actual.requests)) bad.push({ step: "requests", expected: expected.requests, actual: actual.requests });
     if (bad.length) {
       failures.push(t.id);
       console.log(`FAIL - ${t.id}`);

@@ -109,6 +109,40 @@ const DEFAULT_MAX_BYTES = 512 * 1024;
 const MAX_402_BODY_BYTES = 256 * 1024;
 const MAX_REFUSAL_BODY_BYTES = 4 * 1024;
 
+// The resource a 402 challenge names: a URL string, or an object carrying
+// one in `url` (x402 v2's ResourceInfo). Anything else names nothing.
+function resourceUrlOf(res) {
+  if (typeof res === "string") return res.trim() || null;
+  if (res && typeof res === "object" && typeof res.url === "string") return res.url.trim() || null;
+  return null;
+}
+const pathKey = (p) => { let d = String(p || "/"); try { d = decodeURIComponent(d); } catch { /* keep raw */ } return d.replace(/\/+$/, "") || "/"; };
+const queryKey = (search) => [...new URLSearchParams(search)].map(([k, v]) => `${k}=${v}`).sort();
+/** Does the challenge's named resource (top level and the accept to be signed)
+ *  name the URL requested? Same host and port, same path (trailing slash and
+ *  percent-encoding aside), and, when the resource carries a query, the same
+ *  parameters in any order. A resource naming http for an https request on the
+ *  same host is the seller's TLS proxy talking, not another origin. A relative
+ *  resource resolves against the request. Unnamed is not a mismatch. Pure;
+ *  exported for offline tests. */
+export function challengeResourceVerdict(requestedUrl, paymentRequired, accept) {
+  let want;
+  try { want = new URL(String(requestedUrl)); } catch { return { ok: true, verdict: "unknown" }; }
+  const named = [resourceUrlOf(paymentRequired?.resource), resourceUrlOf(accept?.resource)].filter(Boolean);
+  if (!named.length) return { ok: true, verdict: "unnamed" };
+  for (const raw of named) {
+    let got;
+    try { got = new URL(raw, want); } catch { return { ok: false, verdict: "mismatch", field: "resource" }; }
+    const sameScheme = got.protocol === want.protocol || (got.protocol === "http:" && want.protocol === "https:");
+    const port = (u) => u.port || (u.protocol === "https:" ? "443" : u.protocol === "http:" ? "80" : "");
+    const samePort = got.protocol === want.protocol ? port(got) === port(want) : (!got.port || got.port === "80") && port(want) === "443";
+    if (!sameScheme || got.hostname.toLowerCase() !== want.hostname.toLowerCase() || !samePort) return { ok: false, verdict: "mismatch", field: "origin" };
+    if (pathKey(got.pathname) !== pathKey(want.pathname)) return { ok: false, verdict: "mismatch", field: "path" };
+    if (got.search && got.search !== "?" && queryKey(got.search).join("&") !== queryKey(want.search).join("&")) return { ok: false, verdict: "mismatch", field: "query" };
+  }
+  return { ok: true, verdict: "match" };
+}
+
 /** Pin the exact accept the client will sign for `chain` — right network label,
  *  scheme "exact", and the chain's mainnet USDC asset — or null. Pure; exported
  *  for offline tests (decoy-ordering and cross-chain confusion cases). */
@@ -967,6 +1001,18 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
   // we sign.
   const payable = pickPayableAccept(paymentRequired.accepts, chain);
   if (!payable) throw bad(`Seller offers no ${chain}/exact/${chainCfg.symbol || "USDC"} accept - cannot pay from the ${chain} spending wallet`, 502);
+  // THE CHALLENGE MUST BE FOR THE URL WE ASKED FOR. A 402 names the resource
+  // it sells (x402 v2 at the top level, v1 on each accept); a challenge for
+  // another origin or path is not an offer for this request, whatever it
+  // costs, so it is refused before anything is signed. Unnamed is unknown and
+  // does not block. Seller text never reaches the message.
+  const resourceVerdict = challengeResourceVerdict(url, paymentRequired, payable);
+  if (!resourceVerdict.ok) {
+    if (memoizeDelivery) noteSellerRefusal(url, chain, 402);
+    const e = bad(`Seller's 402 challenge names a different ${resourceVerdict.field} than the URL requested; refusing to sign a payment for another resource. Nothing was signed.`, 502);
+    e.refused = true;
+    throw e;
+  }
   // THE ACCEPT'S EIP-712 DOMAIN NAME MUST BE THE TOKEN'S OWN (2026-09-10).
   // The scheme signs the authorization under `extra.name` from the accept it
   // is handed, so a Base accept advertising "USDC" (the token signs under

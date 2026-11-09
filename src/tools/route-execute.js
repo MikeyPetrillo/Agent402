@@ -36,6 +36,7 @@ import { upstreamBuyerStatus, evmBuyerChainStatus } from "../upstream-buyer-stat
 import { EVM_BUYER_CHAINS, EVM_BUYER_CHAIN_BY_NETWORK, isEvmBuyerChain, evmBuyerChainEnabled, enabledEvmBuyerChains } from "../evm-buyer-chains.js";
 import { recordRouterPurchase } from "../router-purchases.js";
 import { adaptParamsToExample } from "../mpp-input-examples.js";
+import { boundRequestUrl, isQueryMethod, BOUND_URL_MAX_CHARS } from "../bound-request-url.js";
 
 // The external leg's default budget for a Solana payer: the short end of a
 // recent blockhash's life (about 60 s, the figure src/solana-buyer.js waits
@@ -436,7 +437,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
       let target = null;
       if (input.target != null) {
         if (input.include !== "external") throw bad('"target" applies only with include:"external"');
-        try { const u = new URL(String(input.target)); if (u.protocol !== "https:" || String(input.target).length > 2048) throw 0; target = u.href; }
+        try { const u = new URL(String(input.target)); if (u.protocol !== "https:" || String(input.target).length > BOUND_URL_MAX_CHARS) throw 0; target = u.href; }
         catch { throw bad('"target" must be one https URL from the index'); }
       }
 
@@ -571,7 +572,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           const wantModel = typeof input.params?.model === "string" && input.params.model.trim() ? input.params.model.trim() : null;
           let candidateList = []; let chain = chains[0]; let lastDrops = null;
           for (const c of chains) {
-            const found = await resolveExternal(input.task, { cap, baseUrl, chain: c, limit: MAX_CANDIDATES, wantModel, ...(target ? { onlyUrl: target } : {}) });
+            const found = await resolveExternal(input.task, { cap, baseUrl, chain: c, limit: MAX_CANDIDATES, wantModel, params, ...(target ? { onlyUrl: target } : {}) });
             const list = Array.isArray(found) ? found : (found ? [found] : []);
             // Keep the tally from the LAST chain tried even when it resolved
             // nothing, or an all-empty run would report no reason at all.
@@ -604,6 +605,10 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           if (!candidateList.length && excludedOut > 0) {
             throw bad(`${excludedOut} outside route(s) matched that task on ${chain}, and the router does not buy them: routes that sell personal data about individuals are listed but not bought by the router. Nothing was spent and nothing is charged.`, 404);
           }
+          // Every GET candidate the caller's params cannot ride a query to
+          // (a nested value, an oversized URL) was set aside before its probe:
+          // the caller's input, said as the builder words it.
+          if (!candidateList.length && Number(drops.byReason?.params_unbindable || 0) > 0 && drops.paramsRefusal) throw bad(drops.paramsRefusal, 400);
           if (!candidateList.length) throw bad(`No external ${chains.includes("tempo") && chains.length > 1 ? "x402 or MPP" : chains[0] === "tempo" ? "MPP" : "x402"} seller matched that task${chains[0] !== "base" || chains.length > 1 ? ` on ${chains.join("/")}` : ""}. Explore /api/route?q=<task>&include=external.`, 404);
           // Nothing is signed from an EVM wallet that reads low on the chain it
           // would pay from (a cached reading, never awaited on the network).
@@ -656,15 +661,11 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             const shaped = adaptParamsToExample(params, ext.inputExample);
             if (shaped.adapted.length) { extBody = shaped.params; paramsAdapted = shaped.adapted; }
           }
-          if (extMethod === "GET" || extMethod === "HEAD") {
-            const qp = new URLSearchParams();
-            for (const [k, v] of Object.entries(params || {})) {
-              if (v == null) continue;
-              if (typeof v === "object") throw bad(`External tool "${ext.slug}" is a ${extMethod} endpoint - param "${k}" must be a string, number, or boolean`, 400);
-              qp.set(k, String(v));
-            }
-            const qs = qp.toString();
-            extUrl = qs ? `${ext.url}${ext.url.includes("?") ? "&" : "?"}${qs}` : ext.url;
+          // The resolver probed this same URL (src/bound-request-url.js), so
+          // the seller that answered 402 to the caller's query is the one paid
+          // at it.
+          if (isQueryMethod(extMethod)) {
+            extUrl = boundRequestUrl(ext.url, { method: extMethod, params, slug: ext.slug });
             extBody = undefined;
           }
           // AN EVM BUYER'S AUTHORIZATION MUST STILL SETTLE AFTER THE SELLER

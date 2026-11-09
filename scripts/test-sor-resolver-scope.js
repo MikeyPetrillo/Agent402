@@ -28,7 +28,7 @@ ok(/r\.unproven = true/.test(fn) && /Number\.isFinite\(gate\.inbound\)/.test(fn)
 ok(/resolved\.filter\(\(x\) => !x\.unproven\)\.length >= Math\.max\(1, limit\)/.test(fn), "only PROVEN candidates count toward the limit");
 ok(/resolved\.sort\(\(a, b\) => \(a\.unproven \? 1 : 0\) - \(b\.unproven \? 1 : 0\)\)/.test(fn) && fn.indexOf("resolved.sort(") < fn.indexOf("resolved.splice("),
   "proven candidates are ordered before unproven ones, then the limit applies");
-ok(/sellerRouteRefusedRecently\(r\.url, chain\)/.test(fn) && fn.indexOf("sellerRouteRefusedRecently(r.url, chain)") < fn.indexOf("await probePublicUrl(r.url"),
+ok(/sellerRouteRefusedRecently\(r\.url, chain\)/.test(fn) && fn.indexOf("sellerRouteRefusedRecently(r.url, chain)") < fn.indexOf("await probePublicUrl(probeUrl"),
   "the resolve loop skips a ROUTE whose payment layer refused our payment on this chain BEFORE probing it (the memo x402-buyer writes after a chain-verified refusal)");
 ok(!/sellerRefusedRecently\(r\.seller/.test(fn), "the resolver does not bench a whole origin for one route's refusals");
 {
@@ -39,8 +39,8 @@ ok(!/sellerRefusedRecently\(r\.seller/.test(fn), "the resolver does not bench a 
 // lacks the requested model is skipped BEFORE the probe, and the model reaches
 // the resolver from route-execute's params. Pinned from source because the
 // offline router tests inject the resolver and cannot see the call site.
-ok(/wantModel = null(?:, onlyUrl = null)? \} = \{\}\)/.test(fn.slice(0, 220)), "resolveExternalSeller accepts wantModel");
-ok(/served\.verdict === "not-served"/.test(fn) && fn.indexOf('served.verdict === "not-served"') < fn.indexOf("await probePublicUrl(r.url"),
+ok(/wantModel = null(?:, onlyUrl = null)?(?:, params = null)? \} = \{\}\)/.test(fn.slice(0, 240)), "resolveExternalSeller accepts wantModel");
+ok(/served\.verdict === "not-served"/.test(fn) && fn.indexOf('served.verdict === "not-served"') < fn.indexOf("await probePublicUrl(probeUrl"),
   "a not-served verdict skips the candidate BEFORE probing it, and only that verdict skips (unknown never does)");
 ok(fn.indexOf("sellerRouteRefusedRecently(r.url, chain)") < fn.indexOf("sellerServesModel(r.url, wantModel)"), "the refusal memo is consulted first (cheaper: no fetch)");
 // A pinned endpoint is searched again by its own URL words when the task's
@@ -50,7 +50,14 @@ ok(fn.indexOf("sellerRouteRefusedRecently(r.url, chain)") < fn.indexOf("sellerSe
 ok(/const routeRows = async \(args\) =>/.test(fn) && /if \(!onlyUrl \|\| \(r\.results \|\| \[\]\)\.some\(\(x\) => sameUrl\(x\.url\)\)\) (?:return r;|\{ noteExcluded\(r\.categoryExcluded \|\| 0\); return r; \})/.test(fn) && (fn.match(/await routeRows\(\{ query: task/g) || []).length === 2 && !/await routeQueryAsync\(\{ query: task/.test(fn),
   "a pinned endpoint the wording missed is searched again by its own host and path (both legs)");
 const rx = readFileSync(new URL("../src/tools/route-execute.js", import.meta.url), "utf8");
-ok(/const wantModel = typeof input\.params\?\.model === "string"/.test(rx) && /limit: MAX_CANDIDATES, wantModel(?: \}|, \.\.\.\(target \? \{ onlyUrl: target \} : \{\}\) \})/.test(rx),
-  "route-execute hands the params' model to the resolver (a stable resolver with nothing feeding it would pass every other test here)");
+ok(/const wantModel = typeof input\.params\?\.model === "string"/.test(rx) && /limit: MAX_CANDIDATES, wantModel, params(?: \}|, \.\.\.\(target \? \{ onlyUrl: target \} : \{\}\) \})/.test(rx),
+  "route-execute hands the params' model, and the params a GET seller's probe is bound to, to the resolver (a stable resolver with nothing feeding it would pass every other test here)");
+// The GET probe asks for the URL the paid call will: the resolver and
+// route-execute both build it with the one builder (src/bound-request-url.js),
+// and the probe reads the bound URL, never the bare listing URL.
+ok(/boundRequestUrl\(r\.url, \{ method: probeMethod, params: params \|\| \{\}, slug: r\.slug \}\)/.test(fn) && fn.indexOf("boundRequestUrl(r.url") < fn.indexOf("await probePublicUrl(probeUrl") && !/await probePublicUrl\(r\.url/.test(fn),
+  "the resolver probes a GET candidate at the URL bound to the caller's params, built by the shared builder");
+ok(/extUrl = boundRequestUrl\(ext\.url, \{ method: extMethod, params, slug: ext\.slug \}\)/.test(rx) && !/new URLSearchParams\(\)/.test(rx),
+  "route-execute pays a GET seller at the URL the same builder makes (no second query builder)");
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
