@@ -709,7 +709,10 @@ export async function executeRefunds(rows, {
       log.log(`      #${row.id} inbound payment confirmed on-chain`);
       if (screen) {
         try { await screen(row); } catch (e) {
-          log.warn(`HOLD  #${row.id} $${row.priceUsd} -> ${tag(row.payer)}: payout screen refused (${String(e?.message || e).slice(0, 160)}); held for a human, still owed`);
+          // A fixed reason only: the screen's own message can name a listed
+          // entity, and this log is published by the workflow run.
+          const why = e?.sanctioned ? "address is listed" : e?.screenUnavailable ? "list not loaded" : e?.statusCode === 502 ? "address unreadable" : "screen did not run";
+          log.warn(`HOLD  #${row.id} $${row.priceUsd} -> ${tag(row.payer)}: payout screen refused (${why}); held for a human, still owed`);
           unverified++;
           continue;
         }

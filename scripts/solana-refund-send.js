@@ -162,7 +162,10 @@ if (USD > owedToThem + 1e-9) {
 {
   const { loadSanctions, assertPayoutScreened } = await import("../src/tools/sanctions-kit.js");
   try { await loadSanctions(); await assertPayoutScreened(TO); }
-  catch (e) { console.error(`payout screen refused: ${String(e?.message || e).slice(0, 200)} - refusing`); process.exit(1); }
+  catch (e) {
+    const why = e?.sanctioned ? "address is listed" : e?.screenUnavailable ? "list not loaded" : e?.statusCode === 502 ? "address unreadable" : "screen did not run";
+    console.error(`payout screen refused (${why}) - refusing`); process.exit(1);
+  }
 }
 
 const raw = (process.env.SOLANA_BURNER_KEY || "").trim();

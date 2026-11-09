@@ -126,8 +126,11 @@ const planOptions = { senders: ALL_SENDERS, maxEachUsd: 0.25, maxTotalUsd: 2, ma
   const ledger = fakeLedger(ROWS());
   const { calls, deps } = stubDeps(ledger);
   const screened = [];
-  const screen = async (row) => { screened.push(row.id); if (row.id === 2) throw new Error("listed address"); };
-  const out = await executeRefunds(planRefunds(ROWS(), planOptions).send, { ...deps, screen, log: quiet });
+  const screen = async (row) => { screened.push(row.id); if (row.id === 2) throw Object.assign(new Error("Refusing to pay x: that address is on the OFAC SDN list (SECRET ENTITY NAME, SDN 12345)."), { sanctioned: true, statusCode: 403 }); };
+  const lines = [];
+  const capture = { log: () => {}, warn: (m) => lines.push(String(m)), error: (m) => lines.push(String(m)) };
+  const out = await executeRefunds(planRefunds(ROWS(), planOptions).send, { ...deps, screen, log: capture });
+  ok(lines.some((l) => /HOLD\s+#2 .*payout screen refused \(address is listed\)/.test(l)) && !lines.some((l) => /SECRET ENTITY|12345/.test(l)), "the hold line gives a fixed reason and never the listed entity or its id");
   ok(screened.join(",") === "1,2,3" && !calls.order.includes("claim:2") && !calls.send.includes(2) && ledger.status.get(2) === "owed", `a refund to an address the screen refuses is held: never claimed or sent, still owed (screened ${screened.join(",")}, sent ${calls.send.join(",")})`);
   ok(out.ok === 2 && calls.send.join(",") === "1,3", "and the other refunds in the run are paid");
   const src = readFileSync(fileURLToPath(new URL("./refund-run.js", import.meta.url)), "utf8");
