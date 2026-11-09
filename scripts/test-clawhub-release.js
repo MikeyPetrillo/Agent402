@@ -13,7 +13,7 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 
 // plan: [exitCode, output] per call, in order (the last repeats); each call is
 // logged to calls.txt as its first two arguments.
-function scenario(plan) {
+function scenario(plan, { scale = "0.02" } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "clawhub-"));
   const bin = join(dir, "clawhub");
   writeFileSync(join(dir, "plan.json"), JSON.stringify(plan));
@@ -28,7 +28,7 @@ const [code, out] = plan[Math.min(n, plan.length - 1)];
   chmodSync(bin, 0o755);
   const r = spawnSync(process.execPath, [script], {
     encoding: "utf8",
-    env: { ...process.env, CLAWHUB_CMD: bin, VERSION: "1.2.3", CLAWHUB_TIME_SCALE: "0.02", GITHUB_REPOSITORY: "o/r", GITHUB_SHA: "abc", GITHUB_REF_NAME: "main" },
+    env: { ...process.env, CLAWHUB_CMD: bin, VERSION: "1.2.3", CLAWHUB_TIME_SCALE: scale, GITHUB_REPOSITORY: "o/r", GITHUB_SHA: "abc", GITHUB_REF_NAME: "main" },
   });
   const calls = existsSync(join(dir, "calls.txt")) ? readFileSync(join(dir, "calls.txt"), "utf8").split("\n").filter(Boolean) : [];
   return { code: r.status, out: r.stdout + r.stderr, calls };
@@ -59,7 +59,9 @@ r = scenario([NF, LIMIT]);
 ok(r.code === 1 && r.calls.filter((c) => c === PUB).length === 3, "publish rate limited past the attempts fails");
 
 const SLOW = [1, "Too many writes in a short period of time (reset in 55s)"];
-r = scenario([SLOW, SLOW, NF, SLOW]);
+// At 0.1 the budget is 6 s and each wait 2 s, so the fake CLI's own start-up
+// time on a loaded host cannot decide which retry the budget stops.
+r = scenario([SLOW, SLOW, NF, SLOW], { scale: "0.1" });
 ok(r.code === 1 && r.calls.join("|") === `${INS}|${INS}|${INS}|${PUB}`, "waits are capped and the total budget stops further retries");
 
 r = scenario([[1, "Error: network unreachable"]]);

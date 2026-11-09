@@ -401,7 +401,7 @@ export const STT_TOOLS = [
     category: "ai",
     price: "$0.100",
     description:
-      "Transcribe audio to text with the gpt-transcribe model - the same model as /api/transcribe with a longer cap. Provide a URL to an audio file and get back the transcript; add diarize:true for speaker labels, word timestamps and a language confidence score (the scribe-v2 model). No API key needed; pay per call via x402. Max 10 minutes of audio, 25 MB file size.",
+      "Pro tier for longer recordings (model-backed, gpt-transcribe, the same model as the standard tier): transcribes an audio file at a URL. Max 10 minutes and 25 MB, the longer cap of the transcribe routes. Returns the transcript text, language and duration; diarize:true adds speaker labels, word timestamps and a language confidence score. No API key needed; pay per call via x402.",
     tags: [...SHARED_TAGS, "gpt-transcribe", "pro"],
     discovery: {
       bodyType: "json",

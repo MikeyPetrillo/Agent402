@@ -945,7 +945,7 @@ export const TICKER_PACK_TOOLS = [
     slug: "ticker-pack",
     category: "llm",
     price: TICKER_PACK_TIERS["ticker-pack"].price,
-    description: "One ticker, one purchase, the full picture. Runs the company due-diligence dossier (SEC filings, XBRL financials, grounded web research), the Form 4 insider-flow report with the actual transactions parsed, and a 13F institutional-holder sample read live off SEC EDGAR full-text search, then stitches them into ONE cited report: company, filings, insider flow, institutional holders and what to check next, with a merged source list and downloadable data appendices. Cheaper than buying the parts separately. SEC EDGAR data, not investment advice. USDC (x402/MPP) or card (Stripe). Not cached.",
+    description: "One ticker, one purchase, the full picture (model-backed). Runs the company due-diligence dossier (SEC filings, XBRL financials, grounded web research), the Form 4 insider-flow report with the actual transactions parsed, and a 13F institutional-holder sample read live off SEC EDGAR full-text search, then stitches them into ONE cited report: company, filings, insider flow, institutional holders and what to check next, with a merged source list and downloadable data appendices. Cheaper than buying the parts separately. SEC EDGAR data, not investment advice. USDC (x402/MPP) or card (Stripe). Not cached.",
     tags: ["research", "due-diligence", "bundle", "sec", "edgar", "13f", "holders", "insider", "form-4", "stocks", "premium", "agentic-finance", "agent"],
     discovery: { bodyType: "json", input: { ticker: "AAPL", days: 90 }, inputSchema: SCHEMA, output: { example: OUT_EXAMPLE } },
     handler: makeTickerPackHandler("ticker-pack"),

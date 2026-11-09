@@ -19,6 +19,7 @@ import { railKey, chainDisplayName } from "./rails.js";
 import { tempoEnabled } from "./mpp-tempo.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
+import { MAX_FULL_PER_SUB_30D } from "./monitor-scheduler.js";
 
 import { REPO_URL } from "./repo-link.js";
 import { powCostPhrase } from "./pow.js";
@@ -97,11 +98,6 @@ function decideRowHtml() {
 export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, skillPacks, { settledOnChain = 0, external = null } = {}) {
   const tools = toolList(catalog);
   const count = tools.length;
-  // The headline's "N utilities": catalog tools in the pure utility categories
-  // (conversion, text, math, encoding, generators, time, validation, network),
-  // counted from the live catalog, never typed.
-  const UTILITY_CATEGORIES = new Set(["conversion", "text", "math", "encoding", "identifiers", "time", "validation", "network"]);
-  const utilityCount = tools.filter((t) => UTILITY_CATEGORIES.has(t.category)).length;
   const packCount = Array.isArray(skillPacks) ? skillPacks.length : 42;
   const served = stats?.toolCallsServed || {};
   const viaUsdc = Number(served.viaUSDC) || 0;
@@ -178,6 +174,14 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
 .hm-claim h3 { font-weight: 600; font-size: var(--fs-lg); line-height: 1.3; letter-spacing: -.01em; margin: 0; color: var(--ink); text-wrap: balance; }
 .hm-claim p { font-size: var(--fs-md); line-height: 1.55; color: var(--muted); margin: 0; font-weight: 300; text-wrap: pretty; }
 .hm-claim a { margin-top: auto; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--ink); text-decoration: none; border-bottom: 1px solid var(--dash); align-self: flex-start; white-space: nowrap; }
+.hm-door { padding: 32px; display: flex; flex-direction: column; gap: 16px; }
+.hm-door p { margin: 0; font-size: var(--fs-base); line-height: 1.55; font-weight: 400; text-wrap: pretty; }
+.hm-door .hm-door-act { margin-top: auto; display: flex; flex-wrap: wrap; gap: 10px; padding-top: 4px; }
+.hm-door-agents p { color: var(--on-panel-soft); }
+.hm-door-agents strong { color: var(--on-panel); font-weight: 600; }
+.hm-door-people p { color: var(--muted); }
+.hm-door-people strong { color: var(--ink); font-weight: 600; }
+.hm-door .ml-ticks { margin: 0; }
 .hm-marks { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-top: 18px; color: var(--muted); }
 .hm-marks a { color: var(--muted); display: inline-flex; padding: 4px; }
 .hm-marks a:hover { color: var(--ink); }
@@ -216,7 +220,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
     <div class="hm-hero">
       <div class="ml-stagger" style="display:flex;flex-direction:column;gap:26px;">
         <div class="ml-hero-eyebrow" style="font-family:var(--font-mono);font-size:var(--fs-xs);letter-spacing:.18em;text-transform:uppercase;color:var(--faint);">For AI agents</div>
-        <h1 class="ml-hero-h1" style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-hero);line-height:.98;margin:0;color:var(--ink);text-wrap:balance;">Web search, browser rendering, SEC filings and market data, plus ${fmtNum(utilityCount)} utilities.</h1>
+        <h1 class="ml-hero-h1" style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-hero);line-height:.98;margin:0;color:var(--ink);text-wrap:balance;">500+ tools: web search, browser rendering, SEC filings, market data and more.</h1>
         <p class="hm-lede" style="margin:0;text-wrap:pretty;">An agent sends a request, gets a price back in the <span style="font-family:var(--font-mono);color:var(--ink);">402</span>, pays it from its own wallet over <a href="/what-is-x402" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">x402</a> or <a href="/what-is-mpp" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">MPP</a>, and gets the answer. No account and no API key.</p>
         <div class="ml-hero-ctas" style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;">
           <a class="btn btn-primary" href="/docs#add">Add to your agent</a>
@@ -262,10 +266,10 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
 
 <section style="max-width:1180px;margin:0 auto;padding:0 30px 20px;">
   <div class="hm-doors">
-    <div class="hm-obsidian" style="padding:32px;display:flex;flex-direction:column;gap:16px;">
+    <div class="hm-obsidian hm-door hm-door-agents on-panel">
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);letter-spacing:.18em;text-transform:uppercase;color:var(--on-panel-dim);">For agents</div>
       <h2 class="hm-h2" style="font-size:var(--fs-2xl);color:var(--on-panel);">Find a tool, pay the 402, get JSON.</h2>
-      <p style="margin:0;color:var(--on-panel-muted);font-size:var(--fs-base);line-height:1.5;font-weight:300;">Resolve any task in one free call, then pay per request in ${esc(RAILS_SHORT)}, or over MPP${tempoMarkHtml ? ", natively on Tempo" : ""}. Connect over <a href="/guides/agent-hosts" ${panelLink}>MCP</a> or plain HTTP; machines read <a href="/llms.txt" ${panelLink}>llms.txt</a>, <a href="/openapi.json" ${panelLink}>openapi.json</a> and <a href="/.well-known/x402" ${panelLink}>.well-known/x402</a>.</p>
+      <p><strong>One free call</strong> finds the tool for any task. Pay per request in <strong>${esc(RAILS_SHORT)}</strong>, or over <strong>MPP</strong>${tempoMarkHtml ? ", natively on Tempo" : ""}. <strong>No API key.</strong> Connect over <a href="/guides/agent-hosts" ${panelLink}>MCP</a> or HTTP; machines read <a href="/llms.txt" ${panelLink}>llms.txt</a>, <a href="/openapi.json" ${panelLink}>openapi.json</a> and <a href="/.well-known/x402" ${panelLink}>.well-known/x402</a>.</p>
       <div class="hm-ptable" style="font-family:var(--font-mono);display:flex;flex-direction:column;border:1px solid rgba(255,255,255,.08);border-radius:var(--radius);overflow:hidden;font-size:var(--fs-sm);">
         <a href="/tools/v1-chat-metered" ${rowStyle}><span>POST /v1/metered/chat/completions</span><span ${priceStyle}>from ${esc(slugPrice(tools, "v1-chat-metered"))}</span></a>
         <a href="/api/find?q=whois" ${rowStyle}><span>GET /api/find?q=</span><span ${priceStyle}>free</span></a>
@@ -275,18 +279,25 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
         <a href="/pricing" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;color:var(--on-panel-soft);"><span>GET /api/&lt;tool&gt;</span><span ${priceStyle}>from $${esc(String(minPriceUsd(catalog)))}</span></a>
         ${decideLive() ? decideRowHtml() : ""}
       </div>
-      <p style="margin:0;color:var(--on-panel-muted);font-size:var(--fs-base);line-height:1.5;font-weight:300;">The pure-CPU tools are free: your machine solves a short proof-of-work (${esc(powCostPhrase())}) instead of paying. <a href="/playground" ${panelLink}>Try them in the playground</a>.</p>
+      <p><strong>The pure-CPU tools are free:</strong> your machine solves a short proof-of-work instead of paying (${esc(powCostPhrase())}).</p>
+      <div class="hm-door-act"><a class="btn btn-secondary btn-sm" href="/playground">Try them in the playground</a><a class="btn btn-secondary btn-sm" href="/docs">Read the docs</a></div>
     </div>
-    <div class="hm-milled" style="padding:32px;display:flex;flex-direction:column;gap:16px;">
+    <div class="hm-milled hm-door hm-door-people">
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);letter-spacing:.18em;text-transform:uppercase;color:var(--faint);">For people</div>
       <h2 class="hm-h2" style="font-size:var(--fs-2xl);">A cited report, by card.</h2>
-      <p class="hm-lede" style="margin:0;font-size:var(--fs-base);">Built from live data, with a PDF and data tables, and refunded if it fails. A monitor re-runs it when something moves.</p>
+      <p>Built from live data, with <strong>a PDF and data tables</strong>. Pay by card, <strong>no account</strong>.</p>
       <div class="hm-ptable" style="font-family:var(--font-mono);display:flex;flex-direction:column;border:1px solid var(--hairline);border-radius:var(--radius);overflow:hidden;font-size:var(--fs-sm);background:var(--card);">
         ${[["research", "Deep research"], ["dossier", "Company dossier"], ["fund-report", "Fund 13F report"], ["domain-audit", "Domain security audit"]]
           .map(([product, label]) => `<a class="hm-prow" data-product="${esc(product)}" href="/reports" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;border-bottom:1px solid var(--hairline);text-decoration:none;color:var(--ink);"><span>${esc(label)}</span><span style="color:var(--accent);white-space:nowrap;">${esc(cardPrice(product))}</span></a>`)
           .join("\n        ")}
         <a class="hm-prow" data-product="monitor" href="/monitors" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;color:var(--ink);"><span>Monitor a target</span><span style="color:var(--accent);white-space:nowrap;">${esc(monitorPrice())}/mo</span></a>
       </div>
+      <ul class="ml-ticks">
+        <li>A report that fails is refunded to your card automatically.</li>
+        <li>A monitor re-checks its target on a schedule and emails up to ${MAX_FULL_PER_SUB_30D} fresh reports in any 30 days.</li>
+        <li>Cancel a monitor anytime from the link in its emails.</li>
+      </ul>
+      <div class="hm-door-act"><a class="btn btn-secondary btn-sm" href="/reports">Browse reports</a><a class="btn btn-secondary btn-sm" href="/monitors">See monitors</a></div>
     </div>
   </div>
 </section>

@@ -176,6 +176,8 @@ try {
   const p = await (await perf()).json();
   const x = p.paidPhases?.rails?.x402, mp = p.paidPhases?.rails?.["mpp-evm"];
   ok(x && x.calls === 3 && x.gone === 1 && mp && mp.calls === 1, `the summary files 3 calls (1 gone) under x402 and 1 under mpp-evm (${JSON.stringify({ x402: x?.calls, gone: x?.gone, mpp: mp?.calls })})`);
+  const nets = Object.entries(x.byNetwork || {});
+  ok(nets.length >= 1 && nets.reduce((a, [, v]) => a + v.calls, 0) === x.calls && nets.every(([n, v]) => n && v.settleMs && v.totalMs), `the x402 summary splits its calls by network, each with its own settle and total figures (${JSON.stringify(Object.fromEntries(nets.map(([n, v]) => [n, v.calls])))})`);
   ok(near(x.verifyMs.p50, VERIFY_MS) && near(x.settleMs.p50, SETTLE_MS) && x.handlerMs.p95 >= DATA_MS, `the x402 summary carries p50/p95 per phase (${JSON.stringify({ v: x.verifyMs, h: x.handlerMs, s: x.settleMs })})`);
   ok(p.stockQuoteWarmer && p.stockQuoteWarmer.running === true && typeof p.stockQuoteWarmer.background.calls === "number", "the warmer's counts ride the same operator surface");
   ok(!JSON.stringify(p.paidPhases).includes(PAYER.slice(2)) && !JSON.stringify(p.paidPhases).includes("MSFT"), "d. the summary carries no payer and no input");

@@ -167,7 +167,7 @@ const encoding = [
   },
   {
     route: "POST /api/crc32", name: "CRC32", slug: "crc32", category: "encoding", price: "$0.001",
-    description: "CRC-32 checksum of a text string (hex), the IEEE polynomial used by zip/png/gzip.",
+    description: "CRC32 checksum of a text string with the standard IEEE polynomial: returns hex and the unsigned integer. Detects accidental changes in data; a checksum, not a secure digest.",
     tags: ["crc32", "checksum", "hash"],
     discovery: { bodyType: "json", input: { text: "hello world" }, inputSchema: { properties: { text: { type: "string" } }, required: ["text"] }, output: { example: { hex: "0d4a1185", uint: 222957957 } } },
     handler: (i) => {
@@ -420,7 +420,7 @@ const text = [
   },
   {
     route: "POST /api/readability", name: "Readability", slug: "readability", category: "text", price: "$0.001",
-    description: "Flesch Reading Ease score and Flesch–Kincaid grade level for English text, plus word/sentence/syllable counts.",
+    description: "Flesch Reading Ease and Flesch-Kincaid grade level for English text, the two classic readability numbers, with word, sentence and syllable counts.",
     tags: ["readability", "flesch", "nlp", "text"],
     discovery: { bodyType: "json", input: { text: "The cat sat on the mat. It was warm." }, inputSchema: { properties: { text: { type: "string" } }, required: ["text"] }, output: { example: { readingEase: 100, gradeLevel: 0.5, words: 9, sentences: 2 } } },
     handler: (i) => {
@@ -539,7 +539,7 @@ const conversion = [
   },
   {
     route: "POST /api/querystring", name: "Query string", slug: "querystring", category: "conversion", price: "$0.001",
-    description: "Parse a URL query string into an object, or build one from an object. mode: parse (default) | build.",
+    description: "Querystring parse and build: turn a=1&b=2 text into an object (a repeated key becomes an array), or build querystring text from an object. mode: parse (default) | build. Takes the query part alone, with or without a leading ?.",
     tags: ["querystring", "url", "parse", "convert"],
     discovery: { bodyType: "json", input: { value: "a=1&b=hello%20world&a=2", mode: "parse" }, inputSchema: { properties: { value: { description: "String to parse or object to build" }, mode: { type: "string", description: "parse | build" } }, required: ["value"] }, output: { example: { result: { a: ["1", "2"], b: "hello world" } } } },
     handler: (i) => {
@@ -1081,7 +1081,7 @@ const math = [
   },
   {
     route: "POST /api/stats", name: "Statistics", slug: "stats", category: "math", price: "$0.001",
-    description: "Descriptive statistics for an array of numbers: count, sum, mean, median, mode, min, max, range, variance, stddev, and percentiles.",
+    description: "Stats with percentile cut points for an array of numbers: p25, p50, p75, p90, p95 and p99, plus count, sum, mean, median, mode, min, max, range, and population variance and stddev.",
     tags: ["stats", "mean", "median", "stddev", "percentile"],
     discovery: { bodyType: "json", input: { numbers: [2, 4, 4, 4, 5, 5, 7, 9] }, inputSchema: { properties: { numbers: { description: "Array of numbers" } }, required: ["numbers"] }, output: { example: { count: 8, mean: 5, median: 4.5, stddev: 2 } } },
     handler: (i) => {
@@ -1193,7 +1193,7 @@ const math = [
   },
   {
     route: "POST /api/finance", name: "Finance", slug: "finance", category: "math", price: "$0.001",
-    description: 'Financial math. op: "compound" (future value of principal at a rate) or "loan" (monthly payment + total for a loan).',
+    description: 'Two finance formulas behind one op switch: op "compound" returns the future value and interest of a principal at an annual rate (monthly compounding by default); op "loan" returns the monthly payment, total paid and total interest of a fixed-rate loan.',
     tags: ["finance", "interest", "loan", "compound", "money"],
     discovery: { bodyType: "json", input: { op: "loan", principal: 20000, annualRatePct: 6, months: 60 }, inputSchema: { properties: { op: { type: "string", description: "compound | loan" }, principal: { type: "number" }, annualRatePct: { type: "number" }, months: { type: "number" }, years: { type: "number" }, compoundsPerYear: { type: "number" } }, required: ["op", "principal", "annualRatePct"] }, output: { example: { monthlyPayment: 386.66, totalPaid: 23199.36, totalInterest: 3199.36 } } },
     handler: (i) => {

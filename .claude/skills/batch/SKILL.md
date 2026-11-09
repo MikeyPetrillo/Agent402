@@ -130,6 +130,10 @@ guard or skill step added.
 - A test seeding past the per-seller cap without importing `uncapped-sellers.js`.
 - A Postgres URL without `sslmode=disable`.
 - `npm ci` run through a `node_modules` link.
+- A timing check that sleeps a fixed time and then counts: wait for the outcome with a
+  deadline, then confirm nothing more follows (a loaded host stretches every pause).
+- An import added to a module that loads stores at import time: it moves their boot ahead
+  of the state database's first read; keep shared constants in a module of their own.
 - A CodeQL-shaped substring check on URLs in a test (compare by equality).
 - Values interpolated into a generated script's source (pass them as argv).
 - A workflow edited on one branch and deleted on another.

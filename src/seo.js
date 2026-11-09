@@ -620,6 +620,8 @@ ${flatTiersLine()}
 ## Key machine surfaces
 - [/agents.md](${baseUrl}${AGENTS_MD_PATH}): the front door for an agent in markdown - the first call and its price, access with no account or API key, when to use the service and when not to, the recovery contract, then how to connect and pay
 - [/SKILL.md](${baseUrl}/SKILL.md): agent-onboarding skill sheet - setup (MCP server / SDK / plain HTTP), discover, pay (x402, MPP or proof-of-work), read the 402, common issues. Start here if you are setting Agent402 up for the first time
+- [/guides/buying-at-volume](${baseUrl}/guides/buying-at-volume): buying in bursts - the per-address limits and their \`Retry-After\`, retries that never pay twice, async jobs, spend caps and the errors to handle
+- [/guides/content-pipeline](${baseUrl}/guides/content-pipeline): a content pipeline from paid calls - research, script, voiceover, images, transcription, subtitles, dubbing and media checks from one wallet, with the stages that run as jobs and the rail to pay on
 - [/api/search](${baseUrl}/api/search): **front door** - live web search (title, URL, snippet). Start here to discover pages; follow with extract or answer
 - [/api/answer](${baseUrl}/api/answer): **front door** - cited answer grounded in live web search results
 - [/api/search-news](${baseUrl}/api/search-news): live news search for current events / headlines

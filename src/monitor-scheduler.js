@@ -61,7 +61,19 @@ export const MAX_FULL_PER_SUB_30D = 4;   // welcome + scheduled + up to 4 change
 export const RUN_CLAIM_TTL_MS = 2 * HOUR;
 export const PERMANENT_FAIL_NOTICE_AT = 5; // consecutive failures before the subscriber is told (once)
 const REPORTS_PER_SUB = 12;
-const MAX_RUNS_KEPT = 24;
+// The run log is kept by age, not by count: the 30-day paid cap counts paid
+// runs in it, so every run inside the window must stay (a count-trimmed log
+// let alert-only runs push paid ones out, and the cap under-counted). Past
+// the window it is dropped; inside it, only the oldest alert-only entries
+// give way when there are more than MAX_ALERT_RUNS_KEPT of them.
+export const RUN_LOG_MS = 31 * DAY;
+export const MAX_ALERT_RUNS_KEPT = 60;
+export function keepRuns(runs, nowMs) {
+  const since = nowMs - RUN_LOG_MS;
+  const out = (Array.isArray(runs) ? runs : []).filter((r) => r && typeof r === "object" && !(Date.parse(r.at) < since));
+  let alerts = out.filter((r) => r.alertOnly).length;
+  return alerts <= MAX_ALERT_RUNS_KEPT ? out : out.filter((r) => !(r.alertOnly && alerts-- > MAX_ALERT_RUNS_KEPT));
+}
 
 const STORE_PATH = () => join(existsSync("/data") ? "/data" : "/tmp", "monitor-runs.json");
 
@@ -318,7 +330,7 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
       at, reason, changes,
     };
     st.lastFullAt = now(); st.lastReportId = id; st.failures = 0; st.nextAttemptAt = null; st.lastError = null;
-    st.runs = [...(st.runs || []), { at, reason, reportId: id }].slice(-MAX_RUNS_KEPT);
+    st.runs = keepRuns([...(st.runs || []), { at, reason, reportId: id }], now());
     pruneReports(rec.subId);
     if (usePg) { addedReports.add(id); await endRun(rec.subId, token, id); }
     else persist();
@@ -335,7 +347,7 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
   async function alertOnly(rec, st, reason, changes) {
     const p = MONITOR_PRODUCTS[rec.product];
     const at = new Date(now()).toISOString();
-    st.runs = [...(st.runs || []), { at, reason, reportId: st.lastReportId || null, alertOnly: true }].slice(-MAX_RUNS_KEPT);
+    st.runs = keepRuns([...(st.runs || []), { at, reason, reportId: st.lastReportId || null, alertOnly: true }], now());
     persist();
     if (rec.email) {
       const id = st.lastReportId;
@@ -668,7 +680,16 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
     const summary = { full: 0, alert: 0, checked: 0, skip: 0, error: 0, deferred: 0, active: 0 };
     let fullCount = 0;
     const budget = { allow: () => { if (fullCount >= MAX_FULL_PER_TICK) { summary.deferred++; return false; } fullCount++; return true; } };
-    const active = subs.listActive().filter((r) => !subId || r.subId === subId);
+    // A record without its own id is never run: every such record would
+    // share one state entry (the key "undefined"), so one would be served
+    // and the rest not served. It is skipped and named loudly.
+    const listed = subs.listActive();
+    const noId = listed.filter((r) => typeof r?.subId !== "string" || !r.subId);
+    if (noId.length) {
+      summary.noId = noId.length;
+      log(`[monitors] ALERT: ${noId.length} active subscription record(s) without a subscription id skipped (products: ${[...new Set(noId.map((r) => String(r?.product || "?")))].join(", ").slice(0, 200)}); fix the records before they are served`);
+    }
+    const active = listed.filter((r) => typeof r?.subId === "string" && r.subId && (!subId || r.subId === subId));
     summary.active = active.length;
     for (const rec of active) {
       // Fencing: a tick whose lease was lost stops here; the next holder
@@ -686,7 +707,7 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
     store.lastTickAt = new Date(now()).toISOString();
     store.lastTick = { ...summary, ms: now() - started, owner: me };
     persist();
-    log(`[monitors] tick: ${summary.active} active, ${summary.full} full, ${summary.alert} alerts, ${summary.checked} checked, ${summary.error} errors, ${summary.deferred} deferred${summary.lost ? ", stopped: lease lost" : ""} (${now() - started}ms)`);
+    log(`[monitors] tick: ${summary.active} active, ${summary.full} full, ${summary.alert} alerts, ${summary.checked} checked, ${summary.error} errors, ${summary.deferred} deferred${summary.noId ? `, ${summary.noId} without an id` : ""}${summary.lost ? ", stopped: lease lost" : ""} (${now() - started}ms)`);
     return summary;
   }
 
@@ -740,7 +761,9 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
   async function subIdOfReportFresh(reportId) { return (await loadMissing(reportId))?.subId || null; }
 
   function status() {
-    const active = subs.listActive();
+    const listed = subs.listActive();
+    const active = listed.filter((r) => typeof r?.subId === "string" && r.subId);
+    const withoutId = listed.length - active.length; // never run (see runTick)
     const rows = active.map((rec) => {
       const st = store.subs[rec.subId] || {};
       return {
@@ -754,7 +777,7 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
         runs: (st.runs || []).slice(-5),
       };
     });
-    return { owner: me, lock: store.lock, lastTickAt: store.lastTickAt || null, lastTick: store.lastTick || null, active: rows.length, reports: Object.keys(store.reports).length, subs: rows };
+    return { owner: me, lock: store.lock, lastTickAt: store.lastTickAt || null, lastTick: store.lastTick || null, active: rows.length, ...(withoutId ? { withoutId } : {}), reports: Object.keys(store.reports).length, subs: rows };
   }
 
   let timer = null;

@@ -71,7 +71,7 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-06.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-09.</p>
 </section>
 
 <section>
@@ -153,7 +153,8 @@ so every claim below is verifiable in code.</p>
   /64 prefix) in the counter's key, for one hour, or 24 hours for the per-client daily allowance. We also
   keep keyed hashes of addresses, never the addresses themselves: in daily traffic statistics (request
   classes, paths and User-Agent product names; each day is deleted after ${TRAFFIC_DEFAULTS.retentionDays} days), in the record that limits how often a dropped
-  connection is excused from payment (24 hours), and on the demand board (combined with the day).
+  connection is excused from payment (24 hours), in the record that an address paid recently, which
+  raises its limit on unpaid price quotes (one hour at most), and on the demand board (combined with the day).
   The tollbooth waitlist form is closed, and every record it collected has been deleted from our
   database; those records were never part of our offsite backups.</li>
   <li><b>AI gateway inputs.</b> Prompts and inputs sent to the <code>/v1</code> endpoints (chat in the
@@ -212,7 +213,10 @@ so every claim below is verifiable in code.</p>
   that was not settled, a forgiven hang-up${allowanceOn ? " or a served first-call allowance" : ""}, whose authorization is still live
   on chain, until the authorization's own validBefore plus ${Math.round(CONSUMED_VALIDITY_MARGIN_MS / 60000)} minutes, which can be long when the client
   signs a long validity window), the signers of a Solana payment (stored only
-  as a keyed hash), the source address of a Tempo credential, the payer the settlement receipt names, and,
+  as a keyed hash), the source address of a Tempo credential, a Tempo pull credential answered 402 after its
+  broadcast failed (kept with its route, amount and payer until the check for a late landing ends: minutes,
+  at most 24 hours while the chain cannot be read, so a transfer that lands after the 402 is booked as owed),
+  the payer the settlement receipt names, and,
   on a refused payment, the resource URL it names (see telemetry above). The optional description and
   <code>reason</code> annotation fields are not read, logged or retained. The machine-readable list is in
   <a href="/.well-known/x402">/.well-known/x402</a> under <code>payment.dataHandling</code>: <code>readsOnly</code>
@@ -241,7 +245,9 @@ so every claim below is verifiable in code.</p>
   task text you give them to a judgment model operated by TypeSafe to choose among candidate tools;
   <code>/api/decide</code> also sends it to AI models via OpenRouter and to an OpenAI embedding model to
   build the plan. When route-and-execute or a decision's execution buys from an outside seller to resell
-  the result to you, that seller receives the request it needs to answer, sent and paid for by us.</li>
+  the result to you, that seller receives the request it needs to answer, sent and paid for by us.
+  A candidate seller may receive a request's inputs unpaid before we pay it, sometimes more than once:
+  to check that it can serve the request and to read its price.</li>
   <li>Card payments and subscriptions are processed by Stripe; transactional email (report links,
   monitor and free alerts) is sent through ZeptoMail, with Resend as a fallback. Report products read public sources named in each
   report (for example SEC EDGAR, openFDA, DNS and certificate-transparency logs, public blockchain

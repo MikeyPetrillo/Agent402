@@ -223,7 +223,7 @@ const OUT_EXAMPLE = {
 export const RECALL_TOOLS = [
   {
     route: "POST /v1/recall-report", name: "FDA recall report (drug, food, device)", slug: "recall-report", category: "llm", price: RECALL_TIERS["recall-report"].price,
-    description: "Name a drug, food, ingredient, brand or medical device and get one cited FDA recall report: every matching enforcement record across the drug, food and device feeds (firm, class I/II/III, status, reason, distribution, date), organized and explained, with a downloadable records appendix. Live openFDA data, not medical advice. USDC (x402/MPP) or card (Stripe). Not cached.",
+    description: "Name a drug, food, ingredient, brand or medical device and get one cited, model-backed FDA recall report: every matching enforcement record across the drug, food and device feeds (firm, class I/II/III, status, reason, distribution, date), organized and explained, with a downloadable records appendix. Live openFDA data, not medical advice. USDC (x402/MPP) or card (Stripe). Not cached.",
     tags: ["fda", "recall", "drug", "food", "device", "safety", "report", "openfda", "research", "agentic-finance", "x402", "mpp"],
     discovery: { bodyType: "json", input: { query: "losartan" }, inputSchema: SCHEMA, output: { example: OUT_EXAMPLE } },
     handler: makeRecallHandler("recall-report"),

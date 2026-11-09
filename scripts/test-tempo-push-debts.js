@@ -39,7 +39,7 @@ const { createTempoGate, PUSH_SENDER_WAIT_MS, isTempoPushCredential, tempoOffere
 const { EVM_RUN_SECONDS } = await import("../src/evm-validity.js");
 const { SLOW_ADVISE_SECONDS } = await import("../src/slow-routes.js");
 const { isLongRunningSlug } = await import("../src/composite-spend-guard.js");
-const { createTempoPushDebts, PUSH_INPUT_REFUSED_NOTE, PUSH_CLAIMED_NOTE, PUSH_SERVED_NOTE, PUSH_FINALIZE_FAILURE_STATUS, PUSH_HANGUP_AFTER_CLAIM_NOTE, PUSH_HANDLER_FAILED_AFTER_CLAIM_NOTE, PUSH_EXCEPTION, whenTempoLedgerPayerKnown } = await import("../src/tempo-push-debts.js");
+const { createTempoPushDebts, createHeldClaimSweep, PULL_LANDED_AFTER_402_NOTE, PUSH_FINALIZE_UNANSWERED_NOTE, PUSH_RUN_UNFINISHED_NOTE, PUSH_INPUT_REFUSED_NOTE, PUSH_CLAIMED_NOTE, PUSH_SERVED_NOTE, PUSH_FINALIZE_FAILURE_STATUS, PUSH_HANGUP_AFTER_CLAIM_NOTE, PUSH_HANDLER_FAILED_AFTER_CLAIM_NOTE, PUSH_EXCEPTION, whenTempoLedgerPayerKnown } = await import("../src/tempo-push-debts.js");
 const { slowSyncWindowMiddleware, SYNC_WINDOW_RETRY } = await import("../src/slow-sync-window.js");
 const { cdnSyncWindowMiddleware } = await import("../src/cdn-sync-window.js");
 const { wantsAsync } = await import("../src/async-jobs.js");
@@ -405,6 +405,7 @@ const rowsFor = (hash) => ledger.listRefunds({ status: "all", limit: 1000 }).fil
   ok(/tx: req\.tempoSettled \? \(tempoPushHashOf\(req\) \|\|/.test(hang), "a push disconnect is keyed on the credential's (lowercased) hash, the evidence the input-refused row used");
   ok(/if \(!made && req\.tempoSettled && tempoPushHashOf\(req\) === row\.tx\) void tempoPushDebts\?\.hungUp\(row\.tx, hangupReason\)/.test(hang), "recordHangupDebt promotes an existing input-refused row instead of ignoring it (on the write's verdict)");
   ok(/promoteToHangup: promoteOwedToHangup/.test(src), "server.js wires the promotion to the refund ledger");
+  ok(/createTempoPushDebts\(\{[\s\S]{0,800}\}\);[\s\S]{0,200}void startTempoHeldClaimSweep\(\{ saleFor: /.test(src), "server.js starts the held-claim sweep where it builds the push-debt hooks, with its saleFor");
   ok(/voidForServe: voidOwedForServe, reopenHeld: reopenHeldClaim, renoteVoid: renoteVoidRefund/.test(src), "server.js wires the claim hold, its reopen and its served note to the refund ledger");
   ok(/app\.use\(tempoGate\);[\s\S]{0,900}await tempoPushDebts\.claimForServe\(req\)/.test(src), "server.js holds the claim right after the Tempo gate, before any handler");
   ok(/res\.statusCode >= 400 && !req\.tempoPushRefunded\)/.test(src), "a push refused as refunded books no second debt or charged failure");
@@ -564,6 +565,81 @@ for (const [label, headers, status, error, tail] of [
   ok(served.status === 200 && sales.filter((s) => s === h).length === 1, `...and releases its claim: the credential is then served on a Tempo route, not refused as a replay (${served.status} ${served.body.details?.reason || ""})`);
 }
 
+// A finalize whose answer was lost (reset after the request was sent): the
+// transfer may be claimed, so it is booked owed under its own note; a retry
+// the relay claims is held and served (void, noted served); one claimed and
+// then failed is owed again; a retry refused as a replay leaves the debt.
+{
+  const h = hashFor(71);
+  const cred = pushCred(h);
+  failNext = { ok: false, cls: "relay-unreachable", connectPhase: false, error: "reset after send", reason: "x" };
+  const w0 = console.warn; console.warn = () => {};
+  let r1;
+  try { r1 = await post(cred, { text: "x" }); } finally { console.warn = w0; }
+  ok(r1.status === 503 && rowsFor(h).length === 1 && rowsFor(h)[0].status === "owed" && rowsFor(h)[0].note === PUSH_FINALIZE_UNANSWERED_NOTE && rowsFor(h)[0].payer === SENDER,
+    `an unanswered finalize books the transfer owed under its own note (${r1.status} ${JSON.stringify(rowsFor(h)[0])})`);
+  const r2 = await post(cred, { text: "x" });
+  ok(r2.status === 200 && rowsFor(h)[0].status === "void" && rowsFor(h)[0].note === `${PUSH_FINALIZE_UNANSWERED_NOTE}; ${PUSH_CLAIMED_NOTE}; ${PUSH_SERVED_NOTE}`, `...the retry the relay claims is served and the debt void, noted served ("${rowsFor(h)[0].note}")`);
+  const h2 = hashFor(72);
+  failNext = { ok: false, cls: "relay-unavailable", relayStatus: 502, error: "HTTP 502", reason: "x" };
+  console.warn = () => {};
+  try { await post(pushCred(h2), { text: "x" }); } finally { console.warn = w0; }
+  ok((await debts.claimForServe({ tempoSettled: true, mppTempoPushHash: h2 })) === true && rowsFor(h2)[0].status === "void", "an unanswered finalize's debt is held by a later claim");
+  ok((await debts.handlerFailed(h2, 500)) === true && rowsFor(h2)[0].status === "owed" && rowsFor(h2)[0].httpStatus === 500 && rowsFor(h2)[0].note.startsWith(PUSH_FINALIZE_UNANSWERED_NOTE), `...and owed again when that run fails ("${rowsFor(h2)[0].note}")`);
+  const h3 = hashFor(73);
+  const cred3 = pushCred(h3);
+  failNext = { ok: false, cls: "relay-unreachable", connectPhase: false, error: "reset", reason: "x" };
+  console.warn = () => {};
+  try { await post(cred3, { text: "x" }); } finally { console.warn = w0; }
+  failNext = { ok: false, cls: "replay", error: "Transaction hash has already been used", reason: "x" };
+  const r3 = await post(cred3, { text: "x" });
+  ok(r3.status === 402 && r3.body.details?.refundOwed === true && rowsFor(h3).length === 1 && rowsFor(h3)[0].status === "owed", `...a retry refused as a replay leaves the debt owed and says so (${r3.status} ${JSON.stringify(r3.body.details)})`);
+}
+
+// A pull transaction that landed after its 402 (the gate's late-landing
+// watch) is booked through notClaimed under its own note, as a charged failure.
+{
+  const h = hashFor(91);
+  const before = failures.length;
+  ok((await debts.notClaimed({ method: "GET", path: "/paid" }, { hash: h, payer: SENDER, amountAtomic: "50000", amountUsd: 0.05, cls: "landed-after-402" })) === true, "a pull landed after its 402 is booked owed");
+  ok(rowsFor(h)[0].note === PULL_LANDED_AFTER_402_NOTE && rowsFor(h)[0].httpStatus === 402 && failures.length === before + 1, `...under its own note, counted as a charged failure ("${rowsFor(h)[0].note}")`);
+}
+
+// The held-claim sweep: a claim held for a run whose process died (void with
+// the hold's note, never marked served or reopened) is owed again once it is
+// older than a run can take; a hold with a sale booked is marked served; a
+// young hold, a served one, and any hold while the ledger's journal holds
+// waiting writes are left alone.
+{
+  const stranded = hashFor(81), young = hashFor(82), sold = hashFor(83), unanswered = hashFor(84);
+  for (const h of [stranded, young, sold]) {
+    await post(pushCred(h), {});
+    ok((await debts.claimForServe({ tempoSettled: true, mppTempoPushHash: h })) === true, `setup: ${h.slice(-2)} held`);
+  }
+  failNext = { ok: false, cls: "relay-unreachable", connectPhase: false, error: "reset", reason: "x" };
+  const w0 = console.warn; console.warn = () => {};
+  try { await post(pushCred(unanswered), { text: "x" }); } finally { console.warn = w0; }
+  await debts.claimForServe({ tempoSettled: true, mppTempoPushHash: unanswered });
+  const held = () => ledger.listRefunds({ status: "void", limit: 2000 });
+  const atOf = (h) => Number(rowsFor(h)[0].resolvedAt);
+  const base = Math.max(atOf(stranded), atOf(sold), atOf(unanswered));
+  // `young` is read as just held; the others as an hour old.
+  const listVoid = () => held().map((r) => (r.evidence === young ? r : { ...r, resolvedAt: Number(r.resolvedAt) - 3_600_000 }));
+  const logs = [];
+  const sweep = createHeldClaimSweep({ listVoid, reopenHeld: ledger.reopenHeldClaim, renoteVoid: ledger.renoteVoidRefund, saleFor: async (tx) => (tx === sold ? { tx } : null), now: () => base + 1000, maxAgeMs: 30 * 60_000, log: (m) => logs.push(m) });
+  const waiting = await createHeldClaimSweep({ listVoid, reopenHeld: ledger.reopenHeldClaim, renoteVoid: ledger.renoteVoidRefund, journalWaiting: () => 1, now: () => base + 1000 }).sweep();
+  ok(waiting.waiting === true && waiting.reopened === 0 && rowsFor(stranded)[0].status === "void", "the sweep does nothing while the refund journal holds waiting writes");
+  const out = await sweep.sweep();
+  ok(out.reopened === 2 && out.served === 1, `the sweep reopens the stranded holds and marks the sold one served (${JSON.stringify(out)})`);
+  ok(rowsFor(stranded)[0].status === "owed" && rowsFor(stranded)[0].httpStatus === 500 && rowsFor(stranded)[0].note === `${PUSH_INPUT_REFUSED_NOTE}; ${PUSH_RUN_UNFINISHED_NOTE}`, `...stranded: owed again, noted why ("${rowsFor(stranded)[0].note}")`);
+  ok(rowsFor(unanswered)[0].status === "owed" && rowsFor(unanswered)[0].note === `${PUSH_FINALIZE_UNANSWERED_NOTE}; ${PUSH_RUN_UNFINISHED_NOTE}`, "...an unanswered finalize's stranded hold too");
+  ok(rowsFor(sold)[0].status === "void" && rowsFor(sold)[0].note.endsWith(PUSH_SERVED_NOTE) && rowsFor(young)[0].status === "void", "...the sold hold is void and noted served; the young hold is untouched");
+  ok(ledger.claimRefundForSend(rowsFor(stranded)[0].id, "refund-run") === true, "...and a refund send can claim the reopened debt");
+  const again = await sweep.sweep();
+  ok(again.reopened === 0 && again.served === 0, "a second pass changes nothing");
+  ok(logs.length === 2, "each reopen is logged once");
+}
+
 // Catalog state the paths above depend on: every slow route (run budget past
 // the advise bound, src/slow-routes.js) is long-running, so no slow route
 // offers Tempo and a push credential on one is refused at the binding check,
@@ -574,6 +650,85 @@ for (const [label, headers, status, error, tail] of [
   const slow = Object.entries(EVM_RUN_SECONDS).filter(([, s]) => Number(s) > SLOW_ADVISE_SECONDS).map(([slug]) => slug);
   const offered = slow.filter((slug) => tempoOfferedFor({ priceUsd: 0.05, longRunning: isLongRunningSlug(slug) }));
   ok(slow.length > 0 && offered.length === 0, `every slow route (${slow.length}) is long-running, so none offers Tempo and the deferred sync-window refusal has no live route today${offered.length ? `: ${offered.join(", ")} now offers Tempo on a slow route` : ""}`);
+}
+
+// The held-claim sweep reads EVERY row created before its cutoff, never only
+// the newest page: a stranded hold older than 2000 newer void rows is found
+// (it was missed while the sweep read the newest 2000 void rows), the walk is
+// bounded per tick and resumes from its cursor, a millisecond holding a full
+// page is read whole, and owed rows unpaid too long are named once a pass.
+{
+  const { ledgerHeldPage, PUSH_HELD_SWEEP_ROWS_PER_TICK } = await import("../src/tempo-push-debts.js");
+  const strandedOld = hashFor(5000);
+  await post(pushCred(strandedOld), {});
+  ok((await debts.claimForServe({ tempoSettled: true, mppTempoPushHash: strandedOld })) === true, "setup: an old hold");
+  const heldNote = ledger.refundByEvidence(strandedOld)?.note;
+  ok(heldNote === `${PUSH_INPUT_REFUSED_NOTE}; ${PUSH_CLAIMED_NOTE}`, `setup: held note (${heldNote})`);
+  await new Promise((r) => setTimeout(r, 5));
+  const FILL = 2100;
+  for (let i = 0; i < FILL; i++) {
+    const h = hashFor(6000 + i);
+    ledger.recordRefundOwed({ slug: "filler", network: "tempo", payer: SENDER, priceUsd: 0.01, tx: h, httpStatus: 400, wire: "mpp-tempo", note: "filler" });
+    ledger.voidOwedOnClaim(h, PUSH_CLAIMED_NOTE);
+  }
+  const newest = ledger.listRefunds({ status: "void", limit: 2000 });
+  ok(newest.length === 2000 && !newest.some((r) => r.evidence === strandedOld), "reproduced: the newest 2000 void rows do not include the old hold");
+  const t0 = Date.now() + 3_600_000; // every hold reads as an hour old
+  const mk = (over = {}) => createHeldClaimSweep({ listPage: ledgerHeldPage(ledger), reopenHeld: async () => false, renoteVoid: async () => false, saleFor: async () => null, now: () => t0, maxAgeMs: 30 * 60_000, log: () => {}, alarm: () => {}, ...over });
+  // Bounded per tick, resuming from the cursor: the hold is found by the pass, wherever it sits.
+  const seen = [];
+  const reopenSpy = async (ev, o) => { seen.push(ev); return ledger.reopenHeldClaim(ev, o); };
+  const small = mk({ rowsPerTick: 600, reopenHeld: async (ev, o) => { seen.push(ev); return false; } });
+  let ticks = 0, rows = 0, last;
+  do { last = await small.sweep(); ticks++; rows += last.rows; ok(last.rows <= 600 + 500, `tick ${ticks} reads at most a tick's rows plus one page (${last.rows})`); } while (!last.passComplete && ticks < 50);
+  ok(last.passComplete && ticks >= 2, `a pass over ${rows} rows takes several bounded ticks (${ticks})`);
+  ok(rows >= FILL + 1 && seen.includes(strandedOld), `every row is read once a pass and the old hold is found (${rows} rows)`);
+  // A page size smaller than one millisecond's rows: the millisecond is read whole, nothing skipped.
+  const seenTiny = [];
+  const tiny = mk({ pageSize: 3, rowsPerTick: 1e9, reopenHeld: async (ev) => { seenTiny.push(ev); return false; } });
+  const tinyOut = await tiny.sweep();
+  ok(tinyOut.passComplete && tinyOut.rows >= FILL + 1 && seenTiny.includes(strandedOld), `with a three-row page every row is still read (${tinyOut.rows} rows, ${tinyOut.reads} reads)`);
+  // The real reopen: the old stranded hold is owed again.
+  const real = mk({ rowsPerTick: PUSH_HELD_SWEEP_ROWS_PER_TICK, reopenHeld: reopenSpy });
+  let r;
+  do { r = await real.sweep(); } while (!r.passComplete);
+  ok(ledger.refundByEvidence(strandedOld)?.status === "owed" && ledger.refundByEvidence(strandedOld)?.note === `${PUSH_INPUT_REFUSED_NOTE}; ${PUSH_RUN_UNFINISHED_NOTE}`, "the old stranded hold is owed again");
+  // Owed rows unpaid past the escalation age are named once a pass, at most once a day.
+  const alarms = [];
+  const esc = mk({ owedAgeMs: 60_000, alarm: (m) => alarms.push(m) });
+  do { r = await esc.sweep(); } while (!r.passComplete);
+  ok(r.owedAged >= 1 && alarms.length === 1 && /owed refund row\(s\) unpaid past/.test(alarms[0]) && !/0x[0-9a-f]{40}/i.test(alarms[0]), `owed rows past the age are named once, no addresses (${alarms[0]})`);
+  do { r = await esc.sweep(); } while (!r.passComplete);
+  ok(alarms.length === 1, "not again inside the day");
+  const none = [];
+  const fresh = mk({ owedAgeMs: 365 * 86_400_000, alarm: (m) => none.push(m) });
+  do { r = await fresh.sweep(); } while (!r.passComplete);
+  ok(r.owedAged === 0 && none.length === 0, "nothing named when no owed row is that old");
+  const { readFileSync } = await import("node:fs");
+  const startSrc = readFileSync(new URL("../src/tempo-push-debts.js", import.meta.url), "utf8").split("export function startTempoHeldClaimSweep")[1] || "";
+  ok(/listPage: ledgerHeldPage\(ledger\)/.test(startSrc) && !/listVoid|listRefunds/.test(startSrc), "the production sweep walks the ledger page by page, never one newest-first list");
+  ok(!/sales-ledger/.test(readFileSync(new URL("../src/tempo-push-debts.js", import.meta.url), "utf8")) && /saleFor,/.test(startSrc), "the sweep takes saleFor from its caller and does not import the sales ledger");
+  ok(/oldestCreatedAt: ledger\.oldestRefundCreatedAt/.test(startSrc), "the production sweep starts each pass at the ledger's oldest row");
+}
+// A pass starts at the oldest row, not the epoch, and yields the event loop
+// between pages: each page reads a synchronous store.
+{
+  const T0 = 1_790_000_000_000;
+  const froms = [];
+  let immediateRan = false;
+  let pagesAfterYield = 0;
+  const listPage = ({ from, limit }) => {
+    froms.push(from);
+    if (immediateRan) pagesAfterYield++;
+    // Every page is full, so the walk halves its window and reads many pages.
+    return Array.from({ length: Math.min(limit, 4) }, (_, i) => ({ status: "paid", createdAt: from + i, evidence: `e${from}-${i}` }));
+  };
+  const sw = createHeldClaimSweep({ listPage, oldestCreatedAt: () => T0, reopenHeld: async () => false, renoteVoid: async () => false, saleFor: async () => null, now: () => T0 + 40 * 60_000, maxAgeMs: 30 * 60_000, log: () => {}, alarm: () => {}, pageSize: 4, rowsPerTick: 40 });
+  // Queued before the tick: it runs during the tick only if the walk yields.
+  setImmediate(() => { immediateRan = true; });
+  const out = await sw.sweep();
+  ok(froms[0] === T0, `the first page starts at the oldest row's createdAt, not 0 (from ${froms[0]})`);
+  ok(out.reads > 3 && pagesAfterYield > 0, `a callback queued before the tick runs while it walks ${out.reads} pages: the walk yields between pages (${pagesAfterYield} pages read after it ran)`);
 }
 
 server.close();

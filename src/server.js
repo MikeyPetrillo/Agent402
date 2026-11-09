@@ -3,11 +3,12 @@ import { heapSamplingReport } from "./boot-profile.js"; // diagnostic boot CPU p
 import "./tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA, process-wide (see the file)
 import { mtaStsPolicy } from "./mta-sts.js";
 import { securityHeaders } from "./security-headers.js";
-import { createLargeBodyGate, largeBodyInflightMaxBytes, unlessBodyUnread } from "./large-body-gate.js";
+import { createLargeBodyGate, largeBodyInflightMaxBytes, unlessBodyUnread, UNPAID_LIMITS as LARGE_BODY_UNPAID_LIMITS } from "./large-body-gate.js";
 import { carriesPaymentAttempt, registerOfferedNetworks } from "./payment-attempt.js";
 import { retiredEntryFor, assertRetiredRegistryConsistent, retirementHeaders, RETIRED_CONVERTERS_AT } from "./retired-tools.js";
 import { createTrafficStore, trafficMiddleware } from "./traffic-classifier.js";
-import { redisSharedSettled, createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath } from "./unpaid-quote-budget.js";
+import { redisSharedSettled, createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath, METERED_UNPAID_QUOTES_PER_MIN, METERED_UNPAID_QUOTES_PER_HOUR, PAID_CLIENT_METERED_QUOTES_PER_MIN, PAID_CLIENT_METERED_QUOTES_PER_HOUR, clientKeyOf as quoteClientKeyOf, workerEgressAddressKeyOf } from "./unpaid-quote-budget.js";
+import { createPaidQuoteTrust, paidAndSettled } from "./paid-quote-trust.js";
 import { stripMcpMarker } from "./mcp-loopback.js";
 import { canonicalizePaymentHeaders, decodePaymentHeader, encodePaymentHeader } from "./payment-header.js";
 import { RAILS_OR, RAILS, x402EvmOnly, x402RailsFor } from "./rails.js";
@@ -355,7 +356,7 @@ import { asyncProfileOf, estimateBasisSeconds, asyncAdvice, asyncAdviceMiddlewar
 import { progressMiddleware, reportHandlerStarted } from "./job-progress.js";
 import { createTaskStore, taskDataDir } from "./mcp-tasks.js";
 import { admitCoveredRun } from "./inflight-cover.js";
-import { paymentReplayKeyAsync, paymentValidBeforeMs, createReplayGuard } from "./replay-guard.js";
+import { paymentReplayKeyAsync, paymentValidBeforeMs, createReplayGuard, replayGuardStoreStatus } from "./replay-guard.js";
 import { statusPage, statusSnapshot } from "./status.js";
 import { recordProbes, statusStoreFlush } from "./status-store.js";
 import { tollboothLandingPage } from "./tollbooth-landing.js";
@@ -422,7 +423,7 @@ import { findTools, findRelatedSellers, markWeakMatches, markMissRows } from "./
 import { buildPlanSketch } from "./plan-sketch.js";
 import { recordWish, getWishesAggregate, annotateServedAsync, WISH_SERVED_MIN_SCORE, startWishRotation } from "./wish.js";
 import { setAlgorandCrawlSources } from "./algorand-sellers.js";
-import { priceToMicroUsd, sellerRouteUrl } from "./x402-index.js";
+import { priceToMicroUsd, sellerRouteUrl, isUrlTemplateRoute } from "./x402-index.js";
 import { priceUsdOf } from "./price-usd.js";
 import { submissionSlotStatus } from "./x402-index.js";
 import { startRouterPool, routerPoolStatus } from "./router-pool.js";
@@ -460,7 +461,8 @@ import { GATEWAY_WIRE, gatewayBalanceStatus, gatewayOfferPublic, gatewayOfferNet
 import { isGatewayWire, isGatewayPendingAnswer } from "./gateway-wire.js";
 import { networkFloorUsd } from "./network-floors.js";
 import { createMppShim } from "./mpp-shim.js";
-import { createTempoChallengeAppender, createTempoGate, tempoTxFromReceiptHeader, isTempoPushCredential } from "./mpp-tempo.js";
+import { createTempoChallengeAppender, createTempoGate, tempoTxFromReceiptHeader, isTempoPushCredential, configureTempoLateWatches } from "./mpp-tempo.js";
+import { createLateWatchLedger, startLateWatchSweep } from "./tempo-late-watches.js";
 import { createStripeChallengeAppender, createStripeGate, stripeTxFromReceiptHeader } from "./mpp-stripe.js";
 import { confirmTempoSettlement } from "./tempo-confirm.js";
 import { KIT } from "./tools/kit.js";
@@ -640,9 +642,9 @@ import { corsMiddleware } from "./cors.js";
 import { MODERATE_TOOLS } from "./tools/moderate-kit.js";
 import { CDP_TOOLS } from "./tools/cdp-kit.js";
 import { toolPage, openapiSpec, toolList, CATEGORIES, faqPage, categoryPage, relatedTools } from "./pages.js";
-import { createIdempotency, implicitReplayAllowed } from "./idempotency.js";
+import { createIdempotency, implicitReplayAllowed, chargedReplayVerdict } from "./idempotency.js";
 import { mountMcp, mcpClientsSeenSinceBoot } from "./mcp-http.js";
-import { guidesIndex, guidePage, guideTitles } from "./guides.js";
+import { guidesIndex, guidePage, guideTitles, BUYING_AT_VOLUME_PATH } from "./guides.js";
 import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, buildPromptMessages, skillPackOfToolSlug } from "./skills.js";
 import { docsPage, docsApi, DOCS_SITE_ROUTES } from "./docs.js";
 import { changelogPage, changelogRss } from "./changelog.js";
@@ -784,7 +786,7 @@ import { buildSellerDossierTool } from "./tools/seller-dossier.js";
 import { buildSellerPayabilityTool } from "./tools/seller-payability-kit.js";
 import { buildFlightTools, parseFlightSellers } from "./tools/flights-kit.js";
 import { deliveryObservation } from "./response-observation.js";
-import { payX402, pickPayableAccept, avmBuyerConfigured, avmBuyerStatus, sellerRefusedRecently, sellerRouteRefusedRecently as routeRefusedNow, sellerDeliveryFailingRecently, sellerDeliveryFailingStamp, sellerDeliveryMemoEntries, DELIVERY_FAIL_STRIKES_REQUIRED, deliveryFailTtlMsNow } from "./x402-buyer.js";
+import { payX402, chainRefusalHolds, pickPayableAccept, avmBuyerConfigured, avmBuyerStatus, sellerRefusedRecently, sellerRouteRefusedRecently as routeRefusedNow, sellerDeliveryFailingRecently, sellerDeliveryFailingStamp, sellerDeliveryMemoEntries, DELIVERY_FAIL_STRIKES_REQUIRED, deliveryFailTtlMsNow } from "./x402-buyer.js";
 import { readTextCapped } from "./capped-body.js";
 import { svmBuyerConfigured, svmBuyerStatus, SOLANA_NETWORK_LABELS } from "./solana-buyer.js";
 import { payTempo, tempoBuyerConfigured, tempoBuyerStatus, tempoRpc } from "./tempo-buyer.js";
@@ -849,7 +851,7 @@ const OX_TRIAL_LIMITS_LABEL = `${OX_TRIAL_PER_HOUR} per hour, ${OX_TRIAL_PER_DAY
 import { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, settleSentWhileConnected, grantedUnsettled, clientGoneError, isClientGoneAbort, onSettleOutcome, onResponseEnd } from "./hangup-settlement.js";
 import { firstCallAllowanceEnabled, claimFirstCallAllowance, finishFirstCallAllowance, firstCallAllowanceStatus, allowanceServed } from "./first-call-allowance.js";
 import { hangupForgiven, hangupTicketDenial, reserveHangupForgiveness, settleHangupTicket, hangupForgivenessStatus, loadHangupForgiveness, flushHangupForgiveness, hasLastingEffect } from "./hangup-forgiveness.js";
-import { createTempoPushDebts, tempoLedgerPayerPending, whenTempoLedgerPayerKnown } from "./tempo-push-debts.js";
+import { createTempoPushDebts, startTempoHeldClaimSweep, tempoLedgerPayerPending, whenTempoLedgerPayerKnown } from "./tempo-push-debts.js";
 import { recordRefundOwed, refundByEvidence, refundByEvidenceFresh, voidOwedOnClaim, voidOwedForServe, reopenHeldClaim, renoteVoidRefund, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
 import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince, statsFlush } from "./stats.js";
 import { timingSafeEqual, createHash, randomUUID, randomBytes } from "node:crypto";
@@ -951,7 +953,7 @@ const CATALOG = {
     slug: "dns",
     category: "network",
     price: "$0.001",
-    description: "Live DNS lookup for a domain: returns name, type and records[]. Supported record types: A, AAAA (addresses as strings), MX ({exchange, priority} objects), TXT (each record an array of its strings), NS and CNAME (hostnames). For SPF, DMARC or a full mail-security read use spf-check, dmarc-check or email-deliverability.",
+    description: "Resolve one common DNS record type for a domain: answers name, type and records[] as the resolver returns them. Types: A, AAAA (addresses as strings), MX ({exchange, priority} objects), TXT (each record an array of its strings), NS and CNAME (hostnames). For SPF, DMARC or a full mail-security read use spf-check, dmarc-check or email-deliverability.",
     tags: ["dns", "domains", "networking"],
     discovery: {
       input: { name: "example.com", type: "A" },
@@ -1248,7 +1250,7 @@ const CATALOG = {
     slug: "memory-forget",
     category: "memory",
     price: "$0.001",
-    description: "Delete a remembered document by id from the recall store.",
+    description: "Forget one stored entry: deletes a document from the wallet-scoped semantic memory by the id it was saved under, and answers deleted: true, or false when no entry had that id.",
     tags: ["memory", "semantic", "delete"],
     discovery: {
       bodyType: "json",
@@ -1638,7 +1640,7 @@ function sellerToolVerdicts(detail) {
   if (!detail || !Array.isArray(detail.tools)) return [];
   const positiveUsd = (p) => { const n = priceUsdOf(p); return n != null && n > 0 ? n : null; };
   return detail.tools.map((t) => {
-    const v = withDispatchFields({ ...t, seller: detail.origin, origin: detail.origin, routable: detail.routable, networks: Array.isArray(t.networks) && t.networks.length ? t.networks : detail.networks, priceUsd: positiveUsd(t.price), urlTemplate: /[{}]/.test(String(t.route || "")), payToByNetwork: detail.payToByNetwork, evmDomainByNetwork: detail.evmDomainByNetwork }, { rowLevel: true });
+    const v = withDispatchFields({ ...t, seller: detail.origin, origin: detail.origin, routable: detail.routable, networks: Array.isArray(t.networks) && t.networks.length ? t.networks : detail.networks, priceUsd: positiveUsd(t.price), urlTemplate: isUrlTemplateRoute(t.route), payToByNetwork: detail.payToByNetwork, evmDomainByNetwork: detail.evmDomainByNetwork }, { rowLevel: true });
     // The affordance fields travel with the verdict: a row the router pays
     // now (proven, or the unproven lane) says so, a row it would pay once the
     // seller proves out says that, as the route rows do (2026-11-03: a
@@ -1701,7 +1703,9 @@ async function labelledSnapshotAsync(snapshot) {
   promise.finally(() => { if (labelledBuild?.promise === promise) labelledBuild = null; }).catch(() => {});
   return promise;
 }
-async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wantModel = null, onlyUrl = null } = {}) {
+// The bound GET probe's timeout (the bare probe has 6 s): see resolveExternalSeller.
+const BOUND_PROBE_TIMEOUT_MS = 3000;
+async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wantModel = null, onlyUrl = null, params = null } = {}) {
   const sameUrl = (u) => { try { return new URL(u).href === new URL(onlyUrl).href; } catch { return false; } };
   // Filled by the dispatch gate below; read by route-execute when nothing
   // resolves, so the refusal can say which world it is in.
@@ -1764,26 +1768,21 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
     // GoPlausible's `verifs` is a facilitator's own witness of settlements to
     // its merchant, while a crawl-only row's count is inbound USDC-ASA
     // transfers read on the payTo THE SELLER ADVERTISES - an assertion, not a
-    // proof of control. So a crawl-proven row carries that address through as
-    // `chainProvenPayTo` and the probe loop below refuses it unless the live
-    // 402 asks us to pay the same one. Same shape out: url/method/price/networks.
-    const { algorandCatalog, rankAlgorandResources } = await import("./algorand-sellers.js");
+    // proof of control. Either count belongs to an address, so every row
+    // carries the address its proof was counted at as `chainProvenPayTo`
+    // (src/dispatch-eligibility.js algorandProofBinding: our crawled payTo,
+    // else the facilitator's recorded receiving address) and the probe loop
+    // below refuses it unless the live 402 asks us to pay that same one. A
+    // row with no address to bind is not a candidate. Same shape out.
+    const { algorandCatalog, algorandRouterCandidates } = await import("./algorand-sellers.js");
     const ourOrigin = (() => { try { return new URL(BASE_URL).origin.toLowerCase(); } catch { return ""; } })();
-    candidates = rankAlgorandResources(await algorandCatalog(), task, { capUsd: cap, minVerifs: SOR_MIN_SETTLED_TX, excludeOrigin: ourOrigin })
-      .slice(0, 5)
-      .map((r) => ({
-        seller: r.origin, slug: r.path.replace(/^\//, ""), url: r.url, method: r.method,
-        price: `$${r.priceUsd}`, priceUsd: r.priceUsd,
-        networks: [PAY_NETWORKS.algorand], settled: r.verifs,
-        // Only a row whose count we read from the chain ourselves. A
-        // facilitator-witnessed row ("both"/undefined) keeps GoPlausible's
-        // count, so comparing its advertised address against the live one
-        // would be comparing two assertions and could refuse a seller that is
-        // genuinely proven.
-        chainProvenPayTo: r.source === "crawl" && typeof r.payTo === "string" ? r.payTo : null,
-        // The route's own text, for the category filter below.
-        description: r.description,
-      }));
+    const algo = algorandRouterCandidates(await algorandCatalog(), task, { capUsd: cap, minVerifs: SOR_MIN_SETTLED_TX, excludeOrigin: ourOrigin, network: PAY_NETWORKS.algorand, limit: 5 });
+    candidates = algo.candidates;
+    for (const [why, n] of Object.entries(algo.dropped)) {
+      gateDrops.total += n;
+      gateDrops.byReason[why] = (gateDrops.byReason[why] || 0) + n;
+      console.log(`[sor] skipping ${n} algorand candidate(s): ${why}`);
+    }
   } else if (chain === "solana") {
     // Solana sellers come from the SAME crawled index as Base ones - their
     // accepts advertise a solana network label - but the Base settled/payers
@@ -1911,6 +1910,7 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
     if ((judgedSelection?.method === "judged" || judgedSelection?.method === "judged-tie") && candidates[0]) candidates[0] = { ...candidates[0], judgedSelection };
   }
   const { probePublicUrl } = await import("./tools/fetch-guard.js");
+  const { boundRequestUrl, isQueryMethod } = await import("./bound-request-url.js");
   const resolved = [];
   const { sellerRouteRefusedRecently, sellerServesModel, refreshSellerMemos } = await import("./x402-buyer.js");
   // Strikes another replica recorded reach this one's memos before they are read.
@@ -1946,6 +1946,15 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
       const served = await sellerServesModel(r.url, wantModel);
       if (served.verdict === "not-served") { console.log(`[sor] skipping ${chain} candidate ${r.seller}: its model list (${served.ids} ids at ${served.modelsUrl}) does not carry "${wantModel}"`); continue; }
     }
+    // A body seller keeps the empty-body probe. A GET or HEAD seller is first
+    // probed at its bare listing URL, as every seller is, so a caller's inputs
+    // reach no seller that answers 402 without them (only the seller paid
+    // gets them, at the URL the paid call builds). Only a bare 400 or 422, the
+    // "inputs required" answers, earns one more probe at the URL bound to the
+    // caller's params (src/bound-request-url.js, the builder route-execute
+    // pays through); params that cannot ride a query set that candidate
+    // aside, and route-execute words the refusal when none is left.
+    const probeMethod = (r.method || "POST").toUpperCase();
     try {
       // SSRF: the seller URL is external, crawled data — a proven seller's
       // registered origin could still DNS-rebind to a private address between
@@ -1955,12 +1964,29 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
       // assertPublicUrl before the request, the connection pinned to the
       // validated IP (parity with payX402), and no redirect followed off the
       // validated host.
-      const probe = await probePublicUrl(r.url, {
-        method: (r.method || "POST").toUpperCase(),
-        headers: { Accept: "application/json", ...((r.method || "POST").toUpperCase() !== "GET" ? { "Content-Type": "application/json" } : {}) },
-        ...((r.method || "POST").toUpperCase() !== "GET" ? { body: "{}" } : {}),
-        timeoutMs: 6000,
+      // The bound probe is a second round trip before any payment on a loop
+      // that runs candidates in turn, so it gets half the bare probe's time.
+      const probeAt = (u, timeoutMs = 6000) => probePublicUrl(u, {
+        method: probeMethod,
+        headers: { Accept: "application/json", ...(!isQueryMethod(probeMethod) ? { "Content-Type": "application/json" } : {}) },
+        ...(!isQueryMethod(probeMethod) ? { body: "{}" } : {}),
+        timeoutMs,
       });
+      let probe = await probeAt(r.url);
+      if (isQueryMethod(probeMethod) && (probe.status === 400 || probe.status === 422)) {
+        let boundUrl;
+        try { boundUrl = boundRequestUrl(r.url, { method: probeMethod, params: params || {}, slug: r.slug }); }
+        catch (e) {
+          gateDrops.total++;
+          gateDrops.byReason.params_unbindable = (gateDrops.byReason.params_unbindable || 0) + 1;
+          if (!gateDrops.paramsRefusal) gateDrops.paramsRefusal = String(e?.message || e).slice(0, 300);
+          continue;
+        }
+        if (boundUrl !== r.url) {
+          try { await probe.body?.cancel(); } catch { /* already read or closed */ }
+          probe = await probeAt(boundUrl, BOUND_PROBE_TIMEOUT_MS);
+        }
+      }
       live = probe.status === 402;
       if (live && r.dynamic) {
         // Dynamic-priced MPP seller: the price exists only on the live 402.
@@ -3012,7 +3038,7 @@ app.get("/__operator/tool-failures.json", async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   const onchainSqlQueries = await sqlQueryStatsReport().catch(() => null);
   const xSearchAuthors = await xSearchStatsReport().catch(() => null);
-  res.set("Cache-Control", "private, no-store").json({ ...(await toolFailureMonitor().report()), robinhoodOrder: robinhoodOrderView(), onchainSqlQueries, xSearchAuthors });
+  res.set("Cache-Control", "private, no-store").json({ ...(await toolFailureMonitor().report()), robinhoodOrder: robinhoodOrderView(), chainRefusalHolds: chainRefusalHolds(), onchainSqlQueries, xSearchAuthors });
 });
 // Direct-upstream A/B (src/gateway-direct-upstream.js): attempts, failures by
 // bucket and p50/p90 latency per upstream for the listed model ids.
@@ -3360,7 +3386,15 @@ app.use(chainNamespaceMiddleware);
 // each container enforces its RATE_LIMIT_REPLICAS share of it (the factory
 // divides, like every limiter in src/rate-limit.js).
 const UNPAID_QUOTE_BUDGET = FREE_MODE ? 0 : unpaidQuoteBudgetPerHour();
+// Client addresses that completed a settled paid call in the last
+// PAID_QUOTE_TRUST_MINUTES (src/paid-quote-trust.js): their unpaid price
+// checks read against PAID_CLIENT_QUOTE_MULTIPLIER times the plain figure on
+// the price-check budget below. A metered quote past the plain figure needs a
+// credit a settled /v1/metered call earned (METERED_QUOTE_CREDITS_PER_CALL).
+// Marked only from the settlement-outcome hook further down.
+const QUOTE_TRUST = createPaidQuoteTrust();
 const UNPAID_BUDGET = UNPAID_QUOTE_BUDGET > 0 ? createUnpaidQuoteBudget({
+  paidTrust: QUOTE_TRUST,
   budget: UNPAID_QUOTE_BUDGET,
   isPriced: (method, path) => Boolean(CATALOG[`${method} ${path}`]),
   isSynthetic: isSyntheticRequest,
@@ -3387,7 +3421,7 @@ const LARGE_BODY_ROUTES = [
   // (OFFICE_LIMITS.requestBytes), past the global parser once JSON-escaped.
   ["/api/xlsx-create", 2 * MB], ["/api/docx-create", 2 * MB], ["/api/pptx-create", 2 * MB],
 ];
-const largeBodyUnpaidLimiter = createRateLimiter("large-body-unpaid", { perMin: 60, perHour: 1200 });
+const largeBodyUnpaidLimiter = createRateLimiter("large-body-unpaid", { perMin: LARGE_BODY_UNPAID_LIMITS.PER_MIN, perHour: LARGE_BODY_UNPAID_LIMITS.PER_HOUR });
 app.use(createLargeBodyGate({
   routes: LARGE_BODY_ROUTES,
   isPaid: (req) => looksLikePayment(req.headers),
@@ -3443,8 +3477,16 @@ app.use("/__operator/seller-verification", (req, res, next) => {
 // An unpaid POST here tokenizes the body for its 402 quote (measured 28 ms
 // per 190k CJK chars): bound unauthenticated quote requests per IP so the
 // quoter cannot be used as free CPU. Paid retries carry a credential and pass.
-const meteredQuoteLimiter = createRateLimiter("metered-quote", { perMin: 60, perHour: 1200 });
-const meteredUnverifiedLimiter = createRateLimiter("metered-quote-refused-credential", { perMin: 60, perHour: 1200 });
+const meteredQuoteLimiter = createRateLimiter("metered-quote", { perMin: METERED_UNPAID_QUOTES_PER_MIN, perHour: METERED_UNPAID_QUOTES_PER_HOUR });
+const meteredUnverifiedLimiter = createRateLimiter("metered-quote-refused-credential", { perMin: METERED_UNPAID_QUOTES_PER_MIN, perHour: METERED_UNPAID_QUOTES_PER_HOUR });
+// An address in the paid-quote trust window reads against a raised ceiling
+// (src/unpaid-quote-budget.js PAID_CLIENT_METERED_QUOTES_*), on its own count
+// keyed like the trust (quoteClientKeyOf): trust raises the cap, never lifts it.
+const meteredTrustedQuoteLimiter = createRateLimiter("metered-quote-paid-client", { perMin: PAID_CLIENT_METERED_QUOTES_PER_MIN, perHour: PAID_CLIENT_METERED_QUOTES_PER_HOUR });
+// On Cloudflare's shared Worker egress address the trust key carries a
+// User-Agent token any Worker can send, so the trusted counts there also share
+// one whole-address count at the same raised figures.
+const meteredTrustedEgressLimiter = createRateLimiter("metered-quote-paid-egress", { perMin: PAID_CLIENT_METERED_QUOTES_PER_MIN, perHour: PAID_CLIENT_METERED_QUOTES_PER_HOUR });
 app.use("/v1/metered", (req, res, next) => {
   // GET/HEAD too: the method alias below turns them into the POST quote path
   // (review 2026-08-28: 70 HEADs with a 180 KB body reached the quoter past
@@ -3458,7 +3500,32 @@ app.use("/v1/metered", (req, res, next) => {
   // src/unpaid-quote-budget.js because the unpaid price-check budget has to
   // read a credential exactly the same way, and two copies of this rule drift.
   const paid = looksLikePayment(req.headers);
-  if (!paid && meteredQuoteLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many unpaid quote requests from this address; send the paid retry, or slow down." });
+  // The 429 names its wait and links the guide to buying in bursts.
+  const refuseQuote = () => {
+    res.set("Retry-After", "60");
+    return res.status(429).json({ error: "Too many unpaid quote requests from this address; send the paid retry, or slow down.", retryAfterSeconds: 60, guide: `${BASE_URL.replace(/\/$/, "")}${BUYING_AT_VOLUME_PATH}` });
+  };
+  if (!paid) {
+    // Every unpaid quote counts against the plain figure first. Past it, a
+    // quote is served only on a credit a settled /v1/metered call from this
+    // address earned (src/paid-quote-trust.js creditMetered), so free quotes
+    // stay bounded by paid metered calls, under the raised ceilings.
+    const trustKey = quoteClientKeyOf(req);
+    const egressKey = workerEgressAddressKeyOf(req);
+    const ip = clientIp(req);
+    if (!meteredQuoteLimiter.peek(ip).limited) {
+      meteredQuoteLimiter.check(ip);
+      return next();
+    }
+    // The raised ceilings are read before a credit is spent, so a quote they
+    // refuse keeps its credit.
+    if (meteredTrustedQuoteLimiter.peek(trustKey).limited) return refuseQuote();
+    if (egressKey && meteredTrustedEgressLimiter.peek(egressKey).limited) return refuseQuote();
+    if (!QUOTE_TRUST.takeMeteredCredit(trustKey)) return refuseQuote();
+    meteredTrustedQuoteLimiter.check(trustKey);
+    if (egressKey) meteredTrustedEgressLimiter.check(egressKey);
+    return next();
+  }
   if (paid) {
     // A header that only decodes as a payment still buys a quote: the gate
     // prices the body before it verifies. Such a request is counted once its
@@ -3902,6 +3969,10 @@ app.get("/api/gateway-status", async (req, res) => {
     // GATEWAY_WITHDRAW_ALERT_USD). One word each publicly; the figure and
     // the per-domain split on the operator view only.
     gatewayPending: { status: await gatewayPendingStatus() },
+    // EVM settlements that failed naming a transaction or an authorization
+    // (src/late-settlements.js): ok / near_capacity / full / unresolved. One
+    // word; the heartbeat and the status Worker page on unresolved and full.
+    lateSettlements: { status: await lateSettleBookForOperator().then((b) => b.alarmStatus()).catch(() => "unknown") },
     gatewayBalance: (() => { try { return gatewayBalanceStatus({ full }); } catch { return { status: "unknown" }; } })(),
     // Redis persistence (src/redis-persistence.js): on / degraded / off /
     // unknown. One word publicly; the operator also gets the INFO fields.
@@ -4021,6 +4092,12 @@ app.get("/api/gateway-status", async (req, res) => {
     // publicly; the clock for the operator, the order on
     // /__operator/tool-failures.json (robinhoodOrder).
     robinhoodSettler: (() => { try { return robinhoodSettlerStatus({ full }); } catch { return { status: "unknown" }; } })(),
+    // replayStore reads pending while a settled payment's consumed mark that
+    // the shared store missed is held on this process only and written again
+    // by the replay guard's retry loop (src/replay-guard.js), ok otherwise.
+    // One word publicly; the counts (pending, missed, recovered, abandoned)
+    // for the operator.
+    replayStore: (() => { try { return replayGuardStoreStatus({ full }); } catch { return { status: "unknown" }; } })(),
     // subscriptionRenewals reads unconfirmed while a wallet-billed monitor
     // renewal has stayed unconfirmed (its send's landing undecided by the
     // chain read, so nothing is signed again) for longer than
@@ -6003,6 +6080,8 @@ app.get("/__operator/traffic.json", (req, res) => {
   res.set("Cache-Control", "no-store").json({
     ...TRAFFIC.report({ days: Math.min(14, parseInt(req.query.days, 10) || 2), top: Math.min(100, parseInt(req.query.top, 10) || 15) }),
     unpaidQuoteBudget: UNPAID_BUDGET ? UNPAID_BUDGET.stats() : { budget: 0 },
+    // Bucketed counts of addresses trusted after a paid call, never an address.
+    paidQuoteTrust: QUOTE_TRUST.stats(),
   });
 });
 // Serving health for the heartbeat: one verdict plus the counts behind it,
@@ -6543,6 +6622,24 @@ app.post("/__operator/circle-pending", express.json(), async (req, res) => {
     const r = await book.resolve(key, { outcome, note });
     return res.status(r.ok ? 200 : 400).set("Cache-Control", "no-store").json(r);
   } catch { return res.status(503).json({ error: "the pending book could not be written" }); }
+});
+// The late-settlement book (src/late-settlements.js): an operator resolves an
+// UNRESOLVED entry (booked_owed, paid or dismissed, with a note; recorded
+// before the entry is dropped) or acknowledges this process's unrecorded
+// bookings, which clears the lateSettlements word. Listed on refunds.json
+// (unconfirmedSettlements).
+app.post("/__operator/late-settlements", express.json({ limit: "8kb" }), async (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  const { action, key, outcome, note, tx, decimals } = req.body || {};
+  let book;
+  try { book = await lateSettleBookForOperator(); } catch { return res.status(503).json({ error: "the late-settlement book could not be read" }); }
+  try {
+    let r;
+    if (action === "resolve") r = await book.resolve(typeof key === "string" ? key : "", { outcome, note, tx: typeof tx === "string" ? tx : null, decimals: decimals ?? null });
+    else if (action === "acknowledge_unrecorded") r = await book.acknowledgeUnrecorded({ note });
+    else return res.status(400).json({ error: 'pass {"action":"resolve","key":"<entry key>","outcome":"booked_owed"|"paid"|"dismissed","note":"what was checked","tx":"0x... (paid: the refund transfer)"} or {"action":"acknowledge_unrecorded","note":"what was checked"}' });
+    return res.status(r.ok ? 200 : 400).set("Cache-Control", "no-store").json({ ...r, status: await book.alarmStatus({ ttlMs: 0 }).catch(() => "unknown") });
+  } catch { return res.status(503).json({ error: "the late-settlement book could not be written" }); }
 });
 app.post("/__operator/seller-funding", express.json(), async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
@@ -10215,9 +10312,16 @@ if (!FREE_MODE) {
   // createTempoGate refuses to mount (fail closed).
   tempoPushDebts = createTempoPushDebts({
     recordOwed: recordRefundOwed, voidOnClaim: voidOwedOnClaim, voidForServe: voidOwedForServe, reopenHeld: reopenHeldClaim, renoteVoid: renoteVoidRefund, renoteOwed: renoteOwedRefund, promoteToHangup: promoteOwedToHangup, restateHandlerFailure: restateOwedAsHandlerFailure, refundByEvidence,
-    recordChargedFailure, isSynthetic: isSyntheticRequest,
+    recordChargedFailure,
+    // A late-landing sweep books from a stored request, which says whether it was synthetic.
+    isSynthetic: (req) => (typeof req?.__lateWatchSynthetic === "boolean" ? req.__lateWatchSynthetic : isSyntheticRequest(req)),
     slugOf: (req) => CATALOG[`${req.method} ${req.path}`]?.slug,
   });
+  // A claim held for a run whose process died is owed again (leased sweep).
+  void startTempoHeldClaimSweep({ saleFor: async (tx) => (await import("./sales-ledger.js")).saleByTxFresh(tx) });
+  // Every Tempo late-landing watch is on record (src/tempo-late-watches.js),
+  // so one past the per-process bound or cut short by a restart is still read.
+  configureTempoLateWatches(createLateWatchLedger());
   const tempoGate = createTempoGate({
     replayGuard: tempoReplayGuard,
     // Chain-truth fallback on relay broadcast failure (2026-08-20): a relay
@@ -10263,7 +10367,9 @@ if (!FREE_MODE) {
     // The row a push transfer already holds, read before a route refusal
     // books one (createTempoGate refuseConfirmedPush).
     pushRowOf: (hash) => refundByEvidence(hash) || null,
+    syntheticOf: isSyntheticRequest,
   });
+  if (tempoGate) void startLateWatchSweep({ sweepOnce: () => tempoGate.sweepLateWatches() });
   if (tempoGate) {
     app.use(tempoGate);
     tempoGateMounted = true;
@@ -10324,54 +10430,18 @@ if (!FREE_MODE) {
   }
 }
 
-// Opt-in idempotency (safe paid retry): src/idempotency.js. Mounted after the
-// credits gate and before the paywall, so a replay hit skips settlement.
-// A re-sent x402 EVM payment (same nonce, route and body) with no explicit key
-// replays its first answer the same way, except on a route whose effect
-// outlives the answer (hasLastingEffect), on an identity-bound route (its
-// answer is one payer's own data, and a settled payment header can be rebuilt
-// from public chain data, so only a key the buyer chose may replay it), and on
-// a streamed call, which the store never holds. Replays are counted per slug on the operator detail
-// (/__operator/tool-failures.json), never per payer.
-app.use(createIdempotency({
-  isCatalogRoute: (req) => Boolean(CATALOG[`${req.method} ${req.path}`]),
-  freeMode: FREE_MODE,
-  implicitReplay: (req) => implicitReplayAllowed(CATALOG[`${req.method} ${req.path}`], req, { hasLastingEffect, isIdentityBound: isIdentityBoundRoute }),
-  onReplay: async (req, { implicit, charged }) => {
-    const def = CATALOG[`${req.method} ${req.path}`];
-    if (def) toolFailureMonitor().noteReplay(def.slug, { implicit });
-    if (!(charged && typeof charged.tx === "string" && charged.tx)) return;
-    // The stored answer was charged but never delivered (the buyer left while
-    // it settled). Its debt is voided BEFORE the answer goes out, like the
-    // Tempo push claim (tempoPushDebts.claimForServe): a row the refund run
-    // has already claimed or paid is not voided, and then the answer is not
-    // served either, so a buyer is served once, never both served and
-    // refunded. No row, or one already void, serves.
-    let voided = false;
-    try { voided = (await voidOwedOnClaim(charged.tx, "served on the resend of the same payment")) === true; } catch { voided = false; }
-    if (voided) { console.log(`[hangup] undelivered answer served on resend (${req.method} ${req.path} tx=${charged.tx}); its debt is void`); return; }
-    let row = null;
-    try { row = await refundByEvidenceFresh(charged.tx); } catch { row = null; }
-    if (!row || row.status === "void") return;
-    console.warn(`[hangup] resend of a refunded payment not served (${req.method} ${req.path} tx=${charged.tx}; refund #${row.id} ${row.status})`);
-    return { serve: false, status: 402, body: {
-      error: "payment_refunded",
-      hint: "The payment this request carries was refunded (or is being refunded) because its first answer was never delivered, so it no longer pays for a request. Request the resource again with a fresh payment.",
-      refund: { status: ["owed", "sending", "paid"].includes(row.status) ? row.status : "owed", lookup: `${BASE_URL}/api/refunds/lookup?tx=${encodeURIComponent(charged.tx)}` },
-    } };
-  },
-}));
-
-// x402 paywall for the catalog routes
 // POST on a GET-only tool is served, not 405'd (2026-08-28): agents POST
 // JSON to every route they discover - a buyer that had just paid for one
 // tool walked the catalog POSTing and got 405 on search, search-news,
 // search-images, search-videos, search-suggest, ip-info, card-validate ...
 // and stopped. The method is rewritten to GET for the IDENTICAL gate chain
-// (funnel, PoW, replay guard, x402 paywall keyed "GET /path"), the parsed
-// JSON body is the input (handlerInputOf merges query + body, and the GET
-// cache keys on that merged input), and Allow/405 remain for a GET sent to
-// a POST-only tool (a GET cannot carry the body those handlers need).
+// (idempotency, funnel, PoW, replay guard, x402 paywall keyed "GET /path"),
+// the parsed JSON body is the input (handlerInputOf merges query + body, and
+// the GET cache keys on that merged input), and Allow/405 remain for a GET
+// sent to a POST-only tool (a GET cannot carry the body those handlers need).
+// Mounted BEFORE idempotency, so the store sees one canonical request: an
+// aliased call's re-sent payment or keyed retry replays its stored answer
+// instead of running into the replay guard (or a second credits debit).
 app.use((req, res, next) => {
   if (req.method === "POST" && !CATALOG[`POST ${req.path}`] && CATALOG[`GET ${req.path}`]) {
     req.__methodAliased = "POST";
@@ -10398,6 +10468,58 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+// Opt-in idempotency (safe paid retry): src/idempotency.js. Mounted after the
+// credits gate and the method alias, and before the paywall, so a replay hit
+// skips settlement.
+// A re-sent x402 EVM payment (same nonce, route and body) with no explicit key
+// replays its first answer the same way, except on a route whose effect
+// outlives the answer (hasLastingEffect), on an identity-bound route (its
+// answer is one payer's own data, and a settled payment header can be rebuilt
+// from public chain data, so only a key the buyer chose may replay it), and on
+// a streamed call, which the store never holds. Replays are counted per slug on the operator detail
+// (/__operator/tool-failures.json), never per payer.
+app.use(createIdempotency({
+  isCatalogRoute: (req) => Boolean(CATALOG[`${req.method} ${req.path}`]),
+  freeMode: FREE_MODE,
+  implicitReplay: (req) => implicitReplayAllowed(CATALOG[`${req.method} ${req.path}`], req, { hasLastingEffect, isIdentityBound: isIdentityBoundRoute }),
+  onReplay: async (req, { implicit, charged }) => {
+    const def = CATALOG[`${req.method} ${req.path}`];
+    if (def) toolFailureMonitor().noteReplay(def.slug, { implicit });
+    if (!(charged && typeof charged.tx === "string" && charged.tx)) return;
+    // The stored answer was charged but never delivered (the buyer left while
+    // it settled). Its debt is voided BEFORE the answer goes out, like the
+    // Tempo push claim (tempoPushDebts.claimForServe): a row the refund run
+    // has already claimed or paid is not voided, and then the answer is not
+    // served either, so a buyer is served once, never both served and
+    // refunded. No row, or one already void, serves. A void that did not land
+    // while the row still reads owed (a failed or queued ledger write, which
+    // lands later) asks for a retry instead of refusing as refunded.
+    const { verdict, voided, row } = await chargedReplayVerdict(charged.tx, {
+      voidOnClaim: (tx) => voidOwedOnClaim(tx, "served on the resend of the same payment"),
+      rowOf: (tx) => refundByEvidenceFresh(tx),
+    });
+    if (verdict === "serve") {
+      if (voided) console.log(`[hangup] undelivered answer served on resend (${req.method} ${req.path} tx=${charged.tx}); its debt is void`);
+      return;
+    }
+    if (verdict === "pending") {
+      console.warn(`[hangup] resend of an undelivered answer held: its debt's void has not landed (${req.method} ${req.path} tx=${charged.tx}; refund #${row.id})`);
+      return { serve: false, status: 503, retryAfter: 10, body: {
+        error: "replay_pending",
+        hint: "The answer this payment bought is stored, and the ledger has not yet confirmed it as served. Nothing more is charged. Retry shortly with the same payment to receive it.",
+      } };
+    }
+    console.warn(`[hangup] resend of a refunded payment not served (${req.method} ${req.path} tx=${charged.tx}; refund #${row.id} ${row.status})`);
+    return { serve: false, status: 402, body: {
+      error: "payment_refunded",
+      hint: "The payment this request carries was refunded (or is being refunded) because its first answer was never delivered, so it no longer pays for a request. Request the resource again with a fresh payment.",
+      refund: { status: ["owed", "sending", "paid"].includes(row.status) ? row.status : "owed", lookup: `${BASE_URL}/api/refunds/lookup?tx=${encodeURIComponent(charged.tx)}` },
+    } };
+  },
+}));
+
+// x402 paywall for the catalog routes
 if (FREE_MODE) {
   console.warn("FREE_MODE=true - payments are DISABLED. Do not run this in production.");
 } else {
@@ -11039,6 +11161,19 @@ app.use((req, res, next) => {
       // X-PAYMENT-RESPONSE was the v1 name (kept for old middleware versions).
       // getHeader is case-insensitive but NOT prefix-insensitive, so check both.
       const settleReceipt = res.getHeader("PAYMENT-RESPONSE") || res.getHeader("X-PAYMENT-RESPONSE");
+      // A final 200 that settled on any rail (or a credits debit) trusts this
+      // client address for the paid-quote window (src/paid-quote-trust.js).
+      // Never in FREE_MODE, never for a free call: paidAndSettled reads the
+      // settle evidence, and this hook skips allowance grants and forgiven
+      // hang-ups before it runs.
+      if (!FREE_MODE && res.statusCode === 200 && res.getHeader("X-Pow-Accepted") !== "true" && res.getHeader("X-Trial-Accepted") !== "true" && paidAndSettled(req, res, { settleReceipt })) {
+        try {
+          const trustKey = quoteClientKeyOf(req);
+          QUOTE_TRUST.mark(trustKey);
+          // Only a settled /v1/metered call earns metered quote credits.
+          if (String(req.originalUrl || req.url || "").split("?")[0].startsWith("/v1/metered/")) QUOTE_TRUST.creditMetered(trustKey);
+        } catch { /* trust is a convenience, never a reason to fail */ }
+      }
       if (res.statusCode === 200) {
         const powAccepted = res.getHeader("X-Pow-Accepted") === "true";
         const trialAccepted = res.getHeader("X-Trial-Accepted") === "true";

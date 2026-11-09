@@ -82,6 +82,21 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   build books in its own unversioned window, so for as long as it serves the two builds' caps are
   independent (each seller and the lane can be paid up to one cap per build), and on the next
   roll-forward each sum's next rebuild (within a day) folds in that window's unexpired entries.
+- **Subscription sponsor ceiling:** `src/tempo-sponsor-ceiling.js` wraps the RPC transport of both
+  Tempo subscription clients (`src/mpp-subscriptions.js`): every raw send carrying a fee-payer
+  signature is admitted into a rolling 24 h window (`src/shared-limits.js`, shared across replicas;
+  this process's own window decides when the store does not answer) counted by transactions and
+  summed by fee bound (gas limit x maxFeePerGas), or refused before it leaves the process.
+  `MPP_SUB_SPONSOR_DAILY_MAX_TX` (default 100) and `MPP_SUB_SPONSOR_DAILY_MAX_USD` (default 2); a
+  malformed or non-positive value keeps the default. A fifth of each ceiling (`RENEWAL_RESERVE_FRACTION`, 0.2) is held
+  for renewals: activations read against the rest, the count rounded down (at
+  `MPP_SUB_SPONSOR_DAILY_MAX_TX=1` no activation is sponsored); a send not named a renewal reads as
+  an activation. A refusal logs the knob that bounds it, is a
+  definite pre-send failure (a renewal goes past_due as with any failed charge, an activation is a
+  402) and reads `ceiling=reached` on `subscriptionFeePayer` in `/api/gateway-status`; a send stays
+  counted whatever the RPC answers, so the window only over-counts.
+  `ceiling=reached` pages (the status Worker and `heartbeat.yml`, one issue "Subscription gas sponsor
+  CEILING reached"), and `ok` closes it.
 - **Failure monitor:** `src/tool-failure-monitor.js` counts every catalog answer past the gates by slug, class, origin (outside vs our own synthetic traffic) and payment rail (`outcomeRailOf` in `src/payment-rail.js`; a free proof-of-work or trial outcome counts on its own lane, shown in the detail and read by `toolFailures` only when a tool fails nearly every free call: `TOOL_FREE_FAIL_RATE`, default 0.9, over `TOOL_FREE_FAIL_MIN_CALLS`, default 20, in an hour) and every named upstream's fetch outcomes through the egress meter's observer, in five-minute buckets merged across replicas through Redis; `toolFailures`, `upstreamHealth` and `facilitatorFunds` (also `low` while a facilitator signer is short of gas; a dry Robinhood signer our relayer covers is left out and pages as `robinhoodSettler=relayer` instead, `.claude/rules/payments.md`) are words on `/api/gateway-status`, detail on `/__operator/tool-failures.json`. Every final 200 is also classified by body (`src/answer-shape.js`: ok, empty, error-shaped, unchecked; a tool whose contract allows an empty answer goes in `EMPTY_RESULT_OK` or sets `discovery.emptyOk`) into the `toolAnswers` word; the same detail lists live-data slugs whose sales all returned one response digest. `src/settle-demotion.js` puts Celo's alternates first after consecutive out-of-funds refusals.
 - **Per-call count documents:** `src/sql-query-stats.js` (onchain-sql queries per call) and
   `src/x-search-stats.js` (x-search-recent authors and posts per call) keep per-UTC-day
@@ -112,3 +127,46 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
 - **Robots:** `src/seo.js`; the private disallow list is repeated in every named-crawler group.
 - **X posting:** `announce.yml` / `scripts/tweet.js` (workflow dispatch only) and
   `src/tweet-queue.js`; both sign through `src/x-oauth.js`. Tweet copy is never committed.
+- **Money-state sweeps and books (batch 2026-11-08a):** `TEMPO_PUSH_HELD_MAX_MINUTES` (default 30)
+  is the age past which a leased sweep reopens a held Tempo push debt whose run never finished;
+  `TEMPO_LATE_CONFIRM_DELAYS_MS` (comma list of delays, default 15000,45000,120000; at most 6, each
+  at most 30 minutes; `off` disables) and `TEMPO_LATE_CONFIRM_MAX_WATCHES` (default 200 per process)
+  bound the re-reads that book a Tempo pull landing after its 402 as owed (`src/mpp-tempo.js`).
+  Every watch is first written to the `tempo-late-watches` state document (`src/tempo-late-watches.js`;
+  without a database the file `TEMPO_LATE_WATCH_FILE`, else memory): one past the bound, one whose
+  process stops mid-watch, one whose last read failed and one whose booking did not land are read by a
+  leased one-minute sweep (`tempo-late-watch-sweep`) once their last delay plus 30 s has passed, and
+  booked by transaction hash, so a second read books nothing more; an entry whose reads fail for 24
+  hours is logged as an error and dropped, and past 2000 entries the oldest is logged and dropped;
+  `GATEWAY_RESUME_RENEW_MS` (default a third of the 10-minute resume lease, 200000; for tests) is how
+  often a Gateway resend renews its hold, for at most 30 minutes (`src/gateway-nanopayments.js`).
+  The held-claim sweep walks every refund row created before its cutoff by createdAt window,
+  with a cursor kept across ticks (at most 5000 rows a tick; a window whose page fills is halved),
+  so a stranded hold is found however many newer rows exist; the same walk logs owed rows unpaid
+  past `OWED_ESCALATE_DAYS` (default 7) as an error, at most once a day (no addresses).
+  The late-settlement book reports `lateSettlements` on /api/gateway-status: ok, near_capacity
+  (80% of the open bound), full, unresolved (an entry waits for a human, a booking sits in the
+  journal, or one could not be recorded anywhere in the last 24 hours; that time is also written
+  to the resolutions document, retried on the next status read when the write fails, so it outlives
+  a restart until it ages out or is acknowledged). The status Worker and the
+  heartbeat page on unresolved and full and close on ok or near_capacity. Unresolved entries are
+  read on chain again every 6 hours (five a pass) and close themselves once the chain answers; an
+  operator clears one with `POST /__operator/late-settlements`
+  `{"action":"resolve","key","outcome":"booked_owed"|"paid"|"dismissed","note","tx"}`
+  (booked_owed writes the refund debt, paid needs the refund tx) or the unrecorded count with
+  `{"action":"acknowledge_unrecorded","note"}`; each is recorded in the
+  `late-settlements-resolutions` document before the entry is dropped and listed on
+  `/__operator/refunds.json` (`unconfirmedSettlements.resolutions`).
+  Rollback: a build before batch 2026-11-08a counts unresolved entries toward the 2000-entry
+  bound and refuses a new booking past it ("NOT booked"), so before rolling back resolve entries
+  until the whole book (open plus unresolved, `/__operator/refunds.json`) is under 2000. Such a
+  build emits neither `lateSettlements` nor `subscriptionFeePayer.ceiling`; both read `unknown`,
+  which neither opens nor closes an issue, so close an open "Late settlements need attention" or
+  "Subscription gas sponsor CEILING reached" issue by hand after checking the log.
+  A Gateway booking held outside its pending book is also written to the `gateway-pending-lost`
+  state document (with a state database), read back by the next container; past 200 in memory the
+  oldest is logged as an error naming it, the `gatewayPending` word pages for 24 hours, and it
+  stays in the document (bound 2000) until memory has room. Without a volume the local copy is a
+  0600 file in a per-process mkdtemp directory. Rollback: an older build ignores the document and starts
+  with empty memory, so before rolling back read `heldInMemory` and `heldDurable` on
+  `/__operator/gateway-pending.json` and resolve what is held.

@@ -8,7 +8,6 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTestPg } from "./lib/test-pg.js";
-import { getFreePorts } from "./lib/free-port.js";
 const { url, schema } = requireTestPg({ label: "test-state-db-overlap" });
 const sdb = await import("../src/state-db.js");
 
@@ -16,13 +15,16 @@ let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const until = async (fn, ms, step = 250) => { const t0 = Date.now(); for (;;) { if (await fn()) return true; if (Date.now() - t0 > ms) return false; await sleep(step); } };
-const [PA, PB] = await getFreePorts(2);
 const DIR = mkdtempSync(join(tmpdir(), "overlap-"));
 // A seed file for one store whose path the environment sets (the per-chain
 // spend ledger), so the first boot imports it and the second must not.
 writeFileSync(join(DIR, "spend.json"), JSON.stringify({ chains: { base: [{ usd: 0.01, at: Date.now() }] }, at: Date.now() }));
 
-function boot(port, tag) {
+// Each server binds port 0 and its bound port is read back from its listening
+// line: a port picked before the first boot finished could be taken by another
+// process's outbound socket by the time the second binds it.
+function boot(tag) {
+  const port = 0;
   let log = "";
   const child = spawn(process.execPath, ["src/server.js"], {
     env: {
@@ -36,7 +38,7 @@ function boot(port, tag) {
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
-  const o = { child, port, tag, exited: null, get log() { return log; } };
+  const o = { child, tag, exited: null, get log() { return log; }, get port() { const m = /listening on :(\d+)/.exec(log); return m ? Number(m[1]) : 0; } };
   child.stdout.on("data", (d) => { log += d; }); child.stderr.on("data", (d) => { log += d; });
   child.on("exit", (code, signal) => { o.exited = { code, signal }; });
   return o;
@@ -46,15 +48,18 @@ const callTool = async (port, text) => { try { const r = await fetch(`http://127
 const T = (t) => `${sdb.stateDbSchema()}.${t}`;
 const recentCalls = async () => Number((await sdb.stateQuery(`SELECT count(*)::bigint AS n FROM ${T("stats_recent_calls")}`)).rows[0].n);
 
-const A = boot(PA, "old"); let B = null;
+const A = boot("old"); let B = null;
+let PA = 0, PB = 0;
 try {
-  ok(await until(async () => (await get(PA, "/health", 2000)).status === 200, 120_000, 500), "A boots");
+  ok(await until(async () => (PA = A.port) > 0 && (await get(PA, "/health", 2000)).status === 200, 120_000, 500), "A boots");
   ok(await until(async () => /spend\.json: imported/.test(A.log), 15_000), "A imports the seed file");
   const imported = await sdb.imports.done("spend.json");
   ok(!!imported, "the import is marked");
 
-  B = boot(PB, "new");
-  ok(await until(async () => (await get(PB, "/health", 2000)).status === 200, 120_000, 500), "B boots beside A on the same schema");
+  B = boot("new");
+  const bootedB = await until(async () => (PB = B.port) > 0 && (await get(PB, "/health", 2000)).status === 200, 120_000, 500);
+  ok(bootedB, "B boots beside A on the same schema");
+  if (!bootedB) console.error(`B's log tail:\n${B.log.slice(-2000)}`);
   ok(!/spend\.json: imported/.test(B.log), "B does not re-import the seed file");
   ok((await get(PA, "/health")).status === 200 && (await get(PB, "/health")).status === 200, "both answer while they overlap");
   const before = await recentCalls();
@@ -76,7 +81,8 @@ try {
   ok(await until(async () => A.exited !== null, 30_000), "A exits");
   ok(A.exited && A.exited.code === 0, `A exits 0 (got ${A.exited?.code})`);
   ok((await get(PB, "/health")).status === 200, "B still serves after A is gone");
-  ok(JSON.parse((await get(PB, "/api/gateway-status")).body)?.stateDb?.status === "on", "B's status word reads on");
+  let gs = null; try { gs = JSON.parse((await get(PB, "/api/gateway-status")).body); } catch { gs = null; }
+  ok(gs?.stateDb?.status === "on", "B's status word reads on");
   B.child.kill("SIGTERM");
   ok(await until(async () => B.exited !== null, 30_000) && B.exited.code === 0, "B drains and exits 0");
   ok(!/\[unhandledRejection\]|\[uncaughtException\]/.test(A.log + B.log), "no unhandled rejection in either log");

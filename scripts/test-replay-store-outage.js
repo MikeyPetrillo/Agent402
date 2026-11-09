@@ -182,6 +182,17 @@ try {
     ok(rf.status === 200 && settles === f0 + 1, `one container, store out, past the overlap window: the fast route is served and settled once (${rf.status}, settle +${settles - f0})`);
     const againF = await send(F, { "payment-signature": credF });
     ok((againF.status !== 200 || againF.headers.get("x-replayed-answer") === "1") && settles === f0 + 1, `and the same payment buys no second run there (${againF.status})`);
+    // The consumed mark the store missed is surfaced: one word, pending.
+    // settle() writes after the response, through bounded retries, so poll.
+    let gsF = {};
+    for (let i = 0; i < 40; i++) {
+      gsF = await fetch(`${F}/api/gateway-status`).then((r) => r.json()).catch(() => ({}));
+      if (gsF?.replayStore?.status === "pending") break;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    ok(gsF?.replayStore?.status === "pending" && Object.keys(gsF.replayStore).join(",") === "status", `the missed consumed mark reads replayStore pending on /api/gateway-status, one word (${JSON.stringify(gsF?.replayStore)})`);
+    const gsC = await fetch(`${C}/api/gateway-status`).then((r) => r.json()).catch(() => ({}));
+    ok(gsC?.replayStore?.status === "ok", `control: with no shared store configured nothing is missed (${JSON.stringify(gsC?.replayStore)})`);
     // ...while inside the window (an old container may still serve) it is refused.
     const credG = credential(accept || {});
     const g0 = verifies;

@@ -63,7 +63,7 @@ export const RECOVERY_ANCHOR = `#${RECOVERY_HEADING.toLowerCase().replace(/\s+/g
  *  receipt was not read in time (src/pending-settle.js), while the transfer
  *  still lands. Every surface that says no PAYMENT-RESPONSE means nothing
  *  settled carries it (scripts/test-front-door.js scans for the claim). */
-export const LATE_SETTLE_EXCEPTION = "One exception: a transfer that lands after a timed-out settle, a disconnect during settle, or a settle the facilitator answered as pending whose receipt was not read in time, is booked as a refund owed and repaid after on-chain proof.";
+export const LATE_SETTLE_EXCEPTION = "One exception, on the EVM chains: a transfer that lands after a timed-out settle, a disconnect during settle, or a settle the facilitator answered as pending whose receipt was not read in time, is booked as a refund owed and repaid after on-chain proof.";
 
 /** What the paid tier settles in and over which wires, from the live config:
  *  the stablecoins named from the rails list (USDC alone only when every rail

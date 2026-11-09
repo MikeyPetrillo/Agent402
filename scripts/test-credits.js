@@ -124,6 +124,38 @@ ok(nexted && cr.balance(KEY).balanceUsd === 19.997 && cr.balance(KEY).heldUsd ==
   ok(cr.balance(KEY).balanceUsd === 19.997 && cr.balance(KEY).calls === 3, "gate: ... and a late end after that never debits");
   delete process.env.CREDITS_ABANDONED_HOLD_MS;
 }
+// A client that leaves AFTER the headers went out (a stream cut part way): the
+// hold is decided when the response ends, by the finish rule. Before, the
+// close itself settled the whole hold: a 500 was charged, a metered stream
+// paid the worst-case hold instead of its meter, and an idempotent replay was
+// debited.
+{
+  // Its own store, so the balances the cases below assert are untouched.
+  const DIR_AH = join("/tmp", `test-credits-ah-${process.pid}`);
+  const crAh = createCredits({ stripe, baseUrl: "https://agent402.tools", storeDir: DIR_AH, onDebit: () => {}, onLoad: () => {}, log: () => {} });
+  const KEY_AH = (await crAh.claim("cs_paid")).key;
+  const gateAh = crAh.gate(priceFor);
+  const afterHeaders = (label, act) => {
+    const before = crAh.balance(KEY_AH);
+    const r = fakeRes();
+    const q = { method: "GET", path: "/api/whois", headers: { authorization: `Bearer ${KEY_AH}` } };
+    gateAh(q, r, () => {});
+    act(r, q);
+    const now = crAh.balance(KEY_AH);
+    return { charged: Math.round((now.spentUsd - before.spentUsd) * 1e4) / 1e4, held: now.heldUsd, calls: now.calls - before.calls, label };
+  };
+  let o = afterHeaders("500", (r) => { r.statusCode = 500; r.headersSent = true; r.emit("close"); r.end(); });
+  ok(o.charged === 0 && o.held === 0 && o.calls === 0, `gate: a 500 whose client left after the headers is not charged [charged=${o.charged} held=${o.held}]`);
+  o = afterHeaders("metered", (r) => { r.headersSent = true; r.emit("close"); r.setHeader("X-Metered-Usd", "0.0004"); r.end(); });
+  ok(o.charged === 0.0004 && o.held === 0 && o.calls === 1, `gate: a metered stream cut part way is debited its metered amount, not the hold [charged=${o.charged}]`);
+  o = afterHeaders("replay", (r) => { r.setHeader("X-Idempotent-Replay", "true"); r.headersSent = true; r.emit("close"); r.end(); });
+  ok(o.charged === 0 && o.held === 0, `gate: an idempotent replay whose client left after the headers is not debited [charged=${o.charged}]`);
+  o = afterHeaders("ended", (r) => { r.headersSent = true; r.writableEnded = true; r.emit("close"); r.end(); });
+  ok(o.charged === 0.001 && o.held === 0 && o.calls === 1, `gate: a 200 ended before the close is debited once, at its price [charged=${o.charged} calls=${o.calls}]`);
+  o = afterHeaders("pending", (r) => { r.headersSent = true; r.emit("close"); });
+  ok(o.charged === 0 && o.held === 0.001, `gate: a close after the headers with the run still going decides nothing yet [held=${o.held}]`);
+  rmSync(DIR_AH, { recursive: true, force: true });
+}
 // idempotent REPLAY of a call this key already paid for: the replay middleware
 // answers 200 with X-Idempotent-Replay: true and no handler runs, so the hold
 // is released and the balance is unchanged (a keyed retry never pays twice).

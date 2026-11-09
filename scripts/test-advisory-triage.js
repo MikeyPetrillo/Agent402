@@ -60,15 +60,18 @@ const API = `http://127.0.0.1:${server.address().port}`;
 
 const dir = await mkdtemp(path.join(tmpdir(), "adv-triage-"));
 
-function run(cmd, args, env) {
+// Two runners, not one shared by node and bash: the script's absolute path is
+// handed only to node, and the bash runner takes nothing but the step text.
+function collect(child) {
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "", stderr = "";
     child.stdout.on("data", (d) => { stdout += d; });
     child.stderr.on("data", (d) => { stderr += d; });
     child.on("close", (code) => resolve({ code, stdout, stderr }));
   });
 }
+const runNode = (args, env) => collect(spawn("node", args, { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"] }));
+const runBash = (stepText, env) => collect(spawn("bash", ["-eo", "pipefail", "-c", stepText], { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"] }));
 
 const baseEnv = (extra = {}) => {
   const env = { ...process.env, GITHUB_REPOSITORY: "o/r", GITHUB_API_URL: API, ADVISORY_READ_TOKEN: TOKEN, ADVISORY_TRIAGE_ACK: "", ...extra };
@@ -80,7 +83,7 @@ async function script(sc, extra = {}) {
   scenario = sc;
   const bodyFile = path.join(dir, "body.md");
   await rm(bodyFile, { force: true });
-  const r = await run("node", [SCRIPT], baseEnv({ ADVISORY_BODY_FILE: bodyFile, ...extra }));
+  const r = await runNode([SCRIPT], baseEnv({ ADVISORY_BODY_FILE: bodyFile, ...extra }));
   r.body = await readFile(bodyFile, "utf8").catch(() => "");
   return r;
 }
@@ -211,7 +214,7 @@ async function runStep(sc, { open1 = "", open2 = "", env = {} } = {}) {
   await writeFile(path.join(dir, "open1"), open1);
   await writeFile(path.join(dir, "open2"), open2);
   await rm(path.join(dir, "gh.log"), { force: true });
-  const r = await run("bash", ["-eo", "pipefail", "-c", step.run], baseEnv({
+  const r = await runBash(step.run, baseEnv({
     PATH: `${dir}:${process.env.PATH}`, RUNNER_TEMP: dir, GH_TOKEN: "x", ...env,
   }));
   r.log = await readFile(path.join(dir, "gh.log"), "utf8").catch(() => "");

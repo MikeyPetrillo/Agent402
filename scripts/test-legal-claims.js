@@ -121,6 +121,20 @@ ok(/payerBalanceBucket/.test(posthog) && /coarse balance bucket/.test(privacy), 
   ok(JSON.stringify(rr.OUTBOUND_PROOF_FAMILIES) === JSON.stringify(["tempo", "solana"]) && /on Tempo and Solana we also confirm the repayment itself before recording it as paid/.test(terms), "/terms names the chains whose repayment is proven before it is marked paid");
   ok(!/an amount under \$0\.05 may be held/.test(terms), "/terms does not promise a dust floor the runner does not have");
   ok(/REFUND_MIN_USD, "0"/.test(run), "control: the runner's dust floor defaults to off");
+  // "Before a repayment is sent we check the receiving address against the published sanctions lists."
+  const sol = readFileSync(new URL("./solana-refund-send.js", import.meta.url), "utf8");
+  ok(/we check the receiving address against the published sanctions lists; we do not send to a listed address, and a repayment waits while that check cannot be made/.test(terms)
+    && /assertPayoutScreened/.test(run) && /if \(screen\) \{\s*try \{ await screen\(row\); \}/.test(run) && /held for a human, still owed/.test(run) && /sanction|screen/i.test(sol),
+    "/terms says repayments are screened and held when the screen cannot run, and both refund senders screen");
+  // "If an x402 payment or a Tempo transaction lands on chain after we answered the call with an error, we record the amount as owed."
+  const tempo = readFileSync(new URL("../src/mpp-tempo.js", import.meta.url), "utf8");
+  const late = readFileSync(new URL("../src/late-settlements.js", import.meta.url), "utf8");
+  ok(/If an x402 payment on an EVM chain, or a Tempo transaction, lands on chain after we answered the call with an error, we record the amount as owed back to the paying wallet and repay it the same way/.test(terms)
+    && /TEMPO_LATE_CONFIRM_DELAYS_MS/.test(tempo) && /booked_owed/.test(late),
+    "/terms names the late landing booked as owed, which the Tempo late watch and the late-settlement book do");
+  // The book takes EVM networks only (not Tempo, which has its own watch), so the sentence is scoped to them.
+  ok(/if \(!network\.startsWith\("eip155:"\) \|\| network === TEMPO_NETWORK\)/.test(late) && !/If an x402 payment (or|lands)/.test(terms),
+    "/terms scopes the late landing to the networks the book takes (EVM) and Tempo's own watch");
 }
 
 // CSP: no inline script on pages, except the one sandbox route the page names.
@@ -206,6 +220,18 @@ ok(/\?trial=1/.test(terms) && /\?trial=1/.test(privacy), "/terms and /privacy bo
   const block = (src("src/mcp-http.js").match(/const NPM_EVM_PRESETS = \{([^}]*)\}/) || [])[1] || "";
   const listed = [...block.matchAll(/(\w+):/g)].map((m) => m[1]).sort();
   ok(JSON.stringify(named) === JSON.stringify(listed), `connector setup names the npm package's EVM presets (${listed.join(", ")} vs ${named.join(", ")})`);
+}
+
+// The Tempo late-landing record (src/tempo-late-watches.js) is named on
+// /privacy and in /.well-known/x402 readsOnly, at the bound the code keeps.
+{
+  const { LATE_WATCH_GIVE_UP_MS } = await import("../src/tempo-late-watches.js");
+  const priv = readFileSync(new URL("../src/privacy.js", import.meta.url), "utf8").replace(/\s+/g, " ");
+  const disc = readFileSync(new URL("../src/discovery.js", import.meta.url), "utf8");
+  const hours = Math.round(LATE_WATCH_GIVE_UP_MS / 3600_000);
+  ok(hours === 24 && priv.includes(`a Tempo pull credential answered 402 after its broadcast failed (kept with its route, amount and payer until the check for a late landing ends: minutes, at most ${hours} hours while the chain cannot be read`)
+    && disc.includes(`a Tempo pull credential answered 402 after its broadcast failed, with its route, amount and the payer it names: kept until the check for a late landing ends (minutes; at most ${hours} hours while the chain cannot be read)`),
+    "/privacy and /.well-known/x402 name the Tempo late-landing record and its 24-hour bound");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

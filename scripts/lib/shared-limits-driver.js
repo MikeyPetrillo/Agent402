@@ -2,7 +2,7 @@
 // that loads the real controls (the gateway settle breaker, the composite spend
 // guard, the external spend guard's per-payer ledger, the hang-up forgiveness
 // budget, the daily spend helper, the judge's daily token ceiling, the in-flight
-// run cover) with the parent's REDIS_URL and answers one
+// run cover, the paid-quote trust) with the parent's REDIS_URL and answers one
 // JSON command per stdin line with one JSON line on stdout. Two of these
 // against one Redis are two containers; what one records the other must see.
 import { createInterface } from "node:readline";
@@ -15,6 +15,8 @@ const H = await import("../../src/hangup-forgiveness.js");
 const SL = await import("../../src/shared-limits.js");
 const J = await import("../../src/tool-judge.js");
 const C = await import("../../src/inflight-cover.js");
+const Q = await import("../../src/paid-quote-trust.js");
+const quoteTrust = Q.createPaidQuoteTrust();
 
 const handles = new Map();
 const daily = new Map();
@@ -108,6 +110,10 @@ async function run(cmd) {
     }
     case "ic.release": { runs.get(cmd.run)?.(); runs.delete(cmd.run); await barrier(); await barrier(); return { ok: true }; }
     case "ic.status": { const s = C.inflightCoverStatus(); return { shared: s.shared, runsInFlight: s.runsInFlight, foreignReads: s.foreignReads, sharedMisses: s.sharedMisses }; }
+    // paid-quote trust
+    case "qt.mark": { quoteTrust.mark(cmd.key); await barrier(); return { ok: true }; }
+    case "qt.trusted": { const local = quoteTrust.trustedLocal(cmd.key); return { local, trusted: await quoteTrust.trusted(cmd.key) }; }
+    case "qt.stats": return quoteTrust.stats();
     default: return { error: `unknown op ${cmd.op}` };
   }
 }

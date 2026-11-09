@@ -765,6 +765,27 @@ jobs:
             gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: PathUSD back above the low-water mark at $(date -u +%FT%TZ)."
           fi
 
+      # Subscription gas sponsor ceiling (src/tempo-sponsor-ceiling.js): our own
+      # rolling 24 h count and fee ceiling on sponsored sends. While it reads
+      # reached, renewals are refused before broadcast and go past_due.
+      - name: Subscription gas sponsor ceiling check (alarm while reached)
+        if: always()
+        continue-on-error: true
+        run: |
+          WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.subscriptionFeePayer.ceiling // "unknown"' 2>/dev/null || echo unknown)
+          echo "subscription gas sponsor ceiling: $WORD"
+          TITLE="Subscription gas sponsor CEILING reached"
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || true)
+          if [ "$WORD" = "reached" ]; then
+            if [ -z "$OPEN" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The Tempo subscription gas sponsor reached its rolling 24 h ceiling (MPP_SUB_SPONSOR_DAILY_MAX_TX or MPP_SUB_SPONSOR_DAILY_MAX_USD, src/tempo-sponsor-ceiling.js): every sponsored send is refused before broadcast until the window rolls, so activations fail 402 (nobody charged) and RENEWALS go past_due, which means existing subscribers are served for free until their grace window ends. The server log names the knob that refused. Read the sponsored-send pattern before raising the knob on Railway; the issue closes when subscriptionFeePayer.ceiling reads ok."
+            else
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still reached at $(date -u +%FT%TZ)."
+            fi
+          elif [ "$WORD" = "ok" ] && [ -n "$OPEN" ]; then
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the sponsor window is back under its ceiling at $(date -u +%FT%TZ)."
+          fi
+
       # Operator-token guessing: the per-IP limiter caps one source; this is the
       # aggregate. "elevated" = OPERATOR_AUTH_FAIL_ALERT (default 100) wrong
       # operator credentials in the last hour. Counts only; rotate the token if
@@ -865,6 +886,33 @@ jobs:
             ok|off)
               if [ -n "$OPEN" ]; then
                 gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: gatewayPending reads $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+          esac
+
+      # EVM settlements that failed naming a transaction or an authorization
+      # (src/late-settlements.js): one word on /api/gateway-status. A landed,
+      # unserved one becomes an owed debt (refundsOwed covers it).
+      # unresolved / full page; ok and near_capacity close; unknown does neither.
+      - name: Late settlements check (alarm when one needs an operator)
+        if: always()
+        continue-on-error: true
+        run: |
+          WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.lateSettlements.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "late settlements: $WORD"
+          TITLE="Late settlements need attention"
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          case "$WORD" in
+            unresolved|full)
+              if [ -z "$OPEN" ]; then
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports lateSettlements.status=$WORD. unresolved: an EVM settlement that failed naming a transaction or an authorization could not be proven landed or absent within a day (or the reads kept failing) and is kept, never dropped; or a booking sits in the journal outside the book; or a booking could not be recorded anywhere in the last day. Unresolved entries are read on chain again every few hours and close themselves once the chain answers. Read them on /__operator/refunds.json (unconfirmedSettlements) and look each transaction up on the chain's explorer, then clear each one with POST /__operator/late-settlements: action resolve, the entry key, an outcome (booked_owed writes the refund debt, paid needs the refund transaction, dismissed when nothing moved to us) and a note saying what was checked. An unrecorded booking (the server log names it) is cleared with action acknowledge_unrecorded and a note. full: the book holds its bound of open entries, and new bookings wait in the journal until there is room (the server log names each). Auto-closes when the word is ok or near_capacity." >/dev/null 2>&1 || echo "issue create failed"
+              else
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+            ok|near_capacity)
+              if [ -n "$OPEN" ]; then
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: lateSettlements reads $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
               fi
               ;;
           esac

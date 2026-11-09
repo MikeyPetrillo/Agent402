@@ -222,6 +222,48 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
     ok(seen[0] === "gpt-4o-mini" && seen[1] === null && seen[2] === null, "resolver receives the trimmed params.model, null when absent or blank");
   }
 
+  // A GET seller is probed and paid at ONE URL: the listing URL with the
+  // caller's params as its query, from the shared builder. The resolver is
+  // handed the params (so its probe asks for the bound URL), and the payer is
+  // handed exactly what the builder makes, with no body.
+  {
+    const { boundRequestUrl, BOUND_URL_MAX_CHARS } = await import("../src/bound-request-url.js");
+    const GET_EXT = { ...EXT, slug: "wx", url: "https://get.example/v1/forecast", method: "GET" };
+    const given = [];
+    const tool = buildRouteExecuteTool({ getCatalog: () => CATALOG, tier: { slug: "route-execute-max", execPriceUsd: 0.55, underlyingMaxUsd: 0.5 },
+      resolveExternal: async (task, opts) => { given.push(opts.params); return GET_EXT; }, payExternal, externalEnabled: () => true });
+    paidWith = null;
+    const params = { city: "Paris", units: "metric" };
+    await tool.handler({ task: "forecast", include: "external", params }, {});
+    const want = boundRequestUrl(GET_EXT.url, { method: "GET", params, slug: GET_EXT.slug });
+    ok(given[0] === params, "GET seller: the resolver is handed the caller's params, so its probe can ask for the bound URL");
+    ok(want === "https://get.example/v1/forecast?city=Paris&units=metric" && paidWith?.url === want && paidWith.opts.method === "GET" && paidWith.opts.body === undefined,
+      `GET seller: the payer is handed exactly the bound URL and no body (${paidWith?.url})`);
+    // Values that look like other hosts stay inside the query: the bound
+    // URL's origin and path are the listing's whatever the caller sends.
+    const hostile = { a: "http://169.254.169.254/latest", b: "@127.0.0.1:22", c: "//10.0.0.1/x?y=1#frag", d: "../../admin", e: "\\evil.example" };
+    const hb = new URL(boundRequestUrl(GET_EXT.url, { method: "GET", params: hostile }));
+    ok(hb.origin === "https://get.example" && hb.pathname === "/v1/forecast" && hb.hash === "" && Object.entries(hostile).every(([k, v]) => hb.searchParams.get(k) === v),
+      `GET seller: param values naming internal addresses only ever change the query (${hb.href})`);
+    ok(boundRequestUrl("https://get.example/x?fixed=1", { method: "HEAD", params: { q: "a b" } }) === "https://get.example/x?fixed=1&q=a+b", "HEAD seller: the query joins a listing query the same way");
+    ok(boundRequestUrl(GET_EXT.url, { method: "POST", params }) === GET_EXT.url && boundRequestUrl(GET_EXT.url, { method: "GET", params: { n: null } }) === GET_EXT.url, "a body seller, and a GET with no params, keep the listing URL");
+    const nested = (() => { try { boundRequestUrl(GET_EXT.url, { method: "GET", params: { q: { x: 1 } }, slug: "wx" }); return null; } catch (e) { return e; } })();
+    ok(nested?.statusCode === 400 && /param "q" must be a string, number, or boolean/.test(nested.message), "a nested param against a GET seller is the caller's 400, as before");
+    const long = (() => { try { boundRequestUrl(GET_EXT.url, { method: "GET", params: { q: "x".repeat(BOUND_URL_MAX_CHARS) } }); return null; } catch (e) { return e; } })();
+    ok(long?.statusCode === 400 && BOUND_URL_MAX_CHARS === 2048 && /max 2048/.test(long.message), "a bound URL past the 2048-character bound is refused 400, nothing sent");
+    // The SSRF guard reads the bound URL: a private listing host stays refused
+    // with params attached, before any byte is sent.
+    const { probePublicUrl } = await import("../src/tools/fetch-guard.js");
+    const http = await import("node:http");
+    let hits = 0;
+    const srv = http.createServer((q, res) => { hits++; res.writeHead(402); res.end(); });
+    await new Promise((r2) => srv.listen(0, "127.0.0.1", r2));
+    const privateBound = boundRequestUrl(`http://127.0.0.1:${srv.address().port}/x`, { method: "GET", params: { host: "seller.example" } });
+    const refused = await probePublicUrl(privateBound, { method: "GET" }).then(() => null, (e) => e);
+    ok(refused && hits === 0, `the probe of a bound URL on a private host is refused before it is sent (${refused?.statusCode ?? refused?.message}, ${hits} hits)`);
+    srv.close();
+  }
+
   // THE CALLER PATH for the payTo binding. payX402's own tests hand it a
   // provenPayTo directly, which proves the comparison and says nothing about
   // whether anything ever SUPPLIES one - the same shape of hole that left the

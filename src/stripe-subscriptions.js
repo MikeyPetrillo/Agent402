@@ -15,7 +15,7 @@
 // Rollout switch = STRIPE_SECRET_KEY (same key as the one-shot checkout).
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { createJsonDocument } from "./json-document.js";
+import { createJsonDocument, SKIP_UPDATE } from "./json-document.js";
 import { trackStoreReady, stateDbSchema, stateQuery } from "./state-db.js";
 import { createDeadLetter, everyMs } from "./ledger-mirror.js";
 import { rugcheckEnabled } from "./rugcheck-switch.js";
@@ -107,20 +107,35 @@ const webhookSecret = () => (process.env.STRIPE_WEBHOOK_SECRET || "").trim();
 const STORE_PATH = () => join(existsSync("/data") ? "/data" : "/tmp", "stripe-subscriptions.json");
 const MAX_STORE = 20000;
 
-const toMap = (j) => (j && typeof j === "object" && !Array.isArray(j) ? new Map(Object.entries(j)) : new Map());
-// Merge-on-save: only OUR changed keys are written into the stored object, so
-// a second process's records are never dropped by a whole-map overwrite. On
-// the file this is tmp + rename; in the state database it is a key merge.
-async function saveKeys(doc, map, keys) {
-  const patch = {};
-  for (const k of keys) if (map.has(k)) patch[k] = map.get(k);
-  const merged = await doc.mergeKeys(patch);
-  if (merged && Object.keys(merged).length > MAX_STORE) {
-    const drop = Object.keys(merged).slice(0, Object.keys(merged).length - MAX_STORE);
-    await doc.mergeKeys({}, drop);
-  }
-  return merged !== null;
+// Every record carries its own id: the map key is the id, and a record
+// loaded without one (written before every upsert set it) takes it from
+// its key in memory. A record that already has it is returned as it is.
+const isRec = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+const withId = (k, v) => (isRec(v) && v.subId !== k ? { ...v, subId: k } : v);
+const toMap = (j) => (isRec(j) ? new Map(Object.entries(j).map(([k, v]) => [k, withId(k, v)])) : new Map());
+// The ids a subscription has been paid with (newest last), kept so a
+// dispute on an earlier month's charge still finds its subscription.
+const MAX_PAID_IDS = 24;
+const pushId = (list, id) => (id ? [...(Array.isArray(list) ? list : []).filter((x) => x !== id), id].slice(-MAX_PAID_IDS) : (Array.isArray(list) ? list : []));
+const idOf = (v) => (typeof v === "string" ? v : v?.id || null);
+// Whether a record was paid with this charge, payment or invoice.
+function paidWith(rec, { pi, charge, invoiceId }) {
+  if (!isRec(rec)) return false;
+  return Boolean((pi && (rec.lastPaymentIntent === pi || rec.paidPaymentIntents?.includes(pi)))
+    || (charge && (rec.lastCharge === charge || rec.paidCharges?.includes(charge)))
+    || (invoiceId && (rec.lastInvoiceId === invoiceId || rec.paidInvoiceIds?.includes(invoiceId))));
 }
+// Stripe delivers status events in no fixed order. A status event older than
+// the status on the record (its event time, or a live read's time) is not
+// applied, so a late update never reactivates a canceled subscription.
+const statusStale = (cur, evAt) => isRec(cur) && Number.isFinite(evAt) && Number(cur.statusEventAt) > evAt;
+const nowSec = () => Math.floor(Date.now() / 1000);
+// A live read is stamped this many seconds before our clock: a webhook's
+// `created` is Stripe's clock, so an event just before or after the read can
+// carry an earlier time than ours. Stamping early lets such an event (a
+// cancellation) apply; the next pre-run read corrects any older one.
+export const LIVE_READ_SKEW_S = 60;
+const liveReadAt = () => nowSec() - LIVE_READ_SKEW_S;
 // The newer of two records of one subscription (by updatedAt; ISO strings compare as strings).
 const newer = (a, b) => (!a ? b : !b ? a : String(b.updatedAt || "") > String(a.updatedAt || "") ? b : a);
 
@@ -240,22 +255,47 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
   // Resolves false only in database mode when the record did not reach the
   // database (it waits in the local journal); the webhook then answers 503
   // so Stripe delivers the event again.
+  //
+  // `patch` is the fields this change sets, or a function of the STORED
+  // record (null when there is none) that returns them, or null to change
+  // nothing. The fields are merged onto the stored record inside a versioned
+  // read-modify-write of the document (on a conflict the row is read again
+  // and the function runs again), so a change another container made since
+  // this one read the record (a dispute, a cancellation) is never written
+  // over with this container's older copy. Every write carries the id.
   async function upsert(subId, patch) {
     if (!subId) return true;
-    if (PG && !store.has(subId)) {
-      // A subscription another container recorded since this one loaded:
-      // its stored record is the base, so a partial patch (a webhook's
-      // status) never replaces the whole record.
-      try { const r = await doc.read(); const v = r.ok && r.exists ? r.body?.[subId] : null; if (v && !store.has(subId)) store.set(subId, v); } catch { /* the patch alone */ }
+    const at = new Date().toISOString();
+    const fieldsFor = (cur) => (typeof patch === "function" ? patch(isRec(cur) ? cur : null) : patch);
+    let r;
+    try {
+      r = await doc.update((b) => {
+        const body = isRec(b) ? b : {};
+        const cur = isRec(body[subId]) ? body[subId] : null;
+        const fields = fieldsFor(cur);
+        if (!fields) return SKIP_UPDATE;
+        body[subId] = { ...(cur || {}), ...fields, subId, updatedAt: at };
+        const keys = Object.keys(body);
+        if (keys.length > MAX_STORE) for (const k of keys.slice(0, keys.length - MAX_STORE)) if (k !== subId) delete body[k];
+        return body;
+      }, { fallback: {} });
+    } catch (e) { r = { ok: false, error: String(e?.message || e) }; }
+    if (r.ok) {
+      const stored = isRec(r.body) ? r.body[subId] : null;
+      if (isRec(stored)) store.set(subId, withId(subId, stored));
+      unsaved.delete(subId);
+      return true;
     }
-    const prev = store.get(subId) || {};
-    store.set(subId, { ...prev, ...patch, updatedAt: new Date().toISOString() });
-    if (!PG) { void saveKeys(doc, store, [subId]); return true; }
-    let landed = false;
-    try { landed = await saveKeys(doc, store, [subId]); } catch { landed = false; }
-    if (landed) { unsaved.delete(subId); return true; }
+    // The document could not be written: the change is applied to this
+    // container's copy, and in database mode kept in the journal (with the
+    // fields it set) until it lands.
+    const fields = fieldsFor(store.get(subId) || null);
+    if (!fields) return true;
+    const rec = { ...(store.get(subId) || {}), ...fields, subId, updatedAt: at };
+    store.set(subId, rec);
+    if (!PG) { console.error(`[subscriptions] the record of ${subId} could not be written: ${String(r.error || "").slice(0, 120)}`); return true; }
     unsaved.add(subId);
-    if (!pending.add("sub", { subId, rec: store.get(subId) })) console.error(`[subscriptions] the record of ${subId} could not be kept on local disk`);
+    if (!pending.add("sub", { subId, rec, fields })) console.error(`[subscriptions] the record of ${subId} could not be kept on local disk`);
     return false;
   }
   // One replay at a time: a call that finds one in flight (the timer tick,
@@ -268,22 +308,30 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
     replaying = replayPendingNow().finally(() => { replaying = null; });
     return replaying;
   }
+  // A journaled change lands only over an older copy of its subscription (by
+  // updatedAt), never over a newer one. An entry that names the fields it set
+  // merges just those onto the stored record; an entry from before that (a
+  // whole record) replaces the older copy, as it always did.
   async function replayPendingNow() {
     let landed = 0;
     {
       landed = await pending.drain(async (e) => {
-        const { subId, rec } = e.payload || {};
+        const { subId, rec, fields } = e.payload || {};
         if (!subId || !rec) return "drop";
-        const mine = newer(rec, unsaved.has(subId) ? store.get(subId) : null);
+        const mine = isRec(fields) ? { ...rec, subId } : newer(rec, unsaved.has(subId) ? store.get(subId) : null);
         const r = await doc.update((b) => {
-          const body = b && typeof b === "object" && !Array.isArray(b) ? b : {};
-          body[subId] = newer(body[subId], mine);
+          const body = isRec(b) ? b : {};
+          const cur = isRec(body[subId]) ? body[subId] : null;
+          if (isRec(fields) && cur) {
+            if (String(cur.updatedAt || "") >= String(mine.updatedAt || "")) return SKIP_UPDATE;
+            body[subId] = { ...cur, ...fields, subId, updatedAt: mine.updatedAt };
+          } else body[subId] = withId(subId, newer(cur, mine));
           return body;
         }, { fallback: {} });
         if (!r.ok) return "stop"; // the database is still away: the next tick retries
-        const stored = r.body?.[subId];
-        if (stored) store.set(subId, newer(store.get(subId), stored));
-        if (stored === mine || String(stored?.updatedAt || "") >= String(mine.updatedAt || "")) unsaved.delete(subId);
+        const stored = isRec(r.body) ? withId(subId, r.body[subId]) : null;
+        if (stored) store.set(subId, stored);
+        if (stored && String(stored.updatedAt || "") >= String(mine.updatedAt || "")) unsaved.delete(subId);
         return "landed";
       });
     }
@@ -374,22 +422,26 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
     if (session.payment_status !== "paid" && session.status !== "complete") return { status: "unpaid" };
     const subId = typeof session.subscription === "string" ? session.subscription : session.subscription?.id;
     if (!subId) return { status: "pending" };
-    const existing = store.get(subId) || null;
-    let status = existing?.status || "active";
+    let live = null, readAt = null;
     try {
       const sub = await stripe.subscriptions.retrieve(subId);
-      if (sub?.status) status = sub.status;
+      if (sub?.status) { live = sub.status; readAt = liveReadAt(); }
     } catch { /* keep existing status (or first-time active) */ }
-    const rec = {
-      subId, customer: session.customer, status,
-      product: existing?.product || session.metadata?.product || null,
-      target: existing?.target || session.metadata?.target || null,
-      email: session.customer_details?.email || session.customer_email || existing?.email || null,
-      createdAt: existing?.createdAt || new Date().toISOString(),
-    };
-    await upsert(subId, rec);
+    // Built from the stored record inside the write: the live status when it
+    // was read, else the stored one, else (first provisioning) active.
+    await upsert(subId, (cur) => ({
+      customer: session.customer || cur?.customer || null,
+      status: live || cur?.status || "active",
+      ...(live ? { statusEventAt: Math.max(Number(cur?.statusEventAt) || 0, readAt) } : {}),
+      product: cur?.product || session.metadata?.product || null,
+      target: cur?.target || session.metadata?.target || null,
+      email: session.customer_details?.email || session.customer_email || cur?.email || null,
+      createdAt: cur?.createdAt || new Date().toISOString(),
+    }));
+    const rec = store.get(subId) || {};
+    const status = rec.status || live || "active";
     const p = MONITOR_PRODUCTS_ALL[rec.product];
-    return { status, subId, customer: rec.customer, product: rec.product, label: p?.label || "monitor", target: rec.target };
+    return { status, subId, customer: rec.customer ?? session.customer, product: rec.product ?? null, label: p?.label || "monitor", target: rec.target ?? null };
   }
 
   // Signature-verified webhook. Never trusts an unverified body: without the
@@ -423,33 +475,45 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
         // fulfilled (credits: key minted + emailed) - claim is idempotent.
         if (s.mode === "payment" && typeof onPaymentSession === "function") { try { await onPaymentSession(s); } catch { /* never fail the webhook on a hook */ } }
         if (s.mode === "subscription" && s.subscription) {
-          const id = typeof s.subscription === "string" ? s.subscription : s.subscription.id;
+          const id = idOf(s.subscription);
           // Stripe retries and reorders events: a completed-checkout event must
           // never overwrite a status the subscription lifecycle already set.
-          const prev = store.get(id);
-          stored = stored && await upsert(id, {
-            customer: s.customer, status: prev?.status || "active",
-            product: s.metadata?.product || prev?.product || null, target: s.metadata?.target || prev?.target || null,
-            email: s.customer_details?.email || s.customer_email || prev?.email || null,
-          });
+          stored = stored && await upsert(id, (cur) => ({
+            customer: s.customer || cur?.customer || null, status: cur?.status || "active",
+            product: s.metadata?.product || cur?.product || null, target: s.metadata?.target || cur?.target || null,
+            email: s.customer_details?.email || s.customer_email || cur?.email || null,
+            createdAt: cur?.createdAt || new Date().toISOString(),
+          }));
         }
         break;
       }
       case "customer.subscription.created":
       case "customer.subscription.updated": {
         const sub = event.data.object;
-        stored = stored && await upsert(sub.id, {
-          customer: sub.customer, status: sub.status,
-          product: sub.metadata?.product || store.get(sub.id)?.product || null,
-          target: sub.metadata?.target || store.get(sub.id)?.target || null,
-          currentPeriodEnd: periodEndOf(sub),
-          cancelAtPeriodEnd: !!sub.cancel_at_period_end,
+        const evAt = Number(event.created);
+        stored = stored && await upsert(sub.id, (cur) => {
+          const ids = {
+            customer: sub.customer || cur?.customer || null,
+            product: sub.metadata?.product || cur?.product || null,
+            target: sub.metadata?.target || cur?.target || null,
+          };
+          // An event older than the status on the record fills only what
+          // the record lacks.
+          if (statusStale(cur, evAt)) return ids;
+          return {
+            ...ids, status: sub.status, currentPeriodEnd: periodEndOf(sub), cancelAtPeriodEnd: !!sub.cancel_at_period_end,
+            ...(Number.isFinite(evAt) ? { statusEventAt: Math.max(Number(cur?.statusEventAt) || 0, evAt) } : {}),
+          };
         });
         break;
       }
       case "customer.subscription.deleted": {
         const sub = event.data.object;
-        stored = stored && await upsert(sub.id, { status: "canceled" });
+        const evAt = Number(event.created);
+        stored = stored && await upsert(sub.id, (cur) => ({
+          status: "canceled",
+          ...(Number.isFinite(evAt) ? { statusEventAt: Math.max(Number(cur?.statusEventAt) || 0, evAt) } : {}),
+        }));
         break;
       }
       case "invoice.paid": {
@@ -458,20 +522,33 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
         // subscriptions, not only x402 settlements. Booked once per invoice
         // id, across containers and restarts (claimInvoiceSale).
         const inv = event.data.object;
-        const subId = typeof inv.subscription === "string" ? inv.subscription : inv.subscription?.id || inv.parent?.subscription_details?.subscription || null;
-        const rec = subId ? store.get(subId) : null;
-        const seenOnRecord = !!inv.id && rec?.lastInvoiceId === inv.id;
+        const subId = idOf(inv.subscription) || inv.parent?.subscription_details?.subscription || null;
+        const pi = invoicePaymentIntentOf(inv);
+        const charge = idOf(inv.charge);
+        // Whether the stored record already booked this invoice (the file's
+        // sale mark), read inside the write from the stored record.
+        let seenOnRecord = false;
         // The record first: an event answered 503 (its record not stored) is
         // delivered again, so the sale is booked on the delivery that stores
-        // it, never once per delivery.
-        if (subId && rec) stored = stored && await upsert(subId, { lastInvoiceId: inv.id, lastPaymentIntent: invoicePaymentIntentOf(inv) || rec.lastPaymentIntent || null, lastPaidAt: new Date().toISOString() });
+        // it, never once per delivery. Every payment's ids are kept, so a
+        // dispute on any of them finds this subscription.
+        if (subId) {
+          stored = stored && await upsert(subId, (cur) => {
+            seenOnRecord = !!inv.id && cur?.lastInvoiceId === inv.id;
+            return {
+              lastInvoiceId: inv.id, lastPaymentIntent: pi || cur?.lastPaymentIntent || null, lastPaidAt: new Date().toISOString(),
+              paidInvoiceIds: pushId(cur?.paidInvoiceIds, inv.id), paidPaymentIntents: pushId(cur?.paidPaymentIntents, pi),
+              ...(charge ? { lastCharge: charge, paidCharges: pushId(cur?.paidCharges, charge) } : {}),
+            };
+          });
+        }
         if (stored && typeof onInvoicePaid === "function" && inv.amount_paid > 0) {
           let first;
           try { first = await claimInvoiceSale(inv.id, seenOnRecord); } catch { first = null; }
           // The claim could not be read: not acknowledged, so Stripe delivers
           // the event again and the claim decides then.
           if (first === null) { stored = false; break; }
-          if (first) { try { onInvoicePaid({ invoiceId: inv.id, subId, product: rec?.product || null, amountUsd: inv.amount_paid / 100, customer: inv.customer }); } catch { /* accounting never breaks the webhook */ } }
+          if (first) { try { onInvoicePaid({ invoiceId: inv.id, subId, product: (subId && store.get(subId)?.product) || null, amountUsd: inv.amount_paid / 100, customer: inv.customer }); } catch { /* accounting never breaks the webhook */ } }
         }
         break;
       }
@@ -480,18 +557,20 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
         // Money went back (or is contested): let the credits store claw back
         // (a charge says how much of it was refunded, and whether all of it).
         const obj = event.data.object;
-        const pi = typeof obj?.payment_intent === "string" ? obj.payment_intent : obj?.payment_intent?.id || null;
+        const pi = idOf(obj?.payment_intent);
         const reversal = event.type === "charge.refunded"
           ? { amountRefundedCents: Number.isFinite(Number(obj?.amount_refunded)) ? Number(obj.amount_refunded) : null, fullyRefunded: obj?.refunded === true }
           : { amountRefundedCents: null, fullyRefunded: true };
         if (pi && typeof onChargeReversed === "function") { try { await onChargeReversed(pi, event.type, reversal); } catch { /* never fail the webhook on a hook */ } }
         // A disputed subscription payment stops its fulfillment: the record
         // is marked (its status still follows Stripe) and listActive drops it.
+        // Any month's payment matches (its payment, charge or invoice id).
         if (event.type === "charge.dispute.created") {
-          const invoiceId = typeof obj?.invoice === "string" ? obj.invoice : obj?.invoice?.id || null;
-          for (const [subId, rec] of store) {
-            if (rec?.disputed) continue;
-            if ((pi && rec?.lastPaymentIntent === pi) || (invoiceId && rec?.lastInvoiceId === invoiceId)) stored = stored && await upsert(subId, { disputed: true, disputedAt: new Date().toISOString(), disputeOutcome: null });
+          const ids = { pi, charge: idOf(obj?.charge), invoiceId: idOf(obj?.invoice) };
+          await reload().catch(() => 0);
+          for (const [subId, rec] of [...store]) {
+            if (rec?.disputed || !paidWith(rec, ids)) continue;
+            stored = stored && await upsert(subId, (cur) => (cur?.disputed || !paidWith(cur, ids) ? null : { disputed: true, disputedAt: new Date().toISOString(), disputeOutcome: null }));
           }
         }
         break;
@@ -502,16 +581,16 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
         // and the credits key the dispute disabled is enabled again (the
         // hook). Lost: the record stays disputed and the outcome is noted.
         const obj = event.data.object;
-        const pi = typeof obj?.payment_intent === "string" ? obj.payment_intent : obj?.payment_intent?.id || null;
+        const pi = idOf(obj?.payment_intent);
         const outcome = typeof obj?.status === "string" ? obj.status.slice(0, 40) : "unknown";
         const won = outcome === "won" || outcome === "warning_closed";
         if (pi && typeof onDisputeClosed === "function") { try { await onDisputeClosed(pi, { won, status: outcome }); } catch { /* never fail the webhook on a hook */ } }
-        const invoiceId = typeof obj?.invoice === "string" ? obj.invoice : obj?.invoice?.id || null;
-        for (const [subId, rec] of store) {
-          if (!rec?.disputed) continue;
-          if ((pi && rec?.lastPaymentIntent === pi) || (invoiceId && rec?.lastInvoiceId === invoiceId)) {
-            stored = stored && await upsert(subId, won ? { disputed: false, disputeOutcome: outcome, disputeClosedAt: new Date().toISOString() } : { disputeOutcome: outcome, disputeClosedAt: new Date().toISOString() });
-          }
+        const ids = { pi, charge: idOf(obj?.charge), invoiceId: idOf(obj?.invoice) };
+        await reload().catch(() => 0);
+        for (const [subId, rec] of [...store]) {
+          if (!rec?.disputed || !paidWith(rec, ids)) continue;
+          stored = stored && await upsert(subId, (cur) => (!cur?.disputed || !paidWith(cur, ids) ? null
+            : won ? { disputed: false, disputeOutcome: outcome, disputeClosedAt: new Date().toISOString() } : { disputeOutcome: outcome, disputeClosedAt: new Date().toISOString() }));
         }
         break;
       }
@@ -537,7 +616,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
     if (!subId) return null;
     try {
       const sub = await stripe.subscriptions.retrieve(subId);
-      if (sub?.status) { await upsert(subId, { status: sub.status, currentPeriodEnd: periodEndOf(sub), cancelAtPeriodEnd: !!sub.cancel_at_period_end }); return sub.status; }
+      if (sub?.status) { const at = liveReadAt(); await upsert(subId, (cur) => ({ status: sub.status, currentPeriodEnd: periodEndOf(sub), cancelAtPeriodEnd: !!sub.cancel_at_period_end, statusEventAt: Math.max(Number(cur?.statusEventAt) || 0, at) })); return sub.status; }
     } catch { /* unreadable */ }
     return null;
   }

@@ -70,6 +70,14 @@ Loaded when an index, discovery, router or buyer file is read.
   (`configureUnprovenSharedPayTos`, wired in server.js). Solana's tier (`SOR_SVM_UNPROVEN_MAX_USD`,
   `src/solana-buyer.js`) is separate.
 - **External spend guard:** `src/external-spend-guard.js` (per payer and per chain wallet).
+- **Seller refusal notes:** a route is benched after two refusals of payments we sent within
+  `SOR_SELLER_REFUSAL_TTL_MS` (6 h), and a settled delivery clears it (`src/x402-buyer.js`). When
+  `SOR_CHAIN_REFUSAL_OURS_MIN` (default 5) different sellers on one chain refuse our paid retries
+  inside `SOR_CHAIN_REFUSAL_WINDOW_MS` (default 30 minutes) with no settle on that chain between
+  them, the cause is read as ours: no route on that chain is noted until a payment there settles or
+  those refusals age out of the window. A refusal from a seller paid under the Base unproven tier never
+  counts toward it (it is noted as the seller's own); the hold logs once when it starts and is listed as `chainRefusalHolds` on
+  `/__operator/tool-failures.json`.
 - **EVM buyer chains:** `src/evm-buyer-chains.js` lists the EVM chains the one spending wallet
   (`X402_UPSTREAM_BUYER_KEY`) can pay a seller on: Base, Arc, Celo, Polygon, Arbitrum and Robinhood
   (USDG), each with its asset, decimals and EIP-712 domain from our own tables, never the seller's.

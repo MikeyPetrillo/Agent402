@@ -28,9 +28,11 @@
 // never by the User-Agent they send. Fixed UTC-hour windows: the 429 says
 // exactly when the count resets.
 // Never counted: our own signed probes, /mcp and the MCP connector's own
-// loopback, the discovery surfaces, any route that is not priced, a client
-// that has already settled a payment this hour, and every request under
-// FREE_MODE (the server does not mount this there).
+// loopback, the discovery surfaces, any route that is not priced, and every
+// request under FREE_MODE (the server does not mount this there). A client
+// that paid recently (settled a payment this hour, or a paid call inside the
+// paid-quote trust window) is counted on its own count against
+// PAID_CLIENT_QUOTE_MULTIPLIER times the budget.
 // Memory is bounded: at most `keyCap` keys, least recently seen dropped first.
 // Counted in THIS process: like every limiter in src/rate-limit.js the budget
 // is divided by RATE_LIMIT_REPLICAS (perReplica), so two containers enforce
@@ -50,10 +52,28 @@ import { DISCOVERY_PATHS, indexerFor, uaToken } from "./traffic-classifier.js";
 import { limiterKey, perReplica } from "./rate-limit.js";
 import { cacheGet, cacheSet, cacheEnabled } from "./cache.js";
 import { decodesAsMppCredential, decodesAsX402Payment } from "./payment-attempt.js";
-import { createHash } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import { isMcpLoopback } from "./mcp-loopback.js";
 
 export const DEFAULT_UNPAID_QUOTE_BUDGET_PER_HOUR = 3000;
+// The metered gateway's own unpaid-quote limiter (server.js, /v1/metered): an
+// unpaid request there tokenizes the body for its quote, so each client address
+// gets this many unpaid quotes a minute and an hour. A request carrying a
+// plausible payment is not counted. Exported so the buying-at-volume guide
+// quotes the figures the limiter enforces.
+export const METERED_UNPAID_QUOTES_PER_MIN = 60;
+export const METERED_UNPAID_QUOTES_PER_HOUR = 1200;
+// A client that paid recently (settled a payment this hour, or a paid call
+// inside src/paid-quote-trust.js's window) reads against this many times each
+// unpaid-quote figure: the price-check budget's hourly figure and the metered
+// limiter's per-minute and per-hour ones. A stock client quotes before every
+// paid call, so the plain figure capped a paying buyer near that many paid
+// calls, so a recently paid address gets a raised ceiling, not an unlimited
+// one. Named here so the limiters and the buying-at-volume guide read one
+// figure.
+export const PAID_CLIENT_QUOTE_MULTIPLIER = 10;
+export const PAID_CLIENT_METERED_QUOTES_PER_MIN = METERED_UNPAID_QUOTES_PER_MIN * PAID_CLIENT_QUOTE_MULTIPLIER;
+export const PAID_CLIENT_METERED_QUOTES_PER_HOUR = METERED_UNPAID_QUOTES_PER_HOUR * PAID_CLIENT_QUOTE_MULTIPLIER;
 export const UNPAID_QUOTE_BUDGET_KEY_CAP = 20_000;
 // A self-declared named indexer or crawler reads against this many times the
 // budget, on the same per-address count as everything else from that address.
@@ -210,30 +230,55 @@ export const secondsToHourBoundary = (now = Date.now()) => Math.max(1, Math.ceil
  * @param {() => number} [o.now]
  * @param {(line:string) => void} [o.log]
  */
+// The digest a "paid recently" record is stored under in the shared store
+// (this hour's settled flag below, src/paid-quote-trust.js's window): a keyed
+// HMAC of the client key, never the address and never a plain hash, which a
+// brute force over the IPv4 space reverses. The key is the same stable secret
+// src/hangup-forgiveness.js digests under (HANGUP_FORGIVE_SALT, else
+// POW_SECRET, else MPP_SECRET_KEY), shared by every replica; with none set a
+// per-process secret still works on this process, and another replica then
+// reads not paid (it limits normally). Records written under the earlier
+// plain digest are not read: they expire within the hour.
+let quoteDigestProcessSecret = null;
+function quoteDigestSecret(env = process.env) {
+  const s = String(env.HANGUP_FORGIVE_SALT || env.POW_SECRET || env.MPP_SECRET_KEY || "").trim();
+  if (s) return s;
+  if (!quoteDigestProcessSecret) quoteDigestProcessSecret = randomBytes(32).toString("hex");
+  return quoteDigestProcessSecret;
+}
+/** The keyed digest of a client key for the shared "paid recently" records. */
+export function quoteKeyDigest(key, env = process.env) {
+  return createHmac("sha256", quoteDigestSecret(env)).update(`unpaid-quote:${String(key)}`).digest("hex").slice(0, 32);
+}
+
 // Which clients have paid this hour, shared by every container through the
-// Redis cache (src/cache.js). Keys are a digest of the client address (the
-// budget's key) plus the hour, never the address itself, and expire with the hour. Without
-// Redis there is no shared record and each container keeps its own, as before.
+// Redis cache (src/cache.js). Keys are a keyed digest of the client address
+// (the budget's key, quoteKeyDigest) plus the hour, never the address itself,
+// and expire with the hour. Without Redis there is no shared record and each
+// container keeps its own, as before.
 export function redisSharedSettled(now = Date.now) {
   if (!cacheEnabled()) return null;
-  const slot = (key) => `a402:uqb:${createHash("sha256").update(String(key)).digest("hex").slice(0, 32)}:${Math.floor(now() / HOUR_MS)}`;
+  const slot = (key) => `a402:uqb:${quoteKeyDigest(key)}:${Math.floor(now() / HOUR_MS)}`;
   return {
     mark: (key) => { void cacheSet(slot(key), 1, 3600); },
     has: async (key) => (await cacheGet(slot(key))) !== null,
   };
 }
 
-export function createUnpaidQuoteBudget({ budget, isPriced, isSynthetic = () => false, policyUrl = "/crawler", keyCap = UNPAID_QUOTE_BUDGET_KEY_CAP, now = Date.now, log = console.warn, replicas = null , sharedSettled = null} = {}) {
+export function createUnpaidQuoteBudget({ budget, isPriced, isSynthetic = () => false, policyUrl = "/crawler", keyCap = UNPAID_QUOTE_BUDGET_KEY_CAP, now = Date.now, log = console.warn, replicas = null, sharedSettled = null, paidTrust = null } = {}) {
   // `published` is the configured, system-wide figure; `limit` is this
   // process's share of it (RATE_LIMIT_REPLICAS, or `replicas` when given).
   const published = Number(budget) || 0;
   const share = (n) => (replicas == null ? perReplica(n) : Math.max(1, Math.floor(n / Math.max(1, Number(replicas) || 1))));
   const limit = published > 0 ? share(published) : 0;
   const namedLimit = published > 0 ? share(published * NAMED_CLIENT_BUDGET_MULTIPLIER) : 0;
+  // A client that paid recently reads against a raised ceiling, never none.
+  const paidLimit = published > 0 ? share(published * PAID_CLIENT_QUOTE_MULTIPLIER) : 0;
+  const paidKeyOf = (key) => `${key}|paid`;
   let hour = -1;
   const counts = new Map();       // client address (IPv6 /64) -> requests this hour, least recently seen first
   const logged = new Set();       // keys already logged as throttled this hour
-  const settled = new Set();      // keys that settled a payment this hour
+  const settled = new Set();      // keys that settled a payment this hour (they read against paidLimit)
   let throttled = 0;
 
   /** Windows are fixed UTC hours; everything keyed to one is dropped together. */
@@ -255,12 +300,14 @@ export function createUnpaidQuoteBudget({ budget, isPriced, isSynthetic = () => 
     return { limited: cap > 0 && n > cap, count: n, retryAfterSeconds: secondsToHourBoundary(t) };
   }
 
-  /** A client that settles a payment stops being counted for the rest of the
-   *  hour. Every stock x402 purchase opens with an unpaid bare request (a spend
-   *  cap adds a second, as a preflight), so a buyer spends this budget on its
-   *  own purchases; past it the 429 would land on that bare request and the
-   *  buyer would never see the 402 it came for. One settlement is proof this
-   *  client is not the burst the budget is about. */
+  /** A client that settles a payment reads against PAID_CLIENT_QUOTE_MULTIPLIER
+   *  times the budget for the rest of the hour. Every stock x402 purchase
+   *  opens with an unpaid bare request (a spend cap adds a second, as a
+   *  preflight), so a buyer spends this budget on its own purchases; past it
+   *  the 429 would land on that bare request and the buyer would never see
+   *  the 402 it came for. One settlement is proof this client is not the
+   *  burst the budget is about, but not a pass: the raised ceiling still
+   *  bounds what one cheap settlement buys. */
   function noteSettled(key, t = now()) {
     if (!key) return;
     rollover(t);
@@ -312,19 +359,24 @@ export function createUnpaidQuoteBudget({ budget, isPriced, isSynthetic = () => 
     let addressKey = null;
     const named10 = (published * NAMED_CLIENT_BUDGET_MULTIPLIER).toLocaleString("en-US");
     const egressCeiling = (published * WORKER_EGRESS_ADDRESS_MULTIPLIER).toLocaleString("en-US");
+    const paidCeiling = (published * PAID_CLIENT_QUOTE_MULTIPLIER).toLocaleString("en-US");
     const refuse = () => {
       throttled += 1;
-      const logKey = scope === "egress" ? addressKey : key;
+      const logKey = scope === "egress" ? addressKey : scope === "paid" ? paidKeyOf(key) : key;
       if (!logged.has(logKey) && logged.size < UNPAID_QUOTE_BUDGET_LOG_CAP) {
         logged.add(logKey);
-        const line = scope === "egress"
+        const line = scope === "paid"
+          ? `[unpaid-budget] a client that paid recently (last User-Agent ${ua}) passed ${paidLimit} unpaid price checks from one address on this container this hour (raised ceiling ${paidCeiling} per hour); answering 429 until the hour turns`
+          : scope === "egress"
           ? `[unpaid-budget] the shared Worker egress address (last User-Agent ${ua}) passed ${limit * WORKER_EGRESS_ADDRESS_MULTIPLIER} unpaid price checks across every User-Agent on this container this hour (whole-address ceiling ${egressCeiling} per hour); answering 429 to every User-Agent there until the hour turns`
           : scope === "agent"
             ? `[unpaid-budget] a client on the shared Worker egress address (User-Agent ${ua}${named ? ", a self-declared named client" : ""}) passed ${named ? namedLimit : limit} unpaid price checks on this container this hour (budget ${published} per hour per User-Agent there); answering 429 to that User-Agent until the hour turns`
             : `[unpaid-budget] a client (last User-Agent ${ua}${named ? ", a self-declared named client" : ""}) passed ${named ? namedLimit : limit} unpaid price checks from one address on this container this hour (budget ${published} per hour); answering 429 until the hour turns`;
         try { log(line); } catch { /* logging never breaks a response */ }
       }
-      const rule = scope === "egress"
+      const rule = scope === "paid"
+        ? `Too many unpaid price checks from one address this hour (an address that paid recently reads against ${paidCeiling} per hour instead of ${published}).`
+        : scope === "egress"
         ? `Too many unpaid price checks from this shared Worker egress address this hour (ceiling ${egressCeiling} per hour for the whole address, across every User-Agent; each User-Agent there also has its own budget of ${published} per hour).`
         : scope === "agent"
           ? `Too many unpaid price checks from this User-Agent this hour (budget ${published} per hour per User-Agent from the shared Worker egress address, under a ceiling of ${egressCeiling} per hour for the whole address; a named indexer or search crawler reads against ${named10}).`
@@ -334,9 +386,26 @@ export function createUnpaidQuoteBudget({ budget, isPriced, isSynthetic = () => 
         ok: false,
         error: "rate-limited",
         reason: UNPAID_QUOTE_BUDGET_REASON,
-        hint: `${rule} Every route and price is published at /.well-known/x402, /openapi.json and /api/pricing, and a request carrying a payment, a credits key or a proof-of-work solution is never counted. A client that settles a payment stops being counted for the rest of the hour. See ${policyUrl}`,
+        hint: `${rule} Every route and price is published at /.well-known/x402, /openapi.json and /api/pricing, and a request carrying a payment, a credits key or a proof-of-work solution is never counted. A client that settles a payment reads against ${paidCeiling} per hour for the rest of the hour. See ${policyUrl}`,
         retryAfterSeconds: verdict.retryAfterSeconds,
       });
+    };
+    // A recently paid client counts on its own raised ceiling. On the shared
+    // Worker egress address its key is the address plus a User-Agent token any
+    // Worker can send, so the whole address still counts against its ceiling:
+    // the raised figure never lifts that address past WORKER_EGRESS_ADDRESS_MULTIPLIER
+    // times the budget.
+    const paidCount = () => {
+      verdict = hit(paidKeyOf(key), now(), paidLimit);
+      scope = "paid";
+      if (!verdict.limited) {
+        addressKey = workerEgressAddressKeyOf(req);
+        if (addressKey) {
+          const whole = hit(addressKey, now(), limit * WORKER_EGRESS_ADDRESS_MULTIPLIER);
+          if (whole.limited) { verdict = whole; scope = "egress"; }
+        }
+      }
+      return verdict.limited ? refuse() : next();
     };
     try {
       const path = normalizeCatalogPath(req.path);
@@ -346,10 +415,15 @@ export function createUnpaidQuoteBudget({ budget, isPriced, isSynthetic = () => 
       // Armed on every request to a priced route, paid or not: the receipt goes
       // out on the PAID retry, which carries a credential and is never counted.
       if (!settled.has(key)) res.once?.("finish", () => { if (hasSettlementReceipt(res)) noteSettled(key); });
-      if (settled.has(key)) return next();
       if (hasCredentialHeader(req.headers)) return next();
       if (isMcpLoopback(req)) return next();
       try { if (isSynthetic(req)) return next(); } catch { /* an unreadable token is not ours */ }
+      // An address that settled a payment this hour, or a paid call in the
+      // last few minutes (any rail, credits included; src/paid-quote-trust.js),
+      // reads against the raised ceiling on its own count.
+      let paidRecently = settled.has(key);
+      if (!paidRecently) { try { paidRecently = Boolean(paidTrust?.trustedLocal?.(key)); } catch { paidRecently = false; } }
+      if (paidRecently) return paidCount();
       named = isNamedClientUserAgent(req.headers?.["user-agent"]);
       verdict = hit(key, now(), named ? namedLimit : limit);
       // From the shared Worker egress address the whole address also counts,
@@ -363,11 +437,16 @@ export function createUnpaidQuoteBudget({ budget, isPriced, isSynthetic = () => 
       if (!verdict.limited) return next();
     } catch { return next(); }
     // About to refuse: this client may have paid on another container. The
-    // shared check runs only here, on the rare refusal path.
-    if (!sharedSettled?.has) return refuse();
-    return Promise.resolve().then(() => sharedSettled.has(key)).catch(() => false).then((paidElsewhere) => {
-      if (paidElsewhere) { noteSettled(key); return next(); }
-      return refuse();
+    // shared checks run only here, on the rare refusal path; a store that does
+    // not answer reads as not paid.
+    if (!sharedSettled?.has && !paidTrust?.trusted) return refuse();
+    const paidElsewhere = () => (sharedSettled?.has ? Promise.resolve().then(() => sharedSettled.has(key)).catch(() => false) : Promise.resolve(false));
+    const trustedElsewhere = () => (paidTrust?.trusted ? Promise.resolve().then(() => paidTrust.trusted(key)).catch(() => false) : Promise.resolve(false));
+    // Paid elsewhere: counted against the raised ceiling instead.
+    const paidPass = paidCount;
+    return paidElsewhere().then((paid) => {
+      if (paid) { noteSettled(key); return paidPass(); }
+      return trustedElsewhere().then((t) => (t ? paidPass() : refuse()));
     });
   }
 
@@ -380,6 +459,7 @@ export function createUnpaidQuoteBudget({ budget, isPriced, isSynthetic = () => 
       budget: published,
       perReplicaBudget: limit,
       namedClientMultiplier: NAMED_CLIENT_BUDGET_MULTIPLIER,
+      paidClientMultiplier: PAID_CLIENT_QUOTE_MULTIPLIER,
       clientsThisHour: stale ? 0 : counts.size,
       clientsSettledThisHour: stale ? 0 : settled.size,
       clientsThrottledThisHour: stale ? 0 : logged.size,

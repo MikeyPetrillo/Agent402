@@ -511,7 +511,7 @@ export const FINANCE_MATH_TOOLS = [
   // --- Bond price from yield -------------------------------------------------
   {
     route: "POST /api/bond-price", name: "Bond price", slug: "bond-price", category: "data", price: "$0.001",
-    description: "Price a fixed-coupon bond from its yield to maturity: present-value the coupons plus face. Returns clean price, coupon per period, current yield, and premium/discount vs par.",
+    description: "Price a fixed-coupon bond at a required annual rate: present-values the coupons plus face, given yieldToMaturity as a decimal. Returns price, coupon per period, periods, currentYield, and premium, discount or par.",
     tags: ["finance", "bond", "fixed-income", "price", "ytm", "present-value"],
     discovery: {
       bodyType: "json",

@@ -306,7 +306,7 @@ export const PACK_STEPS = {
       { slug: "stock-history",       mapInput: (a) => ({ symbol: a.ticker, days: sessionsFor("1y") }) },
       { slug: "edgar-filings",       mapInput: (a) => ({ ticker: a.ticker }) },
       { slug: "edgar-company-facts", mapInput: (a) => ({ ticker: a.ticker }) },
-      { slug: "edgar-insider-trades", mapInput: (a) => ({ ticker: a.ticker, lookbackDays: 90 }) },
+      { slug: "edgar-insider-trades", mapInput: (a) => ({ ticker: a.ticker, days: 90 }) },
       // FRED needs an explicit series id - fed funds is the default macro
       // signal. The key is `seriesId`; this sent `series`, so the step 400'd
       // on every call (2 of 2 in 60 days of telemetry).
@@ -1120,7 +1120,7 @@ export const PACK_STEPS = {
       { slug: "stock-quote",          mapInput: (a) => ({ symbol: a.ticker }) },
       { slug: "company-financials",   mapInput: (a) => ({ ticker: a.ticker }) },
       { slug: "edgar-filings",        mapInput: (a) => ({ ticker: a.ticker, limit: 5 }) },
-      { slug: "edgar-insider-trades", mapInput: (a) => ({ ticker: a.ticker, lookbackDays: 90 }) },
+      { slug: "edgar-insider-trades", mapInput: (a) => ({ ticker: a.ticker, days: 90 }) },
       { slug: "search",               mapInput: (a) => ({ q: `${a.ticker} company news`, count: 5, freshness: "pm" }) },
     ],
   },
@@ -1279,7 +1279,7 @@ export const PACK_STEPS = {
   "insider-alert": {
     mode: "fanout",
     steps: [
-      { slug: "edgar-insider-trades", mapInput: (a) => ({ ticker: a.ticker, lookbackDays: 30 }) },
+      { slug: "edgar-insider-trades", mapInput: (a) => ({ ticker: a.ticker, days: 30 }) },
       { slug: "stock-quote",          mapInput: (a) => ({ symbol: a.ticker }) },
       { slug: "edgar-filings",        mapInput: (a) => ({ ticker: a.ticker, limit: 3 }) },
     ],
@@ -1354,12 +1354,18 @@ export const PACK_STEPS = {
   },
 
   // Wallet audit: balance + transactions + token metadata.
+  // Chain: token metadata is read for a token the wallet holds (the balance
+  // step's first token contract), never for the wallet address itself.
   "wallet-audit": {
-    mode: "fanout",
+    mode: "chain",
     steps: [
       { slug: "wallet-balance",      mapInput: (a) => ({ address: a.address, network: "base" }) },
       { slug: "wallet-transactions", mapInput: (a) => ({ address: a.address, network: "base" }) },
-      { slug: "token-metadata",      mapInput: (a) => ({ contractAddress: a.address, network: "base" }) },
+      { slug: "token-metadata",      mapInput: (_a, p) => {
+          const contract = p["wallet-balance"]?.tokens?.[0]?.contract;
+          if (!contract) throw Object.assign(new Error("the wallet holds no tokens to look up"), { statusCode: 422 });
+          return { contract, network: "base" };
+      } },
     ],
   },
 

@@ -72,7 +72,7 @@ Every pack is **also a single paid endpoint**, `POST /api/skill/{slug}`, which r
 | [**loan-comparison**](https://agent402.tools/skills/loan-comparison) | $0.006 | Compare loan offers with different rates and terms: payment, amortization, compound interest, NPV, IRR. |
 | [**financial-research**](https://agent402.tools/skills/financial-research) | $0.024 | SEC filings + real-time quotes + history + macro context for a single ticker. |
 | [**financial-analysis**](https://agent402.tools/skills/financial-analysis) | $0.024 | Quick company snapshot: live quote, 9 key financial metrics, and upcoming earnings. |
-| [**company-dossier**](https://agent402.tools/skills/company-dossier) | $0.037 | Comprehensive company research in one call: quote, financials, filings, insider trades, news. |
+| [**company-dossier**](https://agent402.tools/skills/company-dossier) | $0.037 | Raw company data in one call: latest close, financials, recent SEC filings, 90 days of insider trades and recent news results, each as its own answer (no written report). |
 | [**earnings-watch**](https://agent402.tools/skills/earnings-watch) | $0.015 | Has this company just reported? Newest SEC filings, the latest close, and recent coverage of analyst expectations. |
 | [**earnings-deep-dive**](https://agent402.tools/skills/earnings-deep-dive) | $0.033 | Everything before a company reports: the upcoming date, latest financials, recent filings, live quote, and fresh news in one pass. |
 | [**insider-alert**](https://agent402.tools/skills/insider-alert) | $0.01 | Insider buying/selling for a stock: Form 4 trades, live quote, and recent SEC filings. |
@@ -86,7 +86,7 @@ Every pack is **also a single paid endpoint**, `POST /api/skill/{slug}`, which r
 | [**macro-economics**](https://agent402.tools/skills/macro-economics) | $0.032 | Pull the canonical US macro dataset - yield curve, CPI, unemployment, fed funds, Sahm rule. |
 | [**macro-context**](https://agent402.tools/skills/macro-context) | $0.036 | "Is the economic backdrop you're modeling against still current?" - refresh the macro snapshot. |
 | [**sec-filings-deep-dive**](https://agent402.tools/skills/sec-filings-deep-dive) | $0.028 | Full EDGAR picture of one company: filings, key financial time series, insider trades, full-text search. |
-| [**regulatory-watch**](https://agent402.tools/skills/regulatory-watch) | $0.023 | "Who just filed / bought / IPO'd?" - EDGAR full-text search, recent filings, Form 4s, 13F, IPO calendar. |
+| [**regulatory-watch**](https://agent402.tools/skills/regulatory-watch) | $0.023 | "Who just filed / bought / IPO'd?" - EDGAR full-text search, recent filings, Form 4s, a reference 13F holdings report, IPO calendar. |
 | [**ipo-watch**](https://agent402.tools/skills/ipo-watch) | $0.023 | What's going public? Recent S-1/IPO filings from EDGAR plus a web search for IPO news. |
 | [**yield-dashboard**](https://agent402.tools/skills/yield-dashboard) | $0.014 | Current yield-curve snapshot: full Treasury curve, key spreads, and average rates. |
 | [**fixed-income-desk**](https://agent402.tools/skills/fixed-income-desk) | $0.017 | Read the rate environment and price a bond in one workflow: live Treasury curve, the recession-signal spread, inflation context, then bond price and yield at current rates. |
@@ -114,7 +114,7 @@ Every pack is **also a single paid endpoint**, `POST /api/skill/{slug}`, which r
 | [**defi-protocol-scanner**](https://agent402.tools/skills/defi-protocol-scanner) | $0.025 | Due-diligence a DeFi protocol: live token price, market context, protocol TVL across chains, and recent news. |
 | [**defi-dashboard**](https://agent402.tools/skills/defi-dashboard) | $0.014 | DeFi overview: total TVL, ETH price, Base gas, and global crypto stats. |
 | [**nft-portfolio**](https://agent402.tools/skills/nft-portfolio) | $0.005 | NFT + wallet snapshot: NFT holdings, native balance, and ETH price for an address. |
-| [**wallet-audit**](https://agent402.tools/skills/wallet-audit) | $0.005 | Full wallet review: balance, recent transactions, and token metadata for an address. |
+| [**wallet-audit**](https://agent402.tools/skills/wallet-audit) | $0.005 | Full wallet review: balance, recent transactions, and metadata for a token the wallet holds. |
 | [**wallet-readiness**](https://agent402.tools/skills/wallet-readiness) | $0.008 | "Can this wallet pay right now?" USDC on Base + Solana, live Base gas, and an Onramp funding link. |
 | [**onchain-analyst**](https://agent402.tools/skills/onchain-analyst) | $0.030 | Ask Base anything in SQL - your query runs against indexed, decoded chain data. |
 | [**gas-optimizer**](https://agent402.tools/skills/gas-optimizer) | $0.007 | Find the cheapest gas: Base gas, Ethereum gas, Base fee estimate, and ETH price for USD conversion. |
@@ -146,7 +146,7 @@ Every pack is **also a single paid endpoint**, `POST /api/skill/{slug}`, which r
 |---|---|---|
 | [**user-onboarding**](https://agent402.tools/skills/user-onboarding) | $0.008 | Take a signup form and run onboarding deterministically - validate, score, mint ID, slug, hash, verify 2FA. |
 | [**contact-verify**](https://agent402.tools/skills/contact-verify) | $0.004 | Verify an email is deliverable - syntax validation plus MX record check on the domain. |
-| [**entity-enrich**](https://agent402.tools/skills/entity-enrich) | $0.022 | Company name to verified identity plus web footprint: Wikidata facts, the LEI legal-entity record, the SEC filer, domain registration, tech stack, and brand favicon. |
+| [**entity-enrich**](https://agent402.tools/skills/entity-enrich) | $0.022 | A company name to its public records: Wikidata facts, the LEI legal-entity record and the SEC filer record, plus, when a domain is given, its registration, tech stack and favicon. |
 
 ## Location & time (5)
 
@@ -169,7 +169,7 @@ Every pack is **also a single paid endpoint**, `POST /api/skill/{slug}`, which r
 
 | Pack | Price | What it solves |
 |---|---|---|
-| [**search-and-cite**](https://agent402.tools/skills/search-and-cite) | $0.101 | Research a question, return an answer with citations - synthesized take + SERP + news, verified by fetch. |
+| [**search-and-cite**](https://agent402.tools/skills/search-and-cite) | $0.101 | A cited answer to a question (model-backed) beside web and news results, then the top citation fetched and its entities extracted, so a claim can be traced to a page. |
 | [**article-digest**](https://agent402.tools/skills/article-digest) | $0.09 | Quick research brief on any topic - web search results plus an AI-generated answer. |
 | [**feed-watch**](https://agent402.tools/skills/feed-watch) | $0.016 | Monitor an RSS/Atom feed: parse it, read the top story in full, extract the keywords driving the cycle, and diff the item list against your last run to isolate what is new. |
 

@@ -559,6 +559,12 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
   reset();
   const unpaid = await run({});
   ok(!unpaid.err && calls.length === 1 && calls[0].timeoutMs === undefined && calls[0].refusalMaxWaitMs > 200_000, "control: a request with no payment header is unchanged");
+  // Through the CDN proxy the seller call shares the proxy's wait: with 15 s
+  // of it left, the payer's own 20 s timeout is narrowed to what is left
+  // (less the 5 s answer margin), so the request ends before the proxy cuts it.
+  reset();
+  const viaCdn = await run({ ...reqWith(hdr(nowS() + 299)), cdnSyncDeadlineMs: Date.now() + 15_000 });
+  ok(!viaCdn.err && calls.length === 1 && calls[0].timeoutMs >= 3000 && calls[0].timeoutMs <= 10_000 && calls[0].refusalMaxWaitMs <= 10_000, `through the CDN with 15 s left, the seller call and the wait end inside it (timeout ${calls[0]?.timeoutMs} ms, wait ${calls[0]?.refusalMaxWaitMs} ms)`);
 
   // Controls on the other rails: a Solana payment is signed against a recent
   // blockhash, so its seller call and wait are budgeted under that life; Tempo keeps its
@@ -783,6 +789,10 @@ try {
     or.chatDelayMs = 1_200;
     const s0 = fac.settled;
     for (let i = 1; i <= 4; i++) { await hangUpMidRun(CHAT, W, `10.1.2.${i}`, "chat"); await sleep(1_800); }
+    // A settle lands after its handler ends, which a loaded host can push past
+    // the fixed pause above: wait for the third, then confirm no fourth follows.
+    for (const until = Date.now() + 15_000; fac.settled < s0 + 3 && Date.now() < until;) await sleep(100);
+    await sleep(1_500);
     ok(fac.settled === s0 + 3, `c. one hang-up forgiven, three settled (settled +${fac.settled - s0})`);
     or.chatDelayMs = 0;
     const r = await pay(CHAT, W, "10.1.2.9");

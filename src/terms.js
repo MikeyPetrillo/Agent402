@@ -51,7 +51,7 @@ export function termsPage(baseUrl) {
 <section>
 <div class="tm-eyebrow">$ GET /terms</div>
 <h1 class="tm-h1">Terms of Service</h1>
-<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-11-04.</p>
+<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-11-09.</p>
 </section>
 
 <section>
@@ -139,7 +139,9 @@ Celo or Tempo. An x402 payment settles only after your call returns a successful
 returns an error, the payment is not settled and you are not charged. Some payments are final before the
 call runs, such as an MPP payment sent as a Tempo transfer; if that call then fails, or if your connection
 closes after a payment has settled and before the response is delivered, we record the amount as owed
-back to the paying wallet, and repay it as described under refunds below. Micropayments are per call and, once settled on-chain, are final and
+back to the paying wallet, and repay it as described under refunds below. If an x402 payment on an EVM
+chain, or a Tempo transaction, lands on chain after we answered the call with an error, we record the amount
+as owed back to the paying wallet and repay it the same way. Micropayments are per call and, once settled on-chain, are final and
 non-refundable except as described in these terms or where required by law. Metered routes quote a ceiling before
 payment and settle at or under it. You are responsible for your own wallet and keys; we never receive or
 hold your private key.${publicIndex ? ` ${publicIndex}` : ""}</p>${gatewayBatched ? `
@@ -164,8 +166,10 @@ Algorand. Before a repayment is sent we confirm on that chain that your payment 
 Solana we also confirm the repayment itself before recording it as paid. An amount
 owed because a connection closed is reviewed before it is repaid, and is not repaid when the call's effect
 outlives the response and was delivered (a memory write, or a purchase we made from another seller for
-you). A payment whose paying wallet cannot be identified from its own settlement cannot be repaid. None of
-this reduces a right you have by law.</p>
+you). A payment whose paying wallet cannot be identified from its own settlement cannot be repaid. Before a
+repayment is sent we check the receiving address against the published sanctions lists; we do not send to
+a listed address, and a repayment waits while that check cannot be made. None of this reduces a right you
+have by law.</p>
 <p><b>By card.</b> Card payments for reports and monitors, for pay-per-call purchases made with a card over MPP, and for prepaid credits are processed by
 <a href="https://stripe.com" rel="noopener">Stripe</a> under Stripe's terms; we never see card numbers. A
 report is generated only against a paid, Stripe-verified session, once; if generation fails, the charge

@@ -107,6 +107,15 @@ if (process.env.CI && !REDIS_URL) fail("CI must run this with REDIS_URL (the cro
   otherReplica();
   let rb = await recoverAlreadyOnChain(b, { prove: provedTx(runTx("c1")), saleByTx: unsold });
   ok(!rb.recovered && /another request owns this authorization/.test(rb.reason), `claims: the replay's recovery is refused (${rb.reason})`);
+  // Another wallet's authorization with the same nonce is a different payment:
+  // its recovery claims its own signer-keyed name, not the first wallet's.
+  {
+    const other = { ...ctxFor(nonce), paymentPayload: { payload: { authorization: { nonce, from: "0x" + "b2".repeat(20) } } } };
+    await run(hooks.beforeVerify, other);
+    otherReplica();
+    const ro = await recoverAlreadyOnChain(other, { prove: provedTx(runTx("c9")), saleByTx: unsold });
+    ok(!/another request owns this authorization/.test(ro.reason || ""), `claims: another wallet's same nonce is not refused as the first wallet's (${ro.reason || "recovered"})`);
+  }
   // The original settles normally; a later replay still cannot recover.
   await run(hooks.afterSettle, { ...a, result: { success: true, transaction: runTx("c1"), network: NET } });
   otherReplica();
@@ -146,6 +155,52 @@ if (process.env.CI && !REDIS_URL) fail("CI must run this with REDIS_URL (the cro
   // No stamp, no recovery.
   rr = await recoverAlreadyOnChain(ctxFor(uniq()), { prove: provedTx(runTx("f1")), saleByTx: unsold });
   ok(!rr.recovered, `claims: a request with no first-seen stamp never recovers (${rr.reason})`);
+
+  // The claim names the signer: another wallet's authorization with the same
+  // nonce is a different payment and proceeds; the first wallet's resend, in
+  // any address case, is still refused.
+  const ctxFrom = (n, from) => ({ ...ctxFor(n), paymentPayload: { payload: { authorization: { nonce: n, from } } } });
+  nonce = uniq();
+  const w1 = ctxFrom(nonce, "0x" + "Ab".repeat(20)), w2 = ctxFrom(nonce, "0x" + "c2".repeat(20)), w1again = ctxFrom(nonce.toUpperCase().replace(/^0X/, "0x"), "0x" + "ab".repeat(20));
+  for (const x of [w1, w2, w1again]) await run(hooks.beforeVerify, x);
+  ok((await run(hooks.beforeSettle, w1)) === undefined, "claims: wallet one reaches settle");
+  otherReplica();
+  ok((await run(hooks.beforeSettle, w2)) === undefined, "claims: another wallet's authorization with the same nonce proceeds");
+  otherReplica();
+  ok((await run(hooks.beforeSettle, w1again))?.reason === claims.DUPLICATE_AUTHORIZATION, "claims: wallet one's resend (address and nonce in another case) is refused");
+  ok(claims.nonceClaimKey(NET, nonce, "0x" + "Ab".repeat(20)) === `nonce:${NET}:0x${"ab".repeat(20)}:${nonce}`, "claims: an EVM signer is lowercased in the key");
+  ok(claims.nonceClaimKey(NET, nonce, "GABCdef") === `nonce:${NET}:GABCdef:${nonce}`, "claims: any other signer is kept as signed");
+  rr = await recoverAlreadyOnChain(w1, { prove: provedTx(runTx("a7")), saleByTx: unsold });
+  ok(rr.recovered, `claims: the holder still recovers its own settlement (${rr.reason || "recovered"})`);
+
+  // Deploy window: an earlier build's claim at the name without the signer
+  // is honored; this build's claim is written there tagged, so the earlier
+  // build refuses it too, and the tag is released with the claim.
+  nonce = uniq();
+  const legacyName = claims.legacyNonceClaimKey(NET, nonce);
+  const signer = "0x" + "a1".repeat(20);
+  ok((await claims.claimSettlementKey(legacyName, "earlier-build-request", { ttlSeconds: 60 })).claimed, "deploy window: an earlier build claims the authorization");
+  otherReplica();
+  const lw = ctxFrom(nonce, signer);
+  await run(hooks.beforeVerify, lw);
+  ok((await run(hooks.beforeSettle, lw))?.reason === claims.DUPLICATE_AUTHORIZATION, "deploy window: this build honors the earlier build's claim");
+  otherReplica();
+  ok((await claims.claimSettlementKey(claims.nonceClaimKey(NET, nonce, signer), "probe")).claimed, "deploy window: and the refused request gave back the key it took");
+  await claims.releaseSettlementKey(claims.nonceClaimKey(NET, nonce, signer), "probe");
+  await claims.releaseSettlementKey(legacyName, "earlier-build-request");
+  nonce = uniq();
+  const tw = ctxFrom(nonce, signer), tw2 = ctxFrom(nonce, "0x" + "b2".repeat(20));
+  await run(hooks.beforeVerify, tw); await run(hooks.beforeVerify, tw2);
+  ok((await run(hooks.beforeSettle, tw)) === undefined, "deploy window: this build claims a fresh authorization");
+  otherReplica();
+  const seen = await claims.claimSettlementKey(claims.legacyNonceClaimKey(NET, nonce), "earlier-build-request", { ttlSeconds: 60 });
+  ok(!seen.claimed && String(seen.holder).startsWith(claims.LEGACY_TAG), `deploy window: an earlier build finds the name held, tagged (${seen.holder})`);
+  otherReplica();
+  ok((await run(hooks.beforeSettle, tw2)) === undefined, "deploy window: another signer's tagged claim there does not refuse a different payment");
+  await run(hooks.settleFailure, { ...tw, error: new Error("insufficient_funds") });
+  otherReplica();
+  ok((await claims.claimSettlementKey(claims.legacyNonceClaimKey(NET, nonce), "earlier-build-request", { ttlSeconds: 60 })).claimed, "deploy window: the tagged claim is released with the request's own");
+  await claims.releaseSettlementKey(claims.legacyNonceClaimKey(NET, nonce), "earlier-build-request");
   if (REDIS_URL) { const { closeSharedRedis } = await import("../src/shared-limit.js"); await closeSharedRedis(); }
 }
 

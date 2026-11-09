@@ -89,6 +89,19 @@ _setBazaarQualityForTest("https://agent402.tools", null); _setBazaarQualityForTe
   ok(plain && plain.urlTemplate === undefined, "a substituted URL carries no flag");
   const twice = [1, 2, 3].map(() => routeQuery({ query: "stock quote", top: 5, include: "external", baseUrl: "https://agent402.tools", catalog: {}, toolCount: 0 }).results.find((r) => String(r.url).includes("{symbol}"))?.urlTemplate);
   ok(twice.every((v) => v === true), `the flag is stable across calls, not a stateful-regex alternation (${JSON.stringify(twice)})`);
+  // A placeholder kept in a manifest endpoint's QUERY is just as uncallable:
+  // the router appends the caller's params after it, so the seller reads the
+  // placeholder first. Flagged like a path template; a real query value is not.
+  cache2.clear();
+  cache2.set("https://qtpl.example", { manifest: { name: "qtpl", homepage: "https://qtpl.example" }, openapiSummary: null, tools: [
+    { seller: "https://qtpl.example", method: "GET", route: "/v1/premium/mainnet/batch-validate?payloads=%3Curl-encoded-json-array%3E", slug: "batch-validate", name: "Batch validate", description: "batch validate envelopes", category: "other", tags: [], price: 0.01 },
+    { seller: "https://qtpl.example", method: "GET", route: "/v1/validate?product=basic", slug: "validate-basic", name: "Validate basic", description: "batch validate envelopes", category: "other", tags: [], price: 0.01 },
+  ], fetchedAt: Date.now(), error: null, history: [1, 1, 1, 1, 1] });
+  const qrows = routeQuery({ query: "batch validate envelopes", top: 5, include: "external", baseUrl: "https://agent402.tools", catalog: {}, toolCount: 0 }).results;
+  const qtpl = qrows.find((r) => r.slug === "batch-validate");
+  const qplain = qrows.find((r) => r.slug === "validate-basic");
+  ok(qtpl && qtpl.urlTemplate === true && qtpl.pathParams?.[0] === "url-encoded-json-array", `a query placeholder is returned but flagged (${JSON.stringify({ flag: qtpl?.urlTemplate, params: qtpl?.pathParams })})`);
+  ok(qplain && qplain.urlTemplate === undefined, "a real query value carries no flag");
   cache2.clear();
 }
 

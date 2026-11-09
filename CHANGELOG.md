@@ -6,6 +6,104 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-08 (buying at volume)
+Docs:
+- A buying-at-volume guide (/guides/buying-at-volume, wiki page
+  Buying-at-Volume) for agents that buy in bursts: the per-address limits and
+  their Retry-After, retries that never pay twice, async jobs, spend caps in
+  agent402-client, agent402-mcp and agent402-openclaw, which rails settle when,
+  metered model ids and input caps, and the errors to handle. llms.txt and the
+  three package pages link it.
+- The /v1/metered unpaid-quote 429 carries Retry-After: 60, retryAfterSeconds
+  and a guide link.
+- Once a client address has paid (a final 200 that settled on any rail, or a
+  credits debit), its unpaid price checks read against 10 times the hourly
+  figure for the rest of that clock hour and for 10 minutes after each paid
+  call; past the plain /v1/metered quote figure, each paid /v1/metered call
+  from that address earns 2 more quotes, used within 10 minutes, up to 10
+  times each figure; on the shared Worker egress address the whole address
+  keeps its ceiling; a refused payment credential still counts.
+- A content-pipeline guide (/guides/content-pipeline, wiki page
+  Content-Pipeline): research, script, voiceover, images, transcription,
+  subtitles, dubbing and media checks as paid calls from one wallet, with a
+  runnable example per stage, an end-to-end flow, the stages that run as jobs,
+  spend caps and Tempo pull and push. llms.txt and the buying-at-volume guide
+  link it.
+- inception/mercury-2.5 reached its upstream expiration and is no longer
+  listed; a call naming it is served by google/gemini-3.1-flash-lite with the
+  swap named.
+Payments:
+- A resend of a payment whose answer was charged but never delivered gets a
+  503 (replay_pending, Retry-After: 10) while the ledger has not yet confirmed
+  that answer as served; nothing more is charged, and a retry with the same
+  payment receives it.
+- When the Tempo relay does not answer whether it claimed a push transfer, the
+  503 says so (transferClaimed: null); when the ledger records the transfer as
+  owed, the 503 also carries refundOwed: true, and a retry with the same
+  credential that pays for the request voids that debt.
+- A Tempo pull payment answered 402 after its broadcast failed is read on chain
+  again (by default 15 s, 45 s and 2 minutes later); a transfer that lands
+  after the 402 is booked as owed, to be refunded.
+- A keyed call whose client closes its connection keeps its claim until the
+  run ends, so a retry with the same key gets 409 idempotent_request_in_flight,
+  then the stored answer, never a second run.
+- A credits call whose client leaves after the response headers is decided
+  when the response ends: a response of 400 or above, a replay or a cache hit
+  is not debited, and a metered call is debited its metered amount, never the
+  whole hold.
+- A card subscription status event that arrives late never reactivates a
+  canceled subscription.
+- Refund recipients are screened like every payout; a held refund logs a
+  fixed reason and stays owed.
+Tools:
+- The company-dossier and financial-research packs return 90 days of Form 4
+  insider trades; their insider step had been read at the 30-day default.
+- wallet-audit looks up metadata for a token the wallet holds, not for the
+  wallet address; a wallet holding no tokens gets a 422 on that step.
+- Report products, the image edit route and the subtitle-pipeline and
+  search-and-cite packs say model-backed in their descriptions.
+Router:
+- A seller's 402 must name the URL requested (the same origin, the same path
+  or the route mounted under a path prefix, and the same query); one naming
+  another resource is refused before anything is signed.
+- A GET seller is probed at its bare listing URL first; while candidates are
+  compared, the caller's inputs reach one only when that probe answers 400 or
+  422.
+- Algorand sellers are paid only at the address their settlement proof names.
+- When several proven sellers on one chain refuse our payments with no settle
+  between them, routes on that chain are not benched until a payment there
+  settles.
+Site:
+- The navigation puts live, status and llms.txt in the menus.
+Operations:
+- /api/gateway-status reports lateSettlements (ok, near_capacity, full,
+  unresolved) for settlements whose outcome was not known when the call was
+  answered, and replayStore (ok, pending) while a settled payment's consumed
+  mark waits to reach the shared store.
+- An operator closes an unresolved late settlement as booked owed, paid (with
+  its refund transaction) or dismissed, and each resolution is recorded before
+  the entry is dropped; unresolved entries are read on chain again every 6
+  hours and close once the chain answers.
+- A Tempo pull transaction that lands after its 402 is booked as owed even
+  past the per-process watch bound or across a restart: every watch is on
+  record, and a one-minute sweep reads any the process did not finish.
+- Tempo subscription gas sponsorship has a rolling 24 h ceiling on
+  transactions and fees, with a fifth of each held for renewals; past it a
+  send is refused before broadcast, and /api/gateway-status reads
+  subscriptionFeePayer.ceiling=reached.
+Privacy:
+- The shared record that an address paid recently is keyed by a keyed hash of
+  the address, never the address or a plain hash of it, and expires within the
+  hour; /privacy names it.
+- /privacy says a candidate seller may receive a request's inputs unpaid
+  before it is paid, sometimes more than once.
+- /privacy and /.well-known/x402 name the Tempo pull credential kept, with
+  its route, amount and payer, until its late-landing check ends (at most 24
+  hours while the chain cannot be read).
+- /terms says an x402 payment on an EVM chain, or a Tempo transaction, that
+  lands on chain after an error answer is recorded as owed and repaid, and that a repayment is checked against the published
+  sanctions lists first.
+
 ### 2026-11-07 (onchain-sql price, X data tools, Solana token search, metered chat, OCR and fetch errors)
 Tools:
 - onchain-sql is $0.030 a call (was $0.040), and a call still sends the query

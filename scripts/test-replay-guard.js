@@ -701,5 +701,162 @@ try {
   ok(a.length > 4500 && keyOfHdr(hdr(a)) === keyOfHdr(hdr(b)), `a ${a.length}-byte multisig transfer signed by two subsets is one identity`);
 }
 
+// ---- A5. The store fails or recovers between begin() and settle()/release() --
+// An in-memory client that can be switched off, and a claim that can be made
+// to lapse (its TTL ran out while the store did not answer).
+function switchableRedis() {
+  const m = memoryRedis();
+  let down = false;
+  const wrap = (f) => async (...a) => { if (down) throw new Error("simulated outage"); return f(...a); };
+  const c = { kv: m.kv, setDown: (v) => { down = v; }, lapse: (k) => m.kv.delete(k), get: wrap(m.get), set: wrap(m.set), del: wrap(m.del), expire: wrap(m.expire) };
+  return c;
+}
+const { replayGuardStoreStatus } = await import("../src/replay-guard.js");
+{
+  // A consumed mark the store did not take: this process refuses the payment
+  // at once, and the mark reaches the store on a later try, so another
+  // replica reads it once the in-flight claim has lapsed.
+  const r = switchableRedis();
+  __setTestClient(r);
+  try {
+    const a = createReplayGuard({ consumedRetryDelaysMs: [5, 5], pendingRetryMs: 20 });
+    const b = createReplayGuard();
+    ok(await a.begin("n:split") === "ok", "store split: claimed on the store");
+    const before = replayGuardStoreStatus({ full: true });
+    r.setDown(true);
+    await a.settle("n:split");
+    r.setDown(false);
+    const mid = replayGuardStoreStatus({ full: true });
+    ok(mid.status === "pending" && mid.consumedWriteFailures === before.consumedWriteFailures + 1, `store split: the missed write is counted and reads pending (${JSON.stringify(mid)})`);
+    r.lapse("replay:f:n:split");
+    ok(await a.begin("n:split") === "consumed", "store split: this process refuses the settled payment after the store recovers");
+    ok(await a.held("n:split") === "consumed", "store split: held() reads it consumed too");
+    for (let i = 0; i < 50 && !r.kv.has("replay:c:n:split"); i++) await new Promise((res) => setTimeout(res, 10));
+    ok(r.kv.has("replay:c:n:split"), "store split: the consumed mark is written in the background once the store answers");
+    ok(await b.begin("n:split") === "consumed", "store split: another replica then reads the payment consumed");
+    const after = replayGuardStoreStatus({ full: true });
+    ok(after.status === "ok" && after.consumedWritesRecovered === before.consumedWritesRecovered + 1 && a._state().pendingConsumed === 0, `store split: the background write ends and the word returns to ok (${JSON.stringify(after)})`);
+  } finally { __setTestClient(null); }
+}
+{
+  // A store that fails once on the consumed write: the bounded retry lands it.
+  const r = switchableRedis();
+  __setTestClient(r);
+  try {
+    const a = createReplayGuard({ consumedRetryDelaysMs: [5, 5] });
+    const b = createReplayGuard();
+    await a.begin("n:blip");
+    const set = r.set;
+    let fails = 1;
+    r.set = async (k, ...rest) => { if (fails > 0 && k.includes(":c:")) { fails--; throw new Error("blip"); } return set(k, ...rest); };
+    const f0 = replayGuardStoreStatus({ full: true }).consumedWriteFailures;
+    await a.settle("n:blip");
+    r.lapse("replay:f:n:blip");
+    ok(await b.begin("n:blip") === "consumed", "store blip: the retried consumed write reaches the store");
+    ok(replayGuardStoreStatus({ full: true }).consumedWriteFailures === f0 && a._state().pendingConsumed === 0, "store blip: a write that landed on a retry is not counted as missed");
+  } finally { __setTestClient(null); }
+}
+{
+  // A claim taken on this process while the store did not answer is cleared
+  // by release() and settle() after the store recovers, and is written to
+  // the store once it answers.
+  const r = switchableRedis();
+  __setTestClient(r);
+  try {
+    const g = createReplayGuard({ renewMs: 10 });
+    r.setDown(true);
+    ok(await g.begin("n:local1") === "ok", "local claim: taken on this process while the store is out");
+    r.setDown(false);
+    ok(await g.begin("n:local1") === "inflight", "local claim: still refuses a duplicate after the store recovers");
+    await g.release("n:local1");
+    ok(await g.held("n:local1") === null && g._state().inFlight === 0, "local claim: release after recovery clears it");
+    ok(await g.begin("n:local1") === "ok", "local claim: so the buyer's retry is claimed");
+    await g.release("n:local1");
+    r.setDown(true);
+    await g.begin("n:local2");
+    r.setDown(false);
+    for (let i = 0; i < 50 && !r.kv.has("replay:f:n:local2"); i++) await new Promise((res) => setTimeout(res, 5));
+    ok(r.kv.has("replay:f:n:local2"), "local claim: written to the store once it answers");
+    ok(await createReplayGuard().begin("n:local2") === "inflight", "local claim: so another replica reads it in flight");
+    await g.settle("n:local2");
+    ok(!r.kv.has("replay:f:n:local2") && r.kv.has("replay:c:n:local2") && g._state().inFlight === 0, "local claim: settle after recovery writes the mark and drops the claim");
+  } finally { __setTestClient(null); }
+}
+{
+  // Owner token: a claim that lapsed and was taken by another request is not
+  // dropped by its first holder's release or settle.
+  const r = switchableRedis();
+  __setTestClient(r);
+  try {
+    const a = createReplayGuard(), b = createReplayGuard(), c = createReplayGuard();
+    await a.begin("n:own");
+    r.lapse("replay:f:n:own");
+    ok(await b.begin("n:own") === "ok", "owner token: a lapsed claim is taken by another request");
+    await a.release("n:own");
+    ok(await c.begin("n:own") === "inflight", "owner token: the first holder's release leaves the new holder's claim");
+    await a.begin("n:own2");
+    r.lapse("replay:f:n:own2");
+    await b.begin("n:own2");
+    await a.settle("n:own2");
+    ok(r.kv.has("replay:f:n:own2") && r.kv.has("replay:c:n:own2"), "owner token: the first holder's settle writes its mark and leaves the new claim");
+    await b.release("n:own");
+    ok(!r.kv.has("replay:f:n:own"), "owner token: the holder's own release drops its claim");
+  } finally { __setTestClient(null); }
+}
+
+{
+  // Missed consumed marks share ONE retry loop over a bounded queue: a timer
+  // per mark grew the heap with the outage (20k marks, RSS 102 -> 226 MB).
+  // Pinned: one interval for many marks, a pass that stops at the first
+  // write the store refuses, every mark written once the store answers, the
+  // loop stopped when the queue empties, and a mark whose hold ended dropped.
+  const r = switchableRedis();
+  __setTestClient(r);
+  const realSetInterval = globalThis.setInterval;
+  const realClearInterval = globalThis.clearInterval;
+  const RETRY_MS = 37; // unique, so only this guard's loop is counted
+  let started = 0, live = 0;
+  const ours = new Set();
+  globalThis.setInterval = (fn, ms, ...a) => { const t = realSetInterval(fn, ms, ...a); if (ms === RETRY_MS) { started++; live++; ours.add(t); } return t; };
+  globalThis.clearInterval = (t) => { if (ours.delete(t)) live--; return realClearInterval(t); };
+  try {
+    const g = createReplayGuard({ consumedRetryDelaysMs: [], pendingRetryMs: RETRY_MS });
+    const N = 400;
+    for (let i = 0; i < N; i++) await g.begin(`n:q${i}`);
+    const before = replayGuardStoreStatus({ full: true });
+    r.setDown(true);
+    for (let i = 0; i < N; i++) await g.settle(`n:q${i}`);
+    ok(g._state().pendingConsumed === N && replayGuardStoreStatus().status === "pending", `pending queue: ${N} missed marks are queued and read pending`);
+    ok(started === 1 && live === 1, `pending queue: one shared retry loop for ${N} missed marks (intervals started ${started})`);
+    // While the store is down a pass stops at its first refused write.
+    const set0 = r.set;
+    let tries = 0;
+    r.set = async (...a) => { tries++; return set0(...a); };
+    await new Promise((res) => setTimeout(res, RETRY_MS * 3 + 10));
+    ok(tries > 0 && tries <= 4, `pending queue: a pass stops at the first write the store refuses (${tries} writes tried over about three passes)`);
+    r.set = set0;
+    r.setDown(false);
+    for (let i = 0; i < 200 && g._state().pendingConsumed > 0; i++) await new Promise((res) => setTimeout(res, 10));
+    let written = 0;
+    for (let i = 0; i < N; i++) if (r.kv.has(`replay:c:n:q${i}`)) written++;
+    const after = replayGuardStoreStatus({ full: true });
+    ok(written === N && g._state().pendingConsumed === 0 && after.consumedWritesRecovered === before.consumedWritesRecovered + N, `pending queue: every queued mark is written once the store answers (${written}/${N})`);
+    ok(after.status === "ok" && live === 0, `pending queue: the loop stops when the queue empties (live intervals ${live})`);
+    // A mark whose hold ends while the store is down is dropped, counted abandoned.
+    const short = createReplayGuard({ ttlMs: 60, consumedRetryDelaysMs: [], pendingRetryMs: RETRY_MS });
+    await short.begin("n:qshort");
+    r.setDown(true);
+    const ab0 = replayGuardStoreStatus({ full: true }).consumedWritesAbandoned;
+    await short.settle("n:qshort");
+    for (let i = 0; i < 100 && short._state().pendingConsumed > 0; i++) await new Promise((res) => setTimeout(res, 10));
+    ok(short._state().pendingConsumed === 0 && replayGuardStoreStatus({ full: true }).consumedWritesAbandoned === ab0 + 1 && live === 0, "pending queue: a mark whose hold ended is dropped as abandoned and the loop stops");
+    r.setDown(false);
+  } finally {
+    globalThis.setInterval = realSetInterval;
+    globalThis.clearInterval = realClearInterval;
+    __setTestClient(null);
+  }
+}
+
 console.log(`\n${failed ? "FAILED" : "OK"}: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

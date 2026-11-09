@@ -925,7 +925,7 @@ jobs:
       # the host most installed users still run. Same key shadowing as above.
       - name: OpenClaw provider plugin against the previous OpenClaw pin
         env:
-          OPENCLAW_SPEC: openclaw@2026.9.3
+          OPENCLAW_SPEC: openclaw@2026.10.1
           BRAVE_API_KEY: ""
           FRED_API_KEY: ""
           FRED_API_KEY_V2: ""
@@ -1380,6 +1380,8 @@ jobs:
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
           t node scripts/test-shared-limits.js
           t node scripts/test-shared-limits-crossprocess.js
+          # A close made while a connect is still in flight ends that connect too.
+          t node scripts/test-shared-redis-close.js
           # The in-flight run cover: memory, a store that does not answer (local ledger decides), and real Redis.
           t node scripts/test-inflight-cover-shared.js
           # The judge's daily token ceiling on the Redis backend (the memory half runs in its own lane).
@@ -1866,6 +1868,8 @@ jobs:
           t node scripts/test-server-tools.js
           # Algorand external router (chain-matched settlement, accept pinning, catalog ranking, AVM buyer gating — offline)
           t node scripts/test-algorand-router.js
+          # Algorand payTo binding: every candidate is paid only at the address its proof was counted at; no address, not dispatched (offline)
+          t node scripts/test-algorand-payto-proof.js
           # Solana external routing: accept pinning (devnet never matches), env gate, pay-time proven-seller gate fails closed, offline e2e signed buy vs stub seller + stub RPC
           t node scripts/test-solana-router.js
           # PayAI Solana listing sweep: the diff between the routes sold on Solana and the registry's rows, from fixtures (offline)
@@ -1954,6 +1958,8 @@ jobs:
           t node scripts/test-render-bytebudget.js
           # Tempo chain-truth confirm (relay says failed but the credential's tx settled -> serve the buyer; pinned on the real incident tx — offline)
           t node scripts/test-tempo-confirm.js
+          # Durable Tempo late-landing watches: failed reads kept, a day of failures dropped with an error, bounded list, in-process removal only once answered (offline)
+          t node scripts/test-tempo-late-watches.js
           # Leaderboard RPC failures never carry the Alchemy key (host-only naming + redaction on the public lastError path — offline)
           t node scripts/test-leaderboard-redaction.js
           t node scripts/test-leaderboard-price-match.js
@@ -2047,6 +2053,10 @@ jobs:
           t node scripts/test-rugcheck-pause.js
           # MPP recurring subscriptions (tempo/subscription challenge shape, binding refuses forged/foreign/expired/underpriced before any settlement, period accounting, dunning, cancellation - offline)
           t node scripts/test-mpp-subscriptions.js
+          # Subscription gas sponsor: a rolling 24 h count and fee ceiling refuses a sponsored send past it before the RPC (offline, stub RPC)
+          t node scripts/test-tempo-sponsor-ceiling.js
+          # Tempo buyer: a minted credential must move exactly the capped quote to the checked recipient, refused before it is sent; our paying scripts sign tempo/charge under the per-call ceiling (offline, stub seller)
+          t node scripts/test-tempo-credential-check.js
 
       - name: Socket supply-chain scan (dependency behaviour, not just versions)
         env:
@@ -2946,6 +2956,8 @@ jobs:
           t node scripts/test-index-parts.js
           t node scripts/test-stall-profiler.js
           t node scripts/test-offload-stalls.js
+          # A registry-fallback crawl of a 77k-row seller takes its whole-list passes across turns (offline)
+          t node scripts/test-fallback-crawl-turn.js
           # Ledger and index figures behind the stalled routes build across turns: same answers as the one-turn reads, first request after a production-sized boot under the bound (boots the server; offline)
           t node scripts/test-stall-routes.js
           t node scripts/test-manifest-input-schema.js
@@ -3065,6 +3077,8 @@ jobs:
           t node scripts/test-safefetch-body-timeout.js
           # yaml-to-json refuses aliases that expand past the JSON size cap (offline)
           t node scripts/test-yaml-alias-cap.js
+          # every call into the outside-seller buyers is a listed caller that books against the shared spending ceilings (offline, source read)
+          t node scripts/test-buyer-callers.js
 
   test-unit-d:
     # The second half of test-unit-b (2026-08-25). That lane was 200 steps
@@ -3344,6 +3358,14 @@ jobs:
           t node scripts/test-package-shed-retry.js
           # Every SOLD skill pack has a real step config (a pack without one answers 200 with 0/N steps and still charges — offline)
           t node scripts/test-skill-pack-steps.js
+          # Every skill-pack step sends only input keys its tool declares (boots its own FREE_MODE server on port 0)
+          t node scripts/test-skill-step-inputs.js
+          # A pack's copy matches its run mode (chain vs fanout); wallet-audit reads a token the wallet holds (offline)
+          t node scripts/test-pack-copy-modes.js
+          # The content-pipeline guide and wiki derive the EVM-only, no-Tempo stages from isLongRunningSlug (offline)
+          t node scripts/test-content-pipeline-guide.js
+          # Every model-backed tool says so in its description, and World Bank and FRED credits survive the listing cap (boots its own FREE_MODE server on port 0)
+          t node scripts/test-catalog-honesty-markers.js
           # Refund backfill decides who is OWED money: who is in, who is out, idempotent (offline, temp ledgers)
           t node scripts/test-refund-backfill.js
           # Upstream-spend meter records with PostHog OFF and in exact micro-dollars (offline)
@@ -4926,6 +4948,8 @@ jobs:
           t node scripts/test-traffic-classifier.js
           # Hourly budget on unpaid price checks per client: 429 past it, never for payments, named indexers, our probes or discovery (boots paid + FREE_MODE servers, offline)
           t node scripts/test-unpaid-quote-budget.js
+          # An address that paid is not held to the unpaid-quote limiters for the trust window; free calls, 4xx and unverified headers still count (paid boot, stub facilitator)
+          t node scripts/test-paid-quote-trust.js
           # A rejected payment is answered in the buyer's terms (balance vs stale authorization) on the 402 (offline)
           t node scripts/test-verify-hint.js
           t node scripts/test-verify-hint-live.js

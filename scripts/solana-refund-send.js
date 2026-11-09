@@ -157,6 +157,17 @@ if (USD > owedToThem + 1e-9) {
   process.exit(1);
 }
 
+// The recipient is screened like every payout we make. A listed address, or a
+// list that cannot be loaded, refuses before any key is read.
+{
+  const { loadSanctions, assertPayoutScreened } = await import("../src/tools/sanctions-kit.js");
+  try { await loadSanctions(); await assertPayoutScreened(TO); }
+  catch (e) {
+    const why = e?.sanctioned ? "address is listed" : e?.screenUnavailable ? "list not loaded" : e?.statusCode === 502 ? "address unreadable" : "screen did not run";
+    console.error(`payout screen refused (${why}) - refusing`); process.exit(1);
+  }
+}
+
 const raw = (process.env.SOLANA_BURNER_KEY || "").trim();
 if (!raw) { console.error("SOLANA_BURNER_KEY is required"); process.exit(2); }
 

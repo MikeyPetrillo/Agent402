@@ -279,6 +279,10 @@ export async function createSvmPaymentPayload(signer, paymentRequirements) {
   if (String(req.asset) !== USDC_MINT) throw bad("SVM payload builder only signs USDC on Solana mainnet", 502);
   const feePayer = req.extra?.feePayer;
   if (!feePayer) throw bad("feePayer is required in the accept's extra for SVM", 502);
+  // The fee payer is the facilitator's account. An accept naming our own
+  // signing wallet would make our signature pay the network fee too, so it is
+  // refused before anything is signed (base58: compared exactly, never folded).
+  if (String(feePayer) === String(signer?.address || "")) throw Object.assign(bad("Seller's Solana accept names our own wallet as the fee payer; refusing to sign. Nothing was signed.", 502), { refused: true });
   // Blockhash: prefer the one the facilitator's 402 already carries (a seller
   // does - then signing needs ZERO RPC, the whole point of this builder). When a
   // seller's accept omits it (most sellers do), fetch it

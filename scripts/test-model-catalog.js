@@ -14,6 +14,7 @@ import { refreshModelCatalog, unknownModelRefusal, isListedModel, contextTokensO
 import { createPrePaymentRefusalRecorder, createPrePaymentLogSampler, stripControlChars, withPushExceptionText } from "../src/prepayment-refusal.js";
 import { PUSH_EXCEPTION } from "../src/tempo-push-debts.js";
 import { upstreamCostsLoaded } from "../src/upstream-costs.js";
+import { METERED_UNPAID_QUOTES_PER_MIN } from "../src/unpaid-quote-budget.js";
 import { Challenge, Credential } from "mppx";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -375,6 +376,20 @@ try {
     ok(unpaid.status === 402, `the unpaid quote budget is separate: an unpaid quote from the same address still gets its 402 (${unpaid.status})`);
     const other = await postFrom("10.40.0.5", { model: "deepseek/deepseek-v4-flash", messages: [{ role: "user", content: "hi" }], max_tokens: 5 }, { "x-payment": xpay });
     ok(other.status === 402, `another address is not limited (${other.status})`);
+  }
+  // Unpaid quotes past the per-address limit: a 429 that names its wait and
+  // links the buying-at-volume guide.
+  {
+    let limited = null, sent = 0;
+    for (let i = 0; i < 200 && !limited; i++) {
+      const r = await postFrom("10.40.0.6", { model: "deepseek/deepseek-v4-flash", messages: [{ role: "user", content: "hi" }], max_tokens: 5 });
+      sent++;
+      if (r.status === 429) limited = { r, j: await r.json().catch(() => ({})) };
+      else await r.arrayBuffer();
+    }
+    ok(!!limited && sent === METERED_UNPAID_QUOTES_PER_MIN + 1, `unpaid quotes are limited after ${METERED_UNPAID_QUOTES_PER_MIN} a minute per address (429 on request ${sent})`);
+    ok(limited?.r.headers.get("retry-after") === "60" && limited?.j.retryAfterSeconds === 60, "the unpaid-quote 429 carries Retry-After: 60 and retryAfterSeconds");
+    ok(limited?.j.guide === "http://agent402.test/guides/buying-at-volume", `the unpaid-quote 429 links the buying-at-volume guide (${limited?.j.guide})`);
   }
 } catch (e) {
   fail++; console.log(`FAIL - ${e.message}`);

@@ -65,6 +65,9 @@ import { createJsonDocument } from "./json-document.js";
 import { trackStoreReady, leased } from "./state-db.js";
 import { ADDR, TX as TX_HASH, UUID, UINT, B32, REASON, SECP256K1_HALF_N, isObj, lc } from "./circle-shapes.js";
 import { randomUUID } from "node:crypto";
+import { readFileSync, writeFileSync, renameSync, mkdirSync, rmSync, mkdtempSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 import { cdnSyncLeftMs } from "./cdn-sync-window.js";
 import { GATEWAY_KIND_NAME, GATEWAY_PENDING_BOOKED, GATEWAY_WIRE, SETTLEMENT_FAILED_REASON, SETTLEMENT_PENDING_REASON, isGatewayBatchedPayment } from "./gateway-wire.js";
 
@@ -730,22 +733,33 @@ export function installGatewayRouting(server, client, networks, { pendingBook = 
       }
       if (owed) {
         let dropped = false;
-        try { dropped = (await pendingBook.resolve(key, { outcome: "owed", note: "an owed debt is booked for this transfer" }))?.ok === true; } catch { dropped = false; }
+        try { dropped = (await pendingBook.resolve(key, { outcome: "owed", note: "an owed debt is booked for this transfer", owner }))?.ok === true; } catch { dropped = false; }
         if (!dropped) { try { await pendingBook.releaseResume(key, owner); } catch { /* the hold lapses on its own */ } }
         return { outcome: "owed", key };
       }
     }
     const resume = { outcome: "accepted", key, owner, transfer: found.transfer, done: false };
+    // The hold is renewed while this request runs, so a handler that runs
+    // past the resume lease is never read as a dead holder: the resolver
+    // cannot take the entry and book it owed while this run may still serve
+    // it. Renewal stops at the request's end, or after RESUME_RENEW_MAX_MS.
+    const renewStarted = Date.now();
+    const renew = setInterval(() => {
+      if (resume.done || Date.now() - renewStarted > RESUME_RENEW_MAX_MS) { clearInterval(renew); return; }
+      Promise.resolve().then(() => pendingBook.renewResume?.(key, owner)).catch(() => {});
+    }, resumeRenewMs());
+    if (typeof renew.unref === "function") renew.unref();
     // The entry is dropped on this request's final 200 (served, and booked
     // once by the sale ledger) and handed back on any other end.
     const finish = async (served) => {
       if (resume.done) return;
       resume.done = true;
+      clearInterval(renew);
       byKey.delete(key);
       let ok = false;
       try {
         ok = served
-          ? (await pendingBook.resolve(key, { outcome: "served", note: "resent and served on Gateway's transfer record" }))?.ok === true
+          ? (await pendingBook.resolve(key, { outcome: "served", note: "resent and served on Gateway's transfer record", owner }))?.ok === true
           : (await pendingBook.releaseResume(key, owner)) === true;
       } catch { ok = false; }
       if (!ok) log(`[gateway] pending entry ${key} could not be ${served ? "dropped" : "handed back"}; its hold lapses after the resume lease`);
@@ -811,14 +825,26 @@ export function installGatewayRouting(server, client, networks, { pendingBook = 
 // dead-letter, src/ledger-mirror.js: Redis with LEDGER_JOURNAL_REDIS, else
 // local disk), exactly as the late-settlement book keeps its own
 // (src/late-settlements.js), and the resolver lands it in the book before
-// each tick. One the journal refuses too is held in this process's memory,
-// logged as an error and listed on the operator view. The word reads
-// "unresolved" (it pages) while any booking sits in the journal or in
-// memory, so a booking outside the book is never silent.
+// each tick. One the journal refuses too is held in this process, written to
+// a file beside the book's (or in the temp directory when that one is not
+// writable) so a restart reads it back, offered to the book and the journal
+// again every LOST_RETRY_MS until one takes it, logged as an error and listed
+// on the operator view. With a state database it is also written, keyed by
+// its authorization, to a document of its own (gateway-pending-lost), so a
+// deploy (a new container with no volume) reads it back. The word reads
+// "unresolved" (it pages) while any booking sits in the journal or is held
+// this way, so a booking outside the book is never silent.
 // ---------------------------------------------------------------------------
 export const PENDING_MAX_ENTRIES = 2000;
 /** How long one resend may hold a pending entry before another may take it. */
 export const RESUME_LEASE_MS = 10 * 60_000;
+/** A resend renews its hold this often while it runs (a third of the lease,
+ *  GATEWAY_RESUME_RENEW_MS overrides for tests), and for at most this long. */
+export const RESUME_RENEW_MAX_MS = 30 * 60_000;
+export function resumeRenewMs(env = process.env) {
+  const n = Number(env.GATEWAY_RESUME_RENEW_MS);
+  return Number.isFinite(n) && n >= 10 && n < RESUME_LEASE_MS ? n : Math.floor(RESUME_LEASE_MS / 3);
+}
 /** An entry still waiting this long reads "unresolved" (it pages):
  *  GATEWAY_PENDING_UNRESOLVED_HOURS, default 24. */
 export const DEFAULT_PENDING_UNRESOLVED_HOURS = 24;
@@ -831,31 +857,240 @@ export const pendingKey = (network, payer, nonce) => `${String(network)}|${lc(pa
 export function gatewayPendingFile(env = process.env) { return env.GATEWAY_PENDING_FILE || "/data/gateway-pending.json"; }
 
 // Bookings neither the book nor its journal took, held in this process
-// (bounded) until an operator resolves them by key. Each one pages.
+// (bounded) until the book or the journal takes one on a retry, or an
+// operator resolves it by key. Each one pages. Written to a local file on
+// every change (the book's file name plus ".lost.json", or, when the book's
+// directory is not writable, a file in a directory private to this process,
+// made with mkdtemp and written 0600) and read back when a book is created,
+// so a restart keeps them; with a state database each is also kept in the
+// durable store below, so a deploy keeps them too.
 const LOST_MAX = 200;
+/** The durable store's bound (it also keeps what memory had to let go). */
+export const LOST_DURABLE_MAX = 2000;
+/** The word reads unresolved this long after a held booking was let go from
+ *  memory (each is logged as an error, naming it). */
+export const LOST_EVICTED_WINDOW_MS = 24 * 3600_000;
+export const LOST_RETRY_MS = 60_000;
 let lostPending = [];
+let lostPaths = [];
+const knownLostPaths = new Set();
+let lostLander = null;
+let lostRetryTimer = null;
+let lostEvictedAt = 0;
+let lostEvictedCount = 0;
+// { load(): entries, put(entry): bool, del(keys): bool }, or null.
+let lostDurable = null;
+let lostDurableWrites = Promise.resolve();
+let privateLostDir = null;
+// The fallback path: a directory only this process made (mkdtemp, mode 0700),
+// so its name cannot be guessed or planted in advance.
+function privateLostPath(file) {
+  try {
+    if (!privateLostDir) privateLostDir = mkdtempSync(join(tmpdir(), "agent402-gw-lost-"));
+    return join(privateLostDir, `${String(file).replace(/[^A-Za-z0-9._-]+/g, "_").slice(-120)}.lost.json`);
+  } catch { return null; }
+}
+const lostPathsFor = (file) => [`${file}.lost.json`, { privateFor: file }];
+function persistLost(log = console.error) {
+  if (!lostPending.length) {
+    for (const p of knownLostPaths) { try { rmSync(p, { force: true }); } catch { /* best effort */ } }
+    return true;
+  }
+  const body = JSON.stringify({ lost: lostPending });
+  for (const p0 of lostPaths) {
+    const p = typeof p0 === "string" ? p0 : privateLostPath(p0.privateFor);
+    if (!p) continue;
+    try {
+      mkdirSync(dirname(p), { recursive: true, mode: 0o700 });
+      const tmp = `${p}.${process.pid}.tmp`;
+      writeFileSync(tmp, body, { mode: 0o600 });
+      renameSync(tmp, p);
+      knownLostPaths.add(p);
+      // Written: the other path, if it holds an older copy, is cleared.
+      for (const q of knownLostPaths) if (q !== p) { try { rmSync(q, { force: true }); } catch { /* best effort */ } }
+      return true;
+    } catch { /* try the next path */ }
+  }
+  if (lostPending.length) { try { log("[gateway] bookings held outside the pending book could not be written to local disk either; they live in this process only"); } catch { /* logging never throws */ } }
+  return false;
+}
+function readLost(paths) {
+  const out = [];
+  for (const p of paths) {
+    if (typeof p !== "string") continue;
+    try {
+      const b = JSON.parse(readFileSync(p, "utf8"));
+      for (const e of Array.isArray(b?.lost) ? b.lost : []) if (isObj(e) && typeof e.key === "string" && !out.some((x) => x.key === e.key)) out.push(e);
+    } catch { /* absent or unreadable */ }
+  }
+  return out;
+}
+// Durable writes run one at a time, in order; a failure is logged as an
+// error (the booking is still held in memory and on disk).
+function durableWrite(label, fn, log = console.error) {
+  const d = lostDurable;
+  if (!d) return Promise.resolve(true);
+  const run = lostDurableWrites.then(() => fn(d)).then((ok) => {
+    if (ok !== true) { try { log(`[gateway] the durable store of bookings held outside the pending book did not take a ${label}; it is still held in memory and on local disk`); } catch { /* logging never throws */ } }
+    return ok === true;
+  }, () => { try { log(`[gateway] the durable store of bookings held outside the pending book failed a ${label}`); } catch { /* logging never throws */ } return false; });
+  lostDurableWrites = run.catch(() => {});
+  return run;
+}
+const lostEntryValid = (e) => isObj(e) && typeof e.key === "string" && e.key.length < 300;
+// Hold one booking in memory; past LOST_MAX the oldest is let go from memory
+// (it stays in the durable store when there is one), logged as an error that
+// names it, and the word pages for LOST_EVICTED_WINDOW_MS.
+function holdLost(e, log = console.error) {
+  if (lostPending.some((x) => x.key === e.key)) return false;
+  lostPending = [...lostPending, e];
+  while (lostPending.length > LOST_MAX) {
+    const [gone] = lostPending;
+    lostPending = lostPending.slice(1);
+    lostEvictedAt = Date.now();
+    lostEvictedCount++;
+    try { log(`[gateway] EVICTED from memory (more than ${LOST_MAX} bookings held outside the pending book): ${gone.key} on ${gone.network}, buyer ${gone.payer}, amount ${gone.amount ?? "?"}, nonce ${gone.nonce}; ${lostDurable ? "still in the durable store, offered to the book once memory has room" : "no durable store: resolve it by hand from this line"}`); } catch { /* logging never throws */ }
+  }
+  return true;
+}
+/** Whether a held booking was let go from memory inside the window. */
+export function gatewayPendingLostEvictedRecently(t = Date.now()) { return lostEvictedAt > 0 && t - lostEvictedAt < LOST_EVICTED_WINDOW_MS; }
+/** A durable store of held bookings on a JSON document (the state database). */
+export function gatewayLostDurableStore(doc) {
+  const ready = Promise.resolve(doc.load(null)).catch(() => null);
+  const mapOf = (b) => (isObj(b) && isObj(b.lost) ? { ...b.lost } : {});
+  return {
+    async load() {
+      await ready;
+      const r = await doc.read();
+      if (!r?.ok) throw new Error("unreadable");
+      return Object.values(mapOf(r.body)).filter(lostEntryValid).sort((a, b) => Number(a.at || 0) - Number(b.at || 0));
+    },
+    async put(e) {
+      await ready;
+      const r = await doc.update((b) => {
+        const lost = mapOf(b);
+        lost[e.key] = e;
+        const keys = Object.keys(lost);
+        if (keys.length > LOST_DURABLE_MAX) {
+          const drop = keys.sort((x, y) => Number(lost[x]?.at || 0) - Number(lost[y]?.at || 0)).slice(0, keys.length - LOST_DURABLE_MAX);
+          for (const k of drop) { try { console.error(`[gateway] EVICTED from the durable store of held bookings (more than ${LOST_DURABLE_MAX}): ${k}`); } catch { /* logging never throws */ } delete lost[k]; }
+        }
+        return { lost };
+      }, { fallback: null });
+      return !!r?.ok;
+    },
+    async del(keys) {
+      await ready;
+      const r = await doc.update((b) => { const lost = mapOf(b); for (const k of keys) delete lost[k]; return { lost }; }, { fallback: null });
+      return !!r?.ok;
+    },
+  };
+}
+function scheduleLostRetry() {
+  if (lostRetryTimer || !lostPending.length || !lostLander) return;
+  lostRetryTimer = setTimeout(() => {
+    lostRetryTimer = null;
+    retryLostPending().catch(() => {}).finally(() => scheduleLostRetry());
+  }, LOST_RETRY_MS);
+  if (typeof lostRetryTimer.unref === "function") lostRetryTimer.unref();
+}
+// Bookings the durable store holds that memory does not (an earlier
+// container's, or ones memory let go) come back while memory has room.
+async function adoptDurable(log = console.error) {
+  if (!lostDurable || lostPending.length >= LOST_MAX) return 0;
+  let list;
+  try { list = await lostDurable.load(); } catch { return 0; }
+  let n = 0;
+  for (const e of list) {
+    if (lostPending.length >= LOST_MAX) break;
+    if (lostPending.some((x) => x.key === e.key)) continue;
+    lostPending = [...lostPending, e];
+    n++;
+  }
+  if (n) { persistLost(log); scheduleLostRetry(); }
+  return n;
+}
+/** Offer every held booking to the book (and its journal) again; one either
+ *  takes is no longer held. Resolves how many landed. */
+export async function retryLostPending(book = lostLander) {
+  if (!book) return 0;
+  await adoptDurable();
+  if (!lostPending.length) return 0;
+  let landed = 0;
+  const gone = [];
+  for (const e of [...lostPending]) {
+    let r = false;
+    try { r = await book.book(e.booking || e, { quiet: true, at: e.at }); } catch { r = false; }
+    if (r === true || r === "journaled") {
+      lostPending = lostPending.filter((x) => x.key !== e.key);
+      gone.push(e.key);
+      landed++;
+    }
+  }
+  if (landed) {
+    await durableWrite("removal", (d) => d.del(gone));
+    persistLost();
+    try { console.warn(`[gateway] ${landed} pending booking(s) held outside the book landed on a retry`); } catch { /* logging never throws */ }
+  }
+  return landed;
+}
 /** Called by the client when a pending booking could not be kept anywhere. */
 export function notePendingLost(entry, log = console.error) {
   const e = {
     key: pendingKey(entry?.network, entry?.payer, entry?.nonce), network: String(entry?.network || ""), payer: lc(entry?.payer), nonce: lc(entry?.nonce),
     amount: UINT.test(String(entry?.amount ?? "")) ? String(entry.amount) : null, resource: typeof entry?.resource === "string" ? entry.resource.slice(0, 300) : null,
     cause: typeof entry?.cause === "string" ? entry.cause.slice(0, 64) : null, at: Date.now(), state: "lost",
+    // What the book needs to take it on a retry.
+    booking: {
+      payer: entry?.payer, network: entry?.network, nonce: entry?.nonce, amount: entry?.amount, payTo: entry?.payTo, resource: entry?.resource,
+      slug: entry?.slug, validBefore: entry?.validBefore, origin: entry?.origin, cause: entry?.cause,
+    },
   };
-  if (!lostPending.some((x) => x.key === e.key)) lostPending = [...lostPending, e].slice(-LOST_MAX);
-  try { log(`[gateway] a batched settlement on ${e.network} left unresolved could NOT be booked (book and journal both refused); if Gateway settled it the buyer ${e.payer} is owed ${e.amount ?? "?"} (nonce ${e.nonce}). Resolve it by hand on /__operator/gateway-pending.json`); } catch { /* logging never throws */ }
+  // Logged first, so a line naming the booking always comes before any
+  // eviction line it causes.
+  try { log(`[gateway] a batched settlement on ${e.network} left unresolved could NOT be booked (book and journal both refused); if Gateway settled it the buyer ${e.payer} is owed ${e.amount ?? "?"} (nonce ${e.nonce}). Kept on local disk${lostDurable ? " and in the durable store" : ""} and offered to the book again every ${Math.round(LOST_RETRY_MS / 1000)} s; resolve it by hand on /__operator/gateway-pending.json`); } catch { /* logging never throws */ }
+  if (holdLost(e, log)) void durableWrite("booking", (d) => d.put(e), log);
+  persistLost(log);
+  scheduleLostRetry();
 }
-/** The bookings held in memory only (operator view; the word reads them). */
-export function gatewayPendingLost() { return lostPending.map((e) => ({ ...e })); }
-/** Test-only. */
-export function _resetGatewayPendingLostForTests() { lostPending = []; }
+/** The bookings held outside the book (operator view; the word reads them). */
+export function gatewayPendingLost() { return lostPending.map(({ booking: _b, ...e }) => ({ ...e })); }
+/** Test-only: forget the held bookings in memory (a restart), or also on disk. */
+export function _resetGatewayPendingLostForTests({ disk = true } = {}) {
+  lostDurable = null;
+  lostDurableWrites = Promise.resolve();
+  if (disk) { lostPending = []; persistLost(() => {}); }
+  lostPending = [];
+  lostPaths = [];
+  knownLostPaths.clear();
+  lostLander = null;
+  lostEvictedAt = 0;
+  lostEvictedCount = 0;
+  privateLostDir = null;
+  if (lostRetryTimer) { clearTimeout(lostRetryTimer); lostRetryTimer = null; }
+}
+/** Test-only: the local files held bookings were written to. */
+export function _gatewayLostPathsForTests() { return [...knownLostPaths]; }
+/** Test-only: wait for the durable writes queued so far. */
+export function _gatewayLostDurableSettled() { return lostDurableWrites; }
 
-export function createGatewayPendingBook({ file = gatewayPendingFile(), now = () => Date.now(), log = console.warn, maxEntries = PENDING_MAX_ENTRIES, unresolvedMs = gatewayPendingUnresolvedMs(), journal = null, alarm = console.error, onChange = null } = {}) {
+export function createGatewayPendingBook({ file = gatewayPendingFile(), now = () => Date.now(), log = console.warn, maxEntries = PENDING_MAX_ENTRIES, unresolvedMs = gatewayPendingUnresolvedMs(), journal = null, alarm = console.error, onChange = null, lostStore = undefined } = {}) {
   let state = { pending: {} };
   const absorb = (s) => { if (isObj(s) && isObj(s.pending)) state = { pending: { ...s.pending } }; };
   const doc = createJsonDocument({ name: "gateway-pending", file, log: () => {} });
   absorb(doc.loadSync(null));
   const PG = doc.backend === "pg";
   const ready = trackStoreReady(PG ? doc.load(null).then(absorb) : Promise.resolve(), "gateway-pending");
+  // Bookings an earlier process held outside the book come back: from the
+  // local file now, and from the durable store (a state database: a deploy
+  // starts a container with no volume) once it is read.
+  lostPaths = lostPathsFor(file);
+  for (const p of lostPaths) if (typeof p === "string") knownLostPaths.add(p);
+  for (const e of readLost(lostPaths)) holdLost(e, alarm);
+  if (lostStore !== undefined) lostDurable = lostStore;
+  else lostDurable = PG ? gatewayLostDurableStore(createJsonDocument({ name: "gateway-pending-lost", file: `${file}.lost-store.json`, log: () => {} })) : null;
+  const durableReady = lostDurable ? adoptDurable(alarm).catch(() => 0) : Promise.resolve(0);
   const refresh = async () => {
     try {
       const b = PG ? await doc.load(null) : doc.loadSync(null);
@@ -913,7 +1148,7 @@ export function createGatewayPendingBook({ file = gatewayPendingFile(), now = ()
     if (out === "made" && wrote !== true) return "failed";
     return out;
   };
-  return {
+  const book = {
     ready,
     refresh,
     /**
@@ -922,7 +1157,7 @@ export function createGatewayPendingBook({ file = gatewayPendingFile(), now = ()
      * the store did not take it and the journal did (the resolver lands it
      * later), false when it is refused as malformed or kept nowhere.
      */
-    async book({ payer, network, nonce, amount, payTo, resource, slug, validBefore, origin, cause } = {}) {
+    async book({ payer, network, nonce, amount, payTo, resource, slug, validBefore, origin, cause } = {}, { quiet = false, at = null } = {}) {
       if (!ADDR.test(String(payer || "")) || !B32.test(String(nonce || "")) || !/^eip155:[0-9]{1,12}$/.test(String(network || ""))) return false;
       const key = pendingKey(network, payer, nonce);
       const entry = {
@@ -931,7 +1166,8 @@ export function createGatewayPendingBook({ file = gatewayPendingFile(), now = ()
         slug: typeof slug === "string" && /^[a-z0-9][a-z0-9._/-]{0,119}$/i.test(slug) ? slug : null,
         validBefore: UINT.test(String(validBefore ?? "")) ? String(validBefore) : null,
         origin: origin === "ambiguous" ? "ambiguous" : "pending", cause: typeof cause === "string" ? safeReason(cause, "unknown") : null,
-        at: now(), state: "pending",
+        // A retry of a booking held outside the book keeps when it happened.
+        at: Number.isFinite(Number(at)) && Number(at) > 0 ? Number(at) : now(), state: "pending",
       };
       const r = await put(entry);
       if (r === "made" || r === "exists") return true;
@@ -939,7 +1175,7 @@ export function createGatewayPendingBook({ file = gatewayPendingFile(), now = ()
       let id = null;
       try { const j = await journalOf(); id = j ? j.add("gateway-pending", entry) : null; } catch { id = null; }
       if (id == null) {
-        alarm(`[gateway] pending settlement ${key} could not be written to the book or its journal`);
+        if (!quiet) alarm(`[gateway] pending settlement ${key} could not be written to the book or its journal`);
         return false;
       }
       log(`[gateway] pending settlement ${key}: the book did not take it (${r}); kept in the journal until the resolver lands it`);
@@ -947,6 +1183,9 @@ export function createGatewayPendingBook({ file = gatewayPendingFile(), now = ()
     },
     /** Land what the journal holds in the book. Resolves how many landed. */
     async drainJournal() {
+      // Bookings held outside the book (this process's, or an earlier
+      // process's read back from disk) are offered to it first.
+      try { await retryLostPending(this); } catch { /* the next tick retries */ }
       let j;
       try { j = await journalOf(); } catch { return 0; }
       if (!j || !((await journalCount()) > 0)) return 0;
@@ -963,20 +1202,34 @@ export function createGatewayPendingBook({ file = gatewayPendingFile(), now = ()
      *  booked as an owed debt in the refund ledger (the resolver). Answers
      *  ok only when the drop landed in the store; logged only then. A key
      *  held in memory only (gatewayPendingLost) is released the same way. */
-    async resolve(key, { outcome, note } = {}) {
+    async resolve(key, { outcome, note, owner = null } = {}) {
       if (!["refunded", "not_charged", "served", "owed"].includes(outcome)) return { ok: false, error: 'outcome must be "refunded", "not_charged", "served" or "owed"' };
       if (typeof key !== "string") return { ok: false, error: "no such entry" };
       if (!state.pending[key]) await refresh();
       if (!state.pending[key]) {
         if (lostPending.some((e) => e.key === key)) {
+          if (lostDurable && !(await durableWrite("resolution", (d) => d.del([key]), alarm))) return { ok: false, error: "the durable store of held bookings could not be written; the booking is kept" };
           lostPending = lostPending.filter((e) => e.key !== key);
+          persistLost(log);
           log(`[gateway] pending entry ${key} (held in memory only) resolved as ${outcome}${note ? ` (${String(note).slice(0, 200)})` : ""}`);
           return { ok: true, key, outcome };
         }
         return { ok: false, error: "no such entry" };
       }
+      // An entry another request or the resolver holds (resuming, its lease
+      // live) is theirs to close: dropping it under them would let the holder
+      // serve, or book owed, an entry already gone.
+      let held = false;
       let wrote = false;
-      try { wrote = await change((pending) => { delete pending[key]; }); } catch { wrote = false; }
+      try {
+        wrote = await change((pending) => {
+          held = false;
+          const e = pending[key];
+          if (e && e.state === "resuming" && e.owner !== owner && now() - Number(e.resumeAt || 0) < RESUME_LEASE_MS) { held = true; return; }
+          delete pending[key];
+        });
+      } catch { wrote = false; }
+      if (held) return { ok: false, error: "the entry is held by a resend or the resolver; it is closed by its holder" };
       if (wrote !== true) return { ok: false, error: "the pending book could not be written" };
       log(`[gateway] pending entry ${key} resolved as ${outcome}${note ? ` (${String(note).slice(0, 200)})` : ""}`);
       return { ok: true, key, outcome };
@@ -1001,6 +1254,19 @@ export function createGatewayPendingBook({ file = gatewayPendingFile(), now = ()
       });
       return took && wrote === true;
     },
+    /** Renew a hold this owner has (its lease restarts). True only when the
+     *  write landed and the entry is still this owner's. */
+    async renewResume(key, owner) {
+      let mine = false;
+      const wrote = await change((pending) => {
+        mine = false;
+        const e = pending[key];
+        if (!e || e.state !== "resuming" || e.owner !== owner) return;
+        pending[key] = { ...e, resumeAt: now() };
+        mine = true;
+      });
+      return mine && wrote === true;
+    },
     /** Hand an entry back after a resend that was not served. True only when
      *  the write landed. */
     async releaseResume(key, owner) {
@@ -1024,7 +1290,7 @@ export function createGatewayPendingBook({ file = gatewayPendingFile(), now = ()
       const list = entries();
       const n = list.length;
       if (n >= maxEntries) return "full";
-      if (lostPending.length) return "unresolved";
+      if (lostPending.length || gatewayPendingLostEvictedRecently()) return "unresolved";
       let journaled = 0;
       try { journaled = await journalCount(); } catch { journaled = 1; }
       if (journaled > 0) return "unresolved";
@@ -1036,9 +1302,20 @@ export function createGatewayPendingBook({ file = gatewayPendingFile(), now = ()
       await refresh();
       let journaled = null;
       try { journaled = await journalCount(); } catch { journaled = null; }
-      return { status: await this.alarmStatus(), count: entries().length, journaled, entries: entries().sort((a, b) => a.at - b.at), heldInMemory: gatewayPendingLost() };
+      // heldInMemory stays the list a rollback reads: an older build ignores
+      // the durable store, so the operator view always names what is held.
+      let heldDurable = null;
+      if (lostDurable) { try { heldDurable = (await lostDurable.load()).length; } catch { heldDurable = null; } }
+      return {
+        status: await this.alarmStatus(), count: entries().length, journaled, entries: entries().sort((a, b) => a.at - b.at), heldInMemory: gatewayPendingLost(),
+        heldDurable, evictedFromMemory: lostEvictedCount, lastEvictedAt: lostEvictedAt || null,
+      };
     },
   };
+  lostLander = book;
+  book.lostReady = durableReady;
+  scheduleLostRetry();
+  return book;
 }
 
 // ---------------------------------------------------------------------------
@@ -1094,8 +1371,8 @@ export function slugOfResource(resource) {
  */
 export function createGatewayPendingResolver({ book, client, recordOwed, owedExists, wasServed = null, payTo = null, maxPerTick = PENDING_RESOLVE_MAX_PER_TICK, now = () => Date.now(), ambiguousNoneMs = gatewayAmbiguousNoneMs(), log = console.warn } = {}) {
   let cursor = 0;
-  const drop = async (key, outcome, note) => {
-    try { return (await book.resolve(key, { outcome, note }))?.ok === true; } catch { return false; }
+  const drop = async (key, outcome, note, owner) => {
+    try { return (await book.resolve(key, { outcome, note, owner }))?.ok === true; } catch { return false; }
   };
   async function decide(e) {
     const amount = String(e.amount ?? "");
@@ -1107,7 +1384,7 @@ export function createGatewayPendingResolver({ book, client, recordOwed, owedExi
     try {
       const found = await client.transferByAuthorization({ payer: e.payer, payTo: pay, amount, nonce: e.nonce, network: e.network });
       if (found.state === "failed") {
-        if (!(await drop(e.key, "not_charged", "Gateway reports the transfer failed"))) return "kept";
+        if (!(await drop(e.key, "not_charged", "Gateway reports the transfer failed", owner))) return "kept";
         release = false;
         return "not_charged";
       }
@@ -1119,14 +1396,14 @@ export function createGatewayPendingResolver({ book, client, recordOwed, owedExi
         // once it is old).
         if (e.origin !== "ambiguous") return "kept";
         if (!expired && !neverTaken) return "kept";
-        if (!(await drop(e.key, "not_charged", expired ? "no Gateway transfer and the authorization has expired" : "no Gateway transfer for an ambiguous settle call"))) return "kept";
+        if (!(await drop(e.key, "not_charged", expired ? "no Gateway transfer and the authorization has expired" : "no Gateway transfer for an ambiguous settle call", owner))) return "kept";
         release = false;
         return "not_charged";
       }
       if (found.state !== "accepted" || !PROVEN_TRANSFER_STATUSES.includes(found.transfer.status)) return "kept";
       const tx = gatewayTransferId(found.transfer.id);
       if (typeof wasServed === "function" && await wasServed({ tx, network: e.network })) {
-        if (!(await drop(e.key, "served", "a sale is booked for this transfer"))) return "kept";
+        if (!(await drop(e.key, "served", "a sale is booked for this transfer", owner))) return "kept";
         release = false;
         return "served";
       }
@@ -1139,9 +1416,10 @@ export function createGatewayPendingResolver({ book, client, recordOwed, owedExi
       }
       // Dropped only once the debt is in the ledger; otherwise kept for the next tick.
       if (!(await owedExists(tx))) return "kept";
-      // Not dropped: the entry stays, and a resend that takes it reads the
-      // owed row first (installGatewayRouting) and is refused.
-      if (!(await drop(e.key, "owed", `owed debt booked for Gateway transfer ${tx}`))) return "kept";
+      // Dropped as owed. Should the drop not land, the entry stays, and a
+      // resend that takes it reads the owed row first (installGatewayRouting)
+      // and is refused.
+      if (!(await drop(e.key, "owed", `owed debt booked for Gateway transfer ${tx}`, owner))) return "kept";
       release = false;
       return "owed";
     } finally {

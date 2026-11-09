@@ -220,8 +220,8 @@ const LOCAL_SELLER = "self";
 // TWO regexes on purpose: `.test()` on a /g regex is STATEFUL (it advances
 // lastIndex and alternates true/false across calls), so the predicate is
 // non-global and only the extraction is global.
-const URL_TEMPLATE_RE = /\{[^}/]+\}|%7[Bb][^/]*?%7[Dd]|\/:[A-Za-z_][A-Za-z0-9_]*(?=\/|$)/;
-const URL_TEMPLATE_RE_G = /\{([^}/]+)\}|%7[Bb](.*?)%7[Dd]|\/:([A-Za-z_][A-Za-z0-9_]*)(?=\/|$)/g;
+const URL_TEMPLATE_RE = /\{[^{}/]{1,200}\}|%7[Bb][^/]{0,200}?%7[Dd]|\/:[A-Za-z_][A-Za-z0-9_]*(?=\/|$)|<[^<>/&=?]{1,200}>|%3[Cc][^/&=?]{1,200}?%3[Ee]|=YOUR_[A-Za-z0-9_]{0,200}(?=&|$)/;
+const URL_TEMPLATE_RE_G = /\{([^{}/]{1,200})\}|%7[Bb]([^/]{0,200}?)%7[Dd]|\/:([A-Za-z_][A-Za-z0-9_]*)(?=\/|$)|<([^<>/&=?]{1,200})>|%3[Cc]([^/&=?]{1,200}?)%3[Ee]|=(YOUR_[A-Za-z0-9_]{0,200})(?=&|$)/g;
 // THREE dialects, not one. The brace form is what OpenAPI writes, but a seller
 // documenting with Express-style ":domain", or a manifest that URL-encoded its
 // own braces into "%7Bdomain%7D", produces a path that is just as uncallable and
@@ -233,6 +233,18 @@ const URL_TEMPLATE_RE_G = /\{([^}/]+)\}|%7[Bb](.*?)%7[Dd]|\/:([A-Za-z_][A-Za-z0-
 //
 // The colon form is anchored to a whole segment (/:name) so an ordinary path
 // containing a colon, or a scheme, is not mistaken for a template.
+// A placeholder can also ride in the query a manifest endpoint keeps
+// ("?payloads=<url-encoded-json-array>", raw or %3C..%3E encoded, or a
+// "=YOUR_KEY" value): the router appends the caller's params after it, so the
+// seller would get the placeholder first. Those read as templates too; a real
+// query value ("?product=basic") does not.
+/** Whether a route (path and query) still holds an unsubstituted placeholder.
+ *  The one test every surface reads, so a label never disagrees with the router. */
+export function isUrlTemplateRoute(route) { return URL_TEMPLATE_RE.test(String(route || "")); }
+// Route text is seller-controlled and unbounded, so every form is bounded: a
+// placeholder name is at most 200 characters and cannot hold its own opening
+// token, which keeps a test linear on a hostile route (unbounded, 100k "{"
+// held the loop for seconds).
 const SELF_BAZAAR_ORIGIN = "https://agent402.tools"; // the origin our Bazaar listing is keyed under
 const SELF_HOST = canonicalHost(SELF_BAZAAR_ORIGIN);
 // The canonical host of each string the whole-cache walks have seen: the self
@@ -2266,7 +2278,7 @@ function urlTemplateProjection(t) {
   if (!URL_TEMPLATE_RE.test(route)) return {};
   return {
     urlTemplate: true,
-    pathParams: [...route.matchAll(URL_TEMPLATE_RE_G)].map((m) => m[1] || m[2] || m[3]).filter(Boolean),
+    pathParams: [...route.matchAll(URL_TEMPLATE_RE_G)].map((m) => m[1] || m[2] || m[3] || m[4] || m[5] || m[6]).filter(Boolean),
   };
 }
 
@@ -2681,6 +2693,9 @@ async function normaliseOpenapiToolsSliced(openapi, originUrl) {
 // is next in line; the work is the same, only its spread over turns changes.
 const crawlLaneQueue = [];
 let crawlLanePumping = false;
+// A bazaar-fallback crawl whose registry and OpenAPI rows pass this count
+// takes a lane turn between its whole-list passes (see crawlSeller).
+const FALLBACK_PASS_TURN_ROWS = 2000;
 function crawlLaneTurn() {
   return new Promise((resolve) => {
     crawlLaneQueue.push(resolve);
@@ -4285,7 +4300,7 @@ let paywallRecheckBudget = PAYWALL_RECHECKS_PER_CYCLE;
 /** Was this stored failure taken at a URL that is still a template? */
 function paywallVerdictOnTemplate(pw) {
   if (typeof pw?.url !== "string") return false;
-  try { return URL_TEMPLATE_RE.test(new URL(pw.url).pathname); } catch { return false; }
+  try { const u = new URL(pw.url); return URL_TEMPLATE_RE.test(u.pathname + u.search); } catch { return false; }
 }
 /** Is this stored paywall verdict a failure due a fresh probe? A missing
  *  verdict is the rotation's business; a passing one is not expired here. */
@@ -6026,36 +6041,45 @@ async function crawlSeller(originUrl, { deadlineAt = 0, forcePaywall = false } =
         noteFallback("/llms.txt", e);
       }
     }
-    const tools = dropUnvouchedNonProductRoutes(
-      mergeOpenapiIntoBazaar(openapiTools, bazaarTools, {
-        allRoutes: openapi ? openapiAllOperationRoutes(openapi, originUrl) : [],
-      }),
-      bazaarTools.map((t) => t.route)
-    );
+    // Each pass below walks every registry row, and the registry is read
+    // before the per-seller tool cap (one seller lists 77k rows): run back to
+    // back they held the loop ~300 ms locally. A large list takes one crawl
+    // lane turn between passes; the passes, their inputs and order are as before.
+    const passTurn = bazaarTools.length + openapiTools.length > FALLBACK_PASS_TURN_ROWS ? crawlLaneTurn : null;
+    const merged = mergeOpenapiIntoBazaar(openapiTools, bazaarTools, {
+      allRoutes: openapi ? openapiAllOperationRoutes(openapi, originUrl) : [],
+    });
+    if (passTurn) await passTurn();
+    const tools = dropUnvouchedNonProductRoutes(merged, bazaarTools.map((t) => t.route));
+    if (passTurn) await passTurn();
     if (tools.length) {
       stampDeclared(tools, [...openapiTools, ...(openapi ? openapiAllOperationRoutes(openapi, originUrl) : [])]);
+      if (passTurn) await passTurn();
       // Same enrichment as the manifest path. A seller discovered through the
       // FALLBACK surfaces is even less likely to have published a price, so
       // skipping it here would leave the worst-served sellers unpriced.
       carryForwardLearnedQuotes(tools, prev);
+      if (passTurn) await passTurn();
       // Crawl-local, as on the manifest path: the probe body only.
       const probeExamples = openapi ? openapiProbeExamples(openapi, originUrl, new Map()) : null;
       // In memory only, for a re-price; this branch's reads are unconditional.
       probeExampleMemo.set(originUrl, "manifest", null);
       probeExampleMemo.set(originUrl, "openapi", probeExamples);
       await enrichLiveQuotes(tools, originUrl, { deadlineAt, redirectedTo: prev?.redirectedTo ?? null, probeExamples });
+      if (passTurn) await passTurn();
       // A real (non-synthesized) manifest from a past crawl is kept; a stale
       // synthesized one is rebuilt so a newly appeared openapi title wins.
       const keepManifest = prev?.manifest && !prev.manifest.synthesized ? prev.manifest : null;
+      const manifest = keepManifest ||
+        (openapi
+          ? synthManifestFromOpenapi(originUrl, openapi, tools)
+          : synthManifestFromBazaar(originUrl, bazaarTools));
+      if (passTurn) await passTurn();
       cache.set(originUrl, {
         // A fresh tool list: the total is read from it, not the old entry
         // (a seller that shrank from 77,000 tools to 6,000 reads 6,000).
         ...freshListBase(prev),
-        manifest:
-          keepManifest ||
-          (openapi
-            ? synthManifestFromOpenapi(originUrl, openapi, tools)
-            : synthManifestFromBazaar(originUrl, bazaarTools)),
+        manifest,
         openapiSummary: openapi ? { paths: Object.keys(openapi.paths || {}).length } : prev?.openapiSummary ?? null,
         tools,
         fetchedAt: Date.now(),

@@ -507,7 +507,7 @@ export const SEARCH_TOOLS = [
     category: "web",
     price: "$0.02",
     description:
-      "Live image search: ranked image results (title, source page, image URL, thumbnail URL, dimensions) from an independent search index as clean JSON. Strict safe-search is on by default.",
+      "Search the web for images by text query: up to 50 ranked results, each with title, source page URL, full-size image URL, a reduced-size copy URL and pixel width and height, from an independent search index as clean JSON. Strict safe-search is on by default.",
     tags: ["search", "images", "visual", "research"],
     discovery: {
       input: { q: "san francisco golden gate bridge sunset", count: 5 },

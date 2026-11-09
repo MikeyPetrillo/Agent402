@@ -613,5 +613,13 @@ rmSync(TMP, { recursive: true, force: true });
   rmSync(outer, { recursive: true, force: true });
 }
 
+// The restart-orphan message scopes "not charged": a Tempo transfer sent before
+// the run is recorded as owed (src/tempo-push-debts.js PUSH_EXCEPTION).
+{
+  const { readFileSync: rf } = await import("node:fs");
+  const src = rf(new URL("../src/mcp-tasks.js", import.meta.url), "utf8");
+  ok(/ORPHAN_MESSAGE = `[^`]*not charged[^`]*\$\{PUSH_EXCEPTION\}/.test(src) && /ORPHAN_ERROR[^\n]*not charged\$\{PUSH_EXCEPTION\}/.test(src), "the restart-orphan messages carry the Tempo push exception");
+}
+
 console.log(`\ntest-mcp-tasks: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

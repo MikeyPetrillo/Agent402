@@ -139,7 +139,7 @@ export async function recoverAlreadyOnChain(ctx, { saleByTx = null, prove = prov
   if (typeof nonce !== "string" || !nonce) return { recovered: false, reason: "no EIP-3009 authorization in the payload" };
   // The first request to reach settle with this authorization owns it; a
   // replay that arrives while (or after) the original settles does not.
-  const nonceKey = nonceClaimKey(network, nonce);
+  const nonceKey = nonceClaimKey(network, nonce, ctx?.paymentPayload?.payload?.authorization?.from || "");
   const nonceOwner = await claimSettlementKey(nonceKey, state.id, { ttlSeconds: INFLIGHT_TTL_SECONDS });
   if (!nonceOwner.claimed) return { recovered: false, reason: "another request owns this authorization" };
   state.nonceKey = nonceKey;

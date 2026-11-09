@@ -24,6 +24,7 @@
 //      for a 4xx or offer-less 402/401 the caller's own input produced.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import "./lib/file-mode.js"; // file backends: never the caller's database or Redis
+import { mintTempoTestCredential } from "./lib/tempo-test-credential.js";
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import { mkdtempSync, readFileSync, existsSync } from "node:fs";
@@ -437,7 +438,7 @@ const near = (a, b) => Math.abs(a - b) < 1e-9;
   const tsock = new Set();
   tsrv.on("connection", (s) => { tsock.add(s); s.on("close", () => tsock.delete(s)); });
   await new Promise((r) => tsrv.listen(0, "127.0.0.1", r));
-  const tempoBuy = () => payTempo(`http://127.0.0.1:${tsrv.address().port}/v1/scrape`, { method: "POST", body: {}, maxAtomic: 5000n, timeoutMs: 3500, createCredential: async () => "Payment ZmFrZQ", proof: async () => 4000 }).then(() => null, (e) => e);
+  const tempoBuy = () => payTempo(`http://127.0.0.1:${tsrv.address().port}/v1/scrape`, { method: "POST", body: {}, maxAtomic: 5000n, timeoutMs: 3500, createCredential: async (res402) => mintTempoTestCredential(res402), proof: async () => 4000 }).then(() => null, (e) => e);
   for (const mode of ["reject", "fail", "hang"]) {
     tempoMode = mode;
     const e = await tempoBuy();
@@ -613,8 +614,8 @@ const near = (a, b) => Math.abs(a - b) < 1e-9;
   ok(/payExternal: \(url, opts\) => \{ const o = \{ \.\.\.opts, memoizeDelivery: true \}; return opts\?\.chain === "tempo" \? payTempo\(url, o\) : payX402\(url, o\); \}/.test(server),
     "only the router's own purchases opt into the memos, on both rails (server.js payExternal)");
   const pay = readFileSync(new URL("../src/x402-buyer.js", import.meta.url), "utf8");
-  ok(/if \(memoizeDelivery\) noteSellerRefusal\(url, chain, 402\)/.test(pay) && /const memoize = memoizeDelivery && \(paid\.status === 402 \|\| paid\.status === 401\) && paidRefusalCarriesChallenge\(paid\.headers, refusalText\);\n\s*if \(memoize\) noteSellerRefusal\(url, chain, paid\.status\)/.test(pay),
-    "both refusal-memo writes in the payer are gated on the router's opt-in and keyed by the route; the paid-retry one also on a 402/401 carrying the seller's offer");
+  ok(/if \(memoizeDelivery\) noteSellerRefusal\(url, chain, 402\)/.test(pay) && /const memoize = memoizeDelivery && \(paid\.status === 402 \|\| paid\.status === 401\) && paidRefusalCarriesChallenge\(paid\.headers, refusalText\) && postSendRefusalIsSellers\(url, chain, \{ proven: !allowUnproven \}\);\n\s*if \(memoize\) noteSellerRefusal\(url, chain, paid\.status\)/.test(pay),
+    "both refusal-memo writes in the payer are gated on the router's opt-in and keyed by the route; the paid-retry one also on a 402/401 carrying the seller's offer and on the refusal not being a chain-wide pattern");
   ok(/if \(memoizeDelivery\) clearSellerDeliveryFailure\(sellerOrigin, chain\);/.test(pay) && !/^\s*clearSellerDeliveryFailure\(sellerOrigin, chain\);/m.test(pay),
     "the chain-proven refusal clears the delivery memo only on the router's opt-in");
   ok(/if \(payable\.amount != null && payable\.maxAmountRequired != null && !sameAtomic\(payable\.amount, payable\.maxAmountRequired\)\) \{\n\s*if \(memoizeDelivery\) noteSellerRefusal\(url, chain, 402\);/.test(pay),
@@ -622,8 +623,8 @@ const near = (a, b) => Math.abs(a - b) < 1e-9;
   const refusalCalls = pay.match(/^.*noteSellerRefusal\(.*$/gm) || [];
   const gatedCalls = refusalCalls.filter((l) => /^\s*if \((memoizeDelivery|memoize)\) noteSellerRefusal\(/.test(l));
   const definitions = refusalCalls.filter((l) => /^export function noteSellerRefusal\(/.test(l));
-  ok(refusalCalls.length === 5 && gatedCalls.length === 4 && definitions.length === 1,
-    "no other refusal-memo write exists in the payer (definition + four gated calls: domain refusal, the token's own domain off Base, split price, paid retry)");
+  ok(refusalCalls.length === 6 && gatedCalls.length === 5 && definitions.length === 1,
+    "no other refusal-memo write exists in the payer (definition + five gated calls: a challenge for another resource, domain refusal, the token's own domain off Base, split price, paid retry)");
 }
 
 loud();

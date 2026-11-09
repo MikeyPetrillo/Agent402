@@ -24,6 +24,38 @@ import { FLAGSHIP_SLUGS, FLAGSHIP_MCP_NAMES } from "./mcp-flagship.js";
 import { creditsSalesEnabled, creditsPrepaymentPhrase } from "./credits-sales.js";
 import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
 import { meteredRoutesInline, meteredFromPrice, meteredQuoteSentence, meteredDefaultModel, flatTiersLine } from "./metered-lead.js";
+// The buying-at-volume guide quotes each limit from the code that enforces it.
+import { unpaidQuoteBudgetPerHour, METERED_UNPAID_QUOTES_PER_MIN, METERED_UNPAID_QUOTES_PER_HOUR, PAID_CLIENT_QUOTE_MULTIPLIER, PAID_CLIENT_METERED_QUOTES_PER_MIN, PAID_CLIENT_METERED_QUOTES_PER_HOUR } from "./unpaid-quote-budget.js";
+import { PAID_QUOTE_TRUST_MINUTES, METERED_QUOTE_CREDITS_PER_CALL } from "./paid-quote-trust.js";
+import { MAX_FAILS as SETTLE_BREAKER_MAX_FAILS, WINDOW_MS as SETTLE_BREAKER_WINDOW_MS, HARD_MAX_FAILS as SETTLE_BREAKER_HARD_MAX } from "./gateway-settle-breaker.js";
+import { ASYNC_JOBS_PER_CLIENT } from "./async-jobs.js";
+import { IDEM_TTL_MS } from "./idempotency-store.js";
+import { IDEM_MAX_BODY_LABEL } from "./idempotency-limits.js";
+import { LATE_SETTLE_EXCEPTION } from "./front-door.js";
+import { AGENT402_MCP_VERSION } from "./mcp-flagship.js";
+import { OCR_LARGE_PIXELS } from "./tools/ocr-kit.js";
+import { asyncProfileOf } from "./slow-routes.js";
+import { needsAsyncOrWait } from "./slow-sync-window.js";
+import { COMPOSITE_GUARD_LIMITS, isLongRunningSlug } from "./composite-spend-guard.js";
+import { UNPAID_BODY_MAX_BYTES, UNPAID_LIMITS as LARGE_BODY_UNPAID } from "./large-body-gate.js";
+// The report and media routes' per-buyer guard, read from the module that
+// enforces it (its env overrides included).
+const COMPOSITE_GUARD = COMPOSITE_GUARD_LIMITS;
+/** A failure share in prose: 0.5 reads "half", so the guide says "more than half"
+ *  from the limit itself (other shares read as a percentage). */
+export function failShareWords(share) {
+  const words = { 0.25: "a quarter", 0.5: "half", 0.75: "three quarters" };
+  return words[share] ?? `${Math.round(share * 100)} percent`;
+}
+// The large-body gate's unpaid limiter (server.js "large-body-unpaid") reads the
+// same export; it is keyed on the client address alone and has no paid-address raise.
+const LARGE_BODY_UNPAID_PER_MIN = LARGE_BODY_UNPAID.PER_MIN;
+const LARGE_BODY_UNPAID_PER_HOUR = LARGE_BODY_UNPAID.PER_HOUR;
+// The content-pipeline guide reads the speech and transcription caps from their kits.
+import { TTS_TIERS, VOICES as TTS_VOICES, FORMATS as TTS_FORMATS, LITE_FORMATS as TTS_LITE_FORMATS } from "./tools/tts-kit.js";
+import { STT_TIERS, MAX_AUDIO_BYTES as STT_MAX_AUDIO_BYTES } from "./tools/stt-kit.js";
+/** Where the buying-at-volume guide lives (the metered quote limiter's 429 links it). */
+export const BUYING_AT_VOLUME_PATH = "/guides/buying-at-volume";
 // Whether prepaid credits are sold now. Copy that tells a reader to buy a pack
 // is only true while they are; read once at module load, like the env it reads.
 const CREDITS_ON = creditsSalesEnabled();
@@ -37,6 +69,15 @@ const CREDITS_ON = creditsSalesEnabled();
 // /api/pricing.
 const priceUsd = (p) => Number(String(p ?? "").replace(/[^0-9.]/g, ""));
 const fmtUsd = (n) => `$${n.toFixed(n < 0.01 ? 3 : 2)}`;
+/** The long-running routes among `slugs`, as "`a`, `b` and `c`". */
+export function evmOnlyStagesText(slugs) {
+  const longOnes = slugs.filter((s) => isLongRunningSlug(s)).map((s) => `\`${s}\``);
+  if (!longOnes.length) throw new Error(`guide token {{evmOnly:${slugs.join(",")}}} names no long-running route`);
+  return longOnes.length === 1 ? longOnes[0] : `${longOnes.slice(0, -1).join(", ")} and ${longOnes[longOnes.length - 1]}`;
+}
+// Every content-pipeline stage, in the order of its stage table.
+export const PIPELINE_STAGE_SLUGS = ["answer", "research", "v1-chat-metered", "tts-lite", "tts", "tts-hd", "v1-images-fast", "v1-images-pro", "v1-images-edit", "transcribe", "transcribe-pro", "srt-convert", "skill-subtitle-pipeline", "dub", "media-info", "audio-convert", "audio-normalize"];
+const PIPELINE_TOKEN = `{{evmOnly:${PIPELINE_STAGE_SLUGS.join(",")}}}`;
 function resolveGuideTokens(text, catalog) {
   const bySlug = catalog ? new Map(Object.values(catalog).filter((d) => d && d.slug).map((d) => [d.slug, d])) : null;
   const def = (slug) => {
@@ -47,6 +88,24 @@ function resolveGuideTokens(text, catalog) {
   return resolveRailCountTokens(String(text))
     .replace(/\{\{price:([a-z0-9-]+)\}\}/g, (_, slug) => (bySlug ? def(slug).price : "(price on /api/pricing)"))
     .replace(/\{\{amount:([a-z0-9-]+)\}\}/g, (_, slug) => (bySlug ? String(Math.round(priceUsd(def(slug).price) * 1e6)) : "<amount>"))
+    // {{jobs:<slug>[,<slug>]}}: whether a route runs as a job, read from the
+    // async profile the catalog carries (src/slow-routes.js) and the slow-sync
+    // window (SLOW_SYNC_WINDOW_SECONDS): "yes, required" when a paid call
+    // without Prefer: respond-async (or a long enough Prefer: wait) is refused,
+    // "on request" when the route takes the header, "no" otherwise. The slugs
+    // on one row must agree.
+    .replace(/\{\{jobs:([a-z0-9,-]+)\}\}/g, (_, list) => {
+      const answers = [...new Set(list.split(",").map((slug) => {
+        const profile = asyncProfileOf(bySlug ? def(slug) : { slug });
+        return !profile ? "no" : needsAsyncOrWait(profile) ? "yes, required" : "on request";
+      }))];
+      if (answers.length !== 1) throw new Error(`guide token {{jobs:${list}}} names routes that run differently`);
+      return answers[0];
+    })
+    // {{evmOnly:<slug>,...}}: of the routes named, the long-running ones
+    // (isLongRunningSlug), which take x402 exact on EVM chains only, as a
+    // code-formatted list. A list with none of them is an error.
+    .replace(/\{\{evmOnly:([a-z0-9,-]+)\}\}/g, (_, list) => evmOnlyStagesText(list.split(",")))
     .replace(/\{\{routerTiers\}\}/g, () => {
       if (!bySlug) return "The tiers and their prices are listed at [/api/pricing](https://agent402.tools/api/pricing).";
       const rows = [...bySlug.values()]
@@ -232,6 +291,628 @@ the moment it discovers it needs them - and the seller can prove every cent of
 revenue on-chain. Every claim in this guide is verifiable: the server is
 [open source](${REPO_URL}) and settled calls land
 at a [public wallet](https://agent402.tools/api/stats).
+`,
+  },
+  {
+    slug: "buying-at-volume",
+    title: "Buying at volume: limits, retries and spend caps for AI agents",
+    seoTitle: "Buying at volume from an AI agent",
+    description:
+      "Run hundreds or thousands of paid calls in a burst: the limits and their Retry-After, retries that never pay twice, spend caps, job links and the errors to handle.",
+    md: `
+An agent that buys a thousand calls in an hour needs what a buyer of one call
+needs, at a larger scale: a price it can check before it pays, a retry that
+never pays twice, a ceiling on what it spends, and limits it can plan around.
+The limits on this page are rendered from the code that enforces them.
+
+## Before the burst: read the prices
+
+Every route and its list price is in [/api/pricing](https://agent402.tools/api/pricing)
+(free). Each row also names the chains it takes (\`networks\`, null for every
+offered chain) and, on a route that runs as a job, its \`async\` block. Read it
+at the start of each burst rather than from memory: list prices change, and
+each change is on the [changelog](https://agent402.tools/changelog).
+
+\`\`\`bash
+curl -s https://agent402.tools/api/pricing \\
+  | jq -c '.endpoints[] | select(.slug=="onchain-sql") | {path, price, networks}'
+\`\`\`
+
+The 402 is the quote for the request in hand: each \`accepts\` entry carries
+the amount in the asset's smallest unit on that chain, with any settlement
+premium or price floor of the chain included (\`/api/pricing\` lists them under
+\`payment.premiumUsdByNetwork\` and \`payment.minPriceUsdByNetwork\` for the chains
+that have one). On the metered model routes the quote is computed from the
+request body, and the paid retry is priced again from its own body, so send the
+paid retry with the body you were quoted for. Compare the quote with your
+ceiling before you sign; the clients below do that on their own.
+
+## Throughput limits
+
+There is no per-wallet rate limit on paid calls. The limits below bound unpaid reads,
+failed settlements and concurrent heavy runs. Each one answers
+before any payment is taken, and the last column says how long to wait.
+
+| What is counted | Limit | Answer |
+|---|---|---|
+| Unpaid price checks (a request with no payment) to priced catalog routes | ${unpaidQuoteBudgetPerHour().toLocaleString("en-US")} an hour per client address; ${(unpaidQuoteBudgetPerHour() * PAID_CLIENT_QUOTE_MULTIPLIER).toLocaleString("en-US")} an hour for the rest of the clock hour once that address settles a payment, and for ${PAID_QUOTE_TRUST_MINUTES} minutes after each paid call | 429, \`Retry-After\` until the hour turns |
+| Unpaid quotes on \`/v1/metered\` | ${METERED_UNPAID_QUOTES_PER_MIN} a minute and ${METERED_UNPAID_QUOTES_PER_HOUR.toLocaleString("en-US")} an hour per client address; past that, ${METERED_QUOTE_CREDITS_PER_CALL} more for each paid \`/v1/metered\` call from that address, used within ${PAID_QUOTE_TRUST_MINUTES} minutes, up to ${PAID_CLIENT_METERED_QUOTES_PER_MIN} a minute and ${PAID_CLIENT_METERED_QUOTES_PER_HOUR.toLocaleString("en-US")} an hour | 429, \`Retry-After: 60\` |
+| Refused payment credentials on \`/v1/metered\` | the same figures, counted once a credential is refused | 429, \`Retry-After: 60\` |
+| Payments that verified and then failed to settle, per wallet | refused at ${SETTLE_BREAKER_MAX_FAILS} in ${Math.round(SETTLE_BREAKER_WINDOW_MS / 60_000)} minutes while they are more than half of the wallet's outcomes there, or at ${SETTLE_BREAKER_HARD_MAX} whatever it settled | 429 naming when it lifts |
+| Report and media runs that failed to settle or failed after the run, per buyer | blocked for ${Math.round(COMPOSITE_GUARD.BLOCK_MS / 60_000)} minutes at ${COMPOSITE_GUARD.MAX_FAILS} in ${Math.round(COMPOSITE_GUARD.WINDOW_MS / 60_000)} minutes while they are more than ${failShareWords(COMPOSITE_GUARD.MIN_FAIL_SHARE)} of the buyer's outcomes there, or at ${COMPOSITE_GUARD.HARD_MAX_FAILS} whatever it settled | 429 without \`Retry-After\`; the block lifts on its own |
+| Unpaid requests with a body over ${Math.round(UNPAID_BODY_MAX_BYTES / 1024)} KB to a route that reads its price from the body | ${LARGE_BODY_UNPAID_PER_MIN} a minute and ${LARGE_BODY_UNPAID_PER_HOUR.toLocaleString("en-US")} an hour per client address, the same once that address has paid | 429, \`Retry-After: 60\` |
+| Concurrent runs of the report and media routes from one wallet | the wallet's balance covers every run in flight plus the new one | 429, \`Retry-After: 30\` |
+| Jobs per client address | ${ASYNC_JOBS_PER_CLIENT} running at once | 429, \`Retry-After: 30\` |
+
+An IPv6 /64 is one address. A request carrying a payment, a credits key or a
+proof-of-work solution is never counted as an unpaid price check. The report
+and media guard keys a buyer by its signed payer, its verified Tempo sender,
+its credits key or, for any other payment, its address. Once an
+address has paid (a final 200 that settled on any rail, or a credits debit), its
+unpaid price checks read against ${PAID_CLIENT_QUOTE_MULTIPLIER} times the figure for the rest of that clock hour
+and for ${PAID_QUOTE_TRUST_MINUTES} minutes after each paid call. A \`/v1/metered\` quote reads the whole
+body, so past its plain figure each paid \`/v1/metered\` call earns ${METERED_QUOTE_CREDITS_PER_CALL} more quotes (its own
+and one retry), used within ${PAID_QUOTE_TRUST_MINUTES} minutes. A payment credential that is refused still counts. \`Retry-After: 60\` on a \`/v1/metered\` 429 is the
+minute window; an address past the hourly figure waits until its oldest quote in
+the last hour ages out, so a retry loop backs off further after repeated 429s.
+
+How to plan a burst around them:
+
+- A stock x402 client reads the 402 and then sends the paid retry, so each
+  call is one unpaid read plus one paid request, and only the unpaid read is
+  counted. On \`/v1/metered\` an address gets ${METERED_UNPAID_QUOTES_PER_MIN} quotes a minute, plus
+  ${METERED_QUOTE_CREDITS_PER_CALL} for each paid \`/v1/metered\` call, so a steady buyer is paced by its own
+  paid calls, up to ${PAID_CLIENT_METERED_QUOTES_PER_MIN} a minute.
+- Keep the paying wallet funded above everything in flight. Each payment is
+  verified on its own; a wallet that runs dry partway through a burst turns its
+  later calls into failed settlements, which is what the per-wallet limit counts.
+- On a 429 or a 503, wait \`Retry-After\` (or the block named above) and send
+  the call again.
+
+## Retries that never pay twice
+
+On x402 a response of 400 or above is not settled, so a retry after one costs
+nothing extra. For a call that may have succeeded (a timeout, a dropped
+connection), use the replay rules:
+
+- **Send an \`Idempotency-Key\`.** The same key with the same credential (the
+  same signed payment), route, query and body returns the first 200 answer (up
+  to ${IDEM_MAX_BODY_LABEL}, kept ${Math.round(IDEM_TTL_MS / 60_000)} minutes) with
+  \`X-Idempotent-Replay: true\`: the tool does not run again and nothing settles
+  again. A copy that arrives while the first is still running gets 409
+  \`idempotent_request_in_flight\` with \`Retry-After: 2\`; on x402 it is not charged.
+- **On an EVM payment the signed payment is the key.** Send the same request
+  again with the same payment header within ${Math.round(IDEM_TTL_MS / 60_000)} minutes
+  and the first answer comes back marked \`X-Replayed-Answer: 1\`, with no
+  second settlement (identity-bound routes, routes with a lasting effect and
+  streamed calls excepted).
+- **On Solana, send the key yourself.** A Solana payment has no implicit key,
+  so pair an \`Idempotency-Key\` with the exact payment header that went out the
+  first time.
+- **A fresh signature is a new payment.** Sign again only after an answer of
+  400 or above.
+
+Each answer says whether it settled:
+
+- No \`PAYMENT-RESPONSE\` header: nothing settled.
+- \`PAYMENT-RESPONSE\` whose receipt reads \`success: false\`: settlement was
+  refused, nothing moved.
+- \`PAYMENT-RESPONSE\` with a status under 400: charged and served.
+
+${LATE_SETTLE_EXCEPTION}
+
+## Long or slow calls: take a job link
+
+Every route whose \`/api/pricing\` row has an \`async\` block runs as a job: the
+report products, video, the premium image tier, the router's execute tiers and
+the rest the rows mark. Send the paid call with \`Prefer: respond-async\` and it
+answers 202 at once with a \`Location\` job link. Poll \`GET /api/jobs/{id}\`
+(free), waiting \`Retry-After\` between polls, until \`status\` is \`completed\` or
+\`failed\`; \`state\`, \`stage\`, \`progress\` and \`etaSeconds\` say where it is. The
+payment settles only when the result is ready, and on x402 a failed run is not
+charged. A row whose block carries \`preferWait\` also takes
+\`Prefer: wait=<maxSeconds>\` to wait on the connection, and a paid call there
+with neither header is answered 400 before any payment.
+
+With ${ASYNC_JOBS_PER_CLIENT} jobs per client address at once, a burst of slow
+calls is a queue on your side: collect a finished job before you start the
+next. agent402-client and agent402-mcp switch to jobs on their own.
+
+## Spend caps in the clients
+
+Every cap below is checked before a payment is signed, so a quote above it is
+refused with nothing sent.
+
+**agent402-client.** The caps are constructor options, held in the client
+instance's memory; give each worker its own instance with its own share.
+
+\`\`\`js
+import { Agent402 } from "agent402-client";
+import { wrapFetchWithPayment } from "@x402/fetch";
+import { x402Client } from "@x402/core/client";
+import { registerExactEvmScheme } from "@x402/evm/exact/client";
+import { privateKeyToAccount } from "viem/accounts";
+
+const client = new x402Client();
+client.setSpendControls?.(false); // the caps below replace the library default
+registerExactEvmScheme(client, { signer: privateKeyToAccount(process.env.AGENT_KEY) });
+const payFetch = wrapFetchWithPayment(fetch, client);
+
+const a = new Agent402({
+  fetch: payFetch,
+  x402Client: client,   // the caps are checked on the payment that is signed
+  maxPerCallUsd: 0.05,  // refuse any single quote above this
+  dailyLimitUsd: 25,    // rolling 24 hours, this instance
+  maxPerHostUsd: 10,    // rolling 24 hours, per seller host
+});
+const out = await a.call("extract", { url: "https://example.com/article" });
+\`\`\`
+
+A refused call throws \`SpendingLimitError\` naming the cap, the quote and the
+list price. A payment that was sent and answered with an error counts as held
+until its authorization can no longer settle.
+
+**agent402-mcp.** The per-call cap is on by default (\`off\` removes it); the
+session budget is opt-in.
+
+\`\`\`bash
+export AGENT_KEY=0x...                # or SOLANA_AGENT_KEY for a Solana wallet
+export AGENT402_MAX_PER_CALL=0.10     # USD per call
+export AGENT402_BUDGET=20             # USD for the whole session
+export AGENT402_NETWORKS=solana       # pay only on these chains, in this order
+npx -y agent402-mcp@${AGENT402_MCP_VERSION}
+\`\`\`
+
+**agent402-openclaw.** \`maxPerCallUsd\` in the plugin config, or
+\`AGENT402_MAX_PER_CALL_USD\`, defaults to the metered per-call cap below;
+\`off\` removes it only beside \`allowUncappedPayments: true\`.
+
+All three refuse an accept that asks for a signing validity longer than a day,
+and refuse to send a payload signed past it.
+
+## Choosing a rail for volume
+
+| Rail | When it settles | When the call fails |
+|---|---|---|
+| x402 exact on an EVM chain | after the tool answers, only for a response under 400 | not charged; the signed payment is its own replay key |
+| x402 exact on Solana | after the tool answers, only for a response under 400 | not charged; send an \`Idempotency-Key\` for replays |
+| x402 exact on Stellar | after the tool answers, only for a response under 400 | not charged |
+| x402 exact on Algorand | after the tool answers, only for a response under 400 | not charged |
+| x402 exact, Gateway batched (where offered; paid from a Circle Gateway deposit) | settled off chain by Circle Gateway after the tool answers, only for a response under 400 | not charged |
+| MPP \`evm\` charge | the same x402 settlement underneath | not charged |
+| MPP Tempo pull (a signed transaction the relay broadcasts) | broadcast after the tool answers, only for a response under 400 | not charged |
+| MPP Tempo push (a transfer you already sent) | final before the call runs | booked as a refund owed to the paying wallet, repaid after on-chain proof |
+
+On the EVM chains and Tempo pull, a settlement whose outcome is not known when
+the call is answered is read on chain again; one that lands after a failed
+answer is booked as a refund owed and repaid after on-chain proof.
+
+- The report products and other long routes take x402 exact on EVM chains
+  only: their run outlives a Solana payment's recent blockhash, an Algorand
+  transaction's rounds and a Tempo credential. Tempo is also not offered on the
+  identity-bound routes.
+- A Solana payment embeds a recent blockhash that lives about a minute, so sign
+  each payment right before you send it rather than signing a batch ahead.
+- A Solana payment refused for a missing USDC account or too little USDC
+  answers with \`retry: "fund-wallet"\` and a \`Retry-After\`; fund the wallet
+  before the next call.
+- MPP methods appear in the 402 while this instance offers them;
+  [/.well-known/x402](https://agent402.tools/.well-known/x402) lists them.
+- On the metered routes, a 402 carrying an \`upto\` accept lets a wallet with a
+  one-time Permit2 approval for USDC sign the quote as a ceiling and settle
+  actual usage under it.
+
+## Metered chat at volume
+
+- **Model ids.** \`GET /v1/models\` lists every id; send one verbatim. An id the
+  upstream does not list is refused with a 400 before any payment, carrying
+  \`suggestions\` (the closest served ids, at most three) and a \`howToCall\`
+  retried with the first. A version written with a hyphen (\`v4-1\`) is served
+  as the dotted id when that exact id is listed.
+- **Input size.** Every model takes ${TIERS["v1-chat-metered"].maxInputChars.toLocaleString("en-US")} input characters,
+  and a model with a larger context window takes three characters per window
+  token, up to ${METERED_MAX_INPUT_CHARS_CEILING.toLocaleString("en-US")}. \`/v1/models\` publishes each model's
+  own figure as \`x402.meteredMaxInputChars\`. A body over it is refused before
+  payment with code \`input_too_large\`, \`maxInputChars\`, \`inputChars\`,
+  \`hint: "trim-input"\` and \`suggestions\` of models whose window takes it.
+- **Per-call cap.** A request quoting above $${METERED_MAX_QUOTE_USD} is refused
+  with a 400 before any upstream call: lower \`max_tokens\` or the input. On
+  x402 it is not charged.
+
+\`\`\`bash
+curl -s https://agent402.tools/v1/models \\
+  | jq -c '.data[] | select(.x402.meteredMaxInputChars) | {id, maxInputChars: .x402.meteredMaxInputChars}'
+\`\`\`
+
+## Errors to handle
+
+| Status | What it means | What to do |
+|---|---|---|
+| 400 | the input was refused before the tool ran; the body carries \`expected\`, \`required\`, \`example\` and \`howToCall\` (method, URL and a ready body) | fix the request from \`howToCall\`; not charged on x402 |
+| 402 | the quote, or a refused payment; the first-contact 402 body carries the offer, \`howToCall\` and, on a job route, \`async\` | pay, or fund the wallet the refusal names |
+| 409 | the same keyed call is still running | wait \`Retry-After\`, then resend the same key with the same payment header to get its answer |
+| 422 | the tool cannot serve this input (an image too large to read, a body that is not an image) | read \`error\` and the \`howToCall\` note; not charged on x402 |
+| 429 | one of the limits above | wait \`Retry-After\` |
+| 503 | busy or briefly paused; image-ocr reading another image over ${OCR_LARGE_PIXELS / 1e6} megapixels answers \`hint: "large-image-busy"\` | wait \`Retry-After\`, or send a smaller image, which is read at once |
+| 502, 504 with \`attribution: "upstream"\` | a source the tool reads failed (a host timed out or refused the connection) | not your input: retry later or pick another source; not charged on x402 |
+
+A loop that honors all of it, shown with plain \`fetch\` (pass your payment
+\`fetch\` in its place):
+
+\`\`\`js
+const BASE = process.env.AGENT402_URL || "https://agent402.tools";
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function call(path, body, { pay = fetch, tries = 5 } = {}) {
+  // The key replays a stored answer only with the same signed payment; a payment
+  // client signs afresh on each retry, so each retry here is its own paid call.
+  // This loop retries only answers that are not charged on x402.
+  const key = crypto.randomUUID();
+  for (let i = 0; i < tries; i++) {
+    const res = await pay(BASE + path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": key },
+      body: JSON.stringify(body),
+    });
+    if (res.ok) return res.json();
+    if (![409, 429, 502, 503, 504].includes(res.status)) throw new Error(JSON.stringify(await res.json()));
+    const wait = Number(res.headers.get("retry-after")) || 2 ** i;
+    await sleep(wait * 1000);
+  }
+  throw new Error("gave up after " + tries + " tries");
+}
+
+console.log(await call("/api/hash", { text: "hello world" }));
+\`\`\`
+
+The recovery contract in brief is at [/agents.md](https://agent402.tools/agents.md),
+and the whole service at [/llms.txt](https://agent402.tools/llms.txt). A worked
+chain of paid stages, from research to subtitles, is in
+[content pipelines](/guides/content-pipeline).
+`,
+  },
+  {
+    slug: "content-pipeline",
+    title: "Content pipelines: research, script, voice, images and subtitles from one wallet",
+    seoTitle: "A content pipeline for AI agents, paid per call",
+    description:
+      "A recipe for podcast, short-video and voiceover pipelines: research, script, speech, images, transcripts, subtitles, dubbing and media checks, each stage one paid call from one wallet, no API keys.",
+    md: `
+A content pipeline turns a topic into a finished piece: find the facts, write
+the script, voice it, illustrate it, transcribe it, subtitle it, dub it and
+check the files. Here each stage is one paid call to the same service, paid
+from one wallet over x402 or MPP, with no API key and no account to open.
+
+Most stages are model-backed: a model answers, writes, speaks, draws, listens
+or translates. Subtitle conversion and the media checks are deterministic code.
+
+## The stages
+
+| Stage | Slug | Price | Model-backed | Runs as a job |
+|---|---|---|---|---|
+| Answer with citations | \`answer\` | {{price:answer}} | yes | {{jobs:answer}} |
+| Research report | \`research\` | {{price:research}} | yes | {{jobs:research}} |
+| Script | \`v1-chat-metered\` | quoted per request, from {{price:v1-chat-metered}} | yes | {{jobs:v1-chat-metered}} |
+| Voiceover | \`tts-lite\` | {{price:tts-lite}} | yes | {{jobs:tts-lite}} |
+| Voiceover | \`tts\`, \`tts-hd\` | quoted from the text, from {{price:tts}} and {{price:tts-hd}} | yes | {{jobs:tts,tts-hd}} |
+| Images | \`v1-images-fast\`, \`v1-images-pro\` | {{price:v1-images-fast}}, {{price:v1-images-pro}} | yes | {{jobs:v1-images-fast,v1-images-pro}} |
+| Image edit | \`v1-images-edit\` | {{price:v1-images-edit}} | yes | {{jobs:v1-images-edit}} |
+| Transcription | \`transcribe\`, \`transcribe-pro\` | {{price:transcribe}}, {{price:transcribe-pro}} | yes | {{jobs:transcribe,transcribe-pro}} |
+| Subtitles | \`srt-convert\` | {{price:srt-convert}}, or free with proof-of-work | no | {{jobs:srt-convert}} |
+| Subtitles in one call | \`skill-subtitle-pipeline\` | {{price:skill-subtitle-pipeline}} | yes | {{jobs:skill-subtitle-pipeline}} |
+| Dubbing | \`dub\` | quoted by tier, from {{price:dub}} | yes | {{jobs:dub}} |
+| Media probe | \`media-info\` | {{price:media-info}} | no | {{jobs:media-info}} |
+| Audio track to MP3 | \`audio-convert\` | {{price:audio-convert}} | no | {{jobs:audio-convert}} |
+| Loudness | \`audio-normalize\` | {{price:audio-normalize}} | no | {{jobs:audio-normalize}} |
+
+Prices are read from [/api/pricing](https://agent402.tools/api/pricing) when
+this page renders. Each example below is the tool's published example.
+
+## Set up once
+
+One client pays every stage. The caps are checked before each payment is
+signed, against the quote for that request.
+
+\`\`\`js
+import { Agent402 } from "agent402-client";
+import { wrapFetchWithPayment } from "@x402/fetch";
+import { x402Client } from "@x402/core/client";
+import { registerExactEvmScheme } from "@x402/evm/exact/client";
+import { privateKeyToAccount } from "viem/accounts";
+
+const client = new x402Client();
+client.setSpendControls?.(false); // the caps below replace the library default
+registerExactEvmScheme(client, { signer: privateKeyToAccount(process.env.AGENT_KEY) });
+const payFetch = wrapFetchWithPayment(fetch, client);
+
+const a = new Agent402({
+  fetch: payFetch,
+  x402Client: client,  // the caps are checked on the payment that is signed
+  maxPerCallUsd: 1,    // refuse any single quote above this
+  dailyLimitUsd: 25,   // rolling 24 hours, this instance
+});
+\`\`\`
+
+Over plain HTTP, the same request without a payment answers 402 with the
+quote, and your x402 or MPP client pays it:
+
+\`\`\`bash
+curl -i -X POST https://agent402.tools/api/tts \\
+  -H 'Content-Type: application/json' \\
+  -d '{"text":"Hello from Agent402!","voice":"alloy","format":"mp3"}'
+# HTTP/2 402, the x402 accepts in PAYMENT-REQUIRED and the MPP challenges in WWW-Authenticate
+\`\`\`
+
+## 1. Research
+
+\`answer\` (\`GET /api/answer\`) returns a short answer grounded in live web
+search, with its citations:
+
+\`\`\`js
+const brief = await a.call("answer", { q: "what is the x402 payment protocol?" });
+// { query, answer, citations: [{ url, snippet, number }], citationCount }
+\`\`\`
+
+\`research\` (\`POST /v1/research\`) plans sub-questions, runs several searches
+and returns one cited report. It runs as a job: the client sends
+\`Prefer: respond-async\` and collects the report from the job link.
+
+\`\`\`js
+const report = await a.call("research", { query: "What are the leading agentic-payment protocols in 2026 and how do they differ?", recency: "year" });
+// { report, sources: [{ n, title, url, snippet }], sub_questions, meta }
+\`\`\`
+
+## 2. Script
+
+The metered chat route quotes each request from its input and \`max_tokens\`,
+so a short script costs what a short script uses. Name any id from
+[/v1/models](https://agent402.tools/v1/models) in \`model\`, or leave it out for
+the default.
+
+\`\`\`js
+const messages = [
+  { role: "system", content: "Write a 60-second voiceover script in plain sentences." },
+  { role: "user", content: brief.answer },
+];
+const draft = await a.call("v1-chat-metered", { max_tokens: 600, messages });
+const script = draft.choices[0].message.content;
+\`\`\`
+
+The flat tiers take the same body at one price per call, from
+\`/v1/nano/chat/completions\` ({{price:v1-chat-nano}}) up.
+
+## 3. Voiceover
+
+\`\`\`js
+const voice = await a.call("tts", { text: "Hello from Agent402!", voice: "alloy", format: "mp3" });
+const audio = Buffer.from(voice.audio, "base64"); // { model, voice, format, audio, chars }
+\`\`\`
+
+- **Tiers.** \`tts-lite\` for high-volume narration where timbre matters less,
+  \`tts\` for natural speech, \`tts-hd\` for the most expressive delivery (it
+  reads inline tags such as \`[whispering]\` as cues). One request shape for all three.
+- **Length.** ${TTS_TIERS.tts.maxChars.toLocaleString("en-US")} characters a call on \`tts\` and \`tts-hd\`,
+  ${TTS_TIERS["tts-lite"].maxChars.toLocaleString("en-US")} on \`tts-lite\`. Split a longer script at sentence ends and send one call per part.
+- **Voices.** The ten standard names on every tier: ${[...TTS_VOICES].map((v) => "`" + v + "`").join(", ")}.
+  \`tts\` and \`tts-hd\` also take the named voices listed on [/speech](https://agent402.tools/speech).
+- **Formats.** ${[...TTS_FORMATS].map((f) => "`" + f + "`").join(", ")} on \`tts\` and \`tts-hd\`; ${[...TTS_LITE_FORMATS].map((f) => "`" + f + "`").join(" or ")} on \`tts-lite\`.
+
+## 4. Images
+
+\`/v1/images/fast\` and \`/v1/images/pro\` take a prompt and return one picture
+inline on the OpenAI images wire; pro is the higher-fidelity tier.
+
+\`\`\`js
+const cover = await a.call("v1-images-fast", { prompt: "A minimalist line drawing of a lighthouse at dawn" });
+const jpeg = Buffer.from(cover.data[0].b64_json, "base64");
+\`\`\`
+
+\`/v1/images/edits\` changes a picture you already have: send one to four PNG
+or JPEG references (base64 or \`data:\` URLs) and describe the change in the
+prompt. The output follows the first reference's aspect ratio.
+
+\`\`\`js
+const ref = "data:image/jpeg;base64," + cover.data[0].b64_json;
+const edited = await a.call("v1-images-edit", { prompt: "Add a warm sunrise glow behind the lighthouse", image: ref });
+\`\`\`
+
+## 5. Transcription
+
+\`transcribe\` reads audio from a public URL, up to ${STT_TIERS.transcribe.maxMinutes} minutes
+(\`transcribe-pro\` up to ${STT_TIERS["transcribe-pro"].maxMinutes}) and ${Math.round(STT_MAX_AUDIO_BYTES / 1024 / 1024)} MB. Add
+\`diarize: true\` for speaker labels and word timestamps, which the subtitle
+stage turns into timed cues.
+
+\`\`\`js
+const t = await a.call("transcribe", { url: "https://agent402.tools/fixtures/sample-speech.wav", diarize: true });
+// { text, language, duration, speakers, words: [{ word, start, end, speaker }] }
+\`\`\`
+
+For audio you hold as bytes, \`POST /v1/audio/transcriptions\` takes the same
+models as a multipart \`file\` upload (\`/v1/pro/audio/transcriptions\` for the
+longer cap).
+
+## 6. Subtitles
+
+\`srt-convert\` turns timed cues into SRT, WebVTT, plain text or JSON. It is
+pure CPU, so agent402-client pays it with a proof-of-work solution and no
+wallet.
+
+\`\`\`js
+const words = t.words.filter((w) => w.word.trim() && w.start != null);
+const cues = [];
+for (let i = 0; i < words.length; i += 7) {
+  const line = words.slice(i, i + 7);
+  cues.push({ start: Math.round(line[0].start * 1000), end: Math.round(line.at(-1).end * 1000), text: line.map((w) => w.word).join(" ") });
+}
+const subs = await a.call("srt-convert", { cues, to: "srt" });
+// { detected, to, count, result }: result is the SRT file
+\`\`\`
+
+The subtitle-pipeline skill pack runs transcribe, srt-convert and text-stats
+in one payment. Its file is one cue spanning the clip, so use the diarized
+words above when each line needs its own timing.
+
+\`\`\`js
+const pack = await a.call("skill-subtitle-pipeline", { url: "https://agent402.tools/fixtures/sample-speech.wav", format: "vtt" });
+\`\`\`
+
+## 7. Dubbing
+
+\`dub\` translates a text and speaks the translation in one call. \`tier\`
+\`"hd"\` speaks it on the tts-hd voice, and the quote is the sum of the two
+steps. The text cap applies to the translation.
+
+\`\`\`js
+const es = await a.call("dub", { text: "Hello from Agent402! Every tool is paid per call.", targetLanguage: "es", voice: "nova", format: "mp3", json: true });
+// { translation, detectedSourceLanguage, targetLanguage, tier, voice, format, audio, chars }
+\`\`\`
+
+Without \`json: true\` the answer is the audio bytes, with the translation in
+the \`X-Dub-Translation\` header (base64 JSON).
+
+## 8. Media checks
+
+Each reads a public URL and runs ffprobe or ffmpeg on it.
+
+\`\`\`js
+const info = await a.call("media-info", { url: "https://agent402.tools/fixtures/sample-audio.wav" });
+// { formatName, durationSec, bitrate, bytes, streams: [{ type, codec, sampleRate, channels }] }
+const level = await a.call("audio-normalize", { url: "https://agent402.tools/fixtures/sample-audio.wav", targetLufs: -16 });
+// { format: "mp3", targetLufs, truePeakDb, bytes, mp3Base64 }
+const track = await a.call("audio-convert", { url: "https://agent402.tools/fixtures/sample-audio.wav", bitrate: "192k" });
+// { format: "mp3", bitrate, bytes, mp3Base64 }: the audio track of a video, as MP3
+\`\`\`
+
+## End to end
+
+The stages that read a URL (transcription, the media checks) need the audio
+at a public address, so the flow puts each file where your pipeline already
+keeps its media. Stages that need only the script run side by side.
+
+\`\`\`js
+// Your storage: put the bytes somewhere public and return the URL.
+async function publish(name, bytes) {
+  throw new Error("upload " + name + " (" + bytes.length + " bytes) and return its public URL");
+}
+
+const topic = "what is the x402 payment protocol?";
+const brief = await a.call("answer", { q: topic });
+
+const messages = [
+  { role: "system", content: "Write a 60-second voiceover script in plain sentences." },
+  { role: "user", content: brief.answer },
+];
+const draft = await a.call("v1-chat-metered", { max_tokens: 600, messages });
+const script = draft.choices[0].message.content;
+
+const [voice, cover, es] = await Promise.all([
+  a.call("tts", { text: script, voice: "nova", format: "mp3" }),
+  a.call("v1-images-fast", { prompt: "Cover art as a minimalist line drawing: " + topic }),
+  a.call("dub", { text: script, targetLanguage: "es", voice: "nova", format: "mp3", json: true }),
+]);
+
+const rawUrl = await publish("episode-raw.mp3", Buffer.from(voice.audio, "base64"));
+const level = await a.call("audio-normalize", { url: rawUrl, targetLufs: -16 });
+const episodeUrl = await publish("episode.mp3", Buffer.from(level.mp3Base64, "base64"));
+const info = await a.call("media-info", { url: episodeUrl });
+
+const t = await a.call("transcribe", { url: episodeUrl, diarize: true });
+const words = t.words.filter((w) => w.word.trim() && w.start != null);
+const cues = [];
+for (let i = 0; i < words.length; i += 7) {
+  const line = words.slice(i, i + 7);
+  cues.push({ start: Math.round(line[0].start * 1000), end: Math.round(line.at(-1).end * 1000), text: line.map((w) => w.word).join(" ") });
+}
+const subs = await a.call("srt-convert", { cues, to: "srt" });
+
+console.log(info.durationSec, subs.count, es.translation, a.spendingSummary());
+\`\`\`
+
+Cite the sources \`brief.citations\` names in the episode's show notes;
+\`a.spendingSummary()\` totals what the run spent.
+
+## Pipeline notes
+
+### Slow stages and jobs
+
+A route runs as a job when its [/api/pricing](https://agent402.tools/api/pricing)
+row carries an \`async\` block. In this recipe:
+
+- \`research\` requires one: send \`Prefer: respond-async\` (202 and a job
+  link at once) or \`Prefer: wait=<maxSeconds>\`; a paid call with neither
+  is answered 400 before any payment. agent402-client sends the header for you.
+- \`v1-images-fast\` and \`v1-images-pro\` take \`Prefer: respond-async\` on
+  request. They answer in seconds, so waiting on the connection also works.
+- Every other stage answers on the connection, and the header is ignored there.
+
+Poll \`GET /api/jobs/{id}\` (free), waiting \`Retry-After\` between polls,
+until \`status\` is \`completed\` or \`failed\`. A client address runs
+${ASYNC_JOBS_PER_CLIENT} jobs at once, so a batch of research reports is a queue
+on your side.
+
+### Spend caps
+
+\`maxPerCallUsd\`, \`dailyLimitUsd\` and \`maxPerHostUsd\` are checked before a
+payment is signed. On the quoted stages (\`tts\`, \`tts-hd\`, \`dub\`, metered
+chat) the check reads the quote for that request, so a longer script meets
+the cap before it is paid. A refused call throws \`SpendingLimitError\`.
+The caps live in one client instance: give each worker its own.
+
+In agent402-mcp, \`AGENT402_MAX_PER_CALL\` and \`AGENT402_BUDGET\` set the
+per-call and session ceilings.
+
+### At volume
+
+A pipeline that renders hundreds of episodes meets the per-address limits,
+retries and replay rules on [buying at volume](/guides/buying-at-volume):
+send an \`Idempotency-Key\` per stage so a retried stage returns its first
+answer instead of paying twice, and wait \`Retry-After\` on a 429 or 503.
+
+### Choosing a rail
+
+${PIPELINE_TOKEN} run long enough that they take x402 exact on
+EVM chains only; their /api/pricing rows list those \`networks\`. Every other
+stage here takes every offered chain, over x402 or MPP.
+
+| Rail | When it settles | A stage that fails |
+|---|---|---|
+| x402 exact on an EVM chain | after the tool answers, only for a response under 400 | not charged |
+| x402 exact on Solana | after the tool answers, only for a response under 400 | not charged |
+| MPP \`evm\` charge | the same x402 settlement underneath | not charged |
+| MPP Tempo pull (a signed transaction) | broadcast after the tool answers, only for a response under 400 | not charged on Tempo pull: the transaction is never broadcast |
+| MPP Tempo push (a transfer already sent) | final before the call runs | the transfer is booked as a refund owed to the paying wallet, repaid after on-chain proof |
+
+Tempo is offered on every stage except ${PIPELINE_TOKEN}. A
+pull credential (\`payload\` type \`transaction\`) is a signed transaction
+the relay broadcasts only once the stage has answered under 400, so a stage
+that fails is never broadcast. A push credential (\`payload\` type \`hash\`)
+is a transfer you already sent: it is final before the stage runs, so a stage
+that fails then is repaid from the refund ledger. For a pipeline, pay with
+pull credentials: pin \`mode: "pull"\` on the Tempo charge method, since a
+JSON-RPC wallet account sends push by default. If your connection closes
+before the answer, a pull payment can still be broadcast, and it is then
+booked as owed in the same way.
+
+\`\`\`js
+import { Mppx, tempo } from "mppx/client";
+import { privateKeyToAccount } from "viem/accounts";
+
+const account = privateKeyToAccount(process.env.AGENT_KEY);
+const mpp = Mppx.create({ methods: [tempo.charge({ account, mode: "pull" })], polyfill: false });
+const res = await mpp.fetch("https://agent402.tools/api/tts", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ text: "Hello from Agent402!", voice: "alloy", format: "mp3" }),
+});
+console.log(res.status, res.headers.get("payment-receipt"));
+\`\`\`
+
+The agent402-client caps read x402 quotes. On Tempo, compare each
+challenge's amount with your own ceiling before your MPP client pays it. The
+MPP methods this instance offers are listed at
+[/.well-known/x402](https://agent402.tools/.well-known/x402), and the wire
+itself is in [x402 and MPP](/guides/x402-and-mpp).
 `,
   },
   {

@@ -40,7 +40,14 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   no handler, no settle, no sale), except on a `hasLastingEffect` route, an identity-bound route
   (a settled header can be rebuilt from chain data) or a streamed call; the store
   (`src/idempotency-store.js`) is Redis-shared across replicas. Replays are counted per slug on
-  `/__operator/tool-failures.json`.
+  `/__operator/tool-failures.json`. A claim is renewed while its run is in flight and released when
+  the run ends; `IDEM_INFLIGHT_MAX_MS` (default 2 hours, at least 1000) bounds how long one is held
+  for a run whose response never ends (`src/idempotency-store.js`).
+- **Credits holds:** a credits hold is debited on a final 200 and released otherwise; one whose buyer
+  left before the first byte is decided when the response ends, and one nothing ends is released after
+  `CREDITS_ABANDONED_HOLD_MS` (default 10 minutes). A running request keeps its hold fresh against
+  that sweep for at most `CREDITS_HOLD_REFRESH_MAX_MS` (default 6 hours, never under the abandoned
+  window) (`src/credits.js`).
 - **Settle-failure breakers:** `src/gateway-settle-breaker.js` (per wallet and global on `/v1`,
   per wallet on other wallet-only tools). A wallet is refused only when it holds
   `GATEWAY_SETTLE_BREAKER_MAX` failures in the window AND they are more than
@@ -219,3 +226,11 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
 - **Algorand network id:** `src/avm-network.js`: the CAIP-2 (32-character) id is what every 402
   carries; the genesis-hash spelling is folded on the paid path (`src/x402-v1-accepts.js`) and read
   as an alias in seller rows and the buyer.
+- **Replay store word:** `/api/gateway-status` reports `replayStore` (ok or pending). pending means a
+  settled payment's consumed mark could not be written to the shared store yet; one shared retry loop
+  writes it, and the local consumed mark keeps the payment from running again meanwhile.
+- **Paid-quote trust:** an address with a settled paid 200 gets 10x the unpaid price-check figures for
+  10 minutes after each paid call (`PAID_CLIENT_QUOTE_MULTIPLIER`), keyed by an HMAC of the client key.
+  On `/v1/metered` the raise is earned per call: past the plain figure each settled `/v1/metered` call
+  grants `METERED_QUOTE_CREDITS_PER_CALL` (2) quotes, held up to the raised per-minute figure for the
+  window, on this process only (`src/paid-quote-trust.js` `creditMetered`).

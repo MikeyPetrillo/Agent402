@@ -31,6 +31,9 @@ for (const p of [
   "/api/v1/hosts/:domain/refresh",
   "/api/v1/hosts/%7Bdomain%7D?refresh=1",
   "/api/v1/hosts/%7bdomain%7d",
+  "/v1/premium/mainnet/batch-validate?payloads=%3Curl-encoded-json-array%3E",
+  "/v1/x?payloads=<json-array>",
+  "/v1/x?q=1&key=YOUR_API_KEY",
 ]) ok(RE.test(p), `template flagged: ${p}`);
 
 // Concrete URLs: callable, must NOT be flagged. A false positive here hides a
@@ -42,17 +45,34 @@ for (const p of [
   "/api/time/12:30",              // a colon that is not a path parameter
   "/api/ratio/16:9",
   "/api/hash",
+  "/v1/x?product=basic",
+  "/v1/x?q=a%3Db",
+  "/v1/x?ratio=1%3C2",
 ]) ok(!RE.test(p), `concrete route not flagged: ${p}`);
+
+// Route text is seller-controlled: a hostile route must not hold the loop.
+for (const [label, p] of [["{ x 100k", "/a/" + "{".repeat(100000)], ["%7B x 33k", "/a/" + "%7B".repeat(33000)], ["%3C x 33k", "/a?x=" + "%3C".repeat(33000)], ["< x 100k", "/a?x=" + "<".repeat(100000)]]) {
+  const t0 = performance.now(); RE.test(p); const ms = performance.now() - t0;
+  ok(ms < 250, `a hostile route (${label}) is tested in bounded time (${ms.toFixed(1)} ms)`);
+}
+
+// One predicate for every surface: the seller detail's dispatch label reads
+// the same test the router does, never its own inline regex.
+const serverSrc = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+ok(!/\/\[\{\}\]\/\.test\(/.test(serverSrc) && /urlTemplate: isUrlTemplateRoute\(t\.route\)/.test(serverSrc), "the seller detail labels templates with the shared isUrlTemplateRoute");
 
 // The row still has to SAY which parameters it wants - we return the row rather
 // than hiding the seller, so the agent needs to know what to substitute.
 const g = /const URL_TEMPLATE_RE_G = \/(.*)\/g;/.exec(src);
 ok(!!g, "the extraction regex is declared");
 const REG = new RegExp(g[1], "g");
-const names = (route) => [...route.matchAll(REG)].map((m) => m[1] || m[2] || m[3]).filter(Boolean);
+const names = (route) => [...route.matchAll(REG)].map((m) => m[1] || m[2] || m[3] || m[4] || m[5] || m[6]).filter(Boolean);
 ok(names("/stock/{symbol}")[0] === "symbol", "brace parameter name extracted");
 ok(names("/api/v1/hosts/:domain")[0] === "domain", "colon parameter name extracted");
 ok(names("/api/v1/hosts/%7Bdomain%7D")[0] === "domain", "encoded parameter name extracted");
+ok(names("/v1/b?payloads=%3Curl-encoded-json-array%3E")[0] === "url-encoded-json-array", "an encoded angle-bracket query placeholder is named");
+ok(names("/v1/b?payloads=<json>")[0] === "json", "a raw angle-bracket query placeholder is named");
+ok(names("/v1/b?key=YOUR_API_KEY")[0] === "YOUR_API_KEY", "a YOUR_ query value is named");
 
 // STATEFULNESS: the predicate must not be /g. A global regex advances lastIndex
 // between .test() calls and alternates true/false, which the file already warns

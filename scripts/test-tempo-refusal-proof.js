@@ -43,6 +43,7 @@ const { sellerDeliveryMemoEntries, sellerDeliveryFailingRecently, __resetSellerD
 const guard = await import("../src/external-spend-guard.js");
 const { buildRouteExecuteTool, EXEC_TIERS } = await import("../src/tools/route-execute.js");
 const { Challenge, Credential } = await import("mppx");
+const { tempoTransferCall } = await import("./lib/tempo-test-credential.js");
 const { TxEnvelopeTempo } = await import("ox/tempo");
 const { Secp256k1, Address } = await import("ox");
 
@@ -63,7 +64,7 @@ let validBeforeS = Math.floor(Date.now() / 1000) + 3;
 let lastTxHash = null;
 const mint = async (res402) => {
   const [ch] = Challenge.fromHeadersList(new Headers({ "WWW-Authenticate": res402.headers.get("www-authenticate") }));
-  const env = TxEnvelopeTempo.from({ chainId: 4217, calls: [{ to: TEMPO_USDC, data: "0x" }], nonceKey: 2n ** 256n - 1n, nonce: 0n, validBefore: validBeforeS, gas: 100000n, maxFeePerGas: 1n, maxPriorityFeePerGas: 1n });
+  const env = TxEnvelopeTempo.from({ chainId: 4217, calls: [tempoTransferCall({ recipient: ch.request.recipient, amount: ch.request.amount })], nonceKey: 2n ** 256n - 1n, nonce: 0n, validBefore: validBeforeS, gas: 100000n, maxFeePerGas: 1n, maxPriorityFeePerGas: 1n });
   const sig = Secp256k1.sign({ payload: TxEnvelopeTempo.getSignPayload(env), privateKey: PK });
   const signature = TxEnvelopeTempo.serialize(env, { signature: { type: "secp256k1", signature: sig } });
   lastTxHash = TxEnvelopeTempo.hash(TxEnvelopeTempo.deserialize(signature)).toLowerCase();

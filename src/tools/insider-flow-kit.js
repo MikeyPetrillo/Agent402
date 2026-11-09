@@ -312,7 +312,7 @@ const OUT_EXAMPLE = {
 export const INSIDER_TOOLS = [
   {
     route: "POST /v1/insider-report", name: "Insider flow report (Form 4 transactions)", slug: "insider-report", category: "llm", price: INSIDER_TIERS["insider-report"].price,
-    description: "Name a US ticker and get one cited insider-flow report: every Form 4 against the company in the window with the actual transactions parsed from the filings - open-market buys and sales (who, when, how much, at what price) separated from awards, option exercises and tax withholding - aggregated per insider and as a net flow, with a grounded signal read and a downloadable transactions appendix. SEC EDGAR data, not investment advice. USDC (x402/MPP) or card (Stripe). Not cached.",
+    description: "Name a US ticker and get one cited, model-backed insider-flow report: every Form 4 against the company in the window with the actual transactions parsed from the filings - open-market buys and sales (who, when, how much, at what price) separated from awards, option exercises and tax withholding - aggregated per insider and as a net flow, with a grounded signal read and a downloadable transactions appendix. SEC EDGAR data, not investment advice. USDC (x402/MPP) or card (Stripe). Not cached.",
     tags: ["insider", "form-4", "sec", "edgar", "trades", "officers", "directors", "report", "equity", "agentic-finance", "x402", "mpp"],
     discovery: { bodyType: "json", input: { ticker: "AAPL", days: 90 }, inputSchema: SCHEMA, output: { example: OUT_EXAMPLE } },
     handler: makeInsiderHandler("insider-report"),

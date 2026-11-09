@@ -135,6 +135,7 @@ const DEFAULTS = {
   "src/evm-authorization-state.js": { n: 1, cls: "fixed" },
   "src/facilitator-gas.js": { n: 1, cls: "fixed", note: "the listed facilitators' /supported and the chain RPC, both configured; AbortSignal timeout" },
   "src/facilitator-diagnostics.js": { n: 1, cls: "wrapper" },
+  "src/guides.js": { n: 1, cls: "snippet", note: "the agent loop sample's pay default (pay = fetch) inside a guide's code block; the page prints it, nothing runs it" },
   "src/indexnow.js": { n: 2, cls: "fixed" },
   "src/late-settlements.js": { n: 1, cls: "fixed", note: "the configured chain RPC (evmRpcFor), through rpc() with its timeout" },
   "src/mcp-mpp.js": { n: 1, cls: "loopback" },

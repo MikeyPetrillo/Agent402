@@ -490,6 +490,17 @@ export const ALARMS = [
       "The Tempo subscription gas sponsor (TEMPO_SUBSCRIPTION_FEE_PAYER_KEY) is below the low-water mark (TEMPO_SUBSCRIPTION_FEE_PAYER_LOW_USD, default $0.25) in PATHUSD - the token Tempo charges sponsored fees in, NOT the USDC.e the products are priced in. An empty sponsor fails subscription activations loudly (402, nobody charged) but sends RENEWALS to past_due, so existing subscribers keep being served for free until their grace window ends. Top up with fund-tempo-fee-payer.yml and token=pathusd.",
   },
   {
+    title: "Subscription gas sponsor CEILING reached",
+    // Our own 24 h ceiling on sponsored subscription sends: while it holds,
+    // renewals are refused before broadcast and go past_due, so it pages.
+    verdict: ({ gateway: b }) => {
+      const w = b.subscriptionFeePayer?.ceiling;
+      return w === "reached" ? "bad" : w === "ok" ? "good" : "quiet";
+    },
+    body: () =>
+      "The Tempo subscription gas sponsor reached its rolling 24 h ceiling (MPP_SUB_SPONSOR_DAILY_MAX_TX or MPP_SUB_SPONSOR_DAILY_MAX_USD, src/tempo-sponsor-ceiling.js): every sponsored send is refused before broadcast until the window rolls, so activations fail 402 (nobody charged) and RENEWALS go past_due, which means existing subscribers are served for free until their grace window ends. The server log names the knob that refused. Read the sponsored-send pattern before raising the knob on Railway; the issue closes when subscriptionFeePayer.ceiling reads ok.",
+  },
+  {
     title: "Postgres UNREACHABLE (leads/analytics)",
     verdict: ({ gateway: b }) => {
       const leads = b.databases?.leads?.status;
@@ -561,6 +572,24 @@ The server log carries a [tweet-queue] line for every outcome (ids and status co
     body: ({ gateway: b }) => {
       const w = b.gatewayPending?.status === "full" ? "full" : "unresolved";
       return `/api/gateway-status reports gatewayPending.status=${w}. unresolved: a batched payment Circle Gateway answered as pending is still waiting past its bound; the resolver reads it every ten minutes and keeps it until Gateway reports it settled or failed. Read it on /__operator/gateway-pending.json and look its nonce up in Gateway's transfer history. full: the pending book reached its bound and refused a new entry (the server log names it). A settled, unserved entry becomes an owed refund (refundsOwed). Auto-closes when the word is ok.`;
+    },
+  },
+  {
+    // EVM settlements that failed naming a transaction or an authorization
+    // (src/late-settlements.js): the reconcile pass reads each on chain and
+    // books a landed, unserved one as an owed debt (refundsOwed covers it).
+    // unresolved (kept for a human, or outside the book) and full page; ok
+    // and near_capacity clear (an operator resolution can leave the book near
+    // its bound); unknown does neither. Same title as heartbeat.yml.
+    title: "Late settlements need attention",
+    verdict: ({ gateway: b }) => {
+      const w = b.lateSettlements?.status;
+      if (w === "unresolved" || w === "full") return "bad";
+      return w === "ok" || w === "near_capacity" ? "good" : "quiet";
+    },
+    body: ({ gateway: b }) => {
+      const w = b.lateSettlements?.status === "full" ? "full" : "unresolved";
+      return `/api/gateway-status reports lateSettlements.status=${w}. unresolved: an EVM settlement that failed naming a transaction or an authorization could not be proven landed or absent within a day (or the reads kept failing) and is kept, never dropped; or a booking sits in the journal outside the book; or a booking could not be recorded anywhere in the last day. Unresolved entries are read on chain again every few hours and close themselves once the chain answers. Read them on /__operator/refunds.json (unconfirmedSettlements) and look each transaction up on the chain's explorer, then clear each one with POST /__operator/late-settlements: action resolve, the entry key, an outcome (booked_owed writes the refund debt, paid needs the refund transaction, dismissed when nothing moved to us) and a note saying what was checked. An unrecorded booking (the server log names it) is cleared with action acknowledge_unrecorded and a note. full: the book holds its bound of open entries, and new bookings wait in the journal until there is room (the server log names each). Auto-closes when the word is ok or near_capacity.`;
     },
   },
   {

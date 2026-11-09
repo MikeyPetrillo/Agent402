@@ -48,7 +48,7 @@
  * that does not pass it falls back to the per-process claim on a Redis
  * failure.
  */
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import algosdk from "algosdk";
 import { getTransactionDecoder } from "@solana/kit";
 import { paymentHeaderOf } from "./payer.js";
@@ -340,48 +340,115 @@ export function paymentValidBeforeMs(req) {
  * Replay guard. Redis-backed (shared across replicas) when configured and
  * reachable; otherwise the original per-process fallback below. `consumed`
  * maps a settled nonce → the time it settled; `inFlight` is the set of nonces
- * whose gated call is currently mid-settle. All three methods are now async
- * (a Redis round trip on the common path) - the server.js call site already
- * runs inside an async middleware.
+ * whose gated call is open on this process. All three methods are async (a
+ * Redis round trip on the common path) - the server.js call site already runs
+ * inside an async middleware.
+ *
+ * This process's own marks are read first: a payment it consumed, or holds in
+ * flight, is refused here whichever backend answered when the mark was made,
+ * so a store that fails between begin() and settle() (or recovers between
+ * them) never lets one payment be claimed twice on this process. A consumed
+ * mark is always kept locally as well as in Redis; when the Redis write fails
+ * after its bounded retries the failure is logged and counted
+ * (replayGuardStoreStatus) and the write is retried in the background until
+ * it lands or the hold ends.
+ *
+ * A Redis claim holds a per-claim token: renewals and the drop on settle or
+ * release act only while the name still holds that token, so a claim that
+ * lapsed and was taken by another request is never dropped or kept alive by
+ * its first holder. A claim taken on this process while the store did not
+ * answer is written to the store once it answers, so other replicas see it.
  *
  * Bounded: entries expire after `ttlMs`, or at the authorization's own
  * validBefore plus CONSUMED_VALIDITY_MARGIN_MS when the caller passes it and
  * it is later. The validBefore hold matters for a GRANTED request that was not
  * settled (a hang-up inside the forgiveness budget: the buyer was told it was
  * free): its nonce is still live on chain, so only this mark stops a re-send
- * from settling it. Total LOCAL consumed entries are capped at `maxEntries`
- * with FIFO eviction (Redis expires its own keys via TTL, no separate cap
- * needed). For a settled nonce eviction is safe (the chain refuses it); for an
- * unsettled granted one it is not, which is one reason the paid x402 path
- * requires the shared store whenever one is configured (server.js).
+ * from settling it. Total LOCAL consumed entries, and background writes, are
+ * each capped at `maxEntries` with FIFO eviction (Redis expires its own keys
+ * via TTL, no separate cap needed). For a settled nonce eviction is safe (the
+ * chain refuses it); for an unsettled granted one it is not, which is one
+ * reason the paid x402 path requires the shared store whenever one is
+ * configured (server.js).
  */
-// Drop a legacy-name entry only when it is this payment's own tagged one.
-async function delIfTagged(c, name, tag) {
-  if ((await c.get(REDIS_PREFIX + name)) === tag) await c.del(REDIS_PREFIX + name);
+// Act on one name only while it still holds `value`: one script on a real
+// Redis; a read then the command on a client without EVAL (test doubles).
+const DEL_IF = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
+const EXPIRE_IF = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('expire', KEYS[1], ARGV[2]) else return 0 end";
+async function delIfValue(c, name, value) {
+  if (typeof c.eval === "function") return c.eval(DEL_IF, { keys: [name], arguments: [String(value)] });
+  if ((await c.get(name)) === value) return c.del(name);
+  return 0;
+}
+async function expireIfValue(c, name, value, seconds) {
+  if (typeof c.eval === "function") return c.eval(EXPIRE_IF, { keys: [name], arguments: [String(value), String(seconds)] });
+  if ((await c.get(name)) === value) return c.expire(name, seconds);
+  return 0;
 }
 
-export function createReplayGuard({ ttlMs = SETTLED_HOLD_MS, maxEntries = 50_000, inflightTtlSeconds = INFLIGHT_TTL_SECONDS, renewMs = INFLIGHT_RENEW_MS, maxHoldMs = MAX_HOLD_MS } = {}) {
-  // Local (per-process) fallback state — used whenever Redis is unset or a
-  // call to it fails (unless the caller requires the shared store), so a
-  // single replica keeps its full guarantee and a Redis outage degrades to a
-  // per-replica one, never to zero protection.
+// Consumed marks the shared store did not take, across every guard in this
+// process. `pending` counts the ones still being retried in the background.
+const storeHealth = { consumedWriteFailures: 0, consumedWritesRecovered: 0, consumedWritesAbandoned: 0, pending: 0, lastFailAt: 0, lastError: null };
+/**
+ * One word for the consumed marks the shared store missed: "pending" while a
+ * mark is held on this process only and retried in the background, else "ok".
+ * `full` adds the counts.
+ */
+export function replayGuardStoreStatus({ full = false } = {}) {
+  const status = storeHealth.pending > 0 ? "pending" : "ok";
+  if (!full) return { status };
+  const { pending, consumedWriteFailures, consumedWritesRecovered, consumedWritesAbandoned, lastFailAt, lastError } = storeHealth;
+  return { status, pending, consumedWriteFailures, consumedWritesRecovered, consumedWritesAbandoned, lastFailAgoMs: lastFailAt ? Date.now() - lastFailAt : null, lastError };
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+export function createReplayGuard({
+  ttlMs = SETTLED_HOLD_MS, maxEntries = 50_000, inflightTtlSeconds = INFLIGHT_TTL_SECONDS, renewMs = INFLIGHT_RENEW_MS, maxHoldMs = MAX_HOLD_MS,
+  // Waits between the tries of a consumed-mark write (the first try runs at once).
+  consumedRetryDelaysMs = [50, 250],
+  // How often a consumed mark the store missed is written again.
+  pendingRetryMs = 2_000,
+} = {}) {
+  // Local (per-process) state. `consumed` and `inFlight` are this process's
+  // own marks, kept whatever backend answered; with no store configured they
+  // are the whole guarantee, and a Redis outage degrades to a per-replica
+  // one, never to zero protection.
   const consumed = new Map(); // key -> expiresAt (ms): settledAt + ttlMs, or later for a long-lived authorization
   const inFlight = new Set();
   const ttlSeconds = Math.max(1, Math.ceil(ttlMs / 1000));
+  // key -> this process's claim: { token, legacyTag, legacyHeld, shared }.
+  // `shared` is true once the claim is in Redis under `token`.
+  const claims = new Map();
   // key -> interval renewing this process's Redis claim on it.
   const renewers = new Map();
-  function startRenew(key, legacyHeld = false) {
+  // key -> { settledAt, until, claim }: a consumed mark the store missed,
+  // oldest first, written again by one shared retry loop (schedulePending).
+  const pending = new Map();
+
+  function startRenew(key) {
     stopRenew(key);
     const until = Date.now() + maxHoldMs;
     const { primary, legacy } = namesOf(key);
     const t = setInterval(async () => {
-      if (Date.now() >= until) { stopRenew(key); return; }
+      const claim = claims.get(key);
+      if (!claim || Date.now() >= until) { stopRenew(key); return; }
       try {
         const c = await getSharedRedisClient();
-        if (c) {
-          await c.expire(REDIS_PREFIX + "f:" + primary, inflightTtlSeconds);
-          if (legacyHeld && legacy) await c.expire(REDIS_PREFIX + "f:" + legacy, inflightTtlSeconds);
+        if (!c) return;
+        if (!claim.shared) {
+          // Taken here while the store did not answer: written there now,
+          // so another replica reads this payment in flight. A name another
+          // request holds is left to it; this process's own mark still
+          // refuses the payment here.
+          if (await c.set(REDIS_PREFIX + "f:" + primary, claim.token, { NX: true, EX: inflightTtlSeconds })) {
+            claim.shared = true;
+            // Settled or released while the write was out: give it back.
+            if (claims.get(key) !== claim) await delIfValue(c, REDIS_PREFIX + "f:" + primary, claim.token);
+          }
+          return;
         }
+        await expireIfValue(c, REDIS_PREFIX + "f:" + primary, claim.token, inflightTtlSeconds);
+        if (claim.legacyHeld && legacy) await expireIfValue(c, REDIS_PREFIX + "f:" + legacy, claim.legacyTag, inflightTtlSeconds);
       } catch { /* the next tick retries */ }
     }, renewMs);
     t.unref?.();
@@ -408,11 +475,115 @@ export function createReplayGuard({ ttlMs = SETTLED_HOLD_MS, maxEntries = 50_000
     if (until <= now) { consumed.delete(key); return false; }
     return true;
   }
+  function markConsumedLocal(lk, until) {
+    consumed.delete(lk);
+    while (consumed.size >= maxEntries) {
+      const oldest = consumed.keys().next().value;
+      if (oldest === undefined) break;
+      consumed.delete(oldest);
+    }
+    consumed.set(lk, until);
+  }
   // How long a consumed mark is held: ttlMs, or until the authorization's
   // validBefore plus a margin when that is later.
   function holdMsOf(now, validBeforeMs) {
     const v = Number(validBeforeMs);
     return Number.isFinite(v) && v > 0 ? Math.max(ttlMs, v + CONSUMED_VALIDITY_MARGIN_MS - now) : ttlMs;
+  }
+
+  // Write the consumed mark (and its tagged legacy twin), trying again after
+  // each of `delays`; then drop this process's claim. True once the mark is
+  // written. Consumed mark FIRST, then the claim is dropped: at every moment
+  // one of the two exists, so a begin() racing this settle reads "consumed"
+  // or fails its SET NX ("inflight").
+  async function writeConsumed(c, key, settledAt, until, claim, delays) {
+    const { primary, legacy } = namesOf(key);
+    let lastError = null;
+    for (let i = 0; ; i++) {
+      try {
+        const ex = Math.max(1, Math.ceil((until - Date.now()) / 1000));
+        if (!c) throw new Error("shared store unavailable");
+        await c.set(REDIS_PREFIX + "c:" + primary, String(settledAt), { EX: ex });
+        // An earlier build still running reads any entry at the legacy name
+        // as consumed. Tagged, so this build reads it as another payer's;
+        // an earlier build's own mark there is never overwritten.
+        if (legacy) await c.set(REDIS_PREFIX + "c:" + legacy, LEGACY_TAG + primary, { NX: true, EX: ex });
+        lastError = null;
+        break;
+      } catch (e) {
+        lastError = e;
+        if (i >= delays.length) break;
+        await sleep(delays[i]);
+        try { c = await getSharedRedisClient(); } catch { c = null; }
+      }
+    }
+    if (lastError) return { written: false, error: lastError };
+    try {
+      if (claim?.shared) await delIfValue(c, REDIS_PREFIX + "f:" + primary, claim.token);
+      if (claim?.legacyHeld && legacy) await delIfValue(c, REDIS_PREFIX + "f:" + legacy, claim.legacyTag);
+    } catch { /* the claim expires with its TTL; the mark is written */ }
+    return { written: true };
+  }
+
+  // One retry loop for every consumed mark the store missed, over a bounded
+  // queue (`pending`, insertion order, at most `maxEntries`): a timer per
+  // mark held one closure and one interval each, so an outage that missed
+  // tens of thousands of marks grew the heap with them. Every pendingRetryMs
+  // the loop walks the queue oldest first, drops a mark whose hold has ended
+  // (abandoned), and writes the rest again; the pass stops at the first write
+  // the store refuses, since the store is still down for the ones after it.
+  let pendingTimer = null;
+  let pendingBusy = false;
+  function stopPendingLoop() {
+    if (pendingTimer) { clearInterval(pendingTimer); pendingTimer = null; }
+  }
+  function clearPending(key) {
+    if (!pending.delete(key)) return false;
+    storeHealth.pending = Math.max(0, storeHealth.pending - 1);
+    if (pending.size === 0) stopPendingLoop();
+    return true;
+  }
+  async function retryPendingPass() {
+    if (pendingBusy) return;
+    pendingBusy = true;
+    try {
+      const t0 = Date.now();
+      for (const [key, entry] of [...pending]) {
+        if (entry.until <= t0) { if (pending.get(key) === entry && clearPending(key)) storeHealth.consumedWritesAbandoned++; }
+      }
+      if (pending.size === 0) return;
+      let c = null;
+      try { c = await getSharedRedisClient(); } catch { c = null; }
+      if (!c) return;
+      for (const [key, entry] of [...pending]) {
+        if (pending.get(key) !== entry) continue;
+        if (Date.now() >= entry.until) { if (clearPending(key)) storeHealth.consumedWritesAbandoned++; continue; }
+        let r;
+        try { r = await writeConsumed(c, key, entry.settledAt, entry.until, entry.claim, []); } catch (e) { r = { written: false, error: e }; }
+        if (!r.written) break;
+        if (pending.get(key) === entry && clearPending(key)) {
+          storeHealth.consumedWritesRecovered++;
+          console.warn("[replay-guard] a consumed mark the shared store missed is now written");
+        }
+      }
+    } catch { /* the next tick retries */ } finally { pendingBusy = false; }
+  }
+  // A consumed mark the store did not take: queued, and written again by the
+  // shared loop every pendingRetryMs until it lands or its hold ends. This
+  // process refuses the payment meanwhile (its local mark).
+  function schedulePending(key, settledAt, until, claim) {
+    clearPending(key);
+    while (pending.size >= maxEntries) {
+      const oldest = pending.keys().next().value;
+      if (oldest === undefined || !clearPending(oldest)) break;
+      storeHealth.consumedWritesAbandoned++;
+    }
+    storeHealth.pending++;
+    pending.set(key, { settledAt, until, claim });
+    if (!pendingTimer) {
+      pendingTimer = setInterval(() => { void retryPendingPass(); }, pendingRetryMs);
+      pendingTimer.unref?.();
+    }
   }
 
   return {
@@ -425,11 +596,18 @@ export function createReplayGuard({ ttlMs = SETTLED_HOLD_MS, maxEntries = 50_000
      *                   configured and did not answer; the caller refuses
      */
     async begin(key, now = Date.now(), { requireShared = false } = {}) {
+      pruneLocal(now);
+      const lk = localKeyOf(key);
+      // This process's own marks first: they hold whatever backend answered
+      // when they were made.
+      if (isConsumedLocal(lk, now)) return "consumed";
+      if (inFlight.has(lk)) return "inflight";
       const c = await getSharedRedisClient();
       if (!c && requireShared && sharedLimitEnabled()) return "unavailable";
       if (c) {
         const { primary, legacy } = namesOf(key);
-        const tag = LEGACY_TAG + primary;
+        const token = randomUUID();
+        const legacyTag = LEGACY_TAG + primary + "|" + token;
         let claimedPrimary = false;
         let legacyHeld = false;
         try {
@@ -438,14 +616,14 @@ export function createReplayGuard({ ttlMs = SETTLED_HOLD_MS, maxEntries = 50_000
           // SET NX is the atomic claim: two replicas racing this same key
           // cannot both receive a non-null reply, which is exactly the
           // property inFlight.add() gave for free within one process.
-          const claimed = await c.set(REDIS_PREFIX + "f:" + primary, String(now), { NX: true, EX: inflightTtlSeconds });
+          const claimed = await c.set(REDIS_PREFIX + "f:" + primary, token, { NX: true, EX: inflightTtlSeconds });
           if (!claimed) return "inflight";
           claimedPrimary = true;
-          const back = async (verdict) => { await c.del(REDIS_PREFIX + "f:" + primary); if (legacyHeld) await delIfTagged(c, "f:" + legacy, tag); return verdict; };
+          const back = async (verdict) => { await delIfValue(c, REDIS_PREFIX + "f:" + primary, token); if (legacyHeld) await delIfValue(c, REDIS_PREFIX + "f:" + legacy, legacyTag); return verdict; };
           if (legacy) {
             // An earlier build's claim on this credential is honored; another
             // payer's tagged claim there is not ours to wait on.
-            legacyHeld = Boolean(await c.set(REDIS_PREFIX + "f:" + legacy, tag, { NX: true, EX: inflightTtlSeconds }));
+            legacyHeld = Boolean(await c.set(REDIS_PREFIX + "f:" + legacy, legacyTag, { NX: true, EX: inflightTtlSeconds }));
             if (!legacyHeld && isLegacyEntry(await c.get(REDIS_PREFIX + "f:" + legacy))) return back("inflight");
           }
           // Read the consumed mark again under the claim: a settle writes its
@@ -453,15 +631,17 @@ export function createReplayGuard({ ttlMs = SETTLED_HOLD_MS, maxEntries = 50_000
           // the first read and the claim is seen here.
           if (await c.get(REDIS_PREFIX + "c:" + primary)) return back("consumed");
           if (legacy && isLegacyEntry(await c.get(REDIS_PREFIX + "c:" + legacy))) return back("consumed");
-          startRenew(key, legacyHeld);
+          inFlight.add(lk);
+          claims.set(key, { token, legacyTag, legacyHeld, shared: true });
+          startRenew(key);
           return "ok";
         } catch (e) {
           // A claim this call took before the store failed is dropped (best
           // effort), so the buyer's retry is not refused as in flight for the
           // claim's whole life on a payment that was never used.
           if (claimedPrimary) {
-            try { await c.del(REDIS_PREFIX + "f:" + primary); } catch { /* expires with its TTL */ }
-            if (legacyHeld) { try { await delIfTagged(c, "f:" + legacy, tag); } catch { /* expires with its TTL */ } }
+            try { await delIfValue(c, REDIS_PREFIX + "f:" + primary, token); } catch { /* expires with its TTL */ }
+            if (legacyHeld) { try { await delIfValue(c, REDIS_PREFIX + "f:" + legacy, legacyTag); } catch { /* expires with its TTL */ } }
           }
           if (requireShared) {
             console.error("[replay-guard] redis begin failed; refusing a route that requires the shared store:", e.message);
@@ -471,11 +651,15 @@ export function createReplayGuard({ ttlMs = SETTLED_HOLD_MS, maxEntries = 50_000
           // fall through to the local path below
         }
       }
-      pruneLocal(now);
-      const lk = localKeyOf(key);
-      if (isConsumedLocal(lk, now)) return "consumed";
+      // Checked again: another call on this process may have claimed the
+      // payment while this one waited on the store.
       if (inFlight.has(lk)) return "inflight";
       inFlight.add(lk);
+      // With a store configured, the claim is written there once it answers.
+      if (c || sharedLimitEnabled()) {
+        claims.set(key, { token: randomUUID(), legacyTag: null, legacyHeld: false, shared: false });
+        startRenew(key);
+      }
       return "ok";
     },
     /**
@@ -488,11 +672,12 @@ export function createReplayGuard({ ttlMs = SETTLED_HOLD_MS, maxEntries = 50_000
     async held(key, now = Date.now()) {
       if (!key) return null;
       const lk = localKeyOf(key);
-      if (isConsumedLocal(lk, now)) return "consumed";
-      if (inFlight.has(lk)) return "inflight";
+      // This process's own marks answer whenever the store holds nothing (or
+      // does not answer): they hold whatever backend answered when made.
+      const local = () => (isConsumedLocal(lk, now) ? "consumed" : inFlight.has(lk) ? "inflight" : null);
       let c = null;
-      try { c = await getSharedRedisClient(); } catch { return sharedLimitEnabled() ? "unavailable" : null; }
-      if (!c) return sharedLimitEnabled() ? "unavailable" : null;
+      try { c = await getSharedRedisClient(); } catch { return local() || (sharedLimitEnabled() ? "unavailable" : null); }
+      if (!c) return local() || (sharedLimitEnabled() ? "unavailable" : null);
       try {
         // Every name in one round trip (MGET): this read runs before the
         // paywall on a gateway cache candidate.
@@ -500,13 +685,13 @@ export function createReplayGuard({ ttlMs = SETTLED_HOLD_MS, maxEntries = 50_000
         const names = [REDIS_PREFIX + "c:" + primary, REDIS_PREFIX + "f:" + primary];
         if (legacy) names.push(REDIS_PREFIX + "c:" + legacy, REDIS_PREFIX + "f:" + legacy);
         const vals = typeof c.mGet === "function" ? await c.mGet(names) : await Promise.all(names.map((n) => c.get(n)));
-        if (!Array.isArray(vals) || vals.length !== names.length) return "unavailable";
+        if (!Array.isArray(vals) || vals.length !== names.length) return local() || "unavailable";
         const [cP, fP, cL, fL] = vals;
         if (cP || (legacy && isLegacyEntry(cL))) return "consumed";
         if (fP || (legacy && isLegacyEntry(fL))) return "inflight";
-        return null;
+        return local();
       } catch {
-        return "unavailable";
+        return local() || "unavailable";
       }
     },
     /** Mark the nonce consumed: call only when the gated call was granted
@@ -518,60 +703,50 @@ export function createReplayGuard({ ttlMs = SETTLED_HOLD_MS, maxEntries = 50_000
      *  paid call. */
     async settle(key, now = Date.now(), { validBeforeMs = null } = {}) {
       stopRenew(key);
-      const holdMs = holdMsOf(now, validBeforeMs);
-      const c = await getSharedRedisClient();
-      if (c) {
-        try {
-          // Consumed mark FIRST, then the claim is dropped: at every moment
-          // one of the two exists, so a begin() racing this settle reads
-          // "consumed" or fails its SET NX ("inflight"). Dropping the claim
-          // first left a gap in which a re-sent authorization was claimed
-          // "ok" and reached the paywall again.
-          const { primary, legacy } = namesOf(key);
-          const ex = Math.max(ttlSeconds, Math.ceil(holdMs / 1000));
-          await c.set(REDIS_PREFIX + "c:" + primary, String(now), { EX: ex });
-          // An earlier build still running reads any entry at the legacy name
-          // as consumed. Tagged, so this build reads it as another payer's;
-          // an earlier build's own mark there is never overwritten.
-          if (legacy) await c.set(REDIS_PREFIX + "c:" + legacy, LEGACY_TAG + primary, { NX: true, EX: ex });
-          await c.del(REDIS_PREFIX + "f:" + primary);
-          if (legacy) await delIfTagged(c, "f:" + legacy, LEGACY_TAG + primary);
-          return;
-        } catch (e) {
-          console.error("[replay-guard] redis settle failed, falling back to local state:", e.message);
-        }
-      }
+      const claim = claims.get(key);
+      claims.delete(key);
+      const until = now + holdMsOf(now, validBeforeMs);
       const lk = localKeyOf(key);
       inFlight.delete(lk);
-      while (consumed.size >= maxEntries) {
-        const oldest = consumed.keys().next().value;
-        if (oldest === undefined) break;
-        consumed.delete(oldest);
-      }
-      consumed.delete(lk);
-      consumed.set(lk, now + holdMs);
+      // Kept here whatever the store does, so this process never claims the
+      // payment again while the mark is held.
+      markConsumedLocal(lk, until);
+      let c = null;
+      try { c = await getSharedRedisClient(); } catch { c = null; }
+      // No store configured: the local mark is the guarantee.
+      if (!c && !sharedLimitEnabled()) return;
+      const r = await writeConsumed(c, key, now, until, claim, consumedRetryDelaysMs);
+      if (r.written) { clearPending(key); return; }
+      storeHealth.consumedWriteFailures++;
+      storeHealth.lastFailAt = Date.now();
+      storeHealth.lastError = String(r.error?.message || r.error || "unavailable").slice(0, 120);
+      console.error(`[replay-guard] redis settle failed after ${consumedRetryDelaysMs.length + 1} tries; the consumed mark is held on this process and written again in the background:`, storeHealth.lastError);
+      schedulePending(key, now, until, claim);
     },
     /** Release the nonce — call when the gated call was NOT granted, so a
-     *  legitimate retry of the still-valid authorization can proceed. */
+     *  legitimate retry of the still-valid authorization can proceed. Only
+     *  this process's own claim is dropped: a name another request holds
+     *  is left to it. */
     async release(key) {
       stopRenew(key);
-      const c = await getSharedRedisClient();
-      if (c) {
-        try {
-          const { primary, legacy } = namesOf(key);
-          await c.del(REDIS_PREFIX + "f:" + primary);
-          if (legacy) await delIfTagged(c, "f:" + legacy, LEGACY_TAG + primary);
-          return;
-        } catch (e) {
-          console.error("[replay-guard] redis release failed, falling back to local state:", e.message);
-        }
-      }
+      const claim = claims.get(key);
+      claims.delete(key);
       inFlight.delete(localKeyOf(key));
+      if (!claim?.shared) return;
+      try {
+        const c = await getSharedRedisClient();
+        if (!c) return;
+        const { primary, legacy } = namesOf(key);
+        await delIfValue(c, REDIS_PREFIX + "f:" + primary, claim.token);
+        if (claim.legacyHeld && legacy) await delIfValue(c, REDIS_PREFIX + "f:" + legacy, claim.legacyTag);
+      } catch (e) {
+        console.error("[replay-guard] redis release failed; the claim expires with its TTL:", e.message);
+      }
     },
-    /** Introspection for tests / stats — LOCAL fallback state only; Redis
-     *  state is shared and has no single-process notion of "size". */
+    /** Introspection for tests / stats: LOCAL state only; Redis state is
+     *  shared and has no single-process notion of "size". */
     _state() {
-      return { consumed: consumed.size, inFlight: inFlight.size, renewing: renewers.size };
+      return { consumed: consumed.size, inFlight: inFlight.size, renewing: renewers.size, pendingConsumed: pending.size };
     },
   };
 }

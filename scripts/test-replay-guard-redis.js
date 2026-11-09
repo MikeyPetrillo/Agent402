@@ -255,5 +255,24 @@ const key = (suffix) => `replay-guard-redis-test:${runId}:${suffix}`;
   await gB.release(kl);
 }
 
+// --- Owner token on a real Redis (compare-and-act scripts) -------------------
+// A claim that lapsed and was taken by another request is neither dropped nor
+// renewed by its first holder; the holder's own release drops it.
+{
+  const gA = createReplayGuard({ renewMs: 50 }), gB = createReplayGuard(), gC = createReplayGuard();
+  const k = key("owner-token");
+  ok(await gA.begin(k) === "ok", "owner token: A claims");
+  await client.del(`replay:f:${k}`); // A's claim lapsed
+  ok(await gB.begin(k) === "ok", "owner token: B takes the lapsed claim");
+  await client.expire(`replay:f:${k}`, 5);
+  await new Promise((r) => setTimeout(r, 160));
+  const ttl = await client.ttl(`replay:f:${k}`);
+  ok(ttl > 0 && ttl <= 5, `owner token: A's renewal does not extend B's claim (ttl ${ttl}s)`);
+  await gA.release(k);
+  ok(await gC.begin(k) === "inflight", "owner token: A's release leaves B's claim");
+  await gB.release(k);
+  ok(!(await client.get(`replay:f:${k}`)), "owner token: B's own release drops it");
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -53,6 +53,8 @@ const DAY = 86_400_000;
   ok(paywallVerdictExpired({ ok: false, status: 400, url: "https://a.example.test/v1/quote" }, now) === true, "a failure with no age is expired");
   ok(paywallVerdictExpired({ ok: false, status: 400, at: now, url: "https://a.example.test/v1/token/:param" }, now) === true, "a fresh failure measured on a :param template is expired");
   ok(paywallVerdictExpired({ ok: false, status: 400, at: now, url: "https://a.example.test/v1/token/%7Bsymbol%7D" }, now) === true, "a fresh failure measured on a {param} template is expired");
+  ok(paywallVerdictExpired({ ok: false, status: 400, at: now, url: "https://a.example.test/v1/batch?payloads=%3Cjson-array%3E" }, now) === true, "a fresh failure measured on a query placeholder is expired");
+  ok(paywallVerdictExpired({ ok: false, status: 400, at: now, url: "https://a.example.test/v1/batch?product=basic" }, now) === false, "a fresh failure on a real query value is not");
   ok(paywallVerdictExpired({ ok: false, status: 400, at: now - 2 * 3_600_000 }, now, 3_600_000) === true, "the window is a parameter");
 }
 

@@ -358,7 +358,7 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
   const vb = Number(sentPayload?.payload?.authorization?.validBefore);
   ok(Number.isFinite(vb) && vb <= t1 + 30 && vb >= t0 + 25, `the SIGNED validBefore is now + the 30 s refusal window (got +${vb - t0}s) even though the accept said maxTimeoutSeconds 300`);
   ok(sentPayload?.accepted?.maxTimeoutSeconds === 300, "the ECHOED accept keeps the seller's own maxTimeoutSeconds (the facilitator's requirements match)");
-  ok(asked.untilUnix === vb + 5 && asked.maxWaitMs === 12345, "the chain check is told to wait until the signed validBefore (+ slack), bounded by the caller's refusalMaxWaitMs");
+  ok(asked.untilUnix === vb + 5 && asked.maxWaitMs <= 12345 && asked.maxWaitMs > 12345 - 5000, `the chain check is told to wait until the signed validBefore (+ slack), bounded by what is left of the caller's refusalMaxWaitMs (${asked.maxWaitMs} of 12345 ms)`);
   ok(!sellerRefusedRecently("https://refuser.example", "base"), "one refusal is recorded and benches nothing yet");
   await buy(async () => ({ debited: false, observed: 1, expired: true }));
   ok(sellerRefusedRecently("https://refuser.example", "base")?.status === 402 && !sellerRefusedRecently("https://refuser.example", "solana"), "the second benches the refusing route on base only");
@@ -806,7 +806,8 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
   const run = async (accept, label) => {
     resetRef();
     let signed = null, attempts = 0;
-    const body = { x402Version: 1, accepts: [accept] };
+    // A v1 accept names the resource it sells: the URL this case pays.
+    const body = { x402Version: 1, accepts: [{ ...accept, resource: `https://${label}.example/x` }] };
     globalThis.fetch = async (url, init) => {
       const paid = init?.headers?.["PAYMENT-SIGNATURE"] || init?.headers?.["payment-signature"] || init?.headers?.["X-PAYMENT"];
       if (!paid) return { status: 402, headers: { get: () => null }, json: async () => body, text: async () => JSON.stringify(body) };
@@ -841,7 +842,7 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
   {
     const { sellerRefusedRecently, sellerRouteRefusedRecently } = await import("../src/x402-buyer.js");
     resetRef();
-    const split = { ...base, amount: "1000", maxAmountRequired: "2000" };
+    const split = { ...base, amount: "1000", maxAmountRequired: "2000", resource: "https://split-seller.example/x" };
     const body = { x402Version: 1, accepts: [split] };
     let paidSends = 0;
     globalThis.fetch = async (url, init) => {
@@ -880,6 +881,174 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
       evm.client.createPaymentPayload = realSign;
     }
   }
+}
+
+// The refusal wait is a deadline from the call's start: a seller that never
+// answers the paid request does not add its timeout on top of the caller's
+// remaining budget (route-execute hands that budget in as refusalMaxWaitMs).
+{
+  const { payX402: pay, __resetSellerRefusalsForTest: resetRefusals } = await import("../src/x402-buyer.js");
+  resetRefusals?.();
+  const acc = { scheme: "exact", network: "eip155:8453", asset: USDC, amount: "1000", payTo: "0x" + "ef".repeat(20), maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } };
+  const h = Buffer.from(JSON.stringify({ x402Version: 2, accepts: [acc] })).toString("base64");
+  globalThis.fetch = async (url, init) => {
+    const paidHdr = init?.headers?.["PAYMENT-SIGNATURE"] || init?.headers?.["payment-signature"] || init?.headers?.["X-PAYMENT"];
+    if (!paidHdr) return { status: 402, headers: { get: (k) => (k.toLowerCase() === "payment-required" ? h : null) }, json: async () => ({}), text: async () => "{}" };
+    return new Promise((_, rej) => init.signal.addEventListener("abort", () => rej(init.signal.reason)));
+  };
+  const waits = [];
+  const notDebited = async ({ maxWaitMs }) => { waits.push(maxWaitMs); await new Promise((r) => setTimeout(r, maxWaitMs)); return { debited: false, expired: false, observed: 0 }; };
+  const keep = setInterval(() => {}, 1000);
+  const t0 = Date.now();
+  const err = await pay("https://hangs.example/x", { maxAtomic: 500000n, method: "POST", body: {}, chain: "base", notDebited, timeoutMs: 600, refusalMaxWaitMs: 1000 }).then(() => null, (e) => e);
+  const took = Date.now() - t0;
+  clearInterval(keep);
+  ok(err?.statusCode === 502 && err?.paidUnanswered === true && err?.committed === true, `an unanswered paid request keeps the hold (${err?.message})`);
+  ok(took < 1300 && waits[0] <= 450, `the refusal wait ends inside the caller's budget from the call's start: 1000 ms budget, 600 ms seller timeout, took ${took} ms (chain wait ${waits[0]} ms)`);
+  // Every signed payment gets one outbound line, whatever ended it.
+  const { readFileSync: rf, existsSync: ex } = await import("node:fs");
+  const lines = () => (ex(process.env.OUTBOUND_LEDGER_FILE) ? rf(process.env.OUTBOUND_LEDGER_FILE, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
+  const forOrigin = (o) => lines().filter((l) => l.origin === new URL(o).host);
+  ok(forOrigin("https://hangs.example").length === 1 && forOrigin("https://hangs.example")[0].result === "unknown", `an unanswered paid request is recorded once, as unknown (${JSON.stringify(forOrigin("https://hangs.example").map((l) => l.result))})`);
+  // A refusal the chain proves unused: one "refused" line, which pays nobody.
+  globalThis.fetch = async (url, init) => {
+    const paidHdr = init?.headers?.["PAYMENT-SIGNATURE"] || init?.headers?.["payment-signature"] || init?.headers?.["X-PAYMENT"];
+    if (!paidHdr) return { status: 402, headers: { get: (k) => (k.toLowerCase() === "payment-required" ? h : null) }, json: async () => ({}), text: async () => "{}" };
+    return { status: 402, headers: { get: (k) => (k.toLowerCase() === "payment-required" ? h : "application/json") }, json: async () => ({ error: "payment_verification_failed" }), text: async () => JSON.stringify({ error: "payment_verification_failed" }) };
+  };
+  resetRefusals?.();
+  const refusedErr = await pay("https://refuses-once.example/x", { maxAtomic: 500000n, method: "POST", body: {}, chain: "base", notDebited: async () => ({ debited: false, expired: true, observed: 1 }) }).then(() => null, (e) => e);
+  ok(refusedErr?.refused === true && forOrigin("https://refuses-once.example").map((l) => l.result).join() === "refused", `a refusal the chain proves unused is recorded once, as refused (${JSON.stringify(forOrigin("https://refuses-once.example").map((l) => l.result))})`);
+  // An unanswered paid request that the chain proves unused: recorded as refused, not unknown.
+  globalThis.fetch = async (url, init) => {
+    const paidHdr = init?.headers?.["PAYMENT-SIGNATURE"] || init?.headers?.["payment-signature"] || init?.headers?.["X-PAYMENT"];
+    if (!paidHdr) return { status: 402, headers: { get: (k) => (k.toLowerCase() === "payment-required" ? h : null) }, json: async () => ({}), text: async () => "{}" };
+    throw Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+  };
+  resetRefusals?.();
+  const droppedErr = await pay("https://drops-unused.example/x", { maxAtomic: 500000n, method: "POST", body: {}, chain: "base", notDebited: async () => ({ debited: false, expired: true, observed: 1 }) }).then(() => null, (e) => e);
+  ok(droppedErr && forOrigin("https://drops-unused.example").map((l) => l.result).join() === "refused", `an unanswered paid request the chain proves unused is recorded once, as refused (${JSON.stringify(forOrigin("https://drops-unused.example").map((l) => l.result))}; ${droppedErr?.message})`);
+  // A 5xx already recorded as undelivered is not recorded twice.
+  globalThis.fetch = async (url, init) => {
+    const paidHdr = init?.headers?.["PAYMENT-SIGNATURE"] || init?.headers?.["payment-signature"] || init?.headers?.["X-PAYMENT"];
+    if (!paidHdr) return { status: 402, headers: { get: (k) => (k.toLowerCase() === "payment-required" ? h : null) }, json: async () => ({}), text: async () => "{}" };
+    return { status: 500, headers: { get: (k) => (k.toLowerCase() === "content-type" ? "application/json" : null) }, json: async () => ({ error: "boom" }), text: async () => "{\"error\":\"boom\"}" };
+  };
+  await pay("https://fails-500.example/x", { maxAtomic: 500000n, method: "POST", body: {}, chain: "base", notDebited: async () => ({ debited: false, expired: false, observed: 1 }), refusalMaxWaitMs: 0 }).then(() => null, (e) => e);
+  ok(forOrigin("https://fails-500.example").map((l) => l.result).join() === "undelivered", `a paid 5xx is recorded once, as undelivered (${JSON.stringify(forOrigin("https://fails-500.example").map((l) => l.result))})`);
+}
+
+// Whose refusal is it: when many different sellers on one chain refuse our
+// paid retries with no settle between them, no route is noted as refusing
+// (the shared factor is our side); a settle on the chain restores the notes.
+{
+  const { payX402: pay, sellerRouteRefusedRecently: benched, __resetSellerRefusalsForTest: resetR, __resetChainRefusalsForTest: resetC, noteChainSettled, chainRefusalHolds } = await import("../src/x402-buyer.js");
+  resetR?.(); resetC();
+  const acc = { scheme: "exact", network: "eip155:8453", asset: USDC, amount: "1000", payTo: "0x" + "ad".repeat(20), maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } };
+  const h = Buffer.from(JSON.stringify({ x402Version: 2, accepts: [acc] })).toString("base64");
+  globalThis.fetch = async (url, init) => {
+    const paidHdr = init?.headers?.["PAYMENT-SIGNATURE"] || init?.headers?.["payment-signature"] || init?.headers?.["X-PAYMENT"];
+    if (!paidHdr) return { status: 402, headers: { get: (k) => (k.toLowerCase() === "payment-required" ? h : null) }, json: async () => ({}), text: async () => "{}" };
+    return { status: 402, headers: { get: (k) => (k.toLowerCase() === "payment-required" ? h : "application/json") }, json: async () => ({ error: "payment_verification_failed" }), text: async () => JSON.stringify({ error: "payment_verification_failed" }) };
+  };
+  const refuse = (o) => pay(`https://${o}.example/x`, { maxAtomic: 500000n, method: "POST", body: {}, chain: "base", memoizeDelivery: true, notDebited: async () => ({ debited: false, expired: true, observed: 1 }) }).then(() => null, (e) => e);
+  // Control: one seller refusing twice is benched.
+  await refuse("solo"); await refuse("solo");
+  ok(!!benched("https://solo.example/x", "base"), "control: one seller that refuses our payment twice is benched");
+  resetR?.(); resetC();
+  // Five different sellers refuse, then each refuses again: none is benched.
+  const many = ["r1", "r2", "r3", "r4", "r5"];
+  ok(chainRefusalHolds().length === 0, "control: no chain is held before the pattern");
+  const warnOrig = console.warn; const holdLogs = [];
+  console.warn = (...a) => { const line = a.join(" "); if (/refused our paid retries with no settle/.test(line)) holdLogs.push(line); else warnOrig(...a); };
+  try {
+    for (const o of many) await refuse(o);
+    for (const o of many) await refuse(o);
+    await refuse("r6"); await refuse("r7");
+  } finally { console.warn = warnOrig; }
+  ok(many.every((o) => !benched(`https://${o}.example/x`, "base")), "five sellers on one chain refusing our payments with no settle between: none is benched");
+  ok(holdLogs.length === 1, `the hold logs once when it starts, not on every later refusal (${holdLogs.length} lines for 12 refusals)`);
+  const holds = chainRefusalHolds();
+  ok(holds.length === 1 && holds[0].chain === "base" && holds[0].sellers === 7 && holds[0].threshold === 5 && !JSON.stringify(holds).includes("example"), `the operator view lists the held chain with its seller count and no origin (${JSON.stringify(holds)})`);
+  resetR?.(); resetC();
+  // Unproven-tier sellers never count toward the chain pattern: each one's
+  // refusal is its own, so five refusing twice are each benched. allowUnproven
+  // reaches the refusal only after the Base unproven ceiling and caps admit the
+  // call; the stub quote (1000 atomic) is under the default ceiling.
+  const refuseUnproven = (o) => pay(`https://${o}.example/x`, { maxAtomic: 500000n, method: "POST", body: {}, chain: "base", memoizeDelivery: true, allowUnproven: true, notDebited: async () => ({ debited: false, expired: true, observed: 1 }) }).then(() => null, (e) => e);
+  const fresh = ["u1", "u2", "u3", "u4", "u5"];
+  const firstErr = await refuseUnproven("u1");
+  for (const o of fresh.slice(1)) await refuseUnproven(o);
+  for (const o of fresh) await refuseUnproven(o);
+  ok(fresh.every((o) => !!benched(`https://${o}.example/x`, "base")) && chainRefusalHolds().length === 0, `five unproven sellers refusing twice are each benched and hold nothing (first: ${firstErr?.message || "no error"})`);
+  resetR?.(); resetC();
+  // After a payment on the chain settles (a real paid call answering 200 with
+  // its settle receipt), a refusing seller is the seller's own again. The
+  // chain is held first, so the settle is what lifts it.
+  const warnKeep = console.warn; console.warn = () => {};
+  try { for (const o of many) await refuse(o); } finally { console.warn = warnKeep; }
+  await refuse("held1"); await refuse("held1");
+  ok(chainRefusalHolds().length === 1 && !benched("https://held1.example/x", "base"), "setup: the chain is held again, and a seller refusing twice inside the hold is not benched");
+  const refusingFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const paidHdr = init?.headers?.["PAYMENT-SIGNATURE"] || init?.headers?.["payment-signature"] || init?.headers?.["X-PAYMENT"];
+    if (!paidHdr) return { status: 402, headers: { get: (k) => (k.toLowerCase() === "payment-required" ? h : null) }, json: async () => ({}), text: async () => "{}" };
+    return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json", "payment-response": Buffer.from(JSON.stringify({ success: true, transaction: "0x" + "ef".repeat(32), network: "eip155:8453" })).toString("base64") } });
+  };
+  const settledOk = await pay("https://settles.example/x", { maxAtomic: 500000n, method: "POST", body: {}, chain: "base", memoizeDelivery: true }).then((r) => r, (e) => e);
+  globalThis.fetch = refusingFetch;
+  ok(settledOk && !(settledOk instanceof Error), `setup: a paid call on the chain settles (${settledOk instanceof Error ? settledOk.message : "200"})`);
+  void noteChainSettled; // the reset is reached through the settled call above, not called directly
+  await refuse("after"); await refuse("after");
+  ok(chainRefusalHolds().length === 0, "the settle lifts the chain's hold");
+  ok(!!benched("https://after.example/x", "base"), "after a settle on the chain, a seller refusing twice is benched again");
+  resetR?.(); resetC();
+}
+
+// --- the challenge must be for the URL requested --------------------------
+// A 402 names the resource it sells (v2 at the top level, v1 on the accept).
+// One naming another origin or path is refused before anything is signed or
+// held; the same parameters in another order are the same resource.
+{
+  const { payX402: pay, challengeResourceVerdict: verdict, _spentThisWindow: spentNow, __resetSellerRefusalsForTest: resetR } = await import("../src/x402-buyer.js");
+  const v = (want, top, acc) => verdict(want, top === undefined ? {} : { resource: top }, acc === undefined ? {} : { resource: acc });
+  const W = "https://seller.example/v1/forecast?city=Paris&units=metric";
+  ok(v(W).ok && v(W).verdict === "unnamed", "resource: a challenge naming nothing is unknown and does not block");
+  ok(v(W, { url: "https://seller.example/v1/forecast?units=metric&city=Paris" }).ok, "resource: the same parameters in another order name the same resource");
+  ok(v(W, { url: "https://seller.example/v1/forecast" }).ok && v(W, { url: "https://SELLER.example:443/v1/forecast/" }).ok && v(W, { url: "/v1/forecast" }).ok, "resource: no query, host case, default port, a trailing slash and a relative path are the same resource");
+  ok(v(W, { url: "http://seller.example/v1/forecast" }).ok, "resource: http named for an https request on the same host is the seller's TLS proxy, not another origin");
+  ok(v(W, { url: "https://seller.example/v1/other" }).field === "path" && v(W, { url: "https://other.example/v1/forecast" }).field === "origin" && v(W, { url: "https://seller.example:8443/v1/forecast" }).field === "origin" && v(W, { url: "http://seller.example:8080/v1/forecast" }).field === "origin",
+    "resource: another path, host or port is a mismatch");
+  ok(v(W, { url: "https://seller.example/paid/v1/forecast" }).ok && v(W, { url: "/api/v2/v1/forecast/" }).ok, "resource: the same route mounted under a prefix on the same origin is the same resource");
+  ok(v(W, { url: "https://seller.example/xv1/forecast" }).field === "path" && v(W, { url: "https://seller.example/v1/forecast/extra" }).field === "path" && v(W, { url: "https://other.example/paid/v1/forecast" }).field === "origin" && v("https://seller.example/", { url: "https://seller.example/anything" }).field === "path" && v(W, { url: "https://seller.example/forecast" }).field === "path",
+    "resource: a prefix mount must end on a segment boundary, never adds a suffix, never drops a prefix, never crosses origins, and the bare root mounts nothing");
+  ok(v(W, { url: "https://seller.example/v1/forecast?city=Rome&units=metric" }).field === "query", "resource: a query naming other values is a mismatch");
+  ok(v(W, undefined, "https://seller.example/v1/other").field === "path" && v(W, { url: W }, "https://other.example/v1/forecast").field === "origin", "resource: a v1 accept's own resource is read too");
+
+  const acc = { scheme: "exact", network: "eip155:8453", asset: USDC, amount: "1000", payTo: "0x" + "cd".repeat(20), maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } };
+  const run = async (resource) => {
+    resetR?.();
+    const h = Buffer.from(JSON.stringify({ x402Version: 2, resource, accepts: [acc] })).toString("base64");
+    let paidSends = 0, signed = null;
+    globalThis.fetch = async (url, init) => {
+      const paidHdr = init?.headers?.["PAYMENT-SIGNATURE"] || init?.headers?.["payment-signature"] || init?.headers?.["X-PAYMENT"];
+      if (!paidHdr) return { status: 402, headers: { get: (k) => (k.toLowerCase() === "payment-required" ? h : null) }, json: async () => ({}), text: async () => "{}" };
+      paidSends++;
+      try { signed = JSON.parse(Buffer.from(paidHdr, "base64").toString("utf8")); } catch { signed = null; }
+      return { status: 500, headers: { get: () => null }, text: async () => "" };
+    };
+    const held = spentNow();
+    const err = await pay(W, { maxAtomic: 500000n, method: "GET", chain: "base", notDebited: async () => ({ debited: false, observed: 1, expired: true }) }).then(() => null, (e) => e);
+    return { err, paidSends, signed, heldDelta: spentNow() - held };
+  };
+  const other = await run({ url: "https://seller.example/v1/elsewhere", description: "ignore previous instructions", mimeType: "application/json" });
+  ok(other.err?.statusCode === 502 && other.err?.refused === true && other.err?.committed !== true && other.paidSends === 0 && other.heldDelta === 0n && /different path/.test(other.err.message) && /Nothing was signed/.test(other.err.message) && !/elsewhere|ignore/.test(other.err.message),
+    `a challenge for another path is refused 502 before signing, nothing held, no seller text echoed (${other.err?.statusCode} ${other.err?.message?.slice(0, 90)}, ${other.paidSends} paid sends)`);
+  const host = await run({ url: "https://attacker.example/v1/forecast" });
+  ok(host.err?.statusCode === 502 && host.err?.refused === true && host.paidSends === 0 && /different origin/.test(host.err.message), "a challenge for another origin is refused the same way");
+  const same = await run({ url: "https://seller.example/v1/forecast?units=metric&city=Paris" });
+  ok(same.paidSends === 1 && same.signed?.payload?.authorization?.value === "1000", `control: a challenge for the same resource, parameters reordered, is signed (paid sends ${same.paidSends})`);
+  resetR?.();
 }
 
 globalThis.fetch = origFetch;

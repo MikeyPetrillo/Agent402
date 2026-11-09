@@ -55,7 +55,10 @@ ok(pubBody?.upstreamBuyerEvm?.status === "off" && Object.keys(pubBody.upstreamBu
 // --- the Robinhood settler word: one word publicly; off without an order (no relayer key here) ---
 ok(pubBody?.robinhoodSettler?.status === "off" && Object.keys(pubBody.robinhoodSettler).join(",") === "status", `robinhoodSettler publishes its word only (${JSON.stringify(pubBody?.robinhoodSettler)})`);
 ok(opBody?.robinhoodSettler?.status === "off", `the operator view reads the same word without an order (${JSON.stringify(opBody?.robinhoodSettler)})`);
-// --- the subscription renewal word: one word publicly; off with no wallet-billed subscription engine here ---
+// --- the replay guard's shared-store word: one word publicly (ok with nothing missed), the counts for the operator ---
+ok(pubBody?.replayStore?.status === "ok" && Object.keys(pubBody.replayStore).join(",") === "status", `replayStore publishes its word only (${JSON.stringify(pubBody?.replayStore)})`);
+ok(opBody?.replayStore?.status === "ok" && typeof opBody?.replayStore?.pending === "number" && typeof opBody?.replayStore?.consumedWriteFailures === "number", `the operator view of replayStore carries the counts (${JSON.stringify(opBody?.replayStore)})`);
+// --- the subscription renewal word:one word publicly; off with no wallet-billed subscription engine here ---
 ok(pubBody?.subscriptionRenewals?.status === "off" && Object.keys(pubBody.subscriptionRenewals).join(",") === "status", `subscriptionRenewals publishes its word only (${JSON.stringify(pubBody?.subscriptionRenewals)})`);
 ok(opBody?.subscriptionRenewals?.status === "off", `the operator view reads the same word without a subscription engine (${JSON.stringify(opBody?.subscriptionRenewals)})`);
 ok(pubBody?.directUpstream?.status === "off" && Object.keys(pubBody.directUpstream).join(",") === "status" && opBody?.directUpstream?.status === "off" && Object.keys(opBody.directUpstream).join(",") === "status", `directUpstream publishes its word only, on both views (${JSON.stringify(pubBody?.directUpstream)})`);
@@ -74,6 +77,9 @@ ok(pubBody?.brokenListings?.status === "ok" && Object.keys(pubBody.brokenListing
 ok(opBody?.brokenListings?.status === "ok" && typeof opBody.brokenListings.origins === "number" && typeof opBody.brokenListings.indexedOrigins === "number" && typeof opBody.brokenListings.widespreadMin === "number" && !/https?:\/\//.test(JSON.stringify(opBody.brokenListings)), `the operator view of brokenListings carries the window's counts and rule, never an origin (${JSON.stringify(opBody?.brokenListings)})`);
 ok(["ok", "refusing"].includes(pubBody?.buyerRefusals?.status) && Object.keys(pubBody.buyerRefusals).join(",") === "status", `buyerRefusals publishes its word only (${JSON.stringify(pubBody?.buyerRefusals)})`);
 ok(typeof opBody?.buyerRefusals?.refusalsWindow === "number" && typeof opBody?.buyerRefusals?.refusals24h === "number", "the operator view of buyerRefusals carries the counts");
+
+// --- the late-settlement book: one word publicly, on both views ---
+ok(["ok", "near_capacity", "full", "unresolved"].includes(pubBody?.lateSettlements?.status) && Object.keys(pubBody.lateSettlements).join(",") === "status" && Object.keys(opBody?.lateSettlements || {}).join(",") === "status", `lateSettlements publishes its word only (${JSON.stringify(pubBody?.lateSettlements)})`);
 
 // --- the CDN origin secret: one word publicly (off without CDN_PROXY), counts and the secret's presence for the operator ---
 ok(pubBody?.cdnOrigin?.status === "off" && Object.keys(pubBody.cdnOrigin).join(",") === "status", `cdnOrigin publishes its word only (${JSON.stringify(pubBody?.cdnOrigin)})`);
