@@ -212,6 +212,16 @@ ok(invoices.length === 1 && invoices[0].amountUsd === 9 && invoices[0].product =
   await send("evt_o4", "customer.subscription.updated", { id: "sub_old", customer: "cus_old", status: "active", metadata: {} }, 2_000_000_400);
   ok(lb.get("sub_old")?.status === "active", "a newer status event applies");
 
+  // A live read, then a status update whose created time (Stripe's clock)
+  // is 30 s behind ours: the update applies, so the paid run stops.
+  await send("evt_s0", "customer.subscription.created", { id: "sub_skew", customer: "cus_skew", status: "active", metadata: { product: "domain-monitor", target: "skew.com" } });
+  const retrieveBefore = stripe.subscriptions.retrieve;
+  stripe.subscriptions.retrieve = async (id) => ({ id, status: "active", items: { data: [{ id: "si_s", current_period_end: 1900000000 }] } });
+  ok((await lb.refreshStatus("sub_skew")) === "active", "setup: a live read stores active");
+  stripe.subscriptions.retrieve = retrieveBefore;
+  await send("evt_s1", "customer.subscription.updated", { id: "sub_skew", customer: "cus_skew", status: "unpaid", metadata: {} }, Math.floor(Date.now() / 1000) - 30);
+  ok(lb.get("sub_skew")?.status === "unpaid", "a status update stamped 30 s behind our clock still applies after a live read (the read is stamped LIVE_READ_SKEW_S early)");
+
   // A dispute on an earlier month's payment, after a later invoice was paid,
   // still finds the subscription (by payment, or by charge).
   await send("evt_p1", "invoice.paid", { id: "in_m1", subscription: "sub_old", customer: "cus_old", amount_paid: 500, payment_intent: "pi_m1", charge: "ch_m1" });

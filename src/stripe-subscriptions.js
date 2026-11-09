@@ -130,6 +130,12 @@ function paidWith(rec, { pi, charge, invoiceId }) {
 // applied, so a late update never reactivates a canceled subscription.
 const statusStale = (cur, evAt) => isRec(cur) && Number.isFinite(evAt) && Number(cur.statusEventAt) > evAt;
 const nowSec = () => Math.floor(Date.now() / 1000);
+// A live read is stamped this many seconds before our clock: a webhook's
+// `created` is Stripe's clock, so an event just before or after the read can
+// carry an earlier time than ours. Stamping early lets such an event (a
+// cancellation) apply; the next pre-run read corrects any older one.
+export const LIVE_READ_SKEW_S = 60;
+const liveReadAt = () => nowSec() - LIVE_READ_SKEW_S;
 // The newer of two records of one subscription (by updatedAt; ISO strings compare as strings).
 const newer = (a, b) => (!a ? b : !b ? a : String(b.updatedAt || "") > String(a.updatedAt || "") ? b : a);
 
@@ -419,7 +425,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
     let live = null, readAt = null;
     try {
       const sub = await stripe.subscriptions.retrieve(subId);
-      if (sub?.status) { live = sub.status; readAt = nowSec(); }
+      if (sub?.status) { live = sub.status; readAt = liveReadAt(); }
     } catch { /* keep existing status (or first-time active) */ }
     // Built from the stored record inside the write: the live status when it
     // was read, else the stored one, else (first provisioning) active.
@@ -610,7 +616,7 @@ export function createStripeSubscriptions({ stripe, baseUrl, storePath, validate
     if (!subId) return null;
     try {
       const sub = await stripe.subscriptions.retrieve(subId);
-      if (sub?.status) { const at = nowSec(); await upsert(subId, (cur) => ({ status: sub.status, currentPeriodEnd: periodEndOf(sub), cancelAtPeriodEnd: !!sub.cancel_at_period_end, statusEventAt: Math.max(Number(cur?.statusEventAt) || 0, at) })); return sub.status; }
+      if (sub?.status) { const at = liveReadAt(); await upsert(subId, (cur) => ({ status: sub.status, currentPeriodEnd: periodEndOf(sub), cancelAtPeriodEnd: !!sub.cancel_at_period_end, statusEventAt: Math.max(Number(cur?.statusEventAt) || 0, at) })); return sub.status; }
     } catch { /* unreadable */ }
     return null;
   }
