@@ -24,6 +24,7 @@
 //      for a 4xx or offer-less 402/401 the caller's own input produced.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import "./lib/file-mode.js"; // file backends: never the caller's database or Redis
+import { mintTempoTestCredential } from "./lib/tempo-test-credential.js";
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import { mkdtempSync, readFileSync, existsSync } from "node:fs";
@@ -437,7 +438,7 @@ const near = (a, b) => Math.abs(a - b) < 1e-9;
   const tsock = new Set();
   tsrv.on("connection", (s) => { tsock.add(s); s.on("close", () => tsock.delete(s)); });
   await new Promise((r) => tsrv.listen(0, "127.0.0.1", r));
-  const tempoBuy = () => payTempo(`http://127.0.0.1:${tsrv.address().port}/v1/scrape`, { method: "POST", body: {}, maxAtomic: 5000n, timeoutMs: 3500, createCredential: async () => "Payment ZmFrZQ", proof: async () => 4000 }).then(() => null, (e) => e);
+  const tempoBuy = () => payTempo(`http://127.0.0.1:${tsrv.address().port}/v1/scrape`, { method: "POST", body: {}, maxAtomic: 5000n, timeoutMs: 3500, createCredential: async (res402) => mintTempoTestCredential(res402), proof: async () => 4000 }).then(() => null, (e) => e);
   for (const mode of ["reject", "fail", "hang"]) {
     tempoMode = mode;
     const e = await tempoBuy();

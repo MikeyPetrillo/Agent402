@@ -22,7 +22,7 @@ import { withConnRetry } from "./lib/conn-retry.js";
 import "../src/tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA
 import { legRefusalVerdict } from "./canary-refusal-classify.js";
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
-import { assertOwnPaidTarget, guardCappedSigning, capFromEnv, KNOWN_EVM_NETWORKS } from "./lib/buyer-guard.js";
+import { assertOwnPaidTarget, guardCappedSigning, capFromEnv, KNOWN_EVM_NETWORKS, tempoCappedChargeOptions } from "./lib/buyer-guard.js";
 import { isSponsorshipRowEvidence, sponsorshipRowMonth, sponsorshipRowUpdatedAt } from "../src/avm-sponsorship.js";
 import { subcentAcceptVerdict } from "./avm-canary-classify.js";
 import { readFileSync, existsSync, appendFileSync } from "node:fs";
@@ -1466,7 +1466,8 @@ async function main() {
         return;
       }
       // autoSwap: pay a USDC.e-first challenge from the PathUSD-funded burner via Tempo's DEX (no-op when currencies match).
-      const tempoClient = MppClientNS.create({ methods: [mppTempo.charge({ account, autoSwap: true })], polyfill: false });
+      // Capped: mppx refuses a challenge above the per-call ceiling before signing (scripts/lib/buyer-guard.js).
+      const tempoClient = MppClientNS.create({ methods: [mppTempo.charge({ account, ...tempoCappedChargeOptions({ autoSwap: true }) })], polyfill: false });
       // Credential creation talks to Tempo's public RPC (nonce, fee fields,
       // simulation) BEFORE any money moves. One visible retry: the 2026-08-18
       // 07:27 run threw "Cannot convert undefined to a BigInt" here (viem's

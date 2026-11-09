@@ -15,6 +15,7 @@
 //             puts MPP/tempo buyers on the Tempo wallet, keeps Base buyers on
 //             Base unless SOR_TEMPO_FROM_BASE opts them into Tempo fallthrough
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { mintTempoTestCredential } from "./lib/tempo-test-credential.js";
 import { createServer } from "node:http";
 import { tempoCatalog, rankTempoResources } from "../src/tempo-sellers.js";
 import { payTempo, __testResetProofCache, tempoInboundCount, tempoInboundEvidence, tempoEvidenceFromLogs, primeTempoInboundCount, TEMPO_USDC, TEMPO_CAIP2 } from "../src/tempo-buyer.js";
@@ -150,7 +151,8 @@ const seller = createServer((req, res) => {
 await new Promise((r) => seller.listen(0, r));
 const URL_ = `http://127.0.0.1:${seller.address().port}/v1/scrape`;
 let minted = 0;
-const mint = async (res402) => { minted++; const www = res402.headers.get("WWW-Authenticate"); ok(/method="tempo"/.test(www), "credential factory receives the seller's tempo challenge"); return "Payment ZmFrZQ"; };
+let lastMinted = null;
+const mint = async (res402) => { minted++; const www = res402.headers.get("WWW-Authenticate"); ok(/method="tempo"/.test(www), "credential factory receives the seller's tempo challenge"); lastMinted = mintTempoTestCredential(res402); return lastMinted; };
 const proofOk = async () => 4000;
 const proofLow = async () => 3;
 const proofDown = async () => { throw new Error("rpc down"); };
@@ -161,7 +163,7 @@ const r1 = await payTempo(URL_, { method: "POST", body: { url: "https://x" }, ma
 ok(r1.result?.scraped === true && r1.result.echo?.url === "https://x", "paid retry relayed the seller's JSON body (request body forwarded)");
 ok(r1.quote.usd === 0.002 && r1.quote.network === TEMPO_CAIP2, "quote reflects the LIVE 402 amount in USD on Tempo");
 ok(r1.receipt.transaction === "0xfeed" && r1.receipt.wire === "mpp", "receipt carries the Payment-Receipt reference and wire=mpp");
-ok(lastAuth === "Payment ZmFrZQ" && paidHits === 1 && minted === 1, "exactly one credential minted and sent as Authorization: Payment");
+ok(lastAuth === lastMinted && /^Payment /.test(lastAuth) && paidHits === 1 && minted === 1, "exactly one credential minted and sent as Authorization: Payment");
 
 // guards - each must refuse BEFORE minting
 const refuse = async (mode, opts, re, label) => {

@@ -2049,6 +2049,8 @@ jobs:
           t node scripts/test-mpp-subscriptions.js
           # Subscription gas sponsor: a rolling 24 h count and fee ceiling refuses a sponsored send past it before the RPC (offline, stub RPC)
           t node scripts/test-tempo-sponsor-ceiling.js
+          # Tempo buyer: a minted credential must move exactly the capped quote to the checked recipient, refused before it is sent; our paying scripts sign tempo/charge under the per-call ceiling (offline, stub seller)
+          t node scripts/test-tempo-credential-check.js
 
       - name: Socket supply-chain scan (dependency behaviour, not just versions)
         env:
