@@ -84,6 +84,9 @@ Operations:
   its refund transaction) or dismissed, and each resolution is recorded before
   the entry is dropped; unresolved entries are read on chain again every 6
   hours and close once the chain answers.
+- A Tempo pull transaction that lands after its 402 is booked as owed even
+  past the per-process watch bound or across a restart: every watch is on
+  record, and a one-minute sweep reads any the process did not finish.
 - Tempo subscription gas sponsorship has a rolling 24 h ceiling on
   transactions and fees, with a fifth of each held for renewals; past it a
   send is refused before broadcast, and /api/gateway-status reads

@@ -27,6 +27,7 @@ const ENTRIES = [
       "Site: the navigation puts live, status and llms.txt in the menus.",
       "Operations: /api/gateway-status reports lateSettlements (ok, near_capacity, full, unresolved) for settlements whose outcome was not known when the call was answered, and replayStore (ok, pending) while a settled payment's consumed mark waits to reach the shared store.",
       "Operations: an operator closes an unresolved late settlement as booked owed, paid (with its refund transaction) or dismissed, and each resolution is recorded before the entry is dropped; unresolved entries are read on chain again every 6 hours and close once the chain answers.",
+      "Operations: a Tempo pull transaction that lands after its 402 is booked as owed even past the per-process watch bound or across a restart: every watch is on record, and a one-minute sweep reads any the process did not finish.",
       "Operations: Tempo subscription gas sponsorship has a rolling 24 h ceiling on transactions and fees, with a fifth of each held for renewals; past it a send is refused before broadcast, and /api/gateway-status reads subscriptionFeePayer.ceiling=reached.",
       "Privacy: the shared record that an address paid recently is keyed by a keyed hash of the address, never the address or a plain hash of it, and expires within the hour; /privacy names it.",
       "Privacy: /privacy says a candidate seller may receive a request's inputs unpaid before it is paid, sometimes more than once.",
