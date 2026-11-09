@@ -125,6 +125,13 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   where a read is refused 503 and the word reads `capped`. The status Worker and `heartbeat.yml`
   page on `over` and `capped` under one issue ("X data daily spend OVER its ceiling") and close it
   on `ok` or `off` (`scripts/test-x-data-ceilings.js`).
+- **Exa ceilings:** the same two ceilings and words (`src/daily-ceilings.js`): `EXA_DAILY_MAX_USD`
+  (default 1; `0` refuses every call) is the alarm and `exaSpend` reads `over` past it while the
+  Exa tools keep serving; `EXA_DAILY_HARD_MAX_USD` (default 5 times the alarm ceiling; never
+  under it) refuses 503 and reads `capped`. Paged under "Exa daily spend OVER its ceiling",
+  closed on `ok` or `off` (`scripts/test-exa-ceilings.js`). `exaAllowance` and `EXA_CREDITS_USD`
+  are separate and unchanged: with the prepaid balance spent the upstream refuses and the tools
+  answer 503 whatever the ceilings say.
 - **Pre-payment refusal logs:** an input refusal answered before any payment gate
   (`src/prepayment-refusal.js`) writes its `[tool-error] ... prepay=true` line for the first 20
   in a clock minute per process; the rest print one summary line per minute (count and top

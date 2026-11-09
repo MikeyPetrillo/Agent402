@@ -22,6 +22,7 @@ import { markUntrusted } from "./provenance.js";
 import { upstreamCosts } from "../upstream-costs.js";
 import { meterUpstreamSpend } from "../posthog.js";
 import { createSharedDailySpend } from "../shared-limits.js";
+import { dailyCeilings, ceilingWord, noteOverAlarm } from "../daily-ceilings.js";
 import { onFinalResponse } from "../request-timing.js";
 import { noteXSearchCall, countsOf as xSearchCountsOf } from "../x-search-stats.js";
 // The upstream bills per POST RETURNED, not per request, so the page size is
@@ -126,10 +127,8 @@ function xRate(k) {
   if (v == null) { const e = new Error("X data tools are temporarily unavailable. This call is not charged on x402."); e.statusCode = 503; throw e; }
   return v;
 }
-// 0 refuses every call; blank or malformed reads as the default, never as off.
-const X_DATA_DAILY_MAX_USD = () => { const raw = String(process.env.X_DATA_DAILY_MAX_USD ?? "").trim(); const n = raw === "" ? NaN : Number(raw); return Number.isFinite(n) && n >= 0 ? n : 1; };
-const X_DATA_HARD_MULTIPLIER = 5;
-const X_DATA_DAILY_HARD_MAX_USD = (soft = X_DATA_DAILY_MAX_USD()) => { const raw = String(process.env.X_DATA_DAILY_HARD_MAX_USD ?? "").trim(); const n = raw === "" ? NaN : Number(raw); return Number.isFinite(n) && n > 0 ? Math.max(n, soft) : soft * X_DATA_HARD_MULTIPLIER; };
+// Both ceilings are read by src/daily-ceilings.js (shared with the Exa kit).
+const xCeilings = () => dailyCeilings("X_DATA_DAILY_MAX_USD", "X_DATA_DAILY_HARD_MAX_USD");
 const xSpend = { day: "", micro: 0, refused: 0, overLogged: "" };
 // Shared across replicas (src/shared-limits.js): the day's spend is also a
 // shared counter per UTC day, reserved before the call and corrected after,
@@ -214,13 +213,8 @@ export function xToolWorstCases(slug) {
 /** Counts only - never a token or a buyer. */
 export function xDataSpendStatus(now = Date.now()) {
   const spent = xSpendToday(now);
-  const cap = X_DATA_DAILY_MAX_USD();
-  const hard = X_DATA_DAILY_HARD_MAX_USD(cap);
-  // off: the switch refuses every call. capped: the hard ceiling refuses.
-  // over: past the alarm ceiling and still serving. over and capped page.
-  const at = (ceiling) => xSpend.micro >= Math.round(ceiling * 1e6);
-  const status = cap === 0 ? "off" : at(hard) ? "capped" : at(cap) ? "over" : "ok";
-  return { day: xSpend.day, spentUsd: Number(spent.toFixed(4)), capUsd: cap, hardCapUsd: cap === 0 ? 0 : hard, refusedToday: xSpend.refused, status };
+  const c = xCeilings();
+  return { day: xSpend.day, spentUsd: Number(spent.toFixed(4)), capUsd: c.alarmUsd, hardCapUsd: c.hardUsd, refusedToday: xSpend.refused, status: ceilingWord(xSpend.micro, c) };
 }
 export function _xSpendReset() { xSpend.day = ""; xSpend.micro = 0; xSpend.refused = 0; xSpend.overLogged = ""; xShared.reset(); }
 export function _xSpendBook(usd) { xSpendToday(); xSpend.micro += Math.round(usd * 1e6); }
@@ -243,9 +237,8 @@ function notFoundOnX(path, upstreamStatus, body) {
 
 async function xGet(path, params = {}) {
   const token = requireBearer();
-  const soft = X_DATA_DAILY_MAX_USD();
   // The refusing ceiling: the hard one, or nothing at all while the switch is 0.
-  const cap = soft === 0 ? 0 : X_DATA_DAILY_HARD_MAX_USD(soft);
+  const { alarmUsd: soft, refuseAtUsd: cap } = xCeilings();
   const estimate = estimateXReadUsd(path, params);
   const capped = () => { xSpend.refused++; return bad(`X data tools have reached today's usage cap - retry after 00:00 UTC. This call is not charged on x402.`, 503); };
   // The shared reserve first (an atomic add on the store, awaited only when
@@ -256,10 +249,7 @@ async function xGet(path, params = {}) {
   if (xSpendToday() + estimate > cap) { xShared.book(-estimate); throw capped(); }
   // Past the alarm ceiling the call is served: its buyer pays for it. One
   // log line a day; the status word carries the alarm (no figure here).
-  if (xSpendToday() + estimate > soft && xSpend.overLogged !== xSpend.day) {
-    xSpend.overLogged = xSpend.day;
-    console.warn("[x-data] the day's spend passed X_DATA_DAILY_MAX_USD: still serving, xDataSpend reads over until 00:00 UTC (X_DATA_DAILY_HARD_MAX_USD is the stop)");
-  }
+  if (xSpendToday() + estimate > soft) noteOverAlarm(xSpend, "[x-data]", "X_DATA_DAILY_MAX_USD", "X_DATA_DAILY_HARD_MAX_USD");
   // Reserve the estimate before the call; corrected to the actual cost after,
   // released on a clean refusal. A timeout or 5xx keeps the reservation.
   _xSpendBook(estimate);

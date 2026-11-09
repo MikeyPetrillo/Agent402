@@ -883,6 +883,14 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
       "`/api/gateway-status.xDataSpend` reports **over** or **capped**: the day's booked spend on the X data tools passed `X_DATA_DAILY_MAX_USD`. On **over** every call is still served (each one is paid for by its buyer); on **capped** it reached `X_DATA_DAILY_HARD_MAX_USD` and the tools answer 503 (uncharged) until 00:00 UTC. Read the day's X calls on the operator view, check the prepaid balance in the upstream's console, then raise the ceilings on Railway or leave them. Closes when the word reads ok (the next UTC day) or off.",
   },
   {
+    title: "Exa daily spend OVER its ceiling",
+    // Same words as xDataSpend (src/daily-ceilings.js); apart from the
+    // prepaid allowance alarm above, which reads exaAllowance.
+    verdict: ({ gateway: b }) => wordVerdict(b.exaSpend?.status, ["over", "capped"], ["ok", "off"]),
+    body: () =>
+      "`/api/gateway-status.exaSpend` reports **over** or **capped**: the day's booked spend on the Exa tools passed `EXA_DAILY_MAX_USD`. On **over** every call is still served (each one is paid for by its buyer); on **capped** it reached `EXA_DAILY_HARD_MAX_USD` and the tools answer 503 (uncharged) until 00:00 UTC. Check the prepaid balance in the upstream's console (a spent balance stops the tools whatever the ceilings say; `exaAllowance` is the word for that), then raise the ceilings on Railway or leave them. Closes when the word reads ok (the next UTC day) or off.",
+  },
+  {
     title: "State database DEGRADED (Postgres)",
     verdict: ({ gateway: b }) => wordVerdict(b.stateDb?.status, ["degraded"], ["on"]),
     body: () =>

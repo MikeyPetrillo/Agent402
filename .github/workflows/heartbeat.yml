@@ -521,6 +521,27 @@ jobs:
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "xDataSpend is ${STATUS}; closing." || true
           fi
 
+      # Exa daily spend (src/tools/exa-kit.js): the same words as xDataSpend.
+      # Apart from the prepaid allowance step above, which reads exaAllowance.
+      - name: Exa daily spend over its ceiling
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.exaSpend.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "exa spend: $STATUS"
+          TITLE="Exa daily spend OVER its ceiling"
+          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          if [ "$STATUS" = "over" ] || [ "$STATUS" = "capped" ]; then
+            if [ -z "$EXISTING" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+                --body "\`/api/gateway-status.exaSpend\` reports **over** or **capped**: the day's booked spend on the Exa tools passed \`EXA_DAILY_MAX_USD\`. On **over** every call is still served (each one is paid for by its buyer); on **capped** it reached \`EXA_DAILY_HARD_MAX_USD\` and the tools answer 503 (uncharged) until 00:00 UTC. Check the prepaid balance in the upstream's console (a spent balance stops the tools whatever the ceilings say; \`exaAllowance\` is the word for that), then raise the ceilings on Railway or leave them. Closes when the word reads ok (the next UTC day) or off."
+            fi
+          elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "exaSpend is ${STATUS}; closing." || true
+          fi
+
       - name: Algorand upstream buyer wallet check (alarm on low AVM spending balance)
         if: always()
         continue-on-error: true

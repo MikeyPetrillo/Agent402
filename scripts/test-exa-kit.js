@@ -44,7 +44,7 @@ const stub = (status, body, headers = {}) => {
     };
   };
 };
-const reset = () => { calls = []; _exaSpendReset(); process.env.EXA_API_KEY = "test-key"; delete process.env.EXA_DAILY_MAX_USD; };
+const reset = () => { calls = []; _exaSpendReset(); process.env.EXA_API_KEY = "test-key"; delete process.env.EXA_DAILY_MAX_USD; delete process.env.EXA_DAILY_HARD_MAX_USD; };
 
 // --- listing predicate ------------------------------------------------------
 {
@@ -95,6 +95,8 @@ const reset = () => { calls = []; _exaSpendReset(); process.env.EXA_API_KEY = "t
   // put the first call over it.
   const cap = R.search * 3;
   process.env.EXA_DAILY_MAX_USD = String(cap);
+  // The refusing ceiling is the hard one; held at the alarm ceiling here (scripts/test-exa-ceilings.js covers the two apart).
+  process.env.EXA_DAILY_HARD_MAX_USD = String(cap);
   stub(200, { results: [], costDollars: { total: R.search } });
   await tool("exa-search").handler({ query: "one" });
   const after = exaSpendStatus();

@@ -3548,6 +3548,8 @@ jobs:
           t node scripts/test-x-data-ceilings.js
           # Exa kit (env-gated on EXA_API_KEY; offline, stubbed fetch, nothing spent)
           t node scripts/test-exa-kit.js
+          # Exa daily ceilings: served past the alarm ceiling, refused at the hard one, 0 refuses all, allowance word untouched, both observers page (offline)
+          t node scripts/test-exa-ceilings.js
           # b2b-enrich kit (offline)
           t node scripts/test-b2b-enrich-kit.js
           # Ox Alpha free-trial safety (fails closed on a repriced upstream, offline)
