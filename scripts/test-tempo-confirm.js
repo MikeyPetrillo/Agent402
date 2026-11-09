@@ -552,14 +552,15 @@ async function listen(app) {
   let landed = false;
   const booked = [];
   const rows = new Set();
+  let bookReturns = true, synth = false;
   const gate = createTempoGate({
     ...GATE,
     validate: async () => ({ ok: true, validation: {} }),
     broadcast: async () => ({ ok: false, cls: "unknown", error: "relay timed out", reason: "relay timed out" }),
     confirmSettlement: async (_auth, opts) => (landed && opts ? { txId: REAL_TXID, amountAtomic: 1000n } : null),
-    onPushNotClaimed: async (req, info) => { booked.push({ req: { method: req.method, path: req.path, payer: req.mppTempoLedgerPayer, synthetic: req.__lateWatchSynthetic }, info }); rows.add(info.hash); return true; },
-    pushRowOf: (hash) => (rows.has(hash) ? { status: "owed" } : null),
-    syntheticOf: () => false,
+    onPushNotClaimed: async (req, info) => { booked.push({ req: { method: req.method, path: req.path, payer: req.mppTempoLedgerPayer, synthetic: req.__lateWatchSynthetic }, info }); rows.add(info.hash); return bookReturns; },
+    pushRowOf: (hash) => (rows.has(hash) ? { status: "paid" } : null),
+    syntheticOf: () => synth,
   });
   const app = express();
   app.use(gate);
@@ -581,6 +582,17 @@ async function listen(app) {
   ok(Object.keys((await doc.read()).body?.watches || {}).length === 0, "durable: and the entry is removed");
   const again = await gate.sweepLateWatches();
   ok(again.read === 0 && booked.length === 1, "durable: a second sweep finds nothing to read");
+  // Our own synthetic traffic keeps its mark, and a transaction whose hash
+  // already holds a refund row in another state (here paid) is on the books:
+  // the booking answers false (no owed row), and the entry is still cleared.
+  synth = true; bookReturns = false;
+  await fetch(`${url}/paid`, { headers: { Authorization: buildCredential() } });
+  await new Promise((r) => setTimeout(r, 50));
+  clock = Date.now() + 40 + LATE_WATCH_GRACE_MS + 1000;
+  const paidRow = await gate.sweepLateWatches();
+  ok(booked.length === 2 && booked[1].req.synthetic === true, "durable: a synthetic request's stored mark reaches the booking");
+  ok(paidRow.landed === 1 && Object.keys((await doc.read()).body?.watches || {}).length === 0, `durable: a transaction already on the books in another state clears the entry, not read again every minute (${JSON.stringify(paidRow)})`);
+  synth = false; bookReturns = true; rows.clear();
   // A process that stops mid-watch: the entry a running watch owned is read by the next process.
   process.env.TEMPO_LATE_CONFIRM_MAX_WATCHES = "5";
   landed = false;
@@ -591,7 +603,7 @@ async function listen(app) {
   const next = createLateWatchLedger({ doc, now: () => Date.now() + 40 + LATE_WATCH_GRACE_MS + 1000, log: () => {} });
   rows.clear(); landed = true;
   const swept = await next.sweep({ confirm: async () => ({ txId: "0x" + "ab".repeat(32), amountAtomic: 1000n }), book: async (e, found) => { booked.push({ e, found }); return true; } });
-  ok(swept.landed === 1 && booked.length === 2 && booked[1].e.path === "/paid", `restart: another process's sweep reads and books the watch the first never finished (${JSON.stringify(swept)})`);
+  ok(swept.landed === 1 && booked.length === 3 && booked[2].e.path === "/paid", `restart: another process's sweep reads and books the watch the first never finished (${JSON.stringify(swept)})`);
   await new Promise((r) => setTimeout(r, 150));
   console.warn = warn;
   configureTempoLateWatches(null);

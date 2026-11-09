@@ -67,7 +67,7 @@ const DUE = 40 + LATE_WATCH_GRACE_MS + 1;
   await doc.update(() => body, { fallback: { watches: {} } });
   await L.record("newest", { auth: "AN", startedAt: 999_999, lastDelayMs: 40 });
   const keys = await entries(doc);
-  ok(keys.length === LATE_WATCH_KEEP_MAX && !keys.includes("k0") && keys.includes("newest") && logs.some((m) => /ERROR late-landing watch list is full/.test(m)), `the list keeps at most ${LATE_WATCH_KEEP_MAX}, dropping the oldest with an error`);
+  ok(keys.length === LATE_WATCH_KEEP_MAX && !keys.includes("k0") && keys.includes("newest") && logs.filter((m) => /ERROR late-landing watch list is full/.test(m)).length === 1, `the list keeps at most ${LATE_WATCH_KEEP_MAX}, dropping the oldest with one error line`);
 }
 {
   // The in-process watch: removes its entry only once it has answered.

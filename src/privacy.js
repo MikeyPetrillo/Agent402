@@ -213,7 +213,10 @@ so every claim below is verifiable in code.</p>
   that was not settled, a forgiven hang-up${allowanceOn ? " or a served first-call allowance" : ""}, whose authorization is still live
   on chain, until the authorization's own validBefore plus ${Math.round(CONSUMED_VALIDITY_MARGIN_MS / 60000)} minutes, which can be long when the client
   signs a long validity window), the signers of a Solana payment (stored only
-  as a keyed hash), the source address of a Tempo credential, the payer the settlement receipt names, and,
+  as a keyed hash), the source address of a Tempo credential, a Tempo pull credential answered 402 after its
+  broadcast failed (kept with its route, amount and payer until the check for a late landing ends: minutes,
+  at most 24 hours while the chain cannot be read, so a transfer that lands after the 402 is booked as owed),
+  the payer the settlement receipt names, and,
   on a refused payment, the resource URL it names (see telemetry above). The optional description and
   <code>reason</code> annotation fields are not read, logged or retained. The machine-readable list is in
   <a href="/.well-known/x402">/.well-known/x402</a> under <code>payment.dataHandling</code>: <code>readsOnly</code>

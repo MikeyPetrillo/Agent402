@@ -44,22 +44,26 @@ export function createLateWatchLedger({
   /** Write an entry before its watch starts. Resolves false when nothing was stored. */
   async function record(key, entry) {
     let r = null;
+    // The update callback can run more than once (a write conflict retries
+    // it), so what it dropped is counted and logged once, after the write.
+    let droppedNow = 0;
     try {
       r = await doc.update((b) => {
+        droppedNow = 0;
         const watches = { ...((b && b.watches) || {}) };
         watches[key] = entry;
         const keys = Object.keys(watches);
         if (keys.length > LATE_WATCH_KEEP_MAX) {
           keys.sort((a, c) => (Number(watches[a]?.startedAt) || 0) - (Number(watches[c]?.startedAt) || 0));
-          for (const k of keys.slice(0, keys.length - LATE_WATCH_KEEP_MAX)) {
-            delete watches[k];
-            counts.dropped++;
-            log(`[mpp-tempo] ERROR late-landing watch list is full (${LATE_WATCH_KEEP_MAX}): the oldest entry was dropped unread`);
-          }
+          for (const k of keys.slice(0, keys.length - LATE_WATCH_KEEP_MAX)) { delete watches[k]; droppedNow++; }
         }
         return { ...(b || {}), watches };
       }, { fallback: EMPTY });
     } catch { r = null; }
+    if (r?.ok && droppedNow) {
+      counts.dropped += droppedNow;
+      log(`[mpp-tempo] ERROR late-landing watch list is full (${LATE_WATCH_KEEP_MAX}): ${droppedNow} oldest entr${droppedNow === 1 ? "y was" : "ies were"} dropped unread`);
+    }
     if (r?.ok) counts.recorded++;
     else { counts.recordFailed++; log("[mpp-tempo] late-landing watch could not be recorded; it runs in this process only"); }
     return !!r?.ok;

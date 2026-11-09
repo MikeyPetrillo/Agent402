@@ -212,6 +212,7 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
           `a digest of the payment's network, signed payer and nonce: as a replay mark, kept about ${settledHoldText()} after a settled call; for a grant that was not settled (a forgiven hang-up${firstCallAllowanceEnabled() ? ", a served first-call allowance" : ""}), whose authorization is still live on chain, until the authorization's own validBefore plus ${Math.round(CONSUMED_VALIDITY_MARGIN_MS / 60000)} minutes, which can be long when the client signs a long validity window`,
           "the signers of a Solana payment transaction: to tell one paying wallet from another in failure telemetry, stored only as a keyed hash",
           "the source of a Tempo MPP credential (a did:pkh address): to classify the payer of a sale",
+          "a Tempo pull credential answered 402 after its broadcast failed, with its route, amount and the payer it names: kept until the check for a late landing ends (minutes; at most 24 hours while the chain cannot be read), so a transfer that lands after the 402 is booked as owed",
           "the payer named in the facilitator's settlement receipt: recorded with the sale when the payment itself names none we can verify",
         ],
         retains: "each sale's payer address, settlement transaction, route and price, in the sales ledger; the ledger's payer list is not published, while pages that show individual on-chain payments show them as the chain records them (shortened payer addresses), see /terms",

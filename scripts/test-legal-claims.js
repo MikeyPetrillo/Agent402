@@ -222,5 +222,17 @@ ok(/\?trial=1/.test(terms) && /\?trial=1/.test(privacy), "/terms and /privacy bo
   ok(JSON.stringify(named) === JSON.stringify(listed), `connector setup names the npm package's EVM presets (${listed.join(", ")} vs ${named.join(", ")})`);
 }
 
+// The Tempo late-landing record (src/tempo-late-watches.js) is named on
+// /privacy and in /.well-known/x402 readsOnly, at the bound the code keeps.
+{
+  const { LATE_WATCH_GIVE_UP_MS } = await import("../src/tempo-late-watches.js");
+  const priv = readFileSync(new URL("../src/privacy.js", import.meta.url), "utf8").replace(/\s+/g, " ");
+  const disc = readFileSync(new URL("../src/discovery.js", import.meta.url), "utf8");
+  const hours = Math.round(LATE_WATCH_GIVE_UP_MS / 3600_000);
+  ok(hours === 24 && priv.includes(`a Tempo pull credential answered 402 after its broadcast failed (kept with its route, amount and payer until the check for a late landing ends: minutes, at most ${hours} hours while the chain cannot be read`)
+    && disc.includes(`a Tempo pull credential answered 402 after its broadcast failed, with its route, amount and the payer it names: kept until the check for a late landing ends (minutes; at most ${hours} hours while the chain cannot be read)`),
+    "/privacy and /.well-known/x402 name the Tempo late-landing record and its 24-hour bound");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

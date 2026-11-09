@@ -97,6 +97,9 @@ Privacy:
   hour; /privacy names it.
 - /privacy says a candidate seller may receive a request's inputs unpaid
   before it is paid, sometimes more than once.
+- /privacy and /.well-known/x402 name the Tempo pull credential kept, with
+  its route, amount and payer, until its late-landing check ends (at most 24
+  hours while the chain cannot be read).
 - /terms says an x402 payment on an EVM chain, or a Tempo transaction, that
   lands on chain after an error answer is recorded as owed and repaid, and that a repayment is checked against the published
   sanctions lists first.

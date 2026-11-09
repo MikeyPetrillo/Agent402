@@ -31,6 +31,7 @@ const ENTRIES = [
       "Operations: Tempo subscription gas sponsorship has a rolling 24 h ceiling on transactions and fees, with a fifth of each held for renewals; past it a send is refused before broadcast, and /api/gateway-status reads subscriptionFeePayer.ceiling=reached.",
       "Privacy: the shared record that an address paid recently is keyed by a keyed hash of the address, never the address or a plain hash of it, and expires within the hour; /privacy names it.",
       "Privacy: /privacy says a candidate seller may receive a request's inputs unpaid before it is paid, sometimes more than once.",
+      "Privacy: /privacy and /.well-known/x402 name the Tempo pull credential kept, with its route, amount and payer, until its late-landing check ends (at most 24 hours while the chain cannot be read).",
       "Privacy: /terms says an x402 payment on an EVM chain, or a Tempo transaction, that lands on chain after an error answer is recorded as owed and repaid, and that a repayment is checked against the published sanctions lists first.",
     ],
   },
