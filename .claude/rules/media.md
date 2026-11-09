@@ -32,3 +32,15 @@ Loaded when a media, document or worker-pool tool file is read.
   then a 429 with Retry-After. ffmpeg, ffprobe and Chromium start with `childEnv()`
   (`src/tools/child-env.js`), an allowlist of environment variables, so no key reaches a child
   process (defense in depth: a same-user child can still read its parent's environment).
+- **Image headers:** the source-pixel cap is read from the container header, so
+  `src/tools/image-headers.js` holds each format to the field its decoder sizes from: one PNG
+  IHDR, and it comes first; one JPEG frame header on the marker chain, with the cap also handed
+  to the JPEG decoder (`maxResolutionInMP`), which applies it to whichever frame header it acts
+  on; GIF frame 0 inside its screen, read with the omggif copy jimp loads; for TIFF every
+  directory the decoder reads, with the cap on the page total (at most 32 pages) and on the
+  decoded sample bytes. TIFF decodes compressions 1, 5, 8, 32946 and 32773; any other, a camera
+  maker note in a vendor layout, or a tag declaring more values than the file holds answers 400.
+  `assertInflateWithinDeclared` runs in the worker before the decode and bounds the inflate of
+  an interlaced PNG and of each deflate TIFF strip or tile. No WebP decoder is installed. A new
+  decoder path gets a header walk that follows the decoder, a small-file test and a decode of
+  the format's ordinary shapes (`scripts/test-image.js`).
