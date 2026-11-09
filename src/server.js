@@ -3382,10 +3382,11 @@ app.use(chainNamespaceMiddleware);
 // divides, like every limiter in src/rate-limit.js).
 const UNPAID_QUOTE_BUDGET = FREE_MODE ? 0 : unpaidQuoteBudgetPerHour();
 // Client addresses that completed a settled paid call in the last
-// PAID_QUOTE_TRUST_MINUTES (src/paid-quote-trust.js): their unpaid quotes
-// read against PAID_CLIENT_QUOTE_MULTIPLIER times the plain figures, on the
-// price-check budget below and on the metered quote limiter. Marked only from
-// the settlement-outcome hook further down.
+// PAID_QUOTE_TRUST_MINUTES (src/paid-quote-trust.js): their unpaid price
+// checks read against PAID_CLIENT_QUOTE_MULTIPLIER times the plain figure on
+// the price-check budget below. A metered quote past the plain figure needs a
+// credit a settled /v1/metered call earned (METERED_QUOTE_CREDITS_PER_CALL).
+// Marked only from the settlement-outcome hook further down.
 const QUOTE_TRUST = createPaidQuoteTrust();
 const UNPAID_BUDGET = UNPAID_QUOTE_BUDGET > 0 ? createUnpaidQuoteBudget({
   paidTrust: QUOTE_TRUST,
@@ -3504,19 +3505,20 @@ app.use("/v1/metered", (req, res, next) => {
     // the raised ceiling (src/paid-quote-trust.js): a stock client quotes
     // before every paid call. This process's record is read first; the shared
     // store only on a refusal.
+    // Every unpaid quote counts against the plain figure first. Past it, a
+    // quote is served only on a credit a settled /v1/metered call from this
+    // address earned (src/paid-quote-trust.js creditMetered), so free quotes
+    // stay bounded by paid metered calls, under the raised ceilings.
     const trustKey = quoteClientKeyOf(req);
     const egressKey = workerEgressAddressKeyOf(req);
-    const trustedQuote = () => {
-      if (meteredTrustedQuoteLimiter.check(trustKey).limited) return refuseQuote();
-      if (egressKey && meteredTrustedEgressLimiter.check(egressKey).limited) return refuseQuote();
-      return next();
-    };
-    if (QUOTE_TRUST.trustedLocal(trustKey)) return trustedQuote();
     const ip = clientIp(req);
-    if (meteredQuoteLimiter.peek(ip).limited) {
-      return QUOTE_TRUST.trusted(trustKey).then((t) => (t ? trustedQuote() : refuseQuote()), () => refuseQuote());
+    if (!meteredQuoteLimiter.peek(ip).limited) {
+      meteredQuoteLimiter.check(ip);
+      return next();
     }
-    meteredQuoteLimiter.check(ip);
+    if (!QUOTE_TRUST.takeMeteredCredit(trustKey)) return refuseQuote();
+    if (meteredTrustedQuoteLimiter.check(trustKey).limited) return refuseQuote();
+    if (egressKey && meteredTrustedEgressLimiter.check(egressKey).limited) return refuseQuote();
     return next();
   }
   if (paid) {
@@ -11153,7 +11155,12 @@ app.use((req, res, next) => {
       // settle evidence, and this hook skips allowance grants and forgiven
       // hang-ups before it runs.
       if (!FREE_MODE && res.statusCode === 200 && res.getHeader("X-Pow-Accepted") !== "true" && res.getHeader("X-Trial-Accepted") !== "true" && paidAndSettled(req, res, { settleReceipt })) {
-        try { QUOTE_TRUST.mark(quoteClientKeyOf(req)); } catch { /* trust is a convenience, never a reason to fail */ }
+        try {
+          const trustKey = quoteClientKeyOf(req);
+          QUOTE_TRUST.mark(trustKey);
+          // Only a settled /v1/metered call earns metered quote credits.
+          if (String(req.originalUrl || req.url || "").split("?")[0].startsWith("/v1/metered/")) QUOTE_TRUST.creditMetered(trustKey);
+        } catch { /* trust is a convenience, never a reason to fail */ }
       }
       if (res.statusCode === 200) {
         const powAccepted = res.getHeader("X-Pow-Accepted") === "true";

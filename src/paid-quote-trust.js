@@ -43,6 +43,9 @@ import { allowanceServed } from "./allowance-state.js";
 export const PAID_QUOTE_TRUST_MINUTES = 10;
 export const PAID_QUOTE_TRUST_MS = PAID_QUOTE_TRUST_MINUTES * 60_000;
 export const PAID_QUOTE_TRUST_KEY_CAP = 20_000;
+// Unpaid /v1/metered quotes one settled /v1/metered call earns past the plain
+// figure: its own quote and one retry.
+export const METERED_QUOTE_CREDITS_PER_CALL = 2;
 // How long a "not trusted" answer from the shared store is held per address.
 export const PAID_QUOTE_TRUST_NEGATIVE_MS = 5_000;
 const STORE_NAME = "paid-quote-trust";
@@ -95,6 +98,35 @@ export function createPaidQuoteTrust({ store = sharedStore, windowMs = PAID_QUOT
     try { void Promise.resolve(store?.flagSet?.(STORE_NAME, digest(key), until, { now: t })).catch(() => {}); } catch { /* never break a response */ }
   }
 
+  // METERED QUOTE CREDITS. A /v1/metered quote runs the tokenizer over the
+  // body, so the raise past the plain figure is earned per paid metered call,
+  // not by any payment: each settled /v1/metered call grants
+  // METERED_QUOTE_CREDITS_PER_CALL unpaid quotes (its own quote and one
+  // retry), at most PAID_CLIENT_METERED_QUOTES_PER_MIN held, expiring with the
+  // window. Kept on this process only: on another replica a buyer simply
+  // reads against the plain figure, never more.
+  const credits = new Map(); // key -> { n, until }
+  function creditMetered(key, t = now()) {
+    if (!key) return;
+    const prev = credits.get(key);
+    const held = prev && prev.until > t ? prev.n : 0;
+    credits.delete(key);
+    credits.set(key, { n: Math.min(PAID_CLIENT_METERED_QUOTES_PER_MIN, held + METERED_QUOTE_CREDITS_PER_CALL), until: t + windowMs });
+    if (credits.size > keyCap) {
+      for (const [k, c] of credits) if (c.until <= t) credits.delete(k);
+      while (credits.size > keyCap) credits.delete(credits.keys().next().value);
+    }
+  }
+  /** Spend one metered quote credit; false when none is held. */
+  function takeMeteredCredit(key, t = now()) {
+    if (!key) return false;
+    const c = credits.get(key);
+    if (!c) return false;
+    if (c.until <= t || c.n <= 0) { credits.delete(key); return false; }
+    c.n -= 1;
+    return true;
+  }
+
   /** This process's own record only: synchronous, no store read. */
   function trustedLocal(key, t = now()) {
     if (!key) return false;
@@ -140,7 +172,7 @@ export function createPaidQuoteTrust({ store = sharedStore, windowMs = PAID_QUOT
     };
   }
 
-  return { mark, trusted, trustedLocal, stats, _size: () => local.size };
+  return { mark, trusted, trustedLocal, creditMetered, takeMeteredCredit, stats, _size: () => local.size, _credits: (key) => credits.get(key)?.n ?? 0 };
 }
 
 /** True when this final response proves a payment settled or was debited.

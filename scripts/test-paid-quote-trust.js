@@ -39,7 +39,7 @@ const POW_SECRET = "test-paid-quote-trust-secret";
 process.env.POW_SECRET = POW_SECRET;
 
 const {
-  PAID_QUOTE_TRUST_MINUTES, PAID_QUOTE_TRUST_MS, PAID_QUOTE_TRUST_NEGATIVE_MS, createPaidQuoteTrust, paidAndSettled, trustBucket,
+  PAID_QUOTE_TRUST_MINUTES, PAID_QUOTE_TRUST_MS, PAID_QUOTE_TRUST_NEGATIVE_MS, createPaidQuoteTrust, paidAndSettled, trustBucket, METERED_QUOTE_CREDITS_PER_CALL,
 } = await import("../src/paid-quote-trust.js");
 const { createUnpaidQuoteBudget, METERED_UNPAID_QUOTES_PER_MIN, METERED_UNPAID_QUOTES_PER_HOUR, PAID_CLIENT_QUOTE_MULTIPLIER, PAID_CLIENT_METERED_QUOTES_PER_MIN, PAID_CLIENT_METERED_QUOTES_PER_HOUR, quoteKeyDigest, clientKeyOf: quoteClientKeyOf } = await import("../src/unpaid-quote-budget.js");
 const { ALLOWANCE_STATE } = await import("../src/allowance-state.js");
@@ -48,9 +48,11 @@ let pass = 0;
 const procs = [];
 const dirs = [];
 let facilitator = null;
+let orStub = null;
 const cleanup = () => {
   for (const p of procs) { try { p.kill("SIGKILL"); } catch { /* gone */ } }
   try { facilitator?.close(); } catch { /* closed */ }
+  try { orStub?.close(); } catch { /* closed */ }
   for (const d of dirs) { try { rmSync(d, { recursive: true, force: true }); } catch { /* gone */ } }
 };
 const fail = (m) => { console.error("FAIL:", m); for (const p of procs) if (p.__log) console.error(p.__log.slice(-2000)); cleanup(); process.exit(1); };
@@ -225,18 +227,41 @@ function fakeStore() {
   ok((await drive(b3, "203.0.113.53")).code === 429, "with the store down the budget limits normally");
 }
 
+// Metered quote credits: earned per paid metered call, capped, expiring, never shared.
+{
+  let t = 1_000_000;
+  const q = createPaidQuoteTrust({ store: null, now: () => t, keyCap: 3 });
+  ok(METERED_QUOTE_CREDITS_PER_CALL === 2, "each paid metered call earns two quotes");
+  ok(!q.takeMeteredCredit("198.51.100.1"), "no credit without a paid metered call");
+  q.mark("198.51.100.1");
+  ok(!q.takeMeteredCredit("198.51.100.1"), "a payment on another route (mark alone) grants no metered credit");
+  q.creditMetered("198.51.100.1");
+  ok(q._credits("198.51.100.1") === 2 && q.takeMeteredCredit("198.51.100.1") && q.takeMeteredCredit("198.51.100.1") && !q.takeMeteredCredit("198.51.100.1"), "two credits spend, the third take is refused");
+  for (let i = 0; i < 1000; i++) q.creditMetered("198.51.100.2");
+  ok(q._credits("198.51.100.2") === PAID_CLIENT_METERED_QUOTES_PER_MIN, `held credits stop at ${PAID_CLIENT_METERED_QUOTES_PER_MIN}`);
+  q.creditMetered("198.51.100.3");
+  t += PAID_QUOTE_TRUST_MS - 1;
+  ok(q.takeMeteredCredit("198.51.100.3"), "a credit holds until the window ends");
+  t += 1;
+  ok(!q.takeMeteredCredit("198.51.100.3"), "and expires with it");
+  q.creditMetered("198.51.100.4"); q.creditMetered("198.51.100.5"); q.creditMetered("198.51.100.6"); q.creditMetered("198.51.100.7");
+  ok(q._credits("198.51.100.4") === 0 && q._credits("198.51.100.7") === 2, "the credit record holds at most keyCap addresses, oldest dropped");
+  ok(!q.takeMeteredCredit("") && !q.takeMeteredCredit(null), "an empty key never holds a credit");
+}
+
 // The buying-at-volume guide and its wiki page quote the window the code enforces.
 {
   const { guidePage } = await import("../src/guides.js");
   const { readFileSync } = await import("node:fs");
   const html = String(guidePage("https://x.test", "buying-at-volume") || "").replace(/\s+/g, " ");
   const phrase = `${PAID_QUOTE_TRUST_MINUTES} minutes after each paid call`;
-  const ceiling = `${PAID_CLIENT_METERED_QUOTES_PER_MIN} a minute and ${PAID_CLIENT_METERED_QUOTES_PER_HOUR.toLocaleString("en-US")} an hour for ${phrase}`;
-  ok(html.includes(ceiling), `the guide quotes the raised ceiling: ${ceiling}`);
+  const credit = `past that, ${METERED_QUOTE_CREDITS_PER_CALL} more for each paid \`/v1/metered\` call from that address, used within ${PAID_QUOTE_TRUST_MINUTES} minutes, up to ${PAID_CLIENT_METERED_QUOTES_PER_MIN} a minute and ${PAID_CLIENT_METERED_QUOTES_PER_HOUR.toLocaleString("en-US")} an hour`;
+  const htmlCredit = credit.replace(/`\/v1\/metered`/, "<code>/v1/metered</code>");
+  ok(html.includes(htmlCredit) || html.includes(credit), `the guide quotes the per-call metered credit and its ceiling: ${credit}`);
+  ok(html.includes(phrase), "and the price-check window");
   ok(!html.includes("not limited for") && !html.includes("not counted for"), "and never says a paid address is not limited");
   const wiki = readFileSync(new URL("../wiki/Buying-at-Volume.md", import.meta.url), "utf8");
-  const wikiCeiling = `${PAID_CLIENT_METERED_QUOTES_PER_MIN} a minute and ${PAID_CLIENT_METERED_QUOTES_PER_HOUR.toLocaleString("en-US")} an hour for ${phrase}`;
-  ok(wiki.includes(wikiCeiling) && wiki.includes("PAID_QUOTE_TRUST_MINUTES") && wiki.includes("PAID_CLIENT_QUOTE_MULTIPLIER"), "the wiki page quotes the same ceiling and window and names their constants");
+  ok(wiki.replace(" (`METERED_QUOTE_CREDITS_PER_CALL`)", "").includes(credit) && wiki.includes("METERED_QUOTE_CREDITS_PER_CALL") && wiki.includes(phrase) && wiki.includes("PAID_QUOTE_TRUST_MINUTES") && wiki.includes("PAID_CLIENT_QUOTE_MULTIPLIER"), "the wiki page quotes the same credit, ceiling and window and names their constants");
   ok(!/not limited for|not counted for/.test(wiki), "and never says a paid address is not limited");
   // The changelog entries (both files, which test-changelog-parity keeps equal) and the home monitor line.
   const changelogMd = readFileSync(new URL("../CHANGELOG.md", import.meta.url), "utf8");
@@ -271,7 +296,7 @@ function fakeStore() {
 }
 
 // ---- booted half ---------------------------------------------------------------
-const [PORT, FAC] = await getFreePorts(2);
+const [PORT, FAC, ORP] = await getFreePorts(3);
 let settles = 0;
 const settledNonces = new Set();
 facilitator = createServer((req, res) => {
@@ -294,11 +319,25 @@ facilitator = createServer((req, res) => {
   });
 });
 await new Promise((r) => facilitator.listen(FAC, "127.0.0.1", r));
+// A stub OpenRouter (scripts/lib/openrouter-stub-preload.js sends openrouter.ai
+// here), so a paid /v1/metered call completes offline and spends nothing.
+let orChats = 0;
+orStub = createServer((req, res) => {
+  let b = ""; req.on("data", (c) => { b += c; }); req.on("end", () => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    if (req.method === "POST" && String(req.url || "").startsWith("/api/v1/chat/completions")) {
+      orChats++;
+      return res.end(JSON.stringify({ id: "gen-test", object: "chat.completion", created: Math.floor(Date.now() / 1000), model: "openai/gpt-4o-mini", choices: [{ index: 0, message: { role: "assistant", content: "OK" }, finish_reason: "stop" }], usage: { prompt_tokens: 5, completion_tokens: 1, total_tokens: 6 } }));
+    }
+    res.end(JSON.stringify({ data: [] }));
+  });
+});
+await new Promise((r) => orStub.listen(ORP, "127.0.0.1", r));
 
 const OP = "test-paid-quote-trust-operator";
 const dir = mkdtempSync(join(tmpdir(), "a402-quote-trust-"));
 dirs.push(dir);
-const proc = spawn(process.execPath, ["src/server.js"], {
+const proc = spawn(process.execPath, ["--import", fileURLToPath(new URL("./lib/openrouter-stub-preload.js", import.meta.url)), "src/server.js"], {
   env: {
     ...process.env, ...ownStoreEnv("paid-quote-trust"),
     FREE_MODE: "", WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", PAYMENT_NETWORKS: "base",
@@ -307,7 +346,7 @@ const proc = spawn(process.execPath, ["src/server.js"], {
     LEADERBOARD_FIRST_REFRESH_DELAY_MS: "3600000",
     // Only unpaid quotes reach the metered route: nothing is sent upstream.
     // The placeholder cost table prices the quote (no private rate here).
-    OPENROUTER_API_KEY: "test-key-never-sent", UPSTREAM_COSTS_JSON: "", UPSTREAM_COSTS_OPTIONAL: "",
+    OPENROUTER_API_KEY: "test-key-never-sent", OPENROUTER_STUB_URL: `http://127.0.0.1:${ORP}`, OPENROUTER_MANAGEMENT_KEY: "", OPENROUTER_FLEX: "off", UPSTREAM_COSTS_JSON: "", UPSTREAM_COSTS_OPTIONAL: "",
     UPSTREAM_COSTS_FILE: fileURLToPath(new URL("../docs/example-upstream-costs.json", import.meta.url)),
     SALES_LEDGER_DB: join(dir, "sales.db"), TRAFFIC_DIR: dir,
     RATE_LIMIT_REPLICAS: "1", TRUST_PROXY_HOPS: "1", POW_SECRET, POW_DIFFICULTY: "8",
@@ -351,7 +390,19 @@ try {
     const got = await quotes("203.0.113.10", N + 1);
     ok(got.slice(0, N).every((s) => s === 402) && got[N] === 429, `control: an address that never paid gets ${N} quotes, then a 429 (statuses ${[...new Set(got.slice(0, N))].join(",")} then ${got[N]})`);
   }
-  // A paid 200, then past the limit.
+  // A paid metered call: read the route's own 402, sign its Base accept, send it.
+  const meteredAccept = async (ip, headers = {}) => {
+    const q = await quote(ip, headers);
+    const req402 = JSON.parse(Buffer.from(q.headers.get("payment-required") || "", "base64").toString("utf-8") || "{}");
+    return (req402.accepts || []).find((a) => a.network === "eip155:8453") || null;
+  };
+  const payMetered = async (accept, ip, headers = {}) => {
+    const r = await fetch(`${B}/v1/metered/chat/completions`, { method: "POST", headers: { "content-type": "application/json", ...from(ip, { ...headers, "payment-signature": credential(accept, freshNonce()) }) }, body: QUOTE_BODY });
+    await r.text();
+    return { status: r.status };
+  };
+  // A payment for another tool raises price checks, not metered quotes: a
+  // metered quote runs the tokenizer, so one cheap payment never buys more.
   {
     const ip = "203.0.113.20";
     const accept = await acceptFor(ip, "/api/uuid");
@@ -359,36 +410,43 @@ try {
     const paid = await fetch(`${B}/api/uuid`, { headers: from(ip, { "payment-signature": credential(accept, freshNonce()) }) });
     ok(paid.status === 200 && settles === s0 + 1, `the paid call settles and is served (status ${paid.status}, settles ${settles - s0})`);
     await sleep(50);
-    const got = await quotes(ip, N + 10);
-    ok(got.every((s) => s === 402), `after a paid 200 the address's ${N + 1}st and later quotes in a minute are answered, not 429 (statuses ${[...new Set(got)].join(",")})`);
-    // Up to the raised ceiling, then a 429: trust raises the cap, never lifts it.
-    const rest = await quotes(ip, PAID_CLIENT_METERED_QUOTES_PER_MIN - got.length + 1);
-    const all = [...got, ...rest];
-    const M = PAID_CLIENT_METERED_QUOTES_PER_MIN;
-    ok(all.slice(0, M).every((s) => s === 402) && all[M] === 429, `a trusted address gets ${M} quotes in a minute (${PAID_CLIENT_QUOTE_MULTIPLIER} times ${N}), then a 429 (statuses ${[...new Set(all.slice(0, M))].join(",")} then ${all[M]})`);
+    const got = await quotes(ip, N + 1);
+    ok(got.slice(0, N).every((s) => s === 402) && got[N] === 429, `after a paid call to another tool the address still gets ${N} metered quotes, then a 429 (statuses ${[...new Set(got.slice(0, N))].join(",")} then ${got[N]})`);
+  }
+  // Each paid /v1/metered call earns METERED_QUOTE_CREDITS_PER_CALL quotes past the plain figure.
+  {
+    const ip = "203.0.113.22";
+    const accept = await meteredAccept(ip);
+    ok(!!accept, "setup: the metered route offers a Base accept");
+    const plain = await quotes(ip, N - 1);
+    ok(plain.every((s) => s === 402), `setup: the rest of the ${N} plain quotes are answered`);
+    const K = 3;
+    const or0 = orChats;
+    let paidOk = 0;
+    for (let i = 0; i < K; i++) { const r = await payMetered(accept, ip); if (r.status === 200) paidOk++; }
+    ok(paidOk === K && orChats === or0 + K, `setup: ${K} paid /v1/metered calls are served (served ${paidOk}, upstream ${orChats - or0})`);
+    await sleep(50);
+    const C = K * METERED_QUOTE_CREDITS_PER_CALL;
+    const extra = await quotes(ip, C + 1);
+    ok(extra.slice(0, C).every((s) => s === 402) && extra[C] === 429, `past the plain figure ${K} paid metered calls earn exactly ${C} quotes, then a 429 (statuses ${[...new Set(extra.slice(0, C))].join(",")} then ${extra[C]})`);
     // A payment header that does not verify still counts against its own budget.
     const bad = (await acceptFor("203.0.113.21", "/api/uuid"));
     const junk = { "payment-signature": Buffer.from(JSON.stringify({ x402Version: 2, resource: bad.resource, accepted: bad, payload: { signature: "0x11", authorization: { from: "nope", to: bad.payTo, value: bad.amount, validAfter: "0", validBefore: "9999999999", nonce: "0x01" } } })).toString("base64") };
     const refused = await quotes(ip, N + 1, junk);
-    ok(refused.slice(0, N).every((s) => s === 402 || s === 401) && refused[N] === 429, `from a trusted address, a payment that does not verify is still refused after ${N} (statuses ${[...new Set(refused.slice(0, N))].join(",")} then ${refused[N]})`);
+    ok(refused.slice(0, N).every((s) => s === 402 || s === 401) && refused[N] === 429, `a payment that does not verify is still refused after ${N} (statuses ${[...new Set(refused.slice(0, N))].join(",")} then ${refused[N]})`);
   }
-  // Two paying Workers on the shared egress address share one raised metered
-  // ceiling: a trust key there carries a User-Agent token any Worker can send.
+  // On the shared Worker egress address the credits are keyed with the
+  // User-Agent token, and every quote still meets the whole-address ceiling.
   {
     const EG = "2a06:98c0:3600::103";
-    const payAs = async (ua) => {
-      const accept = await acceptFor(EG, "/api/uuid");
-      const s0 = settles;
-      const r = await fetch(`${B}/api/uuid`, { headers: from(EG, { "user-agent": ua, "payment-signature": credential(accept, freshNonce()) }) });
-      ok(r.status === 200 && settles === s0 + 1, `a Worker (${ua}) on the egress address pays and is served (status ${r.status})`);
-    };
-    await payAs("payer-a/1");
-    await payAs("payer-b/1");
-    await sleep(50);
-    const M = PAID_CLIENT_METERED_QUOTES_PER_MIN;
-    const a = await quotes(EG, M - 100, { "user-agent": "payer-a/1" });
-    const b = await quotes(EG, 101, { "user-agent": "payer-b/1" });
-    ok(a.every((s) => s === 402) && b.slice(0, 100).every((s) => s === 402) && b[100] === 429, `trusted Workers on the egress address share ${M} metered quotes a minute, then a 429 (A ${[...new Set(a)].join(",")}, B ${[...new Set(b.slice(0, 100))].join(",")} then ${b[100]})`);
+    const ua = { "user-agent": "payer-a/1" };
+    const accept = await meteredAccept(EG, ua);
+    const plain = await quotes(EG, N - 1, ua);
+    ok(!!accept && plain.every((s) => s === 402), "setup: the egress address's plain quotes are answered");
+    const r = await payMetered(accept, EG, ua);
+    ok(r.status === 200, `a Worker on the egress address pays a metered call (status ${r.status})`);
+    const other = await quotes(EG, 1, { "user-agent": "never-paid/1" });
+    ok(other[0] === 429, `a Worker that never paid, on the same address, gets no credit (got ${other[0]})`);
   }
   // A free (proof-of-work) call trusts nothing.
   {
