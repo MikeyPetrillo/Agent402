@@ -19,6 +19,7 @@
 import { isOwnPayoutAddress } from "../own-wallets.js";
 import { createHash } from "node:crypto";
 import { paymentHeaderOf, payerFromRequest } from "../payer.js";
+import { decodePaymentHeader } from "../payment-header.js";
 import { maySpend, noteSpend, adjustSpend, reserveSpend } from "../external-spend-guard.js";
 import { nonEvmPayerFromRequest } from "../non-evm-payer.js";
 import { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2 } from "../avm-network.js";
@@ -107,16 +108,20 @@ export function buyerPaymentNetwork(req) {
     if (req?.mppTempoCredential) return "eip155:4217";
     const header = paymentHeaderOf(req);   // the header settlement reads — see src/payer.js
     if (!header) return null;
-    const p = JSON.parse(Buffer.from(header, "base64").toString("utf-8"));
+    const p = decodePaymentHeader(header);
     // v1 payloads carry `network` top-level; v2 payloads carry the CHOSEN
     // accept under `accepted` (shape: {x402Version:2, accepted, payload}) with
     // the network inside it. Reading only the v1 spot 409'd every v2 Base
     // buyer out of external routing (found by the first paid demo after the
     // fail-closed check shipped — the canary's route-exec leg is internal-only
     // and never walked this path).
-    if (typeof p?.network === "string") return p.network;
-    if (typeof p?.accepted?.network === "string") return p.accepted.network;
-    return null;
+    // The paywall reads one of the two by the payload's version. A header
+    // that names two different networks is not one this can attribute to a
+    // chain, so it names none (the caller refuses external routing then).
+    const v1 = typeof p?.network === "string" ? p.network : null;
+    const v2 = typeof p?.accepted?.network === "string" ? p.accepted.network : null;
+    if (v1 && v2 && v1 !== v2) return null;
+    return v2 || v1;
   } catch { return null; }
 }
 
@@ -124,7 +129,7 @@ export function callRefFrom(req, slug, ts) {
   try {
     const header = paymentHeaderOf(req);   // the header settlement reads — see src/payer.js
     if (!header) return null;
-    const payload = JSON.parse(Buffer.from(header, "base64").toString("utf-8"));
+    const payload = decodePaymentHeader(header);
     const nonce = payload?.payload?.authorization?.nonce;
     if (typeof nonce !== "string" || !nonce) return null;
     return "sha256:" + createHash("sha256").update(JSON.stringify({ nonce, slug, ts })).digest("hex");

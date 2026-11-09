@@ -84,6 +84,13 @@ const mkV2 = (net) => mkHdr({ x402Version: 2, accepted: { scheme: "exact", netwo
 ok(buyerPaymentNetwork(mkV1("eip155:8453")) === "eip155:8453", "v1 payload: reads Base from top-level network");
 ok(buyerPaymentNetwork(mkV1("eip155:137")) === "eip155:137", "v1 payload: reads a non-Base chain");
 ok(buyerPaymentNetwork(mkV2("eip155:8453")) === "eip155:8453", "v2 payload: reads Base from accepted.network");
+{
+  // A header naming one network at the top level and another under accepted
+  // names no chain to spend from.
+  const mixed = (top, accepted) => ({ header: (n) => (/^(payment-signature|x-payment)$/i.test(n) ? Buffer.from(JSON.stringify({ x402Version: 2, network: top, accepted: { network: accepted }, payload: {} })).toString("base64") : undefined), headers: {} });
+  ok(buyerPaymentNetwork(mixed("eip155:8453", "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp")) === null, "two different networks in one header: no chain is named");
+  ok(buyerPaymentNetwork(mixed("eip155:8453", "eip155:8453")) === "eip155:8453", "the same network in both places still reads");
+}
 ok(buyerPaymentNetwork(mkV2("eip155:137")) === "eip155:137", "v2 payload: reads a non-Base chain from accepted.network");
 ok(buyerPaymentNetwork(mkHdr({ x402Version: 2, payload: {} })) === null, "v2 payload with no accepted -> null (fail-closed upstream)");
 ok(buyerPaymentNetwork({ header: () => null }) === null, "no X-PAYMENT -> null (fail-open)");
