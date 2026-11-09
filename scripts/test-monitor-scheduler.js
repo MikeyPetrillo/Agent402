@@ -251,7 +251,7 @@ active.delete("sub_c");
   const st = noIdSch._store().subs;
   ok(!Object.hasOwn(st, "undefined") && !Object.hasOwn(st, "null"), "no scheduler state is keyed by a missing id");
   const ran = calls.generate.slice(g0).map((x) => x.input);
-  ok(ran.includes("ok.example.com") && !ran.some((x) => /^n[12]\./.test(x)) && rr.noId === 2, `records without an id are not run; the one with an id is (${rr.noId} skipped; ran ${ran.join(", ")})`);
+  ok(ran.some((x) => x === "ok.example.com") && !ran.some((x) => /^n[12]\./.test(x)) && rr.noId === 2, `records without an id are not run; the one with an id is (${rr.noId} skipped; ran ${ran.join(", ")})`);
   ok(logs.some((l) => /ALERT: 2 active subscription record\(s\) without a subscription id/.test(l)), "the skip is logged as an alert");
   ok(noIdSch.status().withoutId === 2, "the status view counts them");
   active.delete("noid_1"); active.delete("noid_2"); active.delete("sub_ok");
