@@ -123,8 +123,10 @@ const queryKey = (search) => [...new URLSearchParams(search)].map(([k, v]) => `$
  *  percent-encoding aside), and, when the resource carries a query, the same
  *  parameters in any order. A resource naming http for an https request on the
  *  same host is the seller's TLS proxy talking, not another origin. A relative
- *  resource resolves against the request. Unnamed is not a mismatch. Pure;
- *  exported for offline tests. */
+ *  resource resolves against the request. A path that ends with the requested
+ *  path at a segment boundary on the same origin (/paid/v1/x for /v1/x) is the
+ *  same route mounted under a prefix by the seller's proxy. Unnamed is not a
+ *  mismatch. Pure; exported for offline tests. */
 export function challengeResourceVerdict(requestedUrl, paymentRequired, accept) {
   let want;
   try { want = new URL(String(requestedUrl)); } catch { return { ok: true, verdict: "unknown" }; }
@@ -137,7 +139,10 @@ export function challengeResourceVerdict(requestedUrl, paymentRequired, accept) 
     const port = (u) => u.port || (u.protocol === "https:" ? "443" : u.protocol === "http:" ? "80" : "");
     const samePort = got.protocol === want.protocol ? port(got) === port(want) : (!got.port || got.port === "80") && port(want) === "443";
     if (!sameScheme || got.hostname.toLowerCase() !== want.hostname.toLowerCase() || !samePort) return { ok: false, verdict: "mismatch", field: "origin" };
-    if (pathKey(got.pathname) !== pathKey(want.pathname)) return { ok: false, verdict: "mismatch", field: "path" };
+    const gp = pathKey(got.pathname), wp = pathKey(want.pathname);
+    // wp starts with "/", so a suffix match always falls on a segment boundary.
+    const mounted = wp !== "/" && gp.length > wp.length && gp.endsWith(wp);
+    if (gp !== wp && !mounted) return { ok: false, verdict: "mismatch", field: "path" };
     if (got.search && got.search !== "?" && queryKey(got.search).join("&") !== queryKey(want.search).join("&")) return { ok: false, verdict: "mismatch", field: "query" };
   }
   return { ok: true, verdict: "match" };

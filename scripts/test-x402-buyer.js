@@ -1003,6 +1003,9 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
   ok(v(W, { url: "http://seller.example/v1/forecast" }).ok, "resource: http named for an https request on the same host is the seller's TLS proxy, not another origin");
   ok(v(W, { url: "https://seller.example/v1/other" }).field === "path" && v(W, { url: "https://other.example/v1/forecast" }).field === "origin" && v(W, { url: "https://seller.example:8443/v1/forecast" }).field === "origin" && v(W, { url: "http://seller.example:8080/v1/forecast" }).field === "origin",
     "resource: another path, host or port is a mismatch");
+  ok(v(W, { url: "https://seller.example/paid/v1/forecast" }).ok && v(W, { url: "/api/v2/v1/forecast/" }).ok, "resource: the same route mounted under a prefix on the same origin is the same resource");
+  ok(v(W, { url: "https://seller.example/xv1/forecast" }).field === "path" && v(W, { url: "https://seller.example/v1/forecast/extra" }).field === "path" && v(W, { url: "https://other.example/paid/v1/forecast" }).field === "origin" && v("https://seller.example/", { url: "https://seller.example/anything" }).field === "path",
+    "resource: a prefix mount must end on a segment boundary, never adds a suffix, never crosses origins, and the bare root mounts nothing");
   ok(v(W, { url: "https://seller.example/v1/forecast?city=Rome&units=metric" }).field === "query", "resource: a query naming other values is a mismatch");
   ok(v(W, undefined, "https://seller.example/v1/other").field === "path" && v(W, { url: W }, "https://other.example/v1/forecast").field === "origin", "resource: a v1 accept's own resource is read too");
 
