@@ -933,7 +933,7 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
 // paid retries with no settle between them, no route is noted as refusing
 // (the shared factor is our side); a settle on the chain restores the notes.
 {
-  const { payX402: pay, sellerRouteRefusedRecently: benched, __resetSellerRefusalsForTest: resetR, __resetChainRefusalsForTest: resetC, noteChainSettled } = await import("../src/x402-buyer.js");
+  const { payX402: pay, sellerRouteRefusedRecently: benched, __resetSellerRefusalsForTest: resetR, __resetChainRefusalsForTest: resetC, noteChainSettled, chainRefusalHolds } = await import("../src/x402-buyer.js");
   resetR?.(); resetC();
   const acc = { scheme: "exact", network: "eip155:8453", asset: USDC, amount: "1000", payTo: "0x" + "ad".repeat(20), maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } };
   const h = Buffer.from(JSON.stringify({ x402Version: 2, accepts: [acc] })).toString("base64");
@@ -949,9 +949,29 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
   resetR?.(); resetC();
   // Five different sellers refuse, then each refuses again: none is benched.
   const many = ["r1", "r2", "r3", "r4", "r5"];
-  for (const o of many) await refuse(o);
-  for (const o of many) await refuse(o);
+  ok(chainRefusalHolds().length === 0, "control: no chain is held before the pattern");
+  const warnOrig = console.warn; const holdLogs = [];
+  console.warn = (...a) => { const line = a.join(" "); if (/refused our paid retries with no settle/.test(line)) holdLogs.push(line); else warnOrig(...a); };
+  try {
+    for (const o of many) await refuse(o);
+    for (const o of many) await refuse(o);
+    await refuse("r6"); await refuse("r7");
+  } finally { console.warn = warnOrig; }
   ok(many.every((o) => !benched(`https://${o}.example/x`, "base")), "five sellers on one chain refusing our payments with no settle between: none is benched");
+  ok(holdLogs.length === 1, `the hold logs once when it starts, not on every later refusal (${holdLogs.length} lines for 12 refusals)`);
+  const holds = chainRefusalHolds();
+  ok(holds.length === 1 && holds[0].chain === "base" && holds[0].sellers === 7 && holds[0].threshold === 5 && !JSON.stringify(holds).includes("example"), `the operator view lists the held chain with its seller count and no origin (${JSON.stringify(holds)})`);
+  resetR?.(); resetC();
+  // Unproven-tier sellers never count toward the chain pattern: each one's
+  // refusal is its own, so five refusing twice are each benched. allowUnproven
+  // reaches the refusal only after the Base unproven ceiling and caps admit the
+  // call; the stub quote (1000 atomic) is under the default ceiling.
+  const refuseUnproven = (o) => pay(`https://${o}.example/x`, { maxAtomic: 500000n, method: "POST", body: {}, chain: "base", memoizeDelivery: true, allowUnproven: true, notDebited: async () => ({ debited: false, expired: true, observed: 1 }) }).then(() => null, (e) => e);
+  const fresh = ["u1", "u2", "u3", "u4", "u5"];
+  const firstErr = await refuseUnproven("u1");
+  for (const o of fresh.slice(1)) await refuseUnproven(o);
+  for (const o of fresh) await refuseUnproven(o);
+  ok(fresh.every((o) => !!benched(`https://${o}.example/x`, "base")) && chainRefusalHolds().length === 0, `five unproven sellers refusing twice are each benched and hold nothing (first: ${firstErr?.message || "no error"})`);
   // After a payment on the chain settles (a real paid call answering 200 with
   // its settle receipt), a refusing seller is the seller's own again.
   const refusingFetch = globalThis.fetch;

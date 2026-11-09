@@ -785,7 +785,7 @@ import { buildSellerDossierTool } from "./tools/seller-dossier.js";
 import { buildSellerPayabilityTool } from "./tools/seller-payability-kit.js";
 import { buildFlightTools, parseFlightSellers } from "./tools/flights-kit.js";
 import { deliveryObservation } from "./response-observation.js";
-import { payX402, pickPayableAccept, avmBuyerConfigured, avmBuyerStatus, sellerRefusedRecently, sellerRouteRefusedRecently as routeRefusedNow, sellerDeliveryFailingRecently, sellerDeliveryFailingStamp, sellerDeliveryMemoEntries, DELIVERY_FAIL_STRIKES_REQUIRED, deliveryFailTtlMsNow } from "./x402-buyer.js";
+import { payX402, chainRefusalHolds, pickPayableAccept, avmBuyerConfigured, avmBuyerStatus, sellerRefusedRecently, sellerRouteRefusedRecently as routeRefusedNow, sellerDeliveryFailingRecently, sellerDeliveryFailingStamp, sellerDeliveryMemoEntries, DELIVERY_FAIL_STRIKES_REQUIRED, deliveryFailTtlMsNow } from "./x402-buyer.js";
 import { readTextCapped } from "./capped-body.js";
 import { svmBuyerConfigured, svmBuyerStatus, SOLANA_NETWORK_LABELS } from "./solana-buyer.js";
 import { payTempo, tempoBuyerConfigured, tempoBuyerStatus, tempoRpc } from "./tempo-buyer.js";
@@ -3033,7 +3033,7 @@ app.get("/__operator/tool-failures.json", async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   const onchainSqlQueries = await sqlQueryStatsReport().catch(() => null);
   const xSearchAuthors = await xSearchStatsReport().catch(() => null);
-  res.set("Cache-Control", "private, no-store").json({ ...(await toolFailureMonitor().report()), robinhoodOrder: robinhoodOrderView(), onchainSqlQueries, xSearchAuthors });
+  res.set("Cache-Control", "private, no-store").json({ ...(await toolFailureMonitor().report()), robinhoodOrder: robinhoodOrderView(), chainRefusalHolds: chainRefusalHolds(), onchainSqlQueries, xSearchAuthors });
 });
 // Direct-upstream A/B (src/gateway-direct-upstream.js): attempts, failures by
 // bucket and p50/p90 latency per upstream for the listed model ids.
@@ -3501,10 +3501,6 @@ app.use("/v1/metered", (req, res, next) => {
     return res.status(429).json({ error: "Too many unpaid quote requests from this address; send the paid retry, or slow down.", retryAfterSeconds: 60, guide: `${BASE_URL.replace(/\/$/, "")}${BUYING_AT_VOLUME_PATH}` });
   };
   if (!paid) {
-    // An address that settled a paid call in the trust window reads against
-    // the raised ceiling (src/paid-quote-trust.js): a stock client quotes
-    // before every paid call. This process's record is read first; the shared
-    // store only on a refusal.
     // Every unpaid quote counts against the plain figure first. Past it, a
     // quote is served only on a credit a settled /v1/metered call from this
     // address earned (src/paid-quote-trust.js creditMetered), so free quotes

@@ -509,24 +509,29 @@ export function noteSellerRefusal(url, chain, status) {
 // sign on that chain), and noting each route would bench every seller there
 // for the TTL. So past that point no route strike is written for the chain
 // until a payment on it settles again; the refusals still release their holds.
+// Only sellers the resolver admitted as proven count toward the pattern: an
+// unproven seller has never shown that it takes payments, so its refusal is
+// its own and a handful of new origins cannot pause every route note on a
+// chain. The hold logs once when it starts and is listed on
+// /__operator/tool-failures.json (chainRefusalHolds).
 const CHAIN_REFUSAL_WINDOW_MS = Number(process.env.SOR_CHAIN_REFUSAL_WINDOW_MS) > 0 ? Number(process.env.SOR_CHAIN_REFUSAL_WINDOW_MS) : 30 * 60_000;
 const CHAIN_REFUSAL_OURS_MIN = Number.isInteger(Number(process.env.SOR_CHAIN_REFUSAL_OURS_MIN)) && Number(process.env.SOR_CHAIN_REFUSAL_OURS_MIN) >= 2 ? Number(process.env.SOR_CHAIN_REFUSAL_OURS_MIN) : 5;
 const chainRefusals = new Map(); // chain -> Map(origin -> last refusal at)
 const chainSettledAt = new Map(); // chain -> last settled delivery at
-const chainOursLogged = new Map(); // chain -> window start already logged
+const chainHeldSince = new Map(); // chain -> when the current hold started
 /** Record a refusal of a payment we sent; false when the pattern says it is ours. */
-export function postSendRefusalIsSellers(url, chain, now = Date.now()) {
+export function postSendRefusalIsSellers(url, chain, { proven = true, now = Date.now() } = {}) {
   const origin = originOf(url);
-  if (!origin || !chain) return true;
+  if (!origin || !chain || !proven) return true;
   let m = chainRefusals.get(chain);
   if (!m) { m = new Map(); chainRefusals.set(chain, m); }
   const since = Math.max(now - CHAIN_REFUSAL_WINDOW_MS, chainSettledAt.get(chain) || 0);
   for (const [o, at] of m) if (at < since) m.delete(o);
   m.delete(origin); m.set(origin, now);
   while (m.size > 200) m.delete(m.keys().next().value);
-  if (m.size < CHAIN_REFUSAL_OURS_MIN) return true;
-  if (chainOursLogged.get(chain) !== since) {
-    chainOursLogged.set(chain, since);
+  if (m.size < CHAIN_REFUSAL_OURS_MIN) { chainHeldSince.delete(chain); return true; }
+  if (!chainHeldSince.has(chain)) {
+    chainHeldSince.set(chain, now);
     console.warn(`[x402-buyer] ${m.size} sellers on ${chain} refused our paid retries with no settle on ${chain} between them: not noting their routes as refusing until a payment on ${chain} settles`);
   }
   return false;
@@ -536,9 +541,23 @@ export function noteChainSettled(chain, now = Date.now()) {
   if (!chain) return;
   chainSettledAt.set(chain, now);
   chainRefusals.delete(chain);
+  chainHeldSince.delete(chain);
+}
+/** Operator view: each chain whose route notes are paused, with the count of
+ *  distinct proven sellers that refused inside the window. */
+export function chainRefusalHolds(now = Date.now()) {
+  const out = [];
+  for (const [chain, startedAt] of chainHeldSince) {
+    const m = chainRefusals.get(chain);
+    const since = Math.max(now - CHAIN_REFUSAL_WINDOW_MS, chainSettledAt.get(chain) || 0);
+    const sellers = m ? [...m.values()].filter((at) => at >= since).length : 0;
+    if (sellers < CHAIN_REFUSAL_OURS_MIN) continue; // aged out; the next refusal clears it
+    out.push({ chain, since: new Date(startedAt).toISOString(), sellers, threshold: CHAIN_REFUSAL_OURS_MIN, windowMinutes: Math.round(CHAIN_REFUSAL_WINDOW_MS / 60_000) });
+  }
+  return out;
 }
 /** Test seam. */
-export function __resetChainRefusalsForTest() { chainRefusals.clear(); chainSettledAt.clear(); chainOursLogged.clear(); }
+export function __resetChainRefusalsForTest() { chainRefusals.clear(); chainSettledAt.clear(); chainHeldSince.clear(); }
 /** A settled delivery from the route forgets its strikes. */
 export function clearSellerRefusal(url, chain) {
   const route = refusalRoute(url);
@@ -1592,7 +1611,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
           // whose URL and body a caller chose is not the router's purchase at
           // all. All of them still release the hold on the chain's word; none
           // of them decides where anyone else's money goes.
-          const memoize = memoizeDelivery && (paid.status === 402 || paid.status === 401) && paidRefusalCarriesChallenge(paid.headers, refusalText) && postSendRefusalIsSellers(url, chain);
+          const memoize = memoizeDelivery && (paid.status === 402 || paid.status === 401) && paidRefusalCarriesChallenge(paid.headers, refusalText) && postSendRefusalIsSellers(url, chain, { proven: !allowUnproven });
           if (memoize) noteSellerRefusal(url, chain, paid.status);
           console.warn(`[x402-buyer] ${where} refused the payment and the chain shows no debit after the credential expired (${verdict.observed} tx read) - not charged${memoize ? `, route noted as refusing on ${chain}` : ""}`);
           const e = bad(`Seller refused the payment (HTTP ${paid.status}); the credential expired unused, nothing charged`, 502);
