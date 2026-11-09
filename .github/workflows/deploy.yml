@@ -1956,6 +1956,8 @@ jobs:
           t node scripts/test-render-bytebudget.js
           # Tempo chain-truth confirm (relay says failed but the credential's tx settled -> serve the buyer; pinned on the real incident tx — offline)
           t node scripts/test-tempo-confirm.js
+          # Durable Tempo late-landing watches: failed reads kept, a day of failures dropped with an error, bounded list, in-process removal only once answered (offline)
+          t node scripts/test-tempo-late-watches.js
           # Leaderboard RPC failures never carry the Alchemy key (host-only naming + redaction on the public lastError path — offline)
           t node scripts/test-leaderboard-redaction.js
           t node scripts/test-leaderboard-price-match.js

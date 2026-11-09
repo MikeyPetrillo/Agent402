@@ -513,7 +513,8 @@ async function listen(app) {
 }
 
 // The late-landing watches are bounded per process: past
-// TEMPO_LATE_CONFIRM_MAX_WATCHES a new one is refused and logged, never queued.
+// TEMPO_LATE_CONFIRM_MAX_WATCHES a new one does not run here (one started with
+// a record is left to the durable sweep, tested below; one without is refused and logged).
 {
   const { watchLateTempoLanding, _lateTempoWatchCount } = await import("../src/mpp-tempo.js");
   process.env.TEMPO_LATE_CONFIRM_MAX_WATCHES = "3";
@@ -529,6 +530,74 @@ async function listen(app) {
   for (let i = 0; i < 50 && _lateTempoWatchCount() > 0; i++) await new Promise((r) => setTimeout(r, 5));
   ok(_lateTempoWatchCount() === 0, "late: the watches release their slots when they end");
   delete process.env.TEMPO_LATE_CONFIRM_MAX_WATCHES;
+}
+
+// Durable late-landing watches (src/tempo-late-watches.js): a watch past the
+// per-process bound is not lost but left to the sweep, which books a landed
+// transaction once through the same path, with the stored request; a new
+// process (another ledger on the same document) finds a watch the old one
+// never finished.
+{
+  const { configureTempoLateWatches, LATE_LANDED_CLASS } = await import("../src/mpp-tempo.js");
+  const { createLateWatchLedger, LATE_WATCH_GRACE_MS } = await import("../src/tempo-late-watches.js");
+  const { createJsonDocument } = await import("../src/json-document.js");
+  process.env.TEMPO_LATE_CONFIRM_DELAYS_MS = "40";
+  process.env.TEMPO_LATE_CONFIRM_MAX_WATCHES = "0"; // every watch is past the bound
+  const doc = createJsonDocument({ name: "tempo-late-watches-test", log: () => {} });
+  let clock = Date.now();
+  const ledger = createLateWatchLedger({ doc, now: () => clock, log: () => {} });
+  configureTempoLateWatches(ledger);
+  const logs = [];
+  const warn = console.warn; console.warn = (...a) => { logs.push(a.join(" ")); };
+  let landed = false;
+  const booked = [];
+  const rows = new Set();
+  const gate = createTempoGate({
+    ...GATE,
+    validate: async () => ({ ok: true, validation: {} }),
+    broadcast: async () => ({ ok: false, cls: "unknown", error: "relay timed out", reason: "relay timed out" }),
+    confirmSettlement: async (_auth, opts) => (landed && opts ? { txId: REAL_TXID, amountAtomic: 1000n } : null),
+    onPushNotClaimed: async (req, info) => { booked.push({ req: { method: req.method, path: req.path, payer: req.mppTempoLedgerPayer, synthetic: req.__lateWatchSynthetic }, info }); rows.add(info.hash); return true; },
+    pushRowOf: (hash) => (rows.has(hash) ? { status: "owed" } : null),
+    syntheticOf: () => false,
+  });
+  const app = express();
+  app.use(gate);
+  app.get("/paid", (req, res) => res.status(200).json({ result: "ok" }));
+  const { server, url } = await listen(app);
+  const res = await fetch(`${url}/paid`, { headers: { Authorization: buildCredential() } });
+  await new Promise((r) => setTimeout(r, 50));
+  const stored = Object.values((await doc.read()).body?.watches || {});
+  ok(res.status === 402 && stored.length === 1 && stored[0].path === "/paid" && stored[0].amountAtomic === "1000" && typeof stored[0].auth === "string", `durable: a watch past the bound is on record, not skipped (${stored.length} stored)`);
+  ok(logs.some((m) => /left to the durable sweep/.test(m)) && !logs.some((m) => /watch skipped/.test(m)), "durable: the log says the sweep has it");
+  landed = true;
+  clock = Date.now();
+  const early = await gate.sweepLateWatches();
+  ok(early.waiting === 1 && early.read === 0 && booked.length === 0, "durable: the sweep waits until the watch's last delay and the grace have passed");
+  clock = Date.now() + 40 + LATE_WATCH_GRACE_MS + 1000;
+  const due = await gate.sweepLateWatches();
+  ok(due.landed === 1 && booked.length === 1 && booked[0].info.hash === REAL_TXID.toLowerCase() && booked[0].info.cls === LATE_LANDED_CLASS && booked[0].info.amountAtomic === "1000" && booked[0].req.path === "/paid" && booked[0].req.method === "GET" && booked[0].req.synthetic === false,
+    `durable: once due, the sweep books the landed transaction once, from the stored request (${JSON.stringify(due)})`);
+  ok(Object.keys((await doc.read()).body?.watches || {}).length === 0, "durable: and the entry is removed");
+  const again = await gate.sweepLateWatches();
+  ok(again.read === 0 && booked.length === 1, "durable: a second sweep finds nothing to read");
+  // A process that stops mid-watch: the entry a running watch owned is read by the next process.
+  process.env.TEMPO_LATE_CONFIRM_MAX_WATCHES = "5";
+  landed = false;
+  await fetch(`${url}/paid`, { headers: { Authorization: buildCredential() } });
+  await new Promise((r) => setTimeout(r, 10));
+  const owned = Object.keys((await doc.read()).body?.watches || {});
+  ok(owned.length === 1, "restart: a running watch is on record while it runs");
+  const next = createLateWatchLedger({ doc, now: () => Date.now() + 40 + LATE_WATCH_GRACE_MS + 1000, log: () => {} });
+  rows.clear(); landed = true;
+  const swept = await next.sweep({ confirm: async () => ({ txId: "0x" + "ab".repeat(32), amountAtomic: 1000n }), book: async (e, found) => { booked.push({ e, found }); return true; } });
+  ok(swept.landed === 1 && booked.length === 2 && booked[1].e.path === "/paid", `restart: another process's sweep reads and books the watch the first never finished (${JSON.stringify(swept)})`);
+  await new Promise((r) => setTimeout(r, 150));
+  console.warn = warn;
+  configureTempoLateWatches(null);
+  delete process.env.TEMPO_LATE_CONFIRM_DELAYS_MS;
+  delete process.env.TEMPO_LATE_CONFIRM_MAX_WATCHES;
+  server.close();
 }
 
 console.log(`\n${pass} passed, 0 failed`);

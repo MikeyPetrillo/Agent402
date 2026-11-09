@@ -131,7 +131,13 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   is the age past which a leased sweep reopens a held Tempo push debt whose run never finished;
   `TEMPO_LATE_CONFIRM_DELAYS_MS` (comma list of delays, default 15000,45000,120000; at most 6, each
   at most 30 minutes; `off` disables) and `TEMPO_LATE_CONFIRM_MAX_WATCHES` (default 200 per process)
-  bound the re-reads that book a Tempo pull landing after its 402 as owed (`src/mpp-tempo.js`);
+  bound the re-reads that book a Tempo pull landing after its 402 as owed (`src/mpp-tempo.js`).
+  Every watch is first written to the `tempo-late-watches` state document (`src/tempo-late-watches.js`;
+  without a database the file `TEMPO_LATE_WATCH_FILE`, else memory): one past the bound, one whose
+  process stops mid-watch, one whose last read failed and one whose booking did not land are read by a
+  leased one-minute sweep (`tempo-late-watch-sweep`) once their last delay plus 30 s has passed, and
+  booked by transaction hash, so a second read books nothing more; an entry whose reads fail for 24
+  hours is logged as an error and dropped, and past 2000 entries the oldest is logged and dropped;
   `GATEWAY_RESUME_RENEW_MS` (default a third of the 10-minute resume lease, 200000; for tests) is how
   often a Gateway resend renews its hold, for at most 30 minutes (`src/gateway-nanopayments.js`).
   The held-claim sweep walks every refund row created before its cutoff by createdAt window,

@@ -461,7 +461,8 @@ import { GATEWAY_WIRE, gatewayBalanceStatus, gatewayOfferPublic, gatewayOfferNet
 import { isGatewayWire, isGatewayPendingAnswer } from "./gateway-wire.js";
 import { networkFloorUsd } from "./network-floors.js";
 import { createMppShim } from "./mpp-shim.js";
-import { createTempoChallengeAppender, createTempoGate, tempoTxFromReceiptHeader, isTempoPushCredential } from "./mpp-tempo.js";
+import { createTempoChallengeAppender, createTempoGate, tempoTxFromReceiptHeader, isTempoPushCredential, configureTempoLateWatches } from "./mpp-tempo.js";
+import { createLateWatchLedger, startLateWatchSweep } from "./tempo-late-watches.js";
 import { createStripeChallengeAppender, createStripeGate, stripeTxFromReceiptHeader } from "./mpp-stripe.js";
 import { confirmTempoSettlement } from "./tempo-confirm.js";
 import { KIT } from "./tools/kit.js";
@@ -10311,11 +10312,16 @@ if (!FREE_MODE) {
   // createTempoGate refuses to mount (fail closed).
   tempoPushDebts = createTempoPushDebts({
     recordOwed: recordRefundOwed, voidOnClaim: voidOwedOnClaim, voidForServe: voidOwedForServe, reopenHeld: reopenHeldClaim, renoteVoid: renoteVoidRefund, renoteOwed: renoteOwedRefund, promoteToHangup: promoteOwedToHangup, restateHandlerFailure: restateOwedAsHandlerFailure, refundByEvidence,
-    recordChargedFailure, isSynthetic: isSyntheticRequest,
+    recordChargedFailure,
+    // A late-landing sweep books from a stored request, which says whether it was synthetic.
+    isSynthetic: (req) => (typeof req?.__lateWatchSynthetic === "boolean" ? req.__lateWatchSynthetic : isSyntheticRequest(req)),
     slugOf: (req) => CATALOG[`${req.method} ${req.path}`]?.slug,
   });
   // A claim held for a run whose process died is owed again (leased sweep).
   void startTempoHeldClaimSweep({ saleFor: async (tx) => (await import("./sales-ledger.js")).saleByTxFresh(tx) });
+  // Every Tempo late-landing watch is on record (src/tempo-late-watches.js),
+  // so one past the per-process bound or cut short by a restart is still read.
+  configureTempoLateWatches(createLateWatchLedger());
   const tempoGate = createTempoGate({
     replayGuard: tempoReplayGuard,
     // Chain-truth fallback on relay broadcast failure (2026-08-20): a relay
@@ -10361,7 +10367,9 @@ if (!FREE_MODE) {
     // The row a push transfer already holds, read before a route refusal
     // books one (createTempoGate refuseConfirmedPush).
     pushRowOf: (hash) => refundByEvidence(hash) || null,
+    syntheticOf: isSyntheticRequest,
   });
+  if (tempoGate) void startLateWatchSweep({ sweepOnce: () => tempoGate.sweepLateWatches() });
   if (tempoGate) {
     app.use(tempoGate);
     tempoGateMounted = true;

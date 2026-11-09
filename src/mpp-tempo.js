@@ -52,6 +52,7 @@ import { sharedClaimRequired } from "./replay-topology.js";
 import { drainSignal } from "./drain-abort.js";
 import { screenAddresses, screenFunding, sanctionsScreenStatus, maskAddress as maskOne } from "./sanctions-screen.js";
 import { Secp256k1 } from "ox";
+import { lateWatchKey } from "./tempo-late-watches.js";
 
 const DEFAULT_DECIMALS = 6; // matches every other stablecoin rail this repo settles (unconfirmed specifically for pathUSD — decimals() unread, this is the USDC-family convention, not a live lookup)
 
@@ -1136,8 +1137,12 @@ export async function validateTempoCredential(authorizationHeader) {
  * TEMPO_LATE_CONFIRM_DELAYS_MS (default 15 s, 45 s, 2 min: past any pull
  * credential's validity, after which the transaction can no longer land),
  * and a transaction found is handed to `onLanded` (booked owed as a charged
- * failure). At most TEMPO_LATE_CONFIRM_MAX_WATCHES run at once per process;
- * a process that stops mid-watch takes its watches with it.
+ * failure). At most TEMPO_LATE_CONFIRM_MAX_WATCHES run at once per process.
+ * With a durable ledger configured (configureTempoLateWatches; server.js) and
+ * a `record` passed, every watch is written to it first: one past the bound,
+ * one whose process stops mid-watch, one whose last read failed and one whose
+ * booking did not land are each read and booked by the ledger's sweep
+ * (src/tempo-late-watches.js) instead of being lost.
  */
 export const LATE_LANDED_CLASS = "landed-after-402";
 function lateConfirmDelays(env = process.env) {
@@ -1151,24 +1156,49 @@ function lateConfirmMaxWatches(env = process.env) {
   return Number.isInteger(n) && n >= 0 ? n : 200;
 }
 let lateWatches = 0;
-export function watchLateTempoLanding(auth, { confirm, onLanded, delays = lateConfirmDelays(), log = console.warn } = {}) {
+let lateLedger = null;
+/** The durable record of late-landing watches (src/tempo-late-watches.js); null for none. */
+export function configureTempoLateWatches(ledger) { lateLedger = ledger || null; }
+export function watchLateTempoLanding(auth, { confirm, onLanded, delays = lateConfirmDelays(), log = console.warn, record = null } = {}) {
   if (typeof confirm !== "function" || typeof onLanded !== "function" || !delays.length) return false;
-  if (lateWatches >= lateConfirmMaxWatches()) { log("[mpp-tempo] late-landing watch skipped: the per-process bound is reached"); return false; }
-  lateWatches++;
   const sorted = [...delays].sort((a, b) => a - b);
   const started = Date.now();
+  const durable = lateLedger && record ? lateLedger : null;
+  const key = durable ? lateWatchKey(auth) : null;
+  // Written before the watch can start, so a watch this process never runs
+  // (past the bound) or does not finish is still on record.
+  const stored = durable ? durable.record(key, { auth, startedAt: started, lastDelayMs: sorted[sorted.length - 1], ...record }) : null;
+  if (lateWatches >= lateConfirmMaxWatches()) {
+    log(durable ? "[mpp-tempo] late-landing watch past the per-process bound: left to the durable sweep" : "[mpp-tempo] late-landing watch skipped: the per-process bound is reached");
+    return false;
+  }
+  lateWatches++;
+  if (durable) durable.own(key);
   void (async () => {
+    // Done means answered: a landing booked, or every read made and none
+    // found with the last one read. Anything else stays on record for the sweep.
+    let done = false;
     try {
+      let lastFailed = false;
       for (const at of sorted) {
         const wait = Math.max(0, started + at - Date.now());
         await new Promise((r) => { const t = setTimeout(r, wait); if (typeof t.unref === "function") t.unref(); });
         let found = null;
-        try { found = await confirm(auth, { attempts: 1, delayMs: 0 }); } catch { found = null; }
-        if (found?.txId) { await onLanded(found); return; }
+        const trace = {};
+        try { found = await confirm(auth, { attempts: 1, delayMs: 0, trace }); } catch { found = null; trace.error = trace.error || "threw"; }
+        if (found?.txId) { done = (await onLanded(found)) !== false; return; }
+        lastFailed = !!trace.error;
       }
+      done = !lastFailed;
     } catch (e) {
       log(`[mpp-tempo] late-landing watch failed: ${String(e?.message || e).slice(0, 120)}`);
-    } finally { lateWatches--; }
+    } finally {
+      lateWatches--;
+      if (durable) {
+        durable.release(key);
+        try { await stored; if (done) await durable.remove(key); } catch { /* the sweep reads it again */ }
+      }
+    }
   })();
   return true;
 }
@@ -1332,7 +1362,7 @@ export function createTempoChallengeAppender({ realm, secretKey, priceFor }) {
  *  free handler executions before Tempo's relay rejects the (N-1) duplicate
  *  broadcasts at settlement time — the same "Five Attacks on x402" Attack II
  *  class replay-guard.js documents, just unguarded on this second path. */
-export function createTempoGate({ validate = validateTempoCredential, broadcast = broadcastTempoCredential, confirmSettlement = null, earlyConfirm = null, replayGuard, secretKey, realm, priceFor, preValidate = null, verifyKeychainSender = verifyTempoKeychainSender, pushSender = tempoPushSender, onPushNotClaimed = null, onPushInputRefused = null, pushClaimAllowed = null, pushRowOf = null } = {}) {
+export function createTempoGate({ validate = validateTempoCredential, broadcast = broadcastTempoCredential, confirmSettlement = null, earlyConfirm = null, replayGuard, secretKey, realm, priceFor, preValidate = null, verifyKeychainSender = verifyTempoKeychainSender, pushSender = tempoPushSender, onPushNotClaimed = null, onPushInputRefused = null, pushClaimAllowed = null, pushRowOf = null, syntheticOf = () => false } = {}) {
   if (!tempoConfigured()) return null;
   // Fail CLOSED on the binding inputs: a gate that cannot verify "we minted
   // this challenge for this price" must not exist, because its existence is
@@ -1341,7 +1371,32 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
     console.error("[mpp-tempo] REFUSING to mount the Tempo gate: secretKey (MPP_SECRET_KEY) and priceFor are required to bind credentials to minted challenges and route prices");
     return null;
   }
-  return function tempoGate(req, res, next) {
+  // A landed transaction is on the books once its hash holds a refund row in
+  // any state (owed, sending, paid, void): booking it again would change nothing.
+  const lateRowExists = async (txId) => {
+    if (typeof pushRowOf !== "function") return false;
+    try { return !!(await pushRowOf(String(txId).toLowerCase())); } catch { return false; }
+  };
+  /** One pass of the durable late-landing sweep (src/tempo-late-watches.js). */
+  async function sweepLateWatches() {
+    if (!lateLedger || typeof onPushNotClaimed !== "function" || typeof confirmSettlement !== "function") return null;
+    return lateLedger.sweep({
+      confirm: confirmSettlement,
+      book: async (e, found) => {
+        // The stored request, as the booking reads it: the route (slug), the
+        // ledger payer and whether it was our own synthetic traffic.
+        const stub = { method: e.method, path: e.path, originalUrl: e.path, headers: {}, header: () => undefined, mppTempoLedgerPayer: e.payer || null, __lateWatchSynthetic: !!e.synthetic };
+        const amountAtomic = String(found.amountAtomic ?? e.amountAtomic);
+        let owed = false;
+        try { owed = (await onPushNotClaimed(stub, { hash: String(found.txId).toLowerCase(), payer: e.payer || null, amountAtomic, amountUsd: Number(amountAtomic) / 10 ** envDecimals(), cls: LATE_LANDED_CLASS })) === true; } catch { owed = false; }
+        console.warn(`[mpp-tempo] CHARGED-BUT-NOT-SERVED: a pull transaction landed after its 402 (${e.method} ${e.path} tx=${found.txId}, found by the late-watch sweep) - ${owed ? "recorded as owed in the refund ledger" : "NOT recorded"}`);
+        return owed || await lateRowExists(found.txId);
+      },
+    });
+  }
+  tempoGate.sweepLateWatches = sweepLateWatches;
+  return tempoGate;
+  function tempoGate(req, res, next) {
     const auth = req.headers.authorization;
     const tStart = Date.now();
     if (!isTempoCredential(auth)) {
@@ -1927,7 +1982,9 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
               let owed = false;
               try { owed = (await onPushNotClaimed(req, { hash: String(found.txId).toLowerCase(), payer: req.mppTempoLedgerPayer || null, amountAtomic: String(found.amountAtomic ?? binding.amountAtomic), amountUsd, cls: LATE_LANDED_CLASS })) === true; } catch { owed = false; }
               console.warn(`[mpp-tempo] CHARGED-BUT-NOT-SERVED: a pull transaction landed after its 402 (${req.method} ${req.path} tx=${found.txId}) - ${owed ? "recorded as owed in the refund ledger" : "NOT recorded"}`);
+              return owed || await lateRowExists(found.txId);
             },
+            record: { method: req.method, path: req.path, payer: req.mppTempoLedgerPayer || null, amountAtomic: String(binding.amountAtomic), synthetic: !!syntheticOf(req) },
           });
         }
         return;
