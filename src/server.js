@@ -1702,6 +1702,8 @@ async function labelledSnapshotAsync(snapshot) {
   promise.finally(() => { if (labelledBuild?.promise === promise) labelledBuild = null; }).catch(() => {});
   return promise;
 }
+// The bound GET probe's timeout (the bare probe has 6 s): see resolveExternalSeller.
+const BOUND_PROBE_TIMEOUT_MS = 3000;
 async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wantModel = null, onlyUrl = null, params = null } = {}) {
   const sameUrl = (u) => { try { return new URL(u).href === new URL(onlyUrl).href; } catch { return false; } };
   // Filled by the dispatch gate below; read by route-execute when nothing
@@ -1961,11 +1963,13 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
       // assertPublicUrl before the request, the connection pinned to the
       // validated IP (parity with payX402), and no redirect followed off the
       // validated host.
-      const probeAt = (u) => probePublicUrl(u, {
+      // The bound probe is a second round trip before any payment on a loop
+      // that runs candidates in turn, so it gets half the bare probe's time.
+      const probeAt = (u, timeoutMs = 6000) => probePublicUrl(u, {
         method: probeMethod,
         headers: { Accept: "application/json", ...(!isQueryMethod(probeMethod) ? { "Content-Type": "application/json" } : {}) },
         ...(!isQueryMethod(probeMethod) ? { body: "{}" } : {}),
-        timeoutMs: 6000,
+        timeoutMs,
       });
       let probe = await probeAt(r.url);
       if (isQueryMethod(probeMethod) && (probe.status === 400 || probe.status === 422)) {
@@ -1979,7 +1983,7 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
         }
         if (boundUrl !== r.url) {
           try { await probe.body?.cancel(); } catch { /* already read or closed */ }
-          probe = await probeAt(boundUrl);
+          probe = await probeAt(boundUrl, BOUND_PROBE_TIMEOUT_MS);
         }
       }
       live = probe.status === 402;
