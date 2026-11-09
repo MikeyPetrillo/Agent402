@@ -114,7 +114,7 @@ Every pack is **also a single paid endpoint**, `POST /api/skill/{slug}`, which r
 | [**defi-protocol-scanner**](https://agent402.tools/skills/defi-protocol-scanner) | $0.025 | Due-diligence a DeFi protocol: live token price, market context, protocol TVL across chains, and recent news. |
 | [**defi-dashboard**](https://agent402.tools/skills/defi-dashboard) | $0.014 | DeFi overview: total TVL, ETH price, Base gas, and global crypto stats. |
 | [**nft-portfolio**](https://agent402.tools/skills/nft-portfolio) | $0.005 | NFT + wallet snapshot: NFT holdings, native balance, and ETH price for an address. |
-| [**wallet-audit**](https://agent402.tools/skills/wallet-audit) | $0.005 | Full wallet review: balance, recent transactions, and token metadata for an address. |
+| [**wallet-audit**](https://agent402.tools/skills/wallet-audit) | $0.005 | Full wallet review: balance, recent transactions, and metadata for a token the wallet holds. |
 | [**wallet-readiness**](https://agent402.tools/skills/wallet-readiness) | $0.008 | "Can this wallet pay right now?" USDC on Base + Solana, live Base gas, and an Onramp funding link. |
 | [**onchain-analyst**](https://agent402.tools/skills/onchain-analyst) | $0.030 | Ask Base anything in SQL - your query runs against indexed, decoded chain data. |
 | [**gas-optimizer**](https://agent402.tools/skills/gas-optimizer) | $0.007 | Find the cheapest gas: Base gas, Ethereum gas, Base fee estimate, and ETH price for USD conversion. |

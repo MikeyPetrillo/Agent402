@@ -243,8 +243,8 @@ so every claim below is verifiable in code.</p>
   <code>/api/decide</code> also sends it to AI models via OpenRouter and to an OpenAI embedding model to
   build the plan. When route-and-execute or a decision's execution buys from an outside seller to resell
   the result to you, that seller receives the request it needs to answer, sent and paid for by us.
-  A candidate seller whose listing answers only when given inputs may first receive them once, unpaid,
-  so we can check it can serve the request before we choose it.</li>
+  A candidate seller may receive a request's inputs unpaid before we pay it, sometimes more than once:
+  to check that it can serve the request and to read its price.</li>
   <li>Card payments and subscriptions are processed by Stripe; transactional email (report links,
   monitor and free alerts) is sent through ZeptoMail, with Resend as a fallback. Report products read public sources named in each
   report (for example SEC EDGAR, openFDA, DNS and certificate-transparency logs, public blockchain

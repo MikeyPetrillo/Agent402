@@ -75,8 +75,8 @@ Loaded when an index, discovery, router or buyer file is read.
   `SOR_CHAIN_REFUSAL_OURS_MIN` (default 5) different sellers on one chain refuse our paid retries
   inside `SOR_CHAIN_REFUSAL_WINDOW_MS` (default 30 minutes) with no settle on that chain between
   them, the cause is read as ours: no route on that chain is noted until a payment there settles or
-  those refusals age out of the window. Only proven sellers count (an unproven-tier refusal is noted
-  as the seller's own); the hold logs once when it starts and is listed as `chainRefusalHolds` on
+  those refusals age out of the window. A refusal from a seller paid under the Base unproven tier never
+  counts toward it (it is noted as the seller's own); the hold logs once when it starts and is listed as `chainRefusalHolds` on
   `/__operator/tool-failures.json`.
 - **EVM buyer chains:** `src/evm-buyer-chains.js` lists the EVM chains the one spending wallet
   (`X402_UPSTREAM_BUYER_KEY`) can pay a seller on: Base, Arc, Celo, Polygon, Arbitrum and Robinhood

@@ -426,7 +426,7 @@ export const SKILL_PACKS = [
     ],
     workflow: [
       "Resolve A/AAAA/MX/TXT/NS/CAA records on the apex with dns-lookup to baseline what the authoritative answer should be.",
-      "Run dns-propagation across Cloudflare/Google/Quad9/OpenDNS in parallel - divergent answers mean a stale cache somewhere or a botched TTL during a migration.",
+      "Run dns-propagation, which asks Cloudflare, Google, Quad9 and OpenDNS for the same record - divergent answers mean a stale cache somewhere or a botched TTL during a migration.",
       "Look up the ASN and prefix that the apex resolves into with asn-info (a public DNS-based IP-to-ASN lookup - no auth needed). Useful for spotting an unexpected hosting move.",
       "Pull whois for ownership, expiry, and registrar - catches the 'we forgot to renew' class of outage.",
       "Run http-check for status code, response time, and final URL after redirects - the fastest 'is it actually up' read.",
@@ -1803,7 +1803,7 @@ export const SKILL_PACKS = [
     slug: "wallet-audit",
     title: "Wallet audit",
     tagline:
-      "Full wallet activity review: balance, recent transactions, and token metadata for a given address.",
+      "Full wallet activity review: balance, recent transactions, and metadata for a token the wallet holds.",
     useCase:
       "Investigating wallet activity - what's the balance, what has it been doing, and what tokens are involved.",
     promptArgs: [
@@ -1817,7 +1817,7 @@ export const SKILL_PACKS = [
     workflow: [
       "Get the native + token balances for the address.",
       "Pull recent transactions to see activity patterns.",
-      "Look up token metadata for contracts the wallet interacts with.",
+      "Look up metadata for the first token the wallet holds (a wallet holding no tokens gets a 422 on this step).",
     ],
     claudePrompt:
       "Audit the wallet 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045 using Agent402's wallet-audit skill pack. Get (1) balance, (2) recent transactions, (3) token metadata. Summarize activity and flag anything unusual.",
@@ -1874,7 +1874,7 @@ export const SKILL_PACKS = [
     slug: "email-security",
     title: "Email security",
     tagline:
-      "Email security skill: one parallel call returns SPF, DMARC and a DKIM check at the google selector, each as its own result, beside the combined mail score, to judge whether the domain can be spoofed.",
+      "Email security skill: one parallel call returns SPF, DMARC and a DKIM check at selector \"google\", each as its own result, beside the combined mail score, to judge whether the domain can be spoofed.",
     useCase:
       "Diagnosing email authentication - can this domain be spoofed, and is its mail configuration complete.",
     promptArgs: [

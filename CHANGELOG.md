@@ -19,8 +19,9 @@ Docs:
 - Once a client address has paid (a final 200 that settled on any rail, or a
   credits debit), its unpaid price checks read against 10 times the hourly
   figure for the rest of that clock hour and for 10 minutes after each paid
-  call, and its /v1/metered quotes against 10 times each figure for 10 minutes
-  after each paid call; on the shared Worker egress address the whole address
+  call; past the plain /v1/metered quote figure, each paid /v1/metered call
+  from that address earns 2 more quotes, used within 10 minutes, up to 10
+  times each figure; on the shared Worker egress address the whole address
   keeps its ceiling; a refused payment credential still counts.
 - A content-pipeline guide (/guides/content-pipeline, wiki page
   Content-Pipeline): research, script, voiceover, images, transcription,
@@ -52,6 +53,25 @@ Payments:
   whole hold.
 - A card subscription status event that arrives late never reactivates a
   canceled subscription.
+- Refund recipients are screened like every payout; a held refund logs a
+  fixed reason and stays owed.
+Tools:
+- The company-dossier and financial-research packs return 90 days of Form 4
+  insider trades; their insider step had been read at the 30-day default.
+- wallet-audit looks up metadata for a token the wallet holds, not for the
+  wallet address; a wallet holding no tokens gets a 422 on that step.
+- Report products, the image edit route and the subtitle-pipeline and
+  search-and-cite packs say model-backed in their descriptions.
+Router:
+- A seller's 402 must name the URL requested (the same origin, the same path
+  or the route mounted under a path prefix, and the same query); one naming
+  another resource is refused before anything is signed.
+- A GET seller is probed at its bare listing URL first; the caller's inputs
+  reach it unpaid only when that probe answers 400 or 422.
+- Algorand sellers are paid only at the address their settlement proof names.
+- When several proven sellers on one chain refuse our payments with no settle
+  between them, routes on that chain are not benched until a payment there
+  settles.
 Site:
 - The navigation puts live, status and llms.txt in the menus.
 Operations:
@@ -63,10 +83,16 @@ Operations:
   its refund transaction) or dismissed, and each resolution is recorded before
   the entry is dropped; unresolved entries are read on chain again every 6
   hours and close once the chain answers.
+- Tempo subscription gas sponsorship has a rolling 24 h ceiling on
+  transactions and fees, with a fifth of each held for renewals; past it a
+  send is refused before broadcast, and /api/gateway-status reads
+  subscriptionFeePayer.ceiling=reached.
 Privacy:
 - The shared record that an address paid recently is keyed by a keyed hash of
   the address, never the address or a plain hash of it, and expires within the
   hour; /privacy names it.
+- /privacy says a candidate seller may receive a request's inputs unpaid
+  before it is paid, sometimes more than once.
 
 ### 2026-11-07 (onchain-sql price, X data tools, Solana token search, metered chat, OCR and fetch errors)
 Tools:
