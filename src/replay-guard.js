@@ -113,6 +113,15 @@ export function paymentReplayKey(req) {
       const legacy = createHash("sha256").update(`${legacyNetwork}:${n}`).digest("hex");
       return `n2:${id}:${legacy}`;
     }
+    // A Permit2 payment: the signed permit's network, owner and nonce. Its
+    // other payload fields (and any key a sender adds) are not part of what
+    // the chain consumes, so they must not give one permit a second identity.
+    const p2 = p?.payload?.permit2Authorization;
+    if (p2 && typeof p2 === "object" && typeof p2.nonce === "string" && p2.nonce && typeof p2.from === "string" && p2.from) {
+      const network = p?.accepted?.network || p?.network || p?.payload?.network || "?";
+      const id = createHash("sha256").update(`permit2\n${network}\n${p2.from.trim().toLowerCase()}\n${p2.nonce.trim().toLowerCase()}`).digest("hex");
+      return `p2:${id}:${createHash("sha256").update(cred).digest("hex")}`;
+    }
     // No parseable nonce (a signed Solana transaction, an Algorand group):
     // key on the transaction the chain consumes, read from the fields the
     // facilitator reads, so neither the echoed offer around it nor a field

@@ -12,7 +12,43 @@ export const PAYMENT_HEADER_NAMES = Object.freeze(["payment-signature", "x-payme
 const BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
 const utf8 = new TextDecoder("utf-8"); // default: a leading BOM is dropped, as the paywall does
 
+// The families whose payment is a signed transaction, by v1 name prefix. A
+// CAIP-2 id is read by its namespace instead. scripts/test-payment-header-signed-fields.js
+// holds this beside the server's own network table.
+const NON_EVM_V1 = /^(?:solana|algorand|stellar)/i;
+/** Whether a declared network settles an EIP-3009 authorization: an eip155
+ *  CAIP-2 id, or a v1 name outside the transaction-signed families. */
+export function isEvmNetworkName(network) {
+  if (typeof network !== "string" || !network) return false;
+  if (network.includes(":")) return network.startsWith("eip155:");
+  return !NON_EVM_V1.test(network);
+}
+
+/** Remove a `payload.authorization` block no signature covers. That block is
+ *  what the facilitator verifies only for a plain EIP-3009 payment on an EVM
+ *  network; beside a Permit2 authorization, or on a network that settles a
+ *  signed transaction, the facilitator ignores it, so its from, nonce and
+ *  value are whatever the sender typed. Every network the header names (v2
+ *  `accepted.network`, v1 `network`, `payload.network`) must be an EVM one for
+ *  the block to stay: whichever of them the paywall reads, it then verified
+ *  that block. Mutates and returns `decoded`. */
+export function dropUnsignedAuthorization(decoded) {
+  const inner = decoded?.payload;
+  if (!inner || typeof inner !== "object" || Array.isArray(inner) || !Object.hasOwn(inner, "authorization")) return decoded;
+  const named = [decoded?.accepted?.network, decoded?.network, inner.network].filter((n) => n !== undefined && n !== null);
+  // A header naming no network matches no offer and is never verified, so
+  // nothing downstream of a verify reads it; only a named non-EVM network
+  // (or Permit2) marks the block as one the facilitator did not check.
+  const evm = named.every(isEvmNetworkName);
+  const permit2 = inner.permit2Authorization !== undefined && inner.permit2Authorization !== null;
+  if (!evm || permit2) delete inner.authorization;
+  return decoded;
+}
+
 /** The payment header's JSON object, or null when it does not decode to one.
+ *  A `payload.authorization` no signature covers is removed (see
+ *  dropUnsignedAuthorization), so no reader takes an identity, nonce or
+ *  amount from it, and the intake rewrite below sends the header on without it.
  *  Accepts standard base64 or base64url, padded or not, with surrounding
  *  whitespace and a leading byte order mark on the value itself. Pure. */
 export function decodePaymentHeader(value) {
@@ -25,7 +61,7 @@ export function decodePaymentHeader(value) {
   if (s.length % 4 !== 0 || !BASE64_RE.test(s)) return null;
   try {
     const parsed = JSON.parse(utf8.decode(Buffer.from(s, "base64")));
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? dropUnsignedAuthorization(parsed) : null;
   } catch {
     return null;
   }
