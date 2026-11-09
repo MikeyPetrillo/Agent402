@@ -951,8 +951,18 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
   for (const o of many) await refuse(o);
   for (const o of many) await refuse(o);
   ok(many.every((o) => !benched(`https://${o}.example/x`, "base")), "five sellers on one chain refusing our payments with no settle between: none is benched");
-  // After a settle on the chain, a refusing seller is the seller's own again.
-  noteChainSettled("base");
+  // After a payment on the chain settles (a real paid call answering 200 with
+  // its settle receipt), a refusing seller is the seller's own again.
+  const refusingFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const paidHdr = init?.headers?.["PAYMENT-SIGNATURE"] || init?.headers?.["payment-signature"] || init?.headers?.["X-PAYMENT"];
+    if (!paidHdr) return { status: 402, headers: { get: (k) => (k.toLowerCase() === "payment-required" ? h : null) }, json: async () => ({}), text: async () => "{}" };
+    return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json", "payment-response": Buffer.from(JSON.stringify({ success: true, transaction: "0x" + "ef".repeat(32), network: "eip155:8453" })).toString("base64") } });
+  };
+  const settledOk = await pay("https://settles.example/x", { maxAtomic: 500000n, method: "POST", body: {}, chain: "base", memoizeDelivery: true }).then((r) => r, (e) => e);
+  globalThis.fetch = refusingFetch;
+  ok(settledOk && !(settledOk instanceof Error), `setup: a paid call on the chain settles (${settledOk instanceof Error ? settledOk.message : "200"})`);
+  void noteChainSettled; // the reset is reached through the settled call above, not called directly
   await refuse("after"); await refuse("after");
   ok(!!benched("https://after.example/x", "base"), "after a settle on the chain, a seller refusing twice is benched again");
   resetR?.(); resetC();
