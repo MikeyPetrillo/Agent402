@@ -26,8 +26,13 @@ ok(/\[\\u0000-\\u001f\\u007f\]/.test(block), "control characters are stripped (n
 ok(/content-type/.test(block), "and the content-type, which is what tells HTML-error-page from JSON");
 ok(/new URL\(url\)\.host/.test(block), "it names the host, not the full URL (no query/credential in the log)");
 // The leak guard: the THROWN message must carry only the status.
-const thrown = block.match(/throw bad\(`([^`]+)`/)?.[1] || "";
-ok(thrown === "Seller rejected the paid retry (HTTP ${paid.status})", `the buyer-facing message stays status-only (got: ${thrown})`);
+// The block throws through sellerRejected(status) (2026-11-09: it stamps the
+// seller's status as a number for route-execute), whose message is checked here.
+ok(/throw sellerRejected\(paid\.status\)/.test(block) && !/throw bad\(`Seller rejected/.test(block), "the block throws the rejection through sellerRejected(paid.status)");
+const helper = src.slice(src.indexOf("function sellerRejected("), src.indexOf("function sellerRejected(") + 400);
+const thrown = helper.match(/bad\(`([^`]+)`/)?.[1] || "";
+ok(thrown === "Seller rejected the paid retry (HTTP ${status})", `the buyer-facing message stays status-only (got: ${thrown})`);
+ok(/e\.sellerStatus = status;/.test(helper) && !/sellerStatus = .*(why|refusalText)/.test(helper), "only the numeric status rides the error, never the seller's text");
 ok(!/why|raw|body/.test(thrown), "no part of the seller's body reaches the buyer");
 ok(/try \{[\s\S]*?\} catch \{ why = "\(body unreadable\)"/.test(block), "an unreadable body never throws over the real error");
 console.log(`\n${pass} passed, ${fail} failed`);

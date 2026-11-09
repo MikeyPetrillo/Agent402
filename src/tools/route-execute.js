@@ -141,6 +141,18 @@ export function callRefFrom(req, slug, ts) {
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
 }
+// Body fields the seller's published request contract (src/request-contract.js,
+// projected on each external candidate) requires that `params` does not carry,
+// when the seller's paid answer was an input refusal (400/422). Null otherwise.
+// Names come from the index's own allowlisted projection, never seller text.
+export function contractFieldsMissing(ext, params, err) {
+  if (err?.sellerStatus !== 400 && err?.sellerStatus !== 422) return null;
+  const required = ext?.requestContract?.required?.body;
+  if (!Array.isArray(required) || !required.length) return null;
+  const have = params && typeof params === "object" && !Array.isArray(params) ? params : {};
+  const missing = required.filter((k) => typeof k === "string" && /^[A-Za-z0-9_.-]{1,64}$/.test(k) && !Object.hasOwn(have, k));
+  return missing.length ? missing.slice(0, 8) : null;
+}
 
 const toUsd = (price) => Number(String(price ?? "").replace(/[^0-9.]/g, "")) || 0;
 
@@ -784,8 +796,17 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             // 402 with no challenge, and a payer 400 (seller URL not public,
             // payer misuse) is never the buyer's input: neither is relayed as is.
             const rawSc = e?.statusCode && e.statusCode >= 400 && e.statusCode < 600 ? e.statusCode : 502;
-            const sc = rawSc === 402 ? 409 : rawSc === 400 ? 502 : rawSc;
-            lastErr = bad(`External seller "${ext.seller}" failed: ${String(e?.message || e).slice(0, 200)}${e?.paidUnanswered === true ? "; no other seller is tried for this request" : ""}`, sc);
+            // A seller that refused the paid request as invalid input (400/422)
+            // when the caller's params lack fields the seller's own published
+            // contract requires: the caller's input, named from the contract
+            // (never the seller's text), answered 400 instead of a gateway 502.
+            // The contract stays reporting-only: it is read only AFTER the
+            // seller refused, never to gate or re-rank a payment.
+            const missing = isQueryMethod(extMethod) ? null : contractFieldsMissing(ext, params, e);
+            const sc = missing ? 400 : rawSc === 402 ? 409 : rawSc === 400 ? 502 : rawSc;
+            lastErr = missing
+              ? bad(`External seller "${ext.seller}" refused this request's input (HTTP ${e.sellerStatus}). Its published request contract requires ${missing.map((f) => `params.${f}`).join(", ")}, which this call did not send. You were not charged; add ${missing.length > 1 ? "them" : "it"} and retry.${e?.paidUnanswered === true ? " No other seller is tried for this request." : ""}`, sc)
+              : bad(`External seller "${ext.seller}" failed: ${String(e?.message || e).slice(0, 200)}${e?.paidUnanswered === true ? "; no other seller is tried for this request" : ""}`, sc);
             // FALL THROUGH TO THE NEXT SELLER only on a 5xx (their own upstream
             // or gateway failed), and only when the error carries NO settle
             // receipt - a payExternal throw that includes a receipt means the

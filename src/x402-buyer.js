@@ -61,6 +61,14 @@ export function unprovenCapMessage(payTo, capped) {
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
 }
+// The seller's own status rides on the error as a number (never its text), so
+// a caller can tell an input refusal (400/422) from a gateway failure; the
+// buyer-facing message stays status-only.
+function sellerRejected(status) {
+  const e = bad(`Seller rejected the paid retry (HTTP ${status})`, 502);
+  e.sellerStatus = status;
+  return e;
+}
 
 // Per-chain buyer config. x402 v1 accepts label the network as a bare string
 // ("base") not CAIP-2, and v2 uses CAIP-2; a seller may advertise either. The
@@ -1621,15 +1629,16 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
           console.warn(`[x402-buyer] ${where} refused the payment and the chain shows no debit after the credential expired (${verdict.observed} tx read) - not charged${memoize ? `, route noted as refusing on ${chain}` : ""}`);
           const e = bad(`Seller refused the payment (HTTP ${paid.status}); the credential expired unused, nothing charged`, 502);
           e.refused = true;
+          e.sellerStatus = paid.status;
           throw e;
         }
         if (verdict && verdict.debited === false) {
           console.warn(`[x402-buyer] ${where} refused the payment and the chain shows no debit yet, but the credential is still live (wait bound ${maxWaitMs}ms) - keeping the hold, not trying another seller`);
           // Buyer-facing text stays status-only (test-buyer-rejection-diagnostics pins it); the warn line above carries the reason.
-          throw bad(`Seller rejected the paid retry (HTTP ${paid.status})`, 502);
+          throw sellerRejected(paid.status);
         }
       }
-      throw bad(`Seller rejected the paid retry (HTTP ${paid.status})`, 502);
+      throw sellerRejected(paid.status);
     }
     } catch (postCommitErr) {
       // ONE source of truth: the `committed` variable, which the finally also
