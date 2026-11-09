@@ -182,7 +182,9 @@ const pool = await import("../src/router-pool.js");
   ok(filterAt > 0 && filterAt > fn.indexOf('} else if (chain === "algorand") {') && filterAt > fn.indexOf('} else if (chain === "solana") {') && filterAt < judgeAt && !/orderByJudgment\(/.test(fn.slice(0, filterAt)), "the resolver filters the candidates of every chain branch, before judging or probing any");
   const { tempoCandidateOf } = await import("../src/sor-candidates.js");
   const tc = tempoCandidateOf({ origin: "https://s.example", path: "/p", url: "https://s.example/p", method: "POST", priceUsd: 0.01, networks: ["tempo"], description: "people search", tags: ["people"] });
-  ok(tc.description === "people search" && tc.tags.join() === "people" && /\.map\(tempoCandidateOf\)/.test(fn) && /\/\/ The route's own text, for the category filter below\.\n\s+description: r\.description,\n\s+\}\)\);/.test(fn), "Tempo and Algorand candidates carry their own text to that filter");
+  const { algorandRouterCandidates } = await import("../src/algorand-sellers.js");
+  const ac = algorandRouterCandidates([{ url: "https://a.example/p", origin: "https://a.example", path: "/p", method: "GET", description: "people search", priceUsd: 0.01, verifs: 900, facilitatorPayTo: "A".repeat(58) }], "people search", { capUsd: 1, minVerifs: 50, network: "algorand" }).candidates[0];
+  ok(tc.description === "people search" && tc.tags.join() === "people" && /\.map\(tempoCandidateOf\)/.test(fn) && ac?.description === "people search" && /candidates = algo\.candidates;/.test(fn), "Tempo and Algorand candidates carry their own text to that filter");
   ok(/routeText: r, \.\.\.\(chain === "base" \? \{ usdcDomain:/.test(fn) && /routeText: r, binding: r\.binding, livePayTo \}\)/.test(serverSrc), "the EVM pre-probe gate and the live gate both read the route text");
   ok(/rowLevel \? \{ priceUsd: row\.priceUsd \?\? null, urlTemplate: !!row\.urlTemplate, routeText: row \}/.test(serverSrc), "every public route row's label reads the route text (withDispatchFields)");
 }

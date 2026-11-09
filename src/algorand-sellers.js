@@ -31,6 +31,13 @@
 //                from the chain rather than taken from a registry.
 // A crawled resource that GoPlausible ALSO lists keeps the facilitator's
 // verification count: it witnessed those payments and we did not.
+//
+// Every row is bound to the address its count belongs to before it is paid
+// (algorandRouterCandidates below): our crawled payTo when we have one, else
+// the receiving address the facilitator records; a row with neither is not
+// dispatched.
+
+import { algorandProofBinding } from "./dispatch-eligibility.js";
 
 const GP_BASE = (process.env.ALGORAND_FACILITATOR_URL || "https://facilitator.goplausible.xyz").replace(/\/+$/, "");
 const TTL_MS = Number(process.env.ALGORAND_SELLERS_TTL_MS || 30 * 60 * 1000);
@@ -47,13 +54,21 @@ async function getJson(path) {
   return res.json();
 }
 
+// Algorand addresses are case-sensitive base32: kept exactly, never folded.
+const algoAddr = (a) => (typeof a === "string" && /^[A-Z2-7]{58}$/.test(a) ? a : null);
+
 async function build() {
   const verifsByMerchant = new Map();
+  const payToByMerchant = new Map();
   for (let offset = 0; offset < MAX_PAGES * PAGE; offset += PAGE) {
     const j = await getJson(`/discovery/merchants?limit=${PAGE}&offset=${offset}`);
     const items = j.items || [];
     for (const m of items) {
       if (typeof m?.id === "string") verifsByMerchant.set(m.id, Number(m.totalVerifications) || 0);
+      // The merchant's receiving address, when the record names one (an id
+      // that is itself an address counts): the address its count belongs to.
+      const addr = [m?.payTo, m?.address, m?.id].find(algoAddr);
+      if (typeof m?.id === "string" && addr) payToByMerchant.set(m.id, addr);
     }
     if (items.length < PAGE) break;
   }
@@ -83,6 +98,10 @@ async function build() {
         amountAtomic,
         priceUsd: Number(amountAtomic) / 1e6,
         verifs,
+        // Where the facilitator records this route being paid: the accept's
+        // own payTo, else its merchant's address. The router binds the live
+        // 402 to it (algorandProofBinding, src/dispatch-eligibility.js).
+        facilitatorPayTo: algoAddr(accept?.payTo) || payToByMerchant.get(r?.merchantId) || null,
       });
     }
     if (items.length < PAGE) break;
@@ -228,6 +247,30 @@ export function rankAlgorandResources(resources, task, { capUsd, minVerifs = 50,
     if (score > 0) scored.push({ ...r, score });
   }
   return scored.sort((a, b) => b.score - a.score || b.verifs - a.verifs);
+}
+
+/** The router's Algorand candidates: ranked rows, each bound to the address
+ *  its proof was counted at (`chainProvenPayTo`, which the resolver checks
+ *  against the probe's 402 and payX402 against the accept it signs). A row
+ *  with no address to bind, or two that disagree, is dropped and counted by
+ *  verdict. Pure; server.js maps the result into its candidate list. */
+export function algorandRouterCandidates(resources, task, { capUsd, minVerifs = 50, excludeOrigin = "", network, limit = 5 } = {}) {
+  const candidates = [];
+  const dropped = {};
+  for (const r of rankAlgorandResources(resources, task, { capUsd, minVerifs, excludeOrigin })) {
+    const b = algorandProofBinding(r);
+    if (!b.dispatchable) { dropped[b.verdict] = (dropped[b.verdict] || 0) + 1; continue; }
+    if (candidates.length >= limit) continue;
+    candidates.push({
+      seller: r.origin, slug: r.path.replace(/^\//, ""), url: r.url, method: r.method,
+      price: `$${r.priceUsd}`, priceUsd: r.priceUsd,
+      networks: [network], settled: r.verifs,
+      chainProvenPayTo: b.payTo, proofPayToBasis: b.basis,
+      // The route's own text, for the category filter.
+      description: r.description,
+    });
+  }
+  return { candidates, dropped };
 }
 
 export function _resetForTest(resources = null) {

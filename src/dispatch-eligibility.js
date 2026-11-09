@@ -135,6 +135,42 @@ export function evidencePayToVerdict({ evidence, livePayTo, minSettled = 50, min
   return { bound: true, ok: true, verdict: "evidence_payto_match", payTos, livePayTo: live };
 }
 
+/**
+ * ALGORAND: THE PROOF'S ADDRESS IS THE ADDRESS PAID.
+ *
+ * An Algorand catalog row (src/algorand-sellers.js) is proven by one of two
+ * counts: inbound USDC-ASA read from the chain at the payTo our crawl saw, or
+ * the facilitator's verification count for the merchant that registered the
+ * route. Either way the count belongs to an address, and the router holds the
+ * live 402's payTo to it before it signs (exact compare: Algorand addresses
+ * are case-sensitive base32 and are never folded).
+ *
+ * The address bound, in order: the payTo our crawl read on the route (for a
+ * crawl-only row and for one the facilitator also lists), else the receiving
+ * address the facilitator records for the route or its merchant. A row that
+ * carries both, naming different addresses, has no single address its proof
+ * belongs to. A row with no address is not dispatched: Algorand has no
+ * unproven lane, so there is no smaller bound to try it under.
+ *
+ * Router-internal: these rows come from the facilitator catalog, not the
+ * index, so the verdict travels in the router's drop counts and log, never on
+ * an /api/index row (hence `verdict`, not a DISPATCH_REASONS `reason`).
+ */
+export const ALGORAND_PROOF_VERDICTS = Object.freeze({
+  proof_payto_bound: "the live 402's payTo is held to the address the settlement proof was counted at",
+  proof_payto_conflict: "our crawl and the facilitator record name different receiving addresses for this route, so no single address carries its proof; not dispatched",
+  proof_payto_unbound: "the settlement proof for this route names no receiving address, so the address a live 402 asks us to pay cannot be held to it; not dispatched (Algorand has no unproven lane)",
+});
+const algoAddr = (a) => (typeof a === "string" && /^[A-Z2-7]{58}$/.test(a) ? a : null);
+export function algorandProofBinding(row = {}) {
+  const crawled = row?.source === "crawl" || row?.source === "both" ? algoAddr(row.payTo) : null;
+  const facilitator = row?.source === "crawl" ? null : algoAddr(row?.facilitatorPayTo);
+  if (crawled && facilitator && crawled !== facilitator) return { dispatchable: false, verdict: "proof_payto_conflict", payTo: null };
+  const payTo = crawled || facilitator;
+  if (!payTo) return { dispatchable: false, verdict: "proof_payto_unbound", payTo: null };
+  return { dispatchable: true, verdict: "proof_payto_bound", payTo, basis: crawled ? "crawl" : "facilitator" };
+}
+
 /** Would the history WITHHELD at a listed shared wallet (plus what is credited
  *  there) have cleared the floor? At the live wallet when it is known, else at
  *  the wallet with the largest withheld history. Label wording only: it never
