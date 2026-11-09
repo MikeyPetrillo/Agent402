@@ -2974,6 +2974,8 @@ jobs:
           # CI lane gating (every test lane blocks deploy/publish; Chromium only where a script needs it — offline)
           t node scripts/test-ci-gating.js
           t node scripts/test-port-hygiene.js
+          # scripts/lib/boot-server.js: PORT=0 boots read the bound port back, two at once get two ports, a crash rejects with its log (boots the server; offline)
+          t node scripts/test-boot-server.js
           # Every offline suite pins its stores first: ./lib/offline-stores.js is its first import, so an exported REDIS_URL, STATE_DATABASE_URL or LEDGER_JOURNAL_REDIS never reaches a src/ module (static; offline)
           t node scripts/test-offline-stores-import.js
           # test-all waits for the seller index before its strict sweep and fails naming the state if it never loads (stub server; offline)
