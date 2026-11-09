@@ -93,6 +93,9 @@ Privacy:
   hour; /privacy names it.
 - /privacy says a candidate seller may receive a request's inputs unpaid
   before it is paid, sometimes more than once.
+- /terms says a payment that lands on chain after an error answer is recorded
+  as owed and repaid, and that a repayment is checked against the published
+  sanctions lists first.
 
 ### 2026-11-07 (onchain-sql price, X data tools, Solana token search, metered chat, OCR and fetch errors)
 Tools:
