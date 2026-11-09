@@ -399,5 +399,100 @@ const hex = (n) => (n >>> 0).toString(16).padStart(8, "0");
   ok(j.width === 8 && j.height === 8 && hex(j.getPixelColor(3, 3)) === "808080ff", `a progressive JPEG (one SOF2, two scans) still decodes (${j.width}x${j.height}, ${hex(j.getPixelColor(3, 3))})`);
 }
 
+// TIFF. The decoder reads every directory in the chain and decodes each one,
+// loops once per value a tag declares, and sizes buffers from bits per sample,
+// samples per pixel and the tile size. So the chain is walked the way the
+// decoder walks it, the cap applies to the total across pages, and a layout
+// the header cannot bound (a looping chain, more values than the file holds,
+// a compression with size fields of its own) is refused.
+{
+  // pages: [[tag, type, count, value | Buffer], ...]; a Buffer is stored after
+  // the directory and the entry points at it.
+  const tiff = (pages, { lastNext = 0 } = {}) => {
+    const out = [Buffer.from([0x49, 0x49, 42, 0, 8, 0, 0, 0])]; let off = 8;
+    pages.forEach((tags, idx) => {
+      const dir = Buffer.alloc(2 + tags.length * 12 + 4); dir.writeUInt16LE(tags.length, 0);
+      let blobAt = off + dir.length; const blobs = [];
+      tags.forEach(([tag, type, count, v], k) => {
+        const e = 2 + k * 12; dir.writeUInt16LE(tag, e); dir.writeUInt16LE(type, e + 2); dir.writeUInt32LE(count, e + 4);
+        if (Buffer.isBuffer(v)) { dir.writeUInt32LE(blobAt, e + 8); blobs.push(v); blobAt += v.length; }
+        else if (type === 3) dir.writeUInt16LE(v, e + 8); else dir.writeUInt32LE(v, e + 8);
+      });
+      dir.writeUInt32LE(idx === pages.length - 1 ? lastNext : blobAt, dir.length - 4);
+      out.push(dir, ...blobs); off = blobAt;
+    });
+    return Buffer.concat(out);
+  };
+  const samples = (w, h) => { const d = Buffer.alloc(w * h); for (let k = 0; k < d.length; k++) d[k] = (k * 7) & 255; return d; };
+  // An 8-bit gray page; `over` replaces or (null) removes tags, by number.
+  const page = (w, h, over = {}) => {
+    const d = samples(w, h);
+    const tags = { 256: [256, 4, 1, w], 257: [257, 4, 1, h], 258: [258, 3, 1, 8], 259: [259, 3, 1, 1], 262: [262, 3, 1, 1], 273: [273, 4, 1, d], 277: [277, 3, 1, 1], 278: [278, 4, 1, h], 279: [279, 4, 1, d.length] };
+    for (const [k, v] of Object.entries(over)) { if (v === null) delete tags[k]; else tags[k] = v; }
+    return Object.values(tags).sort((a, b) => a[0] - b[0]);
+  };
+  // A page that declares a size and points its one strip at the file header.
+  const hollow = (w, h, over = {}) => page(w, h, { 273: [273, 4, 1, 8], 279: [279, 4, 1, 1], ...over });
+  const convert = [["image-convert", tool("image-convert"), { format: "png" }]];
+
+  const secondPage = tiff([hollow(10, 10), hollow(9000, 9000)]);
+  ok(secondPage.length === 236, `the two-page TIFF is 236 bytes (got ${secondPage.length})`);
+  await refusedBy("a TIFF whose second page is 9000x9000", secondPage, /^source image too large \(tiff pages total 81000100 pixels/);
+  await refusedBy("a TIFF whose pages total more than the cap", tiff([hollow(3000, 3000), hollow(3000, 3000)]), /^source image too large \(tiff pages total 18000000 pixels; max 16000000/, convert);
+  await refusedBy("a TIFF directory chain that points at itself", tiff([hollow(10, 10)], { lastNext: 8 }), /^tiff directory chain loops back on itself/, convert);
+  await refusedBy("a TIFF with more pages than the limit", tiff(Array.from({ length: 33 }, () => hollow(4, 4))), /^tiff holds more than 32 pages/, convert);
+  await refusedBy("a TIFF tag declaring 2 billion values", tiff([[...hollow(10, 10), [700, 3, 0x7fffffff, 8]]]), /^tiff tag 700 declares 2147483647 values, more than the file holds/, convert);
+  await refusedBy("a TIFF with 60000 bits per sample", tiff([hollow(10, 10, { 258: [258, 3, 1, 60000], 277: [277, 3, 1, 60000] })]), /^source image too large \(tiff samples decode to 45000000000 bytes/, convert);
+  await refusedBy("a TIFF with a 9000x9000 tile", tiff([hollow(10, 10, { 273: null, 278: null, 279: null, 322: [322, 4, 1, 9000], 323: [323, 4, 1, 9000], 324: [324, 4, 1, 8], 325: [325, 4, 1, 1] })]), /^source image too large \(tiff tile 9000x9000/, convert);
+  await refusedBy("a TIFF whose width is a text value", tiff([hollow(10, 10, { 256: [256, 2, 6, Buffer.from("09000\0")], 257: [257, 2, 6, Buffer.from("09000\0")] })]), /^tiff tag 256 is not a SHORT or LONG value/, convert);
+  await refusedBy("a TIFF of raw sensor data", tiff([hollow(10, 10, { 262: [262, 3, 1, 32803], 278: [278, 4, 1, 1], 279: [279, 4, 1, 100000000] })]), /^tiff holds raw sensor data/, convert);
+  const jpegStrip = Buffer.from(await new Jimp({ width: 16, height: 16, color: 0x336699ff }).getBuffer(JimpMime.jpeg));
+  await refusedBy("a JPEG-compressed TIFF", tiff([page(16, 16, { 259: [259, 3, 1, 7], 262: [262, 3, 1, 6], 277: [277, 3, 1, 3], 273: [273, 4, 1, jpegStrip], 279: [279, 4, 1, jpegStrip.length] })]), /^tiff compression 7 is not supported/, convert);
+  await refusedBy("a CCITT-compressed TIFF", tiff([hollow(100, 100, { 258: [258, 3, 1, 1], 259: [259, 3, 1, 4] })]), /^tiff compression 4 is not supported/, convert);
+  await refusedBy("a TIFF whose tags together declare more values than the file holds", tiff([[...hollow(10, 10), ...Array.from({ length: 200 }, (_, k) => [1000 + k, 3, 60, 8])]]), /^tiff tags declare more value bytes than the file holds/, convert);
+  await refusedBy("a TIFF strip that runs past the end of the file", tiff([page(10, 10, { 259: [259, 3, 1, 32773], 279: [279, 4, 1, 0x7fffffff] })]), /^tiff strip 0 runs past the end of the file/, convert);
+  await refusedBy("a TIFF whose maker note is not a byte field", tiff([[...hollow(10, 10), [37500, 6, 0, 8]]]), /^tiff maker note is not a byte field/, convert);
+  await refusedBy("a TIFF with a camera maker note", tiff([[...hollow(10, 10), [37500, 7, 12, Buffer.from("Nikon\0\x02\x10\0\0MM")]]]), /^tiff carries a camera maker note/, convert);
+
+  // A deflate strip that inflates to 64 MB behind a 10x10 page. Refused in the
+  // worker (it inflates), so no 500 ms bound.
+  const swollen = zlibMod.deflateSync(Buffer.alloc(64e6), { level: 9 });
+  for (const slug of ["image-convert", "image-dominant-color"]) {
+    const a = await attempt(tool(slug), tiff([page(10, 10, { 259: [259, 3, 1, 8], 273: [273, 4, 1, swollen], 279: [279, 4, 1, swollen.length] })]), { format: "png" });
+    ok(a.code === 400 && /^tiff strip 0 inflates past the 10x10 page its directory declares/.test(a.msg || ""), `${slug} refuses a deflate TIFF strip that inflates past its page (got ${a.code} "${a.msg}")`);
+  }
+
+  // Ordinary TIFFs decode to the same pixels: sample k of the strip is k*7.
+  const at = (img, x, y) => hex(img.getPixelColor(x, y));
+  const gray = (v) => { const h2 = (v & 255).toString(16).padStart(2, "0"); return h2 + h2 + h2 + "ff"; };
+  let f = await decoded(tiff([page(40, 30)]));
+  ok(f.width === 40 && f.height === 30 && at(f, 3, 2) === gray(83 * 7), `an uncompressed gray TIFF decodes (${f.width}x${f.height}, ${at(f, 3, 2)})`);
+  f = await decoded(tiff([page(40, 30), page(64, 64)]));
+  ok(f.width === 40 && f.height === 30 && at(f, 3, 2) === gray(83 * 7), `a two-page TIFF under the cap decodes as its first page (${f.width}x${f.height})`);
+  f = await decoded(tiff([page(40, 30, { 256: [256, 3, 1, 40], 257: [257, 3, 1, 30], 278: [278, 3, 1, 30] })]));
+  ok(f.width === 40 && at(f, 3, 2) === gray(83 * 7), `a TIFF with SHORT size tags decodes (${at(f, 3, 2)})`);
+  for (const scheme of [8, 32946]) {
+    const z = zlibMod.deflateSync(samples(40, 30));
+    f = await decoded(tiff([page(40, 30, { 259: [259, 3, 1, scheme], 273: [273, 4, 1, z], 279: [279, 4, 1, z.length] })]));
+    ok(f.width === 40 && f.height === 30 && at(f, 3, 2) === gray(83 * 7), `a deflate TIFF (compression ${scheme}) decodes (${at(f, 3, 2)})`);
+  }
+  const literal = Buffer.concat(Array.from({ length: 12 }, (_, k) => Buffer.concat([Buffer.from([99]), samples(40, 30).subarray(k * 100, k * 100 + 100)])));
+  f = await decoded(tiff([page(40, 30, { 259: [259, 3, 1, 32773], 273: [273, 4, 1, literal], 279: [279, 4, 1, literal.length] })]));
+  ok(f.width === 40 && at(f, 3, 2) === gray(83 * 7), `a PackBits TIFF decodes (${at(f, 3, 2)})`);
+  // Tiled: 20x20 in four 16x16 tiles; tile s holds (k + 40s) at sample k.
+  const tiles = Buffer.concat([0, 1, 2, 3].map((s) => Buffer.from(Array.from({ length: 256 }, (_, k) => (k + s * 40) & 255))));
+  const tiledDir = (dataAt) => [[256, 4, 1, 20], [257, 4, 1, 20], [258, 3, 1, 8], [259, 3, 1, 1], [262, 3, 1, 1], [277, 3, 1, 1], [322, 4, 1, 16], [323, 4, 1, 16],
+    [324, 4, 4, Buffer.from(new Uint32Array([0, 1, 2, 3].map((s) => dataAt + s * 256)).buffer)], [325, 4, 4, Buffer.from(new Uint32Array([256, 256, 256, 256]).buffer)]];
+  const tiledLen = tiff([tiledDir(0)]).length;
+  f = await decoded(Buffer.concat([tiff([tiledDir(tiledLen)]), tiles]));
+  ok(f.width === 20 && f.height === 20 && at(f, 1, 1) === gray(17) && at(f, 17, 17) === gray(17 + 120), `a tiled TIFF decodes (${f.width}x${f.height}, ${at(f, 17, 17)})`);
+  // An EXIF sub-directory is followed and read like any other directory.
+  const exif = Buffer.alloc(18); exif.writeUInt16LE(1, 0); exif.writeUInt16LE(0x8827, 2); exif.writeUInt16LE(3, 4); exif.writeUInt32LE(1, 6); exif.writeUInt16LE(100, 10);
+  f = await decoded(tiff([[...page(40, 30), [34665, 4, 1, exif]]]));
+  ok(f.width === 40 && at(f, 3, 2) === gray(83 * 7), `a TIFF with an EXIF directory decodes (${at(f, 3, 2)})`);
+  f = await decoded(Buffer.from(await new Jimp({ width: 30, height: 20, color: 0x3366ccff }).getBuffer("image/tiff")));
+  ok(f.width === 30 && f.height === 20 && at(f, 5, 5) === "3366ccff", `the TIFF encoder's own output decodes (${at(f, 5, 5)})`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

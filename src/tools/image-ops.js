@@ -10,7 +10,10 @@
 // jimp loads with the first decode (./lazy-deps.js), not at boot: on the main
 // thread that keeps its evaluation off the startup path; the worker preloads it.
 import { loadJimp } from "./lazy-deps.js";
-import { assertGifHeader, gifFirstFrame, assertPngHeader, assertInflateWithinDeclared, assertJpegHeader, jpegFrameHeaders } from "./image-headers.js";
+import {
+  assertGifHeader, gifFirstFrame, assertPngHeader, assertInflateWithinDeclared,
+  assertJpegHeader, jpegFrameHeaders, assertTiffHeader,
+} from "./image-headers.js";
 
 // Re-exported for the other decoders of buyer images (barcode-kit, frame-diff).
 export { gifFirstFrame, assertPngHeader, assertInflateWithinDeclared };
@@ -122,6 +125,7 @@ export function assertDeclaredWithinPixelCap(buf, maxPixels) {
   if (format === "gif") assertGifHeader(buf);
   if (format === "png") assertPngHeader(buf);
   if (format === "jpeg") assertJpegHeader(buf);
+  if (format === "tiff") assertTiffHeader(buf, maxPixels);
 }
 
 export async function readImage(buf, { maxPixels = MAX_SRC_PIXELS } = {}) {
