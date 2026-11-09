@@ -6,20 +6,23 @@
 // asserts: the first MAX_FAILS calls from one wallet run the handler and end
 // 402 (settlement failed), the next is refused 429 BEFORE the handler with
 // Retry-After, a different wallet is still served, a PoW-eligible (non
-// wallet-only) tool is never consulted, and a settled 200 clears the count.
+// wallet-only) tool is never consulted, and a settled 200 is an outcome in
+// the window. The refusal holds the NETWORK the failed payments named: the
+// same wallet paying on another offered network is served at once, and the
+// 429 says so in words and in fields.
 //
 // Handler execution is observed through the stub's settle counter: the vendor
 // only calls /settle for a < 400 handler response, so "settles advanced" means
 // the handler ran and "settles did not advance" means the refusal came first.
 //
-// And the /v1 GLOBAL pause, through a real HTTP /v1 request (2026-09-28): every
-// /v1 slug is wallet-only, so the dispatcher's catalog consult (global:false)
-// armed the outcome listener first and the /v1 handler's own consult
-// (global:true) could not re-arm it - no /v1 settle failure ever reached the
-// global count. The server boots under scripts/lib/upstream-stub-preload.js so
+// And the /v1 burst ALARM, through a real HTTP /v1 request: every /v1 slug is
+// wallet-only, so the dispatcher's catalog consult (global:false) arms the
+// outcome listener first and the /v1 handler's own consult (global:true)
+// upgrades it. The server boots under scripts/lib/upstream-stub-preload.js so
 // /v1/embeddings runs to a 200 with no key and nothing spent, then settlement
-// fails; GLOBAL_MAX of them across different wallets must pause every /v1 tier,
-// and one wallet's concurrent burst, however large, must not.
+// fails; GLOBAL_MAX of them across different wallets must read
+// settleFailures=burst on /api/gateway-status while the NEXT buyer is served,
+// and one wallet's concurrent burst, however large, must not raise it.
 // The breaker counts, replay claims and sales of one booted server: Redis or a
 // state database left over from an earlier run would answer this run's fixed
 // wallets and nonces (429/409 before any handler), so the child runs on its own
@@ -48,17 +51,17 @@ let settleMode = "fail"; let verifies = 0, settles = 0;
 facilitator = createServer((req, res) => {
   let body = ""; req.on("data", (c) => (body += c)); req.on("end", () => {
     const reply = (status, obj) => { res.writeHead(status, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
-    let payer = PAYER_A; try { payer = JSON.parse(body)?.paymentPayload?.payload?.authorization?.from || payer; } catch { /* ignore */ }
-    if (req.url === "/supported") return reply(200, { kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} });
+    let payer = PAYER_A, net = "eip155:8453"; try { const j = JSON.parse(body); payer = j?.paymentPayload?.payload?.authorization?.from || payer; net = j?.paymentRequirements?.network || j?.paymentPayload?.accepted?.network || net; } catch { /* ignore */ }
+    if (req.url === "/supported") return reply(200, { kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }, { x402Version: 2, scheme: "exact", network: "eip155:137" }], extensions: [], signers: {} });
     if (req.url === "/verify") { verifies++; return reply(200, { isValid: true, payer }); }
     if (req.url === "/settle") {
       settles++;
-      if (settleMode === "fail") return reply(200, { success: false, errorReason: "insufficient_funds", transaction: "", network: "eip155:8453", payer });
+      if (settleMode === "fail") return reply(200, { success: false, errorReason: "insufficient_funds", transaction: "", network: net, payer });
       // A facilitator refusing on a billing quota of OURS, both shapes: the
       // graceful 200 {success:false} and a thrown non-2xx settle response.
-      if (settleMode === "quota") return reply(200, { success: false, errorReason: "free_tier_exhausted", transaction: "", network: "eip155:8453", payer });
-      if (settleMode === "quota-thrown") return reply(403, { success: false, errorReason: "free_tier_exhausted", errorMessage: "free tier exhausted", transaction: "", network: "eip155:8453", payer });
-      return reply(200, { success: true, transaction: "0x" + "cd".repeat(32), network: "eip155:8453", payer });
+      if (settleMode === "quota") return reply(200, { success: false, errorReason: "free_tier_exhausted", transaction: "", network: net, payer });
+      if (settleMode === "quota-thrown") return reply(403, { success: false, errorReason: "free_tier_exhausted", errorMessage: "free tier exhausted", transaction: "", network: net, payer });
+      return reply(200, { success: true, transaction: "0x" + "cd".repeat(32), network: net, payer });
     }
     if (req.url === "/rpc") return reply(200, { jsonrpc: "2.0", id: 1, result: "0x0" });
     return reply(404, {});
@@ -70,8 +73,10 @@ proc = spawn("node", ["--import", "./scripts/lib/upstream-stub-preload.js", "src
   env: {
     ...process.env, ...ownStoreEnv("settle-breaker"), PORT: String(PORT), FREE_MODE: "", OPENAI_API_KEY: "test-key-never-used",
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
-    FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`,
-    CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYMENT_NETWORKS: "base", MPP_SECRET_KEY: "",
+    // Two networks, so both facilitator clients a multi-chain boot builds are
+    // pointed at the stub: nothing here reaches a real facilitator.
+    FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, PAYAI_FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, SOLVADOR_KEY: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", PAYMENT_SETTLE_FALLBACK: "", AGENT402_BASE_RPC: `http://127.0.0.1:${FAC_PORT}/rpc`,
+    CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYMENT_NETWORKS: "base,polygon", EVM_RPC_137: `http://127.0.0.1:${FAC_PORT}/rpc`, MPP_SECRET_KEY: "",
     GATEWAY_SETTLE_BREAKER_MAX: String(MAX), GATEWAY_SETTLE_BREAKER_WINDOW_MS: "600000", GATEWAY_SETTLE_BREAKER_GLOBAL_MAX: "4",
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
     AGENT402_OPERATOR_TOKEN: OP_TOKEN,
@@ -99,16 +104,18 @@ const credential = (accepted, payer) => Buffer.from(JSON.stringify({
 // control that the consult is scoped to paid (not PoW-eligible) tools.
 const WALLET_ONLY = { path: "/api/demand-radar?limit=1", method: "GET" };
 const POW_TOOL = { path: "/api/hash", method: "POST", body: JSON.stringify({ text: "x" }) };
+const BASE = "eip155:8453", POLYGON = "eip155:137";
 const accepts = {};
-const acceptFor = async (t) => {
-  if (accepts[t.path]) return accepts[t.path];
+const acceptFor = async (t, network = BASE) => {
+  const k = `${network} ${t.path}`;
+  if (accepts[k]) return accepts[k];
   const r = await fetch(`${B}${t.path}`, { method: t.method, headers: { "content-type": "application/json" }, body: t.body });
   ok(r.status === 402, `unpaid ${t.method} ${t.path} -> 402 (got ${r.status})`);
   const req402 = JSON.parse(Buffer.from(r.headers.get("payment-required"), "base64").toString("utf-8"));
-  accepts[t.path] = (req402.accepts || []).find((a) => a.network === "eip155:8453"); ok(!!accepts[t.path], `${t.path} offers exact on Base`);
-  return accepts[t.path];
+  accepts[k] = (req402.accepts || []).find((a) => a.network === network && a.scheme === "exact"); ok(!!accepts[k], `${t.path} offers exact on ${network}`);
+  return accepts[k];
 };
-const pay = async (t, payer) => fetch(`${B}${t.path}`, { method: t.method, headers: { "content-type": "application/json", "payment-signature": credential(await acceptFor(t), payer) }, body: t.body });
+const pay = async (t, payer, network = BASE) => fetch(`${B}${t.path}`, { method: t.method, headers: { "content-type": "application/json", "payment-signature": credential(await acceptFor(t, network), payer) }, body: t.body });
 
 try {
   for (let i = 0; i < 120; i++) { try { if ((await fetch(`${B}/health`)).ok) break; } catch { /* booting */ } await sleep(500); }
@@ -156,6 +163,24 @@ try {
     ok(r.status === 429 && settles === before, `wallet A call ${MAX + 1}: refused 429 before the handler (status ${r.status}, settles ${settles} == ${before})`);
     ok(r.headers.get("retry-after") && /failed to settle/.test(body.error || ""), `429 carries Retry-After and says why (${String(body.error).slice(0, 60)}...)`);
     ok(verifies === v + 1, "the refusal came after verify (the paywall still verified the credential) and before any handler work");
+    // The exact text, and the fields an agent acts on without parsing it.
+    const secs = Number(r.headers.get("retry-after"));
+    const m = /^Recent payments from this wallet on eip155:8453 failed to settle \(3 in the last 10 min: they verified, the call was served, and the transfer did not go through\); paid tools refuse new calls from it on eip155:8453 until (\d{4}-\d\d-\d\dT[\d:.]+Z) \(about (\d+) s\)\. That holds eip155:8453 only: this wallet can pay on any other network this route offers right now \(the networks are accepts\[\]\.network in the route's 402\)\. Nothing was charged for this request\. Before paying on eip155:8453 again, check the wallet's balance of the payment token there\.$/.exec(body.error || "");
+    ok(!!m && Number(m[2]) === secs, `the 429 names the refused network, says another network works now, when Base opens again and what to check (${body.error})`);
+    ok(body.retry === "other-network" && body.refusedNetwork === BASE && body.retryAfterSeconds === secs && secs >= 1 && body.otherNetworksFrom === "accepts[].network in this route's 402", `machine-readable fields ride beside the message (${JSON.stringify({ retry: body.retry, refusedNetwork: body.refusedNetwork, retryAfterSeconds: body.retryAfterSeconds, otherNetworksFrom: body.otherNetworksFrom })})`);
+    // THE SAME WALLET ON ANOTHER NETWORK, in the same instant: the route's 402
+    // lists Polygon (where the fields point), and a payment there reaches the
+    // handler (settles advanced). The Base refusal beside it is the control.
+    const s0 = settles;
+    const onY = await pay(WALLET_ONLY, PAYER_A, POLYGON);
+    ok(onY.status !== 429 && settles === s0 + 1, `wallet A, refused on Base, is served on Polygon at once: the handler ran (status ${onY.status}, settles ${settles} == ${s0 + 1})`);
+    const s1 = settles;
+    const onX = await pay(WALLET_ONLY, PAYER_A);
+    ok(onX.status === 429 && settles === s1, `control: the same wallet's next Base payment is still refused before the handler (status ${onX.status})`);
+    settleMode = "ok";
+    const paidY = await pay(WALLET_ONLY, PAYER_A, POLYGON);
+    settleMode = "fail";
+    ok(paidY.status === 200, `and a Polygon payment that settles answers 200 while Base stays refused (got ${paidY.status})`);
   }
   // A different wallet is still served (its own count is zero).
   {
@@ -204,22 +229,23 @@ try {
     ok(r2.status === 429, `... and the next is 429 (got ${r2.status})`);
   }
   // Per-wallet ONLY: by now 8+ catalog settle failures have happened across two
-  // wallets, well past GLOBAL_MAX (4) - and a THIRD wallet is still served,
-  // because catalog failures neither honour nor feed the global pause.
+  // wallets, well past GLOBAL_MAX (4) - and a THIRD wallet is still served.
+  // Catalog failures do not feed the /v1 burst alarm (checked below: the word
+  // still reads ok after the single-wallet burst).
   {
     const before = settles;
     const r = await pay(WALLET_ONLY, "0x00000000000000000000000000000000000000c3");
-    ok(r.status === 402 && settles === before + 1, `no global pause from catalog failures: a third wallet still reaches the handler (status ${r.status})`);
+    ok(r.status === 402 && settles === before + 1, `a third wallet still reaches the handler (status ${r.status})`);
   }
-  // THE /v1 GLOBAL PAUSE, through HTTP. The catalog failures above (well past
-  // GLOBAL_MAX, across three wallets) fed nothing global.
+  // THE /v1 BURST ALARM, through HTTP. The catalog failures above (well past
+  // GLOBAL_MAX, across three wallets) fed nothing into it.
   const V1 = (i) => ({ path: "/v1/embeddings", method: "POST", body: JSON.stringify({ input: `settle breaker probe ${i}` }) });
   const wallet = (i) => "0x" + "e".repeat(38) + i.toString(16).padStart(2, "0");
   const GLOBAL_MAX = 4; // GATEWAY_SETTLE_BREAKER_GLOBAL_MAX below
   // ONE wallet, a concurrent burst: every call passes the per-wallet check
   // before any of the burst's failures lands, so well over GLOBAL_MAX handlers
   // run and fail to settle. That wallet is the per-wallet bound's business; it
-  // must not pause every /v1 buyer (the global pause counts distinct buyers).
+  // must not raise the alarm (it counts distinct buyers).
   {
     await acceptFor(V1(0));
     // One settled /v1 call first: a 503 here means the route itself cannot
@@ -235,32 +261,46 @@ try {
     const before = settles;
     const burst = await Promise.all(Array.from({ length: 10 }, (_, k) => pay(V1(100 + k), wallet(0x90))));
     const ran = settles - before;
-    ok(ran >= GLOBAL_MAX && burst.every((r) => r.status === 402 || r.status === 429), `one wallet's burst of 10 concurrent /v1 calls: ${ran} handlers ran and failed to settle (>= GLOBAL_MAX ${GLOBAL_MAX}, so the old per-failure count would have paused /v1; statuses ${burst.map((r) => r.status).join(",")})`);
+    ok(ran >= GLOBAL_MAX && burst.every((r) => r.status === 402 || r.status === 429), `one wallet's burst of 10 concurrent /v1 calls: ${ran} handlers ran and failed to settle (>= GLOBAL_MAX ${GLOBAL_MAX}; statuses ${burst.map((r) => r.status).join(",")})`);
     const b0 = settles;
     const r = await pay(V1(200), wallet(0x91));
-    ok(r.status === 402 && settles === b0 + 1, `...and a DIFFERENT wallet's /v1 call still reaches its handler: one buyer cannot pause every /v1 tier (status ${r.status}, settles ${settles})`);
+    ok(r.status === 402 && settles === b0 + 1, `...and a DIFFERENT wallet's /v1 call still reaches its handler (status ${r.status}, settles ${settles})`);
+    const w0 = (await (await fetch(`${B}/api/gateway-status`)).json()).settleFailures;
+    ok(w0?.status === "ok", `one buyer's burst does not raise the alarm: settleFailures reads ok (${JSON.stringify(w0)})`);
   }
   // Now /v1 calls from DIFFERENT fresh wallets (one failure each, far under
   // the per-wallet MAX) run the handler and fail to settle. Two buyers failed
-  // above; GLOBAL_MAX - 2 more reach the threshold, and the next /v1 call, from
-  // yet another wallet, must be refused 503 before the handler.
+  // above; GLOBAL_MAX - 2 more reach the count. Nobody is refused for it: the
+  // next /v1 call, from yet another wallet, reaches its handler, and
+  // settleFailures reads burst on /api/gateway-status.
   {
+    const wordOf = async (headers) => (await (await fetch(`${B}/api/gateway-status`, { headers })).json().catch(() => ({}))).settleFailures;
     for (let i = 1; i <= GLOBAL_MAX - 2; i++) {
+      if (i === GLOBAL_MAX - 2) ok(JSON.stringify(await wordOf()) === JSON.stringify({ status: "ok" }), `control: one buyer short of the count, settleFailures reads ok, the word only (${JSON.stringify(await wordOf())})`);
       const before = settles;
       const r = await pay(V1(i), wallet(i));
       ok(r.status === 402 && settles === before + 1, `/v1 call ${i} from its own wallet: the handler ran (upstream stubbed), settlement failed -> 402 (status ${r.status}, settles ${settles})`);
     }
+    const g = await (await fetch(`${B}/api/gateway-status`)).json().catch(() => ({}));
+    ok(JSON.stringify(g.settleFailures) === JSON.stringify({ status: "burst" }), `after /v1 settle failures from ${GLOBAL_MAX} different wallets settleFailures reads burst, the word only (${JSON.stringify(g.settleFailures)})`);
+    const op = await wordOf({ "X-Operator-Token": OP_TOKEN });
+    ok(op?.status === "burst" && op.threshold === GLOBAL_MAX && op.trips === 1 && typeof op.until === "string", `the operator read adds the counts (${JSON.stringify(op)})`);
     const before = settles;
     const r = await pay(V1(99), wallet(99));
     const body = await r.json().catch(() => ({}));
-    ok(r.status === 503 && settles === before && /briefly paused/.test(body.error || "") && r.headers.get("retry-after"), `after /v1 settle failures from ${GLOBAL_MAX} different wallets the NEXT /v1 call is paused 503 before the handler (status ${r.status}, settles ${settles} == ${before})`);
-    const g = await (await fetch(`${B}/api/gateway-status`)).json().catch(() => ({}));
-    const txt = JSON.stringify(g);
-    ok(!txt.includes(wallet(1)), "the pause is reported without naming a wallet");
-    // The catalog neither honours nor feeds the /v1 pause: a fresh wallet still reaches a wallet-only catalog tool.
-    const c = settles;
-    const cat = await pay(WALLET_ONLY, "0x00000000000000000000000000000000000000f6");
-    ok(cat.status === 402 && settles === c + 1, `the /v1 pause does not reach the catalog: a wallet-only catalog tool still runs its handler (status ${cat.status})`);
+    ok(r.status === 402 && settles === before + 1 && !/paused/.test(body.error || ""), `the NEXT /v1 buyer is served while the word reads burst: its handler ran and reached settlement (status ${r.status}, settles ${settles} == ${before + 1})`);
+    settleMode = "ok";
+    const paid = await pay(V1(98), wallet(98));
+    settleMode = "fail";
+    ok(paid.status === 200, `and a /v1 buyer whose payment settles gets its 200 during the alarm (got ${paid.status})`);
+    const txt = JSON.stringify(g) + JSON.stringify(op);
+    ok(!txt.includes(wallet(1)), "the alarm is reported without naming a wallet");
+    // Control: the per-wallet rule still acts on its own wallet during the alarm.
+    const w = wallet(0x92);
+    for (let i = 0; i < MAX; i++) await pay(V1(300 + i), w);
+    const b1 = settles;
+    const own = await pay(V1(310), w);
+    ok(own.status === 429 && settles === b1, `control: during the alarm a wallet with ${MAX} failed settles of its own is refused 429 before the handler (status ${own.status})`);
   }
   // Status surface stays counts-only.
   {

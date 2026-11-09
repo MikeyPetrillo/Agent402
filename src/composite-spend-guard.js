@@ -17,10 +17,11 @@ import { AsyncLocalStorage } from "node:async_hooks";
 // (the per-call drain is small, blocks are short, and the gateway-balance alarm
 // is the outer backstop), and shared across replicas through
 // src/shared-limits.js when a Redis is configured: failures go to a shared
-// window per payer and a shared global window, a block and the pause are
-// shared flags, and the two consults read them with this process's own state
-// as the floor (synchronous without a shared store, a promise with one; the
-// dispatcher awaits both). Tune via env. The key is the payer (the EVM
+// window per payer and a shared global window, a block and the burst alarm are
+// shared flags, and the per-payer consult reads its flag with this process's
+// own state as the floor (synchronous without a shared store, a promise with
+// one; the dispatcher awaits it). The alarm flag is read by the status word
+// only, never on the serving path. Tune via env. The key is the payer (the EVM
 // EIP-3009 authorization's from, the rail the reusable-nonce mechanic applies
 // to), else the Tempo sender, else the credits key, else the client IP (see
 // guardKey in server.js), so every buyer has a key.
@@ -45,30 +46,45 @@ function tripped(nFails, nOks) {
 const fails = new Map();        // payer -> number[] (failure timestamps in window)
 const oks = new Map();          // payer -> number[] (settled-run timestamps in window)
 const blockedUntil = new Map(); // payer -> timestamp the block lifts
-// Global circuit breaker: spend-then-fail events across ALL keys in the window.
-// The per-key guard is evadable by rotating wallets/IPs; this bounds the total
-// unsettled upstream burn regardless of who causes it. Trips to a short pause
-// on every composite (503, nobody charged) rather than blocking any one buyer.
+// Global burst alarm: spend-then-fail events across ALL keys in the window.
+// The per-key guard acts on one buyer; this counts the total unsettled
+// upstream burn regardless of who causes it. At GLOBAL_MAX_FAILS it is
+// REPORTED: a console.warn and the unsettledReports word on
+// /api/gateway-status (ok / burst, held for GLOBAL_PAUSE_MS), which the
+// status Worker and the heartbeat page on. It refuses nothing: no buyer is
+// refused a report for other buyers' unsettled runs.
 //
 // Each buyer adds at most MAX_FAILS of its own failures to that count, so the
-// pause answers several buyers failing together and never one buyer alone
+// alarm reports several buyers failing together and never one buyer alone
 // (one buyer is the per-key bound's job). A failure that is everyone's (a
 // facilitator refusing every settlement) still reaches the threshold at the
 // same number of failures, spread over a few buyers. A wallet's concurrent
 // runs are also held to what its balance covers before they start
 // (src/inflight-cover.js). A failure with no key counts as its own buyer.
 const GLOBAL_MAX_FAILS = Number(process.env.COMPOSITE_GUARD_GLOBAL_MAX_FAILS) || 12;
+/** How long a tripped alarm reads burst (the env name predates the alarm). */
 const GLOBAL_PAUSE_MS = Number(process.env.COMPOSITE_GUARD_GLOBAL_PAUSE_MS) || 15 * 60_000;
 let globalFailKeys = new Map(); // key -> failure times inside the window
 let anonSeq = 0;
-let globalPausedUntil = 0;
+let globalAlarmUntil = 0;
+let globalTrips = 0;
+function raiseAlarm(t, count, where) {
+  if (globalAlarmUntil > t) return;
+  globalAlarmUntil = t + GLOBAL_PAUSE_MS;
+  globalTrips++;
+  console.warn(`[composite-guard] ${count} unsettled report or media run(s)${where} inside ${Math.round(WINDOW_MS / 1000)} s - unsettledReports reads burst until ${new Date(globalAlarmUntil).toISOString()}; no request is refused for it`);
+}
 
 // ---- the shared half ----------------------------------------------------------
 // cg-fail (per payer, one entry per failure), cg-ok (per payer, one entry per
 // settled run), cg-block (flag per payer),
 // cg-global (one entry per failure, at most MAX_FAILS per payer: the member
 // is the payer plus the failure's index modulo MAX_FAILS, so a payer's later
-// failures refresh its own entries instead of adding), cg-pause (flag).
+// failures refresh its own entries instead of adding), cg-alarm (flag).
+// A build before the alarm wrote a flag cg-pause and refused reports on it:
+// this build neither writes nor reads cg-pause, so during a deploy overlap
+// it cannot make that build refuse, and that build's flag refuses nothing
+// here. The other names and shapes are unchanged.
 const SHARED = sharedLimitsEnabled();
 const PROC = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
 let sharedSeq = 0;
@@ -94,14 +110,14 @@ function sharedRecordFailure(payer, t, global) {
     return sharedWrite(CONTROL, shared.windowAdd("cg-global", "all", { windowMs: WINDOW_MS, member: payer ? `${payer}#${slot}` : `anon:${member}`, now: t }));
   }).then((r) => {
     if (!r?.ok || r.count < GLOBAL_MAX_FAILS) return;
-    if (globalPausedUntil <= t) globalPausedUntil = t + GLOBAL_PAUSE_MS;
+    raiseAlarm(t, r.count, " across replicas");
     return Promise.all([
-      sharedWrite(CONTROL, shared.flagSet("cg-pause", "all", t + GLOBAL_PAUSE_MS, { now: t })),
+      sharedWrite(CONTROL, shared.flagSet("cg-alarm", "all", t + GLOBAL_PAUSE_MS, { now: t })),
       sharedWrite(CONTROL, shared.windowClear("cg-global", "all")),
     ]);
   }));
 }
-// The shared writes a failure starts (block, global window, pause) are a
+// The shared writes a failure starts (block, global window, alarm flag) are a
 // chain nobody on the request path waits for. A test awaits the whole chain
 // rather than counting round trips.
 const pendingShared = new Set();
@@ -116,8 +132,8 @@ async function sharedBlocked(payer, now) {
   if (!r.ok) { noteSharedLimitsDegraded(CONTROL, r); return false; }
   return r.until > now;
 }
-async function sharedPaused(now) {
-  const r = await shared.flagGet("cg-pause", "all", { now });
+async function sharedAlarm(now) {
+  const r = await shared.flagGet("cg-alarm", "all", { now });
   if (!r.ok) { noteSharedLimitsDegraded(CONTROL, r); return false; }
   return r.until > now;
 }
@@ -221,22 +237,32 @@ function localBlocked(payer) {
   return false;
 }
 
-/** True while the global breaker is tripped (checked BEFORE the handler spends).
+/** True while the burst alarm is raised. Read by the status word and tests,
+ *  never by the dispatcher: it refuses nothing.
  *  A boolean without a shared store; a promise of one with it. */
-export function compositeGuardGlobalPaused() {
-  const local = localPaused();
+export function compositeGuardGlobalAlarm() {
+  const local = localAlarm();
   if (!SHARED) return local;
-  return local ? Promise.resolve(true) : sharedPaused(Date.now());
+  return local ? Promise.resolve(true) : sharedAlarm(Date.now());
 }
-function localPaused() {
-  if (globalPausedUntil > Date.now()) return true;
-  globalPausedUntil = 0;
+function localAlarm() {
+  if (globalAlarmUntil > Date.now()) return true;
+  globalAlarmUntil = 0;
   return false;
 }
+/** The unsettledReports word for /api/gateway-status: ok, or burst for
+ *  GLOBAL_PAUSE_MS after GLOBAL_MAX_FAILS report or media runs spent upstream
+ *  and then did not settle inside one window (on any replica, through the
+ *  shared flag). The word only publicly; counts for the operator. No key. */
+export async function compositeGuardAlarmStatus({ full = false } = {}) {
+  const status = (await compositeGuardGlobalAlarm()) ? "burst" : "ok";
+  if (!full) return { status };
+  return { status, until: localAlarm() ? new Date(globalAlarmUntil).toISOString() : null, unsettledInWindow: globalFailCount(Date.now()), threshold: GLOBAL_MAX_FAILS, windowMinutes: WINDOW_MS / 60_000, trips: globalTrips };
+}
 
-/** Slugs that keep the per-buyer bound but neither feed nor honour the global
- *  pause: plan execution carries its own global ceiling, and its failures must
- *  not be able to pause every report product for everyone. */
+/** Slugs that keep the per-buyer bound and do not feed the burst alarm: plan
+ *  execution carries its own global ceiling, and its failures are not report
+ *  runs. */
 export const OWN_GLOBAL_BOUND_SLUGS = new Set(["decide-execute"]);
 
 /** Record that we SPENT upstream for this payer and then did NOT settle (non-200). */
@@ -246,7 +272,8 @@ export function recordCompositeSpendFailure(payer, { global = true } = {}) {
   if (global) {
     const gk = payer || `anon:${++anonSeq}`;
     globalFailKeys.set(gk, [...(globalFailKeys.get(gk) || []), t]);
-    if (globalFailCount(t) >= GLOBAL_MAX_FAILS) { globalPausedUntil = t + GLOBAL_PAUSE_MS; globalFailKeys = new Map(); }
+    const n = globalFailCount(t);
+    if (n >= GLOBAL_MAX_FAILS) { raiseAlarm(t, n, ""); globalFailKeys = new Map(); }
   }
   if (!payer) return;
   const arr = (fails.get(payer) || []).filter((x) => t - x < WINDOW_MS);
@@ -355,14 +382,14 @@ export function compositeUsageSnapshot() {
 export const _compositeGuardShared = SHARED;
 /** Test/ops introspection. */
 export function _compositeGuardState() {
-  return { fails: fails.size, oks: oks.size, blocked: blockedUntil.size, ...COMPOSITE_GUARD_LIMITS, globalFails: globalFailCount(Date.now()), globalPausedUntil, GLOBAL_MAX_FAILS, GLOBAL_PAUSE_MS, usage: { ...usage, upstreamUsd: Math.round(usage.upstreamUsd * 1e4) / 1e4 } };
+  return { fails: fails.size, oks: oks.size, blocked: blockedUntil.size, ...COMPOSITE_GUARD_LIMITS, globalFails: globalFailCount(Date.now()), globalAlarmUntil, globalTrips, GLOBAL_MAX_FAILS, GLOBAL_PAUSE_MS, usage: { ...usage, upstreamUsd: Math.round(usage.upstreamUsd * 1e4) / 1e4 } };
 }
 export function _compositeGuardReset() {
   if (SHARED) {
     for (const k of new Set([...fails.keys(), ...blockedUntil.keys(), ...oks.keys()])) { void shared.windowClear("cg-fail", k); void shared.windowClear("cg-ok", k); void shared.flagSet("cg-block", k, 0); }
-    void shared.flagSet("cg-pause", "all", 0); void shared.windowClear("cg-global", "all");
+    void shared.flagSet("cg-alarm", "all", 0); void shared.windowClear("cg-global", "all");
   }
-  fails.clear(); oks.clear(); blockedUntil.clear(); globalFailKeys = new Map(); globalPausedUntil = 0;
+  fails.clear(); oks.clear(); blockedUntil.clear(); globalFailKeys = new Map(); globalAlarmUntil = 0; globalTrips = 0;
   usage.runs = 0; usage.ok = 0; usage.failed = 0; usage.upstreamUsd = 0;
   usage.overCap = 0; usage.lastOverCap = null; usage.bySlug = {};
 }

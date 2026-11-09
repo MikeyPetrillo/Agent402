@@ -59,11 +59,12 @@ async function run(cmd) {
       catch (e) { return { ok: false, status: e.statusCode, message: String(e.message).slice(0, 80), until: (String(e.message).match(/until (\d{4}-\d\d-\d\dT[0-9:.]+Z)/) || [])[1] || null }; }
     }
     case "gwb.local": return B.gatewaySettleBreakerBlocked(cmd.key);
+    case "gwb.word": return { word: (await B.gatewaySettleFailuresStatus()).status, localAlarm: B.gatewaySettleBreakerGlobalAlarm().alarm };
     // composite spend guard
     case "cg.fail": { for (let i = 0; i < (cmd.n || 1); i++) G.recordCompositeSpendFailure(cmd.payer, { global: cmd.global !== false }); await G.__compositeGuardSharedSettled(); await barrier(); return { ok: true }; }
     case "cg.success": { G.recordCompositeSpendSuccess(cmd.payer); await barrier(); return { ok: true }; }
     case "cg.blocked": return { blocked: await G.compositeGuardBlocked(cmd.payer) };
-    case "cg.paused": return { paused: await G.compositeGuardGlobalPaused() };
+    case "cg.alarm": return { alarm: await G.compositeGuardGlobalAlarm(), word: (await G.compositeGuardAlarmStatus()).status };
     // external spend guard, per payer
     case "esg.reserve": {
       const r = await E.reserveSpend(cmd.payer, cmd.usd, { maxUnsettledUsd: cmd.ceiling });

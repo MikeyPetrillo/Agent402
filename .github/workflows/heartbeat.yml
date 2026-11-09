@@ -1074,7 +1074,8 @@ jobs:
       # Tool and upstream failures (src/tool-failure-monitor.js): four words
       # on /api/gateway-status. toolFailures and upstreamHealth page on
       # degraded / failing; facilitatorFunds pages on low / refused / demoted;
-      # buyerRefusals pages on refusing; robinhoodSettler pages on relayer (ok
+      # buyerRefusals pages on refusing; settleFailures and unsettledReports page on burst;
+      # robinhoodSettler pages on relayer (ok
       # and off close); subscriptionRenewals pages on unconfirmed (ok and off
       # close); directUpstream pages on degraded (ok and off close,
       # starting does neither); ok closes; unknown does neither. The issues are public, so a body carries
@@ -1117,6 +1118,18 @@ jobs:
           # window (src/gateway-settle-breaker.js): refusing pages, ok closes.
           TITLE="buyerRefusals: a paying buyer was refused by the settle breaker"
           check_word buyerRefusals "refusing" "ok"
+          # Distinct buyers whose /v1 payments verified and then failed to
+          # settle reached the breaker's count inside one window
+          # (src/gateway-settle-breaker.js): burst pages, ok closes. No request
+          # is refused for it.
+          TITLE="settleFailures: a burst of buyers' payments verified and then failed to settle"
+          check_word settleFailures "burst" "ok" "/api/gateway-status"
+          # Report and media runs that spent upstream and then did not settle
+          # reached the composite guard's count inside one window
+          # (src/composite-spend-guard.js): burst pages, ok closes. No request
+          # is refused for it.
+          TITLE="unsettledReports: a burst of report runs were served and then did not settle"
+          check_word unsettledReports "burst" "ok" "/api/gateway-status"
           # Our own relayer settling Robinhood Chain sales in the listed
           # facilitator's place for longer than ROBINHOOD_RELAYER_FIRST_ALERT_HOURS
           # (src/robinhood-order.js): relayer pages, ok and off close.

@@ -77,6 +77,10 @@ ok(pubBody?.brokenListings?.status === "ok" && Object.keys(pubBody.brokenListing
 ok(opBody?.brokenListings?.status === "ok" && typeof opBody.brokenListings.origins === "number" && typeof opBody.brokenListings.indexedOrigins === "number" && typeof opBody.brokenListings.widespreadMin === "number" && !/https?:\/\//.test(JSON.stringify(opBody.brokenListings)), `the operator view of brokenListings carries the window's counts and rule, never an origin (${JSON.stringify(opBody?.brokenListings)})`);
 ok(["ok", "refusing"].includes(pubBody?.buyerRefusals?.status) && Object.keys(pubBody.buyerRefusals).join(",") === "status", `buyerRefusals publishes its word only (${JSON.stringify(pubBody?.buyerRefusals)})`);
 ok(typeof opBody?.buyerRefusals?.refusalsWindow === "number" && typeof opBody?.buyerRefusals?.refusals24h === "number", "the operator view of buyerRefusals carries the counts");
+for (const w of ["settleFailures", "unsettledReports"]) {
+  ok(pubBody?.[w]?.status === "ok" && Object.keys(pubBody[w]).join(",") === "status", `${w} publishes its word only (${JSON.stringify(pubBody?.[w])})`);
+  ok(opBody?.[w]?.status === "ok" && typeof opBody[w].threshold === "number" && typeof opBody[w].trips === "number", `the operator view of ${w} carries the counts (${JSON.stringify(opBody?.[w])})`);
+}
 
 // --- the late-settlement book: one word publicly, on both views ---
 ok(["ok", "near_capacity", "full", "unresolved"].includes(pubBody?.lateSettlements?.status) && Object.keys(pubBody.lateSettlements).join(",") === "status" && Object.keys(opBody?.lateSettlements || {}).join(",") === "status", `lateSettlements publishes its word only (${JSON.stringify(pubBody?.lateSettlements)})`);

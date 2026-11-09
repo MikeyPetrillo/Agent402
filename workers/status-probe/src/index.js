@@ -725,6 +725,25 @@ Auto-closes when nothing is owed.`,
     body: () => `${failureWordBody("buyerRefusals", "refusing")} refusing means a wallet, Tempo sender, credits key or address that had settled at least one call inside the breaker's window was then refused for its settle failures; the operator detail has the count, the server log the [gateway-breaker] line.`,
   },
   {
+    // Distinct buyers whose /v1 payments verified and then failed to settle
+    // reached the breaker's count inside one window (settleFailures,
+    // src/gateway-settle-breaker.js): burst pages, ok clears, unknown does
+    // neither. No request is refused for it. Title matches heartbeat.yml's.
+    title: "settleFailures: a burst of buyers' payments verified and then failed to settle",
+    verdict: ({ gateway: b }) => wordVerdict(b.settleFailures?.status, ["burst"], ["ok"]),
+    body: () => "/api/gateway-status reports settleFailures.status=burst. The detail is on the operator read of /api/gateway-status (operator token). Auto-closes when the word is ok. burst means the number of distinct buyers whose /v1 payments verified, were served and then failed to settle reached GATEWAY_SETTLE_BREAKER_GLOBAL_MAX inside one breaker window; the word holds for one window after that. No request is refused for it. The server log has the [gateway-breaker] line.",
+  },
+  {
+    // Report and media runs that spent upstream and then did not settle
+    // reached the composite guard's count inside one window
+    // (unsettledReports, src/composite-spend-guard.js): burst pages, ok
+    // clears, unknown does neither. No request is refused for it. Title
+    // matches heartbeat.yml's.
+    title: "unsettledReports: a burst of report runs were served and then did not settle",
+    verdict: ({ gateway: b }) => wordVerdict(b.unsettledReports?.status, ["burst"], ["ok"]),
+    body: () => "/api/gateway-status reports unsettledReports.status=burst. The detail is on the operator read of /api/gateway-status (operator token). Auto-closes when the word is ok. burst means the number of report or media runs that spent upstream and then did not settle (a failed settlement, or a 5xx after the run) reached COMPOSITE_GUARD_GLOBAL_MAX_FAILS inside one guard window, each buyer counted for at most its own per-buyer limit; the word holds for COMPOSITE_GUARD_GLOBAL_PAUSE_MS after that. No request is refused for it. The server log has the [composite-guard] line.",
+  },
+  {
     // Our own relayer settling Robinhood Chain sales in the listed
     // facilitator's place (its signer read dry) for longer than
     // ROBINHOOD_RELAYER_FIRST_ALERT_HOURS (robinhoodSettler,

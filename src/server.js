@@ -70,8 +70,8 @@ import { startSolanaLeaderboard, getSolanaLeaderboardSnapshot, solanaEvidenceByO
 import { creditFromTx as solanaCreditFromTx } from "./solana-buyer.js";
 import { historyAwareRpc, solanaHistoryStatus } from "./solana-history-rpc.js";
 import { evmLogsStatus } from "./evm-logs-rpc.js";
-import { compositeGuardBlocked, compositeGuardGlobalPaused, recordCompositeSpendFailure, OWN_GLOBAL_BOUND_SLUGS, recordCompositeSpendSuccess, EXPENSIVE_COMPOSITE_SLUGS, isLongRunningSlug, spendsBeforeSettlement, _compositeGuardState, compositeUsageSnapshot, withCompositeContext } from "./composite-spend-guard.js";
-import { gatewaySettleBreakerCheck } from "./gateway-settle-breaker.js";
+import { compositeGuardBlocked, compositeGuardAlarmStatus, recordCompositeSpendFailure, OWN_GLOBAL_BOUND_SLUGS, recordCompositeSpendSuccess, EXPENSIVE_COMPOSITE_SLUGS, isLongRunningSlug, spendsBeforeSettlement, _compositeGuardState, compositeUsageSnapshot, withCompositeContext } from "./composite-spend-guard.js";
+import { gatewaySettleBreakerCheck, gatewaySettleFailuresStatus } from "./gateway-settle-breaker.js";
 // Single-upstream-call routes that run long (40 s+): EVM exact only, like the
 // composites (settle-after on SVM/AVM/Tempo is work done, never charged), but
 // not composite-spend-guarded (one bounded upstream price).
@@ -4080,6 +4080,18 @@ app.get("/api/gateway-status", async (req, res) => {
     // buyerRefusals reads ok / refusing: the settle breaker refused a key that
     // had settled a call in its window (src/gateway-settle-breaker.js) inside
     // the last BUYER_REFUSAL_WINDOW_MS; the count is on the operator detail.
+    // settleFailures reads ok / burst: GATEWAY_SETTLE_BREAKER_GLOBAL_MAX
+    // distinct buyers had /v1 payments verify and then fail to settle inside
+    // one breaker window (src/gateway-settle-breaker.js); burst holds for one
+    // window after the count trips. An alarm only: no request is refused for
+    // it. One word publicly; the counts for the operator.
+    settleFailures: await gatewaySettleFailuresStatus({ full }).catch(() => ({ status: "unknown" })),
+    // unsettledReports reads ok / burst: COMPOSITE_GUARD_GLOBAL_MAX_FAILS
+    // report or media runs spent upstream and then did not settle inside one
+    // guard window (src/composite-spend-guard.js); burst holds for
+    // COMPOSITE_GUARD_GLOBAL_PAUSE_MS after the count trips. An alarm only:
+    // no request is refused for it. One word publicly; counts for the operator.
+    unsettledReports: await compositeGuardAlarmStatus({ full }).catch(() => ({ status: "unknown" })),
     // containedTurns reads ok / repeating: a scheduled turn under contained()
     // (src/contained-turn.js) threw in each of the last three or more
     // consecutive minutes; the names are on the operator view and the counts
@@ -11830,12 +11842,11 @@ for (const tool of ALL_KIT) {
         // credits key, or the client IP (card/SPT buyers and any rail whose
         // payer is only known post-settlement) - nobody is unkeyed.
         const guardKey = payer || (req.mppTempoSender ? `tempo:${req.mppTempoSender}` : req.creditsKeyId ? `credits:${req.creditsKeyId}` : `ip:${clientIp(req)}`);
+        // ownGlobalBound: this slug's failures do not feed the burst alarm
+        // (unsettledReports on /api/gateway-status). The alarm is reported,
+        // never consulted here: no buyer is refused a run for other buyers'
+        // unsettled runs. The per-buyer bound below is the refusal.
         const ownGlobalBound = OWN_GLOBAL_BOUND_SLUGS.has(tool.slug);
-        if (!ownGlobalBound && await compositeGuardGlobalPaused()) {
-          const e = new Error("Premium report generation is briefly paused after a burst of unsettled runs; please retry in a few minutes. Not charged.");
-          e.statusCode = 503;
-          throw e;
-        }
         if (await compositeGuardBlocked(guardKey)) {
           const e = new Error("Too many recent failed settlements on this route from this buyer; blocked briefly to prevent upstream abuse. The block lifts on its own.");
           e.statusCode = 429;
@@ -11859,11 +11870,12 @@ for (const tool of ALL_KIT) {
             // composite is EVM exact only (acceptsForItem), so the Algorand
             // sub-cent refusal the offer gate withdraws can never reach it,
             // and on any other rail nothing withdraws the refused offer - this
-            // guard's per-payer and global bounds are all that stop a billing
-            // lapse becoming an unbounded run of served, never-charged reports.
+            // guard's per-payer bound stops one buyer's run of served,
+            // never-charged reports, and its burst alarm reports a billing
+            // lapse that reaches many buyers.
             // A Circle Gateway batched payment Gateway is still settling is
             // not the buyer's failure (they were told to resend the same
-            // payment): it still feeds the global bound, never the payer's.
+            // payment): it still feeds the burst alarm, never the payer's count.
             const st = res.statusCode;
             if (st === 200) recordCompositeSpendSuccess(guardKey);
             else if (st === 402 && isGatewayPendingAnswer(req, decodeSettleReceipt(res.getHeader("PAYMENT-RESPONSE") || res.getHeader("X-PAYMENT-RESPONSE")))) recordCompositeSpendFailure(null, { global: !ownGlobalBound });
@@ -11906,14 +11918,16 @@ for (const tool of ALL_KIT) {
       // read (Alchemy, CoinGecko, Brave ...) with nothing charged.
       // Per-read that is a fraction of a cent; the breaker bounds the LOOP: a
       // wallet gets MAX_FAILS such outcomes per window before a 429 that runs
-      // before the handler (a >= 400 cancels settlement - the refusal is free),
-      // and a burst across wallets pauses the paid catalog 503 for one window.
+      // before the handler (a >= 400 cancels settlement - the refusal is free).
+      // An EVM payer is counted per network its payment named, so the 429
+      // holds that network only and the wallet can pay on another at once.
       // A settled 200 is a settled outcome in the wallet's window, weighed
       // against its failures; a 4xx the handler threw is neither.
       // FREE_MODE has no settlement, so nothing to breaker there.
-      // global:false - per-wallet only. A catalog read costs a fraction of a
-      // cent; pausing every paid tool over twelve of them would be a lever, not
-      // a guard. The /v1 tiers keep their own global pause inside their handlers.
+      // global:false - per-wallet only: a catalog settle failure does not
+      // feed the /v1 burst alarm (settleFailures on /api/gateway-status),
+      // which the /v1 handlers' own consults feed. No request is refused for
+      // other buyers' settle failures.
       // Keyed on "paid" (not PoW-eligible), not on WALLET_ONLY_SLUGS: the free tier is an
       // allowlist, so a new tool on neither list is paid and must be covered here too.
       if (!FREE_MODE && !isComputePayable(tool)) await gatewaySettleBreakerCheck(req, { global: false });

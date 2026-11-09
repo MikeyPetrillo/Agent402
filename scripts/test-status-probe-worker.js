@@ -438,7 +438,7 @@ for (const [name, over, detail] of failCases) {
   const HEALTHY_GW = { status: "ok", revenueLive: { status: "fresh" }, upstreamBuyer: { status: "low", trend: "ok" }, upstreamBuyerAvm: { status: "ok" }, upstreamBuyerEvm: { status: "ok" }, upstreamBuyerTempo: { status: "ok" }, subscriptionFeePayer: { status: "ok", ceiling: "ok" }, databases: { leads: { status: "ok" }, analytics: { status: "ok" } }, operatorAuth: { status: "ok" }, tweetQueue: { status: "ok" }, circlePending: { status: "ok" }, gatewayPending: { status: "ok" }, lateSettlements: { status: "ok" }, chargedFailures: { status: "ok", windowHours: 6 }, refundsOwed: { status: "ok" }, ledgerDeadLetter: { status: "none" }, redisPersistence: { status: "on" }, backup: { status: "ok" }, outboundDestinations: { status: "ok" },
     upstreamBuyerSvm: { status: "ok" }, stellarFacilitator: { status: "ok" }, upstreamBudgets: { status: "ok" }, upstreamHardCaps: { status: "ok" }, exaAllowance: { status: "ok" }, stateDb: { status: "on" }, sanctions: { status: "ok" }, sanctionsScreen: { status: "fresh" }, email: { status: "ok" }, upstreamCosts: { status: "ok" },
     mppReconcile: { status: "ok", window7d: "ok", chargedFailedStatus: "ok" },
-    toolFailures: { status: "ok" }, upstreamHealth: { status: "ok" }, facilitatorFunds: { status: "ok" }, toolAnswers: { status: "ok" }, containedTurns: { status: "ok" }, brokenListings: { status: "ok" }, buyerRefusals: { status: "ok" }, robinhoodSettler: { status: "ok" }, subscriptionRenewals: { status: "ok" }, directUpstream: { status: "ok" }, creditsRefunds: { status: "ok" }, cdnOrigin: { status: "ok" } };
+    toolFailures: { status: "ok" }, upstreamHealth: { status: "ok" }, facilitatorFunds: { status: "ok" }, toolAnswers: { status: "ok" }, containedTurns: { status: "ok" }, brokenListings: { status: "ok" }, buyerRefusals: { status: "ok" }, settleFailures: { status: "ok" }, unsettledReports: { status: "ok" }, robinhoodSettler: { status: "ok" }, subscriptionRenewals: { status: "ok" }, directUpstream: { status: "ok" }, creditsRefunds: { status: "ok" }, cdnOrigin: { status: "ok" } };
   const { ALARMS, MAX_ISSUE_WRITES } = await import("../workers/status-probe/src/index.js");
   let extractReads = 0;
   stub({
@@ -845,7 +845,7 @@ for (const [name, over, detail] of failCases) {
   await acheck("issue writes are capped per run: opens first, the rest wait for the next run", async () => {
     const titles = ALARMS.map((a) => a.title);
     const allOpen = titles.filter((t) => t !== "Upstream buyer wallet LOW (x402)").map((title, i) => ({ number: i + 1, title }));
-    const everythingHealthy = { gateway: { ...HEALTHY_GATEWAY, upstreamBuyer: { status: "low", trend: "ok" }, tweetQueue: { status: "ok" }, circlePending: { status: "ok" }, gatewayPending: { status: "ok" }, lateSettlements: { status: "ok" }, chargedFailures: { status: "ok" }, refundsOwed: { status: "ok" }, ledgerDeadLetter: { status: "none" }, redisPersistence: { status: "on" }, backup: { status: "ok" }, outboundDestinations: { status: "new" }, upstreamBuyerSvm: { status: "ok" }, stellarFacilitator: { status: "ok" }, upstreamBudgets: { status: "ok" }, upstreamHardCaps: { status: "ok" }, exaAllowance: { status: "ok" }, stateDb: { status: "on" }, sanctions: { status: "ok" }, sanctionsScreen: { status: "fresh" }, email: { status: "ok" }, upstreamCosts: { status: "ok" }, mppReconcile: { status: "ok", window7d: "ok", chargedFailedStatus: "ok" }, toolFailures: { status: "ok" }, upstreamHealth: { status: "ok" }, facilitatorFunds: { status: "ok" }, toolAnswers: { status: "ok" }, containedTurns: { status: "ok" }, brokenListings: { status: "ok" }, buyerRefusals: { status: "ok" }, robinhoodSettler: { status: "ok" }, subscriptionRenewals: { status: "ok" }, directUpstream: { status: "ok" }, creditsRefunds: { status: "ok" }, cdnOrigin: { status: "ok" } }, status: HEALTHY_STATUS };
+    const everythingHealthy = { gateway: { ...HEALTHY_GATEWAY, upstreamBuyer: { status: "low", trend: "ok" }, tweetQueue: { status: "ok" }, circlePending: { status: "ok" }, gatewayPending: { status: "ok" }, lateSettlements: { status: "ok" }, chargedFailures: { status: "ok" }, refundsOwed: { status: "ok" }, ledgerDeadLetter: { status: "none" }, redisPersistence: { status: "on" }, backup: { status: "ok" }, outboundDestinations: { status: "new" }, upstreamBuyerSvm: { status: "ok" }, stellarFacilitator: { status: "ok" }, upstreamBudgets: { status: "ok" }, upstreamHardCaps: { status: "ok" }, exaAllowance: { status: "ok" }, stateDb: { status: "on" }, sanctions: { status: "ok" }, sanctionsScreen: { status: "fresh" }, email: { status: "ok" }, upstreamCosts: { status: "ok" }, mppReconcile: { status: "ok", window7d: "ok", chargedFailedStatus: "ok" }, toolFailures: { status: "ok" }, upstreamHealth: { status: "ok" }, facilitatorFunds: { status: "ok" }, toolAnswers: { status: "ok" }, containedTurns: { status: "ok" }, brokenListings: { status: "ok" }, buyerRefusals: { status: "ok" }, settleFailures: { status: "ok" }, unsettledReports: { status: "ok" }, robinhoodSettler: { status: "ok" }, subscriptionRenewals: { status: "ok" }, directUpstream: { status: "ok" }, creditsRefunds: { status: "ok" }, cdnOrigin: { status: "ok" } }, status: HEALTHY_STATUS };
     mkGh(allOpen);
     const r1 = await syncAlarms(ENV, { ...nosleep, maxWrites: 4, probe: { paywallObserved: true }, fetchStatus: feed(everythingHealthy, everythingHealthy) });
     assert.deepEqual(r1.opened, ["Upstream buyer wallet LOW (x402)"]);
@@ -881,6 +881,10 @@ for (const [name, over, detail] of failCases) {
       ["Upstream cost table missing or incomplete in production", "upstreamCosts", ["missing", "partial"], ["ok"]],
       // A paying buyer refused by the settle breaker (src/gateway-settle-breaker.js).
       ["buyerRefusals: a paying buyer was refused by the settle breaker", "buyerRefusals", ["refusing"], ["ok"]],
+      // Distinct buyers' /v1 payments failing to settle (an alarm only, src/gateway-settle-breaker.js).
+      ["settleFailures: a burst of buyers' payments verified and then failed to settle", "settleFailures", ["burst"], ["ok"]],
+      // Report runs served and then unsettled (an alarm only, src/composite-spend-guard.js).
+      ["unsettledReports: a burst of report runs were served and then did not settle", "unsettledReports", ["burst"], ["ok"]],
       // The direct upstream (src/gateway-direct-pricebook.js); starting does neither.
       ["directUpstream: the direct upstream is degraded", "directUpstream", ["degraded"], ["ok", "off"]],
     ];
@@ -911,6 +915,14 @@ for (const [name, over, detail] of failCases) {
     assert.match(br, /buyerRefusals\.status=refusing\./);
     assert.match(br, /\/__operator\/tool-failures\.json/);
     assert.doesNotMatch(br, /\b7\b|0x|<x>/, "the body carries the word and the operator endpoint, never a count or an address");
+    const sf = body("settleFailures: a burst of buyers' payments verified and then failed to settle", { settleFailures: { status: "<x>", buyersInWindow: 7 } });
+    assert.match(sf, /settleFailures\.status=burst\./);
+    assert.match(sf, /No request is refused for it/);
+    assert.doesNotMatch(sf, /\b7\b|0x|<x>/, "the body carries the word and the operator read, never a count or an address");
+    const ur = body("unsettledReports: a burst of report runs were served and then did not settle", { unsettledReports: { status: "<x>", unsettledInWindow: 7 } });
+    assert.match(ur, /unsettledReports\.status=burst\./);
+    assert.match(ur, /No request is refused for it/);
+    assert.doesNotMatch(ur, /\b7\b|0x|<x>/, "the body carries the word and the operator read, never a count or an address");
     const rec = body("MPP reconciliation MISMATCH", { mppReconcile: { status: "mismatch", day: "2026-10-14", categories: { paid_unrecorded: "mismatch", served_unpaid: "ok", "<b>": "mismatch" } } });
     assert.match(rec, /for 2026-10-14 found/);
     assert.match(rec, /categories: paid_unrecorded\)/);

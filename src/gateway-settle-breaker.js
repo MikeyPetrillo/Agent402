@@ -17,12 +17,23 @@
 // rewrite, the Tempo gate's post-handler broadcast failure - the same shape on
 // every rail), a 4xx/5xx the handler threw was never settled and never charged
 // (and is not this wallet's fault). So each gateway handler calls
-// gatewaySettleBreakerCheck(req) as its FIRST statement: it refuses (429 for a
-// wallet, 503 for the global pause) before any upstream call - a >= 400
-// cancels settlement, so nobody is charged for the refusal - and arms one
-// outcome listener on req.res that records the outcome under the same key the
-// consult used. Keying is the composite guard's: the signed EIP-3009 payer,
-// else the Tempo payer the gate verified, else the client IP.
+// gatewaySettleBreakerCheck(req) as its FIRST statement: it refuses a blocked
+// wallet (429) before any upstream call - a >= 400 cancels settlement, so
+// nobody is charged for the refusal - and arms one outcome listener on req.res
+// that records the outcome under the same key the consult used. The buyer is
+// the composite guard's: the signed EIP-3009 payer, else the Tempo payer the
+// gate verified, else the client IP.
+//
+// PER NETWORK. A signed EVM payer is counted per network its payment named
+// (payer@network): failures on one network refuse payments on that network
+// only, and the same wallet paying on another offered network is served at
+// once. The 429 names the refused network and says so.
+//
+// NO REQUEST IS REFUSED FOR OTHER BUYERS' FAILURES. Distinct buyers failing
+// to settle on the /v1 tiers inside one window are counted, and at
+// GLOBAL_MAX_FAILS the count is reported: a console.warn and the
+// settleFailures word on /api/gateway-status (ok / burst), which the status
+// Worker and the heartbeat page on. It refuses nothing.
 //
 // The listener rides onSettleOutcome (src/hangup-settlement.js), which reports
 // the final outcome whether or not the buyer stayed connected: a settlement
@@ -45,9 +56,9 @@
 // In memory per process (a restart resets it, the same as the composite and
 // external-spend guards), and shared across replicas through
 // src/shared-limits.js when a Redis is configured: every failure is written
-// to a shared window under the same key, the global pause is a shared flag,
-// and the consult reads the shared counts with this process's own as the
-// floor. Without Redis the consult is synchronous, exactly as before; with it
+// to a shared window under the same key, the burst alarm is a shared flag
+// read by the status word only (never on the serving path), and the consult
+// reads the shared counts with this process's own as the floor. Without Redis the consult is synchronous, exactly as before; with it
 // the consult returns a promise (the handlers await it), and when the shared
 // store does not answer the consult decides on this process's counts alone,
 // which is never looser than one replica was. Tune via env.
@@ -62,7 +73,8 @@
 // stopped after MAX_FAILS of them, and any key at HARD_MAX_FAILS failures is
 // stopped whatever it settled (the bound on unpaid handler runs). Settled
 // calls stay in the window as outcomes; they do not erase the failures.
-import { payerFromRequest } from "./payer.js";
+import { payerFromRequest, paymentHeaderOf } from "./payer.js";
+import { decodePaymentHeader } from "./payment-header.js";
 import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { isBillingRefusalReceipt } from "./payment-reject.js";
 import { isWithdrawnSubcentRefusal } from "./avm-sponsorship.js";
@@ -73,7 +85,7 @@ import { positiveNum as num } from "./env-num.js";
 
 /** Settle failures a wallet may accumulate inside the window before it is refused. */
 export const MAX_FAILS = num(process.env.GATEWAY_SETTLE_BREAKER_MAX, 3);
-/** Rolling window, and the length of a global pause. */
+/** Rolling window, and how long a tripped burst alarm reads burst. */
 export const WINDOW_MS = num(process.env.GATEWAY_SETTLE_BREAKER_WINDOW_MS, 15 * 60_000);
 /** The share of a key's outcomes inside the window that must be failures
  *  (strictly more than this) before MAX_FAILS of them refuse it. */
@@ -84,15 +96,13 @@ export const MIN_FAIL_SHARE = (() => { const n = Number(process.env.GATEWAY_SETT
 export const HARD_MAX_FAILS = num(process.env.GATEWAY_SETTLE_BREAKER_HARD_MAX, 40);
 /** Settled outcomes kept per key (the window's rate needs a count, not every stamp). */
 const MAX_OKS_KEPT = 5000;
-/** DISTINCT buyers with a settle failure inside the window that pause every
- *  /v1 tier - the per-key count is evadable by rotating wallets or IPs; this
- *  is not. Distinct, not a sum of failures (2026-09-28): the per-key check
- *  runs before any of a burst's failures lands, so one wallet firing a burst
- *  of concurrent calls could otherwise supply the whole global count by itself
- *  and pause every /v1 buyer for a window. A single buyer is the per-key
- *  bound's job; the pause answers many buyers failing at once. The one
- *  exception is a withdrawn sub-cent refusal: each counts on its own (the
- *  backstop for requests already in flight, see armGatewaySettleBreaker). */
+/** DISTINCT buyers with a /v1 settle failure inside the window that raise the
+ *  burst alarm (the settleFailures word, a console.warn). An alarm only: no
+ *  request is refused for it. Distinct, not a sum of failures: one wallet
+ *  firing a burst of concurrent calls is one buyer, on however many networks,
+ *  and is the per-key bound's job; the alarm reports many buyers failing at
+ *  once. The one exception is a withdrawn sub-cent refusal: each counts on
+ *  its own (see armGatewaySettleBreaker). */
 export const GLOBAL_MAX_FAILS = num(process.env.GATEWAY_SETTLE_BREAKER_GLOBAL_MAX, 12);
 
 const fails = new Map(); // key -> number[] (failure timestamps inside the window)
@@ -103,30 +113,42 @@ const oks = new Map();   // key -> number[] (settled-call timestamps inside the 
 // unbounded served-never-charged loop - but the 429 must not tell the buyer to
 // check a wallet that was never the problem.
 const billingFails = new Map();
-// key -> the time of its latest settle failure inside the window: the global
-// pause counts distinct buyers (see GLOBAL_MAX_FAILS). A failure with no key
+// buyer -> the time of its latest settle failure inside the window: the burst
+// alarm counts distinct buyers (see GLOBAL_MAX_FAILS), so a count key's
+// network is dropped here (buyerOf). A failure with no key
 // (no request to key it on, or a withdrawn sub-cent refusal, which is recorded
 // keyless on purpose so it stays a backstop) counts as its own buyer.
 let globalFailKeys = new Map();
 let anonSeq = 0;
-let globalPausedUntil = 0;
+let globalAlarmUntil = 0;
 let globalTrips = 0;
 
 // ---- the shared half ----------------------------------------------------------
 // Window names: gwb-fail / gwb-bill (per key, one entry per failure),
 // gwb-ok (per key, one entry per settled call),
 // gwb-global (one entry per distinct buyer; a keyless failure is its own
-// entry), and the flag gwb-pause. A window add returns the shared count, so
+// entry), and the flag gwb-alarm. A window add returns the shared count, so
 // the trip decision is made on the count every replica contributed to.
+//
+// KEY SHAPES ACROSS BUILDS. An EVM payer's per-key windows are named
+// payer@network; a build before that named them by the payer alone, and
+// wrote a flag gwb-pause that it refused /v1 on. This build never reads a
+// payer-only window for a payment that names a network (those failures name
+// no network, so counting them could refuse a network they did not happen
+// on) and never writes or reads gwb-pause (writing it would make the earlier
+// build refuse every buyer). During a deploy overlap each build counts its
+// own failures: a count is briefly not shared, and neither build crashes on
+// or refuses from the other's keys. gwb-global members are the buyer alone
+// in both builds. The earlier build's windows expire with their window.
 const SHARED = sharedLimitsEnabled();
 const PROC = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
 let sharedSeq = 0;
 const CONTROL = "gateway-settle-breaker";
 function sharedKey(key) { return key.replace(/[\s]/g, "_"); }
 // Every write this process has sent and not yet heard back from, including
-// the pause a window add sets once its reply shows the trip. The writes are
+// the alarm flag a window add sets once its reply shows the trip. The writes are
 // fire-and-forget on the serving path; only the test reset waits on them, so
-// a pause set by a write still in flight cannot land after the reset cleared
+// an alarm set by a write still in flight cannot land after the reset cleared
 // the flag.
 const pendingWrites = new Set();
 function write(p) {
@@ -138,14 +160,14 @@ function write(p) {
 function sharedRecordFailure(key, now, { global, billing, withdrawn, walletCount = true }) {
   const member = `${PROC}:${++sharedSeq}`;
   if (global) {
-    void write(shared.windowAdd("gwb-global", "all", { windowMs: WINDOW_MS, member: key ? sharedKey(key) : `${withdrawn ? "withdrawn" : "anon"}:${member}`, now })).then((r) => {
+    void write(shared.windowAdd("gwb-global", "all", { windowMs: WINDOW_MS, member: key ? sharedKey(buyerOf(key)) : `${withdrawn ? "withdrawn" : "anon"}:${member}`, now })).then((r) => {
       if (!r?.ok || r.count < GLOBAL_MAX_FAILS) return;
-      void write(shared.flagSet("gwb-pause", "all", now + WINDOW_MS, { now }));
+      void write(shared.flagSet("gwb-alarm", "all", now + WINDOW_MS, { now }));
       void write(shared.windowClear("gwb-global", "all"));
-      if (globalPausedUntil <= now) {
-        globalPausedUntil = now + WINDOW_MS;
+      if (globalAlarmUntil <= now) {
+        globalAlarmUntil = now + WINDOW_MS;
         globalTrips++;
-        console.warn(`[gateway-breaker] unsettled gateway calls from ${r.count} buyer(s) across replicas inside ${Math.round(WINDOW_MS / 1000)} s - pausing every /v1 tier until ${new Date(globalPausedUntil).toISOString()}`);
+        console.warn(`[gateway-breaker] unsettled gateway calls from ${r.count} buyer(s) across replicas inside ${Math.round(WINDOW_MS / 1000)} s - settleFailures reads burst until ${new Date(globalAlarmUntil).toISOString()}; no request is refused for it`);
       }
     });
   }
@@ -175,23 +197,25 @@ async function sharedBlocked(key, now) {
   const failTimes = useShared ? f.entries.map((e) => e.score).sort((x, y) => x - y) : inWindow(fails.get(key) || [], now);
   return verdict(failTimes, Math.max(f.count, local.fails), Math.max(o.count, local.oks), Math.max(b.count, local.billingFails));
 }
-async function sharedGlobalPaused(now) {
-  const local = gatewaySettleBreakerGlobalPaused(now);
-  if (local.paused) return local;
-  const r = await shared.flagGet("gwb-pause", "all", { now });
+/** The alarm with the shared flag folded in. Read by the status word only,
+ *  never by the consult. */
+async function sharedGlobalAlarm(now) {
+  const local = gatewaySettleBreakerGlobalAlarm(now);
+  if (local.alarm) return local;
+  const r = await shared.flagGet("gwb-alarm", "all", { now });
   if (!r.ok) { noteSharedLimitsDegraded(CONTROL, r); return local; }
-  return r.until > now ? { paused: true, until: r.until } : local;
+  return r.until > now ? { alarm: true, until: r.until } : local;
 }
 
-/** The identity a gateway call is counted under. Same derivation as the
+/** The buyer a gateway call belongs to. Same derivation as the
  *  composite guard in server.js: the signed EVM payer, else the Tempo sender
  *  the gate VERIFIED (src/mpp-tempo.js sets req.mppTempoSender, null for a
  *  sender neither the signature nor the chain proved; the credential's own
  *  `source` is client-supplied and a caller could name a fresh one per
  *  request, so it is never a key), else the
  *  credits key, else the client IP. Null only for an in-process caller with no
- *  request (route-execute dispatching a flat tier), which the global breaker
- *  still covers. */
+ *  request (route-execute dispatching a flat tier), which nothing here
+ *  refuses. */
 export function gatewaySettleBreakerKey(req) {
   if (!req || typeof req !== "object") return null;
   const payer = payerFromRequest(req);
@@ -201,6 +225,39 @@ export function gatewaySettleBreakerKey(req) {
   const ip = typeof req.ip === "string" && req.ip.trim() ? req.ip.trim() : req.socket?.remoteAddress;
   return ip ? `ip:${String(ip).trim()}` : null;
 }
+
+// CAIP-2: namespace:reference.
+const CAIP2 = /^[a-z0-9]{3,8}:[A-Za-z0-9._=-]{1,64}$/;
+/** The network a signed x402 payment names, read from the payment header
+ *  through the shared decoder the way src/replay-guard.js reads it (v2
+ *  accepted.network, v1 network). The consult runs after the paywall verified
+ *  the payment against an offered accept, so this is an offered network. Null
+ *  when no header decodes or it names none. */
+export function gatewaySettleBreakerNetwork(req) {
+  try {
+    const p = decodePaymentHeader(paymentHeaderOf(req));
+    const network = p?.accepted?.network || p?.network || p?.payload?.network;
+    return typeof network === "string" && CAIP2.test(network) ? network : null;
+  } catch { return null; }
+}
+/** The key a call's settle outcomes are counted and refused under.
+ *  A signed EVM payer: payer@network, so failures on one network refuse only
+ *  payments on that network. One key, as before, where there is no network
+ *  to split on: a Tempo sender (one chain), a credits key (no chain), the IP
+ *  fallback (the buyer is not a wallet this server can name), and an EVM
+ *  payment whose header names no network. */
+export function gatewaySettleBreakerCountKey(req) {
+  const buyer = gatewaySettleBreakerKey(req);
+  if (!buyer || !EVM_PAYER.test(buyer)) return buyer;
+  const network = gatewaySettleBreakerNetwork(req);
+  return network ? `${buyer}@${network}` : buyer;
+}
+const EVM_PAYER = /^0x[0-9a-f]{40}$/;
+const EVM_COUNT_KEY = /^(0x[0-9a-f]{40})@(.+)$/;
+/** The buyer inside a count key (the burst alarm counts buyers, not networks). */
+function buyerOf(key) { const m = EVM_COUNT_KEY.exec(key); return m ? m[1] : key; }
+/** The network inside a count key, or null for a key with none. */
+function networkOf(key) { const m = typeof key === "string" ? EVM_COUNT_KEY.exec(key) : null; return m ? m[2] : null; }
 
 function inWindow(arr, now) { return arr.filter((t) => now - t < WINDOW_MS); }
 /** The rule: MAX_FAILS failures inside the window, and failures strictly more
@@ -227,24 +284,22 @@ export function gatewaySettleBreakerBlocked(key, now = Date.now()) {
   return verdict(arr, arr.length, ok.length, bill.length);
 }
 
-/** Global state: paused for WINDOW_MS once GLOBAL_MAX_FAILS buyers fail to settle inside a window (a failure recorded with no buyer counts on its own). */
-export function gatewaySettleBreakerGlobalPaused(now = Date.now()) {
-  if (globalPausedUntil > now) return { paused: true, until: globalPausedUntil };
-  globalPausedUntil = 0;
-  return { paused: false };
+/** The burst alarm (this process): raised for WINDOW_MS once GLOBAL_MAX_FAILS buyers fail to settle inside a window (a failure recorded with no buyer counts on its own). It refuses nothing. */
+export function gatewaySettleBreakerGlobalAlarm(now = Date.now()) {
+  if (globalAlarmUntil > now) return { alarm: true, until: globalAlarmUntil };
+  globalAlarmUntil = 0;
+  return { alarm: false };
 }
 
 /** A payment was presented, the handler served, and settlement FAILED. */
 export function recordGatewaySettleFailure(key, now = Date.now(), { global = true, billing = false, withdrawn = false, walletCount = true } = {}) {
   if (SHARED) sharedRecordFailure(key, now, { global, billing, withdrawn, walletCount });
   // `global:false` (the wallet-only catalog consult): the failure counts
-  // against the WALLET only. A catalog read costs a fraction of a cent, so
-  // twelve of them must never pause the LLM tiers - that would hand anyone
-  // with twelve failed settlements a lever on the gateway (the operator,
-  // 2026-09-06).
+  // against the WALLET only; the burst alarm reports the /v1 tiers, where a
+  // served call that fails to settle is upstream spend.
   if (global) {
     pruneGlobal(now);
-    globalFailKeys.set(key || `${withdrawn ? "withdrawn" : "anon"}:${++anonSeq}`, now);
+    globalFailKeys.set(key ? buyerOf(key) : `${withdrawn ? "withdrawn" : "anon"}:${++anonSeq}`, now);
     if (globalFailKeys.size >= GLOBAL_MAX_FAILS) {
       // Say what was counted: buyers, and the failures recorded with no buyer
       // (each counted on its own), so one buyer's withdrawn refusals never
@@ -252,14 +307,14 @@ export function recordGatewaySettleFailure(key, now = Date.now(), { global = tru
       const keys = [...globalFailKeys.keys()];
       const nWithdrawn = keys.filter((k) => k.startsWith("withdrawn:")).length, nAnon = keys.filter((k) => k.startsWith("anon:")).length;
       const parts = [`${keys.length - nWithdrawn - nAnon} buyer(s)`, ...(nWithdrawn ? [`${nWithdrawn} withdrawn sub-cent refusal(s)`] : []), ...(nAnon ? [`${nAnon} failure(s) with no buyer`] : [])];
-      globalPausedUntil = now + WINDOW_MS;
+      globalAlarmUntil = now + WINDOW_MS;
       globalFailKeys = new Map();
       globalTrips++;
-      console.warn(`[gateway-breaker] unsettled gateway calls from ${parts.join(", ")} inside ${Math.round(WINDOW_MS / 1000)} s - pausing every /v1 tier until ${new Date(globalPausedUntil).toISOString()}`);
+      console.warn(`[gateway-breaker] unsettled gateway calls from ${parts.join(", ")} inside ${Math.round(WINDOW_MS / 1000)} s - settleFailures reads burst until ${new Date(globalAlarmUntil).toISOString()}; no request is refused for it`);
     }
   }
   // walletCount:false (a Circle Gateway settlement still pending): one buyer
-  // toward the global pause, nothing against the wallet.
+  // toward the burst alarm, nothing against the wallet.
   if (!key || !walletCount) return;
   const arr = inWindow(fails.get(key) || [], now);
   arr.push(now);
@@ -270,7 +325,7 @@ export function recordGatewaySettleFailure(key, now = Date.now(), { global = tru
     billingFails.set(key, bill);
   }
   const v = verdict(arr, arr.length, inWindow(oks.get(key) || [], now).length, 0);
-  if (v.blocked) console.warn(`[gateway-breaker] ${arr.length} settle failures against ${v.oks} settled calls inside the window for one buyer - refusing its gateway calls until the window clears`);
+  if (v.blocked) console.warn(`[gateway-breaker] ${arr.length} settle failures against ${v.oks} settled calls inside the window for one buyer${networkOf(key) ? ` on ${networkOf(key)}` : ""} - refusing its paid calls${networkOf(key) ? " on that network" : ""} until the window clears`);
 }
 
 /** A settled 200 is an outcome in the window: enough of them keep a key's
@@ -294,12 +349,11 @@ function decodeReceipt(res) {
 /** Arm ONE finish listener per request on `req.res`, recording the FINAL
  *  outcome under `key`. Exported for the test; the check below calls it.
  *
- *  A LATER consult that takes part in the global pause UPGRADES the listener
- *  already armed (2026-09-28). Every /v1 slug is wallet-only, so the
- *  dispatcher's catalog consult (global:false) arms first and the /v1
- *  handler's own consult (global:true) arrives second; when the second could
- *  not re-arm, no /v1 settle failure ever reached the global count and the
- *  /v1 pause could never trip. Never the other way round: a later
+ *  A LATER consult that feeds the burst alarm UPGRADES the listener already
+ *  armed. Every /v1 slug is wallet-only, so the dispatcher's catalog consult
+ *  (global:false) arms first and the /v1 handler's own consult (global:true)
+ *  arrives second; when the second could not re-arm, no /v1 settle failure
+ *  ever reached the alarm's count. Never the other way round: a later
  *  global:false consult does not downgrade. */
 export function armGatewaySettleBreaker(req, key, { global = true } = {}) {
   if (!req || typeof req !== "object") return false;
@@ -324,11 +378,10 @@ export function armGatewaySettleBreaker(req, key, { global = true } = {}) {
       // already withdrawn Algorand from the next sub-cent 402
       // (src/avm-sponsorship.js), so the loop is closed and this is not the
       // buyer's to carry: kept off the WALLET's count, and not a clear either.
-      // It still feeds the /v1 global pause when this consult takes part in
-      // it - that pause names no wallet, and it is the backstop if requests
-      // already in flight keep arriving. It is recorded with no key, so each
-      // one counts as its own buyer toward that pause: counting distinct
-      // buyers does not weaken the backstop. The request is handed over so the
+      // It still feeds the /v1 burst alarm when this consult takes part in
+      // it - the alarm names no wallet, and it reports requests already in
+      // flight that keep arriving. It is recorded with no key, so each one
+      // counts as its own buyer toward the alarm. The request is handed over so the
       // gate checks the requirement THIS call paid against (sub-cent, to the
       // paused payTo) and that the route's next 402 really drops it.
       if (isWithdrawnSubcentRefusal(receipt, { req })) {
@@ -339,16 +392,16 @@ export function armGatewaySettleBreaker(req, key, { global = true } = {}) {
       // (src/gateway-wire.js): the buyer was told to resend the same payment,
       // and nothing about it is the wallet's doing, so it is kept off the
       // WALLET's count (and is not a clear either). The run was served and
-      // not yet paid, so it still counts toward the /v1 global pause when
+      // not yet paid, so it still counts toward the /v1 burst alarm when
       // this consult takes part in it, as this buyer (distinct buyers trip
-      // that pause, so one buyer's pending payments count once).
+      // the alarm, so one buyer's pending payments count once).
       if (isGatewayPendingAnswer(req, receipt)) {
         if (global) recordGatewaySettleFailure(key, Date.now(), { global: true, walletCount: false });
         return;
       }
       // Any OTHER facilitator billing refusal (free_tier_exhausted, a credits
       // wall, the gate switched off) has nothing withdrawing its offer, so it
-      // counts exactly like a failed settle - per wallet and globally - and is
+      // counts exactly like a failed settle - per wallet and in the alarm - and is
       // only marked, so the 429 says what happened instead of blaming the wallet.
       if (st === 402 || receipt?.success === false) recordGatewaySettleFailure(key, Date.now(), { global, billing: isBillingRefusalReceipt(receipt) });
       else if (st === 200) recordGatewaySettleSuccess(key);
@@ -361,38 +414,25 @@ export function armGatewaySettleBreaker(req, key, { global = true } = {}) {
 
 /**
  * THE CONSULT LINE. Every gateway handler awaits this first, before validation
- * and before any upstream call. Throws 503 while the global pause holds, 429
- * while this buyer is blocked; otherwise arms the outcome listener.
+ * and before any upstream call. Throws 429 while this buyer's key is blocked
+ * (for an EVM payer, on the network this payment names only); otherwise arms
+ * the outcome listener. Nothing here refuses for other buyers' failures.
+ * `global` says whether this call's settle failure feeds the burst alarm
+ * (the /v1 tiers) or the wallet's count only (the catalog consult).
  * Synchronous (returns undefined, throws at once) without a shared store; a
  * promise with one, so `await` covers both.
  */
 export function gatewaySettleBreakerCheck(req, { now = Date.now(), global = true } = {}) {
-  const key = gatewaySettleBreakerKey(req);
+  const key = gatewaySettleBreakerCountKey(req);
   if (!SHARED) {
-    decide(req, key, now, global, global ? gatewaySettleBreakerGlobalPaused(now) : { paused: false }, gatewaySettleBreakerBlocked(key, now));
+    decide(req, key, now, global, gatewaySettleBreakerBlocked(key, now));
     return undefined;
   }
-  // Shared: the pause flag and this key's window, read together with this
-  // process's own counts as the floor; a store that does not answer leaves
-  // the decision to those counts.
-  return (async () => {
-    const g = global ? await sharedGlobalPaused(now) : { paused: false };
-    const b = g.paused ? null : await sharedBlocked(key, now);
-    decide(req, key, now, global, g, b);
-  })();
+  // Shared: this key's windows, read with this process's own counts as the
+  // floor; a store that does not answer leaves the decision to those counts.
+  return (async () => { decide(req, key, now, global, await sharedBlocked(key, now)); })();
 }
-function decide(req, key, now, global, g, b) {
-  // The wallet-only catalog consults with global:false: no global pause is
-  // honoured and none is fed. Only the /v1 tiers, where a wasted call costs
-  // real money, take part in the global pause.
-  if (g.paused) {
-    const secs = Math.max(1, Math.ceil((g.until - now) / 1000));
-    const e = new Error(`Paid tools are briefly paused after a burst of payments that verified and then failed to settle; retry after ${new Date(g.until).toISOString()} (about ${secs} s). Nothing was charged for this request.`);
-    e.statusCode = 503;
-    e.retryAfterMs = g.until - now;
-    try { req?.res?.setHeader?.("Retry-After", String(secs)); } catch { /* headers are best-effort */ }
-    throw e;
-  }
+function decide(req, key, now, global, b) {
   if (b.blocked) {
     // A key that settled a call inside the window is a paying buyer: its
     // refusal is noted on the failure monitor (a count per bucket, shared
@@ -402,14 +442,25 @@ function decide(req, key, now, global, g, b) {
     if (b.oks > 0) { try { toolFailureMonitor().noteBuyerRefusal({ at: now }); } catch { /* counting only */ } }
     const secs = Math.max(1, Math.ceil((b.until - now) / 1000));
     const mins = Math.round(WINDOW_MS / 60_000);
-    const until = `paid tools refuse new calls from it until ${new Date(b.until).toISOString()} (about ${secs} s). Nothing was charged for this request.`;
+    // A key with a network refuses that network only, and says how to keep
+    // buying at once; a key without one (Tempo, credits, IP) refuses the key.
+    const network = networkOf(key);
+    const on = network ? ` on ${network}` : "";
+    const until = `paid tools refuse new calls from it${on} until ${new Date(b.until).toISOString()} (about ${secs} s).${network ? ` That holds ${network} only: this wallet can pay on any other network this route offers right now (the networks are accepts[].network in the route's 402).` : ""} Nothing was charged for this request.`;
     // Every counted failure a facilitator billing refusal: say that, and do
     // not send the buyer to a wallet balance that was never the problem.
     const e = new Error(b.billingFails >= b.fails
-      ? `Recent payments from this wallet could not be settled (${b.fails} in the last ${mins} min: each verified and was served, then the paying network's facilitator refused to settle it under a billing limit on this server's own account - not because of the wallet); ${until} After that, pay on a network other than the one refused, from the route's current 402.`
-      : `Recent payments from this wallet failed to settle (${b.fails} in the last ${mins} min: they verified, the call was served, and the transfer did not go through${b.billingFails ? `; ${b.billingFails} of them ${b.billingFails === 1 ? "was" : "were"} a facilitator billing refusal on this server's account, not the wallet's` : ""}); ${until} Check the wallet's USDC balance on the paying chain before retrying.`);
+      ? `Recent payments from this wallet${on} could not be settled (${b.fails} in the last ${mins} min: each verified and was served, then the paying network's facilitator refused to settle it under a billing limit on this server's own account - not because of the wallet); ${until}${network ? "" : " After that, pay on a network other than the one refused, from the route's current 402."}`
+      : `Recent payments from this wallet${on} failed to settle (${b.fails} in the last ${mins} min: they verified, the call was served, and the transfer did not go through${b.billingFails ? `; ${b.billingFails} of them ${b.billingFails === 1 ? "was" : "were"} a facilitator billing refusal on this server's account, not the wallet's` : ""}); ${until} ${network ? `Before paying on ${network} again, check the wallet's balance of the payment token there.` : "Check the wallet's USDC balance on the paying chain before retrying."}`);
     e.statusCode = 429;
     e.retryAfterMs = b.until - now;
+    // Machine-readable, beside the message (src/tool-error-fields.js):
+    // retryAfterSeconds, and for a network key the refused network, what to
+    // do (retry: other-network) and where the other networks are listed. The
+    // route's offer is built per request by the paywall and is not held
+    // here, so the fields name its 402 instead of repeating a list.
+    e.retryAfter = secs;
+    if (network) { e.retry = "other-network"; e.refusedNetwork = network; e.otherNetworksFrom = "accepts[].network in this route's 402"; }
     try { req?.res?.setHeader?.("Retry-After", String(secs)); } catch { /* headers are best-effort */ }
     throw e;
   }
@@ -424,32 +475,45 @@ export function gatewaySettleBreakerStatus(now = Date.now()) {
     if (s.fails) trackedKeys++;
     if (s.blocked) blockedKeys++;
   }
-  const g = gatewaySettleBreakerGlobalPaused(now);
+  const g = gatewaySettleBreakerGlobalAlarm(now);
   return {
+    // Count keys: an EVM payer counts once per network it failed on.
     trackedKeys, blockedKeys,
     // Buyers with a settle failure inside the window, plus each failure
     // recorded with no buyer (a withdrawn sub-cent refusal counts on its
-    // own): the count the global pause trips on.
+    // own): the count the burst alarm trips on.
     globalFailsInWindow: (pruneGlobal(now), globalFailKeys.size),
-    globalPaused: g.paused, globalPausedUntil: g.paused ? new Date(g.until).toISOString() : null, globalTrips,
+    globalAlarm: g.alarm, globalAlarmUntil: g.alarm ? new Date(g.until).toISOString() : null, globalTrips,
     maxFails: MAX_FAILS, minFailShare: MIN_FAIL_SHARE, hardMaxFails: HARD_MAX_FAILS, windowMs: WINDOW_MS, globalMaxFails: GLOBAL_MAX_FAILS,
   };
 }
 
+/** The settleFailures word for /api/gateway-status: ok, or burst for one
+ *  window after GLOBAL_MAX_FAILS distinct buyers failed to settle /v1 calls
+ *  inside a window (on any replica, through the shared flag). The word only
+ *  publicly; the operator read adds the counts. Never a key. */
+export async function gatewaySettleFailuresStatus({ full = false, now = Date.now() } = {}) {
+  const g = SHARED ? await sharedGlobalAlarm(now) : gatewaySettleBreakerGlobalAlarm(now);
+  const status = g.alarm ? "burst" : "ok";
+  if (!full) return { status };
+  const s = gatewaySettleBreakerStatus(now);
+  return { status, until: g.alarm ? new Date(g.until).toISOString() : null, buyersInWindow: s.globalFailsInWindow, threshold: GLOBAL_MAX_FAILS, windowMinutes: WINDOW_MS / 60_000, trips: s.globalTrips, blockedKeys: s.blockedKeys, trackedKeys: s.trackedKeys };
+}
+
 /** Test-only. With a shared store it returns a promise that settles once
- *  every write already sent (a trip's pause included) has landed and the
+ *  every write already sent (a trip's alarm flag included) has landed and the
  *  shared windows and flag are cleared after them; await it. */
 export function _gatewaySettleBreakerReset() {
   const keys = new Set([...fails.keys(), ...billingFails.keys(), ...oks.keys()]);
-  fails.clear(); billingFails.clear(); oks.clear(); globalFailKeys = new Map(); globalPausedUntil = 0; globalTrips = 0;
+  fails.clear(); billingFails.clear(); oks.clear(); globalFailKeys = new Map(); globalAlarmUntil = 0; globalTrips = 0;
   if (!SHARED) return undefined;
   return (async () => {
     while (pendingWrites.size) await Promise.allSettled([...pendingWrites]);
     await Promise.allSettled([
       ...[...keys].flatMap((k) => ["gwb-fail", "gwb-bill", "gwb-ok"].map((name) => shared.windowClear(name, sharedKey(k)))),
-      shared.flagSet("gwb-pause", "all", 0), shared.windowClear("gwb-global", "all"),
+      shared.flagSet("gwb-alarm", "all", 0), shared.windowClear("gwb-global", "all"),
     ]);
-    globalPausedUntil = 0; globalTrips = 0;
+    globalAlarmUntil = 0; globalTrips = 0;
   })();
 }
 /** Whether this process writes the breaker through to the shared store. */
