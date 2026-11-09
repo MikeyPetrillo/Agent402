@@ -94,6 +94,10 @@ console.log("2. stats returns 400 (not 500) on bad input ✓");
     ["html-links", { html: `<a href="${evil}">x</a>`, filter: "(a+)+$" }], // compileUserRegex guard
   ];
   for (const [slug, input] of REGEX_CASES) {
+    // A tool that runs in a worker thread (html-links) pays the worker's cold
+    // start on its first call; one benign call first, so the timer below reads
+    // the hostile input, not the spawn.
+    try { await call(slug, slug === "html-links" ? { html: "<a href=\"x\">x</a>" } : slug === "json-validate" ? { data: "a", schema: { type: "string" } } : { pattern: "a", text: "a", flags: "" }); } catch { /* the warm-up's answer is not under test */ }
     const t0 = Date.now();
     try { await call(slug, input); } catch (e) {
       if (e.statusCode === undefined || e.statusCode < 400 || e.statusCode >= 500) fail(`${slug} ReDoS input must 4xx, got statusCode ${e.statusCode}`);
