@@ -109,6 +109,28 @@ export function declaredDimensions(buf) {
   return null;
 }
 
+/** The first image descriptor of a GIF, read from the block chain without
+ *  decoding: { x, y, width, height }, or null when there is none. The decoder
+ *  sizes its index buffer from THIS rectangle, not from the logical screen
+ *  that declaredDimensions reports, so the two are compared before a decode. */
+export function gifFirstFrame(buf) {
+  if (sniffFormat(buf) !== "gif" || buf.length < 13) return null;
+  let i = 13;
+  if (buf[10] & 0x80) i += 3 * (1 << ((buf[10] & 7) + 1)); // global color table
+  while (i < buf.length) {
+    const block = buf[i];
+    if (block === 0x2c) {
+      if (i + 10 > buf.length) return null;
+      return { x: buf.readUInt16LE(i + 1), y: buf.readUInt16LE(i + 3), width: buf.readUInt16LE(i + 5), height: buf.readUInt16LE(i + 7) };
+    }
+    if (block !== 0x21) return null; // trailer, or bytes that are not a block
+    i += 2; // introducer + label, then data sub-blocks up to a zero length
+    while (i < buf.length && buf[i] !== 0) i += buf[i] + 1;
+    i += 1;
+  }
+  return null;
+}
+
 /** Header pre-check for the source-pixel cap. Throws the same 400 the decoded
  *  check throws, so it does not matter which side of the worker boundary the
  *  refusal happens on. Cheap enough to run on the main thread BEFORE a worker is
@@ -118,6 +140,13 @@ export function assertDeclaredWithinPixelCap(buf, maxPixels) {
   const declared = declaredDimensions(buf);
   if (declared && declared.width > 0 && declared.height > 0 && declared.width * declared.height > maxPixels) {
     throw bad(`source image too large (${declared.width}x${declared.height}; max ${maxPixels} pixels)`);
+  }
+  // A GIF frame is decoded at its own size. One that reaches past the logical
+  // screen is outside the format and would be decoded at a size the cap above
+  // never saw, so it is refused here, before a worker or the decoder has it.
+  const frame = declared ? gifFirstFrame(buf) : null;
+  if (frame && (frame.x + frame.width > declared.width || frame.y + frame.height > declared.height)) {
+    throw bad(`gif frame (${frame.width}x${frame.height} at ${frame.x},${frame.y}) extends past its ${declared.width}x${declared.height} canvas`);
   }
 }
 
@@ -183,6 +212,55 @@ export async function runImageOp({ op, buffer, maxPixels = FREE_MAX_SRC_PIXELS, 
     const size = Math.min(Math.max(posInt(params.size) || 128, 1), 1024);
     img.cover({ w: size, h: size });
     return toBuffer(img, params.format, params.quality);
+  }
+  if (op === "crop") {
+    const w = posInt(params.width), h = posInt(params.height);
+    const x = Math.max(0, Math.trunc(Number(params.left ?? params.x ?? 0)) || 0);
+    const y = Math.max(0, Math.trunc(Number(params.top ?? params.y ?? 0)) || 0);
+    const rotate = params.rotate === undefined ? 0 : Number(params.rotate);
+    const flip = params.flip === undefined ? "" : String(params.flip).toLowerCase();
+    if (rotate && ![90, 180, 270].includes(rotate)) throw bad("rotate must be 90, 180, or 270");
+    if (flip && !["horizontal", "vertical", "both"].includes(flip)) throw bad('flip must be "horizontal", "vertical", or "both"');
+    if ((w && !h) || (!w && h)) throw bad("provide both width and height for the crop box");
+    if (!w && !h && !rotate && !flip) throw bad("provide a crop box (left, top, width, height) and/or rotate/flip");
+    if (w && h) {
+      if (w > MAX_DIM || h > MAX_DIM) throw bad(`crop box exceeds ${MAX_DIM}px`);
+      if (x + w > img.width || y + h > img.height) {
+        throw bad(`crop box (${x},${y} ${w}x${h}) exceeds image bounds (${img.width}x${img.height})`);
+      }
+      img.crop({ x, y, w, h });
+    }
+    if (rotate) img.rotate(rotate);
+    if (flip) img.flip({ horizontal: flip === "horizontal" || flip === "both", vertical: flip === "vertical" || flip === "both" });
+    const out = await toBuffer(img, params.format, params.quality);
+    return { ...out, width: img.width, height: img.height };
+  }
+  if (op === "dominant-color") {
+    const { width, height } = img;
+    const n = Math.min(Math.max(posInt(params.colors) || 5, 1), 10);
+    // Bound the work: sample from a ≤96px-wide copy (deterministic resize).
+    if (img.width > 96) img.resize({ w: 96 });
+    const data = img.bitmap.data;
+    const buckets = new Map();
+    let sampled = 0;
+    for (let p = 0; p < data.length; p += 4) {
+      if (data[p + 3] < 128) continue; // skip transparent
+      sampled++;
+      const key = ((data[p] >> 4) << 8) | ((data[p + 1] >> 4) << 4) | (data[p + 2] >> 4);
+      let b = buckets.get(key);
+      if (!b) buckets.set(key, (b = { n: 0, r: 0, g: 0, b: 0 }));
+      b.n++; b.r += data[p]; b.g += data[p + 1]; b.b += data[p + 2];
+    }
+    if (!sampled) throw bad("image has no opaque pixels");
+    const colors = [...buckets.entries()]
+      .sort((a, b) => b[1].n - a[1].n || a[0] - b[0])
+      .slice(0, n)
+      .map(([, v]) => {
+        const rgb = [Math.round(v.r / v.n), Math.round(v.g / v.n), Math.round(v.b / v.n)];
+        const hex = "#" + rgb.map((c) => c.toString(16).padStart(2, "0")).join("");
+        return { hex, rgb, ratio: Math.round((v.n / sampled) * 1e4) / 1e4 };
+      });
+    return { result: { width, height, sampled, colors } };
   }
   throw bad(`unknown image operation: ${op}`);
 }

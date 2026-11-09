@@ -16,9 +16,9 @@
 // implementation.
 import { safeFetch } from "./fetch-guard.js";
 import {
-  bad, MAX_DIM, declaredDimensions, posInt, readImage, sniffFormat, toBuffer, MIME,
+  bad, MAX_SRC_PIXELS, declaredDimensions, sniffFormat, MIME,
 } from "./image-ops.js";
-import { runImageOffThread } from "./image-pool.js";
+import { runImageOffThread, LARGE_JOB_TIMEOUT_MS } from "./image-pool.js";
 
 // The content types resize/convert/thumbnail answer with (raw bytes through
 // the route binder's __binary sentinel, chosen by `format`). Declared on each
@@ -328,32 +328,9 @@ export const IMAGE_TOOLS = [
       output: { example: { width: 120, height: 80, sampled: 6144, colors: [{ hex: "#1f7a8b", rgb: [31, 122, 139], ratio: 0.5938 }, { hex: "#df7a1e", rgb: [223, 122, 30], ratio: 0.2813 }, { hex: "#22223a", rgb: [34, 34, 58], ratio: 0.0938 }] } },
     },
     handler: async (i) => {
-      const img = await readImage(await inputBuffer(i));
-      const { width, height } = img;
-      const n = Math.min(Math.max(posInt(i.colors) || 5, 1), 10);
-      // Bound the work: sample from a ≤96px-wide copy (deterministic resize).
-      if (img.width > 96) img.resize({ w: 96 });
-      const data = img.bitmap.data;
-      const buckets = new Map();
-      let sampled = 0;
-      for (let p = 0; p < data.length; p += 4) {
-        if (data[p + 3] < 128) continue; // skip transparent
-        sampled++;
-        const key = ((data[p] >> 4) << 8) | ((data[p + 1] >> 4) << 4) | (data[p + 2] >> 4);
-        let b = buckets.get(key);
-        if (!b) buckets.set(key, (b = { n: 0, r: 0, g: 0, b: 0 }));
-        b.n++; b.r += data[p]; b.g += data[p + 1]; b.b += data[p + 2];
-      }
-      if (!sampled) throw bad("image has no opaque pixels");
-      const colors = [...buckets.entries()]
-        .sort((a, b) => b[1].n - a[1].n || a[0] - b[0])
-        .slice(0, n)
-        .map(([, v]) => {
-          const rgb = [Math.round(v.r / v.n), Math.round(v.g / v.n), Math.round(v.b / v.n)];
-          const hex = "#" + rgb.map((c) => c.toString(16).padStart(2, "0")).join("");
-          return { hex, rgb, ratio: Math.round((v.n / sampled) * 1e4) / 1e4 };
-        });
-      return { width, height, sampled, colors };
+      // Decode and sampling run in the image worker: the decode is synchronous
+      // CPU, and this tool admits the larger wallet-only source cap.
+      return runImageOffThread({ op: "dominant-color", buffer: await inputBuffer(i), params: { colors: i.colors }, maxPixels: MAX_SRC_PIXELS, timeoutMs: LARGE_JOB_TIMEOUT_MS });
     },
   },
   {
@@ -382,30 +359,15 @@ export const IMAGE_TOOLS = [
       output: { example: { dataUri: "data:image/png;base64,iVBORw0KG…", width: 60, height: 40, bytes: 144 } },
     },
     handler: async (i) => {
-      const img = await readImage(await inputBuffer(i));
-      const w = posInt(i.width), h = posInt(i.height);
-      const x = Math.max(0, Math.trunc(Number(i.left ?? i.x ?? 0)) || 0);
-      const y = Math.max(0, Math.trunc(Number(i.top ?? i.y ?? 0)) || 0);
-      const rotate = i.rotate === undefined ? 0 : Number(i.rotate);
-      const flip = i.flip === undefined ? "" : String(i.flip).toLowerCase();
-      if (rotate && ![90, 180, 270].includes(rotate)) throw bad("rotate must be 90, 180, or 270");
-      if (flip && !["horizontal", "vertical", "both"].includes(flip)) throw bad('flip must be "horizontal", "vertical", or "both"');
-      if ((w && !h) || (!w && h)) throw bad("provide both width and height for the crop box");
-      if (!w && !h && !rotate && !flip) throw bad("provide a crop box (left, top, width, height) and/or rotate/flip");
-      if (w && h) {
-        if (w > MAX_DIM || h > MAX_DIM) throw bad(`crop box exceeds ${MAX_DIM}px`);
-        if (x + w > img.width || y + h > img.height) {
-          throw bad(`crop box (${x},${y} ${w}x${h}) exceeds image bounds (${img.width}x${img.height})`);
-        }
-        img.crop({ x, y, w, h });
-      }
-      if (rotate) img.rotate(rotate);
-      if (flip) img.flip({ horizontal: flip === "horizontal" || flip === "both", vertical: flip === "vertical" || flip === "both" });
-      const out = await toBuffer(img, i.format, i.quality);
+      // Decode, crop and encode run in the image worker (synchronous CPU).
+      const { width, height, ...out } = await runImageOffThread({
+        op: "crop", buffer: await inputBuffer(i), maxPixels: MAX_SRC_PIXELS, timeoutMs: LARGE_JOB_TIMEOUT_MS,
+        params: { width: i.width, height: i.height, left: i.left, top: i.top, x: i.x, y: i.y, rotate: i.rotate, flip: i.flip, format: i.format, quality: i.quality },
+      });
       if (!i.dataUri) return out;
       const b64 = out.__binary.toString("base64");
       if (b64.length > MAX_B64) throw Object.assign(new Error("result too large for a data URI - request binary output"), { statusCode: 413 });
-      return { dataUri: `data:${out.contentType};base64,${b64}`, width: img.width, height: img.height, bytes: out.__binary.length };
+      return { dataUri: `data:${out.contentType};base64,${b64}`, width, height, bytes: out.__binary.length };
     },
   },
 ];

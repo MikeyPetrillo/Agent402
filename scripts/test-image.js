@@ -174,5 +174,44 @@ catch (e) { ok(e.statusCode === 400, "image-exif without url/image throws 400");
   ok(worstLag < 250, `event loop stayed responsive during the burst (worst timer lag ${worstLag}ms < 250ms)`);
 }
 
+// A GIF frame is decoded at its own size, not the logical screen's. A frame
+// that reaches past the screen is refused from its header, on every image tool,
+// before any decode: a 35-byte body declaring a 10x10 screen and a 30000x30000
+// frame once held the decoding thread for seconds.
+{
+  const gifWithFrame = (w, h) => Buffer.concat([
+    Buffer.from("GIF89a"), Buffer.from([10, 0, 10, 0, 0x80, 0, 0, 0, 0, 0, 255, 255, 255]),
+    Buffer.from([0x21, 0xf9, 4, 0, 0, 0, 0, 0]), // a graphic control extension ahead of the frame
+    Buffer.from([0x2c, 0, 0, 0, 0, w & 255, w >> 8, h & 255, h >> 8, 0, 2, 2, 0x44, 0x01, 0, 0x3b]),
+  ]).toString("base64");
+  const calls = [
+    ["image-crop", { width: 5, height: 5 }], ["image-dominant-color", {}],
+    ["image-resize", { width: 5 }], ["image-convert", { format: "png" }], ["image-thumbnail", {}],
+  ];
+  for (const [slug, extra] of calls) {
+    const t0 = Date.now(); let code = 200, msg = "";
+    try { await tool(slug)({ image: gifWithFrame(30000, 30000), ...extra }); } catch (e) { code = e.statusCode; msg = e.message; }
+    ok(code === 400 && /gif frame/.test(msg) && Date.now() - t0 < 500, `${slug} refuses a GIF frame larger than its canvas from the header (got ${code} "${msg}" in ${Date.now() - t0}ms)`);
+  }
+  const fine = await tool("image-dominant-color")({ image: gifWithFrame(10, 10) });
+  ok(fine.width === 10 && fine.height === 10, `a GIF whose frame fits its canvas still decodes (got ${fine.width}x${fine.height})`);
+}
+
+// image-crop and image-dominant-color decode in the worker pool, like the other
+// transforms: a large source must not hold the event loop while it decodes.
+{
+  const big = new Jimp({ width: 4000, height: 3000, color: 0x3366ccff });
+  const bigJpeg = (await big.getBuffer(JimpMime.jpeg)).toString("base64");
+  let ticks = 0; const iv = setInterval(() => ticks++, 20);
+  const t0 = Date.now();
+  const [c, d] = await Promise.all([
+    tool("image-crop")({ image: bigJpeg, left: 0, top: 0, width: 32, height: 32, dataUri: true }),
+    tool("image-dominant-color")({ image: bigJpeg, colors: 1 }),
+  ]);
+  const ms = Date.now() - t0; clearInterval(iv);
+  ok(c.width === 32 && c.height === 32 && d.width === 4000 && d.colors.length === 1, "crop and dominant-color answer for a 12M-pixel source");
+  ok(ticks >= Math.floor(ms / 20 / 2), `event loop kept ticking while both decoded (${ticks} ticks in ${ms}ms)`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

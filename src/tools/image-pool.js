@@ -31,6 +31,9 @@ const IMAGE_WORKER = fileURLToPath(new URL("./image-worker.js", import.meta.url)
 const POOL_MAX = 2;
 const QUEUE_MAX = 32;
 const JOB_TIMEOUT_MS = 5_000;
+// The wallet-only tools admit MAX_SRC_PIXELS (2.5x the free cap), so their
+// deadline scales with it; the pool size still bounds resident bitmaps.
+export const LARGE_JOB_TIMEOUT_MS = 15_000;
 // Idle workers are terminated so a burst of large images does not leave its peak
 // heap resident for the rest of the process's life; the next call re-spawns.
 const IDLE_MS = 30_000;
@@ -81,11 +84,12 @@ function spawnSlot() {
     if (msg.error) {
       settle(slot, slot.job.reject, Object.assign(new Error(msg.error), { statusCode: msg.statusCode || 500 }));
     } else if (msg.result !== undefined) {
-      settle(slot, slot.job.resolve, msg.result); // a JSON answer (op "barcode")
+      settle(slot, slot.job.resolve, msg.result); // a JSON answer (op "barcode", "dominant-color")
     } else {
       settle(slot, slot.job.resolve, {
         __binary: Buffer.from(msg.buffer.buffer, msg.buffer.byteOffset, msg.buffer.byteLength),
         contentType: msg.contentType,
+        ...(msg.width ? { width: msg.width, height: msg.height } : {}),
       });
     }
     goIdle(slot);
@@ -109,10 +113,10 @@ function assign(slot, job) {
   job.timer = setTimeout(() => {
     // The worker is inside synchronous Jimp code and will not answer another
     // message, so the slot is only recoverable by killing the thread.
-    settle(slot, job.reject, unavailable(`image transform timed out (>${JOB_TIMEOUT_MS}ms)`));
+    settle(slot, job.reject, unavailable(`image transform timed out (>${job.timeoutMs}ms)`));
     retire(slot);
     pump();
-  }, JOB_TIMEOUT_MS);
+  }, job.timeoutMs);
   slot.worker.postMessage({ id: job.id, op: job.op, buffer: job.buffer, maxPixels: job.maxPixels, params: job.params });
 }
 
@@ -128,7 +132,7 @@ function pump() {
  *  { __binary, contentType } shape the inline implementation returned, and
  *  rejects with the same messages and statusCode values. op "barcode" resolves
  *  with the decoder's JSON answer instead. */
-export function runImageOffThread({ op, buffer, params = {}, maxPixels = FREE_MAX_SRC_PIXELS }) {
+export function runImageOffThread({ op, buffer, params = {}, maxPixels = FREE_MAX_SRC_PIXELS, timeoutMs = JOB_TIMEOUT_MS }) {
   // Kept ahead of the queue on purpose: the header pre-check is a few byte reads,
   // and refusing an oversized image here means a hostile small-file/huge-canvas
   // request never occupies a worker or a queue position either.
@@ -137,7 +141,7 @@ export function runImageOffThread({ op, buffer, params = {}, maxPixels = FREE_MA
     return Promise.reject(unavailable("image workers are busy - retry shortly"));
   }
   return new Promise((resolve, reject) => {
-    queue.push({ id: nextJobId++, op, buffer, params, maxPixels, resolve, reject, timer: null });
+    queue.push({ id: nextJobId++, op, buffer, params, maxPixels, timeoutMs, resolve, reject, timer: null });
     pump();
   });
 }
