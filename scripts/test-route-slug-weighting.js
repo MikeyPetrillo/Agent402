@@ -81,7 +81,10 @@ ok(inSlug > inText, `the slug outranks the description for the same words (${inS
 // rows, so the premium stayed inside a 2x-4x band and the mutation survived -
 // the guard passed the one change it exists to catch. Pin the numbers.
 ok(inText >= 11 && inText <= 15, `the description placement scores what it measured (${inText}, expected 13 +/- 2)`);
-ok(inSlug >= 28 && inSlug <= 34, `the slug placement scores what it measured (${inSlug}, expected 31 +/- 3)`);
+// 31 until 2026-11-09, when a name longer than NAME_SLUG_MAX_TOKENS words
+// stopped scoring as a slug alias: this row's 13-word name had added 4 slug
+// points on top of the stuffed slug itself. Re-measured at 27.
+ok(inSlug >= 24 && inSlug <= 30, `the slug placement scores what it measured (${inSlug}, expected 27 +/- 3)`);
 
 // And pin the WEIGHTS themselves, which is what the emails quoted and what a
 // future tweak would move. Each row below carries the term in exactly ONE

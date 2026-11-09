@@ -9984,7 +9984,15 @@ function computeToolStatics(t) {
     // query word it carries, so an outside slug that IS a tool's full name in
     // snake_case out-scored the tool's own shorter slug on its own name (49 of
     // 585 after the first pass). Now both sides score the name the same way.
-    nameSlug: (() => { const toks = splitTokens(name); const ns = toks.join("-"); return toks.length > 1 && ns !== slug.toLowerCase() ? ns : null; })(),
+    //
+    // Only a NAME-length name (NAME_SLUG_MAX_TOKENS words or fewer) is an
+    // alias. Outside sellers often put a whole sentence in "name", and that
+    // sentence in slug form let any common query word ("which", "are", "set")
+    // score slug points by appearing anywhere in it: "which stocks are set up
+    // to buy today" ranked a marketplace-crowding tool first on its name
+    // sentence (2026-11-09). Every one of our own 628 names is 9 words or
+    // fewer, so the rule above keeps working for every row it was built for.
+    nameSlug: (() => { const toks = splitTokens(name); const ns = toks.join("-"); return toks.length > 1 && toks.length <= NAME_SLUG_MAX_TOKENS && ns !== slug.toLowerCase() ? ns : null; })(),
   };
   // Every name the slug rule scores: slug, curated aliases, the name in slug
   // form. Built once here rather than per row per query.
@@ -10382,6 +10390,8 @@ export const ROUTE_TOP_MAX = 25;
 // per /api/route on prod. A row that matches ONLY such words is not an answer
 // to a task that names anything else. A query made of nothing but these words
 // selects on all of them, as before.
+// Longest name (in words) that also scores as a slug alias (toolStatics nameSlug).
+export const NAME_SLUG_MAX_TOKENS = 10;
 const ROUTE_NONSELECTING_TERMS = new Set([
   "a", "an", "the", "to", "of", "for", "in", "on", "at", "by", "and", "or", "with", "from", "into", "via", "as",
   "is", "are", "be", "it", "its", "this", "that", "i", "me", "my", "we", "our", "you", "your",
