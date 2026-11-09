@@ -36,7 +36,7 @@ import { AGENT402_MCP_VERSION } from "./mcp-flagship.js";
 import { OCR_LARGE_PIXELS } from "./tools/ocr-kit.js";
 import { asyncProfileOf } from "./slow-routes.js";
 import { needsAsyncOrWait } from "./slow-sync-window.js";
-import { COMPOSITE_GUARD_LIMITS } from "./composite-spend-guard.js";
+import { COMPOSITE_GUARD_LIMITS, isLongRunningSlug } from "./composite-spend-guard.js";
 import { UNPAID_BODY_MAX_BYTES, UNPAID_LIMITS as LARGE_BODY_UNPAID } from "./large-body-gate.js";
 // The report and media routes' per-buyer guard, read from the module that
 // enforces it (its env overrides included).
@@ -69,6 +69,15 @@ const CREDITS_ON = creditsSalesEnabled();
 // /api/pricing.
 const priceUsd = (p) => Number(String(p ?? "").replace(/[^0-9.]/g, ""));
 const fmtUsd = (n) => `$${n.toFixed(n < 0.01 ? 3 : 2)}`;
+/** The long-running routes among `slugs`, as "`a`, `b` and `c`". */
+export function evmOnlyStagesText(slugs) {
+  const longOnes = slugs.filter((s) => isLongRunningSlug(s)).map((s) => `\`${s}\``);
+  if (!longOnes.length) throw new Error(`guide token {{evmOnly:${slugs.join(",")}}} names no long-running route`);
+  return longOnes.length === 1 ? longOnes[0] : `${longOnes.slice(0, -1).join(", ")} and ${longOnes[longOnes.length - 1]}`;
+}
+// Every content-pipeline stage, in the order of its stage table.
+export const PIPELINE_STAGE_SLUGS = ["answer", "research", "v1-chat-metered", "tts-lite", "tts", "tts-hd", "v1-images-fast", "v1-images-pro", "v1-images-edit", "transcribe", "transcribe-pro", "srt-convert", "skill-subtitle-pipeline", "dub", "media-info", "audio-convert", "audio-normalize"];
+const PIPELINE_TOKEN = `{{evmOnly:${PIPELINE_STAGE_SLUGS.join(",")}}}`;
 function resolveGuideTokens(text, catalog) {
   const bySlug = catalog ? new Map(Object.values(catalog).filter((d) => d && d.slug).map((d) => [d.slug, d])) : null;
   const def = (slug) => {
@@ -93,6 +102,10 @@ function resolveGuideTokens(text, catalog) {
       if (answers.length !== 1) throw new Error(`guide token {{jobs:${list}}} names routes that run differently`);
       return answers[0];
     })
+    // {{evmOnly:<slug>,...}}: of the routes named, the long-running ones
+    // (isLongRunningSlug), which take x402 exact on EVM chains only, as a
+    // code-formatted list. A list with none of them is an error.
+    .replace(/\{\{evmOnly:([a-z0-9,-]+)\}\}/g, (_, list) => evmOnlyStagesText(list.split(",")))
     .replace(/\{\{routerTiers\}\}/g, () => {
       if (!bySlug) return "The tiers and their prices are listed at [/api/pricing](https://agent402.tools/api/pricing).";
       const rows = [...bySlug.values()]
@@ -858,7 +871,7 @@ answer instead of paying twice, and wait \`Retry-After\` on a 429 or 503.
 
 ### Choosing a rail
 
-\`research\` and the image routes run long enough that they take x402 exact on
+${PIPELINE_TOKEN} run long enough that they take x402 exact on
 EVM chains only; their /api/pricing rows list those \`networks\`. Every other
 stage here takes every offered chain, over x402 or MPP.
 
@@ -870,7 +883,7 @@ stage here takes every offered chain, over x402 or MPP.
 | MPP Tempo pull (a signed transaction) | broadcast after the tool answers, only for a response under 400 | not charged on Tempo pull: the transaction is never broadcast |
 | MPP Tempo push (a transfer already sent) | final before the call runs | the transfer is booked as a refund owed to the paying wallet, repaid after on-chain proof |
 
-Tempo is offered on every stage except \`research\` and the image routes. A
+Tempo is offered on every stage except ${PIPELINE_TOKEN}. A
 pull credential (\`payload\` type \`transaction\`) is a signed transaction
 the relay broadcasts only once the stage has answered under 400, so a stage
 that fails is never broadcast. A push credential (\`payload\` type \`hash\`)

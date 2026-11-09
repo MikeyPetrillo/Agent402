@@ -3358,6 +3358,8 @@ jobs:
           t node scripts/test-skill-step-inputs.js
           # A pack's copy matches its run mode (chain vs fanout); wallet-audit reads a token the wallet holds (offline)
           t node scripts/test-pack-copy-modes.js
+          # The content-pipeline guide and wiki derive the EVM-only, no-Tempo stages from isLongRunningSlug (offline)
+          t node scripts/test-content-pipeline-guide.js
           # Every model-backed tool says so in its description, and World Bank and FRED credits survive the listing cap (boots its own FREE_MODE server on port 0)
           t node scripts/test-catalog-honesty-markers.js
           # Refund backfill decides who is OWED money: who is in, who is out, idempotent (offline, temp ledgers)
