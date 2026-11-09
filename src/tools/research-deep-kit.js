@@ -333,7 +333,7 @@ export const RESEARCH_DEEP_TOOLS = [
   },
   {
     route: "POST /v1/research/market-brief", name: "Market / competitor brief (grounded)", slug: "market-brief", category: "llm", price: RESEARCH_TIERS["market-brief"].price,
-    description: "Name a market, category or company and get one cited MARKET / COMPETITOR BRIEF: how the market is defined and sized, the key players and what each offers, pricing, recent moves, how they differ, risks and a bottom line - every claim from live web research with citations, nothing from memory. The research pipeline with a competitive-intelligence plan. USDC (x402/MPP) or card (Stripe). Not cached.",
+    description: "Name a market, category or company and get one cited, model-backed MARKET / COMPETITOR BRIEF: how the market is defined and sized, the key players and what each offers, pricing, recent moves, how they differ, risks and a bottom line - every claim from live web research with citations, nothing from memory. The research pipeline with a competitive-intelligence plan. USDC (x402/MPP) or card (Stripe). Not cached.",
     tags: ["llm", "research", "web-search", "grounded", "citations", "deep-research", "agent", "premium"],
     discovery: { bodyType: "json", input: EXAMPLE, inputSchema: SCHEMA, output: { example: { ...OUT_EXAMPLE, meta: { ...OUT_EXAMPLE.meta, tier: "market-brief", synthesis_model: "anthropic/claude-opus-5" } } } },
     handler: makeResearchHandler("market-brief"),

@@ -362,14 +362,14 @@ const OUT_EXAMPLE = {
 export const TOKEN_RISK_TOOLS = [
   {
     route: "POST /v1/token-risk", name: "Token & contract risk report (on-chain evidence)", slug: "token-risk", category: "llm", price: TOKEN_RISK_TIERS["token-risk"].price,
-    description: "Hand over a token contract address (and chain) and get one evidence-based on-chain risk report: whether the source is verified, holder concentration (top-1 / top-10 share of supply, distinguishing pools/contracts from wallets), and supply + market context, with a top-holders appendix. Evidence, never a 'safe' or 'scam' verdict - on-chain checks can't see off-chain rugs, so a clean report is not an endorsement. USDC (x402/MPP). Not cached.",
+    description: "Hand over a token contract address (and chain) and get one evidence-based, model-backed on-chain risk report: whether the source is verified, holder concentration (top-1 / top-10 share of supply, distinguishing pools/contracts from wallets), and supply + market context, with a top-holders appendix. Evidence, never a 'safe' or 'scam' verdict - on-chain checks can't see off-chain rugs, so a clean report is not an endorsement. USDC (x402/MPP). Not cached.",
     tags: ["crypto", "token", "risk", "rug", "holders", "concentration", "contract", "verified-source", "onchain", "agent", "premium"],
     discovery: { bodyType: "json", input: { address: "0x4200000000000000000000000000000000000006", chain: "base" }, inputSchema: SCHEMA, output: { example: OUT_EXAMPLE } },
     handler: makeTokenRiskHandler("token-risk"),
   },
   {
     route: "POST /v1/token-risk/pro", name: "Token & contract risk report - PRO (static scan + reputation)", slug: "token-risk-pro", category: "llm", price: TOKEN_RISK_TIERS["token-risk-pro"].price,
-    description: "The deeper tier: everything in the standard report plus a deterministic static-pattern scan of the verified source (tx.origin auth, delegatecall, selfdestruct, unchecked calls, reentrancy surface, etc. - heuristic triage, not a formal audit) and a web reputation check. Still evidence, never a verdict. USDC (x402/MPP). Not cached.",
+    description: "The deeper tier (model-backed): everything in the standard report plus a deterministic static-pattern scan of the verified source (tx.origin auth, delegatecall, selfdestruct, unchecked calls, reentrancy surface, etc. - heuristic triage, not a formal audit) and a web reputation check. Still evidence, never a verdict. USDC (x402/MPP). Not cached.",
     tags: ["crypto", "token", "risk", "rug", "static-analysis", "solidity", "reputation", "contract", "onchain", "agent", "premium"],
     discovery: { bodyType: "json", input: { address: "0x4200000000000000000000000000000000000006", chain: "base" }, inputSchema: SCHEMA, output: { example: { ...OUT_EXAMPLE, meta: { ...OUT_EXAMPLE.meta, tier: "token-risk-pro" } } } },
     handler: makeTokenRiskHandler("token-risk-pro"),

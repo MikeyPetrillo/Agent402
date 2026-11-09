@@ -830,7 +830,7 @@ export const FILING_WATCH_TOOLS = [
     slug: "filing-report",
     category: "llm",
     price: FILING_TIERS["filing-report"].price,
-    description: "Name a US ticker and get one cited report on what the company just filed with the SEC: every filing in EDGAR's index for the window (8-K, 10-Q, 10-K, S-1, 424B4, DEF 14A and the rest, minus any form you exclude), the primary documents of the most consequential ones read in full and explained in plain language, and what changed versus the prior period where the filing itself says so, with a downloadable filings appendix. Not investment advice. Not cached.",
+    description: "Name a US ticker and get one cited, model-backed report on what the company just filed with the SEC: every filing in EDGAR's index for the window (8-K, 10-Q, 10-K, S-1, 424B4, DEF 14A and the rest, minus any form you exclude), the primary documents of the most consequential ones read in full and explained in plain language, and what changed versus the prior period where the filing itself says so, with a downloadable filings appendix. Not investment advice. Not cached.",
     tags: ["sec", "edgar", "filings", "8-k", "10-q", "10-k", "s-1", "proxy", "report", "equity", "agentic-finance", "x402", "mpp"],
     discovery: { bodyType: "json", input: { ticker: "AAPL", days: 30 }, inputSchema: SCHEMA, output: { example: OUT_EXAMPLE } },
     handler: makeFilingHandler("filing-report"),

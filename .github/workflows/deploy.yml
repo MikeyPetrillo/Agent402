@@ -3348,6 +3348,8 @@ jobs:
           t node scripts/test-skill-pack-steps.js
           # Every skill-pack step sends only input keys its tool declares (boots its own FREE_MODE server on port 0)
           t node scripts/test-skill-step-inputs.js
+          # Every model-backed tool says so in its description, and World Bank and FRED credits survive the listing cap (boots its own FREE_MODE server on port 0)
+          t node scripts/test-catalog-honesty-markers.js
           # Refund backfill decides who is OWED money: who is in, who is out, idempotent (offline, temp ledgers)
           t node scripts/test-refund-backfill.js
           # Upstream-spend meter records with PostHog OFF and in exact micro-dollars (offline)

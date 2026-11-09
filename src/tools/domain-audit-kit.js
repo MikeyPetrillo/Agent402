@@ -454,14 +454,14 @@ const OUT_EXAMPLE = {
 export const DOMAIN_AUDIT_TOOLS = [
   {
     route: "POST /v1/domain-audit", name: "Domain security & deliverability audit (graded)", slug: "domain-audit", category: "llm", price: DOMAIN_AUDIT_TIERS["domain-audit"].price,
-    description: "Hand over a domain and get one graded security & email-deliverability audit: SPF, DMARC, DKIM and MX (why your mail lands in spam), the web security headers, and the TLS certificate - every finding from a live probe, with an overall letter grade, a downloadable checks appendix, and a prioritized, specific list of fixes. USDC (x402/MPP) or card (Stripe). Not cached.",
+    description: "Hand over a domain and get one graded, model-backed security & email-deliverability audit: SPF, DMARC, DKIM and MX (why your mail lands in spam), the web security headers, and the TLS certificate - every finding from a live probe, with an overall letter grade, a downloadable checks appendix, and a prioritized, specific list of fixes. USDC (x402/MPP) or card (Stripe). Not cached.",
     tags: ["security", "domain", "email", "deliverability", "spf", "dmarc", "dkim", "tls", "headers", "audit", "premium", "agent"],
     discovery: { bodyType: "json", input: { domain: "example.com" }, inputSchema: SCHEMA, output: { example: OUT_EXAMPLE } },
     handler: makeDomainAuditHandler("domain-audit"),
   },
   {
     route: "POST /v1/domain-audit/pro", name: "Domain security audit - PRO (attack surface + stack)", slug: "domain-audit-pro", category: "llm", price: DOMAIN_AUDIT_TIERS["domain-audit-pro"].price,
-    description: "The deeper tier: everything in the standard audit plus the attack surface from Certificate Transparency logs (subdomains), the detected tech stack, and domain registration, in a longer graded report with a fuller remediation plan. USDC or card (Stripe). Not cached.",
+    description: "The deeper tier (model-backed): everything in the standard audit plus the attack surface from Certificate Transparency logs (subdomains), the detected tech stack, and domain registration, in a longer graded report with a fuller remediation plan. USDC or card (Stripe). Not cached.",
     tags: ["security", "domain", "email", "deliverability", "attack-surface", "subdomains", "tls", "audit", "premium", "agent"],
     discovery: { bodyType: "json", input: { domain: "example.com" }, inputSchema: SCHEMA, output: { example: { ...OUT_EXAMPLE, meta: { ...OUT_EXAMPLE.meta, tier: "domain-audit-pro" } } } },
     handler: makeDomainAuditHandler("domain-audit-pro"),

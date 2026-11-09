@@ -484,7 +484,7 @@ export const DOSSIER_TOOLS = [
   },
   {
     route: "POST /v1/dossier/max", name: "Company due-diligence dossier - MAX (exhaustive)", slug: "dossier-max", category: "llm", price: DOSSIER_TIERS["dossier-max"].price,
-    description: "The exhaustive due-diligence tier: more filings, a full year of Form 4 insider activity, wider web research (up to 8 angles), the widest source set, and a ~2,800-word cited dossier with a full source table. For a decision that warrants real diligence. USDC or card (Stripe). Not cached.",
+    description: "The exhaustive due-diligence tier (model-backed): more filings, a full year of Form 4 insider activity, wider web research (up to 8 angles), the widest source set, and a ~2,800-word cited dossier with a full source table. For a decision that warrants real diligence. USDC or card (Stripe). Not cached.",
     tags: ["research", "due-diligence", "company", "sec", "edgar", "filings", "insider", "stocks", "dossier", "premium", "agent"],
     discovery: { bodyType: "json", input: { ticker: "AAPL", focus: ["debt", "litigation"] }, inputSchema: SCHEMA, output: { example: { ...OUT_EXAMPLE, meta: { ...OUT_EXAMPLE.meta, tier: "dossier-max" } } } },
     handler: makeDossierHandler("dossier-max"),

@@ -275,7 +275,7 @@ export const FUND_TOOLS = [
   },
   {
     route: "POST /v1/fund/max", name: "Fund portfolio report - MAX (deep)", slug: "fund-report-max", category: "llm", price: FUND_TIERS["fund-report-max"].price,
-    description: "The deep tier: the full holdings table, wider quarter-over-quarter change analysis, more grounded web research, and a longer cited report on the manager's positioning. USDC or card (Stripe). Not cached.",
+    description: "The deep tier (model-backed): the full holdings table, wider quarter-over-quarter change analysis, more grounded web research, and a longer cited report on the manager's positioning. USDC or card (Stripe). Not cached.",
     tags: ["research", "13f", "fund", "institutional", "holdings", "sec", "edgar", "portfolio", "hedge-fund", "premium", "agent"],
     discovery: { bodyType: "json", input: { manager: "Scion Asset Management" }, inputSchema: SCHEMA, output: { example: { ...OUT_EXAMPLE, meta: { ...OUT_EXAMPLE.meta, tier: "fund-report-max" } } } },
     handler: makeFundHandler("fund-report-max"),
