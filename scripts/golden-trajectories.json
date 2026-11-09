@@ -53,7 +53,12 @@
     "ea": "0x5e11e70000000000000000000000000000000121",
     "eb": "0x5e11e70000000000000000000000000000000122",
     "ua": "0x5e11e70000000000000000000000000000000131",
-    "ub": "0x5e11e70000000000000000000000000000000132"
+    "ub": "0x5e11e70000000000000000000000000000000132",
+    "wa": "0x5e11e70000000000000000000000000000000141",
+    "xa": "0x5e11e70000000000000000000000000000000142",
+    "hn": "0x5e11e70000000000000000000000000000000143",
+    "ho": "0x5e11e70000000000000000000000000000000144",
+    "tq": "0x5e11e70000000000000000000000000000000145"
   },
   "sellers": {
     "qa": { "host": "quasar-prime", "slug": "quasar-spectrum", "about": "quasar spectrum analysis of a light curve", "price": 0.02, "payTo": "qa", "settled": 900, "payers": 40 },
@@ -119,7 +124,12 @@
     "eb": { "host": "eta-backup", "slug": "eta-ephemeris", "about": "eta ephemeris table, backup", "price": 0.02, "payTo": "eb", "settled": 100, "payers": 5 },
 
     "ua": { "host": "upsilon-edge", "slug": "upsilon-gauge", "about": "upsilon gauge reading", "price": 0.01, "payTo": "ua" },
-    "ub": { "host": "omicron-over", "slug": "omicron-sweep", "about": "omicron sweep reading", "price": 0.0101, "payTo": "ub" }
+    "ub": { "host": "omicron-over", "slug": "omicron-sweep", "about": "omicron sweep reading", "price": 0.0101, "payTo": "ub" },
+    "wa": { "host": "wren-get", "slug": "wren-forecast", "about": "wren forecast for a city", "price": 0.01, "payTo": "wa", "settled": 300, "payers": 10, "method": "GET", "requiresQuery": ["city"], "resourceQuery": "reversed" },
+    "xa": { "host": "yarrow-get", "slug": "yarrow-rune", "about": "yarrow rune glyph", "price": 0.01, "payTo": "xa", "settled": 300, "payers": 10, "method": "GET", "resourcePath": "/elsewhere" },
+    "hn": { "host": "heron-get", "slug": "heron-quill", "about": "heron quill reading", "price": 0.01, "payTo": "hn", "settled": 600, "payers": 12, "method": "GET" },
+    "ho": { "host": "heron-alt", "slug": "heron-quill-alt", "about": "heron quill reading, second source", "price": 0.01, "payTo": "ho", "settled": 300, "payers": 10, "method": "GET" },
+    "tq": { "host": "tern-get", "slug": "tern-ballad", "about": "tern ballad verse", "price": 0.01, "payTo": "tq", "settled": 300, "payers": 10, "method": "GET", "requiresQuery": ["verse"], "missingQueryStatus": 422 }
   },
   "tasks": [
     { "id": "quasar-proven-first", "task": "quasar spectrum", "expect": { "candidates": ["qa", "qb", "qc"], "tried": ["qa"], "chosen": "qa", "lane": "proven", "signed": [["qa", 20000]], "settle": { "buyer": "settled", "sellerCharged": ["qa"] }, "booking": { "outbound": [["qa", "delivered"]], "exposureUsd": 0 }, "receipt": { "seller": "qa", "sellerProof": null, "underlyingPriceUsd": 0.02 }, "status": 200 } },
@@ -200,6 +210,11 @@
     { "id": "internal-slug", "slug": "uuid", "internal": true, "expect": { "candidates": null, "tried": [], "chosen": "internal", "lane": null, "signed": [], "settle": { "buyer": "settled", "sellerCharged": [] }, "booking": { "outbound": [], "exposureUsd": 0 }, "receipt": { "seller": "internal", "sellerProof": null, "underlyingPriceUsd": 0.001 }, "status": 200 } },
     { "id": "quasar-after-everything", "task": "quasar spectrum", "expect": { "candidates": ["qa", "qb", "qc"], "tried": ["qa"], "chosen": "qa", "lane": "proven", "signed": [["qa", 20000]], "settle": { "buyer": "settled", "sellerCharged": ["qa"] }, "booking": { "outbound": [["qa", "delivered"]], "exposureUsd": 0 }, "receipt": { "seller": "qa", "sellerProof": null, "underlyingPriceUsd": 0.02 }, "status": 200 } },
     { "id": "polygon-listed-chain-buys", "task": "zephyx lattice", "payNetwork": "eip155:137", "expect": { "candidates": ["pa"], "tried": ["pa"], "chosen": "pa", "lane": "proven", "signed": [["pa", 10000]], "settle": { "buyer": "settled", "sellerCharged": ["pa"] }, "booking": { "outbound": [["pa", "delivered"]], "exposureUsd": 0 }, "receipt": { "seller": "pa", "sellerProof": null, "underlyingPriceUsd": 0.01 }, "status": 200 } },
-    { "id": "polygon-seller-not-bought-from-base", "task": "zephyx lattice", "expect": { "candidates": [], "tried": [], "chosen": null, "lane": null, "signed": [], "settle": { "buyer": "cancelled", "sellerCharged": [] }, "booking": { "outbound": [], "exposureUsd": 0 }, "receipt": null, "status": 404 } }
+    { "id": "polygon-seller-not-bought-from-base", "task": "zephyx lattice", "expect": { "candidates": [], "tried": [], "chosen": null, "lane": null, "signed": [], "settle": { "buyer": "cancelled", "sellerCharged": [] }, "booking": { "outbound": [], "exposureUsd": 0 }, "receipt": null, "status": 404 } },
+    { "id": "get-seller-bound-to-params", "task": "wren forecast", "params": { "city": "Paris", "units": "metric" }, "expect": { "candidates": ["wa"], "tried": ["wa"], "chosen": "wa", "lane": "proven", "signed": [["wa", 10000]], "settle": { "buyer": "settled", "sellerCharged": ["wa"] }, "booking": { "outbound": [["wa", "delivered"]], "exposureUsd": 0 }, "receipt": { "seller": "wa", "sellerProof": null, "underlyingPriceUsd": 0.01 }, "status": 200, "requests": [["wa", "probe", ""], ["wa", "probe", "?city=Paris&units=metric"], ["wa", "bare", "?city=Paris&units=metric"], ["wa", "paid", "?city=Paris&units=metric"]] } },
+    { "id": "get-seller-param-values-stay-in-the-query", "task": "wren forecast", "params": { "city": "http://169.254.169.254/latest@127.0.0.1:1/#frag", "units": "//10.0.0.1/?x=1&city=Rome" }, "expect": { "candidates": ["wa"], "tried": ["wa"], "chosen": "wa", "lane": "proven", "signed": [["wa", 10000]], "settle": { "buyer": "settled", "sellerCharged": ["wa"] }, "booking": { "outbound": [["wa", "delivered"]], "exposureUsd": 0 }, "receipt": { "seller": "wa", "sellerProof": null, "underlyingPriceUsd": 0.01 }, "status": 200, "requests": [["wa", "probe", ""], ["wa", "probe", "?city=http%3A%2F%2F169.254.169.254%2Flatest%40127.0.0.1%3A1%2F%23frag&units=%2F%2F10.0.0.1%2F%3Fx%3D1%26city%3DRome"], ["wa", "bare", "?city=http%3A%2F%2F169.254.169.254%2Flatest%40127.0.0.1%3A1%2F%23frag&units=%2F%2F10.0.0.1%2F%3Fx%3D1%26city%3DRome"], ["wa", "paid", "?city=http%3A%2F%2F169.254.169.254%2Flatest%40127.0.0.1%3A1%2F%23frag&units=%2F%2F10.0.0.1%2F%3Fx%3D1%26city%3DRome"]] } },
+    { "id": "challenge-for-another-path-not-signed", "task": "yarrow rune", "params": { "q": "abc" }, "expect": { "candidates": ["xa"], "tried": ["xa"], "chosen": null, "lane": null, "signed": [], "settle": { "buyer": "cancelled", "sellerCharged": [] }, "booking": { "outbound": [], "exposureUsd": 0 }, "receipt": null, "status": 502, "requests": [["xa", "probe", ""], ["xa", "bare", "?q=abc"]] } },
+    { "id": "unchosen-get-candidate-sees-no-params", "task": "heron quill", "params": { "harbor": "Leith" }, "expect": { "candidates": ["hn", "ho"], "tried": ["hn"], "chosen": "hn", "lane": "proven", "signed": [["hn", 10000]], "settle": { "buyer": "settled", "sellerCharged": ["hn"] }, "booking": { "outbound": [["hn", "delivered"]], "exposureUsd": 0 }, "receipt": { "seller": "hn", "sellerProof": null, "underlyingPriceUsd": 0.01 }, "status": 200, "requests": [["hn", "probe", ""], ["ho", "probe", ""], ["hn", "bare", "?harbor=Leith"], ["hn", "paid", "?harbor=Leith"]] } },
+    { "id": "get-seller-422-bound-probe", "task": "tern ballad", "params": { "verse": "2" }, "expect": { "candidates": ["tq"], "tried": ["tq"], "chosen": "tq", "lane": "proven", "signed": [["tq", 10000]], "settle": { "buyer": "settled", "sellerCharged": ["tq"] }, "booking": { "outbound": [["tq", "delivered"]], "exposureUsd": 0 }, "receipt": { "seller": "tq", "sellerProof": null, "underlyingPriceUsd": 0.01 }, "status": 200, "requests": [["tq", "probe", ""], ["tq", "probe", "?verse=2"], ["tq", "bare", "?verse=2"], ["tq", "paid", "?verse=2"]] } }
   ]
 }

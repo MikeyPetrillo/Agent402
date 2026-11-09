@@ -623,8 +623,8 @@ const near = (a, b) => Math.abs(a - b) < 1e-9;
   const refusalCalls = pay.match(/^.*noteSellerRefusal\(.*$/gm) || [];
   const gatedCalls = refusalCalls.filter((l) => /^\s*if \((memoizeDelivery|memoize)\) noteSellerRefusal\(/.test(l));
   const definitions = refusalCalls.filter((l) => /^export function noteSellerRefusal\(/.test(l));
-  ok(refusalCalls.length === 5 && gatedCalls.length === 4 && definitions.length === 1,
-    "no other refusal-memo write exists in the payer (definition + four gated calls: domain refusal, the token's own domain off Base, split price, paid retry)");
+  ok(refusalCalls.length === 6 && gatedCalls.length === 5 && definitions.length === 1,
+    "no other refusal-memo write exists in the payer (definition + five gated calls: a challenge for another resource, domain refusal, the token's own domain off Base, split price, paid retry)");
 }
 
 loud();

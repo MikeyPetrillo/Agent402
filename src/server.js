@@ -1702,7 +1702,7 @@ async function labelledSnapshotAsync(snapshot) {
   promise.finally(() => { if (labelledBuild?.promise === promise) labelledBuild = null; }).catch(() => {});
   return promise;
 }
-async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wantModel = null, onlyUrl = null } = {}) {
+async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wantModel = null, onlyUrl = null, params = null } = {}) {
   const sameUrl = (u) => { try { return new URL(u).href === new URL(onlyUrl).href; } catch { return false; } };
   // Filled by the dispatch gate below; read by route-execute when nothing
   // resolves, so the refusal can say which world it is in.
@@ -1907,6 +1907,7 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
     if ((judgedSelection?.method === "judged" || judgedSelection?.method === "judged-tie") && candidates[0]) candidates[0] = { ...candidates[0], judgedSelection };
   }
   const { probePublicUrl } = await import("./tools/fetch-guard.js");
+  const { boundRequestUrl, isQueryMethod } = await import("./bound-request-url.js");
   const resolved = [];
   const { sellerRouteRefusedRecently, sellerServesModel, refreshSellerMemos } = await import("./x402-buyer.js");
   // Strikes another replica recorded reach this one's memos before they are read.
@@ -1942,6 +1943,15 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
       const served = await sellerServesModel(r.url, wantModel);
       if (served.verdict === "not-served") { console.log(`[sor] skipping ${chain} candidate ${r.seller}: its model list (${served.ids} ids at ${served.modelsUrl}) does not carry "${wantModel}"`); continue; }
     }
+    // A body seller keeps the empty-body probe. A GET or HEAD seller is first
+    // probed at its bare listing URL, as every seller is, so a caller's inputs
+    // reach no seller that answers 402 without them (only the seller paid
+    // gets them, at the URL the paid call builds). Only a bare 400 or 422, the
+    // "inputs required" answers, earns one more probe at the URL bound to the
+    // caller's params (src/bound-request-url.js, the builder route-execute
+    // pays through); params that cannot ride a query set that candidate
+    // aside, and route-execute words the refusal when none is left.
+    const probeMethod = (r.method || "POST").toUpperCase();
     try {
       // SSRF: the seller URL is external, crawled data — a proven seller's
       // registered origin could still DNS-rebind to a private address between
@@ -1951,12 +1961,27 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
       // assertPublicUrl before the request, the connection pinned to the
       // validated IP (parity with payX402), and no redirect followed off the
       // validated host.
-      const probe = await probePublicUrl(r.url, {
-        method: (r.method || "POST").toUpperCase(),
-        headers: { Accept: "application/json", ...((r.method || "POST").toUpperCase() !== "GET" ? { "Content-Type": "application/json" } : {}) },
-        ...((r.method || "POST").toUpperCase() !== "GET" ? { body: "{}" } : {}),
+      const probeAt = (u) => probePublicUrl(u, {
+        method: probeMethod,
+        headers: { Accept: "application/json", ...(!isQueryMethod(probeMethod) ? { "Content-Type": "application/json" } : {}) },
+        ...(!isQueryMethod(probeMethod) ? { body: "{}" } : {}),
         timeoutMs: 6000,
       });
+      let probe = await probeAt(r.url);
+      if (isQueryMethod(probeMethod) && (probe.status === 400 || probe.status === 422)) {
+        let boundUrl;
+        try { boundUrl = boundRequestUrl(r.url, { method: probeMethod, params: params || {}, slug: r.slug }); }
+        catch (e) {
+          gateDrops.total++;
+          gateDrops.byReason.params_unbindable = (gateDrops.byReason.params_unbindable || 0) + 1;
+          if (!gateDrops.paramsRefusal) gateDrops.paramsRefusal = String(e?.message || e).slice(0, 300);
+          continue;
+        }
+        if (boundUrl !== r.url) {
+          try { await probe.body?.cancel(); } catch { /* already read or closed */ }
+          probe = await probeAt(boundUrl);
+        }
+      }
       live = probe.status === 402;
       if (live && r.dynamic) {
         // Dynamic-priced MPP seller: the price exists only on the live 402.
