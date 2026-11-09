@@ -9,6 +9,7 @@
 // a random 40000-59999 port meeting an ephemeral socket (EADDRINUSE).
 //
 //   node scripts/test-port-hygiene.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readdirSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
