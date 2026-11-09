@@ -43,7 +43,7 @@ export function meteredClientTimeoutSeconds() {
  *  gave up during the ~1 s settlement after a 4-7 s answer were charged and
  *  not served, then refunded by hand). Derived from the upstream bound. */
 export function meteredTimeoutSentence() {
-  return `Set a client timeout of at least ${meteredClientTimeoutSeconds()} s: the answer is generated and the payment settled before the response is sent, which takes a few seconds on most calls and longer for long answers, and a client that disconnects after the payment settles is charged without the answer (the charge is booked as owed and refunded).`;
+  return `Set a client timeout of at least ${meteredClientTimeoutSeconds()} s: the answer is generated and the payment settled before the response is sent, which takes a few seconds on most calls and longer for long answers, and a client that disconnects after the payment settles is charged without the answer (the charge is recorded as owed and reviewed for a refund).`;
 }
 
 /** The three routes as one inline list. */

@@ -104,7 +104,7 @@ Two ways to pay it:
 
 The catalog lists the tier at its $0.001 floor ("from"), and every chat model on `GET /v1/models` carries `meteredFromUsd`. Use the flat tiers when you want a known price per call regardless of length; use the metered tier when calls vary a lot in size and you want to pay for the size you send.
 
-Set a client timeout of at least 120 s on the metered routes. The answer is generated and the payment settled before the response is sent, which takes a few seconds on most calls and longer for long answers, and a client that disconnects after the payment settles is charged without the answer (the charge is booked as owed and refunded).
+Set a client timeout of at least 120 s on the metered routes. The answer is generated and the payment settled before the response is sent, which takes a few seconds on most calls and longer for long answers, and a client that disconnects after the payment settles is charged without the answer (the charge is recorded as owed and reviewed for a refund).
 
 **A flat-tier answer tells you when metered was cheaper.** An OpenAI SDK puts `base_url + /chat/completions` on the flat route by convention, so a buyer who never reads the docs can spend a long time on a $0.02 call that the metered route would have quoted at $0.001. A non-streaming flat-tier response therefore carries an additive `agent402_metered` object whenever the same body would have been at least 25% cheaper metered:
 
