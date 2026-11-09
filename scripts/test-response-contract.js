@@ -242,6 +242,8 @@ for (const kw of ["$ref", "allOf", "anyOf", "oneOf", "not", "if", "patternProper
     /^const packed = packResponseContract\(responseContractOf\(resolveLocalRefs\(op, openapi\)\)\);$/,
     /^return packed \? \{ responseContract: packed \} : \{\};$/,
     /^if \(key === "requestContract" \|\| key === "responseContract"\) continue;$/,
+    // The crawl-side store's copy: a row with neither contract is copied whole.
+    /^if \(!ownKey\.call\(row, "requestContract"\) && !ownKey\.call\(row, "responseContract"\) && Object\.getOwnPropertySymbols\(row\)\.length === 0\) return \{ \.\.\.row \};$/,
     /^const responseContract = ownContractTuple\(o, "responseContract"\);$/,
     /^\.\.\.\(responseContract \? \{ responseContract \} : \{\}\),$/,
     /^\.\.\.responseContractProjection\(t\),$/,
