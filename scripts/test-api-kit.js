@@ -1127,7 +1127,7 @@ ok(threw, `missing "payload" rejected`);
 // RR1. Discovery example round-trips byte-for-byte through the handler.
 {
   const t = tool("openapi-resolve-refs");
-  const out = t.handler(t.discovery.input);
+  const out = await t.handler(t.discovery.input);
   const expected = t.discovery.output.example;
   ok(JSON.stringify(out) === JSON.stringify(expected),
     `openapi-resolve-refs example round-trips exactly\n  got      ${JSON.stringify(out)}\n  expected ${JSON.stringify(expected)}`);
@@ -1140,7 +1140,7 @@ ok(threw, `missing "payload" rejected`);
     paths: { "/u": { get: { responses: { "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/U" } } } } } } } },
     components: { schemas: { U: { type: "string" } } },
   };
-  const r = run("openapi-resolve-refs", { spec });
+  const r = await run("openapi-resolve-refs", { spec });
   ok(r.spec.paths["/u"].get.responses["200"].content["application/json"].schema.type === "string",
     `simple ref inlined to the target type`);
   ok(r.resolved === 1, `resolved count=1, got ${r.resolved}`);
@@ -1155,7 +1155,7 @@ ok(threw, `missing "payload" rejected`);
       B: { type: "integer" },
     } },
   };
-  const r = run("openapi-resolve-refs", { spec });
+  const r = await run("openapi-resolve-refs", { spec });
   const schema = r.spec.paths["/x"].get.responses["200"].content["application/json"].schema;
   ok(schema.type === "object" && schema.properties.b.type === "integer",
     `nested ref fully inlined`);
@@ -1171,7 +1171,7 @@ ok(threw, `missing "payload" rejected`);
     paths: { "/n": { get: { responses: { "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/Node" } } } } } } } },
     components: { schemas: { Node: { type: "object", properties: { next: { $ref: "#/components/schemas/Node" } } } } },
   };
-  const r = run("openapi-resolve-refs", { spec });
+  const r = await run("openapi-resolve-refs", { spec });
   const schema = r.spec.paths["/n"].get.responses["200"].content["application/json"].schema;
   ok(schema.type === "object" && schema.properties.next.$ref === "#/components/schemas/Node",
     `cycle leaves inner $ref intact`);
@@ -1188,7 +1188,7 @@ ok(threw, `missing "payload" rejected`);
       B: { type: "object", properties: { a: { $ref: "#/components/schemas/A" } } },
     } },
   };
-  const r = run("openapi-resolve-refs", { spec });
+  const r = await run("openapi-resolve-refs", { spec });
   ok(r.circular.includes("#/components/schemas/A"), `two-step cycle includes A`);
   ok(r.circular.filter((x) => x === "#/components/schemas/A").length === 1, `each circular ref recorded once`);
 }
@@ -1200,7 +1200,7 @@ ok(threw, `missing "payload" rejected`);
     paths: { "/m": { get: { responses: { "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/Missing" } } } } } } } },
     components: { schemas: {} },
   };
-  const r = run("openapi-resolve-refs", { spec });
+  const r = await run("openapi-resolve-refs", { spec });
   ok(r.spec.paths["/m"].get.responses["200"].content["application/json"].schema.$ref === "#/components/schemas/Missing",
     `unresolved ref left intact`);
   ok(r.unresolved[0] === "#/components/schemas/Missing", `unresolved reports the ref`);
@@ -1212,7 +1212,7 @@ ok(threw, `missing "payload" rejected`);
   const spec = {
     paths: { "/e": { get: { responses: { "200": { content: { "application/json": { schema: { $ref: "http://example.com/schema.json" } } } } } } } },
   };
-  const r = run("openapi-resolve-refs", { spec });
+  const r = await run("openapi-resolve-refs", { spec });
   ok(r.spec.paths["/e"].get.responses["200"].content["application/json"].schema.$ref === "http://example.com/schema.json",
     `external ref left intact`);
   ok(r.external[0] === "http://example.com/schema.json", `external reports the ref`);
@@ -1227,7 +1227,7 @@ ok(threw, `missing "payload" rejected`);
     paths: { "/u": { get: { responses: { "200": { schema: { $ref: "#/definitions/User" } } } } } },
     definitions: { User: { type: "object", properties: { id: { type: "string" } } } },
   };
-  const r = run("openapi-resolve-refs", { spec });
+  const r = await run("openapi-resolve-refs", { spec });
   ok(r.spec.paths["/u"].get.responses["200"].schema.type === "object", `Swagger 2.x definitions ref resolves`);
 }
 
@@ -1240,7 +1240,7 @@ ok(threw, `missing "payload" rejected`);
     } } } } } } },
     components: { schemas: { U: { type: "string" } } },
   };
-  const r = run("openapi-resolve-refs", { spec });
+  const r = await run("openapi-resolve-refs", { spec });
   const schema = r.spec.paths["/s"].get.responses["200"].content["application/json"].schema;
   ok(schema.type === "string", `target value replaces the $ref node`);
   ok(schema.description === undefined && schema.nullable === undefined, `sibling keys are dropped`);
@@ -1256,7 +1256,7 @@ ok(threw, `missing "payload" rejected`);
     } } } } } } },
     components: { schemas: { "weird/key~1": { type: "boolean" } } },
   };
-  const r = run("openapi-resolve-refs", { spec });
+  const r = await run("openapi-resolve-refs", { spec });
   ok(r.spec.paths["/w"].get.responses["200"].content["application/json"].schema.type === "boolean",
     `pointer escapes (~1 → /, ~0 → ~) decoded correctly`);
 }
@@ -1271,7 +1271,7 @@ ok(threw, `missing "payload" rejected`);
     },
     components: { schemas: { X: { type: "number" } } },
   };
-  const r = run("openapi-resolve-refs", { spec });
+  const r = await run("openapi-resolve-refs", { spec });
   ok(r.spec.paths["/a"].get.responses["200"].content["application/json"].schema.type === "number"
     && r.spec.paths["/b"].get.responses["200"].content["application/json"].schema.type === "number",
     `sibling refs to same target both resolve`);
@@ -1284,7 +1284,7 @@ ok(threw, `missing "payload" rejected`);
     paths: { "/j": { get: { responses: { "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/U" } } } } } } } },
     components: { schemas: { U: { type: "string" } } },
   };
-  const r = run("openapi-resolve-refs", { spec: JSON.stringify(spec) });
+  const r = await run("openapi-resolve-refs", { spec: JSON.stringify(spec) });
   ok(r.spec.paths["/j"].get.responses["200"].content["application/json"].schema.type === "string",
     `JSON-string spec accepted`);
 }
@@ -1292,7 +1292,7 @@ ok(threw, `missing "payload" rejected`);
 // RR13. Missing "spec" rejected with a 400-shaped error.
 {
   let err = null;
-  try { run("openapi-resolve-refs", {}); } catch (e) { err = e; }
+  try { await run("openapi-resolve-refs", {}); } catch (e) { err = e; }
   ok(err && err.statusCode === 400 && /spec/i.test(err.message),
     `missing spec rejected with 400, got: ${err && err.message}`);
 }
