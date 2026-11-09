@@ -15,6 +15,7 @@ export async function runOp(op, p = {}) {
     case "markdown": return markdownFromHtml(p.text, p.mode);
     case "visibleText": return visibleTextFromHtml(p.html, p.url, p.selector);
     case "emailHtml": return emailHtmlReport(p.html);
+    case "markdownToHtml": return (await import("./markdown-render.js")).renderMarkdown(p.text);
     case "tool": {
       // The html-kit tools' own handlers (the catalog entries wrap them in runHtml).
       toolHandlers ||= (await import("./html-kit.js")).HTML_TOOL_HANDLERS;

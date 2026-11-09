@@ -12,6 +12,9 @@ import { KIT2 } from "../src/tools/kit2.js";
 import { KIT } from "../src/tools/kit.js";
 import { TEXT_ANALYSIS_TOOLS } from "../src/tools/text-analysis-kit.js";
 import { emailGuard } from "../src/tools/email-guard-kit.js";
+import { runHtml } from "../src/tools/html-pool.js";
+import { MARKDOWN_INLINE_MAX_CHARS } from "../src/tools/markdown-render.js";
+import { marked } from "marked";
 import { sentenceEnds, countSentenceEnds, splitOnSentenceEnds } from "../src/tools/sentence-ends.js";
 
 let pass = 0, fail = 0;
@@ -27,6 +30,17 @@ const bestOf = async (fn) => {
     if (best > BOUND_MS * 8) break;
   }
   return { ms: best, out, err };
+};
+// Longest gap between two turns of the event loop while `fn` runs.
+const loopHold = async (fn) => {
+  let hold = 0, last = performance.now();
+  const iv = setInterval(() => { const now = performance.now(); hold = Math.max(hold, now - last - 5); last = now; }, 5);
+  const t = performance.now();
+  let out, err;
+  try { out = await fn(); } catch (e) { err = e; }
+  await new Promise((r) => setTimeout(r, 10));
+  clearInterval(iv);
+  return { hold, ms: performance.now() - t, out, err };
 };
 // Deterministic random numbers, so a failure reproduces.
 function rng(seed) {
@@ -284,6 +298,51 @@ function rng(seed) {
       ok(r.ms < BOUND_MS, name + ": " + label + " reads in " + r.ms.toFixed(1) + "ms");
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// markdown-to-html: short documents render in place, longer ones in the HTML
+// worker under a deadline.
+// ---------------------------------------------------------------------------
+{
+  const tool = KIT.find((t) => t.slug === "markdown-to-html");
+  ok(JSON.stringify(await tool.handler(tool.discovery.input)) === JSON.stringify(tool.discovery.output.example), "markdown-to-html: the published example answers as published");
+  const blocks = ["# Title\n\n", "Some *text* with **bold**, _under_ and `code`.\n\n", "- one\n- two\n  - nested\n\n", "1. first\n2. second\n\n", "> quoted\n> lines\n\n", "[a link](https://example.com \"t\") and ![img](a.png)\n\n", "| a | b |\n|---|---|\n| 1 | 2 |\n\n", "```js\nconst x = 1 < 2;\n```\n\n", "~~gone~~ and <b>html</b> &amp; entities\n\n", "---\n\n", "Line one  \nline two\\\nline three\n\n", "Unclosed *emphasis and **strong here\n\n", "- [ ] todo\n- [x] done\n\n", "Auto https://example.com/x?y=1 link.\n\n", "Setext\n======\n\n", "    indented code\n\n", "[ref]: https://example.com\n\nA [ref] here.\n\n"];
+  const rand = rng(77);
+  let same = 0, inPlace = 0, inWorker = 0;
+  const RUNS = 120;
+  for (let i = 0; i < RUNS; i++) {
+    const markdown = Array.from({ length: i < 40 ? 1 + Math.floor(rand() * 8) : 60 + Math.floor(rand() * 600) }, () => blocks[Math.floor(rand() * blocks.length)]).join("");
+    if (markdown.length <= MARKDOWN_INLINE_MAX_CHARS) inPlace++; else inWorker++;
+    const got = await tool.handler({ markdown });
+    if (got.html === marked.parse(markdown, { async: false }) && Object.keys(got).join() === "html") same++;
+  }
+  ok(same === RUNS && inPlace > 20 && inWorker > 20, "markdown-to-html: " + same + "/" + RUNS + " ordinary documents render as the library does on its own (" + inPlace + " in place, " + inWorker + " in the worker)");
+
+  // The longest document rendered in place, in the shapes that cost the most.
+  for (const [name, unit] of [["*a ", "*a "], ["_a ", "_a "], ["**a ", "**a "], ["~~a ", "~~a "], ["> ", "> "], ["[", "["]]) {
+    const r = await bestOf(() => tool.handler({ markdown: unit.repeat(Math.floor(MARKDOWN_INLINE_MAX_CHARS / unit.length)) }));
+    ok(r.ms < BOUND_MS / 2, "markdown-to-html: " + MARKDOWN_INLINE_MAX_CHARS + " characters of " + JSON.stringify(name) + " render in place in " + r.ms.toFixed(1) + "ms");
+  }
+  // Past that length the event loop is not held, and the render is stopped at its deadline.
+  const hostile = [["unclosed emphasis", "*a ".repeat(30_000)], ["unclosed strong", "**a ".repeat(22_000)], ["nested quotes", "> ".repeat(45_000)], ["bracket run", "[".repeat(90_000)], ["emphasis just past the in-place length", "*a ".repeat(700)]];
+  for (const [name, markdown] of hostile) {
+    const r = await loopHold(() => tool.handler({ markdown }));
+    ok(r.hold < BOUND_MS, "markdown-to-html: " + name + " (" + markdown.length + " characters) holds the event loop " + r.hold.toFixed(0) + "ms");
+    ok(r.ms < 4000 && (r.out ? typeof r.out.html === "string" : r.err?.statusCode === 400), "markdown-to-html: " + name + " answers " + (r.out ? "200" : r.err?.statusCode + " " + r.err?.message) + " in " + r.ms.toFixed(0) + "ms");
+  }
+  const stopped = await loopHold(() => tool.handler({ markdown: "*a ".repeat(30_000) }));
+  ok(stopped.err?.statusCode === 400 && /2 s/.test(stopped.err.message), "markdown-to-html: a render past the deadline answers 400 naming it (" + stopped.err?.message + ")");
+  // Renders past the deadline never hold every worker: an HTML job beside two of them is served at once.
+  const t0 = performance.now();
+  const slow = [tool.handler({ markdown: "*a ".repeat(30_000) }).catch((e) => e), tool.handler({ markdown: "_a ".repeat(30_000) }).catch((e) => e)];
+  const meta = await runHtml("meta", { html: "<html><head><title>T</title></head><body>x</body></html>", url: "https://example.com/" });
+  const metaMs = performance.now() - t0;
+  ok(meta && metaMs < 1500, "markdown-to-html: an HTML job beside two slow renders is served in " + metaMs.toFixed(0) + "ms");
+  const ends = await Promise.all(slow);
+  ok(ends.every((e) => e?.statusCode === 400), "markdown-to-html: both slow renders end as 400s");
+  const after = await tool.handler({ markdown: "# still here\n\n" + "text ".repeat(600) });
+  ok(after.html.startsWith("<h1>still here</h1>"), "markdown-to-html: the next document renders after a stopped one");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
