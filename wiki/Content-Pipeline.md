@@ -10,12 +10,14 @@ A content pipeline (a podcast, a short video, a narrated explainer) is a chain o
 | Research report | `research` (also `research-pro`, `research-max`) | yes | `src/tools/research-deep-kit.js` |
 | Script | `v1-chat-metered` (quoted per request), or a flat `/v1` chat tier | yes | `src/tools/llm-gateway-kit.js` |
 | Voiceover | `tts-lite`, `tts`, `tts-hd` | yes | `src/tools/tts-kit.js` |
-| Images | `v1-images-fast`, `v1-images-pro`, `v1-images-edit` | yes | `src/tools/llm-images-fast-kit.js` |
+| Images | `v1-images-fast`, `v1-images-pro` | yes | `src/tools/llm-images-fast-kit.js` |
+| Image edits | `v1-images-edit` | yes | `src/tools/llm-images-fast-kit.js` |
 | Transcription | `transcribe`, `transcribe-pro` (a URL); `v1-audio-transcriptions` (a multipart upload) | yes | `src/tools/stt-kit.js` |
 | Subtitles | `srt-convert` (also free with proof-of-work) | no | `src/tools/kit2.js` |
 | Subtitles in one call | `skill-subtitle-pipeline` | yes | `src/tools/skill-runner.js` |
 | Dubbing | `dub` | yes | `src/tools/dub-kit.js` |
-| Media checks | `media-info`, `audio-convert`, `audio-normalize` | no | `src/tools/media-kit.js` |
+| Media checks | `media-info` | no | `src/tools/media-kit.js` |
+| Audio conversion | `audio-convert`, `audio-normalize` | no | `src/tools/media-kit.js` |
 
 Prices and each route's chains are on [`/api/pricing`](https://agent402.tools/api/pricing). Speech, dubbing and metered chat are quoted per request, so the 402 for that body is the price.
 
