@@ -1889,6 +1889,8 @@ jobs:
           t node scripts/test-find-reader-aliases.js
           # Discovery gate: every compute under a deadline, slot released, self-healing in-flight count, perf fields (booted, offline)
           t node scripts/test-discovery-deadline.js
+          # Search refusals: counted by route, rule and keyed client digest, capped with exact totals, kept 8 days, operator route, 429 fields (booted, offline)
+          t node scripts/test-discovery-refusals.js
           # Router worker pool: worker answers equal in-thread, /health stays fast under a burst, crash and deadline recovery, refresh reaches the worker (offline, boots a server from the fixture)
           t node scripts/test-router-worker.js
           t node scripts/test-router-worker-prod-boot.js

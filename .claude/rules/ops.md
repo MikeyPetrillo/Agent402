@@ -107,6 +107,18 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   `X_SEARCH_STATS_FLUSH_MS` (default 60000, at least 1000). The files are used only without a
   state database; `ownStoreEnv` (`scripts/lib/own-stores.js`) points both into a booted test
   server's own directory.
+- **Search refusals:** `src/discovery-refusals.js` counts every search `/api/find` and `/api/route`
+  turn away, per UTC day, by route and rule (`load-gate`, `client-rate`, `client-compute`,
+  `shared-compute`, `inflight`, `deadline`) under a keyed, day-scoped digest of the limiter's client
+  key (never an address) and a User-Agent family, and marks a refused client that is served a
+  search or finishes a paid or free tool call later that day. One state document
+  (`discovery-refusals`), folded in on a timer and at shutdown, 8 days kept; at most
+  `DISCOVERY_REFUSALS_MAX_CLIENTS` (default 500, at most 5000) clients a day, the smallest folded
+  into `other` so totals stay exact. Read at `/__operator/discovery-refusals.json`. Env:
+  `DISCOVERY_REFUSALS_FILE` (default `/data/discovery-refusals.json`, used only without a state
+  database; `ownStoreEnv` points it into a test server's own directory),
+  `DISCOVERY_REFUSALS_FLUSH_MS` (default 300000, at least 1000). The connector's `catalog.find`
+  runs under the MCP limiter, not these rules, and is not counted here.
 - **X data ceilings:** `X_DATA_DAILY_MAX_USD` (default 1) is the alarm: past it the X data tools
   keep serving and `xDataSpend` on `/api/gateway-status` reads `over`; `0` refuses every call
   (`off`). `X_DATA_DAILY_HARD_MAX_USD` (default 5 times the alarm ceiling; never under it) is

@@ -6,6 +6,7 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { REPO_URL, repoUrl } from "./repo-link.js";
 import { DEFAULTS as TRAFFIC_DEFAULTS } from "./traffic-classifier.js";
 import { backupKeepDays } from "./backup.js";
+import { KEEP_DAYS as DISCOVERY_REFUSALS_KEEP_DAYS } from "./discovery-refusals.js";
 import { WISH_STALE_DAYS, wishRetentionDays } from "./wish.js";
 import { auditRetentionDays, AUDIT_SWEEP_MS } from "./memory-retention.js";
 import { ADDRESS_MAX_AGE_MS, MAX_SEND_FAILURES, RECORD_KEEP_MS } from "./followups.js";
@@ -152,7 +153,9 @@ so every claim below is verifiable in code.</p>
   <a href="/terms">terms</a>) are kept in our Redis store, with the address (for IPv6, its
   /64 prefix) in the counter's key, for one hour, or 24 hours for the per-client daily allowance. We also
   keep keyed hashes of addresses, never the addresses themselves: in daily traffic statistics (request
-  classes, paths and User-Agent product names; each day is deleted after ${TRAFFIC_DEFAULTS.retentionDays} days), in the record that limits how often a dropped
+  classes, paths and User-Agent product names; each day is deleted after ${TRAFFIC_DEFAULTS.retentionDays} days), in a daily count of the
+  searches our free search routes turned away under their limits and whether that client was served or
+  completed a call later the same day (with the User-Agent's product name; each day is deleted after ${DISCOVERY_REFUSALS_KEEP_DAYS} days), in the record that limits how often a dropped
   connection is excused from payment (24 hours), in the record that an address paid recently, which
   raises its limit on unpaid price quotes (one hour at most), and on the demand board (combined with the day).
   The tollbooth waitlist form is closed, and every record it collected has been deleted from our

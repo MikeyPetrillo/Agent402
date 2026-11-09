@@ -690,6 +690,7 @@ import { createRegistrationLimiter } from "./registration-limits.js";
 import { flushJsonDocuments } from "./json-document.js";
 import { flushSqlQueryStats, sqlQueryStatsReport } from "./sql-query-stats.js";
 import { flushXSearchStats, xSearchStatsReport } from "./x-search-stats.js";
+import { noteDiscoveryRefusal, noteDiscoveryServed, noteDiscoveryClientCall, flushDiscoveryRefusals, loadDiscoveryRefusals, discoveryRefusalsReport } from "./discovery-refusals.js";
 import { loadRemovedOrigins } from "./x402-index.js";
 import { unloadedStores } from "./store-retry.js";
 import { dispatchEligibility, dispatchLegend } from "./dispatch-eligibility.js";
@@ -2806,6 +2807,9 @@ app.use((req, res, next) => {
   // client by the MCP limiter), so both are protected too.
   if (cp.startsWith("/v1/") || cp === "/v1" || cp.startsWith("/v1beta/") || cp.startsWith("/api/chain/") || cp === "/mcp" || cp.startsWith("/mcp/") || Object.prototype.hasOwnProperty.call(CATALOG, `GET ${cp}`) || Object.prototype.hasOwnProperty.call(CATALOG, `POST ${cp}`)) return next();
   noteShed(why);
+  // A search turned away here is counted with the discovery rules' own
+  // refusals (src/discovery-refusals.js), under the rule "load-gate".
+  if ((cp === "/api/find" || cp === "/api/route") && !isSyntheticRequest(req)) noteDiscoveryRefusal({ address: clientIp(req), userAgent: req.headers["user-agent"], route: cp.slice(5), rule: "load-gate" });
   return shedResponse(res, 2);
 });
 // Canonical host: www.<host> answers a 301 to the apex (path + query kept),
@@ -3048,6 +3052,14 @@ app.get("/__operator/tool-failures.json", async (req, res) => {
   const onchainSqlQueries = await sqlQueryStatsReport().catch(() => null);
   const xSearchAuthors = await xSearchStatsReport().catch(() => null);
   res.set("Cache-Control", "private, no-store").json({ ...(await toolFailureMonitor().report()), robinhoodOrder: robinhoodOrderView(), chainRefusalHolds: chainRefusalHolds(), onchainSqlQueries, xSearchAuthors });
+});
+// Who the free search routes refuse (src/discovery-refusals.js): per UTC day,
+// refusals by route and rule, distinct refused clients, the top clients by
+// refusals (a keyed digest and a User-Agent family, never an address) with
+// what each went on to do, and the share the top 1, 5 and 20 hold. 8 days.
+app.get("/__operator/discovery-refusals.json", async (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  res.set("Cache-Control", "private, no-store").json(await discoveryRefusalsReport());
 });
 // Direct-upstream A/B (src/gateway-direct-upstream.js): attempts, failures by
 // bucket and p50/p90 latency per upstream for the listed model ids.
@@ -7462,6 +7474,10 @@ const DISCOVERY_TEST_HANG_QUERY = process.env.FREE_MODE === "true" && process.en
 function discoveryGateStatus() {
   return { ...discoveryInFlight.snapshot(), maxInFlight: DISCOVERY_MAX_INFLIGHT, deadlineMs: DISCOVERY_COMPUTE_DEADLINE_MS };
 }
+// What the two per-client 429s say about calling tools: the search limiter and
+// the per-client compute share are read only in serveCachedDiscovery, so no
+// tool route (paid or proof-of-work) ever draws on them.
+const DISCOVERY_LIMIT_SCOPE = "This limit covers only uncached searches on /api/find and /api/route. Tool calls, paid or proof-of-work, are not counted against it.";
 async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlug, req, res) {
   const startedAt = Date.now();
   const synthetic = isSyntheticRequest(req);
@@ -7471,6 +7487,9 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
   // A shed refusal is deliberate load control with its own counter (noteShed,
   // /__operator/perf.json); it is not recorded as a server error.
   let shed = false;
+  // Each refusal below is counted by rule under a keyed client digest
+  // (src/discovery-refusals.js): one Map update, nothing stored on this path.
+  const refused = (rule) => { if (!synthetic) noteDiscoveryRefusal({ address: clientIp(req), userAgent: req.headers["user-agent"], route: analyticsSlug.slice(1), rule }); };
   try {
     let cacheKey = null;
     if (policy && cacheEnabled()) {
@@ -7485,21 +7504,27 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
     }
     if (!synthetic && !isDiscoveryLoopback(req) && discoveryComputeLimiter.check(clientIp(req)).limited) {
       status = 429;
+      refused("client-rate");
       res.set("Retry-After", "60");
       return res.status(429).json({
         error: "Too many uncached searches",
         detail: "Each client gets 30 uncached searches a minute and 600 an hour; repeated queries are served from cache and never count. Slow down and retry shortly.",
         retryAfterSeconds: 60,
+        reason: "discovery-client-rate",
+        toolCalls: DISCOVERY_LIMIT_SCOPE,
       });
     }
     const clientBudget = !synthetic && !isDiscoveryLoopback(req) ? discoveryClientBudget(clientIp(req)) : null;
     if (clientBudget?.over()) {
       status = 429;
+      refused("client-compute");
       res.set("Retry-After", "10");
       return res.status(429).json({
         error: "Too many uncached searches at once",
         detail: `Each client gets ${DISCOVERY_CLIENT_CPU_MS} ms of uncached search compute per ${DISCOVERY_CLIENT_WINDOW_MS / 1000} s, so one burst cannot slow searches for everyone else. Repeated queries are served from cache and never count. Spread the searches out and retry shortly.`,
         retryAfterSeconds: 10,
+        reason: "discovery-client-compute",
+        toolCalls: DISCOVERY_LIMIT_SCOPE,
       });
     }
     // Global CPU budget for uncached searches across every caller (the
@@ -7508,11 +7533,13 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
     if (!synthetic && !isDiscoveryLoopback(req) && discoveryCpuBudget.over()) {
       status = 503; shed = true;
       noteShed("discovery-budget");
+      refused("shared-compute");
       return shedResponse(res, 2);
     }
     if (!synthetic && !isDiscoveryLoopback(req) && discoveryInFlight.live() >= DISCOVERY_MAX_INFLIGHT) {
       status = 503; shed = true;
       noteShed("discovery-inflight");
+      refused("inflight");
       return shedResponse(res, 2, { reason: "discovery-inflight" });
     }
     const computeStarted = Date.now();
@@ -7548,6 +7575,7 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
     if (pastDeadline) {
       status = 503; shed = true;
       noteShed("discovery-deadline");
+      refused("deadline");
       console.warn(`[discovery] ${analyticsSlug} compute passed the ${DISCOVERY_COMPUTE_DEADLINE_MS}ms deadline (query ${String(input?.q ?? "").length} chars): slot released, answer dropped`);
       return shedResponse(res, 2, { reason: "discovery-deadline" });
     }
@@ -7576,6 +7604,9 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
     res.status(status).json({ error: errorMessage });
   } finally {
     const latencyMs = Date.now() - startedAt;
+    // A client refused earlier today that is now served: a Map lookup, and a
+    // mark only when that client is tracked.
+    if (status === 200 && !errored && !synthetic) noteDiscoveryServed(clientIp(req));
     if (!shed) recordToolCall({ slug: analyticsSlug, latencyMs, cached, errored, status, synthetic }).catch(() => {});
     capturePostHogToolCall({ slug: analyticsSlug, latencyMs, cached, errored, status, synthetic });
   }
@@ -11206,6 +11237,10 @@ app.use((req, res, next) => {
         // itself here is booked as a sale. A trial moves no money.
         // FREE_MODE serves without any payment gate: booked as "free", never as a sale.
         const method = isHeartbeat ? "heartbeat" : powAccepted ? "pow" : trialAccepted ? "trial" : req.creditsSettled ? "credits" : FREE_MODE ? "free" : "usdc";
+        // A client the free search refused earlier today that completes a
+        // tool call (src/discovery-refusals.js): a Map lookup, marked only
+        // for a tracked client. Never our own probes or FREE_MODE.
+        if (method !== "heartbeat" && method !== "free" && !isSyntheticRequest(req)) noteDiscoveryClientCall(clientIp(req), { paid: method === "usdc" || method === "credits" });
         // Tempo settlements (src/mpp-tempo.js) never carry a PAYMENT-RESPONSE
         // header — @x402/express never runs on that path — so without this
         // flag they'd fall through networkFromPaymentResponse(null) and get
@@ -12313,6 +12348,9 @@ revenueAllTime({ awaitRebuild: true }).then((t) => { if (!__settledMemo.at) stor
 // /leaderboard, /api/index) are built across turns before the first request,
 // so no reader finds them cold; bounded, so a slow build never holds the boot.
 await Promise.race([ledgerFiguresBoot, new Promise((ok) => setTimeout(ok, LEDGER_FIGURES_BOOT_WAIT_MS).unref())]);
+// Today's refused search clients, read back so one refused before this start
+// is still found when it is served after it (src/discovery-refusals.js). Not awaited.
+void loadDiscoveryRefusals();
 const httpServer = app.listen(PORT, () => {
   listenedAt = Date.now();
   // The deploy overlap window (src/replay-topology.js) is counted from here,
@@ -12639,7 +12677,7 @@ let shuttingDown = false;
 // reads held; the flush round below waits on that write with the others.
 let boardSaveAtDrain = false;
 function flushStateQueues({ timeoutMs = 10_000 } = {}) {
-  const flushes = [salesLedgerFlush, refundLedgerFlush, flushJournals, statsFlush, statusStoreFlush, economyHistoryFlush, powReplayFlush, () => boardSaveAtDrain, () => Promise.all([flushSqlQueryStats(), flushXSearchStats()]).then(() => flushJsonDocuments({ timeoutMs }))]
+  const flushes = [salesLedgerFlush, refundLedgerFlush, flushJournals, statsFlush, statusStoreFlush, economyHistoryFlush, powReplayFlush, () => boardSaveAtDrain, () => Promise.all([flushSqlQueryStats(), flushXSearchStats(), flushDiscoveryRefusals()]).then(() => flushJsonDocuments({ timeoutMs }))]
     .map((fn) => { try { return Promise.resolve(fn()); } catch (e) { return Promise.reject(e); } });
   let timer;
   const deadline = new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs); timer.unref?.(); });

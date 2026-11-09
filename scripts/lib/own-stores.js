@@ -33,5 +33,6 @@ export function ownStoreEnv(label = "server") {
     // The per-call count documents (src/sql-query-stats.js, src/x-search-stats.js).
     SQL_QUERY_STATS_FILE: join(dir, "onchain-sql-query-stats.json"),
     X_SEARCH_STATS_FILE: join(dir, "x-search-author-stats.json"),
+    DISCOVERY_REFUSALS_FILE: join(dir, "discovery-refusals.json"),
   };
 }
