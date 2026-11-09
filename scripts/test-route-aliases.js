@@ -64,14 +64,18 @@ ok(scored.slug === "asn-info" && (scored.matched?.slug ?? 0) <= 20, "two alias h
 {
   const { _cacheForTests: cacheFor, NAME_SLUG_MAX_TOKENS } = await import("../src/x402-index.js");
   const cache4 = cacheFor(); cache4.clear();
-  const sentence = "Use when an agent must choose which marketplace to spend effort in: how crowded is it (bids per job, measured), and does it pay out, so you are set up to decide today";
-  cache4.set("https://mkt.example", { manifest: { name: "mkt", homepage: "https://mkt.example" }, openapiSummary: null, tools: [{ seller: "https://mkt.example", method: "POST", route: "/v1/payability", slug: "v1_payability", name: sentence, description: sentence, category: "data", tags: [], price: 0.005, networks: ["eip155:8453"] }], fetchedAt: Date.now(), error: null, history: [1, 1, 1] });
-  cache4.set("https://stk.example", { manifest: { name: "stk", homepage: "https://stk.example" }, openapiSummary: null, tools: [{ seller: "https://stk.example", method: "GET", route: "/api/board/buylist", slug: "board_buylist", name: "Stocks to buy today", description: "Which US stocks are set up to buy today, scored in market hours.", category: "finance", tags: ["stocks"], price: 0.05, networks: ["eip155:8453"] }], fetchedAt: Date.now(), error: null, history: [1, 1, 1] });
+  // The two live rows that showed it, as crawled: the sentence-named row and a
+  // stock seller whose own slug and name are terse. Without the cap the two
+  // tie at 14 and the sentence row is listed first; with it the stock row leads.
+  const sentence = "Use when an agent must choose which marketplace to spend effort in: how crowded is it (bids per job, measured), and does";
+  cache4.set("https://mkt.example", { manifest: { name: "mkt", homepage: "https://mkt.example" }, openapiSummary: null, tools: [{ seller: "https://mkt.example", method: "POST", route: "/v1/payability", slug: "v1_payability", name: sentence, description: sentence, category: "x", tags: [], price: 0.005, networks: ["eip155:8453"] }], fetchedAt: Date.now(), error: null, history: [1, 1, 1] });
+  const buy = "Today's ranked buy candidates per book, with entry windows and leadership flags";
+  cache4.set("https://stk.example", { manifest: { name: "stk", homepage: "https://stk.example" }, openapiSummary: null, tools: [{ seller: "https://stk.example", method: "GET", route: "/api/board/buylist", slug: "getBoardBuylist", name: buy, description: buy, category: "x", tags: [], price: 0.05, networks: ["eip155:8453"] }], fetchedAt: Date.now(), error: null, history: [1, 1, 1] });
   const ctx4 = { baseUrl: "https://agent402.tools", catalog: {}, prices: {}, network: "base", toolCount: 0, walletName: "w" };
-  const r4 = routeQuery({ query: "which stocks are set up to buy today", top: 5, include: "all", ...ctx4 }).results;
-  const mkt = r4.find((r) => r.slug === "v1_payability");
-  ok(r4[0]?.slug === "board_buylist", `a stock tool outranks a row whose sentence-long name only shares common words (first: ${r4.map((r) => r.slug).join(",")})`);
-  ok(!mkt || mkt.why.matchedOn.slug === 0, `a sentence-long name earns no slug points (got ${mkt?.why.matchedOn.slug})`);
+  const r4 = routeQuery({ query: "which stocks are set up to buy today", top: 5, include: "external", ...ctx4 }).results;
+  const mkt = r4.find((r) => r.slug === "v1_payability"), stk = r4.find((r) => r.slug === "getBoardBuylist");
+  ok(r4[0]?.slug === "getBoardBuylist" && stk && mkt && stk.score > mkt.score, `the stock row outranks the sentence-named row on a stock question (${r4.map((r) => `${r.slug}:${r.score}`).join(", ")})`);
+  ok(mkt?.why.matchedOn.slug === 0, `a sentence-long name earns no slug points (got ${mkt?.why.matchedOn.slug})`);
   ok(NAME_SLUG_MAX_TOKENS >= 9, "the cap covers every name length in our own catalog (9 words at most)");
   cache4.clear();
 }
