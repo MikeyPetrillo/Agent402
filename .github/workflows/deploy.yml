@@ -1380,6 +1380,8 @@ jobs:
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
           t node scripts/test-shared-limits.js
           t node scripts/test-shared-limits-crossprocess.js
+          # A close made while a connect is still in flight ends that connect too.
+          t node scripts/test-shared-redis-close.js
           # The in-flight run cover: memory, a store that does not answer (local ledger decides), and real Redis.
           t node scripts/test-inflight-cover-shared.js
           # The judge's daily token ceiling on the Redis backend (the memory half runs in its own lane).

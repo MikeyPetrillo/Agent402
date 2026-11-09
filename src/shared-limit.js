@@ -195,6 +195,10 @@ let state = { connected: null, lastError: null, degradedCalls: 0 };
  *  child) that touched a shared limit can exit. The server never calls it.
  *  A later read connects again. */
 export async function closeSharedRedis() {
+  // A connect its caller stopped waiting for (CONNECT_WAIT_MS) keeps running
+  // and lands in `client` later; wait for it, so its socket is closed here
+  // instead of holding the process open after close.
+  if (connecting) { try { await connecting; } catch { /* closed below */ } }
   const c = client;
   client = null;
   if (!c) return;
