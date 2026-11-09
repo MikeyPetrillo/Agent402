@@ -64,12 +64,12 @@ ok(scored.slug === "asn-info" && (scored.matched?.slug ?? 0) <= 20, "two alias h
 {
   const { _cacheForTests: cacheFor, NAME_SLUG_MAX_TOKENS } = await import("../src/x402-index.js");
   const cache4 = cacheFor(); cache4.clear();
-  // The two live rows that showed it, as crawled: the sentence-named row and a
-  // stock seller whose own slug and name are terse. Without the cap the two
+  // The shape of the two live rows that showed it (text paraphrased): a
+  // sentence-named row and a stock seller whose own slug and name are terse. Without the cap the two
   // tie at 14 and the sentence row is listed first; with it the stock row leads.
-  const sentence = "Use when an agent must choose which marketplace to spend effort in: how crowded is it (bids per job, measured), and does";
+  const sentence = "Call this when an agent has to pick which job board is worth its time: how busy it is (offers per task, counted), and are";
   cache4.set("https://mkt.example", { manifest: { name: "mkt", homepage: "https://mkt.example" }, openapiSummary: null, tools: [{ seller: "https://mkt.example", method: "POST", route: "/v1/payability", slug: "v1_payability", name: sentence, description: sentence, category: "x", tags: [], price: 0.005, networks: ["eip155:8453"] }], fetchedAt: Date.now(), error: null, history: [1, 1, 1] });
-  const buy = "Today's ranked buy candidates per book, with entry windows and leadership flags";
+  const buy = "Today's ranked buy ideas per portfolio, with entry timing and trend markers";
   cache4.set("https://stk.example", { manifest: { name: "stk", homepage: "https://stk.example" }, openapiSummary: null, tools: [{ seller: "https://stk.example", method: "GET", route: "/api/board/buylist", slug: "getBoardBuylist", name: buy, description: buy, category: "x", tags: [], price: 0.05, networks: ["eip155:8453"] }], fetchedAt: Date.now(), error: null, history: [1, 1, 1] });
   const ctx4 = { baseUrl: "https://agent402.tools", catalog: {}, prices: {}, network: "base", toolCount: 0, walletName: "w" };
   const r4 = routeQuery({ query: "which stocks are set up to buy today", top: 5, include: "external", ...ctx4 }).results;
