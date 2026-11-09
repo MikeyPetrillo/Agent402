@@ -5,46 +5,67 @@
 // time and size budget on the input shape that used to grow without limit.
 // Pure functions, no server.
 //
+// TIMING. The costs these checks guard against were seconds to minutes at the
+// sizes tested here, and the bounded readings take milliseconds, so every
+// bound sits in that gap with room for a slow, busy runner. A synchronous
+// reading is timed in CPU time of this process (a runner that deschedules the
+// test does not add to it), best of five. A reading that runs off the serving
+// thread or in slices is judged by the event loop: the longest gap between
+// two turns (least of up to three attempts), or the number of turns it gave
+// back, which does not depend on the clock at all.
+//
 //   node scripts/test-free-tool-bounds.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { API_TOOLS, RESOLVE_REFS_MAX_BYTES } from "../src/tools/api-kit.js";
 import { KIT2 } from "../src/tools/kit2.js";
-import { KIT, JSON_TO_CSV_MAX_CELLS } from "../src/tools/kit.js";
+import { KIT, JSON_TO_CSV_MAX_CELLS, JSON_TO_CSV_MAX_BYTES } from "../src/tools/kit.js";
 import { TEXT_ANALYSIS_TOOLS } from "../src/tools/text-analysis-kit.js";
 import { emailGuard } from "../src/tools/email-guard-kit.js";
 import { readFileSync } from "node:fs";
-import { callerInputError, withCallerInputErrors, holdsUncoercible, readableAsText } from "../src/caller-input-errors.js";
+import { callerInputError, withCallerInputErrors, holdsUncoercible, uncoercibleAt, readableAsText } from "../src/caller-input-errors.js";
+import { toolClassOf } from "../src/tool-failure-monitor.js";
 import { FREE_TIER_SLUGS } from "../src/free-tier.js";
 import { splitSteps } from "../src/plan-sketch.js";
-import { runHtml } from "../src/tools/html-pool.js";
-import { MARKDOWN_INLINE_MAX_CHARS } from "../src/tools/markdown-render.js";
-import { marked } from "marked";
+import { runHtml, htmlPoolState } from "../src/tools/html-pool.js";
+import { marked, headingId, MARKDOWN_INLINE_MAX_CHARS, markdownLooksCostly } from "../src/tools/markdown-render.js";
+import { runMarkdown, markdownPoolState, RENDER_DEADLINE_MS } from "../src/tools/markdown-pool.js";
+import { headingId as guidesHeadingId } from "../src/guides.js";
 import { sentenceEnds, countSentenceEnds, splitOnSentenceEnds } from "../src/tools/sentence-ends.js";
 
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) { pass++; console.log(`ok - ${msg}`); } else { fail++; console.error(`FAIL - ${msg}`); } };
-const BOUND_MS = Number(process.env.FREE_BOUND_MS) || 250;
-// Best of three: a load spike on one run is not the tool's cost.
+const BOUND_MS = Number(process.env.FREE_BOUND_MS) || 1000;
+const cpuMs = () => { const u = process.cpuUsage(); return (u.user + u.system) / 1000; };
+// CPU time of one call, best of five: a load spike on one run is not the tool's cost.
 const bestOf = async (fn) => {
   let best = Infinity, out, err;
-  for (let i = 0; i < 3; i++) {
-    const t = performance.now();
+  for (let i = 0; i < 5; i++) {
+    const t = cpuMs();
     try { out = await fn(); err = undefined; } catch (e) { err = e; }
-    best = Math.min(best, performance.now() - t);
-    if (best > BOUND_MS * 8) break;
+    best = Math.min(best, cpuMs() - t);
+    if (best > BOUND_MS * 4) break;
   }
   return { ms: best, out, err };
 };
-// Longest gap between two turns of the event loop while `fn` runs.
+// The event loop while `fn` runs: the longest gap between two turns and how
+// many turns it took. Repeated (up to three times) while the gap is past the
+// bound, keeping the least: a runner that stalls once is not a held loop.
 const loopHold = async (fn) => {
-  let hold = 0, last = performance.now();
-  const iv = setInterval(() => { const now = performance.now(); hold = Math.max(hold, now - last - 5); last = now; }, 5);
-  const t = performance.now();
-  let out, err;
-  try { out = await fn(); } catch (e) { err = e; }
-  await new Promise((r) => setTimeout(r, 10));
-  clearInterval(iv);
-  return { hold, ms: performance.now() - t, out, err };
+  let best = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let hold = 0, turns = 0, last = performance.now(), running = true;
+    const tick = () => { if (!running) return; const now = performance.now(); hold = Math.max(hold, now - last); last = now; turns++; setImmediate(tick); };
+    setImmediate(tick);
+    const t = performance.now();
+    let out, err;
+    try { out = await fn(); } catch (e) { err = e; }
+    const ms = performance.now() - t;
+    await new Promise((r) => setImmediate(r));
+    running = false;
+    if (!best || hold < best.hold) best = { hold, turns, ms, out, err };
+    if (best.hold < BOUND_MS) break;
+  }
+  return best;
 };
 // Deterministic random numbers, so a failure reproduces.
 function rng(seed) {
@@ -92,7 +113,7 @@ function rng(seed) {
     return { spec: resolved, resolved: report.resolved, circular: report.circular, unresolved: report.unresolved, external: report.external };
   };
 
-  ok(JSON.stringify(tool.handler(tool.discovery.input)) === JSON.stringify(tool.discovery.output.example), "resolve-refs: the published example answers as published");
+  ok(JSON.stringify(await tool.handler(tool.discovery.input)) === JSON.stringify(tool.discovery.output.example), "resolve-refs: the published example answers as published");
 
   // Random specs: schemas that reference each other (cycles included), refs
   // to missing targets, external refs, refs inside arrays, refs to scalars.
@@ -120,7 +141,7 @@ function rng(seed) {
     for (let i = 0; i < n; i++) schemas["S" + i] = { type: "object", properties: { a: value(0), b: value(0) }, items: rand() < 0.3 ? value(0) : undefined };
     const spec = JSON.parse(JSON.stringify({ openapi: "3.0.0", info: { title: "T" }, paths: { "/x": { get: { schema: refTo(), list: [refTo(), refTo()] } } }, components: { schemas } }));
     const want = oldAnswer(spec);
-    const got = tool.handler({ spec });
+    const got = await tool.handler({ spec });
     if (JSON.stringify(got) === JSON.stringify(want)) same++;
     else if (same === run) console.error(`  first difference on run ${run}: ${JSON.stringify(spec)}`);
     if (want.circular.length) withCycle++;
@@ -137,28 +158,36 @@ function rng(seed) {
     return { openapi: "3.0.0", paths: { "/u": { get: { schema: { $ref: "#/components/schemas/S0" } } } }, components: { schemas } };
   };
   const small = doubling(8);
-  ok(JSON.stringify(tool.handler({ spec: small })) === JSON.stringify(oldAnswer(small)), "resolve-refs: eight doubling levels answer as the full walk did");
-  for (const depth of [18, 24, 400]) {
+  ok(JSON.stringify(await tool.handler({ spec: small })) === JSON.stringify(oldAnswer(small)), "resolve-refs: eight doubling levels answer as the full walk did");
+  // A small spec whose shared schemas resolve to several MB is served whole.
+  const deep = doubling(15);
+  const deepOut = JSON.stringify(await tool.handler({ spec: deep }));
+  ok(JSON.stringify(deep).length < 3000 && deepOut.length > 5_000_000 && deepOut === JSON.stringify(oldAnswer(deep)), "resolve-refs: a " + JSON.stringify(deep).length + "-byte spec that resolves to " + deepOut.length + " bytes is served as the full walk did");
+  for (const depth of [20, 24, 400]) {
     const r = await bestOf(() => tool.handler({ spec: doubling(depth) }));
-    ok(r.err?.statusCode === 413 && /4 MB/.test(r.err.message) && /in parts/.test(r.err.message), `resolve-refs: ${depth} doubling levels are refused with a 413 naming the cap (${r.err?.statusCode} ${r.err?.message})`);
-    ok(r.ms < BOUND_MS, `resolve-refs: ${depth} doubling levels are refused in ${r.ms.toFixed(1)}ms`);
+    ok(r.err?.statusCode === 413 && /16 MB/.test(r.err.message) && /in parts/.test(r.err.message), "resolve-refs: " + depth + " doubling levels are refused with a 413 naming the cap (" + r.err?.statusCode + " " + r.err?.message + ")");
+    ok(r.ms < BOUND_MS, "resolve-refs: " + depth + " doubling levels are refused in " + r.ms.toFixed(1) + "ms of CPU");
   }
-  // The same fan-out closed into a cycle: nothing is reusable, the budget still stops it.
+  // The same fan-out closed into a cycle: nothing is reusable, so the walk
+  // runs to the budget. It gives the event loop back as it goes.
   const cyc = doubling(24); cyc.components.schemas.S24 = { $ref: "#/components/schemas/S0" };
-  const rc = await bestOf(() => tool.handler({ spec: cyc }));
-  ok(rc.err?.statusCode === 413 && rc.ms < BOUND_MS * 4, `resolve-refs: a doubling cycle is refused (${rc.err?.statusCode}) in ${rc.ms.toFixed(1)}ms`);
+  const rc = await loopHold(() => tool.handler({ spec: cyc }));
+  ok(rc.err?.statusCode === 413, "resolve-refs: a doubling cycle is refused (" + rc.err?.statusCode + ")");
+  ok(rc.turns >= 10 && rc.hold < BOUND_MS, "resolve-refs: the doubling cycle gave the event loop back " + rc.turns + " times (longest gap " + rc.hold.toFixed(0) + "ms)");
+  const cycSmall = doubling(10); cycSmall.components.schemas.S10 = { $ref: "#/components/schemas/S0" };
+  ok(JSON.stringify(await tool.handler({ spec: cycSmall })) === JSON.stringify(oldAnswer(cycSmall)), "resolve-refs: a ten-level doubling cycle answers as the full walk did");
   // One long string referenced many times.
   const fat = { info: { description: "d".repeat(50_000) }, list: Array.from({ length: 1000 }, () => ({ $ref: "#/info/description" })) };
   const rf = await bestOf(() => tool.handler({ spec: fat }));
-  ok(rf.err?.statusCode === 413, `resolve-refs: a long string referenced 1,000 times is refused (${rf.err?.statusCode})`);
+  ok(rf.err?.statusCode === 413, "resolve-refs: a long string referenced 1,000 times is refused (" + rf.err?.statusCode + ")");
   // The largest answer the cap admits is near the cap, not a multiple of it.
   let biggest = 0;
-  for (let depth = 10; depth < 20; depth++) { try { biggest = Math.max(biggest, JSON.stringify(tool.handler({ spec: doubling(depth) })).length); } catch { break; } }
-  ok(biggest > 500_000 && biggest < RESOLVE_REFS_MAX_BYTES * 1.5, `resolve-refs: the largest doubling answer served is ${biggest} bytes against a ${RESOLVE_REFS_MAX_BYTES}-byte cap`);
+  for (let depth = 12; depth < 22; depth++) { try { biggest = Math.max(biggest, JSON.stringify(await tool.handler({ spec: doubling(depth) })).length); } catch { break; } }
+  ok(biggest > 5_000_000 && biggest < RESOLVE_REFS_MAX_BYTES * 1.5, "resolve-refs: the largest doubling answer served is " + biggest + " bytes against a " + RESOLVE_REFS_MAX_BYTES + "-byte cap");
   // A shared schema used many times stays inside the cap and is served.
   const shared = { components: { schemas: { Err: { type: "object", properties: { code: { type: "integer" }, message: { type: "string" } } } } }, paths: {} };
   for (let i = 0; i < 300; i++) shared.paths["/r" + i] = { get: { responses: { 400: { schema: { $ref: "#/components/schemas/Err" } }, 500: { schema: { $ref: "#/components/schemas/Err" } } } } };
-  const rs = tool.handler({ spec: shared });
+  const rs = await tool.handler({ spec: shared });
   ok(rs.resolved === 600 && JSON.stringify(rs) === JSON.stringify(oldAnswer(shared)), "resolve-refs: one schema referenced 600 times is served and counted 600 times");
 }
 
@@ -219,9 +248,9 @@ function rng(seed) {
     ok(JSON.stringify(tool.handler(input)) === JSON.stringify(oldAnswer(input)), `business-days: ${JSON.stringify(input)} answers as the walk did (${JSON.stringify(tool.handler(input))})`);
   }
   const far = await bestOf(() => tool.handler({ from: "0001-01-01", to: "+275000-01-01", holidays: ["2026-01-01", "+010000-01-05"] }));
-  ok(far.ms < 20 && far.out?.calendarDays > 99_000_000, `business-days: the widest range answers in ${far.ms.toFixed(2)}ms (${JSON.stringify(far.out)})`);
+  ok(far.ms < BOUND_MS && far.out?.calendarDays > 99_000_000, `business-days: the widest range answers in ${far.ms.toFixed(2)}ms of CPU (${JSON.stringify(far.out)})`);
   const many = await bestOf(() => tool.handler({ from: "-271821-04-20", to: "+275760-09-13", holidays: Array.from({ length: 7000 }, (_, k) => new Date(Date.UTC(2000, 0, 1 + k)).toISOString().slice(0, 10)) }));
-  ok(many.ms < BOUND_MS, `business-days: the widest range with 7,000 holidays answers in ${many.ms.toFixed(1)}ms`);
+  ok(many.ms < BOUND_MS, `business-days: the widest range with 7,000 holidays answers in ${many.ms.toFixed(1)}ms of CPU`);
   let refused; try { tool.handler({ from: "2026-01-01", to: "2026-02-01", holidays: ["not a date"] }); } catch (e2) { refused = e2; }
   ok(refused?.statusCode === 400, `business-days: a holiday that is not a date is a 400 (${refused?.statusCode})`);
 }
@@ -299,63 +328,85 @@ function rng(seed) {
     const label = JSON.stringify(run.slice(0, 4)) + " x" + run.length;
     for (const [name, call] of [["text-stats", () => textStats.handler({ text: run })], ["readability", () => readability.handler({ text: run })], ["readability-score", () => score.handler({ text: run })], ["email-guard text", () => emailGuard({ text: run })]]) {
       const r = await bestOf(call);
-      ok(r.ms < BOUND_MS, name + ": " + label + " reads in " + r.ms.toFixed(1) + "ms");
+      ok(r.ms < BOUND_MS, name + ": " + label + " reads in " + r.ms.toFixed(1) + "ms of CPU");
     }
   }
 }
 
 // ---------------------------------------------------------------------------
-// markdown-to-html: short documents render in place, longer ones in the HTML
-// worker under a deadline.
+// markdown-to-html: one renderer configuration; short documents render in
+// place, longer ones in a markdown worker of their own.
 // ---------------------------------------------------------------------------
 {
   const tool = KIT.find((t) => t.slug === "markdown-to-html");
-  ok(JSON.stringify(await tool.handler(tool.discovery.input)) === JSON.stringify(tool.discovery.output.example), "markdown-to-html: the published example answers as published");
-  const blocks = ["# Title\n\n", "Some *text* with **bold**, _under_ and `code`.\n\n", "- one\n- two\n  - nested\n\n", "1. first\n2. second\n\n", "> quoted\n> lines\n\n", "[a link](https://example.com \"t\") and ![img](a.png)\n\n", "| a | b |\n|---|---|\n| 1 | 2 |\n\n", "```js\nconst x = 1 < 2;\n```\n\n", "~~gone~~ and <b>html</b> &amp; entities\n\n", "---\n\n", "Line one  \nline two\\\nline three\n\n", "Unclosed *emphasis and **strong here\n\n", "- [ ] todo\n- [x] done\n\n", "Auto https://example.com/x?y=1 link.\n\n", "Setext\n======\n\n", "    indented code\n\n", "[ref]: https://example.com\n\nA [ref] here.\n\n"];
+  ok(JSON.stringify(await tool.handler(tool.discovery.input)) === JSON.stringify(tool.discovery.output.example) && /<h1 id="hi">/.test(tool.discovery.output.example.html), "markdown-to-html: the published example answers as published, heading id included");
+  ok(guidesHeadingId === headingId, "markdown-to-html: the guide pages take their heading ids from the tool's renderer module");
+  const blocks = ["# Title Here\n\n", "## Second: a `code` heading!\n\n", "Some *text* with **bold**, _under_ and `code`.\n\n", "- one\n- two\n  - nested\n\n", "1. first\n2. second\n\n", "> quoted\n> lines\n\n", "[a link](https://example.com \"t\") and ![img](a.png)\n\n", "| a | b |\n|---|---|\n| 1 | 2 |\n\n", "```js\nconst x = 1 < 2;\n```\n\n", "~~gone~~ and <b>html</b> &amp; entities\n\n", "---\n\n", "Line one  \nline two\\\nline three\n\n", "Unclosed *emphasis and **strong here\n\n", "- [ ] todo\n- [x] done\n\n", "Auto https://example.com/x?y=1 link.\n\n", "Setext\n======\n\n", "    indented code\n\n", "[ref]: https://example.com\n\nA [ref] here.\n\n"];
   const rand = rng(77);
-  let same = 0, inPlace = 0, inWorker = 0;
-  const RUNS = 120;
-  for (let i = 0; i < RUNS; i++) {
-    const markdown = Array.from({ length: i < 40 ? 1 + Math.floor(rand() * 8) : 60 + Math.floor(rand() * 600) }, () => blocks[Math.floor(rand() * blocks.length)]).join("");
+  // Exactly `chars` long: whole blocks, a filler paragraph, a closing heading.
+  const docOf = (chars) => { let d = "# Title Here\n\n"; for (;;) { const b = blocks[Math.floor(rand() * blocks.length)]; if (d.length + b.length + 13 > chars) break; d += b; } return d + "p".repeat(chars - d.length - 13) + "\n\n## Last one"; };
+  // The same bytes on both sides of the in-place length and far past it.
+  let same = 0, inPlace = 0, inWorker = 0, ids = 0;
+  const sizes = [1999, 2001, MARKDOWN_INLINE_MAX_CHARS - 1, MARKDOWN_INLINE_MAX_CHARS, MARKDOWN_INLINE_MAX_CHARS + 1, 5000, 20_000, 99_000];
+  for (let i = 0; i < 60; i++) sizes.push(200 + Math.floor(rand() * (i < 30 ? 2500 : 60_000)));
+  for (const chars of sizes) {
+    const markdown = docOf(chars);
     if (markdown.length <= MARKDOWN_INLINE_MAX_CHARS) inPlace++; else inWorker++;
     const got = await tool.handler({ markdown });
     if (got.html === marked.parse(markdown, { async: false }) && Object.keys(got).join() === "html") same++;
+    if (got.html.startsWith('<h1 id="title-here">Title Here</h1>') && got.html.includes('<h2 id="last-one">Last one</h2>')) ids++;
   }
-  ok(same === RUNS && inPlace > 20 && inWorker > 20, "markdown-to-html: " + same + "/" + RUNS + " ordinary documents render as the library does on its own (" + inPlace + " in place, " + inWorker + " in the worker)");
+  ok(same === sizes.length && inPlace > 20 && inWorker > 20, "markdown-to-html: " + same + "/" + sizes.length + " documents render to the bytes the one configured renderer gives (" + inPlace + " in place, " + inWorker + " in the worker)");
+  ok(ids === sizes.length, "markdown-to-html: " + ids + "/" + sizes.length + " documents carry heading ids, in place and from the worker alike");
 
-  // The longest document rendered in place, in the shapes that cost the most.
-  for (const [name, unit] of [["*a ", "*a "], ["_a ", "_a "], ["**a ", "**a "], ["~~a ", "~~a "], ["> ", "> "], ["[", "["]]) {
+  // The longest document rendered in place, in the shapes that cost the most:
+  // CPU time, so the bound reads the renderer and not the runner's load.
+  ok(MARKDOWN_INLINE_MAX_CHARS <= 2_500, "markdown-to-html: documents over 2,500 characters leave the serving thread (" + MARKDOWN_INLINE_MAX_CHARS + ")");
+  for (const unit of ["*a ", "_a ", "**a ", "~~a ", "> ", "["]) {
     const r = await bestOf(() => tool.handler({ markdown: unit.repeat(Math.floor(MARKDOWN_INLINE_MAX_CHARS / unit.length)) }));
-    ok(r.ms < BOUND_MS / 2, "markdown-to-html: " + MARKDOWN_INLINE_MAX_CHARS + " characters of " + JSON.stringify(name) + " render in place in " + r.ms.toFixed(1) + "ms");
+    ok(r.ms < 250, "markdown-to-html: " + MARKDOWN_INLINE_MAX_CHARS + " characters of " + JSON.stringify(unit) + " render in place in " + r.ms.toFixed(1) + "ms of CPU");
   }
-  // Past that length the event loop is not held, and the render is stopped at its deadline.
-  const hostile = [["unclosed emphasis", "*a ".repeat(30_000)], ["unclosed strong", "**a ".repeat(22_000)], ["nested quotes", "> ".repeat(45_000)], ["bracket run", "[".repeat(90_000)], ["emphasis just past the in-place length", "*a ".repeat(700)]];
-  for (const [name, markdown] of hostile) {
-    const r = await loopHold(() => tool.handler({ markdown }));
-    ok(r.hold < BOUND_MS, "markdown-to-html: " + name + " (" + markdown.length + " characters) holds the event loop " + r.hold.toFixed(0) + "ms");
-    ok(r.ms < 4000 && (r.out ? typeof r.out.html === "string" : r.err?.statusCode === 400), "markdown-to-html: " + name + " answers " + (r.out ? "200" : r.err?.statusCode + " " + r.err?.message) + " in " + r.ms.toFixed(0) + "ms");
-  }
-  const stopped = await loopHold(() => tool.handler({ markdown: "*a ".repeat(30_000) }));
-  ok(stopped.err?.statusCode === 400 && /2 s/.test(stopped.err.message), "markdown-to-html: a render past the deadline answers 400 naming it (" + stopped.err?.message + ")");
-  // Renders past the deadline never hold every worker: an HTML job beside two of them is served at once.
+  // The estimate that picks a lane: ordinary documents are ordinary, the costly shapes are costly.
+  ok(sizes.every((chars) => !markdownLooksCostly(docOf(chars))), "markdown-to-html: none of the ordinary documents is estimated costly");
+  const hostile = [["unclosed emphasis", "*a ".repeat(30_000)], ["unclosed strong", "**a ".repeat(22_000)], ["unclosed underscore", "_a ".repeat(30_000)], ["nested quotes", "> ".repeat(45_000)]];
+  ok(hostile.every(([, m]) => markdownLooksCostly(m)) && markdownLooksCostly("*a ".repeat(1500)), "markdown-to-html: the slow shapes are estimated costly");
+
+  // 100 ordinary documents at once, beside slow renders already in flight:
+  // every one is served, the event loop is never held, and the HTML pool
+  // (another tool family's workers) neither queues nor waits.
+  const slow = hostile.slice(0, 3).map(([, markdown]) => tool.handler({ markdown }).then(() => ({ statusCode: 200 }), (e) => e));
+  const htmlBefore = htmlPoolState();
+  const burst = await loopHold(() => Promise.all(Array.from({ length: 100 }, (_, i) => tool.handler({ markdown: docOf(5000 + i * 450) }).then((r) => (r.html.startsWith("<h1 id=") ? 200 : 0), (e) => e.statusCode + " " + e.message))));
+  const tally = burst.out.reduce((m, x) => (m[x] = (m[x] || 0) + 1, m), {});
+  ok(tally[200] === 100, "markdown-to-html: 100 concurrent documents of 5,000 to 50,000 characters all answer 200 beside 3 slow renders (" + JSON.stringify(tally) + " in " + burst.ms.toFixed(0) + "ms)");
+  ok(burst.hold < BOUND_MS, "markdown-to-html: the event loop's longest gap during that burst was " + burst.hold.toFixed(0) + "ms");
   const t0 = performance.now();
-  const slow = [tool.handler({ markdown: "*a ".repeat(30_000) }).catch((e) => e), tool.handler({ markdown: "_a ".repeat(30_000) }).catch((e) => e)];
   const meta = await runHtml("meta", { html: "<html><head><title>T</title></head><body>x</body></html>", url: "https://example.com/" });
-  const metaMs = performance.now() - t0;
-  ok(meta && metaMs < 1500, "markdown-to-html: an HTML job beside two slow renders is served in " + metaMs.toFixed(0) + "ms");
+  ok(meta && performance.now() - t0 < 5000 && htmlBefore.queued === 0 && htmlPoolState().queued === 0, "markdown-to-html: an HTML job beside the slow renders is served in " + (performance.now() - t0).toFixed(0) + "ms, with nothing queued in the HTML pool");
   const ends = await Promise.all(slow);
-  ok(ends.every((e) => e?.statusCode === 400), "markdown-to-html: both slow renders end as 400s");
-  const after = await tool.handler({ markdown: "# still here\n\n" + "text ".repeat(600) });
-  ok(after.html.startsWith("<h1>still here</h1>"), "markdown-to-html: the next document renders after a stopped one");
+  ok(ends.every((e) => e?.statusCode === 400 && new RegExp(RENDER_DEADLINE_MS / 1000 + " s").test(e.message) && /in parts/.test(e.message)), "markdown-to-html: each slow render ends as a 400 naming the " + RENDER_DEADLINE_MS / 1000 + " s deadline and what to change (" + ends.map((e) => e?.statusCode).join(",") + ")");
+  // The deadline counts render time from the worker's own start signal: the
+  // first document after a stopped render meets a worker that has to start, and is served.
+  const after = await tool.handler({ markdown: docOf(30_000) });
+  ok(after.html.startsWith('<h1 id="title-here">'), "markdown-to-html: the next document renders after a stopped one");
+  // A render that overruns in the ORDINARY lane is not blamed on the document:
+  // 503, retryable. (The lane is named here; nothing ordinary takes 3 s.)
+  const overrun = await loopHold(() => runMarkdown("*a ".repeat(30_000), { costly: false }));
+  ok(overrun.err?.statusCode === 503 && /retry/.test(overrun.err.message), "markdown-to-html: an overrun in the ordinary lane answers 503, retryable (" + overrun.err?.statusCode + " " + overrun.err?.message + ")");
+  ok(overrun.hold < BOUND_MS, "markdown-to-html: a 90,000-character run of unclosed emphasis holds the event loop " + overrun.hold.toFixed(0) + "ms");
+  const quotes = await tool.handler({ markdown: "> ".repeat(45_000) }).then(() => null, (e) => e);
+  ok(quotes?.statusCode === 400, "markdown-to-html: 45,000 quote levels answer 400 (" + quotes?.statusCode + " " + quotes?.message + ")");
+  const st = markdownPoolState();
+  ok(st.queuedOrdinary === 0 && st.queuedCostly === 0 && st.queueMax >= 500, "markdown-to-html: the queue is empty afterwards and holds " + st.queueMax + " waiting documents");
 }
 
 // ---------------------------------------------------------------------------
-// json-to-csv: rows times columns is capped.
+// json-to-csv: written in slices; capped by what one answer can carry.
 // ---------------------------------------------------------------------------
 {
   const tool = KIT.find((t) => t.slug === "json-to-csv");
-  ok(JSON.stringify(tool.handler(tool.discovery.input)) === JSON.stringify(tool.discovery.output.example), "json-to-csv: the published example answers as published");
-  // The conversion as it was, for inputs under the cap.
+  ok(JSON.stringify(await tool.handler(tool.discovery.input)) === JSON.stringify(tool.discovery.output.example), "json-to-csv: the published example answers as published");
+  // The conversion as it was.
   const flatten = (obj, prefix = "", out = {}) => { for (const [k, v] of Object.entries(obj)) { const key = prefix ? prefix + "." + k : k; if (v && typeof v === "object" && !Array.isArray(v)) flatten(v, key, out); else out[key] = Array.isArray(v) ? JSON.stringify(v) : v; } return out; };
   const esc = (v) => { const str = v === null || v === undefined ? "" : String(v); return /[",\n\r]/.test(str) ? '"' + str.replace(/"/g, '""') + '"' : str; };
   const oldAnswer = (data, delimiter = ",") => { const flat = data.map((row) => flatten(row && typeof row === "object" ? row : { value: row })); const columns = [...new Set(flat.flatMap((r) => Object.keys(r)))]; const lines = [columns.map(esc).join(delimiter)]; for (const r of flat) lines.push(columns.map((c) => esc(r[c])).join(delimiter)); return { csv: lines.join("\n") + "\n", rows: data.length, columns: columns.length }; };
@@ -366,19 +417,27 @@ function rng(seed) {
   for (let i = 0; i < RUNS; i++) {
     const keys = Array.from({ length: 1 + Math.floor(rand() * 30) }, (_, k) => "k" + k);
     const data = Array.from({ length: 1 + Math.floor(rand() * 200) }, () => rand() < 0.05 ? cell() : Object.fromEntries(keys.filter(() => rand() < 0.6).map((k) => [k, cell()])));
-    if (JSON.stringify(tool.handler({ json: data })) === JSON.stringify(oldAnswer(data))) same++;
+    if (JSON.stringify(await tool.handler({ json: data })) === JSON.stringify(oldAnswer(data))) same++;
   }
   ok(same === RUNS, "json-to-csv: " + same + "/" + RUNS + " random tables convert as before");
-  // A wide sparse table under the cap is served; the widest dense table a 100 KB body can carry is far under it.
-  const wide = Array.from({ length: 700 }, (_, i) => ({ ["c" + i]: i }));
-  ok(tool.handler({ json: wide }).columns === 700 && 700 * 700 <= JSON_TO_CSV_MAX_CELLS, "json-to-csv: 700 rows with 700 distinct keys are served");
-  for (const n of [1000, 7000, 10_000]) {
-    const r = await bestOf(() => tool.handler({ json: Array.from({ length: n }, (_, i) => ({ [i]: 1 })) }));
-    ok(r.err?.statusCode === 400 && /500000 cells/.test(r.err.message) && /fewer rows per call/.test(r.err.message), "json-to-csv: " + n + " rows with " + n + " distinct keys are refused naming the cap (" + r.err?.statusCode + " " + r.err?.message + ")");
-    ok(r.ms < BOUND_MS, "json-to-csv: refused in " + r.ms.toFixed(1) + "ms");
+  // Sparse sheets (rows that share no column) are served as before.
+  for (const n of [720, 2000]) {
+    const sparse = Array.from({ length: n }, (_, i) => ({ ["c" + i]: i }));
+    const got = await tool.handler({ json: sparse });
+    ok(got.columns === n && got.csv === oldAnswer(sparse).csv, "json-to-csv: " + n + " rows with " + n + " distinct keys convert as before (" + got.csv.length + " characters)");
   }
-  const atCap = await bestOf(() => tool.handler({ json: Array.from({ length: 707 }, (_, i) => ({ ["c" + i]: i })) }));
-  ok(atCap.ms < BOUND_MS / 2 && JSON.stringify(atCap.out).length < 1_000_000, "json-to-csv: a table at the cap converts in " + atCap.ms.toFixed(1) + "ms to " + JSON.stringify(atCap.out).length + " bytes");
+  // A sheet near the cell cap is written in slices: the loop gets many turns.
+  const big = await loopHold(() => tool.handler({ json: Array.from({ length: 3000 }, (_, i) => ({ [i]: 1 })) }));
+  ok(big.out?.columns === 3000 && big.out.csv.length > 9_000_000, "json-to-csv: 3,000 rows of 3,000 columns (9,000,000 cells) are served (" + big.out?.csv.length + " characters)");
+  ok(big.turns >= 10 && big.hold < BOUND_MS, "json-to-csv: that sheet gave the event loop back " + big.turns + " times (longest gap " + big.hold.toFixed(0) + "ms)");
+  for (const n of [4000, 7000, 10_000]) {
+    const r = await bestOf(() => tool.handler({ json: Array.from({ length: n }, (_, i) => ({ [i]: 1 })) }));
+    ok(r.err?.statusCode === 400 && r.err.message.includes(JSON_TO_CSV_MAX_CELLS + " cells") && r.err.message.includes(n + " rows of " + n + " columns") && /fewer rows per call/.test(r.err.message), "json-to-csv: " + n + " rows with " + n + " distinct keys are refused with the cap, the counts and how to split (" + r.err?.statusCode + " " + r.err?.message + ")");
+    ok(r.ms < BOUND_MS, "json-to-csv: refused in " + r.ms.toFixed(1) + "ms of CPU");
+  }
+  // The other bound is the size of the answer.
+  const heavy = await tool.handler({ json: Array.from({ length: 2100 }, (_, i) => ({ id: i, text: "y".repeat(8000) })) }).then(() => null, (e) => e);
+  ok(heavy?.statusCode === 413 && heavy.message.includes(JSON_TO_CSV_MAX_BYTES / 1_000_000 + " MB") && /2100 rows of 2 columns/.test(heavy.message) && /fewer rows per call/.test(heavy.message), "json-to-csv: a sheet past " + JSON_TO_CSV_MAX_BYTES / 1_000_000 + " MB of CSV is refused with the cap, the counts and how to split (" + heavy?.statusCode + " " + heavy?.message + ")");
 }
 
 // ---------------------------------------------------------------------------
@@ -412,34 +471,55 @@ function rng(seed) {
   for (const [name, fill] of [["spaces", " "], ["tabs", "\t"], ["comma-space", ", "], ["space-comma", " ,"], ["newline-space", "\n "], ["dots", "."], ["then", " then"]]) {
     const q = "a" + fill.repeat(Math.floor(498 / fill.length)) + "b";
     const r = await bestOf(() => splitSteps(q));
-    ok(r.ms < 5, "plan sketch: a 500-character run of " + name + " splits in " + r.ms.toFixed(2) + "ms");
+    ok(r.ms < 50, "plan sketch: a 500-character run of " + name + " splits in " + r.ms.toFixed(2) + "ms of CPU");
     ok(JSON.stringify(splitSteps(q)) === JSON.stringify(oldSplit(q)), "plan sketch: the run of " + name + " splits as before");
   }
 }
 
 // ---------------------------------------------------------------------------
-// A field a pure-CPU tool cannot coerce is the caller's 400.
+// A field that cannot be coerced is the caller's 400, with the field named;
+// every other bare error stays a 500 the failure monitor counts.
 // ---------------------------------------------------------------------------
 {
-  const mapped = (e) => callerInputError(e);
-  ok(mapped(new TypeError("Cannot convert object to primitive value")).statusCode === 400 && /^Invalid input: Cannot convert/.test(mapped(new TypeError("Cannot convert object to primitive value")).message), "caller input: a bare TypeError reads as a 400 naming the cause");
-  ok(mapped(new RangeError("Invalid time value")).statusCode === 400, "caller input: a bare RangeError reads as a 400");
+  const statusOf = (e) => e?.statusCode || 500; // what the route binder answers
+  const typeErr = () => new TypeError("Cannot convert object to primitive value");
+  const m1 = callerInputError(typeErr(), { year: { toString: 1 } });
+  ok(m1.statusCode === 400 && /^"year" holds an object whose "toString" is not a function/.test(m1.message) && m1.field === "year" && toolClassOf(statusOf(m1)) === "buyer", "caller input: a TypeError on an input that cannot be coerced is a 400 naming the field (" + m1.message + ")");
+  const m2 = callerInputError(new RangeError("Invalid time value"), { ok: 1, a: { b: [1, { valueOf: "x" }] } });
+  ok(m2.statusCode === 400 && m2.message.startsWith('"a.b[1]" holds an object whose "valueOf"'), "caller input: the field is named by its path (" + m2.message + ")");
+  ok(JSON.stringify(uncoercibleAt({ a: { "odd key": [{ toString: 0 }] } })) === JSON.stringify({ path: 'a["odd key"][0]', key: "toString" }) && uncoercibleAt({ toString: 1 }).path === "" && /^The input holds/.test(callerInputError(typeErr(), { toString: 1 }).message), "caller input: odd keys and the input itself are named too");
+  // Coercible input: the error is the tool's own and stays one.
+  const bare = typeErr();
+  ok(callerInputError(bare, { year: 2026 }) === bare && !bare.statusCode && toolClassOf(statusOf(bare)) === "fail", "caller input: a TypeError on input that can be coerced stays a 500 and counts as a tool failure");
+  const range = new RangeError("Invalid time value");
+  ok(callerInputError(range, { date: "not a date" }) === range && toolClassOf(statusOf(range)) === "fail", "caller input: a RangeError on input that can be coerced stays a 500");
   const own = Object.assign(new TypeError("x"), { statusCode: 422 });
-  ok(mapped(own) === own, "caller input: an error with its own status passes through");
+  ok(callerInputError(own, { a: { toString: 1 } }) === own, "caller input: an error with its own status passes through");
   const plain = new Error("boom");
-  ok(mapped(plain) === plain && !plain.statusCode, "caller input: any other error passes through with no status (a 500)");
-  ok(mapped(Object.assign(new Error("x"), { statusCode: 500, threw: "TypeError" })).statusCode === 400, "caller input: a worker's bare TypeError reads as a 400");
-  const worker500 = Object.assign(new Error("x"), { statusCode: 500 });
+  ok(callerInputError(plain, { a: { toString: 1 } }) === plain && !plain.statusCode, "caller input: an error that is neither a TypeError nor a RangeError passes through");
+  ok(callerInputError(Object.assign(new Error("x"), { statusCode: 500, threw: "TypeError" }), { a: { toString: 1 } }).statusCode === 400, "caller input: a worker's bare TypeError on such an input reads as a 400");
+  const worker500 = Object.assign(new Error("x"), { statusCode: 500, threw: "TypeError" });
   const worker503 = Object.assign(new Error("x"), { statusCode: 503, threw: "TypeError" });
-  ok(mapped(worker500) === worker500 && mapped(worker503) === worker503, "caller input: a worker's own 500 or 503 passes through");
-  ok(holdsUncoercible({ a: [{ b: { toString: 1 } }] }) && holdsUncoercible({ valueOf: "x" }) && !holdsUncoercible({ a: [1, "x", { b: null }], toStringy: 1 }) && !holdsUncoercible("text") && !holdsUncoercible(null), "caller input: an object whose toString or valueOf is not a function is recognized at any depth");
+  ok(callerInputError(worker500, { a: 1 }) === worker500 && callerInputError(worker503, { a: { toString: 1 } }) === worker503, "caller input: a worker's 500 on coercible input, and its own 503, pass through");
+  ok(holdsUncoercible({ a: [{ b: { toString: 1 } }] }) && holdsUncoercible({ valueOf: "x" }) && !holdsUncoercible({ a: [1, "x", { b: null }], toStringy: 1 }) && !holdsUncoercible("text") && !holdsUncoercible(null) && !holdsUncoercible({ toString() { return "x"; } }), "caller input: an object whose toString or valueOf is not a function is recognized at any depth");
   ok(readableAsText({ toString: 1 }) === undefined && readableAsText("q") === "q" && Array.isArray(readableAsText(["a", "b"])) && readableAsText(undefined) === undefined, "caller input: a query that cannot be read as text reads as missing");
 
-  // Every pure-CPU tool of the two base kits, each example field replaced by a
-  // value that cannot be coerced: bare, some throw a TypeError; wrapped, none
-  // answers without a 4xx status.
-  const shapes = [{ toString: 1, valueOf: "x" }, [{ toString: 1 }], "not a date", 1e400, -1e21];
-  let bare = 0, calls = 0;
+  // A test double for a tool with a defect: it throws a TypeError whatever it
+  // is sent. Wrapped as the catalog wraps a tool, it is a 500 on ordinary
+  // input (counted), and a 400 only when the input itself cannot be coerced.
+  const defective = withCallerInputErrors(async () => { const none = undefined; return none.length; });
+  const d1 = await defective({ text: "ordinary" }).then(() => null, (e) => e);
+  ok(d1 instanceof TypeError && !d1.statusCode && toolClassOf(statusOf(d1)) === "fail", "caller input: a wrapped tool that throws a TypeError on ordinary input still answers 500 (" + d1?.message + ")");
+  const d2 = await defective({ text: { toString: 1 } }).then(() => null, (e) => e);
+  ok(d2?.statusCode === 400 && d2.message.startsWith('"text" holds'), "caller input: the same tool answers 400 naming the field when the input cannot be coerced");
+  const fine = withCallerInputErrors((i) => ({ n: String(i.n).length }));
+  ok((await fine({ n: 12 })).n === 2, "caller input: a wrapped tool's answer is untouched");
+
+  // Every pure-CPU tool of the base kits, each example field replaced by a
+  // value that cannot be coerced: bare, some throw a TypeError; wrapped, each
+  // of those is a 4xx, and the 400s the wrapper wrote name the field sent.
+  const shapes = [{ toString: 1, valueOf: "x" }, [{ toString: 1 }]];
+  let bareCount = 0, calls = 0, named = 0, mapped = 0;
   const unmapped = [];
   for (const tool of [...KIT, ...KIT2, ...TEXT_ANALYSIS_TOOLS, ...API_TOOLS]) {
     if (!FREE_TIER_SLUGS.has(tool.slug) || !tool.discovery?.input || typeof tool.discovery.input !== "object") continue;
@@ -447,16 +527,21 @@ function rng(seed) {
     for (const key of Object.keys(tool.discovery.input)) for (const shape of shapes) {
       const input = { ...tool.discovery.input, [key]: shape };
       calls++;
-      try { await tool.handler(input); } catch (e) { if (!e.statusCode && (e instanceof TypeError || e instanceof RangeError)) bare++; }
-      try { await wrapped(input); } catch (e) { if (!(e.statusCode >= 400 && e.statusCode < 500)) unmapped.push(tool.slug + "." + key + ": " + (e.statusCode || "no status") + " " + e.message); }
+      try { await tool.handler(input); } catch (e) { if (!e.statusCode && (e instanceof TypeError || e instanceof RangeError)) bareCount++; }
+      try { await wrapped(input); } catch (e) {
+        if (!(e.statusCode >= 400 && e.statusCode < 500)) unmapped.push(tool.slug + "." + key + ": " + (e.statusCode || "no status") + " " + e.message);
+        else if (e.field !== undefined) { mapped++; if (e.message.startsWith('"' + key)) named++; }
+      }
     }
   }
   for (const u of unmapped.slice(0, 10)) console.error("  " + u);
-  ok(bare >= 20, "caller input: control, " + bare + " of " + calls + " calls throw a bare TypeError or RangeError from the handler itself");
+  ok(bareCount >= 20, "caller input: control, " + bareCount + " of " + calls + " calls throw a bare TypeError or RangeError from the handler itself");
   ok(unmapped.length === 0, "caller input: wrapped, every one of those calls answers a 4xx (" + unmapped.length + " did not)");
+  ok(mapped === bareCount && named === mapped, "caller input: " + named + " of the " + mapped + " answers the wrapper wrote name the field that was sent");
   // The same through the HTML worker, which hands errors back as plain data.
-  let poolErr; try { await runHtml("tool", { slug: "html-table", input: { html: "<table><tr><td>1</td></tr></table>", format: 5 } }); } catch (e) { poolErr = e; }
-  ok(poolErr?.statusCode === 500 && poolErr.threw === "TypeError" && callerInputError(poolErr).statusCode === 400, "caller input: a TypeError inside the HTML worker comes back named and reads as a 400 (" + poolErr?.statusCode + " " + poolErr?.threw + ")");
+  const poolInput = { html: "<table><tr><td>1</td></tr></table>", selector: { toString: 1 } };
+  let poolErr; try { await runHtml("tool", { slug: "html-table", input: poolInput }); } catch (e) { poolErr = e; }
+  ok(poolErr?.statusCode === 500 && poolErr.threw === "TypeError" && callerInputError(poolErr, poolInput).statusCode === 400 && callerInputError(poolErr, poolInput).message.startsWith('"selector" holds'), "caller input: a TypeError inside the HTML worker comes back named and reads as a 400 naming the field (" + poolErr?.statusCode + " " + poolErr?.threw + ")");
   // The catalog applies the wrapper to the proof-of-work tools, where every surface reads the handler.
   const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   ok(/if \(isComputePayable\(def\) && typeof def\.handler === "function"\) def\.handler = withCallerInputErrors\(def\.handler\);/.test(server), "caller input: the assembled catalog wraps every proof-of-work tool's handler");

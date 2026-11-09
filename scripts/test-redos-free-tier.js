@@ -25,7 +25,9 @@
 // one twice, dates at the ends of the range a Date holds, and an object whose
 // toString is not a function. For those the guard also bounds the size of
 // the answer, and a proof-of-work tool may not answer any call with a 500 or
-// a 502: a field it cannot read is the caller's 400.
+// a 502: a field it cannot read is the caller's 400 (src/caller-input-errors.js
+// names the field for a value that cannot be coerced; every other case is
+// the tool's own check).
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { join, dirname } from "node:path";
@@ -78,7 +80,10 @@ function doublingRefs(depth) {
 // Values sent to every field as they are, whatever type the field declares.
 function structuredCorpus() {
   const refs = doublingRefs(18);
+  // The same fan-out closed into a cycle, where no resolved schema can be reused.
+  const cycle = doublingRefs(16); cycle.components.schemas.S16 = { $ref: "#/components/schemas/S0" };
   return {
+    doublingCycle: cycle,
     manyKeys: Array.from({ length: 7000 }, (_, i) => ({ [i]: 1 })),
     doublingRefs: refs,
     doublingRefsText: JSON.stringify(refs),
@@ -90,7 +95,8 @@ function structuredCorpus() {
     lastInstant: 8.64e15,
   };
 }
-const MAX_ANSWER_BYTES = 8_000_000;
+// Above the largest answer a tool may write (16 MB of resolved spec or of CSV, plus its envelope).
+const MAX_ANSWER_BYTES = 24_000_000;
 
 let passed = 0, failed = 0;
 const ok = (cond, msg) => {
@@ -178,12 +184,14 @@ const ok = (cond, msg) => {
 // must stay linear in the 500 characters it reads.
 {
   const { splitSteps } = await import("../src/plan-sketch.js");
-  const PLAN_BOUND_MS = Number(process.env.PLAN_BOUND_MS) || 20;
+  // The split takes microseconds; the pattern it replaced took over 100 ms on
+  // a run of spaces. Least of five, so a busy runner does not read as slow.
+  const PLAN_BOUND_MS = Number(process.env.PLAN_BOUND_MS) || 50;
   const slowPlans = [];
   for (const [name, fill] of Object.entries({ spaces: " ", tabs: "\t", commaSpace: ", ", spaceComma: " ,", newlines: "\n", thens: " then", dots: "." })) {
     const q = "a" + fill.repeat(Math.floor(498 / fill.length)) + "b";
     let best = Infinity;
-    for (let i = 0; i < 3; i++) { const t = performance.now(); splitSteps(q); best = Math.min(best, performance.now() - t); }
+    for (let i = 0; i < 5; i++) { const t = performance.now(); splitSteps(q); best = Math.min(best, performance.now() - t); }
     if (best > PLAN_BOUND_MS) slowPlans.push(`${name}: ${best.toFixed(1)}ms`);
   }
   ok(slowPlans.length === 0, `the plan sketch splits a 500-character run of each separator inside ${PLAN_BOUND_MS}ms (${slowPlans.join(", ") || "all"})`);
