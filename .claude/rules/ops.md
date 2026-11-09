@@ -150,6 +150,12 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   `{"action":"acknowledge_unrecorded","note"}`; each is recorded in the
   `late-settlements-resolutions` document before the entry is dropped and listed on
   `/__operator/refunds.json` (`unconfirmedSettlements.resolutions`).
+  Rollback: a build before batch 2026-11-08a counts unresolved entries toward the 2000-entry
+  bound and refuses a new booking past it ("NOT booked"), so before rolling back resolve entries
+  until the whole book (open plus unresolved, `/__operator/refunds.json`) is under 2000. Such a
+  build emits neither `lateSettlements` nor `subscriptionFeePayer.ceiling`; both read `unknown`,
+  which neither opens nor closes an issue, so close an open "Late settlements need attention" or
+  "Subscription gas sponsor CEILING reached" issue by hand after checking the log.
   A Gateway booking held outside its pending book is also written to the `gateway-pending-lost`
   state document (with a state database), read back by the next container; past 200 in memory the
   oldest is logged as an error naming it, the `gatewayPending` word pages for 24 hours, and it
