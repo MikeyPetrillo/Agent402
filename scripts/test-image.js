@@ -494,5 +494,24 @@ const hex = (n) => (n >>> 0).toString(16).padStart(8, "0");
   ok(f.width === 30 && f.height === 20 && at(f, 5, 5) === "3366ccff", `the TIFF encoder's own output decodes (${at(f, 5, 5)})`);
 }
 
+// BMP and WebP. The BMP decoder reads the width unsigned and treats a negative
+// height as top-down, so a "negative" width is a width past 2^31: the header
+// reader now answers the same number and the cap refuses it. No WebP decoder
+// is installed, so a WebP is answered with a 400 and nothing is allocated.
+{
+  const bmp = Buffer.from(await new Jimp({ width: 8, height: 8, color: 0x336699ff }).getBuffer(JimpMime.bmp));
+  const negativeWidth = Buffer.from(bmp); negativeWidth.writeInt32LE(-8, 18);
+  await refusedBy("a BMP with a negative width", negativeWidth, /^source image too large \(4294967288x8; max/);
+  const topDown = Buffer.from(bmp); topDown.writeInt32LE(-8, 22);
+  let b = await decoded(topDown);
+  ok(b.width === 8 && b.height === 8 && hex(b.getPixelColor(2, 2)) === "336699ff", `a top-down BMP (negative height) still decodes (${b.width}x${b.height}, ${hex(b.getPixelColor(2, 2))})`);
+  b = await decoded(Buffer.from(await new Jimp({ width: 33, height: 17, color: 0x336699ff }).getBuffer(JimpMime.bmp)));
+  ok(b.width === 33 && b.height === 17 && hex(b.getPixelColor(32, 16)) === "336699ff", `a BMP with padded rows still decodes (${b.width}x${b.height})`);
+
+  const webp = Buffer.alloc(40); webp.write("RIFF", 0); webp.writeUInt32LE(32, 4); webp.write("WEBPVP8X", 8); webp.writeUInt32LE(10, 16); webp.writeUIntLE(9, 24, 3); webp.writeUIntLE(9, 27, 3);
+  const w = await attempt(tool("image-convert"), webp, { format: "png" });
+  ok(w.code === 400 && /does not support decoding/.test(w.msg || ""), `a WebP is refused before any decoder runs (got ${w.code} "${w.msg}")`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

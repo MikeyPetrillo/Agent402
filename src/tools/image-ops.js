@@ -64,7 +64,9 @@ export function declaredDimensions(buf) {
       return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
     }
     if (format === "bmp" && buf.length >= 26) {
-      return { width: Math.abs(buf.readInt32LE(18)), height: Math.abs(buf.readInt32LE(22)) };
+      // The decoder reads the width unsigned and takes a negative height as a
+      // top-down image, so a "negative" width is a width past 2^31 here too.
+      return { width: buf.readUInt32LE(18), height: Math.abs(buf.readInt32LE(22)) };
     }
     if (format === "gif" && buf.length >= 10) {
       return { width: buf.readUInt16LE(6), height: buf.readUInt16LE(8) };
