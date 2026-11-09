@@ -15,6 +15,17 @@
 // polled. The longest /health wait during the call is how long the loop was
 // held; a call that holds it past the bound is re-run once and fails if it
 // holds it again.
+//
+// Two more corpora ride the same loop. The long corpus fills the body limit
+// with the runs whose cost shows only at that size (sentence punctuation
+// before a letter, unclosed emphasis, brackets, quote markers, spaces). The
+// structured corpus sends every field, whatever its declared type, a value
+// that is small on the wire and large or unreadable once handled: thousands
+// of objects that share no key, a spec whose every schema references the next
+// one twice, dates at the ends of the range a Date holds, and an object whose
+// toString is not a function. For those the guard also bounds the size of
+// the answer, and a proof-of-work tool may not answer any call with a 500 or
+// a 502: a field it cannot read is the caller's 400.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { join, dirname } from "node:path";
@@ -42,6 +53,44 @@ function corpus(n) {
     nl: "a\n".repeat(n / 2) + "!",
   };
 }
+
+// Sized to the JSON body limit (100 KB) less room for the rest of the body.
+function longCorpus(n) {
+  return {
+    dotsLetter: ".".repeat(n) + "x",
+    bangsLetter: "!?".repeat(n / 2) + "x",
+    emphasis: "*a ".repeat(n / 3),
+    brackets: "[".repeat(n),
+    quotes: "> ".repeat(n / 2),
+    spacesLetter: "a" + " ".repeat(n) + "b",
+  };
+}
+
+// A schema that references the next one twice, level after level: the
+// resolved document doubles per level.
+function doublingRefs(depth) {
+  const schemas = {};
+  for (let i = 0; i < depth; i++) schemas["S" + i] = { type: "object", properties: { a: { $ref: "#/components/schemas/S" + (i + 1) }, b: { $ref: "#/components/schemas/S" + (i + 1) } } };
+  schemas["S" + depth] = { type: "string" };
+  return { openapi: "3.0.0", info: { title: "t", version: "1" }, paths: { "/u": { get: { responses: { 200: { description: "ok", content: { "application/json": { schema: { $ref: "#/components/schemas/S0" } } } } } } } }, components: { schemas } };
+}
+
+// Values sent to every field as they are, whatever type the field declares.
+function structuredCorpus() {
+  const refs = doublingRefs(18);
+  return {
+    manyKeys: Array.from({ length: 7000 }, (_, i) => ({ [i]: 1 })),
+    doublingRefs: refs,
+    doublingRefsText: JSON.stringify(refs),
+    noToString: { toString: 1, valueOf: "x" },
+    noToStringList: [{ toString: 1 }],
+    farFuture: "+275000-01-01",
+    farPast: "-271821-04-20",
+    yearOne: "0001-01-01",
+    lastInstant: 8.64e15,
+  };
+}
+const MAX_ANSWER_BYTES = 8_000_000;
 
 let passed = 0, failed = 0;
 const ok = (cond, msg) => {
@@ -124,6 +173,22 @@ const ok = (cond, msg) => {
   }
 }
 
+// The plan sketch reads the task text of /api/find, /api/route and the
+// connector's catalog.find before any limiter that counts work: its split
+// must stay linear in the 500 characters it reads.
+{
+  const { splitSteps } = await import("../src/plan-sketch.js");
+  const PLAN_BOUND_MS = Number(process.env.PLAN_BOUND_MS) || 20;
+  const slowPlans = [];
+  for (const [name, fill] of Object.entries({ spaces: " ", tabs: "\t", commaSpace: ", ", spaceComma: " ,", newlines: "\n", thens: " then", dots: "." })) {
+    const q = "a" + fill.repeat(Math.floor(498 / fill.length)) + "b";
+    let best = Infinity;
+    for (let i = 0; i < 3; i++) { const t = performance.now(); splitSteps(q); best = Math.min(best, performance.now() - t); }
+    if (best > PLAN_BOUND_MS) slowPlans.push(`${name}: ${best.toFixed(1)}ms`);
+  }
+  ok(slowPlans.length === 0, `the plan sketch splits a 500-character run of each separator inside ${PLAN_BOUND_MS}ms (${slowPlans.join(", ") || "all"})`);
+}
+
 const srv = spawn(process.execPath,["--import", "./scripts/offline-egress-preload.js", "src/server.js"], {
   cwd: ROOT,
   env: {
@@ -152,15 +217,15 @@ async function timedCall(B, job) {
       await sleep(15);
     }
   })();
-  let status = "ERR";
+  let status = "ERR", bytes = 0;
   try {
     const r = await fetch(B + job.url, { method: job.method, headers: job.body ? { "content-type": "application/json" } : {}, body: job.body, signal: AbortSignal.timeout(60_000) });
-    await r.arrayBuffer();
+    bytes = (await r.arrayBuffer()).byteLength;
     status = r.status;
   } catch { /* a timeout is reported through the wait */ }
   inflight = false;
   await pinger;
-  return { maxWait, status };
+  return { maxWait, status, bytes };
 }
 
 try {
@@ -183,9 +248,12 @@ try {
     (ONLY ? ONLY.has(e.slug) : true) &&
     ((FREE_TIER_SLUGS.has(e.slug) && !WALLET_ONLY_SLUGS.has(e.slug)) || e.path.startsWith("/api/skill/")));
   const jobs = [];
+  const structured = structuredCorpus();
   for (const e of targets) {
     const op = openapi.paths?.[e.path]?.[e.method.toLowerCase()];
     if (!op) continue;
+    // A proof-of-work tool reads nothing but its input, so no input is a 500 or a 502.
+    const pure = FREE_TIER_SLUGS.has(e.slug) && !WALLET_ONLY_SLUGS.has(e.slug);
     if (e.method === "POST") {
       const c = op.requestBody?.content?.["application/json"];
       if (!c) continue;
@@ -196,19 +264,38 @@ try {
         // with no declared type) gets the string inside an object and a list.
         const asString = !types.length || types.includes("string");
         const asNested = !types.length || types.includes("object") || types.includes("array");
+        for (const [pn, pv] of Object.entries(structured)) jobs.push({ slug: e.slug, pure, method: "POST", url: e.path, body: JSON.stringify({ ...ex, [k]: pv }), label: `${e.slug} ${k} ${pn}` });
+        if (asString) for (const [pn, pv] of Object.entries(longCorpus(80_000))) jobs.push({ slug: e.slug, pure, method: "POST", url: e.path, body: JSON.stringify({ ...ex, [k]: pv }), label: `${e.slug} ${k} ${pn}` });
         if (!asString && !asNested) continue;
         for (const [pn, pv] of Object.entries(corpus(20_000))) {
-          if (asString) jobs.push({ slug: e.slug, method: "POST", url: e.path, body: JSON.stringify({ ...ex, [k]: pv }), label: `${e.slug} ${k} ${pn}` });
-          if (asNested) jobs.push({ slug: e.slug, method: "POST", url: e.path, body: JSON.stringify({ ...ex, [k]: types.includes("array") ? [pv] : { v: pv, list: [pv] } }), label: `${e.slug} ${k}.nested ${pn}` });
+          if (asString) jobs.push({ slug: e.slug, pure, method: "POST", url: e.path, body: JSON.stringify({ ...ex, [k]: pv }), label: `${e.slug} ${k} ${pn}` });
+          if (asNested) jobs.push({ slug: e.slug, pure, method: "POST", url: e.path, body: JSON.stringify({ ...ex, [k]: types.includes("array") ? [pv] : { v: pv, list: [pv] } }), label: `${e.slug} ${k}.nested ${pn}` });
         }
       }
     } else if (e.method === "GET") {
       const params = (op.parameters || []).filter((p) => p.in === "query" && (!p.schema?.type || p.schema.type === "string"));
       const ex = Object.fromEntries((op.parameters || []).filter((p) => p.in === "query" && p.example !== undefined).map((p) => [p.name, String(p.example)]));
       for (const p of params) {
-        for (const [pn, pv] of Object.entries(corpus(4_000))) jobs.push({ slug: e.slug, method: "GET", url: `${e.path}?${new URLSearchParams({ ...ex, [p.name]: pv })}`, label: `${e.slug} ${p.name} ${pn}` });
+        for (const [pn, pv] of Object.entries({ ...corpus(4_000), ...longCorpus(4_000) })) jobs.push({ slug: e.slug, pure, method: "GET", url: `${e.path}?${new URLSearchParams({ ...ex, [p.name]: pv })}`, label: `${e.slug} ${p.name} ${pn}` });
+      }
+      // Every query parameter, whatever its type: the far dates, and the
+      // bracket form a query parser reads as an object with a "toString" key.
+      for (const p of (op.parameters || []).filter((x) => x.in === "query")) {
+        for (const pn of ["farFuture", "farPast", "yearOne"]) jobs.push({ slug: e.slug, pure, method: "GET", url: `${e.path}?${new URLSearchParams({ ...ex, [p.name]: structured[pn] })}`, label: `${e.slug} ${p.name} ${pn}` });
+        const rest = new URLSearchParams(Object.fromEntries(Object.entries(ex).filter(([k]) => k !== p.name)));
+        jobs.push({ slug: e.slug, pure, method: "GET", url: `${e.path}?${rest}${[...rest].length ? "&" : ""}${encodeURIComponent(p.name)}%5BtoString%5D=1`, label: `${e.slug} ${p.name} noToString` });
       }
     }
+  }
+  // The free discovery routes read a task as text: a long run of spaces and a
+  // task that is not text. Not tools, so they ride under their own names.
+  for (const [name, path] of [["_find", "/api/find"], ["_route", "/api/route"]]) {
+    if (ONLY && !ONLY.has(name)) continue;
+    const spaces = "a" + " ".repeat(498) + "b";
+    jobs.push({ slug: name, pure: true, method: "GET", url: `${path}?${new URLSearchParams({ q: spaces })}`, label: `${name} q spacesLetter` });
+    jobs.push({ slug: name, pure: true, method: "POST", url: path, body: JSON.stringify({ q: spaces }), label: `${name} q spacesLetter (body)` });
+    jobs.push({ slug: name, pure: true, method: "POST", url: path, body: JSON.stringify({ q: { toString: 1 } }), label: `${name} q noToString (body)` });
+    jobs.push({ slug: name, pure: true, method: "GET", url: `${path}?q%5BtoString%5D=1`, label: `${name} q noToString` });
   }
   const slugs = new Set(jobs.map((j) => j.slug));
   ok(slugs.size >= (ONLY ? 1 : 100), `${jobs.length} adversarial calls across ${slugs.size} tools and skills`);
@@ -220,15 +307,22 @@ try {
     ok(ctl.maxWait < BOUND_MS, `control: a trivial call leaves /health answering (${ctl.maxWait}ms)`);
   }
 
-  const slow = [];
+  const slow = [], large = [], faults = [];
+  let pureCalls = 0;
   const t0 = Date.now();
   for (const job of jobs) {
     let r = await timedCall(B, job);
     if (r.maxWait > BOUND_MS) r = await timedCall(B, job); // re-probe once
     if (r.maxWait > BOUND_MS) slow.push(`${job.label}: loop held ${r.maxWait}ms (status ${r.status})`);
+    if (r.bytes > MAX_ANSWER_BYTES) large.push(`${job.label}: ${r.bytes} bytes (status ${r.status})`);
+    if (job.pure) { pureCalls++; if (r.status === 500 || r.status === 502 || r.status === "ERR") faults.push(`${job.label}: status ${r.status}`); }
   }
   for (const s of slow) console.error(`  slow: ${s}`);
   ok(slow.length === 0, `no call holds the event loop past ${BOUND_MS}ms (${jobs.length} calls in ${Math.round((Date.now() - t0) / 1000)}s)`);
+  for (const s of large) console.error(`  large: ${s}`);
+  ok(large.length === 0, `no call answers more than ${MAX_ANSWER_BYTES / 1_000_000} MB`);
+  for (const s of faults.slice(0, 40)) console.error(`  fault: ${s}`);
+  ok(faults.length === 0, `no proof-of-work tool answers a 500 or a 502 for any input (${faults.length} of ${pureCalls} calls did)`);
   ok(srv.exitCode === null, "the server is still up after the corpus");
 } catch (e) {
   failed++;
