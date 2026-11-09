@@ -74,7 +74,8 @@ Loaded when an index, discovery, router or buyer file is read.
   `SOR_SELLER_REFUSAL_TTL_MS` (6 h), and a settled delivery clears it (`src/x402-buyer.js`). When
   `SOR_CHAIN_REFUSAL_OURS_MIN` (default 5) different sellers on one chain refuse our paid retries
   inside `SOR_CHAIN_REFUSAL_WINDOW_MS` (default 30 minutes) with no settle on that chain between
-  them, the cause is read as ours: no route on that chain is noted until a payment there settles.
+  them, the cause is read as ours: no route on that chain is noted until a payment there settles or
+  those refusals age out of the window.
 - **EVM buyer chains:** `src/evm-buyer-chains.js` lists the EVM chains the one spending wallet
   (`X402_UPSTREAM_BUYER_KEY`) can pay a seller on: Base, Arc, Celo, Polygon, Arbitrum and Robinhood
   (USDG), each with its asset, decimals and EIP-712 domain from our own tables, never the seller's.

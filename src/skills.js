@@ -213,7 +213,7 @@ export const SKILL_PACKS = [
     slug: "security-audit",
     title: "Security audit",
     tagline:
-      "Security audit skill: one call runs the external checks side by side and returns each step's own result: certificate transparency log, DNS records, SPF, DMARC, HTTP security headers, TLS certificate and tech stack. Per-step findings with no grade or written report.",
+      "Security audit skill: one call runs the external checks in sequence and returns each step's own result: certificate transparency log, DNS records, SPF, DMARC, HTTP security headers, TLS certificate and tech stack. Per-step findings with no grade or written report.",
     useCase:
       "Before a pentest, an acquisition diligence call, or a quarterly review - you want a fast read on what an attacker sees from the outside.",
     promptArgs: [
@@ -884,7 +884,7 @@ export const SKILL_PACKS = [
     slug: "location-intel",
     title: "Location intel",
     tagline:
-      "Location intel skill: one call turns an address or place name into a situational brief: coordinates, the postal address, nearby places, the weather forecast, active hazard alerts and recent earthquakes.",
+      "Location intel skill: one call turns an address or place name into a situational brief: coordinates, the postal address, restaurants in the area, the weather forecast, active hazard alerts, and the past week's magnitude 2.5 and larger earthquakes worldwide.",
     useCase:
       "A field-ops agent (sales rep about to visit a customer, contractor scoping a job site, traveler arriving in a new city, emergency-response coordinator) hands the pack an address and needs the full pre-arrival brief in one workup. Geocode pins the spot, reverse-geocode confirms the canonical postal form (catches stale addresses where the building number changed), place-search surfaces nearby POIs (gas, coffee, hospital, supplies), weather-forecast covers the next 24-48h conditions, weather-alerts surfaces any active NWS warning (red flag / flood / heat / tornado), and earthquakes filters recent seismic activity in the region. US-centric for hazards/forecast; geocoding works globally.",
     promptArgs: [
@@ -1874,7 +1874,7 @@ export const SKILL_PACKS = [
     slug: "email-security",
     title: "Email security",
     tagline:
-      "Email security skill: one parallel call returns SPF, DMARC and DKIM checks each as its own result, beside the combined mail score, to judge whether the domain can be spoofed.",
+      "Email security skill: one parallel call returns SPF, DMARC and a DKIM check at the google selector, each as its own result, beside the combined mail score, to judge whether the domain can be spoofed.",
     useCase:
       "Diagnosing email authentication - can this domain be spoofed, and is its mail configuration complete.",
     promptArgs: [
@@ -2228,7 +2228,7 @@ export const SKILL_PACKS = [
     slug: "entity-enrich",
     title: "Entity enrichment",
     tagline:
-      "Enrich a company name in one parallel call: public knowledge-base facts, the LEI legal-entity record, the SEC filer record, domain registration, tech stack and favicon, each as its own step's result.",
+      "Enrich a company name in one parallel call: public knowledge-base facts, the LEI legal-entity record, the SEC filer record, and, when a domain is given, its registration, tech stack and favicon, each as its own step's result.",
     useCase:
       "KYB, lead enrichment, or counterparty checks - an agent has a company name (maybe a domain and ticker) and needs to establish that the entity is real, who it legally is, and what its web presence looks like.",
     promptArgs: [
@@ -2274,7 +2274,7 @@ export const SKILL_PACKS = [
     slug: "subtitle-pipeline",
     title: "Subtitle pipeline",
     tagline:
-      "Audio URL → finished subtitles in one call: transcribe the audio, emit the transcript as SRT/WebVTT/JSON cues, and report the text statistics - length, reading time, word count.",
+      "Audio URL → finished subtitles in one call: transcribe the audio (model-backed), emit the transcript as SRT/WebVTT/JSON cues, and report the text statistics - length, reading time, word count.",
     useCase:
       "An agent processing podcasts, voice notes, or video audio needs shippable subtitle files plus the stats to budget downstream steps (summarization, translation, chapters) - without stitching three tools by hand.",
     promptArgs: [

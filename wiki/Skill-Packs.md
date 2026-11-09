@@ -72,7 +72,7 @@ Every pack is **also a single paid endpoint**, `POST /api/skill/{slug}`, which r
 | [**loan-comparison**](https://agent402.tools/skills/loan-comparison) | $0.006 | Compare loan offers with different rates and terms: payment, amortization, compound interest, NPV, IRR. |
 | [**financial-research**](https://agent402.tools/skills/financial-research) | $0.024 | SEC filings + real-time quotes + history + macro context for a single ticker. |
 | [**financial-analysis**](https://agent402.tools/skills/financial-analysis) | $0.024 | Quick company snapshot: live quote, 9 key financial metrics, and upcoming earnings. |
-| [**company-dossier**](https://agent402.tools/skills/company-dossier) | $0.037 | Comprehensive company research in one call: quote, financials, filings, insider trades, news. |
+| [**company-dossier**](https://agent402.tools/skills/company-dossier) | $0.037 | Raw company data in one call: latest close, financials, recent SEC filings, 90 days of insider trades and recent news results, each as its own answer (no written report). |
 | [**earnings-watch**](https://agent402.tools/skills/earnings-watch) | $0.015 | Has this company just reported? Newest SEC filings, the latest close, and recent coverage of analyst expectations. |
 | [**earnings-deep-dive**](https://agent402.tools/skills/earnings-deep-dive) | $0.033 | Everything before a company reports: the upcoming date, latest financials, recent filings, live quote, and fresh news in one pass. |
 | [**insider-alert**](https://agent402.tools/skills/insider-alert) | $0.01 | Insider buying/selling for a stock: Form 4 trades, live quote, and recent SEC filings. |
@@ -146,7 +146,7 @@ Every pack is **also a single paid endpoint**, `POST /api/skill/{slug}`, which r
 |---|---|---|
 | [**user-onboarding**](https://agent402.tools/skills/user-onboarding) | $0.008 | Take a signup form and run onboarding deterministically - validate, score, mint ID, slug, hash, verify 2FA. |
 | [**contact-verify**](https://agent402.tools/skills/contact-verify) | $0.004 | Verify an email is deliverable - syntax validation plus MX record check on the domain. |
-| [**entity-enrich**](https://agent402.tools/skills/entity-enrich) | $0.022 | Company name to verified identity plus web footprint: Wikidata facts, the LEI legal-entity record, the SEC filer, domain registration, tech stack, and brand favicon. |
+| [**entity-enrich**](https://agent402.tools/skills/entity-enrich) | $0.022 | A company name to its public records: Wikidata facts, the LEI legal-entity record and the SEC filer record, plus, when a domain is given, its registration, tech stack and favicon. |
 
 ## Location & time (5)
 
@@ -169,7 +169,7 @@ Every pack is **also a single paid endpoint**, `POST /api/skill/{slug}`, which r
 
 | Pack | Price | What it solves |
 |---|---|---|
-| [**search-and-cite**](https://agent402.tools/skills/search-and-cite) | $0.101 | Research a question, return an answer with citations - synthesized take + SERP + news, verified by fetch. |
+| [**search-and-cite**](https://agent402.tools/skills/search-and-cite) | $0.101 | A cited answer to a question (model-backed) beside web and news results, then the top citation fetched and its entities extracted, so a claim can be traced to a page. |
 | [**article-digest**](https://agent402.tools/skills/article-digest) | $0.09 | Quick research brief on any topic - web search results plus an AI-generated answer. |
 | [**feed-watch**](https://agent402.tools/skills/feed-watch) | $0.016 | Monitor an RSS/Atom feed: parse it, read the top story in full, extract the keywords driving the cycle, and diff the item list against your last run to isolate what is new. |
 

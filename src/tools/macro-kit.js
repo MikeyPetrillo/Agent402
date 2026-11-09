@@ -309,7 +309,7 @@ export const MACRO_TOOLS = [
   {
     route: "GET /api/treasury-yield-history", name: "US Treasury yield history", slug: "treasury-yield-history", category: "data", price: "$0.005",
     description:
-      "Daily history of US Treasury constant-maturity yields over the last N business days, oldest first: one row per day with recordDate and each maturity's yield in percent. ?days=30 (1-250, default 30). Source: FRED DGS* series (St. Louis Fed), public domain.",
+      "Daily history of US Treasury constant-maturity yields over the last N business days, oldest first: one row per day with recordDate and each maturity's yield in percent. Source: FRED DGS* series (St. Louis Fed), public domain. ?days=30 (1-250, default 30).",
     tags: ["treasury", "yield-curve", "history", "interest-rates", "rates", "macro", "bonds", "time-series"],
     discovery: {
       input: { days: 30 },
