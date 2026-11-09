@@ -223,7 +223,10 @@ ok(invoices.length === 1 && invoices[0].amountUsd === 9 && invoices[0].product =
   ok(lb.get("sub_skew")?.status === "unpaid", "a status update stamped 30 s behind our clock still applies after a live read (the read is stamped LIVE_READ_SKEW_S early)");
   // The thanks page's live read (recordFromSession) is stamped the same way.
   sessions.cs_skew2 = { id: "cs_skew2", mode: "subscription", payment_status: "paid", status: "complete", subscription: "sub_skew2", customer: "cus_skew2", customer_details: { email: "s2@x.com" }, metadata: { product: "domain-monitor", target: "skew2.com" } };
-  ok((await lb.recordFromSession("cs_skew2")).status === "active", "setup: the thanks page provisions from a live read");
+  const retrieveKeep = stripe.subscriptions.retrieve;
+  stripe.subscriptions.retrieve = async (id) => ({ id, status: "active" });
+  ok((await lb.recordFromSession("cs_skew2")).status === "active" && Number(lb.get("sub_skew2")?.statusEventAt) > 0, "setup: the thanks page provisions from a live read, which stamps the record");
+  stripe.subscriptions.retrieve = retrieveKeep;
   await send("evt_s2", "customer.subscription.updated", { id: "sub_skew2", customer: "cus_skew2", status: "unpaid", metadata: {} }, Math.floor(Date.now() / 1000) - 30);
   ok(lb.get("sub_skew2")?.status === "unpaid", "a status update stamped 30 s behind our clock still applies after the thanks page's live read");
 
