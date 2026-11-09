@@ -2952,6 +2952,8 @@ jobs:
           t node scripts/test-index-parts.js
           t node scripts/test-stall-profiler.js
           t node scripts/test-offload-stalls.js
+          # A registry-fallback crawl of a 77k-row seller takes its whole-list passes across turns (offline)
+          t node scripts/test-fallback-crawl-turn.js
           # Ledger and index figures behind the stalled routes build across turns: same answers as the one-turn reads, first request after a production-sized boot under the bound (boots the server; offline)
           t node scripts/test-stall-routes.js
           t node scripts/test-manifest-input-schema.js

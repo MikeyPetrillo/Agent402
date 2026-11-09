@@ -2693,6 +2693,9 @@ async function normaliseOpenapiToolsSliced(openapi, originUrl) {
 // is next in line; the work is the same, only its spread over turns changes.
 const crawlLaneQueue = [];
 let crawlLanePumping = false;
+// A bazaar-fallback crawl whose registry and OpenAPI rows pass this count
+// takes a lane turn between its whole-list passes (see crawlSeller).
+const FALLBACK_PASS_TURN_ROWS = 2000;
 function crawlLaneTurn() {
   return new Promise((resolve) => {
     crawlLaneQueue.push(resolve);
@@ -6038,36 +6041,45 @@ async function crawlSeller(originUrl, { deadlineAt = 0, forcePaywall = false } =
         noteFallback("/llms.txt", e);
       }
     }
-    const tools = dropUnvouchedNonProductRoutes(
-      mergeOpenapiIntoBazaar(openapiTools, bazaarTools, {
-        allRoutes: openapi ? openapiAllOperationRoutes(openapi, originUrl) : [],
-      }),
-      bazaarTools.map((t) => t.route)
-    );
+    // Each pass below walks every registry row, and the registry is read
+    // before the per-seller tool cap (one seller lists 77k rows): run back to
+    // back they held the loop ~300 ms locally. A large list takes one crawl
+    // lane turn between passes; the passes, their inputs and order are as before.
+    const passTurn = bazaarTools.length + openapiTools.length > FALLBACK_PASS_TURN_ROWS ? crawlLaneTurn : null;
+    const merged = mergeOpenapiIntoBazaar(openapiTools, bazaarTools, {
+      allRoutes: openapi ? openapiAllOperationRoutes(openapi, originUrl) : [],
+    });
+    if (passTurn) await passTurn();
+    const tools = dropUnvouchedNonProductRoutes(merged, bazaarTools.map((t) => t.route));
+    if (passTurn) await passTurn();
     if (tools.length) {
       stampDeclared(tools, [...openapiTools, ...(openapi ? openapiAllOperationRoutes(openapi, originUrl) : [])]);
+      if (passTurn) await passTurn();
       // Same enrichment as the manifest path. A seller discovered through the
       // FALLBACK surfaces is even less likely to have published a price, so
       // skipping it here would leave the worst-served sellers unpriced.
       carryForwardLearnedQuotes(tools, prev);
+      if (passTurn) await passTurn();
       // Crawl-local, as on the manifest path: the probe body only.
       const probeExamples = openapi ? openapiProbeExamples(openapi, originUrl, new Map()) : null;
       // In memory only, for a re-price; this branch's reads are unconditional.
       probeExampleMemo.set(originUrl, "manifest", null);
       probeExampleMemo.set(originUrl, "openapi", probeExamples);
       await enrichLiveQuotes(tools, originUrl, { deadlineAt, redirectedTo: prev?.redirectedTo ?? null, probeExamples });
+      if (passTurn) await passTurn();
       // A real (non-synthesized) manifest from a past crawl is kept; a stale
       // synthesized one is rebuilt so a newly appeared openapi title wins.
       const keepManifest = prev?.manifest && !prev.manifest.synthesized ? prev.manifest : null;
+      const manifest = keepManifest ||
+        (openapi
+          ? synthManifestFromOpenapi(originUrl, openapi, tools)
+          : synthManifestFromBazaar(originUrl, bazaarTools));
+      if (passTurn) await passTurn();
       cache.set(originUrl, {
         // A fresh tool list: the total is read from it, not the old entry
         // (a seller that shrank from 77,000 tools to 6,000 reads 6,000).
         ...freshListBase(prev),
-        manifest:
-          keepManifest ||
-          (openapi
-            ? synthManifestFromOpenapi(originUrl, openapi, tools)
-            : synthManifestFromBazaar(originUrl, bazaarTools)),
+        manifest,
         openapiSummary: openapi ? { paths: Object.keys(openapi.paths || {}).length } : prev?.openapiSummary ?? null,
         tools,
         fetchedAt: Date.now(),
