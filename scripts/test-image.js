@@ -213,5 +213,95 @@ catch (e) { ok(e.statusCode === 400, "image-exif without url/image throws 400");
   ok(ticks >= Math.floor(ms / 20 / 2), `event loop kept ticking while both decoded (${ticks} ticks in ${ms}ms)`);
 }
 
+// ---------------------------------------------------------------------------
+// Header versus decoder. The pixel cap is read from a container's header; it
+// bounds the decode only when the decoder sizes its buffers from that same
+// field. Each block below builds a small file whose first size field is small
+// and whose decoded size is not, and asserts a 400 that names what was wrong,
+// answered from the header (no worker, no decode). Each also decodes the
+// ordinary shapes of its format, so the checks refuse nothing a buyer sends.
+const zlibMod = await import("node:zlib");
+const { createRequire } = await import("node:module");
+const { assertDeclaredWithinPixelCap } = await import("../src/tools/image-ops.js");
+const barcodeDecode = (await import("../src/tools/barcode-kit.js")).BARCODE_TOOLS.find((t) => t.slug === "barcode-decode").handler;
+const le16 = (n) => [n & 255, (n >> 8) & 255];
+const attempt = async (handler, buf, extra = {}) => {
+  const t0 = Date.now();
+  try { return { code: 200, r: await handler({ image: buf.toString("base64"), ...extra }), ms: Date.now() - t0 }; }
+  catch (e) { return { code: e.statusCode, msg: e.message, ms: Date.now() - t0 }; }
+};
+// Every transform tool, with the least input each needs.
+const TRANSFORMS = [
+  ["image-resize", { width: 5 }], ["image-convert", { format: "png" }], ["image-thumbnail", {}],
+  ["image-crop", { width: 2, height: 2 }], ["image-dominant-color", {}],
+];
+const refusedBy = async (label, buf, pattern, handlers = TRANSFORMS.map(([slug, extra]) => [slug, tool(slug), extra])) => {
+  for (const [name, handler, extra] of handlers) {
+    const a = await attempt(handler, buf, extra);
+    ok(a.code === 400 && pattern.test(a.msg || "") && a.ms < 500, `${name} refuses ${label} from its header (got ${a.code} "${a.msg}" in ${a.ms}ms)`);
+  }
+};
+// Decode through image-convert (the worker path) and hand back the pixels.
+const decoded = async (buf) => Jimp.read((await tool("image-convert")({ image: buf.toString("base64"), format: "png" })).__binary);
+const hex = (n) => (n >>> 0).toString(16).padStart(8, "0");
+
+// GIF. Frame 0 is decoded at the FRAME's size, and the decoder steps over an
+// application extension whose first sub-block is not 11 bytes by a fixed
+// count, not by its sub-block chain. So the frame is read with the decoder's
+// own parser, and a 10x10 screen with a 20000x20000 frame behind such an
+// extension is refused like any other frame larger than its screen.
+{
+  const head = (w, h) => Buffer.from([...Buffer.from("GIF89a"), ...le16(w), ...le16(h), 0x80, 0, 0, 0, 0, 0, 255, 255, 255]);
+  const frame = (x, y, w, h) => Buffer.from([0x2c, ...le16(x), ...le16(y), ...le16(w), ...le16(h), 0, 2, 2, 0x44, 0x01, 0]);
+  const END = Buffer.from([0x3b]);
+  const behindExtension = (w, h) => {
+    const d = Buffer.alloc(29); d[16] = 0x2c; d.writeUInt16LE(w, 21); d.writeUInt16LE(h, 23); d[26] = 2; d[28] = 0x3b;
+    return Buffer.concat([head(10, 10), Buffer.from([0x21, 0xff, 29]), d, Buffer.from([0]), END]);
+  };
+  const hidden = behindExtension(20000, 20000);
+  ok(hidden.length === 53, `the hidden-frame GIF is 53 bytes (got ${hidden.length})`);
+  await refusedBy("a GIF frame hidden behind an application extension", hidden, /^gif frame \(20000x20000 at 0,0\) extends past its 10x10 canvas/);
+
+  // Both axes, size and offset, each on its own.
+  const convert = [["image-convert", tool("image-convert"), { format: "png" }]];
+  await refusedBy("a GIF frame taller than its canvas", Buffer.concat([head(10, 10), frame(0, 0, 10, 30000), END]), /^gif frame \(10x30000 at 0,0\)/, convert);
+  await refusedBy("a GIF frame wider than its canvas", Buffer.concat([head(10, 10), frame(0, 0, 30000, 10), END]), /^gif frame \(30000x10 at 0,0\)/, convert);
+  await refusedBy("a GIF frame pushed past the bottom edge", Buffer.concat([head(10, 10), frame(0, 5, 10, 10), END]), /^gif frame \(10x10 at 0,5\)/, convert);
+  await refusedBy("a GIF frame pushed past the right edge", Buffer.concat([head(10, 10), frame(5, 0, 10, 10), END]), /^gif frame \(10x10 at 5,0\)/, convert);
+  await refusedBy("a hidden GIF frame that is only too tall", behindExtension(10, 20000), /^gif frame \(10x20000 at 0,0\)/, convert);
+  await refusedBy("a GIF with no frame", Buffer.concat([head(10, 10), END]), /^gif has no image frame/, convert);
+  await refusedBy("a GIF the reader rejects", Buffer.concat([head(10, 10), Buffer.from([0]), frame(0, 0, 10, 10), END]), /^gif could not be read: Unknown gif block/, convert);
+
+  // Ordinary GIFs, written with the same library the decoder comes from.
+  const viaJimp = createRequire(createRequire(import.meta.url).resolve("jimp"));
+  const omggif = createRequire(viaJimp.resolve("@jimp/js-gif"))("omggif");
+  const palette = [0x000000, 0xff0000, 0x00ff00, 0x0000ff];
+  const write = (w, h, opts, frames) => {
+    const out = Buffer.alloc(64 * 1024); const gw = new omggif.GifWriter(out, w, h, opts);
+    for (const [x, y, fw, fh, index, fopts] of frames) gw.addFrame(x, y, fw, fh, new Uint8Array(fw * fh).fill(index), fopts);
+    return out.subarray(0, gw.end());
+  };
+  const RED = "ff0000ff";
+  let g = await decoded(write(64, 48, { palette, loop: 0 }, [[8, 4, 40, 30, 1, { delay: 5 }], [20, 10, 10, 10, 2, { delay: 5 }], [0, 0, 64, 48, 3, { delay: 5 }]]));
+  ok(g.width === 64 && g.height === 48 && hex(g.getPixelColor(10, 10)) === RED && hex(g.getPixelColor(0, 0)) !== RED, `an animated GIF whose first frame is a sub-rectangle decodes (${g.width}x${g.height}, ${hex(g.getPixelColor(10, 10))})`);
+  g = await decoded(write(32, 32, {}, [[0, 0, 32, 32, 1, { palette }]]));
+  ok(g.width === 32 && hex(g.getPixelColor(5, 5)) === RED, `a GIF with only a local palette decodes (${hex(g.getPixelColor(5, 5))})`);
+  g = await decoded(write(32, 32, { palette }, [[16, 16, 16, 16, 1, {}]]));
+  ok(g.width === 32 && hex(g.getPixelColor(31, 31)) === RED && hex(g.getPixelColor(15, 15)) !== RED, `a GIF frame flush with the bottom-right edge decodes (${hex(g.getPixelColor(31, 31))})`);
+  const plain = write(32, 32, { palette }, [[0, 0, 32, 32, 1, {}]]);
+  const xmp = Buffer.concat([Buffer.from([0x21, 0xff, 0x0b]), Buffer.from("XMP DataXMP"), Buffer.from([200]), Buffer.alloc(200, 0x20), Buffer.from([0])]);
+  g = await decoded(Buffer.concat([plain.subarray(0, 25), xmp, plain.subarray(25)]));
+  ok(g.width === 32 && hex(g.getPixelColor(5, 5)) === RED, `a GIF with an XMP application extension decodes (${hex(g.getPixelColor(5, 5))})`);
+  g = await decoded(await new Jimp({ width: 120, height: 80, color: 0x3366ccff }).getBuffer("image/gif"));
+  ok(g.width === 120 && g.height === 80, `the GIF encoder's own output decodes (${g.width}x${g.height})`);
+
+  // The check runs on the main thread, so it has to stay a walk of the block
+  // list: 5 MB of the smallest frames a GIF can hold (measured 8 ms warm).
+  const many = Buffer.concat([head(100, 100), ...Array(Math.floor(5e6 / 16)).fill(frame(0, 0, 100, 100)), END]);
+  assertDeclaredWithinPixelCap(many.subarray(0, 64), 16e6); // load the parser outside the timing
+  const t0 = performance.now(); assertDeclaredWithinPixelCap(many, 16e6); const ms = performance.now() - t0;
+  ok(ms < 150, `a 5 MB GIF of 312,500 frames is checked in ${ms.toFixed(1)} ms (< 150 ms)`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

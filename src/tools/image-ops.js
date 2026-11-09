@@ -10,6 +10,10 @@
 // jimp loads with the first decode (./lazy-deps.js), not at boot: on the main
 // thread that keeps its evaluation off the startup path; the worker preloads it.
 import { loadJimp } from "./lazy-deps.js";
+import { assertGifHeader, gifFirstFrame } from "./image-headers.js";
+
+// Re-exported with the rest of the header readers.
+export { gifFirstFrame };
 
 export function bad(message) {
   return Object.assign(new Error(message), { statusCode: 400 });
@@ -45,10 +49,10 @@ export function sniffFormat(buf) {
 }
 
 /** Declared pixel dimensions from the container HEADER, without decoding.
- *  Returns null when the format carries no cheap size field (Jimp then decodes
- *  and the post-decode cap still applies). PNG: IHDR is always the first chunk.
- *  JPEG: the first SOF marker. BMP: the DIB header. GIF: the logical screen
- *  descriptor. All are fixed offsets, so this is a few byte reads. */
+ *  Returns null when the format carries no cheap size field (readImage refuses
+ *  those). PNG: the first chunk's IHDR. JPEG: the first SOF marker found. BMP: the DIB header. GIF: the logical screen descriptor.
+ *  TIFF: the first directory. This reports a size; whether the decoder is
+ *  held to it is assertDeclaredWithinPixelCap's job. */
 export function declaredDimensions(buf) {
   try {
     const format = sniffFormat(buf);
@@ -109,45 +113,23 @@ export function declaredDimensions(buf) {
   return null;
 }
 
-/** The first image descriptor of a GIF, read from the block chain without
- *  decoding: { x, y, width, height }, or null when there is none. The decoder
- *  sizes its index buffer from THIS rectangle, not from the logical screen
- *  that declaredDimensions reports, so the two are compared before a decode. */
-export function gifFirstFrame(buf) {
-  if (sniffFormat(buf) !== "gif" || buf.length < 13) return null;
-  let i = 13;
-  if (buf[10] & 0x80) i += 3 * (1 << ((buf[10] & 7) + 1)); // global color table
-  while (i < buf.length) {
-    const block = buf[i];
-    if (block === 0x2c) {
-      if (i + 10 > buf.length) return null;
-      return { x: buf.readUInt16LE(i + 1), y: buf.readUInt16LE(i + 3), width: buf.readUInt16LE(i + 5), height: buf.readUInt16LE(i + 7) };
-    }
-    if (block !== 0x21) return null; // trailer, or bytes that are not a block
-    i += 2; // introducer + label, then data sub-blocks up to a zero length
-    while (i < buf.length && buf[i] !== 0) i += buf[i] + 1;
-    i += 1;
-  }
-  return null;
-}
-
 /** Header pre-check for the source-pixel cap. Throws the same 400 the decoded
  *  check throws, so it does not matter which side of the worker boundary the
  *  refusal happens on. Cheap enough to run on the main thread BEFORE a worker is
  *  handed the job, which keeps a hostile small-file/huge-canvas request from
- *  even occupying a pool slot. */
+ *  even occupying a pool slot.
+ *
+ *  The declared size only bounds the decode when the decoder sizes its buffers
+ *  from that same field, so the container's structure is checked against its
+ *  decoder here too (src/tools/image-headers.js). All of it is a linear walk
+ *  of headers. */
 export function assertDeclaredWithinPixelCap(buf, maxPixels) {
   const declared = declaredDimensions(buf);
   if (declared && declared.width > 0 && declared.height > 0 && declared.width * declared.height > maxPixels) {
     throw bad(`source image too large (${declared.width}x${declared.height}; max ${maxPixels} pixels)`);
   }
-  // A GIF frame is decoded at its own size. One that reaches past the logical
-  // screen is outside the format and would be decoded at a size the cap above
-  // never saw, so it is refused here, before a worker or the decoder has it.
-  const frame = declared ? gifFirstFrame(buf) : null;
-  if (frame && (frame.x + frame.width > declared.width || frame.y + frame.height > declared.height)) {
-    throw bad(`gif frame (${frame.width}x${frame.height} at ${frame.x},${frame.y}) extends past its ${declared.width}x${declared.height} canvas`);
-  }
+  const format = sniffFormat(buf);
+  if (format === "gif") assertGifHeader(buf);
 }
 
 export async function readImage(buf, { maxPixels = MAX_SRC_PIXELS } = {}) {
