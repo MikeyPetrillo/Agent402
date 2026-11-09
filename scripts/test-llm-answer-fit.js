@@ -288,6 +288,15 @@ for (const [name, w] of Object.entries(WIRES)) {
     const b = await run(w.body(OPUS, smallBudgetThreshold(PREMIUM), "high", { stream: true }));
     ok(w.effortOf(b.sent[0]) === "high" && b.headers[REASONING_ADJUSTED_HEADER] === undefined, `${name} (g): a streamed effort that fits is sent unchanged, with no header`);
   }
+  // A walk that ends before any byte leaves no header behind on the error answer.
+  for (const [name, w] of Object.entries(WIRES)) {
+    globalThis.fetch = async () => ({ ok: false, status: 503, text: async () => "busy" });
+    const headers = {};
+    const res = { headersSent: false, setHeader(k, v) { headers[k] = v; }, removeHeader(k) { delete headers[k]; }, writeHead() { this.headersSent = true; }, flushHeaders() {}, write() {}, end() {}, on() {}, once() {}, off() {} };
+    const h = await w.tool(PREMIUM).handler(w.body(OPUS, 1024, "high", { stream: true, model_fallback: false }), req());
+    const e = await h.__sse(res).then(() => null, (x) => x);
+    ok(!!e && res.headersSent === false && headers[REASONING_ADJUSTED_HEADER] === undefined, `${name} (g): a stream walk that fails before its first byte clears the header (${e?.statusCode})`);
+  }
   ok(CORS_EXPOSE_HEADERS.includes(REASONING_ADJUSTED_HEADER), "a browser client can read the stream header (CORS exposes it)");
 }
 

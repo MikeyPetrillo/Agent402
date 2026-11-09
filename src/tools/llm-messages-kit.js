@@ -587,7 +587,7 @@ export function makeMessagesHandler(routeTier) {
             }
             client.assertPresent();
             throw lastErr || bad("No upstream model could serve this request", 502);
-          } finally { client.done(); }
+          } finally { client.done(); setReasoningAdjustedHeader(res, null); }
         },
       };
     }

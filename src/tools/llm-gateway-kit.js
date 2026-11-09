@@ -4284,7 +4284,7 @@ function makeHandler(routeTier) {
             }
             client.assertPresent();
             throw lastErr;
-          } finally { client.done(); }
+          } finally { client.done(); setReasoningAdjustedHeader(res, null); }
         },
       };
     }
