@@ -5,6 +5,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { isIP } from "node:net";
 import zlib from "node:zlib";
 import { convertAnyUnit, UNIT_CATEGORIES } from "./convert-gen.js";
+import { countSentenceEnds } from "./sentence-ends.js";
 
 function bad(message) {
   const err = new Error(message);
@@ -426,7 +427,7 @@ const text = [
     handler: (i) => {
       const t = cap(need(i, "text"), 200_000);
       const words = t.match(/\b[a-zA-Z]+\b/g) || [];
-      const sentences = Math.max((t.match(/[.!?]+(\s|$)/g) || []).length, 1);
+      const sentences = Math.max(countSentenceEnds(t), 1);
       const syl = words.reduce((s, w) => s + syllables(w), 0);
       const W = Math.max(words.length, 1);
       const ease = 206.835 - 1.015 * (W / sentences) - 84.6 * (syl / W);

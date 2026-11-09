@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { loadJsdom } from "./lazy-deps.js";
 import { hiddenMode, HIDDEN_INPUT_SCHEMA, HIDDEN_OUTPUT_EXAMPLE } from "./hidden-content.js";
 import { runHtml } from "./html-pool.js";
+import { countSentenceEnds } from "./sentence-ends.js";
 // Named imports, not a default import: js-yaml v5 dropped the default export
 // ("does not provide an export named 'default'", which broke the v5 bump on
 // CI). Named imports resolve on both v4 (synthesized from the CJS build) and
@@ -1089,7 +1090,7 @@ const textTools = [
       const words = (text.match(new RegExp(`[${CJK}]|[^\\s${CJK}]+`, "gu")) || []).filter((w) => /[\p{L}\p{N}]/u.test(w));
       const cjkChars = (text.match(new RegExp(`[${CJK}]`, "gu")) || []).length;
       const codePoints = [...text].length;
-      const sentences = (text.match(/[.!?]+(\s|$)|[。！？]+/g) || []).length || (words.length ? 1 : 0);
+      const sentences = (countSentenceEnds(text) + (text.match(/[。！？]+/g) || []).length) || (words.length ? 1 : 0);
       const paragraphs = text.split(/\n\s*\n/).filter((p) => p.trim()).length;
       return {
         characters: codePoints,
