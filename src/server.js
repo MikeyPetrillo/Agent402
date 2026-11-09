@@ -1765,26 +1765,21 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
     // GoPlausible's `verifs` is a facilitator's own witness of settlements to
     // its merchant, while a crawl-only row's count is inbound USDC-ASA
     // transfers read on the payTo THE SELLER ADVERTISES - an assertion, not a
-    // proof of control. So a crawl-proven row carries that address through as
-    // `chainProvenPayTo` and the probe loop below refuses it unless the live
-    // 402 asks us to pay the same one. Same shape out: url/method/price/networks.
-    const { algorandCatalog, rankAlgorandResources } = await import("./algorand-sellers.js");
+    // proof of control. Either count belongs to an address, so every row
+    // carries the address its proof was counted at as `chainProvenPayTo`
+    // (src/dispatch-eligibility.js algorandProofBinding: our crawled payTo,
+    // else the facilitator's recorded receiving address) and the probe loop
+    // below refuses it unless the live 402 asks us to pay that same one. A
+    // row with no address to bind is not a candidate. Same shape out.
+    const { algorandCatalog, algorandRouterCandidates } = await import("./algorand-sellers.js");
     const ourOrigin = (() => { try { return new URL(BASE_URL).origin.toLowerCase(); } catch { return ""; } })();
-    candidates = rankAlgorandResources(await algorandCatalog(), task, { capUsd: cap, minVerifs: SOR_MIN_SETTLED_TX, excludeOrigin: ourOrigin })
-      .slice(0, 5)
-      .map((r) => ({
-        seller: r.origin, slug: r.path.replace(/^\//, ""), url: r.url, method: r.method,
-        price: `$${r.priceUsd}`, priceUsd: r.priceUsd,
-        networks: [PAY_NETWORKS.algorand], settled: r.verifs,
-        // Only a row whose count we read from the chain ourselves. A
-        // facilitator-witnessed row ("both"/undefined) keeps GoPlausible's
-        // count, so comparing its advertised address against the live one
-        // would be comparing two assertions and could refuse a seller that is
-        // genuinely proven.
-        chainProvenPayTo: r.source === "crawl" && typeof r.payTo === "string" ? r.payTo : null,
-        // The route's own text, for the category filter below.
-        description: r.description,
-      }));
+    const algo = algorandRouterCandidates(await algorandCatalog(), task, { capUsd: cap, minVerifs: SOR_MIN_SETTLED_TX, excludeOrigin: ourOrigin, network: PAY_NETWORKS.algorand, limit: 5 });
+    candidates = algo.candidates;
+    for (const [why, n] of Object.entries(algo.dropped)) {
+      gateDrops.total += n;
+      gateDrops.byReason[why] = (gateDrops.byReason[why] || 0) + n;
+      console.log(`[sor] skipping ${n} algorand candidate(s): ${why}`);
+    }
   } else if (chain === "solana") {
     // Solana sellers come from the SAME crawled index as Base ones - their
     // accepts advertise a solana network label - but the Base settled/payers
