@@ -82,7 +82,7 @@ function spawnSlot() {
   slot.worker.on("message", (msg) => {
     if (!slot.job || msg.id !== slot.job.id) return; // stale reply from a job we already gave up on
     if (msg.error) {
-      settle(slot, slot.job.reject, Object.assign(new Error(msg.error), { statusCode: msg.statusCode || 500 }));
+      settle(slot, slot.job.reject, Object.assign(new Error(msg.error), { statusCode: msg.statusCode || 500 }, msg.threw ? { threw: msg.threw } : {}));
     } else if (msg.result !== undefined) {
       settle(slot, slot.job.resolve, msg.result); // a JSON answer (op "barcode", "dominant-color")
     } else {

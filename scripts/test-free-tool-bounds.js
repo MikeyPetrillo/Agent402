@@ -12,6 +12,9 @@ import { KIT2 } from "../src/tools/kit2.js";
 import { KIT, JSON_TO_CSV_MAX_CELLS } from "../src/tools/kit.js";
 import { TEXT_ANALYSIS_TOOLS } from "../src/tools/text-analysis-kit.js";
 import { emailGuard } from "../src/tools/email-guard-kit.js";
+import { readFileSync } from "node:fs";
+import { callerInputError, withCallerInputErrors, holdsUncoercible, readableAsText } from "../src/caller-input-errors.js";
+import { FREE_TIER_SLUGS } from "../src/free-tier.js";
 import { splitSteps } from "../src/plan-sketch.js";
 import { runHtml } from "../src/tools/html-pool.js";
 import { MARKDOWN_INLINE_MAX_CHARS } from "../src/tools/markdown-render.js";
@@ -412,6 +415,51 @@ function rng(seed) {
     ok(r.ms < 5, "plan sketch: a 500-character run of " + name + " splits in " + r.ms.toFixed(2) + "ms");
     ok(JSON.stringify(splitSteps(q)) === JSON.stringify(oldSplit(q)), "plan sketch: the run of " + name + " splits as before");
   }
+}
+
+// ---------------------------------------------------------------------------
+// A field a pure-CPU tool cannot coerce is the caller's 400.
+// ---------------------------------------------------------------------------
+{
+  const mapped = (e) => callerInputError(e);
+  ok(mapped(new TypeError("Cannot convert object to primitive value")).statusCode === 400 && /^Invalid input: Cannot convert/.test(mapped(new TypeError("Cannot convert object to primitive value")).message), "caller input: a bare TypeError reads as a 400 naming the cause");
+  ok(mapped(new RangeError("Invalid time value")).statusCode === 400, "caller input: a bare RangeError reads as a 400");
+  const own = Object.assign(new TypeError("x"), { statusCode: 422 });
+  ok(mapped(own) === own, "caller input: an error with its own status passes through");
+  const plain = new Error("boom");
+  ok(mapped(plain) === plain && !plain.statusCode, "caller input: any other error passes through with no status (a 500)");
+  ok(mapped(Object.assign(new Error("x"), { statusCode: 500, threw: "TypeError" })).statusCode === 400, "caller input: a worker's bare TypeError reads as a 400");
+  const worker500 = Object.assign(new Error("x"), { statusCode: 500 });
+  const worker503 = Object.assign(new Error("x"), { statusCode: 503, threw: "TypeError" });
+  ok(mapped(worker500) === worker500 && mapped(worker503) === worker503, "caller input: a worker's own 500 or 503 passes through");
+  ok(holdsUncoercible({ a: [{ b: { toString: 1 } }] }) && holdsUncoercible({ valueOf: "x" }) && !holdsUncoercible({ a: [1, "x", { b: null }], toStringy: 1 }) && !holdsUncoercible("text") && !holdsUncoercible(null), "caller input: an object whose toString or valueOf is not a function is recognized at any depth");
+  ok(readableAsText({ toString: 1 }) === undefined && readableAsText("q") === "q" && Array.isArray(readableAsText(["a", "b"])) && readableAsText(undefined) === undefined, "caller input: a query that cannot be read as text reads as missing");
+
+  // Every pure-CPU tool of the two base kits, each example field replaced by a
+  // value that cannot be coerced: bare, some throw a TypeError; wrapped, none
+  // answers without a 4xx status.
+  const shapes = [{ toString: 1, valueOf: "x" }, [{ toString: 1 }], "not a date", 1e400, -1e21];
+  let bare = 0, calls = 0;
+  const unmapped = [];
+  for (const tool of [...KIT, ...KIT2, ...TEXT_ANALYSIS_TOOLS, ...API_TOOLS]) {
+    if (!FREE_TIER_SLUGS.has(tool.slug) || !tool.discovery?.input || typeof tool.discovery.input !== "object") continue;
+    const wrapped = withCallerInputErrors(tool.handler);
+    for (const key of Object.keys(tool.discovery.input)) for (const shape of shapes) {
+      const input = { ...tool.discovery.input, [key]: shape };
+      calls++;
+      try { await tool.handler(input); } catch (e) { if (!e.statusCode && (e instanceof TypeError || e instanceof RangeError)) bare++; }
+      try { await wrapped(input); } catch (e) { if (!(e.statusCode >= 400 && e.statusCode < 500)) unmapped.push(tool.slug + "." + key + ": " + (e.statusCode || "no status") + " " + e.message); }
+    }
+  }
+  for (const u of unmapped.slice(0, 10)) console.error("  " + u);
+  ok(bare >= 20, "caller input: control, " + bare + " of " + calls + " calls throw a bare TypeError or RangeError from the handler itself");
+  ok(unmapped.length === 0, "caller input: wrapped, every one of those calls answers a 4xx (" + unmapped.length + " did not)");
+  // The same through the HTML worker, which hands errors back as plain data.
+  let poolErr; try { await runHtml("tool", { slug: "html-table", input: { html: "<table><tr><td>1</td></tr></table>", format: 5 } }); } catch (e) { poolErr = e; }
+  ok(poolErr?.statusCode === 500 && poolErr.threw === "TypeError" && callerInputError(poolErr).statusCode === 400, "caller input: a TypeError inside the HTML worker comes back named and reads as a 400 (" + poolErr?.statusCode + " " + poolErr?.threw + ")");
+  // The catalog applies the wrapper to the proof-of-work tools, where every surface reads the handler.
+  const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  ok(/if \(isComputePayable\(def\) && typeof def\.handler === "function"\) def\.handler = withCallerInputErrors\(def\.handler\);/.test(server), "caller input: the assembled catalog wraps every proof-of-work tool's handler");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

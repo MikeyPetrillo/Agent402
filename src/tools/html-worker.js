@@ -17,7 +17,10 @@ parentPort.on("message", async (job) => {
   } catch (e) {
     // statusCode rides back so a 400 stays a 400. An error without one is a
     // defect in here, not bad input, so it is a 500 and never billed.
-    reply = { id: job.id, error: String(e?.message || e), statusCode: e?.statusCode || 500 };
+    // `threw` names a built-in error thrown with no status, so a caller of a
+    // pure-CPU tool can tell a field that would not coerce from a fault here
+    // (src/caller-input-errors.js).
+    reply = { id: job.id, error: String(e?.message || e), statusCode: e?.statusCode || 500, ...(e?.statusCode ? {} : { threw: e?.name }) };
   }
   try { parentPort.postMessage(reply); }
   catch (e) { parentPort.postMessage({ id: job.id, error: `HTML result could not be returned: ${e.message}`, statusCode: 500 }); }

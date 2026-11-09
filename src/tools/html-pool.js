@@ -77,7 +77,7 @@ function spawnSlot() {
   const slot = { worker: new Worker(HTML_WORKER, { resourceLimits: { maxOldGenerationSizeMb: HEAP_MB, maxYoungGenerationSizeMb: 64 } }), job: null, idleTimer: null };
   slot.worker.on("message", (msg) => {
     if (!slot.job || msg.id !== slot.job.id) return; // a reply from a job already given up on
-    if (msg.error) settle(slot, slot.job.reject, Object.assign(new Error(msg.error), { statusCode: msg.statusCode || 500 }));
+    if (msg.error) settle(slot, slot.job.reject, Object.assign(new Error(msg.error), { statusCode: msg.statusCode || 500 }, msg.threw ? { threw: msg.threw } : {}));
     else settle(slot, slot.job.resolve, msg.result);
     goIdle(slot);
     pump();

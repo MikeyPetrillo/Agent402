@@ -45,6 +45,7 @@ parentPort.on("message", async (job) => {
     // statusCode rides back with the message so a 400 stays a 400 on the wire.
     // An error without one is a defect in here, not bad input, and must not be
     // billed as a served call, hence the 500 default.
-    parentPort.postMessage({ id: job.id, error: e.message, statusCode: e.statusCode || 500 });
+    // `threw` names a built-in error thrown with no status (src/caller-input-errors.js).
+    parentPort.postMessage({ id: job.id, error: e.message, statusCode: e.statusCode || 500, ...(e.statusCode ? {} : { threw: e.name }) });
   }
 });
