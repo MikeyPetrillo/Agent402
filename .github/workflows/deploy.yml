@@ -3346,6 +3346,8 @@ jobs:
           t node scripts/test-package-shed-retry.js
           # Every SOLD skill pack has a real step config (a pack without one answers 200 with 0/N steps and still charges — offline)
           t node scripts/test-skill-pack-steps.js
+          # Every skill-pack step sends only input keys its tool declares (boots its own FREE_MODE server on port 0)
+          t node scripts/test-skill-step-inputs.js
           # Refund backfill decides who is OWED money: who is in, who is out, idempotent (offline, temp ledgers)
           t node scripts/test-refund-backfill.js
           # Upstream-spend meter records with PostHog OFF and in exact micro-dollars (offline)
