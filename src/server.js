@@ -3027,8 +3027,9 @@ app.get("/__operator/followups.json", (req, res) => {
 // Only the production server posts: a FREE_MODE boot, a process without
 // NODE_ENV=production and a process with no durable queue state (no state
 // database and no state file) stay read-only, so a local boot that copies the
-// production variables never becomes a second poster. It replaces .github/workflows/tweet-queue.yml, which is disabled at
-// cutover so exactly one poster runs. `draining` is read at tick time.
+// production variables never becomes a second poster. It replaced the scheduled
+// GitHub workflow that used to post the queue, so exactly one poster runs.
+// `draining` is read at tick time.
 const _tweetQueue = createTweetQueue({ ...tweetQueueOptionsFromEnv(process.env), isDraining: () => draining });
 _tweetQueue.start();
 // Whether the Redis behind REDIS_URL keeps what it is given

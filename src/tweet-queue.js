@@ -1,7 +1,7 @@
 // The approved tweet queue, posted by the server on the hour.
 //
-// The queue used to post only from a scheduled GitHub workflow
-// (.github/workflows/tweet-queue.yml), and scheduled workflows on this repo
+// The queue used to post only from a scheduled GitHub workflow (since
+// removed), and scheduled workflows on this repo
 // are delivered sparsely: an hourly schedule fired a handful of times a day,
 // so approved slots went out late or aged out unposted. The server is up all
 // day, so it posts them itself.
