@@ -102,5 +102,23 @@ ok(payerFromRequest(req(evm({ from: A, nonce: "0x01" }))) === A, "control: an EI
 ok(signedEvmAmountUsd(evm({ from: A, value: "1000000" }), BASE) === 1, "control: an EIP-3009 payment's signed value is read");
 ok(signedEvmAmountUsd(evm({ from: A, value: "1000000" }, { permit2Authorization: { from: A, nonce: "1" } }), BASE) === null, "a value typed beside a Permit2 authorization is not a signed amount");
 
+// --- the operator can see what intake removes (family and block name only) ------
+{
+  const { __noteRemovedBlocksForTest: note } = await import("../src/payment-header.js");
+  const lines = [];
+  // Earlier blocks ran the real intake, so start past its last log time.
+  const T0 = Date.now() + 600_000;
+  note({ payload: { authorization: {} }, network: "solana" }, T0 - 120_000, () => {});
+  const dec = (h) => JSON.parse(Buffer.from(h, "base64").toString("utf8"));
+  note(dec(svm({ authorization: { from: A } })), T0, (l) => lines.push(l));
+  note(dec(evm({ from: A, nonce: "0x01" })), T0 + 1, (l) => lines.push(l));
+  note(dec(evm({ from: A }, { permit2Authorization: { from: B, nonce: "1" } })), T0 + 2, (l) => lines.push(l));
+  note(dec(svm()), T0 + 61_000, (l) => lines.push(l));
+  note(dec(svm({ authorization: { from: A } })), T0 + 62_000, (l) => lines.push(l));
+  ok(lines.length === 2 && /^\[payment-header\] unsigned blocks removed at intake: solana\/authorization=1$/.test(lines[0]) && /eip155\/authorization=1/.test(lines[1]) && /solana\/authorization=1/.test(lines[1]), `one line a minute names family and block with counts (got ${JSON.stringify(lines)})`);
+  ok(!lines.join(" ").includes(A) && !lines.join(" ").includes(B), "the line carries no address");
+  ok(!/eip155\/authorization/.test(lines[0]), "a plain EIP-3009 payment, which keeps its block, is not counted");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

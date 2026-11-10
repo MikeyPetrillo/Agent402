@@ -62,6 +62,10 @@ export function canonicalNonce(nonce) {
  *  Accepts standard base64 or base64url, padded or not, with surrounding
  *  whitespace and a leading byte order mark on the value itself. Pure. */
 export function decodePaymentHeader(value) {
+  const parsed = parsePaymentHeader(value);
+  return parsed ? dropUnsignedAuthorization(parsed) : null;
+}
+function parsePaymentHeader(value) {
   if (typeof value !== "string" || !value) return null;
   let s = value.replace(/^(?:﻿|ï»¿)/, "").replace(/[\t\n\f\r ]+/g, "");
   if (!s) return null;
@@ -71,7 +75,7 @@ export function decodePaymentHeader(value) {
   if (s.length % 4 !== 0 || !BASE64_RE.test(s)) return null;
   try {
     const parsed = JSON.parse(utf8.decode(Buffer.from(s, "base64")));
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? dropUnsignedAuthorization(parsed) : null;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
   } catch {
     return null;
   }
@@ -81,6 +85,33 @@ export function decodePaymentHeader(value) {
 export function encodePaymentHeader(payload) {
   return Buffer.from(JSON.stringify(payload), "utf8").toString("base64");
 }
+
+// What intake removed, for the operator: a real client that sends one of
+// these blocks where no signature covers it would show up here, by network
+// family and block name, never by address. One line a minute at most.
+const removed = new Map();
+let removedLoggedAt = 0;
+const familyOf = (decoded) => {
+  const n = String(decoded?.accepted?.network ?? decoded?.network ?? decoded?.payload?.network ?? "none");
+  return n.includes(":") ? n.split(":")[0] : (isEvmNetworkName(n) ? "evm-v1" : n.toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 16) || "none");
+};
+function noteRemovedBlocks(parsed, now = Date.now(), log = console.log) {
+  const inner = parsed?.payload;
+  if (!inner || typeof inner !== "object" || Array.isArray(inner)) return;
+  const before = ["authorization", "permit2Authorization"].filter((k) => Object.hasOwn(inner, k));
+  if (!before.length) return;
+  const copy = { ...parsed, payload: { ...inner } };
+  dropUnsignedAuthorization(copy);
+  for (const k of before) if (!Object.hasOwn(copy.payload, k)) { const key = `${familyOf(parsed)}/${k}`; removed.set(key, (removed.get(key) || 0) + 1); }
+  if (removed.size && now - removedLoggedAt >= 60_000) {
+    removedLoggedAt = now;
+    log(`[payment-header] unsigned blocks removed at intake: ${[...removed].map(([k, n]) => `${k}=${n}`).join(" ")}`);
+    removed.clear();
+  }
+}
+/** Counts not yet logged; test seam. */
+export function __removedBlockCounts() { return Object.fromEntries(removed); }
+export function __noteRemovedBlocksForTest(parsed, now, log) { return noteRemovedBlocks(parsed, now, log); }
 
 /** Read every payment header on `req` once. Each one that decodes is rewritten
  *  to its canonical value; when any present one does not decode, both are
@@ -95,7 +126,9 @@ export function canonicalizePaymentHeaders(req) {
     const raw = headers[name];
     if (raw == null || raw === "") continue;
     seen = true;
-    const payload = typeof raw === "string" ? decodePaymentHeader(raw) : null;
+    const parsed = typeof raw === "string" ? parsePaymentHeader(raw) : null;
+    if (parsed) noteRemovedBlocks(parsed);
+    const payload = parsed ? dropUnsignedAuthorization(parsed) : null;
     if (!payload) {
       Object.defineProperty(req, "__paymentHeaderAsSent", { value: String(raw), configurable: true, enumerable: false, writable: true });
       for (const n of PAYMENT_HEADER_NAMES) delete headers[n];
