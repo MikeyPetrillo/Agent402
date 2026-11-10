@@ -11,7 +11,7 @@
 //       tier before it; a row whose tiers break any of that is dropped (a gap),
 //       because keeping its base rate would underprice a long prompt.
 //     speech: { modelId: usdPerChar },                       the speech wire models and the direct speech fallbacks
-//     fees: { webSearchPerUse, groundedPerCall, rerankPerUnit, settlementPerCall? },   settlementPerCall (optional): one facilitator settlement, read by the margin test
+//     fees: { webSearchPerUse, groundedPerCall, rerankPerUnit, settlementPerCall },   settlementPerCall: one successful facilitator settlement, read by the margin test
 //     embeddings: { model: usdPer1MInputTokens },
 //     openai: { model: { prompt, cached, completion } },     USD per 1M tokens; the image model's completion rate is per image token
 //     sttPerMinute: { model: usdPerMinute },
@@ -60,6 +60,9 @@ const REQUIRED = [
   // SQL_QUERY_BUDGET per call), which the margin test prices against the
   // tool's list price.
   ["vendor", "cdp", "sqlQuery"],
+  // One successful facilitator settlement, USD: the fee a settle costs us past
+  // any free allowance. The margin test adds it to the onchain-sql worst case.
+  ["fees", "settlementPerCall"],
   // The direct chat upstream's price-guard margin, a fraction from 0 to below 1
   // (src/gateway-direct-pricebook.js minSavingFraction), read on the serving
   // path whenever the direct upstream is configured.
