@@ -15,6 +15,7 @@ import { STRIPE_MIN_USD } from "./mpp-stripe.js";
 import { MAX_FULL_PER_SUB_30D } from "./monitor-scheduler.js";
 
 import { REPO_URL } from "./repo-link.js";
+import { LATE_SETTLE_EXCEPTION } from "./front-door.js";
 import { ERC8004_AGENT_ID } from "./tools/a2a-card.js";
 export const WHY_POINTS = [
   {
@@ -33,7 +34,7 @@ export const WHY_POINTS = [
     t: "A failed x402 call is not charged.",
     h: "A failed x402 call is not charged, and the response shows it.",
     s: "Settlement runs after the answer and an error cancels it; a keyed retry replays the paid answer instead of paying twice.",
-    p: "Settlement runs after the handler answers and an error status cancels it, so a response with no payment receipt, or a receipt marked success:false, moved no money. A retry that carries the same idempotency key and the same payment credential replays the paid answer instead of paying again. The one residual case, a settled receipt on an error response, is detected by our own alarm and recorded as a debt in a refund ledger, never written off silently. A Tempo push payment is sent before the call runs, so a call that then fails is recorded as a refund owed the same way. Anyone holding the settlement transaction can check it for free at /api/refunds/lookup and see our refund transaction once it is sent.",
+    p: `Settlement runs after the handler answers and an error status cancels it, so a failed call is answered with no payment receipt, or with a receipt marked success:false, and is not charged. ${LATE_SETTLE_EXCEPTION} A retry that carries the same idempotency key and the same payment credential replays the paid answer instead of paying again. A settled receipt on an error response is detected by our own alarm and recorded as a debt in a refund ledger, never written off silently. A Tempo push payment is sent before the call runs, so a call that then fails or is not served is recorded as a refund owed the same way. Anyone holding the settlement transaction can check it for free at /api/refunds/lookup and see our refund transaction once it is sent.`,
     links: [["/x402-test", "check a payment"], ["/guides/x402-and-mpp", "how it settles"]],
     more: [],
   },
