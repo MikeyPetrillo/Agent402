@@ -5,7 +5,7 @@
 // takeover after a restart (one regeneration, then refund), long-input metadata
 // chunking, and the legacy single-file import. Offline, in CI.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { createHumanCheckout, HUMAN_PRODUCTS, humanCheckoutEnabled, chunkInput, unchunkInput, STALE_CLAIM_MS } from "../src/human-checkout.js";
+import { createHumanCheckout, HUMAN_PRODUCTS, humanCheckoutEnabled, chunkInput, unchunkInput, STALE_CLAIM_MS, isReportPurchase } from "../src/human-checkout.js";
 import { rmSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -30,6 +30,15 @@ const sessions = {
   cs_other: { id: "cs_other", payment_status: "paid", payment_intent: "pi_other", customer_details: { email: "someone-else@example.com" }, metadata: { product: "dossier", input: "AAPL" } },
   cs_sub: { id: "cs_sub", mode: "subscription", payment_status: "paid", metadata: { product: "domain-monitor", target: "x.com" } },
   cs_nometa: { id: "cs_nometa", payment_status: "paid", payment_intent: "pi_nometa", metadata: {} },
+  // a report purchase whose input is missing (ours to refund)
+  cs_noinput: { id: "cs_noinput", payment_status: "paid", payment_intent: "pi_noinput", metadata: { product: "dossier" } },
+  // a report product a switch has taken off sale since the purchase
+  cs_offsale: { id: "cs_offsale", payment_status: "paid", payment_intent: "pi_offsale", metadata: { product: "token-brief", input: "So11111111111111111111111111111111111111112" } },
+  // paid Checkout sessions that are NOT report purchases
+  cs_pack: { id: "cs_pack", mode: "payment", payment_status: "paid", payment_intent: "pi_pack", customer_details: { email: "pack@example.com" }, metadata: { credits_pack: "credits-100", terms: "t" } },
+  cs_packprod: { id: "cs_packprod", mode: "payment", payment_status: "paid", payment_intent: "pi_packprod", metadata: { credits_pack: "credits-20", product: "dossier", input: "AAPL" } },
+  cs_unknownprod: { id: "cs_unknownprod", mode: "payment", payment_status: "paid", payment_intent: "pi_unknownprod", metadata: { product: "constructor", input: "AAPL" } },
+  cs_arrayprod: { id: "cs_arrayprod", mode: "payment", payment_status: "paid", payment_intent: "pi_arrayprod", metadata: { product: ["dossier"], input: "AAPL" } },
   cs_long: { id: "cs_long", payment_status: "paid", payment_intent: "pi_long", metadata: { product: "research", ...chunkInput("Q".repeat(1200)) } },
   cs_stale: { id: "cs_stale", payment_status: "paid", payment_intent: "pi_stale", metadata: { product: "dossier", input: "MSFT" } },
   cs_stale2: { id: "cs_stale2", payment_status: "paid", payment_intent: "pi_stale2", metadata: { product: "dossier", input: "MSFT" } },
@@ -124,11 +133,38 @@ clock += 31_000;
 const paid2 = await hc.fulfill("cs_fail2");
 ok(paid2.refundId === "re_2" && paid2.refundOwed === false && /has been refunded/.test(paid2.error) && !hc.listIssues().refundOwed.some((x) => x.id === "cs_fail2"), "the owed refund is retried on a later poll, succeeds, and leaves the issues list");
 
-// Missing metadata on a paid payment-mode session: refunded (persisted).
-const nm = await hc.fulfill("cs_nometa");
-ok(nm.status === "error" && nm.refundId === "re_3" && hc.peek("cs_nometa")?.refundId === "re_3", "a paid session with no report details is refunded once and persisted");
-await hc.fulfill("cs_nometa");
+// A report purchase with its input missing: refunded (persisted).
+const nm = await hc.fulfill("cs_noinput");
+ok(nm.status === "error" && nm.refundId === "re_3" && hc.peek("cs_noinput")?.refundId === "re_3", "a paid report session with no report details is refunded once and persisted");
+await hc.fulfill("cs_noinput");
 ok(refunds.length === 3, "...and not refunded again on the next poll");
+
+// A paid session that is not a report purchase (a credits pack, no product,
+// a product this module never sold): invalid, nothing generated, recorded or
+// refunded, on the first read and on every later one. The controls beside it
+// are the report sessions above (cs_paid generated, cs_fail refunded once).
+{
+  const refundsBefore = refunds.length, genBefore = genCalls;
+  for (const id of ["cs_pack", "cs_nometa", "cs_packprod", "cs_unknownprod", "cs_arrayprod"]) {
+    const first = await hc.fulfill(id);
+    const second = await hc.fulfill(id);
+    ok(first.status === "invalid" && second.status === "invalid" && Object.keys(first).join(",") === "status" && hc.peek(id) === null,
+      `${id}: a paid session that is not a report purchase answers invalid and leaves no record (${JSON.stringify(first)})`);
+  }
+  ok(refunds.length === refundsBefore && !refunds.some((r) => /^pi_(pack|nometa|packprod|unknownprod|arrayprod)$/.test(r.payment_intent)), `no refund is made for a session that is not a report purchase (${refunds.length - refundsBefore} made)`);
+  ok(genCalls === genBefore, "and no report is generated for one");
+  ok(JSON.stringify(await hc.fulfill("garbage")) === JSON.stringify(await hc.fulfill("cs_pack")), "the answer is the one an id that is not a session gets");
+  ok(isReportPurchase(sessions.cs_paid) && isReportPurchase(sessions.cs_noinput) && isReportPurchase(sessions.cs_offsale) && !isReportPurchase(sessions.cs_pack) && !isReportPurchase(sessions.cs_nometa) && !isReportPurchase(null),
+    "isReportPurchase: a string product naming a report product, and no credits pack");
+  // A report product taken off sale after the purchase is still the buyer's
+  // report purchase: refunded, as before (exercised when the switch is off).
+  if (!HUMAN_PRODUCTS["token-brief"]) {
+    const off = await hc.fulfill("cs_offsale");
+    ok(off.status === "error" && refunds.at(-1)?.payment_intent === "pi_offsale" && refunds.length === refundsBefore + 1, "a paid session for a report product now off sale is refunded once");
+    await hc.fulfill("cs_offsale");
+    ok(refunds.length === refundsBefore + 1, "...and not again on the next poll");
+  }
+}
 
 // Long input reassembles from chunked metadata.
 await hc.fulfill("cs_long");
