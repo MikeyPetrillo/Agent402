@@ -148,7 +148,6 @@ let lastLoggedWord = null;
 let nowFn = Date.now;
 let rng = Math.random;
 export function _setPriceBookNowForTest(fn) { nowFn = typeof fn === "function" ? fn : Date.now; }
-export function _setPriceBookRngForTest(fn) { rng = typeof fn === "function" ? fn : Math.random; }
 export function _resetDirectPriceBookForTest() { book = blankBook(); measures = new Map(); lastLoggedWord = null; nowFn = Date.now; rng = Math.random; }
 /** Test seam: seed the book as if a refresh read these (USD per 1M tokens):
  *  { [orId]: { direct: {prompt, completion} | {reason}, endpoints: [{prompt, completion, tag?}] } }. */

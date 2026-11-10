@@ -132,6 +132,3 @@ export function createCgCache(name, { max = 200, maxBody = Infinity, keepParsed 
     get size() { return local.size; },
   };
 }
-
-/** Test seam: where this process's cache answers came from. */
-export function cgCacheCounts() { return { ...counts }; }
