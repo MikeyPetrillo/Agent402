@@ -24,9 +24,9 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer } from "node:http";
 import { bootServer } from "./lib/boot-server.js";
-import { TIERS, upstreamHttpError, inputTooLargeError, refuseUnlistedMeteredModel } from "../src/tools/llm-gateway-kit.js";
-import { MESSAGES_PATH_BY_TIER } from "../src/tools/llm-messages-kit.js";
-import { RESPONSES_PATH_BY_TIER } from "../src/tools/llm-responses-kit.js";
+import { TIERS, upstreamHttpError, inputTooLargeError, refuseUnlistedMeteredModel, validateRequest } from "../src/tools/llm-gateway-kit.js";
+import { MESSAGES_PATH_BY_TIER, validateMessagesRequest } from "../src/tools/llm-messages-kit.js";
+import { RESPONSES_PATH_BY_TIER, validateResponsesRequest } from "../src/tools/llm-responses-kit.js";
 import { GEMINI_PATH_BY_TIER } from "../src/tools/llm-gemini-kit.js";
 import { PRE_PAYMENT_WIRES, meteredPrePaymentRefusal } from "../src/gateway-prepayment.js";
 import { _setModelCatalogForTest } from "../src/model-catalog.js";
@@ -258,6 +258,15 @@ async function runRow(srv, row, { stream = false } = {}) {
   const thrown = (() => { try { refuseUnlistedMeteredModel(TIERS["v1-chat-metered"], UNLISTED); } catch (e) { return e; } return null; })();
   ok(thrown?.statusCode === 400 && thrown.code === "unknown_model" && thrown.suggestions?.[0] === MODEL, "validation throws the same verdict as a 400 with its code and suggestions");
   ok((() => { try { refuseUnlistedMeteredModel(TIERS["v1-chat"], UNLISTED); return true; } catch { return false; } })(), "a flat tier's validation is not judged by the live list");
+  // Each wire's own validation throws it (a Tempo push credential, which the
+  // pre-payment check leaves to its gate, is answered by the handler).
+  const validators = { chat: validateRequest, messages: validateMessagesRequest, responses: validateResponsesRequest };
+  for (const [name, validate] of Object.entries(validators)) {
+    const e = (() => { try { validate(WIRES[name].body({ model: UNLISTED }), "v1-chat-metered"); } catch (x) { return x; } return null; })();
+    ok(e?.statusCode === 400 && e.code === "unknown_model" && e.suggestions?.[0] === MODEL, `${name}: the wire's validation refuses an unlisted metered id (${e?.code || e?.message || "served"})`);
+    const served = (() => { try { validate(WIRES[name].body({}), "v1-chat-metered"); return true; } catch { return false; } })();
+    ok(served, `${name}: the wire's validation takes a listed id`);
+  }
   ok(inputTooLargeError("v1-chat-metered", MODEL, OVER_CAP_CHARS).message.includes("/v1/metered/chat/completions"), "the size refusal names the chat route unless a wire names its own");
   await sleep(200); // the miss-triggered read has ended
   _setModelCatalogForTest(null);
