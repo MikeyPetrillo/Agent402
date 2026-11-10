@@ -78,7 +78,8 @@ const base = "eip155:8453", sol = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
   const installAt = src.search(/^\s*installAcceptOutputSchema\(x402ResourceServer\);\s*$/m);
   const newAt = src.search(/^\s*let server = new x402ResourceServer\(/m);
   ok(installAt > 0 && newAt > installAt, "payments.js installs the patch BEFORE constructing the resource server");
-  ok(/accepts: withOutputSchemaOnFirstAccept\(acceptsFor\(item\), acceptOutputSchemaEnabled\(\) \? outputSchemaFromExtensions\(ext\) : null\)/.test(src), "catalog route accepts declare the extension's schema on the first accept, behind the rollout switch");
+  // The accepts are built by a per-route builder (run again when a rail rejoins the offer), from the same two reads.
+  ok(/const firstAcceptSchema = acceptOutputSchemaEnabled\(\) \? outputSchemaFromExtensions\(ext\) : null;/.test(src) && /acceptsBuilders\.set\(route, \(\) => withOutputSchemaOnFirstAccept\(acceptsFor\(item\), firstAcceptSchema\)\);/.test(src) && /accepts: acceptsBuilders\.get\(route\)\(\),/.test(src), "catalog route accepts declare the extension's schema on the first accept, behind the rollout switch");
   ok(acceptOutputSchemaEnabled({}) === true && acceptOutputSchemaEnabled({ ACCEPT_OUTPUT_SCHEMA: "off" }) === false && acceptOutputSchemaEnabled({ ACCEPT_OUTPUT_SCHEMA: "OFF" }) === false, "ACCEPT_OUTPUT_SCHEMA=off is the switch; default on");
   const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   ok(!/createOutputSchemaAppender/.test(server), "the header-only appender is gone from server.js (it broke every stock client's match)");

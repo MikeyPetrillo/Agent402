@@ -107,7 +107,7 @@ export function fundingHint({ kind, payer = null, priceUsd = null, held = false,
   const who = shortAddr(payer) ? `The paying wallet ${shortAddr(payer)}` : "The paying wallet";
   const price = Number.isFinite(priceUsd) && priceUsd > 0 ? ` (${catalogPriceText(priceUsd)})` : "";
   const what = kind === FUNDING_REASONS.noAccount
-    ? `${who} has no USDC token account on Solana, so the transfer cannot run.`
+    ? `${who} has no USDC token account on Solana, so the transfer${price} cannot run.`
     : `${who} holds less USDC on Solana than this call costs${price}.`;
   const todo = kind === FUNDING_REASONS.noAccount
     ? "Send USDC on Solana to the wallet (receiving USDC creates that account), or pay on another network listed in accepts."
@@ -257,7 +257,7 @@ export function registerSvmFundingHold(server, { remember, count = () => {}, now
       const retryAfterSeconds = Math.max(1, Math.ceil((hold.untilMs - t) / 1000));
       const amount = Number(ctx?.requirements?.amount);
       const h = fundingHint({ kind: hold.kind, payer: fundingPayerOf(ctx?.paymentPayload, { feePayer: ctx?.requirements?.extra?.feePayer }), priceUsd: Number.isFinite(amount) ? amount / 1e6 : null, held: true, retryAfterSeconds });
-      try { remember?.(ctx?.paymentPayload, { ...h, network, svmFunding: hold.kind }); } catch { /* the hold still answers */ }
+      try { remember?.(ctx?.paymentPayload, { ...h, network, svmFunding: hold.kind }, ctx?.requirements); } catch { /* the hold still answers */ }
       try { count(network, hold.kind, true); } catch { /* bookkeeping only */ }
       return { abort: true, reason: HOLD_REASON, message: h.hint };
     } catch { return undefined; }

@@ -57,6 +57,9 @@ import { isGatewayBatchedPayment } from "./gateway-wire.js";
 import { GatewayNanopaymentsClient, createGatewayPendingBook, gatewayAcceptFields, gatewayNanopaymentNetworks, gatewayNanopaymentsEnabled, gatewayPendingFile, installGatewayRouting, setGatewayOffer, startGatewayBalanceWatch, startGatewayPendingResolver, byTransferIdAnyCase, gatewayTransferId, GATEWAY_DOMAINS } from "./gateway-nanopayments.js";
 import { existsSync } from "node:fs";
 import { refusingHook, passingHook, HOOK_NAMES, ARC_CONTRACT_WALLET_CHECK_FAILED, WALLET_CHECK_FAILED } from "./x402-hook-guard.js";
+import { verifyFailureLine, payerNamedBy } from "./verify-failure-log.js";
+import { createRailRecheck, railRecheckSettings } from "./rail-recheck.js";
+import { svmTransferAccounts, svmPayerFromPayload } from "./svm-payer.js";
 
 // Supported networks. EVM chains use eip155: CAIP-2 IDs; Solana uses the
 // solana: genesis-hash CAIP-2. Adding a chain = register its scheme + list
@@ -1005,6 +1008,10 @@ export const BAZAAR_DESCRIPTIONS = Object.freeze({
 });
 
 export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, catalog, extraRoutes = {} }) {
+  routeSlugOf = (route) => {
+    const def = typeof route === "string" && catalog && Object.prototype.hasOwnProperty.call(catalog, route) ? catalog[route] : null;
+    return typeof def?.slug === "string" ? def.slug : null;
+  };
   const networks = enabledNetworks(network);
   const caip2List = networks.map((n) => NETWORKS[n]);
   let evmCaip2 = caip2List.filter((c) => c.startsWith("eip155:"));
@@ -1725,8 +1732,11 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // after 2s — the heartbeat's single-retry doctrine, so a deploy-window blip
   // doesn't drop a healthy rail), and drop any offered network that no
   // REACHABLE facilitator advertises `exact` on, with the same loud warning
-  // shape as the misconfiguration guards. A dropped rail returns on the next
-  // boot where its facilitator answers.
+  // shape as the misconfiguration guards. A rail dropped while a read had
+  // FAILED is read again in the background and rejoins the offer when its
+  // facilitator lists it (src/rail-recheck.js, restoreRail below); one
+  // dropped when every facilitator answered returns on the next boot where
+  // one lists it.
   //
   // FAIL-OPEN when EVERY probe fails: that shape is indistinguishable from
   // our own egress being broken, and dropping all rails on a local blip would
@@ -1741,6 +1751,17 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   const syncOnStart = process.env.X402_SYNC_ON_START !== "false";
   const supportedGuardOn =
     syncOnStart && String(process.env.X402_SUPPORTED_GUARD || "").toLowerCase() !== "off";
+  // The networks as configured, before the probe drops any: the order a
+  // restored rail rejoins the offer in, and what the pieces that must exist
+  // for a rail restored later (its scheme's gates and hooks) are keyed on.
+  const configuredRails = { evm: [...evmCaip2], svm: [...svmCaip2], stellar: [...stellarCaip2], avm: [...avmCaip2] };
+  // Facilitators whose boot /supported read failed, and the networks dropped
+  // while one had: read again in the background (src/rail-recheck.js). A
+  // network dropped when every facilitator ANSWERED is not listed, and stays
+  // dropped.
+  const failedReads = [];
+  const droppedOnFailedRead = [];
+  const recheck = railRecheckSettings();
   if (supportedGuardOn && facilitatorClients.length) {
     const probeOne = async (client, label) => {
       for (let attempt = 1; attempt <= 2; attempt++) {
@@ -1801,14 +1822,19 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
           }
         }
       }
+      probed.forEach((kinds, i) => { if (kinds === null) failedReads.push({ client: facilitatorClients[i], label: facilitatorLabels[i] || `#${i}` }); });
+      const reread = failedReads.length > 0 && recheck.enabled;
       const dropUnadvertised = (list) => {
         const dropped = list.filter((c) => !advertisedExact.has(c));
         if (dropped.length) {
+          if (failedReads.length) droppedOnFailedRead.push(...dropped);
           console.warn(
             `WARNING: dropping ${dropped.join(", ")} from the offered networks - no reachable ` +
               "facilitator advertises `exact` settlement there (see /supported failures above). " +
-              "Other chains are unaffected; a dropped rail returns on the next boot where its " +
-              "facilitator answers."
+              "Other chains are unaffected; " +
+              (reread
+                ? "the facilitators that did not answer are read again in the background, and a dropped rail one of them then lists rejoins the offer without a restart."
+                : "a dropped rail returns on the next boot where its facilitator answers.")
           );
         }
         return list.filter((c) => advertisedExact.has(c));
@@ -2006,7 +2032,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // read is a boot timer, never a request; it is skipped for offline boots
   // (X402_SYNC_ON_START=false) unless a facilitator URL is named explicitly,
   // and the settle-refusal flip below works either way.
-  if (algorandEnabled && avmCaip2.length && avmSubcentGateEnabled()) {
+  if (algorandEnabled && configuredRails.avm.length && avmSubcentGateEnabled()) {
     installAvmSubcentGate(x402ResourceServer);
     if (syncOnStart || process.env.ALGORAND_FACILITATOR_URL) {
       startAvmSponsorshipRefresher({ facilitatorUrl: algorandFacilitatorUrl, payTos: [algorandWallet] });
@@ -2034,14 +2060,12 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       owedExists: async (tx) => !!(await owedByTransferId(tx)),
     });
   }
-  for (const caip2 of evmCaip2) {
-    const scheme = caip2 === ROBINHOOD_CAIP2 ? makeUsdgScheme()
-      : caip2 === MONAD_CAIP2 ? makeMonadUsdcScheme()
-      : caip2 === CELO_CAIP2 ? makeCeloUsdcScheme()
-      : TIER1_USDC[caip2] ? makeTier1UsdcScheme(caip2)
-      : new ExactEvmScheme();
-    server = server.register(caip2, scheme);
-  }
+  const evmExactSchemeFor = (caip2) => (caip2 === ROBINHOOD_CAIP2 ? makeUsdgScheme()
+    : caip2 === MONAD_CAIP2 ? makeMonadUsdcScheme()
+    : caip2 === CELO_CAIP2 ? makeCeloUsdcScheme()
+    : TIER1_USDC[caip2] ? makeTier1UsdcScheme(caip2)
+    : new ExactEvmScheme());
+  for (const caip2 of evmCaip2) server = server.register(caip2, evmExactSchemeFor(caip2));
   // `upto` — variable-amount settlement. The buyer signs a Permit2
   // authorization for a CEILING and the facilitator settles the amount the
   // seller names at settle time, never above it. `exact` cannot express that:
@@ -2128,11 +2152,11 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // A Solana wallet refused for funding several times in a row is answered
   // from the funding hold, without the facilitator, until its Retry-After
   // passes (src/svm-funding-refusal.js).
-  if (svmCaip2.length) {
+  if (configuredRails.svm.length) {
     const { registerSvmFundingHold } = await import("./svm-funding-refusal.js");
-    const { rememberHint } = await import("./verify-hint.js");
+    const { rememberHint, needsOf } = await import("./verify-hint.js");
     registerSvmFundingHold(server, {
-      remember: (payload, h) => rememberHint(payload, h),
+      remember: (payload, h, requirements) => rememberHint(payload, { ...h, ...(needsOf(requirements) ? { needs: needsOf(requirements) } : {}) }),
       count: (network, reason, held) => toolFailureMonitor().noteFundingRefusal({ network, reason, held }),
     });
   }
@@ -2301,6 +2325,10 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   const builderCode = process.env.BASE_BUILDER_CODE || null;
   if (builderCode) console.log(`Builder Code: ${builderCode} (Base onchain attribution enabled)`);
 
+  // route -> () => its accepts over the rails offered NOW. The vendor reads a
+  // route's `accepts` on every request, so a rail restored after boot joins
+  // each 402 when these are run again (restoreRail below).
+  const acceptsBuilders = new Map();
   const routes = Object.fromEntries(
     Object.entries(catalog).map(([route, item]) => {
       const ext = {};
@@ -2315,12 +2343,14 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       // idemHashKey). Declared so CDP-native clients (x402Client extensions,
       // awal, purl) know the seller understands it. ~120 bytes per 402.
       ext[PAYMENT_IDENTIFIER] = declarePaymentIdentifierExtension(false);
+      // The first accept declares the extension's typed output schema (one
+      // copy - the buyer echoes its chosen accept back in the payment).
+      const firstAcceptSchema = acceptOutputSchemaEnabled() ? outputSchemaFromExtensions(ext) : null;
+      acceptsBuilders.set(route, () => withOutputSchemaOnFirstAccept(acceptsFor(item), firstAcceptSchema));
       return [
         route,
         {
-          // The first accept declares the extension's typed output schema (one
-          // copy - the buyer echoes its chosen accept back in the payment).
-          accepts: withOutputSchemaOnFirstAccept(acceptsFor(item), acceptOutputSchemaEnabled() ? outputSchemaFromExtensions(ext) : null),
+          accepts: acceptsBuilders.get(route)(),
           description: listingDescription,
           // Per-TOOL service name, not the host name.
           //
@@ -2372,6 +2402,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // untouched. `bazaar: false` on the caller's side keeps the discovery
   // extension off, which is also what x402 wants for `*` patterns.
   for (const [route, cfg] of Object.entries(extraRoutes)) {
+    acceptsBuilders.set(route, () => acceptsFor(cfg));
     routes[route] = {
       accepts: acceptsFor(cfg),
       description: capDesc(cfg.description),
@@ -2413,7 +2444,91 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   const vendorMw = withBazaarHidden(routes, () => paymentMiddlewareFromHTTPServer(httpServer, undefined, undefined, false));
   scheduleBazaarRouteCheck(routes);
   if (!syncOnStart) return vendorMw;
-  return withGuardedInit(vendorMw, createGuardedInit(httpServer), httpServer);
+  const init = createGuardedInit(httpServer);
+
+  // ---- A rail dropped on a FAILED /supported read rejoins the offer live ----
+  //
+  // Everything a 402 needs for a network is read at request time: the route's
+  // `accepts` (replaced here), the scheme registered for the network, and the
+  // resource server's two lookup maps (network -> the facilitator's
+  // /supported answer, network -> the facilitator client), which its
+  // initialize() fills once and the guarded init never refills. So a restore
+  // is four synchronous writes in one turn, in the order a request reads them
+  // last to first: the scheme, the two map entries, the offered list, the
+  // accepts. No request can observe a half-restored rail, and initialize() is
+  // never called again (it clears both maps before it awaits the
+  // facilitators, which would 500 every paid route in between).
+  //
+  // Not restored here, and left for the next restart: Arc (its
+  // contract-wallet route gate is registered only when Arc is in the boot
+  // offer, and it fails closed on Circle's own answer), and on a restored
+  // network the `upto` and Gateway batched accepts (each is decided from its
+  // own boot read). The plain exact accept is what returns.
+  const liveOf = () => new Set([...evmCaip2, ...svmCaip2, ...stellarCaip2, ...avmCaip2]);
+  const applyOffer = (live) => {
+    evmCaip2 = configuredRails.evm.filter((c) => live.has(c));
+    svmCaip2 = configuredRails.svm.filter((c) => live.has(c));
+    stellarCaip2 = configuredRails.stellar.filter((c) => live.has(c));
+    avmCaip2 = configuredRails.avm.filter((c) => live.has(c));
+    for (const [route, build] of acceptsBuilders) routes[route].accepts = build();
+  };
+  const restoreRail = (caip2, { client, label, supported }) => {
+    if (caip2 === ARC_CAIP2) return false;
+    if (!init.initialized()) return "defer"; // the maps are filled by the first successful init
+    const family = configuredRails.evm.includes(caip2) ? "evm" : configuredRails.svm.includes(caip2) ? "svm"
+      : configuredRails.stellar.includes(caip2) ? "stellar" : configuredRails.avm.includes(caip2) ? "avm" : null;
+    if (!family || (family === "stellar" && !stellarEnabled) || (family === "avm" && !algorandEnabled)) return false;
+    if (liveOf().has(caip2)) return true;
+    const responses = server.supportedResponsesMap, clients = server.facilitatorClientsMap;
+    if (!(responses instanceof Map) || !(clients instanceof Map) || typeof server.getSupportedKind !== "function") {
+      console.warn(`[payments] rail re-read: ${caip2} is listed again but this @x402/core keeps its facilitator lookup elsewhere; it returns at the next restart`);
+      return false;
+    }
+    const kinds = (supported?.kinds || []).filter((k) => k?.network === caip2 && typeof k?.scheme === "string" && k.scheme.toLowerCase() === "exact" && Number.isInteger(k?.x402Version));
+    if (!kinds.length) return false;
+    const scheme = family === "evm" ? evmExactSchemeFor(caip2) : family === "svm" ? new ExactSvmScheme() : family === "stellar" ? new ExactStellarScheme() : new ExactAvmScheme();
+    if (typeof scheme.validateFacilitatorSupport === "function") {
+      const problem = kinds.map((k) => scheme.validateFacilitatorSupport(caip2, k, supported?.extensions || [])).find(Boolean);
+      if (problem) { console.warn(`[payments] rail re-read: ${label} lists ${caip2} but not in a form its scheme accepts (${String(problem).slice(0, 140)}); it stays dropped`); return false; }
+    }
+    if (!server.hasRegisteredScheme(caip2, "exact")) server.register(caip2, scheme);
+    for (const k of kinds) {
+      if (server.getSupportedKind(k.x402Version, caip2, k.scheme)) continue; // the init already read it from an earlier facilitator
+      if (!responses.has(k.x402Version)) responses.set(k.x402Version, new Map());
+      if (!clients.has(k.x402Version)) clients.set(k.x402Version, new Map());
+      const byNet = responses.get(k.x402Version), clientByNet = clients.get(k.x402Version);
+      if (!byNet.has(caip2)) byNet.set(caip2, new Map());
+      if (!clientByNet.has(caip2)) clientByNet.set(caip2, new Map());
+      byNet.get(caip2).set(k.scheme, supported);
+      clientByNet.get(caip2).set(k.scheme, client);
+    }
+    const before = liveOf();
+    applyOffer(new Set([...before, caip2]));
+    // The vendor answers 500 on every paid route when one accept names a
+    // pair it cannot build: ask it before the offer stands.
+    let errors = [];
+    try { errors = httpServer.validateRouteConfiguration(); } catch (e) { errors = [{ network: caip2, message: String(e?.message || e) }]; }
+    if (errors.some((e) => e?.network === caip2)) {
+      applyOffer(before);
+      console.warn(`[payments] rail re-read: ${caip2} was not restored (${String(errors.find((e) => e?.network === caip2)?.message || "route check failed").slice(0, 160)}); it returns at the next restart`);
+      return false;
+    }
+    const nowOffered = liveOf();
+    railsOffered = networks.filter((n) => nowOffered.has(NETWORKS[n]));
+    offeredNetworkKeys = new Set([...nowOffered, ...Object.keys(NETWORKS).filter((n) => nowOffered.has(NETWORKS[n]))]);
+    if (!facilitatorFirstTriedByNetwork.has(caip2)) facilitatorFirstTriedByNetwork.set(caip2, label);
+    setPublicIndexOfferedChains([nowOffered.has(ROBINHOOD_CAIP2) && "robinhood", nowOffered.has(INK_CAIP2) && "ink"].filter(Boolean));
+    for (const r of GATED_RAILS) if (r.caip2 === caip2) { markGatedRailOffered(r.caip2); void recordGatedRailOffered(r.caip2); }
+    for (const fn of railsChangedListeners) { try { fn(caip2); } catch { /* a listener never blocks the offer */ } }
+    return true;
+  };
+  const candidates = droppedOnFailedRead.filter((c) => c !== ARC_CAIP2);
+  if (recheck.enabled && failedReads.length && candidates.length) {
+    railRecheck = createRailRecheck({ failed: failedReads, dropped: candidates, restore: restoreRail, firstMs: recheck.firstMs, maxMs: recheck.maxMs });
+    railRecheck.start();
+    console.log(`[payments] rail re-read: ${candidates.join(", ")} dropped on a failed /supported read; ${failedReads.map((f) => f.label).join(", ")} read again in ${Math.round(recheck.firstMs / 1000)} s, then on a backoff up to ${Math.round(recheck.maxMs / 1000)} s`);
+  }
+  return withGuardedInit(vendorMw, init, httpServer);
 }
 
 /**
@@ -2878,6 +2993,12 @@ export function lastResortFallbackOverrides({ networks, payAiClient, solvadorCli
 // decision, it never influences it.
 let railsConfigured = [];
 let railsOffered = [];
+// The background re-read of rails dropped on a failed boot /supported read
+// (src/rail-recheck.js), and who is told when one rejoins the offer.
+let railRecheck = null;
+const railsChangedListeners = [];
+/** Run fn(caip2) each time a rail dropped at boot rejoins the live offer. */
+export function onRailRestored(fn) { if (typeof fn === "function") railsChangedListeners.push(fn); }
 let railsOfferFinal = false;
 /** The offered network names in configured order (primary first), or null
  *  before the paywall has finalized its offer (free mode, early boot). */
@@ -2949,7 +3070,9 @@ export function railStatus() {
     // boot, and inventing a more precise one here could contradict them.
     reason: railsOffered.includes(n)
       ? null
-      : "not offered - no reachable facilitator advertises it, or its facilitator config is incomplete (see boot log for the specific guard)",
+      : railRecheck && railRecheck.pendingNetworks().includes(NETWORKS[n])
+        ? "not offered - its facilitator did not answer /supported at boot; it is read again in the background and the rail rejoins the offer when the facilitator lists it"
+        : "not offered - no reachable facilitator advertises it, or its facilitator config is incomplete (see boot log for the specific guard)",
   }));
 }
 
@@ -2965,10 +3088,10 @@ export function railStatus() {
 async function recordVerifyFailure(ctx, reason, { detail = "" } = {}) {
   let bucket = "unknown";
   try {
+    const { noteVerifyFailure, assetDecimalsFor } = await import("./verify-hint.js");
     const amount = Number(ctx?.requirements?.amount);
-    const priceUsd = Number.isFinite(amount) ? amount / 1e6 : null;
-    const { noteVerifyFailure } = await import("./verify-hint.js");
-    const noted = await noteVerifyFailure({ paymentPayload: ctx?.paymentPayload, network: ctx?.requirements?.network, reason, priceUsd, detail, feePayer: ctx?.requirements?.extra?.feePayer });
+    const priceUsd = Number.isFinite(amount) ? amount / 10 ** assetDecimalsFor(ctx?.requirements?.network) : null;
+    const noted = await noteVerifyFailure({ paymentPayload: ctx?.paymentPayload, network: ctx?.requirements?.network, reason, priceUsd, detail, feePayer: ctx?.requirements?.extra?.feePayer, requirements: ctx?.requirements });
     if (noted) bucket = noted.bucket;
     // A Solana wallet with no USDC account or too little USDC: counted toward
     // the funding hold (src/svm-funding-refusal.js), never a recovered verify.
@@ -3119,13 +3242,36 @@ export function registerFacilitatorUpstream(url) {
   try { toolFailureMonitor().registerUpstreamHost(url, `facilitator:${new URL(String(url)).host}`, { byPath: true }); } catch { /* not a URL */ }
 }
 
+// The catalog slug of the route a paid request is for ("POST /api/hash" ->
+// "hash"), set by buildPaymentMiddleware; null for a route the catalog does
+// not list.
+let routeSlugOf = () => null;
+/**
+ * The verify-failure log line (src/verify-failure-log.js): network, scheme,
+ * the route's slug, the payer's first characters (never case-folded, never
+ * the whole address) and the refusal, on one bounded line. Never throws.
+ */
+function logVerifyFailure(verb, ctx, reason) {
+  try {
+    let slug = null;
+    try {
+      const req = ctx?.transportContext?.request?.adapter?.req;
+      if (req && typeof req.method === "string" && typeof req.path === "string") slug = routeSlugOf(`${req.method} ${req.path}`);
+    } catch { /* no slug */ }
+    const payer = payerNamedBy(ctx, { svm: (payload) => (/^solana:/.test(typeof ctx?.requirements?.network === "string" ? ctx.requirements.network : "") ? svmPayerNamedBy(payload, ctx?.requirements?.extra?.feePayer) : null) });
+    console.warn(verifyFailureLine({ verb, network: ctx?.requirements?.network, scheme: ctx?.requirements?.scheme, reason, slug, payer }));
+  } catch { /* a log line never decides a payment */ }
+}
+function svmPayerNamedBy(payload, feePayer) {
+  const tx = payload?.payload?.transaction ?? payload?.transaction;
+  return svmTransferAccounts(tx)?.authority || svmPayerFromPayload(payload, { feePayer: typeof feePayer === "string" ? feePayer : undefined }) || null;
+}
+
 export function registerFacilitatorFailureHooks(server, payAiClient, solvadorClient = null, fallbackOverrides = null, { outageFor = () => null } = {}) {
   server.onVerifyFailure(async (ctx) => {
-    const reason = summarizeFacilitatorError(ctx?.error);
-    console.warn(
-      `[payments] facilitator VERIFY failed on ${ctx?.requirements?.network} ` +
-        `${ctx?.requirements?.scheme}: ${reason}`
-    );
+    let reason = "unknown error";
+    try { reason = summarizeFacilitatorError(ctx?.error); } catch { /* an error that cannot be read is still a failure */ }
+    logVerifyFailure("failed", ctx, reason);
     // A Circle Gateway batched payment is Gateway's alone: no other
     // facilitator can read a GatewayWalletBatched authorization, so it is
     // never offered to one, and its failure stands as Gateway's.
@@ -3176,8 +3322,8 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
   if (typeof server.onAfterVerify === "function") {
     server.onAfterVerify(async (ctx) => {
       if (ctx?.result && ctx.result.isValid === false) {
-        const reason = String(ctx.result.invalidReason || "verify rejected");
-        console.warn(`[payments] facilitator VERIFY rejected on ${ctx?.requirements?.network} ${ctx?.requirements?.scheme}: ${reason}`);
+        const reason = typeof ctx.result.invalidReason === "string" && ctx.result.invalidReason ? ctx.result.invalidReason : "verify rejected";
+        logVerifyFailure("rejected", ctx, reason);
         // The graceful shape carries the simulation's words in invalidMessage.
         await recordVerifyFailure(ctx, reason, { detail: typeof ctx.result.invalidMessage === "string" ? ctx.result.invalidMessage : "" });
       }

@@ -5020,6 +5020,8 @@ jobs:
           t node scripts/test-verify-hint-live.js
           # A Solana wallet with no USDC account or too little USDC is told to fund it (retry fund-wallet, Retry-After), and a re-signing loop is held without a verify until the Retry-After passes (paid boot, stub facilitator)
           t node scripts/test-svm-funding-refusal.js
+          # A verify refused for lack of funds names its class, the amount and the asset on every rail, and its log line carries the slug and a short payer (offline)
+          t node scripts/test-verify-refusal-reason.js
           # Settle-failure breaker on EVERY wallet-only tool (paid boot, stub facilitator verifies then refuses to settle)
           t node scripts/test-paid-settle-breaker.js
           # Algorand leaves sub-cent 402s while the facilitator's sponsored sub-cent allowance is spent; a quota refusal is never the buyer's (paid boot, stub facilitators + stub sponsorship status)
@@ -5337,6 +5339,8 @@ jobs:
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
           # Boot /supported guard (a dead facilitator costs ONE rail, not every paid route — the 2026-08-01 Celo outage; probe-driven drop, fail-open on total blindness, escape hatch — offline)
           t node scripts/test-supported-guard.js
+          # A rail dropped at boot on a failed or slow /supported read is read again on a backoff and rejoins the 402 and every derived surface without a restart; one the facilitator does not list never does (paid boots, stub facilitators)
+          t node scripts/test-rail-restore.js
           # Verify falls over to another facilitator when the first is UNREACHABLE, and never when it answers (offline, stub facilitators)
           t node scripts/test-verify-failover.js
           # The Bazaar keep-alive is actually scheduled, fails loudly without a key, and pages (CDP removes a resource after 30 days without a settlement)

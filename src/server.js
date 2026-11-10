@@ -488,7 +488,7 @@ const decideLedger = () => {
 if (stateDbEnabled()) decideLedger();
 import { settlePreferenceMiddleware } from "./settle-preference.js";
 import { fromUsdOf } from "./quoted-from.js";
-import { NETWORKS as PAY_NETWORKS, priceForNetwork, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, robinhoodOrderView, robinhoodSettlerStatus, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem, gatewayPendingStatus, gatewayPendingBookForOperator } from "./payments.js";
+import { NETWORKS as PAY_NETWORKS, priceForNetwork, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, onRailRestored, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, robinhoodOrderView, robinhoodSettlerStatus, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem, gatewayPendingStatus, gatewayPendingBookForOperator } from "./payments.js";
 import { GATEWAY_WIRE, gatewayBalanceStatus, gatewayOfferPublic, gatewayOfferNetworkNames, gatewayOfferedOn, isGatewayBatchedRequest } from "./gateway-nanopayments.js";
 import { isGatewayWire, isGatewayPendingAnswer } from "./gateway-wire.js";
 import { networkFloorUsd } from "./network-floors.js";
@@ -9545,6 +9545,10 @@ const openapiDocument = () => {
   }
   return OPENAPI_CACHE;
 };
+// A rail dropped at boot on a failed /supported read rejoined the offer
+// (src/rail-recheck.js): the surfaces built once from the offer are built
+// again, so they name the networks the 402 now carries.
+onRailRestored(() => { MANIFEST = buildManifest(); OPENAPI_CACHE = null; navChainsMemo = { snapshot: null, board: null, value: null }; });
 app.get("/openapi.json", (req, res) => {
   const { json, etag } = openapiDocument();
   res.set("Cache-Control", "public, max-age=3600").set("ETag", etag);
