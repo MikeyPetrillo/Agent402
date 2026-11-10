@@ -31,8 +31,11 @@
 //   gate, which runs earlier. An x402 payment is proved here: it must be an
 //   x402 v2 EIP-3009 authorization to this server's receiving wallet, on a
 //   network spelled the one way the replay guard keys it ("eip155:<id>", no
-//   leading zero), still inside a validity window no longer than the guard
-//   keeps a settled payment's consumed mark, whose signature recovers to its own `from`
+//   leading zero), still valid, with a bounded life (a validity window no
+//   longer than the guard keeps a settled payment's consumed mark, or an
+//   expiry no further out than the stock x402 v2 client sets one: that
+//   client signs every payment valid from the epoch),
+//   whose signature recovers to its own `from`
 //   under the token domain its accept names, and whose replay key the replay
 //   guard holds neither in flight nor consumed (a settled authorization is
 //   public on chain, so its bytes prove nothing once used). Anything else
@@ -63,6 +66,18 @@ const CANONICAL_EVM_NETWORK = /^eip155:([1-9]\d{0,11})$/;
 // before the mark lapses, so a settled authorization can never be read once
 // the guard has let it go.
 const MAX_READ_WINDOW_SEC = BigInt(Math.floor((SETTLED_HOLD_MS - CONSUMED_VALIDITY_MARGIN_MS) / 1000));
+// The stock x402 v2 exact client signs validAfter "0" and validBefore = now +
+// the accept's maxTimeoutSeconds, so its window is never short and the bound
+// above reads none of its payments. A read also accepts an authorization
+// that expires no later than that client would set it for a payment signed
+// now (every accept here asks DEFAULT_MAX_TIMEOUT_SECONDS, src/evm-validity.js:
+// the same figure, held equal by scripts/test-gateway-cache-scope.js), plus a
+// clock allowance. An authorization that expires within the guard's hold of
+// its settle, as every one from a client that follows the accept does, has
+// expired before its consumed mark lapses.
+export const STOCK_MAX_TIMEOUT_SEC = 300;
+export const STOCK_EXPIRY_SLACK_SEC = 60;
+const MAX_READ_REMAINING_SEC = BigInt(STOCK_MAX_TIMEOUT_SEC + STOCK_EXPIRY_SLACK_SEC);
 
 const TRANSFER_WITH_AUTHORIZATION_TYPES = {
   TransferWithAuthorization: [
@@ -192,7 +207,7 @@ export async function provenX402Signer(headerValue, { payTo, nowSec = Math.floor
     if (!anyTime) {
       const after = BigInt(validAfter), before = BigInt(validBefore), t = BigInt(nowSec);
       if (before <= t || after > t) return null;
-      if (before - after > MAX_READ_WINDOW_SEC) return null;
+      if (before - after > MAX_READ_WINDOW_SEC && before - t > MAX_READ_REMAINING_SEC) return null;
     }
     const signer = await recoverMemo(
       { name, version, chainId: Number(m[1]), verifyingContract: accepted.asset },
