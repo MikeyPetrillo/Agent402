@@ -36,7 +36,8 @@ import { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2, canonicalAvmNetw
 export const ROUTER_UA =
   "Mozilla/5.0 (compatible; Agent402-Router/1.0; +https://agent402.tools/crawler)";
 import { recordOutbound } from "./outbound-ledger.js";
-import { PAY_X402_TIMEOUT_MS } from "./buyer-timeouts.js";
+import { PAY_X402_TIMEOUT_MS, PAY_X402_MIN_LEG_MS } from "./buyer-timeouts.js";
+import { recordSignedPurchase } from "./router-purchases.js";
 export { PAY_X402_TIMEOUT_MS };
 import { assertSigningAllowed } from "./signing-halt.js";
 import { recordUpstreamSpend } from "./stats.js";
@@ -468,8 +469,27 @@ export async function refreshSellerMemos(items = [], now = Date.now()) {
   } catch (e) { noteSharedLimitsDegraded("sor-memo", { error: e?.message }); }
 }
 
-// The delivery memo below keys by origin + chain.
-const refusalKey = (origin, chain) => `${chain}|${String(origin || "").toLowerCase().replace(/\/+$/, "")}`;
+// THE DELIVERY MEMO'S KEY: one function for the writer and every reader. The
+// memo is about a SELLER, and a seller is the index's seller key: an origin,
+// or an origin plus a path prefix for a seller that shares its host. Scheme
+// and host are lowercased, the prefix keeps its case (it is part of the key
+// as the index stores it), a trailing slash is dropped.
+export function deliveryMemoKey(seller, chain) {
+  const raw = String(seller || "").replace(/\/+$/, "");
+  const scheme = raw.indexOf("://");
+  const slash = scheme >= 0 ? raw.indexOf("/", scheme + 3) : -1;
+  return `${chain}|${slash < 0 ? raw.toLowerCase() : raw.slice(0, slash).toLowerCase() + raw.slice(slash)}`;
+}
+const refusalKey = deliveryMemoKey;
+/** The seller a purchase's delivery memo is written under: the index's seller
+ *  key the caller bought from when it hands one in (route-execute does, for
+ *  every candidate), else the origin of the URL paid. The resolver reads the
+ *  memo under that same seller key, so a seller on a shared host is benched
+ *  as itself and never as the host's root. */
+export function deliveryMemoSeller(url, sellerKey = null) {
+  if (typeof sellerKey === "string" && /^https?:\/\/[^/]/i.test(sellerKey.trim())) return sellerKey.trim();
+  try { return new URL(String(url)).origin; } catch { return null; }
+}
 /** "https://host/path" for a route URL (query dropped, trailing slash dropped), or null. */
 function refusalRoute(url) {
   try {
@@ -930,18 +950,40 @@ export function atomicForMessage(v) {
  * @param maxAtomic  hard ceiling on the upstream quote in atomic USDC (6dp) —
  *                   the margin guard. A quote above it fails 502, never signs.
  * @param method/body  request shape (POST body is a JSON-serializable object).
- * @param timeoutMs / maxBytes  bounds.
+ * @param timeoutMs / maxBytes  bounds: timeoutMs is the most one seller
+ *                   request may take.
+ * @param deadlineMs the whole call's time budget, from this call's start
+ *                   (null = none). One deadline is fixed when the call
+ *                   starts; every seller request gets the lesser of
+ *                   timeoutMs and the time left, a request is not started
+ *                   with under minLegMs left, and nothing is signed or sent
+ *                   once it has passed.
  * @param refusalMaxWaitMs  the caller's remaining request budget, from this
  *                   call's start: the refusal branch's wait for the
  *                   credential to expire ends by then, whatever the seller
  *                   legs before it took; a wait that hits the bound keeps
  *                   the hold.
  *
+ * @param onSigned   called once, when the payment has been signed and before
+ *                   it is sent, with { url, payTo, chain, amountAtomic, asset }
+ *                   of the accept signed. It records the purchase as our own
+ *                   (default: src/router-purchases.js) and may return a
+ *                   function that takes the record back; that function is
+ *                   called only when the payment provably moved nothing.
+ *
  * A 200 on the bare request means the endpoint is free — returned with no
  * spend. Only a 402 triggers a payment; anything else is a 502.
  */
-export async function payX402(url, { maxAtomic, method = "GET", body, headers = {}, timeoutMs = PAY_X402_TIMEOUT_MS, maxBytes = DEFAULT_MAX_BYTES, chain = "base", provenPayTo = null, evidenceWallets = null, sellerProof = null, notDebited = null, allowUnproven = false, refusalMaxWaitMs = refusalMaxWaitMsDefault(), memoizeDelivery = false, slug = null, signBy = null, sellerKey = null } = {}) {
+export async function payX402(url, { maxAtomic, method = "GET", body, headers = {}, timeoutMs = PAY_X402_TIMEOUT_MS, maxBytes = DEFAULT_MAX_BYTES, chain = "base", provenPayTo = null, evidenceWallets = null, sellerProof = null, notDebited = null, allowUnproven = false, refusalMaxWaitMs = refusalMaxWaitMsDefault(), memoizeDelivery = false, slug = null, signBy = null, sellerKey = null, deadlineMs = null, minLegMs = PAY_X402_MIN_LEG_MS, now = Date.now, onSigned = recordSignedPurchase } = {}) {
   assertSigningAllowed("an external x402 payment");
+  // ONE DEADLINE FOR THE CALL, fixed here. A caller whose own buyer's payment
+  // lives a short time (a Solana blockhash, an Algorand round window) hands
+  // in what is left of it; the legs below share it instead of each taking a
+  // whole timeout, so the seller is never paid after that payment has lapsed.
+  const callEndAt = deadlineMs != null && Number.isFinite(Number(deadlineMs)) ? now() + Math.max(0, Number(deadlineMs)) : null;
+  const callLeftMs = () => (callEndAt == null ? Infinity : callEndAt - now());
+  const legTimeoutMs = () => Math.max(1, Math.min(timeoutMs, callLeftMs()));
+  const legFloorMs = Math.max(0, Number(minLegMs) || 0);
   // The refusal wait ends at a fixed time from this call's start, so a seller
   // that never answers the paid request cannot add its timeout on top of it.
   const refusalEndAt = Date.now() + Math.max(0, Number(refusalMaxWaitMs) || 0);
@@ -1005,11 +1047,13 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     // internal data or forward our signed X-PAYMENT header).
     dispatcher: sellerDispatcher(false),
     redirect: "manual",
-    signal: AbortSignal.timeout(timeoutMs),
   };
+  // Too little of the call's budget left to ask for the price and still pay:
+  // refused before the seller is contacted at all.
+  if (callLeftMs() < legFloorMs) throw bad("Too little of this call's time budget is left to pay a seller. Nothing was signed.", 504);
   const reject3xx = (r) => { if (r.status >= 300 && r.status < 400) throw bad("Seller returned a redirect - refusing to follow off the validated host", 502); };
   let bare;
-  try { bare = await fetch(url, reqInit); }
+  try { bare = await fetch(url, { ...reqInit, signal: AbortSignal.timeout(legTimeoutMs()) }); }
   catch (e) { throw bad(`Seller unreachable: ${String(e?.message || e).slice(0, 80)}`, 502); }
   reject3xx(bare);
   if (bare.status === 200) return { result: await readCapped(bare, maxBytes), quote: null, receipt: null };
@@ -1241,13 +1285,15 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
   // Set once a line for this payment is in the outbound ledger; a post-commit
   // failure no other path recorded is recorded in the catch below.
   let outboundRecorded = false;
+  // Takes back this call's own-purchase record (set when the payment is signed).
+  let retractOwnPurchase = null;
   try {
     // BASE UNPROVEN DAILY CAPS (src/base-unproven.js): the seller's and the
     // whole lane's, checked and the signed amount reserved in one step, keyed
     // on this accept's payTo and the seller's origin, before anything is
     // signed. A path-scoped seller is keyed on the index's seller key
     // (origin plus its prefix), handed in as `sellerKey`, not on the host it
-    // shares with other sellers. A refusal here is pre-commit (the finally gives the budget hold
+    // shares with other sellers (the delivery memo below takes the same key). A refusal here is pre-commit (the finally gives the budget hold
     // back); the reservation is given back by the same finally only when
     // nothing could have moved.
     if (chain === "base" && allowUnproven) {
@@ -1282,6 +1328,10 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     // validBefore less the settle rule and the seller allowance). Refused
     // before anything is signed, so nothing is committed and the hold goes back.
     if (Number.isFinite(signBy) && Date.now() > signBy) throw bad("Too little of the buyer's payment authorization is left to pay this seller and still settle. Nothing was signed.", 504);
+    // The call's own deadline, read at the moment of signing: the unpaid
+    // request, the screens and the chain reads above have spent part of it,
+    // and a credential is signed only while a paid request can still finish.
+    if (callLeftMs() < legFloorMs) throw bad("Too little of this call's time budget is left to pay this seller and read its answer. Nothing was signed.", 504);
     const signAccept = isEvm ? capEvmValidity(signable) : signable;
     const payload = chain === "solana"
       ? await (await import("./solana-buyer.js")).createSvmPaymentPayload(buyer.signer, { ...paymentRequired, accepts: [signable] })
@@ -1300,6 +1350,21 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
       e.refused = true;
       throw e;
     }
+    // OUR OWN PURCHASE, RECORDED AS IT IS SIGNED. From here a credential
+    // exists that can move our wallet's money to this accept's payTo, so the
+    // purchase is written down now, under the address actually signed for:
+    // a seller's settlement evidence is reduced by every payment of ours,
+    // whatever the index knew about its wallet. Bookkeeping never stops a
+    // payment.
+    if (typeof onSigned === "function") {
+      try {
+        const undo = onSigned({ url, payTo: payable.payTo, chain, amountAtomic: String(quotedAtomic), asset: payable.asset ?? null });
+        if (typeof undo === "function") retractOwnPurchase = undo;
+      } catch { /* best effort */ }
+    }
+    // Signing can read the chain (a Solana blockhash). A credential signed
+    // inside the deadline and not sent before it never leaves this process.
+    if (callLeftMs() <= 0) throw bad("This call's time budget ended while the payment was being signed. Nothing was sent.", 504);
     const payHeaders = http.encodePaymentSignatureHeader(payload);
     // Header-name compatibility: @x402/core emits only PAYMENT-SIGNATURE; some
     // sellers read only the X-PAYMENT name (Stelar, found 2026-07-23). Mirror
@@ -1316,7 +1381,8 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     // reads ONLY X-PAYMENT (Stelar, 2026-07-23) says so in its 402 body, and is
     // handled by the single evidence-driven resend below.
     // Fresh timeout AND a fresh pinned connection for the paid leg. The
-    // timeout must not inherit the bare leg's spent budget, and the paid
+    // per-request timeout does not inherit the bare leg's spent time (the
+    // call's deadline, when the caller set one, does), and the paid
     // retry must not reuse the bare leg's kept-alive socket: a live seller's
     // edge corrupts the connection after its 402 (2026-09-01, a seller -
     // the reused socket died as an uncaught "invalid content-length header"
@@ -1331,6 +1397,9 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     // The seller's origin, for the two memos. Computed once, before anything
     // can throw, so a failure path never has to reconstruct it.
     const sellerOrigin = (() => { try { return new URL(url).origin; } catch { return null; } })();
+    // The seller the delivery memo is keyed on (deliveryMemoSeller): the
+    // outbound ledger keeps the origin actually paid.
+    const memoSeller = deliveryMemoSeller(url, sellerKey);
     // THE CHAIN'S ANSWER TO "DID THE CREDENTIAL WE SENT MOVE MONEY". One
     // reader for the two outcomes that leave that question open: a paid retry
     // the seller answered with something other than 200, and a paid request
@@ -1339,7 +1408,8 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     // (authorizationState) or it is not (src/evm-authorization-state.js). On
     // Solana it is our own wallet's USDC account since the header went out.
     // Both reads wait for the credential's own expiry (validBefore + slack,
-    // or the blockhash), bounded by refusalMaxWaitMs. Returns the verdict, or
+    // or the finalized chain passing the blockhash's last valid height),
+    // bounded by refusalMaxWaitMs. Returns the verdict, or
     // null when this chain has no such read or the read failed - and null
     // never releases anything.
     // The most this credential can move: the amount we signed. Carried on
@@ -1349,6 +1419,8 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     const evmAuth = isEvm ? payload?.payload?.authorization : null;
     const evmCheckable = !!(evmAuth && /^0x[0-9a-fA-F]{64}$/.test(String(evmAuth.nonce || "")) && /^0x[0-9a-fA-F]{40}$/.test(String(signable?.asset || "")) && /^\d+$/.test(String(evmAuth.validBefore || "")));
     const svmBlockhash = chain === "solana" && typeof payload?.recentBlockhash === "string" ? payload.recentBlockhash : null;
+    // Known only for a blockhash our own RPC issued; else the read bounds it itself.
+    const svmLastValid = chain === "solana" && Number.isSafeInteger(payload?.lastValidBlockHeight) ? payload.lastValidBlockHeight : null;
     const chainCheckable = chain === "solana" || evmCheckable;
     const readChainVerdict = async (where) => {
       if (!chainCheckable) return null;
@@ -1358,7 +1430,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
           ? (await import("./solana-buyer.js")).confirmSvmNotDebited
           : (await import("./evm-authorization-state.js")).confirmEvmAuthorizationUnused);
         return chain === "solana"
-          ? await check({ wallet: buyer.address, sinceUnix: sentAtUnix, blockhash: svmBlockhash, maxWaitMs })
+          ? await check({ wallet: buyer.address, sinceUnix: sentAtUnix, blockhash: svmBlockhash, lastValidBlockHeight: svmLastValid, maxWaitMs })
           : await check({ token: signable.asset, authorizer: evmAuth.from || buyer.address, nonce: evmAuth.nonce, chain, wallet: buyer.address, sinceUnix: sentAtUnix, untilUnix: Number(evmAuth.validBefore) + REFUSAL_EXPIRY_SLACK_S, maxWaitMs });
       } catch (e) {
         console.warn(`[x402-buyer] ${where}: chain check unreadable (${String(e?.message || e).slice(0, 80)}) - keeping the hold`);
@@ -1405,12 +1477,13 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
       e.paidUnanswered = true;
       e.committed = committed;
       e.signedUsd = signedUsd;
+      e.paidTo = payable.payTo;
       e.cause = err;
       return e;
     };
     let paid;
     try {
-      paid = await fetch(url, { ...reqInit, dispatcher: paidDispatcher, signal: AbortSignal.timeout(timeoutMs), headers: paidHeaders });
+      paid = await fetch(url, { ...reqInit, dispatcher: paidDispatcher, signal: AbortSignal.timeout(legTimeoutMs()), headers: paidHeaders });
     } catch (fetchErr) {
       // SELLER-EDGE COMPAT (measured live 2026-09-01 on one seller): their
       // edge emits response framing that undici's fetch() path rejects as
@@ -1437,6 +1510,8 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
         // (It is still evidence about OUR money: see unansweredPaidLeg.)
         throw await unansweredPaidLeg(fetchErr);
       }
+      // The same credential again is still a send: not past the deadline.
+      if (callLeftMs() <= 0) throw await unansweredPaidLeg(fetchErr, { delivered: true });
       console.warn(`[x402-buyer] paid leg fell back to undici.request for ${(() => { try { return new URL(url).host; } catch { return "seller"; } })()} (fetch rejected: ${cause.slice(0, 80)})`);
       try {
         const { request } = await import("undici");
@@ -1445,7 +1520,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
           method,
           headers: paidHeaders,
           ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-          signal: AbortSignal.timeout(timeoutMs),
+          signal: AbortSignal.timeout(legTimeoutMs()),
           maxRedirections: 0,
         });
         const chunks = []; let total = 0;
@@ -1486,11 +1561,12 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     if ((paid.status === 402 || paid.status === 401) && payHeaders["PAYMENT-SIGNATURE"] && !paidHeaders["X-PAYMENT"]) {
       let sniff = "";
       try { sniff = (await readTextCapped(paid.clone(), MAX_REFUSAL_BODY_BYTES)).slice(0, 2000); } catch { sniff = ""; }
-      if (/x-payment/i.test(sniff)) {
+      // Sent only while the call's deadline leaves room for another request.
+      if (/x-payment/i.test(sniff) && callLeftMs() >= legFloorMs) {
         const host = (() => { try { return new URL(url).host; } catch { return "seller"; } })();
         console.warn(`[x402-buyer] ${host} asked for X-PAYMENT by name on a v2 challenge - resending the same credential under both header names (once)`);
         try {
-          paid = await fetch(url, { ...reqInit, dispatcher: sellerDispatcher(true), signal: AbortSignal.timeout(timeoutMs), headers: { ...paidHeaders, "X-PAYMENT": payHeaders["PAYMENT-SIGNATURE"] } });
+          paid = await fetch(url, { ...reqInit, dispatcher: sellerDispatcher(true), signal: AbortSignal.timeout(legTimeoutMs()), headers: { ...paidHeaders, "X-PAYMENT": payHeaders["PAYMENT-SIGNATURE"] } });
         } catch (e) {
           console.warn(`[x402-buyer] ${host}: X-PAYMENT resend failed (${String(e?.message || e).slice(0, 80)}) - keeping the first response`);
         }
@@ -1545,7 +1621,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
         });
       }
       if (memoizeDelivery && paid.status >= 500 && !(paid.headers.get("payment-response") || paid.headers.get("x-payment-response"))) {
-        noteSellerDeliveryFailure(sellerOrigin, chain, { status: paid.status, ms: Date.now() - sentAtMs });
+        noteSellerDeliveryFailure(memoSeller, chain, { status: paid.status, ms: Date.now() - sentAtMs });
         console.warn(`[x402-buyer] ${where} failed to deliver after payment (HTTP ${paid.status}, no receipt, ${Date.now() - sentAtMs}ms) - memoized as failing on ${chain}, the resolver will skip it`);
       }
       // A 4xx AFTER A CHARGE (2026-09-28). The memo above sees only a 5xx, so a
@@ -1570,7 +1646,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
           slug: slug || null, origin: sellerOrigin, result: "undelivered", tx: null,
         });
         if (!memoizeDelivery) return;
-        noteSellerDeliveryFailure(sellerOrigin, chain, { status: paid.status, ms: Date.now() - sentAtMs });
+        noteSellerDeliveryFailure(memoSeller, chain, { status: paid.status, ms: Date.now() - sentAtMs });
         console.warn(`[x402-buyer] ${where} took the payment and answered HTTP ${paid.status} (${how}) - memoized as failing on ${chain}`);
       };
       if (receiptSaysSettled(paid.headers)) strikeChargedFailure("its own settle receipt");
@@ -1614,7 +1690,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
           // Only the router's own purchase writes or clears either memo (the
           // same opt-in as the delivery memo's write), so a check whose URL a
           // caller chose cannot erase what the router learned.
-          if (memoizeDelivery) clearSellerDeliveryFailure(sellerOrigin, chain);
+          if (memoizeDelivery) clearSellerDeliveryFailure(memoSeller, chain);
           // THE REFUSAL MEMO STEERS THE ROUTER, so it is written only for what
           // it describes: the router's own purchase (memoizeDelivery, the
           // opt-in only route-execute passes) turned away by the seller's
@@ -1647,7 +1723,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
       // every other post-commit throw carries true, as before. (Stamping a
       // literal here let a mutation that never flipped the variable pass the
       // suite - the error said "not committed" while the hold stood.)
-      if (postCommitErr && typeof postCommitErr === "object") { postCommitErr.committed = committed; postCommitErr.signedUsd = signedUsd; }
+      if (postCommitErr && typeof postCommitErr === "object") { postCommitErr.committed = committed; postCommitErr.signedUsd = signedUsd; postCommitErr.paidTo = payable.payTo; }
       // Every signed payment gets one outbound line: a paid request that got
       // no answer, or a refusal, is recorded here unless a path above already
       // recorded it ("refused" once the chain proved the credential unused,
@@ -1680,7 +1756,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     // route from the one that fails. Gated on the same opt-in as the record,
     // so a diagnostic can never clear what the router learned.
     if (tx) noteChainSettled(chain);
-    if (memoizeDelivery && tx) { clearSellerDeliveryFailure(sellerOrigin, chain); clearSellerRefusal(url, chain); }
+    if (memoizeDelivery && tx) { clearSellerDeliveryFailure(memoSeller, chain); clearSellerRefusal(url, chain); }
     recordUpstreamSpend("x402-buyer", Number(quotedAtomic) / 1e6);
     // The aggregate above answers "what did upstream cost". This answers
     // "which payment, to whom, on what chain, did it arrive" - what an
@@ -1695,6 +1771,8 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
       result: await readAfterSpend(paid, maxBytes),
       quote: { atomic: String(quotedAtomic), usd: Number(quotedAtomic) / 1e6, network: chainCfg.caip2 },
       receipt: { transaction: tx, network: net },
+      // The address the signed payment names, for the caller's own records.
+      paidTo: payable.payTo,
     };
   } finally {
     // Refund the hold ONLY when no payment could have been taken:
@@ -1705,6 +1783,8 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     if (!committed) {
       releaseSpend(quotedAtomic, spendToken);
       releaseUnprovenSellerSpend(unprovenHold);
+      // The same proof takes the own-purchase record back: nothing was bought.
+      if (retractOwnPurchase) { try { retractOwnPurchase(); } catch { /* best effort */ } }
     }
   }
 }

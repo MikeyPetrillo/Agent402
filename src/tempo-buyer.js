@@ -27,7 +27,8 @@ import { assertNotOwnPayout } from "./own-wallets.js";
 import { createHash } from "node:crypto";
 import { assertSigningAllowed } from "./signing-halt.js";
 import { assertPayoutScreened } from "./tools/sanctions-kit.js";
-import { ROUTER_UA, noteSellerDeliveryFailure, clearSellerDeliveryFailure, isCallerInputStatus, buyerAddressGuardOn } from "./x402-buyer.js";
+import { recordSignedPurchase } from "./router-purchases.js";
+import { ROUTER_UA, noteSellerDeliveryFailure, clearSellerDeliveryFailure, deliveryMemoSeller, isCallerInputStatus, buyerAddressGuardOn } from "./x402-buyer.js";
 import { recordUpstreamSpend } from "./stats.js";
 import { recordOutbound } from "./outbound-ledger.js";
 import { assertPublicUrl, ssrfDispatcher } from "./tools/fetch-guard.js";
@@ -53,6 +54,14 @@ import { readBytesCapped, decodeUtf8 } from "./capped-body.js";
 // listed: a detail this wallet does not understand may change what is paid.
 const VETTED_METHOD_DETAILS = new Set(["chainId", "feePayer", "splits", "supportedModes", "memo", "machineTokenEnabled"]);
 
+// SELLER-WRITTEN CHALLENGE TEXT NEVER REACHES A MESSAGE AS WRITTEN. These
+// refusals are relayed to the buyer (route-execute), so each names a seller
+// value only when it has the plain shape of what it claims to be (a short
+// identifier, a token address, a chain number), and our own fixed words
+// otherwise.
+const plainName = (v) => (typeof v === "string" && /^[A-Za-z][A-Za-z0-9_-]{0,31}$/.test(v) ? v : null);
+const plainAddress = (v) => (typeof v === "string" && /^0x[0-9a-fA-F]{40}$/.test(v) ? v : null);
+
 /** Why a charge request's method details cannot be paid by this wallet, or
  *  null when they can. Pure; exported for tests. */
 export function methodDetailsRefusal(req) {
@@ -61,7 +70,10 @@ export function methodDetailsRefusal(req) {
   if (typeof md !== "object" || Array.isArray(md)) return "Seller's challenge carries unreadable method details; nothing was signed";
   if (md.machineTokenEnabled !== undefined && md.machineTokenEnabled !== false) return "Seller's challenge enables a machine-token route, which pays from another token than USDC.e; nothing was signed";
   const unknown = Object.keys(md).filter((k) => !VETTED_METHOD_DETAILS.has(k));
-  if (unknown.length) return `Seller's challenge carries a method detail this wallet does not know (${unknown.slice(0, 3).join(", ").slice(0, 80)}); nothing was signed`;
+  if (unknown.length) {
+    const named = unknown.slice(0, 3).map(plainName).filter(Boolean);
+    return `Seller's challenge carries a method detail this wallet does not know${named.length ? ` (${named.join(", ")})` : ""}; nothing was signed`;
+  }
   return null;
 }
 
@@ -376,6 +388,14 @@ export async function payTempo(url, {
   // EVM buyer routed here; route-execute hands it in). Checked right before
   // signing, so a refusal there has signed nothing.
   signBy = null,
+  // Called once the credential is signed and checked, before it is sent: it
+  // records the purchase as our own and may return a function that takes
+  // the record back, called only when the payment provably moved nothing
+  // (the payX402 rule).
+  onSigned = recordSignedPurchase,
+  // The index's seller key this purchase was routed to: the delivery memo is
+  // written under it (deliveryMemoSeller), else under the paid URL's origin.
+  sellerKey = null,
 } = {}) {
   assertSigningAllowed("a Tempo payment");
   const refusalWaitEndAt = Date.now() + Math.max(0, Number(refusalMaxWaitMs) || 0);
@@ -424,12 +444,12 @@ export async function payTempo(url, {
   let challenges;
   try { challenges = Challenge.fromHeadersList(new Headers({ "WWW-Authenticate": www })); } catch { throw bad("Seller's MPP challenge did not parse", 502); }
   const ch = pickTempoChallenge(challenges);
-  if (!ch) throw bad(`Seller offers no tempo/charge method (offered: ${challenges.map((c) => `${c.method}/${c.intent}`).join(", ") || "none"})`, 409);
+  if (!ch) throw bad(`Seller offers no tempo/charge method (offered: ${challenges.slice(0, 5).map((c) => `${plainName(c.method) || "other"}/${plainName(c.intent) || "other"}`).join(", ") || "none"})`, 409);
   const req = ch.request || {};
   // 2. ASSET PIN + chain + margin guard, all before any signing.
-  if (String(req.currency || "").toLowerCase() !== TEMPO_USDC_LC) throw bad(`Seller quotes ${req.currency || "an unknown currency"} - this wallet pays only USDC.e on Tempo`, 409);
+  if (String(req.currency || "").toLowerCase() !== TEMPO_USDC_LC) throw bad(`Seller quotes ${plainAddress(req.currency) || "another currency"} - this wallet pays only USDC.e on Tempo`, 409);
   const chainId = req.methodDetails?.chainId;
-  if (chainId !== undefined && Number(chainId) !== TEMPO_CHAIN_ID) throw bad(`Seller's challenge targets chain ${chainId}, not Tempo mainnet (${TEMPO_CHAIN_ID})`, 409);
+  if (chainId !== undefined && Number(chainId) !== TEMPO_CHAIN_ID) throw bad(`Seller's challenge targets chain ${Number.isSafeInteger(Number(chainId)) ? Number(chainId) : "another chain"}, not Tempo mainnet (${TEMPO_CHAIN_ID})`, 409);
   let quotedAtomic;
   try { quotedAtomic = BigInt(String(req.amount)); } catch { throw bad("Seller's challenge amount is not an integer base-units string", 502); }
   if (!(quotedAtomic > 0n)) throw bad("Seller quoted a zero amount", 502);
@@ -496,10 +516,20 @@ export async function payTempo(url, {
     e.refused = true;
     throw e;
   }
+  // Our own purchase, recorded as it is signed, under the recipient the
+  // credential pays (src/router-purchases.js). Bookkeeping never stops a payment.
+  let retractOwnPurchase = null;
+  if (typeof onSigned === "function") {
+    try {
+      const undo = onSigned({ url, payTo: recipient, chain: "tempo", amountAtomic: String(quotedAtomic), asset: req.currency || null });
+      if (typeof undo === "function") retractOwnPurchase = undo;
+    } catch { /* best effort */ }
+  }
+  const takeBack = () => { if (retractOwnPurchase) { try { retractOwnPurchase(); } catch { /* best effort */ } retractOwnPurchase = null; } };
   const startBlock = await headRead;
   // A pull credential moves nothing until the seller submits it, so when
   // signing used up the budget the request is not sent at all.
-  if (leftMs() < MIN_MINT_MS) throw bad("Too little of this call's time budget is left to wait for the seller; the payment was not sent", 504);
+  if (leftMs() < MIN_MINT_MS) { takeBack(); throw bad("Too little of this call's time budget is left to wait for the seller; the payment was not sent", 504); }
   // From here the credential has been handed to the seller, and nothing on
   // this rail can prove afterwards that it was not broadcast: every failure
   // below is stamped `committed`, with the amount the credential carries
@@ -536,7 +566,7 @@ export async function payTempo(url, {
         // seller there after two), as it was before the chain read. Nothing
         // moved, so no outbound or spend row is written for it.
         const struck = memoizeDelivery && paid.status >= 500;
-        if (struck) { try { noteSellerDeliveryFailure(new URL(url).origin, "tempo", { status: paid.status, ms: Date.now() - sentAt }); } catch { /* unparseable url: nothing to key */ } }
+        if (struck) noteSellerDeliveryFailure(deliveryMemoSeller(url, sellerKey), "tempo", { status: paid.status, ms: Date.now() - sentAt });
         console.warn(`[tempo-buyer] ${where} answered HTTP ${paid.status} to the paid request and the chain shows the credential expired unused - not charged${struck ? ", noted as failing to deliver on tempo" : ""}`);
         const e = bad(paid.status === 402 || paid.status === 401
           ? `Seller refused the payment (HTTP ${paid.status}); the credential expired unused, nothing charged`
@@ -563,7 +593,7 @@ export async function payTempo(url, {
     // same way payX402 does: the money left on this rail too, delivered or not.
     const ledger = (result, tx) => recordOutbound({ chain: "tempo", payTo: recipient, amountAtomic: quotedAtomic, asset: req.currency || null, usd: Number(quotedAtomic) / 1e6, slug: slug || null, origin: sellerOrigin, result, tx });
     if (chargedFailure) ledger("undelivered", null);
-    if (memoizeDelivery && chargedFailure && sellerOrigin) noteSellerDeliveryFailure(sellerOrigin, "tempo", { status: paid.status, ms: Date.now() - sentAt });
+    if (memoizeDelivery && chargedFailure) noteSellerDeliveryFailure(deliveryMemoSeller(url, sellerKey), "tempo", { status: paid.status, ms: Date.now() - sentAt });
     if (paid.status === 402 || paid.status === 401) throw bad(`Seller rejected the paid retry (HTTP ${paid.status})`, 502);
     // A receipt on the error is the seller saying it took the payment; with
     // none, the chain read above could not rule a payment out.
@@ -575,7 +605,7 @@ export async function payTempo(url, {
     // A settled delivery (a receipt with a reference) clears the memo, the
     // payX402 rule: a bare 200 proves the route answers, not that it takes
     // payment and delivers.
-    if (memoizeDelivery && reference) { try { clearSellerDeliveryFailure(new URL(url).origin, "tempo"); } catch { /* unparseable url: nothing to clear */ } }
+    if (memoizeDelivery && reference) clearSellerDeliveryFailure(deliveryMemoSeller(url, sellerKey), "tempo");
     recordUpstreamSpend("tempo-buyer", Number(quotedAtomic) / 1e6);
     ledger("delivered", reference);
     // A paid 200 is relayed even when its body cannot be read: the payment
@@ -586,10 +616,15 @@ export async function payTempo(url, {
       result,
       quote: { atomic: String(quotedAtomic), usd: Number(quotedAtomic) / 1e6, network: TEMPO_CAIP2 },
       receipt: { transaction: reference, network: TEMPO_CAIP2, wire: "mpp" },
+      // The recipient the signed credential pays, for the caller's own records.
+      paidTo: recipient,
     };
   } catch (err) {
     const e = err && typeof err === "object" ? err : bad(String(err), 502);
     e.committed = committed;
+    e.paidTo = recipient;
+    // The chain proved the credential unused: nothing was bought.
+    if (!committed) takeBack();
     // The credential carries the quote and nothing more: the most it moves.
     if (committed) e.signedUsd = Number(quotedAtomic) / 1e6;
     throw e;
