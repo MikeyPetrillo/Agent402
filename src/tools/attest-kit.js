@@ -30,7 +30,7 @@
 // scripts/test-attest-kit.js). Non-revocable, no resolver, no expiry.
 import { createHash } from "node:crypto";
 import { assertSigningAllowed } from "../signing-halt.js";
-import { saleByTxFresh, setAttestation } from "../sales-ledger.js";
+import { saleByTxFresh, setAttestation, queuedSaleWrites } from "../sales-ledger.js";
 import { withLease } from "../state-db.js";
 import { maySpend, noteSpend, adjustSpend, reserveSpend, composeReserve } from "../external-spend-guard.js";
 import { identityPayerOf, freeModeOn, FREE_MODE_IDENTITY_NOTE } from "../payer.js";
@@ -227,6 +227,25 @@ async function realChain() {
   return chainPromise;
 }
 
+// One line per refused lookup, at most REFUSAL_LOG_MAX a minute (the rest are
+// counted into the next line): which check refused, a short tx and payer,
+// and this process's queued sale writes, so a sale that was booked but not
+// yet readable is told apart from a hash that was never a sale here.
+const REFUSAL_LOG_MAX = 10;
+const refusalLog = { windowStart: 0, lines: 0, skipped: 0 };
+const short = (v) => { const s = String(v || ""); return s.length > 14 ? `${s.slice(0, 8)}..${s.slice(-4)}` : s; };
+function noteRefusal(log, why, tx, caller) {
+  try {
+    const now = Date.now();
+    if (now - refusalLog.windowStart >= 60_000) { refusalLog.windowStart = now; refusalLog.lines = 0; }
+    if (refusalLog.lines >= REFUSAL_LOG_MAX) { refusalLog.skipped++; return; }
+    refusalLog.lines++;
+    const q = queuedSaleWrites(now);
+    log(`[attest] refused (${why}) tx=${short(tx)} payer=${short(caller)} queuedSaleWrites=${q.count} oldestQueuedMs=${q.oldestMs}${refusalLog.skipped ? ` (+${refusalLog.skipped} refusals not logged)` : ""}`);
+    refusalLog.skipped = 0;
+  } catch { /* logging never refuses */ }
+}
+
 /**
  * The handler, with injectable dependencies so the whole decision path runs
  * offline: `deps.chain` = { address, ensureSchema, estimateUsd, attest },
@@ -240,6 +259,7 @@ export function makeAttestHandler(deps = {}) {
   const reserve = spend.reserveSpend || composeReserve(spend.maySpend, spend.noteSpend);
   const getChain = deps.chain ? async () => deps.chain : realChain;
   const payerOf = deps.payerOf || identityPayerOf;
+  const log = deps.log || console.warn;
   return async (input, req) => {
     const tx = normalizeTx(input?.tx);
     if (!tx) throw bad('Provide "tx": the settlement transaction from the PAYMENT-RESPONSE (or Payment-Receipt) header of a call you paid for - an EVM hash, a Solana or Stellar signature, or an Algorand id.', 400);
@@ -253,9 +273,14 @@ export function makeAttestHandler(deps = {}) {
     // The three refusals below say the same thing on purpose: a wallet that did
     // not make a purchase learns nothing about whether the tx is ours, what it
     // bought, or whether it was digested. Only the buyer sees the detail.
-    const notYours = () => bad(`No sale of yours settled in transaction ${tx}. Attestations cover calls this wallet paid for on this server; check the hash from your own receipt. Nothing was charged.`, 403);
-    if (!sale) throw notYours();
-    if (!sale.payer || String(sale.payer).toLowerCase() !== String(caller).toLowerCase()) throw notYours();
+    // The log names which of them it was (the answer never does).
+    const notYours = (why) => {
+      noteRefusal(log, why, tx, caller);
+      return bad(`No sale of yours settled in transaction ${tx}. Attestations cover calls this wallet paid for on this server; check the hash from your own receipt. Nothing was charged.`, 403);
+    };
+    if (!sale) throw notYours("no_sale");
+    if (!sale.payer) throw notYours("sale_without_payer");
+    if (String(sale.payer).toLowerCase() !== String(caller).toLowerCase()) throw notYours("other_payer");
     if (identityBoundSlugs.has(sale.slug)) throw bad("This sale is of a wallet-scoped route (memory or usage) and is not attestable: an attestation is public and permanent. Nothing was charged.", 403);
     if (!/^[0-9a-f]{64}$/i.test(String(sale.responseSha256 || ""))) {
       throw bad(`Your sale in ${tx} has no recorded response digest - it was a streamed or binary response, or was served before digests were recorded (2026-09-03). There is nothing to bind the payment to, so no attestation is written. Nothing was charged.`, 422);
