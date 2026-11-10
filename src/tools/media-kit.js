@@ -257,6 +257,61 @@ export async function normalizeAudio(buffer, { targetLufs = -16 } = {}) {
   });
 }
 
+// The length of the audio a file actually holds, measured by decoding its
+// first audio stream to nowhere and reading how far the decoder got. A
+// container's own duration field is a claim the file makes about itself (an
+// MP3's frame count, an MP4's movie header); this is what a decoder plays.
+//
+// Returns seconds, or null when it cannot be measured here (no ffmpeg on this
+// server, an unrecognized container, a decode that fails or outlasts its
+// deadline). It never throws and never refuses: a full pool queues, and the
+// caller decides what an unmeasured file means.
+const MEASURE_MAX_CONCURRENT = 2;
+const MEASURE_TIMEOUT_MS = 10_000;
+const MEASURE_WAIT_MS = 5_000;
+let measureActive = 0;
+const measureWaiters = [];
+// Resolves true with a slot held, or false when none came free in time.
+const measureAcquire = () => {
+  if (measureActive < MEASURE_MAX_CONCURRENT) { measureActive++; return Promise.resolve(true); }
+  return new Promise((resolve) => {
+    const waiter = () => { clearTimeout(timer); resolve(true); };
+    const timer = setTimeout(() => { const i = measureWaiters.indexOf(waiter); if (i !== -1) measureWaiters.splice(i, 1); resolve(false); }, MEASURE_WAIT_MS);
+    timer.unref?.();
+    measureWaiters.push(waiter);
+  });
+};
+const measureRelease = () => { const next = measureWaiters.shift(); if (next) next(); else measureActive--; };
+export async function measureAudioSeconds(buffer) {
+  let input;
+  try { input = mediaInputArgs(buffer, "in"); } catch { return null; }
+  if (!(await measureAcquire())) return null;
+  let dir = null;
+  try {
+    dir = await mkdtemp(join(tmpdir(), "a402-measure-"));
+    const inPath = join(dir, "in");
+    input[input.length - 1] = inPath;
+    await writeFile(inPath, buffer);
+    const stdout = await new Promise((resolve) => {
+      execImpl("ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", "-progress", "pipe:1", "-nostats", ...input, "-map", "0:a:0", "-vn", "-f", "null", "-"],
+        { timeout: MEASURE_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024, env: childEnv() },
+        (err, out) => resolve(err ? null : String(out ?? "")));
+    });
+    if (stdout === null) return null;
+    // The progress stream repeats out_time_us; the last one is the total.
+    let us = null;
+    for (const line of stdout.split("\n")) {
+      if (line.startsWith("out_time_us=")) { const n = Number(line.slice(12)); if (Number.isFinite(n) && n >= 0) us = n; }
+    }
+    return us === null ? null : us / 1e6;
+  } catch {
+    return null;
+  } finally {
+    measureRelease();
+    if (dir) rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 // Fetch and pre-screen: ffprobe is happy to chew on anything, but if the URL
 // obviously points to a webpage / JSON / a script (a common caller mistake —
 // pasting an article URL instead of a direct media file URL), fail fast with a
