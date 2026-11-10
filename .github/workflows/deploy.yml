@@ -4945,6 +4945,8 @@ jobs:
           t node scripts/test-price-by-model.js
           # TTS quoted per request: the 402 on each chain, Tempo, settlement and the credits hold all read the quote for the text; over-cap refused before any spend; the price surfaces carry the formula (boots a paid server, offline)
           t node scripts/test-tts-quote-paid.js
+          # Every quoted route states one floor: /api/pricing, /openapi.json, /llms-full.txt and the 402's smallest quote agree (paid boot, stub facilitator).
+          t node scripts/test-quoted-from-price.js
           # Real sample reports: fixtures are finished reports, pages indexable with own title/JSON-LD, /reports links them, sitemap carries them (boots FREE_MODE, offline)
           t node scripts/test-sample-reports.js
           # openFDA 404 = no matches, an empty result: recall-report must not 502 on it (offline)

@@ -460,6 +460,7 @@ const decideLedger = () => {
 // from the file runs before the first request, not inside it.
 if (stateDbEnabled()) decideLedger();
 import { settlePreferenceMiddleware } from "./settle-preference.js";
+import { fromUsdOf } from "./quoted-from.js";
 import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, robinhoodOrderView, robinhoodSettlerStatus, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem, gatewayPendingStatus, gatewayPendingBookForOperator } from "./payments.js";
 import { GATEWAY_WIRE, gatewayBalanceStatus, gatewayOfferPublic, gatewayOfferNetworkNames, gatewayOfferedOn, isGatewayBatchedRequest } from "./gateway-nanopayments.js";
 import { isGatewayWire, isGatewayPendingAnswer } from "./gateway-wire.js";
@@ -2472,7 +2473,12 @@ for (const def of Object.values(CATALOG)) {
 // price and the dearest flat tier a model can be served under.
 const FLAT_TIER_MAX_USD = Math.max(0, ...Object.keys(TIERS).filter(isFlatTier).map((k) => Number(TIERS[k].price) || 0));
 for (const def of Object.values(CATALOG)) {
-  const floor = Number(String(def.price ?? "").replace(/[^0-9.]/g, "")) || 0;
+  const list = Number(String(def.price ?? "").replace(/[^0-9.]/g, "")) || 0;
+  // A quoted tool whose list price is not its cheapest quote declares its own
+  // floor (quoteMinUsd, from the same config its quote function reads): the
+  // range every surface prints as "from" starts there, never above a price
+  // the 402 can ask. A tool that declares none starts at its list price.
+  const floor = typeof def.quote === "function" && Number.isFinite(def.quoteMinUsd) && def.quoteMinUsd > 0 ? def.quoteMinUsd : list;
   // A quoted tool may declare its own ceiling (quoteMaxUsd); the metered cap
   // is the ceiling only for the tools that do not.
   if (typeof def.quote === "function") def.quoteRange = { minUsd: floor, maxUsd: Number.isFinite(def.quoteMaxUsd) && def.quoteMaxUsd >= floor ? def.quoteMaxUsd : METERED_MAX_QUOTE_USD };
@@ -9996,7 +10002,7 @@ app.get("/api/pricing", (_req, res) => {
         .map(([route, def]) => ({
           path: route.split(" ")[1],
           price: def.price,
-          ...(typeof def.quote === "function" ? { quoted: true, fromUsd: Number(def.price.replace("$", "")) } : {}),
+          ...(typeof def.quote === "function" ? { quoted: true, fromUsd: fromUsdOf(def) } : {}),
           ...(typeof def.tierQuote === "function" ? { pricedByModel: true } : {}),
         }))
         .filter((t) => t.path.startsWith("/v1/"))
