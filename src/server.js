@@ -367,7 +367,7 @@ import { operatorWishesPage } from "./operator-wishes.js";
 import { initLeadsDb } from "./leads-db.js";
 import { cacheEnabled, cacheGet, cacheSet, cacheKeyFor, cacheTtlFor, CACHEABLE_ROUTES, noteCacheOutcome, cacheCounters } from "./cache.js";
 import { fullAnswerMiddleware } from "./full-answer.js";
-import { initAnalyticsDb, recordToolCall, getAnalytics, analyticsEnabled, redactAnalytics } from "./analytics-db.js";
+import { initAnalyticsDb, recordToolCall, getAnalytics, analyticsEnabled, redactAnalytics, startToolCallRetention } from "./analytics-db.js";
 import { databasesStatus } from "./db-status.js";
 import { initWithRetry } from "./db-init-retry.js";
 import { baseNotificationsEnabled } from "./base-notifications.js";
@@ -12454,6 +12454,9 @@ initWithRetry("leads-db", initLeadsDb, { onResult: (r) => { leadsDbReady = !!r.o
 // Powers the public /analytics dashboard. Boot fire-and-forget so a slow DB
 // can't hold up /health.
 initWithRetry("analytics-db", initAnalyticsDb);
+// Rows older than TOOL_CALLS_RETENTION_DAYS are deleted daily, in batches,
+// under a lease (src/analytics-db.js).
+startToolCallRetention();
 
 // PostHog — opt-in via POSTHOG_API_KEY. Same env-gated, fire-and-forget
 // pattern as the other optional infra. Captures tool errors as "tool_error" events. Free tier

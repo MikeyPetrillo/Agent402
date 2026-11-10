@@ -18,6 +18,7 @@
 import pg from "pg";
 import { dbSsl } from "./db-ssl.js";
 import { probeDbHost } from "./db-probe.js";
+import { leased, leaseStillHeld } from "./state-db.js";
 
 const { Pool } = pg;
 
@@ -40,15 +41,34 @@ const RETRY_AFTER_MS = 5 * 60_000;
 let unavailableUntil = 0;
 const unavailable = () => Date.now() < unavailableUntil;
 
+// Server-side limits on every connection of this pool, the same two the state
+// database pool sets (src/state-db.js stateDbTimeouts: 10 s a statement, 30 s
+// for a transaction left idle): the table shares a Postgres with the state
+// schema, so a dashboard aggregate or a retention batch that runs long is
+// cancelled by the server instead of holding a connection and its locks.
+const envMs = (name, dflt) => {
+  const n = Number(String(process.env[name] ?? "").trim());
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : dflt;
+};
+export function analyticsDbTimeouts() {
+  return {
+    statementMs: envMs("ANALYTICS_DB_STATEMENT_TIMEOUT_MS", 10_000),
+    idleTxMs: envMs("ANALYTICS_DB_IDLE_TX_TIMEOUT_MS", 30_000),
+  };
+}
+
 function getPool() {
   if (!ANALYTICS_URL || unavailable()) return null;
   if (pool) return pool;
+  const t = analyticsDbTimeouts();
   pool = new Pool({
     connectionString: ANALYTICS_URL,
     ssl: dbSsl(ANALYTICS_URL), // F11: verified TLS on public hosts, relaxed only on the private railway.internal mesh
     max: 4,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 20_000, // outlives the ~10 s post-listen boot stall (2026-08-25)
+    statement_timeout: t.statementMs,
+    idle_in_transaction_session_timeout: t.idleTxMs,
   });
   pool.on("error", (err) => {
     console.error("[analytics-db] pool error:", err.message);
@@ -173,6 +193,85 @@ export async function recordToolCall({ slug, latencyMs, cached, errored, status,
   }
 }
 
+// --- Retention ---------------------------------------------------------------
+// One row per tool call adds up, and nothing reads a row older than the
+// dashboard's widest window (MAX_WINDOW_HOURS below, 30 days). A daily leased
+// tick deletes rows older than TOOL_CALLS_RETENTION_DAYS (default 180; never
+// under RETENTION_MIN_DAYS, so the widest window always has its rows; `off`
+// or 0 keeps everything). Each batch is one short statement that walks the
+// ts index from its oldest end, so no statement holds a long lock, and the
+// tick pauses between batches so other statements and the event loop get
+// their turns. A tick stops at its batch bound; the next day's continues.
+export const MAX_WINDOW_HOURS = 24 * 30;
+export const RETENTION_DEFAULT_DAYS = 180;
+export const RETENTION_MIN_DAYS = MAX_WINDOW_HOURS / 24 + 1;
+/** The retention in days, or 0 when retention is off. */
+export function toolCallsRetentionDays(env = process.env) {
+  const raw = String(env.TOOL_CALLS_RETENTION_DAYS ?? "").trim().toLowerCase();
+  if (raw === "off" || raw === "0") return 0;
+  const n = Number(raw);
+  if (!raw || !Number.isFinite(n) || n <= 0) return RETENTION_DEFAULT_DAYS;
+  return Math.max(RETENTION_MIN_DAYS, Math.floor(n));
+}
+const pause = (ms) => new Promise((r) => { const t = setTimeout(r, ms); t.unref?.(); });
+/**
+ * Delete rows older than the retention, oldest first, `batchSize` at a time,
+ * at most `maxBatches` batches. Never throws: a failed batch (the statement
+ * limit, a lost connection) ends the run with `error` set and what was
+ * deleted so far stays deleted.
+ */
+export async function pruneToolCalls({ retentionDays = toolCallsRetentionDays(), batchSize = 5000, maxBatches = 100, pauseMs = 200, now = Date.now(), stillHeld = null } = {}) {
+  const out = { ok: true, deleted: 0, batches: 0, more: false, retentionDays };
+  if (!ANALYTICS_URL) return { ...out, ok: false, reason: "no-db" };
+  if (!(retentionDays > 0)) return { ...out, reason: "off" };
+  if (unavailable()) return { ...out, ok: false, reason: "unavailable" };
+  const size = Math.max(1, Math.min(50_000, batchSize | 0));
+  const cutoff = new Date(now - retentionDays * 86_400_000).toISOString();
+  try {
+    if (!(await ensureSchema())) return { ...out, ok: false, reason: "unavailable" };
+    const p = getPool();
+    if (!p) return { ...out, ok: false, reason: "unavailable" };
+    for (;;) {
+      if (stillHeld && !stillHeld()) { out.more = true; break; } // the lease went to another container
+      if (out.batches >= maxBatches) { out.more = true; break; }
+      const r = await p.query(
+        "DELETE FROM tool_calls WHERE id IN (SELECT id FROM tool_calls WHERE ts < $1 ORDER BY ts ASC LIMIT $2)",
+        [cutoff, size]
+      );
+      out.batches++;
+      out.deleted += r.rowCount || 0;
+      if ((r.rowCount || 0) < size) break;
+      if (pauseMs > 0) await pause(pauseMs);
+    }
+  } catch (e) {
+    return { ...out, ok: false, error: String(e?.message || e).slice(0, 160) };
+  }
+  return out;
+}
+const RETENTION_LEASE = "tool-calls-retention";
+/** One retention run under its lease: `{ skipped: "leased" }` while another container holds it. */
+export const pruneToolCallsLeased = leased(RETENTION_LEASE, { ttlMs: 10 * 60_000, log: (m) => console.warn(`[analytics-db] ${m}`) },
+  (opts = {}) => pruneToolCalls({ ...opts, stillHeld: () => leaseStillHeld(RETENTION_LEASE) }));
+let retentionTimer = null;
+/** The daily retention tick (first run a few minutes after boot); under a lease with the state database. */
+export function startToolCallRetention({ firstMs = 7 * 60_000, everyMs = 24 * 3_600_000, log = console.log } = {}) {
+  if (retentionTimer || !ANALYTICS_URL || !toolCallsRetentionDays()) return false;
+  const tick = pruneToolCallsLeased;
+  const run = () => tick().then((r) => {
+    if (r?.error) console.warn(`[analytics-db] retention stopped after ${r.deleted} row(s): ${r.error}`);
+    else if (r?.deleted) log(`[analytics-db] retention: ${r.deleted} row(s) older than ${r.retentionDays} days deleted in ${r.batches} batch(es)${r.more ? "; more remain for the next run" : ""}`);
+  }).catch((e) => console.warn(`[analytics-db] retention failed: ${String(e?.message || e).slice(0, 120)}`));
+  retentionTimer = setInterval(run, everyMs); retentionTimer.unref?.();
+  const f = setTimeout(run, firstMs); f.unref?.();
+  return true;
+}
+/** For tests: close the pool so a script can end. */
+export async function closeAnalyticsDb() {
+  const p = pool;
+  pool = null; schemaReady = false;
+  if (p) await p.end().catch(() => {});
+}
+
 // Aggregates for the public dashboard. Bounded by `windowHours` so a query
 // can't accidentally scan the whole table.
 //
@@ -201,7 +300,7 @@ export async function getAnalytics({ windowHours = 24, top = 25, includeSyntheti
     await ensureSchema();
     const p = getPool();
     if (!p) return { ok: false, enabled: false, reason: "no-pool" };
-    const hours = Math.max(1, Math.min(24 * 30, windowHours | 0));
+    const hours = Math.max(1, Math.min(MAX_WINDOW_HOURS, windowHours | 0));
     const topN = Math.max(1, Math.min(200, top | 0));
     const since = `now() - interval '${hours} hours'`;
     // SQL fragments — inlined (no parameterization) because they're a fixed
@@ -314,7 +413,8 @@ export async function getAnalytics({ windowHours = 24, top = 25, includeSyntheti
         coalesce(count(t.id) FILTER (WHERE t.errored), 0)::int  AS errored
       FROM hours h
       LEFT JOIN tool_calls t
-        ON date_trunc('hour', t.ts) = h.hour ${realOnlyJoin}
+        ON date_trunc('hour', t.ts) = h.hour
+       AND t.ts >= date_trunc('hour', now() - interval '${hours} hours') ${realOnlyJoin}
       GROUP BY h.hour
       ORDER BY h.hour ASC
     `);
