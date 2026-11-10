@@ -38,6 +38,11 @@
 // (src/openrouter-audio-policy.js: data_collection deny, zdr); the default
 // path calls OpenAI directly, outside OpenRouter's routing.
 
+// ONE MORE ATTEMPT (2026-11-10): an upstream failure that passes on its own (a
+// 5xx, a rate limit with a short Retry-After, a connection that failed) used
+// to be the buyer's 502. It now gets one more attempt on the same model; see
+// transcribeWithRetry for the bounds.
+
 import { parseMultipartFile } from "../multipart.js";
 import { loadMusicMetadata } from "./lazy-deps.js";
 import { safeFetch } from "./fetch-guard.js";
@@ -47,6 +52,8 @@ import { OPENROUTER_ATTRIBUTION } from "../openrouter-attribution.js";
 import { assertUpstreamBody } from "./llm-gateway-kit.js";
 import { capturePostHogGatewayUsage } from "../posthog.js";
 import { audioProviderPolicy } from "../openrouter-audio-policy.js";
+import { cdnSyncLeftMs } from "../cdn-sync-window.js";
+import { evmCredentialBudgetMs } from "../evm-validity.js";
 
 const OPENAI_KEY = () => (process.env.OPENAI_API_KEY || "").trim();
 const OPENROUTER_KEY = () => (process.env.OPENROUTER_API_KEY || "").trim();
@@ -180,7 +187,49 @@ export function ourBillingLimit() {
   return Object.assign(bad("Transcription is unavailable right now because this server reached its own spending limit for speech-to-text. This is on our side, not your input; you were not charged. Retry later.", 503), { noRetry: true });
 }
 
-async function callOpenAI(audioBuffer, filename, model, language, probedDuration = null) {
+// --- one more attempt on a transient upstream failure -----------------------
+// Each path keeps the cap it had: the default path 60 s, the diarized path
+// 120 s. The cap now bounds BOTH attempts together, counted from the start of
+// the first, so a call never runs longer than it could before.
+const UPSTREAM_CAP_MS = Object.freeze({ default: 60_000, diarize: 120_000 });
+const CONNECT_FAILURES = new Set(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "ENETUNREACH", "EHOSTUNREACH", "UND_ERR_CONNECT_TIMEOUT"]);
+/** A rate limit is retried only when the upstream names a wait this short. */
+export const STT_RETRY_AFTER_MAX_MS = 3_000;
+const retryKnobs = { capMs: null, minLeftMs: 20_000, pauseMs: () => 250 + Math.floor(Math.random() * 500), sleep: (ms) => new Promise((r) => setTimeout(r, ms)) };
+/** Test seam: shorten the cap, the floor and the pause. */
+export function __setSttRetryForTest(o = {}) { Object.assign(retryKnobs, { capMs: null, minLeftMs: 20_000, pauseMs: () => 250 + Math.floor(Math.random() * 500), sleep: (ms) => new Promise((r) => setTimeout(r, ms)) }, o); }
+
+/** Marks a failure that may get the second attempt. `unbilled`: the upstream
+ *  answered with an error status or was never reached, so it generated
+ *  nothing. `maybe-billed`: the connection opened and then failed with no
+ *  answer, so a transcript may have been generated and billed. */
+const retryable = (err, cls, extra = {}) => Object.assign(err, { sttRetry: cls, ...extra });
+const isTimeout = (e) => e?.name === "TimeoutError" || e?.name === "AbortError" || e?.cause?.name === "TimeoutError";
+/** Maps a fetch that threw. A daily-ceiling refusal keeps its own 503; a
+ *  timeout is final (it spent the whole cap, and may have been billed). */
+function transportFailure(e, message) {
+  if (e?.hardCap) return e;
+  const err = bad(message, 504);
+  if (isTimeout(e)) return err;
+  return retryable(err, CONNECT_FAILURES.has(e?.cause?.code || e?.code) ? "unbilled" : "maybe-billed", { sttCause: "connection" });
+}
+/** Retry-After in ms from a 429 (seconds form, or the -ms header); null when absent or unreadable. */
+function retryAfterMsOf(res) {
+  const read = (name, scale) => {
+    const raw = String(res.headers?.get?.(name) ?? "").trim();
+    const n = Number(raw);
+    return raw !== "" && Number.isFinite(n) && n >= 0 ? n * scale : null;
+  };
+  return read("retry-after-ms", 1) ?? read("retry-after", 1000);
+}
+/** A 429 that is an ordinary rate limit: retried only on a short named wait. */
+function rateLimited(res, message) {
+  const err = bad(message, 503);
+  const wait = retryAfterMsOf(res);
+  return wait !== null && wait <= STT_RETRY_AFTER_MAX_MS ? retryable(err, "unbilled", { sttCause: "HTTP 429", sttWaitMs: wait }) : err;
+}
+
+async function callOpenAI(audioBuffer, filename, model, language, probedDuration = null, timeoutMs = UPSTREAM_CAP_MS.default) {
   const key = OPENAI_KEY();
   if (!key) throw bad("OpenAI not configured", 503);
 
@@ -196,10 +245,10 @@ async function callOpenAI(audioBuffer, filename, model, language, probedDuration
       method: "POST",
       headers: { Authorization: `Bearer ${key}` },
       body: form,
-      signal: AbortSignal.timeout(60_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (e) {
-    throw bad(`OpenAI request failed: ${e.message}`, 504);
+    throw transportFailure(e, `OpenAI request failed: ${e.message}`);
   }
 
   const text = await res.text();
@@ -209,8 +258,8 @@ async function callOpenAI(audioBuffer, filename, model, language, probedDuration
     // and not a rate limit worth an immediate retry.
     if (isOurBillingLimit(res.status, text)) throw ourBillingLimit();
     if (res.status === 401 || res.status === 403) throw bad("OpenAI upstream auth failed", 502);
-    if (res.status === 429) throw bad("OpenAI rate-limited - retry shortly", 503);
-    if (res.status >= 500) throw bad(`OpenAI upstream error (HTTP ${res.status})`, 502);
+    if (res.status === 429) throw rateLimited(res, "OpenAI rate-limited - retry shortly");
+    if (res.status >= 500) throw retryable(bad(`OpenAI upstream error (HTTP ${res.status})`, 502), "unbilled", { sttCause: `HTTP ${res.status}` });
     // Redact the FULL body BEFORE slicing/parsing (a secret straddling the
     // 200-char cut leaves an unredactable prefix); the route binder returns
     // err.message verbatim to buyers and logs it.
@@ -245,7 +294,7 @@ async function callOpenAI(audioBuffer, filename, model, language, probedDuration
  *  timestamps. Same answer fields as the default path plus `words` and
  *  `speakers`; a failure is a 4xx/5xx that cancels settlement, never a quiet
  *  fall back to a transcript without the speakers the buyer asked for. */
-async function callScribe(audioBuffer, filename, model, language, probedDuration = null) {
+async function callScribe(audioBuffer, filename, model, language, probedDuration = null, timeoutMs = UPSTREAM_CAP_MS.diarize) {
   const key = OPENROUTER_KEY();
   if (!key) throw bad("Speech gateway not configured (OPENROUTER_API_KEY unset)", 503);
   const form = new FormData();
@@ -259,9 +308,9 @@ async function callScribe(audioBuffer, filename, model, language, probedDuration
   form.append("provider", JSON.stringify(audioProviderPolicy(model)));
   let res;
   try {
-    res = await fetch(OPENROUTER_STT_URL, { method: "POST", headers: { Authorization: `Bearer ${key}`, ...OPENROUTER_ATTRIBUTION }, body: form, signal: AbortSignal.timeout(120_000) });
+    res = await fetch(OPENROUTER_STT_URL, { method: "POST", headers: { Authorization: `Bearer ${key}`, ...OPENROUTER_ATTRIBUTION }, body: form, signal: AbortSignal.timeout(timeoutMs) });
   } catch (e) {
-    throw bad(`Transcription upstream request failed: ${String(e?.message || e).slice(0, 120)}`, 504);
+    throw transportFailure(e, `Transcription upstream request failed: ${String(e?.message || e).slice(0, 120)}`);
   }
   const text = await res.text();
   if (!res.ok) {
@@ -269,8 +318,9 @@ async function callScribe(audioBuffer, filename, model, language, probedDuration
     let msg = safe.slice(0, 200);
     try { msg = JSON.parse(safe).error?.message || msg; } catch {}
     if (isOurBillingLimit(res.status, text)) throw ourBillingLimit();
-    if (res.status === 429) throw bad("Transcription upstream rate-limited - retry shortly", 503);
-    if (res.status >= 500 || res.status === 401 || res.status === 403) throw bad(`Transcription upstream error (HTTP ${res.status})`, 502);
+    if (res.status === 429) throw rateLimited(res, "Transcription upstream rate-limited - retry shortly");
+    if (res.status === 401 || res.status === 403) throw bad(`Transcription upstream error (HTTP ${res.status})`, 502);
+    if (res.status >= 500) throw retryable(bad(`Transcription upstream error (HTTP ${res.status})`, 502), "unbilled", { sttCause: `HTTP ${res.status}` });
     throw bad(`Transcription upstream rejected the request: ${msg}`, 400);
   }
   let data;
@@ -311,21 +361,99 @@ function recordSttSpend(tierSlug, out, probedDuration) {
   } catch { /* telemetry must never fail a served response */ }
 }
 
-async function transcribeBuffer(buf, filename, tierSlug, language, diarize, probedDuration) {
+/** May a failure that could have been billed get a second attempt? Only when
+ *  two billed attempts on this audio still sit inside the margin bound the
+ *  duration cap holds for one (STT_MARGIN of the price). No rate row, no. */
+export function twoBilledAttemptsWithinMargin(tierSlug, model, durationSec) {
+  const rate = upstreamUsdPerMinute(model);
+  const price = TIERS[tierSlug]?.priceUsd;
+  if (!(rate > 0) || !(price > 0) || !(durationSec > 0)) return false;
+  return 2 * (durationSec / 60) * rate <= STT_MARGIN * price + 1e-12;
+}
+
+/** Time the second attempt may spend: what is left of the path's cap, of the
+ *  CDN answer window and of the buyer's payment authorization, whichever is
+ *  shortest. */
+function retryLeftMs(startedAt, capMs, req) {
+  let left = startedAt + capMs - Date.now();
+  try { const c = cdnSyncLeftMs(req); if (c !== null) left = Math.min(left, c); } catch { /* no bound to read */ }
+  try { const p = req && typeof req === "object" && req.headers ? evmCredentialBudgetMs(req) : null; if (p !== null) left = Math.min(left, p); } catch { /* no bound to read */ }
+  return left;
+}
+
+const NOT_CHARGED = "Nothing was charged.";
+/** The 5xx a buyer gets: what failed, that it was not charged, what to do.
+ *  The charge claim is made only on a route call (`req` present): a skill
+ *  pack runs this handler as one step of a charged 200 and prints the step's
+ *  error, where the claim would be false. On a route call it is true on every
+ *  payment but a Tempo transfer sent before the call, and the route binder
+ *  adds that exception to this exact sentence (server.js withPushException). */
+function finalFailure(err, { attempts, diarize, req }) {
+  if (!err || !(err.statusCode >= 500) || err.hardCap || err.noRetry || typeof err.message !== "string" || err.message.includes(NOT_CHARGED)) return err;
+  const tried = attempts > 1 ? ` (${attempts} attempts)` : "";
+  // The other path is named only while this server can serve it.
+  const other = diarize
+    ? (OPENAI_KEY() ? ", or send the call without diarize for a transcript without speaker labels (a different model serves it)" : "")
+    : (OPENROUTER_KEY() ? ", or send diarize:true (a different model serves that at the same price)" : "");
+  const what = err.message.replace(/\s+-\s+retry(?: shortly)?\s*$/i, "").replace(/[.\s]+$/, "");
+  const routeCall = !!(req && typeof req === "object" && req.headers);
+  err.message = `${what}${tried}.${routeCall ? ` ${NOT_CHARGED}` : ""} Retry in a minute${other}.`;
+  return err;
+}
+
+/**
+ * One upstream attempt, and ONE more on the same model when the first failed
+ * in a way that passes on its own. The tier has no second model at its rate,
+ * so the second attempt is the same model after a short jittered pause (or
+ * the wait a rate limit named).
+ *   - retried: an upstream 5xx, a 429 naming a wait of at most
+ *     STT_RETRY_AFTER_MAX_MS, a connection that never opened (all unbilled);
+ *     a connection that opened and then failed, only when two billed attempts
+ *     on this audio would still be inside the margin bound.
+ *   - never retried: a 4xx about the request, our key refused, our own billing
+ *     limit, the daily ceiling, a timeout (it spent the cap), and a 200 whose
+ *     body is not a transcript (the upstream answered, and may have billed).
+ *   - bounds: both attempts end inside the path's cap, the CDN answer window
+ *     and the payment authorization; with less than the floor left the first
+ *     failure is the answer. Each attempt is one outbound fetch, so the egress
+ *     meter and the daily ceiling count it; only a served attempt is recorded
+ *     as spend, and the price does not change.
+ * A served second attempt says so in `agent402_retried`.
+ */
+async function transcribeWithRetry(buf, filename, tierSlug, language, diarize, probedDuration, req) {
   const tier = TIERS[tierSlug];
-  const out = await (diarize
-    ? callScribe(buf, filename, tier.diarizeModel, language, probedDuration)
-    : callOpenAI(buf, filename, tier.model, language, probedDuration));
+  const model = diarize ? tier.diarizeModel : tier.model;
+  const capMs = retryKnobs.capMs ?? (diarize ? UPSTREAM_CAP_MS.diarize : UPSTREAM_CAP_MS.default);
+  const attempt = (timeoutMs) => (diarize
+    ? callScribe(buf, filename, model, language, probedDuration, timeoutMs)
+    : callOpenAI(buf, filename, model, language, probedDuration, timeoutMs));
+  const startedAt = Date.now();
+  let first;
+  try { return await attempt(capMs); } catch (e) { first = e; }
+  const cls = first?.sttRetry;
+  if (!cls || (cls === "maybe-billed" && !twoBilledAttemptsWithinMargin(tierSlug, model, probedDuration))) throw finalFailure(first, { attempts: 1, diarize, req });
+  const pause = Number.isFinite(first.sttWaitMs) ? first.sttWaitMs : retryKnobs.pauseMs();
+  if (retryLeftMs(startedAt, capMs, req) - pause < retryKnobs.minLeftMs) throw finalFailure(first, { attempts: 1, diarize, req });
+  console.warn(`[stt] ${tierSlug} attempt 1 failed (${first.sttCause}); one more attempt`);
+  await retryKnobs.sleep(pause);
+  let out;
+  try { out = await attempt(Math.max(1, Math.floor(retryLeftMs(startedAt, capMs, req)))); } catch (e) { throw finalFailure(e, { attempts: 2, diarize, req }); }
+  out.agent402_retried = { attempts: 2, reason: `the first upstream attempt failed (${first.sttCause}); a second attempt on the same model served this transcript` };
+  return out;
+}
+
+async function transcribeBuffer(buf, filename, tierSlug, language, diarize, probedDuration, req) {
+  const out = await transcribeWithRetry(buf, filename, tierSlug, language, diarize, probedDuration, req);
   recordSttSpend(tierSlug, out, probedDuration);
   return out;
 }
 
 function makeHandler(tierSlug) {
-  return async (input) => {
+  return async (input, req) => {
     const { url, language, diarize } = validateInput(input);
     const { buf, filename } = await fetchAudio(url);
     const probedDuration = await assertWithinDurationCap(buf, filename, tierSlug); // measured for the margin cap; also the answer's duration
-    return transcribeBuffer(buf, filename, tierSlug, language, diarize, probedDuration);
+    return transcribeBuffer(buf, filename, tierSlug, language, diarize, probedDuration, req);
   };
 }
 
@@ -355,10 +483,11 @@ export function makeMultipartHandler(tierSlug) {
     const diarize = diarizeFlag(fields.diarize);
     refuseUnservedFields(fields);
     const probedDuration = await assertWithinDurationCap(file.buf, file.filename, tierSlug);
-    return transcribeBuffer(file.buf, file.filename, tierSlug, language, diarize, probedDuration);
+    return transcribeBuffer(file.buf, file.filename, tierSlug, language, diarize, probedDuration, req);
   };
 }
 
+const RETRY_NOTE = " A transient upstream failure gets one more attempt inside the same time limit, and an answer served that way says so in agent402_retried.";
 const SHARED_TAGS = ["stt", "speech-to-text", "transcription", "audio", "whisper", "openai"];
 
 export const STT_TOOLS = [
@@ -369,7 +498,7 @@ export const STT_TOOLS = [
     category: "ai",
     price: "$0.030",
     description:
-      "Transcribe audio to text with the gpt-transcribe model. Provide a URL to an audio file (mp3, wav, m4a, etc.) and get back the transcript. Add diarize:true for speaker labels, word timestamps and a language confidence score (the scribe-v2 model, same price). No API key needed; pay per call via x402. Max 4 minutes of audio, 25 MB file size; /api/transcribe-pro takes the same models to 10 minutes.",
+      "Transcribe audio to text with the gpt-transcribe model. Provide a URL to an audio file (mp3, wav, m4a, etc.) and get back the transcript. Add diarize:true for speaker labels, word timestamps and a language confidence score (the scribe-v2 model, same price). No API key needed; pay per call via x402. Max 4 minutes of audio, 25 MB file size; /api/transcribe-pro takes the same models to 10 minutes." + RETRY_NOTE,
     tags: [...SHARED_TAGS, "gpt-transcribe"],
     discovery: {
       bodyType: "json",
@@ -401,7 +530,7 @@ export const STT_TOOLS = [
     category: "ai",
     price: "$0.100",
     description:
-      "Pro tier for longer recordings (model-backed, gpt-transcribe, the same model as the standard tier): transcribes an audio file at a URL. Max 10 minutes and 25 MB, the longer cap of the transcribe routes. Returns the transcript text, language and duration; diarize:true adds speaker labels, word timestamps and a language confidence score. No API key needed; pay per call via x402.",
+      "Pro tier for longer recordings (model-backed, gpt-transcribe, the same model as the standard tier): transcribes an audio file at a URL. Max 10 minutes and 25 MB, the longer cap of the transcribe routes. Returns the transcript text, language and duration; diarize:true adds speaker labels, word timestamps and a language confidence score. No API key needed; pay per call via x402." + RETRY_NOTE,
     tags: [...SHARED_TAGS, "gpt-transcribe", "pro"],
     discovery: {
       bodyType: "json",
@@ -433,7 +562,7 @@ export const STT_TOOLS = [
     category: "ai",
     price: "$0.030",
     description:
-      "OpenAI's own transcription wire: POST multipart/form-data with a `file` part and get the transcript back. Point any Whisper-shaped SDK at this gateway and pay per call with USDC, no account and no API key. Same model and same four-minute cap as /api/transcribe, which takes a URL instead of an upload; /v1/pro/audio/transcriptions takes it to ten minutes.",
+      "OpenAI's own transcription wire: POST multipart/form-data with a `file` part and get the transcript back. Point any Whisper-shaped SDK at this gateway and pay per call with USDC, no account and no API key. Same model and same four-minute cap as /api/transcribe, which takes a URL instead of an upload; /v1/pro/audio/transcriptions takes it to ten minutes." + RETRY_NOTE,
     tags: [...SHARED_TAGS],
     discovery: {
       bodyType: "form-data",
@@ -450,7 +579,7 @@ export const STT_TOOLS = [
     category: "ai",
     price: "$0.100",
     description:
-      "OpenAI's transcription wire on the ten-minute tier: POST multipart/form-data with a `file` part. Same model as /v1/audio/transcriptions with a longer cap, for a recording a four-minute route refuses.",
+      "OpenAI's transcription wire on the ten-minute tier: POST multipart/form-data with a `file` part. Same model as /v1/audio/transcriptions with a longer cap, for a recording a four-minute route refuses." + RETRY_NOTE,
     tags: [...SHARED_TAGS],
     discovery: {
       bodyType: "form-data",
