@@ -24,10 +24,14 @@
 //    case and 5s means a genuine job is never killed while a pathological one
 //    frees its slot quickly.
 import { Worker } from "node:worker_threads";
+import { threadEnv } from "./child-env.js";
 import { fileURLToPath } from "node:url";
 import { assertDeclaredWithinPixelCap, FREE_MAX_SRC_PIXELS } from "./image-ops.js";
 
 const IMAGE_WORKER = fileURLToPath(new URL("./image-worker.js", import.meta.url));
+// What the worker's import graph reads (lazy-deps.js); the decode helper it
+// spawns takes the allowlist's own keys through childEnv().
+const IMAGE_WORKER_ENV = ["LAZY_DEPS_WARM_GAP_MS"];
 const POOL_MAX = 2;
 const QUEUE_MAX = 32;
 const JOB_TIMEOUT_MS = 5_000;
@@ -78,7 +82,7 @@ function goIdle(slot) {
 function spawnSlot() {
   // resourceLimits: a decoder that outgrows the limit dies in its own thread
   // (terminate + 503) instead of taking the process down with it.
-  const slot = { worker: new Worker(IMAGE_WORKER, { resourceLimits: { maxOldGenerationSizeMb: 512, maxYoungGenerationSizeMb: 64 } }), job: null, idleTimer: null };
+  const slot = { worker: new Worker(IMAGE_WORKER, { env: threadEnv(IMAGE_WORKER_ENV), resourceLimits: { maxOldGenerationSizeMb: 512, maxYoungGenerationSizeMb: 64 } }), job: null, idleTimer: null };
   slot.worker.on("message", (msg) => {
     if (!slot.job || msg.id !== slot.job.id) return; // stale reply from a job we already gave up on
     if (msg.error) {

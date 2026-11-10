@@ -10,6 +10,7 @@ import tls from "node:tls";
 import { lookup } from "node:dns/promises";
 import { assertQueryableName } from "./dns-name-filter.js";
 import { Worker } from "node:worker_threads";
+import { threadEnv } from "./child-env.js";
 import { fileURLToPath } from "node:url";
 import { loadJsdom } from "./lazy-deps.js";
 import { hiddenMode, HIDDEN_INPUT_SCHEMA, HIDDEN_OUTPUT_EXAMPLE } from "./hidden-content.js";
@@ -32,7 +33,7 @@ const REGEX_TIMEOUT_MS = 750;
 // contained to a single terminated worker instead of freezing the event loop.
 function runRegexSafely({ pattern, flags, text, maxMatches }) {
   return new Promise((resolve, reject) => {
-    const worker = new Worker(REGEX_WORKER, { workerData: { pattern, flags, text, maxMatches } });
+    const worker = new Worker(REGEX_WORKER, { env: threadEnv(), workerData: { pattern, flags, text, maxMatches } });
     let done = false;
     const finish = (fn, arg) => {
       if (done) return;

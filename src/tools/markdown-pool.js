@@ -28,6 +28,7 @@
 // retryable), since a busy host must never read as bad input. Both are
 // uncharged.
 import { Worker, isMainThread } from "node:worker_threads";
+import { threadEnv } from "./child-env.js";
 import { fileURLToPath } from "node:url";
 import { renderMarkdown, markdownLooksCostly } from "./markdown-render.js";
 
@@ -65,7 +66,7 @@ function retire(lane) {
 }
 
 function spawn(lane) {
-  const worker = new Worker(MARKDOWN_WORKER, { resourceLimits: { maxOldGenerationSizeMb: HEAP_MB, maxYoungGenerationSizeMb: 32 } });
+  const worker = new Worker(MARKDOWN_WORKER, { env: threadEnv(), resourceLimits: { maxOldGenerationSizeMb: HEAP_MB, maxYoungGenerationSizeMb: 32 } });
   lane.worker = worker;
   worker.on("message", (msg) => {
     if (lane.worker !== worker || !lane.job || msg.id !== lane.job.id) return;
