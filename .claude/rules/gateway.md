@@ -147,3 +147,7 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   (`neverReachedUpstream`: the name did not resolve, the connection was refused or never opened, or the signal was
   already aborted at the call). An upstream error answer, a timeout and a reset keep their unit. The operator view
   counts the units given back as `releasedToday`. Suite: `scripts/test-upstream-hard-caps.js`.
+- **Quoted material:** every report kit hands the model third-party text inside `quotedMaterial` blocks
+  (`src/report-grounding.js`) and carries `QUOTED_MATERIAL_RULE`, or `QUOTED_DATA_RULE` (the same rule without its
+  citation sentence) where the report lists no numbered sources: the domain audit's probe blocks and the token risk
+  report's token, holder, liquidity and web blocks. `scripts/test-report-grounding.js` runs each with a planted directive.
