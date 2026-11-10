@@ -4146,7 +4146,9 @@ app.get("/api/gateway-status", async (req, res) => {
     // the last BUYER_REFUSAL_WINDOW_MS; the count is on the operator detail.
     // settleFailures reads ok / burst: GATEWAY_SETTLE_BREAKER_GLOBAL_MAX
     // distinct buyers had /v1 payments verify and then fail to settle inside
-    // one breaker window (src/gateway-settle-breaker.js); burst holds for one
+    // one breaker window, or one payer's /v1 failures read refusing on
+    // GATEWAY_SETTLE_BREAKER_MULTI_NETWORK_MIN networks inside it
+    // (src/gateway-settle-breaker.js); burst holds for one
     // window after the count trips. An alarm only: no request is refused for
     // it. One word publicly; the counts for the operator.
     settleFailures: await gatewaySettleFailuresStatus({ full }).catch(() => ({ status: "unknown" })),

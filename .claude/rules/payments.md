@@ -55,7 +55,11 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `otherNetworksFrom` (`src/tool-error-fields.js`); a Tempo sender, a credits key and the IP
   fallback keep one key. No request is refused for other buyers' failures: `GATEWAY_SETTLE_BREAKER_GLOBAL_MAX`
   distinct failing `/v1` buyers in a window set `settleFailures` on `/api/gateway-status` to `burst`
-  (ok / burst) for one window, and `COMPOSITE_GUARD_GLOBAL_MAX_FAILS` unsettled report or media
+  (ok / burst) for one window; so does ONE signed EVM payer whose `/v1` failures read refusing
+  (the same rule that refuses it) on `GATEWAY_SETTLE_BREAKER_MULTI_NETWORK_MIN` networks (default
+  3, never under 2) inside the window, since the per-network count would otherwise let one wallet
+  be served unpaid up to the limit on every offered network with no word moving (shared window
+  `gwb-nets` per payer; an alarm only, the wallet's per-network refusals are unchanged); and `COMPOSITE_GUARD_GLOBAL_MAX_FAILS` unsettled report or media
   runs set `unsettledReports` to `burst` for `COMPOSITE_GUARD_GLOBAL_PAUSE_MS`; each logs a line
   and the heartbeat and the status Worker page on `burst` under one issue per word that `ok`
   closes. The shared flags are `gwb-alarm` and `cg-alarm`, read by the status words only; the

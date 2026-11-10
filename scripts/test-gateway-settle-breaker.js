@@ -707,5 +707,107 @@ if (process.env.REDIS_URL) {
   await shared.windowClear("gwb-fail", legacy);
 }
 
+// --- one payer at the limit on several networks raises the same alarm ----------
+// The count is per network, so one wallet can reach the refusing count on
+// every network a route offers. It is one buyer, so the distinct-buyer count
+// never sees it; the alarm also trips when one payer's /v1 failures read
+// refusing on three networks (MULTI_NETWORK_MIN) inside the window. Nobody is
+// refused for it.
+{
+  await b._gatewaySettleBreakerReset();
+  const word = async () => (await b.gatewaySettleFailuresStatus()).status;
+  const P = "0x" + "5".repeat(40), Q = "0x" + "6".repeat(40);
+  const NETS = ["eip155:8453", "eip155:137", "eip155:42161", "eip155:42220", "eip155:57073"];
+  const failOn = (payer, net, n = 3, opts = {}) => { for (let i = 0; i < n; i++) b.recordGatewaySettleFailure(`${payer}@${net}`, Date.now(), opts); };
+  ok(b.MULTI_NETWORK_MIN === 3, `the default: three networks (${b.MULTI_NETWORK_MIN})`);
+
+  // One network, however many failures there: the per-key bound's job, no alarm.
+  failOn(P, NETS[0], 10);
+  ok((await word()) === "ok" && b.gatewaySettleBreakerStatus().multiNetworkTrips === 0, "ten failures from one payer on ONE network raise no alarm");
+  // Two networks at the limit, and a third below it: still ok.
+  failOn(P, NETS[1], 3);
+  failOn(P, NETS[2], 2);
+  ok((await word()) === "ok" && b.gatewaySettleBreakerStatus().payersWithNetworkAtLimit === 1, "two networks at the limit and a third below it: ok");
+  // The third network reaches the limit: burst, from one buyer.
+  failOn(P, NETS[2], 1);
+  const st = b.gatewaySettleBreakerStatus();
+  ok((await word()) === "burst" && st.multiNetworkTrips === 1 && st.globalFailsInWindow === 1, `the third network at the limit trips settleFailures: burst, with one buyer in the window (${JSON.stringify({ trips: st.multiNetworkTrips, buyers: st.globalFailsInWindow })})`);
+  const op = await b.gatewaySettleFailuresStatus({ full: true });
+  ok(op.status === "burst" && op.multiNetworkThreshold === 3 && op.multiNetworkTrips === 1 && !/0x|eip155/.test(JSON.stringify(op)) && JSON.stringify(await b.gatewaySettleFailuresStatus()) === JSON.stringify({ status: "burst" }), `the operator read counts the trip and names no payer or network; publicly the word only (${JSON.stringify(op)})`);
+  // Serving is unchanged: the payer is refused on the networks at the limit
+  // (as before) and served on a fourth; another buyer is served everywhere.
+  let eHeld = null, eFree = null, eOther = null;
+  try { await b.gatewaySettleBreakerCheck(fakeReq({ from: P, network: NETS[0] })); } catch (e) { eHeld = e; }
+  try { await b.gatewaySettleBreakerCheck(fakeReq({ from: P, network: NETS[3] })); } catch (e) { eFree = e; }
+  try { await b.gatewaySettleBreakerCheck(fakeReq({ from: Q, network: NETS[0] })); } catch (e) { eOther = e; }
+  ok(eHeld?.statusCode === 429 && eHeld.refusedNetwork === NETS[0] && eFree === null && eOther === null, `no new refusal: the payer is held on its failing networks only, served on a fourth, and another buyer is served (${eHeld?.statusCode}, ${eFree?.statusCode || "served"}, ${eOther?.statusCode || "served"})`);
+  if (b._gatewaySettleBreakerShared) {
+    const { shared } = await import("../src/shared-limits.js");
+    let until = 0;
+    for (let i = 0; i < 40 && !(until > Date.now()); i++) { until = (await shared.flagGet("gwb-alarm", "all")).until || 0; if (!(until > Date.now())) await sleep(25); }
+    ok(until > Date.now(), "the shared alarm flag is set, so every replica's word reads burst");
+  }
+  // It clears the way the alarm clears: one window later.
+  await sleep(950);
+  ok((await word()) === "ok" && !b.gatewaySettleBreakerGlobalAlarm().alarm, "the word returns to ok after the window");
+
+  // Networks at the limit in different windows never add up.
+  await b._gatewaySettleBreakerReset();
+  failOn(P, NETS[0]); failOn(P, NETS[1]);
+  await sleep(950);
+  failOn(P, NETS[2]);
+  ok((await word()) === "ok", "two networks at the limit, then a third one window later: ok");
+
+  // A payer settling most of its calls is not at the limit on a network (the
+  // share rule), so its scattered failures on three networks raise nothing.
+  await b._gatewaySettleBreakerReset();
+  for (const net of NETS.slice(0, 3)) { for (let i = 0; i < 10; i++) b.recordGatewaySettleSuccess(`${P}@${net}`); failOn(P, net); }
+  if (b._gatewaySettleBreakerShared) await sleep(150);
+  ok((await word()) === "ok" && b.gatewaySettleBreakerStatus().multiNetworkTrips === 0, "three failures beside ten settled calls on each of three networks: no network is at the limit, ok");
+
+  // The catalog consult's failures (global:false) count against the wallet
+  // only, here as in the rest of the alarm.
+  await b._gatewaySettleBreakerReset();
+  for (const net of NETS.slice(0, 3)) failOn(P, net, 3, { global: false });
+  if (b._gatewaySettleBreakerShared) await sleep(150);
+  ok((await word()) === "ok" && b.gatewaySettleBreakerBlocked(`${P}@${NETS[0]}`).blocked, "wallet-only catalog failures on three networks hold the wallet there and raise no /v1 alarm");
+
+  // Two payers, the limit on three networks between them: neither alone.
+  await b._gatewaySettleBreakerReset();
+  failOn(P, NETS[0]); failOn(P, NETS[1]); failOn(Q, NETS[2]); failOn(Q, NETS[3]);
+  if (b._gatewaySettleBreakerShared) await sleep(150);
+  ok((await word()) === "ok", "two payers with two networks each at the limit: ok (the rule is one payer)");
+
+  // The payer is the module's own key text. A signed EVM payer arrives
+  // lowercased from the payment header whatever case the header used, so the
+  // same wallet written three ways is one payer...
+  await b._gatewaySettleBreakerReset();
+  const MIXED = "0xAbCdEf0123456789AbCdEf0123456789AbCdEf01";
+  const spellings = [MIXED, MIXED.toLowerCase(), "0x" + MIXED.slice(2).toUpperCase()];
+  for (let n = 0; n < 3; n++) {
+    for (let i = 0; i < 3; i++) {
+      const req = fakeReq({ from: spellings[n], network: NETS[n] });
+      await b.gatewaySettleBreakerCheck(req);
+      req.res.statusCode = 402;
+      req.res.emit("finish");
+    }
+  }
+  ok((await word()) === "burst" && b.gatewaySettleBreakerStatus().multiNetworkTrips === 1, "through the consult: one EVM wallet whose header spells it in three cases, at the limit on three networks, is one payer: burst");
+  // ...and a key that is not a lowercase EVM payer is never re-cased or
+  // split: two base58-style keys differing only in case stay two keys (two
+  // failures each refuse neither), and a key with no network is one key
+  // however many failures it holds.
+  await b._gatewaySettleBreakerReset();
+  const B58 = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU";
+  for (let i = 0; i < 2; i++) { b.recordGatewaySettleFailure(B58, Date.now(), { global: false }); b.recordGatewaySettleFailure(B58.toLowerCase(), Date.now(), { global: false }); }
+  ok(!b.gatewaySettleBreakerBlocked(B58).blocked && !b.gatewaySettleBreakerBlocked(B58.toLowerCase()).blocked && b.gatewaySettleBreakerBlocked(B58).fails === 2, "keys that differ only in case are two keys: never folded together");
+  // (Five keys in all, under the distinct-buyer count of six: each such key is its own buyer.)
+  for (const net of NETS.slice(0, 3)) failOn(B58, net);
+  for (const net of NETS.slice(0, 2)) failOn("0x" + "A".repeat(40), net);
+  if (b._gatewaySettleBreakerShared) await sleep(150);
+  ok((await word()) === "ok" && b.gatewaySettleBreakerStatus().multiNetworkTrips === 0 && b.gatewaySettleBreakerStatus().payersWithNetworkAtLimit === 0, "a key that is not a signed lowercase EVM payer is read whole, as one key, and is never counted per network");
+  await b._gatewaySettleBreakerReset();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
