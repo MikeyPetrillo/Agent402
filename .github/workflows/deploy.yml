@@ -13,9 +13,20 @@ name: Deploy to Railway
 # verification, or an npm publish between two packages. So a run on `main` is
 # never canceled by a newer push; the newer run waits in the same group until
 # the running one ends (GitHub keeps one pending run per group, the newest),
-# and its own deploy then carries both merges.
+# and its own deploy then carries both merges: main only moves forward, so the
+# newest pending push contains every merge before it.
+#
+# The release group holds only runs that can release: a push, a pull_request,
+# and a dispatch whose mode is deploy or publish (the two modes that start the
+# jobs in the production environment). Every other dispatch mode (probe, test,
+# paytest, purl, drain, demo, the bazaar passes) runs in a second group per
+# branch. In one shared group a long manual pass held a merge's tests and
+# deploy behind it, and a dispatch queued after a pending merge run replaced
+# it, so that merge's run never started. The manual modes still run one at a
+# time among themselves, and are never canceled on main.
+# scripts/test-ci-gating.js evaluates this expression for every mode a job reads.
 concurrency:
-  group: deploy-${{ github.ref }}
+  group: ${{ github.event_name == 'workflow_dispatch' && inputs.mode != 'deploy' && inputs.mode != 'publish' && format('deploy-dispatch-{0}', github.ref) || format('deploy-{0}', github.ref) }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 on:

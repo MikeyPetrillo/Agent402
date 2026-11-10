@@ -55,6 +55,13 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   touches their paths (`scripts/worker-deploy-paths.js`, `scripts/decide-deploy-paths.js`: image
   inputs, import closure, and for decide its export row format and kit); an unreadable or capped
   diff, or a check that fails, redeploys.
+- **Release queue:** `deploy.yml` runs in two concurrency groups per branch. Pushes, pull requests
+  and a dispatch with mode `deploy` or `publish` share `deploy-<ref>`; every other dispatch mode
+  shares `deploy-dispatch-<ref>`, so a manual pass neither holds a merge's run nor replaces it
+  while it is pending. Nothing on `main` is canceled in progress. GitHub keeps one pending run per
+  group: of two merges queued behind a running release only the newer runs, on a tree that
+  contains both, and the older push's commit-subject markers are not read by it
+  (`scripts/test-ci-gating.js` evaluates the group for every mode a job reads).
 - **Drain:** in-flight composites are aborted on SIGTERM (`src/drain-abort.js`); drain starts
   immediately (`scripts/test-drain-on-sigterm.js`). An uncaught exception stays fatal, so every
   scheduled turn that reads seller data (the route index drain and shadow rebuild, the crawl timers,
