@@ -86,8 +86,12 @@ const GAP_MS = GAP.ms;
 // turns busy minutes after this process took its baseline, or that runs the
 // server on a slower core than this process, slows the route and the
 // server's baseline together (one first request read 402 ms against a 300 ms
-// bound taken here, at a machine load of 25).
-const ROUTE_FLOOR_MS = Number(process.env.STALL_ROUTE_BOUND_MS || 150), ROUTE_K = 12;
+// bound taken here, at a machine load of 25). The same job reads about 1.4
+// times longer on the server's thread than here (its heap holds the
+// production-sized index: 23 to 25 ms against 17 ms on a laptop), so the
+// server's multiple is 9 where this process's is 12: the same bound in
+// milliseconds on a quiet machine.
+const ROUTE_FLOOR_MS = Number(process.env.STALL_ROUTE_BOUND_MS || 150), ROUTE_K = 12, ROUTE_K_SERVER = 9;
 const ROUTE = bound(ROUTE_FLOOR_MS, ROUTE_K);
 const ROUTE_BOUND_MS = ROUTE.ms;
 // One step of a sliced page: measured at 3.4 ms on a laptop for the longest
@@ -717,7 +721,7 @@ try {
     const h = await serverHold("hold:read");
     const { worstMs, worstGcMs = 0 } = (await (await fetch(`${base}/__operator/perf.json`, op)).json()).loop;
     const after = (await serverHold("hold:baseline")).ms;
-    return { ...out, h, worstMs, worstGcMs, limit: boundAt(ROUTE_FLOOR_MS, ROUTE_K, Math.max(before, after)) };
+    return { ...out, h, worstMs, worstGcMs, limit: boundAt(ROUTE_FLOOR_MS, ROUTE_K_SERVER, Math.max(before, after)) };
   };
   for (const r of routes) {
     const { resp, h, worstMs, worstGcMs, limit } = await heldBy(async () => { const resp = await fetch(base + r); await resp.arrayBuffer(); return { resp }; });
