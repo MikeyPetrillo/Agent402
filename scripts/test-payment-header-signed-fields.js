@@ -89,14 +89,14 @@ ok(dropUnsignedAuthorization({ payload: "text" }).payload === "text" && dropUnsi
   }
   const evmP2 = (nonce) => b64({ x402Version: 2, accepted: { scheme: "exact", network: BASE }, payload: p2block(A, nonce) });
   ok(decodePaymentHeader(evmP2("7")).payload.permit2Authorization.from === A && payerFromRequest(req(evmP2("7"))) === A, "control: on an EVM network a Permit2 block stays and names the payer");
-  const keys = ["7", "07", "0007", "0x7", " 7 ", "0X7", "0".repeat(90) + "7", "0x" + "0".repeat(70) + "7"].map((n) => id(paymentReplayKey(req(evmP2(n)))));
-  ok(new Set(keys).size === 1, `one Permit2 nonce in eight spellings, padded past a uint256's width included, is one payment to the replay guard (${new Set(keys).size} keys)`);
+  const keys = ["7", "07", "0007", "0x7", " 7 ", "0X7", "+7", "+007", "0b111", "0o7", "0".repeat(90) + "7", "0x" + "0".repeat(70) + "7"].map((n) => id(paymentReplayKey(req(evmP2(n)))));
+  ok(new Set(keys).size === 1, `one Permit2 nonce in twelve spellings, padded past a uint256's width included, is one payment to the replay guard (${new Set(keys).size} keys)`);
   ok(id(paymentReplayKey(req(evmP2("8")))) !== keys[0] && id(paymentReplayKey(req(evmP2("70")))) !== keys[0], "control: a different nonce value is a different payment");
   // The idempotency identity is a cache key for a re-sent header and keeps the
   // nonce as sent, as before: a different spelling is a different header, and
   // the replay guard above is what holds one permit to one run.
   ok(paymentNonceIdentityOf(req(evmP2("07")))?.nonce === "07", "the idempotency identity keeps the nonce as sent");
-  ok(canonicalNonce("0xAB") === "171" && canonicalNonce("0x" + "ab".repeat(32)) === BigInt("0x" + "ab".repeat(32)).toString() && canonicalNonce("not-a-number") === "not-a-number", "canonicalNonce reads integers by value and leaves other text as sent");
+  ok(canonicalNonce("0xAB") === "171" && canonicalNonce("0x" + "ab".repeat(32)) === BigInt("0x" + "ab".repeat(32)).toString() && canonicalNonce("not-a-number") === "not-a-number" && canonicalNonce("-7") === "-7" && canonicalNonce("") === "" && canonicalNonce("9".repeat(601)) === "9".repeat(601), "canonicalNonce reads integers by value and leaves other text as sent");
 }
 
 // --- attribution, the screen's address list, the signed amount ------------------

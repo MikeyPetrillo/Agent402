@@ -51,7 +51,9 @@ export function dropUnsignedAuthorization(decoded) {
  *  anything else lowercased as sent. */
 export function canonicalNonce(nonce) {
   const raw = String(nonce ?? "").trim();
-  if (/^(?:0[xX][0-9a-fA-F]{1,512}|[0-9]{1,512})$/.test(raw)) { try { return BigInt(raw).toString(); } catch { /* fall through */ } }
+  // Every spelling BigInt reads as one non-negative integer (decimal, 0x, 0o,
+  // 0b, a leading plus) is that integer: the settler parses the nonce the same way.
+  if (raw && raw.length <= 600) { try { const n = BigInt(raw); if (n >= 0n) return n.toString(); } catch { /* not an integer: fall through */ } }
   return raw.toLowerCase();
 }
 

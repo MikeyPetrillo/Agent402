@@ -71,7 +71,7 @@ const done = (code) => { for (const c of children) { try { c.kill("SIGKILL"); } 
   const settled = async (port) => { let j = null; for (let i = 0; i < 80; i++) { j = await status(port); if (j.sharedLimits?.status === "on") break; await wait(250); } return j; };
   const [sa, sb] = await Promise.all([settled(pa), settled(pb)]);
   ok(sa.sharedLimits?.status === "on" && sb.sharedLimits?.status === "on", `both servers publish sharedLimits.status on (${sa.sharedLimits?.status}, ${sb.sharedLimits?.status})`);
-  ok(Object.keys(sa.sharedLimits).join() === "status", "the public field is the word alone");
+  ok(Object.keys(sa.sharedLimits).join() === "status,alert" && sa.sharedLimits.alert === "ok", `the public field is the two words alone (${JSON.stringify(sa.sharedLimits)})`);
   const opA = await status(pa, true);
   ok(opA.sharedLimits?.mode === "redis" && typeof opA.sharedLimits?.ops === "number", `the operator view carries the mode and counts (${JSON.stringify(opA.sharedLimits)})`);
   ok(opA.operatorAuth?.status === "ok", "control: before any wrong credential the operator auth word is ok on A");
