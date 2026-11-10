@@ -191,7 +191,6 @@ import { esc } from "./ledger-chrome.js";
 import { safeFetch, probePublicUrl } from "./tools/fetch-guard.js";
 import { readTextCapped } from "./capped-body.js";
 import { parseRobots, robotsAllows } from "./tools/kit.js";
-import { CDP_TOOLS } from "./tools/cdp-kit.js";
 import { partialFields, clampFields } from "./partial-answer.js";
 import { responseContractOf, packResponseContract, responseContractProjection } from "./response-contract.js";
 import { deliveryProjection } from "./response-observation.js";
