@@ -5024,6 +5024,8 @@ jobs:
           t node scripts/test-paid-settle-breaker.js
           # onchain-sql queries per call on a booted server: charged, uncharged and free by the final response, operator route token-only (paid boot + FREE_MODE boot, stub facilitator, stubbed query service)
           t node scripts/test-onchain-sql-queries-route.js
+          # Refund debts for sales named by settle tx: dry by default, ledger row decides payer and price, skips named, idempotent, operator only (FREE_MODE boot, seeded ledger)
+          t node scripts/test-refund-backfill-sales.js
           # Algorand leaves sub-cent 402s while the facilitator's sponsored sub-cent allowance is spent; a quota refusal is never the buyer's (paid boot, stub facilitators + stub sponsorship status)
           t node scripts/test-avm-subcent-offer.js
           # Every route's 402 payTo equals the payee /.well-known/x402 declares for it (payToByRoute for the router tiers); spending-wallet addresses set and unset (two paid boots, stub facilitator)

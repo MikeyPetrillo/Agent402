@@ -147,6 +147,15 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   state database; `ownStoreEnv` (`scripts/lib/own-stores.js`) points both into a booted test
   server's own directory (`scripts/test-sql-query-stats.js`,
   `scripts/test-onchain-sql-queries-route.js`).
+- **Refund debts for named sales:** `POST /__operator/refunds/backfill-sales` (operator token, heavy
+  limiter; `src/refund-backfill.js` `backfillNamedSales`) takes `{"txs":[...],"note":"why"}`, at most
+  100 settle tx values and a note of 3 to 200 characters. Each tx must match exactly one external
+  sale (`salesByTx`, matched as stored); the debt's payer, network, slug, price and wire are that
+  ledger row's and nothing else in the body is read. Skipped by name: `no_sale`, `internal_sale`,
+  `more_than_one_sale`, `no_payer`, `no_amount`, `repeated_in_request`. Dry unless `?write=1`
+  (`wouldMint`, `byPayer`, `owedUsd`); a write is idempotent on the tx. It records only:
+  `scripts/refund-run.js` stays the sole payer. The pack backfill (`/__operator/refunds/backfill`)
+  is unchanged (`scripts/test-refund-backfill-sales.js`).
 - **Search refusals:** `src/discovery-refusals.js` counts every search `/api/find` and `/api/route`
   turn away, per UTC day, by route and rule (`load-gate`, `client-rate`, `client-compute`,
   `shared-compute`, `inflight`, `deadline`) under a keyed, day-scoped digest of the limiter's client

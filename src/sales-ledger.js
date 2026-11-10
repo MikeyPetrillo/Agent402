@@ -603,6 +603,25 @@ export function saleByTx(tx) {
   };
 }
 
+const selectAllByTx = db.prepare(
+  "SELECT id, ts, slug, price_usd, rail, network, payer, tx, internal, wire FROM sales WHERE tx = ? ORDER BY id ASC LIMIT ?"
+);
+/** Every sale recorded under this settle transaction, oldest first, up to
+ *  `limit` (the refund backfill for named sales needs to know that a
+ *  transaction names exactly one sale, which saleByTx's newest row cannot
+ *  say). The tx is matched as stored, never case-folded; the payer is
+ *  returned as stored. Same mirror as saleByTx. */
+export function salesByTx(tx, { limit = 5 } = {}) {
+  const t = String(tx || "").trim();
+  if (!t) return [];
+  try {
+    return selectAllByTx.all(t, Math.max(1, Math.min(50, Number(limit) || 5))).map((r) => ({
+      id: r.id, ts: r.ts, slug: r.slug, priceUsd: Number(r.price_usd) || 0, rail: r.rail, network: r.network || null,
+      payer: r.payer || null, tx: r.tx, internal: !!r.internal, wire: r.wire || null,
+    }));
+  } catch { return []; }
+}
+
 /**
  * saleByTx, for a caller that may have bought on ANOTHER container: the local
  * mirror pulls the other containers' writes on a timer, so a receipt check

@@ -92,7 +92,7 @@ import { shownGroundingNote } from "./report-grounding.js";
 import { createStripeSubscriptions, subscriptionsEnabled, MONITOR_PRODUCTS, MONITOR_PRODUCTS_ALL } from "./stripe-subscriptions.js";
 import { createMppSubscriptions, mppSubscriptionsEnabled, subscriptionFeePayerStatus } from "./mpp-subscriptions.js";
 import { stellarFacilitatorStatus } from "./stellar-facilitator-status.js";
-import { backfillBrokenPackRefunds } from "./refund-backfill.js";
+import { backfillBrokenPackRefunds, backfillNamedSales } from "./refund-backfill.js";
 import { mppFallbackStatus } from "./mpp-fallback.js";
 import { applyMeteredSettlement, meteredUsdOf } from "./gateway-meter.js";
 import { handlerInputOf, preValidateInput, withIgnoredParams } from "./handler-input.js";
@@ -6473,6 +6473,24 @@ app.post("/__operator/refunds/backfill", async (req, res) => {
     res.json(await backfillBrokenPackRefunds({ write: String(req.query.write || "") === "1" }));
   } catch (e) {
     res.status(500).json({ error: redactSecrets(String(e.message)) });
+  }
+});
+// Record refund debts for sales the operator names by settle transaction
+// (src/refund-backfill.js backfillNamedSales): body {"txs":[...],"note":"why"},
+// at most 100 values. Each tx must match exactly one external sale; the debt's
+// payer, network, slug and price are that ledger row's, and any such field in
+// the body is never read. RECORDS ONLY (refund-run.js stays the sole payer),
+// dry unless ?write=1, idempotent on the settle tx.
+// The body is the global JSON parser's (100kb).
+app.post("/__operator/refunds/backfill-sales", async (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (operatorHeavyLimited(req, res)) return;
+  res.set("Cache-Control", "private, no-store");
+  try {
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    res.json(await backfillNamedSales({ txs: body.txs, note: body.note, write: String(req.query.write || "") === "1" }));
+  } catch (e) {
+    res.status(e?.statusCode === 400 ? 400 : 500).json({ error: redactSecrets(String(e?.message || e)).slice(0, 300) });
   }
 });
 app.get("/__operator/dataset.json", (req, res) => {

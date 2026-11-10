@@ -62,11 +62,22 @@ const SQL_ROUTE = "/api/onchain-sql";
 const H = (h) => ["q0", "q1", "q2", "q3"].map((b) => h?.[b]).join("/");
 const stubQueries = (srv) => (srv.log().match(/\[cdp-sql-stub\] query/g) || []).length;
 const reportOf = async (srv) => {
-  await sleep(60); // the count is taken once the response has ended
   const r = await fetch(`${srv.url}/__operator/onchain-sql-queries.json`, { headers: { Authorization: `Bearer ${OP_TOKEN}` } });
   return { status: r.status, cache: r.headers.get("cache-control"), text: await r.text() };
 };
-const totalsOf = async (srv) => JSON.parse((await reportOf(srv)).text).totals.outside;
+const callsIn = (t) => ["charged", "free", "uncharged"].reduce((n, k) => n + ["q0", "q1", "q2", "q3"].reduce((m, b) => m + (Number(t?.[k]?.[b]) || 0), 0), 0);
+// A call is counted once its response has ended, which is after the client
+// has read it: wait for the report to hold `calls` calls (never a fixed
+// pause), and fail by name when it never does.
+const totalsOf = async (srv, calls) => {
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    const t = JSON.parse((await reportOf(srv)).text).totals.outside;
+    if (callsIn(t) >= calls) return t;
+    if (Date.now() > deadline) throw new Error(`the report never counted ${calls} call(s): ${JSON.stringify(t)}`);
+    await sleep(25);
+  }
+};
 
 let paid = null, free = null;
 try {
@@ -81,7 +92,7 @@ try {
     },
   });
   const B = paid.url;
-  let nonceN = 0, payerN = 0;
+  let nonceN = 0, payerN = 0, paidCalls = 0;
   let accepted = null;
   const pay = async (sql) => {
     const body = JSON.stringify({ sql });
@@ -101,29 +112,30 @@ try {
     const q0 = stubQueries(paid), s0 = settles;
     const r = await fetch(`${B}${SQL_ROUTE}`, { method: "POST", headers: { "content-type": "application/json", "payment-signature": credential }, body });
     const text = await r.text();
-    await sleep(60);
-    return { status: r.status, text, queries: stubQueries(paid) - q0, settles: settles - s0 };
+    // Counted once the response ended; the stub's lines were written before it.
+    const totals = await totalsOf(paid, ++paidCalls);
+    return { status: r.status, text, totals, queries: stubQueries(paid) - q0, settles: settles - s0 };
   };
 
   // The unpaid read above ran no handler: nothing is recorded for it.
   const first = await pay("SELECT 1 AS n FROM base.blocks");
   ok(first.status === 200 && first.queries === 1 && first.settles === 1, `a paid one-query call settles and answers 200 (${first.status}, ${first.queries} queries, ${first.settles} settles)`);
-  let t = await totalsOf(paid);
+  let t = first.totals;
   ok(H(t.charged) === "0/1/0/0" && H(t.uncharged) === "0/0/0/0" && H(t.free) === "0/0/0/0", `recorded charged/1, and the unpaid 402 before it recorded nothing (${JSON.stringify(t)})`);
 
   const rec = await pay("SELECT ix, sk AS rowsize_a FROM base.blocks");
   ok(rec.status === 200 && rec.queries === 3 && /"recovered":"row-size"/.test(rec.text), `the row-size recovery answers 200 on three queries (${rec.status}, ${rec.queries})`);
-  t = await totalsOf(paid);
+  t = rec.totals;
   ok(H(t.charged) === "0/1/0/1", `recorded charged with its true count, 3 (${H(t.charged)})`);
 
   const rej = await pay("SELECT nope_column FROM base.blocks");
   ok(rej.status === 422 && rej.queries === 1 && rej.settles === 0, `a rejected query is a 422 after one query, nothing settled (${rej.status}, ${rej.queries}, ${rej.settles})`);
-  t = await totalsOf(paid);
+  t = rej.totals;
   ok(H(t.uncharged) === "0/1/0/0" && H(t.charged) === "0/1/0/1", `recorded uncharged/1 (${H(t.uncharged)})`);
 
   const refused = await pay("DROP TABLE base.blocks");
   ok(refused.status === 400 && refused.queries === 0 && refused.settles === 0, `a statement that is not a SELECT is refused before any query (${refused.status}, ${refused.queries})`);
-  t = await totalsOf(paid);
+  t = refused.totals;
   ok(H(t.uncharged) === "1/1/0/0", `recorded uncharged/0 (${H(t.uncharged)})`);
 
   // The handler answers 200, then the settlement fails: the final response is a 402.
@@ -131,7 +143,7 @@ try {
   const unsettled = await pay("SELECT 1 AS n FROM base.blocks");
   settleMode = "ok";
   ok(unsettled.status === 402 && unsettled.queries === 1 && unsettled.settles === 1, `a handler 200 whose settlement fails is a final 402 (${unsettled.status}, ${unsettled.queries} queries, ${unsettled.settles} settle tried)`);
-  t = await totalsOf(paid);
+  t = unsettled.totals;
   ok(H(t.uncharged) === "1/2/0/0" && H(t.charged) === "0/1/0/1", `recorded uncharged/1, never charged (${JSON.stringify(t)})`);
 
   // The report: totals, the ratio, days, and nothing of any request.
@@ -162,7 +174,7 @@ try {
   const fr = await fetch(`${free.url}${SQL_ROUTE}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sql: "SELECT 1 AS n FROM base.blocks" }) });
   await fr.text();
   ok(fr.status === 200 && stubQueries(free) - q0 === 1, `a FREE_MODE call answers 200 on one query (${fr.status})`);
-  const ft = await totalsOf(free);
+  const ft = await totalsOf(free, 1);
   ok(H(ft.free) === "0/1/0/0" && H(ft.charged) === "0/0/0/0" && H(ft.uncharged) === "0/0/0/0", `recorded free/1, never charged (${JSON.stringify(ft)})`);
 } catch (e) {
   failed++;
