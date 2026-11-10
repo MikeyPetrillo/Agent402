@@ -142,7 +142,11 @@ export function conversionPairs(q, terms) {
 // The directions a tool's own names state: its slug ("pdf-to-markdown"), its
 // name ("PDF to Markdown", "Text-to-speech") and its aliases, each read as
 // hyphenated words and split once on "to".
-function statedDirections(t) {
+let statedReads = 0;
+/** Test seam: how many times a tool's names were read for their stated directions. */
+export function _statedDirectionReads() { return statedReads; }
+function readStatedDirections(t) {
+  statedReads++;
   const out = [];
   const add = (text) => {
     const parts = String(text || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").split("-to-");
@@ -155,10 +159,31 @@ function statedDirections(t) {
   for (const al of t.aliases || []) add(al);
   return out;
 }
+// Read once per catalog entry, not once per scored tool per query. The key is
+// the entry object the catalog holds (findTools scores a fresh copy of each
+// entry on every query, so the copy itself is never seen twice). The slug,
+// name and aliases the value was read from are kept beside it and compared on
+// every use, so an entry whose names or aliases change (replaced, or edited
+// in place) is read again.
+const statedMemo = new WeakMap();
+function statedDirections(t, entry) {
+  const al = t.aliases;
+  const keyed = entry !== null && typeof entry === "object" && (al == null || Array.isArray(al));
+  if (!keyed) return readStatedDirections(t);
+  const m = statedMemo.get(entry);
+  if (m && m.slug === t.slug && m.name === t.name && m.aliases.length === (al ? al.length : 0)) {
+    let same = true;
+    for (let i = 0; i < m.aliases.length; i++) if (m.aliases[i] !== al[i]) { same = false; break; }
+    if (same) return m.out;
+  }
+  const out = readStatedDirections(t);
+  statedMemo.set(entry, { slug: t.slug, name: t.name, aliases: al ? al.slice() : [], out });
+  return out;
+}
 /** "reverse" when the tool's names state a pair backwards and never forwards, "forward" when one states it as asked, else null. */
-function directionOf(t, pairs) {
+function directionOf(t, pairs, entry) {
   let reverse = null;
-  for (const [l, r] of statedDirections(t)) {
+  for (const [l, r] of statedDirections(t, entry)) {
     for (const p of pairs) {
       if (p.from.some((x) => l.has(x)) && p.to.some((x) => r.has(x))) return { way: "forward" };
       const to = p.to.find((x) => l.has(x)), from = p.from.find((x) => r.has(x));
@@ -338,7 +363,7 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
     }
     if (score > 0) {
       scored.push([score, t, directionScore(slug)]);
-      if (pairs.length) { const d = directionOf(t, pairs); if (d) wayOf.set(t.slug, d); }
+      if (pairs.length) { const d = directionOf(t, pairs, catalog[t.route]); if (d) wayOf.set(t.slug, d); }
     }
   }
   const reversed = (t) => wayOf.get(t.slug)?.way === "reverse";

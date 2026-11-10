@@ -13,7 +13,7 @@
 // and the queries that worked before the rule, pinned to the top result the
 // batch base returned for each, plus every tool's own description and name.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { findTools, conversionPairs } from "../src/find.js";
+import { findTools, conversionPairs, _statedDirectionReads } from "../src/find.js";
 import { bootServer } from "./lib/boot-server.js";
 
 let pass = 0, fail = 0;
@@ -84,6 +84,38 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
     const t0 = Date.now();
     findTools(C, "to from into ".repeat(200) + "a to b ".repeat(200), { k: 5 });
     ok(Date.now() - t0 < 500, `a query of direction words is bounded (${Date.now() - t0} ms)`);
+  }
+  // A tool's names are read for their directions once per catalog entry, not
+  // once per scored tool per query; an entry that changes is read again.
+  {
+    const q = "convert markdown to pdf";
+    const first = JSON.stringify(top(q));
+    const before = _statedDirectionReads();
+    const again = JSON.stringify(top(q));
+    ok(again === first && _statedDirectionReads() === before, `a second query over the same catalog reads no tool's names again (${_statedDirectionReads() - before} reads)`);
+    const fresh = Object.fromEntries(Object.entries(C).map(([k, v]) => [k, { ...v }]));
+    ok(JSON.stringify(findTools(fresh, q, { k: 25 })) === first && _statedDirectionReads() > before, "control: a catalog of new entry objects is read, and answers the same");
+    // Aliases edited in place: the reversed tool gains a name that states the pair forwards.
+    const pdfTool = C["POST /api/pdf-to-markdown"];
+    ok(top(q).direction?.served === false, "control: before the edit no tool states markdown to pdf forwards");
+    pdfTool.aliases = ["md-export"];
+    ok(top(q).direction?.served === false, "an alias that states no direction changes nothing");
+    // With a forward name the tool serves the pair: first, not reversed, no direction field.
+    const forward = (r) => !r.direction && r.results[0]?.slug === "pdf-to-markdown" && !r.results.some((x) => x.reversed);
+    const backward = (r) => r.direction?.served === false && r.results.find((x) => x.slug === "pdf-to-markdown")?.reversed === true;
+    pdfTool.aliases.push("markdown-to-pdf");
+    ok(forward(top(q)), `an alias pushed onto the same array is read on the next query (${JSON.stringify(top(q).direction)})`);
+    pdfTool.aliases[1] = "markdown-export";
+    ok(backward(top(q)), "an alias replaced at the same index is read on the next query");
+    pdfTool.aliases = ["markdown-to-pdf"];
+    ok(forward(top(q)), "a replaced alias array is read on the next query");
+    delete pdfTool.aliases;
+    ok(JSON.stringify(top(q)) === first, "with the aliases removed the answer is the first one again");
+    // A renamed entry.
+    pdfTool.name = "Markdown to PDF";
+    ok(forward(top(q)), "a renamed entry is read on the next query");
+    pdfTool.name = "PDF to Markdown";
+    ok(JSON.stringify(top(q)) === first, "and named back, it answers as before");
   }
 }
 
