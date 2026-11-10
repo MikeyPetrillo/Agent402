@@ -14,6 +14,7 @@
 // service key and template matching (1e), the Base board's registry walk
 // (1f), and the cache files written without a state database (1g).
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { oursMs, leastOurs } from "./lib/ours-clock.js";
 import "./lib/uncapped-sellers.js"; // seeds a 30,000-tool seller past the per-seller cap
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -22,6 +23,10 @@ import { isDeepStrictEqual } from "node:util";
 
 let n = 0;
 const ok = (c, m) => { n++; assert.ok(c, m); console.log(`ok - ${m}`); };
+// Loop gaps below are read on the ours clock (scripts/lib/ours-clock.js): the
+// smaller of a gap's wall length and the time the thread had a core inside
+// it. A host busy with other suites deschedules the thread mid-turn, and that
+// wait is not a hold by this code.
 const GAP_MS = Number(process.env.OFFLOAD_GAP_MS || 120);
 // How many event-loop turns a piece of work advanced in: `counter` is the
 // work's own step count, sampled once a turn until `work` settles. A pass
@@ -58,12 +63,12 @@ const digest = (r) => createHash("sha256").update(JSON.stringify([r.total, r.mat
   // text, which is its own cost (asserted below) and not what this measures.
   // An inline rebuild of this directory is 160 ms+ locally; the stale read is
   // a slice of the rows already built.
-  const t0 = performance.now();
-  x.allIndexedTools({ limit: 100, offset: 1000 });
-  const staleMs = performance.now() - t0;
+  // Synchronous, so read as the time the thread had a core, least of three
+  // reads (each is the stale slice again; the rebuild runs on later turns).
+  const staleMs = leastOurs(() => x.allIndexedTools({ limit: 100, offset: 1000 })).ms;
   const stale = x.allIndexedTools({ search: "offload-stalls-marker", limit: 5 });
-  let worst = 0, last = performance.now();
-  const iv = setInterval(() => { const now = performance.now(); worst = Math.max(worst, now - last); last = now; }, 1);
+  let worst = 0, last = performance.now(), lastOurs = oursMs();
+  const iv = setInterval(() => { const now = performance.now(), c = oursMs(); worst = Math.max(worst, Math.min(now - last, c - lastOurs)); last = now; lastOurs = c; }, 1);
   ok(stale.matched === 0, "the stale directory is served while the rebuild runs (the change is not in it yet)");
   ok(staleMs < 150, `serving it does not wait on a rebuild (${Math.round(staleMs)} ms)`);
   await x._indexRowsSettledForTest();
@@ -169,8 +174,8 @@ const digest = (r) => createHash("sha256").update(JSON.stringify([r.total, r.mat
   const pendingBefore = x._routeIndexStatsForTest().pending;
   await new Promise((r) => setTimeout(r, 20));
   const gaps = [];
-  let last = performance.now();
-  const timer = setInterval(() => { const t = performance.now(); gaps.push([last, t]); last = t; }, 1);
+  let last = performance.now(), lastOurs = oursMs();
+  const timer = setInterval(() => { const t = performance.now(), c = oursMs(); gaps.push([last, t, c - lastOurs]); last = t; lastOurs = c; }, 1);
   gcs.length = 0;
   // Rows the query scans whole: the entries still pending as it starts, at
   // the index's mean catalogue size.
@@ -182,10 +187,10 @@ const digest = (r) => createHash("sha256").update(JSON.stringify([r.total, r.mat
   clearInterval(timer);
   obs.disconnect();
   let worst = 0;
-  for (const [a, b] of gaps) {
+  for (const [a, b, ours] of gaps) {
     let inGc = 0;
     for (const [s0, e0] of gcs) inGc += Math.max(0, Math.min(b, e0) - Math.max(a, s0));
-    worst = Math.max(worst, b - a - inGc);
+    worst = Math.max(worst, Math.min(b - a, ours) - inGc);
   }
   while (x._routeIndexStatsForTest().pending || x._routeIndexStatsForTest().partial) await new Promise((r) => setImmediate(r));
   const drained = x.routeQuery({ query: Q, top: 25, ...routeCtx });
@@ -284,8 +289,8 @@ const digest = (r) => createHash("sha256").update(JSON.stringify([r.total, r.mat
     let steps = 0, maxRows = 0, before = x._payToScanRowsForTest(), r;
     do { r = gen.next(); const now = x._payToScanRowsForTest(); maxRows = Math.max(maxRows, now - before); before = now; steps++; } while (!r.done);
     ok(steps > 20 && maxRows <= 2000, `the ${kind} payTo scan reads at most ${maxRows} of ${rows}+ rows per step (${steps} steps)`);
-    let worst = 0, last = performance.now();
-    const iv = setInterval(() => { const t = performance.now(); worst = Math.max(worst, t - last); last = t; }, 1);
+    let worst = 0, last = performance.now(), lastOurs = oursMs();
+    const iv = setInterval(() => { const t = performance.now(), c = oursMs(); worst = Math.max(worst, Math.min(t - last, c - lastOurs)); last = t; lastOurs = c; }, 1);
     const { turns, value: got } = await turnsAdvancing(() => x._payToScanRowsForTest(), sliced);
     clearInterval(iv);
     const want = ref(net);
@@ -360,8 +365,8 @@ const digest = (r) => createHash("sha256").update(JSON.stringify([r.total, r.mat
     ok(x._memoizedServiceKeyForTest(v) === refKey, "...and the key the drain primed is the one-pass key, character for character");
     // On the real clock, a copy of the entry (a re-crawl) is primed the same way.
     const again = { ...v };
-    let worst = 0, last = performance.now();
-    const iv = setInterval(() => { const t = performance.now(); worst = Math.max(worst, t - last); last = t; }, 1);
+    let worst = 0, last = performance.now(), lastOurs = oursMs();
+    const iv = setInterval(() => { const t = performance.now(), c = oursMs(); worst = Math.max(worst, Math.min(t - last, c - lastOurs)); last = t; lastOurs = c; }, 1);
     cache.set(BIG, again);
     await drained();
     clearInterval(iv);
@@ -388,8 +393,8 @@ const digest = (r) => createHash("sha256").update(JSON.stringify([r.total, r.mat
     };
   };
   {
-    let worst = 0, last = performance.now();
-    const iv = setInterval(() => { const t = performance.now(); worst = Math.max(worst, t - last); last = t; }, 1);
+    let worst = 0, last = performance.now(), lastOurs = oursMs();
+    const iv = setInterval(() => { const t = performance.now(), c = oursMs(); worst = Math.max(worst, Math.min(t - last, c - lastOurs)); last = t; lastOurs = c; }, 1);
     const steps0 = x._sellerFieldStepsForTest();
     const { turns, value: snap } = await turnsAdvancing(() => x._sellerFieldStepsForTest(), () => x.indexSnapshotAsync(routeCtx));
     clearInterval(iv);
@@ -477,8 +482,8 @@ const digest = (r) => createHash("sha256").update(JSON.stringify([r.total, r.mat
     accepts: [{ network: "eip155:8453", scheme: "exact", asset: USDC, payTo: `0x${String(i % 1200).padStart(40, "f")}`, maxAmountRequired: String(1000 * (1 + (i % 7))) }],
   }));
   const steps0 = lb._extractStepsForTest();
-  let worst = 0, last = performance.now();
-  const iv = setInterval(() => { const t = performance.now(); worst = Math.max(worst, t - last); last = t; }, 1);
+  let worst = 0, last = performance.now(), lastOurs = oursMs();
+  const iv = setInterval(() => { const t = performance.now(), c = oursMs(); worst = Math.max(worst, Math.min(t - last, c - lastOurs)); last = t; lastOurs = c; }, 1);
   const { turns, value: sliced } = await turnsAdvancing(() => lb._extractStepsForTest(), () => lb.extractWalletsFromBazaarAsync({ items }));
   clearInterval(iv);
   const steps = lb._extractStepsForTest() - steps0;
@@ -509,8 +514,8 @@ const digest = (r) => createHash("sha256").update(JSON.stringify([r.total, r.mat
     const lines = [first, big, "x".repeat(PIECE - 2), "\u{1F602}tail", ""];
     const file = join(dir, "f");
     const p0 = x._cacheWritePiecesForTest();
-    let worst = 0, last = performance.now();
-    const iv = setInterval(() => { const t = performance.now(); worst = Math.max(worst, t - last); last = t; }, 1);
+    let worst = 0, last = performance.now(), lastOurs = oursMs();
+    const iv = setInterval(() => { const t = performance.now(), c = oursMs(); worst = Math.max(worst, Math.min(t - last, c - lastOurs)); last = t; lastOurs = c; }, 1);
     const { turns } = await turnsAdvancing(() => x._cacheWritePiecesForTest(), () => x._writeJoinedInPiecesForTest(file, head, lines, sep, tail));
     clearInterval(iv);
     ok(turns >= 2, `a cache write advances across ${turns} event-loop turns`);
@@ -544,8 +549,8 @@ const digest = (r) => createHash("sha256").update(JSON.stringify([r.total, r.mat
   const expected = Buffer.from(cleanPgText(`${entryText.slice(0, -1)},"contentHash":${JSON.stringify(hash)}}`), "utf8");
   const tick = async () => { await new Promise((r) => setImmediate(r)); };
   const p0 = x._rowBytesPiecesForTest();
-  let worst = 0, last = performance.now();
-  const iv = setInterval(() => { const t = performance.now(); worst = Math.max(worst, t - last); last = t; }, 1);
+  let worst = 0, last = performance.now(), lastOurs = oursMs();
+  const iv = setInterval(() => { const t = performance.now(), c = oursMs(); worst = Math.max(worst, Math.min(t - last, c - lastOurs)); last = t; lastOurs = c; }, 1);
   const { turns, value: bytes } = await turnsAdvancing(() => x._rowBytesPiecesForTest(), () => x._rowBodyBytesForTest(line, from, hash, tick));
   clearInterval(iv);
   const pieces = x._rowBytesPiecesForTest() - p0;

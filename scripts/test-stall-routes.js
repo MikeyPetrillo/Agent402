@@ -62,22 +62,37 @@ if (process.env.CI) assert.ok(SCHEDSTAT, "under CI the main thread's schedstat m
 // STALL_*_MS variables set the floors. Timed on the ours clock, as the holds
 // are: a wall-clock baseline taken on a contended host read several times its
 // work and widened every bound with it, so a planted hold passed there.
-const BASELINE_MS = (() => {
+// The booted server's probe (section 2) runs this same function, from its
+// source text, on the server's main thread.
+const baselineJob = (ours) => {
   const once = () => {
-    const t0 = oursMs();
+    const t0 = ours();
     const rows = []; for (let i = 0; i < 36_000; i++) rows.push({ i, s: "k" + (i % 977), v: i * 1.5, t: [i, i + 1] });
     JSON.parse(JSON.stringify(rows)).sort((a, b) => (a.s < b.s ? -1 : a.s > b.s ? 1 : a.i - b.i));
-    return oursMs() - t0;
+    return ours() - t0;
   };
   return Math.min(once(), once(), once());
-})();
-const bound = (floor, k) => ({ ms: Math.max(floor, Math.round(k * BASELINE_MS)), note: `bound ${Math.max(floor, Math.round(k * BASELINE_MS))} ms: ${floor} ms or ${k}x the ${BASELINE_MS.toFixed(1)} ms baseline` });
+};
+const BASELINE_MS = baselineJob(oursMs);
+const boundAt = (floor, k, base) => ({ ms: Math.max(floor, Math.round(k * base)), note: `bound ${Math.max(floor, Math.round(k * base))} ms: ${floor} ms or ${k}x the ${base.toFixed(1)} ms baseline` });
+const bound = (floor, k) => boundAt(floor, k, BASELINE_MS);
 const GAP = bound(Number(process.env.STALL_GAP_MS || 120), 3);
 const GAP_MS = GAP.ms;
 // A first request after boot also compiles the route's code, which a shared
 // runner slows far more than the hot baseline loop (209 ms against a 21 ms
 // baseline seen on one); the stalls this pin exists for were seconds long.
-const ROUTE = bound(Number(process.env.STALL_ROUTE_BOUND_MS || 150), 12);
+// In section 2 the baseline is the booted server's own, run on its main thread
+// on each side of the request it bounds (the larger of the two): a host that
+// turns busy minutes after this process took its baseline, or that runs the
+// server on a slower core than this process, slows the route and the
+// server's baseline together (one first request read 402 ms against a 300 ms
+// bound taken here, at a machine load of 25). The same job reads about 1.4
+// times longer on the server's thread than here (its heap holds the
+// production-sized index: 23 to 25 ms against 17 ms on a laptop), so the
+// server's multiple is 9 where this process's is 12: the same bound in
+// milliseconds on a quiet machine.
+const ROUTE_FLOOR_MS = Number(process.env.STALL_ROUTE_BOUND_MS || 150), ROUTE_K = 12, ROUTE_K_SERVER = 9;
+const ROUTE = bound(ROUTE_FLOOR_MS, ROUTE_K);
 const ROUTE_BOUND_MS = ROUTE.ms;
 // One step of a sliced page: measured at 3.4 ms on a laptop for the longest
 // (?all=1, 5,800 sellers); the floor allows a runner several times slower.
@@ -630,8 +645,10 @@ if (isMainThread && typeof process.send === "function") {
   new PerformanceObserver((l) => { for (const e of l.getEntries()) { gcs.push([e.startTime, e.startTime + e.duration]); if (gcs.length > 4000) gcs.shift(); } }).observe({ entryTypes: ["gc"] });
   let gaps = [], last = performance.now(), lastOurs = ours();
   setInterval(() => { const t = performance.now(), o = ours(); if (t - last > 2) { gaps.push([last, t, o - lastOurs]); if (gaps.length > 20000) gaps.shift(); } last = t; lastOurs = o; }, 1).unref();
+  const baselineJob = ${baselineJob.toString()};
   process.on("message", (m) => {
     if (m === "hold:reset") { gaps = []; process.send({ hold: "reset" }); return; }
+    if (m === "hold:baseline") { process.send({ hold: "baseline", ms: baselineJob(ours) }); return; }
     if (m !== "hold:read") return;
     let worst = 0, wall = 0, wallGc = 0;
     for (const [a, b, o] of gaps) {
@@ -678,10 +695,12 @@ try {
   // Boot work (the route index, the warmers) finishes before the routes are
   // measured: wait for three quiet seconds in a row.
   let quiet = 0;
+  // Read on the probe's ours clock, as the routes are: the server's own wall
+  // figure never reads quiet on a host busy with other work.
   for (let i = 0; i < 120 && quiet < 3; i++) {
-    await fetch(`${base}/__operator/perf.json?reset=1`, op);
+    await serverHold("hold:reset");
     await sleep(1000);
-    quiet = (await (await fetch(`${base}/__operator/perf.json`, op)).json()).loop.worstMs < 40 ? quiet + 1 : 0;
+    quiet = (await serverHold("hold:read")).worstMs < 40 ? quiet + 1 : 0;
   }
   ok(quiet >= 3, "boot work settled before the routes are measured");
   // Bounded: the routes whose first request built a ledger or index figure
@@ -689,27 +708,30 @@ try {
   // page, 800 ms on the directory, 220 ms on /leaderboard). The rest are read
   // once for their status: their figures are pinned in section 1.
   const routes = ["/base", "/polygon", "/solana", "/monad", "/marketplace", "/marketplace?all=1", "/marketplace/tools", "/marketplace/tools?q=json", "/leaderboard", "/api/sales"];
-  for (const r of routes) {
+  // One request with the server's hold while it ran, and the bound from the
+  // server's own baseline taken just before and just after (the larger).
+  const heldBy = async (request) => {
+    const before = (await serverHold("hold:baseline")).ms;
     await fetch(`${base}/__operator/perf.json?reset=1`, op);
     await serverHold("hold:reset");
-    const resp = await fetch(base + r);
-    await resp.arrayBuffer();
+    const out = await request();
     await sleep(300);
     // Our code's hold: the probe's worst gap on the ours clock, less the
     // collector's share of it. The server's own wall figure is printed.
     const h = await serverHold("hold:read");
     const { worstMs, worstGcMs = 0 } = (await (await fetch(`${base}/__operator/perf.json`, op)).json()).loop;
-    ok(resp.status === 200 && heldUnder(h.worstMs, ROUTE_BOUND_MS), `GET ${r}, the first request after boot: 200, the loop held at most ${h.worstMs} ms ${h.reading} (${ROUTE.note}; longest gap ${h.wallMs} ms, ${h.wallGcMs} ms of it the collector; the server's wall figure ${worstMs} ms, ${worstGcMs} ms of it the collector)`);
+    const after = (await serverHold("hold:baseline")).ms;
+    return { ...out, h, worstMs, worstGcMs, limit: boundAt(ROUTE_FLOOR_MS, ROUTE_K_SERVER, Math.max(before, after)) };
+  };
+  for (const r of routes) {
+    const { resp, h, worstMs, worstGcMs, limit } = await heldBy(async () => { const resp = await fetch(base + r); await resp.arrayBuffer(); return { resp }; });
+    ok(resp.status === 200 && heldUnder(h.worstMs, limit.ms), `GET ${r}, the first request after boot: 200, the loop held at most ${h.worstMs} ms ${h.reading} (${limit.note}, the server's own; longest gap ${h.wallMs} ms, ${h.wallGcMs} ms of it the collector; the server's wall figure ${worstMs} ms, ${worstGcMs} ms of it the collector)`);
   }
   {
     // The operator's sales page reads the detailed summary across turns too,
     // and it is the ledger's own detailed summary.
-    await serverHold("hold:reset");
-    const resp = await fetch(`${base}/__operator/sales.json`, op);
-    const body = await resp.json();
-    await sleep(300);
-    const h = await serverHold("hold:read");
-    ok(resp.status === 200 && heldUnder(h.worstMs, ROUTE_BOUND_MS), `GET /__operator/sales.json: 200, the loop held at most ${h.worstMs} ms ${h.reading} (${ROUTE.note}; longest gap ${h.wallMs} ms)`);
+    const { resp, body, h, limit } = await heldBy(async () => { const resp = await fetch(`${base}/__operator/sales.json`, op); return { resp, body: await resp.json() }; });
+    ok(resp.status === 200 && heldUnder(h.worstMs, limit.ms), `GET /__operator/sales.json: 200, the loop held at most ${h.worstMs} ms ${h.reading} (${limit.note}, the server's own; longest gap ${h.wallMs} ms)`);
     const { mppAgentsThisWeek, feedback, ...summary } = body;
     const direct = JSON.parse(JSON.stringify(sales.salesSummary({ days: 30, detailed: true })));
     ok(isDeepStrictEqual(summary.totals, direct.totals) && summary.distinctExternalBuyers === direct.distinctExternalBuyers && isDeepStrictEqual(summary.repeatBuyers, direct.repeatBuyers) && feedback && "mppAgentsThisWeek" in body,

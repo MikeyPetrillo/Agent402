@@ -11,6 +11,7 @@
 // No network, no real Stripe key, no /data. Fetch is injected; the store is a
 // temp sqlite file per case.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { oursMs } from "./lib/ours-clock.js";
 import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -332,10 +333,10 @@ console.log("\n8. THE LOAD-BEARING ONE: the caller is identical in all three wor
   const results = {};
   for (const [name, led] of Object.entries(worlds)) {
     ourBooks.length = 0;
-    const before = Date.now();
+    const before = oursMs(); // a synchronous call: the time the thread had a core, not wall time
     const out = finishHandler(led, SALE);
     results[name] = out;
-    ok(Date.now() - before < 200, `${name}: record() returns immediately (no network on the caller's path)`);
+    ok(oursMs() - before < 200, `${name}: record() returns immediately (no network on the caller's path)`);
     eq(ourBooks.length, 1, `${name}: our own books were written exactly once`);
     // Drain AFTER the caller has already returned - this is the timer's job.
     await led.drain().catch(() => { ok(false, `${name}: drain rejected`); });

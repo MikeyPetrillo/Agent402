@@ -7,6 +7,7 @@
 // This proves the fix stays fast on the pathological shape AND that normal
 // robots.txt behavior (0-3 wildcards) is completely unaffected.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { leastOurs } from "./lib/ours-clock.js";
 import { parseRobots, robotsAllows } from "../src/tools/kit.js";
 
 let pass = 0;
@@ -21,10 +22,10 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m)
   const evilPath = "/" + "a*".repeat(20) + "!";
   const groups = parseRobots(`User-agent: *\nDisallow: ${evilPath}\n`);
   const longNonMatch = "/" + "a".repeat(500) + "X";
-  const start = Date.now();
-  const result = robotsAllows(groups, "test-agent", longNonMatch);
-  const elapsed = Date.now() - start;
-  ok(elapsed < 200, `pathological wildcard rule resolves in <200ms (got ${elapsed}ms)`);
+  // Synchronous matching, read as the time the thread had a core, least of
+  // three, and not repeated once a reading is seconds long.
+  const { value: result, ms: elapsed } = leastOurs(() => robotsAllows(groups, "test-agent", longNonMatch), { giveUp: 1000 });
+  ok(elapsed < 200, `pathological wildcard rule resolves in <200ms (got ${elapsed.toFixed(1)}ms)`);
   // The over-wildcarded rule is skipped entirely (treated as absent), so with
   // no other rule the default is allow — not a false "blocked" verdict either.
   ok(result.allowed === true && result.matchedRule === null,
@@ -36,10 +37,8 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m)
 // and so does a robots.txt holding thousands of such rules.
 {
   const groups = parseRobots(["User-agent: *", "Disallow: /*a*a*a!", "Disallow: /*a*a*a@", "Disallow: /*a*a*a%"].join("\n"));
-  const start = Date.now();
-  const result = robotsAllows(groups, "test-agent", "/" + "a".repeat(8000));
-  const elapsed = Date.now() - start;
-  ok(elapsed < 100, `three-wildcard rules against an 8000-char path resolve in <100ms (got ${elapsed}ms)`);
+  const { value: result, ms: elapsed } = leastOurs(() => robotsAllows(groups, "test-agent", "/" + "a".repeat(8000)), { giveUp: 1000 });
+  ok(elapsed < 100, `three-wildcard rules against an 8000-char path resolve in <100ms (got ${elapsed.toFixed(1)}ms)`);
   ok(result.allowed === true, "a three-wildcard rule that does not match leaves the path allowed");
   const many = ["User-agent: *"];
   for (let i = 0; i < 4999; i++) many.push(`Disallow: /*a*a*a!${i}`);

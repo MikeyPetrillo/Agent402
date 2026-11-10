@@ -84,17 +84,38 @@ ok(hostFields.every((h) => !/^https?:/.test(h)),
 //    own comment claimed "one Map lookup and an integer increment" - at boot the
 //    index crawler makes hundreds of requests and it pushed startup past the
 //    20s budget in scripts/test-shutdown.js. CI caught what the comment denied.
+//    Read as work done, not as wall time (a loaded runner read 2.7 s for the
+//    0.6 s this loop takes alone): the stacks built are counted, and the CPU
+//    time is held to a multiple of the same number of bare stack captures,
+//    timed in this process beside it (least of three each).
 __resetEgressMeter();
 const N = 100_000;
-const t0 = Date.now();
-for (let i = 0; i < N; i++) {
-  recordEgress("hot.test", needsCaller("hot.test") ? () => new Error().stack : null);
-}
-const ms = Date.now() - t0;
-ok(ms < 2000, `${N} records in ${ms}ms - the hot path stays cheap once a host is known`);
+const cpuOf = (fn) => { let best = Infinity; for (let k = 0; k < 3; k++) { const c0 = process.cpuUsage(); fn(); const c = process.cpuUsage(c0); best = Math.min(best, (c.user + c.system) / 1000); } return best; };
+let sink = 0;
+const captureMs = cpuOf(() => { for (let i = 0; i < N; i++) sink += new Error().stack.length; });
+ok(sink > 0 && captureMs > 0, `baseline: ${N} bare stack captures cost ${captureMs.toFixed(0)}ms of CPU here`);
+// a. A host with one caller: every record may still sample, and a record
+//    costs no more than a few captures.
+let built = 0;
+const sampledMs = cpuOf(() => {
+  __resetEgressMeter(); built = 0;
+  for (let i = 0; i < N; i++) recordEgress("hot.test", needsCaller("hot.test") ? () => { built++; return new Error().stack; } : null);
+});
+ok(sampledMs < 5 * captureMs, `${N} records of a host with one caller cost ${sampledMs.toFixed(0)}ms of CPU, under five times the bare captures (${captureMs.toFixed(0)}ms)`);
 const hot = egressReport().hosts.find((h) => h.host === "hot.test");
 ok(hot.calls === N, "every call is still counted");
 ok(hot.callers.length <= 4, `attribution stops after a few samples (${hot.callers.length})`);
+// b. A host whose callers are known: no stack is built at all, and the
+//    records cost a fraction of the captures the first version made.
+let builtKnown = 0;
+const knownMs = cpuOf(() => {
+  __resetEgressMeter(); builtKnown = 0;
+  for (let k = 0; k < 8; k++) recordEgress("hot.test", `x\n at y\n at z (/Users/a/src/tools/kit${k}.js:1:1)`);
+  for (let i = 0; i < N; i++) recordEgress("hot.test", needsCaller("hot.test") ? () => { builtKnown++; return new Error().stack; } : null);
+});
+ok(builtKnown === 0, `once a host's callers are known no record builds a stack (${builtKnown} built in ${N} records)`);
+ok(knownMs < captureMs / 2, `...and ${N} such records cost ${knownMs.toFixed(0)}ms of CPU, under half the bare captures (${captureMs.toFixed(0)}ms)`);
+ok(egressReport().hosts.find((h) => h.host === "hot.test").calls === N + 8, "every call is still counted there too");
 
 // 7. ATTRIBUTION AT REAL DEPTH — the assertion that was missing while the
 //    meter was blind in production.

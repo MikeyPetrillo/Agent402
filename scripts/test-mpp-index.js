@@ -2,6 +2,7 @@
 // x402 side - protocol-agnostic) + the registerMppOrigin flow with an
 // injected fake verifier + the snapshot honesty invariant. No network, no /data.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { leastOurs } from "./lib/ours-clock.js";
 import {
   validateOriginInput, registerMppOrigin, mppIndexSnapshot, parseMppScanOrigins, parseMppScanList, probeTargetFromDiscovery, seedFromOrigins, discoverFromX402Crawl,
   __testResetSubmitted, __testSetSubmittedCap, __testReset,
@@ -80,9 +81,9 @@ __testReset();
   // ReDoS guard: an unterminated list followed by a long whitespace run must
   // parse in linear time (the page is third-party input). ~1s before the
   // one-parse-per-item quantifier, 0ms after.
-  const t0 = Date.now();
-  parseMppScanOrigins('"originUrls": ["https://a.example"' + " ".repeat(50_000) + "x");
-  ok(Date.now() - t0 < 200, `parseMppScanOrigins: unterminated list + 50k spaces parses in linear time (${Date.now() - t0}ms)`);
+  // Synchronous, so read as the time the thread had a core, least of three.
+  const { ms } = leastOurs(() => parseMppScanOrigins('"originUrls": ["https://a.example"' + " ".repeat(50_000) + "x"), { giveUp: 1000 });
+  ok(ms < 200, `parseMppScanOrigins: unterminated list + 50k spaces parses in linear time (${ms.toFixed(1)}ms)`);
 }
 // --- MPPScan tRPC servers.list (primary source): shape + validation ----------------
 {

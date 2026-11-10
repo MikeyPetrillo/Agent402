@@ -4,6 +4,7 @@
 // is well-formed with no template leak. Why: until 2026-09-14 every section
 // page served the same /card.png, so every link preview looked identical.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { leastOurs } from "./lib/ours-clock.js";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -22,8 +23,9 @@ const cases = [["/why", null], ["/docs", "docs"], ["/tools", "tools"], ["/tools/
   ["/skills/crypto-dossier", "skills"], ["/company", null], ["/", null], ["https://agent402.tools/markets?x=1", "markets"], ["/monitors/thanks", "monitors"]];
 for (const [p, want] of cases) ok(ogSectionFor(p) === want, `ogSectionFor(${p}) = ${want}`);
 { // CodeQL #192: a trailing-slash regex on caller-shaped input backtracks polynomially; the strip is linear and bounded now.
-  const t0 = Date.now(); const r = ogSectionFor("/docs" + "/".repeat(200000)); const ms = Date.now() - t0;
-  ok(r === "docs" && ms < 200, `200k trailing slashes resolve in ${ms} ms (linear, bounded)`);
+  // Synchronous, so read as the time the thread had a core, least of three.
+  const { value: r, ms } = leastOurs(() => ogSectionFor("/docs" + "/".repeat(200000)));
+  ok(r === "docs" && ms < 200, `200k trailing slashes resolve in ${ms.toFixed(1)} ms (linear, bounded)`);
 }
 const ids = ogSectionIds();
 ok(ids.length >= 30 && new Set(ids).size === ids.length, `${ids.length} distinct section ids`);

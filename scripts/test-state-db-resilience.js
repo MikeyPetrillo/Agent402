@@ -7,6 +7,7 @@
 // Requires STATE_DATABASE_URL (CI fails without it).
 import { spawn } from "node:child_process";
 import { createServer, connect } from "node:net";
+import { Agent, request as httpRequest } from "node:http";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -87,9 +88,38 @@ try {
   ok(await until(async () => (await hashCount()) === callsBefore + 1, 15_000), "the call's stats bump lands in Postgres");
 
   // ---- burst ------------------------------------------------------------------
+  // 150 calls at once, each on a connection that is already open: one
+  // kept-alive connection per caller, opened in groups of 25 by a /health
+  // read. The burst is the server's to answer; 150 connections opened in the
+  // same instant are the kernel's listen queue's to hold, and it holds
+  // kern.ipc.somaxconn of them (128 on macOS, 4096 on the Linux hosts). On a
+  // host too busy to run this server's accept loop for the length of the
+  // burst the kernel reset the 22 past the queue before the server saw them
+  // (ECONNRESET on 20 of 150, with every accepted call a 200).
+  const BURST = 150, OPEN_GROUP = 25;
+  const callers = Array.from({ length: BURST }, () => new Agent({ keepAlive: true, maxSockets: 1 }));
+  const callOn = (agent, method, path, body, ms) => new Promise((resolve) => {
+    const req = httpRequest({ host: "127.0.0.1", port: PORT, path, method, agent, timeout: ms, headers: body ? { "content-type": "application/json", "content-length": Buffer.byteLength(body) } : {} }, (res) => {
+      res.resume();
+      res.on("end", () => resolve({ status: res.statusCode, reused: req.reusedSocket }));
+      res.on("error", (e) => resolve({ status: `0:${String(e?.code || e?.message || e).slice(0, 40)}`, reused: req.reusedSocket }));
+    });
+    req.on("timeout", () => req.destroy(Object.assign(new Error("timeout"), { code: "TIMEOUT" })));
+    req.on("error", (e) => resolve({ status: `0:${String(e?.code || e?.message || e).slice(0, 40)}`, reused: req.reusedSocket }));
+    req.end(body);
+  });
+  const opened = [];
+  for (let i = 0; i < BURST; i += OPEN_GROUP) opened.push(...await Promise.all(callers.slice(i, i + OPEN_GROUP).map((a) => callOn(a, "GET", "/health", null, 20_000))));
+  const notOpened = opened.filter((o) => o.status !== 200);
+  ok(notOpened.length === 0, `${BURST} connections open and answer /health, ${OPEN_GROUP} at a time${notOpened.length ? `; ${notOpened.length} did not: ${JSON.stringify([...new Set(notOpened.map((o) => o.status))].slice(0, 4))}` : ""}`);
+  const burstBody = JSON.stringify({ text: "resilience", algo: "sha256" });
   const t0 = Date.now();
-  const statuses = await Promise.all(Array.from({ length: 150 }, () => callTool(20_000)));
+  const answers = await Promise.all(callers.map((a) => callOn(a, "POST", "/api/hash", burstBody, 20_000)));
   const burstMs = Date.now() - t0;
+  for (const a of callers) a.destroy();
+  const statuses = answers.map((a) => a.status);
+  const onOpen = answers.filter((a) => a.reused).length;
+  ok(onOpen === BURST, `every burst call went out on its open connection, none on a new one (${onOpen} of ${BURST})`);
   const notOk = statuses.filter((s) => s !== 200);
   ok(notOk.length === 0, `150 concurrent calls all answer 200 (${burstMs} ms for the burst)${notOk.length ? `; ${notOk.length} did not: ${JSON.stringify([...new Set(notOk)].slice(0, 4))}` : ""}`);
   ok(await until(async () => (await hashCount()) === callsBefore + 151, 30_000), "the burst's 150 bumps land, exactly");

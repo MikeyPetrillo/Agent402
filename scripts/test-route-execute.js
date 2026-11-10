@@ -578,9 +578,10 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
   // module's own cache (keyless here: "unconfigured", never low).
   {
     const { cachedSpendingWalletStatus, spendingWalletReadsLow } = await import("../src/tools/route-execute.js");
-    const t0 = Date.now();
-    const st = await cachedSpendingWalletStatus();
-    ok(st?.status === "unconfigured" && Date.now() - t0 < 200 && (await spendingWalletReadsLow()) === false, `default wallet reader: ${st?.status}, not low, no wait`);
+    // The least of three reads: a read that waits on the network waits every time.
+    const { leastWall } = await import("./lib/ours-clock.js");
+    const { value: st, ms: readMs } = await leastWall(() => cachedSpendingWalletStatus());
+    ok(st?.status === "unconfigured" && readMs < 200 && (await spendingWalletReadsLow()) === false, `default wallet reader: ${st?.status}, not low, no wait`);
   }
   // A seller that answers the unpaid request with a 200 was never paid: the
   // receipt books no underlying spend and the payer's ceiling is given back.

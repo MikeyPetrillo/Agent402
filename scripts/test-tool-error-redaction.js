@@ -17,6 +17,7 @@
 //
 //   node scripts/test-tool-error-redaction.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { leastOurs } from "./lib/ours-clock.js";
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -134,7 +135,8 @@ const OP_TOKEN = ["op", "Canary", "Token", String(process.pid)].join("");
     ["a dotted run with a URL and @", "x://" + "a.".repeat(50_000) + "@"],
     ["repeated scheme-like runs", ("ab+c.d-".repeat(20) + "://u:" + "p".repeat(300) + " ").repeat(200) + "@"],
   ]) {
-    const t0 = performance.now(); r(text); const ms = performance.now() - t0;
+    // Synchronous, so read as the time the thread had a core, least of three.
+    const { ms } = leastOurs(() => r(text), { giveUp: 1000 });
     ok(ms < 100, `redaction of ${text.length} chars (${label}) takes ${ms.toFixed(1)} ms, under 100`);
   }
   for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
