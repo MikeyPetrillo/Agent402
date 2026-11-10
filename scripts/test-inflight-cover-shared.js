@@ -24,7 +24,13 @@
 //      with the clock held still (every stamp equal), a read that began
 //      before the view still does not decide, in either direction, whether
 //      it has finished (cached) or is still under way (pending), and reads
-//      that began after it are still shared.
+//      that began after it are still shared. A run another container held
+//      that leaves the window is a departure: with a read cached, with a read
+//      under way, and with nothing in flight here at all, the next judgment
+//      is on a read taken after it; so is a local run that leaves while the
+//      window is being read. A wallet's burst beside another container's run
+//      (at once, or one run after another) shares one read at a time and
+//      nobody in it is refused or admitted unread.
 // Under CI a missing REDIS_URL fails (a skipped integration test is not
 // coverage); a local run says the Redis half was skipped. The two-process
 // case is scripts/test-shared-limits-crossprocess.js.
@@ -84,6 +90,40 @@ if (ROLE === "memory") {
   const c = await attempt(C, W);
   ok(typeof c.release === "function", "memory: once the run leaves, the next is admitted");
   c.release();
+  {
+    // The read lane (8 at once across wallets): a ninth and tenth wallet's
+    // reads wait for a place and are answered, never read as unknown.
+    C._resetInflightCoverForTest();
+    const gated = [];
+    C._setBalanceReaderForTest(() => new Promise((res) => gated.push(res)));
+    const turn = () => new Promise((r) => setImmediate(r));
+    const wallets = Array.from({ length: 10 }, (_, i) => "0x" + (0x10 + i).toString(16).repeat(20));
+    const firsts = [];
+    for (const w of wallets) firsts.push(await attempt(C, w));
+    const seconds = wallets.map((w) => attempt(C, w));
+    for (let i = 0; i < 5; i++) await turn();
+    ok(firsts.every((x) => typeof x.release === "function") && gated.length === 8, `memory: ten wallets each ask for a read at once: eight are under way, two wait for a place (under way ${gated.length})`);
+    let answered = 0;
+    const end = Date.now() + 10_000;
+    while (answered < 10 && Date.now() < end) { while (answered < gated.length) gated[answered++](2n * PRICE); await turn(); }
+    const out = await Promise.all(seconds);
+    const s = C.inflightCoverStatus();
+    ok(out.every((x) => typeof x.release === "function") && answered === 10 && s.admittedByRead === 10 && s.admittedUnread === 0 && s.refusedUnread === 0, `memory: all ten are admitted on a read of their own balance, none unread (reads ${answered}, by read ${s.admittedByRead}, unread ${s.admittedUnread})`);
+    // The reads holding the lane never answer: a read that gets no place
+    // within the wait is unread (the bounded allowance), not a hang.
+    C._resetInflightCoverForTest();
+    gated.length = 0;
+    C._setBalanceReaderForTest(() => new Promise((res) => gated.push(res)));
+    const held = [];
+    for (const w of wallets.slice(0, 9)) held.push(await attempt(C, w));
+    const stuck = wallets.slice(0, 8).map((w) => attempt(C, w));
+    for (let i = 0; i < 5; i++) await turn();
+    const t0 = Date.now();
+    let ninth; try { ninth = { release: await C.admitCoveredRun(reqFor(wallets[8]), { laneWaitMs: 120 }) }; } catch (e) { ninth = { err: e }; }
+    ok(gated.length === 8 && typeof ninth.release === "function" && Date.now() - t0 >= 100 && C.inflightCoverStatus().admittedUnread === 1, `memory: with every place held by a read that does not answer, a wallet's second run waits its bound and is admitted under the unread allowance (${ninth.err?.statusCode || "admitted"}, ${Date.now() - t0} ms)`);
+    for (const g of gated) g(2n * PRICE);
+    await Promise.all(stuck);
+  }
   console.log(`CHILD_PASS ${pass}`);
   process.exit(0);
 }
@@ -92,7 +132,7 @@ if (ROLE === "memory") {
 // fixed at boot) ----------------------------------------------------------------------
 const here = fileURLToPath(import.meta.url);
 for (const [role, extra, min] of [
-  ["memory", { REDIS_URL: "" }, 3],
+  ["memory", { REDIS_URL: "" }, 6],
   ["degraded", { REDIS_URL: "redis://127.0.0.1:1", SHARED_LIMITS: "on", SHARED_LIMITS_OP_MS: "150" }, 7],
 ]) {
   const env = { ...process.env, INFLIGHT_COVER: "", ...extra };
@@ -140,13 +180,19 @@ C._setBalanceReaderForTest(async () => { reads++; return balance; });
   r2.release();
   await new Promise((res) => setTimeout(res, 50));
   ok((await windowOf(W)).count === 1, "redis: a released run leaves the window");
-  // The foreign run leaves: the wallet's next run is admitted on its own proof.
+  // The foreign run leaves. It may have settled since this run's payment
+  // was verified, so the wallet's next run is judged on one read, taken after
+  // the view that no longer shows it; the run after that needs none.
   await unforeign(W, "r1");
-  balance = 0n;
+  balance = PRICE;
   const before = reads;
   const r3 = await attempt(C, W);
-  ok(typeof r3.release === "function" && reads === before, "redis: with nothing in flight anywhere the first run is admitted on verify's proof, no read");
+  ok(typeof r3.release === "function" && reads === before + 1, `redis: the first run after another container's run left the window is admitted on one fresh read (reads ${reads - before})`);
   r3.release();
+  balance = 0n;
+  const r4 = await attempt(C, W);
+  ok(typeof r4.release === "function" && reads === before + 1, "redis: with nothing in flight anywhere and nothing gone since, the next run is admitted on verify's proof, no read");
+  r4.release();
 }
 {
   // A cached balance read taken BEFORE the other container's run appeared
@@ -250,13 +296,15 @@ C._setBalanceReaderForTest(async () => { reads++; return balance; });
       const a = attempt(C, wallet);
       while (C.inflightCoverStatus().foreignReads < judged + 1 || gated.length < 1) await turn();
       const b = attempt(C, wallet);
-      // B has asked for a balance (counted just before it asks); a read of its
-      // own begins one microtask later, so one more turn of the loop shows it.
+      // B has asked for a balance (counted just before it asks). The read
+      // under way began before B's view, so B waits for the one that follows
+      // it: one read at a time for the wallet, begun after B's view.
       while (C.inflightCoverStatus().foreignReads < judged + 2) await turn();
       await turn();
-      ok(gated.length === 2, `pending read: a run whose view landed while another run's read was under way gets its own read, begun after its view (reads ${gated.length}, want 2)`);
+      ok(gated.length === 1, `pending read: a run whose view landed while another run's read was under way does not share it and starts no second read beside it (reads under way ${gated.length}, want 1)`);
       gated[0](firstRead);
       const ra = await a;
+      while (gated.length < 2) await turn();
       gated[1](secondRead);
       const rb = await b;
       ok(typeof ra.release === "function" && (bAdmitted ? typeof rb.release === "function" : rb.err?.statusCode === 429) && gated.length === 2,
@@ -287,6 +335,130 @@ C._setBalanceReaderForTest(async () => { reads++; return balance; });
   held.release?.();
   await unforeign(S, "r6");
 }
+// ---- departures of another container's run, and a wallet's own burst ----
+const turn = () => new Promise((r) => setImmediate(r));
+const until = async (cond, what) => { const end = Date.now() + 15_000; while (!cond()) { if (Date.now() > end) fail(`timed out waiting for ${what}`); await turn(); } };
+// The window calls of the process under test, counted, with one step the
+// test can run just before the next read of the window.
+let adds = 0, beforeWindowRead = null;
+const realAdd = shared.windowAdd, realRead = shared.windowRead;
+shared.windowAdd = async (...a) => { const r = await realAdd(...a); if (String(a[2]?.member || "").indexOf("otherproc-") !== 0) adds++; return r; };
+shared.windowRead = async (...a) => { const step = beforeWindowRead; beforeWindowRead = null; if (step) await step(); return realRead(...a); };
+for (const [label, settledBalance, admitted] of [["the balance left does not cover it", PRICE, false], ["control: the balance left covers it", 2n * PRICE, true]]) {
+  // 1. A read is CACHED when the other container's run leaves. Run b reads
+  // the balance, then its view of the window shows the foreign run gone (it
+  // settled: the balance fell by its price). The read b just took is from
+  // before that settlement and would cover b beside the local run; it is
+  // dropped, and b is judged on a read taken after the departure.
+  C._resetInflightCoverForTest();
+  reads = 0; balance = settledBalance + PRICE;
+  C._setBalanceReaderForTest(async () => { reads++; return balance; });
+  const W = "0x" + (admitted ? "a2" : "a1").repeat(20);
+  await foreign(W, "d1");
+  const a = await attempt(C, W);
+  ok(typeof a.release === "function" && reads === 1, `departure, cached read (${label}): a run beside another container's is admitted on one read`);
+  beforeWindowRead = async () => { await unforeign(W, "d1"); balance = settledBalance; };
+  const b = await attempt(C, W);
+  ok((admitted ? typeof b.release === "function" : b.err?.statusCode === 429) && reads === 3, `departure, cached read (${label}): the read taken before the other container's run left is not reused; the run is ${admitted ? "admitted" : "refused"} on a read taken after it (${b.err?.statusCode || "admitted"}, reads ${reads}, want 3)`);
+  a.release(); b.release?.();
+}
+for (const [label, before, after, admittedCount] of [["the balance left covers neither waiting run", 2n * PRICE, PRICE, 0], ["control: the balance left covers both", 4n * PRICE, 3n * PRICE, 2]]) {
+  // 2. A read is PENDING when the other container's run leaves. Run b's read
+  // is under way (begun while the foreign run was in the window); the foreign
+  // run settles and leaves; run c's view no longer shows it. c must not share
+  // b's read, and that read must not be cached: both are judged on a read
+  // begun after the view that saw the run gone.
+  C._resetInflightCoverForTest();
+  const gated = [];
+  let auto = null;
+  C._setBalanceReaderForTest(() => (auto != null ? Promise.resolve(auto) : new Promise((res) => gated.push(res))));
+  const W = "0x" + (admittedCount ? "a4" : "a3").repeat(20);
+  await foreign(W, "d2");
+  const ap = attempt(C, W);
+  await until(() => gated.length === 1, "run a's read");
+  gated[0](before);
+  const a = await ap;
+  const bp = attempt(C, W);
+  await until(() => gated.length === 2, "run b's read");
+  await unforeign(W, "d2");
+  const mark = adds;
+  const cp = attempt(C, W);
+  await until(() => adds > mark, "run c's view of the window");
+  for (let i = 0; i < 5; i++) await turn();
+  const fresh = gated.length;
+  // b's read answers with the balance from before the settlement; every
+  // read begun from here on sees the balance after it.
+  auto = after;
+  gated[1](before);
+  for (let i = 2; i < gated.length; i++) gated[i](after);
+  const [b, c] = await Promise.all([bp, cp]);
+  const inNow = [b, c].filter((x) => typeof x.release === "function").length;
+  ok(typeof a.release === "function" && fresh === 3 && inNow === admittedCount && [b, c].every((x) => typeof x.release === "function" || x.err?.statusCode === 429),
+    `departure, pending read (${label}): a run whose view shows the other container's run gone starts a read of its own (reads begun ${fresh}, want 3) and ${admittedCount} of the two waiting runs are admitted (${inNow})`);
+  a.release?.(); b.release?.(); c.release?.();
+}
+for (const [label, after, admitted] of [["nothing left", 0n, false], ["control: the balance left covers it", PRICE, true]]) {
+  // 3. The other container's run simply VANISHES from the view, with nothing
+  // in flight here and no judgment under way: this process last saw it while
+  // judging run a. The wallet's next run was verified against a balance that
+  // run's settlement may since have come out of, so it is judged on a read.
+  C._resetInflightCoverForTest();
+  reads = 0; balance = 2n * PRICE;
+  C._setBalanceReaderForTest(async () => { reads++; return balance; });
+  const W = "0x" + (admitted ? "a6" : "a5").repeat(20);
+  await foreign(W, "d3");
+  const a = await attempt(C, W);
+  a.release?.();
+  await unforeign(W, "d3");
+  balance = after;
+  const c = await attempt(C, W);
+  ok(typeof a.release === "function" && reads === 2 && (admitted ? typeof c.release === "function" : c.err?.statusCode === 429 && /no longer covers/.test(c.err.message)),
+    `departure, vanished from the view (${label}): the next run is judged on a fresh read and ${admitted ? "admitted" : "refused"} (${c.err?.statusCode || "admitted"}, reads ${reads}, want 2)`);
+  c.release?.();
+}
+for (const [label, after, admitted] of [["nothing left", 0n, false], ["control: the balance left covers it", PRICE, true]]) {
+  // 4. A LOCAL run settles and leaves while run b's view of the window is
+  // being read, after b's balance read: that read is from before the
+  // settlement, and b is judged again on one taken after it.
+  C._resetInflightCoverForTest();
+  reads = 0; balance = PRICE;
+  C._setBalanceReaderForTest(async () => { reads++; return balance; });
+  const W = "0x" + (admitted ? "a8" : "a7").repeat(20);
+  const a = await attempt(C, W);
+  beforeWindowRead = async () => { balance = after; a.release(); };
+  const b = await attempt(C, W);
+  ok(typeof a.release === "function" && reads === 2 && (admitted ? typeof b.release === "function" : b.err?.statusCode === 429 && /no longer covers/.test(b.err.message)),
+    `a local run that leaves while the window is read (${label}): the run is judged on a read taken after it and ${admitted ? "admitted" : "refused"} (${b.err?.statusCode || "admitted"}, reads ${reads}, want 2)`);
+  b.release?.();
+}
+for (const [label, staggered] of [["one after another", true], ["at once", false]]) {
+  // 5. A wallet's own burst beside another container's run. Every run needs
+  // a read begun after its own view. Thirty runs, each view landing after the
+  // read before it began (or all at once): one read under way at a time, the
+  // rest share the one that follows, nobody is refused and nobody is unread.
+  C._resetInflightCoverForTest();
+  const gated = [];
+  C._setBalanceReaderForTest(() => new Promise((res) => gated.push(res)));
+  const W = "0x" + (staggered ? "a9" : "aa").repeat(20);
+  await foreign(W, "d5");
+  const N = 30, runs = [];
+  for (let i = 0; i < N; i++) {
+    const mark = adds;
+    runs.push(attempt(C, W));
+    if (staggered) { await until(() => adds > mark, "the run's view of the window"); for (let k = 0; k < 3; k++) await turn(); }
+  }
+  let answered = 0, settled = false;
+  const all = Promise.all(runs).then((x) => { settled = true; return x; });
+  const end = Date.now() + 20_000;
+  while (!settled && Date.now() < end) { while (answered < gated.length) gated[answered++](100n * PRICE); await turn(); }
+  const out = await all;
+  const st = C.inflightCoverStatus();
+  ok(out.every((x) => typeof x.release === "function") && st.refused === 0 && st.admittedUnread === 0 && st.admittedByRead === N && gated.length <= 2,
+    `burst beside a foreign run, ${label}: all ${N} are admitted on a read, none refused, none unread, on at most two reads (admitted ${out.filter((x) => typeof x.release === "function").length}, unread ${st.admittedUnread}, refused ${st.refused}, reads ${gated.length})`);
+  out.forEach((x) => x.release?.());
+  await unforeign(W, "d5");
+}
+shared.windowAdd = realAdd; shared.windowRead = realRead;
 // Clean up this run's keys.
 try {
   const { getSharedRedisClient } = await import("../src/shared-limit.js");
