@@ -90,8 +90,10 @@ ok(dropUnsignedAuthorization({ payload: "text" }).payload === "text" && dropUnsi
   const keys = ["7", "07", "0007", "0x7", " 7 "].map((n) => id(paymentReplayKey(req(evmP2(n)))));
   ok(new Set(keys).size === 1, `one Permit2 nonce in five spellings is one payment to the replay guard (${new Set(keys).size} keys)`);
   ok(id(paymentReplayKey(req(evmP2("8")))) !== keys[0] && id(paymentReplayKey(req(evmP2("70")))) !== keys[0], "control: a different nonce value is a different payment");
-  const idem = ["7", "07", "0x7"].map((n) => paymentNonceIdentityOf(req(evmP2(n)))?.nonce);
-  ok(idem.every((n) => n === "7"), `the idempotency identity reads the same nonce for each spelling (got ${JSON.stringify(idem)})`);
+  // The idempotency identity is a cache key for a re-sent header and keeps the
+  // nonce as sent, as before: a different spelling is a different header, and
+  // the replay guard above is what holds one permit to one run.
+  ok(paymentNonceIdentityOf(req(evmP2("07")))?.nonce === "07", "the idempotency identity keeps the nonce as sent");
   ok(canonicalNonce("0xAB") === "171" && canonicalNonce("0x" + "ab".repeat(32)) === BigInt("0x" + "ab".repeat(32)).toString() && canonicalNonce("not-a-number") === "not-a-number", "canonicalNonce reads integers by value and leaves other text as sent");
 }
 

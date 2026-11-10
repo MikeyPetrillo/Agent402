@@ -1,4 +1,4 @@
-import { decodePaymentHeader, canonicalNonce } from "./payment-header.js";
+import { decodePaymentHeader } from "./payment-header.js";
 
 /**
  * Extract the verified payer wallet address from the x402 payment header.
@@ -162,9 +162,7 @@ export function paymentNonceIdentityOf(req) {
     // v2 carries the network on `accepted`; v1 at the top level (see paymentSchemeOf).
     const network = payload?.accepted?.network ?? payload?.network ?? payload?.payload?.network;
     if (typeof network !== "string" || !network) return null;
-    // A Permit2 nonce is an integer the contract reads by value, so its
-    // spellings are one nonce; an EIP-3009 nonce is 32 bytes, kept as sent.
-    return { network: network.toLowerCase(), from, nonce: p2 && typeof p2 === "object" ? canonicalNonce(nonce) : nonce.toLowerCase() };
+    return { network: network.toLowerCase(), from, nonce: nonce.toLowerCase() };
   } catch {
     return null;
   }
