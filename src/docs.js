@@ -11,7 +11,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { marked } from "marked";
+import { marked } from "./tools/markdown-render.js"; // the one renderer configuration
 import { ledgerShell, ledgerFooterCompact, esc, breadcrumbTrail } from "./ledger-chrome.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

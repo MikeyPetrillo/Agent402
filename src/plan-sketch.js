@@ -17,7 +17,42 @@ const MIN_STEP_CHARS = 3;
 // Sequence markers only. A bare "and" is never a split point: "bitcoin and
 // ethereum price" is one step, and guessing otherwise would turn ordinary
 // single-tool queries into plans.
-const SPLIT_RE = /\s*(?:;|\n|->|→|=>|,?\s*\band then\b|,?\s*\bthen\b|,?\s*\bafter that\b|,?\s*\bafterwards\b|,?\s*\bfinally\b|,?\s*\bnext,)\s*/i;
+//
+// A step boundary is a marker with the whitespace around it; a word marker
+// also takes one comma before it. MARKER_RE names the marker alone, and
+// splitOnMarkers walks outward from each one, so every character is read a
+// bounded number of times. (One pattern that consumed the whitespace itself
+// reread a long run of spaces from each of its positions.)
+const MARKER_RE = /;|\n|->|→|=>|\band then\b|\bthen\b|\bafter that\b|\bafterwards\b|\bfinally\b|\bnext,/gi;
+const SYMBOL_MARKERS = new Set([";", "\n", "->", "→", "=>"]);
+const isSpace = (ch) => ch.trim() === "";
+const TAIL_CHARS = new Set([",", ".", ";", ":"]);
+
+function splitOnMarkers(q) {
+  const parts = [];
+  let from = 0;
+  for (const m of q.matchAll(MARKER_RE)) {
+    if (m.index < from) continue; // a line break inside the whitespace after the last marker
+    let end = m.index;
+    while (end > from && isSpace(q[end - 1])) end--;
+    if (!SYMBOL_MARKERS.has(m[0]) && end > from && q[end - 1] === ",") {
+      end--;
+      while (end > from && isSpace(q[end - 1])) end--;
+    }
+    parts.push(q.slice(from, end));
+    from = m.index + m[0].length;
+    while (from < q.length && isSpace(q[from])) from++;
+  }
+  parts.push(q.slice(from));
+  return parts;
+}
+
+// `p` without its trailing run of whitespace and , . ; : characters.
+function trimTail(p) {
+  let end = p.length;
+  while (end > 0 && (TAIL_CHARS.has(p[end - 1]) || isSpace(p[end - 1]))) end--;
+  return p.slice(0, end);
+}
 const NUMBERED_RE = /(?:^|\s)(?:\(?\d{1,2}[.)]|step\s+\d{1,2}:?)\s+/gi;
 const LEAD_RE = /^(?:and|first|firstly|also|please|,)\s+/i;
 
@@ -28,8 +63,8 @@ export function splitSteps(query) {
   // "1. get the price 2. compute rsi" and "step 1: ... step 2: ..." become separators.
   const numbered = q.match(NUMBERED_RE);
   if (numbered && numbered.length >= 2) q = q.replace(NUMBERED_RE, " ; ").trim();
-  const parts = q.split(SPLIT_RE)
-    .map((p) => p.replace(LEAD_RE, "").replace(/[\s,.;:]+$/g, "").trim())
+  const parts = splitOnMarkers(q)
+    .map((p) => trimTail(p.replace(LEAD_RE, "")).trim())
     .filter((p) => p.length >= MIN_STEP_CHARS && /[a-z]/i.test(p));
   return parts.length >= 2 ? parts : [];
 }

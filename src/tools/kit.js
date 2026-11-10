@@ -14,12 +14,14 @@ import { fileURLToPath } from "node:url";
 import { loadJsdom } from "./lazy-deps.js";
 import { hiddenMode, HIDDEN_INPUT_SCHEMA, HIDDEN_OUTPUT_EXAMPLE } from "./hidden-content.js";
 import { runHtml } from "./html-pool.js";
+import { countSentenceEnds } from "./sentence-ends.js";
 // Named imports, not a default import: js-yaml v5 dropped the default export
 // ("does not provide an export named 'default'", which broke the v5 bump on
 // CI). Named imports resolve on both v4 (synthesized from the CJS build) and
 // v5, so this stays correct across the upgrade.
 import { load as yamlLoad, dump as yamlDump, JSON_SCHEMA as YAML_JSON_SCHEMA } from "js-yaml";
-import { marked } from "marked";
+import { renderMarkdown, MARKDOWN_INLINE_MAX_CHARS } from "./markdown-render.js";
+import { runMarkdown } from "./markdown-pool.js";
 import QRCode from "qrcode";
 import { assertPublicUrl, safeFetch, ssrfDispatcher, isSsrfBlock, UNRESOLVED_OR_PRIVATE, isTransientLookupError, lookupUnavailable } from "./fetch-guard.js";
 
@@ -184,6 +186,7 @@ const encodingTools = [
     },
     handler: (input) => {
       const text = capText(need(input, "text"));
+      if (input.algo && typeof input.algo !== "string") throw bad('"algo" must be a string');
       const algo = (input.algo || "sha256").toLowerCase();
       if (!HASH_ALGOS.includes(algo)) throw bad(`algo must be one of: ${HASH_ALGOS.join(", ")}`);
       const h = createHash(algo).update(text);
@@ -215,6 +218,7 @@ const encodingTools = [
     handler: (input) => {
       const text = capText(need(input, "text"));
       const key = need(input, "key");
+      if (input.algo && typeof input.algo !== "string") throw bad('"algo" must be a string');
       const algo = (input.algo || "sha256").toLowerCase();
       if (!["sha256", "sha512", "sha1"].includes(algo)) throw bad("algo must be sha256, sha512, or sha1");
       const buf = createHmac(algo, key).update(text).digest();
@@ -481,6 +485,7 @@ const encodingTools = [
       const min = parseInt(input.min, 10);
       const max = parseInt(input.max, 10);
       if (Number.isNaN(min) || Number.isNaN(max) || max <= min) throw bad("Provide ?bytes= or integer ?min= and ?max= with max > min");
+      if (!Number.isSafeInteger(min) || !Number.isSafeInteger(max + 1) || max - min >= 2 ** 48) throw bad("min and max must be safe integers less than 2^48 apart");
       return { integers: Array.from({ length: count }, () => randomInt(min, max + 1)) };
     },
   },
@@ -525,6 +530,12 @@ const encodingTools = [
 // ---------------------------------------------------------------------------
 // Data conversion
 // ---------------------------------------------------------------------------
+
+// A sheet is written in slices that hand the event loop back, so its size is
+// bounded by what one answer can reasonably carry, not by the serving thread.
+export const JSON_TO_CSV_MAX_CELLS = 10_000_000;
+export const JSON_TO_CSV_MAX_BYTES = 16_000_000;
+const JSON_TO_CSV_SLICE_MS = 4;
 
 function flatten(obj, prefix = "", out = {}) {
   for (const [k, v] of Object.entries(obj)) {
@@ -672,7 +683,7 @@ const dataTools = [
     slug: "json-to-csv",
     category: "conversion",
     price: "$0.002",
-    description: "Convert a JSON array of objects to CSV. Nested objects are flattened to dot-path columns.",
+    description: "Convert a JSON array of objects to CSV. Nested objects are flattened to dot-path columns. Up to 10,000 rows, 10,000,000 cells (rows times columns) and 16 MB of CSV per call; split a larger table into several calls.",
     tags: ["json", "csv", "convert", "spreadsheet"],
     discovery: {
       bodyType: "json",
@@ -686,15 +697,31 @@ const dataTools = [
       },
       output: { example: { csv: "name,role.title\nAda,Engineer\n", rows: 1, columns: 2 } },
     },
-    handler: (input) => {
+    handler: async (input) => {
       const data = parseMaybeJson(need(input, "json", "any"), "json");
       if (!Array.isArray(data) || !data.length) throw bad('"json" must be a non-empty array of objects');
       if (data.length > 10_000) throw bad("Max 10000 rows");
       const delimiter = typeof input.delimiter === "string" && input.delimiter.length === 1 ? input.delimiter : ",";
       const flat = data.map((row) => flatten(row && typeof row === "object" ? row : { value: row }));
       const columns = [...new Set(flat.flatMap((r) => Object.keys(r)))];
+      // Every row is written under every column, so rows that share no keys
+      // grow the sheet with the square of the input.
+      const shape = `this input makes ${data.length} rows of ${columns.length} columns`;
+      const split = "Send fewer rows per call, or convert rows that share columns together";
+      if (data.length * columns.length > JSON_TO_CSV_MAX_CELLS) throw bad(`Max ${JSON_TO_CSV_MAX_CELLS} cells (rows times columns); ${shape}. ${split}`);
       const lines = [columns.map(csvEscape).join(delimiter)];
-      for (const r of flat) lines.push(columns.map((c) => csvEscape(r[c])).join(delimiter));
+      let bytes = lines[0].length + 1, sliceStart = performance.now(), sinceCheck = 0;
+      for (const r of flat) {
+        const line = columns.map((c) => csvEscape(r[c])).join(delimiter);
+        bytes += line.length + 1;
+        if (bytes > JSON_TO_CSV_MAX_BYTES) throw Object.assign(bad(`Max ${JSON_TO_CSV_MAX_BYTES / 1_000_000} MB of CSV per call; ${shape}. ${split}`), { statusCode: 413 });
+        lines.push(line);
+        // The clock is read every 20,000 cells; a slice that has run its time ends here.
+        if ((sinceCheck += columns.length) >= 20_000) {
+          sinceCheck = 0;
+          if (performance.now() - sliceStart > JSON_TO_CSV_SLICE_MS) { await new Promise((done) => setImmediate(done)); sliceStart = performance.now(); }
+        }
+      }
       return { csv: lines.join("\n") + "\n", rows: data.length, columns: columns.length };
     },
   },
@@ -826,7 +853,7 @@ const dataTools = [
     slug: "markdown-to-html",
     category: "conversion",
     price: "$0.001",
-    description: "Render CommonMark + GFM markdown to HTML.",
+    description: "Render CommonMark + GFM markdown to HTML; headings carry id attributes. A render that runs past 10 s is stopped: 400 when the document's own markers are the cause, 503 otherwise, never charged.",
     tags: ["markdown", "html", "convert", "render"],
     discovery: {
       bodyType: "json",
@@ -835,11 +862,15 @@ const dataTools = [
         properties: { markdown: { type: "string", description: "Markdown text (max 100KB)" } },
         required: ["markdown"],
       },
-      output: { example: { html: "<h1>Hi</h1>\n<p><strong>bold</strong></p>\n" } },
+      output: { example: { html: "<h1 id=\"hi\">Hi</h1>\n<p><strong>bold</strong></p>\n" } },
     },
     handler: (input) => {
       const text = capText(need(input, "markdown"), 100_000, "markdown");
-      return { html: marked.parse(text, { async: false }) };
+      // A short document renders here; a longer one renders in a markdown
+      // worker (./markdown-pool.js), since the renderer's cost can grow with
+      // the square of the input.
+      if (text.length <= MARKDOWN_INLINE_MAX_CHARS) return renderMarkdown(text);
+      return runMarkdown(text);
     },
   },
   {
@@ -1089,7 +1120,7 @@ const textTools = [
       const words = (text.match(new RegExp(`[${CJK}]|[^\\s${CJK}]+`, "gu")) || []).filter((w) => /[\p{L}\p{N}]/u.test(w));
       const cjkChars = (text.match(new RegExp(`[${CJK}]`, "gu")) || []).length;
       const codePoints = [...text].length;
-      const sentences = (text.match(/[.!?]+(\s|$)|[。！？]+/g) || []).length || (words.length ? 1 : 0);
+      const sentences = (countSentenceEnds(text) + (text.match(/[。！？]+/g) || []).length) || (words.length ? 1 : 0);
       const paragraphs = text.split(/\n\s*\n/).filter((p) => p.trim()).length;
       return {
         characters: codePoints,

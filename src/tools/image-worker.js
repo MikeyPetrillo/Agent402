@@ -31,19 +31,24 @@ parentPort.on("message", async (job) => {
       parentPort.postMessage({ id: job.id, result });
       return;
     }
-    const { __binary, contentType } = await runImageOp({
+    const out = await runImageOp({
       op: job.op,
       // Structured clone delivers a Uint8Array view; Jimp and the byte-level
       // header reads both want a real Buffer.
       buffer: Buffer.from(job.buffer.buffer, job.buffer.byteOffset, job.buffer.byteLength),
       maxPixels: job.maxPixels,
       params: job.params,
+      // The job's own deadline, so a decode this hands to a child process
+      // ends inside it.
+      deadlineMs: job.deadlineMs,
     });
-    parentPort.postMessage({ id: job.id, buffer: __binary, contentType });
+    if (out.result !== undefined) { parentPort.postMessage({ id: job.id, result: out.result }); return; } // a JSON answer (op "dominant-color")
+    parentPort.postMessage({ id: job.id, buffer: out.__binary, contentType: out.contentType, width: out.width, height: out.height });
   } catch (e) {
     // statusCode rides back with the message so a 400 stays a 400 on the wire.
     // An error without one is a defect in here, not bad input, and must not be
     // billed as a served call, hence the 500 default.
-    parentPort.postMessage({ id: job.id, error: e.message, statusCode: e.statusCode || 500 });
+    // `threw` names a built-in error thrown with no status (src/caller-input-errors.js).
+    parentPort.postMessage({ id: job.id, error: e.message, statusCode: e.statusCode || 500, ...(e.statusCode ? {} : { threw: e.name }) });
   }
 });

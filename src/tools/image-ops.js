@@ -6,10 +6,21 @@
 // second copy of the resize/convert/thumbnail logic would drift.
 //
 // Nothing here may touch the network or the filesystem: this module is loaded in
-// a worker thread where safeFetch's SSRF guard is not the gate that ran.
+// a worker thread where safeFetch's SSRF guard is not the gate that ran. The
+// one process it starts is its own decoder child (decodeInChild, below).
 // jimp loads with the first decode (./lazy-deps.js), not at boot: on the main
 // thread that keeps its evaluation off the startup path; the worker preloads it.
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { loadJimp } from "./lazy-deps.js";
+import { childEnv } from "./child-env.js";
+import {
+  assertGifHeader, gifFirstFrame, assertPngHeader, assertInflateWithinDeclared,
+  assertJpegHeader, jpegFrameHeaders, assertTiffHeader, tiffSettledView, assertTiffStreams,
+} from "./image-headers.js";
+
+// Re-exported for the other decoders of buyer images (barcode-kit, frame-diff).
+export { gifFirstFrame, assertPngHeader, assertInflateWithinDeclared };
 
 export function bad(message) {
   return Object.assign(new Error(message), { statusCode: 400 });
@@ -45,10 +56,11 @@ export function sniffFormat(buf) {
 }
 
 /** Declared pixel dimensions from the container HEADER, without decoding.
- *  Returns null when the format carries no cheap size field (Jimp then decodes
- *  and the post-decode cap still applies). PNG: IHDR is always the first chunk.
- *  JPEG: the first SOF marker. BMP: the DIB header. GIF: the logical screen
- *  descriptor. All are fixed offsets, so this is a few byte reads. */
+ *  Returns null when the format carries no cheap size field (readImage refuses
+ *  those). PNG: the first chunk's IHDR. JPEG: the first frame header on the
+ *  marker chain. BMP: the DIB header. GIF: the logical screen descriptor.
+ *  TIFF: the first directory. This reports a size; whether the decoder is
+ *  held to it is assertDeclaredWithinPixelCap's job. */
 export function declaredDimensions(buf) {
   try {
     const format = sniffFormat(buf);
@@ -56,7 +68,9 @@ export function declaredDimensions(buf) {
       return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
     }
     if (format === "bmp" && buf.length >= 26) {
-      return { width: Math.abs(buf.readInt32LE(18)), height: Math.abs(buf.readInt32LE(22)) };
+      // The decoder reads the width unsigned and takes a negative height as a
+      // top-down image, so a "negative" width is a width past 2^31 here too.
+      return { width: buf.readUInt32LE(18), height: Math.abs(buf.readInt32LE(22)) };
     }
     if (format === "gif" && buf.length >= 10) {
       return { width: buf.readUInt16LE(6), height: buf.readUInt16LE(8) };
@@ -89,21 +103,10 @@ export function declaredDimensions(buf) {
       if (chunk === "VP8L") { const b = buf.readUInt32LE(21); return { width: (b & 0x3fff) + 1, height: ((b >> 14) & 0x3fff) + 1 }; }
     }
     if (format === "jpeg") {
-      // Walk the marker chain to the first Start-Of-Frame; bounded by length.
-      let i = 2;
-      while (i + 9 < buf.length) {
-        if (buf[i] !== 0xff) { i++; continue; }
-        const marker = buf[i + 1];
-        if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { i += 2; continue; }
-        const len = buf.readUInt16BE(i + 2);
-        // SOF0/1/2/3/5/6/7/9/10/11/13/14/15: every non-differential and
-        // differential frame header carries height then width at +5.
-        if ((marker >= 0xc0 && marker <= 0xcf) && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
-          return { height: buf.readUInt16BE(i + 5), width: buf.readUInt16BE(i + 7) };
-        }
-        if (len < 2) break;
-        i += 2 + len;
-      }
+      // The first Start-Of-Frame on the marker chain (segments skipped by their
+      // length, so an EXIF thumbnail's own frame header is never read).
+      const [frame] = jpegFrameHeaders(buf, 1);
+      if (frame) return { height: frame.height, width: frame.width };
     }
   } catch { /* malformed header, so fall through to the decoder's own error */ }
   return null;
@@ -113,15 +116,27 @@ export function declaredDimensions(buf) {
  *  check throws, so it does not matter which side of the worker boundary the
  *  refusal happens on. Cheap enough to run on the main thread BEFORE a worker is
  *  handed the job, which keeps a hostile small-file/huge-canvas request from
- *  even occupying a pool slot. */
-export function assertDeclaredWithinPixelCap(buf, maxPixels) {
+ *  even occupying a pool slot.
+ *
+ *  The declared size only bounds the decode when the decoder sizes its buffers
+ *  from that same field, so the container's structure is checked against its
+ *  decoder here too (src/tools/image-headers.js). All of it is a linear walk
+ *  of headers. `mainThread` (the pool's call) also holds that walk to a fixed
+ *  budget: past it the file is left for the worker, which runs this whole
+ *  check again before it decodes. */
+export function assertDeclaredWithinPixelCap(buf, maxPixels, { mainThread = false } = {}) {
   const declared = declaredDimensions(buf);
   if (declared && declared.width > 0 && declared.height > 0 && declared.width * declared.height > maxPixels) {
     throw bad(`source image too large (${declared.width}x${declared.height}; max ${maxPixels} pixels)`);
   }
+  const format = sniffFormat(buf);
+  if (format === "gif") assertGifHeader(buf, { mainThread });
+  if (format === "png") assertPngHeader(buf);
+  if (format === "jpeg") assertJpegHeader(buf);
+  if (format === "tiff") assertTiffHeader(buf, maxPixels, { mainThread });
 }
 
-export async function readImage(buf, { maxPixels = MAX_SRC_PIXELS } = {}) {
+export async function readImage(buf, { maxPixels = MAX_SRC_PIXELS, deadlineMs } = {}) {
   // The header check runs first because the post-decode check below arrives too
   // late to protect the thread doing the decoding: Jimp's decode is pure JS and
   // synchronous, so a small file declaring a huge canvas costs seconds of solid
@@ -130,12 +145,67 @@ export async function readImage(buf, { maxPixels = MAX_SRC_PIXELS } = {}) {
   // A container whose size cannot be read from its header is refused: the
   // decoder would otherwise allocate the full canvas before any check runs.
   if (!declaredDimensions(buf)) throw bad("unsupported or unreadable image container (png, jpeg, gif, bmp, webp, tiff with a readable header)");
+  // Where the decoder inflates with no output bound, the same inflate runs
+  // here first, under the declared size.
+  const format = sniffFormat(buf);
+  assertInflateWithinDeclared(buf, format);
+  // A TIFF is decoded from a view in which the image the tools use is the
+  // only directory; its strip data is bounded first.
+  let source = buf, isolated = false;
+  if (format === "tiff") {
+    // The view is what gets checked: it is what the decoder reads.
+    const { view, layout } = tiffSettledView(buf, maxPixels);
+    assertTiffStreams(view, layout, maxPixels);
+    source = view;
+    isolated = Boolean(layout.page?.fax);
+  }
   const { Jimp } = await loadJimp();
   let img;
-  try { img = await Jimp.read(buf); }
-  catch (e) { throw bad(`could not decode image: ${e.message}`); }
+  if (isolated) img = Jimp.fromBitmap(decodeInChild(source, maxPixels, deadlineMs));
+  else {
+    // fromBuffer is what Jimp.read runs for a Buffer; called directly because it
+    // is the form that hands per-format options to the decoder. The JPEG decoder
+    // then enforces the pixel cap itself on whichever frame header it acts on.
+    try { img = await Jimp.fromBuffer(source, { "image/jpeg": { maxResolutionInMP: maxPixels / 1e6 } }); }
+    catch (e) { throw bad(`could not decode image: ${e.message}`); }
+  }
   if (img.width * img.height > maxPixels) throw bad(`source image too large (${img.width}x${img.height})`);
   return img;
+}
+
+// CCITT (fax) TIFF data is decoded in a one-shot child process. That decoder
+// builds each row in an array that grows with the strip data, not with the
+// page width, so no header bounds its memory; the child's heap ceiling does,
+// and reaching it ends the child alone. The child gets the decoder's view of
+// the file on stdin, an allowlisted environment, and a deadline inside the
+// job's own; it answers width, height and RGBA on stdout.
+const IMAGE_CHILD = fileURLToPath(new URL("./image-child.js", import.meta.url));
+// Heap only: the page's own buffers are typed arrays the header already
+// bounds. A 6300x6300 fax page decodes under this with room to spare.
+const CHILD_HEAP_MB = 96;
+const CHILD_DEADLINE_MS = 4000;
+
+/** Exported for the suite, which runs it against a stand-in script to read the
+ *  environment and the deadline the child really gets. */
+export function decodeInChild(view, maxPixels, deadlineMs, { script = IMAGE_CHILD } = {}) {
+  const r = spawnSync(process.execPath, [`--max-old-space-size=${CHILD_HEAP_MB}`, script], {
+    input: view, env: childEnv(), timeout: Math.max(500, (deadlineMs || CHILD_DEADLINE_MS + 750) - 750),
+    killSignal: "SIGKILL", maxBuffer: maxPixels * 4 + 65536, windowsHide: true,
+  });
+  if (r.error?.code === "ETIMEDOUT") throw Object.assign(new Error("image transform timed out (fax data did not decode within its deadline)"), { statusCode: 503 });
+  if (r.status === 0 && r.stdout.length >= 8) {
+    const width = r.stdout.readUInt32LE(0), height = r.stdout.readUInt32LE(4);
+    if (r.stdout.length === 8 + width * height * 4) {
+      // A buffer of its own: fromBitmap reads the whole ArrayBuffer behind it.
+      const data = Buffer.alloc(width * height * 4);
+      r.stdout.copy(data, 0, 8);
+      return { width, height, data };
+    }
+  }
+  if (r.status === 2) throw bad(`could not decode image: ${String(r.stderr || "").slice(0, 200) || "decoder error"}`);
+  if (r.error && r.error.code !== "ENOBUFS") throw Object.assign(new Error(`image decoder process could not start: ${r.error.code || r.error.message}`), { statusCode: 503 });
+  // Ended by its heap ceiling (or wrote more than the page allows).
+  throw bad("tiff fax data does not decode within the memory its page size allows");
 }
 
 export async function toBuffer(img, format, quality) {
@@ -153,8 +223,8 @@ export async function toBuffer(img, format, quality) {
  *  would leave part of the cost back on the event loop. Validation order matches
  *  what the handlers did inline before the move (decode errors surface before
  *  parameter errors), so caller-visible behaviour is unchanged. */
-export async function runImageOp({ op, buffer, maxPixels = FREE_MAX_SRC_PIXELS, params = {} }) {
-  const img = await readImage(buffer, { maxPixels });
+export async function runImageOp({ op, buffer, maxPixels = FREE_MAX_SRC_PIXELS, params = {}, deadlineMs }) {
+  const img = await readImage(buffer, { maxPixels, deadlineMs });
   if (op === "resize") {
     let w = posInt(params.width), h = posInt(params.height);
     if (!w && !h) throw bad("provide width and/or height");
@@ -183,6 +253,55 @@ export async function runImageOp({ op, buffer, maxPixels = FREE_MAX_SRC_PIXELS, 
     const size = Math.min(Math.max(posInt(params.size) || 128, 1), 1024);
     img.cover({ w: size, h: size });
     return toBuffer(img, params.format, params.quality);
+  }
+  if (op === "crop") {
+    const w = posInt(params.width), h = posInt(params.height);
+    const x = Math.max(0, Math.trunc(Number(params.left ?? params.x ?? 0)) || 0);
+    const y = Math.max(0, Math.trunc(Number(params.top ?? params.y ?? 0)) || 0);
+    const rotate = params.rotate === undefined ? 0 : Number(params.rotate);
+    const flip = params.flip === undefined ? "" : String(params.flip).toLowerCase();
+    if (rotate && ![90, 180, 270].includes(rotate)) throw bad("rotate must be 90, 180, or 270");
+    if (flip && !["horizontal", "vertical", "both"].includes(flip)) throw bad('flip must be "horizontal", "vertical", or "both"');
+    if ((w && !h) || (!w && h)) throw bad("provide both width and height for the crop box");
+    if (!w && !h && !rotate && !flip) throw bad("provide a crop box (left, top, width, height) and/or rotate/flip");
+    if (w && h) {
+      if (w > MAX_DIM || h > MAX_DIM) throw bad(`crop box exceeds ${MAX_DIM}px`);
+      if (x + w > img.width || y + h > img.height) {
+        throw bad(`crop box (${x},${y} ${w}x${h}) exceeds image bounds (${img.width}x${img.height})`);
+      }
+      img.crop({ x, y, w, h });
+    }
+    if (rotate) img.rotate(rotate);
+    if (flip) img.flip({ horizontal: flip === "horizontal" || flip === "both", vertical: flip === "vertical" || flip === "both" });
+    const out = await toBuffer(img, params.format, params.quality);
+    return { ...out, width: img.width, height: img.height };
+  }
+  if (op === "dominant-color") {
+    const { width, height } = img;
+    const n = Math.min(Math.max(posInt(params.colors) || 5, 1), 10);
+    // Bound the work: sample from a ≤96px-wide copy (deterministic resize).
+    if (img.width > 96) img.resize({ w: 96 });
+    const data = img.bitmap.data;
+    const buckets = new Map();
+    let sampled = 0;
+    for (let p = 0; p < data.length; p += 4) {
+      if (data[p + 3] < 128) continue; // skip transparent
+      sampled++;
+      const key = ((data[p] >> 4) << 8) | ((data[p + 1] >> 4) << 4) | (data[p + 2] >> 4);
+      let b = buckets.get(key);
+      if (!b) buckets.set(key, (b = { n: 0, r: 0, g: 0, b: 0 }));
+      b.n++; b.r += data[p]; b.g += data[p + 1]; b.b += data[p + 2];
+    }
+    if (!sampled) throw bad("image has no opaque pixels");
+    const colors = [...buckets.entries()]
+      .sort((a, b) => b[1].n - a[1].n || a[0] - b[0])
+      .slice(0, n)
+      .map(([, v]) => {
+        const rgb = [Math.round(v.r / v.n), Math.round(v.g / v.n), Math.round(v.b / v.n)];
+        const hex = "#" + rgb.map((c) => c.toString(16).padStart(2, "0")).join("");
+        return { hex, rgb, ratio: Math.round((v.n / sampled) * 1e4) / 1e4 };
+      });
+    return { result: { width, height, sampled, colors } };
   }
   throw bad(`unknown image operation: ${op}`);
 }

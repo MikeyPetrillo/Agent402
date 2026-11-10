@@ -69,8 +69,11 @@ ok(payerFromRequest(req({ "x-payment": enc(ALGO) })) === null,
   const SIGNER = "0x1111111111111111111111111111111111111111", VICTIM = "0x2222222222222222222222222222222222222222";
   const p2 = (payload) => Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453" }, payload })).toString("base64");
   const permit = { from: SIGNER, permitted: { token: SIGNER, amount: "1" }, spender: SIGNER, nonce: "1", deadline: "1" };
-  ok(payerFromRequest(req({ "payment-signature": p2({ signature: "0x", permit2Authorization: permit, authorization: { from: VICTIM } }) })) === null,
-    "a Permit2 payment naming a different authorization.from has no payer (the forged identity is refused)");
+  // The shared decoder drops that block (src/payment-header.js), so the payer
+  // is the Permit2 signer the facilitator verified, never the typed address.
+  const forged = payerFromRequest(req({ "payment-signature": p2({ signature: "0x", permit2Authorization: permit, authorization: { from: VICTIM } }) }));
+  ok(forged === SIGNER && forged !== VICTIM,
+    `a Permit2 payment naming a different authorization.from is attributed to its Permit2 signer, never the typed address (got ${forged})`);
   ok(payerFromRequest(req({ "payment-signature": p2({ signature: "0x", permit2Authorization: permit }) })) === SIGNER,
     "a Permit2 payment's payer is the Permit2 signer");
   ok(payerFromRequest(req({ "payment-signature": p2({ signature: "0x", permit2Authorization: permit, authorization: { from: SIGNER.toUpperCase().replace("0X", "0x") } }) })) === SIGNER,

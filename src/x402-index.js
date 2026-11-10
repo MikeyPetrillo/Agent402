@@ -35,7 +35,7 @@ import { shared, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.j
 import { createListingsStore, listingsStoreEnabled } from "./index-listings-pg.js";
 import { trackStoreReady, leased, stateDbEnabled, stateQuery, stateDbSchema, records, importOnce, pgJsonTextMayChange, largeRowTimeoutMs, isStatementTimeout, withStateTx } from "./state-db.js";
 import { PARTS_COLLECTION, PARTS_ORPHAN_GRACE_MS, isParted, isPartedHeader, headerHashes, partId, splitEntry, assembleEntry } from "./index-parts.js";
-import { SELLER_TOOL_CAP, capSellerEntry, sellerToolsTotal, toolCapLegend, freshListBase } from "./seller-tool-cap.js";
+import { SELLER_TOOL_CAP, capSellerEntry, sellerToolsTotal, toolCapLegend, freshListBase, isDescribedTool } from "./seller-tool-cap.js";
 import { retryingLoad } from "./store-retry.js";
 
 // The last crawl's probe examples per origin (src/probe-example.js), memory
@@ -988,6 +988,10 @@ export function listingBasisProjection(t) {
  *  the route (exact path, or an OpenAPI template it instantiates, or the same
  *  template), false otherwise. `declaredRoutes` is any list of { route }. */
 export function stampDeclared(tools, declaredRoutes = []) {
+  return runSteps(stampDeclaredSteps(tools, declaredRoutes));
+}
+// The same stamp in steps of FALLBACK_STEP_ROWS rows, for the crawl's lane.
+function* stampDeclaredSteps(tools, declaredRoutes = []) {
   if (!Array.isArray(tools)) return tools;
   const exact = new Set();
   const templates = [];
@@ -998,7 +1002,9 @@ export function stampDeclared(tools, declaredRoutes = []) {
     if (r.includes("{")) templates.push(r);
   }
   const index = templateIndex(templates);
-  for (const t of tools) {
+  for (let i = 0; i < tools.length; i++) {
+    if (i && i % FALLBACK_STEP_ROWS === 0) yield;
+    const t = tools[i];
     if (!t || typeof t.route !== "string") continue;
     const r = pathOf(t.route);
     t.declared = exact.has(r) || !templatesMatching(index, r).next().done;
@@ -2693,9 +2699,56 @@ async function normaliseOpenapiToolsSliced(openapi, originUrl) {
 // is next in line; the work is the same, only its spread over turns changes.
 const crawlLaneQueue = [];
 let crawlLanePumping = false;
-// A bazaar-fallback crawl whose registry and OpenAPI rows pass this count
-// takes a lane turn between its whole-list passes (see crawlSeller).
+// A bazaar-fallback crawl whose registry and OpenAPI rows pass this count runs
+// its whole-list passes in the lane, a slice of CRAWL_SLICE_MS at a time (see
+// crawlSeller); each pass is a generator that yields every FALLBACK_STEP_ROWS rows.
 const FALLBACK_PASS_TURN_ROWS = 2000;
+const FALLBACK_STEP_ROWS = 256;
+// One line per fallback crawl whose whole-list work passed either figure (or
+// whose registry listing was cut to the tool cap before the passes), naming
+// the passes and no seller: see fallbackPassMeter.
+const FALLBACK_PASS_LOG = { totalMs: 200, passMs: 100 };
+/** Test hook: the evidence line's thresholds; returns the earlier pair. */
+export function __setFallbackPassLogForTest({ totalMs, passMs } = {}) {
+  const was = { ...FALLBACK_PASS_LOG };
+  if (Number.isFinite(totalMs)) FALLBACK_PASS_LOG.totalMs = totalMs;
+  if (Number.isFinite(passMs)) FALLBACK_PASS_LOG.passMs = passMs;
+  return was;
+}
+const FALLBACK_PASS_NAMES = ["pick", "copy", "vouch", "stamp", "carry", "quotes"];
+/** Time spent in a fallback crawl's whole-list passes: `add` books time on a
+ *  named pass, `slice` records one uninterrupted stretch (the longest is what
+ *  the loop waited), `line` is the log line or null under the thresholds.
+ *  The line carries a short hash of the origin, never the origin. */
+function fallbackPassMeter() {
+  const ms = Object.fromEntries(FALLBACK_PASS_NAMES.map((n) => [n, 0]));
+  let longest = 0;
+  let stretches = 0;
+  const stretch = (d) => { stretches++; if (d > longest) longest = d; };
+  let largest = 0; // the most rows one pass was handed at once (the pick reads every listed row's description and is not counted)
+  const m = {
+    ms,
+    add(name, d) { ms[name] += d; },
+    slice: stretch,
+    rows(n) { if (n > largest) largest = n; },
+    get largestPass() { return largest; },
+    get stretches() { return stretches; },
+    /** A pass run in this turn: its time is one stretch. */
+    sync(name, gen) { const t0 = performance.now(); const v = runSteps(gen); const d = performance.now() - t0; ms[name] += d; stretch(d); return v; },
+    /** A pass run in the crawl lane: each slice is one stretch. */
+    lane(name, gen) { return runCrawlLaneAsync(gen, CRAWL_SLICE_MS, (d) => { ms[name] += d; stretch(d); }); },
+    line(originUrl, listed, kept, { always = false } = {}) {
+      const total = FALLBACK_PASS_NAMES.reduce((sum, n) => sum + ms[n], 0);
+      if (!always && total <= FALLBACK_PASS_LOG.totalMs && !FALLBACK_PASS_NAMES.some((n) => ms[n] > FALLBACK_PASS_LOG.passMs)) return null;
+      const key = createHash("sha256").update(String(originUrl)).digest("hex").slice(0, 8);
+      return `[x402-index] fallback passes ${listed} rows (kept ${kept}) ${key}: ${FALLBACK_PASS_NAMES.map((n) => `${n}=${Math.round(ms[n])}ms`).join(" ")} total=${Math.round(total)}ms longest=${Math.round(longest)}ms`;
+    },
+  };
+  return m;
+}
+let fallbackPassObserver = null;
+/** Test hook: called with ({ origin, listed, kept, largestPass, stretches, ms }) after each fallback crawl's passes. */
+export function __setFallbackPassObserverForTest(fn) { fallbackPassObserver = typeof fn === "function" ? fn : null; }
 function crawlLaneTurn() {
   return new Promise((resolve) => {
     crawlLaneQueue.push(resolve);
@@ -2717,15 +2770,100 @@ async function parseInCrawlLane(text) {
   await crawlLaneTurn();
   return JSON.parse(text);
 }
-async function runCrawlLaneAsync(gen, sliceMs = CRAWL_SLICE_MS) {
+async function runCrawlLaneAsync(gen, sliceMs = CRAWL_SLICE_MS, onSlice = null) {
   await crawlLaneTurn();
-  let until = performance.now() + sliceMs;
+  let from = performance.now();
+  let until = from + sliceMs;
   let r = gen.next();
   while (!r.done) {
-    if (performance.now() >= until) { await crawlLaneTurn(); until = performance.now() + sliceMs; }
+    const now = performance.now();
+    if (now >= until) {
+      if (onSlice) onSlice(now - from);
+      await crawlLaneTurn();
+      from = performance.now(); until = from + sliceMs;
+    }
     r = gen.next();
   }
+  if (onSlice) onSlice(performance.now() - from);
   return r.value;
+}
+// A registry listing longer than the per-seller tool cap, read down to the
+// rows the index will keep BEFORE the whole-list passes. The cap
+// (capSellerTools, applied in IndexCache.set) keeps the described rows in
+// listing order, then the rest in listing order, of the rows that are left
+// after the passes; no pass changes a description, and with no document to
+// merge every pass treats a row on its own (the copy, the declared stamp, the
+// quote carry-forward, the gone-route drop). So the rows are taken in the
+// cap's order, a step of FALLBACK_STEP_ROWS at a time, each step passed and
+// its survivors kept until the cap is full: the kept rows are the ones the
+// cap would have kept from the whole list, and the 72,000 others are never
+// copied. `fill` can be run again after rows leave the kept list (a live
+// probe drops a row that answered gone); `countRest` counts the listed rows
+// not taken and not marked gone, so the total reads as it did when every row
+// was passed. (A row not taken is counted on its listed verb.)
+function registryRowsUnderCap(rows, originUrl, prev, meter, cap = SELLER_TOOL_CAP) {
+  let order = null; // row indexes in the cap's order
+  let at = 0;       // rows taken so far
+  let learned;      // learnedRowsOf(prev), read once
+  function* fill(kept) {
+    let t0 = performance.now();
+    const lap = (name) => { const now = performance.now(); meter.add(name, now - t0); t0 = now; };
+    if (!order) {
+      order = new Int32Array(rows.length);
+      let n = 0;
+      for (const want of [true, false]) {
+        for (let i = 0; i < rows.length; i++) {
+          if (i && i % (FALLBACK_STEP_ROWS * 8) === 0) { lap("pick"); yield; t0 = performance.now(); }
+          if (isDescribedTool(rows[i]) === want) order[n++] = i;
+        }
+      }
+      learned = learnedRowsOf(prev);
+      lap("pick");
+    }
+    while (at < order.length && kept.length < cap) {
+      const take = Math.min(FALLBACK_STEP_ROWS, cap - kept.length, order.length - at);
+      const step = new Array(take);
+      for (let i = 0; i < take; i++) step[i] = withoutRegistryContracts(rows[order[at + i]]);
+      at += take;
+      meter.rows(take);
+      lap("copy");
+      runSteps(stampDeclaredSteps(step, []));
+      lap("stamp");
+      if (learned) for (const t of step) carryLearnedOnto(t, learned);
+      lap("carry");
+      dropGoneRoutes(step, originUrl);
+      for (const t of step) kept.push(t);
+      lap("pick");
+      yield; t0 = performance.now();
+    }
+    return kept;
+  }
+  function* countRest() {
+    let t0 = performance.now();
+    if (!order) return 0;
+    let n = order.length - at;
+    if (goneRoutes.size) {
+      const now = Date.now();
+      for (let i = at; i < order.length; i++) {
+        if ((i - at) % (FALLBACK_STEP_ROWS * 8) === 0 && i > at) { meter.add("pick", performance.now() - t0); yield; t0 = performance.now(); }
+        const t = rows[order[i]];
+        if (!t || typeof t.route !== "string") continue;
+        const m = goneMark(originUrl, t.method, t.route, now);
+        if (m && (m.kind === "410" || m.kind === "miss")) n--;
+      }
+    }
+    meter.add("pick", performance.now() - t0);
+    return n;
+  }
+  return { fill, countRest };
+}
+function* filterSteps(list, keep) {
+  const out = [];
+  for (let i = 0; i < list.length; i++) {
+    if (i && i % FALLBACK_STEP_ROWS === 0) yield;
+    if (keep(list[i])) out.push(list[i]);
+  }
+  return out;
 }
 // One step per operation; the document is read only, so a yield between two
 // operations cannot change a row.
@@ -3537,10 +3675,18 @@ const NON_PRODUCT_SEGMENTS = new Set([
 // /admin/gasto-hoy and /admin/saldo in the buyable index as payable:unknown.
 const OPERATOR_PATH_SEGMENTS = new Set(["admin", "internal", "debug"]);
 export function dropUnvouchedNonProductRoutes(tools = [], vouchedRoutes = []) {
-  const vouched = new Set(
-    (vouchedRoutes || []).map((r) => String(r || "").split("?")[0].replace(/\/$/, ""))
-  );
-  return tools.filter((t) => {
+  return runSteps(dropUnvouchedNonProductRoutesSteps(tools, vouchedRoutes));
+}
+// The same filter in steps of FALLBACK_STEP_ROWS rows, for the crawl's lane.
+// `vouchedRoutes` may be a list of routes or of rows carrying one.
+function* dropUnvouchedNonProductRoutesSteps(tools = [], vouchedRoutes = [], routeOf = null) {
+  const vouched = new Set();
+  const list = vouchedRoutes || [];
+  for (let i = 0; i < list.length; i++) {
+    if (i && i % FALLBACK_STEP_ROWS === 0) yield;
+    vouched.add(String((routeOf ? routeOf(list[i]) : list[i]) || "").split("?")[0].replace(/\/$/, ""));
+  }
+  const keep = (t) => {
     const path = String(t?.route || "").split("?")[0].replace(/\/$/, "");
     const segs = path.split("/").filter(Boolean).map((s) => s.toLowerCase());
     const last = segs[segs.length - 1] || "";
@@ -3550,7 +3696,13 @@ export function dropUnvouchedNonProductRoutes(tools = [], vouchedRoutes = []) {
     if (t.price) return true;                // the seller prices it
     if (t.paid === true) return true;        // the seller annotates it as paid
     return false;
-  });
+  };
+  const out = [];
+  for (let i = 0; i < tools.length; i++) {
+    if (i && i % FALLBACK_STEP_ROWS === 0) yield;
+    if (keep(tools[i])) out.push(tools[i]);
+  }
+  return out;
 }
 
 // Fold a manifest catalogue into the rows we already have, WITHOUT inflating
@@ -4061,8 +4213,18 @@ function* templatesMatching(index, concreteRoute) {
 // seller application-contract authority. Build a fresh plain object from own
 // enumerable data fields so contract-shaped own accessors are not invoked and
 // inherited/prototype-carried fields cannot become own published evidence.
+//
+// A row with neither contract key and no symbol key (every row the registry
+// fold builds for an unscoped seller) is copied in one step, so the copy takes
+// its source's shape. Built key by key, 77,000 copies could each end with a
+// shape of their own (measured: about 450 ms for the list, and every later
+// read of those rows slower, against 8 ms copied whole). The key-by-key form
+// stays for the rows that need it: it skips a contract key without reading it
+// and leaves symbol keys behind, as it always has.
+const ownKey = Object.prototype.hasOwnProperty;
 function withoutRegistryContracts(row) {
   if (!row || typeof row !== "object") return row;
+  if (!ownKey.call(row, "requestContract") && !ownKey.call(row, "responseContract") && Object.getOwnPropertySymbols(row).length === 0) return { ...row };
   const clean = {};
   for (const key of Object.keys(row)) {
     if (key === "requestContract" || key === "responseContract") continue;
@@ -4088,7 +4250,20 @@ function ownContractTuple(row, key) {
 }
 
 export function mergeOpenapiIntoBazaar(openapiTools = [], bazaarTools = [], { allRoutes = [] } = {}) {
-  if (!openapiTools.length && !allRoutes.length) return bazaarTools.map(withoutRegistryContracts);
+  return runSteps(mergeOpenapiIntoBazaarSteps(openapiTools, bazaarTools, { allRoutes }));
+}
+// The same merge, one step per FALLBACK_STEP_ROWS registry rows, for the
+// crawl's lane (see crawlSeller). The rows are read only and every output row
+// is new, so a turn taken between two steps cannot change a row.
+function* mergeOpenapiIntoBazaarSteps(openapiTools = [], bazaarTools = [], { allRoutes = [] } = {}) {
+  if (!openapiTools.length && !allRoutes.length) {
+    const copies = new Array(bazaarTools.length);
+    for (let i = 0; i < bazaarTools.length; i++) {
+      if (i && i % FALLBACK_STEP_ROWS === 0) yield;
+      copies[i] = withoutRegistryContracts(bazaarTools[i]);
+    }
+    return copies;
+  }
   if (!bazaarTools.length) return openapiTools.slice();
   const exact = new Map();
   const byRoute = new Map();
@@ -4198,7 +4373,7 @@ export function mergeOpenapiIntoBazaar(openapiTools = [], bazaarTools = [], { al
     })(),
   });
   };
-  const merged = bazaarTools.map((b) => {
+  const mergeRow = (b) => {
     // Only an inferred Bazaar verb may fall back to a route-only match. An
     // explicit verb must match exactly: GET and POST on the same path can be
     // different tools with different descriptions and prices.
@@ -4232,7 +4407,13 @@ export function mergeOpenapiIntoBazaar(openapiTools = [], bazaarTools = [], { al
       return row;
     }
     return withoutRegistryContracts(b);
-  }).filter(Boolean);
+  };
+  const merged = [];
+  for (let i = 0; i < bazaarTools.length; i++) {
+    if (i && i % FALLBACK_STEP_ROWS === 0) yield;
+    const row = mergeRow(bazaarTools[i]);
+    if (row) merged.push(row);
+  }
   for (const o of openapiTools) if (!used.has(o)) merged.push(o);
   return merged;
 }
@@ -4445,6 +4626,24 @@ function stampIsOwn(r) {
  * method-qualified key: without it the key would miss the row it just fixed.
  */
 export function carryForwardLearnedQuotes(tools, prev) {
+  return runSteps(carryForwardLearnedQuotesSteps(tools, prev));
+}
+// The same carry in steps of FALLBACK_STEP_ROWS rows, for the crawl's lane.
+// Each row is carried from the remembered rows alone, never from another
+// current row, so a turn between two steps (or a list carried in pieces)
+// gives every row what one pass over the whole list would.
+function* carryForwardLearnedQuotesSteps(tools, prev) {
+  const learned = learnedRowsOf(prev);
+  if (!learned) return tools;
+  for (let i = 0; i < tools.length; i++) {
+    if (i && i % FALLBACK_STEP_ROWS === 0) yield;
+    carryLearnedOnto(tools[i], learned);
+  }
+  return tools;
+}
+const learnedQuote = (r) => r?.quoteSource === "live-402" || r?.quoteSource === "live-200";
+/** The remembered rows of `prev` a carry reads: { exact, byRoute }, or null when it holds none. */
+function learnedRowsOf(prev) {
   // Keyed by METHOD + route, with a route-only fallback for the price and
   // networks. Until 2026-09-02 the map was keyed by route alone and the
   // remembered row's VERB was stamped onto every current row on that route,
@@ -4472,7 +4671,6 @@ export function carryForwardLearnedQuotes(tools, prev) {
   // only when its stamp names its own verb (stampIsOwn): a stamp written before
   // the verb was recorded may be another verb's read, and carrying it would
   // keep that verb's chains and Base payTo on this row for good.
-  const learnedQuote = (r) => r?.quoteSource === "live-402" || r?.quoteSource === "live-200";
   const verifiedRead = (r) => stampIsOwn(r) && Array.isArray(r?.networks) && r.networks.length > 0;
   const learnedExact = new Map();
   const learnedByRoute = new Map();
@@ -4488,11 +4686,14 @@ export function carryForwardLearnedQuotes(tools, prev) {
     const heldRoute = learnedByRoute.get(t.route);
     if (!heldRoute || (!learnedQuote(heldRoute) && learnedQuote(t))) learnedByRoute.set(t.route, t);
   }
-  if (!learnedExact.size) return tools;
-  for (const t of tools) {
+  return learnedExact.size ? { exact: learnedExact, byRoute: learnedByRoute } : null;
+}
+/** Carries what `learned` (learnedRowsOf) remembers onto one current row, in place. */
+function carryLearnedOnto(t, { exact: learnedExact, byRoute: learnedByRoute }) {
+  {
     const exact = learnedExact.get(`${String(t.method || "GET").toUpperCase()} ${t.route}`);
     const hit = exact || learnedByRoute.get(t.route);
-    if (!hit) continue;
+    if (!hit) return;
     const fromQuote = learnedQuote(hit);
     // A route-level hit may change a current row's verb in exactly two cases:
     // the row INFERRED its verb (named none), or the hit is a recorded
@@ -4505,7 +4706,7 @@ export function carryForwardLearnedQuotes(tools, prev) {
     // nothing to it, and a learned quote carries it only the route-level price
     // and, onto a row with no chains of its own, the chains (see below).
     const ownRead = Boolean(exact) || correctsVerb;
-    if (!fromQuote && !ownRead) continue;
+    if (!fromQuote && !ownRead) return;
     // ...and the hit's chains, stamp, payTo and domain are this row's own only
     // when its stamp was earned by its own verb (stampIsOwn). A verified read
     // is admitted only on that condition; a learned quote may still carry a
@@ -4537,7 +4738,7 @@ export function carryForwardLearnedQuotes(tools, prev) {
         t.paid = false;
         t.quoteSource = "live-200"; t.freeObservedAt = hit.freeObservedAt; t.quoteObservedAt = hit.quoteObservedAt;
       }
-      continue;
+      return;
     }
     // A carried-forward quote FILLS A GAP; it never overrides what this crawl
     // just read from the origin. `originDeclaredPrice` is set by the OpenAPI
@@ -4656,7 +4857,6 @@ export function carryForwardLearnedQuotes(tools, prev) {
     // verified read never carried a learned price at all.
     if (fromQuote && !originPricedThisCrawl) t.quoteSource = "live-402";
   }
-  return tools;
 }
 
 /** Does the amount we hold disagree materially with what the origin declared
@@ -4849,14 +5049,14 @@ export function adoptLivePrice(row, livePrice, originUrl = "") {
   delete row.quoteCarriedForward;
 }
 
-export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false, maxProbes = null, onProbed = null, deadlineAt = 0, redirectedTo = cache.get(originUrl)?.redirectedTo ?? null, probeExamples = null } = {}) {
+export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false, maxProbes = null, onProbed = null, deadlineAt = 0, redirectedTo = cache.get(originUrl)?.redirectedTo ?? null, probeExamples = null, candidatePass = null } = {}) {
   // Requests go to the origin the manifest was redirected to, when the crawl
   // recorded one; every key, mark and log line below stays on the stored key.
   const probeOrigin = probeOriginOf(originUrl, redirectedTo);
   if (!Array.isArray(tools) || !tools.length) return tools;
   dropGoneRoutes(tools, originUrl);
   if (!tools.length) return tools;
-  const candidates = tools.filter(
+  const isCandidate =
     (t) => t
       && typeof t.route === "string" && t.route.startsWith("/")
       && t.seller !== LOCAL_SELLER                      // never probe ourselves
@@ -4901,8 +5101,11 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
       // automatic crawl; an explicit re-registration still re-asks it.
       && (ignoreBudget || !isObservedFree(t))
       && probeMethodsFor(t).length                       // never PUT/PATCH/DELETE
-      && probeDue(originUrl, `quote:${t.route}`),
-  );
+      && probeDue(originUrl, `quote:${t.route}`);
+  // The registry fallback hands its pass runner in (`candidatePass`), so a
+  // long list is picked over in the crawl lane; every other caller filters here.
+  const picked = candidatePass ? candidatePass(filterSteps(tools, isCandidate)) : tools.filter(isCandidate);
+  const candidates = picked && typeof picked.then === "function" ? await picked : picked;
   // NEVER-ATTEMPTED rows first. The first rotation attempt indexed a window
   // into a list that SHRINKS as rows price, so some rows landed in skipped
   // windows on every pass (one seller's stock routes, three passes running,
@@ -6041,31 +6244,65 @@ async function crawlSeller(originUrl, { deadlineAt = 0, forcePaywall = false } =
         noteFallback("/llms.txt", e);
       }
     }
-    // Each pass below walks every registry row, and the registry is read
+    // Each pass below walks every row it is given, and the registry is read
     // before the per-seller tool cap (one seller lists 77k rows): run back to
-    // back they held the loop ~300 ms locally. A large list takes one crawl
-    // lane turn between passes; the passes, their inputs and order are as before.
-    const passTurn = bazaarTools.length + openapiTools.length > FALLBACK_PASS_TURN_ROWS ? crawlLaneTurn : null;
-    const merged = mergeOpenapiIntoBazaar(openapiTools, bazaarTools, {
-      allRoutes: openapi ? openapiAllOperationRoutes(openapi, originUrl) : [],
-    });
-    if (passTurn) await passTurn();
-    const tools = dropUnvouchedNonProductRoutes(merged, bazaarTools.map((t) => t.route));
-    if (passTurn) await passTurn();
-    if (tools.length) {
-      stampDeclared(tools, [...openapiTools, ...(openapi ? openapiAllOperationRoutes(openapi, originUrl) : [])]);
-      if (passTurn) await passTurn();
-      // Same enrichment as the manifest path. A seller discovered through the
-      // FALLBACK surfaces is even less likely to have published a price, so
-      // skipping it here would leave the worst-served sellers unpriced.
-      carryForwardLearnedQuotes(tools, prev);
-      if (passTurn) await passTurn();
+    // back over the whole listing they held the loop for 0.5 to 1.5 s. Two
+    // things bound that. A registry-only listing past the cap is cut to the
+    // rows the cap keeps BEFORE the passes (registryRowsUnderCap), with the
+    // listed count carried to `toolsTotal`. And any list past
+    // FALLBACK_PASS_TURN_ROWS runs each pass in the crawl lane, a slice at a
+    // time; the passes, their inputs and order are as before. A small list
+    // runs them in this turn.
+    const allRoutes = openapi ? openapiAllOperationRoutes(openapi, originUrl) : [];
+    const listed = bazaarTools.length + openapiTools.length;
+    const laned = listed > FALLBACK_PASS_TURN_ROWS;
+    const passTurn = laned ? crawlLaneTurn : null;
+    const meter = fallbackPassMeter();
+    // With no document to merge, the merge is a copy of each registry row and
+    // every registry route vouches for itself, so nothing else decides a row.
+    const underCap = !openapiTools.length && !allRoutes.length && bazaarTools.length > SELLER_TOOL_CAP
+      ? registryRowsUnderCap(bazaarTools, originUrl, prev, meter)
+      : null;
+    let tools;
+    if (underCap) {
+      tools = await runCrawlLaneAsync(underCap.fill([]), CRAWL_SLICE_MS, meter.slice);
+    } else {
+      meter.rows(listed);
+      const mergeSteps = mergeOpenapiIntoBazaarSteps(openapiTools, bazaarTools, { allRoutes });
+      const merged = laned ? await meter.lane("copy", mergeSteps) : meter.sync("copy", mergeSteps);
+      const vouchSteps = dropUnvouchedNonProductRoutesSteps(merged, bazaarTools, (t) => t.route);
+      tools = laned ? await meter.lane("vouch", vouchSteps) : meter.sync("vouch", vouchSteps);
+    }
+    if (underCap || tools.length) {
+      if (!underCap) {
+        const stampSteps = stampDeclaredSteps(tools, [...openapiTools, ...allRoutes]);
+        if (laned) await meter.lane("stamp", stampSteps); else meter.sync("stamp", stampSteps);
+        // Same enrichment as the manifest path. A seller discovered through the
+        // FALLBACK surfaces is even less likely to have published a price, so
+        // skipping it here would leave the worst-served sellers unpriced.
+        const carrySteps = carryForwardLearnedQuotesSteps(tools, prev);
+        if (laned) await meter.lane("carry", carrySteps); else meter.sync("carry", carrySteps);
+      }
       // Crawl-local, as on the manifest path: the probe body only.
       const probeExamples = openapi ? openapiProbeExamples(openapi, originUrl, new Map()) : null;
       // In memory only, for a re-price; this branch's reads are unconditional.
       probeExampleMemo.set(originUrl, "manifest", null);
       probeExampleMemo.set(originUrl, "openapi", probeExamples);
-      await enrichLiveQuotes(tools, originUrl, { deadlineAt, redirectedTo: prev?.redirectedTo ?? null, probeExamples });
+      await enrichLiveQuotes(tools, originUrl, { deadlineAt, redirectedTo: prev?.redirectedTo ?? null, probeExamples,
+        candidatePass: (gen) => { meter.rows(tools.length); return laned ? meter.lane("quotes", gen) : meter.sync("quotes", gen); } });
+      // A cut listing: rows a live probe just dropped are replaced from the
+      // rows not yet taken, and the total is the kept rows plus the listed
+      // rows still standing behind them.
+      let listedTotal = 0;
+      if (underCap) {
+        if (tools.length < SELLER_TOOL_CAP) await runCrawlLaneAsync(underCap.fill(tools), CRAWL_SLICE_MS, meter.slice);
+        listedTotal = tools.length + await runCrawlLaneAsync(underCap.countRest(), CRAWL_SLICE_MS, meter.slice);
+      }
+      {
+        const line = meter.line(originUrl, listed, tools.length, { always: Boolean(underCap) });
+        if (line) console.log(line);
+        if (fallbackPassObserver) { try { fallbackPassObserver({ origin: originUrl, listed, kept: tools.length, largestPass: meter.largestPass, stretches: meter.stretches, ms: { ...meter.ms } }); } catch { /* a test's reader */ } }
+      }
       if (passTurn) await passTurn();
       // A real (non-synthesized) manifest from a past crawl is kept; a stale
       // synthesized one is rebuilt so a newly appeared openapi title wins.
@@ -6082,6 +6319,10 @@ async function crawlSeller(originUrl, { deadlineAt = 0, forcePaywall = false } =
         manifest,
         openapiSummary: openapi ? { paths: Object.keys(openapi.paths || {}).length } : prev?.openapiSummary ?? null,
         tools,
+        // A listing cut before the passes carries the count it listed; the
+        // cap in IndexCache.set keeps such an entry as it is (and reads the
+        // total itself for a list that reaches it whole).
+        ...(listedTotal > tools.length ? { toolsTotal: listedTotal, toolsCapped: true } : {}),
         fetchedAt: Date.now(),
         error: null,
         source: openapiTools.length ? "openapi-fallback" : "bazaar-fallback",
@@ -6446,12 +6687,39 @@ const CONTROL_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g;
 // "Array<string>") stays as written.
 const ACTIVE_ELEMENTS = "script|style|iframe|frame|frameset|object|embed|applet|svg|math|form|img|image|video|audio|template|noscript|textarea|input|button|select|marquee|meta|base|portal";
 const HTML_TAG = new RegExp(`<(?:/?(?:${ACTIVE_ELEMENTS})(?:[\\s/][^<>]*)?|[a-zA-Z][a-zA-Z0-9-]*[\\s/]+[a-zA-Z_:][\\w:.-]*\\s*=[^<>]*)>`, "gi");
+/** Markdown links and images removed in one pass over the text. An image
+ *  ("![label](target)") is dropped whole; a link ("[label](target)") keeps its
+ *  label. A label runs from the first opening bracket since the last closing
+ *  bracket or line break; a target ends at the first ")" on the same line.
+ *  The positions of the next ")" and line break are remembered between
+ *  candidates, so the cost is linear in the text however many brackets it
+ *  holds (a pattern that rescans from each bracket is quadratic on seller
+ *  text made of brackets). */
+function stripMarkdownTargets(s, images) {
+  if (s.indexOf("](") < 0) return s;
+  let out = "", last = 0, open = -1, closeAt = -2, breakAt = -2;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s.charCodeAt(i);
+    if (ch === 10) { open = -1; continue; }
+    if (ch === 91) { if (open < 0 && (!images || (i > last && s.charCodeAt(i - 1) === 33))) open = i; continue; }
+    if (ch !== 93) continue;
+    const start = open;
+    open = -1;
+    if (start < 0 || s.charCodeAt(i + 1) !== 40) continue;
+    const from = i + 2;
+    if (closeAt !== -1 && closeAt < from) closeAt = s.indexOf(")", from);
+    if (closeAt === -1) break; // no target can close from here on
+    if (breakAt !== -1 && breakAt < from) breakAt = s.indexOf("\n", from);
+    if (breakAt !== -1 && breakAt < closeAt) continue;
+    out += images ? s.slice(last, start - 1) : s.slice(last, start) + s.slice(start + 1, i);
+    last = closeAt + 1;
+    i = closeAt;
+  }
+  return last ? out + s.slice(last) : s;
+}
 function stripListingMarkup(s) {
   if (!/[<[]/.test(s)) return s;
-  return s
-    .replace(/<!--[\s\S]*?(?:-->|$)/g, "")
-    .replace(/!\[[^\]\n]*\]\([^)\n]*\)/g, "")
-    .replace(/\[([^\]\n]*)\]\([^)\n]*\)/g, "$1")
+  return stripMarkdownTargets(stripMarkdownTargets(s.replace(/<!--[\s\S]*?(?:-->|$)/g, ""), true), false)
     .replace(/<((?:https?|mailto):[^<>\s]*)>/gi, "$1")
     .replace(HTML_TAG, "")
     .replace(/[ \t]{2,}/g, " ")

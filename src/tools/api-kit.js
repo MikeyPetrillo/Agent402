@@ -1036,7 +1036,7 @@ export const API_TOOLS = [
   {
     route: "POST /api/openapi-resolve-refs", name: "OpenAPI $ref resolver", slug: "openapi-resolve-refs", category: "conversion", price: "$0.001",
     description:
-      "Inline every local `$ref` in an OpenAPI 3.x or Swagger 2.x document so downstream tools see a self-contained spec. Resolves `#/components/...` (OpenAPI) and `#/definitions/...` (Swagger) JSON-pointer refs anywhere in the document, including inside components themselves. Per-branch cycle detection: if A→B→A, the second A is left as a `$ref` and recorded under `circular`. External refs (http://, file://, ./other.yaml) are never fetched - they're reported under `external` and left as-is. Sibling keys of `$ref` (e.g. a `description` next to a `$ref`) are dropped to match JSON Schema Draft 7 / OpenAPI 3.0 semantics. Returns the dereffed spec plus `resolved` (count inlined) and arrays of any refs that couldn't be inlined. Pure CPU - deterministic, no network.",
+      "Inline every local `$ref` in an OpenAPI 3.x or Swagger 2.x document so downstream tools see a self-contained spec. Resolves `#/components/...` (OpenAPI) and `#/definitions/...` (Swagger) JSON-pointer refs anywhere in the document, including inside components themselves. Per-branch cycle detection: if A→B→A, the second A is left as a `$ref` and recorded under `circular`. External refs (http://, file://, ./other.yaml) are never fetched - they're reported under `external` and left as-is. Sibling keys of `$ref` (e.g. a `description` next to a `$ref`) are dropped to match JSON Schema Draft 7 / OpenAPI 3.0 semantics. Returns the dereffed spec plus `resolved` (count inlined) and arrays of any refs that couldn't be inlined. A resolved document over 16 MB is refused with a 413; send fewer paths or schemas per call to resolve a larger spec in parts. Pure CPU - deterministic, no network.",
     tags: ["openapi", "swagger", "ref", "dereference", "resolve", "api"],
     discovery: {
       bodyType: "json",
@@ -1089,14 +1089,14 @@ export const API_TOOLS = [
         },
       },
     },
-    handler: (i) => {
+    handler: async (i) => {
       if (!("spec" in i)) throw bad('Missing "spec"');
       const spec = parseMaybeJson(i.spec, "spec");
       if (!spec || typeof spec !== "object" || Array.isArray(spec)) {
         throw bad('"spec" must be an OpenAPI document');
       }
-      const report = { resolved: 0, circular: [], unresolved: [], external: [] };
-      const resolved = deepResolveRefs(spec, spec, new Set(), report);
+      const report = newResolveReport();
+      const resolved = await deepResolveRefs(spec, spec, new Set(), report);
       return { spec: resolved, resolved: report.resolved, circular: report.circular, unresolved: report.unresolved, external: report.external };
     },
   },
@@ -1681,38 +1681,108 @@ function jsonPointerLookup(root, ref) {
 // Sibling keys of `$ref` are dropped to match JSON Schema Draft 7 / OpenAPI
 // 3.0 semantics. Callers needing OpenAPI 3.1 merge behavior should pre-merge
 // upstream — this walker is a "replace, not extend" implementation by design.
-function deepResolveRefs(node, root, resolvingPath, report) {
-  if (Array.isArray(node)) {
-    return node.map((n) => deepResolveRefs(n, root, resolvingPath, report));
+//
+// Work and output are both bounded. A target whose resolution met no cycle is
+// resolved once and reused (a schema that reaches no cycle under one path
+// reaches none under any other, so the value does not depend on the path);
+// its counts are replayed on every reuse, so the report reads the same as a
+// full walk. Every value placed in the output, reused or not, is charged to
+// one size budget shared by the whole call, and the walk stops with a 413
+// once the resolved document would pass RESOLVE_REFS_MAX_BYTES: the largest
+// answer the serving thread writes out in about a tenth of a second. A walk
+// that cannot reuse (targets inside a cycle) hands the event loop back every
+// few milliseconds, so the walk itself never holds it.
+export const RESOLVE_REFS_MAX_BYTES = 16_000_000;
+const RESOLVE_SLICE_MS = 4;
+
+function resolveRefsTooLarge() {
+  const err = new Error(`The resolved document is over the ${RESOLVE_REFS_MAX_BYTES / 1_000_000} MB cap; send fewer paths or schemas per call and resolve the spec in parts`);
+  err.statusCode = 413;
+  return err;
+}
+
+function newResolveReport(budget) {
+  return { resolved: 0, circular: [], unresolved: [], external: [], budget: budget || { bytes: 0, steps: 0, sliceStart: performance.now() }, memo: new Map() };
+}
+
+// Approximate serialized size of one output value: a floor on its JSON length.
+function chargeResolved(report, bytes) {
+  report.budget.bytes += bytes;
+  if (report.budget.bytes > RESOLVE_REFS_MAX_BYTES) throw resolveRefsTooLarge();
+}
+
+function mergeRefList(into, from) {
+  for (const r of from) if (!into.includes(r)) into.push(r);
+}
+
+const isNode = (v) => v !== null && typeof v === "object";
+
+async function deepResolveRefs(node, root, resolvingPath, report) {
+  if (!isNode(node)) {
+    chargeResolved(report, typeof node === "string" ? node.length + 2 : 4);
+    return node;
   }
-  if (node && typeof node === "object") {
-    if (typeof node.$ref === "string") {
-      const ref = node.$ref;
-      if (!ref.startsWith("#/")) {
-        if (!report.external.includes(ref)) report.external.push(ref);
-        return node;
-      }
-      if (resolvingPath.has(ref)) {
-        if (!report.circular.includes(ref)) report.circular.push(ref);
-        return node;
-      }
-      const target = jsonPointerLookup(root, ref);
-      if (target === undefined) {
-        if (!report.unresolved.includes(ref)) report.unresolved.push(ref);
-        return node;
-      }
-      report.resolved++;
-      const nextPath = new Set(resolvingPath);
-      nextPath.add(ref);
-      return deepResolveRefs(target, root, nextPath, report);
-    }
-    const out = {};
-    for (const [k, v] of Object.entries(node)) {
-      out[k] = deepResolveRefs(v, root, resolvingPath, report);
-    }
+  // The clock is read once per 256 nodes; a slice that has run its time ends here.
+  const budget = report.budget;
+  if ((++budget.steps & 255) === 0 && performance.now() - budget.sliceStart > RESOLVE_SLICE_MS) {
+    await new Promise((r) => setImmediate(r));
+    budget.sliceStart = performance.now();
+  }
+  if (Array.isArray(node)) {
+    chargeResolved(report, 2 + node.length);
+    const out = new Array(node.length);
+    for (let i = 0; i < node.length; i++) out[i] = isNode(node[i]) ? await deepResolveRefs(node[i], root, resolvingPath, report) : (chargeResolved(report, typeof node[i] === "string" ? node[i].length + 2 : 4), node[i]);
     return out;
   }
-  return node;
+  if (typeof node.$ref === "string") {
+    const ref = node.$ref;
+    if (!ref.startsWith("#/")) {
+      if (!report.external.includes(ref)) report.external.push(ref);
+      chargeResolved(report, ref.length + 11);
+      return node;
+    }
+    if (resolvingPath.has(ref)) {
+      if (!report.circular.includes(ref)) report.circular.push(ref);
+      chargeResolved(report, ref.length + 11);
+      return node;
+    }
+    const target = jsonPointerLookup(root, ref);
+    if (target === undefined) {
+      if (!report.unresolved.includes(ref)) report.unresolved.push(ref);
+      chargeResolved(report, ref.length + 11);
+      return node;
+    }
+    const seen = report.memo.get(ref);
+    if (seen) {
+      chargeResolved(report, seen.bytes);
+      report.resolved += 1 + seen.resolved;
+      mergeRefList(report.unresolved, seen.unresolved);
+      mergeRefList(report.external, seen.external);
+      return seen.value;
+    }
+    const sub = newResolveReport(report.budget);
+    sub.memo = report.memo;
+    const before = report.budget.bytes;
+    const nextPath = new Set(resolvingPath);
+    nextPath.add(ref);
+    const value = await deepResolveRefs(target, root, nextPath, sub);
+    report.resolved += 1 + sub.resolved;
+    mergeRefList(report.circular, sub.circular);
+    mergeRefList(report.unresolved, sub.unresolved);
+    mergeRefList(report.external, sub.external);
+    if (!sub.circular.length) {
+      report.memo.set(ref, { value, bytes: report.budget.bytes - before, resolved: sub.resolved, unresolved: sub.unresolved, external: sub.external });
+    }
+    return value;
+  }
+  const out = {};
+  const entries = Object.entries(node);
+  chargeResolved(report, 2 + entries.length);
+  for (const [k, v] of entries) {
+    chargeResolved(report, k.length + 3);
+    out[k] = isNode(v) ? await deepResolveRefs(v, root, resolvingPath, report) : (chargeResolved(report, typeof v === "string" ? v.length + 2 : 4), v);
+  }
+  return out;
 }
 
 // ---- openapi-security-summary helpers ----

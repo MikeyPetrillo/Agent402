@@ -790,6 +790,7 @@ import { payX402, chainRefusalHolds, pickPayableAccept, avmBuyerConfigured, avmB
 import { readTextCapped } from "./capped-body.js";
 import { svmBuyerConfigured, svmBuyerStatus, SOLANA_NETWORK_LABELS } from "./solana-buyer.js";
 import { payTempo, tempoBuyerConfigured, tempoBuyerStatus, tempoRpc } from "./tempo-buyer.js";
+import { withCallerInputErrors, readableAsText } from "./caller-input-errors.js";
 import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY, verifyHeartbeatToken, PROBE_POW_SLUG, powReplayFlush } from "./pow.js";
 import { createLimiter as createRateLimiter, LIMITS_LABEL as POW_LIMITS_LABEL, limiterKey } from "./rate-limit.js";
 import { classifyWishes, wishClassifyEnabled } from "./wish-classify.js";
@@ -2424,6 +2425,11 @@ for (const tool of buildFlightTools({
 // fully-assembled catalog, so the paywall offers EVM rails only for these
 // routes. Every other tool is untouched and keeps all configured chains.
 for (const def of Object.values(CATALOG)) {
+  // A proof-of-work tool answers 400, with the field named, when its input
+  // holds a value that cannot be coerced (src/caller-input-errors.js); any
+  // other bare error stays a 500. Wrapped here, over the assembled catalog,
+  // so the HTTP route, the connector and the skill packs share it.
+  if (isComputePayable(def) && typeof def.handler === "function") def.handler = withCallerInputErrors(def.handler);
   if (isIdentityBoundRoute(def)) def.identityBound = true;
   // Long-running composites settle AFTER a 2-4 min handler: EVM exact only
   // (see acceptsForItem) and no Tempo challenge (see mpp-tempo).
@@ -3058,6 +3064,7 @@ const alertPage = (title, body) => ledgerShell({ title: `${title} - Agent402`, d
 app.post("/api/alerts", express.json({ limit: "4kb" }), async (req, res) => {
   if (alertsSignupLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many signups from this address. Try again in a few minutes." });
   const b = req.body || {};
+  for (const k of ["email", "kind", "target", "source"]) if (b[k] !== null && typeof b[k] === "object") return res.status(400).json({ error: `"${k}" must be a string` });
   if (typeof b.website === "string" && b.website) return res.json({ ok: true, status: "pending" }); // honeypot: bots see success, nothing is stored
   const emailKey = createHash("sha256").update(String(b.email || "").trim().toLowerCase()).digest("hex").slice(0, 32);
   if (alertsEmailLimiter.check(`e:${emailKey}`).limited) return res.json({ ok: true, status: "pending" }); // same shape: never confirms whether an address is known
@@ -7567,7 +7574,7 @@ const withRouteAnswerNote = (req, res, source) => {
 };
 app.get("/api/find", (req, res) => {
   withRouteAnswerNote(req, res, "find");
-  const q = req.query.q ?? req.query.task ?? req.query.query;
+  const q = readableAsText(req.query.q ?? req.query.task ?? req.query.query);
   // `top` as well as `k`: the sibling /api/route accepts BOTH, so a caller that
   // learned one name there and reused it here was silently handed the 5-result
   // default and told `count: 5`. Same defect as the index listing taking only
@@ -7577,7 +7584,7 @@ app.get("/api/find", (req, res) => {
 });
 app.post("/api/find", (req, res) => {
   withRouteAnswerNote(req, res, "find");
-  const q = req.body?.q ?? req.body?.task ?? req.body?.query;
+  const q = readableAsText(req.body?.q ?? req.body?.task ?? req.body?.query);
   const k = req.body?.k ?? req.body?.top;
   return serveCachedDiscovery(findCachePath, findCachePolicy, { q, task: q, query: q, k }, (meter) => computeFind(q, k, meter, req.ip), "_find", req, res);
 });
@@ -8892,7 +8899,7 @@ const routeCachePath = "/api/route";
 const routeCachePolicy = CACHEABLE_ROUTES[routeCachePath];
 app.get("/api/route", (req, res) => {
   withRouteAnswerNote(req, res, "route");
-  const q = req.query.q ?? req.query.task ?? req.query.query;
+  const q = readableAsText(req.query.q ?? req.query.task ?? req.query.query);
   const top = req.query.top ?? req.query.k;
   const include = req.query.include;
   const net = req.query.network;
@@ -8900,7 +8907,7 @@ app.get("/api/route", (req, res) => {
 });
 app.post("/api/route", (req, res) => {
   withRouteAnswerNote(req, res, "route");
-  const q = req.body?.q ?? req.body?.task ?? req.body?.query;
+  const q = readableAsText(req.body?.q ?? req.body?.task ?? req.body?.query);
   const top = req.body?.top ?? req.body?.k;
   const include = req.body?.include;
   const net = req.body?.network;

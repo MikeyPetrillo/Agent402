@@ -53,7 +53,7 @@ import algosdk from "algosdk";
 import { getTransactionDecoder } from "@solana/kit";
 import { paymentHeaderOf } from "./payer.js";
 import { getSharedRedisClient, sharedLimitEnabled } from "./shared-limit.js";
-import { decodePaymentHeader } from "./payment-header.js";
+import { decodePaymentHeader, isEvmNetworkName, canonicalNonce } from "./payment-header.js";
 import { stellarAuthorizationsOf } from "./stellar-confirm.js";
 import { base64BytesOf } from "./base64-bytes.js";
 
@@ -112,6 +112,18 @@ export function paymentReplayKey(req) {
       const legacyNetwork = p?.network || p?.payload?.network || "?";
       const legacy = createHash("sha256").update(`${legacyNetwork}:${n}`).digest("hex");
       return `n2:${id}:${legacy}`;
+    }
+    // A Permit2 payment: the signed permit's network, owner and nonce. Its
+    // other payload fields (and any key a sender adds) are not part of what
+    // the chain consumes, so they must not give one permit a second identity.
+    const p2 = p?.payload?.permit2Authorization;
+    // (The decoder leaves a Permit2 block only on an EVM network; the check
+    // here keeps this branch from ever keying a signed transaction.)
+    const p2Network = p?.accepted?.network || p?.network || p?.payload?.network || "?";
+    if (p2 && typeof p2 === "object" && typeof p2.nonce === "string" && p2.nonce && typeof p2.from === "string" && p2.from && isEvmNetworkName(p2Network)) {
+      const network = p2Network;
+      const id = createHash("sha256").update(`permit2\n${network}\n${p2.from.trim().toLowerCase()}\n${canonicalNonce(p2.nonce)}`).digest("hex");
+      return `p2:${id}:${createHash("sha256").update(cred).digest("hex")}`;
     }
     // No parseable nonce (a signed Solana transaction, an Algorand group):
     // key on the transaction the chain consumes, read from the fields the

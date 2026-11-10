@@ -30,6 +30,7 @@
 import { SKILL_PACKS, PACK_PRICES } from "../skills.js";
 import { safeFetch } from "./fetch-guard.js";
 import { capturePostHogPackStep } from "../posthog.js";
+import { callerInputError } from "../caller-input-errors.js";
 
 // Cap for the media-pipeline URL→base64 bridge below. Must route through
 // safeFetch (SSRF guard + size cap), never raw fetch — the URL is caller-supplied.
@@ -2109,9 +2110,17 @@ async function runPack(packSlug, args, ctx) {
       // while every other step in the pack was 100% - a coin flip on the
       // publisher, charged to the buyer as a missing step. Falling back to
       // the next search result costs one more attempt and no upstream money.
-      const candidates = typeof step.mapInputs === "function"
-        ? await step.mapInputs(args, prior)
-        : [await step.mapInput(args, prior)];
+      // A step's input is mapped from the caller's args; an arg that cannot be
+      // coerced (an object whose toString is not a function) is the caller's
+      // 400, with the arg named. Any other error here stays what it is.
+      let candidates;
+      try {
+        candidates = typeof step.mapInputs === "function"
+          ? await step.mapInputs(args, prior)
+          : [await step.mapInput(args, prior)];
+      } catch (mapErr) {
+        throw callerInputError(mapErr, args);
+      }
       const inputs = (Array.isArray(candidates) ? candidates : [candidates]).filter((i) => i != null);
       if (!inputs.length) {
         throw Object.assign(new Error("no usable input for this step"), { statusCode: 424 });

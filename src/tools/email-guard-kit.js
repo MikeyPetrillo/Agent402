@@ -15,6 +15,7 @@
 //   text-html-divergence, link-host-mismatch, link-scheme, reply-to-domain,
 //   display-name-address, subject-domain, instruction-like
 import { runHtml } from "./html-pool.js";
+import { sentenceEnds } from "./sentence-ends.js";
 import { markUntrusted } from "./provenance.js";
 import { DIRECTIVE } from "./hidden-content.js";
 import { hiddenCharacters, decodeTagCharacters } from "../hidden-chars.js";
@@ -101,9 +102,9 @@ function sentencesOf(text) {
     const t = piece.trim();
     if (t) out.push({ text: t, offset: from + lead });
   };
-  for (const m of s.matchAll(/[.!?]+(?=\s|$)|\n/g)) {
-    push(start, m[0] === "\n" ? m.index : m.index + m[0].length);
-    start = m.index + m[0].length;
+  for (const [at, end] of sentenceEnds(s, { consumeSpace: false, newline: true })) {
+    push(start, s[at] === "\n" ? at : end);
+    start = end;
   }
   push(start, s.length);
   return out;

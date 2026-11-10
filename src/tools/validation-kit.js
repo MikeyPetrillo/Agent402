@@ -58,6 +58,7 @@ export const VALIDATION_TOOLS = [
     },
     handler(input) {
       if (!input.text || typeof input.text !== "string") throw bad('Missing or invalid "text"');
+      if (input.delimiter && typeof input.delimiter !== "string") throw bad('"delimiter" must be a string');
       const delimiter = (input.delimiter || ",").charAt(0);
       return csvLint(input.text, delimiter);
     },

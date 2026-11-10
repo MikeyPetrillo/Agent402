@@ -5,6 +5,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { isIP } from "node:net";
 import zlib from "node:zlib";
 import { convertAnyUnit, UNIT_CATEGORIES } from "./convert-gen.js";
+import { countSentenceEnds } from "./sentence-ends.js";
 
 function bad(message) {
   const err = new Error(message);
@@ -426,7 +427,7 @@ const text = [
     handler: (i) => {
       const t = cap(need(i, "text"), 200_000);
       const words = t.match(/\b[a-zA-Z]+\b/g) || [];
-      const sentences = Math.max((t.match(/[.!?]+(\s|$)/g) || []).length, 1);
+      const sentences = Math.max(countSentenceEnds(t), 1);
       const syl = words.reduce((s, w) => s + syllables(w), 0);
       const W = Math.max(words.length, 1);
       const ease = 206.835 - 1.015 * (W / sentences) - 84.6 * (syl / W);
@@ -1230,6 +1231,38 @@ function parseDate(v, label = "date") {
   return d;
 }
 
+const DAY_MS = 86400000;
+
+// Weekdays (Mon-Fri) among the UTC day numbers lo <= d < hi, in constant time.
+function weekdaysBetween(lo, hi) {
+  if (!(hi > lo)) return 0;
+  const span = hi - lo;
+  const weeks = Math.floor(span / 7);
+  let n = weeks * 5;
+  for (let d = lo + weeks * 7; d < hi; d++) {
+    const dow = (((d + 4) % 7) + 7) % 7; // day 0 (1970-01-01) is a Thursday
+    if (dow !== 0 && dow !== 6) n++;
+  }
+  return n;
+}
+
+// The UTC day numbers [lo, hi) a holiday key stands for. A key is the first
+// ten characters of an ISO date: one day for a four-digit year, and the
+// year and month ("+010000-01") for a year written with a sign and six
+// digits, which is every day of that month.
+function holidayKeySpan(key) {
+  if (key[0] !== "+" && key[0] !== "-") {
+    const lo = Math.round(Date.parse(key + "T00:00:00Z") / DAY_MS);
+    return [lo, lo + 1];
+  }
+  const year = Number(key.slice(0, 7)), month = Number(key.slice(8, 10));
+  // A month that runs past either end of the date range is open on that side.
+  const first = Date.UTC(year, month - 1, 1), next = Date.UTC(year, month, 1);
+  const lo = Number.isNaN(first) ? -Infinity : Math.round(first / DAY_MS);
+  const hi = Number.isNaN(next) ? Infinity : Math.round(next / DAY_MS);
+  return [lo, hi];
+}
+
 const time = [
   {
     route: "POST /api/business-days", name: "Business days", slug: "business-days", category: "time", price: "$0.001",
@@ -1239,17 +1272,26 @@ const time = [
     handler: (i) => {
       const from = parseDate(need(i, "from", "any"), "from");
       const to = parseDate(need(i, "to", "any"), "to");
-      const holidays = new Set((Array.isArray(i.holidays) ? i.holidays : []).map((h) => new Date(h).toISOString().slice(0, 10)));
+      const holidays = new Set((Array.isArray(i.holidays) ? i.holidays : []).map((h) => {
+        const d = new Date(h);
+        if (Number.isNaN(d.getTime())) throw bad("Cannot parse a date in holidays");
+        return d.toISOString().slice(0, 10);
+      }));
       const start = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate()));
       const end = new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), to.getUTCDate()));
-      let days = 0, cur = new Date(start);
-      const dir = end >= start ? 1 : -1;
-      while (dir > 0 ? cur < end : cur > end) {
-        const dow = cur.getUTCDay();
-        if (dow !== 0 && dow !== 6 && !holidays.has(cur.toISOString().slice(0, 10))) days++;
-        cur.setUTCDate(cur.getUTCDate() + dir);
+      const calendarDays = Math.round((end - start) / 86400000);
+      if (Number.isNaN(calendarDays)) return { businessDays: 0, calendarDays };
+      // Counted, not walked: whole weeks hold five weekdays each, the rest is
+      // at most six days, and each holiday is one lookup. The count covers
+      // [from, to) going forward and (to, from] going backward.
+      const s = Math.round(start.getTime() / DAY_MS), e = Math.round(end.getTime() / DAY_MS);
+      const [lo, hi] = e >= s ? [s, e] : [e + 1, s + 1];
+      let days = weekdaysBetween(lo, hi);
+      for (const key of holidays) {
+        const [hLo, hHi] = holidayKeySpan(key);
+        days -= weekdaysBetween(Math.max(lo, hLo), Math.min(hi, hHi));
       }
-      return { businessDays: days * dir < 0 ? -days : days, calendarDays: Math.round((end - start) / 86400000) };
+      return { businessDays: e >= s || days === 0 ? days : -days, calendarDays };
     },
   },
   {
@@ -1317,7 +1359,9 @@ const time = [
       if (!matches.length) throw bad('Cannot parse "duration" (e.g. "2d 3h")');
       const mult = { w: 604800, d: 86400, h: 3600, m: 60, s: 1 };
       const secs = matches.reduce((a, mt) => a + Number(mt[1]) * mult[mt[2]], 0) * sign;
-      return { result: new Date(base.getTime() + secs * 1000).toISOString(), addedSeconds: secs };
+      const result = new Date(base.getTime() + secs * 1000);
+      if (Number.isNaN(result.getTime())) throw bad("The result is outside the range of dates that can be written");
+      return { result: result.toISOString(), addedSeconds: secs };
     },
   },
 ];

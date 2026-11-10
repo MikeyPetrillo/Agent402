@@ -1191,9 +1191,9 @@ ${jsonLdBlock}
 ${posthogSnippet(baseUrl)}
 ${gaSnippet(canonical)}
 </head>
-<body style="overflow-x:clip;">
+<body style="overflow-x:clip;"><!--email_off-->
 ${nav(activePath)}
 <main>${body}</main>
-</body>
+<!--/email_off--></body>
 </html>`;
 }

@@ -323,5 +323,35 @@ _resetFlatCacheForTest(); _resetIndexRowsForTest();
   ok(/sellers: \(snap\.sellers \|\| \[\]\)\.map\(screenMppSellerForServe\)/.test(mpp), "/api/mpp-index serves through screenMppSellerForServe");
 }
 
+// --- markdown links and images: same answers as the patterns, in linear time ----
+// The reference below is the pair of patterns the single-pass scanner
+// replaced. Each rescans from every opening bracket, so seller text made of
+// brackets cost time quadratic in its length, on the thread that serves.
+{
+  const reference = (t) => t.replace(/!\[[^\]\n]*\]\([^)\n]*\)/g, "").replace(/\[([^\]\n]*)\]\([^)\n]*\)/g, "$1").replace(/[ \t]{2,}/g, " ").trim();
+  const fixed = [
+    "[label](https://x.example)", "![alt](https://x.example/i.png)", "a [b](c) d ![e](f) g [h](i)", "[a [b](u) tail", "[x ![a](u)", "![a [b](u)](v)",
+    "[a]\n(b)", "[a](b\n)", "[a](b", "]( [a](b)", "[a] [b](u)", "[[[[a]]]](u)", "!![a](b)", "[](x)", "![](x)", "[a]()", "[a](b)(c)", "[a](b)[c](d)", "x](y)", "[a\nb](c)",
+  ];
+  let state = 7;
+  const rnd = (n) => { state = (state * 1103515245 + 12345) & 0x7fffffff; return state % n; };
+  const alphabet = ["[", "]", "(", ")", "!", "\n", "a", " ", "](", "![", "["];
+  const random = Array.from({ length: 4000 }, () => Array.from({ length: 1 + rnd(24) }, () => alphabet[rnd(alphabet.length)]).join(""));
+  const differ = [...fixed, ...random].filter((t) => cleanListingText(t) !== reference(t.trim()));
+  ok(differ.length === 0, `link and image removal matches the reference patterns on ${fixed.length + random.length} cases (${differ.length} differ${differ.length ? ": " + JSON.stringify(differ.slice(0, 3)) : ""})`);
+
+  const time = (t) => { const t0 = process.hrtime.bigint(); cleanListingText(t); return Number(process.hrtime.bigint() - t0) / 1e6; };
+  const hostile = [
+    ["opening brackets", "[".repeat(400_000) + "]("],
+    ["image openers", "![".repeat(200_000) + "]("],
+    ["open targets", "[a](".repeat(100_000)],
+    ["targets broken by a late line break", "[a](".repeat(100_000) + "\n)"],
+  ];
+  for (const [label, text] of hostile) {
+    const ms = Math.min(time(text), time(text));
+    ok(ms < 250, `${text.length} characters of ${label} are cleaned in ${ms.toFixed(1)} ms (under 250)`);
+  }
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

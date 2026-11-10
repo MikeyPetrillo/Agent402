@@ -11,7 +11,7 @@ import jpeg from "jpeg-js";
 // @zxing/library 0.23 ships CJS only, so a named import stops resolving there.
 // The default export carries every symbol on both 0.21 and 0.23.
 import { loadZxing, loadJsQR } from "./lazy-deps.js";
-import { declaredDimensions } from "./image-ops.js";
+import { declaredDimensions, assertInflateWithinDeclared } from "./image-ops.js";
 import { runImageOffThread } from "./image-pool.js";
 
 function bad(message) {
@@ -56,13 +56,18 @@ function toRgba(buf) {
   let img;
   try {
     if (isPng) {
+      // pngjs inflates an interlaced PNG with no output bound, so the same
+      // inflate runs first under the size the header declares (a 400 past it).
+      assertInflateWithinDeclared(buf, "png");
       const png = PNG.sync.read(buf);
       img = { data: png.data, width: png.width, height: png.height };
     } else {
-      const j = jpeg.decode(buf, { useTArray: true, maxMemoryUsageInMB: 64 });
+      // The decoder applies the pixel cap to whichever frame header it acts on.
+      const j = jpeg.decode(buf, { useTArray: true, maxMemoryUsageInMB: 64, maxResolutionInMP: MAX_PIXELS / 1e6 });
       img = { data: j.data, width: j.width, height: j.height };
     }
   } catch (e) {
+    if (e?.statusCode === 400) throw e;
     throw bad(`could not decode ${isPng ? "PNG" : "JPEG"} image: ${e.message}`);
   }
   if (img.width * img.height > MAX_PIXELS) throw bad(`image too large (${img.width}x${img.height}; max ${MAX_PIXELS} px)`);

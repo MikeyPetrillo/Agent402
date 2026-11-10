@@ -14,7 +14,7 @@
 // cost of a compare a fixed few hundred thousand byte reads per still.
 import { PNG } from "pngjs";
 import { partialFields } from "../partial-answer.js";
-import { declaredDimensions, sniffFormat } from "./image-ops.js";
+import { declaredDimensions, sniffFormat, assertPngHeader } from "./image-ops.js";
 
 export const FRAME_DIFF = Object.freeze({
   columns: 32,
@@ -41,6 +41,9 @@ export function assertPngWithin(buf, { maxWidth, maxHeight, label = "png" } = {}
   if (!Buffer.isBuffer(buf) || sniffFormat(buf) !== "png") throw bad(`${label} is not a PNG`);
   const dims = declaredDimensions(buf);
   if (!dims || !(dims.width >= 1) || !(dims.height >= 1)) throw bad(`${label} has no readable PNG header`);
+  // The decoder sizes its buffers from the last IHDR it meets, so the checks
+  // below hold only for a PNG that carries exactly one.
+  try { assertPngHeader(buf); } catch (e) { throw bad(`${label}: ${e.message}`); }
   // IHDR byte 28 is the interlace method. The decoder bounds its inflate by
   // the image size only for non-interlaced images, so an interlaced one is
   // refused rather than inflated without a bound.

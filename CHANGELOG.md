@@ -6,6 +6,49 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-09 (tool and payment bounds)
+Tools:
+- Image-crop and image-dominant-color decode in the image worker pool, like
+  image-resize, image-convert and image-thumbnail, with a 15 s deadline; a
+  busy pool answers 503 and nothing is charged.
+- The image tools read each format's header the way its decoder does (a GIF's
+  first frame and its codes, a PNG's chunk list, a JPEG's frame headers, a
+  TIFF's directories) and answer 400, naming what was wrong, when a file's
+  header and contents disagree. An interlaced PNG is inflated under a bound
+  for its declared size. A TIFF decodes from its first image; a CCITT fax page
+  decodes in an isolated process. TIFF compressions 9 and 34316 are not
+  decoded.
+- Business-days counts by arithmetic, so a range of any length answers at
+  once.
+- Markdown-to-html renders every document with the same heading ids as before;
+  documents over 2,500 characters render in a dedicated worker with a 10 s
+  render deadline (400 when the document's markers are the cause, 503
+  otherwise, never charged).
+- Json-to-csv writes large sheets in slices and serves up to 10,000,000 cells
+  or 16 MB of CSV; a larger sheet is refused with its row and column counts
+  and how to split it.
+- Openapi-resolve-refs reuses resolved schemas and serves up to 16 MB; a
+  larger result answers 413 and says to resolve the spec in parts.
+- A proof-of-work tool whose input holds a value that cannot be coerced
+  answers 400 with the field named; other errors are unchanged.
+Payments:
+- A payment that settles a signed transaction (Solana, Algorand, Stellar) is
+  identified by that transaction alone, and a Permit2 payment by its signed
+  permit, for retries, payer attribution and payer screening; an authorization
+  block no signature covers is removed from the header before anything reads
+  it.
+Router:
+- Seller-written names and descriptions are cleaned of markdown links and
+  images in a single pass, in time linear in their length.
+- Route-and-execute names no paying chain for a payment header that names two
+  different networks, and answers its ordinary refusal.
+- A registry-only listing larger than the per-seller tool cap is cut to the
+  cap before the crawl's passes run; stored tools and reported totals are
+  unchanged.
+Site:
+- Pinned install commands such as agent402-mcp@0.13.31 arrive intact in page
+  HTML for readers that run no script.
+
 ### 2026-11-08 (buying at volume)
 Docs:
 - A buying-at-volume guide (/guides/buying-at-volume, wiki page

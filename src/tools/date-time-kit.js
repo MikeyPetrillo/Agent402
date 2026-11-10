@@ -16,7 +16,11 @@ function formatInTz(date, tz, locale = "en-US") {
     hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
     timeZoneName: "short",
   });
-  return fmt.format(date);
+  try { return fmt.format(date); }
+  catch (e) {
+    if (e instanceof RangeError && /time value/i.test(e.message)) throw bad("That datetime is outside the range this time zone conversion can write");
+    throw e;
+  }
 }
 
 function parseDateInput(val) {

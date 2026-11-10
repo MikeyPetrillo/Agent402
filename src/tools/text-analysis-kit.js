@@ -1,6 +1,8 @@
 // Text-analysis kit: readability scores. Pure-CPU, no network, no LLM, proof-of-work eligible.
 // Covered by scripts/test-text-analysis-kit.js.
 
+import { splitOnSentenceEnds } from "./sentence-ends.js";
+
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
 }
@@ -31,7 +33,7 @@ function tokenize(text) {
 
 // Sentence splitter: split on .!? followed by space or end-of-string.
 function splitSentences(text) {
-  return text.split(/[.!?]+(?:\s|$)/).map((s) => s.trim()).filter(Boolean);
+  return splitOnSentenceEnds(text).map((s) => s.trim()).filter(Boolean);
 }
 
 // ---------------------------------------------------------------------------

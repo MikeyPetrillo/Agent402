@@ -2648,6 +2648,7 @@ jobs:
           t node scripts/test-llms-mpp-header-note.js
           # "Payment-nonce replay guard (M3 — Attack II: concurrent replay collapses to one grant, release-on-failure)"
           t node scripts/test-replay-guard.js
+          t node scripts/test-payment-header-signed-fields.js
           t node scripts/test-replay-topology.js
           # "Replay guard with its shared store unreachable: long-running routes refuse 503 before any payment, fast routes keep the per-process claim (real server + stub facilitator - offline)"
           t node scripts/test-replay-store-outage.js
@@ -3830,6 +3831,7 @@ jobs:
           node scripts/test-a2a-card.js
           node scripts/test-proof-card.js
           node scripts/test-api-kit.js
+          node scripts/test-free-tool-bounds.js
           node scripts/test-captcha-kit.js
           node scripts/test-chain-logos.js
           node scripts/test-date-time-kit.js
