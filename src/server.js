@@ -369,7 +369,6 @@ import { cacheEnabled, cacheGet, cacheSet, cacheKeyFor, cacheTtlFor, CACHEABLE_R
 import { initAnalyticsDb, recordToolCall, getAnalytics, analyticsEnabled, redactAnalytics } from "./analytics-db.js";
 import { databasesStatus } from "./db-status.js";
 import { initWithRetry } from "./db-init-retry.js";
-import { baseNotificationsEnabled } from "./base-notifications.js";
 import { railOf, outcomeRailOf } from "./payment-rail.js";
 import { initPostHog, capturePostHogWrongMethod, capturePostHogToolError, capturePostHogToolCall, telemetryKeyOf, capturePostHogDiscovery, capturePostHogPaywall, capturePostHogPowChallenge, capturePostHogSettlement, capturePostHogChargedFailure, capturePostHogSettleFailed, capturePostHogToolGone, toolGoneSourceOf, capturePostHogHumanFunnel, shutdownPostHog, posthogEnabled } from "./posthog.js";
 import { analyticsPage } from "./analytics-page.js";
@@ -3823,7 +3822,9 @@ app.get(["/health", "/health/ready"], (req, res) => {
     // reached — the state has to be observable to be debuggable.
     sharedLimit: sharedLimitEnabled(),
     replicaDivisor: Math.max(1, Number(process.env.RATE_LIMIT_REPLICAS) || 1),
-    baseNotifications: baseNotificationsEnabled(),
+    // Presence of the key only; no client reads it (the Base Notifications
+    // helpers were removed 2026-10-04). The field stays for outside readers.
+    baseNotifications: Boolean((process.env.BASE_NOTIFICATIONS_API_KEY || "").trim()),
   };
   res.status(ok ? 200 : 503).json({ ok, checks, flags, meta: { ...meta, ...diagnostics } });
 });
