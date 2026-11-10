@@ -22,7 +22,8 @@
 //      counted twice; a refused or released run leaves the window. A view of
 //      the window and a balance read are ordered by the process's own count:
 //      with the clock held still (every stamp equal), a read that began
-//      before the view still does not decide, in either direction, and reads
+//      before the view still does not decide, in either direction, whether
+//      it has finished (cached) or is still under way (pending), and reads
 //      that began after it are still shared.
 // Under CI a missing REDIS_URL fails (a skipped integration test is not
 // coverage); a local run says the Redis half was skipped. The two-process
@@ -222,6 +223,47 @@ C._setBalanceReaderForTest(async () => { reads++; return balance; });
     ok(six.every((x) => typeof x.release === "function") && reads - mark >= 1 && reads - mark <= 2 && C.inflightCoverStatus().admittedUnread === 0, `still clock control: six runs at once beside a foreign run are admitted on shared reads, none unread (reads ${reads - mark})`);
     funded.release(); u1.release(); six.forEach((x) => x.release?.());
     for (const [w, id] of [[W, "r3"], [U, "r4"], [X, "r5"]]) await unforeign(w, id);
+  } finally { Date.now = realNow; }
+}
+{
+  // A read still PENDING when a later view lands does not decide for that
+  // view's run either. The test holds each read open and answers it by hand:
+  // run A's read is under way when run B's view of the window lands, so B
+  // gets a read of its own, begun after its view, and B's verdict follows
+  // the balance that second read returns, in both directions. Clock held.
+  C._resetInflightCoverForTest();
+  const gated = [];
+  C._setBalanceReaderForTest(() => new Promise((res) => gated.push(res)));
+  const turn = () => new Promise((r) => setImmediate(r));
+  const realNow = Date.now, T = realNow();
+  Date.now = () => T;
+  try {
+    for (const [wallet, id, firstRead, secondRead, bAdmitted] of [
+      // A's read covers all three runs; the balance B's own read finds does not.
+      ["0x" + "f6".repeat(20), "r7", 3n * PRICE, 2n * PRICE, false],
+      // A's read covers two runs; B's own read finds a balance for all three.
+      ["0x" + "f7".repeat(20), "r8", 2n * PRICE, 3n * PRICE, true],
+    ]) {
+      gated.length = 0;
+      await foreign(wallet, id);
+      const judged = C.inflightCoverStatus().foreignReads;
+      const a = attempt(C, wallet);
+      while (C.inflightCoverStatus().foreignReads < judged + 1 || gated.length < 1) await turn();
+      const b = attempt(C, wallet);
+      // B has asked for a balance (counted just before it asks); a read of its
+      // own begins one microtask later, so one more turn of the loop shows it.
+      while (C.inflightCoverStatus().foreignReads < judged + 2) await turn();
+      await turn();
+      ok(gated.length === 2, `pending read: a run whose view landed while another run's read was under way gets its own read, begun after its view (reads ${gated.length}, want 2)`);
+      gated[0](firstRead);
+      const ra = await a;
+      gated[1](secondRead);
+      const rb = await b;
+      ok(typeof ra.release === "function" && (bAdmitted ? typeof rb.release === "function" : rb.err?.statusCode === 429) && gated.length === 2,
+        `pending read: the later run is ${bAdmitted ? "admitted" : "refused"} on the balance its own read returned, not the earlier read's (first ${ra.err?.statusCode || "admitted"}, later ${rb.err?.statusCode || "admitted"}, reads ${gated.length})`);
+      ra.release?.(); rb.release?.();
+      await unforeign(wallet, id);
+    }
   } finally { Date.now = realNow; }
 }
 {
