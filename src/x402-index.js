@@ -9937,12 +9937,57 @@ function toolStatics(t, origin = null) {
 // With `match`, only the rows it accepts throw (one poison row beside good ones).
 let toolStaticsFaultForTest = null, toolStaticsFaultMatch = null;
 export function _setToolStaticsFaultForTest(err, match = null) { toolStaticsFaultForTest = err || null; toolStaticsFaultMatch = typeof match === "function" ? match : null; }
-/** Does this route text, joined to its seller key, leave the seller? */
-function routeLeavesSeller(seller, route) {
+/** Does this route text, joined to its seller key, leave the seller? The
+ *  parsed answer: the joined text read as a URL (routeLeavesSeller answers
+ *  the same for every input, without the parse where the text alone decides). */
+function routeLeavesSellerParsed(seller, route) {
   let u;
   try { u = new URL(joinSellerRoute(seller, route)); } catch { return true; }
   return !!(u.username || u.password) || !isUnderSeller(u.href, seller);
 }
+// A seller key read once: is it exactly the text a URL parser makes of it
+// (http or https, no credentials, host and port as written, the path its own
+// prefix, no query or fragment, no character a parser strips)? Then a route
+// that starts with "/" joins inside that key's authority whatever follows.
+// One parse per seller key, kept; the tool rows of a seller read the answer.
+const plainSellerKeyMemo = new Map();
+const PLAIN_SELLER_KEYS_MAX = 20_000;
+const SELLER_KEY_UNPLAIN = /[\u0000-\u0020\u007f\\?#]/;
+function isPlainSellerKey(seller) {
+  let plain = plainSellerKeyMemo.get(seller);
+  if (plain !== undefined) return plain;
+  plain = false;
+  if (!SELLER_KEY_UNPLAIN.test(seller)) {
+    const { origin, prefix } = sellerKeyParts(seller);
+    if (seller === `${origin}${prefix}`) {
+      let u = null;
+      try { u = new URL(seller); } catch { u = null; }
+      plain = !!u && (u.protocol === "https:" || u.protocol === "http:") && !u.username && !u.password && !u.search && !u.hash
+        && `${u.protocol}//${u.host}` === origin && u.pathname === (prefix || "/");
+    }
+  }
+  if (plainSellerKeyMemo.size >= PLAIN_SELLER_KEYS_MAX) plainSellerKeyMemo.clear();
+  plainSellerKeyMemo.set(seller, plain);
+  return plain;
+}
+// Route text a parser may read as something other than the path it spells: a
+// character it strips (control, space), a backslash (a slash to it), or a dot
+// segment, written out or percent-encoded (it climbs out of a prefix).
+const ROUTE_NEEDS_PARSE = /[\u0000-\u0020\u007f\\]|%2e|(?:^|\/)\.{1,2}(?:[\/?#]|$)/i;
+/** Does this route text, joined to its seller key, leave the seller? A plain
+ *  path ("/..." with nothing a parser rewrites) under a plain seller key stays
+ *  inside the key by its text: the authority ends where the key's ends and the
+ *  path starts with the key's prefix. That is every ordinary listing, and it
+ *  parses nothing per row (an index add computes this for every tool it
+ *  holds). Anything else is parsed. */
+function routeLeavesSeller(seller, route) {
+  if (typeof route === "string" && typeof seller === "string" && route.charCodeAt(0) === 47 && !ROUTE_NEEDS_PARSE.test(route) && isPlainSellerKey(seller)) return false;
+  return routeLeavesSellerParsed(seller, route);
+}
+/** Test hooks: the text-first answer, the parsed answer, and a row's statics. */
+export function _routeLeavesSellerForTest(seller, route) { return routeLeavesSeller(seller, route); }
+export function _routeLeavesSellerParsedForTest(seller, route) { return routeLeavesSellerParsed(seller, route); }
+export function _computeToolStaticsForTest(t) { return computeToolStatics(t); }
 function computeToolStatics(t) {
   if (toolStaticsFaultForTest && (!toolStaticsFaultMatch || toolStaticsFaultMatch(t))) throw toolStaticsFaultForTest;
   let st;

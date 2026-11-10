@@ -2038,6 +2038,8 @@ jobs:
           t node scripts/test-seller-field-types.js
           # A stored index of sellers with non-text fields boots and serves every seller page and API; entries are cleaned as the cache stores them
           t node scripts/test-seller-field-types-serve.js
+          # A route's off-seller verdict is decided from its text and equals the parsed answer for every input (hostile seller keys and routes, generated routes); a seller's ordinary rows parse one URL for the key and none per row (offline)
+          t node scripts/test-off-seller-route.js
           # The index keeps at most INDEX_SELLER_TOOL_CAP tools per seller, described first, in one funnel: a 12,000-tool seller lists at the cap with toolsTotal and toolsCapped on every surface and routes on its kept tools; a mutation control on a copy of src shows the full count with the cap removed (boots the server; offline)
           t node scripts/test-seller-tool-cap.js
           # A throw inside a scheduled turn (the drain, a shadow rebuild) or inside one seller's listing is contained: the process stays up, the other sellers answer, the counts reach the operator surface (boots the server; offline)
