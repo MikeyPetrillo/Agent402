@@ -79,7 +79,7 @@ import Stripe from "stripe";
 import { REPORT_TIERS } from "./report-tiers.js";
 import { verifyHintMiddleware } from "./verify-hint.js";
 import { meteredTwinSlug, meteredQuoteSentence } from "./metered-lead.js";
-import { paymentRequiredBodyMiddleware } from "./payment-required-body.js";
+import { paymentRequiredBodyMiddleware, decodePaymentRequired } from "./payment-required-body.js";
 import { avmSubcentOfferStatus } from "./avm-sponsorship.js";
 import { translateV1Accepts, v1AcceptsTranslationEnabled } from "./x402-v1-accepts.js";
 import { mountShortlinks } from "./shortlinks.js";
@@ -97,6 +97,7 @@ import { mppFallbackStatus } from "./mpp-fallback.js";
 import { applyMeteredSettlement, meteredUsdOf } from "./gateway-meter.js";
 import { handlerInputOf, preValidateInput, withIgnoredParams } from "./handler-input.js";
 import { configureHowToCall, howToCall402Field, howToCallField } from "./how-to-call.js";
+import { paymentGuide, quoteInputs, usdText } from "./payment-guide.js";
 import { gatewayCacheGate, commitGatewayCacheWrites } from "./gateway-cache-scope.js";
 import { startModelCatalogRefresh, modelCatalogWanted } from "./model-catalog.js";
 import { toolErrorFields } from "./tool-error-fields.js";
@@ -131,6 +132,32 @@ function quotedPriceUsd(def, req) {
     if (Number.isFinite(q) && q > 0) { req.__meteredQuoteUsd = q; return q; }
     return flat;
   } catch { return flat; }
+}
+// The `payment` block of a first-contact 402 (src/payment-guide.js): this
+// request's dollar price on the server's primary network (or, for a route that
+// does not offer it, the first network it does offer), priced through the same
+// per-network funnel as the accept, so the two agree. Read from the response's
+// own PAYMENT-REQUIRED header: a 402 that carries no x402 offer gets no block.
+function paymentGuideFor(def, req, res) {
+  try {
+    const offer = decodePaymentRequired(String(res.getHeader("PAYMENT-REQUIRED") || ""));
+    if (!offer || !offer.accepts.length) return null;
+    const primary = PAY_NETWORKS[NETWORK];
+    const caip2 = offer.accepts.some((a) => a?.network === primary) ? primary : offer.accepts[0]?.network;
+    const network = Object.entries(PAY_NETWORKS).find(([, c]) => c === caip2)?.[0];
+    if (!network || typeof def?.price !== "string") return null;
+    const flatUsd = Number(def.price.replace(/[^0-9.]/g, "")) || 0;
+    const quotedUsd = priceFnOf(def) ? quotedPriceUsd(def, req) : flatUsd;
+    // The catalog's own spelling for a list price; a per-request quote is spelled from its figure.
+    const list = Number.isFinite(quotedUsd) && quotedUsd > 0 && quotedUsd !== flatUsd ? usdText(quotedUsd) : def.price;
+    return paymentGuide({
+      price: priceForNetwork(list, caip2),
+      network,
+      baseUrl: BASE_URL,
+      quote: typeof def.quote === "function" ? quoteInputs(handlerInputOf(req, def), req.headers["content-length"]) : null,
+      powEligible: POW_SLUGS.has(def.slug),
+    });
+  } catch { return null; }
 }
 // The USD a metered call was actually settled/held at, for the books: the upto
 // meter's override (settled actual x markup; a credits stream's amount rides
@@ -460,7 +487,7 @@ const decideLedger = () => {
 // from the file runs before the first request, not inside it.
 if (stateDbEnabled()) decideLedger();
 import { settlePreferenceMiddleware } from "./settle-preference.js";
-import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, robinhoodOrderView, robinhoodSettlerStatus, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem, gatewayPendingStatus, gatewayPendingBookForOperator } from "./payments.js";
+import { NETWORKS as PAY_NETWORKS, priceForNetwork, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, robinhoodOrderView, robinhoodSettlerStatus, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem, gatewayPendingStatus, gatewayPendingBookForOperator } from "./payments.js";
 import { GATEWAY_WIRE, gatewayBalanceStatus, gatewayOfferPublic, gatewayOfferNetworkNames, gatewayOfferedOn, isGatewayBatchedRequest } from "./gateway-nanopayments.js";
 import { isGatewayWire, isGatewayPendingAnswer } from "./gateway-wire.js";
 import { networkFloorUsd } from "./network-floors.js";
@@ -4004,7 +4031,8 @@ app.get("/api/gateway-status", async (req, res) => {
     // and the status Worker page on unresolved and full; a settled, unserved
     // entry becomes an owed debt that refundsOwed covers); gatewayBalance reads
     // off / unknown / ok / withdraw (our Gateway balance is past
-    // GATEWAY_WITHDRAW_ALERT_USD). One word each publicly; the figure and
+    // GATEWAY_WITHDRAW_ALERT_USD; the heartbeat and the status Worker page
+    // on withdraw). One word each publicly; the figure and
     // the per-domain split on the operator view only.
     gatewayPending: { status: await gatewayPendingStatus() },
     // EVM settlements that failed naming a transaction or an authorization
@@ -4018,7 +4046,9 @@ app.get("/api/gateway-status", async (req, res) => {
     // The shared admission and money controls (src/shared-limits.js): on (the
     // store answers), memory (no Redis configured: every control is this
     // process's own), degraded (Redis configured, a command failed inside the
-    // last minute). One word publicly; counts for the operator.
+    // last minute). A second word, alert, reads sustained once degraded has
+    // held ten minutes without a break (the heartbeat and the status Worker
+    // page on it), else ok. Words publicly; counts for the operator.
     sharedLimits: (() => { try { return sharedLimitsStatus({ full }); } catch { return { status: "unknown" }; } })(),
     // Money writes waiting on this container's local disk for the database
     // (src/ledger-mirror.js journals: sales, refund debts, card checkout
@@ -4145,8 +4175,10 @@ app.get("/api/gateway-status", async (req, res) => {
     // replayStore reads pending while a settled payment's consumed mark that
     // the shared store missed is held on this process only and written again
     // by the replay guard's retry loop (src/replay-guard.js), ok otherwise.
-    // One word publicly; the counts (pending, missed, recovered, abandoned)
-    // for the operator.
+    // A second word, alert, reads sustained once pending has held ten
+    // minutes without a break (the heartbeat and the status Worker page on
+    // it), else ok. Words publicly; the counts (pending, missed, recovered,
+    // abandoned) for the operator.
     replayStore: (() => { try { return replayGuardStoreStatus({ full }); } catch { return { status: "unknown" }; } })(),
     // subscriptionRenewals reads unconfirmed while a wallet-billed monitor
     // renewal has stayed unconfirmed (its send's landing undecided by the
@@ -10747,6 +10779,21 @@ if (FREE_MODE) {
       // Authorization credential such as a Tempo credential or a credits key)
       // keeps its own explanation.
       const firstContact = !req.header("x-payment") && !req.header("payment-signature") && !req.headers.authorization;
+      // What this call costs in dollars and what to do next, for a caller
+      // with no x402 client (src/payment-guide.js). Body only and additive,
+      // after the fields below; the PAYMENT-REQUIRED header and every other
+      // body field are untouched. First contact only: a refused payment
+      // keeps its own explanation. Rollback lever: PAYMENT_GUIDE_402=off.
+      if (firstContact && process.env.PAYMENT_GUIDE_402 !== "off") {
+        const origJson = res.json.bind(res);
+        res.json = (body) => {
+          if (res.statusCode === 402 && body && typeof body === "object" && !Array.isArray(body) && !body.payment) {
+            const guide = paymentGuideFor(def, req, res);
+            if (guide) body = { ...body, payment: guide };
+          }
+          return origJson(body);
+        };
+      }
       // The call to make once paid, for a buyer that does not read the Bazaar
       // extension (src/how-to-call.js): the same request the input-validation
       // 400 carries, from the tool's own example (its method and URL only when

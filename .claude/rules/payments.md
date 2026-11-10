@@ -232,6 +232,14 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   no `error`, so `error`-first clients read the explanation. Keyed on the header, so
   settle-failure, credits and Tempo/Stripe direct 402s are untouched. It wraps `res.send`, so it
   is mounted before the MPP shim and the Tempo/Stripe gates.
+- **402 `payment` block:** `src/payment-guide.js`: a first-contact 402 body carries `payment`
+  (this request's dollar price on the primary network through `priceForNetwork`, or on the first
+  network offered when the route does not offer the primary; one sentence on paying; `noWallet`
+  on a proof-of-work tool; `quote` with the caller's own model, request bytes and output cap on a
+  body-quoted route, never a rate or cost; links to `/llms.txt`, `/agents.md#pay` and `/mcp`).
+  Body only, keyed on the PAYMENT-REQUIRED header, never on a refused payment; every other field
+  and the header are unchanged (`scripts/test-payment-guide.js`). Rollback lever:
+  `PAYMENT_GUIDE_402=off`.
 - **Tempo push refusals:** `src/push-refusal-body.js`: for a push credential the Tempo gate
   restates a 4xx JSON body's not-charged sentence and sets `charged`, `transferClaimed`, `refundOwed`.
 - **Algorand network id:** `src/avm-network.js`: the CAIP-2 (32-character) id is what every 402
@@ -239,7 +247,10 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   as an alias in seller rows and the buyer.
 - **Replay store word:** `/api/gateway-status` reports `replayStore` (ok or pending). pending means a
   settled payment's consumed mark could not be written to the shared store yet; one shared retry loop
-  writes it, and the local consumed mark keeps the payment from running again meanwhile.
+  writes it, and the local consumed mark keeps the payment from running again meanwhile. A second
+  word, `alert`, reads `sustained` once pending has held ten minutes without a break
+  (`REPLAY_STORE_ALERT_AFTER_MS`); the status Worker and `heartbeat.yml` page on it ("Replay store
+  marks PENDING (Redis)") and close on `ok`.
 - **Paid-quote trust:** an address with a settled paid 200 gets 10x the unpaid price-check figures for
   10 minutes after each paid call (`PAID_CLIENT_QUOTE_MULTIPLIER`), keyed by an HMAC of the client key.
   On `/v1/metered` the raise is earned per call: past the plain figure each settled `/v1/metered` call

@@ -146,6 +146,16 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   closed on `ok` or `off` (`scripts/test-exa-ceilings.js`). `exaAllowance` and `EXA_CREDITS_USD`
   are separate and unchanged: with the prepaid balance spent the upstream refuses and the tools
   answer 503 whatever the ceilings say.
+- **Words with a grace period:** `sharedLimits` reads `degraded` for a minute after any one failed
+  Redis command and `replayStore` reads `pending` until the next retry pass, so each carries a
+  second word, `alert`, that reads `sustained` once the first has held ten minutes without a break
+  (`SHARED_LIMITS_ALERT_AFTER_MS`, `REPLAY_STORE_ALERT_AFTER_MS`; kept in process memory, so a
+  restart starts the count again). The status Worker and `heartbeat.yml` page on `sustained`
+  ("Shared limits store DEGRADED (Redis)", "Replay store marks PENDING (Redis)") and close when
+  the first word reads healthy (`on` or `memory`; `ok`); the alert word inside its grace period
+  does neither. `gatewayBalance` reads `withdraw` from the read that reaches
+  `GATEWAY_WITHDRAW_ALERT_USD` until the balance is moved, and pages at once ("Gateway balance
+  READY to withdraw"), closing on `ok` or `off` (`scripts/test-status-word-pagers.js`).
 - **Pre-payment refusal logs:** an input refusal answered before any payment gate
   (`src/prepayment-refusal.js`) writes its `[tool-error] ... prepay=true` line for the first 20
   in a clock minute per process; the rest print one summary line per minute (count and top

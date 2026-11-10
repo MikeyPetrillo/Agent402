@@ -521,6 +521,78 @@ jobs:
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "xDataSpend is ${STATUS}; closing." || true
           fi
 
+      # Our Circle Gateway balance (src/gateway-nanopayments.js): withdraw holds
+      # from the read that reaches GATEWAY_WITHDRAW_ALERT_USD until an operator
+      # moves the balance, so it pages at once. ok and off close; unknown does
+      # neither. The status Worker runs the same check under the same title.
+      - name: Gateway balance check (alarm when it is ready to withdraw)
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ROW=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '(.gatewayBalance.status // "unknown") + " none"' 2>/dev/null || echo "unknown unknown")
+          STATUS=${ROW%% *}; ALERT=${ROW##* }
+          echo "gateway balance: $STATUS (alert $ALERT)"
+          TITLE="Gateway balance READY to withdraw"
+          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          if [ "$STATUS" = "withdraw" ]; then
+            if [ -z "$EXISTING" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+                --body "/api/gateway-status reports gatewayBalance.status=withdraw: the Circle Gateway balance that batched payments are credited to has reached GATEWAY_WITHDRAW_ALERT_USD. Nothing is refused for it; the balance stays off chain until it is moved. Read the figure on the operator view of /api/gateway-status, then move it on chain with node scripts/gateway-withdraw.js (human-run, a dry run unless --execute is passed). Auto-closes when the word reads ok or off." || true
+            fi
+          elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "gatewayBalance is ${STATUS}; closing." || true
+          fi
+
+      # The shared limits store (src/shared-limits.js): status reads degraded for
+      # a minute after any one failed command, so this pages on the second
+      # word, alert=sustained (degraded held ten minutes without a break). on
+      # and memory close; degraded inside the grace period does neither.
+      - name: Shared limits store check (alarm on a sustained degraded Redis)
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ROW=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '(.sharedLimits.status // "unknown") + " " + (.sharedLimits.alert // "unknown")' 2>/dev/null || echo "unknown unknown")
+          STATUS=${ROW%% *}; ALERT=${ROW##* }
+          echo "shared limits: $STATUS (alert $ALERT)"
+          TITLE="Shared limits store DEGRADED (Redis)"
+          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          if [ "$ALERT" = "sustained" ]; then
+            if [ -z "$EXISTING" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+                --body "/api/gateway-status reports sharedLimits.alert=sustained: commands to the Redis behind the shared admission and money controls have failed or timed out for ten minutes or more without a break, or the client has not connected since boot. Every control keeps deciding on its own process's counters, so nothing is refused for it, but the limits are not shared across containers and start again on a restart. Check the Redis service and REDIS_URL on Railway and the server log for [shared-limits] lines; the operator view of /api/gateway-status carries the counts and the last error. Auto-closes when sharedLimits.status reads on or memory." || true
+            fi
+          elif { [ "$STATUS" = "on" ] || [ "$STATUS" = "memory" ]; } && [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "sharedLimits is ${STATUS}; closing." || true
+          fi
+
+      # Consumed marks the shared store missed (src/replay-guard.js): status
+      # reads pending until the next retry pass lands the mark, so this pages
+      # on alert=sustained (pending held ten minutes without a break). ok
+      # closes; pending inside the grace period does neither.
+      - name: Replay store check (alarm on consumed marks pending past the grace period)
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ROW=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '(.replayStore.status // "unknown") + " " + (.replayStore.alert // "unknown")' 2>/dev/null || echo "unknown unknown")
+          STATUS=${ROW%% *}; ALERT=${ROW##* }
+          echo "replay store: $STATUS (alert $ALERT)"
+          TITLE="Replay store marks PENDING (Redis)"
+          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          if [ "$ALERT" = "sustained" ]; then
+            if [ -z "$EXISTING" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+                --body "/api/gateway-status reports replayStore.alert=sustained: a settled payment's consumed mark has waited ten minutes or more to reach the shared store (Redis). This process refuses that payment from its own mark and the retry loop keeps writing it; until it lands, another container does not see the mark and a restart drops it. Check the Redis service and the server log for [replay-guard] lines; the operator view of /api/gateway-status carries the counts. Auto-closes when replayStore.status reads ok." || true
+            fi
+          elif [ "$STATUS" = "ok" ] && [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "replayStore is ${STATUS}; closing." || true
+          fi
+
       # Exa daily spend (src/tools/exa-kit.js): the same words as xDataSpend.
       # Apart from the prepaid allowance step above, which reads exaAllowance.
       - name: Exa daily spend over its ceiling

@@ -1070,6 +1070,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             required: Array.isArray(t.required) ? t.required : [],
             inputSchema: t.inputSchema,
             description: t.description.length > 200 ? `${t.description.slice(0, 200)}…` : t.description,
+            ...(t.reversed ? { reversed: true } : {}),
           }));
           // Weak/empty match: this IS a task-intent signal (unlike
           // search_tools' looser lexical search), so capture it as a
@@ -1130,6 +1131,8 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             ...(r.packs?.length ? { workflows: r.packs, workflowsUsage: "One call: catalog.call { slug: 'skill-' + workflows[i].slug, params: { …promptArgs } } (or POST workflows[i].route) runs every step for the single price in workflows[i].price. To orchestrate the steps yourself instead: prompts/get { name: workflows[i].promptName, arguments: { …promptArgs } } - that bills each underlying tool separately." } : {}),
             ...(relatedSellers ? { relatedSellers } : {}),
             ...(plan ? { plan } : {}),
+            // The stated conversion direction and whether any tool serves it (src/find.js).
+            ...(r.direction ? { direction: r.direction } : {}),
             ...(weak && !relatedSellers && !plan ? { hint: WISH_HINT_TEXT } : {}),
             usage: "Run catalog.call with the chosen {slug, params}. Free results execute here; paid tools are payable here over MPP or via the agent402-mcp npm server (a wallet, or a prepaid credits key already issued).",
           });

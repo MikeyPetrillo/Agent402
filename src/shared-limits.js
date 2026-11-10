@@ -34,7 +34,9 @@
 // and this module logs one word per control per minute. The word on
 // /api/gateway-status (sharedLimits): on (Redis answers), memory (no Redis
 // configured), degraded (Redis configured and a command failed inside the
-// last minute, or the client has never connected).
+// last minute, or the client has never connected). A second word, alert,
+// reads sustained once degraded has held for ten minutes without a break
+// (the pagers read that one), else ok.
 //
 // Keys are `sl:<name>:<key>`, or `sl:<prefix>:<name>:<key>` with
 // SHARED_LIMITS_PREFIX (tests running against one Redis set a prefix per run).
@@ -308,12 +310,17 @@ export function createRedisLimits(getClient = getSharedRedisClient, { opTimeoutM
 }
 
 // ---- the process's instance and its word ----------------------------------------
-const state = { ops: 0, failures: 0, lastOkAt: 0, lastFailAt: 0, lastError: null };
-const noteResult = (r) => {
+const state = { ops: 0, failures: 0, lastOkAt: 0, lastFailAt: 0, lastError: null, degradedSince: 0 };
+const LOADED_AT = Date.now();
+/** How long the word must read degraded without a break before `alert` reads sustained. */
+export const SHARED_LIMITS_ALERT_AFTER_MS = 10 * 60_000;
+const noteResult = (r, now = Date.now()) => {
   state.ops++;
-  if (r?.ok) { state.lastOkAt = Date.now(); return; }
+  if (r?.ok) { state.lastOkAt = now; return; }
   state.failures++;
-  state.lastFailAt = Date.now();
+  // A failure after the hold of the one before it starts a new degraded spell.
+  if (!state.degradedSince || !state.lastFailAt || now - state.lastFailAt >= DEGRADED_HOLD_MS()) state.degradedSince = now;
+  state.lastFailAt = now;
   state.lastError = String(r?.error || "unknown").slice(0, 120);
 };
 const impl = MODE === "redis" ? createRedisLimits(getSharedRedisClient, { onResult: noteResult }) : createMemoryLimits();
@@ -341,12 +348,25 @@ export function sharedLimitsWord(now = Date.now()) {
   if (!state.lastOkAt && connectionState().connected === false) return "degraded";
   return "on";
 }
-/** sharedLimits on /api/gateway-status: one word publicly, counts for the operator. */
+/**
+ * The second word, for the pagers: sustained once the word has read degraded
+ * without a break for SHARED_LIMITS_ALERT_AFTER_MS, else ok. One failed
+ * command reads degraded for the hold and then on again, so the word alone
+ * is not a page. A client that never connected counts from module load.
+ */
+export function sharedLimitsAlert(now = Date.now()) {
+  if (sharedLimitsWord(now) !== "degraded") return "ok";
+  const inHold = state.lastFailAt && now - state.lastFailAt < DEGRADED_HOLD_MS();
+  const since = inHold ? state.degradedSince : LOADED_AT;
+  return since && now - since >= SHARED_LIMITS_ALERT_AFTER_MS ? "sustained" : "ok";
+}
+/** sharedLimits on /api/gateway-status: two words publicly, counts for the operator. */
 export function sharedLimitsStatus({ full = false, now = Date.now() } = {}) {
   const status = sharedLimitsWord(now);
-  if (!full) return { status };
+  const alert = sharedLimitsAlert(now);
+  if (!full) return { status, alert };
   return {
-    status, mode: MODE, ops: state.ops, failures: state.failures,
+    status, alert, mode: MODE, ops: state.ops, failures: state.failures,
     lastOkAgoMs: state.lastOkAt ? now - state.lastOkAt : null,
     lastFailAgoMs: state.lastFailAt ? now - state.lastFailAt : null,
     lastError: state.lastError,
@@ -434,4 +454,6 @@ export function startSharedLimitsProbe() {
 
 /** Test seam: the counts behind the word. */
 export function _sharedLimitsState() { return { ...state }; }
-export function _resetSharedLimitsState() { state.ops = 0; state.failures = 0; state.lastOkAt = 0; state.lastFailAt = 0; state.lastError = null; lastDegradedLog.clear(); }
+export function _resetSharedLimitsState() { state.ops = 0; state.failures = 0; state.lastOkAt = 0; state.lastFailAt = 0; state.lastError = null; state.degradedSince = 0; lastDegradedLog.clear(); }
+/** Test-only: record one command result at a given time. */
+export function _noteSharedLimitsResult(r, now) { noteResult(r, now); }

@@ -56,7 +56,7 @@ ok(pubBody?.upstreamBuyerEvm?.status === "off" && Object.keys(pubBody.upstreamBu
 ok(pubBody?.robinhoodSettler?.status === "off" && Object.keys(pubBody.robinhoodSettler).join(",") === "status", `robinhoodSettler publishes its word only (${JSON.stringify(pubBody?.robinhoodSettler)})`);
 ok(opBody?.robinhoodSettler?.status === "off", `the operator view reads the same word without an order (${JSON.stringify(opBody?.robinhoodSettler)})`);
 // --- the replay guard's shared-store word: one word publicly (ok with nothing missed), the counts for the operator ---
-ok(pubBody?.replayStore?.status === "ok" && Object.keys(pubBody.replayStore).join(",") === "status", `replayStore publishes its word only (${JSON.stringify(pubBody?.replayStore)})`);
+ok(pubBody?.replayStore?.status === "ok" && pubBody.replayStore.alert === "ok" && Object.keys(pubBody.replayStore).join(",") === "status,alert", `replayStore publishes its two words only (${JSON.stringify(pubBody?.replayStore)})`);
 ok(opBody?.replayStore?.status === "ok" && typeof opBody?.replayStore?.pending === "number" && typeof opBody?.replayStore?.consumedWriteFailures === "number", `the operator view of replayStore carries the counts (${JSON.stringify(opBody?.replayStore)})`);
 // --- the subscription renewal word:one word publicly; off with no wallet-billed subscription engine here ---
 ok(pubBody?.subscriptionRenewals?.status === "off" && Object.keys(pubBody.subscriptionRenewals).join(",") === "status", `subscriptionRenewals publishes its word only (${JSON.stringify(pubBody?.subscriptionRenewals)})`);

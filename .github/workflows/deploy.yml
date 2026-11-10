@@ -1157,6 +1157,8 @@ jobs:
           t node scripts/test-correctness-fixes.js
           # Find ranker — live-catalog smoke test (boots free-mode, locks top-1 for agent queries)
           t node scripts/test-find-ranking.js
+          # /api/find and a stated conversion direction: a tool named for the reverse direction ranks below the rest, an unserved direction reads as a miss (direction.served false, weak rows, the hint), the reverse query and 88 pinned queries keep their top result, every tool still finds itself by its description; boots a free server on port 0
+          t node scripts/test-find-direction.js
           # /openapi.json coverage (every CATALOG tool has a path + operationId + x-price)
           t node scripts/test-openapi-coverage.js
           # MCP prompts/list + prompts/get (one prompt per skill pack; substitution renders)
@@ -1634,6 +1636,9 @@ jobs:
       # Every input-validation 400 carries a ready-to-run howToCall; each free-tier tool's call and alternate are sent as written (boots its own server on port 0)
       - name: Input 400 carries a ready-to-run call
         run: node scripts/test-how-to-call.js
+      # A first-contact 402 body carries a payment block: the dollar price equals /api/pricing and the accept it names (flat, proof-of-work, metered, a premium chain), the metered block names the model sent, and every other field and the header equal a boot with the block off (three paid boots on port 0, a /supported stub)
+      - name: 402 body states its price and next steps
+        run: node scripts/test-payment-guide.js
 
       # ONE STEP, MANY SCRIPTS (2026-08-25): GitHub spends ~0.7 s of runner setup
       # per step and this lane had over a hundred one-line steps. Each script still
@@ -3205,6 +3210,8 @@ jobs:
           t node scripts/test-tool-failure-monitor.js
           # heartbeat.yml's failure-word step run against stubbed curl and gh (pages, comments, closes; slugs only, never counts or upstream names) and the Worker's matching alarms - offline
           t node scripts/test-heartbeat-failure-words.js
+          # Three gateway-status words and their two observers: gatewayBalance pages on withdraw at once; sharedLimits and replayStore page on their second word (alert=sustained, the first word held ten minutes) and never on a flicker; heartbeat.yml's steps run against stubbed curl and gh - offline
+          t node scripts/test-status-word-pagers.js
           # heartbeat.yml issue lookups keep only the exact alarm title (a title search also finds near-identical titles; the wallet steps never touch each other's issues) - offline
           t node scripts/test-heartbeat-issue-lookup.js
           # Paid 200 answer classes (ok / empty / error-shaped / unchecked), the toolAnswers word and its heartbeat + Worker alarm, the identical-answer read over a scratch sales ledger, the observer byte-for-byte; boots a paid-mode server against a stub facilitator on free ports
