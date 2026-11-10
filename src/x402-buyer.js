@@ -37,6 +37,7 @@ export const ROUTER_UA =
   "Mozilla/5.0 (compatible; Agent402-Router/1.0; +https://agent402.tools/crawler)";
 import { recordOutbound } from "./outbound-ledger.js";
 import { PAY_X402_TIMEOUT_MS, PAY_X402_MIN_LEG_MS } from "./buyer-timeouts.js";
+import { recordSignedPurchase } from "./router-purchases.js";
 export { PAY_X402_TIMEOUT_MS };
 import { assertSigningAllowed } from "./signing-halt.js";
 import { recordUpstreamSpend } from "./stats.js";
@@ -944,10 +945,17 @@ export function atomicForMessage(v) {
  *                   legs before it took; a wait that hits the bound keeps
  *                   the hold.
  *
+ * @param onSigned   called once, when the payment has been signed and before
+ *                   it is sent, with { url, payTo, chain, amountAtomic, asset }
+ *                   of the accept signed. It records the purchase as our own
+ *                   (default: src/router-purchases.js) and may return a
+ *                   function that takes the record back; that function is
+ *                   called only when the payment provably moved nothing.
+ *
  * A 200 on the bare request means the endpoint is free — returned with no
  * spend. Only a 402 triggers a payment; anything else is a 502.
  */
-export async function payX402(url, { maxAtomic, method = "GET", body, headers = {}, timeoutMs = PAY_X402_TIMEOUT_MS, maxBytes = DEFAULT_MAX_BYTES, chain = "base", provenPayTo = null, evidenceWallets = null, sellerProof = null, notDebited = null, allowUnproven = false, refusalMaxWaitMs = refusalMaxWaitMsDefault(), memoizeDelivery = false, slug = null, signBy = null, sellerKey = null, deadlineMs = null, minLegMs = PAY_X402_MIN_LEG_MS, now = Date.now } = {}) {
+export async function payX402(url, { maxAtomic, method = "GET", body, headers = {}, timeoutMs = PAY_X402_TIMEOUT_MS, maxBytes = DEFAULT_MAX_BYTES, chain = "base", provenPayTo = null, evidenceWallets = null, sellerProof = null, notDebited = null, allowUnproven = false, refusalMaxWaitMs = refusalMaxWaitMsDefault(), memoizeDelivery = false, slug = null, signBy = null, sellerKey = null, deadlineMs = null, minLegMs = PAY_X402_MIN_LEG_MS, now = Date.now, onSigned = recordSignedPurchase } = {}) {
   assertSigningAllowed("an external x402 payment");
   // ONE DEADLINE FOR THE CALL, fixed here. A caller whose own buyer's payment
   // lives a short time (a Solana blockhash, an Algorand round window) hands
@@ -1258,6 +1266,8 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
   // Set once a line for this payment is in the outbound ledger; a post-commit
   // failure no other path recorded is recorded in the catch below.
   let outboundRecorded = false;
+  // Takes back this call's own-purchase record (set when the payment is signed).
+  let retractOwnPurchase = null;
   try {
     // BASE UNPROVEN DAILY CAPS (src/base-unproven.js): the seller's and the
     // whole lane's, checked and the signed amount reserved in one step, keyed
@@ -1320,6 +1330,18 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
       const e = bad(`The signed authorization (${signedValue == null ? "missing" : atomicForMessage(signedValue)}) does not equal the capped quote ${atomicForMessage(quotedAtomic)}; refusing to pay. Nothing was sent.`, 502);
       e.refused = true;
       throw e;
+    }
+    // OUR OWN PURCHASE, RECORDED AS IT IS SIGNED. From here a credential
+    // exists that can move our wallet's money to this accept's payTo, so the
+    // purchase is written down now, under the address actually signed for:
+    // a seller's settlement evidence is reduced by every payment of ours,
+    // whatever the index knew about its wallet. Bookkeeping never stops a
+    // payment.
+    if (typeof onSigned === "function") {
+      try {
+        const undo = onSigned({ url, payTo: payable.payTo, chain, amountAtomic: String(quotedAtomic), asset: payable.asset ?? null });
+        if (typeof undo === "function") retractOwnPurchase = undo;
+      } catch { /* best effort */ }
     }
     // Signing can read the chain (a Solana blockhash). A credential signed
     // inside the deadline and not sent before it never leaves this process.
@@ -1433,6 +1455,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
       e.paidUnanswered = true;
       e.committed = committed;
       e.signedUsd = signedUsd;
+      e.paidTo = payable.payTo;
       e.cause = err;
       return e;
     };
@@ -1678,7 +1701,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
       // every other post-commit throw carries true, as before. (Stamping a
       // literal here let a mutation that never flipped the variable pass the
       // suite - the error said "not committed" while the hold stood.)
-      if (postCommitErr && typeof postCommitErr === "object") { postCommitErr.committed = committed; postCommitErr.signedUsd = signedUsd; }
+      if (postCommitErr && typeof postCommitErr === "object") { postCommitErr.committed = committed; postCommitErr.signedUsd = signedUsd; postCommitErr.paidTo = payable.payTo; }
       // Every signed payment gets one outbound line: a paid request that got
       // no answer, or a refusal, is recorded here unless a path above already
       // recorded it ("refused" once the chain proved the credential unused,
@@ -1726,6 +1749,8 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
       result: await readAfterSpend(paid, maxBytes),
       quote: { atomic: String(quotedAtomic), usd: Number(quotedAtomic) / 1e6, network: chainCfg.caip2 },
       receipt: { transaction: tx, network: net },
+      // The address the signed payment names, for the caller's own records.
+      paidTo: payable.payTo,
     };
   } finally {
     // Refund the hold ONLY when no payment could have been taken:
@@ -1736,6 +1761,8 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     if (!committed) {
       releaseSpend(quotedAtomic, spendToken);
       releaseUnprovenSellerSpend(unprovenHold);
+      // The same proof takes the own-purchase record back: nothing was bought.
+      if (retractOwnPurchase) { try { retractOwnPurchase(); } catch { /* best effort */ } }
     }
   }
 }

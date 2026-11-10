@@ -159,7 +159,12 @@ const proofDown = async () => { throw new Error("rpc down"); };
 const cap = BigInt(5000); // $0.005
 
 // happy path
-const r1 = await payTempo(URL_, { method: "POST", body: { url: "https://x" }, maxAtomic: cap, createCredential: mint, proof: proofOk });
+// The purchase is reported as it is signed (src/router-purchases.js).
+const signedSeen = []; let takenBack = 0;
+const onSigned = (p) => { signedSeen.push(p); return () => { takenBack++; }; };
+const r1 = await payTempo(URL_, { method: "POST", body: { url: "https://x" }, maxAtomic: cap, createCredential: mint, proof: proofOk, onSigned });
+ok(signedSeen.length === 1 && signedSeen[0].chain === "tempo" && signedSeen[0].amountAtomic === "2000" && /^0x[0-9a-fA-F]{40}$/.test(signedSeen[0].payTo) && signedSeen[0].payTo === r1.paidTo && takenBack === 0,
+  `the signed credential is reported once as our own purchase, with the recipient and amount it pays, and kept on delivery (${JSON.stringify(signedSeen[0])})`);
 ok(r1.result?.scraped === true && r1.result.echo?.url === "https://x", "paid retry relayed the seller's JSON body (request body forwarded)");
 ok(r1.quote.usd === 0.002 && r1.quote.network === TEMPO_CAIP2, "quote reflects the LIVE 402 amount in USD on Tempo");
 ok(r1.receipt.transaction === "0xfeed" && r1.receipt.wire === "mpp", "receipt carries the Payment-Receipt reference and wire=mpp");
@@ -168,7 +173,9 @@ ok(lastAuth === lastMinted && /^Payment /.test(lastAuth) && paidHits === 1 && mi
 // guards - each must refuse BEFORE minting
 const refuse = async (mode, opts, re, label) => {
   sellerMode = mode; const before = minted; let err = null;
-  try { await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, createCredential: mint, ...opts }); } catch (e) { err = e; }
+  const signedBefore = signedSeen.length;
+  try { await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, createCredential: mint, onSigned, ...opts }); } catch (e) { err = e; }
+  ok(signedSeen.length === signedBefore, `${label} -> no purchase reported`);
   ok(err && re.test(err.message), `${label} -> refused (${err?.statusCode}: ${String(err?.message).slice(0, 70)})`);
   ok(minted === before, `${label} -> no credential minted`);
 };
@@ -190,7 +197,8 @@ await refuse("unknown-detail", { proof: proofOk }, /method detail this wallet do
 }
 await refuse("ok", { proof: proofDown }, /refusing to spend/, "proof RPC down (fail closed)");
 sellerMode = "reject-paid";
-let rej = null; try { await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, createCredential: mint, proof: proofOk }); } catch (e) { rej = e; }
+let rej = null; try { await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, createCredential: mint, proof: proofOk, onSigned }); } catch (e) { rej = e; }
+ok(signedSeen.length === 2 && takenBack === 0 && rej?.committed === true && rej?.paidTo === signedSeen[1].payTo, "a payment the seller answered 402 to with no chain proof keeps its own-purchase report");
 ok(rej && /rejected the paid retry/.test(rej.message) && rej.statusCode === 502, "seller 402 after payment -> 502 (buyer's settlement cancels; our exposure is bounded by cap)");
 
 // ---- one deadline for the whole purchase ----

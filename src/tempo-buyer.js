@@ -27,6 +27,7 @@ import { assertNotOwnPayout } from "./own-wallets.js";
 import { createHash } from "node:crypto";
 import { assertSigningAllowed } from "./signing-halt.js";
 import { assertPayoutScreened } from "./tools/sanctions-kit.js";
+import { recordSignedPurchase } from "./router-purchases.js";
 import { ROUTER_UA, noteSellerDeliveryFailure, clearSellerDeliveryFailure, isCallerInputStatus, buyerAddressGuardOn } from "./x402-buyer.js";
 import { recordUpstreamSpend } from "./stats.js";
 import { recordOutbound } from "./outbound-ledger.js";
@@ -376,6 +377,11 @@ export async function payTempo(url, {
   // EVM buyer routed here; route-execute hands it in). Checked right before
   // signing, so a refusal there has signed nothing.
   signBy = null,
+  // Called once the credential is signed and checked, before it is sent: it
+  // records the purchase as our own and may return a function that takes
+  // the record back, called only when the payment provably moved nothing
+  // (the payX402 rule).
+  onSigned = recordSignedPurchase,
 } = {}) {
   assertSigningAllowed("a Tempo payment");
   const refusalWaitEndAt = Date.now() + Math.max(0, Number(refusalMaxWaitMs) || 0);
@@ -496,10 +502,20 @@ export async function payTempo(url, {
     e.refused = true;
     throw e;
   }
+  // Our own purchase, recorded as it is signed, under the recipient the
+  // credential pays (src/router-purchases.js). Bookkeeping never stops a payment.
+  let retractOwnPurchase = null;
+  if (typeof onSigned === "function") {
+    try {
+      const undo = onSigned({ url, payTo: recipient, chain: "tempo", amountAtomic: String(quotedAtomic), asset: req.currency || null });
+      if (typeof undo === "function") retractOwnPurchase = undo;
+    } catch { /* best effort */ }
+  }
+  const takeBack = () => { if (retractOwnPurchase) { try { retractOwnPurchase(); } catch { /* best effort */ } retractOwnPurchase = null; } };
   const startBlock = await headRead;
   // A pull credential moves nothing until the seller submits it, so when
   // signing used up the budget the request is not sent at all.
-  if (leftMs() < MIN_MINT_MS) throw bad("Too little of this call's time budget is left to wait for the seller; the payment was not sent", 504);
+  if (leftMs() < MIN_MINT_MS) { takeBack(); throw bad("Too little of this call's time budget is left to wait for the seller; the payment was not sent", 504); }
   // From here the credential has been handed to the seller, and nothing on
   // this rail can prove afterwards that it was not broadcast: every failure
   // below is stamped `committed`, with the amount the credential carries
@@ -586,10 +602,15 @@ export async function payTempo(url, {
       result,
       quote: { atomic: String(quotedAtomic), usd: Number(quotedAtomic) / 1e6, network: TEMPO_CAIP2 },
       receipt: { transaction: reference, network: TEMPO_CAIP2, wire: "mpp" },
+      // The recipient the signed credential pays, for the caller's own records.
+      paidTo: recipient,
     };
   } catch (err) {
     const e = err && typeof err === "object" ? err : bad(String(err), 502);
     e.committed = committed;
+    e.paidTo = recipient;
+    // The chain proved the credential unused: nothing was bought.
+    if (!committed) takeBack();
     // The credential carries the quote and nothing more: the most it moves.
     if (committed) e.signedUsd = Number(quotedAtomic) / 1e6;
     throw e;

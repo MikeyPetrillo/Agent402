@@ -201,7 +201,10 @@ const origin = base;
   rpcNow = chain();
   const before = outbound().length;
   mode = { status: 400, receipt: false };
-  const e = await buy("/bad");
+  // The own-purchase report made at signing is taken back on this proof.
+  let reported = 0, takenBack = 0;
+  const e = await buy("/bad", { onSigned: () => { reported++; return () => { takenBack++; }; } });
+  ok(reported === 1 && takenBack === 1, `a proven-unused credential's own-purchase report is taken back, once (${reported} reported, ${takenBack} taken back)`);
   ok(e && /refused the request before taking payment \(HTTP 400\); the credential expired unused, nothing charged/.test(e.message) && !/after payment/.test(e.message), `a proven-unused 400 says the seller refused before payment (got "${e?.message}")`);
   ok(e.committed === false && e.signedUsd === undefined && e.refused === true, "...and carries no committed stamp and no signed amount");
   ok(outbound().length === before, "...and records no outbound payment");

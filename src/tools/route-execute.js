@@ -35,7 +35,7 @@ import { PAY_X402_TIMEOUT_MS, PAY_X402_MIN_LEG_MS } from "../buyer-timeouts.js";
 import { spendsBeforeSettlement } from "../composite-spend-guard.js";
 import { upstreamBuyerStatus, evmBuyerChainStatus } from "../upstream-buyer-status.js";
 import { EVM_BUYER_CHAINS, EVM_BUYER_CHAIN_BY_NETWORK, isEvmBuyerChain, evmBuyerChainEnabled, enabledEvmBuyerChains } from "../evm-buyer-chains.js";
-import { recordRouterPurchase } from "../router-purchases.js";
+import { recordRouterPurchase, retractRouterPurchase } from "../router-purchases.js";
 import { adaptParamsToExample } from "../mpp-input-examples.js";
 import { boundRequestUrl, isQueryMethod, BOUND_URL_MAX_CHARS } from "../bound-request-url.js";
 
@@ -380,7 +380,7 @@ const traceStep = (req, step, data) => {
   try { trajectoryListener(req, step, data); } catch { /* a listener never changes a payment */ }
 };
 
-export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TIERS[0], resolveExternal = null, payExternal = null, externalEnabled = () => false, externalChains = () => ["base"], spendingWalletStatus = cachedSpendingWalletStatus, recordPurchase = recordRouterPurchase }) {
+export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TIERS[0], resolveExternal = null, payExternal = null, externalEnabled = () => false, externalChains = () => ["base"], spendingWalletStatus = cachedSpendingWalletStatus, recordPurchase = recordRouterPurchase, retractPurchase = retractRouterPurchase }) {
   const EXEC_PRICE_USD = tier.execPriceUsd;
   const UNDERLYING_MAX_USD = tier.underlyingMaxUsd;
   const routeSuffix = tier.slug.replace("route-execute", "");
@@ -774,6 +774,26 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             (req.__externalSpends ||= []).push(spendHandle);
           }
           let paid;
+          // THE ROUTER'S OWN PURCHASE is recorded by the payer the moment it
+          // signs (`onSigned`), under this seller and the address the signed
+          // payment names, and taken back by the payer only when that payment
+          // provably moved nothing. It does not wait for an outcome and does
+          // not need the index to have held a wallet for the seller.
+          let signedPurchase = null;
+          const onSigned = (p) => {
+            const rec = { origin: ext.seller, payTo: p?.payTo, chain, at: Date.now() };
+            let stored = false;
+            try { stored = !!recordPurchase(rec); } catch { /* best effort */ }
+            signedPurchase = { ...rec, stored };
+            return stored ? () => { try { retractPurchase(rec); } catch { /* best effort */ } } : null;
+          };
+          // A payer that reported no signature and may still have paid: the
+          // purchase is recorded at the outcome, under the address the payer
+          // names, else the one the index held.
+          const recordUnreported = (paidTo) => {
+            if (signedPurchase) return;
+            try { recordPurchase({ origin: ext.seller, payTo: paidTo || ext.provenPayTo, chain }); } catch { /* best effort */ }
+          };
           try {
             // provenPayTo: the address this seller's reliability evidence was
             // computed FROM. The resolver already refused a probe whose 402
@@ -792,7 +812,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
               throw lastErr || bad(`Tried ${__paidAttempts} paid seller(s) for this task without a delivered answer. Refusing to sign another payment for one request.`, 502);
             }
             traceStep(req, "attempt", { origin: ext.seller, lane: ext.unproven ? "unproven" : "proven" });
-            paid = await payExternal(extUrl, { method: extMethod, body: extBody, maxAtomic: BigInt(Math.round(cap * 1e6)), chain, provenPayTo: ext.provenPayTo || null, evidenceWallets: ext.evidenceWallets || null, allowUnproven: ext.unproven === true, ...(ext.unproven === true && ext.seller ? { sellerKey: ext.seller } : {}), refusalMaxWaitMs: refusalBudgetMs(), ...(tempoBudgetMs == null && evmSellerSignBy(req) != null ? { signBy: evmSellerSignBy(req) } : {}), ...(windowBudgetMs != null ? { timeoutMs: Math.max(3000, remainingMs()) } : cdnLeftMs != null ? { timeoutMs: Math.max(3000, Math.min(PAY_X402_TIMEOUT_MS, refusalBudgetMs())) } : {}), ...(callBudgetLeftMs() != null ? { deadlineMs: Math.max(0, callBudgetLeftMs()) } : {}) });
+            paid = await payExternal(extUrl, { method: extMethod, body: extBody, maxAtomic: BigInt(Math.round(cap * 1e6)), chain, provenPayTo: ext.provenPayTo || null, evidenceWallets: ext.evidenceWallets || null, allowUnproven: ext.unproven === true, ...(ext.unproven === true && ext.seller ? { sellerKey: ext.seller } : {}), refusalMaxWaitMs: refusalBudgetMs(), ...(tempoBudgetMs == null && evmSellerSignBy(req) != null ? { signBy: evmSellerSignBy(req) } : {}), ...(windowBudgetMs != null ? { timeoutMs: Math.max(3000, remainingMs()) } : cdnLeftMs != null ? { timeoutMs: Math.max(3000, Math.min(PAY_X402_TIMEOUT_MS, refusalBudgetMs())) } : {}), ...(callBudgetLeftMs() != null ? { deadlineMs: Math.max(0, callBudgetLeftMs()) } : {}), onSigned });
           } catch (e) {
             // WHAT STAYS BOOKED IS WHAT MAY HAVE LEFT THE WALLET. The payer
             // stamps `committed:true` on every failure after the payment
@@ -853,7 +873,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             // A payment that left is the router's purchase whatever the seller
             // answered: recorded against the seller's wallet so its
             // third-party counts are reduced by it (src/router-purchases.js).
-            if (spentMaybe) { try { recordPurchase({ origin: ext.seller, payTo: ext.provenPayTo, chain }); } catch { /* best effort */ } }
+            if (spentMaybe) recordUnreported(e?.paidTo);
             // A paid request that got no answer is never followed by another
             // seller in the same request, even once the chain shows it unused.
             // "No answer" is the outcome a caller's own params can produce (a
@@ -922,7 +942,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           traceStep(req, "outcome", { origin: ext.seller, ok: true, servedUnpaid, signedUsd: paid.quote ? paid.quote.usd : null });
           // The router's own purchase, recorded against the wallet it paid so
           // the seller's third-party counts are reduced by it.
-          if (!servedUnpaid) { try { recordPurchase({ origin: ext.seller, payTo: ext.provenPayTo, chain }); } catch { /* best effort */ } }
+          if (!servedUnpaid) recordUnreported(paid.paidTo);
           const underlyingUsd = servedUnpaid ? 0 : (paid.quote ? paid.quote.usd : extUsd);
           // Now the real figure is known, so the ceiling stops counting the
           // worst case against this payer.

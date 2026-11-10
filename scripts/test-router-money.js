@@ -8,6 +8,9 @@
 //   2. A Solana hold is released only on proof the credential cannot land:
 //      the finalized chain past the blockhash's last valid height, read
 //      from our own RPC; an unknown answer is pending.
+//   3. Every payment our wallet signs is recorded as our own purchase when it
+//      is signed, under the address signed for, and taken back only on proof
+//      that nothing moved; the outbound ledger reconciles against the rows.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { randomBytes } from "node:crypto";
 import { mkdtempSync } from "node:fs";
@@ -269,6 +272,99 @@ const json200 = () => new Response(JSON.stringify({ ok: true }), { status: 200, 
   ok(buyer._spentThisWindow() === held, "and that hold is given back");
   seller.close(); rpcSrv.close();
   if (prevRpc === undefined) delete process.env.SOLANA_RPC_URL; else process.env.SOLANA_RPC_URL = prevRpc;
+}
+
+// --- 3. Every signed payment is recorded as our own purchase -----------------
+{
+  const { createRouterPurchaseStore, routerPurchaseStore } = await import("../src/router-purchases.js");
+  const { resolvedCandidateOf } = await import("../src/sor-candidates.js");
+  const { buildEvidenceBinding } = await import("../src/evidence-binding.js");
+  const { readFileSync } = await import("node:fs");
+  const SELLER = "https://seller.example", W = "0x" + "c1".repeat(20);
+  const h = challengeHeader(baseAccept({ payTo: W }));
+  const sellerDelivers = async (_u, init) => (paidHeaderOf(init) ? new Response(JSON.stringify({ ok: 1 }), { status: 200, headers: { "content-type": "application/json", "payment-response": Buffer.from(JSON.stringify({ success: true, transaction: "0xab", network: "eip155:8453" })).toString("base64") } }) : bare402(h));
+  const reqBase = { ip: "198.51.100.7", header: (n) => (n === "payment-signature" ? Buffer.from(JSON.stringify({ network: "eip155:8453", payload: {} })).toString("base64") : undefined) };
+  const row = { seller: SELLER, slug: "x", url: `${SELLER}/x`, method: "POST", price: "$0.001", priceUsd: 0.001, networks: ["eip155:8453"], settled: 60 };
+  // The review's run, through the REAL payer: 60 buys at a seller the index
+  // cleared by its per-wallet binding, so it holds no wallet for the seller.
+  const buyTimes = async (candidate, n, payExternal) => {
+    const store = createRouterPurchaseStore({ file: null });
+    const exec = buildRouteExecuteTool({
+      getCatalog: () => ({}), tier: EXEC_TIERS[0], resolveExternal: async () => [candidate], payExternal,
+      externalEnabled: () => true, externalChains: () => ["base"], spendingWalletStatus: () => null,
+      recordPurchase: (a) => store.record(a), retractPurchase: (a) => store.retract(a),
+    });
+    let delivered = 0;
+    for (let i = 0; i < n; i++) { guard.__reset(); buyer.releaseSpend(1_000_000n, { window: -1 }); await exec.handler({ task: "t", include: "external" }, { ...reqBase }).then(() => delivered++, () => {}); }
+    return { store, delivered };
+  };
+  const bazaarQuality = [[SELLER, { calls30d: 70, payers30d: 3, payTos: [W], byPayTo: { [W]: { calls: 70, payers: 3 } } }]];
+  const verdict = (store) => { const b = buildEvidenceBinding({ bazaarQuality, routerPurchases: store.snapshot(), minSettled: 50, minPayers: 3 }).get(SELLER); return { settled: b.settled, payers: b.payers, clears: b.clearing.has(W) }; };
+  globalThis.fetch = sellerDelivers;
+  const asResolved = resolvedCandidateOf(row, { provenPayTo: null, evidenceWallets: [W] });
+  ok(asResolved.provenPayTo == null, "the candidate is the resolver's own shape for a binding-cleared seller: no wallet on record");
+  const realPay = (u, o) => buyer.payX402(u, { ...o, memoizeDelivery: true });
+  const a = await buyTimes(asResolved, 60, realPay);
+  ok(a.delivered === 60 && a.store.at(SELLER, W).calls === 60, `60 buys at a seller with no wallet on record are 60 own-purchase rows at the wallet signed for (${a.delivered} delivered, ${JSON.stringify(a.store.at(SELLER, W))})`);
+  const ev = verdict(a.store);
+  ok(ev.settled === 10 && ev.payers === 2 && ev.clears === false, `and the seller's third-party figures are read without them (${JSON.stringify(ev)})`);
+  // CONTROL: with no purchases the same figures clear the floor.
+  ok(verdict(createRouterPurchaseStore({ file: null })).clears === true, "CONTROL: the same figures with no router purchases clear the floor");
+  // A payer that reports no signature (a stub, an older payer): the outcome
+  // still records the purchase, under the address the payer names.
+  const quiet = await buyTimes(asResolved, 3, async () => ({ result: { ok: 1 }, quote: { usd: 0.001 }, receipt: { transaction: "0xab" }, paidTo: W }));
+  ok(quiet.store.at(SELLER, W).calls === 3, `a payer that reports no signature is recorded at the outcome, once each (${quiet.store.at(SELLER, W).calls})`);
+
+  // RECONCILE: every signed payment against the outbound ledger and the
+  // own-purchase rows. Five outcomes of one payer; only proof takes a row back.
+  const store = createRouterPurchaseStore({ file: null });
+  const signed = [];
+  const onSigned = (p) => { const rec = { origin: p.url, payTo: p.payTo, chain: p.chain, at: Date.now() + signed.length }; signed.push({ ...p, rec }); store.record(rec); return () => store.retract(rec); };
+  const ledgerLines = () => { try { return readFileSync(process.env.OUTBOUND_LEDGER_FILE, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };
+  const before = ledgerLines().length;
+  const pays = { delivered: "0x" + "d1".repeat(20), failed: "0x" + "d2".repeat(20), silent: "0x" + "d3".repeat(20), refused: "0x" + "d4".repeat(20), unsent: "0x" + "d5".repeat(20) };
+  const scenario = async (name, paidAnswer, notDebited) => {
+    const hh = challengeHeader(baseAccept({ payTo: pays[name] }));
+    globalThis.fetch = async (_u, init) => (paidHeaderOf(init) ? paidAnswer() : bare402(hh));
+    buyer.releaseSpend(1_000_000n, { window: -1 });
+    return buyer.payX402(`https://${name}.example/x`, { maxAtomic: 5000n, method: "POST", body: {}, chain: "base", refusalMaxWaitMs: 0, notDebited, onSigned }).then(() => ({ ok: true }), (e) => ({ ok: false, committed: e.committed === true }));
+  };
+  const out = {
+    delivered: await scenario("delivered", () => new Response("{}", { status: 200, headers: { "content-type": "application/json" } })),
+    failed: await scenario("failed", () => new Response("down", { status: 500 }), async () => ({ debited: true, observed: 1 })),
+    silent: await scenario("silent", () => { throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" }); }, async () => ({ debited: false, observed: 0, expired: false })),
+    refused: await scenario("refused", () => new Response("{}", { status: 402, headers: { "payment-required": challengeHeader(baseAccept({ payTo: pays.refused })) } }), async () => ({ debited: false, observed: 0, expired: true })),
+    unsent: await scenario("unsent", () => { throw Object.assign(new Error("fetch failed"), { cause: Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }) }); }),
+  };
+  ok(signed.length === 5 && signed.every((s) => s.payTo === pays[new URL(s.url).host.split(".")[0]] && s.amountAtomic === "1000" && s.chain === "base"), `the payer reports each payment as it signs it, with the address, chain and amount signed (${signed.length})`);
+  ok(out.delivered.ok && out.failed.committed && out.silent.committed && !out.refused.committed && !out.unsent.committed, `the five outcomes are the ones meant (${JSON.stringify(out)})`);
+  const lines = ledgerLines().slice(before);
+  const moved = lines.filter((l) => l.result !== "refused");
+  const missing = moved.filter((l) => store.at(`https://${l.origin}`, l.payTo).calls !== 1);
+  ok(moved.length === 3 && missing.length === 0, `every outbound line that may have moved money has its own-purchase row (${moved.map((l) => `${l.origin}:${l.result}`).join(", ")}; missing ${missing.length})`);
+  for (const name of ["delivered", "failed", "silent"]) ok(store.at(`https://${name}.example`, pays[name]).calls === 1, `${name}: the signed payment has a row`);
+  ok(store.at("https://refused.example", pays.refused).calls === 0 && lines.some((l) => l.origin === "refused.example" && l.result === "refused"), "refused: the chain proved the credential unused, and only then is the row taken back");
+  ok(store.at("https://unsent.example", pays.unsent).calls === 0 && !lines.some((l) => l.origin === "unsent.example"), "unsent: a payment that never left this process keeps no row");
+  // Every caller of the payer, with no option given: the server's own store.
+  buyer.releaseSpend(1_000_000n, { window: -1 });
+  globalThis.fetch = async (_u, init) => (paidHeaderOf(init) ? json200() : bare402(challengeHeader(baseAccept({ payTo: pays.delivered }))));
+  await buyer.payX402("https://anycaller.example/x", { maxAtomic: 5000n, method: "POST", body: {}, chain: "base" });
+  ok(routerPurchaseStore().at("https://anycaller.example", pays.delivered).calls === 1, "a caller that passes nothing still leaves a row in the server's store");
+
+  // The store: a retraction survives a write, and a non-EVM address is kept as written.
+  const file = join(dir, "purchases-roundtrip.json");
+  const s1 = createRouterPurchaseStore({ file });
+  const SOLW = "JBTACMs35KqALb85iEpat8GT7uwukLc6wZ4vrHWpeQSv";
+  const r1 = { origin: SELLER, payTo: W, chain: "base", at: 1_800_000_000_000 }, r2 = { ...r1, at: 1_800_000_000_001 };
+  s1.record(r1); s1.record(r2); s1.record({ origin: SELLER, payTo: SOLW, chain: "solana", at: 1_800_000_000_002 });
+  await s1.flush();
+  ok(s1.retract(r1) === true && s1.retract(r1) === false && s1.at(SELLER, W, 1_800_000_000_100).calls === 1, "retract takes back exactly the one stamp, once");
+  await s1.flush();
+  const s2 = createRouterPurchaseStore({ file });
+  ok(s2.at(SELLER, W, 1_800_000_000_100).calls === 1, `a retraction made after the write is in the stored document (${s2.at(SELLER, W, 1_800_000_000_100).calls})`);
+  ok(s2.at(SELLER, SOLW, 1_800_000_000_100).calls === 1 && s2.at(SELLER, SOLW.toLowerCase(), 1_800_000_000_100).calls === 0, "a Solana address is recorded exactly as written, never case-folded");
+  ok(s1.record({ origin: SELLER, payTo: "not an address", chain: "base" }) === false, "CONTROL: an unreadable address is still not a row");
+  buyer.releaseSpend(1_000_000n, { window: -1 });
 }
 
 globalThis.fetch = origFetch;
