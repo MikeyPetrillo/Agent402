@@ -19,7 +19,9 @@ import { join } from "node:path";
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.error("FAIL -", m); } };
 const read = (f) => readFileSync(new URL(`../${f}`, import.meta.url), "utf8");
-const flat = (s) => s.replace(/<[^>]+>/g, "").replace(/\s+/g, " ");
+// Page text with its markup left out: everything from a "<" to the next ">"
+// is skipped in one pass.
+const flat = (s) => { let out = "", inTag = false; for (const ch of s) { if (inTag) { if (ch === ">") inTag = false; } else if (ch === "<") inTag = true; else out += ch; } return out.replace(/\s+/g, " "); };
 
 // --- Card reports: charged at checkout ---------------------------------------
 {
