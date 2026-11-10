@@ -18,7 +18,11 @@ which is where the x402 v2 spec puts them and where clients should keep reading 
 header is authoritative. The JSON body carries the same PaymentRequired object (`x402Version`,
 `error`, `resource`, `accepts`, `extensions`) beside our own fields (`altPayment` on tools that
 take proof-of-work, and `reason`, `hint` and `retry` when a payment was refused), so a reader of
-either finds the offer and the two never disagree. A refused payment's body leaves out the
+either finds the offer and the two never disagree. A first-contact body also carries `payment`:
+this request's `price` in dollars on the `network` it names (each `accepts` entry keeps its own
+network's amount), one sentence on paying, `noWallet` on a tool that takes proof-of-work, `quote`
+on a route priced from its body (the model, request size and output cap you sent), and links to
+`/llms.txt`, the pay section of `/agents.md` and the MCP connector. A refused payment's body leaves out the
 header's one-line `error`: its `hint` (or, for an MPP credential, the problem's `detail`) says
 what went wrong, and a client that reads `error` first reads that instead. `retry` says what kind of
 change helps; `fund-wallet` means the paying wallet holds too little of the asset (or, on Solana, has no

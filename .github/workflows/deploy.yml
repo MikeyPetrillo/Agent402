@@ -1636,6 +1636,9 @@ jobs:
       # Every input-validation 400 carries a ready-to-run howToCall; each free-tier tool's call and alternate are sent as written (boots its own server on port 0)
       - name: Input 400 carries a ready-to-run call
         run: node scripts/test-how-to-call.js
+      # A first-contact 402 body carries a payment block: the dollar price equals /api/pricing and the accept it names (flat, proof-of-work, metered, a premium chain), the metered block names the model sent, and every other field and the header equal a boot with the block off (three paid boots on port 0, a /supported stub)
+      - name: 402 body states its price and next steps
+        run: node scripts/test-payment-guide.js
 
       # ONE STEP, MANY SCRIPTS (2026-08-25): GitHub spends ~0.7 s of runner setup
       # per step and this lane had over a hundred one-line steps. Each script still
