@@ -14,6 +14,7 @@ import {
 } from "../src/tools/llm-gateway-kit.js";
 import { LLM_MESSAGES_TOOLS, meteredMessagesQuoteUsd, EMPTY_MAX_TOKENS_MESSAGE } from "../src/tools/llm-messages-kit.js";
 import { LLM_RESPONSES_TOOLS, meteredResponsesQuoteUsd, EMPTY_INCOMPLETE_MESSAGE } from "../src/tools/llm-responses-kit.js";
+import { LLM_GEMINI_TOOLS } from "../src/tools/llm-gemini-kit.js";
 import { CORS_EXPOSE_HEADERS } from "../src/cors.js";
 const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
 requireUpstreamCosts("test-llm-answer-fit");
@@ -309,6 +310,23 @@ for (const [name, w] of Object.entries(WIRES)) {
     if (r) refused++;
   }
   ok(refused === 0, `${name}: every supported effort at every cap is served (the fit refuses nothing)`);
+}
+
+// ---- the generateContent wire carries the chat handler's disclosure ----
+// This wire takes no reasoning field (thinkingConfig is refused), so the one
+// adjustment it can serve is the recovery try: no buyer effort, a cap at the
+// tier default (no small-budget effort is added), an empty first answer, then
+// the same model at its lowest effort.
+{
+  const tool = LLM_GEMINI_TOOLS.find((t) => t.slug === `${PREMIUM}-gemini`);
+  const cap = smallBudgetThreshold(PREMIUM);
+  const sent = stub(WIRES.chat, (b, i) => ({ empty: i === 0 }));
+  const out = await settled(tool.handler({ model: OPUS, contents: [{ role: "user", parts: [{ text: "hi" }] }], generationConfig: { maxOutputTokens: cap } }, req()));
+  ok(sent.length === 2 && sent.every((b) => b.model === OPUS) && sent[0].reasoning === undefined && sent[1].reasoning?.effort === "low" && sent[1].max_tokens === cap, `gemini: an empty-for-length first answer gets one same-model try at the lowest effort (${trail(WIRES.chat, sent)})`);
+  ok(out?.candidates?.[0]?.content?.parts?.[0]?.text === "answer" && same(out.agent402_reasoning_adjusted, { field: "reasoning.effort", requested: "default", used: "low", reason: "empty_answer_retry" }), `gemini: the generateContent answer carries the adjustment the chat handler made (${JSON.stringify(out?.agent402_reasoning_adjusted)})`);
+  stub(WIRES.chat);
+  const plain = await settled(tool.handler({ model: OPUS, contents: [{ role: "user", parts: [{ text: "hi" }] }], generationConfig: { maxOutputTokens: cap } }, req()));
+  ok(plain?.candidates?.[0]?.content?.parts?.[0]?.text === "answer" && plain.agent402_reasoning_adjusted === undefined, "gemini: an answer served on the first try carries no adjustment field");
 }
 
 globalThis.fetch = realFetch;
