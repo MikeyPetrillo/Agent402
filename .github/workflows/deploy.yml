@@ -8,10 +8,10 @@ name: Deploy to Railway
 # progress kills the older RUN cleanly the moment a newer push starts, so the
 # only run that survives is the one whose build actually reaches prod.
 #
-# That holds for the dev branch only. On `main` a run is a release: cancelling
+# That holds for the dev branch only. On `main` a run is a release: canceling
 # one in progress can stop a deploy between its variable upsert and its
 # verification, or an npm publish between two packages. So a run on `main` is
-# never cancelled by a newer push; the newer run waits in the same group until
+# never canceled by a newer push; the newer run waits in the same group until
 # the running one ends (GitHub keeps one pending run per group, the newest),
 # and its own deploy then carries both merges.
 concurrency:

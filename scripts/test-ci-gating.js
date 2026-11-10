@@ -273,7 +273,7 @@ for (const [name, j] of Object.entries(jobs)) {
   ok(listing.jobs["listing-pass"]?.environment === "spending", "the scheduled listing pass waits for the spending approval");
 }
 
-// A run on main is a release and is never cancelled by a newer push; the dev
+// A run on main is a release and is never canceled by a newer push; the dev
 // branch keeps cancel-in-progress. Every job is bounded, and no call to the
 // platform API can wait forever.
 {
@@ -281,7 +281,7 @@ for (const [name, j] of Object.entries(jobs)) {
   const conc = wf.concurrency || {};
   ok(String(conc.group || "").includes("${{ github.ref }}"), "runs are grouped per branch, so a main run only ever queues behind a main run");
   ok(conc["cancel-in-progress"] === "${{ github.ref != 'refs/heads/main' }}",
-    `a run on main must not be cancelled in progress (cancel-in-progress is ${JSON.stringify(conc["cancel-in-progress"])})`);
+    `a run on main must not be canceled in progress (cancel-in-progress is ${JSON.stringify(conc["cancel-in-progress"])})`);
   ok(Object.values(jobs).every((j) => j.concurrency === undefined), "no job sets its own concurrency, which would bypass the workflow's rule for main");
   const unbounded = Object.entries(jobs).filter(([, j]) => !(Number.isInteger(j["timeout-minutes"]) && j["timeout-minutes"] >= 1 && j["timeout-minutes"] <= 180)).map(([n]) => n);
   ok(unbounded.length === 0, `every job has a timeout-minutes of at most 180 (missing or out of range: ${unbounded.join(", ") || "none"})`);

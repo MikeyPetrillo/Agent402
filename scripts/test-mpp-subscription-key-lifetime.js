@@ -60,7 +60,7 @@ const advance = (ms) => { clock += ms; };
 
 function makeEngine(name) {
   const calls = { activate: 0, charge: 0 };
-  let chargeBehaviour = () => ({ reference: `0xtx${calls.charge}` });
+  let chargeBehavior = () => ({ reference: `0xtx${calls.charge}` });
   const path = join(tmp, `${name}.json`);
   const engine = createMppSubscriptions({
     secretKey: SECRET, realm: REALM, storePath: path, now: () => clock,
@@ -81,14 +81,14 @@ function makeEngine(name) {
     findRenewalOnChain: async () => ({ found: false }),
     chargePeriod: async (rec, { periodIndex }) => {
       calls.charge++;
-      const r = await chargeBehaviour(rec, periodIndex);
+      const r = await chargeBehavior(rec, periodIndex);
       if (r instanceof Error) throw r;
       const mppxRec = await engine._subStore.get(rec.mppxSubscriptionId);
       await engine._subStore.put({ ...mppxRec, lastChargedPeriod: periodIndex, reference: r.reference });
       return r;
     },
   });
-  return { engine, calls, path, setCharge: (fn) => { chargeBehaviour = fn; } };
+  return { engine, calls, path, setCharge: (fn) => { chargeBehavior = fn; } };
 }
 async function subscribe(engine, { product = "domain-monitor", target = "example.com", email = "owner@example.com" } = {}) {
   const offer = await engine.mintOffer({ product, target, email });

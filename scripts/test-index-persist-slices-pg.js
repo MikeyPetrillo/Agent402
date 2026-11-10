@@ -69,7 +69,7 @@ function synthOrigin(i, n, fetchedAt = 1_000_000) {
       asset: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", tags: [w, w2, "x402", "agent"], mimeType: "application/json", maxTimeoutSeconds: 60,
       quoteSource: "live-402", quotedAt: 1_700_000_000_000 + k, networks: ["eip155:8453", "eip155:137"],
       // Held in memory, dropped from the persisted projection (as a crawled
-      // catalogue's schemas are).
+      // catalog's schemas are).
       inputSchema: { type: "object", properties: { q: { type: "string", description: `${w} query` }, limit: { type: "integer", minimum: 1, maximum: 100 } }, required: ["q"] },
       outputSchema: { type: "object", properties: { items: { type: "array" }, next: { type: "string" } } },
       example: { q: w2, limit: 10 },

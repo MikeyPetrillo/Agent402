@@ -3,7 +3,7 @@
 //   - rows older than the cutoff are deleted in bounded batches, oldest first,
 //     and newer rows stay; a run stops at its batch bound and says more remain;
 //   - while another container holds the lease, a second runner deletes nothing;
-//   - a statement slower than the pool's statement limit is cancelled by the
+//   - a statement slower than the pool's statement limit is canceled by the
 //     server, and the insert path does not throw while that happens;
 //   - the retention never drops under the dashboard's widest window, and the
 //     knob's off value keeps everything.
@@ -93,7 +93,7 @@ try {
   const plan = (await direct.query("EXPLAIN DELETE FROM tool_calls WHERE id IN (SELECT id FROM tool_calls WHERE ts < now() - interval '180 days' ORDER BY ts ASC LIMIT 5000)")).rows.map((r) => r["QUERY PLAN"]).join("\n");
   ok(/Index (Only )?Scan( Backward)? using tool_calls_ts_idx/.test(plan) && !/\bSort\b/.test(plan), "the batch selects by the ts index, oldest first, with no sort");
 
-  // The statement limit: a statement that outlasts it is cancelled by the
+  // The statement limit: a statement that outlasts it is canceled by the
   // server, a retention batch that hits it reports the error instead of
   // throwing, and the insert path never throws meanwhile.
   const holder = new pg.Client({ connectionString: own.toString() });
@@ -108,9 +108,9 @@ try {
   for (let i = 0; i < 5; i++) inserts.push(adb.recordToolCall({ slug: "during", latencyMs: 3, status: 200 }).catch(() => { threw = true; }));
   await Promise.all(inserts);
   // Bounded here too, so a pool with no limit fails this check instead of waiting on the lock for good.
-  const cut = await Promise.race([blocked, new Promise((r) => setTimeout(() => r({ ok: false, error: "not cancelled within 10 s" }), 10_000))]);
+  const cut = await Promise.race([blocked, new Promise((r) => setTimeout(() => r({ ok: false, error: "not canceled within 10 s" }), 10_000))]);
   const took = Date.now() - t0;
-  ok(cut.ok === false && /statement timeout/i.test(cut.error || "") && took >= STATEMENT_MS - 50 && took < STATEMENT_MS + 8000, `a statement past the limit is cancelled by the server (${took} ms, ${cut.error})`);
+  ok(cut.ok === false && /statement timeout/i.test(cut.error || "") && took >= STATEMENT_MS - 50 && took < STATEMENT_MS + 8000, `a statement past the limit is canceled by the server (${took} ms, ${cut.error})`);
   ok(!threw && (await count("slug = 'during'")) === 5, "inserts made while a statement waits out its limit land and never throw");
   await holder.query("ROLLBACK");
   await holder.end();
