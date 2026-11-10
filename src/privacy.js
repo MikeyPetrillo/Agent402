@@ -12,7 +12,7 @@ import { auditRetentionDays, AUDIT_SWEEP_MS } from "./memory-retention.js";
 import { ADDRESS_MAX_AGE_MS, MAX_SEND_FAILURES, RECORD_KEEP_MS } from "./followups.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
-import { settledHoldText, CONSUMED_VALIDITY_MARGIN_MS } from "./replay-guard.js";
+import { settledHoldText, settledValidityHoldText, CONSUMED_VALIDITY_MARGIN_MS } from "./replay-guard.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { SHARE_TTL_DAYS, TOMBSTONE_DAYS, answerShareEnabled, sharePagesMayBeLive } from "./answer-share.js";
 import { firstCallAllowanceEnabled } from "./first-call-allowance.js";
@@ -239,7 +239,8 @@ so every claim below is verifiable in code.</p>
   scheme and network it settles on, the optional <code>payment-identifier</code> (used as an idempotency key
   and kept with the cached answer for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes), the payment's nonce and network (as an
   idempotency key for a re-sent payment, held with the cached answer for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes), a digest of the payment's
-  network, signed payer and nonce as a replay mark (kept about ${settledHoldText()} after a settled call; for a grant
+  network, signed payer and nonce as a replay mark (kept about ${settledHoldText()} after a settled call, or until the
+  authorization's own validBefore plus ${Math.round(CONSUMED_VALIDITY_MARGIN_MS / 60000)} minutes when that is later, at most ${settledValidityHoldText()} after the call; for a grant
   that was not settled, a forgiven hang-up${allowanceOn ? " or a served first-call allowance" : ""}, whose authorization is still live
   on chain, until the authorization's own validBefore plus ${Math.round(CONSUMED_VALIDITY_MARGIN_MS / 60000)} minutes, which can be long when the client
   signs a long validity window), the signers of a Solana payment (stored only

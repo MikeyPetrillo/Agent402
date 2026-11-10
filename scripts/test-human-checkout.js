@@ -313,6 +313,88 @@ ok(refunds.length === 3, "...and not refunded again on the next poll");
   rmSync(DIR3, { recursive: true, force: true });
 }
 
+// THE BUYER'S POLL DOES NOT WAIT ON STRIPE WITHOUT A BOUND. A poll of an owed
+// refund retries it (retryOwedRefund). With a Stripe that never answers the
+// refund call, or the session read that decides a record naming no product,
+// the poll is answered inside its wait with the record still owed and no
+// attempt counted; a poll while that retry is open starts no second call; a
+// later poll against a Stripe that answers sends one refund, under the same
+// idempotency key as the call that was never answered, and a late answer to
+// that first call (a success, or a failure) changes nothing.
+{
+  const DIR4 = join("/tmp", `test-human-checkout-poll-${process.pid}`);
+  rmSync(DIR4, { recursive: true, force: true });
+  mkdirSync(DIR4, { recursive: true });
+  const at = new Date(clock - 3600_000).toISOString();
+  const owed = (pi, extra = {}) => ({ status: "error", refundId: null, error: "We couldn't complete this report. Your refund is being processed.", refundOwed: true, refundAttempts: 1, lastRefundAttemptAt: 0, paymentIntent: pi, at, ...extra });
+  const recs = { cs_pollA: owed("pi_pollA", { product: "research" }), cs_pollB: owed("pi_pollB", { product: "research" }), cs_pollC: owed("pi_pollC") };
+  for (const [id, rec] of Object.entries(recs)) writeFileSync(join(DIR4, `${id}.json`), JSON.stringify(rec));
+  writeFileSync(join(DIR4, "_issues.json"), JSON.stringify(Object.fromEntries(Object.keys(recs).map((id) => [id, { kind: "refund-owed", at, attempts: 1 }]))));
+  let stripeAnswers = false;
+  const creates = [], sent = [], late = new Map(), reads = [];
+  const stub = {
+    checkout: { sessions: { retrieve: (id) => { reads.push(id); return stripeAnswers ? Promise.resolve({ id, mode: "payment", payment_status: "paid", payment_intent: "pi_pollC", metadata: { product: "research", input: "x" } }) : new Promise(() => {}); } } },
+    refunds: { create: (args, opts) => {
+      creates.push({ pi: args.payment_intent, key: opts?.idempotencyKey });
+      if (!stripeAnswers) return new Promise((resolve, reject) => late.set(args.payment_intent, { resolve, reject }));
+      sent.push(args.payment_intent);
+      return Promise.resolve({ id: `re_${args.payment_intent}` });
+    } },
+  };
+  let t = clock;
+  const ABANDON_MS = 300_000;
+  const h = createHumanCheckout({ stripe: stub, generate, baseUrl: "https://agent402.tools", storeDir: DIR4, onSale: () => {}, now: () => t, log: () => {}, owedRetryWaitMs: 150, owedRetryAbandonMs: ABANDON_MS });
+  // A poll is given 20 s here; the retry's own wait is 150 ms.
+  const poll = async (id) => { const r = await Promise.race([h.fulfill(id), wait(20_000).then(() => null)]); return r === null ? { held: true } : r; };
+  const of = (pi) => creates.filter((c) => c.pi === pi);
+  const stillOwed = (r) => !r.held && r.status === "error" && r.refundOwed === true && !r.refundId && /Your refund is being processed\.$/.test(r.error) && !/has been refunded/.test(r.error);
+
+  // 1. The refund call never answers.
+  for (const [id, pi] of [["cs_pollA", "pi_pollA"], ["cs_pollB", "pi_pollB"]]) {
+    const first = await poll(id);
+    ok(stillOwed(first), `refund call unanswered (${id}): the poll is answered inside its wait, the refund still owed and never reported as sent (${first.held ? "HELD" : first.status})`);
+    ok(of(pi).length === 1 && of(pi)[0].key === `agent402-refund-${pi}`, `refund call unanswered (${id}): one refund call is open, under the payment's idempotency key (${JSON.stringify(of(pi))})`);
+    ok(h.peek(id).refundOwed === true && h.peek(id).refundAttempts === 1 && h.listIssues().refundOwed.some((x) => x.id === id), `refund call unanswered (${id}): the record is still owed and listed, no attempt counted`);
+    const second = await poll(id);
+    ok(stillOwed(second) && of(pi).length === 1, `refund call unanswered (${id}): a poll while that call is open is answered from the record and starts no second call (${of(pi).length})`);
+  }
+  // Inside the abandon time, with Stripe answering again: still the one call.
+  stripeAnswers = true;
+  t += ABANDON_MS - 1_000;
+  ok(stillOwed(await poll("cs_pollA")) && of("pi_pollA").length === 1 && sent.length === 0, "refund call unanswered: until the open call is given up no second one is sent");
+  t += 2_000;
+  for (const [id, pi] of [["cs_pollA", "pi_pollA"], ["cs_pollB", "pi_pollB"]]) {
+    const healed = await poll(id);
+    ok(!healed.held && healed.refundOwed === false && healed.refundId === `re_${pi}` && /has been refunded/.test(healed.error), `later, Stripe answering (${id}): the poll refunds the payment and says so (${healed.held ? "HELD" : healed.refundId})`);
+    ok(sent.filter((x) => x === pi).length === 1 && of(pi).length === 2 && of(pi).every((c) => c.key === `agent402-refund-${pi}`), `later, Stripe answering (${id}): exactly one refund is sent, under the same idempotency key as the unanswered call (${JSON.stringify(of(pi))})`);
+    ok(!h.listIssues().refundOwed.some((x) => x.id === id), `later, Stripe answering (${id}): the debt leaves the owed list`);
+  }
+  // The first calls answer late: one as Stripe replays a keyed refund, one as a failure.
+  late.get("pi_pollA").resolve({ id: "re_pi_pollA" });
+  late.get("pi_pollB").reject(new Error("stripe: connection lost"));
+  await wait(50);
+  t += 31_000;
+  for (const [id, pi] of [["cs_pollA", "pi_pollA"], ["cs_pollB", "pi_pollB"]]) {
+    const after = await poll(id);
+    ok(!after.held && after.refundOwed === false && after.refundId === `re_${pi}` && of(pi).length === 2 && sent.filter((x) => x === pi).length === 1, `late answer to the unanswered call (${id}): the record stays refunded and no further refund is sent (${after.refundId}, ${of(pi).length} calls)`);
+  }
+
+  // 2. A record that names no product: the session read never answers.
+  stripeAnswers = false;
+  const c1 = await poll("cs_pollC");
+  ok(stillOwed(c1) && reads.filter((x) => x === "cs_pollC").length === 1 && of("pi_pollC").length === 0, `session read unanswered: the poll is answered inside its wait, still owed, and no refund is sent on an undecided record (${c1.held ? "HELD" : c1.status})`);
+  const c2 = await poll("cs_pollC");
+  ok(stillOwed(c2) && reads.filter((x) => x === "cs_pollC").length === 1, "session read unanswered: a poll while that read is open starts no second read");
+  stripeAnswers = true;
+  t += ABANDON_MS + 1_000;
+  const c3 = await poll("cs_pollC");
+  ok(!c3.held && c3.refundOwed === false && c3.refundId === "re_pi_pollC" && sent.filter((x) => x === "pi_pollC").length === 1 && of("pi_pollC").length === 1, `session read unanswered, then Stripe answering: one refund is sent (${c3.held ? "HELD" : c3.refundId})`);
+  t += 31_000;
+  await poll("cs_pollC");
+  ok(sent.filter((x) => x === "pi_pollC").length === 1, "...and not again on the next poll");
+  rmSync(DIR4, { recursive: true, force: true });
+}
+
 // Long input reassembles from chunked metadata.
 await hc.fulfill("cs_long");
 const lg = await settle("cs_long");

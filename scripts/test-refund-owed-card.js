@@ -9,7 +9,10 @@
 // record names no product, as one stored by an earlier build does, and the
 // status read does not wait for the session read that would decide it. The
 // word still reads owed, and reading the status again starts no second
-// session read for the same record.
+// session read for the same record. The buyer's own poll of an owed refund
+// (GET /api/r/<session>) retries the refund: with Stripe not answering, the
+// poll is answered inside its bounded wait with the refund still owed, and a
+// second poll starts no second refund call.
 import "./lib/file-mode.js";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
@@ -79,6 +82,26 @@ try {
   seed({ cs_test_owed: { kind: "refund-owed", at: iso(20 * MIN), attempts: 6 }, cs_test_old: { kind: "refund-owed", at: iso(50 * HOUR), attempts: 6 } });
   const aging = await read(true);
   ok(aging.status === "aging" && aging.cardOwedCount === 2 && aging.cardAgingCount === 1, `one owed past the alarm hours reads aging (${JSON.stringify(aging)})`);
+
+  // The buyer's poll, through the real Stripe client: its refund call is held
+  // open and never answered.
+  {
+    const REC = join(DIR, "cs_test_poll.json");
+    writeFileSync(REC, JSON.stringify({ status: "error", refundId: null, error: "We couldn't complete this report. Your refund is being processed.", refundOwed: true, refundAttempts: 1, lastRefundAttemptAt: 0, paymentIntent: "pi_test_poll", product: "research", at: iso(20 * MIN) }));
+    try {
+      const refundCalls = () => log.split("\n").filter((l) => l.startsWith("[stripe-hang-preload] request ") && l.endsWith(" POST /v1/refunds")).length;
+      const POLL_BOUND_MS = 30_000; // the poll's own wait is far inside this; the Stripe client's is far past it
+      const poll = async () => {
+        try { const r = await fetch(`${base}/api/r/cs_test_poll`, { signal: AbortSignal.timeout(POLL_BOUND_MS) }); return { status: r.status, body: await r.json() }; }
+        catch (e) { return { status: 0, body: { error: `no answer inside ${POLL_BOUND_MS} ms (${e?.name})` } }; }
+      };
+      const first = await poll();
+      ok(first.status === 200 && first.body.status === "error" && first.body.refundOwed === true && !first.body.refundId && /Your refund is being processed\.$/.test(first.body.error || ""), `buyer poll: with Stripe not answering the poll is answered, the refund still owed and not reported as sent (${first.status} ${String(first.body.error).slice(0, 80)})`);
+      ok(refundCalls() === 1, `buyer poll: CONTROL: its refund call was sent and Stripe holds it unanswered (${refundCalls()} request)`);
+      const second = await poll();
+      ok(second.status === 200 && second.body.refundOwed === true && refundCalls() === 1, `buyer poll: a second poll is answered from the record and starts no second refund call (${refundCalls()} request)`);
+    } finally { rmSync(REC, { force: true }); }
+  }
 
   rmSync(ISSUES, { force: true });
   ok((await read(false)).status === "ok", "control: once nothing is owed the word reads ok again");

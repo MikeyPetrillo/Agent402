@@ -68,6 +68,13 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   model prose passes it through `sanitizeReportProse` (`src/report-grounding.js`: a link stays a
   link only to a listed source's host; images and raw HTML are removed) and wraps fetched text in
   `quotedMaterial`; `scripts/test-report-prose-filter.js` runs each kit.
+- **Card report refunds owed:** a buyer's poll of an owed refund (`retryOwedRefund` in
+  `src/human-checkout.js`) waits `OWED_RETRY_WAIT_MS` (8 s) for Stripe, then answers with the
+  stored owed record while the retry runs on and records its own outcome. One retry per record is
+  open at a time; one still open after `OWED_RETRY_ABANDON_MS` (5 minutes, past the Stripe
+  client's own waits) is given up so a later poll starts another. Every refund create carries the
+  payment's idempotency key, so two calls are one refund, and a late failure never writes over a
+  recorded refund (`scripts/test-human-checkout.js`, `scripts/test-refund-owed-card.js`).
 - **Direct upstream (off by default):** `src/gateway-direct-upstream.js`. With `DIRECT_UPSTREAM_URL`
   (https; plain http only to loopback), `DIRECT_UPSTREAM_KEY` and `DIRECT_UPSTREAM_MODELS`
   (`<openrouter id>=<upstream id>,...`) all set, the chat wire (`llm-gateway-kit.js` makeHandler,
