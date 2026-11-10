@@ -713,5 +713,54 @@ const hex = (n) => (n >>> 0).toString(16).padStart(8, "0");
   ok(c.width === 32 && c.height === 32, `image-crop accepts it under the wallet cap (${c.error || `${c.width}x${c.height}`})`);
 }
 
+// Seeded fuzz. Each valid file the blocks above set aside is mutated (bit
+// flips, byte and size-field edits, truncation, blocks repeated, dropped and
+// swapped) and sent through the pool: the main-thread check, then the worker.
+// Every answer has to be a decode or a 400, inside 1.5 s of a 2 s deadline,
+// with no worker lost and no jump in the process's peak memory. 300 cases per
+// format, fixed seed; about 3 s in all.
+{
+  const { runImageOffThread } = await import("../src/tools/image-pool.js");
+  for (const [format, mime] of [["png", JimpMime.png], ["jpeg", JimpMime.jpeg], ["bmp", JimpMime.bmp], ["gif", "image/gif"], ["tiff", "image/tiff"]]) {
+    const picture = new Jimp({ width: 24, height: 16, color: 0x3366ccff });
+    for (let k = 0; k < 24 * 16; k++) picture.bitmap.data[k * 4] = (k * 5) & 255;
+    fuzzSeeds[format].push(Buffer.from(await picture.getBuffer(mime)));
+  }
+  let seed = 20261109;
+  const rnd = () => (seed = (Math.imul(seed, 1103515245) + 12345) & 0x7fffffff) / 0x80000000;
+  const ri = (n) => Math.floor(rnd() * n);
+  const mutate = (src) => {
+    let b = Buffer.from(src);
+    for (let ops = 1 + ri(4); ops > 0 && b.length > 8; ops--) {
+      const at = ri(b.length), kind = ri(8);
+      if (kind === 0) for (let k = 1 + ri(8); k > 0; k--) b[ri(b.length)] ^= 1 << ri(8);
+      else if (kind === 1) b[at] = [0, 0xff, 0x7f, 0x80, ri(256)][ri(5)];
+      else if (kind === 2) b = b.subarray(0, Math.max(8, at));
+      else if (kind === 3) { const n = 1 + ri(64), from = ri(b.length); b = Buffer.concat([b.subarray(0, at), b.subarray(from, from + n), b.subarray(at)]); }
+      else if (kind === 4) { const n = 1 + ri(32); b = Buffer.concat([b.subarray(0, at), b.subarray(at + n)]); }
+      else if (kind === 5 && at + 2 <= b.length) b.writeUInt16LE([0, 1, 0xffff, 0x7fff, ri(65536)][ri(5)], at);
+      else if (kind === 6 && at + 4 <= b.length) b[ri(2) ? "writeUInt32LE" : "writeUInt32BE"]([0, 1, 0xffffffff, 0x7fffffff, ri(1 << 20)][ri(5)], at);
+      else { const n = 1 + ri(16), c = at + n + ri(64); if (c + n <= b.length) { const x = Buffer.from(b.subarray(at, at + n)); b.copy(b, at, c, c + n); x.copy(b, c); } }
+    }
+    return b;
+  };
+  const started = Date.now();
+  for (const [format, seeds] of Object.entries(fuzzSeeds)) {
+    const peak0 = process.resourceUsage().maxRSS;
+    const tally = { decoded: 0, refused: 0 }; const wrong = [];
+    for (let i = 0; i < 300; i++) {
+      const file = mutate(seeds[i % seeds.length]);
+      const t0 = Date.now(); let code = 200, msg = "";
+      try { await runImageOffThread({ op: "convert", buffer: file, params: { format: "bmp" }, maxPixels: 1e6, timeoutMs: 2000 }); } catch (e) { code = e.statusCode; msg = e.message; }
+      const ms = Date.now() - t0;
+      if (code === 200) tally.decoded++; else if (code === 400) tally.refused++;
+      if ((code !== 200 && code !== 400) || ms > 1500) wrong.push(`#${i} ${code} "${msg.slice(0, 70)}" ${ms}ms`);
+    }
+    const grew = Math.round((process.resourceUsage().maxRSS - peak0) / 1024);
+    ok(wrong.length === 0 && grew < 400, `300 mutated ${format} files (${seeds.length} seeds): ${tally.decoded} decoded, ${tally.refused} refused with a 400, none slow or lost, peak memory +${grew} MB${wrong.length ? ` | ${wrong.slice(0, 3).join("; ")}` : ""}`);
+  }
+  console.log(`# fuzz: 1500 cases in ${Date.now() - started} ms`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
