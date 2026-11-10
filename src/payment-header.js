@@ -90,24 +90,36 @@ export function encodePaymentHeader(payload) {
 // these blocks where no signature covers it would show up here, by network
 // family and block name, never by address. One line a minute at most.
 const removed = new Map();
+const REMOVED_MAX_KEYS = 32;
 let removedLoggedAt = 0;
+// A caller chooses the network text, so the family is cut to a short
+// lowercase token before it is counted or printed.
 const familyOf = (decoded) => {
-  const n = String(decoded?.accepted?.network ?? decoded?.network ?? decoded?.payload?.network ?? "none");
-  return n.includes(":") ? n.split(":")[0] : (isEvmNetworkName(n) ? "evm-v1" : n.toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 16) || "none");
+  const raw = [decoded?.accepted?.network, decoded?.network, decoded?.payload?.network].find((n) => typeof n === "string" && n) ?? "none";
+  const head = raw.includes(":") ? raw.slice(0, raw.indexOf(":")) : (isEvmNetworkName(raw) ? "evm-v1" : raw);
+  return head.toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 16) || "none";
 };
 function noteRemovedBlocks(parsed, now = Date.now(), log = console.log) {
-  const inner = parsed?.payload;
-  if (!inner || typeof inner !== "object" || Array.isArray(inner)) return;
-  const before = ["authorization", "permit2Authorization"].filter((k) => Object.hasOwn(inner, k));
-  if (!before.length) return;
-  const copy = { ...parsed, payload: { ...inner } };
-  dropUnsignedAuthorization(copy);
-  for (const k of before) if (!Object.hasOwn(copy.payload, k)) { const key = `${familyOf(parsed)}/${k}`; removed.set(key, (removed.get(key) || 0) + 1); }
-  if (removed.size && now - removedLoggedAt >= 60_000) {
-    removedLoggedAt = now;
-    log(`[payment-header] unsigned blocks removed at intake: ${[...removed].map(([k, n]) => `${k}=${n}`).join(" ")}`);
-    removed.clear();
-  }
+  // Counting only: nothing here may fail a request.
+  try {
+    const inner = parsed?.payload;
+    if (!inner || typeof inner !== "object" || Array.isArray(inner)) return;
+    const before = ["authorization", "permit2Authorization"].filter((k) => Object.hasOwn(inner, k));
+    if (!before.length) return;
+    const copy = { ...parsed, payload: { ...inner } };
+    dropUnsignedAuthorization(copy);
+    for (const k of before) {
+      if (Object.hasOwn(copy.payload, k)) continue;
+      let key = `${familyOf(parsed)}/${k}`;
+      if (!removed.has(key) && removed.size >= REMOVED_MAX_KEYS) key = `other/${k}`;
+      removed.set(key, (removed.get(key) || 0) + 1);
+    }
+    if (removed.size && now - removedLoggedAt >= 60_000) {
+      removedLoggedAt = now;
+      log(`[payment-header] unsigned blocks removed at intake: ${[...removed].map(([k, n]) => `${k}=${n}`).join(" ")}`);
+      removed.clear();
+    }
+  } catch { /* a count that cannot be taken is skipped */ }
 }
 /** Counts not yet logged; test seam. */
 export function __removedBlockCounts() { return Object.fromEntries(removed); }

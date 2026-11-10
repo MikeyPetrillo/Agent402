@@ -33,6 +33,8 @@ for (const [name, caip2] of Object.entries(NETWORKS)) {
   ok(isEvmNetworkName(name) === wantEvm && isEvmNetworkName(caip2) === wantEvm, `${name} (${caip2}) reads as ${wantEvm ? "an EVM" : "a transaction-signed"} network by name and by id`);
 }
 ok(!isEvmNetworkName("") && !isEvmNetworkName(null) && !isEvmNetworkName(8453), "a missing or non-string network is not an EVM one");
+ok(!isEvmNetworkName("solana:eip155:8453") && !isEvmNetworkName("xeip155:8453") && !isEvmNetworkName("EIP155:8453") && !isEvmNetworkName(" eip155:8453"), "a CAIP id is EVM only when its namespace is exactly eip155");
+ok(!isEvmNetworkName("Solana") && !isEvmNetworkName("SOLANA-devnet") && !isEvmNetworkName("Algorand") && !isEvmNetworkName("STELLAR"), "a v1 name of a transaction-signed family is read whatever its case");
 
 // --- the decoder ---------------------------------------------------------------
 ok(decodePaymentHeader(evm({ from: A, nonce: "0x01", value: "1000" })).payload.authorization.from === A, "control: a plain EIP-3009 payment on an EVM network keeps its authorization");
@@ -120,6 +122,20 @@ ok(signedEvmAmountUsd(evm({ from: A, value: "1000000" }, { permit2Authorization:
   ok(lines.length === 2 && /^\[payment-header\] unsigned blocks removed at intake: solana\/authorization=1$/.test(lines[0]) && /eip155\/authorization=1/.test(lines[1]) && /solana\/authorization=1/.test(lines[1]), `one line a minute names family and block with counts (got ${JSON.stringify(lines)})`);
   ok(!lines.join(" ").includes(A) && !lines.join(" ").includes(B), "the line carries no address");
   ok(!/eip155\/authorization/.test(lines[0]), "a plain EIP-3009 payment, which keeps its block, is not counted");
+  // The network text is the caller's: it can be any JSON value and any length.
+  const odd = [{ toString: 1 }, 7, ["solana"], null, "sol\nana:x", "X".repeat(5000) + ":1", "solana:" + "y".repeat(5000)];
+  let threw = null;
+  for (const [n, net] of odd.entries()) {
+    try { note({ accepted: { network: net }, payload: { transaction: tx, authorization: { from: A } } }, T0 + 63_000 + n, (l) => lines.push(l)); canonicalizePaymentHeaders(req(b64({ x402Version: 2, accepted: { network: net }, payload: { transaction: tx, authorization: { from: A } } }))); }
+    catch (e) { threw = e; }
+  }
+  ok(threw === null, `a network of any JSON type or length is counted without throwing (${threw ? threw.message : "none thrown"})`);
+  for (let k = 0; k < 500; k++) note({ accepted: { network: `fam${k}:1` }, payload: { transaction: tx, authorization: { from: A } } }, T0 + 64_000, () => {});
+  const late = [];
+  note(dec(svm({ authorization: { from: A } })), T0 + 200_000, (l) => late.push(l));
+  const keys = (late[0] || "").split(": ")[1]?.split(" ") || [];
+  ok(late.length === 1 && keys.length <= 33 && keys.some((k) => k.startsWith("other/authorization=")) && late[0].length < 1200 && !/[\n\r]/.test(late[0]) && keys.every((k) => /^[a-z0-9-]{1,16}\/(authorization|permit2Authorization)=\d+$/.test(k)),
+    `500 different families print as at most 33 short keys on one line (got ${keys.length} keys, ${(late[0] || "").length} characters)`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
