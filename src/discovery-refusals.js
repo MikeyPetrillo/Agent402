@@ -67,9 +67,27 @@ export function clientKeyOf(address, now = Date.now()) {
  */
 export function uaFamilyOf(ua) {
   const first = String(ua ?? "").trim().split(/\s+/)[0] || "";
-  const name = first.split("/")[0].toLowerCase().replace(/[^a-z0-9._+-]/g, "")
-    .replace(/[-_.+]?v?\d+(?:[._]\d+)*$/, "").replace(/[-_.+]+$/, "");
-  return name.slice(0, 40) || "none";
+  const name = first.split("/")[0].toLowerCase().replace(/[^a-z0-9._+-]/g, "");
+  // The trailing version and the separators left before it are cut by reading
+  // back from the end, one pass, so a header of any length costs its length.
+  const digit = (i) => { const c = name.charCodeAt(i); return c >= 48 && c <= 57; };
+  const sep = (i) => { const c = name[i]; return c === "-" || c === "_" || c === "." || c === "+"; };
+  let end = name.length;
+  if (end && digit(end - 1)) {
+    // digits, then any number of ". or _ and digits" groups before them
+    let at = end - 1;
+    while (at > 0 && digit(at - 1)) at--;
+    for (;;) {
+      if (at < 2 || (name[at - 1] !== "." && name[at - 1] !== "_") || !digit(at - 2)) break;
+      at -= 2;
+      while (at > 0 && digit(at - 1)) at--;
+    }
+    if (at > 0 && name[at - 1] === "v") at--;
+    if (at > 0 && sep(at - 1)) at--;
+    end = at;
+  }
+  while (end > 0 && sep(end - 1)) end--;
+  return name.slice(0, end).slice(0, 40) || "none";
 }
 
 const zero = (keys) => Object.fromEntries(keys.map((k) => [k, 0]));

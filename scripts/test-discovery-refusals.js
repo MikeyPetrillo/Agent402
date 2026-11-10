@@ -69,6 +69,23 @@ const today = async (now = T) => (await report({ now })).days.find((d) => d.day 
   const cases = [["agent402-client/0.8.16 node/22", "agent402-client"], ["python-requests/2.31.0", "python-requests"], ["Mozilla/5.0 (Macintosh)", "mozilla"], ["curl/8.4.0", "curl"], ["Go-http-client/1.1", "go-http-client"], ["node", "node"], ["python3.11", "python"], ["okhttp-4.12.0", "okhttp"], ["", "none"], [undefined, "none"], ["()<script>", "script"], ["42/1", "none"]];
   for (const [ua, want] of cases) ok(uaFamilyOf(ua) === want, `User-Agent ${JSON.stringify(ua)} reads as family "${want}" (${uaFamilyOf(ua)})`);
   ok(uaFamilyOf("X".repeat(200) + "/1.0").length === 40, "a family is at most 40 characters");
+  // The family is read in one backward pass. It answers what the two trailing
+  // patterns it replaced answered (kept here as the reference), and a header of
+  // any length costs its length.
+  const reference = (ua) => { const first = String(ua ?? "").trim().split(/\s+/)[0] || ""; const name = first.split("/")[0].toLowerCase().replace(/[^a-z0-9._+-]/g, ""); const cut = name.match(/[-_.+]?v?\d+(?:[._]\d+)*$/); const base = cut ? name.slice(0, cut.index) : name; let end = base.length; while (end > 0 && "-_.+".includes(base[end - 1])) end--; return base.slice(0, end).slice(0, 40) || "none"; };
+  let differ = 0, pairs = 0, firstDiff = "";
+  const same = (ua) => { pairs++; if (reference(ua) !== uaFamilyOf(ua)) { differ++; firstDiff ||= JSON.stringify(ua); } };
+  for (const ua of ["", null, undefined, "a1.2.3", "foo-1_2", "1.2.3-4", "abcv2", "a.v2", "x.1", "x_.1", "1..2", "1.v2", "a+1", "v", "v1", "1", "...", "+++", "a-v", "x-v1.2_3", "bot2", "v1v2", "1_", "._1", "a.1.b", "-v1", "+v1.0", "a__1"]) same(ua);
+  const small = ["a", "v", "1", ".", "_", "-", "+"];
+  const walk = (pre, depth) => { same(pre); if (depth) for (const c of small) walk(pre + c, depth - 1); };
+  walk("", 6);
+  ok(differ === 0, `the one-pass family equals the reference for every string of a 7-character alphabet up to length 6 (${pairs} strings, ${differ} differ${firstDiff ? ", first " + firstDiff : ""})`);
+  const cpuMs = () => { const u = process.threadCpuUsage(); return (u.user + u.system) / 1000; };
+  const hostile = ["0" + ".0".repeat(20_000) + "x", "a" + "+".repeat(40_000) + "x", "9".repeat(40_000) + "x", "v1".repeat(20_000), "a" + "._".repeat(20_000)];
+  const t0 = cpuMs();
+  for (const ua of hostile) uaFamilyOf(ua);
+  const spent = cpuMs() - t0;
+  ok(spent < 500, `five 40,000-character User-Agents built to repeat a version or a separator are read in ${spent.toFixed(1)} ms of thread time (the two patterns took 237 ms for one of 16,000)`);
 }
 
 // --- 1d. the cap and the `other` bucket keep totals exact; memory is bounded
