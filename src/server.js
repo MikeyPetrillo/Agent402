@@ -366,6 +366,7 @@ import { tollboothLandingPage } from "./tollbooth-landing.js";
 import { operatorWishesPage } from "./operator-wishes.js";
 import { initLeadsDb } from "./leads-db.js";
 import { cacheEnabled, cacheGet, cacheSet, cacheKeyFor, cacheTtlFor, CACHEABLE_ROUTES, noteCacheOutcome, cacheCounters } from "./cache.js";
+import { fullAnswerMiddleware } from "./full-answer.js";
 import { initAnalyticsDb, recordToolCall, getAnalytics, analyticsEnabled, redactAnalytics } from "./analytics-db.js";
 import { databasesStatus } from "./db-status.js";
 import { initWithRetry } from "./db-init-retry.js";
@@ -10161,6 +10162,17 @@ const asyncJobs = createAsyncJobs({
   quoteOf: quotedPriceUsd,
   paidOf: ({ basePriceUsd, receipt, meteredUsd, req }) => paidPriceUsd({ basePriceUsd, caip2: receipt?.network ?? null, meteredUsd, paymentHeader: paymentHeaderOf(req) }),
 });
+// A catalog tool call is always answered in full (src/full-answer.js): the
+// conditional and range request headers are removed here, before every gate,
+// the method aliases, the idempotency replay, the job loopback and the
+// handlers, so a matching If-None-Match never turns a tool's 200 into an
+// empty 304. Keyed on the path, whatever the method, so an aliased POST or
+// HEAD is covered. Free documents are not catalog routes and keep their 304.
+let catalogPathSet = null;
+app.use(fullAnswerMiddleware((path) => {
+  catalogPathSet ??= new Set(Object.keys(CATALOG).map((route) => route.split(" ")[1]).filter(Boolean));
+  return catalogPathSet.has(path);
+}));
 // A job's loopback (HTTP job or MCP task) carries a progress key; the handler
 // reports its stages to that job through the request scope (src/job-progress.js).
 app.use(progressMiddleware());

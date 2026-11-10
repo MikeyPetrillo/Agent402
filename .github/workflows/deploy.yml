@@ -2253,7 +2253,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (5 scripts, one process each)
+      - name: Offline suites (6 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -2265,6 +2265,8 @@ jobs:
           t node scripts/test-coldstart.js
           # Idempotency (opt-in safe retry of paid/proven calls; boots paid-mode)
           t node scripts/test-idempotency.js
+          # A paid tool call carrying a conditional or range header is a full 200, settled and booked once (stub facilitator; a free document keeps its 304)
+          t node scripts/test-paid-full-answer.js
           # Large-body routes: no compressed body, no unpaid body over 100 KB read unless priced from it, one in-flight byte budget (boots paid-mode on port 0)
           t node scripts/test-large-body-gate.js
 

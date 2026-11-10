@@ -24,6 +24,8 @@ import {
   createStripeGate, createStripeChallengeAppender, validateStripeCredential, checkGrantedToken,
 } from "../src/mpp-stripe.js";
 import { createReplayGuard } from "../src/replay-guard.js";
+import { fullAnswerMiddleware } from "../src/full-answer.js";
+import { rawGet } from "./lib/raw-get.js";
 import { __setTestClient } from "../src/shared-limit.js";
 
 let pass = 0;
@@ -79,6 +81,24 @@ const GATE = { secretKey: SECRET, realm: REALM, priceFor, checkToken: async () =
   ok(res.status === 200 && body.result === "ok", "gate A: valid credential + 200 handler -> served");
   ok(order.join(",") === "validate,handler,settle", `gate A: strict order validate->handler->settle (got ${order.join(",")})`);
   ok(!!res.headers.get("payment-receipt"), "gate A: Payment-Receipt attached");
+  s.close();
+}
+// A2) a GET with If-None-Match: * behind the full-answer seam (the order the
+// server mounts them in, src/full-answer.js): the card is charged once and the
+// answer is the full 200. The same request without the seam is the control:
+// Express answers it 304 with no body.
+for (const seam of [true, false]) {
+  let settles = 0;
+  const app = express();
+  if (seam) app.use(fullAnswerMiddleware((path) => path === "/paid"));
+  app.use(createStripeGate({ ...GATE, validate: async () => ({ ok: true, validation: {} }),
+    settle: async () => { settles++; return { ok: true, receipt: { method: "stripe", status: "success", reference: "pi_test_inm", timestamp: new Date().toISOString() } }; } }));
+  app.get("/paid", (req, res) => res.status(200).json({ result: "ok" }));
+  const { s, url } = await listen(app);
+  const res = await rawGet(`${url}/paid`, { Authorization: credFor(), "If-None-Match": "*" });
+  const text = res.body;
+  if (seam) ok(res.status === 200 && JSON.parse(text).result === "ok" && settles === 1 && !!res.headers["payment-receipt"], `gate A2: with the full-answer seam a conditional GET is a full 200, charged once (status ${res.status}, settles ${settles})`);
+  else ok(res.status === 304 && text === "", `gate A2 control: without the seam the same request is an empty 304 (status ${res.status})`);
   s.close();
 }
 // B) handler fails -> card NEVER charged.
