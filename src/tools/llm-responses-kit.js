@@ -27,7 +27,7 @@ import {
   substitutedFrom, TIERS, AUTO_RANKINGS, classifyPrompt, canonicalModel, tierAllows, tierFor, meteredQuoteForProbe, meteredBoundFor,
   isFlatTier, flatTierQuoteUsd, servedTierFor, crossTierDisclosure, AUTO_MODEL, AUTO_TIER,
   clampToMargin, assertMeteredAvailable, attemptsFor, serviceTierFor, validateServiceTier, cacheControlPref, upstreamUserId, PROVIDER_SORT_ENABLED,
-  fetchOpenRouter, throwUpstreamError, streamOpenRouterTo, bad, MAX_IMAGES, maxInputCharsFor, inputTooLargeError,
+  fetchOpenRouter, upstreamHttpError, refuseUnlistedMeteredModel, isInputTooLarge, streamOpenRouterTo, bad, MAX_IMAGES, maxInputCharsFor, inputTooLargeError,
   failoverChain, modelFallbackPref, availabilitySubstitution, retryRateLimited,
   rateLimitDelaysFor, paymentWindowTimeoutMs, timedOutBudget, streamClientWatch, STREAM_TIMEOUT_MS, UPSTREAM_TIMEOUT_MS,
   validateReasoning, reasoningForLink, lowestEffortRetry, recoveryRunAffordable, retryEmptyAtLowestEffort,
@@ -67,6 +67,13 @@ export function meteredResponsesQuoteUsd(input) {
   } catch (e) {
     return { usd: tier.price, invalid: true, reason: String(e?.message || e).slice(0, 160) };
   }
+}
+/** The metered Responses body's input size refusal for the pre-payment check
+ *  (src/gateway-prepayment.js), or null: this wire's own validation is the
+ *  counter, so the two can never disagree about a body. */
+export function meteredResponsesInputSizeRefusal(input) {
+  try { validateResponsesRequest(input, "v1-chat-metered"); } catch (e) { return isInputTooLarge(e) ? e : null; }
+  return null;
 }
 
 const ROLES = new Set(["user", "assistant", "system", "developer"]);
@@ -210,6 +217,8 @@ export function validateResponsesRequest(input, tierSlug) {
       const homePath = home ? (RESPONSES_PATH_BY_TIER[home] || TIERS[home].route.split(" ")[1]) : null;
       throw bad(home && home !== tierSlug ? `"${model}" is served on ${homePath} (${home})` : `"model" ${model} is not served on this tier - GET /v1/models lists every model and its tier`);
     }
+    // Metered: an id the live list does not carry is refused, as on the chat wire.
+    refuseUnlistedMeteredModel(tier, model);
   }
   const acc = { chars: 0, images: 0 };
   let probeInput;
@@ -258,7 +267,7 @@ export function validateResponsesRequest(input, tierSlug) {
     if (typeof input.instructions !== "string") throw bad('"instructions" must be a string');
     acc.chars += input.instructions.length; instructions = input.instructions;
   }
-  if (acc.chars > tier.maxInputChars && acc.chars > maxInputCharsFor(tierSlug, model)) throw inputTooLargeError(tierSlug, model, acc.chars);
+  if (acc.chars > tier.maxInputChars && acc.chars > maxInputCharsFor(tierSlug, model)) throw inputTooLargeError(tierSlug, model, acc.chars, RESPONSES_PATH_BY_TIER);
   if (acc.images > MAX_IMAGES) throw bad(`Too many images (${acc.images}). Maximum is ${MAX_IMAGES} per request`);
   // The tier's own default budget, like the chat wire: a premium model that
   // reasons before it speaks spent a hardcoded 1024 entirely on reasoning and
@@ -475,11 +484,11 @@ export function makeResponsesHandler(routeTier) {
       try {
         const callOnce = (sendBody, ms) => retryRateLimited(async () => {
           const res = await fetchOpenRouter(sendBody, { url: OPENROUTER_RESPONSES_URL, timeoutMs: ms });
-          if (!res.ok) await throwUpstreamError(res);
+          if (!res.ok) await upstreamHttpError(res, sendBody?.model);
           const text = await res.text();
           let parsed;
           try { parsed = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
-          return assertUpstreamBody(parsed);
+          return assertUpstreamBody(parsed, { model: sendBody?.model });
         }, { delays: rateLimitDelaysFor(flex) });
         let data = await callOnce(outbound, timeoutMs);
         let reasoningAdjusted = outbound[REASONING_ADJUSTED] || null;

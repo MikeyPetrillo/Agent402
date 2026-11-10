@@ -20,8 +20,10 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   tier whose 402 is a per-request quote. `handlerInputOf(req)` (`src/handler-input.js`) is the
   one input object for pricing and serving; a body nested past `MAX_INPUT_DEPTH` (64) is refused
   there with a 400 before any handler walks it. Streams commit 200 only on the first `data:` frame.
-  The metered chat route refuses a model id missing from the upstream's live model list with a 400
-  before any payment gate (`src/model-catalog.js`, read every 10 minutes and on a miss at most once a
+  Every metered route (chat, Messages, Responses, generateContent) refuses a model id missing from the upstream's live model list with a 400
+  before any payment gate (`meteredPrePaymentRefusal` in `src/gateway-prepayment.js`, one check over a
+  row per wire: where the model id is, how the input is counted, the wire's own error object;
+  each wire's validation throws the same verdict through `refuseUnlistedMeteredModel`; `src/model-catalog.js`, read every 10 minutes and on a miss at most once a
   minute; fails open with no read under 30 minutes old; retiring ids and ids with successors are left to their fallback;
   `MODEL_CATALOG_URL` points the read at a stub). A hyphenated version in an id (`v4-1`) is read
   as its dotted form only when that exact dotted id is on the fresh live list.
@@ -30,10 +32,13 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   larger live context window, up to `METERED_MAX_INPUT_CHARS_CEILING` (1,000,000, the
   /v1/metered body bound); `/v1/models` publishes each model's own value as
   `meteredMaxInputChars` (a vendor wildcard reads the floor). **Pre-payment size refusal:** a
-  metered chat body over its model's cap is refused with a 400 (`input_too_large`,
+  metered body over its model's cap is refused with a 400 (`input_too_large`,
   `maxInputChars`, `inputChars`, `hint: trim-input`, larger-window `suggestions`) before any
-  payment gate, as the unknown-model refusal is; Messages and Responses refuse it in the handler
-  (never charged). A Tempo push credential skips the pre-payment check and is answered by its
+  payment gate on every wire, as the unknown-model refusal is; each wire's own validation is the
+  counter, and the message names that wire's route (`inputTooLargeError`'s `pathByTier`).
+  **Upstream HTTP errors:** every wire reads one through `upstreamHttpError` (buffered and
+  streamed): a provider 4xx about the request is `upstreamRejected` and the route binder answers
+  400; `scripts/test-llm-wire-parity.js` sends each caller mistake and upstream condition to every wire. A Tempo push credential skips the pre-payment check and is answered by its
   gate, which books the transfer as owed; a refusal to one names that exception in its charge
   sentence (`PUSH_EXCEPTION`, `withPushException` in server.js).
   **Large quotes:** a /v1/metered body of 16k chars or more is counted before the gates by

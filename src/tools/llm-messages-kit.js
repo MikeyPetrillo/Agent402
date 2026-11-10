@@ -37,7 +37,7 @@ import {
   substitutedFrom, TIERS, AUTO_RANKINGS, classifyPrompt, canonicalModel, tierAllows, tierFor,
   isFlatTier, flatTierQuoteUsd, servedTierFor, crossTierDisclosure, AUTO_MODEL, AUTO_TIER,
   clampToMargin, fitBudgetBelowCap, assertMeteredAvailable, attemptsFor, serviceTierFor, validateServiceTier, cacheControlPref, upstreamUserId, PROVIDER_SORT_ENABLED,
-  fetchOpenRouter, throwUpstreamError, streamOpenRouterTo, bad, MAX_IMAGES, maxInputCharsFor, inputTooLargeError,
+  fetchOpenRouter, upstreamHttpError, refuseUnlistedMeteredModel, isInputTooLarge, streamOpenRouterTo, bad, MAX_IMAGES, maxInputCharsFor, inputTooLargeError,
   failoverChain, modelFallbackPref, availabilitySubstitution, retryRateLimited,
   rateLimitDelaysFor, paymentWindowTimeoutMs, timedOutBudget, streamClientWatch, STREAM_TIMEOUT_MS, UPSTREAM_TIMEOUT_MS,
   refuseCostVariants, checkBlockCacheControl, meteredQuoteForProbe, meteredBoundFor,
@@ -78,6 +78,13 @@ export function meteredMessagesQuoteUsd(input) {
   } catch (e) {
     return { usd: tier.price, invalid: true, reason: String(e?.message || e).slice(0, 160) };
   }
+}
+/** The metered Messages body's input size refusal for the pre-payment check
+ *  (src/gateway-prepayment.js), or null: this wire's own validation is the
+ *  counter, so the two can never disagree about a body. */
+export function meteredMessagesInputSizeRefusal(input) {
+  try { validateMessagesRequest(input, "v1-chat-metered"); } catch (e) { return isInputTooLarge(e) ? e : null; }
+  return null;
 }
 export const MESSAGES_TIER_BY_PATH = Object.fromEntries(Object.entries(MESSAGES_PATH_BY_TIER).map(([t, p]) => [p, t]));
 
@@ -275,6 +282,8 @@ export function validateMessagesRequest(input, tierSlug) {
       const homePath = home ? (MESSAGES_PATH_BY_TIER[home] || TIERS[home].route.split(" ")[1]) : null;
       throw bad(home && home !== tierSlug ? `"${model}" is served on ${homePath} (${home})` : `"model" ${model} is not served on this tier - GET /v1/models lists every model and its tier`);
     }
+    // Metered: an id the live list does not carry is refused, as on the chat wire.
+    refuseUnlistedMeteredModel(tier, model);
   }
   if (!Array.isArray(input.messages) || input.messages.length === 0) throw bad('"messages" must be a non-empty array');
   const acc = { chars: 0, images: 0 };
@@ -300,7 +309,7 @@ export function validateMessagesRequest(input, tierSlug) {
     else if (Array.isArray(input.system)) { system = probeContent(input.system, "system", acc); }
     else throw bad('"system" must be a string or an array of text blocks');
   }
-  if (acc.chars > tier.maxInputChars && acc.chars > maxInputCharsFor(tierSlug, model)) throw inputTooLargeError(tierSlug, model, acc.chars);
+  if (acc.chars > tier.maxInputChars && acc.chars > maxInputCharsFor(tierSlug, model)) throw inputTooLargeError(tierSlug, model, acc.chars, MESSAGES_PATH_BY_TIER);
   if (acc.images > MAX_IMAGES) throw bad(`Too many images (${acc.images}). Maximum is ${MAX_IMAGES} per request`);
   // max_tokens: required by the Anthropic wire; clamp to the tier cap (drop-in friendliness, like the chat wire)
   let maxTokens = parseInt(input.max_tokens, 10);
@@ -605,11 +614,11 @@ export function makeMessagesHandler(routeTier) {
       try {
         const callOnce = (sendBody, ms) => retryRateLimited(async () => {
           const res = await fetchOpenRouter(sendBody, { url: OPENROUTER_MESSAGES_URL, timeoutMs: ms });
-          if (!res.ok) await throwUpstreamError(res);
+          if (!res.ok) await upstreamHttpError(res, sendBody?.model);
           const text = await res.text();
           let parsed;
           try { parsed = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
-          assertUpstreamBody(parsed);
+          assertUpstreamBody(parsed, { model: sendBody?.model });
           if (!Array.isArray(parsed?.content)) throw bad("Upstream returned no answer (no content) - not charged", 502);
           return parsed;
         }, { delays: rateLimitDelaysFor(flex) });

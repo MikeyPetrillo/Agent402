@@ -914,6 +914,16 @@ export function meteredModelVerdict(model) {
   return v ? { ...v, message: stripControlChars(v.message) } : v;
 }
 
+/** Every wire's validation calls this once the tier admits `model`: on the
+ *  metered tier an id the live list does not carry throws the 400 the
+ *  pre-payment check answers (code unknown_model, suggestions). No-op on a
+ *  flat tier, whose allowlist is its own list. */
+export function refuseUnlistedMeteredModel(tier, model) {
+  if (!tier?.metered) return;
+  const unknown = meteredModelVerdict(model);
+  if (unknown) throw Object.assign(bad(unknown.message), { code: "unknown_model", suggestions: unknown.suggestions });
+}
+
 /** Same-family successors for models whose whole upstream can vanish at once
  *  (a model with one or two hosts can lose all of them together). A successor
  *  is tried only AFTER the requested model failed upstream (502/503/504), costs
@@ -2001,15 +2011,18 @@ export function largerWindowSuggestions(model, chars) {
     .map((s) => s.id);
 }
 /** The 400 for an input over its cap, carrying the machine-readable fields
- *  (maxInputChars, inputChars, hint, suggestions) on every wire. */
-export function inputTooLargeError(tierSlug, model, chars) {
+ *  (maxInputChars, inputChars, hint, suggestions) on every wire. `pathByTier`
+ *  is the calling wire's own tier -> path table, so the message names that
+ *  wire's routes; without it the chat routes are named. */
+export function inputTooLargeError(tierSlug, model, chars, pathByTier = null) {
   const tier = TIERS[tierSlug];
   const max = maxInputCharsFor(tierSlug, model);
-  const route = tier.route.split(" ")[1];
+  const pathOf = (slug) => pathByTier?.[slug] || TIERS[slug].route.split(" ")[1];
+  const route = pathOf(tierSlug);
   if (!tier.metered) {
     const m = TIERS["v1-chat-metered"];
     const e = bad(`Input too large (${chars} chars). The ${tierSlug} tier allows up to ${max} chars` +
-      (m ? `; ${m.route.split(" ")[1]} takes at least ${m.maxInputChars} chars (more on a model with a larger context window, up to ${METERED_MAX_INPUT_CHARS_CEILING}) and is priced from the body` : ""));
+      (m ? `; ${pathOf("v1-chat-metered")} takes at least ${m.maxInputChars} chars (more on a model with a larger context window, up to ${METERED_MAX_INPUT_CHARS_CEILING}) and is priced from the body` : ""));
     return Object.assign(e, { maxInputChars: max, inputChars: chars, hint: "trim-input" });
   }
   const suggestions = largerWindowSuggestions(model, chars);
@@ -2019,6 +2032,10 @@ export function inputTooLargeError(tierSlug, model, chars) {
     (suggestions.length ? `, or name a model with a larger context window: ${suggestions.join(", ")}.` : ".") +
     " Nothing was charged.");
   return Object.assign(e, { maxInputChars: max, inputChars: chars, hint: "trim-input", ...(suggestions.length ? { suggestions } : {}) });
+}
+/** True for the error inputTooLargeError builds (any wire). */
+export function isInputTooLarge(err) {
+  return err?.hint === "trim-input" && Number.isSafeInteger(err?.maxInputChars) && Number.isSafeInteger(err?.inputChars);
 }
 /** The metered chat body's input size refusal, read before any payment gate
  *  (server.js), or null: under the cap, or a body the handler's own
@@ -2112,10 +2129,7 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
   }
   // The metered route takes any id under its vendor prefixes; one the live
   // list does not carry is refused here (and before payment, server.js).
-  if (tier.metered) {
-    const unknown = meteredModelVerdict(model);
-    if (unknown) { const e = bad(unknown.message); e.code = "unknown_model"; e.suggestions = unknown.suggestions; throw e; }
-  }
+  refuseUnlistedMeteredModel(tier, model);
 
   const messages = input.messages;
   if (!Array.isArray(messages) || messages.length === 0) throw bad('"messages" must be a non-empty array of {role, content} objects');
@@ -2996,6 +3010,15 @@ export async function throwUpstreamError(res, { refusal = false, model } = {}) {
   throw bad(`Upstream error: ${upstreamRefusalText(msg)}`, 502);
 }
 
+/** An upstream HTTP error on a buyer's own model call, read the same way on
+ *  every wire (chat, Messages, Responses), buffered or streamed: a provider
+ *  4xx about the request is a refusal that names `model` (the chain still
+ *  walks it; the route binder answers 400 when no link took it), anything
+ *  else is an upstream failure. Always throws. */
+export function upstreamHttpError(res, model) {
+  return throwUpstreamError(res, { refusal: true, model });
+}
+
 /** The actionable part of an upstream refusal: no URLs, no "learn more" tail. */
 export function upstreamRefusalText(msg) {
   const t = String(msg || "")
@@ -3040,7 +3063,7 @@ export function assertUpstreamBody(data, { model } = {}) {
 
 async function callOpenRouter(body, { timeoutMs } = {}) {
   const res = await fetchOpenRouter(body, { timeoutMs });
-  if (!res.ok) await throwUpstreamError(res, { refusal: true, model: body?.model });
+  if (!res.ok) await upstreamHttpError(res, body?.model);
   const text = await res.text();
   let data;
   try { data = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
@@ -3220,7 +3243,7 @@ export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = 
       if (firstFrameTimedOut && e && typeof e === "object" && e.statusCode === 504) e.upstreamTimeout = true;
       throw e;
     }
-    if (!upstream.ok) await throwUpstreamError(upstream, { refusal: true, model: body?.model });
+    if (!upstream.ok) await upstreamHttpError(upstream, body?.model);
     // The 200 is NOT committed until the first `data:` frame arrives. Measured
     // live (paid canary 2026-08-27 20:06:42Z): OpenRouter answered a nano
     // stream with only ": OPENROUTER PROCESSING" keep-alive comments and then

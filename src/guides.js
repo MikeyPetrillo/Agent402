@@ -515,6 +515,10 @@ answer is booked as a refund owed and repaid after on-chain proof.
   own figure as \`x402.meteredMaxInputChars\`. A body over it is refused before
   payment with code \`input_too_large\`, \`maxInputChars\`, \`inputChars\`,
   \`hint: "trim-input"\` and \`suggestions\` of models whose window takes it.
+- **Every wire.** Both refusals are answered before payment on
+  \`/v1/metered/chat/completions\`, \`/v1/metered/messages\`,
+  \`/v1/metered/responses\` and \`/v1/metered/gemini\` alike, each in the
+  error object its SDK reads, with the same fields beside it.
 - **Per-call cap.** A request quoting above $${METERED_MAX_QUOTE_USD} is refused
   with a 400 before any upstream call: lower \`max_tokens\` or the input. On
   x402 it is not charged.
