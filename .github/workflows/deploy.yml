@@ -3273,6 +3273,8 @@ jobs:
           t node scripts/test-llm-messages.js
           # Reasoning fitted to the output cap: a buyer effort or budget too high for a small cap is lowered before the call and disclosed, one same-model retry at the lowest effort after an empty answer, price and time conditions, every wire and streams (offline)
           t node scripts/test-llm-answer-fit.js
+          # Wire parity: one caller mistake or upstream condition gets the same class of answer on chat completions, Messages, Responses and generateContent, and a metered request that cannot be served is refused before any payment requirement on each (two local boots, stub upstream - offline)
+          t node scripts/test-llm-wire-parity.js
           # The gateway suites pass on the placeholder cost table too (docs/example-upstream-costs.json; prints exit codes and counts only - offline)
           t node scripts/test-example-costs-suites.js
           # Availability failover: a model with no live host is served by its same-family successor (named in the reply), model_fallback:false opts out, rate limits retry the same model first (offline, every wire)
