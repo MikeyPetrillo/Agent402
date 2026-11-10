@@ -21,8 +21,10 @@ function bad(message) {
 const PNG_CHANNELS = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 };
 
 /** The chunk list as pngjs walks it: length-prefixed, linear, ending at IEND.
- *  Returns how many IHDR chunks it holds and the IDAT payloads in order. */
-export function pngChunks(buf) {
+ *  Returns how many IHDR chunks it holds and, with `payloads` (the worker's
+ *  call), the IDAT payloads in order: a file can hold a chunk every 12 bytes,
+ *  and the main-thread check keeps nothing per chunk. */
+export function pngChunks(buf, { payloads = false } = {}) {
   let ihdr = 0;
   const idat = [];
   let i = 8;
@@ -30,7 +32,7 @@ export function pngChunks(buf) {
     const len = buf.readUInt32BE(i);
     const type = buf.toString("latin1", i + 4, i + 8);
     if (type === "IHDR") ihdr++;
-    else if (type === "IDAT") idat.push(buf.subarray(i + 8, Math.min(i + 8 + len, buf.length)));
+    else if (type === "IDAT" && payloads) idat.push(buf.subarray(i + 8, Math.min(i + 8 + len, buf.length)));
     else if (type === "IEND") break;
     i += 12 + len;
   }
@@ -61,12 +63,15 @@ export function pngInterlacedSize(buf) {
   return total;
 }
 
-// Inflate under an output bound. True when the stream stays within it; a
-// stream that is damaged or cut short is left for the decoder to report.
-function inflatesWithin(data, bound, raw) {
+// Inflate under an output bound. Answers the inflated length, -1 when the
+// stream runs past the bound, and null for a stream that is damaged: the
+// decoder reports that one itself. A failed inflate keeps its zlib buffer
+// until the next collection, so no caller here goes on to another stream
+// after a null or a -1.
+function inflatedLength(data, bound, raw) {
   const opts = { maxOutputLength: Math.max(1, Math.floor(bound)), finishFlush: zlib.constants.Z_SYNC_FLUSH };
-  try { (raw ? zlib.inflateRawSync : zlib.inflateSync)(data, opts); return true; }
-  catch (e) { return e?.code !== "ERR_BUFFER_TOO_LARGE"; }
+  try { return (raw ? zlib.inflateRawSync : zlib.inflateSync)(data, opts).length; }
+  catch (e) { return e?.code === "ERR_BUFFER_TOO_LARGE" ? -1 : null; }
 }
 
 const INFLATE_SLACK = 64;
@@ -238,7 +243,7 @@ const TIFF_LOOPED = new Set([3, 4, 5, 8, 9, 10, 11, 12, 13]);
 // Tags whose first value sizes an allocation or picks a code path, and tags
 // that hold file offsets or byte counts. Each must be BYTE, SHORT or LONG, so
 // this reader and the decoder take the same number from it.
-const TIFF_SCALAR = new Set([256, 257, 258, 259, 262, 277, 278, 322, 323, 513, 514, 50885]);
+const TIFF_SCALAR = new Set([256, 257, 258, 259, 262, 277, 278, 284, 322, 323, 513, 514, 50885]);
 const TIFF_OFFSETS = new Set([273, 279, 324, 325, 519, 520, 521]);
 // Tags that make the decoder read further directories or parse a maker note.
 // Nothing they lead to feeds the pixels of the first image.
@@ -375,14 +380,27 @@ export function tiffLayout(buf, maxPixels = Infinity, budget = Infinity) {
   const offsetsTag = !tags.has(273) || tiled ? 324 : 273;
   const countsTag = !tags.has(279) || tiled ? 325 : 279;
   const parts = tiled ? Math.min(tiles, tags.get(offsetsTag)?.num ?? 0) : tags.get(offsetsTag)?.num ?? 0;
+  // A page holds one strip per `rowsPerStrip` rows (per sample plane when the
+  // planes are stored apart). The decoder runs once per strip the table lists,
+  // whatever the page needs, so a table that lists more is refused here.
+  const rowsPerStrip = Math.min(value(tags, 278) ?? height, height);
+  if (!tiled && rowsPerStrip >= 1) {
+    const most = Math.ceil(height / rowsPerStrip) * (value(tags, 284) === 2 ? Math.max(1, samples) : 1);
+    if (parts > most) throw bad(`tiff lists ${parts} strips for a page that holds ${most}`);
+  }
   // Each strip or tile is read for as many bytes as its count says, so a count
   // that runs past the end of the file is clamped to the file in the decoder's
   // view. One uncompressed strip is sized from the page instead.
   const lengths = new Map(), starts = new Map();
   if (tags.has(countsTag) && !(compression === 1 && !tiled && parts === 1)) {
+    // Strips do not share bytes in a real file, so together they are no longer
+    // than the file; the decoders read every one of them in full.
+    let listed = 0;
     for (let j = 0; j < parts; j++) {
       spend(1);
       const at = value(tags, offsetsTag, j), length = value(tags, countsTag, j);
+      listed += Math.min(length ?? 0, Math.max(0, buf.length - at));
+      if (listed > buf.length * 2 + 65536) throw bad("tiff strips cover the same bytes more than once");
       if (length === undefined || at + length <= buf.length) continue;
       const kept = Math.max(0, buf.length - at);
       lengths.set(j, kept);
@@ -414,7 +432,8 @@ export function tiffLayout(buf, maxPixels = Infinity, budget = Infinity) {
     }
     if (jpeg.old && samples > 4) throw bad(`tiff jpeg page declares ${samples} samples per pixel; at most 4 can be decoded`);
   }
-  layout.page = { width, height, compression, sampleBytes, tileBytes, tiled, parts, part, jpeg, fax: TIFF_FAX.has(compression) };
+  const stripBytes = rowsPerStrip >= 1 ? rowsPerStrip * Math.ceil((width * bitsPerPixel) / 8) : sampleBytes;
+  layout.page = { width, height, compression, sampleBytes, stripBytes, tileBytes, tiled, parts, part, jpeg, fax: TIFF_FAX.has(compression) };
   return layout;
 }
 
@@ -500,13 +519,18 @@ export function assertTiffStreams(buf, layout, maxPixels) {
   const page = layout.page;
   if (!page) return;
   if (page.compression === 8 || page.compression === 32946) {
-    const bound = (page.tiled ? page.tileBytes : page.sampleBytes) + INFLATE_SLACK;
+    // One strip inflates to its own rows, and all of them to the page: the
+    // loop is held to both, whatever the table lists.
+    const each = Math.min(page.tiled ? page.tileBytes : page.stripBytes, page.sampleBytes + page.tileBytes) + INFLATE_SLACK;
+    let left = (page.tiled ? page.parts * page.tileBytes : page.sampleBytes) + INFLATE_SLACK * 16;
     for (let j = 0; j < page.parts; j++) {
       // The decoder inflates the bytes between a 2-byte head and a 4-byte tail.
       const { offset, length } = page.part(j);
       const start = offset + 2, n = (length ?? NaN) - 6;
       if (!(n >= 0) || start + n > buf.length) break; // the decoder stops here on its own
-      if (!inflatesWithin(buf.subarray(start, start + n), bound, true)) {
+      const got = inflatedLength(buf.subarray(start, start + n), Math.min(each, left + 1), true);
+      if (got === null) break; // damaged: the decoder stops at this strip too
+      if (got === -1 || (left -= got) < 0) {
         throw bad(`tiff ${page.tiled ? "tile" : "strip"} ${j} inflates past the ${page.width}x${page.height} page its directory declares`);
       }
     }
@@ -578,8 +602,8 @@ export function assertInflateWithinDeclared(buf, format) {
   if (format === "png" && buf.length >= 29 && buf[28] === 1) {
     const size = pngInterlacedSize(buf);
     if (size === null) return;
-    const { idat } = pngChunks(buf);
-    if (!inflatesWithin(Buffer.concat(idat), size + INFLATE_SLACK, false)) {
+    const { idat } = pngChunks(buf, { payloads: true });
+    if (inflatedLength(Buffer.concat(idat), size + INFLATE_SLACK, false) === -1) {
       throw bad(`interlaced png inflates past the ${buf.readUInt32BE(16)}x${buf.readUInt32BE(20)} image its header declares`);
     }
   }

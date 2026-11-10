@@ -546,6 +546,42 @@ const hex = (n) => (n >>> 0).toString(16).padStart(8, "0");
     await decodes(`a deflate TIFF (compression ${scheme})`, tiff([page(40, 30, { 259: [259, 3, 1, scheme], 273: [273, 4, 1, z], 279: [279, 4, 1, z.length] })]));
   }
 
+  // --- Strip tables: held to the page, to the file, and to one failure -------------
+  // The decoder runs once per strip the table lists. A page holds one strip
+  // per rowsPerStrip rows, so a longer table is refused before anything is
+  // inflated; listed strips together are no longer than the file; and the
+  // inflate check stops at the first strip that does not inflate, as the
+  // decoder does.
+  {
+    const strips = (count, w, h, rowsPerStrip, scheme, offsetOf, lengthOf) => {
+      const offs = Buffer.alloc(count * 4), lens = Buffer.alloc(count * 4);
+      const file = (dataAt) => { for (let k = 0; k < count; k++) { offs.writeUInt32LE(dataAt + offsetOf(k), k * 4); lens.writeUInt32LE(lengthOf(k), k * 4); } return tiff([hollow(w, h, { 259: [259, 3, 1, scheme], 273: [273, 4, count, offs], 278: [278, 4, 1, rowsPerStrip], 279: [279, 4, count, lens] })]); };
+      return file(file(0).length);
+    };
+    const one = zlibMod.deflateSync(Buffer.alloc(100)); // a 10x10 page in one strip
+    await refusedBy("a deflate TIFF listing 100,000 strips for a one-strip page", Buffer.concat([strips(100000, 10, 10, 10, 8, () => 0, () => one.length), one]), /^tiff lists 100000 strips for a page that holds 1/);
+    // 4,096 strips, one row each, every strip its own deflate stream.
+    const rowsZ = Array.from({ length: 4096 }, (_, y) => zlibMod.deflateSync(Buffer.alloc(8, y & 255)));
+    const starts = []; let run2 = 0; for (const z of rowsZ) { starts.push(run2); run2 += z.length; }
+    const manyStrips = Buffer.concat([strips(4096, 8, 4096, 1, 8, (k) => starts[k], (k) => rowsZ[k].length), ...rowsZ]);
+    await decodes("a deflate TIFF of 4,096 one-row strips", manyStrips, (f) => f.width === 8 && f.height === 4096 && at(f, 3, 0) === gray(0) && at(f, 3, 77) === gray(77) && at(f, 7, 4095) === gray(255));
+    fuzzSeeds.tiff.push(Buffer.concat([strips(16, 8, 16, 1, 8, (k) => starts[k], (k) => rowsZ[k].length), ...rowsZ.slice(0, 16)]));
+    const wide = zlibMod.deflateSync(Buffer.alloc(1e6));
+    await refusedInWorker("a deflate TIFF whose first one-row strip inflates to a megabyte", Buffer.concat([strips(4096, 8, 4096, 1, 8, () => 0, () => wide.length), wide]).subarray(0), /^tiff strips cover the same bytes more than once|^tiff strip 0 inflates past/, ["image-convert"]);
+    await refusedInWorker("a one-strip-per-row deflate TIFF whose strip inflates to a megabyte", Buffer.concat([strips(2, 8, 2, 1, 8, () => 0, () => wide.length), wide]), /^tiff strip 0 inflates past the 8x2 page/, ["image-convert"]);
+    const twenty = zlibMod.deflateSync(Buffer.alloc(20000)); // more than one 8-byte row, less than the 32 KB page
+    await refusedInWorker("a deflate TIFF whose one-row strip inflates to 20 KB of a 32 KB page", Buffer.concat([strips(2, 8, 4096, 1, 8, () => 0, () => twenty.length), twenty]), /^tiff strip 0 inflates past the 8x4096 page/, ["image-convert"]);
+    await refusedBy("a TIFF whose strips all name the same 4 KB", Buffer.concat([strips(4096, 8, 4096, 1, 32773, () => 0, () => 4096), Buffer.alloc(4096)]), /^tiff strips cover the same bytes more than once/, convert);
+    // 200,000 one-row strips that all name the same 8 bytes, none of them a
+    // deflate stream. Run in a process of its own so its peak memory is its own.
+    const { spawnSync } = await import("node:child_process");
+    const noStream = Buffer.concat([strips(200000, 1, 200000, 1, 8, () => 0, () => 8), Buffer.alloc(8, 0xff)]);
+    const probe = `const c=[];for await(const x of process.stdin)c.push(x);const {readImage}=await import("./src/tools/image-ops.js");console.log=()=>{};const base=process.resourceUsage().maxRSS;const t=Date.now();let m="decoded";try{await readImage(Buffer.concat(c),{maxPixels:16e6})}catch(e){m=e.statusCode+" "+e.message}process.stdout.write(JSON.stringify({m,ms:Date.now()-t,mb:Math.round((process.resourceUsage().maxRSS-base)/1024)}))`;
+    const r = spawnSync(process.execPath, ["--input-type=module", "-e", probe], { input: noStream, cwd: new URL("..", import.meta.url), encoding: "utf8", timeout: 60000 });
+    let seen = {}; try { seen = JSON.parse(r.stdout); } catch { seen = { m: `no answer (${r.status} ${String(r.stderr).slice(0, 80)})` }; }
+    ok(/^400 /.test(seen.m || "") && seen.mb < 100 && seen.ms < 2000, `a ${noStream.length}-byte TIFF of 200,000 strips that do not inflate is answered 400 with ${seen.mb} MB of added peak memory in ${seen.ms} ms (${seen.m})`);
+  }
+
   // --- JPEG inside a TIFF: every frame header the decoder could read is capped --
   const seg = (marker, data) => { const b = Buffer.alloc(4); b[0] = 0xff; b[1] = marker; b.writeUInt16BE(data.length + 2, 2); return Buffer.concat([b, data]); };
   const jpg = Buffer.from(await new Jimp({ width: 16, height: 16, color: 0x336699ff }).getBuffer(JimpMime.jpeg));
@@ -591,6 +627,29 @@ const hex = (n) => (n >>> 0).toString(16).padStart(8, "0");
     ok(a.code === 400 && /^tiff fax data does not decode within the memory its page size allows/.test(a.msg || "") && a.ms < 4000, `${slug} contains a fax TIFF whose rows never end (${endless.length} bytes in; got ${a.code} "${a.msg}" in ${a.ms}ms)`);
   }
   await decodes("an uncompressed gray TIFF, after a contained fax decode", tiff([page(40, 30)]));
+  {
+    // What the child is given. A stand-in script answers with its own
+    // environment as a one-row image: the child sees the allowlist of
+    // src/tools/child-env.js and nothing else the server holds. A second
+    // stand-in never answers: it is ended at the deadline it was given.
+    const fs = await import("node:fs"), os = await import("node:os"), path = await import("node:path");
+    const { decodeInChild } = await import("../src/tools/image-ops.js");
+    const { childEnv } = await import("../src/tools/child-env.js");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "image-child-"));
+    const echo = path.join(dir, "env.mjs"), stall = path.join(dir, "stall.mjs");
+    fs.writeFileSync(echo, `let t=Buffer.from(JSON.stringify(process.env));t=Buffer.concat([t,Buffer.alloc((4-t.length%4)%4,32)]);const h=Buffer.alloc(8);h.writeUInt32LE(t.length/4,0);h.writeUInt32LE(1,4);process.stdout.write(Buffer.concat([h,t]),()=>process.exit(0));`);
+    fs.writeFileSync(stall, "setInterval(() => {}, 1000);");
+    process.env.IMAGE_CHILD_TEST_SECRET_KEY = "sk_live_not_for_children";
+    const env = JSON.parse(decodeInChild(Buffer.alloc(8), 1e6, 4000, { script: echo }).data.toString());
+    delete process.env.IMAGE_CHILD_TEST_SECRET_KEY;
+    const allowed = new Set([...Object.keys(childEnv({ ...process.env, IMAGE_CHILD_TEST_SECRET_KEY: "x" })), "__CF_USER_TEXT_ENCODING"]);
+    ok(!("IMAGE_CHILD_TEST_SECRET_KEY" in env) && Object.keys(env).length > 0 && Object.keys(env).every((k) => allowed.has(k)), `the decoder child sees only the allowlisted environment (${Object.keys(env).join(",")})`);
+    const t0 = Date.now(); let ended = null;
+    try { decodeInChild(Buffer.alloc(8), 1e6, 1250, { script: stall }); } catch (e) { ended = e; }
+    const ms = Date.now() - t0;
+    ok(ended && ended.statusCode === 503 && /timed out/.test(ended.message) && ms < 1250, `a decoder child that never answers is ended inside its 1250 ms deadline (${ended && ended.statusCode} in ${ms}ms)`);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 
   fuzzSeeds.tiff.push(secondPage, tiff([page(40, 30)]), tiff([[...page(40, 30), [37500, 7, nikon.length, nikon], [34665, 4, 1, exif]]]), jpegPage(7, jpg), jpegPage(6, jpg),
     tiff([page(40, 30, { 259: [259, 3, 1, 8], 273: [273, 4, 1, zlibMod.deflateSync(samples(40, 30))], 279: [279, 4, 1, zlibMod.deflateSync(samples(40, 30)).length] })]),
@@ -624,7 +683,7 @@ const hex = (n) => (n >>> 0).toString(16).padStart(8, "0");
       return b;
     };
     const rows = 400000, table = Buffer.alloc(rows * 4);
-    const longTable = tiff([page(10, 10, { 259: [259, 3, 1, 32773], 273: [273, 4, rows, table], 279: [279, 4, rows, table] })]);
+    const longTable = tiff([hollow(10, rows, { 259: [259, 3, 1, 32773], 273: [273, 4, rows, table], 278: [278, 4, 1, 1], 279: [279, 4, rows, table] })]);
     for (const [label, file] of [["a 65,535-entry directory", wideDirectory(65535)], ["a 400,000-row strip table", longTable]]) {
       const ms = cpuMs(() => assertDeclaredWithinPixelCap(file, 16e6, { mainThread: true }));
       ok(assertTiffHeader(file, 16e6, { mainThread: true }) === false && ms < 5, `the main-thread check leaves ${label} (${file.length} bytes) to the worker after ${ms.toFixed(2)} ms of CPU (< 5 ms)`);

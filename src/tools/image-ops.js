@@ -185,8 +185,10 @@ const IMAGE_CHILD = fileURLToPath(new URL("./image-child.js", import.meta.url));
 const CHILD_HEAP_MB = 96;
 const CHILD_DEADLINE_MS = 4000;
 
-function decodeInChild(view, maxPixels, deadlineMs) {
-  const r = spawnSync(process.execPath, [`--max-old-space-size=${CHILD_HEAP_MB}`, IMAGE_CHILD], {
+/** Exported for the suite, which runs it against a stand-in script to read the
+ *  environment and the deadline the child really gets. */
+export function decodeInChild(view, maxPixels, deadlineMs, { script = IMAGE_CHILD } = {}) {
+  const r = spawnSync(process.execPath, [`--max-old-space-size=${CHILD_HEAP_MB}`, script], {
     input: view, env: childEnv(), timeout: Math.max(500, (deadlineMs || CHILD_DEADLINE_MS + 750) - 750),
     killSignal: "SIGKILL", maxBuffer: maxPixels * 4 + 65536, windowsHide: true,
   });
