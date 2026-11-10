@@ -193,7 +193,8 @@ so every claim below is verifiable in code.</p>
   when the expiry you signed passes, or when the subscription ends for any other reason (a nightly backup
   made before then holds a copy until that backup is deleted, see Backups below). When the subscription
   ends, its record is reduced to the subscription's id and product, the paying wallet, the key's public
-  address, the amount and billing period, the dates, the final state and the last payment's transaction;
+  address, the chain and token, the amount and billing period, the dates, the final state and the reason it
+  ended, the last payment's transaction and a marker for a payment whose outcome was never confirmed;
   the email and the subject you asked us to watch are removed. A check that runs every ${mppSub.sweepMinutes} minutes
   does this for a subscription that ends on a date, and deletes the reduced record ${mppSub.keepDays} days after the subscription ends.
   Payments settle in USDC on the public Base blockchain (or the other chains listed at <a href="/pricing">/pricing</a>,
