@@ -531,7 +531,7 @@ export const ALARMS = [
     },
     body: ({ gateway: b }) => {
       const w = TWEET_QUEUE_BAD.has(b.tweetQueue?.status) ? b.tweetQueue.status : "unknown";
-      return `/api/gateway-status reports tweetQueue.status=${w}. The server posts the approved queue (Railway TWEET_QUEUE) one item per clock hour; nothing else posts it once tweet-queue.yml is disabled.
+      return `/api/gateway-status reports tweetQueue.status=${w}. The server posts the approved queue (Railway TWEET_QUEUE) one item per clock hour; nothing else posts it.
 
 - in_doubt: a post may not have reached X, and its one retry has been used (or its window closed, or the process died mid-post). Read /__operator/tweet-queue.json for the ids and hours, check the account on X, and if a post did not land re-queue its text under a new id. Removing the old id from TWEET_QUEUE clears this.
 - refused: X answered 401/402/403 (credentials or the API balance). The queue pauses and retries; items older than the catch-up window are dropped.
