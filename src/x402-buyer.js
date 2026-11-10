@@ -36,7 +36,7 @@ import { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2, canonicalAvmNetw
 export const ROUTER_UA =
   "Mozilla/5.0 (compatible; Agent402-Router/1.0; +https://agent402.tools/crawler)";
 import { recordOutbound } from "./outbound-ledger.js";
-import { PAY_X402_TIMEOUT_MS } from "./buyer-timeouts.js";
+import { PAY_X402_TIMEOUT_MS, PAY_X402_MIN_LEG_MS } from "./buyer-timeouts.js";
 export { PAY_X402_TIMEOUT_MS };
 import { assertSigningAllowed } from "./signing-halt.js";
 import { recordUpstreamSpend } from "./stats.js";
@@ -930,7 +930,14 @@ export function atomicForMessage(v) {
  * @param maxAtomic  hard ceiling on the upstream quote in atomic USDC (6dp) —
  *                   the margin guard. A quote above it fails 502, never signs.
  * @param method/body  request shape (POST body is a JSON-serializable object).
- * @param timeoutMs / maxBytes  bounds.
+ * @param timeoutMs / maxBytes  bounds: timeoutMs is the most one seller
+ *                   request may take.
+ * @param deadlineMs the whole call's time budget, from this call's start
+ *                   (null = none). One deadline is fixed when the call
+ *                   starts; every seller request gets the lesser of
+ *                   timeoutMs and the time left, a request is not started
+ *                   with under minLegMs left, and nothing is signed or sent
+ *                   once it has passed.
  * @param refusalMaxWaitMs  the caller's remaining request budget, from this
  *                   call's start: the refusal branch's wait for the
  *                   credential to expire ends by then, whatever the seller
@@ -940,8 +947,16 @@ export function atomicForMessage(v) {
  * A 200 on the bare request means the endpoint is free — returned with no
  * spend. Only a 402 triggers a payment; anything else is a 502.
  */
-export async function payX402(url, { maxAtomic, method = "GET", body, headers = {}, timeoutMs = PAY_X402_TIMEOUT_MS, maxBytes = DEFAULT_MAX_BYTES, chain = "base", provenPayTo = null, evidenceWallets = null, sellerProof = null, notDebited = null, allowUnproven = false, refusalMaxWaitMs = refusalMaxWaitMsDefault(), memoizeDelivery = false, slug = null, signBy = null, sellerKey = null } = {}) {
+export async function payX402(url, { maxAtomic, method = "GET", body, headers = {}, timeoutMs = PAY_X402_TIMEOUT_MS, maxBytes = DEFAULT_MAX_BYTES, chain = "base", provenPayTo = null, evidenceWallets = null, sellerProof = null, notDebited = null, allowUnproven = false, refusalMaxWaitMs = refusalMaxWaitMsDefault(), memoizeDelivery = false, slug = null, signBy = null, sellerKey = null, deadlineMs = null, minLegMs = PAY_X402_MIN_LEG_MS, now = Date.now } = {}) {
   assertSigningAllowed("an external x402 payment");
+  // ONE DEADLINE FOR THE CALL, fixed here. A caller whose own buyer's payment
+  // lives a short time (a Solana blockhash, an Algorand round window) hands
+  // in what is left of it; the legs below share it instead of each taking a
+  // whole timeout, so the seller is never paid after that payment has lapsed.
+  const callEndAt = deadlineMs != null && Number.isFinite(Number(deadlineMs)) ? now() + Math.max(0, Number(deadlineMs)) : null;
+  const callLeftMs = () => (callEndAt == null ? Infinity : callEndAt - now());
+  const legTimeoutMs = () => Math.max(1, Math.min(timeoutMs, callLeftMs()));
+  const legFloorMs = Math.max(0, Number(minLegMs) || 0);
   // The refusal wait ends at a fixed time from this call's start, so a seller
   // that never answers the paid request cannot add its timeout on top of it.
   const refusalEndAt = Date.now() + Math.max(0, Number(refusalMaxWaitMs) || 0);
@@ -1005,11 +1020,13 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     // internal data or forward our signed X-PAYMENT header).
     dispatcher: sellerDispatcher(false),
     redirect: "manual",
-    signal: AbortSignal.timeout(timeoutMs),
   };
+  // Too little of the call's budget left to ask for the price and still pay:
+  // refused before the seller is contacted at all.
+  if (callLeftMs() < legFloorMs) throw bad("Too little of this call's time budget is left to pay a seller. Nothing was signed.", 504);
   const reject3xx = (r) => { if (r.status >= 300 && r.status < 400) throw bad("Seller returned a redirect - refusing to follow off the validated host", 502); };
   let bare;
-  try { bare = await fetch(url, reqInit); }
+  try { bare = await fetch(url, { ...reqInit, signal: AbortSignal.timeout(legTimeoutMs()) }); }
   catch (e) { throw bad(`Seller unreachable: ${String(e?.message || e).slice(0, 80)}`, 502); }
   reject3xx(bare);
   if (bare.status === 200) return { result: await readCapped(bare, maxBytes), quote: null, receipt: null };
@@ -1282,6 +1299,10 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     // validBefore less the settle rule and the seller allowance). Refused
     // before anything is signed, so nothing is committed and the hold goes back.
     if (Number.isFinite(signBy) && Date.now() > signBy) throw bad("Too little of the buyer's payment authorization is left to pay this seller and still settle. Nothing was signed.", 504);
+    // The call's own deadline, read at the moment of signing: the unpaid
+    // request, the screens and the chain reads above have spent part of it,
+    // and a credential is signed only while a paid request can still finish.
+    if (callLeftMs() < legFloorMs) throw bad("Too little of this call's time budget is left to pay this seller and read its answer. Nothing was signed.", 504);
     const signAccept = isEvm ? capEvmValidity(signable) : signable;
     const payload = chain === "solana"
       ? await (await import("./solana-buyer.js")).createSvmPaymentPayload(buyer.signer, { ...paymentRequired, accepts: [signable] })
@@ -1300,6 +1321,9 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
       e.refused = true;
       throw e;
     }
+    // Signing can read the chain (a Solana blockhash). A credential signed
+    // inside the deadline and not sent before it never leaves this process.
+    if (callLeftMs() <= 0) throw bad("This call's time budget ended while the payment was being signed. Nothing was sent.", 504);
     const payHeaders = http.encodePaymentSignatureHeader(payload);
     // Header-name compatibility: @x402/core emits only PAYMENT-SIGNATURE; some
     // sellers read only the X-PAYMENT name (Stelar, found 2026-07-23). Mirror
@@ -1316,7 +1340,8 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     // reads ONLY X-PAYMENT (Stelar, 2026-07-23) says so in its 402 body, and is
     // handled by the single evidence-driven resend below.
     // Fresh timeout AND a fresh pinned connection for the paid leg. The
-    // timeout must not inherit the bare leg's spent budget, and the paid
+    // per-request timeout does not inherit the bare leg's spent time (the
+    // call's deadline, when the caller set one, does), and the paid
     // retry must not reuse the bare leg's kept-alive socket: a live seller's
     // edge corrupts the connection after its 402 (2026-09-01, a seller -
     // the reused socket died as an uncaught "invalid content-length header"
@@ -1410,7 +1435,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     };
     let paid;
     try {
-      paid = await fetch(url, { ...reqInit, dispatcher: paidDispatcher, signal: AbortSignal.timeout(timeoutMs), headers: paidHeaders });
+      paid = await fetch(url, { ...reqInit, dispatcher: paidDispatcher, signal: AbortSignal.timeout(legTimeoutMs()), headers: paidHeaders });
     } catch (fetchErr) {
       // SELLER-EDGE COMPAT (measured live 2026-09-01 on one seller): their
       // edge emits response framing that undici's fetch() path rejects as
@@ -1437,6 +1462,8 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
         // (It is still evidence about OUR money: see unansweredPaidLeg.)
         throw await unansweredPaidLeg(fetchErr);
       }
+      // The same credential again is still a send: not past the deadline.
+      if (callLeftMs() <= 0) throw await unansweredPaidLeg(fetchErr, { delivered: true });
       console.warn(`[x402-buyer] paid leg fell back to undici.request for ${(() => { try { return new URL(url).host; } catch { return "seller"; } })()} (fetch rejected: ${cause.slice(0, 80)})`);
       try {
         const { request } = await import("undici");
@@ -1445,7 +1472,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
           method,
           headers: paidHeaders,
           ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-          signal: AbortSignal.timeout(timeoutMs),
+          signal: AbortSignal.timeout(legTimeoutMs()),
           maxRedirections: 0,
         });
         const chunks = []; let total = 0;
@@ -1486,11 +1513,12 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     if ((paid.status === 402 || paid.status === 401) && payHeaders["PAYMENT-SIGNATURE"] && !paidHeaders["X-PAYMENT"]) {
       let sniff = "";
       try { sniff = (await readTextCapped(paid.clone(), MAX_REFUSAL_BODY_BYTES)).slice(0, 2000); } catch { sniff = ""; }
-      if (/x-payment/i.test(sniff)) {
+      // Sent only while the call's deadline leaves room for another request.
+      if (/x-payment/i.test(sniff) && callLeftMs() >= legFloorMs) {
         const host = (() => { try { return new URL(url).host; } catch { return "seller"; } })();
         console.warn(`[x402-buyer] ${host} asked for X-PAYMENT by name on a v2 challenge - resending the same credential under both header names (once)`);
         try {
-          paid = await fetch(url, { ...reqInit, dispatcher: sellerDispatcher(true), signal: AbortSignal.timeout(timeoutMs), headers: { ...paidHeaders, "X-PAYMENT": payHeaders["PAYMENT-SIGNATURE"] } });
+          paid = await fetch(url, { ...reqInit, dispatcher: sellerDispatcher(true), signal: AbortSignal.timeout(legTimeoutMs()), headers: { ...paidHeaders, "X-PAYMENT": payHeaders["PAYMENT-SIGNATURE"] } });
         } catch (e) {
           console.warn(`[x402-buyer] ${host}: X-PAYMENT resend failed (${String(e?.message || e).slice(0, 80)}) - keeping the first response`);
         }

@@ -3865,6 +3865,8 @@ jobs:
           node scripts/test-sor-seed.js
           node scripts/test-self-funding.js
           node scripts/test-x402-buyer.js
+          # Router money invariants through the real payers: one deadline per purchase, release only on proof, every signed payment recorded as our own, one memo key (stub sellers and chain, offline)
+          node scripts/test-router-money.js
           node scripts/test-router-identification.js
           node scripts/test-synthetic-marker.js
           node scripts/test-router-health.js

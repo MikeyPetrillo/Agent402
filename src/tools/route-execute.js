@@ -31,7 +31,7 @@ import { observeDelivery } from "../response-observation.js";
 import { isIdentityBoundRoute } from "../payments.js";
 import { evmCredentialBudgetMs, evmCredentialSettleableMs, evmSellerSignBy, EVM_SELLER_ALLOWANCE_MS } from "../evm-validity.js";
 import { cdnSyncLeftMs } from "../cdn-sync-window.js";
-import { PAY_X402_TIMEOUT_MS } from "../buyer-timeouts.js";
+import { PAY_X402_TIMEOUT_MS, PAY_X402_MIN_LEG_MS } from "../buyer-timeouts.js";
 import { spendsBeforeSettlement } from "../composite-spend-guard.js";
 import { upstreamBuyerStatus, evmBuyerChainStatus } from "../upstream-buyer-status.js";
 import { EVM_BUYER_CHAINS, EVM_BUYER_CHAIN_BY_NETWORK, isEvmBuyerChain, evmBuyerChainEnabled, enabledEvmBuyerChains } from "../evm-buyer-chains.js";
@@ -559,6 +559,14 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           const cdnLeftMs = cdnSyncLeftMs(req);
           const externalDeadlineMs = cdnLeftMs != null ? Math.max(0, Math.min(ownDeadlineMs, cdnLeftMs - 5_000)) : ownDeadlineMs;
           const refusalBudgetMs = () => Math.max(0, externalDeadlineMs - (Date.now() - startedAt));
+          // THE SELLER CALL'S OWN DEADLINE, where this request has one: a
+          // short rail's budget, or the proxy's wait. It rides into the payer
+          // as `deadlineMs`, the budget for the whole purchase (the unpaid
+          // request, the signature and the paid request together), so a seller
+          // slow on both requests is not paid after the buyer's own payment
+          // has lapsed or after the answer can reach nobody. Null = neither
+          // applies, and the payer keeps its per-request timeout alone.
+          const callBudgetLeftMs = () => (windowBudgetMs != null ? remainingMs() : cdnLeftMs != null ? refusalBudgetMs() : null);
           // FALLTHROUGH ON A SELLER 5xx. Resolve up to SOR_MAX_CANDIDATES live
           // sellers (ranked, settled-desc) for the first chain that has any, so
           // a seller whose OWN upstream is down (a seller's Pyth feed,
@@ -638,6 +646,11 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           for (let __i = 0; __i < candidateList.length; __i++) {
           const ext = candidateList[__i];
           const hasNext = __i < candidateList.length - 1;
+          // No seller is started with less of the call's budget left than one
+          // seller request needs: refused before any booking or signature.
+          if (callBudgetLeftMs() != null && callBudgetLeftMs() < PAY_X402_MIN_LEG_MS) {
+            throw lastErr || bad(`Finding an external seller used this request's time budget; nothing was spent and nothing is charged. Retry${windowBudgetMs != null ? " with a fresh payment, or pay this route over an EVM rail" : ""}.`, 504);
+          }
           const extUsd = toUsd(ext.price);
           if (!(extUsd > 0 && extUsd <= cap)) {
             const up = routeExecuteHint(extUsd);
@@ -779,7 +792,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
               throw lastErr || bad(`Tried ${__paidAttempts} paid seller(s) for this task without a delivered answer. Refusing to sign another payment for one request.`, 502);
             }
             traceStep(req, "attempt", { origin: ext.seller, lane: ext.unproven ? "unproven" : "proven" });
-            paid = await payExternal(extUrl, { method: extMethod, body: extBody, maxAtomic: BigInt(Math.round(cap * 1e6)), chain, provenPayTo: ext.provenPayTo || null, evidenceWallets: ext.evidenceWallets || null, allowUnproven: ext.unproven === true, ...(ext.unproven === true && ext.seller ? { sellerKey: ext.seller } : {}), refusalMaxWaitMs: refusalBudgetMs(), ...(tempoBudgetMs == null && evmSellerSignBy(req) != null ? { signBy: evmSellerSignBy(req) } : {}), ...(windowBudgetMs != null ? { timeoutMs: Math.max(3000, remainingMs()) } : cdnLeftMs != null ? { timeoutMs: Math.max(3000, Math.min(PAY_X402_TIMEOUT_MS, refusalBudgetMs())) } : {}) });
+            paid = await payExternal(extUrl, { method: extMethod, body: extBody, maxAtomic: BigInt(Math.round(cap * 1e6)), chain, provenPayTo: ext.provenPayTo || null, evidenceWallets: ext.evidenceWallets || null, allowUnproven: ext.unproven === true, ...(ext.unproven === true && ext.seller ? { sellerKey: ext.seller } : {}), refusalMaxWaitMs: refusalBudgetMs(), ...(tempoBudgetMs == null && evmSellerSignBy(req) != null ? { signBy: evmSellerSignBy(req) } : {}), ...(windowBudgetMs != null ? { timeoutMs: Math.max(3000, remainingMs()) } : cdnLeftMs != null ? { timeoutMs: Math.max(3000, Math.min(PAY_X402_TIMEOUT_MS, refusalBudgetMs())) } : {}), ...(callBudgetLeftMs() != null ? { deadlineMs: Math.max(0, callBudgetLeftMs()) } : {}) });
           } catch (e) {
             // WHAT STAYS BOOKED IS WHAT MAY HAVE LEFT THE WALLET. The payer
             // stamps `committed:true` on every failure after the payment
