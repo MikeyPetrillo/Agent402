@@ -273,6 +273,38 @@ for (const [name, j] of Object.entries(jobs)) {
   ok(listing.jobs["listing-pass"]?.environment === "spending", "the scheduled listing pass waits for the spending approval");
 }
 
+// A run on main is a release and is never cancelled by a newer push; the dev
+// branch keeps cancel-in-progress. Every job is bounded, and no call to the
+// platform API can wait forever.
+{
+  const raw = readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8");
+  const conc = wf.concurrency || {};
+  ok(String(conc.group || "").includes("${{ github.ref }}"), "runs are grouped per branch, so a main run only ever queues behind a main run");
+  ok(conc["cancel-in-progress"] === "${{ github.ref != 'refs/heads/main' }}",
+    `a run on main must not be cancelled in progress (cancel-in-progress is ${JSON.stringify(conc["cancel-in-progress"])})`);
+  ok(Object.values(jobs).every((j) => j.concurrency === undefined), "no job sets its own concurrency, which would bypass the workflow's rule for main");
+  const unbounded = Object.entries(jobs).filter(([, j]) => !(Number.isInteger(j["timeout-minutes"]) && j["timeout-minutes"] >= 1 && j["timeout-minutes"] <= 180)).map(([n]) => n);
+  ok(unbounded.length === 0, `every job has a timeout-minutes of at most 180 (missing or out of range: ${unbounded.join(", ") || "none"})`);
+  for (const n of ["deploy", "publish", "publish-gate", "probe"]) ok(Number.isInteger(jobs[n]?.["timeout-minutes"]), `the ${n} job is bounded`);
+  // The deploy job's bound sits above its own wait loops (quiet gate 20 min,
+  // two 15-minute deployment watches, the health and MCP waits), so it never
+  // ends a healthy run.
+  ok(jobs.deploy?.["timeout-minutes"] >= 90, `the deploy job's bound leaves room for its own wait loops (${jobs.deploy?.["timeout-minutes"]})`);
+  // Every curl to the platform API, with its continuation lines, has a limit.
+  const lines = raw.split("\n");
+  const calls = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!/\bcurl\b/.test(lines[i]) || /^\s*#/.test(lines[i])) continue;
+    let cmd = lines[i], k = i;
+    while (/\\\s*$/.test(lines[k]) && k + 1 < lines.length) cmd += "\n" + lines[++k];
+    if (/backboard\.railway\.(app|com)/.test(cmd)) calls.push({ line: i + 1, cmd });
+  }
+  const bare = calls.filter((c) => !/--max-time\s+\d+/.test(c.cmd)).map((c) => c.line);
+  ok(calls.length >= 8, `the platform API calls are found (${calls.length})`);
+  ok(bare.length === 0, `every platform API curl carries --max-time (bare at line ${bare.join(", ") || "none"})`);
+  ok(calls.every((c) => { const m = /--max-time\s+(\d+)/.exec(c.cmd); return m && Number(m[1]) <= 60; }), "each platform API call is bounded at a minute or less");
+}
+
 console.log(`${pass} passed, ${fail} failed`);
 
 

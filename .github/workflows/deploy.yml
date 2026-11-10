@@ -7,9 +7,16 @@ name: Deploy to Railway
 # even though the newer deploy carries its changes (hit 2026-07-21). cancel-in-
 # progress kills the older RUN cleanly the moment a newer push starts, so the
 # only run that survives is the one whose build actually reaches prod.
+#
+# That holds for the dev branch only. On `main` a run is a release: cancelling
+# one in progress can stop a deploy between its variable upsert and its
+# verification, or an npm publish between two packages. So a run on `main` is
+# never cancelled by a newer push; the newer run waits in the same group until
+# the running one ends (GitHub keeps one pending run per group, the newest),
+# and its own deploy then carries both merges.
 concurrency:
   group: deploy-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 on:
   # NO path filter on this push trigger, deliberately - GitHub Actions applies
@@ -597,7 +604,7 @@ jobs:
     needs: [markers, deploy]
     if: always() && github.event_name == 'workflow_dispatch' && inputs.mode == 'bazaar-sweep' && (needs.deploy.result == 'success' || needs.deploy.result == 'skipped')
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 120
     env:
       TARGET_URL: https://agent402.tools
       MODE: sweep
@@ -5344,6 +5351,8 @@ jobs:
         github.event_name == 'workflow_dispatch' && inputs.mode == 'publish' || needs.markers.outputs.publish == 'true'
       )
     runs-on: ubuntu-24.04
+    # Recent runs on main took 1 to 2 minutes; the bound stops a hung install or boot.
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
@@ -5503,6 +5512,8 @@ jobs:
       )
       && needs.publish-gate.result == 'success'
     runs-on: ubuntu-24.04
+    # Recent runs on main took up to 6 minutes; the registry wait loops below sum to about 20.
+    timeout-minutes: 45
     # F01: publishing packages mutates a production artifact — gate it behind the
     # same protected environment as deploy (see the deploy job comment).
     # publish-gate is deliberately OUTSIDE this environment: it holds no
@@ -5986,6 +5997,8 @@ jobs:
     needs: markers
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'probe' || needs.markers.outputs.probe == 'true'
     runs-on: ubuntu-24.04
+    # Read-only diagnostics, a few minutes; the bound stops a hung read.
+    timeout-minutes: 30
     env:
       RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       # The project id is KNOWN (repo var). Railway's `projects` listing query
@@ -6056,7 +6069,7 @@ jobs:
       - name: Railway deployment history (which image is live, what failed)
         run: |
           gql() {
-            curl -s -X POST https://backboard.railway.app/graphql/v2 \
+            curl -s --max-time 30 -X POST https://backboard.railway.app/graphql/v2 \
               -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
               --data @-
           }
@@ -6160,7 +6173,7 @@ jobs:
       - name: Check which facilitator production is configured to use
         run: |
           gql() {
-            curl -s -X POST https://backboard.railway.app/graphql/v2 \
+            curl -s --max-time 30 -X POST https://backboard.railway.app/graphql/v2 \
               -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
               --data @-
           }
@@ -6254,6 +6267,11 @@ jobs:
         (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' && inputs.mode == 'deploy' || needs.markers.outputs.deploy == 'true'
       )
     runs-on: ubuntu-24.04
+    # Recent runs on main took up to 21 minutes. The wait loops below (the quiet
+    # gate, two deployment watches, health, MCP, the listing validation) sum to
+    # about 75 minutes at their own bounds, so the job bound sits above them and
+    # only ends a step that hangs outside its own limit.
+    timeout-minutes: 120
     # actions: read lets the worker step find the last successful deploy run
     # (its diff base); contents: read is the workflow default restated.
     permissions:
@@ -6341,7 +6359,7 @@ jobs:
         id: project
         run: |
           gql() {
-            curl -s -X POST https://backboard.railway.app/graphql/v2 \
+            curl -s --max-time 30 -X POST https://backboard.railway.app/graphql/v2 \
               -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
               --data @-
           }
@@ -6373,7 +6391,7 @@ jobs:
         id: service
         run: |
           gql() {
-            curl -s -X POST https://backboard.railway.app/graphql/v2 \
+            curl -s --max-time 30 -X POST https://backboard.railway.app/graphql/v2 \
               -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
               --data @-
           }
@@ -6395,7 +6413,7 @@ jobs:
         id: domain
         run: |
           gql() {
-            curl -s -X POST https://backboard.railway.app/graphql/v2 \
+            curl -s --max-time 30 -X POST https://backboard.railway.app/graphql/v2 \
               -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
               --data @-
           }
@@ -6450,7 +6468,7 @@ jobs:
         if: env.CUSTOM_DOMAIN != ''
         run: |
           gql() {
-            curl -s -X POST https://backboard.railway.app/graphql/v2 \
+            curl -s --max-time 30 -X POST https://backboard.railway.app/graphql/v2 \
               -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
               --data @-
           }
@@ -6505,7 +6523,7 @@ jobs:
           RAILWAY_DOMAIN: ${{ steps.domain.outputs.domain }}
         run: |
           gql() {
-            curl -s -X POST https://backboard.railway.app/graphql/v2 \
+            curl -s --max-time 30 -X POST https://backboard.railway.app/graphql/v2 \
               -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
               --data @-
           }
@@ -6588,7 +6606,7 @@ jobs:
         id: trigger
         run: |
           gql() {
-            curl -s -X POST https://backboard.railway.app/graphql/v2 \
+            curl -s --max-time 30 -X POST https://backboard.railway.app/graphql/v2 \
               -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
               --data @-
           }
@@ -6609,7 +6627,7 @@ jobs:
       - name: Wait for the NEW deployment to reach SUCCESS
         run: |
           gql() {
-            curl -s -X POST https://backboard.railway.app/graphql/v2 \
+            curl -s --max-time 30 -X POST https://backboard.railway.app/graphql/v2 \
               -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
               --data @-
           }
@@ -7038,7 +7056,7 @@ jobs:
         if: steps.decide-diff.outputs.run == 'yes'
         run: |
           gql() {
-            curl -s -X POST https://backboard.railway.app/graphql/v2 \
+            curl -s --max-time 30 -X POST https://backboard.railway.app/graphql/v2 \
               -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
               --data @-
           }
