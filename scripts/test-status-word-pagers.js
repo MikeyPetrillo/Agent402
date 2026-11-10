@@ -71,10 +71,12 @@ const MIN = 60_000;
     down = true;
     const t1 = Date.now();
     await g.settle("n:pager-b");
+    // The miss is stamped inside settle, so it lies between t1 and t2.
+    const t2 = Date.now();
     await check("replayStore: a new miss after a recovery starts its own grace period", () => {
       assert.ok(t1 - t0 >= 5, "the two misses are apart in time");
       assert.deepEqual(replayGuardStoreStatus({ now: t1 + 10 * MIN - 1 }), { status: "pending", alert: "ok" }, "counted from the new miss, not the first");
-      assert.equal(replayGuardStoreStatus({ now: t1 + 10 * MIN }).alert, "sustained");
+      assert.equal(replayGuardStoreStatus({ now: t2 + 10 * MIN }).alert, "sustained");
     });
     down = false;
     for (let i = 0; i < 300 && replayGuardStoreStatus().status !== "ok"; i++) await new Promise((r) => setTimeout(r, 10));
