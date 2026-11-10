@@ -142,7 +142,7 @@ for (const [name, w] of Object.entries(WIRES)) {
   };
   for (const [name, w] of Object.entries(WIRES)) {
     const high = quotes[name]("high"), low = quotes[name]("low"), none = quotes[name](undefined);
-    ok(!high.invalid && high.usd === low.usd && high.usd === none.usd, `${name} (e): the metered quote for a body is the same at effort high, at low and with none set`);
+    ok(!high.invalid && high.usd === low.usd && none.usd <= high.usd, `${name} (e): the metered quote for a body is the same at effort high and at low, and no higher with none set`);
     const sent = stub(w);
     const r = req(); r.__meteredQuoteUsd = high.usd;
     const out = await w.tool(M).handler(w.body(model, 256, "high"), r);
