@@ -158,19 +158,86 @@ function trackedFor(now) {
   if (tracked.day !== d) tracked = { day: d, byAddress: new Map(), orphans: new Set(), memo: new Map() };
   return tracked;
 }
+// The order index of one pending day's client table, kept beside it (keyed by
+// the table object, so a day rebuilt by a merge is indexed again from its own
+// keys). At a full table every new client folds the one with the fewest
+// refusals, the earliest tracked on a tie; read from Object.keys that was a
+// scan of every row per new client, on the path that answers a refused search.
+//   order  the rows in the order the table lists them ({ k, c }; null once folded)
+//   min    the fewest refusals any row held at the last pick (null: not known)
+//   cur    every live row before it holds more than `min`
+//   fresh  rows from here on were tracked after the last pick
+// A row's count only rises and a new row is appended, so between picks the
+// rows before `cur` stay above `min`, older rows stay at or above it, and only
+// a row tracked since can sit under it. A pick therefore reads the fresh rows,
+// then walks on from `cur` to the first row still at `min`; only when no row
+// is (every row has since risen) does it read the whole table again.
+// A pending day's table is written here and nowhere else.
+const tables = new WeakMap();
+function tableOf(clients) {
+  let t = tables.get(clients);
+  if (!t) {
+    const order = Object.keys(clients).map((k) => ({ k, c: clients[k] }));
+    t = { order, live: order.length, min: null, cur: 0, fresh: 0 };
+    tables.set(clients, t);
+  }
+  return t;
+}
+/** Index in t.order of the row with the fewest refusals, the earliest on a tie; -1 with no row. */
+function lowestRow(clients, t) {
+  const { order } = t;
+  const rowAt = (i) => { const e = order[i]; return e && clients[e.k] === e.c ? e : null; };
+  let at = -1;
+  if (t.min !== null) {
+    let f = Infinity, fAt = -1;
+    for (let i = t.fresh; i < order.length; i++) { const e = rowAt(i); if (e && e.c.r < f) { f = e.c.r; fAt = i; } }
+    if (f < t.min) { at = fAt; t.min = f; }
+    else for (let i = t.cur; i < order.length; i++) { const e = rowAt(i); if (e && e.c.r === t.min) { at = i; break; } }
+  }
+  if (at < 0) {
+    let m = Infinity;
+    for (let i = 0; i < order.length; i++) { const e = rowAt(i); if (e && e.c.r < m) { m = e.c.r; at = i; } }
+    t.min = at < 0 ? null : m;
+  }
+  t.cur = at + 1;
+  t.fresh = order.length;
+  return at;
+}
+/** Drop the folded rows from t.order once they outnumber the live ones. */
+function compactTable(t) {
+  if (t.order.length <= 2 * t.live + 32) return;
+  const order = [];
+  let cur = 0, fresh = 0;
+  for (let i = 0; i < t.order.length; i++) {
+    if (i === t.cur) cur = order.length;
+    if (i === t.fresh) fresh = order.length;
+    if (t.order[i]) order.push(t.order[i]);
+  }
+  if (t.cur >= t.order.length) cur = order.length;
+  if (t.fresh >= t.order.length) fresh = order.length;
+  t.order = order; t.cur = cur; t.fresh = fresh;
+}
 function pendingClient(day, key, ua) {
   let c = day.clients[key];
   if (!c) {
-    const keys = Object.keys(day.clients);
-    if (keys.length >= MAX_CLIENTS()) {
-      let low = keys[0];
-      for (const k of keys) if (day.clients[k].r < day.clients[low].r) low = k;
-      foldClient(day, low);
+    const t = tableOf(day.clients);
+    if (t.live >= MAX_CLIENTS()) {
+      const at = lowestRow(day.clients, t);
+      if (at >= 0) {
+        foldClient(day, t.order[at].k);
+        t.order[at] = null;
+        t.live--;
+        compactTable(t);
+      }
     }
     c = day.clients[key] = { u: ua, r: 0, s: 0, ok: 0 };
+    t.order.push({ k: key, c });
+    t.live++;
   }
   return c;
 }
+/** Test seam: the row for `key` in a pending day, tracked (and the smallest folded) when new. */
+export function _pendingClientForTest(day, key, ua = "none") { return pendingClient(day, key, ua); }
 
 /**
  * Count one refusal. Synchronous; the store write is deferred.
@@ -356,4 +423,4 @@ export async function discoveryRefusalsReport({ now = Date.now(), top = 20 } = {
 
 /** Test seams. */
 export function _resetDiscoveryRefusals() { pending = {}; tracked = { day: "", byAddress: new Map(), orphans: new Set(), memo: new Map() }; if (timer) { clearInterval(timer); timer = null; } doc = null; }
-export function _discoveryRefusalsMemory() { return { pendingDays: Object.keys(pending).length, pendingClients: Object.values(pending).reduce((n, d) => n + Object.keys(d.clients).length, 0), addresses: tracked.byAddress.size, orphans: tracked.orphans.size, memo: tracked.memo.size }; }
+export function _discoveryRefusalsMemory() { return { pendingDays: Object.keys(pending).length, pendingClients: Object.values(pending).reduce((n, d) => n + Object.keys(d.clients).length, 0), indexRows: Object.values(pending).reduce((n, d) => n + (tables.get(d.clients)?.order.length || 0), 0), addresses: tracked.byAddress.size, orphans: tracked.orphans.size, memo: tracked.memo.size }; }

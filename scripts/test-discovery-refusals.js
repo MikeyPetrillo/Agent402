@@ -81,6 +81,7 @@ const today = async (now = T) => (await report({ now })).days.find((d) => d.day 
   for (let i = 0; i < 300; i++) { refuse({ address: `203.0.${Math.floor(i / 250)}.${i % 250}`, userAgent: `agent${i % 3}/1`, route: "find", rule: "shared-compute", now: T }); total++; }
   const mem = memory();
   ok(mem.pendingClients <= 5 && mem.addresses <= 20, `memory holds at most the cap of clients and four times that of addresses (${JSON.stringify(mem)})`);
+  ok(mem.indexRows >= mem.pendingClients && mem.indexRows <= 2 * 5 + 33, `the table's order index drops folded rows as it goes (${mem.indexRows} entries for ${mem.pendingClients} rows after 300 folds)`);
   let d = await today();
   ok(d.refused === total && total === 375, `the day's total is exact past the cap (${d.refused})`);
   ok(d.topClients.reduce((s, c) => s + c.refused, 0) + d.other.refused === d.refused, "the top rows plus the other remainder equal the total");
@@ -103,6 +104,85 @@ const today = async (now = T) => (await report({ now })).days.find((d) => d.day 
   ok(Object.keys(merged.clients).join() === "bbbbbbbbbbbbbbbb" && merged.other.refused === 1 && merged.other.clients === 1 && merged.other.succeeded === 1 && merged.other.served === 2, "the client with the fewest refusals is the one folded, with its marks");
   ok(enforceCap(mergeDay(day, null, 9), 9).other.refused === 0, "under the cap nothing folds");
   delete process.env.DISCOVERY_REFUSALS_MAX_CLIENTS;
+}
+
+// --- 1d2. a new client at a full table: the same row folds as a scan of every
+//     row picks, without reading every row each time
+{
+  // The rule as first written: read every key, fold the fewest refusals, the
+  // earliest tracked on a tie. The module's table must match it row for row.
+  const referenceClient = (day, key, ua, cap) => {
+    let c = day.clients[key];
+    if (!c) {
+      const keys = Object.keys(day.clients);
+      if (keys.length >= cap) {
+        let low = keys[0];
+        for (const k of keys) if (day.clients[k].r < day.clients[low].r) low = k;
+        const f = day.clients[low];
+        day.other.refused += f.r; day.other.served += f.s;
+        if (f.r > 0) day.other.clients++;
+        if (f.ok) day.other.succeeded++;
+        if (f.ok & 4) day.other.paid++;
+        delete day.clients[low];
+      }
+      c = day.clients[key] = { u: ua, r: 0, s: 0, ok: 0 };
+    }
+    return c;
+  };
+  const blank = () => ({ refused: 0, byRoute: {}, byUa: {}, clients: {}, other: { refused: 0, clients: 0, served: 0, succeeded: 0, paid: 0 } });
+  let seed = 20261110;
+  const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32;
+  const keyOf = (i) => i.toString(16).padStart(16, "0");
+  let ops = 0, folds = 0, differ = null;
+  for (let run = 0; run < 240 && !differ; run++) {
+    const cap = [1, 2, 3, 5, 8, 13, 40, 500][run % 8];
+    process.env.DISCOVERY_REFUSALS_MAX_CLIENTS = String(cap);
+    let a = blank(), b = blank();
+    const pool = Math.max(2, Math.floor(cap * (1.2 + rnd() * 3)));
+    // How a run behaves: mostly new clients, mostly returning ones, or bursts per client.
+    const fresh = [0.9, 0.5, 0.15][run % 3];
+    let next = 0;
+    const steps = cap >= 40 ? 3000 : 600;
+    for (let i = 0; i < steps && !differ; i++) {
+      const key = rnd() < fresh ? keyOf(1e6 + next++) : keyOf(Math.floor(rnd() * pool));
+      const kind = rnd();
+      const before = a.other.clients + a.other.succeeded;
+      const ca = M._pendingClientForTest(a, key, "ua"), cb = referenceClient(b, key, "ua", cap);
+      // A refusal (one or a burst), or a served / success mark that leaves the count at zero.
+      if (kind < 0.75) { const by = rnd() < 0.2 ? 1 + Math.floor(rnd() * 6) : 1; ca.r += by; cb.r += by; }
+      else if (kind < 0.9) { ca.s += 1; cb.s += 1; ca.ok |= 1; cb.ok |= 1; }
+      else { ca.ok |= 4; cb.ok |= 4; }
+      ops++;
+      if (a.other.clients + a.other.succeeded !== before) folds++;
+      if (JSON.stringify(a) !== JSON.stringify(b)) differ = { run, cap, step: i, key };
+      // Now and then the day is rebuilt, as a failed flush merges it back: a new table object.
+      if (!differ && rnd() < 0.004) { a = mergeDay(a, null, cap); b = mergeDay(b, null, cap); if (JSON.stringify(a) !== JSON.stringify(b)) differ = { run, cap, step: i, merged: true }; }
+    }
+  }
+  delete process.env.DISCOVERY_REFUSALS_MAX_CLIENTS;
+  ok(differ === null && ops > 100_000 && folds > 20_000, `over ${ops} random steps (${folds} of them folding a row, caps 1 to 500, days rebuilt mid-run) the table matches a scan of every row at each step, row order included (${JSON.stringify(differ)})`);
+
+  // The cost at a full table: every refusal from a new client. Table reads
+  // are counted, not timed: a scan lists every key and reads every row per
+  // new client (the reference below, on the same table shape).
+  process.env.DISCOVERY_REFUSALS_MAX_CLIENTS = "500";
+  const N = 5000;
+  const measure = (client) => {
+    const day = blank();
+    const count = { lookups: 0, listings: 0 };
+    // A table already at the cap when it is first seen (a day merged back).
+    const rows = {};
+    for (let i = 0; i < 500; i++) rows[keyOf(i)] = { u: "ua", r: 1, s: 0, ok: 0 };
+    day.clients = new Proxy(rows, { get(t, p) { count.lookups++; return t[p]; }, ownKeys(t) { count.listings++; return Reflect.ownKeys(t); } });
+    for (let i = 0; i < N; i++) client(day, keyOf(1e7 + i)).r++;
+    return { ...count, rows: Object.keys(rows).length, folded: day.other.clients, last: Object.keys(rows)[0] };
+  };
+  const scan = measure((day, key) => referenceClient(day, key, "ua", 500));
+  const kept = measure((day, key) => M._pendingClientForTest(day, key, "ua"));
+  delete process.env.DISCOVERY_REFUSALS_MAX_CLIENTS;
+  ok(kept.rows === 500 && kept.folded === N && kept.last === scan.last, "control: each of those new clients folded one row at the 500-row cap, the same rows a scan folds");
+  ok(scan.lookups / N > 500 && scan.listings >= N, `control: a scan reads ${(scan.lookups / N).toFixed(0)} rows and lists the keys once per new client`);
+  ok(kept.lookups / N < 12 && kept.listings <= 2, `at a full 500-row table a new client costs ${(kept.lookups / N).toFixed(1)} table reads on average and the keys are listed ${kept.listings} time(s) in ${N} clients`);
 }
 
 // --- 1e. refused, then served or calling a tool
