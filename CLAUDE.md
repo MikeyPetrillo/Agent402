@@ -73,6 +73,10 @@ LLC: credit the entity, never a personal name.
   key, a spec whose schemas each reference the next twice, dates at the ends of the range, an
   object whose `toString` is not a function), bounds the size of each answer, and fails when a
   proof-of-work tool answers 500 or 502 to any of it.
+- Request headers get the same corpus: `scripts/test-redos-request-headers.js` fills each header
+  to the server's limit on every unpaid surface class and reads the longest event-loop turn from
+  inside the server (`scripts/lib/loop-gap-preload.js`); a header reader it does not reach is
+  timed there directly, so a new one is added to that list.
 - A proof-of-work tool whose input holds a value that cannot be coerced (an object whose own
   `toString` or `valueOf` is not a function) answers 400 with the field named: the catalog wraps
   those handlers once (`src/caller-input-errors.js`). Every other bare TypeError or RangeError
@@ -132,6 +136,11 @@ Operator-only surfaces live under `/__operator/*` (token-authed); the operator v
 surface reads `X-Operator-Token` only, since `Authorization` there is a buyer's credential.
 Such a route calls `operatorView(req, res)` (server.js): every answer varies on the header, and an
 elevated one is `private, no-store`, so a shared cache never keeps it.
+`/__operator/routes.json` lists every operator route from the router (`src/operator-routes.js`);
+`scripts/test-operator-routes-refuse.js` calls each one without the token and expects 404, so an
+operator route is registered on the app itself (a mounted router is not listed and fails it).
+Every answer carries nosniff, a referrer policy and HSTS, a parser-refused request included
+(`src/security-headers.js`; per surface class in `scripts/test-security-header-surfaces.js`).
 A browser operator session ends after `OPERATOR_SESSION_IDLE_SECONDS` (default 1800) with no
 request, inside its 8-hour lifetime; a write carrying the session cookie needs Sec-Fetch-Site
 `same-origin` or an Origin equal to BASE_URL's (a header-token caller needs neither).

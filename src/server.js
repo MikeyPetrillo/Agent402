@@ -2,7 +2,8 @@ import { siteOrgRef, mppOffered } from "./site-org.js";
 import { heapSamplingReport } from "./boot-profile.js"; // diagnostic boot CPU profile - must stay the FIRST import (see the file)
 import "./tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA, process-wide (see the file)
 import { mtaStsPolicy } from "./mta-sts.js";
-import { securityHeaders } from "./security-headers.js";
+import { securityHeaders, answerClientError } from "./security-headers.js";
+import { operatorRoutesOf } from "./operator-routes.js";
 import { createLargeBodyGate, largeBodyInflightMaxBytes, unlessBodyUnread, UNPAID_LIMITS as LARGE_BODY_UNPAID_LIMITS } from "./large-body-gate.js";
 import { carriesPaymentAttempt, registerOfferedNetworks } from "./payment-attempt.js";
 import { retiredEntryFor, assertRetiredRegistryConsistent, retirementHeaders, RETIRED_CONVERTERS_AT } from "./retired-tools.js";
@@ -6239,6 +6240,12 @@ app.get("/__operator/serving-health.json", (req, res) => {
 // Titles the meta clamp shortened since boot (src/seo-meta.js): a served
 // page whose source title ran past the bar. scripts/test-title-clamp.js reads
 // it after rendering every sitemap page and fails on any entry.
+// Every route registered under /__operator, read from the router
+// (src/operator-routes.js).
+app.get("/__operator/routes.json", (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  res.set("Cache-Control", "no-store").json(operatorRoutesOf(app));
+});
 app.get("/__operator/seo-meta.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   res.set("Cache-Control", "no-store").json({ titleMax: META_TITLE_MAX, clampedTitles: [...clampedTitles].map(([source, served]) => ({ source, served })) });
@@ -12475,6 +12482,9 @@ const httpServer = app.listen(PORT, () => {
 // 5 s). Keep-alive outlives the edge proxy's idle window so it never reuses a
 // socket we just closed (a sporadic edge 502), headers stays above keep-alive
 // as Node requires, and a request body must arrive within two minutes.
+// A request the parser refuses never reaches a middleware: its answer carries
+// the always-on security headers here (src/security-headers.js).
+httpServer.on("clientError", answerClientError);
 httpServer.keepAliveTimeout = Number(process.env.HTTP_KEEPALIVE_TIMEOUT_MS) || 65_000;
 httpServer.headersTimeout = Number(process.env.HTTP_HEADERS_TIMEOUT_MS) || 70_000;
 httpServer.requestTimeout = Number(process.env.HTTP_REQUEST_TIMEOUT_MS) || 120_000;
