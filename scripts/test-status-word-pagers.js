@@ -280,6 +280,47 @@ for (const [prefix, T, field, alertRow, quietRows, goodRows] of HB) {
     assert.deepEqual(await runStep(step, undefined, [{ number: 9, title: T }]), [], "a blind read never closes");
   });
 }
+
+// The daily spend words (xDataSpend, exaSpend): over still serves and capped
+// refuses, and the heartbeat pages on both under one issue per upstream. The
+// steps are run as written, like the three above.
+const SPEND = [
+  // [step name, title, field]
+  ["X data daily spend over its ceiling", "X data daily spend OVER its ceiling", "xDataSpend"],
+  ["Exa daily spend over its ceiling", "Exa daily spend OVER its ceiling", "exaSpend"],
+];
+for (const [name, T, field] of SPEND) {
+  const step = steps.find((s) => String(s.name || "") === name);
+  await check(`heartbeat: "${T}" has a step that reads ${field}`, () => {
+    assert.ok(step, `heartbeat.yml has a step named "${name}"`);
+    assert.ok(step.run.includes(`TITLE="${T}"`), "the title");
+    assert.ok(step.run.includes(`.${field}.status`), "reads the word");
+  });
+  if (!step) continue;
+  await check(`heartbeat: "${T}" opens once on over and on capped, never on ok, off or a blind read`, async () => {
+    for (const word of ["over", "capped"]) {
+      const calls = await runStep(step, { [field]: { status: word } });
+      assert.equal(calls.length, 1, `${word}: ${JSON.stringify(calls)}`);
+      assert.deepEqual([calls[0][0], calls[0][1], argOf(calls[0], "--title")], ["issue", "create", T], word);
+      assert.doesNotMatch(argOf(calls[0], "--body"), /\$[0-9]|[0-9]+\.[0-9]/, `${word}: the public body carries no figure`);
+      assert.deepEqual(await runStep(step, { [field]: { status: word } }, [{ number: 9, title: T }]), [], `${word}: an open issue is not duplicated or commented on`);
+    }
+    for (const word of ["ok", "off", "unknown", "something-new"]) assert.deepEqual(await runStep(step, { [field]: { status: word } }), [], word);
+    assert.deepEqual(await runStep(step, {}), [], "a build without the word");
+    assert.deepEqual(await runStep(step, undefined), [], "an unreadable gateway-status");
+    // The other upstream's word does not page this step.
+    const other = SPEND.find((x) => x[2] !== field)[2];
+    assert.deepEqual(await runStep(step, { [other]: { status: "over" } }), [], `${other}=over is the other step's`);
+  });
+  await check(`heartbeat: "${T}" closes on ok and off only, and only its own issue`, async () => {
+    for (const word of ["ok", "off"]) {
+      const calls = await runStep(step, { [field]: { status: word } }, [{ number: 9, title: T }, { number: 4, title: `Other ${T}` }]);
+      assert.ok(calls.length === 1 && calls[0][1] === "close" && calls[0][2] === "9", `${word}: ${JSON.stringify(calls)}`);
+    }
+    for (const word of ["over", "capped", "unknown"]) assert.deepEqual(await runStep(step, { [field]: { status: word } }, [{ number: 9, title: T }]), [], word);
+    assert.deepEqual(await runStep(step, undefined, [{ number: 9, title: T }]), [], "a blind read never closes");
+  });
+}
 await rm(dir, { recursive: true, force: true });
 
 console.log(`\n${pass} passed, ${fail} failed`);

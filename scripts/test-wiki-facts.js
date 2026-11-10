@@ -39,8 +39,7 @@ const wiki = readdirSync(join(ROOT, "wiki")).filter((f) => f.endsWith(".md")).ma
   const { meteredClientTimeoutSeconds } = await import("../src/metered-lead.js");
   const gw = wiki.find(([f]) => f === "LLM-Gateway.md")?.[1] || "";
   const m = /client timeout of at least (\d+) s/.exec(gw);
-  if (!(m && Number(m[1]) === meteredClientTimeoutSeconds())) { console.error(`FAIL - wiki/LLM-Gateway.md metered timeout (${m?.[1]}) matches meteredClientTimeoutSeconds() (${meteredClientTimeoutSeconds()})`); process.exitCode = 1; }
-  else console.log(`ok - wiki/LLM-Gateway.md metered timeout matches the derived ${meteredClientTimeoutSeconds()} s`);
+  ok(!!m && Number(m[1]) === meteredClientTimeoutSeconds(), `wiki/LLM-Gateway.md metered timeout (${m?.[1]}) matches meteredClientTimeoutSeconds() (${meteredClientTimeoutSeconds()})`);
 }
 const card = cardReportPriceRange(HUMAN_PRODUCTS);
 const agent = agentReportPriceRange();

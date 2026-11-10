@@ -87,6 +87,17 @@ try {
   const again = await adb.pruneToolCalls({ pauseMs: 0, now });
   ok(again.ok && again.deleted === 0 && again.batches === 1, "a run with nothing to delete is one empty batch");
 
+  // A lease lost mid-run: the run stops before its next batch and says more
+  // remain, so the container that took the lease is the only one deleting.
+  await direct.query(`INSERT INTO tool_calls (ts, slug, latency_ms) SELECT to_timestamp($1::double precision / 1000) - (g || ' minutes')::interval, 'lost', 1 FROM generate_series(1, 1200) g`, [now - 181 * DAY]);
+  let asked = 0;
+  const lost = await adb.pruneToolCalls({ batchSize: 500, pauseMs: 0, now, stillHeld: () => ++asked <= 1 });
+  ok(lost.ok && lost.deleted === 500 && lost.batches === 1 && lost.more === true && asked === 2 && (await count("slug = 'lost'")) === 700, `a lease that is gone after the first batch stops the run there, with more to do (${JSON.stringify(lost)}, asked ${asked})`);
+  const never = await adb.pruneToolCalls({ batchSize: 500, pauseMs: 0, now, stillHeld: () => false });
+  ok(never.ok && never.deleted === 0 && never.batches === 0 && never.more === true && (await count("slug = 'lost'")) === 700, "a lease already gone deletes nothing");
+  const held = await adb.pruneToolCalls({ batchSize: 500, pauseMs: 0, now, stillHeld: () => true });
+  ok(held.ok && held.deleted === 700 && held.more === false && (await count("slug = 'lost'")) === 0, "control: a lease held throughout deletes the rest");
+
   // The delete walks the ts index (no sort, no full scan of the table).
   await direct.query("ANALYZE tool_calls");
   await direct.query("SET enable_seqscan = off");

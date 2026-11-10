@@ -104,6 +104,8 @@ const REQUESTS = {
   pow: { path: "/api/hash", body: { text: "hello" } },
   metered: { path: "/v1/metered/chat/completions", body: METERED_BODY },
   meteredEmpty: { path: "/v1/metered/chat/completions", body: {} },
+  // A request large enough that its quote is above the route's list price.
+  meteredLarge: { path: "/v1/metered/chat/completions", body: { model: "anthropic/claude-opus-5", messages: [{ role: "user", content: "Name three rivers." }], max_tokens: 8000 } },
 };
 const ask = async (url, { path, body }, headers = {}) => {
   const r = await fetch(`${url}${path}`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
@@ -166,6 +168,12 @@ try {
     ok(p.quote?.maxOutputTokens === 200 && p.quote.requestBytes === Buffer.byteLength(JSON.stringify(METERED_BODY)), `metered: and the caller's own size and cap (${JSON.stringify(p.quote)})`);
     ok(JSON.stringify(Object.keys(p.quote || {})) === JSON.stringify(["model", "requestBytes", "maxOutputTokens"]), "metered: the quote holds the caller's inputs only: no cost, rate or markup field");
     ok(microOf(p.price) >= microOf(range.minUsd) && microOf(p.price) <= microOf(range.maxUsd), `metered: the quote ${p.price} is inside /api/pricing's range (${range.minUsd}..${range.maxUsd})`);
+    // A quote above the list price: the block states this request's own
+    // price, the amount its accept asks, never the route's list price.
+    const big = got.meteredLarge.a.json?.payment || {};
+    const bigBase = acceptOn(got.meteredLarge.a.json, BASE_NET);
+    ok(Number(bigBase?.amount) > microOf(row?.price), `metered, a large request: control, its Base accept asks more than the list price (${bigBase?.amount} vs ${row?.price})`);
+    ok(microOf(big.price) === Number(bigBase?.amount) && big.price !== row?.price && big.quote?.maxOutputTokens === 8000, `metered, a large request: payment.price ${big.price} is the amount in the same 402's accept (${bigBase?.amount}), not the list price ${row?.price}`);
     const e = got.meteredEmpty.a.json?.payment || {};
     ok(microOf(e.price) === microOf(row?.price) && !("model" in (e.quote || {})), `metered, a body that names nothing: the floor /api/pricing lists (${e.price} vs ${row?.price}) and no model`);
   }

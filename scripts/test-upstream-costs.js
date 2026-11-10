@@ -71,6 +71,14 @@ ok(U.upstreamCostsStatus() === "ok" && U.upstreamCostsGaps().length === 0, "a co
   ok(U.upstreamCostsStatus() === "partial" && U.upstreamCostsGaps().join() === "vendor.direct.minSaving", "a table without vendor.direct.minSaving reads partial and names it");
   U.setUpstreamCostsForTest(FULL);
 }
+{
+  // The settlement fee is read by the margin test's worst case: a table without it is partial.
+  const { settlementPerCall, ...fees } = FULL.fees;
+  U.setUpstreamCostsForTest({ ...FULL, fees });
+  ok(settlementPerCall !== undefined && U.upstreamCostsStatus() === "partial" && U.upstreamCostsGaps().join() === "fees.settlementPerCall", "a table without fees.settlementPerCall reads partial and names it");
+  U.setUpstreamCostsForTest(FULL);
+  ok(U.upstreamCostsStatus() === "ok", "control: with the settlement fee back the table reads ok");
+}
 ok(U.vendorRate("cdp", "sqlQuery") === 0.5 && U.vendorRate("cdp", "nope") === null && U.vendorRate("nope", "x") === null, "a vendor rate reads through; an unknown vendor or key is null");
 U.setUpstreamCostsForTest({ ...FULL, models: [...FULL.models, ["acme/big-pro", { prompt: 0, completion: 9 }]] });
 ok(U.upstreamCostsStatus() === "partial" && U.upstreamCostsGaps().join() === "models[acme/big-pro]", "a zero-rate model row (not stealth) is a gap, not a silent fallback to acme/big");
