@@ -22,7 +22,9 @@
 //     One wallet has one read under way at a time: a run that needs a later
 //     read than the one under way waits for it and shares the single read
 //     that follows, with every run that asks meanwhile. A read that finds
-//     the lane full waits for a place in it, first come first served.
+//     the lane full waits for a place in it, first come first served. Either
+//     wait is bounded (LANE_WAIT_MS): a read ahead that has not answered by
+//     then is no longer waited for.
 //   - That proof holds only until a run of the same wallet leaves the
 //     ledger: the departed run's settlement may have come out of the balance
 //     this payment was verified against. A run judged across such a departure
@@ -272,6 +274,13 @@ let reader = readTokenBalance;
 /** Test seam. */
 export function _setBalanceReaderForTest(fn) { reader = typeof fn === "function" ? fn : readTokenBalance; }
 
+/** Resolves when `p` does, or after `ms`, whichever is first. */
+function settledWithin(p, ms) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, Math.max(0, ms));
+    p.then(() => { clearTimeout(timer); resolve(); });
+  });
+}
 /** A place in the read lane: true once held, false after `waitMs` without one. */
 function takeLane(waitMs) {
   if (readsInFlight < MAX_READS_IN_FLIGHT) { readsInFlight++; return true; }
@@ -301,7 +310,8 @@ function freeLane(epoch) {
 // so runs whose views land together share the one read that follows them all.
 // A wallet has one read under way at a time: a caller the read under way is
 // too early for shares the one queued behind it, which begins when that one
-// ends, so a staggered burst costs a read at a time, never one read per run.
+// ends (or has not answered within the wait), so a staggered burst costs a
+// read at a time, never one read per run.
 function balanceFor(coverKey, terms, now, minSeq = 0, laneWaitMs = LANE_WAIT_MS) {
   const hit = balances.get(coverKey);
   if (hit && now - hit.at < CACHE_MS && hit.seq > minSeq) return hit.atomic;
@@ -315,7 +325,7 @@ function balanceFor(coverKey, terms, now, minSeq = 0, laneWaitMs = LANE_WAIT_MS)
     const epoch = laneEpoch;
     try {
       if (pending) {
-        await pending.p;
+        await settledWithin(pending.p, laneWaitMs);
         if (queuedReads.get(coverKey) === entry) queuedReads.delete(coverKey);
         pendingReads.set(coverKey, entry);
       } else await null;

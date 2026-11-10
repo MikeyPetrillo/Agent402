@@ -458,6 +458,29 @@ for (const [label, staggered] of [["one after another", true], ["at once", false
   out.forEach((x) => x.release?.());
   await unforeign(W, "d5");
 }
+{
+  // 6. The read ahead never answers. The run behind it waits its bound, then
+  // begins the read that follows and is judged on it; it is not held for as
+  // long as the first read hangs.
+  C._resetInflightCoverForTest();
+  const gated = [];
+  C._setBalanceReaderForTest(() => new Promise((res) => gated.push(res)));
+  const W = "0x" + "ab".repeat(20);
+  await foreign(W, "d6");
+  const ap = attempt(C, W);
+  await until(() => gated.length === 1, "run a's read");
+  const t0 = Date.now();
+  const bp = C.admitCoveredRun(reqFor(W), { laneWaitMs: 120 }).then((release) => ({ release }), (err) => ({ err }));
+  await until(() => gated.length === 2, "run b's own read, begun although the read ahead has not answered");
+  const waited = Date.now() - t0;
+  gated[1](3n * PRICE);
+  const b = await bp;
+  ok(typeof b.release === "function" && waited >= 100 && C.inflightCoverStatus().admittedUnread === 0, `a read ahead that does not answer: the run behind it begins its own read after the bound and is admitted on it (${b.err?.statusCode || "admitted"}, waited ${waited} ms)`);
+  gated[0](3n * PRICE);
+  const a = await ap;
+  a.release?.(); b.release?.();
+  await unforeign(W, "d6");
+}
 shared.windowAdd = realAdd; shared.windowRead = realRead;
 // Clean up this run's keys.
 try {
