@@ -28,7 +28,7 @@ import { createHash } from "node:crypto";
 import { assertSigningAllowed } from "./signing-halt.js";
 import { assertPayoutScreened } from "./tools/sanctions-kit.js";
 import { recordSignedPurchase } from "./router-purchases.js";
-import { ROUTER_UA, noteSellerDeliveryFailure, clearSellerDeliveryFailure, isCallerInputStatus, buyerAddressGuardOn } from "./x402-buyer.js";
+import { ROUTER_UA, noteSellerDeliveryFailure, clearSellerDeliveryFailure, deliveryMemoSeller, isCallerInputStatus, buyerAddressGuardOn } from "./x402-buyer.js";
 import { recordUpstreamSpend } from "./stats.js";
 import { recordOutbound } from "./outbound-ledger.js";
 import { assertPublicUrl, ssrfDispatcher } from "./tools/fetch-guard.js";
@@ -382,6 +382,9 @@ export async function payTempo(url, {
   // the record back, called only when the payment provably moved nothing
   // (the payX402 rule).
   onSigned = recordSignedPurchase,
+  // The index's seller key this purchase was routed to: the delivery memo is
+  // written under it (deliveryMemoSeller), else under the paid URL's origin.
+  sellerKey = null,
 } = {}) {
   assertSigningAllowed("a Tempo payment");
   const refusalWaitEndAt = Date.now() + Math.max(0, Number(refusalMaxWaitMs) || 0);
@@ -552,7 +555,7 @@ export async function payTempo(url, {
         // seller there after two), as it was before the chain read. Nothing
         // moved, so no outbound or spend row is written for it.
         const struck = memoizeDelivery && paid.status >= 500;
-        if (struck) { try { noteSellerDeliveryFailure(new URL(url).origin, "tempo", { status: paid.status, ms: Date.now() - sentAt }); } catch { /* unparseable url: nothing to key */ } }
+        if (struck) noteSellerDeliveryFailure(deliveryMemoSeller(url, sellerKey), "tempo", { status: paid.status, ms: Date.now() - sentAt });
         console.warn(`[tempo-buyer] ${where} answered HTTP ${paid.status} to the paid request and the chain shows the credential expired unused - not charged${struck ? ", noted as failing to deliver on tempo" : ""}`);
         const e = bad(paid.status === 402 || paid.status === 401
           ? `Seller refused the payment (HTTP ${paid.status}); the credential expired unused, nothing charged`
@@ -579,7 +582,7 @@ export async function payTempo(url, {
     // same way payX402 does: the money left on this rail too, delivered or not.
     const ledger = (result, tx) => recordOutbound({ chain: "tempo", payTo: recipient, amountAtomic: quotedAtomic, asset: req.currency || null, usd: Number(quotedAtomic) / 1e6, slug: slug || null, origin: sellerOrigin, result, tx });
     if (chargedFailure) ledger("undelivered", null);
-    if (memoizeDelivery && chargedFailure && sellerOrigin) noteSellerDeliveryFailure(sellerOrigin, "tempo", { status: paid.status, ms: Date.now() - sentAt });
+    if (memoizeDelivery && chargedFailure) noteSellerDeliveryFailure(deliveryMemoSeller(url, sellerKey), "tempo", { status: paid.status, ms: Date.now() - sentAt });
     if (paid.status === 402 || paid.status === 401) throw bad(`Seller rejected the paid retry (HTTP ${paid.status})`, 502);
     // A receipt on the error is the seller saying it took the payment; with
     // none, the chain read above could not rule a payment out.
@@ -591,7 +594,7 @@ export async function payTempo(url, {
     // A settled delivery (a receipt with a reference) clears the memo, the
     // payX402 rule: a bare 200 proves the route answers, not that it takes
     // payment and delivers.
-    if (memoizeDelivery && reference) { try { clearSellerDeliveryFailure(new URL(url).origin, "tempo"); } catch { /* unparseable url: nothing to clear */ } }
+    if (memoizeDelivery && reference) clearSellerDeliveryFailure(deliveryMemoSeller(url, sellerKey), "tempo");
     recordUpstreamSpend("tempo-buyer", Number(quotedAtomic) / 1e6);
     ledger("delivered", reference);
     // A paid 200 is relayed even when its body cannot be read: the payment

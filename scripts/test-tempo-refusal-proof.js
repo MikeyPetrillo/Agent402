@@ -226,6 +226,12 @@ const origin = base;
   ok(strikes()[0]?.strikes === 2 && sellerDeliveryFailingRecently(origin, "tempo"), "a second proven-unused 5xx makes the router skip the seller");
   ok(outbound().length === before, "...still with no outbound row");
   __resetSellerDeliveryFailuresForTest();
+  // A seller that shares its host is struck under its own key, the one the
+  // resolver reads, and the host's root is not.
+  const tenant = `${origin}/app/tenant-a`;
+  await buy("/app/tenant-a/bad5", { sellerKey: tenant }); await buy("/app/tenant-a/bad5", { sellerKey: tenant });
+  ok(!!sellerDeliveryFailingRecently(tenant, "tempo") && !sellerDeliveryFailingRecently(origin, "tempo"), `two strikes at a path-scoped seller bench that seller, not its host's root (${JSON.stringify(sellerDeliveryMemoEntries().map((m) => m.origin))})`);
+  __resetSellerDeliveryFailuresForTest();
   const e5x = await buy("/bad5", { memoizeDelivery: false });
   ok(e5x && e5x.committed === false && sellerDeliveryMemoEntries().length === 0, "a purchase that is not the router's own (no memoizeDelivery) strikes nothing");
 }

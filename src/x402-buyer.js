@@ -469,8 +469,27 @@ export async function refreshSellerMemos(items = [], now = Date.now()) {
   } catch (e) { noteSharedLimitsDegraded("sor-memo", { error: e?.message }); }
 }
 
-// The delivery memo below keys by origin + chain.
-const refusalKey = (origin, chain) => `${chain}|${String(origin || "").toLowerCase().replace(/\/+$/, "")}`;
+// THE DELIVERY MEMO'S KEY: one function for the writer and every reader. The
+// memo is about a SELLER, and a seller is the index's seller key: an origin,
+// or an origin plus a path prefix for a seller that shares its host. Scheme
+// and host are lowercased, the prefix keeps its case (it is part of the key
+// as the index stores it), a trailing slash is dropped.
+export function deliveryMemoKey(seller, chain) {
+  const raw = String(seller || "").replace(/\/+$/, "");
+  const scheme = raw.indexOf("://");
+  const slash = scheme >= 0 ? raw.indexOf("/", scheme + 3) : -1;
+  return `${chain}|${slash < 0 ? raw.toLowerCase() : raw.slice(0, slash).toLowerCase() + raw.slice(slash)}`;
+}
+const refusalKey = deliveryMemoKey;
+/** The seller a purchase's delivery memo is written under: the index's seller
+ *  key the caller bought from when it hands one in (route-execute does, for
+ *  every candidate), else the origin of the URL paid. The resolver reads the
+ *  memo under that same seller key, so a seller on a shared host is benched
+ *  as itself and never as the host's root. */
+export function deliveryMemoSeller(url, sellerKey = null) {
+  if (typeof sellerKey === "string" && /^https?:\/\/[^/]/i.test(sellerKey.trim())) return sellerKey.trim();
+  try { return new URL(String(url)).origin; } catch { return null; }
+}
 /** "https://host/path" for a route URL (query dropped, trailing slash dropped), or null. */
 function refusalRoute(url) {
   try {
@@ -1274,7 +1293,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     // on this accept's payTo and the seller's origin, before anything is
     // signed. A path-scoped seller is keyed on the index's seller key
     // (origin plus its prefix), handed in as `sellerKey`, not on the host it
-    // shares with other sellers. A refusal here is pre-commit (the finally gives the budget hold
+    // shares with other sellers (the delivery memo below takes the same key). A refusal here is pre-commit (the finally gives the budget hold
     // back); the reservation is given back by the same finally only when
     // nothing could have moved.
     if (chain === "base" && allowUnproven) {
@@ -1378,6 +1397,9 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     // The seller's origin, for the two memos. Computed once, before anything
     // can throw, so a failure path never has to reconstruct it.
     const sellerOrigin = (() => { try { return new URL(url).origin; } catch { return null; } })();
+    // The seller the delivery memo is keyed on (deliveryMemoSeller): the
+    // outbound ledger keeps the origin actually paid.
+    const memoSeller = deliveryMemoSeller(url, sellerKey);
     // THE CHAIN'S ANSWER TO "DID THE CREDENTIAL WE SENT MOVE MONEY". One
     // reader for the two outcomes that leave that question open: a paid retry
     // the seller answered with something other than 200, and a paid request
@@ -1599,7 +1621,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
         });
       }
       if (memoizeDelivery && paid.status >= 500 && !(paid.headers.get("payment-response") || paid.headers.get("x-payment-response"))) {
-        noteSellerDeliveryFailure(sellerOrigin, chain, { status: paid.status, ms: Date.now() - sentAtMs });
+        noteSellerDeliveryFailure(memoSeller, chain, { status: paid.status, ms: Date.now() - sentAtMs });
         console.warn(`[x402-buyer] ${where} failed to deliver after payment (HTTP ${paid.status}, no receipt, ${Date.now() - sentAtMs}ms) - memoized as failing on ${chain}, the resolver will skip it`);
       }
       // A 4xx AFTER A CHARGE (2026-09-28). The memo above sees only a 5xx, so a
@@ -1624,7 +1646,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
           slug: slug || null, origin: sellerOrigin, result: "undelivered", tx: null,
         });
         if (!memoizeDelivery) return;
-        noteSellerDeliveryFailure(sellerOrigin, chain, { status: paid.status, ms: Date.now() - sentAtMs });
+        noteSellerDeliveryFailure(memoSeller, chain, { status: paid.status, ms: Date.now() - sentAtMs });
         console.warn(`[x402-buyer] ${where} took the payment and answered HTTP ${paid.status} (${how}) - memoized as failing on ${chain}`);
       };
       if (receiptSaysSettled(paid.headers)) strikeChargedFailure("its own settle receipt");
@@ -1668,7 +1690,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
           // Only the router's own purchase writes or clears either memo (the
           // same opt-in as the delivery memo's write), so a check whose URL a
           // caller chose cannot erase what the router learned.
-          if (memoizeDelivery) clearSellerDeliveryFailure(sellerOrigin, chain);
+          if (memoizeDelivery) clearSellerDeliveryFailure(memoSeller, chain);
           // THE REFUSAL MEMO STEERS THE ROUTER, so it is written only for what
           // it describes: the router's own purchase (memoizeDelivery, the
           // opt-in only route-execute passes) turned away by the seller's
@@ -1734,7 +1756,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     // route from the one that fails. Gated on the same opt-in as the record,
     // so a diagnostic can never clear what the router learned.
     if (tx) noteChainSettled(chain);
-    if (memoizeDelivery && tx) { clearSellerDeliveryFailure(sellerOrigin, chain); clearSellerRefusal(url, chain); }
+    if (memoizeDelivery && tx) { clearSellerDeliveryFailure(memoSeller, chain); clearSellerRefusal(url, chain); }
     recordUpstreamSpend("x402-buyer", Number(quotedAtomic) / 1e6);
     // The aggregate above answers "what did upstream cost". This answers
     // "which payment, to whom, on what chain, did it arrive" - what an

@@ -454,7 +454,7 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
     ok(calls.length === 2 && r.receipt.seller === B.seller, "a chain-verified refusal (committed:false) falls through to the next candidate");
     ok(opts[0].allowUnproven === false && opts[1].allowUnproven === true, "allowUnproven rides to the buyer ONLY for the candidate the resolver admitted unproven");
     ok(r.receipt.sellerProof === "unproven", "the receipt says the serving seller was unproven");
-    ok(opts[1].sellerKey === U.seller && !("sellerKey" in opts[0]), "the unproven candidate's index seller key rides to the buyer as sellerKey (its per-seller cap key); a proven one carries none");
+    ok(opts[1].sellerKey === U.seller && opts[0].sellerKey === A.seller, "each candidate's index seller key rides to the buyer as sellerKey (the delivery memo's key, and the unproven lane's per-seller cap key)");
     // A path-scoped seller (origin plus prefix) hands its full key, not its host.
     const P = { ...B, seller: "https://shared.example/app/tenant-a", url: "https://shared.example/app/tenant-a/run", unproven: true };
     let popts = [];

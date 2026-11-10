@@ -11,6 +11,9 @@
 //   3. Every payment our wallet signs is recorded as our own purchase when it
 //      is signed, under the address signed for, and taken back only on proof
 //      that nothing moved; the outbound ledger reconciles against the rows.
+//   4. The delivery memo is written and read under one key, the seller's own
+//      (origin, or origin plus prefix), and a listed route that joins to
+//      another host is not served.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { randomBytes } from "node:crypto";
 import { mkdtempSync } from "node:fs";
@@ -365,6 +368,67 @@ const json200 = () => new Response(JSON.stringify({ ok: true }), { status: 200, 
   ok(s2.at(SELLER, SOLW, 1_800_000_000_100).calls === 1 && s2.at(SELLER, SOLW.toLowerCase(), 1_800_000_000_100).calls === 0, "a Solana address is recorded exactly as written, never case-folded");
   ok(s1.record({ origin: SELLER, payTo: "not an address", chain: "base" }) === false, "CONTROL: an unreadable address is still not a row");
   buyer.releaseSpend(1_000_000n, { window: -1 });
+}
+
+// --- 4. The delivery memo has one key, the seller's own ----------------------
+{
+  const idx = await import("../src/x402-index.js");
+  const HOST = "https://shared-host.example";
+  const tenantA = idx.normalizeSellerKey(`${HOST}/App/tenant-a`).key, tenantB = idx.normalizeSellerKey(`${HOST}/App/tenant-b`).key;
+  ok(tenantA === `${HOST}/App/tenant-a`, "the index keys a path-scoped seller on origin plus prefix");
+  ok(buyer.deliveryMemoKey("HTTPS://Shared-Host.Example/App/tenant-a/", "base") === `base|${tenantA}` && buyer.deliveryMemoKey(`${HOST}/`, "base") === `base|${HOST}`, "one key function: host lowercased, prefix as the index stores it, trailing slash dropped");
+  ok(buyer.deliveryMemoSeller(`${tenantA}/paid`, tenantA) === tenantA && buyer.deliveryMemoSeller(`${tenantA}/paid`, null) === HOST, "the writer keys on the seller key handed in, else on the paid URL's origin");
+  const reqBase = { ip: "198.51.100.21", header: (n) => (n === "payment-signature" ? Buffer.from(JSON.stringify({ network: "eip155:8453", payload: {} })).toString("base64") : undefined) };
+  const h = challengeHeader(baseAccept());
+  let answer = () => new Response("upstream down", { status: 500 });
+  globalThis.fetch = async (_u, init) => (paidHeaderOf(init) ? answer() : bare402(h));
+  const consumed = async () => ({ debited: true, observed: 1 }); // the chain says the payment settled
+  // The server's own wiring: the router's purchases write the memo.
+  const payExternal = (u, o) => buyer.payX402(u, { ...o, memoizeDelivery: true, notDebited: consumed, onSigned: null });
+  const buy = async (seller) => {
+    guard.__reset(); buyer.releaseSpend(1_000_000n, { window: -1 });
+    const exec = buildRouteExecuteTool({
+      getCatalog: () => ({}), tier: EXEC_TIERS[0],
+      resolveExternal: async () => [{ seller, slug: "paid", url: `${seller}/paid`, method: "POST", price: "$0.001", networks: ["eip155:8453"] }],
+      payExternal, externalEnabled: () => true, externalChains: () => ["base"], spendingWalletStatus: () => null, recordPurchase: () => true,
+    });
+    return exec.handler({ task: "t", include: "external" }, { ...reqBase }).then(() => "delivered", (e) => e.statusCode);
+  };
+  const benched = (seller) => !!buyer.sellerDeliveryFailingRecently(seller, "base");
+  // The resolver's own read (resolveExternalSeller): the candidate's seller key.
+  buyer.__resetSellerDeliveryFailuresForTest();
+  await buy(tenantA);
+  ok(!benched(tenantA), "CONTROL: one charged failure benches nobody");
+  await buy(tenantA);
+  ok(benched(tenantA), `two charged, undelivered buys bench the path-scoped seller under the key the resolver reads (${JSON.stringify(buyer.sellerDeliveryMemoEntries().map((e) => `${e.origin} x${e.strikes}`))})`);
+  ok(!benched(HOST) && !benched(tenantB), "and neither its host's root seller nor another seller on that host");
+  // The host-root seller on the same host is its own key.
+  await buy(HOST); await buy(HOST);
+  ok(benched(HOST) && !benched(tenantB), "the host-root seller is benched by its own two failures, and still no other tenant is");
+  // A settled delivery clears the seller it was bought from, under the same key.
+  answer = () => new Response(JSON.stringify({ ok: 1 }), { status: 200, headers: { "content-type": "application/json", "payment-response": Buffer.from(JSON.stringify({ success: true, transaction: "0xab", network: "eip155:8453" })).toString("base64") } });
+  ok(await buy(tenantA) === "delivered" && !benched(tenantA) && benched(HOST), "a settled delivery clears that seller's memo and leaves the host root's");
+  // CONTROL: a caller that hands in no seller key is keyed on the URL's origin.
+  buyer.__resetSellerDeliveryFailuresForTest();
+  answer = () => new Response("down", { status: 500 });
+  for (let i = 0; i < 2; i++) { buyer.releaseSpend(1_000_000n, { window: -1 }); await buyer.payX402(`${tenantA}/paid`, { maxAtomic: 5000n, method: "POST", body: {}, chain: "base", memoizeDelivery: true, notDebited: consumed, refusalMaxWaitMs: 0, onSigned: null }).catch(() => {}); }
+  ok(benched(HOST) && !benched(tenantA), "CONTROL: with no seller key the memo is keyed on the paid URL's origin");
+  buyer.__resetSellerDeliveryFailuresForTest();
+  buyer.releaseSpend(1_000_000n, { window: -1 });
+  guard.__reset();
+
+  // A listed route that joins to another host is not served or routed to.
+  const ORIGIN = "https://seller.example";
+  const doc = { openapi: "3.0.0", paths: { "@victim.example/weather": { get: { operationId: "weather-a", summary: "weather forecast", "x-price": "$0.002" } }, ".evil.example/weather": { get: { operationId: "weather-b", summary: "weather forecast", "x-price": "$0.002" } }, "/weather": { get: { operationId: "weather-c", summary: "weather forecast", "x-price": "$0.002" } } } };
+  const tools = idx.normaliseOpenapiTools(doc, ORIGIN);
+  const cache = idx._cacheForTests(); cache.clear();
+  cache.set(ORIGIN, { manifest: { name: "s", homepage: ORIGIN }, tools: tools.map((t) => ({ ...t, networks: ["eip155:8453"] })), fetchedAt: Date.now(), error: null, history: [1, 1, 1] });
+  const r = idx.routeQuery({ query: "weather forecast", top: 12, include: "external", baseUrl: "https://agent402.tools", catalog: {}, prices: {}, network: "base", toolCount: 0, walletName: "x" });
+  const hosts = r.results.map((x) => { try { return new URL(x.url).host; } catch { return "unparseable"; } });
+  ok(tools.length === 3, `the listing holds three routes, two of them joining to another host (${tools.map((t) => t.route).join(" ")})`);
+  ok(r.results.length === 1 && hosts[0] === "seller.example" && r.results[0].route === "/weather", `only the route on the seller's own host is served (${JSON.stringify(r.results.map((x) => x.url))})`);
+  ok(r.results.every((x) => idx.sellerRouteUrl(x.seller, x.route) !== null), "every served row's URL is under its seller's key");
+  cache.clear();
 }
 
 globalThis.fetch = origFetch;

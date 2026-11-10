@@ -328,9 +328,9 @@ const { dispatchEligibility, DISPATCH_REASONS, dispatchLegend } = await import("
   const buyer = readFileSync(new URL("../src/x402-buyer.js", import.meta.url), "utf8");
   ok(/memoizeDelivery && paid\.status >= 500 && !\(paid\.headers\.get\("payment-response"\)/.test(buyer),
      "the recording rule is opt-in AND 5xx AND no receipt, read from the response itself");
-  ok(!/noteSellerDeliveryFailure\(sellerOrigin, chain, \{ status: null/.test(buyer),
+  ok(!/noteSellerDeliveryFailure\((?:sellerOrigin|memoSeller), chain, \{ status: null/.test(buyer),
      "a TIMEOUT is never recorded: route-execute forwards the caller's params as the seller's request body, so a caller can hand a seller a URL that never answers, and our own slow egress produces the identical error");
-  ok(/memoizeDelivery && tx\) \{ clearSellerDeliveryFailure\(sellerOrigin, chain\);/.test(buyer),
+  ok(/memoizeDelivery && tx\) \{ clearSellerDeliveryFailure\(memoSeller, chain\);/.test(buyer),
      "and the CLEAR needs a settle receipt, so the memo cannot be bought off through a route the seller knows works");
   ok(/deliveryFailures\.delete\(key\);\n  if \(deliveryFailures\.size >= DELIVERY_FAIL_MAX\)/.test(buyer),
      "eviction deletes before it sets, so a repeat strike moves to the tail and the most-broken seller is not the first one evicted");

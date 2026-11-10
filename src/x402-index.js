@@ -9938,6 +9938,12 @@ function toolStatics(t, origin = null) {
 // With `match`, only the rows it accepts throw (one poison row beside good ones).
 let toolStaticsFaultForTest = null, toolStaticsFaultMatch = null;
 export function _setToolStaticsFaultForTest(err, match = null) { toolStaticsFaultForTest = err || null; toolStaticsFaultMatch = typeof match === "function" ? match : null; }
+/** Does this route text, joined to its seller key, leave the seller? */
+function routeLeavesSeller(seller, route) {
+  let u;
+  try { u = new URL(joinSellerRoute(seller, route)); } catch { return true; }
+  return !!(u.username || u.password) || !isUnderSeller(u.href, seller);
+}
 function computeToolStatics(t) {
   if (toolStaticsFaultForTest && (!toolStaticsFaultMatch || toolStaticsFaultMatch(t))) throw toolStaticsFaultForTest;
   let st;
@@ -9971,6 +9977,12 @@ function computeToolStatics(t) {
     // the router buys from other sellers: this host's own catalog tools, which
     // it serves under its own upstream terms, are never excluded by it.
     excluded: t.seller !== LOCAL_SELLER && routeExcludedCategory(t) !== null,
+    // A listed route whose text, joined to its seller, is a URL on another
+    // host or outside a path seller's prefix ("@other.host/x",
+    // ".other.host/x"), or no URL at all: the row is never ranked, so
+    // /api/route serves no URL under a seller's name that the seller's own
+    // key does not hold, and the router is never sent to one.
+    offSeller: t.seller !== LOCAL_SELLER && typeof t.seller === "string" && routeLeavesSeller(t.seller, t.route),
     priceRank: priceRank(t.price),
     // Curated alternate names a tool answers to, scored exactly like the slug
     // (max over slug + aliases per term, never additive). Our asn-info IS an IP
@@ -10654,6 +10666,7 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
     const st = toolStatics(t);
     if (st.broken) { brokenToolsSkipped++; return; } // its statics threw: never scored
     if (st.injected) return;
+    if (st.offSeller) return;
     const { name, hay, names, nameToks } = st;
     let score = 0, mSlug = 0, mName = 0, mText = 0;
     // A slug (or alias) EVERY token of which appears in the query is an exact

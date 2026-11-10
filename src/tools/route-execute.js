@@ -805,6 +805,10 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             // history belongs to, when that binding made it eligible. Same
             // reason: the resolver checked the probe's 402, and the payer must
             // check the one it signs. Null = nothing inherited decided it.
+            // sellerKey: the index's key for this seller (an origin, or an
+            // origin plus a path prefix). The payer writes its delivery memo
+            // under it, which is the key the resolver reads, and the
+            // unproven lane keys its per-seller cap on it.
             if (ext.unproven) console.warn(`[sor] paying UNPROVEN ${chain} seller ${ext.seller} (${ext.price}) - every proven candidate was exhausted; loss bounded by the unproven allowance`);
             if (__paidAttempts >= MAX_PAID_ATTEMPTS) {
               // Not a fall-through: the next candidate would be a SECOND signature,
@@ -812,7 +816,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
               throw lastErr || bad(`Tried ${__paidAttempts} paid seller(s) for this task without a delivered answer. Refusing to sign another payment for one request.`, 502);
             }
             traceStep(req, "attempt", { origin: ext.seller, lane: ext.unproven ? "unproven" : "proven" });
-            paid = await payExternal(extUrl, { method: extMethod, body: extBody, maxAtomic: BigInt(Math.round(cap * 1e6)), chain, provenPayTo: ext.provenPayTo || null, evidenceWallets: ext.evidenceWallets || null, allowUnproven: ext.unproven === true, ...(ext.unproven === true && ext.seller ? { sellerKey: ext.seller } : {}), refusalMaxWaitMs: refusalBudgetMs(), ...(tempoBudgetMs == null && evmSellerSignBy(req) != null ? { signBy: evmSellerSignBy(req) } : {}), ...(windowBudgetMs != null ? { timeoutMs: Math.max(3000, remainingMs()) } : cdnLeftMs != null ? { timeoutMs: Math.max(3000, Math.min(PAY_X402_TIMEOUT_MS, refusalBudgetMs())) } : {}), ...(callBudgetLeftMs() != null ? { deadlineMs: Math.max(0, callBudgetLeftMs()) } : {}), onSigned });
+            paid = await payExternal(extUrl, { method: extMethod, body: extBody, maxAtomic: BigInt(Math.round(cap * 1e6)), chain, provenPayTo: ext.provenPayTo || null, evidenceWallets: ext.evidenceWallets || null, allowUnproven: ext.unproven === true, ...(ext.seller ? { sellerKey: ext.seller } : {}), refusalMaxWaitMs: refusalBudgetMs(), ...(tempoBudgetMs == null && evmSellerSignBy(req) != null ? { signBy: evmSellerSignBy(req) } : {}), ...(windowBudgetMs != null ? { timeoutMs: Math.max(3000, remainingMs()) } : cdnLeftMs != null ? { timeoutMs: Math.max(3000, Math.min(PAY_X402_TIMEOUT_MS, refusalBudgetMs())) } : {}), ...(callBudgetLeftMs() != null ? { deadlineMs: Math.max(0, callBudgetLeftMs()) } : {}), onSigned });
           } catch (e) {
             // WHAT STAYS BOOKED IS WHAT MAY HAVE LEFT THE WALLET. The payer
             // stamps `committed:true` on every failure after the payment
