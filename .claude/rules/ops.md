@@ -125,13 +125,28 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
 - **Failure monitor:** `src/tool-failure-monitor.js` counts every catalog answer past the gates by slug, class, origin (outside vs our own synthetic traffic) and payment rail (`outcomeRailOf` in `src/payment-rail.js`; a free proof-of-work or trial outcome counts on its own lane, shown in the detail and read by `toolFailures` only when a tool fails nearly every free call: `TOOL_FREE_FAIL_RATE`, default 0.9, over `TOOL_FREE_FAIL_MIN_CALLS`, default 20, in an hour) and every named upstream's fetch outcomes through the egress meter's observer, in five-minute buckets merged across replicas through Redis; `toolFailures`, `upstreamHealth` and `facilitatorFunds` (also `low` while a facilitator signer is short of gas; a dry Robinhood signer our relayer covers is left out and pages as `robinhoodSettler=relayer` instead, `.claude/rules/payments.md`) are words on `/api/gateway-status`, detail on `/__operator/tool-failures.json`. Every final 200 is also classified by body (`src/answer-shape.js`: ok, empty, error-shaped, unchecked; a tool whose contract allows an empty answer goes in `EMPTY_RESULT_OK` or sets `discovery.emptyOk`) into the `toolAnswers` word; the same detail lists live-data slugs whose sales all returned one response digest. `src/settle-demotion.js` puts Celo's alternates first after consecutive out-of-funds refusals.
 - **Per-call count documents:** `src/sql-query-stats.js` (onchain-sql queries per call) and
   `src/x-search-stats.js` (x-search-recent authors and posts per call) keep per-UTC-day
-  histograms as state documents (`src/json-document.js`), counted on a final 200 and folded
-  into the document on a timer and at shutdown. Env: `SQL_QUERY_STATS_FILE` (default
+  histograms as state documents (`src/json-document.js`), folded into the document on a timer
+  and at shutdown. x-search is counted on a final 200. Every onchain-sql run inside a request
+  is counted once its response has ended (`onFinalResponse`, `src/request-timing.js`; a handler
+  that outlives its buyer is counted when it returns): the queries it sent (`q0` for a refusal
+  before any query, to `q3`) under `charged` (a final 200 with settle evidence, the server's
+  `scope.saleOutcome`), `free` (a final 200 nothing was asked for: FREE_MODE, proof-of-work, a
+  trial, a first-call allowance) or `uncharged` (a 4xx or 5xx, a 402 after the handler ran, a
+  buyer who left, which reads uncharged even when that payment went on to settle), by lane
+  (outside, synthetic), with the budget refusals beside them. An unpaid 402 runs no handler and
+  is not counted. Read at `/__operator/onchain-sql-queries.json` (operator token; days, totals,
+  calls and queries by outcome, `queriesPerChargedCall` for the outside lane; counts only) and
+  as `onchainSqlQueries` on `/__operator/tool-failures.json`. A day an earlier build stored
+  (final-200 counts with no outcome) reads as charged. A failed count or store write is
+  counted (`failures`), logged at most once a UTC day, and never reaches the call. Env:
+  `SQL_QUERY_STATS_KEEP_DAYS` (default 35, today included; 1 to 400; a malformed value keeps
+  the default), `SQL_QUERY_STATS_FILE` (default
   `/data/onchain-sql-query-stats.json`), `SQL_QUERY_STATS_FLUSH_MS` (default 60000, at least
   1000), `X_SEARCH_STATS_FILE` (default `/data/x-search-author-stats.json`),
   `X_SEARCH_STATS_FLUSH_MS` (default 60000, at least 1000). The files are used only without a
   state database; `ownStoreEnv` (`scripts/lib/own-stores.js`) points both into a booted test
-  server's own directory.
+  server's own directory (`scripts/test-sql-query-stats.js`,
+  `scripts/test-onchain-sql-queries-route.js`).
 - **Search refusals:** `src/discovery-refusals.js` counts every search `/api/find` and `/api/route`
   turn away, per UTC day, by route and rule (`load-gate`, `client-rate`, `client-compute`,
   `shared-compute`, `inflight`, `deadline`) under a keyed, day-scoped digest of the limiter's client

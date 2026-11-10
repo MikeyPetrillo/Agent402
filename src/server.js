@@ -3078,8 +3078,8 @@ startSharedLimitsProbe();
 // Per-tool and per-upstream failure detail (src/tool-failure-monitor.js):
 // slugs, classes, last messages, upstream outcomes, facilitator refusals.
 // onchainSqlQueries: per UTC day, how many upstream queries onchain-sql calls
-// that answered a final 200 used, and the budget refusals (counts only;
-// src/sql-query-stats.js). xSearchAuthors: per UTC day, how many distinct
+// sent, by how each call ended, and the budget refusals (counts only;
+// src/sql-query-stats.js; also at /__operator/onchain-sql-queries.json). xSearchAuthors: per UTC day, how many distinct
 // authors and posts x-search-recent calls that answered a final 200 returned,
 // bucketed (counts only; src/x-search-stats.js).
 app.get("/__operator/tool-failures.json", async (req, res) => {
@@ -3087,6 +3087,15 @@ app.get("/__operator/tool-failures.json", async (req, res) => {
   const onchainSqlQueries = await sqlQueryStatsReport().catch(() => null);
   const xSearchAuthors = await xSearchStatsReport().catch(() => null);
   res.set("Cache-Control", "private, no-store").json({ ...(await toolFailureMonitor().report()), robinhoodOrder: robinhoodOrderView(), chainRefusalHolds: chainRefusalHolds(), onchainSqlQueries, xSearchAuthors });
+});
+// Upstream queries per onchain-sql call (src/sql-query-stats.js): per UTC day,
+// calls by the queries each sent (0 to the call budget) and by how the call
+// ended (charged, free, uncharged), totals, and queries per charged call.
+// Counts only: no SQL text, no request field, no payer.
+app.get("/__operator/onchain-sql-queries.json", async (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  const report = await sqlQueryStatsReport().catch(() => null);
+  res.set("Cache-Control", "private, no-store").json(report || { error: "unavailable" });
 });
 // Who the free search routes refuse (src/discovery-refusals.js): per UTC day,
 // refusals by route and rule, distinct refused clients, the top clients by
@@ -11273,6 +11282,22 @@ app.use((req, res, next) => {
     // their public caching. `no-store` blocks all caches; `private` is
     // belt-and-suspenders against shared caches specifically.
     res.setHeader("Cache-Control", "no-store, private");
+    // What this call's FINAL response says about its sale, for a per-call
+    // count that reads it after the response ended (onFinalResponse in
+    // src/request-timing.js; src/sql-query-stats.js): "free" when nothing was
+    // asked (FREE_MODE, an accepted proof-of-work or trial, a first-call
+    // allowance), "charged" on settle evidence (paidAndSettled), else "none".
+    // Read lazily, so it never sees the handler's own status before the gate
+    // decided.
+    {
+      const scope = currentRequestScope();
+      if (scope) scope.saleOutcome = () => {
+        try {
+          if (FREE_MODE || res.getHeader("X-Pow-Accepted") === "true" || res.getHeader("X-Trial-Accepted") === "true" || allowanceServed(req)) return "free";
+          return paidAndSettled(req, res) ? "charged" : "none";
+        } catch { return "none"; }
+      };
+    }
     // Runs once when the settlement is decided (src/hangup-settlement.js), not
     // on "finish" alone: Node emits no "finish" for a response ended on a
     // socket the buyer already closed, and a long run whose buyer timed out
