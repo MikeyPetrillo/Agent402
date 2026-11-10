@@ -48,9 +48,19 @@ export function dropUnsignedAuthorization(decoded) {
 
 /** One spelling of a signed nonce: a decimal or 0x integer in its decimal
  *  form ("7", "07" and "0x7" are one nonce to the contract that consumes it),
- *  anything else lowercased as sent. */
+ *  anything else lowercased as sent. Zero padding of any length is not part
+ *  of the value: it is dropped as text from a plain decimal and from the hex
+ *  digits after 0x, in one pass, before the length bound, so no integer is
+ *  parsed from more than 600 characters. Empty stays empty. */
 export function canonicalNonce(nonce) {
-  const raw = String(nonce ?? "").trim();
+  let raw = String(nonce ?? "").trim();
+  const hex = /^0[xX][0-9a-fA-F]+$/.test(raw);
+  if (hex || /^[0-9]+$/.test(raw)) {
+    const from = hex ? 2 : 0;
+    let i = from;
+    while (i < raw.length - 1 && raw.charCodeAt(i) === 48) i++;
+    if (i > from) raw = raw.slice(0, from) + raw.slice(i);
+  }
   // Every spelling BigInt reads as one non-negative integer (decimal, 0x, 0o,
   // 0b, a leading plus) is that integer: the settler parses the nonce the same way.
   if (raw && raw.length <= 600) { try { const n = BigInt(raw); if (n >= 0n) return n.toString(); } catch { /* not an integer: fall through */ } }

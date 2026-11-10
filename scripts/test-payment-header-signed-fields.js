@@ -97,6 +97,41 @@ ok(dropUnsignedAuthorization({ payload: "text" }).payload === "text" && dropUnsi
   // the replay guard above is what holds one permit to one run.
   ok(paymentNonceIdentityOf(req(evmP2("07")))?.nonce === "07", "the idempotency identity keeps the nonce as sent");
   ok(canonicalNonce("0xAB") === "171" && canonicalNonce("0x" + "ab".repeat(32)) === BigInt("0x" + "ab".repeat(32)).toString() && canonicalNonce("not-a-number") === "not-a-number" && canonicalNonce("-7") === "-7" && canonicalNonce("") === "" && canonicalNonce("9".repeat(601)) === "9".repeat(601), "canonicalNonce reads integers by value and leaves other text as sent");
+  // Zero padding of any length is the bare value, and the padding is never
+  // handed to BigInt: the work is counted on a wrapped BigInt, not timed.
+  {
+    const real = globalThis.BigInt;
+    const parsed = [];
+    globalThis.BigInt = Object.assign(function BigInt(v) { if (typeof v === "string") parsed.push(v.length); return real(v); }, real);
+    let out;
+    try {
+      const pad = "0".repeat(5000);
+      const padded = [pad + "7", "0x" + pad + "7", "0X" + pad + "7"].map((n) => id(paymentReplayKey(req(evmP2(n)))));
+      const zeros = ["0", "00", "0".repeat(601), "0".repeat(100_000), "0x0", "0x" + "0".repeat(100_000)].map(canonicalNonce);
+      const longHex = "0x" + "0".repeat(50_000) + "ab".repeat(25_000), longDec = "0".repeat(40_000) + "9".repeat(60_000);
+      const t = performance.now();
+      const big = [canonicalNonce(longHex), canonicalNonce(longDec), canonicalNonce("0x" + "0".repeat(100_000) + "aB")];
+      out = { padded, zeros, big, ms: performance.now() - t, most: Math.max(0, ...parsed), calls: parsed.length };
+    } finally { globalThis.BigInt = real; }
+    ok(out.padded.every((k) => k === keys[0]), "a Permit2 nonce padded with 5,000 zeros, decimal or hex, is the bare nonce's payment to the replay guard");
+    ok(out.zeros.every((z) => z === "0"), `an all-zero nonce of any length, decimal or hex, reads as 0 (${[...new Set(out.zeros.map((z) => z.slice(0, 8)))].join()})`);
+    ok(canonicalNonce("") === "" && canonicalNonce("   ") === "" && canonicalNonce(undefined) === "" && canonicalNonce("0x") === "0x", "an empty or blank nonce stays empty, apart from 0; a bare 0x stays text");
+    ok(out.big[0] === "0x" + "ab".repeat(25_000) && out.big[1] === "9".repeat(60_000) && out.big[2] === "171", "a 100,000-character nonce loses its padding; past 600 significant characters it stays text, lowercased");
+    ok(out.calls > 0 && out.most <= 600 && out.ms < 5000, `no integer is parsed from more than 600 characters (longest handed to BigInt: ${out.most}, in ${out.calls} parses; three 100,000-character nonces in ${out.ms.toFixed(0)} ms)`);
+  }
+}
+
+// An EIP-3009 nonce is 32 signed bytes and does not pass through
+// canonicalNonce: its replay key is the one the build before the padding rule
+// computed (the three values below were printed by that build's paymentReplayKey).
+{
+  const before = {
+    ["0x" + "ab".repeat(32)]: "n2:80aca88a0be1fb4ef9437b207a37cb75a28df9193a9a433082edc3c77c0913f6:31204f1d306c6deba7f69a0efab4406e968478b5370be776e3bd5d1b58ebbd89",
+    ["0x" + "00".repeat(31) + "07"]: "n2:2a91e202f3fb70ffc6224caa8f58ab5754c73242fbc3419b86a4d71289941f34:babef2820a03370e3cb74d1491f78963ea6bca0de5e9f2d3a906c23a9ec97e6b",
+    ["0x" + "00".repeat(32)]: "n2:c463d95a69dd7750c373fcebf2a98efbcde7927b7f8277b12d0731b78782ed5c:ded445e7bff5dc545d90f10c3ca341047b16d79a9e5e4cea01d12650f2e214eb",
+  };
+  const same = Object.entries(before).filter(([n, k]) => paymentReplayKey(req(evm({ from: A, nonce: n }))) === k).length;
+  ok(same === 3 && new Set(Object.values(before)).size === 3, `an EIP-3009 payment's replay key is unchanged for three bytes32 nonces, zero-padded ones included (${same} of 3)`);
 }
 
 // --- attribution, the screen's address list, the signed amount ------------------
