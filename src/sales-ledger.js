@@ -542,13 +542,13 @@ export function recordSale({ slug, priceUsd, rail, network, payer, tx, synthetic
       // crash, a kill or a database that hangs through the shutdown flush
       // leaves it there, and the replay lands it once (by this id).
       const pgVals = [...vals, randomUUID(), cleanSalePath(via)];
-      return writer.write("record-sale", async () => {
+      return trackQueuedSale(pgVals[6], writer.write("record-sale", async () => {
         let row = await insertSaleIfAbsent(pgVals);
         // No row: this sale is already there (an earlier attempt whose reply was lost).
         if (!row) row = (await stateQuery(`SELECT * FROM ${T("sales")} WHERE sale_uid = $1`, [pgVals[11]])).rows[0];
         if (row) { applySale(row); writeThrough(fileSale, saleRowOf(row)); }
         return true;
-      }, { kind: "sale", payload: pgVals, onError: false });
+      }, { kind: "sale", payload: pgVals, onError: false }));
     }
     insertSale.run(...vals, cleanSalePath(via));
   } catch { /* never break serving for accounting */ }
@@ -603,6 +603,45 @@ export function saleByTx(tx) {
   };
 }
 
+// Sales this process has queued for Postgres and not landed yet, by settle
+// tx: the queued write (the newest when one tx books twice; writes land in
+// order, so it resolves last) and when the oldest was queued.
+const queuedSales = new Map();
+/** The longest a lookup waits on this process's own queued write of the sale it asks for. */
+export const QUEUED_SALE_WAIT_MS = 5000;
+const QUEUED_SALE_SLOW_MS = 250;
+function trackQueuedSale(tx, landed) {
+  if (!tx) return landed;
+  const entry = { landed, since: queuedSales.get(tx)?.since ?? Date.now() };
+  queuedSales.set(tx, entry);
+  landed.then(() => { if (queuedSales.get(tx) === entry) queuedSales.delete(tx); });
+  return landed;
+}
+/** Sale writes this process has queued and not landed: how many, and how long the oldest has waited (ms). Read by a refusal's log line. */
+export function queuedSaleWrites(now = Date.now()) {
+  let oldest = null;
+  for (const e of queuedSales.values()) if (oldest == null || e.since < oldest) oldest = e.since;
+  return { count: queuedSales.size, oldestMs: oldest == null ? 0 : Math.max(0, now - oldest) };
+}
+/** Resolves once this process's queued write of `tx` has landed (true), at once when none is queued (false), or after `waitMs` (false). */
+async function queuedSaleLanded(tx, waitMs = QUEUED_SALE_WAIT_MS) {
+  const entry = queuedSales.get(String(tx || "").trim());
+  if (!entry) return false;
+  const t0 = Date.now();
+  let timer = null;
+  const landed = await Promise.race([
+    entry.landed.then(() => true),
+    new Promise((r) => { timer = setTimeout(() => r(false), waitMs); timer.unref?.(); }),
+  ]);
+  clearTimeout(timer);
+  const waited = Date.now() - t0;
+  if (waited >= QUEUED_SALE_SLOW_MS) {
+    const q = queuedSaleWrites();
+    console.warn(`[sales-ledger] a lookup waited ${waited} ms on its sale's queued write (${landed ? "landed" : "still queued"}; ${q.count} sale write(s) queued, oldest ${q.oldestMs} ms)`);
+  }
+  return landed;
+}
+
 /**
  * saleByTx, for a caller that may have bought on ANOTHER container: the local
  * mirror pulls the other containers' writes on a timer, so a receipt check
@@ -613,8 +652,17 @@ export function saleByTx(tx) {
  * File mode (one process) answers from the mirror alone.
  */
 export async function saleByTxFresh(tx, { force = false } = {}) {
-  const hit = saleByTx(tx);
+  let hit = saleByTx(tx);
   if ((hit && !force) || !USE_PG) return hit;
+  // This process booked the sale and its write is still queued: the buyer
+  // already holds the receipt (the sale is booked on the final response),
+  // so the row is in neither the mirror nor Postgres yet. Wait for that
+  // write, bounded, before anything is read.
+  if (!hit) {
+    await queuedSaleLanded(tx);
+    hit = saleByTx(tx);
+    if (hit && !force) return hit;
+  }
   // puller.fresh(): a pull already running may have read the table before
   // this sale landed, so wait for it and share one follow-up pull.
   try { await readyP(); await puller.fresh(); } catch { /* the database is unreachable: answer from the mirror */ }

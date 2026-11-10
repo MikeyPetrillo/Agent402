@@ -1508,6 +1508,10 @@ jobs:
           t node scripts/test-sale-lookup-crosscontainer-pg.js
           # Two containers attesting one sale write one attestation.
           t node scripts/test-attest-crosscontainer-pg.js
+          # A lookup made while its sale's write is queued waits for the write.
+          t node scripts/test-attest-queued-sale-pg.js
+          # Buy, then attest the receipt's transaction at once, on a paid boot.
+          t node scripts/test-attest-after-buy-pg.js
           # The gateway response cache is shared across replicas (needs this lane's Redis).
           t node scripts/test-prompt-cache-shared.js
           t node scripts/test-ledger-dead-letter-pg.js
