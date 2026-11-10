@@ -10781,15 +10781,20 @@ if (FREE_MODE) {
       // A flat chat tier's unpaid 402 names its metered twin on the same wire
       // (additive `meteredTwin`; x402 clients read `accepts`): the same models,
       // priced from this body instead of one flat price per call. Only on a
-      // first-contact quote: a refused payment (an x402 header, or an
-      // Authorization credential such as a Tempo credential or a credits key)
-      // keeps its own explanation.
+      // first-contact quote: a refused payment (an x402 header that decodes,
+      // or an Authorization credential such as a Tempo credential or a
+      // credits key) keeps its own explanation. An x402 header that does not
+      // decode was removed at intake (canonicalizePaymentHeaders), so that
+      // request reads as first contact here.
       const firstContact = !req.header("x-payment") && !req.header("payment-signature") && !req.headers.authorization;
       // What this call costs in dollars and what to do next, for a caller
       // with no x402 client (src/payment-guide.js). Body only and additive,
       // after the fields below; the PAYMENT-REQUIRED header and every other
-      // body field are untouched. First contact only: a refused payment
-      // keeps its own explanation. Rollback lever: PAYMENT_GUIDE_402=off.
+      // body field are untouched. First contact only: a decodable payment
+      // that is refused, or an Authorization credential, keeps its own
+      // explanation; a header that did not decode is first contact, so its
+      // 402 carries the block beside reason malformed-header. Rollback lever:
+      // PAYMENT_GUIDE_402=off.
       if (firstContact && process.env.PAYMENT_GUIDE_402 !== "off") {
         const origJson = res.json.bind(res);
         res.json = (body) => {

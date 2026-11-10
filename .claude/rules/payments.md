@@ -237,8 +237,12 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   network offered when the route does not offer the primary; one sentence on paying; `noWallet`
   on a proof-of-work tool; `quote` with the caller's own model, request bytes and output cap on a
   body-quoted route, never a rate or cost; links to `/llms.txt`, `/agents.md#pay` and `/mcp`).
-  Body only, keyed on the PAYMENT-REQUIRED header, never on a refused payment; every other field
-  and the header are unchanged (`scripts/test-payment-guide.js`). Rollback lever:
+  Body only, keyed on the PAYMENT-REQUIRED header. A refused payment carries none: an x402
+  header that decodes and is refused, or an `Authorization` credential, keeps its own
+  explanation. An x402 header that does not decode is removed at intake
+  (`src/payment-header.js`), so its 402 is a first-contact answer and carries the block beside
+  `reason: malformed-header`. Every other field and the header are unchanged
+  (`scripts/test-payment-guide.js`). Rollback lever:
   `PAYMENT_GUIDE_402=off`.
 - **Tempo push refusals:** `src/push-refusal-body.js`: for a push credential the Tempo gate
   restates a 4xx JSON body's not-charged sentence and sets `charged`, `transferClaimed`, `refundOwed`.

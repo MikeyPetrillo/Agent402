@@ -189,6 +189,24 @@ try {
     ok(r.status !== 200 && !r.json?.payment, "a request that presented a credential gets no payment block");
   }
 
+  // -- an x402 header: one that does not decode is first contact; one that decodes and is refused is not --
+  {
+    for (const name of ["payment-signature", "x-payment"]) {
+      const bad = await ask(A, REQUESTS.flat, { [name]: "!!!not base64!!!" });
+      ok(bad.status === 402 && bad.json?.reason === "malformed-header" && typeof bad.json?.payment === "object" && bad.json.payment.price === got.flat.a.json?.payment?.price,
+        `a ${name} header that does not decode is treated as first contact: the 402 carries the payment block beside reason malformed-header (${bad.status}, ${bad.json?.reason}, ${bad.json?.payment?.price})`);
+    }
+    // A well-formed v2 exact payment for this route that no key signed.
+    const accept = acceptOn(got.flat.a.json, BASE_NET);
+    const now = Math.floor(Date.now() / 1000);
+    const payload = {
+      x402Version: 2, resource: got.flat.a.header?.resource, accepted: accept,
+      payload: { signature: `0x${"11".repeat(65)}`, authorization: { from: "0x000000000000000000000000000000000000bEEF", to: accept?.payTo, value: accept?.amount, validAfter: "0", validBefore: String(now + 300), nonce: `0x${"22".repeat(32)}` } },
+    };
+    const refused = await ask(A, REQUESTS.flat, { "payment-signature": Buffer.from(JSON.stringify(payload)).toString("base64") });
+    ok(!!accept && refused.status === 402 && !("payment" in (refused.json || {})), `a header that decodes and is refused gets no payment block (${refused.status}, reason ${refused.json?.reason}, keys ${Object.keys(refused.json || {}).join(",")})`);
+  }
+
   // -- the primary network carries a premium: the stated price does too --
   {
     const r = await ask(C, REQUESTS.flat);
