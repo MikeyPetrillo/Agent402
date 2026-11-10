@@ -61,10 +61,11 @@ Payments:
   renewal is not sent and ends the subscription with the reason
   payer-not-accepted on its status answer.
 - An MPP subscription's signing key is deleted when the subscription is
-  canceled or ends. The ended record is reduced to its id, product, wallet,
-  key address, chain, currency, amount, period, dates, final state, cancel
-  reason, last transaction and a marker for a charge that was never confirmed,
-  and deleted 30 days after the end.
+  canceled or ends. The ended record is reduced to its id, product, payment
+  rail and wire, a flag for one of our own test subscriptions, wallet, key
+  address, chain, currency, amount, period, dates, final state, cancel reason,
+  last transaction and a marker for a charge that was never confirmed, and
+  deleted 30 days after the end.
 - The card report route generates, records and refunds only for a paid
   Checkout session that names a report product; any other session answers
   invalid. A report whose product left sale after the purchase is still

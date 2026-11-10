@@ -96,11 +96,23 @@ const flat = (s) => s.replace(/<[^>]+>/g, "").replace(/\s+/g, " ");
   ok(flatP.includes("the email and the subject you asked us to watch are removed") && !TOMBSTONE_FIELDS.includes("email") && !TOMBSTONE_FIELDS.includes("target")
     && ["subId", "product", "payer", "accessKeyAddress", "chainId", "currency", "amountAtomic", "periodCount", "billingAnchor", "canceledAt", "status", "canceledReason", "lastChargeTx", "unconfirmedCharge"].every((k) => TOMBSTONE_FIELDS.includes(k)),
     "the reduced record's fields are the ones /privacy lists: id, product, wallet, key address, chain, token, amount, period, dates, final state, reason, last transaction, unconfirmed-payment marker; no email, no subject");
-  ok(flatP.includes("its record is reduced to the subscription's id and product, the paying wallet, the key's public address, the chain and token, the amount and billing period, the dates, the final state and the reason it ended, the last payment's transaction and a marker for a payment whose outcome was never confirmed;"),
-    "/privacy lists the reduced record's chain, token, end reason and unconfirmed-payment marker");
-  // Every kept field is one the sentence covers: a field added to the record needs a word on /privacy.
-  const COVERED = new Set(["subId", "mppxSubscriptionId", "lookupKey", "product", "rail", "wire", "canary", "payer", "accessKeyAddress", "chainId", "currency", "amountAtomic", "priceUsd", "periodCount", "periodUnit", "createdAt", "billingAnchor", "lastChargedPeriod", "subscriptionExpires", "lastChargeAt", "cancelAtPeriodEnd", "canceledAt", "status", "canceledReason", "lastChargeTx", "unconfirmedCharge"]);
-  ok(TOMBSTONE_FIELDS.every((k) => COVERED.has(k)), `every field the reduced record keeps is listed here beside the /privacy sentence, so a new field needs a word there (${TOMBSTONE_FIELDS.filter((k) => !COVERED.has(k)).join(", ") || "none uncovered"})`);
+  const SENTENCE = "its record is reduced to the subscription's id and product, how it was paid (the payment rail and wire), whether it was one of our own test subscriptions, the paying wallet, the key's public address, the chain and token, the amount and billing period, the dates, the final state and the reason it ended, the last payment's transaction and a marker for a payment whose outcome was never confirmed;";
+  ok(flatP.includes(SENTENCE), "/privacy lists the reduced record's rail, wire, test marker, chain, token, end reason and unconfirmed-payment marker");
+  // Every kept field is named by words of the sentence itself: the words
+  // each field reads as are looked up in the sentence as the page prints it,
+  // so a field added to the record, or words dropped from the page, fail here.
+  const WORDS = {
+    subId: "the subscription's id", mppxSubscriptionId: "the subscription's id", lookupKey: "the subscription's id", product: "and product",
+    rail: "the payment rail", wire: "and wire)", canary: "whether it was one of our own test subscriptions",
+    payer: "the paying wallet", accessKeyAddress: "the key's public address", chainId: "the chain", currency: "and token",
+    amountAtomic: "the amount", priceUsd: "the amount", periodCount: "billing period", periodUnit: "billing period", lastChargedPeriod: "billing period",
+    createdAt: "the dates", billingAnchor: "the dates", subscriptionExpires: "the dates", lastChargeAt: "the dates", canceledAt: "the dates",
+    status: "the final state", cancelAtPeriodEnd: "the final state", canceledReason: "the reason it ended",
+    lastChargeTx: "the last payment's transaction", unconfirmedCharge: "a marker for a payment whose outcome was never confirmed",
+  };
+  const at = flatP.indexOf("its record is reduced to"), printed = at < 0 ? "" : flatP.slice(at, flatP.indexOf(";", at) + 1);
+  const unnamed = TOMBSTONE_FIELDS.filter((k) => !WORDS[k] || !printed.includes(WORDS[k]));
+  ok(printed.length > 0 && unnamed.length === 0, `every field the reduced record keeps is named by words in the /privacy sentence (${unnamed.join(", ") || "none unnamed"})`);
   ok(!/aside from short-lived caches that make repeated identical calls cheaper, not retained/.test(t), "/terms no longer says outputs are kept in caches only");
 }
 
