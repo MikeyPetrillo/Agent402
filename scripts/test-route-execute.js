@@ -431,7 +431,7 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
     let threw = null;
     try { await mk(pay, async () => [C, B]).handler({ task: "t", include: "external", params: { prompt: "hi" } }, {}); } catch (e) { threw = e; }
     ok(calls.length === 1 && threw && threw.statusCode === 400, `an input refusal against the seller's declared contract answers 400, and B is still not tried (${threw?.statusCode})`);
-    ok(/params\.model, params\.messages/.test(threw?.message || "") && /not charged/.test(threw?.message || ""), "the 400 names the missing contract fields and says the caller was not charged");
+    ok(/params\.model, params\.messages/.test(threw?.message || "") && !/not charged/.test(threw?.message || ""), "the 400 names the missing contract fields and makes no not-charged claim (decide relays it where a leg may have paid)");
     ok(threw?.committed === true, "the committed stamp still rides the error (an in-process caller must know a payment may have left)");
   }
   // The same refusal when the params DO carry every required field: the

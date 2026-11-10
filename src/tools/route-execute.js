@@ -803,9 +803,13 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             // The contract stays reporting-only: it is read only AFTER the
             // seller refused, never to gate or re-rank a payment.
             const missing = isQueryMethod(extMethod) ? null : contractFieldsMissing(ext, params, e);
+            // No "you were not charged" here: a direct caller is not (a 4xx
+            // cancels its settlement), but decide-execute relays this text into
+            // a plan whose leg may have paid the seller (it books that from the
+            // committed stamp, not from this message).
             const sc = missing ? 400 : rawSc === 402 ? 409 : rawSc === 400 ? 502 : rawSc;
             lastErr = missing
-              ? bad(`External seller "${ext.seller}" refused this request's input (HTTP ${e.sellerStatus}). Its published request contract requires ${missing.map((f) => `params.${f}`).join(", ")}, which this call did not send. You were not charged; add ${missing.length > 1 ? "them" : "it"} and retry.${e?.paidUnanswered === true ? " No other seller is tried for this request." : ""}`, sc)
+              ? bad(`External seller "${ext.seller}" refused this request's input (HTTP ${e.sellerStatus}). Its published request contract requires ${missing.map((f) => `params.${f}`).join(", ")}, which this call did not send. Add ${missing.length > 1 ? "them" : "it"} and retry.${e?.paidUnanswered === true ? " No other seller is tried for this request." : ""}`, sc)
               : bad(`External seller "${ext.seller}" failed: ${String(e?.message || e).slice(0, 200)}${e?.paidUnanswered === true ? "; no other seller is tried for this request" : ""}`, sc);
             // FALL THROUGH TO THE NEXT SELLER only on a 5xx (their own upstream
             // or gateway failed), and only when the error carries NO settle
