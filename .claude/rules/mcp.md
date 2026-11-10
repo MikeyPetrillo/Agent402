@@ -23,3 +23,9 @@ Loaded when a connector or front-door file is read.
   keeps it (then 410 expired for 90 days), `ANSWER_SHARE_PER_HOUR` (default 60) caps each payer's shares,
   claimed before the call, and `ANSWER_SHARE_DIR` is the file store without the state database. Takedown:
   `POST /__operator/answer-shares/delete {id, note}` (410 removed).
+- **Answer ceiling:** a free tool answer larger than `AGENT402_MCP_MAX_ANSWER_BYTES` (default 1 MiB of compact JSON)
+  is cut in document order to valid JSON and carries `answerBound` (`src/mcp-answer-bound.js`: the partial-answer
+  fields in bytes, plus one entry per cut list, string or object). A paid answer is delivered whole.
+- **Annotations:** lookups are `readOnlyHint: true` (open-world when they read outside this service); `catalog.call`,
+  `memory.write`, `demand.request`, `decide.execute` and `decide.feedback` are not. The stdio package keeps its own copy.
+- **429:** the transport limiter's refusal carries `Retry-After` (seconds, from `src/rate-limit.js` `retryAfterSeconds`).

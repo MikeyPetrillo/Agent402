@@ -74,9 +74,18 @@ export function createLimiter(name = "default", { perMin = MAX_CALLS_PER_BURST, 
       buckets.set(ip, (hits = []));
     }
     prune(hits, now);
-    if (over(hits, now)) return { limited: true, name };
+    if (over(hits, now)) return { limited: true, name, retryAfterSeconds: retryAfter(hits, now) };
     hits.push(now);
     return { limited: false, name };
+  }
+  // Whole seconds until this key has room again: the later of the moment the
+  // hour window and the burst window each drop the hit that keeps them full.
+  function retryAfter(hits, now) {
+    let freeAt = now;
+    if (hits.length >= perHour) freeAt = Math.max(freeAt, hits[hits.length - perHour] + WINDOW_MS);
+    const burst = hits.filter((t) => t > now - BURST_WINDOW_MS);
+    if (burst.length >= perMin) freeAt = Math.max(freeAt, burst[burst.length - perMin] + BURST_WINDOW_MS);
+    return Math.max(1, Math.ceil((freeAt - now) / 1000));
   }
   // Is this key ALREADY over budget, WITHOUT spending any of it?
   //
@@ -91,7 +100,8 @@ export function createLimiter(name = "default", { perMin = MAX_CALLS_PER_BURST, 
     const hits = buckets.get(ip);
     if (!hits) return { limited: false, name };
     prune(hits, now);
-    return { limited: over(hits, now), name };
+    const limited = over(hits, now);
+    return { limited, name, ...(limited ? { retryAfterSeconds: retryAfter(hits, now) } : {}) };
   }
   // Forget a key's history. For flows where a stronger proof of identity
   // supersedes the failures counted so far (e.g. a successful login), so a

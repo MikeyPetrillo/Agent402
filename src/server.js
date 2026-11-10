@@ -11006,7 +11006,9 @@ if (FREE_MODE) {
       if (solution) {
         const result = verifySolution(solution, slug);
         if (result.ok) {
-          if (powHttpLimiter.check(req.ip || "unknown").limited) {
+          const powBudget = powHttpLimiter.check(req.ip || "unknown");
+          if (powBudget.limited) {
+            res.setHeader("Retry-After", String(powBudget.retryAfterSeconds));
             res.setHeader("X-Pow-Rate-Limited", "true");
             res.setHeader("X-Pow-Limits", POW_LIMITS_LABEL);
             return res.status(429).json({
