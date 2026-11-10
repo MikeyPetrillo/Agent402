@@ -37,6 +37,10 @@ Gateway:
   retry, refusedNetwork, retryAfterSeconds and otherNetworksFrom. A burst of
   settle failures across buyers refuses nobody; it reads as a status word
   (settleFailures, unsettledReports: ok or burst) on /api/gateway-status.
+- The settleFailures status word also reads burst when one EVM wallet's
+  unsettled /v1 calls reach the per-network refusing count on three networks
+  inside one window. The word refuses nothing: the wallet is held per network
+  as before, and no other buyer is.
 Payments:
 - A first-contact 402 body carries a payment block: this request's price in
   dollars on the network it names, one sentence on paying, the proof-of-work
@@ -112,7 +116,9 @@ Tools:
 - Exa-search, exa-answer, exa-contents and the X data tools keep serving past
   their daily alarm ceiling, where exaSpend and xDataSpend on
   /api/gateway-status read over; at a higher hard ceiling a call answers 503
-  and the word reads capped.
+  and the word reads capped. Each word is read from the day's count shared
+  across containers, so it keeps its reading through a restart, and it reads
+  capped for an hour after any call is refused at the hard ceiling.
 Operations:
 - /status and /api/status list each observer of the paid call path with its
   own state, age and staleness bound (current.sources); an observer past its
