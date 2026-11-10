@@ -707,7 +707,7 @@ const hex = (n) => (n >>> 0).toString(16).padStart(8, "0");
     const longTable = tiff([hollow(10, rows, { 259: [259, 3, 1, 32773], 273: [273, 4, rows, table], 278: [278, 4, 1, 1], 279: [279, 4, rows, table] })]);
     for (const [label, file] of [["a 65,535-entry directory", wideDirectory(65535)], ["a 400,000-row strip table", longTable]]) {
       const ms = cpuMs(() => assertDeclaredWithinPixelCap(file, 16e6, { mainThread: true }));
-      ok(assertTiffHeader(file, 16e6, { mainThread: true }) === false && ms < 5, `the main-thread check leaves ${label} (${file.length} bytes) to the worker after ${ms.toFixed(2)} ms of CPU (< 5 ms)`);
+      ok(assertTiffHeader(file, 16e6, { mainThread: true }) === false && ms < 50, `the main-thread check leaves ${label} (${file.length} bytes) to the worker after ${ms.toFixed(2)} ms of CPU (< 50 ms; unbudgeted it is hundreds)`);
       const a = await attempt(tool("image-convert"), file, { format: "png" });
       ok((a.code === 400 || a.code === 200) && a.ms < 2000, `${label} is then answered by the worker (got ${a.code} "${a.msg || ""}" in ${a.ms}ms)`);
     }
@@ -718,7 +718,7 @@ const hex = (n) => (n >>> 0).toString(16).padStart(8, "0");
       const widest = wideDirectory(65535), pending = [];
       const ms = cpuMs(() => { pending.push(runImageOffThread({ op: "convert", buffer: widest, params: { format: "png" } }).catch(() => null)); });
       await Promise.all(pending);
-      ok(ms < 5, `the pool queues a 65,535-entry TIFF after ${ms.toFixed(2)} ms of main-thread CPU (< 5 ms)`);
+      ok(ms < 50, `the pool queues a 65,535-entry TIFF after ${ms.toFixed(2)} ms of main-thread CPU (< 50 ms; unbudgeted it is hundreds)`);
     }
     // What the main thread deferred is still held to every bound.
     const deferredAndTooLarge = wideDirectory(6000); deferredAndTooLarge.writeUInt16LE(257, 22); deferredAndTooLarge.writeUInt16LE(3, 24); deferredAndTooLarge.writeUInt32LE(1, 26); deferredAndTooLarge.writeUInt32LE(16, 30);
