@@ -200,14 +200,24 @@ export function gifCodesDefined(buf, dataOffset, pixels) {
 // Frame data the main-thread check reads itself; a longer frame is left to
 // the worker's check (one pass over 64 KB is well under a millisecond).
 export const GIF_MAIN_THREAD_BYTES = 65536;
+// The block walk itself keeps an entry per frame, and a file can hold a frame
+// every dozen bytes: past this size the main thread leaves the whole GIF check
+// to the worker.
+export const GIF_MAIN_THREAD_FILE = 262144;
 
 /** The decoder sizes its index buffer from frame 0's own rectangle, so a frame
  *  that reaches past the screen in either direction is refused, and so is
  *  frame data the decoder's table walk would not come back from. With
- *  `mainThread`, frame data past GIF_MAIN_THREAD_BYTES is not read here: the
- *  worker runs this whole check before it decodes. */
+ *  `mainThread`, a file past GIF_MAIN_THREAD_FILE or frame data past
+ *  GIF_MAIN_THREAD_BYTES is not read here: the worker runs this whole check
+ *  before it decodes. */
 export function assertGifHeader(buf, { mainThread = false } = {}) {
+  if (mainThread && buf.length > GIF_MAIN_THREAD_FILE) return;
   const { screen, frame } = gifFirstFrame(buf);
+  // The decoder's table keeps a literal in 8 bits. A minimum code size past 8
+  // (the format's own limit) makes literals wider than that, they spill into
+  // the prefix half of an entry, and the prefix walk can circle.
+  if (buf[frame.dataOffset] > 8) throw bad(`gif minimum code size ${buf[frame.dataOffset]} is outside the format's 2 to 8`);
   if (frame.x + frame.width > screen.width || frame.y + frame.height > screen.height) {
     throw bad(`gif frame (${frame.width}x${frame.height} at ${frame.x},${frame.y}) extends past its ${screen.width}x${screen.height} canvas`);
   }

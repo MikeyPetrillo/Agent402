@@ -311,6 +311,14 @@ const hex = (n) => (n >>> 0).toString(16).padStart(8, "0");
   const withData = (bytes) => { const blocks = []; for (let k = 0; k < bytes.length; k += 255) { const part = bytes.slice(k, k + 255); blocks.push(part.length, ...part); } return Buffer.concat([head(10, 10), Buffer.from([0x2c, 0, 0, 0, 0, 10, 0, 10, 0, 0, 2, ...blocks, 0]), END]); };
   await refusedBy("a GIF that uses the next free code right after a clear code", withData(codes([4, 6, 0, 6])), /^gif image data uses a code its table does not define/);
   await refusedBy("a GIF that uses a code past the next free one", withData(codes([4, 0, 7, 0, 7])), /^gif image data uses a code its table does not define/, convert);
+  // The decoder's table keeps a literal in 8 bits, so a minimum code size past
+  // 8 (the format allows 2 to 8) breaks it; 1 and 8 decode.
+  const widths = (list, minCodeSize) => { let v = 0n, n = 0n; for (const [c, w] of list) { v |= BigInt(c) << n; n += BigInt(w); } const out = []; for (let k = 0n; k < n; k += 8n) out.push(Number((v >> k) & 255n)); return Buffer.concat([head(10, 10), Buffer.from([0x2c, 0, 0, 0, 0, 10, 0, 10, 0, 0, minCodeSize, out.length, ...out, 0]), END]); };
+  for (const size of [9, 11, 12]) await refusedBy(`a GIF with minimum code size ${size}`, widths([[1 << size, size + 1], [5, size + 1], [(1 << size) + 1, size + 1]], size), new RegExp(`^gif minimum code size ${size} is outside the format's 2 to 8`), convert);
+  for (const [size, list] of [[1, [[2, 2], [0, 2], [1, 2], [3, 3]]], [8, [[256, 9], [5, 9], [257, 9]]]]) {
+    g = await decoded(widths(list, size));
+    ok(g.width === 10 && g.height === 10, `a GIF with minimum code size ${size} still decodes (${g.width}x${g.height})`);
+  }
   // Past 64 KB of frame data the main thread leaves the read to the worker,
   // which runs the same check before it decodes: still a 400, not a deadline.
   const longData = withData(codes([...Array(200000).fill(4), 6, 0, 6]));
