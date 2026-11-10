@@ -151,11 +151,3 @@ export function canonicalizePaymentHeaders(req) {
   for (const [name, value] of rewritten) headers[name] = value;
   return seen ? "canonical" : "none";
 }
-
-/** Express middleware: canonicalizePaymentHeaders on every request. */
-export function paymentHeaderIntake() {
-  return function paymentHeaderIntakeMiddleware(req, _res, next) {
-    canonicalizePaymentHeaders(req);
-    next();
-  };
-}
