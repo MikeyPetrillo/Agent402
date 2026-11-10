@@ -11,7 +11,7 @@
 //   - not-configured mode: zero network calls, plan still readable
 //   - SigV4: requests carry a well-formed AWS4-HMAC-SHA256 authorization
 //
-//   - the alarm word (backupAlarmStatus): off / ok / failed / stale / unencrypted;
+//   - the alarm word (backupAlarmStatus): off / ok / failed / stale / unencrypted / unconfigured;
 //     a set but malformed encryption key refuses the run (nothing in plain)
 //   - the status read back at boot, also with STATE_DATABASE_URL set (the
 //     suite runs in both modes; with it set it uses its own schema)
@@ -300,6 +300,26 @@ ok(stateAfterRun1.every((k) => run2Puts.includes(k)) && new Set(run2Puts).size =
   ok(requests.length === before, "…and makes zero network calls");
   ok(backupPlan().files.length > 0 && backupPlan().configured === false, "plan endpoint still inventories without creds");
   ok(backupAlarmStatus() === "off", "not configured: the alarm word is off");
+  // No bucket where one is expected (production with a state database) is a
+  // fault the pagers read; everywhere else it stays off, which never pages.
+  const { backupExpected } = await import("../src/backup.js");
+  const DB = "postgres://u@127.0.0.1:1/none";
+  ok(backupExpected({ NODE_ENV: "production", STATE_DATABASE_URL: DB }) === true && backupExpected({ RAILWAY_ENVIRONMENT_NAME: "production", STATE_DATABASE_URL: DB }) === true, "a bucket is expected in production with a state database");
+  ok(backupExpected({ NODE_ENV: "production" }) === false, "...not in production without a state database (a self-host on files)");
+  ok(backupExpected({ STATE_DATABASE_URL: DB }) === false, "...not outside production");
+  ok(backupExpected({ NODE_ENV: "production", STATE_DATABASE_URL: DB, FREE_MODE: "true" }) === false, "...never on a FREE_MODE boot");
+  const VARS = ["NODE_ENV", "RAILWAY_ENVIRONMENT_NAME", "RAILWAY_ENVIRONMENT", "FREE_MODE", "STATE_DATABASE_URL"];
+  const prev = Object.fromEntries(VARS.map((k) => [k, process.env[k]]));
+  for (const k of VARS) delete process.env[k];
+  process.env.NODE_ENV = "production";
+  ok(backupAlarmStatus() === "off", "no bucket, production, no state database: off");
+  process.env.STATE_DATABASE_URL = DB;
+  ok(backupAlarmStatus() === "unconfigured", `no bucket, production, a state database: the alarm word is unconfigured (${backupAlarmStatus()})`);
+  process.env.FREE_MODE = "true";
+  ok(backupAlarmStatus() === "off", "...and off again on a FREE_MODE boot");
+  delete process.env.FREE_MODE; delete process.env.NODE_ENV;
+  ok(backupAlarmStatus() === "off", "...and off outside production");
+  for (const k of VARS) { if (prev[k] === undefined) delete process.env[k]; else process.env[k] = prev[k]; }
 }
 
 // The status outlives a restart: a fresh module instance (a new container)
@@ -354,8 +374,9 @@ ok(stateAfterRun1.every((k) => run2Puts.includes(k)) && new Set(run2Puts).size =
   const hb = readFileSync(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8");
   const leg = hb.slice(hb.indexOf("Offsite backup check"), hb.indexOf("Offsite backup check") + 3000);
   ok(/\.backup\.status/.test(leg), "the heartbeat reads backup.status");
-  ok(/held\|failed\|stale\|unencrypted\) sleep 30; WORD=\$\(read_bk\)/.test(leg), "...re-reads once before paging");
-  ok(/held\|failed\|stale\|unencrypted\)\n\s+if \[ -z "\$OPEN" \]; then\n\s+gh issue create/.test(leg) && /ok\)\n\s+if \[ -n "\$OPEN" \]; then\n\s+gh issue close/.test(leg), "...opens an issue on held/failed/stale/unencrypted and closes it on ok");
+  ok(/held\|failed\|stale\|unencrypted\|unconfigured\) sleep 30; WORD=\$\(read_bk\)/.test(leg), "...re-reads once before paging");
+  ok(/unconfigured: the BACKUP_S3_\* bucket variables are unset in production/.test(leg), "...the issue body explains unconfigured");
+  ok(/held\|failed\|stale\|unencrypted\|unconfigured\)\n\s+if \[ -z "\$OPEN" \]; then\n\s+gh issue create/.test(leg) && /ok\)\n\s+if \[ -n "\$OPEN" \]; then\n\s+gh issue close/.test(leg), "...opens an issue on held/failed/stale/unencrypted and closes it on ok");
 }
 
 db.close();

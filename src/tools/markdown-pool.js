@@ -42,6 +42,7 @@
 // the render ran out of time. Every refusal here is uncharged.
 import { Worker, isMainThread } from "node:worker_threads";
 import { EventEmitter } from "node:events";
+import { threadEnv } from "./child-env.js";
 import { fileURLToPath } from "node:url";
 import { renderMarkdown, markdownLooksCostly } from "./markdown-render.js";
 
@@ -150,7 +151,7 @@ function adopt(lane) {
 
 /** A started worker. Its messages go to whichever lane holds it; until one does it is the spare. */
 function start() {
-  const worker = new Worker(MARKDOWN_WORKER, { resourceLimits: { maxOldGenerationSizeMb: HEAP_MB, maxYoungGenerationSizeMb: 32 } });
+  const worker = new Worker(MARKDOWN_WORKER, { env: threadEnv(), resourceLimits: { maxOldGenerationSizeMb: HEAP_MB, maxYoungGenerationSizeMb: 32 } });
   worker.wid = nextWorkerId++;
   worker.lane = null;
   // unref: an idle worker never holds the process open.

@@ -22,9 +22,12 @@
 // Inside a worker (or any non-main thread) runHtml calls the operation
 // directly, so code shared with the worker never re-enters the pool.
 import { Worker, isMainThread } from "node:worker_threads";
+import { threadEnv } from "./child-env.js";
 import { fileURLToPath } from "node:url";
 
 const HTML_WORKER = fileURLToPath(new URL("./html-worker.js", import.meta.url));
+// What the worker's import graph reads (lazy-deps.js, and this module through html-kit.js).
+const HTML_WORKER_ENV = ["LAZY_DEPS_WARM_GAP_MS", "HTML_POOL_MAX", "HTML_POOL_QUEUE_MAX", "HTML_PARSE_TIMEOUT_MS"];
 const num = (v, d) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : d; };
 const POOL_MAX = num(process.env.HTML_POOL_MAX, 2);
 const LARGE_MAX = 1;
@@ -74,7 +77,7 @@ function goIdle(slot) {
 }
 
 function spawnSlot() {
-  const slot = { worker: new Worker(HTML_WORKER, { resourceLimits: { maxOldGenerationSizeMb: HEAP_MB, maxYoungGenerationSizeMb: 64 } }), job: null, idleTimer: null };
+  const slot = { worker: new Worker(HTML_WORKER, { env: threadEnv(HTML_WORKER_ENV), resourceLimits: { maxOldGenerationSizeMb: HEAP_MB, maxYoungGenerationSizeMb: 64 } }), job: null, idleTimer: null };
   slot.worker.on("message", (msg) => {
     if (!slot.job || msg.id !== slot.job.id) return; // a reply from a job already given up on
     if (msg.error) settle(slot, slot.job.reject, Object.assign(new Error(msg.error), { statusCode: msg.statusCode || 500 }, msg.threw ? { threw: msg.threw } : {}));

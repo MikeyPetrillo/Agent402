@@ -821,7 +821,9 @@ While either lasts the money journals stay on each container's local disk (LEDGE
   },
   {
     // The nightly offsite backup (backup on /api/gateway-status,
-    // src/backup.js). held, failed, stale and unencrypted page; ok clears; off and
+    // src/backup.js). held, failed, stale, unencrypted and unconfigured (no
+    // bucket in production with a state database) page; ok clears; off (no
+    // bucket on a boot that is not production or has no state database) and
     // unknown do neither. Title matches heartbeat.yml's.
     title: "Offsite backup is not current",
     verdict: ({ gateway: b }) => {
@@ -837,6 +839,7 @@ While either lasts the money journals stay on each container's local disk (LEDGE
 - failed: the last run threw (bucket unreachable, bill guard, unreadable data dir, or a BACKUP_ENCRYPTION_KEY that is set but does not parse).
 - stale: no successful run in 26 h while configured.
 - unencrypted: BACKUP_ENCRYPTION_KEY is unset in production, so objects go up as plain gzip.
+- unconfigured: the BACKUP_S3_* bucket variables are unset in production with a state database, so no backup runs at all. Set them on the service again.
 
 Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backup] log line; POST /__operator/backup/run retries. Auto-closes when the word is ok.`;
     },
@@ -1048,7 +1051,7 @@ This observer cannot dispatch the canary itself (it holds an issues-only credent
 ];
 
 const TWEET_QUEUE_BAD = new Set(["halted", "no_credentials", "refused", "in_doubt"]);
-const BACKUP_BAD = new Set(["held", "failed", "stale", "unencrypted"]);
+const BACKUP_BAD = new Set(["held", "failed", "stale", "unencrypted", "unconfigured"]);
 const REDIS_PERSISTENCE_BAD = new Set(["off", "degraded"]);
 const DB_WORDS = new Set(["ok", "unreachable", "unconfigured", "unknown"]);
 // src/mpp-reconcile.js CATEGORIES: an issue body names only these.

@@ -15,6 +15,7 @@
 //    client that may have left.
 //  - Idle workers end after IDLE_MS, so their heaps are not held for good.
 import { Worker } from "node:worker_threads";
+import { threadEnv } from "./child-env.js";
 import { fileURLToPath } from "node:url";
 
 const OFFICE_WORKER = fileURLToPath(new URL("./office-worker.js", import.meta.url));
@@ -53,7 +54,7 @@ function goIdle(slot) {
   slot.idleTimer.unref();
 }
 function spawnSlot() {
-  const slot = { worker: new Worker(OFFICE_WORKER, { resourceLimits: { maxOldGenerationSizeMb: HEAP_MB, maxYoungGenerationSizeMb: 64 } }), job: null, idleTimer: null };
+  const slot = { worker: new Worker(OFFICE_WORKER, { env: threadEnv(), resourceLimits: { maxOldGenerationSizeMb: HEAP_MB, maxYoungGenerationSizeMb: 64 } }), job: null, idleTimer: null };
   slot.worker.on("message", (msg) => {
     if (!slot.job || msg.id !== slot.job.id) return;
     if (msg.error) settle(slot, slot.job.reject, Object.assign(new Error(msg.error), { statusCode: msg.statusCode || 500 }));

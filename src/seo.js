@@ -30,10 +30,11 @@ import { pageLastmod, dayOf } from "./page-dates.js";
 import { REPO_URL } from "./repo-link.js";
 import { slowRouteMarker } from "./slow-routes.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
+import { fromPriceLabel } from "./quoted-from.js";
 import { frontDoorMarkdown, AGENTS_MD_PATH, LATE_SETTLE_EXCEPTION } from "./front-door.js";
 import { publicIndexChains, PUBLIC_INDEX_ANCHOR } from "./facilitator-public-index.js";
 // A catalog line's price: a route quoted per request lists its floor as "from".
-const priceOfLine = (t) => (t.quoteRange && t.quoteRange.maxUsd > t.quoteRange.minUsd ? `from ${t.price}` : t.price);
+const priceOfLine = (t) => (t.quoteRange && t.quoteRange.maxUsd > t.quoteRange.minUsd ? `from ${fromPriceLabel(t)}` : t.price);
 // The registration id the registration file publishes (same setting), or null.
 /** The llms.txt "finished reports" paragraph, DERIVED from the live catalog
  *  (route + price per slug) and the product tables (card + monitor prices),

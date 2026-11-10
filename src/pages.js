@@ -36,6 +36,7 @@ import { meteredTwinPath, meteredQuoteSentence, meteredRoutesInline, flatTiersLi
 import { PARAM_ALIASES } from "./input-aliases.js";
 import { UNIT_CATEGORIES } from "./tools/convert-gen.js";
 import { toolJudgeEnabled } from "./tool-judge.js";
+import { fromPriceLabel } from "./quoted-from.js";
 
 export const CATEGORIES = {
   web: { label: "Web & documents", blurb: "Read the live web: browser rendering, screenshots, article extraction, PDFs, metadata." },
@@ -121,10 +122,11 @@ export function displayPrice(price) {
 }
 
 export function priceWords(tool) {
-  const p = displayPrice(tool.price);
   if (tool.quoteRange && Number.isFinite(tool.quoteRange.maxUsd) && tool.quoteRange.maxUsd > tool.quoteRange.minUsd) {
-    return { short: `from ${p}`, long: `quoted per request from ${p}` };
+    const from = displayPrice(fromPriceLabel(tool));
+    return { short: `from ${from}`, long: `quoted per request from ${from}` };
   }
+  const p = displayPrice(tool.price);
   return { short: p, long: `${p} per call` };
 }
 
@@ -412,7 +414,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   if (tool.judgedChoice && toolJudgeEnabled()) facts.push(`A judgment model picks among the shortlisted tools; the chosen tool runs unchanged, so the answer itself is the tool's own.`);
   if (tool.runSeconds) facts.push(`${tool.asyncProfile?.expectedSeconds ? `Usually answers in about ${e(String(tool.asyncProfile.expectedSeconds))} seconds and takes` : "Takes"} up to ${e(String(tool.runSeconds))} seconds. Send the paid call with <code>Prefer: respond-async</code> to get <code>202</code> and a job link at once, then poll <code>GET /api/jobs/{id}</code> for its stage, progress and ETA until it has the answer; payment still settles only when the answer is ready.${needsAsyncOrWait(tool.asyncProfile) ? ` To wait on the connection instead, send <code>Prefer: wait=${e(String(tool.runSeconds))}</code> and keep it open that long. A paid call with neither header is answered <code>400</code> before any payment is taken.` : " Or keep the connection open that long."}`);
   else if (tool.asyncProfile) facts.push(`Runs as a job on request: send the paid call with <code>Prefer: respond-async</code> to get <code>202</code> and a job link instead of waiting on the connection, then poll <code>GET /api/jobs/{id}</code> until it has the answer; payment still settles only when the answer is ready.`);
-  if (tool.quoteRange) facts.push(`Priced per request: the 402 quotes this body, between ${e(displayPrice(tool.price))} and $${e(String(tool.quoteRange.maxUsd))}.${tool.quoteFormula ? ` The quote is ${e(tool.quoteFormula)}.` : ""}`);
+  if (tool.quoteRange) facts.push(`Priced per request: the 402 quotes this body, between ${e(displayPrice(fromPriceLabel(tool)))} and $${e(String(tool.quoteRange.maxUsd))}.${tool.quoteFormula ? ` The quote is ${e(tool.quoteFormula)}.` : ""}`);
   if (typeof tool.tierQuote === "function") facts.push(e(PRICED_BY_MODEL_NOTE));
   if (cacheTtl) facts.push(`Cached: an identical request within ${e(fmtTtl(cacheTtl))} is answered from cache with <code>X-Cache: hit</code>.`);
   // The method alias (server.js) runs only when no catalog route of the other
@@ -789,7 +791,7 @@ export function openapiSpec(baseUrl, catalog) {
     const mppRails = mppRailsPhrase(mppOffers);
     const op = {
       operationId: `${tool.slug}${method === "GET" ? "Get" : ""}`,
-      summary: `${tool.name} (${tool.quoteRange ? `from ${tool.price}` : tool.price}/call via x402${mppRails ? " or MPP" : ""})`,
+      summary: `${tool.name} (${tool.quoteRange ? `from ${fromPriceLabel(tool)}` : tool.price}/call via x402${mppRails ? " or MPP" : ""})`,
       // A route that can quote MORE than its list price for some bodies says so
       // here, in the same breath as the number. `x-price` stays the list price
       // (it is what this route charges for the models it serves, and every
@@ -797,7 +799,7 @@ export function openapiSpec(baseUrl, catalog) {
       // from reading as a ceiling it is not.
       // The 402 walkthrough lives ONCE in info.x-guidance; repeating it on
       // every operation was ~20% of a 2 MB document for no new information.
-      description: `${tool.description}\n\nPrice: ${typeof tool.quote === "function" ? `quoted per request from the body, from ${tool.price}${tool.quoteFormula ? ` (${tool.quoteFormula})` : ""}` : `${tool.price} per call`}, over x402 (${railsOrFor(tool)})${mppRails ? ` or MPP (${mppRails})` : ""}.${typeof tool.quote === "function" && String(tool.slug).startsWith("v1-chat-metered") ? ` ${meteredQuoteSentence()}` : ""}${typeof tool.tierQuote === "function" ? ` ${PRICED_BY_MODEL_NOTE}` : ""}${meteredTwinPath(tool.slug) ? ` For the same models quoted per request from the body (on x402, Tempo and credits, settlement never exceeds the quote), use POST ${meteredTwinPath(tool.slug)}.` : ""} Docs: ${baseUrl}/tools/${tool.slug}`,
+      description: `${tool.description}\n\nPrice: ${typeof tool.quote === "function" ? `quoted per request from the body, from ${fromPriceLabel(tool)}${tool.quoteFormula ? ` (${tool.quoteFormula})` : ""}` : `${tool.price} per call`}, over x402 (${railsOrFor(tool)})${mppRails ? ` or MPP (${mppRails})` : ""}.${typeof tool.quote === "function" && String(tool.slug).startsWith("v1-chat-metered") ? ` ${meteredQuoteSentence()}` : ""}${typeof tool.tierQuote === "function" ? ` ${PRICED_BY_MODEL_NOTE}` : ""}${meteredTwinPath(tool.slug) ? ` For the same models quoted per request from the body (on x402, Tempo and credits, settlement never exceeds the quote), use POST ${meteredTwinPath(tool.slug)}.` : ""} Docs: ${baseUrl}/tools/${tool.slug}`,
       tags: [tool.category],
       responses: {
         200: {

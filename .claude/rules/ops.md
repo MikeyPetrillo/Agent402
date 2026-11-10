@@ -71,7 +71,11 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   breaks every listing does), paged the same way; both issues close only on the second ok read in a row.
 - **Backups:** `src/backup.js` (encrypted, offsite); restore with `scripts/backup-restore.js`.
   The `backup` word reads `unencrypted` while `BACKUP_ENCRYPTION_KEY` is unset in production
-  (`NODE_ENV` or the platform's environment name); the heartbeat and the status probe page on it.
+  (`NODE_ENV` or the platform's environment name), and `unconfigured` while the `BACKUP_S3_*`
+  bucket variables are unset in production with a state database (no backup runs at all); the
+  heartbeat and the status probe page on both under "Offsite backup is not current", closed on
+  `ok`. Without a bucket, a FREE_MODE boot, a boot outside production and a boot with no state
+  database read `off`, which never pages.
 - **Status observers:** GitHub heartbeat plus `workers/status-probe`; a failed check is
   re-probed once before it is recorded. The heartbeat signs its paywall read with X-Heartbeat-Token,
   so the unpaid budget never refuses it; the status Worker pages "Paywall not observed" after three
@@ -164,6 +168,15 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   `calls`/`errorRate` unless `include_pre_payment=1` (`prePaymentHidden` counts them).
   `logToolError` replaces control characters in the message and the key names
   (`stripControlChars`), so one error is one line.
+- **Call log retention:** `tool_calls` (`src/analytics-db.js`, one row per tool call) keeps
+  `TOOL_CALLS_RETENTION_DAYS` (default 180; never under 31, so the dashboard's widest window of
+  30 days always has its rows; `off` or `0` keeps everything). A daily tick under the lease
+  `tool-calls-retention` (first run seven minutes after boot) deletes older rows oldest first by
+  the `ts` index, 5000 a statement with a pause between, at most 100 statements a run; the rest
+  waits for the next run. Its pool sets the server-side limits the state database pool sets:
+  `ANALYTICS_DB_STATEMENT_TIMEOUT_MS` (default 10000) and `ANALYTICS_DB_IDLE_TX_TIMEOUT_MS`
+  (default 30000). A cut statement drops that one row or ends that run; the insert path never
+  throws (`scripts/test-analytics-retention.js`).
 - **Sale paths and cohorts:** each sale records how it arrived (`src/sale-path.js`: the
   connector's loopback, a client package by its User-Agent product token, or HTTP) in the
   ledger's `via` column; `/__operator/cohorts.json` lists wallets past a per-day distinct-tool
