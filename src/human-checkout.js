@@ -234,11 +234,15 @@ const HEARTBEAT_MS = Math.max(50, Number(process.env.HUMAN_CHECKOUT_HEARTBEAT_MS
 const lastSignOf = (rec) => Math.max(Number(rec?.claimedAt) || Date.parse(rec?.at) || 0, Number(rec?.beatAt) || 0);
 const REFUND_RETRY_MS = 30_000;
 const MAX_REFUND_ATTEMPTS = 6;
-// An owed record with no product is decided by one session read. The owed
-// list never waits for that read (owedRefunds): it is started beside the
-// list, given this long to answer, and after a read that failed or did not
-// answer no new one starts for the retry time. At most this many run at once.
+// An owed record with no product is decided by one session read. The read
+// is started beside the owed list (owedRefunds), given this long to answer,
+// and after a read that failed or did not answer no new one starts for the
+// retry time. At most this many run at once. The list waits for the reads
+// one call of it started, OWED_LIST_WAIT_MS in all for that call, so a
+// Stripe that answers decides a record on the first read of the list; past
+// the wait the record is listed as owed.
 const OWED_RESOLVE_TIMEOUT_MS = 15_000;
+const OWED_LIST_WAIT_MS = 300;
 const OWED_RESOLVE_RETRY_MS = 10 * 60_000;
 const OWED_RESOLVE_MAX_INFLIGHT = 3;
 // Failure breaker (review 2026-09-03): every failed generation is refunded, and Stripe keeps its fee on a
@@ -376,7 +380,7 @@ if (USE_PG) {
  * @param {()=>number} [deps.now]
  * @param {(s:string)=>void} [deps.log]
  */
-export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSale, onDelivered = null, onFailed = null, now = () => Date.now(), log = console.log, owedResolveTimeoutMs = OWED_RESOLVE_TIMEOUT_MS, owedResolveRetryMs = OWED_RESOLVE_RETRY_MS }) {
+export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSale, onDelivered = null, onFailed = null, now = () => Date.now(), log = console.log, owedResolveTimeoutMs = OWED_RESOLVE_TIMEOUT_MS, owedResolveRetryMs = OWED_RESOLVE_RETRY_MS, owedListWaitMs = OWED_LIST_WAIT_MS }) {
   const dir = storeDir || DEFAULT_DIR();
   try { mkdirSync(dir, { recursive: true }); } catch { /* best-effort; writes will fail loudly below */ }
   const INFLIGHT = join(dir, "_inflight.json");   // sessionId -> claimedAt (ms)
@@ -740,23 +744,22 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
   // owedReport, where the next read of the list finds it. A read that fails,
   // or has not answered inside the timeout, is not asked again until the
   // retry time has passed (an answer that arrives later is still kept).
-  // Returns whether a read was started.
+  // Returns the started read (it settles when the read is over), or null.
   const owedResolving = new Set();
   const owedResolveAfter = new Map();
   function resolveOwedBeside(id, rec) {
-    if (owedResolving.has(id) || owedResolving.size >= OWED_RESOLVE_MAX_INFLIGHT) return false;
-    if (now() < (owedResolveAfter.get(id) || 0)) return false;
+    if (owedResolving.has(id) || owedResolving.size >= OWED_RESOLVE_MAX_INFLIGHT) return null;
+    if (now() < (owedResolveAfter.get(id) || 0)) return null;
     owedResolving.add(id);
     let timer = null;
     const waited = new Promise((resolve) => { timer = setTimeout(() => resolve(null), owedResolveTimeoutMs); timer.unref?.(); });
-    Promise.race([owedIsReport(id, rec).catch(() => null), waited]).then((v) => {
+    return Promise.race([owedIsReport(id, rec).catch(() => null), waited]).then((v) => {
       clearTimeout(timer);
       owedResolving.delete(id);
       if (v !== null) { owedResolveAfter.delete(id); return; }
       if (owedResolveAfter.size >= 2000) owedResolveAfter.clear();
       owedResolveAfter.set(id, now() + owedResolveRetryMs);
     });
-    return true;
   }
   // One log line with a count, when the count changes (never an id).
   const skippedOwed = new Set();
@@ -1046,24 +1049,38 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
   // to them beside the refund ledger's rows.
   // Only report purchases count (owedIsReport); an entry that is not one is
   // left out and counted in a log line, and one that is not decided yet
-  // stays in: a debt is never left out for want of an answer. This list
-  // never waits on Stripe. A record that names no product is decided by a
-  // session read started beside this call (resolveOwedBeside), and a later
-  // call reads its answer.
+  // stays in: a debt is never left out for want of an answer. A record that
+  // names no product is decided by a session read started beside this call
+  // (resolveOwedBeside). The call waits for the reads it started, up to
+  // owedListWaitMs in all, and uses the answers that arrived; a read still
+  // out then leaves its record on the list, and a later call reads its
+  // answer. A call that starts no read does not wait.
   async function owedRefunds() {
-    const out = [];
+    const out = [], undecided = [];
     for (const entry of (await listIssues()).refundOwed) {
       let v = typeof entry.product === "string" ? REPORT_PRODUCT_KEYS.has(entry.product) : owedReport.has(entry.id) ? owedReport.get(entry.id) !== false : undefined;
       if (v === undefined) {
         let rec = null;
         try { rec = await readRec(entry.id); } catch { rec = null; }
         if (typeof rec?.product === "string") v = REPORT_PRODUCT_KEYS.has(rec.product);
-        else { resolveOwedBeside(entry.id, rec); v = null; }
+        else { undecided.push({ entry, rec }); v = null; }
       }
       if (v === false) { noteSkippedOwed(entry.id); continue; }
       out.push(entry);
     }
-    return out;
+    let left = undecided, started = left.map((u) => resolveOwedBeside(u.entry.id, u.rec)).filter(Boolean);
+    if (!started.length || !(owedListWaitMs > 0)) return out;
+    let timer = null, over = false;
+    const bound = new Promise((resolve) => { timer = setTimeout(() => { over = true; resolve(); }, owedListWaitMs); timer.unref?.(); });
+    while (started.length && !over) {
+      await Promise.race([Promise.all(started), bound]);
+      left = left.filter((u) => !owedReport.has(u.entry.id));
+      started = over ? [] : left.map((u) => resolveOwedBeside(u.entry.id, u.rec)).filter(Boolean);
+    }
+    clearTimeout(timer);
+    const notReport = new Set(undecided.filter((u) => owedReport.get(u.entry.id) === false).map((u) => u.entry.id));
+    for (const id of notReport) noteSkippedOwed(id);
+    return notReport.size ? out.filter((x) => !notReport.has(x.id)) : out;
   }
 
   function peek(sessionId) {

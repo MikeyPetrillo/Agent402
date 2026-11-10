@@ -241,7 +241,7 @@ ok(refunds.length === 3, "...and not refunded again on the next poll");
   const counts = () => ids.map(count).join(",");
   const hung = { checkout: { sessions: { retrieve: (id) => { calls.push(id); return new Promise((resolve) => answer.set(id, resolve)); } } }, refunds: { create: async () => { throw new Error("no refund is sent from the owed list"); } } };
   let t = clock;
-  const h = createHumanCheckout({ stripe: hung, generate, baseUrl: "https://agent402.tools", storeDir: DIR2, onSale: () => {}, now: () => t, log: () => {}, owedResolveTimeoutMs: 150, owedResolveRetryMs: 600_000 });
+  const h = createHumanCheckout({ stripe: hung, generate, baseUrl: "https://agent402.tools", storeDir: DIR2, onSale: () => {}, now: () => t, log: () => {}, owedResolveTimeoutMs: 150, owedResolveRetryMs: 600_000, owedListWaitMs: 0 });
   const listed = async () => {
     const t0 = performance.now();
     const list = await Promise.race([h.owedRefunds(), wait(2000).then(() => null)]);
@@ -272,6 +272,44 @@ ok(refunds.length === 3, "...and not refunded again on the next poll");
   const seventh = await listed();
   ok(count("cs_hang1") === 2 && count("cs_hang2") === 2 && all({ ids: [...seventh.ids, "cs_hang1"] }), `...and a decided record is never read from Stripe again (${counts()})`);
   rmSync(DIR2, { recursive: true, force: true });
+}
+
+// THE FIRST READ AFTER A START DECIDES WHAT A HEALTHY STRIPE CAN DECIDE. The
+// decision for a record that names no product lives in memory, so a new
+// process holds none. The owed list waits a bounded time for the session
+// reads it started: with a Stripe that answers in about 20 ms the first
+// read leaves out the records that are not report purchases (five of them,
+// more than run at once) and lists the report; with one that never answers
+// the first read still returns, every record listed.
+{
+  const DIR3 = join("/tmp", `test-human-checkout-owedwait-${process.pid}`);
+  rmSync(DIR3, { recursive: true, force: true });
+  mkdirSync(DIR3, { recursive: true });
+  const at = new Date(clock - 3600_000).toISOString();
+  const packs = ["cs_wpack1", "cs_wpack2", "cs_wpack3", "cs_wpack4", "cs_wpack5"], ids = [...packs, "cs_wreport"];
+  for (const id of ids) writeFileSync(join(DIR3, `${id}.json`), JSON.stringify({ status: "error", refundId: null, error: "We couldn't complete this report after a retry. Your refund is being processed.", refundOwed: true, refundAttempts: 6, lastRefundAttemptAt: 0, paymentIntent: id.replace("cs_", "pi_"), at }));
+  writeFileSync(join(DIR3, "_issues.json"), JSON.stringify(Object.fromEntries(ids.map((id) => [id, { kind: "refund-owed", at, attempts: 6 }]))));
+  const sessionOf = (id) => ({ id, mode: "payment", payment_status: "paid", payment_intent: id.replace("cs_", "pi_"), metadata: id === "cs_wreport" ? { product: "research", input: "x" } : { credits_pack: "credits-100" } });
+  const noRefund = { create: async () => { throw new Error("no refund is sent from the owed list"); } };
+  const mkOwed = (stripe, extra = {}) => createHumanCheckout({ stripe, generate, baseUrl: "https://agent402.tools", storeDir: DIR3, onSale: () => {}, now, log: () => {}, ...extra });
+  let reads = 0;
+  // The wait is generous here so a busy runner cannot end it before a 20 ms answer; the default is asserted below.
+  const healthy = mkOwed({ checkout: { sessions: { retrieve: async (id) => { reads++; await wait(20); return sessionOf(id); } } }, refunds: noRefund }, { owedListWaitMs: 30_000 });
+  const first = (await healthy.owedRefunds()).map((x) => x.id);
+  ok(first.join() === "cs_wreport" && reads === ids.length, `a fresh start with a Stripe that answers in 20 ms: the first read of the owed list leaves out the ${packs.length} records that are not report purchases and lists the report (${first.join(",") || "none"}; ${reads} session reads)`);
+  const again = (await healthy.owedRefunds()).map((x) => x.id);
+  ok(again.join() === "cs_wreport" && reads === ids.length, `...and the next read asks Stripe nothing more (${reads})`);
+  // A Stripe that never answers, the default wait: the call returns, every
+  // record listed. A session read is given ten minutes here, so only the
+  // list's own wait can end the call inside the 20 s it is allowed.
+  let hungReads = 0;
+  const hanging = mkOwed({ checkout: { sessions: { retrieve: () => { hungReads++; return new Promise(() => {}); } } }, refunds: noRefund }, { owedResolveTimeoutMs: 600_000 });
+  const got = await Promise.race([hanging.owedRefunds(), wait(20_000).then(() => null)]);
+  ok(got !== null && ids.every((id) => got.some((x) => x.id === id)) && hungReads === 3, `a fresh start with a Stripe that never answers: the first read returns past its bounded wait with every record still owed (${got === null ? "held" : got.length} of ${ids.length}; ${hungReads} session reads)`);
+  const t0 = performance.now();
+  const next = await Promise.race([hanging.owedRefunds(), wait(20_000).then(() => null)]);
+  ok(next !== null && next.length === ids.length && hungReads === 3, `...and a read that starts no session read does not wait (${(performance.now() - t0).toFixed(0)} ms, ${hungReads} session reads)`);
+  rmSync(DIR3, { recursive: true, force: true });
 }
 
 // Long input reassembles from chunked metadata.
