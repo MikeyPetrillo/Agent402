@@ -13,8 +13,10 @@
 // shape of the adversarial corpus below (inside an object and a list for an
 // object or array field), one call at a time, while /health is
 // polled. The longest /health wait during the call is how long the loop was
-// held; a call that holds it past the bound is re-run once and fails if it
-// holds it again.
+// held; a call that holds it past the bound is re-run up to three times and
+// fails if it holds it every time (a pattern that goes quadratic on an input
+// holds the loop on every run of it; a host busy with other work does not
+// stretch four waits in a row the same way).
 //
 // Two more corpora ride the same loop. The long corpus fills the body limit
 // with the runs whose cost shows only at that size (sentence punctuation
@@ -34,9 +36,12 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { FREE_TIER_SLUGS } from "../src/free-tier.js";
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";
+import { oursMs, bound, OURS_READING } from "./lib/ours-clock.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const BOUND_MS = Number(process.env.REDOS_BOUND_MS) || 250;
+// A call over the bound is run again this many times before it counts.
+const REPROBES = 3;
 const ONLY = process.env.REDOS_ONLY ? new Set(process.env.REDOS_ONLY.split(",").map((s) => s.trim())) : null;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -111,9 +116,17 @@ const ok = (cond, msg) => {
 // each phrase that opens one of its rules, and must answer each inside
 // LISTING_BOUND_MS (best of three) and grow at most LISTING_GROWTH times from
 // a quarter of the length when it takes over a quarter of the bound (linear
-// grows 4x; a quadratic one 16x).
+// grows 4x; a quadratic one 16x). The functions are synchronous, so a reading
+// is the time this thread had a core (scripts/lib/ours-clock.js), not wall
+// time, and the bound is 100 ms or six times the same-machine baseline job,
+// whichever is larger: the slowest shape reads about 34 ms on a laptop, and
+// on a host busy with other suites the wall clock read it near and past
+// 100 ms. The readings this guards against are the old ones, in seconds
+// (17 s for the digit reading below).
 {
-  const LISTING_BOUND_MS = Number(process.env.LISTING_BOUND_MS) || 100;
+  const LISTING = bound(Number(process.env.LISTING_BOUND_MS) || 100, 6);
+  const LISTING_BOUND_MS = LISTING.ms;
+  console.log(`# screen functions timed as ${OURS_READING}; ${LISTING.note}`);
   const LISTING_GROWTH = 10;
   const screen = await import("../src/listing-screen.js");
   const fns = {
@@ -139,7 +152,7 @@ const ok = (cond, msg) => {
   const bestOf = (fn, s) => {
     let best = Infinity;
     for (let i = 0; i < 3; i++) {
-      const t = performance.now(); fn(s); best = Math.min(best, performance.now() - t);
+      const t = oursMs(); fn(s); best = Math.min(best, oursMs() - t);
       if (best > LISTING_BOUND_MS * 5) break;
     }
     return best;
@@ -185,13 +198,14 @@ const ok = (cond, msg) => {
 {
   const { splitSteps } = await import("../src/plan-sketch.js");
   // The split takes microseconds; the pattern it replaced took over 100 ms on
-  // a run of spaces. Least of five, so a busy runner does not read as slow.
+  // a run of spaces. Least of five on the ours clock, so a busy runner does
+  // not read as slow.
   const PLAN_BOUND_MS = Number(process.env.PLAN_BOUND_MS) || 50;
   const slowPlans = [];
   for (const [name, fill] of Object.entries({ spaces: " ", tabs: "\t", commaSpace: ", ", spaceComma: " ,", newlines: "\n", thens: " then", dots: "." })) {
     const q = "a" + fill.repeat(Math.floor(498 / fill.length)) + "b";
     let best = Infinity;
-    for (let i = 0; i < 5; i++) { const t = performance.now(); splitSteps(q); best = Math.min(best, performance.now() - t); }
+    for (let i = 0; i < 5; i++) { const t = oursMs(); splitSteps(q); best = Math.min(best, oursMs() - t); }
     if (best > PLAN_BOUND_MS) slowPlans.push(`${name}: ${best.toFixed(1)}ms`);
   }
   ok(slowPlans.length === 0, `the plan sketch splits a 500-character run of each separator inside ${PLAN_BOUND_MS}ms (${slowPlans.join(", ") || "all"})`);
@@ -311,7 +325,9 @@ try {
   // Baseline: a trivial call must leave /health well under the bound, or the
   // bound is measuring the runner rather than the tools.
   if (!ONLY) {
-    const ctl = await timedCall(B, { method: "POST", url: "/api/calc", body: JSON.stringify({ expression: "1+1" }) });
+    const ctlJob = { method: "POST", url: "/api/calc", body: JSON.stringify({ expression: "1+1" }) };
+    let ctl = await timedCall(B, ctlJob);
+    for (let again = 0; again < REPROBES && ctl.maxWait >= BOUND_MS; again++) ctl = await timedCall(B, ctlJob);
     ok(ctl.maxWait < BOUND_MS, `control: a trivial call leaves /health answering (${ctl.maxWait}ms)`);
   }
 
@@ -320,7 +336,7 @@ try {
   const t0 = Date.now();
   for (const job of jobs) {
     let r = await timedCall(B, job);
-    if (r.maxWait > BOUND_MS) r = await timedCall(B, job); // re-probe once
+    for (let again = 0; again < REPROBES && r.maxWait > BOUND_MS; again++) r = await timedCall(B, job);
     if (r.maxWait > BOUND_MS) slow.push(`${job.label}: loop held ${r.maxWait}ms (status ${r.status})`);
     if (r.bytes > MAX_ANSWER_BYTES) large.push(`${job.label}: ${r.bytes} bytes (status ${r.status})`);
     if (job.pure) { pureCalls++; if (r.status === 500 || r.status === 502 || r.status === "ERR") faults.push(`${job.label}: status ${r.status}`); }
