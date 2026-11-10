@@ -8,6 +8,9 @@
 //   - wiki/Self-Hosting.md: every payTo variable the payment setup reads, and
 //     BASE_URL with its default.
 //   - README: the leaderboard's refresh cadence.
+//   - plain punctuation in answer strings and example READMEs, the Tempo
+//     screening scope, the token risk descriptions and the README's tollbooth
+//     paragraph, each as the review left it.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -91,8 +94,13 @@ const flat = (s) => s.replace(/<[^>]+>/g, "").replace(/\s+/g, " ");
   ok(flatP.includes(`A check that runs every ${sweepMin} minutes does this for a subscription that ends on a date, and deletes the reduced record ${keepDays} days after the subscription ends.`) && flatP.includes(`record ${keepDays} days after it ends`),
     `/privacy prints the engine's figures: reduced record deleted after ${keepDays} days, by a check every ${sweepMin} minutes`);
   ok(flatP.includes("the email and the subject you asked us to watch are removed") && !TOMBSTONE_FIELDS.includes("email") && !TOMBSTONE_FIELDS.includes("target")
-    && ["subId", "product", "payer", "accessKeyAddress", "amountAtomic", "periodCount", "billingAnchor", "canceledAt", "status", "lastChargeTx"].every((k) => TOMBSTONE_FIELDS.includes(k)),
-    "the reduced record's fields are the ones /privacy lists: id, product, wallet, key address, amount, period, dates, final state, last transaction; no email, no subject");
+    && ["subId", "product", "payer", "accessKeyAddress", "chainId", "currency", "amountAtomic", "periodCount", "billingAnchor", "canceledAt", "status", "canceledReason", "lastChargeTx", "unconfirmedCharge"].every((k) => TOMBSTONE_FIELDS.includes(k)),
+    "the reduced record's fields are the ones /privacy lists: id, product, wallet, key address, chain, token, amount, period, dates, final state, reason, last transaction, unconfirmed-payment marker; no email, no subject");
+  ok(flatP.includes("its record is reduced to the subscription's id and product, the paying wallet, the key's public address, the chain and token, the amount and billing period, the dates, the final state and the reason it ended, the last payment's transaction and a marker for a payment whose outcome was never confirmed;"),
+    "/privacy lists the reduced record's chain, token, end reason and unconfirmed-payment marker");
+  // Every kept field is one the sentence covers: a field added to the record needs a word on /privacy.
+  const COVERED = new Set(["subId", "mppxSubscriptionId", "lookupKey", "product", "rail", "wire", "canary", "payer", "accessKeyAddress", "chainId", "currency", "amountAtomic", "priceUsd", "periodCount", "periodUnit", "createdAt", "billingAnchor", "lastChargedPeriod", "subscriptionExpires", "lastChargeAt", "cancelAtPeriodEnd", "canceledAt", "status", "canceledReason", "lastChargeTx", "unconfirmedCharge"]);
+  ok(TOMBSTONE_FIELDS.every((k) => COVERED.has(k)), `every field the reduced record keeps is listed here beside the /privacy sentence, so a new field needs a word there (${TOMBSTONE_FIELDS.filter((k) => !COVERED.has(k)).join(", ") || "none uncovered"})`);
   ok(!/aside from short-lived caches that make repeated identical calls cheaper, not retained/.test(t), "/terms no longer says outputs are kept in caches only");
 }
 
@@ -119,6 +127,57 @@ const flat = (s) => s.replace(/<[^>]+>/g, "").replace(/\s+/g, " ");
   const words = cadenceWords(LEADERBOARD_DEFAULT_REFRESH_MS);
   const lines = readme.split("\n").filter((l) => l.includes("/api/leaderboard") && /snapshot/i.test(l));
   ok(lines.length >= 2 && lines.every((l) => l.includes(`The snapshot refreshes ${words}`)), `README's leaderboard lines say the snapshot refreshes ${words} (${lines.length} lines)`);
+}
+
+// --- Buyer-facing strings and example READMEs: plain punctuation ----------------
+{
+  const DASH = "—";
+  ok(`a ${DASH} b`.includes(DASH) && !"a - b".includes(DASH), "control: the long dash is read, a hyphen is not");
+  for (const f of ["examples/agentcore-x402-buyer/README.md", "examples/agentcore-x402-buyer/tempo-mpp-probe/README.md", "examples/agentcore/README.md", "workers/algorand-relay/README.md"]) {
+    ok(!read(f).includes(DASH), `${f} uses plain punctuation`);
+  }
+  // One answer string per file, found by a phrase it keeps.
+  for (const [f, anchor] of [
+    ["src/tools/research-deep-kit.js", '"query" (string) is required'],
+    ["src/server.js", 'reason: "no-merchant-data", note:'],
+    ["src/settlement-proof.js", "matches no origin in our crawl"],
+  ]) {
+    const lines = read(f).split("\n").filter((l) => l.includes(anchor));
+    ok(lines.length >= 1 && lines.every((l) => !l.includes(DASH)), `${f}: the answer string holding '${anchor}' uses plain punctuation (${lines.length} line(s))`);
+  }
+  const notice = read("NOTICE");
+  ok(/full license texts/.test(notice) && !/licence/i.test(notice), "NOTICE spells license the US way");
+}
+
+// --- Tempo screening copy: per-call payments, as the screen runs ----------------
+{
+  const tempo = read("src/mpp-tempo.js");
+  ok(/screens every Tempo payment/.test("which this server screens every Tempo payment against") && /every Tempo payment address/.test("screens every Tempo payment address against"), "control: the unscoped screening sentences are read");
+  // The listed-address refusal is one sentence shared with the subscription screen.
+  const screen = read("src/sanctions-screen.js");
+  ok(!/every Tempo payment/.test(tempo) && !/every Tempo payment/.test(screen), "neither module says every Tempo payment, or every payment address, is screened");
+  ok(/screens the addresses of a Tempo per-call payment against/.test(tempo), "the list-not-loaded refusal names a per-call payment");
+  const sec = read("wiki/Security-Model.md");
+  ok(!/every party to a payment\b/.test(sec) && /every party to a per-call payment is checked against/.test(sec), "wiki/Security-Model.md scopes the Tempo screen to a per-call payment");
+}
+
+// --- Token risk copy: the published evidence, no safety assurance ---------------
+{
+  const ASSURANCE = /Safety (?:verdict|headline)|one compact verdict|before an agent buys, quotes, or recommends/;
+  ok(ASSURANCE.test("Safety verdict for one Solana token mint") && ASSURANCE.test("Safety headline for any") && ASSURANCE.test("one compact verdict for pre-trade"), "control: the assurance wording is read");
+  const bazaar = read("src/payments.js").split("\n").find((l) => l.includes('"sol-token-safety": "')) || "";
+  ok(bazaar.length > 0 && !ASSURANCE.test(bazaar) && /^\s*"sol-token-safety": "Risk summary for one Solana token mint/.test(bazaar) && /not a 'safe' or 'scam' verdict/.test(bazaar), "the listing description of sol-token-safety is a risk summary and says it is not a verdict");
+  const { SOLANA_INTEL_TOOLS } = await import("../src/tools/solana-intel-kit.js");
+  const def = (SOLANA_INTEL_TOOLS || []).find((x) => x.slug === "sol-token-safety");
+  ok(!!def && !ASSURANCE.test(def.description) && def.description.startsWith("Risk summary for any Solana SPL token mint") && /never a 'safe' or 'scam' verdict/.test(def.description), "the catalog description of sol-token-safety is a risk summary and says it is not a verdict");
+}
+
+// --- README: tollbooth is described on its own terms -----------------------------
+{
+  const readme = read("README.md").replace(/\s+/g, " ");
+  const COMPARED = /crypto-native answer to|no CDN lock-in/;
+  ok(COMPARED.test("The open, crypto-native answer to another product: no CDN lock-in"), "control: the comparison sentence is read");
+  ok(!COMPARED.test(readme) && readme.includes("Open source and self-hosted: no platform lock-in, no card processor required"), "README describes tollbooth as open source and self-hosted, with no comparison to another product");
 }
 
 console.log(`\ntest-copy-truth: ${pass} passed, ${fail} failed`);
