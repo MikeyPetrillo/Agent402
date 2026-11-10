@@ -3193,6 +3193,8 @@ jobs:
           t node scripts/test-tool-failure-monitor.js
           # heartbeat.yml's failure-word step run against stubbed curl and gh (pages, comments, closes; slugs only, never counts or upstream names) and the Worker's matching alarms - offline
           t node scripts/test-heartbeat-failure-words.js
+          # Three gateway-status words and their two observers: gatewayBalance pages on withdraw at once; sharedLimits and replayStore page on their second word (alert=sustained, the first word held ten minutes) and never on a flicker; heartbeat.yml's steps run against stubbed curl and gh - offline
+          t node scripts/test-status-word-pagers.js
           # heartbeat.yml issue lookups keep only the exact alarm title (a title search also finds near-identical titles; the wallet steps never touch each other's issues) - offline
           t node scripts/test-heartbeat-issue-lookup.js
           # Paid 200 answer classes (ok / empty / error-shaped / unchecked), the toolAnswers word and its heartbeat + Worker alarm, the identical-answer read over a scratch sales ledger, the observer byte-for-byte; boots a paid-mode server against a stub facilitator on free ports

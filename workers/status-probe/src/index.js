@@ -891,6 +891,38 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
       "`/api/gateway-status.exaSpend` reports **over** or **capped**: the day's booked spend on the Exa tools passed `EXA_DAILY_MAX_USD`. On **over** every call is still served (each one is paid for by its buyer); on **capped** it reached `EXA_DAILY_HARD_MAX_USD` and the tools answer 503 (uncharged) until 00:00 UTC. Check the prepaid balance in the upstream's console (a spent balance stops the tools whatever the ceilings say; `exaAllowance` is the word for that), then raise the ceilings on Railway or leave them. Closes when the word reads ok (the next UTC day) or off.",
   },
   {
+    // Our Circle Gateway balance (src/gateway-nanopayments.js), read every
+    // ten minutes: withdraw holds from the read that reaches
+    // GATEWAY_WITHDRAW_ALERT_USD until an operator moves the balance (a
+    // failed read keeps the last figure), so it pages at once. ok and off
+    // clear; unknown does neither. Same title as heartbeat.yml.
+    title: "Gateway balance READY to withdraw",
+    verdict: ({ gateway: b }) => wordVerdict(b.gatewayBalance?.status, ["withdraw"], ["ok", "off"]),
+    body: () =>
+      "/api/gateway-status reports gatewayBalance.status=withdraw: the Circle Gateway balance that batched payments are credited to has reached GATEWAY_WITHDRAW_ALERT_USD. Nothing is refused for it; the balance stays off chain until it is moved. Read the figure on the operator view of /api/gateway-status, then move it on chain with node scripts/gateway-withdraw.js (human-run, a dry run unless --execute is passed). Auto-closes when the word reads ok or off.",
+  },
+  {
+    // The shared admission and money controls' store (src/shared-limits.js).
+    // status reads degraded for a minute after any one failed command, so
+    // the page reads the second word: alert=sustained once degraded has held
+    // ten minutes without a break. on and memory clear; degraded with
+    // alert=ok, unknown and a build without the second word do neither.
+    title: "Shared limits store DEGRADED (Redis)",
+    verdict: ({ gateway: b }) => sustainedVerdict(b.sharedLimits, ["on", "memory"]),
+    body: () =>
+      "/api/gateway-status reports sharedLimits.alert=sustained: commands to the Redis behind the shared admission and money controls have failed or timed out for ten minutes or more without a break, or the client has not connected since boot. Every control keeps deciding on its own process's counters, so nothing is refused for it, but the limits are not shared across containers and start again on a restart. Check the Redis service and REDIS_URL on Railway and the server log for [shared-limits] lines; the operator view of /api/gateway-status carries the counts and the last error. Auto-closes when sharedLimits.status reads on or memory.",
+  },
+  {
+    // Consumed marks the shared store missed (src/replay-guard.js). status
+    // reads pending until the next retry pass lands the mark, seconds after
+    // a store blip, so the page reads alert=sustained (pending held ten
+    // minutes without a break). ok clears; pending with alert=ok does neither.
+    title: "Replay store marks PENDING (Redis)",
+    verdict: ({ gateway: b }) => sustainedVerdict(b.replayStore, ["ok"]),
+    body: () =>
+      "/api/gateway-status reports replayStore.alert=sustained: a settled payment's consumed mark has waited ten minutes or more to reach the shared store (Redis). This process refuses that payment from its own mark and the retry loop keeps writing it; until it lands, another container does not see the mark and a restart drops it. Check the Redis service and the server log for [replay-guard] lines; the operator view of /api/gateway-status carries the counts. Auto-closes when replayStore.status reads ok.",
+  },
+  {
     title: "State database DEGRADED (Postgres)",
     verdict: ({ gateway: b }) => wordVerdict(b.stateDb?.status, ["degraded"], ["on"]),
     body: () =>
@@ -1030,6 +1062,14 @@ const dayOf = (d) => (/^\d{4}-\d{2}-\d{2}$/.test(String(d)) ? d : "the latest da
 function wordVerdict(word, bad, good) {
   if (bad.includes(word)) return "bad";
   return good.includes(word) ? "good" : "quiet";
+}
+
+// A word that flickers in normal operation and carries a second word for the
+// pagers: alert=sustained pages, a healthy status clears, and everything else
+// (the alert status inside its grace period, unknown, absent) does neither.
+function sustainedVerdict(row, good) {
+  if (row?.alert === "sustained") return "bad";
+  return good.includes(row?.status) ? "good" : "quiet";
 }
 
 // The shape shared by every wallet balance: low pages, ok clears, and

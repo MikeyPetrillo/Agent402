@@ -3988,7 +3988,8 @@ app.get("/api/gateway-status", async (req, res) => {
     // and the status Worker page on unresolved and full; a settled, unserved
     // entry becomes an owed debt that refundsOwed covers); gatewayBalance reads
     // off / unknown / ok / withdraw (our Gateway balance is past
-    // GATEWAY_WITHDRAW_ALERT_USD). One word each publicly; the figure and
+    // GATEWAY_WITHDRAW_ALERT_USD; the heartbeat and the status Worker page
+    // on withdraw). One word each publicly; the figure and
     // the per-domain split on the operator view only.
     gatewayPending: { status: await gatewayPendingStatus() },
     // EVM settlements that failed naming a transaction or an authorization
@@ -4002,7 +4003,9 @@ app.get("/api/gateway-status", async (req, res) => {
     // The shared admission and money controls (src/shared-limits.js): on (the
     // store answers), memory (no Redis configured: every control is this
     // process's own), degraded (Redis configured, a command failed inside the
-    // last minute). One word publicly; counts for the operator.
+    // last minute). A second word, alert, reads sustained once degraded has
+    // held ten minutes without a break (the heartbeat and the status Worker
+    // page on it), else ok. Words publicly; counts for the operator.
     sharedLimits: (() => { try { return sharedLimitsStatus({ full }); } catch { return { status: "unknown" }; } })(),
     // Money writes waiting on this container's local disk for the database
     // (src/ledger-mirror.js journals: sales, refund debts, card checkout
@@ -4129,8 +4132,10 @@ app.get("/api/gateway-status", async (req, res) => {
     // replayStore reads pending while a settled payment's consumed mark that
     // the shared store missed is held on this process only and written again
     // by the replay guard's retry loop (src/replay-guard.js), ok otherwise.
-    // One word publicly; the counts (pending, missed, recovered, abandoned)
-    // for the operator.
+    // A second word, alert, reads sustained once pending has held ten
+    // minutes without a break (the heartbeat and the status Worker page on
+    // it), else ok. Words publicly; the counts (pending, missed, recovered,
+    // abandoned) for the operator.
     replayStore: (() => { try { return replayGuardStoreStatus({ full }); } catch { return { status: "unknown" }; } })(),
     // subscriptionRenewals reads unconfirmed while a wallet-billed monitor
     // renewal has stayed unconfirmed (its send's landing undecided by the
