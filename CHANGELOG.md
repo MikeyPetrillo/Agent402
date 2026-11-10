@@ -21,7 +21,7 @@ Tools:
 - Business-days counts by arithmetic, so a range of any length answers at
   once.
 - Markdown-to-html renders every document with the same heading ids as before;
-  documents over 2,500 characters render in a dedicated worker with a 3 s
+  documents over 2,500 characters render in a dedicated worker with a 10 s
   render deadline (400 when the document's markers are the cause, 503
   otherwise, never charged).
 - Json-to-csv writes large sheets in slices and serves up to 10,000,000 cells
