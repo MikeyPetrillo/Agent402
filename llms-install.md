@@ -16,7 +16,7 @@ section below and apply the config.
 Run once in the user's project directory:
 
 ```bash
-claude mcp add agent402 -- npx -y agent402-mcp
+claude mcp add agent402 -- npx -y agent402-mcp@0.13.31
 ```
 
 To use the hosted server instead of the npm package:
@@ -35,7 +35,7 @@ add to `mcpServers`:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp"]
+      "args": ["-y", "agent402-mcp@0.13.31"]
     }
   }
 }
@@ -53,7 +53,7 @@ Open the Cline MCP Servers panel and add:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp"],
+      "args": ["-y", "agent402-mcp@0.13.31"],
       "disabled": false,
       "autoApprove": []
     }
@@ -70,7 +70,7 @@ Settings → MCP → Add new MCP server:
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp"]
+      "args": ["-y", "agent402-mcp@0.13.31"]
     }
   }
 }
@@ -85,7 +85,7 @@ Add to `.vscode/mcp.json` in the workspace, or to the user-level `mcp.json`:
   "servers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp"]
+      "args": ["-y", "agent402-mcp@0.13.31"]
     }
   }
 }

@@ -165,5 +165,5 @@ If `/api/find` has no strong match, `POST /api/wish` with
 - `GET /api/pricing`: the full priced catalog in one call
 - `GET /.well-known/x402`: machine-readable service manifest
 - `GET /api/reliability`: uptime and error rates
-- MCP: `https://agent402.tools/mcp`, or `npx -y agent402-mcp`
+- MCP: `https://agent402.tools/mcp`, or `npx -y agent402-mcp@0.13.31`
 - Docs: https://agent402.tools/docs · Source: https://github.com/MikeyPetrillo/Agent402

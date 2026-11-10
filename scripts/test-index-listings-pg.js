@@ -275,23 +275,38 @@ try {
   // Each page timed with the database warm (it has answered the query once)
   // and this process's count cache emptied, so the count runs again: the
   // steady state of a page whose counts have expired.
-  const times = [];
+  //
+  // What a page costs is pinned first as work, which no busy host changes:
+  // the statements it sends (its totals, its count and one page read) and
+  // the rows they return (the page and one row per count). A page that read
+  // row by row, or read the table and cut the page here, fails that at any
+  // speed. The time is then the least of three reads of each page, beside a
+  // bare round trip timed at the same moment (the median of those): the
+  // bound is 50 ms or twenty round trips, whichever is larger, under 250 ms.
+  // One read on the wall clock took 68 ms on a host busy with other suites
+  // (4 ms alone); a page whose statements grew slow is slow on every read.
+  const { hookStatements } = await import("./lib/pg-statement-hook.js");
+  const PAGE_STATEMENTS_MAX = 3;
+  const times = [], trips = [], work = [];
   for (const q of [{ search: "weather" }, { search: "stock price", offset: 100 }, { category: "finance", search: "quote" }, { offset: 3000 }, { search: "lookups agents" }]) {
-    await run(q);
-    store._resetCountsForTest();
-    const t = performance.now(); await run(q); times.push(performance.now() - t);
+    const page = await run(q);
+    let best = Infinity, statements = 0, rows = 0;
+    for (let k = 0; k < 3; k++) {
+      { const t = performance.now(); await sdb.stateQuery("SELECT 1"); trips.push(performance.now() - t); }
+      store._resetCountsForTest();
+      const unhook = k === 0 ? hookStatements(await sdb.stateDb(), async (sql, values, runIt) => { const r = await runIt(); if (/index_listing/.test(sql)) { statements++; rows += r?.rows?.length || 0; } return r; }) : null;
+      const t = performance.now();
+      try { await run(q); } finally { best = Math.min(best, performance.now() - t); unhook?.(); }
+    }
+    times.push(best);
+    work.push({ q: JSON.stringify(q), statements, rows, served: page.results.length });
   }
+  const heavy = work.filter((w) => w.statements < 1 || w.statements > PAGE_STATEMENTS_MAX || w.rows > w.served + 2);
+  ok(heavy.length === 0, `a page is at most ${PAGE_STATEMENTS_MAX} statements returning its own rows and its counts (${work.map((w) => `${w.statements} statements, ${w.rows} rows for ${w.served} served`).join("; ")})`);
   const worst = Math.round(Math.max(...times));
-  // Same-database baseline: a page is a handful of round trips, so a slow
-  // runner or database slows a bare round trip too. The bound is 50 ms or
-  // twenty round trips, whichever is larger, under 250 ms; a page that
-  // scanned the table would still exceed it (the plan check above pins the
-  // index use itself).
-  const trips = [];
-  for (let k = 0; k < 9; k++) { const t = performance.now(); await sdb.stateQuery("SELECT 1"); trips.push(performance.now() - t); }
-  const tripMs = trips.sort((p, q) => p - q)[4];
+  const tripMs = trips.sort((p, q) => p - q)[Math.floor(trips.length / 2)];
   const bound = Math.round(Math.min(250, Math.max(Number(process.env.LISTINGS_SEARCH_MS || 50), tripMs * 20)));
-  ok(worst < bound, `a directory page answers in ${worst} ms at ${JSON.parse(baseline[0]).total} rows, counts included (bound ${bound} ms: 50 ms or twenty ${tripMs.toFixed(1)} ms round trips)`);
+  ok(worst < bound, `a directory page answers in ${worst} ms at ${JSON.parse(baseline[0]).total} rows, counts included, each page its least of three reads (bound ${bound} ms: 50 ms or twenty ${tripMs.toFixed(1)} ms round trips timed beside them)`);
 
   // ---- two containers on one table: one seller order, paging is exact ----------
   // Container B boots while the order table is empty, A places sellers, then a

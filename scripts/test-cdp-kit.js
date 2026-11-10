@@ -6,6 +6,7 @@
 //
 //   node scripts/test-cdp-kit.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { leastOurs } from "./lib/ours-clock.js";
 import { generateKeyPairSync, createVerify, verify as edVerify } from "node:crypto";
 
 delete process.env.CDP_API_KEY_ID;
@@ -711,8 +712,9 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
       ok(blockTimeRangeDays("SELECT 1 WHERE \"block_time\" > now() - INTERVAL 2 DAY", at) === 2 && blockTimeRangeDays("SELECT 1 FROM `solana`.`instructions` WHERE block_time >= '2026-10-01' AND block_time < '2026-10-05'", at) === 4, "quoted identifiers read as the plain names; two absolute dates give their span");
       ok(blockTimeRangeDays("SELECT 1 WHERE block_time >= toDateTime('2026-10-01 00:00:00')", at) === 33 && blockTimeRangeDays("SELECT 1 WHERE block_time >= toDate('2026-10-31')", at) === 3 && blockTimeRangeDays("SELECT 1 WHERE '2026-10-30' <= block_time", at) === 4, "toDateTime and toDate literals and a reversed comparison are read; one bound spans to now");
       ok(blockTimeRangeDays("SELECT 1 WHERE block_time >= '2026-10-08' AND block_time < '2026-10-01'", at) === null, "reversed bounds read no range (never a negative span)");
-      { const t0 = Date.now(); for (let i = 0; i < 10; i++) blockTimeRangeDays("SELECT 1 WHERE block_time >= now ( ) - interval 1 " + "a".repeat(9_900), at); ok(Date.now() - t0 < 200, `the range reader stays fast on a 10 KB adversarial query (${Date.now() - t0} ms for 10 reads)`); }
-      { const { cappedSql: capQ } = await import("../src/tools/cdp-kit.js"); const bad10k = "SELECT '" + "\\'".repeat(4_995); const t0 = Date.now(); for (let i = 0; i < 10; i++) { capQ(bad10k); solanaRangeRefusal(bad10k); sqlNorm(bad10k); } ok(Date.now() - t0 < 100, `an unclosed string of escaped quotes stays linear through every mask (${Date.now() - t0} ms for 30 passes)`); }
+      // Synchronous scans, read as the time the thread had a core, least of three (scripts/lib/ours-clock.js).
+      { const { ms } = leastOurs(() => { for (let i = 0; i < 10; i++) blockTimeRangeDays("SELECT 1 WHERE block_time >= now ( ) - interval 1 " + "a".repeat(9_900), at); }); ok(ms < 200, `the range reader stays fast on a 10 KB adversarial query (${ms.toFixed(1)} ms for 10 reads)`); }
+      { const { cappedSql: capQ } = await import("../src/tools/cdp-kit.js"); const bad10k = "SELECT '" + "\\'".repeat(4_995); const { ms } = leastOurs(() => { for (let i = 0; i < 10; i++) { capQ(bad10k); solanaRangeRefusal(bad10k); sqlNorm(bad10k); } }); ok(ms < 100, `an unclosed string of escaped quotes stays linear through every mask (${ms.toFixed(1)} ms for 30 passes)`); }
       ok(blockTimeRangeDays("SELECT 1 WHERE block_time > subtractDays(now(), 3)", at) === 3 && blockTimeRangeDays("SELECT 1 WHERE block_time > today() - 5", at) === 5, "subtractDays and today() - N are read");
       ok(blockTimeRangeDays("SELECT 1 WHERE block_time > someFunc(x)", at) === null && blockTimeRangeDays("SELECT 1 WHERE tx_signer = 'x'", at) === null, "a bound this reader does not know, or no block_time, reads no range");
       ok(blockTimeRangeDays("SELECT 1 WHERE block_time > now() - toIntervalDay(7)", at) === null, "an expression that continues past a known bound (now() - toIntervalDay(7)) reads no range, never zero");

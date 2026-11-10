@@ -1,6 +1,7 @@
 // Terms of Service — a stable, public ToS URL is a submission requirement for
 // the Anthropic connector directory. Kept short and honest: a no-account,
 // open-source, pay-per-call tool service.
+import { taskRetentionPublic } from "./mcp-tasks.js";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 import { REPO_URL } from "./repo-link.js";
@@ -51,7 +52,7 @@ export function termsPage(baseUrl) {
 <section>
 <div class="tm-eyebrow">$ GET /terms</div>
 <h1 class="tm-h1">Terms of Service</h1>
-<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-11-09.</p>
+<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-11-10.</p>
 </section>
 
 <section>
@@ -89,8 +90,10 @@ If you do not agree to these terms, do not use the service.</p>
 
 <h2>Generated content</h2>
 <p>Outputs from the AI gateway are produced by third-party models from your inputs. We do not review
-them, do not claim ownership of them, and do not publish or host them - they are returned to you and,
-aside from short-lived caches that make repeated identical calls cheaper, not retained. Generated
+them, do not claim ownership of them, and do not publish or host them - they are returned to you and
+not retained, with two exceptions: short-lived caches that make repeated identical calls cheaper, and the
+result of a call you run as an async job or an MCP task, which is kept for ${taskRetentionPublic().keptFor} after the job was
+created so you can fetch it. Generated
 content may be inaccurate, incomplete, or unsuitable for your purpose; it is not professional, legal,
 financial, or medical advice. Your use of generated content, including any obligation to verify it or
 mark it as AI-generated where the law requires, is your responsibility.</p>${sharesOn ? `
@@ -218,7 +221,7 @@ MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, NON-INFRINGEMENT, ACCU
 UNINTERRUPTED OR ERROR-FREE OPERATION. YOU USE THE SERVICE AT YOUR OWN RISK.</p>
 
 <h2>Liability</h2>
-<p>TO THE MAXIMUM EXTENT PERMITTED BY LAW, HAVOK HOLDINGS LLC, AGENT402, AND THEIR MAINTAINERS AND
+<p>TO THE MAXIMUM EXTENT PERMITTED BY LAW, CARDHAVOK LLC (DOING BUSINESS AS HAVOK HOLDINGS LLC), AGENT402, AND THEIR MAINTAINERS AND
 CONTRIBUTORS ARE NOT LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, EXEMPLARY, OR
 PUNITIVE DAMAGES, OR FOR ANY LOSS OF PROFITS, DATA, GOODWILL, OR DIGITAL ASSETS, ARISING FROM OR
 RELATING TO USE OF THE SERVICE, THE TOOLS, GENERATED CONTENT, OR ON-CHAIN PAYMENTS - WHETHER IN

@@ -32,6 +32,15 @@ const priceBySlug = new Map((pricing.endpoints || []).map((e) => [e.slug, num(e.
 ok(priceBySlug.size > 400, `catalog loaded (${priceBySlug.size} routes)`);
 
 const wiki = readdirSync(join(ROOT, "wiki")).filter((f) => f.endsWith(".md")).map((f) => [f, readFileSync(join(ROOT, "wiki", f), "utf8")]);
+
+// The metered client-timeout advice is typed in the wiki but derived in code
+// (src/metered-lead.js meteredClientTimeoutSeconds, from the upstream bound).
+{
+  const { meteredClientTimeoutSeconds } = await import("../src/metered-lead.js");
+  const gw = wiki.find(([f]) => f === "LLM-Gateway.md")?.[1] || "";
+  const m = /client timeout of at least (\d+) s/.exec(gw);
+  ok(!!m && Number(m[1]) === meteredClientTimeoutSeconds(), `wiki/LLM-Gateway.md metered timeout (${m?.[1]}) matches meteredClientTimeoutSeconds() (${meteredClientTimeoutSeconds()})`);
+}
 const card = cardReportPriceRange(HUMAN_PRODUCTS);
 const agent = agentReportPriceRange();
 const monthly = reportLadderProse({ monitorProducts: MONITOR_PRODUCTS }).monthly;

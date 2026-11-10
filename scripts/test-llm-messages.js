@@ -16,7 +16,7 @@ const msg = (text = "hi") => [{ role: "user", content: text }];
 ok(LLM_MESSAGES_TOOLS.length === 6 && Object.keys(MESSAGES_PATH_BY_TIER).length === 6, "six Messages routes: one per flat chat tier plus the metered one");
 ok(LLM_MESSAGES_TOOLS.every((t) => t.route === `POST ${MESSAGES_PATH_BY_TIER[t.slug.replace(/-messages$/, "")]}`), "routes follow the tier paths (/v1/nano/messages … /v1/premium/messages)");
 ok(LLM_MESSAGES_TOOLS.every((t) => WALLET_ONLY_SLUGS.has(t.slug)), "every Messages route is wallet-only (never PoW-free: metered upstream)");
-ok(LLM_MESSAGES_TOOLS.every((t) => t.price === (t.slug === "v1-chat-nano-messages" ? "$0.003" : t.slug === "v1-chat-metered-messages" ? "$0.001" : `$${TIERS[t.slug.replace(/-messages$/, "")].price.toFixed(2)}`)), "price strings mirror the sibling chat tier (metered: the $0.001 floor)");
+ok(LLM_MESSAGES_TOOLS.every((t) => t.price === (t.slug === "v1-chat-nano-messages" ? "$0.003" : t.slug === "v1-chat-metered-messages" ? `$${TIERS["v1-chat-metered"].price}` : `$${TIERS[t.slug.replace(/-messages$/, "")].price.toFixed(2)}`)), "price strings mirror the sibling chat tier (metered: the tier's floor)");
 ok(typeof bySlug("v1-chat-metered-messages").quote === "function" && LLM_MESSAGES_TOOLS.filter((t) => typeof t.quote === "function").length === 1, "only the metered Messages route carries a per-request quote function");
 {
   // A card on a quoted route is charged the quote grossed up for the
@@ -124,9 +124,9 @@ const fo = await nanoTool.handler({ model: "google/gemini-3.1-flash-lite", max_t
 ok(fo.content[0].text === "Hi there!" && seen.join(",") === "google/gemini-3.1-flash-lite:flex,google/gemini-3.1-flash-lite", `upstream 503 on flex walks to the same model on default (${seen.join(" -> ")})`);
 // paid-empty guard: max_tokens + no content walks on (same model's default retry skipped); chain exhausted -> 502
 seen = [];
-globalThis.fetch = async (url, init) => { const b = JSON.parse(init.body); seen.push(b.model); return { ok: true, status: 200, text: async () => JSON.stringify(reply(b.model, b.model === "google/gemini-3.1-flash-lite" ? { stop_reason: "max_tokens", content: [{ type: "thinking", thinking: "hmm" }] } : {})) }; };
+globalThis.fetch = async (url, init) => { const b = JSON.parse(init.body); seen.push(b.model + (b.effort ? `@${b.effort}` : "")); return { ok: true, status: 200, text: async () => JSON.stringify(reply(b.model, b.model === "google/gemini-3.1-flash-lite" ? { stop_reason: "max_tokens", content: [{ type: "thinking", thinking: "hmm" }] } : {})) }; };
 const pe = await nanoTool.handler({ model: "google/gemini-3.1-flash-lite", max_tokens: 64, messages: msg() }, fakeReq);
-ok(pe.content[0].text === "Hi there!" && seen.join(",") === "google/gemini-3.1-flash-lite,deepseek/deepseek-chat", `a max_tokens answer with nothing said is never served: chain walked on, same model's default retry skipped (${seen.join(" -> ")})`);
+ok(pe.content[0].text === "Hi there!" && pe.agent402_reasoning_adjusted === undefined && seen.join(",") === "google/gemini-3.1-flash-lite,google/gemini-3.1-flash-lite@minimal,deepseek/deepseek-chat", `a max_tokens answer with nothing said is never served: one same-model try at the lowest effort, then the chain walked on with the same model's default retry skipped (${seen.join(" -> ")})`);
 globalThis.fetch = async (url, init) => { const b = JSON.parse(init.body); return { ok: true, status: 200, text: async () => JSON.stringify(reply(b.model, { stop_reason: "max_tokens", content: [] })) }; };
 await nanoTool.handler({ model: "google/gemini-3.1-flash-lite", max_tokens: 64, messages: msg() }, fakeReq).then(() => ok(false, "end-to-end empty must not serve"), (e) => ok(e.statusCode === 502 && /thinking consumed it/.test(e.message), "chain empty end-to-end -> 502 (settlement cancelled)"));
 globalThis.fetch = async () => ({ ok: false, status: 503, text: async () => "busy" });
@@ -163,8 +163,11 @@ await proTool.handler({ model: "anthropic/claude-sonnet-5", max_tokens: 64, mess
   await prem.handler(prem.discovery.input, fakeReq);
   ok(sent[0]?.max_tokens === 1024 && sent[0]?.effort === "low", `premium example: effort ${sent[0]?.effort} at max_tokens ${sent[0]?.max_tokens}`);
   sent.length = 0;
-  await prem.handler({ ...prem.discovery.input, effort: "high" }, fakeReq);
-  ok(sent[0]?.effort === "high", "a buyer effort is sent as given");
+  const asGiven = await prem.handler({ ...prem.discovery.input, max_tokens: TIERS["v1-chat-premium"].defaultMaxTokens, effort: "high" }, fakeReq);
+  ok(sent[0]?.effort === "high" && asGiven.agent402_reasoning_adjusted === undefined, "a buyer effort that fits its cap is sent as given, with no adjustment field");
+  sent.length = 0;
+  const fitted = await prem.handler({ ...prem.discovery.input, effort: "high" }, fakeReq);
+  ok(sent[0]?.effort === "low" && sent[0]?.max_tokens === 1024 && JSON.stringify(fitted.agent402_reasoning_adjusted) === '{"field":"effort","requested":"high","used":"low","reason":"max_tokens"}', `a buyer effort too high for a small cap is sent at the fitted effort and disclosed (${JSON.stringify(fitted.agent402_reasoning_adjusted)})`);
   sent.length = 0;
   await prem.handler({ ...prem.discovery.input, thinking: { type: "adaptive" } }, fakeReq);
   ok(sent[0]?.effort === undefined && sent[0]?.thinking?.type === "adaptive", "a buyer thinking setting gets no injected effort");
@@ -433,7 +436,7 @@ delete process.env.OPENROUTER_API_KEY;
     seen = [];
     globalThis.fetch = async (url, init) => { const b = JSON.parse(init.body); seen.push(b); return { ok: true, status: 200, text: async () => JSON.stringify(reply(b.model)) }; };
     await premiumM.handler({ model: MODEL, max_tokens: 8192, messages: msg(fitContent), thinking: { type: "enabled", budget_tokens: 8000 } }, fakeReq);
-    ok(seen[0]?.model === MODEL && seen[0].max_tokens < 8000 && seen[0].thinking?.budget_tokens === seen[0].max_tokens - 1 && seen[0].thinking.type === "enabled", `Messages: the outbound thinking budget sits one under the clamped cap (max_tokens ${seen[0]?.max_tokens}, budget ${seen[0]?.thinking?.budget_tokens})`);
+    ok(seen[0]?.model === MODEL && seen[0].max_tokens < 8000 && seen[0].thinking?.budget_tokens === seen[0].max_tokens - Math.floor(seen[0].max_tokens / 4) && seen[0].thinking.type === "enabled", `Messages: the outbound thinking budget follows the clamped cap and leaves a quarter of it for the answer (max_tokens ${seen[0]?.max_tokens}, budget ${seen[0]?.thinking?.budget_tokens})`);
     seen = [];
     let err = null;
     try { await premiumM.handler({ model: MODEL, max_tokens: 8192, messages: msg(floorContent), thinking: { type: "enabled", budget_tokens: 8000 } }, fakeReq); } catch (e) { err = e; }

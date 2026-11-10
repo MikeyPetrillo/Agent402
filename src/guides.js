@@ -335,14 +335,17 @@ before any payment is taken, and the last column says how long to wait.
 | Unpaid price checks (a request with no payment) to priced catalog routes | ${unpaidQuoteBudgetPerHour().toLocaleString("en-US")} an hour per client address; ${(unpaidQuoteBudgetPerHour() * PAID_CLIENT_QUOTE_MULTIPLIER).toLocaleString("en-US")} an hour for the rest of the clock hour once that address settles a payment, and for ${PAID_QUOTE_TRUST_MINUTES} minutes after each paid call | 429, \`Retry-After\` until the hour turns |
 | Unpaid quotes on \`/v1/metered\` | ${METERED_UNPAID_QUOTES_PER_MIN} a minute and ${METERED_UNPAID_QUOTES_PER_HOUR.toLocaleString("en-US")} an hour per client address; past that, ${METERED_QUOTE_CREDITS_PER_CALL} more for each paid \`/v1/metered\` call from that address, used within ${PAID_QUOTE_TRUST_MINUTES} minutes, up to ${PAID_CLIENT_METERED_QUOTES_PER_MIN} a minute and ${PAID_CLIENT_METERED_QUOTES_PER_HOUR.toLocaleString("en-US")} an hour | 429, \`Retry-After: 60\` |
 | Refused payment credentials on \`/v1/metered\` | the same figures, counted once a credential is refused | 429, \`Retry-After: 60\` |
-| Payments that verified and then failed to settle, per wallet | refused at ${SETTLE_BREAKER_MAX_FAILS} in ${Math.round(SETTLE_BREAKER_WINDOW_MS / 60_000)} minutes while they are more than half of the wallet's outcomes there, or at ${SETTLE_BREAKER_HARD_MAX} whatever it settled | 429 naming when it lifts |
+| Payments that verified and then failed to settle, per wallet and per network | refused on that network at ${SETTLE_BREAKER_MAX_FAILS} in ${Math.round(SETTLE_BREAKER_WINDOW_MS / 60_000)} minutes while they are more than half of the wallet's outcomes there, or at ${SETTLE_BREAKER_HARD_MAX} whatever it settled | 429 naming the network and when it lifts (\`refusedNetwork\`, \`retryAfterSeconds\`, \`retry: "other-network"\`); the same wallet can pay on another network the route offers at once |
 | Report and media runs that failed to settle or failed after the run, per buyer | blocked for ${Math.round(COMPOSITE_GUARD.BLOCK_MS / 60_000)} minutes at ${COMPOSITE_GUARD.MAX_FAILS} in ${Math.round(COMPOSITE_GUARD.WINDOW_MS / 60_000)} minutes while they are more than ${failShareWords(COMPOSITE_GUARD.MIN_FAIL_SHARE)} of the buyer's outcomes there, or at ${COMPOSITE_GUARD.HARD_MAX_FAILS} whatever it settled | 429 without \`Retry-After\`; the block lifts on its own |
 | Unpaid requests with a body over ${Math.round(UNPAID_BODY_MAX_BYTES / 1024)} KB to a route that reads its price from the body | ${LARGE_BODY_UNPAID_PER_MIN} a minute and ${LARGE_BODY_UNPAID_PER_HOUR.toLocaleString("en-US")} an hour per client address, the same once that address has paid | 429, \`Retry-After: 60\` |
 | Concurrent runs of the report and media routes from one wallet | the wallet's balance covers every run in flight plus the new one | 429, \`Retry-After: 30\` |
 | Jobs per client address | ${ASYNC_JOBS_PER_CLIENT} running at once | 429, \`Retry-After: 30\` |
 
 An IPv6 /64 is one address. A request carrying a payment, a credits key or a
-proof-of-work solution is never counted as an unpaid price check. The report
+proof-of-work solution is never counted as an unpaid price check. On the two
+failed-settlement rows a buyer's failures count against that buyer alone. A
+Tempo sender, a credits key and a buyer keyed by address are each one key
+there, with no network to switch. The report
 and media guard keys a buyer by its signed payer, its verified Tempo sender,
 its credits key or, for any other payment, its address. Once an
 address has paid (a final 200 that settled on any rail, or a credits debit), its
@@ -512,6 +515,10 @@ answer is booked as a refund owed and repaid after on-chain proof.
   own figure as \`x402.meteredMaxInputChars\`. A body over it is refused before
   payment with code \`input_too_large\`, \`maxInputChars\`, \`inputChars\`,
   \`hint: "trim-input"\` and \`suggestions\` of models whose window takes it.
+- **Every wire.** Both refusals are answered before payment on
+  \`/v1/metered/chat/completions\`, \`/v1/metered/messages\`,
+  \`/v1/metered/responses\` and \`/v1/metered/gemini\` alike, each in the
+  error object its SDK reads, with the same fields beside it.
 - **Per-call cap.** A request quoting above $${METERED_MAX_QUOTE_USD} is refused
   with a 400 before any upstream call: lower \`max_tokens\` or the input. On
   x402 it is not charged.
@@ -1077,8 +1084,8 @@ you don't want a middleman holding your money. Agent402's payments tools are
 **non-custodial**: they help an agent move its *own* USDC with its *own* key.
 These tools never hold, sign, or send funds - they decode quotes, read public
 chain state, and build the authorization *you* sign. (Two paths elsewhere on
-the service are not non-custodial and we say so: ${creditsPrepaymentPhrase()}, and a card report purchase is held by the payment
-processor until the report is delivered.) Everything below works on
+the service are not non-custodial and we say so: ${creditsPrepaymentPhrase()}, and a card report purchase is an ordinary card
+charge, taken at checkout; if the report fails to generate, the charge is refunded to the card automatically.) Everything below works on
 **Base, Polygon, Arbitrum, Optimism and Ethereum** (\`network\` param, default
 base); \`tx-status\` and \`gas-estimate\` also read Robinhood Chain. None of it
 needs an API key.

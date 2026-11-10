@@ -345,7 +345,7 @@ export function stateFromSources(rows, { nowMs, staleAfterMs = 45 * 60_000, sour
   const sources = list
     .map((r) => {
       const bound = Object.hasOwn(sourceStaleAfterMs, r.source) ? sourceStaleAfterMs[r.source] : staleAfterMs;
-      return { source: r.source, ts: r.ts, ...stateFrom(r, { nowMs, staleAfterMs: bound }) };
+      return { source: r.source, ts: r.ts, ...stateFrom(r, { nowMs, staleAfterMs: bound }), staleAfterMs: bound };
     })
     .sort((a, b) => b.ts - a.ts);
   const view = sources.map(({ ts, ...s }) => s);

@@ -28,7 +28,7 @@ import { FREE_TIER_SLUGS } from "../src/free-tier.js";
 import { splitSteps } from "../src/plan-sketch.js";
 import { runHtml, htmlPoolState } from "../src/tools/html-pool.js";
 import { marked, headingId, MARKDOWN_INLINE_MAX_CHARS, markdownLooksCostly } from "../src/tools/markdown-render.js";
-import { runMarkdown, markdownPoolState, RENDER_DEADLINE_MS, ORDINARY_QUEUE_MAX, COSTLY_AHEAD_MAX, COSTLY_WAIT_MAX_MS } from "../src/tools/markdown-pool.js";
+import { runMarkdown, markdownPoolState, markdownPoolEvents, RENDER_DEADLINE_MS, ORDINARY_BUDGET_MS, ORDINARY_QUEUE_MAX, ORDINARY_CALLER_MAX, COSTLY_AHEAD_MAX, COSTLY_WAIT_MAX_MS } from "../src/tools/markdown-pool.js";
 import { headingId as guidesHeadingId } from "../src/guides.js";
 import { sentenceEnds, countSentenceEnds, splitOnSentenceEnds } from "../src/tools/sentence-ends.js";
 
@@ -340,6 +340,9 @@ function rng(seed) {
 // ---------------------------------------------------------------------------
 {
   const tool = KIT.find((t) => t.slug === "markdown-to-html");
+  // What the pool did, in order (read further down; recorded from its first worker on).
+  const events = [];
+  for (const type of ["spawned", "ready", "started", "ended", "moved"]) markdownPoolEvents.on(type, (e) => events.push(e));
   ok(JSON.stringify(await tool.handler(tool.discovery.input)) === JSON.stringify(tool.discovery.output.example) && /<h1 id="hi">/.test(tool.discovery.output.example.html), "markdown-to-html: the published example answers as published, heading id included");
   ok(guidesHeadingId === headingId, "markdown-to-html: the guide pages take their heading ids from the tool's renderer module");
   const blocks = ["# Title Here\n\n", "## Second: a `code` heading!\n\n", "Some *text* with **bold**, _under_ and `code`.\n\n", "- one\n- two\n  - nested\n\n", "1. first\n2. second\n\n", "> quoted\n> lines\n\n", "[a link](https://example.com \"t\") and ![img](a.png)\n\n", "| a | b |\n|---|---|\n| 1 | 2 |\n\n", "```js\nconst x = 1 < 2;\n```\n\n", "~~gone~~ and <b>html</b> &amp; entities\n\n", "---\n\n", "Line one  \nline two\\\nline three\n\n", "Unclosed *emphasis and **strong here\n\n", "- [ ] todo\n- [x] done\n\n", "Auto https://example.com/x?y=1 link.\n\n", "Setext\n======\n\n", "    indented code\n\n", "[ref]: https://example.com\n\nA [ref] here.\n\n"];
@@ -424,15 +427,155 @@ function rng(seed) {
   // first document after a stopped render meets a worker that has to start, and is served.
   const after = await tool.handler({ markdown: docOf(30_000) });
   ok(after.html.startsWith('<h1 id="title-here">'), "markdown-to-html: the next document renders after a stopped one");
-  // A render that overruns in the ORDINARY lane is not blamed on the document:
-  // 503, retryable. (The lane is named here; nothing ordinary takes the deadline.)
+  // A HELD SERVING THREAD IS NOT A SLOW RENDER. The budget is a timer on this
+  // thread: with the thread held past the budget while a fast render is in
+  // flight, the timer is due before the result (posted during the hold) has
+  // been read. The document must be answered from that render: not moved,
+  // no worker ended, none started. The hold runs in the check phase, so the
+  // next loop turn reaches the timers phase first.
+  {
+    const quick = "# T\n\n" + "Some *text* with **bold** and `code`.\n\n".repeat(4000);
+    await runMarkdown(quick, { costly: false });
+    let mark = events.length;
+    await runMarkdown(quick, { costly: false });
+    const control = events.slice(mark);
+    const renderMs = control.find((e) => e.type === "ended").at - control.find((e) => e.type === "started").at;
+    mark = events.length;
+    const movedBefore = markdownPoolState().moved;
+    let held = 0;
+    const onStart = () => {
+      markdownPoolEvents.off("started", onStart);
+      setImmediate(() => { const t = performance.now(); while (performance.now() - t < ORDINARY_BUDGET_MS + 200) { /* hold the thread */ } held = performance.now() - t; });
+    };
+    markdownPoolEvents.on("started", onStart);
+    const got = await runMarkdown(quick, { costly: false }).catch((e) => ({ err: e }));
+    await new Promise((r) => setTimeout(r, 50));
+    const since = events.slice(mark).map((e) => e.type + (e.how ? ":" + e.how : ""));
+    ok(renderMs < ORDINARY_BUDGET_MS / 2 && held > ORDINARY_BUDGET_MS, "markdown-to-html: control, the document renders in " + renderMs.toFixed(0) + "ms and the thread was held " + held.toFixed(0) + "ms, past the " + ORDINARY_BUDGET_MS + "ms budget");
+    ok(typeof got.html === "string" && since.join() === "started,ended:done" && markdownPoolState().moved === movedBefore, "markdown-to-html: a render that finished while the serving thread was held is answered from that render, not moved, with no worker ended or started (" + since.join() + ")");
+  }
+  // The costly lane's deadline is the same kind of timer. Two costly
+  // documents, the second waiting behind the first; the thread is held past
+  // the deadline while the first renders. The first is answered from its
+  // render, and its late timer must not end the second (now on the lane) or
+  // its worker.
+  {
+    const quick = "# T\n\n" + "Some *text* with **bold** and `code`.\n\n".repeat(4000);
+    await runMarkdown(quick, { costly: true });
+    await runMarkdown(quick, { costly: true });
+    const mark = events.length;
+    let held = 0;
+    const onStart = () => {
+      markdownPoolEvents.off("started", onStart);
+      setImmediate(() => { const t = performance.now(); while (performance.now() - t < RENDER_DEADLINE_MS + 300) { /* hold the thread */ } held = performance.now() - t; });
+    };
+    markdownPoolEvents.on("started", onStart);
+    const show = (p) => p.then((r) => (typeof r.html === "string" ? "200" : "no html"), (e) => e.statusCode + " " + String(e.message).slice(0, 60));
+    const [first, second] = await Promise.all([show(runMarkdown(quick, { costly: true })), show(runMarkdown(quick, { costly: true }))]);
+    await new Promise((r) => setTimeout(r, 50));
+    const since = events.slice(mark);
+    const shape = since.map((e) => e.type + (e.how ? ":" + e.how : ""));
+    ok(held > RENDER_DEADLINE_MS && first === "200", "markdown-to-html: a costly render that finished while the serving thread was held " + held.toFixed(0) + "ms, past the " + RENDER_DEADLINE_MS / 1000 + " s deadline, is answered from that render (" + first + ")");
+    ok(second === "200" && shape.join() === "started,ended:done,started,ended:done" && new Set(since.map((e) => e.worker)).size === 1, "markdown-to-html: the costly document waiting behind it is rendered by the same worker, not ended by the first one's late timer (" + second + "; " + shape.join() + ")");
+  }
+  // THE ORDINARY BUDGET. Whatever the estimate said, a render that started as
+  // ordinary holds its worker for the budget at most; then it moves to the
+  // costly lane and ends there. Timing below is read from the pool's own
+  // events (started, ended, moved), so a busy runner changes little of it.
+  const overrunMark = events.length;
+  const startOf = (e) => events.find((x) => x.type === "started" && x.job === e.job && x.worker === e.worker);
   const overrun = await loopHold(() => runMarkdown("*a ".repeat(30_000), { costly: false }));
-  ok(overrun.err?.statusCode === 503 && /retry/.test(overrun.err.message), "markdown-to-html: an overrun in the ordinary lane answers 503, retryable (" + overrun.err?.statusCode + " " + overrun.err?.message + ")");
+  const movedOne = events.slice(overrunMark).find((e) => e.type === "moved");
+  const restarted = events.find((e) => e.type === "started" && e.costly && e.job === movedOne?.job);
+  ok(movedOne?.admitted === true && restarted && restarted.lane === 1, "markdown-to-html: a render past the ordinary budget moves to the costly lane and starts again there (" + JSON.stringify(movedOne) + ")");
+  ok(overrun.err?.statusCode === 400 && new RegExp(RENDER_DEADLINE_MS / 1000 + " s").test(overrun.err.message) && overrun.ms > RENDER_DEADLINE_MS, "markdown-to-html: the moved document ends as the costly lane ends it, a 400 naming the " + RENDER_DEADLINE_MS / 1000 + " s deadline (" + overrun.err?.statusCode + " after " + overrun.ms.toFixed(0) + "ms)");
   ok(overrun.hold < BOUND_MS, "markdown-to-html: a 90,000-character run of unclosed emphasis holds the event loop " + overrun.hold.toFixed(0) + "ms");
+  // One caller's share of the ordinary room: 200 documents handed over in one
+  // turn by one client address, and another address beside it.
+  {
+    const mine = Array.from({ length: 200 }, () => tool.handler({ markdown: docOf(3000) }, { ip: "198.51.100.20" }).then(() => 200, (e) => (e.statusCode === 503 && e.retryAfter === 5 && e.shed === true ? 503 : "other " + e.message)));
+    const waitingThen = markdownPoolState().queuedOrdinary;
+    const other = tool.handler({ markdown: docOf(3000) }, { ip: "198.51.100.21" }).then(() => 200, (e) => e.statusCode);
+    const t = (await Promise.all(mine)).reduce((m, x) => (m[x] = (m[x] || 0) + 1, m), {});
+    ok(waitingThen === ORDINARY_CALLER_MAX && t[200] >= ORDINARY_CALLER_MAX && t[200] <= ORDINARY_CALLER_MAX + 2 && t[503] === 200 - t[200], "markdown-to-html: one client address holds at most " + ORDINARY_CALLER_MAX + " places in the ordinary room (" + waitingThen + " waiting of 200 at once: " + JSON.stringify(t) + ")");
+    ok((await other) === 200, "markdown-to-html: another client address is admitted and served while that one is at its share");
+  }
+  // Documents the estimate reads as ordinary and the renderer takes many
+  // seconds over. Six of them in flight from one client address; a
+  // 5,000-character document from another address is served next.
+  const misUnits = ["*a *b c* ", "*a ", "~a ~b c~ "];
+  const mis = misUnits.map((u) => fill(u, 99_000));
+  ok(mis.every((m) => !markdownLooksCostly(m)), "markdown-to-html: " + misUnits.length + " slow shapes the estimate reads as ordinary (the budget, not the estimate, bounds them)");
+  const outcome = (p) => p.then(() => "200", (e) => (e.statusCode === 400 && /took longer than 10 s/.test(e.message) ? "400" : e.statusCode === 503 && e.retryAfter === COSTLY_WAIT_MAX_MS / 1000 && e.shed === true ? "503 retry" : "other " + e.statusCode + " " + e.message));
+  const inFlight = [];
+  let behind = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const ipSlow = "203.0.113." + (10 + attempt), ipLegit = "198.51.100." + (40 + attempt);
+    for (let i = 0; i < 6; i++) inFlight.push(outcome(tool.handler({ markdown: mis[i % mis.length] }, { ip: ipSlow })));
+    await new Promise((r) => setTimeout(r, 50));
+    const mark = events.length, t = performance.now();
+    const got = await tool.handler({ markdown: docOf(5000) }, { ip: ipLegit }).then((r) => (r.html.startsWith("<h1 id=") ? 200 : 0), (e) => e.statusCode + " " + e.message);
+    const ms = performance.now() - t;
+    const mine = events.findIndex((e, k) => k >= mark && e.type === "started" && e.caller === ipLegit);
+    // Ordinary renders of the six that started after this document was waiting and before it did.
+    const ahead = events.slice(mark, mine < 0 ? undefined : mine).filter((e) => e.type === "started" && !e.costly && e.caller === ipSlow).length;
+    const r = { got, ms, ahead, attempt };
+    if (!behind || (r.got === 200 && r.ms < behind.ms)) behind = r;
+    if (behind.got === 200 && behind.ms < 2 * ORDINARY_BUDGET_MS && behind.ahead === 0) break;
+  }
+  ok(behind.got === 200 && behind.ms < 2 * ORDINARY_BUDGET_MS, "markdown-to-html: with six such documents in flight, a 5,000-character document answers " + behind.got + " in " + behind.ms.toFixed(0) + "ms (bound " + 2 * ORDINARY_BUDGET_MS + "ms)");
+  ok(behind.ahead === 0, "markdown-to-html: none of the six started ahead of it once it was waiting (" + behind.ahead + ")");
+  // 100 ordinary documents from ten addresses while 40 slow ones from one
+  // address are in flight: every ordinary one is served, and soon.
+  {
+    for (let i = 0; i < 40; i++) inFlight.push(outcome(tool.handler({ markdown: mis[i % mis.length] }, { ip: "203.0.113.99" })));
+    await new Promise((r) => setTimeout(r, 50));
+    const mark = events.length, t = performance.now();
+    const burst2 = await Promise.all(Array.from({ length: 100 }, (_, i) => tool.handler({ markdown: docOf(5000 + i * 450) }, { ip: "198.51.100." + (60 + (i % 10)) }).then((r) => (r.html.startsWith("<h1 id=") ? 200 : 0), (e) => e.statusCode + " " + e.message)));
+    const ms = performance.now() - t;
+    const tally2 = burst2.reduce((m, x) => (m[x] = (m[x] || 0) + 1, m), {});
+    const slowStarts = events.slice(mark).filter((e) => e.type === "started" && !e.costly && e.caller === "203.0.113.99").length;
+    ok(tally2[200] === 100 && ms < RENDER_DEADLINE_MS, "markdown-to-html: with 40 slow documents in flight, 100 documents of 5,000 to 50,000 characters all answer 200 (" + JSON.stringify(tally2) + " in " + ms.toFixed(0) + "ms)");
+    ok(slowStarts <= 2, "markdown-to-html: " + slowStarts + " of the 40 started in the ordinary lane while the 100 were waiting");
+  }
+  const outcomes = (await Promise.all(inFlight)).reduce((m, x) => (m[x] = (m[x] || 0) + 1, m), {});
+  ok(Object.keys(outcomes).every((k) => k === "200" || k === "400" || k === "503 retry") && (outcomes["400"] || 0) + (outcomes["200"] || 0) >= COSTLY_AHEAD_MAX, "markdown-to-html: every slow document ends as the costly lane ends it: rendered, a 400 naming its deadline, or a 503 with Retry-After when that lane's room is full (" + JSON.stringify(outcomes) + ")");
+  // No ordinary render held a worker past the budget (three times it allows
+  // for a late timer), and every one past it moved.
+  const ordinaryRuns = events.filter((e) => e.type === "ended" && startOf(e) && !startOf(e).costly).map((e) => ({ how: e.how, ms: e.at - startOf(e).at }));
+  const longest = Math.max(...ordinaryRuns.map((r) => r.ms));
+  const movedCount = events.filter((e) => e.type === "moved").length;
+  ok(ordinaryRuns.length > 100 && longest < 3 * ORDINARY_BUDGET_MS && movedCount >= 41 && ordinaryRuns.filter((r) => r.how === "moved").length === movedCount, "markdown-to-html: the longest of " + ordinaryRuns.length + " ordinary renders held its worker " + longest.toFixed(0) + "ms against a budget of " + ORDINARY_BUDGET_MS + "ms; " + movedCount + " moved");
+  // The ordinary lane has a started worker the moment one is ended: the
+  // render after each move ran on a worker that was ready before the move.
+  {
+    let after = 0, warm = 0;
+    events.forEach((e, k) => {
+      if (e.type !== "moved" || e.lane !== 0) return;
+      const next = events.slice(k).find((x) => x.type === "started" && x.lane === 0);
+      if (!next) return;
+      after++;
+      if (events.some((x) => x.type === "ready" && x.worker === next.worker && x.at < e.at)) warm++;
+    });
+    ok(after >= 20 && warm === after, "markdown-to-html: after " + after + " moves out of the ordinary lane, the next render there ran on a worker started beforehand " + warm + " times");
+  }
+  // A document that is only slow is still served: 100,000 characters of
+  // unfenced C source, with the costly lane free (up to five attempts: a
+  // busy runner can stretch one render past the deadline).
+  {
+    const big = fill("int *p = &x; char **argv; a = b * c; /* comment */ x_y = *ptr * 2;\n", 100_000);
+    let got;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const t = performance.now();
+      got = await tool.handler({ markdown: big }, { ip: "198.51.100.90" }).then((r) => "200 in " + (performance.now() - t).toFixed(0) + "ms", (e) => e.statusCode + " " + e.message);
+      if (got.startsWith("200")) break;
+    }
+    ok(got.startsWith("200"), "markdown-to-html: 100,000 characters of unfenced C source answer " + got);
+  }
   const quotes = await tool.handler({ markdown: "> ".repeat(45_000) }).then(() => null, (e) => e);
   ok(quotes?.statusCode === 400, "markdown-to-html: 45,000 quote levels answer 400 (" + quotes?.statusCode + " " + quotes?.message + ")");
   const st = markdownPoolState();
-  ok(st.queuedOrdinary === 0 && st.queuedCostly === 0 && st.ordinaryQueueMax === 512 && st.costlyAheadMax === COSTLY_AHEAD_MAX, "markdown-to-html: both waiting rooms are empty afterwards");
+  ok(st.queuedOrdinary === 0 && st.queuedCostly === 0 && st.ordinaryQueueMax === 512 && st.costlyAheadMax === COSTLY_AHEAD_MAX && st.ordinaryBudgetMs === 1000 && st.ordinaryCallerMax === 128, "markdown-to-html: both waiting rooms are empty afterwards");
 }
 
 // ---------------------------------------------------------------------------

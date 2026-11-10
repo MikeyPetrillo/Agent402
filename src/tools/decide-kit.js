@@ -1116,7 +1116,9 @@ export function buildDecideTools({ getCatalog, ledger = openDecideLedger(), now 
       category: "agent",
       price: `$${priceForDepth("plan").toFixed(3)}`,
       quote: (body) => decideQuoteUsd(body),
-      // Quoted by depth: the listed price is the default depth (plan), the ceiling is full.
+      // Quoted by depth: the listed price is the default depth (plan), the
+      // floor is the cheapest depth and the ceiling is full.
+      quoteMinUsd: Math.min(...DEPTHS.map((d) => priceForDepth(d))),
       quoteMaxUsd: priceForDepth("full"),
       description: decideDescription(),
       tags: ["agents", "routing", "planning", "discovery", "x402"],

@@ -155,12 +155,17 @@ export function evidencePayToVerdict({ evidence, livePayTo, minSettled = 50, min
  * Router-internal: these rows come from the facilitator catalog, not the
  * index, so the verdict travels in the router's drop counts and log, never on
  * an /api/index row (hence `verdict`, not a DISPATCH_REASONS `reason`).
+ *
+ * The verdicts:
+ * - proof_payto_bound: the live 402's payTo is held to the address the
+ *   settlement proof was counted at.
+ * - proof_payto_conflict: our crawl and the facilitator record name different
+ *   receiving addresses for this route, so no single address carries its
+ *   proof; not dispatched.
+ * - proof_payto_unbound: the settlement proof for this route names no
+ *   receiving address, so the address a live 402 asks us to pay cannot be
+ *   held to it; not dispatched (Algorand has no unproven lane).
  */
-export const ALGORAND_PROOF_VERDICTS = Object.freeze({
-  proof_payto_bound: "the live 402's payTo is held to the address the settlement proof was counted at",
-  proof_payto_conflict: "our crawl and the facilitator record name different receiving addresses for this route, so no single address carries its proof; not dispatched",
-  proof_payto_unbound: "the settlement proof for this route names no receiving address, so the address a live 402 asks us to pay cannot be held to it; not dispatched (Algorand has no unproven lane)",
-});
 const algoAddr = (a) => (typeof a === "string" && /^[A-Z2-7]{58}$/.test(a) ? a : null);
 export function algorandProofBinding(row = {}) {
   const crawled = row?.source === "crawl" || row?.source === "both" ? algoAddr(row.payTo) : null;

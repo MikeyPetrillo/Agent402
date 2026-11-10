@@ -21,7 +21,13 @@ import { getFreePorts } from "./lib/free-port.js";
 const [PORT, FAC_PORT] = await getFreePorts(2);
 const B = `http://127.0.0.1:${PORT}`;
 const OP_TOKEN = "idempotency-test-operator-token-0123456789";
-const IDEM_TTL_MS = 4000; // shortened so the past-window case can be run
+// Shortened so the past-window case can be run. Every replay below is a first
+// answer and its copy sent back to back, and both must land inside this
+// window: at 4 s a host busy enough to put four seconds between two requests
+// read as a replay that was not served. The past-window case waits out the
+// window from the first answer, so the longer window costs it nothing but
+// the wait.
+const IDEM_TTL_MS = 12_000;
 let facilitator = null;
 const fail = (m) => { console.error("FAIL:", m); for (const l of serverLog.slice(-20)) console.error("  server:", l); proc.kill("SIGKILL"); facilitator?.close(); process.exit(1); };
 const lz = (b) => { let t = 0; for (const x of b) { if (!x) { t += 8; continue; } t += Math.clz32(x) - 24; break; } return t; };
@@ -71,7 +77,9 @@ proc.stdout.on("data", keepLog); proc.stderr.on("data", keepLog);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 try {
-  for (let i = 0; i < 120; i++) { try { if ((await fetch(`${B}/api/pow`)).ok) break; } catch {} await sleep(500); }
+  let up = false;
+  for (let i = 0; i < 360 && !up; i++) { try { up = (await fetch(`${B}/api/pow`)).ok; } catch {} if (!up) await sleep(500); }
+  if (!up) fail("the server did not answer /api/pow within 180 s of its start");
 
   const powFor = async () => { const c = await (await fetch(`${B}/api/pow/challenge?slug=hash`)).json(); return `${c.token}:${solve(c)}`; };
   const hash = (sol, idem) => fetch(`${B}/api/hash`, {
@@ -261,6 +269,7 @@ try {
   // with no verify and no settle.
   const copy = await pay(TOOL, cred1);
   const copyBody = await copy.text();
+  const firstAnsweredBy = Date.now(); // the stored answer is no younger than this
   ok(copy.status === 200 && replayed(copy) && copy.headers.get("x-idempotent-replay") === "true" && copyBody === firstBody && settles === 1 && verifies === 1,
     `the re-sent payment is answered from the first answer with X-Replayed-Answer: 1, no verify, no settle (status ${copy.status}, verifies ${verifies}, settles ${settles})`);
   ok(/no-store/.test(copy.headers.get("cache-control") || ""), "the replayed answer is still no-store");
@@ -299,15 +308,20 @@ try {
   const memCopy = await pay("/api/memory", cred3, { method: "POST", body: memBody });
   ok(memCopy.status !== 200 && !replayed(memCopy), `its re-sent copy is not served from the store (got ${memCopy.status})`);
   // f. Past the store's window the first payment is no longer replayed.
-  await sleep(IDEM_TTL_MS + 600);
+  await sleep(Math.max(0, firstAnsweredBy + IDEM_TTL_MS + 600 - Date.now()));
   const late = await pay(TOOL, cred1);
   ok(late.status !== 200 && !replayed(late) && settles === 3, `a copy re-sent after the window is not served from the store (got ${late.status}, settles ${settles})`);
   // g. The sale is booked once per settled payment: three settles, three usdc
   // sales (the PoW calls above are usage rows on their own rail), none for
   // the replays.
+  // Waited for with a deadline, then read once more after a pause: a sale
+  // booked for a replay would arrive after the three.
+  const usdcSales = async () => (await opJson("/__operator/sales.json")).totals?.byRail?.["external:usdc"] ?? 0;
   let sales = -1;
-  for (let i = 0; i < 30 && sales !== settles; i++) { sales = (await opJson("/__operator/sales.json")).totals?.byRail?.["external:usdc"] ?? 0; if (sales !== settles) await sleep(100); }
-  ok(sales === 3, `the sales ledger holds one usdc sale per settled payment and none for a replay (sales ${sales}, settles ${settles})`);
+  for (const until = Date.now() + 20_000; sales !== settles && Date.now() < until;) { sales = await usdcSales(); if (sales !== settles) await sleep(100); }
+  await sleep(300);
+  const salesAfter = await usdcSales();
+  ok(sales === 3 && salesAfter === 3, `the sales ledger holds one usdc sale per settled payment and none for a replay (sales ${sales}, then ${salesAfter}; settles ${settles})`);
   // h. Replays are counted per slug on the operator detail: one implicit, one keyed.
   const tf = await opJson("/__operator/tool-failures.json");
   const row = (tf.replays || []).find((r) => r.slug === "demand-radar");

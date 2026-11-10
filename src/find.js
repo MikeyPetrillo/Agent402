@@ -104,6 +104,95 @@ export function applyFrontDoorTerms(terms, q) {
  */
 // Most rows one /api/find answer carries, and the default when none is asked
 // for. Published on every answer so the ceiling is never read as the match count.
+// CONVERSION DIRECTION. "convert markdown to pdf" names a source and a
+// target; a tool named pdf-to-markdown shares every word and does the
+// opposite. The words around each "to" / "into" (source before, target
+// after) and each "from" (target before, source after) are candidate pairs:
+// up to two kept terms on each side, stopping at the next direction word.
+// A pair only ever matters when some tool's own name states it reversed, so
+// "want to convert" or "how to" produce pairs that match nothing.
+const DIRECTION_WORDS = new Set(["to", "into", "from"]);
+export function conversionPairs(q, terms) {
+  const kept = new Set(terms);
+  const pairs = [];
+  // One clause at a time: a pair never spans a sentence or a parenthesis.
+  for (const clause of String(q || "").toLowerCase().split(/[.;:!?()\n]+/).slice(0, 16)) {
+    const tokens = clause.split(/[^\p{L}\p{N}]+/u).filter(Boolean).slice(0, 96);
+    // Up to two kept terms walking away from i, and the direction word that ended the walk.
+    const side = (i, step) => {
+      const out = [];
+      let j = i + step;
+      for (; j >= 0 && j < tokens.length && out.length < 2; j += step) {
+        if (DIRECTION_WORDS.has(tokens[j])) return { out, stop: tokens[j] };
+        if (kept.has(tokens[j])) out.push(tokens[j]);
+      }
+      return { out, stop: tokens[j] && DIRECTION_WORDS.has(tokens[j]) ? tokens[j] : null };
+    };
+    for (let i = 0; i < tokens.length && pairs.length < 8; i++) {
+      if (!DIRECTION_WORDS.has(tokens[i])) continue;
+      const before = side(i, -1), after = side(i, 1);
+      if (!before.out.length || !after.out.length) continue;
+      if (tokens[i] !== "from") pairs.push({ from: before.out, to: after.out });
+      // "from X to Y" is the "to" pair; only a bare "Y from X" reads the other way round.
+      else if (after.stop !== "to" && after.stop !== "into") pairs.push({ from: after.out, to: before.out });
+    }
+  }
+  return pairs;
+}
+// The directions a tool's own names state: its slug ("pdf-to-markdown"), its
+// name ("PDF to Markdown", "Text-to-speech") and its aliases, each read as
+// hyphenated words and split once on "to".
+let statedReads = 0;
+/** Test seam: how many times a tool's names were read for their stated directions. */
+export function _statedDirectionReads() { return statedReads; }
+function readStatedDirections(t) {
+  statedReads++;
+  const out = [];
+  const add = (text) => {
+    const parts = String(text || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").split("-to-");
+    if (parts.length !== 2) return;
+    const [l, r] = parts.map((x) => new Set(x.split("-").filter(Boolean)));
+    if (l.size && r.size) out.push([l, r]);
+  };
+  add(t.slug);
+  add(t.name);
+  for (const al of t.aliases || []) add(al);
+  return out;
+}
+// Read once per catalog entry, not once per scored tool per query. The key is
+// the entry object the catalog holds (findTools scores a fresh copy of each
+// entry on every query, so the copy itself is never seen twice). The slug,
+// name and aliases the value was read from are kept beside it and compared on
+// every use, so an entry whose names or aliases change (replaced, or edited
+// in place) is read again.
+const statedMemo = new WeakMap();
+function statedDirections(t, entry) {
+  const al = t.aliases;
+  const keyed = entry !== null && typeof entry === "object" && (al == null || Array.isArray(al));
+  if (!keyed) return readStatedDirections(t);
+  const m = statedMemo.get(entry);
+  if (m && m.slug === t.slug && m.name === t.name && m.aliases.length === (al ? al.length : 0)) {
+    let same = true;
+    for (let i = 0; i < m.aliases.length; i++) if (m.aliases[i] !== al[i]) { same = false; break; }
+    if (same) return m.out;
+  }
+  const out = readStatedDirections(t);
+  statedMemo.set(entry, { slug: t.slug, name: t.name, aliases: al ? al.slice() : [], out });
+  return out;
+}
+/** "reverse" when the tool's names state a pair backwards and never forwards, "forward" when one states it as asked, else null. */
+function directionOf(t, pairs, entry) {
+  let reverse = null;
+  for (const [l, r] of statedDirections(t, entry)) {
+    for (const p of pairs) {
+      if (p.from.some((x) => l.has(x)) && p.to.some((x) => r.has(x))) return { way: "forward" };
+      const to = p.to.find((x) => l.has(x)), from = p.from.find((x) => r.has(x));
+      if (to && from && !reverse) reverse = { way: "reverse", from, to };
+    }
+  }
+  return reverse;
+}
+
 export const FIND_TOP_MAX = 25;
 export const FIND_TOP_DEFAULT = 5;
 
@@ -232,6 +321,9 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
   }
 
   const termSet = new Set(terms);
+  // Empty for a query that names no direction, so the passes below cost nothing.
+  const pairs = conversionPairs(q, terms);
+  const wayOf = new Map(); // slug -> { way, from, to }, only for tools that state one of the pairs
   const scored = [];
   for (const e of all) {
     const { t, slug, name, tagSet, hay, aliasWords } = e;
@@ -269,11 +361,18 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
       if (hay.includes(term)) s += 1;
       score += s * idf.get(term);           // weight by how much the term narrows things
     }
-    if (score > 0) scored.push([score, t, directionScore(slug)]);
+    if (score > 0) {
+      scored.push([score, t, directionScore(slug)]);
+      if (pairs.length) { const d = directionOf(t, pairs, catalog[t.route]); if (d) wayOf.set(t.slug, d); }
+    }
   }
-  // Highest score first; then more in-order term pairs win (directional intent);
+  const reversed = (t) => wayOf.get(t.slug)?.way === "reverse";
+  // A tool whose own name states the query's direction backwards ranks below
+  // every tool that does not, whatever it scored on the shared words; then
+  // highest score first; then more in-order term pairs win (directional intent);
   // then shorter slug (more specific); then alpha for full determinism.
   scored.sort((a, b) =>
+    (reversed(a[1]) ? 1 : 0) - (reversed(b[1]) ? 1 : 0) ||
     b[0] - a[0] ||
     b[2] - a[2] ||
     a[1].slug.length - b[1].slug.length ||
@@ -314,6 +413,8 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
       score,
       computePayable: powSlugs ? powSlugs.has(t.slug) : undefined,
       docs: baseUrl ? `${baseUrl}/tools/${t.slug}` : undefined,
+      // This tool's name states the opposite conversion to the one asked for.
+      ...(reversed(t) ? { reversed: true } : {}),
     };
   });
   // Cross-surface: also recommend the matching skill pack(s) so an agent asking
@@ -395,6 +496,28 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
     }
   }
 
+  // A stated direction that only a reversed tool matches. When some tool's
+  // name states the opposite conversion, none states the one asked for, and
+  // the top result does not mention both the source and the target, no tool
+  // here converts that way: the answer says so in `direction.served` and
+  // reads as a miss (rarestTermCovered false is the one switch every caller
+  // of this function already reads to mark the rows weak and record the need).
+  let direction = null;
+  const firstReversed = scored.find((x) => reversed(x[1]));
+  if (firstReversed && results.length) {
+    const { from, to } = wayOf.get(firstReversed[1].slug);
+    const forward = scored.some((x) => wayOf.get(x[1].slug)?.way === "forward");
+    const top = all.find((e) => e.t.slug === results[0].slug);
+    const mentions = (term) => !!top && (top.slug.includes(term) || top.hay.includes(term) || top.tagSet.has(term));
+    // Without a tool named for the direction, the top result still serves it
+    // when it mentions both ends (a general converter, a tool whose name
+    // does not spell the direction out): a tool that may do the task is
+    // never marked as a miss.
+    const served = forward || (!reversed(results[0]) && mentions(from) && mentions(to));
+    direction = { from, to, served, reversed: scored.filter((x) => reversed(x[1])).slice(0, 5).map((x) => x[1].slug) };
+    if (!served) rarestTermCovered = false;
+  }
+
   return {
     query: String(query),
     // `count` is what this answer CARRIES. It read as "this is how many tools
@@ -412,6 +535,7 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
     rarestTermCovered,
     ...(coverageShare != null ? { coverageShare: Math.round(coverageShare * 100) / 100 } : {}),
     ...(Object.keys(corrected).length ? { corrected } : {}),
+    ...(direction ? { direction } : {}),
   };
 }
 

@@ -16,6 +16,7 @@
 //   node scripts/test-seller-dossier.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
+import { leastOurs } from "./lib/ours-clock.js";
 import { buildSellerDossierTool, composeSellerDossier, hostOf } from "../src/tools/seller-dossier.js";
 import { buildEvidenceBinding } from "../src/evidence-binding.js";
 import { routerLanes } from "../src/router-lanes.js";
@@ -357,10 +358,9 @@ check("hostOf is linear on a pathological input", () => {
   assert.equal(hostOf("a.b/c"), "a.b");
   assert.equal(hostOf(""), "");
   assert.equal(hostOf(null), "");
-  const t = Date.now();
-  hostOf("/".repeat(200_000));
-  const ms = Date.now() - t;
-  assert.ok(ms < 250, `200k slashes took ${ms}ms`);
+  // Synchronous, so read as the time the thread had a core, least of three.
+  const { ms } = leastOurs(() => hostOf("/".repeat(200_000)), { giveUp: 2000 });
+  assert.ok(ms < 250, `200k slashes took ${ms.toFixed(1)}ms`);
 });
 
 // A LOADING INDEX IS A FACT ABOUT US, NOT ABOUT THE SELLER.

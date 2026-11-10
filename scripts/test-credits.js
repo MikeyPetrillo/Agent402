@@ -11,6 +11,8 @@ import { rmSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import express from "express";
+import { fullAnswerMiddleware } from "../src/full-answer.js";
+import { rawGet } from "./lib/raw-get.js";
 import { paymentRequiredBodyMiddleware, PAYMENT_REQUIRED_OFFER_KEYS } from "../src/payment-required-body.js";
 
 const DIR = join("/tmp", `test-credits-${process.pid}`);
@@ -506,6 +508,40 @@ try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
   r.statusCode = 200; r.emit("finish");
   const d = debits.slice(before).at(-1);
   ok(went && d?.slug === "whois" && d?.via === "agent402-client/0.8.21", `a credits debit carries the sale path (${JSON.stringify(d)})`);
+}
+// A GET with If-None-Match: * behind the full-answer seam (the order the
+// server mounts them in, src/full-answer.js): a full 200, debited once. The
+// same request without the seam is the control: an empty 304, hold released.
+for (const seam of [true, false]) {
+  const app = express();
+  if (seam) app.use(fullAnswerMiddleware((path) => path === "/api/whois"));
+  app.use(cr.gate(priceFor));
+  // The handler's own finish listener is added after the gate's, so it runs
+  // once the gate has seen the response end.
+  let ended = () => {};
+  const endedP = new Promise((resolve) => { ended = resolve; });
+  app.get("/api/whois", (req, r) => { r.once("finish", () => ended(true)); r.status(200).json({ served: true }); });
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise((r) => server.once("listening", r));
+  const before = cr.balance(KEY), debitsBefore = debits.length;
+  const r = await rawGet(`http://127.0.0.1:${server.address().port}/api/whois`, { authorization: `Bearer ${KEY}`, "if-none-match": "*" });
+  const text = r.body;
+  // The outcome is waited for, with a deadline: the response has ended and
+  // the hold is decided (debited behind the seam, released without it). Then
+  // a pause, and a second read confirms nothing more followed it.
+  const DEADLINE_MS = 5000, t0 = Date.now();
+  const sawEnd = await Promise.race([endedP, new Promise((resolve) => setTimeout(() => resolve(false), DEADLINE_MS))]);
+  const outcome = () => cr.balance(KEY).heldUsd === before.heldUsd && debits.length === debitsBefore + (seam ? 1 : 0);
+  while (sawEnd && !outcome() && Date.now() - t0 < DEADLINE_MS) await new Promise((done) => setTimeout(done, 5));
+  const decided = sawEnd && outcome();
+  const settled = cr.balance(KEY), debitsSettled = debits.length;
+  await new Promise((done) => setTimeout(done, 100));
+  server.close();
+  const after = cr.balance(KEY);
+  const quiet = after.balanceUsd === settled.balanceUsd && after.heldUsd === settled.heldUsd && debits.length === debitsSettled;
+  const spent = usdToMicro(before.balanceUsd) - usdToMicro(after.balanceUsd);
+  if (seam) ok(decided && quiet && r.status === 200 && JSON.parse(text).served === true && spent === 1000 && after.heldUsd === before.heldUsd && debits.length === debitsBefore + 1, `with the full-answer seam a conditional GET is a full 200, debited once, and nothing follows the debit (status ${r.status}, spent ${spent} micro, decided ${decided} in ${Date.now() - t0 - 100} ms, quiet ${quiet})`);
+  else ok(decided && quiet && r.status === 304 && text === "" && spent === 0 && after.heldUsd === before.heldUsd && debits.length === debitsBefore, `control: without the seam the same request is an empty 304 and the hold is released, with no debit after it (status ${r.status}, spent ${spent} micro, decided ${decided}, quiet ${quiet})`);
 }
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -89,6 +89,11 @@ regexes = [
   # a 40-hex address is not a credential and the capture is a prefix of a known
   # public value, pinned exactly. Surfaced 2026-09-18 when lines above it moved.
   '''0xe15fc38f6d8c56af07bbcbe3baf5708a2bf423''',
+  # scripts/test-worker-isolation.js: the planted fake provider key as first
+  # committed (2026-11-10), before it took the LEAKCANARY convention; a
+  # fixture with no live counterpart, kept only so the full-history scan stays
+  # clean. Pinned exactly.
+  '''^sk-planted-0123456789$''',
   # The leak-guard test's own canary tokens (e.g. fredv2-LEAKCANARY0000).
   '''LEAKCANARY''',
   # Placeholders, not credentials: the Bing sitemap test's stub key and the

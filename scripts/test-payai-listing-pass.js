@@ -20,6 +20,7 @@ import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
+import { isHost } from "./lib/url-host.js";
 
 let n = 0;
 const ok = (c, m) => { n++; assert.ok(c, m); console.log(`ok - ${m}`); };
@@ -594,7 +595,7 @@ const cov = coverageFor({ pricing, payaiItems: [{ resource: "https://agent402.to
     const kept = await fetchMemory({ repo: "o/r", token: "tok", outDir: out, now: nowMs, fetchImpl: f, unzip: (zip, dir) => { unzipped.push(dir); writeFileSync(join(dir, "pass.json"), "{}"); }, log: () => {} });
     ok(kept === 4 && unzipped.length === 4, `four artifacts kept (spend.yml and the retired files alike); the one whose run is another workflow is ignored (${kept})`);
     ok(calls.filter((c) => /actions\/artifacts\?name=/.test(c.url)).length === 3, "the artifacts are listed by each of the three names");
-    ok(calls.filter((c) => c.url.startsWith("https://blob.test")).every((c) => !c.auth) && calls.filter((c) => /\/zip$/.test(c.url)).every((c) => c.redirect === "manual" && c.auth), "the zip is fetched with the token, the redirect target without it");
+    ok(calls.filter((c) => isHost(c.url, "blob.test")).every((c) => !c.auth) && calls.filter((c) => /\/zip$/.test(c.url)).every((c) => c.redirect === "manual" && c.auth), "the zip is fetched with the token, the redirect target without it");
     let failed = false;
     try { await fetchMemory({ repo: "o/r", token: "tok", outDir: out, now: nowMs, fetchImpl: async () => new Response("", { status: 403 }), unzip: () => {}, log: () => {} }); } catch { failed = true; }
     ok(failed, "an API refusal is an error, so the job stops before the spending step");

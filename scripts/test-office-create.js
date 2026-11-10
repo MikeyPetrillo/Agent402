@@ -22,6 +22,7 @@
 //
 //   node scripts/test-office-create.js
 import "./lib/offline-stores.js";
+import { oursMs } from "./lib/ours-clock.js";
 import { spawn } from "node:child_process";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -439,9 +440,11 @@ await refuses(() => finish(Buffer.alloc(11), 10), 422, /cap outputBytes/, "outpu
 // ----------------------------------------------------------------------------
 // The repo's stall bound (scripts/test-redos-free-tier.js REDOS_BOUND_MS).
 const STALL_BOUND_MS = Number(process.env.REDOS_BOUND_MS) || 250;
+// A gap is read on the ours clock: the smaller of its wall length and the
+// time the thread had a core inside it (scripts/lib/ours-clock.js).
 function lagMonitor() {
-  let max = 0, last = performance.now();
-  const t = setInterval(() => { const now = performance.now(); max = Math.max(max, now - last - 5); last = now; }, 5);
+  let max = 0, last = performance.now(), lastOurs = oursMs();
+  const t = setInterval(() => { const now = performance.now(), c = oursMs(); max = Math.max(max, Math.min(now - last - 5, c - lastOurs)); last = now; lastOurs = c; }, 5);
   return () => { clearInterval(t); return max; };
 }
 const largest = {

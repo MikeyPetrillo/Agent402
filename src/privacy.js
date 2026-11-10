@@ -6,6 +6,7 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { REPO_URL, repoUrl } from "./repo-link.js";
 import { DEFAULTS as TRAFFIC_DEFAULTS } from "./traffic-classifier.js";
 import { backupKeepDays } from "./backup.js";
+import { KEEP_DAYS as DISCOVERY_REFUSALS_KEEP_DAYS } from "./discovery-refusals.js";
 import { WISH_STALE_DAYS, wishRetentionDays } from "./wish.js";
 import { auditRetentionDays, AUDIT_SWEEP_MS } from "./memory-retention.js";
 import { ADDRESS_MAX_AGE_MS, MAX_SEND_FAILURES, RECORD_KEEP_MS } from "./followups.js";
@@ -16,6 +17,9 @@ import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { SHARE_TTL_DAYS, TOMBSTONE_DAYS, answerShareEnabled, sharePagesMayBeLive } from "./answer-share.js";
 import { firstCallAllowanceEnabled } from "./first-call-allowance.js";
 import { directUpstreamPrivacyText, directUpstreamThirdPartyText, directUpstreamLocationText, withDirectUpstreamDate } from "./gateway-direct-upstream.js";
+import { taskRetentionPublic } from "./mcp-tasks.js";
+import { oneHopPublicBounds } from "./sanctions-screen.js";
+import { endedRecordRetentionPublic } from "./mpp-subscription-retention.js";
 import { publicIndexPrivacyText, publicIndexNoSaleText, withPublicIndexDate, PUBLIC_INDEX_ANCHOR } from "./facilitator-public-index.js";
 const DAYS = (ms) => Math.round(ms / 86_400_000);
 export function privacyPage(baseUrl) {
@@ -26,6 +30,13 @@ export function privacyPage(baseUrl) {
   // surface reads (src/gateway-nanopayments.js): its sentence and the scoping
   // of the on-chain sentences appear only while it is offered.
   const gatewayBatched = !!gatewayOfferPublic();
+  // Job and task results, and the funding screen's bounds, as the server runs
+  // them (src/mcp-tasks.js, src/sanctions-screen.js).
+  const jobs = taskRetentionPublic();
+  const oneHop = oneHopPublicBounds();
+  // An ended MPP subscription's reduced record, as the engine keeps it
+  // (src/mpp-subscription-retention.js).
+  const mppSub = endedRecordRetentionPublic();
   // Shared answers and the first-call allowance each ship behind a switch:
   // their lines appear only while the switch is on. The shared-answer line
   // also stays, in the past tense, while pages made under the switch may
@@ -71,7 +82,7 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-09.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-10.</p>
 </section>
 
 <section>
@@ -118,6 +129,10 @@ so every claim below is verifiable in code.</p>
     leaves the board after ${WISH_STALE_DAYS} days without a repeat, and each request's text and hash are
     deleted ${wishRetentionDays()} days after it was sent, leaving only its counts, kept under a keyed hash
     of the text (never the text);</li>
+    <li>a call sent with <code>Prefer: respond-async</code>, and a long call the MCP connector runs as a
+    task, keeps its result (up to ${jobs.maxSize}) under the job or task id so you can fetch it; the record is
+    deleted ${jobs.keptFor} after the job was created. It is stored in the state database, so a nightly backup
+    made inside that time copies it (see Backups below);</li>
     <li>for a decision bought on <code>/api/decide</code>, we keep the task you describe, the plan we
     returned, the paying wallet and any feedback you report on its steps, for 30 days;</li>
     <li>for a paid call, the sales ledger keeps the tool's name and a SHA-256 hash of the response we
@@ -152,7 +167,9 @@ so every claim below is verifiable in code.</p>
   <a href="/terms">terms</a>) are kept in our Redis store, with the address (for IPv6, its
   /64 prefix) in the counter's key, for one hour, or 24 hours for the per-client daily allowance. We also
   keep keyed hashes of addresses, never the addresses themselves: in daily traffic statistics (request
-  classes, paths and User-Agent product names; each day is deleted after ${TRAFFIC_DEFAULTS.retentionDays} days), in the record that limits how often a dropped
+  classes, paths and User-Agent product names; each day is deleted after ${TRAFFIC_DEFAULTS.retentionDays} days), in a daily count of the
+  searches our free search routes turned away under their limits and whether that client was served or
+  completed a call later the same day (with the User-Agent's product name; each day is deleted after ${DISCOVERY_REFUSALS_KEEP_DAYS} days), in the record that limits how often a dropped
   connection is excused from payment (24 hours), in the record that an address paid recently, which
   raises its limit on unpaid price quotes (one hour at most), and on the demand board (combined with the day).
   The tollbooth waitlist form is closed, and every record it collected has been deleted from our
@@ -167,7 +184,20 @@ so every claim below is verifiable in code.</p>
   endpoints that do not train on or publish request data, and does not let OpenRouter use inputs or
   outputs to improve its product. Request metadata such as the model, token counts and cost is still
   recorded for billing and monitoring, without the prompt or completion text.${directUpstream}</li>
-  <li><b>On-chain payments.</b> For x402 and MPP payments there are no card numbers, names, or emails.
+  <li><b>On-chain payments.</b> A per-call x402 or MPP payment carries no card number, name or email.
+  A monitor subscription paid over MPP is different: its record holds the paying wallet together with the
+  subject you asked us to watch, the email you give for delivery (optional), and a signing key our server
+  made for that subscription. Your signed authorization lets that key send one payment per period from your
+  account, in one token, to our address, up to the subscription price, until the expiry you signed. The
+  key is kept only while a later payment can still be taken: it is deleted from our records when you cancel,
+  when the expiry you signed passes, or when the subscription ends for any other reason (a nightly backup
+  made before then holds a copy until that backup is deleted, see Backups below). When the subscription
+  ends, its record is reduced to the subscription's id and product, how it was paid (the payment rail and
+  wire), whether it was one of our own test subscriptions, the paying wallet, the key's public
+  address, the chain and token, the amount and billing period, the dates, the final state and the reason it
+  ended, the last payment's transaction and a marker for a payment whose outcome was never confirmed;
+  the email and the subject you asked us to watch are removed. A check that runs every ${mppSub.sweepMinutes} minutes
+  does this for a subscription that ends on a date, and deletes the reduced record ${mppSub.keepDays} days after the subscription ends.
   Payments settle in USDC on the public Base blockchain (or the other chains listed at <a href="/pricing">/pricing</a>,
   USDG on Robinhood Chain, or MPP on Base, Celo or Tempo) via the x402 or MPP protocol; ${gatewayBatched ? "for a payment settled on chain, " : ""}wallet addresses, amounts, and
   timestamps are public on-chain by the protocol's design, not collected by us. ${gatewayBatched ? "Circle Gateway batched payments are verified and settled by Circle Gateway off chain; the sales ledger keeps Gateway's transfer id for them. " : ""}Payment verification ${gatewayBatched ? "for every other payment " : ""}is
@@ -221,6 +251,13 @@ so every claim below is verifiable in code.</p>
   <code>reason</code> annotation fields are not read, logged or retained. The machine-readable list is in
   <a href="/.well-known/x402">/.well-known/x402</a> under <code>payment.dataHandling</code>: <code>readsOnly</code>
   names the fields read, and <code>readsAnnotationFields: false</code> states that the annotations are not.</li>
+  <li><b>Sanctions screening.</b> The paying address of an x402 payment, each address party to a Tempo
+  per-call payment our server settles itself, and the paying wallet of an MPP monitor subscription (before its
+  first payment and before each renewal) are checked against the US Treasury OFAC SDN list, which we download and
+  hold on our server. For such a Tempo payment and for a subscription payment we also read the paying wallet's recent
+  inbound transfers (up to ${oneHop.maxTransfers}, from the last ${oneHop.lookbackDays} days) from Tempo's transfer data feed, which
+  receives the wallet address, and check their senders against the same list. The result for that wallet
+  (clean, flagged or listed) is kept under the wallet address for ${oneHop.ttlDays} days, then read again on its next payment.</li>
   <li><b>Memory tools.</b> Data written via <code>/api/memory</code> is stored on our server keyed to the
   paying wallet, readable only by that wallet (or wallets it explicitly grants), until the owner deletes
   it or its TTL expires. A tamper-evident audit log of accesses is kept for the namespace owner: each entry
@@ -282,7 +319,10 @@ as soon as the last follow-up is sent, when you stop them or buy again, or after
 in a row, and in any case ${DAYS(ADDRESS_MAX_AGE_MS)} days after the purchase; the rest of the record (the
 product and the subject you asked about) is deleted ${DAYS(RECORD_KEEP_MS)} days after the purchase. Memory audit-log
 entries are deleted ${auditRetentionDays()} days after they are written, and demand-board request text
-${wishRetentionDays()} days after it was sent. Decisions bought on <code>/api/decide</code> are deleted after 30 days. You can ask
+${wishRetentionDays()} days after it was sent. Decisions bought on <code>/api/decide</code> are deleted after 30 days. An async job's or MCP task's result
+is deleted ${jobs.keptFor} after the job was created, and a wallet's funding-screen result after ${oneHop.ttlDays} days. An MPP
+monitor subscription's signing key is deleted when the subscription is canceled or ends, and its reduced
+record ${mppSub.keepDays} days after it ends. You can ask
 us at the address below to delete your email from our alert, follow-up and subscription
 records; the card processor's copy is deleted through Stripe. The sales ledger keeps wallet addresses and transaction ids, which are already public
 on-chain${gatewayBatched ? " (for a Circle Gateway batched payment, it keeps Gateway's transfer id instead)" : ""}. Aggregate, non-personal counters (total calls served per tool) are kept for the public

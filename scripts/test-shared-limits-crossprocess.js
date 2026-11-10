@@ -71,7 +71,7 @@ const done = (code) => { for (const c of children) { try { c.kill("SIGKILL"); } 
   const settled = async (port) => { let j = null; for (let i = 0; i < 80; i++) { j = await status(port); if (j.sharedLimits?.status === "on") break; await wait(250); } return j; };
   const [sa, sb] = await Promise.all([settled(pa), settled(pb)]);
   ok(sa.sharedLimits?.status === "on" && sb.sharedLimits?.status === "on", `both servers publish sharedLimits.status on (${sa.sharedLimits?.status}, ${sb.sharedLimits?.status})`);
-  ok(Object.keys(sa.sharedLimits).join() === "status", "the public field is the word alone");
+  ok(Object.keys(sa.sharedLimits).join() === "status,alert" && sa.sharedLimits.alert === "ok", `the public field is the two words alone (${JSON.stringify(sa.sharedLimits)})`);
   const opA = await status(pa, true);
   ok(opA.sharedLimits?.mode === "redis" && typeof opA.sharedLimits?.ops === "number", `the operator view carries the mode and counts (${JSON.stringify(opA.sharedLimits)})`);
   ok(opA.operatorAuth?.status === "ok", "control: before any wrong credential the operator auth word is ok on A");
@@ -150,19 +150,27 @@ ok((await A.ready) && (await B.ready), "two control replicas started");
   for (let i = 0; i < 3; i++) await A.send({ op: "gwb.success", key });
   r = await B.send({ op: "gwb.check", ip });
   ok(r.ok === true, "four settled calls on A outweigh the three failures: B serves the wallet again (the settled calls ride the shared window)");
-  // The global pause: distinct buyers failing on both replicas, two each.
+  // The burst alarm: distinct buyers failing on both replicas, two each. It
+  // is a status word on every replica and refuses nobody on any.
   await A.send({ op: "gwb.fail", key: "ip:198.51.100.1" });
   await A.send({ op: "gwb.fail", key: "ip:198.51.100.2" });
-  r = await B.send({ op: "gwb.check", ip: "198.51.100.9" });
-  ok(r.ok === true, "global control: two failing buyers on A alone do not pause B (threshold four)");
+  r = await B.send({ op: "gwb.word" });
+  ok(r.word === "ok", "alarm control: two failing buyers on A alone read ok on B (threshold four)");
   await B.send({ op: "gwb.fail", key: "ip:198.51.100.3" });
   await B.send({ op: "gwb.fail", key: "ip:198.51.100.4" });
+  await B.send({ op: "barrier" }); await A.send({ op: "barrier" });
+  r = await A.send({ op: "gwb.word" });
+  ok(r.word === "burst" && r.localAlarm === false, `alarm: four distinct failing buyers split across A and B read burst on A, through the shared flag (${JSON.stringify(r)})`);
+  r = await B.send({ op: "gwb.word" });
+  ok(r.word === "burst", "and on B");
   r = await A.send({ op: "gwb.check", ip: "198.51.100.9" });
-  ok(r.ok === false && r.status === 503, `global: four distinct failing buyers split across A and B pause every /v1 call on A (${r.status})`);
+  ok(r.ok === true, `a fresh buyer's /v1 consult is served on A while the alarm reads burst (${r.status || "served"})`);
   r = await B.send({ op: "gwb.check", ip: "198.51.100.9" });
-  ok(r.ok === false && r.status === 503, "and on B");
-  r = await A.send({ op: "gwb.check", ip: "198.51.100.9", global: false });
-  ok(r.ok === true, "a wallet-only consult (global:false) is not held by the pause");
+  ok(r.ok === true, "and on B");
+  // Control: a wallet's own failures still refuse it during the alarm.
+  await A.send({ op: "gwb.fail", key: "ip:198.51.100.77", n: 3, global: false });
+  r = await B.send({ op: "gwb.check", ip: "198.51.100.77" });
+  ok(r.ok === false && r.status === 429, `control: during the alarm a buyer with three failures of its own is still refused 429 (${r.status})`);
   // A Circle Gateway pending answer (walletCount:false) is kept off the
   // wallet's SHARED count too.
   await A.send({ op: "gwb.fail", key: "ip:203.0.113.41", n: 3, global: false, walletCount: false });
@@ -188,19 +196,21 @@ ok((await A.ready) && (await B.ready), "two control replicas started");
   ok(r.blocked === true, "the third failure, recorded on B, blocks the payer on A");
   r = await B.send({ op: "cg.blocked", payer: P });
   ok(r.blocked === true, "and on B");
-  // Global pause (threshold six): the blocked payer above already counts
+  // Burst alarm (threshold six): the blocked payer above already counts
   // three (one payer adds at most MAX_FAILS); two more payers on A make five,
-  // a sixth on B trips the pause for both.
-  r = await A.send({ op: "cg.paused" });
-  ok(r.paused === false, "global control: not paused before the burst");
+  // a sixth on B raises the alarm on both. It blocks no other payer.
+  r = await A.send({ op: "cg.alarm" });
+  ok(r.alarm === false && r.word === "ok", "alarm control: the word reads ok before the burst");
   for (let i = 0; i < 2; i++) await A.send({ op: "cg.fail", payer: `0xrotA${i}` });
-  r = await B.send({ op: "cg.paused" });
-  ok(r.paused === false, "five spend-then-fail across A and B (three of them one payer's) do not pause B (threshold six)");
+  r = await B.send({ op: "cg.alarm" });
+  ok(r.alarm === false, "five spend-then-fail across A and B (three of them one payer's) do not raise it on B (threshold six)");
   await B.send({ op: "cg.fail", payer: "0xrotB0" });
-  r = await A.send({ op: "cg.paused" });
-  ok(r.paused === true, "the sixth, recorded on B, pauses the reports on A");
-  r = await B.send({ op: "cg.paused" });
-  ok(r.paused === true, "and on B");
+  r = await A.send({ op: "cg.alarm" });
+  ok(r.alarm === true && r.word === "burst", "the sixth, recorded on B, reads burst on A");
+  r = await B.send({ op: "cg.alarm" });
+  ok(r.alarm === true && r.word === "burst", "and on B");
+  r = await A.send({ op: "cg.blocked", payer: "0xfreshduringalarm" });
+  ok(r.blocked === false, "a payer with no failures of its own is not blocked while the alarm reads burst");
   // Settled runs are outcomes in the shared window: recorded on A, they keep
   // B's failures for the same payer under the share; the hard cap (five)
   // blocks it whatever it settled.

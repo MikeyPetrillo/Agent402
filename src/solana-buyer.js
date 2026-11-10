@@ -268,6 +268,11 @@ export function svmUnprovenAllowanceAtomic() {
  * corrupt. Output is identical to the scheme's ({x402Version, payload:{
  * transaction: base64}}), so the facilitator accepts it unchanged.
  */
+// A blockhash is accepted for this many blocks after the block it names
+// (the cluster's MAX_PROCESSING_AGE), and a release waits this many more.
+export const SVM_BLOCKHASH_LIFE_BLOCKS = 150;
+export const SVM_EXPIRY_MARGIN_BLOCKS = 10;
+
 export async function createSvmPaymentPayload(signer, paymentRequirements) {
   assertSigningAllowed("a Solana payment");
   const kit = await import("@solana/kit");
@@ -358,6 +363,12 @@ export async function createSvmPaymentPayload(signer, paymentRequirements) {
   // buyer needs it after a refusal: the credential can settle until this
   // blockhash expires, and only then is "no debit" final (confirmSvmNotDebited).
   Object.defineProperty(out, "recentBlockhash", { value: recentBlockhash, enumerable: false });
+  // The last block height that blockhash can land at, known only when the
+  // blockhash came from our own RPC read above. A seller's blockhash carries
+  // the seller's word for it, which is never read: null here, and the refusal
+  // read bounds it from our own RPC's view instead (confirmSvmNotDebited).
+  const ownLastValid = fetchedLastValidBH != null && /^\d+$/.test(fetchedLastValidBH) ? Number(fetchedLastValidBH) : null;
+  Object.defineProperty(out, "lastValidBlockHeight", { value: Number.isSafeInteger(ownLastValid) && ownLastValid > 0 ? ownLastValid : null, enumerable: false });
   return out;
 }
 
@@ -377,17 +388,34 @@ export async function createSvmPaymentPayload(signer, paymentRequirements) {
  * transaction, and a signed transaction can be broadcast until its recent
  * blockhash expires (~60-90 s) whatever the seller answered - so a seller can
  * refuse, wait, and settle after we have paid the next candidate. With
- * `blockhash` given, the poll runs until `isBlockhashValid` reports it EXPIRED
- * (bounded by `maxWaitMs`) and the result carries `expired: true` only when
- * the chain itself said so; a wait cut short by the bound reports
- * `expired: false`, and the caller must keep the hold. Without a blockhash the
- * legacy `graceMs` poll runs and `expired` is null - never final.
+ * `blockhash` given, the poll runs until the credential provably cannot land
+ * (bounded by `maxWaitMs`) and the result carries `expired: true` only on
+ * that proof; a wait cut short by the bound reports `expired: false`, and the
+ * caller must keep the hold. Without a blockhash the legacy `graceMs` poll
+ * runs and `expired` is null - never final.
+ *
+ * THE PROOF. A transaction lands only in a block whose height is at most the
+ * blockhash's last valid height, so it cannot land once the FINALIZED chain
+ * is past that height. Two readings, both from our own RPC:
+ *   - the last valid height: `lastValidBlockHeight` when our own
+ *     getLatestBlockhash issued the blockhash; for a blockhash the seller
+ *     supplied, an upper bound taken the first time our RPC reports that
+ *     blockhash VALID (it then sits in a block no higher than the height read
+ *     at or after that slot, and lives SVM_BLOCKHASH_LIFE_BLOCKS past it).
+ *     The seller's own figure is never read.
+ *   - the finalized block height, which must exceed that height by
+ *     SVM_EXPIRY_MARGIN_BLOCKS, with the blockhash reading invalid at that
+ *     slot and a debit scan no older than that slot showing nothing.
+ * `isBlockhashValid: false` alone proves nothing: an RPC node that has not
+ * reached a fresh blockhash answers false for it, exactly as for an expired
+ * one. A blockhash our RPC never reported valid has no bound, so its wait
+ * ends `expired: false` (pending), never `expired: true`.
  * THROWS on any RPC failure: an unreadable chain is "maybe charged", never
  * "not charged" - the caller keeps the hold and does not retry elsewhere.
  * A concurrent buy from the same wallet inside the window reads as debited,
  * which errs toward the safe side. Injectable RPC + clock + sleep for tests.
  */
-export async function confirmSvmNotDebited({ wallet, sinceUnix, graceMs = 8000, blockhash = null, maxWaitMs = 90_000, pollMs = 2000, fetchImpl = fetch, now = Date.now, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
+export async function confirmSvmNotDebited({ wallet, sinceUnix, graceMs = 8000, blockhash = null, lastValidBlockHeight = null, maxWaitMs = 90_000, pollMs = 2000, fetchImpl = fetch, now = Date.now, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
   if (!wallet) throw new Error("confirmSvmNotDebited: wallet required");
   const accounts = await rpcCall("getTokenAccountsByOwner", [wallet, { mint: USDC_MINT }, { encoding: "jsonParsed" }], { fetchImpl });
   const ata = accounts?.value?.[0]?.pubkey;
@@ -395,10 +423,39 @@ export async function confirmSvmNotDebited({ wallet, sinceUnix, graceMs = 8000, 
   const started = now();
   const untilExpiry = typeof blockhash === "string" && blockhash.length > 0;
   const deadline = started + (untilExpiry ? Math.max(0, Number(maxWaitMs) || 0) : graceMs);
+  const height = (v) => (Number.isSafeInteger(v) && v >= 0 ? v : null);
+  // The highest block the credential can land in, from our own RPC only.
+  let lastValid = Number.isSafeInteger(Number(lastValidBlockHeight)) && Number(lastValidBlockHeight) > 0 ? Number(lastValidBlockHeight) : null;
+  // One reading of "can the credential still land". Returns the finalized
+  // slot a release must be scanned at, or null while it can (or may) land.
+  const readExpiry = async () => {
+    if (lastValid == null) {
+      // A non-boolean answer is unreadable and throws (fail closed).
+      const seen = await rpcCall("isBlockhashValid", [blockhash, { commitment: "confirmed" }], { fetchImpl });
+      if (typeof seen?.value !== "boolean") throw new Error("isBlockhashValid unreadable");
+      const seenSlot = height(seen?.context?.slot);
+      if (seen.value !== true || seenSlot == null) return null; // not seen valid by our RPC: no bound yet
+      const at = await rpcCall("getEpochInfo", [{ commitment: "confirmed", minContextSlot: seenSlot }], { fetchImpl });
+      if (height(at?.blockHeight) == null) throw new Error("getEpochInfo unreadable");
+      lastValid = at.blockHeight + SVM_BLOCKHASH_LIFE_BLOCKS;
+      return null;
+    }
+    const fin = await rpcCall("getEpochInfo", [{ commitment: "finalized" }], { fetchImpl });
+    const finHeight = height(fin?.blockHeight), finSlot = height(fin?.absoluteSlot);
+    if (finHeight == null || finSlot == null) throw new Error("getEpochInfo unreadable");
+    if (!(finHeight > lastValid + SVM_EXPIRY_MARGIN_BLOCKS)) return null;
+    const gone = await rpcCall("isBlockhashValid", [blockhash, { commitment: "finalized", minContextSlot: finSlot }], { fetchImpl });
+    if (typeof gone?.value !== "boolean") throw new Error("isBlockhashValid unreadable");
+    return gone.value === false ? finSlot : null;
+  };
   let observed = 0;
   for (;;) {
+    // The expiry reading comes BEFORE the debit scan, and a scan that a
+    // release rests on is asked for a view at least as new as that reading:
+    // a transfer that landed in the last valid blocks is in it.
+    const expiredAtSlot = untilExpiry ? await readExpiry() : null;
     if (ata) {
-      const sigs = await rpcCall("getSignaturesForAddress", [ata, { limit: 20 }], { fetchImpl });
+      const sigs = await rpcCall("getSignaturesForAddress", [ata, { limit: 20, ...(expiredAtSlot != null ? { commitment: "finalized", minContextSlot: expiredAtSlot } : {}) }], { fetchImpl });
       const recent = (sigs || []).filter((s) => !s.err && Number(s.blockTime || 0) >= cutoff);
       observed = recent.length;
       for (const s of recent) {
@@ -412,12 +469,7 @@ export async function confirmSvmNotDebited({ wallet, sinceUnix, graceMs = 8000, 
       return { debited: false, observed: 0, expired: null }; // no USDC account: nothing could have moved
     }
     if (untilExpiry) {
-      // The chain's own word on whether the credential can still land. A
-      // non-boolean answer is unreadable and throws (fail closed).
-      const valid = await rpcCall("isBlockhashValid", [blockhash, { commitment: "confirmed" }], { fetchImpl });
-      const v = valid?.value;
-      if (typeof v !== "boolean") throw new Error("isBlockhashValid unreadable");
-      if (!v) return { debited: false, observed, expired: true };
+      if (expiredAtSlot != null) return { debited: false, observed, expired: true };
       if (now() >= deadline) return { debited: false, observed, expired: false };
     } else if (now() >= deadline) {
       return { debited: false, observed, expired: null };

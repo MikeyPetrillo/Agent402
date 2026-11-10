@@ -27,10 +27,11 @@ import {
   substitutedFrom, TIERS, AUTO_RANKINGS, classifyPrompt, canonicalModel, tierAllows, tierFor, meteredQuoteForProbe, meteredBoundFor,
   isFlatTier, flatTierQuoteUsd, servedTierFor, crossTierDisclosure, AUTO_MODEL, AUTO_TIER,
   clampToMargin, assertMeteredAvailable, attemptsFor, serviceTierFor, validateServiceTier, cacheControlPref, upstreamUserId, PROVIDER_SORT_ENABLED,
-  fetchOpenRouter, throwUpstreamError, streamOpenRouterTo, bad, MAX_IMAGES, maxInputCharsFor, inputTooLargeError,
+  fetchOpenRouter, upstreamHttpError, refuseUnlistedMeteredModel, isInputTooLarge, streamOpenRouterTo, bad, MAX_IMAGES, maxInputCharsFor, inputTooLargeError,
   failoverChain, modelFallbackPref, availabilitySubstitution, retryRateLimited,
   rateLimitDelaysFor, paymentWindowTimeoutMs, timedOutBudget, streamClientWatch, STREAM_TIMEOUT_MS, UPSTREAM_TIMEOUT_MS,
-  defaultReasoningFor, validateReasoning, fitReasoningToCap,
+  validateReasoning, reasoningForLink, lowestEffortRetry, recoveryRunAffordable, retryEmptyAtLowestEffort,
+  setReasoningAdjustedHeader, REASONING_ADJUSTED, LINK_PROBE,
   refuseCostVariants, refuseUnsupportedParams, defaultModelFor, defaultModelCompatNote,
   assertUpstreamBody,
   stripBilling,
@@ -66,6 +67,13 @@ export function meteredResponsesQuoteUsd(input) {
   } catch (e) {
     return { usd: tier.price, invalid: true, reason: String(e?.message || e).slice(0, 160) };
   }
+}
+/** The metered Responses body's input size refusal for the pre-payment check
+ *  (src/gateway-prepayment.js), or null: this wire's own validation is the
+ *  counter, so the two can never disagree about a body. */
+export function meteredResponsesInputSizeRefusal(input) {
+  try { validateResponsesRequest(input, "v1-chat-metered"); } catch (e) { return isInputTooLarge(e) ? e : null; }
+  return null;
 }
 
 const ROLES = new Set(["user", "assistant", "system", "developer"]);
@@ -209,6 +217,8 @@ export function validateResponsesRequest(input, tierSlug) {
       const homePath = home ? (RESPONSES_PATH_BY_TIER[home] || TIERS[home].route.split(" ")[1]) : null;
       throw bad(home && home !== tierSlug ? `"${model}" is served on ${homePath} (${home})` : `"model" ${model} is not served on this tier - GET /v1/models lists every model and its tier`);
     }
+    // Metered: an id the live list does not carry is refused, as on the chat wire.
+    refuseUnlistedMeteredModel(tier, model);
   }
   const acc = { chars: 0, images: 0 };
   let probeInput;
@@ -257,7 +267,7 @@ export function validateResponsesRequest(input, tierSlug) {
     if (typeof input.instructions !== "string") throw bad('"instructions" must be a string');
     acc.chars += input.instructions.length; instructions = input.instructions;
   }
-  if (acc.chars > tier.maxInputChars && acc.chars > maxInputCharsFor(tierSlug, model)) throw inputTooLargeError(tierSlug, model, acc.chars);
+  if (acc.chars > tier.maxInputChars && acc.chars > maxInputCharsFor(tierSlug, model)) throw inputTooLargeError(tierSlug, model, acc.chars, RESPONSES_PATH_BY_TIER);
   if (acc.images > MAX_IMAGES) throw bad(`Too many images (${acc.images}). Maximum is ${MAX_IMAGES} per request`);
   // The tier's own default budget, like the chat wire: a premium model that
   // reasons before it speaks spent a hardcoded 1024 entirely on reasoning and
@@ -359,6 +369,9 @@ function saidAnything(data) {
   return out.some((o) => o?.type === "function_call" || (o?.type === "message" && Array.isArray(o.content) && o.content.some((c) => c?.type === "output_text" && typeof c.text === "string" && c.text.trim() !== "")));
 }
 
+/** The end-to-end empty answer's 502 on this wire (not settled). */
+export const EMPTY_INCOMPLETE_MESSAGE = "Upstream produced no output within max_output_tokens (reasoning consumed it, after any effort fit and lowest-effort retry by the gateway) - raise max_output_tokens, lower reasoning.effort, or pick a non-reasoning model";
+
 export function makeResponsesHandler(routeTier) {
   return async function responsesHandler(input, req) {
     // Settle-failure breaker first: refuse (nobody charged) before any upstream call.
@@ -402,14 +415,18 @@ export function makeResponsesHandler(routeTier) {
       const p = { ...probe, model };
       clampToMargin(p, tier, imageCount); // max_tokens in the probe IS max_output_tokens
       const maxOut = Math.min(body.max_output_tokens, p.max_tokens);
-      // A buyer budget follows this link's clamped cap (fitReasoningToCap).
-      const reasoning = body.reasoning !== undefined ? fitReasoningToCap(body.reasoning, maxOut) : defaultReasoningFor(model, tierSlug, maxOut);
+      // A buyer budget follows this link's clamped cap, and a buyer effort
+      // or budget that leaves no room for an answer inside it is lowered by
+      // the small-budget rule and disclosed (reasoningForLink).
+      const { reasoning, note } = reasoningForLink(body.reasoning, model, tierSlug, maxOut, "max_output_tokens");
       return {
         ...body, model, max_output_tokens: maxOut, zdr: undefined,
         ...(reasoning ? { reasoning } : {}),
         ...(provider ? { provider } : {}), ...(user ? { user, session_id: user } : {}),
         ...(cacheControl ? { cache_control: cacheControl } : {}),
         service_tier: serviceTierFor(model, body, flex), // flex / priority / explicit default on :nitro
+        ...(note ? { [REASONING_ADJUSTED]: note } : {}),
+        [LINK_PROBE]: { ...p, max_tokens: maxOut },
       };
     };
     const recordUsage = (usage, upstreamUsd, served, serviceTier) => import("../posthog.js")
@@ -433,6 +450,8 @@ export function makeResponsesHandler(routeTier) {
               try { outbound = outboundFor(model, flex); } catch (e) { if (!lastErr) lastErr = e; continue; }
               const timeoutMs = paymentWindowTimeoutMs(req, STREAM_TIMEOUT_MS);
               const attemptStarted = Date.now();
+              // No envelope on a stream: the disclosure rides in a header.
+              setReasoningAdjustedHeader(res, outbound[REASONING_ADJUSTED]);
               try {
                 return await retryRateLimited(() => streamOpenRouterTo(outbound, res, {
                   url: OPENROUTER_RESPONSES_URL, timeoutMs,
@@ -447,7 +466,7 @@ export function makeResponsesHandler(routeTier) {
             }
             client.assertPresent();
             throw lastErr || bad("No upstream model could serve this request", 502);
-          } finally { client.done(); }
+          } finally { client.done(); setReasoningAdjustedHeader(res, null); }
         },
       };
     }
@@ -455,6 +474,7 @@ export function makeResponsesHandler(routeTier) {
     let lastErr;
     let refusedModel = null;
     const timeouts = timedOutBudget();
+    const recovery = { used: false }; // one lowest-effort recovery try per call
     for (const { model, flex } of attempts) {
       if (model === refusedModel) continue;
       let outbound;
@@ -462,14 +482,30 @@ export function makeResponsesHandler(routeTier) {
       const timeoutMs = paymentWindowTimeoutMs(req, UPSTREAM_TIMEOUT_MS);
       const attemptStarted = Date.now();
       try {
-        const data = await retryRateLimited(async () => {
-          const res = await fetchOpenRouter(outbound, { url: OPENROUTER_RESPONSES_URL, timeoutMs });
-          if (!res.ok) await throwUpstreamError(res);
+        const callOnce = (sendBody, ms) => retryRateLimited(async () => {
+          const res = await fetchOpenRouter(sendBody, { url: OPENROUTER_RESPONSES_URL, timeoutMs: ms });
+          if (!res.ok) await upstreamHttpError(res, sendBody?.model);
           const text = await res.text();
           let parsed;
           try { parsed = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
-          return assertUpstreamBody(parsed);
+          return assertUpstreamBody(parsed, { model: sendBody?.model });
         }, { delays: rateLimitDelaysFor(flex) });
+        let data = await callOnce(outbound, timeoutMs);
+        let reasoningAdjusted = outbound[REASONING_ADJUSTED] || null;
+        // An answer that spent its whole cap reasoning gets one more run of
+        // the same model at its lowest supported effort before the chain
+        // walks on: once per call, while the price covers another run and
+        // time is left.
+        if (isEmptyIncomplete(data)) {
+          const plan = lowestEffortRetry(outbound.reasoning, body.reasoning, model);
+          const again = await retryEmptyAtLowestEffort({
+            once: recovery, plan, req, timeouts,
+            affordable: () => recoveryRunAffordable(outbound[LINK_PROBE], tier, imageCount, data?.usage?.cost, req?.__meteredQuoteUsd),
+            run: (p, ms) => callOnce({ ...outbound, reasoning: p.reasoning }, ms),
+            usable: (d) => !(d?.status === "failed" || d?.error) && !isEmptyIncomplete(d) && !isEmptyFilteredIncomplete(d),
+          });
+          if (again) { data = again; reasoningAdjusted = plan.note; }
+        }
         if (data?.status === "failed" || data?.error) {
           lastErr = bad(`Upstream error: ${String(data?.error?.message || data?.error?.code || "response failed").slice(0, 200)}`, 502);
           continue;
@@ -480,7 +516,7 @@ export function makeResponsesHandler(routeTier) {
           continue;
         }
         if (isEmptyIncomplete(data)) {
-          lastErr = bad("Upstream produced no output within max_output_tokens (reasoning consumed it) - raise max_output_tokens, lower reasoning.effort, or pick a non-reasoning model", 502);
+          lastErr = bad(EMPTY_INCOMPLETE_MESSAGE, 502);
           refusedModel = model;
           continue;
         }
@@ -488,6 +524,7 @@ export function makeResponsesHandler(routeTier) {
         await recordUsage(data.usage, upstreamUsd, data.model || model, data.service_tier || (flex ? "flex" : "default"));
         if (routerNote) data.agent402_router = { ...routerNote, served: data.model || model };
         if (defaultedModel) data.agent402_default_model = defaultedModel;
+        if (reasoningAdjusted) data.agent402_reasoning_adjusted = reasoningAdjusted; // a reasoning setting was lowered to leave room for the answer
         if (substituted) data.agent402_model_substituted = { requested: substituted, served: body.model, reason: "the requested model is retired upstream; its named successor served instead" };
         else { const sub = availabilitySubstitution(body.model, model); if (sub) data.agent402_model_substituted = sub; }
         if (tierSlug !== routeTier) data.agent402_tier = { ...crossTierDisclosure(routeTier, tierSlug), route: RESPONSES_PATH_BY_TIER[routeTier] };
@@ -526,7 +563,7 @@ const INPUT_SCHEMA = {
     max_output_tokens: { type: "integer", description: "Optional output cap (clamped to the tier cap)" },
     tools: { type: "array", description: "Optional function tools ({type:\"function\", name, parameters}); server-side tools are not served" },
     text: { type: "object", description: 'Optional {format: {type: "text"|"json_schema"|"json_object", ...}}' },
-    reasoning: { type: "object", description: 'Optional {effort: "none"|"minimal"|"low"|"medium"|"high"|"xhigh"|"max"} - reasoning tokens count against max_output_tokens' },
+    reasoning: { type: "object", description: 'Optional {effort: "none"|"minimal"|"low"|"medium"|"high"|"xhigh"|"max"} - reasoning tokens count against max_output_tokens. An effort above low, or a reasoning.max_tokens budget, that leaves no room for an answer inside a small max_output_tokens is lowered before the call, and an answer that still comes back empty is retried once on the same model at its lowest supported effort when the call\'s price and time allow; either change is named in agent402_reasoning_adjusted {field, requested, used, reason} (the X-Agent402-Reasoning-Adjusted header on a stream)' },
     stream: { type: "boolean", description: "Responses SSE events (response.created … response.completed)" },
     zdr: { type: "boolean", description: "Optional - zero-data-retention providers only" },
   },

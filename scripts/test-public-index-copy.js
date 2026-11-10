@@ -56,7 +56,7 @@ for (const value of [undefined, "", " , ", "base,stellar", "solana", "Solana"]) 
   ok(!ANY.test(r.llms) && !/public index/.test(pageText(r.rail)), `llms.txt and /robinhood ${tag}: nothing said`);
   ok(dateOf(r.p) === PRIVACY_OWN && dateOf(r.t) === TERMS_OWN, `${tag}: both pages keep their own dates though _SINCE is set`);
 }
-ok(TERMS_OWN === "2026-11-09", "terms keeps its own date: the late-landing and repayment screening lines");
+ok(TERMS_OWN === "2026-11-10", "terms keeps its own date: the job-result retention line and the liability sentence's party name");
 
 // --- robinhood: the paragraph, scoped no-sale line, terms, machine surfaces ---
 for (const value of ["robinhood", " Robinhood ,solana", "robinhood,stellar"]) {

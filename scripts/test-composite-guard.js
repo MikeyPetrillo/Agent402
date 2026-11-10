@@ -61,20 +61,34 @@ ok(EXPECTED.every((s) => g.EXPENSIVE_COMPOSITE_SLUGS.has(s)), "every expensive c
 ok(g.EXPENSIVE_COMPOSITE_SLUGS.size === EXPECTED.length, "the guard set matches the expected composites exactly (no drift)");
 ok(!g.EXPENSIVE_COMPOSITE_SLUGS.has("uuid"), "cheap tools are NOT in the guard set");
 
-// Global circuit breaker: rotating keys must not make the total burn unbounded.
+// Global burst alarm: unsettled runs across every key are counted and
+// reported (the unsettledReports word, a log line). It refuses nobody.
 g._compositeGuardReset();
-ok(!g.compositeGuardGlobalPaused(), "breaker starts closed");
+ok(!g.compositeGuardGlobalAlarm() && (await g.compositeGuardAlarmStatus()).status === "ok", "the alarm starts clear: the word reads ok");
 for (let i = 0; i < 5; i++) g.recordCompositeSpendFailure(`0xRotating${i}`);
-ok(!g.compositeGuardGlobalPaused(), "5 failures across 5 keys: below the global threshold of 6");
-g.recordCompositeSpendFailure(null); // an unkeyed failure still counts globally
-ok(g.compositeGuardGlobalPaused(), "the 6th spend-then-fail (any key, even unkeyed) trips the GLOBAL pause");
+ok(!g.compositeGuardGlobalAlarm() && (await g.compositeGuardAlarmStatus()).status === "ok", "5 failures across 5 keys: below the global threshold of 6");
+{
+  const warned = [], warn0 = console.warn;
+  console.warn = (...a) => { warned.push(a.join(" ")); };
+  try { g.recordCompositeSpendFailure(null); } finally { console.warn = warn0; } // an unkeyed failure still counts globally
+  ok(g.compositeGuardGlobalAlarm(), "the 6th spend-then-fail (any key, even unkeyed) raises the alarm");
+  ok(warned.length === 1 && /\[composite-guard\] 6 unsettled report or media run\(s\) inside .* unsettledReports reads burst until .*no request is refused/.test(warned[0]) && !/0x/.test(warned[0]), `one log line says what was counted and that nothing is refused, with no key (${warned[0]})`);
+}
+const pubWord = await g.compositeGuardAlarmStatus(), opWord = await g.compositeGuardAlarmStatus({ full: true });
+ok(JSON.stringify(pubWord) === JSON.stringify({ status: "burst" }), `publicly the word only (${JSON.stringify(pubWord)})`);
+ok(opWord.status === "burst" && opWord.threshold === 6 && opWord.trips === 1 && typeof opWord.until === "string" && !/0x/.test(JSON.stringify(opWord)), `the operator read adds counts, never a key (${JSON.stringify(opWord)})`);
+// While the alarm is up: a buyer with no failures of its own is not blocked,
+// and (the control) a buyer with three of its own is.
+ok(!g.compositeGuardBlocked("0xFreshDuringAlarm"), "during the alarm a buyer with no failures of its own is not blocked");
+for (let i = 0; i < 3; i++) g.recordCompositeSpendFailure("0xOwnFailures");
+ok(g.compositeGuardBlocked("0xOwnFailures"), "control: during the alarm the per-buyer rule still blocks a buyer with three failures of its own");
 await new Promise((r) => setTimeout(r, 750));
-ok(!g.compositeGuardGlobalPaused(), "the global pause lifts after its window");
-// Plan execution keeps the per-buyer bound but cannot pause the report products.
+ok(!g.compositeGuardGlobalAlarm() && (await g.compositeGuardAlarmStatus()).status === "ok", "the word returns to ok after its window");
+// Plan execution keeps the per-buyer bound and does not feed the report alarm.
 g._compositeGuardReset();
 ok(g.OWN_GLOBAL_BOUND_SLUGS.has("decide-execute"), "decide-execute carries its own global bound");
 for (let i = 0; i < 20; i++) g.recordCompositeSpendFailure(`0xExec${i}`, { global: false });
-ok(!g.compositeGuardGlobalPaused(), "20 decide-execute failures from 20 wallets do NOT trip the global report pause");
+ok(!g.compositeGuardGlobalAlarm(), "20 decide-execute failures from 20 wallets do NOT raise the report alarm");
 for (let i = 0; i < 3; i++) g.recordCompositeSpendFailure("0xExecOne", { global: false });
 ok(g.compositeGuardBlocked("0xExecOne"), "...but one wallet failing repeatedly is still blocked per key");
 g._compositeGuardReset();
@@ -99,9 +113,9 @@ ok(fast.some((a) => a.network.startsWith("solana:")) && fast.some((a) => a.netwo
 // A 402 from a FACILITATOR billing refusal COUNTS here. A composite is EVM
 // exact only (above), so the Algorand sub-cent refusal the offer gate
 // withdraws (src/avm-sponsorship.js) never reaches it, and on an EVM rail
-// nothing withdraws a refused offer: the guard's per-payer and global bounds
-// are all that stop a billing lapse becoming unbounded served, never-charged
-// reports. The predicate itself is pinned too, since the settle breaker words
+// nothing withdraws a refused offer: the guard's per-payer bound stops one
+// buyer's run of served, never-charged reports, and its alarm reports a lapse
+// that reaches many buyers. The predicate itself is pinned too, since the settle breaker words
 // its 429 with it.
 {
   const { isBillingRefusalReceipt } = await import("../src/payment-reject.js");
@@ -116,7 +130,10 @@ ok(fast.some((a) => a.network.startsWith("solana:")) && fast.some((a) => a.netwo
   const from = server.indexOf("if (await compositeGuardBlocked(guardKey))");
   const listener = server.slice(from, server.indexOf("let cacheKey = null;", from));
   ok(/else if \(st === 402 \|\| st >= 500\) recordCompositeSpendFailure\(guardKey, \{ global: !ownGlobalBound \}\);/.test(listener), "the composite finish listener counts every 402 and 5xx, billing refusals included");
-  ok(/if \(!ownGlobalBound && await compositeGuardGlobalPaused\(\)\)/.test(server), "only slugs without their own global bound honour the global pause (awaited: a promise with a shared store)");
+  ok(!/compositeGuardGlobalPaused|compositeGuardGlobalAlarm\(|Premium report generation is briefly paused/.test(server), "the dispatcher consults no global pause or alarm and carries no pause message: no buyer is refused for other buyers' unsettled runs");
+  ok(/unsettledReports: await compositeGuardAlarmStatus\(\{ full \}\)/.test(server), "the alarm is read by /api/gateway-status only");
+  const guardSrc = readFileSync(new URL("../src/composite-spend-guard.js", import.meta.url), "utf8");
+  ok(!/flag(Set|Get)\("cg-pause"/.test(guardSrc), "the guard neither writes nor reads the earlier build's pause flag");
   ok(!/isBillingRefusalReceipt|isWithdrawnSubcentRefusal/.test(listener), "...with no billing exemption anywhere in it");
 }
 

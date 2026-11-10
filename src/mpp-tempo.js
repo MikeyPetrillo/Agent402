@@ -50,7 +50,7 @@ import { tempoPushSender } from "./tempo-confirm.js";
 import { syncWindowRefusalOf } from "./slow-sync-window.js";
 import { sharedClaimRequired } from "./replay-topology.js";
 import { drainSignal } from "./drain-abort.js";
-import { screenAddresses, screenFunding, sanctionsScreenStatus, maskAddress as maskOne } from "./sanctions-screen.js";
+import { screenAddresses, screenFunding, sanctionsScreenStatus, maskAddress as maskOne, TEMPO_SCREEN_REFUSED_DETAIL, TEMPO_SCREEN_REFUSED_HINT } from "./sanctions-screen.js";
 import { Secp256k1 } from "ox";
 import { lateWatchKey } from "./tempo-late-watches.js";
 
@@ -401,16 +401,18 @@ export const TEMPO_REFUSAL_CLASSES = Object.freeze({
   // address the transaction's calls name) is on the OFAC SDN list, or a
   // recent sender of funds to the payer is (the one-hop funding check).
   // Checked before verification and the exact match again before the broadcast.
+  // The same answer refuses a subscription's first payment when its paying
+  // wallet is screened out (src/mpp-subscriptions.js, in either mode).
   "screen-rejected": {
     kind: "verification-failed", status: 402,
-    detail: "An address in this payment, or an address that recently sent funds to the paying wallet, appears on the US Treasury OFAC SDN list, which this server screens every Tempo payment against. The payment was not broadcast and nothing was charged.",
-    hint: "This server does not accept this payment.",
+    detail: TEMPO_SCREEN_REFUSED_DETAIL,
+    hint: TEMPO_SCREEN_REFUSED_HINT,
   },
   // Direct mode only: the screen has no list loaded, so no payment address
   // can be checked and none is accepted. Retryable; nothing charged.
   "screen-unavailable": {
     kind: "internal-payment-error", status: 503, retryAfter: 60,
-    detail: "This server screens every Tempo payment address against the OFAC SDN list before accepting a payment, and the list is not loaded right now, so the credential was not checked and nothing was charged.",
+    detail: "This server screens the addresses of a Tempo per-call payment against the OFAC SDN list before accepting it, and the list is not loaded right now, so the credential was not checked and nothing was charged.",
     hint: "Retry shortly, or pay over another method offered in the WWW-Authenticate header (x402 USDC or MPP evm/charge).",
   },
   "policy-denied": {

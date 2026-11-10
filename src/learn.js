@@ -6,6 +6,7 @@
 // accepted chain. Each entry's `summary` is reused verbatim by /llms-full.txt.
 import { siteOrgRef } from "./site-org.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
+import { LATE_SETTLE_EXCEPTION } from "./front-door.js";
 // Copy that names a prepaid key as a way in reads the switch that sells it:
 // while sales are off, a key is something a buyer already holds.
 const PREPAID = creditsSalesEnabled() ? "a prepaid key" : "a prepaid key bought earlier";
@@ -156,7 +157,7 @@ export const LEARN = [
         { code: X402_CLIENT },
       ]],
       ["What happens when a call fails", [
-        P(`On this server the tool runs before settlement, and settlement completes only for a successful response. An error, a timeout or an upstream failure cancels the payment, so nothing moves. You can check it from the response you hold: no ${C("PAYMENT-RESPONSE")} header means you were not charged on x402. One exception: a transfer that lands after a timed-out settle, a disconnect during settle, or a settle the facilitator answered as pending whose receipt was not read in time, is booked as a refund owed and repaid after on-chain proof. Send an ${C("Idempotency-Key")} header and a retry of a call that was already served and paid replays the first answer.`),
+        P(`On this server the tool runs before settlement, and settlement completes only for a successful response. An error, a timeout or an upstream failure cancels the payment, so nothing moves. You can check it from the response you hold: no ${C("PAYMENT-RESPONSE")} header means you were not charged on x402. ${LATE_SETTLE_EXCEPTION} Send an ${C("Idempotency-Key")} header and a retry of a call that was already served and paid replays the first answer.`),
       ]],
     ],
     links: [["/what-is-x402", "What is x402? (the full explainer)"], ["/x402-test", "Test your x402 client against a real 402"], ["/guides/x402-in-5-minutes", "x402 in 5 minutes"], ["/integrations/client", "agent402-client"], ["/tools/hash", "hash, the tool in the example"]],
@@ -184,7 +185,7 @@ export const LEARN = [
         P(`Reading a 402 is free. It is a quote, not a charge, and no payment is taken until a request arrives carrying a signed payment that matches one of the offers. That makes the 402 a useful discovery step: an agent can learn the price of any route before deciding to buy.`),
       ]],
       ["Was I charged?", [
-        P(`On this server settlement runs after the tool, and only for a successful response. So for a wallet payment the answer you hold tells you: a 200 with a ${C("PAYMENT-RESPONSE")} header (x402) or a ${C("Payment-Receipt")} header (MPP) was paid; a response with no receipt header was not charged, and neither was one whose x402 receipt reads ${C("success: false")}. A payment that is refused comes back as another 402, and when the refusal is about the credential the body says why in plain words.`),
+        P(`On this server settlement runs after the tool, and only for a successful response. So for a wallet payment the answer you hold tells you: a 200 with a ${C("PAYMENT-RESPONSE")} header (x402) or a ${C("Payment-Receipt")} header (MPP) was paid; a failed call is answered with no receipt header, or with an x402 receipt that reads ${C("success: false")}, and is not charged. ${LATE_SETTLE_EXCEPTION} A Tempo push payment is sent before the call runs, so one that is not served is recorded as a refund owed and the 402 says so (${C("refundOwed")}). A payment that is refused comes back as another 402, and when the refusal is about the credential the body says why in plain words.`),
       ]],
     ],
     links: [["/x402-test", "See why a payment was refused"], ["/learn/x402", "x402"], ["/learn/mpp", "MPP"], ["/integrations/tollbooth", "Answer 402s on your own site"], ["/tools", "Every priced route"]],

@@ -400,17 +400,23 @@ async function expireIfValue(c, name, value, seconds) {
 
 // Consumed marks the shared store did not take, across every guard in this
 // process. `pending` counts the ones still being retried in the background.
-const storeHealth = { consumedWriteFailures: 0, consumedWritesRecovered: 0, consumedWritesAbandoned: 0, pending: 0, lastFailAt: 0, lastError: null };
+const storeHealth = { consumedWriteFailures: 0, consumedWritesRecovered: 0, consumedWritesAbandoned: 0, pending: 0, pendingSince: 0, lastFailAt: 0, lastError: null };
+/** How long the word must read pending without a break before `alert` reads sustained. */
+export const REPLAY_STORE_ALERT_AFTER_MS = 10 * 60_000;
 /**
  * One word for the consumed marks the shared store missed: "pending" while a
  * mark is held on this process only and retried in the background, else "ok".
+ * A second word, `alert`, for the pagers: "sustained" once pending has held
+ * without a break for REPLAY_STORE_ALERT_AFTER_MS (a store blip clears on the
+ * next retry pass, seconds later, and is not a page), else "ok".
  * `full` adds the counts.
  */
-export function replayGuardStoreStatus({ full = false } = {}) {
+export function replayGuardStoreStatus({ full = false, now = Date.now() } = {}) {
   const status = storeHealth.pending > 0 ? "pending" : "ok";
-  if (!full) return { status };
+  const alert = status === "pending" && storeHealth.pendingSince && now - storeHealth.pendingSince >= REPLAY_STORE_ALERT_AFTER_MS ? "sustained" : "ok";
+  if (!full) return { status, alert };
   const { pending, consumedWriteFailures, consumedWritesRecovered, consumedWritesAbandoned, lastFailAt, lastError } = storeHealth;
-  return { status, pending, consumedWriteFailures, consumedWritesRecovered, consumedWritesAbandoned, lastFailAgoMs: lastFailAt ? Date.now() - lastFailAt : null, lastError };
+  return { status, alert, pending, consumedWriteFailures, consumedWritesRecovered, consumedWritesAbandoned, lastFailAgoMs: lastFailAt ? Date.now() - lastFailAt : null, lastError };
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -552,6 +558,7 @@ export function createReplayGuard({
   function clearPending(key) {
     if (!pending.delete(key)) return false;
     storeHealth.pending = Math.max(0, storeHealth.pending - 1);
+    if (storeHealth.pending === 0) storeHealth.pendingSince = 0;
     if (pending.size === 0) stopPendingLoop();
     return true;
   }
@@ -590,6 +597,7 @@ export function createReplayGuard({
       if (oldest === undefined || !clearPending(oldest)) break;
       storeHealth.consumedWritesAbandoned++;
     }
+    if (storeHealth.pending === 0) storeHealth.pendingSince = Date.now();
     storeHealth.pending++;
     pending.set(key, { settledAt, until, claim });
     if (!pendingTimer) {

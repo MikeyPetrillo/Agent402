@@ -191,7 +191,6 @@ import { esc } from "./ledger-chrome.js";
 import { safeFetch, probePublicUrl } from "./tools/fetch-guard.js";
 import { readTextCapped } from "./capped-body.js";
 import { parseRobots, robotsAllows } from "./tools/kit.js";
-import { CDP_TOOLS } from "./tools/cdp-kit.js";
 import { partialFields, clampFields } from "./partial-answer.js";
 import { responseContractOf, packResponseContract, responseContractProjection } from "./response-contract.js";
 import { deliveryProjection } from "./response-observation.js";
@@ -208,8 +207,7 @@ import { priceToMicroUsd, priceUsdOf, isPricedAboveZero, atomicContext, atomicAm
 // Re-exported: the dataset snapshot, the server and the tests import it from here.
 export { priceToMicroUsd };
 import { queryTerms, isCjkTerm, splitTokens } from "./query-terms.js";
-import { summarize, fmtUsd, fmtPct } from "./economy.js";
-import { rankBy, canonicalHost, getLeaderboardSnapshot, getLeaderboardCircularWallets } from "./leaderboard.js";
+import { canonicalHost, getLeaderboardSnapshot, getLeaderboardCircularWallets } from "./leaderboard.js";
 import { routeExecuteHint } from "./tools/route-execute.js";
 import { recordSellerRegistrationSeen, getSellerRegistrations, deleteSellerRegistration, ensureSellerRegistrations } from "./stats.js";
 
@@ -9938,6 +9936,57 @@ function toolStatics(t, origin = null) {
 // With `match`, only the rows it accepts throw (one poison row beside good ones).
 let toolStaticsFaultForTest = null, toolStaticsFaultMatch = null;
 export function _setToolStaticsFaultForTest(err, match = null) { toolStaticsFaultForTest = err || null; toolStaticsFaultMatch = typeof match === "function" ? match : null; }
+/** Does this route text, joined to its seller key, leave the seller? The
+ *  parsed answer: the joined text read as a URL (routeLeavesSeller answers
+ *  the same for every input, without the parse where the text alone decides). */
+function routeLeavesSellerParsed(seller, route) {
+  let u;
+  try { u = new URL(joinSellerRoute(seller, route)); } catch { return true; }
+  return !!(u.username || u.password) || !isUnderSeller(u.href, seller);
+}
+// A seller key read once: is it exactly the text a URL parser makes of it
+// (http or https, no credentials, host and port as written, the path its own
+// prefix, no query or fragment, no character a parser strips)? Then a route
+// that starts with "/" joins inside that key's authority whatever follows.
+// One parse per seller key, kept; the tool rows of a seller read the answer.
+const plainSellerKeyMemo = new Map();
+const PLAIN_SELLER_KEYS_MAX = 20_000;
+const SELLER_KEY_UNPLAIN = /[\u0000-\u0020\u007f\\?#]/;
+function isPlainSellerKey(seller) {
+  let plain = plainSellerKeyMemo.get(seller);
+  if (plain !== undefined) return plain;
+  plain = false;
+  if (!SELLER_KEY_UNPLAIN.test(seller)) {
+    const { origin, prefix } = sellerKeyParts(seller);
+    if (seller === `${origin}${prefix}`) {
+      let u = null;
+      try { u = new URL(seller); } catch { u = null; }
+      plain = !!u && (u.protocol === "https:" || u.protocol === "http:") && !u.username && !u.password && !u.search && !u.hash
+        && `${u.protocol}//${u.host}` === origin && u.pathname === (prefix || "/");
+    }
+  }
+  if (plainSellerKeyMemo.size >= PLAIN_SELLER_KEYS_MAX) plainSellerKeyMemo.clear();
+  plainSellerKeyMemo.set(seller, plain);
+  return plain;
+}
+// Route text a parser may read as something other than the path it spells: a
+// character it strips (control, space), a backslash (a slash to it), or a dot
+// segment, written out or percent-encoded (it climbs out of a prefix).
+const ROUTE_NEEDS_PARSE = /[\u0000-\u0020\u007f\\]|%2e|(?:^|\/)\.{1,2}(?:[\/?#]|$)/i;
+/** Does this route text, joined to its seller key, leave the seller? A plain
+ *  path ("/..." with nothing a parser rewrites) under a plain seller key stays
+ *  inside the key by its text: the authority ends where the key's ends and the
+ *  path starts with the key's prefix. That is every ordinary listing, and it
+ *  parses nothing per row (an index add computes this for every tool it
+ *  holds). Anything else is parsed. */
+function routeLeavesSeller(seller, route) {
+  if (typeof route === "string" && typeof seller === "string" && route.charCodeAt(0) === 47 && !ROUTE_NEEDS_PARSE.test(route) && isPlainSellerKey(seller)) return false;
+  return routeLeavesSellerParsed(seller, route);
+}
+/** Test hooks: the text-first answer, the parsed answer, and a row's statics. */
+export function _routeLeavesSellerForTest(seller, route) { return routeLeavesSeller(seller, route); }
+export function _routeLeavesSellerParsedForTest(seller, route) { return routeLeavesSellerParsed(seller, route); }
+export function _computeToolStaticsForTest(t) { return computeToolStatics(t); }
 function computeToolStatics(t) {
   if (toolStaticsFaultForTest && (!toolStaticsFaultMatch || toolStaticsFaultMatch(t))) throw toolStaticsFaultForTest;
   let st;
@@ -9971,6 +10020,12 @@ function computeToolStatics(t) {
     // the router buys from other sellers: this host's own catalog tools, which
     // it serves under its own upstream terms, are never excluded by it.
     excluded: t.seller !== LOCAL_SELLER && routeExcludedCategory(t) !== null,
+    // A listed route whose text, joined to its seller, is a URL on another
+    // host or outside a path seller's prefix ("@other.host/x",
+    // ".other.host/x"), or no URL at all: the row is never ranked, so
+    // /api/route serves no URL under a seller's name that the seller's own
+    // key does not hold, and the router is never sent to one.
+    offSeller: t.seller !== LOCAL_SELLER && typeof t.seller === "string" && routeLeavesSeller(t.seller, t.route),
     priceRank: priceRank(t.price),
     // Curated alternate names a tool answers to, scored exactly like the slug
     // (max over slug + aliases per term, never additive). Our asn-info IS an IP
@@ -9984,7 +10039,15 @@ function computeToolStatics(t) {
     // query word it carries, so an outside slug that IS a tool's full name in
     // snake_case out-scored the tool's own shorter slug on its own name (49 of
     // 585 after the first pass). Now both sides score the name the same way.
-    nameSlug: (() => { const toks = splitTokens(name); const ns = toks.join("-"); return toks.length > 1 && ns !== slug.toLowerCase() ? ns : null; })(),
+    //
+    // Only a NAME-length name (NAME_SLUG_MAX_TOKENS words or fewer) is an
+    // alias. Outside sellers often put a whole sentence in "name", and that
+    // sentence in slug form let any common query word ("which", "are", "set")
+    // score slug points by appearing anywhere in it: "which stocks are set up
+    // to buy today" ranked a marketplace-crowding tool first on its name
+    // sentence (2026-11-09). Every one of our own 628 names is 9 words or
+    // fewer, so the rule above keeps working for every row it was built for.
+    nameSlug: (() => { const toks = splitTokens(name); const ns = toks.join("-"); return toks.length > 1 && toks.length <= NAME_SLUG_MAX_TOKENS && ns !== slug.toLowerCase() ? ns : null; })(),
   };
   // Every name the slug rule scores: slug, curated aliases, the name in slug
   // form. Built once here rather than per row per query.
@@ -10382,6 +10445,8 @@ export const ROUTE_TOP_MAX = 25;
 // per /api/route on prod. A row that matches ONLY such words is not an answer
 // to a task that names anything else. A query made of nothing but these words
 // selects on all of them, as before.
+// Longest name (in words) that also scores as a slug alias (toolStatics nameSlug).
+export const NAME_SLUG_MAX_TOKENS = 10;
 const ROUTE_NONSELECTING_TERMS = new Set([
   "a", "an", "the", "to", "of", "for", "in", "on", "at", "by", "and", "or", "with", "from", "into", "via", "as",
   "is", "are", "be", "it", "its", "this", "that", "i", "me", "my", "we", "our", "you", "your",
@@ -10644,6 +10709,7 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
     const st = toolStatics(t);
     if (st.broken) { brokenToolsSkipped++; return; } // its statics threw: never scored
     if (st.injected) return;
+    if (st.offSeller) return;
     const { name, hay, names, nameToks } = st;
     let score = 0, mSlug = 0, mName = 0, mText = 0;
     // A slug (or alias) EVERY token of which appears in the query is an exact
@@ -11047,86 +11113,6 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
     ...(anyExternal ? { containsUntrustedContent: true } : {}),
     ...(wantNet ? { network: wantNet } : {}),
   };
-}
-
-// "The economy, over time" — folded in from the two old standalone economy
-// pages (/x402-economy and /economy, both now 301s to /index#economy).
-// Renders (a) the daily settlement history + week-over-week trend from
-// x402EconomySnapshot(), and (b) the 24h ecosystem summary (concentration +
-// network split) from the leaderboard snapshot via summarize() — the parts
-// /leaderboard itself doesn't show. The per-seller top lists from both old
-// pages were NOT ported since /leaderboard already ranks sellers.
-// Pure function of its snapshots so it's unit-testable without a server.
-const econFmt = (n) => Number(n || 0).toLocaleString("en-US");
-
-// 24h ecosystem summary sub-block (from the old /economy page). Renders
-// nothing when the leaderboard snapshot is warming — the section's on-chain
-// history above still carries it, no fabricated zeros.
-function economy24hHtml(leaderboardSnap) {
-  if (leaderboardSnap?.warming || !leaderboardSnap?.leaderboard?.length) return "";
-  const s = summarize(rankBy(leaderboardSnap.leaderboard, "usd"), "usd");
-  const windowLabel = leaderboardSnap.windowLabel || "24h";
-  const networkBars = s.networks
-    .map(
-      (n) => `<div class="econ-net-row"><span>${esc(n.net)}</span><span class="econ-net-val">${fmtUsd(n.usd)} &middot; ${fmtPct(n.share)}</span></div>
-      <div class="econ-net-bar"><div style="width:${Math.max(2, Math.min(100, n.share))}%"></div></div>`
-    )
-    .join("");
-  return `
-    <h3 class="econ-h3">Last ${esc(windowLabel)} across the ecosystem</h3>
-    <p class="pn" style="margin:0 0 14px;">Per-call USDC settled across every public x402 seller our crawler can see, from on-chain Base transfers ($0.50 per-call ceiling filters out funding moves). Refreshes hourly. Full ranking: <a href="/leaderboard">/leaderboard</a>; machine-readable: <a href="/api/leaderboard">/api/leaderboard</a>.</p>
-    <div class="grid" style="margin:0 0 14px;">
-      <div class="stat"><div class="k">Total volume</div><div class="v">${fmtUsd(s.total)}</div><div class="s">across ${econFmt(s.activeSellers)} active sellers</div></div>
-      <div class="stat"><div class="k">Total calls</div><div class="v">${econFmt(s.totalCalls)}</div><div class="s">avg ${fmtUsd(s.avgCallUsd)} per call</div></div>
-      <div class="stat"><div class="k">Top-5 share</div><div class="v">${fmtPct(s.top5Share)}</div><div class="s">top-1 ${fmtPct(s.top1Share)} &middot; top-10 ${fmtPct(s.top10Share)}</div></div>
-      <div class="stat"><div class="k">Networks</div><div class="v">${s.networks.length}</div><div class="s">chains with volume</div></div>
-    </div>
-    <div class="econ-nets">${networkBars}</div>`;
-}
-
-export function economySectionHtml(snap, leaderboardSnap) {
-  const day = economy24hHtml(leaderboardSnap);
-  const unavailable = !snap || (snap.errors?.length && !(snap.daily || []).length);
-  if (unavailable) {
-    return `<div class="panel" id="economy">
-  <div class="ph"><h2>The economy, over time</h2><div class="pn">Chain-wide gasless USDC settlement history on Base.</div></div>
-  <div style="padding:14px 18px;"><div class="econ-warm">economy history unavailable right now (detail in <a href="/api/x402-economy">/api/x402-economy</a>)</div>${day}</div>
-</div>`;
-  }
-  const t7 = snap.totals?.last7d || { settlements: 0, volumeUsd: 0, payers: 0 };
-  const t30 = snap.totals?.last30d || { settlements: 0 };
-  const daily = snap.daily || [];
-  const maxSett = Math.max(1, ...daily.map((d) => d.settlements));
-  const weekly = snap.weekly;
-  const weeklyLine = weekly?.growthPct != null && weekly.lastWeek.days === 7
-    ? `<p class="pn" style="margin:0 0 14px;">week over week: <strong style="color:${weekly.growthPct >= 0 ? "var(--accent)" : "var(--ink)"};">${weekly.growthPct >= 0 ? "+" : ""}${weekly.growthPct}%</strong> settlements (${econFmt(weekly.thisWeek.settlements)} vs ${econFmt(weekly.lastWeek.settlements)} the week before - complete days only)</p>`
-    : `<p class="pn" style="margin:0 0 14px;">week-over-week trend unlocks once two full weeks of history accumulate (${weekly?.historyDays ?? 0} days recorded so far)</p>`;
-  const bars = daily
-    .map(
-      (d) => `<div class="econ-bar-row">
-        <span class="econ-bar-day">${esc(d.day)}</span>
-        <span class="econ-bar-track" style="width:${Math.max(1, Math.round((d.settlements / maxSett) * 100))}%;"></span>
-        <span>${econFmt(d.settlements)} settlements &middot; ${econFmt(d.payers)} payers</span>
-      </div>`
-    )
-    .join("");
-  return `<div class="panel" id="economy">
-  <div class="ph">
-    <h2>The economy, over time</h2>
-    <div class="pn">Every gasless EIP-3009 USDC settlement on Base - the primitive x402 uses - counted chain-wide across every seller, not just Agent402's own catalog. Machine-readable at <a href="/api/x402-economy">/api/x402-economy</a>; same query any agent can buy as <a href="/tools/onchain-sql">onchain-sql</a> for ${esc(CDP_TOOLS.find((t) => t.slug === "onchain-sql")?.price || "its list price")}.</div>
-  </div>
-  <div style="padding:14px 18px;">
-    <div class="grid" style="margin:0 0 14px;">
-      <div class="stat"><div class="k">Settlements 7d</div><div class="v">${econFmt(t7.settlements)}</div></div>
-      <div class="stat"><div class="k">Volume 7d</div><div class="v">$${econFmt(t7.volumeUsd)}</div></div>
-      <div class="stat"><div class="k">Unique payers 7d</div><div class="v">${econFmt(t7.payers)}</div></div>
-      <div class="stat"><div class="k">Settlements 30d</div><div class="v">${econFmt(t30.settlements)}</div></div>
-    </div>
-    ${weeklyLine}
-    <div class="econ-bars">${bars || `<div class="pn">no daily history recorded yet</div>`}</div>
-    ${day}
-  </div>
-</div>`;
 }
 
 // REMOVED 2026-08-24: `indexPage` (a ~340-line HTML dashboard) and its only

@@ -9,9 +9,7 @@
 //      its next one on B a 429, and the same for the x402 route.
 //   REDIS_URL=redis://127.0.0.1:6379 node scripts/test-registration-limits-redis.js
 // Deliberately does not skip without REDIS_URL (CI provides the service container).
-import { spawn } from "node:child_process";
-import { ownStoreEnv } from "./lib/own-stores.js";
-import { getFreePorts } from "./lib/free-port.js";
+import { bootServer } from "./lib/boot-server.js";
 
 if (!process.env.REDIS_URL) {
   console.error("FAIL: REDIS_URL is not set. This test needs a real redis; it deliberately does not skip.");
@@ -59,29 +57,25 @@ ok(sl.sharedLimitsMode() === "redis", "the shared store is Redis (not process me
 
 // ---- 2. two real servers -----------------------------------------------------------------
 {
-  const [pa, pb] = await getFreePorts(2);
-  const children = [];
-  const boot = (port) => {
-    const c = spawn(process.execPath, ["src/server.js"], { env: { ...process.env, ...ownStoreEnv("reg-limits"), SHARED_LIMITS_PREFIX: `${PREFIX}srv`, FREE_MODE: "true", PORT: String(port), X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off" }, stdio: ["ignore", "pipe", "pipe"] });
-    c.log = ""; c.stdout.on("data", (d) => { c.log += d; }); c.stderr.on("data", (d) => { c.log += d; });
-    children.push(c); return c;
-  };
-  const A = boot(pa), B = boot(pb);
+  // PORT=0 boots (scripts/lib/boot-server.js): each server's port is the one it bound.
+  const env = { SHARED_LIMITS_PREFIX: `${PREFIX}srv`, FREE_MODE: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off" };
+  const boots = await Promise.allSettled([bootServer({ env, stores: "reg-limits" }), bootServer({ env, stores: "reg-limits" })]);
+  const [A, B] = boots.map((b) => (b.status === "fulfilled" ? b.value : null));
   try {
-    const up = async (port) => { for (let i = 0; i < 120; i++) { try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) return true; } catch { /* */ } await wait(500); } return false; };
-    const [ua, ub] = await Promise.all([up(pa), up(pb)]);
-    ok(ua && ub, "two servers booted on one Redis");
-    if (!(ua && ub)) console.error(A.log.slice(-800), B.log.slice(-800));
-    // Both servers see the request from 127.0.0.1: one IP.
-    const reg = (port, path, origin) => fetch(`http://127.0.0.1:${port}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ origin }) });
-    for (const path of ["/api/mpp-index/register", "/api/index/register"]) {
-      const codes = [];
-      for (let i = 0; i < 5; i++) codes.push((await reg(pa, path, `https://seller-${i}.invalid`)).status);
-      ok(codes.every((c) => c !== 429), `${path}: five registrations on A are admitted (${codes.join(",")})`);
-      const sixth = await reg(pb, path, "https://seller-6.invalid");
-      ok(sixth.status === 429, `${path}: the IP's sixth, on B, is refused (${sixth.status})`);
+    ok(A && B, "two servers booted on one Redis");
+    if (!(A && B)) for (const b of boots) if (b.status === "rejected") console.error(String(b.reason?.message || b.reason).slice(-800));
+    if (A && B) {
+      // Both servers see the request from 127.0.0.1: one IP.
+      const reg = (srv, path, origin) => fetch(`${srv.url}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ origin }) });
+      for (const path of ["/api/mpp-index/register", "/api/index/register"]) {
+        const codes = [];
+        for (let i = 0; i < 5; i++) codes.push((await reg(A, path, `https://seller-${i}.invalid`)).status);
+        ok(codes.every((c) => c !== 429), `${path}: five registrations on A are admitted (${codes.join(",")})`);
+        const sixth = await reg(B, path, "https://seller-6.invalid");
+        ok(sixth.status === 429, `${path}: the IP's sixth, on B, is refused (${sixth.status})`);
+      }
     }
-  } finally { for (const c of children) { try { c.kill("SIGKILL"); } catch { /* */ } } }
+  } finally { await Promise.all([A?.stop(), B?.stop()]); }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

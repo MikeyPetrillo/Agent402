@@ -107,6 +107,34 @@ const HANDLER_WAIT_MS = 120_000;
 
 const ms = (a, b) => (a != null && b != null && b >= a ? Math.round(b - a) : null);
 
+// Which phase a buyer who left was waiting on: the handler (the answer was not
+// ready), the settlement (the answer was ready and the charge was in flight),
+// or after it (the response was being written).
+function leftDuring(s, closedAt) {
+  if (s.handlerEnd == null || closedAt < s.handlerEnd) return "handler";
+  if (s.settleStart != null && closedAt >= s.settleStart && (s.settleEnd == null || closedAt <= s.settleEnd)) return "settle";
+  return "after-handler";
+}
+
+/** How long a paid call's buyer waited before leaving, and during which phase
+ *  (null when the request carries no arrival mark). Read by the hang-up debt
+ *  line in server.js, so a charged-but-not-served booking says when the
+ *  buyer's own client gave up. */
+export function hangupWaitOf(req) {
+  const s = req && req[KEY];
+  if (!s || s.arrived == null) return null;
+  const closedAt = s.closedAt ?? now();
+  return { waitedMs: ms(s.arrived, closedAt), during: leftDuring(s, closedAt), network: s.network || null };
+}
+
+// The last HANGUP_KEEP buyer departures per network, kept apart from the
+// rolling window: a few hang-ups a week would scroll out of a window of
+// recent calls, and how long those buyers waited is the one figure that names
+// their client's timeout (2026-11-09: Solana metered buyers leaving during the
+// ~1 s settle after a 4-7 s answer, charged and not served).
+const HANGUP_KEEP = 50;
+const hangups = new Map(); // network -> [{ at, slug, waitedMs, during }]
+
 // The payer's first six characters (enough to split buyers in an audit, never
 // the address) and whether the call is our own traffic.
 function whoOf(s) {
@@ -135,6 +163,13 @@ function recordPaidCall(req, res, s) {
     gone,
     ...whoOf(s),
   };
+  if (gone !== "no") {
+    const net = row.network || "-";
+    const list = hangups.get(net) || [];
+    list.push({ at: new Date(Math.round(performance.timeOrigin + closedAt)).toISOString(), slug: row.slug, rail, waitedMs: row.totalMs, during: leftDuring(s, closedAt), synthetic: row.synthetic });
+    while (list.length > HANGUP_KEEP) list.shift();
+    hangups.set(net, list);
+  }
   const ring = rings.get(rail) || [];
   ring.push(row);
   while (ring.length > windowSize()) ring.shift();
@@ -180,5 +215,11 @@ export function paidPhaseSummary() {
       })),
     };
   }
+  // Buyer departures per network, newest last, with the waits sorted so the
+  // shortest wait that still left (the likely client timeout) reads at a glance.
+  out.hangups = Object.fromEntries([...hangups].map(([net, list]) => {
+    const waits = list.filter((h) => !h.synthetic).map((h) => h.waitedMs).filter((v) => v != null).sort((x, y) => x - y);
+    return [net, { count: list.length, waitsMs: waits, minWaitMs: waits[0] ?? null, medianWaitMs: pct(waits, 50), byPhase: list.reduce((acc, h) => ((acc[h.during] = (acc[h.during] || 0) + 1), acc), {}), recent: list.slice(-10) }];
+  }));
   return out;
 }

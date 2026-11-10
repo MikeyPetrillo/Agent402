@@ -68,6 +68,8 @@ export const CORS_EXPOSE_HEADERS = [
   "X-Replayed-Answer",
   // A first-call allowance grant (src/first-call-allowance.js).
   "X-Agent402-Allowance",
+  // A streamed /v1 answer whose reasoning setting was lowered to fit its cap.
+  "X-Agent402-Reasoning-Adjusted",
   "Retry-After",
   "Mcp-Session-Id",
   "Mcp-Protocol-Version",

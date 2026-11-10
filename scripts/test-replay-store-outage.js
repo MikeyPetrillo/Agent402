@@ -190,7 +190,7 @@ try {
       if (gsF?.replayStore?.status === "pending") break;
       await new Promise((r) => setTimeout(r, 250));
     }
-    ok(gsF?.replayStore?.status === "pending" && Object.keys(gsF.replayStore).join(",") === "status", `the missed consumed mark reads replayStore pending on /api/gateway-status, one word (${JSON.stringify(gsF?.replayStore)})`);
+    ok(gsF?.replayStore?.status === "pending" && gsF.replayStore.alert === "ok" && Object.keys(gsF.replayStore).join(",") === "status,alert", `the missed consumed mark reads replayStore pending (alert ok inside its grace period) on /api/gateway-status, words only (${JSON.stringify(gsF?.replayStore)})`);
     const gsC = await fetch(`${C}/api/gateway-status`).then((r) => r.json()).catch(() => ({}));
     ok(gsC?.replayStore?.status === "ok", `control: with no shared store configured nothing is missed (${JSON.stringify(gsC?.replayStore)})`);
     // ...while inside the window (an old container may still serve) it is refused.

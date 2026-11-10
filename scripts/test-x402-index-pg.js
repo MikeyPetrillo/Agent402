@@ -13,6 +13,7 @@ import { mkdtempSync, writeFileSync, rmSync, readFileSync, existsSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTestPg } from "./lib/test-pg.js";
+import { oursMs } from "./lib/ours-clock.js";
 import "./lib/uncapped-sellers.js"; // every seeded tool is kept: the large sellers here are the point
 requireTestPg({ label: "test-x402-index-pg" });
 
@@ -89,13 +90,16 @@ try {
     m1.__testSeedCache([[BIG, entry("/big", { tools, fetchedAt: 1700000000001 })]]);
     // The bound is relative to this machine: twice the time one JSON.stringify
     // of the row takes here (the old array path was over ten times that).
-    const t0 = performance.now();
+    // Both are read on the ours clock (scripts/lib/ours-clock.js): a gap is
+    // the smaller of its wall length and the time the thread had a core
+    // inside it, so a host busy with other suites does not read as a hold.
+    const t0 = oursMs();
     const mb = JSON.stringify(m1._cacheForTests().get(BIG)).length / 1_048_576;
-    const bound = Math.max(Number(process.env.LOOP_SLICE_BOUND_MS || 120), 2 * (performance.now() - t0));
-    let last = performance.now(), worst = 0;
-    const iv = setInterval(() => { const now = performance.now(); worst = Math.max(worst, now - last - 2); last = now; }, 2);
+    const bound = Math.max(Number(process.env.LOOP_SLICE_BOUND_MS || 120), 2 * (oursMs() - t0));
+    let last = performance.now(), lastOurs = oursMs(), worst = 0;
+    const iv = setInterval(() => { const now = performance.now(), c = oursMs(); worst = Math.max(worst, Math.min(now - last - 2, c - lastOurs)); last = now; lastOurs = c; }, 2);
     const storedBig = await m1.persistIndexCacheAsync(process.env.INDEX_CACHE_FILE);
-    worst = Math.max(worst, performance.now() - last - 2); // the gap still open when persist settles
+    worst = Math.max(worst, Math.min(performance.now() - last - 2, oursMs() - lastOurs)); // the gap still open when persist settles
     clearInterval(iv);
     const row = await sdb.records.get(COLLECTION, BIG);
     ok(storedBig === true && row?.tools?.length === 120_000 && row.tools[17].name === 'Route "17"' && row.tools[0].description === "Quotes \"inside\" and a back\\slash.", "a multi-megabyte row is stored whole, quotes and backslashes intact");
@@ -128,9 +132,9 @@ try {
     // Mostly three-byte characters, so byte-range boundaries fall inside them.
     const mk = (price, fetchedAt) => entry("/huge", { fetchedAt, tools: Array.from({ length: 100_000 }, (_, i) => ({ route: `/api/h${i}`, slug: `h${i}`, name: `名前 ${i} 😀`, description: `${"説明".repeat(40)} "${i}" \\`, price, networks: ["eip155:8453"] })) });
     const gap = async (fn) => {
-      let last = performance.now(), worst = 0;
-      const iv = setInterval(() => { const now = performance.now(); worst = Math.max(worst, now - last - 2); last = now; }, 2);
-      try { const out = await fn(); worst = Math.max(worst, performance.now() - last - 2); return { out, worst: Math.round(worst) }; } finally { clearInterval(iv); }
+      let last = performance.now(), lastOurs = oursMs(), worst = 0;
+      const iv = setInterval(() => { const now = performance.now(), c = oursMs(); worst = Math.max(worst, Math.min(now - last - 2, c - lastOurs)); last = now; lastOurs = c; }, 2);
+      try { const out = await fn(); worst = Math.max(worst, Math.min(performance.now() - last - 2, oursMs() - lastOurs)); return { out, worst: Math.round(worst) }; } finally { clearInterval(iv); }
     };
     const stampOf = async (id) => (await sdb.stateQuery(`SELECT updated_at::text AS t FROM ${process.env.STATE_DB_SCHEMA}.records WHERE collection = $1 AND id = $2`, [COLLECTION, id])).rows[0]?.t ?? null;
     m1.__testSeedCache([[HUGE, mk("$0.001", 1700000000100)]]);
@@ -143,9 +147,9 @@ try {
     // Another container writes a newer copy: this one reads it, whole and once.
     await sdb.records.put(COLLECTION, HUGE, mk("$0.002", 1700000000200));
     const stored = await sdb.records.get(COLLECTION, HUGE); // the driver's one-call parse
-    const t0 = performance.now();
+    const t0 = oursMs(); // the same clock as the gaps it bounds
     JSON.parse(JSON.stringify(stored));
-    const oneParse = performance.now() - t0;
+    const oneParse = oursMs() - t0;
     const heldBefore = m1._cacheForTests().get(HUGE);
     const reads1 = m1.__testPullBodyReads();
     const { out: folded, worst: wForeign } = await gap(() => m1.pullIndexChanges());

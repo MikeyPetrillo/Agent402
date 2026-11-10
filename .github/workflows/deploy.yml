@@ -7,9 +7,27 @@ name: Deploy to Railway
 # even though the newer deploy carries its changes (hit 2026-07-21). cancel-in-
 # progress kills the older RUN cleanly the moment a newer push starts, so the
 # only run that survives is the one whose build actually reaches prod.
+#
+# That holds for the dev branch only. On `main` a run is a release: canceling
+# one in progress can stop a deploy between its variable upsert and its
+# verification, or an npm publish between two packages. So a run on `main` is
+# never canceled by a newer push; the newer run waits in the same group until
+# the running one ends (GitHub keeps one pending run per group, the newest),
+# and its own deploy then carries both merges: main only moves forward, so the
+# newest pending push contains every merge before it.
+#
+# The release group holds only runs that can release: a push, a pull_request,
+# and a dispatch whose mode is deploy or publish (the two modes that start the
+# jobs in the production environment). Every other dispatch mode (probe, test,
+# paytest, purl, drain, demo, the bazaar passes) runs in a second group per
+# branch. In one shared group a long manual pass held a merge's tests and
+# deploy behind it, and a dispatch queued after a pending merge run replaced
+# it, so that merge's run never started. The manual modes still run one at a
+# time among themselves, and are never canceled on main.
+# scripts/test-ci-gating.js evaluates this expression for every mode a job reads.
 concurrency:
-  group: deploy-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.event_name == 'workflow_dispatch' && inputs.mode != 'deploy' && inputs.mode != 'publish' && format('deploy-dispatch-{0}', github.ref) || format('deploy-{0}', github.ref) }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 on:
   # NO path filter on this push trigger, deliberately - GitHub Actions applies
@@ -597,7 +615,7 @@ jobs:
     needs: [markers, deploy]
     if: always() && github.event_name == 'workflow_dispatch' && inputs.mode == 'bazaar-sweep' && (needs.deploy.result == 'success' || needs.deploy.result == 'skipped')
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 120
     env:
       TARGET_URL: https://agent402.tools
       MODE: sweep
@@ -1147,7 +1165,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (6 scripts, one process each)
+      - name: Offline suites (7 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -1157,6 +1175,8 @@ jobs:
           t node scripts/test-correctness-fixes.js
           # Find ranker — live-catalog smoke test (boots free-mode, locks top-1 for agent queries)
           t node scripts/test-find-ranking.js
+          # /api/find and a stated conversion direction: a tool named for the reverse direction ranks below the rest, an unserved direction reads as a miss (direction.served false, weak rows, the hint), the reverse query and 88 pinned queries keep their top result, every tool still finds itself by its description; boots a free server on port 0
+          t node scripts/test-find-direction.js
           # /openapi.json coverage (every CATALOG tool has a path + operationId + x-price)
           t node scripts/test-openapi-coverage.js
           # MCP prompts/list + prompts/get (one prompt per skill pack; substitution renders)
@@ -1380,6 +1400,8 @@ jobs:
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
           t node scripts/test-shared-limits.js
           t node scripts/test-shared-limits-crossprocess.js
+          # exaSpend and xDataSpend in a new process: over from the shared day, capped while another process refuses, this process's own word inside a bounded wait when the store does not answer.
+          t node scripts/test-spend-words-shared-redis.js
           # A close made while a connect is still in flight ends that connect too.
           t node scripts/test-shared-redis-close.js
           # The in-flight run cover: memory, a store that does not answer (local ledger decides), and real Redis.
@@ -1400,6 +1422,8 @@ jobs:
           t node scripts/test-hangup-settlement.js
           # The settle-failure breaker writes through to the shared store: a trip on one process pauses the other.
           t node scripts/test-gateway-settle-breaker.js
+          # A burst alarm tripped on one container reads burst on another through the shared flag (settle breaker and report guard).
+          t node scripts/test-alarm-flag-shared-redis.js
           # Two servers on one live Redis run one payment sent to both at once exactly once (the outage cases also run offline).
           t node scripts/test-replay-store-outage.js
           # The consumed mark's hold read back from Redis: a settled 200 keeps the guard's hour, a forgiven unsettled hang-up is held to the authorization's validBefore.
@@ -1430,6 +1454,8 @@ jobs:
           # A link whose row write cannot land answers unavailable (503), never ok.
           t node scripts/test-email-links-outage-pg.js
           t node scripts/test-leased-loops.js
+          # The call log: rows past the retention are deleted in batches under a lease; the pool's statement limit cuts a slow statement and the insert path never throws.
+          t node scripts/test-analytics-retention.js
           # With more than one replica, a database error never lets a singleton (backup, reconcile) run on both.
           t node scripts/test-lease-failopen-replicas.js
           # A tick whose lease was lost stops before its next send, pull or paid run.
@@ -1634,6 +1660,9 @@ jobs:
       # Every input-validation 400 carries a ready-to-run howToCall; each free-tier tool's call and alternate are sent as written (boots its own server on port 0)
       - name: Input 400 carries a ready-to-run call
         run: node scripts/test-how-to-call.js
+      # A first-contact 402 body carries a payment block: the dollar price equals /api/pricing and the accept it names (flat, proof-of-work, metered, a premium chain), the metered block names the model sent, and every other field and the header equal a boot with the block off (three paid boots on port 0, a /supported stub)
+      - name: 402 body states its price and next steps
+        run: node scripts/test-payment-guide.js
 
       # ONE STEP, MANY SCRIPTS (2026-08-25): GitHub spends ~0.7 s of runner setup
       # per step and this lane had over a hundred one-line steps. Each script still
@@ -1889,6 +1918,8 @@ jobs:
           t node scripts/test-find-reader-aliases.js
           # Discovery gate: every compute under a deadline, slot released, self-healing in-flight count, perf fields (booted, offline)
           t node scripts/test-discovery-deadline.js
+          # Search refusals: counted by route, rule and keyed client digest, capped with exact totals, kept 8 days, operator route, 429 fields (booted, offline)
+          t node scripts/test-discovery-refusals.js
           # Router worker pool: worker answers equal in-thread, /health stays fast under a burst, crash and deadline recovery, refresh reaches the worker (offline, boots a server from the fixture)
           t node scripts/test-router-worker.js
           t node scripts/test-router-worker-prod-boot.js
@@ -2022,6 +2053,8 @@ jobs:
           t node scripts/test-seller-field-types.js
           # A stored index of sellers with non-text fields boots and serves every seller page and API; entries are cleaned as the cache stores them
           t node scripts/test-seller-field-types-serve.js
+          # A route's off-seller verdict is decided from its text and equals the parsed answer for every input (hostile seller keys and routes, generated routes); a seller's ordinary rows parse one URL for the key and none per row (offline)
+          t node scripts/test-off-seller-route.js
           # The index keeps at most INDEX_SELLER_TOOL_CAP tools per seller, described first, in one funnel: a 12,000-tool seller lists at the cap with toolsTotal and toolsCapped on every surface and routes on its kept tools; a mutation control on a copy of src shows the full count with the cap removed (boots the server; offline)
           t node scripts/test-seller-tool-cap.js
           # A throw inside a scheduled turn (the drain, a shadow rebuild) or inside one seller's listing is contained: the process stays up, the other sellers answer, the counts reach the operator surface (boots the server; offline)
@@ -2053,6 +2086,10 @@ jobs:
           t node scripts/test-rugcheck-pause.js
           # MPP recurring subscriptions (tempo/subscription challenge shape, binding refuses forged/foreign/expired/underpriced before any settlement, period accounting, dunning, cancellation - offline)
           t node scripts/test-mpp-subscriptions.js
+          # An MPP subscription's signing key is deleted when the subscription is canceled or ends (store, file and memory searched in every encoding; mppx's renewal cannot sign), the reduced record after its retention and not before, the sweep is bounded and idempotent, a live subscription keeps its key and renews (offline)
+          t node scripts/test-mpp-subscription-key-lifetime.js
+          # MPP subscription payers are screened before the first payment and before each renewal: a listed wallet is refused with zero sends, a wallet listed between renewals is not charged and its subscription ends, a clean wallet sends exactly once, no list loaded proceeds and is counted (offline, stub feed)
+          t node scripts/test-mpp-subscription-screen.js
           # Subscription gas sponsor: a rolling 24 h count and fee ceiling refuses a sponsored send past it before the RPC (offline, stub RPC)
           t node scripts/test-tempo-sponsor-ceiling.js
           # Tempo buyer: a minted credential must move exactly the capped quote to the checked recipient, refused before it is sent; our paying scripts sign tempo/charge under the per-call ceiling (offline, stub seller)
@@ -2104,6 +2141,8 @@ jobs:
           t node scripts/test-legal-dates.js
           # Legal, security and machine copy state what the code does (backups, refunds, CSP, MPP chains; offline)
           t node scripts/test-legal-claims.js
+          # Sentences a review found contradicting the code, pinned to its constants: card charge timing, job and screening retention on /privacy and /terms, the payTo variables in Self-Hosting, the leaderboard cadence (offline)
+          t node scripts/test-copy-truth.js
           # FACILITATOR_PUBLIC_INDEX_CHAINS: the privacy paragraph and terms pointer appear only for the listed chains, with their exact wording (offline)
           t node scripts/test-public-index-copy.js
           t node scripts/test-wire-count-copy.js
@@ -2251,7 +2290,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (5 scripts, one process each)
+      - name: Offline suites (7 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -2263,6 +2302,10 @@ jobs:
           t node scripts/test-coldstart.js
           # Idempotency (opt-in safe retry of paid/proven calls; boots paid-mode)
           t node scripts/test-idempotency.js
+          # A paid tool call carrying a conditional or range header is a full 200, settled and booked once (stub facilitator; a free document keeps its 304)
+          t node scripts/test-paid-full-answer.js
+          # The URL tools and the memory family write one call-log row per call, final status (free and paid boots, stub facilitator, loopback-only fetch)
+          t node scripts/test-bespoke-call-log.js
           # Large-body routes: no compressed body, no unpaid body over 100 KB read unless priced from it, one in-flight byte budget (boots paid-mode on port 0)
           t node scripts/test-large-body-gate.js
 
@@ -2974,6 +3017,10 @@ jobs:
           # CI lane gating (every test lane blocks deploy/publish; Chromium only where a script needs it — offline)
           t node scripts/test-ci-gating.js
           t node scripts/test-port-hygiene.js
+          # scripts/lib/boot-server.js: PORT=0 boots read the bound port back, two at once get two ports, a crash rejects with its log (boots the server; offline)
+          t node scripts/test-boot-server.js
+          # Stubbed fetches route by the parsed host (scripts/lib/url-host.js), never a URL substring; older files frozen with counts (static; offline)
+          t node scripts/test-url-host-match.js
           # Every offline suite pins its stores first: ./lib/offline-stores.js is its first import, so an exported REDIS_URL, STATE_DATABASE_URL or LEDGER_JOURNAL_REDIS never reaches a src/ module (static; offline)
           t node scripts/test-offline-stores-import.js
           # test-all waits for the seller index before its strict sweep and fails naming the state if it never loads (stub server; offline)
@@ -3032,6 +3079,8 @@ jobs:
           t node scripts/test-robots-redos.js
           # transcribe's refusal for our own billing limit names our side and no vendor (offline)
           t node scripts/test-stt-billing-limit.js
+          # transcribe makes one more upstream attempt on a transient failure, inside its cap and its counters (offline)
+          t node scripts/test-stt-retry.js
           # rwa-asset joins only the requested asset's market row (offline)
           t node scripts/test-rwa-asset-own-row.js
           # filing-watch form filter reads the full recent list and older filing files, bounded reads (offline)
@@ -3187,6 +3236,8 @@ jobs:
           t node scripts/test-tool-failure-monitor.js
           # heartbeat.yml's failure-word step run against stubbed curl and gh (pages, comments, closes; slugs only, never counts or upstream names) and the Worker's matching alarms - offline
           t node scripts/test-heartbeat-failure-words.js
+          # Three gateway-status words and their two observers: gatewayBalance pages on withdraw at once; sharedLimits and replayStore page on their second word (alert=sustained, the first word held ten minutes) and never on a flicker; heartbeat.yml's steps run against stubbed curl and gh - offline
+          t node scripts/test-status-word-pagers.js
           # heartbeat.yml issue lookups keep only the exact alarm title (a title search also finds near-identical titles; the wallet steps never touch each other's issues) - offline
           t node scripts/test-heartbeat-issue-lookup.js
           # Paid 200 answer classes (ok / empty / error-shaped / unchecked), the toolAnswers word and its heartbeat + Worker alarm, the identical-answer read over a scratch sales ledger, the observer byte-for-byte; boots a paid-mode server against a stub facilitator on free ports
@@ -3259,6 +3310,10 @@ jobs:
           t node scripts/test-bazaar-validate.js
           # Anthropic Messages wire on the five tiers (validation, probe clamp, outbound prefs, billing strip, failover, paid-empty guard, SSE scrub - offline)
           t node scripts/test-llm-messages.js
+          # Reasoning fitted to the output cap: a buyer effort or budget too high for a small cap is lowered before the call and disclosed, one same-model retry at the lowest effort after an empty answer, price and time conditions, every wire and streams (offline)
+          t node scripts/test-llm-answer-fit.js
+          # Wire parity: one caller mistake or upstream condition gets the same class of answer on chat completions, Messages, Responses and generateContent, and a metered request that cannot be served is refused before any payment requirement on each (two local boots, stub upstream - offline)
+          t node scripts/test-llm-wire-parity.js
           # The gateway suites pass on the placeholder cost table too (docs/example-upstream-costs.json; prints exit codes and counts only - offline)
           t node scripts/test-example-costs-suites.js
           # Availability failover: a model with no live host is served by its same-family successor (named in the reply), model_fallback:false opts out, rate limits retry the same model first (offline, every wire)
@@ -3477,8 +3532,6 @@ jobs:
           t node scripts/test-log-safe.js
           # Postgres TLS policy by route (F11 — verified cert on public hosts, relaxed only on the private railway.internal mesh — offline)
           t node scripts/test-db-ssl.js
-          # Bounded rate-limit maps + global window ceiling (F21 — stale one-time-IP keys swept, distributed flood capped — offline)
-          t node scripts/test-rate-sweep.js
           # Local SQLite fallback contract: the stats and memory stores report persistence honestly and fail loud in prod without durable storage
           t node scripts/test-stats-persistence.js
           # Buyer SDK response-size ceiling (refused before parsing; a paid oversize says it was paid - offline)
@@ -3536,8 +3589,12 @@ jobs:
           t node scripts/test-x-data-kit.js
           # x-search-recent author and post histogram: counted on the final response, counts only (offline)
           t node scripts/test-x-search-stats.js
+          # x-data daily ceilings: served past the alarm ceiling, refused at the hard one, 0 refuses all, both observers page (offline)
+          t node scripts/test-x-data-ceilings.js
           # Exa kit (env-gated on EXA_API_KEY; offline, stubbed fetch, nothing spent)
           t node scripts/test-exa-kit.js
+          # Exa daily ceilings: served past the alarm ceiling, refused at the hard one, 0 refuses all, allowance word untouched, both observers page (offline)
+          t node scripts/test-exa-ceilings.js
           # b2b-enrich kit (offline)
           t node scripts/test-b2b-enrich-kit.js
           # Ox Alpha free-trial safety (fails closed on a repriced upstream, offline)
@@ -3847,6 +3904,8 @@ jobs:
           node scripts/test-sor-seed.js
           node scripts/test-self-funding.js
           node scripts/test-x402-buyer.js
+          # Router money invariants through the real payers: one deadline per purchase, release only on proof, every signed payment recorded as our own, one memo key (stub sellers and chain, offline)
+          node scripts/test-router-money.js
           node scripts/test-router-identification.js
           node scripts/test-synthetic-marker.js
           node scripts/test-router-health.js
@@ -4918,6 +4977,8 @@ jobs:
           t node scripts/test-price-by-model.js
           # TTS quoted per request: the 402 on each chain, Tempo, settlement and the credits hold all read the quote for the text; over-cap refused before any spend; the price surfaces carry the formula (boots a paid server, offline)
           t node scripts/test-tts-quote-paid.js
+          # Every quoted route states one floor: /api/pricing, /openapi.json, /llms-full.txt and the 402's smallest quote agree (paid boot, stub facilitator).
+          t node scripts/test-quoted-from-price.js
           # Real sample reports: fixtures are finished reports, pages indexable with own title/JSON-LD, /reports links them, sitemap carries them (boots FREE_MODE, offline)
           t node scripts/test-sample-reports.js
           # openFDA 404 = no matches, an empty result: recall-report must not 502 on it (offline)
@@ -5324,6 +5385,8 @@ jobs:
         github.event_name == 'workflow_dispatch' && inputs.mode == 'publish' || needs.markers.outputs.publish == 'true'
       )
     runs-on: ubuntu-24.04
+    # Recent runs on main took 1 to 2 minutes; the bound stops a hung install or boot.
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
@@ -5483,6 +5546,8 @@ jobs:
       )
       && needs.publish-gate.result == 'success'
     runs-on: ubuntu-24.04
+    # Recent runs on main took up to 6 minutes; the registry wait loops below sum to about 20.
+    timeout-minutes: 45
     # F01: publishing packages mutates a production artifact — gate it behind the
     # same protected environment as deploy (see the deploy job comment).
     # publish-gate is deliberately OUTSIDE this environment: it holds no
@@ -5966,6 +6031,8 @@ jobs:
     needs: markers
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'probe' || needs.markers.outputs.probe == 'true'
     runs-on: ubuntu-24.04
+    # Read-only diagnostics, a few minutes; the bound stops a hung read.
+    timeout-minutes: 30
     env:
       RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       # The project id is KNOWN (repo var). Railway's `projects` listing query
@@ -6036,7 +6103,7 @@ jobs:
       - name: Railway deployment history (which image is live, what failed)
         run: |
           gql() {
-            curl -s -X POST https://backboard.railway.app/graphql/v2 \
+            curl -s --max-time 30 -X POST https://backboard.railway.app/graphql/v2 \
               -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
               --data @-
           }
@@ -6140,7 +6207,7 @@ jobs:
       - name: Check which facilitator production is configured to use
         run: |
           gql() {
-            curl -s -X POST https://backboard.railway.app/graphql/v2 \
+            curl -s --max-time 30 -X POST https://backboard.railway.app/graphql/v2 \
               -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
               --data @-
           }
@@ -6234,6 +6301,11 @@ jobs:
         (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' && inputs.mode == 'deploy' || needs.markers.outputs.deploy == 'true'
       )
     runs-on: ubuntu-24.04
+    # Recent runs on main took up to 21 minutes. The wait loops below (the quiet
+    # gate, two deployment watches, health, MCP, the listing validation) sum to
+    # about 75 minutes at their own bounds, so the job bound sits above them and
+    # only ends a step that hangs outside its own limit.
+    timeout-minutes: 120
     # actions: read lets the worker step find the last successful deploy run
     # (its diff base); contents: read is the workflow default restated.
     permissions:
@@ -6321,7 +6393,7 @@ jobs:
         id: project
         run: |
           gql() {
-            curl -s -X POST https://backboard.railway.app/graphql/v2 \
+            curl -s --max-time 30 -X POST https://backboard.railway.app/graphql/v2 \
               -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
               --data @-
           }
@@ -6353,7 +6425,7 @@ jobs:
         id: service
         run: |
           gql() {
-            curl -s -X POST https://backboard.railway.app/graphql/v2 \
+            curl -s --max-time 30 -X POST https://backboard.railway.app/graphql/v2 \
               -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
               --data @-
           }
@@ -6375,7 +6447,7 @@ jobs:
         id: domain
         run: |
           gql() {
-            curl -s -X POST https://backboard.railway.app/graphql/v2 \
+            curl -s --max-time 30 -X POST https://backboard.railway.app/graphql/v2 \
               -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
               --data @-
           }
@@ -6430,7 +6502,7 @@ jobs:
         if: env.CUSTOM_DOMAIN != ''
         run: |
           gql() {
-            curl -s -X POST https://backboard.railway.app/graphql/v2 \
+            curl -s --max-time 30 -X POST https://backboard.railway.app/graphql/v2 \
               -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
               --data @-
           }
@@ -6485,7 +6557,7 @@ jobs:
           RAILWAY_DOMAIN: ${{ steps.domain.outputs.domain }}
         run: |
           gql() {
-            curl -s -X POST https://backboard.railway.app/graphql/v2 \
+            curl -s --max-time 30 -X POST https://backboard.railway.app/graphql/v2 \
               -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
               --data @-
           }
@@ -6568,7 +6640,7 @@ jobs:
         id: trigger
         run: |
           gql() {
-            curl -s -X POST https://backboard.railway.app/graphql/v2 \
+            curl -s --max-time 30 -X POST https://backboard.railway.app/graphql/v2 \
               -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
               --data @-
           }
@@ -6589,7 +6661,7 @@ jobs:
       - name: Wait for the NEW deployment to reach SUCCESS
         run: |
           gql() {
-            curl -s -X POST https://backboard.railway.app/graphql/v2 \
+            curl -s --max-time 30 -X POST https://backboard.railway.app/graphql/v2 \
               -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
               --data @-
           }
@@ -7018,7 +7090,7 @@ jobs:
         if: steps.decide-diff.outputs.run == 'yes'
         run: |
           gql() {
-            curl -s -X POST https://backboard.railway.app/graphql/v2 \
+            curl -s --max-time 30 -X POST https://backboard.railway.app/graphql/v2 \
               -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
               --data @-
           }

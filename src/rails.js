@@ -53,9 +53,6 @@ if (process.env.NODE_ENV === "test") {
   }
 }
 
-/** True when `caip2` is a rail static copy names (in RAILS). */
-export const railListed = (caip2) => RAILS.some((r) => r.caip2 === String(caip2 || ""));
-
 /** RAILS plus every gated rail that is in the live offer right now. */
 export function liveRails() {
   const extra = GATED_RAILS.filter((r) => gatedRailOffered(r.caip2));

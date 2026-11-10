@@ -9,6 +9,7 @@
 // a random 40000-59999 port meeting an ephemeral socket (EADDRINUSE).
 //
 //   node scripts/test-port-hygiene.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readdirSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -47,6 +48,24 @@ for (const f of files) {
 }
 ok(assignments >= 30, `found ${assignments} port assignments across ${files.length} test files (the scan sees the fleet)`);
 ok(offenders.length === 0, `no test derives its port from pid/random or picks one in the ephemeral range${offenders.length ? `:\n  ${offenders.join("\n  ")}` : ""}`);
+
+// A server.js boot on a RESERVED port is the narrower hazard the rules above
+// still allow: getFreePort() hands back a port that is free only when picked,
+// and a test that boots a second server minutes later leaves that port open to
+// another lane's outbound socket (test-state-db-overlap, 2026-11-09). New tests
+// boot through scripts/lib/boot-server.js (PORT=0, port read back). The files
+// that predate it are frozen in scripts/port-reservation-baseline.json, which
+// may only shrink: a file that moves to bootServer() must leave the list.
+const BOOTS_SERVER = /["'`]src\/server\.js["'`]/;
+const RESERVES = /\bgetFreePorts?\(/;
+const reserving = files.filter((f) => { const src = readFileSync(join(DIR, f), "utf8"); return BOOTS_SERVER.test(src) && RESERVES.test(src); });
+const baseline = new Set(JSON.parse(readFileSync(join(DIR, "port-reservation-baseline.json"), "utf8")).files);
+const added = reserving.filter((f) => !baseline.has(f));
+const stale = [...baseline].filter((f) => !reserving.includes(f));
+ok(added.length === 0, `no new test boots src/server.js on a reserved port (use bootServer from scripts/lib/boot-server.js)${added.length ? `:\n  ${added.join("\n  ")}` : ""}`);
+ok(stale.length === 0, `the port-reservation baseline lists only files that still reserve (delete moved ones)${stale.length ? `:\n  ${stale.join("\n  ")}` : ""}`);
+ok(baseline.size <= 143, `the port-reservation baseline never grows past its frozen size (${baseline.size} of 143)`);
+ok(BOOTS_SERVER.test('spawn(process.execPath, ["src/server.js"])') && RESERVES.test("const [PORT] = await getFreePorts(1);"), "control: a planted reserved-port boot would be seen");
 
 // The scan must be able to see an offender at all.
 const planted = "const PORT = 40000 + Math.floor(Math.random() * 20000);";

@@ -3,9 +3,10 @@
 //
 // The hole: @x402/express settles AFTER the handler, so a payment that verifies
 // and then fails to settle costs us the upstream call with nothing charged. The
-// breaker refuses a wallet (429) or every tier (503) BEFORE any upstream call
-// once settle failures pile up, and a >= 400 cancels settlement, so nobody pays
-// for the refusal. Nothing here touches the network: every fetch is a stub, and
+// breaker refuses a wallet (429, for an EVM payer on the network its payment
+// named only) BEFORE any upstream call once its settle failures pile up, and a
+// >= 400 cancels settlement, so nobody pays for the refusal. Distinct buyers
+// failing at once raise an alarm (the settleFailures word) and refuse nobody. Nothing here touches the network: every fetch is a stub, and
 // the stub that must NOT be reached fails the run if it is.
 import { EventEmitter } from "node:events";
 import { readFile } from "node:fs/promises";
@@ -17,7 +18,7 @@ process.env.GATEWAY_SETTLE_BREAKER_WINDOW_MS = "900";
 process.env.GATEWAY_SETTLE_BREAKER_GLOBAL_MAX = "6";
 process.env.POSTHOG_TEST_CAPTURE = "1";
 // With a REDIS_URL the breaker writes through to the shared store, whose
-// windows and pause flag outlive this process: a run keys them under its own
+// windows and alarm flag outlive this process: a run keys them under its own
 // prefix so no other run (or a concurrent one on the same Redis) reads them.
 if (!process.env.SHARED_LIMITS_PREFIX) process.env.SHARED_LIMITS_PREFIX = `gwb-test-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -31,7 +32,9 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const ADDR = "0xAbCdEf0123456789AbCdEf0123456789AbCdEf01";
-const paymentHeader = (from) => Buffer.from(JSON.stringify({ payload: { authorization: { from } } })).toString("base64");
+// `network` names the payment's network the way the wire does: v2 under
+// accepted.network (the default here), v1 at the top level.
+const paymentHeader = (from, network = null, v1 = false) => Buffer.from(JSON.stringify({ ...(network && v1 ? { x402Version: 1, scheme: "exact", network } : {}), ...(network && !v1 ? { x402Version: 2, accepted: { scheme: "exact", network } } : {}), payload: { authorization: { from } } })).toString("base64");
 function fakeRes() {
   const res = new EventEmitter();
   res.statusCode = 200;
@@ -40,8 +43,8 @@ function fakeRes() {
   res.setHeader = (n, v) => { res._headers[String(n).toLowerCase()] = v; };
   return res;
 }
-function fakeReq({ from = null, tempo = null, ip = "203.0.113.7", withRes = true } = {}) {
-  const hdr = from ? paymentHeader(from) : null;
+function fakeReq({ from = null, tempo = null, ip = "203.0.113.7", withRes = true, network = null, v1 = false } = {}) {
+  const hdr = from ? paymentHeader(from, network, v1) : null;
   const req = {
     header: (n) => (String(n).toLowerCase() === "payment-signature" ? hdr || undefined : undefined),
     headers: {}, ip,
@@ -212,30 +215,43 @@ const chatBody = { model: "mistralai/ministral-8b-2512", messages: [{ role: "use
   ok(out?.choices?.[0]?.message?.content === "OK" && fetchCalls === 1, "and the wallet is served again");
 }
 
-// --- the global breaker --------------------------------------------------------
+// --- the burst alarm: counted and reported, never a refusal ---------------------
 {
   await b._gatewaySettleBreakerReset();
+  const word = async () => (await b.gatewaySettleFailuresStatus()).status;
   for (let i = 0; i < 5; i++) b.recordGatewaySettleFailure(`0xrotating${i}`);
-  ok(!b.gatewaySettleBreakerGlobalPaused().paused, "five failures across five keys: below the global threshold of six");
+  ok(!b.gatewaySettleBreakerGlobalAlarm().alarm && (await word()) === "ok", "five failures across five keys: below the threshold of six, the word reads ok");
   b.recordGatewaySettleFailure(null);
-  ok(b.gatewaySettleBreakerGlobalPaused().paused, "the sixth (any key, even unkeyed) trips the global pause");
-  globalThis.fetch = async () => { ok(false, "upstream was called during the global pause"); throw new Error("must not be called"); };
-  let err = null;
-  const req = fakeReq({ from: "0x2222222222222222222222222222222222222222" });
-  try { await nano.handler(chatBody, req); } catch (e) { err = e; }
-  ok(err?.statusCode === 503 && /paused/i.test(err?.message || "") && /Nothing was charged/.test(err?.message || ""), `a fresh wallet is refused 503 during the global pause (got ${err?.statusCode}: ${String(err?.message).slice(0, 80)})`);
-  let e3 = null;
-  try { await nano.handler(chatBody); } catch (e) { e3 = e; }
-  ok(e3?.statusCode === 503, "an in-process caller with no request is covered by the global pause too");
-  const st = b.gatewaySettleBreakerStatus();
-  ok(st.globalPaused === true && st.globalTrips === 1 && typeof st.globalPausedUntil === "string", `status reports the pause (got ${JSON.stringify(st)})`);
-  ok(!/0x|203\.0\.113|tempo:/.test(JSON.stringify(st)), "status carries counts only - never a key, address or IP");
-  await sleep(950);
-  ok(!b.gatewaySettleBreakerGlobalPaused().paused, "the global pause lifts after the window");
+  ok(b.gatewaySettleBreakerGlobalAlarm().alarm && (await word()) === "burst", "the sixth (any key, even unkeyed) trips the alarm: settleFailures reads burst");
+  // The next buyer is SERVED while the alarm reads burst: the stub is reached.
   globalThis.fetch = async (url, init) => { fetchCalls++; return okChat(init); };
   fetchCalls = 0;
-  const out = await nano.handler(chatBody, fakeReq({ from: ADDR }));
-  ok(out?.choices?.[0]?.message?.content === "OK" && fetchCalls === 1, "tiers serve again after the pause");
+  let err = null, out = null;
+  const req = fakeReq({ from: "0x2222222222222222222222222222222222222222" });
+  try { out = await nano.handler(chatBody, req); } catch (e) { err = e; }
+  ok(err === null && out?.choices?.[0]?.message?.content === "OK" && fetchCalls === 1 && (await word()) === "burst", `a fresh wallet is served while the alarm reads burst (${err ? `${err.statusCode}: ${String(err.message).slice(0, 60)}` : "served"})`);
+  ok(req.__gatewaySettleBreakerArmed === true, "and its outcome listener is armed like any served call's");
+  let e3 = null; fetchCalls = 0;
+  try { await nano.handler(chatBody); } catch (e) { e3 = e; }
+  ok(e3 === null && fetchCalls === 1, "an in-process caller with no request is served during the alarm too");
+  // The per-wallet rule is untouched by the alarm (the control beside the
+  // served call): a wallet with its own three failures is still refused 429.
+  for (let i = 0; i < 3; i++) b.recordGatewaySettleFailure(ADDR.toLowerCase(), Date.now(), { global: false });
+  let e4 = null;
+  try { await nano.handler(chatBody, fakeReq({ from: ADDR })); } catch (e) { e4 = e; }
+  ok(e4?.statusCode === 429, `control: during the alarm a wallet's own failures still refuse it 429 (got ${e4?.statusCode})`);
+  const st = b.gatewaySettleBreakerStatus();
+  ok(st.globalAlarm === true && st.globalTrips === 1 && typeof st.globalAlarmUntil === "string" && !("globalPaused" in st), `status reports the alarm (got ${JSON.stringify(st)})`);
+  ok(!/0x|203\.0\.113|tempo:/.test(JSON.stringify(st)), "status carries counts only - never a key, address or IP");
+  const pub = await b.gatewaySettleFailuresStatus(), op = await b.gatewaySettleFailuresStatus({ full: true });
+  ok(JSON.stringify(pub) === JSON.stringify({ status: "burst" }), `publicly the word only (${JSON.stringify(pub)})`);
+  ok(op.status === "burst" && op.threshold === 6 && op.trips === 1 && typeof op.until === "string" && typeof op.buyersInWindow === "number" && !/0x|203\.0\.113/.test(JSON.stringify(op)), `the operator read adds the counts, never a key (${JSON.stringify(op)})`);
+  await sleep(950);
+  ok(!b.gatewaySettleBreakerGlobalAlarm().alarm && (await word()) === "ok", "the word returns to ok after the window");
+  const src = (await import("node:fs")).readFileSync(new URL("../src/gateway-settle-breaker.js", import.meta.url), "utf8");
+  ok(!/statusCode = 503/.test(src) && !/briefly paused/.test(src) && !/flag(Set|Get)\("gwb-pause"/.test(src), "the module holds no 503, no pause message and neither writes nor reads the earlier build's pause flag");
+  const consult = src.slice(src.indexOf("export function gatewaySettleBreakerCheck"), src.indexOf("/** Counts only"));
+  ok(!/flagGet|GlobalAlarm/.test(consult), "the consult reads no alarm flag: the alarm is off the serving path");
 }
 
 // --- the finish listener reads the FINAL outcome -------------------------------
@@ -276,7 +292,7 @@ const chatBody = { model: "mistralai/ministral-8b-2512", messages: [{ role: "use
   // and the route's next 402 really dropping that accept - so the loop is
   // closed) is kept off the wallet's count (2026-09-28: one buyer refused 325
   // calls for it, told their wallet was the problem), and even that still
-  // feeds the /v1 global pause. Every other billing refusal has nothing
+  // feeds the /v1 burst alarm. Every other billing refusal has nothing
   // closing its loop, so it counts exactly as before - per wallet and
   // globally - and the 429 names it instead of the wallet. Driven on the exact
   // final shape the vendor writes: 402 + PAYMENT-RESPONSE {success:false,
@@ -324,16 +340,16 @@ const chatBody = { model: "mistralai/ministral-8b-2512", messages: [{ role: "use
     pause();
     for (let i = 0; i < 5; i++) await finishWith("subcent_quota_exceeded");
     ok(walletFails() === 0 && !b.gatewaySettleBreakerBlocked(avmKey).blocked, "five withdrawn subcent_quota_exceeded refusals leave the wallet uncounted and unblocked");
-    ok(globalFails() === 5, `...and every one still feeds the /v1 global pause (got ${globalFails()})`);
+    ok(globalFails() === 5, `...and every one still feeds the /v1 burst alarm (got ${globalFails()})`);
     await finishWith("subcent_quota_exceeded", {}, { global: false });
     ok(walletFails() === 0 && globalFails() === 5, "on the catalog consult (global:false) it records nothing at all");
     const warned = [], warn0 = console.warn;
     console.warn = (...a) => { warned.push(a.join(" ")); };
     try { await finishWith("subcent_quota_exceeded"); } finally { console.warn = warn0; }
-    ok(b.gatewaySettleBreakerGlobalPaused().paused, "the sixth trips the global pause (GLOBAL_MAX 6): the backstop for requests already in flight");
-    const pauseLine = warned.find((l) => /pausing every \/v1 tier/.test(l)) || "";
-    ok(/from 0 buyer\(s\), 6 withdrawn sub-cent refusal\(s\) inside/.test(pauseLine) && !/different buyers/.test(pauseLine), `the pause line says what it counted - withdrawn refusals, not six buyers (${pauseLine.slice(0, 90)})`);
-    // The global pause counts distinct buyers; a withdrawn refusal is recorded
+    ok(b.gatewaySettleBreakerGlobalAlarm().alarm, "the sixth trips the burst alarm (GLOBAL_MAX 6): requests already in flight are reported");
+    const pauseLine = warned.find((l) => /settleFailures reads burst/.test(l)) || "";
+    ok(/from 0 buyer\(s\), 6 withdrawn sub-cent refusal\(s\) inside/.test(pauseLine) && /no request is refused/.test(pauseLine) && !/different buyers/.test(pauseLine), `the alarm line says what it counted - withdrawn refusals, not six buyers (${pauseLine.slice(0, 90)})`);
+    // The burst alarm counts distinct buyers; a withdrawn refusal is recorded
     // with no key, so each one still counts on its own - also in the real
     // arming order (the catalog consult first, then the /v1 handler's own,
     // which upgrades the listener) and from ONE buyer's requests.
@@ -348,7 +364,7 @@ const chatBody = { model: "mistralai/ministral-8b-2512", messages: [{ role: "use
       req.res.emit("finish");
     };
     for (let i = 0; i < 3; i++) await finishUpgraded();
-    ok(walletFails() === 0 && globalFails() === 3, `one buyer's three withdrawn refusals, catalog consult first: off the wallet, and each still counts toward the /v1 global pause (wallet ${walletFails()}, global ${globalFails()})`);
+    ok(walletFails() === 0 && globalFails() === 3, `one buyer's three withdrawn refusals, catalog consult first: off the wallet, and each still counts toward the /v1 burst alarm (wallet ${walletFails()}, global ${globalFails()})`);
     await b._gatewaySettleBreakerReset();
     b.recordGatewaySettleFailure(avmKey);
     await finishWith("subcent_quota_exceeded");
@@ -489,21 +505,21 @@ delete process.env.OPENAI_API_KEY;
   await b._gatewaySettleBreakerReset();
 }
 
-// --- the global pause counts BUYERS, not failures --------------------------------
+// --- the burst alarm counts BUYERS, not failures --------------------------------
 // The per-key check runs before any of a burst's failures lands, so one wallet
 // firing concurrent calls could otherwise supply the whole global count alone
-// and pause every /v1 buyer. (The HTTP twin, a real concurrent burst through a
+// (one buyer is the per-key rule's job). (The HTTP twin, a real concurrent burst through a
 // booted paid server, is in scripts/test-paid-settle-breaker.js.)
 {
   await b._gatewaySettleBreakerReset();
   for (let i = 0; i < 20; i++) b.recordGatewaySettleFailure("0xoneburstwallet");
   const st = b.gatewaySettleBreakerStatus();
-  ok(!st.globalPaused && st.globalFailsInWindow === 1, `twenty failures from ONE buyer count once toward the global pause and never trip it (distinct ${st.globalFailsInWindow}, GLOBAL_MAX 6)`);
+  ok(!st.globalAlarm && st.globalFailsInWindow === 1, `twenty failures from ONE buyer count once toward the burst alarm and never trip it (distinct ${st.globalFailsInWindow}, GLOBAL_MAX 6)`);
   ok(b.gatewaySettleBreakerBlocked("0xoneburstwallet").blocked, "...that buyer is the per-key bound's job, and it is blocked");
   for (let i = 1; i <= 4; i++) b.recordGatewaySettleFailure(`0xotherbuyer${i}`);
-  ok(!b.gatewaySettleBreakerGlobalPaused().paused && b.gatewaySettleBreakerStatus().globalFailsInWindow === 5, "five different buyers: still below the threshold of six");
+  ok(!b.gatewaySettleBreakerGlobalAlarm().alarm && b.gatewaySettleBreakerStatus().globalFailsInWindow === 5, "five different buyers: still below the threshold of six");
   b.recordGatewaySettleFailure("0xotherbuyer5");
-  ok(b.gatewaySettleBreakerGlobalPaused().paused, "the sixth DIFFERENT buyer trips the pause (wallet rotation is what the pause is for)");
+  ok(b.gatewaySettleBreakerGlobalAlarm().alarm, "the sixth DIFFERENT buyer trips the alarm (many buyers failing at once is what it reports)");
   await b._gatewaySettleBreakerReset();
   b.recordGatewaySettleFailure(null); b.recordGatewaySettleFailure(null);
   ok(b.gatewaySettleBreakerStatus().globalFailsInWindow === 2, "a failure with no key to count it under counts as its own buyer (never merged into one)");
@@ -513,7 +529,7 @@ delete process.env.OPENAI_API_KEY;
 // A Circle Gateway batched payment Gateway is still settling: the buyer was
 // told to resend the SAME payment (src/gateway-wire.js), so the pending
 // answer is never counted against the wallet, three in a row block nothing,
-// and it still counts once toward the /v1 global pause as that buyer. The
+// and it still counts once toward the /v1 burst alarm as that buyer. The
 // control: Gateway refusing the same wallet's payment (insufficient_balance)
 // counts exactly as before.
 {
@@ -532,7 +548,7 @@ delete process.env.OPENAI_API_KEY;
   }
   const st = b.gatewaySettleBreakerBlocked(key);
   ok(st.fails === 0 && !st.blocked, `three settlement_pending answers count nothing against the wallet (got ${JSON.stringify(st)})`);
-  ok(b.gatewaySettleBreakerStatus().globalFailsInWindow === 1, "...and count once toward the /v1 global pause, as that one buyer");
+  ok(b.gatewaySettleBreakerStatus().globalFailsInWindow === 1, "...and count once toward the /v1 burst alarm, as that one buyer");
   // Control: the same word on a PLAIN payment (Circle's Arc facilitator,
   // whose resend its held claim refuses) is not this exemption.
   const plainReq = fakeReq({ from: ADDR });
@@ -550,13 +566,13 @@ delete process.env.OPENAI_API_KEY;
   ok(b.gatewaySettleBreakerBlocked(key).fails === 1, "control: Gateway refusing the same wallet (insufficient_balance) still counts against it");
   await b._gatewaySettleBreakerReset();
   // From a wallet-only consult (global:false) a pending answer feeds nothing:
-  // not the wallet, and not the /v1 global pause it takes no part in.
+  // not the wallet, and not the /v1 burst alarm it takes no part in.
   const wo = batchedReq();
   b.armGatewaySettleBreaker(wo, key, { global: false });
   wo.res.statusCode = 402;
   wo.res.setHeader("PAYMENT-RESPONSE", pendingReceipt);
   wo.res.emit("finish");
-  ok(b.gatewaySettleBreakerStatus().globalFailsInWindow === 0 && b.gatewaySettleBreakerBlocked(key).fails === 0, "a wallet-only consult's pending answer counts toward neither the wallet nor the global pause");
+  ok(b.gatewaySettleBreakerStatus().globalFailsInWindow === 0 && b.gatewaySettleBreakerBlocked(key).fails === 0, "a wallet-only consult's pending answer counts toward neither the wallet nor the burst alarm");
   await b._gatewaySettleBreakerReset();
 }
 
@@ -572,19 +588,224 @@ delete process.env.OPENAI_API_KEY;
   await b._gatewaySettleBreakerReset();
 }
 
-// The shared half (only with a REDIS_URL): a trip's pause is written by a
-// window add's reply, after the call that tripped it returned. The test reset
-// waits for every write already sent before it clears the flag, so a pause
-// still in flight cannot land after it and refuse the next case's call.
+// --- per network: a wallet refused on one network is served on another ---------
+// An EVM payer's count key is payer@network. Network X's failures refuse a
+// payment that names X and nothing else; the same wallet naming Y is served
+// in the same instant (the control and the refusal run back to back, one
+// stub, one clock).
+{
+  await b._gatewaySettleBreakerReset();
+  const X = "eip155:8453", Y = "eip155:137", P = ADDR.toLowerCase();
+  ok(b.gatewaySettleBreakerNetwork(fakeReq({ from: ADDR, network: X })) === X && b.gatewaySettleBreakerNetwork(fakeReq({ from: ADDR, network: X, v1: true })) === X, "the network is read from the payment header: v2 accepted.network and v1 network");
+  ok(b.gatewaySettleBreakerNetwork(fakeReq({ from: ADDR })) === null && b.gatewaySettleBreakerNetwork(fakeReq({ from: ADDR, network: "not a network" })) === null, "a header naming no network, or one that is not a CAIP-2 id, reads as none");
+  ok(b.gatewaySettleBreakerCountKey(fakeReq({ from: ADDR, network: X })) === `${P}@${X}` && b.gatewaySettleBreakerCountKey(fakeReq({ from: ADDR, network: Y, v1: true })) === `${P}@${Y}`, "an EVM payer is counted per network: payer@network");
+  ok(b.gatewaySettleBreakerKey(fakeReq({ from: ADDR, network: X })) === P, "the buyer (what the burst alarm counts) stays the payer alone");
+  ok(b.gatewaySettleBreakerCountKey(fakeReq({ from: ADDR })) === P, "an EVM payment naming no network keeps the payer-only key");
+  ok(b.gatewaySettleBreakerCountKey(Object.assign(fakeReq({ network: X }), { mppTempoSender: "0xtempo" })) === "tempo:0xtempo"
+    && b.gatewaySettleBreakerCountKey(Object.assign(fakeReq(), { creditsKeyId: "ck_1" })) === "credits:ck_1"
+    && b.gatewaySettleBreakerCountKey(fakeReq()) === "ip:203.0.113.7", "a Tempo sender, a credits key and the IP fallback keep one key (no network to split on)");
+
+  // Three settle failures on X, each through the real listener of a request that named X.
+  for (let i = 0; i < 3; i++) {
+    const req = fakeReq({ from: ADDR, network: X });
+    await b.gatewaySettleBreakerCheck(req, { global: false });
+    req.res.statusCode = 402; req.res.emit("finish"); req.res.emit("close");
+  }
+  ok(b.gatewaySettleBreakerBlocked(`${P}@${X}`).blocked && b.gatewaySettleBreakerBlocked(`${P}@${Y}`).fails === 0 && b.gatewaySettleBreakerBlocked(P).fails === 0, "three failed settles on X are counted under payer@X only");
+  const keyWas = process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = "test-key";
+  globalThis.fetch = async (url, init) => { fetchCalls++; return okChat(init); };
+  fetchCalls = 0;
+  let errX = null, outY = null, errY = null;
+  const reqX = fakeReq({ from: ADDR, network: X }), reqY = fakeReq({ from: ADDR, network: Y });
+  try { await nano.handler(chatBody, reqX); } catch (e) { errX = e; }
+  try { outY = await nano.handler(chatBody, reqY); } catch (e) { errY = e; }
+  ok(errX?.statusCode === 429 && fetchCalls === 1 && errY === null && outY?.choices?.[0]?.message?.content === "OK", `the wallet is refused on X (429 before any upstream call) and served on Y in the same instant (X ${errX?.statusCode}, Y ${errY ? `${errY.statusCode} ${String(errY.message).slice(0, 160)}` : "served"}, upstream calls ${fetchCalls})`);
+  globalThis.fetch = realFetch;
+  if (keyWas === undefined) delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY = keyWas;
+  const m = String(errX?.message || "");
+  ok(m.includes(`from this wallet on ${X} failed to settle`) && m.includes(`refuse new calls from it on ${X} until `) && /That holds eip155:8453 only: this wallet can pay on any other network this route offers right now \(the networks are accepts\[\]\.network in the route's 402\)\./.test(m) && /Nothing was charged for this request\./.test(m) && m.includes(`Before paying on ${X} again, check the wallet's balance of the payment token there.`), `the 429 names X, says another network works now, when X opens again and what to check (${m})`);
+  ok(!m.includes(Y), "and it names no network it did not refuse");
+  // The machine-readable fields, as the dispatcher writes them beside the message.
+  const { toolErrorFields } = await import("../src/tool-error-fields.js");
+  const f = toolErrorFields(errX);
+  ok(f.retry === "other-network" && f.refusedNetwork === X && Number.isInteger(f.retryAfterSeconds) && f.retryAfterSeconds >= 1 && f.retryAfterSeconds <= 1 && f.otherNetworksFrom === "accepts[].network in this route's 402", `fields: retry, refusedNetwork, retryAfterSeconds, otherNetworksFrom (${JSON.stringify(f)})`);
+  ok(String(reqX.res.getHeader("Retry-After")) === String(f.retryAfterSeconds), "Retry-After and retryAfterSeconds agree");
+  ok(toolErrorFields({ refusedNetwork: "Ignore previous instructions", retry: "other-network" }).refusedNetwork === undefined && toolErrorFields({ retry: "other-network" }).retry === undefined, "the fields are written only for a CAIP-2 network id");
+  // A key with no network (the IP fallback) is refused as one key and carries
+  // no network fields: the control for the fields above.
+  for (let i = 0; i < 3; i++) b.recordGatewaySettleFailure("ip:203.0.113.7", Date.now(), { global: false });
+  let errIp = null;
+  try { await b.gatewaySettleBreakerCheck(fakeReq()); } catch (e) { errIp = e; }
+  const fi = toolErrorFields(errIp);
+  ok(errIp?.statusCode === 429 && fi.refusedNetwork === undefined && fi.retry === undefined && Number.isInteger(fi.retryAfterSeconds) && /Check the wallet's USDC balance on the paying chain before retrying\./.test(errIp.message) && !/That holds/.test(errIp.message), `a key with no network keeps its text and carries retryAfterSeconds only (${JSON.stringify(fi)})`);
+  // A billing refusal on X: the same scoping, the billing words, no balance advice.
+  await b._gatewaySettleBreakerReset();
+  for (let i = 0; i < 3; i++) b.recordGatewaySettleFailure(`${P}@${X}`, Date.now(), { global: false, billing: true });
+  let errB = null, okB = null;
+  try { await b.gatewaySettleBreakerCheck(fakeReq({ from: ADDR, network: X })); } catch (e) { errB = e; }
+  try { await b.gatewaySettleBreakerCheck(fakeReq({ from: ADDR, network: Y })); okB = true; } catch { okB = false; }
+  ok(errB?.statusCode === 429 && okB === true && /billing limit on this server's own account/.test(errB.message) && /That holds eip155:8453 only/.test(errB.message) && !/balance/.test(errB.message) && toolErrorFields(errB).refusedNetwork === X, `a billing refusal on X refuses X only, in the billing words (${String(errB?.message).slice(0, 90)})`);
+  // The burst alarm counts the BUYER once, on however many networks it failed.
+  await b._gatewaySettleBreakerReset();
+  for (const n of [X, Y, "eip155:42161", "eip155:10", "eip155:43114", "eip155:56", "eip155:100"]) b.recordGatewaySettleFailure(`${P}@${n}`);
+  ok(b.gatewaySettleBreakerStatus().globalFailsInWindow === 1 && !b.gatewaySettleBreakerGlobalAlarm().alarm, "one wallet failing on seven networks is one buyer toward the alarm (GLOBAL_MAX 6) and does not trip it");
+  await b._gatewaySettleBreakerReset();
+}
+
+// --- legacy keys: an earlier build's payer-only counts refuse no network -------
+// Before the per-network key a wallet's failures were counted under the payer
+// alone. Those counts name no network, so a payment that names one is not
+// refused by them; the payer-only key itself still behaves as it did.
+{
+  await b._gatewaySettleBreakerReset();
+  const P = ADDR.toLowerCase();
+  for (let i = 0; i < 3; i++) b.recordGatewaySettleFailure(P, Date.now(), { global: false });
+  let legacyErr = null, namedErr = null;
+  try { await b.gatewaySettleBreakerCheck(fakeReq({ from: ADDR })); } catch (e) { legacyErr = e; }
+  try { await b.gatewaySettleBreakerCheck(fakeReq({ from: ADDR, network: "eip155:8453" })); } catch (e) { namedErr = e; }
+  ok(legacyErr?.statusCode === 429, `control: three failures under the payer-only key still refuse a payment that names no network (got ${legacyErr?.statusCode})`);
+  ok(namedErr === null, `the same counts refuse no payment that names a network (${namedErr ? namedErr.message.slice(0, 80) : "served"})`);
+  await b._gatewaySettleBreakerReset();
+}
+
+// The shared half (only with a REDIS_URL): a trip's alarm flag is written by
+// a window add's reply, after the call that tripped it returned. The test
+// reset waits for every write already sent before it clears the flag.
 if (process.env.REDIS_URL) {
+  const { shared } = await import("../src/shared-limits.js");
   ok(b._gatewaySettleBreakerShared === true, "with a REDIS_URL the breaker writes through to the shared store");
   await b._gatewaySettleBreakerReset();
   for (let i = 0; i < 6; i++) b.recordGatewaySettleFailure(`0xtrip${i}`);
-  ok(b.gatewaySettleBreakerGlobalPaused().paused, "six distinct buyers trip the global pause (GLOBAL_MAX 6)");
-  await b._gatewaySettleBreakerReset();
+  ok(b.gatewaySettleBreakerGlobalAlarm().alarm, "six distinct buyers trip the burst alarm (GLOBAL_MAX 6)");
   let err = null;
   try { await b.gatewaySettleBreakerCheck(fakeReq({ from: "0x" + "9".repeat(40) })); } catch (e) { err = e; }
-  ok(err === null, `after the reset no pause written by the trip survives in the shared store (${err ? err.message.slice(0, 80) : "no refusal"})`);
+  ok(err === null, `a fresh wallet is served while the shared alarm is up (${err ? err.message.slice(0, 80) : "no refusal"})`);
+  await b._gatewaySettleBreakerReset();
+  ok((await b.gatewaySettleFailuresStatus()).status === "ok", "after the reset no alarm flag written by the trip survives in the shared store");
+  // The alarm flag set by ANOTHER replica reads burst here (this process's own latch is clear).
+  await shared.flagSet("gwb-alarm", "all", Date.now() + 5000);
+  ok(!b.gatewaySettleBreakerGlobalAlarm().alarm && (await b.gatewaySettleFailuresStatus()).status === "burst", "another replica's alarm flag reads burst through the shared store");
+  await b._gatewaySettleBreakerReset();
+  // DEPLOY OVERLAP, new build reading the earlier build's keys. The earlier
+  // build wrote a pause flag and payer-only windows: neither refuses here.
+  const legacy = "0x" + "7".repeat(40), X = "eip155:8453";
+  await shared.flagSet("gwb-pause", "all", Date.now() + 5000);
+  for (let i = 0; i < 3; i++) await shared.windowAdd("gwb-fail", legacy, { windowMs: 900, member: `old:${i}`, now: Date.now() });
+  let e1 = null, e2 = null;
+  try { await b.gatewaySettleBreakerCheck(fakeReq({ from: legacy, network: X })); } catch (e) { e1 = e; }
+  ok(e1 === null && (await b.gatewaySettleFailuresStatus()).status === "ok", `the earlier build's pause flag and payer-only failure window refuse no payment that names a network, and raise no alarm (${e1 ? `${e1.statusCode}: ${e1.message.slice(0, 60)}` : "served"})`);
+  // Control: the same shared window DOES refuse the key it is named for, so
+  // the served call above was served for the key's shape, not an empty store.
+  try { await b.gatewaySettleBreakerCheck(fakeReq({ from: legacy })); } catch (e) { e2 = e; }
+  ok(e2?.statusCode === 429, `control: that payer-only shared window refuses a payment naming no network (got ${e2?.statusCode})`);
+  // And this build's per-network failures land in windows the earlier build
+  // never reads (its key is the payer alone), under names it can parse.
+  for (let i = 0; i < 3; i++) b.recordGatewaySettleFailure(`${legacy}@${X}`, Date.now(), { global: false });
+  await b._gatewaySettleBreakerReset();
+  await shared.flagSet("gwb-pause", "all", 0);
+  await shared.windowClear("gwb-fail", legacy);
+}
+
+// --- one payer at the limit on several networks raises the same alarm ----------
+// The count is per network, so one wallet can reach the refusing count on
+// every network a route offers. It is one buyer, so the distinct-buyer count
+// never sees it; the alarm also trips when one payer's /v1 failures read
+// refusing on three networks (MULTI_NETWORK_MIN) inside the window. Nobody is
+// refused for it.
+{
+  await b._gatewaySettleBreakerReset();
+  const word = async () => (await b.gatewaySettleFailuresStatus()).status;
+  const P = "0x" + "5".repeat(40), Q = "0x" + "6".repeat(40);
+  const NETS = ["eip155:8453", "eip155:137", "eip155:42161", "eip155:42220", "eip155:57073"];
+  const failOn = (payer, net, n = 3, opts = {}) => { for (let i = 0; i < n; i++) b.recordGatewaySettleFailure(`${payer}@${net}`, Date.now(), opts); };
+  ok(b.MULTI_NETWORK_MIN === 3, `the default: three networks (${b.MULTI_NETWORK_MIN})`);
+
+  // One network, however many failures there: the per-key bound's job, no alarm.
+  failOn(P, NETS[0], 10);
+  ok((await word()) === "ok" && b.gatewaySettleBreakerStatus().multiNetworkTrips === 0, "ten failures from one payer on ONE network raise no alarm");
+  // Two networks at the limit, and a third below it: still ok.
+  failOn(P, NETS[1], 3);
+  failOn(P, NETS[2], 2);
+  ok((await word()) === "ok" && b.gatewaySettleBreakerStatus().payersWithNetworkAtLimit === 1, "two networks at the limit and a third below it: ok");
+  // The third network reaches the limit: burst, from one buyer.
+  failOn(P, NETS[2], 1);
+  const st = b.gatewaySettleBreakerStatus();
+  ok((await word()) === "burst" && st.multiNetworkTrips === 1 && st.globalFailsInWindow === 1, `the third network at the limit trips settleFailures: burst, with one buyer in the window (${JSON.stringify({ trips: st.multiNetworkTrips, buyers: st.globalFailsInWindow })})`);
+  const op = await b.gatewaySettleFailuresStatus({ full: true });
+  ok(op.status === "burst" && op.multiNetworkThreshold === 3 && op.multiNetworkTrips === 1 && !/0x|eip155/.test(JSON.stringify(op)) && JSON.stringify(await b.gatewaySettleFailuresStatus()) === JSON.stringify({ status: "burst" }), `the operator read counts the trip and names no payer or network; publicly the word only (${JSON.stringify(op)})`);
+  // Serving is unchanged: the payer is refused on the networks at the limit
+  // (as before) and served on a fourth; another buyer is served everywhere.
+  let eHeld = null, eFree = null, eOther = null;
+  try { await b.gatewaySettleBreakerCheck(fakeReq({ from: P, network: NETS[0] })); } catch (e) { eHeld = e; }
+  try { await b.gatewaySettleBreakerCheck(fakeReq({ from: P, network: NETS[3] })); } catch (e) { eFree = e; }
+  try { await b.gatewaySettleBreakerCheck(fakeReq({ from: Q, network: NETS[0] })); } catch (e) { eOther = e; }
+  ok(eHeld?.statusCode === 429 && eHeld.refusedNetwork === NETS[0] && eFree === null && eOther === null, `no new refusal: the payer is held on its failing networks only, served on a fourth, and another buyer is served (${eHeld?.statusCode}, ${eFree?.statusCode || "served"}, ${eOther?.statusCode || "served"})`);
+  if (b._gatewaySettleBreakerShared) {
+    const { shared } = await import("../src/shared-limits.js");
+    let until = 0;
+    for (let i = 0; i < 40 && !(until > Date.now()); i++) { until = (await shared.flagGet("gwb-alarm", "all")).until || 0; if (!(until > Date.now())) await sleep(25); }
+    ok(until > Date.now(), "the shared alarm flag is set, so every replica's word reads burst");
+  }
+  // It clears the way the alarm clears: one window later.
+  await sleep(950);
+  ok((await word()) === "ok" && !b.gatewaySettleBreakerGlobalAlarm().alarm, "the word returns to ok after the window");
+
+  // Networks at the limit in different windows never add up.
+  await b._gatewaySettleBreakerReset();
+  failOn(P, NETS[0]); failOn(P, NETS[1]);
+  await sleep(950);
+  failOn(P, NETS[2]);
+  ok((await word()) === "ok", "two networks at the limit, then a third one window later: ok");
+
+  // A payer settling most of its calls is not at the limit on a network (the
+  // share rule), so its scattered failures on three networks raise nothing.
+  await b._gatewaySettleBreakerReset();
+  for (const net of NETS.slice(0, 3)) { for (let i = 0; i < 10; i++) b.recordGatewaySettleSuccess(`${P}@${net}`); failOn(P, net); }
+  if (b._gatewaySettleBreakerShared) await sleep(150);
+  ok((await word()) === "ok" && b.gatewaySettleBreakerStatus().multiNetworkTrips === 0, "three failures beside ten settled calls on each of three networks: no network is at the limit, ok");
+
+  // The catalog consult's failures (global:false) count against the wallet
+  // only, here as in the rest of the alarm.
+  await b._gatewaySettleBreakerReset();
+  for (const net of NETS.slice(0, 3)) failOn(P, net, 3, { global: false });
+  if (b._gatewaySettleBreakerShared) await sleep(150);
+  ok((await word()) === "ok" && b.gatewaySettleBreakerBlocked(`${P}@${NETS[0]}`).blocked, "wallet-only catalog failures on three networks hold the wallet there and raise no /v1 alarm");
+
+  // Two payers, the limit on three networks between them: neither alone.
+  await b._gatewaySettleBreakerReset();
+  failOn(P, NETS[0]); failOn(P, NETS[1]); failOn(Q, NETS[2]); failOn(Q, NETS[3]);
+  if (b._gatewaySettleBreakerShared) await sleep(150);
+  ok((await word()) === "ok", "two payers with two networks each at the limit: ok (the rule is one payer)");
+
+  // The payer is the module's own key text. A signed EVM payer arrives
+  // lowercased from the payment header whatever case the header used, so the
+  // same wallet written three ways is one payer...
+  await b._gatewaySettleBreakerReset();
+  const MIXED = "0xAbCdEf0123456789AbCdEf0123456789AbCdEf01";
+  const spellings = [MIXED, MIXED.toLowerCase(), "0x" + MIXED.slice(2).toUpperCase()];
+  for (let n = 0; n < 3; n++) {
+    for (let i = 0; i < 3; i++) {
+      const req = fakeReq({ from: spellings[n], network: NETS[n] });
+      await b.gatewaySettleBreakerCheck(req);
+      req.res.statusCode = 402;
+      req.res.emit("finish");
+    }
+  }
+  ok((await word()) === "burst" && b.gatewaySettleBreakerStatus().multiNetworkTrips === 1, "through the consult: one EVM wallet whose header spells it in three cases, at the limit on three networks, is one payer: burst");
+  // ...and a key that is not a lowercase EVM payer is never re-cased or
+  // split: two base58-style keys differing only in case stay two keys (two
+  // failures each refuse neither), and a key with no network is one key
+  // however many failures it holds.
+  await b._gatewaySettleBreakerReset();
+  const B58 = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU";
+  for (let i = 0; i < 2; i++) { b.recordGatewaySettleFailure(B58, Date.now(), { global: false }); b.recordGatewaySettleFailure(B58.toLowerCase(), Date.now(), { global: false }); }
+  ok(!b.gatewaySettleBreakerBlocked(B58).blocked && !b.gatewaySettleBreakerBlocked(B58.toLowerCase()).blocked && b.gatewaySettleBreakerBlocked(B58).fails === 2, "keys that differ only in case are two keys: never folded together");
+  // (Five keys in all, under the distinct-buyer count of six: each such key is its own buyer.)
+  for (const net of NETS.slice(0, 3)) failOn(B58, net);
+  for (const net of NETS.slice(0, 2)) failOn("0x" + "A".repeat(40), net);
+  if (b._gatewaySettleBreakerShared) await sleep(150);
+  ok((await word()) === "ok" && b.gatewaySettleBreakerStatus().multiNetworkTrips === 0 && b.gatewaySettleBreakerStatus().payersWithNetworkAtLimit === 0, "a key that is not a signed lowercase EVM payer is read whole, as one key, and is never counted per network");
   await b._gatewaySettleBreakerReset();
 }
 

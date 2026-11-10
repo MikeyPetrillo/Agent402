@@ -57,6 +57,28 @@ ok(scored.slug === "asn-info" && (scored.matched?.slug ?? 0) <= 20, "two alias h
   ok(r3[0]?.slug === "cron-next", `on a tie the cheaper row leads (first: ${r3[0]?.slug})`);
   cache3.clear();
 }
+// A SENTENCE in the name field is not a slug alias (2026-11-09): an outside
+// row whose "name" is a long description used to earn slug points for every
+// common query word inside it, and "which stocks are set up to buy today"
+// ranked a marketplace-crowding tool above stock tools on that sentence.
+{
+  const { _cacheForTests: cacheFor, NAME_SLUG_MAX_TOKENS } = await import("../src/x402-index.js");
+  const cache4 = cacheFor(); cache4.clear();
+  // The shape of the two live rows that showed it (text paraphrased): a
+  // sentence-named row and a stock seller whose own slug and name are terse. Without the cap the two
+  // tie at 14 and the sentence row is listed first; with it the stock row leads.
+  const sentence = "Call this when an agent has to pick which job board is worth its time: how busy it is (offers per task, counted), and are";
+  cache4.set("https://mkt.example", { manifest: { name: "mkt", homepage: "https://mkt.example" }, openapiSummary: null, tools: [{ seller: "https://mkt.example", method: "POST", route: "/v1/payability", slug: "v1_payability", name: sentence, description: sentence, category: "x", tags: [], price: 0.005, networks: ["eip155:8453"] }], fetchedAt: Date.now(), error: null, history: [1, 1, 1] });
+  const buy = "Today's ranked buy ideas per portfolio, with entry timing and trend markers";
+  cache4.set("https://stk.example", { manifest: { name: "stk", homepage: "https://stk.example" }, openapiSummary: null, tools: [{ seller: "https://stk.example", method: "GET", route: "/api/board/buylist", slug: "getBoardBuylist", name: buy, description: buy, category: "x", tags: [], price: 0.05, networks: ["eip155:8453"] }], fetchedAt: Date.now(), error: null, history: [1, 1, 1] });
+  const ctx4 = { baseUrl: "https://agent402.tools", catalog: {}, prices: {}, network: "base", toolCount: 0, walletName: "w" };
+  const r4 = routeQuery({ query: "which stocks are set up to buy today", top: 5, include: "external", ...ctx4 }).results;
+  const mkt = r4.find((r) => r.slug === "v1_payability"), stk = r4.find((r) => r.slug === "getBoardBuylist");
+  ok(r4[0]?.slug === "getBoardBuylist" && stk && mkt && stk.score > mkt.score, `the stock row outranks the sentence-named row on a stock question (${r4.map((r) => `${r.slug}:${r.score}`).join(", ")})`);
+  ok(mkt?.why.matchedOn.slug === 0, `a sentence-long name earns no slug points (got ${mkt?.why.matchedOn.slug})`);
+  ok(NAME_SLUG_MAX_TOKENS >= 9, "the cap covers every name length in our own catalog (9 words at most)");
+  cache4.clear();
+}
 // Bazaar-quality tie-break vs local rows (2026-08-28): an outside seller with
 // measured payers must not outrank our identical tool when OUR measurement is
 // missing; when ours is present the same metric applies to both sides.

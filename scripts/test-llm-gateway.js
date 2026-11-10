@@ -705,8 +705,10 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   };
   await nano.handler({ model: "openai/gpt-5-nano", messages: msg1(), max_tokens: 64 }, fakeReqC);
   ok(seen.reasoning?.effort === "minimal", "gpt-5-nano on nano gets reasoning.effort minimal by default");
-  await nano.handler({ model: "openai/gpt-5-nano", messages: msg1(), max_tokens: 64, reasoning: { effort: "high", exclude: true } }, fakeReqC);
-  ok(seen.reasoning?.effort === "high" && seen.reasoning?.exclude === true, "a buyer reasoning object rides through unchanged");
+  const fitOut = await nano.handler({ model: "openai/gpt-5-nano", messages: msg1(), max_tokens: TIERS["v1-chat-nano"].maxTokens, reasoning: { effort: "high", exclude: true } }, fakeReqC);
+  ok(seen.reasoning?.effort === "high" && seen.reasoning?.exclude === true && fitOut.agent402_reasoning_adjusted === undefined, "a buyer reasoning object that fits its cap rides through unchanged, with no adjustment field");
+  const smallOut = await nano.handler({ model: "openai/gpt-5-nano", messages: msg1(), max_tokens: 64, reasoning: { effort: "high", exclude: true } }, fakeReqC);
+  ok(seen.reasoning?.effort === "low" && seen.reasoning?.exclude === true && seen.max_tokens === 64 && JSON.stringify(smallOut.agent402_reasoning_adjusted) === '{"field":"reasoning.effort","requested":"high","used":"low","reason":"max_tokens"}', `a buyer effort too high for a small cap is sent at the fitted effort and disclosed (${JSON.stringify(smallOut.agent402_reasoning_adjusted)})`);
   await nano.handler({ model: "deepseek/deepseek-chat", messages: msg1(), max_tokens: 64 }, fakeReqC);
   ok(seen.reasoning === undefined && seen.plugins === undefined && seen.provider?.require_parameters === undefined, "non-reasoning, unstructured call: no reasoning, no plugins, no require_parameters");
   const rf = { type: "json_schema", json_schema: { name: "a", strict: true, schema: { type: "object", properties: { x: { type: "string" } }, required: ["x"], additionalProperties: false } } };
@@ -2051,7 +2053,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
     process.env.OPENROUTER_API_KEY = "test-key";
     globalThis.fetch = async (url, init) => { const b = JSON.parse(init.body); got.push(b); return { ok: true, status: 200, text: async () => JSON.stringify({ id: "gen-fit", model: b.model, choices: [{ index: 0, message: { role: "assistant", content: "OK" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } }) }; };
     await premium.handler({ model: MODEL, messages: [{ role: "user", content }], max_tokens: 8192, reasoning: { max_tokens: 8000 } }, req);
-    ok(got[0]?.model === MODEL && got[0].max_tokens < 8000 && got[0].reasoning?.max_tokens === got[0].max_tokens - 1, `chat: the outbound reasoning budget sits one under the clamped cap (max_tokens ${got[0]?.max_tokens}, reasoning ${got[0]?.reasoning?.max_tokens})`);
+    ok(got[0]?.model === MODEL && got[0].max_tokens < 8000 && got[0].reasoning?.max_tokens === got[0].max_tokens - Math.floor(got[0].max_tokens / 4), `chat: the outbound reasoning budget follows the clamped cap and leaves a quarter of it for the answer (max_tokens ${got[0]?.max_tokens}, reasoning ${got[0]?.reasoning?.max_tokens})`);
     globalThis.fetch = realFetch;
     delete process.env.OPENROUTER_API_KEY;
     const v = validateRequest({ model: MODEL, messages: [{ role: "user", content }], max_tokens: 8192, reasoning: { max_tokens: 8000 } }, "v1-chat-premium");

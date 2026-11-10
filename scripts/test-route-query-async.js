@@ -9,6 +9,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 process.env.X402_INDEX_CRAWL = "off";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { PerformanceObserver } from "node:perf_hooks";
 const { routeQuery, routeQueryAsync, _cacheForTests, _setBazaarQualityForTest, warmRouteIndex, _routeIndexSettledForTest } = await import("../src/x402-index.js");
 const { buildRoutePerfFixture, GOLDEN_QUERIES } = await import("./lib/route-perf-fixture.js");
 
@@ -45,21 +46,39 @@ const SCHEDSTAT = (() => { const p = `/proc/self/task/${process.pid}/schedstat`;
 const oursMs = SCHEDSTAT ? () => performance.now() - Number(readFileSync(SCHEDSTAT, "utf8").split(" ")[1]) / 1e6 : threadCpuMs;
 const HOLD = SCHEDSTAT ? "ours" : "of thread CPU";
 if (process.env.CI) assert.ok(SCHEDSTAT, "under CI the main thread's schedstat must be readable, so a blocking wait is measured");
+// A collector pause inside a gap is the runtime's, not a step of the query:
+// it lands in whichever form happens to be running, and the yielding form
+// gives it more places to land. Each gap is read less the pauses inside it
+// (test-stall-routes.js reads its holds the same way), and the pause time in
+// the worst gap and in the whole run is printed beside the figures.
+const gcPauses = [];
+new PerformanceObserver((list) => { for (const e of list.getEntries()) gcPauses.push([e.startTime, e.startTime + e.duration]); }).observe({ entryTypes: ["gc"] });
 async function worstHold(run) {
-  let worst = 0, worstWall = 0, last = performance.now(), lastOurs = oursMs(), live = true;
+  let last = performance.now(), lastOurs = oursMs(), live = true;
+  const gaps = [];
+  gcPauses.length = 0;
   const tick = () => {
     const now = performance.now(), ours = oursMs();
-    worst = Math.max(worst, Math.min(now - last, ours - lastOurs)); worstWall = Math.max(worstWall, now - last);
+    gaps.push([last, now, ours - lastOurs]);
     last = now; lastOurs = ours;
     if (live) setImmediate(tick);
   };
   setImmediate(tick);
   const t0 = performance.now();
   await run();
-  const total = performance.now() - t0;
+  const t1 = performance.now(), total = t1 - t0;
   live = false;
   await new Promise((r) => setImmediate(r));
-  return { worst, worstWall, total };
+  // The observer delivers gc entries on a later task.
+  await new Promise((r) => setTimeout(r, 50));
+  const gcIn = (a, b) => { let ms = 0; for (const [s0, e0] of gcPauses) ms += Math.max(0, Math.min(b, e0) - Math.max(a, s0)); return ms; };
+  let worst = 0, worstWall = 0, worstGc = 0, worstRaw = 0;
+  for (const [a, b, ours] of gaps) {
+    const inGc = gcIn(a, b), held = Math.min(b - a, ours);
+    if (held - inGc > worst) { worst = held - inGc; worstGc = inGc; worstRaw = held; }
+    worstWall = Math.max(worstWall, b - a);
+  }
+  return { worst, worstWall, total, worstGc, worstRaw, gc: gcIn(t0, t1) };
 }
 // An absolute bound on the async query's longest hold, beside the ratio to
 // the sync query's: a hold in code both forms run (routeQuerySteps) inflates
@@ -86,7 +105,7 @@ routeQuery({ query: HEAVY, top: 10, include: "external", ...ctx }); // warm stat
 const sync = await worstHold(async () => { routeQuery({ query: HEAVY, top: 10, include: "external", ...ctx }); });
 let busy = 0;
 const asy = await worstHold(() => routeQueryAsync({ query: HEAVY, top: 10, include: "external", ...ctx }, { onBusy: (ms) => { busy += ms; } }));
-console.log(`# sync hold ${sync.worst.toFixed(1)} ms ${HOLD} (${sync.worstWall.toFixed(1)} ms wall) of ${sync.total.toFixed(1)}; async worst hold ${asy.worst.toFixed(1)} ms ${HOLD} (${asy.worstWall.toFixed(1)} ms wall) over ${asy.total.toFixed(1)} ms, busy ${busy.toFixed(1)} ms`);
+console.log(`# sync hold ${sync.worst.toFixed(1)} ms ${HOLD} (${sync.worstWall.toFixed(1)} ms wall) of ${sync.total.toFixed(1)}; async worst hold ${asy.worst.toFixed(1)} ms ${HOLD} (${asy.worstWall.toFixed(1)} ms wall) over ${asy.total.toFixed(1)} ms, busy ${busy.toFixed(1)} ms; collector: ${sync.gc.toFixed(1)} ms in the sync run, ${asy.gc.toFixed(1)} ms in the async run, ${asy.worstGc.toFixed(1)} ms of the ${asy.worstRaw.toFixed(1)} ms gap that held longest`);
 ok(asy.worst < sync.worst * 0.6, `the async query's longest hold (${asy.worst.toFixed(1)} ms ${HOLD}) is well under the sync query's (${sync.worst.toFixed(1)} ms)`);
 ok(asy.worst < HOLD_BOUND_MS, `the async query's longest hold (${asy.worst.toFixed(1)} ms ${HOLD}) is under an absolute bound (${HOLD_NOTE})`);
 ok(busy > 0 && busy <= asy.total + 1, "onBusy reports the time the query actually held the thread");

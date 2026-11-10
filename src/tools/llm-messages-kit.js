@@ -25,7 +25,10 @@
 // reasoning-effort injection (the Anthropic wire expresses thinking as
 // `thinking`, which the buyer sets natively). The one effort the gateway adds
 // is premium's small-budget "low" (smallBudgetEffort), and only when the buyer
-// set neither effort nor thinking. Routing on the auto tier by prompt class is
+// set neither effort nor thinking. A buyer's own effort or thinking budget
+// that leaves no room for an answer inside the cap is lowered on the outbound
+// link and disclosed (agent402_reasoning_adjusted), and an empty max_tokens
+// answer gets one same-model run at the lowest depth before the chain walks. Routing on the auto tier by prompt class is
 // supported (classifyPrompt reads text blocks). Buyer-settable OpenRouter
 // knobs are the same as the chat wire: zdr, cache_control (top-level, the
 // Anthropic-native per-block cache_control passes through untouched).
@@ -34,12 +37,13 @@ import {
   substitutedFrom, TIERS, AUTO_RANKINGS, classifyPrompt, canonicalModel, tierAllows, tierFor,
   isFlatTier, flatTierQuoteUsd, servedTierFor, crossTierDisclosure, AUTO_MODEL, AUTO_TIER,
   clampToMargin, fitBudgetBelowCap, assertMeteredAvailable, attemptsFor, serviceTierFor, validateServiceTier, cacheControlPref, upstreamUserId, PROVIDER_SORT_ENABLED,
-  fetchOpenRouter, throwUpstreamError, streamOpenRouterTo, bad, MAX_IMAGES, maxInputCharsFor, inputTooLargeError,
+  fetchOpenRouter, upstreamHttpError, refuseUnlistedMeteredModel, isInputTooLarge, streamOpenRouterTo, bad, MAX_IMAGES, maxInputCharsFor, inputTooLargeError,
   failoverChain, modelFallbackPref, availabilitySubstitution, retryRateLimited,
   rateLimitDelaysFor, paymentWindowTimeoutMs, timedOutBudget, streamClientWatch, STREAM_TIMEOUT_MS, UPSTREAM_TIMEOUT_MS,
   refuseCostVariants, checkBlockCacheControl, meteredQuoteForProbe, meteredBoundFor,
   assertUpstreamBody, reasoningProfile, REASONING_EFFORTS, refuseUnsupportedParams, defaultModelFor, defaultModelCompatNote, smallBudgetEffort,
-  stripBilling,
+  stripBilling, fitEffortToBudget, fitBudgetForAnswer, lowestEffortFor, reasoningAdjustedNote, recoveryRunAffordable, retryEmptyAtLowestEffort,
+  setReasoningAdjustedHeader, reasoningOutsideMaxTokens, REASONING_ADJUSTED, LINK_PROBE,
 } from "./llm-gateway-kit.js";
 import { METER_MIN_SETTLE_USD, setMeterSentinel } from "../gateway-meter.js";
 import { gatewaySettleBreakerCheck } from "../gateway-settle-breaker.js";
@@ -74,6 +78,13 @@ export function meteredMessagesQuoteUsd(input) {
   } catch (e) {
     return { usd: tier.price, invalid: true, reason: String(e?.message || e).slice(0, 160) };
   }
+}
+/** The metered Messages body's input size refusal for the pre-payment check
+ *  (src/gateway-prepayment.js), or null: this wire's own validation is the
+ *  counter, so the two can never disagree about a body. */
+export function meteredMessagesInputSizeRefusal(input) {
+  try { validateMessagesRequest(input, "v1-chat-metered"); } catch (e) { return isInputTooLarge(e) ? e : null; }
+  return null;
 }
 export const MESSAGES_TIER_BY_PATH = Object.fromEntries(Object.entries(MESSAGES_PATH_BY_TIER).map(([t, p]) => [p, t]));
 
@@ -271,6 +282,8 @@ export function validateMessagesRequest(input, tierSlug) {
       const homePath = home ? (MESSAGES_PATH_BY_TIER[home] || TIERS[home].route.split(" ")[1]) : null;
       throw bad(home && home !== tierSlug ? `"${model}" is served on ${homePath} (${home})` : `"model" ${model} is not served on this tier - GET /v1/models lists every model and its tier`);
     }
+    // Metered: an id the live list does not carry is refused, as on the chat wire.
+    refuseUnlistedMeteredModel(tier, model);
   }
   if (!Array.isArray(input.messages) || input.messages.length === 0) throw bad('"messages" must be a non-empty array');
   const acc = { chars: 0, images: 0 };
@@ -296,7 +309,7 @@ export function validateMessagesRequest(input, tierSlug) {
     else if (Array.isArray(input.system)) { system = probeContent(input.system, "system", acc); }
     else throw bad('"system" must be a string or an array of text blocks');
   }
-  if (acc.chars > tier.maxInputChars && acc.chars > maxInputCharsFor(tierSlug, model)) throw inputTooLargeError(tierSlug, model, acc.chars);
+  if (acc.chars > tier.maxInputChars && acc.chars > maxInputCharsFor(tierSlug, model)) throw inputTooLargeError(tierSlug, model, acc.chars, MESSAGES_PATH_BY_TIER);
   if (acc.images > MAX_IMAGES) throw bad(`Too many images (${acc.images}). Maximum is ${MAX_IMAGES} per request`);
   // max_tokens: required by the Anthropic wire; clamp to the tier cap (drop-in friendliness, like the chat wire)
   let maxTokens = parseInt(input.max_tokens, 10);
@@ -437,6 +450,9 @@ export function isEmptyMaxTokens(data) {
   return !blocks.some((b) => (b?.type === "text" && typeof b.text === "string" && b.text.trim() !== "") || b?.type === "tool_use");
 }
 
+/** The end-to-end empty answer's 502 on this wire (not settled). */
+export const EMPTY_MAX_TOKENS_MESSAGE = "Upstream produced no content within max_tokens (thinking consumed it, after any effort or budget fit and lowest-depth retry by the gateway) - raise max_tokens, lower effort or thinking.budget_tokens, or disable thinking";
+
 export function makeMessagesHandler(routeTier) {
   return async function messagesHandler(input, req) {
     // Settle-failure breaker first: refuse (nobody charged) before any upstream call.
@@ -494,21 +510,54 @@ export function makeMessagesHandler(routeTier) {
       // budget is below the room the tier gives a reasoning model: thinking
       // tokens count against max_tokens, and a small budget spent thinking at
       // the model default comes back cut off (smallBudgetEffort).
+      const buyerEffort = body.effort !== undefined && linkProfile && linkProfile.efforts.includes(body.effort) ? body.effort : undefined;
+      // A buyer effort that leaves no room for an answer inside this link's
+      // cap is lowered by the same small-budget rule and disclosed
+      // (fitEffortToBudget).
       const effortForLink = body.effort !== undefined
-        ? ((!linkProfile || !linkProfile.efforts.includes(body.effort)) ? undefined : body.effort)
+        ? fitEffortToBudget(model, tierSlug, buyerEffort, maxOut)
         : (body.thinking === undefined ? (smallBudgetEffort(model, tierSlug, maxOut) ?? undefined) : undefined);
+      let note = buyerEffort !== undefined && effortForLink !== buyerEffort ? reasoningAdjustedNote("effort", buyerEffort, effortForLink, "max_tokens") : null;
       // A thinking budget follows the clamped cap (thinking tokens are output
       // tokens); under Anthropic's 1024 floor the link is refused instead.
-      const thinking = body.thinking?.type === "enabled"
-        ? { ...body.thinking, budget_tokens: fitBudgetBelowCap(body.thinking.budget_tokens, maxOut, { floor: 1024, field: "thinking.budget_tokens" }) }
-        : body.thinking;
+      // It is then lowered, never under that floor, so a quarter of the cap
+      // is left for the answer (fitBudgetForAnswer).
+      let thinking = body.thinking;
+      if (body.thinking?.type === "enabled") {
+        const underCap = fitBudgetBelowCap(body.thinking.budget_tokens, maxOut, { floor: 1024, field: "thinking.budget_tokens" });
+        const budget = reasoningOutsideMaxTokens(model) ? underCap : fitBudgetForAnswer(underCap, maxOut, { floor: 1024 });
+        if (budget !== underCap && !note) note = reasoningAdjustedNote("thinking.budget_tokens", body.thinking.budget_tokens, budget, "max_tokens");
+        thinking = { ...body.thinking, budget_tokens: budget };
+      }
       return {
         ...body, model, max_tokens: maxOut, zdr: undefined, effort: effortForLink,
         ...(thinking !== undefined ? { thinking } : {}),
         ...(provider ? { provider } : {}), ...(user ? { user, session_id: user } : {}),
         ...(cacheControl ? { cache_control: cacheControl } : {}),
         service_tier: serviceTierFor(model, body, flex), // flex / priority / explicit default on :nitro
+        ...(note ? { [REASONING_ADJUSTED]: note } : {}),
+        [LINK_PROBE]: p,
       };
+    };
+    // The one recovery try after an empty max_tokens answer: the same model
+    // with its depth setting at the lowest the wire offers. An effort goes to
+    // the model's lowest; a thinking budget on a model that may run without
+    // thinking is switched off. Null when nothing lower can be sent.
+    const lowestDepthRetry = (outbound, model) => {
+      const lowest = lowestEffortFor(model, { floor: "minimal" });
+      const prof = reasoningProfile(model);
+      const sent = outbound.effort;
+      if (sent !== undefined) {
+        if (!lowest || REASONING_EFFORTS.indexOf(sent) <= REASONING_EFFORTS.indexOf(lowest)) return null;
+        return { patch: { effort: lowest }, note: reasoningAdjustedNote("effort", body.effort !== undefined ? body.effort : "default", lowest, "empty_answer_retry") };
+      }
+      if (outbound.thinking?.type === "enabled" && (!prof || prof.efforts.includes("none"))) {
+        return { patch: { thinking: { type: "disabled" } }, note: reasoningAdjustedNote("thinking.budget_tokens", body.thinking.budget_tokens, "disabled", "empty_answer_retry") };
+      }
+      if (lowest && outbound.thinking?.type !== "disabled") {
+        return { patch: { effort: lowest }, note: reasoningAdjustedNote("effort", "default", lowest, "empty_answer_retry") };
+      }
+      return null;
     };
     const recordUsage = (usage, upstreamUsd, served, serviceTier) => import("../posthog.js")
       .then(({ capturePostHogGatewayUsage }) => capturePostHogGatewayUsage({
@@ -531,6 +580,8 @@ export function makeMessagesHandler(routeTier) {
               try { outbound = outboundFor(model, flex); } catch (e) { if (!lastErr) lastErr = e; continue; }
               const timeoutMs = paymentWindowTimeoutMs(req, STREAM_TIMEOUT_MS);
               const attemptStarted = Date.now();
+              // No envelope on a stream: the disclosure rides in a header.
+              setReasoningAdjustedHeader(res, outbound[REASONING_ADJUSTED]);
               try {
                 return await retryRateLimited(() => streamOpenRouterTo(outbound, res, {
                   url: OPENROUTER_MESSAGES_URL, timeoutMs,
@@ -545,7 +596,7 @@ export function makeMessagesHandler(routeTier) {
             }
             client.assertPresent();
             throw lastErr || bad("No upstream model could serve this request", 502);
-          } finally { client.done(); }
+          } finally { client.done(); setReasoningAdjustedHeader(res, null); }
         },
       };
     }
@@ -553,6 +604,7 @@ export function makeMessagesHandler(routeTier) {
     let lastErr;
     let refusedModel = null;
     const timeouts = timedOutBudget();
+    const recovery = { used: false }; // one lowest-depth recovery try per call
     for (const { model, flex } of attempts) {
       if (model === refusedModel) continue;
       let outbound;
@@ -560,23 +612,38 @@ export function makeMessagesHandler(routeTier) {
       const timeoutMs = paymentWindowTimeoutMs(req, UPSTREAM_TIMEOUT_MS);
       const attemptStarted = Date.now();
       try {
-        const data = await retryRateLimited(async () => {
-          const res = await fetchOpenRouter(outbound, { url: OPENROUTER_MESSAGES_URL, timeoutMs });
-          if (!res.ok) await throwUpstreamError(res);
+        const callOnce = (sendBody, ms) => retryRateLimited(async () => {
+          const res = await fetchOpenRouter(sendBody, { url: OPENROUTER_MESSAGES_URL, timeoutMs: ms });
+          if (!res.ok) await upstreamHttpError(res, sendBody?.model);
           const text = await res.text();
           let parsed;
           try { parsed = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
-          assertUpstreamBody(parsed);
+          assertUpstreamBody(parsed, { model: sendBody?.model });
           if (!Array.isArray(parsed?.content)) throw bad("Upstream returned no answer (no content) - not charged", 502);
           return parsed;
         }, { delays: rateLimitDelaysFor(flex) });
+        let data = await callOnce(outbound, timeoutMs);
+        let reasoningAdjusted = outbound[REASONING_ADJUSTED] || null;
+        // An answer that spent its whole cap thinking gets one more run of
+        // the same model at its lowest depth before the chain walks on: once
+        // per call, while the price covers another run and time is left.
+        if (isEmptyMaxTokens(data)) {
+          const plan = lowestDepthRetry(outbound, model);
+          const again = await retryEmptyAtLowestEffort({
+            once: recovery, plan, req, timeouts,
+            affordable: () => recoveryRunAffordable(outbound[LINK_PROBE], tier, imageCount, data?.usage?.cost, req?.__meteredQuoteUsd),
+            run: (p, ms) => callOnce({ ...outbound, ...p.patch }, ms),
+            usable: (d) => !isEmptyMaxTokens(d) && !(d?.stop_reason === "refusal" && isEmptyMaxTokens({ ...d, stop_reason: "max_tokens" })),
+          });
+          if (again) { data = again; reasoningAdjusted = plan.note; }
+        }
         if (data?.stop_reason === "refusal" && isEmptyMaxTokens({ ...data, stop_reason: "max_tokens" })) {
           lastErr = bad("Upstream declined the request (safety filter) - rephrase the prompt, or pick a different model", 502);
           refusedModel = model;
           continue;
         }
         if (isEmptyMaxTokens(data)) {
-          lastErr = bad("Upstream produced no content within max_tokens (thinking consumed it) - raise max_tokens, lower thinking.budget_tokens, or disable thinking", 502);
+          lastErr = bad(EMPTY_MAX_TOKENS_MESSAGE, 502);
           refusedModel = model;
           continue;
         }
@@ -584,6 +651,7 @@ export function makeMessagesHandler(routeTier) {
         await recordUsage(data.usage, upstreamUsd, data.model || model, data.usage?.service_tier || (flex ? "flex" : "default"));
         if (routerNote) data.agent402_router = { ...routerNote, served: data.model || model };
         if (defaultedModel) data.agent402_default_model = defaultedModel; // the caller sent no model; say what served
+        if (reasoningAdjusted) data.agent402_reasoning_adjusted = reasoningAdjusted; // a depth setting was lowered to leave room for the answer
         if (substituted) data.agent402_model_substituted = { requested: substituted, served: body.model, reason: "the requested model is retired upstream; its named successor served instead" };
         else { const sub = availabilitySubstitution(body.model, model); if (sub) data.agent402_model_substituted = sub; }
         if (tierSlug !== routeTier) data.agent402_tier = { ...crossTierDisclosure(routeTier, tierSlug), route: MESSAGES_PATH_BY_TIER[routeTier] };
@@ -616,8 +684,8 @@ const INPUT_SCHEMA = {
     messages: { type: "array", description: "Anthropic messages: {role: user|assistant, content: string | [text|image|tool_use|tool_result blocks]}" },
     system: { type: "string", description: "Optional system prompt (string or text blocks)" },
     tools: { type: "array", description: "Optional client tools {name, description, input_schema}; server/built-in tools are not served" },
-    thinking: { type: "object", description: 'Optional {type:"enabled", budget_tokens} | {type:"adaptive"} | {type:"disabled"} - thinking tokens are output tokens; a budget is clamped along with max_tokens to fit the tier output cap. On Claude 4.7+ (Opus 5, Sonnet 5, Fable 5.1) thinking is adaptive and `effort` is the depth control; a budget_tokens value is advisory there. Claude Haiku 5.5 refuses {type:"enabled", budget_tokens} with a 400 (send effort instead)' },
-    effort: { type: "string", description: 'Optional depth control for Claude 4.7+ (Opus 5, Sonnet 5, Fable 5.1) and Claude Haiku 5.5: low | medium | high | xhigh | max, validated against the model\'s own list (GET /v1/models). Not accepted on Haiku 4.5 and older, which take thinking.budget_tokens instead' },
+    thinking: { type: "object", description: 'Optional {type:"enabled", budget_tokens} | {type:"adaptive"} | {type:"disabled"} - thinking tokens are output tokens; a budget is clamped along with max_tokens to fit the tier output cap. On Claude 4.7+ (Opus 5, Sonnet 5, Fable 5.1) thinking is adaptive and `effort` is the depth control; a budget_tokens value is advisory there. Claude Haiku 5.5 refuses {type:"enabled", budget_tokens} with a 400 (send effort instead). A budget above three quarters of max_tokens is lowered to leave a quarter for the answer (not under 1024), and an answer that still comes back empty is retried once with thinking off where the model runs without it, when the call\'s price and time allow; either change is named in agent402_reasoning_adjusted' },
+    effort: { type: "string", description: 'Optional depth control for Claude 4.7+ (Opus 5, Sonnet 5, Fable 5.1) and Claude Haiku 5.5: low | medium | high | xhigh | max, validated against the model\'s own list (GET /v1/models). Not accepted on Haiku 4.5 and older, which take thinking.budget_tokens instead. An effort above low that leaves no room for an answer inside a small max_tokens is sent as low, and an answer that still comes back empty is retried once at the model\'s lowest effort when the call\'s price and time allow; either change is named in agent402_reasoning_adjusted {field, requested, used, reason} (the X-Agent402-Reasoning-Adjusted header on a stream)' },
     stream: { type: "boolean", description: "Anthropic SSE (message_start … message_stop)" },
     zdr: { type: "boolean", description: "Optional - zero-data-retention providers only" },
   },

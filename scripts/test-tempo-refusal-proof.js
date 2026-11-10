@@ -201,7 +201,10 @@ const origin = base;
   rpcNow = chain();
   const before = outbound().length;
   mode = { status: 400, receipt: false };
-  const e = await buy("/bad");
+  // The own-purchase report made at signing is taken back on this proof.
+  let reported = 0, takenBack = 0;
+  const e = await buy("/bad", { onSigned: () => { reported++; return () => { takenBack++; }; } });
+  ok(reported === 1 && takenBack === 1, `a proven-unused credential's own-purchase report is taken back, once (${reported} reported, ${takenBack} taken back)`);
   ok(e && /refused the request before taking payment \(HTTP 400\); the credential expired unused, nothing charged/.test(e.message) && !/after payment/.test(e.message), `a proven-unused 400 says the seller refused before payment (got "${e?.message}")`);
   ok(e.committed === false && e.signedUsd === undefined && e.refused === true, "...and carries no committed stamp and no signed amount");
   ok(outbound().length === before, "...and records no outbound payment");
@@ -222,6 +225,12 @@ const origin = base;
   await buy("/bad5");
   ok(strikes()[0]?.strikes === 2 && sellerDeliveryFailingRecently(origin, "tempo"), "a second proven-unused 5xx makes the router skip the seller");
   ok(outbound().length === before, "...still with no outbound row");
+  __resetSellerDeliveryFailuresForTest();
+  // A seller that shares its host is struck under its own key, the one the
+  // resolver reads, and the host's root is not.
+  const tenant = `${origin}/app/tenant-a`;
+  await buy("/app/tenant-a/bad5", { sellerKey: tenant }); await buy("/app/tenant-a/bad5", { sellerKey: tenant });
+  ok(!!sellerDeliveryFailingRecently(tenant, "tempo") && !sellerDeliveryFailingRecently(origin, "tempo"), `two strikes at a path-scoped seller bench that seller, not its host's root (${JSON.stringify(sellerDeliveryMemoEntries().map((m) => m.origin))})`);
   __resetSellerDeliveryFailuresForTest();
   const e5x = await buy("/bad5", { memoizeDelivery: false });
   ok(e5x && e5x.committed === false && sellerDeliveryMemoEntries().length === 0, "a purchase that is not the router's own (no memoizeDelivery) strikes nothing");

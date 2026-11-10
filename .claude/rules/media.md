@@ -40,8 +40,14 @@ Loaded when a media, document or worker-pool tool file is read.
   `markdown-worker.js`), never in the HTML pool: one lane for ordinary documents, one for those a
   one-pass estimate reads as costly, each with its own waiting room (512 ordinary documents; a
   costly one is admitted only while the renders ahead of it fit in 30 s, else a 503 with
-  Retry-After for that lane alone). A render gets 10 s counted from the worker's start signal; past it the worker is terminated and the answer is
-  400 in the costly lane (the document's markers are the cause) and 503 in the ordinary lane.
+  Retry-After for that lane alone). The estimate is only a first sort: a render that started as
+  ordinary gets `ORDINARY_BUDGET_MS` (1 s from the worker's start signal); past it the worker is
+  ended and the document moves to the costly lane and starts again there (a 503 with Retry-After
+  when that room is full), and the ordinary lane takes a spare worker kept started for it. The
+  ordinary room is fair by caller (`req.ip`, which the handler passes): the next document comes
+  from the caller that has used the least worker time, level callers take turns, and one address
+  holds at most `ORDINARY_CALLER_MAX` (128) places. A costly render gets 10 s from its start
+  signal; past it the worker is terminated and the answer is a 400 that names the deadline.
 - **Image headers:** the source-pixel cap is read from the container header, so
   `src/tools/image-headers.js` holds each format to the field its decoder sizes from: one PNG
   IHDR, and it comes first; one JPEG frame header on the marker chain, with the cap also handed

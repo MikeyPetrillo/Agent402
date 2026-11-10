@@ -43,6 +43,7 @@ try {
     "src/leaderboard.js": "leaderboard-refresh", "src/mpp-leaderboard.js": "mpp-leaderboard-refresh", "src/solana-leaderboard.js": "solana-leaderboard-refresh",
     "src/mpp-index.js": "mpp-index-crawl", "src/x402-index.js": "x402-index-crawl", "src/revenue-ledger.js": "revenue-ledger-tick",
     "src/backup.js": "backup-nightly", "src/monitor-scheduler.js": "monitor-scheduler",
+    "src/mpp-subscriptions.js": "mpp-subscription-ended-sweep",
   };
   for (const [file, name] of Object.entries(expect)) {
     const src = readFileSync(new URL("../" + file, import.meta.url), "utf8");

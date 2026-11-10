@@ -4,7 +4,7 @@
 // SKILL.md, the MCP connector, the home page, the guides, the flat tiers' 402)
 // reads this module, so the wording and the figures cannot drift apart.
 // Prices and the default model are read from the tier table, never typed.
-import { TIERS, tierPriceLabel, isFlatTier } from "./tools/llm-gateway-kit.js";
+import { TIERS, tierPriceLabel, isFlatTier, UPSTREAM_TIMEOUT_MS } from "./tools/llm-gateway-kit.js";
 import { MESSAGES_PATH_BY_TIER } from "./tools/llm-messages-kit.js";
 import { RESPONSES_PATH_BY_TIER } from "./tools/llm-responses-kit.js";
 import { GEMINI_PATH_BY_TIER } from "./tools/llm-gemini-kit.js";
@@ -30,7 +30,20 @@ export function meteredDefaultModel() {
 
 /** What the quote is, and the rails on which settlement never exceeds it. */
 export function meteredQuoteSentence() {
-  return "The 402 quotes this exact request from its own body (the input estimated from its tokens with headroom, plus your `max_tokens`, at the model's list price plus a fee). On x402, Tempo and credits, settlement never exceeds that quote: an `exact` payer pays the quote, and an `upto` payer (where the 402 offers it) or a credits key settles what the answer used; a card payment adds the processor fee.";
+  return `The 402 quotes this exact request from its own body (the input estimated from its tokens with headroom, plus your \`max_tokens\`, at the model's list price plus a fee). On x402, Tempo and credits, settlement never exceeds that quote: an \`exact\` payer pays the quote, and an \`upto\` payer (where the 402 offers it) or a credits key settles what the answer used; a card payment adds the processor fee. ${meteredTimeoutSentence()}`;
+}
+
+/** Seconds a metered caller's client should wait: one upstream attempt's own
+ *  bound plus room for the settlement and a retry on another link. */
+export function meteredClientTimeoutSeconds() {
+  return Math.ceil(UPSTREAM_TIMEOUT_MS / 1000) + 30;
+}
+
+/** Why and how long to wait (2026-11-09: Solana metered buyers whose client
+ *  gave up during the ~1 s settlement after a 4-7 s answer were charged and
+ *  not served, then refunded by hand). Derived from the upstream bound. */
+export function meteredTimeoutSentence() {
+  return `Set a client timeout of at least ${meteredClientTimeoutSeconds()} s: the answer is generated and the payment settled before the response is sent, which takes a few seconds on most calls and longer for long answers, and a client that disconnects after the payment settles is charged without the answer (the charge is recorded as owed and reviewed for a refund).`;
 }
 
 /** The three routes as one inline list. */

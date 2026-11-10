@@ -165,24 +165,27 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
   ok(evmCredentialSettleableMs(req, { nowMs: t }) <= 1000 && evmCredentialSettleableMs(req, { nowMs: t }) > 0 && evmCredentialBudgetMs(req, { nowMs: t }) < 0 && evmCredentialSettleableMs({ header: () => undefined }) === null, "settleable time is validBefore less the facilitator's 6 s; the work budget takes a further margin; no header reads as nothing");
 }
 
-// 1c. The composite guard's service-wide pause: each buyer adds at most its
-// own per-key limit (3) of failures.
+// 1c. The composite guard's service-wide burst alarm: each buyer adds at most
+// its own per-key limit (3) of failures. The alarm is a status word and
+// refuses nobody (the booted half is 2a2 below).
 {
-  // Default thresholds: 3 per buyer, 12 for the pause.
+  // Default thresholds: 3 per buyer, 12 for the alarm.
   const g = await import("../src/composite-spend-guard.js");
   g._compositeGuardReset();
   for (let i = 0; i < 12; i++) g.recordCompositeSpendFailure("0xBURST");
-  ok(!(await g.compositeGuardGlobalPaused()), "one wallet's twelve failures do not pause every buyer's reports");
+  ok(!(await g.compositeGuardGlobalAlarm()), "one wallet's twelve failures do not raise the alarm");
   ok(await g.compositeGuardBlocked("0xBURST"), "... that wallet is blocked by the per-key bound");
   for (let w = 0; w < 2; w++) for (let i = 0; i < 3; i++) g.recordCompositeSpendFailure(`0xLapse${w}`);
-  ok(!(await g.compositeGuardGlobalPaused()), "three buyers with three failures each (nine) do not pause");
+  ok(!(await g.compositeGuardGlobalAlarm()), "three buyers with three failures each (nine) do not raise it");
   for (let i = 0; i < 3; i++) g.recordCompositeSpendFailure("0xLapse2");
-  ok(await g.compositeGuardGlobalPaused(), "a fourth buyer's third failure makes twelve: a refusal that hits every buyer still pauses at twelve failures");
+  ok(await g.compositeGuardGlobalAlarm(), "a fourth buyer's third failure makes twelve: a refusal that hits every buyer raises the alarm at twelve failures");
+  ok((await g.compositeGuardAlarmStatus()).status === "burst" && !(await g.compositeGuardBlocked("0xNextBuyer")), "the word reads burst, and a buyer with no failures of its own is not blocked");
+  ok(typeof g.compositeGuardGlobalPaused === "undefined", "the guard exports no pause consult");
   g._compositeGuardReset();
   for (let i = 0; i < 11; i++) g.recordCompositeSpendFailure(`0xWallet${i}`);
-  ok(!(await g.compositeGuardGlobalPaused()), "eleven buyers with one failure each do not pause");
+  ok(!(await g.compositeGuardGlobalAlarm()), "eleven buyers with one failure each do not raise it");
   g.recordCompositeSpendFailure(null);
-  ok(await g.compositeGuardGlobalPaused(), "a twelfth, unkeyed, does: an unkeyed failure counts as its own buyer");
+  ok(await g.compositeGuardGlobalAlarm(), "a twelfth, unkeyed, does: an unkeyed failure counts as its own buyer");
   g._compositeGuardReset();
 }
 
@@ -676,7 +679,7 @@ proc = spawn("node", ["--import", "./scripts/lib/openrouter-stub-preload.js", "s
     CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", POSTHOG_API_KEY: "",
     OPENROUTER_API_KEY: "test-key-never-used", OPENROUTER_MANAGEMENT_KEY: "", OPENROUTER_STUB_URL: `http://127.0.0.1:${OR_PORT}`, OPENROUTER_FLEX: "off",
     GATEWAY_SETTLE_BREAKER_MAX: "3", GATEWAY_SETTLE_BREAKER_WINDOW_MS: "600000", GATEWAY_SETTLE_BREAKER_GLOBAL_MAX: "50",
-    COMPOSITE_GUARD_MAX_FAILS: "3", COMPOSITE_GUARD_GLOBAL_MAX_FAILS: "50",
+    COMPOSITE_GUARD_MAX_FAILS: "3", COMPOSITE_GUARD_GLOBAL_MAX_FAILS: "4",
     HANGUP_FORGIVE: "", HANGUP_FORGIVE_KEY_USD: "0.005", HANGUP_FORGIVE_GLOBAL_USD: "1", HANGUP_FORGIVE_FILE: "off", EVM_VALIDITY_FLOOR: "enforce", INFLIGHT_COVER: "",
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
     AGENT402_OPERATOR_TOKEN: OP, REFUND_DB_DIR: TMP, SALES_LEDGER_DB: join(TMP, "sales.db") },
@@ -726,6 +729,41 @@ try {
   {
     const r = await pay(CHAT, wallet(0xa0), "10.1.0.1");
     ok(r.status === 200 && fac.settled >= 1, `a. control: a connected buyer is served and settles (${r.status})`);
+  }
+
+  // 2a2. The composite guard's burst alarm refuses nobody. Four different
+  // buyers (COMPOSITE_GUARD_GLOBAL_MAX_FAILS below) each run an image tier
+  // that is served and then fails to settle; the next buyer's run is SERVED
+  // and settles while unsettledReports reads burst. Control beside it: the
+  // per-buyer rule still refuses a buyer with three failures of its own.
+  {
+    const word = async () => (await (await fetch(`${B}/api/gateway-status`)).json()).unsettledReports;
+    const opWord = async () => (await (await fetch(`${B}/api/gateway-status`, { headers: { "X-Operator-Token": OP } })).json()).unsettledReports;
+    const failing = [0x1a21, 0x1a22, 0x1a23, 0x1a24].map(wallet);
+    for (const w of failing) fac.refuse.add(w.toLowerCase());
+    for (let i = 0; i < 3; i++) {
+      const r = await pay(FAST, failing[i], `10.1.9.${i + 1}`);
+      ok(r.status === 402, `a2. buyer ${i + 1}: the image run was served and its settlement refused (${r.status})`);
+    }
+    ok(JSON.stringify(await word()) === JSON.stringify({ status: "ok" }), `a2. control: three unsettled runs from three buyers, under the count of four: unsettledReports reads ok, the word only (${JSON.stringify(await word())})`);
+    const r4 = await pay(FAST, failing[3], "10.1.9.4");
+    ok(r4.status === 402, `a2. buyer 4: served, settlement refused (${r4.status})`);
+    ok(JSON.stringify(await word()) === JSON.stringify({ status: "burst" }), `a2. the fourth trips the count: unsettledReports reads burst, the word only (${JSON.stringify(await word())})`);
+    const op = await opWord();
+    ok(op.status === "burst" && op.threshold === 4 && op.trips === 1 && typeof op.until === "string" && !JSON.stringify(op).includes("0x"), `a2. the operator read adds the counts, never a wallet (${JSON.stringify(op)})`);
+    const i0 = or.images, s0 = fac.settled;
+    const next = await pay(FAST, wallet(0x1a25), "10.1.9.5");
+    const nb = await next.json().catch(() => ({}));
+    ok(next.status === 200 && or.images === i0 + 1 && fac.settled === s0 + 1, `a2. the NEXT buyer's run is served and settles while the word reads burst (status ${next.status}${next.status === 200 ? "" : `: ${String(nb.error).slice(0, 90)}`}, upstream +${or.images - i0}, settled +${fac.settled - s0})`);
+    ok((await word()).status === "burst", "a2. ...and the word still reads burst");
+    // The per-buyer rule: buyer 1 fails twice more (three of its own), and its
+    // next run is refused 429 before the handler; buyer 5 above was not.
+    for (let i = 0; i < 2; i++) await pay(FAST, failing[0], `10.1.9.${6 + i}`);
+    const i1 = or.images;
+    const blocked = await pay(FAST, failing[0], "10.1.9.8");
+    const bb = await blocked.json().catch(() => ({}));
+    ok(blocked.status === 429 && or.images === i1 && /from this buyer/.test(bb.error || ""), `a2. control: the per-buyer rule still refuses the buyer with three unsettled runs of its own, before the handler (${blocked.status}: ${String(bb.error).slice(0, 70)})`);
+    for (const w of failing) fac.refuse.delete(w.toLowerCase());
   }
 
   // 2b. A hang-up whose settlement FAILS is counted against the wallet, and a

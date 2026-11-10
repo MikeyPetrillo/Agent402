@@ -20,8 +20,10 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   tier whose 402 is a per-request quote. `handlerInputOf(req)` (`src/handler-input.js`) is the
   one input object for pricing and serving; a body nested past `MAX_INPUT_DEPTH` (64) is refused
   there with a 400 before any handler walks it. Streams commit 200 only on the first `data:` frame.
-  The metered chat route refuses a model id missing from the upstream's live model list with a 400
-  before any payment gate (`src/model-catalog.js`, read every 10 minutes and on a miss at most once a
+  Every metered route (chat, Messages, Responses, generateContent) refuses a model id missing from the upstream's live model list with a 400
+  before any payment gate (`meteredPrePaymentRefusal` in `src/gateway-prepayment.js`, one check over a
+  row per wire: where the model id is, how the input is counted, the wire's own error object;
+  each wire's validation throws the same verdict through `refuseUnlistedMeteredModel`; `src/model-catalog.js`, read every 10 minutes and on a miss at most once a
   minute; fails open with no read under 30 minutes old; retiring ids and ids with successors are left to their fallback;
   `MODEL_CATALOG_URL` points the read at a stub). A hyphenated version in an id (`v4-1`) is read
   as its dotted form only when that exact dotted id is on the fresh live list.
@@ -30,10 +32,13 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   larger live context window, up to `METERED_MAX_INPUT_CHARS_CEILING` (1,000,000, the
   /v1/metered body bound); `/v1/models` publishes each model's own value as
   `meteredMaxInputChars` (a vendor wildcard reads the floor). **Pre-payment size refusal:** a
-  metered chat body over its model's cap is refused with a 400 (`input_too_large`,
+  metered body over its model's cap is refused with a 400 (`input_too_large`,
   `maxInputChars`, `inputChars`, `hint: trim-input`, larger-window `suggestions`) before any
-  payment gate, as the unknown-model refusal is; Messages and Responses refuse it in the handler
-  (never charged). A Tempo push credential skips the pre-payment check and is answered by its
+  payment gate on every wire, as the unknown-model refusal is; each wire's own validation is the
+  counter, and the message names that wire's route (`inputTooLargeError`'s `pathByTier`).
+  **Upstream HTTP errors:** every wire reads one through `upstreamHttpError` (buffered and
+  streamed): a provider 4xx about the request is `upstreamRejected` and the route binder answers
+  400; `scripts/test-llm-wire-parity.js` sends each caller mistake and upstream condition to every wire. A Tempo push credential skips the pre-payment check and is answered by its
   gate, which books the transfer as owed; a refusal to one names that exception in its charge
   sentence (`PUSH_EXCEPTION`, `withPushException` in server.js).
   **Large quotes:** a /v1/metered body of 16k chars or more is counted before the gates by
@@ -44,6 +49,20 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   verified payment never spends it.
   `GATEWAY_METERED_BILLING=on` gates metered settlement, the buffered override and a credits
   stream's debit on finish alike (`recordStreamedUsage`, `meteredUsdOf` in `src/gateway-meter.js`).
+- **Reasoning fitted to the output cap** (chat, Messages, Responses; `reasoningForLink`,
+  `fitEffortToBudget`, `fitBudgetForAnswer` in `llm-gateway-kit.js`): on each outbound link a
+  buyer effort above "low" is sent as "low" when the link's cap is under `smallBudgetThreshold`
+  (the tier's default output budget, the threshold `smallBudgetEffort` reads), and a reasoning or
+  thinking budget is lowered to leave a quarter of the cap (never under the provider floor). A model
+  flagged `reasoningOutsideMaxTokens` is left as sent. The normalized body, the cache key, the
+  clamp and the metered quote read the buyer's own values; only the outbound link changes, and it
+  only gets cheaper. An empty-for-length answer from OpenRouter gets one same-model run at the
+  model's lowest effort (`retryEmptyAtLowestEffort`: once per call, only when
+  `recoveryRunAffordable` holds, the payment window leaves time and the timed-out budget is not
+  spent), metered at the served run alone; then the walk is as before. Disclosure:
+  `agent402_reasoning_adjusted {field, requested, used, reason}` on the answer, the same JSON in
+  `X-Agent402-Reasoning-Adjusted` on a stream. It adds no refusal. Suite:
+  `scripts/test-llm-answer-fit.js`.
 - **Report products:** kits under `src/tools/*-report-kit.js`, `src/report-tiers.js`,
   house style in `src/house-style.js`, samples in `src/sample-reports.js`. Every kit that serves
   model prose passes it through `sanitizeReportProse` (`src/report-grounding.js`: a link stays a

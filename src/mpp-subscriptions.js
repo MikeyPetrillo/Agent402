@@ -50,6 +50,17 @@
 // SUBSCRIBER's own account with the access key as the delegated signer, so the
 // subscriber pays their own fees and we fund nothing.
 //
+// KEY LIFETIME. The key is held only while a later period can still be pulled.
+// It is deleted from the store (both copies mppx keeps, found by content) the
+// moment that stops being true: a cancel is stored (also while the paid period
+// runs on, since a canceled subscription is never pulled again), the signed
+// term runs out, dunning gives up, or a sweep closes the record. The house
+// record of an ended subscription is reduced in the same step to the fields
+// TOMBSTONE_FIELDS names (no email, no watched subject, no error text) and is
+// deleted ENDED_RECORD_KEEP_MS after the end (src/mpp-subscription-retention.js)
+// by a leased sweep, which also closes records whose end only the clock
+// decides and reduces ended records written before this rule existed.
+//
 // BILLING PERIOD HANDLING (the money rules, all fail-closed):
 //   - Activation charges period 0 on-chain at subscribe time. No confirmed
 //     transfer, no subscriber record: an unpaid activation is simply a 402.
@@ -61,6 +72,15 @@
 //   - A failed charge backs off (1h doubling to 24h) and is retried. If it has
 //     not cleared within PAST_DUE_GRACE_MS the subscription is canceled as
 //     unpaid and never charged again.
+//   - The paying wallet is screened (src/sanctions-screen.js: the exact OFAC
+//     SDN match, then the one-hop funding check with its per-payer cache)
+//     BEFORE the first payment is sent and BEFORE every renewal is signed,
+//     never after. A refused first payment is a 402 with the answer the
+//     per-call Tempo rail gives and nothing is sent. A refused renewal sends
+//     nothing and ends the subscription (canceledReason "payer-not-accepted"),
+//     so its key is destroyed like any other end. With no list loaded the
+//     payment proceeds and is counted as unscreened, as the x402 payer screen
+//     does; /api/gateway-status then reads sanctionsScreen missing.
 //   - Cancellation is ours to honour, never ours to fake: the subscriber calls
 //     cancel() with the manage token minted at activation, we stop pulling, and
 //     the subscription stays active until the period they already paid for
@@ -77,7 +97,8 @@
 import { readFileSync, writeFileSync, renameSync, existsSync } from "node:fs";
 import { assertSigningAllowed } from "./signing-halt.js";
 import { createJsonDocument, SKIP_UPDATE } from "./json-document.js";
-import { leaseOwnerId, stateDbEnabled, stateDbSchema, stateQuery, trackStoreReady, withLease } from "./state-db.js";
+import { leaseOwnerId, leased, stateDbEnabled, stateDbSchema, stateQuery, trackStoreReady, withLease } from "./state-db.js";
+import { ENDED_RECORD_KEEP_MS, ENDED_SWEEP_INTERVAL_MS, ENDED_SWEEP_MAX_PER_RUN } from "./mpp-subscription-retention.js";
 import { createHmac, timingSafeEqual, randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { Challenge, Credential, Method, Receipt } from "mppx";
@@ -87,6 +108,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
 import { redactSecrets } from "./tools/redact.js";
 import { withSponsorCeiling, sponsorCeilingWord } from "./tempo-sponsor-ceiling.js";
+import { screenAddresses, screenFunding, maskAddress, TEMPO_SCREEN_REFUSED_DETAIL } from "./sanctions-screen.js";
 
 // Tempo mainnet. Same constant mpp-tempo.js pins; a subscription authorization
 // commits to the chain id, so a mismatch is a rejected signature, not a
@@ -388,6 +410,24 @@ export const MAX_OPEN_OFFERS = 500;
  *  can take, short enough that a crashed holder frees it. */
 export const RENEWAL_LEASE_TTL_MS = 10 * 60_000;
 
+/**
+ * What an ended subscription's record keeps (the reduced record): its id,
+ * product and final state, the paying wallet, the dates, and what a question
+ * about its last charge reads (amount, period, last transaction, a send whose
+ * landing was never decided). The access key ADDRESS stays so the subscriber
+ * can revoke it on their account; our private half is gone. Not kept: the
+ * email, the watched subject, error text, dunning and claim state.
+ */
+export const TOMBSTONE_FIELDS = Object.freeze([
+  "subId", "status", "product", "createdAt", "rail", "wire", "canary",
+  "mppxSubscriptionId", "lookupKey", "payer", "accessKeyAddress",
+  "currency", "chainId", "amountAtomic", "priceUsd", "periodCount", "periodUnit",
+  "billingAnchor", "lastChargedPeriod", "subscriptionExpires", "lastChargeTx", "lastChargeAt", "unconfirmedCharge",
+  "cancelAtPeriodEnd", "canceledAt", "canceledReason",
+]);
+/** The canceledReason of a subscription a refused renewal ended (the word the
+ *  x402 payer screen answers with). Its status answer carries the refusal text. */
+export const SCREEN_ENDED_REASON = "payer-not-accepted";
 const SUB_PREFIX = "mpp_";                       // our subscription ids
 const REC_KEY = (subId) => `a402:sub:${subId}`;      // our records inside the shared kv
 const OFFER_KEY = (nonce) => `a402:offer:${nonce}`;  // an open, unpaid offer
@@ -929,6 +969,7 @@ export function createMppSubscriptions({
   secretKey, realm, storePath, validateTarget = {}, onCharge,
   activate: injectedActivate = null, chargePeriod: injectedChargePeriod = null,
   findRenewalOnChain: injectedFindRenewal = null,
+  screen = { addresses: screenAddresses, funding: screenFunding },
   now = () => Date.now(), log = console.log,
 } = {}) {
   // Fail closed on the inputs the binding rests on. A subscription engine that
@@ -1123,8 +1164,21 @@ export function createMppSubscriptions({
    * A requested cancel that meets a period just paid stays "active until the
    * period ends", as cancel() itself decides; anything else stays canceled.
    */
-  async function writeRecKeepingCancel(rec) {
+  async function writeRecKeepingCancel(rec, { ownPull = false } = {}) {
     const r = await kv.compareAndSet(REC_KEY(rec.subId), (cur) => {
+      // A record the sweep deleted is not written back, and a reduced record
+      // takes only the facts of a charge that landed after it was reduced.
+      if (!cur) return null;
+      if (cur.tombstone) {
+        const paid = (rec.lastChargedPeriod ?? 0) > (cur.lastChargedPeriod ?? 0);
+        const pending = !!rec.unconfirmedCharge && !cur.unconfirmedCharge && (rec.lastChargedPeriod ?? 0) === (cur.lastChargedPeriod ?? 0);
+        if (!paid && !pending) return null;
+        return {
+          ...cur,
+          ...(paid ? { lastChargedPeriod: rec.lastChargedPeriod, lastChargeTx: rec.lastChargeTx || null, lastChargeAt: rec.lastChargeAt || null, unconfirmedCharge: null } : { unconfirmedCharge: rec.unconfirmedCharge }),
+          updatedAt: new Date(now()).toISOString(),
+        };
+      }
       const out = { ...rec, updatedAt: new Date(now()).toISOString() };
       if (cur && cur.cancelAtPeriodEnd && !out.cancelAtPeriodEnd) {
         out.cancelAtPeriodEnd = true; out.canceledAt = cur.canceledAt; out.canceledReason = cur.canceledReason;
@@ -1135,8 +1189,14 @@ export function createMppSubscriptions({
       }
       return out;
     });
-    const next = r.value || { ...rec };
+    if (!r.value) { cache.delete(rec.subId); return { ...rec }; }
+    let next = r.value;
     cache.set(rec.subId, next);   // listActive/get are synchronous for the scheduler
+    // The write that ends a subscription is also where its key goes.
+    if (isEnded(next) && !next.tombstone) {
+      await finishEnded(rec.subId, { ownPull });
+      next = cache.get(rec.subId) || next;
+    }
     return next;
   }
   async function allRecs() {
@@ -1205,6 +1265,154 @@ export function createMppSubscriptions({
       if (v2 && typeof v2 === "object" && v2.privateKey && String(v2.accessKeyAddress || "").toLowerCase() === addr) { await kv.delete(k2); n++; }
     }
     return n;
+  }
+
+  // --- the end of a subscription ----------------------------------------------
+  const isEnded = (rec) => !!rec && (rec.status === "canceled" || rec.status === "expired");
+  /** Private-key records held for one access key address, in a store snapshot. */
+  function heldKeyCount(address, snap = kv._snapshot()) {
+    const addr = String(address || "").toLowerCase();
+    let n = 0;
+    for (const v of Object.values(snap)) if (isKeyRecord(v) && keyAddrOf(v) === addr) n++;
+    return n;
+  }
+  /** When an ended record's subscription ended: the signed expiry, the end of
+   *  the paid period for a requested cancel, the cancel time otherwise; never
+   *  later than `at`. */
+  function endedAtOf(rec, at) {
+    const cancel = Date.parse(rec.canceledAt || "");
+    let end;
+    if (rec.status === "expired") end = Date.parse(rec.subscriptionExpires || "");
+    else if (rec.canceledReason === "requested" && !isCanaryProduct(rec.product)) end = Math.max(Number.isFinite(cancel) ? cancel : 0, paidThroughAt(rec));
+    else end = cancel;
+    return new Date(Number.isFinite(end) && end > 0 && end < at ? end : at).toISOString();
+  }
+  function tombstoneOf(rec, at) {
+    const out = {};
+    for (const k of TOMBSTONE_FIELDS) if (rec[k] !== undefined) out[k] = rec[k];
+    return {
+      ...out, tombstone: true,
+      endedAt: rec.endedAt || endedAtOf(rec, at),
+      keyDestroyedAt: rec.keyDestroyedAt || new Date(at).toISOString(),
+      mppxCleared: false,
+      updatedAt: new Date(at).toISOString(),
+    };
+  }
+  /** Delete mppx's own entries for an ended subscription (its record, which
+   *  carries the buyer's signed authorization, the lookup pointer and any
+   *  activation marker), found by content like the key records are. */
+  async function clearMppxRecord(tomb, at = now()) {
+    const id = tomb.mppxSubscriptionId;
+    if (id) {
+      for (const [k, v] of Object.entries(kv._snapshot())) {
+        if (k.startsWith("a402:")) continue;
+        if (v === id || (v && typeof v === "object" && !Array.isArray(v) && v.subscriptionId === id)) await kv.delete(k);
+      }
+    }
+    if (tomb.lookupKey) {
+      const marker = `tempo:subscription:activation:${tomb.lookupKey}`;
+      if (await kv.get(marker)) await kv.delete(marker);
+    }
+    const r = await kv.compareAndSet(REC_KEY(tomb.subId), (cur) => (cur?.tombstone && !cur.mppxCleared ? { ...cur, mppxCleared: true, updatedAt: new Date(at).toISOString() } : null));
+    if (r.value) cache.set(tomb.subId, r.value);
+  }
+  /**
+   * Finish an ended subscription: destroy our private half of its access key
+   * (marked, so a renewal still sending cannot write it back) and reduce the
+   * record to TOMBSTONE_FIELDS, deleting mppx's own record with it.
+   * Idempotent; does nothing for a record that is not canceled or expired.
+   * The key always goes at once. The record is NOT reduced while a renewal
+   * is in flight (another caller's claim is live): a charge that lands for
+   * a requested cancel keeps the subscriber active through the period it
+   * paid for (writeRecKeepingCancel), so that renewal's own write decides,
+   * and the sweep reduces whatever is still ended once the claim has run
+   * out. Returns { keys, reduced } or null.
+   */
+  async function finishEnded(subId, { at = now(), ownPull = false } = {}) {
+    let rec;
+    try { rec = await kv.getFresh(REC_KEY(subId)); } catch { rec = await kv.get(REC_KEY(subId)); }
+    if (!isEnded(rec)) return null;
+    if (kv.backend === "pg") await kv.refreshAll().catch(() => false);   // the other container's key copies
+    const keys = (!rec.keyDestroyedAt || heldKeyCount(rec.accessKeyAddress)) ? await destroyAccessKey(rec.accessKeyAddress, null, { mark: true }) : 0;
+    const r = await kv.compareAndSet(REC_KEY(subId), (cur) => {
+      if (!isEnded(cur) || cur.tombstone) return null;
+      if (!ownPull && cur.chargeClaim && Date.parse(cur.chargeClaim.until) > at) return null;
+      return tombstoneOf(cur, at);
+    });
+    const next = r.value || null;
+    if (next) cache.set(subId, next);
+    if (next?.tombstone && !next.mppxCleared) await clearMppxRecord(next, at);
+    return { keys, reduced: r.won === true };
+  }
+
+  /**
+   * The ended-subscription sweep (leased, every ENDED_SWEEP_INTERVAL_MS, at
+   * most `max` records changed per run). For each record: one whose end only
+   * the clock decides (the signed term ran out, or a requested cancel's paid
+   * period did) is closed; an ended record is finished (key destroyed, record
+   * reduced), which is also how records ended before this sweep existed are
+   * brought in; a reduced record older than ENDED_RECORD_KEEP_MS is deleted.
+   * A subscription that can still be pulled is never touched. Signs nothing,
+   * moves no money. Logs counts only.
+   */
+  async function sweepEndedUnleased({ max = ENDED_SWEEP_MAX_PER_RUN } = {}) {
+    await ready;
+    const at = now();
+    const out = { closed: 0, reduced: 0, keysDestroyed: 0, deleted: 0, more: false };
+    let budget = Math.max(1, Number(max) || ENDED_SWEEP_MAX_PER_RUN);
+    for (const rec of await allRecs()) {
+      if (!rec || typeof rec.subId !== "string") continue;
+      let cur = rec, touched = false;
+      if (!isEnded(cur)) {
+        // A rail-canary record is closed by its own run or by sweepStaleCanaries.
+        if (isCanaryProduct(cur.product)) continue;
+        const term = Date.parse(cur.subscriptionExpires);
+        if (!(Number.isFinite(term) && at >= term) && !(cur.cancelAtPeriodEnd && at >= paidThroughAt(cur))) continue;
+        if (budget <= 0) { out.more = true; break; }
+        const r = await kv.compareAndSet(REC_KEY(cur.subId), (c) => {
+          if (!c || isEnded(c)) return null;
+          const t = Date.parse(c.subscriptionExpires);
+          if (Number.isFinite(t) && at >= t) return { ...c, status: "expired", updatedAt: new Date(at).toISOString() };
+          if (c.cancelAtPeriodEnd && at >= paidThroughAt(c)) return { ...c, status: "canceled", canceledAt: c.canceledAt || new Date(at).toISOString(), canceledReason: c.canceledReason || "requested", updatedAt: new Date(at).toISOString() };
+          return null;
+        });
+        if (!r.won || !isEnded(r.value)) continue;
+        cur = r.value; cache.set(cur.subId, cur); out.closed++; touched = true;
+      }
+      if (!cur.tombstone || !cur.mppxCleared || heldKeyCount(cur.accessKeyAddress)) {
+        if (budget <= 0) { out.more = true; break; }
+        const f = await finishEnded(cur.subId, { at });
+        if (f) { out.keysDestroyed += f.keys; if (f.reduced) out.reduced++; }
+        cur = cache.get(cur.subId) || cur; touched = true;
+      }
+      const ended = Date.parse(cur.endedAt || "");
+      if (cur.tombstone && Number.isFinite(ended) && at - ended >= ENDED_RECORD_KEEP_MS) {
+        if (budget <= 0) { out.more = true; break; }
+        if (!cur.mppxCleared) await clearMppxRecord(cur, at);
+        await kv.delete(REC_KEY(cur.subId));
+        cache.delete(cur.subId);
+        out.deleted++; touched = true;
+      }
+      if (touched) budget--;
+    }
+    if (out.closed || out.reduced || out.keysDestroyed || out.deleted) {
+      log(`[mpp-subs] ended-subscription sweep: closed ${out.closed}, reduced ${out.reduced}, key records destroyed ${out.keysDestroyed}, deleted ${out.deleted}${out.more ? " (more next run)" : ""}`);
+    }
+    return out;
+  }
+  const sweepEnded = leased("mpp-subscription-ended-sweep", { ttlMs: 10 * 60_000, log }, sweepEndedUnleased);
+  let sweepTimer = null, sweepFirst = null;
+  /** Start the ended-subscription sweep's timer (unref'd; the first run is held back off the boot path). */
+  function start({ intervalMs = ENDED_SWEEP_INTERVAL_MS, firstMs = 2 * 60_000 } = {}) {
+    if (sweepTimer) return;
+    const run = () => { sweepEnded().catch((e) => log(`[mpp-subs] ended-subscription sweep failed: ${String(e?.message || e).slice(0, 160)}`)); };
+    sweepTimer = setInterval(run, intervalMs); sweepTimer.unref?.();
+    sweepFirst = setTimeout(run, firstMs); sweepFirst.unref?.();
+  }
+  function stop() {
+    if (sweepTimer) clearInterval(sweepTimer);
+    if (sweepFirst) clearTimeout(sweepFirst);
+    sweepTimer = null; sweepFirst = null;
   }
 
   // --- the offer -------------------------------------------------------------
@@ -1311,6 +1519,54 @@ export function createMppSubscriptions({
     return { header: Challenge.serialize(challenge), challenge, product: String(product), target: t, email: mail, accessKeyAddress: ak.accessKeyAddress };
   }
 
+  // --- payer screen ----------------------------------------------------------
+  // Counted like the x402 payer screen counts (src/x402-payer-screen.js):
+  // screened, refused, and payments sent while no list was loaded.
+  const screenCounts = { screened: 0, refused: 0, servedUnscreened: 0, lastRefusedAt: 0, lastUnscreenedAt: 0 };
+  let unscreenedLoggedAt = 0;
+  const payerScreenView = () => ({
+    screened: screenCounts.screened, refused: screenCounts.refused, servedUnscreened: screenCounts.servedUnscreened,
+    lastRefusedAt: screenCounts.lastRefusedAt ? new Date(screenCounts.lastRefusedAt).toISOString() : null,
+    lastUnscreenedAt: screenCounts.lastUnscreenedAt ? new Date(screenCounts.lastUnscreenedAt).toISOString() : null,
+  });
+  /**
+   * The paying wallet's verdict before a payment is sent: null when it
+   * passes, { reason: "listed" } (on the list) or { reason: "funded" } (the
+   * one-hop funding check refused it). The exact match is a Set lookup. The
+   * funding check answers from its per-payer cache when it holds a verdict;
+   * a cold one reads the transfer feed inside its own deadline
+   * (SANCTIONS_ONE_HOP_DEADLINE_MS, default 2.5 s, at most 10 s), and a read
+   * that fails or times out passes. Both run before anything is signed, so
+   * the read takes nothing from a transaction's validity window, which is
+   * stamped when the transaction is prepared. With no list loaded the
+   * payment proceeds: counted, logged once a minute.
+   */
+  async function screenPayer(payer, phase) {
+    let v;
+    try { v = screen.addresses([payer]); } catch { v = { ok: false, reason: "unavailable" }; }
+    if (!v.ok && v.reason === "listed") {
+      screenCounts.screened++; screenCounts.refused++; screenCounts.lastRefusedAt = Date.now();
+      log(`[sanctions-screen] subscription payer ${maskAddress(payer)} refused ${phase}; nothing sent`);
+      return { reason: "listed" };
+    }
+    if (v.ok) screenCounts.screened++;
+    else {
+      screenCounts.servedUnscreened++; screenCounts.lastUnscreenedAt = Date.now();
+      if (Date.now() - unscreenedLoggedAt >= 60_000) {
+        unscreenedLoggedAt = Date.now();
+        log("[sanctions-screen] subscription payer screen: no list loaded, sending subscription payments unscreened");
+      }
+    }
+    let f;
+    try { f = await screen.funding([payer], { now: now() }); } catch { f = { ok: true }; }
+    if (f && f.ok === false) {
+      screenCounts.refused++; screenCounts.lastRefusedAt = Date.now();
+      log(`[sanctions-screen] subscription payer ${maskAddress(payer)} refused ${phase} (funding check); nothing sent`);
+      return { reason: "funded" };
+    }
+    return null;
+  }
+
   // --- activation ------------------------------------------------------------
   /** Default activation: hand the credential to mppx's subscription method,
    *  which verifies the key authorization, recovers the payer, installs the
@@ -1374,6 +1630,15 @@ export function createMppSubscriptions({
       // gives the caller their existing subscription back instead of a second.
       const existing = await findBySubscriptionId(already.subscriptionId);
       if (existing) return { ...publicView(existing), replay: true };
+    }
+
+    // The payer screen, before anything is sent. A refused wallet gets the
+    // per-call Tempo rail's answer; the offer's key is dropped at once, so the
+    // authorization just signed for it can never be used.
+    if (await screenPayer(payer, "before the first payment")) {
+      await destroyAccessKey(b.accessKeyAddress);
+      const e = new Error(TEMPO_SCREEN_REFUSED_DETAIL);
+      e.statusCode = 402; e.screenRejected = true; throw e;
     }
 
     const doActivate = injectedActivate || defaultActivate;
@@ -1603,7 +1868,7 @@ export function createMppSubscriptions({
         const decided = !!verdict && !verdict.unknown && ((verdict.found === true && typeof verdict.tx === "string" && verdict.tx !== "") || verdict.found === false);
         if (!decided) {
           const next = { ...rec, status: rec.status === "active" ? "past_due" : rec.status, nextChargeAttemptAt: new Date(at + TRANSIENT_CHARGE_BACKOFF_MS).toISOString() };
-          await writeRecKeepingCancel(next);
+          await writeRecKeepingCancel(next, { ownPull: true });
           log(`[mpp-subs] ${subId}: unconfirmed period ${due} and the chain ${verdict === null ? "is unreadable" : `could not decide (${verdict?.reason || "unknown"})`} - waiting, not re-charging`);
           return next.status;
         }
@@ -1615,7 +1880,7 @@ export function createMppSubscriptions({
             ...rec, status: "active", lastChargedPeriod: due, lastChargeTx: verdict.tx, lastChargeAt: new Date(at).toISOString(),
             chargeFailures: 0, firstFailedAt: null, nextChargeAttemptAt: null, lastChargeError: null, unconfirmedCharge: null,
           };
-          await writeRecKeepingCancel(next);
+          await writeRecKeepingCancel(next, { ownPull: true });
           bookCharge(next, due, verdict.tx);
           log(`[mpp-subs] reconciled ${subId} period ${due} from the chain: the send that timed out had landed, tx=${verdict.tx} - not charged twice`);
           return "active";
@@ -1626,13 +1891,24 @@ export function createMppSubscriptions({
           (Date.parse(rec.unconfirmedCharge.at) + renewalValidForS * 1000 + SETTLEABLE_SLACK_MS);
         if (at < settleableUntil) {
           const next = { ...rec, status: rec.status === "active" ? "past_due" : rec.status, nextChargeAttemptAt: new Date(settleableUntil).toISOString() };
-          await writeRecKeepingCancel(next);
+          await writeRecKeepingCancel(next, { ownPull: true });
           log(`[mpp-subs] ${subId}: unconfirmed period ${due} not on chain yet and still settleable - waiting, not re-charging`);
           return next.status;
         }
         rec = { ...rec, unconfirmedCharge: null };
-        await writeRecKeepingCancel(rec);
+        await writeRecKeepingCancel(rec, { ownPull: true });
         log(`[mpp-subs] ${subId}: the send that timed out for period ${due} never landed - charging now`);
+      }
+      // The payer screen, before this period is signed. A wallet refused now
+      // is not charged and the subscription ends here: the write below is an
+      // ending write, so the key is destroyed and the record reduced with it.
+      if (await screenPayer(rec.payer, "before a renewal")) {
+        await writeRecKeepingCancel({
+          ...rec, status: "canceled", canceledAt: new Date(at).toISOString(), canceledReason: SCREEN_ENDED_REASON,
+          nextChargeAttemptAt: null,
+        }, { ownPull: true });
+        log(`[mpp-subs] ${subId}: period ${due} not sent (payer screening); subscription ended, nothing charged`);
+        return "canceled";
       }
       if (!stillHeld()) {
         log(`[mpp-subs] ${subId}: the renewal lease was lost before period ${due} was signed; nothing signed`);
@@ -1652,7 +1928,7 @@ export function createMppSubscriptions({
         lastChargeAt: new Date(at).toISOString(),
         chargeFailures: 0, firstFailedAt: null, nextChargeAttemptAt: null, lastChargeError: null, unconfirmedCharge: null,
       };
-      await writeRecKeepingCancel(next);
+      await writeRecKeepingCancel(next, { ownPull: true });
       bookCharge(next, charged, next.lastChargeTx);
       log(`[mpp-subs] charged ${subId} period ${charged} tx=${next.lastChargeTx || "?"}`);
       return "active";
@@ -1680,7 +1956,7 @@ export function createMppSubscriptions({
         status: givenUp ? "canceled" : "past_due",
         ...(givenUp ? { canceledAt: new Date(at).toISOString(), canceledReason: "unpaid" } : {}),
       };
-      await writeRecKeepingCancel(next);
+      await writeRecKeepingCancel(next, { ownPull: true });
       log(`[mpp-subs] period charge failed for ${subId} (attempt ${failures}${givenUp ? ", giving up: past the grace window" : `, retry in ${Math.round(backoff / 60000)}m${transient ? " (transient)" : ""}${ambiguous ? ", chain checked before any retry" : ""}`}): ${diagnoseError(err)}`);
       return next.status;
     } finally { inFlight.delete(subId); }
@@ -1722,11 +1998,16 @@ export function createMppSubscriptions({
     });
     const next = r.value || rec;
     cache.set(subId, next);   // listActive/get are synchronous for the scheduler
-    // A closed canary record's access key is never needed again; drop our
-    // private half so the burner's standing authorization is inert.
-    if (canaryRec) await destroyAccessKey(rec.accessKeyAddress, null, { mark: true });
+    // Once a cancel is stored no later period is ever pulled (the claim and
+    // the status decision both refuse it), so our private half of the access
+    // key goes now, also while the paid period runs on: the subscriber's
+    // standing authorization is inert from this moment. A record that closed
+    // at once is reduced in the same step; one still in its paid period is
+    // reduced by the sweep when that period ends.
+    if (isEnded(next)) await finishEnded(subId, { at });
+    else if (next.cancelAtPeriodEnd) await destroyAccessKey(next.accessKeyAddress || rec.accessKeyAddress, null, { mark: true });
     if (r.won) log(`[mpp-subs] canceled ${subId} (${stillPaid ? `active until ${new Date(endsAtNow).toISOString()}` : "immediately"})`);
-    return publicView(next);
+    return publicView(cache.get(subId) || next);
   }
 
   /** Close every rail-canary subscription a canary run failed to close itself
@@ -1753,6 +2034,7 @@ export function createMppSubscriptions({
       if (r.value) cache.set(rec.subId, r.value);
       if (!r.won) continue;
       const keysDestroyed = await destroyAccessKey(rec.accessKeyAddress, null, { mark: true });
+      await finishEnded(rec.subId, { at });
       swept.push({ subId: rec.subId, accessKeyAddress: rec.accessKeyAddress || null, keysDestroyed });
     }
     if (swept.length) log(`[mpp-subs] canary sweep closed ${swept.length} stale rail-canary subscription(s)`);
@@ -1770,6 +2052,10 @@ export function createMppSubscriptions({
       lastChargedPeriod: rec.lastChargedPeriod, paidThrough: new Date(paidThroughAt(rec)).toISOString(),
       subscriptionExpires: rec.subscriptionExpires,
       cancelAtPeriodEnd: !!rec.cancelAtPeriodEnd, canceledAt: rec.canceledAt || null,
+      // Why it ended, when it has: requested, unpaid, payer-not-accepted (with
+      // the refusal text the first payment would have been answered with).
+      canceledReason: rec.canceledReason || null,
+      ...(rec.canceledReason === SCREEN_ENDED_REASON ? { notice: TEMPO_SCREEN_REFUSED_DETAIL } : {}),
       lastChargeAt: rec.lastChargeAt || null, lastChargeTx: rec.lastChargeTx || null,
       // Deliberately NOT exposed: chargeFailures/lastChargeError text on the
       // public view (operator surface only) - it can quote a node's words.
@@ -1868,6 +2154,7 @@ export function createMppSubscriptions({
       enabled: true, recipient, currency, chainId: TEMPO_MAINNET_CHAIN_ID,
       periodSeconds: PERIOD_MS / 1000,
       renewals: renewalsWord([...cache.values()], { hours: renewalUnconfirmedAlertHours(), at: now(), full: true }),
+      payerScreen: payerScreenView(),
       subs: [...cache.values()].map((rec) => ({
         ...publicView(rec),
         email: rec.email ? `${rec.email.slice(0, 2)}***` : null,
@@ -1875,12 +2162,16 @@ export function createMppSubscriptions({
         nextChargeAttemptAt: rec.nextChargeAttemptAt || null,
         unconfirmedChargeAt: rec.unconfirmedCharge?.at || null,
         accessKeyAddress: rec.accessKeyAddress,
+        // A reduced record of an ended subscription: when it ended (it is
+        // deleted ENDED_RECORD_KEEP_MS later) and that its key is gone.
+        ...(rec.tombstone ? { reduced: true, endedAt: rec.endedAt || null, keyDestroyedAt: rec.keyDestroyedAt || null } : {}),
       })),
     };
   }
 
   return {
     offerInfo, mintOffer, activateFromCredential, refreshStatus, cancel, isCanarySub, sweepStaleCanaries,
+    sweepEnded, start, stop, _sweepEndedUnleased: sweepEndedUnleased, _finishEnded: finishEnded, payerScreenView,
     listActive, get, getFresh, isMine, status, renewalsStatus, warm, warmSync, refreshMirror, manageToken, manageTokenOk, publicView,
     ready: () => ready, flush: () => kv.flush(),
     _store: kv, _subStore: subStore, _method: method,

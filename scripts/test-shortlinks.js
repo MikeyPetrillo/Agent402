@@ -190,10 +190,10 @@ try {
 // answer instantly, and the accepted spellings must be unchanged.
 {
   const { isSelfSellerQuery } = await import("../src/host-entry.js");
-  const t0 = Date.now();
-  const evil = isSelfSellerQuery("/".repeat(120_000) + "x", "https://agent402.tools");
-  const ms = Date.now() - t0;
-  ok(evil === false && ms < 250, `a 120k-slash seller query answers in ${ms}ms, not polynomial time`);
+  // Synchronous, so read as the time the thread had a core, least of three.
+  const { leastOurs } = await import("./lib/ours-clock.js");
+  const { value: evil, ms } = leastOurs(() => isSelfSellerQuery("/".repeat(120_000) + "x", "https://agent402.tools"), { giveUp: 2000 });
+  ok(evil === false && ms < 250, `a 120k-slash seller query answers in ${ms.toFixed(1)}ms, not polynomial time`);
   ok(["agent402.tools", "https://agent402.tools", "https://agent402.tools/", "www.agent402.tools"].every((q) => isSelfSellerQuery(q, "https://agent402.tools")), "every spelling of the host still matches");
   ok(isSelfSellerQuery("other.example", "https://agent402.tools") === false, "another seller never matches the host");
 }

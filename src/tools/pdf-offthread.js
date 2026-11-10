@@ -11,9 +11,12 @@
 // with up to PDF_QUEUE_MAX calls waiting for a slot; past that a call answers
 // 503 with nothing charged. A call's deadline starts when its worker does.
 import { Worker } from "node:worker_threads";
+import { threadEnv } from "./child-env.js";
 import { fileURLToPath } from "node:url";
 
 const PDF_WORKER = fileURLToPath(new URL("./pdf-worker.js", import.meta.url));
+// What the worker's import graph reads (lazy-deps.js).
+const PDF_WORKER_ENV = ["LAZY_DEPS_WARM_GAP_MS"];
 export const PDF_JOB_TIMEOUT_MS = 20_000;
 // Decoded stream bytes one job may allocate (object and cross-reference
 // streams, which pdf-lib inflates while loading). Real documents use a tiny
@@ -52,6 +55,7 @@ export async function runPdfOp(op, buffers, args = [], opts = {}) {
 function runPdfWorker(op, buffers, args, { timeoutMs = PDF_JOB_TIMEOUT_MS, decodeCapBytes = PDF_DECODE_CAP_BYTES } = {}) {
   return new Promise((resolve, reject) => {
     const worker = new Worker(PDF_WORKER, {
+      env: threadEnv(PDF_WORKER_ENV),
       workerData: { op, buffers, args, decodeCapBytes },
       resourceLimits: { maxOldGenerationSizeMb: HEAP_MB, maxYoungGenerationSizeMb: 64 },
     });

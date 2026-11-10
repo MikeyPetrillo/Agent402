@@ -199,7 +199,7 @@ if (!process.env.REDIS_URL) {
     const SL = await import("../src/shared-limits.js");
     SL._resetSharedLimitsState();
     ok(SL.sharedLimitsMode() === "redis" && SL.sharedLimitsStatus().status === "on", `the process's word reads on with a reachable Redis (${SL.sharedLimitsStatus().status})`);
-    ok(Object.keys(SL.sharedLimitsStatus()).join() === "status", "the public status is the word alone");
+    ok(Object.keys(SL.sharedLimitsStatus()).join() === "status,alert" && SL.sharedLimitsStatus().alert === "ok", "the public status is the two words alone");
     const full = SL.sharedLimitsStatus({ full: true });
     ok(full.mode === "redis" && typeof full.ops === "number" && typeof full.failures === "number", "the operator view carries the mode and the counts");
     // The word is computed from recorded results: a failure inside the hold reads degraded.

@@ -48,16 +48,31 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `CREDITS_ABANDONED_HOLD_MS` (default 10 minutes). A running request keeps its hold fresh against
   that sweep for at most `CREDITS_HOLD_REFRESH_MAX_MS` (default 6 hours, never under the abandoned
   window) (`src/credits.js`).
-- **Settle-failure breakers:** `src/gateway-settle-breaker.js` (per wallet and global on `/v1`,
-  per wallet on other wallet-only tools). A wallet is refused only when it holds
+- **Settle-failure breakers:** `src/gateway-settle-breaker.js` (per wallet on `/v1` and other
+  wallet-only tools). A signed EVM payer is counted per network its payment named (key
+  `payer@network`, read through `decodePaymentHeader`), so its 429 holds that network only, says the
+  wallet can pay on another at once and carries `retry`, `refusedNetwork`, `retryAfterSeconds` and
+  `otherNetworksFrom` (`src/tool-error-fields.js`); a Tempo sender, a credits key and the IP
+  fallback keep one key. No request is refused for other buyers' failures: `GATEWAY_SETTLE_BREAKER_GLOBAL_MAX`
+  distinct failing `/v1` buyers in a window set `settleFailures` on `/api/gateway-status` to `burst`
+  (ok / burst) for one window; so does ONE signed EVM payer whose `/v1` failures read refusing
+  (the same rule that refuses it) on `GATEWAY_SETTLE_BREAKER_MULTI_NETWORK_MIN` networks (default
+  3, never under 2) inside the window, since the per-network count would otherwise let one wallet
+  be served unpaid up to the limit on every offered network with no word moving (shared window
+  `gwb-nets` per payer; an alarm only, the wallet's per-network refusals are unchanged); and `COMPOSITE_GUARD_GLOBAL_MAX_FAILS` unsettled report or media
+  runs set `unsettledReports` to `burst` for `COMPOSITE_GUARD_GLOBAL_PAUSE_MS`; each logs a line
+  and the heartbeat and the status Worker page on `burst` under one issue per word that `ok`
+  closes. The shared flags are `gwb-alarm` and `cg-alarm`, read by the status words only; the
+  earlier `gwb-pause` and `cg-pause` are neither written nor read, and payer-only windows are not
+  read for a payment that names a network, so a deploy overlap refuses nobody. A wallet is refused only when it holds
   `GATEWAY_SETTLE_BREAKER_MAX` failures in the window AND they are more than
   `GATEWAY_SETTLE_BREAKER_MIN_FAIL_SHARE` (default 0.5) of its outcomes there; settled calls
   stay in the window as outcomes and never erase failures, so a buyer settling hundreds of
   calls is not cut off by a few replayed authorizations, whatever order the fast reverts and
   slower settlements land in; `GATEWAY_SETTLE_BREAKER_HARD_MAX` (default 40) failures refuse
-  a wallet whatever it settled, the bound on unpaid handler runs. The `/v1` global pause counts distinct buyers, not
+  a wallet whatever it settled, the bound on unpaid handler runs. The `/v1` burst alarm counts distinct buyers, not
   failures. Only a refusal whose offer the next 402 withdraws (`isWithdrawnSubcentRefusal`)
-  stays off the buyer's count, and it still feeds the `/v1` global pause, each one counted on
+  stays off the buyer's count, and it still feeds the `/v1` burst alarm, each one counted on
   its own; every other facilitator billing refusal (`src/payment-reject.js`) counts in both
   breakers and the composite guard, with a 429 that names it instead of the wallet.
   The composite guard (`src/composite-spend-guard.js`) reads its window the same way: a settled
@@ -221,6 +236,18 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   no `error`, so `error`-first clients read the explanation. Keyed on the header, so
   settle-failure, credits and Tempo/Stripe direct 402s are untouched. It wraps `res.send`, so it
   is mounted before the MPP shim and the Tempo/Stripe gates.
+- **402 `payment` block:** `src/payment-guide.js`: a first-contact 402 body carries `payment`
+  (this request's dollar price on the primary network through `priceForNetwork`, or on the first
+  network offered when the route does not offer the primary; one sentence on paying; `noWallet`
+  on a proof-of-work tool; `quote` with the caller's own model, request bytes and output cap on a
+  body-quoted route, never a rate or cost; links to `/llms.txt`, `/agents.md#pay` and `/mcp`).
+  Body only, keyed on the PAYMENT-REQUIRED header. A refused payment carries none: an x402
+  header that decodes and is refused, or an `Authorization` credential, keeps its own
+  explanation. An x402 header that does not decode is removed at intake
+  (`src/payment-header.js`), so its 402 is a first-contact answer and carries the block beside
+  `reason: malformed-header`. Every other field and the header are unchanged
+  (`scripts/test-payment-guide.js`). Rollback lever:
+  `PAYMENT_GUIDE_402=off`.
 - **Tempo push refusals:** `src/push-refusal-body.js`: for a push credential the Tempo gate
   restates a 4xx JSON body's not-charged sentence and sets `charged`, `transferClaimed`, `refundOwed`.
 - **Algorand network id:** `src/avm-network.js`: the CAIP-2 (32-character) id is what every 402
@@ -228,7 +255,10 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   as an alias in seller rows and the buyer.
 - **Replay store word:** `/api/gateway-status` reports `replayStore` (ok or pending). pending means a
   settled payment's consumed mark could not be written to the shared store yet; one shared retry loop
-  writes it, and the local consumed mark keeps the payment from running again meanwhile.
+  writes it, and the local consumed mark keeps the payment from running again meanwhile. A second
+  word, `alert`, reads `sustained` once pending has held ten minutes without a break
+  (`REPLAY_STORE_ALERT_AFTER_MS`); the status Worker and `heartbeat.yml` page on it ("Replay store
+  marks PENDING (Redis)") and close on `ok`.
 - **Paid-quote trust:** an address with a settled paid 200 gets 10x the unpaid price-check figures for
   10 minutes after each paid call (`PAID_CLIENT_QUOTE_MULTIPLIER`), keyed by an HMAC of the client key.
   On `/v1/metered` the raise is earned per call: past the plain figure each settled `/v1/metered` call

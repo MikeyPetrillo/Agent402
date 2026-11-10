@@ -32,6 +32,61 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const waitFor = async (cond, ms = 8000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (cond()) return true; await sleep(20); } return cond(); };
 
+// ---- which phase a departed buyer was waiting on (the module alone) ----
+// The booted case below leaves mid-handler. A buyer who leaves while the
+// settle call is in flight, or after it, is told apart by the same marks; here
+// they are set through the module's own middleware and hooks on a plain
+// request and response, with no server.
+{
+  const { EventEmitter } = await import("node:events");
+  const T = await import("../src/paid-phase-timing.js");
+  process.env.PAID_TIMING_LOG = "off";
+  const hooks = {};
+  T.registerPhaseTimingHooks(Object.fromEntries(["onBeforeVerify", "onAfterVerify", "onVerifyFailure", "onBeforeSettle", "onAfterSettle", "onSettleFailure"].map((k) => [k, (fn) => { hooks[k] = fn; }])));
+  const arrive = T.phaseArrivalMiddleware();
+  // One paid call on its own network (so each lands in its own hang-up list).
+  const call = (network) => {
+    const req = { headers: {}, header: () => undefined };
+    const res = new EventEmitter();
+    res.statusCode = 200; res.writableFinished = false; res.end = () => {};
+    const ctx = { transportContext: { request: { adapter: { req } } }, requirements: { network } };
+    arrive(req, res, () => {});
+    hooks.onBeforeVerify(ctx); hooks.onAfterVerify(ctx);
+    T.markPaidHandlerStart(req, res, "phase-unit");
+    return { req, res, ctx };
+  };
+  const listed = (network) => T.paidPhaseSummary().hangups[network];
+  const tick = () => sleep(5);
+
+  // During settle: the handler ended, the settle call started and has not returned.
+  const a = call("test:settle");
+  await tick(); a.res.end(); await tick();
+  hooks.onBeforeSettle(a.ctx); await tick();
+  a.res.emit("close");
+  ok(T.hangupWaitOf(a.req)?.during === "settle" && listed("test:settle")?.byPhase?.settle === 1 && listed("test:settle").recent[0].during === "settle", `a buyer who leaves while the settle call is in flight is listed under settle (${JSON.stringify(listed("test:settle")?.byPhase)})`);
+
+  // After the settle returned: the response was being written.
+  const b = call("test:after");
+  await tick(); b.res.end(); await tick();
+  hooks.onBeforeSettle(b.ctx); await tick();
+  hooks.onAfterSettle({ ...b.ctx, result: { success: true } }); await tick();
+  b.res.emit("close");
+  ok(T.hangupWaitOf(b.req)?.during === "after-handler" && listed("test:after")?.byPhase?.["after-handler"] === 1, `a buyer who leaves after the settle returned is listed under after-handler (${JSON.stringify(listed("test:after")?.byPhase)})`);
+
+  // A rail with no settle hooks: after the handler's end it is after-handler.
+  const c = call("test:nohooks");
+  await tick(); c.res.end(); await tick();
+  c.res.emit("close");
+  ok(T.hangupWaitOf(c.req)?.during === "after-handler" && listed("test:nohooks")?.byPhase?.["after-handler"] === 1, "with no settle marks, a departure after the handler's end is after-handler");
+
+  // Control: before the handler's end it is the handler, whatever came later.
+  const d = call("test:handler");
+  await tick(); d.res.emit("close");
+  ok(T.hangupWaitOf(d.req)?.during === "handler", "control: a departure before the handler's end reads handler");
+  d.res.end();
+  ok(listed("test:handler")?.byPhase?.handler === 1 && listed("test:handler").recent[0].waitedMs >= 0, "control: and is listed under handler once the handler ends");
+}
+
 const [PORT, FAC_PORT, DB_PORT] = await getFreePorts(3);
 const B = `http://127.0.0.1:${PORT}`;
 const TREASURY = "0x000000000000000000000000000000000000dEaD";
@@ -179,6 +234,14 @@ try {
   const nets = Object.entries(x.byNetwork || {});
   ok(nets.length >= 1 && nets.reduce((a, [, v]) => a + v.calls, 0) === x.calls && nets.every(([n, v]) => n && v.settleMs && v.totalMs), `the x402 summary splits its calls by network, each with its own settle and total figures (${JSON.stringify(Object.fromEntries(nets.map(([n, v]) => [n, v.calls])))})`);
   ok(near(x.verifyMs.p50, VERIFY_MS) && near(x.settleMs.p50, SETTLE_MS) && x.handlerMs.p95 >= DATA_MS, `the x402 summary carries p50/p95 per phase (${JSON.stringify({ v: x.verifyMs, h: x.handlerMs, s: x.settleMs })})`);
+  // e. (2026-11-09) the departure is kept apart from the rolling window, with
+  // how long the buyer waited and which phase it left in: the figure that
+  // names a buyer client's timeout.
+  const hg = Object.values(p.paidPhases?.hangups || {});
+  const dep = hg.flatMap((h) => h.recent || []).find((r) => r.slug === "stock-quote");
+  ok(hg.length >= 1 && hg.reduce((a2, h) => a2 + h.count, 0) === 1, `e. one buyer departure is listed under its network (${JSON.stringify(p.paidPhases?.hangups ? Object.fromEntries(Object.entries(p.paidPhases.hangups).map(([k, v]) => [k, v.count])) : null)})`);
+  ok(dep && dep.during === "handler" && dep.waitedMs >= 150 && dep.waitedMs < 1500, `e. it left during the handler, after the time the buyer actually waited (${JSON.stringify(dep)})`);
+  ok(hg[0]?.minWaitMs === dep?.waitedMs && hg[0]?.byPhase?.handler === 1, "e. the network's summary carries the shortest wait and a count by phase");
   ok(p.stockQuoteWarmer && p.stockQuoteWarmer.running === true && typeof p.stockQuoteWarmer.background.calls === "number", "the warmer's counts ride the same operator surface");
   ok(!JSON.stringify(p.paidPhases).includes(PAYER.slice(2)) && !JSON.stringify(p.paidPhases).includes("MSFT"), "d. the summary carries no payer and no input");
   const anon = await perf(false);

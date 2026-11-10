@@ -55,6 +55,13 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   touches their paths (`scripts/worker-deploy-paths.js`, `scripts/decide-deploy-paths.js`: image
   inputs, import closure, and for decide its export row format and kit); an unreadable or capped
   diff, or a check that fails, redeploys.
+- **Release queue:** `deploy.yml` runs in two concurrency groups per branch. Pushes, pull requests
+  and a dispatch with mode `deploy` or `publish` share `deploy-<ref>`; every other dispatch mode
+  shares `deploy-dispatch-<ref>`, so a manual pass neither holds a merge's run nor replaces it
+  while it is pending. Nothing on `main` is canceled in progress. GitHub keeps one pending run per
+  group: of two merges queued behind a running release only the newer runs, on a tree that
+  contains both, and the older push's commit-subject markers are not read by it
+  (`scripts/test-ci-gating.js` evaluates the group for every mode a job reads).
 - **Drain:** in-flight composites are aborted on SIGTERM (`src/drain-abort.js`); drain starts
   immediately (`scripts/test-drain-on-sigterm.js`). An uncaught exception stays fatal, so every
   scheduled turn that reads seller data (the route index drain and shadow rebuild, the crawl timers,
@@ -71,7 +78,11 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   breaks every listing does), paged the same way; both issues close only on the second ok read in a row.
 - **Backups:** `src/backup.js` (encrypted, offsite); restore with `scripts/backup-restore.js`.
   The `backup` word reads `unencrypted` while `BACKUP_ENCRYPTION_KEY` is unset in production
-  (`NODE_ENV` or the platform's environment name); the heartbeat and the status probe page on it.
+  (`NODE_ENV` or the platform's environment name), and `unconfigured` while the `BACKUP_S3_*`
+  bucket variables are unset in production with a state database (no backup runs at all); the
+  heartbeat and the status probe page on both under "Offsite backup is not current", closed on
+  `ok`. Without a bucket, a FREE_MODE boot, a boot outside production and a boot with no state
+  database read `off`, which never pages.
 - **Status observers:** GitHub heartbeat plus `workers/status-probe`; a failed check is
   re-probed once before it is recorded. The heartbeat signs its paywall read with X-Heartbeat-Token,
   so the unpaid budget never refuses it; the status Worker pages "Paywall not observed" after three
@@ -82,6 +93,20 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   build books in its own unversioned window, so for as long as it serves the two builds' caps are
   independent (each seller and the lane can be paid up to one cap per build), and on the next
   roll-forward each sum's next rebuild (within a day) folds in that window's unexpired entries.
+- **Ended MPP subscriptions:** the private half of a subscription's access key is deleted when a
+  cancel is stored or the subscription ends (`finishEnded` in `src/mpp-subscriptions.js`, reached from
+  every write that ends one), and the record is reduced to `TOMBSTONE_FIELDS` unless a renewal is in
+  flight. The leased sweep `mpp-subscription-ended-sweep` (every `ENDED_SWEEP_INTERVAL_MS`, at most
+  `ENDED_SWEEP_MAX_PER_RUN` records changed per run, counts-only log line) closes records whose end
+  only the clock decides, finishes ended records, and deletes a reduced record
+  `ENDED_RECORD_KEEP_MS` after its end; the three constants live in
+  `src/mpp-subscription-retention.js`, which /privacy prints. A new path that ends a subscription
+  writes through `writeRecKeepingCancel` or calls `finishEnded`. The paying wallet is screened
+  (`screenPayer`: the exact list match, then the one-hop funding check and its cache) before the
+  first payment and before each renewal is signed; a refused first payment is the Tempo rail's
+  `screen-rejected` 402, a refused renewal is an ending write (`payer-not-accepted`), and with no
+  list loaded the payment is sent and counted (`payerScreen` on `/__operator/monitors.json`,
+  `sanctionsScreen.mppSubscriptions` on the operator view of `/api/gateway-status`).
 - **Subscription sponsor ceiling:** `src/tempo-sponsor-ceiling.js` wraps the RPC transport of both
   Tempo subscription clients (`src/mpp-subscriptions.js`): every raw send carrying a fee-payer
   signature is admitted into a rolling 24 h window (`src/shared-limits.js`, shared across replicas;
@@ -107,6 +132,46 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   `X_SEARCH_STATS_FLUSH_MS` (default 60000, at least 1000). The files are used only without a
   state database; `ownStoreEnv` (`scripts/lib/own-stores.js`) points both into a booted test
   server's own directory.
+- **Search refusals:** `src/discovery-refusals.js` counts every search `/api/find` and `/api/route`
+  turn away, per UTC day, by route and rule (`load-gate`, `client-rate`, `client-compute`,
+  `shared-compute`, `inflight`, `deadline`) under a keyed, day-scoped digest of the limiter's client
+  key (never an address) and a User-Agent family, and marks a refused client that is served a
+  search or finishes a paid or free tool call later that day. One state document
+  (`discovery-refusals`), folded in on a timer and at shutdown, 8 days kept; at most
+  `DISCOVERY_REFUSALS_MAX_CLIENTS` (default 500, at most 5000) clients a day, the smallest folded
+  into `other` so totals stay exact. Read at `/__operator/discovery-refusals.json`. Env:
+  `DISCOVERY_REFUSALS_FILE` (default `/data/discovery-refusals.json`, used only without a state
+  database; `ownStoreEnv` points it into a test server's own directory),
+  `DISCOVERY_REFUSALS_FLUSH_MS` (default 300000, at least 1000). The connector's `catalog.find`
+  runs under the MCP limiter, not these rules, and is not counted here.
+- **X data ceilings:** `X_DATA_DAILY_MAX_USD` (default 1) is the alarm: past it the X data tools
+  keep serving and `xDataSpend` on `/api/gateway-status` reads `over`; `0` refuses every call
+  (`off`). `X_DATA_DAILY_HARD_MAX_USD` (default 5 times the alarm ceiling; never under it) is
+  where a read is refused 503 and the word reads `capped`. The status Worker and `heartbeat.yml`
+  page on `over` and `capped` under one issue ("X data daily spend OVER its ceiling") and close it
+  on `ok` or `off` (`scripts/test-x-data-ceilings.js`). The word is built from the larger of this
+  process's day and the shared day counter the refusal reads (one read of at most `STATUS_READ_MS`
+  per status answer, reused 5 s; a failed read leaves this process's own figure), so a new
+  container does not read `ok` on a day already past a ceiling, and a refusal on any replica
+  holds `capped` for `REFUSAL_HOLD_MS` (an hour; a refused call books nothing, so the total can
+  sit under the ceiling) (`src/daily-ceilings.js`, `scripts/test-spend-words-shared-redis.js`).
+- **Exa ceilings:** the same two ceilings and words, read the same way (`src/daily-ceilings.js`): `EXA_DAILY_MAX_USD`
+  (default 1; `0` refuses every call) is the alarm and `exaSpend` reads `over` past it while the
+  Exa tools keep serving; `EXA_DAILY_HARD_MAX_USD` (default 5 times the alarm ceiling; never
+  under it) refuses 503 and reads `capped`. Paged under "Exa daily spend OVER its ceiling",
+  closed on `ok` or `off` (`scripts/test-exa-ceilings.js`). `exaAllowance` and `EXA_CREDITS_USD`
+  are separate and unchanged: with the prepaid balance spent the upstream refuses and the tools
+  answer 503 whatever the ceilings say.
+- **Words with a grace period:** `sharedLimits` reads `degraded` for a minute after any one failed
+  Redis command and `replayStore` reads `pending` until the next retry pass, so each carries a
+  second word, `alert`, that reads `sustained` once the first has held ten minutes without a break
+  (`SHARED_LIMITS_ALERT_AFTER_MS`, `REPLAY_STORE_ALERT_AFTER_MS`; kept in process memory, so a
+  restart starts the count again). The status Worker and `heartbeat.yml` page on `sustained`
+  ("Shared limits store DEGRADED (Redis)", "Replay store marks PENDING (Redis)") and close when
+  the first word reads healthy (`on` or `memory`; `ok`); the alert word inside its grace period
+  does neither. `gatewayBalance` reads `withdraw` from the read that reaches
+  `GATEWAY_WITHDRAW_ALERT_USD` until the balance is moved, and pages at once ("Gateway balance
+  READY to withdraw"), closing on `ok` or `off` (`scripts/test-status-word-pagers.js`).
 - **Pre-payment refusal logs:** an input refusal answered before any payment gate
   (`src/prepayment-refusal.js`) writes its `[tool-error] ... prepay=true` line for the first 20
   in a clock minute per process; the rest print one summary line per minute (count and top
@@ -115,6 +180,17 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   `calls`/`errorRate` unless `include_pre_payment=1` (`prePaymentHidden` counts them).
   `logToolError` replaces control characters in the message and the key names
   (`stripControlChars`), so one error is one line.
+- **Call log retention:** `tool_calls` (`src/analytics-db.js`, one row per tool call) keeps
+  `TOOL_CALLS_RETENTION_DAYS` (default 180; never under 31, so the dashboard's widest window of
+  30 days always has its rows; `off` or `0` keeps everything). A daily tick under the lease
+  `tool-calls-retention` (first run seven minutes after boot) deletes older rows oldest first by
+  the `ts` index, 5000 a statement with a pause between, at most 100 statements a run; the rest
+  waits for the next run. Its pool sets the server-side limits the state database pool sets:
+  `ANALYTICS_DB_STATEMENT_TIMEOUT_MS` (default 10000) and `ANALYTICS_DB_IDLE_TX_TIMEOUT_MS`
+  (default 30000). A cut statement drops that one row or ends that run; the insert path never
+  throws (`scripts/test-analytics-retention.js`). `ANALYTICS_TEST_CAPTURE=1` (default unset) is
+  a test sink: each call-log row is printed as one `[tool-call-test]` line and none is written;
+  never set in production (`scripts/test-bespoke-call-log.js`).
 - **Sale paths and cohorts:** each sale records how it arrived (`src/sale-path.js`: the
   connector's loopback, a client package by its User-Agent product token, or HTTP) in the
   ledger's `via` column; `/__operator/cohorts.json` lists wallets past a per-day distinct-tool

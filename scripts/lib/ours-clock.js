@@ -63,3 +63,37 @@ export function gapMeter(everyMs = 2) {
   }, everyMs);
   return { stop() { clearInterval(iv); return { worst, worstWall }; } };
 }
+
+// The least of `attempts` ours-clock timings of a synchronous fn(): what the
+// work costs this thread. One reading carries whatever else the host did to
+// the thread in that moment (a cold cache, a slower core); code that went
+// quadratic is slow on every reading. Stops early once a reading is under
+// `enough` (a bound already met needs no second run) or past `giveUp` (a
+// regression fails in one run, not three).
+export function leastOurs(fn, { attempts = 3, enough = 0, giveUp = Infinity } = {}) {
+  let ms = Infinity, value;
+  for (let k = 0; k < attempts; k++) {
+    const t0 = oursMs();
+    value = fn();
+    const took = oursMs() - t0;
+    ms = Math.min(ms, took);
+    if (ms < enough || took > giveUp) break;
+  }
+  return { value, ms };
+}
+
+// The same for work that awaits, on the wall clock: a wait is not CPU time,
+// so the ours clock reads it as nothing where there is no schedstat. A host
+// busy with other work stretches one reading; code that waits where it
+// should not waits on every reading.
+export async function leastWall(fn, { attempts = 3, enough = 0, giveUp = Infinity } = {}) {
+  let ms = Infinity, value;
+  for (let k = 0; k < attempts; k++) {
+    const t0 = performance.now();
+    value = await fn();
+    const took = performance.now() - t0;
+    ms = Math.min(ms, took);
+    if (ms < enough || took > giveUp) break;
+  }
+  return { value, ms };
+}

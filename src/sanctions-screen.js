@@ -1,9 +1,11 @@
 // Payment-party screen: EVM-format addresses on the US Treasury OFAC
-// Specially Designated Nationals (SDN) list. Two readers: the Tempo rail's
+// Specially Designated Nationals (SDN) list. Three readers: the Tempo rail's
 // direct mode (src/mpp-tempo.js, TEMPO_RELAY=off), which checks every payment
-// party here before any money moves, and the x402 payer screen
+// party here before any money moves, the x402 payer screen
 // (src/x402-payer-screen.js), which checks an x402 payment's EVM payer after
-// verification and before the paid handler.
+// verification and before the paid handler, and the MPP subscription engine
+// (src/mpp-subscriptions.js), which checks the paying wallet before the first
+// payment and before every renewal it sends.
 //
 // SOURCE. OFAC's SDN list in its legacy XML format (SDN.XML), downloaded and
 // parsed by src/ofac-sdn.js: the same parser, and the same in-memory parse,
@@ -217,6 +219,13 @@ export function sanctionsScreenOperatorView(now = Date.now()) {
   };
 }
 
+/** What a buyer is told when the screen refuses a Tempo payment this server
+ *  would have sent: a per-call payment in direct mode (the screen-rejected
+ *  class in src/mpp-tempo.js) and a subscription's first payment or renewal
+ *  (src/mpp-subscriptions.js). One text, so both say the same thing. */
+export const TEMPO_SCREEN_REFUSED_DETAIL = "An address in this payment, or an address that recently sent funds to the paying wallet, appears on the US Treasury OFAC SDN list, which this server screens Tempo per-call and subscription payments against. The payment was not broadcast and nothing was charged.";
+export const TEMPO_SCREEN_REFUSED_HINT = "This server does not accept this payment.";
+
 /** Screen payment addresses. Values that are not EVM-format addresses are
  *  ignored (the caller passes every party it could read). Stale screens
  *  against the last good set; missing answers unavailable. */
@@ -288,6 +297,11 @@ export function screenAddresses(list) {
 // (which still fails closed), logs one word per minute and shows on the
 // operator view. Nothing is cached for a failed read.
 const ONE_HOP_PAGE = 50;
+/** The funding check's bounds as /privacy prints them: how long a payer's
+ *  verdict is kept, and how many inbound transfers from how far back are read. */
+export function oneHopPublicBounds() {
+  return { ttlDays: Math.round(oneHopTtlMs() / 86400_000), maxTransfers: oneHopMaxPages() * ONE_HOP_PAGE, lookbackDays: Math.round(oneHopLookbackMs() / 86400_000) };
+}
 const ONE_HOP_FLAGS_KEPT = 10;
 function oneHopTtlMs() { return envMs("SANCTIONS_ONE_HOP_TTL_MS", 7 * 86400_000, 1000); }
 function oneHopMaxPages() { return Math.max(1, Math.min(10, Math.trunc(envMs("SANCTIONS_ONE_HOP_MAX_PAGES", 2, 1)))); }

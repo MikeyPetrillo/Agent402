@@ -5,7 +5,7 @@
 // takeover after a restart (one regeneration, then refund), long-input metadata
 // chunking, and the legacy single-file import. Offline, in CI.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { createHumanCheckout, HUMAN_PRODUCTS, humanCheckoutEnabled, chunkInput, unchunkInput, STALE_CLAIM_MS } from "../src/human-checkout.js";
+import { createHumanCheckout, HUMAN_PRODUCTS, humanCheckoutEnabled, chunkInput, unchunkInput, STALE_CLAIM_MS, isReportPurchase } from "../src/human-checkout.js";
 import { rmSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -30,6 +30,15 @@ const sessions = {
   cs_other: { id: "cs_other", payment_status: "paid", payment_intent: "pi_other", customer_details: { email: "someone-else@example.com" }, metadata: { product: "dossier", input: "AAPL" } },
   cs_sub: { id: "cs_sub", mode: "subscription", payment_status: "paid", metadata: { product: "domain-monitor", target: "x.com" } },
   cs_nometa: { id: "cs_nometa", payment_status: "paid", payment_intent: "pi_nometa", metadata: {} },
+  // a report purchase whose input is missing (ours to refund)
+  cs_noinput: { id: "cs_noinput", payment_status: "paid", payment_intent: "pi_noinput", metadata: { product: "dossier" } },
+  // a report product a switch has taken off sale since the purchase
+  cs_offsale: { id: "cs_offsale", payment_status: "paid", payment_intent: "pi_offsale", metadata: { product: "token-brief", input: "So11111111111111111111111111111111111111112" } },
+  // paid Checkout sessions that are NOT report purchases
+  cs_pack: { id: "cs_pack", mode: "payment", payment_status: "paid", payment_intent: "pi_pack", customer_details: { email: "pack@example.com" }, metadata: { credits_pack: "credits-100", terms: "t" } },
+  cs_packprod: { id: "cs_packprod", mode: "payment", payment_status: "paid", payment_intent: "pi_packprod", metadata: { credits_pack: "credits-20", product: "dossier", input: "AAPL" } },
+  cs_unknownprod: { id: "cs_unknownprod", mode: "payment", payment_status: "paid", payment_intent: "pi_unknownprod", metadata: { product: "constructor", input: "AAPL" } },
+  cs_arrayprod: { id: "cs_arrayprod", mode: "payment", payment_status: "paid", payment_intent: "pi_arrayprod", metadata: { product: ["dossier"], input: "AAPL" } },
   cs_long: { id: "cs_long", payment_status: "paid", payment_intent: "pi_long", metadata: { product: "research", ...chunkInput("Q".repeat(1200)) } },
   cs_stale: { id: "cs_stale", payment_status: "paid", payment_intent: "pi_stale", metadata: { product: "dossier", input: "MSFT" } },
   cs_stale2: { id: "cs_stale2", payment_status: "paid", payment_intent: "pi_stale2", metadata: { product: "dossier", input: "MSFT" } },
@@ -124,11 +133,185 @@ clock += 31_000;
 const paid2 = await hc.fulfill("cs_fail2");
 ok(paid2.refundId === "re_2" && paid2.refundOwed === false && /has been refunded/.test(paid2.error) && !hc.listIssues().refundOwed.some((x) => x.id === "cs_fail2"), "the owed refund is retried on a later poll, succeeds, and leaves the issues list");
 
-// Missing metadata on a paid payment-mode session: refunded (persisted).
-const nm = await hc.fulfill("cs_nometa");
-ok(nm.status === "error" && nm.refundId === "re_3" && hc.peek("cs_nometa")?.refundId === "re_3", "a paid session with no report details is refunded once and persisted");
-await hc.fulfill("cs_nometa");
+// A report purchase with its input missing: refunded (persisted).
+const nm = await hc.fulfill("cs_noinput");
+ok(nm.status === "error" && nm.refundId === "re_3" && hc.peek("cs_noinput")?.refundId === "re_3", "a paid report session with no report details is refunded once and persisted");
+await hc.fulfill("cs_noinput");
 ok(refunds.length === 3, "...and not refunded again on the next poll");
+
+// A paid session that is not a report purchase (a credits pack, no product,
+// a product this module never sold): invalid, nothing generated, recorded or
+// refunded, on the first read and on every later one. The controls beside it
+// are the report sessions above (cs_paid generated, cs_fail refunded once).
+{
+  const refundsBefore = refunds.length, genBefore = genCalls;
+  for (const id of ["cs_pack", "cs_nometa", "cs_packprod", "cs_unknownprod", "cs_arrayprod"]) {
+    const first = await hc.fulfill(id);
+    const second = await hc.fulfill(id);
+    ok(first.status === "invalid" && second.status === "invalid" && Object.keys(first).join(",") === "status" && hc.peek(id) === null,
+      `${id}: a paid session that is not a report purchase answers invalid and leaves no record (${JSON.stringify(first)})`);
+  }
+  ok(refunds.length === refundsBefore && !refunds.some((r) => /^pi_(pack|nometa|packprod|unknownprod|arrayprod)$/.test(r.payment_intent)), `no refund is made for a session that is not a report purchase (${refunds.length - refundsBefore} made)`);
+  ok(genCalls === genBefore, "and no report is generated for one");
+  ok(JSON.stringify(await hc.fulfill("garbage")) === JSON.stringify(await hc.fulfill("cs_pack")), "the answer is the one an id that is not a session gets");
+  ok(isReportPurchase(sessions.cs_paid) && isReportPurchase(sessions.cs_noinput) && isReportPurchase(sessions.cs_offsale) && !isReportPurchase(sessions.cs_pack) && !isReportPurchase(sessions.cs_nometa) && !isReportPurchase(null),
+    "isReportPurchase: a string product naming a report product, and no credits pack");
+  // A report product taken off sale after the purchase is still the buyer's
+  // report purchase: refunded, as before (exercised when the switch is off).
+  if (!HUMAN_PRODUCTS["token-brief"]) {
+    const off = await hc.fulfill("cs_offsale");
+    ok(off.status === "error" && refunds.at(-1)?.payment_intent === "pi_offsale" && refunds.length === refundsBefore + 1, "a paid session for a report product now off sale is refunded once");
+    await hc.fulfill("cs_offsale");
+    ok(refunds.length === refundsBefore + 1, "...and not again on the next poll");
+  }
+}
+
+// OWED REFUNDS ALREADY ON DISK: the retry and the refundsOwed fold act only on
+// report purchases. Four stored owed records as an earlier build could have
+// left them, read by a fresh instance: a credits-pack session, a record naming
+// a product this module never sold, a genuine report purchase recorded before
+// records carried a product (the live control), and one whose session Stripe
+// no longer returns.
+{
+  sessions.cs_owedpack = { id: "cs_owedpack", mode: "payment", payment_status: "paid", payment_intent: "pi_owedpack", metadata: { credits_pack: "credits-100" } };
+  sessions.cs_owedlegacy = { id: "cs_owedlegacy", mode: "payment", payment_status: "paid", payment_intent: "pi_owedlegacy", metadata: { product: "research", input: "FAIL" } };
+  const owedRec = (pi, extra = {}) => ({ status: "error", refundId: null, error: "We couldn't complete this report after a retry. Your refund is being processed.", refundOwed: true, refundAttempts: 1, lastRefundAttemptAt: 0, paymentIntent: pi, at: new Date(clock - 3600_000).toISOString(), ...extra });
+  const planted = { cs_owedpack: owedRec("pi_owedpack"), cs_owedunknown: owedRec("pi_owedunknown", { product: "constructor" }), cs_owedlegacy: owedRec("pi_owedlegacy"), cs_owednosess: owedRec("pi_owednosess") };
+  const issuesPath = join(DIR, "_issues.json");
+  const issues = existsSync(issuesPath) ? JSON.parse(readFileSync(issuesPath, "utf8")) : {};
+  for (const [id, rec] of Object.entries(planted)) { writeFileSync(join(DIR, `${id}.json`), JSON.stringify(rec)); issues[id] = { kind: "refund-owed", at: rec.at, attempts: 1 }; }
+  writeFileSync(issuesPath, JSON.stringify(issues));
+  const lines = [];
+  const fresh = createHumanCheckout({ stripe, generate, baseUrl: "https://agent402.tools", storeDir: DIR, onSale: (x) => sales.push(x), now, log: (m) => lines.push(String(m)) });
+  ok(["cs_owedpack", "cs_owedunknown", "cs_owedlegacy", "cs_owednosess"].every((id) => fresh.listIssues().refundOwed.some((x) => x.id === id)), "control: the four stored owed records are on the operator's list");
+
+  const before = refunds.length, genBefore = genCalls;
+  for (const id of ["cs_owedpack", "cs_owedunknown", "cs_owednosess"]) { await fresh.fulfill(id); clock += 31_000; await fresh.fulfill(id); }
+  ok(refunds.length === before && !refunds.some((r) => /^pi_owed(pack|unknown|nosess)$/.test(r.payment_intent)), `a stored owed record that is not a report purchase makes no refunds.create call, on two polls past the pacing window (${refunds.length - before})`);
+  ok(fresh.peek("cs_owedpack").refundOwed === true && fresh.peek("cs_owedpack").refundAttempts === 1 && fresh.peek("cs_owedunknown").refundAttempts === 1, "those records are left exactly as they were (no attempt counted)");
+  // The live control: the genuine report purchase beside them is retried once.
+  const legacy = await fresh.fulfill("cs_owedlegacy");
+  ok(refunds.length === before + 1 && refunds.at(-1).payment_intent === "pi_owedlegacy" && legacy.refundOwed === false && /has been refunded/.test(legacy.error), "control: the genuine owed report refund stored beside them is retried and succeeds");
+  clock += 31_000;
+  await fresh.fulfill("cs_owedlegacy");
+  ok(refunds.length === before + 1 && genCalls === genBefore, "...once: not again on the next poll, and nothing is generated");
+  ok(fresh.peek("cs_owedlegacy").product === "research", "the refunded record now names its report product");
+
+  // The refundsOwed fold reads the same rule.
+  const owedNow = (await fresh.owedRefunds()).map((x) => x.id);
+  ok(!owedNow.includes("cs_owedpack") && !owedNow.includes("cs_owedunknown") && !owedNow.includes("cs_owedlegacy"), `the owed list behind the refundsOwed word leaves out the two that are not report purchases (and the one just refunded): ${owedNow.join(",") || "none"}`);
+  ok(owedNow.includes("cs_owednosess"), "a record whose session cannot be read is not decided: it stays on the owed list and is not refunded");
+  ok(fresh.listIssues().refundOwed.some((x) => x.id === "cs_owedpack"), "the operator's list still shows every stored record");
+  // A genuine owed refund made by this build is on the owed list, then retried once.
+  sessions.cs_owednew = { id: "cs_owednew", payment_status: "paid", payment_intent: "pi_owednew", metadata: { product: "research", input: "FAIL" } };
+  refundFail = true;
+  await fresh.fulfill("cs_owednew");
+  for (let i = 0; i < 50 && fresh.peek("cs_owednew")?.status === "generating"; i++) await wait(10);
+  refundFail = false;
+  ok(fresh.peek("cs_owednew")?.refundOwed === true && fresh.peek("cs_owednew").product === "research" && (await fresh.owedRefunds()).some((x) => x.id === "cs_owednew" && x.product === "research"), "control: a new owed report refund names its product and is on the owed list");
+  clock += 31_000;
+  const n0 = refunds.length, r0 = retrieves;
+  const fixed = await fresh.fulfill("cs_owednew");
+  ok(fixed.refundOwed === false && refunds.length === n0 + 1 && refunds.at(-1).payment_intent === "pi_owednew" && retrieves === r0, "and is retried once on a later poll, decided from the record with no extra session read");
+  const skipLines = lines.filter((l) => /owed-refund record\(s\) skipped: not a report purchase/.test(l));
+  ok(skipLines.length >= 1 && /^\[human-checkout\] 2 owed-refund record\(s\) skipped/.test(skipLines.at(-1)) && skipLines.every((l) => !/cs_|pi_/.test(l)), `the skips are one counted log line with no id (${skipLines.at(-1)})`);
+  for (const id of Object.keys(planted)) { rmSync(join(DIR, `${id}.json`), { force: true }); }
+  const left = JSON.parse(readFileSync(issuesPath, "utf8"));
+  for (const id of [...Object.keys(planted), "cs_owednew"]) delete left[id];
+  writeFileSync(issuesPath, JSON.stringify(left));
+}
+
+// THE OWED LIST NEVER WAITS ON STRIPE (the list behind the refundsOwed word of
+// /api/gateway-status). Five owed records that name no product, as an earlier
+// build stored them, and a Stripe whose session read never answers: the list
+// returns at once with every record still on it, reads start beside it (three
+// at a time), a record with a read in flight or one that did not answer is
+// not asked again inside the retry time, and an answer that does arrive is
+// used by the next read of the list. (The list's own bounded wait for the
+// reads it started is set to 0 here; the block after this one covers it.)
+{
+  const DIR2 = join("/tmp", `test-human-checkout-owed-${process.pid}`);
+  rmSync(DIR2, { recursive: true, force: true });
+  mkdirSync(DIR2, { recursive: true });
+  const at = new Date(clock - 3600_000).toISOString();
+  const ids = ["cs_hang1", "cs_hang2", "cs_hang3", "cs_hang4", "cs_hang5"];
+  for (const id of ids) writeFileSync(join(DIR2, `${id}.json`), JSON.stringify({ status: "error", refundId: null, error: "We couldn't complete this report after a retry. Your refund is being processed.", refundOwed: true, refundAttempts: 6, lastRefundAttemptAt: 0, paymentIntent: id.replace("cs_", "pi_"), at }));
+  writeFileSync(join(DIR2, "_issues.json"), JSON.stringify(Object.fromEntries(ids.map((id) => [id, { kind: "refund-owed", at, attempts: 6 }]))));
+  const calls = [], answer = new Map();
+  const count = (id) => calls.filter((c) => c === id).length;
+  const counts = () => ids.map(count).join(",");
+  const hung = { checkout: { sessions: { retrieve: (id) => { calls.push(id); return new Promise((resolve) => answer.set(id, resolve)); } } }, refunds: { create: async () => { throw new Error("no refund is sent from the owed list"); } } };
+  let t = clock;
+  const h = createHumanCheckout({ stripe: hung, generate, baseUrl: "https://agent402.tools", storeDir: DIR2, onSale: () => {}, now: () => t, log: () => {}, owedResolveTimeoutMs: 150, owedResolveRetryMs: 600_000, owedListWaitMs: 0 });
+  const listed = async () => {
+    const t0 = performance.now();
+    const list = await Promise.race([h.owedRefunds(), wait(2000).then(() => null)]);
+    return { held: list === null, ms: performance.now() - t0, ids: (list || []).map((x) => x.id) };
+  };
+  const all = (r) => ids.every((id) => r.ids.includes(id));
+  const first = await listed();
+  ok(!first.held && first.ms < 1000 && all(first), `with a Stripe that never answers the owed list returns at once, every record still owed (${first.held ? "held" : `${first.ms.toFixed(0)} ms`}, ${first.ids.length} of ${ids.length})`);
+  ok(counts() === "1,1,1,0,0", `its session reads run beside it, three at a time (${counts()})`);
+  const second = await listed();
+  ok(!second.held && all(second) && counts() === "1,1,1,0,0", `a second read while those are in flight starts no second read of a record (${counts()})`);
+  await wait(300); // past the 150 ms a read is given
+  const third = await listed();
+  ok(!third.held && all(third) && counts() === "1,1,1,1,1", `a read that did not answer is not asked again; the waiting records get their turn (${counts()})`);
+  await wait(300);
+  t += 599_000;
+  const fourth = await listed();
+  ok(!fourth.held && all(fourth) && counts() === "1,1,1,1,1", `inside the retry time no record is asked again, and all are still owed (${counts()})`);
+  t += 2_000;
+  const fifth = await listed();
+  ok(!fifth.held && all(fifth) && counts() === "2,2,2,1,1", `past the retry time a record is asked once more (${counts()})`);
+  // Stripe answers two of them late: one is a credits pack, one a report.
+  answer.get("cs_hang1")({ id: "cs_hang1", mode: "payment", payment_status: "paid", payment_intent: "pi_hang1", metadata: { credits_pack: "credits-100" } });
+  answer.get("cs_hang2")({ id: "cs_hang2", mode: "payment", payment_status: "paid", payment_intent: "pi_hang2", metadata: { product: "research", input: "x" } });
+  await wait(30);
+  const sixth = await listed();
+  ok(!sixth.held && !sixth.ids.includes("cs_hang1") && ["cs_hang2", "cs_hang3", "cs_hang4", "cs_hang5"].every((id) => sixth.ids.includes(id)), `an answer that arrives is used by the next read: the one that is not a report purchase leaves the list, the report stays (${sixth.ids.join(",")})`);
+  const seventh = await listed();
+  ok(count("cs_hang1") === 2 && count("cs_hang2") === 2 && all({ ids: [...seventh.ids, "cs_hang1"] }), `...and a decided record is never read from Stripe again (${counts()})`);
+  rmSync(DIR2, { recursive: true, force: true });
+}
+
+// THE FIRST READ AFTER A START DECIDES WHAT A HEALTHY STRIPE CAN DECIDE. The
+// decision for a record that names no product lives in memory, so a new
+// process holds none. The owed list waits a bounded time for the session
+// reads it started: with a Stripe that answers in about 20 ms the first
+// read leaves out the records that are not report purchases (five of them,
+// more than run at once) and lists the report; with one that never answers
+// the first read still returns, every record listed.
+{
+  const DIR3 = join("/tmp", `test-human-checkout-owedwait-${process.pid}`);
+  rmSync(DIR3, { recursive: true, force: true });
+  mkdirSync(DIR3, { recursive: true });
+  const at = new Date(clock - 3600_000).toISOString();
+  const packs = ["cs_wpack1", "cs_wpack2", "cs_wpack3", "cs_wpack4", "cs_wpack5"], ids = [...packs, "cs_wreport"];
+  for (const id of ids) writeFileSync(join(DIR3, `${id}.json`), JSON.stringify({ status: "error", refundId: null, error: "We couldn't complete this report after a retry. Your refund is being processed.", refundOwed: true, refundAttempts: 6, lastRefundAttemptAt: 0, paymentIntent: id.replace("cs_", "pi_"), at }));
+  writeFileSync(join(DIR3, "_issues.json"), JSON.stringify(Object.fromEntries(ids.map((id) => [id, { kind: "refund-owed", at, attempts: 6 }]))));
+  const sessionOf = (id) => ({ id, mode: "payment", payment_status: "paid", payment_intent: id.replace("cs_", "pi_"), metadata: id === "cs_wreport" ? { product: "research", input: "x" } : { credits_pack: "credits-100" } });
+  const noRefund = { create: async () => { throw new Error("no refund is sent from the owed list"); } };
+  const mkOwed = (stripe, extra = {}) => createHumanCheckout({ stripe, generate, baseUrl: "https://agent402.tools", storeDir: DIR3, onSale: () => {}, now, log: () => {}, ...extra });
+  let reads = 0;
+  // The wait is generous here so a busy runner cannot end it before a 20 ms answer; the default is asserted below.
+  const healthy = mkOwed({ checkout: { sessions: { retrieve: async (id) => { reads++; await wait(20); return sessionOf(id); } } }, refunds: noRefund }, { owedListWaitMs: 30_000 });
+  const first = (await healthy.owedRefunds()).map((x) => x.id);
+  ok(first.join() === "cs_wreport" && reads === ids.length, `a fresh start with a Stripe that answers in 20 ms: the first read of the owed list leaves out the ${packs.length} records that are not report purchases and lists the report (${first.join(",") || "none"}; ${reads} session reads)`);
+  const again = (await healthy.owedRefunds()).map((x) => x.id);
+  ok(again.join() === "cs_wreport" && reads === ids.length, `...and the next read asks Stripe nothing more (${reads})`);
+  // A Stripe that never answers, the default wait: the call returns, every
+  // record listed. A session read is given ten minutes here, so only the
+  // list's own wait can end the call inside the 20 s it is allowed.
+  let hungReads = 0;
+  const hanging = mkOwed({ checkout: { sessions: { retrieve: () => { hungReads++; return new Promise(() => {}); } } }, refunds: noRefund }, { owedResolveTimeoutMs: 600_000 });
+  const got = await Promise.race([hanging.owedRefunds(), wait(20_000).then(() => null)]);
+  ok(got !== null && ids.every((id) => got.some((x) => x.id === id)) && hungReads === 3, `a fresh start with a Stripe that never answers: the first read returns past its bounded wait with every record still owed (${got === null ? "held" : got.length} of ${ids.length}; ${hungReads} session reads)`);
+  const t0 = performance.now();
+  const next = await Promise.race([hanging.owedRefunds(), wait(20_000).then(() => null)]);
+  ok(next !== null && next.length === ids.length && hungReads === 3, `...and a read that starts no session read does not wait (${(performance.now() - t0).toFixed(0)} ms, ${hungReads} session reads)`);
+  rmSync(DIR3, { recursive: true, force: true });
+}
 
 // Long input reassembles from chunked metadata.
 await hc.fulfill("cs_long");

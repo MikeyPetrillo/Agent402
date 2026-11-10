@@ -31,7 +31,7 @@
 // be a buyer believing they set something they did not.
 import {
   TIERS, canonicalModel, bad, meteredQuoteForProbe, validateRequest, LLM_GATEWAY_TOOLS,
-  isFlatTier, flatTierQuoteUsd,
+  isFlatTier, flatTierQuoteUsd, meteredInputSizeRefusal,
 } from "./llm-gateway-kit.js";
 
 /** Tier slug -> the fixed catalog path for that tier's Gemini route.
@@ -302,6 +302,20 @@ export function repointToGeminiWire(message) {
   return out;
 }
 
+/** The metered Gemini body's input size refusal for the pre-payment check
+ *  (src/gateway-prepayment.js), or null: the chat wire's own count of the
+ *  translated body, which is the body the handler serves, with the message
+ *  naming this wire's route. A body the translation refuses is left to it. */
+export function meteredGeminiInputSizeRefusal(input) {
+  let refusal = null;
+  try {
+    const { chat } = geminiToChat(input, modelOf(input, "v1-chat-metered"));
+    refusal = meteredInputSizeRefusal(chat);
+  } catch { return null; }
+  if (refusal) refusal.message = repointToGeminiWire(refusal.message);
+  return refusal;
+}
+
 export function makeGeminiHandler(tierSlug) {
   return async function geminiHandler(input, req) {
     if (input?.stream === true || input?.alt === "sse") {
@@ -330,6 +344,9 @@ export function makeGeminiHandler(tierSlug) {
     if (data?.agent402_tier) out.agent402_tier = { ...data.agent402_tier, route: GEMINI_PATH_BY_TIER[tierSlug] };
     // model "auto" (routed by the auto tier): carry the router's disclosure too.
     if (data?.agent402_router) out.agent402_router = data.agent402_router;
+    // The chat handler lowered the reasoning effort to get an answer inside
+    // the cap (its one recovery try): carry that disclosure too.
+    if (data?.agent402_reasoning_adjusted) out.agent402_reasoning_adjusted = data.agent402_reasoning_adjusted;
     return out;
   };
 }

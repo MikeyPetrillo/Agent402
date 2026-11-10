@@ -196,6 +196,17 @@ for (const p of Object.values(HUMAN_PRODUCTS)) {
 // The token brief is sold only while its RugCheck sources are listed
 // (RUGCHECK_TOOLS=on). A paid session for it that is fulfilled after the
 // switch goes off finds no product and is refunded.
+// Every report product key this table names, including one a switch has
+// taken off sale: what tells a report purchase from any other Checkout
+// session on the account (a credits pack, a subscription).
+const REPORT_PRODUCT_KEYS = new Set(Object.keys(HUMAN_PRODUCTS));
+// A Checkout session is a report purchase only when its metadata names a
+// report product as a string and carries no credits pack. Only such a session
+// is generated, recorded or refunded by this module.
+export function isReportPurchase(session) {
+  const product = session?.metadata?.product;
+  return typeof product === "string" && REPORT_PRODUCT_KEYS.has(product) && !session.metadata.credits_pack;
+}
 if (!rugcheckEnabled()) delete HUMAN_PRODUCTS["token-brief"];
 
 // Stripe metadata: <= 50 keys, value <= 500 chars. Inputs are capped at 2000
@@ -223,6 +234,17 @@ const HEARTBEAT_MS = Math.max(50, Number(process.env.HUMAN_CHECKOUT_HEARTBEAT_MS
 const lastSignOf = (rec) => Math.max(Number(rec?.claimedAt) || Date.parse(rec?.at) || 0, Number(rec?.beatAt) || 0);
 const REFUND_RETRY_MS = 30_000;
 const MAX_REFUND_ATTEMPTS = 6;
+// An owed record with no product is decided by one session read. The read
+// is started beside the owed list (owedRefunds), given this long to answer,
+// and after a read that failed or did not answer no new one starts for the
+// retry time. At most this many run at once. The list waits for the reads
+// one call of it started, OWED_LIST_WAIT_MS in all for that call, so a
+// Stripe that answers decides a record on the first read of the list; past
+// the wait the record is listed as owed.
+const OWED_RESOLVE_TIMEOUT_MS = 15_000;
+const OWED_LIST_WAIT_MS = 300;
+const OWED_RESOLVE_RETRY_MS = 10 * 60_000;
+const OWED_RESOLVE_MAX_INFLIGHT = 3;
 // Failure breaker (review 2026-09-03): every failed generation is refunded, and Stripe keeps its fee on a
 // refund, so an input engineered to fail costs us the fee plus the upstream spend each time. After
 // FAIL_MAX failures from one buyer address inside FAIL_WINDOW_MS the next paid session is refunded
@@ -358,7 +380,7 @@ if (USE_PG) {
  * @param {()=>number} [deps.now]
  * @param {(s:string)=>void} [deps.log]
  */
-export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSale, onDelivered = null, onFailed = null, now = () => Date.now(), log = console.log }) {
+export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSale, onDelivered = null, onFailed = null, now = () => Date.now(), log = console.log, owedResolveTimeoutMs = OWED_RESOLVE_TIMEOUT_MS, owedResolveRetryMs = OWED_RESOLVE_RETRY_MS, owedListWaitMs = OWED_LIST_WAIT_MS }) {
   const dir = storeDir || DEFAULT_DIR();
   try { mkdirSync(dir, { recursive: true }); } catch { /* best-effort; writes will fail loudly below */ }
   const INFLIGHT = join(dir, "_inflight.json");   // sessionId -> claimedAt (ms)
@@ -678,6 +700,10 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
       error: refundId ? `${message} Your payment has been refunded.` : `${message} Your refund is being processed.`,
       refundOwed: !refundId, refundAttempts: (prev.refundAttempts || 0) + (intent ? 0 : 1), lastRefundAttemptAt: intent ? 0 : now(),
       paymentIntent: typeof session?.payment_intent === "string" ? session.payment_intent : session?.payment_intent?.id || null,
+      // The report product the session bought (kept across retries, whose
+      // session stand-in carries none): what lets a later reader of this
+      // record tell it is a report purchase without asking Stripe again.
+      product: isReportPurchase(session) ? session.metadata.product : (typeof prev.product === "string" ? prev.product : null),
       at: new Date(now()).toISOString(),
     };
     if (USE_PG) {
@@ -692,8 +718,57 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     }
     await writeRec(id, rec);
     await patchIndex(INFLIGHT, id, null);
-    await patchIndex(ISSUES, id, refundId ? null : { kind: "refund-owed", at: rec.at, attempts: rec.refundAttempts });
+    await patchIndex(ISSUES, id, refundId ? null : { kind: "refund-owed", at: rec.at, attempts: rec.refundAttempts, product: rec.product });
     return rec;
+  }
+  // Whether a stored owed refund belongs to a report purchase, by the rule
+  // fulfill applies to a session (isReportPurchase): the product the record
+  // names when it names one, otherwise the Checkout session itself, read from
+  // Stripe once and remembered. true | false | null (the session could not be
+  // read: not decided, asked again later). Only a true answer is refunded or
+  // counted as owed.
+  const owedReport = new Map();
+  async function owedIsReport(id, rec) {
+    if (typeof rec?.product === "string") return REPORT_PRODUCT_KEYS.has(rec.product);
+    if (owedReport.has(id)) return owedReport.get(id) !== false;
+    let session;
+    try { session = await stripe.checkout.sessions.retrieve(id); } catch { return null; }
+    const v = !!session && (!session.mode || session.mode === "payment") && isReportPurchase(session);
+    if (owedReport.size >= 2000) owedReport.clear();
+    owedReport.set(id, v ? session.metadata.product : false); // the product, so the retry's record names it
+    return v;
+  }
+  // The same decision for a reader that must not wait (the owed list behind
+  // a status word): the session read runs beside the caller, one per record
+  // at a time and OWED_RESOLVE_MAX_INFLIGHT in all. Its answer lands in
+  // owedReport, where the next read of the list finds it. A read that fails,
+  // or has not answered inside the timeout, is not asked again until the
+  // retry time has passed (an answer that arrives later is still kept).
+  // Returns the started read (it settles when the read is over), or null.
+  const owedResolving = new Set();
+  const owedResolveAfter = new Map();
+  function resolveOwedBeside(id, rec) {
+    if (owedResolving.has(id) || owedResolving.size >= OWED_RESOLVE_MAX_INFLIGHT) return null;
+    if (now() < (owedResolveAfter.get(id) || 0)) return null;
+    owedResolving.add(id);
+    let timer = null;
+    const waited = new Promise((resolve) => { timer = setTimeout(() => resolve(null), owedResolveTimeoutMs); timer.unref?.(); });
+    return Promise.race([owedIsReport(id, rec).catch(() => null), waited]).then((v) => {
+      clearTimeout(timer);
+      owedResolving.delete(id);
+      if (v !== null) { owedResolveAfter.delete(id); return; }
+      if (owedResolveAfter.size >= 2000) owedResolveAfter.clear();
+      owedResolveAfter.set(id, now() + owedResolveRetryMs);
+    });
+  }
+  // One log line with a count, when the count changes (never an id).
+  const skippedOwed = new Set();
+  let skippedLogged = 0;
+  function noteSkippedOwed(id) {
+    if (skippedOwed.size < 2000) skippedOwed.add(id);
+    if (skippedOwed.size === skippedLogged) return;
+    skippedLogged = skippedOwed.size;
+    log(`[human-checkout] ${skippedLogged} owed-refund record(s) skipped: not a report purchase`);
   }
   // Refund a session and record it. On the database the owed record lands
   // FIRST (kept on local disk if Postgres is away), so a refund is never
@@ -715,8 +790,13 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     if ((rec.refundAttempts || 0) >= MAX_REFUND_ATTEMPTS) return rec;
     if (now() - (rec.lastRefundAttemptAt || 0) < REFUND_RETRY_MS) return rec;
     if (USE_PG && pendingFinals.has(id)) return rec; // its owed record has not landed yet
+    // Only a report purchase is refunded from here; any other stored record
+    // is left as it is (and one whose session cannot be read waits).
+    const isReport = await owedIsReport(id, rec);
+    if (isReport !== true) { if (isReport === false) noteSkippedOwed(id); return rec; }
     const refundId = await refundSession({ payment_intent: rec.paymentIntent });
-    return recordError(id, { payment_intent: rec.paymentIntent }, refundId, rec.error.replace(/ Your refund is being processed\.$/, ""));
+    const product = typeof rec.product === "string" ? rec.product : owedReport.get(id);
+    return recordError(id, { payment_intent: rec.paymentIntent, metadata: { product } }, refundId, rec.error.replace(/ Your refund is being processed\.$/, ""));
   }
 
   const failKeyOf = (session) => {
@@ -897,6 +977,10 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     // in the dashboard: fulfil it (the operator chose that) but book $0.
     if (!session || (session.payment_status !== "paid" && session.payment_status !== "no_payment_required")) return negSet(sessionId, "unpaid");
     if (session.mode && session.mode !== "payment") return { status: "invalid" };
+    // Not a report purchase (a credits pack, or any session whose metadata
+    // names no report product): this route has nothing to deliver for it and
+    // nothing to refund. Answered like an id that is not a report's.
+    if (!isReportPurchase(session)) return { status: "invalid" };
 
     const productKey = session.metadata?.product;
     const input = unchunkInput(session.metadata || {});
@@ -963,7 +1047,41 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
   // polls and then left for the operator), each with when it was recorded:
   // the refundsOwed word on /api/gateway-status applies its notice and aging
   // to them beside the refund ledger's rows.
-  async function owedRefunds() { return (await listIssues()).refundOwed; }
+  // Only report purchases count (owedIsReport); an entry that is not one is
+  // left out and counted in a log line, and one that is not decided yet
+  // stays in: a debt is never left out for want of an answer. A record that
+  // names no product is decided by a session read started beside this call
+  // (resolveOwedBeside). The call waits for the reads it started, up to
+  // owedListWaitMs in all, and uses the answers that arrived; a read still
+  // out then leaves its record on the list, and a later call reads its
+  // answer. A call that starts no read does not wait.
+  async function owedRefunds() {
+    const out = [], undecided = [];
+    for (const entry of (await listIssues()).refundOwed) {
+      let v = typeof entry.product === "string" ? REPORT_PRODUCT_KEYS.has(entry.product) : owedReport.has(entry.id) ? owedReport.get(entry.id) !== false : undefined;
+      if (v === undefined) {
+        let rec = null;
+        try { rec = await readRec(entry.id); } catch { rec = null; }
+        if (typeof rec?.product === "string") v = REPORT_PRODUCT_KEYS.has(rec.product);
+        else { undecided.push({ entry, rec }); v = null; }
+      }
+      if (v === false) { noteSkippedOwed(entry.id); continue; }
+      out.push(entry);
+    }
+    let left = undecided, started = left.map((u) => resolveOwedBeside(u.entry.id, u.rec)).filter(Boolean);
+    if (!started.length || !(owedListWaitMs > 0)) return out;
+    let timer = null, over = false;
+    const bound = new Promise((resolve) => { timer = setTimeout(() => { over = true; resolve(); }, owedListWaitMs); timer.unref?.(); });
+    while (started.length && !over) {
+      await Promise.race([Promise.all(started), bound]);
+      left = left.filter((u) => !owedReport.has(u.entry.id));
+      started = over ? [] : left.map((u) => resolveOwedBeside(u.entry.id, u.rec)).filter(Boolean);
+    }
+    clearTimeout(timer);
+    const notReport = new Set(undecided.filter((u) => owedReport.get(u.entry.id) === false).map((u) => u.entry.id));
+    for (const id of notReport) noteSkippedOwed(id);
+    return notReport.size ? out.filter((x) => !notReport.has(x.id)) : out;
+  }
 
   function peek(sessionId) {
     const valid = SESSION_RE.test(String(sessionId));

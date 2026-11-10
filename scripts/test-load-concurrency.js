@@ -73,6 +73,19 @@ const BUSY_SHARE_SLACK = 0.12;
 // runner noise lands in one window and the median ignores it.
 const TAIL_WINDOWS = 3;
 const TAIL_SLOW_HANDLERS = 4;
+// The unit above is taken on the quiet server before the load, and a host
+// that is busier during the load than it was then stretches every /health
+// wait with no change in this server (the median window p95 read 101 and
+// 117 ms against 98 ms beside other suites, 36 ms alone). So the unit is
+// taken again the moment a load window ends, the same serial calls to the
+// same slow tool on the same server, now with no buyers: what a slow handler
+// costs on this host at that moment. A window's host factor is that reading
+// over the one before the load, never under 1, and its held threshold and
+// tail bound are multiplied by it. A loop held by a route the mix calls
+// does not move the slow tool's own serial cost, so a hold of several slow
+// handlers still fails. The factor is capped at HOST_FACTOR_MAX: a host
+// slowed past three times fails the run rather than excusing any hold.
+const HOST_FACTOR_MAX = 3;
 // Confirmation: when a /health check fails, the load runs once more and the
 // check fails only when it fails again. A regression in the server holds the
 // loop in both runs; a noisy neighbor on a shared runner rarely lands in both.
@@ -258,10 +271,15 @@ try {
   let warm = null;
   for (let i = 0; i < SLOW_WARM_CALLS; i++) await call("slow-warm", `${base}/api/levenshtein`, slowInit);
   stats.delete("slow-warm");
-  for (let i = 0; i < SLOW_IDLE_CALLS; i++) warm = await call("slow-idle", `${base}/api/levenshtein`, slowInit);
-  const slowIdleP50 = pct(stats.get("slow-idle").lat, 0.5);
+  // The slow tool's serial cost on the server as it is right now (no buyers).
+  const slowUnit = async () => {
+    for (let i = 0; i < SLOW_IDLE_CALLS; i++) warm = await call("slow-idle", `${base}/api/levenshtein`, slowInit);
+    const p50 = pct(stats.get("slow-idle").lat, 0.5);
+    stats.delete("slow-idle");
+    return p50;
+  };
+  const slowIdleP50 = await slowUnit();
   ok(warm.status === 200 && typeof warm.json?.distance === "number", `the slow tool answers its ${SLOW_INPUT_CHARS}-char input (distance ${warm.json?.distance}, idle p50 ${r0(slowIdleP50)}ms)`);
-  stats.delete("slow-idle");
 
   // ---- idle baseline -----------------------------------------------------
   const idle = await probeHealth(IDLE_MS);
@@ -311,12 +329,16 @@ try {
       }
     }
   };
-  // One load window: the buyers for LOAD_MS with the /health probe beside them.
+  // One load window: the buyers for LOAD_MS with the /health probe beside
+  // them, then the slow tool's serial cost again as the buyers leave (the
+  // window's host factor).
   const runLoad = async () => {
     const start = Date.now();
     const probe = probeHealth(LOAD_MS);
     await Promise.all(Array.from({ length: BUYERS }, (_, id) => buyer(id, start, start + LOAD_MS)));
-    return probe;
+    const out = await probe;
+    const slowAfter = await slowUnit();
+    return { ...out, slowAfter, factor: Math.min(HOST_FACTOR_MAX, Math.max(1, slowAfter / slowIdleP50)) };
   };
   // Shed counts per window: calls and sheds on the routes the gate may shed.
   const shedSnap = () => Object.fromEntries(SHED_KEYS.map((k) => { const st = stats.get(k); return [k, { n: st ? st.lat.length : 0, shed: st?.shed || 0 }]; }));
@@ -331,13 +353,15 @@ try {
   const HELD_MS = HELD_FRACTION_OF_SLOW * slowIdleP50;
   const BUSY_SHARE_MAX = SLOW_TOOL_THREAD_SHARE + BUSY_SHARE_SLACK;
   const TAIL_MAX = TAIL_SLOW_HANDLERS * slowIdleP50;
-  const healthVerdict = (lat) => {
-    const busy = lat.filter((x) => x > HELD_MS).length / Math.max(1, lat.length);
+  // A window's waits are read in its host factor: a probe is held past
+  // HELD_MS times the factor, and the tail bound is TAIL_MAX times it.
+  const healthVerdict = ({ lat, factor, slowAfter }) => {
+    const busy = lat.filter((x) => x > HELD_MS * factor).length / Math.max(1, lat.length);
     const per = Math.ceil(lat.length / TAIL_WINDOWS);
     const winP95 = Array.from({ length: TAIL_WINDOWS }, (_, k) => pct(lat.slice(k * per, (k + 1) * per), 0.95));
     const tail = pct(winP95, 0.5);
-    return { busy, winP95, tail, busyOk: busy <= BUSY_SHARE_MAX, tailOk: tail <= TAIL_MAX,
-      line: `n=${lat.length} p50=${r0(pct(lat, 0.5))}ms p95=${r0(pct(lat, 0.95))}ms max=${r0(Math.max(...lat))}ms busy=${(100 * busy).toFixed(1)}% window p95 ${winP95.map(r0).join("/")}ms` };
+    return { busy, winP95, tail, factor, busyOk: busy <= BUSY_SHARE_MAX, tailOk: tail <= TAIL_MAX * factor,
+      line: `n=${lat.length} p50=${r0(pct(lat, 0.5))}ms p95=${r0(pct(lat, 0.95))}ms max=${r0(Math.max(...lat))}ms busy=${(100 * busy).toFixed(1)}% window p95 ${winP95.map(r0).join("/")}ms; host factor ${factor.toFixed(2)} (slow tool ${r0(slowAfter)}ms as the load ended, ${r0(slowIdleP50)}ms before it)` };
   };
   const perf = await (await fetch(`${base}/__operator/perf.json`, { headers: { authorization: `Bearer ${TOKEN}` } })).json();
   const loadLog = serverLog.slice(logMarkAt);
@@ -363,7 +387,7 @@ try {
   const isDiscovery = (k) => k === "GET /api/find" || k === "GET /api/route";
   // One confirming window serves every check that reads the machine: the
   // /health busy share and tail, and the shed share.
-  const verdict = healthVerdict(load.lat);
+  const verdict = healthVerdict(load);
   console.log(`# /health run 1: ${verdict.line}`);
   console.log(`# shed run 1: ${shed1.shed}/${shed1.n} (${(100 * shed1.share).toFixed(1)}%), allowance ${(100 * SHED_ALLOW).toFixed(1)}% = ${SHED_MAX_FRACTION * 100}% x ${shedScale.toFixed(2)} (slow-tool idle p50 ${r0(slowIdleP50)}ms against ${SHED_REF_SLOW_MS}ms)`);
   let busyOk = verdict.busyOk, tailOk = verdict.tailOk, confirm = null;
@@ -373,7 +397,7 @@ try {
     const before = shedSnap();
     const again = await runLoad();
     shed2 = shedWindow(before, shedSnap());
-    confirm = healthVerdict(again.lat);
+    confirm = healthVerdict(again);
     console.log(`# /health run 2: ${confirm.line}`);
     console.log(`# shed run 2: ${shed2.shed}/${shed2.n} (${(100 * shed2.share).toFixed(1)}%)`);
     busyOk ||= confirm.busyOk;
@@ -409,8 +433,8 @@ try {
   ok(timeouts === 0 && errors === 0, `no request hit the ${HARD_TIMEOUT_MS / 1000}s hard timeout or failed to connect (timeouts ${timeouts}, errors ${errors})`);
   ok(load.bad === 0 && load.lat.length >= LOAD_MS / PROBE_EVERY_MS * 0.8, `/health answered 200 on every probe during the load (n=${load.lat.length})`);
   const both = (k, f) => f(verdict[k]) + (confirm ? `; confirm run ${f(confirm[k])}` : "");
-  ok(busyOk, `/health busy share under load ${both("busy", (x) => `${(100 * x).toFixed(1)}%`)} <= ${(100 * BUSY_SHARE_MAX).toFixed(0)}% (probes held over ${r0(HELD_MS)}ms = ${HELD_FRACTION_OF_SLOW}x slow-tool idle p50 ${r0(slowIdleP50)}ms; the mix holds the loop about ${SLOW_TOOL_THREAD_SHARE * 100}%)`);
-  ok(tailOk, `/health median window p95 under load ${both("tail", (x) => `${r0(x)}ms`)} <= ${r0(TAIL_MAX)}ms (${TAIL_SLOW_HANDLERS}x slow-tool idle p50 ${r0(slowIdleP50)}ms; windows ${both("winP95", (w) => w.map(r0).join("/"))})`);
+  ok(busyOk, `/health busy share under load ${both("busy", (x) => `${(100 * x).toFixed(1)}%`)} <= ${(100 * BUSY_SHARE_MAX).toFixed(0)}% (probes held over ${r0(HELD_MS)}ms = ${HELD_FRACTION_OF_SLOW}x slow-tool idle p50 ${r0(slowIdleP50)}ms, times the host factor ${both("factor", (f) => f.toFixed(2))}; the mix holds the loop about ${SLOW_TOOL_THREAD_SHARE * 100}%)`);
+  ok(tailOk, `/health median window p95 under load ${both("tail", (x) => `${r0(x)}ms`)} <= ${r0(TAIL_MAX)}ms times the host factor ${both("factor", (f) => f.toFixed(2))} (${TAIL_SLOW_HANDLERS}x slow-tool idle p50 ${r0(slowIdleP50)}ms; windows ${both("winP95", (w) => w.map(r0).join("/"))})`);
 } catch (e) {
   console.error(`\n# server log tail:\n${serverLog.split("\n").slice(-60).join("\n")}`);
   throw e;

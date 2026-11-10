@@ -18,7 +18,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const TABLE = process.env.EXAMPLE_COSTS_FILE || fileURLToPath(new URL("../docs/example-upstream-costs.json", import.meta.url));
-const SUITES = ["test-llm-messages.js", "test-llm-responses.js", "test-messages-sdk-alias.js", "test-paytime-bounds.js"];
+const SUITES = ["test-llm-messages.js", "test-llm-responses.js", "test-llm-answer-fit.js", "test-messages-sdk-alias.js", "test-paytime-bounds.js"];
 let failed = 0;
 
 function run(suite) {

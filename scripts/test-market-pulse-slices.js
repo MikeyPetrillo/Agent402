@@ -5,6 +5,7 @@
 // seconds, on a paid call's first build and again on each stale rebuild.
 //   node scripts/test-market-pulse-slices.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { oursMs } from "./lib/ours-clock.js";
 import "./lib/uncapped-sellers.js"; // every seeded tool is kept: the large sellers here are the point
 import { PerformanceObserver } from "node:perf_hooks";
 process.env.X402_INDEX_CRAWL = "off";
@@ -35,14 +36,17 @@ for (let i = 0; i < ORIGINS; i++) {
 X.__testSeedCache(entries);
 
 // The longest gap between 1 ms timer ticks while `fn` runs, less the
-// collector's pauses inside it.
+// collector's pauses inside it. A gap is read on the ours clock
+// (scripts/lib/ours-clock.js): the smaller of its wall length and the time
+// the thread had a core inside it, so a host busy with other suites does not
+// read as a hold by this code.
 async function longestBlock(fn) {
   const gcs = [];
   const obs = new PerformanceObserver((list) => { for (const e of list.getEntries()) gcs.push([e.startTime, e.startTime + e.duration]); });
   obs.observe({ entryTypes: ["gc"] });
   const gaps = [];
-  let last = performance.now();
-  const timer = setInterval(() => { const now = performance.now(); gaps.push([last, now]); last = now; }, 1);
+  let last = performance.now(), lastOurs = oursMs();
+  const timer = setInterval(() => { const now = performance.now(), c = oursMs(); gaps.push([last, now, c - lastOurs]); last = now; lastOurs = c; }, 1);
   let result;
   try { result = await fn(); } finally {
     await new Promise((r) => setTimeout(r, 20));
@@ -50,10 +54,10 @@ async function longestBlock(fn) {
     obs.disconnect();
   }
   let ms = 0;
-  for (const [a, b] of gaps) {
+  for (const [a, b, ours] of gaps) {
     let gc = 0;
     for (const [s, e] of gcs) gc += Math.max(0, Math.min(b, e) - Math.max(a, s));
-    ms = Math.max(ms, b - a - gc);
+    ms = Math.max(ms, Math.min(b - a, ours) - gc);
   }
   return { result, ms: Math.round(ms) };
 }

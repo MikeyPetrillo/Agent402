@@ -35,6 +35,8 @@ writeFileSync(join(DIR, "cs_owed.json"), JSON.stringify({ status: "error", refun
 writeFileSync(join(DIR, "_issues.json"), JSON.stringify({ cs_owed: { kind: "refund-owed", at: new Date(clock - 60_000).toISOString(), attempts: 1 } }));
 
 const sessions = {
+  // The session behind the imported owed record: a report purchase, which is what the retry now reads before it refunds.
+  cs_owed: { id: "cs_owed", mode: "payment", payment_status: "paid", payment_intent: "pi_owed", metadata: { product: "research", input: "FAIL" } },
   cs_paid: { id: "cs_paid", payment_status: "paid", payment_intent: "pi_ok", customer_details: { email: null }, metadata: { product: "dossier", input: "AAPL" } },
   cs_fail: { id: "cs_fail", payment_status: "paid", payment_intent: "pi_fail", metadata: { product: "research", input: "FAIL" } },
   cs_stale: { id: "cs_stale", payment_status: "paid", payment_intent: "pi_stale", metadata: { product: "dossier", input: "MSFT" } },

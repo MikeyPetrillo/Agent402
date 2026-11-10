@@ -30,6 +30,10 @@ const TITLES = {
   // facilitatorFunds=low (a settlement signer short of gas) has its own title.
   facilitatorGas: "facilitatorFunds: a facilitator's settlement gas is running low or could not be read",
   buyerRefusals: "buyerRefusals: a paying buyer was refused by the settle breaker",
+  // Distinct buyers' /v1 payments failing to settle (an alarm; nothing is refused for it).
+  settleFailures: "settleFailures: a burst of buyers' payments verified and then failed to settle",
+  // Report runs served and then unsettled (an alarm; nothing is refused for it).
+  unsettledReports: "unsettledReports: a burst of report runs were served and then did not settle",
 };
 const titleOf = (field, word) => (field === "facilitatorFunds" && word === "low" ? TITLES.facilitatorGas : TITLES[field]);
 const fieldOf = (key) => (key === "facilitatorGas" ? "facilitatorFunds" : key);
@@ -107,6 +111,30 @@ try {
       assert.doesNotMatch(c[0].title.replace(/facilitatorFunds/g, ""), PRIVATE);
     });
   }
+
+  // settleFailures (src/gateway-settle-breaker.js): burst pages one issue
+  // naming the word and the operator read, ok closes it, and a word the step
+  // does not know (the control beside the page) neither opens nor closes.
+  for (const F of ["settleFailures", "unsettledReports"]) await check(`${F} burst: one issue; ok closes it; another word does neither`, async () => {
+    let r = await run({ gateway: { ...OK, [F]: { status: "burst" } }, op: OP });
+    const c = created(r.calls);
+    assert.deepEqual(c.map((x) => x.title), [TITLES[F]]);
+    assert.ok(c[0].body.includes(`${F}.status=burst.`), c[0].body);
+    assert.match(c[0].body, /operator endpoint, \/api\/gateway-status \(operator token\)/);
+    assert.doesNotMatch(c[0].body, PRIVATE, `no count or detail: ${c[0].body}`);
+    r = await run({ gateway: { ...OK, [F]: { status: "ok" } } });
+    assert.deepEqual(created(r.calls), [], "control: ok opens nothing");
+    r = await run({ gateway: { ...OK, [F]: { status: "burst" } }, open: TITLES[F] });
+    assert.deepEqual(created(r.calls), []);
+    assert.ok(r.calls.some((x) => x[0] === "issue" && x[1] === "comment" && x[2] === "41"), "an open issue gets a comment, not a second issue");
+    r = await run({ gateway: { ...OK, [F]: { status: "ok" } }, open: TITLES[F] });
+    assert.equal(closed(r.calls).length, 1, "ok closes the open issue");
+    for (const w of ["unknown", "paused"]) {
+      r = await run({ gateway: { ...OK, [F]: { status: w } }, open: TITLES[F] });
+      assert.equal(closed(r.calls).length, 0, `${w} does not close`);
+      assert.deepEqual(created(r.calls), [], `${w} does not open`);
+    }
+  });
 
   await check("upstreamHealth failing and facilitatorFunds low / refused / demoted page under their own titles", async () => {
     for (const [gw, title] of [[{ upstreamHealth: { status: "failing" } }, TITLES.upstreamHealth], [{ upstreamHealth: { status: "degraded" } }, TITLES.upstreamHealth], [{ facilitatorFunds: { status: "refused" } }, TITLES.facilitatorFunds], [{ facilitatorFunds: { status: "demoted" } }, TITLES.facilitatorFunds], [{ facilitatorFunds: { status: "low" } }, TITLES.facilitatorGas], [{ buyerRefusals: { status: "refusing" } }, TITLES.buyerRefusals]]) {
@@ -323,6 +351,10 @@ try {
     assert.match(body, /toolFailures\.status=degraded/, "the body echoes only a known word");
     assert.match(body, /\/__operator\/tool-failures\.json/);
     assert.equal(j({ buyerRefusals: { status: "refusing" } })[TITLES.buyerRefusals], "bad");
+    for (const F of ["settleFailures", "unsettledReports"]) {
+      assert.equal(j({ [F]: { status: "burst" } })[TITLES[F]], "bad");
+      assert.equal(j({ [F]: { status: "paused" } })[TITLES[F]], "quiet", "a word the Worker does not know neither pages nor clears");
+    }
     for (const [field, word] of [["toolFailures", "failing"], ["upstreamHealth", "degraded"], ["facilitatorFunds", "refused"], ["facilitatorFunds", "demoted"], ["facilitatorFunds", "low"], ["buyerRefusals", "refusing"]]) {
       const b = ALARMS.find((a) => a.title === titleOf(field, word)).body({ gateway: { [field]: { status: word } } });
       assert.match(b, new RegExp(`${field}\\.status=${word}\\.`));

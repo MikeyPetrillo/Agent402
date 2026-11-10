@@ -2,6 +2,7 @@
 // it as PNG and JPEG, and confirm the decoder reads it back. Also checks the
 // not-found path and input validation. Pure functions, no server needed.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { oursMs } from "./lib/ours-clock.js";
 import QR from "qrcode";
 import jpeg from "jpeg-js";
 import { PNG } from "pngjs";
@@ -52,8 +53,8 @@ function blankPng(w, h, bitDepth) {
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", ihdr), chunk("IDAT", zlib.deflateSync(Buffer.alloc(rowBytes * h), { level: 9 })), chunk("IEND", Buffer.alloc(0))]);
 }
 async function withLoopLag(fn) {
-  let last = performance.now(), worst = 0;
-  const iv = setInterval(() => { const n = performance.now(); worst = Math.max(worst, n - last); last = n; }, 5);
+  let last = performance.now(), lastOurs = oursMs(), worst = 0;
+  const iv = setInterval(() => { const n = performance.now(), c = oursMs(); worst = Math.max(worst, Math.min(n - last, c - lastOurs)); last = n; lastOurs = c; }, 5);
   await new Promise((r) => setTimeout(r, 20));
   let out;
   try { out = { value: await fn() }; } catch (e) { out = { error: e }; }
@@ -61,6 +62,10 @@ async function withLoopLag(fn) {
   clearInterval(iv);
   return { ...out, lagMs: Math.round(worst) };
 }
+// Loop gaps below are read on the ours clock (scripts/lib/ours-clock.js): the
+// smaller of a gap's wall length and the time the thread had a core inside
+// it. A host busy with other suites deschedules the thread mid-turn, and that
+// wait is not a hold by this code.
 const LAG_BOUND_MS = 150;
 const bomb = blankPng(16000, 16000, 1);
 let m = await withLoopLag(() => handler({ image: bomb.toString("base64") }));

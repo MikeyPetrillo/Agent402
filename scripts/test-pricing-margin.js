@@ -331,8 +331,8 @@ console.log("\n# STT — cap-before-spend (local duration probe)");
 // 5b. onchain-sql: the query service meters every query, and one call may
 //     send SQL_QUERY_BUDGET of them (the buyer's query, then the row-size
 //     measure and the filtered run or one small re-run). That many at the
-//     table's rate, plus one facilitator settlement when the table prices
-//     one, must sit within SQL_WORST_CASE_BOUND x the price. The
+//     table's rate, plus one facilitator settlement (fees.settlementPerCall),
+//     must sit within SQL_WORST_CASE_BOUND x the price. The
 //     onchain-analyst pack runs the tool once and its price follows the
 //     tool's through the pack rule, so its bundle price is held to the same
 //     bound. Figures stay in the process: the rate is private, and only
@@ -341,11 +341,9 @@ console.log("\n# onchain-sql: the call's query budget vs price");
 // Owner decision (2026-11-07): onchain-sql is the one tool held to its own
 // worst-case bound instead of the shared MARGIN. Its worst case (every query
 // of SQL_QUERY_BUDGET spent, plus a settlement) must keep at least 13% of the
-// list price: cost <= 0.87 x price (15% until 2026-11-09, when the settlement
-// fee entered the table and the owner kept the price and budget and moved the
-// bound). Queries 2 and 3 run only for the 64 KB row-size recovery, so a
-// typical call sends one query and sits far inside MARGIN. Every other tool
-// keeps MARGIN.
+// list price: cost <= 0.87 x price. Queries 2 and 3 run only for the 64 KB
+// row-size recovery, so a typical call sends one query and sits far inside
+// MARGIN. Every other tool keeps MARGIN.
 const SQL_WORST_CASE_BOUND = 0.87;
 {
   const { CDP_TOOLS, SQL_QUERY_BUDGET } = await import("../src/tools/cdp-kit.js");
@@ -356,10 +354,12 @@ const SQL_WORST_CASE_BOUND = 0.87;
     if (process.env.CI && process.env.UPSTREAM_COSTS_OPTIONAL !== "1") ok(false, "onchain-sql: the private table has no vendor.cdp.sqlQuery rate (required under CI)");
     else console.log("SKIP - onchain-sql margin: the private table has no vendor.cdp.sqlQuery rate yet");
   } else {
-    // A settlement fee is optional in the table (fees.settlementPerCall); without one the term is zero.
-    const settle = upstreamCosts().fees.settlementPerCall ?? 0;
+    // The settlement fee is a REQUIRED row (fees.settlementPerCall); a table
+    // without it fails here under CI rather than pricing the settle as free.
+    const settle = upstreamCosts().fees.settlementPerCall;
+    if (!Number.isFinite(settle)) ok(!(process.env.CI && process.env.UPSTREAM_COSTS_OPTIONAL !== "1"), "onchain-sql: the private table has no fees.settlementPerCall (required under CI)");
     const priceOf = (s) => Number(String(CDP_TOOLS.find((t) => t.slug === s)?.price ?? "").replace(/[^0-9.]/g, ""));
-    const cost = SQL_QUERY_BUDGET * rate + settle;
+    const cost = SQL_QUERY_BUDGET * rate + (Number.isFinite(settle) ? settle : 0);
     const sqlPrice = priceOf("onchain-sql");
     ok(SQL_QUERY_BUDGET >= 3 && Number.isFinite(sqlPrice) && sqlPrice > 0, `onchain-sql: a list price and a query budget of ${SQL_QUERY_BUDGET} to price against`);
     ok(cost <= SQL_WORST_CASE_BOUND * sqlPrice + 1e-12, `onchain-sql: ${SQL_QUERY_BUDGET} queries at the table rate plus a settlement keep at least 13% of the list price: ${cost <= SQL_WORST_CASE_BOUND * sqlPrice + 1e-12 ? "PASS" : "FAIL"}`);

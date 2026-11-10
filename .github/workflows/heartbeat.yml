@@ -499,6 +499,121 @@ jobs:
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "exaAllowance is ${STATUS}; closing." || true
           fi
 
+      # X data daily spend (src/tools/x-data-kit.js): over = past the alarm
+      # ceiling and still serving; capped = the hard ceiling refuses, or
+      # refused a call within the last hour. off is the switch and never pages.
+      - name: X data daily spend over its ceiling
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.xDataSpend.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "x data spend: $STATUS"
+          TITLE="X data daily spend OVER its ceiling"
+          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          if [ "$STATUS" = "over" ] || [ "$STATUS" = "capped" ]; then
+            if [ -z "$EXISTING" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+                --body "\`/api/gateway-status.xDataSpend\` reports **over** or **capped**. On **over** the day's booked spend on the X data tools passed \`X_DATA_DAILY_MAX_USD\` and every call is still served (each one is paid for by its buyer). On **capped** a call that would take the day past \`X_DATA_DAILY_HARD_MAX_USD\` was refused 503 (uncharged) within the last hour, or the day's spend reached that ceiling; a call that fits under it is still served, and the day's count starts again at 00:00 UTC. Read the day's X calls on the operator view, check the prepaid balance in the upstream's console, then raise the ceilings on Railway or leave them. Closes when the word reads ok or off: an hour after the last refusal when the day's spend is under \`X_DATA_DAILY_MAX_USD\`, otherwise the next UTC day."
+            fi
+          elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "xDataSpend is ${STATUS}; closing." || true
+          fi
+
+      # Our Circle Gateway balance (src/gateway-nanopayments.js): withdraw holds
+      # from the read that reaches GATEWAY_WITHDRAW_ALERT_USD until an operator
+      # moves the balance, so it pages at once. ok and off close; unknown does
+      # neither. The status Worker runs the same check under the same title.
+      - name: Gateway balance check (alarm when it is ready to withdraw)
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ROW=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '(.gatewayBalance.status // "unknown") + " none"' 2>/dev/null || echo "unknown unknown")
+          STATUS=${ROW%% *}; ALERT=${ROW##* }
+          echo "gateway balance: $STATUS (alert $ALERT)"
+          TITLE="Gateway balance READY to withdraw"
+          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          if [ "$STATUS" = "withdraw" ]; then
+            if [ -z "$EXISTING" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+                --body "/api/gateway-status reports gatewayBalance.status=withdraw: the Circle Gateway balance that batched payments are credited to has reached GATEWAY_WITHDRAW_ALERT_USD. Nothing is refused for it; the balance stays off chain until it is moved. Read the figure on the operator view of /api/gateway-status, then move it on chain with node scripts/gateway-withdraw.js (human-run, a dry run unless --execute is passed). Auto-closes when the word reads ok or off." || true
+            fi
+          elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "gatewayBalance is ${STATUS}; closing." || true
+          fi
+
+      # The shared limits store (src/shared-limits.js): status reads degraded for
+      # a minute after any one failed command, so this pages on the second
+      # word, alert=sustained (degraded held ten minutes without a break). on
+      # and memory close; degraded inside the grace period does neither.
+      - name: Shared limits store check (alarm on a sustained degraded Redis)
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ROW=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '(.sharedLimits.status // "unknown") + " " + (.sharedLimits.alert // "unknown")' 2>/dev/null || echo "unknown unknown")
+          STATUS=${ROW%% *}; ALERT=${ROW##* }
+          echo "shared limits: $STATUS (alert $ALERT)"
+          TITLE="Shared limits store DEGRADED (Redis)"
+          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          if [ "$ALERT" = "sustained" ]; then
+            if [ -z "$EXISTING" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+                --body "/api/gateway-status reports sharedLimits.alert=sustained: commands to the Redis behind the shared admission and money controls have failed or timed out for ten minutes or more without a break, or the client has not connected since boot. Every control keeps deciding on its own process's counters, so nothing is refused for it, but the limits are not shared across containers and start again on a restart. Check the Redis service and REDIS_URL on Railway and the server log for [shared-limits] lines; the operator view of /api/gateway-status carries the counts and the last error. Auto-closes when sharedLimits.status reads on or memory." || true
+            fi
+          elif { [ "$STATUS" = "on" ] || [ "$STATUS" = "memory" ]; } && [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "sharedLimits is ${STATUS}; closing." || true
+          fi
+
+      # Consumed marks the shared store missed (src/replay-guard.js): status
+      # reads pending until the next retry pass lands the mark, so this pages
+      # on alert=sustained (pending held ten minutes without a break). ok
+      # closes; pending inside the grace period does neither.
+      - name: Replay store check (alarm on consumed marks pending past the grace period)
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ROW=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '(.replayStore.status // "unknown") + " " + (.replayStore.alert // "unknown")' 2>/dev/null || echo "unknown unknown")
+          STATUS=${ROW%% *}; ALERT=${ROW##* }
+          echo "replay store: $STATUS (alert $ALERT)"
+          TITLE="Replay store marks PENDING (Redis)"
+          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          if [ "$ALERT" = "sustained" ]; then
+            if [ -z "$EXISTING" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+                --body "/api/gateway-status reports replayStore.alert=sustained: a settled payment's consumed mark has waited ten minutes or more to reach the shared store (Redis). This process refuses that payment from its own mark and the retry loop keeps writing it; until it lands, another container does not see the mark and a restart drops it. Check the Redis service and the server log for [replay-guard] lines; the operator view of /api/gateway-status carries the counts. Auto-closes when replayStore.status reads ok." || true
+            fi
+          elif [ "$STATUS" = "ok" ] && [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "replayStore is ${STATUS}; closing." || true
+          fi
+
+      # Exa daily spend (src/tools/exa-kit.js): the same words as xDataSpend.
+      # Apart from the prepaid allowance step above, which reads exaAllowance.
+      - name: Exa daily spend over its ceiling
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.exaSpend.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "exa spend: $STATUS"
+          TITLE="Exa daily spend OVER its ceiling"
+          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          if [ "$STATUS" = "over" ] || [ "$STATUS" = "capped" ]; then
+            if [ -z "$EXISTING" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+                --body "\`/api/gateway-status.exaSpend\` reports **over** or **capped**. On **over** the day's booked spend on the Exa tools passed \`EXA_DAILY_MAX_USD\` and every call is still served (each one is paid for by its buyer). On **capped** a call that would take the day past \`EXA_DAILY_HARD_MAX_USD\` was refused 503 (uncharged) within the last hour, or the day's spend reached that ceiling; a call that fits under it is still served, and the day's count starts again at 00:00 UTC. Check the prepaid balance in the upstream's console (a spent balance stops the tools whatever the ceilings say; \`exaAllowance\` is the word for that), then raise the ceilings on Railway or leave them. Closes when the word reads ok or off: an hour after the last refusal when the day's spend is under \`EXA_DAILY_MAX_USD\`, otherwise the next UTC day."
+            fi
+          elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "exaSpend is ${STATUS}; closing." || true
+          fi
+
       - name: Algorand upstream buyer wallet check (alarm on low AVM spending balance)
         if: always()
         continue-on-error: true
@@ -635,24 +750,26 @@ jobs:
       # /api/gateway-status. held (a state table, or the whole database
       # snapshot, did not go up), failed (the run threw, or the encryption
       # key does not parse), stale (no successful run in 26 h while
-      # configured) and unencrypted (no encryption key in production) page;
-      # ok closes; off and
+      # configured), unencrypted (no encryption key in production) and
+      # unconfigured (no bucket variables in production with a state
+      # database, so no backup runs) page; ok closes; off (no bucket on a boot
+      # that is not production or has no state database) and
       # unknown do neither. Two readings 30 s apart, because a boot can read
       # stale once before the persisted status has loaded.
-      - name: Offsite backup check (alarm on a held, failed, stale or unencrypted backup)
+      - name: Offsite backup check (alarm on a held, failed, stale, unencrypted or unconfigured backup)
         if: always()
         continue-on-error: true
         run: |
           read_bk() { curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.backup.status // "unknown"' 2>/dev/null || echo unknown; }
           WORD=$(read_bk)
-          case "$WORD" in held|failed|stale|unencrypted) sleep 30; WORD=$(read_bk) ;; esac
+          case "$WORD" in held|failed|stale|unencrypted|unconfigured) sleep 30; WORD=$(read_bk) ;; esac
           echo "offsite backup: $WORD"
           TITLE="Offsite backup is not current"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
-            held|failed|stale|unencrypted)
+            held|failed|stale|unencrypted|unconfigured)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports backup.status=$WORD on two readings 30 s apart. held: the last run left a state table, or the whole database snapshot, without an offsite copy (older days are kept, not pruned, while this lasts). failed: the last run threw (bucket unreachable, bill guard, unreadable data dir, or a BACKUP_ENCRYPTION_KEY that is set but does not parse). stale: no successful run in 26 h. unencrypted: BACKUP_ENCRYPTION_KEY is unset in production, so objects go up as plain gzip. Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backup] log line; POST /__operator/backup/run retries. Auto-closes when the word is ok." >/dev/null 2>&1 || echo "issue create failed"
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports backup.status=$WORD on two readings 30 s apart. held: the last run left a state table, or the whole database snapshot, without an offsite copy (older days are kept, not pruned, while this lasts). failed: the last run threw (bucket unreachable, bill guard, unreadable data dir, or a BACKUP_ENCRYPTION_KEY that is set but does not parse). stale: no successful run in 26 h. unencrypted: BACKUP_ENCRYPTION_KEY is unset in production, so objects go up as plain gzip. unconfigured: the BACKUP_S3_* bucket variables are unset in production with a state database, so no backup runs at all. Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backup] log line; POST /__operator/backup/run retries. Auto-closes when the word is ok." >/dev/null 2>&1 || echo "issue create failed"
               else
                 gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
               fi
@@ -1074,7 +1191,8 @@ jobs:
       # Tool and upstream failures (src/tool-failure-monitor.js): four words
       # on /api/gateway-status. toolFailures and upstreamHealth page on
       # degraded / failing; facilitatorFunds pages on low / refused / demoted;
-      # buyerRefusals pages on refusing; robinhoodSettler pages on relayer (ok
+      # buyerRefusals pages on refusing; settleFailures and unsettledReports page on burst;
+      # robinhoodSettler pages on relayer (ok
       # and off close); subscriptionRenewals pages on unconfirmed (ok and off
       # close); directUpstream pages on degraded (ok and off close,
       # starting does neither); ok closes; unknown does neither. The issues are public, so a body carries
@@ -1117,6 +1235,18 @@ jobs:
           # window (src/gateway-settle-breaker.js): refusing pages, ok closes.
           TITLE="buyerRefusals: a paying buyer was refused by the settle breaker"
           check_word buyerRefusals "refusing" "ok"
+          # Distinct buyers whose /v1 payments verified and then failed to
+          # settle reached the breaker's count inside one window
+          # (src/gateway-settle-breaker.js): burst pages, ok closes. No request
+          # is refused for it.
+          TITLE="settleFailures: a burst of buyers' payments verified and then failed to settle"
+          check_word settleFailures "burst" "ok" "/api/gateway-status"
+          # Report and media runs that spent upstream and then did not settle
+          # reached the composite guard's count inside one window
+          # (src/composite-spend-guard.js): burst pages, ok closes. No request
+          # is refused for it.
+          TITLE="unsettledReports: a burst of report runs were served and then did not settle"
+          check_word unsettledReports "burst" "ok" "/api/gateway-status"
           # Our own relayer settling Robinhood Chain sales in the listed
           # facilitator's place for longer than ROBINHOOD_RELAYER_FIRST_ALERT_HOURS
           # (src/robinhood-order.js): relayer pages, ok and off close.

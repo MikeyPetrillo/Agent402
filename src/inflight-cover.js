@@ -54,8 +54,10 @@
 //     plus every reservation another container holds (admitted there or still
 //     being judged there; run ids carry the process, so this process's own
 //     reservations are not counted twice). A run another container holds
-//     drew on a balance verify never saw, so while one is in the window no
-//     cached read older than that view decides; and a run of another
+//     drew on a balance verify never saw, so while one is in the window only
+//     a read that began after that view decides (the two are ordered by a
+//     count this process keeps, never by the clock: a view and a read inside
+//     one millisecond still have an order); and a run of another
 //     container that leaves during a read is a departure like a local one,
 //     judged again on a read taken after it. A store that does not answer
 //     leaves the decision to this process's ledger, which is what one replica
@@ -95,8 +97,11 @@ export const _inflightCoverShared = SHARED;
 
 const ledger = new Map(); // coverKey -> { count, atomic: bigint, settling }
 const waiters = new Map(); // coverKey -> Set<() => void>, woken when a run leaves
-const balances = new Map(); // coverKey -> { atomic: bigint, at }
-const pendingReads = new Map(); // coverKey -> { p: Promise<bigint|null> }
+const balances = new Map(); // coverKey -> { atomic: bigint, at, seq } (seq: when its read began)
+const pendingReads = new Map(); // coverKey -> { p: Promise<bigint|null>, seq }
+// The order of events in this process: a shared view takes the next value
+// when it lands, a balance read takes the next when it begins.
+let eventSeq = 0;
 const judging = new Map(); // coverKey -> Set<{ left }>, runs being judged; release() counts in `left`
 let readsInFlight = 0;
 // The settled-release of an admitted run, kept on its request (own,
@@ -211,24 +216,29 @@ let reader = readTokenBalance;
 /** Test seam. */
 export function _setBalanceReaderForTest(fn) { reader = typeof fn === "function" ? fn : readTokenBalance; }
 
-// `minAt`: a cached or pending read taken before it does not count (another
-// container's run may have drawn on the balance since).
-async function balanceFor(coverKey, terms, now, minAt = 0) {
+// `minSeq`: the caller's shared view. A cached or pending read that began
+// before it does not count (another container's run may have drawn on the
+// balance since), however recently it finished. A read begins one microtask
+// after it is asked for and is later than every view until then (Infinity),
+// so runs whose views land together share the one read that follows them all.
+async function balanceFor(coverKey, terms, now, minSeq = 0) {
   const hit = balances.get(coverKey);
-  if (hit && now - hit.at < CACHE_MS && hit.at >= minAt) return hit.atomic;
+  if (hit && now - hit.at < CACHE_MS && hit.seq > minSeq) return hit.atomic;
   const pending = pendingReads.get(coverKey);
-  if (pending && pending.startedAt >= minAt) return pending.p;
+  if (pending && pending.seq > minSeq) return pending.p;
   if (readsInFlight >= MAX_READS_IN_FLIGHT) return null; // never queue: a full lane reads as unknown
   readsInFlight++;
-  const entry = { p: null, startedAt: Date.now() };
+  const entry = { p: null, seq: Infinity };
   entry.p = (async () => {
     try {
+      await null;
+      entry.seq = ++eventSeq;
       const atomic = await reader(terms);
       if (typeof atomic !== "bigint" || atomic < 0n) return null;
       // A run that left while this read was under way detached it (release()
       // drops the pending entry): it may predate that run's settlement, so it
       // is not kept for anyone who asks after the departure.
-      if (pendingReads.get(coverKey) === entry) balances.set(coverKey, { atomic, at: Date.now() });
+      if (pendingReads.get(coverKey) === entry) balances.set(coverKey, { atomic, at: Date.now(), seq: entry.seq });
       return atomic;
     } catch { return null; }
     finally { readsInFlight--; if (pendingReads.get(coverKey) === entry) pendingReads.delete(coverKey); }
@@ -278,10 +288,10 @@ export async function admitCoveredRun(req, { now = Date.now(), settleWaitMs = SE
   // judging one wallet at once each see the other's run; it is taken back on
   // a refusal and when the admitted run leaves.
   const sharedId = SHARED ? `${PROC}:${++runSeq}` : null;
-  let others = null, sharedAt = 0;
+  let others = null, sharedSeq = 0;
   if (sharedId) {
     const r = await shared.windowAdd(SHARED_NAME, coverKey, { windowMs: SHARED_WINDOW_MS(), member: sharedId, weight: Number(terms.atomic), now });
-    if (r.ok) { others = othersOf(r, sharedId, terms.atomic); sharedAt = Date.now(); }
+    if (r.ok) { others = othersOf(r, sharedId, terms.atomic); sharedSeq = ++eventSeq; }
     else { stats.sharedMisses++; noteSharedLimitsDegraded(SHARED_NAME, r); }
   }
   let admitted = false;
@@ -292,10 +302,10 @@ export async function admitCoveredRun(req, { now = Date.now(), settleWaitMs = SE
       if (me.left === 0 && (!held || held.count <= 0) && !foreignHeld(others, held)) break;
       const leftBefore = me.left;
       // Another container's run is in flight: verify's proof may predate its
-      // settlement, so only a read taken after the shared view decides.
+      // settlement, so only a read begun after the shared view decides.
       const foreign = foreignHeld(others, held, judges.size);
       if (foreign) stats.foreignReads++;
-      const balance = await balanceFor(coverKey, terms, at, foreign ? sharedAt : 0);
+      const balance = await balanceFor(coverKey, terms, at, foreign ? sharedSeq : 0);
       // A run left while the balance was being read: the read may predate its
       // settlement. Judge again on a read taken after the departure.
       if (me.left !== leftBefore) { at = Date.now(); continue; }
@@ -304,7 +314,7 @@ export async function admitCoveredRun(req, { now = Date.now(), settleWaitMs = SE
         if (r.ok) {
           const next = othersOf(r, sharedId, terms.atomic);
           const departed = foreignDeparted(others, next);
-          others = next; sharedAt = Date.now();
+          others = next; sharedSeq = ++eventSeq;
           if (departed) { at = Date.now(); continue; }
         } else { stats.sharedMisses++; noteSharedLimitsDegraded(SHARED_NAME, r); }
       }

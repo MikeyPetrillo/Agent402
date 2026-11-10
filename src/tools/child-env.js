@@ -21,3 +21,23 @@ export function childEnv(source = process.env) {
   for (const k of CHILD_ENV_KEYS) if (typeof source[k] === "string") env[k] = source[k];
   return env;
 }
+
+// The environment a parser worker thread (node:worker_threads) gets. Without
+// an `env` option a Worker starts with a copy of the whole process
+// environment, so code running over buyer bytes (a PDF, an image, HTML, a
+// regex) could read every key in it. `threadEnv(own)` is the same allowlist
+// as above (a worker that spawns a helper passes it on with childEnv) plus:
+//   NODE_ENV      modules read it at import
+//   NODE_OPTIONS  with an `env` option Node builds the worker's options from
+//                 this variable instead of the parent's, so leaving it out
+//                 would drop flags the parent runs with
+// and the worker's `own` knobs: the variables its import graph reads, named
+// where each worker is created. The same caveat applies as for a child: a
+// thread shares the process, so this narrows what a parser bug can read from
+// its own globals; it is not a boundary.
+const THREAD_ENV_KEYS = [...CHILD_ENV_KEYS, "NODE_ENV", "NODE_OPTIONS"];
+export function threadEnv(own = [], source = process.env) {
+  const env = {};
+  for (const k of [...THREAD_ENV_KEYS, ...own]) if (typeof source[k] === "string") env[k] = source[k];
+  return env;
+}

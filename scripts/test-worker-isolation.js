@@ -179,5 +179,122 @@ const listen = (app) => new Promise((res) => { const s = app.listen(0, () => res
   set(save.u, save.t);
 }
 
+// --- 7. Worker threads start with an allowlisted environment ------------------
+// A Worker created without an `env` option gets a copy of the whole process
+// environment. Every `new Worker(` in the serving tree names its env, and the
+// parser workers (PDF, image, HTML, regex, markdown, office) get threadEnv():
+// the helper-binary allowlist, NODE_ENV, NODE_OPTIONS and their own knobs.
+{
+  const { readdirSync, statSync } = await import("node:fs");
+  const walk = (dir) => readdirSync(dir).flatMap((n) => {
+    if (n === "node_modules" || n.startsWith(".")) return [];
+    const p = join(dir, n);
+    return statSync(p).isDirectory() ? walk(p) : /\.(m?js)$/.test(n) ? [p] : [];
+  });
+  // The options text of each `new Worker(` call: brackets balanced, strings skipped.
+  const callText = (text, open) => {
+    let depth = 0, i = open, q = null;
+    for (; i < text.length; i++) {
+      const c = text[i];
+      if (q) { if (c === "\\") i++; else if (c === q) q = null; continue; }
+      if (c === '"' || c === "'" || c === "`") { q = c; continue; }
+      if (c === "(" || c === "{" || c === "[") depth++;
+      else if (c === ")" || c === "}" || c === "]") { depth--; if (depth === 0) break; }
+    }
+    return text.slice(open, i + 1);
+  };
+  // The one worker that is not a parser: the router replica builds its own
+  // env (the process's, minus its stores) because it runs the index module.
+  const OWN_ENV = { "src/router-pool.js": /\{\s*env:\s*workerEnv\(\)\s*\}/ };
+  const sites = [];
+  for (const dir of ["src", "worker", "services"]) {
+    for (const f of walk(join(ROOT, dir))) {
+      const text = readFileSync(f, "utf8");
+      for (const m of text.matchAll(/\bnew Worker\(/g)) sites.push({ file: f.slice(ROOT.length + 1), call: callText(text, m.index + m[0].length - 1) });
+    }
+  }
+  ok(sites.length >= 7, `the worker thread call sites are found (${sites.length})`);
+  const bare = sites.filter((x) => !/[{,]\s*env\s*:/.test(x.call)).map((x) => x.file);
+  ok(bare.length === 0, `every new Worker( passes an explicit env (without one: ${bare.join(", ") || "none"})`);
+  const loose = sites.filter((x) => (OWN_ENV[x.file] ? !OWN_ENV[x.file].test(x.call) : !/[{,]\s*env:\s*threadEnv\(/.test(x.call))).map((x) => x.file);
+  ok(loose.length === 0, `every parser worker's env is threadEnv(...) (otherwise: ${loose.join(", ") || "none"})`);
+  ok(sites.every((x) => !/SHARE_ENV|env:\s*process\.env\b/.test(x.call)), "no worker shares or is handed process.env itself");
+
+  // Behavior: a secret-shaped variable planted in this process is not in any
+  // parser worker's environment. Each pool runs one real job (so the worker
+  // still works with the narrowed env); the Worker constructor is wrapped to
+  // record the options each real worker was created with, and a probe thread
+  // started with exactly that `env` reports what such a worker can read.
+  const PLANTED = { PLANTED_PROVIDER_API_KEY: "sk-LEAKCANARY-0123456789", PLANTED_DATABASE_URL: "postgres://u:planted-pw@db.internal/x", X402_UPSTREAM_BUYER_KEY: "0xplanted" };
+  Object.assign(process.env, PLANTED);
+  const { createRequire, syncBuiltinESMExports } = await import("node:module");
+  const wt = createRequire(import.meta.url)("node:worker_threads");
+  const RealWorker = wt.Worker;
+  const made = [];
+  wt.Worker = class extends RealWorker {
+    constructor(file, options) { super(file, options); made.push({ file: String(file).split("/").pop(), options }); }
+  };
+  syncBuiltinESMExports();
+  const probe = (options) => new Promise((res, rej) => {
+    const w = new RealWorker('require("node:worker_threads").parentPort.postMessage({ ...process.env })', { eval: true, ...options });
+    w.once("message", res); w.once("error", rej);
+  });
+  try {
+    // Control: without an env option a worker does read the planted secret.
+    const inherited = await probe({});
+    ok(inherited.PLANTED_PROVIDER_API_KEY === PLANTED.PLANTED_PROVIDER_API_KEY, "control: a worker created with no env option reads the planted secret");
+
+    const { KIT } = await import("../src/tools/kit.js");
+    const { runMarkdown } = await import("../src/tools/markdown-pool.js");
+    const { runHtml } = await import("../src/tools/html-pool.js");
+    const { runOfficeOp } = await import("../src/tools/office-pool.js");
+    const { validateXlsx } = await import("../src/tools/office-ops.js");
+    const { runPdfOp } = await import("../src/tools/pdf-offthread.js");
+    const { runImageOffThread } = await import("../src/tools/image-pool.js");
+    const { PDFDocument } = await import("pdf-lib");
+    const { PNG } = await import("pngjs");
+    const doc = await PDFDocument.create(); doc.addPage([200, 200]);
+    const pdf = Buffer.from(await doc.save());
+    const png = new PNG({ width: 20, height: 20 }); png.data.fill(200);
+    const pngBuf = PNG.sync.write(png);
+
+    const rx = await KIT.find((t) => t.slug === "regex").handler({ pattern: "(\\w+)@(\\w+)", text: "mail a@b now" });
+    ok(rx.matchCount === 1 && rx.matches[0].groups[1] === "b", "regex worker: a job answers as before");
+    const md = await runMarkdown("# hi");
+    ok(/<h1[^>]*>hi<\/h1>/.test(JSON.stringify(md)), "markdown worker: a job answers as before");
+    const meta = await runHtml("meta", { html: "<html><head><title>T</title></head><body>x</body></html>", url: "https://example.com/" });
+    ok(meta?.title === "T", `html worker: a job answers as before (${JSON.stringify(meta).slice(0, 80)})`);
+    const xl = await runOfficeOp("xlsx", validateXlsx({ rows: [["a", 1]] }));
+    ok(!!xl && JSON.stringify(xl).length > 20, "office worker: a job answers as before");
+    const info = await runPdfOp("info", [pdf]);
+    ok((info?.pages ?? info?.pageCount) === 1, `pdf worker: a job answers as before (${JSON.stringify(info).slice(0, 80)})`);
+    const small = await runImageOffThread({ op: "resize", buffer: pngBuf, params: { width: 10 } });
+    ok(!!small && JSON.stringify(small).length > 20, "image worker: a job answers as before");
+
+    const WORKERS = ["regex-worker.js", "markdown-worker.js", "html-worker.js", "office-worker.js", "pdf-worker.js", "image-worker.js"];
+    const ALLOWED = new Set(["PATH", "HOME", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "LD_LIBRARY_PATH", "PLAYWRIGHT_BROWSERS_PATH", "FONTCONFIG_PATH", "FONTCONFIG_FILE",
+      "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_RUNTIME_DIR", "NODE_ENV", "NODE_OPTIONS", "LAZY_DEPS_WARM_GAP_MS", "HTML_POOL_MAX", "HTML_POOL_QUEUE_MAX", "HTML_PARSE_TIMEOUT_MS"]);
+    for (const name of WORKERS) {
+      const rec = made.find((m) => m.file === name);
+      if (!rec) { ok(false, `${name}: no worker was created by its job`); continue; }
+      const seen = await probe({ env: rec.options?.env });
+      const leaked = Object.keys(PLANTED).filter((k) => k in seen);
+      const extra = Object.keys(seen).filter((k) => !ALLOWED.has(k));
+      ok(rec.options?.env && typeof rec.options.env === "object" && leaked.length === 0, `${name}: a worker with its env cannot read a planted secret (${leaked.join(", ") || "none read"})`);
+      ok(extra.length === 0 && seen.PATH === process.env.PATH, `${name}: its env holds only allowlisted names (${extra.join(", ") || "no others"})`);
+    }
+    const { threadEnv } = await import("../src/tools/child-env.js");
+    ok(threadEnv(["A_KNOB"], { A_KNOB: "1", NODE_OPTIONS: "--enable-source-maps", SECRET_KEY: "x", PATH: "/bin" }).SECRET_KEY === undefined
+      && JSON.stringify(threadEnv(["A_KNOB"], { A_KNOB: "1", NODE_OPTIONS: "--enable-source-maps", SECRET_KEY: "x", PATH: "/bin" })) === JSON.stringify({ PATH: "/bin", NODE_OPTIONS: "--enable-source-maps", A_KNOB: "1" }),
+      "threadEnv carries the allowlist, NODE_OPTIONS and the named knobs only");
+  } catch (e) {
+    ok(false, `worker env check threw: ${e?.stack || e}`);
+  } finally {
+    wt.Worker = RealWorker;
+    syncBuiltinESMExports();
+    for (const k of Object.keys(PLANTED)) delete process.env[k];
+  }
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

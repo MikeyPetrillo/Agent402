@@ -9,6 +9,12 @@
 // what was bought there: the calls, and one payer per spending wallet that
 // paid. The unproven lane pays a seller; it never qualifies one.
 //
+// A purchase is recorded when its payment is SIGNED, by the payer itself
+// (payX402's and payTempo's `onSigned`), under the address that payment
+// names, so the record does not depend on what the index knew about the
+// seller. A signed payment that provably moved nothing (never sent, or the
+// chain showed the credential expired unused) is taken back with `retract`.
+//
 // One record per (origin, payTo wallet): each purchase's time and the chain
 // it left from (one spending wallet per chain), over the Bazaar's 30-day
 // window. Kept as one state document (the file on the volume without a
@@ -34,7 +40,14 @@ const REFRESH_MS = 30_000;
 const FLUSH_DELAY_MS = 250;
 const RETRY_MAX_MS = 60_000;
 
-const evmKey = (a) => (typeof a === "string" && /^0x[0-9a-f]{40}$/i.test(a.trim()) ? a.trim().toLowerCase() : null);
+// The wallet a purchase paid. An EVM address is lowercased; a Solana
+// (base58) or Algorand (base32) address is kept exactly as written.
+const evmKey = (a) => {
+  if (typeof a !== "string") return null;
+  const t = a.trim();
+  if (/^0x[0-9a-f]{40}$/i.test(t)) return t.toLowerCase();
+  return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(t) || /^[A-Z2-7]{58}$/.test(t) ? t : null;
+};
 const normOrigin = (o) => {
   try { const u = new URL(String(o || "")); return u.protocol === "https:" || u.protocol === "http:" ? `${u.protocol}//${u.host.toLowerCase()}` : null; } catch { return null; }
 };
@@ -66,6 +79,14 @@ export function createRouterPurchaseStore({ file = null, now = Date.now, log = n
     prune(e, now());
     return true;
   }
+  // Take one stamp back out of the memory copy; true when one was there.
+  function dropRow(origin, wallet, at, chain) {
+    const e = rows.get(origin)?.get(wallet);
+    const i = e ? e.buys.findIndex((b) => b[0] === at && b[1] === chain) : -1;
+    if (i < 0) return false;
+    e.buys.splice(i, 1);
+    return true;
+  }
   function apply(j) {
     const entries = j && typeof j.rows === "object" && j.rows ? Object.entries(j.rows) : [];
     for (const [k, v] of entries.slice(0, MAX_KEYS)) {
@@ -86,7 +107,7 @@ export function createRouterPurchaseStore({ file = null, now = Date.now, log = n
   function replaceFrom(j) {
     rows.clear();
     if (j) apply(j);
-    for (const p of pending) addRow(p.origin, p.wallet, p.at, p.chain);
+    for (const p of pending) { if (p.remove) dropRow(p.origin, p.wallet, p.at, p.chain); else addRow(p.origin, p.wallet, p.at, p.chain); }
     refreshedAt = now();
   }
   function load() {
@@ -126,6 +147,12 @@ export function createRouterPurchaseStore({ file = null, now = Date.now, log = n
       const cur = b.rows[key];
       if (!cur && Object.keys(b.rows).length >= MAX_KEYS) continue;
       const list = (cur && Array.isArray(cur.buys) ? cur.buys : []).filter(inWindow).map(stampOf);
+      if (p.remove) {
+        const i = list.findIndex((x) => x[0] === p.at && x[1] === p.chain);
+        if (i >= 0) list.splice(i, 1);
+        if (cur) b.rows[key] = { buys: list };
+        continue;
+      }
       list.push([p.at, p.chain]);
       list.sort((x, y) => x[0] - y[0]);
       b.rows[key] = { buys: list.slice(-MAX_STAMPS) };
@@ -173,6 +200,21 @@ export function createRouterPurchaseStore({ file = null, now = Date.now, log = n
     persist();
     return true;
   }
+  /** Take back one purchase recorded with the same origin, payTo, chain and
+   *  `at`: its payment provably moved nothing. True when a stamp was removed. */
+  function retract({ origin, payTo, chain, at } = {}) {
+    ensure();
+    const o = normOrigin(origin), w = evmKey(payTo);
+    const stamp = Number(at), c = typeof chain === "string" && chain ? chain : "base";
+    if (!o || !w || !Number.isFinite(stamp)) return false;
+    if (!dropRow(o, w, stamp, c)) return false;
+    // Not written yet: the write never happens. Already written (or being
+    // written): a removal is merged into the document like a buy.
+    const i = pending.findIndex((p) => !p.remove && p.origin === o && p.wallet === w && p.at === stamp && p.chain === c);
+    if (i >= 0 && !flushing) pending.splice(i, 1);
+    else { pending.push({ origin: o, wallet: w, at: stamp, chain: c, remove: true }); persist(); }
+    return true;
+  }
   /** { calls, payers } the router bought at `origin`'s wallet `payTo` over the window. */
   function at(origin, payTo, t = now()) {
     ensure(); kick();
@@ -195,7 +237,7 @@ export function createRouterPurchaseStore({ file = null, now = Date.now, log = n
     }
     return out;
   }
-  return { load, record, at, snapshot, flush, ready: () => ready, __reset() { rows.clear(); pending = []; } };
+  return { load, record, retract, at, snapshot, flush, ready: () => ready, __reset() { rows.clear(); pending = []; } };
 }
 
 let instance = null;
@@ -206,6 +248,16 @@ export function routerPurchaseStore() {
 }
 export function recordRouterPurchase(args) {
   try { return routerPurchaseStore().record(args); } catch { return false; }
+}
+export function retractRouterPurchase(args) {
+  try { return routerPurchaseStore().retract(args); } catch { return false; }
+}
+/** The payers' default `onSigned`: record the purchase under the URL paid and
+ *  the address signed for, and hand back the call that takes it back. */
+export function recordSignedPurchase({ url, payTo, chain } = {}) {
+  const rec = { origin: url, payTo, chain, at: Date.now() };
+  if (!recordRouterPurchase(rec)) return null;
+  return () => retractRouterPurchase(rec);
 }
 export function routerPurchasesSnapshot() {
   try { return routerPurchaseStore().snapshot(); } catch { return new Map(); }

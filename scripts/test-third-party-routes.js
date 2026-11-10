@@ -52,6 +52,22 @@ const pages = src("pages.js");
 ok(/tool\.identityBound \|\| paysThirdParty\(tool\) \? \[\] : \["a prepaid credits key"\]/.test(pages) && /paysThirdParty\(tool\) \? " It buys from an outside seller with our wallet/.test(pages), "tool pages do not offer credits on a third-party route");
 ok(/the operations that buy from an outside seller/.test(pages), "openapi's credits scheme names the excluded operations");
 ok(/except the ones that buy from an outside seller/.test(src("seo.js")), "llms.txt names the excluded routes");
+// llms.txt's decide line renders only while /api/decide is in the catalog (a
+// FREE_MODE boot hides it), so the generator is called with that route present.
+// decide-execute is flagged above: the line must not offer credits or a card.
+{
+  const { llmsTxt, llmsFullTxt } = await import("../src/seo.js");
+  const catalog = { "POST /api/decide": { route: "POST /api/decide", slug: "decide", name: "Decide", category: "agent", price: "$0.003", description: "A paid decision.", tags: [] } };
+  for (const [name, render] of [["llms.txt", llmsTxt], ["llms-full.txt", llmsFullTxt]]) {
+    const line = render("https://agent402.test", catalog).split("\n").find((l) => l.includes("`POST /api/decide/execute`")) || "";
+    ok(line.length > 0, `${name} renders the decide line when /api/decide is in the catalog`);
+    const pays = (line.match(/`POST \/api\/decide\/execute`,[^.]*\./) || [""])[0];
+    ok(pays.length > 0 && !/\bpaid[^.;(]*\b(?:by|or) (?:credits|card|a card)\b/.test(pays) && /paid from a wallet on Base/.test(pays) && /a prepaid credits key or a card does not pay it/.test(pays),
+      `${name} sells decide-execute for a wallet payment only`);
+  }
+  const sentence = "`POST /api/decide/execute`, which runs the plan when paid on Base or by credits or card (third-party steps at the seller's price plus a 5% markup).";
+  ok(/\bpaid[^.;(]*\b(?:by|or) (?:credits|card|a card)\b/.test(sentence), "control: the sentence that offered credits or a card is caught");
+}
 const mcpHttp = src("mcp-http.js");
 ok(/onSale: creditsSalesEnabled\(\)/.test(mcpHttp) && /the routes that buy from an outside seller/.test(mcpHttp), "payment.info reads the sales switch and names the excluded routes");
 

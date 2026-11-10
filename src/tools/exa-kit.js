@@ -33,9 +33,9 @@
 //   2. Set EXA_CREDITS_USD on Railway to the NEW funded total. That is what
 //      `exaAllowance` measures remaining against; leaving it stale is how the
 //      alarm goes quiet while the account empties.
-//   3. Optionally raise EXA_DAILY_MAX_USD - the default is a brake, and a cap
-//      that fires under real demand is costing revenue rather than saving
-//      money.
+//   3. Optionally raise EXA_DAILY_MAX_USD and EXA_DAILY_HARD_MAX_USD. The
+//      first is an alarm (calls are served past it); the second, by default
+//      five times the first, is where calls are refused.
 // The spend counter lives in memory and resets on deploy, so `remainingUsd` is
 // an UPPER bound. Top up on "low"; never wait for it to reach zero.
 //
@@ -45,6 +45,7 @@ import { markUntrusted } from "./provenance.js";
 import { upstreamCosts } from "../upstream-costs.js";
 import { meterUpstreamSpend } from "../posthog.js";
 import { createSharedDailySpend } from "../shared-limits.js";
+import { dailyCeilings, ceilingWord, noteOverAlarm, createSharedCeilingView, REFUSAL_HOLD_MS } from "../daily-ceilings.js";
 
 const EXA_API = "https://api.exa.ai";
 import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
@@ -86,13 +87,26 @@ function requireKey() {
 // Exa is pay-as-you-go against a prepaid balance, and the whole point of
 // shipping on the free tier is to measure demand without spending - so a
 // buyer must not be able to burn the allowance in an afternoon. Every call is
-// priced BEFORE it goes out at the published card, refused 503 (uncharged,
-// so a >= 400 cancels settlement and nobody pays for the refusal) once the
-// UTC day's booked spend would pass the cap, and then re-booked AFTER the
-// call at what Exa itself reports in `costDollars` - the estimate is only
-// ever a gate, never the accounting. In memory: a restart resets the day,
-// exactly like the other spend guards, and the prepaid balance is the outer
-// bound.
+// priced BEFORE it goes out at the published card and then re-booked AFTER
+// the call at what Exa itself reports in `costDollars` - the estimate is only
+// ever a gate, never the accounting. Two ceilings on the UTC day's booked
+// spend (src/daily-ceilings.js, shared with the X data kit):
+//   EXA_DAILY_MAX_USD (default 1): the alarm. Past it every call is still
+//     served, since each one is paid for by its buyer; `exaSpend` on
+//     /api/gateway-status reads `over`, which pages. 0 is the switch: it
+//     refuses every call (the word reads `off`). Blank or malformed reads as
+//     the default, never as off.
+//   EXA_DAILY_HARD_MAX_USD (default 5 times the alarm ceiling; a blank,
+//     malformed or non-positive value reads as the default, and a value under
+//     the alarm ceiling reads as the alarm ceiling): the stop for a runaway.
+//     A call that would take the day past it is refused 503 (uncharged, so a
+//     >= 400 cancels settlement and nobody pays for the refusal) and the word
+//     reads `capped`, which pages too.
+// A restart resets this process's day; the shared day counter (below) does
+// not, and both the refusal and the status word read it. A refusal holds the
+// word at `capped` for an hour on every replica, since a refused call books
+// nothing. The prepaid balance is the outer bound: with the balance spent the
+// upstream refuses and the tools answer 503 whatever these ceilings say.
 // Exa's card (search, instant and lite per request at <= 10 results, answer per
 // request, content per page per type) is private: src/upstream-costs.js,
 // `vendor.exa`. Without it the cap cannot be enforced, so calls refuse 503.
@@ -101,8 +115,7 @@ function exaRate(k) {
   if (v == null) throw bad("Exa tools are temporarily unavailable. This call is not charged on x402.", 503);
   return v;
 }
-// 0 refuses every call; blank or malformed reads as the default, never as off.
-const EXA_DAILY_MAX_USD = () => { const raw = String(process.env.EXA_DAILY_MAX_USD ?? "").trim(); const n = raw === "" ? NaN : Number(raw); return Number.isFinite(n) && n >= 0 ? n : 1; };
+const exaCeilings = () => dailyCeilings("EXA_DAILY_MAX_USD", "EXA_DAILY_HARD_MAX_USD");
 
 // ---- prepaid allowance + low-water -----------------------------------------
 // EXA PUBLISHES NO BALANCE. Their public OpenAPI carries 42 endpoints and not
@@ -120,11 +133,11 @@ const EXA_DAILY_MAX_USD = () => { const raw = String(process.env.EXA_DAILY_MAX_U
 const EXA_CREDITS_USD = () => { const n = Number(process.env.EXA_CREDITS_USD); return Number.isFinite(n) && n > 0 ? n : null; };
 const EXA_LOW_FRACTION = () => { const n = Number(process.env.EXA_LOW_FRACTION); return Number.isFinite(n) && n > 0 && n < 1 ? n : 0.25; };
 const lifetime = { micro: 0, since: Date.now() };
-const spend = { day: "", micro: 0, refused: 0, calls: 0 };
+const spend = { day: "", micro: 0, refused: 0, refusedAt: 0, calls: 0, overLogged: "" };
 const utcDay = (now = Date.now()) => new Date(now).toISOString().slice(0, 10);
 const spentToday = (now = Date.now()) => {
   const d = utcDay(now);
-  if (spend.day !== d) { spend.day = d; spend.micro = 0; spend.refused = 0; spend.calls = 0; }
+  if (spend.day !== d) { spend.day = d; spend.micro = 0; spend.refused = 0; spend.refusedAt = 0; spend.calls = 0; spend.overLogged = ""; }
   return spend.micro / 1e6;
 };
 
@@ -159,28 +172,42 @@ export function actualExaUsd(data) {
   return typeof t === "number" && Number.isFinite(t) && t >= 0 ? t : null;
 }
 
-/** Counts only - never a key, a query or a buyer. */
+/**
+ * Counts only - never a key, a query or a buyer. The day's figure is the
+ * larger of this process's own and the shared day counter last read by
+ * refreshExaSpendShared (a new process starts at zero; the shared counter,
+ * which the refusal reads, does not).
+ */
 export function exaSpendStatus(now = Date.now()) {
-  const spent = spentToday(now);
-  const cap = EXA_DAILY_MAX_USD();
+  spentToday(now);
+  const c = exaCeilings();
+  const micro = Math.max(spend.micro, exaView.micro(now));
+  const refusing = (spend.refusedAt > 0 && now - spend.refusedAt < REFUSAL_HOLD_MS) || exaView.refusing(now);
   return {
     day: spend.day,
-    spentUsd: Number(spent.toFixed(4)),
-    capUsd: cap,
+    spentUsd: Number((micro / 1e6).toFixed(4)),
+    capUsd: c.alarmUsd,
+    hardCapUsd: c.hardUsd,
     refusedToday: spend.refused,
-    status: spent >= cap ? "capped" : "ok",
+    // off: the switch refuses every call. capped: the hard ceiling refuses, or
+    // refused a call inside the hold. over: past the alarm ceiling and still
+    // serving. over and capped page.
+    status: ceilingWord(micro, c, { refusing }),
   };
 }
+/** One bounded read of the shared day for the status word; never rejects. */
+export function refreshExaSpendShared(now = Date.now()) { return exaView.refresh(now); }
 /** Calls our Exa tools sent today. The index crawlers also read api.exa.ai
  *  (Exa is an indexed x402 and MPP seller), unpaid, so a host-level count of
  *  that domain is not this number. */
 export function exaCallsToday(now = Date.now()) { spentToday(now); return spend.calls; }
-export function _exaSpendReset() { spend.day = ""; spend.micro = 0; spend.refused = 0; spend.calls = 0; exaShared.reset(); }
+export function _exaSpendReset() { spend.day = ""; spend.micro = 0; spend.refused = 0; spend.refusedAt = 0; spend.calls = 0; spend.overLogged = ""; exaShared.reset(); exaView.reset(); }
 // Shared across replicas (src/shared-limits.js): the day's spend is also a
 // shared counter per UTC day, reserved before the call and corrected after; a
-// reserve that takes the shared total past the cap is given back and refused.
+// reserve that takes the shared total past the hard ceiling is given back and refused.
 // The local counter stays the floor when the store does not answer.
 const exaShared = createSharedDailySpend("exa-day", "exa");
+const exaView = createSharedCeilingView(exaShared);
 export function _exaSpendBook(usd) { spentToday(); spend.micro += Math.round(usd * 1e6); lifetime.micro += Math.round(usd * 1e6); }
 
 /**
@@ -241,14 +268,20 @@ export function liteSearchBody(body) {
 async function exaPost(path, rawBody) {
   const body = path === "/search" && rawBody?.type === "lite" ? liteSearchBody(rawBody) : rawBody;
   const key = requireKey();
-  const cap = EXA_DAILY_MAX_USD();
+  // The refusing ceiling: the hard one, or nothing at all while the switch is 0.
+  const { alarmUsd: soft, refuseAtUsd: cap } = exaCeilings();
   const estimate = estimateExaUsd(path, body);
-  const capped = () => { spend.refused++; return bad(`Exa tools have reached today's usage cap - retry after 00:00 UTC. This call is not charged on x402.`, 503); };
+  // A refusal at the hard ceiling (not the 0 switch, whose word is off) is
+  // noted here and on the shared store, so every replica's word reads capped.
+  const capped = () => { spentToday(); spend.refused++; if (cap > 0) { spend.refusedAt = Date.now(); exaShared.noteRefused(REFUSAL_HOLD_MS); } return bad(`Exa tools have reached today's usage cap - retry after 00:00 UTC. This call is not charged on x402.`, 503); };
   // The shared reserve first (an atomic add on the store, awaited only when
   // there is one): over the cap there, nothing is booked here. Then this
   // process's check and booking, with no await between them.
   if (exaShared.enabled && !(await exaShared.reserve(estimate, cap))) throw capped();
   if (spentToday() + estimate > cap) { exaShared.book(-estimate); throw capped(); }
+  // Past the alarm ceiling the call is served: its buyer pays for it. One
+  // log line a day; the status word carries the alarm (no figure here).
+  if (spentToday() + estimate > soft) noteOverAlarm(spend, "[exa]", "EXA_DAILY_MAX_USD", "EXA_DAILY_HARD_MAX_USD");
   // Book the estimate BEFORE the call. If the request dies mid-flight we may
   // still have been billed, and a guard that only books on success is a guard
   // a timeout walks straight through.

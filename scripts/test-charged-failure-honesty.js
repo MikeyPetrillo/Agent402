@@ -19,7 +19,14 @@
 // does not survive scrutiny. Ours was worse than theirs in one respect — it
 // defamed us.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { recordChargedFailure, getStats } from "../src/stats.js";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+// Its own stats store, set before src/stats.js is loaded: the default file is
+// one per machine, and once it holds the retained-row cap every insert prunes
+// an older row, so the counts below would not move as asserted.
+process.env.STATS_DB_DIR = mkdtempSync(join(tmpdir(), "a402-charged-failure-honesty-"));
+const { recordChargedFailure, getStats } = await import("../src/stats.js");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };

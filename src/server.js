@@ -70,8 +70,8 @@ import { startSolanaLeaderboard, getSolanaLeaderboardSnapshot, solanaEvidenceByO
 import { creditFromTx as solanaCreditFromTx } from "./solana-buyer.js";
 import { historyAwareRpc, solanaHistoryStatus } from "./solana-history-rpc.js";
 import { evmLogsStatus } from "./evm-logs-rpc.js";
-import { compositeGuardBlocked, compositeGuardGlobalPaused, recordCompositeSpendFailure, OWN_GLOBAL_BOUND_SLUGS, recordCompositeSpendSuccess, EXPENSIVE_COMPOSITE_SLUGS, isLongRunningSlug, spendsBeforeSettlement, _compositeGuardState, compositeUsageSnapshot, withCompositeContext } from "./composite-spend-guard.js";
-import { gatewaySettleBreakerCheck } from "./gateway-settle-breaker.js";
+import { compositeGuardBlocked, compositeGuardAlarmStatus, recordCompositeSpendFailure, OWN_GLOBAL_BOUND_SLUGS, recordCompositeSpendSuccess, EXPENSIVE_COMPOSITE_SLUGS, isLongRunningSlug, spendsBeforeSettlement, _compositeGuardState, compositeUsageSnapshot, withCompositeContext } from "./composite-spend-guard.js";
+import { gatewaySettleBreakerCheck, gatewaySettleFailuresStatus } from "./gateway-settle-breaker.js";
 // Single-upstream-call routes that run long (40 s+): EVM exact only, like the
 // composites (settle-after on SVM/AVM/Tempo is work done, never charged), but
 // not composite-spend-guarded (one bounded upstream price).
@@ -79,7 +79,7 @@ import Stripe from "stripe";
 import { REPORT_TIERS } from "./report-tiers.js";
 import { verifyHintMiddleware } from "./verify-hint.js";
 import { meteredTwinSlug, meteredQuoteSentence } from "./metered-lead.js";
-import { paymentRequiredBodyMiddleware } from "./payment-required-body.js";
+import { paymentRequiredBodyMiddleware, decodePaymentRequired } from "./payment-required-body.js";
 import { avmSubcentOfferStatus } from "./avm-sponsorship.js";
 import { translateV1Accepts, v1AcceptsTranslationEnabled } from "./x402-v1-accepts.js";
 import { mountShortlinks } from "./shortlinks.js";
@@ -97,9 +97,11 @@ import { mppFallbackStatus } from "./mpp-fallback.js";
 import { applyMeteredSettlement, meteredUsdOf } from "./gateway-meter.js";
 import { handlerInputOf, preValidateInput, withIgnoredParams } from "./handler-input.js";
 import { configureHowToCall, howToCall402Field, howToCallField } from "./how-to-call.js";
+import { paymentGuide, quoteInputs, usdText } from "./payment-guide.js";
 import { gatewayCacheGate, commitGatewayCacheWrites } from "./gateway-cache-scope.js";
 import { startModelCatalogRefresh, modelCatalogWanted } from "./model-catalog.js";
 import { toolErrorFields } from "./tool-error-fields.js";
+import { PRE_PAYMENT_WIRES, meteredPrePaymentRefusal } from "./gateway-prepayment.js";
 import { createPrePaymentRefusalRecorder, createPrePaymentLogSampler, stripControlChars, withPushExceptionText } from "./prepayment-refusal.js";
 import { shapeRefusal } from "./input-aliases.js";
 import { setSettlementOverrides } from "@x402/express";
@@ -130,6 +132,32 @@ function quotedPriceUsd(def, req) {
     if (Number.isFinite(q) && q > 0) { req.__meteredQuoteUsd = q; return q; }
     return flat;
   } catch { return flat; }
+}
+// The `payment` block of a first-contact 402 (src/payment-guide.js): this
+// request's dollar price on the server's primary network (or, for a route that
+// does not offer it, the first network it does offer), priced through the same
+// per-network funnel as the accept, so the two agree. Read from the response's
+// own PAYMENT-REQUIRED header: a 402 that carries no x402 offer gets no block.
+function paymentGuideFor(def, req, res) {
+  try {
+    const offer = decodePaymentRequired(String(res.getHeader("PAYMENT-REQUIRED") || ""));
+    if (!offer || !offer.accepts.length) return null;
+    const primary = PAY_NETWORKS[NETWORK];
+    const caip2 = offer.accepts.some((a) => a?.network === primary) ? primary : offer.accepts[0]?.network;
+    const network = Object.entries(PAY_NETWORKS).find(([, c]) => c === caip2)?.[0];
+    if (!network || typeof def?.price !== "string") return null;
+    const flatUsd = Number(def.price.replace(/[^0-9.]/g, "")) || 0;
+    const quotedUsd = priceFnOf(def) ? quotedPriceUsd(def, req) : flatUsd;
+    // The catalog's own spelling for a list price; a per-request quote is spelled from its figure.
+    const list = Number.isFinite(quotedUsd) && quotedUsd > 0 && quotedUsd !== flatUsd ? usdText(quotedUsd) : def.price;
+    return paymentGuide({
+      price: priceForNetwork(list, caip2),
+      network,
+      baseUrl: BASE_URL,
+      quote: typeof def.quote === "function" ? quoteInputs(handlerInputOf(req, def), req.headers["content-length"]) : null,
+      powEligible: POW_SLUGS.has(def.slug),
+    });
+  } catch { return null; }
 }
 // The USD a metered call was actually settled/held at, for the books: the upto
 // meter's override (settled actual x markup; a credits stream's amount rides
@@ -282,7 +310,10 @@ function recordHangupDebt(req, res) {
   const created = whenVerdict(recordRefundOwed({ slug: def.slug, ...row, httpStatus: 499, synthetic, hangupReason }), (made) => {
     if (!made && req.tempoSettled && tempoPushHashOf(req) === row.tx) void tempoPushDebts?.hungUp(row.tx, hangupReason);
   });
-  console.warn(`[hangup] CHARGED-BUT-NOT-SERVED: client disconnected before the settled response was delivered (${req.method} ${req.path} rail=${row.wire} tx=${row.tx || "?"}) - ${created ? "recorded as owed in the refund ledger" : "already on the books"}${denied ? `; not forgiven: ${denied}` : ""}`);
+  // How long the buyer waited and which phase it left in: the figure that
+  // names the client's own timeout (src/paid-phase-timing.js hangupWaitOf).
+  const wait = (() => { try { return hangupWaitOf(req); } catch { return null; } })();
+  console.warn(`[hangup] CHARGED-BUT-NOT-SERVED: client disconnected before the settled response was delivered (${req.method} ${req.path} rail=${row.wire} tx=${row.tx || "?"}${wait ? ` net=${wait.network || "-"} waited=${wait.waitedMs ?? "-"}ms left-during=${wait.during}` : ""}) - ${created ? "recorded as owed in the refund ledger" : "already on the books"}${denied ? `; not forgiven: ${denied}` : ""}`);
   return row;
 }
 // Every close-before-the-first-byte on a paid request ends here (the hang-up
@@ -342,7 +373,7 @@ import { createSearchData } from "./search-data.js";
 import { operatorSearchPage } from "./operator-search.js";
 import { datasetStatus, datasetRecorded, runDatasetSnapshot, startDatasetScheduler } from "./dataset-snapshot.js";
 import { startQuoteWarmer, quoteWarmerStatus } from "./tools/databento.js";
-import { phaseArrivalMiddleware, markPaidHandlerStart, paidPhaseSummary } from "./paid-phase-timing.js";
+import { phaseArrivalMiddleware, markPaidHandlerStart, paidPhaseSummary, hangupWaitOf } from "./paid-phase-timing.js";
 import { slowPaidMsFromEnv, slowPaidVerdict, recentSlowPaidCalls } from "./slow-paid-calls.js";
 import { assertAvmValidityCovers } from "./avm-validity.js";
 import { assertEvmValidityCovers, EVM_RUN_SECONDS, runTimeNote } from "./evm-validity.js";
@@ -363,10 +394,10 @@ import { tollboothLandingPage } from "./tollbooth-landing.js";
 import { operatorWishesPage } from "./operator-wishes.js";
 import { initLeadsDb } from "./leads-db.js";
 import { cacheEnabled, cacheGet, cacheSet, cacheKeyFor, cacheTtlFor, CACHEABLE_ROUTES, noteCacheOutcome, cacheCounters } from "./cache.js";
-import { initAnalyticsDb, recordToolCall, getAnalytics, analyticsEnabled, redactAnalytics } from "./analytics-db.js";
+import { fullAnswerMiddleware } from "./full-answer.js";
+import { initAnalyticsDb, recordToolCall, getAnalytics, analyticsEnabled, redactAnalytics, startToolCallRetention } from "./analytics-db.js";
 import { databasesStatus } from "./db-status.js";
 import { initWithRetry } from "./db-init-retry.js";
-import { baseNotificationsEnabled } from "./base-notifications.js";
 import { railOf, outcomeRailOf } from "./payment-rail.js";
 import { initPostHog, capturePostHogWrongMethod, capturePostHogToolError, capturePostHogToolCall, telemetryKeyOf, capturePostHogDiscovery, capturePostHogPaywall, capturePostHogPowChallenge, capturePostHogSettlement, capturePostHogChargedFailure, capturePostHogSettleFailed, capturePostHogToolGone, toolGoneSourceOf, capturePostHogHumanFunnel, shutdownPostHog, posthogEnabled } from "./posthog.js";
 import { analyticsPage } from "./analytics-page.js";
@@ -430,7 +461,7 @@ import { startRouterPool, routerPoolStatus } from "./router-pool.js";
 import { allPayToOriginsAsync, allPayToPricesAsync, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedToolsAsync, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategoriesAsync, configureListingsStore, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR, brokenListingsSummary, brokenListingsStatus } from "./x402-index.js";
 import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot, screenMppSellerForServe } from "./mpp-index.js";
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
-import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled, tempoSettlementMode } from "./mpp-tempo.js";
+import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled, tempoSettlementMode, tempoRefusalProblem } from "./mpp-tempo.js";
 import { startSanctionsScreen, sanctionsScreenStarted, sanctionsScreenStatus, sanctionsScreenOperatorView } from "./sanctions-screen.js";
 import { createX402PayerScreen, x402PayerScreenView } from "./x402-payer-screen.js";
 import { createMppReconciler, fetchTransfersFromFeed, fetchTransfersFromRpc } from "./mpp-reconcile.js";
@@ -456,7 +487,8 @@ const decideLedger = () => {
 // from the file runs before the first request, not inside it.
 if (stateDbEnabled()) decideLedger();
 import { settlePreferenceMiddleware } from "./settle-preference.js";
-import { NETWORKS as PAY_NETWORKS, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, robinhoodOrderView, robinhoodSettlerStatus, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem, gatewayPendingStatus, gatewayPendingBookForOperator } from "./payments.js";
+import { fromUsdOf } from "./quoted-from.js";
+import { NETWORKS as PAY_NETWORKS, priceForNetwork, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, robinhoodOrderView, robinhoodSettlerStatus, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem, gatewayPendingStatus, gatewayPendingBookForOperator } from "./payments.js";
 import { GATEWAY_WIRE, gatewayBalanceStatus, gatewayOfferPublic, gatewayOfferNetworkNames, gatewayOfferedOn, isGatewayBatchedRequest } from "./gateway-nanopayments.js";
 import { isGatewayWire, isGatewayPendingAnswer } from "./gateway-wire.js";
 import { networkFloorUsd } from "./network-floors.js";
@@ -557,7 +589,7 @@ import { LLM_GEMINI_TOOLS, GEMINI_PATH_BY_TIER } from "./tools/llm-gemini-kit.js
 import { refusalReason } from "./refusal-reason.js";
 import { setKnownProductKeys } from "./posthog.js";
 import { LLM_RESPONSES_TOOLS } from "./tools/llm-responses-kit.js";
-import { LLM_GATEWAY_TOOLS, TIERS, PRICED_BY_MODEL_NOTE, modelsList, promptCacheKey, promptCacheGetShared, promptCacheStore, GATEWAY_TIER_BY_PATH, embeddingsCacheKey, EMBEDDINGS_PATH, rerankCacheKey, RERANK_PATH, gatewayCreditsStatus, oxAlphaAvailable, probeOxAlphaAvailability, canonicalModel, meteredModelVerdict, meteredInputSizeRefusal, OX_ROUTE, oxUpstreamIsFree, isFlatTier, METERED_MAX_QUOTE_USD, warmQuoteTokenCounts, QUOTE_WARM_MIN_CHARS } from "./tools/llm-gateway-kit.js";
+import { LLM_GATEWAY_TOOLS, TIERS, PRICED_BY_MODEL_NOTE, modelsList, promptCacheKey, promptCacheGetShared, promptCacheStore, GATEWAY_TIER_BY_PATH, embeddingsCacheKey, EMBEDDINGS_PATH, rerankCacheKey, RERANK_PATH, gatewayCreditsStatus, oxAlphaAvailable, probeOxAlphaAvailability, OX_ROUTE, oxUpstreamIsFree, isFlatTier, METERED_MAX_QUOTE_USD, warmQuoteTokenCounts, QUOTE_WARM_MIN_CHARS } from "./tools/llm-gateway-kit.js";
 // /v1/audio/speech stays behind OPENROUTER_TTS_ENABLED as a rollout gate:
 // @x402/express (v2.16) runs the handler first and settles only a <400
 // response, so a 502 is never charged — but an UNLISTED route returns no 402
@@ -617,10 +649,10 @@ import { CVE_TOOLS } from "./tools/cve-kit.js";
 import { MCP_PACKAGE_TOOLS } from "./tools/mcp-package-kit.js";
 import { CRYPTO_SIGNALS_TOOLS } from "./tools/crypto-signals-kit.js";
 import { CRAWL_TOOLS } from "./tools/crawl-kit.js";
-import { X_DATA_TOOLS, xDataEnabled, xDataSpendStatus } from "./tools/x-data-kit.js";
+import { X_DATA_TOOLS, xDataEnabled, xDataSpendStatus, refreshXDataSpendShared } from "./tools/x-data-kit.js";
 import { jevSpendStatus, orderByJudgment } from "./tool-judge.js";
 import { noteRouteAnswer, noteRoutePurchase } from "./route-conversion.js";
-import { EXA_TOOLS, exaEnabled, exaSpendStatus, exaAllowanceStatus, exaCallsToday } from "./tools/exa-kit.js";
+import { EXA_TOOLS, exaEnabled, exaSpendStatus, refreshExaSpendShared, exaAllowanceStatus, exaCallsToday } from "./tools/exa-kit.js";
 import { upstreamBudgetStatus, registerUpstreamCounter } from "./upstream-budgets.js";
 import { hardCapStatus, startHardCapSync } from "./upstream-hard-caps.js";
 // Exa is also an indexed seller the crawlers read unpaid; its budget counts only
@@ -687,6 +719,7 @@ import { createRegistrationLimiter } from "./registration-limits.js";
 import { flushJsonDocuments } from "./json-document.js";
 import { flushSqlQueryStats, sqlQueryStatsReport } from "./sql-query-stats.js";
 import { flushXSearchStats, xSearchStatsReport } from "./x-search-stats.js";
+import { noteDiscoveryRefusal, noteDiscoveryServed, noteDiscoveryClientCall, flushDiscoveryRefusals, loadDiscoveryRefusals, discoveryRefusalsReport } from "./discovery-refusals.js";
 import { loadRemovedOrigins } from "./x402-index.js";
 import { unloadedStores } from "./store-retry.js";
 import { dispatchEligibility, dispatchLegend } from "./dispatch-eligibility.js";
@@ -2467,7 +2500,12 @@ for (const def of Object.values(CATALOG)) {
 // price and the dearest flat tier a model can be served under.
 const FLAT_TIER_MAX_USD = Math.max(0, ...Object.keys(TIERS).filter(isFlatTier).map((k) => Number(TIERS[k].price) || 0));
 for (const def of Object.values(CATALOG)) {
-  const floor = Number(String(def.price ?? "").replace(/[^0-9.]/g, "")) || 0;
+  const list = Number(String(def.price ?? "").replace(/[^0-9.]/g, "")) || 0;
+  // A quoted tool whose list price is not its cheapest quote declares its own
+  // floor (quoteMinUsd, from the same config its quote function reads): the
+  // range every surface prints as "from" starts there, never above a price
+  // the 402 can ask. A tool that declares none starts at its list price.
+  const floor = typeof def.quote === "function" && Number.isFinite(def.quoteMinUsd) && def.quoteMinUsd > 0 ? def.quoteMinUsd : list;
   // A quoted tool may declare its own ceiling (quoteMaxUsd); the metered cap
   // is the ceiling only for the tools that do not.
   if (typeof def.quote === "function") def.quoteRange = { minUsd: floor, maxUsd: Number.isFinite(def.quoteMaxUsd) && def.quoteMaxUsd >= floor ? def.quoteMaxUsd : METERED_MAX_QUOTE_USD };
@@ -2803,6 +2841,9 @@ app.use((req, res, next) => {
   // client by the MCP limiter), so both are protected too.
   if (cp.startsWith("/v1/") || cp === "/v1" || cp.startsWith("/v1beta/") || cp.startsWith("/api/chain/") || cp === "/mcp" || cp.startsWith("/mcp/") || Object.prototype.hasOwnProperty.call(CATALOG, `GET ${cp}`) || Object.prototype.hasOwnProperty.call(CATALOG, `POST ${cp}`)) return next();
   noteShed(why);
+  // A search turned away here is counted with the discovery rules' own
+  // refusals (src/discovery-refusals.js), under the rule "load-gate".
+  if ((cp === "/api/find" || cp === "/api/route") && !isSyntheticRequest(req)) noteDiscoveryRefusal({ address: clientIp(req), userAgent: req.headers["user-agent"], route: cp.slice(5), rule: "load-gate" });
   return shedResponse(res, 2);
 });
 // Canonical host: www.<host> answers a 301 to the apex (path + query kept),
@@ -3020,8 +3061,9 @@ app.get("/__operator/followups.json", (req, res) => {
 // Only the production server posts: a FREE_MODE boot, a process without
 // NODE_ENV=production and a process with no durable queue state (no state
 // database and no state file) stay read-only, so a local boot that copies the
-// production variables never becomes a second poster. It replaces .github/workflows/tweet-queue.yml, which is disabled at
-// cutover so exactly one poster runs. `draining` is read at tick time.
+// production variables never becomes a second poster. It replaced the scheduled
+// GitHub workflow that used to post the queue, so exactly one poster runs.
+// `draining` is read at tick time.
 const _tweetQueue = createTweetQueue({ ...tweetQueueOptionsFromEnv(process.env), isDraining: () => draining });
 _tweetQueue.start();
 // Whether the Redis behind REDIS_URL keeps what it is given
@@ -3045,6 +3087,14 @@ app.get("/__operator/tool-failures.json", async (req, res) => {
   const onchainSqlQueries = await sqlQueryStatsReport().catch(() => null);
   const xSearchAuthors = await xSearchStatsReport().catch(() => null);
   res.set("Cache-Control", "private, no-store").json({ ...(await toolFailureMonitor().report()), robinhoodOrder: robinhoodOrderView(), chainRefusalHolds: chainRefusalHolds(), onchainSqlQueries, xSearchAuthors });
+});
+// Who the free search routes refuse (src/discovery-refusals.js): per UTC day,
+// refusals by route and rule, distinct refused clients, the top clients by
+// refusals (a keyed digest and a User-Agent family, never an address) with
+// what each went on to do, and the share the top 1, 5 and 20 hold. 8 days.
+app.get("/__operator/discovery-refusals.json", async (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  res.set("Cache-Control", "private, no-store").json(await discoveryRefusalsReport());
 });
 // Direct-upstream A/B (src/gateway-direct-upstream.js): attempts, failures by
 // bucket and p50/p90 latency per upstream for the listed model ids.
@@ -3168,6 +3218,17 @@ if (_mppSubs) {
     _mppSubs.sweepStaleCanaries().catch((e) => console.warn("[mpp-subs] canary sweep failed:", String(e?.message || e).slice(0, 200)));
   }, 60_000);
   t.unref?.();
+  // The ended-subscription sweep (leased): destroys an ended subscription's
+  // signing key, reduces its record and deletes it after the retention
+  // period (src/mpp-subscription-retention.js). Never touches one that can
+  // still be pulled.
+  _mppSubs.start();
+  // Subscription payers are screened against the list the x402 payer screen
+  // and Tempo direct mode load (src/sanctions-screen.js). Those start it
+  // during boot with their own timing; this covers a server that runs
+  // neither (FREE_MODE with subscriptions on), after they have had their turn.
+  const s = setTimeout(contained("sanctions-screen-start", () => { if (!sanctionsScreenStarted()) startSanctionsScreen(); }), 30_000);
+  s.unref?.();
 }
 // Prepaid card credits (src/credits.js): same rollout switch
 // as the human checkout. The GATE mounts inside the paywall block below
@@ -3807,7 +3868,9 @@ app.get(["/health", "/health/ready"], (req, res) => {
     // reached — the state has to be observable to be debuggable.
     sharedLimit: sharedLimitEnabled(),
     replicaDivisor: Math.max(1, Number(process.env.RATE_LIMIT_REPLICAS) || 1),
-    baseNotifications: baseNotificationsEnabled(),
+    // Presence of the key only; no client reads it (the Base Notifications
+    // helpers were removed 2026-10-04). The field stays for outside readers.
+    baseNotifications: Boolean((process.env.BASE_NOTIFICATIONS_API_KEY || "").trim()),
   };
   res.status(ok ? 200 : 503).json({ ok, checks, flags, meta: { ...meta, ...diagnostics } });
 });
@@ -3907,7 +3970,10 @@ app.get("/api/gateway-status", async (req, res) => {
   const full = operatorView(req, res);
   // The wrong-credential and unauthenticated-CDN-peer counts every replica
   // contributed to, when shared.
-  await Promise.all([refreshOperatorAuthShared(), refreshCdnOriginShared()]);
+  // Also the shared day behind xDataSpend and exaSpend: a new process's own
+  // counters start empty, so each word is built from the larger of the two
+  // (one bounded read each, reused for a few seconds; never rejects).
+  await Promise.all([refreshOperatorAuthShared(), refreshCdnOriginShared(), refreshXDataSpendShared(), refreshExaSpendShared()]);
   const spend = { xDataSpend: xDataSpendStatus(), exaSpend: exaSpendStatus(), exaAllowance: exaAllowanceStatus(), jevSpend: jevSpendStatus() };
   const budgets = upstreamBudgetStatus();
   // The global unsettled external-spend ceiling: one word, never a figure.
@@ -3937,11 +4003,12 @@ app.get("/api/gateway-status", async (req, res) => {
     // payout screen: one word publicly, counts and the last error for the operator.
     sanctions: full ? { ...sanctionsHealth(), ...sanctionsStatus() } : sanctionsHealth(),
     // The payment-party screen (src/sanctions-screen.js) of Tempo direct
-    // mode and of x402 payers (src/x402-payer-screen.js): fresh / stale /
+    // mode, of x402 payers (src/x402-payer-screen.js) and of MPP
+    // subscription payers (src/mpp-subscriptions.js): fresh / stale /
     // missing, while either is on. One word publicly; counts and the last
     // load time for the operator.
     ...(sanctionsScreenStarted()
-      ? { sanctionsScreen: (() => { try { return full ? { ...sanctionsScreenOperatorView(), x402: x402PayerScreenView() } : { status: sanctionsScreenStatus() }; } catch { return { status: "unknown" }; } })() }
+      ? { sanctionsScreen: (() => { try { return full ? { ...sanctionsScreenOperatorView(), x402: x402PayerScreenView(), ...(_mppSubs ? { mppSubscriptions: _mppSubs.payerScreenView() } : {}) } : { status: sanctionsScreenStatus() }; } catch { return { status: "unknown" }; } })() }
       : {}),
     mppEvmDomainFallback: full ? mppFallbackStatus() : publicFallback(mppFallbackStatus()),
     loopLag: full ? loopLagStatus() : publicLoopLag(loopLagStatus()),
@@ -3973,7 +4040,8 @@ app.get("/api/gateway-status", async (req, res) => {
     // and the status Worker page on unresolved and full; a settled, unserved
     // entry becomes an owed debt that refundsOwed covers); gatewayBalance reads
     // off / unknown / ok / withdraw (our Gateway balance is past
-    // GATEWAY_WITHDRAW_ALERT_USD). One word each publicly; the figure and
+    // GATEWAY_WITHDRAW_ALERT_USD; the heartbeat and the status Worker page
+    // on withdraw). One word each publicly; the figure and
     // the per-domain split on the operator view only.
     gatewayPending: { status: await gatewayPendingStatus() },
     // EVM settlements that failed naming a transaction or an authorization
@@ -3987,7 +4055,9 @@ app.get("/api/gateway-status", async (req, res) => {
     // The shared admission and money controls (src/shared-limits.js): on (the
     // store answers), memory (no Redis configured: every control is this
     // process's own), degraded (Redis configured, a command failed inside the
-    // last minute). One word publicly; counts for the operator.
+    // last minute). A second word, alert, reads sustained once degraded has
+    // held ten minutes without a break (the heartbeat and the status Worker
+    // page on it), else ok. Words publicly; counts for the operator.
     sharedLimits: (() => { try { return sharedLimitsStatus({ full }); } catch { return { status: "unknown" }; } })(),
     // Money writes waiting on this container's local disk for the database
     // (src/ledger-mirror.js journals: sales, refund debts, card checkout
@@ -4077,6 +4147,20 @@ app.get("/api/gateway-status", async (req, res) => {
     // buyerRefusals reads ok / refusing: the settle breaker refused a key that
     // had settled a call in its window (src/gateway-settle-breaker.js) inside
     // the last BUYER_REFUSAL_WINDOW_MS; the count is on the operator detail.
+    // settleFailures reads ok / burst: GATEWAY_SETTLE_BREAKER_GLOBAL_MAX
+    // distinct buyers had /v1 payments verify and then fail to settle inside
+    // one breaker window, or one payer's /v1 failures read refusing on
+    // GATEWAY_SETTLE_BREAKER_MULTI_NETWORK_MIN networks inside it
+    // (src/gateway-settle-breaker.js); burst holds for one
+    // window after the count trips. An alarm only: no request is refused for
+    // it. One word publicly; the counts for the operator.
+    settleFailures: await gatewaySettleFailuresStatus({ full }).catch(() => ({ status: "unknown" })),
+    // unsettledReports reads ok / burst: COMPOSITE_GUARD_GLOBAL_MAX_FAILS
+    // report or media runs spent upstream and then did not settle inside one
+    // guard window (src/composite-spend-guard.js); burst holds for
+    // COMPOSITE_GUARD_GLOBAL_PAUSE_MS after the count trips. An alarm only:
+    // no request is refused for it. One word publicly; counts for the operator.
+    unsettledReports: await compositeGuardAlarmStatus({ full }).catch(() => ({ status: "unknown" })),
     // containedTurns reads ok / repeating: a scheduled turn under contained()
     // (src/contained-turn.js) threw in each of the last three or more
     // consecutive minutes; the names are on the operator view and the counts
@@ -4102,8 +4186,10 @@ app.get("/api/gateway-status", async (req, res) => {
     // replayStore reads pending while a settled payment's consumed mark that
     // the shared store missed is held on this process only and written again
     // by the replay guard's retry loop (src/replay-guard.js), ok otherwise.
-    // One word publicly; the counts (pending, missed, recovered, abandoned)
-    // for the operator.
+    // A second word, alert, reads sustained once pending has held ten
+    // minutes without a break (the heartbeat and the status Worker page on
+    // it), else ok. Words publicly; the counts (pending, missed, recovered,
+    // abandoned) for the operator.
     replayStore: (() => { try { return replayGuardStoreStatus({ full }); } catch { return { status: "unknown" }; } })(),
     // subscriptionRenewals reads unconfirmed while a wallet-billed monitor
     // renewal has stayed unconfirmed (its send's landing undecided by the
@@ -5027,6 +5113,10 @@ if (_mppSubs) {
       if (r.receipt) res.set("Payment-Receipt", r.receipt);
       return res.json(r);
     } catch (e) {
+      // The paying wallet was screened out before anything was sent: the
+      // per-call Tempo rail's own refusal, and no fresh challenge (another
+      // signature from this wallet would be refused the same way).
+      if (e?.screenRejected) return sendMppProblem(res, tempoRefusalProblem("screen-rejected"));
       if (e?.statusCode === 402) {
         // Spec shape for a rejected credential: 402 + a FRESH challenge + an
         // RFC 9457 problem saying why, same as the tempo/charge gate answers.
@@ -6010,7 +6100,7 @@ app.get("/__operator/discovery-gap.json", async (req, res) => {
     });
     if (!gap) {
       // Absence of data, said plainly. Never "0 unattributed".
-      return res.json({ ok: false, reason: "no-merchant-data", note: "The on-chain merchant scan returned nothing, so the size of the blind spot is UNKNOWN — not zero.", errors: econ?.errors || [] });
+      return res.json({ ok: false, reason: "no-merchant-data", note: "The on-chain merchant scan returned nothing, so the size of the blind spot is UNKNOWN, not zero.", errors: econ?.errors || [] });
     }
     res.json({ ok: true, asOf: new Date().toISOString(), ...gap });
   } catch (e) {
@@ -7447,6 +7537,10 @@ const DISCOVERY_TEST_HANG_QUERY = process.env.FREE_MODE === "true" && process.en
 function discoveryGateStatus() {
   return { ...discoveryInFlight.snapshot(), maxInFlight: DISCOVERY_MAX_INFLIGHT, deadlineMs: DISCOVERY_COMPUTE_DEADLINE_MS };
 }
+// What the two per-client 429s say about calling tools: the search limiter and
+// the per-client compute share are read only in serveCachedDiscovery, so no
+// tool route (paid or proof-of-work) ever draws on them.
+const DISCOVERY_LIMIT_SCOPE = "This limit covers only uncached searches on /api/find and /api/route. Tool calls, paid or proof-of-work, are not counted against it.";
 async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlug, req, res) {
   const startedAt = Date.now();
   const synthetic = isSyntheticRequest(req);
@@ -7456,6 +7550,9 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
   // A shed refusal is deliberate load control with its own counter (noteShed,
   // /__operator/perf.json); it is not recorded as a server error.
   let shed = false;
+  // Each refusal below is counted by rule under a keyed client digest
+  // (src/discovery-refusals.js): one Map update, nothing stored on this path.
+  const refused = (rule) => { if (!synthetic) noteDiscoveryRefusal({ address: clientIp(req), userAgent: req.headers["user-agent"], route: analyticsSlug.slice(1), rule }); };
   try {
     let cacheKey = null;
     if (policy && cacheEnabled()) {
@@ -7470,21 +7567,27 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
     }
     if (!synthetic && !isDiscoveryLoopback(req) && discoveryComputeLimiter.check(clientIp(req)).limited) {
       status = 429;
+      refused("client-rate");
       res.set("Retry-After", "60");
       return res.status(429).json({
         error: "Too many uncached searches",
         detail: "Each client gets 30 uncached searches a minute and 600 an hour; repeated queries are served from cache and never count. Slow down and retry shortly.",
         retryAfterSeconds: 60,
+        reason: "discovery-client-rate",
+        toolCalls: DISCOVERY_LIMIT_SCOPE,
       });
     }
     const clientBudget = !synthetic && !isDiscoveryLoopback(req) ? discoveryClientBudget(clientIp(req)) : null;
     if (clientBudget?.over()) {
       status = 429;
+      refused("client-compute");
       res.set("Retry-After", "10");
       return res.status(429).json({
         error: "Too many uncached searches at once",
         detail: `Each client gets ${DISCOVERY_CLIENT_CPU_MS} ms of uncached search compute per ${DISCOVERY_CLIENT_WINDOW_MS / 1000} s, so one burst cannot slow searches for everyone else. Repeated queries are served from cache and never count. Spread the searches out and retry shortly.`,
         retryAfterSeconds: 10,
+        reason: "discovery-client-compute",
+        toolCalls: DISCOVERY_LIMIT_SCOPE,
       });
     }
     // Global CPU budget for uncached searches across every caller (the
@@ -7493,11 +7596,13 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
     if (!synthetic && !isDiscoveryLoopback(req) && discoveryCpuBudget.over()) {
       status = 503; shed = true;
       noteShed("discovery-budget");
+      refused("shared-compute");
       return shedResponse(res, 2);
     }
     if (!synthetic && !isDiscoveryLoopback(req) && discoveryInFlight.live() >= DISCOVERY_MAX_INFLIGHT) {
       status = 503; shed = true;
       noteShed("discovery-inflight");
+      refused("inflight");
       return shedResponse(res, 2, { reason: "discovery-inflight" });
     }
     const computeStarted = Date.now();
@@ -7533,6 +7638,7 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
     if (pastDeadline) {
       status = 503; shed = true;
       noteShed("discovery-deadline");
+      refused("deadline");
       console.warn(`[discovery] ${analyticsSlug} compute passed the ${DISCOVERY_COMPUTE_DEADLINE_MS}ms deadline (query ${String(input?.q ?? "").length} chars): slot released, answer dropped`);
       return shedResponse(res, 2, { reason: "discovery-deadline" });
     }
@@ -7561,6 +7667,9 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
     res.status(status).json({ error: errorMessage });
   } finally {
     const latencyMs = Date.now() - startedAt;
+    // A client refused earlier today that is now served: a Map lookup, and a
+    // mark only when that client is tracked.
+    if (status === 200 && !errored && !synthetic) noteDiscoveryServed(clientIp(req));
     if (!shed) recordToolCall({ slug: analyticsSlug, latencyMs, cached, errored, status, synthetic }).catch(() => {});
     capturePostHogToolCall({ slug: analyticsSlug, latencyMs, cached, errored, status, synthetic });
   }
@@ -9949,7 +10058,7 @@ app.get("/api/pricing", (_req, res) => {
         .map(([route, def]) => ({
           path: route.split(" ")[1],
           price: def.price,
-          ...(typeof def.quote === "function" ? { quoted: true, fromUsd: Number(def.price.replace("$", "")) } : {}),
+          ...(typeof def.quote === "function" ? { quoted: true, fromUsd: fromUsdOf(def) } : {}),
           ...(typeof def.tierQuote === "function" ? { pricedByModel: true } : {}),
         }))
         .filter((t) => t.path.startsWith("/v1/"))
@@ -10115,6 +10224,17 @@ const asyncJobs = createAsyncJobs({
   quoteOf: quotedPriceUsd,
   paidOf: ({ basePriceUsd, receipt, meteredUsd, req }) => paidPriceUsd({ basePriceUsd, caip2: receipt?.network ?? null, meteredUsd, paymentHeader: paymentHeaderOf(req) }),
 });
+// A catalog tool call is always answered in full (src/full-answer.js): the
+// conditional and range request headers are removed here, before every gate,
+// the method aliases, the idempotency replay, the job loopback and the
+// handlers, so a matching If-None-Match never turns a tool's 200 into an
+// empty 304. Keyed on the path, whatever the method, so an aliased POST or
+// HEAD is covered. Free documents are not catalog routes and keep their 304.
+let catalogPathSet = null;
+app.use(fullAnswerMiddleware((path) => {
+  catalogPathSet ??= new Set(Object.keys(CATALOG).map((route) => route.split(" ")[1]).filter(Boolean));
+  return catalogPathSet.has(path);
+}));
 // A job's loopback (HTTP job or MCP task) carries a progress key; the handler
 // reports its stages to that job through the request scope (src/job-progress.js).
 app.use(progressMiddleware());
@@ -10148,46 +10268,30 @@ if (CDN_PROXY_ON) app.use(cdnSyncWindowMiddleware({ asyncRouteOf, wantsAsync, ca
 app.use(slowSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPaymentAttempt, followsJobAnswer, isInternal: isInternalReplay, isTempoPush }));
 app.use(asyncJobs.middleware);
 app.get("/api/jobs/:id", asyncJobs.statusHandler);
-// A metered chat body naming a model id the upstream does not serve is
-// refused before any payment gate (src/model-catalog.js, which fails open),
-// so the buyer signs nothing for a call that cannot be served. A Tempo push
-// credential has already paid: its gate's own input check answers it.
+// A metered /v1 body that cannot be served (a model id the upstream does not
+// serve, an input over the model's character cap) is refused before any
+// payment gate on every wire: chat completions, Messages, Responses and
+// generateContent (src/gateway-prepayment.js, one check; src/model-catalog.js
+// fails open), so the buyer signs nothing for a call that cannot be served.
+// The answer is the wire's own error object beside the machine-readable
+// fields and a ready-to-run howToCall. A Tempo push credential has already
+// paid: its gate's own input check answers it.
 app.use((req, res, next) => {
   if (req.method !== "POST" || isTempoPush(req)) return next();
   // req.path is already the catalog's spelling (case and trailing slash
-  // folded above), so the variants are checked too.
+  // folded above, SDK-shaped paths rewritten), so the variants are checked too.
   const def = CATALOG[`POST ${req.path}`];
-  if (def?.slug !== "v1-chat-metered") return next();
+  if (!def || !Object.hasOwn(PRE_PAYMENT_WIRES, def.slug)) return next();
   const startedAt = Date.now();
-  let verdict = null, tooLarge = null;
-  try {
-    const input = handlerInputOf(req, def);
-    const model = canonicalModel(input?.model);
-    verdict = model ? meteredModelVerdict(model) : null;
-    // An input over the model's character cap is refused here too, with the
-    // cap, the size read and models whose window takes it.
-    if (!verdict) tooLarge = meteredInputSizeRefusal(input);
-  } catch { return next(); }
-  if (verdict) {
-    recordPrePaymentRefusal(req, def.slug, 400, verdict.message, startedAt);
-    const suggestions = verdict.suggestions || [];
-    return res.status(400).json({
-      error: { message: verdict.message, type: "invalid_request_error", code: "unknown_model", ...(suggestions.length ? { suggestions } : {}) },
-      tool: def.slug,
-      ...(suggestions.length ? { suggestions, ...howToCallField(def, { bodyFields: { model: suggestions[0] } }) } : howToCallField(def)),
-    });
-  }
-  if (tooLarge) {
-    recordPrePaymentRefusal(req, def.slug, 400, tooLarge.message, startedAt);
-    const fields = toolErrorFields(tooLarge);
-    return res.status(400).json({
-      error: { message: tooLarge.message, type: "invalid_request_error", code: "input_too_large", ...fields },
-      tool: def.slug,
-      ...fields,
-      ...(fields.suggestions ? howToCallField(def, { bodyFields: { model: fields.suggestions[0] } }) : {}),
-    });
-  }
-  return next();
+  let refusal = null;
+  try { refusal = meteredPrePaymentRefusal(def.slug, handlerInputOf(req, def)); } catch { return next(); }
+  if (!refusal) return next();
+  recordPrePaymentRefusal(req, def.slug, refusal.status, refusal.message, startedAt);
+  // The retry: the route's example with the closest served id, when one is
+  // suggested; an unknown id with nothing close gets the plain example.
+  const retry = refusal.suggestions.length ? howToCallField(def, { bodyFields: { model: refusal.suggestions[0] } })
+    : refusal.code === "unknown_model" ? howToCallField(def) : {};
+  return res.status(refusal.status).json({ ...refusal.body, tool: def.slug, ...refusal.fields, ...retry });
 });
 // A large metered body's token count is taken here, in pieces that yield the
 // loop, before the gates price it synchronously (warmQuoteTokenCounts in
@@ -10682,10 +10786,30 @@ if (FREE_MODE) {
       // A flat chat tier's unpaid 402 names its metered twin on the same wire
       // (additive `meteredTwin`; x402 clients read `accepts`): the same models,
       // priced from this body instead of one flat price per call. Only on a
-      // first-contact quote: a refused payment (an x402 header, or an
-      // Authorization credential such as a Tempo credential or a credits key)
-      // keeps its own explanation.
+      // first-contact quote: a refused payment (an x402 header that decodes,
+      // or an Authorization credential such as a Tempo credential or a
+      // credits key) keeps its own explanation. An x402 header that does not
+      // decode was removed at intake (canonicalizePaymentHeaders), so that
+      // request reads as first contact here.
       const firstContact = !req.header("x-payment") && !req.header("payment-signature") && !req.headers.authorization;
+      // What this call costs in dollars and what to do next, for a caller
+      // with no x402 client (src/payment-guide.js). Body only and additive,
+      // after the fields below; the PAYMENT-REQUIRED header and every other
+      // body field are untouched. First contact only: a decodable payment
+      // that is refused, or an Authorization credential, keeps its own
+      // explanation; a header that did not decode is first contact, so its
+      // 402 carries the block beside reason malformed-header. Rollback lever:
+      // PAYMENT_GUIDE_402=off.
+      if (firstContact && process.env.PAYMENT_GUIDE_402 !== "off") {
+        const origJson = res.json.bind(res);
+        res.json = (body) => {
+          if (res.statusCode === 402 && body && typeof body === "object" && !Array.isArray(body) && !body.payment) {
+            const guide = paymentGuideFor(def, req, res);
+            if (guide) body = { ...body, payment: guide };
+          }
+          return origJson(body);
+        };
+      }
       // The call to make once paid, for a buyer that does not read the Bazaar
       // extension (src/how-to-call.js): the same request the input-validation
       // 400 carries, from the tool's own example (its method and URL only when
@@ -11191,6 +11315,10 @@ app.use((req, res, next) => {
         // itself here is booked as a sale. A trial moves no money.
         // FREE_MODE serves without any payment gate: booked as "free", never as a sale.
         const method = isHeartbeat ? "heartbeat" : powAccepted ? "pow" : trialAccepted ? "trial" : req.creditsSettled ? "credits" : FREE_MODE ? "free" : "usdc";
+        // A client the free search refused earlier today that completes a
+        // tool call (src/discovery-refusals.js): a Map lookup, marked only
+        // for a tracked client. Never our own probes or FREE_MODE.
+        if (method !== "heartbeat" && method !== "free" && !isSyntheticRequest(req)) noteDiscoveryClientCall(clientIp(req), { paid: method === "usdc" || method === "credits" });
         // Tempo settlements (src/mpp-tempo.js) never carry a PAYMENT-RESPONSE
         // header — @x402/express never runs on that path — so without this
         // flag they'd fall through networkFromPaymentResponse(null) and get
@@ -11553,6 +11681,43 @@ function noteToolOutcomeOnClose(req, res, slug, def = null) {
   });
 }
 
+// A 4xx whose request named no meaningful key, or none the tool declares, is
+// a scanning call, not a schema mismatch (see the kit binder's catch, which
+// reads the same rule).
+function isProbeShape(shape, tool) {
+  const meaningfulKeys = (shape || []).filter((k) => !["b:params", "b:input", "b:args", "b:slug"].includes(k));
+  const declared = Object.keys(tool?.discovery?.inputSchema?.properties || {});
+  const hitsDeclared = meaningfulKeys.some((k) => declared.includes(k.replace(/^[bq]:/, "")));
+  return meaningfulKeys.length === 0 || (declared.length > 0 && !hitsDeclared);
+}
+// The call-log row for a tool route served outside the kit binder (the URL
+// tools and the memory family): the same recordToolCall row the binder
+// writes, one per call that reached the handler. Latency is the handler's
+// own time; the status is the FINAL response's, read when the response has
+// closed (499 when the buyer left before any answer), so writing the row
+// never delays or changes the answer. An unpaid 402 never reaches a handler
+// and writes no row, as for a kit tool. slugOf is a slug or (req) => slug.
+function withToolCallLog(slugOf, handler) {
+  return async function loggedToolCall(req, res, ...rest) {
+    const startedAt = Date.now();
+    let latencyMs = null;
+    try {
+      res.once("close", () => {
+        try {
+          const slug = typeof slugOf === "function" ? slugOf(req) : slugOf;
+          if (!slug) return;
+          const status = res.headersSent ? res.statusCode : 499;
+          // A 402 here is a settlement that failed after the handler, never a scan.
+          const probe = status >= 400 && status < 500 && status !== 402 && isProbeShape(requestShape(req), CATALOG[`${req.method} ${req.path}`]);
+          recordToolCall({ slug, latencyMs: latencyMs ?? Date.now() - startedAt, cached: false, errored: status >= 400, status, synthetic: isSyntheticRequest(req), probe }).catch(() => {});
+        } catch { /* the call log never affects a call */ }
+      });
+    } catch { /* the call log never affects a call */ }
+    try { return await handler(req, res, ...rest); }
+    finally { latencyMs = Date.now() - startedAt; }
+  };
+}
+
 function sendToolError(res, err, slug) {
   const status = err?.statusCode || 502;
   // Every tool error answer logs through the one function, so a bespoke route's
@@ -11585,7 +11750,7 @@ function contentsUrlOf(req, res, slug) {
   return input.url;
 }
 
-app.post("/api/extract", async (req, res) => {
+app.post("/api/extract", withToolCallLog("extract", async (req, res) => {
   const url = contentsUrlOf(req, res, "extract");
   if (!url) return;
   try {
@@ -11593,9 +11758,9 @@ app.post("/api/extract", async (req, res) => {
   } catch (err) {
     sendToolError(res, err, "extract");
   }
-});
+}));
 
-app.get("/api/meta", async (req, res) => {
+app.get("/api/meta", withToolCallLog("meta", async (req, res) => {
   const { url } = req.query;
   if (!url) return res.status(400).json({ error: 'Missing "url" query parameter' });
   try {
@@ -11603,9 +11768,9 @@ app.get("/api/meta", async (req, res) => {
   } catch (err) {
     sendToolError(res, err, "meta");
   }
-});
+}));
 
-app.get("/api/dns", async (req, res) => {
+app.get("/api/dns", withToolCallLog("dns", async (req, res) => {
   const { name, type } = req.query;
   if (!name) return res.status(400).json({ error: 'Missing "name" query parameter' });
   try {
@@ -11613,9 +11778,9 @@ app.get("/api/dns", async (req, res) => {
   } catch (err) {
     sendToolError(res, err, "dns");
   }
-});
+}));
 
-app.post("/api/render", async (req, res) => {
+app.post("/api/render", withToolCallLog("render", async (req, res) => {
   // Bespoke route (outside the generic binder): record the same tool_call the
   // binder emits, so latency and errors exist for it (none did until 2026-09-22).
   const _t0 = Date.now();
@@ -11639,9 +11804,9 @@ app.post("/api/render", async (req, res) => {
   } catch (err) {
     if (!res.headersSent) sendToolError(res, err, "render");
   }
-});
+}));
 
-app.get("/api/screenshot", async (req, res) => {
+app.get("/api/screenshot", withToolCallLog("screenshot", async (req, res) => {
   // Bespoke route (outside the generic binder): record the same tool_call the
   // binder emits, so latency and errors exist for it (none did until 2026-09-22).
   const _t0 = Date.now();
@@ -11658,9 +11823,9 @@ app.get("/api/screenshot", async (req, res) => {
   } catch (err) {
     if (!res.headersSent) sendToolError(res, err, "screenshot");
   }
-});
+}));
 
-app.post("/api/pdf", async (req, res) => {
+app.post("/api/pdf", withToolCallLog("pdf", async (req, res) => {
   // Bespoke route (outside the generic binder): record the same tool_call the
   // binder emits, so latency and errors exist for it (none did until 2026-09-22).
   const _t0 = Date.now();
@@ -11672,7 +11837,7 @@ app.post("/api/pdf", async (req, res) => {
   } catch (err) {
     sendToolError(res, err, "pdf");
   }
-});
+}));
 
 // The same work these bespoke routes do, as handlers, so a Decide plan run
 // through execute (and route-execute) can call them like any kit tool: they
@@ -11710,7 +11875,7 @@ const targetOwner = (req, actor) => {
   const o = (req.body?.owner ?? req.query.owner ?? "").toString().toLowerCase();
   return o && /^0x[0-9a-f]{40}$/.test(o) ? o : actor;
 };
-const memHandler = (fn) => async (req, res) => {
+const memHandler = (fn) => withToolCallLog((req) => CATALOG[`${req.method} ${req.path}`]?.slug, async (req, res) => {
   // Defense in depth: the PoW gate already refuses memory routes via
   // WALLET_ONLY_SLUGS in src/pow.js, but if that set ever drifts, refuse here
   // too. Memory's whole identity model is "the paying wallet IS the caller",
@@ -11732,7 +11897,7 @@ const memHandler = (fn) => async (req, res) => {
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: redactSecrets(err?.message) });
   }
-};
+});
 
 // Optional client request id: a retried write returns the first answer instead of applying twice.
 const memRequestId = (req) => req.body?.requestId ?? req.header("x-memory-request-id") ?? undefined;
@@ -11827,12 +11992,11 @@ for (const tool of ALL_KIT) {
         // credits key, or the client IP (card/SPT buyers and any rail whose
         // payer is only known post-settlement) - nobody is unkeyed.
         const guardKey = payer || (req.mppTempoSender ? `tempo:${req.mppTempoSender}` : req.creditsKeyId ? `credits:${req.creditsKeyId}` : `ip:${clientIp(req)}`);
+        // ownGlobalBound: this slug's failures do not feed the burst alarm
+        // (unsettledReports on /api/gateway-status). The alarm is reported,
+        // never consulted here: no buyer is refused a run for other buyers'
+        // unsettled runs. The per-buyer bound below is the refusal.
         const ownGlobalBound = OWN_GLOBAL_BOUND_SLUGS.has(tool.slug);
-        if (!ownGlobalBound && await compositeGuardGlobalPaused()) {
-          const e = new Error("Premium report generation is briefly paused after a burst of unsettled runs; please retry in a few minutes. Not charged.");
-          e.statusCode = 503;
-          throw e;
-        }
         if (await compositeGuardBlocked(guardKey)) {
           const e = new Error("Too many recent failed settlements on this route from this buyer; blocked briefly to prevent upstream abuse. The block lifts on its own.");
           e.statusCode = 429;
@@ -11856,11 +12020,12 @@ for (const tool of ALL_KIT) {
             // composite is EVM exact only (acceptsForItem), so the Algorand
             // sub-cent refusal the offer gate withdraws can never reach it,
             // and on any other rail nothing withdraws the refused offer - this
-            // guard's per-payer and global bounds are all that stop a billing
-            // lapse becoming an unbounded run of served, never-charged reports.
+            // guard's per-payer bound stops one buyer's run of served,
+            // never-charged reports, and its burst alarm reports a billing
+            // lapse that reaches many buyers.
             // A Circle Gateway batched payment Gateway is still settling is
             // not the buyer's failure (they were told to resend the same
-            // payment): it still feeds the global bound, never the payer's.
+            // payment): it still feeds the burst alarm, never the payer's count.
             const st = res.statusCode;
             if (st === 200) recordCompositeSpendSuccess(guardKey);
             else if (st === 402 && isGatewayPendingAnswer(req, decodeSettleReceipt(res.getHeader("PAYMENT-RESPONSE") || res.getHeader("X-PAYMENT-RESPONSE")))) recordCompositeSpendFailure(null, { global: !ownGlobalBound });
@@ -11903,14 +12068,16 @@ for (const tool of ALL_KIT) {
       // read (Alchemy, CoinGecko, Brave ...) with nothing charged.
       // Per-read that is a fraction of a cent; the breaker bounds the LOOP: a
       // wallet gets MAX_FAILS such outcomes per window before a 429 that runs
-      // before the handler (a >= 400 cancels settlement - the refusal is free),
-      // and a burst across wallets pauses the paid catalog 503 for one window.
+      // before the handler (a >= 400 cancels settlement - the refusal is free).
+      // An EVM payer is counted per network its payment named, so the 429
+      // holds that network only and the wallet can pay on another at once.
       // A settled 200 is a settled outcome in the wallet's window, weighed
       // against its failures; a 4xx the handler threw is neither.
       // FREE_MODE has no settlement, so nothing to breaker there.
-      // global:false - per-wallet only. A catalog read costs a fraction of a
-      // cent; pausing every paid tool over twelve of them would be a lever, not
-      // a guard. The /v1 tiers keep their own global pause inside their handlers.
+      // global:false - per-wallet only: a catalog settle failure does not
+      // feed the /v1 burst alarm (settleFailures on /api/gateway-status),
+      // which the /v1 handlers' own consults feed. No request is refused for
+      // other buyers' settle failures.
       // Keyed on "paid" (not PoW-eligible), not on WALLET_ONLY_SLUGS: the free tier is an
       // allowlist, so a new tool on neither list is paid and must be covered here too.
       if (!FREE_MODE && !isComputePayable(tool)) await gatewaySettleBreakerCheck(req, { global: false });
@@ -12069,12 +12236,7 @@ for (const tool of ALL_KIT) {
       // could not have succeeded with any values is a probe, not a tool error;
       // a caller who sent at least one declared key keeps its real 4xx.
       const shape = status < 500 ? requestShape(req) : null;
-      if (status >= 400 && status < 500) {
-        const meaningfulKeys = (shape || []).filter((k) => !["b:params", "b:input", "b:args", "b:slug"].includes(k));
-        const declared = Object.keys(tool.discovery?.inputSchema?.properties || {});
-        const hitsDeclared = meaningfulKeys.some((k) => declared.includes(k.replace(/^[bq]:/, "")));
-        probe = meaningfulKeys.length === 0 || (declared.length > 0 && !hitsDeclared);
-      }
+      if (status >= 400 && status < 500) probe = isProbeShape(shape, tool);
       // What a handler throws is answered and logged, so a configured secret
       // or a credential-bearing URL an error quotes (an upstream echo, a
       // database driver's connection string) is scrubbed first, on every status.
@@ -12296,6 +12458,9 @@ revenueAllTime({ awaitRebuild: true }).then((t) => { if (!__settledMemo.at) stor
 // /leaderboard, /api/index) are built across turns before the first request,
 // so no reader finds them cold; bounded, so a slow build never holds the boot.
 await Promise.race([ledgerFiguresBoot, new Promise((ok) => setTimeout(ok, LEDGER_FIGURES_BOOT_WAIT_MS).unref())]);
+// Today's refused search clients, read back so one refused before this start
+// is still found when it is served after it (src/discovery-refusals.js). Not awaited.
+void loadDiscoveryRefusals();
 const httpServer = app.listen(PORT, () => {
   listenedAt = Date.now();
   // The deploy overlap window (src/replay-topology.js) is counted from here,
@@ -12355,6 +12520,9 @@ initWithRetry("leads-db", initLeadsDb, { onResult: (r) => { leadsDbReady = !!r.o
 // Powers the public /analytics dashboard. Boot fire-and-forget so a slow DB
 // can't hold up /health.
 initWithRetry("analytics-db", initAnalyticsDb);
+// Rows older than TOOL_CALLS_RETENTION_DAYS are deleted daily, in batches,
+// under a lease (src/analytics-db.js).
+startToolCallRetention();
 
 // PostHog — opt-in via POSTHOG_API_KEY. Same env-gated, fire-and-forget
 // pattern as the other optional infra. Captures tool errors as "tool_error" events. Free tier
@@ -12622,7 +12790,7 @@ let shuttingDown = false;
 // reads held; the flush round below waits on that write with the others.
 let boardSaveAtDrain = false;
 function flushStateQueues({ timeoutMs = 10_000 } = {}) {
-  const flushes = [salesLedgerFlush, refundLedgerFlush, flushJournals, statsFlush, statusStoreFlush, economyHistoryFlush, powReplayFlush, () => boardSaveAtDrain, () => Promise.all([flushSqlQueryStats(), flushXSearchStats()]).then(() => flushJsonDocuments({ timeoutMs }))]
+  const flushes = [salesLedgerFlush, refundLedgerFlush, flushJournals, statsFlush, statusStoreFlush, economyHistoryFlush, powReplayFlush, () => boardSaveAtDrain, () => Promise.all([flushSqlQueryStats(), flushXSearchStats(), flushDiscoveryRefusals()]).then(() => flushJsonDocuments({ timeoutMs }))]
     .map((fn) => { try { return Promise.resolve(fn()); } catch (e) { return Promise.reject(e); } });
   let timer;
   const deadline = new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs); timer.unref?.(); });

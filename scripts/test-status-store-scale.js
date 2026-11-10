@@ -27,6 +27,7 @@
 //
 // Run: node scripts/test-status-store-scale.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { leastOurs } from "./lib/ours-clock.js";
 import Database from "better-sqlite3";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -203,7 +204,9 @@ check("the compared page carries incidents and a full strip", snapNew.incidents.
     store.earliestObservation();
   };
   const ms = [];
-  for (let i = 0; i < 7; i++) { const t = performance.now(); reads(); ms.push(performance.now() - t); }
+  // Synchronous SQLite reads, so each is the time the thread had a core
+  // (scripts/lib/ours-clock.js; on Linux that counts a read's disk wait too).
+  for (let i = 0; i < 7; i++) ms.push(leastOurs(reads, { attempts: 1 }).ms);
   ms.sort((a, b) => a - b);
   const median = ms[3];
   // Measured about 0.1 ms here; the whole-table reads took about 780 ms.

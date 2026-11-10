@@ -247,9 +247,12 @@ async function call(input) {
     const second = __ocrLargeTest.acquire(5_000).then((rel) => { order.push("second"); return rel; });
     const third = __ocrLargeTest.acquire(5_000).then((rel) => { order.push("third"); return rel; });
     ok(__ocrLargeTest.state().waiting === OCR_LARGE_QUEUE_MAX, `two more wait for it (waiting ${__ocrLargeTest.state().waiting})`);
+    // "At once" is read against the wait it would otherwise serve (the 5 s it
+    // asked for) and against the queue: it is refused while both waiters
+    // ahead of it still wait.
     const tOver = Date.now();
     const overflow = await __ocrLargeTest.acquire(5_000).then(() => null, (e) => e);
-    ok(Date.now() - tOver < 100 && overflow?.statusCode === 503 && overflow.retryAfter === 60 && overflow.shed === true && overflow.hint === "large-image-busy" && /Nothing was charged\./.test(overflow.message),
+    ok(Date.now() - tOver < 2_500 && order.length === 0 && __ocrLargeTest.state().waiting === OCR_LARGE_QUEUE_MAX && overflow?.statusCode === 503 && overflow.retryAfter === 60 && overflow.shed === true && overflow.hint === "large-image-busy" && /Nothing was charged\./.test(overflow.message),
       `past ${OCR_LARGE_QUEUE_MAX} waiting, a large image is a 503 at once with Retry-After 60 (got ${overflow?.statusCode})`);
     first();
     const r2 = await second;

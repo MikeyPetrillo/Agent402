@@ -2,7 +2,7 @@
 // Uses a miniature catalog — no server boot, no network.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createHash } from "node:crypto";
-import { buildRouteExecuteTool } from "../src/tools/route-execute.js";
+import { buildRouteExecuteTool, contractFieldsMissing } from "../src/tools/route-execute.js";
 import { USAGE_TOOLS } from "../src/tools/usage-kit.js";
 import { isIdentityBoundRoute } from "../src/payments.js";
 
@@ -419,6 +419,30 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
     const r = await mk(pay, async () => [A, B]).handler({ task: "t", include: "external" }, {});
     ok(calls.length === 2 && r.receipt.seller === B.seller, "a pre-commit 4xx (nothing spent) falls through - the next seller may accept the same params");
   }
+  // #1918 (2026-11-09): a seller refuses the PAID request as invalid input
+  // (sellerStatus 400) and the caller's params lack fields the seller's own
+  // contract requires -> the buyer gets a 400 naming them (from the contract,
+  // never the seller's text), not a gateway 502 that pages as a tool failure.
+  // The money rule is unchanged: post-commit, so B is never tried.
+  {
+    const C = { ...A, requestContract: { state: "declared", required: { body: ["model", "messages"] }, runtimeVerified: false } };
+    let calls = [];
+    const pay = async (url) => { calls.push(url); if (url === C.url) throw err("Seller rejected the paid retry (HTTP 400)", 502, { committed: true, sellerStatus: 400 }); return good; };
+    let threw = null;
+    try { await mk(pay, async () => [C, B]).handler({ task: "t", include: "external", params: { prompt: "hi" } }, {}); } catch (e) { threw = e; }
+    ok(calls.length === 1 && threw && threw.statusCode === 400, `an input refusal against the seller's declared contract answers 400, and B is still not tried (${threw?.statusCode})`);
+    ok(/params\.model, params\.messages/.test(threw?.message || "") && !/not charged/.test(threw?.message || ""), "the 400 names the missing contract fields and makes no not-charged claim (decide relays it where a leg may have paid)");
+    ok(threw?.committed === true, "the committed stamp still rides the error (an in-process caller must know a payment may have left)");
+  }
+  // The same refusal when the params DO carry every required field: the
+  // seller's 400 is not the caller's missing input, so it stays a 502.
+  {
+    const C = { ...A, requestContract: { state: "declared", required: { body: ["messages"] } } };
+    const pay = async (url) => { if (url === C.url) throw err("Seller rejected the paid retry (HTTP 400)", 502, { committed: true, sellerStatus: 400 }); return good; };
+    let threw = null;
+    try { await mk(pay, async () => [C]).handler({ task: "t", include: "external", params: { messages: [] } }, {}); } catch (e) { threw = e; }
+    ok(threw?.statusCode === 502, "an input refusal with every contract field present stays 502 (not the caller's input)");
+  }
   // A REFUSES the payment and the buyer proved on chain it was not charged
   // (committed:false + refused) -> falls through; B was admitted UNPROVEN, so
   // the buyer is told to allow it and the receipt says so (2026-09-02).
@@ -430,7 +454,7 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
     ok(calls.length === 2 && r.receipt.seller === B.seller, "a chain-verified refusal (committed:false) falls through to the next candidate");
     ok(opts[0].allowUnproven === false && opts[1].allowUnproven === true, "allowUnproven rides to the buyer ONLY for the candidate the resolver admitted unproven");
     ok(r.receipt.sellerProof === "unproven", "the receipt says the serving seller was unproven");
-    ok(opts[1].sellerKey === U.seller && !("sellerKey" in opts[0]), "the unproven candidate's index seller key rides to the buyer as sellerKey (its per-seller cap key); a proven one carries none");
+    ok(opts[1].sellerKey === U.seller && opts[0].sellerKey === A.seller, "each candidate's index seller key rides to the buyer as sellerKey (the delivery memo's key, and the unproven lane's per-seller cap key)");
     // A path-scoped seller (origin plus prefix) hands its full key, not its host.
     const P = { ...B, seller: "https://shared.example/app/tenant-a", url: "https://shared.example/app/tenant-a/run", unproven: true };
     let popts = [];
@@ -554,9 +578,10 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
   // module's own cache (keyless here: "unconfigured", never low).
   {
     const { cachedSpendingWalletStatus, spendingWalletReadsLow } = await import("../src/tools/route-execute.js");
-    const t0 = Date.now();
-    const st = await cachedSpendingWalletStatus();
-    ok(st?.status === "unconfigured" && Date.now() - t0 < 200 && (await spendingWalletReadsLow()) === false, `default wallet reader: ${st?.status}, not low, no wait`);
+    // The least of three reads: a read that waits on the network waits every time.
+    const { leastWall } = await import("./lib/ours-clock.js");
+    const { value: st, ms: readMs } = await leastWall(() => cachedSpendingWalletStatus());
+    ok(st?.status === "unconfigured" && readMs < 200 && (await spendingWalletReadsLow()) === false, `default wallet reader: ${st?.status}, not low, no wait`);
   }
   // A seller that answers the unpaid request with a 200 was never paid: the
   // receipt books no underlying spend and the payer's ceiling is given back.
@@ -746,5 +771,16 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
   ok(/judgedOverrideAllowed\(task, candidates, ordered\.items\[0\]\)/.test(judged) && /items: candidates, selection: \{ method: "lexical"/.test(judged), "a judged reorder below the floor keeps the lexical order");
 }
 
+
+// contractFieldsMissing (#1918): only an input refusal (400/422) with a declared
+// body contract names fields; names outside the allowlist are never echoed.
+{
+  const ext = { requestContract: { required: { body: ["model", "messages", "bad name<script>"] } } };
+  ok(JSON.stringify(contractFieldsMissing(ext, {}, { sellerStatus: 400 })) === '["model","messages"]', "missing fields named on a 400, allowlisted names only");
+  ok(JSON.stringify(contractFieldsMissing(ext, { model: "x" }, { sellerStatus: 422 })) === '["messages"]', "a present field is not named; 422 counts as an input refusal");
+  ok(contractFieldsMissing(ext, {}, { sellerStatus: 500 }) === null && contractFieldsMissing(ext, {}, {}) === null, "a 5xx or an unstamped error names nothing");
+  ok(contractFieldsMissing({}, {}, { sellerStatus: 400 }) === null && contractFieldsMissing({ requestContract: { required: {} } }, {}, { sellerStatus: 400 }) === null, "no declared body contract names nothing");
+  ok(contractFieldsMissing(ext, { model: 1, messages: [] }, { sellerStatus: 400 }) === null, "nothing missing -> null");
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

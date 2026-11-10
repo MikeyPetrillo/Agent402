@@ -182,6 +182,28 @@ function assertAccess(label, text, powCount, wires) {
   }
   ok(claims >= 5, `class: the no-receipt claim is found where it is made (${claims} places)`);
   ok(bare.length === 0, `class: every no-receipt claim carries the late-settle exception${bare.length ? ` (missing: ${bare.join(", ")})` : ""}`);
+  // The same claim in other words ("no payment receipt ... moved no money",
+  // "no receipt header was not charged") carries the exception too.
+  const CLAIM2 = /\bno (?:payment )?receipt(?: header)?\b[^.;]{0,90}?(?:moved no money|(?:was|were|is|are) not charged|nothing (?:moved|settled))/gi;
+  let claims2 = 0;
+  const bare2 = [];
+  for (const f of files) {
+    const text = readFileSync(f, "utf8");
+    for (const m of text.matchAll(CLAIM2)) {
+      // A code comment is not copy (one describes a served allowance grant).
+      if (/^\s*(?:\/\/|\/?\*)/.test(text.slice(text.lastIndexOf("\n", m.index) + 1, m.index))) continue;
+      claims2++;
+      const after = text.slice(m.index, m.index + m[0].length + 700).replace(/\\?\n\s*/g, " ");
+      if (!EXC.test(after)) bare2.push(`${f.slice(ROOT.length + 1)}:${text.slice(0, m.index).split("\n").length}`);
+    }
+  }
+  ok(claims2 >= 3, `class: the no-receipt claim in other words is found where it is made (${claims2} places)`);
+  ok(bare2.length === 0, `class: every such claim carries the late-settle exception${bare2.length ? ` (missing: ${bare2.join(", ")})` : ""}`);
+  ok("so a response with no payment receipt, or a receipt marked success:false, moved no money.".match(CLAIM2) && "a response with no receipt header was not charged, and".match(CLAIM2),
+    "control: both sentences that made the claim bare are matched");
+  // A markdown file cannot interpolate the constant: the README carries its text word for word.
+  ok(readFileSync(join(ROOT, "README.md"), "utf8").includes(LATE_SETTLE_EXCEPTION), "README's failed-call point carries LATE_SETTLE_EXCEPTION word for word");
+  ok(readFileSync(join(ROOT, "wiki/Why-Pay-Here.md"), "utf8").includes(LATE_SETTLE_EXCEPTION), "the wiki's failed-call point carries LATE_SETTLE_EXCEPTION word for word");
 }
 
 // ---------------------------------------------------------------------------

@@ -31,11 +31,11 @@ import { observeDelivery } from "../response-observation.js";
 import { isIdentityBoundRoute } from "../payments.js";
 import { evmCredentialBudgetMs, evmCredentialSettleableMs, evmSellerSignBy, EVM_SELLER_ALLOWANCE_MS } from "../evm-validity.js";
 import { cdnSyncLeftMs } from "../cdn-sync-window.js";
-import { PAY_X402_TIMEOUT_MS } from "../buyer-timeouts.js";
+import { PAY_X402_TIMEOUT_MS, PAY_X402_MIN_LEG_MS } from "../buyer-timeouts.js";
 import { spendsBeforeSettlement } from "../composite-spend-guard.js";
 import { upstreamBuyerStatus, evmBuyerChainStatus } from "../upstream-buyer-status.js";
 import { EVM_BUYER_CHAINS, EVM_BUYER_CHAIN_BY_NETWORK, isEvmBuyerChain, evmBuyerChainEnabled, enabledEvmBuyerChains } from "../evm-buyer-chains.js";
-import { recordRouterPurchase } from "../router-purchases.js";
+import { recordRouterPurchase, retractRouterPurchase } from "../router-purchases.js";
 import { adaptParamsToExample } from "../mpp-input-examples.js";
 import { boundRequestUrl, isQueryMethod, BOUND_URL_MAX_CHARS } from "../bound-request-url.js";
 
@@ -140,6 +140,18 @@ export function callRefFrom(req, slug, ts) {
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
+}
+// Body fields the seller's published request contract (src/request-contract.js,
+// projected on each external candidate) requires that `params` does not carry,
+// when the seller's paid answer was an input refusal (400/422). Null otherwise.
+// Names come from the index's own allowlisted projection, never seller text.
+export function contractFieldsMissing(ext, params, err) {
+  if (err?.sellerStatus !== 400 && err?.sellerStatus !== 422) return null;
+  const required = ext?.requestContract?.required?.body;
+  if (!Array.isArray(required) || !required.length) return null;
+  const have = params && typeof params === "object" && !Array.isArray(params) ? params : {};
+  const missing = required.filter((k) => typeof k === "string" && /^[A-Za-z0-9_.-]{1,64}$/.test(k) && !Object.hasOwn(have, k));
+  return missing.length ? missing.slice(0, 8) : null;
 }
 
 const toUsd = (price) => Number(String(price ?? "").replace(/[^0-9.]/g, "")) || 0;
@@ -368,7 +380,7 @@ const traceStep = (req, step, data) => {
   try { trajectoryListener(req, step, data); } catch { /* a listener never changes a payment */ }
 };
 
-export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TIERS[0], resolveExternal = null, payExternal = null, externalEnabled = () => false, externalChains = () => ["base"], spendingWalletStatus = cachedSpendingWalletStatus, recordPurchase = recordRouterPurchase }) {
+export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TIERS[0], resolveExternal = null, payExternal = null, externalEnabled = () => false, externalChains = () => ["base"], spendingWalletStatus = cachedSpendingWalletStatus, recordPurchase = recordRouterPurchase, retractPurchase = retractRouterPurchase }) {
   const EXEC_PRICE_USD = tier.execPriceUsd;
   const UNDERLYING_MAX_USD = tier.underlyingMaxUsd;
   const routeSuffix = tier.slug.replace("route-execute", "");
@@ -547,6 +559,14 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           const cdnLeftMs = cdnSyncLeftMs(req);
           const externalDeadlineMs = cdnLeftMs != null ? Math.max(0, Math.min(ownDeadlineMs, cdnLeftMs - 5_000)) : ownDeadlineMs;
           const refusalBudgetMs = () => Math.max(0, externalDeadlineMs - (Date.now() - startedAt));
+          // THE SELLER CALL'S OWN DEADLINE, where this request has one: a
+          // short rail's budget, or the proxy's wait. It rides into the payer
+          // as `deadlineMs`, the budget for the whole purchase (the unpaid
+          // request, the signature and the paid request together), so a seller
+          // slow on both requests is not paid after the buyer's own payment
+          // has lapsed or after the answer can reach nobody. Null = neither
+          // applies, and the payer keeps its per-request timeout alone.
+          const callBudgetLeftMs = () => (windowBudgetMs != null ? remainingMs() : cdnLeftMs != null ? refusalBudgetMs() : null);
           // FALLTHROUGH ON A SELLER 5xx. Resolve up to SOR_MAX_CANDIDATES live
           // sellers (ranked, settled-desc) for the first chain that has any, so
           // a seller whose OWN upstream is down (a seller's Pyth feed,
@@ -626,6 +646,11 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           for (let __i = 0; __i < candidateList.length; __i++) {
           const ext = candidateList[__i];
           const hasNext = __i < candidateList.length - 1;
+          // No seller is started with less of the call's budget left than one
+          // seller request needs: refused before any booking or signature.
+          if (callBudgetLeftMs() != null && callBudgetLeftMs() < PAY_X402_MIN_LEG_MS) {
+            throw lastErr || bad(`Finding an external seller used this request's time budget; nothing was spent and nothing is charged. Retry${windowBudgetMs != null ? " with a fresh payment, or pay this route over an EVM rail" : ""}.`, 504);
+          }
           const extUsd = toUsd(ext.price);
           if (!(extUsd > 0 && extUsd <= cap)) {
             const up = routeExecuteHint(extUsd);
@@ -749,6 +774,26 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             (req.__externalSpends ||= []).push(spendHandle);
           }
           let paid;
+          // THE ROUTER'S OWN PURCHASE is recorded by the payer the moment it
+          // signs (`onSigned`), under this seller and the address the signed
+          // payment names, and taken back by the payer only when that payment
+          // provably moved nothing. It does not wait for an outcome and does
+          // not need the index to have held a wallet for the seller.
+          let signedPurchase = null;
+          const onSigned = (p) => {
+            const rec = { origin: ext.seller, payTo: p?.payTo, chain, at: Date.now() };
+            let stored = false;
+            try { stored = !!recordPurchase(rec); } catch { /* best effort */ }
+            signedPurchase = { ...rec, stored };
+            return stored ? () => { try { retractPurchase(rec); } catch { /* best effort */ } } : null;
+          };
+          // A payer that reported no signature and may still have paid: the
+          // purchase is recorded at the outcome, under the address the payer
+          // names, else the one the index held.
+          const recordUnreported = (paidTo) => {
+            if (signedPurchase) return;
+            try { recordPurchase({ origin: ext.seller, payTo: paidTo || ext.provenPayTo, chain }); } catch { /* best effort */ }
+          };
           try {
             // provenPayTo: the address this seller's reliability evidence was
             // computed FROM. The resolver already refused a probe whose 402
@@ -760,6 +805,10 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             // history belongs to, when that binding made it eligible. Same
             // reason: the resolver checked the probe's 402, and the payer must
             // check the one it signs. Null = nothing inherited decided it.
+            // sellerKey: the index's key for this seller (an origin, or an
+            // origin plus a path prefix). The payer writes its delivery memo
+            // under it, which is the key the resolver reads, and the
+            // unproven lane keys its per-seller cap on it.
             if (ext.unproven) console.warn(`[sor] paying UNPROVEN ${chain} seller ${ext.seller} (${ext.price}) - every proven candidate was exhausted; loss bounded by the unproven allowance`);
             if (__paidAttempts >= MAX_PAID_ATTEMPTS) {
               // Not a fall-through: the next candidate would be a SECOND signature,
@@ -767,7 +816,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
               throw lastErr || bad(`Tried ${__paidAttempts} paid seller(s) for this task without a delivered answer. Refusing to sign another payment for one request.`, 502);
             }
             traceStep(req, "attempt", { origin: ext.seller, lane: ext.unproven ? "unproven" : "proven" });
-            paid = await payExternal(extUrl, { method: extMethod, body: extBody, maxAtomic: BigInt(Math.round(cap * 1e6)), chain, provenPayTo: ext.provenPayTo || null, evidenceWallets: ext.evidenceWallets || null, allowUnproven: ext.unproven === true, ...(ext.unproven === true && ext.seller ? { sellerKey: ext.seller } : {}), refusalMaxWaitMs: refusalBudgetMs(), ...(tempoBudgetMs == null && evmSellerSignBy(req) != null ? { signBy: evmSellerSignBy(req) } : {}), ...(windowBudgetMs != null ? { timeoutMs: Math.max(3000, remainingMs()) } : cdnLeftMs != null ? { timeoutMs: Math.max(3000, Math.min(PAY_X402_TIMEOUT_MS, refusalBudgetMs())) } : {}) });
+            paid = await payExternal(extUrl, { method: extMethod, body: extBody, maxAtomic: BigInt(Math.round(cap * 1e6)), chain, provenPayTo: ext.provenPayTo || null, evidenceWallets: ext.evidenceWallets || null, allowUnproven: ext.unproven === true, ...(ext.seller ? { sellerKey: ext.seller } : {}), refusalMaxWaitMs: refusalBudgetMs(), ...(tempoBudgetMs == null && evmSellerSignBy(req) != null ? { signBy: evmSellerSignBy(req) } : {}), ...(windowBudgetMs != null ? { timeoutMs: Math.max(3000, remainingMs()) } : cdnLeftMs != null ? { timeoutMs: Math.max(3000, Math.min(PAY_X402_TIMEOUT_MS, refusalBudgetMs())) } : {}), ...(callBudgetLeftMs() != null ? { deadlineMs: Math.max(0, callBudgetLeftMs()) } : {}), onSigned });
           } catch (e) {
             // WHAT STAYS BOOKED IS WHAT MAY HAVE LEFT THE WALLET. The payer
             // stamps `committed:true` on every failure after the payment
@@ -784,8 +833,21 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             // 402 with no challenge, and a payer 400 (seller URL not public,
             // payer misuse) is never the buyer's input: neither is relayed as is.
             const rawSc = e?.statusCode && e.statusCode >= 400 && e.statusCode < 600 ? e.statusCode : 502;
-            const sc = rawSc === 402 ? 409 : rawSc === 400 ? 502 : rawSc;
-            lastErr = bad(`External seller "${ext.seller}" failed: ${String(e?.message || e).slice(0, 200)}${e?.paidUnanswered === true ? "; no other seller is tried for this request" : ""}`, sc);
+            // A seller that refused the paid request as invalid input (400/422)
+            // when the caller's params lack fields the seller's own published
+            // contract requires: the caller's input, named from the contract
+            // (never the seller's text), answered 400 instead of a gateway 502.
+            // The contract stays reporting-only: it is read only AFTER the
+            // seller refused, never to gate or re-rank a payment.
+            const missing = isQueryMethod(extMethod) ? null : contractFieldsMissing(ext, params, e);
+            // No "you were not charged" here: a direct caller is not (a 4xx
+            // cancels its settlement), but decide-execute relays this text into
+            // a plan whose leg may have paid the seller (it books that from the
+            // committed stamp, not from this message).
+            const sc = missing ? 400 : rawSc === 402 ? 409 : rawSc === 400 ? 502 : rawSc;
+            lastErr = missing
+              ? bad(`External seller "${ext.seller}" refused this request's input (HTTP ${e.sellerStatus}). Its published request contract requires ${missing.map((f) => `params.${f}`).join(", ")}, which this call did not send. Add ${missing.length > 1 ? "them" : "it"} and retry.${e?.paidUnanswered === true ? " No other seller is tried for this request." : ""}`, sc)
+              : bad(`External seller "${ext.seller}" failed: ${String(e?.message || e).slice(0, 200)}${e?.paidUnanswered === true ? "; no other seller is tried for this request" : ""}`, sc);
             // FALL THROUGH TO THE NEXT SELLER only on a 5xx (their own upstream
             // or gateway failed), and only when the error carries NO settle
             // receipt - a payExternal throw that includes a receipt means the
@@ -815,7 +877,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             // A payment that left is the router's purchase whatever the seller
             // answered: recorded against the seller's wallet so its
             // third-party counts are reduced by it (src/router-purchases.js).
-            if (spentMaybe) { try { recordPurchase({ origin: ext.seller, payTo: ext.provenPayTo, chain }); } catch { /* best effort */ } }
+            if (spentMaybe) recordUnreported(e?.paidTo);
             // A paid request that got no answer is never followed by another
             // seller in the same request, even once the chain shows it unused.
             // "No answer" is the outcome a caller's own params can produce (a
@@ -884,7 +946,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           traceStep(req, "outcome", { origin: ext.seller, ok: true, servedUnpaid, signedUsd: paid.quote ? paid.quote.usd : null });
           // The router's own purchase, recorded against the wallet it paid so
           // the seller's third-party counts are reduced by it.
-          if (!servedUnpaid) { try { recordPurchase({ origin: ext.seller, payTo: ext.provenPayTo, chain }); } catch { /* best effort */ } }
+          if (!servedUnpaid) recordUnreported(paid.paidTo);
           const underlyingUsd = servedUnpaid ? 0 : (paid.quote ? paid.quote.usd : extUsd);
           // Now the real figure is known, so the ceiling stops counting the
           // worst case against this payer.
