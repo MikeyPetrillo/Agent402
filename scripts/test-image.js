@@ -301,6 +301,26 @@ const hex = (n) => (n >>> 0).toString(16).padStart(8, "0");
   g = await decoded(await new Jimp({ width: 120, height: 80, color: 0x3366ccff }).getBuffer("image/gif"));
   ok(g.width === 120 && g.height === 80, `the GIF encoder's own output decodes (${g.width}x${g.height})`);
 
+  // Image data the decoder's table walk would not come back from. After a
+  // clear code (4) the next free slot is 6: code 6 there, or code 7 one step
+  // later, names an entry that does not exist yet; the decoder stores it as a
+  // prefix, an entry ends up naming itself, and following it never ends. The
+  // check reads the codes the way the decoder does and refuses the first one
+  // the table does not define. Codes are 3 bits, packed low bit first.
+  const codes = (list) => { let v = 0n, n = 0n; for (const c of list) { v |= BigInt(c) << n; n += 3n; } const out = []; for (let k = 0n; k < n; k += 8n) out.push(Number((v >> k) & 255n)); return out; };
+  const withData = (bytes) => { const blocks = []; for (let k = 0; k < bytes.length; k += 255) { const part = bytes.slice(k, k + 255); blocks.push(part.length, ...part); } return Buffer.concat([head(10, 10), Buffer.from([0x2c, 0, 0, 0, 0, 10, 0, 10, 0, 0, 2, ...blocks, 0]), END]); };
+  await refusedBy("a GIF that uses the next free code right after a clear code", withData(codes([4, 6, 0, 6])), /^gif image data uses a code its table does not define/);
+  await refusedBy("a GIF that uses a code past the next free one", withData(codes([4, 0, 7, 0, 7])), /^gif image data uses a code its table does not define/, convert);
+  // Past 64 KB of frame data the main thread leaves the read to the worker,
+  // which runs the same check before it decodes: still a 400, not a deadline.
+  const longData = withData(codes([...Array(200000).fill(4), 6, 0, 6]));
+  const { assertGifHeader } = await import("../src/tools/image-headers.js");
+  let deferred = true; try { assertGifHeader(longData, { mainThread: true }); } catch { deferred = false; }
+  const late = await attempt(tool("image-convert"), longData, { format: "png" });
+  ok(deferred && late.code === 400 && /^gif image data uses a code its table does not define/.test(late.msg || "") && late.ms < 2000, `a ${longData.length}-byte GIF with an undefined code is refused by the worker's check (got ${late.code} "${late.msg}" in ${late.ms}ms)`);
+  g = await decoded(withData(codes([4, 1, 6, 5])));
+  ok(g.width === 10 && g.height === 10, `a GIF that uses the next free code after a literal (a repeat) still decodes (${g.width}x${g.height})`);
+
   // The check runs on the main thread, so it has to stay a walk of the block
   // list: 5 MB of the smallest frames a GIF can hold (measured 8 ms warm).
   const many = Buffer.concat([head(100, 100), ...Array(Math.floor(5e6 / 16)).fill(frame(0, 0, 100, 100)), END]);

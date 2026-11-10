@@ -130,7 +130,7 @@ export function assertDeclaredWithinPixelCap(buf, maxPixels, { mainThread = fals
     throw bad(`source image too large (${declared.width}x${declared.height}; max ${maxPixels} pixels)`);
   }
   const format = sniffFormat(buf);
-  if (format === "gif") assertGifHeader(buf);
+  if (format === "gif") assertGifHeader(buf, { mainThread });
   if (format === "png") assertPngHeader(buf);
   if (format === "jpeg") assertJpegHeader(buf);
   if (format === "tiff") assertTiffHeader(buf, maxPixels, { mainThread });

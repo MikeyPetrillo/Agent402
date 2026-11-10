@@ -133,23 +133,82 @@ function loadGifReader() {
 }
 
 /** Frame 0 of a GIF as the decoder reads it: { screen: { width, height },
- *  frame: { x, y, width, height } }. The constructor only walks the block
- *  list. Throws a 400 for a GIF the reader rejects or that has no frame. */
+ *  frame: { x, y, width, height, dataOffset, dataLength } }. The constructor
+ *  only walks the block list. Throws a 400 for a GIF the reader rejects or
+ *  that has no frame. */
 export function gifFirstFrame(buf) {
   let reader;
   try { reader = new (loadGifReader())(buf); }
   catch (e) { throw bad(`gif could not be read: ${String(e?.message || e).slice(0, 120)}`); }
   if (reader.numFrames() < 1) throw bad("gif has no image frame");
   const f = reader.frameInfo(0);
-  return { screen: { width: reader.width, height: reader.height }, frame: { x: f.x, y: f.y, width: f.width, height: f.height } };
+  return {
+    screen: { width: reader.width, height: reader.height },
+    frame: { x: f.x, y: f.y, width: f.width, height: f.height, dataOffset: f.data_offset, dataLength: f.data_length },
+  };
 }
 
+/** Whether every code in a frame's LZW data is one its code table defines at
+ *  that point. The decoder follows a code's chain of prefixes through the
+ *  table until it reaches a literal; a code the table does not define yet
+ *  (above the next free slot, or the next free slot right after a clear code)
+ *  is stored as a prefix all the same, which can leave a table entry that
+ *  names itself, and the walk over it never ends. This runs the decoder's own
+ *  code reader (same bit packing, code widths, clear and end codes, and the
+ *  same stop once the frame is full) and keeps only each code's chain length,
+ *  so it is one pass over the data with no pixel written. */
+export function gifCodesDefined(buf, dataOffset, pixels) {
+  let p = dataOffset;
+  const minCodeSize = buf[p++];
+  const clear = 1 << minCodeSize, end = clear + 1;
+  let next = end + 1, size = minCodeSize + 1, mask = (1 << size) - 1;
+  let shift = 0, cur = 0, out = 0, prev = null;
+  let sub = buf[p++];
+  const chain = new Uint16Array(4096); // prefix hops from a table code down to a literal
+  for (;;) {
+    while (shift < 16) {
+      if (sub === 0) break;
+      cur |= buf[p++] << shift;
+      shift += 8;
+      if (sub === 1) sub = buf[p++]; else --sub;
+    }
+    if (shift < size) return true;
+    const code = cur & mask;
+    cur >>= size;
+    shift -= size;
+    if (code === clear) { next = end + 1; size = minCodeSize + 1; mask = (1 << size) - 1; prev = null; continue; }
+    if (code === end) return true;
+    if (code > next || (code === next && prev === null)) return false;
+    const from = code < next ? code : prev;
+    const hops = from > clear ? chain[from] : 0;
+    const after = out + hops + (from !== code ? 1 : 0);
+    if (after > pixels) return true; // the decoder stops at a full frame
+    out = after + 1;
+    if (prev !== null && next < 4096) {
+      chain[next++] = (prev > clear ? chain[prev] : 0) + 1;
+      if (next >= mask + 1 && size < 12) { ++size; mask = (mask << 1) | 1; }
+    }
+    prev = code;
+  }
+}
+
+// Frame data the main-thread check reads itself; a longer frame is left to
+// the worker's check (one pass over 64 KB is well under a millisecond).
+export const GIF_MAIN_THREAD_BYTES = 65536;
+
 /** The decoder sizes its index buffer from frame 0's own rectangle, so a frame
- *  that reaches past the screen in either direction is refused. */
-export function assertGifHeader(buf) {
+ *  that reaches past the screen in either direction is refused, and so is
+ *  frame data the decoder's table walk would not come back from. With
+ *  `mainThread`, frame data past GIF_MAIN_THREAD_BYTES is not read here: the
+ *  worker runs this whole check before it decodes. */
+export function assertGifHeader(buf, { mainThread = false } = {}) {
   const { screen, frame } = gifFirstFrame(buf);
   if (frame.x + frame.width > screen.width || frame.y + frame.height > screen.height) {
     throw bad(`gif frame (${frame.width}x${frame.height} at ${frame.x},${frame.y}) extends past its ${screen.width}x${screen.height} canvas`);
+  }
+  if (mainThread && frame.dataLength > GIF_MAIN_THREAD_BYTES) return;
+  if (!gifCodesDefined(buf, frame.dataOffset, frame.width * frame.height)) {
+    throw bad("gif image data uses a code its table does not define");
   }
 }
 
