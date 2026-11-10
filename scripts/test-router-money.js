@@ -319,6 +319,20 @@ const json200 = () => new Response(JSON.stringify({ ok: true }), { status: 200, 
   const quiet = await buyTimes(asResolved, 3, async () => ({ result: { ok: 1 }, quote: { usd: 0.001 }, receipt: { transaction: "0xab" }, paidTo: W }));
   ok(quiet.store.at(SELLER, W).calls === 3, `a payer that reports no signature is recorded at the outcome, once each (${quiet.store.at(SELLER, W).calls})`);
 
+  // WHEN: the row exists before the paid request leaves, not at the outcome.
+  {
+    const early = createRouterPurchaseStore({ file: null });
+    let rowsAtSend = null;
+    globalThis.fetch = async (u, init) => { if (paidHeaderOf(init)) rowsAtSend = early.at(SELLER, W).calls; return sellerDelivers(u, init); };
+    guard.__reset(); buyer.releaseSpend(1_000_000n, { window: -1 });
+    await buildRouteExecuteTool({
+      getCatalog: () => ({}), tier: EXEC_TIERS[0], resolveExternal: async () => [asResolved], payExternal: realPay,
+      externalEnabled: () => true, externalChains: () => ["base"], spendingWalletStatus: () => null,
+      recordPurchase: (x) => early.record(x), retractPurchase: (x) => early.retract(x),
+    }).handler({ task: "t", include: "external" }, { ...reqBase });
+    ok(rowsAtSend === 1 && early.at(SELLER, W).calls === 1, `the router's row is written when the payment is signed, before it is sent, and once (${rowsAtSend} at send, ${early.at(SELLER, W).calls} after)`);
+  }
+
   // RECONCILE: every signed payment against the outbound ledger and the
   // own-purchase rows. Five outcomes of one payer; only proof takes a row back.
   const store = createRouterPurchaseStore({ file: null });
