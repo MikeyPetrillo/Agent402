@@ -105,7 +105,7 @@ export const COMPONENTS = [
   {
     key: "paid-call",
     label: "Paid call path",
-    blurb: "A real end-to-end call through the proof-of-work path: challenge, solve, unlock, payload. The GitHub heartbeat walks the challenge a buyer without a wallet is issued; the Cloudflare probe walks a low-difficulty probe challenge every 5 minutes. A failure either one records stands until that same observer sees the path work again. A miss here means our probe could not complete a call, never that a customer was charged.",
+    blurb: "A real end-to-end call through the proof-of-work path: challenge, solve, unlock, payload. The scheduled heartbeat walks the challenge a buyer without a wallet is issued; the outside probe walks a low-difficulty probe challenge every 5 minutes. A failure either one records stands until that same observer sees the path work again. A miss here means our probe could not complete a call, never that a customer was charged.",
     staleAfterMs: HOURLY_OBSERVER,
     // Judged per source, not newest-row-wins (see HOURLY_OBSERVER above).
     perSource: true,
@@ -295,7 +295,9 @@ function bars(daily) {
 // A component read from two observers lists each one's own reading and its
 // age, so an observer that has gone quiet is shown as not current beside the
 // one the component's word comes from, never folded into it.
-const OBSERVER_LABEL = { [PAID_CALL_SOURCES.heartbeat]: "GitHub heartbeat", [PAID_CALL_SOURCES.worker]: "Cloudflare probe" };
+// First-party names for what each observer does; where an observer runs is
+// said once, in the page's method notes.
+export const OBSERVER_LABEL = Object.freeze({ [PAID_CALL_SOURCES.heartbeat]: "Scheduled heartbeat", [PAID_CALL_SOURCES.worker]: "Outside probe" });
 const ageStr = (ms) => {
   const s = Math.max(0, Number(ms) || 0) / 1000;
   if (s < 60) return `${s | 0}s ago`;
@@ -309,6 +311,15 @@ export function observerLines(c) {
   const line = (s) => `${OBSERVER_LABEL[s.source]}: ${s.state === "unknown" ? `not current, last observed ${ageStr(s.ageMs)}` : `${WORD[s.state].toLowerCase()}, observed ${ageStr(s.ageMs)}`}`;
   return `<p class="comp-b">${esc(sources.map(line).join(". "))}.</p>`;
 }
+/** A component whose newest reading has aged past its bound says so, with the
+ *  reading's age, beside its "Not measured" word (a component with an observer
+ *  line already says it there). */
+export function staleLine(c) {
+  const cur = c.current || {};
+  if (cur.state !== "unknown" || cur.reason !== "no recent observation" || !Number.isFinite(cur.ageMs)) return "";
+  if (observerLines(c)) return "";
+  return `<p class="comp-b">${esc(`The last observation is stale: recorded ${ageStr(cur.ageMs)}.`)}</p>`;
+}
 
 function componentRow(c) {
   const w = c.windows[`${STRIP_DAYS}d`];
@@ -319,7 +330,7 @@ function componentRow(c) {
     <span class="comp-s ${DOT[c.current.state]}">${esc(WORD[c.current.state])}</span>
   </div>
   <p class="comp-b">${esc(c.blurb)}</p>
-  ${observerLines(c)}
+  ${observerLines(c)}${staleLine(c)}
   ${
     c.observed > 0
       ? `<div class="bars">${bars(c.daily)}</div>
