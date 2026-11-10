@@ -242,6 +242,67 @@ const NOW = Date.UTC(2026, 6, 25, 12, 0, 0); // 2026-07-25T12:00:00Z
   check(`the Worker records under "${CF}"`, worker.includes(`source: "${CF}"`));
 }
 
+// ---- stale readings at a fixed clock: the page follows its own rule ----
+// Each bound tracks what feeds it: the Worker's 5-minute cron (45 min), the
+// canary's one buy a day (26 h, so a 23-hour-old rail reading is current), the
+// heartbeat (3 h). A component whose newest reading is past its bound reads
+// unknown and the overall word is not operational; an observer of the paid
+// call path that has gone quiet is listed as not current with its age.
+{
+  const { statusSnapshot, statusPage, observerLines, COMPONENTS, RAIL_COMPONENTS, PAID_CALL_SOURCES, overallState } = await import("../src/status.js");
+  const T = Date.UTC(2026, 10, 10, 12, 0, 0);
+  const MIN = 60_000, H = 3600_000;
+  const HB = PAID_CALL_SOURCES.heartbeat, CF = PAID_CALL_SOURCES.worker;
+  // A store where every component was last seen ok `age(key)` ago.
+  const storeAt = (age, sourceAges = { [HB]: 30 * MIN, [CF]: 4 * MIN }) => ({
+    probeRows: (key, since) => (T - age(key) >= since ? [{ ts: T - age(key), ok: 1 }] : []),
+    probeCounts: () => ({ observed: 1, up: 1 }),
+    latestByComponent: () => [...COMPONENTS, ...RAIL_COMPONENTS].map((c) => ({ component: c.key, ts: T - age(c.key), ok: 1, detail: null })),
+    latestBySource: () => Object.entries(sourceAges).map(([source, a]) => ({ source, ts: T - a, ok: 1 })),
+    earliestObservation: () => T - 40 * 86400000,
+    totalObservations: () => 1000,
+    statusPersistent: () => true,
+  });
+  const fresh = (key) => (/^rail_|^settlement$/.test(key) ? 23 * H : 4 * MIN);
+  const view = (store) => statusSnapshot({ baseUrl: "https://example.test", nowMs: T, store });
+  const of = (snap, key) => [...snap.components, ...snap.railComponents].find((c) => c.key === key);
+
+  let snap = view(storeAt(fresh));
+  check("every reading inside its bound: operational, a 23-hour-old canary rail reading included",
+    snap.overall === "operational" && of(snap, "rail_base").current.state === "operational" && of(snap, "settlement").current.state === "operational");
+
+  snap = view(storeAt((key) => (key === "rail_base" ? 27 * H : fresh(key))));
+  check("a rail reading past the canary's daily bound reads unknown with its age, and the overall word is not operational",
+    of(snap, "rail_base").current.state === "unknown" && of(snap, "rail_base").current.ageMs === 27 * H && snap.overall === "degraded");
+
+  snap = view(storeAt((key) => (key === "paywall" ? 50 * MIN : fresh(key))));
+  check("a 5-minute component 50 minutes old reads unknown, and the overall word is not operational",
+    of(snap, "paywall").current.state === "unknown" && snap.overall === "degraded");
+  check("...and 40 minutes old (a few missed runs) is still current", view(storeAt((key) => (key === "paywall" ? 40 * MIN : fresh(key)))).overall === "operational");
+
+  // The paid call path with both observers quiet: unknown, not operational.
+  snap = view(storeAt(fresh, { [HB]: 6.4 * H, [CF]: 50 * MIN }));
+  check("paid-call with both observers past their bounds reads unknown and the overall word is not operational",
+    of(snap, "paid-call").current.state === "unknown" && snap.overall === "degraded");
+  check("overallState never answers operational over an unknown paid-path component",
+    overallState([{ key: "paid-call", observed: 5, current: { state: "unknown" } }, { key: "api", observed: 5, current: { state: "operational" } }]) === "degraded"
+    && overallState([{ key: "api", observed: 5, current: { state: "operational" } }], [{ key: "rail_base", observed: 5, current: { state: "unknown" } }]) === "degraded");
+
+  // One observer quiet, the other current: the word comes from the current
+  // one, and the quiet one is listed as unknown with its age and its bound.
+  snap = view(storeAt(fresh, { [HB]: 6.4 * H, [CF]: 4 * MIN }));
+  const pc2 = of(snap, "paid-call").current;
+  const hb = pc2.sources.find((x) => x.source === HB), cf = pc2.sources.find((x) => x.source === CF);
+  check("a quiet heartbeat beside a current Worker: the source is listed unknown with its age and bound",
+    pc2.state === "operational" && pc2.source === CF && hb.state === "unknown" && hb.ageMs === 6.4 * H && hb.staleAfterMs === 3 * H && cf.state === "operational" && cf.staleAfterMs === 45 * MIN);
+  const lines = observerLines(of(snap, "paid-call"));
+  check("the card names the quiet observer as not current with its age", /GitHub heartbeat: not current, last observed 6h ago\. Cloudflare probe: operational, observed 4m ago\./.test(lines) || /Cloudflare probe: operational, observed 4m ago\. GitHub heartbeat: not current, last observed 6h ago\./.test(lines));
+  const html = statusPage("https://example.test", {}, snap);
+  check("the page renders that line on the paid call card", html.includes("GitHub heartbeat: not current, last observed 6h ago"));
+  check("a component with one observer gets no observer line", observerLines(of(snap, "api")) === "");
+  check("/api/status states the two-observer rule", /two observers \(paid-call\) is read from the observers whose readings are current/.test(snap.measurement.note));
+}
+
 // ---- the strip window and the footer figure must agree (2026-09-18) ----
 // The per-component footer reads windows[`${STRIP_DAYS}d`]. That key is only
 // present because 30d happens to be one of the WINDOWS rows; set STRIP_DAYS to

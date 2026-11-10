@@ -238,7 +238,10 @@ export function statusSnapshot({ baseUrl = "", nowMs = Date.now(), historyDays =
       note:
         "Availability is what an outside observer recorded, not a self-report. A day with no " +
         "observation is reported as no data rather than uptime, and a component whose latest " +
-        "observation is stale is reported as unknown rather than operational.",
+        "observation is stale is reported as unknown rather than operational. A component with " +
+        "two observers (paid-call) is read from the observers whose readings are current; each " +
+        "observer's own state, age and staleness bound are listed under current.sources, and one " +
+        "whose reading is stale is listed as unknown.",
     },
     components,
     railComponents,
@@ -289,6 +292,24 @@ function bars(daily) {
     .join("");
 }
 
+// A component read from two observers lists each one's own reading and its
+// age, so an observer that has gone quiet is shown as not current beside the
+// one the component's word comes from, never folded into it.
+const OBSERVER_LABEL = { [PAID_CALL_SOURCES.heartbeat]: "GitHub heartbeat", [PAID_CALL_SOURCES.worker]: "Cloudflare probe" };
+const ageStr = (ms) => {
+  const s = Math.max(0, Number(ms) || 0) / 1000;
+  if (s < 60) return `${s | 0}s ago`;
+  if (s < 3600) return `${(s / 60) | 0}m ago`;
+  if (s < 86400) return `${(s / 3600) | 0}h ago`;
+  return `${(s / 86400) | 0}d ago`;
+};
+export function observerLines(c) {
+  const sources = (c.current?.sources || []).filter((s) => OBSERVER_LABEL[s.source]);
+  if (sources.length < 2) return "";
+  const line = (s) => `${OBSERVER_LABEL[s.source]}: ${s.state === "unknown" ? `not current, last observed ${ageStr(s.ageMs)}` : `${WORD[s.state].toLowerCase()}, observed ${ageStr(s.ageMs)}`}`;
+  return `<p class="comp-b">${esc(sources.map(line).join(". "))}.</p>`;
+}
+
 function componentRow(c) {
   const w = c.windows[`${STRIP_DAYS}d`];
   return `<div class="comp">
@@ -298,6 +319,7 @@ function componentRow(c) {
     <span class="comp-s ${DOT[c.current.state]}">${esc(WORD[c.current.state])}</span>
   </div>
   <p class="comp-b">${esc(c.blurb)}</p>
+  ${observerLines(c)}
   ${
     c.observed > 0
       ? `<div class="bars">${bars(c.daily)}</div>
@@ -543,7 +565,7 @@ ${liveSection(snap.live, stats)}
 <li><b>The observers sit outside the service.</b> A Cloudflare cron probe checks production every 5 minutes and a GitHub Actions heartbeat checks it again; each records what it saw, and this page only stores and renders those observations.</li>
 <li><b>An outage appears as a gap.</b> When production is down the probe cannot report in either, so the record shows missing observations rather than a tidy row of failures. Gaps are never counted as uptime or as downtime: each percentage is taken over the probes that reported.</li>
 <li><b>Percentages carry their denominator.</b> 100% of three probes is a weaker claim than 100% of three thousand, and the page shows which one you are reading.</li>
-<li><b>Stale means unknown, not healthy.</b> A component whose most recent observation has aged out is reported as not measured.</li>
+<li><b>Stale means unknown, not healthy.</b> A component whose most recent observation has aged out is reported as not measured. The paid call path has two observers; each one's reading and age is listed on its card, and one that has gone quiet is shown as not current.</li>
 <li><b>One observer cannot clear another's failure.</b> The two observers walk different proof-of-work challenges on the paid call path, so a failure either one records stands until that same observer sees the path work again.</li>
 <li><b>Payment is proven with real money.</b> A daily canary buys tools across every supported chain and settles genuine USDC. <a href="${esc(CANARY_RUNS)}" rel="noopener">Runs are public</a>.</li>
 <li><b>Incidents are derived, not authored.</b> The table above is computed from failed probes, so a bad day cannot be edited out.</li>
