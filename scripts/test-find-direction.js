@@ -161,7 +161,7 @@ const PINNED = [
   ["decode a JWT", "jwt-decode"],
   ["convert anything to markdown", "html-to-markdown"],
   ["trip planning", "skill-trip-planner"],
-  ["investment decision", "npv"],
+  ["investment decision", "skill-macro-context"], // the pack that cites it; scripts/test-find-ranking.js pins the same
   ["site status snapshot", "skill-status-snapshot"],
   ["qr code", "qr"],
   ["whois lookup", "whois"],
