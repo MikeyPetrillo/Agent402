@@ -243,21 +243,29 @@ try {
   grants++; grantUsd += 0.001;
 
   // 4b. A grant on a wallet-only route books nothing on the settle-failure
-  // breaker (its outcomes are on the shared store, keyed by wallet); the same
-  // wallet's next, settled call does.
+  // breaker (its outcomes are on the shared store, under the key the module
+  // itself derives from the payment); the same wallet's next, settled call
+  // does. The "nothing" read looks at every breaker window naming the wallet,
+  // whatever its key shape, and the settled call is its positive control.
   const wR = wallet(0xd2);
-  const brk = async (name) => (await redis.zCard(`sl:${PREFIX}:${name}:${wR}`)) || 0;
+  const { gatewaySettleBreakerSharedKeyOf } = await import("../src/gateway-settle-breaker.js");
+  const brkKeyOf = (cred) => gatewaySettleBreakerSharedKeyOf({ header: (n) => (String(n).toLowerCase() === "payment-signature" ? cred : undefined) });
+  const brk = async (name, cred) => (await redis.zCard(`sl:${PREFIX}:${name}:${brkKeyOf(cred)}`)) || 0;
+  const brkNaming = async () => (await redis.keys(`sl:${PREFIX}:gwb-*`)).filter((k) => k.toLowerCase().includes(wR.toLowerCase())).sort();
   const s4c = settles;
   const r4c = await payCall(B, "radar", wR, { ip: "10.4.0.2" });
   ok(r4c.status === 200 && granted(r4c) && settles === s4c, `a wallet-only route's first call is granted (status ${r4c.status})`);
   grants++; grantUsd += 0.005;
   await sleep(300);
-  ok(await brk("gwb-ok") === 0 && await brk("gwb-fail") === 0, "the grant is neither a settled nor a failed outcome on the breaker");
+  const named4c = await brkNaming();
+  ok(brkKeyOf(r4c.cred)?.includes(wR) && await brk("gwb-ok", r4c.cred) === 0 && await brk("gwb-fail", r4c.cred) === 0 && named4c.length === 0, `the grant is neither a settled nor a failed outcome on the breaker (windows naming the wallet: ${named4c.length})`);
   const r4d = await payCall(B, "radar", wR, { ip: "10.4.0.3" });
   ok(r4d.status === 200 && !granted(r4d) && settles === s4c + 1, `its second call settles (status ${r4d.status})`);
   let okN = 0;
-  for (let i = 0; i < 20 && okN === 0; i++) { okN = await brk("gwb-ok"); if (!okN) await sleep(100); }
-  ok(okN === 1 && await brk("gwb-fail") === 0, `the settled call is the breaker's one outcome for the wallet (ok ${okN})`);
+  for (let i = 0; i < 20 && okN === 0; i++) { okN = await brk("gwb-ok", r4d.cred); if (!okN) await sleep(100); }
+  const named4d = await brkNaming();
+  ok(okN === 1 && await brk("gwb-fail", r4d.cred) === 0, `the settled call is the breaker's one outcome for the wallet (ok ${okN})`);
+  ok(named4d.length === 1 && named4d[0] === `sl:${PREFIX}:gwb-ok:${brkKeyOf(r4d.cred)}` && brkKeyOf(r4d.cred) === brkKeyOf(r4c.cred), `control: the read that found nothing for the grant finds the settled call's window, under the module's own key (${named4d.length} window(s))`);
 
   // 5. Settles normally: over the price cap, not listed, prior sale, our own wallet, low balance.
   const s5 = settles;

@@ -252,6 +252,13 @@ export function gatewaySettleBreakerCountKey(req) {
   const network = gatewaySettleBreakerNetwork(req);
   return network ? `${buyer}@${network}` : buyer;
 }
+/** The name a call's per-key shared windows (gwb-fail, gwb-bill, gwb-ok) are
+ *  stored under: its count key as the store spells it. For a reader of the
+ *  store (a test), so the key shape lives here only. Null with no key. */
+export function gatewaySettleBreakerSharedKeyOf(req) {
+  const key = gatewaySettleBreakerCountKey(req);
+  return key ? sharedKey(key) : null;
+}
 const EVM_PAYER = /^0x[0-9a-f]{40}$/;
 const EVM_COUNT_KEY = /^(0x[0-9a-f]{40})@(.+)$/;
 /** The buyer inside a count key (the burst alarm counts buyers, not networks). */
