@@ -2,6 +2,7 @@
 // layer is SSRF-guarded and tested separately). Covers the new pdf-* tools.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { PDFDocument } from "pdf-lib";
+import { oursMs } from "./lib/ours-clock.js";
 import zlib from "node:zlib";
 import { pdfInfo, mergePdfs, extractPages, rotatePdf, imagesToPdf, parsePages } from "../src/tools/pdf-kit.js";
 import { runPdfOp, pdfPoolState, PDF_WORKERS_MAX, PDF_QUEUE_MAX } from "../src/tools/pdf-offthread.js";
@@ -83,8 +84,9 @@ function objStmBomb(mb, typeName) {
 }
 for (const typeName of ["ObjStm", "Obj#53tm"]) {
   const bomb = objStmBomb(200, typeName);
-  let worst = 0, last = performance.now();
-  const iv = setInterval(() => { const n = performance.now(); worst = Math.max(worst, n - last); last = n; }, 5);
+  // Gaps read on the ours clock: the smaller of a gap's wall length and the time the thread had a core inside it.
+  let worst = 0, last = performance.now(), lastOurs = oursMs();
+  const iv = setInterval(() => { const n = performance.now(), c = oursMs(); worst = Math.max(worst, Math.min(n - last, c - lastOurs)); last = n; lastOurs = c; }, 5);
   let err = null;
   try { await pdfInfo(bomb); } catch (e) { err = e; }
   clearInterval(iv);
