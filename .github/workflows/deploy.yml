@@ -2055,6 +2055,10 @@ jobs:
           t node scripts/test-rugcheck-pause.js
           # MPP recurring subscriptions (tempo/subscription challenge shape, binding refuses forged/foreign/expired/underpriced before any settlement, period accounting, dunning, cancellation - offline)
           t node scripts/test-mpp-subscriptions.js
+          # An MPP subscription's signing key is deleted when the subscription is canceled or ends (store, file and memory searched in every encoding; mppx's renewal cannot sign), the reduced record after its retention and not before, the sweep is bounded and idempotent, a live subscription keeps its key and renews (offline)
+          t node scripts/test-mpp-subscription-key-lifetime.js
+          # MPP subscription payers are screened before the first payment and before each renewal: a listed wallet is refused with zero sends, a wallet listed between renewals is not charged and its subscription ends, a clean wallet sends exactly once, no list loaded proceeds and is counted (offline, stub feed)
+          t node scripts/test-mpp-subscription-screen.js
           # Subscription gas sponsor: a rolling 24 h count and fee ceiling refuses a sponsored send past it before the RPC (offline, stub RPC)
           t node scripts/test-tempo-sponsor-ceiling.js
           # Tempo buyer: a minted credential must move exactly the capped quote to the checked recipient, refused before it is sent; our paying scripts sign tempo/charge under the per-call ceiling (offline, stub seller)

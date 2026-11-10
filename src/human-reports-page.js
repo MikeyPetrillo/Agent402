@@ -203,9 +203,9 @@ ${R["token-brief"] ? `
       </div>
 ` : ""}      <div class="pcard receipt" data-kind="fund">
         <div class="k">Fund tracker</div>
-        <h3>Follow the smart money</h3>
+        <h3>A fund's 13F holdings</h3>
         <p>What a fund holds, and what it bought, added, trimmed and exited last quarter, from SEC 13F filings, cited.</p>
-        <div class="field"><input id="in-fund" type="text" aria-label="Follow the smart money" placeholder="A fund, e.g. Berkshire Hathaway"></div>
+        <div class="field"><input id="in-fund" type="text" aria-label="A fund's 13F holdings" placeholder="A fund, e.g. Berkshire Hathaway"></div>
         <div class="gets"><b>What you get:</b> the top holdings, what the fund bought, added, trimmed and exited last quarter, with the full 13F table to download.</div>
         <div class="err" id="err-fund"></div>
         ${buyBtn("fund", "fund-report", "Get report")}

@@ -329,7 +329,7 @@ export const MACRO_TOOLS = [
   {
     route: "GET /api/yield-curve-spread", name: "Treasury yield-curve spreads + inversion", slug: "yield-curve-spread", category: "data", price: "$0.005",
     description:
-      "Derived 2s10s and 3m10y Treasury yield-curve spreads (in basis points) plus a boolean recession-signal flag when the curve is inverted. Source: FRED constant-maturity yields (public domain). No params.",
+      "Derived 2s10s and 3m10y Treasury yield-curve spreads (in basis points) plus a boolean flag per spread that is true when the curve is inverted. Source: FRED constant-maturity yields (public domain). No params.",
     tags: ["yield-curve", "spread", "2s10s", "3m10y", "inversion", "recession", "macro", "treasury", "rates", "bonds"],
     discovery: {
       input: {},
@@ -943,7 +943,7 @@ MACRO_TOOLS.push(
   {
     route: "GET /api/sahm-rule", name: "Sahm Rule recession indicator", slug: "sahm-rule", category: "data", price: "$0.005",
     description:
-      "Real-time Sahm Rule recession indicator from FRED (SAHMREALTIME series). The Sahm Rule triggers when the 3-month moving average of US unemployment rises ≥0.50 percentage points above its prior-12-month low - historically a clean recession signal. No params.",
+      "Real-time Sahm Rule recession indicator from FRED (SAHMREALTIME series). The Sahm Rule triggers when the 3-month moving average of US unemployment rises ≥0.50 percentage points above its prior-12-month low. No params.",
     tags: ["sahm-rule", "recession", "unemployment", "macro", "fred", "indicator", "signal"],
     discovery: {
       input: {},

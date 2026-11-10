@@ -166,6 +166,61 @@ ok(refunds.length === 3, "...and not refunded again on the next poll");
   }
 }
 
+// OWED REFUNDS ALREADY ON DISK: the retry and the refundsOwed fold act only on
+// report purchases. Four stored owed records as an earlier build could have
+// left them, read by a fresh instance: a credits-pack session, a record naming
+// a product this module never sold, a genuine report purchase recorded before
+// records carried a product (the live control), and one whose session Stripe
+// no longer returns.
+{
+  sessions.cs_owedpack = { id: "cs_owedpack", mode: "payment", payment_status: "paid", payment_intent: "pi_owedpack", metadata: { credits_pack: "credits-100" } };
+  sessions.cs_owedlegacy = { id: "cs_owedlegacy", mode: "payment", payment_status: "paid", payment_intent: "pi_owedlegacy", metadata: { product: "research", input: "FAIL" } };
+  const owedRec = (pi, extra = {}) => ({ status: "error", refundId: null, error: "We couldn't complete this report after a retry. Your refund is being processed.", refundOwed: true, refundAttempts: 1, lastRefundAttemptAt: 0, paymentIntent: pi, at: new Date(clock - 3600_000).toISOString(), ...extra });
+  const planted = { cs_owedpack: owedRec("pi_owedpack"), cs_owedunknown: owedRec("pi_owedunknown", { product: "constructor" }), cs_owedlegacy: owedRec("pi_owedlegacy"), cs_owednosess: owedRec("pi_owednosess") };
+  const issuesPath = join(DIR, "_issues.json");
+  const issues = existsSync(issuesPath) ? JSON.parse(readFileSync(issuesPath, "utf8")) : {};
+  for (const [id, rec] of Object.entries(planted)) { writeFileSync(join(DIR, `${id}.json`), JSON.stringify(rec)); issues[id] = { kind: "refund-owed", at: rec.at, attempts: 1 }; }
+  writeFileSync(issuesPath, JSON.stringify(issues));
+  const lines = [];
+  const fresh = createHumanCheckout({ stripe, generate, baseUrl: "https://agent402.tools", storeDir: DIR, onSale: (x) => sales.push(x), now, log: (m) => lines.push(String(m)) });
+  ok(["cs_owedpack", "cs_owedunknown", "cs_owedlegacy", "cs_owednosess"].every((id) => fresh.listIssues().refundOwed.some((x) => x.id === id)), "control: the four stored owed records are on the operator's list");
+
+  const before = refunds.length, genBefore = genCalls;
+  for (const id of ["cs_owedpack", "cs_owedunknown", "cs_owednosess"]) { await fresh.fulfill(id); clock += 31_000; await fresh.fulfill(id); }
+  ok(refunds.length === before && !refunds.some((r) => /^pi_owed(pack|unknown|nosess)$/.test(r.payment_intent)), `a stored owed record that is not a report purchase makes no refunds.create call, on two polls past the pacing window (${refunds.length - before})`);
+  ok(fresh.peek("cs_owedpack").refundOwed === true && fresh.peek("cs_owedpack").refundAttempts === 1 && fresh.peek("cs_owedunknown").refundAttempts === 1, "those records are left exactly as they were (no attempt counted)");
+  // The live control: the genuine report purchase beside them is retried once.
+  const legacy = await fresh.fulfill("cs_owedlegacy");
+  ok(refunds.length === before + 1 && refunds.at(-1).payment_intent === "pi_owedlegacy" && legacy.refundOwed === false && /has been refunded/.test(legacy.error), "control: the genuine owed report refund stored beside them is retried and succeeds");
+  clock += 31_000;
+  await fresh.fulfill("cs_owedlegacy");
+  ok(refunds.length === before + 1 && genCalls === genBefore, "...once: not again on the next poll, and nothing is generated");
+  ok(fresh.peek("cs_owedlegacy").product === "research", "the refunded record now names its report product");
+
+  // The refundsOwed fold reads the same rule.
+  const owedNow = (await fresh.owedRefunds()).map((x) => x.id);
+  ok(!owedNow.includes("cs_owedpack") && !owedNow.includes("cs_owedunknown") && !owedNow.includes("cs_owedlegacy"), `the owed list behind the refundsOwed word leaves out the two that are not report purchases (and the one just refunded): ${owedNow.join(",") || "none"}`);
+  ok(owedNow.includes("cs_owednosess"), "a record whose session cannot be read is not decided: it stays on the owed list and is not refunded");
+  ok(fresh.listIssues().refundOwed.some((x) => x.id === "cs_owedpack"), "the operator's list still shows every stored record");
+  // A genuine owed refund made by this build is on the owed list, then retried once.
+  sessions.cs_owednew = { id: "cs_owednew", payment_status: "paid", payment_intent: "pi_owednew", metadata: { product: "research", input: "FAIL" } };
+  refundFail = true;
+  await fresh.fulfill("cs_owednew");
+  for (let i = 0; i < 50 && fresh.peek("cs_owednew")?.status === "generating"; i++) await wait(10);
+  refundFail = false;
+  ok(fresh.peek("cs_owednew")?.refundOwed === true && fresh.peek("cs_owednew").product === "research" && (await fresh.owedRefunds()).some((x) => x.id === "cs_owednew" && x.product === "research"), "control: a new owed report refund names its product and is on the owed list");
+  clock += 31_000;
+  const n0 = refunds.length, r0 = retrieves;
+  const fixed = await fresh.fulfill("cs_owednew");
+  ok(fixed.refundOwed === false && refunds.length === n0 + 1 && refunds.at(-1).payment_intent === "pi_owednew" && retrieves === r0, "and is retried once on a later poll, decided from the record with no extra session read");
+  const skipLines = lines.filter((l) => /owed-refund record\(s\) skipped: not a report purchase/.test(l));
+  ok(skipLines.length >= 1 && /^\[human-checkout\] 2 owed-refund record\(s\) skipped/.test(skipLines.at(-1)) && skipLines.every((l) => !/cs_|pi_/.test(l)), `the skips are one counted log line with no id (${skipLines.at(-1)})`);
+  for (const id of Object.keys(planted)) { rmSync(join(DIR, `${id}.json`), { force: true }); }
+  const left = JSON.parse(readFileSync(issuesPath, "utf8"));
+  for (const id of [...Object.keys(planted), "cs_owednew"]) delete left[id];
+  writeFileSync(issuesPath, JSON.stringify(left));
+}
+
 // Long input reassembles from chunked metadata.
 await hc.fulfill("cs_long");
 const lg = await settle("cs_long");

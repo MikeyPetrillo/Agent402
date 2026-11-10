@@ -50,7 +50,7 @@ import { tempoPushSender } from "./tempo-confirm.js";
 import { syncWindowRefusalOf } from "./slow-sync-window.js";
 import { sharedClaimRequired } from "./replay-topology.js";
 import { drainSignal } from "./drain-abort.js";
-import { screenAddresses, screenFunding, sanctionsScreenStatus, maskAddress as maskOne } from "./sanctions-screen.js";
+import { screenAddresses, screenFunding, sanctionsScreenStatus, maskAddress as maskOne, TEMPO_SCREEN_REFUSED_DETAIL, TEMPO_SCREEN_REFUSED_HINT } from "./sanctions-screen.js";
 import { Secp256k1 } from "ox";
 import { lateWatchKey } from "./tempo-late-watches.js";
 
@@ -401,10 +401,12 @@ export const TEMPO_REFUSAL_CLASSES = Object.freeze({
   // address the transaction's calls name) is on the OFAC SDN list, or a
   // recent sender of funds to the payer is (the one-hop funding check).
   // Checked before verification and the exact match again before the broadcast.
+  // The same answer refuses a subscription's first payment when its paying
+  // wallet is screened out (src/mpp-subscriptions.js, in either mode).
   "screen-rejected": {
     kind: "verification-failed", status: 402,
-    detail: "An address in this payment, or an address that recently sent funds to the paying wallet, appears on the US Treasury OFAC SDN list, which this server screens Tempo per-call payments against. The payment was not broadcast and nothing was charged.",
-    hint: "This server does not accept this payment.",
+    detail: TEMPO_SCREEN_REFUSED_DETAIL,
+    hint: TEMPO_SCREEN_REFUSED_HINT,
   },
   // Direct mode only: the screen has no list loaded, so no payment address
   // can be checked and none is accepted. Retryable; nothing charged.

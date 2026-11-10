@@ -9,7 +9,7 @@
 // lease another container holds signs nothing. Requires STATE_DATABASE_URL
 // (CI fails without it; locally it skips). Fully offline otherwise: real mppx
 // codec objects, injected settlement, no RPC.
-import { mkdtempSync, writeFileSync, readFileSync, rmSync, utimesSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTestPg } from "./lib/test-pg.js";
@@ -374,6 +374,43 @@ try {
     const rowB = (await rowBody())?.[key(subB.subId)];
     ok(rowB?.lastChargedPeriod === 1 && rowB?.lastChargeTx === "0xq-race-b" && rowB?.cancelAtPeriodEnd === true, `a cancel decided on a copy read before the renewal's write keeps the charged period (row period=${rowB?.lastChargedPeriod} tx=${rowB?.lastChargeTx} cancel=${rowB?.cancelAtPeriodEnd})`);
     ok(rowB?.status === "active" && viewB?.status === "active", `...and, the new period being paid, stays active until it ends (row ${rowB?.status}, answer ${viewB?.status})`);
+  }
+
+  // ---- an ended subscription's key leaves the row, the write-through file and the other container's map ----
+  {
+    mkdirSync(join(D1, "kl"), { recursive: true }); // the write-through file needs its directory
+    const fileK = join(D1, "kl", "mpp-subscriptions.json");
+    const K1 = makeEngine(fileK);
+    await K1.engine.ready();
+    K1.calls.activate = 700; // its own mppx subscription ids in the shared row
+    const offerK = await K1.engine.mintOffer({ product: "domain-monitor", target: "key-lifetime.example", email: "kl@example.com" });
+    const subK = await K1.engine.activateFromCredential(await signCredential(Challenge.deserialize(offerK.header)));
+    await K1.engine.flush();
+    const recK = await K1.engine._readRec(subK.subId);
+    const held = Object.values(await rowBody()).find((v) => v && typeof v === "object" && typeof v.privateKey === "string" && v.accessKeyAddress === recK.accessKeyAddress);
+    const hex = String(held?.privateKey || "").replace(/^0x/, "").toLowerCase();
+    const inRow = async () => JSON.stringify(await rowBody()).toLowerCase().includes(hex);
+    const inFile = () => readFileSync(fileK, "utf8").toLowerCase().includes(hex);
+    // The second container boots while the subscription is live: its map has the key.
+    const K2 = makeEngine(join(D2, "kl", "mpp-subscriptions.json"));
+    await K2.engine.ready();
+    const inMap = (E) => JSON.stringify(E.engine._store._snapshot()).toLowerCase().includes(hex);
+    ok(hex.length === 64 && (await inRow()) && inFile() && inMap(K1) && inMap(K2), "control: a live subscription's key is in the row, in the write-through file and in both containers' maps");
+    const viewK = await K1.engine.cancel(subK.subId, K1.engine.manageToken(subK.subId));
+    await K1.engine.flush();
+    ok(viewK.status === "active" && viewK.cancelAtPeriodEnd === true && !(await inRow()) && !inFile() && !inMap(K1), "after the cancel the key is in neither the row, the write-through file nor the canceling container's map");
+    // The other container's sweep: held off while another holder has its lease, then it re-reads the row.
+    advance(PERIOD + 60_000);
+    await sdb.leases.acquire("mpp-subscription-ended-sweep", { owner: "other-container", ttlMs: 60_000 });
+    const skipped = await K2.engine.sweepEnded({ max: 500 });
+    ok(skipped?.skipped === "leased" && (await rowBody())?.[`a402:sub:${subK.subId}`]?.tombstone !== true, "the ended-subscription sweep does nothing while another container holds its lease");
+    await sdb.leases.release("mpp-subscription-ended-sweep", { owner: "other-container" });
+    const sweptK = await K2.engine.sweepEnded({ max: 500 });
+    await K2.engine.flush();
+    const rowK = (await rowBody())?.[`a402:sub:${subK.subId}`];
+    ok(sweptK.closed >= 1 && rowK?.tombstone === true && rowK?.status === "canceled" && rowK?.email === undefined && rowK?.target === undefined && rowK?.payer === recK.payer, `the other container's sweep closes and reduces the record in the row (closed ${sweptK.closed}, reduced ${sweptK.reduced})`);
+    ok(!inMap(K2) && !(await inRow()) && !JSON.stringify(await rowBody()).includes("kl@example.com"), "and its own map no longer holds the key; the email is gone from the row");
+    ok((await sdb.leases.holder("mpp-subscription-ended-sweep")) === null, "the sweep released its lease");
   }
 } finally {
   await sdb.__dropStateSchema().catch(() => {});

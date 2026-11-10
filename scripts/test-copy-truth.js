@@ -78,8 +78,21 @@ const flat = (s) => s.replace(/<[^>]+>/g, "").replace(/\s+/g, " ");
   ok(/email: b\.email/.test(rec) && /\bpayer, accessKeyAddress: b\.accessKeyAddress/.test(rec) && /typeof v\.privateKey === "string"/.test(subs),
     "an MPP subscription record holds the payer, the email and an access key");
   ok(!/For x402 and MPP payments there are no card numbers, names, or emails/.test(p), "/privacy no longer says MPP payments carry no email");
-  ok(/A monitor subscription paid over MPP is different: its record holds the paying wallet together with/.test(p) && /the email you give for delivery \(optional\), and a signing key/.test(p) && /is kept for the life of the subscription and after it ends/.test(p),
-    "/privacy names the MPP subscription record: wallet, email, signing key, kept after it ends");
+  ok(/A monitor subscription paid over MPP is different: its record holds the paying wallet together with/.test(p) && /the email you give for delivery \(optional\), and a signing key/.test(p),
+    "/privacy names the MPP subscription record: wallet, email, signing key");
+  // What happens to that record when the subscription ends, with the engine's own figures.
+  const { ENDED_RECORD_KEEP_MS, ENDED_SWEEP_INTERVAL_MS } = await import("../src/mpp-subscription-retention.js");
+  const { TOMBSTONE_FIELDS } = await import("../src/mpp-subscriptions.js");
+  const keepDays = ENDED_RECORD_KEEP_MS / 86_400_000, sweepMin = ENDED_SWEEP_INTERVAL_MS / 60_000;
+  const flatP = p.replace(/\s+/g, " ");
+  ok(!/is kept for the life of the subscription and after it ends/.test(flatP) && !/subscription's record is kept after the subscription ends/.test(flatP), "/privacy no longer says the MPP subscription record and key are kept after it ends");
+  ok(flatP.includes("it is deleted from our records when you cancel, when the expiry you signed passes, or when the subscription ends for any other reason") && flatP.includes("holds a copy until that backup is deleted"),
+    "/privacy says when the signing key is deleted, and that a backup made before then holds a copy until it is deleted");
+  ok(flatP.includes(`A check that runs every ${sweepMin} minutes does this for a subscription that ends on a date, and deletes the reduced record ${keepDays} days after the subscription ends.`) && flatP.includes(`record ${keepDays} days after it ends`),
+    `/privacy prints the engine's figures: reduced record deleted after ${keepDays} days, by a check every ${sweepMin} minutes`);
+  ok(flatP.includes("the email and the subject you asked us to watch are removed") && !TOMBSTONE_FIELDS.includes("email") && !TOMBSTONE_FIELDS.includes("target")
+    && ["subId", "product", "payer", "accessKeyAddress", "amountAtomic", "periodCount", "billingAnchor", "canceledAt", "status", "lastChargeTx"].every((k) => TOMBSTONE_FIELDS.includes(k)),
+    "the reduced record's fields are the ones /privacy lists: id, product, wallet, key address, amount, period, dates, final state, last transaction; no email, no subject");
   ok(!/aside from short-lived caches that make repeated identical calls cheaper, not retained/.test(t), "/terms no longer says outputs are kept in caches only");
 }
 

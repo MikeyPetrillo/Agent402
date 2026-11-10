@@ -82,6 +82,20 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   build books in its own unversioned window, so for as long as it serves the two builds' caps are
   independent (each seller and the lane can be paid up to one cap per build), and on the next
   roll-forward each sum's next rebuild (within a day) folds in that window's unexpired entries.
+- **Ended MPP subscriptions:** the private half of a subscription's access key is deleted when a
+  cancel is stored or the subscription ends (`finishEnded` in `src/mpp-subscriptions.js`, reached from
+  every write that ends one), and the record is reduced to `TOMBSTONE_FIELDS` unless a renewal is in
+  flight. The leased sweep `mpp-subscription-ended-sweep` (every `ENDED_SWEEP_INTERVAL_MS`, at most
+  `ENDED_SWEEP_MAX_PER_RUN` records changed per run, counts-only log line) closes records whose end
+  only the clock decides, finishes ended records, and deletes a reduced record
+  `ENDED_RECORD_KEEP_MS` after its end; the three constants live in
+  `src/mpp-subscription-retention.js`, which /privacy prints. A new path that ends a subscription
+  writes through `writeRecKeepingCancel` or calls `finishEnded`. The paying wallet is screened
+  (`screenPayer`: the exact list match, then the one-hop funding check and its cache) before the
+  first payment and before each renewal is signed; a refused first payment is the Tempo rail's
+  `screen-rejected` 402, a refused renewal is an ending write (`payer-not-accepted`), and with no
+  list loaded the payment is sent and counted (`payerScreen` on `/__operator/monitors.json`,
+  `sanctionsScreen.mppSubscriptions` on the operator view of `/api/gateway-status`).
 - **Subscription sponsor ceiling:** `src/tempo-sponsor-ceiling.js` wraps the RPC transport of both
   Tempo subscription clients (`src/mpp-subscriptions.js`): every raw send carrying a fee-payer
   signature is admitted into a rolling 24 h window (`src/shared-limits.js`, shared across replicas;
