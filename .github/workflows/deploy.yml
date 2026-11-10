@@ -1157,6 +1157,8 @@ jobs:
           t node scripts/test-correctness-fixes.js
           # Find ranker — live-catalog smoke test (boots free-mode, locks top-1 for agent queries)
           t node scripts/test-find-ranking.js
+          # /api/find and a stated conversion direction: a tool named for the reverse direction ranks below the rest, an unserved direction reads as a miss (direction.served false, weak rows, the hint), the reverse query and 88 pinned queries keep their top result, every tool still finds itself by its description; boots a free server on port 0
+          t node scripts/test-find-direction.js
           # /openapi.json coverage (every CATALOG tool has a path + operationId + x-price)
           t node scripts/test-openapi-coverage.js
           # MCP prompts/list + prompts/get (one prompt per skill pack; substitution renders)

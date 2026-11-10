@@ -48,6 +48,11 @@ word matches, not answers: the response carries `weakMatches: true`, each row
 outside seller does the task). A one-letter slip in a word of six or more
 letters that no tool mentions is corrected before ranking, and the response
 says what it changed in `corrected` (for example `{ "danctions": "sanctions" }`).
+A task that names a conversion direction ("convert X to Y", "X into Y", "Y from
+X") ranks a tool whose own name states the opposite direction below every other
+match and marks that row `reversed: true`. The response then carries
+`direction` (`from`, `to`, `served`, and the `reversed` slugs); when `served` is
+`false` no tool here converts that way, and the answer is marked as above.
 Under heavy load an uncached search may answer `503` with `Retry-After`.
 
 ### `POST /api/route`
