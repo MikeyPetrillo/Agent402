@@ -54,6 +54,14 @@ import { readBytesCapped, decodeUtf8 } from "./capped-body.js";
 // listed: a detail this wallet does not understand may change what is paid.
 const VETTED_METHOD_DETAILS = new Set(["chainId", "feePayer", "splits", "supportedModes", "memo", "machineTokenEnabled"]);
 
+// SELLER-WRITTEN CHALLENGE TEXT NEVER REACHES A MESSAGE AS WRITTEN. These
+// refusals are relayed to the buyer (route-execute), so each names a seller
+// value only when it has the plain shape of what it claims to be (a short
+// identifier, a token address, a chain number), and our own fixed words
+// otherwise.
+const plainName = (v) => (typeof v === "string" && /^[A-Za-z][A-Za-z0-9_-]{0,31}$/.test(v) ? v : null);
+const plainAddress = (v) => (typeof v === "string" && /^0x[0-9a-fA-F]{40}$/.test(v) ? v : null);
+
 /** Why a charge request's method details cannot be paid by this wallet, or
  *  null when they can. Pure; exported for tests. */
 export function methodDetailsRefusal(req) {
@@ -62,7 +70,10 @@ export function methodDetailsRefusal(req) {
   if (typeof md !== "object" || Array.isArray(md)) return "Seller's challenge carries unreadable method details; nothing was signed";
   if (md.machineTokenEnabled !== undefined && md.machineTokenEnabled !== false) return "Seller's challenge enables a machine-token route, which pays from another token than USDC.e; nothing was signed";
   const unknown = Object.keys(md).filter((k) => !VETTED_METHOD_DETAILS.has(k));
-  if (unknown.length) return `Seller's challenge carries a method detail this wallet does not know (${unknown.slice(0, 3).join(", ").slice(0, 80)}); nothing was signed`;
+  if (unknown.length) {
+    const named = unknown.slice(0, 3).map(plainName).filter(Boolean);
+    return `Seller's challenge carries a method detail this wallet does not know${named.length ? ` (${named.join(", ")})` : ""}; nothing was signed`;
+  }
   return null;
 }
 
@@ -433,12 +444,12 @@ export async function payTempo(url, {
   let challenges;
   try { challenges = Challenge.fromHeadersList(new Headers({ "WWW-Authenticate": www })); } catch { throw bad("Seller's MPP challenge did not parse", 502); }
   const ch = pickTempoChallenge(challenges);
-  if (!ch) throw bad(`Seller offers no tempo/charge method (offered: ${challenges.map((c) => `${c.method}/${c.intent}`).join(", ") || "none"})`, 409);
+  if (!ch) throw bad(`Seller offers no tempo/charge method (offered: ${challenges.slice(0, 5).map((c) => `${plainName(c.method) || "other"}/${plainName(c.intent) || "other"}`).join(", ") || "none"})`, 409);
   const req = ch.request || {};
   // 2. ASSET PIN + chain + margin guard, all before any signing.
-  if (String(req.currency || "").toLowerCase() !== TEMPO_USDC_LC) throw bad(`Seller quotes ${req.currency || "an unknown currency"} - this wallet pays only USDC.e on Tempo`, 409);
+  if (String(req.currency || "").toLowerCase() !== TEMPO_USDC_LC) throw bad(`Seller quotes ${plainAddress(req.currency) || "another currency"} - this wallet pays only USDC.e on Tempo`, 409);
   const chainId = req.methodDetails?.chainId;
-  if (chainId !== undefined && Number(chainId) !== TEMPO_CHAIN_ID) throw bad(`Seller's challenge targets chain ${chainId}, not Tempo mainnet (${TEMPO_CHAIN_ID})`, 409);
+  if (chainId !== undefined && Number(chainId) !== TEMPO_CHAIN_ID) throw bad(`Seller's challenge targets chain ${Number.isSafeInteger(Number(chainId)) ? Number(chainId) : "another chain"}, not Tempo mainnet (${TEMPO_CHAIN_ID})`, 409);
   let quotedAtomic;
   try { quotedAtomic = BigInt(String(req.amount)); } catch { throw bad("Seller's challenge amount is not an integer base-units string", 502); }
   if (!(quotedAtomic > 0n)) throw bad("Seller quoted a zero amount", 502);
