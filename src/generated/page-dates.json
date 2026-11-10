@@ -109,7 +109,7 @@
     "src/tools/html-kit.js": "2026-11-09",
     "src/tools/html-parse-ops.js": "2026-10-19",
     "src/tools/html-pool.js": "2026-11-09",
-    "src/tools/html-worker-ops.js": "2026-11-09",
+    "src/tools/html-worker-ops.js": "2026-10-20",
     "src/tools/html-worker.js": "2026-11-09",
     "src/tools/hyperliquid-shared.js": "2026-10-21",
     "src/tools/image-child.js": "2026-11-09",
