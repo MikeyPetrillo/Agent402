@@ -454,6 +454,30 @@ function rng(seed) {
     ok(renderMs < ORDINARY_BUDGET_MS / 2 && held > ORDINARY_BUDGET_MS, "markdown-to-html: control, the document renders in " + renderMs.toFixed(0) + "ms and the thread was held " + held.toFixed(0) + "ms, past the " + ORDINARY_BUDGET_MS + "ms budget");
     ok(typeof got.html === "string" && since.join() === "started,ended:done" && markdownPoolState().moved === movedBefore, "markdown-to-html: a render that finished while the serving thread was held is answered from that render, not moved, with no worker ended or started (" + since.join() + ")");
   }
+  // The costly lane's deadline is the same kind of timer. Two costly
+  // documents, the second waiting behind the first; the thread is held past
+  // the deadline while the first renders. The first is answered from its
+  // render, and its late timer must not end the second (now on the lane) or
+  // its worker.
+  {
+    const quick = "# T\n\n" + "Some *text* with **bold** and `code`.\n\n".repeat(4000);
+    await runMarkdown(quick, { costly: true });
+    await runMarkdown(quick, { costly: true });
+    const mark = events.length;
+    let held = 0;
+    const onStart = () => {
+      markdownPoolEvents.off("started", onStart);
+      setImmediate(() => { const t = performance.now(); while (performance.now() - t < RENDER_DEADLINE_MS + 300) { /* hold the thread */ } held = performance.now() - t; });
+    };
+    markdownPoolEvents.on("started", onStart);
+    const show = (p) => p.then((r) => (typeof r.html === "string" ? "200" : "no html"), (e) => e.statusCode + " " + String(e.message).slice(0, 60));
+    const [first, second] = await Promise.all([show(runMarkdown(quick, { costly: true })), show(runMarkdown(quick, { costly: true }))]);
+    await new Promise((r) => setTimeout(r, 50));
+    const since = events.slice(mark);
+    const shape = since.map((e) => e.type + (e.how ? ":" + e.how : ""));
+    ok(held > RENDER_DEADLINE_MS && first === "200", "markdown-to-html: a costly render that finished while the serving thread was held " + held.toFixed(0) + "ms, past the " + RENDER_DEADLINE_MS / 1000 + " s deadline, is answered from that render (" + first + ")");
+    ok(second === "200" && shape.join() === "started,ended:done,started,ended:done" && new Set(since.map((e) => e.worker)).size === 1, "markdown-to-html: the costly document waiting behind it is rendered by the same worker, not ended by the first one's late timer (" + second + "; " + shape.join() + ")");
+  }
   // THE ORDINARY BUDGET. Whatever the estimate said, a render that started as
   // ordinary holds its worker for the budget at most; then it moves to the
   // costly lane and ends there. Timing below is read from the pool's own
