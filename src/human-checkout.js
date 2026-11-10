@@ -245,6 +245,17 @@ const OWED_RESOLVE_TIMEOUT_MS = 15_000;
 const OWED_LIST_WAIT_MS = 300;
 const OWED_RESOLVE_RETRY_MS = 10 * 60_000;
 const OWED_RESOLVE_MAX_INFLIGHT = 3;
+// A buyer's poll that retries an owed refund (retryOwedRefund) waits this
+// long for Stripe; past it the poll is answered with the stored owed record
+// ("Your refund is being processed.") and the retry runs on beside it, its
+// outcome recorded when Stripe answers. While that retry is open, later
+// polls are answered at once from the record and start no second one. A
+// retry that has not ended after OWED_RETRY_ABANDON_MS (longer than the
+// Stripe client waits across its own tries) is given up, so a later poll
+// starts a new one; the refund's idempotency key makes the two one refund.
+const OWED_RETRY_WAIT_MS = 8_000;
+const OWED_RETRY_ABANDON_MS = 5 * 60_000;
+const OWED_RETRY_MAX_OPEN = 2000;
 // Failure breaker (review 2026-09-03): every failed generation is refunded, and Stripe keeps its fee on a
 // refund, so an input engineered to fail costs us the fee plus the upstream spend each time. After
 // FAIL_MAX failures from one buyer address inside FAIL_WINDOW_MS the next paid session is refunded
@@ -380,7 +391,7 @@ if (USE_PG) {
  * @param {()=>number} [deps.now]
  * @param {(s:string)=>void} [deps.log]
  */
-export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSale, onDelivered = null, onFailed = null, now = () => Date.now(), log = console.log, owedResolveTimeoutMs = OWED_RESOLVE_TIMEOUT_MS, owedResolveRetryMs = OWED_RESOLVE_RETRY_MS, owedListWaitMs = OWED_LIST_WAIT_MS }) {
+export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSale, onDelivered = null, onFailed = null, now = () => Date.now(), log = console.log, owedResolveTimeoutMs = OWED_RESOLVE_TIMEOUT_MS, owedResolveRetryMs = OWED_RESOLVE_RETRY_MS, owedListWaitMs = OWED_LIST_WAIT_MS, owedRetryWaitMs = OWED_RETRY_WAIT_MS, owedRetryAbandonMs = OWED_RETRY_ABANDON_MS }) {
   const dir = storeDir || DEFAULT_DIR();
   try { mkdirSync(dir, { recursive: true }); } catch { /* best-effort; writes will fail loudly below */ }
   const INFLIGHT = join(dir, "_inflight.json");   // sessionId -> claimedAt (ms)
@@ -679,10 +690,11 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
       const pi = session?.payment_intent;
       if (pi) {
         const piId = typeof pi === "string" ? pi : pi.id;
-        // On the database the refund carries a key of its own, so a refund
-        // issued again for the same payment (a retry whose reply was lost)
-        // returns the first one instead of failing or doubling.
-        const r = USE_PG ? await stripe.refunds.create({ payment_intent: piId }, { idempotencyKey: `agent402-refund-${piId}` }) : await stripe.refunds.create({ payment_intent: piId });
+        // The refund carries a key of its own, so a refund issued again for
+        // the same payment (a retry whose reply was lost, or one started
+        // after an earlier call stopped being waited for) returns the first
+        // one instead of failing or doubling.
+        const r = await stripe.refunds.create({ payment_intent: piId }, { idempotencyKey: `agent402-refund-${piId}` });
         return r.id;
       }
     } catch (e) { log(`[human-checkout] refund failed: ${String(e?.message || e).slice(0, 160)}`); }
@@ -784,19 +796,57 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     const refundId = await refundSession(session);
     return recordError(id, session, refundId, message);
   }
-  // An owed refund is retried on later polls (bounded, paced).
-  async function retryOwedRefund(id, rec) {
-    if (!rec.refundOwed || rec.refundId) return rec;
-    if ((rec.refundAttempts || 0) >= MAX_REFUND_ATTEMPTS) return rec;
-    if (now() - (rec.lastRefundAttemptAt || 0) < REFUND_RETRY_MS) return rec;
-    if (USE_PG && pendingFinals.has(id)) return rec; // its owed record has not landed yet
+  // An owed refund is retried on later polls (bounded, paced). The poll
+  // waits owedRetryWaitMs for the retry and is then answered with the owed
+  // record as stored; the retry runs on and records its own outcome. One
+  // retry per record at a time (owedRetrying), so a poll that arrives while
+  // Stripe has not answered waits on nothing and sends nothing.
+  const owedRetrying = new Map(); // id -> { startedAt, slow, done }
+  const owedRefunded = new Set(); // ids a retry here has refunded
+  const OWED_WAITED = Symbol("owedRetryWaited");
+  async function awaitOwedRetry(entry, rec) {
+    let timer = null;
+    const waited = new Promise((resolve) => { timer = setTimeout(() => resolve(OWED_WAITED), owedRetryWaitMs); timer.unref?.(); });
+    try {
+      const v = await Promise.race([entry.done, waited]);
+      if (v !== OWED_WAITED) return v;
+    } finally { clearTimeout(timer); }
+    entry.slow = true;
+    return rec;
+  }
+  async function runOwedRetry(id, rec, entry) {
     // Only a report purchase is refunded from here; any other stored record
     // is left as it is (and one whose session cannot be read waits).
     const isReport = await owedIsReport(id, rec);
     if (isReport !== true) { if (isReport === false) noteSkippedOwed(id); return rec; }
     const refundId = await refundSession({ payment_intent: rec.paymentIntent });
+    if (refundId) {
+      if (owedRefunded.size >= OWED_RETRY_MAX_OPEN) owedRefunded.clear();
+      owedRefunded.add(id);
+    } else if (owedRetrying.get(id) !== entry || owedRefunded.has(id)) {
+      // A failure from a retry that was given up, or after another retry
+      // refunded the payment, records nothing: it must not count an attempt
+      // against, or write "owed" over, the newer outcome.
+      return rec;
+    }
     const product = typeof rec.product === "string" ? rec.product : owedReport.get(id);
     return recordError(id, { payment_intent: rec.paymentIntent, metadata: { product } }, refundId, rec.error.replace(/ Your refund is being processed\.$/, ""));
+  }
+  async function retryOwedRefund(id, rec) {
+    if (!rec.refundOwed || rec.refundId) return rec;
+    const open = owedRetrying.get(id);
+    if (open && now() - open.startedAt < owedRetryAbandonMs) return open.slow ? rec : awaitOwedRetry(open, rec);
+    if ((rec.refundAttempts || 0) >= MAX_REFUND_ATTEMPTS) return rec;
+    if (now() - (rec.lastRefundAttemptAt || 0) < REFUND_RETRY_MS) return rec;
+    if (USE_PG && pendingFinals.has(id)) return rec; // its owed record has not landed yet
+    const entry = { startedAt: now(), slow: false, done: null };
+    owedRetrying.delete(id);
+    while (owedRetrying.size >= OWED_RETRY_MAX_OPEN) owedRetrying.delete(owedRetrying.keys().next().value);
+    owedRetrying.set(id, entry);
+    entry.done = runOwedRetry(id, rec, entry).finally(() => { if (owedRetrying.get(id) === entry) owedRetrying.delete(id); });
+    // A retry that fails after its poll stopped waiting has no caller left.
+    entry.done.catch((e) => { if (entry.slow) log(`[human-checkout] owed refund retry stopped: ${String(e?.message || e).slice(0, 160)}`); });
+    return awaitOwedRetry(entry, rec);
   }
 
   const failKeyOf = (session) => {
