@@ -45,14 +45,21 @@ Loaded when a media, document or worker-pool tool file is read.
   `src/tools/image-headers.js` holds each format to the field its decoder sizes from: one PNG
   IHDR, and it comes first; one JPEG frame header on the marker chain, with the cap also handed
   to the JPEG decoder (`maxResolutionInMP`), which applies it to whichever frame header it acts
-  on; GIF frame 0 inside its screen, read with the omggif copy jimp loads.
+  on; GIF frame 0 inside its screen, read with the omggif copy jimp loads, and its LZW data
+  read once for a code the table does not define yet (the decoder's prefix walk does not come
+  back from one).
   `assertInflateWithinDeclared` runs in the worker and bounds the inflate of an interlaced PNG.
-  No WebP decoder is installed.
+  No WebP decoder is installed. The pool's call (`mainThread`) holds its own work to a fixed
+  budget (4,096 TIFF entries and strip rows, 64 KB of GIF frame data) and leaves a larger file
+  to the worker, which runs the whole check before it decodes. `scripts/test-image.js` ends
+  with a seeded fuzz of every format (300 mutated files each, about a second).
 - **TIFF:** the tools use the first image, so `tiffLayout` reads that one directory the way the
   decoder does and bounds it (pixels, sample bytes, tile, tag value counts against the file's
   length), and the decoder is given `tiffDecoderView`: a copy of the file in which that
   directory is the only one, sub-directory and maker-note tags carry an unused tag number
-  (stored, never followed), and byte counts stop at the end of the file. Multi-page files,
+  (stored, never followed), and byte counts stop at the end of the file. Those edits land in
+  the directory, which a file can also point its own values at, so `tiffSettledView` checks
+  the view again as the decoder will read it and refuses one that does not settle. Multi-page files,
   maker notes and raw-sensor pages decode to the same pixels as before. In the worker,
   `assertTiffStreams` inflates each deflate strip under the page's size and caps every frame
   header an embedded-JPEG decoder could read (compression 6, 7, 34892; a raw byte scan of the
