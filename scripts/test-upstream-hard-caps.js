@@ -7,6 +7,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import {
   HARD_CAPS, hardCapOf, takeHardCap, hardCapRefusalForHost, hardCapStatus, _resetHardCaps,
+  neverReachedUpstream, releaseHardCap,
 } from "../src/upstream-hard-caps.js";
 
 let pass = 0, fail = 0;
@@ -155,6 +156,92 @@ installEgressMeter();
   }
   delete process.env.HARDCAP_ALCHEMY_CALLS;
 }
+// --- a unit is a call that may have reached the upstream -----------------------
+// A call that provably never left this process gives its unit back; an
+// upstream that answered an error, a timeout and a reset all keep theirs.
+{
+  const used = () => hardCapStatus().upstreams.brave.usedToday;
+  const fetchFailed = (code) => Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error(code), { code }) });
+  // The release runs on a handler attached to the call's promise: wait for the
+  // count to settle rather than for a fixed time.
+  const settled = async (want) => { for (let i = 0; i < 200 && used() !== want; i++) await new Promise((r) => setImmediate(r)); return used(); };
+  const call = async (opts) => { try { await fetch("https://api.search.brave.com/res/v1/web/search?q=a", opts); } catch { /* the outcome is read from the count */ } };
+  _resetHardCaps();
+  process.env.HARDCAP_BRAVE_CALLS = "100";
+  for (const code of ["ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "UND_ERR_CONNECT_TIMEOUT"]) {
+    inner = async () => { throw fetchFailed(code); };
+    await call();
+    ok(await settled(0) === 0, `a call that failed with ${code} never reached the upstream and is not counted (used ${used()})`);
+  }
+  inner = async () => { throw Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new AggregateError([Object.assign(new Error("a"), { code: "ECONNREFUSED" }), Object.assign(new Error("b"), { code: "ENETUNREACH" })], "all failed"), {}) }); };
+  await call();
+  ok(await settled(0) === 0, "a connect failure on every address tried is not counted");
+  ok(hardCapStatus().upstreams.brave.releasedToday === 7, `the units given back are counted on the operator view (${hardCapStatus().upstreams.brave.releasedToday})`);
+  // A signal already aborted when the call is made: nothing is sent.
+  const dead = AbortSignal.abort();
+  inner = async () => { throw new DOMException("This operation was aborted", "AbortError"); };
+  await call({ signal: dead });
+  ok(await settled(0) === 0, "a call made on an already-aborted signal is not counted");
+
+  // Everything below MAY have reached the upstream: each keeps its unit.
+  let want = 0;
+  for (const status of [200, 400, 401, 403, 429, 500, 503]) {
+    inner = async () => new Response("{}", { status });
+    await call(); want++;
+    await new Promise((r) => setImmediate(r));
+    ok(used() === want, `an upstream answer of ${status} is counted (used ${used()} of ${want})`);
+  }
+  for (const code of ["ECONNRESET", "UND_ERR_SOCKET", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT", "EPIPE", "ETIMEDOUT"]) {
+    inner = async () => { throw fetchFailed(code); };
+    await call(); want++;
+    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+    ok(used() === want, `a call that failed with ${code} may have been read by the upstream and is counted (used ${used()} of ${want})`);
+  }
+  // A live signal aborted mid-flight (a timeout): the request was on the wire.
+  {
+    const ac = new AbortController();
+    inner = async () => { ac.abort(); throw new DOMException("This operation was aborted", "AbortError"); };
+    await call({ signal: ac.signal }); want++;
+    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+    ok(used() === want, `a call aborted after it was made is counted (used ${used()} of ${want})`);
+  }
+  inner = async () => { throw new Error("no code at all"); };
+  await call(); want++;
+  for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+  ok(used() === want, "an unclassified failure is counted");
+
+  // The ceiling still holds while calls are in flight: the unit is taken first.
+  _resetHardCaps();
+  process.env.HARDCAP_BRAVE_CALLS = "2";
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  let reached = 0;
+  inner = async () => { reached++; await gate; return new Response("{}"); };
+  const inFlight = [call(), call(), call(), call()];
+  ok(reached === 2, `with two calls in flight at a ceiling of 2, the third and fourth are refused before the network (reached ${reached})`);
+  release(); await Promise.all(inFlight);
+  // A refused connection frees its unit for the next call.
+  _resetHardCaps();
+  process.env.HARDCAP_BRAVE_CALLS = "1";
+  inner = async () => { throw fetchFailed("ECONNREFUSED"); };
+  await call();
+  await settled(0);
+  reached = 0;
+  inner = async () => { reached++; return new Response("{}"); };
+  await call();
+  ok(reached === 1, "after a call that never connected, the next call still has its unit");
+  await call();
+  ok(reached === 1, "and the one after that meets the ceiling");
+
+  // The classifier and the release, read directly.
+  ok(neverReachedUpstream(fetchFailed("ENOTFOUND")) && !neverReachedUpstream(fetchFailed("ECONNRESET")) && !neverReachedUpstream(null) && !neverReachedUpstream(new Error("x")), "the classifier reads the cause chain and defaults to counted");
+  _resetHardCaps();
+  process.env.HARDCAP_BRAVE_CALLS = "5";
+  ok(releaseHardCap("brave", T0, T0) === false, "nothing is given back when nothing was taken");
+  takeHardCap("brave", T0);
+  ok(releaseHardCap("brave", T0, T0 + 86_400_000) === false && hardCapStatus(T0 + 86_400_000).upstreams.brave.usedToday === 0, "a unit taken on an earlier day is not given back to today");
+  delete process.env.HARDCAP_BRAVE_CALLS;
+}
 inner = async () => new Response("{}");
 
 // --- the kit gate: no sandbox is created past the ceiling ----------------------
@@ -175,6 +262,18 @@ inner = async () => new Response("{}");
   err = null;
   try { await run.handler({ code: "print(1)", language: "python" }); } catch (e) { err = e; }
   ok(created === 1 && !err, `code-run: under the ceiling the sandbox is created (created ${created}${err ? `, ${err.message}` : ""})`);
+  // A create that never reached the sandbox service gives its unit back; one
+  // that failed any other way keeps it (a sandbox may have started).
+  const e2bUsed = () => hardCapStatus().upstreams.e2b.usedToday;
+  const before = e2bUsed();
+  codeRunTest.setSandbox({ create: async () => { throw Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("refused"), { code: "ECONNREFUSED" }) }); } });
+  err = null;
+  try { await run.handler({ code: "print(1)", language: "python" }); } catch (e) { err = e; }
+  ok(err?.statusCode === 503 && e2bUsed() === before, `code-run: a sandbox service that could not be reached does not count a sandbox (used ${e2bUsed()} of ${before})`);
+  codeRunTest.setSandbox({ create: async () => { throw new Error("502 from the sandbox service"); } });
+  err = null;
+  try { await run.handler({ code: "print(1)", language: "python" }); } catch (e) { err = e; }
+  ok(err?.statusCode === 503 && e2bUsed() === before + 1, `code-run: a create that failed after reaching the service keeps its unit (used ${e2bUsed()} of ${before + 1})`);
   codeRunTest.setSandbox(undefined);
   delete process.env.HARDCAP_E2B_SANDBOXES;
   delete process.env.E2B_API_KEY;

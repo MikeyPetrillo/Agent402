@@ -16,6 +16,15 @@
 // one sync interval of traffic. Without a shared store the per-process count
 // is the bound, and it survives nothing a restart resets.
 //
+// WHAT A UNIT IS: a call that may have reached the upstream. The unit is taken
+// before the call (so a burst cannot pass the ceiling while calls are in
+// flight) and given back only when the call provably never left this process:
+// the name did not resolve, the connection was refused or never opened, or the
+// caller's signal was already aborted when the call was made
+// (neverReachedUpstream). Everything else keeps its unit, whatever came back:
+// an upstream that answered an error, a timeout or a reset after the request
+// was written may all have been metered there.
+//
 // A ceiling of `0` refuses every call; `off` disables one. A malformed value
 // falls back to the default, never to disabled.
 
@@ -42,12 +51,12 @@ export function hardCapOf(c, env = process.env) {
   return Number.isFinite(n) && n >= 0 ? Math.floor(n) : c.dflt;
 }
 
-const state = new Map(); // name -> { day, local, unflushed, shared, refused, store }
+const state = new Map(); // name -> { day, local, unflushed, shared, refused, released, store }
 function rowOf(c, now = Date.now()) {
   let s = state.get(c.name);
   const d = utcDay(now);
-  if (!s) { s = { day: d, local: 0, unflushed: 0, shared: null, refused: 0, store: createSharedDailySpend(`hardcap-${c.name}`, "upstream-hard-caps", { scale: 1 }) }; state.set(c.name, s); }
-  if (s.day !== d) { s.day = d; s.local = 0; s.unflushed = 0; s.shared = null; s.refused = 0; }
+  if (!s) { s = { day: d, local: 0, unflushed: 0, shared: null, refused: 0, released: 0, store: createSharedDailySpend(`hardcap-${c.name}`, "upstream-hard-caps", { scale: 1 }) }; state.set(c.name, s); }
+  if (s.day !== d) { s.day = d; s.local = 0; s.unflushed = 0; s.shared = null; s.refused = 0; s.released = 0; }
   return s;
 }
 
@@ -61,7 +70,7 @@ function capForHost(host) {
   return c;
 }
 
-function seenToday(s) { return Math.max(s.local, (s.shared ?? 0) + s.unflushed); }
+function seenToday(s) { return Math.max(0, s.local, (s.shared ?? 0) + s.unflushed); }
 
 /**
  * Take one unit of `name`'s ceiling. Returns true when the call may go ahead
@@ -77,6 +86,51 @@ export function takeHardCap(name, now = Date.now()) {
   if (seenToday(s) >= cap) { s.refused++; return false; }
   s.local++; s.unflushed++;
   return true;
+}
+
+// Failures that happen before a request is written: name resolution, and a
+// connection that was refused, unroutable or never opened. A reset, a body
+// timeout or a closed socket is not here: the request may have been read.
+const NEVER_SENT_CODES = new Set([
+  "ENOTFOUND", "EAI_AGAIN", "EAI_NODATA", "EAI_NONAME",
+  "ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "EADDRNOTAVAIL",
+  "UND_ERR_CONNECT_TIMEOUT",
+]);
+/**
+ * True only when `err` shows the call never left this process. Reads the
+ * error and up to four causes (fetch wraps the socket error as `cause`).
+ * `abortedAtCall`: the caller's signal was already aborted when the call was made.
+ */
+export function neverReachedUpstream(err, { abortedAtCall = false } = {}) {
+  if (abortedAtCall) return true;
+  let e = err;
+  for (let i = 0; i < 5 && e && typeof e === "object"; i++) {
+    if (typeof e.code === "string" && NEVER_SENT_CODES.has(e.code)) return true;
+    // A happy-eyeballs failure carries one error per address tried.
+    if (Array.isArray(e.errors) && e.errors.length && e.errors.every((x) => typeof x?.code === "string" && NEVER_SENT_CODES.has(x.code))) return true;
+    e = e.cause;
+  }
+  return false;
+}
+
+/**
+ * Give back the unit a call took at `takenAt`, for a call that never reached
+ * the upstream. A unit taken on an earlier UTC day is not given back to today.
+ */
+export function releaseHardCap(name, takenAt = Date.now(), now = Date.now()) {
+  const c = byName.get(name);
+  if (!c || hardCapOf(c) === null) return false;
+  const s = rowOf(c, now);
+  if (utcDay(takenAt) !== s.day || s.local <= 0) return false;
+  // unflushed may pass below zero when the unit was already flushed: the next
+  // sync books the difference to the shared counter.
+  s.local--; s.unflushed--; s.released++;
+  return true;
+}
+
+/** The capped upstream a host belongs to, or null. */
+export function hardCapNameForHost(host) {
+  try { return host ? (capForHost(String(host).toLowerCase())?.name ?? null) : null; } catch { return null; }
 }
 
 /** The fetch hook's check: null when the host is not capped or the call may go ahead. */
@@ -131,7 +185,7 @@ export function hardCapStatus(now = Date.now()) {
     // made the word (and the heartbeat issue) flip on every read.
     const status = cap === null ? "disabled" : (seenToday(s) >= cap ? "capped" : "ok");
     if (status === "capped") worst = "capped";
-    rows[c.name] = { usedToday: seenToday(s), ceiling: cap, refusedToday: s.refused, status, shared: s.store.enabled };
+    rows[c.name] = { usedToday: seenToday(s), ceiling: cap, refusedToday: s.refused, releasedToday: s.released, status, shared: s.store.enabled };
   }
   return { day: utcDay(now), status: worst, upstreams: rows };
 }
