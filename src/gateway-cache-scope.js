@@ -70,11 +70,12 @@ const MAX_READ_WINDOW_SEC = BigInt(Math.floor((SETTLED_HOLD_MS - CONSUMED_VALIDI
 // the accept's maxTimeoutSeconds, so its window is never short and the bound
 // above reads none of its payments. A read also accepts an authorization
 // that expires no later than that client would set it for a payment signed
-// now (every accept here asks DEFAULT_MAX_TIMEOUT_SECONDS, src/evm-validity.js:
-// the same figure, held equal by scripts/test-gateway-cache-scope.js), plus a
-// clock allowance. An authorization that expires within the guard's hold of
-// its settle, as every one from a client that follows the accept does, has
-// expired before its consumed mark lapses.
+// now (the exact-scheme accepts ask DEFAULT_MAX_TIMEOUT_SECONDS,
+// src/evm-validity.js: the same figure, held equal by
+// scripts/test-gateway-cache-scope.js; the batched accept asks a longer one),
+// plus a clock allowance. An authorization that expires within the guard's
+// hold of its settle, as one from a client that follows an exact accept does,
+// has expired before its consumed mark lapses.
 export const STOCK_MAX_TIMEOUT_SEC = 300;
 export const STOCK_EXPIRY_SLACK_SEC = 60;
 const MAX_READ_REMAINING_SEC = BigInt(STOCK_MAX_TIMEOUT_SEC + STOCK_EXPIRY_SLACK_SEC);
