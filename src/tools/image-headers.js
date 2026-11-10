@@ -532,7 +532,11 @@ export function assertTiffStreams(buf, layout, maxPixels) {
     // One strip inflates to its own rows, and all of them to the page: the
     // loop is held to both, whatever the table lists.
     const each = Math.min(page.tiled ? page.tileBytes : page.stripBytes, page.sampleBytes + page.tileBytes) + INFLATE_SLACK;
-    let left = (page.tiled ? page.parts * page.tileBytes : page.sampleBytes) + INFLATE_SLACK * 16;
+    // Strips together may hold what their own rows hold: a writer may pad the
+    // last strip to a full rowsPerStrip, which is more than the page's rows
+    // and less than twice them (a strip is never taller than the page here).
+    const perStrip = Math.min(page.stripBytes, page.sampleBytes);
+    let left = (page.tiled ? page.parts * page.tileBytes : Math.max(page.sampleBytes, page.parts * perStrip)) + INFLATE_SLACK * 16;
     for (let j = 0; j < page.parts; j++) {
       // The decoder inflates the bytes between a 2-byte head and a 4-byte tail.
       const { offset, length } = page.part(j);

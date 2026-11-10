@@ -574,6 +574,19 @@ const hex = (n) => (n >>> 0).toString(16).padStart(8, "0");
     const manyStrips = Buffer.concat([strips(4096, 8, 4096, 1, 8, (k) => starts[k], (k) => rowsZ[k].length), ...rowsZ]);
     await decodes("a deflate TIFF of 4,096 one-row strips", manyStrips, (f) => f.width === 8 && f.height === 4096 && at(f, 3, 0) === gray(0) && at(f, 3, 77) === gray(77) && at(f, 7, 4095) === gray(255));
     fuzzSeeds.tiff.push(Buffer.concat([strips(16, 8, 16, 1, 8, (k) => starts[k], (k) => rowsZ[k].length), ...rowsZ.slice(0, 16)]));
+    // Some writers pad the last strip to a full rowsPerStrip: 100 rows in
+    // strips of 40 is three strips of 40 rows, 120 rows of data for a 100-row
+    // page. That is more data than the page holds and no more than its strips
+    // hold, and the decoder accepts it, so the check must too.
+    {
+      const padZ = [0, 1, 2].map((p) => zlibMod.deflateSync(Buffer.concat(Array.from({ length: 40 }, (_, r) => Buffer.alloc(64, p * 40 + r)))));
+      const padAt = [0, padZ[0].length, padZ[0].length + padZ[1].length];
+      await decodes("a deflate TIFF whose last strip is padded to a full rowsPerStrip", Buffer.concat([strips(3, 64, 100, 40, 8, (k) => padAt[k], (k) => padZ[k].length), ...padZ]), (f) => f.width === 64 && f.height === 100 && at(f, 3, 0) === gray(0) && at(f, 3, 2) === gray(2) && at(f, 60, 39) === gray(39));
+      // The allowance is the strips' own rows, not more: a strip that
+      // inflates past its rows is still refused.
+      const fat = zlibMod.deflateSync(Buffer.alloc(64 * 45));
+      await refusedInWorker("a deflate TIFF whose strip inflates to five rows more than rowsPerStrip", Buffer.concat([strips(3, 64, 100, 40, 8, () => 0, () => fat.length), fat]), /^tiff strips cover the same bytes more than once|^tiff strip 0 inflates past the 64x100 page/, ["image-convert"]);
+    }
     const wide = zlibMod.deflateSync(Buffer.alloc(1e6));
     await refusedInWorker("a deflate TIFF whose first one-row strip inflates to a megabyte", Buffer.concat([strips(4096, 8, 4096, 1, 8, () => 0, () => wide.length), wide]).subarray(0), /^tiff strips cover the same bytes more than once|^tiff strip 0 inflates past/, ["image-convert"]);
     await refusedInWorker("a one-strip-per-row deflate TIFF whose strip inflates to a megabyte", Buffer.concat([strips(2, 8, 2, 1, 8, () => 0, () => wide.length), wide]), /^tiff strip 0 inflates past the 8x2 page/, ["image-convert"]);
