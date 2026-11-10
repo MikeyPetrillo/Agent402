@@ -41,5 +41,29 @@ ok(err?.statusCode === 422, "a wallet holding no tokens gets a 422 on the metada
 const pack = SKILL_PACKS.find((p) => p.slug === "wallet-audit");
 ok(/token the wallet holds/.test(pack?.tagline || "") && !/for a given address|contracts the wallet interacts with/.test([pack?.tagline, ...(pack?.workflow || [])].join(" ")), "wallet-audit's copy says it reads a token the wallet holds");
 
+// Pack copy, the macro tool descriptions and the storefront's fund card say
+// what the data is and where it comes from: no signal, prediction or advice
+// wording. (The Sahm Rule's published name, "recession indicator", is a name.)
+{
+  const ADVICE = /recession[- ]signal|recession lead indicator|recession-priced|recession territory|are we in (or near )?a recession|smart money|before any investment decision|recommend a savings|inflation-sensitive recommendation/i;
+  const hits = [];
+  for (const p of SKILL_PACKS) {
+    const txt = [p.title, p.tagline, p.useCase, ...(p.workflow || []), p.claudePrompt].filter(Boolean).join(" ");
+    const m = txt.match(ADVICE);
+    if (m) hits.push(`${p.slug}: "${m[0]}"`);
+  }
+  ok(hits.length === 0, `no skill pack's copy uses signal, prediction or advice wording${hits.length ? ": " + hits.join("; ") : ""}`);
+  ok(ADVICE.test("the classic recession signal") && ADVICE.test("Follow the smart money") && !ADVICE.test("the Sahm Rule recession indicator"), "control: the wording check matches the phrases it names and not the indicator's published name");
+  const { readFileSync } = await import("node:fs");
+  const src = (f) => readFileSync(new URL(`../${f}`, import.meta.url), "utf8");
+  for (const f of ["src/human-reports-page.js", "src/tools/macro-kit.js", "wiki/Skill-Packs.md"]) {
+    const lines = src(f).split("\n").filter((l) => !/^\s*\/\//.test(l) && ADVICE.test(l));
+    ok(lines.length === 0, `${f} carries none of that wording${lines.length ? ": " + lines[0].trim().slice(0, 80) : ""}`);
+  }
+  const macro = SKILL_PACKS.find((p) => p.slug === "macro-context");
+  ok(/each figure with its as-of date and source/.test(macro?.tagline || "") && /makes no forecast/.test(macro?.useCase || ""), "macro-context says its figures are dated and sourced, and that it makes no forecast");
+  ok(/<h3>A fund's 13F holdings<\/h3>/.test(src("src/human-reports-page.js")), "the fund card is headed by what it reports: a fund's 13F holdings");
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

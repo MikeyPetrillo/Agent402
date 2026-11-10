@@ -89,8 +89,8 @@ Every pack is **also a single paid endpoint**, `POST /api/skill/{slug}`, which r
 | [**regulatory-watch**](https://agent402.tools/skills/regulatory-watch) | $0.023 | "Who just filed / bought / IPO'd?" - EDGAR full-text search, recent filings, Form 4s, a reference 13F holdings report, IPO calendar. |
 | [**ipo-watch**](https://agent402.tools/skills/ipo-watch) | $0.023 | What's going public? Recent S-1/IPO filings from EDGAR plus a web search for IPO news. |
 | [**yield-dashboard**](https://agent402.tools/skills/yield-dashboard) | $0.014 | Current yield-curve snapshot: full Treasury curve, key spreads, and average rates. |
-| [**fixed-income-desk**](https://agent402.tools/skills/fixed-income-desk) | $0.017 | Read the rate environment and price a bond in one workflow: live Treasury curve, the recession-signal spread, inflation context, then bond price and yield at current rates. |
-| [**inflation-check**](https://agent402.tools/skills/inflation-check) | $0.018 | Is the economy in recession territory? CPI, fed funds, unemployment, and Sahm rule. |
+| [**fixed-income-desk**](https://agent402.tools/skills/fixed-income-desk) | $0.017 | Read the rate environment and price a bond in one workflow: live Treasury curve, the 2s10s and 3M-10Y spreads, inflation context, then bond price and yield at current rates. |
+| [**inflation-check**](https://agent402.tools/skills/inflation-check) | $0.018 | Four dated US series in one call: CPI, fed funds, unemployment and the Sahm Rule recession indicator. |
 | [**fx-monitor**](https://agent402.tools/skills/fx-monitor) | $0.009 | Major currency snapshot: EUR/USD, GBP/USD, JPY/USD plus the full FX dashboard. |
 | [**fred-snapshot**](https://agent402.tools/skills/fred-snapshot) | $0.005 | Key Fed indicators - fed funds rate, unemployment, and CPI - in one call. |
 | [**world-data**](https://agent402.tools/skills/world-data) | $0.005 | GDP and population for a country - two key World Bank indicators. |
