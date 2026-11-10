@@ -22,14 +22,17 @@ Gateway:
   sent as low when the output cap is under the tier's default output budget,
   and a reasoning or thinking budget is lowered to leave a quarter of the cap
   for the answer. An answer that came back empty for length gets one more run
-  on the same model at its lowest effort when the payment window allows. The
-  answer names the change in agent402_reasoning_adjusted (a response header on
-  a stream); the quote reads the buyer's own values.
-- The metered routes advise a client timeout of at least 120 s on every
-  surface that describes them: the answer is generated and the payment settled
+  on the same model at its lowest effort when the price covers another run and
+  the payment window allows. The answer names the change in
+  agent402_reasoning_adjusted (a response header on a stream); the quote reads
+  the buyer's own values.
+- The metered routes advise a client timeout of at least 120 s on llms.txt,
+  llms-full.txt, openapi, the home page, SKILL.md, the x402 guide, a flat
+  tier's 402, the connector's server.describe and payment.info answers and the
+  LLM-Gateway wiki page: the answer is generated and the payment settled
   before the response is sent, and a charge for an answer the client did not
   wait for is recorded as owed and reviewed for a refund.
-- A wallet's repeated settle failures on the /v1 routes are counted per
+- An EVM wallet's repeated settle failures on the /v1 routes are counted per
   network the payment named, so its 429 holds that network only and carries
   retry, refusedNetwork, retryAfterSeconds and otherNetworksFrom. A burst of
   settle failures across buyers refuses nobody; it reads as a status word
@@ -55,8 +58,9 @@ Payments:
   payer-not-accepted on its status answer.
 - An MPP subscription's signing key is deleted when the subscription is
   canceled or ends. The ended record is reduced to its id, product, wallet,
-  key address, amount, period, dates, final state and last transaction, and
-  deleted 30 days after the end.
+  key address, chain, currency, amount, period, dates, final state, cancel
+  reason, last transaction and a marker for a charge that was never confirmed,
+  and deleted 30 days after the end.
 - The card report route generates, records and refunds only for a paid
   Checkout session that names a report product; any other session answers
   invalid. A report whose product left sale after the purchase is still
@@ -94,9 +98,10 @@ Router:
 Tools:
 - A transcription call whose upstream answers a 5xx, a rate limit naming a
   wait of at most three seconds, or a failed connection gets one more attempt
-  on the same model inside the time cap the call already had. A served second
-  attempt carries agent402_retried {attempts, reason}; a 5xx on a route call
-  says nothing was charged and names the other transcription path.
+  on the same model inside the time cap the call already had, when at least
+  20 s of it remain. A served second attempt carries agent402_retried
+  {attempts, reason}; a 5xx on a route call says nothing was charged and names
+  the other transcription path.
 - Markdown-to-html gives a document in its ordinary lane 1 s to render; past
   it the document starts again in the lane for slow documents under that
   lane's deadline. Waiting in the ordinary lane is fair by client address: the
@@ -104,9 +109,10 @@ Tools:
   most 128 places.
 - The PDF, image, HTML, regex, markdown and office parser workers start with
   an allowlisted environment.
-- The search tools and the X data tools keep serving past their daily alarm
-  ceiling, where exaSpend and xDataSpend on /api/gateway-status read over; at
-  a higher hard ceiling a call answers 503 and the word reads capped.
+- Exa-search, exa-answer, exa-contents and the X data tools keep serving past
+  their daily alarm ceiling, where exaSpend and xDataSpend on
+  /api/gateway-status read over; at a higher hard ceiling a call answers 503
+  and the word reads capped.
 Operations:
 - /status and /api/status list each observer of the paid call path with its
   own state, age and staleness bound (current.sources); an observer past its
@@ -137,9 +143,11 @@ Privacy:
   MPP subscription, and the daily count of searches the free search routes
   turned away.
 Docs:
-- The gateway guide and the LLM-Gateway wiki page state the metered refusals
-  for every wire; Self-Hosting documents the payTo variables and BASE_URL;
-  every markdown install line pins the agent402-mcp version.
+- The buying-at-volume guide and wiki page state the metered pre-payment
+  refusals for every wire, and the LLM-Gateway wiki page states the
+  provider-refusal 400 for every wire; Self-Hosting documents the payTo
+  variables and BASE_URL; every markdown install line pins the agent402-mcp
+  version.
 
 ### 2026-11-09 (tool and payment bounds)
 Tools:
