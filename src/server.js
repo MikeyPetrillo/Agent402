@@ -434,7 +434,7 @@ import { startRouterPool, routerPoolStatus } from "./router-pool.js";
 import { allPayToOriginsAsync, allPayToPricesAsync, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedToolsAsync, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategoriesAsync, configureListingsStore, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR, brokenListingsSummary, brokenListingsStatus } from "./x402-index.js";
 import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot, screenMppSellerForServe } from "./mpp-index.js";
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
-import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled, tempoSettlementMode } from "./mpp-tempo.js";
+import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled, tempoSettlementMode, tempoRefusalProblem } from "./mpp-tempo.js";
 import { startSanctionsScreen, sanctionsScreenStarted, sanctionsScreenStatus, sanctionsScreenOperatorView } from "./sanctions-screen.js";
 import { createX402PayerScreen, x402PayerScreenView } from "./x402-payer-screen.js";
 import { createMppReconciler, fetchTransfersFromFeed, fetchTransfersFromRpc } from "./mpp-reconcile.js";
@@ -3189,6 +3189,12 @@ if (_mppSubs) {
   // period (src/mpp-subscription-retention.js). Never touches one that can
   // still be pulled.
   _mppSubs.start();
+  // Subscription payers are screened against the list the x402 payer screen
+  // and Tempo direct mode load (src/sanctions-screen.js). Those start it
+  // during boot with their own timing; this covers a server that runs
+  // neither (FREE_MODE with subscriptions on), after they have had their turn.
+  const s = setTimeout(() => { if (!sanctionsScreenStarted()) startSanctionsScreen(); }, 30_000);
+  s.unref?.();
 }
 // Prepaid card credits (src/credits.js): same rollout switch
 // as the human checkout. The GATE mounts inside the paywall block below
@@ -3958,11 +3964,12 @@ app.get("/api/gateway-status", async (req, res) => {
     // payout screen: one word publicly, counts and the last error for the operator.
     sanctions: full ? { ...sanctionsHealth(), ...sanctionsStatus() } : sanctionsHealth(),
     // The payment-party screen (src/sanctions-screen.js) of Tempo direct
-    // mode and of x402 payers (src/x402-payer-screen.js): fresh / stale /
+    // mode, of x402 payers (src/x402-payer-screen.js) and of MPP
+    // subscription payers (src/mpp-subscriptions.js): fresh / stale /
     // missing, while either is on. One word publicly; counts and the last
     // load time for the operator.
     ...(sanctionsScreenStarted()
-      ? { sanctionsScreen: (() => { try { return full ? { ...sanctionsScreenOperatorView(), x402: x402PayerScreenView() } : { status: sanctionsScreenStatus() }; } catch { return { status: "unknown" }; } })() }
+      ? { sanctionsScreen: (() => { try { return full ? { ...sanctionsScreenOperatorView(), x402: x402PayerScreenView(), ...(_mppSubs ? { mppSubscriptions: _mppSubs.payerScreenView() } : {}) } : { status: sanctionsScreenStatus() }; } catch { return { status: "unknown" }; } })() }
       : {}),
     mppEvmDomainFallback: full ? mppFallbackStatus() : publicFallback(mppFallbackStatus()),
     loopLag: full ? loopLagStatus() : publicLoopLag(loopLagStatus()),
@@ -5060,6 +5067,10 @@ if (_mppSubs) {
       if (r.receipt) res.set("Payment-Receipt", r.receipt);
       return res.json(r);
     } catch (e) {
+      // The paying wallet was screened out before anything was sent: the
+      // per-call Tempo rail's own refusal, and no fresh challenge (another
+      // signature from this wallet would be refused the same way).
+      if (e?.screenRejected) return sendMppProblem(res, tempoRefusalProblem("screen-rejected"));
       if (e?.statusCode === 402) {
         // Spec shape for a rejected credential: 402 + a FRESH challenge + an
         // RFC 9457 problem saying why, same as the tempo/charge gate answers.

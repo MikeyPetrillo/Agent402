@@ -90,7 +90,12 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   only the clock decides, finishes ended records, and deletes a reduced record
   `ENDED_RECORD_KEEP_MS` after its end; the three constants live in
   `src/mpp-subscription-retention.js`, which /privacy prints. A new path that ends a subscription
-  writes through `writeRecKeepingCancel` or calls `finishEnded`.
+  writes through `writeRecKeepingCancel` or calls `finishEnded`. The paying wallet is screened
+  (`screenPayer`: the exact list match, then the one-hop funding check and its cache) before the
+  first payment and before each renewal is signed; a refused first payment is the Tempo rail's
+  `screen-rejected` 402, a refused renewal is an ending write (`payer-not-accepted`), and with no
+  list loaded the payment is sent and counted (`payerScreen` on `/__operator/monitors.json`,
+  `sanctionsScreen.mppSubscriptions` on the operator view of `/api/gateway-status`).
 - **Subscription sponsor ceiling:** `src/tempo-sponsor-ceiling.js` wraps the RPC transport of both
   Tempo subscription clients (`src/mpp-subscriptions.js`): every raw send carrying a fee-payer
   signature is admitted into a rolling 24 h window (`src/shared-limits.js`, shared across replicas;

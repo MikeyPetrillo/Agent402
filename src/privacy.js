@@ -249,9 +249,10 @@ so every claim below is verifiable in code.</p>
   <code>reason</code> annotation fields are not read, logged or retained. The machine-readable list is in
   <a href="/.well-known/x402">/.well-known/x402</a> under <code>payment.dataHandling</code>: <code>readsOnly</code>
   names the fields read, and <code>readsAnnotationFields: false</code> states that the annotations are not.</li>
-  <li><b>Sanctions screening.</b> The paying address of an x402 payment, and each address party to a Tempo
-  per-call payment our server settles itself, is checked against the US Treasury OFAC SDN list, which we download and
-  hold on our server. For such a Tempo payment we also read the paying wallet's recent
+  <li><b>Sanctions screening.</b> The paying address of an x402 payment, each address party to a Tempo
+  per-call payment our server settles itself, and the paying wallet of an MPP monitor subscription (before its
+  first payment and before each renewal) are checked against the US Treasury OFAC SDN list, which we download and
+  hold on our server. For such a Tempo payment and for a subscription payment we also read the paying wallet's recent
   inbound transfers (up to ${oneHop.maxTransfers}, from the last ${oneHop.lookbackDays} days) from Tempo's transfer data feed, which
   receives the wallet address, and check their senders against the same list. The result for that wallet
   (clean, flagged or listed) is kept under the wallet address for ${oneHop.ttlDays} days, then read again on its next payment.</li>

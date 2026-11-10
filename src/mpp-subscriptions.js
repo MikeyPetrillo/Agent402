@@ -72,6 +72,15 @@
 //   - A failed charge backs off (1h doubling to 24h) and is retried. If it has
 //     not cleared within PAST_DUE_GRACE_MS the subscription is canceled as
 //     unpaid and never charged again.
+//   - The paying wallet is screened (src/sanctions-screen.js: the exact OFAC
+//     SDN match, then the one-hop funding check with its per-payer cache)
+//     BEFORE the first payment is sent and BEFORE every renewal is signed,
+//     never after. A refused first payment is a 402 with the answer the
+//     per-call Tempo rail gives and nothing is sent. A refused renewal sends
+//     nothing and ends the subscription (canceledReason "payer-not-accepted"),
+//     so its key is destroyed like any other end. With no list loaded the
+//     payment proceeds and is counted as unscreened, as the x402 payer screen
+//     does; /api/gateway-status then reads sanctionsScreen missing.
 //   - Cancellation is ours to honour, never ours to fake: the subscriber calls
 //     cancel() with the manage token minted at activation, we stop pulling, and
 //     the subscription stays active until the period they already paid for
@@ -99,6 +108,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
 import { redactSecrets } from "./tools/redact.js";
 import { withSponsorCeiling, sponsorCeilingWord } from "./tempo-sponsor-ceiling.js";
+import { screenAddresses, screenFunding, maskAddress, TEMPO_SCREEN_REFUSED_DETAIL } from "./sanctions-screen.js";
 
 // Tempo mainnet. Same constant mpp-tempo.js pins; a subscription authorization
 // commits to the chain id, so a mismatch is a rejected signature, not a
@@ -415,6 +425,9 @@ export const TOMBSTONE_FIELDS = Object.freeze([
   "billingAnchor", "lastChargedPeriod", "subscriptionExpires", "lastChargeTx", "lastChargeAt", "unconfirmedCharge",
   "cancelAtPeriodEnd", "canceledAt", "canceledReason",
 ]);
+/** The canceledReason of a subscription a refused renewal ended (the word the
+ *  x402 payer screen answers with). Its status answer carries the refusal text. */
+export const SCREEN_ENDED_REASON = "payer-not-accepted";
 const SUB_PREFIX = "mpp_";                       // our subscription ids
 const REC_KEY = (subId) => `a402:sub:${subId}`;      // our records inside the shared kv
 const OFFER_KEY = (nonce) => `a402:offer:${nonce}`;  // an open, unpaid offer
@@ -956,6 +969,7 @@ export function createMppSubscriptions({
   secretKey, realm, storePath, validateTarget = {}, onCharge,
   activate: injectedActivate = null, chargePeriod: injectedChargePeriod = null,
   findRenewalOnChain: injectedFindRenewal = null,
+  screen = { addresses: screenAddresses, funding: screenFunding },
   now = () => Date.now(), log = console.log,
 } = {}) {
   // Fail closed on the inputs the binding rests on. A subscription engine that
@@ -1505,6 +1519,54 @@ export function createMppSubscriptions({
     return { header: Challenge.serialize(challenge), challenge, product: String(product), target: t, email: mail, accessKeyAddress: ak.accessKeyAddress };
   }
 
+  // --- payer screen ----------------------------------------------------------
+  // Counted like the x402 payer screen counts (src/x402-payer-screen.js):
+  // screened, refused, and payments sent while no list was loaded.
+  const screenCounts = { screened: 0, refused: 0, servedUnscreened: 0, lastRefusedAt: 0, lastUnscreenedAt: 0 };
+  let unscreenedLoggedAt = 0;
+  const payerScreenView = () => ({
+    screened: screenCounts.screened, refused: screenCounts.refused, servedUnscreened: screenCounts.servedUnscreened,
+    lastRefusedAt: screenCounts.lastRefusedAt ? new Date(screenCounts.lastRefusedAt).toISOString() : null,
+    lastUnscreenedAt: screenCounts.lastUnscreenedAt ? new Date(screenCounts.lastUnscreenedAt).toISOString() : null,
+  });
+  /**
+   * The paying wallet's verdict before a payment is sent: null when it
+   * passes, { reason: "listed" } (on the list) or { reason: "funded" } (the
+   * one-hop funding check refused it). The exact match is a Set lookup. The
+   * funding check answers from its per-payer cache when it holds a verdict;
+   * a cold one reads the transfer feed inside its own deadline
+   * (SANCTIONS_ONE_HOP_DEADLINE_MS, default 2.5 s, at most 10 s), and a read
+   * that fails or times out passes. Both run before anything is signed, so
+   * the read takes nothing from a transaction's validity window, which is
+   * stamped when the transaction is prepared. With no list loaded the
+   * payment proceeds: counted, logged once a minute.
+   */
+  async function screenPayer(payer, phase) {
+    let v;
+    try { v = screen.addresses([payer]); } catch { v = { ok: false, reason: "unavailable" }; }
+    if (!v.ok && v.reason === "listed") {
+      screenCounts.screened++; screenCounts.refused++; screenCounts.lastRefusedAt = Date.now();
+      log(`[sanctions-screen] subscription payer ${maskAddress(payer)} refused ${phase}; nothing sent`);
+      return { reason: "listed" };
+    }
+    if (v.ok) screenCounts.screened++;
+    else {
+      screenCounts.servedUnscreened++; screenCounts.lastUnscreenedAt = Date.now();
+      if (Date.now() - unscreenedLoggedAt >= 60_000) {
+        unscreenedLoggedAt = Date.now();
+        log("[sanctions-screen] subscription payer screen: no list loaded, sending subscription payments unscreened");
+      }
+    }
+    let f;
+    try { f = await screen.funding([payer], { now: now() }); } catch { f = { ok: true }; }
+    if (f && f.ok === false) {
+      screenCounts.refused++; screenCounts.lastRefusedAt = Date.now();
+      log(`[sanctions-screen] subscription payer ${maskAddress(payer)} refused ${phase} (funding check); nothing sent`);
+      return { reason: "funded" };
+    }
+    return null;
+  }
+
   // --- activation ------------------------------------------------------------
   /** Default activation: hand the credential to mppx's subscription method,
    *  which verifies the key authorization, recovers the payer, installs the
@@ -1568,6 +1630,15 @@ export function createMppSubscriptions({
       // gives the caller their existing subscription back instead of a second.
       const existing = await findBySubscriptionId(already.subscriptionId);
       if (existing) return { ...publicView(existing), replay: true };
+    }
+
+    // The payer screen, before anything is sent. A refused wallet gets the
+    // per-call Tempo rail's answer; the offer's key is dropped at once, so the
+    // authorization just signed for it can never be used.
+    if (await screenPayer(payer, "before the first payment")) {
+      await destroyAccessKey(b.accessKeyAddress);
+      const e = new Error(TEMPO_SCREEN_REFUSED_DETAIL);
+      e.statusCode = 402; e.screenRejected = true; throw e;
     }
 
     const doActivate = injectedActivate || defaultActivate;
@@ -1828,6 +1899,17 @@ export function createMppSubscriptions({
         await writeRecKeepingCancel(rec, { ownPull: true });
         log(`[mpp-subs] ${subId}: the send that timed out for period ${due} never landed - charging now`);
       }
+      // The payer screen, before this period is signed. A wallet refused now
+      // is not charged and the subscription ends here: the write below is an
+      // ending write, so the key is destroyed and the record reduced with it.
+      if (await screenPayer(rec.payer, "before a renewal")) {
+        await writeRecKeepingCancel({
+          ...rec, status: "canceled", canceledAt: new Date(at).toISOString(), canceledReason: SCREEN_ENDED_REASON,
+          nextChargeAttemptAt: null,
+        }, { ownPull: true });
+        log(`[mpp-subs] ${subId}: period ${due} not sent (payer screening); subscription ended, nothing charged`);
+        return "canceled";
+      }
       if (!stillHeld()) {
         log(`[mpp-subs] ${subId}: the renewal lease was lost before period ${due} was signed; nothing signed`);
         return rec.status === "active" ? "past_due" : rec.status;
@@ -1970,6 +2052,10 @@ export function createMppSubscriptions({
       lastChargedPeriod: rec.lastChargedPeriod, paidThrough: new Date(paidThroughAt(rec)).toISOString(),
       subscriptionExpires: rec.subscriptionExpires,
       cancelAtPeriodEnd: !!rec.cancelAtPeriodEnd, canceledAt: rec.canceledAt || null,
+      // Why it ended, when it has: requested, unpaid, payer-not-accepted (with
+      // the refusal text the first payment would have been answered with).
+      canceledReason: rec.canceledReason || null,
+      ...(rec.canceledReason === SCREEN_ENDED_REASON ? { notice: TEMPO_SCREEN_REFUSED_DETAIL } : {}),
       lastChargeAt: rec.lastChargeAt || null, lastChargeTx: rec.lastChargeTx || null,
       // Deliberately NOT exposed: chargeFailures/lastChargeError text on the
       // public view (operator surface only) - it can quote a node's words.
@@ -2068,6 +2154,7 @@ export function createMppSubscriptions({
       enabled: true, recipient, currency, chainId: TEMPO_MAINNET_CHAIN_ID,
       periodSeconds: PERIOD_MS / 1000,
       renewals: renewalsWord([...cache.values()], { hours: renewalUnconfirmedAlertHours(), at: now(), full: true }),
+      payerScreen: payerScreenView(),
       subs: [...cache.values()].map((rec) => ({
         ...publicView(rec),
         email: rec.email ? `${rec.email.slice(0, 2)}***` : null,
@@ -2084,7 +2171,7 @@ export function createMppSubscriptions({
 
   return {
     offerInfo, mintOffer, activateFromCredential, refreshStatus, cancel, isCanarySub, sweepStaleCanaries,
-    sweepEnded, start, stop, _sweepEndedUnleased: sweepEndedUnleased, _finishEnded: finishEnded,
+    sweepEnded, start, stop, _sweepEndedUnleased: sweepEndedUnleased, _finishEnded: finishEnded, payerScreenView,
     listActive, get, getFresh, isMine, status, renewalsStatus, warm, warmSync, refreshMirror, manageToken, manageTokenOk, publicView,
     ready: () => ready, flush: () => kv.flush(),
     _store: kv, _subStore: subStore, _method: method,
