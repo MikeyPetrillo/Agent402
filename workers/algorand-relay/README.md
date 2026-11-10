@@ -22,8 +22,8 @@ npx wrangler secret put RELAY_TOKEN   # any long random string
 Then set on Railway (both required; unset pair = direct Nodely, which works
 everywhere except Railway):
 
-- `ALGORAND_RELAY_URL` — the workers.dev URL printed by deploy
-- `ALGORAND_RELAY_TOKEN` — the same token
+- `ALGORAND_RELAY_URL`: the workers.dev URL printed by deploy
+- `ALGORAND_RELAY_TOKEN`: the same token
 
 Consumers: `src/revenue-live.js` (30-day activity on /revenue) and
 `src/revenue-ledger.js` (all-time sync). Both walk the relay FIRST, then

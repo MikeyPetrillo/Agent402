@@ -316,6 +316,21 @@ for (const [name, html] of [["/reports", humanReportsPage("https://agent402.tool
     }
   }
   ok(mostQuoted >= 5, `${mostQuoted} markdown surfaces quote the "most tools" band - if this hits zero the check above is vacuous`);
+  // Decide's per-decision price in markdown is the depth prices' own range
+  // (src/decide/config.js): the README once quoted a floor no depth is sold at.
+  {
+    const { DEFAULTS: DECIDE } = await import("../src/decide/config.js");
+    const prices = Object.values(DECIDE.prices);
+    const want = `$${Math.min(...prices)} to $${Math.max(...prices)}`;
+    const PER_DECISION = /\bfrom (\$[0-9.]+(?: to \$[0-9.]+)?) per decision\b/g;
+    ok([..."prompt), from $0.005 per decision over x402".matchAll(PER_DECISION)].map((m) => m[1]).join() === "$0.005", "control: a typed per-decision floor is read");
+    let quoted = 0;
+    for (const f of files.filter((x) => x.endsWith(".md"))) {
+      const text = (() => { try { return rf(join(root, f), "utf8"); } catch { return ""; } })();
+      for (const m of text.matchAll(PER_DECISION)) { quoted++; ok(m[1] === want, `${f} quotes Decide at ${m[1]} per decision, and the depth prices run ${want}`); }
+    }
+    ok(quoted >= 1, `${quoted} markdown surface(s) quote Decide's per-decision price`);
+  }
   // Control first: the sweep must report a planted figure through this path.
   const scan = (entries) => {
     const hits = [];

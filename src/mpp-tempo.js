@@ -403,14 +403,14 @@ export const TEMPO_REFUSAL_CLASSES = Object.freeze({
   // Checked before verification and the exact match again before the broadcast.
   "screen-rejected": {
     kind: "verification-failed", status: 402,
-    detail: "An address in this payment, or an address that recently sent funds to the paying wallet, appears on the US Treasury OFAC SDN list, which this server screens every Tempo payment against. The payment was not broadcast and nothing was charged.",
+    detail: "An address in this payment, or an address that recently sent funds to the paying wallet, appears on the US Treasury OFAC SDN list, which this server screens Tempo per-call payments against. The payment was not broadcast and nothing was charged.",
     hint: "This server does not accept this payment.",
   },
   // Direct mode only: the screen has no list loaded, so no payment address
   // can be checked and none is accepted. Retryable; nothing charged.
   "screen-unavailable": {
     kind: "internal-payment-error", status: 503, retryAfter: 60,
-    detail: "This server screens every Tempo payment address against the OFAC SDN list before accepting a payment, and the list is not loaded right now, so the credential was not checked and nothing was charged.",
+    detail: "This server screens the addresses of a Tempo per-call payment against the OFAC SDN list before accepting it, and the list is not loaded right now, so the credential was not checked and nothing was charged.",
     hint: "Retry shortly, or pay over another method offered in the WWW-Authenticate header (x402 USDC or MPP evm/charge).",
   },
   "policy-denied": {

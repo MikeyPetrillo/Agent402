@@ -1080,8 +1080,8 @@ you don't want a middleman holding your money. Agent402's payments tools are
 **non-custodial**: they help an agent move its *own* USDC with its *own* key.
 These tools never hold, sign, or send funds - they decode quotes, read public
 chain state, and build the authorization *you* sign. (Two paths elsewhere on
-the service are not non-custodial and we say so: ${creditsPrepaymentPhrase()}, and a card report purchase is held by the payment
-processor until the report is delivered.) Everything below works on
+the service are not non-custodial and we say so: ${creditsPrepaymentPhrase()}, and a card report purchase is an ordinary card
+charge, taken at checkout; if the report fails to generate, the charge is refunded to the card automatically.) Everything below works on
 **Base, Polygon, Arbitrum, Optimism and Ethereum** (\`network\` param, default
 base); \`tx-status\` and \`gas-estimate\` also read Robinhood Chain. None of it
 needs an API key.

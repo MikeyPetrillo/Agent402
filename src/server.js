@@ -6037,7 +6037,7 @@ app.get("/__operator/discovery-gap.json", async (req, res) => {
     });
     if (!gap) {
       // Absence of data, said plainly. Never "0 unattributed".
-      return res.json({ ok: false, reason: "no-merchant-data", note: "The on-chain merchant scan returned nothing, so the size of the blind spot is UNKNOWN — not zero.", errors: econ?.errors || [] });
+      return res.json({ ok: false, reason: "no-merchant-data", note: "The on-chain merchant scan returned nothing, so the size of the blind spot is UNKNOWN, not zero.", errors: econ?.errors || [] });
     }
     res.json({ ok: true, asOf: new Date().toISOString(), ...gap });
   } catch (e) {

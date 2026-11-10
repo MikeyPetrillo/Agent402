@@ -194,17 +194,29 @@ function writeJsonAtomic(path, obj) {
  *        sibling produced unpaid in a shared directory or database is never
  *        served by a paid instance.
  */
+/** The shipped retention of a task or async-job record and the largest result
+ *  one keeps (the env overrides below move the server, and /privacy and
+ *  /terms print what the server runs with: taskRetentionPublic()). */
+export const TASK_TTL_DEFAULT_MS = 60 * 60_000;                 // 1h
+export const TASK_MAX_RESULT_DEFAULT_BYTES = 8 * 1024 * 1024;
+export function taskRetentionPublic() {
+  const ttlMs = num(process.env.AGENT402_MCP_TASK_TTL_MS, TASK_TTL_DEFAULT_MS);
+  const maxBytes = num(process.env.AGENT402_MCP_TASK_MAX_RESULT_BYTES, TASK_MAX_RESULT_DEFAULT_BYTES);
+  const minutes = Math.round(ttlMs / 60_000);
+  const keptFor = minutes % 60 === 0 ? `${minutes / 60} hour${minutes === 60 ? "" : "s"}` : `${minutes} minutes`;
+  return { ttlMs, maxBytes, keptFor, maxSize: `${Math.round(maxBytes / (1024 * 1024))} MB` };
+}
 export function createTaskStore({ dir, now = () => Date.now(), log = console.log, onChargedFailure = null, bootId = BOOT_ID, limits = {}, label = "mcp-tasks", freeMode = process.env.FREE_MODE === "true" } = {}) {
   const root = dir || DEFAULT_DIR();
   try { mkdirSync(root, { recursive: true }); } catch { /* writes fail loudly below */ }
 
   // Bounds. TTL is deliberately short: with no auth context the id IS the
   // credential, so the exposure window is part of the security posture.
-  const TTL_MS = num(limits.ttlMs ?? process.env.AGENT402_MCP_TASK_TTL_MS, 60 * 60_000);          // 1h
+  const TTL_MS = num(limits.ttlMs ?? process.env.AGENT402_MCP_TASK_TTL_MS, TASK_TTL_DEFAULT_MS);
   const POLL_MS = num(limits.pollMs ?? process.env.AGENT402_MCP_TASK_POLL_MS, 5_000);
   const RUN_TIMEOUT_MS = num(limits.runMs ?? process.env.AGENT402_MCP_TASK_RUN_MS, 6 * 60_000);   // > the 4 min worst case
   const MAX_ACTIVE = num(limits.maxActive ?? process.env.AGENT402_MCP_TASK_MAX_ACTIVE, 64);
-  const MAX_RESULT_BYTES = num(limits.maxResultBytes ?? process.env.AGENT402_MCP_TASK_MAX_RESULT_BYTES, 8 * 1024 * 1024);
+  const MAX_RESULT_BYTES = num(limits.maxResultBytes ?? process.env.AGENT402_MCP_TASK_MAX_RESULT_BYTES, TASK_MAX_RESULT_DEFAULT_BYTES);
 
   const runs = new Map(); // taskId -> AbortController for the live loopback
   const expired = (rec) => rec.ttlMs != null && now() - (rec.createdAtMs || 0) > rec.ttlMs;

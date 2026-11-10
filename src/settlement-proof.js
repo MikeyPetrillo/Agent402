@@ -192,7 +192,7 @@ export function unattributedMerchants({ sellers, merchants, ourAddresses = [], m
     // we cannot route to. This is the number that was previously unobservable.
     unattributedShareOfPayments: totalPayments > 0 ? Number((unattributedPayments / totalPayments).toFixed(4)) : null,
     minPayments,
-    note: "Merchants observed settling on Base whose address matches no origin in our crawl. A settlement carries no URL, so these cannot be resolved to a seller from chain data alone — they need an origin from somewhere before the router can ever consider them.",
+    note: "Merchants observed settling on Base whose address matches no origin in our crawl. A settlement carries no URL, so these cannot be resolved to a seller from chain data alone: they need an origin from somewhere before the router can ever consider them.",
   };
 }
 

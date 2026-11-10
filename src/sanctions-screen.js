@@ -288,6 +288,11 @@ export function screenAddresses(list) {
 // (which still fails closed), logs one word per minute and shows on the
 // operator view. Nothing is cached for a failed read.
 const ONE_HOP_PAGE = 50;
+/** The funding check's bounds as /privacy prints them: how long a payer's
+ *  verdict is kept, and how many inbound transfers from how far back are read. */
+export function oneHopPublicBounds() {
+  return { ttlDays: Math.round(oneHopTtlMs() / 86400_000), maxTransfers: oneHopMaxPages() * ONE_HOP_PAGE, lookbackDays: Math.round(oneHopLookbackMs() / 86400_000) };
+}
 const ONE_HOP_FLAGS_KEPT = 10;
 function oneHopTtlMs() { return envMs("SANCTIONS_ONE_HOP_TTL_MS", 7 * 86400_000, 1000); }
 function oneHopMaxPages() { return Math.max(1, Math.min(10, Math.trunc(envMs("SANCTIONS_ONE_HOP_MAX_PAGES", 2, 1)))); }

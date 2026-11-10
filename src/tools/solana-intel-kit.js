@@ -644,7 +644,7 @@ export const SOLANA_INTEL_TOOLS = [
     category: "crypto",
     price: "$0.005",
     description:
-      "Safety headline for any Solana SPL token mint: a public token-risk score (raw + 0-100 normalized), the named risks with level (danger/warn/info), LP locked percentage, and the aggregator's audit facts - mint authority and freeze authority revoked or live, top-holder share, dev mints, holder count, verified flag and organic score. Two keyless public sources read in parallel; one compact verdict for pre-trade screening of memecoins and new launches. The full token-risk report is read only when a published field needs it (the aggregator does not index the mint, or the summary carries no score), and fullReport names the fields it filled.",
+      "Risk summary for any Solana SPL token mint: a public token-risk score (raw + 0-100 normalized), the named risks with level (danger/warn/info), LP locked percentage, and the aggregator's audit facts - mint authority and freeze authority revoked or live, top-holder share, dev mints, holder count, verified flag and organic score. Two keyless public sources read in parallel and returned as one compact summary of what they report. Evidence from those sources, never a 'safe' or 'scam' verdict: a clean summary is not an endorsement. The full token-risk report is read only when a published field needs it (the aggregator does not index the mint, or the summary carries no score), and fullReport names the fields it filled.",
     tags: ["solana", "token", "safety", "memecoin", "risk", "spl"],
     discovery: {
       bodyType: "json",

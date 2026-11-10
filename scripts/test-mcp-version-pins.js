@@ -19,5 +19,16 @@ for (const f of files) {
   for (const m of s.matchAll(/agent402-mcp@(\d+\.\d+\.\d+)/g)) if (m[1] !== version) stale.push(`${f}: ${m[0]}`);
 }
 ok(stale.length === 0, `every agent402-mcp install pin names ${version}${stale.length ? `; stale: ${stale.slice(0, 5).join(", ")}` : ""}`);
+// An install line with no pin at all is not seen by the scan above: in the
+// markdown trees every `npx -y agent402-mcp` and every "-y", "agent402-mcp"
+// argument names the version.
+const UNPINNED = /(?:npx -y |"-y",\s*")agent402-mcp(?!@\d+\.\d+\.\d+)/g;
+ok("npx -y agent402-mcp\n".match(UNPINNED) && '"args": ["-y", "agent402-mcp"]'.match(UNPINNED) && !`npx -y agent402-mcp@${version}`.match(UNPINNED), "control: an unpinned install line is matched, a pinned one is not");
+const bare = [];
+for (const f of files.filter((x) => x.endsWith(".md"))) {
+  let s; try { s = readFileSync(root + f, "utf8"); } catch { continue; }
+  for (const m of s.matchAll(UNPINNED)) bare.push(`${f}:${s.slice(0, m.index).split("\n").length}`);
+}
+ok(bare.length === 0, `every markdown install line pins agent402-mcp@${version}${bare.length ? `; unpinned: ${bare.slice(0, 8).join(", ")}` : ""}`);
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
