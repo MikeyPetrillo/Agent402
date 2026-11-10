@@ -225,7 +225,7 @@ const listen = (app) => new Promise((res) => { const s = app.listen(0, () => res
   // still works with the narrowed env); the Worker constructor is wrapped to
   // record the options each real worker was created with, and a probe thread
   // started with exactly that `env` reports what such a worker can read.
-  const PLANTED = { PLANTED_PROVIDER_API_KEY: "sk-planted-0123456789", PLANTED_DATABASE_URL: "postgres://u:planted-pw@db.internal/x", X402_UPSTREAM_BUYER_KEY: "0xplanted" };
+  const PLANTED = { PLANTED_PROVIDER_API_KEY: "sk-LEAKCANARY-0123456789", PLANTED_DATABASE_URL: "postgres://u:planted-pw@db.internal/x", X402_UPSTREAM_BUYER_KEY: "0xplanted" };
   Object.assign(process.env, PLANTED);
   const { createRequire, syncBuiltinESMExports } = await import("node:module");
   const wt = createRequire(import.meta.url)("node:worker_threads");
