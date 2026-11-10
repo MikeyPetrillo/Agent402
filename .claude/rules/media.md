@@ -47,10 +47,11 @@ Loaded when a media, document or worker-pool tool file is read.
   to the JPEG decoder (`maxResolutionInMP`), which applies it to whichever frame header it acts
   on; GIF frame 0 inside its screen, read with the omggif copy jimp loads, and its LZW data
   read once for a code the table does not define yet (the decoder's prefix walk does not come
-  back from one).
+  back from one); a minimum code size past 8 is refused (the decoder keeps literals in 8 bits).
   `assertInflateWithinDeclared` runs in the worker and bounds the inflate of an interlaced PNG.
   No WebP decoder is installed. The pool's call (`mainThread`) holds its own work to a fixed
-  budget (4,096 TIFF entries and strip rows, 64 KB of GIF frame data) and leaves a larger file
+  budget (4,096 TIFF entries and strip rows, a 256 KB GIF, 64 KB of GIF frame data, no per-chunk
+  state for a PNG) and leaves a larger file
   to the worker, which runs the whole check before it decodes. `scripts/test-image.js` ends
   with a seeded fuzz of every format (300 mutated files each, about a second).
 - **TIFF:** the tools use the first image, so `tiffLayout` reads that one directory the way the
@@ -61,7 +62,10 @@ Loaded when a media, document or worker-pool tool file is read.
   the directory, which a file can also point its own values at, so `tiffSettledView` checks
   the view again as the decoder will read it and refuses one that does not settle. Multi-page files,
   maker notes and raw-sensor pages decode to the same pixels as before. In the worker,
-  `assertTiffStreams` inflates each deflate strip under the page's size and caps every frame
+  a strip table may list no more strips than the page's rows hold, nor more bytes than twice
+  the file; `assertTiffStreams` inflates each deflate strip under its own rows and all of them
+  under the page, stops at the first strip that does not inflate (a failed inflate keeps its
+  zlib buffer until the next collection), and caps every frame
   header an embedded-JPEG decoder could read (compression 6, 7, 34892; a raw byte scan of the
   ranges the decoder copies). CCITT pages (2, 3, 4) are decoded in a one-shot child process
   (`image-child.js`, started with `childEnv()`, a 96 MB heap ceiling and a deadline inside the
