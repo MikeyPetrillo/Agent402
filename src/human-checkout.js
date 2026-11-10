@@ -689,6 +689,10 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
       error: refundId ? `${message} Your payment has been refunded.` : `${message} Your refund is being processed.`,
       refundOwed: !refundId, refundAttempts: (prev.refundAttempts || 0) + (intent ? 0 : 1), lastRefundAttemptAt: intent ? 0 : now(),
       paymentIntent: typeof session?.payment_intent === "string" ? session.payment_intent : session?.payment_intent?.id || null,
+      // The report product the session bought (kept across retries, whose
+      // session stand-in carries none): what lets a later reader of this
+      // record tell it is a report purchase without asking Stripe again.
+      product: isReportPurchase(session) ? session.metadata.product : (typeof prev.product === "string" ? prev.product : null),
       at: new Date(now()).toISOString(),
     };
     if (USE_PG) {
@@ -703,8 +707,34 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     }
     await writeRec(id, rec);
     await patchIndex(INFLIGHT, id, null);
-    await patchIndex(ISSUES, id, refundId ? null : { kind: "refund-owed", at: rec.at, attempts: rec.refundAttempts });
+    await patchIndex(ISSUES, id, refundId ? null : { kind: "refund-owed", at: rec.at, attempts: rec.refundAttempts, product: rec.product });
     return rec;
+  }
+  // Whether a stored owed refund belongs to a report purchase, by the rule
+  // fulfill applies to a session (isReportPurchase): the product the record
+  // names when it names one, otherwise the Checkout session itself, read from
+  // Stripe once and remembered. true | false | null (the session could not be
+  // read: not decided, asked again later). Only a true answer is refunded or
+  // counted as owed.
+  const owedReport = new Map();
+  async function owedIsReport(id, rec) {
+    if (typeof rec?.product === "string") return REPORT_PRODUCT_KEYS.has(rec.product);
+    if (owedReport.has(id)) return owedReport.get(id) !== false;
+    let session;
+    try { session = await stripe.checkout.sessions.retrieve(id); } catch { return null; }
+    const v = !!session && (!session.mode || session.mode === "payment") && isReportPurchase(session);
+    if (owedReport.size >= 2000) owedReport.clear();
+    owedReport.set(id, v ? session.metadata.product : false); // the product, so the retry's record names it
+    return v;
+  }
+  // One log line with a count, when the count changes (never an id).
+  const skippedOwed = new Set();
+  let skippedLogged = 0;
+  function noteSkippedOwed(id) {
+    if (skippedOwed.size < 2000) skippedOwed.add(id);
+    if (skippedOwed.size === skippedLogged) return;
+    skippedLogged = skippedOwed.size;
+    log(`[human-checkout] ${skippedLogged} owed-refund record(s) skipped: not a report purchase`);
   }
   // Refund a session and record it. On the database the owed record lands
   // FIRST (kept on local disk if Postgres is away), so a refund is never
@@ -726,8 +756,13 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     if ((rec.refundAttempts || 0) >= MAX_REFUND_ATTEMPTS) return rec;
     if (now() - (rec.lastRefundAttemptAt || 0) < REFUND_RETRY_MS) return rec;
     if (USE_PG && pendingFinals.has(id)) return rec; // its owed record has not landed yet
+    // Only a report purchase is refunded from here; any other stored record
+    // is left as it is (and one whose session cannot be read waits).
+    const isReport = await owedIsReport(id, rec);
+    if (isReport !== true) { if (isReport === false) noteSkippedOwed(id); return rec; }
     const refundId = await refundSession({ payment_intent: rec.paymentIntent });
-    return recordError(id, { payment_intent: rec.paymentIntent }, refundId, rec.error.replace(/ Your refund is being processed\.$/, ""));
+    const product = typeof rec.product === "string" ? rec.product : owedReport.get(id);
+    return recordError(id, { payment_intent: rec.paymentIntent, metadata: { product } }, refundId, rec.error.replace(/ Your refund is being processed\.$/, ""));
   }
 
   const failKeyOf = (session) => {
@@ -978,7 +1013,26 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
   // polls and then left for the operator), each with when it was recorded:
   // the refundsOwed word on /api/gateway-status applies its notice and aging
   // to them beside the refund ledger's rows.
-  async function owedRefunds() { return (await listIssues()).refundOwed; }
+  // Only report purchases count (owedIsReport); an entry that is not one is
+  // left out and counted in a log line, and one that cannot be decided yet
+  // stays in (at most three session reads per call).
+  async function owedRefunds() {
+    const out = [];
+    let reads = 0;
+    for (const entry of (await listIssues()).refundOwed) {
+      let v = typeof entry.product === "string" ? REPORT_PRODUCT_KEYS.has(entry.product) : owedReport.has(entry.id) ? owedReport.get(entry.id) !== false : undefined;
+      if (v === undefined) {
+        let rec = null;
+        try { rec = await readRec(entry.id); } catch { rec = null; }
+        if (typeof rec?.product === "string") v = REPORT_PRODUCT_KEYS.has(rec.product);
+        else if (reads++ < 3) v = await owedIsReport(entry.id, rec);
+        else v = null;
+      }
+      if (v === false) { noteSkippedOwed(entry.id); continue; }
+      out.push(entry);
+    }
+    return out;
+  }
 
   function peek(sessionId) {
     const valid = SESSION_RE.test(String(sessionId));
