@@ -150,7 +150,7 @@ request, inside its 8-hour lifetime; a write carrying the session cookie needs S
   parses subject lines only, and `merge-on-green.sh` merges with `--merge`, which puts the PR
   title in the merge commit's body.
 - **A push to `main` tests and deploys unconditionally**; merging is shipping.
-  A run on `main` is never cancelled by a newer push (cancel-in-progress applies to the dev
+  A run on `main` is never canceled by a newer push (cancel-in-progress applies to the dev
   branch only): a second merge's run waits for the first, and every job has `timeout-minutes`
   (`scripts/test-ci-gating.js`).
 - **Flow:** commit to the dev branch with `[test]` only (never `[deploy]` on dev), push, open a

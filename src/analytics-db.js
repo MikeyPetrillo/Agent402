@@ -45,7 +45,7 @@ const unavailable = () => Date.now() < unavailableUntil;
 // database pool sets (src/state-db.js stateDbTimeouts: 10 s a statement, 30 s
 // for a transaction left idle): the table shares a Postgres with the state
 // schema, so a dashboard aggregate or a retention batch that runs long is
-// cancelled by the server instead of holding a connection and its locks.
+// canceled by the server instead of holding a connection and its locks.
 const envMs = (name, dflt) => {
   const n = Number(String(process.env[name] ?? "").trim());
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : dflt;
