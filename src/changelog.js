@@ -35,7 +35,7 @@ const ENTRIES = [
       "Operations: a second merge to main queues behind a running release instead of canceling it, and the deploy, publish and probe jobs carry time bounds.",
       "Operations: timing checks in the test suite read the thread's own time or counted work, so a busy runner does not fail them.",
       "Surfaces: pack and report copy names the data each product reports: the storefront's fund card is headed by a fund's 13F holdings, and the macro packs name the series, its source and its as-of date. Card report copy says the charge is taken at checkout, and llms.txt offers decide-execute for a wallet payment only.",
-      "Surfaces: every page that says a response with no receipt was not charged carries the same late-settle exception.",
+      "Surfaces: every page that describes a failed call as not charged carries the same late-settle exception.",
       "Privacy: /privacy and /terms list how long an async job's or MCP task's result is kept, the screening of subscription payers, the reduced record of an ended MPP subscription, and the daily count of searches the free search routes turned away.",
       "Docs: the gateway guide and the LLM-Gateway wiki page state the metered refusals for every wire; Self-Hosting documents the payTo variables and BASE_URL; every markdown install line pins the agent402-mcp version.",
     ],

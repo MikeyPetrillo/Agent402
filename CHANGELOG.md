@@ -129,8 +129,8 @@ Surfaces:
   series, its source and its as-of date. Card report copy says the charge is
   taken at checkout, and llms.txt offers decide-execute for a wallet payment
   only.
-- Every page that says a response with no receipt was not charged carries the
-  same late-settle exception.
+- Every page that describes a failed call as not charged carries the same
+  late-settle exception.
 Privacy:
 - /privacy and /terms list how long an async job's or MCP task's result is
   kept, the screening of subscription payers, the reduced record of an ended
