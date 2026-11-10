@@ -131,6 +131,13 @@ try {
   ok(Array.isArray(perf.recentStalls) && Array.isArray(perf.activeJobs), "perf.json carries the stall ring and the running jobs");
   const unauth = await fetch(`${base}/__operator/serving-health.json`, from("203.0.113.5"));
   ok(unauth.status === 404, "serving health is operator-only");
+  // The gate counts the searches it turned away with the discovery rules'
+  // own refusals, under "load-gate": the two /api/find sheds above plus one
+  // /api/route here, and none of the other shed paths (/r/*, /tools/*).
+  const shedRoute = await fetch(`${base}/api/route?q=hash`, from("203.0.113.5"));
+  const refusals = await (await fetch(`${base}/__operator/discovery-refusals.json`, from("203.0.113.5", { authorization: "Bearer shed-test-operator-token-0123456789" }))).json();
+  const day = (refusals.days || []).find((d) => d.day === new Date().toISOString().slice(0, 10)) || (refusals.days || [])[0];
+  ok(shedRoute.status === 503 && day?.byRule?.["load-gate"] === 3 && day.refused === 3 && day.byRouteAndRule?.find?.["load-gate"] === 2 && day.byRouteAndRule?.route?.["load-gate"] === 1, `a search the load gate sheds is counted under the load-gate rule in the discovery-refusals view, and no other shed path is (${JSON.stringify({ byRule: day?.byRule, byRoute: day?.byRoute })})`);
 } finally { proc.kill("SIGKILL"); }
 
 const port2 = await getFreePort();
