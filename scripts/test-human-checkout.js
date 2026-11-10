@@ -221,6 +221,59 @@ ok(refunds.length === 3, "...and not refunded again on the next poll");
   writeFileSync(issuesPath, JSON.stringify(left));
 }
 
+// THE OWED LIST NEVER WAITS ON STRIPE (the list behind the refundsOwed word of
+// /api/gateway-status). Five owed records that name no product, as an earlier
+// build stored them, and a Stripe whose session read never answers: the list
+// returns at once with every record still on it, reads start beside it (three
+// at a time), a record with a read in flight or one that did not answer is
+// not asked again inside the retry time, and an answer that does arrive is
+// used by the next read of the list.
+{
+  const DIR2 = join("/tmp", `test-human-checkout-owed-${process.pid}`);
+  rmSync(DIR2, { recursive: true, force: true });
+  mkdirSync(DIR2, { recursive: true });
+  const at = new Date(clock - 3600_000).toISOString();
+  const ids = ["cs_hang1", "cs_hang2", "cs_hang3", "cs_hang4", "cs_hang5"];
+  for (const id of ids) writeFileSync(join(DIR2, `${id}.json`), JSON.stringify({ status: "error", refundId: null, error: "We couldn't complete this report after a retry. Your refund is being processed.", refundOwed: true, refundAttempts: 6, lastRefundAttemptAt: 0, paymentIntent: id.replace("cs_", "pi_"), at }));
+  writeFileSync(join(DIR2, "_issues.json"), JSON.stringify(Object.fromEntries(ids.map((id) => [id, { kind: "refund-owed", at, attempts: 6 }]))));
+  const calls = [], answer = new Map();
+  const count = (id) => calls.filter((c) => c === id).length;
+  const counts = () => ids.map(count).join(",");
+  const hung = { checkout: { sessions: { retrieve: (id) => { calls.push(id); return new Promise((resolve) => answer.set(id, resolve)); } } }, refunds: { create: async () => { throw new Error("no refund is sent from the owed list"); } } };
+  let t = clock;
+  const h = createHumanCheckout({ stripe: hung, generate, baseUrl: "https://agent402.tools", storeDir: DIR2, onSale: () => {}, now: () => t, log: () => {}, owedResolveTimeoutMs: 150, owedResolveRetryMs: 600_000 });
+  const listed = async () => {
+    const t0 = performance.now();
+    const list = await Promise.race([h.owedRefunds(), wait(2000).then(() => null)]);
+    return { held: list === null, ms: performance.now() - t0, ids: (list || []).map((x) => x.id) };
+  };
+  const all = (r) => ids.every((id) => r.ids.includes(id));
+  const first = await listed();
+  ok(!first.held && first.ms < 1000 && all(first), `with a Stripe that never answers the owed list returns at once, every record still owed (${first.held ? "held" : `${first.ms.toFixed(0)} ms`}, ${first.ids.length} of ${ids.length})`);
+  ok(counts() === "1,1,1,0,0", `its session reads run beside it, three at a time (${counts()})`);
+  const second = await listed();
+  ok(!second.held && all(second) && counts() === "1,1,1,0,0", `a second read while those are in flight starts no second read of a record (${counts()})`);
+  await wait(300); // past the 150 ms a read is given
+  const third = await listed();
+  ok(!third.held && all(third) && counts() === "1,1,1,1,1", `a read that did not answer is not asked again; the waiting records get their turn (${counts()})`);
+  await wait(300);
+  t += 599_000;
+  const fourth = await listed();
+  ok(!fourth.held && all(fourth) && counts() === "1,1,1,1,1", `inside the retry time no record is asked again, and all are still owed (${counts()})`);
+  t += 2_000;
+  const fifth = await listed();
+  ok(!fifth.held && all(fifth) && counts() === "2,2,2,1,1", `past the retry time a record is asked once more (${counts()})`);
+  // Stripe answers two of them late: one is a credits pack, one a report.
+  answer.get("cs_hang1")({ id: "cs_hang1", mode: "payment", payment_status: "paid", payment_intent: "pi_hang1", metadata: { credits_pack: "credits-100" } });
+  answer.get("cs_hang2")({ id: "cs_hang2", mode: "payment", payment_status: "paid", payment_intent: "pi_hang2", metadata: { product: "research", input: "x" } });
+  await wait(30);
+  const sixth = await listed();
+  ok(!sixth.held && !sixth.ids.includes("cs_hang1") && ["cs_hang2", "cs_hang3", "cs_hang4", "cs_hang5"].every((id) => sixth.ids.includes(id)), `an answer that arrives is used by the next read: the one that is not a report purchase leaves the list, the report stays (${sixth.ids.join(",")})`);
+  const seventh = await listed();
+  ok(count("cs_hang1") === 2 && count("cs_hang2") === 2 && all({ ids: [...seventh.ids, "cs_hang1"] }), `...and a decided record is never read from Stripe again (${counts()})`);
+  rmSync(DIR2, { recursive: true, force: true });
+}
+
 // Long input reassembles from chunked metadata.
 await hc.fulfill("cs_long");
 const lg = await settle("cs_long");
