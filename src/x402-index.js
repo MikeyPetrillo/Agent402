@@ -208,8 +208,7 @@ import { priceToMicroUsd, priceUsdOf, isPricedAboveZero, atomicContext, atomicAm
 // Re-exported: the dataset snapshot, the server and the tests import it from here.
 export { priceToMicroUsd };
 import { queryTerms, isCjkTerm, splitTokens } from "./query-terms.js";
-import { summarize, fmtUsd, fmtPct } from "./economy.js";
-import { rankBy, canonicalHost, getLeaderboardSnapshot, getLeaderboardCircularWallets } from "./leaderboard.js";
+import { canonicalHost, getLeaderboardSnapshot, getLeaderboardCircularWallets } from "./leaderboard.js";
 import { routeExecuteHint } from "./tools/route-execute.js";
 import { recordSellerRegistrationSeen, getSellerRegistrations, deleteSellerRegistration, ensureSellerRegistrations } from "./stats.js";
 
@@ -11057,86 +11056,6 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
     ...(anyExternal ? { containsUntrustedContent: true } : {}),
     ...(wantNet ? { network: wantNet } : {}),
   };
-}
-
-// "The economy, over time" — folded in from the two old standalone economy
-// pages (/x402-economy and /economy, both now 301s to /index#economy).
-// Renders (a) the daily settlement history + week-over-week trend from
-// x402EconomySnapshot(), and (b) the 24h ecosystem summary (concentration +
-// network split) from the leaderboard snapshot via summarize() — the parts
-// /leaderboard itself doesn't show. The per-seller top lists from both old
-// pages were NOT ported since /leaderboard already ranks sellers.
-// Pure function of its snapshots so it's unit-testable without a server.
-const econFmt = (n) => Number(n || 0).toLocaleString("en-US");
-
-// 24h ecosystem summary sub-block (from the old /economy page). Renders
-// nothing when the leaderboard snapshot is warming — the section's on-chain
-// history above still carries it, no fabricated zeros.
-function economy24hHtml(leaderboardSnap) {
-  if (leaderboardSnap?.warming || !leaderboardSnap?.leaderboard?.length) return "";
-  const s = summarize(rankBy(leaderboardSnap.leaderboard, "usd"), "usd");
-  const windowLabel = leaderboardSnap.windowLabel || "24h";
-  const networkBars = s.networks
-    .map(
-      (n) => `<div class="econ-net-row"><span>${esc(n.net)}</span><span class="econ-net-val">${fmtUsd(n.usd)} &middot; ${fmtPct(n.share)}</span></div>
-      <div class="econ-net-bar"><div style="width:${Math.max(2, Math.min(100, n.share))}%"></div></div>`
-    )
-    .join("");
-  return `
-    <h3 class="econ-h3">Last ${esc(windowLabel)} across the ecosystem</h3>
-    <p class="pn" style="margin:0 0 14px;">Per-call USDC settled across every public x402 seller our crawler can see, from on-chain Base transfers ($0.50 per-call ceiling filters out funding moves). Refreshes hourly. Full ranking: <a href="/leaderboard">/leaderboard</a>; machine-readable: <a href="/api/leaderboard">/api/leaderboard</a>.</p>
-    <div class="grid" style="margin:0 0 14px;">
-      <div class="stat"><div class="k">Total volume</div><div class="v">${fmtUsd(s.total)}</div><div class="s">across ${econFmt(s.activeSellers)} active sellers</div></div>
-      <div class="stat"><div class="k">Total calls</div><div class="v">${econFmt(s.totalCalls)}</div><div class="s">avg ${fmtUsd(s.avgCallUsd)} per call</div></div>
-      <div class="stat"><div class="k">Top-5 share</div><div class="v">${fmtPct(s.top5Share)}</div><div class="s">top-1 ${fmtPct(s.top1Share)} &middot; top-10 ${fmtPct(s.top10Share)}</div></div>
-      <div class="stat"><div class="k">Networks</div><div class="v">${s.networks.length}</div><div class="s">chains with volume</div></div>
-    </div>
-    <div class="econ-nets">${networkBars}</div>`;
-}
-
-export function economySectionHtml(snap, leaderboardSnap) {
-  const day = economy24hHtml(leaderboardSnap);
-  const unavailable = !snap || (snap.errors?.length && !(snap.daily || []).length);
-  if (unavailable) {
-    return `<div class="panel" id="economy">
-  <div class="ph"><h2>The economy, over time</h2><div class="pn">Chain-wide gasless USDC settlement history on Base.</div></div>
-  <div style="padding:14px 18px;"><div class="econ-warm">economy history unavailable right now (detail in <a href="/api/x402-economy">/api/x402-economy</a>)</div>${day}</div>
-</div>`;
-  }
-  const t7 = snap.totals?.last7d || { settlements: 0, volumeUsd: 0, payers: 0 };
-  const t30 = snap.totals?.last30d || { settlements: 0 };
-  const daily = snap.daily || [];
-  const maxSett = Math.max(1, ...daily.map((d) => d.settlements));
-  const weekly = snap.weekly;
-  const weeklyLine = weekly?.growthPct != null && weekly.lastWeek.days === 7
-    ? `<p class="pn" style="margin:0 0 14px;">week over week: <strong style="color:${weekly.growthPct >= 0 ? "var(--accent)" : "var(--ink)"};">${weekly.growthPct >= 0 ? "+" : ""}${weekly.growthPct}%</strong> settlements (${econFmt(weekly.thisWeek.settlements)} vs ${econFmt(weekly.lastWeek.settlements)} the week before - complete days only)</p>`
-    : `<p class="pn" style="margin:0 0 14px;">week-over-week trend unlocks once two full weeks of history accumulate (${weekly?.historyDays ?? 0} days recorded so far)</p>`;
-  const bars = daily
-    .map(
-      (d) => `<div class="econ-bar-row">
-        <span class="econ-bar-day">${esc(d.day)}</span>
-        <span class="econ-bar-track" style="width:${Math.max(1, Math.round((d.settlements / maxSett) * 100))}%;"></span>
-        <span>${econFmt(d.settlements)} settlements &middot; ${econFmt(d.payers)} payers</span>
-      </div>`
-    )
-    .join("");
-  return `<div class="panel" id="economy">
-  <div class="ph">
-    <h2>The economy, over time</h2>
-    <div class="pn">Every gasless EIP-3009 USDC settlement on Base - the primitive x402 uses - counted chain-wide across every seller, not just Agent402's own catalog. Machine-readable at <a href="/api/x402-economy">/api/x402-economy</a>; same query any agent can buy as <a href="/tools/onchain-sql">onchain-sql</a> for ${esc(CDP_TOOLS.find((t) => t.slug === "onchain-sql")?.price || "its list price")}.</div>
-  </div>
-  <div style="padding:14px 18px;">
-    <div class="grid" style="margin:0 0 14px;">
-      <div class="stat"><div class="k">Settlements 7d</div><div class="v">${econFmt(t7.settlements)}</div></div>
-      <div class="stat"><div class="k">Volume 7d</div><div class="v">$${econFmt(t7.volumeUsd)}</div></div>
-      <div class="stat"><div class="k">Unique payers 7d</div><div class="v">${econFmt(t7.payers)}</div></div>
-      <div class="stat"><div class="k">Settlements 30d</div><div class="v">${econFmt(t30.settlements)}</div></div>
-    </div>
-    ${weeklyLine}
-    <div class="econ-bars">${bars || `<div class="pn">no daily history recorded yet</div>`}</div>
-    ${day}
-  </div>
-</div>`;
 }
 
 // REMOVED 2026-08-24: `indexPage` (a ~340-line HTML dashboard) and its only

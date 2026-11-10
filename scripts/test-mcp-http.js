@@ -239,7 +239,7 @@ for (const aboutName of ["server.describe", "describe_server", "describe_agent40
   // tools layer beside LLM gateways") in this
   // live, agent-served response - a direct violation of the project's own
   // "we deliberately do not name competing sellers anywhere in user-facing
-  // copy" rule (src/economy.js). Found in a link/leak audit, not by any
+  // copy" rule. Found in a link/leak audit, not by any
   // existing test. Locks the whole about/describe response text, not just
   // firstJob, since any field here is equally "live positioning copy".
   // The blocklist is carried as sha256(lowercased name) so the repository
