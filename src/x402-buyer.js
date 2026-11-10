@@ -1364,7 +1364,8 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     // (authorizationState) or it is not (src/evm-authorization-state.js). On
     // Solana it is our own wallet's USDC account since the header went out.
     // Both reads wait for the credential's own expiry (validBefore + slack,
-    // or the blockhash), bounded by refusalMaxWaitMs. Returns the verdict, or
+    // or the finalized chain passing the blockhash's last valid height),
+    // bounded by refusalMaxWaitMs. Returns the verdict, or
     // null when this chain has no such read or the read failed - and null
     // never releases anything.
     // The most this credential can move: the amount we signed. Carried on
@@ -1374,6 +1375,8 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     const evmAuth = isEvm ? payload?.payload?.authorization : null;
     const evmCheckable = !!(evmAuth && /^0x[0-9a-fA-F]{64}$/.test(String(evmAuth.nonce || "")) && /^0x[0-9a-fA-F]{40}$/.test(String(signable?.asset || "")) && /^\d+$/.test(String(evmAuth.validBefore || "")));
     const svmBlockhash = chain === "solana" && typeof payload?.recentBlockhash === "string" ? payload.recentBlockhash : null;
+    // Known only for a blockhash our own RPC issued; else the read bounds it itself.
+    const svmLastValid = chain === "solana" && Number.isSafeInteger(payload?.lastValidBlockHeight) ? payload.lastValidBlockHeight : null;
     const chainCheckable = chain === "solana" || evmCheckable;
     const readChainVerdict = async (where) => {
       if (!chainCheckable) return null;
@@ -1383,7 +1386,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
           ? (await import("./solana-buyer.js")).confirmSvmNotDebited
           : (await import("./evm-authorization-state.js")).confirmEvmAuthorizationUnused);
         return chain === "solana"
-          ? await check({ wallet: buyer.address, sinceUnix: sentAtUnix, blockhash: svmBlockhash, maxWaitMs })
+          ? await check({ wallet: buyer.address, sinceUnix: sentAtUnix, blockhash: svmBlockhash, lastValidBlockHeight: svmLastValid, maxWaitMs })
           : await check({ token: signable.asset, authorizer: evmAuth.from || buyer.address, nonce: evmAuth.nonce, chain, wallet: buyer.address, sinceUnix: sentAtUnix, untilUnix: Number(evmAuth.validBefore) + REFUSAL_EXPIRY_SLACK_S, maxWaitMs });
       } catch (e) {
         console.warn(`[x402-buyer] ${where}: chain check unreadable (${String(e?.message || e).slice(0, 80)}) - keeping the hold`);

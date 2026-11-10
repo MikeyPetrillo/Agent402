@@ -5,6 +5,9 @@
 //
 //   1. One deadline per purchase: every seller request takes what is left of
 //      it, and nothing is signed or sent once too little remains.
+//   2. A Solana hold is released only on proof the credential cannot land:
+//      the finalized chain past the blockhash's last valid height, read
+//      from our own RPC; an unknown answer is pending.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { randomBytes } from "node:crypto";
 import { mkdtempSync } from "node:fs";
@@ -127,6 +130,145 @@ const json200 = () => new Response(JSON.stringify({ ok: true }), { status: 200, 
   const cdnOpen = await run({ network: "eip155:8453", chains: ["base"], reqExtra: { cdnSyncDeadlineMs: Date.now() + 60_000 } });
   ok(cdnOpen.out.status === 200 && cdnOpen.seen?.deadlineMs > PAY_X402_MIN_LEG_MS && cdnOpen.seen.deadlineMs <= 55_000, `CONTROL: with the window open the seller is paid under one deadline inside it (${JSON.stringify(cdnOpen.seen)})`);
   guard.__reset();
+}
+
+// --- 2. A Solana hold is released only on proof the credential cannot land ---
+// The chain is a stub the test scripts: what our RPC says about the blockhash,
+// and the confirmed and finalized heights it reports.
+{
+  const sol = await import("../src/solana-buyer.js");
+  const { confirmSvmNotDebited, createSvmPaymentPayload, SVM_BLOCKHASH_LIFE_BLOCKS: LIFE, SVM_EXPIRY_MARGIN_BLOCKS: MARGIN } = sol;
+  const kit = await import("@solana/kit");
+  const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+  const W = "5xVcvJQ6jLe5tYv7aYQ4gCXoR1yzz9Vc3Nc7qF2wD1Zd";
+  const nowS = Math.floor(Date.now() / 1000);
+  const balRow = (amt) => ({ mint: SOL_USDC, owner: W, uiTokenAmount: { amount: String(amt) } });
+  const debitTx = { meta: { err: null, preTokenBalances: [balRow(1000000)], postTokenBalances: [balRow(995000)] } };
+  // script(poll) -> { valid, confirmed: { slot, height }, finalized: { slot, height }, sigs?, epoch? }
+  const chain = (script) => {
+    const calls = [];
+    let poll = 0, validReads = 0;
+    const state = () => script(poll);
+    const rpc = async (_u, init) => {
+      const { method, params } = JSON.parse(init.body);
+      calls.push({ method, opts: params?.[1] ?? params?.[0] ?? null });
+      const st = state();
+      const reply = (result) => new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result }), { status: 200, headers: { "content-type": "application/json" } });
+      if (method === "getTokenAccountsByOwner") return reply({ value: [{ pubkey: "ATA" }] });
+      if (method === "isBlockhashValid") { validReads++; return reply({ context: { slot: params[1]?.commitment === "finalized" ? st.finalized.slot : st.confirmed.slot }, value: st.valid }); }
+      if (method === "getEpochInfo") { if (st.epoch !== undefined) return reply(st.epoch); const c = params[0]?.commitment === "finalized" ? st.finalized : st.confirmed; return reply({ absoluteSlot: c.slot, blockHeight: c.height }); }
+      if (method === "getSignaturesForAddress") { poll++; return reply(st.sigs || []); }
+      if (method === "getTransaction") return reply(debitTx);
+      return reply(null);
+    };
+    return { rpc, calls, polls: () => poll, validReads: () => validReads };
+  };
+  let t = 0;
+  const base = { wallet: W, sinceUnix: nowS - 10, blockhash: "SELLERHASH", pollMs: 0, now: () => (t += 1000), sleep: async () => {}, maxWaitMs: 30_000 };
+  const run = async (script, extra = {}) => { t = 0; const c = chain(script); const verdict = await confirmSvmNotDebited({ ...base, ...extra, fetchImpl: c.rpc }).then((v) => v, (e) => ({ threw: e.message })); return { verdict, ...c }; };
+  const H = 250_000_000;
+
+  // The review's case: a blockhash our RPC has not reached reads invalid at once.
+  const unseen = await run(() => ({ valid: false, confirmed: { slot: 900, height: H }, finalized: { slot: 870, height: H - 30 } }));
+  ok(unseen.verdict.debited === false && unseen.verdict.expired === false, `a blockhash our RPC never reported valid is pending at the bound, never expired (${JSON.stringify(unseen.verdict)})`);
+  ok(unseen.validReads() > 1, `it was read again on every poll (${unseen.validReads()} reads), not taken on the first answer`);
+  // Seen valid, then invalid on a node that is behind: the height has not passed.
+  const flip = await run((p) => ({ valid: p === 0, confirmed: { slot: 900, height: H }, finalized: { slot: 870 + p, height: H - 30 + p } }));
+  ok(flip.verdict.expired === false, `invalid readings while the finalized height is inside the blockhash's life are pending (${JSON.stringify(flip.verdict)})`);
+  // CONTROL: seen valid, then the finalized chain passes the bound with margin.
+  const proven = await run((p) => ({ valid: p === 0, confirmed: { slot: 900, height: H }, finalized: p < 3 ? { slot: 870, height: H - 30 } : { slot: 1200, height: H + LIFE + MARGIN + 1 } }));
+  ok(proven.verdict.debited === false && proven.verdict.expired === true, `CONTROL: seen valid, then finalized past its last valid height plus the margin, nothing debited: expired (${JSON.stringify(proven.verdict)})`);
+  const lastScan = proven.calls.filter((c) => c.method === "getSignaturesForAddress").pop();
+  ok(lastScan?.opts?.minContextSlot === 1200 && lastScan.opts.commitment === "finalized", `the scan a release rests on is no older than the expiry reading (${JSON.stringify(lastScan?.opts)})`);
+  const boundRead = proven.calls.find((c) => c.method === "getEpochInfo" && c.opts?.commitment === "confirmed");
+  ok(boundRead?.opts?.minContextSlot === 900, `the bound is read at or after the slot the blockhash was seen valid at (${JSON.stringify(boundRead?.opts)})`);
+  // Exactly at the margin is not past it.
+  const edge = await run((p) => ({ valid: p === 0, confirmed: { slot: 900, height: H }, finalized: { slot: 1200, height: H + LIFE + MARGIN } }));
+  ok(edge.verdict.expired === false, "a finalized height at the margin, not past it, is pending");
+  // Our RPC still calls the blockhash valid at the finalized slot: pending.
+  const stillValid = await run(() => ({ valid: true, confirmed: { slot: 900, height: H }, finalized: { slot: 1200, height: H + LIFE + MARGIN + 50 } }));
+  ok(stillValid.verdict.expired === false, "a blockhash our RPC still reports valid is pending whatever the height reads");
+  // A transfer that landed in the last valid blocks is in the final scan.
+  const late = await run((p) => ({ valid: p === 0, confirmed: { slot: 900, height: H }, finalized: p < 2 ? { slot: 870, height: H - 30 } : { slot: 1200, height: H + LIFE + MARGIN + 1 }, sigs: p >= 2 ? [{ signature: "s9", blockTime: nowS }] : [] }));
+  ok(late.verdict.debited === true && late.verdict.expired === undefined, `a debit in the scan taken at the expiry reading is charged, not expired (${JSON.stringify(late.verdict)})`);
+  // An unreadable height is unknown, and unknown never releases.
+  const unreadable = await run((p) => ({ valid: p === 0, confirmed: { slot: 900, height: H }, finalized: { slot: 1200, height: H + 500 }, epoch: p === 0 ? undefined : { absoluteSlot: "x" } }));
+  ok(/getEpochInfo unreadable/.test(unreadable.verdict.threw || ""), `an unreadable height throws, so the caller keeps the hold (${JSON.stringify(unreadable.verdict)})`);
+  // A blockhash our own RPC issued carries its exact last valid height.
+  const own = await run((p) => ({ valid: false, confirmed: { slot: 900, height: H }, finalized: p < 2 ? { slot: 870, height: H + 100 } : { slot: 1300, height: H + 100 + MARGIN + 1 } }), { lastValidBlockHeight: H + 100 });
+  ok(own.verdict.expired === true && own.polls() === 3, `our own blockhash expires on its own last valid height plus the margin (${JSON.stringify(own.verdict)}, ${own.polls()} polls)`);
+
+  // What the signer records: our own RPC's height, never the seller's figure.
+  const signer = await kit.generateKeyPairSigner();
+  const facilitator = await kit.generateKeyPairSigner();
+  const sellerWallet = await kit.generateKeyPairSigner();
+  const sellerHash = kit.getBase58Decoder().decode(randomBytes(32));
+  const ownHash = kit.getBase58Decoder().decode(randomBytes(32));
+  const accept = (extra) => ({ scheme: "exact", network: sol.SOLANA_CAIP2, asset: SOL_USDC, amount: "3000", payTo: sellerWallet.address, maxTimeoutSeconds: 300, extra: { feePayer: facilitator.address, ...extra } });
+  globalThis.fetch = async (_u, init) => {
+    const { method } = JSON.parse(init.body);
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: method === "getLatestBlockhash" ? { context: { slot: 900 }, value: { blockhash: ownHash, lastValidBlockHeight: H + 150 } } : null }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const theirs = await createSvmPaymentPayload(signer, { x402Version: 2, accepts: [accept({ recentBlockhash: sellerHash, lastValidBlockHeight: "1" })] });
+  ok(theirs.recentBlockhash === sellerHash && theirs.lastValidBlockHeight === null, `a seller's blockhash carries no last valid height of the seller's (${theirs.lastValidBlockHeight})`);
+  const ours = await createSvmPaymentPayload(signer, { x402Version: 2, accepts: [accept({ lastValidBlockHeight: "1" })] });
+  ok(ours.recentBlockhash === ownHash && ours.lastValidBlockHeight === H + 150 && !Object.keys(ours).includes("lastValidBlockHeight"), `our own blockhash carries our RPC's last valid height, off the wire (${ours.lastValidBlockHeight})`);
+
+  // THROUGH THE PAYER: the seller hands a blockhash, takes the paid request,
+  // answers 400 at once, and our RPC says "invalid". Every hold stands.
+  const { createServer } = await import("node:http");
+  const keypair = new Uint8Array(64);
+  const gen = await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"]);
+  const pkcs8 = new Uint8Array(await crypto.subtle.exportKey("pkcs8", gen.privateKey));
+  keypair.set(pkcs8.slice(pkcs8.length - 32), 0);
+  keypair.set(new Uint8Array(await crypto.subtle.exportKey("raw", gen.publicKey)), 32);
+  process.env.SOLANA_UPSTREAM_BUYER_KEY = JSON.stringify([...keypair]);
+  let rpcScript = () => ({});
+  let rpcPoll = 0;
+  const rpcSrv = createServer((req, res) => {
+    let buf = "";
+    req.on("data", (d) => (buf += d));
+    req.on("end", () => {
+      const { method, params, id } = JSON.parse(buf);
+      const st = rpcScript(rpcPoll);
+      const reply = (result) => { res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ jsonrpc: "2.0", id, result })); };
+      if (method === "getTokenAccountsByOwner") return reply({ value: [{ pubkey: "ATA" }] });
+      if (method === "isBlockhashValid") return reply({ context: { slot: params[1]?.commitment === "finalized" ? st.finalized.slot : st.confirmed.slot }, value: st.valid });
+      if (method === "getEpochInfo") { const c = params[0]?.commitment === "finalized" ? st.finalized : st.confirmed; return reply({ absoluteSlot: c.slot, blockHeight: c.height }); }
+      if (method === "getSignaturesForAddress") { rpcPoll++; return reply([]); }
+      return reply(null);
+    });
+  });
+  await new Promise((r) => rpcSrv.listen(0, "127.0.0.1", r));
+  const prevRpc = process.env.SOLANA_RPC_URL;
+  process.env.SOLANA_RPC_URL = `http://127.0.0.1:${rpcSrv.address().port}`;
+  const ch = Buffer.from(JSON.stringify({ x402Version: 2, accepts: [accept({ recentBlockhash: sellerHash, lastValidBlockHeight: "1" })] })).toString("base64");
+  let paidSends = 0;
+  const seller = createServer((req, res) => {
+    req.resume();
+    const pay = req.headers["payment-signature"] || req.headers["x-payment"];
+    res.setHeader("content-type", "application/json");
+    if (!pay) { res.statusCode = 402; res.setHeader("payment-required", ch); res.end("{}"); return; }
+    paidSends++; res.statusCode = 400; res.end(JSON.stringify({ error: "bad request" }));
+  });
+  await new Promise((r) => seller.listen(0, "127.0.0.1", r));
+  globalThis.fetch = origFetch;
+  const buy = (refusalMaxWaitMs) => buyer.payX402(`http://127.0.0.1:${seller.address().port}/x`, { maxAtomic: 5000n, method: "POST", body: {}, chain: "solana", sellerProof: async () => 25, refusalMaxWaitMs }).then(() => null, (e) => e);
+  rpcScript = () => ({ valid: false, confirmed: { slot: 900, height: H }, finalized: { slot: 870, height: H - 30 } });
+  let held = buyer._spentThisWindow();
+  const attack = await buy(50);
+  ok(paidSends === 1 && attack && attack.committed === true && attack.refused !== true, `through the payer: "invalid" right after signing keeps the payment committed (committed ${attack?.committed}, refused ${attack?.refused}, ${attack?.message})`);
+  ok(buyer._spentThisWindow() === held + 3000n, `and the hold stands (${buyer._spentThisWindow() - held} atomic held)`);
+  // CONTROL, same seller: once our RPC has seen the blockhash valid and the
+  // finalized chain is past its life, the same refusal releases the hold.
+  rpcPoll = 0;
+  rpcScript = (p) => ({ valid: p === 0, confirmed: { slot: 900, height: H }, finalized: p === 0 ? { slot: 870, height: H - 30 } : { slot: 1200, height: H + LIFE + MARGIN + 1 } });
+  held = buyer._spentThisWindow();
+  const honest = await buy(30_000);
+  ok(honest && honest.committed === false && honest.refused === true, `CONTROL: proof of expiry releases it (committed ${honest?.committed}, refused ${honest?.refused})`);
+  ok(buyer._spentThisWindow() === held, "and that hold is given back");
+  seller.close(); rpcSrv.close();
+  if (prevRpc === undefined) delete process.env.SOLANA_RPC_URL; else process.env.SOLANA_RPC_URL = prevRpc;
 }
 
 globalThis.fetch = origFetch;

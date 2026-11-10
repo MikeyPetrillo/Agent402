@@ -311,7 +311,7 @@ const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
 
   // confirmSvmNotDebited against a stub RPC, all four outcomes.
   const W = "5xVcvJQ6jLe5tYv7aYQ4gCXoR1yzz9Vc3Nc7qF2wD1Zd";
-  const mkRpc = (sigs, txs, fail, bhValid = null) => async (_u, init) => {
+  const mkRpc = (sigs, txs, fail, bhValid = null, finalized = null) => async (_u, init) => {
     const { method, params } = JSON.parse(init.body);
     const reply = (result) => new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result }), { status: 200, headers: { "content-type": "application/json" } });
     if (fail) return new Response("{}", { status: 429 });
@@ -319,7 +319,14 @@ const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
     if (method === "getSignaturesForAddress") return reply(typeof sigs === "function" ? sigs() : sigs);
     if (method === "getTransaction") return reply(txs[params[0]] || null);
     // isBlockhashValid: a scripted sequence, last answer repeats.
-    if (method === "isBlockhashValid") { const v = bhValid.length > 1 ? bhValid.shift() : bhValid[0]; return reply({ value: v }); }
+    if (method === "isBlockhashValid") { const v = bhValid.length > 1 ? bhValid.shift() : bhValid[0]; return reply({ context: { slot: 900 }, value: v }); }
+    // getEpochInfo: the confirmed height is 1000; the finalized heights are a
+    // scripted sequence, last answer repeats.
+    if (method === "getEpochInfo") {
+      if (params[0]?.commitment !== "finalized") return reply({ absoluteSlot: 900, blockHeight: 1000 });
+      const h = finalized && finalized.length > 1 ? finalized.shift() : finalized ? finalized[0] : 1000;
+      return reply({ absoluteSlot: h + 100, blockHeight: h });
+    }
     return reply(null);
   };
   const nowS = Math.floor(Date.now() / 1000);
@@ -334,13 +341,19 @@ const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
   let threw = null; try { await confirmSvmNotDebited({ ...fast, fetchImpl: mkRpc([], {}, true) }); } catch (e) { threw = e; }
   ok(threw, "an unreadable RPC throws - never 'not debited' by default");
   ok((await confirmSvmNotDebited({ ...fast, fetchImpl: mkRpc([], {}) })).expired === null, "the legacy grace read (no blockhash) reports expired:null - never final");
-  // Blockhash-bounded mode (2026-09-03): the wait runs until the chain says
-  // the blockhash is no longer valid, and only THEN is "no debit" final.
+  // Blockhash-bounded mode (2026-09-03): the wait runs until the credential
+  // cannot land, and only THEN is "no debit" final: our RPC saw the blockhash
+  // valid (its last valid height is then at most 1000 + 150), and the
+  // finalized height has passed that by the margin (scripts/test-router-money.js
+  // holds the cases a release must not be read from).
   {
     let t = 0; const clock = () => (t += 1000); const noSleep = async () => {};
     const bh = { wallet: W, sinceUnix: nowS - 10, blockhash: "BH", pollMs: 0, now: clock, sleep: noSleep };
-    const expired = await confirmSvmNotDebited({ ...bh, maxWaitMs: 60_000, fetchImpl: mkRpc([], {}, false, [true, true, false]) });
-    ok(expired.debited === false && expired.expired === true, "polls isBlockhashValid until it reads false -> expired:true (provably unpaid)");
+    const expired = await confirmSvmNotDebited({ ...bh, maxWaitMs: 60_000, fetchImpl: mkRpc([], {}, false, [true, false], [1100, 1150, 1161]) });
+    ok(expired.debited === false && expired.expired === true, "polls until the finalized height is past the blockhash's last valid height and it reads invalid -> expired:true (provably unpaid)");
+    t = 0;
+    const early = await confirmSvmNotDebited({ ...bh, maxWaitMs: 5_000, fetchImpl: mkRpc([], {}, false, [false]) });
+    ok(early.debited === false && early.expired === false, "isBlockhashValid false with no earlier valid reading is not expiry -> expired:false (the hold must stand)");
     let polls = 0;
     const lateDebit = await confirmSvmNotDebited({ ...bh, maxWaitMs: 60_000, fetchImpl: mkRpc(() => (++polls >= 2 ? [{ signature: "s9", blockTime: nowS }] : []), { s9: debitTx }, false, [true]) });
     ok(lateDebit.debited === true && lateDebit.signature === "s9", "a debit that lands on a later poll, while the blockhash is still valid, is seen as charged");
