@@ -387,7 +387,7 @@ import { asyncProfileOf, estimateBasisSeconds, asyncAdvice, asyncAdviceMiddlewar
 import { progressMiddleware, reportHandlerStarted } from "./job-progress.js";
 import { createTaskStore, taskDataDir } from "./mcp-tasks.js";
 import { admitCoveredRun } from "./inflight-cover.js";
-import { paymentReplayKeyAsync, paymentValidBeforeMs, createReplayGuard, replayGuardStoreStatus } from "./replay-guard.js";
+import { paymentReplayKeyAsync, consumedHoldFor, createReplayGuard, replayGuardStoreStatus } from "./replay-guard.js";
 import { statusPage, statusSnapshot } from "./status.js";
 import { recordProbes, statusStoreFlush } from "./status-store.js";
 import { tollboothLandingPage } from "./tollbooth-landing.js";
@@ -11196,10 +11196,12 @@ if (FREE_MODE) {
         // A grant that was not settled (a forgiven hang-up, a first-call
         // allowance: src/hangup-settlement.js grantedUnsettled) leaves the
         // authorization live on chain, so its mark is held until the
-        // authorization itself expires. A settled grant keeps the guard's
-        // default hold: its nonce is spent on chain, and a far validBefore
-        // held for every paid call would keep one long-lived key each.
-        if (res.statusCode === 200) replayGuard.settle(replayKey, undefined, grantedUnsettled(req) ? { validBeforeMs: paymentValidBeforeMs(req) } : {}).catch(() => {});
+        // authorization itself expires. A settled grant is held that long
+        // too, up to the guard's settled bound (MAX_SETTLED_VALIDITY_HOLD_MS):
+        // its nonce is spent on chain, but the gateway cache reader takes a
+        // still-valid authorization the guard does not hold as its payer's
+        // proof, and a far validBefore must not keep a key per paid call.
+        if (res.statusCode === 200) replayGuard.settle(replayKey, undefined, consumedHoldFor(req, { settled: !grantedUnsettled(req) })).catch(() => {});
         else replayGuard.release(replayKey).catch(() => {}); // not granted (facilitator rejected, handler errored)
       };
       res.on("finish", finishGuard);

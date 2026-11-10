@@ -4,11 +4,17 @@
 //
 //   REDIS_URL=redis://127.0.0.1:6379 node scripts/test-replay-consumed-hold.js
 //
-// A settled 200 keeps the guard's default hold (one hour): the authorization's
-// nonce is spent on chain, so nothing can settle it again, and a mark held to
-// a far validBefore for every paid call would keep one long-lived key each (a
-// client signing century-long validity windows grows the store by one key per
-// call). A grant that was NOT settled (a hang-up the forgiveness budget
+// A settled 200 keeps its mark while its authorization stays valid (plus the
+// margin), never under the guard's default hold (one hour): the nonce is
+// spent on chain, but the gateway cache reader (src/gateway-cache-scope.js)
+// takes a still-valid authorization the guard does not hold as its payer's
+// proof, so the mark must not lapse while the authorization could be read
+// there. That hold is bounded (MAX_SETTLED_VALIDITY_HOLD_MS from the settle):
+// a mark held to a far validBefore for every paid call would keep one
+// long-lived key each (a client signing century-long validity windows grows
+// the store by one key per call), so a century-long authorization keeps its
+// key for the bound and no longer, and a payment with the stock five-minute
+// expiry keeps the default hour. A grant that was NOT settled (a hang-up the forgiveness budget
 // forgave: the buyer was told it was free) leaves the authorization live, so
 // its mark is held past the authorization's own validBefore
 // (CONSUMED_VALIDITY_MARGIN_MS beyond it; a validBefore further out than a
@@ -34,7 +40,7 @@ if (!process.env.REDIS_URL) {
   process.exit(1);
 }
 const { createClient } = await import("redis");
-const { CONSUMED_VALIDITY_MARGIN_MS } = await import("../src/replay-guard.js");
+const { CONSUMED_VALIDITY_MARGIN_MS, MAX_SETTLED_VALIDITY_HOLD_MS, SETTLED_HOLD_MS } = await import("../src/replay-guard.js");
 
 const [PORT, FAC_PORT] = await getFreePorts(2);
 const B = `http://127.0.0.1:${PORT}`;
@@ -81,10 +87,12 @@ await redis.connect();
 // The guard's own key for an EIP-3009 authorization (src/replay-guard.js
 // paymentReplayKey, namesOf): the consumed mark lives at replay:c:n2:<id>.
 const consumedKey = (nonce) => "replay:c:n2:" + createHash("sha256").update(`eip155:8453\n${PAYER.toLowerCase()}\n${nonce.toLowerCase()}`).digest("hex");
-const credential = (accept, nonce) => Buffer.from(JSON.stringify({
+const credential = (accept, nonce, validBefore = "9999999999") => Buffer.from(JSON.stringify({
   x402Version: 2, resource: accept.resource, accepted: accept,
-  payload: { signature: "0x" + "11".repeat(65), authorization: { from: PAYER, to: accept.payTo, value: accept.amount, validAfter: "0", validBefore: "9999999999", nonce } },
+  payload: { signature: "0x" + "11".repeat(65), authorization: { from: PAYER, to: accept.payTo, value: accept.amount, validAfter: "0", validBefore: String(validBefore), nonce } },
 })).toString("base64");
+// The earlier build's name for the same credential (namesOf: the tagged twin).
+const legacyKey = (nonce) => "replay:c:n:" + createHash("sha256").update(`?:${nonce.toLowerCase()}`).digest("hex");
 const hangUp = (url, { headers = {}, abortWhen } = {}) => new Promise((resolve) => {
   const req = httpRequest(url, { method: "GET", headers });
   let done = false;
@@ -106,16 +114,39 @@ try {
   if (!accept) throw new Error("no Base accept to pay");
   const YEAR_S = 365 * 24 * 3600;
 
-  // 1. A settled 200: the default hold, not the authorization's validBefore.
-  {
+  // 1. Settled 200s. The mark is written after the response ends, so each
+  // read waits for the key (with a deadline).
+  const HOUR_S = SETTLED_HOLD_MS / 1000, BOUND_S = MAX_SETTLED_VALIDITY_HOLD_MS / 1000, MARGIN_S = CONSUMED_VALIDITY_MARGIN_MS / 1000;
+  const paySettled = async (label, validBefore) => {
     const nonce = "0x" + randomBytes(32).toString("hex");
     const s0 = settles;
-    const r = await fetch(`${B}/api/uuid`, { headers: { "payment-signature": credential(accept, nonce) } });
-    ok(r.status === 200 && settles === s0 + 1, `settled: a connected buyer is served and settled once (${r.status}, settle +${settles - s0})`);
-    await waitFor(() => false, 400);
-    const ttl = await redis.ttl(consumedKey(nonce));
-    ok(ttl > 0 && ttl <= 3600, `settled: the consumed mark holds for the guard's default hour, not the authorization's validBefore (TTL ${ttl} s)`);
-    ok(ttl < YEAR_S, `settled: no long-lived key for a century-long authorization (TTL ${ttl} s)`);
+    const cred = validBefore === undefined ? credential(accept, nonce) : credential(accept, nonce, validBefore);
+    const r = await fetch(`${B}/api/uuid`, { headers: { "payment-signature": cred } });
+    ok(r.status === 200 && settles === s0 + 1, `${label}: a connected buyer is served and settled once (${r.status}, settle +${settles - s0})`);
+    let ttl = -2;
+    for (const t0 = Date.now(); Date.now() - t0 < 5000 && ttl <= 0;) { ttl = await redis.ttl(consumedKey(nonce)); if (ttl <= 0) await sleep(20); }
+    return { nonce, cred, ttl, twin: await redis.ttl(legacyKey(nonce)) };
+  };
+  {
+    // a. Stock expiry (five minutes): the default hour, as before.
+    const a = await paySettled("settled, stock expiry", Math.floor(Date.now() / 1000) + 300);
+    ok(a.ttl > HOUR_S - 30 && a.ttl <= HOUR_S, `settled, stock expiry: the consumed mark keeps the guard's default hour (TTL ${a.ttl} s)`);
+    // b. Valid two hours and seven days: held until the authorization expires plus the margin.
+    for (const [label, life] of [["two hours", 2 * 3600], ["seven days", 7 * 24 * 3600]]) {
+      const b = await paySettled(`settled, valid ${label}`, Math.floor(Date.now() / 1000) + life);
+      ok(b.ttl > life + MARGIN_S - 30 && b.ttl <= life + MARGIN_S + 1, `settled, valid ${label}: the consumed mark lasts until the authorization expires plus the margin (TTL ${b.ttl} s, expiry in ${life} s)`);
+      ok(b.twin > life + MARGIN_S - 30 && b.twin <= life + MARGIN_S + 1, `settled, valid ${label}: and so does its twin under the earlier key name (TTL ${b.twin} s)`);
+      const s0 = settles;
+      const again = await fetch(`${B}/api/uuid`, { headers: { "payment-signature": b.cred } });
+      // Inside the idempotency window a re-sent payment is answered with
+      // the stored answer; past it the guard's mark refuses it. Never a
+      // second settle or handler run either way.
+      ok((again.status === 409 || again.status === 200) && settles === s0, `settled, valid ${label}: the same authorization again settles nothing (${again.status}, settle +${settles - s0})`);
+    }
+    // c. Valid for centuries: the settled bound, no long-lived key.
+    const c = await paySettled("settled, valid for centuries");
+    ok(c.ttl > BOUND_S - 30 && c.ttl <= BOUND_S, `settled, valid for centuries: the consumed mark is held for the settled bound, not to the authorization's validBefore (TTL ${c.ttl} s, bound ${BOUND_S} s)`);
+    ok(c.twin > 0 && c.twin <= BOUND_S && c.ttl < YEAR_S, `settled, valid for centuries: no key outlives the bound (twin TTL ${c.twin} s)`);
   }
 
   // 2. A forgiven hang-up: granted, not settled, held past validBefore.

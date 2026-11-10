@@ -88,10 +88,18 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   (`src/replay-topology.js`: more than one replica configured, inside `DEPLOY_OVERLAP_SECONDS` of
   listen, default 120, anchored by `markListening` from the listen callback, else import time, or
   draining, read from `drainSignal()`); a lone container past that window serves fast routes on a
-  per-process claim, so a store outage does not stop sales. A settled 200's consumed mark keeps the
-  guard's default hold; only a grant that was not settled (`grantedUnsettled` in
-  `src/hangup-settlement.js`: a forgiven hang-up, a first-call allowance) is held to the
-  authorization's own `validBefore` plus a margin, since that authorization is still live on chain
+  per-process claim, so a store outage does not stop sales. Every granted x402 call's consumed mark
+  is held while its authorization stays valid (`validBefore` plus a margin, never under the default
+  hold): the gateway cache reader (`src/gateway-cache-scope.js`) takes a still-valid authorization
+  the guard does not hold as its payer's proof, so a settled mark must not lapse first. A settled
+  call's hold ends `MAX_SETTLED_VALIDITY_HOLD_MS` (30 days) after its settle at the latest, so no
+  `validBefore` keeps a key per paid call for longer; past that bound a settled mark is let go (its
+  nonce is spent on chain, so it cannot be charged again), and an authorization signed valid from
+  the epoch for longer than the bound is the one case the reader cannot tell from a fresh payment in
+  its last minutes. A grant that was not settled (`grantedUnsettled` in
+  `src/hangup-settlement.js`: a forgiven hang-up, a first-call allowance) is held to its
+  `validBefore` in full, since that authorization is still live on chain. The call site is
+  `consumedHoldFor`; a longer hold is a longer TTL on the same writes
   (`scripts/test-replay-consumed-hold.js`, on Redis).
 - **Per-chain price floors:** `src/network-floors.js`. Every accept is priced through
   `priceForNetwork` (`src/payments.js`: list or per-request quote, plus the chain's

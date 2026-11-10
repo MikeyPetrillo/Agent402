@@ -1426,7 +1426,7 @@ jobs:
           t node scripts/test-alarm-flag-shared-redis.js
           # Two servers on one live Redis run one payment sent to both at once exactly once (the outage cases also run offline).
           t node scripts/test-replay-store-outage.js
-          # The consumed mark's hold read back from Redis: a settled 200 keeps the guard's hour, a forgiven unsettled hang-up is held to the authorization's validBefore.
+          # The consumed mark's hold read back from Redis: a settled 200 is held while its authorization stays valid (the default hour for a stock expiry, the settled bound at most), a forgiven unsettled hang-up to the authorization's validBefore.
           t node scripts/test-replay-consumed-hold.js
 
       - name: "State database (REAL postgres: documents/records/log lines/leases; every migrated store imports its file once and reads the row; loops skip under another holder's lease; idempotency answers and claims shared over REAL redis)"

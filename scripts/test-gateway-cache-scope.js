@@ -41,7 +41,7 @@ import { carriesPaymentAttempt } from "../src/payment-attempt.js";
 import { stableStringify, promptCacheGetShared, promptCacheStore, EMBEDDINGS_PATH } from "../src/tools/llm-gateway-kit.js";
 import { ALLOWANCE_STATE } from "../src/allowance-state.js";
 import { identityPayerOf } from "../src/payer.js";
-import { createReplayGuard, paymentReplayKey, paymentReplayKeyAsync, SETTLED_HOLD_MS } from "../src/replay-guard.js";
+import { createReplayGuard, paymentReplayKey, paymentReplayKeyAsync, consumedHoldFor, SETTLED_HOLD_MS, MAX_SETTLED_VALIDITY_HOLD_MS, CONSUMED_VALIDITY_MARGIN_MS } from "../src/replay-guard.js";
 import { __setTestClient } from "../src/shared-limit.js";
 
 let pass = 0, failed = 0;
@@ -397,6 +397,91 @@ try {
       ok((await call({ "payment-signature": used }, body)).status === 402, "stock v2 window: one the guard holds as settled reads nothing");
       guard = lapsed;
     }
+    guard = createReplayGuard();
+  }
+  // A settled authorization signed to stay valid long past the default hold,
+  // presented again in its last minutes (when its expiry is as near as a
+  // stock payment's): the guard still holds it, on the per-process store and
+  // on the shared one read from another replica, so it reads no scope and
+  // the paywall path refuses it as consumed. Settled as server.js settles a
+  // granted request (consumedHoldFor), at the time it was paid.
+  {
+    // A shared-store stand-in that expires keys as Redis does, on a clock
+    // the test can move forward (`ahead`).
+    const expiringRedis = () => {
+      const m = new Map();
+      const c = { ahead: 0 };
+      const clock = () => Date.now() + c.ahead;
+      const live = (k) => { const e = m.get(k); if (e && e.exp && e.exp <= clock()) { m.delete(k); return null; } return e || null; };
+      return Object.assign(c, {
+        async get(k) { return live(k)?.v ?? null; },
+        async set(k, v, o = {}) { if (o.NX && live(k)) return null; m.set(k, { v, exp: o.EX ? clock() + o.EX * 1000 : 0 }); return "OK"; },
+        async del(k) { return m.delete(k) ? 1 : 0; },
+        async expire(k, sec) { const e = live(k); if (!e) return 0; e.exp = clock() + sec * 1000; return 1; },
+        ttl: (k) => { const e = live(k); return e ? Math.ceil((e.exp - clock()) / 1000) : -2; },
+      });
+    };
+    const DAY_S = 24 * 3600;
+    for (const [label, days] of [["seven days", 7], ["a day", 1], ["two hours", 2 / 24]]) {
+      for (const store of ["local", "shared"]) {
+        const fake = store === "shared" ? expiringRedis() : null;
+        __setTestClient(fake);
+        const writer = createReplayGuard();
+        const body = { ...BODY, input: `${BODY.input} settled ${label} ${store}` };
+        storeFor(`evm:${alice.address.toLowerCase()}`, keyOfBody(body));
+        // Signed `days` ago valid from the epoch, five minutes of life left.
+        const paidAtMs = Date.now() - Math.round(days * DAY_S * 1000) + 300_000;
+        const old = await signedHeader(alice, { validAfter: 0, validBefore: now() + 300 });
+        const req = fakeReq({ "payment-signature": old });
+        const key = await paymentReplayKeyAsync(req);
+        ok((await writer.begin(key, paidAtMs)) === "ok", `settled ${label} ago (${store}): claimed when it was paid`);
+        await writer.settle(key, paidAtMs, consumedHoldFor(req, { settled: true }));
+        // The shared store is read by a replica that never saw the payment,
+        // ten seconds on (a key the store was told to keep for a second is
+        // gone by then).
+        guard = store === "shared" ? createReplayGuard() : writer;
+        if (fake) fake.ahead = 10_000;
+        ok((await provenX402Signer(old, { payTo: PAY_TO })) === alice.address.toLowerCase(), `settled ${label} ago (${store}): CONTROL: the signature alone still proves its payer inside the read window`);
+        ok((await guard.held(key)) === "consumed", `settled ${label} ago (${store}): the guard still holds it five minutes before it expires`);
+        const replay = await call({ "payment-signature": old }, body);
+        ok(replay.status === 402 && replay.cache === null, `settled ${label} ago (${store}): presented again near its expiry it reads no cached answer (${replay.status}, X-Cache ${replay.cache})`);
+        ok((await guard.begin(key)) === "consumed", `settled ${label} ago (${store}): and the paywall path refuses it as consumed`);
+        const fresh = await call({ "payment-signature": await signedHeader(alice, { validAfter: 0, validBefore: now() + 300 }) }, body);
+        ok(fresh.status === 200 && fresh.cache === "hit", `settled ${label} ago (${store}): CONTROL: the payer's fresh stock payment still reads its own answer`);
+        if (fake) {
+          const { 1: id, 2: legacy } = key.split(":");
+          const ttls = [fake.ttl(`replay:c:n2:${id}`), fake.ttl(`replay:c:n:${legacy}`)];
+          const want = 300 + CONSUMED_VALIDITY_MARGIN_MS / 1000;
+          ok(ttls.every((t) => t > 300 - 10 && t <= want + 2), `settled ${label} ago (shared): the mark and its legacy twin last to the authorization's expiry plus the margin, no longer (TTL ${ttls} s)`);
+        }
+      }
+    }
+    // A stock payment settled now: the default hold, exactly as before.
+    {
+      const fake = expiringRedis();
+      __setTestClient(fake);
+      guard = createReplayGuard();
+      const stock = await signedHeader(alice, { validAfter: 0, validBefore: now() + STOCK_MAX_TIMEOUT_SEC });
+      const req = fakeReq({ "payment-signature": stock });
+      const key = await paymentReplayKeyAsync(req);
+      await guard.begin(key); await guard.settle(key, undefined, consumedHoldFor(req, { settled: true }));
+      const ttl = fake.ttl(`replay:c:n2:${key.split(":")[1]}`);
+      ok(ttl > SETTLED_HOLD_MS / 1000 - 5 && ttl <= SETTLED_HOLD_MS / 1000, `stock payment: its settled mark keeps the default hold (TTL ${ttl} s)`);
+    }
+    // An authorization that names its own start further back than the guard
+    // keeps any settled mark may have settled and been let go: no scope.
+    {
+      __setTestClient(null);
+      guard = createReplayGuard();
+      const body = { ...BODY, input: `${BODY.input} aged` };
+      storeFor(`evm:${alice.address.toLowerCase()}`, keyOfBody(body));
+      const boundSec = Math.floor(MAX_SETTLED_VALIDITY_HOLD_MS / 1000);
+      const aged = await signedHeader(alice, { validAfter: now() - boundSec - 60, validBefore: now() + 300 });
+      ok((await call({ "payment-signature": aged }, body)).status === 402, "aged window: a named start older than the settled bound, expiring like a stock payment, reads no scope");
+      const young = await signedHeader(alice, { validAfter: now() - boundSec + 3600, validBefore: now() + 300 });
+      ok((await call({ "payment-signature": young }, body)).cache === "hit", "aged window: a named start inside the settled bound, never settled, is a hit (the guard would still hold it had it settled)");
+    }
+    __setTestClient(null);
     guard = createReplayGuard();
   }
   // A configured shared store that does not answer holds everything.
