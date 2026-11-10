@@ -27,7 +27,7 @@ import {
   substitutedFrom, TIERS, AUTO_RANKINGS, classifyPrompt, canonicalModel, tierAllows, tierFor, meteredQuoteForProbe, meteredBoundFor,
   isFlatTier, flatTierQuoteUsd, servedTierFor, crossTierDisclosure, AUTO_MODEL, AUTO_TIER,
   clampToMargin, assertMeteredAvailable, attemptsFor, serviceTierFor, validateServiceTier, cacheControlPref, upstreamUserId, PROVIDER_SORT_ENABLED,
-  fetchOpenRouter, throwUpstreamError, streamOpenRouterTo, bad, MAX_IMAGES, maxInputCharsFor, inputTooLargeError,
+  fetchOpenRouter, upstreamHttpError, streamOpenRouterTo, bad, MAX_IMAGES, maxInputCharsFor, inputTooLargeError,
   failoverChain, modelFallbackPref, availabilitySubstitution, retryRateLimited,
   rateLimitDelaysFor, paymentWindowTimeoutMs, timedOutBudget, streamClientWatch, STREAM_TIMEOUT_MS, UPSTREAM_TIMEOUT_MS,
   validateReasoning, reasoningForLink, lowestEffortRetry, recoveryRunAffordable, retryEmptyAtLowestEffort,
@@ -475,11 +475,11 @@ export function makeResponsesHandler(routeTier) {
       try {
         const callOnce = (sendBody, ms) => retryRateLimited(async () => {
           const res = await fetchOpenRouter(sendBody, { url: OPENROUTER_RESPONSES_URL, timeoutMs: ms });
-          if (!res.ok) await throwUpstreamError(res);
+          if (!res.ok) await upstreamHttpError(res, sendBody?.model);
           const text = await res.text();
           let parsed;
           try { parsed = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
-          return assertUpstreamBody(parsed);
+          return assertUpstreamBody(parsed, { model: sendBody?.model });
         }, { delays: rateLimitDelaysFor(flex) });
         let data = await callOnce(outbound, timeoutMs);
         let reasoningAdjusted = outbound[REASONING_ADJUSTED] || null;

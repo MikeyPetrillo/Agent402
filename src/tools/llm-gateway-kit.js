@@ -2996,6 +2996,15 @@ export async function throwUpstreamError(res, { refusal = false, model } = {}) {
   throw bad(`Upstream error: ${upstreamRefusalText(msg)}`, 502);
 }
 
+/** An upstream HTTP error on a buyer's own model call, read the same way on
+ *  every wire (chat, Messages, Responses), buffered or streamed: a provider
+ *  4xx about the request is a refusal that names `model` (the chain still
+ *  walks it; the route binder answers 400 when no link took it), anything
+ *  else is an upstream failure. Always throws. */
+export function upstreamHttpError(res, model) {
+  return throwUpstreamError(res, { refusal: true, model });
+}
+
 /** The actionable part of an upstream refusal: no URLs, no "learn more" tail. */
 export function upstreamRefusalText(msg) {
   const t = String(msg || "")
@@ -3040,7 +3049,7 @@ export function assertUpstreamBody(data, { model } = {}) {
 
 async function callOpenRouter(body, { timeoutMs } = {}) {
   const res = await fetchOpenRouter(body, { timeoutMs });
-  if (!res.ok) await throwUpstreamError(res, { refusal: true, model: body?.model });
+  if (!res.ok) await upstreamHttpError(res, body?.model);
   const text = await res.text();
   let data;
   try { data = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
@@ -3220,7 +3229,7 @@ export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = 
       if (firstFrameTimedOut && e && typeof e === "object" && e.statusCode === 504) e.upstreamTimeout = true;
       throw e;
     }
-    if (!upstream.ok) await throwUpstreamError(upstream, { refusal: true, model: body?.model });
+    if (!upstream.ok) await upstreamHttpError(upstream, body?.model);
     // The 200 is NOT committed until the first `data:` frame arrives. Measured
     // live (paid canary 2026-08-27 20:06:42Z): OpenRouter answered a nano
     // stream with only ": OPENROUTER PROCESSING" keep-alive comments and then
