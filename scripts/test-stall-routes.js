@@ -507,14 +507,26 @@ const { ctx } = buildRoutePerfFixture({ sellers: 5800, toolsTarget: 198_000, cac
   // The alias walk behind the rebuild reads a host per cached origin, redirect
   // target and homepage: each is parsed once per string, never once per walk,
   // so a rebuild parses URLs for the changed sellers only.
+  // A seller key's own check (isPlainSellerKey) is one parse the first time a
+  // key is seen, kept for the process. The route index is still adding sellers
+  // in its own turns while this runs, so those first sights land in the window
+  // on a slow host: they are counted apart and held to one per key, and every
+  // other parse is held to the bound.
   const RealURL = globalThis.URL;
   let parses = 0;
-  globalThis.URL = class extends RealURL { constructor(...args) { parses++; super(...args); } };
+  const keyParses = [];
+  globalThis.URL = class extends RealURL {
+    constructor(...args) {
+      if (String(new Error().stack).includes("isPlainSellerKey")) keyParses.push(String(args[0])); else parses++;
+      super(...args);
+    }
+  };
   let rebuilt;
   try { rebuilt = await blockOf(() => x.routableSellerSummaries()); } finally { globalThis.URL = RealURL; }
   const projected = x._routableRowBuildsForTest() - before;
   ok(rebuilt.value.length === first.length + 1 && projected === 2, `a seller-summary rebuild projects only the changed sellers (${projected} of ${rebuilt.value.length})`);
   ok(parses <= 16, `...and parses URLs for the changed sellers only (${parses} parses over ${rebuilt.value.length} sellers)`);
+  ok(new Set(keyParses).size === keyParses.length, `...and a seller key is parsed once, the first time it is seen (${keyParses.length} first sights, ${new Set(keyParses).size} keys)`);
   ok(heldUnder(rebuilt.ms, GAP_MS), `...and never held the loop past ${GAP_MS} ms (${GAP.note}) (worst ${rebuilt.ms} ms ours; longest gap ${rebuilt.raw} ms, ${rebuilt.gc} ms of it the collector)`);
   cache.delete("https://stall-routes-new.example");
 }
