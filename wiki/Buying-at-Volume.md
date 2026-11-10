@@ -69,6 +69,7 @@ The long routes (report products, video, the slow media tiers) take x402 exact o
 
 - Model ids: `GET /v1/models`. An unlisted id is refused before payment with `suggestions` and a `howToCall` retried with the first.
 - Input size: each model's cap is `x402.meteredMaxInputChars` on `/v1/models` (`maxInputCharsFor` in `src/tools/llm-gateway-kit.js`); over it, `input_too_large` before payment, with `suggestions` of models whose window takes it.
+- Every wire: both refusals are answered before payment on `/v1/metered/chat/completions`, `/v1/metered/messages`, `/v1/metered/responses` and `/v1/metered/gemini` alike (`src/gateway-prepayment.js`), each in the error object its SDK reads, with the same fields beside it.
 - Per-call cap: a body quoting above `METERED_MAX_QUOTE_USD` is refused with a 400 before any upstream call.
 
 ## Errors
