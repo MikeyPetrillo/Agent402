@@ -227,7 +227,8 @@ ok(refunds.length === 3, "...and not refunded again on the next poll");
 // returns at once with every record still on it, reads start beside it (three
 // at a time), a record with a read in flight or one that did not answer is
 // not asked again inside the retry time, and an answer that does arrive is
-// used by the next read of the list.
+// used by the next read of the list. (The list's own bounded wait for the
+// reads it started is set to 0 here; the block after this one covers it.)
 {
   const DIR2 = join("/tmp", `test-human-checkout-owed-${process.pid}`);
   rmSync(DIR2, { recursive: true, force: true });
