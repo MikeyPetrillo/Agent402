@@ -51,7 +51,7 @@ export function dropUnsignedAuthorization(decoded) {
  *  anything else lowercased as sent. */
 export function canonicalNonce(nonce) {
   const raw = String(nonce ?? "").trim();
-  if (/^(?:0x[0-9a-fA-F]{1,64}|[0-9]{1,78})$/.test(raw)) { try { return BigInt(raw).toString(); } catch { /* fall through */ } }
+  if (/^(?:0[xX][0-9a-fA-F]{1,512}|[0-9]{1,512})$/.test(raw)) { try { return BigInt(raw).toString(); } catch { /* fall through */ } }
   return raw.toLowerCase();
 }
 
