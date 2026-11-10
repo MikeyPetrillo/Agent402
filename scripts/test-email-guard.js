@@ -9,6 +9,7 @@
 //     findings, oversize input, and MIME a reader cannot fully decode (partial).
 //   - The MIME reader on its own: encodings, charsets, nesting, mailboxes.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { leastOurs, leastWall } from "./lib/ours-clock.js";
 import { EMAIL_GUARD_TOOLS, siteOf } from "../src/tools/email-guard-kit.js";
 import { parseMessage, parseMailbox, decodeEncodedWords, parseContentType, MAX_RAW_BYTES } from "../src/tools/email-guard-mime.js";
 import { readableBase64 } from "../src/tools/email-guard-html.js";
@@ -328,12 +329,14 @@ ok(/no score and no verdict/.test(tool.description), "copy says there is no scor
 // ----------------------------------------------------------------------------
 {
   await run({ raw: "From: warm <a@example.com>\r\nSubject: warm\r\n\r\nwarm up the lazy imports" });
-  const timed = async (label, input) => { const t = Date.now(); await run(input); const ms = Date.now() - t; ok(ms < 150, `${label} (${ms}ms)`); };
+  // The least of three reads each: a host busy with other work stretches one
+  // read, a header scan that went quadratic is slow on all three.
+  const timed = async (label, input) => { const { ms } = await leastWall(() => run(input), { enough: 50, giveUp: 1500 }); ok(ms < 150, `${label} (${ms.toFixed(1)}ms)`); };
   await timed("a 20,000-character display name in raw mode is read in bounded time", { raw: `From: ${"a".repeat(20000)} <a@example.com>\r\nSubject: hi\r\n\r\nbody text here` });
   await timed("a 20,000-space run before the address is read in bounded time", { raw: `From: a${" ".repeat(20000)}! <a@example.com>\r\nSubject: hi\r\n\r\nbody text here` });
   await timed("a display name of 20,000 dotted labels is read in bounded time", { raw: `From: a@${"a.".repeat(10000)}- <a@example.com>\r\nSubject: hi\r\n\r\nbody text here` });
-  const t0 = Date.now(); const sp = parseMailbox(`a${" ".repeat(50000)}! <a@example.com>`); const ms0 = Date.now() - t0;
-  ok(ms0 < 50 && sp.address === "a@example.com", `parseMailbox finds the address after a long whitespace run (${ms0}ms)`);
+  const { value: sp, ms: ms0 } = leastOurs(() => parseMailbox(`a${" ".repeat(50000)}! <a@example.com>`), { giveUp: 500 });
+  ok(ms0 < 50 && sp.address === "a@example.com", `parseMailbox finds the address after a long whitespace run (${ms0.toFixed(1)}ms)`);
   ok(parseMailbox(`${"N".repeat(5000)} <a@example.com>`).displayName.length === 1000, "the display name is read up to 1000 characters");
   const longName = await run({ raw: `From: "${"x".repeat(1200)} billing@pay.example" <a@example.com>\r\nSubject: hi\r\n\r\nbody text here` });
   ok(Array.isArray(longName.findings), "a long display name still answers");

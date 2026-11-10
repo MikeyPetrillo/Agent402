@@ -9,6 +9,7 @@
 //
 //   node scripts/test-multipart.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { leastOurs } from "./lib/ours-clock.js";
 const { parseMultipartFile, boundaryOf } = await import("../src/multipart.js");
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.log("FAIL -", m); } };
@@ -77,12 +78,11 @@ throws(() => parseMultipartFile(build([field("big", "x".repeat(5000))]), CT), "t
 {
   const { handlerInputOf } = await import("../src/handler-input.js");
   const big = Buffer.alloc(3 * 1024 * 1024);
-  const t = Date.now();
-  const got = handlerInputOf({ query: { a: "1" }, headers: {}, body: big });
-  const ms = Date.now() - t;
+  // Synchronous, so read as the time the thread had a core, least of three.
+  const { value: got, ms } = leastOurs(() => handlerInputOf({ query: { a: "1" }, headers: {}, body: big }), { giveUp: 1000 });
   ok(Object.keys(got).length === 1, `a raw body is not expanded into parameters (got ${Object.keys(got).length} keys)`);
   ok(got.a === "1", "the query string still becomes parameters beside a raw body");
-  ok(ms < 100, `a 3 MB raw body costs no measurable time (${ms}ms)`);
+  ok(ms < 100, `a 3 MB raw body costs no measurable time (${ms.toFixed(1)}ms)`);
   const json = handlerInputOf({ query: {}, headers: {}, body: { text: "x" } });
   ok(json.text === "x", "a JSON body is still spread into parameters, unchanged");
 }

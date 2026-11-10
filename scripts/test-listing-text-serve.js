@@ -11,6 +11,7 @@
 // Run: node scripts/test-listing-text-serve.js
 // sellers.list is mounted only with the router shown (as CI runs it).
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { leastOurs } from "./lib/ours-clock.js";
 process.env.AGENT402_SHOW_ROUTER ??= "1";
 import { readFileSync } from "node:fs";
 import express from "express";
@@ -340,7 +341,8 @@ _resetFlatCacheForTest(); _resetIndexRowsForTest();
   const differ = [...fixed, ...random].filter((t) => cleanListingText(t) !== reference(t.trim()));
   ok(differ.length === 0, `link and image removal matches the reference patterns on ${fixed.length + random.length} cases (${differ.length} differ${differ.length ? ": " + JSON.stringify(differ.slice(0, 3)) : ""})`);
 
-  const time = (t) => { const t0 = process.hrtime.bigint(); cleanListingText(t); return Number(process.hrtime.bigint() - t0) / 1e6; };
+  // Synchronous, so a reading is the time the thread had a core (scripts/lib/ours-clock.js).
+  const time = (t) => leastOurs(() => cleanListingText(t), { attempts: 1 }).ms;
   const hostile = [
     ["opening brackets", "[".repeat(400_000) + "]("],
     ["image openers", "![".repeat(200_000) + "]("],
@@ -348,7 +350,7 @@ _resetFlatCacheForTest(); _resetIndexRowsForTest();
     ["targets broken by a late line break", "[a](".repeat(100_000) + "\n)"],
   ];
   for (const [label, text] of hostile) {
-    const ms = Math.min(time(text), time(text));
+    const ms = Math.min(time(text), time(text), time(text));
     ok(ms < 250, `${text.length} characters of ${label} are cleaned in ${ms.toFixed(1)} ms (under 250)`);
   }
 }

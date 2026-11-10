@@ -13,6 +13,7 @@
 // we could not have seen from here: a prober that tries the documented path
 // records the SELLER as unpayable, for a service that answers 402 correctly.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { leastOurs } from "./lib/ours-clock.js";
 import { readFileSync } from "node:fs";
 
 let pass = 0, fail = 0;
@@ -52,7 +53,8 @@ for (const p of [
 
 // Route text is seller-controlled: a hostile route must not hold the loop.
 for (const [label, p] of [["{ x 100k", "/a/" + "{".repeat(100000)], ["%7B x 33k", "/a/" + "%7B".repeat(33000)], ["%3C x 33k", "/a?x=" + "%3C".repeat(33000)], ["< x 100k", "/a?x=" + "<".repeat(100000)]]) {
-  const t0 = performance.now(); RE.test(p); const ms = performance.now() - t0;
+  // Synchronous, so read as the time the thread had a core, least of three.
+  const { ms } = leastOurs(() => RE.test(p), { giveUp: 2000 });
   ok(ms < 250, `a hostile route (${label}) is tested in bounded time (${ms.toFixed(1)} ms)`);
 }
 

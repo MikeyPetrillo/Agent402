@@ -1,6 +1,7 @@
 // Exact-output tests for the 39 kit2 tools. Proves each one actually works by
 // asserting a known input produces the expected result.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { leastOurs } from "./lib/ours-clock.js";
 import { KIT2 } from "../src/tools/kit2.js";
 
 const bySlug = Object.fromEntries(KIT2.map((t) => [t.slug, t]));
@@ -35,10 +36,8 @@ await check("base32", { text: "NBSWY3DP======", mode: "decode" }, (o) => o.resul
 {
   // Base32 is linear and keeps the general 100,000-character limit; a long
   // run of padding before a character is refused at once, not rescanned.
-  const t0 = performance.now();
-  let err = null;
-  try { bySlug.base32.handler({ text: "=".repeat(99_999) + "A", mode: "decode" }); } catch (e) { err = e; }
-  const ms = performance.now() - t0;
+  // Synchronous, so read as the time the thread had a core, least of three.
+  const { value: err, ms } = leastOurs(() => { try { bySlug.base32.handler({ text: "=".repeat(99_999) + "A", mode: "decode" }); return null; } catch (e) { return e; } });
   if (!err || err.statusCode !== 400 || ms > 100) fails.push(`base32: 100k padding run should be refused 400 in under 100 ms (got ${err?.statusCode} in ${ms.toFixed(0)} ms)`);
   else { pass++; console.log(`✓ base32             100k padding run refused in ${ms.toFixed(1)} ms`); }
   const long = bySlug.base32.handler({ text: "a".repeat(50_000) });

@@ -3,6 +3,7 @@
 // size and format. The EXIF parser is tested against a hand-crafted TIFF so no
 // network is needed (the live URL path is covered by test-all's example check).
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { leastOurs, oursMs } from "./lib/ours-clock.js";
 import { Jimp, JimpMime } from "jimp";
 import { IMAGE_TOOLS, extractExifBuffer, parseTiff, sniffFormat } from "../src/tools/image-kit.js";
 
@@ -158,6 +159,11 @@ catch (e) { ok(e.statusCode === 400, "image-exif without url/image throws 400");
 // times in the whole 1.3s burst. With the decode in a worker: 2ms, 28 ticks.
 {
   const bigB64 = (await new Jimp({ width: 4000, height: 4000, color: 0x3366ffff }).getBuffer(JimpMime.png)).toString("base64");
+  // The wall lag is read beside the same gaps on the ours clock (the time
+  // this thread had a core): an inline decode fills the gap with this
+  // thread's work on both, a host busy with other suites only on the first.
+  let oursWorst = 0, gapLast = performance.now(), gapOurs = oursMs();
+  const gapIv = setInterval(() => { const n = performance.now(), c = oursMs(); oursWorst = Math.max(oursWorst, Math.min(n - gapLast, c - gapOurs)); gapLast = n; gapOurs = c; }, 5);
   let worstLag = 0, ticking = true, due = 0;
   const tick = () => {
     due = Date.now() + 25;
@@ -170,8 +176,12 @@ catch (e) { ok(e.statusCode === 400, "image-exif without url/image throws 400");
   // callback-only metric would score as a perfect 0ms. The still-pending timer's
   // overdue-by is the honest reading in that case.
   worstLag = Math.max(worstLag, Date.now() - due);
+  oursWorst = Math.max(oursWorst, Math.min(performance.now() - gapLast, oursMs() - gapOurs)); // the gap still open
+  clearInterval(gapIv);
+  const wallLag = worstLag;
+  worstLag = Math.round(Math.min(wallLag, oursWorst));
   ok(burst.every((b) => b.__binary.length > 0), `4 concurrent 16M-pixel resizes all returned bytes (${burst.map((b) => b.__binary.length).join(",")})`);
-  ok(worstLag < 250, `event loop stayed responsive during the burst (worst timer lag ${worstLag}ms < 250ms)`);
+  ok(worstLag < 250, `event loop stayed responsive during the burst (worst hold ${worstLag}ms < 250ms; worst timer lag on the wall clock ${wallLag}ms)`);
 }
 
 // A GIF frame is decoded at its own size, not the logical screen's. A frame
@@ -333,7 +343,8 @@ const hex = (n) => (n >>> 0).toString(16).padStart(8, "0");
   // list: 5 MB of the smallest frames a GIF can hold (measured 8 ms warm).
   const many = Buffer.concat([head(100, 100), ...Array(Math.floor(5e6 / 16)).fill(frame(0, 0, 100, 100)), END]);
   assertDeclaredWithinPixelCap(many.subarray(0, 64), 16e6); // load the parser outside the timing
-  const t0 = performance.now(); assertDeclaredWithinPixelCap(many, 16e6); const ms = performance.now() - t0;
+  // Synchronous, so read as the time the thread had a core, least of three.
+  const { ms } = leastOurs(() => assertDeclaredWithinPixelCap(many, 16e6), { giveUp: 1500 });
   ok(ms < 150, `a 5 MB GIF of 312,500 frames is checked in ${ms.toFixed(1)} ms (< 150 ms)`);
 }
 
