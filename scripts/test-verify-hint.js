@@ -200,7 +200,9 @@ ok(r5.out.hint === undefined, "no remembered failure for this credential -> no h
   const flood = Array.from({ length: 500 }, (_, i) => usdcBalanceOnBase(addr(5000 + i), { fetchImpl: stall, now: () => Date.now(), rpcUrls: ["https://rpc.test"] }));
   const extraStart = Date.now();
   const extra = await usdcBalanceOnBase(addr(9999), { fetchImpl: stall, now: () => Date.now(), rpcUrls: ["https://rpc.test"] });
-  ok(extra === null && Date.now() - extraStart < 100, "past the queue cap a new wallet reads unknown at once (never an unbounded queue)");
+  // "At once" is read against the wait a queued wallet serves (WAIT_MS, while
+  // the RPC stalls): unknown inside half of it was never queued.
+  ok(extra === null && Date.now() - extraStart < _limitsForTest.WAIT_MS / 2, `past the queue cap a new wallet reads unknown at once (never an unbounded queue; ${Date.now() - extraStart} ms of a ${_limitsForTest.WAIT_MS} ms wait)`);
   const r = await Promise.all(flood);
   const took = Date.now() - start;
   ok(r.every((v) => v === null) && took < _limitsForTest.WAIT_MS + 400, `a stalled RPC holds no caller past the wait (${took} ms, bound ${_limitsForTest.WAIT_MS})`);

@@ -14,6 +14,7 @@
 // not), and a booted server (word only in public, counts for the operator, the
 // listing behind the operator token and 404 without it).
 import "./lib/file-mode.js"; // file backends: never the caller's database or Redis
+import { oursMs } from "./lib/ours-clock.js";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -133,9 +134,9 @@ const file = join(dir, "outbound-destinations.json");
   const { recordOutbound } = await import("../src/outbound-ledger.js");
   const { outboundDestinationStore } = await import("../src/outbound-destinations.js");
   const store = outboundDestinationStore();
-  const t0 = Date.now();
+  const t0 = oursMs(); // a synchronous call: the time the thread had a core, not wall time
   recordOutbound({ chain: "base", payTo: EVM, amountAtomic: "1000", asset: "USDC", usd: 0.001, slug: "route-execute", origin: "https://seller-a.example/x", result: "delivered", tx: "0xtx" });
-  ok(store.size === 0 && Date.now() - t0 < 50, "the ledger write returns before the store is touched: nothing on the payment path waits");
+  ok(store.size === 0 && oursMs() - t0 < 50, "the ledger write returns before the store is touched: nothing on the payment path waits");
   recordOutbound({ chain: "base", payTo: "0x" + "6".repeat(40), amountAtomic: "1000", asset: "USDC", usd: 0.001, slug: "s", origin: "https://seller-b.example/", result: "undelivered", tx: null });
   recordOutbound({ chain: "base", payTo: "0x" + "7".repeat(40), amountAtomic: "1000", asset: "USDC", usd: 0.001, slug: "s", origin: "https://seller-c.example/", result: "refused", tx: null });
   recordOutbound({ chain: "base", payTo: null, amountAtomic: "1000", asset: "USDC", usd: 0.001, slug: "s", origin: null, result: "delivered", tx: null });

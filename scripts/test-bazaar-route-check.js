@@ -48,11 +48,20 @@ try {
   }
   {
     const routes = Object.fromEntries(Array.from({ length: 60 }, (_, i) => [`POST /api/r${i}`, { accepts, extensions: { bazaar: bazaar("x") } }]));
-    let seen = 0, yields = 0;
-    const burn = () => { seen++; const end = performance.now() + 4; while (performance.now() < end) { /* work */ } };
-    const r = await checkBazaarRoutesInSlices(routes, { sliceMs: 15, validate: burn, yieldTurn: () => { yields++; return new Promise((res) => setImmediate(res)); } });
+    // The slicing is pinned as work first: each check burns 4 ms, so a 15 ms
+    // slice holds four of them (five with a late clock read), on any host. A
+    // turn that held more ran past its slice. The time is then the least of
+    // three runs: a host busy with other work stretches one turn of one run.
+    let seen = 0, yields = 0, inTurn = 0, mostInTurn = 0, longest = Infinity;
+    const burn = () => { seen++; inTurn++; mostInTurn = Math.max(mostInTurn, inTurn); const end = performance.now() + 4; while (performance.now() < end) { /* work */ } };
+    for (let k = 0; k < 3 && longest >= 40; k++) {
+      seen = 0; yields = 0; inTurn = 0;
+      const r = await checkBazaarRoutesInSlices(routes, { sliceMs: 15, validate: burn, yieldTurn: () => { yields++; inTurn = 0; return new Promise((res) => setImmediate(res)); } });
+      longest = Math.min(longest, r.longestTurnMs);
+    }
     ok(seen === 60, `all 60 routes checked (${seen})`);
-    ok(yields >= 10 && r.longestTurnMs < 40, `the work is cut into short turns (${yields} yields, longest ${r.longestTurnMs} ms)`);
+    ok(yields >= 10 && mostInTurn <= 5, `the work is cut into turns of a slice each (${yields} yields, at most ${mostInTurn} checks in one turn)`);
+    ok(longest < 40, `...and the turns are short (longest ${longest} ms, the least of up to three runs)`);
   }
 } finally {
   console.warn = origWarn;

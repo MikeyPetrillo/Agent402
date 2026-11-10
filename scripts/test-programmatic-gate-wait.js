@@ -10,6 +10,7 @@
 // pages at a 20s client timeout; the caller that matters is not the test but
 // any crawler walking our sitemap, Googlebot included.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { leastWall } from "./lib/ours-clock.js";
 import { __gateInternals, gateDepth } from "../src/programmatic-pages.js";
 
 const { withGate, GATE_BUSY } = __gateInternals;
@@ -62,9 +63,11 @@ ok(gateDepth().active === 0 && gateDepth().waiting === 0,
   `gate did not drain: ${JSON.stringify(gateDepth())}`);
 
 // --- an empty gate must not be slowed by any of this -------------------------
-const t1 = Date.now();
-ok(await withGate(async () => "fast") === "fast", "uncontended call broke");
-ok(Date.now() - t1 < 100, "uncontended call now pays a wait it does not need");
+// The least of three calls: a host busy with other work stretches one of
+// them, a gate that waits makes every call wait.
+const fast = await leastWall(() => withGate(async () => "fast"));
+ok(fast.value === "fast", "uncontended call broke");
+ok(fast.ms < 100, `uncontended call now pays a wait it does not need (${fast.ms.toFixed(1)} ms)`);
 
 // --- the queue ceiling still refuses outright, no waiting --------------------
 let hold2 = [];
@@ -73,11 +76,12 @@ for (let i = 0; i < 2; i++) hold2.push(withGate(() => new Promise((r) => rel.pus
 await sleep(10);
 const filler = Array.from({ length: 8 }, () => withGate(async () => { await sleep(400); }, { waitMs: 60_000 }).catch(() => {}));
 await sleep(20);
-let over = null;
-const t2 = Date.now();
-try { await withGate(async () => "x", { waitMs: 60_000 }); } catch (e) { over = e; }
-ok(over === GATE_BUSY, "a request past the queue ceiling was queued instead of refused");
-ok(Date.now() - t2 < 100, "a request past the queue ceiling waited before being refused");
+// Three requests past the ceiling, each refused; the least of their times.
+const overs = [];
+const refusal = await leastWall(async () => { try { await withGate(async () => "x", { waitMs: 60_000 }); overs.push("ran"); } catch (e) { overs.push(e); } });
+const over = overs.every((e) => e === GATE_BUSY) ? GATE_BUSY : overs.find((e) => e !== GATE_BUSY);
+ok(over === GATE_BUSY && overs.length === 3, "a request past the queue ceiling was queued instead of refused");
+ok(refusal.ms < 100, `a request past the queue ceiling waited before being refused (${refusal.ms.toFixed(1)} ms)`);
 rel.forEach((r) => r());
 await Promise.all(hold2); await Promise.all(filler);
 

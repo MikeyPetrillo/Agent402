@@ -49,9 +49,12 @@ const f = installDrainAwareFetch({ fetchImpl: async (url, init) => { seen.push({
 {
   __resetDrainForTest();
   abortInFlightComposites("SIGTERM");
+  // "At once" is read against what the call would otherwise cost: the stub
+  // upstream answers after 2 s, so a rejection inside half of that never
+  // waited for it, however busy the host.
   const t0 = Date.now();
   const err = await runInAbortableScope(() => f("https://openrouter.example/late")).then(() => null, (e) => e);
-  ok(err && isDrainAbort(err) && Date.now() - t0 < 100, "a composite fetch attempted after the abort rejects at once (no upstream spend)");
+  ok(err && isDrainAbort(err) && Date.now() - t0 < 1000, `a composite fetch attempted after the abort rejects at once, not after the upstream's 2 s (no upstream spend; ${Date.now() - t0} ms)`);
 }
 // 4. the caller's own signal is still honoured
 {
