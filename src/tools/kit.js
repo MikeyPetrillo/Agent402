@@ -853,7 +853,7 @@ const dataTools = [
     slug: "markdown-to-html",
     category: "conversion",
     price: "$0.001",
-    description: "Render CommonMark + GFM markdown to HTML; headings carry id attributes. A render that runs past 10 s is stopped: 400 when the document's own markers are the cause, 503 otherwise, never charged.",
+    description: "Render CommonMark + GFM markdown to HTML; headings carry id attributes. A render that runs past 10 s is stopped with a 400 that says so; a 503 means the workers are busy and the call can be retried. Neither is charged.",
     tags: ["markdown", "html", "convert", "render"],
     discovery: {
       bodyType: "json",
@@ -864,13 +864,14 @@ const dataTools = [
       },
       output: { example: { html: "<h1 id=\"hi\">Hi</h1>\n<p><strong>bold</strong></p>\n" } },
     },
-    handler: (input) => {
+    handler: (input, req) => {
       const text = capText(need(input, "markdown"), 100_000, "markdown");
       // A short document renders here; a longer one renders in a markdown
       // worker (./markdown-pool.js), since the renderer's cost can grow with
-      // the square of the input.
+      // the square of the input. The pool's waiting room is fair by caller:
+      // the client address, read through req.ip alone.
       if (text.length <= MARKDOWN_INLINE_MAX_CHARS) return renderMarkdown(text);
-      return runMarkdown(text);
+      return runMarkdown(text, { caller: typeof req?.ip === "string" ? req.ip : "" });
     },
   },
   {
