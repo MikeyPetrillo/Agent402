@@ -4,6 +4,7 @@
 // tables in one transaction. The staged objects must hold every row exactly
 // once, and both halves of every pair or neither. Requires STATE_DATABASE_URL
 // (CI fails without it).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import pg from "pg";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

@@ -16,6 +16,7 @@
 // Deliberately does not skip when REDIS_URL is unset: a skipped integration
 // test is how the cross-replica gap this guard now closes went uncaught for
 // as long as it did.
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 if (!process.env.REDIS_URL) {
   console.error("FAIL: REDIS_URL is not set. This test needs a real redis (CI provides a service container).");
   console.error("      It deliberately does not skip - see the header comment.");

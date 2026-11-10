@@ -11,6 +11,7 @@
 // replicas and must read one count. Under CI a missing REDIS_URL FAILS (a
 // skipped integration test is not coverage); locally it is reported as skipped
 // in so many words.
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { createMemoryLimits, createRedisLimits, createSharedDailySpend, sharedLimitsConfigured, SHARED_LIMITS_WORDS } from "../src/shared-limits.js";
 
 let pass = 0, fail = 0;

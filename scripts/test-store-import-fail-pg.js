@@ -9,6 +9,7 @@
 // own mark in another session: the import's rows go in, and the mark's
 // INSERT ... ON CONFLICT waits on the held row until the statement limit.
 // Requires STATE_DATABASE_URL (CI fails without it).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";

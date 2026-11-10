@@ -6,6 +6,7 @@
 // while an idempotent loop (a crawl) still fails open. Needs no database: the
 // URL points at a port nothing listens on.
 //   node scripts/test-lease-failopen-replicas.js
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { readFileSync } from "node:fs";
 
 process.env.STATE_DATABASE_URL = "postgres://postgres@127.0.0.1:1/none?sslmode=disable&connect_timeout=1";

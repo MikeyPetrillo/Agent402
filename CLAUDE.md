@@ -215,7 +215,10 @@ request, inside its 8-hour lifetime; a write carrying the session cookie needs S
   clears `REDIS_URL`, `STATE_DATABASE_URL` and the journal switch, which modules read once at
   import, so a developer's shell never puts the suite on a shared backend. A suite that boots a
   server spreads `ownStoreEnv(label)` (`scripts/lib/own-stores.js`) after `process.env`, so every
-  file store lands in its own temp directory and two servers never share a SQLite file.
+  file store lands in its own temp directory and two servers never share a SQLite file. Every
+  suite that reaches `src/` gets a stats store of its own from its first import (the offline pin,
+  or `scripts/lib/own-stats.js` in a suite that runs on a real store); `scripts/test-stats-store-hygiene.js`
+  fails a suite without one.
 
 ## x402 settlement ordering (CRITICAL)
 The installed `@x402/express` **runs the handler FIRST, then settles**, and only settles a

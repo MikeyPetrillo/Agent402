@@ -11,6 +11,7 @@
 //   - backupAlarmStatus() is the one word the gateway status publishes
 //   - the documents table is read one row per FETCH (a row is a whole store)
 // Requires STATE_DATABASE_URL (CI fails without it).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { createServer } from "node:http";
 import { childJson } from "./lib/child-json.js";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";

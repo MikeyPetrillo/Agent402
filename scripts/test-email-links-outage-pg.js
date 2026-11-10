@@ -5,6 +5,7 @@
 // mail client's one-click POST retries); the retry lands. A confirm for a
 // record the other container already unsubscribed answers from the row.
 // Requires STATE_DATABASE_URL (CI fails without it; locally it skips).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { createHmac } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

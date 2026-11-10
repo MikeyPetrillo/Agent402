@@ -21,6 +21,7 @@
 //   - Same container restarted on the same disk: B lands A's journal before it
 //     decides, so it neither generates nor refunds.
 // Requires STATE_DATABASE_URL (CI fails without it).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync, readFileSync, existsSync } from "node:fs";
 import { childJson } from "./lib/child-json.js";
 import { tmpdir } from "node:os";

@@ -17,6 +17,7 @@
 //   * the Base scan after an adopt reads only the blocks since the log
 //     cache's cursor: fewer calls than the first read of the window
 //   STATE_DATABASE_URL=postgres://... node scripts/test-board-scan-once-pg.js
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { requireTestPg } from "./lib/test-pg.js";
 requireTestPg({ label: "test-board-scan-once-pg" });
 import { createServer } from "node:http";

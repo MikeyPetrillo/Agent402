@@ -7,6 +7,7 @@
 // owed on the row, and a published report is served by the synchronous
 // public readers from the mirror. Requires STATE_DATABASE_URL (CI fails
 // without it).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";

@@ -4,6 +4,7 @@
 // their table is unreachable (renamed away), then the table comes back and
 // the next flush lands every row exactly once. Requires STATE_DATABASE_URL
 // (CI fails without it).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

@@ -6,6 +6,7 @@
 // table, row for row. Then a default insert goes into every serial table:
 // none may collide with a restored id. Requires STATE_DATABASE_URL (CI fails
 // without it).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import pg from "pg";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";

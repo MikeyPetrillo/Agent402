@@ -3019,6 +3019,8 @@ jobs:
           # CI lane gating (every test lane blocks deploy/publish; Chromium only where a script needs it — offline)
           t node scripts/test-ci-gating.js
           t node scripts/test-port-hygiene.js
+          # Every suite that reaches src/ takes a stats store of its own with its first import (scripts/lib/own-stats.js), so no two suites share one stats file (static, plus the pin run in a child; offline)
+          t node scripts/test-stats-store-hygiene.js
           # scripts/lib/boot-server.js: PORT=0 boots read the bound port back, two at once get two ports, a crash rejects with its log (boots the server; offline)
           t node scripts/test-boot-server.js
           # Stubbed fetches route by the parsed host (scripts/lib/url-host.js), never a URL substring; older files frozen with counts (static; offline)

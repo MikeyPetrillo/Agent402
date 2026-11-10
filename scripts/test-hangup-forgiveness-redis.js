@@ -9,6 +9,7 @@
 //     hang-up is admitted, once across both replicas;
 //   - control: released tickets free their room for the other replica.
 // Requires REDIS_URL (under CI a missing one fails).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { spawn } from "node:child_process";
 import { childJson } from "./lib/child-json.js";
 import { randomBytes } from "node:crypto";

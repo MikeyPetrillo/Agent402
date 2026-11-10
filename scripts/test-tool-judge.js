@@ -2,6 +2,7 @@
 // route-execute asks a judgment model which of find's candidates does the task,
 // and may refuse before anything runs (src/tool-judge.js). Offline: the
 // judgment endpoint is a stubbed fetch; fails open when it is unusable.
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import assert from "node:assert/strict";
 // Hermetic: a developer shell's OpenRouter key would turn on the Decision-1
 // fallback (src/decision-one.js); scripts/test-decision-one.js covers it.

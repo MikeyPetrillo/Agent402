@@ -18,6 +18,7 @@
 //      and a settlement or a success on A clears B.
 // Deliberately does not skip without REDIS_URL: this is the test the
 // two-replica deployment rests on, and CI provides the service container.
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { getFreePorts } from "./lib/free-port.js";

@@ -8,6 +8,7 @@
 // on load and on persist, while the payers row is never touched.
 //
 // Needs STATE_DATABASE_URL (CI fails without it; locally it prints SKIP).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";

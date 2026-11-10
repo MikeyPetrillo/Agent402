@@ -16,6 +16,7 @@
 //     really settles from our own wallet lands on the synthetic lane, so the
 //     lane is observable and an own-wallet payer does move it.
 // Requires REDIS_URL (under CI a missing one fails).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";

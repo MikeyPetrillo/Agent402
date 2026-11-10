@@ -66,7 +66,7 @@ ok(Array.isArray(none) && none.length === 0, "unknown upstream reads back as an 
 run(`
   import Database from "better-sqlite3";
   import { existsSync } from "node:fs";
-  const db = new Database((existsSync("/data") ? "/data" : "/tmp") + "/agent402-stats.db");
+  const db = new Database((process.env.STATS_DB_DIR || (existsSync("/data") ? "/data" : "/tmp")) + "/agent402-stats.db");
   db.prepare("DELETE FROM daily_upstream_calls WHERE upstream = ?").run("${UP}");
   console.log(JSON.stringify({ cleaned: true }));
 `);

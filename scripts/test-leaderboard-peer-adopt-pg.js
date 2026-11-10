@@ -3,6 +3,7 @@
 // snapshot for good, and router evidence differed by container. A skipped tick
 // now adopts the newer snapshot the other container saved.
 //   STATE_DATABASE_URL=postgres://... node scripts/test-leaderboard-peer-adopt-pg.js
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { requireTestPg } from "./lib/test-pg.js";
 requireTestPg({ label: "test-leaderboard-peer-adopt-pg" });
 

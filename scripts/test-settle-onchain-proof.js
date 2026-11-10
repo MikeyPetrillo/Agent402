@@ -28,6 +28,7 @@
 //
 //   node scripts/test-settle-onchain-proof.js
 //   REDIS_URL=redis://127.0.0.1:6379 node scripts/test-settle-onchain-proof.js
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { createHash } from "node:crypto";

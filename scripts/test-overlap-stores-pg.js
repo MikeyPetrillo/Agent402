@@ -4,6 +4,7 @@
 // seen by the other, an email is sent once when both tick at the same time,
 // and a load that fails during an outage never leads to an overwrite.
 // Requires STATE_DATABASE_URL (CI fails without it).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { createHmac } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

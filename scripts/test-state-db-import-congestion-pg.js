@@ -12,6 +12,7 @@
 // serving read runs every 50 ms. Expected: no connect timeouts anywhere,
 // every document loads its file's body, and the serving reads stay fast.
 // Requires STATE_DATABASE_URL (CI fails without it).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

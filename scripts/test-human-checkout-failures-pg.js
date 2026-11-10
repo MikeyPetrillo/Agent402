@@ -13,6 +13,7 @@
 // The journal here is the local-disk one (no REDIS_URL); the Redis journal's
 // cases are in test-ledger-journal-redis-pg.js.
 // Requires STATE_DATABASE_URL (CI fails without it).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

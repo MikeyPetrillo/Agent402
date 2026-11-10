@@ -9,6 +9,7 @@
 // its newer-wins rule, the pull's byte-range read of a large row); a seller
 // this large is normally stored as a header and parts (src/index-parts.js,
 // scripts/test-index-parts-pg.js), so the part size is raised past them.
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync, writeFileSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

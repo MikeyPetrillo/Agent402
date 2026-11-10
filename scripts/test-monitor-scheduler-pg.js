@@ -6,6 +6,7 @@
 // row, so one container's save never erases the other's record. The
 // subscription list is reloaded under the lease when the source offers it.
 // Requires STATE_DATABASE_URL (CI fails without it; locally it skips).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

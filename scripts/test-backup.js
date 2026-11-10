@@ -19,6 +19,7 @@
 //     still reports ok; an endless pushback fails the run after the bound
 //
 //   node scripts/test-backup.js
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { createServer } from "node:http";
 import { requireTestPg } from "./lib/test-pg.js";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";

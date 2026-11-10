@@ -4,6 +4,7 @@
 // full answer without them. Boots the server behind a relay that refuses
 // every connection until the test heals it.
 // Requires STATE_DATABASE_URL (CI fails without it).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

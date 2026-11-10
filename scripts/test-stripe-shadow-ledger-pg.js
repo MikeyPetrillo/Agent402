@@ -10,6 +10,7 @@
 // is a stub fetch that replays by Idempotency-Key the way Stripe does.
 //
 // Needs STATE_DATABASE_URL (CI fails without it; locally it prints SKIP).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

@@ -4,6 +4,7 @@
 // it took. Each loop is driven for real against a Postgres (required under
 // CI); the loss is made by moving the clock past the lease's ttl inside the
 // first external effect, so the second one must not happen.
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { createHmac } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

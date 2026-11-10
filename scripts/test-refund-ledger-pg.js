@@ -6,6 +6,7 @@
 // containers try at once.
 //
 //   STATE_DATABASE_URL=postgres://... node scripts/test-refund-ledger-pg.js
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync, rmSync, utimesSync } from "node:fs";
 import { childJson } from "./lib/child-json.js";
 import { tmpdir } from "node:os";

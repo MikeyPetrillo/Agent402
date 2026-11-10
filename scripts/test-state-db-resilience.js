@@ -5,6 +5,7 @@
 // the writes queued during the outage land), survives a burst of concurrent
 // calls, and drains cleanly on SIGTERM with no unhandled rejection in its log.
 // Requires STATE_DATABASE_URL (CI fails without it).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { spawn } from "node:child_process";
 import { createServer, connect } from "node:net";
 import { Agent, request as httpRequest } from "node:http";
