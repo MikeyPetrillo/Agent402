@@ -38,8 +38,9 @@ Loaded when a media, document or worker-pool tool file is read.
   everywhere. The tool renders a document of up to `MARKDOWN_INLINE_MAX_CHARS` (2,500) characters
   on the serving thread and a longer one in its own two-worker pool (`markdown-pool.js`,
   `markdown-worker.js`), never in the HTML pool: one lane for ordinary documents, one for those a
-  one-pass estimate reads as costly, up to 512 documents waiting (past it a 503). A render gets
-  3 s counted from the worker's start signal; past it the worker is terminated and the answer is
+  one-pass estimate reads as costly, each with its own waiting room (512 ordinary documents; a
+  costly one is admitted only while the renders ahead of it fit in 30 s, else a 503 with
+  Retry-After for that lane alone). A render gets 10 s counted from the worker's start signal; past it the worker is terminated and the answer is
   400 in the costly lane (the document's markers are the cause) and 503 in the ordinary lane.
 - **Image headers:** the source-pixel cap is read from the container header, so
   `src/tools/image-headers.js` holds each format to the field its decoder sizes from: one PNG

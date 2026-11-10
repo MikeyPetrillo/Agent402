@@ -28,7 +28,7 @@ import { FREE_TIER_SLUGS } from "../src/free-tier.js";
 import { splitSteps } from "../src/plan-sketch.js";
 import { runHtml, htmlPoolState } from "../src/tools/html-pool.js";
 import { marked, headingId, MARKDOWN_INLINE_MAX_CHARS, markdownLooksCostly } from "../src/tools/markdown-render.js";
-import { runMarkdown, markdownPoolState, RENDER_DEADLINE_MS } from "../src/tools/markdown-pool.js";
+import { runMarkdown, markdownPoolState, RENDER_DEADLINE_MS, ORDINARY_QUEUE_MAX, COSTLY_AHEAD_MAX, COSTLY_WAIT_MAX_MS } from "../src/tools/markdown-pool.js";
 import { headingId as guidesHeadingId } from "../src/guides.js";
 import { sentenceEnds, countSentenceEnds, splitOnSentenceEnds } from "../src/tools/sentence-ends.js";
 
@@ -367,38 +367,72 @@ function rng(seed) {
     const r = await bestOf(() => tool.handler({ markdown: unit.repeat(Math.floor(MARKDOWN_INLINE_MAX_CHARS / unit.length)) }));
     ok(r.ms < 250, "markdown-to-html: " + MARKDOWN_INLINE_MAX_CHARS + " characters of " + JSON.stringify(unit) + " render in place in " + r.ms.toFixed(1) + "ms of CPU");
   }
-  // The estimate that picks a lane: ordinary documents are ordinary, the costly shapes are costly.
-  ok(sizes.every((chars) => !markdownLooksCostly(docOf(chars))), "markdown-to-html: none of the ordinary documents is estimated costly");
+  // The estimate that picks a lane: ordinary documents, source code and
+  // tables at the tool's maximum size are ordinary; the slow shapes are costly.
+  const pyDef = (i) => "def handle_request_" + i + "(self, request_body, *args, **kwargs):\n    \"\"\"Handle the __request__ and return a *response* object.\"\"\"\n    user_id = request_body.get(\"user_id\")\n    if user_id is None and not self._allow_anonymous:\n        raise ValueError(\"missing user_id: %s\" % request_body)\n    return [row for row in self._backend.fetch_rows(user_id, limit=kwargs.get(\"limit\", 10) * 2) if row.is_active]\n\n";
+  const fill = (unit, n) => { let d = ""; for (let i = 0; d.length < n; i++) d += typeof unit === "function" ? unit(i) : unit; return d.slice(0, n); };
+  const maxSize = [["Python source", fill(pyDef, 100_000)], ["prose", fill("Some *text* with **bold**, `code` and a_snake_case name, 2 * 3 * 4 and x_i.\n\n", 100_000)], ["a table", "| a | b |\n|---|---|\n" + fill("| *x* | `y_z` |\n", 99_900)], ["a list", fill("- item *one* and **two** with `code`\n", 100_000)], ["one paragraph", fill("word *emph* another_word and more text here ", 100_000)]];
+  ok(sizes.every((chars) => !markdownLooksCostly(docOf(chars))) && maxSize.every(([, m]) => !markdownLooksCostly(m)), "markdown-to-html: none of the ordinary documents is estimated costly, 100,000-character source, prose, table and list included");
   const hostile = [["unclosed emphasis", "*a ".repeat(30_000)], ["unclosed strong", "**a ".repeat(22_000)], ["unclosed underscore", "_a ".repeat(30_000)], ["nested quotes", "> ".repeat(45_000)]];
-  ok(hostile.every(([, m]) => markdownLooksCostly(m)) && markdownLooksCostly("*a ".repeat(1500)), "markdown-to-html: the slow shapes are estimated costly");
+  const slowUnits = ["*a ", "**a ", "_a ", "~~a ", "*a**b ", "_a*b ", "**a*b ", "*a_ ", "*a* *", "***a ", "__a ", "_a_b ", "*_a ", "*`a ", "`*a ", "*a\n"];
+  ok(hostile.every(([, m]) => markdownLooksCostly(m)) && slowUnits.every((u) => markdownLooksCostly(fill(u, 20_000))), "markdown-to-html: " + slowUnits.length + " slow marker shapes at 20,000 characters are all estimated costly");
+  // A maximum-size ordinary document has the whole deadline as headroom: it renders in a small part of it.
+  for (const [name, markdown] of maxSize) {
+    const t = performance.now();
+    const got = await tool.handler({ markdown });
+    const ms = performance.now() - t;
+    ok(typeof got.html === "string" && ms < RENDER_DEADLINE_MS / 4, "markdown-to-html: 100,000 characters of " + name + " render in " + ms.toFixed(0) + "ms against a " + RENDER_DEADLINE_MS / 1000 + " s deadline");
+  }
 
-  // 100 ordinary documents at once, beside slow renders already in flight:
-  // every one is served, the event loop is never held, and the HTML pool
-  // (another tool family's workers) neither queues nor waits.
-  const slow = hostile.slice(0, 3).map(([, markdown]) => tool.handler({ markdown }).then(() => ({ statusCode: 200 }), (e) => e));
+  // The costly lane admits only what it can render within its wait bound;
+  // the rest are told to retry, at once. Its queue never refuses the other lane.
+  const slow = [], refused = [];
+  for (let i = 0; i < COSTLY_AHEAD_MAX + 5; i++) {
+    const p = tool.handler({ markdown: hostile[i % 3][1] }).then(() => ({ statusCode: 200 }), (e) => e);
+    slow.push(p);
+  }
+  await new Promise((r) => setTimeout(r, 50));
+  const early = markdownPoolState();
+  ok(early.queuedCostly === COSTLY_AHEAD_MAX - 1 && COSTLY_AHEAD_MAX * RENDER_DEADLINE_MS <= COSTLY_WAIT_MAX_MS, "markdown-to-html: the costly lane holds " + COSTLY_AHEAD_MAX + " renders (one running, " + early.queuedCostly + " waiting): at most " + COSTLY_WAIT_MAX_MS / 1000 + " s of work ahead of a new one");
+  for (const p of slow.slice(COSTLY_AHEAD_MAX)) refused.push(await Promise.race([p, new Promise((r) => setTimeout(() => r({ statusCode: "still waiting" }), 1000))]));
+  ok(refused.length === 5 && refused.every((e) => e.statusCode === 503 && e.retryAfter === COSTLY_WAIT_MAX_MS / 1000 && e.shed === true && /nothing was charged/.test(e.message)), "markdown-to-html: a costly render past that is refused at once with a 503, Retry-After " + COSTLY_WAIT_MAX_MS / 1000 + " and no charge (" + refused.map((e) => e.statusCode).join(",") + ")");
+  // 100 ordinary documents at once, with the costly lane full: every one is
+  // served, the event loop is never held, and the HTML pool (another tool
+  // family's workers) neither queues nor waits.
   const htmlBefore = htmlPoolState();
   const burst = await loopHold(() => Promise.all(Array.from({ length: 100 }, (_, i) => tool.handler({ markdown: docOf(5000 + i * 450) }).then((r) => (r.html.startsWith("<h1 id=") ? 200 : 0), (e) => e.statusCode + " " + e.message))));
   const tally = burst.out.reduce((m, x) => (m[x] = (m[x] || 0) + 1, m), {});
-  ok(tally[200] === 100, "markdown-to-html: 100 concurrent documents of 5,000 to 50,000 characters all answer 200 beside 3 slow renders (" + JSON.stringify(tally) + " in " + burst.ms.toFixed(0) + "ms)");
+  ok(tally[200] === 100, "markdown-to-html: with the costly lane full, 100 concurrent documents of 5,000 to 50,000 characters all answer 200 (" + JSON.stringify(tally) + " in " + burst.ms.toFixed(0) + "ms)");
   ok(burst.hold < BOUND_MS, "markdown-to-html: the event loop's longest gap during that burst was " + burst.hold.toFixed(0) + "ms");
   const t0 = performance.now();
   const meta = await runHtml("meta", { html: "<html><head><title>T</title></head><body>x</body></html>", url: "https://example.com/" });
   ok(meta && performance.now() - t0 < 5000 && htmlBefore.queued === 0 && htmlPoolState().queued === 0, "markdown-to-html: an HTML job beside the slow renders is served in " + (performance.now() - t0).toFixed(0) + "ms, with nothing queued in the HTML pool");
-  const ends = await Promise.all(slow);
+  // The ordinary lane's waiting room is bounded too (it holds each document's
+  // text): 600 documents handed over in one turn, 512 wait, one starts, the
+  // rest are told to retry, and every admitted one is served.
+  let maxQueued = 0;
+  const flood = Array.from({ length: 600 }, () => { const p = tool.handler({ markdown: docOf(3000) }).then(() => 200, (e) => (e.statusCode === 503 && e.retryAfter === 5 ? 503 : "other " + e.message)); maxQueued = Math.max(maxQueued, markdownPoolState().queuedOrdinary); return p; });
+  const floodTally = (await Promise.all(flood)).reduce((m, x) => (m[x] = (m[x] || 0) + 1, m), {});
+  ok(maxQueued === ORDINARY_QUEUE_MAX && floodTally[503] === 600 - ORDINARY_QUEUE_MAX - 1 && floodTally[200] === ORDINARY_QUEUE_MAX + 1, "markdown-to-html: at most " + ORDINARY_QUEUE_MAX + " ordinary documents wait (" + maxQueued + " at the peak of 600 at once: " + JSON.stringify(floodTally) + ")");
+  const ends = await Promise.all(slow.slice(0, COSTLY_AHEAD_MAX));
   ok(ends.every((e) => e?.statusCode === 400 && new RegExp(RENDER_DEADLINE_MS / 1000 + " s").test(e.message) && /in parts/.test(e.message)), "markdown-to-html: each slow render ends as a 400 naming the " + RENDER_DEADLINE_MS / 1000 + " s deadline and what to change (" + ends.map((e) => e?.statusCode).join(",") + ")");
+  // A costly-looking document that is only slow (unfenced C source) is served.
+  const cSource = fill("int *p = &x; char **argv; a = b * c; /* comment */ x_y = *ptr * 2;\n", 30_000);
+  const cOut = await tool.handler({ markdown: cSource }).then((r) => r.html.length, (e) => e.statusCode + " " + e.message);
+  ok(markdownLooksCostly(cSource) && cOut > 30_000, "markdown-to-html: 30,000 characters of unfenced C source, estimated costly, render in the costly lane (" + cOut + ")");
   // The deadline counts render time from the worker's own start signal: the
   // first document after a stopped render meets a worker that has to start, and is served.
   const after = await tool.handler({ markdown: docOf(30_000) });
   ok(after.html.startsWith('<h1 id="title-here">'), "markdown-to-html: the next document renders after a stopped one");
   // A render that overruns in the ORDINARY lane is not blamed on the document:
-  // 503, retryable. (The lane is named here; nothing ordinary takes 3 s.)
+  // 503, retryable. (The lane is named here; nothing ordinary takes the deadline.)
   const overrun = await loopHold(() => runMarkdown("*a ".repeat(30_000), { costly: false }));
   ok(overrun.err?.statusCode === 503 && /retry/.test(overrun.err.message), "markdown-to-html: an overrun in the ordinary lane answers 503, retryable (" + overrun.err?.statusCode + " " + overrun.err?.message + ")");
   ok(overrun.hold < BOUND_MS, "markdown-to-html: a 90,000-character run of unclosed emphasis holds the event loop " + overrun.hold.toFixed(0) + "ms");
   const quotes = await tool.handler({ markdown: "> ".repeat(45_000) }).then(() => null, (e) => e);
   ok(quotes?.statusCode === 400, "markdown-to-html: 45,000 quote levels answer 400 (" + quotes?.statusCode + " " + quotes?.message + ")");
   const st = markdownPoolState();
-  ok(st.queuedOrdinary === 0 && st.queuedCostly === 0 && st.queueMax >= 500, "markdown-to-html: the queue is empty afterwards and holds " + st.queueMax + " waiting documents");
+  ok(st.queuedOrdinary === 0 && st.queuedCostly === 0 && st.ordinaryQueueMax === 512 && st.costlyAheadMax === COSTLY_AHEAD_MAX, "markdown-to-html: both waiting rooms are empty afterwards");
 }
 
 // ---------------------------------------------------------------------------

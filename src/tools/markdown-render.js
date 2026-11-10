@@ -32,37 +32,75 @@ export function renderMarkdown(text) {
 }
 
 // The renderer looks for the closer of each emphasis or code marker across
-// the rest of its block, so a block's cost is bounded by its length times its
-// marker runs. A document whose blocks stay under MARKDOWN_ORDINARY_COST
-// renders in tens of milliseconds; one over it, or one that opens dozens of
-// quote levels on a line, may take seconds. The estimate only chooses which
-// worker lane a render waits in (./markdown-pool.js); it refuses nothing.
-export const MARKDOWN_ORDINARY_COST = 2_000_000;
+// the rest of its block, so a marker run costs about the distance to its
+// closer, and the whole block when it has none. markdownCost() adds that up
+// in one pass: for each run of * _ ~ or ` that can open, the distance to the
+// next run of the same character and length that can close, else the rest of
+// the block. Opening and closing follow CommonMark's flanking rules (a run
+// opens before a word and closes after one; an underscore inside a word does
+// neither; a code marker always can). Blocks end at a blank line. Ordinary writing
+// and source code score low because their markers pair up nearby; a block
+// dense with markers that never close scores with the square of its length.
+// The estimate only chooses which worker lane a render waits in
+// (./markdown-pool.js); it refuses nothing.
+//
+// MARKDOWN_ORDINARY_COST is about a third of a second of rendering on an idle
+// host (a scanned character costs 10 to 65 ns in the slow shapes).
+export const MARKDOWN_ORDINARY_COST = 5_000_000;
 const QUOTE_DEPTH_ORDINARY = 32;
+const isSpaceCode = (c) => c === 32 || c === 9 || c === 10 || c === 13 || Number.isNaN(c);
+const isPunctCode = (c) => (c >= 33 && c <= 47) || (c >= 58 && c <= 64) || (c >= 91 && c <= 96) || (c >= 123 && c <= 126);
 
-/** One pass over `text`: true when its estimated render cost is past the ordinary bound. */
-export function markdownLooksCostly(text) {
-  let cost = 0, blockStart = 0, runs = 0, inRun = false, lineStart = true, quotes = 0;
+/** Estimated render cost of `text`, in characters scanned; Infinity past `limit` or for dozens of quote levels on one line. */
+export function markdownCost(text, limit = Infinity) {
   const n = text.length;
+  let cost = 0, blockStart = 0, lineStart = true, quotes = 0;
+  let runs = []; // [position, character, length, canOpen, canClose] of the current block
+  const closeBlock = (end) => {
+    const nearest = new Map(); // "character:length" -> position of the nearest closer to the right
+    for (let k = runs.length - 1; k >= 0; k--) {
+      const [pos, ch, len, canOpen, canClose] = runs[k];
+      const key = ch * 64 + Math.min(len, 63);
+      if (canOpen) cost += (nearest.get(key) ?? end) - pos;
+      if (canClose) nearest.set(key, pos);
+    }
+    runs = [];
+  };
   for (let i = 0; i < n; i++) {
     const c = text.charCodeAt(i);
-    const marker = c === 42 || c === 95 || c === 126 || c === 96; // * _ ~ `
-    if (marker && !inRun) runs++;
-    inRun = marker;
+    if (c === 92) { i++; lineStart = false; continue; } // a backslash escapes the next character
+    if (c === 42 || c === 95 || c === 126 || c === 96) { // * _ ~ `
+      let j = i + 1;
+      while (j < n && text.charCodeAt(j) === c) j++;
+      const prev = i > blockStart ? text.charCodeAt(i - 1) : NaN, next = text.charCodeAt(j);
+      const left = !isSpaceCode(next) && (!isPunctCode(next) || isSpaceCode(prev) || isPunctCode(prev));
+      const right = !isSpaceCode(prev) && (!isPunctCode(prev) || isSpaceCode(next) || isPunctCode(next));
+      const code = c === 96, under = c === 95;
+      runs.push([i, c, j - i, code || (under ? left && (!right || isPunctCode(prev)) : left), code || (under ? right && (!left || isPunctCode(next)) : right)]);
+      i = j - 1;
+      lineStart = false;
+      continue;
+    }
     if (c === 10) {
       // A blank line ends the block.
       let j = i + 1;
       while (j < n && (text.charCodeAt(j) === 32 || text.charCodeAt(j) === 9 || text.charCodeAt(j) === 13)) j++;
       if (j >= n || text.charCodeAt(j) === 10) {
-        cost += (i - blockStart) * runs;
-        if (cost > MARKDOWN_ORDINARY_COST) return true;
-        blockStart = j; runs = 0;
+        closeBlock(i);
+        if (cost > limit) return Infinity;
+        blockStart = j;
       }
       lineStart = true; quotes = 0;
     } else if (lineStart) {
-      if (c === 62) { if (++quotes > QUOTE_DEPTH_ORDINARY) return true; } // >
+      if (c === 62) { if (++quotes > QUOTE_DEPTH_ORDINARY) return Infinity; } // >
       else if (c !== 32 && c !== 9) lineStart = false;
     }
   }
-  return cost + (n - blockStart) * runs > MARKDOWN_ORDINARY_COST;
+  closeBlock(n);
+  return cost > limit ? Infinity : cost;
+}
+
+/** True when the estimated render cost of `text` is past the ordinary bound. */
+export function markdownLooksCostly(text) {
+  return markdownCost(text, MARKDOWN_ORDINARY_COST) > MARKDOWN_ORDINARY_COST;
 }

@@ -853,7 +853,7 @@ const dataTools = [
     slug: "markdown-to-html",
     category: "conversion",
     price: "$0.001",
-    description: "Render CommonMark + GFM markdown to HTML; headings carry id attributes. A render that runs past 3 s is stopped: 400 when the document's own markers are the cause, 503 otherwise, never charged.",
+    description: "Render CommonMark + GFM markdown to HTML; headings carry id attributes. A render that runs past 10 s is stopped: 400 when the document's own markers are the cause, 503 otherwise, never charged.",
     tags: ["markdown", "html", "convert", "render"],
     discovery: {
       bodyType: "json",

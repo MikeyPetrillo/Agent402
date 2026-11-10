@@ -10,24 +10,34 @@
 //    whenever it has nothing costly to do;
 //  - costly-looking documents wait for the second worker only.
 // So a run of slow renders delays other slow renders, and ordinary documents
-// keep a worker to themselves. Callers wait in the queue; nothing is refused
-// until QUEUE_MAX documents are pending.
+// keep a worker to themselves. Each lane has its own waiting room, so one
+// filling up never refuses the other:
+//  - ordinary: ORDINARY_QUEUE_MAX documents wait (each renders in
+//    milliseconds); past it a 503.
+//  - costly: a document is admitted only while the renders ahead of it (the
+//    one running and those waiting) can finish within COSTLY_WAIT_MAX_MS at
+//    one deadline each; otherwise a 503 with Retry-After, for this lane only.
 //
 // A render gets RENDER_DEADLINE_MS, counted from the moment the worker says
-// it started (not from the request, and not from a worker's start-up). Past
-// it the worker is terminated, the only lever on a synchronous render. The
-// answer then depends on the lane: a costly-looking document is told its
-// shape is the cause (400); an ordinary-looking one is told we did not
-// finish (503, retryable), since a busy host must never read as bad input.
-// Both are uncharged.
+// it started (not from the request, and not from a worker's start-up): many
+// times what the largest ordinary document needs on a busy host, and room
+// for a large costly one such as unfenced source code. Past it the worker is
+// terminated, the only lever on a synchronous render. The answer then
+// depends on the lane: a costly-looking document is told its shape is the
+// cause (400); an ordinary-looking one is told we did not finish (503,
+// retryable), since a busy host must never read as bad input. Both are
+// uncharged.
 import { Worker, isMainThread } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
 import { renderMarkdown, markdownLooksCostly } from "./markdown-render.js";
 
 const MARKDOWN_WORKER = fileURLToPath(new URL("./markdown-worker.js", import.meta.url));
-export const RENDER_DEADLINE_MS = 3_000;
+export const RENDER_DEADLINE_MS = 10_000;
+export const ORDINARY_QUEUE_MAX = 512;
+export const COSTLY_WAIT_MAX_MS = 30_000;
+/** Costly renders in flight plus waiting; one more would wait past COSTLY_WAIT_MAX_MS. */
+export const COSTLY_AHEAD_MAX = Math.floor(COSTLY_WAIT_MAX_MS / RENDER_DEADLINE_MS);
 const START_GUARD_MS = 20_000; // a worker that never reports a start
-const QUEUE_MAX = 512;
 const HEAP_MB = 256;
 const IDLE_MS = 30_000;
 
@@ -118,7 +128,12 @@ function pump() {
  *  `costly` is the lane (estimated when not given; tests name it). */
 export async function runMarkdown(text, { costly: lane = markdownLooksCostly(text) } = {}) {
   if (!isMainThread) return renderMarkdown(text);
-  if (ordinary.length + costly.length >= QUEUE_MAX) throw unavailable("Markdown workers are busy, retry shortly");
+  if (lane) {
+    const ahead = costly.length + lanes.filter((l) => l.job?.costly).length;
+    if (ahead >= COSTLY_AHEAD_MAX) throw Object.assign(unavailable(`Slow markdown renders are queued ahead of this one (its unclosed emphasis or code markers make it slow to render); nothing was charged, retry in ${COSTLY_WAIT_MAX_MS / 1000} s`), { retryAfter: COSTLY_WAIT_MAX_MS / 1000, shed: true });
+  } else if (ordinary.length >= ORDINARY_QUEUE_MAX) {
+    throw Object.assign(unavailable("Markdown workers are busy; nothing was charged, retry in a few seconds"), { retryAfter: 5, shed: true });
+  }
   return new Promise((resolve, reject) => {
     const job = { id: nextJobId++, text, costly: lane, resolve, reject, timer: null };
     (job.costly ? costly : ordinary).push(job);
@@ -128,5 +143,5 @@ export async function runMarkdown(text, { costly: lane = markdownLooksCostly(tex
 
 /** Pool state for tests and operator views. */
 export function markdownPoolState() {
-  return { workers: lanes.filter((l) => l.worker).length, busy: lanes.filter((l) => l.job).length, queuedOrdinary: ordinary.length, queuedCostly: costly.length, deadlineMs: RENDER_DEADLINE_MS, queueMax: QUEUE_MAX };
+  return { workers: lanes.filter((l) => l.worker).length, busy: lanes.filter((l) => l.job).length, queuedOrdinary: ordinary.length, queuedCostly: costly.length, deadlineMs: RENDER_DEADLINE_MS, ordinaryQueueMax: ORDINARY_QUEUE_MAX, costlyAheadMax: COSTLY_AHEAD_MAX };
 }
