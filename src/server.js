@@ -3227,7 +3227,7 @@ if (_mppSubs) {
   // and Tempo direct mode load (src/sanctions-screen.js). Those start it
   // during boot with their own timing; this covers a server that runs
   // neither (FREE_MODE with subscriptions on), after they have had their turn.
-  const s = setTimeout(() => { if (!sanctionsScreenStarted()) startSanctionsScreen(); }, 30_000);
+  const s = setTimeout(contained("sanctions-screen-start", () => { if (!sanctionsScreenStarted()) startSanctionsScreen(); }), 30_000);
   s.unref?.();
 }
 // Prepaid card credits (src/credits.js): same rollout switch
