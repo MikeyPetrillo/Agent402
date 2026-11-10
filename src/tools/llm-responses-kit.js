@@ -27,7 +27,7 @@ import {
   substitutedFrom, TIERS, AUTO_RANKINGS, classifyPrompt, canonicalModel, tierAllows, tierFor, meteredQuoteForProbe, meteredBoundFor,
   isFlatTier, flatTierQuoteUsd, servedTierFor, crossTierDisclosure, AUTO_MODEL, AUTO_TIER,
   clampToMargin, assertMeteredAvailable, attemptsFor, serviceTierFor, validateServiceTier, cacheControlPref, upstreamUserId, PROVIDER_SORT_ENABLED,
-  fetchOpenRouter, upstreamHttpError, streamOpenRouterTo, bad, MAX_IMAGES, maxInputCharsFor, inputTooLargeError,
+  fetchOpenRouter, upstreamHttpError, refuseUnlistedMeteredModel, streamOpenRouterTo, bad, MAX_IMAGES, maxInputCharsFor, inputTooLargeError,
   failoverChain, modelFallbackPref, availabilitySubstitution, retryRateLimited,
   rateLimitDelaysFor, paymentWindowTimeoutMs, timedOutBudget, streamClientWatch, STREAM_TIMEOUT_MS, UPSTREAM_TIMEOUT_MS,
   validateReasoning, reasoningForLink, lowestEffortRetry, recoveryRunAffordable, retryEmptyAtLowestEffort,
@@ -68,7 +68,6 @@ export function meteredResponsesQuoteUsd(input) {
     return { usd: tier.price, invalid: true, reason: String(e?.message || e).slice(0, 160) };
   }
 }
-
 const ROLES = new Set(["user", "assistant", "system", "developer"]);
 const SERVER_TOOL_RE = /^(web_search|file_search|computer|mcp|code_interpreter|image_generation|local_shell|shell|apply_patch)/;
 
@@ -210,6 +209,8 @@ export function validateResponsesRequest(input, tierSlug) {
       const homePath = home ? (RESPONSES_PATH_BY_TIER[home] || TIERS[home].route.split(" ")[1]) : null;
       throw bad(home && home !== tierSlug ? `"${model}" is served on ${homePath} (${home})` : `"model" ${model} is not served on this tier - GET /v1/models lists every model and its tier`);
     }
+    // Metered: an id the live list does not carry is refused, as on the chat wire.
+    refuseUnlistedMeteredModel(tier, model);
   }
   const acc = { chars: 0, images: 0 };
   let probeInput;
@@ -258,7 +259,7 @@ export function validateResponsesRequest(input, tierSlug) {
     if (typeof input.instructions !== "string") throw bad('"instructions" must be a string');
     acc.chars += input.instructions.length; instructions = input.instructions;
   }
-  if (acc.chars > tier.maxInputChars && acc.chars > maxInputCharsFor(tierSlug, model)) throw inputTooLargeError(tierSlug, model, acc.chars);
+  if (acc.chars > tier.maxInputChars && acc.chars > maxInputCharsFor(tierSlug, model)) throw inputTooLargeError(tierSlug, model, acc.chars, RESPONSES_PATH_BY_TIER);
   if (acc.images > MAX_IMAGES) throw bad(`Too many images (${acc.images}). Maximum is ${MAX_IMAGES} per request`);
   // The tier's own default budget, like the chat wire: a premium model that
   // reasons before it speaks spent a hardcoded 1024 entirely on reasoning and

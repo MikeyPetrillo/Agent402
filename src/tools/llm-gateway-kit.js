@@ -914,6 +914,16 @@ export function meteredModelVerdict(model) {
   return v ? { ...v, message: stripControlChars(v.message) } : v;
 }
 
+/** Every wire's validation calls this once the tier admits `model`: on the
+ *  metered tier an id the live list does not carry throws the 400 the
+ *  pre-payment check answers (code unknown_model, suggestions). No-op on a
+ *  flat tier, whose allowlist is its own list. */
+export function refuseUnlistedMeteredModel(tier, model) {
+  if (!tier?.metered) return;
+  const unknown = meteredModelVerdict(model);
+  if (unknown) throw Object.assign(bad(unknown.message), { code: "unknown_model", suggestions: unknown.suggestions });
+}
+
 /** Same-family successors for models whose whole upstream can vanish at once
  *  (a model with one or two hosts can lose all of them together). A successor
  *  is tried only AFTER the requested model failed upstream (502/503/504), costs
@@ -2001,15 +2011,18 @@ export function largerWindowSuggestions(model, chars) {
     .map((s) => s.id);
 }
 /** The 400 for an input over its cap, carrying the machine-readable fields
- *  (maxInputChars, inputChars, hint, suggestions) on every wire. */
-export function inputTooLargeError(tierSlug, model, chars) {
+ *  (maxInputChars, inputChars, hint, suggestions) on every wire. `pathByTier`
+ *  is the calling wire's own tier -> path table, so the message names that
+ *  wire's routes; without it the chat routes are named. */
+export function inputTooLargeError(tierSlug, model, chars, pathByTier = null) {
   const tier = TIERS[tierSlug];
   const max = maxInputCharsFor(tierSlug, model);
-  const route = tier.route.split(" ")[1];
+  const pathOf = (slug) => pathByTier?.[slug] || TIERS[slug].route.split(" ")[1];
+  const route = pathOf(tierSlug);
   if (!tier.metered) {
     const m = TIERS["v1-chat-metered"];
     const e = bad(`Input too large (${chars} chars). The ${tierSlug} tier allows up to ${max} chars` +
-      (m ? `; ${m.route.split(" ")[1]} takes at least ${m.maxInputChars} chars (more on a model with a larger context window, up to ${METERED_MAX_INPUT_CHARS_CEILING}) and is priced from the body` : ""));
+      (m ? `; ${pathOf("v1-chat-metered")} takes at least ${m.maxInputChars} chars (more on a model with a larger context window, up to ${METERED_MAX_INPUT_CHARS_CEILING}) and is priced from the body` : ""));
     return Object.assign(e, { maxInputChars: max, inputChars: chars, hint: "trim-input" });
   }
   const suggestions = largerWindowSuggestions(model, chars);
@@ -2112,10 +2125,7 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
   }
   // The metered route takes any id under its vendor prefixes; one the live
   // list does not carry is refused here (and before payment, server.js).
-  if (tier.metered) {
-    const unknown = meteredModelVerdict(model);
-    if (unknown) { const e = bad(unknown.message); e.code = "unknown_model"; e.suggestions = unknown.suggestions; throw e; }
-  }
+  refuseUnlistedMeteredModel(tier, model);
 
   const messages = input.messages;
   if (!Array.isArray(messages) || messages.length === 0) throw bad('"messages" must be a non-empty array of {role, content} objects');
