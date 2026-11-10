@@ -500,8 +500,8 @@ jobs:
           fi
 
       # X data daily spend (src/tools/x-data-kit.js): over = past the alarm
-      # ceiling and still serving; capped = the hard ceiling refuses. off is
-      # the switch and never pages.
+      # ceiling and still serving; capped = the hard ceiling refuses, or
+      # refused a call within the last hour. off is the switch and never pages.
       - name: X data daily spend over its ceiling
         if: always()
         continue-on-error: true
@@ -515,7 +515,7 @@ jobs:
           if [ "$STATUS" = "over" ] || [ "$STATUS" = "capped" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "\`/api/gateway-status.xDataSpend\` reports **over** or **capped**: the day's booked spend on the X data tools passed \`X_DATA_DAILY_MAX_USD\`. On **over** every call is still served (each one is paid for by its buyer); on **capped** it reached \`X_DATA_DAILY_HARD_MAX_USD\` and the tools answer 503 (uncharged) until 00:00 UTC. Read the day's X calls on the operator view, check the prepaid balance in the upstream's console, then raise the ceilings on Railway or leave them. Closes when the word reads ok (the next UTC day) or off."
+                --body "\`/api/gateway-status.xDataSpend\` reports **over** or **capped**. On **over** the day's booked spend on the X data tools passed \`X_DATA_DAILY_MAX_USD\` and every call is still served (each one is paid for by its buyer). On **capped** a call that would take the day past \`X_DATA_DAILY_HARD_MAX_USD\` was refused 503 (uncharged) within the last hour, or the day's spend reached that ceiling; a call that fits under it is still served, and the day's count starts again at 00:00 UTC. Read the day's X calls on the operator view, check the prepaid balance in the upstream's console, then raise the ceilings on Railway or leave them. Closes when the word reads ok or off: an hour after the last refusal when the day's spend is under \`X_DATA_DAILY_MAX_USD\`, otherwise the next UTC day."
             fi
           elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "xDataSpend is ${STATUS}; closing." || true
@@ -608,7 +608,7 @@ jobs:
           if [ "$STATUS" = "over" ] || [ "$STATUS" = "capped" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "\`/api/gateway-status.exaSpend\` reports **over** or **capped**: the day's booked spend on the Exa tools passed \`EXA_DAILY_MAX_USD\`. On **over** every call is still served (each one is paid for by its buyer); on **capped** it reached \`EXA_DAILY_HARD_MAX_USD\` and the tools answer 503 (uncharged) until 00:00 UTC. Check the prepaid balance in the upstream's console (a spent balance stops the tools whatever the ceilings say; \`exaAllowance\` is the word for that), then raise the ceilings on Railway or leave them. Closes when the word reads ok (the next UTC day) or off."
+                --body "\`/api/gateway-status.exaSpend\` reports **over** or **capped**. On **over** the day's booked spend on the Exa tools passed \`EXA_DAILY_MAX_USD\` and every call is still served (each one is paid for by its buyer). On **capped** a call that would take the day past \`EXA_DAILY_HARD_MAX_USD\` was refused 503 (uncharged) within the last hour, or the day's spend reached that ceiling; a call that fits under it is still served, and the day's count starts again at 00:00 UTC. Check the prepaid balance in the upstream's console (a spent balance stops the tools whatever the ceilings say; \`exaAllowance\` is the word for that), then raise the ceilings on Railway or leave them. Closes when the word reads ok or off: an hour after the last refusal when the day's spend is under \`EXA_DAILY_MAX_USD\`, otherwise the next UTC day."
             fi
           elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "exaSpend is ${STATUS}; closing." || true
