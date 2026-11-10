@@ -1400,7 +1400,7 @@ jobs:
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
           t node scripts/test-shared-limits.js
           t node scripts/test-shared-limits-crossprocess.js
-          # exaSpend and xDataSpend in a new process: over from the shared day, capped while another process refuses, this process's own word inside a bounded wait when the store does not answer.
+          # exaSpend, xDataSpend and routerSpendWindow in a new process: over from the shared day, capped while another process refuses, this process's own word inside a bounded wait when the store does not answer.
           t node scripts/test-spend-words-shared-redis.js
           # A close made while a connect is still in flight ends that connect too.
           t node scripts/test-shared-redis-close.js
@@ -3593,6 +3593,8 @@ jobs:
           t node scripts/test-x-search-stats.js
           # x-data daily ceilings: served past the alarm ceiling, refused at the hard one, 0 refuses all, both observers page (offline)
           t node scripts/test-x-data-ceilings.js
+          # Router per-minute spend ceilings: a purchase past the alarm ceiling is made and the word reads over, the stop refuses 429 before signing, the word clears after its hold, 0 refuses all, no figure publicly (offline)
+          t node scripts/test-router-spend-window.js
           # Exa kit (env-gated on EXA_API_KEY; offline, stubbed fetch, nothing spent)
           t node scripts/test-exa-kit.js
           # Exa daily ceilings: served past the alarm ceiling, refused at the hard one, 0 refuses all, allowance word untouched, both observers page (offline)

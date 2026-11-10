@@ -895,6 +895,16 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
       "`/api/gateway-status.exaSpend` reports **over** or **capped**. On **over** the day's booked spend on the Exa tools passed `EXA_DAILY_MAX_USD` and every call is still served (each one is paid for by its buyer). On **capped** a call that would take the day past `EXA_DAILY_HARD_MAX_USD` was refused 503 (uncharged) within the last hour, or the day's spend reached that ceiling; a call that fits under it is still served, and the day's count starts again at 00:00 UTC. Check the prepaid balance in the upstream's console (a spent balance stops the tools whatever the ceilings say; `exaAllowance` is the word for that), then raise the ceilings on Railway or leave them. Closes when the word reads ok or off: an hour after the last refusal when the day's spend is under `EXA_DAILY_MAX_USD`, otherwise the next UTC day.",
   },
   {
+    title: "Router spend per minute OVER its ceiling",
+    // The router's per-minute holds for outside sellers
+    // (src/router-spend-window.js). over: a minute passed the alarm ceiling
+    // and every purchase was made. capped: a purchase was refused at the
+    // stop. Each holds an hour. off is the owner's switch and does not page.
+    verdict: ({ gateway: b }) => wordVerdict(b.routerSpendWindow?.status, ["over", "capped"], ["ok", "off"]),
+    body: () =>
+      "/api/gateway-status reports routerSpendWindow.status=over or capped. On over, what the router's spending wallet held for outside sellers inside one minute passed SOR_SPEND_CAP_ATOMIC and every purchase was still made (each one is for a buyer who is paying for it). On capped, a purchase that would have passed SOR_SPEND_HARD_CAP_ATOMIC inside one minute was refused before anything was signed and its buyer was not charged. Each word holds for an hour after the last such minute. Read the router's purchases and the spending wallets on the operator view: for steady buyer volume raise the two ceilings on Railway; purchases that no buyer payment settled stay bounded per payer and per chain per day by the external spend guard. Closes when the word reads ok or off.",
+  },
+  {
     // Our Circle Gateway balance (src/gateway-nanopayments.js), read every
     // ten minutes: withdraw holds from the read that reaches
     // GATEWAY_WITHDRAW_ALERT_USD until an operator moves the balance (a

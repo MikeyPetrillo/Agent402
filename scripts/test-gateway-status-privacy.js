@@ -116,6 +116,10 @@ for (const k of ["xDataSpend", "exaSpend", "exaAllowance", "upstreamBudgets"]) {
 // Heartbeat reads only .status, so bucketing must not break paging.
 ok(typeof pubBody?.upstreamBudgets?.status === "string", "upstreamBudgets keeps the top-level status the heartbeat reads");
 
+// --- the router's per-minute spend word: the word alone publicly ---------------
+ok(Object.keys(pubBody?.routerSpendWindow || {}).join(",") === "status" && ["ok", "over", "capped", "off"].includes(pubBody.routerSpendWindow.status), `routerSpendWindow publishes one word only (${JSON.stringify(pubBody?.routerSpendWindow)})`);
+ok(/^[0-9]+$/.test(opBody?.routerSpendWindow?.alarmAtomic || "") && /^[0-9]+$/.test(opBody?.routerSpendWindow?.hardAtomic || ""), "the OPERATOR view of routerSpendWindow carries the two ceilings");
+
 // --- the budget group is ONE word publicly ----------------------------------
 // The per-upstream rows name the upstreams and carry their daily ceilings;
 // together they are a map of where to push, so they stay on the operator view.

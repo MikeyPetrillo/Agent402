@@ -273,11 +273,20 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
   ok(_spentThisWindow() === 400000n, "budget: reserve holds $0.40");
   releaseSpend("400000", t);         // paid leg failed pre-response → refund
   ok(_spentThisWindow() === 0n, "budget: release refunds the full hold");
-  // over-cap is refused (default $2/min cap = 2000000)
-  const held = reserveSpend("2000000");
+  // Past the alarm ceiling a hold is still taken (the status word reads over,
+  // scripts/test-router-spend-window.js); only the hard stop refuses.
+  const { spendWindowCeilings, _resetSpendWindowMarks } = await import("../src/router-spend-window.js");
+  const { alarmAtomic, hardAtomic } = spendWindowCeilings();
+  const held = reserveSpend(alarmAtomic);
+  const past = reserveSpend("1");
+  ok(_spentThisWindow() === alarmAtomic + 1n, "budget: a reserve past the alarm ceiling is held, not refused");
+  releaseSpend("1", past);
+  const rest = reserveSpend(hardAtomic - alarmAtomic);
   let over = null; try { reserveSpend("1"); } catch (e) { over = e; }
-  ok(over && over.statusCode === 429, "budget: reserve past the window cap throws 429");
-  releaseSpend("2000000", held);
+  ok(over && over.statusCode === 429 && _spentThisWindow() === hardAtomic, "budget: reserve past the hard stop throws 429 and holds nothing");
+  releaseSpend(hardAtomic - alarmAtomic, rest);
+  releaseSpend(alarmAtomic, held);
+  _resetSpendWindowMarks();
   ok(_spentThisWindow() === 0n, "budget: post-test window drained");
   // stale token (wrong window) is a no-op, never drives the counter negative
   releaseSpend("999", "0"); ok(_spentThisWindow() === 0n, "budget: stale-token release is a no-op");

@@ -1,5 +1,6 @@
 // Three words on /api/gateway-status and their two observers: gatewayBalance
-// (withdraw), sharedLimits (degraded) and replayStore (pending).
+// (withdraw), sharedLimits (degraded) and replayStore (pending). Also the spend
+// words (xDataSpend, exaSpend, routerSpendWindow: over and capped).
 //
 // gatewayBalance=withdraw holds from the read that reaches the mark until an
 // operator moves the balance, so it pages at once. The other two flicker in
@@ -135,7 +136,19 @@ const { judge, ALARMS, syncAlarms } = await import("../workers/status-probe/src/
 const GB = "Gateway balance READY to withdraw";
 const SLT = "Shared limits store DEGRADED (Redis)";
 const RS = "Replay store marks PENDING (Redis)";
+const RSW = "Router spend per minute OVER its ceiling";
 const j = (gateway) => judge({ gateway });
+
+await check("Worker: routerSpendWindow pages on over and capped, clears on ok and off", () => {
+  for (const w of ["over", "capped"]) assert.equal(j({ routerSpendWindow: { status: w } })[RSW], "bad", w);
+  for (const w of ["ok", "off"]) assert.equal(j({ routerSpendWindow: { status: w } })[RSW], "good", w);
+  for (const w of ["unknown", "something-new"]) assert.equal(j({ routerSpendWindow: { status: w } })[RSW], "quiet", w);
+  assert.equal(j({})[RSW], "quiet", "a build without the word changes nothing");
+  const a = ALARMS.find((x) => x.title === RSW);
+  const b = a.body({ gateway: { routerSpendWindow: { status: "<x>", alarmAtomic: "77", hardAtomic: "77" } } });
+  assert.equal(b, a.body({ gateway: {} }), "the body does not read the response");
+  assert.doesNotMatch(b, /[0-9]|<x>|`|"|\$/, "no figure, and nothing a shell would expand");
+});
 
 await check("Worker: gatewayBalance pages on withdraw at once, clears on ok and off", () => {
   assert.equal(j({ gatewayBalance: { status: "withdraw" } })[GB], "bad");
@@ -187,6 +200,8 @@ await check("Worker: the three bodies are fixed text with no figure", () => {
   const run = (gateway) => syncAlarms(ENV, { sleep: async () => {}, confirmDelayMs: 0, fetchStatus: async () => ({ gateway, status: null }) });
   const CASES = [
     [GB, { gatewayBalance: { status: "withdraw" } }, { gatewayBalance: { status: "ok" } }, null],
+    [RSW, { routerSpendWindow: { status: "over" } }, { routerSpendWindow: { status: "ok" } }, null],
+    [RSW, { routerSpendWindow: { status: "capped" } }, { routerSpendWindow: { status: "off" } }, null],
     [SLT, { sharedLimits: { status: "degraded", alert: "sustained" } }, { sharedLimits: { status: "on", alert: "ok" } }, { sharedLimits: { status: "degraded", alert: "ok" } }],
     [RS, { replayStore: { status: "pending", alert: "sustained" } }, { replayStore: { status: "ok", alert: "ok" } }, { replayStore: { status: "pending", alert: "ok" } }],
   ];
@@ -284,17 +299,21 @@ for (const [prefix, T, field, alertRow, quietRows, goodRows] of HB) {
 // The daily spend words (xDataSpend, exaSpend): over still serves and capped
 // refuses, and the heartbeat pages on both under one issue per upstream. The
 // steps are run as written, like the three above.
+// routerSpendWindow (src/router-spend-window.js) carries the same two words for
+// the router's per-minute holds; its body is the Worker's, word for word.
 const SPEND = [
-  // [step name, title, field]
+  // [step name, title, field, the body is the Worker's]
   ["X data daily spend over its ceiling", "X data daily spend OVER its ceiling", "xDataSpend"],
   ["Exa daily spend over its ceiling", "Exa daily spend OVER its ceiling", "exaSpend"],
+  ["Router spend per minute over its ceiling", RSW, "routerSpendWindow", true],
 ];
-for (const [name, T, field] of SPEND) {
+for (const [name, T, field, sameBody] of SPEND) {
   const step = steps.find((s) => String(s.name || "") === name);
   await check(`heartbeat: "${T}" has a step that reads ${field}`, () => {
     assert.ok(step, `heartbeat.yml has a step named "${name}"`);
     assert.ok(step.run.includes(`TITLE="${T}"`), "the title");
     assert.ok(step.run.includes(`.${field}.status`), "reads the word");
+    if (sameBody) assert.ok(step.run.includes(ALARMS.find((x) => x.title === T).body({})), "the Worker's body");
   });
   if (!step) continue;
   await check(`heartbeat: "${T}" opens once on over and on capped, never on ok, off or a blind read`, async () => {
@@ -303,6 +322,7 @@ for (const [name, T, field] of SPEND) {
       assert.equal(calls.length, 1, `${word}: ${JSON.stringify(calls)}`);
       assert.deepEqual([calls[0][0], calls[0][1], argOf(calls[0], "--title")], ["issue", "create", T], word);
       assert.doesNotMatch(argOf(calls[0], "--body"), /\$[0-9]|[0-9]+\.[0-9]/, `${word}: the public body carries no figure`);
+      if (sameBody) assert.equal(argOf(calls[0], "--body"), ALARMS.find((x) => x.title === T).body({}), `${word}: the body gh receives is the Worker's, unexpanded`);
       assert.deepEqual(await runStep(step, { [field]: { status: word } }, [{ number: 9, title: T }]), [], `${word}: an open issue is not duplicated or commented on`);
     }
     for (const word of ["ok", "off", "unknown", "something-new"]) assert.deepEqual(await runStep(step, { [field]: { status: word } }), [], word);

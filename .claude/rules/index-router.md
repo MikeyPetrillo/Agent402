@@ -17,6 +17,7 @@ paths:
   - "src/seller-funding.js"
   - "src/shared-paytos.js"
   - "src/external-spend-guard.js"
+  - "src/router-spend-window.js"
 ---
 
 # Seller index, router and route-execute
@@ -76,6 +77,19 @@ Loaded when an index, discovery, router or buyer file is read.
   (`configureUnprovenSharedPayTos`, wired in server.js). Solana's tier (`SOR_SVM_UNPROVEN_MAX_USD`,
   `src/solana-buyer.js`) is separate.
 - **External spend guard:** `src/external-spend-guard.js` (per payer and per chain wallet).
+- **Per-minute spend ceilings:** `SOR_SPEND_CAP_ATOMIC` (atomic USDC, default 2000000) is the
+  alarm on what `payX402` holds for outside sellers in one minute, summed across buyers
+  (`reserveSpend` in `src/x402-buyer.js`; every chain that payer buys on, so EVM, Solana and
+  Algorand; `payTempo` has no per-minute ceiling). Past it a purchase is still made and
+  `routerSpendWindow` on `/api/gateway-status` reads `over`. `SOR_SPEND_HARD_CAP_ATOMIC` (default
+  5 times the alarm; never under it) is the stop: a purchase that would pass it answers 429
+  before anything is signed and the word reads `capped`. `0` on the alarm refuses every purchase
+  (`off`); a blank or malformed value reads as the default. Each word holds an hour
+  (`REFUSAL_HOLD_MS`) as this process's mark and as a flag in the shared store, and the word
+  reads the later of the two (`src/router-spend-window.js`). The status Worker and
+  `heartbeat.yml` page on `over` and `capped` under one issue ("Router spend per minute OVER its
+  ceiling") and close it on `ok` or `off`. The unsettled loss stays bounded by the external spend
+  guard above (`scripts/test-router-spend-window.js`, `scripts/test-spend-words-shared-redis.js`).
 - **Seller refusal notes:** a route is benched after two refusals of payments we sent within
   `SOR_SELLER_REFUSAL_TTL_MS` (6 h), and a settled delivery clears it (`src/x402-buyer.js`). When
   `SOR_CHAIN_REFUSAL_OURS_MIN` (default 5) different sellers on one chain refuse our paid retries
