@@ -104,6 +104,11 @@ jobs:
   markers:
     runs-on: ubuntu-24.04
     timeout-minutes: 2
+    # actions: read lets the parse step list this workflow's earlier runs and
+    # their jobs (scripts/marker-base.js); nothing here writes.
+    permissions:
+      contents: read
+      actions: read
     outputs:
       test: ${{ steps.parse.outputs.test }}
       deploy: ${{ steps.parse.outputs.deploy }}
@@ -151,6 +156,8 @@ jobs:
           BEFORE: ${{ github.event.before }}
           AFTER: ${{ github.event.after }}
           EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+          MARKER_WORKFLOW_FILE: deploy.yml
         run: |
           set -euo pipefail
           MARKERS="test deploy publish probe drain paytest purl bazaar-refresh bazaar-register bazaar-solana"
@@ -168,6 +175,23 @@ jobs:
             TITLES=$(git log -1 --format='%s' "$AFTER")
           else
             TITLES=$(git log --format='%s' "$BEFORE..$AFTER" 2>/dev/null || git log -1 --format='%s' "$AFTER")
+          fi
+          # On main a pending run can be replaced by a newer push before it
+          # starts (one pending run per concurrency group), and the pushed range
+          # above holds only this push's commits. Read on from the head of the
+          # last run whose markers job finished (scripts/marker-base.js), so a
+          # replaced push's markers are read here, by exactly one run. No such
+          # run, an unreadable API or a commit that is not an ancestor of this
+          # push leaves the pushed range as it is.
+          if [ "${GITHUB_REF:-}" = "refs/heads/main" ]; then
+            LAST=$(node scripts/marker-base.js || true)
+            if printf '%s' "$LAST" | grep -qE '^[0-9a-f]{40}$' && git cat-file -e "$LAST^{commit}" 2>/dev/null && git merge-base --is-ancestor "$LAST" "$AFTER" 2>/dev/null; then
+              echo "Reading subjects since the last run that read its markers: $LAST"
+              SINCE=$(git log --format='%s' "$LAST..$AFTER")
+              TITLES=$(printf '%s\n%s\n' "$TITLES" "$SINCE" | awk 'NF && !seen[$0]++')
+            else
+              echo "No earlier run to read from; the pushed range stands."
+            fi
           fi
           echo "Subject lines scanned for markers:"
           printf '%s\n' "$TITLES" | sed 's/^/  /'
