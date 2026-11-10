@@ -55,7 +55,15 @@ try {
   ok(r.error?.statusCode === 503 && /usage cap/.test(r.error.message) && !/\$\d/.test(r.error.message) && fetched === 0, "a read that would pass the hard ceiling is refused 503 before any fetch");
   ok(xDataSpendStatus().refusedToday === 1 && xDataSpendStatus().spentUsd <= xDataSpendStatus().hardCapUsd, "the refusal is counted and books nothing past the hard ceiling");
   ok(xDataSpendStatus().status === "capped", "with the total short of the hard ceiling, the word reads capped while reads are refused");
-  ok(xDataSpendStatus(Date.now() + REFUSAL_HOLD_MS - 1000).status === "capped" && xDataSpendStatus(Date.now() + REFUSAL_HOLD_MS + 1000).status === "over", "and reads over again once the last refusal is older than the hold");
+  {
+    // A read on the next UTC day finds the count started again and the
+    // word ok, so in the day's last hour that is what both reads return.
+    const t = Date.now(), inside = t + REFUSAL_HOLD_MS - 1000, past = t + REFUSAL_HOLD_MS + 1000;
+    const day = (ms) => new Date(ms).toISOString().slice(0, 10);
+    const want = [day(inside) === day(t) ? "capped" : "ok", day(past) === day(t) ? "over" : "ok"];
+    const got = [xDataSpendStatus(inside).status, xDataSpendStatus(past).status];
+    ok(got.join() === want.join(), `and reads over again once the last refusal is older than the hold (${got}; expected ${want})`);
+  }
   setEnv(2 * E, 6 * E);
   _xSpendBook(5.5 * E);
   ok(xDataSpendStatus().status === "over", "control: the same total with no refusal reads over");

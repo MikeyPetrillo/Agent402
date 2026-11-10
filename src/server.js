@@ -649,6 +649,7 @@ import { CVE_TOOLS } from "./tools/cve-kit.js";
 import { MCP_PACKAGE_TOOLS } from "./tools/mcp-package-kit.js";
 import { CRYPTO_SIGNALS_TOOLS } from "./tools/crypto-signals-kit.js";
 import { CRAWL_TOOLS } from "./tools/crawl-kit.js";
+import { spendWindowStatus, refreshSpendWindowShared } from "./router-spend-window.js";
 import { X_DATA_TOOLS, xDataEnabled, xDataSpendStatus, refreshXDataSpendShared } from "./tools/x-data-kit.js";
 import { jevSpendStatus, orderByJudgment } from "./tool-judge.js";
 import { noteRouteAnswer, noteRoutePurchase } from "./route-conversion.js";
@@ -3982,7 +3983,7 @@ app.get("/api/gateway-status", async (req, res) => {
   // Also the shared day behind xDataSpend and exaSpend: a new process's own
   // counters start empty, so each word is built from the larger of the two
   // (one bounded read each, reused for a few seconds; never rejects).
-  await Promise.all([refreshOperatorAuthShared(), refreshCdnOriginShared(), refreshXDataSpendShared(), refreshExaSpendShared()]);
+  await Promise.all([refreshOperatorAuthShared(), refreshCdnOriginShared(), refreshXDataSpendShared(), refreshExaSpendShared(), refreshSpendWindowShared()]);
   const spend = { xDataSpend: xDataSpendStatus(), exaSpend: exaSpendStatus(), exaAllowance: exaAllowanceStatus(), jevSpend: jevSpendStatus() };
   const budgets = upstreamBudgetStatus();
   // The global unsettled external-spend ceiling: one word, never a figure.
@@ -3996,6 +3997,11 @@ app.get("/api/gateway-status", async (req, res) => {
     exaSpend: full ? spend.exaSpend : publicBucket(spend.exaSpend),
     exaAllowance: full ? spend.exaAllowance : publicBucket(spend.exaAllowance),
     jevSpend: full ? spend.jevSpend : publicBucket(spend.jevSpend),
+    // The router's per-minute holds for outside sellers
+    // (src/router-spend-window.js): ok / over (past the alarm, still serving)
+    // / capped (a purchase was refused at the stop inside the last hour) /
+    // off. One word publicly; the two ceilings for the operator.
+    routerSpendWindow: (() => { try { return spendWindowStatus({ full }); } catch { return { status: "unknown" }; } })(),
     upstreamBudgets: full ? budgets : publicBudgets(budgets),
     // Hard daily ceilings (src/upstream-hard-caps.js): one word publicly.
     upstreamHardCaps: (() => { try { const h = hardCapStatus(); return full ? h : { status: h.status }; } catch { return { status: "unknown" }; } })(),

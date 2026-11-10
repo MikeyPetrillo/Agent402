@@ -67,7 +67,15 @@ try {
   ok(r.error?.statusCode === 503 && /usage cap/.test(r.error.message) && /not charged on x402/.test(r.error.message) && !/\$\d/.test(r.error.message) && fetched === 0, "a call that would pass the hard ceiling is refused 503 before any fetch");
   ok(exaSpendStatus().refusedToday === 1 && Math.abs(exaSpendStatus().spentUsd - 5.5 * E) < 1e-4, "the refusal is counted and books nothing");
   ok(exaSpendStatus().status === "capped", "with the total short of the hard ceiling, the word reads capped while calls are refused");
-  ok(exaSpendStatus(Date.now() + REFUSAL_HOLD_MS - 1000).status === "capped" && exaSpendStatus(Date.now() + REFUSAL_HOLD_MS + 1000).status === "over", "and reads over again once the last refusal is older than the hold");
+  {
+    // A read on the next UTC day finds the count started again and the
+    // word ok, so in the day's last hour that is what both reads return.
+    const t = Date.now(), inside = t + REFUSAL_HOLD_MS - 1000, past = t + REFUSAL_HOLD_MS + 1000;
+    const day = (ms) => new Date(ms).toISOString().slice(0, 10);
+    const want = [day(inside) === day(t) ? "capped" : "ok", day(past) === day(t) ? "over" : "ok"];
+    const got = [exaSpendStatus(inside).status, exaSpendStatus(past).status];
+    ok(got.join() === want.join(), `and reads over again once the last refusal is older than the hold (${got}; expected ${want})`);
+  }
   setEnv(2 * E, 6 * E);
   _exaSpendBook(5.5 * E);
   ok(exaSpendStatus().status === "over", "control: the same total with no refusal reads over");

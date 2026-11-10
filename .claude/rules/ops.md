@@ -186,6 +186,10 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   closed on `ok` or `off` (`scripts/test-exa-ceilings.js`). `exaAllowance` and `EXA_CREDITS_USD`
   are separate and unchanged: with the prepaid balance spent the upstream refuses and the tools
   answer 503 whatever the ceilings say.
+- **Router per-minute spend word:** `routerSpendWindow` carries the same words (`over` serves,
+  `capped` refuses, `off` is the switch) for `SOR_SPEND_CAP_ATOMIC` and
+  `SOR_SPEND_HARD_CAP_ATOMIC`, each held an hour; paged under "Router spend per minute OVER its
+  ceiling", closed on `ok` or `off`. Detail in `index-router.md` (`src/router-spend-window.js`).
 - **Words with a grace period:** `sharedLimits` reads `degraded` for a minute after any one failed
   Redis command and `replayStore` reads `pending` until the next retry pass, so each carries a
   second word, `alert`, that reads `sustained` once the first has held ten minutes without a break
