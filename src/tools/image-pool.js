@@ -136,7 +136,7 @@ export function runImageOffThread({ op, buffer, params = {}, maxPixels = FREE_MA
   // Kept ahead of the queue on purpose: the header pre-check is a few byte reads,
   // and refusing an oversized image here means a hostile small-file/huge-canvas
   // request never occupies a worker or a queue position either.
-  assertDeclaredWithinPixelCap(buffer, maxPixels);
+  assertDeclaredWithinPixelCap(buffer, maxPixels, { mainThread: true });
   if (queue.length >= QUEUE_MAX) {
     return Promise.reject(unavailable("image workers are busy - retry shortly"));
   }

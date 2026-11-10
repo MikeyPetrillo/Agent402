@@ -243,6 +243,11 @@ const refusedBy = async (label, buf, pattern, handlers = TRANSFORMS.map(([slug, 
 };
 // Decode through image-convert (the worker path) and hand back the pixels.
 const decoded = async (buf) => Jimp.read((await tool("image-convert")({ image: buf.toString("base64"), format: "png" })).__binary);
+// Valid files each block hands to the seeded fuzz at the end of this file.
+const fuzzSeeds = { gif: [], png: [], jpeg: [], bmp: [], tiff: [] };
+// CPU the calling thread spends in fn, in ms (best of five): wall time would
+// also count whatever else the machine is doing.
+const cpuMs = (fn) => { let best = Infinity; for (let k = 0; k < 5; k++) { const c0 = process.cpuUsage(); try { fn(); } catch { /* a refusal is timed too */ } const c = process.cpuUsage(c0); best = Math.min(best, (c.user + c.system) / 1000); } return best; };
 const hex = (n) => (n >>> 0).toString(16).padStart(8, "0");
 
 // GIF. Frame 0 is decoded at the FRAME's size, and the decoder steps over an
@@ -289,6 +294,7 @@ const hex = (n) => (n >>> 0).toString(16).padStart(8, "0");
   g = await decoded(write(32, 32, { palette }, [[16, 16, 16, 16, 1, {}]]));
   ok(g.width === 32 && hex(g.getPixelColor(31, 31)) === RED && hex(g.getPixelColor(15, 15)) !== RED, `a GIF frame flush with the bottom-right edge decodes (${hex(g.getPixelColor(31, 31))})`);
   const plain = write(32, 32, { palette }, [[0, 0, 32, 32, 1, {}]]);
+  fuzzSeeds.gif.push(plain, write(64, 48, { palette, loop: 0 }, [[8, 4, 40, 30, 1, { delay: 5 }], [20, 10, 10, 10, 2, { delay: 5 }]]), write(32, 32, {}, [[0, 0, 32, 32, 1, { palette }]]));
   const xmp = Buffer.concat([Buffer.from([0x21, 0xff, 0x0b]), Buffer.from("XMP DataXMP"), Buffer.from([200]), Buffer.alloc(200, 0x20), Buffer.from([0])]);
   g = await decoded(Buffer.concat([plain.subarray(0, 25), xmp, plain.subarray(25)]));
   ok(g.width === 32 && hex(g.getPixelColor(5, 5)) === RED, `a GIF with an XMP application extension decodes (${hex(g.getPixelColor(5, 5))})`);
@@ -335,6 +341,7 @@ const hex = (n) => (n >>> 0).toString(16).padStart(8, "0");
   // (pass widths 1,1,2,1,3,2,5 over 1,1,1,2,1,3,2 rows), every sample 0x40.
   const rows = [[1, 1], [1, 1], [2, 1], [1, 2], [3, 1], [2, 3], [5, 2]].flatMap(([w, n]) => Array(n).fill(Buffer.from([0, ...Array(w).fill(0x40)])));
   const interlaced = png(ihdr(5, 5, 1), idat(Buffer.concat(rows)));
+  fuzzSeeds.png.push(interlaced, png(ihdr(4, 4), idat(Buffer.alloc(4 * 5))));
   const p = await decoded(interlaced);
   ok(p.width === 5 && p.height === 5 && hex(p.getPixelColor(0, 0)) === "404040ff" && hex(p.getPixelColor(4, 4)) === "404040ff", `an interlaced PNG still decodes to its pixels (${p.width}x${p.height}, ${hex(p.getPixelColor(4, 4))})`);
   // A text chunk that spells IHDR in its data is not a second header.
@@ -395,6 +402,7 @@ const hex = (n) => (n >>> 0).toString(16).padStart(8, "0");
   const table = (cls) => seg(0xc4, Buffer.from([cls << 4, 1, ...Array(15).fill(0), 0]));
   const scan = (from, to) => Buffer.concat([seg(0xda, Buffer.from([1, 1, 0, from, to, 0])), Buffer.from([0x7f])]);
   const progressive = Buffer.concat([Buffer.from([0xff, 0xd8]), seg(0xdb, Buffer.from([0, ...Array(64).fill(1)])), seg(0xc2, Buffer.from([8, 0, 8, 0, 8, 1, 1, 0x11, 0])), table(0), scan(0, 0), table(1), scan(1, 63), Buffer.from([0xff, 0xd9])]);
+  fuzzSeeds.jpeg.push(progressive, withThumb, small);
   j = await decoded(progressive);
   ok(j.width === 8 && j.height === 8 && hex(j.getPixelColor(3, 3)) === "808080ff", `a progressive JPEG (one SOF2, two scans) still decodes (${j.width}x${j.height}, ${hex(j.getPixelColor(3, 3))})`);
 }
@@ -564,6 +572,63 @@ const hex = (n) => (n >>> 0).toString(16).padStart(8, "0");
   }
   await decodes("an uncompressed gray TIFF, after a contained fax decode", tiff([page(40, 30)]));
 
+  fuzzSeeds.tiff.push(secondPage, tiff([page(40, 30)]), tiff([[...page(40, 30), [37500, 7, nikon.length, nikon], [34665, 4, 1, exif]]]), jpegPage(7, jpg), jpegPage(6, jpg),
+    tiff([page(40, 30, { 259: [259, 3, 1, 8], 273: [273, 4, 1, zlibMod.deflateSync(samples(40, 30))], 279: [279, 4, 1, zlibMod.deflateSync(samples(40, 30)).length] })]),
+    tiff([page(40, 30, { 259: [259, 3, 1, 32773], 273: [273, 4, 1, literal], 279: [279, 4, 1, literal.length] })]),
+    faxPage(4, 32, 24, pack(Array.from({ length: 24 }, () => "001" + run(8, false) + run(8, true) + "1").join(""))));
+
+  // --- Two files the fuzz below found (stored deflated) ---------------------------
+  // 1: a tile byte count that sits inside the directory itself, so cutting it
+  // to the file's length rewrites the width tag the decoder then reads. The
+  // view is checked again as the decoder will read it. 2: a CCITT strip offset
+  // far past the end of the file, which the decoder would count its way up to.
+  for (const [label, packed] of [
+    ["a TIFF whose byte count overlaps its directory", "8/TUYuBgYGDgYmBgZGFgZGBgEGFgYGBEYjMxMoPZIFXMUDYIsyGxRZHYTowsDCxA+TYGBgZXKFuAgYHBBWomiO0MZU9jgIBlIMzIwLCMiYFhGTPUIBTMxMzCysbOwcnFzcPLxy8gKCQsIiomLiEpJS0jKyevoKikrKKqpq6hqaWto6unb2BoZGxiamZuYWllbWNrZ+/g6OTs4urm7uHp5e3j6+cfEBgUHBIaFh4RGRUdExsXn5CYlJySmpaekZmVnZObl19QWFRcUlpWXlFZVV1TW1ff0NjU3NLa1t7R2dXd09vXP2HipMlTpk6bPmPmrNlz5s6bv2DhosVLli5bvmLlqtVr1q5bv2Hjps1btm7bvmPnrt179u7bf+DgocNHjh47fuLkqdNnzp47f+HipctXrl67fuPmrdt37t67/+Dho8dPnj57/uLlq9dv3r57/+Hjp89fvn77/uPnr99//v77P1z9RWy8Dld/ERuvw9VfxMYrAA=="],
+    ["a CCITT TIFF whose strip offset is past the end of the file", "8/TUYuBgYGDgZGBgZGFgZGBgUGBgYGCEsiUYGBiYGJnBbBBmhrJZGBgY2KBsEBCEqmcwFkvTORM5Y7NhWtKZowwMYkjmiEPZuhAtVQwMDKJwo2d2o+jE4AIA"],
+  ]) {
+    const a = await attempt(tool("image-convert"), zlibMod.inflateRawSync(Buffer.from(packed, "base64")), { format: "png" });
+    ok((a.code === 400 || a.code === 200) && a.ms < 1500, `${label} is answered at once (got ${a.code} "${a.msg || ""}" in ${a.ms}ms)`);
+  }
+
+  // --- The main-thread check has a fixed budget -----------------------------------
+  // A directory may declare 65,535 entries and a strip table millions of rows.
+  // The pool's check reads 4,096 of them and then leaves the file to the
+  // worker, which runs the whole check before it decodes.
+  {
+    const { assertTiffHeader } = await import("../src/tools/image-headers.js");
+    const wideDirectory = (count) => {
+      const b = Buffer.alloc(8 + 2 + count * 12 + 4 + 16); b.write("II", 0, "latin1"); b.writeUInt16LE(42, 2); b.writeUInt32LE(8, 4); b.writeUInt16LE(count, 8);
+      for (let k = 0; k < count; k++) { const e = 10 + k * 12; b.writeUInt16LE(1000 + (k % 30000), e); b.writeUInt16LE(1, e + 2); }
+      const last = 10 + (count - 1) * 12; b.writeUInt16LE(330, last); b.writeUInt16LE(4, last + 2); b.writeUInt32LE(1, last + 4); b.writeUInt32LE(8, last + 8); // a sub-directory tag naming this directory
+      b.writeUInt16LE(256, 10); b.writeUInt16LE(3, 12); b.writeUInt32LE(1, 14); b.writeUInt32LE(16, 18);
+      return b;
+    };
+    const rows = 400000, table = Buffer.alloc(rows * 4);
+    const longTable = tiff([page(10, 10, { 259: [259, 3, 1, 32773], 273: [273, 4, rows, table], 279: [279, 4, rows, table] })]);
+    for (const [label, file] of [["a 65,535-entry directory", wideDirectory(65535)], ["a 400,000-row strip table", longTable]]) {
+      const ms = cpuMs(() => assertDeclaredWithinPixelCap(file, 16e6, { mainThread: true }));
+      ok(assertTiffHeader(file, 16e6, { mainThread: true }) === false && ms < 5, `the main-thread check leaves ${label} (${file.length} bytes) to the worker after ${ms.toFixed(2)} ms of CPU (< 5 ms)`);
+      const a = await attempt(tool("image-convert"), file, { format: "png" });
+      ok((a.code === 400 || a.code === 200) && a.ms < 2000, `${label} is then answered by the worker (got ${a.code} "${a.msg || ""}" in ${a.ms}ms)`);
+    }
+    // The pool's own call is the budgeted one: the synchronous part of handing
+    // it the widest directory (its check, before the job is queued) stays small.
+    {
+      const { runImageOffThread } = await import("../src/tools/image-pool.js");
+      const widest = wideDirectory(65535), pending = [];
+      const ms = cpuMs(() => { pending.push(runImageOffThread({ op: "convert", buffer: widest, params: { format: "png" } }).catch(() => null)); });
+      await Promise.all(pending);
+      ok(ms < 5, `the pool queues a 65,535-entry TIFF after ${ms.toFixed(2)} ms of main-thread CPU (< 5 ms)`);
+    }
+    // What the main thread deferred is still held to every bound.
+    const deferredAndTooLarge = wideDirectory(6000); deferredAndTooLarge.writeUInt16LE(257, 22); deferredAndTooLarge.writeUInt16LE(3, 24); deferredAndTooLarge.writeUInt32LE(1, 26); deferredAndTooLarge.writeUInt32LE(16, 30);
+    deferredAndTooLarge.writeUInt16LE(258, 34); deferredAndTooLarge.writeUInt16LE(3, 36); deferredAndTooLarge.writeUInt32LE(1, 38); deferredAndTooLarge.writeUInt32LE(60000, 42);
+    deferredAndTooLarge.writeUInt16LE(277, 46); deferredAndTooLarge.writeUInt16LE(3, 48); deferredAndTooLarge.writeUInt32LE(1, 50); deferredAndTooLarge.writeUInt32LE(60000, 54);
+    const a = await attempt(tool("image-convert"), deferredAndTooLarge, { format: "png" });
+    ok(assertTiffHeader(deferredAndTooLarge, 16e6, { mainThread: true }) === false && a.code === 400 && /^source image too large \(tiff samples decode to/.test(a.msg || ""), `a deferred TIFF past the sample cap is refused by the worker (got ${a.code} "${a.msg}")`);
+    ok(assertTiffHeader(tiff(Array.from({ length: 40 }, () => page(40, 30))), 16e6, { mainThread: true }) === true, "a real 40-page TIFF is checked in full on the main thread");
+  }
+
   // --- The rest of the ordinary shapes -------------------------------------------
   // Tiled: 20x20 in four 16x16 tiles; tile s holds (k + 40s) at sample k.
   const tiles = Buffer.concat([0, 1, 2, 3].map((s) => Buffer.from(Array.from({ length: 256 }, (_, k) => (k + s * 40) & 255))));
@@ -583,6 +648,7 @@ const hex = (n) => (n >>> 0).toString(16).padStart(8, "0");
   const negativeWidth = Buffer.from(bmp); negativeWidth.writeInt32LE(-8, 18);
   await refusedBy("a BMP with a negative width", negativeWidth, /^source image too large \(4294967288x8; max/);
   const topDown = Buffer.from(bmp); topDown.writeInt32LE(-8, 22);
+  fuzzSeeds.bmp.push(bmp, topDown);
   let b = await decoded(topDown);
   ok(b.width === 8 && b.height === 8 && hex(b.getPixelColor(2, 2)) === "336699ff", `a top-down BMP (negative height) still decodes (${b.width}x${b.height}, ${hex(b.getPixelColor(2, 2))})`);
   b = await decoded(Buffer.from(await new Jimp({ width: 33, height: 17, color: 0x336699ff }).getBuffer(JimpMime.bmp)));

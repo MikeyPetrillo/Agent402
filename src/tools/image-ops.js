@@ -16,7 +16,7 @@ import { loadJimp } from "./lazy-deps.js";
 import { childEnv } from "./child-env.js";
 import {
   assertGifHeader, gifFirstFrame, assertPngHeader, assertInflateWithinDeclared,
-  assertJpegHeader, jpegFrameHeaders, assertTiffHeader, tiffLayout, tiffDecoderView, assertTiffStreams,
+  assertJpegHeader, jpegFrameHeaders, assertTiffHeader, tiffSettledView, assertTiffStreams,
 } from "./image-headers.js";
 
 // Re-exported for the other decoders of buyer images (barcode-kit, frame-diff).
@@ -121,8 +121,10 @@ export function declaredDimensions(buf) {
  *  The declared size only bounds the decode when the decoder sizes its buffers
  *  from that same field, so the container's structure is checked against its
  *  decoder here too (src/tools/image-headers.js). All of it is a linear walk
- *  of headers. */
-export function assertDeclaredWithinPixelCap(buf, maxPixels) {
+ *  of headers. `mainThread` (the pool's call) also holds that walk to a fixed
+ *  budget: past it the file is left for the worker, which runs this whole
+ *  check again before it decodes. */
+export function assertDeclaredWithinPixelCap(buf, maxPixels, { mainThread = false } = {}) {
   const declared = declaredDimensions(buf);
   if (declared && declared.width > 0 && declared.height > 0 && declared.width * declared.height > maxPixels) {
     throw bad(`source image too large (${declared.width}x${declared.height}; max ${maxPixels} pixels)`);
@@ -131,7 +133,7 @@ export function assertDeclaredWithinPixelCap(buf, maxPixels) {
   if (format === "gif") assertGifHeader(buf);
   if (format === "png") assertPngHeader(buf);
   if (format === "jpeg") assertJpegHeader(buf);
-  if (format === "tiff") assertTiffHeader(buf, maxPixels);
+  if (format === "tiff") assertTiffHeader(buf, maxPixels, { mainThread });
 }
 
 export async function readImage(buf, { maxPixels = MAX_SRC_PIXELS, deadlineMs } = {}) {
@@ -151,9 +153,10 @@ export async function readImage(buf, { maxPixels = MAX_SRC_PIXELS, deadlineMs } 
   // only directory; its strip data is bounded first.
   let source = buf, isolated = false;
   if (format === "tiff") {
-    const layout = tiffLayout(buf, maxPixels);
-    assertTiffStreams(buf, layout, maxPixels);
-    source = tiffDecoderView(buf, layout);
+    // The view is what gets checked: it is what the decoder reads.
+    const { view, layout } = tiffSettledView(buf, maxPixels);
+    assertTiffStreams(view, layout, maxPixels);
+    source = view;
     isolated = Boolean(layout.page?.fax);
   }
   const { Jimp } = await loadJimp();

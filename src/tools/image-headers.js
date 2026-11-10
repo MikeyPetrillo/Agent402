@@ -194,6 +194,12 @@ const TIFF_UNBOUNDED = new Set([9, 34316]);
 const TIFF_MAX_SKIPPED = 64;
 // Decoded sample bytes allowed per pixel of the cap (16-bit RGBA).
 const TIFF_BYTES_PER_CAP_PIXEL = 8;
+// Directory entries and strip-table rows the main-thread check will read
+// before it leaves the file to the worker's check. The real TIFFs measured
+// hold at most 27 entries in the first directory and 64 strips (1,965 files); a directory
+// can declare 65,535 and a strip table millions.
+export const TIFF_MAIN_THREAD_BUDGET = 4096;
+const TIFF_DEFERRED = Symbol("tiff layout left to the worker");
 
 /** The first image of a TIFF as the decoder will read it. Returns
  *  { directory, next, renames, clamps, page }: the directory's offset, where
@@ -203,7 +209,10 @@ const TIFF_BYTES_PER_CAP_PIXEL = 8;
  *  decode the header cannot bound: tags declaring more values than the file
  *  holds, a size tag of a non-integer type, a page, tile or sample layout
  *  past `maxPixels`, or a compression with size fields no reader here covers. */
-export function tiffLayout(buf, maxPixels = Infinity) {
+export function tiffLayout(buf, maxPixels = Infinity, budget = Infinity) {
+  // Every entry and table row read is counted against `budget`.
+  let work = 0;
+  const spend = (n) => { work += n; if (work > budget) throw TIFF_DEFERRED; };
   const le = buf[0] === 0x49;
   // Reads past the end answer zero, as the decoder's do.
   const g = (p) => (p >= 0 && p < buf.length ? buf[p] : 0);
@@ -224,6 +233,7 @@ export function tiffLayout(buf, maxPixels = Infinity) {
     for (let k = 0; k < count; k++) {
       const e = offset + 2 + k * 12;
       if (e >= buf.length) break; // the rest read as empty entries
+      spend(1);
       const tag = u16(e), type = u16(e + 2), num = u32(e + 4), voff = u32(e + 8);
       const unit = TIFF_UNIT[type];
       // Renamed whatever its type: the decoder follows these even when it
@@ -263,6 +273,7 @@ export function tiffLayout(buf, maxPixels = Infinity) {
     const firstType = u16(offset + 4);
     if ((count !== 0 && (firstType < 1 || firstType > 13)) || seen.has(offset) || seen.size >= TIFF_MAX_SKIPPED) break;
     seen.add(offset);
+    spend(1);
     tags = readDirectory(offset);
     if (tags) { directory = offset; break; }
     offset = u32(offset + 2 + count * 12);
@@ -308,19 +319,24 @@ export function tiffLayout(buf, maxPixels = Infinity) {
   // Each strip or tile is read for as many bytes as its count says, so a count
   // that runs past the end of the file is clamped to the file in the decoder's
   // view. One uncompressed strip is sized from the page instead.
-  const lengths = new Map();
+  const lengths = new Map(), starts = new Map();
   if (tags.has(countsTag) && !(compression === 1 && !tiled && parts === 1)) {
     for (let j = 0; j < parts; j++) {
+      spend(1);
       const at = value(tags, offsetsTag, j), length = value(tags, countsTag, j);
       if (length === undefined || at + length <= buf.length) continue;
       const kept = Math.max(0, buf.length - at);
       lengths.set(j, kept);
       layout.clamps.push({ ...slot(tags, countsTag, j), value: kept });
+      // An offset past the end has nothing to read; the view moves it to zero
+      // so no decoder counts its way up to it.
+      if (at >= buf.length) { starts.set(j, 0); layout.clamps.push({ ...slot(tags, offsetsTag, j), value: 0 }); }
     }
   }
-  const part = (j) => ({ offset: value(tags, offsetsTag, j), length: lengths.get(j) ?? value(tags, countsTag, j) });
+  const part = (j) => ({ offset: starts.get(j) ?? value(tags, offsetsTag, j), length: lengths.get(j) ?? value(tags, countsTag, j) });
   let jpeg = null;
   if (TIFF_JPEG.has(compression)) {
+    spend((tags.get(519)?.num ?? 0) + (tags.get(520)?.num ?? 0) + (tags.get(521)?.num ?? 0));
     const list = (tag) => Array.from({ length: tags.get(tag)?.num ?? 0 }, (_, j) => value(tags, tag, j));
     // JPEGTables, a byte field the decoder puts ahead of every strip.
     const tables = tags.get(347);
@@ -343,9 +359,13 @@ export function tiffLayout(buf, maxPixels = Infinity) {
   return layout;
 }
 
-/** The cap applied to everything the first image makes the decoder allocate. */
-export function assertTiffHeader(buf, maxPixels) {
-  tiffLayout(buf, maxPixels);
+/** The cap applied to everything the first image makes the decoder allocate.
+ *  With `mainThread`, the read stops at TIFF_MAIN_THREAD_BUDGET entries and
+ *  answers false: the file is neither passed nor refused, and the worker runs
+ *  the whole check before it decodes. */
+export function assertTiffHeader(buf, maxPixels, { mainThread = false } = {}) {
+  try { tiffLayout(buf, maxPixels, mainThread ? TIFF_MAIN_THREAD_BUDGET : Infinity); return true; }
+  catch (e) { if (e === TIFF_DEFERRED) return false; throw e; }
 }
 
 /** The file as the decoder is shown it: a copy in which the chain ends at the
@@ -354,6 +374,28 @@ export function assertTiffHeader(buf, maxPixels) {
  *  stores them without following them, and byte counts stop at the end of the
  *  file. The caller's buffer is not written to. */
 export function tiffDecoderView(buf, layout = tiffLayout(buf)) {
+  const { view, changed } = patchedCopy(buf, layout);
+  return changed ? view : Buffer.from(buf);
+}
+
+/** The view, read again as the decoder will read it. The edits above land in
+ *  the directory, and a file can point a tag's values (or a strip) at those
+ *  same bytes, so what was checked in the file is not yet what the view
+ *  holds. This returns { view, layout } only when the view passes the whole
+ *  check on its own and asks for no further edit; a file that never settles
+ *  is one whose directory overlaps its own data, and is refused. */
+export function tiffSettledView(buf, maxPixels) {
+  let view = buf;
+  for (let pass = 0; pass < 3; pass++) {
+    const layout = tiffLayout(view, maxPixels);
+    const next = patchedCopy(view, layout);
+    if (!next.changed) return { view: pass ? view : next.view, layout };
+    view = next.view;
+  }
+  throw bad("tiff directory overlaps its own data");
+}
+
+function patchedCopy(buf, layout) {
   const view = Buffer.from(buf);
   const w16 = (v, at) => (layout.le ? view.writeUInt16LE(v, at) : view.writeUInt16BE(v, at));
   const w32 = (v, at) => (layout.le ? view.writeUInt32LE(v, at) : view.writeUInt32BE(v, at));
@@ -363,7 +405,7 @@ export function tiffDecoderView(buf, layout = tiffLayout(buf)) {
     if (at + size > view.length) continue;
     if (size === 1) view[at] = Math.min(value, 255); else if (size === 2) w16(Math.min(value, 65535), at); else w32(value, at);
   }
-  return view;
+  return { view, changed: !view.equals(buf) };
 }
 
 // Every place in [start, end) where a JPEG decoder could read a frame header:
