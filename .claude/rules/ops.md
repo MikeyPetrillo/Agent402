@@ -71,7 +71,11 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   breaks every listing does), paged the same way; both issues close only on the second ok read in a row.
 - **Backups:** `src/backup.js` (encrypted, offsite); restore with `scripts/backup-restore.js`.
   The `backup` word reads `unencrypted` while `BACKUP_ENCRYPTION_KEY` is unset in production
-  (`NODE_ENV` or the platform's environment name); the heartbeat and the status probe page on it.
+  (`NODE_ENV` or the platform's environment name), and `unconfigured` while the `BACKUP_S3_*`
+  bucket variables are unset in production with a state database (no backup runs at all); the
+  heartbeat and the status probe page on both under "Offsite backup is not current", closed on
+  `ok`. Without a bucket, a FREE_MODE boot, a boot outside production and a boot with no state
+  database read `off`, which never pages.
 - **Status observers:** GitHub heartbeat plus `workers/status-probe`; a failed check is
   re-probed once before it is recorded. The heartbeat signs its paywall read with X-Heartbeat-Token,
   so the unpaid budget never refuses it; the status Worker pages "Paywall not observed" after three

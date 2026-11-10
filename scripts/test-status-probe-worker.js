@@ -1107,16 +1107,17 @@ for (const [name, over, detail] of failCases) {
     }
   });
 
-  await acheck("offsite backup: held, failed, stale and unencrypted page, ok clears, off and unknown do neither; body echoes only known words", async () => {
+  await acheck("offsite backup: held, failed, stale, unencrypted and unconfigured page, ok clears, off and unknown do neither; body echoes only known words", async () => {
     const { judge, ALARMS } = await import("../workers/status-probe/src/index.js");
     const T = "Offsite backup is not current";
-    for (const w of ["held", "failed", "stale", "unencrypted"]) assert.equal(judge({ gateway: { backup: { status: w } } })[T], "bad", w);
+    for (const w of ["held", "failed", "stale", "unencrypted", "unconfigured"]) assert.equal(judge({ gateway: { backup: { status: w } } })[T], "bad", w);
     assert.equal(judge({ gateway: { backup: { status: "ok" } } })[T], "good");
     assert.equal(judge({ gateway: { backup: { status: "off" } } })[T], "quiet");
     assert.equal(judge({ gateway: { backup: { status: "unknown" } } })[T], "quiet");
     assert.equal(judge({ gateway: {} })[T], "quiet");
     const a = ALARMS.find((x) => x.title === T);
     assert.match(a.body({ gateway: { backup: { status: "held" } } }), /backup\.status=held\./);
+    assert.match(a.body({ gateway: { backup: { status: "unconfigured" } } }), /backup\.status=unconfigured\.[\s\S]*- unconfigured: the BACKUP_S3_\* bucket variables are unset in production/);
     assert.match(a.body({ gateway: { backup: { status: "<b>x</b>" } } }), /backup\.status=unknown\./);
   });
 

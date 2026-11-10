@@ -413,8 +413,11 @@ function saveStatus() {
 export const backupStatus = () => { loadStatus(); refreshStatus(); return { ...status, configured: backupConfigured(), encryptionKey: encKeyState() }; };
 
 // The backup alarm as one word, never a number (/api/gateway-status; the
-// heartbeat pages on held / failed / stale / unencrypted):
-//   off     BACKUP_S3_* not configured
+// heartbeat pages on held / failed / stale / unencrypted / unconfigured):
+//   off     BACKUP_S3_* not configured (a FREE_MODE boot, a self-host, any
+//           boot with no state database): nothing to page about
+//   unconfigured  BACKUP_S3_* not configured in production with a state
+//           database (backupExpected): the database is not being backed up
 //   failed  the last run threw (nothing or only part went up)
 //   held    the last run left a state table without an offsite copy
 //   stale   no successful run within BACKUP_STALE_HOURS (26: one nightly
@@ -433,8 +436,12 @@ export const backupStatus = () => { loadStatus(); refreshStatus(); return { ...s
 export function backupProduction(env = process.env) {
   return isProductionEnv(env);
 }
+/** A boot whose missing bucket is a fault: production, with a state database to back up. */
+export function backupExpected(env = process.env) {
+  return backupProduction(env) && stateDbEnabled(env);
+}
 export function backupAlarmStatus(now = Date.now()) {
-  if (!backupConfigured()) return "off";
+  if (!backupConfigured()) return backupExpected() ? "unconfigured" : "off";
   const keyState = encKeyState();
   if (keyState === "invalid") return "failed";
   loadStatus();
