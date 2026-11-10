@@ -12,7 +12,7 @@
 // below fails, so a new one is added here with its floor.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer } from "node:http";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bootServer } from "./lib/boot-server.js";
@@ -131,6 +131,16 @@ try {
   }
   const gateway = pricing.llmGateway?.tiers || [];
   ok(gateway.filter((t) => t.quoted).every((t) => t.fromUsd === pricing.endpoints.find((e) => e.path === t.path)?.fromUsd), "the gateway tier list reads the same floors");
+  // Each gateway tier row against its own range, and not vacuously.
+  const quotedTiers = gateway.filter((t) => t.quoted);
+  ok(quotedTiers.length >= 4 && quotedTiers.every((t) => Number.isFinite(t.fromUsd) && t.fromUsd === pricing.endpoints.find((e) => e.path === t.path)?.quoteRange?.minUsd), `every quoted gateway tier row's fromUsd is its range's floor (${quotedTiers.map((t) => `${t.path} ${t.fromUsd}`).join(", ")})`);
+  // Today every quoted /v1 row lists its floor as its price, so a row that
+  // read the list price would serve the same numbers. The source is pinned
+  // too: the tier rows take the floor from the one helper the helper checks
+  // above cover (a floor under the list price is the from price).
+  const serverSrc = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  const tiersSrc = serverSrc.slice(serverSrc.indexOf("tiers: Object.entries(CATALOG)"), serverSrc.indexOf('.filter((t) => t.path.startsWith("/v1/"))'));
+  ok(tiersSrc.length > 0 && /typeof def\.quote === "function" \? \{ quoted: true, fromUsd: fromUsdOf\(def\) \}/.test(tiersSrc), "the gateway tier rows take fromUsd from fromUsdOf(def), the range's floor, never the list price");
 } catch (e) {
   ok(false, `unexpected: ${e?.stack || e}`);
 } finally {
