@@ -61,11 +61,15 @@ Set these on your host. None are committed to the repo.
 |---|---|---|
 | `FREE_MODE` | No | Set `true` to serve all tools free (no paywall, no PoW gate) |
 | `PORT` | No | HTTP listen port (default: 3000) |
+| `BASE_URL` | For a public deployment | The public origin of your server, e.g. `https://tools.example.com` (default: `http://127.0.0.1:<PORT>`). Links, the resource URL in each 402, the discovery files and the canonical-host redirect are built from it |
 | `TRUST_PROXY_HOPS` | Behind a proxy | How many reverse proxies in front of the server append X-Forwarded-For (default 0: the client address is the connection's, and a client-sent X-Forwarded-For is ignored). Set `1` behind a single edge proxy so per-client rate limits see the real client; the server logs a warning at boot while it is unset. Without it, every visitor behind the proxy reads as the proxy's one address and shares its rate limits |
 | `WALLET_ADDRESS` | For paid mode | Your USDC receiving address (Base) |
 | `WALLET_ENS` | No | ENS or Basename for display (e.g. `agent402.base.eth`) |
 | `NETWORK` | For paid mode | Primary chain (default: `base` = Base mainnet; `base-sepolia` for testnet) |
-| `PAYMENT_NETWORKS` | No | Comma-separated chains to accept (default: the primary network only), e.g. `base,solana,polygon,arbitrum,stellar,algorand,monad,celo,avalanche,sei,optimism,robinhood`; each extra chain needs its own payTo / facilitator settings (see below) |
+| `PAYMENT_NETWORKS` | No | Comma-separated chains to accept (default: the primary network only), e.g. `base,solana,polygon,arbitrum,stellar,algorand,monad,celo,avalanche,sei,optimism,robinhood`; an extra EVM chain is paid to `WALLET_ADDRESS`; Solana, Stellar and Algorand each need their own payTo (the next three rows) |
+| `SOLANA_WALLET_ADDRESS` | With a Solana network in `PAYMENT_NETWORKS` | Your USDC receiving address on Solana (base58). Unset, the server logs a boot warning and leaves the Solana option out of the 402s it sends |
+| `STELLAR_WALLET_ADDRESS` | With `stellar` in `PAYMENT_NETWORKS` | Your USDC receiving address on Stellar (public key, `G...`). Unset, the server logs a boot warning and leaves the Stellar option out of the 402s it sends |
+| `ALGORAND_WALLET_ADDRESS` | With `algorand` in `PAYMENT_NETWORKS` | Your USDC receiving address on Algorand. Unset, the server logs a boot warning and leaves the Algorand option out of the 402s it sends |
 | `CDP_API_KEY_ID` | For paid mode (or `FACILITATOR_URL`) | Coinbase CDP API key ID (facilitator auth) |
 | `CDP_API_KEY_SECRET` | For paid mode (or `FACILITATOR_URL`) | Coinbase CDP API secret |
 | `FACILITATOR_URL` | No | Custom x402 facilitator URL for the primary network, used when the CDP keys are unset (the CDP keys take precedence). With neither, only `NETWORK=base-sepolia` boots, on the x402.org testnet facilitator |
@@ -83,7 +87,7 @@ Set these on your host. None are committed to the repo.
 | `STATE_DATABASE_URL` | No | Postgres connection string for the state database; unset keeps state in SQLite and files on `/data` |
 | `RATE_LIMIT_REPLICAS` | With replicas | How many server replicas share the limits; set it to the replica count (default 1) |
 | `INDEX_PULL_MS` | No | How often each replica pulls the seller index rows another wrote (default 30000) |
-| `TEMPO_RELAY` | No | `off` settles Tempo payments in the server itself (verify, simulate, broadcast over `TEMPO_RPC_URL`) and screens every party against OFAC's SDN list; unset uses Tempo's hosted relay |
+| `TEMPO_RELAY` | No | `off` settles Tempo payments in the server itself (verify, simulate, broadcast over `TEMPO_RPC_URL`) and screens every party to a per-call payment against OFAC's SDN list; unset uses Tempo's hosted relay |
 | `JEV_MODEL` | No | The Jev version the judgment routes pin to (default `jev-1.14.0`); `TYPESAFE_MODEL` overrides it for the internal callers |
 | `E2B_MAX_CONCURRENT` | No | Sandboxes running at once for the whole service (default 8), split across replicas |
 | `DATABENTO_SUMMARY` | No | `off` makes the stock tools read the three-venue feed instead of the end-of-day summary dataset |
