@@ -54,11 +54,43 @@ function bodyCarriesGaLoader(body) {
   if (Buffer.isBuffer(body)) return body.includes(GA_LOADER_MARK);
   return false;
 }
+// The three every answer carries. Strict-Transport-Security is sent on every
+// answer, not only one read as secure: TLS ends at the edge, so whether a
+// request "was https" is a reading of X-Forwarded-Proto that is only as good
+// as TRUST_PROXY_HOPS, and an answer that lost the header to a wrong hop count
+// would leave a browser free to downgrade. A browser ignores the header on an
+// answer it received over plain http (RFC 6797 section 8.1), so a local http
+// boot is unaffected by it.
+const ALWAYS_HEADERS = Object.freeze([
+  ["X-Content-Type-Options", "nosniff"],
+  ["Referrer-Policy", "strict-origin-when-cross-origin"],
+  ["Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload"],
+]);
+// A request the HTTP parser refuses (a malformed request line or header, a
+// header block past the size limit, a request that never finished arriving)
+// is answered by the server before any middleware runs, so the middleware
+// below never sees it. The same status line Node writes by default, with the
+// three headers above. Attach with httpServer.on("clientError", answerClientError).
+const PARSER_STATUS = Object.freeze({
+  HPE_HEADER_OVERFLOW: "431 Request Header Fields Too Large",
+  HPE_CHUNK_EXTENSIONS_OVERFLOW: "413 Payload Too Large",
+  ERR_HTTP_REQUEST_TIMEOUT: "408 Request Timeout",
+});
+export function clientErrorHead(code) {
+  const status = (typeof code === "string" && Object.hasOwn(PARSER_STATUS, code) && PARSER_STATUS[code]) || "400 Bad Request";
+  return `HTTP/1.1 ${status}\r\n${ALWAYS_HEADERS.map(([n, v]) => `${n}: ${v}\r\n`).join("")}Content-Length: 0\r\nConnection: close\r\n\r\n`;
+}
+export function answerClientError(err, socket) {
+  // Nothing is written into an answer already under way, or to a socket that
+  // can no longer take one (Node's own rule for its default answer).
+  try {
+    if (socket.writable && (!socket._httpMessage || !socket._httpMessage._headerSent)) socket.write(clientErrorHead(err?.code));
+  } catch { /* the socket is closed below either way */ }
+  socket.destroy(err);
+}
 export function securityHeaders() {
   return (req, res, next) => {
-    res.setHeader("X-Content-Type-Options", "nosniff");
-    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
-    res.setHeader("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload");
+    for (const [name, value] of ALWAYS_HEADERS) res.setHeader(name, value);
     const send = res.send;
     if (typeof send === "function") {
       res.send = function (body) {
@@ -116,4 +148,4 @@ export function contentSecurityPolicy({ analytics = false } = {}) {
   ).replace("script-src 'self';", analytics ? `script-src 'self' ${GA_SCRIPT_HOST};` : "script-src 'self';");
 }
 
-export { DOCUMENT_HEADERS_SKIP, setDocumentHeaders, headIsHtml, headIsInert, SANDBOX_CSP };
+export { DOCUMENT_HEADERS_SKIP, setDocumentHeaders, headIsHtml, headIsInert, SANDBOX_CSP, ALWAYS_HEADERS };

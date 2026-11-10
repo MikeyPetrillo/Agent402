@@ -1349,6 +1349,8 @@ jobs:
           t node scripts/test-security-headers.js
           # Document headers: pages always, JSON API paths never, an HTML answer under /api again (offline, in-process)
           t node scripts/test-security-headers-unit.js
+          # Security header set per surface class: page, API 200, 402, 404, operator 404, /mcp, static documents, redirects, parser-refused requests (boots paid-mode on port 0)
+          t node scripts/test-security-header-surfaces.js
           t node scripts/test-algorand-page-deadline.js
           # crawl kit (offline)
           t node scripts/test-crawl-kit.js
@@ -2327,6 +2329,12 @@ jobs:
         # of every free-tier tool and skill against a long-input corpus.
         run: node scripts/test-redos-free-tier.js
 
+      - name: No request header holds the event loop on adversarial strings
+        # Boots its own paid-mode server on port 0 and sends the long-input
+        # corpus in each request header to the unpaid surfaces, timing the
+        # event loop from inside the server.
+        run: node scripts/test-redos-request-headers.js
+
       # ONE STEP, MANY SCRIPTS (2026-08-25): GitHub spends ~0.7 s of runner setup
       # per step and this lane had over a hundred one-line steps. Each script still
       # runs in its own process, in the same order; `t` groups its log and names it
@@ -2520,6 +2528,8 @@ jobs:
           t node scripts/test-seo-meta.js
           # Operator auth (A402-07 no ?token= query; session cookie + header; hardened cookie flags — spawns child)
           t node scripts/test-operator-auth.js
+          # Every route the booted router registers under /__operator refuses a caller without the token; the operator view of a public surface reads X-Operator-Token only (boots a real server, offline)
+          t node scripts/test-operator-routes-refuse.js
           # Probe-only credential: STATUS_PROBE_TOKEN opens POST /api/status/probe and NOTHING else, the operator token still works there, and the narrow gate is wired to one route (boots a real server, offline)
           t node scripts/test-status-probe-token.js
           # The status Worker's paid-call challenge: STATUS_PROBE_TOKEN gets a low-difficulty challenge on the probe slug only, its call is booked internal, the mark cannot be forged or reused, and the token buys nothing else (boots two real servers, offline)
