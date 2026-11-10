@@ -27,7 +27,7 @@ import {
   substitutedFrom, TIERS, AUTO_RANKINGS, classifyPrompt, canonicalModel, tierAllows, tierFor, meteredQuoteForProbe, meteredBoundFor,
   isFlatTier, flatTierQuoteUsd, servedTierFor, crossTierDisclosure, AUTO_MODEL, AUTO_TIER,
   clampToMargin, assertMeteredAvailable, attemptsFor, serviceTierFor, validateServiceTier, cacheControlPref, upstreamUserId, PROVIDER_SORT_ENABLED,
-  fetchOpenRouter, upstreamHttpError, refuseUnlistedMeteredModel, streamOpenRouterTo, bad, MAX_IMAGES, maxInputCharsFor, inputTooLargeError,
+  fetchOpenRouter, upstreamHttpError, refuseUnlistedMeteredModel, isInputTooLarge, streamOpenRouterTo, bad, MAX_IMAGES, maxInputCharsFor, inputTooLargeError,
   failoverChain, modelFallbackPref, availabilitySubstitution, retryRateLimited,
   rateLimitDelaysFor, paymentWindowTimeoutMs, timedOutBudget, streamClientWatch, STREAM_TIMEOUT_MS, UPSTREAM_TIMEOUT_MS,
   validateReasoning, reasoningForLink, lowestEffortRetry, recoveryRunAffordable, retryEmptyAtLowestEffort,
@@ -68,6 +68,14 @@ export function meteredResponsesQuoteUsd(input) {
     return { usd: tier.price, invalid: true, reason: String(e?.message || e).slice(0, 160) };
   }
 }
+/** The metered Responses body's input size refusal for the pre-payment check
+ *  (src/gateway-prepayment.js), or null: this wire's own validation is the
+ *  counter, so the two can never disagree about a body. */
+export function meteredResponsesInputSizeRefusal(input) {
+  try { validateResponsesRequest(input, "v1-chat-metered"); } catch (e) { return isInputTooLarge(e) ? e : null; }
+  return null;
+}
+
 const ROLES = new Set(["user", "assistant", "system", "developer"]);
 const SERVER_TOOL_RE = /^(web_search|file_search|computer|mcp|code_interpreter|image_generation|local_shell|shell|apply_patch)/;
 

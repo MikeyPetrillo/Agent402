@@ -100,6 +100,7 @@ import { configureHowToCall, howToCall402Field, howToCallField } from "./how-to-
 import { gatewayCacheGate, commitGatewayCacheWrites } from "./gateway-cache-scope.js";
 import { startModelCatalogRefresh, modelCatalogWanted } from "./model-catalog.js";
 import { toolErrorFields } from "./tool-error-fields.js";
+import { PRE_PAYMENT_WIRES, meteredPrePaymentRefusal } from "./gateway-prepayment.js";
 import { createPrePaymentRefusalRecorder, createPrePaymentLogSampler, stripControlChars, withPushExceptionText } from "./prepayment-refusal.js";
 import { shapeRefusal } from "./input-aliases.js";
 import { setSettlementOverrides } from "@x402/express";
@@ -561,7 +562,7 @@ import { LLM_GEMINI_TOOLS, GEMINI_PATH_BY_TIER } from "./tools/llm-gemini-kit.js
 import { refusalReason } from "./refusal-reason.js";
 import { setKnownProductKeys } from "./posthog.js";
 import { LLM_RESPONSES_TOOLS } from "./tools/llm-responses-kit.js";
-import { LLM_GATEWAY_TOOLS, TIERS, PRICED_BY_MODEL_NOTE, modelsList, promptCacheKey, promptCacheGetShared, promptCacheStore, GATEWAY_TIER_BY_PATH, embeddingsCacheKey, EMBEDDINGS_PATH, rerankCacheKey, RERANK_PATH, gatewayCreditsStatus, oxAlphaAvailable, probeOxAlphaAvailability, canonicalModel, meteredModelVerdict, meteredInputSizeRefusal, OX_ROUTE, oxUpstreamIsFree, isFlatTier, METERED_MAX_QUOTE_USD, warmQuoteTokenCounts, QUOTE_WARM_MIN_CHARS } from "./tools/llm-gateway-kit.js";
+import { LLM_GATEWAY_TOOLS, TIERS, PRICED_BY_MODEL_NOTE, modelsList, promptCacheKey, promptCacheGetShared, promptCacheStore, GATEWAY_TIER_BY_PATH, embeddingsCacheKey, EMBEDDINGS_PATH, rerankCacheKey, RERANK_PATH, gatewayCreditsStatus, oxAlphaAvailable, probeOxAlphaAvailability, OX_ROUTE, oxUpstreamIsFree, isFlatTier, METERED_MAX_QUOTE_USD, warmQuoteTokenCounts, QUOTE_WARM_MIN_CHARS } from "./tools/llm-gateway-kit.js";
 // /v1/audio/speech stays behind OPENROUTER_TTS_ENABLED as a rollout gate:
 // @x402/express (v2.16) runs the handler first and settles only a <400
 // response, so a 502 is never charged — but an UNLISTED route returns no 402
@@ -10206,46 +10207,30 @@ if (CDN_PROXY_ON) app.use(cdnSyncWindowMiddleware({ asyncRouteOf, wantsAsync, ca
 app.use(slowSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPaymentAttempt, followsJobAnswer, isInternal: isInternalReplay, isTempoPush }));
 app.use(asyncJobs.middleware);
 app.get("/api/jobs/:id", asyncJobs.statusHandler);
-// A metered chat body naming a model id the upstream does not serve is
-// refused before any payment gate (src/model-catalog.js, which fails open),
-// so the buyer signs nothing for a call that cannot be served. A Tempo push
-// credential has already paid: its gate's own input check answers it.
+// A metered /v1 body that cannot be served (a model id the upstream does not
+// serve, an input over the model's character cap) is refused before any
+// payment gate on every wire: chat completions, Messages, Responses and
+// generateContent (src/gateway-prepayment.js, one check; src/model-catalog.js
+// fails open), so the buyer signs nothing for a call that cannot be served.
+// The answer is the wire's own error object beside the machine-readable
+// fields and a ready-to-run howToCall. A Tempo push credential has already
+// paid: its gate's own input check answers it.
 app.use((req, res, next) => {
   if (req.method !== "POST" || isTempoPush(req)) return next();
   // req.path is already the catalog's spelling (case and trailing slash
-  // folded above), so the variants are checked too.
+  // folded above, SDK-shaped paths rewritten), so the variants are checked too.
   const def = CATALOG[`POST ${req.path}`];
-  if (def?.slug !== "v1-chat-metered") return next();
+  if (!def || !Object.hasOwn(PRE_PAYMENT_WIRES, def.slug)) return next();
   const startedAt = Date.now();
-  let verdict = null, tooLarge = null;
-  try {
-    const input = handlerInputOf(req, def);
-    const model = canonicalModel(input?.model);
-    verdict = model ? meteredModelVerdict(model) : null;
-    // An input over the model's character cap is refused here too, with the
-    // cap, the size read and models whose window takes it.
-    if (!verdict) tooLarge = meteredInputSizeRefusal(input);
-  } catch { return next(); }
-  if (verdict) {
-    recordPrePaymentRefusal(req, def.slug, 400, verdict.message, startedAt);
-    const suggestions = verdict.suggestions || [];
-    return res.status(400).json({
-      error: { message: verdict.message, type: "invalid_request_error", code: "unknown_model", ...(suggestions.length ? { suggestions } : {}) },
-      tool: def.slug,
-      ...(suggestions.length ? { suggestions, ...howToCallField(def, { bodyFields: { model: suggestions[0] } }) } : howToCallField(def)),
-    });
-  }
-  if (tooLarge) {
-    recordPrePaymentRefusal(req, def.slug, 400, tooLarge.message, startedAt);
-    const fields = toolErrorFields(tooLarge);
-    return res.status(400).json({
-      error: { message: tooLarge.message, type: "invalid_request_error", code: "input_too_large", ...fields },
-      tool: def.slug,
-      ...fields,
-      ...(fields.suggestions ? howToCallField(def, { bodyFields: { model: fields.suggestions[0] } }) : {}),
-    });
-  }
-  return next();
+  let refusal = null;
+  try { refusal = meteredPrePaymentRefusal(def.slug, handlerInputOf(req, def)); } catch { return next(); }
+  if (!refusal) return next();
+  recordPrePaymentRefusal(req, def.slug, refusal.status, refusal.message, startedAt);
+  // The retry: the route's example with the closest served id, when one is
+  // suggested; an unknown id with nothing close gets the plain example.
+  const retry = refusal.suggestions.length ? howToCallField(def, { bodyFields: { model: refusal.suggestions[0] } })
+    : refusal.code === "unknown_model" ? howToCallField(def) : {};
+  return res.status(refusal.status).json({ ...refusal.body, tool: def.slug, ...refusal.fields, ...retry });
 });
 // A large metered body's token count is taken here, in pieces that yield the
 // loop, before the gates price it synchronously (warmQuoteTokenCounts in

@@ -2033,6 +2033,10 @@ export function inputTooLargeError(tierSlug, model, chars, pathByTier = null) {
     " Nothing was charged.");
   return Object.assign(e, { maxInputChars: max, inputChars: chars, hint: "trim-input", ...(suggestions.length ? { suggestions } : {}) });
 }
+/** True for the error inputTooLargeError builds (any wire). */
+export function isInputTooLarge(err) {
+  return err?.hint === "trim-input" && Number.isSafeInteger(err?.maxInputChars) && Number.isSafeInteger(err?.inputChars);
+}
 /** The metered chat body's input size refusal, read before any payment gate
  *  (server.js), or null: under the cap, or a body the handler's own
  *  validation refuses for another reason. Counts characters only. */

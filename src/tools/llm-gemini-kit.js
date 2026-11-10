@@ -31,7 +31,7 @@
 // be a buyer believing they set something they did not.
 import {
   TIERS, canonicalModel, bad, meteredQuoteForProbe, validateRequest, LLM_GATEWAY_TOOLS,
-  isFlatTier, flatTierQuoteUsd,
+  isFlatTier, flatTierQuoteUsd, meteredInputSizeRefusal,
 } from "./llm-gateway-kit.js";
 
 /** Tier slug -> the fixed catalog path for that tier's Gemini route.
@@ -300,6 +300,20 @@ export function repointToGeminiWire(message) {
     out = out.split(chatPath).join(geminiPath);
   }
   return out;
+}
+
+/** The metered Gemini body's input size refusal for the pre-payment check
+ *  (src/gateway-prepayment.js), or null: the chat wire's own count of the
+ *  translated body, which is the body the handler serves, with the message
+ *  naming this wire's route. A body the translation refuses is left to it. */
+export function meteredGeminiInputSizeRefusal(input) {
+  let refusal = null;
+  try {
+    const { chat } = geminiToChat(input, modelOf(input, "v1-chat-metered"));
+    refusal = meteredInputSizeRefusal(chat);
+  } catch { return null; }
+  if (refusal) refusal.message = repointToGeminiWire(refusal.message);
+  return refusal;
 }
 
 export function makeGeminiHandler(tierSlug) {
