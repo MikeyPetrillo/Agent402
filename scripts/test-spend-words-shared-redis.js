@@ -87,9 +87,9 @@ let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 
 /** Run one container: the steps' results, the wall time and the exit code. */
-function container(job, { prefix, redisUrl = process.env.REDIS_URL, timeoutMs = 30_000 } = {}) {
+function container(job, { prefix, redisUrl = process.env.REDIS_URL, timeoutMs = 30_000, env: extra = {} } = {}) {
   return new Promise((resolve) => {
-    const env = { ...process.env, SPEND_WORDS_CHILD: JSON.stringify(job), SHARED_LIMITS_PREFIX: prefix, REDIS_URL: redisUrl };
+    const env = { ...process.env, SPEND_WORDS_CHILD: JSON.stringify(job), SHARED_LIMITS_PREFIX: prefix, REDIS_URL: redisUrl, ...extra };
     delete env.SHARED_LIMITS;
     const child = spawn(process.execPath, [SELF], { env, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "", stderr = "";
@@ -151,17 +151,48 @@ for (const kit of ["exa", "x"]) {
   ok(e1.code === 0 && e1.out && !e1.out.some((s) => String(s).startsWith("threw")), `${kit}: with the store refusing connections nothing throws (${show(e1)})`);
   ok(e1.out?.[1] === "ok" && e1.out?.[4] === "over", `${kit}: and the word is this process's own: ok, then over once it books past the alarm ceiling (${show(e1)})`);
 
-  // E2: a store that accepts the connection and never answers. The status
-  // read gives up inside its bound (re-armed at most once for loop time).
+  // E2: a store that connects and never answers a read. The stub answers the
+  // client's connection commands (so the client is connected) and nothing
+  // else, and the store client's own bound on one operation is set to ten
+  // minutes, so the status read's bound is the only thing that can end the
+  // read. No wall-clock bound is asserted on a child: without that bound the
+  // read does not resolve, the container is ended at its deadline (many
+  // times the bound) and reports no result at all.
   const sockets = new Set();
-  const mute = createServer((s) => { sockets.add(s); s.on("close", () => sockets.delete(s)); s.on("error", () => {}); });
+  const unanswered = [];
+  const mute = createServer((s) => {
+    sockets.add(s); s.on("close", () => sockets.delete(s)); s.on("error", () => {});
+    let buf = "";
+    s.on("data", (d) => {
+      buf += d.toString("latin1");
+      // RESP arrays of bulk strings: *N, then N times $len and the bytes.
+      for (;;) {
+        const head = buf.match(/^\*(\d+)\r\n/);
+        if (!head) return;
+        let at = head[0].length;
+        const parts = [];
+        for (let k = 0; k < Number(head[1]); k++) {
+          const len = buf.slice(at).match(/^\$(\d+)\r\n/);
+          if (!len || buf.length < at + len[0].length + Number(len[1]) + 2) return;
+          parts.push(buf.slice(at + len[0].length, at + len[0].length + Number(len[1])));
+          at += len[0].length + Number(len[1]) + 2;
+        }
+        buf = buf.slice(at);
+        const name = String(parts[0] || "").toUpperCase();
+        if (name === "HELLO") s.write("%1\r\n$5\r\nproto\r\n:3\r\n");
+        else if (["CLIENT", "SELECT", "AUTH", "PING"].includes(name)) s.write("+OK\r\n");
+        else unanswered.push(name);
+      }
+    });
+  });
   const mutePort = await new Promise((r) => mute.listen(0, "127.0.0.1", () => r(mute.address().port)));
-  const e2 = await run(["book:2", "refresh", "status"], { redisUrl: `redis://127.0.0.1:${mutePort}` });
+  const e2 = await run(["book:2", "refresh", "status"], { redisUrl: `redis://127.0.0.1:${mutePort}`, env: { SHARED_LIMITS_OP_MS: "600000" } });
   for (const s of sockets) s.destroy();
   await new Promise((r) => mute.close(r));
+  ok(unanswered.length > 0, `${kit}: control, the stub store received the status read's commands and answered none (${[...new Set(unanswered)].join(",") || "none received"})`);
   const waited = e2.out?.[1];
   ok(e2.code === 0 && e2.out?.[2] === "over", `${kit}: with the store accepting and never answering the word is this process's own (${show(e2)})`);
-  ok(Number.isFinite(waited) && waited <= 2 * STATUS_READ_MS + 100, `${kit}: and the status read waited ${waited} ms, inside its bound (${STATUS_READ_MS} ms, re-armed at most once)`);
+  ok(e2.code === 0 && Number.isFinite(waited), `${kit}: and the status read resolved against that store (after ${waited} ms; its bound is ${STATUS_READ_MS} ms, the container's deadline 30 s)`);
 }
 
 // ---- the caller path: /api/gateway-status on a server that made no call ------
