@@ -11615,6 +11615,43 @@ function noteToolOutcomeOnClose(req, res, slug, def = null) {
   });
 }
 
+// A 4xx whose request named no meaningful key, or none the tool declares, is
+// a scanning call, not a schema mismatch (see the kit binder's catch, which
+// reads the same rule).
+function isProbeShape(shape, tool) {
+  const meaningfulKeys = (shape || []).filter((k) => !["b:params", "b:input", "b:args", "b:slug"].includes(k));
+  const declared = Object.keys(tool?.discovery?.inputSchema?.properties || {});
+  const hitsDeclared = meaningfulKeys.some((k) => declared.includes(k.replace(/^[bq]:/, "")));
+  return meaningfulKeys.length === 0 || (declared.length > 0 && !hitsDeclared);
+}
+// The call-log row for a tool route served outside the kit binder (the URL
+// tools and the memory family): the same recordToolCall row the binder
+// writes, one per call that reached the handler. Latency is the handler's
+// own time; the status is the FINAL response's, read when the response has
+// closed (499 when the buyer left before any answer), so writing the row
+// never delays or changes the answer. An unpaid 402 never reaches a handler
+// and writes no row, as for a kit tool. slugOf is a slug or (req) => slug.
+function withToolCallLog(slugOf, handler) {
+  return async function loggedToolCall(req, res, ...rest) {
+    const startedAt = Date.now();
+    let latencyMs = null;
+    try {
+      res.once("close", () => {
+        try {
+          const slug = typeof slugOf === "function" ? slugOf(req) : slugOf;
+          if (!slug) return;
+          const status = res.headersSent ? res.statusCode : 499;
+          // A 402 here is a settlement that failed after the handler, never a scan.
+          const probe = status >= 400 && status < 500 && status !== 402 && isProbeShape(requestShape(req), CATALOG[`${req.method} ${req.path}`]);
+          recordToolCall({ slug, latencyMs: latencyMs ?? Date.now() - startedAt, cached: false, errored: status >= 400, status, synthetic: isSyntheticRequest(req), probe }).catch(() => {});
+        } catch { /* the call log never affects a call */ }
+      });
+    } catch { /* the call log never affects a call */ }
+    try { return await handler(req, res, ...rest); }
+    finally { latencyMs = Date.now() - startedAt; }
+  };
+}
+
 function sendToolError(res, err, slug) {
   const status = err?.statusCode || 502;
   // Every tool error answer logs through the one function, so a bespoke route's
@@ -11647,7 +11684,7 @@ function contentsUrlOf(req, res, slug) {
   return input.url;
 }
 
-app.post("/api/extract", async (req, res) => {
+app.post("/api/extract", withToolCallLog("extract", async (req, res) => {
   const url = contentsUrlOf(req, res, "extract");
   if (!url) return;
   try {
@@ -11655,9 +11692,9 @@ app.post("/api/extract", async (req, res) => {
   } catch (err) {
     sendToolError(res, err, "extract");
   }
-});
+}));
 
-app.get("/api/meta", async (req, res) => {
+app.get("/api/meta", withToolCallLog("meta", async (req, res) => {
   const { url } = req.query;
   if (!url) return res.status(400).json({ error: 'Missing "url" query parameter' });
   try {
@@ -11665,9 +11702,9 @@ app.get("/api/meta", async (req, res) => {
   } catch (err) {
     sendToolError(res, err, "meta");
   }
-});
+}));
 
-app.get("/api/dns", async (req, res) => {
+app.get("/api/dns", withToolCallLog("dns", async (req, res) => {
   const { name, type } = req.query;
   if (!name) return res.status(400).json({ error: 'Missing "name" query parameter' });
   try {
@@ -11675,9 +11712,9 @@ app.get("/api/dns", async (req, res) => {
   } catch (err) {
     sendToolError(res, err, "dns");
   }
-});
+}));
 
-app.post("/api/render", async (req, res) => {
+app.post("/api/render", withToolCallLog("render", async (req, res) => {
   // Bespoke route (outside the generic binder): record the same tool_call the
   // binder emits, so latency and errors exist for it (none did until 2026-09-22).
   const _t0 = Date.now();
@@ -11701,9 +11738,9 @@ app.post("/api/render", async (req, res) => {
   } catch (err) {
     if (!res.headersSent) sendToolError(res, err, "render");
   }
-});
+}));
 
-app.get("/api/screenshot", async (req, res) => {
+app.get("/api/screenshot", withToolCallLog("screenshot", async (req, res) => {
   // Bespoke route (outside the generic binder): record the same tool_call the
   // binder emits, so latency and errors exist for it (none did until 2026-09-22).
   const _t0 = Date.now();
@@ -11720,9 +11757,9 @@ app.get("/api/screenshot", async (req, res) => {
   } catch (err) {
     if (!res.headersSent) sendToolError(res, err, "screenshot");
   }
-});
+}));
 
-app.post("/api/pdf", async (req, res) => {
+app.post("/api/pdf", withToolCallLog("pdf", async (req, res) => {
   // Bespoke route (outside the generic binder): record the same tool_call the
   // binder emits, so latency and errors exist for it (none did until 2026-09-22).
   const _t0 = Date.now();
@@ -11734,7 +11771,7 @@ app.post("/api/pdf", async (req, res) => {
   } catch (err) {
     sendToolError(res, err, "pdf");
   }
-});
+}));
 
 // The same work these bespoke routes do, as handlers, so a Decide plan run
 // through execute (and route-execute) can call them like any kit tool: they
@@ -11772,7 +11809,7 @@ const targetOwner = (req, actor) => {
   const o = (req.body?.owner ?? req.query.owner ?? "").toString().toLowerCase();
   return o && /^0x[0-9a-f]{40}$/.test(o) ? o : actor;
 };
-const memHandler = (fn) => async (req, res) => {
+const memHandler = (fn) => withToolCallLog((req) => CATALOG[`${req.method} ${req.path}`]?.slug, async (req, res) => {
   // Defense in depth: the PoW gate already refuses memory routes via
   // WALLET_ONLY_SLUGS in src/pow.js, but if that set ever drifts, refuse here
   // too. Memory's whole identity model is "the paying wallet IS the caller",
@@ -11794,7 +11831,7 @@ const memHandler = (fn) => async (req, res) => {
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: redactSecrets(err?.message) });
   }
-};
+});
 
 // Optional client request id: a retried write returns the first answer instead of applying twice.
 const memRequestId = (req) => req.body?.requestId ?? req.header("x-memory-request-id") ?? undefined;
@@ -12133,12 +12170,7 @@ for (const tool of ALL_KIT) {
       // could not have succeeded with any values is a probe, not a tool error;
       // a caller who sent at least one declared key keeps its real 4xx.
       const shape = status < 500 ? requestShape(req) : null;
-      if (status >= 400 && status < 500) {
-        const meaningfulKeys = (shape || []).filter((k) => !["b:params", "b:input", "b:args", "b:slug"].includes(k));
-        const declared = Object.keys(tool.discovery?.inputSchema?.properties || {});
-        const hitsDeclared = meaningfulKeys.some((k) => declared.includes(k.replace(/^[bq]:/, "")));
-        probe = meaningfulKeys.length === 0 || (declared.length > 0 && !hitsDeclared);
-      }
+      if (status >= 400 && status < 500) probe = isProbeShape(shape, tool);
       // What a handler throws is answered and logged, so a configured secret
       // or a credential-bearing URL an error quotes (an upstream echo, a
       // database driver's connection string) is scrubbed first, on every status.

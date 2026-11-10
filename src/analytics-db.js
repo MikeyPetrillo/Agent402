@@ -22,6 +22,11 @@ import { probeDbHost } from "./db-probe.js";
 const { Pool } = pg;
 
 const ANALYTICS_URL = process.env.ANALYTICS_DATABASE_URL || process.env.DATABASE_URL || "";
+// Test sink: ANALYTICS_TEST_CAPTURE=1 makes recordToolCall print each row as a
+// single `[tool-call-test] {json}` line instead of touching a database, so a
+// suite reads the exact rows a boot would have written (the same pattern as
+// POSTHOG_TEST_CAPTURE in src/posthog.js). Never set in production.
+const TEST_CAPTURE = process.env.ANALYTICS_TEST_CAPTURE === "1";
 let pool = null;
 let schemaReady = false;
 // After a failed init the database is not retried for RETRY_AFTER_MS. This
@@ -142,6 +147,11 @@ export async function initAnalyticsDb() {
 // `prePayment`: a refusal answered before any payment gate (server.js
 // recordPrePaymentRefusal); the buyer was never asked to pay for it.
 export async function recordToolCall({ slug, latencyMs, cached, errored, status, synthetic, probe, prePayment = false }) {
+  if (TEST_CAPTURE) {
+    // The row as it would be inserted, one line per call (see TEST_CAPTURE).
+    if (slug) console.log(`[tool-call-test] ${JSON.stringify({ slug: String(slug).slice(0, 128), latencyMs: Math.max(0, latencyMs | 0), cached: !!cached, errored: !!errored, status: Math.max(0, Math.min(599, status | 0)), synthetic: !!synthetic, probe: !!probe, prePayment: !!prePayment })}`);
+    return;
+  }
   if (!ANALYTICS_URL || unavailable()) return;
   if (!slug) return;
   try {
