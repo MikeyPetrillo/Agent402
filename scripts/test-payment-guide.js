@@ -96,7 +96,31 @@ async function boot(label, extra, cwd = ROOT) {
   });
   const url = `http://127.0.0.1:${port}`;
   for (let i = 0; i < 240; i++) { try { if ((await fetch(`${url}/health`)).ok) break; } catch { /* booting */ } await new Promise((r) => setTimeout(r, 250)); }
+  bootLogs.set(url, () => log);
+  bootChildren.set(url, child);
   return url;
+}
+// A server reads the facilitator's /supported once as it boots and offers
+// only the networks that read confirmed. Three servers boot at once here, and
+// on a busy runner one of them can miss that read and come up offering fewer
+// networks: its 402 then differs from its neighbor's by a whole accept, which
+// is not what this suite compares. Each boot is held to the networks its
+// environment names; one that came up short is stopped, its boot lines about
+// the read are printed, and it is booted again alone (twice at most).
+const bootLogs = new Map(), bootChildren = new Map();
+const networksOf = async (url) => { try { return (await (await fetch(`${url}/api/pricing`)).json()).payment?.networks || []; } catch { return []; } };
+let reboots = 0;
+async function bootOffering(want, label, extra, cwd = ROOT) {
+  for (let attempt = 0; ; attempt++) {
+    const url = await boot(attempt ? `${label}-again${attempt}` : label, extra, cwd);
+    const offered = await networksOf(url);
+    if (JSON.stringify([...offered].sort()) === JSON.stringify([...want].sort())) return url;
+    const lines = String(bootLogs.get(url)?.() || "").split("\n").filter((l) => /supported|facilitator|WARNING/i.test(l)).slice(0, 8);
+    console.log(`# boot ${label} offered ${JSON.stringify(offered)}, wanted ${JSON.stringify(want)} (attempt ${attempt + 1}); its boot lines: ${JSON.stringify(lines.map((l) => l.slice(0, 200)))}`);
+    if (attempt >= 2) return url;
+    reboots++;
+    try { bootChildren.get(url)?.kill("SIGTERM"); } catch { /* already gone */ }
+  }
 }
 const METERED_BODY = { model: "anthropic/claude-haiku-5.5", messages: [{ role: "user", content: "Name three rivers." }], max_tokens: 200 };
 const REQUESTS = {
@@ -120,10 +144,14 @@ const acceptOn = (body, network) => (body?.accepts || []).find((a) => a.network 
 
 try {
   const [A, B, C] = await Promise.all([
-    boot("a", {}),
-    BASE_TREE ? boot("base-tree", {}, BASE_TREE) : boot("off", { PAYMENT_GUIDE_402: "off" }),
-    boot("c", { NETWORK: "optimism", PAYMENT_NETWORKS: "optimism" }),
+    bootOffering(["base", "optimism"], "a", {}),
+    BASE_TREE ? bootOffering(["base", "optimism"], "base-tree", {}, BASE_TREE) : bootOffering(["base", "optimism"], "off", { PAYMENT_GUIDE_402: "off" }),
+    bootOffering(["optimism"], "c", { NETWORK: "optimism", PAYMENT_NETWORKS: "optimism" }),
   ]);
+  {
+    const [na, nb, nc] = await Promise.all([networksOf(A), networksOf(B), networksOf(C)]);
+    ok(JSON.stringify([...na].sort()) === '["base","optimism"]' && JSON.stringify([...nb].sort()) === '["base","optimism"]' && JSON.stringify(nc) === '["optimism"]', `control: each boot offers the networks its environment names (A ${JSON.stringify(na)}, B ${JSON.stringify(nb)}, C ${JSON.stringify(nc)}; ${reboots} booted again)`);
+  }
   const B_NAME = BASE_TREE ? "the batch base tree" : "the block switched off";
   const pricing = await (await fetch(`${A}/api/pricing`)).json();
   const listed = (path) => (pricing.endpoints || []).find((e) => e.path === path) || (pricing.llmGateway?.tiers || []).find((t) => t.path === path);

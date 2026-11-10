@@ -5,6 +5,7 @@ const ENTRIES = [
     date: "2026-11-10",
     title: "Wire parity and payment answers",
     items: [
+      "Gateway: a byte-identical paid repeat on /v1/embeddings, /v1/rerank and cache:true chat is served from the payer's cache when paid with the standard x402 v2 client; from 2026-11-06 those repeats were generated and charged again.",
       "Gateway: a metered body that cannot be served (an unlisted model id, an input over the model's cap) answers 400 before any payment requirement on the Messages, Responses and generateContent routes, as it does on chat completions, each in the error shape its own SDK parses.",
       "Gateway: the Messages and Responses routes answer an unlisted metered model id with 400 (code unknown_model, with suggestions), and an input over the cap names the calling wire's own routes.",
       "Gateway: a buffered Messages or Responses call whose provider refuses the request answers 400 naming the model, as chat completions and every streamed call do; it had answered 502.",

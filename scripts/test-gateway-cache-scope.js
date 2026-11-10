@@ -21,7 +21,9 @@
 //   - a body no payer holds an entry for runs no signature recovery (the
 //     presence marker the commit writes beside each entry);
 //   - the proof reads the network in the one spelling the replay guard keys
-//     on, and a validity window no longer than the guard's settled hold;
+//     on, and a validity window no longer than the guard's settled hold, or
+//     the stock x402 v2 client's form (valid from the epoch, expiring at the
+//     accept's maxTimeoutSeconds);
 //   - recoveries are memoized on everything the signature covers (bounded,
 //     least recently used out), and the guard's read is one MGET;
 //   - server.js mounts the gate and commits deferred writes through the scope.
@@ -33,7 +35,8 @@ import { readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import express from "express";
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
-import { gatewayCacheGate, scopedCacheKey, writerCacheScope, readerCacheScope, provenX402Signer, presenceCacheKey, commitGatewayCacheWrites, proofRecoveryCount, proofMemoSize, PROOF_MEMO_MAX, __setProofMemoMax } from "../src/gateway-cache-scope.js";
+import { gatewayCacheGate, scopedCacheKey, writerCacheScope, readerCacheScope, provenX402Signer, presenceCacheKey, commitGatewayCacheWrites, proofRecoveryCount, proofMemoSize, PROOF_MEMO_MAX, __setProofMemoMax, STOCK_MAX_TIMEOUT_SEC, STOCK_EXPIRY_SLACK_SEC } from "../src/gateway-cache-scope.js";
+import { DEFAULT_MAX_TIMEOUT_SECONDS } from "../src/evm-validity.js";
 import { carriesPaymentAttempt } from "../src/payment-attempt.js";
 import { stableStringify, promptCacheGetShared, promptCacheStore, EMBEDDINGS_PATH } from "../src/tools/llm-gateway-kit.js";
 import { ALLOWANCE_STATE } from "../src/allowance-state.js";
@@ -375,6 +378,25 @@ try {
     ok((await call({ "payment-signature": spanned }, body)).status === 402, "long validity: a window that ends inside the hold from now but spans more than the hold is not served");
     ok((await call({ "payment-signature": await signedHeader(alice, { validAfter: now() - 600, validBefore: now() + 300 }) }, body)).cache === "hit", "long validity: a stock window (ten minutes back, five ahead) is a hit");
     ok((await provenX402Signer(long, { payTo: PAY_TO, anyTime: true })) === alice.address.toLowerCase(), "long validity: the writer's proof (no window) still names the payer");
+    // The stock x402 v2 exact client signs validAfter "0" and validBefore =
+    // now + the accept's maxTimeoutSeconds: a window that is never short. It
+    // is read while it expires no later than that client sets an expiry, and
+    // not when it expires further out (scripts/test-gateway-cache-paid-path.js
+    // pays with the client itself against a booted server).
+    ok(STOCK_MAX_TIMEOUT_SEC === DEFAULT_MAX_TIMEOUT_SECONDS, "stock v2 window: the read's expiry bound is the maxTimeoutSeconds every accept asks");
+    ok((await call({ "payment-signature": await signedHeader(alice, { validAfter: 0, validBefore: now() + STOCK_MAX_TIMEOUT_SEC }) }, body)).cache === "hit", "stock v2 window: valid from the epoch, expiring at the accept's maxTimeoutSeconds from now, is a hit");
+    ok((await call({ "payment-signature": await signedHeader(alice, { validAfter: 0, validBefore: now() + STOCK_MAX_TIMEOUT_SEC + STOCK_EXPIRY_SLACK_SEC + 30 }) }, body)).status === 402, "stock v2 window: valid from the epoch and expiring past the stock expiry plus the clock allowance is not served");
+    ok((await call({ "payment-signature": await signedHeader(alice, { validAfter: 0, validBefore: now() - 1 }) }, body)).status === 402, "stock v2 window: valid from the epoch and expired is not served");
+    ok((await call({ "payment-signature": await signedHeader(mallory, { validAfter: 0, validBefore: now() + STOCK_MAX_TIMEOUT_SEC }) }, body)).status === 402, "stock v2 window: another wallet's payment in the same form reads nothing");
+    {
+      const used = await signedHeader(alice, { validAfter: 0, validBefore: now() + STOCK_MAX_TIMEOUT_SEC });
+      const held = createReplayGuard();
+      const uk = await paymentReplayKeyAsync(fakeReq({ "payment-signature": used }));
+      await held.begin(uk); await held.settle(uk);
+      const lapsed = guard; guard = held;
+      ok((await call({ "payment-signature": used }, body)).status === 402, "stock v2 window: one the guard holds as settled reads nothing");
+      guard = lapsed;
+    }
     guard = createReplayGuard();
   }
   // A configured shared store that does not answer holds everything.

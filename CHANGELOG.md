@@ -8,6 +8,9 @@ carries its own version on npm.
 
 ### 2026-11-10 (wire parity and payment answers)
 Gateway:
+- A byte-identical paid repeat on /v1/embeddings, /v1/rerank and cache:true
+  chat is served from the payer's cache when paid with the standard x402 v2
+  client; from 2026-11-06 those repeats were generated and charged again.
 - A metered body that cannot be served (an unlisted model id, an input over
   the model's cap) answers 400 before any payment requirement on the Messages,
   Responses and generateContent routes, as it does on chat completions, each
