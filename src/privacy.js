@@ -19,6 +19,7 @@ import { firstCallAllowanceEnabled } from "./first-call-allowance.js";
 import { directUpstreamPrivacyText, directUpstreamThirdPartyText, directUpstreamLocationText, withDirectUpstreamDate } from "./gateway-direct-upstream.js";
 import { taskRetentionPublic } from "./mcp-tasks.js";
 import { oneHopPublicBounds } from "./sanctions-screen.js";
+import { endedRecordRetentionPublic } from "./mpp-subscription-retention.js";
 import { publicIndexPrivacyText, publicIndexNoSaleText, withPublicIndexDate, PUBLIC_INDEX_ANCHOR } from "./facilitator-public-index.js";
 const DAYS = (ms) => Math.round(ms / 86_400_000);
 export function privacyPage(baseUrl) {
@@ -33,6 +34,9 @@ export function privacyPage(baseUrl) {
   // them (src/mcp-tasks.js, src/sanctions-screen.js).
   const jobs = taskRetentionPublic();
   const oneHop = oneHopPublicBounds();
+  // An ended MPP subscription's reduced record, as the engine keeps it
+  // (src/mpp-subscription-retention.js).
+  const mppSub = endedRecordRetentionPublic();
   // Shared answers and the first-call allowance each ship behind a switch:
   // their lines appear only while the switch is on. The shared-answer line
   // also stays, in the past tense, while pages made under the switch may
@@ -185,7 +189,13 @@ so every claim below is verifiable in code.</p>
   subject you asked us to watch, the email you give for delivery (optional), and a signing key our server
   made for that subscription. Your signed authorization lets that key send one payment per period from your
   account, in one token, to our address, up to the subscription price, until the expiry you signed. The
-  record, including the key, is kept for the life of the subscription and after it ends.
+  key is kept only while a later payment can still be taken: it is deleted from our records when you cancel,
+  when the expiry you signed passes, or when the subscription ends for any other reason (a nightly backup
+  made before then holds a copy until that backup is deleted, see Backups below). When the subscription
+  ends, its record is reduced to the subscription's id and product, the paying wallet, the key's public
+  address, the amount and billing period, the dates, the final state and the last payment's transaction;
+  the email and the subject you asked us to watch are removed. A check that runs every ${mppSub.sweepMinutes} minutes
+  does this for a subscription that ends on a date, and deletes the reduced record ${mppSub.keepDays} days after the subscription ends.
   Payments settle in USDC on the public Base blockchain (or the other chains listed at <a href="/pricing">/pricing</a>,
   USDG on Robinhood Chain, or MPP on Base, Celo or Tempo) via the x402 or MPP protocol; ${gatewayBatched ? "for a payment settled on chain, " : ""}wallet addresses, amounts, and
   timestamps are public on-chain by the protocol's design, not collected by us. ${gatewayBatched ? "Circle Gateway batched payments are verified and settled by Circle Gateway off chain; the sales ledger keeps Gateway's transfer id for them. " : ""}Payment verification ${gatewayBatched ? "for every other payment " : ""}is
@@ -308,7 +318,8 @@ product and the subject you asked about) is deleted ${DAYS(RECORD_KEEP_MS)} days
 entries are deleted ${auditRetentionDays()} days after they are written, and demand-board request text
 ${wishRetentionDays()} days after it was sent. Decisions bought on <code>/api/decide</code> are deleted after 30 days. An async job's or MCP task's result
 is deleted ${jobs.keptFor} after the job was created, and a wallet's funding-screen result after ${oneHop.ttlDays} days. An MPP
-monitor subscription's record is kept after the subscription ends. You can ask
+monitor subscription's signing key is deleted when the subscription is canceled or ends, and its reduced
+record ${mppSub.keepDays} days after it ends. You can ask
 us at the address below to delete your email from our alert, follow-up and subscription
 records; the card processor's copy is deleted through Stripe. The sales ledger keeps wallet addresses and transaction ids, which are already public
 on-chain${gatewayBatched ? " (for a Circle Gateway batched payment, it keeps Gateway's transfer id instead)" : ""}. Aggregate, non-personal counters (total calls served per tool) are kept for the public

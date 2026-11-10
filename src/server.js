@@ -3184,6 +3184,11 @@ if (_mppSubs) {
     _mppSubs.sweepStaleCanaries().catch((e) => console.warn("[mpp-subs] canary sweep failed:", String(e?.message || e).slice(0, 200)));
   }, 60_000);
   t.unref?.();
+  // The ended-subscription sweep (leased): destroys an ended subscription's
+  // signing key, reduces its record and deletes it after the retention
+  // period (src/mpp-subscription-retention.js). Never touches one that can
+  // still be pulled.
+  _mppSubs.start();
 }
 // Prepaid card credits (src/credits.js): same rollout switch
 // as the human checkout. The GATE mounts inside the paywall block below
