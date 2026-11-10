@@ -166,7 +166,12 @@ function start() {
       clearTimeout(job.timer);
       job.startedAt = performance.now();
       emit("started", { lane: lane.index, job: job.id, worker: worker.wid, costly: job.costly, caller: job.caller?.key });
-      job.timer = setTimeout(() => (job.costly ? stop(lane, job) : move(lane, job)), job.costly ? RENDER_DEADLINE_MS : ORDINARY_BUDGET_MS);
+      // The timer measures this thread's clock, not the render: after a hold
+      // of this thread it fires in the timers phase, before the poll phase
+      // has read a result the worker posted during the hold. One setImmediate
+      // (after that poll phase) lets a finished render settle first; move and
+      // stop then find the lane no longer holds the job and do nothing.
+      job.timer = setTimeout(() => setImmediate(() => (job.costly ? stop(lane, job) : move(lane, job))), job.costly ? RENDER_DEADLINE_MS : ORDINARY_BUDGET_MS);
       return;
     }
     if (msg.error) settle(lane, "reject", Object.assign(new Error(msg.error), { statusCode: msg.statusCode || 500 }));
@@ -195,6 +200,7 @@ function start() {
 
 /** A costly render past its deadline: the document is the cause. */
 function stop(lane, job) {
+  if (lane.job !== job) return;
   settle(lane, "reject", Object.assign(new Error(`"markdown" took longer than ${RENDER_DEADLINE_MS / 1000} s to render and was stopped (long runs of unclosed emphasis or code markers, or very deep quote nesting, are the usual cause); close the markers or send the document in parts`), { statusCode: 400 }));
   retire(lane);
   pump();

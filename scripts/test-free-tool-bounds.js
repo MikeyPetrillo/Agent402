@@ -427,6 +427,33 @@ function rng(seed) {
   // first document after a stopped render meets a worker that has to start, and is served.
   const after = await tool.handler({ markdown: docOf(30_000) });
   ok(after.html.startsWith('<h1 id="title-here">'), "markdown-to-html: the next document renders after a stopped one");
+  // A HELD SERVING THREAD IS NOT A SLOW RENDER. The budget is a timer on this
+  // thread: with the thread held past the budget while a fast render is in
+  // flight, the timer is due before the result (posted during the hold) has
+  // been read. The document must be answered from that render: not moved,
+  // no worker ended, none started. The hold runs in the check phase, so the
+  // next loop turn reaches the timers phase first.
+  {
+    const quick = "# T\n\n" + "Some *text* with **bold** and `code`.\n\n".repeat(4000);
+    await runMarkdown(quick, { costly: false });
+    let mark = events.length;
+    await runMarkdown(quick, { costly: false });
+    const control = events.slice(mark);
+    const renderMs = control.find((e) => e.type === "ended").at - control.find((e) => e.type === "started").at;
+    mark = events.length;
+    const movedBefore = markdownPoolState().moved;
+    let held = 0;
+    const onStart = () => {
+      markdownPoolEvents.off("started", onStart);
+      setImmediate(() => { const t = performance.now(); while (performance.now() - t < ORDINARY_BUDGET_MS + 200) { /* hold the thread */ } held = performance.now() - t; });
+    };
+    markdownPoolEvents.on("started", onStart);
+    const got = await runMarkdown(quick, { costly: false }).catch((e) => ({ err: e }));
+    await new Promise((r) => setTimeout(r, 50));
+    const since = events.slice(mark).map((e) => e.type + (e.how ? ":" + e.how : ""));
+    ok(renderMs < ORDINARY_BUDGET_MS / 2 && held > ORDINARY_BUDGET_MS, "markdown-to-html: control, the document renders in " + renderMs.toFixed(0) + "ms and the thread was held " + held.toFixed(0) + "ms, past the " + ORDINARY_BUDGET_MS + "ms budget");
+    ok(typeof got.html === "string" && since.join() === "started,ended:done" && markdownPoolState().moved === movedBefore, "markdown-to-html: a render that finished while the serving thread was held is answered from that render, not moved, with no worker ended or started (" + since.join() + ")");
+  }
   // THE ORDINARY BUDGET. Whatever the estimate said, a render that started as
   // ordinary holds its worker for the budget at most; then it moves to the
   // costly lane and ends there. Timing below is read from the pool's own
