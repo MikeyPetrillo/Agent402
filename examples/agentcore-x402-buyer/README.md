@@ -1,4 +1,4 @@
-# AgentCore x402 buyer — buy an Agent402 tool from a Bedrock AgentCore agent
+# AgentCore x402 buyer - buy an Agent402 tool from a Bedrock AgentCore agent
 
 A minimal sample showing an **AWS Bedrock AgentCore** agent paying for an
 **Agent402** tool over **x402**. The AgentCore-managed wallet holds the funds and
@@ -30,7 +30,7 @@ proof loop has an answer it can check.
 Agent402 (and 10,000+ x402 sellers) return **HTTP 402** with the payment terms in
 a `payment-required` header. AgentCore Payments (built with Coinbase + Stripe)
 reads that 402, authorizes a USDC micropayment from the agent's scoped wallet, and
-the request is retried with the payment proof — settling on-chain to the seller's
+the request is retried with the payment proof - settling on-chain to the seller's
 own address. AgentCore Payments speaks **both x402 and MPP**, which are exactly the
 two rails Agent402 serves.
 
@@ -41,7 +41,7 @@ two rails Agent402 serves.
 > steers the plugin to the x402 offer in the same 402 automatically, so `direct_buy.py`
 > works as written. Nothing to configure here.
 
-> Note: AgentCore's Gateway cannot pay a 402 on the Gateway→target hop — payment is
+> Note: AgentCore's Gateway cannot pay a 402 on the Gateway→target hop - payment is
 > an **agent-side** capability (this Payments plugin). That's why this sample runs
 > the buy from the agent, and why the headline discovery path for paid tools is the
 > **Coinbase x402 Bazaar** Gateway target + this plugin.
@@ -50,14 +50,14 @@ two rails Agent402 serves.
 
 1. **AWS account + Agent Toolkit** (one-time). Sign in (`aws login --profile agent402`)
    and install the `aws-agents` plugin (`claude plugin install aws-agents@agent-toolkit-for-aws`).
-2. **Bedrock model access** for the agent's LLM (Console → Bedrock → Model access) —
+2. **Bedrock model access** for the agent's LLM (Console → Bedrock → Model access) -
    `agent_buy.py` only.
-3. **Payment resources** — let the `agents-pay` skill provision them:
+3. **Payment resources** - let the `agents-pay` skill provision them:
    in Claude Code, *"set up microtransactions for my agent using the agents-build skill."*
    It creates a **Payment Credential Provider → Payment Manager → Connector → Instrument
-   → Session**, pausing to (a) enter your wallet-provider secrets (**Coinbase CDP** —
+   → Session**, pausing to (a) enter your wallet-provider secrets (**Coinbase CDP** -
    which needs an AWS Marketplace subscription to *Coinbase Wallets for AgentCore
-   Payments* — or **Stripe Privy**) and (b) fund + authorize the wallet.
+   Payments* - or **Stripe Privy**) and (b) fund + authorize the wallet.
 4. **Fund the wallet.**
    - **Testnet (free, do this first):** fund with Base Sepolia USDC from the
      [Circle faucet](https://faucet.circle.com/) and set
@@ -84,7 +84,7 @@ paid JSON, and `VERIFIED: sha256('hello world') == b94d27b9…`.
 
 ## Notes
 
-- Spend is bounded by the **Payment Session** limit you set (default $5) — the agent
+- Spend is bounded by the **Payment Session** limit you set (default $5) - the agent
   cannot exceed it.
 - On the FREE AWS plan, a project **spend limit** can pause the project; if a
   previously-working call starts returning AccessDenied, check AWS Settings → Billing.

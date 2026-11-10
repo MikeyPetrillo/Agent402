@@ -132,7 +132,7 @@ function makeResearchHandlerInner(tierSlug) {
   return async (input, req, deps = {}) => {
     if (!input || typeof input !== "object") throw bad('Body must be a JSON object: {"query": "…"}');
     const query = typeof input.query === "string" ? input.query.trim() : "";
-    if (!query) throw bad('"query" (string) is required — the research question to investigate');
+    if (!query) throw bad('"query" (string) is required: the research question to investigate');
     if (query.length > MAX_QUERY_CHARS) throw bad(`"query" too long (${query.length} chars; max ${MAX_QUERY_CHARS})`);
     const focus = Array.isArray(input.focus) ? input.focus.filter((x) => typeof x === "string").slice(0, 8) : [];
     const recency = ["week", "month", "year", "any"].includes(input.recency) ? input.recency : "any";
