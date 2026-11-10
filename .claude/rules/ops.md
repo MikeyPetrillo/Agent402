@@ -142,8 +142,13 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   (`off`). `X_DATA_DAILY_HARD_MAX_USD` (default 5 times the alarm ceiling; never under it) is
   where a read is refused 503 and the word reads `capped`. The status Worker and `heartbeat.yml`
   page on `over` and `capped` under one issue ("X data daily spend OVER its ceiling") and close it
-  on `ok` or `off` (`scripts/test-x-data-ceilings.js`).
-- **Exa ceilings:** the same two ceilings and words (`src/daily-ceilings.js`): `EXA_DAILY_MAX_USD`
+  on `ok` or `off` (`scripts/test-x-data-ceilings.js`). The word is built from the larger of this
+  process's day and the shared day counter the refusal reads (one read of at most `STATUS_READ_MS`
+  per status answer, reused 5 s; a failed read leaves this process's own figure), so a new
+  container does not read `ok` on a day already past a ceiling, and a refusal on any replica
+  holds `capped` for `REFUSAL_HOLD_MS` (an hour; a refused call books nothing, so the total can
+  sit under the ceiling) (`src/daily-ceilings.js`, `scripts/test-spend-words-shared-redis.js`).
+- **Exa ceilings:** the same two ceilings and words, read the same way (`src/daily-ceilings.js`): `EXA_DAILY_MAX_USD`
   (default 1; `0` refuses every call) is the alarm and `exaSpend` reads `over` past it while the
   Exa tools keep serving; `EXA_DAILY_HARD_MAX_USD` (default 5 times the alarm ceiling; never
   under it) refuses 503 and reads `capped`. Paged under "Exa daily spend OVER its ceiling",

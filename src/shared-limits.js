@@ -424,9 +424,22 @@ export function createSharedDailySpend(name, control, { day = (now) => new Date(
       const r = await shared.counterGet(name, day(now));
       return r.ok ? r.value / scale : null;
     },
+    /** A refusal at the cap, held `holdMs` for every replica's status word (a flag per day). */
+    noteRefused(holdMs, now = Date.now()) {
+      if (sharedLimitsEnabled()) void sharedWrite(control, shared.flagSet(`${name}-refused`, day(now), now + holdMs, { now }));
+    },
+    /** One read for a status word: the day's shared total in stored units and
+     *  the refusal hold's end, or null when the store did not answer. */
+    async view(now = Date.now()) {
+      if (!sharedLimitsEnabled()) return null;
+      const [c, f] = await Promise.all([shared.counterGet(name, day(now)), shared.flagGet(`${name}-refused`, day(now), { now })]);
+      return c.ok && f.ok ? { day: day(now), units: c.value, refusedUntil: f.until } : null;
+    },
     /** Test seam: the day's shared counter is dropped (beside the kit's own reset). */
     reset(now = Date.now()) {
-      if (sharedLimitsEnabled()) void sharedWrite(control, shared.counterClear(name, day(now)));
+      if (!sharedLimitsEnabled()) return;
+      void sharedWrite(control, shared.counterClear(name, day(now)));
+      void sharedWrite(control, shared.flagSet(`${name}-refused`, day(now), 0, { now }));
     },
   };
 }

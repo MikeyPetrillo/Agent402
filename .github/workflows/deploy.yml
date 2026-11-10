@@ -1389,6 +1389,8 @@ jobs:
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
           t node scripts/test-shared-limits.js
           t node scripts/test-shared-limits-crossprocess.js
+          # exaSpend and xDataSpend in a new process: over from the shared day, capped while another process refuses, this process's own word inside a bounded wait when the store does not answer.
+          t node scripts/test-spend-words-shared-redis.js
           # A close made while a connect is still in flight ends that connect too.
           t node scripts/test-shared-redis-close.js
           # The in-flight run cover: memory, a store that does not answer (local ledger decides), and real Redis.

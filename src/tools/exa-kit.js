@@ -45,7 +45,7 @@ import { markUntrusted } from "./provenance.js";
 import { upstreamCosts } from "../upstream-costs.js";
 import { meterUpstreamSpend } from "../posthog.js";
 import { createSharedDailySpend } from "../shared-limits.js";
-import { dailyCeilings, ceilingWord, noteOverAlarm } from "../daily-ceilings.js";
+import { dailyCeilings, ceilingWord, noteOverAlarm, createSharedCeilingView, REFUSAL_HOLD_MS } from "../daily-ceilings.js";
 
 const EXA_API = "https://api.exa.ai";
 import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
@@ -102,8 +102,10 @@ function requireKey() {
 //     A call that would take the day past it is refused 503 (uncharged, so a
 //     >= 400 cancels settlement and nobody pays for the refusal) and the word
 //     reads `capped`, which pages too.
-// In memory: a restart resets the day, exactly like the other spend guards,
-// and the prepaid balance is the outer bound: with the balance spent the
+// A restart resets this process's day; the shared day counter (below) does
+// not, and both the refusal and the status word read it. A refusal holds the
+// word at `capped` for an hour on every replica, since a refused call books
+// nothing. The prepaid balance is the outer bound: with the balance spent the
 // upstream refuses and the tools answer 503 whatever these ceilings say.
 // Exa's card (search, instant and lite per request at <= 10 results, answer per
 // request, content per page per type) is private: src/upstream-costs.js,
@@ -131,11 +133,11 @@ const exaCeilings = () => dailyCeilings("EXA_DAILY_MAX_USD", "EXA_DAILY_HARD_MAX
 const EXA_CREDITS_USD = () => { const n = Number(process.env.EXA_CREDITS_USD); return Number.isFinite(n) && n > 0 ? n : null; };
 const EXA_LOW_FRACTION = () => { const n = Number(process.env.EXA_LOW_FRACTION); return Number.isFinite(n) && n > 0 && n < 1 ? n : 0.25; };
 const lifetime = { micro: 0, since: Date.now() };
-const spend = { day: "", micro: 0, refused: 0, calls: 0, overLogged: "" };
+const spend = { day: "", micro: 0, refused: 0, refusedAt: 0, calls: 0, overLogged: "" };
 const utcDay = (now = Date.now()) => new Date(now).toISOString().slice(0, 10);
 const spentToday = (now = Date.now()) => {
   const d = utcDay(now);
-  if (spend.day !== d) { spend.day = d; spend.micro = 0; spend.refused = 0; spend.calls = 0; spend.overLogged = ""; }
+  if (spend.day !== d) { spend.day = d; spend.micro = 0; spend.refused = 0; spend.refusedAt = 0; spend.calls = 0; spend.overLogged = ""; }
   return spend.micro / 1e6;
 };
 
@@ -170,31 +172,42 @@ export function actualExaUsd(data) {
   return typeof t === "number" && Number.isFinite(t) && t >= 0 ? t : null;
 }
 
-/** Counts only - never a key, a query or a buyer. */
+/**
+ * Counts only - never a key, a query or a buyer. The day's figure is the
+ * larger of this process's own and the shared day counter last read by
+ * refreshExaSpendShared (a new process starts at zero; the shared counter,
+ * which the refusal reads, does not).
+ */
 export function exaSpendStatus(now = Date.now()) {
-  const spent = spentToday(now);
+  spentToday(now);
   const c = exaCeilings();
+  const micro = Math.max(spend.micro, exaView.micro(now));
+  const refusing = (spend.refusedAt > 0 && now - spend.refusedAt < REFUSAL_HOLD_MS) || exaView.refusing(now);
   return {
     day: spend.day,
-    spentUsd: Number(spent.toFixed(4)),
+    spentUsd: Number((micro / 1e6).toFixed(4)),
     capUsd: c.alarmUsd,
     hardCapUsd: c.hardUsd,
     refusedToday: spend.refused,
-    // off: the switch refuses every call. capped: the hard ceiling refuses.
-    // over: past the alarm ceiling and still serving. over and capped page.
-    status: ceilingWord(spend.micro, c),
+    // off: the switch refuses every call. capped: the hard ceiling refuses, or
+    // refused a call inside the hold. over: past the alarm ceiling and still
+    // serving. over and capped page.
+    status: ceilingWord(micro, c, { refusing }),
   };
 }
+/** One bounded read of the shared day for the status word; never rejects. */
+export function refreshExaSpendShared(now = Date.now()) { return exaView.refresh(now); }
 /** Calls our Exa tools sent today. The index crawlers also read api.exa.ai
  *  (Exa is an indexed x402 and MPP seller), unpaid, so a host-level count of
  *  that domain is not this number. */
 export function exaCallsToday(now = Date.now()) { spentToday(now); return spend.calls; }
-export function _exaSpendReset() { spend.day = ""; spend.micro = 0; spend.refused = 0; spend.calls = 0; spend.overLogged = ""; exaShared.reset(); }
+export function _exaSpendReset() { spend.day = ""; spend.micro = 0; spend.refused = 0; spend.refusedAt = 0; spend.calls = 0; spend.overLogged = ""; exaShared.reset(); exaView.reset(); }
 // Shared across replicas (src/shared-limits.js): the day's spend is also a
 // shared counter per UTC day, reserved before the call and corrected after; a
 // reserve that takes the shared total past the hard ceiling is given back and refused.
 // The local counter stays the floor when the store does not answer.
 const exaShared = createSharedDailySpend("exa-day", "exa");
+const exaView = createSharedCeilingView(exaShared);
 export function _exaSpendBook(usd) { spentToday(); spend.micro += Math.round(usd * 1e6); lifetime.micro += Math.round(usd * 1e6); }
 
 /**
@@ -258,7 +271,9 @@ async function exaPost(path, rawBody) {
   // The refusing ceiling: the hard one, or nothing at all while the switch is 0.
   const { alarmUsd: soft, refuseAtUsd: cap } = exaCeilings();
   const estimate = estimateExaUsd(path, body);
-  const capped = () => { spend.refused++; return bad(`Exa tools have reached today's usage cap - retry after 00:00 UTC. This call is not charged on x402.`, 503); };
+  // A refusal at the hard ceiling (not the 0 switch, whose word is off) is
+  // noted here and on the shared store, so every replica's word reads capped.
+  const capped = () => { spentToday(); spend.refused++; if (cap > 0) { spend.refusedAt = Date.now(); exaShared.noteRefused(REFUSAL_HOLD_MS); } return bad(`Exa tools have reached today's usage cap - retry after 00:00 UTC. This call is not charged on x402.`, 503); };
   // The shared reserve first (an atomic add on the store, awaited only when
   // there is one): over the cap there, nothing is booked here. Then this
   // process's check and booking, with no await between them.

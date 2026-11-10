@@ -11,7 +11,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import { EXA_TOOLS, estimateExaUsd, exaSpendStatus, exaAllowanceStatus, _exaSpendReset, _exaSpendBook, _exaLifetimeReset } from "../src/tools/exa-kit.js";
-import { dailyCeilings, ceilingWord, HARD_MULTIPLIER } from "../src/daily-ceilings.js";
+import { dailyCeilings, ceilingWord, HARD_MULTIPLIER, REFUSAL_HOLD_MS, createSharedCeilingView } from "../src/daily-ceilings.js";
 import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
 requireUpstreamCosts("test-exa-ceilings");
 
@@ -65,9 +65,20 @@ try {
   _exaSpendBook(5.5 * E);
   r = await call();
   ok(r.error?.statusCode === 503 && /usage cap/.test(r.error.message) && /not charged on x402/.test(r.error.message) && !/\$\d/.test(r.error.message) && fetched === 0, "a call that would pass the hard ceiling is refused 503 before any fetch");
-  ok(exaSpendStatus().refusedToday === 1 && exaSpendStatus().status === "over", "the refusal is counted and books nothing; short of the hard ceiling the word reads over");
+  ok(exaSpendStatus().refusedToday === 1 && Math.abs(exaSpendStatus().spentUsd - 5.5 * E) < 1e-4, "the refusal is counted and books nothing");
+  ok(exaSpendStatus().status === "capped", "with the total short of the hard ceiling, the word reads capped while calls are refused");
+  ok(exaSpendStatus(Date.now() + REFUSAL_HOLD_MS - 1000).status === "capped" && exaSpendStatus(Date.now() + REFUSAL_HOLD_MS + 1000).status === "over", "and reads over again once the last refusal is older than the hold");
+  setEnv(2 * E, 6 * E);
+  _exaSpendBook(5.5 * E);
+  ok(exaSpendStatus().status === "over", "control: the same total with no refusal reads over");
   _exaSpendBook(1 * E);
   ok(exaSpendStatus().status === "capped", "spend at the hard ceiling reads capped");
+  // A refusal with the hard ceiling at the alarm ceiling and the total under both.
+  setEnv(2 * E, 2 * E);
+  _exaSpendBook(1.5 * E);
+  ok(exaSpendStatus().status === "ok", "control: under both ceilings with no refusal the word reads ok");
+  r = await call();
+  ok(r.error?.statusCode === 503 && fetched === 0 && exaSpendStatus().status === "capped", "a refusal under the alarm ceiling (hard ceiling equal to it) reads capped, never ok");
 
   // --- the default hard ceiling is five times the alarm ceiling ------------
   setEnv(2 * E, undefined);
@@ -117,6 +128,37 @@ try {
   ok(c.alarmUsd === 2 && c.hardUsd === 10 && c.refuseAtUsd === 10 && ceilingWord(1.9e6, c) === "ok" && ceilingWord(2e6, c) === "over" && ceilingWord(10e6, c) === "capped", "the shared reader gives the alarm, the hard ceiling and the words");
   const off = dailyCeilings("A", "H", { A: "0", H: "50" });
   ok(off.refuseAtUsd === 0 && ceilingWord(0, off) === "off", "and 0 refuses at 0 whatever the hard ceiling");
+  ok(ceilingWord(0, c, { refusing: true }) === "capped" && ceilingWord(0, off, { refusing: true }) === "off", "a refusal inside the hold reads capped at any total, and the 0 switch still reads off");
+
+  // --- the shared half of the word (a stub store; the real one is in
+  //     scripts/test-spend-words-shared-redis.js) ----------------------------
+  {
+    const T = Date.parse("2026-11-10T12:00:00Z"), DAY = "2026-11-10";
+    let reads = 0, answer = async () => ({ day: DAY, units: 7e6, refusedUntil: 0 });
+    const view = createSharedCeilingView({ enabled: true, view: () => { reads++; return answer(); } }, { readMs: 60, freshMs: 1000 });
+    ok(view.micro(T) === 0 && view.refusing(T) === false, "before a read the shared half is empty");
+    ok((await view.refresh(T)) === true && view.micro(T) === 7e6 && reads === 1, "a read brings the day's shared total");
+    await view.refresh(T + 500);
+    ok(reads === 1, "a second read inside the fresh window reuses the first");
+    answer = async () => { throw new Error("store down"); };
+    ok((await view.refresh(T + 2000)) === false && view.micro(T + 2000) === 7e6 && reads === 2, "a failed read never rejects and keeps the day's last value");
+    answer = () => new Promise(() => {});
+    const t0 = performance.now();
+    const keep = setTimeout(() => {}, 5000); // the bound's own timer is unref'd
+    const hung = await view.refresh(T + 4000);
+    clearTimeout(keep);
+    ok(hung === false && performance.now() - t0 < 500 && view.micro(T + 4000) === 7e6, `a read that never answers ends at its bound (${Math.round(performance.now() - t0)} ms)`);
+    answer = async () => ({ day: DAY, units: 1e6, refusedUntil: T + 6000 + 60_000 });
+    await view.refresh(T + 6000);
+    ok(view.refusing(T + 6000) === true && view.refusing(T + 6000 + 61_000) === false, "a refusal another process noted reads refusing until its hold ends");
+    ok(view.micro(T + 86_400_000) === 0 && view.refusing(T + 86_400_000) === false, "a new UTC day starts from nothing");
+    const both = [view.refresh(T + 20_000), view.refresh(T + 20_000)];
+    await Promise.all(both);
+    ok(reads === 5, "concurrent status reads share one store read");
+    let offReads = 0;
+    const none = createSharedCeilingView({ enabled: false, view: () => { offReads++; return null; } });
+    ok((await none.refresh(T)) === false && offReads === 0, "without a shared store nothing is read");
+  }
   const kits = ["exa-kit.js", "x-data-kit.js"].map((f) => readFileSync(new URL(`../src/tools/${f}`, import.meta.url), "utf8"));
   ok(kits.every((k) => /dailyCeilings\(/.test(k) && /ceilingWord\(/.test(k) && !/Number\(process\.env\.(EXA|X_DATA)_DAILY/.test(k) && !/process\.env\.(EXA|X_DATA)_DAILY_(HARD_)?MAX_USD/.test(k)), "both kits read their ceilings through the shared reader");
 

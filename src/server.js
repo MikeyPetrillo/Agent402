@@ -649,10 +649,10 @@ import { CVE_TOOLS } from "./tools/cve-kit.js";
 import { MCP_PACKAGE_TOOLS } from "./tools/mcp-package-kit.js";
 import { CRYPTO_SIGNALS_TOOLS } from "./tools/crypto-signals-kit.js";
 import { CRAWL_TOOLS } from "./tools/crawl-kit.js";
-import { X_DATA_TOOLS, xDataEnabled, xDataSpendStatus } from "./tools/x-data-kit.js";
+import { X_DATA_TOOLS, xDataEnabled, xDataSpendStatus, refreshXDataSpendShared } from "./tools/x-data-kit.js";
 import { jevSpendStatus, orderByJudgment } from "./tool-judge.js";
 import { noteRouteAnswer, noteRoutePurchase } from "./route-conversion.js";
-import { EXA_TOOLS, exaEnabled, exaSpendStatus, exaAllowanceStatus, exaCallsToday } from "./tools/exa-kit.js";
+import { EXA_TOOLS, exaEnabled, exaSpendStatus, refreshExaSpendShared, exaAllowanceStatus, exaCallsToday } from "./tools/exa-kit.js";
 import { upstreamBudgetStatus, registerUpstreamCounter } from "./upstream-budgets.js";
 import { hardCapStatus, startHardCapSync } from "./upstream-hard-caps.js";
 // Exa is also an indexed seller the crawlers read unpaid; its budget counts only
@@ -3970,7 +3970,10 @@ app.get("/api/gateway-status", async (req, res) => {
   const full = operatorView(req, res);
   // The wrong-credential and unauthenticated-CDN-peer counts every replica
   // contributed to, when shared.
-  await Promise.all([refreshOperatorAuthShared(), refreshCdnOriginShared()]);
+  // Also the shared day behind xDataSpend and exaSpend: a new process's own
+  // counters start empty, so each word is built from the larger of the two
+  // (one bounded read each, reused for a few seconds; never rejects).
+  await Promise.all([refreshOperatorAuthShared(), refreshCdnOriginShared(), refreshXDataSpendShared(), refreshExaSpendShared()]);
   const spend = { xDataSpend: xDataSpendStatus(), exaSpend: exaSpendStatus(), exaAllowance: exaAllowanceStatus(), jevSpend: jevSpendStatus() };
   const budgets = upstreamBudgetStatus();
   // The global unsettled external-spend ceiling: one word, never a figure.

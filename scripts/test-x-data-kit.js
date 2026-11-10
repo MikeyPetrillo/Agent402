@@ -291,7 +291,7 @@ if (fail) process.exit(1);
     ok(Array.isArray(r1.data) && fetched === 1 && near(xDataSpendStatus().spentUsd, 5 * P, 1e-4), "under the cap: fetched, booked the actual");
     let threw = null; try { await __test.xGet("/tweets/search/recent", { max_results: 10 }); } catch (e) { threw = e; } // 5P + 10P > 12P -> refused before fetch
     ok(threw?.statusCode === 503 && /usage cap/.test(threw.message) && !/\$\d/.test(threw.message) && fetched === 1, "over the cap: 503 before any fetch, names the cap");
-    ok(xDataSpendStatus().refusedToday === 1 && xDataSpendStatus().status === "ok", "status counts the refusal; the cap is not yet reached by booked spend");
+    ok(xDataSpendStatus().refusedToday === 1 && xDataSpendStatus().status === "capped", "status counts the refusal and reads capped, though booked spend is under the cap");
     process.env.X_DATA_DAILY_MAX_USD = "0"; threw = null; try { await __test.xGet("/tweets/1"); } catch (e) { threw = e; }
     ok(threw?.statusCode === 503 && fetched === 1, "cap 0 refuses every read; it never disables the guard");
     process.env.X_DATA_DAILY_MAX_USD = "junk"; _xSpendReset(); _xSpendBook(0.99); threw = null; try { await __test.xGet("/tweets/search/recent", { max_results: 10 }); } catch (e) { threw = e; }

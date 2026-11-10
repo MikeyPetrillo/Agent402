@@ -22,7 +22,7 @@ import { markUntrusted } from "./provenance.js";
 import { upstreamCosts } from "../upstream-costs.js";
 import { meterUpstreamSpend } from "../posthog.js";
 import { createSharedDailySpend } from "../shared-limits.js";
-import { dailyCeilings, ceilingWord, noteOverAlarm } from "../daily-ceilings.js";
+import { dailyCeilings, ceilingWord, noteOverAlarm, createSharedCeilingView, REFUSAL_HOLD_MS } from "../daily-ceilings.js";
 import { onFinalResponse } from "../request-timing.js";
 import { noteXSearchCall, countsOf as xSearchCountsOf } from "../x-search-stats.js";
 // The upstream bills per POST RETURNED, not per request, so the page size is
@@ -118,8 +118,10 @@ function takeBool(raw, field) {
 //     the alarm ceiling reads as the alarm ceiling): the stop for a runaway.
 //     A read that would take the day past it is refused 503 (uncharged) and
 //     the word reads `capped`, which pages too.
-// In memory: a restart resets the day, like the other spend guards; the
-// prepaid balance itself is the outer bound.
+// A restart resets this process's day; the shared day counter (below) does
+// not, and both the refusal and the status word read it. A refusal holds the
+// word at `capped` for an hour on every replica, since a refused call books
+// nothing. The prepaid balance itself is the outer bound.
 // X's card (per post read, per user read) is private: src/upstream-costs.js,
 // `vendor.x`. Without it the cap cannot be enforced, so reads refuse 503.
 function xRate(k) {
@@ -129,14 +131,15 @@ function xRate(k) {
 }
 // Both ceilings are read by src/daily-ceilings.js (shared with the Exa kit).
 const xCeilings = () => dailyCeilings("X_DATA_DAILY_MAX_USD", "X_DATA_DAILY_HARD_MAX_USD");
-const xSpend = { day: "", micro: 0, refused: 0, overLogged: "" };
+const xSpend = { day: "", micro: 0, refused: 0, refusedAt: 0, overLogged: "" };
 // Shared across replicas (src/shared-limits.js): the day's spend is also a
 // shared counter per UTC day, reserved before the call and corrected after,
 // and a reserve that takes the shared total past the hard ceiling is given
 // back and refused. The local counter stays the floor when the store does not answer.
 const xShared = createSharedDailySpend("xdata-day", "x-data");
+const xView = createSharedCeilingView(xShared);
 const utcDay = (now = Date.now()) => new Date(now).toISOString().slice(0, 10);
-const xSpendToday = (now = Date.now()) => { const d = utcDay(now); if (xSpend.day !== d) { xSpend.day = d; xSpend.micro = 0; xSpend.refused = 0; xSpend.overLogged = ""; } return xSpend.micro / 1e6; };
+const xSpendToday = (now = Date.now()) => { const d = utcDay(now); if (xSpend.day !== d) { xSpend.day = d; xSpend.micro = 0; xSpend.refused = 0; xSpend.refusedAt = 0; xSpend.overLogged = ""; } return xSpend.micro / 1e6; };
 // Objects returned through `expansions` are billed too (X notice,
 // 2026-11-05): each one under `includes` is metered at the card rate of its
 // kind, a user read for `includes.users`, a post read for `includes.tweets`.
@@ -210,13 +213,22 @@ export function xToolWorstCases(slug) {
     default: throw new Error(`no worst case for ${slug}`);
   }
 }
-/** Counts only - never a token or a buyer. */
+/**
+ * Counts only - never a token or a buyer. The day's figure is the larger of
+ * this process's own and the shared day counter last read by
+ * refreshXDataSpendShared (a new process starts at zero; the shared counter,
+ * which the refusal reads, does not).
+ */
 export function xDataSpendStatus(now = Date.now()) {
-  const spent = xSpendToday(now);
+  xSpendToday(now);
   const c = xCeilings();
-  return { day: xSpend.day, spentUsd: Number(spent.toFixed(4)), capUsd: c.alarmUsd, hardCapUsd: c.hardUsd, refusedToday: xSpend.refused, status: ceilingWord(xSpend.micro, c) };
+  const micro = Math.max(xSpend.micro, xView.micro(now));
+  const refusing = (xSpend.refusedAt > 0 && now - xSpend.refusedAt < REFUSAL_HOLD_MS) || xView.refusing(now);
+  return { day: xSpend.day, spentUsd: Number((micro / 1e6).toFixed(4)), capUsd: c.alarmUsd, hardCapUsd: c.hardUsd, refusedToday: xSpend.refused, status: ceilingWord(micro, c, { refusing }) };
 }
-export function _xSpendReset() { xSpend.day = ""; xSpend.micro = 0; xSpend.refused = 0; xSpend.overLogged = ""; xShared.reset(); }
+/** One bounded read of the shared day for the status word; never rejects. */
+export function refreshXDataSpendShared(now = Date.now()) { return xView.refresh(now); }
+export function _xSpendReset() { xSpend.day = ""; xSpend.micro = 0; xSpend.refused = 0; xSpend.refusedAt = 0; xSpend.overLogged = ""; xShared.reset(); xView.reset(); }
 export function _xSpendBook(usd) { xSpendToday(); xSpend.micro += Math.round(usd * 1e6); }
 
 // "Not found on X" comes in two shapes - an HTTP 404, or a 200 whose body
@@ -240,7 +252,9 @@ async function xGet(path, params = {}) {
   // The refusing ceiling: the hard one, or nothing at all while the switch is 0.
   const { alarmUsd: soft, refuseAtUsd: cap } = xCeilings();
   const estimate = estimateXReadUsd(path, params);
-  const capped = () => { xSpend.refused++; return bad(`X data tools have reached today's usage cap - retry after 00:00 UTC. This call is not charged on x402.`, 503); };
+  // A refusal at the hard ceiling (not the 0 switch, whose word is off) is
+  // noted here and on the shared store, so every replica's word reads capped.
+  const capped = () => { xSpendToday(); xSpend.refused++; if (cap > 0) { xSpend.refusedAt = Date.now(); xShared.noteRefused(REFUSAL_HOLD_MS); } return bad(`X data tools have reached today's usage cap - retry after 00:00 UTC. This call is not charged on x402.`, 503); };
   // The shared reserve first (an atomic add on the store, awaited only when
   // there is one): over the hard ceiling there, nothing is booked here. Then this
   // process's check and booking, with no await between them, so concurrent
