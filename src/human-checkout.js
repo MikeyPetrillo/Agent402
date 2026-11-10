@@ -196,6 +196,17 @@ for (const p of Object.values(HUMAN_PRODUCTS)) {
 // The token brief is sold only while its RugCheck sources are listed
 // (RUGCHECK_TOOLS=on). A paid session for it that is fulfilled after the
 // switch goes off finds no product and is refunded.
+// Every report product key this table names, including one a switch has
+// taken off sale: what tells a report purchase from any other Checkout
+// session on the account (a credits pack, a subscription).
+const REPORT_PRODUCT_KEYS = new Set(Object.keys(HUMAN_PRODUCTS));
+// A Checkout session is a report purchase only when its metadata names a
+// report product as a string and carries no credits pack. Only such a session
+// is generated, recorded or refunded by this module.
+export function isReportPurchase(session) {
+  const product = session?.metadata?.product;
+  return typeof product === "string" && REPORT_PRODUCT_KEYS.has(product) && !session.metadata.credits_pack;
+}
 if (!rugcheckEnabled()) delete HUMAN_PRODUCTS["token-brief"];
 
 // Stripe metadata: <= 50 keys, value <= 500 chars. Inputs are capped at 2000
@@ -897,6 +908,10 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     // in the dashboard: fulfil it (the operator chose that) but book $0.
     if (!session || (session.payment_status !== "paid" && session.payment_status !== "no_payment_required")) return negSet(sessionId, "unpaid");
     if (session.mode && session.mode !== "payment") return { status: "invalid" };
+    // Not a report purchase (a credits pack, or any session whose metadata
+    // names no report product): this route has nothing to deliver for it and
+    // nothing to refund. Answered like an id that is not a report's.
+    if (!isReportPurchase(session)) return { status: "invalid" };
 
     const productKey = session.metadata?.product;
     const input = unchunkInput(session.metadata || {});

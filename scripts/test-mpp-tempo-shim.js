@@ -26,6 +26,8 @@ import { createTempoGate, createTempoChallengeAppender, mintTempoChallenge, temp
 import { Transaction as TempoTransaction } from "viem/tempo";
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import { createReplayGuard } from "../src/replay-guard.js";
+import { fullAnswerMiddleware } from "../src/full-answer.js";
+import { rawGet } from "./lib/raw-get.js";
 import { whenTempoLedgerPayerKnown } from "../src/tempo-push-debts.js";
 import { paymentRequiredBodyMiddleware, PAYMENT_REQUIRED_OFFER_KEYS } from "../src/payment-required-body.js";
 import { isDeepStrictEqual } from "node:util";
@@ -295,6 +297,28 @@ async function listen(app) {
   ok(body.result === "ok", "case A: original handler body is delivered");
   ok(!!res.headers.get("payment-receipt"), "case A: Payment-Receipt header attached");
   ok(isDeepOrderOk(callOrder, ["validate", "handler", "broadcast"]), `case A: strict order validate -> handler -> broadcast (got ${callOrder.join(",")})`);
+  server.close();
+}
+
+// Case A2: a GET with If-None-Match: * behind the full-answer seam (the order
+// the server mounts them in, src/full-answer.js): broadcast once, full 200.
+// The same request without the seam is the control: an empty 304.
+for (const seam of [true, false]) {
+  let broadcasts = 0;
+  const app = express();
+  if (seam) app.use(fullAnswerMiddleware((path) => path === "/paid"));
+  app.use(createTempoGate({
+    ...GATE,
+    validate: async () => ({ ok: true, validation: {} }),
+    broadcast: async () => { broadcasts++; return { ok: true, receipt: { method: "tempo", status: "success", reference: "0xdeadbeef", timestamp: new Date().toISOString() } }; },
+  }));
+  app.use(paywallStub);
+  app.get("/paid", (req, res) => res.status(200).json({ result: "ok" }));
+  const { server, url } = await listen(app);
+  const res = await rawGet(`${url}/paid`, { Authorization: buildTempoCredential(), "If-None-Match": "*" });
+  const text = res.body;
+  if (seam) ok(res.status === 200 && JSON.parse(text).result === "ok" && broadcasts === 1 && !!res.headers["payment-receipt"], `case A2: with the full-answer seam a conditional GET is a full 200, broadcast once (status ${res.status}, broadcasts ${broadcasts})`);
+  else ok(res.status === 304 && text === "", `case A2 control: without the seam the same request is an empty 304 (status ${res.status})`);
   server.close();
 }
 
