@@ -176,7 +176,9 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   waits for the next run. Its pool sets the server-side limits the state database pool sets:
   `ANALYTICS_DB_STATEMENT_TIMEOUT_MS` (default 10000) and `ANALYTICS_DB_IDLE_TX_TIMEOUT_MS`
   (default 30000). A cut statement drops that one row or ends that run; the insert path never
-  throws (`scripts/test-analytics-retention.js`).
+  throws (`scripts/test-analytics-retention.js`). `ANALYTICS_TEST_CAPTURE=1` (default unset) is
+  a test sink: each call-log row is printed as one `[tool-call-test]` line and none is written;
+  never set in production (`scripts/test-bespoke-call-log.js`).
 - **Sale paths and cohorts:** each sale records how it arrived (`src/sale-path.js`: the
   connector's loopback, a client package by its User-Agent product token, or HTTP) in the
   ledger's `via` column; `/__operator/cohorts.json` lists wallets past a per-day distinct-tool
