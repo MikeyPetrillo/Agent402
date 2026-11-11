@@ -6,7 +6,6 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createHash } from "node:crypto";
 import { FLAGSHIP_SLUGS, FLAGSHIP_MCP_NAMES } from "../src/mcp-flagship.js";
-import { isComputePayable } from "../src/pow.js";
 
 const BASE = process.env.TARGET_URL || "http://127.0.0.1:3000";
 
@@ -114,8 +113,14 @@ assert(
 const tool = (n) => (list.result?.tools ?? []).find((t) => t.name === n);
 const mppHere = !!init.result?.capabilities?.experimental?.payment;
 const slugOfName = Object.fromEntries(Object.entries(FLAGSHIP_MCP_NAMES).map(([slug, n]) => [n, slug]));
+// The free table is read from the server under test (/api/pricing marks each
+// entry computePayable), not imported from src/pow.js: the deploy job runs this
+// suite against production from an install with no native modules built.
 const pricedSlugs = (pricingDoc.endpoints ?? []).map((e) => e.slug).filter(Boolean);
 assert(pricedSlugs.length > 100, `the pricing document lists the catalog's slugs (${pricedSlugs.length})`);
+const freeSlugs = new Set((pricingDoc.endpoints ?? []).filter((e) => e.computePayable === true).map((e) => e.slug));
+assert(freeSlugs.size > 0 && freeSlugs.size < pricedSlugs.length, `the pricing document marks the proof-of-work tools (${freeSlugs.size} of ${pricedSlugs.length})`);
+const isComputePayable = ({ slug }) => freeSlugs.has(slug);
 const anyPaidSlug = pricedSlugs.some((slug) => !isComputePayable({ slug }));
 const canCharge = (n) => (n === "catalog.call" ? anyPaidSlug : n in slugOfName ? !isComputePayable({ slug: slugOfName[n] }) : false);
 // The free tools that leave a row behind (a recorded request, a step verdict).
