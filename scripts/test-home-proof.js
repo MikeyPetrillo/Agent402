@@ -105,6 +105,17 @@ const full = homeProofFigures({
   ok(!/not counted above/.test(none), "no footnote without the figure it qualifies");
 }
 
+// --- the changelog names the figures by the labels the hero draws ---------------
+{
+  const { readFileSync } = await import("node:fs");
+  const labels = full.map((f) => f.label.split(" · ")[0]);
+  for (const file of ["CHANGELOG.md", "src/changelog.js"]) {
+    const text = readFileSync(new URL(`../${file}`, import.meta.url), "utf8").replace(/\s+/g, " ");
+    const entry = (text.match(/home page hero shows ([^.]*)\./) || [])[1] || "";
+    ok(entry && labels.every((l) => entry.includes(l)) && !/outside calls/.test(entry), `${file}: the hero entry names each figure by its label (${labels.join(", ")}): "${entry}"`);
+  }
+}
+
 // --- a slow source does not hold the page --------------------------------------------
 {
   let started = 0;

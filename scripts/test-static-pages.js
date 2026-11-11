@@ -371,7 +371,10 @@ try {
   const home = await (await fetch(`${BASE}/`)).text();
   ok(!/class="hm-proof"/.test(home), "the home page has no full-width stats strip");
   ok(!/settlement rails · x402 \+ MPP|deducted from sellers · open source|priced tools · \d+ are skill packs/.test(home), "none of the strip's labels remain");
-  ok(/\d+ chains( \+ Tempo)? live/.test(home), "control: the hero still states the live chain count");
+  // The hero's chains-live line counts the chains /api/rails offers, and says
+  // no count when none is offered (a free-mode boot configures no rail).
+  const offered = Number((await (await fetch(`${BASE}/api/rails`)).json().catch(() => ({}))).offered) || 0;
+  ok(offered > 0 ? new RegExp(`>${offered} chains( \\+ Tempo)? live<`).test(home.replace(/<span class="ml-dot"><\/span>/g, "")) : !/\d+ chains( \+ Tempo)? live/.test(home), `control: the hero states the offered chain count (${offered}) and no other`);
   // The hero is the agent story: no report button, no card, one primary pill.
   const hero = (home.match(/<header[\s\S]*?<\/header>/) || [""])[0];
   ok(hero.includes('href="/docs#add"') && /btn-primary" href="\/docs#add">Add to your agent</.test(hero), "hero primary is Add to your agent");

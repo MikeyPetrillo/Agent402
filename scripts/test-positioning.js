@@ -83,5 +83,13 @@ for (const p of ["package.json", "mcp/package.json"]) {
   ok(d.includes(LEAD_SENTENCE) && d.indexOf(LEAD_SENTENCE) < 40, `${p} description leads with the lead sentence`);
 }
 
+// The changelog says where the sentence is: the package READMEs in this
+// repository; the registry pages change only with a package release.
+for (const file of ["CHANGELOG.md", "src/changelog.js"]) {
+  const text = read(file).replace(/\s+/g, " ");
+  const entry = (text.match(/One lead sentence describes Agent402 on (.*?)\.(?=\s|"|$)/i) || [])[1] || "";
+  ok(entry.includes("package READMEs in the repository") && !/package pages/.test(entry), `${file}: the lead-sentence entry names the repository READMEs, not the package pages ("${entry}")`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
