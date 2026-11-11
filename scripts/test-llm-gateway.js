@@ -1921,6 +1921,27 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
     const b = validateRequest({ model: MER, messages: [{ role: "user", content: "hi" }] }, tier);
     ok(b.model === MER_USE && b.__substitutedFrom === MER, `on ${tier}: mercury-2.5 served as ${MER_USE} with the swap named`);
   }
+  // qwen-2.5-7b-instruct (gone from the upstream catalog 2026-11-11): out of
+  // every tier list, fallback, ranking, availability-successor row and
+  // /v1/models; a call naming it is served as ministral-8b-2512 on each tier
+  // that served it, with the swap named, and is never refused before payment.
+  {
+    const GONE = "qwen/qwen-2.5-7b-instruct", GONE_USE = "mistralai/ministral-8b-2512";
+    ok(RETIRING_MODELS[GONE]?.use === GONE_USE && !RETIRING_MODELS[GONE].asItselfUntil && K.canonicalModel(GONE) === GONE_USE && K.substitutedFrom(GONE) === GONE, "qwen-2.5-7b-instruct: retired, successor ministral-8b-2512");
+    ok(tierFor(GONE_USE) === "v1-chat-nano" && tierFor(GONE) === "v1-chat-nano" && !RETIRING_MODELS[GONE_USE], "its successor homes on nano and is not itself retiring, so a nano caller keeps the nano price");
+    ok(!Object.values(TIERS).some((t) => (t.prefixes || []).includes(GONE) || (t.fallbacks || []).includes(GONE) || t.defaultModel === GONE) && !Object.values(AUTO_RANKINGS).flatMap((b) => Object.values(b).flat()).includes(GONE), "no tier prefix, fallback, default or ranking names qwen-2.5-7b-instruct");
+    ok(!Object.hasOwn(K.AVAILABILITY_SUCCESSORS, GONE) && !Object.values(K.AVAILABILITY_SUCCESSORS).flat().includes(GONE), "no availability-successor row names it");
+    const listed = K.modelsList().data.map((m) => m.id);
+    ok(!listed.includes(GONE) && listed.includes(GONE_USE), "/v1/models no longer lists it, and lists its successor");
+    ok(cf(GONE) === cf(GONE_USE) && cf(GONE_USE).prompt <= ROW("qwen/").prompt && cf(GONE_USE).completion <= ROW("qwen/").completion && cf(GONE_USE).prompt <= TIERS["v1-chat-nano"].maxPrice.prompt && cf(GONE_USE).completion <= TIERS["v1-chat-nano"].maxPrice.completion, "it is priced by its successor's row, which is at or under the row that priced it and inside nano's bound");
+    ok(["v1-chat-nano", "v1-chat", "v1-chat-metered"].every((t) => tierAllows(t, GONE) && tierAllows(t, GONE, GONE)) && Object.keys(TIERS).every((t) => tierAllows(t, GONE) === tierAllows(t, GONE_USE)), "it stays admitted on nano, base and metered, and only where its successor is");
+    ok(K.meteredModelVerdict(GONE) === null && K.meteredModelRefusal(`${GONE}:nitro`) === null, "the pre-payment unknown-model check leaves it to its successor");
+    for (const tier of ["v1-chat-nano", "v1-chat", "v1-chat-metered"]) {
+      const b = validateRequest({ model: GONE, messages: [{ role: "user", content: "hi" }] }, tier);
+      ok(b.model === GONE_USE && b.__substitutedFrom === GONE, `on ${tier}: qwen-2.5-7b-instruct served as ${GONE_USE} with the swap named`);
+      ok(K.failoverChain(b.model, tier)[0] === GONE_USE && !K.failoverChain(b.model, tier).includes(GONE), `on ${tier}: the chain starts at the successor and never names the retired id`);
+    }
+  }
   K.setRetiringClockForTest(null);
   ok(!tierFor("nvidia/nemotron-3.5-lightning"), "nemotron-3.5-lightning stays out (reasons by default with no effort knob in the catalog)");
 }
