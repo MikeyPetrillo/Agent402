@@ -2,6 +2,7 @@
 // connector in Anthropic's directory, and it should be true: this service
 // has no accounts, so there is genuinely little to say.
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { scorecardPublishesTx } from "./scorecard.js";
 
 import { REPO_URL, repoUrl } from "./repo-link.js";
 import { DEFAULTS as TRAFFIC_DEFAULTS } from "./traffic-classifier.js";
@@ -208,7 +209,9 @@ so every claim below is verifiable in code.</p>
   timestamps are public on-chain by the protocol's design, not collected by us. ${gatewayBatched ? "Circle Gateway batched payments are verified and settled by Circle Gateway off chain; the sales ledger keeps Gateway's transfer id for them. " : ""}Payment verification ${gatewayBatched ? "for every other payment " : ""}is
   performed by the payment facilitators (Coinbase CDP and per-chain facilitators, or Tempo's relay) and
   we keep a sales ledger of settled payments (wallet address, amount, chain, transaction id) for accounting
-  and for refunding a call that was charged but failed.</li>
+  and for refunding a call that was charged but failed.  The public <a href="/scorecard">buyer scorecard</a> is computed from that ledger and publishes monthly
+  counts only (paying wallets, returning wallets, settled payments and amounts by chain), never a wallet
+  address; a count under 3 reads "&lt;3", and a month with fewer than 3 wallets is withheld.${scorecardPublishesTx() ? " It also links a few sample settlement transactions on public block explorers, which show the paying wallet on chain." : ""}</li>
   <li><b>Card purchases (reports, monitors and prepaid credits).</b> Card details are entered on Stripe's
   hosted checkout and processed by <a href="https://stripe.com/privacy" rel="noopener">Stripe</a>; we never see card
   numbers. Stripe gives us the email address you entered, a customer and session id, and the payment
@@ -299,6 +302,8 @@ so every claim below is verifiable in code.</p>
   settled on-chain payments (wallet address, transaction id, amount) are recorded in Stripe for
   bookkeeping; no email or card data is involved in that mirror.</li>
   <li>Hosting is on Railway, and the nightly backups described below are stored in object storage there.
+  Requests to the site pass through Cloudflare, which sees each request and its answer, with the
+  caller's IP address and request headers, on the way to and from our server.
   On-chain settlement is on Base (Coinbase CDP facilitator) and the other
   per-chain facilitators${gatewayBatched ? "; Circle Gateway batched payments settle off chain at Circle Gateway" : ""}.</li>${directUpstreamParty ? `
   <li id="direct-inference">${directUpstreamParty}</li>` : ""}${publicIndex ? `

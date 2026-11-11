@@ -81,8 +81,6 @@ const CALL_SITE = {
 };
 // A provider /trust names ahead of the privacy policy, which waits on an owner
 // decision. The entry fails once /privacy names it, so it is removed then.
-const PRIVACY_PENDING = new Set(["Cloudflare"]);
-for (const p of PRIVACY_PENDING) ok(!privacy.includes(p), `${p} is still pending on /privacy (remove it from PRIVACY_PENDING once /privacy names it)`);
 const subs = trustSubprocessors();
 ok(subs.length >= 10, `the subprocessor table lists ${subs.length} rows`);
 for (const s of subs) {
@@ -92,7 +90,7 @@ for (const s of subs) {
     const site = CALL_SITE[part];
     ok(Boolean(site), `"${part}" has a call site named in this test`);
     if (site) ok(srcAll.includes(site), `"${part}" is called from src/ (${site})`);
-    if (!PRIVACY_PENDING.has(part)) ok(privacy.includes(part), `"${part}" is named in the privacy policy`);
+    ok(privacy.includes(part), `"${part}" is named in the privacy policy`);
   }
 }
 ok(subs.some((s) => s.name === "Cloudflare") && /Cloudflare[\s\S]{0,200}IP address/.test(trust), "the network edge in front of the site is a row, with what it sees");
@@ -228,5 +226,18 @@ ok(llmsFullTxt(BASE, {}).includes(`(${BASE}/trust)`), "llms-full.txt lists /trus
   delete process.env.COMPANY_POSTAL_ADDRESS;
 }
 
+// /privacy covers /scorecard, and its sample-transaction sentence follows SCORECARD_PUBLISH_TX
+{
+  const prev = process.env.SCORECARD_PUBLISH_TX;
+  delete process.env.SCORECARD_PUBLISH_TX;
+  const off = pageText(privacyPage(BASE));
+  process.env.SCORECARD_PUBLISH_TX = "on";
+  const on = pageText(privacyPage(BASE));
+  if (prev === undefined) delete process.env.SCORECARD_PUBLISH_TX; else process.env.SCORECARD_PUBLISH_TX = prev;
+  ok(/buyer scorecard[\s\S]{0,200}monthly[\s\S]{0,120}counts only[\s\S]{0,200}never a wallet\s+address/.test(off), "/privacy says the scorecard publishes monthly counts only, never a wallet address");
+  ok(!/sample settlement transactions/.test(off), "/privacy names no scorecard transaction links while SCORECARD_PUBLISH_TX is off");
+  ok(/sample settlement transactions[\s\S]{0,120}paying wallet/.test(on), "/privacy says the scorecard links sample transactions that show the payer while SCORECARD_PUBLISH_TX is on");
+  ok(/Cloudflare[\s\S]{0,200}IP address/.test(off), "/privacy names Cloudflare and what it sees");
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
