@@ -16,6 +16,7 @@ const ENTRIES = [
       "Tools: the onchain query health check keeps a failing reading for one minute, then reads the service again.",
       "Tools: stock quotes keep reading the consolidated dataset after a single refused request, and the three-venue note says the consolidated dataset was unavailable only when it answered so for that read.",
       "Tools: text to speech keeps its primary voices when long texts reach our own time limit; later callers move to the backup voices when the primary link stops answering for several callers. Model calls on the direct upstream link move to the fallback route on the upstream's own answers, not on our timeout or DNS failure.",
+      "Tools: image generation runs the provider's less restrictive content filter by default (send moderation \"auto\" for stricter filtering), and a prompt the model's content check refuses gets a plain 400 explaining how to rephrase it.",
       "Surfaces: /api/gateway-status carries topBuyerFailures (ok, alert, unknown or off); upstreamHealth reads unanswered when one upstream did not answer within our limit for several callers while others answered, and facilitatorFunds reads unknown when a settlement signer's balance could not be read.",
     ],
   },

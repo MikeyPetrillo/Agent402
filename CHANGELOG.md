@@ -59,6 +59,9 @@ Tools:
   answering for several callers. Model calls on the direct upstream link move
   to the fallback route on the upstream's own answers, not on our timeout or
   DNS failure.
+- Image generation runs the provider's less restrictive content filter by
+  default (send moderation "auto" for stricter filtering), and a prompt the
+  model's content check refuses gets a plain 400 explaining how to rephrase it.
 Surfaces:
 - /api/gateway-status carries topBuyerFailures (ok, alert, unknown or off);
   upstreamHealth reads unanswered when one upstream did not answer within our
