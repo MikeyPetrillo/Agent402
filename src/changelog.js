@@ -3,6 +3,13 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 const ENTRIES = [
   {
     date: "2026-11-11",
+    title: "Node security release",
+    items: [
+      "Server: the server, facilitator, worker and MCP images run on Node 22.23.5, the November 2026 Node.js security release.",
+    ],
+  },
+  {
+    date: "2026-11-11",
     title: "Buyer scorecard, trust page and one story",
     items: [
       "Site: /scorecard and GET /api/scorecard publish monthly buyer counts: outside paying wallets, returning wallets, wallets with paid calls on two or more days, and settled calls and USD by chain, for the current month to date and the six before. Our own wallets and internal traffic are not counted; small counts read <3.",
