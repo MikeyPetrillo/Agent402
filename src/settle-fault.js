@@ -2,7 +2,8 @@
 // (src/gateway-settle-breaker.js). Three answers:
 //
 //   "buyer"      a definite verdict on the buyer's own payment: a verdict
-//                code (src/settle-verdict.js isBuyerSettleVerdict), or the
+//                code (src/settle-verdict.js isBuyerSettleVerdict), our own
+//                blocklist's verdict on the paying wallet (wallet_blocked), or the
 //                chain's own words that the paying wallet came up short on
 //                the transfer (BALANCE_PROOFS below). Counted at the
 //                breaker's normal count, and the refusal names the payment.
@@ -79,6 +80,8 @@ export function settleFailureFault({ receipt = null, raw = null, network = null 
   if (NOT_BUYER_CODE.test(code) || NOT_BUYER_CODE.test(rawReason.trim())) return "not-buyer";
   // A verdict code first: words in a message never turn it into anything else.
   if (isBuyerSettleVerdict(code) || isBuyerSettleVerdict(rawReason)) return "buyer";
+  // Our blocklist naming the paying wallet is a verdict on that wallet.
+  if (code === "wallet_blocked" || rawReason.trim() === "wallet_blocked") return "buyer";
   // Our request not completing, a facilitator's HTTP status, a billing limit
   // on our account: proven, and not the buyer's.
   if (notCheckedRefusal(text) || notCheckedRefusal(code)) return "not-buyer";

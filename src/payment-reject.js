@@ -89,7 +89,8 @@ export const NOT_CHECKED_RETRY_AFTER_SECONDS = 5;
  * (`*_unverifiable`, `*_check_failed`); the facilitator refusing this
  * server's own credentials (HTTP 401/403); the facilitator answering a 5xx,
  * 408 or 429 (named with that status); and our request not completing (a
- * timeout, a DNS or connection error). Pure.
+ * timeout, a DNS or connection error), read only when the text carries no
+ * other 4xx status. Pure.
  */
 export function notCheckedRefusal(reason, { chain = "" } = {}) {
   const r = String(typeof reason === "string" ? reason : "").slice(0, 2000);
@@ -102,6 +103,10 @@ export function notCheckedRefusal(reason, { chain = "" } = {}) {
   const status = m ? Number(m[1] || m[2] || m[3]) : 0;
   if (status === 401 || status === 403) return out(`The facilitator${on} refused this server's own credentials (HTTP ${status})`);
   if (status >= 500 || status === 408 || status === 429) return out(`The facilitator${on} answered HTTP ${status} to this server's verify request`);
+  // Any other 4xx is the facilitator's definite answer about the request,
+  // which can be a verdict on the payment: transport words inside its body
+  // ("request timeout ...") never turn it into a request that did not complete.
+  if (status >= 400 && status < 500) return null;
   if (NOT_CHECKED_TRANSPORT.test(r)) return out(`This server's verify request to the facilitator${on} did not complete (a connection error or this server's own time limit)`);
   return null;
 }

@@ -293,6 +293,9 @@ ok(r5.out.hint === undefined, "no remembered failure for this credential -> no h
   ok(hintFor({ reason: "unsupported network eip155:1", network: "eip155:1" }).retry === "other-network", "control: an unsupported network still points at accepts");
   ok(hintFor({ reason: "invalid_network" }).retry === "other-network", "control: invalid_network still points at accepts");
   ok(hintFor({ reason: 'Facilitator verify failed (400): {"error":"bad network"}' }).retry !== "other-network", "a 400 body that only mentions a network is not wrong-network advice");
+  for (const reason of ['Facilitator verify failed (400): {"error":"request timeout while waiting for receipt; nonce used"}', "Facilitator verify failed (422): fetch failed upstream; invalid signature", "gateway_http_409: aborted, authorization already used"]) {
+    ok(hintFor({ reason, network: "eip155:8453", payer: PAYER }).reason !== "not-checked", `a definite 4xx is never not-checked on transport words in its body (${reason.slice(0, 60)})`);
+  }
   ok(hintFor({ reason: REVERT, balanceUsd: 0, priceUsd: 0.005, network: "eip155:8453", payer: PAYER }).retry === "fund-wallet", "control: a revert with an empty wallet still says fund-wallet");
   ok(hintFor({ reason: "invalid_exact_evm_payload_signature" }).retry === "fresh-authorization", "control: a signature verdict still says sign a fresh authorization");
   // Through the hook and the 402: no Base balance read for a not-checked
