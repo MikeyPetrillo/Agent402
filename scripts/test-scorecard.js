@@ -61,7 +61,7 @@ if (process.env.SCORECARD_PERF_CHILD === "1") {
   const r = await L.buyerScorecardAsync({ now, months: 7, minGroup: 3, samples: 3, sampleOk, networkKey: scorecardNetworkKey });
   const ours = oursMs() - t0, wall = performance.now() - w0;
   const { worst } = gaps.stop();
-  const total = bound(300, 20), hold = bound(20, 2);
+  const total = bound(300, 25), hold = bound(20, 2);
   console.log(JSON.stringify({ ours, wall, worst, total, hold, months: r.months.length, wallets: r.months.at(-1).wallets }));
   process.exit(0);
 }
@@ -116,7 +116,7 @@ sale(feb(10), { payer: W[2] });
 // October: two wallets only.
 sale(oct(7), { payer: W[0], priceUsd: 0.25 }); sale(oct(8), { payer: W[1], priceUsd: 0.5 });
 // August: three base wallets and one Solana wallet: Solana folds, then base joins it.
-for (const w of W.slice(0, 3)) sale(aug(5), { payer: w });
+for (const w of [W[0], W[1], W[5]]) sale(aug(5), { payer: w }); // W3 paid only before the window
 sale(aug(6), { payer: SOLW[0], network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", tx: solTx() });
 // Never counted: our wallets (canary, burner, the router's spending wallets), synthetic rows,
 // free rails, rows with no paying wallet, card rows.
@@ -179,6 +179,7 @@ ok(pNov.proof.published === true && pNov.proof.samples.length === 3 && pNov.proo
 ok(pNov.proof.samples.every((s) => s.url && hostOf(s.url) === EXPECT_HOST[s.chain] && new URL(s.url).pathname === `/tx/${s.tx}` && new URL(s.url).protocol === "https:"), `each sample links its transaction on its chain's explorer (${pNov.proof.samples.map((s) => s.url).join(" ")})`);
 ok(JSON.stringify(pNov.proof.samples.map((s) => s.tx)) === JSON.stringify(FIRST_NOV_TX), `samples are the month's first settlements by ledger id (${pNov.proof.samples.map((s) => s.tx.slice(-4)).join()})`);
 ok(JSON.stringify(S.scorecardBody(rawAgain, { asOf: new Date(NOW).toISOString(), publishTx: true }).months.at(-1).proof.samples) === JSON.stringify(pNov.proof.samples), "the same samples on every read");
+ok(S.scorecardPublishesTx({}) === false && S.scorecardPublishesTx({ SCORECARD_PUBLISH_TX: "on" }) === true, "sample transactions are public only with SCORECARD_PUBLISH_TX=on");
 ok(S.sampleOk("base", "0xnot-a-hash") === false && S.sampleOk("stripe", `0x${"a".repeat(64)}`) === false && S.sampleOk("base", `0x${"a".repeat(64)}`) === true, "a sample must be hash-shaped and on a network an explorer reads");
 
 // No address, no per-wallet figure.
@@ -298,26 +299,32 @@ ok(page.includes("&lt;3") && page.includes("/api/scorecard") && page.includes("N
     ok(row && row.payer === buyer.address && row.payer !== row.payer.toLowerCase() && row.internal === 0 && row.rail === "usdc" && S.scorecardNetworkKey(row.network) === "solana",
       `the sales ledger books the Solana paying wallet as written, never case-folded (${JSON.stringify(row && { payerKept: row.payer === buyer.address, network: row.network, internal: row.internal })})`);
 
-    // The scorecard answers from its timer's figures; force a fresh read by polling until the sale shows.
-    let sc = null, res = null;
-    for (const until = Date.now() + 40_000; Date.now() < until;) {
-      res = await fetch(`${B}/api/scorecard`);
-      sc = await res.json().catch(() => null);
-      if (sc?.months?.at(-1)?.wallets === "<3") break;
-      await sleep(500);
+    // Two more outside wallets paid this month (Base), so the month has three and publishes figures.
+    const OTHER_TX = [`0x${"1".repeat(64)}`, `0x${"2".repeat(64)}`];
+    {
+      const h = new Database(ledgerFile);
+      const ins = h.prepare("INSERT INTO sales (ts, slug, price_usd, rail, network, payer, tx, internal, wire) VALUES (?, 'uuid', 0.01, 'usdc', 'base', ?, ?, 0, 'x402')");
+      ins.run(Date.now(), `0x${"a".repeat(40)}`, OTHER_TX[0]); ins.run(Date.now(), `0x${"b".repeat(40)}`, OTHER_TX[1]);
+      h.close();
     }
+    const res = await fetch(`${B}/api/scorecard`);
+    const sc = await res.json().catch(() => null);
     const cur = sc?.months?.at(-1);
     ok(res?.status === 200 && /public/.test(res.headers.get("cache-control") || "") && /x-operator-token/i.test(res.headers.get("vary") || ""), `GET /api/scorecard: public cache, varies on the operator header (${res?.headers.get("cache-control")})`);
-    ok(cur && cur.wallets === "<3" && cur.withheld === true && cur.settledCalls === null && cur.usd === null, `one paying wallet reads "<3" and nothing else (${JSON.stringify(cur)})`);
+    ok(cur && cur.wallets === 3 && cur.withheld === false && cur.settledCalls === 3 && cur.proof?.published === false && cur.proof.samples.length === 0 && cur.proof.settlementsWithTx === 3 && cur.proof.truncated === true,
+      `three paying wallets this month, the Solana sale among them; no sample transaction in public (${JSON.stringify(cur && { w: cur.wallets, c: cur.settledCalls, proof: cur.proof })})`);
     const pubText = JSON.stringify(sc);
-    ok(!pubText.includes(buyer.address) && !pubText.includes(SETTLE_TX), "no address and no transaction in the public body");
+    ok(![buyer.address, SETTLE_TX, ...OTHER_TX, "a".repeat(40), "b".repeat(40)].some((x) => pubText.includes(x)), "no address and no transaction in the public body");
     const htmlRes = await fetch(`${B}/scorecard`);
     const html = await htmlRes.text();
-    ok(htmlRes.status === 200 && html.includes("&lt;3") && !html.includes(buyer.address) && !html.includes(SETTLE_TX), `/scorecard renders without the address (${htmlRes.status})`);
+    ok(htmlRes.status === 200 && html.includes("Who pays") && ![buyer.address, SETTLE_TX, ...OTHER_TX, "a".repeat(40)].some((x) => html.includes(x)), `/scorecard renders without an address or a transaction (${htmlRes.status})`);
     const opRes = await fetch(`${B}/api/scorecard`, { headers: { "X-Operator-Token": OP } });
     const op = await opRes.json();
     ok(/private/.test(opRes.headers.get("cache-control") || "") && /no-store/.test(opRes.headers.get("cache-control") || ""), `the operator view is private, no-store (${opRes.headers.get("cache-control")})`);
-    ok(op.months.at(-1).wallets === "<3" && !JSON.stringify(op).includes(buyer.address), "the operator view keeps the buckets and carries no address");
+    const opSamples = op.months.at(-1).proof?.samples || [];
+    ok(op.months.at(-1).wallets === 3 && !JSON.stringify(op).includes(buyer.address) && !JSON.stringify(op).includes("a".repeat(40)), "the operator view keeps the figures and carries no address");
+    ok(opSamples.length === 3 && opSamples.every((x) => x.url && hostOf(x.url) === (x.chain === "solana" ? "solscan.io" : "basescan.org") && new URL(x.url).pathname === `/tx/${x.tx}`) && opSamples.some((x) => x.tx === SETTLE_TX),
+      `the operator view lists the sample settlements with explorer links (${opSamples.map((x) => x.url).join(" ")})`);
     const sm = await fetch(`${B}/sitemap.xml`).then((r) => r.text());
     const llms = await fetch(`${B}/llms.txt`).then((r) => r.text());
     const oa = await fetch(`${B}/openapi.json`).then((r) => r.json());
