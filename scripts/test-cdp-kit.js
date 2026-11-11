@@ -172,7 +172,7 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
     ok((await fund(addr("c"))).funded && (await fund(addr("c"))).funded, "and its slot was returned");
     // A buyer's query (onchain-sql): a slow 502 is answered once, a fast 5xx
     // is tried twice, and the answer says how to narrow the query.
-    const { _setSlowQueryGatewayMsForTest, _setQueryHealthForTest, QUERY_HEALTH_SQL, _setHealthTimeoutMsForTest, HEALTH_TIMEOUT_MS, HEALTH_TTL_MS, BUYER_QUERY_INFLIGHT_MAX, _buyerQueriesInflightForTest, _cdpLogThrottleSizeForTest } = await import("../src/tools/cdp-kit.js");
+    const { _setSlowQueryGatewayMsForTest, _setQueryHealthForTest, QUERY_HEALTH_SQL, _setHealthTimeoutMsForTest, HEALTH_TIMEOUT_MS, HEALTH_TTL_MS, HEALTH_UNKNOWN_TTL_MS, _ageQueryHealthForTest = () => {}, BUYER_QUERY_INFLIGHT_MAX, _buyerQueriesInflightForTest, _cdpLogThrottleSizeForTest } = await import("../src/tools/cdp-kit.js");
     const isHealth = (sql) => Object.values(QUERY_HEALTH_SQL).includes(sql);
     _setSlowQueryGatewayMsForTest(40);
     _setQueryHealthForTest(true); // the service answers a known-good query (checked below)
@@ -303,19 +303,59 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
         };
         await Promise.all([sqlRun().catch((x) => x), sqlRun().catch((x) => x)]);
         ok(seen.filter((s) => s.health).length === 1, `two overlapping slow failures share one health read (${seen.filter((s) => s.health).length})`);
-        // The health read has its own short timeout: a hung service answers "unhealthy" within it.
-        ok(HEALTH_TIMEOUT_MS === 5_000 && HEALTH_TTL_MS === 5 * 60_000, "the health read's timeout is 5 s and its reading is kept 5 minutes");
+        // The health read's cap sits above the service's ~10 s gateway limit,
+        // so a busy service still answers it; its readings are kept 5 minutes.
+        ok(HEALTH_TIMEOUT_MS === 12_000 && HEALTH_TTL_MS === 5 * 60_000 && HEALTH_UNKNOWN_TTL_MS === 30_000, "the health read's timeout is 12 s; a reading is kept 5 minutes, an unknown one 30 s");
+        // A health read that times out is OUR check's timeout, not the
+        // service's failure: the slow 502 is the narrow-query 422, never the
+        // outage text, the log says so, and the unknown reading is not kept
+        // long enough to answer a later slow 502 with an outage.
         _setHealthTimeoutMsForTest(150); _setQueryHealthForTest(null);
+        let healthSent = 0;
         globalThis.fetch = async (url, init = {}) => {
           const sql = JSON.parse(init.body || "{}").sql;
-          if (isHealth(sql)) return new Promise((_, reject) => { init.signal?.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "TimeoutError" })), { once: true }); });
+          if (isHealth(sql)) { healthSent++; return new Promise((_, reject) => { init.signal?.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "TimeoutError" })), { once: true }); }); }
           return new Promise((r) => setTimeout(() => r(J(502, {})), 60));
         };
-        const tH = Date.now();
         const keepH = setInterval(() => {}, 1000); // a timeout signal alone does not hold the loop
-        e = await sqlRun().catch((x) => x);
-        clearInterval(keepH);
-        ok(e?.statusCode === 502 && Date.now() - tH < 2000, `a hung health read ends at its own timeout and the failure stays a 502 (${Date.now() - tH} ms)`);
+        const warnedH = []; const realWarnH = console.warn; console.warn = (m) => warnedH.push(String(m));
+        try {
+          e = await sqlRun("SELECT argMin(m, block_time) FROM solana.instructions WHERE block_time > now() - INTERVAL 1 DAY").catch((x) => x);
+          ok(e?.statusCode === 422 && e?.hint === "narrow-query" && /answer window of about 10 s/.test(e.message) && !/is failing|retry later|known-good/.test(e.message) && healthSent === 1,
+            `a health read that times out leaves the slow 502 the buyer's to narrow: 422, not the outage text (${e?.statusCode} ${String(e?.message).slice(0, 70)}; ${healthSent} health read)`);
+          const hLine = warnedH.find((w) => /query health/.test(w)) || "";
+          ok(/timed out after \d+ ms; verdict unknown \(a timeout of our check, not a failure of the service\)/.test(hLine) && !warnedH.some((w) => /did not answer within/.test(w)), `the log names a timeout of our check, not a failure of the service (${hLine.slice(0, 120)})`);
+          // A burst inside the unknown window sends no further health read.
+          for (let i = 0; i < 4; i++) {
+            e = await sqlRun("SELECT argMin(m, block_time) FROM solana.instructions WHERE block_time > now() - INTERVAL 1 DAY").catch((x) => x);
+            if (e?.statusCode !== 422) break;
+          }
+          ok(e?.statusCode === 422 && healthSent === 1, `a burst of slow 502s after a timed-out health read shares its unknown reading: one health read in all (${healthSent}), each a 422 (${e?.statusCode})`);
+          // A minute later the unknown reading has lapsed: the check runs
+          // again, and while it still times out the answer is again the 422.
+          _ageQueryHealthForTest(60_000);
+          e = await sqlRun("SELECT argMin(m, block_time) FROM solana.instructions WHERE block_time > now() - INTERVAL 1 DAY").catch((x) => x);
+          ok(e?.statusCode === 422 && !/is failing|retry later/.test(e.message) && healthSent === 2, `a slow 502 a minute later is not answered from a kept outage verdict: a fresh check (${healthSent} health reads), a 422 (${e?.statusCode})`);
+          // A known-good query the service answers with a 5xx is an outage.
+          _setQueryHealthForTest(null);
+          globalThis.fetch = async (url, init = {}) => {
+            const sql = JSON.parse(init.body || "{}").sql;
+            if (isHealth(sql)) return J(503, {});
+            return new Promise((r) => setTimeout(() => r(J(502, {})), 60));
+          };
+          e = await sqlRun().catch((x) => x);
+          ok(e?.statusCode === 502 && /is failing/.test(e.message) && /known-good query failed too/.test(e.message), `a known-good query answered 503 keeps the outage text (${e?.statusCode})`);
+          ok(warnedH.some((w) => /query health: the known-good base query answered HTTP 503: the query service is failing/.test(w)), "the log names the service's own failure on the known-good query");
+          // A refused health read (no answer at all) is unknown too.
+          _setQueryHealthForTest(null);
+          globalThis.fetch = async (url, init = {}) => {
+            const sql = JSON.parse(init.body || "{}").sql;
+            if (isHealth(sql)) throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNRESET" } });
+            return new Promise((r) => setTimeout(() => r(J(502, {})), 60));
+          };
+          e = await sqlRun().catch((x) => x);
+          ok(e?.statusCode === 422 && e?.hint === "narrow-query", `a health read that cannot reach the host is unknown: the 422 (${e?.statusCode})`);
+        } finally { console.warn = realWarnH; clearInterval(keepH); }
         _setHealthTimeoutMsForTest(null);
       } finally { globalThis.fetch = realFetchH; _setQueryHealthForTest(true); }
     }
@@ -422,6 +462,16 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
         globalThis.fetch = withMeasureShim(async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sent.push(q); return isHealth(q) ? J(200, { result: [{ block_slot: 1 }] }) : J(500, {}); });
         e = await sqlRun("SELECT m, bals FROM solana.instructions WHERE block_time > now() - INTERVAL 1 DAY GROUP BY m").catch((x) => x);
         ok(e?.statusCode === 502 && /known-good query/.test(e.message), `with the service failing a known-good query too, it is a 502 (${e?.statusCode})`);
+        // Our check timing out is not the service failing: the 422.
+        _setQueryHealthForTest(null); _setHealthTimeoutMsForTest(150); sent.length = 0;
+        {
+          const keepR = setInterval(() => {}, 1000);
+          globalThis.fetch = withMeasureShim(async (url, init = {}) => { const q = JSON.parse(init.body || "{}").sql; sent.push(q); if (isHealth(q)) return new Promise((_, reject) => { init.signal?.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "TimeoutError" })), { once: true }); }); return J(500, {}); });
+          e = await sqlRun("SELECT m, bals FROM solana.instructions WHERE block_time > now() - INTERVAL 1 DAY GROUP BY m").catch((x) => x);
+          clearInterval(keepR);
+          ok(e?.statusCode === 422 && e?.hint === "narrow-query" && !/is failing|retry later/.test(e.message) && sent.filter(isHealth).length === 1, `when our health read times out, even ${SQL_RECOVER_ROWS} rows not fitting is the 422, not the outage text (${e?.statusCode} ${String(e?.message).slice(0, 60)})`);
+        }
+        _setHealthTimeoutMsForTest(null);
         _setQueryHealthForTest(true);
         // An unwrapped query (WITH) cannot take an outer cap: answered once, no resend.
         sent.length = 0; calls = [];
@@ -687,6 +737,10 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
       ok(solanaRangeRefusal("SELECT * FROM solana.instructions LIMIT 5") === null, "a bare Solana sample is sent");
       ok(solanaRangeRefusal("SELECT COUNT(*) FROM solana.instructions WHERE block_time > now() - INTERVAL 1 DAY") === null, "a Solana query with a block_time range is sent");
       ok(solanaRangeRefusal("SELECT COUNT(*) FROM base.transactions WHERE block_number > 1") === null, "a Base query is not judged by the Solana rule");
+      {
+        const { QUERY_HEALTH_SQL: H } = await import("../src/tools/cdp-kit.js");
+        ok(solanaRangeRefusal(H.solana) === null && /\bWHERE block_time > now\(\) - INTERVAL 1 HOUR LIMIT 1$/.test(H.solana), `the Solana health query is bounded by block_time, the table's pruning key (${H.solana})`);
+      }
       ok(solanaRangeRefusal("SELECT count() FROM solana.instructions") === null && solanaRangeRefusal("SELECT COUNT(*) AS n FROM solana.instructions") === null, "a bare count is sent (answered from metadata, measured 0.2 s)");
       ok(solanaRangeRefusal("SELECT anything, any_data FROM solana.instructions LIMIT 5") === null, "a column named like an aggregate is not an aggregate");
       ok(solanaRangeRefusal("SELECT * FROM solana.instructions /* where */ LIMIT 3") === null, "a keyword inside a comment does not count");
