@@ -20,9 +20,13 @@ Payments:
   that could not finish) answers reason not-checked with retry same-payment
   and Retry-After 5, before any other reading of the error: nothing was
   charged, and the same payment can be sent again.
-- On Tempo, a payment our server could not read on chain answers 503
-  not-checked, nothing charged, and the same credential can be sent again; the
-  client keeps Tempo first.
+- On Tempo with direct chain reads (TEMPO_RELAY=off), a payment our server
+  could not read on chain answers 503 with reason chain-unreachable: the
+  credential was not checked, and the same credential can be sent again. This
+  server keeps listing Tempo first in the payment challenges it sends that
+  client. A push credential (a transfer already sent) that could not be
+  checked this way, or because the payment relay could not be reached, is told
+  its transfer has not been claimed and still pays for the request.
 - /api/rails gives each payment network left off at startup a reason word
   (probe-timeout, read-failed, not-advertised or config) and, while the
   batched option is on, its status and the networks it dropped. The startup
@@ -51,17 +55,21 @@ Tools:
   check it or retry. The hosted connector's free answers read the same.
 - The onchain query health check keeps a failing reading for one minute, then
   reads the service again.
-- Stock quotes keep reading the consolidated dataset after a single refused
-  request, and the three-venue note says the consolidated dataset was
-  unavailable only when it answered so for that read.
+- Stock quotes keep reading the consolidated dataset after a single 400
+  answer (400s for two different symbols or a symbol and the range read inside
+  the skip window, or one 401 or 403, still switch to the three-venue dataset),
+  and the three-venue note says the consolidated dataset was unavailable only
+  when it answered so for that read.
 - Text to speech keeps its primary voices when long texts reach our own time
   limit; later callers move to the backup voices when the primary link stops
   answering for several callers. Model calls on the direct upstream link move
   to the fallback route on the upstream's own answers, not on our timeout or
   DNS failure.
-- Image generation runs the provider's less restrictive content filter by
-  default (send moderation "auto" for stricter filtering), and a prompt the
-  model's content check refuses gets a plain 400 explaining how to rephrase it.
+- The GPT Image tools (image-gen, image-gen-hd and image-gen-premium) send the
+  provider's less restrictive content filter level by default (send moderation
+  "auto" for stricter filtering; a model that does not take the setting runs
+  at the provider's standard level), and a prompt the model's content check
+  refuses gets a plain 400, not charged on x402.
 Surfaces:
 - /api/gateway-status carries topBuyerFailures (ok, alert, unknown or off);
   upstreamHealth reads unanswered when one upstream did not answer within our

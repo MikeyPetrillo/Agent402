@@ -194,7 +194,7 @@ async function callOpenAI(prompt, size, tierSlug, moderation = DEFAULT_MODERATIO
       const cats = refusalCategories(msg);
       throw bad("The model's content check refused this prompt. This 400 is not charged on x402; rephrase the prompt and try again."
         + (cats ? ` Flagged: ${cats}.` : "")
-        + (moderation === "auto" && !fellBack ? ' This call used moderation "auto"; "low", the default, filters less strictly.' : ""), 400);
+        + (moderation === "auto" && !fellBack ? ' This call chose moderation "auto", the stricter level; "low" is the default level.' : ""), 400);
     }
     // Reaching here means a remaining 4xx - the REQUEST was invalid (bad
     // temperature, unknown language code, oversized input), not the upstream.
@@ -252,8 +252,8 @@ function makeHandler(tierSlug) {
 
 const SHARED_TAGS = ["image", "ai", "generation", "openai", "text-to-image"];
 
-const MODERATION_PROP = { type: "string", enum: MODERATION_LEVELS, description: 'Content filtering level: "low" (default, less restrictive) or "auto" (stricter). The model provider\'s usage policies apply at either level; a prompt its content check refuses answers 400 and is not charged on x402.' };
-const MODERATION_COPY = ' Content filtering runs at the less restrictive "low" level by default (send moderation "auto" for stricter filtering); the model provider\'s usage policies still apply, and a refused prompt answers 400, not charged on x402.';
+const MODERATION_PROP = { type: "string", enum: MODERATION_LEVELS, description: 'Content filtering level: "low" (sent by default, less restrictive) or "auto" (stricter). If the model does not take the setting, the call runs at the provider\'s standard level. The model provider\'s usage policies apply at either level; a prompt its content check refuses answers 400 and is not charged on x402.' };
+const MODERATION_COPY = ' The less restrictive "low" content filtering level is sent by default (send moderation "auto" for stricter filtering); if the model does not take the setting, the call runs at the provider\'s standard level. The model provider\'s usage policies still apply, and a refused prompt answers 400, not charged on x402.';
 
 export const IMAGE_GEN_TOOLS = [
   {
