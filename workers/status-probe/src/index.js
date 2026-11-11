@@ -734,10 +734,12 @@ Auto-closes when nothing is owed.`,
   },
   {
     // Close-only: the issue opened under this title before it was renamed
-    // (above) closes once the word reads ok. Never opens: the verdict is
-    // "good" or "quiet", never "bad". Title matches heartbeat.yml's.
+    // (above) closes once the word reads ok, low or unknown (the two titles
+    // above take over those states, so it never stays open beside them).
+    // Never opens: the verdict is "good" or "quiet", never "bad". Title
+    // matches heartbeat.yml's.
     title: "facilitatorFunds: a facilitator's settlement gas is running low or could not be read",
-    verdict: ({ gateway: b }) => (b.facilitatorFunds?.status === "ok" ? "good" : "quiet"),
+    verdict: ({ gateway: b }) => (["ok", "low", "unknown"].includes(b.facilitatorFunds?.status) ? "good" : "quiet"),
     body: () => failureWordBody("facilitatorFunds", "low"),
   },
   {
@@ -830,7 +832,7 @@ Auto-closes when nothing is owed.`,
     // matches heartbeat.yml's.
     title: "topBuyerFailures: a top paying buyer is getting failed answers",
     verdict: ({ gateway: b }) => wordVerdict(b.topBuyerFailures?.status, ["alert"], ["ok"]),
-    body: () => "/api/gateway-status reports topBuyerFailures.status=alert: one of our top outside payers by paid spend over the last week has had TOP_BUYER_FAIL_MIN or more failed final answers (any status that is not a success) to verified paid requests inside TOP_BUYER_FAIL_WINDOW_MS. The payer's short id, its spend rank, the tools, statuses, times and the first characters of the error text we sent are on the operator view of /api/gateway-status (topBuyerFailures, operator token). Read them, fix the failing tool or path, and check whether what we told the buyer was true. Nothing is refused for it. Auto-closes when the word reads ok.",
+    body: () => "/api/gateway-status reports topBuyerFailures.status=alert: one of our top outside payers by paid spend over the last week has had TOP_BUYER_FAIL_MIN or more failed final answers (any status that is not a success, except a refusal of the caller's own input that the answer attributes to the caller or to no one) to verified paid requests inside TOP_BUYER_FAIL_WINDOW_MS. The payer's short id, its spend rank, the tools, statuses, times and the first characters of the error text we sent are on the operator view of /api/gateway-status (topBuyerFailures, operator token). Read them, fix the failing tool or path, and check whether what we told the buyer was true. Nothing is refused for it. Auto-closes when the word reads ok.",
   },
   {
     // Redis persistence (redisPersistence on /api/gateway-status,

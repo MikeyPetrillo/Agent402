@@ -433,12 +433,18 @@ for (const [name, T, field, sameBody] of SPEND) {
     assert.deepEqual(closedNum(await runStep(step, gw, [{ number: 8, title: FG }])), ["8"]);
   });
   // The issue opened under the title before its rename: both pagers close it
-  // when the word reads ok, and neither ever opens it, on any word.
+  // when the word reads ok, low or unknown (the new titles take over those
+  // states, so it never stays open beside them), and neither ever opens it,
+  // on any word.
   const OLD = "facilitatorFunds: a facilitator's settlement gas is running low or could not be read";
-  await check("facilitatorFunds: the issue under the old title closes on ok and is never opened", async () => {
-    assert.equal(judge({ gateway: gw })[OLD], "good");
-    assert.deepEqual(closedNum(await runStep(step, gw, [{ number: 11, title: OLD }, { number: 4, title: `Other ${OLD}` }])), ["11"]);
-    for (const w of ["low", "unknown", "refused", "demoted", "", "something-new"]) {
+  await check("facilitatorFunds: the issue under the old title closes on ok, low or unknown and is never opened", async () => {
+    for (const w of ["ok", "low", "unknown"]) {
+      const g = { facilitatorFunds: { status: w } };
+      assert.equal(judge({ gateway: g })[OLD], "good", `Worker: ${w}`);
+      assert.deepEqual(closedNum(await runStep(step, g, [{ number: 11, title: OLD }, { number: 4, title: `Other ${OLD}` }])), ["11"], `heartbeat: ${w} closes the old issue`);
+      assert.equal(created(await runStep(step, g), OLD), 0, `heartbeat: ${w} opens nothing under the old title`);
+    }
+    for (const w of ["refused", "demoted", "", "something-new"]) {
       const g = { facilitatorFunds: { status: w } };
       assert.equal(judge({ gateway: g })[OLD], "quiet", `Worker: ${w || "(empty)"}`);
       const calls = await runStep(step, g, [{ number: 11, title: OLD }]);
@@ -459,11 +465,13 @@ for (const [name, T, field, sameBody] of SPEND) {
     };
     try {
       const sync = (g) => syncAlarms({ GITHUB_ISSUES_TOKEN: "t" }, { sleep: async () => {}, confirmDelayMs: 0, fetchStatus: async () => ({ gateway: g, status: null }) });
-      let r = await sync({ facilitatorFunds: { status: "low" } });
-      assert.ok(!r.opened.includes(OLD) && !r.closed.includes(OLD) && !made.includes(OLD), `Worker: low leaves the old issue alone (${JSON.stringify(r)})`);
-      made = []; shut = [];
-      r = await sync({ facilitatorFunds: { status: "ok" } });
-      assert.ok(r.closed.includes(OLD) && shut.some((u) => /\/issues\/11$/.test(u)) && made.length === 0, `Worker: ok closes the old issue (${JSON.stringify(r)})`);
+      let r = await sync({ facilitatorFunds: { status: "refused" } });
+      assert.ok(!r.opened.includes(OLD) && !r.closed.includes(OLD) && !made.includes(OLD), `Worker: refused leaves the old issue alone (${JSON.stringify(r)})`);
+      for (const w of ["low", "unknown", "ok"]) {
+        made = []; shut = [];
+        r = await sync({ facilitatorFunds: { status: w } });
+        assert.ok(r.closed.includes(OLD) && shut.some((u) => /\/issues\/11$/.test(u)) && !made.includes(OLD), `Worker: ${w} closes the old issue and never reopens it (${JSON.stringify(r)})`);
+      }
     } finally { globalThis.fetch = realFetch; }
   });
   // An unread signer held for hours: a real monitor fed a fresh unread

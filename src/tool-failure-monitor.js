@@ -822,7 +822,8 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     // under the floor reads "low" (a warning before refusals). A balance our
     // checker could not read past its retries ("unread": our RPC read failed,
     // so nothing about the signer is known) reads "unknown", which pages
-    // nothing; a real low beside it still reads "low". A facilitator that
+    // only once it has held past FACILITATOR_UNREAD_PAGE_HOURS (alert
+    // sustained); a real low beside it still reads "low". A facilitator that
     // publishes no signer ("unknown") has nothing to watch and never pages.
     const gas = (m.gas || []).filter((r) => r.at > t - th.gasFreshMs);
     // A listed facilitator's empty or unreadable signer is covered while our
