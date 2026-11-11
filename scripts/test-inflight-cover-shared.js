@@ -155,6 +155,19 @@ if (ROLE === "memory") {
     const b = await bp;
     ok(typeof b.release === "function" && asked.get(W) === 1, `memory: a read asked for before a run left and begun after it is the one read the waiting run is judged on (${b.err?.statusCode || "admitted"}, reads for the wallet ${asked.get(W)}, want 1)`);
     await Promise.all(holding);
+    // A run waiting on a settling one is woken when that run leaves, not
+    // when its wait runs out (ten minutes here).
+    C._resetInflightCoverForTest();
+    let bal = PRICE;
+    C._setBalanceReaderForTest(async () => bal);
+    const S = "0x" + "1c".repeat(20);
+    const s1 = await attempt(C, S);
+    s1.release.settling();
+    let woken = false;
+    const s2p = attempt(C, S, { settleWaitMs: 600_000 }).then((r) => { woken = true; return r; });
+    await until(() => C.inflightCoverStatus().settleWaits >= 1, "the second run to wait on the settling one");
+    s1.release();
+    ok(await until(() => woken, "the waiting run to be woken by the departure") && typeof (await s2p).release === "function", "memory: a run waiting on a settling run is judged again as soon as that run leaves");
   }
   console.log(`CHILD_PASS ${pass}`);
   process.exit(0);
@@ -268,7 +281,7 @@ if (ROLE === "model") {
 // fixed at boot) ----------------------------------------------------------------------
 const here = fileURLToPath(import.meta.url);
 for (const [role, extra, min] of [
-  ["memory", { REDIS_URL: "" }, 7],
+  ["memory", { REDIS_URL: "" }, 8],
   ["model", { REDIS_URL: "redis://127.0.0.1:1", SHARED_LIMITS: "on" }, 7],
   ["degraded", { REDIS_URL: "redis://127.0.0.1:1", SHARED_LIMITS: "on", SHARED_LIMITS_OP_MS: "150" }, 7],
 ]) {
