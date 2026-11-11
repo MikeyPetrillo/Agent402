@@ -466,6 +466,54 @@ for (const [name, T, field, sameBody] of SPEND) {
       assert.ok(r.closed.includes(OLD) && shut.some((u) => /\/issues\/11$/.test(u)) && made.length === 0, `Worker: ok closes the old issue (${JSON.stringify(r)})`);
     } finally { globalThis.fetch = realFetch; }
   });
+  // An unread signer held for hours: a real monitor fed a fresh unread
+  // reading every ten minutes reads unknown with alert ok for the first six
+  // hours (nothing pages), then alert sustained, which pages once under its
+  // own title in both pagers; the balance read again (ok) closes it.
+  {
+    const UR = "facilitatorFunds: a settlement signer's balance could not be read for hours";
+    let tu = Date.parse("2026-11-10T00:00:00Z");
+    const mu = createToolFailureMonitor({ now: () => tu, env: {} });
+    const unreadRow = () => ({ network: NET, facilitator: "listed", signer: "0x" + "3".repeat(40), status: "unread", failures: 3, runway: null, at: tu });
+    const read = async () => { const st = await mu.status({ fresh: true, t: tu }); return { facilitatorFunds: st.facilitatorFunds }; };
+    const t0 = tu;
+    let g;
+    await check("facilitatorFunds: unknown for under six hours pages nothing; the alert word reads ok", async () => {
+      for (; tu < t0 + 6 * 3_600_000 - 10 * 60_000; tu += 10 * 60_000) mu.noteRelayerGas([unreadRow()]);
+      g = await read();
+      assert.deepEqual([g.facilitatorFunds.status, g.facilitatorFunds.alert], ["unknown", "ok"]);
+      assert.equal(judge({ gateway: g })[UR], "quiet");
+      assert.equal(created(await runStep(step, g), UR), 0);
+      const full = await mu.status({ fresh: true, t: tu, full: true });
+      assert.equal(full.facilitatorFunds.unreadSince, new Date(t0).toISOString(), "the operator view carries when the signer first read unread");
+    });
+    await check("facilitatorFunds: unknown held past six hours reads alert sustained and pages once in both pagers", async () => {
+      tu += 20 * 60_000; mu.noteRelayerGas([unreadRow()]);
+      g = await read();
+      assert.deepEqual([g.facilitatorFunds.status, g.facilitatorFunds.alert], ["unknown", "sustained"]);
+      assert.equal(judge({ gateway: g })[UR], "bad");
+      assert.equal(judge({ gateway: g })[FG], "quiet", "the low title stays quiet");
+      const calls = await runStep(step, g);
+      assert.equal(created(calls, UR), 1);
+      assert.equal(calls.filter((c) => c[1] === "create").length, 1, `only the unread title opens (${JSON.stringify(calls)})`);
+      assert.equal(created(await runStep(step, g, [{ number: 12, title: UR }]), UR), 0, "an open issue is not duplicated");
+    });
+    await check("facilitatorFunds: a sustained alert under a word that is not unknown pages nothing; a blind read neither opens nor closes", async () => {
+      for (const st of ["ok", "refused", "low"]) assert.notEqual(judge({ gateway: { facilitatorFunds: { status: st, alert: "sustained" } } })[UR], "bad", st);
+      assert.equal(created(await runStep(step, { facilitatorFunds: { status: "refused", alert: "sustained" } }), UR), 0);
+      assert.deepEqual(closedNum(await runStep(step, undefined, [{ number: 12, title: UR }])), []);
+    });
+    await check("facilitatorFunds: the balance read again closes the unread issue", async () => {
+      tu += 10 * 60_000; mu.noteRelayerGas([{ ...unreadRow(), status: "ok", runway: 5000 }]);
+      g = await read();
+      assert.deepEqual([g.facilitatorFunds.status, g.facilitatorFunds.alert], ["ok", "ok"]);
+      assert.equal(judge({ gateway: g })[UR], "good");
+      assert.deepEqual(closedNum(await runStep(step, g, [{ number: 12, title: UR }])), ["12"]);
+      tu += 10 * 60_000; mu.noteRelayerGas([unreadRow()]);
+      g = await read();
+      assert.deepEqual([g.facilitatorFunds.status, g.facilitatorFunds.alert], ["unknown", "ok"], "a new unread spell starts its own clock");
+    });
+  }
 }
 // ---- upstreamHealth=unanswered, end to end -----------------------------------------
 // A hung stub upstream: our AbortSignal.timeout fires on every call to it, for

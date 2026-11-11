@@ -1288,9 +1288,17 @@ jobs:
           TITLE="facilitatorFunds: a facilitator refused settlement"
           check_word facilitatorFunds "refused demoted" "ok"
           # A settlement signer short of gas, before any refusal: its own title.
-          # A balance our checker could not read reads unknown and pages nothing.
+          # A balance our checker could not read reads unknown, which pages
+          # under its own title (below) only once it has held for hours.
           TITLE="facilitatorFunds: a facilitator's settlement gas is running low"
           check_word facilitatorFunds "low" "ok"
+          # A signer balance our checker could not read pages only once
+          # unknown has held past FACILITATOR_UNREAD_PAGE_HOURS (alert=sustained,
+          # src/tool-failure-monitor.js); a read balance (ok or low) closes it.
+          TITLE="facilitatorFunds: a settlement signer's balance could not be read for hours"
+          FA=$(echo "$GS" | jq -r '.facilitatorFunds.alert // "none"' 2>/dev/null || echo none)
+          if [ "$FA" = "sustained" ]; then UNREAD_BAD="unknown"; else UNREAD_BAD="_not-sustained_"; fi
+          check_word facilitatorFunds "$UNREAD_BAD" "ok low"
           # Close-only: the issue opened under the title before its rename
           # closes on ok. The bad list is a word no status reads, so it never opens.
           TITLE="facilitatorFunds: a facilitator's settlement gas is running low or could not be read"

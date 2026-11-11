@@ -74,7 +74,8 @@ Surfaces:
 - /api/gateway-status carries topBuyerFailures (ok, alert, unknown or off);
   upstreamHealth reads unanswered when one upstream did not answer within our
   limit for several callers while others answered, and facilitatorFunds reads
-  unknown when a settlement signer's balance could not be read.
+  unknown when a settlement signer's balance could not be read, with alert
+  sustained once that has held past FACILITATOR_UNREAD_PAGE_HOURS (default 6).
 
 ### 2026-11-11 (spend alarm, funding refusals and connector answers)
 Gateway:

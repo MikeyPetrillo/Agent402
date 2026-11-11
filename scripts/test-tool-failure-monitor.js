@@ -692,7 +692,7 @@ await check("settle demotion safety: an alternate's ambiguous failure stops the 
       assert.equal(rep.relayerGas[0].facilitator, new URL(FAC).host);
       assert.ok(rep.issueSummary.facilitatorNetworks.includes(NET));
       const pub = await m.status({ fresh: true });
-      assert.deepEqual(Object.keys(pub.facilitatorFunds), ["status"], "the public word carries no figure");
+      assert.deepEqual(Object.keys(pub.facilitatorFunds), ["status", "alert"], "the public word carries no figure");
       // A refusal outranks low.
       m.noteFacilitatorRefusal({ network: NET, facilitator: "x", reason: "Out of mainnet settlement funds" });
       assert.equal((await m.status({ fresh: true })).facilitatorFunds.status, "refused");
@@ -858,7 +858,7 @@ await check("settle demotion safety: an alternate's ambiguous failure stops the 
       const full = await m.status({ fresh: true, full: true });
       assert.equal(full.facilitatorFunds.gasNearFloor, true);
       const pub = await m.status({ fresh: true });
-      assert.deepEqual(Object.keys(pub.facilitatorFunds), ["status"], "the public word carries no figures");
+      assert.deepEqual(Object.keys(pub.facilitatorFunds), ["status", "alert"], "the public word carries no figures");
       const rep = await m.report();
       const row = (rep.relayerGas || rep.facilitatorFunds?.relayerGas || []).find((x) => x.reason === "gasNearFloor");
       assert.ok(row && Number.isFinite(row.gasUsd) && row.floorUsd === 0.006, "the operator detail names the reason and the figures");
@@ -934,7 +934,9 @@ try {
   assert.ok(up, "server booted");
   await check("public words carry only `status`", async () => {
     const b = await (await fetch(`${base}/api/gateway-status`)).json();
-    for (const k of ["toolFailures", "upstreamHealth", "facilitatorFunds"]) assert.deepEqual(Object.keys(b[k]), ["status"], k);
+    for (const k of ["toolFailures", "upstreamHealth"]) assert.deepEqual(Object.keys(b[k]), ["status"], k);
+    assert.deepEqual(Object.keys(b.facilitatorFunds), ["status", "alert"], "facilitatorFunds: its word and its alert word");
+    assert.ok(["ok", "sustained"].includes(b.facilitatorFunds.alert), b.facilitatorFunds.alert);
   });
   await check("/__operator/tool-failures.json: 404 without the token, the rows with it", async () => {
     const anon = await fetch(`${base}/__operator/tool-failures.json`);

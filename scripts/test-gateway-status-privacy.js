@@ -67,7 +67,7 @@ ok(pubBody?.directUpstream?.status === "off" && Object.keys(pubBody.directUpstre
 for (const k of ["toolFailures", "upstreamHealth"]) {
   ok(["ok", "degraded", "failing", ...(k === "upstreamHealth" ? ["unanswered"] : [])].includes(pubBody?.[k]?.status) && Object.keys(pubBody[k]).join(",") === "status", `${k} publishes its word only (${JSON.stringify(pubBody?.[k])})`);
 }
-ok(["ok", "low", "unknown", "refused", "demoted"].includes(pubBody?.facilitatorFunds?.status) && Object.keys(pubBody.facilitatorFunds).join(",") === "status", `facilitatorFunds publishes its word only (${JSON.stringify(pubBody?.facilitatorFunds)})`);
+ok(["ok", "low", "unknown", "refused", "demoted"].includes(pubBody?.facilitatorFunds?.status) && Object.keys(pubBody.facilitatorFunds).join(",") === "status,alert" && ["ok", "sustained"].includes(pubBody.facilitatorFunds.alert), `facilitatorFunds publishes its word and its alert word only (${JSON.stringify(pubBody?.facilitatorFunds)})`);
 ok(Array.isArray(opBody?.toolFailures?.tools) && Array.isArray(opBody?.upstreamHealth?.upstreams) && typeof opBody?.facilitatorFunds?.refusals1h === "number", "the operator view of the failure words carries the rows and counts");
 ok(["ok", "degraded"].includes(pubBody?.toolAnswers?.status) && Object.keys(pubBody.toolAnswers).join(",") === "status", `toolAnswers publishes its word only (${JSON.stringify(pubBody?.toolAnswers)})`);
 ok(Array.isArray(opBody?.toolAnswers?.tools), "the operator view of toolAnswers carries its rows");

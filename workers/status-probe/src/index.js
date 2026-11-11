@@ -721,7 +721,16 @@ Auto-closes when nothing is owed.`,
     // refusing (low, src/facilitator-gas.js). Title matches heartbeat.yml's.
     title: "facilitatorFunds: a facilitator's settlement gas is running low",
     verdict: ({ gateway: b }) => wordVerdict(b.facilitatorFunds?.status, ["low"], ["ok"]),
-    body: () => `${failureWordBody("facilitatorFunds", "low")} low means a settlement signer's gas runway is under the floor (relayersLow). A balance our checker could not read reads unknown and pages nothing; the operator detail counts it (relayersUnread).`,
+    body: () => `${failureWordBody("facilitatorFunds", "low")} low means a settlement signer's gas runway is under the floor (relayersLow). A balance our checker could not read reads unknown and pages under its own title only once that has held for hours; the operator detail counts it (relayersUnread).`,
+  },
+  {
+    // A settlement signer's balance our checker could not read, held past
+    // FACILITATOR_UNREAD_PAGE_HOURS (alert=sustained beside unknown,
+    // src/tool-failure-monitor.js). A short spell of unknown pages nothing;
+    // a read balance (ok or low) closes it. Title matches heartbeat.yml's.
+    title: "facilitatorFunds: a settlement signer's balance could not be read for hours",
+    verdict: ({ gateway: b }) => (b.facilitatorFunds?.status === "unknown" && b.facilitatorFunds?.alert === "sustained" ? "bad" : ["ok", "low"].includes(b.facilitatorFunds?.status) ? "good" : "quiet"),
+    body: () => `${failureWordBody("facilitatorFunds", "unknown")} unknown with alert=sustained means our checker has not read a settlement signer's balance for longer than FACILITATOR_UNREAD_PAGE_HOURS (default 6), so its gas runway is not known; the operator detail counts it (relayersUnread, unreadSince). Closes when the balance reads again (ok or low).`,
   },
   {
     // Close-only: the issue opened under this title before it was renamed

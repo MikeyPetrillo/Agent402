@@ -90,10 +90,11 @@ for (const [doc, re, pkg, why] of CLAIMS) {
 // be read reads unknown (src/tool-failure-monitor.js), which does not page.
 {
   const mon = read("src/tool-failure-monitor.js");
+  const { thresholds } = await import("../src/tool-failure-monitor.js");
   const rh = String(read("wiki/Robinhood-Chain.md") || "").replace(/\s+/g, " ");
   ok(/gasLow\.length \? "low" : gasUnread\.length \? "unknown"/.test(mon), "control: the monitor reads an unread gas balance as unknown and a low one as low");
-  ok(/cannot be read three times running reads `facilitatorFunds=unknown`, which does not page/.test(rh) && !/cannot be read three times running, reads `facilitatorFunds=low`/.test(rh),
-    "wiki/Robinhood-Chain.md says an unreadable balance reads facilitatorFunds=unknown and does not page");
+  ok(/cannot be read three times running reads `facilitatorFunds=unknown`, which pages only once it has held past `FACILITATOR_UNREAD_PAGE_HOURS` \(default (\d+)\)/.test(rh) && Number(rh.match(/FACILITATOR_UNREAD_PAGE_HOURS` \(default (\d+)\)/)?.[1]) === Math.round(thresholds({}).gasUnreadPageMs / 3_600_000) && !/cannot be read three times running, reads `facilitatorFunds=low`/.test(rh),
+    "wiki/Robinhood-Chain.md says an unreadable balance reads facilitatorFunds=unknown and pages only past the code's default hours");
 }
 
 console.log(`test-doc-claims: ${pass} passed, ${fail} failed`);
