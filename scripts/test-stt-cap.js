@@ -141,11 +141,13 @@ const reject = (p) => p.then(() => null, (e) => e);
   const applies = sttKit.byteFloorApplies;
   ok(typeof applies === "function", "the kit says which containers the byte floor bounds");
   if (typeof applies === "function") {
-    ok(applies({ lossy: true, hasVideo: false, channels: 2 }) && applies({ lossy: true, hasVideo: false, channels: 1 }), "an audio-only lossy file in one or two channels is held to the floor");
-    ok(!applies({ lossy: true, hasVideo: true, channels: 2 }), "a file with a video track is not held to the floor (its video bytes are not audio)");
-    ok(!applies({ lossy: true, hasVideo: undefined, channels: 2 }), "a container that does not say whether it holds video is not held to the floor");
-    ok(!applies({ lossy: true, hasVideo: false, channels: 6 }) && !applies({ lossy: true, hasVideo: false, channels: null }), "a lossy file of more channels, or of an unread channel count, is not held to the floor");
-    ok(!applies({ lossy: false, hasVideo: false, channels: 2 }) && !applies(null), "a lossless file is not held to the floor");
+    ok(applies({ lossy: true, hasVideo: false, channels: 2, sampleRate: 48000 }) && applies({ lossy: true, hasVideo: false, channels: 1, sampleRate: 44100 }), "an audio-only lossy file in one or two channels at up to 48 kHz is held to the floor");
+    ok(!applies({ lossy: true, hasVideo: true, channels: 2, sampleRate: 44100 }), "a file with a video track is not held to the floor (its video bytes are not audio)");
+    ok(!applies({ lossy: true, hasVideo: undefined, channels: 2, sampleRate: 44100 }), "a container that does not say whether it holds video is not held to the floor");
+    ok(!applies({ lossy: true, hasVideo: false, channels: 6, sampleRate: 44100 }) && !applies({ lossy: true, hasVideo: false, channels: null, sampleRate: 44100 }), "a lossy file of more channels, or of an unread channel count, is not held to the floor");
+    ok(!applies({ lossy: false, hasVideo: false, channels: 2, sampleRate: 44100 }) && !applies(null), "a lossless file is not held to the floor");
+    ok(!applies({ lossy: true, hasVideo: false, channels: 2, sampleRate: 192000 }) && !applies({ lossy: true, hasVideo: false, channels: 2, sampleRate: 96000 }), "a lossy file above 48 kHz is not held to the floor (192 kHz Vorbis carries more bits a second than the floor's rate)");
+    ok(!applies({ lossy: true, hasVideo: false, channels: 2, sampleRate: null }) && !applies({ lossy: true, hasVideo: false, channels: 2 }), "a lossy file without a reported sample rate is not held to the floor");
   }
   __setMeasureForTest(null);
 
@@ -227,6 +229,18 @@ const reject = (p) => p.then(() => null, (e) => e);
       const unmeasuredClip = await reject(assertWithinDurationCap(video, "clip.mp4", "transcribe"));
       ok(unmeasuredClip === null, `unmeasured, a 10-second clip with a video track passes on its declared length (${unmeasuredClip?.message ?? "passed"})`);
       ok(Math.abs((await assertWithinDurationCap(video, "clip.mp4", "transcribe")) - 10) < 1, "and the duration returned is its declared 10 seconds");
+      __setMeasureForTest(null);
+
+      // 150 seconds of 192 kHz stereo Vorbis: about 24 MB, more bits a second
+      // than the floor's rate. Inside the cap it passes unmeasured too.
+      const hiRate = join(dir, "hi.ogg");
+      execFileSync("ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "anoisesrc=r=192000:a=0.9:d=150", "-ac", "2", "-c:a", "vorbis", "-strict", "-2", "-q:a", "10", hiRate], { stdio: "ignore" });
+      const vorbis = readFileSync(hiRate);
+      ok(byteFloorSeconds(vorbis.length) > 4 * 60 + 2, `the Vorbis file's bytes would read as ${Math.round(byteFloorSeconds(vorbis.length))} s at the floor's rate (${(vorbis.length / 1e6).toFixed(1)} MB)`);
+      __setMeasureForTest(async () => null);
+      const unmeasuredVorbis = await reject(assertWithinDurationCap(vorbis, "audio.ogg", "transcribe"));
+      ok(unmeasuredVorbis === null, `unmeasured, 150 seconds of 192 kHz stereo Vorbis passes the 4-minute cap on its declared length (${unmeasuredVorbis?.message ?? "passed"})`);
+      ok(Math.abs((await assertWithinDurationCap(vorbis, "audio.ogg", "transcribe")) - 150) < 1, "and the duration returned is its declared 150 seconds");
       __setMeasureForTest(null);
     } finally {
       __setMeasureForTest(null);

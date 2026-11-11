@@ -70,9 +70,10 @@ Tools:
   decoded on the server and its length read, and the cap applies to the longer
   of that and the duration the file's headers declare. A file the server
   cannot decode is held to the shortest length its byte count can play when it
-  is lossy audio-only in one or two channels; any other file (a lossless one,
-  or one with a video track or more than two channels) keeps its declared
-  length.
+  is lossy audio-only in one or two channels at a sample rate of 48 kHz or
+  less; any other file (a lossless one, one with a video track, more than two
+  channels, a higher sample rate or no reported sample rate) keeps its
+  declared length.
 - The domain audit and token risk reports (model-backed) pass the records they
   read (DNS, header and certificate values, registration text, token names,
   symbols and labels, web reputation text) to the model as quoted data, with

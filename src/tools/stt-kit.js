@@ -144,7 +144,7 @@ async function fetchAudio(url) {
 
 /** What the container says about itself, read locally (no upstream call):
  *  the duration its headers declare, whether its codec is lossy, whether it
- *  carries a video track, its channel count, and the bytes of embedded
+ *  carries a video track, its channel count, its sample rate, and the bytes of embedded
  *  pictures. Null when the container cannot be read. */
 async function probeContainer(buf, filename) {
   try {
@@ -155,7 +155,8 @@ async function probeContainer(buf, filename) {
     let pictureBytes = 0;
     for (const pic of meta?.common?.picture || []) pictureBytes += pic?.data?.length || 0;
     const channels = Number(meta?.format?.numberOfChannels);
-    return { durationSec: d, lossy: meta?.format?.lossless === false, hasVideo: meta?.format?.hasVideo, channels: Number.isInteger(channels) ? channels : null, pictureBytes };
+    const sampleRate = Number(meta?.format?.sampleRate);
+    return { durationSec: d, lossy: meta?.format?.lossless === false, hasVideo: meta?.format?.hasVideo, channels: Number.isInteger(channels) ? channels : null, sampleRate: Number.isFinite(sampleRate) && sampleRate > 0 ? sampleRate : null, pictureBytes };
   } catch {
     return null;
   }
@@ -169,9 +170,11 @@ export async function probeDurationSeconds(buf, filename) {
   return (await probeContainer(buf, filename))?.durationSec ?? null;
 }
 
-// The most bits a second of lossy audio holds in any format these tiers
-// accept (free-format MPEG audio tops out here; AAC, Opus and Vorbis sit
-// below it). Bytes divided by this is a duration the audio cannot be under.
+// The most bits a second of lossy audio holds at a sample rate of 48 kHz or
+// less in one or two channels (free-format MPEG audio tops out here; AAC,
+// Opus and Vorbis sit below it there). Vorbis at 192 kHz goes past it, so the
+// floor is read only up to 48 kHz (byteFloorApplies). Bytes divided by this
+// is a duration such audio cannot be under.
 const LOSSY_MAX_BITS_PER_SECOND = 640_000;
 const NON_AUDIO_ALLOWANCE_BYTES = 256 * 1024;
 /** The shortest a lossy file of this size can play, in seconds. Pure; exported for tests. */
@@ -181,13 +184,15 @@ export function byteFloorSeconds(bytes, pictureBytes = 0) {
 }
 
 /** Whether the byte floor bounds this container: lossy audio the parser read
- *  as holding no video track, in one or two channels. A video track's bytes
- *  are not audio, and more channels can carry more bits a second than the
- *  floor's rate, so either one would make the floor longer than the audio
- *  plays. Those files keep their declared length when unmeasured. Pure;
- *  exported for tests. */
+ *  as holding no video track, in one or two channels, at a reported sample
+ *  rate of 48 kHz or less. A video track's bytes are not audio, and more
+ *  channels or a higher sample rate can carry more bits a second than the
+ *  floor's rate, so any of them would make the floor longer than the audio
+ *  plays. Those files, and a file whose sample rate is not reported, keep
+ *  their declared length when unmeasured. Pure; exported for tests. */
 export function byteFloorApplies(container) {
-  return !!container && container.lossy === true && container.hasVideo === false && (container.channels === 1 || container.channels === 2);
+  return !!container && container.lossy === true && container.hasVideo === false && (container.channels === 1 || container.channels === 2)
+    && Number.isFinite(container.sampleRate) && container.sampleRate > 0 && container.sampleRate <= 48000;
 }
 
 let measureImpl = measureAudioSeconds;
@@ -206,7 +211,7 @@ export const sttUnmeasuredSinceBoot = () => unmeasured;
  *  what the audio measures: the file is decoded locally (ffmpeg, no upstream
  *  call) and the decoder's own clock is read. Where it cannot be decoded here
  *  (no ffmpeg on this server, a failed or slow decode), a lossy audio-only
- *  file in one or two channels is held to the shortest its byte count can
+ *  file in one or two channels at up to 48 kHz is held to the shortest its byte count can
  *  play (byteFloorApplies); any other file keeps its declared length. A
  *  file inside the cap passes either way; the returned duration is the one
  *  the margin math uses. */

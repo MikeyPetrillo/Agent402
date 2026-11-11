@@ -85,7 +85,8 @@ Loaded when a media, document or worker-pool tool file is read.
   file's headers declare and the length its audio measures. `measureAudioSeconds` (`src/tools/media-kit.js`) decodes
   the first audio stream to nowhere with ffmpeg (audio-only whitelist, its own two-slot pool that queues, 10 s
   deadline) and never refuses: where it cannot measure (no ffmpeg, a failed or slow decode) a lossy audio-only file in
-  one or two channels is held to the shortest its bytes can play (`byteFloorApplies`, `byteFloorSeconds`,
-  `src/tools/stt-kit.js`); a file with a video track or more channels keeps its declared length, since its bytes are
-  not all audio at the floor's rate. The unmeasured count since boot is `transcriptionUnmeasured.sinceBoot` on
+  one or two channels at a reported sample rate of 48 kHz or less is held to the shortest its bytes can play
+  (`byteFloorApplies`, `byteFloorSeconds`, `src/tools/stt-kit.js`); a file with a video track, more channels, a higher
+  sample rate (192 kHz Vorbis passes 640 kbps) or no reported sample rate keeps its declared length, since its bytes
+  are not all audio at the floor's rate. The unmeasured count since boot is `transcriptionUnmeasured.sinceBoot` on
   `/__operator/tool-failures.json`. Suite: `scripts/test-stt-cap.js`.
