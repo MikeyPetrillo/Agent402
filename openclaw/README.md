@@ -1,6 +1,6 @@
 # agent402-openclaw
 
-Part of [Agent402](https://agent402.tools), the open-source paid door for AI agents.
+Part of [Agent402](https://agent402.tools), the open-source paid door for AI agents. Agent402 is a catalog of 500+ tools that AI agents find, pay for per request over x402 or MPP, and call with no account or API key.
 
 Agent402 as an [OpenClaw](https://openclaw.ai) model provider: explicit models
 **priced per request** from the body by default (metered), and the auto-routed

@@ -1917,7 +1917,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (61 scripts, one process each)
+      - name: Offline suites (62 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -2041,6 +2041,8 @@ jobs:
           t node scripts/test-repo-link.js
           # Surface copy gate (every package, README, wiki page, connector string and machine surface names Agentic Finance + both wires - offline)
           t node scripts/test-surface-copy.js
+          # The lead sentence and category line (src/positioning.js) on the home hero, llms.txt, both MCP connectors, the READMEs and package descriptions (offline)
+          t node scripts/test-positioning.js
           # Leaderboard SEO/discovery surfaces (robots, sitemap, llms.txt, manifest, landing JSON-LD)
           t node scripts/test-leaderboard-surface.js
           # filing watch kit (offline)
@@ -2982,7 +2984,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (104 scripts, one process each)
+      - name: Offline suites (105 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -3071,6 +3073,8 @@ jobs:
           t node scripts/test-stats-store-hygiene.js
           # scripts/lib/boot-server.js: PORT=0 boots read the bound port back, two at once get two ports, a crash rejects with its log (boots the server; offline)
           t node scripts/test-boot-server.js
+          # Home hero first-party figures: served with an as-of each, no dash or loading placeholder, a slow source never holds the page (boots the server; offline)
+          t node scripts/test-home-proof.js
           # Stubbed fetches route by the parsed host (scripts/lib/url-host.js), never a URL substring; older files frozen with counts (static; offline)
           t node scripts/test-url-host-match.js
           # Every offline suite pins its stores first: ./lib/offline-stores.js is its first import, so an exported REDIS_URL, STATE_DATABASE_URL or LEDGER_JOURNAL_REDIS never reaches a src/ module (static; offline)

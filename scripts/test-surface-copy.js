@@ -80,7 +80,7 @@ ok(hi === si, "hosted and stdio initialize instructions are byte-identical");
   ok(hd === sd && /decide\.plan/.test(hd) && /decide\.execute/.test(hd), "with the decide tools listed, both instruction copies name decide.plan and decide.execute, identically");
   ok(!/decide\.plan/.test(hi), "without them, the instructions never name a tool the connector does not list");
 }
-ok(/positioning: `Agent402 is the applied layer of Agentic Finance/.test(read("src/mcp-http.js")), "hosted describe_server carries a positioning field naming Agentic Finance");
+ok(/positioning: `\$\{LEAD_SENTENCE\} It is the applied layer of Agentic Finance/.test(read("src/mcp-http.js")), "hosted describe_server carries a positioning field that leads with the lead sentence and names Agentic Finance");
 ok((read("mcp/index.js").match(/positioning: `[^`]*Agentic Finance[^`]*MPP/g) || []).length >= 2, "stdio describe payloads (both aliases) carry Agentic Finance + MPP positioning");
 
 // --- prominence (2026-08-18, the operator): the BRAND leads; the AIFI acronym lives only on the
