@@ -188,7 +188,7 @@ export async function refreshIndexSideStores() {
 export async function __sideStoresSettledForTest() { await Promise.all([...sideChains.values()].map((p) => p.catch(() => {}))); }
 import { timedSync } from "./boot-timing.js";
 import { esc } from "./ledger-chrome.js";
-import { safeFetch, probePublicUrl } from "./tools/fetch-guard.js";
+import { safeFetch, probePublicUrl, OUR_EGRESS_CONNECT_CODES } from "./tools/fetch-guard.js";
 import { readTextCapped } from "./capped-body.js";
 import { parseRobots, robotsAllows } from "./tools/kit.js";
 import { partialFields, clampFields } from "./partial-answer.js";
@@ -5853,7 +5853,9 @@ export function __setCrawlFetchForTest(fn) { crawlFetch = typeof fn === "functio
 export async function __crawlSellerForTest(originUrl, opts) { return crawlSeller(originUrl, opts); }
 
 /** Did this crawl read fail on our side? Our own deadline or abort, our
- *  resolver failing to finish a lookup, or our own byte cap on the document.
+ *  resolver failing to finish a lookup, our own byte cap on the document, or
+ *  a connection our own network path could not make (source-unreachable with
+ *  ENETUNREACH, EHOSTUNREACH or EADDRNOTAVAIL, OUR_EGRESS_CONNECT_CODES).
  *  Positive identification only: an HTTP status the seller sent
  *  (upstreamStatus), a body that is not the document, a redirect it chose,
  *  its robots.txt, a name that does not resolve, and a connection its host
@@ -5864,6 +5866,7 @@ export function crawlReadFailureIsOurs(e) {
   if (e.upstreamStatus != null || e.robotsBlocked) return false;
   if (e.hint === "source-timeout") return true;
   if (e.code === "EDNSUNAVAILABLE") return true; // fetch-guard's lookupUnavailable: our resolver
+  if (e.hint === "source-unreachable" && typeof e.transportCode === "string" && OUR_EGRESS_CONNECT_CODES.has(e.transportCode)) return true;
   if (e.statusCode === 413) return true;         // fetch-guard's own maxBytes cut, not a seller 413
   return e.name === "AbortError" || e.name === "TimeoutError";
 }

@@ -443,6 +443,12 @@ export async function retryTransient(fn, { retries = 1, backoffMs = 300 } = {}) 
   throw lastErr;
 }
 
+/** Connect failures that are this server's own network path, not the
+ *  host's answer: no route out of our network (ENETUNREACH), no route to the
+ *  host from here (EHOSTUNREACH), and no local address to send from
+ *  (EADDRNOTAVAIL). A refused, reset or TLS-failed connection is the host's. */
+export const OUR_EGRESS_CONNECT_CODES = Object.freeze(new Set(["ENETUNREACH", "EHOSTUNREACH", "EADDRNOTAVAIL"]));
+
 /**
  * Fetch a public http(s) URL with SSRF protection, size cap, and timeout.
  * Returns { finalUrl, html } — or { finalUrl, buffer } with `binary: true`.
@@ -506,7 +512,10 @@ export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, 
           ? `Source URL did not respond within our ${Math.max(1, Math.round(timeoutMs / 1000))} s limit; check that the URL is correct and publicly reachable, or retry`
           : `Could not connect to source URL: ${err.message}${code ? ` (${code})` : ""}; check that the URL is correct and publicly reachable, or retry`
       ),
-      { statusCode: 504, attribution: "unknown", hint: timedOut ? "source-timeout" : "source-unreachable" }
+      // The transport code rides beside the hint (never as `code`, which
+      // other readers branch on), so a reader that keeps our own egress
+      // apart (OUR_EGRESS_CONNECT_CODES) can tell it from the host's answer.
+      { statusCode: 504, attribution: "unknown", hint: timedOut ? "source-timeout" : "source-unreachable", ...(code ? { transportCode: String(code).slice(0, 40) } : {}) }
     );
   }
 
