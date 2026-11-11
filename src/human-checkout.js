@@ -256,6 +256,18 @@ const OWED_RESOLVE_MAX_INFLIGHT = 3;
 const OWED_RETRY_WAIT_MS = 8_000;
 const OWED_RETRY_ABANDON_MS = 5 * 60_000;
 const OWED_RETRY_MAX_OPEN = 2000;
+// A buyer's poll of a session with no record yet reads the session from
+// Stripe (fulfill). The poll waits SESSION_READ_WAIT_MS for that read; past
+// it the poll is answered "generating" and the read runs on. One read per
+// session is open at a time. When a read answers after its poll stopped
+// waiting, the session is kept SESSION_READ_KEEP_MS and fulfill runs once
+// more from it, so a paid session starts its report without another poll; a
+// read that fails late is recorded as one that failed in time is. A read
+// still open after SESSION_READ_ABANDON_MS is given up and its answer unused.
+const SESSION_READ_WAIT_MS = 8_000;
+const SESSION_READ_ABANDON_MS = 5 * 60_000;
+const SESSION_READ_KEEP_MS = 60_000;
+const SESSION_READ_MAX_OPEN = 2000;
 // Failure breaker (review 2026-09-03): every failed generation is refunded, and Stripe keeps its fee on a
 // refund, so an input engineered to fail costs us the fee plus the upstream spend each time. After
 // FAIL_MAX failures from one buyer address inside FAIL_WINDOW_MS the next paid session is refunded
@@ -391,7 +403,7 @@ if (USE_PG) {
  * @param {()=>number} [deps.now]
  * @param {(s:string)=>void} [deps.log]
  */
-export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSale, onDelivered = null, onFailed = null, now = () => Date.now(), log = console.log, owedResolveTimeoutMs = OWED_RESOLVE_TIMEOUT_MS, owedResolveRetryMs = OWED_RESOLVE_RETRY_MS, owedListWaitMs = OWED_LIST_WAIT_MS, owedRetryWaitMs = OWED_RETRY_WAIT_MS, owedRetryAbandonMs = OWED_RETRY_ABANDON_MS }) {
+export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSale, onDelivered = null, onFailed = null, now = () => Date.now(), log = console.log, owedResolveTimeoutMs = OWED_RESOLVE_TIMEOUT_MS, owedResolveRetryMs = OWED_RESOLVE_RETRY_MS, owedListWaitMs = OWED_LIST_WAIT_MS, owedRetryWaitMs = OWED_RETRY_WAIT_MS, owedRetryAbandonMs = OWED_RETRY_ABANDON_MS, sessionReadWaitMs = SESSION_READ_WAIT_MS, sessionReadAbandonMs = SESSION_READ_ABANDON_MS }) {
   const dir = storeDir || DEFAULT_DIR();
   try { mkdirSync(dir, { recursive: true }); } catch { /* best-effort; writes will fail loudly below */ }
   const INFLIGHT = join(dir, "_inflight.json");   // sessionId -> claimedAt (ms)
@@ -961,6 +973,54 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     inFlight.set(sessionId, job);
   }
 
+  // The session read of a poll with no record yet, waited on for
+  // sessionReadWaitMs. Answers { session }, { failed: true } (the read threw)
+  // or { waiting: true } (Stripe has not answered; the read stays open, and
+  // polls while it is open wait on nothing and start no second read).
+  const sessionReading = new Map(); // id -> { startedAt, slow, done }
+  const sessionRead = new Map();    // id -> { session, at }: answered after its poll stopped waiting
+  const SESSION_WAITED = Symbol("sessionReadWaited");
+  async function readSessionForPoll(sessionId) {
+    const kept = sessionRead.get(sessionId);
+    if (kept) {
+      sessionRead.delete(sessionId);
+      if (now() - kept.at < SESSION_READ_KEEP_MS) return { session: kept.session };
+    }
+    let entry = sessionReading.get(sessionId);
+    if (entry && now() - entry.startedAt >= sessionReadAbandonMs) entry = null;
+    if (entry && entry.slow) return { waiting: true };
+    if (!entry) {
+      entry = { startedAt: now(), slow: false, done: null };
+      const mine = entry;
+      sessionReading.delete(sessionId);
+      while (sessionReading.size >= SESSION_READ_MAX_OPEN) sessionReading.delete(sessionReading.keys().next().value);
+      sessionReading.set(sessionId, mine);
+      // Never rejects: the outcome is a value either way.
+      mine.done = (async () => { try { return { session: await stripe.checkout.sessions.retrieve(sessionId) }; } catch { return { failed: true }; } })();
+      mine.done.then((got) => {
+        const current = sessionReading.get(sessionId) === mine;
+        if (current) sessionReading.delete(sessionId);
+        // Answered in time: the poll that waited acts on it. Given up, or
+        // pushed out by a newer read: its answer is not used.
+        if (!mine.slow || !current) return;
+        if (got.failed) { negSet(sessionId, "not_found"); return; }
+        if (sessionRead.size >= SESSION_READ_MAX_OPEN) sessionRead.clear();
+        sessionRead.set(sessionId, { session: got.session, at: now() });
+        // The poll was answered "generating": run the same path once more
+        // from the session now in hand, as that poll would have.
+        fulfill(sessionId).catch((e) => log(`[human-checkout] fulfill after a slow session read stopped for ${sessionId}: ${String(e?.message || e).slice(0, 160)}`));
+      });
+    }
+    let timer = null;
+    const waited = new Promise((resolve) => { timer = setTimeout(() => resolve(SESSION_WAITED), sessionReadWaitMs); timer.unref?.(); });
+    try {
+      const v = await Promise.race([entry.done, waited]);
+      if (v !== SESSION_WAITED) return v;
+    } finally { clearTimeout(timer); }
+    entry.slow = true;
+    return { waiting: true };
+  }
+
   // Idempotent, generate-once, refund-on-failure. Returns a status object the
   // page polls. NEVER generates without a verified-paid Stripe session.
   async function fulfill(sessionId) {
@@ -1021,8 +1081,12 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
 
     const neg = negGet(sessionId);
     if (neg) return neg;
-    let session;
-    try { session = await stripe.checkout.sessions.retrieve(sessionId); } catch { return negSet(sessionId, "not_found"); }
+    // Stripe has not answered inside the poll's wait: nothing is decided, so
+    // nothing is recorded (never "unpaid" or "not found") and the page polls on.
+    const got = await readSessionForPoll(sessionId);
+    if (got.waiting) return { status: "generating" };
+    if (got.failed) return negSet(sessionId, "not_found");
+    const session = got.session;
     // "no_payment_required" is a 100%-off promotion code the operator created
     // in the dashboard: fulfil it (the operator chose that) but book $0.
     if (!session || (session.payment_status !== "paid" && session.payment_status !== "no_payment_required")) return negSet(sessionId, "unpaid");

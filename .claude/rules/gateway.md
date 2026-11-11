@@ -75,6 +75,12 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   client's own waits) is given up so a later poll starts another. Every refund create carries the
   payment's idempotency key, so two calls are one refund, and a late failure never writes over a
   recorded refund (`scripts/test-human-checkout.js`, `scripts/test-refund-owed-card.js`).
+- **Card report first poll:** a session with no record yet is read from Stripe before anything is
+  decided (`fulfill`); the poll waits `SESSION_READ_WAIT_MS` (8 s) and is then answered
+  `generating`, with nothing recorded (never `unpaid` or `not_found` on an unanswered read). One
+  read per session is open at a time; when it answers late, `fulfill` runs once more from that
+  session, so a paid session starts its report without another poll. A read open past
+  `SESSION_READ_ABANDON_MS` (5 minutes) is given up and its answer unused.
 - **Direct upstream (off by default):** `src/gateway-direct-upstream.js`. With `DIRECT_UPSTREAM_URL`
   (https; plain http only to loopback), `DIRECT_UPSTREAM_KEY` and `DIRECT_UPSTREAM_MODELS`
   (`<openrouter id>=<upstream id>,...`) all set, the chat wire (`llm-gateway-kit.js` makeHandler,

@@ -395,6 +395,89 @@ ok(refunds.length === 3, "...and not refunded again on the next poll");
   rmSync(DIR4, { recursive: true, force: true });
 }
 
+// THE FIRST POLL OF A PAID SESSION DOES NOT WAIT ON STRIPE WITHOUT A BOUND.
+// A session with no record yet is read from Stripe before anything is
+// decided. With a Stripe that never answers that read, the poll is answered
+// "generating" inside its wait: never "unpaid" or "not found", nothing
+// recorded, nothing generated, nothing refunded. A poll while the read is
+// open starts no second read. When the read answers late with a paid session
+// the report is generated once, with no further poll; a read that fails late
+// is the "not found" a read that fails in time is; and a read given up is
+// replaced by one new read whose report is the only one made.
+{
+  const DIR5 = join("/tmp", `test-human-checkout-read-${process.pid}`);
+  rmSync(DIR5, { recursive: true, force: true });
+  mkdirSync(DIR5, { recursive: true });
+  const paid = (id) => ({ id, mode: "payment", payment_status: "paid", payment_intent: `pi_${id}`, amount_total: 500, metadata: { product: "dossier", input: "AAPL" } });
+  let answers = false;
+  const reads = [], open = new Map(), made = [], refunded = [], sold = [];
+  const stub = {
+    checkout: { sessions: { retrieve: (id) => {
+      reads.push(id);
+      if (answers) return Promise.resolve(paid(id));
+      return new Promise((resolve, reject) => { open.set(id, [...(open.get(id) || []), { resolve, reject }]); });
+    } } },
+    refunds: { create: (args) => { refunded.push(args.payment_intent); return Promise.resolve({ id: `re_${args.payment_intent}` }); } },
+  };
+  let t = clock;
+  const ABANDON_MS = 300_000;
+  const h = createHumanCheckout({
+    stripe: stub, baseUrl: "https://agent402.tools", storeDir: DIR5, now: () => t, log: () => {},
+    generate: async (_kind, slug, input) => { made.push(input); return { report: `# REPORT (${slug})\n\nAnalysis of ${input}. [1]`, title: input, sources: [], tables: [] }; },
+    onSale: (x) => sold.push(x.sessionId), sessionReadWaitMs: 150, sessionReadAbandonMs: ABANDON_MS,
+  });
+  // A poll is given 20 s here; the read's own wait is 150 ms.
+  const poll = async (id) => { const r = await Promise.race([h.fulfill(id), wait(20_000).then(() => null)]); return r === null ? { held: true } : r; };
+  const readsOf = (id) => reads.filter((x) => x === id).length;
+  // Wait for an outcome with a deadline, never a fixed sleep.
+  const until = async (cond, ms = 10_000) => { const end = Date.now() + ms; while (Date.now() < end) { if (cond()) return true; await wait(10); } return cond(); };
+  const done = (id) => h.peek(id)?.status === "done";
+
+  // 1. The read never answers.
+  const first = await poll("cs_slowA");
+  ok(!first.held && first.status === "generating", `session read unanswered: the first poll is answered inside its wait as still being prepared (${first.held ? "HELD" : first.status})`);
+  ok(readsOf("cs_slowA") === 1 && h.peek("cs_slowA") == null && made.length === 0 && refunded.length === 0, "session read unanswered: one read is open, and nothing is recorded, generated or refunded");
+  const second = await poll("cs_slowA");
+  ok(!second.held && second.status === "generating" && readsOf("cs_slowA") === 1, `session read unanswered: a poll while the read is open is answered at once and starts no second read (${readsOf("cs_slowA")})`);
+  // 2. The read answers late, paid: the report is made once, with no poll.
+  open.get("cs_slowA")[0].resolve(paid("cs_slowA"));
+  ok(await until(() => done("cs_slowA")), "late paid answer: the report is generated without another poll");
+  const after = await poll("cs_slowA");
+  ok(after.status === "done" && made.length === 1 && sold.filter((x) => x === "cs_slowA").length === 1 && readsOf("cs_slowA") === 1 && refunded.length === 0, `late paid answer: one report, one sale, one read, no refund (${made.length} reports, ${readsOf("cs_slowA")} reads)`);
+
+  // 3. The read fails late: "not found", as a read that fails in time.
+  const b1 = await poll("cs_slowB");
+  ok(b1.status === "generating" && readsOf("cs_slowB") === 1, "second session, read unanswered: answered as still being prepared");
+  open.get("cs_slowB")[0].reject(new Error("No such session"));
+  // The failure is taken in on the turn after the read rejects.
+  let b2 = null;
+  await until(() => { if (b2?.status !== "not_found") void h.fulfill("cs_slowB").then((r) => { b2 = r; }); return b2?.status === "not_found"; });
+  ok(h.peek("cs_slowB") == null, "late failure: nothing is recorded");
+  ok(b2?.status === "not_found" && readsOf("cs_slowB") === 1 && made.length === 1, `late failure: a later poll reads "not found" without a new read (${b2?.status}, ${readsOf("cs_slowB")} reads)`);
+
+  // 4. A read given up: one new read, and the old read's late answer makes
+  // no second report.
+  const c1 = await poll("cs_slowC");
+  ok(c1.status === "generating" && readsOf("cs_slowC") === 1, "third session, read unanswered: answered as still being prepared");
+  t += ABANDON_MS - 1_000;
+  ok((await poll("cs_slowC")).status === "generating" && readsOf("cs_slowC") === 1, "until the open read is given up no second read starts");
+  t += 2_000;
+  answers = true;
+  const c2 = await poll("cs_slowC");
+  ok(c2.status === "generating" && readsOf("cs_slowC") === 2, `read given up, Stripe answering: one new read starts the report (${c2.status}, ${readsOf("cs_slowC")} reads)`);
+  ok(await until(() => done("cs_slowC")), "read given up, Stripe answering: the report is generated");
+  open.get("cs_slowC")[0].resolve(paid("cs_slowC"));
+  // The late answer is taken in on the turns that follow, not after a delay.
+  for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+  const c3 = await poll("cs_slowC");
+  ok(c3.status === "done" && made.length === 2 && sold.filter((x) => x === "cs_slowC").length === 1 && refunded.length === 0, `the given-up read answering late makes no second report, sale or refund (${made.length} reports)`);
+
+  // 5. A paid session whose read answers inside the wait is never "unpaid".
+  const d1 = await poll("cs_fastD");
+  ok(d1.status === "generating" && readsOf("cs_fastD") === 1 && await until(() => done("cs_fastD")), "Stripe answering in time: the paid session starts its report on the first poll");
+  rmSync(DIR5, { recursive: true, force: true });
+}
+
 // Long input reassembles from chunked metadata.
 await hc.fulfill("cs_long");
 const lg = await settle("cs_long");
