@@ -34,6 +34,27 @@ set_mirrors() {  # $1 = with-azure | no-azure
   } | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
 }
 set_mirrors with-azure
+# When the runner's resolver cannot find the Ubuntu archive hosts (seen
+# 2026-11-11: "Temporary failure resolving 'archive.ubuntu.com'" while other
+# hosts resolved), look them up through public resolvers and pin the answer
+# in /etc/hosts for this job only. Nothing is pinned when the runner resolves.
+pin_ubuntu_hosts() {
+  for h in archive.ubuntu.com security.ubuntu.com; do
+    getent hosts "$h" >/dev/null 2>&1 && continue
+    ip=""
+    for r in 1.1.1.1 8.8.8.8; do
+      ip=$(dig +short +time=3 +tries=1 @"$r" "$h" A 2>/dev/null | grep -E '^[0-9.]+$' | head -1)
+      [ -n "$ip" ] && break
+    done
+    if [ -n "$ip" ]; then
+      echo "runner resolver cannot find $h; pinning $h to $ip (public resolver) for this job"
+      echo "$ip $h" | sudo tee -a /etc/hosts >/dev/null
+    else
+      echo "runner resolver cannot find $h, and the public resolvers gave no answer"
+    fi
+  done
+}
+pin_ubuntu_hosts
 for i in 1 2 3; do
   t0=$(date +%s)
   if attempt "$@"; then
@@ -46,6 +67,7 @@ for i in 1 2 3; do
   # the group); clear it so the retry is not blocked on its lock.
   sudo pkill -TERM -f 'apt-get' 2>/dev/null || true
   set_mirrors no-azure
+  pin_ubuntu_hosts
   sleep 10
 done
 echo "apt install of $* failed 3x - the runner's apt mirror is likely down"
