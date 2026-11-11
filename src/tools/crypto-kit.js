@@ -20,7 +20,7 @@ import { assertPublicUrl } from "./fetch-guard.js";
 import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, budgetSpent, currentBudget } from "../upstream-deadline.js";
 const CRYPTO_READ_MS = 10_000;
 const CRYPTO_RETRY_READ_MS = 12_000;
-import { cgTake, cgRefusalMessage, isCoinGeckoHost, COINGECKO_ATTRIBUTION } from "./coingecko-rate.js";
+import { cgTake, cgRefusal, isCoinGeckoHost, COINGECKO_ATTRIBUTION } from "./coingecko-rate.js";
 import { createCgCache } from "./coingecko-cache.js";
 import { upstreamErrorText } from "./redact.js";
 
@@ -144,7 +144,7 @@ async function jsonLoad(safeUrl, host, { isCg, sendCgKey, cgKey }) {
   // retries included.
   if (isCg) {
     const why = await cgTake(Date.now());
-    if (why) throw bad(cgRefusalMessage(why), 503);
+    if (why) throw cgRefusal(why);
   }
   // DEADLINES (src/upstream-deadline.js): each attempt runs under its own cap
   // and the handler budget, so the retry gets what remains instead of a second

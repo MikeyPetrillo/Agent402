@@ -155,11 +155,42 @@ export async function cgTake(now = Date.now()) {
  *  bucket without one, or its own bucket because the store did not answer. */
 export function cgTakeCounts() { return { ...counts }; }
 
-/** Buyer-facing refusal text for a cgTokenRefusal reason (never a count). */
-export function cgRefusalMessage(reason, label = "CoinGecko") {
+/** Seconds until 00:00 UTC, when the daily allowance renews. */
+export function secondsToUtcMidnight(now = Date.now()) {
+  const d = new Date(now);
+  const next = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1);
+  return Math.max(1, Math.ceil((next - now) / 1000));
+}
+/** Seconds until the pacing has room again: this process's bucket refills
+ *  continuously, so the next token is (1 - tokens) / rate away; with a
+ *  shared store, one token's spacing at the service-wide rate. */
+export function cgPacingRetrySeconds(now = Date.now()) {
+  const perMs = cgLocalShare(cgRatePerMin()) / 60_000;
+  const missing = cgTokens === null ? 0 : Math.max(0, 1 - cgTokens);
+  const localMs = missing > 0 ? missing / perMs : 0;
+  const spacingMs = 60_000 / cgRatePerMin();
+  return Math.max(1, Math.ceil(Math.max(localMs, spacingMs) / 1000));
+}
+
+/** Buyer-facing refusal text for a cgTokenRefusal reason (never a count).
+ *  Both reasons are this server's own: its share of the daily allowance, or
+ *  its own request pacing. Neither says the upstream is down or throttling. */
+export function cgRefusalMessage(reason, label = "CoinGecko", now = Date.now()) {
   return reason === "day"
-    ? `${label} is temporarily unavailable, retry later. You were not charged.`
-    : `${label} is rate limited right now, retry in a few seconds. You were not charged.`;
+    ? `This server's daily ${label} allowance is used up; it renews at 00:00 UTC. This is on our side, not your input. You were not charged.`
+    : `This server paces its ${label} requests and has no room this moment; retry in ${cgPacingRetrySeconds(now)} s. This is on our side, not your input. You were not charged.`;
+}
+
+/** The 503 for a cgTokenRefusal reason: attributed to this server, with the
+ *  kind (our-allowance or our-pacing) and Retry-After (src/upstream-deadline.js). */
+export function cgRefusal(reason, label = "CoinGecko", now = Date.now()) {
+  const day = reason === "day";
+  return Object.assign(new Error(cgRefusalMessage(reason, label, now)), {
+    statusCode: 503,
+    attribution: "ours",
+    hint: day ? "our-allowance" : "our-pacing",
+    retryAfter: day ? secondsToUtcMidnight(now) : cgPacingRetrySeconds(now),
+  });
 }
 
 /** Test seam: refill this process's bucket (offline suites make dozens of

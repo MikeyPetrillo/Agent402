@@ -117,7 +117,7 @@ const reset = () => { calls = []; _exaSpendReset(); process.env.EXA_API_KEY = "t
   reset();
   globalThis.fetch = async () => { const e = new Error("timeout"); e.name = "TimeoutError"; throw e; };
   const before = exaSpendStatus().spentUsd;
-  await throws(() => tool("exa-search").handler({ query: "slow" }), /^Exa did not answer the search read within \d+ s \(upstream deadline\)/, "a deadline is a 503 naming the upstream and the step");
+  await throws(() => tool("exa-search").handler({ query: "slow" }), /^Exa did not answer the search read within our \d+ s limit/, "a deadline is a 503 naming the upstream and the step");
   ok(exaSpendStatus().spentUsd > before, "and the day's spend still moved - a guard that only books on success is one a timeout walks through");
 }
 
@@ -218,7 +218,7 @@ const reset = () => { calls = []; _exaSpendReset(); process.env.EXA_API_KEY = "t
   // naming the upstream; a timeout is the shared deadline 503 (src/upstream-deadline.js).
   reset(); globalThis.fetch = async () => { throw new Error("ECONNRESET"); };
   const down = await tool("exa-search").handler({ query: "x" }).catch((x) => x);
-  ok(down.statusCode === 503 && down.attribution === "upstream" && /Exa is unreachable from here/.test(down.message) && /nothing was charged/i.test(down.message), "an unreachable upstream is a 503 naming the upstream and the uncharged call");
+  ok(down.statusCode === 503 && down.attribution === "unknown" && /Exa is unreachable from here/.test(down.message) && /nothing was charged/i.test(down.message), "an unreachable upstream is a 503 naming the upstream and the uncharged call");
   reset(); globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => { throw new Error("bad json"); }, headers: { get: () => null } });
   const junk = await tool("exa-search").handler({ query: "x" }).catch((x) => x);
   ok(junk.statusCode === 503 && /not JSON.*not charged on x402/.test(junk.message), "a non-JSON upstream body is a 503 naming the upstream");

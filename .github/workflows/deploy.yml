@@ -1902,6 +1902,8 @@ jobs:
           t node scripts/test-solana-intel-deadline.js
           # Every kit that reads an upstream: a stalled read ends at its cap, composed with the handler budget, as the shared 503 class naming the upstream and the step (stubbed fetch, short budget).
           t node scripts/test-upstream-deadline.js
+          # Whose failure an error names: our own 500, limit, budget, key or allowance is ours; a caller URL that did not answer is told to check it or retry; a router leg our clamp cut is not the seller's (stub catalog, stubbed fetch).
+          t node scripts/test-error-attribution.js
           t node scripts/test-solana-kit-deps.js
           t node scripts/test-workflow-client-pins.js
 

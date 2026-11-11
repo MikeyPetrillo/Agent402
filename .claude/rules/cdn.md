@@ -29,6 +29,8 @@ Loaded when an edge, job or fetch-guard file is read.
 - **Outbound fetches:** every buyer-supplied URL goes through `src/tools/fetch-guard.js`. A name
   that does not resolve and a private address get one neutral 400; a resolver that cannot answer
   (EAI_AGAIN and the other transient codes, or a lookup past `DNS_LOOKUP_TIMEOUT_MS`, default 10 s)
-  is a retryable 503 attributed upstream. The MCP connector's loopback replay carries a
+  is a retryable 503 attributed to our side (`attribution: "ours"`, `hint: "our-egress"`). A caller URL
+  that times out or refuses the connection is a 504 with `attribution: "unknown"` and `hint` `source-timeout` or
+  `source-unreachable`, advising to check the URL or retry; the attribution vocabulary lives in `src/upstream-deadline.js`. The MCP connector's loopback replay carries a
   per-process secret in its marker (`src/mcp-loopback.js`); an inbound marker is stripped by the
   first middleware, so only the real replay is exempt from the discovery limits.

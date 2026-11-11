@@ -539,7 +539,9 @@ curl -s https://agent402.tools/v1/models \\
 | 422 | the tool cannot serve this input (an image too large to read, a body that is not an image) | read \`error\` and the \`howToCall\` note; not charged on x402 |
 | 429 | one of the limits above | wait \`Retry-After\` |
 | 503 | busy or briefly paused; image-ocr reading another image over ${OCR_LARGE_PIXELS / 1e6} megapixels answers \`hint: "large-image-busy"\` | wait \`Retry-After\`, or send a smaller image, which is read at once |
-| 502, 504 with \`attribution: "upstream"\` | a source the tool reads failed (a host timed out or refused the connection) | not your input: retry later or pick another source; not charged on x402 |
+| 502, 503 with \`attribution: "upstream"\` | a source the tool reads answered with a failure (its own status rides in \`upstreamStatus\`) | not your input: retry later or pick another source; not charged on x402 |
+| 503, 504 with \`attribution: "ours"\` | our side: our time limit passed (\`hint: "our-deadline"\` or \`"budget-spent"\`), our DNS lookup failed (\`"our-egress"\`), or our own allowance or pacing (\`"our-allowance"\`, \`"our-pacing"\`); \`hint: "smaller-input"\` means an input this long outlasts the limit | retry the same call, or send a shorter input when the hint says so; not charged on x402 |
+| 504 with \`hint: "source-timeout"\` or \`"source-unreachable"\` | a URL you supplied did not answer within our limit, or could not be connected to (\`attribution: "unknown"\`) | check that the URL is correct and publicly reachable, or retry; not charged on x402 |
 
 A loop that honors all of it, shown with plain \`fetch\` (pass your payment
 \`fetch\` in its place):

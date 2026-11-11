@@ -194,7 +194,7 @@ const okCount = (rs) => rs.filter((r) => r.status === 200).length;
   for (let i = 0; i < 8; i++) onA.push(await search(A, `dayA${i}`));
   ok(okCount(onA) === DAY - 3, `the day's remaining calls are one counter: A takes all ${DAY - 3} left (${okCount(onA)} answered)`);
   const onB = await Promise.all(Array.from({ length: 4 }, (_, i) => search(B, `dayB${i}`)));
-  ok(okCount(onB) === 0 && onB.every((r) => r.status === 503 && /temporarily unavailable/i.test(JSON.stringify(r.body))), "then B refuses with the daily wording");
+  ok(okCount(onB) === 0 && onB.every((r) => r.status === 503 && /daily .* allowance is used up/.test(JSON.stringify(r.body))), "then B refuses with the daily wording (our own allowance)");
   ok(upstream === DAY, `upstream requests across both servers for the day: ${upstream} (ceiling ${DAY})`);
   stop();
 }

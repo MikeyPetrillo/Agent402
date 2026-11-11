@@ -177,7 +177,15 @@ for (const format of ["mp3", "pcm", "wav", "flac", "opus", "aac"]) {
   ok(empty?.statusCode === 502 && calls.length === 1, `empty audio is a final uncharged 502 after one upstream call (calls: ${calls.length})`);
   stub([["openrouter.ai", withBackups(() => { throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" }); })]]);
   const slow = await throwsWith(() => run("tts-hd", { text: "hi" }));
-  ok(slow?.statusCode === 503 && /^Speech upstream did not answer the speech read within \d+ s \(upstream deadline\)/.test(slow?.message || "") && calls.length === 1, `a deadline is a final uncharged 503 naming the step after one upstream call (calls: ${calls.length}, got ${slow?.statusCode} "${slow?.message}")`);
+  ok(slow?.statusCode === 503 && /^Speech upstream did not answer the speech read within our \d+ s limit/.test(slow?.message || "") && calls.length === 1, `a deadline is a final uncharged 503 naming the step after one upstream call (calls: ${calls.length}, got ${slow?.statusCode} "${slow?.message}")`);
+  // A long text whose read outlives our per-link limit is told to shorten it:
+  // our limit, an input long enough to outlast it, never "retry shortly".
+  stub([["openrouter.ai", withBackups(() => { throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" }); })]]);
+  const longText = "word ".repeat(380).trim();
+  const slowLong = await throwsWith(() => run("tts", { text: longText }));
+  ok(slowLong?.statusCode === 503 && slowLong?.attribution === "ours" && slowLong?.hint === "smaller-input" && /within our \d+ s limit/.test(slowLong?.message || "") && /shorter one is more likely to finish/.test(slowLong?.message || "") && !/retry shortly/.test(slowLong?.message || ""),
+    `a long text that outlives our per-link limit is told a shorter one is more likely to finish (got ${slowLong?.statusCode} ${slowLong?.hint} "${slowLong?.message}")`);
+  ok(slow?.hint === "our-deadline" && slow?.attribution === "ours", `control: a short text's deadline keeps the plain retry advice (${slow?.hint})`);
   stub([["openrouter.ai", withBackups(() => { throw Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }); })]]);
   ok((await run("tts", { text: "hi" })).model === FIRST_BACKUP, "a connection that never reached the upstream is an outage: the chain and then a backup run");
   // Each later backup serves only after the one before failed unbilled.

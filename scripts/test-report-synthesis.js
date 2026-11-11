@@ -91,7 +91,10 @@ for (const kit of registryKits) {
   ok(okLeg.ok === true && okLeg.data === 7 && badLeg.ok === false && badLeg.error === "upstream down" && badLeg.status === 503, "a leg settles to {ok,data} or {ok:false,error,status}");
   ok(timers() === before, `a settled leg leaves no timer pending (${timers() - before} left)`);
   const slow = await settleWithin(new Promise(() => {}), 20);
-  ok(slow.ok === false && slow.error === "timeout" && slow.status === 504, "a leg past its timeout fails as a 504 timeout");
+  ok(slow.ok === false && slow.error === "our 1 s limit for this step passed" && slow.status === 504 && slow.attribution === "ours" && slow.hint === "our-deadline",
+    `a leg past its timeout fails as a 504 naming OUR limit, attributed to our side, never as the source being unavailable (${slow.error})`);
+  const tagged = await settleWithin(Promise.reject(Object.assign(new Error("x"), { statusCode: 502, attribution: "upstream", hint: "y" })), 1000);
+  ok(tagged.attribution === "upstream" && tagged.hint === "y" && badLeg.attribution === undefined, "a failed leg carries the attribution and kind its error carried, and none it did not");
   const sync = await settleWithin(() => { throw Object.assign(new Error("bad input"), { statusCode: 400 }); }, 1000);
   ok(sync.ok === false && sync.error === "bad input" && sync.status === 400 && timers() === before, "a function leg that throws synchronously is a failed leg");
   const plain = await settleWithin(Promise.reject("x"));

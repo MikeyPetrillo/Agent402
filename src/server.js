@@ -101,7 +101,7 @@ import { configureHowToCall, howToCall402Field, howToCallField } from "./how-to-
 import { paymentGuide, quoteInputs, usdText } from "./payment-guide.js";
 import { gatewayCacheGate, commitGatewayCacheWrites } from "./gateway-cache-scope.js";
 import { startModelCatalogRefresh, modelCatalogWanted } from "./model-catalog.js";
-import { toolErrorFields } from "./tool-error-fields.js";
+import { toolErrorFields, notCallersInput } from "./tool-error-fields.js";
 import { PRE_PAYMENT_WIRES, meteredPrePaymentRefusal } from "./gateway-prepayment.js";
 import { createPrePaymentRefusalRecorder, createPrePaymentLogSampler, stripControlChars, withPushExceptionText } from "./prepayment-refusal.js";
 import { shapeRefusal } from "./input-aliases.js";
@@ -12392,10 +12392,10 @@ for (const tool of ALL_KIT) {
       // carried them, `Retry-After` is set when the upstream named one, and a
       // failure attributed upstream does NOT get the schema hint, because
       // re-reading the schema cannot fix a host that is throttling us.
-      const upstreamStatus = Number.isInteger(err?.upstreamStatus) ? err.upstreamStatus : null;
-      const attribution = typeof err?.attribution === "string" ? err.attribution
-        : upstreamStatus ? "upstream" : null;
-      const fromUpstream = attribution === "upstream" || attribution === "upstream-access";
+      // The attribution vocabulary (src/upstream-deadline.js): any side but
+      // the caller's ("upstream", "upstream-access", "ours", "unknown") is
+      // not the input, so no schema hint.
+      const fromUpstream = notCallersInput(err, 0);
       if (Number.isInteger(err?.retryAfter)) res.set("Retry-After", String(err.retryAfter));
       // A refusal for capacity (a full worker queue) is shed load, not a tool failure.
       if (err?.shed === true) res.locals.shed = true;

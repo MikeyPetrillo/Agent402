@@ -153,7 +153,7 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
     // A faucet POST that timed out is never resent, and its slot is kept (it may have dripped).
     calls = []; reply = timeout;
     e = await fund(addr("b")).catch((x) => x);
-    ok(e?.statusCode === 503 && e?.attribution === "upstream" && /^Coinbase Developer Platform did not answer the faucet read within 15 s \(upstream deadline\)/.test(e.message) && calls.length === 1,
+    ok(e?.statusCode === 503 && e?.attribution === "ours" && /^Coinbase Developer Platform did not answer the faucet read within our 15 s limit/.test(e.message) && calls.length === 1,
       `a faucet POST that timed out is a 503 naming the step and is not retried (attempts ${calls.length}, ${e?.statusCode} "${e?.message}")`);
     calls = []; reply = () => J(200, { transactionHash: "0xabc" });
     const f1 = await fund(addr("b"));

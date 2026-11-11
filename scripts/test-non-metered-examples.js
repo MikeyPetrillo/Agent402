@@ -235,7 +235,7 @@ function isClientTimeoutFlake(status, body, threw) {
 // An upstream that stops answering THIS RUNNER (2026-09-25: RugCheck timed out
 // on every GitHub-hosted run for hours while answering production and a local
 // machine in under a second). A tool's own deadline 503, "<Label> did not
-// answer the <step> read within N s (upstream deadline)" or "<Label> is
+// answer the <step> read within our N s limit" or "<Label> is
 // unreachable from here", counts as that only when the harness, from the same
 // runner, cannot reach the upstream directly either; if the direct probe
 // answers, the tool failing is ours and it fails. One probe per label per run.
@@ -260,7 +260,7 @@ export function runnerProbeLabel(status, body, slug = null) {
   if (status !== 503) return null;
   // A report the upstream itself declined to build ("<Label> could not produce a
   // report right now (upstream)") is the same class: probed directly below.
-  const m = /^([\w ]+?) (?:did not answer the [\w -]+ read within \d+ s \(upstream deadline\)|is unreachable from here|could not produce a report right now \(upstream\))/.exec(String(body?.error || ""));
+  const m = /^([\w ]+?) (?:did not answer the [\w -]+ read within our \d+ s limit|is unreachable from here|could not produce a report right now \(upstream\))/.exec(String(body?.error || ""));
   return m && RUNNER_PROBES[m[1]] ? m[1] : null;
 }
 const RUNNER_PROBE_UA = "Mozilla/5.0 (compatible; Agent402/1.0; +https://agent402.tools)";
@@ -560,13 +560,13 @@ function runControls() {
     "control: client AbortSignal timeout is a soft-skip");
   ok(isClientTimeoutFlake(504, { error: "timeout" }, null) === false,
     "control: server HTTP 504 timeout is NOT a client-timeout soft-skip");
-  ok(runnerProbeLabel(503, { error: "RugCheck did not answer the report summary read within 8 s (upstream deadline); nothing was charged - retry shortly" }) === "RugCheck",
+  ok(runnerProbeLabel(503, { error: "RugCheck did not answer the report summary read within our 8 s limit; nothing was charged - retry shortly" }) === "RugCheck",
     "control: a tool's RugCheck deadline 503 is a runner-probe candidate");
   ok(runnerProbeLabel(503, { error: "RugCheck is unreachable from here (report read failed before any answer); nothing was charged - retry shortly" }) === "RugCheck",
     "control: a tool's RugCheck unreachable 503 is a runner-probe candidate");
   ok(runnerProbeLabel(503, { error: "RugCheck could not produce a report right now (upstream) - retry shortly" }) === "RugCheck",
     "control: a report RugCheck itself declined to build is a runner-probe candidate (excused only if RugCheck refuses the runner's direct request too)");
-  ok(runnerProbeLabel(503, { error: "Solana RPC did not answer the getTokenLargestAccounts read within 5 s (upstream deadline); nothing was charged - retry shortly" }) === null
+  ok(runnerProbeLabel(503, { error: "Solana RPC did not answer the getTokenLargestAccounts read within our 5 s limit; nothing was charged - retry shortly" }) === null
     && runnerProbeLabel(504, { error: "RugCheck upstream timed out" }) === null
     && runnerProbeLabel(503, { error: "RugCheck answered something unexpected" }) === null,
     "control: only a listed upstream's deadline, unreachable or report-refusal 503 is a candidate (an unlisted upstream, the old 504 words, or other words still fail)");

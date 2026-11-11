@@ -9,9 +9,8 @@
 // could run for several caps in a row while the payment it was answering
 // expired (this server's own router signs 30 s authorizations and the
 // facilitator refuses one within six seconds of its expiry, so the answer must
-// be on the wire inside about 20 s). A 504 named the wrong party: the buyer
-// reads "gateway timeout" as this server's defect when the host that stopped
-// answering was the upstream's. And a connection that was refused outright
+// be on the wire inside about 20 s). A 504 read as a gateway defect when no
+// one knew whose side had stalled, and a connection that was refused outright
 // read as a timeout. The Solana intel kit was fixed first; this module is that
 // fix made shareable, so the next kit cannot drift from it.
 //
@@ -25,10 +24,14 @@
 //     is shorter; a budget already spent refuses before any egress. The signal
 //     bounds headers AND body, so a stalled body read ends at the same
 //     deadline (bodyUnderDeadline maps that abort too).
-//   - upstreamDeadline() / upstreamUnreachable(): the two 503 classes. The
+//   - upstreamDeadline() / budgetSpentError() / upstreamUnreachable(): the
+//     503 classes, each with its attribution and kind (ATTRIBUTION, KIND
+//     below): our limit passed ("our N s limit"), our budget was spent before
+//     any request left, our DNS lookup failed, or the connection failed before
+//     any answer. Our own limit passing names no upstream as failing. The
 //     message is the contract the strict sweep's runner probe reads
 //     (scripts/test-non-metered-examples.js, runnerProbeLabel): the upstream's
-//     label first, then the step, then the deadline. Both say "nothing was
+//     label first, then the step, then the limit. All say "nothing was
 //     charged", which is true by construction: settlement runs after the
 //     handler and a status of 400 or more is never settled. Never a 504 for an
 //     upstream problem (a 504 here is reserved for the buyer's own payment
@@ -139,19 +142,123 @@ function bad(message, statusCode) {
   return Object.assign(new Error(message), { statusCode });
 }
 
-/** The 503 a read answers when its upstream does not come back in time. */
-export function upstreamDeadline(label, step, ms) {
+// WHOSE FAILURE IS THIS. Every error a caller sees says whose side failed only
+// when a definite answer proves it, and gives advice that can work. Two
+// fields carry it into the JSON answer (src/tool-error-fields.js), the MCP
+// error envelope (src/mcp-http.js) and the logs:
+//   attribution  whose side: "upstream" only on a definite answer from the
+//                third party (a failing status or body); "upstream-access" when
+//                it refused this server's access; "caller" for the caller's
+//                input; "ours" for this server's own limit, budget, resolver,
+//                key, allowance or defect; "unknown" when no answer came back
+//                and nothing proves which side failed.
+//   hint         the kind, a short code a caller can branch on (KIND below).
+// Our own deadline passing is never evidence about the upstream: it may be
+// slow, our egress may be, or the input may be heavier than the limit allows.
+export const ATTRIBUTION = Object.freeze({
+  UPSTREAM: "upstream",
+  UPSTREAM_ACCESS: "upstream-access",
+  CALLER: "caller",
+  OURS: "ours",
+  UNKNOWN: "unknown",
+});
+export const KIND = Object.freeze({
+  /** our N s limit for one read passed before an answer came back */
+  OUR_DEADLINE: "our-deadline",
+  /** the call's budget was spent before this read left: no request was sent */
+  BUDGET_SPENT: "budget-spent",
+  /** this server's DNS lookup for the host failed: no request was sent */
+  OUR_EGRESS: "our-egress",
+  /** the connection failed before any answer (refused, reset, unreachable) */
+  CONNECT_FAILED: "connect-failed",
+  /** our limit passed on an input long enough to outlast it: send less */
+  SMALLER_INPUT: "smaller-input",
+  /** a URL the caller supplied did not answer within our limit */
+  SOURCE_TIMEOUT: "source-timeout",
+  /** a URL the caller supplied could not be connected to */
+  SOURCE_UNREACHABLE: "source-unreachable",
+  /** the upstream refused this server's own key or account */
+  OUR_KEY: "our-key",
+  /** this server's own share of an upstream's allowance is used up */
+  OUR_ALLOWANCE: "our-allowance",
+  /** this server's own request pacing has no room this moment */
+  OUR_PACING: "our-pacing",
+  /** a defect in this server's own code */
+  INTERNAL: "internal",
+});
+
+/** Stamp the attribution and kind on an error (returns it). */
+export function attributed(err, attribution, kind = null) {
+  return Object.assign(err, { attribution, ...(kind ? { hint: kind } : {}) });
+}
+
+/** The share of an input's cap at which our read limit gets the
+ *  smaller-input advice: a long input is the likeliest reason a read that
+ *  normally answers in time did not. */
+export const HEAVY_INPUT_SHARE = 0.5;
+/** True when `ctx.input` ({ size, max }) is at or past HEAVY_INPUT_SHARE. */
+function heavyInput(input) {
+  const size = Number(input?.size), max = Number(input?.max);
+  return Number.isFinite(size) && Number.isFinite(max) && max > 0 && size >= max * HEAVY_INPUT_SHARE;
+}
+
+/** The 503 a read answers when our limit for it passes before an answer.
+ *  `input` ({ size, max, unit }) names an input long enough to outlast the
+ *  limit; the answer then advises a smaller one. */
+export function upstreamDeadline(label, step, ms, { input = null } = {}) {
+  const limit = `${label} did not answer the ${step} read within our ${secondsOf(ms)} s limit`;
+  if (heavyInput(input)) {
+    const unit = input.unit || "chars";
+    return Object.assign(
+      bad(`${limit}; this input (${input.size} of at most ${input.max} ${unit}) is long enough to outlast that limit, so a shorter one is more likely to finish; nothing was charged`, 503),
+      { attribution: ATTRIBUTION.OURS, hint: KIND.SMALLER_INPUT, upstreamFailure: "deadline" },
+    );
+  }
   return Object.assign(
-    bad(`${label} did not answer the ${step} read within ${secondsOf(ms)} s (upstream deadline); nothing was charged - retry shortly`, 503),
-    { attribution: "upstream", upstreamFailure: "deadline" },
+    bad(`${limit}; nothing was charged - retry shortly`, 503),
+    { attribution: ATTRIBUTION.OURS, hint: KIND.OUR_DEADLINE, upstreamFailure: "deadline" },
   );
 }
 
-/** The 503 a read answers when the upstream could not be reached at all. */
-export function upstreamUnreachable(label, step) {
+/** The 503 a read answers when the call's budget was spent before it left:
+ *  no request was sent, so no upstream is named as slow. `upstreamFailure`
+ *  stays "deadline" (a kit's fallback walk and the RugCheck pause read it);
+ *  `budgetSpent` says nothing left this server. */
+export function budgetSpentError(label, step, ms) {
+  return Object.assign(
+    bad(`No ${label} ${step} read was sent: our ${secondsOf(ms)} s limit for this call was used up by its earlier steps; nothing was charged - retry shortly`, 503),
+    { attribution: ATTRIBUTION.OURS, hint: KIND.BUDGET_SPENT, upstreamFailure: "deadline", budgetSpent: true },
+  );
+}
+
+// A lookup that failed is this server's resolver path: getaddrinfo's codes and
+// the c-ares ones (src/tools/fetch-guard.js keeps the same list for caller URLs).
+const DNS_CODES = new Set(["ENOTFOUND", "EAI_AGAIN", "EAI_FAIL", "EAI_NODATA", "EAI_NONAME", "ESERVFAIL", "EREFUSED", "ETIMEOUT", "ECANCELLED", "EDNSLOOKUPTIMEOUT", "EDNSUNAVAILABLE"]);
+/** The transport code on a fetch error's cause chain, or null. */
+export function transportCodeOf(err) {
+  let e = err;
+  for (let i = 0; i < 5 && e; i++) {
+    if (typeof e.code === "string" && e.code) return e.code;
+    e = e.cause;
+  }
+  return null;
+}
+/** True when a fetch error is this server's DNS lookup failing. */
+export const isDnsFailure = (err) => DNS_CODES.has(transportCodeOf(err) || "");
+
+/** The 503 a read answers when no answer came back at all. A failed DNS
+ *  lookup is this server's own resolver path; any other transport failure
+ *  (refused, reset, unreachable) proves nothing about whose side failed. */
+export function upstreamUnreachable(label, step, cause = null) {
+  if (cause && isDnsFailure(cause)) {
+    return Object.assign(
+      bad(`${label} could not be reached: this server's DNS lookup for its host failed (${step} read, no request sent); nothing was charged - retry shortly`, 503),
+      { attribution: ATTRIBUTION.OURS, hint: KIND.OUR_EGRESS, upstreamFailure: "unreachable" },
+    );
+  }
   return Object.assign(
     bad(`${label} is unreachable from here (${step} read failed before any answer); nothing was charged - retry shortly`, 503),
-    { attribution: "upstream", upstreamFailure: "unreachable" },
+    { attribution: ATTRIBUTION.UNKNOWN, hint: KIND.CONNECT_FAILED, upstreamFailure: "unreachable" },
   );
 }
 
@@ -186,7 +293,7 @@ export async function upstreamFetch(url, init = {}, ctx = {}) {
   // A budget already spent (or too close to spent for any read to use)
   // refuses before any egress; the deadline named is the handler budget the
   // upstream's earlier reads used up.
-  if (cap < MIN_READ_MS) throw upstreamDeadline(label, step, budget?.totalMs ?? timeoutMs);
+  if (cap < MIN_READ_MS) throw budgetSpentError(label, step, budget?.totalMs ?? timeoutMs);
   const fetchImpl = ctx.fetchImpl || fetch;
   try {
     return await fetchImpl(url, { ...init, signal: AbortSignal.timeout(cap) });
@@ -198,7 +305,7 @@ export async function upstreamFetch(url, init = {}, ctx = {}) {
     if (ctx.tag !== null) {
       console.warn(`${ctx.tag || "[upstream]"} ${label} ${timedOut ? `did not answer within ${cap} ms` : "unreachable"}: ${hostOf(url)} (${step}) -> ${err?.name ?? err?.code ?? err?.message}`);
     }
-    throw timedOut ? upstreamDeadline(label, step, cap) : upstreamUnreachable(label, step);
+    throw timedOut ? upstreamDeadline(label, step, cap, { input: ctx.input }) : upstreamUnreachable(label, step, err);
   }
 }
 
@@ -211,7 +318,7 @@ export async function bodyUnderDeadline(promise, ctx = {}) {
   try {
     return await promise;
   } catch (err) {
-    if (isAbortError(err)) throw upstreamDeadline(ctx.label || "Upstream", ctx.step || "data", ctx.cap ?? ctx.timeoutMs ?? DEFAULT_READ_MS);
+    if (isAbortError(err)) throw upstreamDeadline(ctx.label || "Upstream", ctx.step || "data", ctx.cap ?? ctx.timeoutMs ?? DEFAULT_READ_MS, { input: ctx.input });
     throw err;
   }
 }
@@ -229,12 +336,12 @@ export function workUnderDeadline(work, ctx = {}) {
   const budget = ctx.budget === undefined ? currentBudget() : ctx.budget;
   const cap = capOf(timeoutMs, budget);
   ctx.cap = cap;
-  if (cap < MIN_READ_MS) return Promise.reject(upstreamDeadline(label, step, budget?.totalMs ?? timeoutMs));
+  if (cap < MIN_READ_MS) return Promise.reject(budgetSpentError(label, step, budget?.totalMs ?? timeoutMs));
   let timer;
   const expiry = new Promise((_, reject) => {
     timer = setTimeout(() => {
       try { ctx.onExpire?.(); } catch { /* the deadline stands */ }
-      reject(upstreamDeadline(label, step, cap));
+      reject(upstreamDeadline(label, step, cap, { input: ctx.input }));
     }, cap);
   });
   return Promise.race([work, expiry]).finally(() => clearTimeout(timer));

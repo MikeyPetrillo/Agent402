@@ -331,7 +331,7 @@ const route = async (list) => {
   rpcNow = chain({ fail: true });
   mode = { status: 400, receipt: false };
   const { e } = await route([cand("/maybe"), cand("/good")]);
-  ok(e && e.committed === true && !hits.get("/good:paid") && /External seller ".*" failed: Seller failed after the payment was sent \(HTTP 400\); it may have been charged/.test(e.message), `ROUTER: a possibly-paid Tempo failure tries no other seller and says it may have been charged (got "${e?.message}")`);
+  ok(e && e.committed === true && !hits.get("/good:paid") && /(?:External seller ".*" failed|The purchase from external seller ".*" did not complete): Seller failed after the payment was sent \(HTTP 400\); it may have been charged/.test(e.message), `ROUTER: a possibly-paid Tempo failure tries no other seller and says it may have been charged (got "${e?.message}")`);
   ok(near(tempoDay(), 0.002), `ROUTER: ...and keeps the $0.002 signed booked on the Tempo day (got $${tempoDay()})`);
 }
 {
@@ -340,7 +340,7 @@ const route = async (list) => {
   rpcNow = chain();
   mode = { status: 400, receipt: false };
   const { e } = await route([cand("/bad"), cand("/good")]);
-  ok(e && e.committed !== true && /failed: Seller refused the request before taking payment \(HTTP 400\)/.test(e.message), `ROUTER: a proven-unused refusal reaches the buyer as a refusal before payment (got "${e?.message}")`);
+  ok(e && e.committed !== true && /(?:failed|did not complete): Seller refused the request before taking payment \(HTTP 400\)/.test(e.message), `ROUTER: a proven-unused refusal reaches the buyer as a refusal before payment (got "${e?.message}")`);
   ok(!hits.get("/good:paid"), "ROUTER: ...and, like a Solana refusal, ends the request after the wait (no second seller)");
   ok(near(tempoDay(), 0), `ROUTER: ...and nothing stays booked on the Tempo day (got $${tempoDay()})`);
 }

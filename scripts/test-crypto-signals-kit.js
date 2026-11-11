@@ -235,7 +235,7 @@ ok(Object.keys(NEWS_SOURCES).length >= 5 && Object.keys(NEWS_SOURCES).length <= 
   ok(r.sources.find((s) => s.id === "decrypt")?.items === 0 && !r.sources.find((s) => s.id === "decrypt")?.error, "truncated feed reports 0 items without an error entry");
   ok(r.errors.every((e) => !/boom|down|html/i.test(e.error)), "upstream error bodies never relayed in errors[]");
   ok(r.errors.some((e) => e.source === "theblock" && /HTTP 500/.test(e.error)), "HTTP 500 feed reported as HTTP 500");
-  ok(r.errors.some((e) => e.source === "thedefiant" && /did not answer the feed read within \d+ s \(upstream deadline\)/.test(e.error)), "a feed that outlived its deadline is reported as the deadline it is");
+  ok(r.errors.some((e) => e.source === "thedefiant" && /did not answer the feed read within our \d+ s limit/.test(e.error)), "a feed that outlived its deadline is reported as the deadline it is");
   ok(r.errors.some((e) => e.source === "cointelegraph" && /not a valid RSS\/Atom/.test(e.error)), "HTML page reported as not-a-feed");
   const urls = r.items.map((i) => i.url);
   ok(new Set(urls).size === urls.length && urls.filter((u) => u === "https://a.example/news/btc-etf").length === 1, "same story from two feeds deduped by canonical URL");

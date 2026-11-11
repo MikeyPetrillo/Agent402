@@ -526,7 +526,7 @@ try {
   // the step, attributed upstream, never a 504 and never charged.
   stub(() => Promise.reject(Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" })));
   try { await h("sol-token-safety")({ mint: JUP }); ok(false, "deadline expiry resolved"); }
-  catch (e) { ok(e.statusCode === 503 && e.attribution === "upstream" && /^(RugCheck did not answer the report summary|Jupiter did not answer the token search) read within \d+ s \(upstream deadline\)/.test(e.message), `deadline expiry -> 503 naming upstream and step, attributed upstream (got ${e.statusCode} "${e.message}")`); }
+  catch (e) { ok(e.statusCode === 503 && e.attribution === "upstream" && /^(RugCheck did not answer the report summary|Jupiter did not answer the token search) read within our \d+ s limit/.test(e.message), `deadline expiry -> 503 naming upstream and step, attributed upstream (got ${e.statusCode} "${e.message}")`); }
   stub(() => Promise.reject(Object.assign(new Error("fetch failed"), { code: "ECONNRESET" })));
   try { await h("sol-swap-quote")({ inputMint: SOL, outputMint: USDC, amount: "1" }); ok(false, "connection reset resolved"); }
   catch (e) { ok(e.statusCode === 503 && e.attribution === "upstream" && /^Jupiter is unreachable from here \(swap quote read/.test(e.message), `connection reset -> 503 naming upstream and step (got ${e.statusCode} "${e.message}")`); }

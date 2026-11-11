@@ -232,7 +232,7 @@ try { await h("fc-cast")({ identifier: CAST.hash }); } catch (e) { ok(!/SECRET/.
 responder = () => jsonRes(400, { message: "bad", property: "<script>" }, RL);
 await throws(h("fc-cast")({ identifier: CAST.hash }), 400, "upstream 400 with junk property -> generic", /check the parameters/);
 responder = () => { const e = new Error("The operation was aborted due to timeout"); e.name = "TimeoutError"; throw e; };
-await throws(h("fc-channel")({ id: "base" }), 503, "deadline -> 503 naming the upstream and the step", /^Farcaster upstream did not answer the channel read within \d+ s \(upstream deadline\)/);
+await throws(h("fc-channel")({ id: "base" }), 503, "deadline -> 503 naming the upstream and the step", /^Farcaster upstream did not answer the channel read within our \d+ s limit/);
 responder = () => ({ status: 200, ok: true, headers: { get: () => null }, json: async () => { throw new Error("nope"); } });
 await throws(h("fc-channel")({ id: "base" }), 502, "non-JSON 200 -> 502");
 responder = () => jsonRes(200, { channel: null }, RL);

@@ -60,7 +60,21 @@ const J = (status, body) => new Response(typeof body === "string" ? body : JSON.
   const day = Date.UTC(2030, 0, 1, 12);
   ok(rate.takeCgToken(day) && rate.takeCgToken(day + 1000) && rate.takeCgToken(day + 2000), "three calls inside the daily ceiling");
   eq(rate.cgTokenRefusal(day + 60_000), "day", "the fourth in the same UTC day is refused as daily");
-  ok(/temporarily unavailable/i.test(rate.cgRefusalMessage("day")) && !/\d/.test(rate.cgRefusalMessage("day")), "daily refusal text says temporarily unavailable and carries no count");
+  {
+    // Both refusals are this server's own: its daily allowance and its own
+    // pacing. Neither may say CoinGecko is unavailable or rate limited.
+    const dayMsg = rate.cgRefusalMessage("day", "CoinGecko", day + 60_000);
+    ok(/This server's daily CoinGecko allowance is used up; it renews at 00:00 UTC/.test(dayMsg) && !/\d/.test(dayMsg.replace("00:00 UTC", "")) && !/temporarily unavailable|rate limited/i.test(dayMsg),
+      `daily refusal names OUR allowance and its renewal, carries no count, and names no upstream outage (${dayMsg})`);
+    const minMsg = rate.cgRefusalMessage("minute", "Market data", day);
+    ok(/^This server paces its Market data requests and has no room this moment; retry in \d+ s\./.test(minMsg) && !/rate limited|temporarily unavailable/i.test(minMsg),
+      `pacing refusal names OUR pacing and a retry time, not the upstream (${minMsg})`);
+    const de = rate.cgRefusal("day", "CoinGecko", Date.UTC(2030, 0, 1, 23, 0, 0));
+    const me = rate.cgRefusal("minute");
+    ok(de.statusCode === 503 && de.attribution === "ours" && de.hint === "our-allowance" && de.retryAfter === 3600
+      && me.statusCode === 503 && me.attribution === "ours" && me.hint === "our-pacing" && Number.isInteger(me.retryAfter) && me.retryAfter >= 1,
+      `the refusals are 503s attributed to our side, kinds our-allowance (Retry-After to 00:00 UTC: ${de.retryAfter} s) and our-pacing (${me.retryAfter} s)`);
+  }
   eq(rate.cgTokenRefusal(day + 86_400_000), null, "the next UTC day starts a fresh count");
   delete process.env.COINGECKO_API_KEY;
   rate.resetCgRateLimit();
@@ -82,7 +96,7 @@ const J = (status, body) => new Response(typeof body === "string" ? body : JSON.
       [markets.CRYPTO_MARKETS_TOOLS.find((t) => t.slug === "coin-search").handler, { query: "btc" }],
       [PRICE_FEED_TOOLS.find((t) => t.slug === "price-coingecko").handler, { ids: ["bitcoin"] }],
     ]) { try { await fn(input); refused.push(null); } catch (e) { refused.push(e); } }
-    ok(refused.every((e) => e?.statusCode === 503 && /temporarily unavailable/i.test(e.message)), "crypto-kit, crypto-markets-kit and price-feed-kit all refuse 503 once the day is spent");
+    ok(refused.every((e) => e?.statusCode === 503 && /daily .* allowance is used up/.test(e.message) && e.attribution === "ours" && e.hint === "our-allowance" && e.retryAfter > 0), "crypto-kit, crypto-markets-kit and price-feed-kit all refuse 503 once the day is spent, naming our own allowance with Retry-After");
     eq(fetched, 0, "and none of them reached the upstream");
   } finally { globalThis.fetch = orig; }
   delete process.env.COINGECKO_DAILY_MAX; delete process.env.COINGECKO_API_KEY;

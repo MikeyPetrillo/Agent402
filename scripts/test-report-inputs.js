@@ -10,6 +10,7 @@ import { parseForm4 } from "../src/tools/insider-flow-kit.js";
 import { parse13fCover } from "../src/tools/edgar-kit.js";
 import { classifyFromSubmissions } from "../src/tools/ipo-report-kit.js";
 import { parse13GCover } from "../src/tools/ticker-pack-kit.js";
+import { upstreamDeadline } from "../src/upstream-deadline.js";
 import { shapeGoPlus, privilegedFunctions, makeTokenRiskHandler, probeGoPlus, CHAINS, GOPLUS_CHAIN_IDS, DEXSCREENER_CHAINS, TOKEN_RISK_TOOLS } from "../src/tools/token-risk-kit.js";
 import { auditCitations } from "../src/tools/research-deep-kit.js";
 let pass = 0, fail = 0;
@@ -204,13 +205,17 @@ const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - 
   // token; every other failure is the source, and an our-4xx on a valid input
   // is what the probe classifier files as a defect.
   asked = 0;
-  const e3 = await refusal({ probeGoPlus: async () => { throw Object.assign(new Error("upstream HTTP 503"), { statusCode: 503 }); } });
-  ok(e3?.statusCode === 503 && /token-security source is unavailable/.test(e3.message) && /Not charged/.test(e3.message) && asked === 0,
+  // The shapes the probe throws (its getJson): the source's own status is
+  // attributed to it; our limit passing is the shared deadline class.
+  const e3 = await refusal({ probeGoPlus: async () => { throw Object.assign(new Error("upstream HTTP 429"), { statusCode: 503, upstreamStatus: 429, attribution: "upstream" }); } });
+  ok(e3?.statusCode === 503 && /token-security source answered with a failure \(upstream HTTP 429\)/.test(e3.message) && /Not charged/.test(e3.message) && asked === 0,
     "a rate-limited token-security source refuses 503, not a 422 blaming the address");
   const e4 = await refusal({ probeGoPlus: async () => { throw Object.assign(new Error("upstream HTTP 500"), { statusCode: 502 }); } });
   ok(e4?.statusCode === 502, "an upstream error from the token-security source refuses 502");
-  const e5 = await refusal({ probeGoPlus: async () => { throw new Error("The operation was aborted due to timeout"); } });
-  ok(e5?.statusCode === 503 && /unavailable/.test(e5.message), "a timeout with no status of its own refuses 503");
+  const e5 = await refusal({ probeGoPlus: async () => { throw upstreamDeadline("Token-security source", "token security", 12_000); } });
+  ok(e5?.statusCode === 503 && /our 12 s limit/.test(e5.message) && e5.attribution === "ours", "a read our limit cut refuses 503 naming our limit, not the source as down");
+  const e6 = await refusal({ probeGoPlus: async () => { throw new Error("boom"); } });
+  ok(e6?.statusCode === 503 && /internal error on our side/.test(e6.message) && e6.attribution === "ours", "a throw of our own with no status refuses 503 as our internal error");
   ok(asked === 0, "no synthesis is bought on any unavailable-source refusal");
   ok(!/Confirm the address and chain/.test(`${e3?.message} ${e4?.message} ${e5?.message}`), "an unavailable source never tells the buyer to check a correct address");
 
