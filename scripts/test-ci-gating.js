@@ -381,11 +381,18 @@ for (const [name, j] of Object.entries(jobs)) {
 
   // The stub: what GitHub lists for this workflow's push runs on main, and
   // each run's jobs.
-  const state = { runs: [], jobs: {}, status: 200, hits: 0 };
+  // The parse step's token is the workflow's own (the runs read needs it);
+  // the stub answers only a request that carries the token the step was given.
+  const STEP_TOKEN = "stub-token";
+  ok(String(parse.env?.GH_TOKEN ?? "").replace(/\s+/g, "") === "${{github.token}}", `the parse step passes the workflow token to scripts/marker-base.js (${JSON.stringify(parse.env?.GH_TOKEN ?? null)})`);
+  const state = { runs: [], jobs: {}, status: 200, hits: 0, hang: false };
+  const hung = [];
   const server = http.createServer((req, res) => {
     state.hits++;
     const u = new URL(req.url, "http://stub");
     const send = (code, body) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(body)); };
+    if (state.hang) { hung.push(res); return; }
+    if (req.headers.authorization !== `Bearer ${STEP_TOKEN}`) return send(401, { message: "Requires authentication" });
     if (state.status !== 200) return send(state.status, { message: "refused" });
     if (u.pathname === "/repos/o/r/actions/workflows/deploy.yml/runs" && u.searchParams.get("branch") === "main" && u.searchParams.get("event") === "push") return send(200, { workflow_runs: state.runs });
     const m = /^\/repos\/o\/r\/actions\/runs\/(\d+)\/jobs$/.exec(u.pathname);
@@ -397,11 +404,12 @@ for (const [name, j] of Object.entries(jobs)) {
   const ran = (n, sha) => { state.runs.unshift({ id: 100 + n, run_number: n, head_sha: sha, event: "push", head_branch: "main", status: "completed", conclusion: "success" }); state.jobs[100 + n] = [{ name: "markers", conclusion: "success" }, { name: "test", conclusion: "success" }]; };
   const replaced = (n, sha, jobsSeen = []) => { state.runs.unshift({ id: 100 + n, run_number: n, head_sha: sha, event: "push", head_branch: "main", status: "completed", conclusion: "cancelled" }); state.jobs[100 + n] = jobsSeen; };
 
-  const step = (n, before, after, { ref = "refs/heads/main" } = {}) => new Promise((resolve) => {
+  const step = (n, before, after, { ref = "refs/heads/main", extra = {} } = {}) => new Promise((resolve) => {
     const out = join(repo, `.out-${n}-${Math.random().toString(36).slice(2)}`);
     writeFileSync(out, "");
-    const env = { PATH: process.env.PATH, HOME: repo, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", BEFORE: before, AFTER: after, EVENT_NAME: "push", GH_TOKEN: "stub-token", MARKER_WORKFLOW_FILE: String(parse.env?.MARKER_WORKFLOW_FILE ?? "deploy.yml"),
-      GITHUB_OUTPUT: out, GITHUB_REF: ref, GITHUB_REF_NAME: ref.replace("refs/heads/", ""), GITHUB_REPOSITORY: "o/r", GITHUB_RUN_NUMBER: String(n), GITHUB_API_URL: api };
+    // GH_TOKEN reaches the step only when the workflow names it in the step's env.
+    const env = { PATH: process.env.PATH, HOME: repo, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", BEFORE: before, AFTER: after, EVENT_NAME: "push", ...(parse.env?.GH_TOKEN !== undefined ? { GH_TOKEN: STEP_TOKEN } : {}), MARKER_WORKFLOW_FILE: String(parse.env?.MARKER_WORKFLOW_FILE ?? "deploy.yml"),
+      GITHUB_OUTPUT: out, GITHUB_REF: ref, GITHUB_REF_NAME: ref.replace("refs/heads/", ""), GITHUB_REPOSITORY: "o/r", GITHUB_RUN_NUMBER: String(n), GITHUB_API_URL: api, ...extra };
     const child = spawn("bash", ["-c", runText], { cwd: repo, env, stdio: ["ignore", "pipe", "pipe"] });
     let log = ""; child.stdout.on("data", (d) => { log += d; }); child.stderr.on("data", (d) => { log += d; });
     child.on("exit", (code) => {
@@ -447,6 +455,13 @@ for (const [name, j] of Object.entries(jobs)) {
     state.runs = []; state.jobs = {}; ran(2, side);
     const off = await step(3, B, C);
     ok(off.code === 0 && off.on === "test", `a listed head outside the push's history is ignored (${off.on}; exit ${off.code})`);
+    // An API that takes the connection and never answers: the lookup gives up
+    // at its one deadline and the pushed range stands, the job still passing.
+    state.runs = []; state.jobs = {}; ran(1, A); replaced(2, B); state.hang = true;
+    const hang = await step(3, B, C, { extra: { MARKER_BASE_DEADLINE_MS: "1500" } });
+    state.hang = false;
+    for (const r of hung.splice(0)) { try { r.destroy(); } catch { /* closed */ } }
+    ok(hang.code === 0 && hang.on === "test" && /no answer within the 2 s deadline/.test(hang.log), `an API that never answers is given up at the lookup's deadline, the pushed range stands (${hang.on}; exit ${hang.code}; ${(/marker-base: [^\n]*/.exec(hang.log) || [""])[0]})`);
     // A value that is not a commit id never reaches git as a revision.
     state.runs = []; state.jobs = {}; ran(2, "--all"); state.runs[0].head_sha = "--all";
     const odd = await step(3, B, C);
@@ -463,6 +478,17 @@ for (const [name, j] of Object.entries(jobs)) {
   ok(none.sha === null && asked === MAX_RUNS_READ, `the lookup reads a bounded number of earlier runs (${asked})`);
   const later = await lastReadRun({ runs: [{ id: 9, run_number: 9, head_sha: "b".repeat(40), event: "push" }, { id: 5, run_number: 5, head_sha: "c".repeat(40), event: "push" }], runNumber: 7, jobsOf: async () => [{ name: "markers", conclusion: "success" }] });
   ok(later.sha === "c".repeat(40), "a run numbered after this one is never read from (a re-run of an older run reads as it first did)");
+  const markersRead = async () => [{ name: "markers", conclusion: "success" }];
+  const self = await lastReadRun({ runs: [{ id: 7, run_number: 7, head_sha: "d".repeat(40), event: "push" }, { id: 5, run_number: 5, head_sha: "c".repeat(40), event: "push" }], runNumber: 7, jobsOf: markersRead });
+  ok(self.sha === "c".repeat(40), `this run itself is never its own base (${self.sha?.slice(0, 7)})`);
+  const pr = await lastReadRun({ runs: [{ id: 6, run_number: 6, head_sha: "e".repeat(40), event: "pull_request" }, { id: 5, run_number: 5, head_sha: "c".repeat(40), event: "push" }], runNumber: 7, jobsOf: markersRead });
+  ok(pr.sha === "c".repeat(40), `a run of another event is never read from (${pr.sha?.slice(0, 7)})`);
+  const shapes = await lastReadRun({ runs: [{ id: 6, run_number: 6, head_sha: "--all", event: "push" }, { id: 4, run_number: 4, head_sha: "F".repeat(40), event: "push" }, { id: 3, run_number: 3, head_sha: "c".repeat(39), event: "push" }, { id: 2, run_number: 2, head_sha: "c".repeat(40), event: "push" }], runNumber: 7, jobsOf: markersRead });
+  ok(shapes.sha === "c".repeat(40) && shapes.read === 1, `a listed head that is not 40 lowercase hex is passed over before any jobs read (${shapes.sha?.slice(0, 7)}, ${shapes.read} read)`);
+  const { deadlineMs, DEADLINE_MS_DEFAULT } = await import("./marker-base.js");
+  const jobLimitMs = Number(markersJob["timeout-minutes"]) * 60_000;
+  ok(deadlineMs({}) === DEADLINE_MS_DEFAULT && DEADLINE_MS_DEFAULT <= jobLimitMs / 2, `the lookup's default deadline (${DEADLINE_MS_DEFAULT / 1000} s) is at most half the markers job's limit (${jobLimitMs / 1000} s), leaving the checkout and the scan their time`);
+  ok(deadlineMs({ MARKER_BASE_DEADLINE_MS: "1500" }) === 1500 && deadlineMs({ MARKER_BASE_DEADLINE_MS: "999999" }) === DEADLINE_MS_DEFAULT && deadlineMs({ MARKER_BASE_DEADLINE_MS: "nope" }) === DEADLINE_MS_DEFAULT && deadlineMs({ MARKER_BASE_DEADLINE_MS: "0" }) === DEADLINE_MS_DEFAULT, "a deadline setting can shorten the lookup, never lengthen it");
 }
 
 console.log(`${pass} passed, ${fail} failed`);

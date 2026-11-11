@@ -21,16 +21,25 @@
 // Prints one 40-hex SHA and exits 0, or prints nothing and exits 0 when no such
 // run is found or GitHub cannot be read (the reason goes to stderr); the caller
 // then reads the pushed range alone, as before. It never fails the job: a
-// release is not held on this lookup.
+// release is not held on this lookup. The whole lookup has one deadline
+// (MARKER_BASE_DEADLINE_MS, default 40 s, well inside the markers job's
+// timeout): past it the pushed range is read, as on an API error, however
+// many reads are still waiting.
 //
 //   GITHUB_REPOSITORY, GITHUB_RUN_NUMBER, GITHUB_REF_NAME, GITHUB_API_URL,
-//   GH_TOKEN, MARKER_WORKFLOW_FILE (default deploy.yml)
+//   GH_TOKEN, MARKER_WORKFLOW_FILE (default deploy.yml), MARKER_BASE_DEADLINE_MS
 import { fileURLToPath } from "node:url";
 
 const SHA_RE = /^[0-9a-f]{40}$/;
 export const MAX_RUNS_READ = 10;   // earlier runs whose jobs are read before giving up
 const RUNS_PAGE = 50;
 const JOB_PAGES = 3;
+export const DEADLINE_MS_DEFAULT = 40_000;
+/** The whole lookup's deadline: a positive MARKER_BASE_DEADLINE_MS up to the default, else the default. */
+export function deadlineMs(env = process.env) {
+  const n = Number(env.MARKER_BASE_DEADLINE_MS);
+  return Number.isFinite(n) && n > 0 ? Math.min(n, DEADLINE_MS_DEFAULT) : DEADLINE_MS_DEFAULT;
+}
 
 /**
  * The newest earlier push run that read its markers.
@@ -100,5 +109,11 @@ async function main() {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  main().catch((e) => { console.error(`marker-base: GitHub could not be read (${String(e && e.message || e).slice(0, 200)}); reading the pushed range only`); }).finally(() => process.exit(0));
+  const ms = deadlineMs();
+  let timer;
+  const deadline = new Promise((resolve) => { timer = setTimeout(() => { console.error(`marker-base: no answer within the ${Math.round(ms / 1000)} s deadline; reading the pushed range only`); resolve(); }, ms); });
+  Promise.race([
+    main().catch((e) => { console.error(`marker-base: GitHub could not be read (${String(e && e.message || e).slice(0, 200)}); reading the pushed range only`); }),
+    deadline,
+  ]).finally(() => { clearTimeout(timer); process.exit(0); });
 }
