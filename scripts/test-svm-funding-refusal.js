@@ -455,5 +455,73 @@ try {
   proc.kill("SIGKILL"); facilitator.close();
 }
 if (failed) { console.error("--- server output (last lines) ---"); for (const l of log.slice(-60)) console.error(l); }
+
+// ---- the wire, a Solana rail restored after boot ---------------------------------------
+// The funding hold covers the configured Solana rail, not only one offered at
+// boot: Solana's only facilitator fails /supported at boot, the rail is
+// dropped and read again, and once it rejoins the offer an underfunded wallet
+// that keeps re-signing is held the same way.
+{
+  const { bootServer } = await import("./lib/boot-server.js");
+  const SOL_CELO = "eip155:42220";
+  const fac = (handler) => { const s = createServer((req, res) => { let body = ""; req.on("data", (c) => (body += c)); req.on("end", () => handler(req.url.split("?")[0], body, (status, obj) => { res.writeHead(status, { "Content-Type": "application/json", Connection: "close" }); res.end(JSON.stringify(obj)); })); }); return new Promise((r) => s.listen(0, "127.0.0.1", () => r(s))); };
+  const st2 = { up: false, verifies: 0 };
+  const baseFac = await fac((path, _b, reply) => {
+    if (path === "/supported") return reply(200, { kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} });
+    if (path === "/rpc") return reply(200, { jsonrpc: "2.0", id: 1, error: { code: -32000, message: "stub" } });
+    return reply(404, {});
+  });
+  const solFac = await fac((path, _b, reply) => {
+    if (path === "/supported") return st2.up ? reply(200, { kinds: [{ x402Version: 2, scheme: "exact", network: SOL_CELO }, { x402Version: 2, scheme: "exact", network: SOL, extra: { feePayer: feePayer.address } }], extensions: [], signers: {} }) : reply(500, { error: "down" });
+    if (path === "/verify") { st2.verifies++; return reply(200, { isValid: false, invalidReason: "transaction_simulation_failed", invalidMessage: 'Simulation failed: {"InstructionError":[2,{"Custom":1}]}' }); }
+    return reply(404, {});
+  });
+  let srv2 = null;
+  try {
+    srv2 = await bootServer({
+      stores: "svm-funding-restored",
+      env: {
+        FREE_MODE: "", NODE_ENV: "", STATE_DATABASE_URL: "", REDIS_URL: "",
+        WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
+        PAYMENT_NETWORKS: "base,celo,solana", SOLANA_WALLET_ADDRESS: payTo.address,
+        FACILITATOR_URL: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", PAYAI_FACILITATOR_URL: `http://127.0.0.1:${baseFac.address().port}`,
+        CELO_FACILITATOR_URL: `http://127.0.0.1:${solFac.address().port}`, CELO_FACILITATOR_KEY: "test-key", SOLVADOR_CELO_PRIMARY: "",
+        AGENT402_BASE_RPC: `http://127.0.0.1:${baseFac.address().port}/rpc`, CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "", CIRCLE_FACILITATOR_API_KEY: "",
+        PAYMENT_SETTLE_FALLBACK: "", SOLVADOR_KEY: "", X402_UPTO_NETWORKS: "",
+        X402_RAIL_RECHECK_MS: "300", X402_RAIL_RECHECK_MAX_MS: "600", SVM_FUNDING_RETRY_AFTER_S: String(HOLD_S),
+        X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
+      },
+    });
+    const offerNow = async () => { const r = await fetch(`${srv2.url}${PATH}`, { method: "POST", headers: { "content-type": "application/json" }, body: BODY }); await r.arrayBuffer(); return decode(r.headers.get("payment-required")); };
+    const first = await offerNow();
+    ok(!(first.accepts || []).some((a) => a.network === SOL) && /dropping [^\n]*solana:/.test(srv2.log()), "setup: Solana's facilitator fails /supported at boot and the rail is dropped");
+    st2.up = true;
+    let offer = first;
+    for (const end = Date.now() + 30_000; Date.now() < end && !(offer.accepts || []).some((a) => a.network === SOL);) { await sleep(100); offer = await offerNow(); }
+    const accept = (offer.accepts || []).find((a) => a.network === SOL);
+    ok(!!accept, `setup: the facilitator answers and Solana rejoins the offer without a restart (${(offer.accepts || []).map((a) => a.network).join(", ")})`);
+    if (accept) {
+      const buyer = await kit.generateKeyPairSigner();
+      const src = (await kit.generateKeyPairSigner()).address;
+      const pay2 = async () => {
+        const { tx } = await paymentTx(buyer, { source: src, amount: Number(accept.amount) });
+        const header = Buffer.from(JSON.stringify({ x402Version: 2, resource: offer.resource, accepted: accept, payload: { transaction: tx } })).toString("base64");
+        const r = await fetch(`${srv2.url}${PATH}`, { method: "POST", headers: { "content-type": "application/json", "payment-signature": header }, body: BODY });
+        return { status: r.status, required: r.headers.get("payment-required"), body: await r.json().catch(() => ({})) };
+      };
+      const firsts = [];
+      for (let i = 0; i < HOLD_AFTER(); i++) firsts.push(await pay2());
+      ok(firsts.every((r) => r.status === 402 && r.body.retry === "fund-wallet") && st2.verifies === HOLD_AFTER(), `restored rail: the first ${HOLD_AFTER()} refusals reach verify and ask for funding (${st2.verifies} verifies)`);
+      const held = await pay2();
+      ok(held.status === 402 && st2.verifies === HOLD_AFTER() && decode(held.required).error === "wallet_not_funded", `restored rail: the next attempt is answered from the funding hold, the facilitator not asked (${held.status}, ${st2.verifies} verifies, ${decode(held.required).error})`);
+    }
+  } catch (e) {
+    failed++; console.error("FAIL -", e?.stack || e);
+    if (srv2) console.error(srv2.log().slice(-3000));
+  } finally {
+    await srv2?.stop();
+    baseFac.close(); solFac.close();
+  }
+}
 console.log(`\n${pass} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

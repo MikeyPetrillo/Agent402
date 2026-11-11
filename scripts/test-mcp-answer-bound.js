@@ -132,6 +132,10 @@ CATALOG["GET /api/wide"] = { ...def("wide", async () => ({ label: "wide", text: 
 // A flagship (web.search) whose answer is past the ceiling.
 const FLAG_ROWS = Array.from({ length: 3000 }, (_, i) => ({ title: `t${i}`, url: `https://example.com/${i}`, description: "d".repeat(40), age: null }));
 CATALOG["GET /api/search"] = { ...def("search", async () => ({ query: "q", count: FLAG_ROWS.length, results: FLAG_ROWS })), description: "flagship test tool", tags: ["flagship"] };
+// An answer under the ceiling whose serializations are recorded: each call
+// of its toJSON keeps the stack that asked for it.
+const SERIALIZED_BY = [];
+CATALOG["GET /api/counted"] = { ...def("counted", async () => ({ label: "counted", rows: [{ toJSON() { SERIALIZED_BY.push(String(new Error().stack || "")); return { n: 1 }; } }] })), description: "counted test tool", tags: ["counted"] };
 // Enough tools that an unclamped search would return more than the maximum.
 for (let i = 0; i < 60; i++) CATALOG[`GET /api/w${i}`] = def(`w${i}`, async () => ({ ok: true }));
 
@@ -172,6 +176,11 @@ try {
   ok(bytes(airyWant) < MAX && Buffer.byteLength(JSON.stringify(airyWant, null, 2)) > MAX, "setup: the airy answer fits the ceiling compact and passes it indented");
   const airy = (await rpc("tools/call", { name: "catalog.call", arguments: { slug: "airy", params: {} } })).result;
   ok(airy.content[0].text === JSON.stringify(airyWant, null, 2) && airy.structuredContent.answerBound === undefined && airy.structuredContent.result.rows.length === AIRY_ROWS.length, "an answer that fits compact is sent whole, indented as built, with no answerBound");
+
+  // An answer that fits is sent as built: serialized once for the text
+  // block, never again to be measured against the ceiling.
+  const counted = (await rpc("tools/call", { name: "catalog.call", arguments: { slug: "counted", params: {} } })).result;
+  ok(counted.content[0].text === JSON.stringify({ label: "counted", rows: [{ n: 1 }] }, null, 2) && SERIALIZED_BY.length >= 1 && !SERIALIZED_BY.some((s) => s.includes("/src/mcp-answer-bound.js")), `an answer that fits is not serialized again to be measured (${SERIALIZED_BY.length} serializations, ${SERIALIZED_BY.filter((s) => s.includes("/src/mcp-answer-bound.js")).length} by the bound)`);
 
   const wideWant = { label: "wide", text: WIDE_TEXT };
   const widePretty = JSON.stringify(wideWant, null, 2);

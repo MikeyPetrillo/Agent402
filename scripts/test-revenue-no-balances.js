@@ -69,6 +69,17 @@ try {
   srv.close();
 }
 
+// The operator handler answers a caller without the credential with the
+// refusal it is given (server.js passes the site's own operator 404), never
+// one of its own.
+{
+  const seen = [];
+  const given = revenueApiHandlers({ snapshot: async () => snap, ledger: () => ledger, authed: () => false, refuse: (req, res) => { seen.push(req.marker); res.status(404).json({ given: true }); } });
+  const res = { statusCode: 200, body: null, headers: {}, status(c) { this.statusCode = c; return this; }, json(b) { this.body = b; return this; }, set(k, v) { this.headers[k] = v; return this; } };
+  await given.operatorHandler({ headers: {}, marker: "m1" }, res);
+  ok(seen.join() === "m1" && res.statusCode === 404 && res.body?.given === true && !("totalUsd" in (res.body || {})), `the operator handler refuses with the refusal it is given (${JSON.stringify(res.body)})`);
+}
+
 // nextRefreshAt is the snapshot's read time plus the scan cadence.
 {
   const asOf = new Date(Date.now() - 60_000).toISOString();

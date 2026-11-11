@@ -182,6 +182,8 @@ try {
     ok(page.status === 410 && /text\/html/.test(page.headers.get("content-type") || ""), `a retired tool's page is 410 (got ${page.status})`);
     ok(pastSunset(page, RETIRED_TOOLS["options-chain"].retiredAt) && /\/tools\/crypto-options-chain>; rel="successor-version"/.test(page.headers.get("link") || ""), `...with Sunset and a successor Link to the replacement's page (${page.headers.get("link")})`);
     ok(html.includes(RETIRED_TOOLS["options-chain"].retiredAt) && html.includes('href="/tools/crypto-options-chain"') && /noindex/.test(html), "the page names the retirement date, links the replacement and is not indexed");
+    // The date is in the page's own sentence, not only in its meta description.
+    ok(html.includes(`<code>options-chain</code> was retired on ${RETIRED_TOOLS["options-chain"].retiredAt}.`), "the page body says the slug was retired on that date");
     ok((await fetch(`${base}/tools/crypto-options-chain`)).status === 200, "control: the replacement's page is served");
     const noRep = await fetch(`${base}/tools/stock-dividends`);
     ok(noRep.status === 410 && !/successor-version/.test(noRep.headers.get("link") || "") && (await noRep.text()).includes('href="/tools"'), "a retired tool with no replacement: 410, no successor, a link to the catalog");

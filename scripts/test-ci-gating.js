@@ -427,6 +427,12 @@ for (const [name, j] of Object.entries(jobs)) {
     replaced(2, B);
     const r3 = await step(3, B, C);
     ok(r3.code === 0 && r3.on === "drain,paytest,publish,test", `the run that replaced a queued release reads the replaced push's subjects too: [publish], [paytest] and [drain] are on (${r3.on}; exit ${r3.code})`);
+    {
+      // The pushed range and the range since the last read run overlap: the
+      // scanned list names each subject once.
+      const listed = r3.log.split("Subject lines scanned for markers:")[1]?.split("\n").filter((l) => l.startsWith("  ")) || [];
+      ok(listed.includes("  [test] third change") && listed.includes("  [test] [publish] second change") && new Set(listed).size === listed.length, `the subjects scanned are listed once each (${listed.length} lines, ${new Set(listed).size} distinct)`);
+    }
     ok(!/(^|,)purl(,|$)/.test(r3.on), "a marker in a replaced merge commit's body is still not read");
     ran(3, C);
     // Push 4 after the release caught up: the replaced push is not read again.
@@ -466,6 +472,26 @@ for (const [name, j] of Object.entries(jobs)) {
     state.runs = []; state.jobs = {}; ran(2, "--all"); state.runs[0].head_sha = "--all";
     const odd = await step(3, B, C);
     ok(odd.code === 0 && odd.on === "test", `a listed head that is not a commit id is ignored (${odd.on})`);
+    // The step's own check, apart from the script's: a lookup that printed a
+    // revision that is not a 40-hex commit id (here one naming the first
+    // push, an ancestor) is not read from.
+    state.runs = []; state.jobs = {};
+    writeFileSync(join(repo, "scripts", "marker-base.js"), `console.log(${JSON.stringify(`${C}~5`)});\n`);
+    let notSha;
+    try { notSha = await step(3, B, C); } finally { copyFileSync(new URL("./marker-base.js", import.meta.url), join(repo, "scripts", "marker-base.js")); }
+    ok(git("rev-parse", `${C}~5`) === A && notSha.code === 0 && notSha.on === "test", `a printed revision that is not a commit id is ignored by the step itself (${notSha.on})`);
+    // The script itself exits 0 on an API error, printing nothing: a release
+    // is never held on this lookup.
+    {
+      state.status = 403;
+      const { fileURLToPath } = await import("node:url");
+      const child = spawn(process.execPath, [fileURLToPath(new URL("./marker-base.js", import.meta.url))], { cwd: repo, env: { PATH: process.env.PATH, GH_TOKEN: STEP_TOKEN, GITHUB_REPOSITORY: "o/r", GITHUB_REF_NAME: "main", GITHUB_RUN_NUMBER: "3", GITHUB_API_URL: api }, stdio: ["ignore", "pipe", "pipe"] });
+      let out = "", err = "";
+      child.stdout.on("data", (d) => { out += d; }); child.stderr.on("data", (d) => { err += d; });
+      const code = await new Promise((r) => child.on("exit", r));
+      state.status = 200;
+      ok(code === 0 && out === "" && /GitHub could not be read \(HTTP 403\)/.test(err), `marker-base.js exits 0 and prints no commit when GitHub answers an error (exit ${code}; ${err.trim().slice(0, 120)})`);
+    }
   } finally {
     await new Promise((r) => server.close(r));
     rmSync(repo, { recursive: true, force: true });

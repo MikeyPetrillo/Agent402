@@ -220,6 +220,20 @@ const USDC_SOL = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
   const hint = typeof res.out?.hint === "string" ? res.out.hint : "";
   ok(res.out?.reason === "insufficient-funds" && /\(\$0\.0050\) on Stellar\./.test(hint) && !/\$0\.05\b|\$0\.0500/.test(hint), `a Stellar refusal through the payment hooks prices the call at 7 decimals (${hint})`);
   _testResetForTest();
+  // A refusal whose invalidReason is not a string (a facilitator answering an
+  // object, or one that cannot be coerced): the hook never throws, and the
+  // log line says "verify rejected" instead.
+  const lines = [];
+  console.warn = (...a) => lines.push(a.join(" "));
+  let threw = 0;
+  try {
+    for (const h of HOSTILE) {
+      try { await hooks.after({ paymentPayload: payload, requirements, result: { isValid: false, invalidReason: h } }); } catch { threw++; }
+    }
+  } finally { console.warn = warn; }
+  const said = lines.filter((l) => /facilitator VERIFY rejected/.test(l));
+  ok(threw === 0 && said.length === HOSTILE.length && said.every((l) => l.endsWith(": verify rejected")), `a refusal whose reason is not a string is logged as "verify rejected" and never throws (${threw} threw; ${said.length} of ${HOSTILE.length} lines)`);
+  _testResetForTest();
 }
 
 console.log(`\n${failed ? "FAILED" : "OK"}: ${pass} passed, ${failed} failed`);

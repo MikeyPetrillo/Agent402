@@ -216,6 +216,43 @@ const catalog = {
   ok(/frame-src 'self' https:\/\/live\.agent402\.tools;/.test(srv), "site CSP frames only itself and the live view");
 }
 
+// The hero script's live read, run against a live view that never answers:
+// it is given up after 8 s (the request is aborted and its timer cleared),
+// and the figures are left as they were. Timers are driven by hand.
+{
+  const vm = await import("node:vm");
+  const { readFileSync } = await import("node:fs");
+  const code = readFileSync(new URL("../assets/js/home-hero.js", import.meta.url), "utf8");
+  const timers = [];
+  const cleared = new Set();
+  const live = [];
+  const els = { "hm-live-n": { textContent: "-" }, "hm-live-usd": { textContent: "-" }, "hm-live-buyers": { textContent: "-" }, "hm-live-pm": { textContent: "-" } };
+  const sandbox = {
+    AbortController, performance, Promise,
+    document: { getElementById: (id) => els[id] || null },
+    window: { matchMedia: () => ({ matches: true }), addEventListener() {} },
+    requestAnimationFrame() {},
+    setInterval() {},
+    setTimeout: (fn, ms) => { const t = { fn, ms }; timers.push(t); return t; },
+    clearTimeout: (t) => { if (t) cleared.add(t); },
+    fetch: (url, init) => {
+      if (!/^https:\/\/live\.agent402\.tools\//.test(String(url))) return new Promise(() => {});
+      const read = { url, signal: init && init.signal, aborted: false };
+      live.push(read);
+      // Never answers; only an abort ends it.
+      return new Promise((_resolve, reject) => { if (read.signal) read.signal.addEventListener("abort", () => { read.aborted = true; reject(new Error("aborted")); }); });
+    },
+  };
+  vm.runInNewContext(code, sandbox);
+  ok(live.length === 1, `the hero reads the live view once on load (${live.length})`);
+  const giveUp = timers.find((t) => t.ms === 8000);
+  ok(!!giveUp && !!live[0]?.signal, `the read carries an abort signal and an 8 s give-up timer (${timers.map((t) => t.ms).join(", ") || "no timers"})`);
+  if (giveUp) giveUp.fn();
+  await new Promise((r) => setImmediate(r));
+  ok(live[0]?.aborted === true && cleared.has(giveUp), "at 8 s the unanswered read is aborted and its timer cleared");
+  ok(Object.values(els).every((e) => e.textContent === "-"), "the live figures are left as they were");
+}
+
 // --- claims read from their sources -----------------------------------------
 {
   const { RAILS_SHORT, RAILS } = await import("../src/rails.js");

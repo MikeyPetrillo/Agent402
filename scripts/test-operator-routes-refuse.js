@@ -232,6 +232,16 @@ try {
       }
     }
     ok(apart.length === 0, `a method the sign-in routes do not register answers as an unregistered path does (${apart.join("; ") || "all"})`);
+    // A path below an open route is not that route: it is refused as an
+    // unregistered path is, never let past the credential check.
+    const below = [];
+    for (const [method, path] of [["GET", "/__operator/login/x"], ["GET", "/__operator/Login/routes.json"], ["POST", "/__operator/login/x"], ["POST", "/__operator/logout/x"]]) {
+      for (const body of bodiesOf(method)) {
+        const d = differs(await call(method, path, {}, body), await absentFor(method, "no credential", body));
+        if (d) below.push(`${method} ${path}: ${d}`);
+      }
+    }
+    ok(below.length === 0, `a path below an open route answers as an unregistered path does (${below.join("; ") || "all"})`);
   }
 
   // The routes read apart.
