@@ -246,6 +246,33 @@ try {
     ok(query.status === 401 && !query.headers.get("set-cookie"), `sign-in with the token in the query string: 401, no session (${query.status})`);
     const out = await call("POST", "/__operator/logout");
     ok(out.status === 303 && /\/__operator\/login$/.test(out.headers.get("location") || "") && !/a402_op=[^;]/.test(out.headers.get("set-cookie") || ""), `sign-out without a session: a redirect to the form that grants nothing (${out.status})`);
+    // The router matches a path in any case and with a trailing slash, and
+    // answers HEAD with GET's route: the open routes stay open in each form.
+    const head = await call("HEAD", "/__operator/login");
+    ok(head.status === 200 && !head.headers.get("set-cookie"), `HEAD of the sign-in form is served as its GET (${head.status})`);
+    const upper = await call("GET", "/__operator/Login");
+    ok(upper.status === 200 && upper.text === form.text, `the sign-in form at /__operator/Login is the same form (${upper.status})`);
+    const slash = await call("GET", "/__operator/login/");
+    ok(slash.status !== 404 && (slash.status === 200 ? slash.text === form.text : /\/__operator\/login$/.test(slash.headers.get("location") || "")), `the sign-in form at /__operator/login/ is the form or a redirect to it, never the refusal (${slash.status})`);
+    for (const path of ["/__operator/logout/", "/__operator/Logout", "/__operator/LOGOUT/"]) {
+      const o = await call("POST", path);
+      ok(o.status === 303 && /\/__operator\/login$/.test(o.headers.get("location") || ""), `sign-out at ${path} is the same sign-out (${o.status})`);
+    }
+  }
+
+  // The refusal is the machine 404 every unknown machine path answers: a
+  // JSON body of exactly ok false and error "not-found", the shape an unknown
+  // /api path opens with too, so a caller learns nothing from its wording.
+  {
+    const none = await call("GET", "/__operator/no-such-route-here");
+    const gatedRead = await call("GET", "/__operator/routes.json");
+    const api = await call("GET", "/api/no-such-tool-here");
+    let noneBody = null, apiBody = null;
+    try { noneBody = JSON.parse(none.text); } catch { /* asserted below */ }
+    try { apiBody = JSON.parse(api.text); } catch { /* asserted below */ }
+    ok(none.status === 404 && none.text === JSON.stringify({ ok: false, error: "not-found" }), `an unregistered operator path answers the machine 404 body (${none.status} ${none.text.slice(0, 80)})`);
+    ok(gatedRead.status === 404 && gatedRead.text === none.text, `a registered route refused at the mount answers the same body (${gatedRead.status} ${gatedRead.text.slice(0, 80)})`);
+    ok(api.status === 404 && apiBody?.ok === noneBody?.ok && apiBody?.error === noneBody?.error, `and that body has the ok and error an unknown /api path answers (${JSON.stringify({ ok: apiBody?.ok, error: apiBody?.error })})`);
   }
 
   // Live control: the right token is let in, by either header, on read-only GETs.
