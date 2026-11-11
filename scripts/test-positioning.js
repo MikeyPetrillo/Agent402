@@ -13,7 +13,7 @@ import { LEAD_SENTENCE, CATEGORY_LINE, leadSentence } from "../src/positioning.j
 import { ledgerHomePage } from "../src/ledger-home.js";
 import { llmsTxt } from "../src/seo.js";
 import { mppMethodsSummary } from "../src/mpp-offers.js";
-import { MCP_SERVER_DESCRIPTION as HOSTED_DESC, mcpInitializeInstructions as hostedInstructions } from "../src/mcp-flagship.js";
+import { MCP_SERVER_DESCRIPTION as HOSTED_DESC, mcpInitializeInstructions as hostedInstructions, mcpServerDescription } from "../src/mcp-flagship.js";
 import { MCP_SERVER_DESCRIPTION as STDIO_DESC, mcpInitializeInstructions as stdioInstructions } from "../mcp/output-schemas.js";
 import { pageText, stripInlineTags } from "./lib/html-text.js";
 
@@ -38,6 +38,12 @@ ok(/^[A-Z][^.]*\.$/.test(CATEGORY_LINE) && !/Agentic Finance|AIFI/.test(CATEGORY
   const lede = (html.match(/<p class="hm-lede"[^>]*>([\s\S]*?)<\/p>/) || [])[1] || "";
   ok(pageText(stripInlineTags(lede)).trim() === LEAD_SENTENCE, "home hero lede is the lead sentence, word for word");
   ok((html.match(/<h1\b/g) || []).length === 1, "the home page has one h1");
+  // The wires follow the MPP switch the "/" route passes.
+  const off = ledgerHomePage("https://agent402.tools", {}, {}, {}, [], { mpp: false });
+  const offLede = pageText(stripInlineTags((off.match(/<p class="hm-lede"[^>]*>([\s\S]*?)<\/p>/) || [])[1] || "")).trim();
+  ok(offLede === leadSentence({ mpp: false }) && !/MPP/.test(offLede), `with MPP off the home lede offers x402 alone ("${offLede}")`);
+  ok(/href="\/what-is-x402"/.test((off.match(/<p class="hm-lede"[^>]*>[\s\S]*?<\/p>/) || [""])[0]), "with MPP off the x402 wire name stays linked");
+  ok(/ledgerHomePage\([^;]*mpp: mppMethodsSummary\(\)\.enabled \}\)/.test(read("src/server.js")), "the \"/\" route passes the MPP switch to the hero");
 }
 
 // --- machine surfaces ----------------------------------------------------------------
@@ -50,9 +56,19 @@ ok(HOSTED_DESC.startsWith(LEAD_SENTENCE) && STDIO_DESC.startsWith(LEAD_SENTENCE)
 for (const [name, fn] of [["hosted", hostedInstructions], ["stdio", stdioInstructions]]) {
   ok(fn("https://example.test").split("\n")[0].startsWith(LEAD_SENTENCE), `MCP initialize instructions (${name}) open with the lead sentence`);
 }
+// The hosted connector's copies follow the MPP switch; the published (stdio)
+// copies keep both wires.
+for (const mpp of [true, false]) {
+  const d = mcpServerDescription({ mpp });
+  ok(d.startsWith(leadSentence({ mpp })) && (mpp ? /x402 or MPP/.test(d) : !/MPP/.test(d)), `hosted serverInfo description with MPP ${mpp ? "on" : "off"} names ${mpp ? "both wires" : "x402 alone"}`);
+  const first = hostedInstructions("https://example.test", { mppOffered: mpp }).split("\n")[0];
+  ok(first.startsWith(leadSentence({ mpp })) && (mpp || !/MPP/.test(first)), `hosted initialize instructions with MPP ${mpp ? "on" : "off"} open with that lead sentence`);
+}
+ok(mcpServerDescription() === HOSTED_DESC && HOSTED_DESC === STDIO_DESC, "the default description is the published one, identical to the stdio package's");
 {
   const src = read("src/mcp-http.js");
-  ok(/import \{ LEAD_SENTENCE \} from "\.\/positioning\.js";/.test(src) && /positioning: `\$\{LEAD_SENTENCE\} /.test(src), "hosted server.describe positioning opens with the lead sentence, read from the module");
+  ok(/description: mcpServerDescription\(\{ mpp: mppMethodsSummary\(\)\.enabled \}\)/.test(src) && /mppOffered: mppMethodsSummary\(\)\.enabled/.test(src), "the hosted connector passes the MPP switch to its description and instructions");
+  ok(/import \{ leadSentence \} from "\.\/positioning\.js";/.test(src) && /positioning: `\$\{leadSentence\(\{ mpp: mppMethodsSummary\(\)\.enabled \}\)\} /.test(src), "hosted server.describe positioning opens with the lead sentence for the MPP switch, read from the module");
   const stdio = read("mcp/index.js");
   const lines = stdio.match(/positioning: `[^`]*`/g) || [];
   ok(lines.length >= 2 && lines.every((l) => l.startsWith(`positioning: \`${LEAD_SENTENCE} `)), `stdio server.describe positioning (both aliases) opens with the lead sentence (${lines.length} payloads)`);

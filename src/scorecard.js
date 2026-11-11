@@ -120,19 +120,29 @@ export function scorecardBody(raw, { asOf = new Date().toISOString(), refreshMs 
 
 /**
  * The refresh loop and its cache. `compute()` resolves the ledger read;
- * `get()` answers the cached body (waiting for the first computation).
+ * `get()` answers the cached body and never waits on a read: until one
+ * computation has succeeded it rejects at once with `retryAfterSeconds` (the
+ * route answers 503 with Retry-After). A request may start the first read,
+ * but a read that failed holds off the next request-started one for
+ * `retryMs`, so a ledger that keeps failing is not read once per request. At
+ * most one read is in flight.
  */
-export function createScorecard({ compute, env = process.env, now = () => Date.now(), log = console } = {}) {
-  let cached = null, inFlight = null, timer = null, warned = 0, lastMs = null;
+export const SCORECARD_RETRY_MS = 30_000;
+// Retry-After while the first read is running.
+const SCORECARD_PENDING_RETRY_S = 5;
+export function createScorecard({ compute, env = process.env, now = () => Date.now(), log = console, retryMs = SCORECARD_RETRY_MS } = {}) {
+  let cached = null, inFlight = null, timer = null, warned = 0, lastMs = null, failedAt = null;
   const refresh = () => {
     if (inFlight) return inFlight;
     const started = performance.now();
     inFlight = Promise.resolve().then(compute).then((v) => {
       cached = { value: v, at: now() };
+      failedAt = null;
       lastMs = performance.now() - started;
       return cached;
     }).catch((e) => {
       const t = now();
+      failedAt = t;
       if (t - warned > 3_600_000) { warned = t; try { log.warn(`[scorecard] read failed (${String(e?.message || e).slice(0, 120)}); keeping the last figures`); } catch { /* logging only */ } }
       if (!cached) throw e;
       return cached;
@@ -141,7 +151,16 @@ export function createScorecard({ compute, env = process.env, now = () => Date.n
   };
   return {
     refresh,
-    async get() { return cached || refresh(); },
+    async get() {
+      if (cached) return cached;
+      const notYet = (seconds) => Object.assign(new Error("the scorecard is not computed yet"), { retryAfterSeconds: Math.max(1, Math.ceil(seconds)) });
+      if (!inFlight) {
+        const wait = failedAt === null ? 0 : failedAt + retryMs - now();
+        if (wait > 0) throw notYet(wait / 1000);
+        void refresh().catch(() => { /* failedAt holds off the next one */ });
+      }
+      throw notYet(SCORECARD_PENDING_RETRY_S);
+    },
     lastComputeMs: () => lastMs,
     start({ firstMs = 15_000 } = {}) {
       if (timer) return;

@@ -42,6 +42,25 @@ const catalog = { "POST /api/hash": { name: "Hash", slug: "hash", category: "enc
   ok(failing.peek()?.value.count === 3, "a read that fails keeps the last good value");
 }
 
+// --- a hung read is bounded; a value too old to vouch for is left out ------------
+{
+  let t = 1_000_000, reads = 0, mode = "ok";
+  const cell = proofCell(() => { reads++; return mode === "hang" ? new Promise(() => {}) : { value: { count: 5 }, at: t }; }, { ttlMs: 60_000, timeoutMs: 30, maxAgeMs: 300_000, now: () => t });
+  cell.peek(); await cell.settled();
+  ok(cell.peek()?.value.count === 5 && reads === 1, "a read that answers is held");
+  mode = "hang"; t += 61_000;
+  ok(cell.peek()?.value.count === 5, "while the next read hangs, the value inside its freshness window is still served");
+  await cell.settled();
+  ok(reads === 2, "the hung read is abandoned at its timeout");
+  cell.peek();
+  await new Promise((r) => setImmediate(r));
+  ok(reads === 3, "after the timeout the next peek starts a new read, not pinned behind the hung one");
+  await cell.settled();
+  t += 300_000;
+  ok(cell.peek() === null, "past its freshness window with every read hung, the figure is left out (never stale, never a zero)");
+  ok(homeProofFigures({ uptime: cell.peek() }).length === 0, "and no figure is drawn for it");
+}
+
 // --- stubbed sources render as figures with an as-of each ---------------------------
 const AT = { u: Date.UTC(2026, 10, 11, 10, 0, 0), e: Date.UTC(2026, 10, 11, 10, 1, 0), c: Date.UTC(2026, 10, 11, 10, 2, 0), l: Date.UTC(2026, 10, 11, 10, 3, 0) };
 const full = homeProofFigures({
@@ -57,7 +76,7 @@ const full = homeProofFigures({
   const fig = (key) => (h.match(new RegExp(`<a class="hm-own-fig" id="hm-own-${key}"[^>]*>[\\s\\S]*?</a>`)) || [""])[0];
   ok(/>99\.951%</.test(fig("uptime")) && /href="\/status"/.test(fig("uptime")) && fig("uptime").includes(`data-as-of="${new Date(AT.u).toISOString()}"`), "uptime is served with its value, its /status link and its as-of");
   ok(/>1,234</.test(fig("paid")) && /external payments/.test(fig("paid")) && fig("paid").includes(`data-as-of="${new Date(AT.e).toISOString()}"`), "external payments are served with their value and as-of");
-  ok(new RegExp(`>${RAILS.length}<`).test(fig("chains")) && fig("chains").includes(`data-as-of="${new Date(AT.c).toISOString()}"`), "chains live are served from the rails list with an as-of");
+  ok(new RegExp(`>${RAILS.length}<`).test(fig("chains")) && fig("chains").includes(`data-as-of="${new Date(AT.c).toISOString()}"`), "chains live are served from the count given, with an as-of");
   ok(/>212 ms</.test(fig("latency")) && fig("latency").includes(`data-as-of="${new Date(AT.l).toISOString()}"`), "median latency is served with its as-of");
   ok(placeholders(h).length === 0, `the served hero holds no dash or loading placeholder (found: ${placeholders(h).join(" ") || "none"})`);
   ok(/66 of our own test purchases are not counted above/.test(h) && /\$56\.78 external revenue/.test(h), "our own test purchases are footnoted under the external figure");
@@ -70,6 +89,17 @@ const full = homeProofFigures({
   ok(some.map((f) => f.key).join(",") === "chains", "a missing or zero source is left out");
   const h = hero(ledgerHomePage("https://agent402.tools", catalog, {}, {}, [], { proof: some }));
   ok(!/id="hm-own-(uptime|paid|latency)"/.test(h) && placeholders(h).length === 0 && !/>0</.test((h.match(/<div class="hm-own"[\s\S]*?<\/div>/) || [""])[0]), "the left-out figures render nothing in their place");
+  // Zero is "nothing yet", never a figure: no "0 chains live", no uptime
+  // from a window with no observations.
+  const zeroChains = homeProofFigures({ chains: { value: { count: 0 }, at: AT.c }, latency: { value: { p50Ms: 90 }, at: AT.l } });
+  ok(zeroChains.map((f) => f.key).join(",") === "latency", `zero offered chains draw no chains figure (${zeroChains.map((f) => `${f.key}=${f.value}`).join(",")})`);
+  const unobserved = homeProofFigures({ uptime: { value: { pct: 100, observed: 0, windowDays: 90 }, at: AT.u }, latency: { value: { p50Ms: 90 }, at: AT.l } });
+  ok(unobserved.map((f) => f.key).join(",") === "latency", `uptime with no observations draws no uptime figure (${unobserved.map((f) => `${f.key}=${f.value}`).join(",")})`);
+  const zh = hero(ledgerHomePage("https://agent402.tools", catalog, {}, {}, [], { proof: homeProofFigures({ uptime: { value: { pct: 100, observed: 0, windowDays: 90 }, at: AT.u }, external: { value: { count: 0 }, at: AT.e }, chains: { value: { count: 0 }, at: AT.c } }) }));
+  ok(!/class="hm-own"/.test(zh) && !/id="hm-own-/.test(zh), "a hero fed only zero sources draws no figure at all");
+  // The status line beside the buttons follows the same offer.
+  const line = (o) => hero(ledgerHomePage("https://agent402.tools", catalog, {}, {}, [], { chainsOffered: o }));
+  ok(/>3 chains( \+ Tempo)? live</.test(line(3).replace(/<span class="ml-dot"><\/span>/, "")) && !/chains( \+ Tempo)? live/.test(line(0)), "the hero's chains-live line counts the offered chains and leaves the count out at zero");
   const none = hero(ledgerHomePage("https://agent402.tools", catalog, {}, {}, []));
   ok(!/class="hm-own"/.test(none) && placeholders(none).length === 0, "with no figures at all the panel serves no grid and no placeholder");
   ok(!/not counted above/.test(none), "no footnote without the figure it qualifies");
@@ -102,8 +132,14 @@ const full = homeProofFigures({
     const first = await fetch(`${srv.url}/`);
     const h1 = hero(await first.text());
     ok(first.status === 200 && placeholders(h1).length === 0, `GET / serves the hero with no placeholder (found: ${placeholders(h1).join(" ") || "none"})`);
+    // The chains figure is the offer /api/rails reports, not the static
+    // list: present with that count when a rail is offered, absent otherwise.
     const chains = (h1.match(/<a class="hm-own-fig" id="hm-own-chains"[^>]*>[\s\S]*?<\/a>/) || [""])[0];
-    ok(new RegExp(`>${RAILS.length}<`).test(chains) && /data-as-of="\d{4}-\d\d-\d\dT[^"]+"/.test(chains), "GET / serves the chains figure from the rails list, with an as-of");
+    const offered = Number((await (await fetch(`${srv.url}/api/rails`)).json()).offered) || 0;
+    ok(offered > 0
+      ? new RegExp(`>${offered}<`).test(chains) && /data-as-of="\d{4}-\d\d-\d\dT[^"]+"/.test(chains)
+      : chains === "" && !/chains live/.test(h1),
+    `GET / serves the chains figure from the offered rails (/api/rails offered ${offered}, of ${RAILS.length} listed): ${chains ? "drawn" : "left out"}`);
 
     // The uptime cell reads the /status snapshot in the background; the page
     // carries the figure once that read lands (deadline, not a fixed sleep).

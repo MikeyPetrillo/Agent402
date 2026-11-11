@@ -3855,13 +3855,18 @@ function homeProof() {
   const settled = settledOnChainCount();
   const external = settledExternalCount();
   const perf = getPerformance24h();
+  // The x402 chains the 402 offers right now (/api/rails "offered"), not the
+  // static list: a rail dropped at boot is not live. Null (no rail
+  // configured) or zero leaves the figure out.
+  const offered = offeredChainCount();
   return {
     settled,
     external,
+    chainsOffered: offered || 0,
     figures: homeProofFigures({
       uptime: homeUptimeCell.peek(),
       external: external && __settledMemo.at ? { value: { count: external.count }, at: __settledMemo.at } : null,
-      chains: { value: { count: RAILS.length }, at: Date.now() },
+      chains: offered ? { value: { count: offered }, at: Date.now() } : null,
       latency: perf && perfCache.at ? { value: { p50Ms: perf.p50LatencyMs }, at: perfCache.at } : null,
     }),
   };
@@ -3869,7 +3874,7 @@ function homeProof() {
 app.get("/", (_req, res) => {
   const proof = homeProof();
   htmlCache(res, 60, 300).send(
-    ledgerHomePage(BASE_URL, CATALOG, getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }), getLeaderboardSnapshot(), SKILL_PACKS, { settledOnChain: proof.settled, external: proof.external, proof: proof.figures })
+    ledgerHomePage(BASE_URL, CATALOG, getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }), getLeaderboardSnapshot(), SKILL_PACKS, { settledOnChain: proof.settled, external: proof.external, proof: proof.figures, chainsOffered: proof.chainsOffered, mpp: mppMethodsSummary().enabled })
   );
 });
 // /marketplaces — legacy surface, merged into /marketplace (301 keeps SEO equity).
@@ -4535,11 +4540,11 @@ app.get("/api/scorecard", async (req, res) => {
     const elevated = operatorView(req, res);
     if (!elevated) res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=600");
     res.json(scorecardOf(value, elevated));
-  } catch { res.status(503).set("Retry-After", "30").json({ error: "The scorecard is not computed yet; retry shortly." }); }
+  } catch (e) { res.status(503).set("Retry-After", String(e?.retryAfterSeconds || 30)).json({ error: "The scorecard is not computed yet; retry shortly." }); }
 });
 app.get("/scorecard", async (_req, res) => {
   try { const { value } = await scorecard.get(); htmlCache(res, 300, 600).send(scorecardPage(BASE_URL, scorecardOf(value))); }
-  catch { res.status(503).set("Retry-After", "30").type("text").send("The scorecard is not computed yet; retry shortly."); }
+  catch (e) { res.status(503).set("Retry-After", String(e?.retryAfterSeconds || 30)).type("text").send("The scorecard is not computed yet; retry shortly."); }
 });
 app.get("/glossary", (_req, res) => htmlCache(res, 300, 900).send(glossaryPage(BASE_URL)));
 // x402 & MPP 101 - the presenter-mode walkthrough with the live demo (src/x402-101.js).

@@ -63,7 +63,8 @@ import { rankBy as rankLeaderboard } from "./leaderboard.js";
 import { SKILL_PACKS, PACK_PRICE_RANGE, buildPromptMessages, rankSkillPacks } from "./skills.js";
 import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
 import { meteredFromPrice, meteredQuoteSentence, flatTiersLine } from "./metered-lead.js";
-import { LEAD_SENTENCE } from "./positioning.js";
+import { leadSentence } from "./positioning.js";
+import { mppMethodsSummary } from "./mpp-offers.js";
 import { decideUpgradeOffer } from "./tools/decide-kit.js";
 import { networkFloorUsd, ROBINHOOD_CAIP2 } from "./network-floors.js";
 import { needsAsyncOrWait } from "./slow-sync-window.js";
@@ -82,7 +83,7 @@ import {
   FLAGSHIP_WRITERS,
   FLAGSHIP_OUTPUT_SCHEMAS,
   META_OUTPUT_SCHEMAS,
-  MCP_SERVER_DESCRIPTION,
+  mcpServerDescription,
   MCP_SERVER_WEBSITE,
   mcpInstallHints,
   mcpInitializeInstructions,
@@ -441,7 +442,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         name: profile?.serverName || "agent402",
         version: VERSION,
         title: "Agent402",
-        description: MCP_SERVER_DESCRIPTION,
+        description: mcpServerDescription({ mpp: mppMethodsSummary().enabled }),
         websiteUrl: baseUrl || MCP_SERVER_WEBSITE,
       },
       {
@@ -463,7 +464,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // paid call here cannot be settled at all.
           ...(mppLoopback ? { experimental: { payment: { methods: mcpPaymentMethods() } } } : {}),
         },
-        instructions: profile?.instructions || mcpInitializeInstructions(baseUrl, { decide: !!catalog["POST /api/decide"], mpp: !!mppLoopback }),
+        instructions: profile?.instructions || mcpInitializeInstructions(baseUrl, { decide: !!catalog["POST /api/decide"], mpp: !!mppLoopback, mppOffered: mppMethodsSummary().enabled }),
       },
     );
 
@@ -1170,7 +1171,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             service: baseUrl,
             connector: "hosted free tier (authless)",
             maintainer: "Havok Holdings LLC",
-            positioning: `${LEAD_SENTENCE} It is the applied layer of Agentic Finance: software agents that pay and get paid on their own, per request, over the two open wires - x402 and MPP (Machine Payments Protocol) - both answered on the same 402. Definition + glossary: ${baseUrl}/agentic-finance, ${baseUrl}/glossary.`,
+            positioning: `${leadSentence({ mpp: mppMethodsSummary().enabled })} It is the applied layer of Agentic Finance: software agents that pay and get paid on their own, per request, ${mppMethodsSummary().enabled ? "over the two open wires - x402 and MPP (Machine Payments Protocol) - both answered on the same 402" : "over x402"}. Definition + glossary: ${baseUrl}/agentic-finance, ${baseUrl}/glossary.`,
             // Flagship-first positioning: search/answer as the default job,
             // evergreen 500+ catalog, models and reports named beside the tools.
             startHere: {

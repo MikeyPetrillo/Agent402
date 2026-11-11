@@ -289,6 +289,28 @@ async function readSurfaces(B, tag, { mpp = false, door402 = true } = {}) {
     ok(t.endsWith(`When a call fails: ${AGENTS_MD_PATH}.`), `${label}: the use line points at ${AGENTS_MD_PATH} for failures`);
   };
 
+  // The lead sentence follows the MPP switch on every served surface: the
+  // home hero, the connector's serverInfo, its instructions and server.describe.
+  {
+    const { leadSentence } = await import("../src/positioning.js");
+    const lead = leadSentence({ mpp });
+    const home = await (await fetch(`${B}/`)).text();
+    const lede = ((home.match(/<p class="hm-lede"[^>]*>([\s\S]*?)<\/p>/) || [])[1] || "").replace(/<[^>]*>/g, "");
+    ok(lede === lead, `${tag} GET /: the hero lede is the lead sentence for MPP ${mpp ? "on" : "off"} ("${lede}")`);
+    const init = await fetch(`${B}/mcp`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "front-door-test", version: "0" } } }),
+    });
+    const t = await init.text();
+    const r = (init.headers.get("content-type") || "").startsWith("text/event-stream") ? JSON.parse(t.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trim()).join("")) : JSON.parse(t);
+    const desc = r.result?.serverInfo?.description || "", instr = r.result?.instructions || "";
+    ok(desc.startsWith(lead) && (mpp || !/MPP/.test(desc)), `${tag} MCP initialize: serverInfo.description opens with that lead sentence${mpp ? "" : " and names no MPP"}`);
+    ok(instr.split("\n")[0].startsWith(lead), `${tag} MCP initialize: the instructions open with that lead sentence`);
+    const pos = (await describeOf(B)).positioning || "";
+    ok(pos.startsWith(lead) && (mpp || !/MPP/.test(pos)), `${tag} server.describe: positioning opens with that lead sentence${mpp ? "" : " and names no MPP"}`);
+  }
+
   // /llms.txt: title, summary blockquote, then the three lines, then the rest.
   const llmsRes = await fetch(`${B}/llms.txt`);
   const llms = await llmsRes.text();

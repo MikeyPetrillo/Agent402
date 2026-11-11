@@ -2143,6 +2143,8 @@ function* buyerScorecardSteps({ now = Date.now(), months = 7, minGroup = 3, samp
       networks.push({ network: "other", networks: folded.map((n) => n.network).sort(), wallets: fp.size, calls: folded.reduce((s, n) => s + n.calls, 0), usd: nanoToUsd4(folded.reduce((s, n) => s + n.nano, 0)) });
     }
     rows.push({ month: k, wallets: m.payerDays.size, returningWallets: returning, multiDayWallets: multiDay, calls: m.calls, usd: nanoToUsd4(m.nano), networks, samples: m.txs, settlementsWithTx: m.withTx });
+    // One month's fold walks every payer of that month: a turn of its own.
+    yield;
   }
   return { months: rows, windowStart, now };
 }

@@ -24,7 +24,7 @@ import { MAX_FULL_PER_SUB_30D } from "./monitor-scheduler.js";
 import { REPO_URL } from "./repo-link.js";
 import { powCostPhrase } from "./pow.js";
 import { METERED_WIRES, meteredQuoteSentence, flatTiersLine } from "./metered-lead.js";
-import { CATEGORY_LINE, LEAD_SENTENCE } from "./positioning.js";
+import { CATEGORY_LINE, leadSentence } from "./positioning.js";
 // PRICES IN COPY ARE DERIVED, NEVER TYPED.
 //
 // These chips were hardcoded and went stale at the 2026-08-23 repricing: the
@@ -99,7 +99,7 @@ function decideRowHtml() {
 // `proof` is the hero's first-party figures (src/home-proof.js
 // homeProofFigures), read from caches by the server so the page never waits on
 // a source; a figure the server has no value for is simply absent.
-export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, skillPacks, { settledOnChain = 0, external = null, proof = [] } = {}) {
+export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, skillPacks, { settledOnChain = 0, external = null, proof = [], chainsOffered, mpp = true } = {}) {
   const tools = toolList(catalog);
   const count = tools.length;
   const packCount = Array.isArray(skillPacks) ? skillPacks.length : 42;
@@ -124,14 +124,22 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
           <div class="hm-own" style="--hm-own-n:${figures.length};">${figures.map((f) => `<a class="hm-own-fig" id="hm-own-${esc(f.key)}" href="${esc(f.href)}" data-as-of="${esc(f.asOf)}" title="as of ${esc(f.asOf)}"><span class="hm-own-v">${esc(f.value)}</span><span class="hm-own-l">${esc(f.label)}</span></a>`).join("")}</div>
           ${heroFootnote}`
     : "";
-  // The lead sentence (src/positioning.js), with its two wire names linked.
+  // The lead sentence (src/positioning.js) with the wires this server offers
+  // (the "/" route passes the MPP switch), each wire name linked.
   const wireLink = (href, t) => `<a href="${href}" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">${t}</a>`;
-  const leadHtml = esc(LEAD_SENTENCE).replace("x402 or MPP", `${wireLink("/what-is-x402", "x402")} or ${wireLink("/what-is-mpp", "MPP")}`);
+  const leadHtml = mpp
+    ? esc(leadSentence({ mpp: true })).replace("x402 or MPP", `${wireLink("/what-is-x402", "x402")} or ${wireLink("/what-is-mpp", "MPP")}`)
+    : esc(leadSentence({ mpp: false })).replace("over x402,", `over ${wireLink("/what-is-x402", "x402")},`);
   const viaPow = Number(served.viaProofOfWork) || 0;
   const rails = railsByVolume(stats);
   // One noun on every surface: the x402 chains, plus Tempo over MPP when it is
   // on. "N rails" counted Tempo as a chain beside copy that said N-1 chains.
-  const railCountLabel = `${RAILS.length} chains${rails.length > RAILS.length ? " + Tempo" : ""} live`;
+  // The x402 chains the 402 offers right now when the server says (the "/"
+  // route passes /api/rails "offered"); the static list only for a caller
+  // that does not. Zero offered leaves the count out rather than claim it.
+  const liveChains = chainsOffered === undefined ? RAILS.length : Number(chainsOffered) || 0;
+  const tempoLive = rails.length > RAILS.length;
+  const railCountLabel = liveChains > 0 ? `${liveChains} chains${tempoLive ? " + Tempo" : ""} live` : tempoLive ? "Tempo live" : "";
   // The chains the router can pay an outside seller on right now: its map
   // plus the EVM chains SOR_EVM_CHAINS lists.
   const routerChains = routerPayChains();
@@ -237,7 +245,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
           <a class="btn btn-secondary" href="/tools">Browse tools</a>
         </div>
         <div class="ml-items" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);gap:8px 18px;align-items:center;">
-          <span style="display:inline-flex;align-items:center;gap:10px;white-space:nowrap;"><span class="ml-dot"></span>${railCountLabel}</span>
+          ${railCountLabel ? `<span style="display:inline-flex;align-items:center;gap:10px;white-space:nowrap;"><span class="ml-dot"></span>${railCountLabel}</span>` : ""}
           <a href="${REPO_URL}" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);white-space:nowrap;">open source</a>
         </div>
       </div>

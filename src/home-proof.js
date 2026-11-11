@@ -1,7 +1,7 @@
 // The home hero's first-party figures: uptime as outside observers measured
 // it, paid calls from buyers outside our own wallets, the chains live, and the
 // median tool latency. Each is read from a value another surface already
-// keeps (the /status snapshot, the /revenue external count, the rails list,
+// keeps (the /status snapshot, the /revenue external count, the offered rails on /api/rails,
 // the /api/stats performance block) and carries the time it was measured.
 //
 // The page never waits on a read: a proofCell answers with the last value it
@@ -10,26 +10,39 @@
 // dash or a zero.
 
 /** One cached source. `read` may be slow or async; `peek()` never waits on
- *  it. Returns { value, at } or null when nothing has been read yet. */
-export function proofCell(read, { ttlMs = 60_000, now = () => Date.now() } = {}) {
-  let held = null;
+ *  it. Returns { value, at } or null when nothing usable is held.
+ *
+ *  Each read is bounded by `timeoutMs`: a read that has not answered by then
+ *  is abandoned (its late answer is ignored) and the next peek starts a new
+ *  one, so a hung source never pins the figure. A held value is served only
+ *  while its last successful read is younger than `maxAgeMs`; past that the
+ *  figure is left out (null), never drawn stale and never as a zero. */
+export function proofCell(read, { ttlMs = 60_000, timeoutMs = 10_000, maxAgeMs = 5 * Math.max(ttlMs, 60_000), now = () => Date.now() } = {}) {
+  let held = null; // { value, at, readAt }
   let pending = null;
+  let gen = 0;
   const refresh = () => {
     if (pending) return;
+    const mine = ++gen;
+    let timer = null;
     // The read starts on a later turn, so not even its synchronous part runs
     // inside the request that asked.
-    pending = new Promise((r) => setImmediate(r))
+    const attempt = new Promise((r) => setImmediate(r))
       .then(read)
-      .then((v) => { if (v && v.value != null) held = { value: v.value, at: Number(v.at) || now() }; })
-      .catch(() => { /* keep the last good value */ })
-      .finally(() => { pending = null; });
+      .then((v) => { if (mine === gen && v && v.value != null) held = { value: v.value, at: Number(v.at) || now(), readAt: now() }; })
+      .catch(() => { /* keep the last good value */ });
+    const deadline = new Promise((r) => { timer = setTimeout(r, Math.max(1, timeoutMs)); });
+    pending = Promise.race([attempt, deadline]).finally(() => {
+      clearTimeout(timer);
+      if (mine === gen) { gen++; pending = null; } // a late answer from this read is ignored
+    });
   };
   return {
     peek() {
-      if (!held || now() - held.at >= ttlMs) refresh();
-      return held;
+      if (!held || now() - held.readAt >= ttlMs) refresh();
+      return held && now() - held.readAt < maxAgeMs ? { value: held.value, at: held.at } : null;
     },
-    // For tests: settles once the refresh in flight (if any) is done.
+    // For tests: settles once the refresh in flight (if any) is done or abandoned.
     settled: () => pending || Promise.resolve(),
   };
 }
