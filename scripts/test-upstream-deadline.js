@@ -135,6 +135,7 @@ const keepAlive = setInterval(() => {}, 1000);
     try { await upstreamFetch("https://x.test/", { method: "POST", headers: { a: "b" }, dispatcher }, { label: "Refused", step: "read", budget: null, tag: null, fetchImpl: async (_u, init) => { seenInit = init; throw Object.assign(new TypeError("fetch failed"), { code: "ECONNREFUSED" }); } }); } catch (e) { err = e; }
     ok(err?.upstreamFailure === "unreachable" && seenInit?.method === "POST" && seenInit?.headers?.a === "b" && seenInit?.dispatcher === dispatcher && seenInit?.signal instanceof AbortSignal,
       "a refused connection is the unreachable class, and method, headers, dispatcher and a signal all reach fetch");
+    ok(seenInit?.signal?.[Symbol.for("agent402.upstreamLimitMs")] === 8000, `the signal carries the read's cap for the failure monitor's note (${seenInit?.signal?.[Symbol.for("agent402.upstreamLimitMs")]})`);
   }
   // Body reads and promise-shaped work map the same way.
   {

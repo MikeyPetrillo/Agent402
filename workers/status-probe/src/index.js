@@ -703,6 +703,13 @@ Auto-closes when nothing is owed.`,
     body: ({ gateway: b }) => failureWordBody("upstreamHealth", b.upstreamHealth?.status === "failing" ? "failing" : "degraded"),
   },
   {
+    // Our own limit passed on one upstream for several callers while others
+    // answered (src/unanswered-rule.js): neutral, no claim the upstream failed.
+    title: "upstreamHealth: an upstream did not answer within our limit",
+    verdict: ({ gateway: b }) => wordVerdict(b.upstreamHealth?.status, ["unanswered"], ["ok"]),
+    body: () => failureWordBody("upstreamHealth", "unanswered"),
+  },
+  {
     // Settle refusals (refused) and a facilitator in its settle cool-down
     // (demoted, src/settle-demotion.js).
     title: "facilitatorFunds: a facilitator refused settlement",

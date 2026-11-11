@@ -1255,6 +1255,10 @@ jobs:
           check_word toolFailures "degraded failing" "ok"
           TITLE="upstreamHealth: an upstream is timing out or failing"
           check_word upstreamHealth "degraded failing" "ok"
+          # Our own limit passed on one upstream for several callers while
+          # others answered (src/unanswered-rule.js): its own neutral title.
+          TITLE="upstreamHealth: an upstream did not answer within our limit"
+          check_word upstreamHealth "unanswered" "ok"
           TITLE="facilitatorFunds: a facilitator refused settlement"
           check_word facilitatorFunds "refused demoted" "ok"
           # A settlement signer short of gas, before any refusal: its own title.

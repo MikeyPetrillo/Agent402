@@ -73,6 +73,125 @@ await check("upstream words: our own deadlines and egress errors never page upst
   assert.equal((await m.status({ fresh: true })).upstreamHealth.status, "degraded", "five 5xx answers from the upstream itself still page");
 });
 
+// ---- upstreamHealth=unanswered (src/unanswered-rule.js) -------------------------
+// Our deadline firing on ONE upstream on many calls from several callers while
+// other upstreams answer in the same buckets reads its own neutral word; one
+// slow call, one caller's long inputs, a share under the rate, and our egress
+// or deadline on every upstream at once never do.
+const hungOn = (m, host, n, callers, extra = {}) => { for (let i = 0; i < n; i++) m.noteUpstream(host, "deadline", { origin: "outside", caller: `caller-${i % callers}`, ...extra }); };
+const answers = (m, host, n, origin = "outside") => { for (let i = 0; i < n; i++) m.noteUpstream(host, "ok", { origin }); };
+const VENDOR_BLAME = /fail|down|outage|error|unavailable|unreachable|broken/i;
+await check("unanswered: our deadline on one upstream for three callers while another answers reads unanswered; the detail says only our limit", async () => {
+  const m = createToolFailureMonitor({ now: clock().now, env: {} });
+  hungOn(m, "hist.databento.com", 6, 3);
+  answers(m, "api.exa.ai", 10);
+  assert.deepEqual((await m.status({ fresh: true })).upstreamHealth, { status: "unanswered" }, "the public read is the word alone");
+  const full = await m.status({ full: true, fresh: true });
+  assert.equal(full.upstreamHealth.status, "unanswered");
+  assert.equal(full.upstreamHealth.ourSide, false);
+  const row = full.upstreamHealth.upstreams.find((u) => u.upstream === "databento");
+  assert.equal(row?.status, "unanswered", JSON.stringify(full.upstreamHealth));
+  assert.equal(row.unanswered, "databento did not answer within our limit on 6 of 6 calls from 3 callers in 15 min");
+  assert.doesNotMatch(row.unanswered, VENDOR_BLAME, "the note claims no failure");
+  assert.equal(row.failures, 0, "our deadlines are still not counted as the upstream's failures");
+  assert.ok(!full.upstreamHealth.upstreams.some((u) => u.upstream === "exa"), "the answering upstream is not listed");
+});
+await check("unanswered: the note names our own limit when the read carried it, and the caller key is read only for a deadline", async () => {
+  const m = createToolFailureMonitor({ now: clock().now, env: {} });
+  let reads = 0;
+  for (let i = 0; i < 5; i++) {
+    const signal = AbortSignal.abort(new DOMException("t", "TimeoutError"));
+    signal[Symbol.for("agent402.upstreamLimitMs")] = 25_000;
+    const p = Promise.reject(new DOMException("The operation was aborted due to timeout", "TimeoutError")); p.catch(() => {});
+    m.observeFetch("hist.databento.com", p, { signal }, "outside", null, () => { reads++; return `k${i}`; });
+  }
+  for (let i = 0; i < 4; i++) m.observeFetch("api.exa.ai", Promise.resolve(new Response("x")), {}, "outside", null, () => { reads++; return "never"; });
+  await new Promise((r) => setTimeout(r, 0));
+  const row = (await m.status({ full: true, fresh: true })).upstreamHealth.upstreams.find((u) => u.upstream === "databento");
+  assert.equal(row?.unanswered, "databento did not answer within our 25 s limit on 5 of 5 calls from 5 callers in 15 min");
+  assert.equal(reads, 5, "an answered fetch never reads (hashes) the caller key");
+});
+await check("unanswered: one slow call, and one caller's long inputs, read ok", async () => {
+  const one = createToolFailureMonitor({ now: clock().now, env: {} });
+  hungOn(one, "hist.databento.com", 1, 1);
+  answers(one, "api.exa.ai", 10);
+  assert.equal((await one.status({ fresh: true })).upstreamHealth.status, "ok", "one slow call");
+  const single = createToolFailureMonitor({ now: clock().now, env: {} });
+  hungOn(single, "hist.databento.com", 20, 1);
+  answers(single, "api.exa.ai", 10);
+  assert.equal((await single.status({ fresh: true })).upstreamHealth.status, "ok", "twenty deadlines for one caller");
+  const two = createToolFailureMonitor({ now: clock().now, env: {} });
+  hungOn(two, "hist.databento.com", 20, 2);
+  answers(two, "api.exa.ai", 10);
+  assert.equal((await two.status({ fresh: true })).upstreamHealth.status, "ok", "two callers are under the default three");
+  const unknown = createToolFailureMonitor({ now: clock().now, env: {} });
+  for (let i = 0; i < 20; i++) unknown.noteUpstream("hist.databento.com", "deadline", { origin: "background" });
+  answers(unknown, "api.exa.ai", 10);
+  assert.equal((await unknown.status({ fresh: true })).upstreamHealth.status, "ok", "work outside a request is one caller");
+});
+await check("unanswered: answers from the same upstream keep the share under the rate", async () => {
+  const m = createToolFailureMonitor({ now: clock().now, env: {} });
+  hungOn(m, "hist.databento.com", 6, 3);
+  answers(m, "hist.databento.com", 10);
+  answers(m, "api.exa.ai", 10);
+  assert.equal((await m.status({ fresh: true })).upstreamHealth.status, "ok");
+});
+await check("unanswered: our egress or our deadline on every upstream at once names none (ourSide)", async () => {
+  const hosts = ["hist.databento.com", "api.exa.ai", "openrouter.ai", "api.stlouisfed.org"];
+  const egress = createToolFailureMonitor({ now: clock().now, env: {} });
+  for (const h of hosts) for (let i = 0; i < 12; i++) egress.noteUpstream(h, "egress", { origin: "outside" });
+  hungOn(egress, "hist.databento.com", 6, 3);
+  assert.equal((await egress.status({ fresh: true })).upstreamHealth.status, "ok", "our egress failing for every upstream");
+  assert.equal((await egress.status({ full: true, fresh: true })).upstreamHealth.ourSide, true);
+  const held = createToolFailureMonitor({ now: clock().now, env: {} });
+  for (const h of hosts) { hungOn(held, h, 8, 4); answers(held, h, 1); }
+  assert.equal((await held.status({ fresh: true })).upstreamHealth.status, "ok", "our deadline firing on every upstream at once");
+  assert.equal((await held.status({ full: true, fresh: true })).upstreamHealth.ourSide, true);
+  const alone = createToolFailureMonitor({ now: clock().now, env: {} });
+  hungOn(alone, "hist.databento.com", 8, 4);
+  assert.equal((await alone.status({ fresh: true })).upstreamHealth.status, "ok", "with no other upstream answering, our side cannot be told apart");
+});
+await check("unanswered: another upstream must answer in the same buckets, and the window ages it out", async () => {
+  const c = clock();
+  const m = createToolFailureMonitor({ now: c.now, env: {} });
+  answers(m, "api.exa.ai", 10);
+  c.t += 2 * BUCKET_MS;
+  hungOn(m, "hist.databento.com", 6, 3);
+  assert.equal((await m.status({ fresh: true, t: c.t })).upstreamHealth.status, "ok", "the other upstream answered only earlier");
+  answers(m, "api.exa.ai", 3);
+  assert.equal((await m.status({ fresh: true, t: c.t })).upstreamHealth.status, "unanswered", "now it answers beside the deadlines");
+  c.t += 20 * 60_000;
+  assert.equal((await m.status({ fresh: true, t: c.t })).upstreamHealth.status, "ok", "past the 15-minute window");
+});
+await check("unanswered: thresholds come from the environment; a real failure word outranks it", async () => {
+  const env = { UPSTREAM_UNANSWERED_MIN: "2", UPSTREAM_UNANSWERED_MIN_CALLERS: "2", UPSTREAM_UNANSWERED_WINDOW_MS: String(60 * 60_000), UPSTREAM_UNANSWERED_RATE: "0.9" };
+  const m = createToolFailureMonitor({ now: clock().now, env });
+  hungOn(m, "hist.databento.com", 2, 2);
+  answers(m, "api.exa.ai", 5);
+  const full = await m.status({ full: true, fresh: true });
+  assert.equal(full.upstreamHealth.status, "unanswered");
+  assert.match(full.upstreamHealth.upstreams[0].unanswered, / on 2 of 2 calls from 2 callers in 60 min$/);
+  for (let i = 0; i < 5; i++) m.noteUpstream("api.exa.ai", "s5xx", { origin: "outside" });
+  assert.ok(["degraded", "failing"].includes((await m.status({ fresh: true })).upstreamHealth.status), "an upstream's own 5xx answers keep their word");
+});
+await check("unanswered: the caller keys merge across replicas through the snapshot store", async () => {
+  const c = clock();
+  const kv = new Map();
+  const store = {
+    async publish(id, json) { kv.set(id, json); return { ok: true }; },
+    async readAll() { return { ok: true, snapshots: [...kv].map(([id, v]) => ({ id, ...JSON.parse(v) })) }; },
+  };
+  const a = createToolFailureMonitor({ now: c.now, env: {}, store, replicaId: "a" });
+  const b = createToolFailureMonitor({ now: c.now, env: {}, store, replicaId: "b" });
+  hungOn(a, "hist.databento.com", 4, 2); answers(a, "api.exa.ai", 3);
+  for (let i = 0; i < 3; i++) b.noteUpstream("hist.databento.com", "deadline", { origin: "outside", caller: "caller-b" });
+  assert.equal((await a.status({ fresh: true })).upstreamHealth.status, "ok", "two callers on one replica");
+  await a.publish(); await b.publish();
+  c.t += 61_000; // past the remote read's cache
+  assert.equal((await a.status({ fresh: true })).upstreamHealth.status, "unanswered", "three callers across the two");
+  assert.ok(!/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/.test([...kv.values()].join("")), "a snapshot carries no address");
+});
+
 await check("tool words: 2 outside 5xx ok, 3 degraded, a >25% share over 8 calls failing; synthetic never counts", async () => {
   const c = clock();
   const m = createToolFailureMonitor({ now: c.now, env: {} });

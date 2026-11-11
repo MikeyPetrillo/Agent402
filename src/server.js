@@ -2584,7 +2584,7 @@ installEgressMeter();
     try { workerHost = new URL(workerUrlAtBoot).host; } catch { /* registerUpstreamHost already parsed it */ }
     setWorkerOutcomeObserver((kind, status) => { monitor.noteUpstream(workerHost, kind, { origin: originNow(), status }); });
   }
-  setEgressOutcomeObserver((host, p, init, path) => { monitor.observeFetch(host, p, init, originNow(), path); });
+  setEgressOutcomeObserver((host, p, init, path) => { const scope = currentRequestScope(); monitor.observeFetch(host, p, init, originNow(), path, scope ? () => scope.callerKey : null); });
   // Identical answers (operator detail): live-data slugs only. A pure-CPU
   // tool answers the same bytes to the same input by design, and the memory
   // and identity-bound reads answer each payer from its own store.
@@ -4188,7 +4188,9 @@ app.get("/api/gateway-status", async (req, res) => {
     // a secret is configured for the operator.
     cdnOrigin: cdnOriginStatus({ full }),
     // Per-tool and per-upstream failure counts (src/tool-failure-monitor.js):
-    // toolFailures and upstreamHealth read ok / degraded / failing over the
+    // toolFailures reads ok / degraded / failing, and upstreamHealth ok /
+    // degraded / failing / unanswered (our limit passed on one upstream for
+    // several callers, src/unanswered-rule.js), over the
     // last hour; facilitatorFunds reads ok / low (a facilitator's settlement
     // signer is short of gas, src/facilitator-gas.js) / unknown (a signer's
     // balance could not be read; pages nothing) / refused (an

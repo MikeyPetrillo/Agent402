@@ -2,7 +2,9 @@
 // (withdraw), sharedLimits (degraded) and replayStore (pending). Also the spend
 // words (xDataSpend, exaSpend, routerSpendWindow: over and capped), and
 // upstreamHealth and facilitatorFunds driven end to end from the monitor (our
-// own timeouts, DNS failures and unread balances page nothing).
+// own timeouts, DNS failures and unread balances page nothing), and
+// upstreamHealth=unanswered (a hung upstream for several callers pages under
+// its own neutral title; one caller, or our side for every upstream, does not).
 //
 // gatewayBalance=withdraw holds from the read that reaches the mark until an
 // operator moves the balance, so it pages at once. The other two flicker in
@@ -414,6 +416,78 @@ for (const [name, T, field, sameBody] of SPEND) {
     assert.equal(judge({ gateway: gw })[FG], "good");
     assert.deepEqual(closedNum(await runStep(step, gw, [{ number: 8, title: FG }])), ["8"]);
   });
+}
+// ---- upstreamHealth=unanswered, end to end -----------------------------------------
+// A hung stub upstream: our AbortSignal.timeout fires on every call to it, for
+// five callers, while another upstream answers. The monitor reads unanswered;
+// the Worker and heartbeat.yml page once under the neutral title (not the
+// "timing out or failing" one) with a body that names no upstream, and close
+// it once the window passes. One caller's long inputs, and our egress or our
+// deadline on every upstream at once, page nothing.
+{
+  const { createToolFailureMonitor } = await import("../src/tool-failure-monitor.js");
+  const UN = "upstreamHealth: an upstream did not answer within our limit";
+  const UH = "upstreamHealth: an upstream is timing out or failing";
+  const step = steps.find((s) => String(s.name || "").startsWith("Tool, upstream and facilitator failure checks"));
+  const start = Date.parse("2026-11-10T15:00:00Z");
+  const created = (calls, T) => calls.filter((c) => c[1] === "create" && argOf(c, "--title") === T);
+  const closedNum = (calls) => calls.filter((c) => c[1] === "close").map((c) => c[2]);
+  const hungCall = (m, host, caller) => {
+    const signal = AbortSignal.abort(new DOMException("t", "TimeoutError"));
+    signal[Symbol.for("agent402.upstreamLimitMs")] = 25_000;
+    const p = Promise.reject(new DOMException("The operation was aborted due to timeout", "TimeoutError")); p.catch(() => {});
+    m.observeFetch(host, p, { signal }, "outside", null, () => caller);
+  };
+  const dnsCall = (m, host) => { const p = Promise.reject(Object.assign(new TypeError("fetch failed"), { cause: { code: "ENOTFOUND" } })); p.catch(() => {}); m.observeFetch(host, p, {}, "outside", null, () => "x"); };
+  const answered = (m, host, n) => { for (let i = 0; i < n; i++) m.observeFetch(host, Promise.resolve(new Response("x")), {}, "outside"); };
+  const read = async (m, t) => ({ upstreamHealth: (await m.status({ fresh: true, t })).upstreamHealth });
+  let t = start;
+  const m = createToolFailureMonitor({ now: () => t, env: {} });
+  for (let i = 0; i < 6; i++) hungCall(m, "hist.databento.com", `caller-${i % 5}`);
+  answered(m, "api.exa.ai", 8);
+  await new Promise((r) => setTimeout(r, 0));
+  let gw = await read(m, t);
+  await check("unanswered: a hung upstream for five callers pages once under the neutral title, with a body that names no upstream", async () => {
+    assert.deepEqual(gw.upstreamHealth, { status: "unanswered" });
+    const v = judge({ gateway: gw });
+    assert.equal(v[UN], "bad");
+    assert.notEqual(v[UH], "bad", "not the timing-out-or-failing page");
+    const worker = ALARMS.find((x) => x.title === UN);
+    assert.ok(worker, "the Worker has the alarm");
+    assert.doesNotMatch(worker.body({ gateway: gw }), /databento|failing|failed|outage|is down/i);
+    const calls = await runStep(step, gw);
+    assert.equal(created(calls, UN).length, 1, JSON.stringify(calls));
+    assert.equal(created(calls, UH).length, 0);
+    assert.equal(argOf(created(calls, UN)[0], "--body"), worker.body({ gateway: gw }), "the heartbeat's body is the Worker's");
+    assert.equal(created(await runStep(step, gw, [{ number: 11, title: UN }]), UN).length, 0, "an open issue is not duplicated");
+    const full = await m.status({ full: true, fresh: true, t });
+    assert.equal(full.upstreamHealth.upstreams[0].unanswered, "databento did not answer within our 25 s limit on 6 of 6 calls from 5 callers in 15 min", "the operator detail");
+  });
+  t += 20 * 60_000;
+  gw = await read(m, t);
+  await check("unanswered: once the window passes the word reads ok and the issue closes", async () => {
+    assert.equal(gw.upstreamHealth.status, "ok");
+    assert.equal(judge({ gateway: gw })[UN], "good");
+    assert.deepEqual(closedNum(await runStep(step, gw, [{ number: 11, title: UN }])), ["11"]);
+  });
+  const quiet = async (label, feed) => {
+    const q = createToolFailureMonitor({ now: () => start, env: {} });
+    feed(q);
+    await new Promise((r) => setTimeout(r, 0));
+    const g = await read(q, start);
+    await check(`unanswered: ${label} pages nothing`, async () => {
+      assert.equal(g.upstreamHealth.status, "ok", JSON.stringify(g));
+      const v = judge({ gateway: g });
+      assert.notEqual(v[UN], "bad"); assert.notEqual(v[UH], "bad");
+      const calls = await runStep(step, g);
+      assert.equal(created(calls, UN).length + created(calls, UH).length, 0, JSON.stringify(calls));
+    });
+  };
+  await quiet("one caller's long inputs held past our limit twenty times", (q) => { for (let i = 0; i < 20; i++) hungCall(q, "hist.databento.com", "caller-long"); answered(q, "api.exa.ai", 8); });
+  await quiet("one slow call", (q) => { hungCall(q, "hist.databento.com", "caller-1"); answered(q, "api.exa.ai", 8); });
+  const ALL = ["hist.databento.com", "api.exa.ai", "openrouter.ai", "api.stlouisfed.org"];
+  await quiet("our egress failing for every upstream", (q) => { for (const h of ALL) for (let i = 0; i < 10; i++) dnsCall(q, h); });
+  await quiet("our deadline on every upstream at once, for many callers", (q) => { for (const h of ALL) for (let i = 0; i < 8; i++) hungCall(q, h, `caller-${i}`); });
 }
 // ---- the rail check: a dropped Circle Gateway batched option ---------------------
 // /api/rails carries gatewayBatched.dropped (each network with its reason word)

@@ -10,6 +10,7 @@
 // a query string or a value, and are capped in number.
 
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createHmac, randomBytes } from "node:crypto";
 import { registerMemoryStore } from "./memory-stores.js";
 
 const als = new AsyncLocalStorage();
@@ -99,10 +100,29 @@ export function installRequestTimingFetch() {
   return true;
 }
 
+// A short keyed hash of the client address, so a rule can count distinct
+// callers (src/unanswered-rule.js) without keeping an address. The key is
+// this process's own and never leaves it as anything but the hash.
+const CALLER_SALT = randomBytes(16);
+export function callerKeyOf(req) {
+  const ip = String(req?.ip || req?.socket?.remoteAddress || "");
+  return ip ? createHmac("sha256", CALLER_SALT).update(ip).digest("hex").slice(0, 12) : null;
+}
+/** The current request's caller key, or null outside a request. */
+export function currentCallerKey() { return als.getStore()?.callerKey ?? null; }
+
 /** Express middleware. `keyOf(req)` maps a request to its route key. */
 export function requestTimingMiddleware(keyOf, isPaid = () => false) {
   return (req, res, next) => {
-    const store = { upstreamMs: 0 };
+    // The caller key is hashed only when a rule asks for it (rare), once.
+    let callerKey;
+    const store = {
+      upstreamMs: 0,
+      get callerKey() {
+        if (callerKey === undefined) { try { callerKey = callerKeyOf(req); } catch { callerKey = null; } }
+        return callerKey;
+      },
+    };
     const t0 = performance.now();
     const id = nextId++;
     let key = "(unknown)", reserved = false;
