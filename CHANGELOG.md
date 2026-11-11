@@ -16,7 +16,8 @@ Payments:
   cause refuse the wallet only at three times that count, and that answer says
   only that settlement did not complete.
 - A facilitator's definite 4xx answer to a settlement is no longer read as a
-  settlement that did not complete.
+  settlement that did not complete. A settlement answer of 4xx that names no
+  reason (other than 401, 403, 408 or 429) counts as unknown cause.
 - A payment whose verification could not be completed (a timeout, a connection
   that failed, a facilitator 5xx, 408 or 429, or an on-chain signature check
   that could not finish) answers reason not-checked with retry same-payment
@@ -27,8 +28,9 @@ Payments:
   credential was not checked, and the same credential can be sent again. This
   server keeps listing Tempo first in the payment challenges it sends that
   client. A push credential (a transfer already sent) that could not be
-  checked this way, or because the payment relay could not be reached, is told
-  its transfer has not been claimed and still pays for the request.
+  checked this way, because the payment relay could not be reached, or because
+  the shared payment store did not answer, is told its transfer has not been
+  claimed and, once final, still pays for the request.
 - /api/rails gives each payment network left off at startup a reason word
   (probe-timeout, read-failed, not-advertised or config) and, while the
   batched option is on, its status and the networks it dropped. The startup
@@ -36,11 +38,12 @@ Payments:
   when it answers with an error.
 Router:
 - The seller index keeps a seller routable when our own read of it fails (our
-  time limit, our resolver, our byte cap) and its last completed crawl
-  succeeded within 6 hours; a connection the seller's host refused, reset or
-  failed TLS on is the seller's own answer. ?seller= and the index rows carry
-  lastReadIncomplete and errorKind, the seller dossier says our read did not
-  complete, and a paywall probe that read no status records no verdict.
+  time limit, our resolver, our byte cap, our own network path) and its last
+  completed crawl succeeded within 6 hours; a connection the seller's host
+  refused, reset or failed TLS on is the seller's own answer. ?seller= and the
+  index rows carry lastReadIncomplete and errorKind, the seller dossier says
+  our read did not complete, and a paywall probe that read no status records
+  no verdict.
 - The seller index backs off a seller whose host refuses connections and stops
   routing to it.
 - Route-and-execute stops buying from a seller that takes payment and then
