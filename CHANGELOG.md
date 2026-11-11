@@ -58,8 +58,8 @@ Tools:
   of that and the duration the file's headers declare.
 - The domain audit and token risk reports (model-backed) pass the records they
   read (DNS, header and certificate values, registration text, token names,
-  symbols and labels, web reputation text) to the model as quoted data: the
-  report describes them and takes no direction from them.
+  symbols and labels, web reputation text) to the model as quoted data, with
+  the rule to describe them and never follow them.
 - The daily call ceilings on upstream services count calls that may have
   reached the upstream. A call that never left the server (a name that did not
   resolve, a refused connection) gives its unit back.
