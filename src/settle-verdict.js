@@ -70,8 +70,8 @@ export function isPaymentVerdictReason(reason) {
 // signature, an authorization or nonce already used, a window that closed,
 // a payload the facilitator refused, or the same authorization already
 // settling for another request (our claim store, src/settlement-claims.js).
-// Everything else proves nothing about the wallet and is never counted
-// against it: a timeout or connection error on our side, a hook of ours
+// Everything else is not a verdict code (src/settle-fault.js reads what
+// else it proves): a timeout or connection error on our side, a hook of ours
 // that could not run (wallet_check_failed, settle_mark_failed,
 // before_settle_hook_error), a facilitator's HTTP error or billing refusal
 // on our account, a reverted transfer (the settler's own gas can cause it),
@@ -91,8 +91,3 @@ export function isBuyerSettleVerdict(reason) {
   if (SETTLE_NOT_BUYER.test(r)) return false;
   return SETTLE_BUYER_EXTRA.test(r) || isPaymentVerdictCode(r);
 }
-
-/** The request property a payment gate with no x402 receipt (the Tempo
- *  gate) sets to true when its post-handler refusal was a definite verdict
- *  on the buyer's payment; the settle breaker reads it. */
-export const SETTLE_VERDICT_PROVEN = "__settleVerdictProven";

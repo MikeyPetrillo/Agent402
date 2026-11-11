@@ -53,18 +53,25 @@
 // with success:false), so a graceful facilitator rejection is caught whatever
 // status rides with it.
 //
-// WHO IS COUNTED. Only a failure that is a definite verdict on the buyer's
-// own payment counts toward the wallet's refusal (src/settle-verdict.js
-// isBuyerSettleVerdict: balance, signature, an authorization used or
-// expired, a payload refused; for the Tempo gate, which carries no x402
-// receipt, the gate's own SETTLE_VERDICT_PROVEN mark). A failure that proves
-// nothing about the wallet (our timeout or socket error at settle, our
-// store or a hook of ours failing, a facilitator's HTTP error or billing
-// refusal on our account, a revert the settler's gas can cause, a settle
-// still pending, a 402 with no receipt) never refuses the wallet: it feeds
-// the burst alarm like any failure, and one key's own run of them raises the
-// same alarm (UNPROVEN, below), so a loop of served-and-unsettled calls is
-// paged on instead of charged to the buyer. Not caught, and accepted: a MALFORMED facilitator
+// WHO IS COUNTED (src/settle-fault.js settleFailureFault; for the Tempo gate,
+// which carries no x402 receipt, the gate's own SETTLE_FAULT mark):
+//   buyer      a definite verdict on the buyer's payment (balance,
+//              signature, an authorization used or expired, a payload
+//              refused, or the chain's own words that the wallet came up
+//              short): counted at MAX_FAILS, and the 429 names the payment.
+//   unknown    a revert or failed simulation that names no balance, a bare
+//              settlement_failed, a 402 with no receipt, a settle still
+//              pending: counted at UNKNOWN_MAX_FAILS (a served run that is
+//              never paid stays bounded per wallet), and the 429 says only
+//              that settlement of the wallet's recent payments did not
+//              complete, which is true whoever caused it.
+//   not-buyer  ours or a third party's, proven (our timeout or socket error,
+//              our store or a hook of ours, our relayer, our credentials, a
+//              facilitator's HTTP error or a billing limit on our account):
+//              never counted against the wallet.
+// Every failure feeds the burst alarm, and one key's run of unknown or
+// not-buyer failures at MAX_FAILS raises it too, so a loop is paged on.
+// Not caught, and accepted: a MALFORMED facilitator
 // response at settle (FacilitatorResponseError, answered 502 by the vendor) -
 // indistinguishable from a handler 502 without a served marker, rare, and the
 // facilitator-diagnostics wrapper logs it loudly.
@@ -96,7 +103,7 @@
 import { payerFromRequest, paymentHeaderOf } from "./payer.js";
 import { decodePaymentHeader } from "./payment-header.js";
 import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
-import { isBuyerSettleVerdict, SETTLE_VERDICT_PROVEN } from "./settle-verdict.js";
+import { settleFailureFault, SETTLE_FAULT, RAW_SETTLE_RECEIPT } from "./settle-fault.js";
 import { isWithdrawnSubcentRefusal } from "./avm-sponsorship.js";
 import { isGatewayPendingAnswer } from "./gateway-wire.js";
 import { onSettleOutcome } from "./hangup-settlement.js";
@@ -114,6 +121,10 @@ export const MIN_FAIL_SHARE = (() => { const n = Number(process.env.GATEWAY_SETT
  *  the share rule bounds a wallet's unpaid handler runs by its own settled
  *  calls, and this bounds them outright. */
 export const HARD_MAX_FAILS = num(process.env.GATEWAY_SETTLE_BREAKER_HARD_MAX, 40);
+/** Failures of unknown cause (WHO IS COUNTED) a wallet may accumulate inside
+ *  the window before it is refused: three times MAX_FAILS by default, never
+ *  under it. The share rule and HARD_MAX_FAILS apply to them as to verdicts. */
+export const UNKNOWN_MAX_FAILS = Math.max(MAX_FAILS, num(process.env.GATEWAY_SETTLE_BREAKER_UNKNOWN_MAX, 3 * MAX_FAILS));
 /** Settled outcomes kept per key (the window's rate needs a count, not every stamp). */
 const MAX_OKS_KEPT = 5000;
 /** DISTINCT buyers with a /v1 settle failure inside the window that raise the
@@ -138,6 +149,9 @@ const oks = new Map();   // key -> number[] (settled-call timestamps inside the 
 // and share that would refuse a wallet, they raise the burst alarm instead
 // (this process's count; the alarm flag is shared).
 const unprovenFails = new Map();
+// key -> number[]: failures of unknown cause inside the window, the count the
+// consult refuses at UNKNOWN_MAX_FAILS (shared window gwb-unk).
+const unknownFails = new Map();
 const unprovenAlarmed = new Map(); // key -> until when its run has raised the alarm
 let unprovenTrips = 0;
 // buyer -> the time of its latest settle failure inside the window: the burst
@@ -157,8 +171,9 @@ const NETWORKS_AT_LIMIT_MAX_BUYERS = 5000;
 let multiNetworkTrips = 0;
 
 // ---- the shared half ----------------------------------------------------------
-// Window names: gwb-fail (per key, one entry per failure counted against
-// the wallet), gwb-ok (per key, one entry per settled call),
+// Window names: gwb-fail (per key, one entry per verdict counted against
+// the wallet), gwb-unk (per key, one entry per failure of unknown cause),
+// gwb-ok (per key, one entry per settled call),
 // gwb-global (one entry per distinct buyer; a keyless failure is its own
 // entry), gwb-nets (per payer, one entry per network its count reads
 // refusing on), and the flag gwb-alarm. A window add returns the shared count, so
@@ -194,7 +209,7 @@ function write(p) {
   w.finally(() => pendingWrites.delete(w));
   return w;
 }
-function sharedRecordFailure(key, now, { global, withdrawn, walletCount = true }) {
+function sharedRecordFailure(key, now, { global, withdrawn, walletCount = true, unknown = false }) {
   const member = `${PROC}:${++sharedSeq}`;
   if (global) {
     void write(shared.windowAdd("gwb-global", "all", { windowMs: WINDOW_MS, member: key ? sharedKey(buyerOf(key)) : `${withdrawn ? "withdrawn" : "anon"}:${member}`, now })).then((r) => {
@@ -208,6 +223,7 @@ function sharedRecordFailure(key, now, { global, withdrawn, walletCount = true }
       }
     });
   }
+  if (key && unknown) void write(shared.windowAdd("gwb-unk", sharedKey(key), { windowMs: WINDOW_MS, member, now }));
   if (!key || !walletCount) return;
   void write(shared.windowAdd("gwb-fail", sharedKey(key), { windowMs: WINDOW_MS, member, now })).then((r) => {
     // A /v1 failure that brings this key's shared count to the refusing
@@ -245,12 +261,16 @@ async function sharedBlocked(key, now) {
   const r = await shared.windowReadMany([
     { name: "gwb-fail", key: sharedKey(key), windowMs: WINDOW_MS },
     { name: "gwb-ok", key: sharedKey(key), windowMs: WINDOW_MS },
+    { name: "gwb-unk", key: sharedKey(key), windowMs: WINDOW_MS },
   ], { now });
   if (!r.ok) { noteSharedLimitsDegraded(CONTROL, r); return local; }
-  const [f, o] = r.results;
-  const useShared = f.count > local.fails && Array.isArray(f.entries);
-  const failTimes = useShared ? f.entries.map((e) => e.score).sort((x, y) => x - y) : inWindow(fails.get(key) || [], now);
-  return verdict(failTimes, Math.max(f.count, local.fails), Math.max(o.count, local.oks));
+  const [f, o, u] = r.results;
+  const timesOf = (w, localCount, map) => (w.count > localCount && Array.isArray(w.entries) ? w.entries.map((e) => e.score).sort((x, y) => x - y) : inWindow(map.get(key) || [], now));
+  const nOks = Math.max(o.count, local.oks);
+  return combined(
+    verdict(timesOf(f, local.fails, fails), Math.max(f.count, local.fails), nOks),
+    verdict(timesOf(u, local.unknownFails, unknownFails), Math.max(u.count, local.unknownFails), nOks, UNKNOWN_MAX_FAILS),
+  );
 }
 /** The alarm with the shared flag folded in. Read by the status word only,
  *  never by the consult. */
@@ -325,12 +345,21 @@ function inWindow(arr, now) { return arr.filter((t) => now - t < WINDOW_MS); }
 /** The rule: MAX_FAILS failures inside the window, and failures strictly more
  *  than MIN_FAIL_SHARE of the key's outcomes there. `until` is when the
  *  (len - MAX + 1)th newest failure ages out. */
-function verdict(failTimes, nFails, nOks) {
+function verdict(failTimes, nFails, nOks, max = MAX_FAILS) {
   const out = { blocked: false, fails: nFails, oks: nOks };
-  if (nFails < MAX_FAILS) return out;
+  if (nFails < max) return out;
   if (nFails < HARD_MAX_FAILS && nFails <= MIN_FAIL_SHARE * (nFails + nOks)) return out;
-  const idx = Math.max(0, failTimes.length - MAX_FAILS);
+  const idx = Math.max(0, failTimes.length - max);
   return { ...out, blocked: true, until: (failTimes[idx] ?? failTimes[failTimes.length - 1] ?? Date.now()) + WINDOW_MS };
+}
+/** One key's state from its two counts: refused when its verdicts or its
+ *  unknown failures are at their limit; `kind` says which (a verdict first),
+ *  and the refusal's words follow it. */
+function combined(v, u) {
+  const out = { blocked: v.blocked || u.blocked, fails: v.fails, oks: v.oks, unknownFails: u.fails };
+  if (v.blocked) return { ...out, kind: "buyer", until: v.until };
+  if (u.blocked) return { ...out, kind: "unknown", until: u.until };
+  return out;
 }
 /** The alarm, raised for one payer (this process's word; the shared flag is
  *  the caller's). Logged once per raise: a trip that finds the alarm already
@@ -373,12 +402,14 @@ function pruneGlobal(now) { for (const [k, t] of globalFailKeys) if (now - t >= 
 
 /** Per-key state (this process): see `verdict`. */
 export function gatewaySettleBreakerBlocked(key, now = Date.now()) {
-  if (!key) return { blocked: false, fails: 0, oks: 0 };
+  if (!key) return { blocked: false, fails: 0, oks: 0, unknownFails: 0 };
   const arr = inWindow(fails.get(key) || [], now);
   if (arr.length) fails.set(key, arr); else fails.delete(key);
+  const unk = inWindow(unknownFails.get(key) || [], now);
+  if (unk.length) unknownFails.set(key, unk); else unknownFails.delete(key);
   const ok = inWindow(oks.get(key) || [], now);
   if (ok.length) oks.set(key, ok); else oks.delete(key);
-  return verdict(arr, arr.length, ok.length);
+  return combined(verdict(arr, arr.length, ok.length), verdict(unk, unk.length, ok.length, UNKNOWN_MAX_FAILS));
 }
 
 /** The burst alarm (this process): raised for WINDOW_MS once GLOBAL_MAX_FAILS buyers fail to settle inside a window (a failure recorded with no buyer counts on its own), or once one payer's failures read refusing on MULTI_NETWORK_MIN networks. It refuses nothing. */
@@ -413,15 +444,25 @@ function noteUnprovenFailure(key, now) {
   if (globalAlarmUntil <= now) globalTrips++;
   globalAlarmUntil = now + WINDOW_MS;
   if (SHARED) void write(shared.flagSet("gwb-alarm", "all", now + WINDOW_MS, { now }));
-  console.warn(`[gateway-breaker] ${arr.length} paid calls from one buyer${networkOf(key) ? ` on ${networkOf(key)}` : ""} were served and could not be settled inside ${Math.round(WINDOW_MS / 1000)} s, none of them a verdict on the buyer's payment - settleFailures reads burst until ${new Date(globalAlarmUntil).toISOString()}; the buyer is not refused for it`);
+  console.warn(`[gateway-breaker] ${arr.length} paid calls from one buyer${networkOf(key) ? ` on ${networkOf(key)}` : ""} were served and could not be settled inside ${Math.round(WINDOW_MS / 1000)} s, none of them a verdict on the buyer's payment - settleFailures reads burst until ${new Date(globalAlarmUntil).toISOString()}`);
 }
 
 /** A payment was presented, the handler served, and settlement FAILED.
- *  Counted against the wallet unless `walletCount` is false; `unproven`
- *  (a failure that proved nothing about the wallet) feeds the one-key alarm. */
-export function recordGatewaySettleFailure(key, now = Date.now(), { global = true, withdrawn = false, walletCount = true, unproven = false } = {}) {
-  if (SHARED) sharedRecordFailure(key, now, { global, withdrawn, walletCount });
-  if (unproven && key) noteUnprovenFailure(key, now);
+ *  `fault` (WHO IS COUNTED): "buyer" counts at MAX_FAILS, "unknown" at
+ *  UNKNOWN_MAX_FAILS, "not-buyer" never; both of the latter feed the one-key
+ *  alarm. `walletCount:false` keeps a buyer failure off the wallet. */
+export function recordGatewaySettleFailure(key, now = Date.now(), { global = true, withdrawn = false, walletCount = true, fault = "buyer" } = {}) {
+  const isBuyer = fault !== "unknown" && fault !== "not-buyer";
+  const unknown = fault === "unknown" && !!key;
+  if (SHARED) sharedRecordFailure(key, now, { global, withdrawn, walletCount: walletCount && isBuyer, unknown });
+  if (!isBuyer && key) noteUnprovenFailure(key, now);
+  if (unknown) {
+    const u = inWindow(unknownFails.get(key) || [], now);
+    u.push(now);
+    if (u.length > MAX_OKS_KEPT) u.splice(0, u.length - MAX_OKS_KEPT);
+    unknownFails.set(key, u);
+    if (verdict(u, u.length, inWindow(oks.get(key) || [], now).length, UNKNOWN_MAX_FAILS).blocked) console.warn(`[gateway-breaker] ${u.length} settlements of unknown cause against ${inWindow(oks.get(key) || [], now).length} settled calls inside the window for one buyer${networkOf(key) ? ` on ${networkOf(key)}` : ""} - refusing its paid calls${networkOf(key) ? " on that network" : ""} until the window clears`);
+  }
   // `global:false` (the wallet-only catalog consult): the failure counts
   // against the WALLET only; the burst alarm reports the /v1 tiers, where a
   // served call that fails to settle is upstream spend.
@@ -441,9 +482,9 @@ export function recordGatewaySettleFailure(key, now = Date.now(), { global = tru
       console.warn(`[gateway-breaker] unsettled gateway calls from ${parts.join(", ")} inside ${Math.round(WINDOW_MS / 1000)} s - settleFailures reads burst until ${new Date(globalAlarmUntil).toISOString()}; no request is refused for it`);
     }
   }
-  // walletCount:false (a Circle Gateway settlement still pending): one buyer
-  // toward the burst alarm, nothing against the wallet.
-  if (!key || !walletCount) return;
+  // walletCount:false (a Circle Gateway settlement still pending), and every
+  // failure that is not a verdict: nothing more against the wallet here.
+  if (!key || !walletCount || !isBuyer) return;
   const arr = inWindow(fails.get(key) || [], now);
   arr.push(now);
   fails.set(key, arr);
@@ -533,8 +574,11 @@ export function armGatewaySettleBreaker(req, key, { global = true } = {}) {
       // with no receipt - is unproven: kept off the wallet, and a run of
       // them on one key raises the alarm instead.
       if (st === 402 || receipt?.success === false) {
-        const proven = receipt?.success === false ? isBuyerSettleVerdict(receipt.errorReason) : req[SETTLE_VERDICT_PROVEN] === true;
-        recordGatewaySettleFailure(key, Date.now(), proven ? { global } : { global, walletCount: false, unproven: true });
+        const marked = req[SETTLE_FAULT];
+        const fault = receipt?.success === false
+          ? settleFailureFault({ receipt, raw: req[RAW_SETTLE_RECEIPT] || null, network: gatewaySettleBreakerNetwork(req) })
+          : marked === "buyer" || marked === "not-buyer" ? marked : "unknown";
+        recordGatewaySettleFailure(key, Date.now(), { global, fault });
       } else if (st === 200) recordGatewaySettleSuccess(key);
       // Anything else (a 4xx/5xx the handler threw) was never settled and is
       // not this wallet's doing: neither counted nor cleared.
@@ -578,9 +622,11 @@ function decide(req, key, now, global, b) {
     const network = networkOf(key);
     const on = network ? ` on ${network}` : "";
     const until = `paid tools refuse new calls from it${on} until ${new Date(b.until).toISOString()} (about ${secs} s).${network ? ` That holds ${network} only: this wallet can pay on any other network this route offers right now (the networks are accepts[].network in the route's 402).` : ""} Nothing was charged for this request.`;
-    // Only verdicts on the buyer's own payment are counted (WHO IS COUNTED),
-    // so the words can name them.
-    const e = new Error(`Recent payments from this wallet${on} failed to settle (${b.fails} in the last ${mins} min: they verified, the call was served, and the settlement then refused the payment itself, for its balance, its signature, or an authorization already used or expired); ${until} ${network ? `Before paying on ${network} again, check the wallet's balance of the payment token there and sign a new authorization.` : "Check the wallet's USDC balance on the paying chain and sign a new authorization before retrying."}`);
+    // A verdict on the buyer's payment is named; a run of unknown cause is
+    // said as what it is, with no claim about whose fault it was.
+    const e = new Error(b.kind === "unknown"
+      ? `Settlement of this wallet's recent payments${on} did not complete (${b.unknownFails} in the last ${mins} min: each verified and was served, and its settlement did not complete); ${until}`
+      : `Recent payments from this wallet${on} failed to settle (${b.fails} in the last ${mins} min: they verified, the call was served, and the settlement then refused the payment itself, for its balance, its signature, or an authorization already used or expired); ${until} ${network ? `Before paying on ${network} again, check the wallet's balance of the payment token there and sign a new authorization.` : "Check the wallet's USDC balance on the paying chain and sign a new authorization before retrying."}`);
     e.statusCode = 429;
     e.retryAfterMs = b.until - now;
     // Machine-readable, beside the message (src/tool-error-fields.js):
@@ -599,9 +645,9 @@ function decide(req, key, now, global, b) {
 /** Counts only - never a key, address or IP. */
 export function gatewaySettleBreakerStatus(now = Date.now()) {
   let blockedKeys = 0, trackedKeys = 0;
-  for (const [key] of fails) {
+  for (const key of new Set([...fails.keys(), ...unknownFails.keys()])) {
     const s = gatewaySettleBreakerBlocked(key, now);
-    if (s.fails) trackedKeys++;
+    if (s.fails || s.unknownFails) trackedKeys++;
     if (s.blocked) blockedKeys++;
   }
   const g = gatewaySettleBreakerGlobalAlarm(now);
@@ -619,7 +665,7 @@ export function gatewaySettleBreakerStatus(now = Date.now()) {
     // the refusing count and raised the alarm instead.
     unprovenTrips,
     globalAlarm: g.alarm, globalAlarmUntil: g.alarm ? new Date(g.until).toISOString() : null, globalTrips,
-    maxFails: MAX_FAILS, minFailShare: MIN_FAIL_SHARE, hardMaxFails: HARD_MAX_FAILS, windowMs: WINDOW_MS, globalMaxFails: GLOBAL_MAX_FAILS,
+    maxFails: MAX_FAILS, unknownMaxFails: UNKNOWN_MAX_FAILS, minFailShare: MIN_FAIL_SHARE, hardMaxFails: HARD_MAX_FAILS, windowMs: WINDOW_MS, globalMaxFails: GLOBAL_MAX_FAILS,
   };
 }
 
@@ -640,14 +686,14 @@ export async function gatewaySettleFailuresStatus({ full = false, now = Date.now
  *  every write already sent (a trip's alarm flag included) has landed and the
  *  shared windows and flag are cleared after them; await it. */
 export function _gatewaySettleBreakerReset() {
-  const keys = new Set([...fails.keys(), ...oks.keys()]);
-  fails.clear(); unprovenFails.clear(); unprovenAlarmed.clear(); unprovenTrips = 0; oks.clear(); globalFailKeys = new Map(); globalAlarmUntil = 0; globalTrips = 0;
+  const keys = new Set([...fails.keys(), ...oks.keys(), ...unknownFails.keys()]);
+  fails.clear(); unknownFails.clear(); unprovenFails.clear(); unprovenAlarmed.clear(); unprovenTrips = 0; oks.clear(); globalFailKeys = new Map(); globalAlarmUntil = 0; globalTrips = 0;
   networksAtLimit.clear(); multiNetworkTrips = 0;
   if (!SHARED) return undefined;
   return (async () => {
     while (pendingWrites.size) await Promise.allSettled([...pendingWrites]);
     await Promise.allSettled([
-      ...[...keys].flatMap((k) => ["gwb-fail", "gwb-ok"].map((name) => shared.windowClear(name, sharedKey(k)))),
+      ...[...keys].flatMap((k) => ["gwb-fail", "gwb-ok", "gwb-unk"].map((name) => shared.windowClear(name, sharedKey(k)))),
       ...[...new Set([...keys].filter((k) => networkOf(k)).map((k) => sharedKey(buyerOf(k))))].map((payer) => shared.windowClear("gwb-nets", payer)),
       shared.flagSet("gwb-alarm", "all", 0), shared.windowClear("gwb-global", "all"),
     ]);

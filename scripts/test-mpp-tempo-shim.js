@@ -773,23 +773,24 @@ async function withWarnings(fn) {
   _resetTempoDemotion();
 }
 
-// Case N4: a broadcast refused after the handler marks the request for the
-// settle breaker: a verdict on the buyer's payment is proven, anything else
-// (our transport, an unknown answer, the relay's own errors) is not.
+// Case N4: a broadcast refused after the handler marks the request with the
+// fault its class proves, for the settle breaker (src/settle-fault.js): a
+// verdict on the buyer's payment is "buyer", our transport and the relay's
+// own errors are "not-buyer", anything else is "unknown".
 {
-  const { SETTLE_VERDICT_PROVEN } = await import("../src/settle-verdict.js");
-  for (const [cls, proven] of [["insufficient-funds", true], ["expired", true], ["replay", true], ["chain-unreachable", false], ["relay-unreachable", false], ["relay-unavailable", false], ["unknown", false], [undefined, false]]) {
+  const { SETTLE_FAULT } = await import("../src/settle-fault.js");
+  for (const [cls, proven] of [["insufficient-funds", "buyer"], ["expired", "buyer"], ["replay", "buyer"], ["chain-unreachable", "not-buyer"], ["relay-unreachable", "not-buyer"], ["relay-unavailable", "not-buyer"], ["policy-denied", "unknown"], ["unknown", "unknown"], [undefined, "unknown"]]) {
     let mark = "unset", done;
     const finished = new Promise((r) => { done = r; });
     const app = express();
-    app.use((req, res, next) => { res.on("finish", () => { mark = req[SETTLE_VERDICT_PROVEN]; done(); }); next(); });
+    app.use((req, res, next) => { res.on("finish", () => { mark = req[SETTLE_FAULT]; done(); }); next(); });
     app.use(createTempoGate({ ...GATE, validate: async () => ({ ok: true, validation: {} }), broadcast: async () => ({ ok: false, ...(cls ? { cls } : {}), error: "x", reason: "x" }) }));
     app.use(paywallStub);
     app.get("/paid", (req, res) => res.json({ served: true }));
     const { server, url } = await listen(app);
     const { value: st } = await withWarnings(async () => (await fetch(`${url}/paid`, { headers: { Authorization: buildTempoCredential() } })).status);
     await Promise.race([finished, new Promise((r) => setTimeout(r, 5000).unref())]);
-    ok(st === 402 && mark === proven, `case N4: the ${cls || "classless"} broadcast refusal answers 402 and marks the verdict ${proven} (got ${st}, ${mark})`);
+    ok(st === 402 && mark === proven, `case N4: the ${cls || "classless"} broadcast refusal answers 402 and marks the fault ${proven} (got ${st}, ${mark})`);
     server.close();
   }
 }

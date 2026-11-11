@@ -53,7 +53,7 @@ import { drainSignal } from "./drain-abort.js";
 import { screenAddresses, screenFunding, sanctionsScreenStatus, maskAddress as maskOne, TEMPO_SCREEN_REFUSED_DETAIL, TEMPO_SCREEN_REFUSED_HINT } from "./sanctions-screen.js";
 import { Secp256k1 } from "ox";
 import { lateWatchKey } from "./tempo-late-watches.js";
-import { SETTLE_VERDICT_PROVEN } from "./settle-verdict.js";
+import { SETTLE_FAULT, tempoRefusalFault } from "./settle-fault.js";
 
 const DEFAULT_DECIMALS = 6; // matches every other stablecoin rail this repo settles (unconfirmed specifically for pathUSD — decimals() unread, this is the USDC-family convention, not a live lookup)
 
@@ -459,13 +459,6 @@ export const TEMPO_REFUSAL_CLASSES = Object.freeze({
     hint: "Request the resource again and pay the fresh challenge; if it keeps failing, pay over another method in the WWW-Authenticate header.",
   },
 });
-
-/** The refusal classes that are a definite verdict on the buyer's own
- *  payment (its balance, its transfer, its window, its memo, a credential
- *  already used, a transaction that fails simulation). Every other class
- *  (our transport, the relay's HTTP errors and policy, the screen,
- *  "unknown") proves nothing about the buyer. */
-export const TEMPO_BUYER_VERDICT_CLASSES = new Set(["insufficient-funds", "transfer-mismatch", "memo-unbound", "expired", "replay", "simulation-failed"]);
 
 export function classifyTempoRefusal(e) {
   const trace = e?.__relayTrace || {};
@@ -2002,9 +1995,8 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
         // relay's verdict, and only the numbers tell them apart.
         console.warn(`[mpp-tempo] broadcast failed AFTER a successful handler (${req.method} ${req.path}) — buyer answered 402, not charged by us: ${maskAddresses(b.error)} [${timing}]`);
         const bcls = b.cls || "unknown";
-        // The settle breaker counts this against the buyer only when it is a
-        // definite verdict on the buyer's payment.
-        req[SETTLE_VERDICT_PROVEN] = TEMPO_BUYER_VERDICT_CLASSES.has(bcls);
+        // What this refusal proves, for the settle breaker (src/settle-fault.js).
+        req[SETTLE_FAULT] = tempoRefusalFault(bcls);
         logTempoRefusal(req, { cls: `broadcast:${bcls}`, amountAtomic: binding.amountAtomic, timings: { validate: tValidated - t0, handler: tHandled - tValidated, broadcast: tBroadcast - tHandled, total: Date.now() - tStart }, requestId: b.requestId });
         bufferedCalls = [];
         restore();

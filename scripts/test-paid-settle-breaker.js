@@ -64,6 +64,9 @@ facilitator = createServer((req, res) => {
       // The facilitator failing on its side (an HTTP 503 whose body is no
       // settle answer): no verdict on the payment.
       if (settleMode === "down") return reply(503, { error: "upstream network unavailable" });
+      // A revert, with and without the token's own balance words.
+      if (settleMode === "revert") return reply(200, { success: false, errorReason: "invalid_exact_evm_transaction_failed", errorMessage: "execution reverted", transaction: "", network: net, payer });
+      if (settleMode === "revert-balance") return reply(200, { success: false, errorReason: "invalid_exact_evm_transaction_failed", errorMessage: "execution reverted: ERC20: transfer amount exceeds balance", transaction: "", network: net, payer });
       return reply(200, { success: true, transaction: "0x" + "cd".repeat(32), network: net, payer });
     }
     if (req.url === "/rpc") return reply(200, { jsonrpc: "2.0", id: 1, result: "0x0" });
@@ -306,6 +309,27 @@ try {
       const r = await pay(WALLET_ONLY, PAYER_D);
       ok(r.status === 402 && settles === before + 1, `facilitator 503 at settle ${i}: served, not settled -> 402, never 429 (status ${r.status}, settles ${settles})`);
     }
+  }
+  // Through the wire, what a revert proves: with the token's balance words it
+  // is a verdict (three refuse, in the verdict words); without them it is of
+  // unknown cause, still bounded per wallet, at three times the count, in
+  // words that blame no one.
+  {
+    const UNKNOWN_MAX = 3 * MAX;
+    settleMode = "revert-balance";
+    const PAYER_RB = "0x00000000000000000000000000000000000000e6";
+    for (let i = 1; i <= MAX; i++) { const s0 = settles; const r = await pay(WALLET_ONLY, PAYER_RB); ok(r.status === 402 && settles === s0 + 1, `revert naming the balance ${i}: served, refused at settle (status ${r.status})`); }
+    let s0 = settles;
+    let r = await pay(WALLET_ONLY, PAYER_RB);
+    let body = await r.json().catch(() => ({}));
+    ok(r.status === 429 && settles === s0 && /refused the payment itself/.test(body.error || ""), `a revert naming the balance is a verdict: the next is refused 429 before the handler (${r.status}: ${String(body.error).slice(0, 80)})`);
+    settleMode = "revert";
+    const PAYER_RV = "0x00000000000000000000000000000000000000e7";
+    for (let i = 1; i <= UNKNOWN_MAX; i++) { const s1 = settles; const r1 = await pay(WALLET_ONLY, PAYER_RV); ok(r1.status === 402 && settles === s1 + 1, `bare revert ${i} (unknown cause): served, refused at settle (status ${r1.status})`); }
+    s0 = settles;
+    r = await pay(WALLET_ONLY, PAYER_RV);
+    body = await r.json().catch(() => ({}));
+    ok(r.status === 429 && settles === s0 && /did not complete/.test(body.error || "") && !/balance|signature|failed to settle/.test(body.error || ""), `after ${UNKNOWN_MAX} bare reverts the wallet is refused 429 before the handler, in words that blame no one (${r.status}: ${String(body.error).slice(0, 100)})`);
   }
   settleMode = "fail";
   // Status surface stays counts-only.
