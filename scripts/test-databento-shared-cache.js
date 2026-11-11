@@ -23,6 +23,7 @@
 //      audit and one read per warmed symbol across both servers, and the
 //      server that did not run them serves warm and audited with no upstream
 //      call.
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";

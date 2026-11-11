@@ -252,5 +252,40 @@ ok(chatToGemini({}, M).candidates[0].finishReason === "FINISH_REASON_UNSPECIFIED
   } finally { globalThis.fetch = real; delete process.env.OPENROUTER_API_KEY; }
 }
 
+// ---- swaps named on this wire, as on the chat wire --------------------------
+// The chat tier's handler is stubbed (no upstream): this wire carries an
+// availability swap the chat handler names, names a retired id's successor
+// itself on a tier that serves the model asked for, and names none on a
+// router tier, which picks its own model whatever the body says.
+{
+  const { LLM_GATEWAY_TOOLS } = await import("../src/tools/llm-gateway-kit.js");
+  const byT = (t) => LLM_GEMINI_TOOLS.find((x) => x.slug === `${t}-gemini`);
+  const contents = [{ role: "user", parts: [{ text: "hi" }] }];
+  const reply = (model, extra = {}) => ({ id: "g", object: "chat.completion", model, choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }], usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 }, ...extra });
+  const stubbed = [];
+  const stub = (slug, fn) => { const t = LLM_GATEWAY_TOOLS.find((x) => x.slug === slug); stubbed.push([t, t.handler]); t.handler = fn; };
+  try {
+    const avail = { requested: "openai/gpt-5.6-terra", served: "openai/gpt-5.6-sol", reason: "the requested model is unavailable upstream; an available model served instead" };
+    let seenChat = null;
+    stub("v1-chat-premium", async (chat) => { seenChat = chat; return reply("openai/gpt-5.6-sol", { agent402_model_substituted: avail }); });
+    const a = await byT("v1-chat-premium").handler({ model: "openai/gpt-5.6-terra", contents }, null);
+    ok(JSON.stringify(a.agent402_model_substituted) === JSON.stringify(avail), `an availability swap the chat handler names is carried on this wire (${JSON.stringify(a.agent402_model_substituted)})`);
+    stubbed.splice(0).forEach(([t, h]) => { t.handler = h; });
+
+    stub("v1-chat-premium", async (chat) => { seenChat = chat; return reply(chat.model); });
+    const r = await byT("v1-chat-premium").handler({ model: "models/openai/o4-mini", contents }, null);
+    ok(seenChat?.model === "openai/gpt-5.6-terra" && r.agent402_model_substituted?.requested === "openai/o4-mini" && r.agent402_model_substituted.served === "openai/gpt-5.6-terra" && /retired upstream/.test(r.agent402_model_substituted.reason),
+      `a retired id is served by its named successor and the swap is named (${JSON.stringify(r.agent402_model_substituted)})`);
+    const plain = await byT("v1-chat-premium").handler({ model: "openai/gpt-5.6-terra", contents }, null);
+    ok(plain.agent402_model_substituted === undefined, "control: a current id names no swap");
+    stubbed.splice(0).forEach(([t, h]) => { t.handler = h; });
+
+    ok(TIERS["v1-chat-auto"].router === true && GEMINI_PATH_BY_TIER["v1-chat-auto"], "setup: the auto tier is a router tier with a Gemini route");
+    stub("v1-chat-auto", async () => reply("openai/gpt-5.6-sol"));
+    const au = await byT("v1-chat-auto").handler({ model: "openai/o4-mini", contents }, null).catch((e) => ({ threw: e?.message }));
+    ok(!au.threw && au.agent402_model_substituted === undefined, `a router tier names no retired-id swap: it serves the model it picks (${au.threw || JSON.stringify(au.agent402_model_substituted ?? null)})`);
+  } finally { stubbed.forEach(([t, h]) => { t.handler = h; }); }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

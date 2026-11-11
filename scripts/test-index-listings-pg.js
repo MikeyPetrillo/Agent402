@@ -6,6 +6,7 @@
 // directory while it is on, and a search answers in under 50 ms at fixture
 // scale. Off, nothing is created and the in-memory directory answers.
 // Requires STATE_DATABASE_URL (CI fails without it).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

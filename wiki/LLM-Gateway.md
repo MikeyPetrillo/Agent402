@@ -62,7 +62,7 @@ The flat tiers: one price per call whatever the length, for a buyer who wants a 
 
 | Endpoint | Price | Serves | Input cap | Output cap |
 |---|---|---|---|---|
-| `POST /v1/nano/chat/completions` | $0.003 | nano models (gpt-6-luna by default, gpt-5.6-luna, gpt-5-nano, gemini flash-lite, small llama/ministral/qwen, deepseek-chat; `GET /v1/models` lists the live set) - priced for high-frequency agent loops | 12k chars | 768 tokens |
+| `POST /v1/nano/chat/completions` | $0.003 | nano models (gpt-6-luna by default, gpt-5.6-luna, gpt-5-nano, gemini flash-lite, small llama/ministral, deepseek-chat; `GET /v1/models` lists the live set) - priced for high-frequency agent loops | 12k chars | 768 tokens |
 | `POST /v1/auto/chat/completions` | $0.01 | **model optional** - deterministic eval-ranked routing (see below) | 16k chars | 1,024 tokens |
 | `POST /v1/chat/completions` | $0.02 | budget/mid models (gpt-4o-mini, gpt-4.1-mini, claude haiku, gemini flash-lite, deepseek, llama, mistral, qwen) | 32k chars | 2,048 tokens |
 | `POST /v1/pro/chat/completions` | $0.10 | mid-frontier (gpt-4o, gpt-4.1, gpt-6 sol, claude sonnet incl. sonnet-5.5, gemini pro and 3.x flash, grok) | 48k chars | 4,096 tokens |
@@ -91,7 +91,7 @@ Questions your code can branch on instead of prose to parse. Model-backed, walle
 
 ## Retired model ids
 
-A request that names a model the upstream has retired is served by its successor, and the reply says so in `agent402_model_substituted`. Current mappings include `anthropic/claude-sonnet-4` to `anthropic/claude-sonnet-5.5`, `qwen/qwen3.5-9b` to `qwen/qwen3.7-flash`, the Gemini 2.5 models to their Gemini 3.x successors and the Laguna 2.1 models to Ministral. GPT-4o, GPT-4o mini, GPT-4.1 and GPT-4.1 mini are scheduled to be retired upstream on 2027-01-14.
+A request that names a model the upstream has retired is served by its successor, and the reply says so in `agent402_model_substituted`. Current mappings include `anthropic/claude-sonnet-4` to `anthropic/claude-sonnet-5.5`, `qwen/qwen3.5-9b` to `qwen/qwen3.7-flash`, `qwen/qwen-2.5-7b-instruct` to `mistralai/ministral-8b-2512`, the Gemini 2.5 models to their Gemini 3.x successors and the Laguna 2.1 models to Ministral. `meta-llama/llama-3.2-1b-instruct` is served as itself until its upstream expiration on 2026-11-20, then by `meta-llama/llama-3.2-3b-instruct`. GPT-4o, GPT-4o mini, GPT-4.1 and GPT-4.1 mini are scheduled to be retired upstream on 2027-01-14.
 
 ## Reasoning that fits the output cap
 
@@ -119,7 +119,7 @@ Two ways to pay it:
 
 The catalog lists the tier at its $0.001 floor ("from"), and every chat model on `GET /v1/models` carries `meteredFromUsd`. Use the flat tiers when you want a known price per call regardless of length; use the metered tier when calls vary a lot in size and you want to pay for the size you send.
 
-Set a client timeout of at least 120 s on the metered routes. The answer is generated and the payment settled before the response is sent, which takes a few seconds on most calls and longer for long answers, and a client that disconnects after the payment settles is charged without the answer (the charge is recorded as owed and reviewed for a refund).
+Set a client timeout of at least 120 s: the answer is generated and the payment settled before the response is sent, which takes a few seconds on most calls and longer for long answers, and a client that disconnects after the payment settles is charged without the answer (the charge is recorded as owed and reviewed for a refund).
 
 **A flat-tier answer tells you when metered was cheaper.** An OpenAI SDK puts `base_url + /chat/completions` on the flat route by convention, so a buyer who never reads the docs can spend a long time on a $0.02 call that the metered route would have quoted at $0.001. A non-streaming flat-tier response therefore carries an additive `agent402_metered` object whenever the same body would have been at least 25% cheaper metered:
 

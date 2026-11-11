@@ -5,68 +5,146 @@
 //   - a burst of /mcp POSTs is bounded with 429 BEFORE the cap-exceeding
 //     requests do any work (JSON-RPC error envelope preserved);
 //   - a normal initialize under the cap still succeeds;
+//   - the free-tier tool budget's refusal says in how many seconds there is
+//     room again, the same whole seconds the limiter computed;
 //   - the 429 is emitted for a malformed body too (bounded before parse/build).
+//
+// The server is booted on port 0 with its own stores (scripts/lib/boot-server.js)
+// and must answer /health with the build id this run gave it, so the test
+// never reads a server it did not start.
 //
 //   node scripts/test-mcp-limits.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { randomBytes } from "node:crypto";
+import { bootServer } from "./lib/boot-server.js";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const PORT = 3127;
-const CAP = 5; // outer per-IP requests/min for this run
+const CAP = 6; // outer per-IP requests/min for this run
+const TOOL_BURST = 1; // free-tier tool calls/min for this run
+const BUILD = randomBytes(4).toString("hex").slice(0, 7);
 
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { cond ? pass++ : fail++; console.log(`${cond ? "ok" : "FAIL"} - ${msg}`); };
 
 const initBody = (id) => ({ jsonrpc: "2.0", id, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "r11-test", version: "1" } } });
-const post = (body, raw = false) =>
-  fetch(`http://127.0.0.1:${PORT}/mcp`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
-    body: raw ? body : JSON.stringify(body),
-  });
+const callBody = (id) => ({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "catalog.call", arguments: { slug: "hash", params: { text: "hi", algorithm: "sha256" } } } });
 
-const childEnv = {
-  ...process.env,
-  FREE_MODE: "true",
-  PORT: String(PORT),
-  X402_SYNC_ON_START: "false",
-  AGENT402_MCP_REQ_PER_MIN: String(CAP),
-  AGENT402_MCP_REQ_PER_HOUR: "1000",
-};
-delete childEnv.X402_ECONOMY_DB;
-const proc = spawn(process.execPath, [join(ROOT, "src", "server.js")], { cwd: ROOT, env: childEnv, stdio: ["ignore", "pipe", "pipe"] });
-const bootLog = [];
-proc.stdout.on("data", (d) => bootLog.push(String(d)));
-proc.stderr.on("data", (d) => bootLog.push(String(d)));
-let exited = false;
-proc.on("exit", () => { exited = true; });
+// ---- the limiter's wait, on a stubbed clock (no server) ----
+// Whole seconds until the key has room again, never 0: a hit that leaves the
+// window in under a second still reads 1, never "retry now".
+{
+  delete process.env.RATE_LIMIT_REPLICAS;
+  const { createLimiter } = await import("../src/rate-limit.js");
+  const realNow = Date.now;
+  try {
+    const T = 1_800_000_000_000;
+    let now = T;
+    Date.now = () => now;
+    const lim = createLimiter("retry-after-unit", { perMin: 3, perHour: 1000 });
+    for (let i = 0; i < 3; i++) lim.check("k");
+    now = T + 30_000;
+    const half = lim.check("k");
+    ok(half.limited && half.retryAfterSeconds === 30, `half a minute after a full burst the wait is 30 s (${half.retryAfterSeconds})`);
+    now = T + 59_500;
+    const edge = lim.check("k");
+    ok(edge.limited && edge.retryAfterSeconds === 1, `half a second before room the wait is 1 s, never 0 (${edge.retryAfterSeconds})`);
+    ok(lim.peek("k").retryAfterSeconds === 1, "a read that spends nothing gives the same wait");
+    now = T + 60_000;
+    ok(!lim.check("k").limited, "and at the minute there is room");
+  } finally { Date.now = realNow; }
+}
 
+let srv = null;
 try {
-  let up = false;
-  for (let i = 0; i < 180 && !exited; i++) {
-    try { if ((await fetch(`http://127.0.0.1:${PORT}/health`)).ok) { up = true; break; } } catch { /* booting */ }
-    await new Promise((r) => setTimeout(r, 500));
-  }
-  if (!up) {
-    ok(false, `server never became healthy on :${PORT} (exited=${exited}) — boot tail:\n${bootLog.join("").slice(-1500)}`);
-  } else {
+  srv = await bootServer({
+    stores: "mcp-limits",
+    env: {
+      FREE_MODE: "true",
+      X402_SYNC_ON_START: "false",
+      X402_INDEX_CRAWL: "off",
+      MPP_INDEX_CRAWL: "off",
+      MONITOR_SCHEDULER: "off",
+      REDIS_URL: "",
+      GIT_COMMIT_SHA: BUILD,
+      RAILWAY_GIT_COMMIT_SHA: "",
+      AGENT402_MCP_REQ_PER_MIN: String(CAP),
+      AGENT402_MCP_REQ_PER_HOUR: "1000",
+      AGENT402_MCP_MAX_PER_MIN: String(TOOL_BURST),
+      AGENT402_MCP_MAX_PER_HOUR: "1000",
+    },
+    timeoutMs: 180_000,
+  });
+} catch (e) {
+  ok(false, `server booted on port 0 (${String(e?.message || e).slice(-1500)})`);
+}
+
+if (srv) {
+  try {
+    const post = (body, raw = false) =>
+      fetch(`${srv.url}/mcp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+        body: raw ? body : JSON.stringify(body),
+      });
+    const rpcJson = async (r) => {
+      const text = await r.text();
+      if ((r.headers.get("content-type") || "").startsWith("text/event-stream")) {
+        return JSON.parse(text.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trim()).join(""));
+      }
+      return JSON.parse(text);
+    };
+
+    // The server answering is the one this run started: its /health names the
+    // build id given only to it, and the child is still running.
+    const health = await (await fetch(`${srv.url}/health`)).json().catch(() => null);
+    const build = health?.meta?.build ?? health?.build;
+    ok(build === BUILD && !srv.exited(), `the server answering is the one this test booted (build ${build} vs ${BUILD}, port ${srv.port})`);
+
     // First request under the cap: a valid initialize should NOT be 429.
+    // The outer limiter's first hit is this request: its window frees at
+    // that moment plus a minute, so every later 429 waits the seconds left.
+    const firstAt = [Date.now()];
     const first = await post(initBody(1));
+    firstAt.push(Date.now());
     ok(first.status !== 429, `first initialize is served, not rate-limited (got ${first.status})`);
+    await first.arrayBuffer();
+
+    // The free-tier tool budget: the first call runs, the next is refused with
+    // the wait in whole seconds.
+    const call1At = [Date.now()];
+    const call1 = await rpcJson(await post(callBody(2)));
+    call1At.push(Date.now());
+    ok(call1?.result && !call1.result.isError, `the first free tool call runs (${JSON.stringify(call1?.result?.content?.[0]?.text || call1?.error || "").slice(0, 80)})`);
+    const call2At = [Date.now()];
+    const call2 = await rpcJson(await post(callBody(3)));
+    call2At.push(Date.now());
+    const text = String(call2?.result?.content?.[0]?.text || "");
+    const m = /^Free-tier rate limit reached \([^)]*\); room again in about (\d+) s\. /.exec(text);
+    // The seconds the limiter computed: the first call's hit plus a minute,
+    // less the moment of the refusal, rounded up (bounds from the clock
+    // readings around each request, so a slow machine widens them, never fails them).
+    const waitLo = Math.max(1, Math.ceil((call1At[0] + 60_000 - call2At[1]) / 1000));
+    const waitHi = Math.max(1, Math.ceil((call1At[1] + 60_000 - call2At[0]) / 1000));
+    ok(call2?.result?.isError === true && !!m && Number(m[1]) >= waitLo && Number(m[1]) <= waitHi, `the refused tool call says when there is room again, the limiter's own whole seconds (${m?.[1]} in ${waitLo}..${waitHi}: ${text.slice(0, 110)})`);
 
     // Flood well past the per-IP cap; the tail must be 429 with a JSON-RPC error.
     let saw429 = false, sawJsonRpc429 = false;
+    const badRetryAfter = [];
     for (let i = 0; i < CAP + 8; i++) {
+      const sentAt = Date.now();
       const r = await post(initBody(100 + i));
+      const gotAt = Date.now();
       if (r.status === 429) {
         saw429 = true;
         const j = await r.json().catch(() => null);
         if (j && j.jsonrpc === "2.0" && j.error) sawJsonRpc429 = true;
-      }
+        const wait = r.headers.get("retry-after");
+        // The first hit (the opening initialize) frees the burst window.
+        const lo = Math.max(1, Math.ceil((firstAt[0] + 60_000 - gotAt) / 1000));
+        const hi = Math.max(1, Math.ceil((firstAt[1] + 60_000 - sentAt) / 1000));
+        if (!/^[1-9][0-9]*$/.test(wait || "") || Number(wait) < lo || Number(wait) > hi) badRetryAfter.push(`${wait} not in ${lo}..${hi}`);
+      } else await r.arrayBuffer();
     }
+    ok(saw429 && badRetryAfter.length === 0, `every 429 carries Retry-After as the limiter's own whole seconds to room (bad: ${JSON.stringify(badRetryAfter.slice(0, 3))})`);
     ok(saw429, "a burst past the per-IP cap is bounded with 429");
     ok(sawJsonRpc429, "the 429 preserves the JSON-RPC error envelope");
 
@@ -75,9 +153,12 @@ try {
     // Neither builds a server/transport, which is the R-11 invariant.
     const bad = await post("{not valid json", true);
     ok(bad.status === 400 || bad.status === 429, `malformed POST bounded pre-build (parser 400 or cap 429), got ${bad.status}`);
+    ok(!srv.exited(), "the booted server is still the one running at the end");
+  } catch (e) {
+    ok(false, `run completed (${e?.stack || e})`);
+  } finally {
+    await srv.stop();
   }
-} finally {
-  proc.kill("SIGKILL");
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);

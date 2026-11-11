@@ -163,6 +163,12 @@ const CLASSIFIER_CASES = [
   [Object.assign(new Error("slow down"), { statusCode: 429 }), "upstream", "429 is throttling, not a defect"],
   [new Error("fetch failed"), "upstream", "network"],
   [new TypeError("fetch failed"), "our-bug", "a TypeError is ours even when it says network"],
+  [Object.assign(new Error("EDGAR upstream HTTP 403 - the source refused or rate-limited the request"), { statusCode: 422, upstreamStatus: 403 }), "upstream", "the source's own 403 (throttle), whatever status the kit answers"],
+  [Object.assign(new Error("source throttled"), { statusCode: 422, upstreamStatus: 429 }), "upstream", "the source's own 429"],
+  [Object.assign(new Error("source down"), { statusCode: 422, upstreamStatus: 503 }), "upstream", "the source's own 5xx"],
+  [Object.assign(new Error("EDGAR returned 404 - unknown CIK"), { statusCode: 422, upstreamStatus: 404 }), "our-bug", "the source saying the subject does not exist: the probe asked wrongly"],
+  [Object.assign(new Error("bad request"), { statusCode: 422, upstreamStatus: 400 }), "our-bug", "the source refusing a malformed request: ours"],
+  [Object.assign(new TypeError("x is not a function"), { upstreamStatus: 403 }), "our-bug", "a programming error stays ours whatever upstream status rides on it"],
 ];
 for (const [err, want, why] of CLASSIFIER_CASES) {
   const got = classifyProbeFailure(err);

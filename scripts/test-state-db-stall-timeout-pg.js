@@ -15,6 +15,7 @@
 //   - stores waiting for the schema lock hold no pooled connection, so a
 //     serving read is not queued behind them.
 // Requires STATE_DATABASE_URL (CI fails without it).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import pg from "pg";
 import { requireTestPg } from "./lib/test-pg.js";
 const { url } = requireTestPg({ label: "test-state-db-stall-timeout-pg" });

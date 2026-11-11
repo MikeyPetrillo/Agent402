@@ -8,6 +8,7 @@
 //      take, and stored rows that are not wish records, are skipped while
 //      the rest of the board is rebuilt.
 // Requires STATE_DATABASE_URL (CI fails without it).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync, appendFileSync, readFileSync } from "node:fs";

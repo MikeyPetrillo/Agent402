@@ -6,6 +6,7 @@
 // real client, so the parse is proven on what Redis answers, not a fixture.
 // Requires REDIS_URL (under CI a missing one fails); the test switches that
 // Redis's appendonly with CONFIG SET and puts it back as it found it.
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

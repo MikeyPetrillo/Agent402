@@ -2,10 +2,11 @@ import { siteOrgRef, mppOffered } from "./site-org.js";
 import { heapSamplingReport } from "./boot-profile.js"; // diagnostic boot CPU profile - must stay the FIRST import (see the file)
 import "./tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA, process-wide (see the file)
 import { mtaStsPolicy } from "./mta-sts.js";
-import { securityHeaders } from "./security-headers.js";
+import { securityHeaders, answerClientError } from "./security-headers.js";
+import { operatorRoutesOf } from "./operator-routes.js";
 import { createLargeBodyGate, largeBodyInflightMaxBytes, unlessBodyUnread, UNPAID_LIMITS as LARGE_BODY_UNPAID_LIMITS } from "./large-body-gate.js";
 import { carriesPaymentAttempt, registerOfferedNetworks } from "./payment-attempt.js";
-import { retiredEntryFor, assertRetiredRegistryConsistent, retirementHeaders, RETIRED_CONVERTERS_AT } from "./retired-tools.js";
+import { retiredEntryFor, retiredEntryForSlug, assertRetiredRegistryConsistent, retirementHeaders, RETIRED_CONVERTERS_AT } from "./retired-tools.js";
 import { createTrafficStore, trafficMiddleware } from "./traffic-classifier.js";
 import { redisSharedSettled, createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath, METERED_UNPAID_QUOTES_PER_MIN, METERED_UNPAID_QUOTES_PER_HOUR, PAID_CLIENT_METERED_QUOTES_PER_MIN, PAID_CLIENT_METERED_QUOTES_PER_HOUR, clientKeyOf as quoteClientKeyOf, workerEgressAddressKeyOf } from "./unpaid-quote-budget.js";
 import { createPaidQuoteTrust, paidAndSettled } from "./paid-quote-trust.js";
@@ -78,7 +79,7 @@ import { gatewaySettleBreakerCheck, gatewaySettleFailuresStatus } from "./gatewa
 import Stripe from "stripe";
 import { REPORT_TIERS } from "./report-tiers.js";
 import { verifyHintMiddleware } from "./verify-hint.js";
-import { meteredTwinSlug, meteredQuoteSentence } from "./metered-lead.js";
+import { meteredTwinSlug, meteredQuoteSentence, isMeteredChatSlug, meteredClientTimeoutField } from "./metered-lead.js";
 import { paymentRequiredBodyMiddleware, decodePaymentRequired } from "./payment-required-body.js";
 import { avmSubcentOfferStatus } from "./avm-sponsorship.js";
 import { translateV1Accepts, v1AcceptsTranslationEnabled } from "./x402-v1-accepts.js";
@@ -92,7 +93,7 @@ import { shownGroundingNote } from "./report-grounding.js";
 import { createStripeSubscriptions, subscriptionsEnabled, MONITOR_PRODUCTS, MONITOR_PRODUCTS_ALL } from "./stripe-subscriptions.js";
 import { createMppSubscriptions, mppSubscriptionsEnabled, subscriptionFeePayerStatus } from "./mpp-subscriptions.js";
 import { stellarFacilitatorStatus } from "./stellar-facilitator-status.js";
-import { backfillBrokenPackRefunds } from "./refund-backfill.js";
+import { backfillBrokenPackRefunds, backfillNamedSales } from "./refund-backfill.js";
 import { mppFallbackStatus } from "./mpp-fallback.js";
 import { applyMeteredSettlement, meteredUsdOf } from "./gateway-meter.js";
 import { handlerInputOf, preValidateInput, withIgnoredParams } from "./handler-input.js";
@@ -387,7 +388,7 @@ import { asyncProfileOf, estimateBasisSeconds, asyncAdvice, asyncAdviceMiddlewar
 import { progressMiddleware, reportHandlerStarted } from "./job-progress.js";
 import { createTaskStore, taskDataDir } from "./mcp-tasks.js";
 import { admitCoveredRun } from "./inflight-cover.js";
-import { paymentReplayKeyAsync, paymentValidBeforeMs, createReplayGuard, replayGuardStoreStatus } from "./replay-guard.js";
+import { paymentReplayKeyAsync, consumedHoldFor, createReplayGuard, replayGuardStoreStatus } from "./replay-guard.js";
 import { statusPage, statusSnapshot } from "./status.js";
 import { recordProbes, statusStoreFlush } from "./status-store.js";
 import { tollboothLandingPage } from "./tollbooth-landing.js";
@@ -488,7 +489,7 @@ const decideLedger = () => {
 if (stateDbEnabled()) decideLedger();
 import { settlePreferenceMiddleware } from "./settle-preference.js";
 import { fromUsdOf } from "./quoted-from.js";
-import { NETWORKS as PAY_NETWORKS, priceForNetwork, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, robinhoodOrderView, robinhoodSettlerStatus, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem, gatewayPendingStatus, gatewayPendingBookForOperator } from "./payments.js";
+import { NETWORKS as PAY_NETWORKS, priceForNetwork, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, onRailRestored, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, robinhoodOrderView, robinhoodSettlerStatus, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem, gatewayPendingStatus, gatewayPendingBookForOperator } from "./payments.js";
 import { GATEWAY_WIRE, gatewayBalanceStatus, gatewayOfferPublic, gatewayOfferNetworkNames, gatewayOfferedOn, isGatewayBatchedRequest } from "./gateway-nanopayments.js";
 import { isGatewayWire, isGatewayPendingAnswer } from "./gateway-wire.js";
 import { networkFloorUsd } from "./network-floors.js";
@@ -649,6 +650,7 @@ import { CVE_TOOLS } from "./tools/cve-kit.js";
 import { MCP_PACKAGE_TOOLS } from "./tools/mcp-package-kit.js";
 import { CRYPTO_SIGNALS_TOOLS } from "./tools/crypto-signals-kit.js";
 import { CRAWL_TOOLS } from "./tools/crawl-kit.js";
+import { spendWindowStatus, refreshSpendWindowShared } from "./router-spend-window.js";
 import { X_DATA_TOOLS, xDataEnabled, xDataSpendStatus, refreshXDataSpendShared } from "./tools/x-data-kit.js";
 import { jevSpendStatus, orderByJudgment } from "./tool-judge.js";
 import { noteRouteAnswer, noteRoutePurchase } from "./route-conversion.js";
@@ -664,7 +666,7 @@ const X_DATA_TOOLS_ENABLED = xDataEnabled() ? X_DATA_TOOLS : [];
 // advertising routes that can only 503.
 const EXA_TOOLS_ENABLED = exaEnabled() ? EXA_TOOLS : [];
 const B2B_ENRICH_TOOLS_ENABLED = b2bEnrichEnabled();
-import { STT_TOOLS } from "./tools/stt-kit.js";
+import { STT_TOOLS, sttUnmeasuredSinceBoot } from "./tools/stt-kit.js";
 import { EMBED_TOOLS } from "./tools/embed-kit.js";
 import { USAGE_TOOLS } from "./tools/usage-kit.js";
 import { FEEDBACK_TOOLS } from "./tools/feedback-kit.js";
@@ -3048,11 +3050,24 @@ app.use("/__operator", (req, res, next) => {
   // included; the page shell repeats it as a robots meta.
   res.set("X-Robots-Tag", "noindex, nofollow");
   if (operatorWriteRefused(req)) return res.status(403).json({ error: "operator writes from a browser session must come from this site's own pages" });
-  if (!OP_SESSION_SHARED) return next();
-  syncOperatorSession(req).then(() => next(), () => next());
+  // The credential is checked here, once, ahead of the router: a caller
+  // without it gets the same answer at a registered path and at one that is
+  // not, on every method, whatever sits between this mount and the route (a
+  // body parser, a header set later, the router's own OPTIONS answer). The
+  // sign-in form, sign-in and sign-out are the routes reachable without it.
+  // Each route keeps its own check as well.
+  const gate = () => {
+    const at = `${req.method === "HEAD" ? "GET" : req.method} ${String(req.path || "/").toLowerCase().replace(/\/+$/, "") || "/"}`;
+    if (OPERATOR_OPEN_ROUTES.has(at) || operatorAuthed(req)) return next();
+    return operatorNotFound(req, res);
+  };
+  if (!OP_SESSION_SHARED) return gate();
+  syncOperatorSession(req).then(gate, gate);
 });
+// Method and path below the /__operator mount.
+const OPERATOR_OPEN_ROUTES = new Set(["GET /login", "POST /login", "POST /logout"]);
 app.get("/__operator/followups.json", (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "no-store").json(_followups.stats());
 });
 // The approved tweet queue, posted from here on the hour (src/tweet-queue.js).
@@ -3078,32 +3093,44 @@ startSharedLimitsProbe();
 // Per-tool and per-upstream failure detail (src/tool-failure-monitor.js):
 // slugs, classes, last messages, upstream outcomes, facilitator refusals.
 // onchainSqlQueries: per UTC day, how many upstream queries onchain-sql calls
-// that answered a final 200 used, and the budget refusals (counts only;
-// src/sql-query-stats.js). xSearchAuthors: per UTC day, how many distinct
+// sent, by how each call ended, and the budget refusals (counts only;
+// src/sql-query-stats.js; also at /__operator/onchain-sql-queries.json). xSearchAuthors: per UTC day, how many distinct
 // authors and posts x-search-recent calls that answered a final 200 returned,
-// bucketed (counts only; src/x-search-stats.js).
+// bucketed (counts only; src/x-search-stats.js). transcriptionUnmeasured:
+// transcription files this process could not measure by decoding since boot
+// (a busy or slow decode, no ffmpeg), which the cap then read from the
+// declared length or the byte floor (src/tools/stt-kit.js; a count only).
 app.get("/__operator/tool-failures.json", async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   const onchainSqlQueries = await sqlQueryStatsReport().catch(() => null);
   const xSearchAuthors = await xSearchStatsReport().catch(() => null);
-  res.set("Cache-Control", "private, no-store").json({ ...(await toolFailureMonitor().report()), robinhoodOrder: robinhoodOrderView(), chainRefusalHolds: chainRefusalHolds(), onchainSqlQueries, xSearchAuthors });
+  res.set("Cache-Control", "private, no-store").json({ ...(await toolFailureMonitor().report()), robinhoodOrder: robinhoodOrderView(), chainRefusalHolds: chainRefusalHolds(), onchainSqlQueries, xSearchAuthors, transcriptionUnmeasured: { sinceBoot: sttUnmeasuredSinceBoot() } });
+});
+// Upstream queries per onchain-sql call (src/sql-query-stats.js): per UTC day,
+// calls by the queries each sent (0 to the call budget) and by how the call
+// ended (charged, free, uncharged), totals, and queries per charged call.
+// Counts only: no SQL text, no request field, no payer.
+app.get("/__operator/onchain-sql-queries.json", async (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  const report = await sqlQueryStatsReport().catch(() => null);
+  res.set("Cache-Control", "private, no-store").json(report || { error: "unavailable" });
 });
 // Who the free search routes refuse (src/discovery-refusals.js): per UTC day,
 // refusals by route and rule, distinct refused clients, the top clients by
 // refusals (a keyed digest and a User-Agent family, never an address) with
 // what each went on to do, and the share the top 1, 5 and 20 hold. 8 days.
 app.get("/__operator/discovery-refusals.json", async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "private, no-store").json(await discoveryRefusalsReport());
 });
 // Direct-upstream A/B (src/gateway-direct-upstream.js): attempts, failures by
 // bucket and p50/p90 latency per upstream for the listed model ids.
 app.get("/__operator/direct-upstream.json", (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "private, no-store").json({ ...directUpstreamReport(), priceBook: directPriceBookReport() });
 });
 app.get("/__operator/tweet-queue.json", (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "no-store").json(_tweetQueue.status());
 });
 const alertsSignupLimiter = createRateLimiter("alerts-signup", { perMin: 6, perHour: 40 });
@@ -3157,11 +3184,11 @@ app.get("/digest/unsubscribe", digestEnded);
 // One-click unsubscribe (RFC 8058) from an old email: nothing is subscribed.
 app.post("/digest/unsubscribe", (_req, res) => res.set("Cache-Control", "no-store").json({ ok: true }));
 app.get("/__operator/alerts.json", (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "no-store").json(_freeAlerts.stats());
 });
 app.post("/__operator/alerts/run", async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "no-store").json(await _freeAlerts.tick({ force: req.query.force === "1" }));
 });
 const ALERT_KIND_LABEL = (kind, t) => ({ insider: `Form 4 insider filings for ${t}`, filing: `SEC filings from ${t}`, fund: `13F filings from ${t}`, domain: `security changes on ${t}`, recall: `FDA recalls naming ${t}` }[kind] || `changes for ${t}`);
@@ -3539,7 +3566,7 @@ app.use("/v1/images/edits", unlessBodyUnread(express.raw({ type: "multipart/form
 const sellerVerificationJson = express.json({ limit: "8mb", inflate: false });
 app.use("/__operator/seller-verification", (req, res, next) => {
   if (req.method !== "POST") return next();
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   return sellerVerificationJson(req, res, next);
 });
 // An unpaid POST here tokenizes the body for its 402 quote (measured 28 ms
@@ -3779,6 +3806,26 @@ function notFoundPage(res, { what = "Page", href = "/", label = "Home" } = {}) {
     </div>${ledgerFooterCompact()}`;
   return res.status(404).type("html").send(ledgerShell({ title: `${what} not found - Agent402`, description: `${what} not found`, canonical: `${BASE_URL}/`, baseUrl: BASE_URL, activePath: "__none__", robots: "noindex, nofollow", body }));
 }
+// The page of a tool or skill pack we retired: 410 with the retirement date and
+// the replacement's page, the same answer its API route gives
+// (src/retired-tools.js). A 404 here read as a broken link, not a retirement.
+function retiredPage(res, gone) {
+  const what = gone.kind === "pack" ? "Skill pack" : "Tool";
+  const rep = gone.replacement ? Object.values(CATALOG).find((d) => d.slug === gone.replacement) : null;
+  const repHref = rep ? `/tools/${rep.slug}` : null;
+  const all = gone.kind === "pack" ? { href: "/skills", label: "All skill packs" } : { href: "/tools", label: "All tools" };
+  const body = `<div style="max-width:640px;margin:0 auto;padding:96px 26px 80px;text-align:center;">
+      <div style="font-family:var(--font-mono);font-weight:500;font-size:var(--fs-hero);line-height:1;letter-spacing:-.03em;color:var(--ink);margin-bottom:14px;">410</div>
+      <h1 style="font-weight:800;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 10px;color:var(--ink);">${escHtml(what)} retired</h1>
+      <p style="color:var(--muted);margin:0 0 28px;font-weight:300;"><code>${escHtml(gone.slug)}</code> was retired on ${escHtml(gone.retiredAt)}.${rep ? ` ${escHtml(rep.name)} answers the nearest question.` : ""}</p>
+      <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
+        ${rep ? `<a class="btn btn-secondary" href="${escHtml(repHref)}">${escHtml(rep.name)}</a>` : ""}
+        <a class="btn btn-secondary" href="${all.href}">${all.label}</a>
+      </div>
+    </div>${ledgerFooterCompact()}`;
+  res.set(retirementHeaders(gone.retiredAt, repHref ? `${BASE_URL}${repHref}` : null));
+  return res.status(410).type("html").send(ledgerShell({ title: `${what} retired - Agent402`, description: `${what} ${gone.slug} was retired on ${gone.retiredAt}`, canonical: `${BASE_URL}/`, baseUrl: BASE_URL, activePath: "__none__", robots: "noindex, nofollow", body }));
+}
 const htmlCache = (res, maxAge, swr) =>
   res.set("Cache-Control", `public, max-age=${maxAge}, stale-while-revalidate=${swr}`).type("html");
 app.get("/", (_req, res) => {
@@ -3973,7 +4020,7 @@ app.get("/api/gateway-status", async (req, res) => {
   // Also the shared day behind xDataSpend and exaSpend: a new process's own
   // counters start empty, so each word is built from the larger of the two
   // (one bounded read each, reused for a few seconds; never rejects).
-  await Promise.all([refreshOperatorAuthShared(), refreshCdnOriginShared(), refreshXDataSpendShared(), refreshExaSpendShared()]);
+  await Promise.all([refreshOperatorAuthShared(), refreshCdnOriginShared(), refreshXDataSpendShared(), refreshExaSpendShared(), refreshSpendWindowShared()]);
   const spend = { xDataSpend: xDataSpendStatus(), exaSpend: exaSpendStatus(), exaAllowance: exaAllowanceStatus(), jevSpend: jevSpendStatus() };
   const budgets = upstreamBudgetStatus();
   // The global unsettled external-spend ceiling: one word, never a figure.
@@ -3987,6 +4034,11 @@ app.get("/api/gateway-status", async (req, res) => {
     exaSpend: full ? spend.exaSpend : publicBucket(spend.exaSpend),
     exaAllowance: full ? spend.exaAllowance : publicBucket(spend.exaAllowance),
     jevSpend: full ? spend.jevSpend : publicBucket(spend.jevSpend),
+    // The router's per-minute holds for outside sellers
+    // (src/router-spend-window.js): ok / over (past the alarm, still serving)
+    // / capped (a purchase was refused at the stop inside the last hour) /
+    // off. One word publicly; the two ceilings for the operator.
+    routerSpendWindow: (() => { try { return spendWindowStatus({ full }); } catch { return { status: "unknown" }; } })(),
     upstreamBudgets: full ? budgets : publicBudgets(budgets),
     // Hard daily ceilings (src/upstream-hard-caps.js): one word publicly.
     upstreamHardCaps: (() => { try { const h = hardCapStatus(); return full ? h : { status: h.status }; } catch { return { status: "unknown" }; } })(),
@@ -4488,6 +4540,7 @@ const revenueApi = revenueApiHandlers({
   snapshot: async () => withFreshRecent(await revenueSnapshot(revenueWallets()), ledgerRecent, ledgerNewestOwn),
   ledger: async () => { const { mpp: _mpp, ...rest } = await revenueAllTime(); return rest; },
   authed: (req) => operatorAuthed(req),
+  refuse: (req, res) => operatorNotFound(req, res),
 });
 app.get("/api/revenue", revenueApi.publicHandler);
 app.get("/__operator/revenue.json", revenueApi.operatorHandler);
@@ -4624,7 +4677,7 @@ app.get("/api/calls/daily", (req, res) => {
 // codes, per plan shape and per planner version, outside buyers and our own
 // traffic apart. Aggregates only (src/decide/stats.js).
 app.get("/__operator/decide-stats.json", async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "private, no-store");
   const L = DECIDE_TOOLS_ENABLED.length ? decideLedger() : null;
   if (!L || typeof L.statsRows !== "function") return res.json({ enabled: false });
@@ -4886,13 +4939,13 @@ if (_credits) {
     res.json(b);
   });
   app.get("/__operator/credits.json", async (req, res) => {
-    if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+    if (!operatorAuthed(req)) return operatorNotFound(req, res);
     res.set("Cache-Control", "no-store").json({ ...(await _credits.status()), keyAttempts: _credits.badKeyStats(), refusalsToRefund: await _credits.refusalsToRefund() });
   });
   // After refunding a refused purchase by hand in Stripe: clears it from
   // creditsRefunds. Body { session: "cs_..." }.
   app.post("/__operator/credits/refusal-refunded", express.json(), async (req, res) => {
-    if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+    if (!operatorAuthed(req)) return operatorNotFound(req, res);
     const s = String(req.body?.session || "");
     if (!/^cs_[A-Za-z0-9_]+$/.test(s)) return res.status(400).json({ error: "session must be a Checkout session id (cs_...)" });
     if (!(await _credits.refusalsToRefund()).includes(s)) return res.status(404).json({ error: "that session is not awaiting a refund" });
@@ -4900,7 +4953,7 @@ if (_credits) {
     res.json({ ok: true, session: s });
   });
   app.post("/__operator/credits/disable", express.json(), async (req, res) => {
-    if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+    if (!operatorAuthed(req)) return operatorNotFound(req, res);
     const { keyId, disabled = true } = req.body || {};
     res.json({ ok: await _credits.setDisabled(String(keyId || ""), !!disabled) });
   });
@@ -4938,7 +4991,7 @@ if (humanCheckoutEnabled()) {
     const _sweep = setTimeout(() => { _humanCheckout.recoverAbandoned().catch(() => {}); }, 45_000);
     _sweep.unref?.();
     app.get("/__operator/human-checkout.json", async (req, res) => {
-      if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+      if (!operatorAuthed(req)) return operatorNotFound(req, res);
       res.set("Cache-Control", "no-store").json({ ...(await _humanCheckout.listIssues()), compositeUsage: compositeUsageSnapshot(), compositeGuard: _compositeGuardState(), stripeWebhooks: _subs?.webhookStats?.() || null });
     });
     app.post("/api/buy", async (req, res) => {
@@ -5210,7 +5263,7 @@ if (_allSubs) {
   } catch (e) { console.warn("[monitors] scheduler failed to initialize:", String(e?.message || e)); _monitors = null; }
 }
 app.get("/__operator/monitors.json", async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   // The wallet-billed subscribers carry billing state the scheduler never sees
   // (paid period, charge failures, next retry), so they get their own block.
   const mpp = _mppSubs ? await _mppSubs.status().catch((e) => ({ enabled: true, error: redactSecrets(String(e?.message || e)).slice(0, 200) })) : { enabled: false };
@@ -5222,7 +5275,7 @@ app.get("/__operator/monitors.json", async (req, res) => {
 // Close stale rail-canary subscriptions now (the boot sweep's lever). Canary
 // product only; a real subscriber is never touched. Status writes only.
 app.post("/__operator/mpp-subscriptions/sweep-canaries", async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   if (!_mppSubs) return res.status(503).json({ error: "MPP subscriptions not enabled" });
   const olderThanMs = Number(req.query.olderThanMs) > 0 ? Number(req.query.olderThanMs) : undefined;
   try { res.set("Cache-Control", "no-store").json(await _mppSubs.sweepStaleCanaries(olderThanMs ? { olderThanMs } : {})); }
@@ -5232,7 +5285,7 @@ app.post("/__operator/mpp-subscriptions/sweep-canaries", async (req, res) => {
 // it takes the heavy-route limiter like the other upstream-reaching operator
 // routes. Fire-and-report.
 app.post("/__operator/monitors/run", (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   if (operatorHeavyLimited(req, res)) return;
   if (!_monitors) return res.status(503).json({ error: "monitor scheduler not enabled" });
   const subId = req.query.sub ? String(req.query.sub) : null;
@@ -5267,7 +5320,7 @@ app.get("/api/sales", async (_req, res) => {
 // answer and nobody complains — so it needs a monitor, not a bug report.
 // Operator-gated: it names our own revenue shortfall per rail.
 app.get("/__operator/settlement-reconciliation.json", (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "no-store");
   try {
     const days = Math.min(Math.max(parseInt(req.query?.days, 10) || 7, 1), 60);
@@ -5277,7 +5330,7 @@ app.get("/__operator/settlement-reconciliation.json", (req, res) => {
   }
 });
 app.get("/__operator/sales.json", async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "no-store");
   try {
     // Feedback rides here because this is the page an operator already reads:
@@ -5300,7 +5353,7 @@ app.get("/__operator/sales.json", async (req, res) => {
 // one (operator-only; see salesCohorts in sales-ledger.js). Public revenue
 // figures are never adjusted by it. ?days= (max 30), ?toolsPerDay=, ?callsPerHour=.
 app.get("/__operator/cohorts.json", (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "no-store");
   try {
     res.json(salesCohorts({ days: req.query.days, toolsPerDay: req.query.toolsPerDay, callsPerHour: req.query.callsPerHour }));
@@ -5312,7 +5365,7 @@ app.get("/__operator/cohorts.json", (req, res) => {
 // Weekly OUTSIDE MPP agents vs all rails (operator-only, counts only, never
 // payer addresses). See mppAgentsWeekly in sales-ledger.js.
 app.get("/__operator/mpp-agents.json", (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "no-store");
   try {
     res.json(mppAgentsWeekly({ weeks: Number(req.query.weeks) || 12 }));
@@ -5343,7 +5396,7 @@ app.get("/__operator/mpp-agents.json", (req, res) => {
 // spending key, and widening that job's reach to our dataset storage would buy
 // nothing. Same split as POST /api/status/probe.
 app.post("/__operator/seller-verification", async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   try {
     const out = await recordSellerVerification(req.body);
     res.set("Cache-Control", "no-store").json(out);
@@ -5354,7 +5407,7 @@ app.post("/__operator/seller-verification", async (req, res) => {
 // Settlement evidence that clears the router floor but looks staged
 // (src/evidence-watch.js). For review only: no verdict reads it.
 app.get("/__operator/evidence-watch.json", (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   const snap = getLeaderboardSnapshot();
   const self = new Set([WALLET_ADDRESS].filter(Boolean).map((w) => String(w).toLowerCase()));
   const { clearing, listed } = evidenceWatchList(snap?.leaderboard || [], { minSettled: SOR_MIN_SETTLED_TX, minPayers: SOR_MIN_DISTINCT_PAYERS, self });
@@ -5377,7 +5430,7 @@ app.get("/__operator/evidence-watch.json", (req, res) => {
 // by month and billing ZIP, for filing (src/nc-sales-tax.js). Built from the
 // sales ledger; ?month=YYYY-MM (default: this month and last).
 app.get("/__operator/nc-sales-tax.json", async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   const now = new Date();
   const thisMonth = now.toISOString().slice(0, 7);
   const lastMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)).toISOString().slice(0, 7);
@@ -5415,7 +5468,7 @@ app.get("/__operator/nc-sales-tax.json", async (req, res) => {
   }
 });
 app.get("/__operator/seller-verification.json", (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "no-store").json({
     note: "the newest sweep this process recorded. The durable record is one dated object per sweep in the dataset bucket; this is only what THIS process last wrote, and a restart clears it.",
     ...sellerVerificationStatus(),
@@ -5423,7 +5476,7 @@ app.get("/__operator/seller-verification.json", (req, res) => {
 });
 
 app.get("/__operator/router-delivery.json", (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "no-store");
   // Read the MAP, never the index. An origin that is not in our crawl can
   // still hold a memo, and those are exactly the ones worth seeing - the first
@@ -5445,7 +5498,7 @@ app.get("/__operator/router-delivery.json", (req, res) => {
 });
 
 app.get("/__operator/margin.json", (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "no-store");
   try {
     const days = Math.max(1, Math.min(365, parseInt(req.query.days, 10) || 60));
@@ -6024,11 +6077,11 @@ app.post("/__operator/logout", async (req, res) => {
   res.redirect(303, "/__operator/login");
 });
 app.get("/__operator", (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).type("html").send("<p>Not found.</p>");
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.type("html").send(operatorPage(BASE_URL, getOperatorBreakdown({ prices: TOOL_PRICES, walletOnlySet: PAID_SLUGS, offeredNetworks: enabledNetworks(NETWORK) })));
 });
 app.get("/__operator/stats", (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   // upstreamCalls: outbound PAID-upstream spend counted where it actually
   // leaves the process. The Brave reconciliation (2026-07-28) could not be
   // closed from inbound telemetry alone, because calls made by CI never reach
@@ -6066,7 +6119,7 @@ async function withIntent(req, agg) {
   return agg;
 }
 app.get("/__operator/wishes", async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).type("html").send("<p>Not found.</p>");
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   const agg = getWishesAggregate({ limit: 500, detailed: true });
   await annotateServedAsync(agg.clusters, wishServedScore, WISH_SERVED_MIN_SCORE);
   res.type("html").send(operatorWishesPage(BASE_URL, await withRerank(req, await withIntent(req, agg))));
@@ -6081,7 +6134,7 @@ app.get("/__operator/wishes", async (req, res) => {
 // Operator-only: it is a map of where demand is going, which is the same class
 // of intelligence /api/sales and the analytics table were reduced for.
 app.get("/__operator/discovery-gap.json", async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   // Same bound as ledger-sync.json: this one reaches the on-chain economy
   // snapshot. CodeQL flagged only its sibling; the shape is identical.
   if (operatorHeavyLimited(req, res)) return;
@@ -6108,7 +6161,7 @@ app.get("/__operator/discovery-gap.json", async (req, res) => {
   }
 });
 app.get("/__operator/wishes.json", async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "no-store");
   const agg = getWishesAggregate({ limit: req.query?.limit, detailed: true });
   await annotateServedAsync(agg.clusters, wishServedScore, WISH_SERVED_MIN_SCORE);
@@ -6171,7 +6224,7 @@ function operatorLedgerLimited(req, res) {
 const LEDGER_SYNC_TTL_MS = 15_000;
 let ledgerSyncCache = { at: 0, value: null };
 app.get("/__operator/traffic.json", (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   // In-memory rollups (hashed ips, hashed payers, top-N per class) - cheap read.
   // unpaidQuoteBudget: counts only (clients seen this hour, throttled since boot), never an address.
   res.set("Cache-Control", "no-store").json({
@@ -6230,7 +6283,7 @@ function servingHealth() {
 // hour" means that.
 setInterval(() => { try { resetShedCounters(); } catch { /* best-effort */ } }, 3600_000).unref();
 app.get("/__operator/serving-health.json", (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "no-store").json(servingHealth());
 });
 // Counts-only latency and event-loop read: per-route p50/p95/p99 split into
@@ -6239,12 +6292,18 @@ app.get("/__operator/serving-health.json", (req, res) => {
 // Titles the meta clamp shortened since boot (src/seo-meta.js): a served
 // page whose source title ran past the bar. scripts/test-title-clamp.js reads
 // it after rendering every sitemap page and fails on any entry.
+// Every route registered under /__operator, read from the router
+// (src/operator-routes.js).
+app.get("/__operator/routes.json", (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  res.set("Cache-Control", "no-store").json(operatorRoutesOf(app));
+});
 app.get("/__operator/seo-meta.json", (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "no-store").json({ titleMax: META_TITLE_MAX, clampedTitles: [...clampedTitles].map(([source, served]) => ({ source, served })) });
 });
 app.get("/__operator/perf.json", (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   // ?reset=1 clears the stall high-water mark first (the load test reads a fresh one per scenario).
   if (req.query.reset === "1") resetLoopLag();
   res.set("Cache-Control", "no-store").json({ stateQueries: stateQueryStats(), loop: loopLagStatus(), recentStalls: recentStalls(), activeJobs: activeJobs(), inFlight: inFlightCount(), shed: shedStatus(), chainSellerViews: chainSellerViewMemo.stats(), routerPool: routerPoolStatus(), discoveryCpuSpentMs: discoveryCpuBudget.spent(), discovery: discoveryGateStatus(), paidPhases: paidPhaseSummary(), slowPaid: { verdict: slowPaidVerdict(3600_000, Date.now(), SERVING.slowPaidMs), recent: recentSlowPaidCalls() }, stockQuoteWarmer: quoteWarmerStatus(), containedTurns: containedTurnsSummary(), brokenListings: brokenListingsSummary(), routes: routeTimings({ top: Math.min(200, parseInt(req.query.top, 10) || 40), minSamples: Math.max(1, parseInt(req.query.min, 10) || 5) }) });
@@ -6255,7 +6314,7 @@ app.get("/__operator/perf.json", (req, res) => {
 // Heap by V8 space plus what the index holds, counts only: sizes the next
 // memory change from production instead of a fixture.
 app.get("/__operator/heap.json", async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   const v8 = await import("node:v8");
   const mb = (n) => Math.round(n / 1048576);
   // ?gc=1 collects first when the process runs with --expose-gc (a test's
@@ -6283,12 +6342,12 @@ app.get("/__operator/heap.json", async (req, res) => {
 // Which code allocated the live heap (HEAP_SAMPLING=on; src/boot-profile.js):
 // function names, file lines and megabytes only.
 app.get("/__operator/heap-sampling.json", async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   try { res.set("Cache-Control", "no-store").json(await heapSamplingReport({ top: Math.max(1, Math.min(100, parseInt(req.query.top, 10) || 40)) })); }
   catch (e) { res.status(500).json({ error: "heap sampling read failed", detail: redactSecrets(String(e?.message || e)).slice(0, 120) }); }
 });
 app.post("/__operator/stall-profile", async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   try {
     const { profileOnce } = await import("./stall-profiler.js");
     const out = await profileOnce({ seconds: req.query.seconds });
@@ -6321,7 +6380,7 @@ app.get("/__internal/decide/tools.ndjson", decideIndexExportHandler({
   },
 }));
 app.get("/__operator/egress.json", (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   // Cheap read of an in-memory counter - no upstream, so no heavy-route limiter.
   res.set("Cache-Control", "no-store").json(egressReport({ top: Math.min(200, parseInt(req.query.top, 10) || 60) }));
 });
@@ -6332,7 +6391,7 @@ app.get("/__operator/egress.json", (req, res) => {
 // (getSupported kinds -> exact networks). Settles the "is CDP now settling
 // Polygon/Arbitrum/Solana for us?" question without guessing from labels.
 app.get("/__operator/facilitators.json", async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" }); // same shape as the other operator routes (no oracle)
+  if (!operatorAuthed(req)) return operatorNotFound(req, res); // same shape as the other operator routes (no oracle)
   try {
     const facilitators = await facilitatorSupportReport();
     // First client advertising a network is the one @x402 tries first for it.
@@ -6346,32 +6405,32 @@ app.get("/__operator/facilitators.json", async (req, res) => {
 // Search-engine data (GSC + Bing). Operator only; no-op without credentials.
 const searchData = createSearchData();
 app.get("/__operator/search.json", (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   searchData.summary().then(
     (r) => res.set("Cache-Control", "no-store").json(r),
     (e) => res.status(500).json({ error: redactSecrets(String(e.message)).slice(0, 200) })
   );
 });
 app.get("/__operator/search", (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).type("html").send("<p>Not found.</p>");
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   searchData.summary().then(
     (r) => res.set("Cache-Control", "no-store").type("html").send(operatorSearchPage(BASE_URL, r)),
     (e) => res.status(500).type("html").send(`<p>${redactSecrets(String(e.message)).slice(0, 200).replace(/[<>&]/g, "")}</p>`)
   );
 });
 app.post("/__operator/search/run", (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   if (operatorHeavyLimited(req, res)) return;
   searchData.runOnce().then((r) => res.json(r), (e) => res.status(500).json({ error: redactSecrets(String(e.message)) }));
 });
 app.post("/__operator/search/inspect", express.json({ limit: "32kb" }), (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   if (operatorHeavyLimited(req, res)) return;
   const urls = Array.isArray(req.body?.urls) ? req.body.urls : [];
   searchData.inspectUrls(urls).then((r) => res.json(r), (e) => res.status(500).json({ error: redactSecrets(String(e.message)) }));
 });
 app.post("/__operator/search/sitemaps/submit", (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   if (operatorHeavyLimited(req, res)) return;
   searchData.submitSitemaps().then((r) => res.json(r), (e) => res.status(500).json({ error: redactSecrets(String(e.message)) }));
 });
@@ -6420,13 +6479,13 @@ const mppReconciler = createMppReconciler({
   } : null,
 });
 app.get("/__operator/mpp-reconcile.json", async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "no-store").json({ status: await mppReconciler.status({ full: true }).catch(() => null), ...mppReconciler.detail() });
 });
 // Manual run: reads the chain (feed or RPC) and optionally Stripe, so it takes
 // the heavy limiter. ?day=YYYY-MM-DD reconciles that day instead of yesterday.
 app.post("/__operator/mpp-reconcile/run", (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   if (operatorHeavyLimited(req, res)) return;
   const day = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.day || "")) ? String(req.query.day) : null;
   mppReconciler.runOnce({ day }).then((r) => res.json(r), (e) => res.status(500).json({ error: redactSecrets(String(e.message)).slice(0, 200) }));
@@ -6436,7 +6495,7 @@ app.post("/__operator/mpp-reconcile/run", (req, res) => {
 // re-runs the affected days (a chain read, so the heavy limiter). The note is
 // stored as given and only ever served as JSON.
 app.post("/__operator/mpp-reconcile/explain", express.json(), (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   if (operatorHeavyLimited(req, res)) return;
   const b = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
   mppReconciler.explain({ tx: b.tx, note: b.note, action: b.action === undefined ? "explain" : b.action }).then(
@@ -6445,7 +6504,7 @@ app.post("/__operator/mpp-reconcile/explain", express.json(), (req, res) => {
   );
 });
 app.get("/__operator/backup.json", (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "no-store").json({ status: backupStatus(), plan: backupPlan() });
 });
 // Manual backup run - fans out to the bucket (third-party writes), so it
@@ -6458,7 +6517,7 @@ app.get("/__operator/backup.json", (req, res) => {
 // inbound payment from the chain before every send). Dry by default here too:
 // ?write=1 is what actually mints.
 app.post("/__operator/refunds/backfill", async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   if (operatorHeavyLimited(req, res)) return;
   try {
     res.json(await backfillBrokenPackRefunds({ write: String(req.query.write || "") === "1" }));
@@ -6466,8 +6525,26 @@ app.post("/__operator/refunds/backfill", async (req, res) => {
     res.status(500).json({ error: redactSecrets(String(e.message)) });
   }
 });
+// Record refund debts for sales the operator names by settle transaction
+// (src/refund-backfill.js backfillNamedSales): body {"txs":[...],"note":"why"},
+// at most 100 values. Each tx must match exactly one external sale; the debt's
+// payer, network, slug and price are that ledger row's, and any such field in
+// the body is never read. RECORDS ONLY (refund-run.js stays the sole payer),
+// dry unless ?write=1, idempotent on the settle tx.
+// The body is the global JSON parser's (100kb).
+app.post("/__operator/refunds/backfill-sales", async (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  if (operatorHeavyLimited(req, res)) return;
+  res.set("Cache-Control", "private, no-store");
+  try {
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    res.json(await backfillNamedSales({ txs: body.txs, note: body.note, write: String(req.query.write || "") === "1" }));
+  } catch (e) {
+    res.status(e?.statusCode === 400 ? 400 : 500).json({ error: redactSecrets(String(e?.message || e)).slice(0, 300) });
+  }
+});
 app.get("/__operator/dataset.json", (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   // `status` is this process's memory and is wiped by every deploy; `recorded`
   // asks the bucket, which is the actual record. A health check must read the
   // second or it reports an outage after every deploy.
@@ -6480,7 +6557,7 @@ app.get("/__operator/dataset.json", (req, res) => {
 // is skipped unless ?force=1, which is for repairing a run that half-failed
 // and is recorded in that day's manifest.
 app.post("/__operator/dataset/run", (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   if (operatorHeavyLimited(req, res)) return;
   runDatasetSnapshot({
     ...datasetSources(),
@@ -6492,7 +6569,7 @@ app.post("/__operator/dataset/run", (req, res) => {
   );
 });
 app.post("/__operator/backup/run", (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   if (operatorHeavyLimited(req, res)) return;
   runBackup().then(
     (r) => res.json(r),
@@ -6504,7 +6581,7 @@ app.post("/__operator/backup/run", (req, res) => {
 // wrong-credential limiter is the request-rate bound here; the store
 // enforces path shape, byte cap, entry cap, and TTL.
 app.post("/__operator/well-known", express.json({ limit: "32kb" }), (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   const { path, body, contentType, remove } = req.body || {};
   try {
     if (remove === true) return res.json({ removed: removeWellKnown(String(path || "")), entries: listWellKnown() });
@@ -6522,7 +6599,7 @@ app.post("/__operator/well-known", express.json({ limit: "32kb" }), (req, res) =
 // refund-run.js) is the only thing that sends money, from its own keys in
 // Actions secrets - this server never holds a spending key.
 app.get("/__operator/refunds.json", async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   // The real brute-force bound is operatorAuthed's own per-IP attempt limiter,
   // which charges budget only on a WRONG credential - CodeQL cannot see it
   // because it matches recognised middleware, not hand-rolled limiters
@@ -6571,7 +6648,7 @@ app.get("/__operator/refunds.json", async (req, res) => {
 // Reasons are codes only - a Stripe error message is an upstream body and is
 // never stored or relayed. Off unless STRIPE_SHADOW_LEDGER=on.
 app.get("/__operator/shadow-ledger.json", (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   if (operatorHeavyLimited(req, res)) return;
   res.set("Cache-Control", "no-store").json(shadowLedgerReport({ limit: Math.min(500, parseInt(req.query.limit, 10) || 50) }));
 });
@@ -6582,16 +6659,16 @@ app.get("/__operator/shadow-ledger.json", (req, res) => {
 // the case where that is not available - a domain that changed hands, or a
 // claim that should never have been recorded.
 app.get("/__operator/quote-probes.json", (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "no-store").json(quoteProbeStatsSnapshot());
 });
 app.get("/__operator/successions.json", (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   const rows = listSuccessions();
   res.set("Cache-Control", "no-store").json({ total: rows.length, successions: rows });
 });
 app.post("/__operator/successions/revoke", express.json(), (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   const from = String(req.body?.from || "").trim();
   if (!from) return res.status(400).json({ error: 'pass {"from":"<the retired origin>"}' });
   const revoked = revokeSuccession(from);
@@ -6602,7 +6679,7 @@ app.post("/__operator/successions/revoke", express.json(), (req, res) => {
 // The addresses live here and nowhere public; /api/gateway-status carries the
 // word. ?limit= caps the rows (default 100, at most 5000).
 app.get("/__operator/outbound-destinations.json", async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   if (operatorHeavyLimited(req, res)) return;
   const body = await outboundDestinationStore().list({ limit: parseInt(req.query.limit, 10) || 100 }).catch(() => null);
   if (!body) return res.status(503).json({ error: "the destination store could not be read" });
@@ -6614,7 +6691,7 @@ app.get("/__operator/outbound-destinations.json", async (req, res) => {
 // only. Applied from the next evidence read (the minute memo is dropped), and
 // persisted on the volume so a restart keeps it.
 app.get(["/__operator/shared-paytos", "/__operator/shared-paytos.json"], (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   const store = sharedPayToStore();
   const wallet = String(req.query?.wallet || "").trim().toLowerCase();
   if (wallet) {
@@ -6632,7 +6709,7 @@ app.get(["/__operator/shared-paytos", "/__operator/shared-paytos.json"], (req, r
   res.set("Cache-Control", "no-store").json({ ...store.counts(), wallets: store.list(), note: `GET ?wallet=0x... for who that wallet's history is credited to; POST {"action":"add"|"remove","wallet":"0x...","note":"..."} to change it` });
 });
 app.post("/__operator/shared-paytos", express.json(), async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   const { action, wallet, note } = req.body || {};
   const store = sharedPayToStore();
   let r;
@@ -6657,7 +6734,7 @@ app.post("/__operator/shared-paytos", express.json(), async (req, res) => {
 // Persisted on the volume, applied from the next evidence read. Counts and
 // verdicts only: no payer is ever listed.
 app.get(["/__operator/seller-funding", "/__operator/seller-funding.json"], (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   const store = selfFundingClearedStore();
   const wallet = String(req.query?.wallet || "").trim().toLowerCase();
   if (wallet) {
@@ -6681,7 +6758,7 @@ app.get(["/__operator/seller-funding", "/__operator/seller-funding.json"], (req,
 // after checking Circle and the chain. Token-authed; every action is logged
 // with its note.
 app.get("/__operator/circle-pending.json", async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   const book = circlePendingBookForOperator();
   if (!book) return res.set("Cache-Control", "no-store").json({ status: "off" });
   try { return res.set("Cache-Control", "no-store").json(await book.operatorView()); }
@@ -6692,14 +6769,14 @@ app.get("/__operator/circle-pending.json", async (req, res) => {
 // Gateway's transfer history; an entry is resolved here once it is repaid,
 // known failed, or found served. Token-authed; every action is logged.
 app.get("/__operator/gateway-pending.json", async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   const book = gatewayPendingBookForOperator();
   if (!book) return res.set("Cache-Control", "no-store").json({ status: "off" });
   try { return res.set("Cache-Control", "no-store").json(await book.operatorView()); }
   catch { return res.status(503).json({ error: "the pending book could not be read" }); }
 });
 app.post("/__operator/gateway-pending", express.json(), async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   const book = gatewayPendingBookForOperator();
   if (!book) return res.status(409).json({ error: "the Circle Gateway batched option is not on" });
   const { action, key, outcome, note } = req.body || {};
@@ -6710,7 +6787,7 @@ app.post("/__operator/gateway-pending", express.json(), async (req, res) => {
   } catch { return res.status(503).json({ error: "the pending book could not be written" }); }
 });
 app.post("/__operator/circle-pending", express.json(), async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   const book = circlePendingBookForOperator();
   if (!book) return res.status(409).json({ error: "Arc is not configured on this server" });
   const { action, key, outcome, note } = req.body || {};
@@ -6726,7 +6803,7 @@ app.post("/__operator/circle-pending", express.json(), async (req, res) => {
 // bookings, which clears the lateSettlements word. Listed on refunds.json
 // (unconfirmedSettlements).
 app.post("/__operator/late-settlements", express.json({ limit: "8kb" }), async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   const { action, key, outcome, note, tx, decimals } = req.body || {};
   let book;
   try { book = await lateSettleBookForOperator(); } catch { return res.status(503).json({ error: "the late-settlement book could not be read" }); }
@@ -6739,7 +6816,7 @@ app.post("/__operator/late-settlements", express.json({ limit: "8kb" }), async (
   } catch { return res.status(503).json({ error: "the late-settlement book could not be written" }); }
 });
 app.post("/__operator/seller-funding", express.json(), async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   const { action, wallet, note } = req.body || {};
   if (action === "disable" || action === "enable") {
     const r = setSellerFundingEnabled(action === "enable", { note: typeof note === "string" ? note : "" });
@@ -6763,7 +6840,7 @@ app.post("/__operator/seller-funding", express.json(), async (req, res) => {
 // cannot take out a neighbour. Restore only lifts the block; the owner can
 // then register again.
 app.post("/__operator/sellers/remove", express.json(), (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   if (operatorHeavyLimited(req, res)) return;
   const r = removeOrigin(req.body?.origin, { note: typeof req.body?.note === "string" ? req.body.note : "" });
   if (r.error) return res.status(400).json({ error: r.error });
@@ -6778,7 +6855,7 @@ app.post("/__operator/sellers/remove", express.json(), (req, res) => {
 // is a live crawl of the origin). scripts/x402scan-seed.js is the caller.
 const SEED_MAX_PER_CALL = 25;
 app.post("/__operator/index/seed", express.json({ limit: "64kb" }), async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   if (operatorHeavyLimited(req, res)) return;
   const raw = req.body?.origins;
   if (!Array.isArray(raw) || raw.length === 0) return res.status(400).json({ error: "origins must be a non-empty array of https origins" });
@@ -6813,12 +6890,12 @@ app.post("/__operator/index/seed", express.json({ limit: "64kb" }), async (req, 
   res.json({ dryRun: false, total: raw.length, valid: unique.length, listed: rows.filter((r) => r.listed).length, rows });
 });
 app.get("/__operator/sellers/removed.json", (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   const rows = listRemovedOrigins();
   res.set("Cache-Control", "no-store").json({ total: rows.length, removed: rows });
 });
 app.post("/__operator/sellers/restore", express.json(), (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   if (operatorHeavyLimited(req, res)) return;
   const r = restoreOrigin(req.body?.origin);
   // The removal list has not been read yet (the state database is down): a
@@ -6833,7 +6910,7 @@ app.post("/__operator/sellers/restore", express.json(), (req, res) => {
 // allow-list (it is under /__operator, which is denied by name) and never
 // cached.
 app.get("/__operator/seller-evidence.json", async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   const origin = String(req.query.origin || "").trim();
   if (!operatorDossier) return res.status(503).json({ error: "Dossier assembly is not mounted on this build" });
   // No `origin` check here on purpose: the tool validates it and its own 400
@@ -6848,7 +6925,7 @@ app.get("/__operator/seller-evidence.json", async (req, res) => {
 });
 
 app.get("/__operator/seller-registrations.json", (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   const now = Date.now();
   const rows = getSellerRegistrations().map((r) => ({
     ...r,
@@ -6865,7 +6942,7 @@ app.get("/__operator/seller-registrations.json", (req, res) => {
   });
 });
 app.post("/__operator/refunds/update", express.json({ limit: "16kb" }), async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   if (operatorLedgerLimited(req, res)) return;   // see refunds.json above
   const { id, action, tx, note } = req.body || {};
   const rowId = Number(id);
@@ -6885,7 +6962,7 @@ app.post("/__operator/refunds/update", express.json({ limit: "16kb" }), async (r
   res.json({ ok: true, id: rowId, action, totals: refundTotals() });
 });
 app.get("/__operator/ledger-sync.json", async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   if (operatorHeavyLimited(req, res)) return;
   res.set("Cache-Control", "no-store");
   if (ledgerSyncCache.value && Date.now() - ledgerSyncCache.at < LEDGER_SYNC_TTL_MS) {
@@ -6937,7 +7014,11 @@ app.get("/guides/:slug", (req, res) => {
 app.get("/skills", (_req, res) => htmlCache(res, 300, 900).send(skillsIndex(BASE_URL)));
 app.get("/skills/:slug", (req, res) => {
   const html = skillPackPage(BASE_URL, req.params.slug, CATALOG);
-  if (!html) return notFoundPage(res, { what: "Skill pack", href: "/skills", label: "All skill packs" });
+  if (!html) {
+    const gone = retiredEntryForSlug(`skill-${req.params.slug}`);
+    if (gone) return retiredPage(res, gone);
+    return notFoundPage(res, { what: "Skill pack", href: "/skills", label: "All skill packs" });
+  }
   htmlCache(res, 300, 900).send(html);
 });
 // Machine-readable skill packs — the canonical source for the `agent402-mcp`
@@ -9025,7 +9106,7 @@ app.post("/api/route", (req, res) => {
 // Operator-only: why does the SOR external resolver keep/drop each candidate for
 // a task? Explains a prod "no external seller matched" 404 without a paid buy.
 app.get("/api/route/external-debug", async (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   const task = req.query.q ?? req.query.task;
   if (!task) return res.status(400).json({ error: "Missing q/task" });
   const cap = Number(req.query.cap) > 0 ? Number(req.query.cap) : EXEC_TIERS[0].underlyingMaxUsd;
@@ -9469,7 +9550,7 @@ mountAnswerShares(app, {
 // "removed" from then on. Body {"id": "<share id>", "note": "<why>"}.
 app.post("/__operator/answer-shares/delete", express.json({ limit: "8kb" }), async (req, res) => {
   res.set("Cache-Control", "private, no-store");
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
   const id = String(req.body?.id || "").trim().replace(/^.*\/answers\//, "").replace(/(\.json|\/card\.(png|svg))$/, "");
   let r;
   try { r = await removeShare(id, req.body?.note); } catch { return res.status(503).json({ error: "the share store could not be written" }); }
@@ -9545,6 +9626,10 @@ const openapiDocument = () => {
   }
   return OPENAPI_CACHE;
 };
+// A rail dropped at boot on a failed /supported read rejoined the offer
+// (src/rail-recheck.js): the surfaces built once from the offer are built
+// again, so they name the networks the 402 now carries.
+onRailRestored(() => { MANIFEST = buildManifest(); OPENAPI_CACHE = null; navChainsMemo = { snapshot: null, board: null, value: null }; });
 app.get("/openapi.json", (req, res) => {
   const { json, etag } = openapiDocument();
   res.set("Cache-Control", "public, max-age=3600").set("ETag", etag);
@@ -9701,7 +9786,11 @@ app.get("/tools/category/:cat", (req, res) => {
 app.get("/tools/:slug", (req, res) => {
   const tools = toolList(CATALOG);
   const tool = tools.find((t) => t.slug === req.params.slug);
-  if (!tool) return notFoundPage(res, { what: "Tool", href: "/tools", label: "All tools" });
+  if (!tool) {
+    const gone = retiredEntryForSlug(req.params.slug);
+    if (gone) return retiredPage(res, gone);
+    return notFoundPage(res, { what: "Tool", href: "/tools", label: "All tools" });
+  }
   const related = relatedTools(tool, tools, 6);
   const cachePolicy = tool.method === "GET" ? CACHEABLE_ROUTES[tool.path] : null;
   // The method alias (POST on a GET-only path, GET/HEAD on a POST-only path)
@@ -10842,6 +10931,20 @@ if (FREE_MODE) {
           return origJson(body);
         };
       }
+      // A metered route's unpaid 402 says how long the caller's client should
+      // wait (additive `clientTimeout`, src/metered-lead.js): the answer is
+      // generated and the payment settled before the response is sent. Body
+      // only; the PAYMENT-REQUIRED header and every other field are untouched.
+      // First contact only, like the twin above.
+      if (firstContact && isMeteredChatSlug(def.slug)) {
+        const origJson = res.json.bind(res);
+        res.json = (body) => {
+          if (res.statusCode === 402 && body && typeof body === "object" && !Array.isArray(body) && !body.clientTimeout) {
+            body.clientTimeout = meteredClientTimeoutField();
+          }
+          return origJson(body);
+        };
+      }
       // A first-contact unpaid 402 leads its body with the front door
       // (src/front-door.js): the access line /llms.txt and /agents.md lead
       // with, and the /agents.md link (the recovery lines live there only).
@@ -11006,7 +11109,9 @@ if (FREE_MODE) {
       if (solution) {
         const result = verifySolution(solution, slug);
         if (result.ok) {
-          if (powHttpLimiter.check(req.ip || "unknown").limited) {
+          const powBudget = powHttpLimiter.check(req.ip || "unknown");
+          if (powBudget.limited) {
+            res.setHeader("Retry-After", String(powBudget.retryAfterSeconds));
             res.setHeader("X-Pow-Rate-Limited", "true");
             res.setHeader("X-Pow-Limits", POW_LIMITS_LABEL);
             return res.status(429).json({
@@ -11196,13 +11301,27 @@ if (FREE_MODE) {
         // A grant that was not settled (a forgiven hang-up, a first-call
         // allowance: src/hangup-settlement.js grantedUnsettled) leaves the
         // authorization live on chain, so its mark is held until the
-        // authorization itself expires. A settled grant keeps the guard's
-        // default hold: its nonce is spent on chain, and a far validBefore
-        // held for every paid call would keep one long-lived key each.
-        if (res.statusCode === 200) replayGuard.settle(replayKey, undefined, grantedUnsettled(req) ? { validBeforeMs: paymentValidBeforeMs(req) } : {}).catch(() => {});
+        // authorization itself expires. A settled grant is held that long
+        // too, up to the guard's settled bound (MAX_SETTLED_VALIDITY_HOLD_MS):
+        // its nonce is spent on chain, but the gateway cache reader takes a
+        // still-valid authorization the guard does not hold as its payer's
+        // proof, and a far validBefore must not keep a key per paid call.
+        if (res.statusCode === 200) replayGuard.settle(replayKey, undefined, consumedHoldFor(req, { settled: !grantedUnsettled(req) })).catch(() => {});
         else replayGuard.release(replayKey).catch(() => {}); // not granted (facilitator rejected, handler errored)
       };
       res.on("finish", finishGuard);
+      // A refusal (anything but a 200) is released when it is ended: "finish"
+      // waits for the socket write, and a buyer that resent the same payment
+      // as soon as the 402's headers arrived was refused as a replay in that
+      // window. The paywall buffers the handler's answer and ends the
+      // response through this wrapper once settlement is decided, so the
+      // status read here is the final one; a 200 still waits for "finish".
+      const endBeforeGuard = res.end;
+      res.end = function replayGuardEnd(...args) {
+        const out = endBeforeGuard.apply(this, args);
+        if (res.statusCode !== 200) finishGuard();
+        return out;
+      };
       // Client left before the response finished. On a close before the first
       // byte, statusCode is still Node's default 200 (the paywall buffers the
       // handler's status), so the key is marked CONSUMED even though the
@@ -11273,6 +11392,22 @@ app.use((req, res, next) => {
     // their public caching. `no-store` blocks all caches; `private` is
     // belt-and-suspenders against shared caches specifically.
     res.setHeader("Cache-Control", "no-store, private");
+    // What this call's FINAL response says about its sale, for a per-call
+    // count that reads it after the response ended (onFinalResponse in
+    // src/request-timing.js; src/sql-query-stats.js): "free" when nothing was
+    // asked (FREE_MODE, an accepted proof-of-work or trial, a first-call
+    // allowance), "charged" on settle evidence (paidAndSettled), else "none".
+    // Read lazily, so it never sees the handler's own status before the gate
+    // decided.
+    {
+      const scope = currentRequestScope();
+      if (scope) scope.saleOutcome = () => {
+        try {
+          if (FREE_MODE || res.getHeader("X-Pow-Accepted") === "true" || res.getHeader("X-Trial-Accepted") === "true" || allowanceServed(req)) return "free";
+          return paidAndSettled(req, res) ? "charged" : "none";
+        } catch { return "none"; }
+      };
+    }
     // Runs once when the settlement is decided (src/hangup-settlement.js), not
     // on "finish" alone: Node emits no "finish" for a response ended on a
     // socket the buyer already closed, and a long run whose buyer timed out
@@ -12340,6 +12475,14 @@ app.use((req, res, next) => {
 // (test-mcp-self-consistency's live GET oracle) are unaffected.
 // A machine surface by path, read case-insensitively (routing is, so /V1/x
 // reaches the same 404 as /v1/x and gets the same JSON answer).
+// The JSON 404 of a machine path nothing is registered at. A refused operator
+// route answers with this same call, so its status, body and headers are the
+// ones an unregistered /__operator path gives, and a caller without the token
+// cannot tell which paths exist. A function declaration: the operator routes
+// that call it are registered earlier in this file.
+function operatorNotFound(_req, res) {
+  return res.status(404).json({ ok: false, error: "not-found" });
+}
 function isMachinePath(path) {
   const p = String(path || "").toLowerCase();
   return p.startsWith("/api") || p.startsWith("/v1") || p.startsWith("/mcp") || p.startsWith("/__operator");
@@ -12374,7 +12517,7 @@ app.use((req, res) => {
       try { capturePostHogToolGone({ route: req.path, replacement: "GET /api/find", source: toolGoneSourceOf({ headers: req.headers, surface: "http" }) }); } catch { /* telemetry never breaks a response */ }
       return res.status(404).json({ ok: false, error: "not-found", hint: `No tool lives at ${req.path}. It may have been retired; the closest live tools are listed, or ask /api/find?q=<task>.`, find: `${BASE_URL}/api/find?q=${encodeURIComponent(slug)}`, suggestions });
     }
-    return res.status(404).json({ ok: false, error: "not-found" });
+    return operatorNotFound(req, res);
   }
   const body = `<div style="max-width:640px;margin:0 auto;padding:96px 26px 80px;text-align:center;">
       <div style="font-family:var(--font-mono);font-weight:500;font-size:var(--fs-hero);line-height:1;letter-spacing:-.03em;color:var(--ink);margin-bottom:14px;">404</div>
@@ -12475,6 +12618,9 @@ const httpServer = app.listen(PORT, () => {
 // 5 s). Keep-alive outlives the edge proxy's idle window so it never reuses a
 // socket we just closed (a sporadic edge 502), headers stays above keep-alive
 // as Node requires, and a request body must arrive within two minutes.
+// A request the parser refuses never reaches a middleware: its answer carries
+// the always-on security headers here (src/security-headers.js).
+httpServer.on("clientError", answerClientError);
 httpServer.keepAliveTimeout = Number(process.env.HTTP_KEEPALIVE_TIMEOUT_MS) || 65_000;
 httpServer.headersTimeout = Number(process.env.HTTP_HEADERS_TIMEOUT_MS) || 70_000;
 httpServer.requestTimeout = Number(process.env.HTTP_REQUEST_TIMEOUT_MS) || 120_000;

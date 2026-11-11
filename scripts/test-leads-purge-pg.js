@@ -3,6 +3,7 @@
 // table is gone (it never creates it again). Two containers booting together
 // drop it once between them. Runs in a schema this test creates and drops,
 // reached through DATABASE_URL's search_path, so no other table is touched.
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { requireTestPg } from "./lib/test-pg.js";
 const { url, schema } = requireTestPg({ label: "test-leads-purge-pg" });
 import pg from "pg";

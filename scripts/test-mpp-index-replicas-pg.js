@@ -5,6 +5,7 @@
 //   - two containers taking submissions at once keep each other's seeds;
 //   - a crawl that did not run here (another container holds its lease) saves nothing.
 //   STATE_DATABASE_URL=postgres://... node scripts/test-mpp-index-replicas-pg.js
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

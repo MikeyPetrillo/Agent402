@@ -46,6 +46,7 @@
 import { parseMultipartFile } from "../multipart.js";
 import { loadMusicMetadata } from "./lazy-deps.js";
 import { safeFetch } from "./fetch-guard.js";
+import { measureAudioSeconds } from "./media-kit.js";
 import { redactSecrets } from "./redact.js";
 import { upstreamCosts } from "../upstream-costs.js";
 import { OPENROUTER_ATTRIBUTION } from "../openrouter-attribution.js";
@@ -141,30 +142,96 @@ async function fetchAudio(url) {
   return { buf, filename };
 }
 
-/** Audio duration in seconds from the container headers, or null when it
- *  cannot be determined. Pure local parse — no upstream call, no cost. */
-export async function probeDurationSeconds(buf, filename) {
+/** What the container says about itself, read locally (no upstream call):
+ *  the duration its headers declare, whether its codec is lossy, whether it
+ *  carries a video track, its channel count, its sample rate, and the bytes of embedded
+ *  pictures. Null when the container cannot be read. */
+async function probeContainer(buf, filename) {
   try {
     const { parseBuffer } = await loadMusicMetadata();
     const meta = await parseBuffer(buf, { path: filename }, { duration: true });
     const d = meta?.format?.duration;
-    return Number.isFinite(d) && d > 0 ? d : null;
+    if (!(Number.isFinite(d) && d > 0)) return null;
+    let pictureBytes = 0;
+    for (const pic of meta?.common?.picture || []) pictureBytes += pic?.data?.length || 0;
+    const channels = Number(meta?.format?.numberOfChannels);
+    const sampleRate = Number(meta?.format?.sampleRate);
+    return { durationSec: d, lossy: meta?.format?.lossless === false, hasVideo: meta?.format?.hasVideo, channels: Number.isInteger(channels) ? channels : null, sampleRate: Number.isFinite(sampleRate) && sampleRate > 0 ? sampleRate : null, pictureBytes };
   } catch {
     return null;
   }
 }
 
+/** Audio duration in seconds as the container headers declare it, or null
+ *  when it cannot be determined. Pure local parse: no upstream call, no cost.
+ *  A declared duration is the file's own claim: assertWithinDurationCap
+ *  measures the audio as well. */
+export async function probeDurationSeconds(buf, filename) {
+  return (await probeContainer(buf, filename))?.durationSec ?? null;
+}
+
+// The most bits a second of lossy audio holds at a sample rate of 48 kHz or
+// less in one or two channels (free-format MPEG audio tops out here; AAC,
+// Opus and Vorbis sit below it there). Vorbis at 192 kHz goes past it, so the
+// floor is read only up to 48 kHz (byteFloorApplies). Bytes divided by this
+// is a duration such audio cannot be under.
+const LOSSY_MAX_BITS_PER_SECOND = 640_000;
+const NON_AUDIO_ALLOWANCE_BYTES = 256 * 1024;
+/** The shortest a lossy file of this size can play, in seconds. Pure; exported for tests. */
+export function byteFloorSeconds(bytes, pictureBytes = 0) {
+  const audioBytes = Math.max(0, bytes - pictureBytes - NON_AUDIO_ALLOWANCE_BYTES);
+  return (audioBytes * 8) / LOSSY_MAX_BITS_PER_SECOND;
+}
+
+/** Whether the byte floor bounds this container: lossy audio the parser read
+ *  as holding no video track, in one or two channels, at a reported sample
+ *  rate of 48 kHz or less. A video track's bytes are not audio, and more
+ *  channels or a higher sample rate can carry more bits a second than the
+ *  floor's rate, so any of them would make the floor longer than the audio
+ *  plays. Those files, and a file whose sample rate is not reported, keep
+ *  their declared length when unmeasured. Pure; exported for tests. */
+export function byteFloorApplies(container) {
+  return !!container && container.lossy === true && container.hasVideo === false && (container.channels === 1 || container.channels === 2)
+    && Number.isFinite(container.sampleRate) && container.sampleRate > 0 && container.sampleRate <= 48000;
+}
+
+let measureImpl = measureAudioSeconds;
+/** Test seam: replace the decode measurement (null restores it). */
+export function __setMeasureForTest(fn) { measureImpl = fn || measureAudioSeconds; }
+let unmeasured = 0;
+/** Files whose audio could not be measured by decoding since boot (the byte floor bounded the ones it applies to). */
+export const sttUnmeasuredSinceBoot = () => unmeasured;
+
 /** Throws 422 when the audio exceeds the tier's advertised duration cap, or
  *  when the duration cannot be read at all (an unreadable container would
  *  otherwise be an unbounded upstream bill). Small tolerance for container
- *  rounding. Exported for tests. */
+ *  rounding. Exported for tests.
+ *
+ *  The length that is capped is the longer of what the headers declare and
+ *  what the audio measures: the file is decoded locally (ffmpeg, no upstream
+ *  call) and the decoder's own clock is read. Where it cannot be decoded here
+ *  (no ffmpeg on this server, a failed or slow decode), a lossy audio-only
+ *  file in one or two channels at up to 48 kHz is held to the shortest its byte count can
+ *  play (byteFloorApplies); any other file keeps its declared length. A
+ *  file inside the cap passes either way; the returned duration is the one
+ *  the margin math uses. */
 export async function assertWithinDurationCap(buf, filename, tierSlug) {
   const tier = TIERS[tierSlug];
-  const durationSec = await probeDurationSeconds(buf, filename);
-  if (durationSec === null) {
+  const container = await probeContainer(buf, filename);
+  if (container === null) {
     throw bad("Could not read the audio duration from the file - send a standard mp3, wav, m4a, ogg, flac, or webm file", 422);
   }
   const capSec = tier.maxMinutes * 60;
+  let durationSec = container.durationSec;
+  if (durationSec <= capSec + 2) {
+    let measured = null;
+    try { measured = await measureImpl(buf); } catch { /* unmeasured: the byte floor below */ }
+    if (Number.isFinite(measured) && measured > 0) durationSec = Math.max(durationSec, measured);
+    else {
+      unmeasured++;
+      if (byteFloorApplies(container)) durationSec = Math.max(durationSec, byteFloorSeconds(buf.length, container.pictureBytes));
+    }
+  }
   if (durationSec > capSec + 2) {
     const mins = (durationSec / 60).toFixed(1);
     const upsell = tierSlug === "transcribe" ? " For up to 10 minutes, use /api/transcribe-pro." : "";

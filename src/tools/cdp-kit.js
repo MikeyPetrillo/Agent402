@@ -344,6 +344,25 @@ export const SQL_SEND_LIMIT_BYTES = 500_000;
 // every call, under its own memo and timeout.
 export const SQL_QUERY_BUDGET = 3;
 function newQueryBudget() { return { sent: 0, max: SQL_QUERY_BUDGET, left() { return this.max - this.sent; } }; }
+// Wraps the onchain-sql handler so every run inside a request is counted once
+// its response has ENDED (src/sql-query-stats.js): the queries it sent (0 for
+// a refusal before any query), by the response's final status and what the
+// server read from it (charged, free or neither), never by what the handler
+// returned. A call outside a request (the economy panel's refresh) is not
+// counted. Counting never changes or fails the call.
+function countedSqlCall(run) {
+  return async (input) => {
+    const call = { queries: newQueryBudget(), budgetSpent: false };
+    try { return await run(input, call); }
+    catch (e) { if (e?.queryBudgetSpent) call.budgetSpent = true; throw e; }
+    finally {
+      try {
+        const used = call.queries.sent, budgetSpent = call.budgetSpent;
+        onFinalResponse((status, scope) => noteSqlCall({ status, queries: used, budgetSpent, synthetic: !!scope?.synthetic, sale: status === 200 && typeof scope?.saleOutcome === "function" ? scope.saleOutcome() : null }));
+      } catch { /* bookkeeping only */ }
+    }
+  };
+}
 let maxQueriesPerCall = 0;
 export function _maxQueriesPerCallForTest() { return maxQueriesPerCall; }
 function queryBudgetSpentError() {
@@ -1023,7 +1042,7 @@ export const CDP_TOOLS = [
         example: { rows: [{ txs: 123456 }], rowCount: 1, maxRows: 1000, returned: 1, matched: 1, complete: true, truncated: false },
       },
     },
-    handler: async (input) => {
+    handler: countedSqlCall(async (input, call) => {
       const sql = String(input?.sql || "").trim();
       if (!sql) throw bad('"sql" is required');
       if (sql.length > SQL_MAX_CHARS) throw bad(`"sql" too long (${sql.length} chars, max ${SQL_MAX_CHARS.toLocaleString("en-US")})`);
@@ -1045,8 +1064,8 @@ export const CDP_TOOLS = [
       buyerQueriesInflight++;
       // One query budget for the call: the buyer's query, its retry, and
       // every recovery run spend it where they are sent.
-      const queries = newQueryBudget();
-      let res, budgetSpent = false;
+      const queries = call.queries;
+      let res;
       try {
         try {
           try { res = await cdpFetch("POST", "/platform/v2/data/query/run", body, { idempotent: true, buyerQuery: true, lineOffset: capped.lineOffset, queries }); }
@@ -1126,18 +1145,9 @@ export const CDP_TOOLS = [
             }
           }
         }
-      } catch (e) {
-        if (e?.queryBudgetSpent) budgetSpent = true;
-        throw e;
       } finally {
         buyerQueriesInflight--;
         if (queries.sent > maxQueriesPerCall) maxQueriesPerCall = queries.sent;
-        // Counted on the request's FINAL response (src/sql-query-stats.js): a
-        // query count only for a final 200, a budget refusal whenever its
-        // answer finished. A call outside a request (the economy panel's
-        // refresh) is not counted.
-        const used = queries.sent;
-        onFinalResponse((status, scope) => noteSqlCall({ status, queries: used, budgetSpent, synthetic: !!scope?.synthetic }));
       }
       const rows = res?.result ?? res?.rows ?? res?.data ?? res;
       const all = Array.isArray(rows) ? rows : [];
@@ -1150,7 +1160,7 @@ export const CDP_TOOLS = [
         ...(capped.capped ? {} : { rowCapApplied: false }),
         ...(Array.isArray(rows) ? {} : { raw: res }),
       };
-    },
+    }),
   },
   {
     route: "GET /api/onchain-sql-schema",

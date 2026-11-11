@@ -24,6 +24,7 @@
 //     returning payer or our own wallet is never counted, an async ledger
 //     seam is never called on a refusal, and a grant makes one ledger call.
 // Requires REDIS_URL (under CI a missing one fails).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { randomBytes } from "node:crypto";
 
 const REDIS = String(process.env.REDIS_URL || "").trim();

@@ -2,6 +2,7 @@
 // another container holds the lease, the tick answers { skipped: "leased" }
 // and does nothing. This drives the real wrapped ticks of three stores against
 // a Postgres (required under CI) and checks the lease names the modules use.
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { readFileSync } from "node:fs";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

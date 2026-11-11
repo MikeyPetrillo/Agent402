@@ -14,6 +14,7 @@
 // versioned, a sum that cannot be right (negative, above what its window
 // could hold) is rebuilt in the same call, and a reserve never renews the
 // sum's expiry. Requires REDIS_URL (under CI a missing one fails).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { spawn } from "node:child_process";
 import { childJson } from "./lib/child-json.js";
 import { randomBytes } from "node:crypto";

@@ -48,6 +48,7 @@ import { disableVendorSpendControls } from "./x402-spend-controls.js";
 import { assertNotOwnPayout } from "./own-wallets.js";
 import { readBytesCapped, readTextCapped, declaredLength, discardBody, decodeUtf8 } from "./capped-body.js";
 import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
+import { spendWindowCeilings, noteSpendWindowOver, noteSpendWindowRefused } from "./router-spend-window.js";
 import { reserveUnprovenSellerSpend, releaseUnprovenSellerSpend } from "./base-unproven.js";
 import { usdFigure } from "./price-usd.js";
 import { EVM_BUYER_CHAINS, isEvmBuyerChain, evmBuyerChainEnabled, evmAcceptDomainCheck } from "./evm-buyer-chains.js";
@@ -381,11 +382,14 @@ export function capEvmValidity(accept, windowS = refusalWindowSeconds()) {
   return { ...accept, maxTimeoutSeconds: capped };
 }
 
-// F3 belt: bound external spend per rolling window regardless of buyer
-// settlement, so a forced-cancellation drain can't be farmed even before the
-// low hot-wallet balance runs out. Per-process; Date.now() is fine server-side.
+// What this wallet holds for outside sellers per rolling window, whatever the
+// buyers' settlements do. Two ceilings (src/router-spend-window.js): past
+// SOR_SPEND_CAP_ATOMIC a purchase is still made and the status word reads
+// over (the buyer is paying for it; the unsettled loss is bounded per payer
+// and per chain per day in src/external-spend-guard.js), and a purchase that
+// would pass SOR_SPEND_HARD_CAP_ATOMIC is refused, the stop for a runaway.
 const SPEND_WINDOW_MS = 60_000;
-const SPEND_CAP_ATOMIC = BigInt(process.env.SOR_SPEND_CAP_ATOMIC || "2000000"); // $2/min default
+const SPEND_REFUSED = "Upstream spend budget for this window is exhausted - try again shortly";
 let spendWindowStart = 0, spentThisWindow = 0n;
 // Reserve budget BEFORE signing (holds it against concurrent calls in the same
 // tick), returning a window token. If the spend then never happens (sign throws,
@@ -878,7 +882,7 @@ export async function sellerServesModel(url, model, { fetchImpl = fetch, now = D
 }
 export function __resetModelListsForTest() { modelLists.clear(); }
 
-// Shared across replicas (src/shared-limits.js): the same cap is also a shared
+// Shared across replicas (src/shared-limits.js): the same ceilings also read a shared
 // counter per fixed minute, reserved before signing and given back on release.
 // Without a shared store the reserve is synchronous as before; with one it
 // returns a promise of the token (payX402 awaits it). A store that does not
@@ -889,8 +893,11 @@ export function reserveSpend(atomic) {
   const now = Date.now();
   if (now - spendWindowStart > SPEND_WINDOW_MS) { spendWindowStart = now; spentThisWindow = 0n; }
   const amt = BigInt(atomic);
-  if (spentThisWindow + amt > SPEND_CAP_ATOMIC) throw bad("Upstream spend budget for this window is exhausted - try again shortly", 429);
+  const { alarmAtomic, hardAtomic } = spendWindowCeilings();
+  const refuse = () => { if (alarmAtomic !== 0n) noteSpendWindowRefused(now); return bad(SPEND_REFUSED, 429); };
+  if (spentThisWindow + amt > hardAtomic) throw refuse();
   spentThisWindow += amt;
+  if (spentThisWindow > alarmAtomic) noteSpendWindowOver(now);
   // The token names the window this hold belongs to, and the fixed minute the
   // shared counter booked it under (the two differ: the local window rolls
   // from its first spend, the shared one is the clock's minute).
@@ -899,11 +906,13 @@ export function reserveSpend(atomic) {
   return (async () => {
     const r = await shared.counterAdd("x402-buyer-window", token.bucket, Number(amt), SPEND_WINDOW_MS * 2);
     if (!r.ok) { noteSharedLimitsDegraded("x402-buyer", r); return token; }
-    if (BigInt(Math.trunc(r.value)) > SPEND_CAP_ATOMIC) {
+    const all = BigInt(Math.trunc(r.value));
+    if (all > hardAtomic) {
       void sharedWrite("x402-buyer", shared.counterAdd("x402-buyer-window", token.bucket, -Number(amt), SPEND_WINDOW_MS * 2));
       releaseLocal(amt, token);
-      throw bad("Upstream spend budget for this window is exhausted - try again shortly", 429);
+      throw refuse();
     }
+    if (all > alarmAtomic) noteSpendWindowOver(now);
     return token;
   })();
 }
@@ -1280,7 +1289,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     }
     console.log(`[x402-buyer] paying UNPROVEN Base seller ${String(payable.payTo).slice(0, 10)}… - quote ${quote} atomic is within the unproven ceiling ${ceiling}`);
   }
-  const spendToken = await reserveSpend(quotedAtomic); // F3 belt, before signing (throws 429 if over the window budget)
+  const spendToken = await reserveSpend(quotedAtomic); // before signing (throws 429 only at the hard stop; past the alarm it serves)
   let committed = false;
   // Set once a line for this payment is in the outbound ledger; a post-commit
   // failure no other path recorded is recorded in the catch below.

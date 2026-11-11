@@ -158,13 +158,23 @@ const gated = pages.filter((p) => EDGAR_BACKED.test(p));
 const ungated = pages.filter((p) => !EDGAR_BACKED.test(p));
 
 const t0 = Date.now();
+// A page that never reaches network idle is not a CSP violation, and saying
+// it was one sends the reader after the wrong thing. It is still a failure
+// (a page this pass could not read has no CSP verdict), reported on its own
+// with the requests still open when the wait ran out, which is what names
+// the cause.
+const unloaded = [];
 const loadPage = async (path, navTimeoutMs) => {
   const { page, violations } = await freshPage();
+  const open = new Set();
+  page.on("request", (r) => open.add(r));
+  page.on("requestfinished", (r) => open.delete(r));
+  page.on("requestfailed", (r) => open.delete(r));
   try {
     await page.goto(`${BASE}${path}`, { waitUntil: "networkidle", timeout: navTimeoutMs });
     await page.waitForTimeout(300); // let any deferred/polling script fire once
   } catch (e) {
-    violations.push({ directive: "(navigation)", blockedURI: String(e && e.message || e), sourceFile: path, lineNumber: 0 });
+    unloaded.push({ path, error: String(e && e.message || e).split("\n")[0], open: [...open].map((r) => `${r.method()} ${r.url()}`) });
   }
   await page.close();
   return violations.map((v) => ({ path, ...v }));
@@ -176,6 +186,8 @@ for (const list of [...perPage, ...perGated]) for (const v of list) allViolation
 console.log(`  load pass: ${ungated.length} templates at concurrency ${LOAD_CONCURRENCY}, ` +
   `${gated.length} EDGAR-backed at ${EDGAR_CONCURRENCY}, in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 ok(allViolations.length === 0, `zero CSP violations across ${pages.length} page loads (got ${allViolations.length})`);
+ok(unloaded.length === 0, `every page reached network idle within its deadline (${unloaded.length} did not)`);
+for (const u of unloaded) console.error(`  ${u.path}: ${u.error}; requests still open: ${u.open.length ? u.open.join(", ") : "none"}`);
 
 // --- Interaction pass: pages whose scripts gate real behavior behind a
 // click/input, not just page load. -------------------------------------------
@@ -261,14 +273,22 @@ const interactions = [
 // the time goes anyway.
 for (const { path, run } of interactions) {
   const { page, violations } = await freshPage();
+  const open = new Set();
+  page.on("request", (r) => open.add(r));
+  page.on("requestfinished", (r) => open.delete(r));
+  page.on("requestfailed", (r) => open.delete(r));
+  let notRun = null;
   try {
     await page.goto(`${BASE}${path}`, { waitUntil: "networkidle", timeout: 20000 });
     await run(page);
   } catch (e) {
-    violations.push({ directive: "(interaction)", blockedURI: String(e && e.message || e), sourceFile: path, lineNumber: 0 });
+    notRun = `${String(e && e.message || e).split("\n")[0]}; requests still open: ${open.size ? [...open].map((r) => `${r.method()} ${r.url()}`).join(", ") : "none"}`;
   }
   for (const v of violations) allViolations.push({ path: `${path} (interaction)`, ...v });
   await page.close();
+  // A page that did not load or whose interaction threw has no CSP verdict:
+  // reported as that, not as a violation.
+  ok(notRun === null, `${path}: the page loaded and the interaction ran${notRun ? ` (${notRun})` : ""}`);
   ok(violations.length === 0, `${path}: zero CSP violations after interacting with the page`);
 }
 

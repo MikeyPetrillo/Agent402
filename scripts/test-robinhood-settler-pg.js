@@ -4,6 +4,7 @@
 // process (a deploy) reading the same row, so the robinhoodSettler clock
 // survives a restart, and a process that finds the facilitator first again
 // resets it. Requires STATE_DATABASE_URL (CI fails without it).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { spawnSync } from "node:child_process";
 import { childJson } from "./lib/child-json.js";
 import { requireTestPg } from "./lib/test-pg.js";

@@ -21,6 +21,7 @@
 // variable in OFFLINE_STORES_KEEP in the child's env, comma-separated; the
 // child keeps it and drops the rest. The list is read once and removed, so a
 // grandchild starts pinned again.
+import "./own-stats.js"; // a stats store of this suite's own (see the file)
 const keep = new Set(String(process.env.OFFLINE_STORES_KEEP || "").split(",").map((s) => s.trim()).filter(Boolean));
 delete process.env.OFFLINE_STORES_KEEP;
 for (const k of ["REDIS_URL", "STATE_DATABASE_URL", "STATE_DATABASE_URL_FOR_TEST", "LEDGER_JOURNAL_REDIS"]) if (!keep.has(k)) delete process.env[k];

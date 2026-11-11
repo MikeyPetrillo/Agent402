@@ -9,6 +9,7 @@
 //      its next one on B a 429, and the same for the x402 route.
 //   REDIS_URL=redis://127.0.0.1:6379 node scripts/test-registration-limits-redis.js
 // Deliberately does not skip without REDIS_URL (CI provides the service container).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { bootServer } from "./lib/boot-server.js";
 
 if (!process.env.REDIS_URL) {

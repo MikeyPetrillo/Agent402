@@ -192,6 +192,33 @@ ok(spent > 0 && spent <= 0.0021, `base wallet booked the estimate (${spent})`);
   ok(server.includes("setIdentityBoundSlugs(new Set(Object.values(CATALOG).filter((d) => d.identityBound)"), "server hands the kit the catalog's own identity-bound slugs");
 }
 
+// --- 7c. the payer compare: a sale with no payer is nobody's; an EVM payer
+// matches in any letter case (the ledger stores EVM lowercased, a caller may
+// sign in checksum case). The route is EVM exact only, so the caller is always
+// 0x-hex; a base58 or Stellar payer can never equal one in any case (base58
+// has no "0", Stellar starts with G). A wallet-scoped slug stops the run right
+// after the payer check, so the error names which side of it the call reached.
+{
+  const SCOPED = { slug: "memory-get", priceUsd: 0.001, network: "eip155:8453", tx: "0x" + "ab".repeat(32), responseSha256: "0".repeat(64), ts: Date.now() };
+  const CHECKSUM = "0x902DCf34E53695bdea2fFB354B1a2e58bd598256";
+  const asCaller = (payer, caller) => makeAttestHandler({ chain, saleByTx: async () => ({ ...SCOPED, payer }), payerOf: () => caller, log: () => {} });
+  await rejects(() => asCaller(null, CHECKSUM.toLowerCase())({ tx: SCOPED.tx }), 403, /No sale of yours/);
+  await rejects(() => asCaller("", CHECKSUM.toLowerCase())({ tx: SCOPED.tx }), 403, /No sale of yours/);
+  await rejects(() => asCaller(CHECKSUM, CHECKSUM.toLowerCase())({ tx: SCOPED.tx }), 403, /wallet-scoped/);
+  await rejects(() => asCaller(CHECKSUM.toLowerCase(), CHECKSUM)({ tx: SCOPED.tx }), 403, /wallet-scoped/);
+  await rejects(() => asCaller(CHECKSUM.toLowerCase(), "0x" + "99".repeat(20))({ tx: SCOPED.tx }), 403, /No sale of yours/);
+
+  // The refusal log is bounded: at most ten lines a minute, the rest counted
+  // into the next line. 25 refusals inside one burst cross at most one minute
+  // boundary, so at most 20 lines.
+  const lines = [];
+  const loud = makeAttestHandler({ chain, saleByTx: async () => null, payerOf: () => CHECKSUM, log: (l) => lines.push(String(l)) });
+  for (let i = 0; i < 25; i++) { try { await loud({ tx: SCOPED.tx }); } catch { /* refused */ } }
+  const refusedLines = lines.filter((l) => l.startsWith("[attest] refused"));
+  ok(refusedLines.length >= 1 && refusedLines.length <= 20, `25 refusals in a burst log at most ten a minute (${refusedLines.length} lines)`);
+  ok(refusedLines.every((l) => !l.includes(CHECKSUM) && !l.includes(SCOPED.tx)), "and no line carries the full payer or tx");
+}
+
 // --- 8. catalog entry + registrations
 const tool = ATTEST_TOOLS[0];
 eq(tool.slug, "attest", "slug");

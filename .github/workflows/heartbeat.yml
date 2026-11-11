@@ -614,6 +614,30 @@ jobs:
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "exaSpend is ${STATUS}; closing." || true
           fi
 
+      # The router's per-minute holds for outside sellers
+      # (src/router-spend-window.js): over = a minute passed the alarm ceiling
+      # and every purchase was made; capped = a purchase was refused at the
+      # stop. Each word holds an hour. off is the switch and never pages. The
+      # status Worker runs the same check under the same title.
+      - name: Router spend per minute over its ceiling
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.routerSpendWindow.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "router spend window: $STATUS"
+          TITLE="Router spend per minute OVER its ceiling"
+          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          if [ "$STATUS" = "over" ] || [ "$STATUS" = "capped" ]; then
+            if [ -z "$EXISTING" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+                --body "/api/gateway-status reports routerSpendWindow.status=over or capped. On over, what the router's spending wallet held for outside sellers inside one minute passed SOR_SPEND_CAP_ATOMIC and every purchase was still made (each one is for a buyer who is paying for it). On capped, a purchase that would have passed SOR_SPEND_HARD_CAP_ATOMIC inside one minute was refused before anything was signed. Each word holds for an hour after the last such minute. Read the router's purchases and the spending wallets on the operator view: for steady buyer volume raise the two ceilings on Railway; purchases that no buyer payment settled stay bounded per payer and per chain per day by the external spend guard. Closes when the word reads ok or off." || true
+            fi
+          elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "routerSpendWindow is ${STATUS}; closing." || true
+          fi
+
       - name: Algorand upstream buyer wallet check (alarm on low AVM spending balance)
         if: always()
         continue-on-error: true

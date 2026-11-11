@@ -97,3 +97,14 @@ export function meteredTwinPath(slug) {
   const twin = meteredTwinSlug(slug);
   return twin ? TWIN_PATHS[twin] || null : null;
 }
+
+/** Whether `slug` is a metered chat route (any wire this tree serves it on). */
+export function isMeteredChatSlug(slug) {
+  return Object.hasOwn(TWIN_PATHS, String(slug || ""));
+}
+
+/** The `clientTimeout` field of a metered route's unpaid 402 body: how long a
+ *  caller's client should wait, as a number and as the sentence. */
+export function meteredClientTimeoutField() {
+  return { seconds: meteredClientTimeoutSeconds(), note: meteredTimeoutSentence() };
+}

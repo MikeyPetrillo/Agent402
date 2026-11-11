@@ -4,6 +4,7 @@
 // database behind a relay the test cuts, and every payment-API connection
 // refused locally (a preload), so nothing leaves the machine.
 // Requires STATE_DATABASE_URL (CI fails without it).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { spawn } from "node:child_process";
 import { requireTestPg } from "./lib/test-pg.js";
 import { startPgRelay } from "./lib/pg-relay.js";

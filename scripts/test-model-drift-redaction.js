@@ -10,6 +10,7 @@
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { noteOwnedPrice, staleHighRows, describeStaleHigh, overridesOf, longContextGaps, describeLongContext } from "./lib/cost-row-drift.js";
+import { advertisedIds, advertisedExpiring } from "./lib/advertised-expiry.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -140,6 +141,45 @@ const redact = (text) => {
   ok(!/DIRECT_UPSTREAM_KEY/.test(wf), "model-drift.yml never hands the guard the direct upstream's key");
 }
 
+// The advertised-id expiry rule (scripts/lib/advertised-expiry.js) on a stub
+// catalog (ids and dates invented): a tier-listed id dated inside the window
+// is a finding until a retirement entry names the successor for that day.
+{
+  const NOW = Date.parse("2030-03-01T00:00:00Z");
+  const tiers = {
+    small: { prefixes: ["fake/tiny-1b", "fake/tiny-3b", "fam/"] },
+    big: { prefixes: ["fake/large", "fake/late", "fake/covered", "fake/stale-entry", "fake/no-successor"] },
+  };
+  const models = [
+    { id: "fake/tiny-1b", expiration_date: "2030-03-10" },       // listed, 9 days out, no successor
+    { id: "fake/tiny-3b", expiration_date: null },               // listed, undated
+    { id: "fake/large", deprecation_date: "2030-03-14" },        // listed, 13 days out, read from deprecation_date
+    { id: "fake/late", expiration_date: "2030-03-15" },          // listed, exactly at the horizon: not yet
+    { id: "fake/covered", expiration_date: "2030-03-05" },       // listed, successor scheduled on the date
+    { id: "fake/stale-entry", expiration_date: "2030-03-05" },   // listed, its entry starts after the date
+    { id: "fake/no-successor", expiration_date: "2030-03-05" },  // listed, its entry is dated but names no successor
+    { id: "fam/member", expiration_date: "2030-03-02" },         // under a family prefix only: not advertised by name
+    { id: "fake/printed", expiration_date: "2030-03-03" },       // on /v1/models only
+    { id: "other/unlisted", expiration_date: "2030-03-02" },     // nowhere
+  ];
+  const retiring = {
+    "fake/covered": { until: "2030-03-05", use: "fake/tiny-3b", asItselfUntil: true },
+    "fake/stale-entry": { until: "2030-03-06", use: "fake/tiny-3b", asItselfUntil: true },
+    "fake/no-successor": { until: "2030-03-04", asItselfUntil: true },
+  };
+  const advertised = advertisedIds(tiers, ["fake/printed", "fam/*", "bare-id"]);
+  ok(advertised.has("fake/tiny-1b") && advertised.has("fake/printed") && !advertised.has("fam/") && !advertised.has("fam/*") && !advertised.has("bare-id") && advertised.size === 8, `advertised ids are the tiers' named ids and the exact ids /v1/models prints (${advertised.size})`);
+  const due = advertisedExpiring({ models, advertised, retiring, now: NOW });
+  const open = due.filter((d) => !d.covered).map((d) => d.id);
+  ok(JSON.stringify(open) === JSON.stringify(["fake/large", "fake/no-successor", "fake/printed", "fake/stale-entry", "fake/tiny-1b"]), `a listed id dated inside 14 days with no successor for its date is a finding, an entry dated in time that names no successor included (${open.join(", ")})`);
+  ok(due.find((d) => d.id === "fake/no-successor")?.successor === null, "an entry that names no successor reports none");
+  const covered = due.filter((d) => d.covered);
+  ok(covered.length === 1 && covered[0].id === "fake/covered" && covered[0].successor === "fake/tiny-3b" && covered[0].expires === "2030-03-05", "an id whose retirement entry takes over on its date is reported as covered, with the successor");
+  ok(!due.some((d) => ["fake/late", "fake/tiny-3b", "fam/member", "other/unlisted"].includes(d.id)), "an id at the horizon, an undated id, a family member and an unlisted id are not findings");
+  ok(advertisedExpiring({ models, advertised, retiring, now: NOW + 86_400_000 }).some((d) => d.id === "fake/late" && !d.covered), "the id at the horizon becomes a finding a day later");
+  ok(advertisedExpiring({ models, advertised, retiring: {}, now: NOW }).every((d) => !d.covered), "with no retirement table every dated listed id is open");
+}
+
 // Wiring.
 ok(/cron:\s*"53 \*\/6 \* \* \*"/.test(wf), "model-drift.yml runs every 6 hours");
 ok(!/^\s*push:/m.test(wf), "model-drift.yml never runs on a push");
@@ -147,6 +187,7 @@ ok(/node scripts\/test-gateway-model-ids\.js 2>&1 \| perl -pe "\$REDACT_RATES"/.
 ok(/FAILS=\$\(printf '%s\\n' "\$FAILS" \| perl -pe "\$REDACT_RATES"\)/.test(wf), "the issue text passes through REDACT_RATES again");
 ok(/UNDER its dearest live endpoint/.test(wf) && /ABOVE the dearest live endpoint/.test(wf), "the issue text names both directions");
 const guard = readFileSync(new URL("./test-gateway-model-ids.js", import.meta.url), "utf8");
+ok(/advertisedIds\(TIERS, modelsList\(\)\.data\.map/.test(guard) && /advertisedExpiring\(\{ models, advertised, retiring: RETIRING_MODELS, now: Date\.now\(\) \}\)/.test(guard) && /ok\(open\.length === 0, `no advertised model expires within 14 days/.test(guard), "the live guard fails on an advertised id dated inside the window through the shared rule");
 ok(/staleHighRows\(owned\)/.test(guard) && /describeStaleHigh/.test(guard), "the live guard grades the stale-high direction through the shared grader");
 ok(/longContextGaps\(table, overrides, admittedTokensFor\(/.test(guard) && /describeLongContext\(key, f\)/.test(guard) && /overridesOf\(e\?\.pricing\)/.test(guard) && /overridesOf\(m\.pricing\)/.test(guard), "the live guard grades long-context overrides (endpoints and headline) through the shared grader");
 

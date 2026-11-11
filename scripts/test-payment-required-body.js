@@ -44,6 +44,7 @@ import {
   PAYMENT_REQUIRED_OFFER_KEYS,
 } from "../src/payment-required-body.js";
 import { REJECTION_REASONS } from "../src/payment-reject.js";
+import { meteredClientTimeoutField, meteredTimeoutSentence } from "../src/metered-lead.js";
 import { Agent402 } from "../client/index.js";
 import { x402TestPage } from "../src/x402-test-page.js";
 
@@ -276,7 +277,7 @@ const decodeHeader = (res) => {
 // header would be one of OUR body fields written back into the challenge a
 // buyer pays from.
 const PROTOCOL_KEYS = new Set(["x402Version", "error", "resource", "accepts", "extensions"]);
-const BODY_ONLY_KEYS = ["altPayment", "replacement", "meteredTwin", "reason", "hint", "retry", "payerUsdcOnBase", "type", "title", "detail", "status"];
+const BODY_ONLY_KEYS = ["altPayment", "replacement", "meteredTwin", "clientTimeout", "reason", "hint", "retry", "payerUsdcOnBase", "type", "title", "detail", "status"];
 /** The header carries protocol keys only, none of ours. */
 const assertHeaderUntouched = (label, decoded) => {
   const extra = Object.keys(decoded).filter((k) => !PROTOCOL_KEYS.has(k));
@@ -405,17 +406,22 @@ try {
       const [b] = assertMirror(`B4b ${path}`, r, await r.text());
       ok(b.meteredTwin?.route === twin && b.meteredTwin?.url === `${BASE_URL}${twin.split(" ")[1]}`, `B4b ${path} names its metered twin ${twin} (${JSON.stringify(b.meteredTwin?.route)})`);
       ok(/settlement never exceeds that quote/.test(b.meteredTwin?.note || ""), `B4b ${path}: the twin note says settlement never exceeds the quote`);
+      ok(!("clientTimeout" in b), `B4b ${path}: a flat tier's first-contact 402 carries no clientTimeout (the wait is the metered routes')`);
     }
     for (const path of ["/v1/auto/chat/completions", "/v1/embeddings"]) {
       const r = await fetch(`${B}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(path.includes("embed") ? { input: "x" } : chat) });
       const b = JSON.parse(await r.text());
       ok(r.status === 402 && !("meteredTwin" in b), `B4b control: ${path} (not a flat chat tier) carries no meteredTwin (${r.status})`);
+      ok(!("clientTimeout" in b), `B4b control: ${path} (not a metered route) carries no clientTimeout`);
     }
     for (const path of ["/v1/metered/chat/completions", "/v1/metered/messages", "/v1/metered/responses"]) {
       const r = await fetch(`${B}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(path.endsWith("responses") ? { input: "hi", max_output_tokens: 16 } : { ...chat, model: "openai/gpt-4o-mini" }) });
       ok(r.status === 402, `B4b unpaid ${path} -> 402 (got ${r.status})`);
       const [b, decoded] = assertMirror(`B4b ${path}`, r, await r.text());
       ok(!("meteredTwin" in b), `B4b ${path} carries no meteredTwin`);
+      // The wait a metered caller's client needs, derived (src/metered-lead.js).
+      ok(isDeepStrictEqual(b.clientTimeout, meteredClientTimeoutField()) && b.clientTimeout.note === meteredTimeoutSentence() && b.clientTimeout.note.includes(`at least ${b.clientTimeout.seconds} s`), `B4b ${path} carries the derived clientTimeout (${JSON.stringify(b.clientTimeout)?.slice(0, 80)})`);
+      ok(!("clientTimeout" in decoded), `B4b ${path}: clientTimeout is in the body only`);
       const schemes = (decoded.accepts || []).filter((a) => a.network === "eip155:8453").map((a) => a.scheme);
       ok(schemes.includes("exact") && schemes.includes("upto"), `B4b ${path} offers exact and upto on Base (${schemes.join(",")})`);
     }
@@ -423,6 +429,12 @@ try {
     const r = await fetch(`${B}/v1/chat/completions`, { method: "POST", headers: { "content-type": "application/json", "payment-signature": b64({ x402Version: 2, accepted: { scheme: "lightning", network: "eip155:8453" }, payload: {} }) }, body: JSON.stringify({ ...chat, model: "openai/gpt-4o-mini" }) });
     const b = JSON.parse(await r.text());
     ok(r.status === 402 && !("meteredTwin" in b), `B4b a refused payment on a flat tier carries no meteredTwin (${r.status})`);
+    ok(!("clientTimeout" in b), "B4b a flat tier carries no clientTimeout of its own");
+    {
+      const rm = await fetch(`${B}/v1/metered/chat/completions`, { method: "POST", headers: { "content-type": "application/json", "payment-signature": b64({ x402Version: 2, accepted: { scheme: "lightning", network: "eip155:8453" }, payload: {} }) }, body: JSON.stringify({ ...chat, model: "openai/gpt-4o-mini" }) });
+      const bm = JSON.parse(await rm.text());
+      ok(rm.status === 402 && !("clientTimeout" in bm), `B4b a refused payment on a metered route keeps its own explanation, no clientTimeout (${rm.status})`);
+    }
     // An Authorization credential (an MPP/Tempo credential, a credits key)
     // refused on a flat tier keeps its own explanation too.
     for (const [label, authorization] of [["an MPP/Tempo credential", "Payment !!!not-base64url!!!"], ["a credits key", `Bearer a402_${"0".repeat(32)}`]]) {

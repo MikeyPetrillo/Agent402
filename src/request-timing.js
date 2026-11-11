@@ -48,11 +48,14 @@ export function currentRequestScope() { return als.getStore() || null; }
 
 /** Run `fn(status, scope)` once the current request's response has ended,
  *  with its FINAL status (after any settlement turned it into a 402), or 499
- *  when the connection closed before the response finished. False outside a
- *  request. A throw in `fn` is swallowed: bookkeeping never fails a response. */
+ *  when the connection closed before the response finished. Registered after
+ *  the response ended (a handler that outlived its buyer), it runs at once
+ *  with that status. False outside a request. A throw in `fn` is swallowed:
+ *  bookkeeping never fails a response. */
 export function onFinalResponse(fn) {
   const store = als.getStore();
   if (!store || typeof fn !== "function") return false;
+  if (store.finalStatus != null) { try { fn(store.finalStatus, store); } catch { /* bookkeeping only */ } return true; }
   (store.finalHooks ||= []).push(fn);
   return true;
 }
@@ -117,8 +120,9 @@ export function requestTimingMiddleware(keyOf, isPaid = () => false) {
       if (ended.length > ENDED_RING) ended.shift();
       recordTiming(key, performance.now() - t0, store.upstreamMs, reserved);
       noteResponse(res.headersSent ? res.statusCode : 499, paid, Date.now(), !!res.locals?.shed);
+      const status = res.writableFinished ? res.statusCode : 499;
+      store.finalStatus = status;
       if (store.finalHooks) {
-        const status = res.writableFinished ? res.statusCode : 499;
         for (const fn of store.finalHooks.splice(0)) { try { fn(status, store); } catch { /* bookkeeping only */ } }
       }
     };

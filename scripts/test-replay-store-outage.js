@@ -26,6 +26,7 @@
 // reached every chain's public RPC from a test boot): the suite reads every
 // server's log for a chain read and fails on one.
 // Offline: a stub facilitator; Redis only for the optional live control.
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createServer } from "node:http";

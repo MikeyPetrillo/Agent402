@@ -308,9 +308,8 @@ function namesOf(key) {
 const localKeyOf = (key) => (/^(?:s2|p2|t2):/.test(String(key)) ? namesOf(key).primary : key);
 const isLegacyEntry = (v) => v != null && !String(v).startsWith(LEGACY_TAG);
 
-// A settled payment's consumed mark is kept this long (the chain refuses its
-// nonce after that, so the mark need not outlive it). /privacy and the
-// dataHandling list on /.well-known/x402 quote it.
+// A settled payment's consumed mark is kept at least this long. /privacy and
+// the dataHandling list on /.well-known/x402 quote it.
 export const SETTLED_HOLD_MS = 60 * 60_000;
 /** The settled hold in words for those surfaces ("an hour", "2 hours", "30 minutes"). */
 export function settledHoldText() {
@@ -324,6 +323,21 @@ export const CONSUMED_VALIDITY_MARGIN_MS = 10 * 60_000;
 // A validBefore further out than this is read as this far out: an
 // authorization signed to stay valid for a century is held for a century.
 const MAX_VALIDITY_HOLD_MS = 100 * 365 * 24 * 3600_000;
+// A SETTLED payment's mark is also kept while its authorization stays valid
+// (plus the margin), when that is longer than SETTLED_HOLD_MS: the chain
+// refuses the spent nonce, but a reader that runs before the paywall
+// (src/gateway-cache-scope.js) takes a still-valid authorization the guard
+// does not hold as its payer's proof, so the mark must not lapse first. That
+// hold ends this long after the settle at the latest, so a settled call
+// keeps a key for a bounded time whatever validBefore its client signed (a
+// settled nonce cannot be charged again, so nothing is owed past it). /privacy
+// and the dataHandling list quote it.
+export const MAX_SETTLED_VALIDITY_HOLD_MS = 30 * 24 * 3600_000;
+/** The settled bound in words for those surfaces ("30 days"). */
+export function settledValidityHoldText() {
+  const days = MAX_SETTLED_VALIDITY_HOLD_MS / (24 * 3600_000);
+  return Number.isInteger(days) && days >= 1 ? (days === 1 ? "a day" : `${days} days`) : `${Math.round(MAX_SETTLED_VALIDITY_HOLD_MS / 3_600_000)} hours`;
+}
 
 /**
  * When the signed authorization on this request stops being settleable, in
@@ -341,11 +355,23 @@ export function paymentValidBeforeMs(req) {
   try {
     const p = decodePaymentHeader(cred);
     const raw = p?.payload?.authorization?.validBefore;
-    const sec = typeof raw === "string" && /^\d{1,20}$/.test(raw.trim()) ? Number(raw.trim()) : (Number.isSafeInteger(raw) ? raw : NaN);
+    // Digits as long as a uint256 (the gateway cache reader accepts the
+    // same): a spelling that reader takes never reads as no expiry here.
+    const sec = typeof raw === "string" && /^\d{1,78}$/.test(raw.trim()) ? Number(raw.trim()) : (Number.isSafeInteger(raw) ? raw : NaN);
     return Number.isFinite(sec) && sec > 0 ? Math.min(sec * 1000, Date.now() + MAX_VALIDITY_HOLD_MS) : null;
   } catch {
     return null;
   }
+}
+
+/**
+ * settle()'s options for a granted x402 request: its authorization's
+ * validBefore, and whether the grant was settled (a forgiven hang-up or a
+ * first-call allowance was not). Every grant is held while its authorization
+ * stays valid; a settled one no longer than MAX_SETTLED_VALIDITY_HOLD_MS.
+ */
+export function consumedHoldFor(req, { settled = true } = {}) {
+  return { validBeforeMs: paymentValidBeforeMs(req), settled: settled === true };
 }
 
 /**
@@ -376,7 +402,9 @@ export function paymentValidBeforeMs(req) {
  * it is later. The validBefore hold matters for a GRANTED request that was not
  * settled (a hang-up inside the forgiveness budget: the buyer was told it was
  * free): its nonce is still live on chain, so only this mark stops a re-send
- * from settling it. Total LOCAL consumed entries, and background writes, are
+ * from settling it. A SETTLED request passes it too, with `settled`: its mark
+ * is held to the same time, and no longer than MAX_SETTLED_VALIDITY_HOLD_MS
+ * from the settle (`settledMaxHoldMs`). Total LOCAL consumed entries, and background writes, are
  * each capped at `maxEntries` with FIFO eviction (Redis expires its own keys
  * via TTL, no separate cap needed). For a settled nonce eviction is safe (the
  * chain refuses it); for an unsettled granted one it is not, which is one
@@ -421,7 +449,7 @@ export function replayGuardStoreStatus({ full = false, now = Date.now() } = {}) 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export function createReplayGuard({
-  ttlMs = SETTLED_HOLD_MS, maxEntries = 50_000, inflightTtlSeconds = INFLIGHT_TTL_SECONDS, renewMs = INFLIGHT_RENEW_MS, maxHoldMs = MAX_HOLD_MS,
+  ttlMs = SETTLED_HOLD_MS, settledMaxHoldMs = MAX_SETTLED_VALIDITY_HOLD_MS, maxEntries = 50_000, inflightTtlSeconds = INFLIGHT_TTL_SECONDS, renewMs = INFLIGHT_RENEW_MS, maxHoldMs = MAX_HOLD_MS,
   // Waits between the tries of a consumed-mark write (the first try runs at once).
   consumedRetryDelaysMs = [50, 250],
   // How often a consumed mark the store missed is written again.
@@ -431,7 +459,12 @@ export function createReplayGuard({
   // own marks, kept whatever backend answered; with no store configured they
   // are the whole guarantee, and a Redis outage degrades to a per-replica
   // one, never to zero protection.
-  const consumed = new Map(); // key -> expiresAt (ms): settledAt + ttlMs, or later for a long-lived authorization
+  const consumed = new Map(); // key -> expiresAt (ms): settledAt + ttlMs
+  // key -> expiresAt (ms) for a mark held past ttlMs (a long-lived
+  // authorization). Kept apart: in one map such an entry sat at the head
+  // while the hour-long ones behind it expired unpruned, the map filled, and
+  // the FIFO eviction then dropped the long-held mark first.
+  const consumedLong = new Map();
   const inFlight = new Set();
   const ttlSeconds = Math.max(1, Math.ceil(ttlMs / 1000));
   // key -> this process's claim: { token, legacyTag, legacyHeld, shared }.
@@ -478,35 +511,48 @@ export function createReplayGuard({
   }
 
   // Prune expired local consumed entries from the head (insertion order).
-  // An entry held past its authorization's validBefore can sit at the head
-  // longer than the ones behind it, so pruning stops there and a lookup
-  // also checks the entry it reads (isConsumedLocal).
+  // The default-hold map expires in the order it was written. A long-held
+  // entry can sit at its map's head longer than the ones behind it, so
+  // pruning stops there and a lookup also checks the entry it reads
+  // (isConsumedLocal).
   function pruneLocal(now) {
-    for (const [k, until] of consumed) {
-      if (until <= now) consumed.delete(k);
-      else break;
+    for (const m of [consumed, consumedLong]) {
+      for (const [k, until] of m) {
+        if (until <= now) m.delete(k);
+        else break;
+      }
     }
   }
   function isConsumedLocal(key, now) {
-    const until = consumed.get(key);
-    if (until === undefined) return false;
-    if (until <= now) { consumed.delete(key); return false; }
-    return true;
-  }
-  function markConsumedLocal(lk, until) {
-    consumed.delete(lk);
-    while (consumed.size >= maxEntries) {
-      const oldest = consumed.keys().next().value;
-      if (oldest === undefined) break;
-      consumed.delete(oldest);
+    for (const m of [consumed, consumedLong]) {
+      const until = m.get(key);
+      if (until === undefined) continue;
+      if (until > now) return true;
+      m.delete(key);
     }
-    consumed.set(lk, until);
+    return false;
+  }
+  // Each map is capped at maxEntries, oldest first out.
+  function markConsumedLocal(lk, until, long) {
+    consumed.delete(lk);
+    consumedLong.delete(lk);
+    const m = long ? consumedLong : consumed;
+    while (m.size >= maxEntries) {
+      const oldest = m.keys().next().value;
+      if (oldest === undefined) break;
+      m.delete(oldest);
+    }
+    m.set(lk, until);
   }
   // How long a consumed mark is held: ttlMs, or until the authorization's
-  // validBefore plus a margin when that is later.
-  function holdMsOf(now, validBeforeMs) {
+  // validBefore plus a margin when that is later; for a settled payment
+  // that longer hold ends settledMaxHoldMs after the settle at the latest
+  // (never under ttlMs).
+  function holdMsOf(now, validBeforeMs, settled) {
     const v = Number(validBeforeMs);
-    return Number.isFinite(v) && v > 0 ? Math.max(ttlMs, v + CONSUMED_VALIDITY_MARGIN_MS - now) : ttlMs;
+    if (!(Number.isFinite(v) && v > 0)) return ttlMs;
+    const toExpiry = v + CONSUMED_VALIDITY_MARGIN_MS - now;
+    return Math.max(ttlMs, settled ? Math.min(toExpiry, settledMaxHoldMs) : toExpiry);
   }
 
   // Write the consumed mark (and its tagged legacy twin), trying again after
@@ -716,21 +762,24 @@ export function createReplayGuard({
     },
     /** Mark the nonce consumed: call only when the gated call was granted
      *  (200). `validBeforeMs` (paymentValidBeforeMs) holds the mark until the
-     *  authorization itself expires when that is later than ttlMs. Pass it
-     *  only for a grant that was NOT settled (a forgiven hang-up, a first-call
-     *  allowance): a settled authorization is spent on chain, and holding
-     *  every settled mark to a far validBefore keeps one long-lived key per
-     *  paid call. */
-    async settle(key, now = Date.now(), { validBeforeMs = null } = {}) {
+     *  authorization itself expires when that is later than ttlMs. Pass
+     *  `settled: true` with it for a grant that WAS settled: that
+     *  authorization is spent on chain, so its mark is held to its validBefore
+     *  only up to settledMaxHoldMs from now, and a far validBefore does not
+     *  keep one long-lived key per paid call. A grant that was not settled (a
+     *  forgiven hang-up, a first-call allowance) is still live on chain and is
+     *  held to its validBefore in full. */
+    async settle(key, now = Date.now(), { validBeforeMs = null, settled = false } = {}) {
       stopRenew(key);
       const claim = claims.get(key);
       claims.delete(key);
-      const until = now + holdMsOf(now, validBeforeMs);
+      const holdMs = holdMsOf(now, validBeforeMs, settled === true);
+      const until = now + holdMs;
       const lk = localKeyOf(key);
       inFlight.delete(lk);
       // Kept here whatever the store does, so this process never claims the
       // payment again while the mark is held.
-      markConsumedLocal(lk, until);
+      markConsumedLocal(lk, until, holdMs > ttlMs);
       let c = null;
       try { c = await getSharedRedisClient(); } catch { c = null; }
       // No store configured: the local mark is the guarantee.
@@ -766,7 +815,7 @@ export function createReplayGuard({
     /** Introspection for tests / stats: LOCAL state only; Redis state is
      *  shared and has no single-process notion of "size". */
     _state() {
-      return { consumed: consumed.size, inFlight: inFlight.size, renewing: renewers.size, pendingConsumed: pending.size };
+      return { consumed: consumed.size + consumedLong.size, inFlight: inFlight.size, renewing: renewers.size, pendingConsumed: pending.size };
     },
   };
 }

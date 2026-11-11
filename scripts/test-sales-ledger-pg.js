@@ -6,6 +6,7 @@
 // wallets in the table, and a fresh process reads the table, not the file.
 //
 //   STATE_DATABASE_URL=postgres://... node scripts/test-sales-ledger-pg.js
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync, rmSync, existsSync, utimesSync } from "node:fs";
 import { childJson } from "./lib/child-json.js";
 import { tmpdir } from "node:os";

@@ -33,8 +33,9 @@ const tick = () => new Promise((r) => setImmediate(r));
   ok(!/\bpaymentMiddleware\(/.test(src), "payments.js: no call to the vendor's paymentMiddleware() (its eager init would own the exit)");
   ok(/paymentMiddlewareFromHTTPServer\(httpServer, undefined, undefined, false\)/.test(src),
     "payments.js: paymentMiddlewareFromHTTPServer(..., false) - the vendor never starts an init of its own");
-  ok(/withGuardedInit\(vendorMw, createGuardedInit\(httpServer\), httpServer\)/.test(src),
-    "payments.js: the guarded init wraps the vendor middleware");
+  // The init is named because the rail re-read asks it whether the first init has latched.
+  ok(/const init = createGuardedInit\(httpServer\);/.test(src) && /return withGuardedInit\(vendorMw, init, httpServer\);/.test(src) && !/initialize\(\)\s*;/.test(src.slice(src.indexOf("const restoreRail = "), src.indexOf("return withGuardedInit(vendorMw, init, httpServer);"))),
+    "payments.js: the guarded init wraps the vendor middleware, and a rail restore never calls initialize() again");
   ok(/if \(!syncOnStart\) return vendorMw;/.test(src), "payments.js: X402_SYNC_ON_START=false still skips the handshake entirely");
 }
 

@@ -700,10 +700,10 @@ export function publicRevenueBody(snap, ledger = {}) {
 /**
  * The two revenue JSON handlers. `snapshot()` resolves the rails snapshot,
  * `ledger()` the ledger totals, `authed(req)` the operator check. The public
- * one never carries a balance; the operator one answers 404 to anyone else,
- * like every other /__operator surface.
+ * one never carries a balance; the operator one answers anyone else with
+ * `refuse(req, res)`, the 404 every other /__operator surface answers.
  */
-export function revenueApiHandlers({ snapshot, ledger, authed }) {
+export function revenueApiHandlers({ snapshot, ledger, authed, refuse = (_req, res) => res.status(404).json({ ok: false, error: "not-found" }) }) {
   const fail = (res, e) => res.status(500).json({ error: "revenue snapshot failed", detail: String(e?.message || e).slice(0, 120) });
   return {
     publicHandler: async (_req, res) => {
@@ -713,7 +713,7 @@ export function revenueApiHandlers({ snapshot, ledger, authed }) {
       } catch (e) { fail(res, e); }
     },
     operatorHandler: async (req, res) => {
-      if (!authed(req)) return res.status(404).json({ error: "Not found" });
+      if (!authed(req)) return refuse(req, res);
       res.set("Cache-Control", "no-store");
       try {
         res.json(operatorRevenueBody(await snapshot(), await ledger()));

@@ -34,7 +34,10 @@
 //   leading zero), still valid, with a bounded life (a validity window no
 //   longer than the guard keeps a settled payment's consumed mark, or an
 //   expiry no further out than the stock x402 v2 client sets one: that
-//   client signs every payment valid from the epoch),
+//   client signs every payment valid from the epoch; the guard keeps a
+//   settled payment's mark until its authorization expires, up to a bound
+//   from its settle, and one whose named start is older than that bound
+//   reads no scope),
 //   whose signature recovers to its own `from`
 //   under the token domain its accept names, and whose replay key the replay
 //   guard holds neither in flight nor consumed (a settled authorization is
@@ -48,7 +51,7 @@ import { recoverTypedDataAddress } from "viem";
 import { decodeB64Json } from "./payment-reject.js";
 import { identityPayerOf, paymentHeaderOf } from "./payer.js";
 import { allowanceServed } from "./allowance-state.js";
-import { SETTLED_HOLD_MS, CONSUMED_VALIDITY_MARGIN_MS } from "./replay-guard.js";
+import { SETTLED_HOLD_MS, CONSUMED_VALIDITY_MARGIN_MS, MAX_SETTLED_VALIDITY_HOLD_MS } from "./replay-guard.js";
 
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
 const HEX32 = /^0x[0-9a-fA-F]{64}$/;
@@ -73,12 +76,20 @@ const MAX_READ_WINDOW_SEC = BigInt(Math.floor((SETTLED_HOLD_MS - CONSUMED_VALIDI
 // now (the exact-scheme accepts ask DEFAULT_MAX_TIMEOUT_SECONDS,
 // src/evm-validity.js: the same figure, held equal by
 // scripts/test-gateway-cache-scope.js; the batched accept asks a longer one),
-// plus a clock allowance. An authorization that expires within the guard's
-// hold of its settle, as one from a client that follows an exact accept does,
-// has expired before its consumed mark lapses.
+// plus a clock allowance. The guard keeps a settled authorization's consumed
+// mark until the authorization expires (plus a margin), for as long as
+// MAX_SETTLED_VALIDITY_HOLD_MS after its settle (src/replay-guard.js), so one
+// that expires within that bound of its settle is held for every second it
+// could be read here.
 export const STOCK_MAX_TIMEOUT_SEC = 300;
 export const STOCK_EXPIRY_SLACK_SEC = 60;
 const MAX_READ_REMAINING_SEC = BigInt(STOCK_MAX_TIMEOUT_SEC + STOCK_EXPIRY_SLACK_SEC);
+// An authorization that names its own start (validAfter past the epoch) and
+// has been valid for longer than the guard keeps a settled mark may have
+// settled and been let go: it reads no scope. One signed valid from the
+// epoch names no start, so this cannot be read from it; the guard holds it
+// to its expiry when that falls within the bound of its settle.
+const MAX_READ_AGE_SEC = BigInt(Math.floor((MAX_SETTLED_VALIDITY_HOLD_MS - CONSUMED_VALIDITY_MARGIN_MS) / 1000));
 
 const TRANSFER_WITH_AUTHORIZATION_TYPES = {
   TransferWithAuthorization: [
@@ -209,6 +220,7 @@ export async function provenX402Signer(headerValue, { payTo, nowSec = Math.floor
       const after = BigInt(validAfter), before = BigInt(validBefore), t = BigInt(nowSec);
       if (before <= t || after > t) return null;
       if (before - after > MAX_READ_WINDOW_SEC && before - t > MAX_READ_REMAINING_SEC) return null;
+      if (before - after > MAX_READ_WINDOW_SEC && after > 0n && t - after > MAX_READ_AGE_SEC) return null;
     }
     const signer = await recoverMemo(
       { name, version, chainId: Number(m[1]), verifyingContract: accepted.asset },

@@ -4,6 +4,7 @@
 // cas are atomic under concurrent callers, the grants gate holds, and a
 // second process sees every write. Requires STATE_DATABASE_URL (CI fails
 // without it; locally it skips).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, rmSync, utimesSync } from "node:fs";

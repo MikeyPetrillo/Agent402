@@ -8,6 +8,7 @@
 // same way in the upsert and in the pull, so both containers and the table
 // converge on one copy whichever wrote first.
 //   STATE_DATABASE_URL=postgres://... node scripts/test-index-equal-rev-pg.js
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

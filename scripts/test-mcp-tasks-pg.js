@@ -5,6 +5,7 @@
 // orphan while that container's lease stands and becomes one when it goes,
 // and a settled 200 whose result cannot be retained still records a refund
 // debt. Requires STATE_DATABASE_URL (CI fails without it).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync, writeFileSync, rmSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";

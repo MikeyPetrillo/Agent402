@@ -1,6 +1,7 @@
 // scripts/test-spend-words-shared-redis.js
-// The exaSpend and xDataSpend status words survive a new process, over a REAL
-// Redis (src/tools/exa-kit.js, src/tools/x-data-kit.js, src/daily-ceilings.js).
+// The exaSpend, xDataSpend and routerSpendWindow status words survive a new
+// process, over a REAL Redis (src/tools/exa-kit.js, src/tools/x-data-kit.js,
+// src/daily-ceilings.js, src/router-spend-window.js).
 //
 // Each kit keeps the day's spend in its own process and in a shared day
 // counter; the refusal at the hard ceiling reads the shared one. A process
@@ -24,6 +25,7 @@
 //
 // Under CI a missing REDIS_URL fails the test: a skipped integration test is
 // not coverage. Locally it prints how to point one at the test and exits 0.
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
@@ -41,7 +43,14 @@ if (process.env.SPEND_WORDS_CHILD) {
   const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
   requireUpstreamCosts("test-spend-words-shared-redis");
   let kit;
-  if (job.kit === "exa") {
+  if (job.kit === "router") {
+    // The router's per-minute holds (src/router-spend-window.js): a call is
+    // one hold through the buyer's own reserveSpend.
+    const b = await import("../src/x402-buyer.js");
+    const w = await import("../src/router-spend-window.js");
+    const E = 1000;
+    kit = { E, alarm: "SOR_SPEND_CAP_ATOMIC", hard: "SOR_SPEND_HARD_CAP_ATOMIC", call: async () => { await b.reserveSpend(String(E)); }, book: () => {}, refresh: () => w.refreshSpendWindowShared(), status: () => w.spendWindowStatus() };
+  } else if (job.kit === "exa") {
     const m = await import("../src/tools/exa-kit.js");
     const E = m.estimateExaUsd("/search", { numResults: 10 });
     const search = m.EXA_TOOLS.find((t) => t.slug === "exa-search").handler;
@@ -63,6 +72,7 @@ if (process.env.SPEND_WORDS_CHILD) {
       else if (verb === "book") { kit.book(Number(arg) * kit.E); out.push("booked"); }
       else if (verb === "refresh") { const t = performance.now(); await kit.refresh(); out.push(Math.round(performance.now() - t)); }
       else if (verb === "status") { const s = kit.status(); out.push(s.status); }
+      else if (verb === "minute") out.push(Math.floor(Date.now() / 60_000)); // the shared counter's fixed minute
       else if (verb === "sleep") { await new Promise((r) => setTimeout(r, Number(arg))); out.push("slept"); }
     } catch (e) { out.push(`threw:${String(e?.message || e).slice(0, 80)}`); }
   }
@@ -195,6 +205,65 @@ for (const kit of ["exa", "x"]) {
   ok(e2.code === 0 && Number.isFinite(waited), `${kit}: and the status read resolved against that store (after ${waited} ms; its bound is ${STATUS_READ_MS} ms, the container's deadline 30 s)`);
 }
 
+// ---- routerSpendWindow: the router's per-minute holds -------------------------
+// The same two words, held an hour as flags in the shared store, since a
+// minute's counter is gone long before a pager reads. A hold here is an
+// integer of atomic units, so nothing needs the cost table.
+{
+  const base = { kit: "router", alarm: 2, hard: 4.5 };
+  const run = (steps, opts = {}) => container({ ...base, steps }, { prefix, ...opts });
+  const control = await run(["refresh", "status"]);
+  ok(control.out?.[1] === "ok", `router: before any hold a new process reads ok (${show(control)})`);
+  const a = await run(["call", "call", "call", "status", "refresh", "status"]);
+  ok(a.out?.slice(0, 3).every((x) => x === 200) && a.out?.[3] === "over" && a.out?.[5] === "over", `router: process A's holds past the alarm ceiling are all taken and it reads over (${show(a)})`);
+  const b = await run(["status", "refresh", "status"]);
+  ok(b.out?.[0] === "ok" && b.out?.[2] === "over", `router: a new process reads ok on its own and over from the shared mark (${show(b)})`);
+  // Five holds in one process: the fifth passes the stop wherever the clock's
+  // minute falls (an earlier one does when A's holds share the minute).
+  const c = await run(["call", "call", "call", "call", "call", "status", "refresh", "status"]);
+  ok(c.out?.[0] === 200 && c.out?.[4] === 429, `router: process C is refused 429 at the stop (${show(c)})`);
+  ok(c.out?.[5] === "capped" && c.out?.[7] === "capped", `router: the refusing process reads capped (${show(c)})`);
+  const d = await run(["refresh", "status"]);
+  ok(d.out?.[1] === "capped", `router: a new process reads capped while another process's refusal is inside its hold (${show(d)})`);
+  const other = await container({ ...base, steps: ["refresh", "status"] }, { prefix: `${prefix}-other` });
+  ok(other.out?.[1] === "ok", `router: a process on another prefix still reads ok (${show(other)})`);
+  // Holds that pass the alarm, then the stop, only when summed across
+  // processes. Above, every process also crosses each line on its own (A's
+  // three holds pass the alarm of 2, C's fifth passes the stop of 4.5), so
+  // those words would read the same with no shared counter. Here no process
+  // holds more than 2 (the alarm, not past it): only the shared minute's
+  // total can mark over and refuse. The four processes must book in one
+  // clock minute; a run that straddles a minute is run again on a new prefix.
+  let sum = null;
+  for (let attempt = 0; attempt < 4 && !sum; attempt++) {
+    const p = `${prefix}-sum${attempt}`;
+    const one = (steps) => container({ ...base, steps }, { prefix: p });
+    const p1 = await one(["minute", "call", "call", "status", "minute"]);
+    const p2 = await one(["minute", "call", "status", "refresh", "status", "minute"]);
+    const p3 = await one(["minute", "call", "status", "refresh", "minute"]);
+    const p4 = await one(["minute", "call", "status", "refresh", "status", "minute"]);
+    const minutes = [p1, p2, p3, p4].flatMap((r) => (r.out ? [r.out[0], r.out[r.out.length - 1]] : [NaN]));
+    if (minutes.every((m) => m === minutes[0])) sum = { p1, p2, p3, p4, p };
+  }
+  ok(sum, "router: four processes booked inside one clock minute (four attempts)");
+  if (sum) {
+    const { p1, p2, p3, p4 } = sum;
+    ok(p1.out?.[1] === 200 && p1.out?.[2] === 200 && p1.out?.[3] === "ok", `router: control, two holds in one process stay at the alarm and read ok (${show(p1)})`);
+    ok(p2.out?.[1] === 200 && p2.out?.[2] === "over", `router: a process holding one reads over once the shared minute passes the alarm (${show(p2)})`);
+    ok(p2.out?.[4] === "over", `router: and the over mark is shared (${show(p2)})`);
+    ok(p3.out?.[1] === 200 && p3.out?.[2] === "over", `router: a hold that keeps the shared minute under the stop is served (${show(p3)})`);
+    ok(p4.out?.[1] === 429, `router: a process holding one is refused 429 once the shared minute would pass the stop (${show(p4)})`);
+    ok(p4.out?.[2] === "capped" && p4.out?.[4] === "capped", `router: and that process reads capped (${show(p4)})`);
+    const p5 = await container({ ...base, steps: ["refresh", "status"] }, { prefix: sum.p });
+    ok(p5.out?.[1] === "capped", `router: a new process reads the shared refusal as capped (${show(p5)})`);
+  }
+  const closed = createServer();
+  const closedPort = await new Promise((r) => closed.listen(0, "127.0.0.1", () => r(closed.address().port)));
+  await new Promise((r) => closed.close(r));
+  const e1 = await run(["refresh", "status", "call", "call", "call", "refresh", "status"], { redisUrl: `redis://127.0.0.1:${closedPort}` });
+  ok(e1.code === 0 && e1.out?.[1] === "ok" && e1.out?.slice(2, 5).every((x) => x === 200) && e1.out?.[6] === "over", `router: with the store refusing connections every hold is taken and the word is this process's own (${show(e1)})`);
+}
+
 // ---- the caller path: /api/gateway-status on a server that made no call ------
 // A booted server on the same counters (its own process, its own empty day)
 // answers the two words the pagers read. The refusals above are inside their
@@ -210,13 +279,15 @@ if (ran === 2) {
       const t = performance.now();
       const r = await fetch(`${srv.url}/api/gateway-status`, { signal: AbortSignal.timeout(20_000) });
       const j = await r.json();
-      return { status: r.status, exa: j.exaSpend, x: j.xDataSpend, ms: Math.round(performance.now() - t) };
+      return { status: r.status, exa: j.exaSpend, x: j.xDataSpend, router: j.routerSpendWindow, ms: Math.round(performance.now() - t) };
     } finally { await srv.stop(); }
   };
   const live = await words("spend-words", prefix);
   ok(live.status === 200 && live.exa?.status === "capped" && live.x?.status === "capped", `a new server that made no call answers capped for both words on /api/gateway-status (exaSpend ${live.exa?.status}, xDataSpend ${live.x?.status})`);
   ok([live.exa, live.x].every((w) => w && Object.keys(w).sort().join() === "day,status" && Object.values(w).every((v) => typeof v === "string")), "and the public answer carries the day and the word only, no figure");
+  ok(live.router?.status === "capped" && Object.keys(live.router).join() === "status", `and capped for routerSpendWindow, the word alone (${JSON.stringify(live.router)})`);
   const quiet = await words("spend-words-control", `${prefix}-quiet`);
+  ok(quiet.router?.status === "ok", `control: routerSpendWindow reads ok there (${quiet.router?.status})`);
   ok(quiet.exa?.status === "ok" && quiet.x?.status === "ok", `control: the same server on counters nobody spent reads ok (exaSpend ${quiet.exa?.status}, xDataSpend ${quiet.x?.status})`);
 }
 

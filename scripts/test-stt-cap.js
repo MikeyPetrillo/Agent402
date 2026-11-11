@@ -6,7 +6,13 @@
 // gpt-4o-mini-transcribe, which OpenAI retires 2027-02-26, onto gpt-transcribe,
 // and its cap dropped 5 -> 4 minutes to stay inside the margin rule). Offline: synthetic WAV buffers, no network.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { probeDurationSeconds, assertWithinDurationCap, STT_TIERS, upstreamUsdPerMinute, STT_MARGIN, STT_TOOLS } from "../src/tools/stt-kit.js";
+import { probeDurationSeconds, assertWithinDurationCap, STT_TIERS, upstreamUsdPerMinute, STT_MARGIN, STT_TOOLS, byteFloorSeconds, __setMeasureForTest, sttUnmeasuredSinceBoot } from "../src/tools/stt-kit.js";
+import { measureAudioSeconds, __setExecFileForTest } from "../src/tools/media-kit.js";
+import * as sttKit from "../src/tools/stt-kit.js";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
 requireUpstreamCosts("test-stt-cap");
 
@@ -76,6 +82,172 @@ await assertWithinDurationCap(junk, "audio.mp3", "transcribe").then(
   () => ok(false, "unreadable duration must be rejected (unbounded upstream bill otherwise)"),
   (e) => ok(e.statusCode === 422 && /duration/i.test(e.message), "unreadable container -> self-explaining 422")
 );
+
+// ---- the cap holds the audio a file plays, not the length it declares ----
+// An MP3 of `seconds` at 128 kbps (MPEG-1 Layer III, 44.1 kHz: 417-byte
+// frames of silence). `declaredFrames` writes a Xing header into the first
+// frame that claims that many frames (and their bytes), whatever the file holds.
+function makeMp3(seconds, declaredFrames = null) {
+  const FRAME = 417, PER_SEC = 44100 / 1152;
+  const n = Math.round(seconds * PER_SEC);
+  const buf = Buffer.alloc(n * FRAME);
+  for (let i = 0; i < n; i++) buf.writeUInt32BE(0xfffb9000, i * FRAME);
+  if (declaredFrames !== null) { buf.write("Xing", 36, "latin1"); buf.writeUInt32BE(3, 40); buf.writeUInt32BE(declaredFrames, 44); buf.writeUInt32BE(declaredFrames * FRAME, 48); }
+  return buf;
+}
+const reject = (p) => p.then(() => null, (e) => e);
+{
+  const honest = makeMp3(180);
+  const lying = makeMp3(330, 100);          // plays 5.5 minutes, declares about 2.6 seconds
+  const declared = await probeDurationSeconds(lying, "audio.mp3");
+  ok(declared !== null && declared < 10, `the lying MP3's header declares a few seconds (${declared}s)`);
+
+  // The measurement is the longer of the two readings.
+  let calls = 0;
+  __setMeasureForTest(async () => { calls++; return 330; });
+  let e = await reject(assertWithinDurationCap(lying, "audio.mp3", "transcribe"));
+  ok(e?.statusCode === 422 && /5\.5 minutes/.test(e.message) && /up to 4 minutes/.test(e.message), `a file that plays 5.5 minutes and declares seconds is refused by the 4-minute cap on what it plays (${e?.message ?? "passed"})`);
+  ok(Math.abs((await assertWithinDurationCap(lying, "audio.mp3", "transcribe-pro")) - 330) < 0.01, "the same file passes the 10-minute tier, and the duration returned is the measured one (the margin math reads it)");
+  __setMeasureForTest(async () => 1200);
+  e = await reject(assertWithinDurationCap(lying, "audio.mp3", "transcribe-pro"));
+  ok(e?.statusCode === 422 && /10 minutes/.test(e.message), "a file that plays 20 minutes is refused by the 10-minute tier whatever its header declares");
+  __setMeasureForTest(async () => 5);
+  ok(Math.abs((await assertWithinDurationCap(short, "audio.wav", "transcribe")) - 10) < 0.5, "a measurement shorter than the declared length never shortens it");
+  calls = 0;
+  __setMeasureForTest(async () => { calls++; return 1; });
+  await reject(assertWithinDurationCap(long, "audio.wav", "transcribe-pro"));
+  ok(calls === 0, "a file its own header puts over the cap is refused without a decode");
+
+  // Unmeasured (no ffmpeg here, a failed decode): nothing inside the cap is refused.
+  for (const [label, impl] of [["null", async () => null], ["a throw", async () => { throw new Error("spawn failed"); }], ["zero", async () => 0], ["NaN", async () => NaN]]) {
+    __setMeasureForTest(impl);
+    const before = sttUnmeasuredSinceBoot();
+    ok(Math.abs((await assertWithinDurationCap(short, "audio.wav", "transcribe")) - 10) < 0.5 && (await assertWithinDurationCap(honest, "audio.mp3", "transcribe")) > 170, `an unmeasured file inside the cap still passes on its declared length (measure gave ${label})`);
+    ok(sttUnmeasuredSinceBoot() === before + 2, "and each unmeasured file is counted");
+  }
+  // Unmeasured and lossy: held to the shortest its bytes can play.
+  __setMeasureForTest(async () => null);
+  const heavy = makeMp3(1300, 100);         // about 20.8 MB declaring seconds
+  e = await reject(assertWithinDurationCap(heavy, "audio.mp3", "transcribe"));
+  ok(e?.statusCode === 422 && /up to 4 minutes/.test(e.message), `unmeasured, a lossy file too large to play under the cap is refused (${e?.message ?? "passed"})`);
+  ok(Math.abs(byteFloorSeconds(640_000 / 8 * 100 + 256 * 1024) - 100) < 1e-9 && byteFloorSeconds(1000) === 0 && byteFloorSeconds(10_000_000, 9_900_000) === 0, "the byte floor is bytes over the highest lossy bitrate, less embedded pictures and an allowance");
+  // A lossless file is never held to the lossy floor: 96 kHz 24-bit stereo
+  // PCM plays one minute in 34 MB, far above any lossy bitrate.
+  const hi = (() => { const sr = 96000, bps = 3, ch = 2, secs = 30, dataLen = sr * bps * ch * secs; const b = Buffer.alloc(44 + dataLen); b.write("RIFF", 0); b.writeUInt32LE(36 + dataLen, 4); b.write("WAVE", 8); b.write("fmt ", 12); b.writeUInt32LE(16, 16); b.writeUInt16LE(1, 20); b.writeUInt16LE(ch, 22); b.writeUInt32LE(sr, 24); b.writeUInt32LE(sr * bps * ch, 28); b.writeUInt16LE(bps * ch, 32); b.writeUInt16LE(24, 34); b.write("data", 36); b.writeUInt32LE(dataLen, 40); return b; })();
+  ok(Math.abs((await assertWithinDurationCap(hi, "audio.wav", "transcribe")) - 30) < 0.5, `unmeasured, a 30-second lossless file of ${(hi.length / 1e6).toFixed(0)} MB passes (the floor is for lossy audio only)`);
+  // The floor is for audio-only lossy files in one or two channels: a video
+  // track's bytes are not audio, and more channels can carry more bits a
+  // second than the floor's rate. Either one keeps the declared length.
+  const applies = sttKit.byteFloorApplies;
+  ok(typeof applies === "function", "the kit says which containers the byte floor bounds");
+  if (typeof applies === "function") {
+    ok(applies({ lossy: true, hasVideo: false, channels: 2, sampleRate: 48000 }) && applies({ lossy: true, hasVideo: false, channels: 1, sampleRate: 44100 }), "an audio-only lossy file in one or two channels at up to 48 kHz is held to the floor");
+    ok(!applies({ lossy: true, hasVideo: true, channels: 2, sampleRate: 44100 }), "a file with a video track is not held to the floor (its video bytes are not audio)");
+    ok(!applies({ lossy: true, hasVideo: undefined, channels: 2, sampleRate: 44100 }), "a container that does not say whether it holds video is not held to the floor");
+    ok(!applies({ lossy: true, hasVideo: false, channels: 6, sampleRate: 44100 }) && !applies({ lossy: true, hasVideo: false, channels: null, sampleRate: 44100 }), "a lossy file of more channels, or of an unread channel count, is not held to the floor");
+    ok(!applies({ lossy: false, hasVideo: false, channels: 2, sampleRate: 44100 }) && !applies(null), "a lossless file is not held to the floor");
+    ok(!applies({ lossy: true, hasVideo: false, channels: 2, sampleRate: 192000 }) && !applies({ lossy: true, hasVideo: false, channels: 2, sampleRate: 96000 }), "a lossy file above 48 kHz is not held to the floor (192 kHz Vorbis carries more bits a second than the floor's rate)");
+    ok(!applies({ lossy: true, hasVideo: false, channels: 2, sampleRate: null }) && !applies({ lossy: true, hasVideo: false, channels: 2 }), "a lossy file without a reported sample rate is not held to the floor");
+  }
+  __setMeasureForTest(null);
+
+  // The decode's own bounds and readings, on a stubbed ffmpeg (no process, no
+  // clock): each run has a time and an output-size bound, at most two run at
+  // once and a third waits for a slot, and only a decode that succeeded and
+  // reported how far it got is a measurement.
+  {
+    // Each call decodes a file of its own length, so the stub knows which
+    // call a run belongs to whatever order the temp-file writes finish in.
+    const held = [];
+    __setExecFileForTest((bin, args, opts, cb) => {
+      let bytes = -1;
+      try { bytes = readFileSync(args[args.indexOf("-i") + 1]).length; } catch { /* asserted below */ }
+      held.push({ bin, args, opts, cb, bytes });
+    });
+    try {
+      const mp3s = [makeMp3(5), makeMp3(6), makeMp3(7)];
+      const calls = mp3s.map((b) => measureAudioSeconds(b));
+      // Waits for an outcome, up to a deadline (a slow machine waits longer, never fails sooner).
+      const until = async (cond, ms = 30_000) => { const end = Date.now() + ms; while (!cond() && Date.now() < end) await new Promise((r) => setTimeout(r, 5)); return cond(); };
+      ok(await until(() => held.length === 2), `two decodes start at once (${held.length})`);
+      // A third would have started by now had it not waited (its file is written like the others').
+      await until(() => held.length > 2, 500);
+      ok(held.length === 2, `a third waits for a slot while two run (${held.length} started)`);
+      const o = held[0].opts || {};
+      ok(held[0].bin === "ffmpeg" && o.timeout === 10_000, `each decode has a 10 s time bound (${o.timeout})`);
+      ok(Number.isFinite(o.maxBuffer) && o.maxBuffer > 0 && o.maxBuffer <= 8 * 1024 * 1024, `each decode's output is bounded (${o.maxBuffer} bytes)`);
+      ok(held[0].args.includes("0:a:0") && held[0].args.includes("-vn"), "the decode reads the first audio stream only");
+      // Answer the two running decodes: one finished, one failed after printing progress.
+      const [ran, failed] = held.slice(0, 2);
+      const idx = (h) => mp3s.findIndex((b) => b.length === h.bytes);
+      ran.cb(null, "out_time_us=1000000\nprogress=continue\nout_time_us=5000000\nprogress=end\n");
+      failed.cb(Object.assign(new Error("exit 1"), { code: 1 }), "out_time_us=4000000\n");
+      ok((await calls[idx(ran)]) === 5, "a decode that finished reports its last out_time in seconds");
+      ok((await calls[idx(failed)]) === null, "a decode that failed is no measurement, whatever it printed before failing");
+      ok(await until(() => held.length === 3), "the waiting decode starts when a slot frees");
+      const last = held[2];
+      last.cb(null, "progress=end\n");
+      ok((await calls[idx(last)]) === null, "a decode that never reported how far it got is no measurement (null, never a guess)");
+      ok(new Set(held.map(idx)).size === 3 && held.every((h) => idx(h) >= 0), "each call ran its own decode once");
+    } finally { __setExecFileForTest(null); }
+  }
+
+  // The real decode. Under CI a missing ffmpeg fails the suite: the lane installs it.
+  let ffmpeg = true;
+  try { execFileSync("ffmpeg", ["-version"], { stdio: "ignore" }); } catch { ffmpeg = false; }
+  if (!ffmpeg) {
+    if (process.env.CI) ok(false, "ffmpeg is not installed on this CI runner: the decode measurement cannot be tested (install it in the lane)");
+    else console.log("SKIP: ffmpeg not installed here; the decode measurement ran on stubs only");
+  } else {
+    const m = await measureAudioSeconds(lying);
+    ok(Number.isFinite(m) && Math.abs(m - 330) < 3, `the decode measures what the lying MP3 plays (${m}s of 330)`);
+    e = await reject(assertWithinDurationCap(lying, "audio.mp3", "transcribe"));
+    ok(e?.statusCode === 422 && /up to 4 minutes/.test(e.message), `end to end: the lying MP3 is refused by the 4-minute cap (${e?.message ?? "passed"})`);
+    ok((await assertWithinDurationCap(lying, "audio.mp3", "transcribe-pro")) > 320, "end to end: and passes the 10-minute tier at its measured length");
+    // No new refusal inside the cap: honest files of each kind, up to the cap's edge.
+    ok(Math.abs((await assertWithinDurationCap(short, "audio.wav", "transcribe")) - 10) < 0.5, "end to end: a 10-second WAV passes");
+    ok((await assertWithinDurationCap(makeWav(4 * 60), "audio.wav", "transcribe")) > 239, "end to end: a WAV exactly at the 4-minute cap passes");
+    ok((await assertWithinDurationCap(makeMp3(239), "audio.mp3", "transcribe")) > 238, "end to end: an honest MP3 just under the cap passes");
+    ok((await assertWithinDurationCap(makeMp3(599), "audio.mp3", "transcribe-pro")) > 598, "end to end: an honest MP3 just under the 10-minute cap passes the pro tier");
+    ok((await measureAudioSeconds(junk)) === null, "bytes that are no container measure to null, never a throw");
+
+    // A clip with a video track: 10 seconds whose video bytes alone would be
+    // minutes of audio at the floor's rate. Inside the cap it passes measured
+    // and unmeasured alike (a busy decode pool, a slow decode).
+    const dir = mkdtempSync(join(tmpdir(), "a402-stt-cap-"));
+    try {
+      const clip = join(dir, "clip.mp4");
+      execFileSync("ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "nullsrc=s=320x240:r=25,geq=random(1)*255:128:128", "-f", "lavfi", "-i", "sine=f=440", "-t", "10", "-c:v", "mpeg4", "-q:v", "1", "-c:a", "aac", "-b:a", "96k", "-shortest", clip], { stdio: "ignore" });
+      const video = readFileSync(clip);
+      ok(byteFloorSeconds(video.length) > 4 * 60 + 2, `the clip's bytes would read as ${Math.round(byteFloorSeconds(video.length))} s of lossy audio (${(video.length / 1e6).toFixed(1)} MB)`);
+      const m = await measureAudioSeconds(video);
+      ok(Number.isFinite(m) && Math.abs(m - 10) < 1, `the decode measures the clip's audio, not its video (${m}s of 10)`);
+      const measured = await reject(assertWithinDurationCap(video, "clip.mp4", "transcribe"));
+      ok(measured === null, `end to end: a 10-second clip with a video track passes measured (${measured?.message ?? "passed"})`);
+      ok(Math.abs((await assertWithinDurationCap(video, "clip.mp4", "transcribe")) - 10) < 1, "and the duration returned is its 10 seconds");
+      __setMeasureForTest(async () => null);
+      const unmeasuredClip = await reject(assertWithinDurationCap(video, "clip.mp4", "transcribe"));
+      ok(unmeasuredClip === null, `unmeasured, a 10-second clip with a video track passes on its declared length (${unmeasuredClip?.message ?? "passed"})`);
+      ok(Math.abs((await assertWithinDurationCap(video, "clip.mp4", "transcribe")) - 10) < 1, "and the duration returned is its declared 10 seconds");
+      __setMeasureForTest(null);
+
+      // 150 seconds of 192 kHz stereo Vorbis: about 24 MB, more bits a second
+      // than the floor's rate. Inside the cap it passes unmeasured too.
+      const hiRate = join(dir, "hi.ogg");
+      execFileSync("ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "anoisesrc=r=192000:a=0.9:d=150", "-ac", "2", "-c:a", "vorbis", "-strict", "-2", "-q:a", "10", hiRate], { stdio: "ignore" });
+      const vorbis = readFileSync(hiRate);
+      ok(byteFloorSeconds(vorbis.length) > 4 * 60 + 2, `the Vorbis file's bytes would read as ${Math.round(byteFloorSeconds(vorbis.length))} s at the floor's rate (${(vorbis.length / 1e6).toFixed(1)} MB)`);
+      __setMeasureForTest(async () => null);
+      const unmeasuredVorbis = await reject(assertWithinDurationCap(vorbis, "audio.ogg", "transcribe"));
+      ok(unmeasuredVorbis === null, `unmeasured, 150 seconds of 192 kHz stereo Vorbis passes the 4-minute cap on its declared length (${unmeasuredVorbis?.message ?? "passed"})`);
+      ok(Math.abs((await assertWithinDurationCap(vorbis, "audio.ogg", "transcribe")) - 150) < 1, "and the duration returned is its declared 150 seconds");
+      __setMeasureForTest(null);
+    } finally {
+      __setMeasureForTest(null);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

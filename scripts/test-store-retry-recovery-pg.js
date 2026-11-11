@@ -6,6 +6,7 @@
 // to it faster than the backoff allows, apart from the state database's own
 // recovery check.
 // Requires STATE_DATABASE_URL (CI fails without it).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { requireTestPg } from "./lib/test-pg.js";
 import { startPgRelay } from "./lib/pg-relay.js";
 const { url } = requireTestPg({ label: "test-store-retry-recovery-pg" });

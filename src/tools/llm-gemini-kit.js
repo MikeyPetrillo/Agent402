@@ -30,7 +30,7 @@
 // (the chat wire owns reasoning defaults). A field we silently dropped would
 // be a buyer believing they set something they did not.
 import {
-  TIERS, canonicalModel, bad, meteredQuoteForProbe, validateRequest, LLM_GATEWAY_TOOLS,
+  TIERS, canonicalModel, substitutedFrom, bad, meteredQuoteForProbe, validateRequest, LLM_GATEWAY_TOOLS,
   isFlatTier, flatTierQuoteUsd, meteredInputSizeRefusal,
 } from "./llm-gateway-kit.js";
 
@@ -347,6 +347,16 @@ export function makeGeminiHandler(tierSlug) {
     // The chat handler lowered the reasoning effort to get an answer inside
     // the cap (its one recovery try): carry that disclosure too.
     if (data?.agent402_reasoning_adjusted) out.agent402_reasoning_adjusted = data.agent402_reasoning_adjusted;
+    // An availability successor served: the chat handler names the swap, and
+    // this wire carries it. A retired id is resolved to its named successor
+    // here (modelOf), before the chat handler reads the body, so this wire
+    // names that swap itself, in the chat wire's words and on the same tiers.
+    if (data?.agent402_model_substituted) out.agent402_model_substituted = data.agent402_model_substituted;
+    else {
+      const raw = typeof input?.model === "string" ? input.model.replace(/^models\//, "") : null;
+      const retired = raw && !TIERS[tierSlug].lockedModel && !TIERS[tierSlug].router ? substitutedFrom(raw) : null;
+      if (retired) out.agent402_model_substituted = { requested: retired, served: model, reason: "the requested model is retired upstream; its named successor served instead" };
+    }
     return out;
   };
 }

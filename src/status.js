@@ -105,7 +105,7 @@ export const COMPONENTS = [
   {
     key: "paid-call",
     label: "Paid call path",
-    blurb: "A real end-to-end call through the proof-of-work path: challenge, solve, unlock, payload. The GitHub heartbeat walks the challenge a buyer without a wallet is issued; the Cloudflare probe walks a low-difficulty probe challenge every 5 minutes. A failure either one records stands until that same observer sees the path work again. A miss here means our probe could not complete a call, never that a customer was charged.",
+    blurb: "A real end-to-end call through the proof-of-work path: challenge, solve, unlock, payload. The scheduled heartbeat walks the challenge a buyer without a wallet is issued; the outside probe walks a low-difficulty probe challenge every 5 minutes. A failure either one records stands until that same observer sees the path work again. A miss here means our probe could not complete a call, never that a customer was charged.",
     staleAfterMs: HOURLY_OBSERVER,
     // Judged per source, not newest-row-wins (see HOURLY_OBSERVER above).
     perSource: true,
@@ -229,8 +229,8 @@ export function statusSnapshot({ baseUrl = "", nowMs = Date.now(), historyDays =
     generatedAt: new Date(nowMs).toISOString(),
     overall: overallState(components, railComponents),
     measurement: {
-      observer: "Two independent observers outside production: a Cloudflare cron probe and the GitHub Actions heartbeat",
-      cadence: "every 5 minutes (Cloudflare), plus the GitHub heartbeat",
+      observer: "Two independent observers outside production: an outside probe and a scheduled heartbeat",
+      cadence: "every 5 minutes (outside probe), plus the scheduled heartbeat",
       verify: HEARTBEAT_RUNS,
       measuringSince: firstObs ? new Date(firstObs).toISOString() : null,
       totalObservations: store.totalObservations(),
@@ -295,7 +295,9 @@ function bars(daily) {
 // A component read from two observers lists each one's own reading and its
 // age, so an observer that has gone quiet is shown as not current beside the
 // one the component's word comes from, never folded into it.
-const OBSERVER_LABEL = { [PAID_CALL_SOURCES.heartbeat]: "GitHub heartbeat", [PAID_CALL_SOURCES.worker]: "Cloudflare probe" };
+// First-party names for what each observer does, the same names the method
+// notes and /api/status measurement use (no vendor is named on either).
+export const OBSERVER_LABEL = Object.freeze({ [PAID_CALL_SOURCES.heartbeat]: "Scheduled heartbeat", [PAID_CALL_SOURCES.worker]: "Outside probe" });
 const ageStr = (ms) => {
   const s = Math.max(0, Number(ms) || 0) / 1000;
   if (s < 60) return `${s | 0}s ago`;
@@ -309,6 +311,15 @@ export function observerLines(c) {
   const line = (s) => `${OBSERVER_LABEL[s.source]}: ${s.state === "unknown" ? `not current, last observed ${ageStr(s.ageMs)}` : `${WORD[s.state].toLowerCase()}, observed ${ageStr(s.ageMs)}`}`;
   return `<p class="comp-b">${esc(sources.map(line).join(". "))}.</p>`;
 }
+/** A component whose newest reading has aged past its bound says so, with the
+ *  reading's age, beside its "Not measured" word (a component with an observer
+ *  line already says it there). */
+export function staleLine(c) {
+  const cur = c.current || {};
+  if (cur.state !== "unknown" || cur.reason !== "no recent observation" || !Number.isFinite(cur.ageMs)) return "";
+  if (observerLines(c)) return "";
+  return `<p class="comp-b">${esc(`The last observation is stale: recorded ${ageStr(cur.ageMs)}.`)}</p>`;
+}
 
 function componentRow(c) {
   const w = c.windows[`${STRIP_DAYS}d`];
@@ -319,7 +330,7 @@ function componentRow(c) {
     <span class="comp-s ${DOT[c.current.state]}">${esc(WORD[c.current.state])}</span>
   </div>
   <p class="comp-b">${esc(c.blurb)}</p>
-  ${observerLines(c)}
+  ${observerLines(c)}${staleLine(c)}
   ${
     c.observed > 0
       ? `<div class="bars">${bars(c.daily)}</div>
@@ -562,7 +573,7 @@ ${liveSection(snap.live, stats)}
 <h2 id="method">How this is measured</h2>
 <div class="method">
 <ul>
-<li><b>The observers sit outside the service.</b> A Cloudflare cron probe checks production every 5 minutes and a GitHub Actions heartbeat checks it again; each records what it saw, and this page only stores and renders those observations.</li>
+<li><b>The observers sit outside the service.</b> An outside probe checks production every 5 minutes and a scheduled heartbeat checks it again; each records what it saw, and this page only stores and renders those observations.</li>
 <li><b>An outage appears as a gap.</b> When production is down the probe cannot report in either, so the record shows missing observations rather than a tidy row of failures. Gaps are never counted as uptime or as downtime: each percentage is taken over the probes that reported.</li>
 <li><b>Percentages carry their denominator.</b> 100% of three probes is a weaker claim than 100% of three thousand, and the page shows which one you are reading.</li>
 <li><b>Stale means unknown, not healthy.</b> A component whose most recent observation has aged out is reported as not measured. The paid call path has two observers; each one's reading and age is listed on its card, and one that has gone quiet is shown as not current.</li>

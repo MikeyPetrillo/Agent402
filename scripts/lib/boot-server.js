@@ -31,16 +31,18 @@ const LISTENING = /listening on :(\d+)/;
  * @param {string[]} [o.args]                  extra node arguments (before the entry)
  * @param {string} [o.readyPath]               polled until it answers 200 (null: the listening line is enough)
  * @param {number} [o.timeoutMs]               give up after this long
+ * @param {boolean} [o.ipc]                    open an IPC channel to the child (child.send / child.on("message")),
+ *                                            for a preload that reports from inside the server process
  * @returns {Promise<{ child, port: number, url: string, log: () => string, exited: () => object|null, stop: () => Promise<void> }>}
  *          rejects with the log tail when the child exits or never becomes ready
  */
-export async function bootServer({ env = {}, stores = "boot", entry = "src/server.js", args = [], readyPath = "/health", timeoutMs = 120_000 } = {}) {
+export async function bootServer({ env = {}, stores = "boot", entry = "src/server.js", args = [], readyPath = "/health", timeoutMs = 120_000, ipc = false } = {}) {
   let log = "";
   let exited = null;
   const child = spawn(process.execPath, [...args, entry], {
     cwd: ROOT,
     env: { ...process.env, ...(stores ? ownStoreEnv(stores) : {}), ...env, PORT: "0" },
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ipc ? ["ignore", "pipe", "pipe", "ipc"] : ["ignore", "pipe", "pipe"],
   });
   child.stdout.on("data", (d) => { log += d; });
   child.stderr.on("data", (d) => { log += d; });

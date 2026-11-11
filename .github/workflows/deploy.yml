@@ -104,6 +104,11 @@ jobs:
   markers:
     runs-on: ubuntu-24.04
     timeout-minutes: 2
+    # actions: read lets the parse step list this workflow's earlier runs and
+    # their jobs (scripts/marker-base.js); nothing here writes.
+    permissions:
+      contents: read
+      actions: read
     outputs:
       test: ${{ steps.parse.outputs.test }}
       deploy: ${{ steps.parse.outputs.deploy }}
@@ -151,6 +156,8 @@ jobs:
           BEFORE: ${{ github.event.before }}
           AFTER: ${{ github.event.after }}
           EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+          MARKER_WORKFLOW_FILE: deploy.yml
         run: |
           set -euo pipefail
           MARKERS="test deploy publish probe drain paytest purl bazaar-refresh bazaar-register bazaar-solana"
@@ -168,6 +175,23 @@ jobs:
             TITLES=$(git log -1 --format='%s' "$AFTER")
           else
             TITLES=$(git log --format='%s' "$BEFORE..$AFTER" 2>/dev/null || git log -1 --format='%s' "$AFTER")
+          fi
+          # On main a pending run can be replaced by a newer push before it
+          # starts (one pending run per concurrency group), and the pushed range
+          # above holds only this push's commits. Read on from the head of the
+          # last run whose markers job finished (scripts/marker-base.js), so a
+          # replaced push's markers are read here, by exactly one run. No such
+          # run, an unreadable API or a commit that is not an ancestor of this
+          # push leaves the pushed range as it is.
+          if [ "${GITHUB_REF:-}" = "refs/heads/main" ]; then
+            LAST=$(node scripts/marker-base.js || true)
+            if printf '%s' "$LAST" | grep -qE '^[0-9a-f]{40}$' && git cat-file -e "$LAST^{commit}" 2>/dev/null && git merge-base --is-ancestor "$LAST" "$AFTER" 2>/dev/null; then
+              echo "Reading subjects since the last run that read its markers: $LAST"
+              SINCE=$(git log --format='%s' "$LAST..$AFTER")
+              TITLES=$(printf '%s\n%s\n' "$TITLES" "$SINCE" | awk 'NF && !seen[$0]++')
+            else
+              echo "No earlier run to read from; the pushed range stands."
+            fi
           fi
           echo "Subject lines scanned for markers:"
           printf '%s\n' "$TITLES" | sed 's/^/  /'
@@ -1183,6 +1207,8 @@ jobs:
           t node scripts/test-mcp-prompts.js
           # MCP outer transport limits (R-11 — per-IP cap + concurrency ceiling bound floods before server/transport allocation — spawns child)
           t node scripts/test-mcp-limits.js
+          # Hosted connector bounds: a free answer past the size ceiling is cut to valid JSON with answerBound fields, catalog.search holds its row maximum for any limit, a refusing limiter names its wait (offline, bare express + mountMcp)
+          t node scripts/test-mcp-answer-bound.js
 
       - name: Code-run-kit tests (E2B sandbox — validation always runs; live calls opt-in via E2B_LIVE_TEST=1)
         run: node scripts/test-code-run-kit.js
@@ -1207,6 +1233,8 @@ jobs:
           t node scripts/test-no-third-party-names.js
           # No hidden character (TAG text, zero-width, bidi, variation-selector carrier, soft hyphen) in an instruction file: CLAUDE.md, .claude, wiki, docs, READMEs, the MCP instructions module
           t node scripts/test-hidden-chars.js
+          # A payment log line in src/ prints a wallet by its first characters only (shortPayer), outside a reasoned allowlist (offline)
+          t node scripts/test-log-payer-short.js
           # US spelling in public copy: README, wiki, docs, package READMEs, legal and guide pages, tool descriptions (offline)
           t node scripts/test-us-spelling.js
           # No filesystem path built from a URL pathname (percent-encoded: a checkout path with a space breaks) and no hand-made file:// entry check, in every source tree (offline)
@@ -1349,6 +1377,8 @@ jobs:
           t node scripts/test-security-headers.js
           # Document headers: pages always, JSON API paths never, an HTML answer under /api again (offline, in-process)
           t node scripts/test-security-headers-unit.js
+          # Security header set per surface class: page, API 200, 402, 404, operator 404, /mcp, static documents, redirects, parser-refused requests (boots paid-mode on port 0)
+          t node scripts/test-security-header-surfaces.js
           t node scripts/test-algorand-page-deadline.js
           # crawl kit (offline)
           t node scripts/test-crawl-kit.js
@@ -1400,7 +1430,7 @@ jobs:
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
           t node scripts/test-shared-limits.js
           t node scripts/test-shared-limits-crossprocess.js
-          # exaSpend and xDataSpend in a new process: over from the shared day, capped while another process refuses, this process's own word inside a bounded wait when the store does not answer.
+          # exaSpend, xDataSpend and routerSpendWindow in a new process: over from the shared day, capped while another process refuses, this process's own word inside a bounded wait when the store does not answer.
           t node scripts/test-spend-words-shared-redis.js
           # A close made while a connect is still in flight ends that connect too.
           t node scripts/test-shared-redis-close.js
@@ -1426,7 +1456,7 @@ jobs:
           t node scripts/test-alarm-flag-shared-redis.js
           # Two servers on one live Redis run one payment sent to both at once exactly once (the outage cases also run offline).
           t node scripts/test-replay-store-outage.js
-          # The consumed mark's hold read back from Redis: a settled 200 keeps the guard's hour, a forgiven unsettled hang-up is held to the authorization's validBefore.
+          # The consumed mark's hold read back from Redis: a settled 200 is held while its authorization stays valid (the default hour for a stock expiry, the settled bound at most), a forgiven unsettled hang-up to the authorization's validBefore.
           t node scripts/test-replay-consumed-hold.js
 
       - name: "State database (REAL postgres: documents/records/log lines/leases; every migrated store imports its file once and reads the row; loops skip under another holder's lease; idempotency answers and claims shared over REAL redis)"
@@ -1508,6 +1538,10 @@ jobs:
           t node scripts/test-sale-lookup-crosscontainer-pg.js
           # Two containers attesting one sale write one attestation.
           t node scripts/test-attest-crosscontainer-pg.js
+          # A lookup made while its sale's write is queued waits for the write.
+          t node scripts/test-attest-queued-sale-pg.js
+          # Buy, then attest the receipt's transaction at once, on a paid boot.
+          t node scripts/test-attest-after-buy-pg.js
           # The gateway response cache is shared across replicas (needs this lane's Redis).
           t node scripts/test-prompt-cache-shared.js
           t node scripts/test-ledger-dead-letter-pg.js
@@ -2323,6 +2357,12 @@ jobs:
         # of every free-tier tool and skill against a long-input corpus.
         run: node scripts/test-redos-free-tier.js
 
+      - name: No request header holds the event loop on adversarial strings
+        # Boots its own paid-mode server on port 0 and sends the long-input
+        # corpus in each request header to the unpaid surfaces, timing the
+        # event loop from inside the server.
+        run: node scripts/test-redos-request-headers.js
+
       # ONE STEP, MANY SCRIPTS (2026-08-25): GitHub spends ~0.7 s of runner setup
       # per step and this lane had over a hundred one-line steps. Each script still
       # runs in its own process, in the same order; `t` groups its log and names it
@@ -2516,6 +2556,8 @@ jobs:
           t node scripts/test-seo-meta.js
           # Operator auth (A402-07 no ?token= query; session cookie + header; hardened cookie flags — spawns child)
           t node scripts/test-operator-auth.js
+          # Every route the booted router registers under /__operator refuses a caller without the token; the operator view of a public surface reads X-Operator-Token only (boots a real server, offline)
+          t node scripts/test-operator-routes-refuse.js
           # Probe-only credential: STATUS_PROBE_TOKEN opens POST /api/status/probe and NOTHING else, the operator token still works there, and the narrow gate is wired to one route (boots a real server, offline)
           t node scripts/test-status-probe-token.js
           # The status Worker's paid-call challenge: STATUS_PROBE_TOKEN gets a low-difficulty challenge on the probe slug only, its call is booked internal, the mark cannot be forged or reused, and the token buys nothing else (boots two real servers, offline)
@@ -3019,6 +3061,8 @@ jobs:
           # CI lane gating (every test lane blocks deploy/publish; Chromium only where a script needs it — offline)
           t node scripts/test-ci-gating.js
           t node scripts/test-port-hygiene.js
+          # Every suite that reaches src/ takes a stats store of its own with its first import (scripts/lib/own-stats.js), so no two suites share one stats file (static, plus the pin run in a child; offline)
+          t node scripts/test-stats-store-hygiene.js
           # scripts/lib/boot-server.js: PORT=0 boots read the bound port back, two at once get two ports, a crash rejects with its log (boots the server; offline)
           t node scripts/test-boot-server.js
           # Stubbed fetches route by the parsed host (scripts/lib/url-host.js), never a URL substring; older files frozen with counts (static; offline)
@@ -3398,7 +3442,7 @@ jobs:
           t node scripts/test-invariants.js
           # CDP kit unit tests (JWT signing both key formats, validation, faucet gate — offline)
           t node scripts/test-cdp-kit.js
-          # onchain-sql query-count histogram: counted on the final response, stored as counts only (offline)
+          # onchain-sql query-count histogram: queries per call by how the response ended, stored as counts only, 35 days kept (offline)
           t node scripts/test-sql-query-stats.js
           # CDP facilitator config built on the kit's JWT minter (header groups, claims, wire path; offline)
           t node scripts/test-cdp-facilitator.js
@@ -3593,6 +3637,8 @@ jobs:
           t node scripts/test-x-search-stats.js
           # x-data daily ceilings: served past the alarm ceiling, refused at the hard one, 0 refuses all, both observers page (offline)
           t node scripts/test-x-data-ceilings.js
+          # Router per-minute spend ceilings: a purchase past the alarm ceiling is made and the word reads over, the stop refuses 429 before signing, the word clears after its hold, 0 refuses all, no figure publicly (offline)
+          t node scripts/test-router-spend-window.js
           # Exa kit (env-gated on EXA_API_KEY; offline, stubbed fetch, nothing spent)
           t node scripts/test-exa-kit.js
           # Exa daily ceilings: served past the alarm ceiling, refused at the hard one, 0 refuses all, allowance word untouched, both observers page (offline)
@@ -5018,10 +5064,18 @@ jobs:
           # A rejected payment is answered in the buyer's terms (balance vs stale authorization) on the 402 (offline)
           t node scripts/test-verify-hint.js
           t node scripts/test-verify-hint-live.js
+          # A refused payment resent before its 402's write completes is refused again, never held as a replay; a 200 keeps its claim until "finish" marks it consumed (paid boot, stub facilitator, "finish" held back by a test preload)
+          t node scripts/test-replay-release-at-end.js
           # A Solana wallet with no USDC account or too little USDC is told to fund it (retry fund-wallet, Retry-After), and a re-signing loop is held without a verify until the Retry-After passes (paid boot, stub facilitator)
           t node scripts/test-svm-funding-refusal.js
+          # A verify refused for lack of funds names its class, the amount and the asset on every rail, and its log line carries the slug and a short payer (offline)
+          t node scripts/test-verify-refusal-reason.js
           # Settle-failure breaker on EVERY wallet-only tool (paid boot, stub facilitator verifies then refuses to settle)
           t node scripts/test-paid-settle-breaker.js
+          # onchain-sql queries per call on a booted server: charged, uncharged and free by the final response, operator route token-only (paid boot + FREE_MODE boot, stub facilitator, stubbed query service)
+          t node scripts/test-onchain-sql-queries-route.js
+          # Refund debts for sales named by settle tx: dry by default, ledger row decides payer and price, skips named, idempotent, operator only (FREE_MODE boot, seeded ledger)
+          t node scripts/test-refund-backfill-sales.js
           # Algorand leaves sub-cent 402s while the facilitator's sponsored sub-cent allowance is spent; a quota refusal is never the buyer's (paid boot, stub facilitators + stub sponsorship status)
           t node scripts/test-avm-subcent-offer.js
           # Every route's 402 payTo equals the payee /.well-known/x402 declares for it (payToByRoute for the router tiers); spending-wallet addresses set and unset (two paid boots, stub facilitator)
@@ -5337,6 +5391,8 @@ jobs:
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
           # Boot /supported guard (a dead facilitator costs ONE rail, not every paid route — the 2026-08-01 Celo outage; probe-driven drop, fail-open on total blindness, escape hatch — offline)
           t node scripts/test-supported-guard.js
+          # A rail dropped at boot on a failed or slow /supported read is read again on a backoff and rejoins the 402 and every derived surface without a restart; one the facilitator does not list never does (paid boots, stub facilitators)
+          t node scripts/test-rail-restore.js
           # Verify falls over to another facilitator when the first is UNREACHABLE, and never when it answers (offline, stub facilitators)
           t node scripts/test-verify-failover.js
           # The Bazaar keep-alive is actually scheduled, fails loudly without a key, and pages (CDP removes a resource after 30 days without a settlement)

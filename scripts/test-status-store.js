@@ -296,9 +296,63 @@ const NOW = Date.UTC(2026, 6, 25, 12, 0, 0); // 2026-07-25T12:00:00Z
   check("a quiet heartbeat beside a current Worker: the source is listed unknown with its age and bound",
     pc2.state === "operational" && pc2.source === CF && hb.state === "unknown" && hb.ageMs === 6.4 * H && hb.staleAfterMs === 3 * H && cf.state === "operational" && cf.staleAfterMs === 45 * MIN);
   const lines = observerLines(of(snap, "paid-call"));
-  check("the card names the quiet observer as not current with its age", /GitHub heartbeat: not current, last observed 6h ago\. Cloudflare probe: operational, observed 4m ago\./.test(lines) || /Cloudflare probe: operational, observed 4m ago\. GitHub heartbeat: not current, last observed 6h ago\./.test(lines));
+  check("the card names the quiet observer as not current with its age", /Scheduled heartbeat: not current, last observed 6h ago\. Outside probe: operational, observed 4m ago\./.test(lines) || /Outside probe: operational, observed 4m ago\. Scheduled heartbeat: not current, last observed 6h ago\./.test(lines));
   const html = statusPage("https://example.test", {}, snap);
-  check("the page renders that line on the paid call card", html.includes("GitHub heartbeat: not current, last observed 6h ago"));
+  check("the page renders that line on the paid call card", html.includes("Scheduled heartbeat: not current, last observed 6h ago"));
+  // The observer labels say what each observer does, in our own words.
+  {
+    const { OBSERVER_LABEL, staleLine } = await import("../src/status.js");
+    const labels = Object.values(OBSERVER_LABEL);
+    check("every paid-call observer has a label", Object.values(PAID_CALL_SOURCES).every((k) => typeof OBSERVER_LABEL[k] === "string" && OBSERVER_LABEL[k].length > 3));
+    check(`the observer labels name no vendor (${labels.join(", ")})`, labels.every((l) => !/github|cloudflare|actions|worker|railway/i.test(l)));
+    // Each card: its label, word, blurb and observer lines (the text up to its bars).
+    const cards = [...snap.components, ...snap.railComponents].map((c) => { const at = html.indexOf(`<span class="comp-n">${c.label}</span>`); return at < 0 ? "" : html.slice(at, html.indexOf('<div class="bars">', at) > at ? html.indexOf('<div class="bars">', at) : at + 1500); });
+    check("every component card is found on the page", cards.length >= COMPONENTS.length && cards.every((t) => t.length > 40));
+    check("no component card names a vendor", !/github|cloudflare/i.test(cards.join("\n")));
+    // The whole page's visible text and every prose value of /api/status name
+    // no vendor. The names are carried as hashes (the approach of
+    // scripts/test-no-third-party-names.js): the upstream vendor list plus the
+    // two services the observers run on. A link (a URL value) and an
+    // identifier (a source id such as the Worker's, one token with no space)
+    // are contract values, not copy.
+    {
+      const { h, loadVendorData } = await import("./lib/vendor-names.js");
+      const { pageText } = await import("./lib/html-text.js");
+      const OBSERVER_HOSTS = ["738e22f0acab814cc0c6", "c0b0109d9439de57fe3c"];
+      const vendors = new Set([...loadVendorData().vendors, ...OBSERVER_HOSTS]);
+      const named = (text) => [...new Set((String(text).toLowerCase().match(/[a-z0-9][a-z0-9-]{2,}/g) || []).flatMap((w) => [w, ...w.split("-")]))].filter((w) => vendors.has(h(w)));
+      check("control: a hashed observer vendor is caught in prose", named("probed by a " + "cloud" + "flare cron").length === 1 && named("an outside probe").length === 0);
+      const prose = [];
+      const walk = (v) => {
+        if (typeof v === "string") { if (!/^https?:\/\//.test(v) && /\s/.test(v)) prose.push(v); }
+        else if (Array.isArray(v)) v.forEach(walk);
+        else if (v && typeof v === "object") Object.values(v).forEach(walk);
+      };
+      walk(snap);
+      const pageHits = named(pageText(html)), apiHits = named(prose.join("\n"));
+      check(`/status names no vendor in its text (${pageHits.length} hit(s))`, pageText(html).length > 2000 && pageHits.length === 0);
+      check(`/api/status names no vendor in its prose (${prose.length} strings, ${apiHits.length} hit(s))`, prose.length > 10 && apiHits.length === 0 && /outside probe/.test(snap.measurement.observer) && /outside probe/.test(snap.measurement.cadence));
+    }
+    // A component whose only reading is stale reads Not measured AND says the reading is stale, with its age.
+    const staleSnap = view(storeAt((key) => (key === "api" ? 5 * H : fresh(key)), { [HB]: 4 * MIN, [CF]: 4 * MIN }));
+    const api = of(staleSnap, "api");
+    check("a stale reading is never shown as operational", api.current.state === "unknown" && api.current.reason === "no recent observation" && api.current.ageMs === 5 * H);
+    check("the card says the observation is stale, with its age", staleLine(api) === '<p class="comp-b">The last observation is stale: recorded 5h ago.</p>');
+    const staleHtml = statusPage("https://example.test", {}, staleSnap);
+    const apiCard = staleHtml.slice(staleHtml.indexOf(">Tool serving<"), staleHtml.indexOf(">Catalog<"));
+    check("the page renders Not measured and the stale line on that card, never Operational", /Not measured/.test(apiCard) && /The last observation is stale: recorded 5h ago\./.test(apiCard) && !/Operational/.test(apiCard));
+    check("control: a current component carries no stale line", staleLine(of(snap, "api")) === "" && staleLine(of(staleSnap, "paid-call")) === "");
+    check("a never-observed component carries no stale line", staleLine({ current: { state: "unknown", reason: "never observed" } }) === "");
+    check("an unknown reading for any other reason carries no stale line, whatever its age", staleLine({ current: { state: "unknown", reason: "never observed", ageMs: 5 * H } }) === "" && staleLine({ current: { state: "unknown", reason: "probe failed to report", ageMs: 5 * H } }) === "");
+    check("control: the same age with the stale reason does carry it", staleLine({ current: { state: "unknown", reason: "no recent observation", ageMs: 5 * H } }) !== "");
+    {
+      // Both observers gone quiet: the card's observer lines already give each
+      // one's age, so no second stale line is added.
+      const quiet = { current: { state: "unknown", reason: "no recent observation", ageMs: 6 * H, sources: [{ source: PAID_CALL_SOURCES.heartbeat, state: "unknown", ageMs: 6 * H }, { source: PAID_CALL_SOURCES.worker, state: "unknown", ageMs: 7 * H }] } };
+      check("control: a card with two quiet observers has observer lines", /not current, last observed 6h ago/.test(observerLines(quiet)));
+      check("a card with observer lines carries no stale line of its own", staleLine(quiet) === "");
+    }
+  }
   check("a component with one observer gets no observer line", observerLines(of(snap, "api")) === "");
   check("/api/status states the two-observer rule", /two observers \(paid-call\) is read from the observers whose readings are current/.test(snap.measurement.note));
 }

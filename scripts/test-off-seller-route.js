@@ -13,6 +13,11 @@
 //   2. Named cases read the value they should.
 //   3. A seller's ordinary rows parse one URL for the seller and none per
 //      row, and a row's statics carry the same offSeller either way.
+//   4. Seller keys that are not the text a parser makes of them (scheme and
+//      host case, written default and odd ports, hosts a parser rewrites,
+//      credentials, trailing dots, paths with dot segments and encoded
+//      slashes), every combination, read the reference answer for plain and
+//      hostile routes, and the plain routes of such a key parse nothing.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { joinSellerRoute } from "../src/x402-live-quote.js";
 
@@ -134,12 +139,91 @@ for (let i = 0; i < 6000; i++) {
     const n = parses;
     ok(n <= 1 && sts.every((st) => st.offSeller === false), `${N} ordinary rows of ${seller.includes("/app") ? "a path seller" : "a seller"} parse one URL for the seller key and none per row (${n} parses)`);
   }
+  // A key that is not the text a parser makes of it is read once too: the
+  // host's case (every row stays) and a written default port (the host as
+  // parsed is not the host as written, so every row leaves).
+  for (const [seller, want, what] of [["HTTPS://Off-Seller-Rows.EXAMPLE/app/tenant-a", false, "an uppercase host"], ["https://off-seller-rows.example:443", true, "a written default port"], ["https://Off-Seller-Rows.example:8443/App//v1/", false, "an odd port, mixed case and a doubled slash"]]) {
+    const rows = Array.from({ length: N }, (_, i) => row(seller, i));
+    const sts = await counted(() => rows.map((t) => x._computeToolStaticsForTest(t)));
+    const n = parses;
+    const agree = rows.every((t) => reference(t.seller, t.route) === want);
+    ok(n <= 2 && agree && sts.every((st) => st.offSeller === want), `${N} ordinary rows under a key with ${what} parse the key and nothing per row, and read the parsed answer, ${want ? "off" : "under"} the seller (${n} parses)`);
+  }
   // CONTROL: the counter sees a parse, and a row that needs one gets it and its answer.
-  const odd = [row("https://off-seller-rows.example/app/tenant-a", 1, "/../other/x"), row("https://off-seller-rows.example", 2, "@victim.example/x"), row("HTTPS://Off-Seller-Rows.example", 3, "/x")];
+  const odd = [row("https://off-seller-rows.example/app/tenant-a", 1, "/../other/x"), row("https://off-seller-rows.example", 2, "@victim.example/x"), row("https://off-seller-rows.example/a/../b", 3, "/x")];
   const sts = await counted(() => odd.map((t) => x._computeToolStaticsForTest(t)));
-  ok(parses >= 3 && sts[0].offSeller === true && sts[1].offSeller === true && sts[2].offSeller === reference(odd[2].seller, odd[2].route), `CONTROL: a row a parser could read differently is parsed and reads the parsed answer (${parses} parses over ${odd.length} rows)`);
+  ok(parses >= 6 && sts[0].offSeller === true && sts[1].offSeller === true && sts[2].offSeller === reference(odd[2].seller, odd[2].route), `CONTROL: a row a parser could read differently is parsed and reads the parsed answer (${parses} parses over ${odd.length} rows)`);
   const local = await counted(() => x._computeToolStaticsForTest({ ...row("self", 4), route: "@victim.example/x" }));
   ok(local.offSeller === false && parses === 0, "this host's own rows are never read as off their seller, and parse nothing");
+}
+
+// --- 4. Seller keys a parser rewrites, every combination of the parts.
+{
+  const SCHEMES = ["https://", "HTTPS://", "Https://", "http://", "hTTp://"];
+  const HOSTS = ["a.com", "A.COM", "A.com", "a.Com.", "a.com.", "sub.A.com", "b\u00fccher.example", "B\u00dcCHER.example", "xn--bcher-kva.example", "XN--BCHER-KVA.example", "\u0130stanbul.example", "ex%41mple.com", "a%2ecom", "127.0.0.1", "0x7f.1", "2130706433", "[::1]", "[0:0:0:0:0:0:0:1]", "[::FFFF:1.2.3.4]",
+    "user@a.com", "user:pw@a.com", "@a.com", ":@a.com", "a.com@evil.com", "A.com:pw@Evil.com", "a_b.com", "-a.com", "a..com", "a.com-", "\uff41.com", "a\u3002com", "a.com%00", "a,b.com", "a b.com", "a|b.com", "a^b.com", "{a}.com", "a..", "."];
+  const PORTS = ["", ":443", ":80", ":0443", ":080", ":8443", ":08443", ":", ":0", ":65535", ":65536", ":99999", ":4a", ":-1", ":443:443"];
+  const PATHS = ["", "/", "//", "/app", "/App/V1", "/app/", "/app//", "/a//b", "/a/../b", "/a/./b", "/a/.", "/a/..", "/..", "/.", "/...", "/..a", "/a..", "/.a/b", "/%2e%2e", "/%2E", "/a%2eb", "/.%2e/x", "/%41pp", "/%2f", "/a%2Fb", "/a%2f..%2fb", "/%5c", "/%", "/%zz", "/\u00e9", "/p@q", "/p:q", "/a.b", "/a;b=c", "/a{b}", "/a|b", "/a^b", "/a`b", "/a\"b", "/a<b>", "/a'b", "/~a", "/a!$&()*+,=", "/a[b]", "/@evil.com", "/:80", "/https://evil.com"];
+  const PLAIN_ROUTES = ["/x", "/", "/?q=1", "/app/x", "/v1/tools/t-1/run.json?mode=3", "//evil.com/@y?z#w", "/a%2fb%2F..%2f", "/%5c..%5c", "/:80/@evil.com", "/..."];
+  const pool = [...ROUTES, ...generated];
+  let compared = 0, leaves = 0, keys = 0, textKeys = 0, textPairs = 0, textLeave = 0, textStay = 0, parses = 0;
+  const diffs = [];
+  const CountedURL = class extends RealURL { constructor(...args) { parses++; super(...args); } };
+  const one = (seller, route) => {
+    const want = reference(seller, route);
+    x._routeLeavesSellerForTest(seller, route); // the seller key's one read
+    parses = 0;
+    globalThis.URL = CountedURL;
+    let got;
+    try { got = x._routeLeavesSellerForTest(seller, route); } finally { globalThis.URL = RealURL; }
+    const text = parses === 0;
+    compared++;
+    if (want) leaves++;
+    if (got !== want) diffs.push(`${JSON.stringify(seller)} + ${JSON.stringify(route)}: got ${got}, reference ${want}`);
+    return { text, want };
+  };
+  for (const sc of SCHEMES) for (const h of HOSTS) for (const p of PORTS) for (const path of PATHS) {
+    const seller = `${sc}${h}${p}${path}`;
+    keys++;
+    let allText = true;
+    for (const r of PLAIN_ROUTES) { const o = one(seller, r); if (o.text) { textPairs++; if (o.want) textLeave++; else textStay++; } else allText = false; }
+    if (allText) textKeys++;
+    for (let i = 0; i < 4; i++) one(seller, pool[rnd(pool.length)]);
+  }
+  for (const d of diffs.slice(0, 12)) console.error(`  differs: ${d}`);
+  ok(diffs.length === 0, `seller keys a parser rewrites read the parsed answer for every input (${compared} pairs: ${keys} keys from ${SCHEMES.length} schemes, ${HOSTS.length} hosts, ${PORTS.length} ports and ${PATHS.length} paths, each by ${PLAIN_ROUTES.length} plain routes and 4 drawn from the hostile and generated sets; ${diffs.length} differences)`);
+  ok(leaves > compared / 10 && compared - leaves > compared / 20, `...over a corpus that holds both answers (${leaves} leave, ${compared - leaves} stay)`);
+  ok(textKeys > keys / 2 && textLeave > 1000 && textStay > 1000, `...and ${textKeys} of the ${keys} keys decide every plain route from the key's one parse (${textPairs} pairs with no parse: ${textLeave} leave, ${textStay} stay)`);
+}
+
+// --- 5. The kept answer per seller key: keyed on the key as written, bounded.
+{
+  // Two keys that lowercase to the same text: the first's path is ASCII (no
+  // plain route leaves), the second's holds the Kelvin sign, which lowercases
+  // to "k" but which a parser percent-encodes (every route leaves). Read in
+  // that order, the second must not take the first's kept answer.
+  const first = "HTTPS://case-memo.example/kpp", second = "HTTPS://case-memo.example/\u212App";
+  ok(first.toLowerCase() === second.toLowerCase() && first !== second, "setup: the two keys share their lowercase text");
+  const a = x._routeLeavesSellerForTest(first, "/r"), b = x._routeLeavesSellerForTest(second, "/r");
+  ok(a === x._routeLeavesSellerParsedForTest(first, "/r") && a === false, `the ASCII key keeps its routes (${a})`);
+  ok(b === x._routeLeavesSellerParsedForTest(second, "/r") && b === true, `the Kelvin-sign key read second still reads its own parsed answer, never the first key's (${b})`);
+
+  // The kept answers are bounded like the plain-key memo: past its size the
+  // table starts over, so the first key of a long run is parsed again (one
+  // parse), where an unbounded table would answer it from memory (none).
+  const keyAt = (i) => `HTTPS://memo-${i}.example/app/`;
+  ok(x._routeLeavesSellerForTest(keyAt(0), "/x") === false, "setup: a key that is not plain text decides its plain routes from its one kept read");
+  let parses = 0;
+  const CountedURL = class extends RealURL { constructor(...args) { parses++; super(...args); } };
+  globalThis.URL = CountedURL;
+  try { x._routeLeavesSellerForTest(keyAt(0), "/y"); } finally { globalThis.URL = RealURL; }
+  ok(parses === 0, `control: a kept key is answered from memory (${parses} parses)`);
+  for (let i = 1; i <= 20_000; i++) x._routeLeavesSellerForTest(keyAt(i), "/x");
+  parses = 0;
+  globalThis.URL = CountedURL;
+  let again;
+  try { again = x._routeLeavesSellerForTest(keyAt(0), "/y"); } finally { globalThis.URL = RealURL; }
+  ok(parses === 1 && again === false, `after 20,000 more keys the first is read again, once (${parses} parses), with the same answer (${again})`);
 }
 
 console.log(`\n${pass} passed, ${failed} failed`);

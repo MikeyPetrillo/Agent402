@@ -28,6 +28,8 @@ import { classifyPaymentRejection, classifySettlementRefusal, unclassifiedPaymen
 import { classifySvmFundingRefusal, fundingHint, fundingPayerOf, POW_SENTENCE } from "./svm-funding-refusal.js";
 import { classifySettlementPending, isGatewayBatchedPayment, isGatewayBatchedRequest, PENDING_RETRY_AFTER_SECONDS, SETTLEMENT_FAILED_DETAIL, SETTLEMENT_PENDING_DETAIL } from "./gateway-wire.js";
 import { decodePaymentHeader } from "./payment-header.js";
+import { RAILS, GATED_RAILS } from "./rails.js";
+import { ALGORAND_MAINNET_LEGACY_CAIP2 } from "./avm-network.js";
 const decodeB64Json = (v) => { try { return JSON.parse(Buffer.from(String(v), "base64").toString("utf8")); } catch { return null; } };
 const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 const BALANCE_TTL_MS = 60_000;
@@ -184,13 +186,62 @@ export function balanceBucket(balanceUsd, priceUsd) {
   return "covers-price";
 }
 
+/** "stellar" | "algorand" when the words say the PAYING wallet has no
+ *  account for the asset (no trustline; not opted in), else null. Pure. */
+function noAssetAccountOf(net, words, payTo) {
+  if (/^stellar:/.test(net)) return /trustline[a-z ]{0,24}missing|missing trustline|no trustline|Error\(Contract, ?#13\)/i.test(words) ? "stellar" : null;
+  if (/^algorand:/.test(net)) {
+    const m = /asset \d{1,20} missing from ([A-Z2-7]{58})(?![A-Z2-7])/.exec(words);
+    return m && typeof payTo === "string" && payTo && m[1] !== payTo ? "algorand" : null;
+  }
+  return null;
+}
+
+/** Decimals of the asset a network's accept is priced in: 7 on Stellar, 6 elsewhere. */
+export const assetDecimalsFor = (network) => (/^stellar:/.test(typeof network === "string" ? network : "") ? 7 : 6);
+
+const FUNDING_CLASSES = new Set(["insufficient-funds", "no-token-account"]);
+/**
+ * What the refused call needs, from OUR requirements (never the facilitator's
+ * text): { network, asset, amount (base units), usd }. Null unless every
+ * field has the shape an accept carries. Pure, never throws.
+ */
+export function needsOf(requirements) {
+  try {
+    const { network, asset, amount } = requirements || {};
+    if (typeof network !== "string" || !/^[a-z0-9]{1,16}:[A-Za-z0-9_\-=+/]{1,64}$/.test(network)) return null;
+    if (typeof asset !== "string" || !/^[A-Za-z0-9:_\-]{1,128}$/.test(asset)) return null;
+    if (typeof amount !== "string" || !/^\d{1,30}$/.test(amount)) return null;
+    const usd = Number(amount) / 10 ** assetDecimalsFor(network);
+    return { network, asset, amount, ...(Number.isFinite(usd) ? { usd: Number(usd.toFixed(7)) } : {}) };
+  } catch { return null; }
+}
+
+/** The chain a refusal names, in words a buyer reads: the rail's own name
+ *  for a network we list (RAILS, and Algorand's legacy id), else the CAIP-2
+ *  id itself, bounded to 80 characters; "" when the network is unnamed. Pure. */
+export function chainNameOf(network) {
+  const net = typeof network === "string" ? network : "";
+  if (!net) return "";
+  const id = net === ALGORAND_MAINNET_LEGACY_CAIP2 ? RAILS.find((r) => r.name === "Algorand")?.caip2 : net;
+  const rail = RAILS.find((r) => r.caip2 === id) || GATED_RAILS.find((r) => r.caip2 === id);
+  return rail ? rail.name : net.slice(0, 80);
+}
+
 /** The plain-language hint. Pure; exported for tests. */
-export function hintFor({ reason, balanceUsd, priceUsd, network, payer, gateway = false, detail = "", svmPayer = null }) {
-  const r = String(reason || "");
+export function hintFor({ reason, balanceUsd, priceUsd, network, payer, gateway = false, detail = "", svmPayer = null, payTo = null }) {
+  const r = typeof reason === "string" ? reason : "";
+  const net = typeof network === "string" ? network : "";
+  // Stellar and Algorand facilitators answer a failed simulation with one
+  // reason code and put the simulation's words in the message, so on those
+  // two rails the message is read as well. Never on an EVM rail: there
+  // "insufficient funds" in a message can be the submitter's gas.
+  const wordsRail = /^(stellar|algorand):/.test(net);
+  const words = wordsRail ? `${r} ${typeof detail === "string" ? detail : ""}`.slice(0, 2000) : r;
   // A Solana payment whose transfer failed in the facilitator's simulation
   // because the paying wallet has no USDC account or too little USDC
   // (src/svm-funding-refusal.js): a new signature cannot fix that, funding can.
-  const svmFunding = classifySvmFundingRefusal({ network, reason: `${r} ${detail || ""}` });
+  const svmFunding = classifySvmFundingRefusal({ network: net, reason: `${r} ${typeof detail === "string" ? detail : ""}` });
   if (svmFunding) return { ...fundingHint({ kind: svmFunding, payer: svmPayer, priceUsd }), svmFunding };
   // A Circle Gateway batched payment resent while Gateway is still settling
   // it (src/gateway-nanopayments.js): the same payment, later; never a new
@@ -198,32 +249,50 @@ export function hintFor({ reason, balanceUsd, priceUsd, network, payer, gateway 
   if (/^settlement_pending$/.test(r)) return { reason: "settlement-pending", retry: "same-payment", retryAfterSeconds: PENDING_RETRY_AFTER_SECONDS, hint: SETTLEMENT_PENDING_DETAIL };
   if (/^settlement_failed$/.test(r)) return { reason: "settlement-failed", retry: "fresh-authorization", hint: SETTLEMENT_FAILED_DETAIL };
   const price = Number.isFinite(priceUsd) ? `$${priceUsd.toFixed(priceUsd < 0.01 ? 4 : 3)}` : "the listed price";
-  const short = payer ? `${payer.slice(0, 6)}...${payer.slice(-4)}` : "your wallet";
+  // The wallet the hint is about: the payer the credential names, shortened,
+  // or "the paying wallet" (capitalized where it opens a sentence).
+  const short = typeof payer === "string" && payer ? `${payer.slice(0, 6)}...${payer.slice(-4)}` : "the paying wallet";
+  const Short = short[0].toUpperCase() + short.slice(1);
+  const chain = chainNameOf(net);
+  const onChain = chain ? ` on ${chain}` : "";
+  // The paying wallet cannot hold the asset at all: no trustline for it on
+  // Stellar, not opted in to it on Algorand (the Solana case is worded
+  // above). An Algorand refusal that names OUR receiving address is not the
+  // buyer's and is not worded here.
+  const noAccount = noAssetAccountOf(net, words, payTo);
+  if (noAccount && !gateway) {
+    const rail = noAccount === "stellar" ? "Stellar" : "Algorand";
+    const what = noAccount === "stellar" ? "has no trustline for the asset on Stellar" : "has not opted in to the asset on Algorand";
+    const todo = noAccount === "stellar" ? "Add the trustline and fund the wallet" : "Opt the wallet in to the asset and fund it";
+    return {
+      reason: "no-token-account",
+      retry: "fund-wallet",
+      hint: `The paying wallet ${what}, so it cannot pay the ${price} this call costs. Nothing was charged. ${todo} on ${rail}, or pay on another network listed in accepts, then sign a NEW payment; re-sending this one will keep failing.`,
+    };
+  }
   // A batched payment is paid from the signer's USDC balance inside Circle
   // Gateway, not from its wallet: a balance word from Gateway means that
   // deposit came up short, and funding the wallet changes nothing.
   if (gateway && /insufficient|balance|not enough/i.test(r)) {
-    const rail = network ? ` on ${String(network).split(":")[0]}` : "";
     return {
       reason: "insufficient-funds",
       retry: "fund-gateway-deposit",
-      hint: `${short}'s Circle Gateway balance holds less than this call costs (${price})${rail}. Deposit USDC into Circle Gateway for that address (an on-chain transfer, gas paid once) or pay the plain accept from the wallet, then sign a NEW authorization; re-sending this one will keep failing.`,
+      hint: `${Short}'s Circle Gateway balance holds less than this call costs (${price})${onChain}. Deposit USDC into Circle Gateway for that address (an on-chain transfer, gas paid once) or pay the plain accept from the wallet, then sign a NEW authorization; re-sending this one will keep failing.`,
     };
   }
-  const reverted = /execution reverted|contract call failed|insufficient|balance/i.test(r);
+  const cameUpShort = /underflow on subtracting|overspend|insufficient[ _](funds|balance)|not enough (funds|balance)|balance is not sufficient|Error\(Contract, ?#10\)/i.test(words);
+  const reverted = cameUpShort || /execution reverted|contract call failed|insufficient|balance/i.test(r);
   // The facilitator simulated the transfer and the wallet came up short, said
   // in the facilitator's own words: an AVM simulation reports "underflow on
   // subtracting <price> from sender amount <held>". On Base the balance read
   // below answers with the figure; on every other rail this text is the only
   // reading there is, and without this branch the refusal fell through to
   // "unclassified", which told the buyer the fault might be ours.
-  const cameUpShort = /underflow on subtracting|overspend|insufficient[ _](funds|balance)|not enough (funds|balance)/i.test(r);
   if (cameUpShort && balanceUsd == null) {
-    const rail = network ? ` on ${String(network).split(":")[0]}` : "";
     return {
       reason: "insufficient-funds",
       retry: "fund-wallet",
-      hint: `${short} holds less of the asset than this call costs (${price})${rail}. Fund the wallet, or pay on another network listed in accepts, then sign a NEW authorization; re-sending this one will keep failing.`,
+      hint: `${Short} holds less of the asset than this call costs (${price})${onChain}. Fund the wallet, or pay on another network listed in accepts, then sign a NEW authorization; re-sending this one will keep failing.`,
     };
   }
   if (reverted && balanceUsd != null && (balanceUsd <= 0 || (Number.isFinite(priceUsd) && balanceUsd < priceUsd))) {
@@ -241,20 +310,29 @@ export function hintFor({ reason, balanceUsd, priceUsd, network, payer, gateway 
       reason: "insufficient-funds",
       retry: funded ? "lower-price-route" : "fund-wallet",
       wantsAffordable: funded,
-      hint: `${short} holds $${balanceUsd.toFixed(4)} USDC on Base and this call costs ${price}. ${funded
+      hint: `${Short} holds $${balanceUsd.toFixed(4)} USDC on Base and this call costs ${price}. ${funded
         ? "Either fund the wallet and sign a NEW authorization, or call something this balance already covers - GET /api/pricing lists every route and its price, and /api/find?q=<task> ranks them."
         : "Fund the wallet (or pay on another network listed in accepts), then sign a NEW authorization; re-sending this one will keep failing."}`,
+    };
+  }
+  if (reverted && balanceUsd == null) {
+    // The balance was not read (only Base is, and a read can fail), so the
+    // refusal is worded as the two things it can be, never as a wallet that
+    // "covers" a price nobody checked.
+    return {
+      retry: "fresh-authorization",
+      hint: `The transfer of ${price} was refused in simulation${onChain}: either ${short} holds less of the asset than this call costs there, or the authorization's nonce was already spent or its validity window has passed. Nothing was charged. Check the wallet's balance of the asset in accepts on that network, then sign a NEW authorization; re-sending this one will keep failing.`,
     };
   }
   if (reverted) {
     return {
       retry: "fresh-authorization",
-      hint: `${short} covers ${price}, so the authorization itself was refused on-chain: its nonce was already spent or its validity window has passed. Never re-send a signed authorization; sign a fresh one for this request.`,
+      hint: `${Short} covers ${price}${onChain}, so the authorization itself was refused on-chain: its nonce was already spent or its validity window has passed. Never re-send a signed authorization; sign a fresh one for this request.`,
     };
   }
   if (/expired|validBefore|valid_before/i.test(r)) return { retry: "fresh-authorization", hint: "The authorization's validity window has passed. Sign a fresh one." };
   if (/nonce|already used|replay/i.test(r)) return { retry: "fresh-authorization", hint: "That authorization nonce was already used. Sign a fresh one; a settled call is never re-charged." };
-  if (/network|unsupported|scheme/i.test(r)) return { retry: "other-network", hint: `Pay on a network listed in accepts${network ? ` (the header named ${network})` : ""}.` };
+  if (/network|unsupported|scheme/i.test(r)) return { retry: "other-network", hint: `Pay on a network listed in accepts${net ? ` (the header named ${net.slice(0, 80)})` : ""}.` };
   return { retry: "fresh-authorization", hint: "The payment was refused before settlement. Sign a fresh authorization exactly matching one entry in accepts; nothing was charged." };
 }
 
@@ -262,8 +340,9 @@ export function hintFor({ reason, balanceUsd, priceUsd, network, payer, gateway 
  *  `isValid:false`). Reads the balance (bounded) and remembers the hint under
  *  the failed CREDENTIAL's key; `paymentPayload` is the decoded payload the
  *  paywall verified (`payer` alone is accepted for tests). */
-export async function noteVerifyFailure({ paymentPayload, payer, network, reason, priceUsd, detail = "", feePayer, now = Date.now, balanceReader = usdcBalanceOnBase }) {
-  const rawFrom = String(payer || paymentPayload?.payload?.authorization?.from || "").toLowerCase();
+export async function noteVerifyFailure({ paymentPayload, payer, network, reason, priceUsd, detail = "", feePayer, requirements = null, now = Date.now, balanceReader = usdcBalanceOnBase }) {
+  const namedFrom = payer || paymentPayload?.payload?.authorization?.from;
+  const rawFrom = typeof namedFrom === "string" ? namedFrom.toLowerCase() : "";
   // An EVM credential names its payer (authorization.from); an AVM, SVM or
   // Stellar one does not, and until 2026-10-12 that ended the hint here, so a
   // refusal on those rails stayed unexplained. The hint is keyed by the
@@ -275,13 +354,18 @@ export async function noteVerifyFailure({ paymentPayload, payer, network, reason
   // A Gateway settlement word is not about the wallet's balance: no read.
   // Nor is any refusal of a batched payment (paid from the Gateway deposit).
   const gateway = isGatewayBatchedPayment(paymentPayload);
-  const isBase = !gateway && /^eip155:8453$/.test(String(network || "")) && !/^settlement_(pending|failed)$/.test(String(reason || ""));
+  if (typeof network !== "string") network = "";
+  if (typeof reason !== "string") reason = "";
+  const isBase = !gateway && network === "eip155:8453" && !/^settlement_(pending|failed)$/.test(reason);
   const balanceUsd = isBase && from ? await balanceReader(from) : null;
-  const svmPayer = /^solana:/.test(String(network || "")) ? fundingPayerOf(paymentPayload, { feePayer }) : null;
-  const h = hintFor({ reason, balanceUsd, priceUsd, network, payer: from, gateway, detail, svmPayer });
+  const svmPayer = /^solana:/.test(network) ? fundingPayerOf(paymentPayload, { feePayer }) : null;
+  const h = hintFor({ reason, balanceUsd, priceUsd, network, payer: from, gateway, detail, svmPayer, payTo: requirements?.payTo });
+  // A funding refusal says what the call needs, in fields (a Gateway
+  // batched payment is paid from a deposit, not from the wallet's asset).
+  const needs = !gateway && FUNDING_CLASSES.has(h.reason) ? needsOf(requirements) : null;
   // `reason` on the entry is the facilitator's text (telemetry reads it);
   // the refusal class the hint names rides as `reasonClass`.
-  const entry = { ...h, balanceUsd, priceUsd, network, reasonClass: h.reason || null, reason: String(reason || "").slice(0, 200), at: now() };
+  const entry = { ...h, ...(needs ? { needs } : {}), balanceUsd, priceUsd, network, reasonClass: h.reason || null, reason: (typeof reason === "string" ? reason : "").slice(0, 200), at: now() };
   if (key) { hints.set(key, entry); bounded(hints); }
   return { ...entry, bucket: balanceBucket(balanceUsd, priceUsd), key };
 }
@@ -354,7 +438,7 @@ export function verifyHintMiddleware() {
           if (h.reasonClass) req.__paymentRejectReason = h.reasonClass;
           // A route that also takes proof-of-work says so in the funding hint.
           const hint = h.svmFunding && body.altPayment ? `${h.hint} ${POW_SENTENCE}` : h.hint;
-          return origJson({ ...body, ...(h.reasonClass ? { reason: h.reasonClass } : {}), hint, retry: h.retry, ...(h.balanceUsd != null ? { payerUsdcOnBase: Number(h.balanceUsd.toFixed(6)) } : {}) });
+          return origJson({ ...body, ...(h.reasonClass ? { reason: h.reasonClass } : {}), hint, retry: h.retry, ...(h.needs ? { needs: h.needs } : {}), ...(h.balanceUsd != null ? { payerUsdcOnBase: Number(h.balanceUsd.toFixed(6)) } : {}) });
         }
         // No facilitator hint means the payment never REACHED the facilitator:
         // @x402/express refused it first and threw the reason away. Read the

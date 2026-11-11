@@ -4,6 +4,7 @@
 // so the link works instead of answering "did not work". Boots the server
 // against a Postgres (required under CI); the records are made by a second
 // engine instance on the same schema, standing in for the other container.
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";

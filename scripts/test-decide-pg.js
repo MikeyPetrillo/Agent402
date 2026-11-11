@@ -7,6 +7,7 @@
 // Without it the test says so and exits 0, EXCEPT under CI, where a missing
 // database is a failure (a skipped integration test is not coverage).
 
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import pg from "pg";
 import { migrate, MIGRATIONS } from "../services/decide/migrations.js";
 import { PgToolStore } from "../services/decide/tool-store.js";

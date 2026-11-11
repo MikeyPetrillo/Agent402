@@ -32,6 +32,7 @@
 // With STATE_DATABASE_URL set, boot B runs on the state database in a schema
 // of its own (dropped afterwards), and a served grant is also a record there.
 // Requires REDIS_URL (under CI a missing one fails).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";

@@ -112,6 +112,22 @@ try {
   const b3 = await r3.json();
   ok(r3.status === 402 && b3.retry === "fund-wallet" && /holds \$0\.0000/.test(b3.hint), `non-2xx verify (thrown) -> the hint still reaches the retried credential (retry=${b3.retry})`);
 
+  // A refused credential resent the moment its 402's headers arrive (before
+  // the server's write has completed) is answered as a refusal with its hint,
+  // never as a payment still running or already used: the idempotency claim
+  // and the replay claim are both released when a refusal is ended.
+  const burst = {};
+  for (let i = 0; i < 150; i++) {
+    const h = credential(accepted, "0x" + (0x1000 + i).toString(16).padStart(64, "0"));
+    const a = await pay(h);
+    const b = await pay(h);
+    a.body?.cancel?.().catch(() => {});
+    const bb = await b.json().catch(() => ({}));
+    const k = `${a.status}->${b.status}${b.status === 402 && bb.retry === "fund-wallet" ? "" : `:${bb.error || bb.retry || "no-hint"}`}`;
+    burst[k] = (burst[k] || 0) + 1;
+  }
+  ok(Object.keys(burst).length === 1 && burst["402->402"] === 150, `150 refused credentials each resent at once: every resend is the hinted 402 (${JSON.stringify(burst)})`);
+
   console.log(`\nPASS - ${pass} checks (402 hint on both verify-failure shapes, bound to the credential)`);
   proc.kill("SIGKILL"); facilitator.close(); process.exit(0);
 } catch (e) { fail(e?.stack || String(e)); }

@@ -5,6 +5,7 @@
 // concurrent holds on a balance that covers one leave exactly one holder, a
 // hold becomes spend only on a final 200 and comes back on anything else.
 // Requires STATE_DATABASE_URL (CI fails without it).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";

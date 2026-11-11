@@ -50,7 +50,7 @@ const dir = mkdtempSync(join(tmpdir(), "a402-succ-"));
 process.env.SALES_LEDGER_DB = join(dir, "sales.db");
 process.env.ALLOW_EPHEMERAL_STATS = "true";
 const TAG = Math.random().toString(36).slice(2, 8);
-const STATS_DB = existsSync("/data") ? "/data/agent402-stats.db" : "/tmp/agent402-stats.db";
+const STATS_DB = join(process.env.STATS_DB_DIR || (existsSync("/data") ? "/data" : "/tmp"), "agent402-stats.db");
 
 const { recordSellerRegistrationSeen, sellerRegistrationFirstSeen, getSellerRegistrations } = await import("../src/stats.js");
 

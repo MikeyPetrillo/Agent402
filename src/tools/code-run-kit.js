@@ -10,7 +10,7 @@
 import { redactSecrets } from "./redact.js";
 import { payerFromRequest } from "../payer.js";
 import { perReplica } from "../rate-limit.js";
-import { takeHardCap, hardCapError } from "../upstream-hard-caps.js";
+import { takeHardCap, hardCapError, releaseHardCap, neverReachedUpstream } from "../upstream-hard-caps.js";
 
 let Sandbox;
 
@@ -108,12 +108,16 @@ async function runInSandbox(code, language, tierSlug) {
   if (e2bInFlight >= E2B_MAX_CONCURRENT) throw bad("code execution is at capacity - retry shortly", 503);
   // The daily sandbox ceiling (src/upstream-hard-caps.js), shared across replicas.
   if (!takeHardCap("e2b")) throw hardCapError();
+  const capTakenAt = Date.now();
   e2bInFlight++;
   let sbx;
   try {
     try {
       sbx = await Sandbox.create({ apiKey: key, timeoutMs: tier.timeoutMs + 10_000 });
     } catch (e) {
+      // A create that never reached the sandbox service started nothing: its
+      // unit goes back. Any other failure keeps it (a sandbox may have started).
+      if (neverReachedUpstream(e)) releaseHardCap("e2b", capTakenAt);
       // The SDK text wraps the upstream error body (account state, the key):
       // log it redacted, answer the buyer generically.
       console.warn(`[code-run] sandbox creation failed: ${redactSecrets(String(e?.message || e)).slice(0, 300)}`);

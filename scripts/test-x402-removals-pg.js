@@ -7,6 +7,7 @@
 //     answer, the router offers no outside seller, and restoring a stored
 //     removal says the list has not loaded rather than "not removed".
 // Requires STATE_DATABASE_URL (CI fails without it).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";

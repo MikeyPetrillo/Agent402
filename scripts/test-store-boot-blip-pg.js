@@ -7,6 +7,7 @@
 // write and read, the shared PoW replay pull, the Stripe shadow enqueue, the
 // wish board and append, the revenue ledger's first load).
 // Requires STATE_DATABASE_URL (CI fails without it).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { fileURLToPath } from "node:url";
 import net from "node:net";
 import { spawn } from "node:child_process";

@@ -52,6 +52,7 @@ import { stripeEnabled } from "./mpp-stripe.js";
 import { findTools, findRelatedSellers, applyFrontDoorTerms } from "./find.js";
 import { buildPlanSketch } from "./plan-sketch.js";
 import { partialFields, clampFields } from "./partial-answer.js";
+import { boundAnswer, withAnswerBound, mcpMaxAnswerBytes } from "./mcp-answer-bound.js";
 import { routableSellerSummaries, screenSellerNameOn } from "./x402-index.js";
 import { logSafe } from "./log-safe.js";
 import { withoutPaymentRequired } from "./payment-required-body.js";
@@ -118,7 +119,6 @@ const WISH_HINT_TEXT = "Nothing matched well? Tell us what you needed via POST /
 // policy live in src/rate-limit.js so the direct-HTTP PoW redemption path
 // applies the same quota.
 const mcpLimiter = createLimiter("mcp");
-const rateLimited = (ip) => mcpLimiter.check(ip).limited;
 // The limiter above divides its budget among the replicas (src/rate-limit.js
 // perReplica): the figure a client is told is the service-wide one, so the
 // copy says so rather than quoting it as a per-replica allowance.
@@ -407,7 +407,8 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       if (score > 0) scored.push([score, def, free]);
     }
     scored.sort((a, b) => b[0] - a[0]);
-    const rows = scored.slice(0, Math.min(Number(limit) || 10, SEARCH_LIMIT_MAX)).map(([, def, free]) => ({
+    // Clamped at both ends: a negative count would read as "all but the last n".
+    const rows = scored.slice(0, Math.min(Math.max(Math.trunc(Number(limit)) || 10, 1), SEARCH_LIMIT_MAX)).map(([, def, free]) => ({
       slug: def.slug,
       price: def.price,
       access: free ? "free here (rate-limited)" : "paid (USDC via x402 / MPP - agent402-mcp with AGENT_KEY, or a prepaid credits key already issued as AGENT402_CREDITS_KEY)",
@@ -507,21 +508,26 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     }
 
     // Titles + safety annotations on every tool are required for listing in
-    // Anthropic's connector directory. Meta discovery tools are honestly
-    // read-only; flagship egress tools set openWorldHint; memory-write writes.
+    // Anthropic's connector directory. A host may run a read-only tool without
+    // asking its user, so readOnlyHint is true only for a tool that can never
+    // charge and never writes on any path here: the catalog lookups, the
+    // leaderboard read, describe and payment info. Every tool that can charge
+    // (each flagship, catalog.call) or leaves something behind is not.
     const SAFE = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
     const OPEN = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true };
     const WRITE = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
     const CALL_PAID = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true };
-    // Anything that reaches the network is not read-only and is open-world; only
-    // the local describe and payment-info lookups are read-only.
+    // A flagship reaches the network and can charge: not read-only, open-world.
     const NET = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true };
+    // memory.write replaces the value a key held.
+    const OVERWRITE = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false };
+    const flagshipHints = (slug) => (slug === "memory-write" ? OVERWRITE : NET);
     server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: listable([
         {
           name: META_MCP_NAMES.search_tools,
           title: "Search the Agent402 tool catalog",
-          annotations: { title: "Search the Agent402 tool catalog", ...NET },
+          annotations: { title: "Search the Agent402 tool catalog", ...SAFE },
           description:
             `Keyword search over the Agent402 catalog of 500+ tools (${tools.size} loaded by this connector). Returns { results, workflows }; run one with catalog.call. ${freeCount} pure-CPU tools run free here (proof-of-work). The others are paid per call${mppLoopback ? ", payable here over MPP (credential in _meta; mppx McpClient pays automatically), or" : ", through"} npx agent402-mcp with a wallet.`,
           inputSchema: {
@@ -537,7 +543,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         {
           name: META_MCP_NAMES.find_tool,
           title: "Resolve a task to the one best Agent402 tool",
-          annotations: { title: "Resolve a task to the one best Agent402 tool", ...NET },
+          annotations: { title: "Resolve a task to the one best Agent402 tool", ...SAFE },
           description:
             "Resolve a plain-language task to the single best-matching Agent402 tool, returned call-ready: slug, price, input schema and a worked example. Use catalog.search to compare several candidates. Returns { task, results } with the top pick first; run it with catalog.call and the slug and params it lists.",
           inputSchema: {
@@ -587,8 +593,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         // authless connector: calling returns paid-access setup.
         ...[...flagshipSet].map((slug) => {
           const { def, free } = tools.get(slug);
-          // Every flagship reaches the network (the free ones included), so none is read-only.
-          const ann = NET;
+          const ann = flagshipHints(slug);
           const access = free
             ? "[free, no wallet]"
             : `Paid (${def.price}/call):`;
@@ -671,7 +676,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // remain CallTool aliases via resolveListedName.
           name: META_MCP_NAMES.list_top_sellers,
           title: "List top x402 sellers",
-          annotations: { title: "List top x402 sellers", ...NET },
+          annotations: { title: "List top x402 sellers", ...OPEN },
           description: "[free] List ranked sellers from the on-chain settlement leaderboards. wire=x402 (default): x402 sellers by settled calls, USDC totals and distinct buyers. wire=mpp: MPP sellers ranked by inbound USDC.e transfers on Tempo. This host's own wallet is excluded unless include is all.",
           inputSchema: {
             type: "object",
@@ -1383,9 +1388,10 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           if (!mppLoopback) return { content: [{ type: "text", text: walletRequiredText(entry.def) }], isError: true };
           return await payOverMpp(entry, req.params, args, isNamed, ip, signal);
         }
-        if (rateLimited(ip)) {
+        const toolBudget = mcpLimiter.check(ip);
+        if (toolBudget.limited) {
           return {
-            content: [{ type: "text", text: `Free-tier rate limit reached (${RATE_LIMIT_COPY}). For unmetered access pay per call via x402: npx agent402-mcp with AGENT_KEY. ${baseUrl}/llms.txt` }],
+            content: [{ type: "text", text: `Free-tier rate limit reached (${RATE_LIMIT_COPY}); room again in about ${toolBudget.retryAfterSeconds} s. For unmetered access pay per call via x402: npx agent402-mcp with AGENT_KEY. ${baseUrl}/llms.txt` }],
             isError: true,
           };
         }
@@ -1497,10 +1503,26 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         // FLAGSHIP_OUTPUT_SCHEMAS). call_tool: envelope {slug, result} so the
         // meta outputSchema has stable named fields while content text stays
         // the raw tool JSON agents already parse.
-        if (isNamed) return mcpJsonResult(result);
+        // A free answer past the connector's ceiling is cut and says so in
+        // fields (src/mcp-answer-bound.js).
+        // The text block is built once: when it fits the ceiling the compact
+        // form fits too (it is the same JSON less whitespace), so it is sent
+        // as built and the answer is not serialized again to be measured.
+        const maxBytes = mcpMaxAnswerBytes();
+        let pretty;
+        try { pretty = JSON.stringify(result, null, 2); } catch { pretty = undefined; }
+        if (typeof pretty === "string" && (pretty.length * 3 <= maxBytes || Buffer.byteLength(pretty) <= maxBytes)) {
+          if (isNamed) return mcpJsonResult(result, pretty);
+          return { content: [{ type: "text", text: pretty }], structuredContent: { slug: entry.def.slug, result } };
+        }
+        const { value, bound } = boundAnswer(result, maxBytes);
+        if (bound) result = withAnswerBound(value, bound);
+        // A cut answer is sent compact, as it was sized.
+        if (isNamed) return bound ? mcpJsonResult(result, JSON.stringify(result)) : mcpJsonResult(result, pretty);
         return {
-          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-          structuredContent: { slug: entry.def.slug, result },
+          // A cut answer is already large: no indentation on top of it.
+          content: [{ type: "text", text: bound ? JSON.stringify(result) : pretty }],
+          structuredContent: { slug: entry.def.slug, result, ...(bound ? { answerBound: bound } : {}) },
         };
       } catch (err) {
         // A payment ask is a JSON-RPC ERROR (-32042) by mppx's wire, not an
@@ -1601,7 +1623,10 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     // so it must not be bypassable by injecting a header.
     const ip = (req.ip || req.socket.remoteAddress || "?").trim();
     // R-11 outer gate #1: per-IP raw-request cap, BEFORE allocating anything.
-    if (mcpReqLimiter.check(ip).limited) {
+    const reqBudget = mcpReqLimiter.check(ip);
+    if (reqBudget.limited) {
+      // A client that is told when to come back waits; one that is not retries at once.
+      res.setHeader("Retry-After", String(reqBudget.retryAfterSeconds));
       return res.status(429).json({ jsonrpc: "2.0", error: { code: -32000, message: `Too many requests to ${path} - slow down and retry shortly.` }, id: req.body?.id ?? null });
     }
     // MCP Tasks (io.modelcontextprotocol/tasks). Answered here, ahead of the SDK

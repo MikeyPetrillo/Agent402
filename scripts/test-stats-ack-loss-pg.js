@@ -5,6 +5,7 @@
 // that landed. The retry carries the same batch id, finds it recorded, and
 // adds nothing. A control batch whose transaction really failed is applied
 // by its retry. Requires STATE_DATABASE_URL (CI fails without it).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { createServer, connect } from "node:net";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

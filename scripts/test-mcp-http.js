@@ -6,6 +6,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createHash } from "node:crypto";
 import { FLAGSHIP_SLUGS, FLAGSHIP_MCP_NAMES } from "../src/mcp-flagship.js";
+import { isComputePayable } from "../src/pow.js";
 
 const BASE = process.env.TARGET_URL || "http://127.0.0.1:3000";
 
@@ -104,23 +105,41 @@ assert(
   typeof init.result?.serverInfo?.websiteUrl === "string" && init.result.serverInfo.websiteUrl.includes("http"),
   "initialize.serverInfo.websiteUrl is set"
 );
-// Writers: demand.request (wish) + memory.write (durable state). Everything else
-// is read-only so clients that trust readOnlyHint are not misled.
-const writers = (list.result?.tools ?? []).filter((t) => t.annotations?.readOnlyHint === false).map((t) => t.name).sort();
-// With the decide service configured, decide.execute (runs a paid plan) and
-// decide.feedback (records a verdict) write too.
-// catalog.call writes too when this connector can take a payment (MPP): a paid
-// call can run any slug, memory writes and on-chain attests included.
+// A host may run a read-only tool without asking its user, so readOnlyHint is
+// true only for a tool that cannot charge here and writes nothing. "Can
+// charge" is derived, never listed: a flagship charges unless its slug is in
+// the connector's free table (isComputePayable, the proof-of-work allowlist
+// less the wallet-only set); catalog.call charges when any catalog entry
+// does; a tool with no catalog entry has no paid route to reach.
+const tool = (n) => (list.result?.tools ?? []).find((t) => t.name === n);
 const mppHere = !!init.result?.capabilities?.experimental?.payment;
-// Only the two local lookups (describe, payment info) stay read-only; every tool
-// that reaches the network is not read-only, so hosts ask before running it.
-const LOCAL_LOOKUPS = ["payment.info", "server.describe"];
-const expectedWriters = (list.result?.tools ?? []).map((t) => t.name).filter((n) => !LOCAL_LOOKUPS.includes(n)).sort();
-void [mppHere, served];
-assert(
-  writers.join(",") === expectedWriters.join(","),
-  `writers are ${expectedWriters.join(" + ")} (got ${writers.join(",") || "none"})`
-);
+const slugOfName = Object.fromEntries(Object.entries(FLAGSHIP_MCP_NAMES).map(([slug, n]) => [n, slug]));
+const pricedSlugs = (pricingDoc.endpoints ?? []).map((e) => e.slug).filter(Boolean);
+assert(pricedSlugs.length > 100, `the pricing document lists the catalog's slugs (${pricedSlugs.length})`);
+const anyPaidSlug = pricedSlugs.some((slug) => !isComputePayable({ slug }));
+const canCharge = (n) => (n === "catalog.call" ? anyPaidSlug : n in slugOfName ? !isComputePayable({ slug: slugOfName[n] }) : false);
+// The free tools that leave a row behind (a recorded request, a step verdict).
+const FREE_WRITERS = new Set(["demand.request", "decide.feedback"]);
+const NET_HINTS = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true };
+let chargers = 0;
+for (const t of (list.result?.tools ?? [])) {
+  const charges = canCharge(t.name);
+  if (charges) chargers++;
+  const wantReadOnly = !charges && !FREE_WRITERS.has(t.name);
+  assert(t.annotations.readOnlyHint === wantReadOnly, `${t.name} readOnlyHint is ${wantReadOnly} (${charges ? "can charge" : FREE_WRITERS.has(t.name) ? "free, writes" : "free, writes nothing"}; got ${t.annotations.readOnlyHint})`);
+  if (wantReadOnly) assert(t.annotations.destructiveHint === false, `${t.name} is read-only and not destructive`);
+  // A flagship that can charge carries the network hints, memory.write aside (checked below).
+  if (charges && t.name in slugOfName && t.name !== "memory.write") {
+    for (const [k, v] of Object.entries(NET_HINTS)) assert(t.annotations[k] === v, `${t.name} ${k} is ${v} (got ${t.annotations[k]})`);
+  }
+}
+assert(chargers >= 2 && canCharge("web.search") && canCharge("memory.read") && !canCharge("catalog.search"), `the derivation finds the tools that can charge (${chargers})`);
+assert(tool("catalog.search")?.annotations.readOnlyHint === true && tool("web.search")?.annotations.readOnlyHint === false, "catalog.search is read-only and web.search is not");
+void served;
+{
+  const ann = tool("memory.write")?.annotations || {};
+  assert(ann.readOnlyHint === false && ann.destructiveHint === true, `memory.write is annotated as a write that replaces a stored value (got ${JSON.stringify(ann)})`);
+}
 {
   const call = (list.result?.tools ?? []).find((t) => t.name === "catalog.call");
   const ann = call?.annotations || {};

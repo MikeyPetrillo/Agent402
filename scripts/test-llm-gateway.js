@@ -1921,6 +1921,52 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
     const b = validateRequest({ model: MER, messages: [{ role: "user", content: "hi" }] }, tier);
     ok(b.model === MER_USE && b.__substitutedFrom === MER, `on ${tier}: mercury-2.5 served as ${MER_USE} with the swap named`);
   }
+  // llama-3.2-1b-instruct (upstream expiration 2026-11-20): SCHEDULED. Served
+  // as itself on nano, base and metered until the date, then by
+  // llama-3.2-3b-instruct on the tier of the route called, the swap named.
+  {
+    const L1 = "meta-llama/llama-3.2-1b-instruct", L3 = "meta-llama/llama-3.2-3b-instruct";
+    const HOMES = ["v1-chat-nano", "v1-chat", "v1-chat-metered"];
+    ok(RETIRING_MODELS[L1]?.until === "2026-11-20" && RETIRING_MODELS[L1].use === L3 && RETIRING_MODELS[L1].asItselfUntil === true && !RETIRING_MODELS[L3], "llama-3.2-1b-instruct: scheduled to retire 2026-11-20, successor llama-3.2-3b-instruct, itself not retiring");
+    ok(!Object.values(TIERS).some((t) => (t.fallbacks || []).includes(L1) || t.defaultModel === L1) && !Object.values(AUTO_RANKINGS).flatMap((b) => Object.values(b).flat()).includes(L1) && !K.FLEX_MODELS.includes(L1) && !Object.hasOwn(K.AVAILABILITY_SUCCESSORS, L1), "no fallback, default, ranking, flex or availability entry names llama-3.2-1b-instruct");
+    ok(cf(L3) === cf(L1) && cf(L3) !== null && !rp(L1) && !rp(L3), "the successor is priced by the row that prices the retiring id, and neither has a reasoning row");
+    const on = (tier) => validateRequest({ model: L1, messages: [{ role: "user", content: "hi" }] }, tier);
+    K.setRetiringClockForTest(() => Date.parse("2026-11-19T23:59:59Z"));
+    ok(!retiringModel(L1) && tierFor(L1) === "v1-chat-nano" && JSON.stringify(Object.keys(TIERS).filter((t) => tierAllows(t, L1))) === JSON.stringify(HOMES), "before 2026-11-20: llama-3.2-1b-instruct homes on nano, admitted on base and metered");
+    for (const tier of HOMES) {
+      const b = on(tier);
+      ok(b.model === L1 && !b.__substitutedFrom, `before 2026-11-20 on ${tier}: llama-3.2-1b-instruct served as itself`);
+    }
+    K.setRetiringClockForTest(() => Date.parse("2026-11-20T00:00:00Z"));
+    ok(retiringModel(L1)?.use === L3 && K.canonicalModel(L1) === L3 && K.substitutedFrom(L1) === L1 && Object.keys(TIERS).every((t) => tierAllows(t, L1) === tierAllows(t, L3)), "from 2026-11-20: llama-3.2-1b-instruct is admitted exactly where its successor is");
+    for (const tier of HOMES) {
+      const b = on(tier);
+      ok(b.model === L3 && b.__substitutedFrom === L1, `from 2026-11-20 on ${tier}: llama-3.2-1b-instruct served as ${L3} with the swap named`);
+    }
+    ok(K.flatTierQuoteUsd("v1-chat-nano", L1) === TIERS["v1-chat-nano"].price && K.crossTierHome("v1-chat-nano", L1) === null && K.meteredModelVerdict(L1) === null, "from 2026-11-20: a nano call naming it keeps the nano price, and the metered pre-payment check leaves it to its successor");
+    K.setRetiringClockForTest(null);
+  }
+  // qwen-2.5-7b-instruct (gone from the upstream catalog 2026-11-11): out of
+  // every tier list, fallback, ranking, availability-successor row and
+  // /v1/models; a call naming it is served as ministral-8b-2512 on each tier
+  // that served it, with the swap named, and is never refused before payment.
+  {
+    const GONE = "qwen/qwen-2.5-7b-instruct", GONE_USE = "mistralai/ministral-8b-2512";
+    ok(RETIRING_MODELS[GONE]?.use === GONE_USE && !RETIRING_MODELS[GONE].asItselfUntil && K.canonicalModel(GONE) === GONE_USE && K.substitutedFrom(GONE) === GONE, "qwen-2.5-7b-instruct: retired, successor ministral-8b-2512");
+    ok(tierFor(GONE_USE) === "v1-chat-nano" && tierFor(GONE) === "v1-chat-nano" && !RETIRING_MODELS[GONE_USE], "its successor homes on nano and is not itself retiring, so a nano caller keeps the nano price");
+    ok(!Object.values(TIERS).some((t) => (t.prefixes || []).includes(GONE) || (t.fallbacks || []).includes(GONE) || t.defaultModel === GONE) && !Object.values(AUTO_RANKINGS).flatMap((b) => Object.values(b).flat()).includes(GONE), "no tier prefix, fallback, default or ranking names qwen-2.5-7b-instruct");
+    ok(!Object.hasOwn(K.AVAILABILITY_SUCCESSORS, GONE) && !Object.values(K.AVAILABILITY_SUCCESSORS).flat().includes(GONE), "no availability-successor row names it");
+    const listed = K.modelsList().data.map((m) => m.id);
+    ok(!listed.includes(GONE) && listed.includes(GONE_USE), "/v1/models no longer lists it, and lists its successor");
+    ok(cf(GONE) === cf(GONE_USE) && cf(GONE_USE).prompt <= ROW("qwen/").prompt && cf(GONE_USE).completion <= ROW("qwen/").completion && cf(GONE_USE).prompt <= TIERS["v1-chat-nano"].maxPrice.prompt && cf(GONE_USE).completion <= TIERS["v1-chat-nano"].maxPrice.completion, "it is priced by its successor's row, which is at or under the row that priced it and inside nano's bound");
+    ok(["v1-chat-nano", "v1-chat", "v1-chat-metered"].every((t) => tierAllows(t, GONE) && tierAllows(t, GONE, GONE)) && Object.keys(TIERS).every((t) => tierAllows(t, GONE) === tierAllows(t, GONE_USE)), "it stays admitted on nano, base and metered, and only where its successor is");
+    ok(K.meteredModelVerdict(GONE) === null && K.meteredModelRefusal(`${GONE}:nitro`) === null, "the pre-payment unknown-model check leaves it to its successor");
+    for (const tier of ["v1-chat-nano", "v1-chat", "v1-chat-metered"]) {
+      const b = validateRequest({ model: GONE, messages: [{ role: "user", content: "hi" }] }, tier);
+      ok(b.model === GONE_USE && b.__substitutedFrom === GONE, `on ${tier}: qwen-2.5-7b-instruct served as ${GONE_USE} with the swap named`);
+      ok(K.failoverChain(b.model, tier)[0] === GONE_USE && !K.failoverChain(b.model, tier).includes(GONE), `on ${tier}: the chain starts at the successor and never names the retired id`);
+    }
+  }
   K.setRetiringClockForTest(null);
   ok(!tierFor("nvidia/nemotron-3.5-lightning"), "nemotron-3.5-lightning stays out (reasons by default with no effort knob in the catalog)");
 }
@@ -2087,6 +2133,25 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   const walk = (d) => { for (const e of readdirSync(d, { withFileTypes: true })) { const p = new URL(e.name + (e.isDirectory() ? "/" : ""), d); if (e.isDirectory()) walk(p); else if (e.name.endsWith(".js")) readFileSync(p, "utf8").split("\n").forEach((line, i) => { const code = line.replace(/\/\/.*$/, ""); if (/^\s*\*/.test(line)) return; if (/\bdelete\s+[\w.?\[\]"]+\.(cost|cost_details|is_byok|cache_discount)\b/.test(code) || (/\b(cost_details|is_byok|cache_discount)\b/.test(code) && !/BILLING_USAGE_FIELDS\s*=/.test(code))) strays.push(`${e.name}:${i + 1}`); }); } };
   walk(new URL("../src/", import.meta.url));
   ok(strays.length === 0, `no answer path deletes or names a billing field outside BILLING_USAGE_FIELDS (${strays.join(", ") || "none"})`);
+}
+
+// The nano tier's model list, as its tool description and the LLM-Gateway
+// wiki row print it, names only families the tier serves: every word of the
+// list is part of one of the tier's own prefixes (a family that left the tier,
+// such as the retired qwen id, leaves both texts).
+{
+  const { readFileSync } = await import("node:fs");
+  const prefixes = TIERS["v1-chat-nano"].prefixes;
+  const words = (list) => list.split(",").flatMap((item) => item.replace(/\([^)]*\)|\bby default\b|\bsmall\b/g, " ").split(/[\s/]+/)).map((w) => w.trim().toLowerCase()).filter(Boolean);
+  const unserved = (ws) => ws.filter((w) => !prefixes.some((p) => p.includes(w)));
+  const desc = LLM_GATEWAY_TOOLS.find((x) => x.slug === "v1-chat-nano")?.description || "";
+  const dList = (desc.split("nano tier: ")[1] || "").split(" - $")[0];
+  const wiki = readFileSync(new URL("../wiki/LLM-Gateway.md", import.meta.url), "utf8");
+  const wList = (wiki.split("nano models (")[1] || "").split(";")[0];
+  const dw = words(dList), ww = words(wList);
+  ok(dw.length >= 6 && unserved(dw).length === 0, `the nano description names only families the tier serves (${dw.join(" ")}${unserved(dw).length ? `; not served: ${unserved(dw).join(", ")}` : ""})`);
+  ok(ww.length >= 6 && unserved(ww).length === 0, `the wiki's nano row names only families the tier serves (${ww.join(" ")}${unserved(ww).length ? `; not served: ${unserved(ww).join(", ")}` : ""})`);
+  ok(unserved(words("small qwen")).length === 1, "control: a family the tier does not serve is caught");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

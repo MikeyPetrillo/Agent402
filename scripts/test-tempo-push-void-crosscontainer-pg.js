@@ -15,6 +15,7 @@
 // The dead-letter here is A's local disk (no REDIS_URL); with the journals in
 // Redis the same void tombstone holds (test-ledger-journal-redis-pg.js).
 // Requires STATE_DATABASE_URL (CI fails without it).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync } from "node:fs";
 import { childJson } from "./lib/child-json.js";
 import { tmpdir } from "node:os";

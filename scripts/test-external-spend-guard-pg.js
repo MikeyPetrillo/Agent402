@@ -4,6 +4,7 @@
 // the row first so the OTHER container's spend counts, and a write merges
 // rather than overwrites the other container's rows. The other container is a
 // real second process. Requires STATE_DATABASE_URL (CI fails without it).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { spawn, spawnSync } from "node:child_process";
 import { childJson } from "./lib/child-json.js";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";

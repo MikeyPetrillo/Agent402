@@ -36,6 +36,7 @@
 //      live: every line added exactly once, and an entry whose line already
 //      landed adds nothing.
 // Requires STATE_DATABASE_URL and REDIS_URL (under CI a missing one fails).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync, existsSync, readFileSync } from "node:fs";
 import { childJson } from "./lib/child-json.js";
 import { tmpdir } from "node:os";

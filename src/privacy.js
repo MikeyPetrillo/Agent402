@@ -12,7 +12,7 @@ import { auditRetentionDays, AUDIT_SWEEP_MS } from "./memory-retention.js";
 import { ADDRESS_MAX_AGE_MS, MAX_SEND_FAILURES, RECORD_KEEP_MS } from "./followups.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
-import { settledHoldText, CONSUMED_VALIDITY_MARGIN_MS } from "./replay-guard.js";
+import { settledHoldText, settledValidityHoldText, CONSUMED_VALIDITY_MARGIN_MS } from "./replay-guard.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { SHARE_TTL_DAYS, TOMBSTONE_DAYS, answerShareEnabled, sharePagesMayBeLive } from "./answer-share.js";
 import { firstCallAllowanceEnabled } from "./first-call-allowance.js";
@@ -82,7 +82,7 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-10.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-11.</p>
 </section>
 
 <section>
@@ -160,7 +160,11 @@ so every claim below is verifiable in code.</p>
     address then answers that it was removed.</li>` : ""}
   </ul></li>
   <li><b>IP addresses.</b> Used for rate limiting and in standard operational logs (request path, status
-  code) for abuse prevention and debugging. When the onchain data service cannot answer an
+  code) for abuse prevention and debugging. The log line written for a refused payment, and the timing
+  line written for each paid call, also hold the payment's network, the route and the first characters of
+  the paying address. Other payment log lines name a paying address by its first characters too, except a
+  line written when a payment that may be owed back could not be recorded anywhere else: that line holds
+  the full address so the payment can be returned. When the onchain data service cannot answer an
   <code>onchain-sql</code> query, the text of that query is written to the same operational log so the
   failure can be reproduced; it is kept with the log and not used for anything else. Most rate-limit counters are kept in process memory for up
   to one hour. The free trial's counters (the <code>?trial=1</code> allowance on the pure-CPU tools, see the
@@ -239,7 +243,8 @@ so every claim below is verifiable in code.</p>
   scheme and network it settles on, the optional <code>payment-identifier</code> (used as an idempotency key
   and kept with the cached answer for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes), the payment's nonce and network (as an
   idempotency key for a re-sent payment, held with the cached answer for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes), a digest of the payment's
-  network, signed payer and nonce as a replay mark (kept about ${settledHoldText()} after a settled call; for a grant
+  network, signed payer and nonce as a replay mark (kept about ${settledHoldText()} after a settled call, or until the
+  authorization's own validBefore plus ${Math.round(CONSUMED_VALIDITY_MARGIN_MS / 60000)} minutes when that is later, at most ${settledValidityHoldText()} after the call; for a grant
   that was not settled, a forgiven hang-up${allowanceOn ? " or a served first-call allowance" : ""}, whose authorization is still live
   on chain, until the authorization's own validBefore plus ${Math.round(CONSUMED_VALIDITY_MARGIN_MS / 60000)} minutes, which can be long when the client
   signs a long validity window), the signers of a Solana payment (stored only

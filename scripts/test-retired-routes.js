@@ -174,6 +174,28 @@ try {
   const pack = await fetch(`${base}/api/skill/market-open`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
   const pb = await pack.json();
   ok(pack.status === 410 && pb.slug === "market-open" && /Skill pack market-open was retired/.test(pb.hint), `a retired skill pack is 410 (got ${pack.status})`);
+  // The retired tool's and pack's PAGES answer 410 too, with the same headers,
+  // the date and the replacement's page; a slug that never existed stays 404.
+  {
+    const page = await fetch(`${base}/tools/options-chain`);
+    const html = await page.text();
+    ok(page.status === 410 && /text\/html/.test(page.headers.get("content-type") || ""), `a retired tool's page is 410 (got ${page.status})`);
+    ok(pastSunset(page, RETIRED_TOOLS["options-chain"].retiredAt) && /\/tools\/crypto-options-chain>; rel="successor-version"/.test(page.headers.get("link") || ""), `...with Sunset and a successor Link to the replacement's page (${page.headers.get("link")})`);
+    ok(html.includes(RETIRED_TOOLS["options-chain"].retiredAt) && html.includes('href="/tools/crypto-options-chain"') && /noindex/.test(html), "the page names the retirement date, links the replacement and is not indexed");
+    // The date is in the page's own sentence, not only in its meta description.
+    ok(html.includes(`<code>options-chain</code> was retired on ${RETIRED_TOOLS["options-chain"].retiredAt}.`), "the page body says the slug was retired on that date");
+    ok((await fetch(`${base}/tools/crypto-options-chain`)).status === 200, "control: the replacement's page is served");
+    const noRep = await fetch(`${base}/tools/stock-dividends`);
+    ok(noRep.status === 410 && !/successor-version/.test(noRep.headers.get("link") || "") && (await noRep.text()).includes('href="/tools"'), "a retired tool with no replacement: 410, no successor, a link to the catalog");
+    const packPage = await fetch(`${base}/skills/market-open`);
+    ok(packPage.status === 410 && /Skill pack retired/.test(await packPage.text()), `a retired skill pack's page is 410 (got ${packPage.status})`);
+    const packTool = await fetch(`${base}/tools/skill-market-open`);
+    ok(packTool.status === 410, `a retired pack's catalog page is 410 (got ${packTool.status})`);
+    for (const p of ["/tools/nope-nope", "/skills/nope-nope"]) ok((await fetch(`${base}${p}`)).status === 404, `control: ${p} never existed and is still 404`);
+    const pagesBad = [];
+    for (const slug of Object.keys(RETIRED_TOOLS)) { const r = await fetch(`${base}/tools/${slug}`); if (r.status !== 410) pagesBad.push(`${slug}:${r.status}`); }
+    ok(pagesBad.length === 0, `every retired tool's page answers 410 (${pagesBad.join(", ") || "all"})`);
+  }
   const unknown = await fetch(`${base}/api/nope-nope`);
   ok(unknown.status === 404 && (await unknown.json()).error === "not-found", "a guessed slug that was never a tool is still 404");
   // Routing is case-insensitive, so is the machine-surface test: an uppercase

@@ -336,12 +336,13 @@ export const TIERS = {
       // gemini-2.5-flash-lite left 2026-09-29 (upstream expiration 2026-10-20): served by its successor via RETIRING_MODELS.
       "google/gemini-3.1-flash-lite", // inside this tier's max_price
       // inception/mercury-2.5 left 2026-11-08 (upstream expiration): served by gemini-3.1-flash-lite via RETIRING_MODELS.
+      // llama-3.2-1b-instruct: served as itself until its upstream expiration on 2026-11-20, then by llama-3.2-3b-instruct (RETIRING_MODELS, scheduled). In no ranking, fallback or default; this prefix goes on that day.
       "meta-llama/llama-3.2-1b-instruct", "meta-llama/llama-3.2-3b-instruct",
       // ministral-3b/8b were renamed upstream to the -2512 ids (the bare ids
       // 404 at OpenRouter; live-verified 2026-08-19). Listed with the live id so
       // /v1/models never advertises a name the upstream no longer serves.
       "mistralai/ministral-3b-2512", "mistralai/ministral-8b-2512",
-      "qwen/qwen-2.5-7b-instruct",
+      // qwen-2.5-7b-instruct left 2026-11-11 (gone from the upstream catalog): served by ministral-8b-2512 via RETIRING_MODELS.
       "deepseek/deepseek-chat",
       // poolside laguna-xs-2.1 / laguna-s-2.1 left 2026-10-03 (upstream expiration 2026-10-31): served by their successors via RETIRING_MODELS.
     ],
@@ -876,6 +877,19 @@ export const RETIRING_MODELS = Object.freeze({
   // family successor on premium, the one the /api/llm-premium proxy already
   // serves for the retired o3-mini and o4-mini ids (llm-kit.js).
   "openai/o4-mini": { until: "2026-10-27", use: "openai/gpt-5.6-terra" },
+  // Gone from the upstream catalog 2026-11-11 (the live-catalog guard), with
+  // no expiration date announced. It was the nano tier's only qwen id, so the
+  // successor is the nano model of matching size class, as for laguna-s:
+  // non-reasoning, tool-capable, its own row at or under the row that priced
+  // this id and inside the tier's max_price. A call naming it on nano, base
+  // or metered is served there by the successor.
+  "qwen/qwen-2.5-7b-instruct": { until: "2026-11-11", use: "mistralai/ministral-8b-2512" },
+  // Llama 3.2 1B (OpenRouter expiration_date 2026-11-20). SCHEDULED: served as
+  // itself on nano, base and metered until that day, then by the next size of
+  // its own family, which those same three tiers list. Neither takes tools,
+  // both are non-reasoning, and the family row prices both, so the successor
+  // is no dearer; its live endpoints sit inside the nano tier's max_price.
+  "meta-llama/llama-3.2-1b-instruct": { until: "2026-11-20", use: "meta-llama/llama-3.2-3b-instruct", asItselfUntil: true },
 });
 let retiringClock = () => Date.now();
 /** Tests only: read scheduled retirements against another clock (null resets). */
@@ -935,7 +949,8 @@ export function refuseUnlistedMeteredModel(tier, model) {
 export const AVAILABILITY_SUCCESSORS = Object.freeze({
   // Each value is an ordered list: the first entry the serving tier admits is used.
   "deepseek/deepseek-chat": ["deepseek/deepseek-v4-flash"],
-  "qwen/qwen-2.5-7b-instruct": ["qwen/qwen3-235b-a22b-2507"],
+  // qwen-2.5-7b-instruct left this table 2026-11-11: the id is gone upstream
+  // and RETIRING_MODELS serves its successor before any upstream attempt.
   // Not gpt-4.1-nano (removed 2026-10-23) or gpt-5-nano (removed 2026-12-11):
   // gpt-6-luna lists below gpt-4o-mini, takes tools, and is served on the
   // tiers that serve both (auto, grounded, metered). Base admits no current
@@ -4605,7 +4620,7 @@ export const LLM_GATEWAY_TOOLS = [
     category: "llm",
     price: "$0.003",
     description:
-      "OpenAI-compatible chat completions, nano tier: gpt-6-luna (the default), gpt-5.6-luna, gpt-5-nano, gemini flash-lite, small llama/ministral/qwen, deepseek-chat - $0.003 per call in USDC over x402, priced for high-frequency agent loops. Same wire format as /v1/chat/completions with loop-sized caps (12k chars in, 768 tokens out). Streaming supported (stream: true). No API key, no signup.",
+      "OpenAI-compatible chat completions, nano tier: gpt-6-luna (the default), gpt-5.6-luna, gpt-5-nano, gemini flash-lite, small llama/ministral, deepseek-chat - $0.003 per call in USDC over x402, priced for high-frequency agent loops. Same wire format as /v1/chat/completions with loop-sized caps (12k chars in, 768 tokens out). Streaming supported (stream: true). No API key, no signup.",
     tags: SHARED_TAGS,
     discovery: { bodyType: "json", input: { ...EXAMPLE, model: "openai/gpt-5.6-luna" }, inputSchema: INPUT_SCHEMA, output: { example: { ...EXAMPLE_OUT, model: "openai/gpt-5.6-luna" } } },
     handler: makeHandler("v1-chat-nano"),

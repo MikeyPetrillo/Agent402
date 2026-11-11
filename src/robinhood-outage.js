@@ -32,6 +32,7 @@
 // buyer twice; the claims make sure one transfer answers one request.
 
 import { keccak256, toHex, encodeFunctionData, parseAbi } from "viem";
+import { shortPayer } from "./verify-failure-log.js";
 import { rpc, evmTransferredInReceipt } from "./payment-verify.js";
 import { cdnSyncLeftMs } from "./cdn-sync-window.js";
 import { SETTLE_RULE_SECONDS } from "./evm-validity.js";
@@ -210,7 +211,7 @@ export function createRobinhoodOutage({ network, token, treasury, rpcUrl, relaye
           await sleep(pollMs);
         }
       } catch (e) {
-        log(`[rh-outage] chain read failed for ${auth.from} nonce ${auth.nonce}: ${String(e?.message || e).slice(0, 120)}; refused, the authorization is booked`);
+        log(`[rh-outage] chain read failed for ${shortPayer(auth.from)} nonce ${auth.nonce}: ${String(e?.message || e).slice(0, 120)}; refused, the authorization is booked`);
         return { refused: true, lateAuth, reason: "chain read failed" };
       }
 
@@ -229,7 +230,7 @@ export function createRobinhoodOutage({ network, token, treasury, rpcUrl, relaye
       try {
         if (await authorizationUsed(call, tok, auth.from, auth.nonce)) return await judgeUsed();
       } catch (e) {
-        log(`[rh-outage] chain re-read failed after our relayer for ${auth.from} nonce ${auth.nonce}: ${String(e?.message || e).slice(0, 120)}`);
+        log(`[rh-outage] chain re-read failed after our relayer for ${shortPayer(auth.from)} nonce ${auth.nonce}: ${String(e?.message || e).slice(0, 120)}`);
       }
       return { refused: true, lateAuth, reason: `our relayer did not settle it (${r?.errorReason || "no reason"})` };
     },

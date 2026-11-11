@@ -4,6 +4,7 @@
 // the file through), and the budget survives a restart: the same wallet is
 // still past its budget after the records are reloaded from the row.
 // Requires STATE_DATABASE_URL (CI fails without it).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

@@ -336,6 +336,187 @@ for (const [name, j] of Object.entries(jobs)) {
   ok(calls.every((c) => { const m = /--max-time\s+(\d+)/.exec(c.cmd); return m && Number(m[1]) <= 60; }), "each platform API call is bounded at a minute or less");
 }
 
+// --- a replaced queued release keeps its markers ---------------------------
+// Nothing on main is canceled in progress and GitHub keeps one pending run per
+// group, so of two merges queued behind a running release only the newer run
+// starts. Its pushed range holds only its own commits; the parse step reads on
+// from the head of the last run whose markers job finished
+// (scripts/marker-base.js), so the replaced push's markers are read, once.
+// Modeled here: the step's own `run:` text, executed in a throwaway repository
+// of three pushes against a stub of the two GitHub reads it makes. What the
+// stub cannot show is GitHub itself: how a replaced run is listed there.
+{
+  const markersJob = jobs.markers || {};
+  const parse = (markersJob.steps || []).find((s) => s.id === "parse") || {};
+  const runText = String(parse.run || "");
+  ok(JSON.stringify(markersJob.permissions) === JSON.stringify({ contents: "read", actions: "read" }), `the markers job's token reads the tree and the workflow's runs, nothing else (${JSON.stringify(markersJob.permissions)})`);
+  ok(!runText.includes("${{") && (markersJob.steps || []).every((s) => !String(s.run || "").includes("${{")), "no markers step interpolates an expression into its script");
+  ok(/node scripts\/marker-base\.js/.test(runText) && /refs\/heads\/main/.test(runText), "the parse step asks scripts/marker-base.js where to read from, on main only");
+  ok(/merge-base --is-ancestor/.test(runText), "...and reads on from that commit only when it is an ancestor of the push");
+
+  const { mkdtempSync, rmSync, writeFileSync, mkdirSync, copyFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { spawn } = await import("node:child_process");
+  const http = await import("node:http");
+  const repo = mkdtempSync(join(tmpdir(), "a402-markers-"));
+  const git = (...a) => { const r = spawnSync("git", a, { cwd: repo, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.test", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.test", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" } }); if (r.status !== 0) throw new Error(`git ${a.join(" ")}: ${r.stderr}`); return r.stdout.trim(); };
+  git("init", "-q", "-b", "main");
+  mkdirSync(join(repo, "scripts"));
+  copyFileSync(new URL("./marker-base.js", import.meta.url), join(repo, "scripts", "marker-base.js"));
+  git("add", "scripts/marker-base.js");
+  const commit = (subject, body = "") => { git("commit", "-q", "--allow-empty", "-m", subject, ...(body ? ["-m", body] : [])); return git("rev-parse", "HEAD"); };
+  const base = commit("[test] base");
+  // Three pushes (each a branch commit and its merge, the way merge-on-green
+  // lands them) and a fourth after the release caught up.
+  commit("[test] first change");
+  const A = commit("Merge pull request #1 from o/dev", "[test] first");
+  commit("[test] [publish] second change");
+  commit("[paytest] [drain] second change, more");
+  const B = commit("Merge pull request #2 from o/dev", "[purl] in a body is not a marker");
+  commit("[test] third change");
+  const C = commit("Merge pull request #3 from o/dev");
+  commit("[test] [probe] fourth change");
+  const D = commit("Merge pull request #4 from o/dev");
+
+  // The stub: what GitHub lists for this workflow's push runs on main, and
+  // each run's jobs.
+  // The parse step's token is the workflow's own (the runs read needs it);
+  // the stub answers only a request that carries the token the step was given.
+  const STEP_TOKEN = "stub-token";
+  ok(String(parse.env?.GH_TOKEN ?? "").replace(/\s+/g, "") === "${{github.token}}", `the parse step passes the workflow token to scripts/marker-base.js (${JSON.stringify(parse.env?.GH_TOKEN ?? null)})`);
+  const state = { runs: [], jobs: {}, status: 200, hits: 0, hang: false };
+  const hung = [];
+  const server = http.createServer((req, res) => {
+    state.hits++;
+    const u = new URL(req.url, "http://stub");
+    const send = (code, body) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(body)); };
+    if (state.hang) { hung.push(res); return; }
+    if (req.headers.authorization !== `Bearer ${STEP_TOKEN}`) return send(401, { message: "Requires authentication" });
+    if (state.status !== 200) return send(state.status, { message: "refused" });
+    if (u.pathname === "/repos/o/r/actions/workflows/deploy.yml/runs" && u.searchParams.get("branch") === "main" && u.searchParams.get("event") === "push") return send(200, { workflow_runs: state.runs });
+    const m = /^\/repos\/o\/r\/actions\/runs\/(\d+)\/jobs$/.exec(u.pathname);
+    if (m) return send(200, { jobs: state.jobs[m[1]] || [] });
+    send(404, { message: "not found" });
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const api = `http://127.0.0.1:${server.address().port}`;
+  const ran = (n, sha) => { state.runs.unshift({ id: 100 + n, run_number: n, head_sha: sha, event: "push", head_branch: "main", status: "completed", conclusion: "success" }); state.jobs[100 + n] = [{ name: "markers", conclusion: "success" }, { name: "test", conclusion: "success" }]; };
+  const replaced = (n, sha, jobsSeen = []) => { state.runs.unshift({ id: 100 + n, run_number: n, head_sha: sha, event: "push", head_branch: "main", status: "completed", conclusion: "cancelled" }); state.jobs[100 + n] = jobsSeen; };
+
+  const step = (n, before, after, { ref = "refs/heads/main", extra = {} } = {}) => new Promise((resolve) => {
+    const out = join(repo, `.out-${n}-${Math.random().toString(36).slice(2)}`);
+    writeFileSync(out, "");
+    // GH_TOKEN reaches the step only when the workflow names it in the step's env.
+    const env = { PATH: process.env.PATH, HOME: repo, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", BEFORE: before, AFTER: after, EVENT_NAME: "push", ...(parse.env?.GH_TOKEN !== undefined ? { GH_TOKEN: STEP_TOKEN } : {}), MARKER_WORKFLOW_FILE: String(parse.env?.MARKER_WORKFLOW_FILE ?? "deploy.yml"),
+      GITHUB_OUTPUT: out, GITHUB_REF: ref, GITHUB_REF_NAME: ref.replace("refs/heads/", ""), GITHUB_REPOSITORY: "o/r", GITHUB_RUN_NUMBER: String(n), GITHUB_API_URL: api, ...extra };
+    const child = spawn("bash", ["-c", runText], { cwd: repo, env, stdio: ["ignore", "pipe", "pipe"] });
+    let log = ""; child.stdout.on("data", (d) => { log += d; }); child.stderr.on("data", (d) => { log += d; });
+    child.on("exit", (code) => {
+      const got = Object.fromEntries(readFileSync(out, "utf8").split("\n").filter(Boolean).map((l) => l.split("=")));
+      resolve({ code, log, on: Object.keys(got).filter((k) => got[k] === "true").sort().join(",") });
+    });
+  });
+
+  try {
+    // Push 1 runs alone: no earlier run, so its own range.
+    const r1 = await step(1, base, A);
+    ok(r1.code === 0 && r1.on === "test", `the first release reads its own pushed range (${r1.on}; exit ${r1.code})`);
+    ran(1, A);
+    // Push 2 queues behind run 1 and is replaced by push 3 before it starts.
+    replaced(2, B);
+    const r3 = await step(3, B, C);
+    ok(r3.code === 0 && r3.on === "drain,paytest,publish,test", `the run that replaced a queued release reads the replaced push's subjects too: [publish], [paytest] and [drain] are on (${r3.on}; exit ${r3.code})`);
+    {
+      // The pushed range and the range since the last read run overlap: the
+      // scanned list names each subject once.
+      const listed = r3.log.split("Subject lines scanned for markers:")[1]?.split("\n").filter((l) => l.startsWith("  ")) || [];
+      ok(listed.includes("  [test] third change") && listed.includes("  [test] [publish] second change") && new Set(listed).size === listed.length, `the subjects scanned are listed once each (${listed.length} lines, ${new Set(listed).size} distinct)`);
+    }
+    ok(!/(^|,)purl(,|$)/.test(r3.on), "a marker in a replaced merge commit's body is still not read");
+    ran(3, C);
+    // Push 4 after the release caught up: the replaced push is not read again.
+    const r4 = await step(4, C, D);
+    ok(r4.code === 0 && r4.on === "probe,test", `the next run starts from that run's head, so each subject is read by one run (${r4.on})`);
+
+    // A replaced run that GitHub lists with a canceled markers job reads the same.
+    state.runs = []; state.jobs = {}; ran(1, A); replaced(2, B, [{ name: "markers", conclusion: "cancelled" }]);
+    const r3b = await step(3, B, C);
+    ok(r3b.on === "drain,paytest,publish,test", `a replaced run listed with a canceled markers job is not counted as read (${r3b.on})`);
+    // A run that read its markers and then failed a lane did read them.
+    state.runs = []; state.jobs = {}; ran(1, A); ran(2, B); state.runs[0].conclusion = "failure";
+    const r3c = await step(3, B, C);
+    ok(r3c.on === "test", `a run whose markers job finished counts as read, whatever its later jobs did (${r3c.on})`);
+    // The dev branch reads its pushed range and never asks.
+    state.runs = []; state.jobs = {}; ran(1, A); replaced(2, B); state.hits = 0;
+    const dev = await step(3, B, C, { ref: "refs/heads/claude/sweet-brown-i99jl3" });
+    ok(dev.code === 0 && dev.on === "test" && state.hits === 0, `a push to the dev branch reads its pushed range and makes no API read (${dev.on}; ${state.hits} reads)`);
+    // GitHub unreadable: the pushed range stands and the job still passes.
+    state.status = 403;
+    const down = await step(3, B, C);
+    ok(down.code === 0 && down.on === "test", `an unreadable API leaves the pushed range and does not fail the job (${down.on}; exit ${down.code})`);
+    state.status = 200;
+    // A listed head that is not an ancestor of the push is not read from.
+    const side = git("commit-tree", "-m", "[publish] elsewhere", `${base}^{tree}`);
+    state.runs = []; state.jobs = {}; ran(2, side);
+    const off = await step(3, B, C);
+    ok(off.code === 0 && off.on === "test", `a listed head outside the push's history is ignored (${off.on}; exit ${off.code})`);
+    // An API that takes the connection and never answers: the lookup gives up
+    // at its one deadline and the pushed range stands, the job still passing.
+    state.runs = []; state.jobs = {}; ran(1, A); replaced(2, B); state.hang = true;
+    const hang = await step(3, B, C, { extra: { MARKER_BASE_DEADLINE_MS: "1500" } });
+    state.hang = false;
+    for (const r of hung.splice(0)) { try { r.destroy(); } catch { /* closed */ } }
+    ok(hang.code === 0 && hang.on === "test" && /no answer within the 2 s deadline/.test(hang.log), `an API that never answers is given up at the lookup's deadline, the pushed range stands (${hang.on}; exit ${hang.code}; ${(/marker-base: [^\n]*/.exec(hang.log) || [""])[0]})`);
+    // A value that is not a commit id never reaches git as a revision.
+    state.runs = []; state.jobs = {}; ran(2, "--all"); state.runs[0].head_sha = "--all";
+    const odd = await step(3, B, C);
+    ok(odd.code === 0 && odd.on === "test", `a listed head that is not a commit id is ignored (${odd.on})`);
+    // The step's own check, apart from the script's: a lookup that printed a
+    // revision that is not a 40-hex commit id (here one naming the first
+    // push, an ancestor) is not read from.
+    state.runs = []; state.jobs = {};
+    writeFileSync(join(repo, "scripts", "marker-base.js"), `console.log(${JSON.stringify(`${C}~5`)});\n`);
+    let notSha;
+    try { notSha = await step(3, B, C); } finally { copyFileSync(new URL("./marker-base.js", import.meta.url), join(repo, "scripts", "marker-base.js")); }
+    ok(git("rev-parse", `${C}~5`) === A && notSha.code === 0 && notSha.on === "test", `a printed revision that is not a commit id is ignored by the step itself (${notSha.on})`);
+    // The script itself exits 0 on an API error, printing nothing: a release
+    // is never held on this lookup.
+    {
+      state.status = 403;
+      const { fileURLToPath } = await import("node:url");
+      const child = spawn(process.execPath, [fileURLToPath(new URL("./marker-base.js", import.meta.url))], { cwd: repo, env: { PATH: process.env.PATH, GH_TOKEN: STEP_TOKEN, GITHUB_REPOSITORY: "o/r", GITHUB_REF_NAME: "main", GITHUB_RUN_NUMBER: "3", GITHUB_API_URL: api }, stdio: ["ignore", "pipe", "pipe"] });
+      let out = "", err = "";
+      child.stdout.on("data", (d) => { out += d; }); child.stderr.on("data", (d) => { err += d; });
+      const code = await new Promise((r) => child.on("exit", r));
+      state.status = 200;
+      ok(code === 0 && out === "" && /GitHub could not be read \(HTTP 403\)/.test(err), `marker-base.js exits 0 and prints no commit when GitHub answers an error (exit ${code}; ${err.trim().slice(0, 120)})`);
+    }
+  } finally {
+    await new Promise((r) => server.close(r));
+    rmSync(repo, { recursive: true, force: true });
+  }
+
+  const { lastReadRun, MAX_RUNS_READ } = await import("./marker-base.js");
+  const many = Array.from({ length: 40 }, (_, i) => ({ id: i + 1, run_number: i + 1, head_sha: "a".repeat(40), event: "push" }));
+  let asked = 0;
+  const none = await lastReadRun({ runs: many, runNumber: 41, jobsOf: async () => { asked++; return []; } });
+  ok(none.sha === null && asked === MAX_RUNS_READ, `the lookup reads a bounded number of earlier runs (${asked})`);
+  const later = await lastReadRun({ runs: [{ id: 9, run_number: 9, head_sha: "b".repeat(40), event: "push" }, { id: 5, run_number: 5, head_sha: "c".repeat(40), event: "push" }], runNumber: 7, jobsOf: async () => [{ name: "markers", conclusion: "success" }] });
+  ok(later.sha === "c".repeat(40), "a run numbered after this one is never read from (a re-run of an older run reads as it first did)");
+  const markersRead = async () => [{ name: "markers", conclusion: "success" }];
+  const self = await lastReadRun({ runs: [{ id: 7, run_number: 7, head_sha: "d".repeat(40), event: "push" }, { id: 5, run_number: 5, head_sha: "c".repeat(40), event: "push" }], runNumber: 7, jobsOf: markersRead });
+  ok(self.sha === "c".repeat(40), `this run itself is never its own base (${self.sha?.slice(0, 7)})`);
+  const pr = await lastReadRun({ runs: [{ id: 6, run_number: 6, head_sha: "e".repeat(40), event: "pull_request" }, { id: 5, run_number: 5, head_sha: "c".repeat(40), event: "push" }], runNumber: 7, jobsOf: markersRead });
+  ok(pr.sha === "c".repeat(40), `a run of another event is never read from (${pr.sha?.slice(0, 7)})`);
+  const shapes = await lastReadRun({ runs: [{ id: 6, run_number: 6, head_sha: "--all", event: "push" }, { id: 4, run_number: 4, head_sha: "F".repeat(40), event: "push" }, { id: 3, run_number: 3, head_sha: "c".repeat(39), event: "push" }, { id: 2, run_number: 2, head_sha: "c".repeat(40), event: "push" }], runNumber: 7, jobsOf: markersRead });
+  ok(shapes.sha === "c".repeat(40) && shapes.read === 1, `a listed head that is not 40 lowercase hex is passed over before any jobs read (${shapes.sha?.slice(0, 7)}, ${shapes.read} read)`);
+  const { deadlineMs, DEADLINE_MS_DEFAULT } = await import("./marker-base.js");
+  const jobLimitMs = Number(markersJob["timeout-minutes"]) * 60_000;
+  ok(deadlineMs({}) === DEADLINE_MS_DEFAULT && DEADLINE_MS_DEFAULT <= jobLimitMs / 2, `the lookup's default deadline (${DEADLINE_MS_DEFAULT / 1000} s) is at most half the markers job's limit (${jobLimitMs / 1000} s), leaving the checkout and the scan their time`);
+  ok(deadlineMs({ MARKER_BASE_DEADLINE_MS: "1500" }) === 1500 && deadlineMs({ MARKER_BASE_DEADLINE_MS: "999999" }) === DEADLINE_MS_DEFAULT && deadlineMs({ MARKER_BASE_DEADLINE_MS: "nope" }) === DEADLINE_MS_DEFAULT && deadlineMs({ MARKER_BASE_DEADLINE_MS: "0" }) === DEADLINE_MS_DEFAULT, "a deadline setting can shorten the lookup, never lengthen it");
+}
+
 console.log(`${pass} passed, ${fail} failed`);
 
 

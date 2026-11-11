@@ -17,8 +17,9 @@
 // Redis code path here runs against an in-memory client (section A4).
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import express from "express";
+import { randomBytes } from "node:crypto";
 delete process.env.REDIS_URL;
-const { paymentReplayKey, paymentValidBeforeMs, createReplayGuard, CONSUMED_VALIDITY_MARGIN_MS } = await import("../src/replay-guard.js");
+const { paymentReplayKey, paymentValidBeforeMs, consumedHoldFor, createReplayGuard, CONSUMED_VALIDITY_MARGIN_MS, SETTLED_HOLD_MS, MAX_SETTLED_VALIDITY_HOLD_MS } = await import("../src/replay-guard.js");
 const { __setTestClient } = await import("../src/shared-limit.js");
 
 let passed = 0, failed = 0;
@@ -263,16 +264,16 @@ function memoryRedis() {
 }
 
 {
-  // The x402 call site passes the authorization's validBefore only for a
-  // grant that was not settled (src/hangup-settlement.js grantedUnsettled:
-  // a forgiven hang-up, a served first-call allowance), so a settled 200
-  // keeps the guard's default hold; and it requires the shared claim on a
+  // The x402 call site passes the authorization's validBefore for every
+  // grant, and marks the ones that were settled (not grantedUnsettled in
+  // src/hangup-settlement.js: a forgiven hang-up, a served first-call
+  // allowance), whose hold the guard bounds; and it requires the shared claim on a
   // long-running route and whenever another container may be serving (the
   // booted cases are scripts/test-replay-store-outage.js; the hold read back
   // from Redis is scripts/test-replay-consumed-hold.js).
   const { readFileSync } = await import("node:fs");
   const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-  ok(server.includes("replayGuard.settle(replayKey, undefined, grantedUnsettled(req) ? { validBeforeMs: paymentValidBeforeMs(req) } : {})"), "server.js holds a granted x402 payment's consumed mark until its validBefore only when the grant was not settled");
+  ok(server.includes("replayGuard.settle(replayKey, undefined, consumedHoldFor(req, { settled: !grantedUnsettled(req) }))"), "server.js holds every granted x402 payment's consumed mark while its authorization stays valid, and tells the guard which grants were settled (those are bounded)");
   const { grantedUnsettled } = await import("../src/hangup-settlement.js");
   const ticket = (granted) => ({ value: { granted, reason: granted ? null : "payer budget" }, enumerable: false });
   const settled = {}; // a connected buyer, settled
@@ -286,6 +287,82 @@ function memoryRedis() {
   ok(grantedUnsettled(forgiven) === true && grantedUnsettled(allowance) === true, "a forgiven hang-up and a served first-call allowance are held to validBefore");
   ok(grantedUnsettled(inherited) === false && grantedUnsettled(null) === false, "own properties only: an inherited flag never makes a grant read as unsettled");
   ok(/requireShared: sharedClaimRequired\(\{ longRunning: !!replayDef && isLongRunningSlug\(replayDef\.slug\), draining: drainSignal\(\)\.aborted \}\)/.test(server), "server.js requires the shared claim on a long-running route and whenever another container may serve (src/replay-topology.js)");
+}
+
+// ---- A4b. A SETTLED payment's consumed mark lasts while its authorization
+// stays valid (plus the margin), on both stores and on the legacy twin, and
+// no longer than MAX_SETTLED_VALIDITY_HOLD_MS from the settle. A payment
+// with the stock five-minute expiry keeps exactly the default hold, and a
+// settle sends the store the same commands whatever hold it asks for.
+{
+  const DAY = 24 * 3600_000;
+  const signed = (validBefore) => fakeReq({ "payment-signature": Buffer.from(JSON.stringify({ x402Version: 2, accepted: { network: "eip155:8453" }, payload: { authorization: { from: "0x" + "c".repeat(40), nonce: "0x" + randomBytes(32).toString("hex"), validAfter: "0", validBefore: String(validBefore) } } })).toString("base64") });
+  const t0 = Date.now();
+  const sec = (ms) => Math.floor(ms / 1000);
+  const week = signed(sec(t0 + 7 * DAY)), century = signed(9999999999), stock = signed(sec(t0 + 300_000)), padded = signed("0".repeat(40) + sec(t0 + 7 * DAY));
+  ok(consumedHoldFor(week).settled === true && consumedHoldFor(week).validBeforeMs === sec(t0 + 7 * DAY) * 1000, "consumedHoldFor: a settled grant carries its authorization's validBefore, marked settled");
+  ok(consumedHoldFor(week, { settled: false }).settled === false && consumedHoldFor(week, { settled: false }).validBeforeMs === sec(t0 + 7 * DAY) * 1000, "consumedHoldFor: a grant that was not settled carries it too, not marked settled");
+  ok(consumedHoldFor(padded).validBeforeMs === sec(t0 + 7 * DAY) * 1000, "consumedHoldFor: a validBefore spelled with leading zeros (a uint256 the cache reader accepts) reads the same expiry");
+  const mem = memoryRedis();
+  __setTestClient(mem);
+  try {
+    const g = createReplayGuard();
+    const exOf = (key) => { const { 1: id, 2: legacy } = key.split(":"); return [mem.sets.findLast((x) => x.k === `replay:c:n2:${id}`)?.ex, mem.sets.findLast((x) => x.k === `replay:c:n:${legacy}`)?.ex]; };
+    const run = async (req, opts) => { const k = paymentReplayKey(req); await g.begin(k, t0); const before = mem.sets.length; await g.settle(k, t0, opts); return { k, cmds: mem.sets.length - before }; };
+    const w = await run(week, consumedHoldFor(week));
+    const wantWeek = Math.ceil((sec(t0 + 7 * DAY) * 1000 + CONSUMED_VALIDITY_MARGIN_MS - t0) / 1000);
+    ok(exOf(w.k).every((ex) => ex >= wantWeek - 5 && ex <= wantWeek + 1), `redis path: a settled seven-day authorization keeps its consumed mark and its legacy twin until it expires plus the margin (EX ${exOf(w.k)} s, want about ${wantWeek})`);
+    const c = await run(century, consumedHoldFor(century));
+    const bound = Math.ceil(MAX_SETTLED_VALIDITY_HOLD_MS / 1000);
+    ok(exOf(c.k).every((ex) => ex <= bound && ex >= bound - 5), `redis path: a settled authorization valid for centuries keeps both keys for the settled bound and no longer (EX ${exOf(c.k)} s, bound ${bound})`);
+    const u = await run(century, consumedHoldFor(century, { settled: false }));
+    ok(exOf(u.k)[0] > bound * 10, `redis path: the same authorization granted without a settle is still held to its validBefore, unbounded by the settled bound (EX ${exOf(u.k)[0]} s)`);
+    const st = await run(stock, consumedHoldFor(stock));
+    ok(exOf(st.k).every((ex) => ex === Math.ceil(SETTLED_HOLD_MS / 1000)), `redis path: a settled stock five-minute payment keeps exactly the default hold (EX ${exOf(st.k)} s)`);
+    const plain = signed(sec(t0 + 300_000));
+    const pl = await run(plain, {});
+    ok(w.cmds === pl.cmds && c.cmds === pl.cmds && st.cmds === pl.cmds, `redis path: a longer hold is a longer TTL on the same writes, no extra command (${w.cmds}, ${c.cmds}, ${st.cmds} vs ${pl.cmds})`);
+    // Another replica (no local mark) reads the store's mark near the expiry.
+    const g2 = createReplayGuard();
+    ok(await g2.held(w.k) === "consumed" && await g2.begin(w.k) === "consumed", "redis path: another replica reads the seven-day authorization as consumed");
+  } finally { __setTestClient(null); }
+  // Per-process store, injected clock.
+  const g = createReplayGuard();
+  const settleAt0 = async (req, opts) => { const k = paymentReplayKey(req); await g.begin(k, t0); await g.settle(k, t0, opts); return k; };
+  const kw = await settleAt0(week, consumedHoldFor(week));
+  const expiry = sec(t0 + 7 * DAY) * 1000;
+  ok(await g.begin(kw, t0 + SETTLED_HOLD_MS + 1) === "consumed" && await g.begin(kw, expiry - 300_000) === "consumed" && await g.held(kw, expiry - 1) === "consumed", "local path: a settled seven-day authorization reads consumed past the default hold, five minutes before it expires, and at its last second");
+  ok(await g.begin(kw, expiry + CONSUMED_VALIDITY_MARGIN_MS + 1) === "ok", "local path: past its validBefore plus the margin the key is free (the chain refuses it by then)");
+  const kc = await settleAt0(century, consumedHoldFor(century));
+  ok(await g.begin(kc, t0 + MAX_SETTLED_VALIDITY_HOLD_MS - 1) === "consumed" && await g.begin(kc, t0 + MAX_SETTLED_VALIDITY_HOLD_MS + 1) === "ok", "local path: a settled authorization valid for centuries is held for the settled bound and let go after it");
+  const ks = await settleAt0(stock, consumedHoldFor(stock));
+  ok(await g.begin(ks, t0 + SETTLED_HOLD_MS - 1) === "consumed" && await g.begin(ks, t0 + SETTLED_HOLD_MS + 1) === "ok", "local path: a settled stock five-minute payment is held for exactly the default hold");
+  ok(MAX_SETTLED_VALIDITY_HOLD_MS >= 7 * DAY + CONSUMED_VALIDITY_MARGIN_MS && MAX_SETTLED_VALIDITY_HOLD_MS <= 366 * DAY, "the settled bound covers a seven-day authorization and is under a year");
+  // A long-held mark is not the first one out when the per-process store
+  // fills with default-hold marks written after it, and it does not keep
+  // their expired entries in the store.
+  {
+    const small = createReplayGuard({ maxEntries: 4 });
+    const kl = paymentReplayKey(week);
+    await small.begin(kl, t0); await small.settle(kl, t0, consumedHoldFor(week));
+    for (let i = 0; i < 12; i++) { await small.begin(`n:fill${i}`, t0); await small.settle(`n:fill${i}`, t0); }
+    ok(await small.held(kl, t0 + 1) === "consumed", "local path: twelve later default-hold marks in a store of four do not push out the long-held one");
+    ok(small._state().consumed <= 8, `local path: the store stays bounded (${small._state().consumed} entries, at most four of each kind)`);
+    await small.begin("n:late", t0 + SETTLED_HOLD_MS + 1);
+    ok(small._state().consumed === 1 && await small.held(kl, t0 + SETTLED_HOLD_MS + 1) === "consumed", `local path: expired default-hold marks are pruned behind a long-held one (${small._state().consumed} left)`);
+    await small.release("n:late");
+    // And once the long-held mark itself has expired, the next claim prunes it too.
+    await small.begin("n:later", t0 + MAX_SETTLED_VALIDITY_HOLD_MS + SETTLED_HOLD_MS);
+    ok(small._state().consumed === 0, `local path: an expired long-held mark is pruned from its own map (${small._state().consumed} left)`);
+    await small.release("n:later");
+  }
+  // The bound is published as a fixed figure in the 2026-11-11 changelog entry,
+  // beside the derived text on /privacy and /.well-known/x402.
+  {
+    const { settledValidityHoldText } = await import("../src/replay-guard.js");
+    const log = (await import("node:fs")).readFileSync(new URL("../src/changelog.js", import.meta.url), "utf8");
+    ok(log.includes(`at most ${settledValidityHoldText()} after the call`), `the changelog states the settled bound the guard enforces (${settledValidityHoldText()})`);
+  }
 }
 
 // ---- A5. Payer- and network-scoped keys on the Redis path, and the deploy

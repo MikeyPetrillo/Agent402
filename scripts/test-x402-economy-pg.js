@@ -8,6 +8,7 @@
 // Requires STATE_DATABASE_URL (CI fails without it; locally it skips).
 //
 //   node scripts/test-x402-economy-pg.js
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import Database from "better-sqlite3";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

@@ -204,6 +204,7 @@ export const META_OUTPUT_SCHEMAS = {
     properties: {
       slug: { type: "string", description: "Catalog slug that ran" },
       result: { description: "Native tool output (shape depends on slug)", additionalProperties: true },
+      answerBound: { type: "object", description: "Present only when a free answer was cut to the connector's size ceiling: unit, maxBytes, returned, matched, complete, truncated, cuts (one entry per cut list, string or object: path, kind, returned, matched, complete, truncated), cutsListed (entries in cuts) and cutsTotal (every cut made)", additionalProperties: true },
     },
     required: ["slug", "result"],
   },
@@ -513,9 +514,9 @@ export function outputSchemaFromExample(example) {
 }
 
 /** Wrap a JSON object as MCP CallToolResult with structuredContent. */
-export function mcpJsonResult(obj) {
+export function mcpJsonResult(obj, text = JSON.stringify(obj, null, 2)) {
   return {
-    content: [{ type: "text", text: JSON.stringify(obj, null, 2) }],
+    content: [{ type: "text", text }],
     structuredContent: obj && typeof obj === "object" && !Array.isArray(obj) ? obj : { result: obj },
   };
 }

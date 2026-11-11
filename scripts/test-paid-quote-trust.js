@@ -365,6 +365,8 @@ const proc = spawn(process.execPath, ["--import", fileURLToPath(new URL("./lib/o
     UPSTREAM_COSTS_FILE: fileURLToPath(new URL("../docs/example-upstream-costs.json", import.meta.url)),
     SALES_LEDGER_DB: join(dir, "sales.db"), TRAFFIC_DIR: dir,
     RATE_LIMIT_REPLICAS: "1", TRUST_PROXY_HOPS: "1", POW_SECRET, POW_DIFFICULTY: "8",
+    // The free-tier defaults, whatever the caller exports (the redemption limit below reads them).
+    AGENT402_MCP_MAX_PER_MIN: "20", AGENT402_MCP_MAX_PER_HOUR: "120",
     AGENT402_OPERATOR_TOKEN: OP, PORT: String(PORT),
   },
   stdio: ["ignore", "pipe", "pipe"],
@@ -477,6 +479,36 @@ try {
     ok(free?.status === 200 && free.headers.get("x-pow-accepted") === "true", `a free proof-of-work call is served (status ${free?.status})`);
     const got = await quotes(ip, N + 1);
     ok(got[N] === 429, `an address that only made a free call is still refused at quote ${N + 1} (got ${got[N]})`);
+  }
+  // Proof-of-work redemption past the free-tier burst (20 a minute per
+  // address) is refused 429 with Retry-After: the limiter's own whole seconds
+  // until the first redemption leaves the minute window.
+  {
+    const ip = "203.0.113.31";
+    const lz = (b) => { let t = 0; for (const x of b) { if (!x) { t += 8; continue; } t += Math.clz32(x) - 24; break; } return t; };
+    const solve = async () => {
+      const ch = await (await fetch(`${B}/api/pow/challenge?slug=uuid`, { headers: from(ip) })).json().catch(() => ({}));
+      if (!ch?.token || !ch?.challenge) return null;
+      let n = 0; while (lz(createHash("sha256").update(`${ch.challenge}:${n}`).digest()) < ch.difficulty) n++;
+      return `${ch.token}:${n}`;
+    };
+    let firstAt = null, served = 0, limited = null, sentAt = 0, gotAt = 0;
+    for (let i = 0; i < 25 && !limited; i++) {
+      const sol = await solve();
+      sentAt = Date.now();
+      const r = await fetch(`${B}/api/uuid`, { headers: from(ip, { "x-pow-solution": sol || "none" }) });
+      gotAt = Date.now();
+      await r.arrayBuffer();
+      if (r.status === 200 && r.headers.get("x-pow-accepted") === "true") { served++; firstAt ??= [sentAt, gotAt]; }
+      else if (r.status === 429) limited = r;
+      else break;
+    }
+    ok(served === 20 && !!limited, `20 redemptions a minute are served, the next is refused 429 (served ${served}, ${limited ? "refused" : "never refused"})`);
+    const wait = limited?.headers.get("retry-after");
+    const lo = firstAt ? Math.max(1, Math.ceil((firstAt[0] + 60_000 - gotAt) / 1000)) : NaN;
+    const hi = firstAt ? Math.max(1, Math.ceil((firstAt[1] + 60_000 - sentAt) / 1000)) : NaN;
+    ok(/^[1-9][0-9]*$/.test(wait || "") && Number(wait) >= lo && Number(wait) <= hi, `the redemption 429 carries Retry-After, the seconds until the first redemption leaves the minute (${wait} in ${lo}..${hi})`);
+    ok(limited?.headers.get("x-pow-rate-limited") === "true", "and says it is the proof-of-work limit");
   }
   // A paid call that ends in a 4xx is not charged and trusts nothing: one the
   // handler refuses (settlement canceled) and one whose settle is refused.

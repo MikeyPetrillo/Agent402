@@ -6,6 +6,7 @@
 // in-process: the claim on REAL Redis (the claim script), the record on REAL
 // Postgres, a minute between claim and finish.
 // Requires STATE_DATABASE_URL and REDIS_URL (CI fails without either).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { randomBytes } from "node:crypto";
 import { requireTestPg } from "./lib/test-pg.js";
 requireTestPg({ label: "test-first-call-allowance-record-pg" });

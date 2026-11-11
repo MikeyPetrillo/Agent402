@@ -4,6 +4,7 @@
 // imports the file once when its row is missing and records the import, so
 // turning the database on carries every store across. The Postgres half runs
 // only when STATE_DATABASE_URL points at a database (required under CI).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
