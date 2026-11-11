@@ -16,8 +16,8 @@
 // Each route is called with no credential, with a wrong token in each place a
 // token is read, with a forged session cookie and with the right token where
 // no token is read (the query string, a schemeless or Basic Authorization
-// header), and must answer 404 every time, as an unregistered /__operator path
-// does. Every call arrives from its own client address, so the refusal is the
+// header), and must answer 404 every time, with the status, the body bytes and
+// the headers an unregistered /__operator path answers, on every method. Every call arrives from its own client address, so the refusal is the
 // credential check and never the wrong-credential budget. The right token is
 // sent only to a short sample of read-only GET routes (the live control: a
 // suite where every answer is 404 proves nothing without it) and never to a
@@ -140,37 +140,99 @@ try {
     ["the right token in a Basic Authorization", path, { authorization: basic }],
     ["the right token in a cookie", path, { cookie: `a402_op=${TOKEN}; operator_token=${TOKEN}`, "sec-fetch-site": "same-origin" }],
   ];
-  // What an unregistered operator path answers to the same calls.
+  // What an unregistered operator path answers to the same calls: the status,
+  // the body and the headers a refused route must repeat, so a caller without
+  // the token cannot tell a registered path from one that is not.
+  const ABSENT = "/__operator/no-such-route-here";
+  // Headers whose value is the moment or the request, never the route.
+  const PER_REQUEST = new Set(["date", "x-request-id", "server-timing", "x-response-time"]);
+  const headersOf = (a) => [...a.headers.entries()].map(([k, v]) => [k.toLowerCase(), v]).sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0));
+  const differs = (a, b) => {
+    if (a.status !== b.status) return `status ${a.status}, not ${b.status}`;
+    if (a.text !== b.text) return `body ${JSON.stringify(a.text.slice(0, 80))}, not ${JSON.stringify(b.text.slice(0, 80))}`;
+    const ha = headersOf(a), hb = headersOf(b);
+    const na = ha.map((h) => h[0]).join(","), nb = hb.map((h) => h[0]).join(",");
+    if (na !== nb) return `header names [${na}], not [${nb}]`;
+    for (let i = 0; i < ha.length; i++) if (!PER_REQUEST.has(ha[i][0]) && ha[i][1] !== hb[i][1]) return `header ${ha[i][0]}: ${ha[i][1]}, not ${hb[i][1]}`;
+    return null;
+  };
+  const bodiesOf = (method) => (method === "GET" || method === "HEAD" || method === "OPTIONS" ? [undefined] : ["{}", "{not json"]);
+  const absentAnswers = new Map();
+  const absentFor = async (method, variant, body) => {
+    const key = `${method} ${variant} ${body}`;
+    if (!absentAnswers.has(key)) {
+      const [, p, h] = variants(ABSENT).find((v) => v[0] === variant);
+      absentAnswers.set(key, await call(method, p, h, body));
+    }
+    return absentAnswers.get(key);
+  };
   const absent = {};
   for (const method of ["GET", "POST"]) {
-    for (const [name, p, h] of variants("/__operator/no-such-route-here")) absent[`${method} ${name}`] = (await call(method, p, h, method === "POST" ? "{}" : undefined)).status;
+    for (const [name] of variants(ABSENT)) absent[`${method} ${name}`] = (await absentFor(method, name, method === "POST" ? "{}" : undefined)).status;
   }
   ok(Object.values(absent).every((s) => s === 404), `an unregistered operator path answers 404 to every form of call (${[...new Set(Object.values(absent))].join(", ")})`);
   // A body the JSON parser cannot read is refused by the parser that sits
   // ahead of every route on the site, registered or not: the answer to one is
   // the answer an unregistered operator path gives, so it tells a caller
   // nothing about the route.
-  const absentBadBody = await call("POST", "/__operator/no-such-route-here", {}, "{not json");
+  const absentBadBody = await absentFor("POST", "no credential", "{not json");
   ok(absentBadBody.status === 400 || absentBadBody.status === 404, `an unregistered operator path answers an unparseable body with a 400 or a 404 (${absentBadBody.status})`);
+  // Two calls to the unregistered path agree with each other, so the
+  // comparison below reads the route and nothing that changes per request.
+  {
+    const again = await call("GET", ABSENT, {});
+    const d = differs(again, await absentFor("GET", "no credential", undefined));
+    ok(d === null, `two answers of an unregistered operator path are the same bytes and headers (${d || "same"})`);
+  }
 
-  const open = [];
+  const open = [], told = [];
   let calls = 0;
+  // Every method a caller can send, the route's own and the ones it does not
+  // register: none of them may answer differently from the unregistered path.
+  const METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
   for (const r of gated) {
     const path = urlOf(r.path);
     for (const [name, p, h] of variants(path)) {
-      const bodies = r.method === "GET" || r.method === "HEAD" ? [undefined] : ["{}", "{not json"];
-      for (const body of bodies) {
+      for (const body of bodiesOf(r.method)) {
         const a = await call(r.method, p, h, body);
         calls++;
         if (body === "{not json") {
           if (a.status !== 404 && !(a.status === absentBadBody.status && a.text === absentBadBody.text)) open.push(`${r.method} ${r.path} with ${name} and an unparseable body: ${a.status}, not what an unregistered path answers`);
         } else if (a.status !== 404) open.push(`${r.method} ${r.path} with ${name}: ${a.status}`);
         if (/no-store/.test(a.headers.get("cache-control") || "") === false) open.push(`${r.method} ${r.path} with ${name}: its 404 may be stored (${a.headers.get("cache-control")})`);
+        const d = differs(a, await absentFor(r.method, name, body));
+        if (d) told.push(`${r.method} ${r.path} with ${name}${body === "{not json" ? " and an unparseable body" : ""}: ${d}`);
+      }
+    }
+    for (const method of METHODS) {
+      if (method === r.method) continue;
+      for (const body of bodiesOf(method)) {
+        const a = await call(method, path, {}, body);
+        calls++;
+        const d = differs(a, await absentFor(method, "no credential", body));
+        if (d) told.push(`${method} to ${r.method} ${r.path}${body === "{not json" ? " with an unparseable body" : ""}: ${d}`);
       }
     }
   }
   for (const o of open.slice(0, 60)) console.error(`  open: ${o}`);
   ok(open.length === 0, `each of ${gated.length} operator routes refuses every call without the token with a never-stored 404 (${calls} calls, ${open.length} did not)`);
+  for (const o of told.slice(0, 60)) console.error(`  told apart: ${o}`);
+  ok(told.length === 0, `each refusal is the unregistered path's answer: same status, same body bytes, same header names and values, for every method (${told.length} differed)`);
+  // The sign-in routes answer without a session by design; a method they do
+  // not register still answers as an unregistered path does.
+  {
+    const apart = [];
+    for (const path of ["/__operator/login", "/__operator/logout"]) {
+      for (const method of METHODS) {
+        if (OPEN.has(`${method} ${path}`) || (method === "HEAD" && OPEN.has(`GET ${path}`))) continue;
+        for (const body of bodiesOf(method)) {
+          const d = differs(await call(method, path, {}, body), await absentFor(method, "no credential", body));
+          if (d) apart.push(`${method} ${path}: ${d}`);
+        }
+      }
+    }
+    ok(apart.length === 0, `a method the sign-in routes do not register answers as an unregistered path does (${apart.join("; ") || "all"})`);
+  }
 
   // The routes read apart.
   {

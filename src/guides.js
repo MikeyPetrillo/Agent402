@@ -20,7 +20,7 @@ import { mppEvmDiscoveryRails, mppShimEnabled } from "./mpp-shim.js";
 import { FLAGSHIP_SLUGS, FLAGSHIP_MCP_NAMES } from "./mcp-flagship.js";
 import { creditsSalesEnabled, creditsPrepaymentPhrase } from "./credits-sales.js";
 import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
-import { meteredRoutesInline, meteredFromPrice, meteredQuoteSentence, meteredDefaultModel, flatTiersLine } from "./metered-lead.js";
+import { meteredRoutesInline, meteredFromPrice, meteredQuoteSentence, meteredTimeoutSentence, meteredDefaultModel, flatTiersLine } from "./metered-lead.js";
 // The buying-at-volume guide quotes each limit from the code that enforces it.
 import { unpaidQuoteBudgetPerHour, METERED_UNPAID_QUOTES_PER_MIN, METERED_UNPAID_QUOTES_PER_HOUR, PAID_CLIENT_QUOTE_MULTIPLIER, PAID_CLIENT_METERED_QUOTES_PER_MIN, PAID_CLIENT_METERED_QUOTES_PER_HOUR } from "./unpaid-quote-budget.js";
 import { PAID_QUOTE_TRUST_MINUTES, METERED_QUOTE_CREDITS_PER_CALL } from "./paid-quote-trust.js";
@@ -522,6 +522,7 @@ answer is booked as a refund owed and repaid after on-chain proof.
 - **Per-call cap.** A request quoting above $${METERED_MAX_QUOTE_USD} is refused
   with a 400 before any upstream call: lower \`max_tokens\` or the input. On
   x402 it is not charged.
+- **Client timeout.** ${meteredTimeoutSentence()}
 
 \`\`\`bash
 curl -s https://agent402.tools/v1/models \\
@@ -1892,6 +1893,7 @@ Agent402 opens two doors to an agent host:
   over x402. With ${CREDITS_ON ? "a credits key" : "a credits key you already hold"}, a client can instead use
   \`https://agent402.tools/v1/metered\` directly with the key as its API key. Each request is quoted from its own
   body (input plus your \`max_tokens\`), from $${TIERS["v1-chat-metered"].price} a call.
+  ${meteredTimeoutSentence()}
   \`GET https://agent402.tools/v1/models\` lists every id with its price and
   input cap; \`auto\` (routed per prompt, flat
   $${TIERS["v1-chat-auto"].price}) lives at \`https://agent402.tools/v1/auto\`.
@@ -2494,6 +2496,7 @@ Restart the gateway (\`openclaw gateway restart\`). Every model call now goes to
 that call costs (quoted from input plus \`max_tokens\`, capped at
 $${METERED_MAX_QUOTE_USD} per call). Any id from
 [\`/v1/models\`](https://agent402.tools/v1/models) can take Haiku's place.
+${meteredTimeoutSentence()}
 
 ## Explicit models and the other tiers
 

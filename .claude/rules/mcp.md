@@ -26,6 +26,9 @@ Loaded when a connector or front-door file is read.
 - **Answer ceiling:** a free tool answer larger than `AGENT402_MCP_MAX_ANSWER_BYTES` (default 1 MiB of compact JSON)
   is cut in document order to valid JSON and carries `answerBound` (`src/mcp-answer-bound.js`: the partial-answer
   fields in bytes, plus one entry per cut list, string or object). A paid answer is delivered whole.
-- **Annotations:** lookups are `readOnlyHint: true` (open-world when they read outside this service); `catalog.call`,
-  `memory.write`, `demand.request`, `decide.execute` and `decide.feedback` are not. The stdio package keeps its own copy.
+- **Annotations:** `readOnlyHint: true` only on a tool that never charges and never writes on any path here
+  (`catalog.search`, `catalog.find`, `sellers.list`, `server.describe`, `payment.info`); a host may run those without
+  asking. Every flagship (it can charge) and `catalog.call`, `demand.request`, `decide.feedback` are not read-only;
+  `memory.write` is also `destructiveHint: true`. `scripts/test-mcp-http.js` derives this from the free-tier table.
+  The stdio package keeps its own copy.
 - **429:** the transport limiter's refusal carries `Retry-After` (seconds, from `src/rate-limit.js` `retryAfterSeconds`).

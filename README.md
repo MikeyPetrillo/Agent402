@@ -227,7 +227,11 @@ its own body (the input estimated from its tokens with headroom, plus your
 `max_tokens`, at the model's list price plus a fee). On x402, Tempo and credits,
 settlement never exceeds that quote: an `exact` payer pays the quote, and an `upto`
 payer (where the 402 offers it) or a credits key settles what the answer used; a card
-payment adds the processor fee.
+payment adds the processor fee. Set a client timeout of at least 120 s: the answer is
+generated and the payment settled before the response is sent, which takes a few seconds
+on most calls and longer for long answers, and a client that disconnects after the
+payment settles is charged without the answer (the charge is recorded as owed and
+reviewed for a refund).
 
 ```bash
 curl -i -X POST https://agent402.tools/v1/metered/chat/completions -H 'content-type: application/json' \
