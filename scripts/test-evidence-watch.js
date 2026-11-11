@@ -26,8 +26,14 @@ ok(listed.length === 1 && listed[0].wallet === "0x" + "1".repeat(40), "lists onl
 ok(!evidenceWatchList([row({ multiSellerPayers: null })]).listed.length, "an unknown payer breadth never lists a wallet");
 
 const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-const route = server.slice(server.indexOf('app.get("/__operator/evidence-watch.json"'), server.indexOf('app.get("/__operator/seller-verification.json"'));
-ok(/if \(!operatorAuthed\(req\)\) return res\.status\(404\)/.test(route), "the route answers 404 without the operator token");
+// The route's own handler: from its registration to the next one.
+const routeAt = server.indexOf('app.get("/__operator/evidence-watch.json"');
+const route = server.slice(routeAt, server.indexOf("\napp.", routeAt + 1));
+// The route refuses through the shared helper, which answers as an
+// unregistered path does (404).
+const notFound = server.slice(server.indexOf("function operatorNotFound("), server.indexOf("function operatorNotFound(") + 200);
+ok(/if \(!operatorAuthed\(req\)\) return operatorNotFound\(req, res\)/.test(route)
+  && /^function operatorNotFound\([^)]*\) \{\s*return res\.status\(404\)/.test(notFound), "the route answers 404 without the operator token");
 ok((server.match(/evidenceWatchList\(/g) || []).length === 1, "only the operator route calls the watch list (no verdict reads it)");
 for (const f of ["../src/dispatch-eligibility.js", "../src/evidence-binding.js"]) {
   ok(!readFileSync(new URL(f, import.meta.url), "utf8").includes("evidence-watch"), `${f.split("/").pop()} does not read the watch list`);
