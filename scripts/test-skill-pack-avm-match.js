@@ -88,7 +88,7 @@ ok(packs.length >= 60, `the skill packs are built (${packs.length})`);
   const reason = "Transaction simulation failed: transaction D37KIHORSUGGXXIFP5SEBNUBK2YZAEVCA7X5HAPCUCCFAGUND5XA: underflow on subtracting 15000 from sender amount 9135";
   const h = vh.hintFor({ reason, balanceUsd: null, priceUsd: 0.015, network: ALGO, payer: null });
   ok(h.reason === "insufficient-funds" && h.retry === "fund-wallet", `the AVM simulation's underflow is insufficient-funds with a fund-wallet retry (${h.reason}, ${h.retry})`);
-  ok(/holds less of the asset than this call costs \(\$0\.015\) on algorand/.test(h.hint) && !/9135|15000/.test(h.hint), "...the hint names the price and the rail, never the facilitator's figures");
+  ok(/holds less of the asset than this call costs \(\$0\.015\) on Algorand\./.test(h.hint) && /^The paying wallet /.test(h.hint) && !/9135|15000/.test(h.hint), "...the hint names the price and the rail, never the facilitator's figures");
   ok(REJECTION_REASONS.some((r) => r.reason === "insufficient-funds"), "...and the class is documented with the other refusal classes");
   const control = vh.hintFor({ reason: "invalid_payload: contract call failed: execution reverted", balanceUsd: null, priceUsd: 0.01, network: "eip155:8453", payer: "0x" + "cd".repeat(20) });
   ok(control.reason === undefined && control.retry === "fresh-authorization", "control: a plain revert with no balance reading keeps its fresh-authorization hint and no class");

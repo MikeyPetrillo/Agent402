@@ -90,7 +90,7 @@ const ALGO_PAYER = "A".repeat(58), ALGO_PAYTO = "B".repeat(58);
   ok(h.retry === "fresh-authorization" && !/covers/.test(h.hint) && /holds less of the asset than this call costs/.test(h.hint) && /\$0\.0050/.test(h.hint) && /Nothing was charged\./.test(h.hint), `EVM, balance unread: both readings, the amount, never "covers" (${h.hint})`);
   ok(/covers \$0\.0050/.test(hintFor({ reason: REVERT, balanceUsd: 1, priceUsd: 0.005, network: "eip155:8453", payer: "0x00000000000000000000000000000000000000a1" }).hint), "EVM on Base with a balance read that covers the price keeps its wording");
   const f = hintFor({ reason: "invalid_exact_evm_insufficient_balance", balanceUsd: null, priceUsd: 0.005, network: "eip155:10", payer: "0x00000000000000000000000000000000000000a1" });
-  ok(f.reason === "insufficient-funds" && f.retry === "fund-wallet" && /holds less of the asset than this call costs \(\$0\.0050\) on eip155/.test(f.hint), `EVM, the facilitator's own balance code: insufficient-funds with the amount (${f.hint})`);
+  ok(f.reason === "insufficient-funds" && f.retry === "fund-wallet" && /holds less of the asset than this call costs \(\$0\.0050\) on Optimism\./.test(f.hint), `EVM, the facilitator's own balance code: insufficient-funds with the amount (${f.hint})`);
   // A message about the submitter's gas is not the buyer's balance.
   const g = hintFor({ reason: "invalid_exact_evm_transaction_simulation_failed", detail: "insufficient funds for gas * price + value", balanceUsd: null, priceUsd: 0.005, network: "eip155:10" });
   ok(g.reason !== "insufficient-funds", "an EVM message is not read for balance words (it can be the submitter's gas)");
@@ -98,7 +98,7 @@ const ALGO_PAYER = "A".repeat(58), ALGO_PAYTO = "B".repeat(58);
 {
   // Stellar: one reason code, the words in the message.
   const short = hintFor({ reason: "invalid_exact_stellar_payload_simulation_failed", detail: "HostError: Error(Contract, #10) balance is not sufficient to spend", balanceUsd: null, priceUsd: 0.005, network: STELLAR });
-  ok(short.reason === "insufficient-funds" && short.retry === "fund-wallet" && /holds less of the asset than this call costs \(\$0\.0050\) on stellar/.test(short.hint), `Stellar, balance short: insufficient-funds (${short.hint})`);
+  ok(short.reason === "insufficient-funds" && short.retry === "fund-wallet" && /holds less of the asset than this call costs \(\$0\.0050\) on Stellar\./.test(short.hint) && /^The paying wallet /.test(short.hint), `Stellar, balance short: insufficient-funds (${short.hint})`);
   const none = hintFor({ reason: "invalid_exact_stellar_payload_simulation_failed", detail: "HostError: Error(Contract, #13) trustline entry is missing for account", balanceUsd: null, priceUsd: 0.005, network: STELLAR });
   ok(none.reason === "no-token-account" && none.retry === "fund-wallet" && /has no trustline for the asset on Stellar/.test(none.hint) && /\$0\.0050/.test(none.hint) && /Nothing was charged\./.test(none.hint), `Stellar, no trustline: no-token-account (${none.hint})`);
   const other = hintFor({ reason: "invalid_exact_stellar_payload_simulation_failed", detail: "HostError: Error(Auth, InvalidInput)", balanceUsd: null, priceUsd: 0.005, network: STELLAR });
@@ -109,7 +109,7 @@ const ALGO_PAYER = "A".repeat(58), ALGO_PAYTO = "B".repeat(58);
   // Algorand: the simulation's words, in the reason (thrown) or the message (graceful).
   const thrown = hintFor({ reason: "invalid_exact_avm_simulation_failed: underflow on subtracting 5000 from sender amount 100", balanceUsd: null, priceUsd: 0.005, network: ALGO });
   const graceful = hintFor({ reason: "invalid_exact_avm_simulation_failed", detail: "transaction X: underflow on subtracting 5000 from sender amount 100", balanceUsd: null, priceUsd: 0.005, network: ALGO });
-  ok(thrown.reason === "insufficient-funds" && graceful.reason === "insufficient-funds" && graceful.retry === "fund-wallet" && /\(\$0\.0050\) on algorand/.test(graceful.hint), `Algorand, balance short in either shape: insufficient-funds (${graceful.hint})`);
+  ok(thrown.reason === "insufficient-funds" && graceful.reason === "insufficient-funds" && graceful.retry === "fund-wallet" && /\(\$0\.0050\) on Algorand\./.test(graceful.hint), `Algorand, balance short in either shape: insufficient-funds (${graceful.hint})`);
   ok(!/underflow|5000|sender amount/.test(graceful.hint), "the facilitator's own text is not echoed");
   const optIn = hintFor({ reason: "invalid_exact_avm_simulation_failed", detail: `asset 31566704 missing from ${ALGO_PAYER}`, balanceUsd: null, priceUsd: 0.005, network: ALGO, payTo: ALGO_PAYTO });
   ok(optIn.reason === "no-token-account" && /has not opted in to the asset on Algorand/.test(optIn.hint) && !optIn.hint.includes(ALGO_PAYER), `Algorand, payer not opted in: no-token-account (${optIn.hint})`);

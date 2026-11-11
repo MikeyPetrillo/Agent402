@@ -61,7 +61,7 @@ ok(reads === 0 && hintForCredential(credentialKeyOf(C2), { now })?.retry === "fr
   let gwReads = 0;
   const g = await noteVerifyFailure({ paymentPayload: batched, network: "eip155:8453", reason: "insufficient_balance", priceUsd: 0.005, now, balanceReader: async () => { gwReads++; return 12; } });
   ok(gwReads === 0 && g.balanceUsd === null, "a batched payment on Base reads no wallet balance (the deposit is what paid)");
-  ok(g.reasonClass === "insufficient-funds" && g.retry === "fund-gateway-deposit" && /Circle Gateway balance holds less than this call costs \(\$0\.0050\) on eip155/.test(g.hint) && /Deposit USDC into Circle Gateway/.test(g.hint) && /NEW authorization/.test(g.hint), `a short Gateway balance says to deposit, with its own retry verb and the price (${g.hint})`);
+  ok(g.reasonClass === "insufficient-funds" && g.retry === "fund-gateway-deposit" && /Circle Gateway balance holds less than this call costs \(\$0\.0050\) on Base\./.test(g.hint) && /Deposit USDC into Circle Gateway/.test(g.hint) && /NEW authorization/.test(g.hint), `a short Gateway balance says to deposit, with its own retry verb and the price (${g.hint})`);
   {
     // The middleware reads the wall clock: note the failure under it.
     await noteVerifyFailure({ paymentPayload: batched, network: "eip155:8453", reason: "insufficient_balance", priceUsd: 0.005, now: () => Date.now(), balanceReader: async () => { gwReads++; return 12; } });
@@ -258,6 +258,48 @@ ok(r5.out.hint === undefined, "no remembered failure for this credential -> no h
   const phantom = [...documented].filter((r) => !emitted.has(r));
   ok(phantom.length === 0, `and the table documents nothing the classifier cannot emit${phantom.length ? ` - phantom: ${phantom.join(", ")}` : ""}`);
   ok(REJECTION_REASONS.every((r) => typeof r.means === "string" && r.means.length > 30), "each documented reason explains itself in a sentence, not a restated slug");
+}
+
+// Every hint that names where the payment was refused names a chain a buyer
+// can read (the rail's name, or the full CAIP-2 id of a network we do not
+// list, bounded), and every hint opens with a capital whether or not the
+// credential names its payer.
+{
+  const { chainNameOf } = await import("../src/verify-hint.js");
+  const { RAILS } = await import("../src/rails.js");
+  const { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2 } = await import("../src/avm-network.js");
+  const name = (caip2) => RAILS.find((r) => r.caip2 === caip2)?.name;
+  const SOL = RAILS.find((r) => /^solana:/.test(r.caip2)).caip2;
+  const REV = "invalid_payload: contract call failed: unable to call contract: execution reverted";
+  const LONG = "eip155:" + "9".repeat(120);
+  const cases = [
+    ["Gateway deposit short", { reason: "insufficient_balance", gateway: true, network: "eip155:8453" }, name("eip155:8453")],
+    ["EVM balance code, no read", { reason: "invalid_exact_evm_insufficient_balance", network: "eip155:137" }, name("eip155:137")],
+    ["Stellar balance short", { reason: "invalid_exact_stellar_payload_simulation_failed", detail: "HostError: Error(Contract, #10) balance is not sufficient", network: "stellar:pubnet" }, name("stellar:pubnet")],
+    ["Stellar no trustline", { reason: "invalid_exact_stellar_payload_simulation_failed", detail: "HostError: Error(Contract, #13) trustline entry is missing", network: "stellar:pubnet" }, name("stellar:pubnet")],
+    ["Algorand underflow", { reason: "simulation_failed", detail: "underflow on subtracting 10000 from sender amount 12", network: ALGORAND_MAINNET_CAIP2 }, name(ALGORAND_MAINNET_CAIP2)],
+    ["Algorand underflow, legacy id", { reason: "simulation_failed", detail: "underflow on subtracting 10000 from sender amount 12", network: ALGORAND_MAINNET_LEGACY_CAIP2 }, name(ALGORAND_MAINNET_CAIP2)],
+    ["Algorand not opted in", { reason: "simulation_failed", detail: `asset 31566704 missing from ${"A".repeat(58)}`, payTo: "B".repeat(58), network: ALGORAND_MAINNET_CAIP2 }, name(ALGORAND_MAINNET_CAIP2)],
+    ["Solana short", { reason: "transaction_simulation_failed: InstructionError:[2 map[Custom:1]]", network: SOL }, name(SOL)],
+    ["Solana no token account", { reason: "transaction_simulation_failed", detail: "InstructionError:[2 InvalidAccountData]", network: SOL }, name(SOL)],
+    ["Base balance read short", { reason: REV, balanceUsd: 0.001, network: "eip155:8453" }, name("eip155:8453")],
+    ["Base balance read empty", { reason: REV, balanceUsd: 0, network: "eip155:8453" }, name("eip155:8453")],
+    ["Base balance read covers", { reason: REV, balanceUsd: 5, network: "eip155:8453" }, name("eip155:8453")],
+    ["EVM revert, no read", { reason: REV, network: "eip155:10" }, name("eip155:10")],
+    ["unlisted network, no read", { reason: REV, network: "eip155:84532" }, "eip155:84532"],
+    ["unlisted network, long id", { reason: "invalid_exact_evm_insufficient_balance", network: LONG }, LONG.slice(0, 80)],
+  ];
+  ok(cases.every(([, , chain]) => typeof chain === "string" && chain.length > 0), "every case's chain name reads from RAILS or the network id");
+  ok(chainNameOf(LONG).length === 80 && chainNameOf("") === "" && chainNameOf(null) === "", "chainNameOf bounds an unlisted id to 80 characters and names nothing for no network");
+  for (const [label, args, chain] of cases) {
+    for (const payer of [null, PAYER]) {
+      const h = hintFor({ priceUsd: 0.005, balanceUsd: null, ...args, payer, svmPayer: null });
+      const hint = String(h.hint || "");
+      const opens = /^[A-Z0-9]/.test(hint);
+      ok(hint.includes(` on ${chain}`) && opens && !/ on (eip155|stellar|algorand|solana)[.: ]/.test(hint.replace(chain, "")), `${label}${payer ? "" : ", no payer"}: names ${chain.slice(0, 24)} and opens with a capital (${hint.slice(0, 90)})`);
+      if (!payer) ok(!/your wallet/.test(hint) && (/^The /.test(hint)), `${label}, no payer: the subject is the paying wallet, never "your wallet"`);
+    }
+  }
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
