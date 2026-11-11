@@ -375,7 +375,8 @@ for (const [label, opts] of [["a non-transient poll status", { pollHttp: [401] }
   installVideoFetch({ statuses: ["pending"] });
   await throws(() => bySlug("v1-videos").handler({ prompt: `a doomed boat ${label}` }, evmReq(4)), "did not finish", `${label}: a timed-out request parks its job`);
   installVideoFetch(opts);
-  await throws(() => bySlug("v1-videos").handler({ prompt: `a doomed boat ${label}` }, evmReq(4)), "pstream", `${label}: the resumed job ends in a terminal error`);
+  // A 401 is our own key refused (src/upstream-deadline.js ourKeyRefusedError); the others name the upstream.
+  await throws(() => bySlug("v1-videos").handler({ prompt: `a doomed boat ${label}` }, evmReq(4)), opts.pollHttp?.[0] === 401 ? "refused this server's key" : "pstream", `${label}: the resumed job ends in a terminal error`);
   const seen = installVideoFetch();
   await bySlug("v1-videos").handler({ prompt: `a doomed boat ${label}` }, evmReq(4));
   ok(seen.submits === 1, `${label}: the dead job is no longer parked; the next retry submits fresh`);
@@ -403,8 +404,8 @@ for (const [label, opts] of [["a non-transient poll status", { pollHttp: [401] }
 }
 {
   const seen = installVideoFetch({ pollHttp: [401] });
-  const e = await throws(() => bySlug("v1-videos").handler({ prompt: "a boat" }), "auth", "a non-transient poll status (401) still ends the request at once");
-  ok(e?.statusCode === 502 && seen.polls.length === 1, "…on the first poll");
+  const e = await throws(() => bySlug("v1-videos").handler({ prompt: "a boat" }), "refused this server's key", "a non-transient poll status (401) still ends the request at once, naming our own key");
+  ok(e?.statusCode === 502 && e.attribution === "ours" && e.hint === "our-key" && seen.polls.length === 1, "…on the first poll, attributed to our side");
 }
 {
   const seen = installVideoFetch({ contentStatuses: [503, "throw", 200] });
