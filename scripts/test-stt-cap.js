@@ -154,26 +154,39 @@ const reject = (p) => p.then(() => null, (e) => e);
   // once and a third waits for a slot, and only a decode that succeeded and
   // reported how far it got is a measurement.
   {
+    // Each call decodes a file of its own length, so the stub knows which
+    // call a run belongs to whatever order the temp-file writes finish in.
     const held = [];
-    __setExecFileForTest((bin, args, opts, cb) => { held.push({ bin, args, opts, cb }); });
+    __setExecFileForTest((bin, args, opts, cb) => {
+      let bytes = -1;
+      try { bytes = readFileSync(args[args.indexOf("-i") + 1]).length; } catch { /* asserted below */ }
+      held.push({ bin, args, opts, cb, bytes });
+    });
     try {
-      const mp3 = makeMp3(5);
-      const first = measureAudioSeconds(mp3), second = measureAudioSeconds(mp3), third = measureAudioSeconds(mp3);
-      const until = async (cond) => { for (let i = 0; i < 2000 && !cond(); i++) await new Promise((r) => setImmediate(r)); return cond(); };
+      const mp3s = [makeMp3(5), makeMp3(6), makeMp3(7)];
+      const calls = mp3s.map((b) => measureAudioSeconds(b));
+      // Waits for an outcome, up to a deadline (a slow machine waits longer, never fails sooner).
+      const until = async (cond, ms = 30_000) => { const end = Date.now() + ms; while (!cond() && Date.now() < end) await new Promise((r) => setTimeout(r, 5)); return cond(); };
       ok(await until(() => held.length === 2), `two decodes start at once (${held.length})`);
-      for (let i = 0; i < 50; i++) await new Promise((r) => setImmediate(r));
+      // A third would have started by now had it not waited (its file is written like the others').
+      await until(() => held.length > 2, 500);
       ok(held.length === 2, `a third waits for a slot while two run (${held.length} started)`);
       const o = held[0].opts || {};
       ok(held[0].bin === "ffmpeg" && o.timeout === 10_000, `each decode has a 10 s time bound (${o.timeout})`);
       ok(Number.isFinite(o.maxBuffer) && o.maxBuffer > 0 && o.maxBuffer <= 8 * 1024 * 1024, `each decode's output is bounded (${o.maxBuffer} bytes)`);
       ok(held[0].args.includes("0:a:0") && held[0].args.includes("-vn"), "the decode reads the first audio stream only");
-      held[0].cb(null, "out_time_us=1000000\nprogress=continue\nout_time_us=5000000\nprogress=end\n");
-      ok((await first) === 5, "a decode that finished reports its last out_time in seconds");
+      // Answer the two running decodes: one finished, one failed after printing progress.
+      const [ran, failed] = held.slice(0, 2);
+      const idx = (h) => mp3s.findIndex((b) => b.length === h.bytes);
+      ran.cb(null, "out_time_us=1000000\nprogress=continue\nout_time_us=5000000\nprogress=end\n");
+      failed.cb(Object.assign(new Error("exit 1"), { code: 1 }), "out_time_us=4000000\n");
+      ok((await calls[idx(ran)]) === 5, "a decode that finished reports its last out_time in seconds");
+      ok((await calls[idx(failed)]) === null, "a decode that failed is no measurement, whatever it printed before failing");
       ok(await until(() => held.length === 3), "the waiting decode starts when a slot frees");
-      held[1].cb(Object.assign(new Error("exit 1"), { code: 1 }), "out_time_us=4000000\n");
-      ok((await second) === null, "a decode that failed is no measurement, whatever it printed before failing");
-      held[2].cb(null, "progress=end\n");
-      ok((await third) === null, "a decode that never reported how far it got is no measurement (null, never a guess)");
+      const last = held[2];
+      last.cb(null, "progress=end\n");
+      ok((await calls[idx(last)]) === null, "a decode that never reported how far it got is no measurement (null, never a guess)");
+      ok(new Set(held.map(idx)).size === 3 && held.every((h) => idx(h) >= 0), "each call ran its own decode once");
     } finally { __setExecFileForTest(null); }
   }
 
