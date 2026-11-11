@@ -160,6 +160,45 @@ const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
   await proveCrawledResources(two, async () => "not a number");
   ok(two[0].verifs === 0, "a junk count is refused too");
   ok(rankAlgorandResources(two, "anything", { capUsd: 1, minVerifs: 50 }).length === 0, "and the router's gate refuses an unproven crawl-only seller end to end");
+
+  // A FAILED READ IS UNKNOWN, NEVER A COUNT. A failed read is marked unread
+  // (not "0 payments"); a payTo with an earlier completed read keeps that
+  // count through a failure; and a catalog holding an unread count is re-read
+  // in minutes, not kept for the 30-minute TTL as if the count were known.
+  const mod = await import("../src/algorand-sellers.js");
+  mod.__resetKnownInboundForTest?.();
+  ok(two[0].verifsUnknown === true, "an indexer failure marks the row's count unknown, not a count of 0");
+  const payToK = "K".repeat(58);
+  const rowsK = () => mergeCrawledResources([], [{ url: "https://k.example/a", method: "GET", amountAtomic: "1000", payTo: payToK }]).merged;
+  const firstK = rowsK();
+  await proveCrawledResources(firstK, async () => 75);
+  ok(firstK[0].verifs === 75 && !firstK[0].verifsUnknown, "a completed read gives the count");
+  const secondK = rowsK();
+  await proveCrawledResources(secondK, async () => { throw new Error("indexer read did not complete"); });
+  ok(secondK[0].verifs === 75 && !secondK[0].verifsUnknown, `a failed read keeps the last completed count (${secondK[0].verifs}), so a proven seller stays proven`);
+  const zeroK = rowsK();
+  mod.__resetKnownInboundForTest?.();
+  await proveCrawledResources(zeroK, async () => 0);
+  ok(zeroK[0].verifs === 0 && !zeroK[0].verifsUnknown, "a completed read of 0 is a definite 0");
+  // The catalog cache: an unread count is retried within minutes.
+  mod._resetForTest();
+  mod.__resetKnownInboundForTest?.();
+  const realFetch = globalThis.fetch;
+  let builds = 0;
+  globalThis.fetch = async (u) => { if (String(u).includes("/discovery/merchants")) builds++; return new Response(JSON.stringify({ items: [] }), { status: 200, headers: { "content-type": "application/json" } }); };
+  mod.setAlgorandCrawlSources({ crawledResources: async () => [{ url: "https://u.example/a", method: "GET", amountAtomic: "1000", payTo: "U".repeat(58) }], countInbound: async () => { throw new Error("indexer read did not complete"); } });
+  try {
+    const cat = await mod.algorandCatalog();
+    ok(cat.some((r) => r.verifsUnknown === true), "the catalog carries the unread count as unknown");
+    const realNow = Date.now;
+    Date.now = () => realNow() + 6 * 60_000; // six minutes on, inside the 30-minute TTL
+    try { await mod.algorandCatalog(); } finally { Date.now = realNow; }
+    // The re-read runs in the background: wait for it, with a deadline.
+    for (const until = realNow() + 5000; builds < 2 && realNow() < until;) await new Promise((r) => setImmediate(r));
+    ok(builds === 2, `a catalog holding an unread count is re-read after minutes, not kept 30 (${builds} builds)`);
+  } finally { globalThis.fetch = realFetch; mod.setAlgorandCrawlSources({}); mod._resetForTest(); }
+  const srvText = (await import("node:fs")).readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  ok(!/if \(!r\.ok\) return 0;\s*\n\s*const txs = r\.json\?\.transactions/.test(srvText) && /indexer read did not complete/.test(srvText), "the server's chain read throws on a read that did not complete instead of answering 0");
 }
 
 // The halves only matter if the catalog build reaches them and the server
