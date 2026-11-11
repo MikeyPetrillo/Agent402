@@ -1065,7 +1065,12 @@ export const SOLANA_INTEL_TOOLS = [
           spent.message = `Solana token search found no pairs. ${spent.message}`;
           throw spent;
         }
-        throw Object.assign(bad(`Solana token search found no pairs and the ${fb.unavailable.upstream} ${fb.unavailable.step} read did not answer - retry shortly`, 503), { attribution: "upstream" });
+        // What is left is an answer that was not results: the upstream's own
+        // HTTP 4xx refusal (upstreamJsonOnce's 422 for a 400 or 404 it
+        // answered; attributed to it, and said as such), or a reply that was
+        // not usable with no status to show whose side it was.
+        if (e && e.statusCode >= 400 && e.statusCode < 500) throw Object.assign(bad(`Solana token search found no pairs and the ${fb.unavailable.upstream} ${fb.unavailable.step} read answered with a refusal (HTTP 4xx) instead of results - retry shortly`, 503), { attribution: "upstream" });
+        throw Object.assign(bad(`Solana token search found no pairs and the ${fb.unavailable.upstream} ${fb.unavailable.step} read gave no usable answer - retry shortly`, 503), { attribution: "unknown" });
       }
       const incomplete = fb.status === "unavailable" || fb.status === "partial";
       return {

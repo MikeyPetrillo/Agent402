@@ -420,7 +420,7 @@ try {
     await throws(h("sol-token-search")({ query: "wif" }), 503, "search fallback: Jupiter 4xx with no rows -> 503, not a 422 blaming the query");
     // A definite Jupiter 4xx is Jupiter's own answer: attributed upstream.
     try { await h("sol-token-search")({ query: "wif" }); ok(false, "search fallback: Jupiter 4xx with no rows resolved"); }
-    catch (e) { ok(e.statusCode === 503 && e.attribution === "upstream", `search fallback: Jupiter 4xx with no rows is attributed upstream (got ${e.statusCode} ${e.attribution})`); }
+    catch (e) { ok(e.statusCode === 503 && e.attribution === "upstream" && /read answered with a refusal \(HTTP 4xx\) instead of results/.test(e.message) && !/did not answer/.test(e.message), `search fallback: Jupiter 4xx with no rows is attributed upstream and says it answered (got ${e.statusCode} ${e.attribution} "${e.message}")`); }
     // The call's budget runs out during the pair search, before the Jupiter
     // read is sent: no request left, so the 503 is ours (budget-spent).
     {
