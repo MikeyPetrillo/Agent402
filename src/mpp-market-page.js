@@ -26,7 +26,7 @@ const CSS = `
 .mpr-ep-path{overflow:hidden;text-overflow:ellipsis;max-width:100%}
 .mpr-verified{display:inline-flex;align-items:center;gap:6px;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--ok);white-space:nowrap}
 .mpr-dot{width:7px;height:7px;border-radius:50%;background:var(--ok);display:inline-block}
-.mkt-search-wrap{border:1px solid var(--hairline)}
+.mkt-search-wrap{border:1px solid var(--control)}
 .mkt-search-wrap:focus-within{border-color:var(--accent)}
 .mpr-proven{display:inline-flex;align-items:center;gap:6px;font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--ink);border:1px solid var(--ink);padding:2px 7px;margin-left:8px;white-space:nowrap}
 .mlb-scroll{overflow-x:auto}

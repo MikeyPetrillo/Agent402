@@ -1,7 +1,7 @@
 import { siteOrgRef } from "./site-org.js";
 import { fitTitle, META_TITLE_MAX } from "./seo-meta.js";
 import { routingProofSentence } from "./routing-proof.js";
-import { ledgerShell, ledgerFooterCompact, esc, decideLive, breadcrumbTrail } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc, decideLive, breadcrumbTrail, wrapCodeBlocks } from "./ledger-chrome.js";
 import { powCostPhrase } from "./pow.js";
 
 import { REPO_URL } from "./repo-link.js";
@@ -420,15 +420,13 @@ export function blogPost(baseUrl, slug) {
 .bp-eyebrow{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:10px;}
 .bp-date{display:inline-block;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:6px;}
 .bp-wrap h1{font-family:var(--font-body);font-weight:800;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:4px 0 28px;color:var(--ink);}
-.post-body{font-size:var(--fs-base);line-height:1.55;color:var(--muted);}
+.post-body{font-size:var(--fs-prose);line-height:1.6;color:var(--muted);}
 .post-body h2{font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);line-height:1.1;letter-spacing:-.02em;color:var(--ink);margin:32px 0 12px;}
 .post-body p{margin:0 0 16px;}
 .post-body ul,.post-body ol{margin:0 0 16px;padding-left:24px;}
 .post-body li{margin-bottom:6px;}
 .post-body strong{color:var(--ink);}
 .post-body code{font-family:var(--font-mono);font-size:var(--fs-sm);background:var(--card);border:1px solid var(--hairline);padding:2px 6px;}
-.post-body pre{background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.55;padding:16px 20px;overflow-x:auto;margin:0 0 16px;border:1px solid var(--hairline);}
-.post-body pre code{background:none;border:none;padding:0;color:inherit;font-size:var(--fs-sm);}
 .post-body a{color:var(--accent);text-decoration:underline;text-underline-offset:3px;text-decoration-thickness:1px;}
 .post-body a:hover{text-decoration:underline;}
 .bp-back{display:inline-block;margin-top:28px;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);text-decoration:none;font-weight:700;}
@@ -440,7 +438,7 @@ export function blogPost(baseUrl, slug) {
   <span class="bp-date">${esc(post.date)}</span>
   <h1>${esc(post.title)}</h1>
   <div class="post-body">
-    ${decideLive() ? post.body : post.body.replaceAll('href="/decide"', 'href="/docs/Decide"')}
+    ${wrapCodeBlocks(decideLive() ? post.body : post.body.replaceAll('href="/decide"', 'href="/docs/Decide"'))}
   </div>
   <a href="/blog" class="bp-back">Back to blog</a>
 </div>

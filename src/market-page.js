@@ -43,7 +43,7 @@ const ROSTER_CSS = `
 .mlr-mpp{border:1px solid var(--ok);color:var(--ok);font-family:var(--font-mono);font-size:var(--fs-2xs);font-weight:700;padding:0 4px;margin-left:4px}
 .ml-chain-h1-wrap{min-height:80px}
 @media (max-width: 900px) { .ml-chain-h1-wrap{min-height:120px} }
-.mkt-search-wrap{border:1px solid var(--hairline)}
+.mkt-search-wrap{border:1px solid var(--control)}
 .mkt-search-wrap:focus-within{border-color:var(--accent)}`;
 
 // Crawled manifests are third-party input: only http(s) may become an href

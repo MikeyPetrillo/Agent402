@@ -12,7 +12,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { marked } from "./tools/markdown-render.js"; // the one renderer configuration
-import { ledgerShell, ledgerFooterCompact, esc, breadcrumbTrail } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc, breadcrumbTrail, wrapCodeBlocks } from "./ledger-chrome.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WIKI_DIR = join(__dirname, "..", "wiki");
@@ -223,7 +223,7 @@ export function docsLayoutHtml(currentSlug, mainHtml) {
   return `<div class="ml-docs-layout">
     <button type="button" class="ml-docs-mobile-toggle" id="ml-docs-mobile-toggle" aria-expanded="false" aria-controls="ml-docs-side">Browse docs &#9776;</button>
     <aside class="ml-docs-side" id="ml-docs-side">${renderSidebar(currentSlug)}</aside>
-    <div class="ml-docs-main">${mainHtml}</div>
+    <div class="ml-docs-main">${wrapCodeBlocks(mainHtml)}</div>
   </div>`;
 }
 
@@ -256,9 +256,8 @@ export const DOCS_LAYOUT_CSS = `
   .ml-docs-main h1 {font-family:var(--font-display);font-weight:400;letter-spacing:-.01em; font-size:var(--fs-4xl);line-height:1;margin:0 0 18px;text-wrap:balance; }
   .ml-docs-main h2 { font-size:var(--fs-lg);margin-top:36px;color:var(--accent);font-weight:700; }
   .ml-docs-main h3 { font-size:var(--fs-lg);margin-top:26px;font-weight:600; }
-  .ml-docs-main p, .ml-docs-main li { color:var(--ink);line-height:1.7; }
+  .ml-docs-main p, .ml-docs-main li { color:var(--ink);font-size:var(--fs-prose);line-height:1.7; }
   .ml-docs-main .muted { color:var(--muted); }
-  .ml-docs-main pre { background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);border:0;padding:14px 16px;overflow-x:auto;font-size:var(--fs-md);line-height:1.55; }
   .ml-docs-main code { font-family:var(--font-mono); }
   .ml-docs-main p > code, .ml-docs-main li > code, .ml-docs-main td > code, .ml-docs-main h3 > code { background:var(--card);border:1px solid var(--hairline);padding:1px 6px;font-size:var(--fs-code-inline); }
   /* A wide table scrolls inside its own wrapper; its code names keep whole words. */
@@ -277,7 +276,7 @@ export const DOCS_LAYOUT_CSS = `
   .ml-docs-main a:hover { text-decoration:underline; }
   .ml-docs-main img { max-width:100%; }
   .ml-docs-search { margin-bottom:14px; }
-  .ml-docs-search input { width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--hairline);color:var(--ink);font-family:var(--font-mono);font-size:var(--fs-md);padding:8px 10px;outline:none; }
+  .ml-docs-search input { width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--control);color:var(--ink);font-family:var(--font-mono);font-size:var(--fs-md);padding:8px 10px;outline:none; }
   .ml-docs-search input:focus { border-color:var(--accent); }
   .ml-docs-mobile-toggle { display:block;width:100%;box-sizing:border-box;margin-bottom:16px;padding:11px 14px;background:var(--card);border:1px solid var(--ink);color:var(--ink);font-family:var(--font-mono);font-weight:700;font-size:var(--fs-sm);text-align:left;cursor:pointer; }
   .ml-docs-side.ml-docs-side-open { display:block !important; }

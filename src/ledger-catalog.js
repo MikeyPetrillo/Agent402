@@ -82,7 +82,7 @@ table{border-collapse:collapse;width:100%}
 .cat-row>td:nth-child(4){grid-column:1;grid-row:3;margin-top:6px}
 }
 @media (max-width:900px){.cat-2col{grid-template-columns:minmax(0,1fr)!important}}
-.cat-search-wrap{border:1px solid var(--hairline)}
+.cat-search-wrap{border:1px solid var(--control)}
 .cat-search-wrap:focus-within{border-color:var(--accent)}
 `;
 

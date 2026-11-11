@@ -9,7 +9,7 @@ import { networkFloorUsd, ROBINHOOD_CAIP2 } from "./network-floors.js";
 // are configured in one place, shared with the markdown-to-html tool.
 import { marked, headingId } from "./tools/markdown-render.js";
 export { headingId };
-import { ledgerShell, ledgerFooterCompact, esc, breadcrumbTrail } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc, breadcrumbTrail, wrapCodeBlocks } from "./ledger-chrome.js";
 import { fitTitle } from "./seo-meta.js";
 import { GUIDE_INTEGRATIONS, integrationBySlug } from "./integration-pages.js";
 import { RAILS_COUNT, RAILS_COUNT_MD, resolveRailCountTokens, chainDisplayName } from "./rails.js";
@@ -2602,7 +2602,7 @@ const GUIDE_PAGE_CSS = `
 .gp-eyebrow{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:10px;}
 .gp-wrap h1{font-family:var(--font-body);font-weight:800;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:0 0 28px;color:var(--ink);text-wrap:balance;}
 @media(max-width:640px){.gp-wrap h1{font-size:var(--fs-2xl);line-height:1.1;}}
-.gp-body{font-size:var(--fs-base);line-height:1.55;color:var(--muted);}
+.gp-body{font-size:var(--fs-prose);line-height:1.6;color:var(--muted);}
 .gp-body h2{font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);line-height:1.1;letter-spacing:-.02em;color:var(--ink);margin:32px 0 12px;}
 .gp-body p{margin:0 0 16px;}
 .gp-body ul,.gp-body ol{margin:0 0 16px;padding-left:24px;}
@@ -2612,8 +2612,6 @@ const GUIDE_PAGE_CSS = `
 .gp-body a{color:var(--accent);text-decoration:underline;text-underline-offset:3px;text-decoration-thickness:1px;}
 .gp-body a:hover{text-decoration:underline;}
 .gp-body code{font-family:var(--font-mono);font-size:var(--fs-sm);background:var(--card);border:1px solid var(--hairline);padding:2px 6px;}
-.gp-body pre{background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.55;padding:16px 20px;overflow-x:auto;margin:0 0 16px;border:1px solid var(--hairline);}
-.gp-body pre code{background:none;border:none;padding:0;color:inherit;font-size:var(--fs-sm);}
 .gp-tw{overflow-x:auto;margin:0 0 16px;}
 .gp-back{display:inline-block;margin-top:28px;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);text-decoration:none;font-weight:700;}
 .gp-back:hover{text-decoration:underline;}
@@ -2681,7 +2679,7 @@ export function guidePage(baseUrl, slug, catalog = null) {
   ${crumbs.nav}
   <h1 title="${esc(g.title)}">${esc(g.title)}</h1>
   <div class="gp-body">
-    ${marked.parse(g.md).replace(/<table>/g, '<div class="gp-tw"><table>').replace(/<\/table>/g, "</table></div>")}
+    ${wrapCodeBlocks(marked.parse(g.md).replace(/<table>/g, '<div class="gp-tw"><table>').replace(/<\/table>/g, "</table></div>"))}
   </div>
   ${integrationsBlock(g.slug)}
   <a href="/guides" class="gp-back">Back to guides</a>

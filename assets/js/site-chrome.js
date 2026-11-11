@@ -230,3 +230,25 @@ try{new MutationObserver(later).observe(document.body||document.documentElement,
 (function(){function open(){try{var id=decodeURIComponent(location.hash.slice(1));if(!id)return;var el=document.getElementById(id);var d=el&&(el.tagName==='DETAILS'?el:el.closest('details'));if(d&&!d.open){d.open=true;el.scrollIntoView();}}catch(e){}}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',open);else open();
 window.addEventListener('hashchange',open);})();
+
+/* Code blocks (DESIGN.md "Code blocks"): every .ml-code gets a copy button. It is
+   a real <button> (Tab reaches it, Enter and Space press it), named for what it
+   copies, and a polite live region says the copy happened (or that it did not).
+   The button exists only once this script runs, so a page with no script shows
+   the plain <pre>. Exposed so a page that draws a block after load can wire it. */
+window.a402CodeBlocks=function(root){try{
+  var live=function(){var l=document.querySelector('.ml-code-live');if(!l){l=document.createElement('div');l.className='ml-code-live ml-sr';l.setAttribute('role','status');l.setAttribute('aria-live','polite');document.body.appendChild(l);}return l;};
+  var say=function(t){var l=live();l.textContent='';setTimeout(function(){l.textContent=t;},40);};
+  var copy=function(text){if(navigator.clipboard&&window.isSecureContext)return navigator.clipboard.writeText(text);return new Promise(function(ok,no){try{var ta=document.createElement('textarea');ta.value=text;ta.setAttribute('readonly','');ta.style.position='fixed';ta.style.top='0';ta.style.opacity='0';document.body.appendChild(ta);ta.select();var done=document.execCommand('copy');document.body.removeChild(ta);if(done)ok();else no(new Error('copy refused'));}catch(e){no(e);}});};
+  var blocks=(root||document).querySelectorAll('.ml-code');
+  for(var i=0;i<blocks.length;i++){(function(b){
+    if(b.getAttribute('data-copy'))return;var pre=b.querySelector('pre');if(!pre)return;b.setAttribute('data-copy','1');
+    var btn=document.createElement('button');btn.type='button';btn.className='ml-code-copy';btn.textContent='Copy';
+    var nm=b.getAttribute('data-name');btn.setAttribute('aria-label',nm?'Copy '+nm:'Copy code');
+    var t=null;
+    btn.addEventListener('click',function(){copy(pre.textContent).then(function(){btn.textContent='Copied';btn.classList.add('is-done');say('Copied to the clipboard');},function(){btn.textContent='Select to copy';say('Copy failed: select the code to copy it');}).then(function(){clearTimeout(t);t=setTimeout(function(){btn.textContent='Copy';btn.classList.remove('is-done');},1600);});});
+    var head=b.querySelector('.ml-code-head');(head&&head.parentNode===b?head:b).appendChild(btn);
+    live();
+  })(blocks[i]);}
+}catch(e){}};
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',function(){window.a402CodeBlocks(document);});else window.a402CodeBlocks(document);

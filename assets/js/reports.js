@@ -27,13 +27,23 @@
       });
     });
   });
-  document.querySelectorAll("[data-buy]").forEach(function (btn) {
-    btn.addEventListener("click", async function () {
-      var kind = btn.dataset.buy;
-      var input = (document.getElementById("in-" + kind).value || "").trim();
-      var errEl = document.getElementById("err-" + kind);
+  // Each card's field sits in a <form>: the buy button submits it, and so does
+  // Enter in the field. An empty field shows its error in the line the field
+  // names by aria-describedby, marks the field invalid and keeps focus on it.
+  document.querySelectorAll(".pcard-form").forEach(function (form) {
+    var kind = form.dataset.kind;
+    var field = document.getElementById("in-" + kind);
+    var errEl = document.getElementById("err-" + kind);
+    var btn = form.querySelector("[data-buy]");
+    if (!field || !errEl || !btn) return;
+    field.addEventListener("input", function () { if (field.getAttribute("aria-invalid")) { field.removeAttribute("aria-invalid"); errEl.textContent = ""; } });
+    form.addEventListener("submit", async function (ev) {
+      ev.preventDefault();
+      if (btn.disabled) return;
+      var input = (field.value || "").trim();
       errEl.textContent = "";
-      if (!input) { errEl.textContent = "Please enter " + (need[kind] || "a value."); return; }
+      if (!input) { errEl.textContent = "Please enter " + (need[kind] || "a value."); field.setAttribute("aria-invalid", "true"); field.focus(); return; }
+      field.removeAttribute("aria-invalid");
       btn.disabled = true;
       var label = btn.textContent;
       ph("report_buy_click", { product: sel[kind], kind: kind });

@@ -53,10 +53,10 @@ export function playgroundPage(baseUrl, catalog) {
   .pg-left{flex:0 0 60%;min-width:0}
   .pg-right{flex:1;min-width:0}
   @media(max-width:760px){.pg-wrap{flex-direction:column}.pg-left,.pg-right{flex:none;width:100%}}
-  .pg-search{width:100%;padding:10px 14px;border:1px solid var(--hairline);background:var(--card);color:var(--ink);font-size:var(--fs-base);outline:none;font-family:var(--font-body)}
+  .pg-search{width:100%;padding:10px 14px;border:1px solid var(--control);background:var(--card);color:var(--ink);font-size:var(--fs-base);outline:none;font-family:var(--font-body)}
   .pg-search:focus{border-color:var(--accent)}
   .pg-search::placeholder{color:var(--faint)}
-  .pg-select{width:100%;margin-top:10px;padding:10px 14px;border:1px solid var(--hairline);background:var(--card);color:var(--ink);font-size:var(--fs-base);outline:none;font-family:var(--font-body);cursor:pointer}
+  .pg-select{width:100%;margin-top:10px;padding:10px 14px;border:1px solid var(--control);background:var(--card);color:var(--ink);font-size:var(--fs-base);outline:none;font-family:var(--font-body);cursor:pointer}
   .pg-select:focus{border-color:var(--accent)}
   .pg-select optgroup{color:var(--faint);font-style:normal}
   .pg-select option{color:var(--ink);background:var(--card)}
@@ -68,7 +68,7 @@ export function playgroundPage(baseUrl, catalog) {
   .pg-fields{margin-top:14px}
   .pg-field{margin-bottom:10px}
   .pg-field label{display:block;font-size:var(--fs-md);color:var(--faint);margin-bottom:3px;font-family:var(--font-mono)}
-  .pg-field input[type="text"],.pg-field input[type="number"]{width:100%;padding:8px 12px;border:1px solid var(--hairline);background:var(--paper);color:var(--ink);font-size:var(--fs-md);font-family:var(--font-mono);outline:none}
+  .pg-field input[type="text"],.pg-field input[type="number"]{width:100%;padding:8px 12px;border:1px solid var(--control);background:var(--paper);color:var(--ink);font-size:var(--fs-md);font-family:var(--font-mono);outline:none}
   .pg-field input:focus{border-color:var(--accent)}
   .pg-field .chk-wrap{display:flex;align-items:center;gap:8px}
   .pg-field input[type="checkbox"]{accent-color:var(--accent);width:16px;height:16px}

@@ -42,8 +42,8 @@ const CSS = `
 .ix-stats li{border:1px solid var(--hairline);background:var(--card);padding:9px 13px;font-family:var(--font-mono);font-size:var(--fs-sm)}
 .ix-stats b{font-family:var(--font-body)}
 .ix-search{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 16px}
-.ix-search input{flex:1;min-width:220px;border:1px solid var(--hairline);background:var(--paper);color:var(--ink);font-family:var(--font-mono);font-size:var(--fs-sm);padding:10px 12px}
-.ix-search button{border:1px solid var(--hairline);background:var(--ink);color:var(--paper);font-family:var(--font-mono);font-size:var(--fs-sm);font-weight:700;padding:10px 18px;cursor:pointer}
+.ix-search input{flex:1;min-width:220px;border:1px solid var(--control);background:var(--paper);color:var(--ink);font-family:var(--font-mono);font-size:var(--fs-sm);padding:10px 12px}
+.ix-search button{border:1px solid var(--control);background:var(--ink);color:var(--paper);font-family:var(--font-mono);font-size:var(--fs-sm);font-weight:700;padding:10px 18px;cursor:pointer}
 .ix-chips{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 22px}
 .ix-chips a{border:1px solid var(--hairline);background:var(--card);color:var(--muted);font-family:var(--font-mono);font-size:var(--fs-xs);text-decoration:none;padding:5px 10px}
 .ix-chips a.on{background:var(--ink);color:var(--paper);border-color:var(--ink)}

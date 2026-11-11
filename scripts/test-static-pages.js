@@ -463,7 +463,7 @@ const MOVED = { "/compare": "/docs#why-compare", "/use-cases": "/docs#examples",
     const img = await fetch(`${BASE}/badges/${b.style}.svg`);
     ok(img.status === 200 && (img.headers.get("content-type") || "").includes("image/svg+xml") && (await img.text()).startsWith("<svg"), `/badges/${b.style}.svg still serves an SVG (got ${img.status})`);
   }
-  ok(docs.includes('<script src="/js/copy-buttons.js"></script>'), "/docs loads the copy-button script for the badge snippets");
+  ok((bd.match(/<div class="ml-code[^"]*"[^>]*><pre>/g) || []).length === BADGE_STYLES.length * 2 && !/bdg-copy/.test(bd), "/docs#badges: each snippet is a shared code block (its copy button comes from site-chrome.js)");
 }
 
 // --- the weekly digest is retired ----------------------------------------------

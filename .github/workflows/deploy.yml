@@ -4896,6 +4896,9 @@ jobs:
       - name: Input labels (every text input has an accessible name; session replay stays off)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-input-labels.js
 
+      - name: Controls and focus in a browser (skip link, focus ring, control contrast, target size, code block copy, storefront labels)
+        run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-a11y-controls.js
+
       - name: gov-data Catalog API v4 (retired CKAN v3 proxy 404s on catalog-old)
         run: node scripts/test-gov-data.js
       - name: Runner kills and memory (on failure)

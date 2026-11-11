@@ -1,14 +1,23 @@
 // /monitors storefront behavior. External file (site CSP drops inline script).
 (function () {
-  document.querySelectorAll("[data-sub]").forEach(function (btn) {
-    btn.addEventListener("click", async function () {
-      var product = btn.dataset.sub;
+  // Each card's field sits in a <form>: Subscribe submits it, and so does Enter
+  // in the field. An empty field shows its error in the line it names by
+  // aria-describedby, is marked invalid and keeps focus.
+  document.querySelectorAll(".pcard-form").forEach(function (form) {
+    var product = form.dataset.product;
+    var el = document.getElementById("in-" + product);
+    var errEl = document.getElementById("err-" + product);
+    var btn = form.querySelector("[data-sub]");
+    if (!el || !btn) return;
+    el.addEventListener("input", function () { if (el.getAttribute("aria-invalid")) { el.removeAttribute("aria-invalid"); if (errEl) errEl.textContent = ""; } });
+    form.addEventListener("submit", async function (ev) {
+      ev.preventDefault();
+      if (btn.disabled) return;
       try { if (window.posthog && window.posthog.capture) window.posthog.capture("monitor_subscribe_click", { product: product }); } catch (e) { /* telemetry never blocks a subscribe */ }
-      var el = document.getElementById("in-" + product);
-      var input = (el && el.value || "").trim();
-      var errEl = document.getElementById("err-" + product);
+      var input = (el.value || "").trim();
       if (errEl) errEl.textContent = "";
-      if (!input) { if (errEl) errEl.textContent = "Please enter a value."; return; }
+      if (!input) { if (errEl) errEl.textContent = "Please enter a value."; el.setAttribute("aria-invalid", "true"); el.focus(); return; }
+      el.removeAttribute("aria-invalid");
       btn.disabled = true;
       var label = btn.textContent;
       btn.innerHTML = '<span class="spin"></span>Redirecting to checkout…';

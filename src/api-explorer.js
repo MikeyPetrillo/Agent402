@@ -11,13 +11,13 @@ export function apiExplorerPage(baseUrl) {
 
   const extraCss = `
 .ae-wrap{max-width:1180px;margin:0 auto;padding:56px 30px 0}
-.ae-search{width:100%;max-width:560px;padding:13px 16px;background:var(--card);border:1px solid var(--hairline);color:var(--ink);font-family:var(--font-mono);font-size:var(--fs-md);outline:none;margin-bottom:14px}
+.ae-search{width:100%;max-width:560px;padding:13px 16px;background:var(--card);border:1px solid var(--control);color:var(--ink);font-family:var(--font-mono);font-size:var(--fs-md);outline:none;margin-bottom:14px}
 .ae-search:focus{border-color:var(--accent)}
 .ae-count{margin-left:12px;color:var(--faint);font-family:var(--font-mono);font-size:var(--fs-xs)}
 .ae-cats{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:22px}
 /* On a phone the category chips are one sideways strip, so no row ends on a stray chip. */
 @media (max-width:600px){.ae-cats{flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px}.ae-cat-btn{flex:none}}
-.ae-cat-btn{background:transparent;border:1px solid var(--hairline);color:var(--ink);padding:5px 10px;font-family:var(--font-mono);font-size:var(--fs-xs);cursor:pointer;transition:.15s}
+.ae-cat-btn{background:transparent;border:1px solid var(--control);color:var(--ink);padding:5px 10px;font-family:var(--font-mono);font-size:var(--fs-xs);cursor:pointer;transition:.15s}
 .ae-cat-btn:hover{border-color:var(--accent);color:var(--accent)}
 .ae-cat-btn.active{background:var(--panel);color:var(--on-panel);border-color:var(--ink);font-weight:700}
 .ae-endpoint{background:var(--card);border:1px solid var(--hairline);margin-bottom:8px;overflow:hidden}

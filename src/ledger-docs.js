@@ -10,7 +10,7 @@
 // docs hub should feel like.
 
 import { siteOrgRef } from "./site-org.js";
-import { ledgerShell, ledgerFooterCompact, fmtNum } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, fmtNum, codeBlock } from "./ledger-chrome.js";
 import { docsLayoutHtml, DOCS_LAYOUT_CSS, docPrevNextHtml, DOCS_SEARCH_SCRIPT } from "./docs.js";
 import { toolList } from "./pages.js";
 import { isComputePayable } from "./pow.js";
@@ -96,17 +96,14 @@ export function ledgerDocsPage(baseUrl, catalog) {
       <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 14px;">Docs</h1>
       <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:76ch;margin:0 0 30px;">Add ${fmtNum(totalCount)} tools, the cross-seller index and Smart Order Router, and an OpenAI-compatible /v1 gateway to your agent. Start free with proof-of-work, then pay per call in USDC on <a href="/pricing" style="color:var(--ink);text-decoration:underline;text-underline-offset:3px;">the chains in /pricing</a>.</p>
 
-      <div id="quickstart" style="border:1px solid var(--hairline);background:var(--panel);margin-bottom:14px;">
-        <div style="display:flex;align-items:center;gap:7px;padding:11px 15px;border-bottom:1px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--on-panel-dim);">terminal</div>
-        <pre style="margin:0;padding:18px;font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.85;color:var(--on-panel);white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># one file, no install - pays with COMPUTE (no wallet)
+      <div id="quickstart">${codeBlock(`<span style="color:var(--on-panel-faint);"># one file, no install - pays with COMPUTE (no wallet)
 </span>curl -s https://agent402.tools/demo.js -o demo.js
 node demo.js
 
 <span style="color:var(--on-panel-faint);"># or settle USDC on Base with a funded EVM key (four packages, same file)
 </span>npm i @x402/core @x402/evm @x402/fetch viem
 <span style="color:var(--on-panel-faint);"># Use a new wallet holding only a few dollars of USDC. Never your main wallet.
-</span>AGENT_KEY=0xYOUR_FUNDED_KEY node demo.js</pre>
-      </div>
+</span>AGENT_KEY=0xYOUR_FUNDED_KEY node demo.js`, { label: "terminal", name: "the terminal commands", html: true, wrap: true, style: "margin-bottom:14px" })}</div>
       <p style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);margin:0 0 14px;">// an autonomous buyer discovers the catalog, gets quoted over HTTP 402, settles, and uses the result - zero humans.</p>
       <p style="font-size:var(--fs-md);color:var(--muted);max-width:76ch;margin:0 0 44px;">The demo signs on the EVM rails. To pay on Solana, Stellar or Algorand, see <a href="/docs/Paying-with-x402" style="color:var(--ink);text-decoration:underline;text-underline-offset:3px;">Paying with x402</a>.</p>
       </section>
@@ -126,7 +123,7 @@ node demo.js
       <h2 id="add" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 18px;">Three ways in.</h2>
 
       <div class="ml-meta" style="font-size:var(--fs-xs);color:var(--accent);margin:0 0 8px;"><span>A / MCP</span><span>Claude &amp; any MCP client</span></div>
-      <div style="border:1px solid var(--hairline);background:var(--panel);margin-bottom:22px;"><pre style="margin:0;padding:16px;font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.8;color:var(--on-panel);white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># Claude Code - hosted connector (no install; free proof-of-work tools, paid tools need a wallet client)
+      ${codeBlock(`<span style="color:var(--on-panel-faint);"># Claude Code - hosted connector (no install; free proof-of-work tools, paid tools need a wallet client)
 </span>claude mcp add --transport http agent402 https://agent402.tools/mcp
 
 <span style="color:var(--on-panel-faint);"># Claude Code - npm server with a funded EVM key (paid tools settle via x402)
@@ -138,11 +135,11 @@ node demo.js
   "mcpServers": {
     "agent402": { "url": "https://agent402.tools/mcp" }
   }
-}</pre></div>
+}`, { name: "the MCP setup", html: true, wrap: true, style: "margin-bottom:22px" })}
       <p style="font-size:var(--fs-md);color:var(--muted);margin:-12px 0 22px;">Every other host, each block read from its own docs: <a href="/guides/agent-hosts" style="color:var(--ink);text-decoration:underline;text-underline-offset:3px;">VS Code, Windsurf, Cline, Roo Code, OpenAI Codex CLI, Gemini CLI, Continue, ElizaOS, Bedrock AgentCore, any OpenAI or Anthropic SDK</a>. Shortlinks: <span style="font-family:var(--font-mono);">agent402.sh/cursor</span>, <span style="font-family:var(--font-mono);">agent402.sh/vscode</span>, <span style="font-family:var(--font-mono);">agent402.sh/codex</span>; one-shot install <span style="font-family:var(--font-mono);">curl -fsSL agent402.sh/install | sh</span>.</p>
 
       <div class="ml-meta" style="font-size:var(--fs-xs);color:var(--accent);margin:0 0 8px;"><span>B / x402 client</span><span>pay in code</span></div>
-      <div style="border:1px solid var(--hairline);background:var(--panel);margin-bottom:22px;"><pre style="margin:0;padding:16px;font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.8;color:var(--on-panel);white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);">// npm i @x402/core @x402/evm @x402/fetch viem
+      ${codeBlock(`<span style="color:var(--on-panel-faint);">// npm i @x402/core @x402/evm @x402/fetch viem
 </span>import { x402Client } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { wrapFetchWithPayment } from "@x402/fetch";
@@ -157,13 +154,13 @@ const res = await payFetch("https://agent402.tools/api/extract", {
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ url: "https://example.com" })
 });
-console.log(await res.json());</pre></div>
+console.log(await res.json());`, { name: "the x402 client code", html: true, wrap: true, style: "margin-bottom:22px" })}
 
       <div class="ml-meta" style="font-size:var(--fs-xs);color:var(--accent);margin:0 0 8px;"><span>C / SDK</span><span>resolves a task &amp; pays automatically</span></div>
-      <div style="border:1px solid var(--hairline);background:var(--panel);margin-bottom:44px;"><pre style="margin:0;padding:16px;font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.8;color:var(--on-panel);white-space:pre-wrap;word-break:break-word;">npm install agent402-client
+      ${codeBlock(`npm install agent402-client
 import { Agent402 } from "agent402-client";
 const a = new Agent402();           <span style="color:var(--on-panel-faint);">// free tier (proof-of-work)</span>
-const out = await a.call("hash", { text: "hello", algo: "sha256" });</pre></div>
+const out = await a.call("hash", { text: "hello", algo: "sha256" });`, { name: "the SDK code", html: true, wrap: true, style: "margin-bottom:44px" })}
       </section>
 
       <!-- FREE -->
@@ -216,8 +213,7 @@ ${gateway.rows}
   </div>
 
   ${ledgerFooterCompact()}
-  ${DOCS_SEARCH_SCRIPT}
-  <script src="/js/copy-buttons.js"></script>`;
+  ${DOCS_SEARCH_SCRIPT}`;
 
   return ledgerShell({
     title,

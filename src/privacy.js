@@ -64,7 +64,7 @@ export function privacyPage(baseUrl) {
 .pv-eyebrow{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:18px}
 .pv-h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 14px}
 .pv-updated{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);margin:0 0 32px}
-.pv-body p,.pv-body li{font-size:var(--fs-base);line-height:1.55;color:var(--muted)}
+.pv-body p,.pv-body li{font-size:var(--fs-prose);line-height:1.6;color:var(--muted)}
 .pv-body p{margin:0 0 14px}
 .pv-body ul{margin:0 0 18px;padding:0 0 0 22px}
 .pv-body li{margin-bottom:8px}
