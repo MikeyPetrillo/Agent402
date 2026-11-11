@@ -28,6 +28,7 @@
 // Under CI a missing REDIS_URL fails (a skipped integration test is not
 // coverage); a local run says the Redis half was skipped. The two-process
 // case is scripts/test-shared-limits-crossprocess.js.
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 

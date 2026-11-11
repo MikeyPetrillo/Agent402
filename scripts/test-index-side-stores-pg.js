@@ -4,6 +4,7 @@
 // never replaces the other's; the pull folds the other container's changes,
 // including a deletion (a cleared mark, a lifted removal).
 //   STATE_DATABASE_URL=postgres://... node scripts/test-index-side-stores-pg.js
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

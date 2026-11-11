@@ -13,6 +13,7 @@
 //
 // Under CI a missing REDIS_URL fails the test: a skipped integration test is
 // not coverage. Locally it prints how to point one at the test and exits 0.
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { randomBytes } from "node:crypto";
 
 if (!String(process.env.REDIS_URL || "").trim()) {

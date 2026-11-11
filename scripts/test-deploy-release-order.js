@@ -46,6 +46,15 @@ ok(triggerAt > upsertAt && upsertAt >= 0, "the deploy trigger runs after the ups
   ok(/exit 1/.test(String(bazaar.run || "")) && !bazaar["continue-on-error"], "an INVALID verdict with no clean run fails the job");
 }
 
+// The jobs a commit-subject marker starts read the markers job's outputs, so
+// the range that job reads (on main, from the last run that read its markers:
+// scripts/test-ci-gating.js) is the one thing that decides them.
+for (const [job, out] of [["publish", "publish"], ["paytest", "paytest"], ["drain", "drain"], ["purl", "purl"], ["probe", "probe"]]) {
+  const j = wf.jobs?.[job] || {};
+  ok([].concat(j.needs || []).includes("markers") && new RegExp(`needs\\.markers\\.outputs\\.${out} == 'true'`).test(String(j.if || "")), `the ${job} job starts on the markers job's ${out} output`);
+}
+ok(!/github\.event\.(commits|head_commit)/.test(JSON.stringify(Object.values(wf.jobs || {}).map((j) => j.if || ""))), "no job reads a marker from the push payload beside the markers job");
+
 const pub = (wf.jobs?.publish?.steps || []).map((s) => String(s.name || ""));
 const clawAt = pub.findIndex((n) => /ClawHub/.test(n));
 const registryAt = pub.findIndex((n) => /MCP Registry/.test(n));

@@ -14,6 +14,7 @@
 //   import "./lib/file-mode.js";
 // The tests that are meant to run against a real database are the *-pg.js
 // suites and the CI step that sets STATE_DATABASE_URL; they never import this.
+import "./own-stats.js"; // a stats store of this suite's own (see the file)
 delete process.env.STATE_DATABASE_URL;
 delete process.env.REDIS_URL;
 delete process.env.LEDGER_JOURNAL_REDIS;

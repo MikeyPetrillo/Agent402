@@ -8,6 +8,7 @@
 //      newest RECENT_KEEP like the file; daily_upstream_spend sums are exact
 //      integers in micro-dollars;
 //   4. the schema is dropped and the pool closed at the end.
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync, rmSync } from "node:fs";
 import { childJson } from "./lib/child-json.js";
 import { tmpdir } from "node:os";

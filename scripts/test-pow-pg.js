@@ -14,6 +14,7 @@
 // Requires STATE_DATABASE_URL (CI fails without it; locally it skips).
 //
 //   node scripts/test-pow-pg.js
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import Database from "better-sqlite3";
 import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";

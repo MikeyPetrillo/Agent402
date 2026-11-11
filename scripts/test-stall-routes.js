@@ -504,11 +504,16 @@ const { ctx } = buildRoutePerfFixture({ sellers: 5800, toolsTarget: 198_000, cac
   cache.set(origin, { ...v, fetchedAt: 2 });
   const fresh = "https://stall-routes-new.example";
   cache.set(fresh, { ...v, manifest: { name: "stall routes new", homepage: fresh }, tools: v.tools.map((t) => ({ ...t, seller: fresh })), fetchedAt: 2 });
+  // A third whose key is not the text a parser makes of it (scheme and host
+  // case): its rows read the key's one kept answer too, never a parse per row.
+  const upper = "HTTPS://Stall-Routes-Upper.EXAMPLE";
+  cache.set(upper, { ...v, manifest: { name: "stall routes upper", homepage: upper }, tools: v.tools.map((t) => ({ ...t, seller: upper })), fetchedAt: 2 });
   // The alias walk behind the rebuild reads a host per cached origin, redirect
   // target and homepage: each is parsed once per string, never once per walk,
   // so a rebuild parses URLs for the changed sellers only.
-  // A seller key's own check (isPlainSellerKey) is one parse the first time a
-  // key is seen, kept for the process. The route index is still adding sellers
+  // A seller key's own check (isPlainSellerKey, and sellerKeyFixedAnswer for a
+  // key that is not plain) is one parse each the first time a key is seen,
+  // kept for the process. The route index is still adding sellers
   // in its own turns while this runs, so those first sights land in the window
   // on a slow host: they are counted apart and held to one per key, and every
   // other parse is held to the bound.
@@ -517,18 +522,33 @@ const { ctx } = buildRoutePerfFixture({ sellers: 5800, toolsTarget: 198_000, cac
   const keyParses = [];
   globalThis.URL = class extends RealURL {
     constructor(...args) {
-      if (String(new Error().stack).includes("isPlainSellerKey")) keyParses.push(String(args[0])); else parses++;
+      const reader = /\b(isPlainSellerKey|sellerKeyFixedAnswer)\b/.exec(String(new Error().stack));
+      if (reader) keyParses.push(`${reader[1]} ${String(args[0])}`); else parses++;
       super(...args);
     }
   };
   let rebuilt;
   try { rebuilt = await blockOf(() => x.routableSellerSummaries()); } finally { globalThis.URL = RealURL; }
   const projected = x._routableRowBuildsForTest() - before;
-  ok(rebuilt.value.length === first.length + 1 && projected === 2, `a seller-summary rebuild projects only the changed sellers (${projected} of ${rebuilt.value.length})`);
+  ok(rebuilt.value.length === first.length + 2 && projected === 3, `a seller-summary rebuild projects only the changed sellers (${projected} of ${rebuilt.value.length})`);
+  const upperRows = v.tools.length;
+  // The same rows read directly: a first sight parses the key, a second read of
+  // every row parses nothing.
+  const direct = v.tools.map((t) => ({ ...t, seller: "Https://Stall-Routes-Upper-Direct.EXAMPLE:8443/App" }));
+  for (const t of direct) x._computeToolStaticsForTest(t);
+  const p0 = parses, k0 = keyParses.length;
+  globalThis.URL = class extends RealURL { constructor(...args) { parses++; super(...args); } };
+  let offDirect;
+  try { offDirect = direct.map((t) => x._computeToolStaticsForTest(t).offSeller); } finally { globalThis.URL = RealURL; }
+  const perRow = parses - p0;
+  parses = p0; keyParses.length = k0;
+  ok(upperRows >= 10 && perRow === 0 && offDirect.every((o) => o === false), `...the ${upperRows} rows of a seller whose key is written in another case parse nothing per row (${perRow} parses)`);
   ok(parses <= 16, `...and parses URLs for the changed sellers only (${parses} parses over ${rebuilt.value.length} sellers)`);
-  ok(new Set(keyParses).size === keyParses.length, `...and a seller key is parsed once, the first time it is seen (${keyParses.length} first sights, ${new Set(keyParses).size} keys)`);
+  ok(new Set(keyParses).size === keyParses.length, `...and a seller key is parsed once by each of its two checks, the first time it is seen (${keyParses.length} first sights, ${new Set(keyParses).size} distinct)`);
+  ok(keyParses.some((k) => k === `sellerKeyFixedAnswer ${upper}`) || x._routeLeavesSellerForTest(upper, "/x") === false, "...the key written in another case among them, read as under its seller");
   ok(heldUnder(rebuilt.ms, GAP_MS), `...and never held the loop past ${GAP_MS} ms (${GAP.note}) (worst ${rebuilt.ms} ms ours; longest gap ${rebuilt.raw} ms, ${rebuilt.gc} ms of it the collector)`);
   cache.delete("https://stall-routes-new.example");
+  cache.delete(upper);
 }
 
 // --- 1d. /marketplace: the all-chains page in slices, byte for byte.

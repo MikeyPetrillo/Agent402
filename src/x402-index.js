@@ -9969,6 +9969,39 @@ function isPlainSellerKey(seller) {
   plainSellerKeyMemo.set(seller, plain);
   return plain;
 }
+// A seller key that is not that text (an uppercase host or scheme, a written
+// default port, a host a parser rewrites, credentials) still has one authority,
+// and a route that starts with "/" joins after it: the parser reads the same
+// scheme, credentials, host and port from the joined text as from the key
+// alone. So the key's own parse decides every plain route under it, once:
+//   true   every route leaves: the key does not parse, carries credentials, or
+//          its host as parsed is not its host as written (the comparison
+//          isUnderSeller makes), whatever the path;
+//   false  no plain route leaves: the host matches, and the key's path is
+//          empty or made only of characters a parser copies, with no dot
+//          segment, so the joined path starts with it;
+//   null   the key's path is one a parser may rewrite: each row is parsed.
+// One parse per seller key, kept; a key of any other shape reads null.
+const fixedSellerKeyMemo = new Map();
+const SELLER_KEY_ONE_AUTHORITY = /^https?:\/\/[^\/]+(\/.*)?$/i;
+const SELLER_PATH_COPIED = /^[A-Za-z0-9\-._~!$&'()*+,;=:@%\/]*$/;
+const SELLER_PATH_DOTTED = /%2e|(?:^|\/)\.{1,2}(?:\/|$)/i;
+function sellerKeyFixedAnswer(seller) {
+  let fixed = fixedSellerKeyMemo.get(seller);
+  if (fixed !== undefined) return fixed;
+  fixed = null;
+  const m = SELLER_KEY_UNPLAIN.test(seller) ? null : SELLER_KEY_ONE_AUTHORITY.exec(seller);
+  if (m) {
+    const { origin, prefix } = sellerKeyParts(seller);
+    let u = null;
+    try { u = new URL(seller); } catch { u = null; }
+    if (!u || u.username || u.password || `${u.protocol}//${u.host.toLowerCase()}` !== origin.toLowerCase()) fixed = true;
+    else if (!prefix || (SELLER_PATH_COPIED.test(m[1] || "") && !SELLER_PATH_DOTTED.test(m[1] || ""))) fixed = false;
+  }
+  if (fixedSellerKeyMemo.size >= PLAIN_SELLER_KEYS_MAX) fixedSellerKeyMemo.clear();
+  fixedSellerKeyMemo.set(seller, fixed);
+  return fixed;
+}
 // Route text a parser may read as something other than the path it spells: a
 // character it strips (control, space), a backslash (a slash to it), or a dot
 // segment, written out or percent-encoded (it climbs out of a prefix).
@@ -9978,9 +10011,14 @@ const ROUTE_NEEDS_PARSE = /[\u0000-\u0020\u007f\\]|%2e|(?:^|\/)\.{1,2}(?:[\/?#]|
  *  inside the key by its text: the authority ends where the key's ends and the
  *  path starts with the key's prefix. That is every ordinary listing, and it
  *  parses nothing per row (an index add computes this for every tool it
- *  holds). Anything else is parsed. */
+ *  holds). A key that is not plain reads its one kept answer where it has
+ *  one (sellerKeyFixedAnswer). Anything else is parsed. */
 function routeLeavesSeller(seller, route) {
-  if (typeof route === "string" && typeof seller === "string" && route.charCodeAt(0) === 47 && !ROUTE_NEEDS_PARSE.test(route) && isPlainSellerKey(seller)) return false;
+  if (typeof route === "string" && typeof seller === "string" && route.charCodeAt(0) === 47 && !ROUTE_NEEDS_PARSE.test(route)) {
+    if (isPlainSellerKey(seller)) return false;
+    const fixed = sellerKeyFixedAnswer(seller);
+    if (fixed !== null) return fixed;
+  }
   return routeLeavesSellerParsed(seller, route);
 }
 /** Test hooks: the text-first answer, the parsed answer, and a row's statics. */

@@ -10,6 +10,7 @@
 // X is a stub, the clock is a stub.
 //
 // Needs STATE_DATABASE_URL (CI fails without it; locally it prints SKIP).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

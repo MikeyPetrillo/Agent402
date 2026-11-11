@@ -8,6 +8,7 @@
 // reservation the chain ceiling refuses gives its payer room back.
 // Requires REDIS_URL (under CI a missing one fails); the database rounds run
 // when STATE_DATABASE_URL is set.
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { spawn } from "node:child_process";
 import { childJson } from "./lib/child-json.js";
 import { mkdtempSync } from "node:fs";

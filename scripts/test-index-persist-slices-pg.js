@@ -8,6 +8,7 @@
 // loop and its collector are measured against its own index, not a heap that
 // also holds A's index and the synthetic input.
 //   STATE_DATABASE_URL=postgres://... node scripts/test-index-persist-slices-pg.js
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

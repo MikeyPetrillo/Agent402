@@ -10,6 +10,7 @@
 // before passing it through, so the connect outlives the wait; the child must
 // still exit once it has closed.
 // Deliberately does not skip without REDIS_URL (CI provides the service).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import net from "node:net";
 import { spawn } from "node:child_process";
 

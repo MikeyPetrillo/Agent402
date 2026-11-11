@@ -19,6 +19,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { leastOurs } from "./lib/ours-clock.js";
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -29,8 +30,13 @@ let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) { pass++; console.log(`ok - ${msg}`); } else { fail++; console.error(`FAIL - ${msg}`); } };
 
 // Values built at runtime so the tree carries no credential-shaped literal.
-const SECRET = ["canary", "Secret", "Value", String(Date.now() % 1e6)].join("");
-const DB_PASS = ["pw", "Canary", String(process.pid)].join("");
+// RUN is the per-run part: a digit and twelve random hex characters, the same
+// length on every machine. A process id or a clock remainder is one to seven
+// digits, and in a fresh container (a pid under 1000) a canary built from it
+// is shorter than the shortest value the redactor reads as a credential.
+const RUN = `9${randomBytes(6).toString("hex")}`;
+const SECRET = ["canary", "Secret", "Value", RUN].join("");
+const DB_PASS = ["pw", "Canary", RUN].join("");
 const DB_URL = `postgres://agent:${DB_PASS}@db.internal.test:5432/state`;
 const REDIS_PASS = ["rd", "Canary", "Pass9"].join("");
 const REDIS_URL = `redis://default:${REDIS_PASS}@redis.internal.test:6379`;
@@ -40,7 +46,7 @@ const ECHO_VALUE = "Invalid domain name";
 // /__operator/well-known refuses an unknown content type with exactly this text
 // (src/well-known-store.js); the operator token is built at runtime.
 const OP_ECHO_VALUE = 'contentType must be "application/json" or "text/plain"';
-const OP_TOKEN = ["op", "Canary", "Token", String(process.pid)].join("");
+const OP_TOKEN = ["op", "Canary", "Token", RUN].join("");
 
 // --- 1. redactSecrets in process ---------------------------------------------
 {
@@ -68,7 +74,7 @@ const OP_TOKEN = ["op", "Canary", "Token", String(process.pid)].join("");
   ok(r("Missing or invalid \"pattern\"") === "Missing or invalid \"pattern\"", "innocent text passes through unchanged");
   // RPC endpoints carry the key in the path; Basic credentials are base64;
   // salts are secrets under a name that says neither KEY nor TOKEN.
-  const PATH_KEY = ["Rpc", "Canary", "Path", "Key", String(process.pid)].join("");
+  const PATH_KEY = ["Rpc", "Canary", "Path", "Key", RUN].join("");
   process.env.PROBE_SOLANA_RPC_URL = `https://sol.example.test/v2/${PATH_KEY}`;
   process.env.PROBE_BASE_RPCS = `https://a.example.test/${PATH_KEY}b, https://b.example.test/rpc?x=${PATH_KEY}c`;
   process.env.PROBE_TEMPO_RPC = `https://tempo.example.test/${PATH_KEY}d`;
@@ -95,11 +101,11 @@ const OP_TOKEN = ["op", "Canary", "Token", String(process.pid)].join("");
   process.env.PROBE_DOCS_URL = "https://docs.example.test/guides/getting-started-guide-2024/configuration-reference?section=webhooks-and-retries";
   const docsText = "see https://docs.example.test/guides/getting-started-guide-2024/configuration-reference?section=webhooks-and-retries";
   ok(r(docsText) === docsText, `a non-secret *_URL with long word segments passes through (${r(docsText)})`);
-  const HOOK_TOKEN = ["Hook", "Canary", "Tok", String(process.pid), "zz"].join("");
+  const HOOK_TOKEN = ["Hook", "Canary", "Tok", RUN, "zz"].join("");
   process.env.PROBE_WEBHOOK_URL = `https://hooks.example.test/services/team-alerts/${HOOK_TOKEN}?channel=ops`;
   const hookOut = r(`post to https://hooks.example.test/services/team-alerts/${HOOK_TOKEN}?channel=ops failed`);
   ok(hookOut === "post to https://hooks.example.test/services/team-alerts/[redacted]?channel=ops failed", `a *_URL loses only its credential segment (${hookOut})`);
-  const QTOKEN = ["q", "Canary", String(process.pid), "Abc", "def"].join("");
+  const QTOKEN = ["q", "Canary", RUN, "Abc", "def"].join("");
   process.env.PROBE_EXPORT_URL = `https://export.example.test/v1/data?cursor=${QTOKEN}&format=csv`;
   ok(r(`GET https://export.example.test/v1/data?cursor=${QTOKEN}&format=csv`) === "GET https://export.example.test/v1/data?cursor=[redacted]&format=csv", "a credential-looking query value under any name is redacted, the rest kept");
   // Known key shapes and random runs are credentials; words are not.
@@ -109,7 +115,7 @@ const OP_TOKEN = ["op", "Canary", "Token", String(process.pid)].join("");
   for (const s of ["getting-started-guide-2024", "configuration-reference", "internationalization", "release-notes-2026-11-04"]) ok(!looksLikeCredential(s), `looksLikeCredential: ${s} is not`);
   // Encoded spellings of a secret: percent-encoded (either hex case), hex
   // (either case) and with JSON-escaped slashes.
-  const ENC = ["enc", "Canary", "/Key+", String(process.pid), "=x"].join("");
+  const ENC = ["enc", "Canary", "/Key+", RUN, "=x"].join("");
   process.env.PROBE_ENCODED_API_KEY = ENC;
   const pct = encodeURIComponent(ENC);
   for (const [label, form] of [["percent-encoded", pct], ["percent-encoded, lowercase escapes", pct.replace(/%[0-9A-F]{2}/g, (m) => m.toLowerCase())],

@@ -7,6 +7,7 @@
 // still retrying. x402-index's operator lists merge what changed in memory
 // meanwhile and save the merge.
 // Requires STATE_DATABASE_URL (CI fails without it).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

@@ -3,6 +3,7 @@
 // drops. Leases are the piece two overlapping containers depend on: a second
 // owner cannot take a live lease, can take an expired one, and withLease skips
 // a tick another holder owns instead of running it twice.
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { requireTestPg } from "./lib/test-pg.js";
 requireTestPg({ label: "test-state-db" });
 const sdb = await import("../src/state-db.js");

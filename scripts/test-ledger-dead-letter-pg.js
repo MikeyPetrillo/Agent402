@@ -9,6 +9,7 @@
 // own suite, test-ledger-journal-redis-pg.js.
 //
 //   STATE_DATABASE_URL=postgres://... node scripts/test-ledger-dead-letter-pg.js
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { createServer, connect } from "node:net";
 import { childJson } from "./lib/child-json.js";
 import { mkdtempSync, rmSync, existsSync } from "node:fs";

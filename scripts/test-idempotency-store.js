@@ -6,6 +6,7 @@
 // are also written to the local store, so a Redis outage (cooldown or a
 // throwing client) never forgets an answer or locks a released claim. The Redis
 // half runs against REDIS_URL (required under CI).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { createLocalIdempotencyStore, createIdempotencyStore, IDEM_TTL_MS } from "../src/idempotency-store.js";
 
 let pass = 0, fail = 0;

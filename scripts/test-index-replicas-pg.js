@@ -5,6 +5,7 @@
 //   - an origin the operator removed on one container is purged from the
 //     other before it saves, so the removal is never undone.
 //   STATE_DATABASE_URL=postgres://... node scripts/test-index-replicas-pg.js
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

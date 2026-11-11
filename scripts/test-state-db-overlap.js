@@ -3,6 +3,7 @@
 // answer, both processes' writes land in the shared tables, exactly one of
 // them holds a given loop's lease at a time, and the first drains while the
 // second keeps serving. Requires STATE_DATABASE_URL (CI fails without it).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

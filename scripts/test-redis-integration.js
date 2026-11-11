@@ -20,6 +20,7 @@
 // This test REQUIRES a server. It does not skip: a skipped test is what let
 // the gap exist, and "no redis configured" in CI means the service container
 // is gone, which is the regression.
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 if (!process.env.REDIS_URL) {
   console.error("FAIL: REDIS_URL is not set. This test needs a real redis (CI provides a service container).");
   console.error("      It deliberately does not skip - a skipped integration test is why redis went untested at all.");

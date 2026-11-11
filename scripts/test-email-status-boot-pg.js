@@ -2,6 +2,7 @@
 // the boot awaits it: a container that starts after another one recorded an
 // outcome reports that outcome on its first status read, not "unknown".
 // Two child processes stand in for the two containers (one records, one boots).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { spawnSync } from "node:child_process";
 import { childJson } from "./lib/child-json.js";
 import { mkdtempSync, rmSync } from "node:fs";

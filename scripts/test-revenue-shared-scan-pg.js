@@ -4,6 +4,7 @@
 // (src/revenue-live.js). Only the scan itself is injected (no chain reads).
 // Needs STATE_DATABASE_URL; under CI a missing database is a failure.
 
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { requireTestPg } from "./lib/test-pg.js";
 requireTestPg({ label: "test-revenue-shared-scan-pg" });
 

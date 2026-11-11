@@ -5,6 +5,7 @@
 // its own even if the drain lease is gone; and a holder that dies stops
 // renewing, so its drain and its entries are claimed by the next holder once
 // the lease lapses. Requires REDIS_URL (under CI a missing one fails).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { randomBytes } from "node:crypto";
 import { createClient } from "redis";
 

@@ -5,6 +5,7 @@
 // "No sale of yours settled". saleByTxFresh pulls once on a miss.
 //
 //   STATE_DATABASE_URL=postgres://... node scripts/test-sale-lookup-crosscontainer-pg.js
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";

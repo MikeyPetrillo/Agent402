@@ -12,6 +12,7 @@
 //   - POST /api/decide answers its paid decision when the ledger is down
 //     after the model call, and the decision and its credit land later.
 // Requires STATE_DATABASE_URL (CI fails without it).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

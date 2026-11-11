@@ -7,6 +7,7 @@
 // The shared base tables (state-db's own) are created by the parent first:
 // this test is about the stores' DDL.
 // Requires STATE_DATABASE_URL (CI fails without it).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";

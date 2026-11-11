@@ -10,6 +10,7 @@
 // Requires STATE_DATABASE_URL (CI fails without it). The table lives in a
 // database of its own, created here and dropped at the end, so parallel runs
 // never share rows.
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import pg from "pg";
 import { readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";

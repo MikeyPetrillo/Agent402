@@ -3,6 +3,7 @@
 // another, so a paid repeat on the other replica is served free instead of
 // charged again. Needs a Redis (REDIS_URL); under CI a missing one fails.
 //   REDIS_URL=redis://... node scripts/test-prompt-cache-shared.js
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 let pass = 0, fail = 0;

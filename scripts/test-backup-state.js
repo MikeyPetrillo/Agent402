@@ -2,6 +2,7 @@
 // stageStateTable) and scripts/state-restore.js brings a table back: rows in,
 // NDJSON out, rows back into a fresh schema, equal. Requires STATE_DATABASE_URL
 // (CI fails without it).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

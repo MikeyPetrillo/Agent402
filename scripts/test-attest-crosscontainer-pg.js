@@ -4,6 +4,7 @@
 // the first one's UID. Before, each container's mirror still showed no UID
 // and both paid gas for an attestation.
 //   STATE_DATABASE_URL=postgres://... node scripts/test-attest-crosscontainer-pg.js
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { childJson } from "./lib/child-json.js";
 import { tmpdir } from "node:os";

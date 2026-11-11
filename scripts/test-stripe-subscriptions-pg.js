@@ -11,6 +11,7 @@
 //   - a webhook's partial patch on a container that never loaded the
 //     subscription keeps the record's product and target.
 // Requires STATE_DATABASE_URL (CI fails without it).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";

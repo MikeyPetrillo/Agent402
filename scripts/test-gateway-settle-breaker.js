@@ -8,6 +8,7 @@
 // >= 400 cancels settlement, so nobody pays for the refusal. Distinct buyers
 // failing at once raise an alarm (the settleFailures word) and refuse nobody. Nothing here touches the network: every fetch is a stub, and
 // the stub that must NOT be reached fails the run if it is.
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { EventEmitter } from "node:events";
 import { readFile } from "node:fs/promises";
 

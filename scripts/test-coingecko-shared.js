@@ -19,6 +19,7 @@
 //      control with RATE_LIMIT_REPLICAS=1 shows one server alone takes it all.
 // Deliberately does not skip: it starts a redis-server on a free port, and with
 // neither the binary nor REDIS_URL it fails.
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { spawn, execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import { connect } from "node:net";

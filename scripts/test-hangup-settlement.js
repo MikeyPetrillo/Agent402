@@ -43,6 +43,7 @@
 //      feedback or route-execute settles and is booked as owed, with budget
 //      to spare, while the same hang-up on an ordinary tool is not settled.
 // Part 2 also checks the lasting-effect list against the booted catalog.
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { spawn } from "node:child_process";
 import { createServer, request as httpRequest } from "node:http";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";

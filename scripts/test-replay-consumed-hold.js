@@ -25,6 +25,7 @@
 //
 // Deliberately does not skip without REDIS_URL: the hold is only observable
 // on the shared store, and a skipped integration test is not coverage.
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { spawn } from "node:child_process";
 import { createServer, request as httpRequest } from "node:http";
 import { createHash, randomBytes } from "node:crypto";

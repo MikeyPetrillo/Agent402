@@ -4,6 +4,7 @@
 // saved, even after the background re-read has landed mid-scan, and a state
 // the row moved past (another container saved) never replaces it.
 // Requires STATE_DATABASE_URL (CI fails without it).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

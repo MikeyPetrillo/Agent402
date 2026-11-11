@@ -10,6 +10,7 @@
 // document name in another session: the import's INSERT ... ON CONFLICT waits
 // on it until the statement limit, while the plain read sees no row.
 // Requires STATE_DATABASE_URL (CI fails without it).
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

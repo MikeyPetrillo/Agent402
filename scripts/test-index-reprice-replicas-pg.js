@@ -6,6 +6,7 @@
 //   - a boot holds the rows it read as unchanged, so its first save rewrites
 //     nothing it did not change.
 //   STATE_DATABASE_URL=postgres://... node scripts/test-index-reprice-replicas-pg.js
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
