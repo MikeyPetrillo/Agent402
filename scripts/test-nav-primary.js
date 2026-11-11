@@ -5,6 +5,7 @@
 // Offline: renders the shell (src/ledger-chrome.js); no server, no network.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { ledgerShell, ledgerFooterCompact, setDecideLive, NAV_PRIMARY_ACTION } from "../src/ledger-chrome.js";
+import { pageCtaHrefs, duplicateCtaTargets } from "./lib/page-ctas.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -69,6 +70,22 @@ for (const decide of [false, true]) {
     const on = [...p.desktop.matchAll(/class="ml-nav-link ml-nav-link-on[^"]*" href="([^"]+)"/g)].map((m) => m[1]);
     ok(on.length === 1 && on[0] === path, `${label} lights its own link alone${tag} (lit: ${on.join(", ") || "none"})`);
   }
+}
+
+// The page-CTA reader the "one call to action per target" suites share
+// (scripts/lib/page-ctas.js): the header action is chrome and is not counted,
+// a page's own button to the same target is, and two in-page buttons to one
+// target are still a duplicate.
+{
+  const page = (body) => ledgerShell({ title: "t", description: "d", canonical: "https://x.test/p", baseUrl: "https://x.test", activePath: "/p", body });
+  const own = `<a class="btn btn-primary" href="${NAV_PRIMARY_ACTION.href}">Add</a><a class="btn btn-ghost" href="/pricing">Pricing</a>`;
+  const one = page(own);
+  ok(primaries(one).filter((p) => p.href === NAV_PRIMARY_ACTION.href).length === 3, "control: the shell carries the header action twice (bar and menu) beside the page's own");
+  ok(pageCtaHrefs(one).join() === `${NAV_PRIMARY_ACTION.href},/pricing` && duplicateCtaTargets(one).length === 0, `the header action is site chrome: a page's own ${NAV_PRIMARY_ACTION.href} button is its only one (${pageCtaHrefs(one).join(", ")})`);
+  const two = page(`${own}<a class="btn btn-ghost" href="/pricing">Pricing again</a>`);
+  ok(duplicateCtaTargets(two).join() === "/pricing", `two in-page buttons to one target are still a duplicate (${duplicateCtaTargets(two).join(", ") || "none"})`);
+  const twice = page(`${own}<a class="btn btn-ghost" href="${NAV_PRIMARY_ACTION.href}">Add again</a>`);
+  ok(duplicateCtaTargets(twice).join() === NAV_PRIMARY_ACTION.href, "a second in-page button to the header action's target is a duplicate");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

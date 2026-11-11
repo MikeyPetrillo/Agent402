@@ -4,6 +4,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { whatIsMppPage } from "../src/what-is-mpp.js";
 import { whatIsX402Page } from "../src/what-is-x402.js";
+import { pageCtaHrefs } from "./lib/page-ctas.js";
 
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) { pass++; console.log(`ok - ${msg}`); } else { fail++; console.error(`FAIL - ${msg}`); } };
@@ -35,7 +36,7 @@ ok(!/<th[^>]*>x402<\/th>/.test(html), "this page carries no second x402 vs MPP t
 ok(html.includes('href="/what-is-x402"'), "links to /what-is-x402 (the broader explainer, not duplicated content)");
 ok((html.match(/href="\/what-is-x402(#compare)?"/g) || []).length >= 2, "the cross-link to /what-is-x402 appears in the hero and at #compare");
 {
-  const ctaHrefs = [...html.matchAll(/<a class="btn[^"]*" href="([^"]+)"/g)].map((m) => m[1]);
+  const ctaHrefs = pageCtaHrefs(html);
   ok(ctaHrefs.length > 0 && new Set(ctaHrefs).size === ctaHrefs.length, `one call to action per target (${ctaHrefs.join(", ")})`);
 }
 

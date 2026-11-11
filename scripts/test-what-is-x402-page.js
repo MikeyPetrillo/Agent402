@@ -2,6 +2,7 @@
 // (Aug 2026 revamp). Fixture data — no server, no network.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { whatIsX402Page } from "../src/what-is-x402.js";
+import { pageCtaHrefs } from "./lib/page-ctas.js";
 
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) { pass++; console.log(`ok - ${msg}`); } else { fail++; console.error(`FAIL - ${msg}`); } };
@@ -63,7 +64,7 @@ ok(!html.includes("—"), "no em dashes anywhere in the page copy");
 {
   const page = whatIsX402Page("https://agent402.tools", { stats, leaderboardSnapshot });
   ok((page.match(/<section id="compare"/g) || []).length === 1, "the x402 vs MPP table lives here, once (/what-is-mpp links it)");
-  const ctaHrefs = [...page.matchAll(/<a class="btn[^"]*" href="([^"]+)"/g)].map((m) => m[1]);
+  const ctaHrefs = pageCtaHrefs(page);
   ok(ctaHrefs.length > 0 && new Set(ctaHrefs).size === ctaHrefs.length, `one call to action per target (${ctaHrefs.join(", ")})`);
   ok(page.includes('id="agentic"') && page.includes("could the software complete the purchase with no human awake"), "#agentic keeps the practical test the AIFI post links to");
 }
