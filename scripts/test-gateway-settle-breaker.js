@@ -893,17 +893,20 @@ if (process.env.REDIS_URL) {
   // verdict, written to the shared windows that replica writes (gwb-fail,
   // gwb-blk); this process holds none of them. Its refusal reads the shared
   // blocklist count and uses the neutral words; the same strikes without the
-  // gwb-blk entry keep the verdict words (the control).
+  // gwb-blk entry keep the verdict words (the control). One fixed clock for
+  // the writes and the read (the consult takes `now`), and a key life of a
+  // minute, so no wall-clock delay between them can age the strikes out.
+  const KEY_LIFE_MS = 60_000;
   for (const [label, withBlk] of [["blocklisted", true], ["control: balance only", false]]) {
     await b._gatewaySettleBreakerReset();
     const W2 = "0x" + (withBlk ? "5" : "6").repeat(40);
     const k2 = b.gatewaySettleBreakerCountKey(fakeReq({ from: W2, network: X }));
     const now = Date.now();
-    for (let i = 0; i < 3; i++) await shared.windowAdd("gwb-fail", k2, { windowMs: 900, member: `other:${i}`, now });
-    if (withBlk) await shared.windowAdd("gwb-blk", k2, { windowMs: 900, member: "other:0", now });
-    const localBefore = b.gatewaySettleBreakerBlocked(k2);
+    for (let i = 0; i < 3; i++) await shared.windowAdd("gwb-fail", k2, { windowMs: KEY_LIFE_MS, member: `other:${i}`, now });
+    if (withBlk) await shared.windowAdd("gwb-blk", k2, { windowMs: KEY_LIFE_MS, member: "other:0", now });
+    const localBefore = b.gatewaySettleBreakerBlocked(k2, now);
     let err = null;
-    try { await b.gatewaySettleBreakerCheck(fakeReq({ from: W2, network: X })); } catch (e) { err = e; }
+    try { await b.gatewaySettleBreakerCheck(fakeReq({ from: W2, network: X }), { now }); } catch (e) { err = e; }
     ok(localBefore.fails === 0 && !localBefore.blocklisted, `${label}: this process holds none of the strikes (fails ${localBefore.fails})`);
     ok(withBlk
       ? err?.statusCode === 429 && /settlement did not proceed for this wallet/.test(err.message) && !/balance|signature|refused the payment itself/i.test(err.message)
