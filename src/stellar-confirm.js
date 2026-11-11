@@ -30,6 +30,7 @@
 // and is already the status quo, so it is the safe way to fail.
 
 import { base64BytesOf } from "./base64-bytes.js";
+import { shortPayer } from "./verify-failure-log.js";
 
 const DEFAULT_HORIZON = "https://horizon.stellar.org";
 
@@ -496,7 +497,7 @@ export async function settleWithStellarFallback({ primary, fallback = null, conf
     // errorReason alone hid what the fallback objected to (canary run
     // 32972751838: "unexpected_verify_error" and nothing else) - carry the
     // facilitator's own message, bounded.
-    log(`[stellar] fallback facilitator also failed (${JSON.stringify(fbRes?.errorReason || fbErr?.message || "failed").slice(0, 120)}${fbRes?.errorMessage ? `: ${String(fbRes.errorMessage).slice(0, 300)}` : ""}${fbRes?.payer ? ` payer=${fbRes.payer}` : ""}) - returning the primary failure`);
+    log(`[stellar] fallback facilitator also failed (${JSON.stringify(fbRes?.errorReason || fbErr?.message || "failed").slice(0, 120)}${fbRes?.errorMessage ? `: ${String(fbRes.errorMessage).slice(0, 300)}` : ""}${fbRes?.payer ? ` payer=${shortPayer(fbRes.payer)}` : ""}) - returning the primary failure`);
   }
   if (primaryErr) throw primaryErr;
   return { ...primaryRes, ...(typeof fallback === "function" ? { fallbackTried: true } : {}) };

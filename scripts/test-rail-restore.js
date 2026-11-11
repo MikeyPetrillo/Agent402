@@ -132,6 +132,19 @@ function fakeTimers() {
   ok(tm.due.length === 0 && none.pendingNetworks().length === 0, "no failed facilitator: nothing is scheduled and nothing reads as pending");
 }
 
+// Arc is never restored live: its contract-wallet route gate is registered
+// only when Arc is in the boot offer. Its facilitator has no stub here (the
+// client reads Circle's own host), so the two places that keep it out are
+// read from the source: it is not a re-read candidate, and the restore
+// refuses it before anything else.
+{
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../src/payments.js", import.meta.url), "utf8");
+  const body = (/const restoreRail = \(caip2, \{ client, label, supported \}\) => \{\n([^\n]*)\n/.exec(src) || [])[1] || "";
+  ok(body.trim() === "if (caip2 === ARC_CAIP2) return false;", `restoreRail refuses Arc first (${body.trim().slice(0, 60)})`);
+  ok(/const candidates = droppedOnFailedRead\.filter\(\(c\) => c !== ARC_CAIP2\);/.test(src) && /createRailRecheck\(\{ failed: failedReads, dropped: candidates,/.test(src), "and Arc is left out of the networks the re-read waits on");
+}
+
 // ---- Part 2: the wire ----------------------------------------------------------------
 const stubs = [];
 // mode: an object -> 200 with it; "die" -> 500; { slowMs, then } -> the first read answers `then` after slowMs, later reads at once.
