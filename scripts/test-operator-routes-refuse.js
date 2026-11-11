@@ -305,6 +305,10 @@ try {
     let view = null; try { view = JSON.parse(failures.text); } catch { /* asserted below */ }
     ok(failures.status === 200 && Number.isInteger(view?.transcriptionUnmeasured?.sinceBoot) && view.transcriptionUnmeasured.sinceBoot >= 0 && Object.keys(view.transcriptionUnmeasured).length === 1,
       `the failure view counts unmeasured transcription files since boot (${JSON.stringify(view?.transcriptionUnmeasured)})`);
+    const mod = view?.imageGenModeration?.sinceBoot;
+    const counts = (o) => o && Object.keys(o).join() === "low,auto" && Object.values(o).every((n) => Number.isInteger(n) && n >= 0);
+    ok(counts(mod?.calls) && counts(mod?.refusals) && Number.isInteger(mod?.unknownParamFallbacks) && Object.keys(view.imageGenModeration).length === 1,
+      `the failure view counts image-gen renders and refusals by moderation level and the parameter fallback since boot (${JSON.stringify(view?.imageGenModeration)})`);
   }
 
   // The operator view of a public surface: X-Operator-Token only. The surfaces
