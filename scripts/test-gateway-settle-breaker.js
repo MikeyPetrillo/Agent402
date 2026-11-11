@@ -1019,5 +1019,75 @@ if (process.env.REDIS_URL) {
   await b._gatewaySettleBreakerReset();
 }
 
+// --- non-EVM payers: keyed by the signer, never by a shared IP --------------------
+// Two wallets paying on one rail from one client address: one failing at
+// settle reaches the refusing count and is refused; the other is never
+// refused. The key is the signer read from the signed payment, case kept.
+{
+  const kit = await import("@solana/kit");
+  const { default: algosdk } = await import("algosdk");
+  const sdk = await import("@stellar/stellar-sdk");
+  const SHARED_IP = "198.51.100.23";
+  const reqFor = (payload) => {
+    const hdr = Buffer.from(JSON.stringify(payload)).toString("base64");
+    const req = { header: (n) => (String(n).toLowerCase() === "payment-signature" ? hdr : undefined), headers: {}, ip: SHARED_IP, res: fakeRes(), method: "POST", path: "/v1/chat" };
+    settleReceiptHeaderGuard({ log: () => {} })(req, req.res, () => {});
+    return req;
+  };
+  const SOL = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
+  const feePayer = await kit.generateKeyPairSigner();
+  const solPayload = async () => {
+    const buyer = await kit.generateKeyPairSigner();
+    const msg = kit.pipe(
+      kit.createTransactionMessage({ version: 0 }),
+      (m) => kit.setTransactionMessageFeePayer(feePayer.address, m),
+      (m) => kit.setTransactionMessageLifetimeUsingBlockhash({ blockhash: kit.blockhash("11111111111111111111111111111111"), lastValidBlockHeight: 0n }, m),
+      (m) => kit.appendTransactionMessageInstruction({ programAddress: kit.address("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"), accounts: [{ address: buyer.address, role: kit.AccountRole.READONLY_SIGNER, signer: buyer }], data: new TextEncoder().encode("t") }, m),
+    );
+    const tx = kit.getBase64EncodedWireTransaction(await kit.partiallySignTransactionMessageWithSigners(msg));
+    return { key: `svm:${buyer.address}`, payload: { x402Version: 2, accepted: { scheme: "exact", network: SOL, extra: { feePayer: feePayer.address } }, payload: { transaction: tx } } };
+  };
+  const ALGO = "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=";
+  const algoPayload = async () => {
+    const buyer = algosdk.generateAccount(), payTo = algosdk.generateAccount();
+    const params = { fee: 1000, minFee: 1000, firstValid: 1, lastValid: 1000, genesisID: "mainnet-v1.0", genesisHash: Buffer.from("wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=", "base64"), flatFee: true };
+    const txn = algosdk.makeAssetTransferTxnWithSuggestedParamsFromObject({ sender: buyer.addr, receiver: payTo.addr, amount: 1000, assetIndex: 31566704, suggestedParams: params });
+    return { key: `avm:${buyer.addr.toString()}`, payload: { x402Version: 2, accepted: { scheme: "exact", network: ALGO }, payload: { paymentGroup: [Buffer.from(txn.signTxn(buyer.sk)).toString("base64")], paymentIndex: 0 } } };
+  };
+  const stellarPayload = async () => {
+    const buyer = sdk.Keypair.random(), payTo = sdk.Keypair.random(), source = sdk.Keypair.random();
+    const op = sdk.Operation.invokeContractFunction({ contract: "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75", function: "transfer", args: [new sdk.Address(buyer.publicKey()).toScVal(), new sdk.Address(payTo.publicKey()).toScVal(), sdk.nativeToScVal(1000n, { type: "i128" })] });
+    const tx = new sdk.TransactionBuilder(new sdk.Account(source.publicKey(), "1"), { fee: "100", networkPassphrase: sdk.Networks.PUBLIC }).addOperation(op).setTimeout(300).build();
+    return { key: `stellar:${buyer.publicKey()}`, payload: { x402Version: 2, accepted: { scheme: "exact", network: "stellar:pubnet" }, payload: { transaction: tx.toXDR() } } };
+  };
+  const refusedFor = async (payload) => { try { await b.gatewaySettleBreakerCheck(reqFor(payload)); return null; } catch (e) { return e; } };
+  for (const [rail, make] of [["Solana", solPayload], ["Algorand", algoPayload], ["Stellar", stellarPayload]]) {
+    await b._gatewaySettleBreakerReset();
+    const A = await make(), B = await make();
+    const reqA = reqFor(A.payload);
+    await b.gatewaySettleBreakerCheck(reqA); // the consult reads the signer
+    ok(b.gatewaySettleBreakerKey(reqA) === A.key && A.key !== B.key, `${rail}: the breaker key is the signer read from the signed payment (${b.gatewaySettleBreakerKey(reqA)})`);
+    ok(b.gatewaySettleBreakerKey(reqA) !== b.gatewaySettleBreakerKey(reqA).toLowerCase() || rail === "Algorand", `${rail}: the signer key keeps its case`);
+    // Wallet A fails at settle three times (a verdict on its payment).
+    for (let i = 0; i < 3; i++) { const req = reqFor(A.payload); await b.gatewaySettleBreakerCheck(req); failWith(req, "insufficient_funds"); }
+    if (b._gatewaySettleBreakerShared) await sleep(150);
+    const eA = await refusedFor(A.payload);
+    ok(eA?.statusCode === 429, `${rail}: the failing wallet is still refused at the existing count (got ${eA?.statusCode})`);
+    const eB = await refusedFor(B.payload);
+    ok(eB === null, `${rail}: another wallet behind the same IP is never refused for it (got ${eB?.statusCode})`);
+    ok(!b.gatewaySettleBreakerBlocked(`ip:${SHARED_IP}`).blocked && b.gatewaySettleBreakerBlocked(`ip:${SHARED_IP}`).fails === 0, `${rail}: nothing was counted under the shared IP`);
+  }
+  // A payload whose signer cannot be read keeps the IP fallback; nobody is unkeyed.
+  await b._gatewaySettleBreakerReset();
+  const unreadable = reqFor({ x402Version: 2, accepted: { scheme: "exact", network: SOL }, payload: { transaction: "bm90IGEgdHg=" } });
+  await b.gatewaySettleBreakerCheck(unreadable);
+  ok(b.gatewaySettleBreakerKey(unreadable) === `ip:${SHARED_IP}`, "an unreadable non-EVM payment falls back to the client IP");
+  // EVM is unchanged: the signed payer, per network.
+  const evm = fakeReq({ from: ADDR, network: "eip155:8453", ip: SHARED_IP });
+  await b.gatewaySettleBreakerCheck(evm);
+  ok(b.gatewaySettleBreakerCountKey(evm) === `${ADDR.toLowerCase()}@eip155:8453` && !Object.hasOwn(evm, "__a402BreakerNonEvmSigner"), "an EVM payment keeps its signed payer key and reads no non-EVM signer");
+  await b._gatewaySettleBreakerReset();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

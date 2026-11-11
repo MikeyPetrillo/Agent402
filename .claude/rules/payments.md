@@ -49,7 +49,10 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   that sweep for at most `CREDITS_HOLD_REFRESH_MAX_MS` (default 6 hours, never under the abandoned
   window) (`src/credits.js`).
 - **Settle-failure breakers:** `src/gateway-settle-breaker.js` (per wallet on `/v1` and other
-  wallet-only tools). Each failed settle is read for the fault it proves (`settleFailureFault` in
+  wallet-only tools). The key is the signed EVM payer (per network), the verified Tempo sender,
+  the credits key, or the signer read from a Solana, Algorand or Stellar payment
+  (`src/non-evm-payer.js`, `svm:`/`avm:`/`stellar:`, never case-folded); the client IP only when
+  none can be read. Each failed settle is read for the fault it proves (`settleFailureFault` in
   `src/settle-fault.js`, from the receipt code and the facilitator's raw words the receipt guard
   keeps on the request; the Tempo gate's `SETTLE_FAULT` mark): a verdict on the buyer's payment
   (balance, signature, an authorization used or expired, or the chain's own balance words: an EVM

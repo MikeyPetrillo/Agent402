@@ -21,8 +21,9 @@
 // wallet (429) before any upstream call - a >= 400 cancels settlement, so
 // nobody is charged for the refusal - and arms one outcome listener on req.res
 // that records the outcome under the same key the consult used. The buyer is
-// the composite guard's: the signed EIP-3009 payer, else the Tempo payer the
-// gate verified, else the client IP.
+// the signed EIP-3009 payer, else the Tempo payer the gate verified, else the
+// credits key, else the signer of a Solana, Algorand or Stellar payment read
+// from what it signed, else the client IP (gatewaySettleBreakerKey).
 //
 // PER NETWORK. A signed EVM payer is counted per network its payment named
 // (payer@network): failures on one network refuse payments on that network
@@ -101,6 +102,7 @@
 // stopped whatever it settled (the bound on unpaid handler runs). Settled
 // calls stay in the window as outcomes; they do not erase the failures.
 import { payerFromRequest, paymentHeaderOf } from "./payer.js";
+import { nonEvmPayerFromRequest } from "./non-evm-payer.js";
 import { decodePaymentHeader } from "./payment-header.js";
 import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { settleFailureFault, isBlocklistSettleVerdict, SETTLE_FAULT, RAW_SETTLE_RECEIPT } from "./settle-fault.js";
@@ -291,23 +293,50 @@ async function sharedGlobalAlarm(now) {
   return r.until > now ? { alarm: true, until: r.until } : local;
 }
 
-/** The buyer a gateway call belongs to. Same derivation as the
- *  composite guard in server.js: the signed EVM payer, else the Tempo sender
- *  the gate VERIFIED (src/mpp-tempo.js sets req.mppTempoSender, null for a
- *  sender neither the signature nor the chain proved; the credential's own
+/** The buyer a gateway call belongs to: the signed EVM payer, else the Tempo
+ *  sender the gate VERIFIED (src/mpp-tempo.js sets req.mppTempoSender, null for
+ *  a sender neither the signature nor the chain proved; the credential's own
  *  `source` is client-supplied and a caller could name a fresh one per
- *  request, so it is never a key), else the
- *  credits key, else the client IP. Null only for an in-process caller with no
- *  request (route-execute dispatching a flat tier), which nothing here
- *  refuses. */
+ *  request, so it is never a key), else the credits key, else the signer of
+ *  a Solana, Algorand or Stellar payment read from what it signed
+ *  (src/non-evm-payer.js: `svm:`, `avm:`, `stellar:`, case kept, read by
+ *  resolveGatewaySettleBreakerSigner before the consult), else the client IP.
+ *  Without the signer, every wallet paying on those rails from one address
+ *  shared one IP key, so one wallet's settle failures refused the others.
+ *  Null only for an in-process caller with no request (route-execute
+ *  dispatching a flat tier), which nothing here refuses. */
 export function gatewaySettleBreakerKey(req) {
   if (!req || typeof req !== "object") return null;
   const payer = payerFromRequest(req);
   if (payer) return payer;
   if (req.mppTempoSender) return `tempo:${req.mppTempoSender}`;
   if (req.creditsKeyId) return `credits:${req.creditsKeyId}`;
+  const signer = Object.hasOwn(req, NON_EVM_SIGNER) ? req[NON_EVM_SIGNER] : null;
+  if (signer) return signer;
   const ip = typeof req.ip === "string" && req.ip.trim() ? req.ip.trim() : req.socket?.remoteAddress;
   return ip ? `ip:${String(ip).trim()}` : null;
+}
+// The non-EVM signer read for this request: a rail-prefixed address, or ""
+// once read and none was found (the IP fallback). Own, non-enumerable, read
+// once per request (the catalog consult and the /v1 handler's own share it).
+const NON_EVM_SIGNER = "__a402BreakerNonEvmSigner";
+/** Does this request still need its non-EVM signer read? Only a request with
+ *  a payment header and none of the keys ahead of the signer. */
+function signerReadPending(req) {
+  if (!req || typeof req !== "object" || Object.hasOwn(req, NON_EVM_SIGNER)) return false;
+  if (req.mppTempoSender || req.creditsKeyId) return false;
+  if (!paymentHeaderOf(req)) return false;
+  return !payerFromRequest(req);
+}
+/** Read the signer of a Solana, Algorand or Stellar payment on this request
+ *  into its breaker key. The paywall verified the payment before any consult
+ *  runs, so the signer named inside it is the wallet that paid. Never throws;
+ *  an unreadable payload leaves the IP fallback. Exported for tests. */
+export async function resolveGatewaySettleBreakerSigner(req) {
+  if (!signerReadPending(req)) return;
+  let signer = "";
+  try { signer = (await nonEvmPayerFromRequest(req)) || ""; } catch { signer = ""; }
+  try { Object.defineProperty(req, NON_EVM_SIGNER, { value: signer, enumerable: false, configurable: true }); } catch { /* a frozen request keeps the IP key */ }
 }
 
 // CAIP-2: namespace:reference.
@@ -616,6 +645,12 @@ export function armGatewaySettleBreaker(req, key, { global = true } = {}) {
  * promise with one, so `await` covers both.
  */
 export function gatewaySettleBreakerCheck(req, { now = Date.now(), global = true } = {}) {
+  // A non-EVM payment's signer is read first (an async parse for Algorand and
+  // Stellar); every other key is decided as before.
+  if (signerReadPending(req)) return resolveGatewaySettleBreakerSigner(req).then(() => consultKey(req, now, global));
+  return consultKey(req, now, global);
+}
+function consultKey(req, now, global) {
   const key = gatewaySettleBreakerCountKey(req);
   if (!SHARED) {
     decide(req, key, now, global, gatewaySettleBreakerBlocked(key, now));
