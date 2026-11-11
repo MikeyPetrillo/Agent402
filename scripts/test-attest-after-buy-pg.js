@@ -15,6 +15,7 @@
 // No request leaves the machine.
 //
 //   STATE_DATABASE_URL=postgres://... node scripts/test-attest-after-buy-pg.js
+import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { createServer } from "node:http";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
