@@ -14,6 +14,10 @@
 //   D   watches another payer with no failures: reads ok
 //   E   a store that refuses the connection: its own failures still raise
 //       the word, from this process alone, inside a bounded wait
+//   F   serves one busy refusal of onchain-sql for another top payer:
+//       onchainSqlBusy reads alert; G, a new process that served nothing,
+//       reads alert from the shared store with F's refusal (its kind is kept
+//       in the shared window); H, watching only the first payer, reads ok
 //
 //   REDIS_URL=redis://127.0.0.1:6379 node scripts/test-top-buyer-failures-redis.js
 //
@@ -27,6 +31,7 @@ import { childJson } from "./lib/child-json.js";
 
 const SELF = fileURLToPath(import.meta.url);
 const PAYER = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU"; // a Solana address shape, mixed case
+const BUSY_PAYER = "0x00000000000000000000000000000000000000b5"; // another top payer, for onchainSqlBusy
 
 if (process.env.TOP_BUYER_CHILD) {
   const job = JSON.parse(process.env.TOP_BUYER_CHILD);
@@ -36,12 +41,15 @@ if (process.env.TOP_BUYER_CHILD) {
   T.setTopBuyers(job.top);
   const t0 = Date.now();
   for (let i = 0; i < (job.fail || 0); i++) T.noteVerifiedPaidOutcome({ payer: PAYER, slug: "onchain-sql", status: 502, error: `we said ${i}`, at: t0 + i });
+  for (let i = 0; i < (job.busy || 0); i++) T.noteVerifiedPaidOutcome({ payer: BUSY_PAYER, slug: "onchain-sql", status: 429, kind: T.SQL_BUSY_KIND, error: "busy", at: t0 + i });
   await T._flushTopBuyerWrites();
   const started = performance.now();
   const pub = await T.topBuyerFailuresStatus({ now: t0 + 1_000 });
   const ms = Math.round(performance.now() - started);
   const full = await T.topBuyerFailuresStatus({ now: t0 + 1_000, full: true });
-  process.stdout.write(`\n${JSON.stringify({ mode: sharedLimitsMode(), pub, full, ms })}\n`);
+  const busyPub = await T.onchainSqlBusyStatus({ now: t0 + 1_000 });
+  const busyFull = await T.onchainSqlBusyStatus({ now: t0 + 1_000, full: true });
+  process.stdout.write(`\n${JSON.stringify({ mode: sharedLimitsMode(), pub, full, busyPub, busyFull, ms })}\n`);
   process.exit(0);
 }
 
@@ -90,6 +98,16 @@ ok(d.out?.pub?.status === "ok", `D: another top payer with no failures reads ok 
 // A store that refuses the connection: the word is this process's own.
 const e = await container({ top: [PAYER], fail: 3 }, { redisUrl: "redis://127.0.0.1:1" });
 ok(e.out?.pub?.status === "alert" && e.out.full?.sharedStore === "unread" && e.out.ms < 5_000, `E: with the store refusing, its own failures still read alert inside a bounded wait (${show(e)}, ${e.out?.ms} ms)`);
+
+// onchainSqlBusy reads the same per-payer window, by the refusal's kind.
+const f = await container({ top: [PAYER, BUSY_PAYER], busy: 1 });
+ok(f.out?.busyPub?.status === "alert" && f.out.busyFull?.alerting?.length === 1 && f.out.busyFull.alerting[0].rank === 2, `F: one busy refusal it served reads onchainSqlBusy alert, for that payer only; A's 502s for the other payer are not busy refusals (${JSON.stringify(f.out?.busyFull?.alerting)})`);
+const g = await container({ top: [PAYER, BUSY_PAYER], busy: 0 });
+const gRow = g.out?.busyFull?.alerting?.[0];
+ok(g.out?.busyPub?.status === "alert" && g.out.busyFull?.sharedStore === "on" && gRow?.payer === BUSY_PAYER.slice(0, 6) && gRow.rank === 2 && gRow.refusals?.length === 1 && gRow.refusals[0].status === 429, `G: a process that served none reads alert from the shared store, with the kind kept (${JSON.stringify(g.out?.busyFull)})`);
+ok(Object.keys(g.out?.busyPub || {}).join() === "status", "G: the public answer is the word alone");
+const h = await container({ top: [PAYER], busy: 0 });
+ok(h.out?.busyPub?.status === "ok", `H: watching only the other payer reads ok (${JSON.stringify(h.out?.busyPub)})`);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

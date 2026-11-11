@@ -400,7 +400,7 @@ import { initAnalyticsDb, recordToolCall, getAnalytics, analyticsEnabled, redact
 import { databasesStatus } from "./db-status.js";
 import { initWithRetry } from "./db-init-retry.js";
 import { railOf, outcomeRailOf } from "./payment-rail.js";
-import { noteVerifiedPaidOutcome, errorTextOf, attributionTextOf, topBuyerFailuresStatus, startTopBuyerRefresh, topRefreshMs } from "./top-buyer-failures.js";
+import { noteVerifiedPaidOutcome, errorTextOf, attributionTextOf, topBuyerFailuresStatus, startTopBuyerRefresh, topRefreshMs, isWatchedTopBuyer, onchainSqlBusyStatus, SQL_BUSY_KIND } from "./top-buyer-failures.js";
 import { nonEvmPayerFromRequest } from "./non-evm-payer.js";
 import { initPostHog, capturePostHogWrongMethod, capturePostHogToolError, capturePostHogToolCall, telemetryKeyOf, capturePostHogDiscovery, capturePostHogPaywall, capturePostHogPowChallenge, capturePostHogSettlement, capturePostHogChargedFailure, capturePostHogSettleFailed, capturePostHogToolGone, toolGoneSourceOf, capturePostHogHumanFunnel, shutdownPostHog, posthogEnabled } from "./posthog.js";
 import { analyticsPage } from "./analytics-page.js";
@@ -723,7 +723,7 @@ import { startRedisPersistenceMonitor, redisPersistenceStatus } from "./redis-pe
 import { sharedLimitsStatus, startSharedLimitsProbe, shared as sharedLimits, sharedLimitsEnabled, sharedWrite as sharedLimitsWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { createRegistrationLimiter } from "./registration-limits.js";
 import { flushJsonDocuments } from "./json-document.js";
-import { flushSqlQueryStats, sqlQueryStatsReport } from "./sql-query-stats.js";
+import { flushSqlQueryStats, sqlQueryStatsReport, noteSqlBusy } from "./sql-query-stats.js";
 import { flushXSearchStats, xSearchStatsReport } from "./x-search-stats.js";
 import { noteDiscoveryRefusal, noteDiscoveryServed, noteDiscoveryClientCall, flushDiscoveryRefusals, loadDiscoveryRefusals, discoveryRefusalsReport } from "./discovery-refusals.js";
 import { loadRemovedOrigins } from "./x402-index.js";
@@ -4278,6 +4278,15 @@ app.get("/api/gateway-status", async (req, res) => {
     // payer its short id, spend rank, tools, statuses, times and our error
     // text for the operator. An alarm only: nothing is refused for it.
     topBuyerFailures: await topBuyerFailuresStatus({ full, off: FREE_MODE }),
+    // onchainSqlBusy reads alert while one of the same watched top payers got
+    // onchain-sql's busy refusal (the server-wide in-flight query cap, a 429
+    // never charged) inside TOP_BUYER_FAIL_HOLD_MS; one is enough. ok
+    // otherwise, unknown before the first read of the top payers, off in
+    // FREE_MODE (src/top-buyer-failures.js). The word publicly; per alerting
+    // payer its short id, spend rank and refusal times for the operator. The
+    // daily counts by caller are on /__operator/tool-failures.json
+    // (onchainSqlQueries busy). An alarm only: nothing is refused for it.
+    onchainSqlBusy: await onchainSqlBusyStatus({ full, off: FREE_MODE }),
     // robinhoodSettler reads ok while the listed Robinhood Chain facilitator
     // settles first, relayer once our own relayer has settled first in its
     // place (src/robinhood-order.js: its signer read dry) for longer than
@@ -11915,20 +11924,27 @@ async function verifiedPayerOf(req, res) {
   const signer = await nonEvmPayerFromRequest(req);
   return signer ? normalizePayerAddress(signer.slice(signer.indexOf(":") + 1)) : null;
 }
-function noteTopBuyerFailure(req, res, slug, status, answer) {
+// sqlBusy: the answer was onchain-sql's busy refusal (src/tools/cdp-kit.js
+// marks the request). It is counted by caller once the payer is known
+// (src/sql-query-stats.js noteSqlBusy: a watched top payer or other) and kept
+// under its kind, which raises onchainSqlBusy for a top payer.
+function noteTopBuyerFailure(req, res, slug, status, answer, sqlBusy = false) {
   let error = null, attribution = null;
   try { error = answer?.has?.() ? errorTextOf(answer.body()) : null; } catch { error = null; }
   try { attribution = answer?.has?.() ? attributionTextOf(answer.body()) : null; } catch { attribution = null; }
   const at = Date.now();
   verifiedPayerOf(req, res).then((payer) => {
-    if (payer && !isOwnWallet(payer)) noteVerifiedPaidOutcome({ payer, slug, status, error, attribution, at });
-  }, () => {});
+    const outside = !!payer && !isOwnWallet(payer);
+    if (outside) noteVerifiedPaidOutcome({ payer, slug, status, error, attribution, kind: sqlBusy ? SQL_BUSY_KIND : null, at });
+    if (sqlBusy) noteSqlBusy({ topBuyer: outside && isWatchedTopBuyer(payer), now: at });
+  }, () => { if (sqlBusy) noteSqlBusy({ now: at }); });
 }
 function noteToolOutcomeOnClose(req, res, slug, def = null) {
   if (req.__a402OutcomeNoted) return;
   req.__a402OutcomeNoted = true;
   const synthetic = callIsOurs(req);
-  if (synthetic) { const scope = currentRequestScope(); if (scope) scope.synthetic = true; }
+  const scope = currentRequestScope();
+  if (synthetic && scope) scope.synthetic = true;
   // The JSON body handed to res.json, held by reference (nothing is copied or
   // serialized) and read only after the response closed, so classifying it
   // never delays, changes or bills the answer.
@@ -11939,9 +11955,13 @@ function noteToolOutcomeOnClose(req, res, slug, def = null) {
       // Free (proof-of-work, trial) outcomes count on their own lane, which
       // the toolFailures word does not read.
       toolFailureMonitor().noteTool(slug, status, { synthetic, shed: !!res.locals?.shed || drainSignal().aborted, path: salePathOf(req), rail: outcomeRailOf(req, res) });
+      // onchain-sql's busy refusal (the handler marks the request scope),
+      // counted by caller in either branch below.
+      const sqlBusy = status === 429 && scope?.onchainSqlBusy === true;
       // A verified paid request (past every gate, src/top-buyer-failures.js)
       // whose final answer was not a 2xx, under the payer its gate proved.
-      if (!synthetic && (status < 200 || status >= 300) && ownTrue(req, "__a402Dispatched")) noteTopBuyerFailure(req, res, slug, status, answer);
+      if (!synthetic && (status < 200 || status >= 300) && ownTrue(req, "__a402Dispatched")) noteTopBuyerFailure(req, res, slug, status, answer, sqlBusy);
+      else if (sqlBusy) noteSqlBusy({ synthetic });
       if (answer && status === 200) {
         const { klass, reasons } = answer.has() ? classifyAnswer(answerContractFor(def), answer.body()) : { klass: "unchecked", reasons: ["not-json"] };
         toolFailureMonitor().noteAnswer(slug, klass, { synthetic, reasons });

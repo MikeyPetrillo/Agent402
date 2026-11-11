@@ -165,7 +165,8 @@ try {
   ok(control.status === 200 && /"charged"/.test(control.text), `control: the valid token still reads it (${control.status})`);
   // No public surface carries the counts.
   const status = await (await fetch(`${B}/api/gateway-status`)).text();
-  ok(!/onchainSql|queriesPerChargedCall/.test(status), "the public status answer carries none of it");
+  // (onchainSqlBusy is a public word, ok/alert/unknown/off: the counts stay operator-only.)
+  ok(!/onchainSqlQueries|queriesPerChargedCall|"busy":\{|"charged":/.test(status), "the public status answer carries none of it");
   await paid.stop(); paid = null;
 
   // --- FREE_MODE boot: a call nothing is asked for is free ------------------------
