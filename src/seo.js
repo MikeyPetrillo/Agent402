@@ -369,6 +369,7 @@ function pageUrls(baseUrl, catalog) {
     { loc: `${baseUrl}/trust`, priority: "0.6" },
     { loc: `${baseUrl}/crawler`, priority: "0.5" },
     { loc: `${baseUrl}/company`, priority: "0.7" },
+    { loc: `${baseUrl}/scorecard`, priority: "0.7" },
     { loc: `${baseUrl}/glossary`, priority: "0.8" },
     { loc: `${baseUrl}/101`, priority: "0.9" },
     { loc: `${baseUrl}/pricing`, priority: "0.8" },
@@ -723,12 +724,18 @@ export function llmsTxt(baseUrl, catalog) {
   const summary = full.find((l) => l.startsWith("> "));
   // The optional reading list lives in /llms-full.txt; the short index stays under 15 KB.
   const keep = ["Call a model (metered, the default)", "Key machine surfaces", "Connect via MCP", "Framework adapters (zero-dependency npm)", "Settlement chains"];
+  // Entries the short index names in one clause; /llms-full.txt keeps each in full.
+  const brief = [
+    [`- [/api/scorecard](`, `- [/api/scorecard](${baseUrl}/api/scorecard): monthly buyer scorecard`],
+    [`- [/api/refunds](`, `- [/api/refunds](${baseUrl}/api/refunds?tx=): free refund status for one payment`],
+  ];
+  const briefOf = (line) => (brief.find(([prefix]) => line.startsWith(prefix)) || [])[1] || line;
   const sections = keep.map((name) => {
     const start = full.indexOf(`## ${name}`);
     if (start < 0) return "";
     let end = start + 1;
     while (end < full.length && !full[end].startsWith("## ")) end += 1;
-    return full.slice(start, end).join("\n").trimEnd();
+    return full.slice(start, end).map(briefOf).join("\n").trimEnd();
   }).filter(Boolean);
   const identity = `## Identity and receiving wallet
 - Receiving wallet: agent402.base.eth on Base, verifiable on Basescan. Every stablecoin call settles to the payTo its 402 names.

@@ -74,7 +74,15 @@ const CALL_SITE = {
   "Google Analytics": "googletagmanager.com",
   PostHog: "posthog.com",
   "Circle Gateway": "gateway-api.circle.com",
+  // The edge in front of the site: the server reads the client address it sets.
+  Cloudflare: "CF-Connecting-IP",
+  "direct inference provider": "DIRECT_UPSTREAM_URL",
+  "Example Inference": "DIRECT_UPSTREAM_URL",
 };
+// A provider /trust names ahead of the privacy policy, which waits on an owner
+// decision. The entry fails once /privacy names it, so it is removed then.
+const PRIVACY_PENDING = new Set(["Cloudflare"]);
+for (const p of PRIVACY_PENDING) ok(!privacy.includes(p), `${p} is still pending on /privacy (remove it from PRIVACY_PENDING once /privacy names it)`);
 const subs = trustSubprocessors();
 ok(subs.length >= 10, `the subprocessor table lists ${subs.length} rows`);
 for (const s of subs) {
@@ -84,8 +92,35 @@ for (const s of subs) {
     const site = CALL_SITE[part];
     ok(Boolean(site), `"${part}" has a call site named in this test`);
     if (site) ok(srcAll.includes(site), `"${part}" is called from src/ (${site})`);
-    ok(privacy.includes(part), `"${part}" is named in the privacy policy`);
+    if (!PRIVACY_PENDING.has(part)) ok(privacy.includes(part), `"${part}" is named in the privacy policy`);
   }
+}
+ok(subs.some((s) => s.name === "Cloudflare") && /Cloudflare[\s\S]{0,200}IP address/.test(trust), "the network edge in front of the site is a row, with what it sees");
+{
+  const stripe = subs.find((s) => s.name === "Stripe")?.gets || "";
+  ok(/ledger mirror/.test(stripe) && /wallet address, transaction id, amount/.test(stripe) && /optional Stripe ledger mirror[\s\S]*wallet address, transaction id, amount/.test(privacy), "the Stripe row names the optional ledger mirror and its fields, as the privacy policy does");
+  const ph = subs.find((s) => s.providers.includes("PostHog"))?.gets || "";
+  for (const field of ["paying wallet address", "first word of the caller's User-Agent", "keyed hash of one declared input field", "error message"]) {
+    ok(ph.includes(field) && privacy.includes(field), `the PostHog row names the server's service events: ${field} (as /privacy does)`);
+  }
+}
+{
+  // The direct inference provider: a row exactly while /privacy names it.
+  const KEYS = ["DIRECT_UPSTREAM_URL", "DIRECT_UPSTREAM_KEY", "DIRECT_UPSTREAM_MODELS", "DIRECT_UPSTREAM_NAME"];
+  const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
+  const direct = () => trustSubprocessors().find((s) => s.category === "AI models (direct)");
+  ok(!direct() && !privacy.includes("direct inference provider"), "with the direct upstream off, neither page names a direct inference provider");
+  Object.assign(process.env, { DIRECT_UPSTREAM_URL: "https://inference.example.test/v1", DIRECT_UPSTREAM_KEY: "unit", DIRECT_UPSTREAM_MODELS: "a/b=c" });
+  delete process.env.DIRECT_UPSTREAM_NAME;
+  for (const name of ["", "Example Inference"]) {
+    if (name) process.env.DIRECT_UPSTREAM_NAME = name;
+    const row = direct(), p = pageText(privacyPage(BASE)), t = pageText(trustPage(BASE));
+    const part = row?.providers?.[0] || "";
+    ok(Boolean(row) && t.includes(row.name) && p.includes(part) && Boolean(CALL_SITE[part]) && srcAll.includes(CALL_SITE[part]), `with the direct upstream on${name ? " and named" : ""}, /trust has its row and /privacy names it (${part})`);
+    ok(/zero data retention/.test(row?.gets || "") && /zero data retention/.test(p), "the direct row states zero data retention, as /privacy does");
+  }
+  for (const k of KEYS) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+  ok(!direct(), "control: the row leaves with the switch");
 }
 ok(!srcAll.includes("api.example-provider.invalid") && CALL_SITE.Stripe && srcAll.includes(CALL_SITE.Stripe), "control: the call-site scan finds a real host and not a made-up one");
 ok(/outside seller/.test(trust) && /outside seller/.test(privacy), "outside sellers are described by role, as in the privacy policy");
@@ -96,6 +131,8 @@ ok(/for one hour, or 24 hours for the per-client daily allowance/.test(privacy) 
 ok(/An entry is removed only\s*\n?\/\/ after its database write committed/.test(src("src/ledger-journal-redis.js")) && trust.includes("until its database write commits"), "a journaled money record lives until its database write commits (src/ledger-journal-redis.js)");
 ok(trust.includes(`A nightly copy of the state database ${backupKeepDays()} days`) || new RegExp(`nightly copy of the state database\\s+${backupKeepDays()} days`).test(trust), `backup retention on /trust is backupKeepDays() (${backupKeepDays()})`);
 ok(privacy.includes(`deleted after ${backupKeepDays()} days`), "the privacy policy states the same backup retention");
+
+ok(trust.includes("Backups (separate object storage)") && !/offsite/i.test(trust) && privacy.includes("object storage"), "backups are named as separate object storage, consistent with the hosting row and /privacy");
 
 // ---- encryption -----------------------------------------------------------------
 const hsts = (ALWAYS_HEADERS.find(([k]) => k === "Strict-Transport-Security") || [])[1];
@@ -108,6 +145,12 @@ ok(hstsYears() === 2 && /for two years/.test(trust), `/trust's HSTS lifetime is 
   const enc = encryptBackupBuffer(Buffer.from("row"), key);
   ok(enc.subarray(0, 8).toString() === "A402ENC1" && decryptBackupBuffer(enc, key).toString() === "row", "backup objects encrypt and decrypt with the AES-256-GCM envelope");
   ok(/createCipheriv\("aes-256-gcm"/.test(src("src/backup.js")) && trust.includes("AES-256-GCM"), "/trust names the cipher src/backup.js uses");
+}
+{
+  // The emailed report link (/r/<checkout session>) is not signed: the HMAC claim is scoped as /security scopes it.
+  const scope = "Links we email (confirmations, unsubscribes, monitor management) are HMAC-signed";
+  ok(trust.includes(scope) && pageText(securityPage(BASE)).includes(scope) && !/the links we email are HMAC-signed/i.test(trust), "the HMAC claim on /trust carries the scope /security states");
+  ok(/\/r\/\$\{/.test(src("src/human-checkout.js")), "control: the report link is a bare /r/<session> path");
 }
 ok(/if \(keyState === "unset" && backupProduction\(\)\) return "unencrypted";/.test(src("src/backup.js")), "the backup word reads unencrypted in production without a key");
 

@@ -7,8 +7,8 @@ const ENTRIES = [
     items: [
       "Site: /scorecard and GET /api/scorecard publish monthly buyer counts: outside paying wallets, returning wallets, wallets with paid calls on two or more days, and settled calls and USD by chain, for the current month to date and the six before. Our own wallets and internal traffic are not counted; small counts read <3.",
       "Site: /trust gathers subprocessors, encryption, incident response and restore testing on one page; /company lists the business phone, postal address and role mailboxes.",
-      "Site: the home page hero shows uptime, settled outside calls, chains and latency, rendered on the server. The site navigation adds Pricing, Company and Status and one primary action, Add to your agent.",
-      "Site: one lead sentence describes Agent402 on the home page, README, llms.txt, the MCP connector and the package pages.",
+      "Site: the home page hero shows uptime, external payments, the chains live and median latency, rendered on the server. The site navigation adds Pricing, Company and Status and one primary action, Add to your agent.",
+      "Site: one lead sentence describes Agent402 on the home page, README, llms.txt, the MCP connector and the package READMEs in the repository.",
       "Site: design: form controls share one border token, every control shows a 2px focus ring, pages open with a skip link, prose reads at 16px, small targets are at least 24px, and code blocks share one component with a copy button.",
       "Payments: GET /api/refunds?tx=<hash> looks up a refund by settlement transaction, with found, priceUsd and txUrl fields; /api/refunds/lookup keeps answering.",
       "Payments: the /v1 settle breaker keys a Solana, Algorand or Stellar payment by its signed payer.",

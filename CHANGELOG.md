@@ -16,11 +16,11 @@ Site:
 - /trust gathers subprocessors, encryption, incident response and restore
   testing on one page; /company lists the business phone, postal address and
   role mailboxes.
-- The home page hero shows uptime, settled outside calls, chains and latency,
-  rendered on the server. The site navigation adds Pricing, Company and Status
-  and one primary action, Add to your agent.
+- The home page hero shows uptime, external payments, the chains live and
+  median latency, rendered on the server. The site navigation adds Pricing,
+  Company and Status and one primary action, Add to your agent.
 - One lead sentence describes Agent402 on the home page, README, llms.txt, the
-  MCP connector and the package pages.
+  MCP connector and the package READMEs in the repository.
 - Design: form controls share one border token, every control shows a 2px
   focus ring, pages open with a skip link, prose reads at 16px, small targets
   are at least 24px, and code blocks share one component with a copy button.

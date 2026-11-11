@@ -15,6 +15,7 @@ import { backupKeepDays, backupUtcHour, backupStaleHours } from "./backup.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
 import { ALWAYS_HEADERS } from "./security-headers.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
+import { directUpstreamConfigured, directUpstreamName } from "./gateway-direct-upstream.js";
 import { COMPANY_MAILBOXES } from "./company.js";
 
 /** The processors the server sends buyer data to, as the privacy policy names
@@ -23,18 +24,27 @@ import { COMPANY_MAILBOXES } from "./company.js";
 export function trustSubprocessors() {
   const rows = [
     { category: "Hosting and backup storage", name: "Railway", providers: ["Railway"], gets: "Everything the service stores, and the nightly backups (encrypted before upload)" },
-    { category: "Card payments", name: "Stripe", providers: ["Stripe"], gets: "Card details on its hosted checkout, the email entered there" },
+    { category: "Network edge", name: "Cloudflare", providers: ["Cloudflare"], gets: "Every request to the site and its answer, with the caller's IP address and request headers, on the way to and from our server" },
+    { category: "Card payments", name: "Stripe", providers: ["Stripe"], gets: "Card details on its hosted checkout, the email entered there; when the optional Stripe ledger mirror is on, settled on-chain payments (wallet address, transaction id, amount) for bookkeeping, with no email or card data" },
     { category: "Transactional email", name: "ZeptoMail, with Resend as a fallback", providers: ["ZeptoMail", "Resend"], gets: "The address and the message: report links, monitor reports, alerts" },
     { category: "AI models", name: "OpenAI, and model operators via OpenRouter", providers: ["OpenAI", "OpenRouter"], gets: "Prompts and inputs to the /v1 endpoints, model-backed tools and report synthesis" },
+    // The same switch that prints the privacy policy's Third parties item.
+    ...(directUpstreamConfigured() ? [directInferenceRow(directUpstreamName())] : []),
     { category: "Web search and data", name: "Brave Search API, Exa, the X API", providers: ["Brave Search API", "Exa", "X API"], gets: "The query, URL, handle or post id a search tool is given" },
     { category: "Code sandbox", name: "E2B", providers: ["E2B"], gets: "The code sent to the code-run tools" },
     { category: "Tool routing", name: "TypeSafe", providers: ["TypeSafe"], gets: "The task text given to route and decide" },
     { category: "Payment verification", name: "Coinbase CDP and per-chain facilitators, Tempo's relay", providers: ["Coinbase CDP", "Tempo's relay"], gets: "The signed payment, to verify and settle it" },
     { category: "Sanctions screening", name: "Tempo's transfer data feed", providers: ["Tempo's transfer data feed"], gets: "A paying wallet address, to read its recent inbound transfers" },
-    { category: "Site analytics", name: "Google Analytics (advertising features off), PostHog", providers: ["Google Analytics", "PostHog"], gets: "Page visits and browser details; PostHog receives events relayed by our server, without your IP address" },
+    { category: "Site analytics", name: "Google Analytics (advertising features off), PostHog", providers: ["Google Analytics", "PostHog"], gets: "Page visits and browser details, relayed to PostHog by our server without your IP address. PostHog also receives the server's service events: tool name, HTTP status, price, settlement chain, the paying wallet address, the first word of the caller's User-Agent, a keyed hash of one declared input field and our error message" },
   ];
   if (gatewayOfferPublic()) rows.push({ category: "Batched payments", name: "Circle Gateway", providers: ["Circle Gateway"], gets: "A batched payment, verified and settled off chain" });
   return rows;
+}
+
+/** The direct inference provider's row, worded as the privacy policy's
+ *  Third parties item: named when DIRECT_UPSTREAM_NAME is set. */
+function directInferenceRow(name) {
+  return { category: "AI models (direct)", name: name || "A direct inference provider", providers: [name || "direct inference provider"], gets: "The messages and generation settings of a chat call to a listed model on the /v1 chat endpoints, served instead of OpenRouter, with zero data retention requested" };
 }
 
 const HSTS = (ALWAYS_HEADERS.find(([k]) => k === "Strict-Transport-Security") || [])[1] || "";
@@ -76,7 +86,7 @@ export function trustPage(baseUrl) {
         table(["Store", "What it holds", "Kept"], [
           ["State database (Postgres)", "The sales and refund ledgers, card-purchase records, monitor and alert subscriptions, wallet-keyed memory, async job and task results", `Per record class, as the ${link("/privacy", "privacy policy")} lists`],
           ["Redis", "Shared rate-limit and free-trial counters, the cached answer to an identical retry, and a money record whose database write has not landed yet", `Counters for their window (one hour, or 24 hours for the free trial's daily allowance); cached answers up to ${cacheMin} minutes; a money record until its database write commits`],
-          ["Offsite backups (object storage)", "A nightly copy of the state database", `${keep} days`],
+          ["Backups (separate object storage)", "A nightly copy of the state database", `${keep} days`],
           ["Operational logs", "Request paths and status codes", "The hosting platform's log retention"],
         ]),
         `No accounts and no passwords. Tool inputs are processed in memory and not stored, except where the privacy policy says otherwise.`,
@@ -87,7 +97,7 @@ export function trustPage(baseUrl) {
       h: "Encryption",
       p: [
         `In transit: every answer carries ${code(`Strict-Transport-Security: ${HSTS}`)}, so a browser that has seen it reaches agent402.tools over HTTPS only, for ${words(years)} years.`,
-        `At rest: each backup object is encrypted on our server with AES-256-GCM before upload, so the storage holds ciphertext. In production the ${code("backup")} word on ${link("/api/gateway-status", "/api/gateway-status")} reads ${code("unencrypted")} if the key is missing, and that pages. A prepaid credits key is stored only as a hash, and the links we email are HMAC-signed.`,
+        `At rest: each backup object is encrypted on our server with AES-256-GCM before upload, so the storage holds ciphertext. In production the ${code("backup")} word on ${link("/api/gateway-status", "/api/gateway-status")} reads ${code("unencrypted")} if the key is missing, and that pages. A prepaid credits key is stored only as a hash. Links we email (confirmations, unsubscribes, monitor management) are HMAC-signed with dedicated secrets and verified in constant time.`,
       ],
       links: [[repoUrl("blob/main/src/security-headers.js"), "Headers code"], [repoUrl("blob/main/src/backup.js"), "Backup code"]],
     },
