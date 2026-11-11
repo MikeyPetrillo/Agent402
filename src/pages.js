@@ -774,6 +774,10 @@ const ASYNC_JOB_SCHEMA = {
     error: { type: "object", description: "On failed: { httpStatus, body or message }." },
   },
 };
+// A well-formed Base payment hash: a generator or sweep that sends the
+// published example gets the real answer shape (status none for a payment
+// with no refund recorded), never a 400.
+const REFUND_LOOKUP_EXAMPLE_TX = "0x3f9c2a7d41b8e06c5d2f7a9b13e48c60d7a2f95b1c3e8d40a6f2b97c5d1e3a08";
 const REFUND_LOOKUP_SCHEMA = {
   type: "object",
   required: ["tx", "found", "status"],
@@ -982,7 +986,7 @@ export function openapiSpec(baseUrl, catalog) {
     summary: "Refund status of one payment, by its payment transaction",
     description: "Free. Answers whether a payment that was charged and not delivered is refunded: found, status (owed, sending, paid, void, or none for a transaction with no refund recorded, which is also the answer for one never seen), priceUsd of the call it paid for, network, chain, the payment's and the refund's explorer links, and refundTx once sent. One payment per ask, keyed by its own on-chain transaction; never a list, never a wallet address, never the payer or the tool bought. Rate limited per client address (429 with Retry-After).",
     tags: ["refunds"],
-    parameters: [{ name: "tx", in: "query", required: true, description: "The payment's transaction: 0x plus 64 hex on EVM chains, 64 hex on Stellar, a base58 signature on Solana, a 52-character id on Algorand.", schema: { type: "string", maxLength: 100 } }],
+    parameters: [{ name: "tx", in: "query", required: true, description: "The payment's transaction: 0x plus 64 hex on EVM chains, 64 hex on Stellar, a base58 signature on Solana, a 52-character id on Algorand.", schema: { type: "string", maxLength: 100 }, example: REFUND_LOOKUP_EXAMPLE_TX }],
     responses: {
       200: { description: "The refund status of that one payment.", content: { "application/json": { schema: REFUND_LOOKUP_SCHEMA } } },
       400: { description: "tx is not one transaction hash." },

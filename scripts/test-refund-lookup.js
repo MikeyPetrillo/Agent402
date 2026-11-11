@@ -148,6 +148,14 @@ try {
   const spec = await (await fetch(`${base}/openapi.json`)).json();
   const op = spec?.paths?.["/api/refunds"]?.get;
   ok(op && Array.isArray(op.security) && op.security.length === 0 && op.parameters?.[0]?.name === "tx" && op.responses?.[200]?.content?.["application/json"]?.schema?.properties?.status?.enum?.join() === "owed,sending,paid,void,none" && !("payer" in (op.responses[200].content["application/json"].schema.properties || {})), "openapi documents GET /api/refunds: free, one tx, every status, no payer field");
+  // The sweep (scripts/test-all.js buildGetUrl) calls each GET with its
+  // published parameter examples: both names must publish a tx that answers 200.
+  for (const path of ["/api/refunds", "/api/refunds/lookup"]) {
+    const ex = spec?.paths?.[path]?.get?.parameters?.find((p) => p.name === "tx")?.example;
+    const r = typeof ex === "string" ? await fetch(`${base}${path}?tx=${encodeURIComponent(ex)}`) : null;
+    const rj = r ? await r.json() : null;
+    ok(r?.status === 200 && typeof rj?.status === "string" && rj.tx === ex, `openapi ${path} publishes a tx example the server answers 200 to (${r?.status ?? "no example"})`);
+  }
   const llms = await (await fetch(`${base}/llms.txt`)).text();
   ok(/\/api\/refunds\]\([^)]*\/api\/refunds\?tx=\): free refund status for one payment/.test(llms), "llms.txt names the refund lookup");
   let limited = null, n = 0;
