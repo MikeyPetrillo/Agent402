@@ -69,7 +69,7 @@ const wiki = readdirSync(join(ROOT, "wiki")).filter((f) => f.endsWith(".md")).ma
     ok(r.status === 200, `${path} answers 200 (${r.status})`);
     check(path, html.replace(/&#39;|&apos;/g, "'").replace(/&amp;/g, "&"));
   }
-  for (const f of ["wiki/Buying-at-Volume.md", "README.md"]) check(f, readFileSync(join(ROOT, f), "utf8"));
+  for (const f of ["wiki/Buying-at-Volume.md", "wiki/LLM-Gateway.md", "README.md"]) check(f, readFileSync(join(ROOT, f), "utf8"));
 }
 // A model id the LLM-Gateway page says is served as itself until its upstream
 // expiration: the day and the successor are the ones RETIRING_MODELS holds.
