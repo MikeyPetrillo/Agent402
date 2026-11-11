@@ -56,6 +56,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { randomBytes } from "node:crypto";
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
+import { shortPayer } from "../src/verify-failure-log.js";
 import Database from "better-sqlite3";
 import { parsePaymentRequired } from "@x402/core/schemas";
 import { x402ResourceServer } from "@x402/core/server";
@@ -559,7 +560,9 @@ await check("past the in-memory bound a held booking is never dropped in silence
   const first = pendingKey("eip155:8453", acct.address, nonces[0]);
   const ev = errs.filter((m) => /EVICTED from memory/.test(m));
   assert.equal(ev.length, 1, "one error line per eviction");
-  assert.ok(ev[0].includes(first) && ev[0].includes("5000"), "the line names the booking and its amount");
+  const [net, who, non] = first.split("|");
+  assert.ok(ev[0].includes(`${net}|${shortPayer(who)}|${non}`) && ev[0].includes("5000"), "the line names the booking (payer by its first characters) and its amount");
+  assert.ok(!ev[0].toLowerCase().includes(acct.address.toLowerCase()), "with a durable store the line never holds the full address, in the key or beside it");
   assert.equal((await store.load()).length, 201, "the evicted one is still in the durable store");
   assert.equal((await book.operatorView()).evictedFromMemory, 1);
   // Every in-memory booking resolved by hand: the eviction still pages inside its window.

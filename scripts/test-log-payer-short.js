@@ -10,7 +10,13 @@
 // whose expression mentions a wallet-shaped name (payer, from, sender, buyer,
 // payTo, wallet, address, signer, authority, owner) without a shortening step
 // (shortPayer, maskAddress, mask, short, a fixed .slice(0, n)) or a count.
-// String literals inside the expression are not read. A line that must keep
+// String literals inside the expression are not read. A shortening step
+// counts only for what it wraps: `c ? shortPayer(p) : p` still prints p.
+// In the payment modules (PAYMENT_FILE) a booking or lookup key (key, e.key,
+// fooKey) is read as a wallet too, since keys there are built from the payer
+// (gateway-nanopayments' network|payer|nonce), and so is a call to a helper
+// in the same file whose template prints a wallet unshortened (late-settle's
+// labelOf). A line that must keep
 // the full address is in ALLOW with its reason; an ALLOW entry that no longer
 // matches anything fails too, so the list never outlives its lines.
 // The scanner is exercised on a sample first, so a clean tree is a result and
@@ -30,6 +36,17 @@ const ALLOW = {
     "byAuth ? `auth ${c.payer}/${c.nonce}` : `tx ${c.tx}`": "the could-NOT-be-recorded alarm: store and journal both refused, so this line is the only record of who is owed",
     "entry.payer": "the same alarm: the wallet a refund would be sent to",
   },
+  "src/gateway-nanopayments.js": {
+    "lostDurable ? shortKey(gone.key) : gone.key": "the EVICTED line with no durable store: memory was the last copy of a booking that may be owed back",
+    "lostDurable ? shortPayer(gone.payer) : gone.payer": "the same EVICTED line: the wallet a refund would be sent to",
+  },
+  "src/gateway-settle-breaker.js": {
+    'networkOf(key) ? ` on ${networkOf(key)}` : ""': "prints the network read from the key, never the key",
+    'networkOf(key) ? " on that network" : ""': "a fixed phrase chosen by the network read from the key",
+  },
+  "src/stellar-confirm.js": {
+    'fbRes?.payer ? ` payer=${shortPayer(fbRes.payer)}` : ""': "the bare payer is only tested for presence; the printed one is shortened",
+  },
   "src/paid-phase-timing.js": {
     'row.payer || "-"': "already the first six characters (cut when the row is built)",
   },
@@ -42,14 +59,40 @@ const ALLOW = {
 
 const CALL = /(?<![\w$.])(?:console\.(?:log|warn|error|info|debug)|log|warn|alarm)\s*\(/g;
 const WALLETISH = /\b(payer|payers|from|sender|buyer|payTo|wallet|address|signer|authority|owner)\b/i;
-const SHORTENED = /\bshortPayer\(|\bmaskAddress\(|\bmask\(|\bshort\(|\.slice\(0,\s*\d+\)|\.length\b|\.size\b|[Cc]ount\b/;
+const SHORTENED = /\.slice\(0,\s*\d+\)|\.length\b|\.size\b|[Cc]ount\b/;
+const SHORTENING_CALL = /\b(?:shortPayer|shortKey|maskAddress|mask|short)\(/g;
+const KEYISH = /(?<![\w$])key\b|[a-z0-9]Key\b/;
+// Payment modules: keys there carry the payer.
+const PAYMENT_FILE = /^src\/(?:payments|payment-[\w-]+|payer|[\w-]+-payer|gateway-[\w-]+|hangup-[\w-]+|late-settlements|pending-settle|refund-[\w-]+|sales-ledger|revenue-ledger|outbound-ledger|settle[\w-]*|settlement-[\w-]+|credits|idempotency[\w-]*|replay-[\w-]+|mpp-[\w-]+|mcp-mpp|verify-[\w-]+|x402-buyer|solana-buyer|tempo-buyer|prepayment-refusal|svm-[\w-]+|shared-paytos|stripe-shadow-ledger|ledger-journal-redis|ledger-mirror)\.js$/;
+/** The expression with every shortening call and its argument list removed. */
+function withoutShortened(code) {
+  let out = "", last = 0;
+  for (const m of code.matchAll(SHORTENING_CALL)) {
+    if (m.index < last) continue;
+    let i = m.index + m[0].length, depth = 1;
+    for (; i < code.length && depth; i++) { const c = code[i]; if (c === "(") depth++; else if (c === ")") depth--; }
+    out += code.slice(last, m.index) + '""';
+    last = i;
+  }
+  return out + code.slice(last);
+}
+/** Names of helpers in `src` whose template prints a wallet unshortened. */
+function walletHelpers(src) {
+  const names = [];
+  for (const d of src.matchAll(/\b(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*\([^)\n]*\)\s*=>([^\n]*)/g)) {
+    for (const e of d[2].matchAll(/\$\{([^{}]*)\}/g)) if (WALLETISH.test(withoutShortened(withoutStrings(e[1])))) { names.push(d[1]); break; }
+  }
+  return names;
+}
 // Quoted text inside an expression is not code: drop it before matching. A
 // nested template keeps its own ${...} parts (they are expressions).
 const withoutStrings = (expr) => expr.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '""').replace(/`(?:[^`\\$]|\\.|\$(?!\{))*`/g, "``");
 
 /** Every flagged interpolation in `src` as { line, expr }. */
-function scanLogCalls(src) {
+function scanLogCalls(src, payment = false) {
   const out = [];
+  const helpers = payment ? walletHelpers(src) : [];
+  const helperCall = helpers.length ? new RegExp(`(?<![\\w$.])(?:${helpers.join("|")})\\(`) : null;
   for (const m of src.matchAll(CALL)) {
     let i = m.index + m[0].length, depth = 1;
     const end = Math.min(src.length, i + 4000);
@@ -58,7 +101,9 @@ function scanLogCalls(src) {
     if (!arg.includes("`")) continue;
     for (const e of arg.matchAll(/\$\{((?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*)\}/g)) {
       const code = withoutStrings(e[1]);
-      if (!WALLETISH.test(code) || SHORTENED.test(code)) continue;
+      if (SHORTENED.test(code)) continue;
+      const bare = withoutShortened(code);
+      if (!WALLETISH.test(bare) && !(payment && (KEYISH.test(bare) || (helperCall && helperCall.test(bare))))) continue;
       out.push({ line: src.slice(0, m.index).split("\n").length, expr: e[1].trim() });
     }
   }
@@ -76,6 +121,18 @@ function scanLogCalls(src) {
   ].join("\n");
   const hits = scanLogCalls(sample).map((h) => h.expr);
   ok(hits.join("|") === "payer|auth.from", `control: the scanner flags a bare payer and a from, and passes shortened values, counts and quoted words (${hits.join(", ")})`);
+  const pay = [
+    "const labelOf = (e) => `auth ${e.payer}/${e.nonce}`;",
+    "const okLabel = (e) => `auth ${shortPayer(e.payer)}`;",
+    "log(`[g] entry ${key} resolved`);",
+    "log(`[g] evicted ${e.key} and ${cacheKey}`);",
+    "log(`[g] ${labelOf(e)} and ${okLabel(e)}`);",
+    "log(`[g] ${durable ? shortPayer(p.payer) : p.payer}`);",
+    "log(`[g] ok ${shortKey(key)} ${keys.length} ${monkey}`);",
+  ].join("\n");
+  const payHits = scanLogCalls(pay, true).map((h) => h.expr);
+  ok(payHits.join("|") === "key|e.key|cacheKey|labelOf(e)|durable ? shortPayer(p.payer) : p.payer", `control: in a payment module a key, a payer-printing helper and an unshortened ternary branch are flagged (${payHits.join(", ")})`);
+  ok(scanLogCalls(pay, false).map((h) => h.expr).join("|") === "durable ? shortPayer(p.payer) : p.payer", "control: outside the payment modules a key is not read as a wallet");
 }
 
 const files = [];
@@ -94,7 +151,7 @@ for (const f of files) {
   const rel = relative(ROOT, f).split("\\").join("/");
   const src = readFileSync(f, "utf8");
   calls += (src.match(CALL) || []).length;
-  for (const h of scanLogCalls(src)) {
+  for (const h of scanLogCalls(src, PAYMENT_FILE.test(rel))) {
     if (ALLOW[rel] && Object.hasOwn(ALLOW[rel], h.expr)) { used.add(`${rel}\u0000${h.expr}`); continue; }
     bad.push(`${rel}:${h.line} \${${h.expr.slice(0, 80)}}`);
   }

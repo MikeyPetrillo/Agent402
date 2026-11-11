@@ -763,7 +763,7 @@ export function installGatewayRouting(server, client, networks, { pendingBook = 
           ? (await pendingBook.resolve(key, { outcome: "served", note: "resent and served on Gateway's transfer record", owner }))?.ok === true
           : (await pendingBook.releaseResume(key, owner)) === true;
       } catch { ok = false; }
-      if (!ok) log(`[gateway] pending entry ${key} could not be ${served ? "dropped" : "handed back"}; its hold lapses after the resume lease`);
+      if (!ok) log(`[gateway] pending entry ${shortKey(key)} could not be ${served ? "dropped" : "handed back"}; its hold lapses after the resume lease`);
     };
     resume.finish = finish;
     const res = req?.res;
@@ -854,6 +854,8 @@ export function gatewayPendingUnresolvedMs(env = process.env) {
   return (Number.isFinite(h) && h > 0 && h <= 24 * 30 ? h : DEFAULT_PENDING_UNRESOLVED_HOURS) * 3_600_000;
 }
 export const pendingKey = (network, payer, nonce) => `${String(network)}|${lc(payer)}|${lc(nonce)}`;
+// A booking key as a log line prints it: network|<payer by its first characters>|nonce.
+const shortKey = (key) => { const p = String(key).split("|"); return p.length === 3 ? `${p[0]}|${shortPayer(p[1])}|${p[2]}` : "?"; };
 /** The book's file (also the journal's base name). */
 export function gatewayPendingFile(env = process.env) { return env.GATEWAY_PENDING_FILE || "/data/gateway-pending.json"; }
 
@@ -950,7 +952,7 @@ function holdLost(e, log = console.error) {
     lostPending = lostPending.slice(1);
     lostEvictedAt = Date.now();
     lostEvictedCount++;
-    try { log(`[gateway] EVICTED from memory (more than ${LOST_MAX} bookings held outside the pending book): ${gone.key} on ${gone.network}, buyer ${lostDurable ? shortPayer(gone.payer) : gone.payer}, amount ${gone.amount ?? "?"}, nonce ${gone.nonce}; ${lostDurable ? "still in the durable store, offered to the book once memory has room" : "no durable store: resolve it by hand from this line"}`); } catch { /* logging never throws */ }
+    try { log(`[gateway] EVICTED from memory (more than ${LOST_MAX} bookings held outside the pending book): ${lostDurable ? shortKey(gone.key) : gone.key} on ${gone.network}, buyer ${lostDurable ? shortPayer(gone.payer) : gone.payer}, amount ${gone.amount ?? "?"}, nonce ${gone.nonce}; ${lostDurable ? "still in the durable store, offered to the book once memory has room" : "no durable store: resolve it by hand from this line"}`); } catch { /* logging never throws */ }
   }
   return true;
 }
@@ -1176,10 +1178,10 @@ export function createGatewayPendingBook({ file = gatewayPendingFile(), now = ()
       let id = null;
       try { const j = await journalOf(); id = j ? j.add("gateway-pending", entry) : null; } catch { id = null; }
       if (id == null) {
-        if (!quiet) alarm(`[gateway] pending settlement ${key} could not be written to the book or its journal`);
+        if (!quiet) alarm(`[gateway] pending settlement ${shortKey(key)} could not be written to the book or its journal`);
         return false;
       }
-      log(`[gateway] pending settlement ${key}: the book did not take it (${r}); kept in the journal until the resolver lands it`);
+      log(`[gateway] pending settlement ${shortKey(key)}: the book did not take it (${r}); kept in the journal until the resolver lands it`);
       return "journaled";
     },
     /** Land what the journal holds in the book. Resolves how many landed. */
@@ -1212,7 +1214,7 @@ export function createGatewayPendingBook({ file = gatewayPendingFile(), now = ()
           if (lostDurable && !(await durableWrite("resolution", (d) => d.del([key]), alarm))) return { ok: false, error: "the durable store of held bookings could not be written; the booking is kept" };
           lostPending = lostPending.filter((e) => e.key !== key);
           persistLost(log);
-          log(`[gateway] pending entry ${key} (held in memory only) resolved as ${outcome}${note ? ` (${String(note).slice(0, 200)})` : ""}`);
+          log(`[gateway] pending entry ${shortKey(key)} (held in memory only) resolved as ${outcome}${note ? ` (${String(note).slice(0, 200)})` : ""}`);
           return { ok: true, key, outcome };
         }
         return { ok: false, error: "no such entry" };
@@ -1232,7 +1234,7 @@ export function createGatewayPendingBook({ file = gatewayPendingFile(), now = ()
       } catch { wrote = false; }
       if (held) return { ok: false, error: "the entry is held by a resend or the resolver; it is closed by its holder" };
       if (wrote !== true) return { ok: false, error: "the pending book could not be written" };
-      log(`[gateway] pending entry ${key} resolved as ${outcome}${note ? ` (${String(note).slice(0, 200)})` : ""}`);
+      log(`[gateway] pending entry ${shortKey(key)} resolved as ${outcome}${note ? ` (${String(note).slice(0, 200)})` : ""}`);
       return { ok: true, key, outcome };
     },
     /** The entry for one authorization key, read from the shared store. */

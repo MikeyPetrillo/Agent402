@@ -126,7 +126,8 @@ const NONCE = /^0x[0-9a-fA-F]{64}$/;
 const AUTH_LOOKBACK_MS = 10 * 60_000;
 
 /** How a log line names an entry: its transaction, or its authorization. */
-const labelOf = (e) => (e.tx ? `tx ${e.tx}` : `auth ${e.payer}/${e.nonce}`);
+// A log line names the payer by its first characters; the row keeps it whole.
+const labelOf = (e) => (e.tx ? `tx ${e.tx}` : `auth ${shortPayer(e.payer)}/${e.nonce}`);
 const backoff = (checks) => Math.min(FIRST_CHECK_MS * 2 ** Math.max(0, checks), MAX_BACKOFF_MS);
 
 /**
