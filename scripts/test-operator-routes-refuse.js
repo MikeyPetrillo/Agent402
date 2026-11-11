@@ -289,6 +289,12 @@ try {
     // refused for them: an address used once is still compared.
     const again = await call("GET", "/__operator/seo-meta.json", { "x-operator-token": TOKEN });
     ok(again.status === 200, `after the sweep a new address with the right token is still let in (${again.status})`);
+    // The failure view carries the transcription files this process could not
+    // measure since boot: a count only.
+    const failures = await call("GET", "/__operator/tool-failures.json", { "x-operator-token": TOKEN });
+    let view = null; try { view = JSON.parse(failures.text); } catch { /* asserted below */ }
+    ok(failures.status === 200 && Number.isInteger(view?.transcriptionUnmeasured?.sinceBoot) && view.transcriptionUnmeasured.sinceBoot >= 0 && Object.keys(view.transcriptionUnmeasured).length === 1,
+      `the failure view counts unmeasured transcription files since boot (${JSON.stringify(view?.transcriptionUnmeasured)})`);
   }
 
   // The operator view of a public surface: X-Operator-Token only. The surfaces

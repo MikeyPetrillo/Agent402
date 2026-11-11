@@ -84,5 +84,8 @@ Loaded when a media, document or worker-pool tool file is read.
 - **Transcription length:** the per-tier cap of `transcribe` and `transcribe-pro` holds the longer of the duration a
   file's headers declare and the length its audio measures. `measureAudioSeconds` (`src/tools/media-kit.js`) decodes
   the first audio stream to nowhere with ffmpeg (audio-only whitelist, its own two-slot pool that queues, 10 s
-  deadline) and never refuses: where it cannot measure (no ffmpeg, a failed or slow decode) a lossy file is held to
-  the shortest its bytes can play (`byteFloorSeconds`, `src/tools/stt-kit.js`). Suite: `scripts/test-stt-cap.js`.
+  deadline) and never refuses: where it cannot measure (no ffmpeg, a failed or slow decode) a lossy audio-only file in
+  one or two channels is held to the shortest its bytes can play (`byteFloorApplies`, `byteFloorSeconds`,
+  `src/tools/stt-kit.js`); a file with a video track or more channels keeps its declared length, since its bytes are
+  not all audio at the floor's rate. The unmeasured count since boot is `transcriptionUnmeasured.sinceBoot` on
+  `/__operator/tool-failures.json`. Suite: `scripts/test-stt-cap.js`.
