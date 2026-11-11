@@ -44,6 +44,13 @@ Payments:
   until the authorization's own validBefore plus 10 minutes when that is
   later, at most 30 days after the call. The privacy page and the readsOnly
   list under payment.dataHandling on /.well-known/x402 state the same hold.
+- The log line written for a refused payment names the network, the route and
+  the paying address by its first characters, and shortens the paying address
+  where the facilitator's own text repeats it (an EVM address in any letter
+  case, any other address as written). Other payment log lines name a paying
+  address by its first characters too, except a line written when a payment
+  that may be owed back could not be recorded anywhere else, which keeps the
+  full address so the payment can be returned. The privacy page says so.
 - A card report page keeps answering while the card processor is slow: a poll
   waits up to 8 seconds, then answers generating, and the report starts as
   soon as the payment is confirmed, with no further poll needed. A poll for a
@@ -61,7 +68,11 @@ Tools:
   for the write.
 - The transcription duration caps hold the audio a file plays: the audio is
   decoded on the server and its length read, and the cap applies to the longer
-  of that and the duration the file's headers declare.
+  of that and the duration the file's headers declare. A file the server
+  cannot decode is held to the shortest length its byte count can play when it
+  is lossy audio-only in one or two channels; any other file (a lossless one,
+  or one with a video track or more than two channels) keeps its declared
+  length.
 - The domain audit and token risk reports (model-backed) pass the records they
   read (DNS, header and certificate values, registration text, token names,
   symbols and labels, web reputation text) to the model as quoted data, with
