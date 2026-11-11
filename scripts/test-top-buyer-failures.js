@@ -28,10 +28,18 @@
 // operator view (private, no-store) names the short payer, rank 1, the slug,
 // the statuses and the first characters of the error text the buyer was
 // sent; the word clears after its hold.
+// Busy half (onchainSqlBusy): with two queries held in flight by the stubbed
+// query service, a non-top payer's third query gets the busy 429, is counted
+// as other on the operator's daily counts and leaves the word ok; the top
+// payer's gets the same 429, is counted as topBuyer, raises the word at once
+// (one refusal is enough), the public body carries the word only, the
+// operator view names the short payer and rank, and the word clears after
+// its hold. In the module half one busy refusal of a top payer raises the
+// word, any other failure or a non-top payer's refusal does not.
 //
 //   node scripts/test-top-buyer-failures.js     (offline)
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
@@ -44,6 +52,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const MIN = 60_000;
 const SOL = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
 const TMP = mkdtempSync(join(tmpdir(), "top-buyer-"));
+const HOLD_DIR = join(TMP, "holds");
+mkdirSync(HOLD_DIR);
 process.env.SALES_LEDGER_DB = join(TMP, "agent402-sales.db");
 // A secret-named variable whose value the error text must never carry.
 process.env.TOP_BUYER_TEST_API_KEY = "tbk-0123456789abcdefghijklmnopqrstuv";
@@ -171,6 +181,35 @@ const SPEND_EVM = [...OUR_EVM_WALLETS].find((w) => w.startsWith("0x7706"));
   T._resetTopBuyerFailures();
 }
 
+// ---- onchainSqlBusy, on an injected clock ----------------------------------------
+{
+  T._resetTopBuyerFailures();
+  const env = {};
+  const TOP = topSol.address;
+  const t0 = Date.parse("2026-11-11T10:00:00Z");
+  ok((await T.onchainSqlBusyStatus({ now: t0, env })).status === "unknown", "onchainSqlBusy: unknown before the top payers are read");
+  ok((await T.onchainSqlBusyStatus({ now: t0, env, off: true })).status === "off", "onchainSqlBusy: off in FREE_MODE");
+  T.setTopBuyers([evm(1), TOP], t0);
+  ok(T.isWatchedTopBuyer(TOP) && !T.isWatchedTopBuyer(TOP.toLowerCase()) && !T.isWatchedTopBuyer(nonTopSol.address), "a watched payer is matched exactly, never case-folded");
+  // A top payer's other failures, even past the failure threshold, are not busy refusals.
+  for (let i = 0; i < 3; i++) T.noteVerifiedPaidOutcome({ payer: TOP, slug: "onchain-sql", status: 502, at: t0 + i }, env);
+  ok((await T.onchainSqlBusyStatus({ now: t0 + 10, env })).status === "ok", "a top payer's 502s leave onchainSqlBusy ok");
+  T.noteVerifiedPaidOutcome({ payer: nonTopSol.address, slug: "onchain-sql", status: 429, kind: T.SQL_BUSY_KIND, at: t0 + 20 }, env);
+  ok((await T.onchainSqlBusyStatus({ now: t0 + 30, env })).status === "ok", "a non-top payer's busy refusal leaves it ok");
+  T.noteVerifiedPaidOutcome({ payer: TOP, slug: "onchain-sql", status: 429, kind: "something-else", at: t0 + 40 }, env);
+  ok((await T.onchainSqlBusyStatus({ now: t0 + 50, env })).status === "ok", "an unknown kind is not a busy refusal");
+  const at = t0 + 60_000;
+  T.noteVerifiedPaidOutcome({ payer: TOP, slug: "onchain-sql", status: 429, kind: T.SQL_BUSY_KIND, error: "busy", at }, env);
+  const pub = await T.onchainSqlBusyStatus({ now: at + 1, env });
+  ok(pub.status === "alert" && Object.keys(pub).join() === "status", `one busy refusal of a top payer reads alert, the word alone in public (${JSON.stringify(pub)})`);
+  const full = await T.onchainSqlBusyStatus({ now: at + 1, env, full: true });
+  const a = full.alerting?.[0];
+  ok(full.alerting?.length === 1 && a.payer === shortPayer(TOP) && a.rank === 2 && a.refusals.length === 1 && a.refusals[0].status === 429 && a.refusals[0].at === new Date(at).toISOString() && !JSON.stringify(full).includes(TOP), `the operator view names the short payer, its rank and the refusal time, never the address (${JSON.stringify(a)})`);
+  ok((await T.onchainSqlBusyStatus({ now: at + 20 * MIN, env })).status === "alert" && (await T.onchainSqlBusyStatus({ now: at + 20 * MIN + 1, env })).status === "ok", "it holds TOP_BUYER_FAIL_HOLD_MS, then clears");
+  ok((await T.onchainSqlBusyStatus({ now: at + 1, env: { TOP_BUYER_FAIL_HOLD_MS: "0" } })).status === "ok", "the hold follows TOP_BUYER_FAIL_HOLD_MS");
+  T._resetTopBuyerFailures();
+}
+
 // ---- the ledger: who the top payers are --------------------------------------------
 const L = await import("../src/sales-ledger.js");
 {
@@ -251,6 +290,7 @@ try {
     args: ["--import", "./scripts/lib/cdp-sql-stub-preload.js"], stores: "top-buyer",
     env: {
       FREE_MODE: "", NODE_ENV: "", CDP_SQL_STUB: "1",
+      CDP_SQL_STUB_HOLD_DIR: HOLD_DIR,
       CDP_API_KEY_ID: "organizations/test/apiKeys/test", CDP_API_KEY_SECRET: privateKey.export({ type: "pkcs8", format: "pem" }),
       SALES_LEDGER_DB: process.env.SALES_LEDGER_DB,
       WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", PAYMENT_NETWORKS: "base,solana", SOLANA_WALLET_ADDRESS: payTo.address,
@@ -326,6 +366,48 @@ try {
   // Clears after the hold.
   const cleared = await waitWord("ok", 20_000);
   ok(cleared?.status === "ok", `the word clears after its hold (${cleared?.status})`);
+
+  // ---- busy refusals (onchainSqlBusy) ----
+  const word = async (op = true) => (await gs(op)).body.onchainSqlBusy;
+  const busyCounts = async () => {
+    const r = await fetch(`${B}/__operator/tool-failures.json`, { headers: { "X-Operator-Token": OP } });
+    const j = await r.json().catch(() => ({}));
+    return j?.onchainSqlQueries?.summary?.outside?.busy || null;
+  };
+  const waitFor = async (fn, ms = 15_000) => { let v; for (const until = Date.now() + ms; Date.now() < until;) { v = await fn(); if (v.done) return v; await sleep(50); } return v; };
+  const heldCount = () => (srv.log().match(/\[cdp-sql-stub\] held /g) || []).length;
+  // Two queries held in flight (paid by the non-top payer), then the caller's.
+  const busyRound = async (caller, tag) => {
+    const before = heldCount();
+    const holders = [pay(nonTopSol, `SELECT 1 AS hold_${tag}a FROM base.blocks`), pay(nonTopSol, `SELECT 1 AS hold_${tag}b FROM base.blocks`)];
+    const held = await waitFor(async () => ({ done: heldCount() >= before + 2, n: heldCount() - before }));
+    const r = await pay(caller, "SELECT 1 AS n FROM base.blocks");
+    writeFileSync(join(HOLD_DIR, `${tag}a`), ""); writeFileSync(join(HOLD_DIR, `${tag}b`), "");
+    const done = await Promise.all(holders);
+    return { r, held: held.n, holders: done.map((x) => x.status) };
+  };
+  ok((await word(false))?.status === "ok" && Object.keys(await word(false)).join() === "status", `onchainSqlBusy reads ok and publishes its word only (${JSON.stringify(await word(false))})`);
+  const b0 = await busyCounts();
+  ok(b0 && b0.topBuyer === 0 && b0.other === 0, `no busy refusal is counted yet (${JSON.stringify(b0)})`);
+  const nb = await busyRound(nonTopSol, "n1");
+  ok(nb.held === 2 && nb.r.status === 429 && nb.r.body?.hint === "busy" && nb.holders.every((s) => s === 200), `with two queries in flight a non-top payer's third gets the busy 429 and the two finish (${JSON.stringify({ held: nb.held, status: nb.r.status, hint: nb.r.body?.hint, holders: nb.holders })})`);
+  const b1 = await waitFor(async () => { const c = await busyCounts(); return { done: c?.other === 1, c }; });
+  ok(b1.c?.other === 1 && b1.c.topBuyer === 0, `it is counted on the day as other (${JSON.stringify(b1.c)})`);
+  ok((await word())?.status === "ok", "and onchainSqlBusy stays ok");
+  const tb = await busyRound(topSol, "t1");
+  ok(tb.held === 2 && tb.r.status === 429 && tb.r.body?.hint === "busy", `the top payer's third query gets the busy 429 (${JSON.stringify({ held: tb.held, status: tb.r.status })})`);
+  const b2 = await waitFor(async () => { const c = await busyCounts(); return { done: c?.topBuyer === 1, c }; });
+  ok(b2.c?.topBuyer === 1 && b2.c.other === 1, `it is counted on the day as topBuyer (${JSON.stringify(b2.c)})`);
+  const up = await waitFor(async () => { const w = await word(); return { done: w?.status === "alert", w }; });
+  ok(up.w?.status === "alert", `one busy refusal of the top payer raises onchainSqlBusy (${JSON.stringify(up.w?.status)})`);
+  const pubB = await gs(false);
+  ok(Object.keys(pubB.body.onchainSqlBusy || {}).join() === "status" && pubB.body.onchainSqlBusy.status === "alert" && !JSON.stringify(pubB.body).includes(topSol.address), `the public body carries the word only (${JSON.stringify(pubB.body.onchainSqlBusy)})`);
+  const rowB = up.w?.alerting?.[0];
+  ok(rowB && rowB.payer === topSol.address.slice(0, 4) && rowB.rank === 1 && rowB.refusals?.length === 1 && rowB.refusals[0].status === 429 && !JSON.stringify(up.w).includes(topSol.address), `the operator view names the short payer, rank 1 and the refusal (${JSON.stringify(rowB)})`);
+  const pubCounts = JSON.stringify(pubB.body);
+  ok(!/onchainSqlQueries|"busy"/.test(pubCounts), "the daily counts are not on the public body");
+  const down = await waitFor(async () => { const w = await word(); return { done: w?.status === "ok", w }; }, 20_000);
+  ok(down.w?.status === "ok", `onchainSqlBusy clears after its hold (${down.w?.status})`);
 } catch (e) {
   failed++; console.error("FAIL -", e?.stack || e);
   if (srv) console.error(srv.log().slice(-3000));

@@ -27,7 +27,7 @@ import { createPrivateKey, createSign, randomBytes, sign as edSign, createHash }
 import { redactSecrets } from "./redact.js";
 import { partialFields } from "../partial-answer.js";
 import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, currentBudget, isUpstreamFailure, OPTIONAL_READ_FLOOR_MS } from "../upstream-deadline.js";
-import { onFinalResponse } from "../request-timing.js";
+import { onFinalResponse, currentRequestScope } from "../request-timing.js";
 import { noteSqlCall } from "../sql-query-stats.js";
 
 const CDP_HOST = "api.cdp.coinbase.com";
@@ -1063,6 +1063,10 @@ export const CDP_TOOLS = [
       if (buyerQueriesInflight >= BUYER_QUERY_INFLIGHT_MAX) {
         const e = bad(`The query service is answering ${BUYER_QUERY_INFLIGHT_MAX} queries from this server already; retry in a few seconds. Nothing was charged.`, 429);
         e.retryAfter = 5; e.hint = "busy"; e.shed = true; // a capacity refusal, not a tool failure
+        // The request is marked so server.js counts the refusal by caller
+        // once its response has ended (src/sql-query-stats.js noteSqlBusy)
+        // and a top payer's raises onchainSqlBusy (src/top-buyer-failures.js).
+        try { const scope = currentRequestScope(); if (scope) scope.onchainSqlBusy = true; } catch { /* bookkeeping only */ }
         throw e;
       }
       buyerQueriesInflight++;

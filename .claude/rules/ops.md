@@ -153,6 +153,22 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   ("topBuyerFailures: a top paying buyer is getting failed answers", fixed text) and close on `ok`.
   An alarm only: nothing is refused for it (`scripts/test-top-buyer-failures.js`,
   `scripts/test-top-buyer-failures-redis.js`).
+- **onchain-sql busy refusals:** onchain-sql refuses a query past `BUYER_QUERY_INFLIGHT_MAX`
+  buyer queries in flight on this server (`src/tools/cdp-kit.js`; a 429 with `Retry-After`,
+  `hint: "busy"`, shed, never charged) and marks the request scope (`onchainSqlBusy`). When its
+  response has ended, server.js counts it per UTC day by caller (`noteSqlBusy`,
+  `src/sql-query-stats.js`: `busy.topBuyer` when the proven payer is one of the watched top
+  payers then, `busy.other` otherwise, including a call with no proven payer; by lane, outside or
+  synthetic; on `/__operator/onchain-sql-queries.json` and `onchainSqlQueries` on
+  `/__operator/tool-failures.json`, counts only) and keeps a top payer's refusal among its
+  failures with kind `sql-busy`. `onchainSqlBusy` on `/api/gateway-status` reads `alert` while a
+  watched payer has one such refusal inside `TOP_BUYER_FAIL_HOLD_MS`, `ok` otherwise, `unknown`
+  before the first read of the top payers, `off` in FREE_MODE; publicly the word only, the
+  operator view names the short payer, rank and refusal times. The status Worker and
+  `heartbeat.yml` page once on `alert` ("onchainSqlBusy: a top paying buyer was told the query
+  service is busy", fixed text) and close on `ok`. An alarm only: the cap is unchanged. The test
+  preload `scripts/lib/cdp-sql-stub-preload.js` holds a `hold_<id>` query open until the file
+  `<id>` exists in `CDP_SQL_STUB_HOLD_DIR` (test only).
 - **Per-call count documents:** `src/sql-query-stats.js` (onchain-sql queries per call) and
   `src/x-search-stats.js` (x-search-recent authors and posts per call) keep per-UTC-day
   histograms as state documents (`src/json-document.js`), folded into the document on a timer

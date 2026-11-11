@@ -835,6 +835,16 @@ Auto-closes when nothing is owed.`,
     body: () => "/api/gateway-status reports topBuyerFailures.status=alert: one of our top outside payers by paid spend over the last week has had TOP_BUYER_FAIL_MIN or more failed final answers (any status that is not a success, except a refusal of the caller's own input that the answer attributes to the caller or to no one) to verified paid requests inside TOP_BUYER_FAIL_WINDOW_MS. The payer's short id, its spend rank, the tools, statuses, times and the first characters of the error text we sent are on the operator view of /api/gateway-status (topBuyerFailures, operator token). Read them, fix the failing tool or path, and check whether what we told the buyer was true. Nothing is refused for it. Auto-closes when the word reads ok.",
   },
   {
+    // A top outside payer got onchain-sql's busy refusal (onchainSqlBusy,
+    // src/top-buyer-failures.js): alert pages, ok clears, unknown and off do
+    // neither. The payer and the times are on the operator view only; this
+    // text names none of them and carries no figure. Title matches
+    // heartbeat.yml's.
+    title: "onchainSqlBusy: a top paying buyer was told the query service is busy",
+    verdict: ({ gateway: b }) => wordVerdict(b.onchainSqlBusy?.status, ["alert"], ["ok"]),
+    body: () => "/api/gateway-status reports onchainSqlBusy.status=alert: one of our top outside payers by paid spend over the last week got the busy refusal of the onchain query tool (the server-wide limit on queries in flight; never charged, told to retry in a few seconds) inside TOP_BUYER_FAIL_HOLD_MS. The payer's short id, its spend rank and the refusal times are on the operator view of /api/gateway-status (onchainSqlBusy, operator token); the daily busy counts by caller are on /__operator/tool-failures.json (onchainSqlQueries, operator token). Read them and decide whether the in-flight limit should rise. Nothing is refused for this alarm. Auto-closes when the word reads ok.",
+  },
+  {
     // Redis persistence (redisPersistence on /api/gateway-status,
     // src/redis-persistence.js): what INFO persistence says about the Redis
     // behind REDIS_URL. off and degraded page; on clears; unknown does
