@@ -55,6 +55,11 @@ ok(m.payment.dataHandling?.readsAnnotationFields === false && m.payment.dataHand
   for (const [needle, what] of [["authorization.from", "the EIP-3009 payer"], ["payment-identifier", "the idempotency extension"], ["Solana", "the Solana signers"], ["Tempo", "the Tempo credential source"], ["settlement receipt", "the facilitator receipt payer"]]) {
     ok(reads.includes(needle), `dataHandling.readsOnly names ${what}`);
   }
+  // The settled replay mark's hold, from the guard's own constants: the hour,
+  // or the authorization's validBefore plus the margin, bounded after the call.
+  const rg = await import("../src/replay-guard.js");
+  const hold = `or until the authorization's own validBefore plus ${Math.round(rg.CONSUMED_VALIDITY_MARGIN_MS / 60000)} minutes when that is later (at most ${rg.settledValidityHoldText()} after the call)`;
+  ok(reads.includes(hold), `dataHandling.readsOnly states the settled replay mark's validBefore hold and its bound (${hold})`);
   ok(/payer/.test(String(m.payment.dataHandling?.retains || "")), "dataHandling says the sales ledger keeps the payer of a sale");
 }
 // The heartbeat figure is the interval of the observer that actually keeps it:

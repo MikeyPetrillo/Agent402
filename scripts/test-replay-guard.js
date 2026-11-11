@@ -351,6 +351,17 @@ function memoryRedis() {
     await small.begin("n:late", t0 + SETTLED_HOLD_MS + 1);
     ok(small._state().consumed === 1 && await small.held(kl, t0 + SETTLED_HOLD_MS + 1) === "consumed", `local path: expired default-hold marks are pruned behind a long-held one (${small._state().consumed} left)`);
     await small.release("n:late");
+    // And once the long-held mark itself has expired, the next claim prunes it too.
+    await small.begin("n:later", t0 + MAX_SETTLED_VALIDITY_HOLD_MS + SETTLED_HOLD_MS);
+    ok(small._state().consumed === 0, `local path: an expired long-held mark is pruned from its own map (${small._state().consumed} left)`);
+    await small.release("n:later");
+  }
+  // The bound is published as a fixed figure in the 2026-11-11 changelog entry,
+  // beside the derived text on /privacy and /.well-known/x402.
+  {
+    const { settledValidityHoldText } = await import("../src/replay-guard.js");
+    const log = (await import("node:fs")).readFileSync(new URL("../src/changelog.js", import.meta.url), "utf8");
+    ok(log.includes(`at most ${settledValidityHoldText()} after the call`), `the changelog states the settled bound the guard enforces (${settledValidityHoldText()})`);
   }
 }
 

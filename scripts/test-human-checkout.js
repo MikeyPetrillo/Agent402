@@ -478,6 +478,95 @@ ok(refunds.length === 3, "...and not refunded again on the next poll");
   rmSync(DIR5, { recursive: true, force: true });
 }
 
+// LATE ANSWERS OF RETRIES AND READS THAT WERE GIVEN UP OR PUSHED OUT. The
+// retry or read a poll stopped waiting for is marked slow, so a poll while it
+// is open answers at once (asserted here as inside half the wait, the wait
+// being seconds). A given-up refund retry that fails late records nothing
+// while a newer retry is open, and a retry's failure never writes "owed" over
+// a refund another retry recorded. A pushed-out session read's late failure is
+// not "not found". A session kept from a late read is used only for a minute.
+{
+  const DIR6 = join("/tmp", `test-human-checkout-late-${process.pid}`);
+  rmSync(DIR6, { recursive: true, force: true });
+  mkdirSync(DIR6, { recursive: true });
+  const at = new Date(clock - 3600_000).toISOString();
+  const owed = (pi) => ({ status: "error", refundId: null, error: "We couldn't complete this report. Your refund is being processed.", refundOwed: true, refundAttempts: 1, lastRefundAttemptAt: 0, paymentIntent: pi, product: "research", at });
+  for (const id of ["cs_lateA", "cs_lateB", "cs_lateS"]) writeFileSync(join(DIR6, `${id}.json`), JSON.stringify(owed(id.replace("cs_", "pi_"))));
+  writeFileSync(join(DIR6, "_issues.json"), JSON.stringify(Object.fromEntries(["cs_lateA", "cs_lateB", "cs_lateS"].map((id) => [id, { kind: "refund-owed", at, attempts: 1 }]))));
+  const paid = (id) => ({ id, mode: "payment", payment_status: "paid", payment_intent: `pi_${id}`, amount_total: 500, metadata: { product: "dossier", input: "AAPL" } });
+  const calls = new Map(), reads = new Map(), made = [];
+  const pending = (map, key) => new Promise((resolve, reject) => map.set(key, [...(map.get(key) || []), { resolve, reject }]));
+  const stub = {
+    checkout: { sessions: { retrieve: (id) => pending(reads, id) } },
+    refunds: { create: (args) => pending(calls, args.payment_intent) },
+  };
+  let t = clock;
+  const ABANDON_MS = 300_000, WAIT_MS = 3_000;
+  const h = createHumanCheckout({
+    stripe: stub, baseUrl: "https://agent402.tools", storeDir: DIR6, now: () => t, log: () => {},
+    generate: async (_k, slug, input) => { made.push(input); return { report: `# REPORT (${slug})\n\nAnalysis of ${input}. [1]`, title: input, sources: [], tables: [] }; },
+    onSale: () => {}, owedRetryWaitMs: WAIT_MS, owedRetryAbandonMs: ABANDON_MS, sessionReadWaitMs: WAIT_MS, sessionReadAbandonMs: ABANDON_MS,
+  });
+  const quick = async (id) => { const r = await Promise.race([h.fulfill(id), wait(WAIT_MS / 2).then(() => null)]); return r === null ? { held: true } : r; };
+  // A poll that waits: given four times the wait (the wait's own timer does not hold the process open).
+  const slowPoll = async (id) => { const r = await Promise.race([h.fulfill(id), wait(WAIT_MS * 4).then(() => null)]); return r === null ? { held: true } : r; };
+  const until = async (cond, ms = 10_000) => { const end = Date.now() + ms; while (Date.now() < end) { if (cond()) return true; await wait(10); } return cond(); };
+
+  // 1. A poll while a slow refund retry is open answers at once.
+  const a1 = await slowPoll("cs_lateA");
+  ok(a1.refundOwed === true && calls.get("pi_lateA")?.length === 1, "refund retry unanswered: the first poll is answered from the record after its wait");
+  const a2 = await quick("cs_lateA");
+  ok(!a2.held && a2.refundOwed === true && calls.get("pi_lateA").length === 1, `refund retry unanswered: a poll while it is open answers at once, without waiting again (${a2.held ? "HELD" : "answered"})`);
+  // 2. Given up: a new retry opens; the old one fails late and records nothing.
+  t += ABANDON_MS + 1_000;
+  await slowPoll("cs_lateA");
+  ok(calls.get("pi_lateA").length === 2, "the retry given up is replaced by one new refund call");
+  calls.get("pi_lateA")[0].reject(new Error("stripe: connection lost"));
+  await until(() => h.peek("cs_lateA").refundAttempts !== 1, 1_000);
+  ok(h.peek("cs_lateA").refundAttempts === 1 && h.peek("cs_lateA").refundOwed === true, `the given-up retry's late failure counts no attempt while the newer one is open (${h.peek("cs_lateA").refundAttempts})`);
+  // 3. The given-up retry refunds late; the newer one then fails: the refund stands.
+  t += ABANDON_MS + 1_000;
+  await slowPoll("cs_lateB");
+  t += ABANDON_MS + 1_000;
+  await slowPoll("cs_lateB");
+  ok(calls.get("pi_lateB").length === 2, "second record: two refund calls, the first given up");
+  calls.get("pi_lateB")[0].resolve({ id: "re_pi_lateB" });
+  ok(await until(() => h.peek("cs_lateB").refundId === "re_pi_lateB"), "the given-up retry's late refund is recorded");
+  calls.get("pi_lateB")[1].reject(new Error("stripe: connection lost"));
+  await until(() => h.peek("cs_lateB").refundId !== "re_pi_lateB", 1_000);
+  ok(h.peek("cs_lateB").refundId === "re_pi_lateB" && h.peek("cs_lateB").refundOwed === false, `a newer retry failing after that refund writes nothing over it (${h.peek("cs_lateB").refundId}, owed ${h.peek("cs_lateB").refundOwed})`);
+
+  // 4. A poll while a slow session read is open answers at once.
+  const s1 = await slowPoll("cs_readP");
+  ok(s1.status === "generating" && reads.get("cs_readP")?.length === 1, "session read unanswered: answered as still being prepared after the wait");
+  const s2 = await quick("cs_readP");
+  ok(!s2.held && s2.status === "generating" && reads.get("cs_readP").length === 1, `session read unanswered: a poll while it is open answers at once, without waiting again (${s2.held ? "HELD" : s2.status})`);
+  // 5. Given up and replaced: the old read failing late is not "not found".
+  t += ABANDON_MS + 1_000;
+  await slowPoll("cs_readP");
+  ok(reads.get("cs_readP").length === 2, "the given-up read is replaced by one new read");
+  reads.get("cs_readP")[0].reject(new Error("No such session"));
+  for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+  const s3 = await quick("cs_readP");
+  ok(s3.status === "generating", `the pushed-out read's late failure is not taken as "not found" (${s3.held ? "HELD" : s3.status})`);
+  reads.get("cs_readP")[1].resolve(paid("cs_readP"));
+  ok(await until(() => h.peek("cs_readP")?.status === "done"), "the newer read's paid answer makes the report");
+  // 6. A session kept from a late read is used for a minute, no longer. Here
+  // the run started by the late answer meets a fresh claim on the record (as
+  // when another process holds it), so the kept session is not used then.
+  const k1 = await slowPoll("cs_readK");
+  ok(k1.status === "generating" && reads.get("cs_readK").length === 1, "third session: read unanswered");
+  writeFileSync(join(DIR6, "cs_readK.json"), JSON.stringify({ status: "generating", kind: "dossier", slug: "dossier", at: new Date(t).toISOString(), claimedAt: t, takeovers: 0 }));
+  reads.get("cs_readK")[0].resolve(paid("cs_readK"));
+  for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+  rmSync(join(DIR6, "cs_readK.json"), { force: true });
+  t += 61_000;
+  const madeBefore = made.length;
+  const k2 = await slowPoll("cs_readK");
+  ok(k2.status === "generating" && reads.get("cs_readK").length === 2 && made.length === madeBefore, `a kept session older than a minute is not used: the poll reads the session again (${reads.get("cs_readK").length} reads, ${made.length - madeBefore} reports)`);
+  rmSync(DIR6, { recursive: true, force: true });
+}
+
 // Long input reassembles from chunked metadata.
 await hc.fulfill("cs_long");
 const lg = await settle("cs_long");
