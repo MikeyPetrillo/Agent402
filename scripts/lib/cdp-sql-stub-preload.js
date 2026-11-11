@@ -9,6 +9,8 @@
 //                  measure answers a few rows over the per-row limit, and the
 //                  filtered run answers the rows that fit: three queries;
 //   nope_column    the service rejects the query (HTTP 400);
+//   fail_upstream  the service answers unavailable (HTTP 503) for that
+//                  query every time, while the known-good query still answers;
 //   anything else  one row (the health probe's known-good query included).
 // Every query answered prints one "[cdp-sql-stub] query" line, so a test can
 // count what reached the service apart from what the server recorded. Any
@@ -32,6 +34,7 @@ globalThis.fetch = async function cdpSqlStubFetch(input, init) {
   try { sql = String(JSON.parse(init?.body || "{}").sql || ""); } catch { /* an empty query */ }
   console.log("[cdp-sql-stub] query");
   if (/nope_column/.test(sql)) return J(400, { errorMessage: "Unknown identifier" });
+  if (/fail_upstream/.test(sql)) return J(503, { errorMessage: "unavailable" });
   const id = /rowsize_(\w+)/.exec(sql)?.[1];
   if (id) {
     const n = (seen.get(id) || 0) + 1;

@@ -161,11 +161,20 @@ export function mergeCrawledResources(facilitator, crawled) {
  *  never saw, the equivalent evidence is inbound USDC-ASA transfers to the
  *  payTo the seller itself advertises. `countInbound(payTo)` is injected (the
  *  indexer lives in revenue-live.js, which this module does not import) and is
- *  asked ONCE PER DISTINCT PAYTO, not per resource. A read that throws or
- *  returns a non-number leaves verifs at 0, which gates that seller closed:
- *  an unreadable chain is never evidence of activity.
+ *  asked ONCE PER DISTINCT PAYTO, not per resource.
+ *
+ *  A READ THAT FAILED IS UNKNOWN, NEVER A COUNT. A read that throws or returns
+ *  a non-number is not "0 payments": the rows keep the last count a completed
+ *  read gave for that payTo (within KNOWN_COUNT_TTL_MS), or, with none, stay
+ *  unproven and carry `verifsUnknown: true`, and the catalog holding them is
+ *  re-read in minutes instead of being kept for the whole TTL
+ *  (algorandCatalog). An unreadable chain is never evidence of activity, and
+ *  never evidence of its absence either. Only a completed read of 0 is a 0.
  */
-export async function proveCrawledResources(resources, countInbound) {
+const KNOWN_COUNT_TTL_MS = 24 * 3600 * 1000;
+const knownInbound = new Map(); // payTo -> { n, at } from the last completed read
+export function __resetKnownInboundForTest() { knownInbound.clear(); }
+export async function proveCrawledResources(resources, countInbound, now = Date.now()) {
   if (typeof countInbound !== "function") return 0;
   const needed = new Map();
   for (const r of resources) {
@@ -175,14 +184,24 @@ export async function proveCrawledResources(resources, countInbound) {
   }
   let proved = 0;
   for (const [payTo, rows] of needed.entries()) {
-    let n = 0;
-    try { n = Number(await countInbound(payTo)); } catch { n = 0; }
-    if (!Number.isFinite(n) || n <= 0) continue;
+    let n = NaN;
+    try { n = Number(await countInbound(payTo)); } catch { n = NaN; }
+    if (!Number.isFinite(n) || n < 0) {
+      const known = knownInbound.get(payTo);
+      if (known && now - known.at <= KNOWN_COUNT_TTL_MS) n = known.n;
+      else { for (const r of rows) r.verifsUnknown = true; continue; }
+    } else {
+      if (knownInbound.size >= 5000 && !knownInbound.has(payTo)) knownInbound.delete(knownInbound.keys().next().value);
+      knownInbound.set(payTo, { n, at: now });
+    }
+    if (n <= 0) continue;
     for (const r of rows) r.verifs = n;
     proved++;
   }
   return proved;
 }
+/** Re-read a catalog holding an unread count in this long, not the TTL. */
+const UNKNOWN_COUNT_RETRY_MS = 5 * 60 * 1000;
 
 /** The cached facilitator catalog. Stale cache is served while a deduped
  *  background refresh runs; only a cold cache awaits the build. Failure ->
@@ -190,6 +209,20 @@ export async function proveCrawledResources(resources, countInbound) {
 let sources = { crawledResources: null, countInbound: null };
 /** Inject the index-backed halves (server.js). Both optional: with neither,
  *  this module behaves exactly as it did before 2026-09-18. */
+/** The chain read server.js injects as `countInbound`: inbound USDC
+ *  transfers to `payTo` from the indexer, through `getJson(bases, path, opts)`
+ *  (src/revenue-live.js getJsonAcross). The indexer's 404 (no such account)
+ *  is a definite 0; any other read that did not complete throws (unknown,
+ *  never a count of 0). Inbound only, and never the seller paying itself. */
+export const ALGORAND_USDC_ASSET_ID = 31566704;
+export function makeIndexerInboundCount(getJson, bases) {
+  return async (payTo) => {
+    const r = await getJson(bases, `/v2/accounts/${payTo}/transactions?asset-id=${ALGORAND_USDC_ASSET_ID}&tx-type=axfer&limit=200`, { timeoutMs: 8000, okStatuses: [404] });
+    if (r?.ok && r.status === 404) return 0;
+    if (!r?.ok || !Array.isArray(r.json?.transactions)) throw new Error("indexer read did not complete");
+    return r.json.transactions.filter((t) => t?.["asset-transfer-transaction"]?.receiver === payTo && t?.sender !== payTo).length;
+  };
+}
 export function setAlgorandCrawlSources({ crawledResources, countInbound } = {}) {
   sources = { crawledResources: crawledResources || null, countInbound: countInbound || null };
 }
@@ -211,7 +244,10 @@ export async function algorandCatalog() {
             await proveCrawledResources(out, sources.countInbound);
           }
         } catch { out = resources; }
-        cache = { at: Date.now(), resources: out };
+        // A count we could not read is not cached as one: the catalog is
+        // re-read in minutes (proveCrawledResources).
+        const unread = out.some((r) => r?.verifsUnknown === true);
+        cache = { at: unread ? Date.now() - TTL_MS + UNKNOWN_COUNT_RETRY_MS : Date.now(), resources: out };
       })
       // Keep the last known list; back-date so the next call retries in ~5 min.
       .catch(() => { cache.at = Date.now() - TTL_MS + 5 * 60 * 1000; })

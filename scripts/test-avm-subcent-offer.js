@@ -555,20 +555,21 @@ const base = (amount) => ({ scheme: "exact", network: "eip155:8453", asset: "0x8
     }
     ok(allServed, "four withdrawn refusals from one buyer (MAX 3): each served and refused at settle, never a 429 - none counted against the buyer");
     // Control, same buyer: genuine settle failures still count from zero and trip the 429 at MAX.
-    // The first is a payment VERDICT whose message names the allowance: it
-    // pauses nothing, is not called a quota, and counts like any failure.
+    // First a reverted transfer whose message names the allowance: it pauses
+    // nothing, is not called a quota, and (a revert proves nothing about the
+    // wallet) is not counted against the buyer either.
     {
       settleMode = "verdict";
       const quotaLogs = serverLog.filter((l) => /QUOTA exhausted/.test(l)).length;
       const s = settles;
       const r = await payAvm(RADAR, (await offer402(RADAR)).avm);
-      ok(r.status === 402 && settles === s + 1, `genuine failure 1 (transaction_failed naming subcent_quota_exceeded in its message) from the same buyer is served (status ${r.status})`);
+      ok(r.status === 402 && settles === s + 1, `a revert (transaction_failed naming subcent_quota_exceeded in its message) from the same buyer is served (status ${r.status})`);
       await sleep(300);
       ok(!!(await offer402(RADAR)).avm && (await (await fetch(`${B}/api/rails`)).json()).restrictions?.length === 0, "...and it does NOT pause the rail: the next sub-cent 402 still offers Algorand, /api/rails lists nothing");
       ok(serverLog.filter((l) => /QUOTA exhausted/.test(l)).length === quotaLogs, "...nor is it logged as a facilitator quota");
     }
     settleMode = "fail";
-    for (let i = 2; i <= 3; i++) {
+    for (let i = 1; i <= 3; i++) {
       const s = settles;
       const r = await payAvm(RADAR, (await offer402(RADAR)).avm);
       ok(r.status === 402 && settles === s + 1, `genuine failure ${i} (insufficient_funds) from the same buyer is served (status ${r.status})`);
@@ -587,10 +588,11 @@ const base = (amount) => ({ scheme: "exact", network: "eip155:8453", asset: "0x8
       ok(r.status === 200, `a $0.01 Algorand payment settles (status ${r.status})`);
     }
 
-    // AVM_SUBCENT_GATE=off: the escape hatch withdraws nothing, so NOTHING is
-    // exempt from the breaker - a sub-cent Algorand refusal loop is bounded per
-    // buyer like any other failed settle, with a 429 that names the billing
-    // limit instead of the wallet. (Before this, off meant served free without bound.)
+    // AVM_SUBCENT_GATE=off: the escape hatch withdraws nothing. The refusal
+    // is still a billing limit on this server's own account, never the
+    // buyer's, so the buyer is never refused for it: each call is served and
+    // answered 402 (nothing charged), and the run raises the settleFailures
+    // burst alarm instead (scripts/test-gateway-settle-breaker.js).
     {
       const B2 = await boot(PORT_OFF, { AVM_SUBCENT_GATE: "off" });
       ok(!!B2, "a second paid server booted with AVM_SUBCENT_GATE=off");
@@ -606,8 +608,9 @@ const base = (amount) => ({ scheme: "exact", network: "eip155:8453", asset: "0x8
       const s = settles;
       const r = await payAvmAt(B2, RADAR, (await offer402At(B2, RADAR)).avm);
       const b = await r.json().catch(() => ({}));
-      ok(r.status === 429 && settles === s, `gate off, refusal 4: refused 429 BEFORE the handler, the loop bounded per buyer (status ${r.status})`);
-      ok(/billing limit on this server's own account/.test(b.error || "") && !/USDC balance/.test(b.error || ""), `...and the 429 names the facilitator's billing limit, not the wallet (got: ${String(b.error).slice(0, 110)})`);
+      ok(r.status === 402 && settles === s + 1 && b.reason === "facilitator-quota", `gate off, refusal 4: served and refused at settle again, never a 429 - the limit is ours, not the buyer's (status ${r.status}, ${b.reason})`);
+      const g = await (await fetch(`${B2}/api/gateway-status`)).json().catch(() => ({}));
+      ok(g.settleFailures?.status === "burst", `...and the run is paged on: settleFailures reads burst (${JSON.stringify(g.settleFailures)})`);
     }
   } catch (e) {
     ok(false, `booted leg threw: ${e?.stack || e}`);

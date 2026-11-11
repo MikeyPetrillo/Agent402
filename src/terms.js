@@ -52,7 +52,7 @@ export function termsPage(baseUrl) {
 <section>
 <div class="tm-eyebrow">$ GET /terms</div>
 <h1 class="tm-h1">Terms of Service</h1>
-<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-11-10.</p>
+<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-11-11.</p>
 </section>
 
 <section>
@@ -82,7 +82,7 @@ If you do not agree to these terms, do not use the service.</p>
   <li>Don't use the service to break the law, infringe others' rights, or attack the service or third parties (e.g. using the URL-fetching tools against targets you don't control).</li>
   <li>Don't attempt to bypass rate limits, payment, or the proof-of-work gate, or to disrupt availability for others.</li>
   <li><b>Generative paths:</b> don't use the AI gateway or any generative tool to create or attempt to create: child sexual abuse material (zero tolerance - we will block the wallet and report as required by law); non-consensual intimate imagery or sexual content depicting real people; content that impersonates a real person to deceive; material that infringes others' intellectual-property rights; or content whose creation or distribution is otherwise illegal in your jurisdiction or ours.</li>
-  <li>Traffic through the AI gateway is also subject to the <b>usage policies of the upstream model providers</b> (including OpenAI's usage policies and the terms of OpenRouter and the model operators it serves). Those providers apply their own safety filtering and may refuse requests; their policies apply to your use through us. Don't attempt to circumvent, probe, or disable that safety filtering.</li>
+  <li>Traffic through the AI gateway is also subject to the <b>usage policies of the upstream model providers</b> (including OpenAI's usage policies and the terms of OpenRouter and the model operators it serves). Those providers apply their own safety filtering and may refuse requests; their policies apply to your use through us. The GPT Image tools (image-gen, image-gen-hd and image-gen-premium) ask the provider for its less restrictive filtering level by default, and a caller may choose its stricter level; the provider's usage policies apply at either level. Don't attempt to circumvent, probe, or disable that safety filtering.</li>
   <li>Don't use the service to create malware or exploits for unauthorized use, to defraud, phish, spam, or deceive, or to process other people's personal data unlawfully.</li>
   <li><b>High-risk use is prohibited:</b> the service is not designed for, and must not be relied on in, any context where failure or inaccuracy could lead to death, personal injury, or severe damage - including medical treatment, life-safety systems, and operation of critical infrastructure.</li>
   <li>You are responsible for the inputs you send and how you use the outputs.</li>

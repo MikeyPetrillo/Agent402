@@ -170,10 +170,18 @@ jobs:
             echo "rails: /api/rails unreadable - not treating that as healthy; leaving any open issue alone"
             exit 0
           fi
-          echo "rails: degraded=$DEGRADED"
-          if [ "$DEGRADED" -gt 0 ]; then
+          # The Circle Gateway batched option, when switched on, counts too: a
+          # network it was asked for and does not offer for a failure (its
+          # reason word, e.g. probe-timeout or read-failed) is listed beside the
+          # rails. not-in-offer (the network's plain rail is not configured) and
+          # probe-skipped (the boot probe is switched off) are configuration
+          # facts and never page. Absent field = 0.
+          BATCHED=$(echo "$RAILS" | jq -r '[.gatewayBatched.dropped // [] | .[] | select(.reason != "not-in-offer" and .reason != "probe-skipped")] | length' 2>/dev/null || echo 0)
+          case "$BATCHED" in ''|*[!0-9]*) BATCHED=0;; esac
+          echo "rails: degraded=$DEGRADED batched-dropped=$BATCHED"
+          if [ "$DEGRADED" -gt 0 ] || [ "$BATCHED" -gt 0 ]; then
             if [ -z "$OPEN" ]; then
-              echo "$RAILS" | jq -r '[.rails[] | select(.offered==false) | "- **\(.network)** - \(.reason)"] | join("\n")' > /tmp/rail-body.md
+              echo "$RAILS" | jq -r '[(.rails[] | select(.offered==false) | "- **\(.network)** - \(.reason)"), (.gatewayBatched.dropped // [] | .[] | select(.reason != "not-in-offer" and .reason != "probe-skipped") | "- **Circle Gateway batched option on \(.network)** - not offered (\(.reason)); the plain accept there is unaffected, and the option returns at the next restart once the Gateway /supported read answers and lists it there")] | join("\n")' > /tmp/rail-body.md
               {
                 echo ""
                 echo "Revenue is unaffected on the other rails: a rail nobody can settle is dropped deliberately so the rest keep earning. This is a notice, not an outage."
@@ -187,7 +195,7 @@ jobs:
               echo "already tracked in #$OPEN"
             fi
           elif [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: every configured rail is being offered again at $(date -u +%FT%TZ)."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: every configured rail (and batched option) is being offered again at $(date -u +%FT%TZ)."
           fi
 
       - name: Gateway credits check (alarm on low OpenRouter balance)
@@ -543,6 +551,29 @@ jobs:
             fi
           elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "gatewayBalance is ${STATUS}; closing." || true
+          fi
+
+      # A top outside payer's verified paid calls are failing
+      # (src/top-buyer-failures.js): alert pages once, ok closes; unknown, off
+      # and a blind read do neither. The payer, tools and our error text are
+      # on the operator view only; this issue names none of them.
+      - name: Top buyer failures check (alarm when a top paying buyer gets failed answers)
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.topBuyerFailures.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "top buyer failures: $STATUS"
+          TITLE="topBuyerFailures: a top paying buyer is getting failed answers"
+          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          if [ "$STATUS" = "alert" ]; then
+            if [ -z "$EXISTING" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+                --body "/api/gateway-status reports topBuyerFailures.status=alert: one of our top outside payers by paid spend over the last week has had TOP_BUYER_FAIL_MIN or more failed final answers (any status that is not a success, except a refusal of the caller's own input that the answer attributes to the caller or to no one) to verified paid requests inside TOP_BUYER_FAIL_WINDOW_MS. The payer's short id, its spend rank, the tools, statuses, times and the first characters of the error text we sent are on the operator view of /api/gateway-status (topBuyerFailures, operator token). Read them, fix the failing tool or path, and check whether what we told the buyer was true. Nothing is refused for it. Auto-closes when the word reads ok." || true
+            fi
+          elif [ "$STATUS" = "ok" ] && [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "topBuyerFailures is ok; closing." || true
           fi
 
       # The shared limits store (src/shared-limits.js): status reads degraded for
@@ -1250,11 +1281,30 @@ jobs:
           check_word toolFailures "degraded failing" "ok"
           TITLE="upstreamHealth: an upstream is timing out or failing"
           check_word upstreamHealth "degraded failing" "ok"
+          # Our own limit passed on one upstream for several callers while
+          # others answered (src/unanswered-rule.js): its own neutral title.
+          TITLE="upstreamHealth: an upstream did not answer within our limit"
+          check_word upstreamHealth "unanswered" "ok"
           TITLE="facilitatorFunds: a facilitator refused settlement"
           check_word facilitatorFunds "refused demoted" "ok"
           # A settlement signer short of gas, before any refusal: its own title.
-          TITLE="facilitatorFunds: a facilitator's settlement gas is running low or could not be read"
+          # A balance our checker could not read reads unknown, which pages
+          # under its own title (below) only once it has held for hours.
+          TITLE="facilitatorFunds: a facilitator's settlement gas is running low"
           check_word facilitatorFunds "low" "ok"
+          # A signer balance our checker could not read pages only once
+          # unknown has held past FACILITATOR_UNREAD_PAGE_HOURS (alert=sustained,
+          # src/tool-failure-monitor.js); a read balance (ok or low) closes it.
+          TITLE="facilitatorFunds: a settlement signer's balance could not be read for hours"
+          FA=$(echo "$GS" | jq -r '.facilitatorFunds.alert // "none"' 2>/dev/null || echo none)
+          if [ "$FA" = "sustained" ]; then UNREAD_BAD="unknown"; else UNREAD_BAD="_not-sustained_"; fi
+          check_word facilitatorFunds "$UNREAD_BAD" "ok low"
+          # Close-only: the issue opened under the title before its rename
+          # closes on ok, low or unknown (the two titles above take over those
+          # states, so it never stays open beside them). The bad list is a word
+          # no status reads, so it never opens.
+          TITLE="facilitatorFunds: a facilitator's settlement gas is running low or could not be read"
+          check_word facilitatorFunds "_close-only_" "ok low unknown"
           # The settle breaker refused a buyer that had settled a call in its
           # window (src/gateway-settle-breaker.js): refusing pages, ok closes.
           TITLE="buyerRefusals: a paying buyer was refused by the settle breaker"

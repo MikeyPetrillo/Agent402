@@ -50,7 +50,11 @@ export function lookupUnavailable(cause) {
   return Object.assign(new Error(LOOKUP_UNAVAILABLE), {
     code: LOOKUP_UNAVAILABLE_CODE,
     statusCode: 503,
-    attribution: "upstream",
+    // This server's own resolver path (the attribution vocabulary of
+    // src/upstream-deadline.js, written out here so this module imports
+    // nothing of the payment path): ours, kind our-egress.
+    attribution: "ours",
+    hint: "our-egress",
     retryAfter: LOOKUP_RETRY_AFTER_S,
     ...(cause ? { cause } : {}),
   });
@@ -203,9 +207,10 @@ function safeHostOf(u) {
  *   that is correct and publicly reachable concludes their input is broken, or
  *   that we are.
  *
- * `attribution` is the machine-readable half ("caller" | "upstream" |
- * "upstream-access"); the route binder in server.js reads it to decide whether
- * echoing the tool's input schema back would be help or a lie.
+ * `attribution` is the machine-readable half (here "caller" | "upstream" |
+ * "upstream-access"; the whole vocabulary is in src/upstream-deadline.js);
+ * the route binder in server.js reads it to decide whether echoing the tool's
+ * input schema back would be help or a lie.
  *
  * Pure so it unit-tests with no socket and no DNS, like probe-classify.js.
  */
@@ -438,6 +443,13 @@ export async function retryTransient(fn, { retries = 1, backoffMs = 300 } = {}) 
   throw lastErr;
 }
 
+/** Connect failures that are this server's own network path, not the
+ *  host's answer: no local address to send from (EADDRNOTAVAIL). No route to
+ *  the host or its network (EHOSTUNREACH, ENETUNREACH) can come from an ICMP
+ *  answer near the host, so it reads as the host not answering, as a refused,
+ *  reset or TLS-failed connection does. */
+export const OUR_EGRESS_CONNECT_CODES = Object.freeze(new Set(["EADDRNOTAVAIL"]));
+
 /**
  * Fetch a public http(s) URL with SSRF protection, size cap, and timeout.
  * Returns { finalUrl, html } — or { finalUrl, buffer } with `binary: true`.
@@ -490,16 +502,21 @@ export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, 
     // telemetry can tell egress problems from slow upstreams.
     let code = null;
     for (let e = err.cause; e && !code; e = e.cause) code = e.code || null;
-    // The source host, not the caller's input: attributed upstream with a
-    // code the caller can branch on (retry later, or try another host),
-    // since nothing about the request body would change the outcome.
+    // A URL the caller named that gave no answer: our limit passing, or a
+    // connection that failed, proves nothing about whose side it is (the URL
+    // may be dead, the host slow, or our egress), so the attribution is
+    // "unknown" and the advice covers both: check the URL, or retry. The hint
+    // is the code a caller branches on.
     throw Object.assign(
       new Error(
         timedOut
-          ? `Source URL did not respond within ${Math.round(timeoutMs / 1000)}s - host may be slow or unreachable`
-          : `Could not connect to source URL: ${err.message}${code ? ` (${code})` : ""}`
+          ? `Source URL did not respond within our ${Math.max(1, Math.round(timeoutMs / 1000))} s limit; check that the URL is correct and publicly reachable, or retry`
+          : `Could not connect to source URL: ${err.message}${code ? ` (${code})` : ""}; check that the URL is correct and publicly reachable, or retry`
       ),
-      { statusCode: 504, attribution: "upstream", hint: timedOut ? "source-timeout" : "source-unreachable" }
+      // The transport code rides beside the hint (never as `code`, which
+      // other readers branch on), so a reader that keeps our own egress
+      // apart (OUR_EGRESS_CONNECT_CODES) can tell it from the host's answer.
+      { statusCode: 504, attribution: "unknown", hint: timedOut ? "source-timeout" : "source-unreachable", ...(code ? { transportCode: String(code).slice(0, 40) } : {}) }
     );
   }
 
@@ -535,7 +552,7 @@ export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, 
       step = await reader.read();
     } catch (err) {
       if (controller.signal.aborted) {
-        throw Object.assign(new Error(`Source URL did not finish sending within ${Math.round(timeoutMs / 1000)}s - host may be slow or unreachable`), { statusCode: 504, attribution: "upstream", hint: "source-timeout" });
+        throw Object.assign(new Error(`Source URL did not finish sending within our ${Math.max(1, Math.round(timeoutMs / 1000))} s limit; check that the URL serves what you expect, or retry`), { statusCode: 504, attribution: "unknown", hint: "source-timeout" });
       }
       throw err;
     }

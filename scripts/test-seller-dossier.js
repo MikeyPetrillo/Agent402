@@ -211,10 +211,17 @@ check("the router verdict rides through with the reason, the gate constants and 
   assert.ok(r.flags.some((f) => /above the router's \$0\.005 underlying cap/.test(f)));
 });
 check("a refusal memo on a chain is surfaced with the chain and time", () => {
-  const r = base({ refusals: [{ chain: "base", at: NOW - 600_000, status: 402 }] });
+  const r = base({ refusals: [{ chain: "base", at: NOW - 600_000, status: 402, kind: "paid-retry" }] });
   assert.equal(r.router.refusals[0].chain, "base");
   assert.equal(r.router.refusals[0].at, new Date(NOW - 600_000).toISOString());
-  assert.ok(r.flags.some((f) => /refused on base/.test(f)));
+  assert.ok(r.flags.some((f) => /paid retries .* were refused on base/.test(f)));
+  // An offer refused before anything was signed never reads as a refused
+  // payment, and a refusal another replica recorded (no kind) claims neither.
+  const offer = base({ refusals: [{ chain: "base", at: NOW - 600_000, status: 402, kind: "offer" }] });
+  assert.equal(offer.router.refusals[0].kind, "offer");
+  assert.ok(offer.flags.some((f) => /402 offer our router could not pay as listed \(nothing was signed\)/.test(f)) && !offer.flags.some((f) => /paid retries/.test(f)));
+  const plain = base({ refusals: [{ chain: "base", at: NOW - 600_000, status: 402 }] });
+  assert.ok(plain.flags.some((f) => /noted two refusals .* on base/.test(f)) && !plain.flags.some((f) => /paid retries/.test(f)));
 });
 
 // --- our own paid calls -------------------------------------------------------

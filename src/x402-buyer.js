@@ -9,6 +9,7 @@
 // settlement can cost us the one upstream payment (the LLM-gateway risk class),
 // so the margin guard below refuses any upstream quote over the caller's cap.
 import { assertPublicUrl, ssrfDispatcher, freshSsrfDispatcher } from "./tools/fetch-guard.js";
+import { isAbortError, isNameNotFound, isOurResolverFailure } from "./upstream-deadline.js";
 import { Agent as UndiciAgent } from "undici";
 import { withDistrust } from "./tls-distrust.js";
 
@@ -36,6 +37,7 @@ import { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2, canonicalAvmNetw
 export const ROUTER_UA =
   "Mozilla/5.0 (compatible; Agent402-Router/1.0; +https://agent402.tools/crawler)";
 import { recordOutbound } from "./outbound-ledger.js";
+import { createHash } from "node:crypto";
 import { PAY_X402_TIMEOUT_MS, PAY_X402_MIN_LEG_MS } from "./buyer-timeouts.js";
 import { recordSignedPurchase } from "./router-purchases.js";
 export { PAY_X402_TIMEOUT_MS };
@@ -69,7 +71,36 @@ function bad(message, statusCode = 400) {
 function sellerRejected(status) {
   const e = bad(`Seller rejected the paid retry (HTTP ${status})`, 502);
   e.sellerStatus = status;
+  e.attribution = "upstream";
   return e;
+}
+// An answer the seller itself gave (a status, a redirect): the one class a
+// caller may read as the seller's (attribution "upstream", the vocabulary of
+// src/upstream-deadline.js). Everything else this payer throws is ours or
+// unknown, and route-execute words it without blaming the seller.
+const sellerSaid = (e) => Object.assign(e, { attribution: "upstream" });
+
+/** The bare (price) leg that got no answer. Our own limit passing is ours
+ *  and names the limit (the call's remaining budget when that cut the leg
+ *  short); our resolver failing (a timeout, a refused or unavailable lookup)
+ *  is ours; an answer that the seller's host name does not exist (NXDOMAIN,
+ *  no data) is the seller's name, not our resolver, and like any other
+ *  transport failure proves nothing about whose side failed. Never "Seller
+ *  unreachable" for a leg our own clamp ended. */
+export function bareLegFailure(err, { capMs, clamped = false } = {}) {
+  const secs = Math.max(1, Math.round(Number(capMs) / 1000) || 1);
+  if (isAbortError(err)) {
+    return Object.assign(bad(clamped
+      ? `Seller did not answer the price request within the ${secs} s left of our limit for this call`
+      : `Seller did not answer the price request within our ${secs} s limit`, 502), { attribution: "ours", hint: "our-deadline" });
+  }
+  if (isNameNotFound(err)) {
+    return Object.assign(bad("The seller's host name does not resolve; no request was sent", 502), { attribution: "unknown", hint: "connect-failed" });
+  }
+  if (isOurResolverFailure(err)) {
+    return Object.assign(bad("This server's DNS lookup for the seller's host failed; no request was sent", 502), { attribution: "ours", hint: "our-egress" });
+  }
+  return Object.assign(bad(`Seller could not be reached from here: ${String(err?.message || err).slice(0, 80)}`, 502), { attribution: "unknown", hint: "connect-failed" });
 }
 
 // Per-chain buyer config. x402 v1 accepts label the network as a bare string
@@ -432,10 +463,10 @@ const DELIVERY_MEMO = "sor-delivery";
 let memoSeq = 0;
 const MEMO_REPLICA = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
 const memoKeysWritten = new Set(); // "name\u0000key", so a test reset clears what it wrote
-function memoShare(name, key, windowMs, status, now, entry) {
+function memoShare(name, key, windowMs, status, now, entry, member = null) {
   if (!(windowMs > 0)) return;
   if (memoKeysWritten.size < 5000) memoKeysWritten.add(`${name}\u0000${key}`);
-  void sharedWrite("sor-memo", shared.windowAdd(name, key, { windowMs, member: `${MEMO_REPLICA}:${++memoSeq}`, weight: Number(status) || 0, now })).then((r) => { if (r?.ok) entry.shared = true; });
+  void sharedWrite("sor-memo", shared.windowAdd(name, key, { windowMs, member: member || `${MEMO_REPLICA}:${++memoSeq}`, weight: Number(status) || 0, now })).then((r) => { if (r?.ok) entry.shared = true; });
 }
 /** Fold one shared window into a local memo map (strikes from every replica). */
 function foldShared(map, key, r) {
@@ -524,8 +555,35 @@ export function paidRefusalCarriesChallenge(headers, bodyText = "") {
   } catch { return false; }
 }
 
+/**
+ * Does a refusal of a payment we sent name the authorization's time window
+ * (validBefore or validAfter, an expired authorization)? Read from the
+ * refusal's own error fields only (the `error` of the PAYMENT-REQUIRED header
+ * the seller sent back, and `error` / `message` / `reason` of a JSON body, or
+ * the body itself when it is not JSON), never from the offer it echoes, whose
+ * field names would match. Literal alternations only, on capped text.
+ */
+const VALIDITY_TEXT = /(valid_?before|valid_?after|authorization[_ ]expired|expired authorization|authorization has expired)/i;
+export function refusalNamesValidity(headers, bodyText = "") {
+  const get = (n) => { try { return headers?.get?.(n) ?? null; } catch { return null; } };
+  const said = [];
+  const errOf = (j) => {
+    if (!j || typeof j !== "object") return;
+    for (const k of ["error", "message", "reason", "errorReason", "invalidReason"]) {
+      const v = j[k];
+      if (typeof v === "string") said.push(v);
+      else if (v && typeof v === "object") for (const kk of ["message", "code", "reason"]) if (typeof v[kk] === "string") said.push(v[kk]);
+    }
+  };
+  const raw = String(get("payment-required") || get("x-payment-required") || "").trim();
+  if (raw) { try { errOf(JSON.parse(decodeUtf8(Buffer.from(raw.slice(0, 16384), "base64")))); } catch { /* not readable */ } }
+  const text = String(bodyText || "").slice(0, 4096);
+  try { errOf(JSON.parse(text)); } catch { said.push(text); }
+  return said.some((t) => VALIDITY_TEXT.test(String(t).slice(0, 1000)));
+}
+
 /** Record one refusal of the route `url` on `chain` (a strike; see above). */
-export function noteSellerRefusal(url, chain, status) {
+export function noteSellerRefusal(url, chain, status, { kind = "paid-retry" } = {}) {
   const route = refusalRoute(url);
   if (!route || !chain) return;
   const key = `${chain}|${route}`;
@@ -535,7 +593,11 @@ export function noteSellerRefusal(url, chain, status) {
   // Re-inserted at the tail, so eviction takes the least recently refused.
   sellerRefusals.delete(key);
   if (sellerRefusals.size >= SELLER_REFUSAL_MAX) sellerRefusals.delete(sellerRefusals.keys().next().value);
-  const entry = { at: now, firstAt: live ? live.firstAt : now, status, strikes: (live?.strikes || 0) + 1 };
+  // `kind`: "offer" is the seller's 402 offer itself refused before anything
+  // was signed (a wrong domain, a split price, another resource); "paid-retry"
+  // is the seller's payment layer turning away a payment we sent. The record
+  // says which, so it never claims a payment was refused when none was sent.
+  const entry = { at: now, firstAt: live ? live.firstAt : now, status, kind: kind === "offer" ? "offer" : "paid-retry", strikes: (live?.strikes || 0) + 1 };
   sellerRefusals.set(key, entry);
   memoShare(REFUSAL_MEMO, key, SELLER_REFUSAL_TTL_MS, status, now, entry);
 }
@@ -699,13 +761,30 @@ const deliveryFailures = new Map(); // "chain|origin" -> { at, firstAt, status, 
  * url, method and body. Without the opt-in, one paid call was a 24-hour
  * routing ban against any origin on the internet, chosen by the buyer.
  */
-export function noteSellerDeliveryFailure(origin, chain, { status = null, ms = null } = {}) {
+export function noteSellerDeliveryFailure(origin, chain, { status = null, ms = null, input = null, payer = null } = {}) {
   if (!origin || !chain) return;
   const key = refusalKey(origin, chain);
   const prev = deliveryFailures.get(key);
   const ttl = deliveryFailTtlMs();
   // A strike older than the TTL is not part of this pattern; start again.
   const live = prev && ttl > 0 && Date.now() - prev.at <= ttl ? prev : null;
+  // ONE PAYER'S SAME REQUEST IS ONE STRIKE, UNTIL IT REPEATS. A request the
+  // same payer sends again and that fails again is what that payer's input
+  // does, so its repeat adds no strike; every DELIVERY_SAME_INPUT_RECOUNT-th
+  // repeat counts again, so one payer's same request benches a seller that
+  // keeps failing it by its third failure. The same request from ANOTHER
+  // payer is its own strike: a parameterless route, or a popular input,
+  // failing for two payers is the seller failing. A call that names no payer
+  // or no input is counted per call.
+  const seen = live?.seen && typeof live.seen === "object" ? live.seen : {};
+  const repeatKey = typeof input === "string" && input && typeof payer === "string" && payer ? deliveryRepeatKey(payer, input) : null;
+  const repeats = repeatKey ? (seen[repeatKey] || 0) + 1 : 1;
+  if (repeatKey && live && repeats > 1 && (repeats - 1) % DELIVERY_SAME_INPUT_RECOUNT !== 0) {
+    live.seen = { ...seen, [repeatKey]: repeats };
+    live.at = Date.now();
+    live.status = Number.isFinite(status) ? status : live.status;
+    return;
+  }
   // Re-insert at the TAIL. Map.set on an EXISTING key keeps its original
   // insertion slot, so the plain `set` this started as meant the seller that
   // had failed fifty times was evicted FIRST and 499 one-off failures sat
@@ -715,15 +794,56 @@ export function noteSellerDeliveryFailure(origin, chain, { status = null, ms = n
   // the update path.)
   deliveryFailures.delete(key);
   if (deliveryFailures.size >= DELIVERY_FAIL_MAX) deliveryFailures.delete(deliveryFailures.keys().next().value);
+  let nextSeen = seen;
+  if (repeatKey) {
+    nextSeen = { ...seen, [repeatKey]: repeats };
+    const keys = Object.keys(nextSeen);
+    if (keys.length > DELIVERY_SEEN_MAX) for (const k of keys.slice(0, keys.length - DELIVERY_SEEN_MAX)) delete nextSeen[k];
+  }
   const entry = {
     at: Date.now(),
     firstAt: live ? live.firstAt : Date.now(),
     status: Number.isFinite(status) ? status : null,
     ms: Number.isFinite(ms) ? Math.round(ms) : null,
     strikes: (live?.strikes || 0) + 1,
+    ...(Object.keys(nextSeen).length ? { seen: nextSeen } : {}),
   };
   deliveryFailures.set(key, entry);
-  memoShare(DELIVERY_MEMO, key, ttl, status, entry.at, entry);
+  // Shared under the payer's request and its repeat count, so the same
+  // strike written on another replica is the same member.
+  memoShare(DELIVERY_MEMO, key, ttl, status, entry.at, entry, repeatKey ? `in:${repeatKey}:${repeats}` : null);
+}
+// Every second repeat of one payer's same request counts again (strikes at
+// its 1st, 3rd, 5th failure): one stray failure and one retry never bench a
+// seller, and what one payer's request can cost our wallet at a seller that
+// takes the payment and fails is bounded at three payments.
+const DELIVERY_SAME_INPUT_RECOUNT = 2;
+const DELIVERY_SEEN_MAX = 16;
+function deliveryRepeatKey(payer, input) {
+  return createHash("sha256").update(`${payer}\n${input}`).digest("hex").slice(0, 24);
+}
+
+/** The request a delivery strike is about: method, URL (with the query the
+ *  caller's params built) and body, hashed. Exported for the test. */
+export function deliveryInputKey(method, url, body) {
+  let b = "";
+  try { b = body === undefined ? "" : (typeof body === "string" ? body : JSON.stringify(body)); } catch { b = "(unserializable)"; }
+  return createHash("sha256").update(`${String(method || "GET").toUpperCase()}\n${String(url || "")}\n${b}`).digest("hex").slice(0, 24);
+}
+
+/**
+ * A 500 whose body names the REQUEST as the problem (a validation message, a
+ * missing or invalid field, JSON our caller's body did not parse as) is the
+ * seller's handler failing on the input it was given: the same answer a 400
+ * gives, with the wrong status. Not a delivery strike. 502, 503 and 504 are
+ * the seller's infrastructure and always strike; so does a 500 whose body
+ * names anything else. The body is read capped and matched with anchored
+ * literal alternations only.
+ */
+const INPUT_FAULT_TEXT = /\b(validation (?:error|failed)|invalid (?:input|param(?:eter)?s?|argument|request(?: body)?|body|json|field|value|query)|(?:missing|required) (?:field|param(?:eter)?|argument|property|query|input)|is required|must be (?:a|an|one of|provided)|malformed|bad request|unexpected token|unprocessable)\b/i;
+export function deliveryFailureIsInputFault(status, bodyText = "") {
+  if (Number(status) !== 500) return false;
+  return INPUT_FAULT_TEXT.test(String(bodyText || "").slice(0, 2000));
 }
 
 /**
@@ -983,7 +1103,7 @@ export function atomicForMessage(v) {
  * A 200 on the bare request means the endpoint is free — returned with no
  * spend. Only a 402 triggers a payment; anything else is a 502.
  */
-export async function payX402(url, { maxAtomic, method = "GET", body, headers = {}, timeoutMs = PAY_X402_TIMEOUT_MS, maxBytes = DEFAULT_MAX_BYTES, chain = "base", provenPayTo = null, evidenceWallets = null, sellerProof = null, notDebited = null, allowUnproven = false, refusalMaxWaitMs = refusalMaxWaitMsDefault(), memoizeDelivery = false, slug = null, signBy = null, sellerKey = null, deadlineMs = null, minLegMs = PAY_X402_MIN_LEG_MS, now = Date.now, onSigned = recordSignedPurchase } = {}) {
+export async function payX402(url, { maxAtomic, method = "GET", body, headers = {}, timeoutMs = PAY_X402_TIMEOUT_MS, maxBytes = DEFAULT_MAX_BYTES, chain = "base", provenPayTo = null, evidenceWallets = null, sellerProof = null, notDebited = null, allowUnproven = false, refusalMaxWaitMs = refusalMaxWaitMsDefault(), memoizeDelivery = false, payer = null, slug = null, signBy = null, sellerKey = null, deadlineMs = null, minLegMs = PAY_X402_MIN_LEG_MS, now = Date.now, onSigned = recordSignedPurchase } = {}) {
   assertSigningAllowed("an external x402 payment");
   // ONE DEADLINE FOR THE CALL, fixed here. A caller whose own buyer's payment
   // lives a short time (a Solana blockhash, an Algorand round window) hands
@@ -996,6 +1116,10 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
   // The refusal wait ends at a fixed time from this call's start, so a seller
   // that never answers the paid request cannot add its timeout on top of it.
   const refusalEndAt = Date.now() + Math.max(0, Number(refusalMaxWaitMs) || 0);
+  // Set when OUR refusal window cut the seller's own maxTimeoutSeconds short
+  // on the authorization we sign (capEvmValidity): a refusal naming the
+  // authorization's validity is then about our window, not the seller.
+  let validityShortened = false;
   if (maxAtomic == null) throw bad("payX402 requires maxAtomic (the margin-guard ceiling)", 500);
   const chainCfg = BUYER_CHAINS[chain];
   if (!chainCfg) throw bad(`payX402: unknown chain "${chain}" (known: ${Object.keys(BUYER_CHAINS).join(", ")})`, 500);
@@ -1060,14 +1184,15 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
   // Too little of the call's budget left to ask for the price and still pay:
   // refused before the seller is contacted at all.
   if (callLeftMs() < legFloorMs) throw bad("Too little of this call's time budget is left to pay a seller. Nothing was signed.", 504);
-  const reject3xx = (r) => { if (r.status >= 300 && r.status < 400) throw bad("Seller returned a redirect - refusing to follow off the validated host", 502); };
+  const reject3xx = (r) => { if (r.status >= 300 && r.status < 400) throw sellerSaid(bad("Seller returned a redirect - refusing to follow off the validated host", 502)); };
   let bare;
-  try { bare = await fetch(url, { ...reqInit, signal: AbortSignal.timeout(legTimeoutMs()) }); }
-  catch (e) { throw bad(`Seller unreachable: ${String(e?.message || e).slice(0, 80)}`, 502); }
+  const bareCapMs = legTimeoutMs();
+  try { bare = await fetch(url, { ...reqInit, signal: AbortSignal.timeout(bareCapMs) }); }
+  catch (e) { throw bareLegFailure(e, { capMs: bareCapMs, clamped: bareCapMs < timeoutMs }); }
   reject3xx(bare);
   if (bare.status === 200) return { result: await readCapped(bare, maxBytes), quote: null, receipt: null };
-  if (bare.status === 404) throw bad("Seller returned 404 for that request", 404);
-  if (bare.status !== 402) throw bad(`Seller upstream error (HTTP ${bare.status})`, 502);
+  if (bare.status === 404) throw sellerSaid(bad("Seller returned 404 for that request", 404));
+  if (bare.status !== 402) throw sellerSaid(bad(`Seller upstream error (HTTP ${bare.status})`, 502));
 
   let paymentRequired;
   try {
@@ -1076,7 +1201,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     let bareBody;
     try { bareBody = JSON.parse(await readTextCapped(bare, MAX_402_BODY_BYTES)); } catch { bareBody = undefined; }
     paymentRequired = http.getPaymentRequiredResponse((n) => bare.headers.get(n), bareBody);
-  } catch { throw bad("Seller sent an unparseable 402 challenge", 502); }
+  } catch { throw sellerSaid(bad("Seller sent an unparseable 402 challenge", 502)); }
 
   // F2: pin to the EXACT accept the client will actually sign — the requested
   // chain + scheme "exact" + that chain's mainnet USDC asset — and cap-check
@@ -1085,7 +1210,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
   // hand the client a single validated accept, so what we cap-check is what
   // we sign.
   const payable = pickPayableAccept(paymentRequired.accepts, chain);
-  if (!payable) throw bad(`Seller offers no ${chain}/exact/${chainCfg.symbol || "USDC"} accept - cannot pay from the ${chain} spending wallet`, 502);
+  if (!payable) throw sellerSaid(bad(`Seller offers no ${chain}/exact/${chainCfg.symbol || "USDC"} accept - cannot pay from the ${chain} spending wallet`, 502));
   // THE CHALLENGE MUST BE FOR THE URL WE ASKED FOR. A 402 names the resource
   // it sells (x402 v2 at the top level, v1 on each accept); a challenge for
   // another origin or path is not an offer for this request, whatever it
@@ -1093,7 +1218,9 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
   // does not block. Seller text never reaches the message.
   const resourceVerdict = challengeResourceVerdict(url, paymentRequired, payable);
   if (!resourceVerdict.ok) {
-    if (memoizeDelivery) noteSellerRefusal(url, chain, 402);
+    // A query that differs is the caller's params against the seller's echo
+    // of them, not the seller offering another resource: no strike.
+    if (memoizeDelivery && resourceVerdict.field !== "query") noteSellerRefusal(url, chain, 402, { kind: "offer" });
     const e = bad(`Seller's 402 challenge names a different ${resourceVerdict.field} than the URL requested; refusing to sign a payment for another resource. Nothing was signed.`, 502);
     e.refused = true;
     throw e;
@@ -1117,8 +1244,12 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     if (unsignableByStockBuyer(domain)) {
       // The memo steers the router, so only the router writes it (see the
       // refusal memo below): a check whose URL the caller chose reports the
-      // accept and changes no routing decision.
-      if (memoizeDelivery) noteSellerRefusal(url, chain, 402);
+      // accept and changes no routing decision. Only wrong_domain is the
+      // seller's defect; a Gateway-rail or transfer-then-prove accept is a
+      // method this signer cannot make, which is ours, and strikes nothing
+      // (the index labels those rows gateway_rail_unsupported and
+      // payment_method_unsupported already).
+      if (memoizeDelivery && domain.verdict === "wrong_domain") noteSellerRefusal(url, chain, 402, { kind: "offer" });
       const e = bad(domain.verdict === "payment_method_unsupported"
         ? `Seller's ${chainLabel} accept asks for paymentMethod ${JSON.stringify(domain.paymentMethod)} (a transfer proved afterwards), which this stock x402 signer does not make. Nothing was signed.`
         : domain.verdict === "gateway_batched"
@@ -1135,7 +1266,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     if (chain !== "base") {
       const own = evmAcceptDomainCheck(payable, chain);
       if (!own.ok) {
-        if (memoizeDelivery) noteSellerRefusal(url, chain, 402);
+        if (memoizeDelivery) noteSellerRefusal(url, chain, 402, { kind: "offer" });
         const e = bad(`Seller's ${chain} ${chainCfg.symbol || "USDC"} accept advertises EIP-712 ${own.field} ${JSON.stringify(own.advertised)} but the token signs under ${JSON.stringify(own.expected)}. Nothing was signed.`, 502);
         e.refused = true;
         throw e;
@@ -1149,7 +1280,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
   // Memoized like the domain refusal above, so the router benches the route
   // instead of meeting the same split price on every call.
   if (payable.amount != null && payable.maxAmountRequired != null && !sameAtomic(payable.amount, payable.maxAmountRequired)) {
-    if (memoizeDelivery) noteSellerRefusal(url, chain, 402);
+    if (memoizeDelivery) noteSellerRefusal(url, chain, 402, { kind: "offer" });
     const e = bad(`Seller accept quotes amount ${atomicForMessage(payable.amount)} but maxAmountRequired ${atomicForMessage(payable.maxAmountRequired)}; refusing to sign an ambiguous price. Nothing was signed.`, 502);
     e.refused = true;
     throw e;
@@ -1342,6 +1473,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     // and a credential is signed only while a paid request can still finish.
     if (callLeftMs() < legFloorMs) throw bad("Too little of this call's time budget is left to pay this seller and read its answer. Nothing was signed.", 504);
     const signAccept = isEvm ? capEvmValidity(signable) : signable;
+    validityShortened = isEvm && Number(signable?.maxTimeoutSeconds) > Number(signAccept?.maxTimeoutSeconds);
     const payload = chain === "solana"
       ? await (await import("./solana-buyer.js")).createSvmPaymentPayload(buyer.signer, { ...paymentRequired, accepts: [signable] })
       : await client.createPaymentPayload({ ...paymentRequired, accepts: [signAccept] });
@@ -1409,6 +1541,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     // The seller the delivery memo is keyed on (deliveryMemoSeller): the
     // outbound ledger keeps the origin actually paid.
     const memoSeller = deliveryMemoSeller(url, sellerKey);
+    const deliveryInput = deliveryInputKey(method, url, body);
     // THE CHAIN'S ANSWER TO "DID THE CREDENTIAL WE SENT MOVE MONEY". One
     // reader for the two outcomes that leave that question open: a paid retry
     // the seller answered with something other than 200, and a paid request
@@ -1605,6 +1738,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
       // buyers is the leak the 2026-08-19 review closed for the MPP relay.
       let why = "";
       let refusalText = "";
+      let inputFaultPending = false;
       try {
         refusalText = await readTextCapped(paid, MAX_REFUSAL_BODY_BYTES);
         why = refusalText.slice(0, 400).replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
@@ -1630,8 +1764,18 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
         });
       }
       if (memoizeDelivery && paid.status >= 500 && !(paid.headers.get("payment-response") || paid.headers.get("x-payment-response"))) {
-        noteSellerDeliveryFailure(memoSeller, chain, { status: paid.status, ms: Date.now() - sentAtMs });
-        console.warn(`[x402-buyer] ${where} failed to deliver after payment (HTTP ${paid.status}, no receipt, ${Date.now() - sentAtMs}ms) - memoized as failing on ${chain}, the resolver will skip it`);
+        // A 500 naming the request as the problem may be the caller's input
+        // (deliveryFailureIsInputFault), but its text is the seller's own: it
+        // goes unstruck only when the chain read below proves the credential
+        // expired unused. A rail with no such read, a debit, a live
+        // credential or an unreadable chain strikes, since we may have paid.
+        if (deliveryFailureIsInputFault(paid.status, refusalText)) {
+          inputFaultPending = true;
+          console.warn(`[x402-buyer] ${where} answered HTTP ${paid.status} naming the request as the problem - struck unless the chain proves nothing was charged`);
+        } else {
+          noteSellerDeliveryFailure(memoSeller, chain, { status: paid.status, ms: Date.now() - sentAtMs, input: deliveryInput, payer });
+          console.warn(`[x402-buyer] ${where} failed to deliver after payment (HTTP ${paid.status}, no receipt, ${Date.now() - sentAtMs}ms) - noted on ${chain}; the resolver skips it after two strikes`);
+        }
       }
       // A 4xx AFTER A CHARGE (2026-09-28). The memo above sees only a 5xx, so a
       // seller that took the payment and answered 400 (or 402) wrote nothing,
@@ -1646,6 +1790,12 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
       // CHARGED 400/413/415/422 (isCallerInputStatus): an upfront-settling
       // seller takes the payment before reading the body the caller wrote.
       let deliveryStruck = false;
+      const strikeInputFault = () => {
+        if (!inputFaultPending) return;
+        inputFaultPending = false;
+        noteSellerDeliveryFailure(memoSeller, chain, { status: paid.status, ms: Date.now() - sentAtMs, input: deliveryInput, payer });
+        console.warn(`[x402-buyer] ${where} answered HTTP ${paid.status} after payment and the chain does not prove it uncharged - noted on ${chain}`);
+      };
       const strikeChargedFailure = (how) => {
         if (deliveryStruck || !(paid.status >= 400 && paid.status < 500) || isCallerInputStatus(paid.status)) return;
         deliveryStruck = true;
@@ -1655,7 +1805,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
           slug: slug || null, origin: sellerOrigin, result: "undelivered", tx: null,
         });
         if (!memoizeDelivery) return;
-        noteSellerDeliveryFailure(memoSeller, chain, { status: paid.status, ms: Date.now() - sentAtMs });
+        noteSellerDeliveryFailure(memoSeller, chain, { status: paid.status, ms: Date.now() - sentAtMs, input: deliveryInput, payer });
         console.warn(`[x402-buyer] ${where} took the payment and answered HTTP ${paid.status} (${how}) - memoized as failing on ${chain}`);
       };
       if (receiptSaysSettled(paid.headers)) strikeChargedFailure("its own settle receipt");
@@ -1685,9 +1835,14 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
       // stance; unused-but-still-live (the bound cut the wait short, or a
       // checker that could not attach an expiry) keeps it too - only
       // expired + unused releases the hold and falls through.
+      // One read, before any branch: a 500 naming the request (held above)
+      // strikes unless this verdict proves the credential expired unused. A
+      // rail with no such read has no verdict, so it strikes.
+      const maxWaitMs = Math.max(0, refusalEndAt - Date.now());
+      let verdict = null;
+      if (chainCheckable) { try { verdict = await readChainVerdict(where); } catch { verdict = null; } }
+      if (!(verdict && verdict.debited === false && verdict.expired === true)) strikeInputFault();
       if (chainCheckable) {
-        const maxWaitMs = Math.max(0, refusalEndAt - Date.now());
-        const verdict = await readChainVerdict(where);
         if (evmCheckable && verdict && verdict.debited === true) strikeChargedFailure("the signed authorization was consumed on chain");
         if (verdict && verdict.debited === false && verdict.expired === true) {
           committed = false; // provably unpaid: the finally releases the hold
@@ -1709,7 +1864,11 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
           // whose URL and body a caller chose is not the router's purchase at
           // all. All of them still release the hold on the chain's word; none
           // of them decides where anyone else's money goes.
-          const memoize = memoizeDelivery && (paid.status === 402 || paid.status === 401) && paidRefusalCarriesChallenge(paid.headers, refusalText) && postSendRefusalIsSellers(url, chain, { proven: !allowUnproven });
+          // A refusal that names the authorization's validity while our own
+          // window was shorter than the seller asked for is about our window:
+          // not the seller's refusal, no strike.
+          const ourWindow = validityShortened && refusalNamesValidity(paid.headers, refusalText);
+          const memoize = memoizeDelivery && !ourWindow && (paid.status === 402 || paid.status === 401) && paidRefusalCarriesChallenge(paid.headers, refusalText) && postSendRefusalIsSellers(url, chain, { proven: !allowUnproven });
           if (memoize) noteSellerRefusal(url, chain, paid.status);
           console.warn(`[x402-buyer] ${where} refused the payment and the chain shows no debit after the credential expired (${verdict.observed} tx read) - not charged${memoize ? `, route noted as refusing on ${chain}` : ""}`);
           const e = bad(`Seller refused the payment (HTTP ${paid.status}); the credential expired unused, nothing charged`, 502);

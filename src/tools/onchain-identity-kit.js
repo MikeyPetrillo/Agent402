@@ -25,7 +25,7 @@
 
 import { redactSecrets } from "./redact.js";
 import { partialFields } from "../partial-answer.js";
-import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, budgetSpent, currentBudget, isUpstreamFailure, upstreamDeadline } from "../upstream-deadline.js";
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, budgetSpent, currentBudget, isUpstreamFailure, budgetSpentError } from "../upstream-deadline.js";
 
 // DEADLINES (src/upstream-deadline.js): each read has its own cap, composed
 // with the handler budget, so the ENS fan-out and the EAS retry end inside it;
@@ -173,7 +173,7 @@ async function ensBulkResolve({ addresses } = {}) {
     // Lookups that all ended at the deadline, or could not reach the host,
     // answer the upstream's 503 class naming the step.
     if (isUpstreamFailure(firstFailure)) throw firstFailure;
-    if (!firstFailure) throw upstreamDeadline("ENS resolver", "resolve", currentBudget()?.totalMs ?? ENS_READ_MS);
+    if (!firstFailure) throw budgetSpentError("ENS resolver", "resolve", currentBudget()?.totalMs ?? ENS_READ_MS);
     throw Object.assign(new Error(`ENS resolver upstream unavailable: ${failed[0].error}`), { statusCode: 502 });
   }
   return {

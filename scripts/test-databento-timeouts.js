@@ -13,10 +13,10 @@ const timeoutErr = () => Object.assign(new DOMException("The operation was abort
 
 globalThis.fetch = async () => { throw timeoutErr(); };
 try { await availableEnd(); ok(false, "range read times out"); }
-catch (e) { ok(e.statusCode === 503 && /^Market data upstream did not answer the dataset range read within \d+ s \(upstream deadline\)/.test(e.message), `a timed-out range read is a 503 naming the upstream and the step (${e.statusCode}: ${e.message})`); }
+catch (e) { ok(e.statusCode === 503 && /^Market data upstream did not answer the dataset range read within our \d+ s limit/.test(e.message), `a timed-out range read is a 503 naming the upstream and the step (${e.statusCode}: ${e.message})`); }
 
 try { await dailyBars({ symbol: "AAPL", start: "2026-08-01", end: "2026-09-05" }); ok(false, "data read times out"); }
-catch (e) { ok(e.statusCode === 503 && e.attribution === "upstream", `a timed-out data read is a 503 attributed upstream, not a 500 (${e.statusCode})`); }
+catch (e) { ok(e.statusCode === 503 && e.attribution === "ours" && e.hint === "our-deadline", `a timed-out data read is a 503 attributed to our own limit, not a 500 (${e.statusCode} ${e.attribution})`); }
 
 globalThis.fetch = async () => { throw new TypeError("fetch failed"); };
 try { await dailyBars({ symbol: "AAPL", start: "2026-08-01", end: "2026-09-05" }); ok(false, "unreachable"); }

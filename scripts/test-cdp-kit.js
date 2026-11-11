@@ -153,7 +153,7 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
     // A faucet POST that timed out is never resent, and its slot is kept (it may have dripped).
     calls = []; reply = timeout;
     e = await fund(addr("b")).catch((x) => x);
-    ok(e?.statusCode === 503 && e?.attribution === "upstream" && /^Coinbase Developer Platform did not answer the faucet read within 15 s \(upstream deadline\)/.test(e.message) && calls.length === 1,
+    ok(e?.statusCode === 503 && e?.attribution === "ours" && /^Coinbase Developer Platform did not answer the faucet read within our 15 s limit/.test(e.message) && calls.length === 1,
       `a faucet POST that timed out is a 503 naming the step and is not retried (attempts ${calls.length}, ${e?.statusCode} "${e?.message}")`);
     calls = []; reply = () => J(200, { transactionHash: "0xabc" });
     const f1 = await fund(addr("b"));
@@ -346,6 +346,35 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
           e = await sqlRun().catch((x) => x);
           ok(e?.statusCode === 502 && /is failing/.test(e.message) && /known-good query failed too/.test(e.message), `a known-good query answered 503 keeps the outage text (${e?.statusCode})`);
           ok(warnedH.some((w) => /query health: the known-good base query answered HTTP 503: the query service is failing/.test(w)), "the log names the service's own failure on the known-good query");
+          // ONE 5xx on the known-good query speaks for a minute, not five: the
+          // service recovers, and 61 s later a slow 502 is read afresh (the
+          // 422), while 30 s later the kept outage reading still answers.
+          {
+            const { HEALTH_FAILING_TTL_MS } = await import("../src/tools/cdp-kit.js");
+            ok(HEALTH_FAILING_TTL_MS === 60_000, `a "failing" reading is kept 60 s (${HEALTH_FAILING_TTL_MS})`);
+            let hs = 0;
+            globalThis.fetch = async (url, init = {}) => {
+              const sql = JSON.parse(init.body || "{}").sql;
+              if (isHealth(sql)) { hs++; return J(200, { result: [{ block_number: 1 }] }); }
+              return new Promise((r) => setTimeout(() => r(J(502, {})), 60));
+            };
+            _ageQueryHealthForTest(30_000);
+            e = await sqlRun().catch((x) => x);
+            ok(e?.statusCode === 502 && /is failing/.test(e.message) && hs === 0, `30 s after a failing read the outage reading still answers (${e?.statusCode}, ${hs} health reads)`);
+            _ageQueryHealthForTest(31_000);
+            e = await sqlRun().catch((x) => x);
+            ok(e?.statusCode === 422 && e?.hint === "narrow-query" && hs === 1, `61 s after one failing read the service is read again and its recovery is believed (${e?.statusCode}, ${hs} health reads)`);
+            // A REAL OUTAGE stays reported: every re-read fails, every buyer is told.
+            _setQueryHealthForTest(null);
+            globalThis.fetch = async (url, init = {}) => {
+              const sql = JSON.parse(init.body || "{}").sql;
+              if (isHealth(sql)) { hs++; return J(503, {}); }
+              return new Promise((r) => setTimeout(() => r(J(502, {})), 60));
+            };
+            let reported = 0;
+            for (let i = 0; i < 4; i++) { e = await sqlRun().catch((x) => x); if (e?.statusCode === 502 && /is failing/.test(e.message)) reported++; _ageQueryHealthForTest(61_000); }
+            ok(reported === 4, `a sustained outage is reported to every buyer across re-reads (${reported} of 4)`);
+          }
           // A refused health read (no answer at all) is unknown too.
           _setQueryHealthForTest(null);
           globalThis.fetch = async (url, init = {}) => {

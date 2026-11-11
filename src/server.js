@@ -63,7 +63,7 @@ import {
   grant, revoke, listGrants, getLog, remember, recall, forget,
   PERSISTENT as memoryPersistent,
 } from "./tools/memory.js";
-import { payerFromRequest, payerFromPaymentResponse, paymentHeaderOf, identityPayerOf, FREE_MODE_IDENTITY_NOTE } from "./payer.js";
+import { payerFromRequest, payerFromPaymentResponse, paymentHeaderOf, identityPayerOf, FREE_MODE_IDENTITY_NOTE, normalizePayerAddress } from "./payer.js";
 import { paidPriceUsd, quotedOnNetworkUsd, ticketPriceUsd } from "./paid-price.js";
 import { runInAbortableScope, abortInFlightComposites, installDrainAwareFetch, isDrainAbort, drainSignal } from "./drain-abort.js";
 import { sharedClaimRequired, markListening } from "./replay-topology.js";
@@ -101,7 +101,7 @@ import { configureHowToCall, howToCall402Field, howToCallField } from "./how-to-
 import { paymentGuide, quoteInputs, usdText } from "./payment-guide.js";
 import { gatewayCacheGate, commitGatewayCacheWrites } from "./gateway-cache-scope.js";
 import { startModelCatalogRefresh, modelCatalogWanted } from "./model-catalog.js";
-import { toolErrorFields } from "./tool-error-fields.js";
+import { toolErrorFields, notCallersInput } from "./tool-error-fields.js";
 import { PRE_PAYMENT_WIRES, meteredPrePaymentRefusal } from "./gateway-prepayment.js";
 import { createPrePaymentRefusalRecorder, createPrePaymentLogSampler, stripControlChars, withPushExceptionText } from "./prepayment-refusal.js";
 import { shapeRefusal } from "./input-aliases.js";
@@ -400,6 +400,8 @@ import { initAnalyticsDb, recordToolCall, getAnalytics, analyticsEnabled, redact
 import { databasesStatus } from "./db-status.js";
 import { initWithRetry } from "./db-init-retry.js";
 import { railOf, outcomeRailOf } from "./payment-rail.js";
+import { noteVerifiedPaidOutcome, errorTextOf, attributionTextOf, topBuyerFailuresStatus, startTopBuyerRefresh, topRefreshMs } from "./top-buyer-failures.js";
+import { nonEvmPayerFromRequest } from "./non-evm-payer.js";
 import { initPostHog, capturePostHogWrongMethod, capturePostHogToolError, capturePostHogToolCall, telemetryKeyOf, capturePostHogDiscovery, capturePostHogPaywall, capturePostHogPowChallenge, capturePostHogSettlement, capturePostHogChargedFailure, capturePostHogSettleFailed, capturePostHogToolGone, toolGoneSourceOf, capturePostHogHumanFunnel, shutdownPostHog, posthogEnabled } from "./posthog.js";
 import { analyticsPage } from "./analytics-page.js";
 import { operatorPage, operatorLoginPage } from "./operator.js";
@@ -454,7 +456,7 @@ import { acpFeed, acpManifest } from "./acp.js";
 import { findTools, findRelatedSellers, markWeakMatches, markMissRows } from "./find.js";
 import { buildPlanSketch } from "./plan-sketch.js";
 import { recordWish, getWishesAggregate, annotateServedAsync, WISH_SERVED_MIN_SCORE, startWishRotation } from "./wish.js";
-import { setAlgorandCrawlSources } from "./algorand-sellers.js";
+import { setAlgorandCrawlSources, makeIndexerInboundCount } from "./algorand-sellers.js";
 import { priceToMicroUsd, sellerRouteUrl, isUrlTemplateRoute } from "./x402-index.js";
 import { priceUsdOf } from "./price-usd.js";
 import { submissionSlotStatus } from "./x402-index.js";
@@ -489,7 +491,7 @@ const decideLedger = () => {
 if (stateDbEnabled()) decideLedger();
 import { settlePreferenceMiddleware } from "./settle-preference.js";
 import { fromUsdOf } from "./quoted-from.js";
-import { NETWORKS as PAY_NETWORKS, priceForNetwork, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, onRailRestored, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, robinhoodOrderView, robinhoodSettlerStatus, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem, gatewayPendingStatus, gatewayPendingBookForOperator } from "./payments.js";
+import { NETWORKS as PAY_NETWORKS, priceForNetwork, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, gatewayBatchedRailStatus, onRailRestored, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, robinhoodOrderView, robinhoodSettlerStatus, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem, gatewayPendingStatus, gatewayPendingBookForOperator } from "./payments.js";
 import { GATEWAY_WIRE, gatewayBalanceStatus, gatewayOfferPublic, gatewayOfferNetworkNames, gatewayOfferedOn, isGatewayBatchedRequest } from "./gateway-nanopayments.js";
 import { isGatewayWire, isGatewayPendingAnswer } from "./gateway-wire.js";
 import { networkFloorUsd } from "./network-floors.js";
@@ -618,7 +620,7 @@ const GATEWAY_TOOLS_ENABLED = [
   // OpenAI Responses wire on the same five tiers (src/tools/llm-responses-kit.js).
   ...LLM_RESPONSES_TOOLS,
 ];
-import { IMAGE_GEN_TOOLS } from "./tools/image-gen-kit.js";
+import { IMAGE_GEN_TOOLS, imageModerationStats } from "./tools/image-gen-kit.js";
 import { CODE_RUN_TOOLS } from "./tools/code-run-kit.js";
 import { TTS_TOOLS, elevenLabsBreakerState } from "./tools/tts-kit.js";
 // Translate-and-speak: composes the chat gateway and the tts kit in-process (src/tools/dub-kit.js).
@@ -732,7 +734,7 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, payerHasPaidSale, firstPaidSaleAfterAsync } from "./sales-ledger.js";
+import { topExternalPayersAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, payerHasPaidSale, firstPaidSaleAfterAsync } from "./sales-ledger.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
@@ -2381,7 +2383,7 @@ let operatorDossier = null;
       return { verified: seller.verified === true, lastProbeOk: seller.lastProbeOk === true, offers: seller.offers || [], recipients: rows };
     },
     getRefusals: (origin) => spendChainsConfigured()
-      .map((chain) => { const r = sellerRefusedRecently(origin, chain); return r ? { chain, at: r.at, status: r.status } : null; })
+      .map((chain) => { const r = sellerRefusedRecently(origin, chain); return r ? { chain, at: r.at, status: r.status, kind: r.kind || null } : null; })
       .filter(Boolean),
     getDeliveryFailures: (origin) => spendChainsConfigured()
       .map((chain) => { const f = sellerDeliveryFailingRecently(origin, chain); return f ? { chain, at: f.at, status: f.status, ms: f.ms } : null; })
@@ -2584,7 +2586,7 @@ installEgressMeter();
     try { workerHost = new URL(workerUrlAtBoot).host; } catch { /* registerUpstreamHost already parsed it */ }
     setWorkerOutcomeObserver((kind, status) => { monitor.noteUpstream(workerHost, kind, { origin: originNow(), status }); });
   }
-  setEgressOutcomeObserver((host, p, init, path) => { monitor.observeFetch(host, p, init, originNow(), path); });
+  setEgressOutcomeObserver((host, p, init, path) => { const scope = currentRequestScope(); monitor.observeFetch(host, p, init, originNow(), path, scope ? () => scope.callerKey : null); });
   // Identical answers (operator detail): live-data slugs only. A pure-CPU
   // tool answers the same bytes to the same input by design, and the memory
   // and identity-bound reads answer each payer from its own store.
@@ -3090,6 +3092,11 @@ startRedisPersistenceMonitor();
 // the store shortly after boot and then on a timer, so sharedLimits on
 // /api/gateway-status is measured (on / memory / degraded), never assumed.
 startSharedLimitsProbe();
+// The top outside payers by paid spend (src/top-buyer-failures.js), read from
+// the sales ledger shortly after boot and then on a timer, never on a
+// request's path: topBuyerFailures on /api/gateway-status watches their
+// verified paid calls for failures.
+if (!FREE_MODE) startTopBuyerRefresh({ read: async (o) => { await salesLedgerReady(); return topExternalPayersAsync(o); }, isOwn: (p) => isOwnWallet(p), firstMs: Math.min(5_000, topRefreshMs()) });
 // Per-tool and per-upstream failure detail (src/tool-failure-monitor.js):
 // slugs, classes, last messages, upstream outcomes, facilitator refusals.
 // onchainSqlQueries: per UTC day, how many upstream queries onchain-sql calls
@@ -3100,11 +3107,14 @@ startSharedLimitsProbe();
 // transcription files this process could not measure by decoding since boot
 // (a busy or slow decode, no ffmpeg), which the cap then read from the
 // declared length or the byte floor (src/tools/stt-kit.js; a count only).
+// imageGenModeration: image-gen renders and content-check refusals by the
+// moderation level sent, and requests sent again without the parameter, since
+// boot (src/tools/image-gen-kit.js; counts only).
 app.get("/__operator/tool-failures.json", async (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   const onchainSqlQueries = await sqlQueryStatsReport().catch(() => null);
   const xSearchAuthors = await xSearchStatsReport().catch(() => null);
-  res.set("Cache-Control", "private, no-store").json({ ...(await toolFailureMonitor().report()), robinhoodOrder: robinhoodOrderView(), chainRefusalHolds: chainRefusalHolds(), onchainSqlQueries, xSearchAuthors, transcriptionUnmeasured: { sinceBoot: sttUnmeasuredSinceBoot() } });
+  res.set("Cache-Control", "private, no-store").json({ ...(await toolFailureMonitor().report()), robinhoodOrder: robinhoodOrderView(), chainRefusalHolds: chainRefusalHolds(), onchainSqlQueries, xSearchAuthors, transcriptionUnmeasured: { sinceBoot: sttUnmeasuredSinceBoot() }, imageGenModeration: imageModerationStats() });
 });
 // Upstream queries per onchain-sql call (src/sql-query-stats.js): per UTC day,
 // calls by the queries each sent (0 to the call budget) and by how the call
@@ -4188,9 +4198,12 @@ app.get("/api/gateway-status", async (req, res) => {
     // a secret is configured for the operator.
     cdnOrigin: cdnOriginStatus({ full }),
     // Per-tool and per-upstream failure counts (src/tool-failure-monitor.js):
-    // toolFailures and upstreamHealth read ok / degraded / failing over the
+    // toolFailures reads ok / degraded / failing, and upstreamHealth ok /
+    // degraded / failing / unanswered (our limit passed on one upstream for
+    // several callers, src/unanswered-rule.js), over the
     // last hour; facilitatorFunds reads ok / low (a facilitator's settlement
-    // signer is short of gas, src/facilitator-gas.js) / refused (an
+    // signer is short of gas, src/facilitator-gas.js) / unknown (a signer's
+    // balance could not be read; pages nothing) / refused (an
     // out-of-funds or billing settle refusal inside the hour) / demoted (a
     // facilitator in its settle cool-down). One word each publicly; slugs, upstreams and counts
     // are on /__operator/tool-failures.json.
@@ -4226,6 +4239,16 @@ app.get("/api/gateway-status", async (req, res) => {
     // the indexed origins and the rule are on the operator view; origins on
     // /__operator/perf.json.
     brokenListings: (() => { try { return brokenListingsStatus({ full }); } catch { return { status: "unknown" }; } })(),
+    // topBuyerFailures reads alert while one of the top outside payers by
+    // paid spend (TOP_BUYERS_COUNT over TOP_BUYERS_DAYS, from the sales
+    // ledger) has TOP_BUYER_FAIL_MIN or more non-2xx final answers to
+    // verified paid requests inside TOP_BUYER_FAIL_WINDOW_MS, held
+    // TOP_BUYER_FAIL_HOLD_MS after the failure that met the rule; ok
+    // otherwise, unknown before the first read of the top payers, off in
+    // FREE_MODE (src/top-buyer-failures.js). The word publicly; per alerting
+    // payer its short id, spend rank, tools, statuses, times and our error
+    // text for the operator. An alarm only: nothing is refused for it.
+    topBuyerFailures: await topBuyerFailuresStatus({ full, off: FREE_MODE }),
     // robinhoodSettler reads ok while the listed Robinhood Chain facilitator
     // settles first, relayer once our own relayer has settled first in its
     // place (src/robinhood-order.js: its signer read dry) for longer than
@@ -7228,6 +7251,17 @@ app.get("/.well-known/x402", serveManifest);
 // Public on purpose: the 402 already advertises the offered set, so this adds
 // no secret. It adds the part that was invisible. `degraded` non-zero means one
 // chain is down, not the service.
+function gatewayBatchedRailField() {
+  const st = gatewayBatchedRailStatus();
+  const live = gatewayOfferPublic();
+  if (!st && !live) return {};
+  return {
+    gatewayBatched: {
+      ...(live ? { kind: live.kind, networks: gatewayOfferNetworkNames(), settlement: live.settlement } : { networks: [] }),
+      ...(st ? { status: st.status, dropped: st.dropped } : {}),
+    },
+  };
+}
 app.get("/api/rails", (_req, res) => {
   const rails = railStatus();
   const offered = rails.filter((r) => r.offered);
@@ -7248,10 +7282,12 @@ app.get("/api/rails", (_req, res) => {
     // sub-cent allowance is spent (src/avm-sponsorship.js). Status words and
     // times only. Empty when nothing is restricted.
     restrictions: avmSubcentOfferStatus(),
-    // The Circle Gateway batched option, where it is live: one more accept on
-    // these networks beside the plain one (src/gateway-nanopayments.js).
-    // Absent while it is off.
-    ...(gatewayOfferPublic() ? { gatewayBatched: { kind: gatewayOfferPublic().kind, networks: gatewayOfferNetworkNames(), settlement: gatewayOfferPublic().settlement } } : {}),
+    // The Circle Gateway batched option while it is switched on: one more
+    // accept beside the plain one where it is live (src/gateway-nanopayments.js),
+    // and status offered / partial / dropped with each network the boot read
+    // left out and its reason word (railStatus's words, plus not-in-offer), so
+    // a dropped option reaches the heartbeat's rail check. Absent while off.
+    ...gatewayBatchedRailField(),
   });
 });
 app.get("/api/reliability", async (_req, res) =>
@@ -11793,6 +11829,39 @@ function answerContractFor(def) {
   if (!c) { c = answerContractOf(def, { deterministic: isComputePayable(def) }); answerContracts.set(def, c); }
   return c;
 }
+// The payer a verified paid request's gate proved, for the top-buyer failure
+// alarm, in the form the sales ledger books it (so it matches a ledger row):
+// the signed EVM `from` (lowercased), the Tempo sender the gate proved, the
+// facilitator's settle receipt, else the signer of the signed Solana,
+// Algorand or Stellar transaction (src/non-evm-payer.js, case kept). A
+// credits key and a card (Stripe) payment name no wallet: the ledger books
+// those sales with no payer (normalizePayerAddress), so neither can rank as
+// a top payer and neither is recorded. Read after the response closed, never
+// on the request's path.
+async function verifiedPayerOf(req, res) {
+  const rail = railOf(req);
+  if (rail === "credits" || rail === "mpp-stripe") return null;
+  if (rail === "mpp-tempo") {
+    await new Promise((done) => { whenTempoLedgerPayerKnown(req, "top-buyers", done); });
+    return normalizePayerAddress(tempoLedgerPayer(req));
+  }
+  const evm = payerFromRequest(req);
+  if (evm) return evm;
+  const receipt = res.getHeader("PAYMENT-RESPONSE") || res.getHeader("X-PAYMENT-RESPONSE");
+  const fromReceipt = payerFromPaymentResponse(String(receipt || ""));
+  if (fromReceipt) return fromReceipt;
+  const signer = await nonEvmPayerFromRequest(req);
+  return signer ? normalizePayerAddress(signer.slice(signer.indexOf(":") + 1)) : null;
+}
+function noteTopBuyerFailure(req, res, slug, status, answer) {
+  let error = null, attribution = null;
+  try { error = answer?.has?.() ? errorTextOf(answer.body()) : null; } catch { error = null; }
+  try { attribution = answer?.has?.() ? attributionTextOf(answer.body()) : null; } catch { attribution = null; }
+  const at = Date.now();
+  verifiedPayerOf(req, res).then((payer) => {
+    if (payer && !isOwnWallet(payer)) noteVerifiedPaidOutcome({ payer, slug, status, error, attribution, at });
+  }, () => {});
+}
 function noteToolOutcomeOnClose(req, res, slug, def = null) {
   if (req.__a402OutcomeNoted) return;
   req.__a402OutcomeNoted = true;
@@ -11808,6 +11877,9 @@ function noteToolOutcomeOnClose(req, res, slug, def = null) {
       // Free (proof-of-work, trial) outcomes count on their own lane, which
       // the toolFailures word does not read.
       toolFailureMonitor().noteTool(slug, status, { synthetic, shed: !!res.locals?.shed || drainSignal().aborted, path: salePathOf(req), rail: outcomeRailOf(req, res) });
+      // A verified paid request (past every gate, src/top-buyer-failures.js)
+      // whose final answer was not a 2xx, under the payer its gate proved.
+      if (!synthetic && (status < 200 || status >= 300) && ownTrue(req, "__a402Dispatched")) noteTopBuyerFailure(req, res, slug, status, answer);
       if (answer && status === 200) {
         const { klass, reasons } = answer.has() ? classifyAnswer(answerContractFor(def), answer.body()) : { klass: "unchecked", reasons: ["not-json"] };
         toolFailureMonitor().noteAnswer(slug, klass, { synthetic, reasons });
@@ -12392,10 +12464,10 @@ for (const tool of ALL_KIT) {
       // carried them, `Retry-After` is set when the upstream named one, and a
       // failure attributed upstream does NOT get the schema hint, because
       // re-reading the schema cannot fix a host that is throttling us.
-      const upstreamStatus = Number.isInteger(err?.upstreamStatus) ? err.upstreamStatus : null;
-      const attribution = typeof err?.attribution === "string" ? err.attribution
-        : upstreamStatus ? "upstream" : null;
-      const fromUpstream = attribution === "upstream" || attribution === "upstream-access";
+      // The attribution vocabulary (src/upstream-deadline.js): any side but
+      // the caller's ("upstream", "upstream-access", "ours", "unknown") is
+      // not the input, so no schema hint.
+      const fromUpstream = notCallersInput(err, 0);
       if (Number.isInteger(err?.retryAfter)) res.set("Retry-After", String(err.retryAfter));
       // A refusal for capacity (a full worker queue) is shed load, not a tool failure.
       if (err?.shed === true) res.locals.shed = true;
@@ -12878,14 +12950,9 @@ bootStep("setAlgorandCrawlSources", () => {
       }
       return out;
     },
-    countInbound: async (payTo) => {
-      const r = await getJsonAcross(ALGORAND_INDEXER_BASES, `/v2/accounts/${payTo}/transactions?asset-id=31566704&tx-type=axfer&limit=200`, { timeoutMs: 8000 });
-      if (!r.ok) return 0;
-      const txs = r.json?.transactions || [];
-      // Inbound only, and never the seller paying itself: the same rule the
-      // Base credit read applies (balance rose AND a non-self account paid).
-      return txs.filter((t) => t?.["asset-transfer-transaction"]?.receiver === payTo && t?.sender !== payTo).length;
-    },
+    // The indexer's 404 is a definite 0; any other read that did not
+    // complete is unknown (src/algorand-sellers.js makeIndexerInboundCount).
+    countInbound: makeIndexerInboundCount(getJsonAcross, ALGORAND_INDEXER_BASES),
   });
 });
 bootStep("startLeaderboardRefresh", () => startLeaderboardRefresh({

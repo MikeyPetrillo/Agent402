@@ -21,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { ownStoreEnv } from "./lib/own-stores.js";
 import { getFreePort } from "./lib/free-port.js";
 
@@ -334,6 +335,125 @@ setEnv(ON);
   D._setDirectBreakerNowForTest(null);
   setEnv(ON);
 }
+// Our own timeout on a long prompt (at or past HEAVY_INPUT_SHARE of the
+// tier's input cap) and a lookup our resolver could not finish are not the
+// upstream's answer: any number of them leaves the breaker closed and the next
+// call still goes direct. A refused connection, a host name that does not
+// resolve, and our own timeout on a short prompt count.
+{
+  setEnv({ ...ON, DIRECT_UPSTREAM_BREAKER_FAILS: "2", DIRECT_UPSTREAM_BREAKER_OPEN_MS: "60000" });
+  const longMsgs = [{ role: "user", content: "x".repeat(Math.ceil(K.maxInputCharsFor("v1-chat", MODEL) * 0.6)) }];
+  const failWith = (code) => async (url, init, prevFetch) => {
+    if (String(url) === `${DIRECT_BASE}/chat/completions`) {
+      direct.hits.push({ url: String(url) });
+      if (!code) throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+      throw Object.assign(new TypeError("fetch failed"), { cause: { code } });
+    }
+    return prevFetch(url, init);
+  };
+  const runWith = async (code, n, messages) => {
+    reset();
+    const prevFetch = globalThis.fetch;
+    const f = failWith(code);
+    globalThis.fetch = (url, init) => f(url, init, prevFetch);
+    try { for (let i = 0; i < n; i++) await base.handler({ model: MODEL, messages, max_tokens: 32 }); }
+    finally { globalThis.fetch = prevFetch; }
+  };
+  for (const [label, code, messages] of [["our own timeout on a long prompt", null, longMsgs], ["our resolver not finishing a lookup", "EAI_AGAIN", msgs]]) {
+    await runWith(code, 4, messages);
+    ok(direct.hits.length === 4 && or.hits.length === 4 && !D.directBreakerState().open && D.directBreakerState().fails === 0, `${label} four times: the breaker stays closed and every call still goes direct (direct ${direct.hits.length}, fails ${D.directBreakerState().fails})`);
+  }
+  for (const [label, code] of [["two connections the upstream's host refused", "ECONNREFUSED"], ["two lookups answered no such name", "ENOTFOUND"], ["two of our timeouts on a short prompt", null]]) {
+    await runWith(code, 2, msgs);
+    ok(D.directBreakerState().open, `${label} open the breaker (fails ${D.directBreakerState().fails})`);
+    const dBefore = direct.hits.length;
+    await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 });
+    ok(direct.hits.length === dBefore, `and the next call goes to OpenRouter without a direct attempt (${label})`);
+  }
+  D._setDirectBreakerNowForTest(null);
+  setEnv(ON);
+}
+// Our own timeout on a light call counts only when the attempt ran the full
+// configured direct timeout. A buyer whose payment authorization is close to
+// its end gets a shorter attempt (paymentWindowTimeoutMs): its timeouts say
+// nothing about the upstream and never count, however many. A large output
+// cap (DIRECT_HEAVY_OUTPUT_TOKENS) is a heavy call: one buyer's timeouts on it
+// do not count either.
+{
+  setEnv({ ...ON, DIRECT_UPSTREAM_TIMEOUT_MS: "60000", DIRECT_UPSTREAM_BREAKER_OPEN_MS: "60000" });
+  const timeoutFetch = (prevFetch) => async (url, init) => {
+    if (String(url) === `${DIRECT_BASE}/chat/completions`) {
+      direct.hits.push({ url: String(url) });
+      throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    }
+    return prevFetch(url, init);
+  };
+  // A buyer-signed EVM exact authorization whose validBefore leaves ~24 s of
+  // settleable life: the direct attempt is clamped well under 60 s, and the
+  // OpenRouter attempt after it still has room to start.
+  const windowReq = () => {
+    const vb = Math.floor(Date.now() / 1000) + 30;
+    const payload = { x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453" }, payload: { signature: "0x" + "1".repeat(130), authorization: { from: "0x" + "a".repeat(40), to: "0x" + "b".repeat(40), value: "1000", validAfter: "0", validBefore: String(vb), nonce: "0x" + randomBytes(32).toString("hex") } } };
+    const hdr = Buffer.from(JSON.stringify(payload)).toString("base64");
+    return { headers: { "payment-signature": hdr }, get(h) { return this.headers[String(h).toLowerCase()]; }, header(h) { return this.get(h); } };
+  };
+  const clampedMs = K.paymentWindowTimeoutMs(windowReq(), 60_000);
+  ok(clampedMs > 0 && clampedMs < 60_000, `a short authorization clamps the attempt under the configured direct timeout (${clampedMs} ms)`);
+  const run = async (n, { max_tokens = 32, withReq = false } = {}) => {
+    reset();
+    const prevFetch = globalThis.fetch;
+    globalThis.fetch = timeoutFetch(prevFetch);
+    const states = [];
+    try {
+      for (let i = 0; i < n; i++) {
+        await base.handler({ model: MODEL, messages: msgs, max_tokens }, withReq ? windowReq() : undefined);
+        states.push(D.directBreakerState().open ? "open" : "closed");
+      }
+    } finally { globalThis.fetch = prevFetch; }
+    return states;
+  };
+  const quietWarn = async (fn) => { const w = console.warn; console.warn = () => {}; try { return await fn(); } finally { console.warn = w; } };
+  let states = await quietWarn(() => run(5, { withReq: true }));
+  ok(direct.hits.length === 5 && states.every((x) => x === "closed") && D.directBreakerState().fails === 0, `five clamped short-prompt timeouts from one buyer never count (direct ${direct.hits.length}, fails ${D.directBreakerState().fails}, ${states.join(" ")})`);
+  states = await quietWarn(() => run(3));
+  ok(states.join(" ") === "closed closed open", `three full-length short-prompt timeouts open the breaker by the third (${states.join(" ")})`);
+  ok(D.DIRECT_HEAVY_OUTPUT_TOKENS > 32 && D.DIRECT_HEAVY_OUTPUT_TOKENS <= K.TIERS["v1-chat"].maxTokens, `the heavy output threshold sits inside the tier's output cap (${D.DIRECT_HEAVY_OUTPUT_TOKENS})`);
+  states = await quietWarn(() => run(4, { max_tokens: D.DIRECT_HEAVY_OUTPUT_TOKENS }));
+  ok(direct.hits.length === 4 && states.every((x) => x === "closed") && D.directBreakerState().fails === 0, `four full-length timeouts on a large output cap (max_tokens ${D.DIRECT_HEAVY_OUTPUT_TOKENS}) count as heavy and leave the breaker closed (direct ${direct.hits.length}, fails ${D.directBreakerState().fails})`);
+  reset();
+  for (let i = 0; i < 4; i++) D.noteDirectOutcome(false, "timeout", "caller-clamped", { clamped: true });
+  ok(!D.directBreakerState().open && D.directBreakerState().fails === 0, "the outcome reader ignores clamped timeouts");
+  ok(D.directHeavyOutput({ max_completion_tokens: D.DIRECT_HEAVY_OUTPUT_TOKENS }) && !D.directHeavyOutput({ max_tokens: D.DIRECT_HEAVY_OUTPUT_TOKENS - 1 }), "max_completion_tokens reads as the output cap too");
+  // Clamped timeouts still feed the unanswered rule (many calls, several
+  // callers): a hung link whose every caller is on a short window opens.
+  reset();
+  await quietWarn(async () => { for (let i = 0; i < 30; i++) D.noteDirectOutcome(false, "timeout", `caller-clamped-${i % 10}`, { clamped: true }); });
+  ok(D.directBreakerState().open && D.directBreakerState().opens >= 1 && D.directBreakerState().fails === 0, `clamped timeouts from ten callers open the breaker through the unanswered rule (opens ${D.directBreakerState().opens}, fails ${D.directBreakerState().fails})`);
+  reset();
+  await quietWarn(async () => { for (let i = 0; i < 30; i++) D.noteDirectOutcome(false, "timeout", "caller-clamped-one", { clamped: true }); });
+  ok(!D.directBreakerState().open && D.directBreakerState().opens === 0 && D.directBreakerState().fails === 0, "thirty clamped timeouts from one caller leave it closed");
+  setEnv(ON);
+}
+// A configured direct timeout above the route's default: the attempt runs
+// the default (attemptTimeoutMs takes the lower), and with no payment window
+// that is the full unclamped length, so its timeouts count.
+{
+  ok(!K.directAttemptClamped(K.UPSTREAM_TIMEOUT_MS, K.UPSTREAM_TIMEOUT_MS + 30_000, K.UPSTREAM_TIMEOUT_MS) && K.directAttemptClamped(K.UPSTREAM_TIMEOUT_MS - 1, K.UPSTREAM_TIMEOUT_MS + 30_000, K.UPSTREAM_TIMEOUT_MS) && K.directAttemptClamped(399, 400, K.UPSTREAM_TIMEOUT_MS), "clamped compares against the lower of the direct timeout and the route default");
+  setEnv({ ...ON, DIRECT_UPSTREAM_TIMEOUT_MS: String(K.UPSTREAM_TIMEOUT_MS + 30_000), DIRECT_UPSTREAM_BREAKER_OPEN_MS: "60000" });
+  reset();
+  const prevFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url) === `${DIRECT_BASE}/chat/completions`) { direct.hits.push({ url: String(url) }); throw new DOMException("The operation was aborted due to timeout", "TimeoutError"); }
+    return prevFetch(url, init);
+  };
+  const states = [];
+  const w = console.warn; console.warn = () => {};
+  try {
+    for (let i = 0; i < 3; i++) { await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 }); states.push(D.directBreakerState().open ? "open" : "closed"); }
+  } finally { globalThis.fetch = prevFetch; console.warn = w; }
+  ok(direct.hits.length === 3 && states.join(" ") === "closed closed open", `a direct timeout set above the route default: three full-length light timeouts open the breaker by the third (${states.join(" ")})`);
+  setEnv(ON);
+}
 // A refusal of the request itself (any 4xx but auth, quota, capacity and a
 // missing endpoint) is the buyer's request, which OpenRouter refuses too: it
 // never opens the breaker, the word stays ok, honest traffic keeps going direct.
@@ -403,6 +523,50 @@ setEnv(ON);
   D.noteDirectOutcome(true);
   ok(!D.directBreakerState().open && !D.directBreakerState().halfOpen, "a success closes it");
   D._setDirectBreakerNowForTest(null);
+  setEnv(ON);
+}
+// Our own timeout on the direct link on a SHORT prompt counts toward the
+// breaker: one caller is moved to OpenRouter by the third (default threshold).
+// On a LONG prompt, several callers in a row (src/unanswered-rule.js, defaults
+// 5 calls, 3 callers, 15 minutes, no answer between) open the breaker so the
+// next callers go to OpenRouter; one caller's long prompts, or an answer
+// between, do not.
+{
+  setEnv({ ...ON, DIRECT_UPSTREAM_BREAKER_OPEN_MS: "60000" });
+  reset();
+  const shortStates = [];
+  {
+    const warned = [];
+    const realWarn = console.warn;
+    console.warn = (...a) => { warned.push(a.join(" ")); };
+    try {
+      for (let i = 0; i < 3; i++) { D.noteDirectOutcome(false, "timeout", "caller-short"); shortStates.push(D.directBreakerState().open ? "open" : "closed"); }
+    } finally { console.warn = realWarn; }
+    ok(shortStates.join(" ") === "closed closed open" && !D.directBreakerAllows(), `three of our timeouts on one caller's short prompt open the breaker by the third (${shortStates.join(" ")})`);
+    const sl = warned.find((w) => w.startsWith("[direct-upstream]"));
+    ok(!!sl && /did not answer within our limit on a short prompt/.test(sl) && !/fail(?!ures)|outage|is down/i.test(sl), `the log line is neutral (${sl})`);
+  }
+  reset();
+  for (let i = 0; i < 8; i++) D.noteDirectOutcome(false, "timeout", "caller-long", { heavy: true });
+  ok(!D.directBreakerState().open && D.directBreakerAllows(), "eight of our timeouts on one caller's long prompts leave the direct link in use");
+  reset();
+  for (let i = 0; i < 4; i++) D.noteDirectOutcome(false, "timeout", `caller-${i}`, { heavy: true });
+  D.noteDirectOutcome(true);
+  for (let i = 0; i < 4; i++) D.noteDirectOutcome(false, "timeout", `caller-${i + 4}`, { heavy: true });
+  ok(!D.directBreakerState().open, "an answer between clears the count");
+  reset();
+  const warned = [];
+  const realWarn = console.warn;
+  console.warn = (...a) => { warned.push(a.join(" ")); };
+  try {
+    for (let i = 0; i < 5; i++) D.noteDirectOutcome(false, "timeout", `caller-${i % 3}`, { heavy: true });
+  } finally { console.warn = realWarn; }
+  ok(D.directBreakerState().open && !D.directBreakerAllows(), "five of our timeouts from three callers open the breaker");
+  const line = warned.find((w) => w.startsWith("[direct-upstream]"));
+  ok(!!line && /did not answer within our limit on 5 calls from 3 callers/.test(line) && !/fail|outage|is down/i.test(line), `the log line is neutral (${line})`);
+  const before = or.hits.length, dBefore = direct.hits.length;
+  await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 });
+  ok(direct.hits.length === dBefore && or.hits.length === before + 1, "and the next call goes to OpenRouter without a direct attempt");
   setEnv(ON);
 }
 // A half-open trial granted to a call whose payment window cannot fit an

@@ -14,11 +14,23 @@
 //              word). Each outcome carries its payment rail, counted per rail
 //              as operator detail.
 //   upstreams  per named upstream host, every outbound fetch the egress
-//              meter sees, by outcome: ok, s5xx, timeout, network (refused or
-//              reset before an answer), throttled (429), aborted (the caller
-//              canceled: a buyer who left, a drain). Split by origin:
-//              outside (inside a buyer's request), synthetic, background (no
-//              request: warmers, crawlers, timers).
+//              meter sees, by outcome: ok, s5xx, timeout (the transport's own
+//              connect or socket timeout), network (refused or reset before
+//              an answer, or a host name that does not resolve), throttled (429), aborted (the caller canceled: a
+//              buyer who left, a drain), deadline (our own deadline passed:
+//              an AbortSignal.timeout of ours, a health check's limit, a
+//              handler budget) and egress (our side could not finish a
+//              lookup or route to the host: resolver, no route). aborted, deadline and egress
+//              prove nothing about the upstream: they are shown on the
+//              operator view and never counted as its failure. One pattern of
+//              them is read: our deadline firing on ONE upstream on many
+//              calls from several callers in a window while another upstream
+//              answers in the same buckets (src/unanswered-rule.js) reads
+//              upstreamHealth unanswered ("did not answer within our limit");
+//              most upstreams held at once is our side and names none
+//              (ourSide). Split by
+//              origin: outside (inside a buyer's request), synthetic,
+//              background (no request: warmers, crawlers, timers).
 //   facilitator refusals  a settle refused for an out-of-funds or billing
 //              class, per network and facilitator label.
 //   answers    per slug, every final 200 of a catalog route, by what the body
@@ -89,12 +101,23 @@ import { ANSWER_CLASSES, identicalAnswerFlags } from "./answer-shape.js";
 import { registerMemoryStore } from "./memory-stores.js";
 import { salePathGroup } from "./sale-path.js";
 import { positiveNum as num } from "./env-num.js";
+import { unansweredSettings, callerOf } from "./unanswered-rule.js";
+
+// The cap src/upstream-deadline.js records on the signal it sends (the same
+// registered symbol, read here without importing that module).
+const LIMIT_MS = Symbol.for("agent402.upstreamLimitMs");
+const HEAVY_INPUT_MARK = Symbol.for("agent402.upstreamHeavyInput");
+const secondsOfMs = (ms) => String(Math.max(1, Math.round(ms / 1000)));
 
 export const BUCKET_MS = 5 * 60_000;
 export const DAY_MS = 24 * 3_600_000;
 const HOUR_MS = 3_600_000;
 export const TOOL_CLASSES = ["ok", "buyer", "fail", "timeout", "payment", "gone", "shed"];
-export const UPSTREAM_KINDS = ["ok", "s5xx", "timeout", "network", "throttled", "aborted"];
+// Appended only: replicas publish these as positional arrays, so an older
+// replica's snapshot (fewer kinds) still merges.
+export const UPSTREAM_KINDS = ["ok", "s5xx", "timeout", "network", "throttled", "aborted", "deadline", "egress"];
+/** The kinds upstreamHealth counts as the upstream's own failure. */
+export const UPSTREAM_FAILURE_KINDS = Object.freeze(["s5xx", "timeout", "network"]);
 export const WORDS = ["ok", "degraded", "failing"];
 export const REPLAY_KINDS = ["implicit", "keyed"];
 /** Pending-settle outcomes (src/pending-settle.js), in count order. */
@@ -140,6 +163,10 @@ export function thresholds(env = process.env) {
     // A settlement signer's gas reading (src/facilitator-gas.js) counts while
     // it is this recent; an older one (its checker stopped) counts for nothing.
     gasFreshMs: num(env.FACILITATOR_GAS_FRESH_MS, 45 * 60_000),
+    // facilitatorFunds=unknown (a signer balance our checker could not read)
+    // pages nothing for a short spell; held this long it reads
+    // alert=sustained, which pages under its own neutral title.
+    gasUnreadPageMs: num(env.FACILITATOR_UNREAD_PAGE_HOURS, 6) * HOUR_MS,
     // toolAnswers degraded: one slug's outside empty + error-shaped share of
     // its checked 200s (ok + empty + error-shaped) at or above this rate,
     // over at least answerMinHour checked in 1 h or answerMinDay in 24 h.
@@ -169,11 +196,23 @@ export function toolClassOf(status, { shed = false } = {}) {
 }
 
 const TIMEOUT_CODES = new Set(["UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT", "ETIMEDOUT", "ESOCKETTIMEDOUT"]);
+// Our side could not finish a lookup or route to the host: no answer from it
+// at all. A name answered "no such name" (ENOTFOUND, EAI_NONAME, EAI_NODATA)
+// is not here: the host's own name not resolving counts as `network`, so a
+// vendor whose domain stops resolving still drives upstreamHealth.
+const EGRESS_CODES = new Set(["EAI_AGAIN", "EAI_FAIL", "ESERVFAIL", "EREFUSED", "ETIMEOUT", "ECANCELLED", "EDNSLOOKUPTIMEOUT", "EDNSUNAVAILABLE", "ENETUNREACH", "ENETDOWN", "EHOSTUNREACH", "EADDRNOTAVAIL"]);
 /** The outcome of an outbound fetch from its rejection (or null for a response). */
 export function upstreamKindOfError(err, init) {
   const reason = init?.signal?.reason;
   const code = err?.cause?.code || err?.code;
-  if (err?.name === "TimeoutError" || reason?.name === "TimeoutError" || TIMEOUT_CODES.has(code)) return "timeout";
+  // An error already classed by src/upstream-deadline.js: every class but
+  // "unreachable" is a deadline of ours (its cap, the handler budget).
+  if (typeof err?.upstreamFailure === "string" && err.upstreamFailure !== "unreachable") return "deadline";
+  // A TimeoutError is an AbortSignal.timeout of ours firing (a per-read cap,
+  // a health check's limit), not an answer from the upstream.
+  if (err?.name === "TimeoutError" || reason?.name === "TimeoutError") return "deadline";
+  if (TIMEOUT_CODES.has(code)) return "timeout";
+  if (EGRESS_CODES.has(code)) return "egress";
   if (err?.name === "AbortError" || reason) return "aborted";
   return "network";
 }
@@ -353,7 +392,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     lastToolError.set(s, { at, status: Number(status), message: String(message || "").slice(0, 200), synthetic: !!synthetic });
   }
 
-  function noteUpstream(host, kind, { origin = "background", status = null, at = now(), path = null } = {}) {
+  function noteUpstream(host, kind, { origin = "background", status = null, at = now(), path = null, caller = null, limitMs = null, heavy = false } = {}) {
     const name = upstreamNameOf(host, path);
     if (!name || !UPSTREAM_KINDS.includes(kind)) return null;
     let m = upstreams.get(name);
@@ -363,7 +402,19 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     if (!row) { row = { o: emptyUp(), s: emptyUp(), b: emptyUp() }; m.set(b, row); prune(m, at); }
     const lane = origin === "synthetic" ? "s" : origin === "outside" ? "o" : "b";
     row[lane][UPSTREAM_KINDS.indexOf(kind)]++;
-    if (kind !== "ok") lastUpstream.set(name, { at, kind, host: String(host).slice(0, 120), status });
+    // Who our deadline fired for (a caller key, never an address), outside
+    // the synthetic lane: the unanswered rule needs several callers.
+    if (kind === "deadline" && lane !== "s") {
+      const c = callerOf(caller);
+      const dc = (row.dc ||= []);
+      if (dc.length < 32 && !dc.includes(c)) dc.push(c);
+      // A deadline on an input long enough to outlast our limit (`hv`): it
+      // still counts toward the several-callers rule, never toward the rule
+      // that needs no second caller.
+      if (heavy) row.hv = (row.hv || 0) + 1;
+    }
+    const limit = kind === "deadline" && Number(limitMs) > 0 ? Math.round(Number(limitMs)) : null;
+    if (kind !== "ok") lastUpstream.set(name, { at, kind, host: String(host).slice(0, 120), status, ...(limit ? { limitMs: limit } : {}) });
     return name;
   }
 
@@ -417,7 +468,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
   }
 
   /** Observe one outbound fetch (the egress meter's observer). */
-  function observeFetch(host, promise, init, origin, path = null) {
+  function observeFetch(host, promise, init, origin, path = null, caller = null) {
     // A read that marks itself as not an upstream outcome (the model list,
     // src/model-catalog.js) is not counted.
     if (init && init[NO_OUTCOME]) return;
@@ -426,7 +477,14 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     if (hosts.some(([m, , perFetch]) => !perFetch && m(h, path))) return;
     Promise.resolve(promise).then(
       (res) => { noteUpstream(host, upstreamKindOfStatus(res?.status), { origin, status: res?.status ?? null, path }); },
-      (err) => { noteUpstream(host, upstreamKindOfError(err, init), { origin, path }); },
+      (err) => {
+        const kind = upstreamKindOfError(err, init);
+        // `caller` is the request's caller key or a function that reads it
+        // (hashed only for a deadline, the one kind that keeps it).
+        let who = null;
+        if (kind === "deadline") { try { who = typeof caller === "function" ? caller() : caller; } catch { /* no key */ } }
+        noteUpstream(host, kind, { origin, path, caller: who, limitMs: init?.signal?.[LIMIT_MS] ?? null, heavy: kind === "deadline" && init?.signal?.[HEAVY_INPUT_MARK] === true });
+      },
     );
   }
 
@@ -435,6 +493,10 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
   // check per listed-facilitator rail keeps the other's readings.
   function noteRelayerGas(readings = [], { network = null } = {}) {
     const keep = network ? relayerGas.filter((r) => r.network !== String(network)) : [];
+    // An unread row keeps the time its signer first read unread, carried from
+    // the previous reading of the same signer while it stays unread.
+    const gasKey = (r) => `${String(r?.network || "")}|${String(r?.facilitator || "unknown")}|${r?.signer ? String(r.signer) : ""}`;
+    const prevUnread = new Map(relayerGas.filter((r) => r.status === "unread").map((r) => [gasKey(r), r.unreadSince || r.at]));
     relayerGas = [...keep, ...(Array.isArray(readings) ? readings : []).slice(0, 50).map((r) => ({
       network: String(r?.network || "").slice(0, 64),
       facilitator: String(r?.facilitator || "unknown").slice(0, 120),
@@ -447,7 +509,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       ...(r?.reason ? { reason: String(r.reason).slice(0, 40) } : {}),
       ...(["gasUsd", "floorUsd", "sharePct", "ethUsd"].reduce((o, k) => (Number.isFinite(r?.[k]) ? { ...o, [k]: r[k] } : o), {})),
       at: Number(r?.at) || now(),
-    }))].slice(-100);
+    })).map((r) => (r.status === "unread" ? { ...r, unreadSince: Math.min(prevUnread.get(gasKey(r)) ?? r.at, r.at) } : r))].slice(-100);
   }
 
   function noteFacilitatorRefusal({ network, facilitator, reason, at = now() } = {}) {
@@ -501,10 +563,20 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       }
       return out;
     };
+    // Caller keys are read only inside the unanswered window: a bucket older
+    // than that window plus one bucket is published without them.
+    const dcFloor = bucketOf(t - unansweredSettings(env).windowMs) - 1;
+    const packUpstreams = () => {
+      const out = pack(upstreams);
+      for (const rows of Object.values(out)) {
+        for (const [b, row] of Object.entries(rows)) if (row.dc && Number(b) < dcFloor) { const { dc, ...rest } = row; void dc; rows[b] = rest; }
+      }
+      return out;
+    };
     return {
       at: t,
       tools: pack(tools),
-      upstreams: pack(upstreams),
+      upstreams: packUpstreams(),
       answers: pack(answers),
       lastAnswer: Object.fromEntries([...lastAnswer].map(([k, v]) => [k, v.filter((x) => x.at > t - DAY_MS)]).filter(([, v]) => v.length)),
       lastToolError: Object.fromEntries([...lastToolError].filter(([, v]) => v.at > t - DAY_MS)),
@@ -580,6 +652,8 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
         for (const [b, row] of Object.entries(rows)) {
           const d = (dst[b] ||= { o: emptyUp(), s: emptyUp(), b: emptyUp() });
           add(d.o, row.o); add(d.s, row.s); add(d.b, row.b);
+          if (Array.isArray(row.dc)) for (const c of row.dc) { d.dc ||= []; if (d.dc.length < 64 && !d.dc.includes(c)) d.dc.push(c); }
+          if (Number(row.hv) > 0) d.hv = (d.hv || 0) + Number(row.hv);
         }
       }
       for (const [slug, rows] of Object.entries(s.answers || {})) {
@@ -647,7 +721,9 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       const h = sumWindow(rows, ["o", "s", "b"], UPSTREAM_KINDS.length, hourFloor);
       const d = sumWindow(rows, ["o", "s", "b"], UPSTREAM_KINDS.length, dayFloor);
       const counted = named(UPSTREAM_KINDS, add([...h.o], h.b));
-      const fails = counted.s5xx + counted.timeout + counted.network;
+      // Only the upstream's own failures (UPSTREAM_FAILURE_KINDS): our
+      // deadlines, our egress and a caller's cancel are left out of both.
+      const fails = UPSTREAM_FAILURE_KINDS.reduce((n, k) => n + counted[k], 0);
       const calls = fails + counted.ok + counted.throttled;
       let word = "ok";
       if (fails >= th.upstreamDegraded) word = calls >= th.upstreamMinCalls && fails / calls > th.upstreamFailRate ? "failing" : "degraded";
@@ -659,6 +735,62 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
         last: m.lastUpstream[name] ? { ...m.lastUpstream[name], at: new Date(m.lastUpstream[name].at).toISOString() } : null,
       });
     }
+    // Unanswered: our deadline firing on one upstream across many calls from
+    // several callers inside the window (src/unanswered-rule.js), or on every
+    // one of at least allHeldMin calls when fewer callers (or background work
+    // alone) reach it, while other
+    // upstreams answer in the same five-minute buckets. Says only "did not
+    // answer within our limit". When most upstreams with traffic are held at
+    // once, or no other upstream answered while this one was held, the cause
+    // may be our side (the event loop, our egress): no upstream is named and
+    // ourSide is set. Our egress failures (DNS, no route) are never a deadline
+    // and never name an upstream; they only feed the ourSide reading.
+    const un = unansweredSettings(env);
+    const unFloor = bucketOf(t - un.windowMs);
+    const unStats = [];
+    const okBy = new Map(); // upstream -> Map(bucket -> ok answers), outside and background lanes
+    const iOk = UPSTREAM_KINDS.indexOf("ok"), iDl = UPSTREAM_KINDS.indexOf("deadline");
+    for (const [name, rows] of Object.entries(m.upstreams)) {
+      const w = sumWindow(rows, ["o", "b"], UPSTREAM_KINDS.length, unFloor);
+      const c = named(UPSTREAM_KINDS, add([...w.o], w.b));
+      const answered = c.ok + c.s5xx + c.timeout + c.network + c.throttled;
+      const held = c.deadline + c.egress;
+      if (answered + held === 0) continue;
+      const callers = new Set();
+      const okB = new Map();
+      const dlBuckets = [];
+      let heavyDl = 0;
+      for (const [b, row] of Object.entries(rows)) {
+        if (!(Number(b) > unFloor)) continue;
+        for (const k of row.dc || []) callers.add(k);
+        heavyDl += Number(row.hv) || 0;
+        const ok = (row.o?.[iOk] || 0) + (row.b?.[iOk] || 0);
+        if (ok) okB.set(Number(b), ok);
+        if ((row.o?.[iDl] || 0) + (row.b?.[iDl] || 0)) dlBuckets.push(Number(b));
+      }
+      okBy.set(name, okB);
+      unStats.push({ upstream: name, deadline: c.deadline, shortDeadline: Math.max(0, c.deadline - heavyDl), egress: c.egress, answered, calls: answered + held, callers: callers.size, dlBuckets });
+    }
+    const heldShare = (x) => (x.calls ? (x.deadline + x.egress) / x.calls : 0);
+    const heldUps = unStats.filter((x) => x.calls >= un.minCalls && heldShare(x) >= un.rate);
+    const ourSide = heldUps.length > 0 && heldUps.length > unStats.length / 2;
+    // Another upstream answered (an ok) in a bucket where this one was held.
+    const othersAnswered = (x) => unStats.some((y) => y.upstream !== x.upstream && heldShare(y) < un.rate && x.dlBuckets.some((b) => okBy.get(y.upstream)?.get(b)));
+    // Several callers, or (one caller, or background work alone) an upstream
+    // that answered none of its calls in the window on allHeldMin of ours
+    // whose input was not long enough to outlast the limit.
+    const candidates = unStats.filter((x) => x.deadline >= un.minCalls && x.deadline / x.calls >= un.rate
+      && (x.callers >= un.minCallers || (x.answered === 0 && x.shortDeadline >= un.allHeldMin)));
+    const unanswered = ourSide ? [] : candidates.filter(othersAnswered);
+    for (const x of unanswered) {
+      const r = upRows.find((u) => u.upstream === x.upstream);
+      const last = m.lastUpstream[x.upstream];
+      const limit = last?.kind === "deadline" && last.limitMs ? ` ${secondsOfMs(last.limitMs)} s` : "";
+      const detail = { deadlines: x.deadline, calls: x.calls, callers: x.callers, note: `${x.upstream} did not answer within our${limit} limit on ${x.deadline} of ${x.calls} calls from ${x.callers} callers in ${Math.round(un.windowMs / 60_000)} min` };
+      if (r) { r.unanswered = detail; if (r.status === "ok") r.status = "unanswered"; }
+    }
+    if (upWord === "ok" && unanswered.length) upWord = "unanswered";
+    const unansweredDetail = { ourSide: ourSide || (candidates.length > 0 && unanswered.length < candidates.length), upstreams: unanswered.map((x) => x.upstream), thresholds: un };
     const ansRows = [];
     let ansWord = "ok";
     const shareOf = (c) => ({ checked: c.ok + c.empty + c["error-shaped"], bad: c.empty + c["error-shaped"] });
@@ -686,10 +818,13 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     const recent = m.refusals.filter((r) => r.at > t - th.fundsWindowMs);
     let demoted = [];
     try { demoted = isDemoted() || []; } catch { demoted = []; }
-    // Gas runway of the facilitators' settlement signers: low, or unreadable
-    // past the checker's retries, reads "low" (a warning before refusals). A
-    // facilitator that publishes no signer ("unknown") has nothing to watch
-    // and never pages.
+    // Gas runway of the facilitators' settlement signers: a balance read
+    // under the floor reads "low" (a warning before refusals). A balance our
+    // checker could not read past its retries ("unread": our RPC read failed,
+    // so nothing about the signer is known) reads "unknown", which pages
+    // only once it has held past FACILITATOR_UNREAD_PAGE_HOURS (alert
+    // sustained); a real low beside it still reads "low". A facilitator that
+    // publishes no signer ("unknown") has nothing to watch and never pages.
     const gas = (m.gas || []).filter((r) => r.at > t - th.gasFreshMs);
     // A listed facilitator's empty or unreadable signer is covered while our
     // own relayer on that network reads ok: payments settle through ours
@@ -697,8 +832,13 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     // relayer low or unread, and the gas-against-floor row, are never covered.
     const ownOk = new Set(gas.filter((r) => r.own && r.status === "ok").map((r) => r.network));
     const covered = gas.filter((r) => !r.own && !r.reason && r.facilitator !== "price floor" && (r.status === "low" || r.status === "unread") && ownOk.has(r.network));
-    const gasLow = gas.filter((r) => (r.status === "low" || r.status === "unread") && !covered.includes(r));
-    const fundsWord = demoted.length ? "demoted" : recent.length ? "refused" : gasLow.length ? "low" : "ok";
+    const gasLow = gas.filter((r) => r.status === "low" && !covered.includes(r));
+    const gasUnread = gas.filter((r) => r.status === "unread" && !covered.includes(r));
+    const fundsWord = demoted.length ? "demoted" : recent.length ? "refused" : gasLow.length ? "low" : gasUnread.length ? "unknown" : "ok";
+    // unknown held past gasUnreadPageMs: the oldest unread signer's first
+    // unread reading (a row from before this field reads from its own time).
+    const unreadSince = gasUnread.length ? Math.min(...gasUnread.map((r) => (Number.isFinite(r.unreadSince) ? r.unreadSince : r.at))) : null;
+    const fundsAlert = fundsWord === "unknown" && unreadSince !== null && t - unreadSince >= th.gasUnreadPageMs ? "sustained" : "ok";
     // A refused paying buyer: a bucket counts while it ended inside the window
     // (its start is after t - window - BUCKET_MS), so a refusal is read for at
     // least the window and at most one bucket longer.
@@ -762,12 +902,12 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     const byPath = laneRows(m.paths);
     // Catalog outcomes by payment rail (detail only, never a word).
     const byRail = laneRows(m.rails);
-    const rank = { failing: 0, degraded: 1, ok: 2 };
+    const rank = { failing: 0, degraded: 1, unanswered: 2, ok: 3 };
     toolRows.sort((a, b) => rank[a.status] - rank[b.status] || b.hour.outside5xx - a.hour.outside5xx || a.slug.localeCompare(b.slug));
     upRows.sort((a, b) => rank[a.status] - rank[b.status] || b.hour.failures - a.hour.failures || a.upstream.localeCompare(b.upstream));
     ansRows.sort((a, b) => rank[a.status] - rank[b.status] || b.day.outsideBad - a.day.outsideBad || a.slug.localeCompare(b.slug));
     return {
-      toolFailures: toolWord, upstreamHealth: upWord, facilitatorFunds: fundsWord, toolAnswers: ansWord, buyerRefusals: buyerWord,
+      toolFailures: toolWord, upstreamHealth: upWord, upstreamUnanswered: unansweredDetail, facilitatorFunds: fundsWord, facilitatorFundsAlert: fundsAlert, facilitatorFundsUnreadSince: unreadSince, toolAnswers: ansWord, buyerRefusals: buyerWord,
       buyerRefusalsWindow, buyerRefusalsDay,
       replays: replayRows, replayTotals, byPath, byRail, fundingRefusals: fundingRows,
       pendingSettles: { rows: pendingRows, totals: pendingTotals, dropped: pendingDropped, maxKeys: MAX_PENDING_KEYS },
@@ -802,13 +942,13 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
    *  now instead of reading the cache (tests and one-off reads). */
   async function status({ full = false, t = now(), fresh = false } = {}) {
     const e = fresh ? await recompute(t) : await cachedEvaluation(t);
-    if (!full) return { toolFailures: { status: e.toolFailures }, upstreamHealth: { status: e.upstreamHealth }, facilitatorFunds: { status: e.facilitatorFunds }, toolAnswers: { status: e.toolAnswers }, buyerRefusals: { status: e.buyerRefusals } };
+    if (!full) return { toolFailures: { status: e.toolFailures }, upstreamHealth: { status: e.upstreamHealth }, facilitatorFunds: { status: e.facilitatorFunds, alert: e.facilitatorFundsAlert }, toolAnswers: { status: e.toolAnswers }, buyerRefusals: { status: e.buyerRefusals } };
     const failingTools = e.tools.filter((r) => r.status !== "ok");
     const badUps = e.upstreams.filter((r) => r.status !== "ok");
     return {
       toolFailures: { status: e.toolFailures, tools: failingTools.map((r) => ({ slug: r.slug, status: r.status, outside5xx: r.hour.outside5xx, outsideCalls: r.hour.outsideCalls })) },
-      upstreamHealth: { status: e.upstreamHealth, upstreams: badUps.map((r) => ({ upstream: r.upstream, status: r.status, failures: r.hour.failures, calls: r.hour.calls })) },
-      facilitatorFunds: { status: e.facilitatorFunds, refusals1h: e.facilitatorRefusals.length, demoted: e.demoted, relayersLow: e.relayerGas.filter((r) => r.status === "low" && !r.coveredByOwnRelayer).length, relayersCovered: e.relayerGas.filter((r) => r.coveredByOwnRelayer).length, relayersUnread: e.relayerGas.filter((r) => r.status === "unread" && !r.coveredByOwnRelayer).length, gasNearFloor: e.relayerGas.some((r) => r.reason === "gasNearFloor") },
+      upstreamHealth: { status: e.upstreamHealth, upstreams: badUps.map((r) => ({ upstream: r.upstream, status: r.status, failures: r.hour.failures, calls: r.hour.calls, ...(r.unanswered ? { unanswered: r.unanswered.note } : {}) })), ourSide: !!e.upstreamUnanswered?.ourSide },
+      facilitatorFunds: { status: e.facilitatorFunds, alert: e.facilitatorFundsAlert, ...(e.facilitatorFundsUnreadSince !== null ? { unreadSince: new Date(e.facilitatorFundsUnreadSince).toISOString() } : {}), refusals1h: e.facilitatorRefusals.length, demoted: e.demoted, relayersLow: e.relayerGas.filter((r) => r.status === "low" && !r.coveredByOwnRelayer).length, relayersCovered: e.relayerGas.filter((r) => r.coveredByOwnRelayer).length, relayersUnread: e.relayerGas.filter((r) => r.status === "unread" && !r.coveredByOwnRelayer).length, gasNearFloor: e.relayerGas.some((r) => r.reason === "gasNearFloor") },
       toolAnswers: { status: e.toolAnswers, tools: e.answers.filter((r) => r.status !== "ok").map((r) => ({ slug: r.slug, status: r.status, outsideBad1h: r.hour.outsideBad, outsideChecked1h: r.hour.outsideChecked, outsideBad24h: r.day.outsideBad, outsideChecked24h: r.day.outsideChecked })) },
       // Counts only: no key, no address, no slug.
       buyerRefusals: { status: e.buyerRefusals, refusalsWindow: e.buyerRefusalsWindow, refusals24h: e.buyerRefusalsDay, windowMinutes: e.thresholds.buyerRefusalWindowMs / 60_000 },

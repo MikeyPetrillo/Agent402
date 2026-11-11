@@ -70,6 +70,7 @@ import { PUSH_EXCEPTION } from "./tempo-push-debts.js";
 import { publicPremiumClause as premiumClause } from "./public-networks.js";
 import { paidPriceUsd } from "./paid-price.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
+import { attributionOf, notCallersInput, faultAdvice } from "./tool-error-fields.js";
 import {
   FLAGSHIP_SLUGS,
   FLAGSHIP_MCP_NAMES,
@@ -1463,26 +1464,25 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // a subject it got right. Same envelope, same defect, one surface over
           // from the HTTP route binder - which is the reason to fix the class
           // here rather than the instance there.
+          // Whose fault is read from the error's own attribution and kind
+          // (src/upstream-deadline.js, src/tool-error-fields.js): a third
+          // party is named only when a definite answer from it set
+          // "upstream"; our own 500 says it is ours, our own limit names the
+          // limit, and a URL the caller supplied gets "check the URL, or retry".
           const upstreamStatus = Number.isInteger(handlerErr?.upstreamStatus) ? handlerErr.upstreamStatus : null;
-          const attribution = typeof handlerErr?.attribution === "string" ? handlerErr.attribution
-            : upstreamStatus ? "upstream" : null;
-          const fromUpstream = attribution === "upstream" || attribution === "upstream-access";
+          const attribution = attributionOf(handlerErr);
           const status = handlerErr.statusCode || 500;
           const hint = {
             error: handlerErr.message,
             tool: entry.def.slug,
             ...(upstreamStatus ? { upstreamStatus } : {}),
             ...(attribution ? { attribution } : {}),
+            ...(typeof handlerErr?.hint === "string" && /^[a-z][a-z0-9-]{0,39}$/.test(handlerErr.hint) ? { hint: handlerErr.hint } : {}),
             ...(Number.isInteger(handlerErr?.retryAfter) ? { retryAfterSeconds: handlerErr.retryAfter } : {}),
-            ...(fromUpstream || status >= 500
-              ? {
-                // The free tier: no credential rides along here, so there is
-                // nothing a push exception could apply to.
-                whoseFault: "not your input - a third party this tool depends on refused or failed our request; this free call presented no payment, so there was nothing to charge",
-                nextStep: attribution === "upstream"
-                  ? "retry the SAME call later; changing the input will not help"
-                  : "this resource is not reachable by this server; a different source may be, but the same call will keep failing",
-              }
+            ...(notCallersInput(handlerErr, status)
+              // The free tier: no credential rides along here, so there is
+              // nothing a push exception could apply to.
+              ? faultAdvice(handlerErr, status)
               : {
                 expected: entry.def.discovery?.inputSchema?.properties || {},
                 required: entry.def.discovery?.inputSchema?.required || [],

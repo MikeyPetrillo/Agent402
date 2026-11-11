@@ -96,9 +96,11 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   (OpenRouter keeps its whole budget). A non-stream direct body is read under
   `DIRECT_UPSTREAM_MAX_BYTES` (default 4 MB; over it is a `malformed` failure). A per-process
   breaker opens after `DIRECT_UPSTREAM_BREAKER_FAILS` (default 3) consecutive counted direct
-  failures: auth (401/403), quota (402), 429, 404/405, 5xx, timeout, connect, malformed or
-  oversized body, late error, missing cost. A refusal of the request itself (any other 4xx,
-  bucket `refused`), a client gone and an empty answer do not count; an answer resets it. No call
+  failures, the upstream's own answers only (`DIRECT_BREAKER_COUNTED`): auth (401/403), quota
+  (402), 429, 404/405, 5xx, a refused or reset connection (`connect`), malformed or oversized
+  body, late error, missing cost. Our own timeout (`timeout`) on a prompt at or past `HEAVY_INPUT_SHARE` of the tier's input cap, a
+  lookup our resolver could not finish or a route our side lacks (`egress`; a host name that does not resolve is `connect` and counts), a stream cut with no status (`stream`), a refusal of the request itself (any other
+  4xx, bucket `refused`), a client gone and an empty answer do not count; an answer resets it. Our own `timeout` on a shorter prompt counts like the upstream's own failure. One exception: our own `timeout` on a long prompt on the direct link on `UPSTREAM_UNANSWERED_MIN` calls from `UPSTREAM_UNANSWERED_MIN_CALLERS` callers inside `UPSTREAM_UNANSWERED_WINDOW_MS`, with no answer between, opens it at once (`src/unanswered-rule.js`; the log says "did not answer within our limit"). No call
   goes direct while open (`DIRECT_UPSTREAM_BREAKER_OPEN_MS`, default 5 minutes, skip bucket
   `breaker_open`); after that it is half-open (reads ok publicly) and the next call that passes the
   price check and the share draw takes the one trial: a success closes it, a counted failure

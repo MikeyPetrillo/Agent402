@@ -184,7 +184,10 @@ const srv = createServer((req, res) => {
     const h = { "content-type": "application/json" };
     if (mode.receipt) h["payment-receipt"] = "x";
     res.writeHead(mode.status, h);
-    res.end('{"error":"bad request"}');
+    // A 5xx body that names nothing about the request (a 500 naming the
+    // request is read as the request's input, x402-buyer.js).
+    if (path.startsWith("/input500")) return res.end('{"error":"validation error: field symbol is required"}');
+    res.end(mode.status >= 500 ? '{"error":"internal error"}' : '{"error":"bad request"}');
   });
 });
 await new Promise((r) => srv.listen(0, "127.0.0.1", r));
@@ -217,20 +220,28 @@ const origin = base;
   // not a payment was taken: a delivery strike (so the router stops choosing
   // it), never an outbound or spend row (nothing moved).
   mode = { status: 502, receipt: false };
-  const e5 = await buy("/bad5");
+  const e5 = await buy("/bad5", { payer: "tempo:0xpayer-a" });
   ok(e5 && e5.committed === false && e5.signedUsd === undefined && /before taking payment \(HTTP 502\)/.test(e5.message), "a proven-unused 502 says nothing was charged and carries no committed stamp");
   const strikes = () => sellerDeliveryMemoEntries().filter((m) => m.chain === "tempo" && m.origin === origin);
   ok(strikes().length === 1 && strikes()[0].strikes === 1 && strikes()[0].status === 502, `...and is a first delivery strike on tempo (got ${JSON.stringify(sellerDeliveryMemoEntries())})`);
   ok(outbound().length === before, "...and records no outbound payment");
-  await buy("/bad5");
-  ok(strikes()[0]?.strikes === 2 && sellerDeliveryFailingRecently(origin, "tempo"), "a second proven-unused 5xx makes the router skip the seller");
+  await buy("/bad5", { payer: "tempo:0xpayer-a" });
+  ok(strikes()[0]?.strikes === 1 && !sellerDeliveryFailingRecently(origin, "tempo"), "one payer's same request failing again is one strike, not a skip");
+  await buy("/bad5", { body: { url: "https://example.org" }, payer: "tempo:0xpayer-a" });
+  ok(strikes()[0]?.strikes === 2 && sellerDeliveryFailingRecently(origin, "tempo"), "a second proven-unused 5xx on a different request makes the router skip the seller");
   ok(outbound().length === before, "...still with no outbound row");
   __resetSellerDeliveryFailuresForTest();
   // A seller that shares its host is struck under its own key, the one the
   // resolver reads, and the host's root is not.
   const tenant = `${origin}/app/tenant-a`;
-  await buy("/app/tenant-a/bad5", { sellerKey: tenant }); await buy("/app/tenant-a/bad5", { sellerKey: tenant });
+  await buy("/app/tenant-a/bad5", { sellerKey: tenant }); await buy("/app/tenant-a/bad5", { sellerKey: tenant, body: { url: "https://example.org" } });
   ok(!!sellerDeliveryFailingRecently(tenant, "tempo") && !sellerDeliveryFailingRecently(origin, "tempo"), `two strikes at a path-scoped seller bench that seller, not its host's root (${JSON.stringify(sellerDeliveryMemoEntries().map((m) => m.origin))})`);
+  __resetSellerDeliveryFailuresForTest();
+  // A 500 whose body names the request is the request's input: no strike, on any request.
+  mode = { status: 500, receipt: false };
+  await buy("/input500", { body: { url: "https://example.com/1" } }); await buy("/input500", { body: { url: "https://example.com/2" } });
+  ok(sellerDeliveryMemoEntries().length === 0, `a 500 naming the request that the chain proves uncharged strikes nothing on tempo (${JSON.stringify(sellerDeliveryMemoEntries())})`);
+  mode = { status: 502, receipt: false };
   __resetSellerDeliveryFailuresForTest();
   const e5x = await buy("/bad5", { memoizeDelivery: false });
   ok(e5x && e5x.committed === false && sellerDeliveryMemoEntries().length === 0, "a purchase that is not the router's own (no memoizeDelivery) strikes nothing");
@@ -253,6 +264,19 @@ for (const [label, setup] of [
     if (status >= 500) ok(rows.length === 1 && rows[0].result === "undelivered" && rows[0].chain === "tempo" && sellerDeliveryMemoEntries().some((m) => m.chain === "tempo" && m.origin === origin), `${label}, HTTP 500: one undelivered outbound row and a first delivery strike, as before`);
     else ok(rows.length === 0, `${label}, HTTP 400 with no receipt: no outbound row, as before`);
   }
+}
+{
+  // A 500 naming the request when we may have paid (a debit from the signer,
+  // or a receipt on the error) strikes: its text is the seller's own.
+  for (const [label, setup, receipt] of [["a debit from the signer", () => { rpcNow = chain({ logs: () => [{ topics: [TRANSFER_TOPIC] }] }); }, false], ["a receipt on the error", () => { rpcNow = chain(); }, true]]) {
+    setup();
+    __resetSellerDeliveryFailuresForTest();
+    mode = { status: 500, receipt };
+    const e = await buy("/input500", { body: { url: "https://example.com/1" }, payer: "tempo:0xpayer-a" });
+    const m = sellerDeliveryMemoEntries().find((x) => x.chain === "tempo" && x.origin === origin);
+    ok(e && e.committed === true && m?.strikes === 1, `${label}: a 500 naming the request is a delivery strike on tempo (${JSON.stringify(sellerDeliveryMemoEntries())})`);
+  }
+  __resetSellerDeliveryFailuresForTest();
 }
 {
   // A receipt on the error: the seller says it took the payment. No chain wait.
@@ -331,7 +355,7 @@ const route = async (list) => {
   rpcNow = chain({ fail: true });
   mode = { status: 400, receipt: false };
   const { e } = await route([cand("/maybe"), cand("/good")]);
-  ok(e && e.committed === true && !hits.get("/good:paid") && /External seller ".*" failed: Seller failed after the payment was sent \(HTTP 400\); it may have been charged/.test(e.message), `ROUTER: a possibly-paid Tempo failure tries no other seller and says it may have been charged (got "${e?.message}")`);
+  ok(e && e.committed === true && !hits.get("/good:paid") && /(?:External seller ".*" failed|The purchase from external seller ".*" did not complete): Seller failed after the payment was sent \(HTTP 400\); it may have been charged/.test(e.message), `ROUTER: a possibly-paid Tempo failure tries no other seller and says it may have been charged (got "${e?.message}")`);
   ok(near(tempoDay(), 0.002), `ROUTER: ...and keeps the $0.002 signed booked on the Tempo day (got $${tempoDay()})`);
 }
 {
@@ -340,7 +364,7 @@ const route = async (list) => {
   rpcNow = chain();
   mode = { status: 400, receipt: false };
   const { e } = await route([cand("/bad"), cand("/good")]);
-  ok(e && e.committed !== true && /failed: Seller refused the request before taking payment \(HTTP 400\)/.test(e.message), `ROUTER: a proven-unused refusal reaches the buyer as a refusal before payment (got "${e?.message}")`);
+  ok(e && e.committed !== true && /(?:failed|did not complete): Seller refused the request before taking payment \(HTTP 400\)/.test(e.message), `ROUTER: a proven-unused refusal reaches the buyer as a refusal before payment (got "${e?.message}")`);
   ok(!hits.get("/good:paid"), "ROUTER: ...and, like a Solana refusal, ends the request after the wait (no second seller)");
   ok(near(tempoDay(), 0), `ROUTER: ...and nothing stays booked on the Tempo day (got $${tempoDay()})`);
 }

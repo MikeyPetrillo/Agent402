@@ -10,6 +10,7 @@
 // allowed hosts with the validated mint in the path.
 
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { urlMatches } from "./lib/url-host.js";
 import { SOLANA_INTEL_TOOLS, MINTS, __test, jupiterBase, jupiterHeaders } from "../src/tools/solana-intel-kit.js";
 
 const realFetch = globalThis.fetch;
@@ -417,6 +418,24 @@ try {
     await throws(h("sol-token-search")({ query: "wif" }), 502, "search fallback: both pair reads fail with no rows -> 5xx");
     stub(route({ jup: () => Promise.resolve(jsonRes({ error: "bad" }, 400)) }));
     await throws(h("sol-token-search")({ query: "wif" }), 503, "search fallback: Jupiter 4xx with no rows -> 503, not a 422 blaming the query");
+    // A definite Jupiter 4xx is Jupiter's own answer: attributed upstream.
+    try { await h("sol-token-search")({ query: "wif" }); ok(false, "search fallback: Jupiter 4xx with no rows resolved"); }
+    catch (e) { ok(e.statusCode === 503 && e.attribution === "upstream" && /read answered with a refusal \(HTTP 4xx\) instead of results/.test(e.message) && !/did not answer/.test(e.message), `search fallback: Jupiter 4xx with no rows is attributed upstream and says it answered (got ${e.statusCode} ${e.attribution} "${e.message}")`); }
+    // The call's budget runs out during the pair search, before the Jupiter
+    // read is sent: no request left, so the 503 is ours (budget-spent).
+    {
+      const realNow = Date.now;
+      let jupCalls = 0;
+      const routed = route({ jup: () => { jupCalls++; return Promise.resolve(jsonRes(JUP_WIF)); } });
+      stub((url) => {
+        // The pair search is answered at the very end of the call's budget.
+        if (urlMatches(url, "api.dexscreener.com", "/latest/dex/search")) { const t = realNow(); Date.now = () => t + __test.DEADLINES.HANDLER_BUDGET_MS; }
+        return routed(url);
+      });
+      try { await h("sol-token-search")({ query: "wif" }); ok(false, "search fallback: spent budget with no rows resolved"); }
+      catch (e) { ok(e.statusCode === 503 && e.attribution === "ours" && e.hint === "budget-spent" && jupCalls === 0 && /^Solana token search found no pairs\. No Jupiter token search read was sent: our \d+ s limit for this call was used up by its earlier steps; nothing was charged/.test(e.message), `search fallback: budget spent before the Jupiter read -> 503 attributed ours, budget-spent, no request sent (got ${e.statusCode} ${e.attribution} ${e.hint} ${jupCalls} "${e.message}")`); }
+      finally { Date.now = realNow; }
+    }
 
     // One pair read fails: what the other read gave, flagged partial.
     stub(route({ all: () => Promise.resolve(textRes("x", 500)) }));
@@ -521,15 +540,16 @@ try {
   await throws(h("sol-token-lookup")({ query: "x" }), 502, "403 -> 502");
   stub(() => Promise.resolve(textRes("<html>cloudflare</html>", 200)));
   await throws(h("sol-token-search")({ query: "x" }), 502, "non-JSON 200 -> 502");
-  // Deadline expiry (AbortSignal.timeout rejects with TimeoutError) and a
-  // transport failure are both the upstream's: a 503 naming the upstream and
-  // the step, attributed upstream, never a 504 and never charged.
+  // Deadline expiry (AbortSignal.timeout rejects with TimeoutError) is our own
+  // limit passing, and a reset connection proves nothing about whose side
+  // failed: each is a 503 naming the upstream and the step, attributed "ours"
+  // or "unknown", never a 504 and never charged.
   stub(() => Promise.reject(Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" })));
   try { await h("sol-token-safety")({ mint: JUP }); ok(false, "deadline expiry resolved"); }
-  catch (e) { ok(e.statusCode === 503 && e.attribution === "upstream" && /^(RugCheck did not answer the report summary|Jupiter did not answer the token search) read within \d+ s \(upstream deadline\)/.test(e.message), `deadline expiry -> 503 naming upstream and step, attributed upstream (got ${e.statusCode} "${e.message}")`); }
+  catch (e) { ok(e.statusCode === 503 && e.attribution === "ours" && e.hint === "our-deadline" && /^(RugCheck did not answer the report summary|Jupiter did not answer the token search) read within our \d+ s limit/.test(e.message), `deadline expiry -> 503 naming upstream and step, attributed to our own limit (got ${e.statusCode} "${e.message}")`); }
   stub(() => Promise.reject(Object.assign(new Error("fetch failed"), { code: "ECONNRESET" })));
   try { await h("sol-swap-quote")({ inputMint: SOL, outputMint: USDC, amount: "1" }); ok(false, "connection reset resolved"); }
-  catch (e) { ok(e.statusCode === 503 && e.attribution === "upstream" && /^Jupiter is unreachable from here \(swap quote read/.test(e.message), `connection reset -> 503 naming upstream and step (got ${e.statusCode} "${e.message}")`); }
+  catch (e) { ok(e.statusCode === 503 && e.attribution === "unknown" && e.hint === "connect-failed" && /^Jupiter is unreachable from here \(swap quote read/.test(e.message), `connection reset -> 503 naming upstream and step, attribution unknown (got ${e.statusCode} "${e.message}")`); }
   // One leg failing fails the parallel tool (no half answers billed as whole).
   stub((url) => url.includes("rugcheck") ? Promise.resolve(jsonRes(RC_SUMMARY)) : Promise.resolve(textRes("x", 500)));
   await throws(h("sol-token-safety")({ mint: JUP }), 502, "safety: Jupiter leg 500 -> whole call 502");
@@ -560,7 +580,7 @@ try {
     let err = null;
     try { await h("sol-token-safety")({ mint: JUP }); } catch (e) { err = e; }
     const ms = Date.now() - t0;
-    ok(err?.statusCode === 503 && /^RugCheck did not answer the report summary read within 8 s/.test(err?.message || "") && ms >= D.RUGCHECK_SUMMARY_MS - 50 && ms < D.RUGCHECK_SUMMARY_MS + 1500,
+    ok(err?.statusCode === 503 && /^RugCheck did not answer the report summary read within our 8 s limit/.test(err?.message || "") && ms >= D.RUGCHECK_SUMMARY_MS - 50 && ms < D.RUGCHECK_SUMMARY_MS + 1500,
       `a stalled RugCheck summary answers the deadline 503 at the summary cap (${ms} ms, got ${err?.statusCode} "${err?.message}")`);
     ok(ms < D.HANDLER_BUDGET_MS, `the safety read answers inside the handler budget (${ms} ms < ${D.HANDLER_BUDGET_MS})`);
   }

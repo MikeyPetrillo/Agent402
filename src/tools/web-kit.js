@@ -271,10 +271,10 @@ export const WEB_TOOLS = [
           m = await mementoClosest(url, timestamp);
         } catch (err2) {
           // Both archives down: keep the Wayback error's status and its
-          // class fields (attribution, upstreamFailure) and carry both causes
-          // in the message.
+          // class fields (attribution, kind, upstreamFailure) and carry both
+          // causes in the message.
           throw Object.assign(bad(`${err.message}; Memento fallback also failed: ${err2.message}`, err.statusCode || 502),
-            ...(err.attribution ? [{ attribution: err.attribution }] : []), ...(err.upstreamFailure ? [{ upstreamFailure: err.upstreamFailure }] : []));
+            ...(err.attribution ? [{ attribution: err.attribution }] : []), ...(typeof err.hint === "string" ? [{ hint: err.hint }] : []), ...(err.upstreamFailure ? [{ upstreamFailure: err.upstreamFailure }] : []));
         }
         const mClosest = m?.mementos?.closest;
         const mAvailable = typeof mClosest?.uri === "string" && mClosest.uri.length > 0;

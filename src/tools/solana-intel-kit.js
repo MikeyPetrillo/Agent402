@@ -34,7 +34,7 @@
 import { markUntrusted } from "./provenance.js";
 import { partialFields } from "../partial-answer.js";
 import { createTtlCache } from "./ttl-dedupe.js";
-import { HANDLER_BUDGET_MS, OPTIONAL_READ_FLOOR_MS, budgetOf, upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, capOf, currentBudget } from "../upstream-deadline.js";
+import { HANDLER_BUDGET_MS, OPTIONAL_READ_FLOOR_MS, budgetOf, budgetSpentError, upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, capOf, currentBudget } from "../upstream-deadline.js";
 import { RUGCHECK_SLUGS, rugcheckEnabled } from "../rugcheck-switch.js";
 import { rugcheckPause, rugcheckFailureKind, rugcheckInputKey } from "../rugcheck-pause.js";
 export { RUGCHECK_SLUGS, rugcheckEnabled };
@@ -1059,7 +1059,18 @@ export const SOLANA_INTEL_TOOLS = [
         // after the handler).
         const e = fb.error;
         if (e && e.statusCode >= 500) throw e;
-        throw Object.assign(bad(`Solana token search found no pairs and the ${fb.unavailable.upstream} ${fb.unavailable.step} read did not answer - retry shortly`, 503), { attribution: "upstream" });
+        // No read was sent: the call's own budget ran out first. That is ours.
+        if (fb.unavailable.reason === "budget") {
+          const spent = budgetSpentError(fb.unavailable.upstream, fb.unavailable.step, budget.totalMs);
+          spent.message = `Solana token search found no pairs. ${spent.message}`;
+          throw spent;
+        }
+        // What is left is an answer that was not results: the upstream's own
+        // HTTP 4xx refusal (upstreamJsonOnce's 422 for a 400 or 404 it
+        // answered; attributed to it, and said as such), or a reply that was
+        // not usable with no status to show whose side it was.
+        if (e && e.statusCode >= 400 && e.statusCode < 500) throw Object.assign(bad(`Solana token search found no pairs and the ${fb.unavailable.upstream} ${fb.unavailable.step} read answered with a refusal (HTTP 4xx) instead of results - retry shortly`, 503), { attribution: "upstream" });
+        throw Object.assign(bad(`Solana token search found no pairs and the ${fb.unavailable.upstream} ${fb.unavailable.step} read gave no usable answer - retry shortly`, 503), { attribution: "unknown" });
       }
       const incomplete = fb.status === "unavailable" || fb.status === "partial";
       return {

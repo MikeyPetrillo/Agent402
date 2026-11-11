@@ -1,6 +1,11 @@
-// Three words on /api/gateway-status and their two observers: gatewayBalance
-// (withdraw), sharedLimits (degraded) and replayStore (pending). Also the spend
-// words (xDataSpend, exaSpend, routerSpendWindow: over and capped).
+// Words on /api/gateway-status and their two observers: gatewayBalance
+// (withdraw), topBuyerFailures (alert), sharedLimits (degraded) and
+// replayStore (pending). Also the spend words (xDataSpend, exaSpend,
+// routerSpendWindow: over and capped), and upstreamHealth and facilitatorFunds
+// driven end to end from the monitor (our own timeouts, DNS failures and
+// unread balances page nothing), and upstreamHealth=unanswered (a hung
+// upstream for several callers pages under its own neutral title; one caller,
+// or our side for every upstream, does not).
 //
 // gatewayBalance=withdraw holds from the read that reaches the mark until an
 // operator moves the balance, so it pages at once. The other two flicker in
@@ -137,6 +142,7 @@ const GB = "Gateway balance READY to withdraw";
 const SLT = "Shared limits store DEGRADED (Redis)";
 const RS = "Replay store marks PENDING (Redis)";
 const RSW = "Router spend per minute OVER its ceiling";
+const TBF = "topBuyerFailures: a top paying buyer is getting failed answers";
 const j = (gateway) => judge({ gateway });
 
 await check("Worker: routerSpendWindow pages on over and capped, clears on ok and off", () => {
@@ -148,6 +154,18 @@ await check("Worker: routerSpendWindow pages on over and capped, clears on ok an
   const b = a.body({ gateway: { routerSpendWindow: { status: "<x>", alarmAtomic: "77", hardAtomic: "77" } } });
   assert.equal(b, a.body({ gateway: {} }), "the body does not read the response");
   assert.doesNotMatch(b, /[0-9]|<x>|`|"|\$/, "no figure, and nothing a shell would expand");
+});
+
+await check("Worker: topBuyerFailures pages on alert, clears on ok; unknown, off and absent do neither", () => {
+  assert.equal(j({ topBuyerFailures: { status: "alert" } })[TBF], "bad");
+  assert.equal(j({ topBuyerFailures: { status: "ok" } })[TBF], "good");
+  for (const w of ["unknown", "off", "something-new"]) assert.equal(j({ topBuyerFailures: { status: w } })[TBF], "quiet", w);
+  assert.equal(j({})[TBF], "quiet", "a build without the word changes nothing");
+  const a = ALARMS.find((x) => x.title === TBF);
+  const b = a.body({ gateway: { topBuyerFailures: { status: "alert", alerting: [{ payer: "7xKX", rank: 1, failures: [{ slug: "onchain-sql", status: 502, error: "<x>" }] }] } } });
+  assert.equal(b, a.body({ gateway: {} }), "the body does not read the response");
+  assert.doesNotMatch(b, /[0-9]|<x>|7xKX|onchain-sql|`|"|\$/, "no payer, no tool, no figure, and nothing a shell would expand");
+  assert.match(b, /operator view of \/api\/gateway-status \(topBuyerFailures/, "it points at the operator view");
 });
 
 await check("Worker: gatewayBalance pages on withdraw at once, clears on ok and off", () => {
@@ -173,7 +191,7 @@ await check("Worker: replayStore pages only on alert=sustained, clears on ok", (
   assert.equal(j({})[RS], "quiet");
 });
 await check("Worker: the three bodies are fixed text with no figure", () => {
-  for (const T of [GB, SLT, RS]) {
+  for (const T of [GB, SLT, RS, TBF]) {
     const a = ALARMS.find((x) => x.title === T);
     assert.ok(a, `the Worker has "${T}"`);
     const b = a.body({ gateway: { gatewayBalance: { status: "<x>", usd: 77 }, sharedLimits: { failures: 77 }, replayStore: { pending: 77 } } });
@@ -201,6 +219,7 @@ await check("Worker: the three bodies are fixed text with no figure", () => {
   const CASES = [
     [GB, { gatewayBalance: { status: "withdraw" } }, { gatewayBalance: { status: "ok" } }, null],
     [RSW, { routerSpendWindow: { status: "over" } }, { routerSpendWindow: { status: "ok" } }, null],
+    [TBF, { topBuyerFailures: { status: "alert" } }, { topBuyerFailures: { status: "ok" } }, { topBuyerFailures: { status: "unknown" } }],
     [RSW, { routerSpendWindow: { status: "capped" } }, { routerSpendWindow: { status: "off" } }, null],
     [SLT, { sharedLimits: { status: "degraded", alert: "sustained" } }, { sharedLimits: { status: "on", alert: "ok" } }, { sharedLimits: { status: "degraded", alert: "ok" } }],
     [RS, { replayStore: { status: "pending", alert: "sustained" } }, { replayStore: { status: "ok", alert: "ok" } }, { replayStore: { status: "pending", alert: "ok" } }],
@@ -264,6 +283,7 @@ const argOf = (call, flag) => call[call.indexOf(flag) + 1];
 const HB = [
   // [step name prefix, title, field, alert reading, readings that neither open nor close, healthy readings]
   ["Gateway balance check", GB, "gatewayBalance", { status: "withdraw" }, [{ status: "unknown" }], [{ status: "ok" }, { status: "off" }]],
+  ["Top buyer failures check", TBF, "topBuyerFailures", { status: "alert" }, [{ status: "unknown" }, { status: "off" }], [{ status: "ok" }]],
   ["Shared limits store check", SLT, "sharedLimits", { status: "degraded", alert: "sustained" }, [{ status: "degraded", alert: "ok" }, { status: "degraded" }, { status: "unknown" }], [{ status: "on", alert: "ok" }, { status: "memory", alert: "ok" }]],
   ["Replay store check", RS, "replayStore", { status: "pending", alert: "sustained" }, [{ status: "pending", alert: "ok" }, { status: "pending" }, { status: "unknown" }], [{ status: "ok", alert: "ok" }]],
 ];
@@ -339,6 +359,289 @@ for (const [name, T, field, sameBody] of SPEND) {
     }
     for (const word of ["over", "capped", "unknown"]) assert.deepEqual(await runStep(step, { [field]: { status: word } }, [{ number: 9, title: T }]), [], word);
     assert.deepEqual(await runStep(step, undefined, [{ number: 9, title: T }]), [], "a blind read never closes");
+  });
+}
+// ---- upstreamHealth and facilitatorFunds, end to end -----------------------------
+// The words come from a real monitor fed the outcomes the server sees: our own
+// AbortSignal.timeout and DNS failures through the egress observer, then the
+// upstream's own 5xx answers; the gas checker's unread rows, then a real low
+// reading. Each reading is judged by the Worker and run through heartbeat.yml's
+// step as written: our own failures page nothing, the upstream's own failure
+// pages once, and recovery closes it.
+{
+  const { createToolFailureMonitor } = await import("../src/tool-failure-monitor.js");
+  const UH = "upstreamHealth: an upstream is timing out or failing";
+  const FG = "facilitatorFunds: a facilitator's settlement gas is running low";
+  const step = steps.find((s) => String(s.name || "").startsWith("Tool, upstream and facilitator failure checks"));
+  let t = Date.parse("2026-11-10T12:00:00Z");
+  const m = createToolFailureMonitor({ now: () => t, env: {} });
+  const words = async () => {
+    const st = await m.status({ fresh: true, t });
+    return { upstreamHealth: st.upstreamHealth, facilitatorFunds: st.facilitatorFunds };
+  };
+  const created = (calls, T) => calls.filter((c) => c[1] === "create" && argOf(c, "--title") === T).length;
+  const closedNum = (calls) => calls.filter((c) => c[1] === "close").map((c) => c[2]);
+  const ourTimeout = () => { const ac = new AbortController(); ac.abort(new DOMException("t", "TimeoutError")); const p = Promise.reject(new DOMException("The operation was aborted due to timeout", "TimeoutError")); p.catch(() => {}); return [p, { signal: ac.signal }]; };
+  const ourDns = () => { const p = Promise.reject(Object.assign(new TypeError("fetch failed"), { cause: { code: "EAI_AGAIN" } })); p.catch(() => {}); return [p, {}]; };
+  for (let i = 0; i < 40; i++) { const [p, init] = i % 2 ? ourTimeout() : ourDns(); m.observeFetch("hist.databento.com", p, init, "outside"); }
+  await new Promise((r) => setTimeout(r, 0));
+  let gw = await words();
+  await check("upstreamHealth: forty of our own timeouts and DNS failures read ok; the Worker and the heartbeat page nothing", async () => {
+    assert.equal(gw.upstreamHealth.status, "ok");
+    assert.notEqual(judge({ gateway: gw })[UH], "bad");
+    assert.equal(created(await runStep(step, gw), UH), 0);
+  });
+  for (let i = 0; i < 6; i++) m.observeFetch("hist.databento.com", Promise.resolve(new Response("x", { status: 502 })), {}, "outside");
+  await new Promise((r) => setTimeout(r, 0));
+  gw = await words();
+  await check("upstreamHealth: the upstream's own 502s page once under the title, and an open issue is not duplicated", async () => {
+    assert.ok(["degraded", "failing"].includes(gw.upstreamHealth.status), gw.upstreamHealth.status);
+    assert.equal(judge({ gateway: gw })[UH], "bad");
+    assert.equal(created(await runStep(step, gw), UH), 1);
+    assert.equal(created(await runStep(step, gw, [{ number: 7, title: UH }]), UH), 0);
+  });
+  t += 2 * 3_600_000; // the hour the word reads has passed
+  gw = await words();
+  await check("upstreamHealth: once the failures age out the word reads ok and the issue closes", async () => {
+    assert.equal(gw.upstreamHealth.status, "ok");
+    assert.equal(judge({ gateway: gw })[UH], "good");
+    assert.deepEqual(closedNum(await runStep(step, gw, [{ number: 7, title: UH }])), ["7"]);
+  });
+  // Gas: our failed balance reads are not a low balance.
+  const NET = "eip155:4663";
+  const row = (status, extra = {}) => ({ network: NET, facilitator: "listed", signer: "0x" + "1".repeat(40), status, runway: status === "low" ? 10 : status === "ok" ? 5000 : null, at: t, ...extra });
+  m.noteRelayerGas([row("unread", { failures: 3 })]);
+  gw = await words();
+  await check("facilitatorFunds: a signer our checker could not read reads unknown, and neither pages nor closes", async () => {
+    assert.equal(gw.facilitatorFunds.status, "unknown");
+    assert.equal(judge({ gateway: gw })[FG], "quiet");
+    assert.equal(created(await runStep(step, gw), FG), 0);
+    assert.deepEqual(closedNum(await runStep(step, gw, [{ number: 8, title: FG }])), []);
+  });
+  m.noteRelayerGas([row("low"), row("unread", { signer: "0x" + "2".repeat(40) })]);
+  gw = await words();
+  await check("facilitatorFunds: a real low balance still pages once, unread rows beside it or not", async () => {
+    assert.equal(gw.facilitatorFunds.status, "low");
+    assert.equal(judge({ gateway: gw })[FG], "bad");
+    assert.equal(created(await runStep(step, gw), FG), 1);
+  });
+  m.noteRelayerGas([row("ok")]);
+  gw = await words();
+  await check("facilitatorFunds: a funded signer reads ok and closes the issue", async () => {
+    assert.equal(gw.facilitatorFunds.status, "ok");
+    assert.equal(judge({ gateway: gw })[FG], "good");
+    assert.deepEqual(closedNum(await runStep(step, gw, [{ number: 8, title: FG }])), ["8"]);
+  });
+  // The issue opened under the title before its rename: both pagers close it
+  // when the word reads ok, low or unknown (the new titles take over those
+  // states, so it never stays open beside them), and neither ever opens it,
+  // on any word.
+  const OLD = "facilitatorFunds: a facilitator's settlement gas is running low or could not be read";
+  await check("facilitatorFunds: the issue under the old title closes on ok, low or unknown and is never opened", async () => {
+    for (const w of ["ok", "low", "unknown"]) {
+      const g = { facilitatorFunds: { status: w } };
+      assert.equal(judge({ gateway: g })[OLD], "good", `Worker: ${w}`);
+      assert.deepEqual(closedNum(await runStep(step, g, [{ number: 11, title: OLD }, { number: 4, title: `Other ${OLD}` }])), ["11"], `heartbeat: ${w} closes the old issue`);
+      assert.equal(created(await runStep(step, g), OLD), 0, `heartbeat: ${w} opens nothing under the old title`);
+    }
+    for (const w of ["refused", "demoted", "", "something-new"]) {
+      const g = { facilitatorFunds: { status: w } };
+      assert.equal(judge({ gateway: g })[OLD], "quiet", `Worker: ${w || "(empty)"}`);
+      const calls = await runStep(step, g, [{ number: 11, title: OLD }]);
+      assert.equal(calls.filter((c) => argOf(c, "--title") === OLD || c[2] === "11").length, 0, `heartbeat: ${w || "(empty)"}: ${JSON.stringify(calls)}`);
+      assert.equal(created(await runStep(step, g), OLD), 0, `heartbeat: ${w || "(empty)"} opens nothing under the old title`);
+    }
+    assert.deepEqual(closedNum(await runStep(step, undefined, [{ number: 11, title: OLD }])), [], "a blind read never closes it");
+    // The Worker's own sync: ok closes the open issue; low opens only the new title.
+    const realFetch = globalThis.fetch;
+    let made = [], shut = [];
+    globalThis.fetch = async (url, init = {}) => {
+      const u = String(url); const meth = (init.method || "GET").toUpperCase();
+      if (u === "https://api.github.com/user") return Response.json({ login: "probe-bot" });
+      if (u.includes("/issues?state=open")) return Response.json([{ number: 11, title: OLD, user: { login: "probe-bot" } }]);
+      if (meth === "POST" && /\/issues$/.test(u)) { made.push(JSON.parse(init.body).title); return new Response("{}", { status: 201 }); }
+      if (meth === "PATCH" && /\/issues\/\d+$/.test(u)) { shut.push(u); return new Response("{}", { status: 200 }); }
+      return new Response("{}", { status: 200 });
+    };
+    try {
+      const sync = (g) => syncAlarms({ GITHUB_ISSUES_TOKEN: "t" }, { sleep: async () => {}, confirmDelayMs: 0, fetchStatus: async () => ({ gateway: g, status: null }) });
+      let r = await sync({ facilitatorFunds: { status: "refused" } });
+      assert.ok(!r.opened.includes(OLD) && !r.closed.includes(OLD) && !made.includes(OLD), `Worker: refused leaves the old issue alone (${JSON.stringify(r)})`);
+      for (const w of ["low", "unknown", "ok"]) {
+        made = []; shut = [];
+        r = await sync({ facilitatorFunds: { status: w } });
+        assert.ok(r.closed.includes(OLD) && shut.some((u) => /\/issues\/11$/.test(u)) && !made.includes(OLD), `Worker: ${w} closes the old issue and never reopens it (${JSON.stringify(r)})`);
+      }
+    } finally { globalThis.fetch = realFetch; }
+  });
+  // An unread signer held for hours: a real monitor fed a fresh unread
+  // reading every ten minutes reads unknown with alert ok for the first six
+  // hours (nothing pages), then alert sustained, which pages once under its
+  // own title in both pagers; the balance read again (ok) closes it.
+  {
+    const UR = "facilitatorFunds: a settlement signer's balance could not be read for hours";
+    let tu = Date.parse("2026-11-10T00:00:00Z");
+    const mu = createToolFailureMonitor({ now: () => tu, env: {} });
+    const unreadRow = () => ({ network: NET, facilitator: "listed", signer: "0x" + "3".repeat(40), status: "unread", failures: 3, runway: null, at: tu });
+    const read = async () => { const st = await mu.status({ fresh: true, t: tu }); return { facilitatorFunds: st.facilitatorFunds }; };
+    const t0 = tu;
+    let g;
+    await check("facilitatorFunds: unknown for under six hours pages nothing; the alert word reads ok", async () => {
+      for (; tu < t0 + 6 * 3_600_000 - 10 * 60_000; tu += 10 * 60_000) mu.noteRelayerGas([unreadRow()]);
+      g = await read();
+      assert.deepEqual([g.facilitatorFunds.status, g.facilitatorFunds.alert], ["unknown", "ok"]);
+      assert.equal(judge({ gateway: g })[UR], "quiet");
+      assert.equal(created(await runStep(step, g), UR), 0);
+      const full = await mu.status({ fresh: true, t: tu, full: true });
+      assert.equal(full.facilitatorFunds.unreadSince, new Date(t0).toISOString(), "the operator view carries when the signer first read unread");
+    });
+    await check("facilitatorFunds: unknown held past six hours reads alert sustained and pages once in both pagers", async () => {
+      tu += 20 * 60_000; mu.noteRelayerGas([unreadRow()]);
+      g = await read();
+      assert.deepEqual([g.facilitatorFunds.status, g.facilitatorFunds.alert], ["unknown", "sustained"]);
+      assert.equal(judge({ gateway: g })[UR], "bad");
+      assert.equal(judge({ gateway: g })[FG], "quiet", "the low title stays quiet");
+      const calls = await runStep(step, g);
+      assert.equal(created(calls, UR), 1);
+      assert.equal(calls.filter((c) => c[1] === "create").length, 1, `only the unread title opens (${JSON.stringify(calls)})`);
+      assert.equal(created(await runStep(step, g, [{ number: 12, title: UR }]), UR), 0, "an open issue is not duplicated");
+    });
+    await check("facilitatorFunds: a sustained alert under a word that is not unknown pages nothing; a blind read neither opens nor closes", async () => {
+      for (const st of ["ok", "refused", "low"]) assert.notEqual(judge({ gateway: { facilitatorFunds: { status: st, alert: "sustained" } } })[UR], "bad", st);
+      assert.equal(created(await runStep(step, { facilitatorFunds: { status: "refused", alert: "sustained" } }), UR), 0);
+      assert.deepEqual(closedNum(await runStep(step, undefined, [{ number: 12, title: UR }])), []);
+    });
+    await check("facilitatorFunds: the balance read again closes the unread issue", async () => {
+      tu += 10 * 60_000; mu.noteRelayerGas([{ ...unreadRow(), status: "ok", runway: 5000 }]);
+      g = await read();
+      assert.deepEqual([g.facilitatorFunds.status, g.facilitatorFunds.alert], ["ok", "ok"]);
+      assert.equal(judge({ gateway: g })[UR], "good");
+      assert.deepEqual(closedNum(await runStep(step, g, [{ number: 12, title: UR }])), ["12"]);
+      tu += 10 * 60_000; mu.noteRelayerGas([unreadRow()]);
+      g = await read();
+      assert.deepEqual([g.facilitatorFunds.status, g.facilitatorFunds.alert], ["unknown", "ok"], "a new unread spell starts its own clock");
+    });
+  }
+}
+// ---- upstreamHealth=unanswered, end to end -----------------------------------------
+// A hung stub upstream: our AbortSignal.timeout fires on every call to it, for
+// five callers, while another upstream answers. The monitor reads unanswered;
+// the Worker and heartbeat.yml page once under the neutral title (not the
+// "timing out or failing" one) with a body that names no upstream, and close
+// it once the window passes. One caller's long inputs, and our egress or our
+// deadline on every upstream at once, page nothing.
+{
+  const { createToolFailureMonitor } = await import("../src/tool-failure-monitor.js");
+  const UN = "upstreamHealth: an upstream did not answer within our limit";
+  const UH = "upstreamHealth: an upstream is timing out or failing";
+  const step = steps.find((s) => String(s.name || "").startsWith("Tool, upstream and facilitator failure checks"));
+  const start = Date.parse("2026-11-10T15:00:00Z");
+  const created = (calls, T) => calls.filter((c) => c[1] === "create" && argOf(c, "--title") === T);
+  const closedNum = (calls) => calls.filter((c) => c[1] === "close").map((c) => c[2]);
+  const hungCall = (m, host, caller, { heavy = false } = {}) => {
+    const signal = AbortSignal.abort(new DOMException("t", "TimeoutError"));
+    signal[Symbol.for("agent402.upstreamLimitMs")] = 25_000;
+    if (heavy) signal[Symbol.for("agent402.upstreamHeavyInput")] = true;
+    const p = Promise.reject(new DOMException("The operation was aborted due to timeout", "TimeoutError")); p.catch(() => {});
+    m.observeFetch(host, p, { signal }, "outside", null, () => caller);
+  };
+  const dnsCall = (m, host) => { const p = Promise.reject(Object.assign(new TypeError("fetch failed"), { cause: { code: "EAI_AGAIN" } })); p.catch(() => {}); m.observeFetch(host, p, {}, "outside", null, () => "x"); };
+  const answered = (m, host, n) => { for (let i = 0; i < n; i++) m.observeFetch(host, Promise.resolve(new Response("x")), {}, "outside"); };
+  const read = async (m, t) => ({ upstreamHealth: (await m.status({ fresh: true, t })).upstreamHealth });
+  let t = start;
+  const m = createToolFailureMonitor({ now: () => t, env: {} });
+  for (let i = 0; i < 6; i++) hungCall(m, "hist.databento.com", `caller-${i % 5}`);
+  answered(m, "api.exa.ai", 8);
+  await new Promise((r) => setTimeout(r, 0));
+  let gw = await read(m, t);
+  await check("unanswered: a hung upstream for five callers pages once under the neutral title, with a body that names no upstream", async () => {
+    assert.deepEqual(gw.upstreamHealth, { status: "unanswered" });
+    const v = judge({ gateway: gw });
+    assert.equal(v[UN], "bad");
+    assert.notEqual(v[UH], "bad", "not the timing-out-or-failing page");
+    const worker = ALARMS.find((x) => x.title === UN);
+    assert.ok(worker, "the Worker has the alarm");
+    assert.doesNotMatch(worker.body({ gateway: gw }), /databento|failing|failed|outage|is down/i);
+    const calls = await runStep(step, gw);
+    assert.equal(created(calls, UN).length, 1, JSON.stringify(calls));
+    assert.equal(created(calls, UH).length, 0);
+    assert.equal(argOf(created(calls, UN)[0], "--body"), worker.body({ gateway: gw }), "the heartbeat's body is the Worker's");
+    assert.equal(created(await runStep(step, gw, [{ number: 11, title: UN }]), UN).length, 0, "an open issue is not duplicated");
+    const full = await m.status({ full: true, fresh: true, t });
+    assert.equal(full.upstreamHealth.upstreams[0].unanswered, "databento did not answer within our 25 s limit on 6 of 6 calls from 5 callers in 15 min", "the operator detail");
+  });
+  t += 20 * 60_000;
+  gw = await read(m, t);
+  await check("unanswered: once the window passes the word reads ok and the issue closes", async () => {
+    assert.equal(gw.upstreamHealth.status, "ok");
+    assert.equal(judge({ gateway: gw })[UN], "good");
+    assert.deepEqual(closedNum(await runStep(step, gw, [{ number: 11, title: UN }])), ["11"]);
+  });
+  const quiet = async (label, feed) => {
+    const q = createToolFailureMonitor({ now: () => start, env: {} });
+    feed(q);
+    await new Promise((r) => setTimeout(r, 0));
+    const g = await read(q, start);
+    await check(`unanswered: ${label} pages nothing`, async () => {
+      assert.equal(g.upstreamHealth.status, "ok", JSON.stringify(g));
+      const v = judge({ gateway: g });
+      assert.notEqual(v[UN], "bad"); assert.notEqual(v[UH], "bad");
+      const calls = await runStep(step, g);
+      assert.equal(created(calls, UN).length + created(calls, UH).length, 0, JSON.stringify(calls));
+    });
+  };
+  await quiet("one caller's long inputs held past our limit twenty times", (q) => { for (let i = 0; i < 20; i++) hungCall(q, "hist.databento.com", "caller-long", { heavy: true }); answered(q, "api.exa.ai", 8); });
+  await quiet("one slow call", (q) => { hungCall(q, "hist.databento.com", "caller-1"); answered(q, "api.exa.ai", 8); });
+  const ALL = ["hist.databento.com", "api.exa.ai", "openrouter.ai", "api.stlouisfed.org"];
+  await quiet("our egress failing for every upstream", (q) => { for (const h of ALL) for (let i = 0; i < 10; i++) dnsCall(q, h); });
+  await quiet("our deadline on every upstream at once, for many callers", (q) => { for (const h of ALL) for (let i = 0; i < 8; i++) hungCall(q, h, `caller-${i}`); });
+}
+// ---- the rail check: a dropped Circle Gateway batched option ---------------------
+// /api/rails carries gatewayBatched.dropped (each network with its reason word)
+// while the option is switched on; the heartbeat's rail check counts it beside
+// degraded rails, opens one "Settlement rail DEGRADED" issue naming it, and
+// closes it once nothing is dropped.
+{
+  const RT = "Settlement rail DEGRADED";
+  const step = steps.find((s) => String(s.name || "").startsWith("Rail check"));
+  const rails = (dropped, degraded = 0) => ({ configured: 2, offered: 2 - degraded, degraded, rails: [{ network: "base", caip2: "eip155:8453", offered: true, reason: null }, ...(degraded ? [{ network: "celo", caip2: "eip155:42220", offered: false, reason: "not offered - x (probe-timeout)", reasonWord: "probe-timeout" }] : [])], ...(dropped === undefined ? {} : { gatewayBatched: { networks: [], status: dropped.length ? "dropped" : "offered", dropped } }) });
+  const runRail = async (body, issues = []) => {
+    const calls = await runStep(step, body, issues);
+    let file = "";
+    try { file = await readFile("/tmp/rail-body.md", "utf8"); } catch { /* not written */ }
+    return { calls, file };
+  };
+  await check("rail check: a batched option dropped on probe-timeout opens one issue naming it; the plain rails all offered", async () => {
+    assert.ok(step, "heartbeat.yml has the rail check");
+    const { calls, file } = await runRail(rails([{ network: "eip155:8453", reason: "probe-timeout" }]));
+    assert.equal(calls.length, 1, JSON.stringify(calls));
+    assert.deepEqual([calls[0][0], calls[0][1], argOf(calls[0], "--title")], ["issue", "create", RT]);
+    assert.match(file, /Circle Gateway batched option on eip155:8453\*\* - not offered \(probe-timeout\)/);
+    assert.deepEqual((await runRail(rails([{ network: "eip155:8453", reason: "probe-timeout" }]), [{ number: 3, title: RT }])).calls, [], "an open issue is not duplicated");
+  });
+  await check("rail check: nothing dropped closes the issue; no batched field and an unreadable read do nothing", async () => {
+    const { calls } = await runRail(rails([]), [{ number: 3, title: RT }]);
+    assert.ok(calls.length === 1 && calls[0][1] === "close" && calls[0][2] === "3", JSON.stringify(calls));
+    assert.deepEqual((await runRail(rails(undefined))).calls, [], "the option off: no issue");
+    assert.deepEqual((await runRail(undefined, [{ number: 3, title: RT }])).calls, [], "a blind read never closes");
+  });
+  await check("rail check: not-in-offer and probe-skipped are configuration facts: they never open the issue, and alone they close it", async () => {
+    for (const reason of ["not-in-offer", "probe-skipped"]) {
+      assert.deepEqual((await runRail(rails([{ network: "arc", reason }]))).calls, [], `${reason}: no issue`);
+      const { calls } = await runRail(rails([{ network: "arc", reason }]), [{ number: 3, title: RT }]);
+      assert.ok(calls.length === 1 && calls[0][1] === "close" && calls[0][2] === "3", `${reason}: closes (${JSON.stringify(calls)})`);
+    }
+    for (const reason of ["probe-timeout", "read-failed", "not-advertised"]) {
+      const { calls, file } = await runRail(rails([{ network: "arc", reason: "not-in-offer" }, { network: "eip155:8453", reason }]));
+      assert.equal(calls.filter((c) => c[1] === "create").length, 1, `${reason} beside not-in-offer pages once`);
+      assert.match(file, new RegExp(`batched option on eip155:8453\\*\\* - not offered \\(${reason}\\)`));
+      assert.doesNotMatch(file, /not-in-offer/, `${reason}: the body lists only the failure`);
+    }
+  });
+  await check("rail check: a degraded plain rail still pages as before", async () => {
+    const { calls, file } = await runRail(rails(undefined, 1));
+    assert.equal(calls.filter((c) => c[1] === "create").length, 1);
+    assert.match(file, /\*\*celo\*\* - not offered - x \(probe-timeout\)/);
   });
 }
 await rm(dir, { recursive: true, force: true });

@@ -432,7 +432,7 @@ const proc = spawn("node", ["src/server.js"], {
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, AGENT402_BASE_RPC: `http://127.0.0.1:${RPC_PORT}/rpc`,
     EVM_RPC_8453: `http://127.0.0.1:${RPC_PORT}/rpc`, PAYMENT_SETTLE_FALLBACK: "",
     PENDING_SETTLE_RECEIPT_WAIT_MS: "4000", PENDING_SETTLE_POLL_MS: "400", LATE_SETTLE_RECONCILE: "off",
-    GATEWAY_SETTLE_BREAKER_MAX: "1", GATEWAY_SETTLE_BREAKER_MIN_FAIL_SHARE: "0",
+    GATEWAY_SETTLE_BREAKER_MAX: "1", GATEWAY_SETTLE_BREAKER_UNKNOWN_MAX: "1", GATEWAY_SETTLE_BREAKER_MIN_FAIL_SHARE: "0",
     LATE_SETTLE_FILE: LATE, REFUND_DB_DIR: DIR, SALES_LEDGER_DB: LEDGER, STATS_ALLOW_EPHEMERAL: "true", STATE_DATABASE_URL: "",
     AGENT402_OPERATOR_TOKEN: OP,
     REDIS_URL: "", CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", MPP_SECRET_KEY: "",
@@ -599,6 +599,9 @@ try {
     ok(r.status === 200 && r.receipt?.transaction === p.tx.toLowerCase(), `breaker (max 1 failure): recovered call ${i + 1} from one wallet -> 200 (status ${r.status})`);
   }
   // The control: one unrecovered pending call does block that wallet's next.
+  // A pending settle is a failure of unknown cause, counted at
+  // GATEWAY_SETTLE_BREAKER_UNKNOWN_MAX (1 here, so the three recovered calls
+  // above would each have tripped it had they counted).
   const Q = "0x" + "d1".repeat(20);
   rpcMode = "never";
   p = await newPayment("usage", { payer: Q });

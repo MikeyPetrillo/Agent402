@@ -188,7 +188,9 @@ export const TOOLS = [
     // announce posts use. Wednesdays, away from Monday's Algorand sweep.
     weekday: 3,
     priceUsd: 0.008,
-    check: (r) => (r?.tweet?.id === "20" && /twttr/.test(String(r?.tweet?.text)) && r?.tweet?.author?.username === "jack") || `expected tweet 20 by jack, got ${JSON.stringify(r).slice(0, 100)}`,
+    // x-tweet reads no author (src/tools/x-data-kit.js): the row carries the
+    // author id ("12" for post 20) and an /i/web/status link, never a username.
+    check: (r) => (r?.tweet?.id === "20" && /twttr/.test(String(r?.tweet?.text)) && r?.tweet?.authorId === "12" && r?.tweet?.url === "https://x.com/i/web/status/20") || `expected tweet 20 by author id 12, got ${JSON.stringify(r).slice(0, 100)}`,
   },
   {
     // Seller dossier (2026-09-08): a board-backed tool needs a prod-side

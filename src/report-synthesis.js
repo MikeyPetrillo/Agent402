@@ -5,6 +5,7 @@
 // so, rather than ending on a half sentence.
 
 import { fetchOpenRouter, throwUpstreamError } from "./tools/llm-gateway-kit.js";
+import { ATTRIBUTION, KIND, secondsOf } from "./upstream-deadline.js";
 
 export const stoppedForLength = (d) => String(d?.choices?.[0]?.finish_reason || "").toLowerCase() === "length";
 export const textOf = (d) => (d?.choices?.[0]?.message?.content || "").trim();
@@ -20,19 +21,26 @@ export async function reportChat(body, timeoutMs, user) {
 }
 
 /** Run one data leg without throwing: { ok: true, data } or
- *  { ok: false, error, status }. `work` is a promise or a function returning
- *  one (a function's synchronous throw is a failed leg too). Past `timeoutMs`
- *  the leg fails with a 504 "timeout"; the timer is cleared either way. */
+ *  { ok: false, error, status, attribution?, hint? }. `work` is a promise or a
+ *  function returning one (a function's synchronous throw is a failed leg
+ *  too). Past `timeoutMs` the leg fails with a 504 naming OUR limit (its
+ *  attribution "ours", kind our-deadline: our limit passing says nothing about
+ *  the source); the timer is cleared either way. A failed leg carries the
+ *  attribution and kind its error carried (src/upstream-deadline.js). */
 export async function settleWithin(work, timeoutMs) {
   let timer = null;
   try {
     const p = typeof work === "function" ? work() : work;
     const data = timeoutMs
-      ? await Promise.race([p, new Promise((_, r) => { timer = setTimeout(() => r(Object.assign(new Error("timeout"), { statusCode: 504 })), timeoutMs); })])
+      ? await Promise.race([p, new Promise((_, r) => { timer = setTimeout(() => r(Object.assign(new Error(`our ${secondsOf(timeoutMs)} s limit for this step passed`), { statusCode: 504, attribution: ATTRIBUTION.OURS, hint: KIND.OUR_DEADLINE })), timeoutMs); })])
       : await p;
     return { ok: true, data };
   } catch (e) {
-    return { ok: false, error: e?.message || String(e), status: Number.isInteger(e?.statusCode) ? e.statusCode : null };
+    return {
+      ok: false, error: e?.message || String(e), status: Number.isInteger(e?.statusCode) ? e.statusCode : null,
+      ...(typeof e?.attribution === "string" ? { attribution: e.attribution } : {}),
+      ...(typeof e?.hint === "string" ? { hint: e.hint } : {}),
+    };
   } finally {
     clearTimeout(timer);
   }

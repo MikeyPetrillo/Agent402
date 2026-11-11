@@ -100,11 +100,11 @@ for (const [status, want, why] of [[401, 503, "a refused key is OUR problem, a 5
 {
   let e = null;
   try { await judge(base, { fetchImpl: async () => { throw new TypeError("fetch failed"); } }); } catch (err) { e = err; }
-  ok(e?.statusCode === 503 && e?.attribution === "upstream" && /^Judgment upstream is unreachable from here \(judgment read/.test(e?.message || ""), `an unreachable upstream is a 503 naming the step (theirs), not a bare 500 (ours) (got ${e?.statusCode} "${e?.message}")`);
+  ok(e?.statusCode === 503 && e?.attribution === "unknown" && /^Judgment upstream is unreachable from here \(judgment read/.test(e?.message || ""), `an unreachable upstream is a 503 naming the step (no answer, side unknown), not a bare 500 (got ${e?.statusCode} "${e?.message}")`);
   const t = new Error("The operation was aborted due to timeout"); t.name = "TimeoutError";
   e = null;
   try { await judge(base, { fetchImpl: async () => { throw t; } }); } catch (err) { e = err; }
-  ok(e?.statusCode === 503 && e?.mayBeBilled === true && /^Judgment upstream did not answer the judgment read within \d+ s \(upstream deadline\)/.test(e?.message || ""), `a timed-out upstream is a 503 naming the step, may be billed (got ${e?.statusCode} "${e?.message}")`);
+  ok(e?.statusCode === 503 && e?.mayBeBilled === true && e?.attribution === "ours" && /^Judgment upstream did not answer the judgment read within our \d+ s limit/.test(e?.message || ""), `a timed-out upstream is a 503 naming the step and our limit, may be billed (got ${e?.statusCode} "${e?.message}")`);
 }
 
 // --- the answer passes through intact -----------------------------------------

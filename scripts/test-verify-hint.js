@@ -262,6 +262,56 @@ ok(r5.out.hint === undefined, "no remembered failure for this credential -> no h
   ok(unclassifiedPaymentHint({ paymentHeader, paymentRequiredHeader: null }) === null, "with no advertised requirements there is nothing to compare against, so it stays quiet");
 }
 
+// --- a verify with no verdict: not checked, nothing charged, same payment ---
+// Our request timing out or failing to connect, the facilitator answering an
+// HTTP error, or an on-chain check of ours that could not finish proves
+// nothing about the payment. Each is answered with the same-payment retry,
+// never "sign a fresh authorization" and never "pay on a network listed", and
+// a 5xx body that happens to say "network" is not read as wrong-network advice.
+{
+  const NOT_CHECKED = [
+    ["our time limit (core client)", "Facilitator verify request timed out after 15000ms", /did not complete/],
+    ["our time limit (Circle client)", "Circle facilitator verify failed (0): timeout", /did not complete/],
+    ["DNS", "fetch failed [ENOTFOUND syscall=getaddrinfo]", /did not complete/],
+    ["connection reset", "fetch failed [ECONNRESET syscall=read]", /did not complete/],
+    ["aborted", "This operation was aborted", /did not complete/],
+    ["facilitator 5xx with 'network' in its body", 'Facilitator verify failed (502): {"error":"upstream network unreachable"}', /answered HTTP 502/],
+    ["facilitator 503 (Circle)", "circle_http_503: Circle facilitator answered HTTP 503", /answered HTTP 503/],
+    ["facilitator 429", "Facilitator verify failed (429): rate limited", /answered HTTP 429/],
+    ["our credentials refused", "Facilitator verify failed (401): unauthorized", /refused this server's own credentials \(HTTP 401\)/],
+    ["contract signature unverifiable", "contract_signature_unverifiable", /could not finish its own on-chain check/],
+    ["contract-wallet check failed", "contract_wallet_check_failed", /could not finish its own on-chain check/],
+  ];
+  for (const [label, reason, says] of NOT_CHECKED) {
+    for (const network of ["eip155:8453", "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", "stellar:pubnet"]) {
+      const h = hintFor({ reason, balanceUsd: null, priceUsd: 0.005, network, payer: PAYER, detail: "insufficient balance on the network" });
+      ok(h.reason === "not-checked" && h.retry === "same-payment" && h.retryAfterSeconds === 5 && says.test(h.hint) && /not checked/.test(h.hint) && /Nothing was charged/.test(h.hint) && /same payment again/.test(h.hint)
+        && !/[Ss]ign a fresh authorization|sign a NEW|Pay on a network listed|[Ff]und the wallet/.test(h.hint), `${label} on ${network.split(":")[0]}: not-checked, same-payment, no new-signature or other-network advice (${h.reason}/${h.retry}: ${String(h.hint).slice(0, 90)})`);
+    }
+  }
+  // Controls beside them: a definite verdict keeps its own advice.
+  ok(hintFor({ reason: "unsupported network eip155:1", network: "eip155:1" }).retry === "other-network", "control: an unsupported network still points at accepts");
+  ok(hintFor({ reason: "invalid_network" }).retry === "other-network", "control: invalid_network still points at accepts");
+  ok(hintFor({ reason: 'Facilitator verify failed (400): {"error":"bad network"}' }).retry !== "other-network", "a 400 body that only mentions a network is not wrong-network advice");
+  for (const reason of ['Facilitator verify failed (400): {"error":"request timeout while waiting for receipt; nonce used"}', "Facilitator verify failed (422): fetch failed upstream; invalid signature", "gateway_http_409: aborted, authorization already used"]) {
+    ok(hintFor({ reason, network: "eip155:8453", payer: PAYER }).reason !== "not-checked", `a definite 4xx is never not-checked on transport words in its body (${reason.slice(0, 60)})`);
+  }
+  ok(hintFor({ reason: REVERT, balanceUsd: 0, priceUsd: 0.005, network: "eip155:8453", payer: PAYER }).retry === "fund-wallet", "control: a revert with an empty wallet still says fund-wallet");
+  ok(hintFor({ reason: "invalid_exact_evm_payload_signature" }).retry === "fresh-authorization", "control: a signature verdict still says sign a fresh authorization");
+  // Through the hook and the 402: no Base balance read for a not-checked
+  // failure, and the retried header gets the class, the verb and Retry-After 5.
+  _testResetForTest();
+  let reads = 0;
+  const C = cred("0x" + "5c".repeat(32));
+  const n = await noteVerifyFailure({ paymentPayload: C, network: "eip155:8453", reason: "fetch failed [ETIMEDOUT]", priceUsd: 0.005, now: () => Date.now(), balanceReader: async () => { reads++; return 0; } });
+  ok(reads === 0 && n.reasonClass === "not-checked" && n.bucket === "unknown", `a not-checked failure reads no balance (reads ${reads}, ${n.reasonClass})`);
+  const mw = verifyHintMiddleware();
+  const res = { statusCode: 402, headersSent: false, headers: {}, out: null, setHeader(k, v) { this.headers[k] = v; }, json(b) { this.out = b; return this; } };
+  mw({ headers: { "payment-signature": toHeader(C) } }, res, () => {});
+  res.json({ x402Version: 2, accepts: [] });
+  ok(res.out.reason === "not-checked" && res.out.retry === "same-payment" && res.headers["Retry-After"] === "5" && /not checked/.test(res.out.hint) && !("payerUsdcOnBase" in res.out), `the 402 to the same header says not-checked, same-payment, Retry-After 5 (${JSON.stringify({ reason: res.out.reason, retry: res.out.retry, ra: res.headers["Retry-After"] })})`);
+}
+
 // --- the published reason table cannot drift from the classifier ----------
 // /x402-test teaches developers this vocabulary. A class the classifier can
 // emit and the table does not document is a developer reading a page that does

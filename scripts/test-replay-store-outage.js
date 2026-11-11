@@ -255,6 +255,7 @@ try {
     import("express").then((m) => m.default), import("mppx"), import("stripe"), import("mppx/server"), import("node:crypto"),
     import("../src/mpp-tempo.js"), import("../src/mpp-stripe.js"), import("../src/replay-guard.js"), import("../src/shared-limit.js"), import("../src/drain-abort.js"),
   ]);
+  const { TEMPO_REFUSAL_CLASSES, TEMPO_PUSH_NOT_CHECKED } = await import("../src/mpp-tempo.js");
   const broken = { get: async () => { throw new Error("simulated outage"); }, set: async () => { throw new Error("simulated outage"); }, del: async () => { throw new Error("simulated outage"); }, expire: async () => { throw new Error("simulated outage"); } };
   const e0 = console.error, w0 = console.warn;
   const quiet = async (fn) => { console.error = () => {}; console.warn = () => {}; try { return await fn(); } finally { console.error = e0; console.warn = w0; } };
@@ -276,7 +277,7 @@ try {
   tempoApp.use(createTempoGate({
     secretKey: SECRET, realm: REALM, replayGuard: createReplayGuard(),
     priceFor: (_m, path) => (path === "/paid" ? { priceUsd: 0.05 } : path === "/long" ? { priceUsd: 0.05, longRunning: true } : null),
-    validate: async () => { tempo.validates++; return { ok: true, validation: {} }; },
+    validate: async () => { tempo.validates++; return tempo.validateAnswer || { ok: true, validation: {} }; },
     broadcast: async () => { tempo.broadcasts++; return { ok: true, receipt: { method: "tempo", status: "success", reference: `0xr${tempo.broadcasts}`, timestamp: new Date().toISOString() } }; },
     pushSender: async () => SENDER,
     onPushInputRefused: async () => { tempo.booked++; return true; },
@@ -317,29 +318,49 @@ try {
     let t0 = snap();
     let r = await quiet(() => tempoPost("/paid", pullCred()));
     let d = delta(t0, snap());
-    ok(await refused(r) && d.runs === 0 && d.broadcasts === 0, `tempo pull credential, store out, inside the window: refused 503 with Retry-After before the handler, nothing broadcast (${r.status}; ${JSON.stringify(d)})`);
+    const pullBody = await r.clone().json().catch(() => ({}));
+    ok(await refused(r) && d.runs === 0 && d.broadcasts === 0 && pullBody.charged === false, `tempo pull credential, store out, inside the window: refused 503 with Retry-After before the handler, nothing broadcast, charged:false (${r.status}; ${JSON.stringify(d)})`);
     t0 = snap();
     r = await quiet(() => tempoPost("/paid", pushCred("0x" + "a1".repeat(32))));
     const pb = await r.clone().json().catch(() => ({}));
     d = delta(t0, snap());
-    ok(await refused(r) && pb.transferClaimed === false && pb.charged === false && d.runs === 0 && d.broadcasts === 0 && d.booked === 0, `tempo push credential, store out, inside the window: refused 503 before the transfer is claimed or finalized, nothing booked (${r.status}; ${JSON.stringify(d)})`);
+    ok(await refused(r) && pb.transferClaimed === false && d.runs === 0 && d.broadcasts === 0 && d.booked === 0, `tempo push credential, store out, inside the window: refused 503 before the transfer is claimed or finalized, nothing booked (${r.status}; ${JSON.stringify(d)})`);
+    // A push credential names a transfer the buyer already sent: the body says
+    // it was not claimed and once final still pays, never "not charged".
+    ok(!("charged" in pb) && typeof pb.error === "string" && pb.error.includes(TEMPO_PUSH_NOT_CHECKED.tail.trim().replace(/^, /, "")) && /same credential/.test(pb.error) && !/is final on chain/.test(pb.error) && !/not charged|nothing was charged|not claimed or charged/i.test(pb.error) && pb.hint === TEMPO_PUSH_NOT_CHECKED.hint, `its body says the transfer is final, unclaimed and still pays, with no charged field (${JSON.stringify(pb).slice(0, 240)})`);
     // A push credential the ROUTE refuses (long-running: the owed-booking
     // path) meets the same store state before its claim: the same 503, so
     // the buyer does not read a verdict on a transfer nothing checked. The
-    // transfer is final on chain, so the body never says "not charged"; it
+    // transfer was already sent, so the body never says "not charged"; it
     // says the transfer is booked as owed once the credential returns.
     t0 = snap();
     r = await quiet(() => tempoPost("/long", pushCred("0x" + "b2".repeat(32))));
     const rb = await r.clone().json().catch(() => ({}));
     d = delta(t0, snap());
     ok(await refused(r) && rb.transferClaimed === false && d.runs === 0 && d.broadcasts === 0 && d.booked === 0 && d.validates === 0, `tempo push credential on a route that refuses it, store out, inside the window: refused 503 with Retry-After before the claim, no relay call, no handler, nothing booked as owed (${r.status}; ${JSON.stringify(d)})`);
-    ok(typeof rb.error === "string" && /final on chain/.test(rb.error) && /recorded as owed/.test(rb.error) && !/not charged|nothing was charged|no run was started/i.test(rb.error) && !("charged" in rb), `its body says the transfer is final and will be booked as owed when the credential returns, never that nothing was charged (${JSON.stringify(rb).slice(0, 200)})`);
+    ok(typeof rb.error === "string" && !/is final on chain/.test(rb.error) && /recorded as owed/.test(rb.error) && !/not charged|nothing was charged|no run was started/i.test(rb.error) && !("charged" in rb), `its body says the transfer will be booked as owed when the credential returns, never that it is final (unread) or that nothing was charged (${JSON.stringify(rb).slice(0, 200)})`);
     const c0 = { ...card };
     r = await quiet(() => cardPost());
     ok(await refused(r) && card.runs === c0.runs && card.captures === c0.captures, `card credential, store out, inside the window: refused 503 with Retry-After before the handler, nothing captured (${r.status}; runs +${card.runs - c0.runs}, captures +${card.captures - c0.captures})`);
 
-    // Past the window, one container: served on the per-process claim, once.
+    // Every Tempo 503 a push credential can meet from validate (the relay
+    // unreachable, our key refused, its dependency down), with and without a
+    // quotable relay message: none says "not charged" or carries charged:false.
     past();
+    const push503 = Object.entries(TEMPO_REFUSAL_CLASSES).filter(([, c]) => c.status === 503).map(([cls]) => cls);
+    const push503Bad = [];
+    for (const cls of push503) {
+      for (const relayMessage of [null, "database temporarily unavailable"]) {
+        tempo.validateAnswer = { ok: false, cls, error: "stub", relayMessage };
+        const pr = await quiet(() => tempoPost("/paid", pushCred("0x" + randomBytes(32).toString("hex"))));
+        const txt = await pr.text();
+        if (pr.status !== 503 || /not charged|nothing was charged|"charged"\s*:\s*false/i.test(txt) || !/"transferClaimed"\s*:\s*false/.test(txt)) push503Bad.push(`${cls}${relayMessage ? "+msg" : ""}:${pr.status}:${txt.slice(0, 120)}`);
+      }
+    }
+    tempo.validateAnswer = null;
+    ok(push503.length >= 3 && push503Bad.length === 0, `every Tempo 503 for a push credential (${push503.length} classes, with and without a relay message) says the transfer was not claimed and never "not charged" (${push503Bad.join(" | ")})`);
+
+    // Past the window, one container: served on the per-process claim, once.
     t0 = snap();
     const pull = pullCred();
     r = await quiet(() => tempoPost("/paid", pull));

@@ -24,7 +24,7 @@
 // gets a BUCKET, never an address.
 import { createHash } from "node:crypto";
 import { encodeFunctionData, decodeFunctionResult } from "viem";
-import { classifyPaymentRejection, classifySettlementRefusal, unclassifiedPaymentShape, unclassifiedPaymentHint } from "./payment-reject.js";
+import { classifyPaymentRejection, classifySettlementRefusal, unclassifiedPaymentShape, unclassifiedPaymentHint, notCheckedRefusal } from "./payment-reject.js";
 import { classifySvmFundingRefusal, fundingHint, fundingPayerOf, POW_SENTENCE } from "./svm-funding-refusal.js";
 import { classifySettlementPending, isGatewayBatchedPayment, isGatewayBatchedRequest, PENDING_RETRY_AFTER_SECONDS, SETTLEMENT_FAILED_DETAIL, SETTLEMENT_PENDING_DETAIL } from "./gateway-wire.js";
 import { decodePaymentHeader } from "./payment-header.js";
@@ -238,6 +238,11 @@ export function hintFor({ reason, balanceUsd, priceUsd, network, payer, gateway 
   // "insufficient funds" in a message can be the submitter's gas.
   const wordsRail = /^(stellar|algorand):/.test(net);
   const words = wordsRail ? `${r} ${typeof detail === "string" ? detail : ""}`.slice(0, 2000) : r;
+  // No verdict at all: our request did not complete, the facilitator
+  // answered an HTTP error, or a check of ours could not finish. Read first,
+  // so no word in an error body is taken as advice about the payment.
+  const notChecked = notCheckedRefusal(r, { chain: chainNameOf(net) });
+  if (notChecked) return { reason: notChecked.reason, retry: notChecked.retry, retryAfterSeconds: notChecked.retryAfterSeconds, hint: notChecked.detail };
   // A Solana payment whose transfer failed in the facilitator's simulation
   // because the paying wallet has no USDC account or too little USDC
   // (src/svm-funding-refusal.js): a new signature cannot fix that, funding can.
@@ -332,7 +337,9 @@ export function hintFor({ reason, balanceUsd, priceUsd, network, payer, gateway 
   }
   if (/expired|validBefore|valid_before/i.test(r)) return { retry: "fresh-authorization", hint: "The authorization's validity window has passed. Sign a fresh one." };
   if (/nonce|already used|replay/i.test(r)) return { retry: "fresh-authorization", hint: "That authorization nonce was already used. Sign a fresh one; a settled call is never re-charged." };
-  if (/network|unsupported|scheme/i.test(r)) return { retry: "other-network", hint: `Pay on a network listed in accepts${net ? ` (the header named ${net.slice(0, 80)})` : ""}.` };
+  // A word naming the network itself as wrong, never "network" alone: an
+  // error body can say "network" about anything.
+  if (/unsupported|scheme|invalid[ _-]?network|network[ _-]?mismatch|wrong[ _-]?network/i.test(r)) return { retry: "other-network", hint: `Pay on a network listed in accepts${net ? ` (the header named ${net.slice(0, 80)})` : ""}.` };
   return { retry: "fresh-authorization", hint: "The payment was refused before settlement. Sign a fresh authorization exactly matching one entry in accepts; nothing was charged." };
 }
 
@@ -356,7 +363,7 @@ export async function noteVerifyFailure({ paymentPayload, payer, network, reason
   const gateway = isGatewayBatchedPayment(paymentPayload);
   if (typeof network !== "string") network = "";
   if (typeof reason !== "string") reason = "";
-  const isBase = !gateway && network === "eip155:8453" && !/^settlement_(pending|failed)$/.test(reason);
+  const isBase = !gateway && network === "eip155:8453" && !/^settlement_(pending|failed)$/.test(reason) && !notCheckedRefusal(reason);
   const balanceUsd = isBase && from ? await balanceReader(from) : null;
   const svmPayer = /^solana:/.test(network) ? fundingPayerOf(paymentPayload, { feePayer }) : null;
   const h = hintFor({ reason, balanceUsd, priceUsd, network, payer: from, gateway, detail, svmPayer, payTo: requirements?.payTo });

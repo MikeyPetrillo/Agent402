@@ -736,6 +736,88 @@ async function withWarnings(fn) {
   server.close();
 }
 
+// Case N5: the same 503 classes for a PUSH credential (payload type "hash").
+// Its transfer was already sent, so the answer never says "nothing
+// was charged" or "nothing was broadcast": it says the transfer was not
+// claimed and still pays for this request, with transferClaimed:false. The
+// pull control beside it keeps the pull wording.
+{
+  for (const cls of ["relay-unreachable", "chain-unreachable", "relay-unavailable"]) {
+    for (const push of [true, false]) {
+      let handlerRan = false;
+      const app = express();
+      app.use(createTempoGate({ ...GATE, validate: async () => ({ ok: false, cls, reason: "x", error: "probe" }), broadcast: async () => ({ ok: true, receipt: {} }) }));
+      app.use(paywallStub);
+      app.get("/paid", (req, res) => { handlerRan = true; res.json({ served: true }); });
+      const { server, url } = await listen(app);
+      const { value: r } = await withWarnings(async () => { const x = await fetch(`${url}/paid`, { headers: { Authorization: buildTempoCredential({ push }) } }); return { status: x.status, body: await x.json().catch(() => ({})) }; });
+      const words = `${r.body.detail || ""} ${r.body.hint || ""}`;
+      if (push) ok(r.status === 503 && !handlerRan && r.body.details?.reason === cls && r.body.details?.transferClaimed === false && !("charged" in (r.body.details || {})) && !/nothing was charged|nothing was broadcast|another method/i.test(words) && /has not been claimed, so once final it still pays for this request/.test(r.body.detail || "") && !/is final on chain/.test(r.body.detail || "") && /same credential/.test(r.body.hint || ""), `case N5: push ${cls} -> 503 says not claimed, still pays, same credential (${r.status} ${words})`);
+      else ok(r.status === 503 && !handlerRan && r.body.details?.charged === false && /nothing was charged/.test(r.body.detail || "") && !("transferClaimed" in (r.body.details || {})), `case N5: pull ${cls} keeps "nothing was charged" (${r.status} ${words})`);
+      server.close();
+    }
+  }
+}
+
+// Case N3: OUR read failed with no verdict in it (direct mode reads the chain
+// itself; viem's HttpRequestError carries the request body, whose
+// validBefore once classified as "expired"). Classified as chain-unreachable:
+// 503 + Retry-After, "not checked, nothing charged", the same credential
+// again, and never a demotion off Tempo. The control beside it: the same
+// gate answering a definite "expired" verdict is a 402 and demotes.
+{
+  const { _resetTempoDemotion, tempoLeads, isOwnTransportError } = await import("../src/mpp-tempo.js");
+  const BODY = 'HTTP request failed.\n\nURL: https://rpc.tempo.xyz/\nRequest body: {"method":"eth_call","params":[{"from":"0x1111111111111111111111111111111111111111","validBefore":"0x6"}]}';
+  const viemErr = (cause) => Object.assign(new Error(BODY), { name: "HttpRequestError", cause });
+  const shapes = [
+    ["viem HttpRequestError", viemErr(new TypeError("fetch failed"))],
+    ["a wrapped DNS failure", Object.assign(new Error("Execution reverted? no: " + BODY), { name: "CallExecutionError", cause: Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("getaddrinfo ENOTFOUND rpc.tempo.xyz"), { code: "ENOTFOUND" }) }) })],
+    ["our own time limit", Object.assign(new Error("The request took too long to respond. " + BODY), { name: "TimeoutError" })],
+    ["a reset socket", Object.assign(new Error("other side closed validBefore"), { cause: { code: "UND_ERR_SOCKET" } })],
+  ];
+  for (const [label, e] of shapes) ok(isOwnTransportError(e) && classifyTempoRefusal(e) === "chain-unreachable", `case N3: ${label} is chain-unreachable, not a verdict (${classifyTempoRefusal(e)})`);
+  ok(!isOwnTransportError(Object.assign(new Error("execution reverted: insufficient balance"), { name: "RpcRequestError" })) && classifyTempoRefusal(Object.assign(new Error("execution reverted: insufficient balance"), { name: "RpcRequestError" })) === "insufficient-funds", "case N3: a JSON-RPC answer from the node is a verdict, not our transport");
+  const c = TEMPO_REFUSAL_CLASSES["chain-unreachable"];
+  ok(c.status === 503 && c.retryAfter > 0 && /not checked and nothing was charged/.test(c.detail) && /same credential/.test(c.hint), "case N3: chain-unreachable is a 503 that says not checked, nothing charged, same credential");
+  ok(/did not complete/.test(TEMPO_REFUSAL_CLASSES["relay-unreachable"].detail) && /this server's own time limit/.test(TEMPO_REFUSAL_CLASSES["relay-unreachable"].detail) && /same credential/.test(TEMPO_REFUSAL_CLASSES["relay-unreachable"].hint), "case N3: relay-unreachable says our request did not complete, and the same credential again");
+  for (const [cls, status, demoted] of [[classifyTempoRefusal(viemErr(new TypeError("fetch failed"))), 503, false], ["expired", 402, true]]) {
+    _resetTempoDemotion();
+    let handlerRan = false;
+    const app = express();
+    app.use(createTempoGate({ ...GATE, validate: async () => ({ ok: false, cls, reason: "Payment verification failed.", error: BODY }), broadcast: async () => ({ ok: true, receipt: {} }) }));
+    app.use(paywallStub);
+    app.get("/paid", (req, res) => { handlerRan = true; res.json({ served: true }); });
+    const { server, url } = await listen(app);
+    const { value: r } = await withWarnings(async () => { const x = await fetch(`${url}/paid`, { headers: { Authorization: buildTempoCredential(), "User-Agent": "agent/n3" } }); return { status: x.status, retry: x.headers.get("retry-after"), body: await x.json().catch(() => ({})) }; });
+    ok(r.status === status && !handlerRan && tempoLeads({ ip: "127.0.0.1", headers: { "user-agent": "agent/n3" } }) === !demoted, `case N3: ${cls} -> ${r.status}, ${demoted ? "demoted" : "not demoted"} (status ${r.status}, leads ${tempoLeads({ ip: "127.0.0.1", headers: { "user-agent": "agent/n3" } })})`);
+    if (status === 503) ok(Number(r.retry) > 0 && r.body.details?.charged === false && /not checked/.test(r.body.detail) && !/verification failed/i.test(r.body.detail), `case N3: the 503 says not checked, nothing charged (${r.body.detail})`);
+    server.close();
+  }
+  _resetTempoDemotion();
+}
+
+// Case N4: a broadcast refused after the handler marks the request with the
+// fault its class proves, for the settle breaker (src/settle-fault.js): a
+// verdict on the buyer's payment is "buyer", our transport and the relay's
+// own errors are "not-buyer", anything else is "unknown".
+{
+  const { SETTLE_FAULT } = await import("../src/settle-fault.js");
+  for (const [cls, proven] of [["insufficient-funds", "buyer"], ["expired", "buyer"], ["replay", "buyer"], ["chain-unreachable", "not-buyer"], ["relay-unreachable", "not-buyer"], ["relay-unavailable", "not-buyer"], ["policy-denied", "unknown"], ["unknown", "unknown"], [undefined, "unknown"]]) {
+    let mark = "unset", done;
+    const finished = new Promise((r) => { done = r; });
+    const app = express();
+    app.use((req, res, next) => { res.on("finish", () => { mark = req[SETTLE_FAULT]; done(); }); next(); });
+    app.use(createTempoGate({ ...GATE, validate: async () => ({ ok: true, validation: {} }), broadcast: async () => ({ ok: false, ...(cls ? { cls } : {}), error: "x", reason: "x" }) }));
+    app.use(paywallStub);
+    app.get("/paid", (req, res) => res.json({ served: true }));
+    const { server, url } = await listen(app);
+    const { value: st } = await withWarnings(async () => (await fetch(`${url}/paid`, { headers: { Authorization: buildTempoCredential() } })).status);
+    await Promise.race([finished, new Promise((r) => setTimeout(r, 5000).unref())]);
+    ok(st === 402 && mark === proven, `case N4: the ${cls || "classless"} broadcast refusal answers 402 and marks the fault ${proven} (got ${st}, ${mark})`);
+    server.close();
+  }
+}
+
 // Case N2: the relay answers 2xx with its own temporarily_unavailable code
 // (the exact 2026-10-12 production body) -> 503 + Retry-After, nothing
 // charged, the relay's own words in the detail with addresses masked, the

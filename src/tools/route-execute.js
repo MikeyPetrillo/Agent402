@@ -816,7 +816,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
               throw lastErr || bad(`Tried ${__paidAttempts} paid seller(s) for this task without a delivered answer. Refusing to sign another payment for one request.`, 502);
             }
             traceStep(req, "attempt", { origin: ext.seller, lane: ext.unproven ? "unproven" : "proven" });
-            paid = await payExternal(extUrl, { method: extMethod, body: extBody, maxAtomic: BigInt(Math.round(cap * 1e6)), chain, provenPayTo: ext.provenPayTo || null, evidenceWallets: ext.evidenceWallets || null, allowUnproven: ext.unproven === true, ...(ext.seller ? { sellerKey: ext.seller } : {}), refusalMaxWaitMs: refusalBudgetMs(), ...(tempoBudgetMs == null && evmSellerSignBy(req) != null ? { signBy: evmSellerSignBy(req) } : {}), ...(windowBudgetMs != null ? { timeoutMs: Math.max(3000, remainingMs()) } : cdnLeftMs != null ? { timeoutMs: Math.max(3000, Math.min(PAY_X402_TIMEOUT_MS, refusalBudgetMs())) } : {}), ...(callBudgetLeftMs() != null ? { deadlineMs: Math.max(0, callBudgetLeftMs()) } : {}), onSigned });
+            paid = await payExternal(extUrl, { method: extMethod, body: extBody, maxAtomic: BigInt(Math.round(cap * 1e6)), chain, provenPayTo: ext.provenPayTo || null, evidenceWallets: ext.evidenceWallets || null, allowUnproven: ext.unproven === true, ...(ext.seller ? { sellerKey: ext.seller } : {}), ...(spendPayer ? { payer: spendPayer } : {}), refusalMaxWaitMs: refusalBudgetMs(), ...(tempoBudgetMs == null && evmSellerSignBy(req) != null ? { signBy: evmSellerSignBy(req) } : {}), ...(windowBudgetMs != null ? { timeoutMs: Math.max(3000, remainingMs()) } : cdnLeftMs != null ? { timeoutMs: Math.max(3000, Math.min(PAY_X402_TIMEOUT_MS, refusalBudgetMs())) } : {}), ...(callBudgetLeftMs() != null ? { deadlineMs: Math.max(0, callBudgetLeftMs()) } : {}), onSigned });
           } catch (e) {
             // WHAT STAYS BOOKED IS WHAT MAY HAVE LEFT THE WALLET. The payer
             // stamps `committed:true` on every failure after the payment
@@ -847,7 +847,12 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             const sc = missing ? 400 : rawSc === 402 ? 409 : rawSc === 400 ? 502 : rawSc;
             lastErr = missing
               ? bad(`External seller "${ext.seller}" refused this request's input (HTTP ${e.sellerStatus}). Its published request contract requires ${missing.map((f) => `params.${f}`).join(", ")}, which this call did not send. Add ${missing.length > 1 ? "them" : "it"} and retry.${e?.paidUnanswered === true ? " No other seller is tried for this request." : ""}`, sc)
-              : bad(`External seller "${ext.seller}" failed: ${String(e?.message || e).slice(0, 200)}${e?.paidUnanswered === true ? "; no other seller is tried for this request" : ""}`, sc);
+              // The seller is named as failing only on its own answer
+              // (attribution "upstream": a status, a redirect); our limit,
+              // our spend budget, our RPC or an unanswered request is not
+              // the seller's failure, so it is worded as a purchase that did
+              // not complete, with the payer's own reason after it.
+              : bad(`${e?.attribution === "upstream" ? `External seller "${ext.seller}" failed` : `The purchase from external seller "${ext.seller}" did not complete`}: ${String(e?.message || e).slice(0, 200)}${e?.paidUnanswered === true ? "; no other seller is tried for this request" : ""}`, sc);
             // FALL THROUGH TO THE NEXT SELLER only on a 5xx (their own upstream
             // or gateway failed), and only when the error carries NO settle
             // receipt - a payExternal throw that includes a receipt means the

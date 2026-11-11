@@ -703,6 +703,13 @@ Auto-closes when nothing is owed.`,
     body: ({ gateway: b }) => failureWordBody("upstreamHealth", b.upstreamHealth?.status === "failing" ? "failing" : "degraded"),
   },
   {
+    // Our own limit passed on one upstream for several callers while others
+    // answered (src/unanswered-rule.js): neutral, no claim the upstream failed.
+    title: "upstreamHealth: an upstream did not answer within our limit",
+    verdict: ({ gateway: b }) => wordVerdict(b.upstreamHealth?.status, ["unanswered"], ["ok"]),
+    body: () => failureWordBody("upstreamHealth", "unanswered"),
+  },
+  {
     // Settle refusals (refused) and a facilitator in its settle cool-down
     // (demoted, src/settle-demotion.js).
     title: "facilitatorFunds: a facilitator refused settlement",
@@ -712,9 +719,28 @@ Auto-closes when nothing is owed.`,
   {
     // A facilitator's settlement signer short of gas before it starts
     // refusing (low, src/facilitator-gas.js). Title matches heartbeat.yml's.
-    title: "facilitatorFunds: a facilitator's settlement gas is running low or could not be read",
+    title: "facilitatorFunds: a facilitator's settlement gas is running low",
     verdict: ({ gateway: b }) => wordVerdict(b.facilitatorFunds?.status, ["low"], ["ok"]),
-    body: () => `${failureWordBody("facilitatorFunds", "low")} low means a settlement signer's gas runway is under the floor, or its balance could not be read three times running; the operator detail says which (relayersLow, relayersUnread).`,
+    body: () => `${failureWordBody("facilitatorFunds", "low")} low means a settlement signer's gas runway is under the floor (relayersLow). A balance our checker could not read reads unknown and pages under its own title only once that has held for hours; the operator detail counts it (relayersUnread).`,
+  },
+  {
+    // A settlement signer's balance our checker could not read, held past
+    // FACILITATOR_UNREAD_PAGE_HOURS (alert=sustained beside unknown,
+    // src/tool-failure-monitor.js). A short spell of unknown pages nothing;
+    // a read balance (ok or low) closes it. Title matches heartbeat.yml's.
+    title: "facilitatorFunds: a settlement signer's balance could not be read for hours",
+    verdict: ({ gateway: b }) => (b.facilitatorFunds?.status === "unknown" && b.facilitatorFunds?.alert === "sustained" ? "bad" : ["ok", "low"].includes(b.facilitatorFunds?.status) ? "good" : "quiet"),
+    body: () => `${failureWordBody("facilitatorFunds", "unknown")} unknown with alert=sustained means our checker has not read a settlement signer's balance for longer than FACILITATOR_UNREAD_PAGE_HOURS (default 6), so its gas runway is not known; the operator detail counts it (relayersUnread, unreadSince). Closes when the balance reads again (ok or low).`,
+  },
+  {
+    // Close-only: the issue opened under this title before it was renamed
+    // (above) closes once the word reads ok, low or unknown (the two titles
+    // above take over those states, so it never stays open beside them).
+    // Never opens: the verdict is "good" or "quiet", never "bad". Title
+    // matches heartbeat.yml's.
+    title: "facilitatorFunds: a facilitator's settlement gas is running low or could not be read",
+    verdict: ({ gateway: b }) => (["ok", "low", "unknown"].includes(b.facilitatorFunds?.status) ? "good" : "quiet"),
+    body: () => failureWordBody("facilitatorFunds", "low"),
   },
   {
     // The settle breaker refused a buyer that had settled a call in its
@@ -797,6 +823,16 @@ Auto-closes when nothing is owed.`,
     closeAfterTwoOk: true,
     verdict: ({ gateway: b }) => wordVerdict(b.brokenListings?.status, ["widespread"], ["ok"]),
     body: () => "/api/gateway-status reports brokenListings.status=widespread: inside the last 15 minutes the seller listings of many distinct origins (past a floor and a share of the indexed origins) threw while they were read and were dropped, which one seller's bad data does not do; a code bug in how listings are read is emptying external routing while the process stays up. The origins and counts are on the operator endpoint, /__operator/perf.json (brokenListings, operator token). Auto-closes after two ok reads in a row.",
+  },
+  {
+    // A top outside payer's verified paid calls are failing
+    // (topBuyerFailures, src/top-buyer-failures.js): alert pages, ok clears,
+    // unknown and off do neither. The payer, the tools and our error text are
+    // on the operator view only; this text names none of them. Title
+    // matches heartbeat.yml's.
+    title: "topBuyerFailures: a top paying buyer is getting failed answers",
+    verdict: ({ gateway: b }) => wordVerdict(b.topBuyerFailures?.status, ["alert"], ["ok"]),
+    body: () => "/api/gateway-status reports topBuyerFailures.status=alert: one of our top outside payers by paid spend over the last week has had TOP_BUYER_FAIL_MIN or more failed final answers (any status that is not a success, except a refusal of the caller's own input that the answer attributes to the caller or to no one) to verified paid requests inside TOP_BUYER_FAIL_WINDOW_MS. The payer's short id, its spend rank, the tools, statuses, times and the first characters of the error text we sent are on the operator view of /api/gateway-status (topBuyerFailures, operator token). Read them, fix the failing tool or path, and check whether what we told the buyer was true. Nothing is refused for it. Auto-closes when the word reads ok.",
   },
   {
     // Redis persistence (redisPersistence on /api/gateway-status,

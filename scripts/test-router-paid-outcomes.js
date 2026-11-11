@@ -101,6 +101,26 @@ const SELLERS = {
   "bare500.example": { bare: () => new Response("down", { status: 500 }) },
   "notfound.example": { bare: () => new Response("nope", { status: 404 }) },
   "overcap.example": { bare: () => r402("9000000") },
+  // OURS, NOT THE SELLER'S (each benches nothing, however often): a Gateway
+  // rail accept and a transfer-then-prove accept this stock signer cannot
+  // make; a challenge whose only difference is the query the caller's params
+  // built; a refusal naming the authorization's validity after OUR window cut
+  // the seller's 300 s to 30 s (its control: the same refusal with no cut).
+  "gateway.example": { bare: () => new Response("{}", { status: 402, headers: { "payment-required": b64({ x402Version: 2, accepts: [{ ...accept(), extra: { name: "GatewayWalletBatched", version: "1" } }] }) } }) },
+  "transfer.example": { bare: () => new Response("{}", { status: 402, headers: { "payment-required": b64({ x402Version: 2, accepts: [{ ...accept(), extra: { name: "USD Coin", version: "2", paymentMethod: "direct-transfer" } }] }) } }) },
+  "querymismatch.example": { bare: () => new Response("{}", { status: 402, headers: { "payment-required": b64({ x402Version: 2, resource: { url: "https://querymismatch.example/x?q=theirs" }, accepts: [accept()] }) } }) },
+  "pathmismatch.example": { bare: () => new Response("{}", { status: 402, headers: { "payment-required": b64({ x402Version: 2, resource: { url: "https://pathmismatch.example/other" }, accepts: [accept()] }) } }) },
+  "window.example": {
+    bare: () => new Response("{}", { status: 402, headers: { "payment-required": b64({ x402Version: 2, accepts: [{ ...accept(), maxTimeoutSeconds: 300 }] }) } }),
+    paid: () => new Response("{}", { status: 402, headers: { "content-type": "application/json", "payment-required": b64({ x402Version: 2, error: "invalid_exact_evm_payload_authorization_valid_before", accepts: [{ ...accept(), maxTimeoutSeconds: 300 }] }) } }),
+  },
+  "window-uncut.example": {
+    bare: () => new Response("{}", { status: 402, headers: { "payment-required": b64({ x402Version: 2, accepts: [{ ...accept(), maxTimeoutSeconds: 20 }] }) } }),
+    paid: () => new Response("{}", { status: 402, headers: { "content-type": "application/json", "payment-required": b64({ x402Version: 2, error: "invalid_exact_evm_payload_authorization_valid_before", accepts: [{ ...accept(), maxTimeoutSeconds: 20 }] }) } }),
+  },
+  // a 500 whose body names the request as the problem: the input's, not the backend's
+  "inputfault500.example": { paid: () => new Response(JSON.stringify({ error: "validation error: field 'symbol' is required" }), { status: 500, headers: { "content-type": "application/json" } }) },
+  "outage502.example": { paid: () => new Response(JSON.stringify({ error: "invalid input" }), { status: 502, headers: { "content-type": "application/json" } }) },
   // wrong EIP-712 domain on the Base accept: unsignable, refused before signing
   "wrongdomain.example": { bare: () => new Response("{}", { status: 402, headers: { "payment-required": b64({ x402Version: 2, accepts: [{ ...accept(), extra: { name: "USDC", version: "2" } }] }) } }) },
 };
@@ -600,6 +620,99 @@ const near = (a, b) => Math.abs(a - b) < 1e-9;
     "a handler's own 402/401 body, an empty accepts list and a non-payment auth challenge are not offers");
 }
 
+// ===========================================================================
+// 3b. NO STRIKE FOR OUR OWN GAPS, NONE FOR ONE BUYER'S INPUT
+// ===========================================================================
+{
+  const memo = (host) => buyer.sellerRefusedRecently(`https://${host}`, "base");
+  const thrice = async (fn) => { let last; for (let i = 0; i < 3; i++) last = await fn(); return last; };
+  chainReader = CHAIN.unused;
+  buyer.__resetSellerRefusalsForTest();
+  for (const host of ["gateway.example", "transfer.example"]) {
+    const { e } = await thrice(() => buy(host, { memoizeDelivery: true }));
+    ok(e?.refused === true && /Nothing was signed/.test(e.message) && !memo(host), `RULE: an accept our signer cannot make (${host}) is refused unsigned three times and benches nothing`);
+  }
+  {
+    const { e } = await thrice(() => buy("querymismatch.example", { memoizeDelivery: true }, "/x?q=mine"));
+    ok(e?.refused === true && !memo("querymismatch.example"), "RULE: a challenge differing only in the query the caller's params built benches nothing");
+    await thrice(() => buy("pathmismatch.example", { memoizeDelivery: true }));
+    ok(memo("pathmismatch.example")?.kind === "offer", "CONTROL: a challenge for another path still benches the route, recorded as the seller's offer");
+  }
+  {
+    const { e } = await thrice(() => buy("window.example", { memoizeDelivery: true }));
+    ok(e?.refused === true && !memo("window.example"), "RULE: a refusal naming validBefore after our window cut the seller's own benches nothing");
+    await buy("window-uncut.example", { memoizeDelivery: true });
+    await buy("window-uncut.example", { memoizeDelivery: true });
+    ok(memo("window-uncut.example")?.kind === "paid-retry", "CONTROL: the same refusal with the seller's own window uncut benches the route, recorded as a paid-retry refusal");
+  }
+  buyer.__resetSellerRefusalsForTest();
+  // The delivery memo: one payer's same request is one strike until it
+  // repeats; the same request from another payer, or a call naming no payer,
+  // strikes; a 500 naming the input goes unstruck only when the chain proves
+  // nothing was charged.
+  chainReader = CHAIN.consumed;
+  buyer.__resetSellerDeliveryFailuresForTest();
+  const failing = (host) => buyer.sellerDeliveryFailingRecently(`https://${host}`, "base");
+  const memoOf = (host) => buyer.sellerDeliveryMemoEntries().find((m) => m.origin === `https://${host}`);
+  await buy("broken.example", { memoizeDelivery: true, body: { q: "same" }, payer: "0xpayer-a" });
+  await buy("broken.example", { memoizeDelivery: true, body: { q: "same" }, payer: "0xpayer-a" });
+  ok(!failing("broken.example") && memoOf("broken.example")?.strikes === 1, "RULE: one payer's same request failing twice is one strike, not a skip");
+  await buy("broken.example", { memoizeDelivery: true, body: { q: "same" }, payer: "0xpayer-a" });
+  ok(failing("broken.example")?.strikes === 2, "RULE: one payer's same request failing a third time counts again and makes the skip");
+  buyer.__resetSellerDeliveryFailuresForTest();
+  await buy("broken.example", { memoizeDelivery: true, body: { q: "same" }, payer: "0xpayer-a" });
+  await buy("broken.example", { memoizeDelivery: true, body: { q: "another" }, payer: "0xpayer-a" });
+  ok(failing("broken.example")?.strikes === 2, "CONTROL: a second, different request failing makes the skip (a real outage fails every input)");
+  buyer.__resetSellerDeliveryFailuresForTest();
+  // A parameterless route: every caller sends the same request.
+  const outcomes = [];
+  for (const payer of ["0xpayer-a", "0xpayer-b", "0xpayer-c", "0xpayer-d", "0xpayer-e"]) {
+    await buy("broken.example", { memoizeDelivery: true, method: "GET", body: undefined, payer });
+    outcomes.push(!!failing("broken.example"));
+  }
+  ok(outcomes.join() === "false,true,true,true,true", `RULE: five charged failures of the same request from different payers bench the seller at the second (${outcomes.join()})`);
+  buyer.__resetSellerDeliveryFailuresForTest();
+  await buy("broken.example", { memoizeDelivery: true, method: "GET", body: undefined });
+  await buy("broken.example", { memoizeDelivery: true, method: "GET", body: undefined });
+  ok(failing("broken.example")?.strikes === 2, "RULE: a call naming no payer is counted per call");
+  buyer.__resetSellerDeliveryFailuresForTest();
+  // Charged (the signed authorization was consumed): a 500 naming the input strikes.
+  chainReader = CHAIN.consumed;
+  await buy("inputfault500.example", { memoizeDelivery: true, body: { q: 1 }, payer: "0xpayer-a" });
+  await buy("inputfault500.example", { memoizeDelivery: true, body: { q: 2 }, payer: "0xpayer-a" });
+  ok(failing("inputfault500.example")?.strikes === 2, "RULE: a charged 500 naming the request strikes like any charged failure");
+  buyer.__resetSellerDeliveryFailuresForTest();
+  for (const [label, reader] of [["a live credential", CHAIN.live], ["an unreadable chain", CHAIN.unreadable]]) {
+    chainReader = reader;
+    await buy("inputfault500.example", { memoizeDelivery: true, body: { q: 1 }, payer: "0xpayer-a" });
+    ok(memoOf("inputfault500.example")?.strikes === 1, `RULE: a 500 naming the request with ${label} (not proven uncharged) strikes`);
+    buyer.__resetSellerDeliveryFailuresForTest();
+  }
+  // Proven uncharged (expired unused): one payer's bad input benches nothing.
+  chainReader = CHAIN.unused;
+  for (let i = 0; i < 3; i++) await buy("inputfault500.example", { memoizeDelivery: true, body: { q: i }, payer: "0xpayer-a" });
+  ok(!failing("inputfault500.example") && !memoOf("inputfault500.example"), "RULE: a 500 naming the request that the chain proves uncharged writes no strike, for any input");
+  chainReader = CHAIN.consumed;
+  await buy("outage502.example", { memoizeDelivery: true, body: { q: 1 }, payer: "0xpayer-a" });
+  await buy("outage502.example", { memoizeDelivery: true, body: { q: 2 }, payer: "0xpayer-a" });
+  ok(failing("outage502.example")?.strikes === 2, "CONTROL: a 502 always strikes, whatever its body says");
+  buyer.__resetSellerDeliveryFailuresForTest();
+  // The caller path: route-execute hands its spend key in as the payer.
+  {
+    guard.__reset(); chainReader = CHAIN.consumed;
+    const asCaller = (ip) => routeTool([cand("broken.example")]).handler({ task: "t", include: "external", params: { q: "same" } }, { ip }).catch((e) => e);
+    await asCaller("192.0.2.77"); await asCaller("192.0.2.77");
+    ok(memoOf("broken.example")?.strikes === 1, `RULE: route-execute's same caller and request failing twice is one strike (${JSON.stringify(memoOf("broken.example")?.strikes)})`);
+    await asCaller("192.0.2.78");
+    ok(failing("broken.example")?.strikes === 2, "CONTROL: the same request from a second caller through route-execute makes the skip");
+    guard.__reset();
+  }
+  ok(buyer.deliveryFailureIsInputFault(500, "Internal Server Error") === false && buyer.deliveryFailureIsInputFault(500, "database connection refused: missing env") === false
+    && buyer.deliveryFailureIsInputFault(500, '{"message":"\"amount\" is required"}') === true && buyer.deliveryFailureIsInputFault(503, "invalid input") === false,
+    "the input-fault reading: only a 500 whose body names the request");
+  buyer.__resetSellerDeliveryFailuresForTest();
+}
+
 // ---------------------------------------------------------------------------
 // Call-site pins: the rules above are inert unless the callers use them.
 {
@@ -614,14 +727,14 @@ const near = (a, b) => Math.abs(a - b) < 1e-9;
   ok(/payExternal: \(url, opts\) => \{ const o = \{ \.\.\.opts, memoizeDelivery: true \}; return opts\?\.chain === "tempo" \? payTempo\(url, o\) : payX402\(url, o\); \}/.test(server),
     "only the router's own purchases opt into the memos, on both rails (server.js payExternal)");
   const pay = readFileSync(new URL("../src/x402-buyer.js", import.meta.url), "utf8");
-  ok(/if \(memoizeDelivery\) noteSellerRefusal\(url, chain, 402\)/.test(pay) && /const memoize = memoizeDelivery && \(paid\.status === 402 \|\| paid\.status === 401\) && paidRefusalCarriesChallenge\(paid\.headers, refusalText\) && postSendRefusalIsSellers\(url, chain, \{ proven: !allowUnproven \}\);\n\s*if \(memoize\) noteSellerRefusal\(url, chain, paid\.status\)/.test(pay),
+  ok(/if \(memoizeDelivery\) noteSellerRefusal\(url, chain, 402, \{ kind: "offer" \}\)/.test(pay) && /const memoize = memoizeDelivery && !ourWindow && \(paid\.status === 402 \|\| paid\.status === 401\) && paidRefusalCarriesChallenge\(paid\.headers, refusalText\) && postSendRefusalIsSellers\(url, chain, \{ proven: !allowUnproven \}\);\n\s*if \(memoize\) noteSellerRefusal\(url, chain, paid\.status\)/.test(pay),
     "both refusal-memo writes in the payer are gated on the router's opt-in and keyed by the route; the paid-retry one also on a 402/401 carrying the seller's offer and on the refusal not being a chain-wide pattern");
   ok(/if \(memoizeDelivery\) clearSellerDeliveryFailure\(memoSeller, chain\);/.test(pay) && !/^\s*clearSellerDeliveryFailure\((?:sellerOrigin|memoSeller), chain\);/m.test(pay),
     "the chain-proven refusal clears the delivery memo only on the router's opt-in");
-  ok(/if \(payable\.amount != null && payable\.maxAmountRequired != null && !sameAtomic\(payable\.amount, payable\.maxAmountRequired\)\) \{\n\s*if \(memoizeDelivery\) noteSellerRefusal\(url, chain, 402\);/.test(pay),
+  ok(/if \(payable\.amount != null && payable\.maxAmountRequired != null && !sameAtomic\(payable\.amount, payable\.maxAmountRequired\)\) \{\n\s*if \(memoizeDelivery\) noteSellerRefusal\(url, chain, 402, \{ kind: "offer" \}\);/.test(pay),
     "the split-price refusal memo in the payer is gated on the router's opt-in and keyed by the route");
   const refusalCalls = pay.match(/^.*noteSellerRefusal\(.*$/gm) || [];
-  const gatedCalls = refusalCalls.filter((l) => /^\s*if \((memoizeDelivery|memoize)\) noteSellerRefusal\(/.test(l));
+  const gatedCalls = refusalCalls.filter((l) => /^\s*if \((memoizeDelivery(?: && (?:resourceVerdict\.field !== "query"|domain\.verdict === "wrong_domain"))?|memoize)\) noteSellerRefusal\(/.test(l));
   const definitions = refusalCalls.filter((l) => /^export function noteSellerRefusal\(/.test(l));
   ok(refusalCalls.length === 6 && gatedCalls.length === 5 && definitions.length === 1,
     "no other refusal-memo write exists in the payer (definition + five gated calls: a challenge for another resource, domain refusal, the token's own domain off Base, split price, paid retry)");

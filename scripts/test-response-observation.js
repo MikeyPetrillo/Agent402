@@ -159,5 +159,26 @@ ok(o.lastMissing.join(",") === "data.attributes",
   ok(/resolvedCandidateOf\(/.test(server), "...and the resolver builds its candidates with that function");
 }
 
+// A BODY WE CUT IS NOT WHAT THE SELLER SENT. readAfterSpend marks a body cut
+// at our own byte limit `_truncated` (and one it could not read `relayError`):
+// a guaranteed path missing from it is ours, so the call is not observed, and
+// the published keep rate is the seller's own.
+{
+  const o = "https://cut.example";
+  ok(observeDelivery({ origin: o, method: "POST", route: "/r", guaranteedPaths: ["result.value"], body: { raw: "{\"result\":{\"va", _truncated: true } }) === null
+    && deliveryObservation(o, "POST", "/r") === null, "a body cut at our byte limit is not observed");
+  ok(observeDelivery({ origin: o, method: "POST", route: "/r", guaranteedPaths: ["result.value"], body: { relayError: "upstream body unreadable" } }) === null, "nor is a body we could not read");
+  observeDelivery({ origin: o, method: "POST", route: "/r", guaranteedPaths: ["result.value"], body: { result: { value: 1 } } });
+  ok(deliveryObservation(o, "POST", "/r")?.calls === 1 && deliveryObservation(o, "POST", "/r")?.keptRate === 1, "control: a whole body is observed as before");
+}
+// The published delivery_failing reason says what the memo records: never a
+// timeout (a paid leg that times out is not recorded), and two requests.
+{
+  const { DISPATCH_REASONS, dispatchLegend } = await import("../src/dispatch-eligibility.js");
+  const reason = DISPATCH_REASONS.delivery_failing;
+  ok(!/timeout|no answer/i.test(reason) && /two different requests/.test(reason), `the delivery_failing reason names no timeout and says two different requests (${reason.slice(0, 90)})`);
+  ok(/two different requests/.test(JSON.stringify(dispatchLegend())), "and so does the legend");
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

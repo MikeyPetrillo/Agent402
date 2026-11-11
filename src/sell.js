@@ -83,7 +83,7 @@ const NEW_SELLER_VERDICTS = [
   ["category_excluded", "Nothing to fix: the route stays listed, buyers can still call it directly, and your other routes are judged on their own."],
   ["settlement_required", "If the verdict also carries unprovenTier: true, there is nothing to fix: you are callable now in the unproven lane, and payments from real outside buyers move you up."],
   ["settlement_self_funded", "Payments made with USDC your own paid wallet sent the payer are netted out. Only buyers' own money counts."],
-  ["delivery_failing", "The router's last paid call to you did not deliver. It retries once that memo expires; fix the failing route first."],
+  ["delivery_failing", "Two of the router's recent paid calls to you, for different requests, did not deliver. It retries once that memo expires or a paid call to you delivers; fix the failing route first."],
 ];
 
 // Each answer stands alone (it is also the FAQPage JSON-LD text); `links`

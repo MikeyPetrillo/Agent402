@@ -115,7 +115,7 @@ for (const lit of ["::ffff:0:808:808", "64:ff9b:1::808:808", "64:ff9b::808:808"]
   }
   for (const m of ["EAI_AGAIN", "ESERVFAIL", "ETIMEOUT", "ECONNREFUSED", "EREFUSED", "HANG"]) {
     const e = await upfront(m);
-    ok(e?.statusCode === 503 && e.message === LOOKUP_UNAVAILABLE && e.retryAfter === LOOKUP_RETRY_AFTER_S && e.attribution === "upstream" && !/private/i.test(e.message),
+    ok(e?.statusCode === 503 && e.message === LOOKUP_UNAVAILABLE && e.retryAfter === LOOKUP_RETRY_AFTER_S && e.attribution === "ours" && e.hint === "our-egress" && !/private/i.test(e.message),
       `lookup ${m}: retryable 503 with Retry-After, no address class (${e?.statusCode} ${e?.retryAfter} ${e?.message})`);
     if (m === "HANG") continue;
     const h = await hop(m);

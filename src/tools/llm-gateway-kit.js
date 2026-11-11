@@ -52,7 +52,8 @@ import { payerFromRequest, paymentHeaderOf } from "../payer.js";
 // module header) - refuses before any upstream call, arms the outcome listener.
 import { gatewaySettleBreakerCheck } from "../gateway-settle-breaker.js";
 import { clientGoneSignal } from "../drain-abort.js";
-import { directUpstreamConfig, withDirectAttempts, directBodyFrom, directShareDraw, directCostUsd, stripVendorExtensions, noteDirectAb, noteDirectSkip, noteDirectAnomaly, failureBucket, directModelFor, directBreakerTake, directBreakerRelease, noteDirectOutcome } from "../gateway-direct-upstream.js";
+import { heavyInput, ourKeyRefusedError } from "../upstream-deadline.js";
+import { directUpstreamConfig, withDirectAttempts, directBodyFrom, directShareDraw, directCostUsd, stripVendorExtensions, noteDirectAb, noteDirectSkip, noteDirectAnomaly, failureBucket, directModelFor, directBreakerTake, directBreakerRelease, noteDirectOutcome, directHeavyOutput } from "../gateway-direct-upstream.js";
 import { directPriceDecision, noteDirectMeasure } from "../gateway-direct-pricebook.js";
 import { readBytesCapped, declaredLength, discardBody } from "../capped-body.js";
 import { clientGoneError } from "../hangup-settlement.js";
@@ -1021,6 +1022,15 @@ export const PAYMENT_WINDOW_TAIL_MS = 5_000;
  *  `defaultMs` when the request carries none; throws a 504 (not charged)
  *  when too little is left to start another attempt. */
 const windowAttempted = new WeakSet();
+/** Whether a direct attempt's timeout was cut short by the caller's own
+ *  window: shorter than the timeout it would have had with no window (the
+ *  configured direct timeout capped by the route's default). Exported for
+ *  tests. */
+export function directAttemptClamped(timeoutMs, directMs, defaultMs) {
+  if (!Number.isFinite(timeoutMs) || !Number.isFinite(directMs)) return false;
+  const unclamped = Number.isFinite(defaultMs) ? Math.min(directMs, defaultMs) : directMs;
+  return timeoutMs < unclamped;
+}
 export function paymentWindowTimeoutMs(req, defaultMs) {
   // Through the CDN proxy the answer must also start inside the proxy's wait
   // (src/cdn-sync-window.js); the nearer of the two bounds applies.
@@ -3003,7 +3013,7 @@ export async function fetchOpenRouter(body, { timeoutMs, signal, url = OPENROUTE
  *  content download, a poll) keep a plain upstream error: a 4xx there is ours. */
 export async function throwUpstreamError(res, { refusal = false, model } = {}) {
   const text = await res.text().catch(() => "");
-  if (res.status === 401 || res.status === 403) throw bad("Gateway upstream auth failed", 502);
+  if (res.status === 401 || res.status === 403) throw ourKeyRefusedError("The model gateway", res.status);
   if (res.status === 402) throw bad("Gateway upstream balance exhausted - the operator has been notified", 502);
   if (res.status === 429) throw bad("Upstream rate-limited - retry shortly", 503);
   if (res.status >= 500) throw bad(`Upstream error (HTTP ${res.status})`, 502);
@@ -3119,9 +3129,13 @@ async function fetchDirectUpstream(body, { signal, timeoutMs, cfg = directUpstre
     // An abort from the stream relay's own controller (its first-frame timer,
     // which then marks upstreamTimeout itself, or the buyer leaving).
     if (e?.name === "AbortError") throw directFailure("Direct upstream request aborted", 504, "aborted");
-    throw directFailure("Direct upstream unreachable", 502, "connect");
+    // A lookup our resolver could not finish or a route our side lacks is
+    // not the upstream's answer (the breaker leaves "egress" out); a refused
+    // or reset connection, or a host name that does not resolve, is.
+    throw directFailure("Direct upstream unreachable", 502, DIRECT_EGRESS_CODES.has(e?.cause?.code || e?.code) ? "egress" : "connect");
   }
 }
+const DIRECT_EGRESS_CODES = new Set(["EAI_AGAIN", "EAI_FAIL", "ESERVFAIL", "EREFUSED", "ETIMEOUT", "EDNSLOOKUPTIMEOUT", "ENETUNREACH", "ENETDOWN", "EHOSTUNREACH", "EADDRNOTAVAIL"]);
 function directStatusFailure(status) {
   if (status === 429) return directFailure("Direct upstream at capacity", 503, "rate_limited");
   if (status === 402) return directFailure("Direct upstream balance exhausted", 502, "quota");
@@ -4248,6 +4262,21 @@ function makeHandler(routeTier) {
     // the one the margin clamp already made for this link (metered links,
     // which skip the clamp, estimate the direct body here).
     const directCfg = directUpstreamConfig();
+    // Whether this prompt is long enough to outlast the direct link's limit
+    // (HEAVY_INPUT_SHARE of the tier's input cap for the model): the direct
+    // breaker counts our own timeout only on a shorter one.
+    const promptChars = (Array.isArray(body.messages) ? body.messages : []).reduce((n, m) => {
+      try { return n + (m && m.content != null ? contentChars(m.content).chars : 0); } catch { return n; }
+    }, 0);
+    // A large output cap is heavy too (a long expected generation), and an
+    // attempt whose timeout the caller's own window clamped below the
+    // unclamped one (the configured direct timeout, itself capped by the
+    // route's default, as attemptTimeoutMs takes it) never counts as the
+    // single-caller failure (it reads the unanswered rule instead).
+    const directOpts = (model, timeoutMs, directBody, defaultMs) => ({
+      heavy: heavyInput({ size: promptChars, max: maxInputCharsFor(tierSlug, model) }) || directHeavyOutput(directBody) || directHeavyOutput(body),
+      clamped: directAttemptClamped(timeoutMs, directCfg?.timeoutMs, defaultMs),
+    });
     const attempts = withDirectAttempts(attemptsFor(chain, body).slice(0, TIERS[tierSlug].maxAttempts || Infinity), directCfg);
     const directPlanFor = (direct, outbound, stream) => {
       if (!direct) return null;
@@ -4310,7 +4339,7 @@ function makeHandler(routeTier) {
                 return out;
               } catch (e) {
                 if (abListed) noteDirectAb(directBody ? "direct" : "openrouter", { ok: false, reason: failureBucket(e) });
-                if (directBody) noteDirectOutcome(false, failureBucket(e));
+                if (directBody) noteDirectOutcome(false, failureBucket(e), undefined, directOpts(model, timeoutMs, directBody, STREAM_TIMEOUT_MS));
                 if (res.headersSent || ![502, 503, 504].includes(e?.statusCode)) throw e;
                 if (!directBody || !lastErr) lastErr = e;
                 // A direct attempt's timeout is not one of the buyer's timed-out
@@ -4452,7 +4481,7 @@ function makeHandler(routeTier) {
         return data;
       } catch (e) {
         if (abListed) noteDirectAb(abLabel, { ok: false, reason: failureBucket(e) });
-        if (directBody) noteDirectOutcome(false, failureBucket(e));
+        if (directBody) noteDirectOutcome(false, failureBucket(e), undefined, directOpts(model, timeoutMs, directBody, UPSTREAM_TIMEOUT_MS));
         if (![502, 503, 504].includes(e?.statusCode)) throw e;
         if (!directBody || !lastErr) lastErr = e;
         // Not counted for a direct attempt (see the stream walk above).

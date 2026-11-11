@@ -62,6 +62,27 @@ Loaded when an index, discovery, router or buyer file is read.
   re-checks). A seller that keeps failing is stamped again and waits a whole window; a passing verdict
   stays on the rotation; an explicit re-registration probes whenever probes are on (`paywallVerdictExpired` in
   `src/x402-index.js`, `scripts/test-index-paywall-recheck.js`).
+- **Our read is not the seller's answer:** a crawl read that failed on our side (our time limit, our
+  resolver, our byte cap: `crawlReadFailureIsOurs` in `src/x402-index.js`) counts toward a path's
+  backoff only once per `CRAWL_OURS_PER_STEP` (3) in a row; a connection the seller's host refused,
+  reset or failed TLS on (`source-unreachable`) and a name that does not resolve are the seller's
+  answer and count like any other. A failed
+  crawl with such a read keeps an entry whose last completed crawl succeeded as it was, with
+  `readIncomplete` beside it (`lastReadIncomplete` on `?seller=` and the index rows), while that crawl
+  is under `INDEX_CRAWL_HOLD_HOURS` old (default 6), or whatever its age when at least half of the last
+  cycle's crawls ended on our side (`oursShare` in the cycle summary); past that it reads unroutable
+  with `errorKind: "our-read-incomplete"` (`scripts/test-crawl-read-incomplete.js`). A paywall probe
+  that read no status, or a 400/415/422 to our bare request, is no verdict (`ok: null`, `unknown`), never
+  a failure. A chain count we could not read is unknown, never 0: Algorand keeps the last completed count
+  and re-reads the catalog in minutes; Solana throws `countUnknown` when unread transactions could reach
+  the floor. The delivery memo counts one payer's same request (method, URL, body) once, and again at its
+  3rd and 5th failure; the same request from another payer, or a call naming no payer, is its own strike.
+  A 500 whose body names the request goes unstruck only when the chain proves the credential expired
+  unused; whenever we may have paid (a receipt, a debit, a live credential, an unreadable chain or no
+  chain read on the rail) it strikes, on every rail; a refusal note is never written for an accept this signer cannot make
+  (Gateway rail, transfer-then-prove), a challenge differing only in the caller's query, or a refusal
+  naming validBefore after our window cut the seller's; each note records its `kind` (`offer` or
+  `paid-retry`) for the dossier.
 - **Unproven tier:** A Base seller below the settlement floor is tried after every proven candidate in the unproven
   tier (`src/base-unproven.js`): its signed quote at most `SOR_BASE_UNPROVEN_MAX_USD` (default
   $0.05), paid only at its live 402's payTo, `sellerProof: "unproven"` on the receipt, and at most

@@ -65,9 +65,9 @@ ok(pubBody?.directUpstream?.status === "off" && Object.keys(pubBody.directUpstre
 
 // --- tool and upstream failure words: one word each publicly, rows for the operator ---
 for (const k of ["toolFailures", "upstreamHealth"]) {
-  ok(["ok", "degraded", "failing"].includes(pubBody?.[k]?.status) && Object.keys(pubBody[k]).join(",") === "status", `${k} publishes its word only (${JSON.stringify(pubBody?.[k])})`);
+  ok(["ok", "degraded", "failing", ...(k === "upstreamHealth" ? ["unanswered"] : [])].includes(pubBody?.[k]?.status) && Object.keys(pubBody[k]).join(",") === "status", `${k} publishes its word only (${JSON.stringify(pubBody?.[k])})`);
 }
-ok(["ok", "low", "refused", "demoted"].includes(pubBody?.facilitatorFunds?.status) && Object.keys(pubBody.facilitatorFunds).join(",") === "status", `facilitatorFunds publishes its word only (${JSON.stringify(pubBody?.facilitatorFunds)})`);
+ok(["ok", "low", "unknown", "refused", "demoted"].includes(pubBody?.facilitatorFunds?.status) && Object.keys(pubBody.facilitatorFunds).join(",") === "status,alert" && ["ok", "sustained"].includes(pubBody.facilitatorFunds.alert), `facilitatorFunds publishes its word and its alert word only (${JSON.stringify(pubBody?.facilitatorFunds)})`);
 ok(Array.isArray(opBody?.toolFailures?.tools) && Array.isArray(opBody?.upstreamHealth?.upstreams) && typeof opBody?.facilitatorFunds?.refusals1h === "number", "the operator view of the failure words carries the rows and counts");
 ok(["ok", "degraded"].includes(pubBody?.toolAnswers?.status) && Object.keys(pubBody.toolAnswers).join(",") === "status", `toolAnswers publishes its word only (${JSON.stringify(pubBody?.toolAnswers)})`);
 ok(Array.isArray(opBody?.toolAnswers?.tools), "the operator view of toolAnswers carries its rows");
@@ -75,6 +75,8 @@ ok(["ok", "repeating"].includes(pubBody?.containedTurns?.status) && Object.keys(
 ok(Array.isArray(opBody?.containedTurns?.repeating) && ["ok", "repeating"].includes(opBody?.containedTurns?.status), "the operator view of containedTurns carries the repeating names");
 ok(pubBody?.brokenListings?.status === "ok" && Object.keys(pubBody.brokenListings).join(",") === "status", `brokenListings publishes its word only (${JSON.stringify(pubBody?.brokenListings)})`);
 ok(opBody?.brokenListings?.status === "ok" && typeof opBody.brokenListings.origins === "number" && typeof opBody.brokenListings.indexedOrigins === "number" && typeof opBody.brokenListings.widespreadMin === "number" && !/https?:\/\//.test(JSON.stringify(opBody.brokenListings)), `the operator view of brokenListings carries the window's counts and rule, never an origin (${JSON.stringify(opBody?.brokenListings)})`);
+// FREE_MODE verifies no payment, so nothing is watched: the word reads off on both views.
+ok(pubBody?.topBuyerFailures?.status === "off" && Object.keys(pubBody.topBuyerFailures).join(",") === "status" && opBody?.topBuyerFailures?.status === "off", `topBuyerFailures publishes its word only, off in FREE_MODE (${JSON.stringify(pubBody?.topBuyerFailures)})`);
 ok(["ok", "refusing"].includes(pubBody?.buyerRefusals?.status) && Object.keys(pubBody.buyerRefusals).join(",") === "status", `buyerRefusals publishes its word only (${JSON.stringify(pubBody?.buyerRefusals)})`);
 ok(typeof opBody?.buyerRefusals?.refusalsWindow === "number" && typeof opBody?.buyerRefusals?.refusals24h === "number", "the operator view of buyerRefusals carries the counts");
 for (const w of ["settleFailures", "unsettledReports"]) {

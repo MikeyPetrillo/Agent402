@@ -24,6 +24,7 @@ import { reportChat, costOf, textOf, settleWithin } from "../report-synthesis.js
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 import { checkReportGrounding, sanitizeReportProse, cleanSourceTitle, quotedMaterial, neutralizeQuoteMarkers, QUOTED_DATA_RULE } from "../report-grounding.js";
 import { CONTRACT_TOOLS } from "./contract-kit.js";
+import { upstreamFetch, bodyUnderDeadline } from "../upstream-deadline.js";
 
 // Keyless control-plane facts the report used to disclaim as "not visible
 // here": GoPlus token_security (honeypot, proxy, mintable, hidden owner, taxes,
@@ -46,10 +47,15 @@ const KEYLESS_TIMEOUT_MS = 12_000;
 // caller's token: both probes answer 200 with an empty result when they hold
 // no record, so there is no status here that means "your address is wrong".
 // 422 is reserved for that answer and minted only where it is read.
-async function getJson(url) {
-  const res = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(KEYLESS_TIMEOUT_MS) });
-  if (!res.ok) throw bad(`upstream HTTP ${res.status}`, res.status === 429 ? 503 : 502);
-  return res.json();
+// Our own limit passing, or no connection, is the shared 503 class
+// (src/upstream-deadline.js), which names our limit and never the source as
+// down; only the source's own status is attributed to it.
+async function getJson(url, label = "Token-security source", step = "token security") {
+  const ctx = { label, step, timeoutMs: KEYLESS_TIMEOUT_MS, budget: null, tag: "[token-risk]" };
+  const res = await upstreamFetch(url, { headers: { accept: "application/json" } }, ctx);
+  if (!res.ok) throw Object.assign(bad(`upstream HTTP ${res.status}`, res.status === 429 ? 503 : 502), { upstreamStatus: res.status, attribution: "upstream" });
+  try { return await bodyUnderDeadline(res.json(), ctx); }
+  catch (err) { if (err?.statusCode) throw err; throw Object.assign(bad(`${label} returned an unreadable body`, 502), { attribution: "upstream" }); }
 }
 const flag = (v) => (v === "1" || v === 1 || v === true ? true : v === "0" || v === 0 || v === false ? false : null);
 export async function probeGoPlus({ chain, address }) {
@@ -86,7 +92,7 @@ export function shapeGoPlus(r) {
 export async function probeDexPairs({ chain, address }) {
   const c = DEXSCREENER_CHAINS[chain];
   if (!c) throw bad(`DexScreener does not cover ${chain}`, 422);
-  const arr = await getJson(`https://api.dexscreener.com/token-pairs/v1/${c}/${address}`);
+  const arr = await getJson(`https://api.dexscreener.com/token-pairs/v1/${c}/${address}`, "DEX pairs source", "pairs");
   const pairs = (Array.isArray(arr) ? arr : []).map((p) => ({
     dex: p.dexId || null, pair: p.pairAddress || null, baseAddress: p.baseToken?.address || null, quote: p.quoteToken?.symbol || null, priceUsd: p.priceUsd != null ? Number(p.priceUsd) : null,
     liquidityUsd: Number(p.liquidity?.usd) || 0, volume24h: Number(p.volume?.h24) || 0, volume1h: Number(p.volume?.h1) || 0,
@@ -202,9 +208,18 @@ function makeTokenRiskHandlerInner(tierSlug, deps = {}) {
     // token", "chain not covered"); every other outcome is the source itself.
     // Both are >= 400, so settlement is cancelled and nobody pays; what differs
     // is the words and the class a monitor files it under.
+    // The words say whose side failed only when it is known: the source's
+    // own answer (attribution "upstream"), our limit passing, or a throw of
+    // our own (no status), which is an internal error, never an outage.
     if (!gp && gpR.status !== 422) {
-      throw bad(`The token-security source is unavailable (${gpR.error}), so the risk report for "${address}" on ${chain} could not be produced. Not charged; try again shortly.`,
-        UNAVAILABLE_STATUS.has(gpR.status) ? gpR.status : 503);
+      const why = gpR.attribution === "upstream" ? `the token-security source answered with a failure (${gpR.error})`
+        : gpR.status == null ? "the token-security read hit an internal error on our side"
+        : `the token-security read did not complete (${gpR.error})`;
+      throw Object.assign(bad(`The risk report for "${address}" on ${chain} could not be produced: ${why}. Not charged; try again shortly.`,
+        UNAVAILABLE_STATUS.has(gpR.status) ? gpR.status : 503), {
+        attribution: gpR.attribution || (gpR.status == null ? "ours" : "unknown"),
+        ...(gpR.hint ? { hint: gpR.hint } : gpR.status == null ? { hint: "internal" } : {}),
+      });
     }
     // Minimum evidence: a RISK report needs on-chain token facts (supply) or the
     // holder distribution, and the token-security record is where both come

@@ -20,7 +20,7 @@ import { redactSecrets } from "./redact.js";
 import { formatUnits } from "./alchemy-data-kit.js";
 import sha3 from "js-sha3"; // CommonJS — default import, then destructure (same as b20-kit)
 const { keccak256 } = sha3;
-import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, isUpstreamFailure, upstreamDeadline, budgetSpent, currentBudget } from "../upstream-deadline.js";
+import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, isUpstreamFailure, budgetSpentError, budgetSpent, currentBudget } from "../upstream-deadline.js";
 
 // DEADLINES (src/upstream-deadline.js): each read has its own cap, composed
 // with the handler budget, so a fallback walk over several public nodes ends
@@ -230,7 +230,7 @@ export async function publicJsonRpc(network, method, params) {
   // upstream's 503 class, not a 502 of ours. A provider refusal or a node's
   // own error keeps the 502.
   if (isUpstreamFailure(lastErr)) throw lastErr;
-  if (!lastErr && budgetSpent()) throw upstreamDeadline("Chain RPC", method, currentBudget()?.totalMs ?? EVM_RPC_TIMEOUT_MS);
+  if (!lastErr && budgetSpent()) throw budgetSpentError("Chain RPC", method, currentBudget()?.totalMs ?? EVM_RPC_TIMEOUT_MS);
   throw bad(`RPC upstream unavailable for ${network.name}${lastErr ? ` (${redactSecrets(String(lastErr.message)).slice(0, 120)})` : ""}`, 502);
 }
 

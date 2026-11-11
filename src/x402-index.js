@@ -188,7 +188,7 @@ export async function refreshIndexSideStores() {
 export async function __sideStoresSettledForTest() { await Promise.all([...sideChains.values()].map((p) => p.catch(() => {}))); }
 import { timedSync } from "./boot-timing.js";
 import { esc } from "./ledger-chrome.js";
-import { safeFetch, probePublicUrl } from "./tools/fetch-guard.js";
+import { safeFetch, probePublicUrl, OUR_EGRESS_CONNECT_CODES } from "./tools/fetch-guard.js";
 import { readTextCapped } from "./capped-body.js";
 import { parseRobots, robotsAllows } from "./tools/kit.js";
 import { partialFields, clampFields } from "./partial-answer.js";
@@ -4484,7 +4484,13 @@ function paywallVerdictOnTemplate(pw) {
 /** Is this stored paywall verdict a failure due a fresh probe? A missing
  *  verdict is the rotation's business; a passing one is not expired here. */
 export function paywallVerdictExpired(pw, now = Date.now(), windowMs = PAYWALL_FAILED_RECHECK_MS) {
-  if (!pw || typeof pw !== "object" || pw.ok !== false) return false;
+  if (!pw || typeof pw !== "object") return false;
+  // A stored failure with no HTTP status was our probe not completing, kept
+  // as a failure by an earlier build: due again now. A probe that read no
+  // verdict (paywallUnknown) is due again after the same window as a failure,
+  // so it never takes the re-check budget from one every cycle.
+  if (pw.ok === false && !(Number(pw.status) > 0)) return true;
+  if (pw.ok !== false && pw.unknown !== true) return false;
   if (paywallVerdictOnTemplate(pw)) return true;
   const at = Number(pw.at);
   return !(at > 0) || now - at >= windowMs;
@@ -5481,11 +5487,27 @@ async function probePaywall(tools, { redirectedTo = null } = {}) {
     // live-verified signal (we made the request and read the actual header),
     // never a claim inferred from a registry or a manifest field.
     const mpp = isMppChallenge(res.headers.get("www-authenticate"));
+    // A 400, 415 or 422 to our bare request (no parameters, or the `{}` body
+    // above) answers OUR request's shape before any paywall is reached: it
+    // says nothing about whether a well-formed call gets a 402. No verdict.
+    if (PAYWALL_PROBE_SHAPE_STATUSES.has(res.status)) {
+      await res.body?.cancel?.().catch?.(() => {});
+      return paywallUnknown(url, `our unpaid probe was not a well-formed request for this route (HTTP ${res.status} to ${method === "GET" ? "a request without parameters" : "an empty JSON body"}); no paywall verdict`, res.status);
+    }
     // `url` is the URL that answered, which is the upgraded one after a 301/308.
     return { ok: res.status === 402, status: res.status, url, at: Date.now(), mpp };
   } catch (e) {
-    return { ok: false, status: 0, url: e?.probedUrl || url, at: Date.now(), error: String(e?.message || e).slice(0, 120), mpp: false };
+    // No status was read: our time limit, a connection that did not finish,
+    // our resolver. That is our probe not completing, not the route failing.
+    return paywallUnknown(e?.probedUrl || url, `our unpaid probe did not complete (${String(e?.message || e).slice(0, 100)}); no paywall verdict`, 0);
   }
+}
+// The answers to our own malformed probe request, read as no verdict.
+const PAYWALL_PROBE_SHAPE_STATUSES = new Set([400, 415, 422]);
+/** A paywall probe that read no verdict: `ok` is null, never a failure;
+ *  paywallVerdictExpired re-probes it after the failure window. */
+function paywallUnknown(url, error, status) {
+  return { ok: null, unknown: true, status, url, at: Date.now(), error, mpp: false };
 }
 
 // BACK OFF FROM AN ORIGIN THAT KEEPS SAYING NO.
@@ -5532,8 +5554,23 @@ export function probeDue(originUrl, path, now = Date.now()) {
   const b = crawlBackoff.get(bkey(originUrl, path));
   return !b || now >= b.nextAt;
 }
-export function noteProbeOutcome(originUrl, path, ok, now = Date.now()) {
+// Our own side failing a read (crawlReadFailureIsOurs) is not the seller's
+// answer, but a path that never completes on our side still costs a crawl
+// slot every cycle: every CRAWL_OURS_PER_STEP consecutive such failures count
+// as one step of the same backoff (a slower one).
+export const CRAWL_OURS_PER_STEP = 3;
+const crawlOursStreak = new Map();
+export function noteProbeOursFailure(originUrl, path, now = Date.now()) {
   const k = bkey(originUrl, path);
+  const n = (crawlOursStreak.get(k) || 0) + 1;
+  if (n >= CRAWL_OURS_PER_STEP) { crawlOursStreak.delete(k); noteProbeOutcome(originUrl, path, false, now, { keepStreak: true }); return true; }
+  if (!crawlOursStreak.has(k) && crawlOursStreak.size >= 20_000) crawlOursStreak.delete(crawlOursStreak.keys().next().value);
+  crawlOursStreak.set(k, n);
+  return false;
+}
+export function noteProbeOutcome(originUrl, path, ok, now = Date.now(), { keepStreak = false } = {}) {
+  const k = bkey(originUrl, path);
+  if (!keepStreak) crawlOursStreak.delete(k);
   if (ok) { crawlBackoff.delete(k); return; }
   const fails = (crawlBackoff.get(k)?.fails || 0) + 1;
   const step = CRAWL_BACKOFF_STEPS_MS[Math.min(fails, CRAWL_BACKOFF_STEPS_MS.length - 1)];
@@ -5815,9 +5852,82 @@ let crawlFetch = (url, opts) => safeFetch(url, opts);
 export function __setCrawlFetchForTest(fn) { crawlFetch = typeof fn === "function" ? fn : (url, opts) => safeFetch(url, opts); }
 export async function __crawlSellerForTest(originUrl, opts) { return crawlSeller(originUrl, opts); }
 
+/** Did this crawl read fail on our side? Our own deadline or abort, our
+ *  resolver failing to finish a lookup, our own byte cap on the document, or
+ *  a connection our own network path could not make (source-unreachable with
+ *  EADDRNOTAVAIL, OUR_EGRESS_CONNECT_CODES). Positive identification only: an
+ *  HTTP status the seller sent (upstreamStatus), a body that is not the
+ *  document, a redirect it chose, its robots.txt, a name that does not
+ *  resolve, a connection its host refused, reset or failed TLS on, and no
+ *  route to its host or network (EHOSTUNREACH, ENETUNREACH, which an ICMP
+ *  answer near the host can carry) are the seller's host and read false. Exported for the test. */
+export function crawlReadFailureIsOurs(e) {
+  if (!e || typeof e !== "object") return false;
+  if (e.upstreamStatus != null || e.robotsBlocked) return false;
+  if (e.hint === "source-timeout") return true;
+  if (e.code === "EDNSUNAVAILABLE") return true; // fetch-guard's lookupUnavailable: our resolver
+  if (e.hint === "source-unreachable" && typeof e.transportCode === "string" && OUR_EGRESS_CONNECT_CODES.has(e.transportCode)) return true;
+  if (e.statusCode === 413) return true;         // fetch-guard's own maxBytes cut, not a seller 413
+  return e.name === "AbortError" || e.name === "TimeoutError";
+}
+
+// A READ THAT DID NOT COMPLETE IS NOT A VERDICT. One timed-out crawl used to
+// roll a failure into the seller's history, which made it unroutable
+// (`crawl_failed`) for a whole cycle and counted toward the path backoff. Now
+// a failed crawl in which at least one read failed on our side keeps the last
+// good entry as it was, with `readIncomplete` beside it, while that entry is
+// recent: its last completed crawl succeeded within INDEX_CRAWL_HOLD_HOURS
+// (default 6, a dozen cycles). Past that it is treated as before. When at
+// least half of the previous cycle's crawls ended on our side, the cause is
+// read as ours and the hold does not age out until a cycle reads normally.
+const CRAWL_HOLD_MS = (() => { const n = Number(process.env.INDEX_CRAWL_HOLD_HOURS); return (Number.isFinite(n) && n >= 0 ? n : 6) * 3600_000; })();
+const CRAWL_OURS_SIDE_SHARE = 0.5;
+const CRAWL_OURS_MIN_SAMPLE = 20;
+let crawlCycleTally = { done: 0, ours: 0 };
+let lastCycleOursShare = 0;
+/** Close a cycle's tally: the share of crawls that ended on our side. */
+function closeCrawlCycleTally() {
+  const { done, ours } = crawlCycleTally;
+  lastCycleOursShare = done >= CRAWL_OURS_MIN_SAMPLE ? ours / done : 0;
+  crawlCycleTally = { done: 0, ours: 0 };
+  return lastCycleOursShare;
+}
+export function __setLastCycleOursShareForTest(x) { lastCycleOursShare = Number(x) || 0; crawlCycleTally = { done: 0, ours: 0 }; }
+/** May this failed crawl keep `prev` as it was? Only an entry whose last
+ *  completed crawl succeeded with a catalog the origin itself served. */
+export function crawlHoldsLastGood(prev, now = Date.now()) {
+  if (!prev || typeof prev !== "object" || prev.error || prev.originResponded === false) return false;
+  const h = prev.history;
+  if (!Array.isArray(h) || !h.length || h[h.length - 1] !== 1) return false;
+  if (!Array.isArray(prev.tools) || !prev.tools.length) return false;
+  if (lastCycleOursShare >= CRAWL_OURS_SIDE_SHARE) return true;
+  const at = Number(prev.fetchedAt);
+  return Number.isFinite(at) && now - at <= CRAWL_HOLD_MS;
+}
+/** What the ?seller= detail and the index rows say about a read of ours that
+ *  did not complete: the time, and that the listing from the last completed
+ *  read stands. `errorKind` tells our incomplete read from the seller's answer. */
+export function crawlReadFields(v) {
+  const out = {};
+  if (v?.readIncomplete && typeof v.readIncomplete === "object") {
+    const at = Number(v.readIncomplete.at);
+    out.lastReadIncomplete = {
+      at: Number.isFinite(at) ? new Date(at).toISOString() : null,
+      note: "our last read of this seller's documents did not complete (our time limit, our resolver or our size limit); the listing from the last completed read stands",
+    };
+  }
+  if (v?.error) out.errorKind = v.errorOurs ? "our-read-incomplete" : "seller-answer";
+  return out;
+}
+function heldEntry(prev, message, now = Date.now()) {
+  return { ...prev, readIncomplete: { at: now, error: String(message || "").slice(0, 160) } };
+}
+
 /** Fetch `path` on `originUrl` unless it is backed off, recording the outcome.
  *  Every per-origin probe in the crawl goes through here so a new one cannot be
- *  added ungated the way /agents.json and /llms.txt were. */
+ *  added ungated the way /agents.json and /llms.txt were. Only a definite
+ *  answer from the seller counts toward the backoff (crawlReadFailureIsOurs);
+ *  our own side's failures count a slower step (noteProbeOursFailure). */
 async function probePath(originUrl, path, { manifestPublished = false, conditional = true, ...opts } = {}) {
   if (!probeDue(originUrl, path)) throw new Error(`probe backed off: ${path}`);
   // Every per-origin probe already funnels through here, so this is the one
@@ -5863,7 +5973,8 @@ async function probePath(originUrl, path, { manifestPublished = false, condition
     rememberValidator(originUrl, path, conditional ? res.validators || null : null);
     return res;
   } catch (e) {
-    noteProbeOutcome(originUrl, path, false);
+    if (!crawlReadFailureIsOurs(e)) noteProbeOutcome(originUrl, path, false);
+    else noteProbeOursFailure(originUrl, path);
     throw e;
   }
 }
@@ -6021,7 +6132,12 @@ function oncePerCrawl() {
   };
 }
 
-async function crawlSeller(originUrl, { deadlineAt = 0, forcePaywall = false } = {}) {
+async function crawlSeller(originUrl, opts = {}) {
+  const outcome = { ours: false };
+  try { return await crawlSellerOnce(originUrl, opts, outcome); }
+  finally { crawlCycleTally.done++; if (outcome.ours) crawlCycleTally.ours++; }
+}
+async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false } = {}, outcome = { ours: false }) {
   const pastDeadline = () => deadlineAt > 0 && Date.now() >= deadlineAt;
   const once = oncePerCrawl();
   // `manifestPublished` is set by the well-known branch only: once the seller's
@@ -6187,7 +6303,21 @@ async function crawlSeller(originUrl, { deadlineAt = 0, forcePaywall = false } =
     // read (or read and could not use) saw "probe backed off: /.well-known/x402"
     // and nothing about the file that actually decided the listing.
     const fallbackErrors = [];
-    const noteFallback = (path, e) => fallbackErrors.push({ path, error: String(e?.message || e).slice(0, 160) });
+    // Whether any read this crawl failed on our side (crawlReadFailureIsOurs):
+    // then a failed crawl is no verdict on the seller, and a recent good entry
+    // is kept as it was (crawlHoldsLastGood).
+    let oursFailed = crawlReadFailureIsOurs(e);
+    const noteFallback = (path, err) => {
+      if (crawlReadFailureIsOurs(err)) oursFailed = true;
+      fallbackErrors.push({ path, error: String(err?.message || err).slice(0, 160) });
+    };
+    const holdOnOurs = () => {
+      if (!oursFailed) return false;
+      outcome.ours = true;
+      if (!crawlHoldsLastGood(prev)) return false;
+      cache.set(originUrl, heldEntry(prev, e?.message || e));
+      return true;
+    };
     try {
       const openapiRes = await fetchOpenapi({ conditional: false });
       const parsed = await parseInCrawlLane(await fallbackBody(originUrl, "/openapi.json", openapiRes, { maxBytes: MAX_OPENAPI_BYTES }));
@@ -6310,10 +6440,13 @@ async function crawlSeller(originUrl, { deadlineAt = 0, forcePaywall = false } =
           ? synthManifestFromOpenapi(originUrl, openapi, tools)
           : synthManifestFromBazaar(originUrl, bazaarTools));
       if (passTurn) await passTurn();
+      // Registry rows alone, and a read of ours did not complete: no verdict.
+      if (!openapiTools.length && holdOnOurs()) return;
       cache.set(originUrl, {
         // A fresh tool list: the total is read from it, not the old entry
         // (a seller that shrank from 77,000 tools to 6,000 reads 6,000).
         ...freshListBase(prev),
+        readIncomplete: undefined,
         manifest,
         openapiSummary: openapi ? { paths: Object.keys(openapi.paths || {}).length } : prev?.openapiSummary ?? null,
         tools,
@@ -6363,11 +6496,19 @@ async function crawlSeller(originUrl, { deadlineAt = 0, forcePaywall = false } =
       });
       return;
     }
+    // A read of ours did not complete and the last good entry is recent: it
+    // stands as it was (see crawlHoldsLastGood).
+    if (holdOnOurs()) return;
     // Preserve the last good manifest+tools so a transient outage doesn't drop
     // the seller from the Index — but the history flip marks them unhealthy
     // for routing decisions.
     cache.set(originUrl, {
       ...(prev || {}),
+      readIncomplete: undefined,
+      // Whether a read of ours failed (a timeout, a connection that never
+      // completed): the record then says our read did not complete, not that
+      // the seller's document failed.
+      errorOurs: oursFailed || undefined,
       error: String(e.message || e),
       // A seller who has excluded us in robots.txt is EXCLUDED, not broken and
       // not absent. Flagged so /index can say so; reporting it as a crawl
@@ -6991,7 +7132,9 @@ async function runCrawl() {
     // seen every 5th cycle (~2.5h) instead of every 30 minutes. Single-host
     // sellers - almost all of them - are untouched.
     const due = originsDueThisCycle(ordered, crawlCycle);
+    crawlCycleTally = { done: 0, ours: 0 };
     await runPool(due, CRAWL_CONCURRENCY, crawlSeller);
+    const oursShare = closeCrawlCycleTally();
     // Each step is guarded on its own: a throw in one used to skip the release
     // silently for every later cycle, and the slots it should have freed stayed
     // held with nothing in the log to say why.
@@ -7007,7 +7150,7 @@ async function runCrawl() {
     const fraction = cycleOkFraction(due);
     let release;
     try { release = releaseDeadSubmissions(fraction); } catch (e) { release = { released: 0, reason: `error: ${String(e?.message || e).slice(0, 120)}` }; }
-    lastCycleSummary = { at: new Date().toISOString(), cycle: crawlCycle, due: due.length, okFraction: fraction === null ? null : Number(fraction.toFixed(3)), rowsAdded, ...release };
+    lastCycleSummary = { at: new Date().toISOString(), cycle: crawlCycle, due: due.length, okFraction: fraction === null ? null : Number(fraction.toFixed(3)), oursShare: Number(oursShare.toFixed(3)), rowsAdded, ...release };
     // One line per cycle (every ~30 min): the only way to tell from the log
     // whether the release ran, freed slots, or why it did not.
     console.log(`[x402-index] cycle ${crawlCycle}: probed ${due.length}, ok ${fraction === null ? "n/a" : (fraction * 100).toFixed(1) + "%"}, release ${release.released ? `freed ${release.released}` : `none (${release.reason})`}${rowsAdded ? `, ${rowsAdded} registration row(s) added` : ""}`);
@@ -7146,7 +7289,8 @@ export function cycleOkFraction(visited = [], lookup = (o) => cache.get(o)) {
     if (!entry) continue;      // never reached (budgeted probe, abort) - not a vote
     if (entry.robotsBlocked) continue;  // their choice, not our outage
     seen++;
-    if (!entry.error) ok++;
+    // A held entry (our read did not complete) is not a read that worked.
+    if (!entry.error && !entry.readIncomplete) ok++;
   }
   return seen ? ok / seen : null;
 }
@@ -7210,7 +7354,7 @@ function releaseDeadSubmissions(okFraction) {
 function recordSubmittedSellerObservations() {
   for (const origin of submittedSeeds) {
     const entry = cache.get(origin);
-    if (!entry || entry.error) continue;
+    if (!entry || entry.error || entry.readIncomplete) continue;
     recordSellerRegistrationSeen(origin, { settled: originHasSettled(origin) });
   }
 }
@@ -9274,6 +9418,7 @@ export function sellerDetail(originOrHost) {
         : {}),
       fetchedAt: v.fetchedAt ?? null,
       error: v.error || null,
+      ...crawlReadFields(v),
       health: healthScore(v),
       // A superseded origin still answers here and says where it went. An old
       // link that 404s teaches nothing; one that names its successor is how
@@ -9528,6 +9673,7 @@ function* indexSnapshotSteps({ baseUrl, catalog, prices, network, toolCount, wal
     ...(listed.paidToolCount !== undefined ? { paidToolCount: listed.paidToolCount } : {}),
     fetchedAt: v.fetchedAt,
     error: v.error || null,
+    ...crawlReadFields(v),
     local: false,
     health: healthScore(v),
     routable: isRoutable(v),

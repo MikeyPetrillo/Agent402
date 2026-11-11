@@ -74,7 +74,7 @@ function headers() {
 // charged; a cache hit never takes a token.
 // The bucket is SHARED with crypto-kit since 2026-09-03 (src/tools/coingecko-rate.js):
 // one Demo key, one minute budget, whichever kit spends it.
-import { cgTake, cgRefusalMessage, resetCgRateLimit, COINGECKO_ATTRIBUTION } from "./coingecko-rate.js";
+import { cgTake, cgRefusal, resetCgRateLimit, COINGECKO_ATTRIBUTION } from "./coingecko-rate.js";
 import { createCgCache } from "./coingecko-cache.js";
 export { resetCgRateLimit };
 
@@ -94,7 +94,7 @@ async function cgGet(path, params, ttlMs) {
 // a thrown refusal (never cached).
 async function cgLoad(key, path) {
   const why = await cgTake(Date.now());
-  if (why) throw bad(cgRefusalMessage(why, "Market data"), 503);
+  if (why) throw cgRefusal(why, "Market data");
   // The ctx of the read that answered is kept, so its body read runs under
   // the same deadline (a stalled body is the 503 deadline, not "non-JSON").
   const ctxOf = new WeakMap();

@@ -18,6 +18,7 @@
 // requires is not a failure - it turns nobody away who would have succeeded,
 // it just asks for a newer runtime than the floor. Only the reverse breaks a
 // reader, so only the reverse fails here.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -66,6 +67,34 @@ for (const [doc, re, pkg, why] of CLAIMS) {
   ok(required !== null, `${pkg} declares engines.node (got ${engines(pkg)})`);
   ok(!compare(stated, required),
      `${doc} says Node ${stated}+ and ${pkg} requires ${engines(pkg)} - the doc must not promise a version the install refuses`);
+}
+
+// --- limits and alarm words in prose match the code that decides them ------
+// The settle-failure breaker: verdict failures refuse at MAX_FAILS, failures of
+// unknown cause at UNKNOWN_MAX_FAILS, and a failure on our side or the
+// facilitator's is never counted (src/gateway-settle-breaker.js). The wiki row
+// and the /guides/buying-at-volume row both say all three.
+{
+  const b = await import("../src/gateway-settle-breaker.js");
+  const flat = (t) => String(t || "").replace(/\s+/g, " ");
+  const vol = flat(read("wiki/Buying-at-Volume.md"));
+  const guide = flat(read("src/guides.js"));
+  const NEVER = /could not complete on this server's side or the facilitator's \([^)]*\) is never counted against the wallet/;
+  ok(b.UNKNOWN_MAX_FAILS > b.MAX_FAILS, `control: unknown-cause failures refuse later than verdicts (${b.MAX_FAILS} < ${b.UNKNOWN_MAX_FAILS})`);
+  ok(vol.includes(`failed to settle for a reason about the payment itself`) && vol.includes(`at ${b.MAX_FAILS} in ${Math.round(b.WINDOW_MS / 60_000)} minutes (${b.UNKNOWN_MAX_FAILS} for failures whose cause the settlement did not name`) && NEVER.test(vol),
+    `wiki/Buying-at-Volume.md breaker row: verdicts at ${b.MAX_FAILS}, unknown causes at ${b.UNKNOWN_MAX_FAILS}, our side or the facilitator's never counted`);
+  ok(guide.includes("failed to settle for a reason about the payment itself") && guide.includes("(${SETTLE_BREAKER_UNKNOWN_MAX} for failures whose cause the settlement did not name") && /UNKNOWN_MAX_FAILS as SETTLE_BREAKER_UNKNOWN_MAX/.test(guide) && NEVER.test(guide),
+    "src/guides.js breaker row reads the unknown-cause count from the code and says our side or the facilitator's is never counted");
+}
+// facilitatorFunds: a gas balance under the floor reads low; one that cannot
+// be read reads unknown (src/tool-failure-monitor.js), which does not page.
+{
+  const mon = read("src/tool-failure-monitor.js");
+  const { thresholds } = await import("../src/tool-failure-monitor.js");
+  const rh = String(read("wiki/Robinhood-Chain.md") || "").replace(/\s+/g, " ");
+  ok(/gasLow\.length \? "low" : gasUnread\.length \? "unknown"/.test(mon), "control: the monitor reads an unread gas balance as unknown and a low one as low");
+  ok(/cannot be read three times running reads `facilitatorFunds=unknown`, which pages only once it has held past `FACILITATOR_UNREAD_PAGE_HOURS` \(default (\d+)\)/.test(rh) && Number(rh.match(/FACILITATOR_UNREAD_PAGE_HOURS` \(default (\d+)\)/)?.[1]) === Math.round(thresholds({}).gasUnreadPageMs / 3_600_000) && !/cannot be read three times running, reads `facilitatorFunds=low`/.test(rh),
+    "wiki/Robinhood-Chain.md says an unreadable balance reads facilitatorFunds=unknown and pages only past the code's default hours");
 }
 
 console.log(`test-doc-claims: ${pass} passed, ${fail} failed`);

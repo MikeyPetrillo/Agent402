@@ -1432,6 +1432,8 @@ jobs:
           t node scripts/test-shared-limits-crossprocess.js
           # exaSpend, xDataSpend and routerSpendWindow in a new process: over from the shared day, capped while another process refuses, this process's own word inside a bounded wait when the store does not answer.
           t node scripts/test-spend-words-shared-redis.js
+          # topBuyerFailures read the same on a container that served none of the failures; a refusing store leaves this process's own word.
+          t node scripts/test-top-buyer-failures-redis.js
           # A close made while a connect is still in flight ends that connect too.
           t node scripts/test-shared-redis-close.js
           # The in-flight run cover: memory, a store that does not answer (local ledger decides), and real Redis.
@@ -1902,6 +1904,8 @@ jobs:
           t node scripts/test-solana-intel-deadline.js
           # Every kit that reads an upstream: a stalled read ends at its cap, composed with the handler budget, as the shared 503 class naming the upstream and the step (stubbed fetch, short budget).
           t node scripts/test-upstream-deadline.js
+          # Whose failure an error names: our own 500, limit, budget, key or allowance is ours; a caller URL that did not answer is told to check it or retry; a router leg our clamp cut is not the seller's (stub catalog, stubbed fetch).
+          t node scripts/test-error-attribution.js
           t node scripts/test-solana-kit-deps.js
           t node scripts/test-workflow-client-pins.js
 
@@ -3030,6 +3034,8 @@ jobs:
           # Index warm-start (crawl cache survives a redeploy; no half-crawled marketplace — offline)
           t node scripts/test-index-warmstart.js
           t node scripts/test-index-persist-last-good.js
+          # A crawl read of ours that did not complete keeps the last good entry: no unroutable seller, no backoff (offline)
+          t node scripts/test-crawl-read-incomplete.js
           # A seller without /.well-known/x402 keeps its catalog when its /openapi.json, /agents.json or /llms.txt answers 304 (offline)
           t node scripts/test-index-fallback-304.js
           # A crawled entry keeps the slim manifest; a 304 derives the same catalog from the packed body (offline)
@@ -5068,6 +5074,8 @@ jobs:
           t node scripts/test-replay-release-at-end.js
           # A Solana wallet with no USDC account or too little USDC is told to fund it (retry fund-wallet, Retry-After), and a re-signing loop is held without a verify until the Retry-After passes (paid boot, stub facilitator)
           t node scripts/test-svm-funding-refusal.js
+          # A top paying buyer's failed paid calls raise topBuyerFailures within minutes, word only in public; challenges, verify refusals and payers outside the top ten never do (paid boot, Solana, stub facilitator)
+          t node scripts/test-top-buyer-failures.js
           # A verify refused for lack of funds names its class, the amount and the asset on every rail, and its log line carries the slug and a short payer (offline)
           t node scripts/test-verify-refusal-reason.js
           # Settle-failure breaker on EVERY wallet-only tool (paid boot, stub facilitator verifies then refuses to settle)

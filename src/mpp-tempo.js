@@ -53,6 +53,7 @@ import { drainSignal } from "./drain-abort.js";
 import { screenAddresses, screenFunding, sanctionsScreenStatus, maskAddress as maskOne, TEMPO_SCREEN_REFUSED_DETAIL, TEMPO_SCREEN_REFUSED_HINT } from "./sanctions-screen.js";
 import { Secp256k1 } from "ox";
 import { lateWatchKey } from "./tempo-late-watches.js";
+import { SETTLE_FAULT, tempoRefusalFault } from "./settle-fault.js";
 
 const DEFAULT_DECIMALS = 6; // matches every other stablecoin rail this repo settles (unconfirmed specifically for pathUSD — decimals() unread, this is the USDC-family convention, not a live lookup)
 
@@ -174,6 +175,29 @@ const relayTrace = new AsyncLocalStorage();
 const CONNECT_PHASE_CODES = new Set(["UND_ERR_CONNECT_TIMEOUT", "ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "ENETUNREACH", "EHOSTUNREACH"]);
 function transportCode(e) {
   return String(e?.cause?.code || e?.code || e?.cause?.cause?.code || e?.name || "");
+}
+// A failure of OUR request that carries no answer about the credential: a
+// connection or DNS error, a reset, our own time limit, or an HTTP error from
+// the node we read (viem's HttpRequestError). A JSON-RPC error the node sent
+// back (RpcRequestError, a revert) is an answer and is not this.
+const OWN_TRANSPORT_CODES = new Set([...CONNECT_PHASE_CODES, "ECONNRESET", "ECONNABORTED", "ETIMEDOUT", "EPIPE", "UND_ERR_SOCKET", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT", "UND_ERR_CLOSED"]);
+const OWN_TRANSPORT_NAMES = new Set(["TimeoutError", "AbortError", "HttpRequestError", "SocketClosedError", "WebSocketRequestError"]);
+/** True when `e`, or an error on its cause chain, is our own transport
+ *  failure (exported for tests). Reads at most eight links. */
+export function isOwnTransportError(e) {
+  const seen = new Set();
+  const queue = [e];
+  for (let i = 0; i < 8 && queue.length; i++) {
+    const x = queue.shift();
+    if (!x || typeof x !== "object" || seen.has(x)) continue;
+    seen.add(x);
+    if (OWN_TRANSPORT_NAMES.has(String(x.name || ""))) return true;
+    if (OWN_TRANSPORT_CODES.has(String(x.code || ""))) return true;
+    if (x instanceof TypeError && String(x.message || "") === "fetch failed") return true;
+    if (Array.isArray(x.errors)) queue.push(...x.errors.slice(0, 3));
+    queue.push(x.cause);
+  }
+  return false;
 }
 /** True when a fetch failure provably happened before any request bytes were
  *  sent (exported for tests). */
@@ -346,10 +370,19 @@ function buyerReason(e) {
  *  while the relay had said "memo is not bound to this challenge"; the buyer
  *  could not act on the first and could on the second. Exported for tests. */
 export const TEMPO_REFUSAL_CLASSES = Object.freeze({
+  // Our request to the relay did not complete: a connection or DNS error, or
+  // our own time limit. Validation is non-mutating and claims nothing, so the
+  // same credential can be presented again.
   "relay-unreachable": {
     kind: "internal-payment-error", status: 503, retryAfter: 5,
-    detail: "The Tempo payment relay could not be reached, so the credential was not checked and nothing was charged.",
-    hint: "Retry the same request in a few seconds with a fresh challenge. Nothing was broadcast.",
+    detail: "This server's request to the Tempo payment relay did not complete (a connection error or this server's own time limit), so the credential was not checked and nothing was charged.",
+    hint: "Retry the same request with the same credential in a few seconds. Nothing was broadcast.",
+  },
+  // Direct mode (no relay): our own read of the Tempo chain did not complete.
+  "chain-unreachable": {
+    kind: "internal-payment-error", status: 503, retryAfter: 5,
+    detail: "This server's read of the Tempo chain did not complete (a connection error, an HTTP error from the node, or this server's own time limit), so the credential was not checked and nothing was charged.",
+    hint: "Retry the same request with the same credential in a few seconds. Nothing was broadcast.",
   },
   // Transport-level only: the relay answered 5xx/429/401/403 or not at all.
   "relay-unavailable": {
@@ -444,6 +477,10 @@ export function classifyTempoRefusal(e) {
   }
   if (trace.networkError) return "relay-unreachable";
   if (trace.relayUnavailable) return "relay-unavailable";
+  // Our own read failed with no answer in it (direct mode reads the chain
+  // itself). Read before any word: viem's message carries the request body,
+  // whose validBefore once read as an expired credential.
+  if (isOwnTransportError(e)) return "chain-unreachable";
   // mppx keeps this code in `.details` (with retry: same_credential); the
   // text match covers a body whose code mppx dropped.
   if (code === "temporarily_unavailable" || /temporarily[ _]unavailable/.test(text)) return "relay-dependency-unavailable";
@@ -474,7 +511,17 @@ export function quotableRelayMessage(message) {
  *  prose (quotableRelayMessage): it is the relay naming which of its
  *  dependencies is down, which the buyer can act on, and that class never
  *  carries a verdict on the credential. */
-export function tempoRefusalProblem(cls, fallbackReason, { relayMessage = null } = {}) {
+// A PUSH credential (payload type "hash") names a transfer the buyer already
+// sent, so a 503 that checked nothing cannot say "nothing was charged" or
+// "nothing was broadcast"; nor can it say the transfer is final, since the
+// chain was not read. The transfer was not claimed, so once final it still
+// pays for this request when the same credential is sent again. Exported for
+// tests.
+export const TEMPO_PUSH_NOT_CHECKED = Object.freeze({
+  tail: ", so the transfer this credential names was not checked. It has not been claimed, so once final it still pays for this request.",
+  hint: "Retry the same request with the same credential shortly; do not pay again.",
+});
+export function tempoRefusalProblem(cls, fallbackReason, { relayMessage = null, push = false } = {}) {
   const c = TEMPO_REFUSAL_CLASSES[cls] || TEMPO_REFUSAL_CLASSES.unknown;
   let detail = c.detail;
   if (cls === "unknown" && fallbackReason) detail = `Payment verification failed: ${String(fallbackReason).slice(0, 160)}`;
@@ -482,7 +529,12 @@ export function tempoRefusalProblem(cls, fallbackReason, { relayMessage = null }
     const said = quotableRelayMessage(relayMessage);
     if (said) detail = `The Tempo payment relay reported one of its own dependencies temporarily unavailable ("${said}"), so the credential was not checked and nothing was charged.`;
   }
-  return mppProblem(c.kind, detail, { status: c.status, hint: c.hint, details: { reason: cls in TEMPO_REFUSAL_CLASSES ? cls : "unknown", charged: false } });
+  const reason = cls in TEMPO_REFUSAL_CLASSES ? cls : "unknown";
+  if (push && c.status === 503) {
+    const pushDetail = detail.replace(/, so the credential was not checked and nothing was charged\.$/, TEMPO_PUSH_NOT_CHECKED.tail);
+    return mppProblem(c.kind, pushDetail === detail ? `${detail.replace(/\.$/, "")}${TEMPO_PUSH_NOT_CHECKED.tail}` : pushDetail, { status: c.status, hint: TEMPO_PUSH_NOT_CHECKED.hint, details: { reason, transferClaimed: false } });
+  }
+  return mppProblem(c.kind, detail, { status: c.status, hint: c.hint, details: { reason, charged: false } });
 }
 
 // Operator log line for EVERY refused Tempo credential: reason class, route,
@@ -1460,8 +1512,8 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
       // request (in flight) is never booked as owed for a call it paid. The
       // shared claim is required when another container may serve (see the
       // paid path below); with the store out the answer is the paid path's
-      // 503 with Retry-After: the transfer is final on chain and nothing was
-      // checked, claimed or booked, so the same credential sent again once
+      // 503 with Retry-After: the transfer was not read on chain and nothing
+      // was checked, claimed or booked, so the same credential sent again once
       // the store answers is confirmed and booked as owed then (a plain 402
       // here would read as a verdict on the credential, which none was
       // given).
@@ -1471,7 +1523,7 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
           logTempoRefusal(req, { cls: "replay-store", amountAtomic: amount, timings: { total: Date.now() - tStart }, detail: `before validate: ${binding.reason}; push credential, shared replay store did not answer; refused before the claim, nothing checked, claimed or booked` });
           res.setHeader("Retry-After", "30");
           res.setHeader("Cache-Control", "no-store");
-          return res.status(503).json({ error: `This route is briefly unavailable: the shared payment store did not answer, so the transfer this credential names was not checked, claimed or recorded. That transfer is final on chain. Send the same request again with the same credential in about 30 seconds: this route does not accept it (${b.detail}), so it is then confirmed and recorded as owed to the sending wallet, to be refunded; before the challenge expires the same credential instead pays for a request on a route that offers Tempo.`, reason: "replay-store-unavailable", transferClaimed: false });
+          return res.status(503).json({ error: `This route is briefly unavailable: the shared payment store did not answer, so the transfer this credential names was not checked, claimed or recorded. Send the same request again with the same credential in about 30 seconds: this route does not accept it (${b.detail}), so it is then confirmed and recorded as owed to the sending wallet, to be refunded; before the challenge expires the same credential instead pays for a request on a route that offers Tempo.`, reason: "replay-store-unavailable", transferClaimed: false });
         }
         if (verdict !== "ok") return plain(`replay guard: ${verdict}`);
       }
@@ -1582,7 +1634,7 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
           // says that; a bare 402 after a 10-22 s wait said "your payment
           // failed". No demotion: the buyer's Tempo credential was never judged.
           res.setHeader("Retry-After", String(c.retryAfter || 5));
-          return sendMppProblem(res, tempoRefusalProblem(cls, null, { relayMessage: v.relayMessage }));
+          return sendMppProblem(res, tempoRefusalProblem(cls, null, { relayMessage: v.relayMessage, push: binding.payloadType === "hash" }));
         }
         // This client's next 402 lists the evm challenge first (see tempoLeads).
         noteTempoRefusal(req);
@@ -1633,6 +1685,12 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
           logTempoRefusal(req, { cls: "replay-store", amountAtomic: binding.amountAtomic, timings: { validate: tValidated - t0, total: Date.now() - tStart }, detail: "shared replay store did not answer; refused before the claim, nothing claimed or broadcast" });
           res.setHeader("Retry-After", "30");
           res.setHeader("Cache-Control", "no-store");
+          // A PUSH credential names a transfer the buyer already sent, so its
+          // body never says "not charged": it was not claimed, so once final
+          // it still pays for this request when the same credential comes back.
+          if (binding.payloadType === "hash") {
+            return res.status(503).json({ error: `This route is briefly unavailable: the shared payment store did not answer and no run was started${TEMPO_PUSH_NOT_CHECKED.tail} Send the same request again with the same credential in about 30 seconds; do not pay again.`, hint: TEMPO_PUSH_NOT_CHECKED.hint, reason: "replay-store-unavailable", transferClaimed: false });
+          }
           return res.status(503).json({ error: "This route is briefly unavailable: the shared payment store did not answer, so no run was started and this credential was not claimed or charged. Send the same request again in about 30 seconds.", reason: "replay-store-unavailable", charged: false, transferClaimed: false });
         }
         if (verdict !== "ok") {
@@ -1744,7 +1802,7 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
             // presented again.
             releaseReplay();
             res.setHeader("Retry-After", String(fc.retryAfter || 5));
-            return sendMppProblem(res, mppProblem(fc.kind, "The Tempo payment relay could not be reached to claim the transfer you sent. It has not been claimed, so it still pays for this request.", { status: 503, hint: "Retry the same request with the same credential in a few seconds.", details: { reason: fcls, transferClaimed: false } }));
+            return sendMppProblem(res, mppProblem(fc.kind, fcls === "relay-unavailable" ? "The Tempo payment relay did not accept this server's request to claim the transfer you sent. It has not been claimed, so it still pays for this request." : "This server's request to claim the transfer you sent did not complete. It has not been claimed, so it still pays for this request.", { status: 503, hint: "Retry the same request with the same credential in a few seconds.", details: { reason: fcls, transferClaimed: false } }));
           }
           settleReplay();
           // The relay confirmed a transfer paying this challenge to our
@@ -1958,6 +2016,8 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
         // relay's verdict, and only the numbers tell them apart.
         console.warn(`[mpp-tempo] broadcast failed AFTER a successful handler (${req.method} ${req.path}) — buyer answered 402, not charged by us: ${maskAddresses(b.error)} [${timing}]`);
         const bcls = b.cls || "unknown";
+        // What this refusal proves, for the settle breaker (src/settle-fault.js).
+        req[SETTLE_FAULT] = tempoRefusalFault(bcls);
         logTempoRefusal(req, { cls: `broadcast:${bcls}`, amountAtomic: binding.amountAtomic, timings: { validate: tValidated - t0, handler: tHandled - tValidated, broadcast: tBroadcast - tHandled, total: Date.now() - tStart }, requestId: b.requestId });
         bufferedCalls = [];
         restore();

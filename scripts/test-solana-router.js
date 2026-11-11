@@ -114,6 +114,45 @@ const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
   const below = await assertProvenSolanaSeller(payTo, { inboundFn: async () => 3, minCount: 20 }).then(() => null, (e) => e);
   ok(below && below.statusCode === 409 && /floor 20/.test(below.message), "a seller under the credit floor is refused 409 with the floor named");
   ok((await assertProvenSolanaSeller(payTo, { inboundFn: async () => 25, minCount: 20 })) === 25, "a seller at/over the credit floor passes and the count is returned");
+  // AN UNDERCOUNT IS NOT A COUNT. getTransaction reads the RPC refuses (429)
+  // are unread, not "no credit": below the floor with enough unread to reach
+  // it, the count is unknown, never "15 payments, floor 20".
+  {
+    const sigs25 = Array.from({ length: 25 }, (_, i) => ({ signature: `u${i}`, blockTime: now - 60, err: null }));
+    const credit = (sig) => {
+      const pre = [{ accountIndex: 0, mint: USDC, owner: payTo, uiTokenAmount: { amount: "0" } }, { accountIndex: 1, mint: USDC, owner: `F${sig}`.padEnd(40, "1"), uiTokenAmount: { amount: "1000" } }];
+      const post = [{ accountIndex: 0, mint: USDC, owner: payTo, uiTokenAmount: { amount: "50" } }, { accountIndex: 1, mint: USDC, owner: `F${sig}`.padEnd(40, "1"), uiTokenAmount: { amount: "950" } }];
+      return { meta: { err: null, preTokenBalances: pre, postTokenBalances: post } };
+    };
+    const limited = (refuse) => async (url, init) => {
+      const { method, params } = JSON.parse(init.body);
+      if (method === "getTokenAccountsByOwner") return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { value: [{ pubkey: "ATA111" }] } }), { status: 200 });
+      if (method === "getSignaturesForAddress") return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: sigs25 }), { status: 200 });
+      if (refuse(params[0])) return new Response("rate limited", { status: 429 });
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: credit(params[0]) }), { status: 200 });
+    };
+    const idx = (sig) => Number(String(sig).slice(1));
+    const under = await solanaInboundCount(payTo, { stopAt: 20, fetchImpl: limited((sig) => idx(sig) >= 15) }).then((n) => n, (e) => e);
+    ok(under instanceof Error && under.countUnknown === true && under.atLeast === 15, `15 credits read and 10 reads refused by the RPC: unknown, at least 15 (${under?.message || under})`);
+    let tries = 0;
+    const flaky = await solanaInboundCount(payTo, { stopAt: 20, fetchImpl: limited((sig) => idx(sig) >= 18 && idx(sig) < 20 && ++tries <= 2) }).then((n) => n, (e) => e);
+    ok(flaky === 20, `two reads refused once are read again: the floor is met (${flaky?.message || flaky})`);
+    const thin = await solanaInboundCount(payTo, { stopAt: 20, fetchImpl: limited((sig) => idx(sig) >= 3) }).then((n) => n, (e) => e);
+    ok(thin instanceof Error && thin.countUnknown, "3 read and 22 unread could still reach 20: unknown");
+    const sigs4 = sigs25.slice(0, 4);
+    const four = await solanaInboundCount(payTo, { stopAt: 20, fetchImpl: async (url, init) => {
+      const { method, params } = JSON.parse(init.body);
+      if (method === "getTokenAccountsByOwner") return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { value: [{ pubkey: "ATA111" }] } }), { status: 200 });
+      if (method === "getSignaturesForAddress") return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: sigs4 }), { status: 200 });
+      if (idx(params[0]) >= 2) return new Response("rate limited", { status: 429 });
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: credit(params[0]) }), { status: 200 });
+    } }).then((n) => n, (e) => e);
+    ok(four === 2, `2 read and 2 unread cannot reach 20 either way: a definite 2 (${four?.message || four})`);
+    const unknownGate = await assertProvenSolanaSeller(payTo, { minCount: 20, inboundFn: async () => { throw Object.assign(new Error("10 of 25 recent transactions could not be read by us"), { countUnknown: true, atLeast: 15 }); } }).then(() => null, (e) => e);
+    ok(unknownGate && unknownGate.statusCode === 503 && /did not complete/.test(unknownGate.message) && !/has 15 recent/.test(unknownGate.message), `an unknown count is our read, a 503 that names it, never the seller's 409 (${unknownGate?.statusCode} ${unknownGate?.message})`);
+    const unknownSmall = await assertProvenSolanaSeller(payTo, { minCount: 20, allowUnprovenUpToAtomic: 10000n, quotedAtomic: "1000", inboundFn: async () => { throw Object.assign(new Error("unread"), { countUnknown: true, atLeast: 15 }); } }).then((n) => n, (e) => e);
+    ok(unknownSmall === 15, `an unknown count still takes the unproven allowance a seller with no history could (${unknownSmall?.message || unknownSmall})`);
+  }
   const junk = await solanaInboundCount("not-an-address!!", { fetchImpl: rpcStub({}) }).then(() => null, (e) => e);
   ok(junk instanceof Error, "a junk payTo is refused before any RPC call");
 }

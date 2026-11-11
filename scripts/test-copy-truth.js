@@ -194,5 +194,27 @@ const flat = (s) => { let out = "", inTag = false; for (const ch of s) { if (inT
   ok(!COMPARED.test(readme) && readme.includes("Open source and self-hosted: no platform lock-in, no card processor required"), "README describes tollbooth as open source and self-hosted, with no comparison to another product");
 }
 
+// --- Error tables: every attribution and kind the code emits ----------------
+// The vocabulary is exported by src/upstream-deadline.js; each value must be
+// named in the /guides/buying-at-volume error table and in the wiki page's
+// Errors list, so a reader can look up every hint a tool error can carry. The
+// list is the block right under its heading.
+{
+  const { ATTRIBUTION, KIND } = await import("../src/upstream-deadline.js");
+  // The block right under the heading: from the blank line after it to the
+  // next blank line (the table or list, never the prose after it).
+  const section = (text, heading) => { const at = text.indexOf(`${heading}\n\n`); if (at < 0) return ""; const from = at + heading.length + 2; const end = text.indexOf("\n\n", from); return text.slice(from, end < 0 ? undefined : end); };
+  const named = (table, v) => table.includes(`"${v}"`);
+  const values = [...Object.values(ATTRIBUTION), ...Object.values(KIND)];
+  ok(values.length >= 15 && values.includes("connect-failed") && values.includes("our-key"), `control: the vocabulary is read from the code (${values.length} values)`);
+  ok(!named("| 502 | `attribution: \"upstream\"` |", "connect-failed"), "control: a table without a value is reported");
+  for (const [file, heading] of [["src/guides.js", "## Errors to handle"], ["wiki/Buying-at-Volume.md", "## Errors"]]) {
+    const table = section(read(file), heading);
+    ok(table.length > 200, `${file} has its error list under "${heading}"`);
+    const missing = values.filter((v) => !named(table, v));
+    ok(missing.length === 0, `${file} error list names every attribution and kind the code emits${missing.length ? ` (missing: ${missing.join(", ")})` : ""}`);
+  }
+}
+
 console.log(`\ntest-copy-truth: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

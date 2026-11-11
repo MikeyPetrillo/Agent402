@@ -24,7 +24,7 @@ import { meteredRoutesInline, meteredFromPrice, meteredQuoteSentence, meteredTim
 // The buying-at-volume guide quotes each limit from the code that enforces it.
 import { unpaidQuoteBudgetPerHour, METERED_UNPAID_QUOTES_PER_MIN, METERED_UNPAID_QUOTES_PER_HOUR, PAID_CLIENT_QUOTE_MULTIPLIER, PAID_CLIENT_METERED_QUOTES_PER_MIN, PAID_CLIENT_METERED_QUOTES_PER_HOUR } from "./unpaid-quote-budget.js";
 import { PAID_QUOTE_TRUST_MINUTES, METERED_QUOTE_CREDITS_PER_CALL } from "./paid-quote-trust.js";
-import { MAX_FAILS as SETTLE_BREAKER_MAX_FAILS, WINDOW_MS as SETTLE_BREAKER_WINDOW_MS, HARD_MAX_FAILS as SETTLE_BREAKER_HARD_MAX } from "./gateway-settle-breaker.js";
+import { MAX_FAILS as SETTLE_BREAKER_MAX_FAILS, UNKNOWN_MAX_FAILS as SETTLE_BREAKER_UNKNOWN_MAX, WINDOW_MS as SETTLE_BREAKER_WINDOW_MS, HARD_MAX_FAILS as SETTLE_BREAKER_HARD_MAX } from "./gateway-settle-breaker.js";
 import { ASYNC_JOBS_PER_CLIENT } from "./async-jobs.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
 import { IDEM_MAX_BODY_LABEL } from "./idempotency-limits.js";
@@ -335,7 +335,7 @@ before any payment is taken, and the last column says how long to wait.
 | Unpaid price checks (a request with no payment) to priced catalog routes | ${unpaidQuoteBudgetPerHour().toLocaleString("en-US")} an hour per client address; ${(unpaidQuoteBudgetPerHour() * PAID_CLIENT_QUOTE_MULTIPLIER).toLocaleString("en-US")} an hour for the rest of the clock hour once that address settles a payment, and for ${PAID_QUOTE_TRUST_MINUTES} minutes after each paid call | 429, \`Retry-After\` until the hour turns |
 | Unpaid quotes on \`/v1/metered\` | ${METERED_UNPAID_QUOTES_PER_MIN} a minute and ${METERED_UNPAID_QUOTES_PER_HOUR.toLocaleString("en-US")} an hour per client address; past that, ${METERED_QUOTE_CREDITS_PER_CALL} more for each paid \`/v1/metered\` call from that address, used within ${PAID_QUOTE_TRUST_MINUTES} minutes, up to ${PAID_CLIENT_METERED_QUOTES_PER_MIN} a minute and ${PAID_CLIENT_METERED_QUOTES_PER_HOUR.toLocaleString("en-US")} an hour | 429, \`Retry-After: 60\` |
 | Refused payment credentials on \`/v1/metered\` | the same figures, counted once a credential is refused | 429, \`Retry-After: 60\` |
-| Payments that verified and then failed to settle, per wallet and per network | refused on that network at ${SETTLE_BREAKER_MAX_FAILS} in ${Math.round(SETTLE_BREAKER_WINDOW_MS / 60_000)} minutes while they are more than half of the wallet's outcomes there, or at ${SETTLE_BREAKER_HARD_MAX} whatever it settled | 429 naming the network and when it lifts (\`refusedNetwork\`, \`retryAfterSeconds\`, \`retry: "other-network"\`); the same wallet can pay on another network the route offers at once |
+| Payments that verified and then failed to settle for a reason about the payment itself (its balance, its signature, or an authorization already used or expired), per wallet and per network | refused on that network at ${SETTLE_BREAKER_MAX_FAILS} in ${Math.round(SETTLE_BREAKER_WINDOW_MS / 60_000)} minutes (${SETTLE_BREAKER_UNKNOWN_MAX} for failures whose cause the settlement did not name, refused in words that blame no one) while they are more than half of the wallet's outcomes there, or at ${SETTLE_BREAKER_HARD_MAX} whatever it settled | 429 naming the network and when it lifts (\`refusedNetwork\`, \`retryAfterSeconds\`, \`retry: "other-network"\`); the same wallet can pay on another network the route offers at once |
 | Report and media runs that failed to settle or failed after the run, per buyer | blocked for ${Math.round(COMPOSITE_GUARD.BLOCK_MS / 60_000)} minutes at ${COMPOSITE_GUARD.MAX_FAILS} in ${Math.round(COMPOSITE_GUARD.WINDOW_MS / 60_000)} minutes while they are more than ${failShareWords(COMPOSITE_GUARD.MIN_FAIL_SHARE)} of the buyer's outcomes there, or at ${COMPOSITE_GUARD.HARD_MAX_FAILS} whatever it settled | 429 without \`Retry-After\`; the block lifts on its own |
 | Unpaid requests with a body over ${Math.round(UNPAID_BODY_MAX_BYTES / 1024)} KB to a route that reads its price from the body | ${LARGE_BODY_UNPAID_PER_MIN} a minute and ${LARGE_BODY_UNPAID_PER_HOUR.toLocaleString("en-US")} an hour per client address, the same once that address has paid | 429, \`Retry-After: 60\` |
 | Concurrent runs of the report and media routes from one wallet | the wallet's balance covers every run in flight plus the new one | 429, \`Retry-After: 30\` |
@@ -343,7 +343,11 @@ before any payment is taken, and the last column says how long to wait.
 
 An IPv6 /64 is one address. A request carrying a payment, a credits key or a
 proof-of-work solution is never counted as an unpaid price check. On the two
-failed-settlement rows a buyer's failures count against that buyer alone. A
+failed-settlement rows a buyer's failures count against that buyer alone. On
+the first, a settlement that could not complete on this server's side or the
+facilitator's (a timeout, a connection error, an HTTP error, a billing limit on
+this server's own account) is never counted against the wallet; a run of those
+is an operator alarm. A
 Tempo sender, a credits key and a buyer keyed by address are each one key
 there, with no network to switch. The report
 and media guard keys a buyer by its signed payer, its verified Tempo sender,
@@ -536,10 +540,13 @@ curl -s https://agent402.tools/v1/models \\
 | 400 | the input was refused before the tool ran; the body carries \`expected\`, \`required\`, \`example\` and \`howToCall\` (method, URL and a ready body) | fix the request from \`howToCall\`; not charged on x402 |
 | 402 | the quote, or a refused payment; the first-contact 402 body carries the offer, \`howToCall\` and, on a job route, \`async\` | pay, or fund the wallet the refusal names |
 | 409 | the same keyed call is still running | wait \`Retry-After\`, then resend the same key with the same payment header to get its answer |
-| 422 | the tool cannot serve this input (an image too large to read, a body that is not an image) | read \`error\` and the \`howToCall\` note; not charged on x402 |
+| 422 | the tool cannot serve this input (an image too large to read, a body that is not an image), or a URL you supplied answered with a 4xx (\`attribution: "caller"\`) or refused this server's access (\`attribution: "upstream-access"\`) | read \`error\` and the \`howToCall\` note; not charged on x402 |
 | 429 | one of the limits above | wait \`Retry-After\` |
 | 503 | busy or briefly paused; image-ocr reading another image over ${OCR_LARGE_PIXELS / 1e6} megapixels answers \`hint: "large-image-busy"\` | wait \`Retry-After\`, or send a smaller image, which is read at once |
-| 502, 504 with \`attribution: "upstream"\` | a source the tool reads failed (a host timed out or refused the connection) | not your input: retry later or pick another source; not charged on x402 |
+| 502, 503 with \`attribution: "upstream"\` | a source the tool reads answered with a failure (its own status rides in \`upstreamStatus\`) | not your input: retry later or pick another source; not charged on x402 |
+| 502, 503, 504 with \`attribution: "ours"\` | our side: our time limit passed (\`hint: "our-deadline"\` or \`"budget-spent"\`), our DNS lookup failed (\`"our-egress"\`), the source refused our own key (\`"our-key"\`), our own allowance or pacing (\`"our-allowance"\`, \`"our-pacing"\`), or a defect in our own code (\`"internal"\`); \`hint: "smaller-input"\` means an input this long outlasts the limit | retry the same call, or send a shorter input when the hint says so; not charged on x402 |
+| 502, 503 with \`attribution: "unknown"\` and \`hint: "connect-failed"\` | the connection to a source failed before any answer (refused, reset or unreachable), and nothing shows which side failed | retry the same call later; not charged on x402 |
+| 504 with \`hint: "source-timeout"\` or \`"source-unreachable"\` | a URL you supplied did not answer within our limit, or could not be connected to (\`attribution: "unknown"\`) | check that the URL is correct and publicly reachable, or retry; not charged on x402 |
 
 A loop that honors all of it, shown with plain \`fetch\` (pass your payment
 \`fetch\` in its place):

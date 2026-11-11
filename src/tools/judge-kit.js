@@ -20,9 +20,9 @@
 // retired a data source once already for deriving income without permission.
 
 import { upstreamCosts } from "../upstream-costs.js";
-import { askDecisionOne, decisionOneEnabled, DECISION_ONE_MODEL } from "../decision-one.js";
+import { askDecisionOne, decisionOneEnabled, DECISION_ONE_MODEL, JUDGMENT_KEY_REFUSED, JUDGMENT_BALANCE_OUT } from "../decision-one.js";
 import { capturePostHogGatewayUsage } from "../posthog.js";
-import { upstreamFetch, bodyUnderDeadline, withBudget, currentBudget, handlerBudgetMs, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
+import { upstreamFetch, bodyUnderDeadline, withBudget, currentBudget, handlerBudgetMs, PAYMENT_WINDOW_BUDGET_MS, attributed, ATTRIBUTION, KIND } from "../upstream-deadline.js";
 
 // THREE BACKENDS, one answer shape. On /v1/judge TypeSafe's Jev answers first,
 // then Microsoft Decision-1 (over OpenRouter, the Jev wire with another model
@@ -182,7 +182,8 @@ export async function post(url, key, body, fetchImpl, hasAnswers, extraHeaders =
       body: JSON.stringify(body),
     }, ctx);
   } catch (err) {
-    if (err?.upstreamFailure === "deadline") err.mayBeBilled = true;
+    // A budget spent before the request left sent nothing, so nothing was billed.
+    if (err?.upstreamFailure === "deadline" && !err.budgetSpent) err.mayBeBilled = true;
     throw err;
   }
   let text;
@@ -190,8 +191,8 @@ export async function post(url, key, body, fetchImpl, hasAnswers, extraHeaders =
   catch (err) { if (err?.statusCode) { err.mayBeBilled = true; throw err; } const e = new Error("Judgment upstream returned an unreadable body."); e.statusCode = 502; e.mayBeBilled = true; throw e; }
   if (!res.ok) {
     // Relay the CLASS, never the body: it can echo the buyer's own state back.
-    if (res.status === 401 || res.status === 403) { const e = new Error("Judgment upstream rejected our credentials."); e.statusCode = 503; throw e; }
-    if (res.status === 402) { const e = new Error("Judgment upstream is unavailable."); e.statusCode = 503; throw e; }
+    if (res.status === 401 || res.status === 403) { const e = new Error(JUDGMENT_KEY_REFUSED); e.statusCode = 503; throw attributed(e, ATTRIBUTION.OURS, KIND.OUR_KEY); }
+    if (res.status === 402) { const e = new Error(JUDGMENT_BALANCE_OUT); e.statusCode = 503; throw attributed(e, ATTRIBUTION.OURS, KIND.OUR_ALLOWANCE); }
     if (res.status === 429) { const e = new Error("Judgment upstream is rate limiting. Retry shortly."); e.statusCode = 503; throw e; }
     // The upstream answers some of its own failures with 499 and an
     // internal_server_error body (seen 2026-10-15 on an image request): its

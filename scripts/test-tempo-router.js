@@ -311,11 +311,16 @@ await refuse("ok", { proof: async () => ({ count: 4000, payers: 2 }) }, /distinc
 // strikes, a settled delivery clears it.
 {
   const ORIGIN = new URL(URL_).origin;
-  const buy = (mode, memoizeDelivery = true) => { sellerMode = mode; return payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, createCredential: mint, proof: proofOk, memoizeDelivery }).then((r) => r, (e) => e); };
+  // Each purchase a different request: one payer's same request failing
+  // twice is one strike (x402-buyer.js).
+  let bodySeq = 0;
+  const buy = (mode, memoizeDelivery = true, body = { n: ++bodySeq }) => { sellerMode = mode; return payTempo(URL_, { method: "POST", body, maxAtomic: cap, createCredential: mint, proof: proofOk, memoizeDelivery, payer: "tempo:0xpayer-a" }).then((r) => r, (e) => e); };
   __resetSellerDeliveryFailuresForTest();
-  const e1 = await buy("fail-500");
+  const e1 = await buy("fail-500", true, { same: 1 });
   ok(e1 instanceof Error && e1.committed === true, "control: a 500 after the credential went out is still a committed 502");
   ok(sellerDeliveryFailingRecently(ORIGIN, "tempo") === null, "one strike changes no routing decision");
+  await buy("fail-500", true, { same: 1 });
+  ok(sellerDeliveryFailingRecently(ORIGIN, "tempo") === null, "one payer's same request failing again is still one strike");
   await buy("fail-500");
   ok(sellerDeliveryFailingRecently(ORIGIN, "tempo")?.strikes === 2, "a second 5xx with no receipt makes the Tempo seller actionable for the resolver");
   await buy("ok");

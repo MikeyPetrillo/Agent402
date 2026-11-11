@@ -8,7 +8,7 @@
 // rate limit), never PoW-eligible. Covered by scripts/test-price-feed-kit.js.
 
 import { protocols as llamaProtocols } from "./defi-kit.js";
-import { cgTake, cgRefusalMessage, isCoinGeckoHost, COINGECKO_ATTRIBUTION } from "./coingecko-rate.js";
+import { cgTake, cgRefusal, isCoinGeckoHost, COINGECKO_ATTRIBUTION } from "./coingecko-rate.js";
 import { createCgCache } from "./coingecko-cache.js";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 // DEADLINES (src/upstream-deadline.js): each read has its own cap, composed
@@ -64,7 +64,7 @@ async function feedLoad(url, host, { timeout = FEED_READ_MS, step = "data" } = {
     // under load it overran the key for every caller. Refuse before the call
     // when the minute is spent: 503 is never charged.
     const why = await cgTake(Date.now());
-    if (why) throw bad(cgRefusalMessage(why), 503);
+    if (why) throw cgRefusal(why);
   }
   // A read that outlives its cap, or a host that cannot be reached, is the
   // upstream's: a 503 naming the step (the transport cause reaches the log).
