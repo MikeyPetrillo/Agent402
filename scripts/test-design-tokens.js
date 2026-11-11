@@ -186,6 +186,83 @@ export function scanHeadings(rel, src) {
   return out;
 }
 
+// ---- controls, focus, prose step, skip link and code blocks (DESIGN.md "Controls and focus") ----
+// WCAG 1.4.11 asks 3:1 for the boundary of a control and for a focus
+// indicator, against every ground it sits on. Computed from the token file in
+// both themes, so a palette edit that drops one under 3:1 fails here.
+const themeBlock = (re) => (tokenSrc.match(re) || [, ""])[1];
+const LIGHT = themeBlock(/\n:root \{\n([\s\S]*?--fs-base[\s\S]*?)\n\}/);
+const DARK = themeBlock(/:root\[data-theme="dark"\] \{\n([\s\S]*?)\n\}/);
+const tokenIn = (block, name) => (block.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})\\s*;`)) || [])[1] || null;
+const lum = (hex) => { const f = (i) => { const v = parseInt(hex.slice(i, i + 2), 16) / 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(1) + 0.7152 * f(3) + 0.0722 * f(5); };
+export const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+const GROUNDS = ["paper", "card", "card-zebra", "footer-bg"];
+const PANELS = ["panel"];
+// A rule that styles a form field and bounds it with --hairline or --dash (1.2 to 1.7:1).
+const CONTROL_SEL = /(^|[\s,>.#-])(input|select|textarea|field)\b|search|-sel\b/;
+const CONTROL_BORDER_PENDING = {
+  "src/company.js": "the /company page moves to --control in its own change",
+  "src/operator.js": "the operator sign-in field sits on an obsidian panel and takes panel rules",
+};
+export function controlRuleProblems(rel, src) {
+  if (CONTROL_BORDER_PENDING[rel] || EXEMPT_FILES[rel] || LITERAL_FILES[rel]) return [];
+  const out = [];
+  const code = stripComments(src);
+  for (const m of code.matchAll(/([^{}\n`]*)\{([^{}]*)\}/g)) {
+    const sel = m[1].trim();
+    if (!sel || /\b(return|const|let|if|function)\b|=>/.test(sel) || !CONTROL_SEL.test(sel) || /wrap\b|-tw\b|label|btn/.test(sel) && !/search-wrap/.test(sel)) continue;
+    if (/border(-color)?\s*:[^;]*var\(--(hairline|dash)\)/.test(m[2])) out.push(`${rel}:${code.slice(0, m.index).split("\n").length}: "${sel.slice(0, 50)}" bounds a form control with --hairline or --dash (use var(--control))`);
+  }
+  return out;
+}
+function checkControlsAndFocus() {
+  for (const [theme, block] of [["light", LIGHT], ["dark", DARK]]) {
+    const control = tokenIn(block, "control");
+    ok(!!control, `${theme}: the token file defines --control (got ${control})`);
+    if (!control) continue;
+    for (const g of GROUNDS) {
+      const bg = tokenIn(block, g);
+      const r = bg ? contrast(control, bg) : 0;
+      ok(r >= 3, `${theme}: --control ${control} on --${g} ${bg} is ${r.toFixed(2)}:1 (WCAG 1.4.11 needs 3:1)`);
+      const accent = tokenIn(block, "accent");
+      const ra = bg && accent ? contrast(accent, bg) : 0;
+      ok(ra >= 3, `${theme}: the focus ring (--accent ${accent}) on --${g} is ${ra.toFixed(2)}:1`);
+    }
+    for (const g of PANELS) {
+      const bg = tokenIn(block, g), lit = tokenIn(block, "accent-lit") || tokenIn(LIGHT, "accent-lit");
+      const r = bg && lit ? contrast(lit, bg) : 0;
+      ok(r >= 3, `${theme}: the panel focus ring (--accent-lit ${lit}) on --${g} ${bg} is ${r.toFixed(2)}:1`);
+      const pc = tokenIn(LIGHT, "on-panel-faint"), rp = bg && pc ? contrast(pc, bg) : 0;
+      ok(rp >= 3, `${theme}: an outlined button on a panel (--on-panel-faint ${pc}) is ${rp.toFixed(2)}:1 on --${g}`);
+    }
+  }
+  ok(/--fs-prose:\s*16px;/.test(LIGHT) && SCALE_PX.has(16), "the type scale has the 16px prose step (--fs-prose)");
+  const css = tokenSrc;
+  ok(/\n:focus-visible \{ outline: 2px solid var\(--accent\) !important; outline-offset: 2px; \}/.test(css), "one 2px --accent focus ring for every interactive element");
+  ok(/\.on-panel :focus-visible[^{]*\.ml-code :focus-visible[^{]*\{ outline-color: var\(--accent-lit\) !important; \}/.test(css), "on a panel or a code block the ring is --accent-lit");
+  ok(/\.btn-secondary \{[^}]*border-color:var\(--control\)/.test(css) && /\.mfb-sel,\.mfb-search\{[^}]*border:1px solid var\(--control\)/.test(css), "the outlined button and the shared filter fields are bounded by --control");
+  ok(/:where\(input:not\([^)]*\), select, textarea\) \{ border-color: var\(--control\); \}/.test(css), "a field with no page rule is bounded by --control");
+  ok(/<body[^>]*><!--email_off-->\n<a class="ml-skip" href="#main">Skip to content<\/a>\n\$\{nav\(activePath\)\}\n<main id="main" tabindex="-1">/.test(css), "the shell's first focusable element is the skip link to <main id=main>");
+  ok(/\.ml-skip:focus \{ top: 12px; \}/.test(css), "the skip link shows when it has focus");
+  ok(/\.ml-nav-link \{ display: inline-block; min-height: 24px;/.test(css) && /\.ml-foot-links > a \{[^}]*min-height: 24px; min-width: 24px;/.test(css), "nav and footer links are at least 24px targets");
+  // Code blocks: the shared component, and no hand-made <pre> in the modules that moved to it.
+  ok(/\.ml-code \{ position: relative;[^}]*background: var\(--panel\)/.test(css) && /\.ml-code-copy \{[^}]*min-height: 28px/.test(css), "the code block component and its copy button are styled from tokens in the token file");
+  for (const rel of ["src/pages.js", "src/ledger-docs.js", "src/badges.js", "src/page-html.js"]) {
+    const src = stripComments(readFileSync(new URL(rel, ROOT), "utf8"));
+    ok(!/<pre[\s>]/.test(src) && /codeBlock\(/.test(src), `${rel}: every code block is codeBlock() (no hand-made <pre>)`);
+  }
+  for (const rel of ["src/guides.js", "src/docs.js", "src/blog.js"]) {
+    const src = readFileSync(new URL(rel, ROOT), "utf8");
+    ok(/wrapCodeBlocks\(/.test(src) && !/(^|[\s.}])(gp-body|post-body|ml-docs-main) pre\s*\{/m.test(src), `${rel}: rendered markdown code goes through wrapCodeBlocks() and no page rule restyles it`);
+  }
+  // The stylesheet is inlined in every page's head: a tag name in its comments
+  // (a main, pre, nav or footer tag) is read as markup by every HTML reader that slices a page.
+  const cssText = (tokenSrc.match(/export const LEDGER_CSS = `([\s\S]*?)`;/) || [, ""])[1];
+  ok(cssText.length > 1000 && !/<\/?(main|pre|nav|footer|script|style|body)\b/.test(cssText), "the shared stylesheet names no landmark or block tag as markup");
+  const chromeJs = readFileSync(new URL("assets/js/site-chrome.js", ROOT), "utf8");
+  ok(/window\.a402CodeBlocks=function/.test(chromeJs) && /setAttribute\('aria-live','polite'\)/.test(chromeJs) && /btn\.type='button'/.test(chromeJs), "site-chrome.js adds a real copy button and a polite live region to every code block");
+}
+
 function pageModules() {
   const out = [];
   for (const f of readdirSync(new URL("src/", ROOT))) if (f.endsWith(".js")) out.push(`src/${f}`);
@@ -221,9 +298,13 @@ if (process.argv.includes("--self-test")) {
   ok(scan("src/x.js", `<h1 style="font-family:var(--font-display);font-weight:400">`).length === 0, "a display h1 at 400 passes");
   ok(scan("src/x.js", `.x-h2{font-weight:800;font-size:var(--fs-xl)}`).length === 1, "an off-level heading weight is caught");
   ok(scan("src/x.js", `<h3 style="font-weight:600">`).length === 0, "the level weight passes");
+  ok(controlRuleProblems("src/x.js", `.x-search input{padding:8px;border:1px solid var(--hairline);}`).length === 1, "a field bounded by the hairline is caught");
+  ok(controlRuleProblems("src/x.js", `.x select{border:1px solid var(--control)} .x-card{border:1px solid var(--hairline)}`).length === 0, "a field on --control and a card on the hairline pass");
 } else {
   const problems = [];
   for (const rel of pageModules()) problems.push(...scan(rel, readFileSync(new URL(rel, ROOT), "utf8")));
+  for (const rel of pageModules()) problems.push(...controlRuleProblems(rel, readFileSync(new URL(rel, ROOT), "utf8")));
+  checkControlsAndFocus();
   ok(SCALE_PX.size >= 8, `the token file defines a type scale (${SCALE_PX.size} steps)`);
   ok(PALETTE.size >= 20, `the token file defines a palette (${PALETTE.size} values)`);
   ok(problems.length === 0, `page modules stay on DESIGN.md tokens (${problems.length} problems)\n  ${problems.slice(0, Number(process.env.SHOW || 60)).join("\n  ")}${problems.length > Number(process.env.SHOW || 60) ? `\n  ... ${problems.length - Number(process.env.SHOW || 60)} more` : ""}`);

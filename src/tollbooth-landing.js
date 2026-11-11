@@ -35,7 +35,7 @@ export function tollboothLandingPage(baseUrl) {
   .config { background:var(--card); border:1px solid var(--hairline); padding:18px; margin:0 0 14px; display:grid; gap:14px; grid-template-columns:1fr 160px 1fr; align-items:end; }
   .config label { display:block; }
   .config .k { color:var(--faint); font-family:var(--font-mono); font-size:var(--fs-xs); letter-spacing:.06em; text-transform:uppercase; margin-bottom:6px; }
-  .config input, .config select { width:100%; box-sizing:border-box; background:var(--paper); color:var(--ink); border:1px solid var(--hairline); padding:9px 11px; font:inherit; font-family:var(--font-mono); font-size:var(--fs-base); }
+  .config input, .config select { width:100%; box-sizing:border-box; background:var(--paper); color:var(--ink); border:1px solid var(--control); padding:9px 11px; font:inherit; font-family:var(--font-mono); font-size:var(--fs-base); }
   .config input:focus, .config select:focus { outline:none; border-color:var(--accent); }
   @media (max-width:720px){ .config { grid-template-columns:1fr; } }
   .install { background:var(--panel); border:1.5px solid var(--panel-rule); padding:16px 18px; position:relative; overflow:auto; }

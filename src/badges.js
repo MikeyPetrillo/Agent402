@@ -1,4 +1,4 @@
-import { esc } from "./ledger-chrome.js";
+import { esc, codeBlock } from "./ledger-chrome.js";
 
 // README badges: the SVG images at /badges/<style>.svg (embedded by READMEs
 // elsewhere, so the routes stay) and the Badges section of /docs (#badges;
@@ -98,20 +98,18 @@ export const BADGES_SECTION_CSS = `
   .ml-docs-main .bdg-row h3 { font-family:var(--font-body);font-weight:600;font-size:var(--fs-md);margin:0 0 4px;color:var(--ink); }
   .ml-docs-main .bdg-row p { font-size:var(--fs-sm);line-height:1.5;color:var(--muted);margin:0 0 10px; }
   .bdg-label { display:block;font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--faint);margin:0 0 4px; }
-  .bdg-code-wrap { position:relative;margin:0 0 10px; }
-  .bdg-code-wrap:last-child { margin-bottom:0; }
-  .bdg-code-wrap pre { background:var(--panel);border:1px solid var(--panel-rule);padding:12px 70px 12px 12px;margin:0;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.55;color:var(--on-panel);white-space:pre-wrap;word-break:break-all; }
-  .bdg-code-wrap .bdg-copy { position:absolute;top:8px;right:8px;background:var(--panel);border:1px solid var(--panel-rule-2);border-radius:var(--radius);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-2xs);padding:4px 10px;cursor:pointer; }
-  .bdg-code-wrap .bdg-copy.copied { color:var(--accent-lit);border-color:var(--accent-lit); }`;
+  .bdg-row .ml-code { margin:0 0 10px; }
+  .bdg-row .ml-code:last-child { margin-bottom:0; }
+  .bdg-row .ml-code > pre { padding-top:12px;padding-bottom:12px;padding-left:12px;line-height:1.55;overflow-wrap:anywhere;word-break:break-all; }`;
 
 /** The Badges section of /docs: each style's preview and its Markdown and
- * HTML embed. The copy buttons are wired by /js/copy-buttons.js. */
+ * HTML embed, each a shared code block (codeBlock, ledger-chrome.js). */
 export function badgesSectionHtml(baseUrl) {
   const rows = BADGE_STYLES.map((b) => {
     const svgUrl = `${baseUrl}/badges/${b.style}.svg`;
     const md = `[![Agent402](${svgUrl})](${baseUrl})`;
     const html = `<a href="${baseUrl}"><img src="${svgUrl}" alt="Agent402"></a>`;
-    const snippet = (label, code) => `<span class="bdg-label">${label}</span><div class="bdg-code-wrap"><pre><code>${esc(code)}</code></pre><button class="bdg-copy" type="button" aria-label="Copy the ${label} snippet">Copy</button></div>`;
+    const snippet = (label, code) => `<span class="bdg-label">${label}</span>${codeBlock(code, { name: `the ${label} snippet`, wrap: true, size: "xs" })}`;
     return `
         <div class="bdg-row">
           <div><h3>${esc(b.label)}</h3><p>${esc(b.description)}</p><img src="/badges/${esc(b.style)}.svg" alt="${esc(b.label)} badge" loading="lazy"></div>

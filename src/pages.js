@@ -10,7 +10,7 @@ import { REPO_URL } from "./repo-link.js";
 import { isComputePayable } from "./pow.js";
 import { responseSchemaFor } from "./openapi-schema.js";
 import { captureNote } from "./tool-output-examples.js";
-import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc, breadcrumbTrail } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc, breadcrumbTrail, codeBlock } from "./ledger-chrome.js";
 import { SKILL_PACKS, PACK_PRICE_RANGE } from "./skills.js";
 import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
 import { agentReportPriceRange, cardReportPriceRange, reportLadderProse } from "./report-tiers.js";
@@ -478,7 +478,9 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   .tp-table td, .tp-table th { border:1px solid var(--hairline); padding:10px 12px; text-align:left; vertical-align:top; }
   .tp-table th { background:var(--card); font-weight:700; }
   .tp-tw { overflow-x:auto; }
-  .tp-pre { background:var(--panel); color:var(--on-panel); font-family:var(--font-mono); font-size:var(--fs-sm); line-height:1.6; padding:18px 20px; overflow-x:auto; border:none; white-space:pre; }
+  .tp-wrap .ml-code { margin:13px 0; }
+  /* Target size (DESIGN.md): a link that is not inside a sentence is at least 24px tall. */
+  .tp-meta a, .tp-card h3 a { display:inline-block; padding:4px 0; }
   .tp-grid { display:grid; gap:14px; margin:20px 0; }
   @media (min-width:640px){ .tp-grid { grid-template-columns:repeat(3,1fr); } }
   .tp-card { background:var(--card); border:1px solid var(--hairline); padding:18px 20px; display:flex; flex-direction:column; gap:8px; min-width:0; overflow-wrap:break-word; }
@@ -511,24 +513,24 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   ${paramRows ? `<div class="tp-tw"><table class="tp-table"><tr><th>Name</th><th>Type</th><th>Required</th><th>Description</th></tr>${paramRows}</table></div>` : `<p class="tp-sub">${e(tool.name)} takes no parameters.</p>`}
 
   <h2 class="tp-h2">Example request</h2>
-  <pre class="tp-pre">${e(curlExample(baseUrl, tool))}</pre>
+  ${codeBlock(curlExample(baseUrl, tool), { name: "the request" })}
   <p class="tp-sub">Without payment this returns <code>HTTP 402 Payment Required</code> with the exact price for ${e(tool.slug)}; any x402 v2${orMpp} client pays it and retries.</p>
 
   <h2 class="tp-h2">Example response</h2>
   ${binaryTypes
     ? `<p class="tp-sub">A 200 carries ${binaryPhrase}: the file itself.</p>`
-    : `<pre class="tp-pre">${e(JSON.stringify(example ?? {}, null, 2))}</pre>${captured ? `\n  <p class="tp-sub tp-captured">${e(captureNote(captured))}</p>` : ""}`}
+    : `${codeBlock(JSON.stringify(example ?? {}, null, 2), { name: "the response" })}${captured ? `\n  <p class="tp-sub tp-captured">${e(captureNote(captured))}</p>` : ""}`}
   ${respRows ? `<div class="tp-tw"><table class="tp-table"><tr><th>Field</th><th>Type</th><th>Always present</th><th>In the example</th></tr>${respRows}</table></div>` : ""}
 
   <h2 class="tp-h2">From an MCP client</h2>
-  <pre class="tp-pre">catalog.call ${e(mcpArgs)}</pre>
+  ${codeBlock(`catalog.call ${mcpArgs}`, { name: "the MCP call" })}
   <p class="tp-sub">${mcpNote} Local install: <code>npx -y agent402-mcp@0.13.31</code>.</p>
 
   <h2 class="tp-h2">Errors and behavior</h2>
   <ul class="tp-facts">${facts.map((f) => `<li>${f}</li>`).join("\n")}</ul>
 
   <h2 class="tp-h2">Paid call (JavaScript agent)</h2>
-  <pre class="tp-pre">${e(`import { wrapFetchWithPayment } from "@x402/fetch";
+  ${codeBlock(`import { wrapFetchWithPayment } from "@x402/fetch";
 import { x402Client } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { privateKeyToAccount } from "viem/accounts";
@@ -538,18 +540,18 @@ client.setSpendControls?.({ maxAmountPerPayment: "${spendCap}" }); // refuse any
 registerExactEvmScheme(client, { signer: privateKeyToAccount(KEY) });
 const payFetch = wrapFetchWithPayment(fetch, client);
 
-${payExample(baseUrl, tool)}`)}</pre>
+${payExample(baseUrl, tool)}`, { name: "the paid call" })}
 
   ${
     computePayable
       ? `<h2 class="tp-h2">No wallet? Pay with compute</h2>
   <p class="tp-sub">Fetch a challenge, solve the sha256 puzzle (${e(String(powDifficulty))} leading zero bits, a fraction of a second of CPU), and resend with the <code>X-Pow-Solution</code> header:</p>
-  <pre class="tp-pre">${e(`import { createHash } from "node:crypto";
+  ${codeBlock(`import { createHash } from "node:crypto";
 const lz = (b) => { let t = 0; for (const x of b) { if (!x) { t += 8; continue; } t += Math.clz32(x) - 24; break; } return t; };
 const c = await (await fetch("${baseUrl}/api/pow/challenge?slug=${tool.slug}")).json();
 let n = 0;
 while (lz(createHash("sha256").update(c.challenge + ":" + n).digest()) < c.difficulty) n++;
-await fetch("${powSnippetRequest(baseUrl, tool).url}", { method: "${tool.method}", headers: { "X-Pow-Solution": c.token + ":" + n${tool.method === "POST" ? ', "Content-Type": "application/json"' : ""} }${tool.method === "POST" ? `, body: JSON.stringify(${JSON.stringify(input)})` : ""} });`)}</pre>`
+await fetch("${powSnippetRequest(baseUrl, tool).url}", { method: "${tool.method}", headers: { "X-Pow-Solution": c.token + ":" + n${tool.method === "POST" ? ', "Content-Type": "application/json"' : ""} }${tool.method === "POST" ? `, body: JSON.stringify(${JSON.stringify(input)})` : ""} });`, { name: "the proof-of-work call" })}`
       : ""
   }
 

@@ -75,7 +75,7 @@ try {
   const hub = (await text("/integrations")).body;
   for (const i of INTEGRATIONS) {
     const body = (await text(`/integrations/${i.slug}`)).body;
-    const main = body.split("<main>")[1] || "";
+    const main = body.split(/<main\b[^>]*>/)[1] || "";
     const toolLinks = new Set([...main.matchAll(/href="\/tools\/([^"]+)"/g)].map((m) => m[1]));
     ok(toolLinks.size >= 4, `/integrations/${i.slug}: links ${toolLinks.size} tool pages (>= 4)`);
     for (const slug of toolLinks) {
@@ -94,7 +94,7 @@ try {
   for (const l of LEARN) {
     const body = (await text(`/learn/${l.slug}`)).body;
     ok(/"@type":"DefinedTerm"/.test(body), `/learn/${l.slug}: DefinedTerm JSON-LD`);
-    const prose = (body.split("<main>")[1] || "").split("<footer")[0]
+    const prose = (body.split(/<main\b[^>]*>/)[1] || "").split("<footer")[0]
       .replace(/<nav[\s\S]*?<\/nav>/, "").replace(/<pre[\s\S]*?<\/pre>/g, "").replace(/<[^>]+>/g, " ").replace(/&[a-z#0-9]+;/g, " ");
     const words = prose.split(/\s+/).filter(Boolean).length;
     ok(words >= 300 && words <= 650, `/learn/${l.slug}: ${words} words of prose (300-600 plus the related list)`);

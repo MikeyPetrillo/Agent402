@@ -119,7 +119,7 @@ export const LEDGER_CSS = `
    announces heading LEVEL as structure, so h1 straight to h3 tells a listener
    there is a section title they have missed. Where a visual design genuinely
    has no title, this supplies one without changing the page for anyone else. */
-.sr-section{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+.sr-section,.ml-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 /* Hard stop on page-level horizontal scroll: no content should ever push the
    document sideways on a phone. Both the root and the body use overflow-x:
    clip (never hidden, auto or scroll): any of those on html or body turns that
@@ -155,6 +155,10 @@ html { overflow-x: clip; }
   --faint: #8B929A;
   --hairline: #24282C;
   --dash: #353B41;
+  /* --control bounds a form field, a select and an outlined button: 3:1 or
+     more against --paper, --card, --card-zebra and --footer-bg (WCAG 1.4.11),
+     computed in scripts/test-design-tokens.js. --dash stays for rules. */
+  --control: #6A727B;
   --panel-rule: #2C3136;
   --panel-rule-2: #3A4148;
   --panel: #16191D;
@@ -215,6 +219,8 @@ html { overflow-x: clip; }
   --fs-sm: 13px;
   --fs-md: 14px;
   --fs-base: 15px;
+  /* Running text on long-form pages (docs, guides, blog, legal). UI text stays --fs-base. */
+  --fs-prose: 16px;
   --fs-lg: 17px;
   --fs-xl: 22px;
   --fs-2xl: 28px;
@@ -240,6 +246,7 @@ html { overflow-x: clip; }
   --faint: #626970;
   --hairline: #D9DDE1;
   --dash: #C3C9CF;
+  --control: #7F868E;
   --panel-rule: #24282C;
   --panel-rule-2: #353B41;
   --panel: #0C0D0F;
@@ -308,9 +315,9 @@ body { transition: background-color .18s ease, color .18s ease; }
 /* --- mobile hamburger menu (the hover nav dropdowns don't work on touch, and
    the inline links get squeezed to zero on a phone - so ≤880px collapses the
    whole nav into a tap menu) --- */
-.ml-burger { display:none; align-items:center; justify-content:center; width:38px; height:34px; padding:0; border:1px solid var(--hairline); border-radius:var(--radius); background:var(--card); color:var(--ink); cursor:pointer; }
+.ml-burger { display:none; align-items:center; justify-content:center; width:38px; height:34px; padding:0; border:1px solid var(--control); border-radius:var(--radius); background:var(--card); color:var(--ink); cursor:pointer; }
 .ml-burger .ml-burger-close { display:none; }
-.ml-theme-toggle { display:inline-flex; align-items:center; justify-content:center; width:36px; height:34px; padding:0; border:1px solid var(--hairline); border-radius:var(--radius); background:var(--card); color:var(--ink); cursor:pointer; }
+.ml-theme-toggle { display:inline-flex; align-items:center; justify-content:center; width:36px; height:34px; padding:0; border:1px solid var(--control); border-radius:var(--radius); background:var(--card); color:var(--ink); cursor:pointer; }
 .ml-theme-toggle .ml-moon { display:none; } :root[data-theme="dark"] .ml-theme-toggle .ml-moon { display:inline; } :root[data-theme="dark"] .ml-theme-toggle .ml-sun { display:none; }
 .ml-mobile-menu { display:none; border-top:1px solid var(--hairline); background:var(--paper); max-height:calc(100vh - 62px); overflow-y:auto; -webkit-overflow-scrolling:touch; }
 .ml-mm-h { padding:12px 20px 4px; font-family:var(--font-mono); font-size:var(--fs-2xs); letter-spacing:.14em; text-transform:uppercase; color:var(--faint); }
@@ -384,13 +391,14 @@ body { overflow-wrap: break-word; }
 .pv-updated, .tm-updated { font-family: var(--font-body) !important; }
 /* Footer link rows: wrap as whole links; on a phone, a two-column list so no row ends on one stray link. */
 .ml-foot-links { display: flex; gap: 6px 16px; flex-wrap: wrap; }
-.ml-foot-links > a { white-space: nowrap; }
-.ml-foot-links > button { white-space: nowrap; font: inherit; color: var(--muted); background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
+.ml-foot-links > a { white-space: nowrap; display: inline-flex; align-items: center; min-height: 24px; min-width: 24px; }
+.ml-foot-links > button { white-space: nowrap; font: inherit; color: var(--muted); background: none; border: 0; padding: 0; min-height: 24px; cursor: pointer; text-align: left; }
 .ml-foot-links > button[hidden] { display: none; }
 @media (max-width: 600px) { .ml-foot-links { display: grid; grid-template-columns: repeat(2, max-content); gap: 8px 28px; width: 100%; } }
 /* The legal line: the entity and the contact address are two whole items, joined by a dot on one row and stacked when the row is too narrow, so neither breaks inside itself. */
 .ml-foot-legal { display: flex; flex-wrap: wrap; gap: 4px 0; }
 .ml-foot-legal > span { white-space: nowrap; }
+.ml-foot-legal a, .ml-foot-brand { display: inline-flex; align-items: center; min-height: 24px; }
 .ml-foot-legal > span + span::before { content: "·"; padding: 0 8px; }
 @media (max-width: 600px) { .ml-foot-legal { flex-direction: column; } .ml-foot-legal > span + span::before { content: none; } }
 /* A table cell that is a list of code names (site-chrome.js marks it .ml-codelist): on a phone each name takes its own
@@ -441,7 +449,7 @@ a { color: inherit; }
 .mlnav-faint { color: var(--faint); }
 .mlnav-row:hover { background: var(--card-zebra); }
 /* nowrap: a dropdown trigger and its caret are one unit; at 1180px with the CTA the row is tight and the caret used to wrap under the label. */
-.ml-nav-link { white-space: nowrap; color: var(--muted); text-decoration: none; border-bottom: 1.5px solid transparent; padding-bottom: 2px; transition: color .15s ease, border-color .15s ease; }
+.ml-nav-link { display: inline-block; min-height: 24px; white-space: nowrap; color: var(--muted); text-decoration: none; border-bottom: 1.5px solid transparent; padding-bottom: 2px; transition: color .15s ease, border-color .15s ease; }
 .ml-nav-link:hover { color: var(--ink); border-bottom-color: var(--dash); }
 .ml-nav-link-on { color: var(--ink); font-weight: 500; border-bottom-color: var(--ink); }
 .ml-nav-link-on:hover { border-bottom-color: var(--accent); }
@@ -548,13 +556,45 @@ a { color: inherit; }
 .ml-reveal.ml-reveal-in { opacity: 1; transform: none; }
 /* A breadcrumb link is told apart from the plain crumbs by more than color
    (WCAG 1.4.1): an underline, whatever the page's inline style says. */
-nav[aria-label="Breadcrumb"] a { text-decoration: underline !important; text-underline-offset: 3px; text-decoration-thickness: 1px; }
+nav[aria-label="Breadcrumb"] a { text-decoration: underline !important; text-underline-offset: 3px; text-decoration-thickness: 1px; display: inline-block; padding: 4px 0; }
 /* The same rule for a plain link inside running text: underlined unless it
    is a styled component (a class) or already carries a border underline. */
 p a:not([class]):not([style*="border"]), li a:not([class]):not([style*="border"]) { text-decoration: underline !important; text-underline-offset: 3px; text-decoration-thickness: 1px; }
-/* A code block that scrolls sideways takes keyboard focus (site-chrome.js
-   adds tabindex), and shows it. */
-pre[tabindex="0"]:focus-visible, .tablewrap[tabindex="0"]:focus-visible, .pg-table-wrap[tabindex="0"]:focus-visible, .wx-scroll[tabindex="0"]:focus-visible, .gp-tw[tabindex="0"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* --- controls and focus (DESIGN.md "Controls and focus") -------------------
+   One focus ring for every interactive element, keyboard focus only: 2px of
+   --accent, 2px off the element (6.2:1 or more on every page ground, both
+   themes). It wins over any page rule that drops the outline. On an obsidian
+   panel or a code block (dark in both themes) the ring is --accent-lit. A code
+   block or table that scrolls sideways takes focus too (site-chrome.js adds
+   tabindex), and shows the same ring. */
+:focus-visible { outline: 2px solid var(--accent) !important; outline-offset: 2px; }
+.on-panel :focus-visible, .on-panel:focus-visible, .hm-obsidian :focus-visible, .on-panel-ground :focus-visible, .ml-code :focus-visible, .ml-code:focus-visible, .ml-cta-panel :focus-visible, [style*="background:var(--panel)"] :focus-visible, [style*="background:var(--obsidian-bg)"] :focus-visible { outline-color: var(--accent-lit) !important; }
+/* The milled surface's darkest stop (#E3E6E9) holds --control at 2.94:1, so a control on it takes --faint (4.4:1 or more, both themes). */
+.hm-milled { --control: var(--faint); }
+/* The skip link target: the main landmark takes focus from the skip link without a ring around the page. */
+main:focus, main:focus-visible { outline: none !important; }
+/* Skip link: the first focusable element of every page, shown when focused. */
+.ml-skip { position: absolute; left: 16px; top: -200px; z-index: 100; display: inline-flex; align-items: center; min-height: 24px; padding: 10px 16px; background: var(--card); color: var(--ink); border: 1px solid var(--control); border-radius: var(--radius); font-family: var(--font-body); font-size: var(--fs-md); font-weight: 500; text-decoration: none; }
+.ml-skip:focus { top: 12px; }
+/* A field, a select and a text area are bounded by --control unless a page sets its own control token. */
+:where(input:not([type=checkbox], [type=radio], [type=hidden], [type=submit], [type=button], [type=range], [type=color], [type=file]), select, textarea) { border-color: var(--control); }
+/* --- code block (DESIGN.md "Code blocks") ----------------------------------
+   codeBlock() renders it: a panel holding one pre block. site-chrome.js adds the
+   copy button and the live region that says the copy happened, so with no
+   script it is a plain pre block. The right padding keeps the button off the text. */
+.ml-code { position: relative; margin: 0 0 16px; background: var(--panel); border: 1px solid var(--panel-rule); }
+.ml-code > pre { margin: 0; padding: 16px 84px 16px 20px; background: transparent; border: 0; font-family: var(--font-mono); font-size: var(--fs-sm); line-height: 1.6; color: var(--on-panel); white-space: pre; overflow-x: auto; overflow-wrap: normal; word-break: normal; }
+.ml-code > pre code { font: inherit; color: inherit; background: none; border: 0; padding: 0; }
+.ml-code-xs > pre { font-size: var(--fs-xs); }
+.ml-code-wrap > pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.ml-code-labeled > pre { padding-right: 20px; }
+/* A labeled block carries its copy button in the header row, beside the label; the label stays on one line. */
+.ml-code-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; min-height: 36px; padding: 4px 8px 4px 20px; border-bottom: 1px solid var(--panel-rule-2); font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: .06em; color: var(--on-panel-dim); }
+.ml-code-head > span { white-space: nowrap; }
+.ml-code-head > .ml-code-copy { position: static; }
+.ml-code-copy { position: absolute; top: 7px; right: 8px; z-index: 1; display: inline-flex; align-items: center; justify-content: center; min-width: 24px; min-height: 28px; padding: 4px 10px; background: var(--panel); color: var(--on-panel); border: 1px solid var(--on-panel-faint); border-radius: var(--radius); font-family: var(--font-mono); font-size: var(--fs-xs); line-height: 1; cursor: pointer; }
+.ml-code-copy:hover { border-color: var(--on-panel); }
+.ml-code-copy.is-done { color: var(--accent-lit); border-color: var(--accent-lit); }
 /* Home hero color field (assets/js/hero-aura.js): a canvas behind the hero,
    faded out toward the bottom so the hero meets the page ground without an
    edge. Hidden until the script has drawn, so a browser without WebGL keeps
@@ -588,10 +628,10 @@ pre[tabindex="0"]:focus-visible, .tablewrap[tabindex="0"]:focus-visible, .pg-tab
 .btn:disabled { opacity:.5; cursor:default; transform:none; }
 .btn-sm { font-size:var(--fs-sm); padding:9px 14px; }
 .btn-primary { background:var(--btn-bg); color:var(--btn-fg); box-shadow:var(--btn-shadow); border-radius:var(--radius-pill); }
-.btn-secondary { background:transparent; color:var(--ink); border-color:var(--dash); border-radius:var(--radius); }
+.btn-secondary { background:transparent; color:var(--ink); border-color:var(--control); border-radius:var(--radius); }
 .btn-secondary:hover { border-color:var(--ink); }
 .on-panel .btn-primary, .btn-primary.on-panel { background:var(--accent-lit); color:var(--on-accent-lit); box-shadow:none; }
-.on-panel .btn-secondary, .btn-secondary.on-panel { color:var(--on-panel); border-color:var(--panel-rule-2); }
+.on-panel .btn-secondary, .btn-secondary.on-panel { color:var(--on-panel); border-color:var(--on-panel-faint); }
 .on-panel .btn-secondary:hover, .btn-secondary.on-panel:hover { border-color:var(--on-panel); }
 @media (prefers-reduced-motion: reduce) { .btn, .btn:hover { transition:none; transform:none; } }
 .mfb-label{font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.1em;text-transform:uppercase;color:var(--faint);font-weight:700;}
@@ -606,7 +646,7 @@ pre[tabindex="0"]:focus-visible, .tablewrap[tabindex="0"]:focus-visible, .pg-tab
 .mfb-tabs{display:block;text-wrap:balance;flex:1 1 auto;min-width:0;line-height:2.15;}
 .mfb-tabs .mfb-tab{display:inline-block;margin:0 5px 5px 0;line-height:1.4;}
 @media (max-width:600px){.mfb-tabs{display:flex;flex-wrap:nowrap !important;overflow-x:auto;max-width:100%;padding-bottom:4px;gap:5px;}.mfb-tabs .mfb-tab{margin:0;}}
-.mfb-sel,.mfb-search{font-family:var(--font-mono);font-size:var(--fs-xs);padding:6px 10px;border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);color:var(--ink);}
+.mfb-sel,.mfb-search{font-family:var(--font-mono);font-size:var(--fs-xs);padding:6px 10px;border:1px solid var(--control);border-radius:var(--radius);background:var(--card);color:var(--ink);}
 .mfb-search{flex:1;min-width:120px;}
 `;
 
@@ -1001,7 +1041,7 @@ export function ledgerFooterCompact() {
   return `<footer style="border-top:1px solid var(--hairline);background:var(--footer-bg);">
   <div style="max-width:1180px;margin:0 auto;padding:26px 30px;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;">
-      <a href="/" style="display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--ink);">${brandMark(20, "f")}<span style="font-weight:600;font-size:var(--fs-md);font-family:var(--font-body);letter-spacing:-.01em;">Agent402</span></a>
+      <a href="/" class="ml-foot-brand" style="display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--ink);">${brandMark(20, "f")}<span style="font-weight:600;font-size:var(--fs-md);font-family:var(--font-body);letter-spacing:-.01em;">Agent402</span></a>
       <span class="ml-foot-links"><a href="/reports" style="color:var(--muted);text-decoration:none;">reports</a><a href="/monitors" style="color:var(--muted);text-decoration:none;">monitors</a><a href="/tools" style="color:var(--muted);text-decoration:none;">tools</a>${DECIDE_LIVE ? `<a href="/decide" style="color:var(--muted);text-decoration:none;">decide</a>` : ""}<a href="/pricing" style="color:var(--muted);text-decoration:none;">pricing</a><a href="/marketplace" style="color:var(--muted);text-decoration:none;">marketplace</a><a href="/revenue" style="color:var(--muted);text-decoration:none;">transactions</a><a href="/sell" style="color:var(--muted);text-decoration:none;">sell</a><a href="/docs" style="color:var(--muted);text-decoration:none;">docs</a></span>
     </div>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--hairline);">
@@ -1014,6 +1054,50 @@ export function ledgerFooterCompact() {
     </div>
   </div>
 </footer>`;
+}
+
+// ---------------------------------------------------------------------------
+// Code block (DESIGN.md "Code blocks")
+// ---------------------------------------------------------------------------
+
+/**
+ * One code block: a panel holding a <pre>. /js/site-chrome.js adds a copy
+ * button (keyboard reachable, announced through a polite live region), so a
+ * page with no script shows the plain block.
+ *
+ * @param {string} text           the code; escaped here unless `html` is set
+ * @param {object} [o]
+ * @param {string} [o.label]      a header line over the block ("terminal")
+ * @param {string} [o.name]       what the copy button copies, for its accessible name
+ * @param {boolean} [o.html]      `text` is markup already escaped by the caller (syntax spans)
+ * @param {boolean} [o.wrap]      soft-wrap long lines instead of scrolling sideways
+ * @param {"sm"|"xs"} [o.size]    type step of the code
+ * @param {string} [o.style]      inline layout for the block (margin, max-width)
+ */
+export function codeBlock(text, { label = "", name = "", html = false, wrap = false, size = "sm", style = "" } = {}) {
+  const cls = `ml-code${label ? " ml-code-labeled" : ""}${wrap ? " ml-code-wrap" : ""}${size === "xs" ? " ml-code-xs" : ""}`;
+  const named = name || label;
+  return `<div class="${cls}"${named ? ` data-name="${esc(named)}"` : ""}${style ? ` style="${esc(style)}"` : ""}>${label ? `<div class="ml-code-head"><span>${esc(label)}</span></div>` : ""}<pre>${html ? String(text) : esc(text)}</pre></div>`;
+}
+
+/** Rendered markdown: every <pre> block becomes the shared code block. A
+ * block codeBlock() already made is left as it is, so a page that mixes the two
+ * never nests one block in another. */
+const IN_CODE_BLOCK = /<div class="ml-code[^"<>]*"[^<>]*>(?:<div class="ml-code-head"><span>[^<>]*<\/span><\/div>)?$/;
+export function wrapCodeBlocks(html) {
+  const src = String(html);
+  let out = "", at = 0;
+  for (;;) {
+    const open = src.indexOf("<pre", at);
+    if (open < 0) break;
+    if (!/[\s>]/.test(src.charAt(open + 4))) { out += src.slice(at, open + 4); at = open + 4; continue; }
+    const end = src.indexOf("</pre>", open);
+    if (end < 0) break;
+    const wrapped = IN_CODE_BLOCK.test(src.slice(Math.max(at, open - 600), open));
+    out += src.slice(at, open) + (wrapped ? src.slice(open, end + 6) : `<div class="ml-code">${src.slice(open, end + 6)}</div>`);
+    at = end + 6;
+  }
+  return out + src.slice(at);
 }
 
 // ---------------------------------------------------------------------------
@@ -1210,8 +1294,9 @@ ${posthogSnippet(baseUrl)}
 ${gaSnippet(canonical)}
 </head>
 <body style="overflow-x:clip;"><!--email_off-->
+<a class="ml-skip" href="#main">Skip to content</a>
 ${nav(activePath)}
-<main>${body}</main>
+<main id="main" tabindex="-1">${body}</main>
 <!--/email_off--></body>
 </html>`;
 }
