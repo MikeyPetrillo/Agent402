@@ -1253,7 +1253,8 @@ jobs:
           TITLE="facilitatorFunds: a facilitator refused settlement"
           check_word facilitatorFunds "refused demoted" "ok"
           # A settlement signer short of gas, before any refusal: its own title.
-          TITLE="facilitatorFunds: a facilitator's settlement gas is running low or could not be read"
+          # A balance our checker could not read reads unknown and pages nothing.
+          TITLE="facilitatorFunds: a facilitator's settlement gas is running low"
           check_word facilitatorFunds "low" "ok"
           # The settle breaker refused a buyer that had settled a call in its
           # window (src/gateway-settle-breaker.js): refusing pages, ok closes.

@@ -712,9 +712,9 @@ Auto-closes when nothing is owed.`,
   {
     // A facilitator's settlement signer short of gas before it starts
     // refusing (low, src/facilitator-gas.js). Title matches heartbeat.yml's.
-    title: "facilitatorFunds: a facilitator's settlement gas is running low or could not be read",
+    title: "facilitatorFunds: a facilitator's settlement gas is running low",
     verdict: ({ gateway: b }) => wordVerdict(b.facilitatorFunds?.status, ["low"], ["ok"]),
-    body: () => `${failureWordBody("facilitatorFunds", "low")} low means a settlement signer's gas runway is under the floor, or its balance could not be read three times running; the operator detail says which (relayersLow, relayersUnread).`,
+    body: () => `${failureWordBody("facilitatorFunds", "low")} low means a settlement signer's gas runway is under the floor (relayersLow). A balance our checker could not read reads unknown and pages nothing; the operator detail counts it (relayersUnread).`,
   },
   {
     // The settle breaker refused a buyer that had settled a call in its

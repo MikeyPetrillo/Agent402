@@ -13,7 +13,9 @@
 //
 // A reading is "low" under the minimum runway, and "unread" after enough
 // consecutive failed reads that the balance cannot be vouched for; a single
-// failed read keeps the last good reading. A facilitator whose /supported
+// failed read keeps the last good reading. A failed read is our RPC read
+// failing, not evidence of a short balance: "unread" makes the
+// facilitatorFunds word read unknown (no page), never low. A facilitator whose /supported
 // answers but names no signer for the network reads "unknown": nothing to
 // watch is not a failure, so it is logged once and never pages. Readings feed the facilitatorFunds
 // word through the tool-failure monitor (noteRelayerGas), which shares them

@@ -14,11 +14,17 @@
 //              word). Each outcome carries its payment rail, counted per rail
 //              as operator detail.
 //   upstreams  per named upstream host, every outbound fetch the egress
-//              meter sees, by outcome: ok, s5xx, timeout, network (refused or
-//              reset before an answer), throttled (429), aborted (the caller
-//              canceled: a buyer who left, a drain). Split by origin:
-//              outside (inside a buyer's request), synthetic, background (no
-//              request: warmers, crawlers, timers).
+//              meter sees, by outcome: ok, s5xx, timeout (the transport's own
+//              connect or socket timeout), network (refused or reset before
+//              an answer), throttled (429), aborted (the caller canceled: a
+//              buyer who left, a drain), deadline (our own deadline passed:
+//              an AbortSignal.timeout of ours, a health check's limit, a
+//              handler budget) and egress (our side could not resolve or
+//              route to the host: DNS, no route). aborted, deadline and egress
+//              prove nothing about the upstream: they are shown on the
+//              operator view and never counted by upstreamHealth. Split by
+//              origin: outside (inside a buyer's request), synthetic,
+//              background (no request: warmers, crawlers, timers).
 //   facilitator refusals  a settle refused for an out-of-funds or billing
 //              class, per network and facilitator label.
 //   answers    per slug, every final 200 of a catalog route, by what the body
@@ -94,7 +100,11 @@ export const BUCKET_MS = 5 * 60_000;
 export const DAY_MS = 24 * 3_600_000;
 const HOUR_MS = 3_600_000;
 export const TOOL_CLASSES = ["ok", "buyer", "fail", "timeout", "payment", "gone", "shed"];
-export const UPSTREAM_KINDS = ["ok", "s5xx", "timeout", "network", "throttled", "aborted"];
+// Appended only: replicas publish these as positional arrays, so an older
+// replica's snapshot (fewer kinds) still merges.
+export const UPSTREAM_KINDS = ["ok", "s5xx", "timeout", "network", "throttled", "aborted", "deadline", "egress"];
+/** The kinds upstreamHealth counts as the upstream's own failure. */
+export const UPSTREAM_FAILURE_KINDS = Object.freeze(["s5xx", "timeout", "network"]);
 export const WORDS = ["ok", "degraded", "failing"];
 export const REPLAY_KINDS = ["implicit", "keyed"];
 /** Pending-settle outcomes (src/pending-settle.js), in count order. */
@@ -169,11 +179,20 @@ export function toolClassOf(status, { shed = false } = {}) {
 }
 
 const TIMEOUT_CODES = new Set(["UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT", "ETIMEDOUT", "ESOCKETTIMEDOUT"]);
+// Our side could not resolve or route to the host: no answer from it at all.
+const EGRESS_CODES = new Set(["ENOTFOUND", "EAI_AGAIN", "EAI_FAIL", "EAI_NODATA", "EAI_NONAME", "ENETUNREACH", "ENETDOWN", "EHOSTUNREACH", "EADDRNOTAVAIL"]);
 /** The outcome of an outbound fetch from its rejection (or null for a response). */
 export function upstreamKindOfError(err, init) {
   const reason = init?.signal?.reason;
   const code = err?.cause?.code || err?.code;
-  if (err?.name === "TimeoutError" || reason?.name === "TimeoutError" || TIMEOUT_CODES.has(code)) return "timeout";
+  // An error already classed by src/upstream-deadline.js: every class but
+  // "unreachable" is a deadline of ours (its cap, the handler budget).
+  if (typeof err?.upstreamFailure === "string" && err.upstreamFailure !== "unreachable") return "deadline";
+  // A TimeoutError is an AbortSignal.timeout of ours firing (a per-read cap,
+  // a health check's limit), not an answer from the upstream.
+  if (err?.name === "TimeoutError" || reason?.name === "TimeoutError") return "deadline";
+  if (TIMEOUT_CODES.has(code)) return "timeout";
+  if (EGRESS_CODES.has(code)) return "egress";
   if (err?.name === "AbortError" || reason) return "aborted";
   return "network";
 }
@@ -647,7 +666,9 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       const h = sumWindow(rows, ["o", "s", "b"], UPSTREAM_KINDS.length, hourFloor);
       const d = sumWindow(rows, ["o", "s", "b"], UPSTREAM_KINDS.length, dayFloor);
       const counted = named(UPSTREAM_KINDS, add([...h.o], h.b));
-      const fails = counted.s5xx + counted.timeout + counted.network;
+      // Only the upstream's own failures (UPSTREAM_FAILURE_KINDS): our
+      // deadlines, our egress and a caller's cancel are left out of both.
+      const fails = UPSTREAM_FAILURE_KINDS.reduce((n, k) => n + counted[k], 0);
       const calls = fails + counted.ok + counted.throttled;
       let word = "ok";
       if (fails >= th.upstreamDegraded) word = calls >= th.upstreamMinCalls && fails / calls > th.upstreamFailRate ? "failing" : "degraded";
@@ -686,10 +707,12 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     const recent = m.refusals.filter((r) => r.at > t - th.fundsWindowMs);
     let demoted = [];
     try { demoted = isDemoted() || []; } catch { demoted = []; }
-    // Gas runway of the facilitators' settlement signers: low, or unreadable
-    // past the checker's retries, reads "low" (a warning before refusals). A
-    // facilitator that publishes no signer ("unknown") has nothing to watch
-    // and never pages.
+    // Gas runway of the facilitators' settlement signers: a balance read
+    // under the floor reads "low" (a warning before refusals). A balance our
+    // checker could not read past its retries ("unread": our RPC read failed,
+    // so nothing about the signer is known) reads "unknown", which pages
+    // nothing; a real low beside it still reads "low". A facilitator that
+    // publishes no signer ("unknown") has nothing to watch and never pages.
     const gas = (m.gas || []).filter((r) => r.at > t - th.gasFreshMs);
     // A listed facilitator's empty or unreadable signer is covered while our
     // own relayer on that network reads ok: payments settle through ours
@@ -697,8 +720,9 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     // relayer low or unread, and the gas-against-floor row, are never covered.
     const ownOk = new Set(gas.filter((r) => r.own && r.status === "ok").map((r) => r.network));
     const covered = gas.filter((r) => !r.own && !r.reason && r.facilitator !== "price floor" && (r.status === "low" || r.status === "unread") && ownOk.has(r.network));
-    const gasLow = gas.filter((r) => (r.status === "low" || r.status === "unread") && !covered.includes(r));
-    const fundsWord = demoted.length ? "demoted" : recent.length ? "refused" : gasLow.length ? "low" : "ok";
+    const gasLow = gas.filter((r) => r.status === "low" && !covered.includes(r));
+    const gasUnread = gas.filter((r) => r.status === "unread" && !covered.includes(r));
+    const fundsWord = demoted.length ? "demoted" : recent.length ? "refused" : gasLow.length ? "low" : gasUnread.length ? "unknown" : "ok";
     // A refused paying buyer: a bucket counts while it ended inside the window
     // (its start is after t - window - BUCKET_MS), so a refusal is read for at
     // least the window and at most one bucket longer.

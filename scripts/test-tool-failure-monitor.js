@@ -39,12 +39,38 @@ await check("classes: ok / buyer / fail / timeout / payment / gone / shed", () =
   assert.equal(upstreamKindOfStatus(404), "ok", "an upstream 404 is an answer, not an outage");
   assert.equal(upstreamKindOfStatus(429), "throttled");
   assert.equal(upstreamKindOfStatus(502), "s5xx");
-  assert.equal(upstreamKindOfError(Object.assign(new Error("x"), { name: "TimeoutError" })), "timeout");
+  assert.equal(upstreamKindOfError(Object.assign(new Error("x"), { name: "TimeoutError" })), "deadline", "an AbortSignal.timeout of ours is our deadline");
   assert.equal(upstreamKindOfError(Object.assign(new Error("fetch failed"), { cause: { code: "UND_ERR_CONNECT_TIMEOUT" } })), "timeout");
   const ac = new AbortController(); ac.abort(new DOMException("t", "TimeoutError"));
-  assert.equal(upstreamKindOfError(Object.assign(new Error("aborted"), { name: "AbortError" }), { signal: ac.signal }), "timeout", "a signal whose reason is a TimeoutError is a timeout");
+  assert.equal(upstreamKindOfError(Object.assign(new Error("aborted"), { name: "AbortError" }), { signal: ac.signal }), "deadline", "a signal whose reason is a TimeoutError is our deadline");
+  assert.equal(upstreamKindOfError(Object.assign(new Error("x"), { upstreamFailure: "deadline" })), "deadline", "an upstream-deadline class other than unreachable is ours");
+  assert.equal(upstreamKindOfError(Object.assign(new Error("fetch failed"), { cause: { code: "ENOTFOUND" } })), "egress", "our resolver finding no address is our egress");
+  assert.equal(upstreamKindOfError(Object.assign(new Error("fetch failed"), { cause: { code: "EAI_AGAIN" } })), "egress");
+  assert.equal(upstreamKindOfError(Object.assign(new Error("fetch failed"), { cause: { code: "ENETUNREACH" } })), "egress");
   assert.equal(upstreamKindOfError(Object.assign(new Error("aborted"), { name: "AbortError" })), "aborted", "a caller's cancel is not the upstream's failure");
   assert.equal(upstreamKindOfError(Object.assign(new Error("fetch failed"), { cause: { code: "ECONNREFUSED" } })), "network");
+});
+
+await check("upstream words: our own deadlines and egress errors never page upstreamHealth; the upstream's own failures still do", async () => {
+  const m = createToolFailureMonitor({ now: clock().now, env: {} });
+  for (let i = 0; i < 30; i++) m.noteUpstream("hist.databento.com", "deadline", { origin: "outside" });
+  for (let i = 0; i < 30; i++) m.noteUpstream("hist.databento.com", "egress", { origin: "background" });
+  for (let i = 0; i < 2; i++) m.noteUpstream("hist.databento.com", "ok", { origin: "outside" });
+  assert.equal((await m.status({ fresh: true })).upstreamHealth.status, "ok", "thirty of our deadlines and thirty egress errors are not the upstream failing");
+  const full = await m.status({ full: true, fresh: true });
+  assert.deepEqual(full.upstreamHealth.upstreams, [], "no upstream is listed as failing");
+  const row = m.evaluate().upstreams.find((u) => u.upstream === "databento");
+  assert.equal(row.hour.outside.deadline, 30, "the operator view still counts our deadlines");
+  assert.equal(row.hour.background.egress, 30, "and our egress errors");
+  assert.equal(row.hour.failures, 0);
+  // Through the egress observer: a fetch our AbortSignal.timeout ended.
+  const ac2 = new AbortController(); ac2.abort(new DOMException("t", "TimeoutError"));
+  const rejected = Promise.reject(new DOMException("The operation was aborted due to timeout", "TimeoutError")); rejected.catch(() => {});
+  m.observeFetch("hist.databento.com", rejected, { signal: ac2.signal }, "outside");
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(m.evaluate().upstreams.find((u) => u.upstream === "databento").hour.outside.deadline, 31, "the observer files our timeout as a deadline");
+  for (let i = 0; i < 5; i++) m.noteUpstream("hist.databento.com", "s5xx", { origin: "outside" });
+  assert.equal((await m.status({ fresh: true })).upstreamHealth.status, "degraded", "five 5xx answers from the upstream itself still page");
 });
 
 await check("tool words: 2 outside 5xx ok, 3 degraded, a >25% share over 8 calls failing; synthetic never counts", async () => {
@@ -181,7 +207,7 @@ await check("upstream words: named hosts only; 5 timeouts degraded, a >25% share
   assert.equal(m.upstreamNameOf("worker.internal"), "render-worker");
 });
 
-await check("the egress meter's observer feeds the monitor (5xx, timeout, network; the caller's promise untouched)", async () => {
+await check("the egress meter's observer feeds the monitor (5xx, our deadline, network; the caller's promise untouched)", async () => {
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
     const u = String(input);
@@ -204,7 +230,7 @@ await check("the egress meter's observer feeds the monitor (5xx, timeout, networ
     await new Promise((r) => setTimeout(r, 10));
     const r = await m.report();
     assert.equal(r.upstreams.length, 1);
-    assert.deepEqual(r.upstreams[0].hour.outside, { ok: 1, s5xx: 1, timeout: 1, network: 1, throttled: 0, aborted: 0 });
+    assert.deepEqual(r.upstreams[0].hour.outside, { ok: 1, s5xx: 1, timeout: 0, network: 1, throttled: 0, aborted: 0, deadline: 1, egress: 0 });
     assert.deepEqual(seenPaths, ["/five", "/slow", "/refused", "/ok", "/five"], "the observer is handed each call's path");
     setEgressOutcomeObserver(null);
   } finally { globalThis.fetch = realFetch; }
@@ -225,8 +251,8 @@ await check("a facilitator registered by path names only its own calls; the data
     await new Promise((r) => setTimeout(r, 10));
     const r = await m.report();
     const by = Object.fromEntries(r.upstreams.map((u) => [u.upstream, u.hour.outside]));
-    assert.deepEqual(by["cdp-data"], { ok: 0, s5xx: 3, timeout: 0, network: 0, throttled: 0, aborted: 0 }, "data-API 502s count on cdp-data");
-    assert.deepEqual(by["facilitator:api.cdp.coinbase.com"], { ok: 1, s5xx: 0, timeout: 0, network: 0, throttled: 0, aborted: 0 }, "the facilitator keeps only its own calls");
+    assert.deepEqual(by["cdp-data"], { ok: 0, s5xx: 3, timeout: 0, network: 0, throttled: 0, aborted: 0, deadline: 0, egress: 0 }, "data-API 502s count on cdp-data");
+    assert.deepEqual(by["facilitator:api.cdp.coinbase.com"], { ok: 1, s5xx: 0, timeout: 0, network: 0, throttled: 0, aborted: 0, deadline: 0, egress: 0 }, "the facilitator keeps only its own calls");
   }
 });
 
@@ -552,7 +578,7 @@ await check("settle demotion safety: an alternate's ambiguous failure stops the 
       m.noteFacilitatorRefusal({ network: NET, facilitator: "x", reason: "Out of mainnet settlement funds" });
       assert.equal((await m.status({ fresh: true })).facilitatorFunds.status, "refused");
     });
-    await check("gas: one failed read keeps the last reading; repeated failures read unread (low), never a silent ok", async () => {
+    await check("gas: one failed read keeps the last reading; repeated failures read unread (unknown), never low and never a silent ok", async () => {
       const c = clock();
       const m = createToolFailureMonitor({ now: c.now, env: {} });
       const g = createRelayerGasCheck({ urls: [FAC], network: NET, rpcUrl: RPC, settings, now: c.now });
@@ -566,7 +592,7 @@ await check("settle demotion safety: an alternate's ambiguous failure stops the 
       r = await g.check();
       assert.equal(r[0].status, "unread");
       m.noteRelayerGas(r);
-      assert.equal((await m.status({ fresh: true })).facilitatorFunds.status, "low", "unreadable reads the public word low (fails closed)");
+      assert.equal((await m.status({ fresh: true })).facilitatorFunds.status, "unknown", "unreadable reads the public word unknown: our failed read is not a low balance");
       const fullU = await m.status({ fresh: true, full: true });
       assert.equal(fullU.facilitatorFunds.relayersUnread, 1, "the operator detail names it unreadable");
       assert.equal(fullU.facilitatorFunds.relayersLow, 0, "...not short of gas");
