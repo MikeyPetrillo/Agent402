@@ -94,18 +94,33 @@ const okPayer = (p) => typeof p === "string" && p.length >= 1 && p.length <= 160
 // The caller's own input refused (a malformed body, a missing resource, a
 // conflict, a body too large or of the wrong type, a value out of range):
 // never settled, and a looping client of the payer's could page us with it.
+// One of these statuses is the caller's only when the answer attributes it to
+// the caller or to no one: a 422 attributed to a third party refusing our
+// access (upstream-access, src/tools/fetch-guard.js), to an upstream, to us
+// or to an unknown side is a failed answer and is kept.
 export const CALLER_INPUT_STATUSES = Object.freeze([400, 404, 409, 413, 415, 422]);
 const CALLER_INPUT = new Set(CALLER_INPUT_STATUSES);
-const isFailure = (status) => !(Number.isInteger(status) && status >= 200 && status < 300) && !CALLER_INPUT.has(status);
+const ATTRIBUTION_RE = /^[a-z][a-z-]{0,23}$/;
+const isFailure = (status, attribution = null) => !(Number.isInteger(status) && status >= 200 && status < 300)
+  && !(CALLER_INPUT.has(status) && (attribution == null || attribution === "caller"));
+/** The attribution field of a JSON error answer (src/tool-error-fields.js),
+ *  or null. */
+export function attributionTextOf(body) {
+  try {
+    const a = body && typeof body === "object" ? (typeof body.attribution === "string" ? body.attribution : (body.error && typeof body.error === "object" && typeof body.error.attribution === "string" ? body.error.attribution : null)) : null;
+    return a && ATTRIBUTION_RE.test(a) ? a : null;
+  } catch { return null; }
+}
 
 /**
  * Records one final answer to a verified paid request. Only a non-2xx that
- * is not the caller's own input refused (CALLER_INPUT_STATUSES) is kept; a
- * 2xx costs one comparison. Never throws, never awaits on the caller.
+ * is not the caller's own input refused (CALLER_INPUT_STATUSES attributed to
+ * the caller or to no one) is kept; a 2xx costs one comparison. Never
+ * throws, never awaits on the caller.
  */
-export function noteVerifiedPaidOutcome({ payer, slug, status, error = null, at = Date.now() } = {}, env = process.env) {
+export function noteVerifiedPaidOutcome({ payer, slug, status, error = null, attribution = null, at = Date.now() } = {}, env = process.env) {
   try {
-    if (!isFailure(status) || !okPayer(payer)) return false;
+    if (!isFailure(status, typeof attribution === "string" ? attribution : null) || !okPayer(payer)) return false;
     const ev = { id: `${PROC}-${++seq}`, at: Number(at) || Date.now(), slug: String(slug || "unknown").slice(0, 80), status: Number.isInteger(status) ? status : 0, error: typeof error === "string" ? error.slice(0, ERROR_CHARS) : null };
     const cutoff = ev.at - keepSpan(env);
     let list = local.get(payer);

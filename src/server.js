@@ -400,7 +400,7 @@ import { initAnalyticsDb, recordToolCall, getAnalytics, analyticsEnabled, redact
 import { databasesStatus } from "./db-status.js";
 import { initWithRetry } from "./db-init-retry.js";
 import { railOf, outcomeRailOf } from "./payment-rail.js";
-import { noteVerifiedPaidOutcome, errorTextOf, topBuyerFailuresStatus, startTopBuyerRefresh, topRefreshMs } from "./top-buyer-failures.js";
+import { noteVerifiedPaidOutcome, errorTextOf, attributionTextOf, topBuyerFailuresStatus, startTopBuyerRefresh, topRefreshMs } from "./top-buyer-failures.js";
 import { nonEvmPayerFromRequest } from "./non-evm-payer.js";
 import { initPostHog, capturePostHogWrongMethod, capturePostHogToolError, capturePostHogToolCall, telemetryKeyOf, capturePostHogDiscovery, capturePostHogPaywall, capturePostHogPowChallenge, capturePostHogSettlement, capturePostHogChargedFailure, capturePostHogSettleFailed, capturePostHogToolGone, toolGoneSourceOf, capturePostHogHumanFunnel, shutdownPostHog, posthogEnabled } from "./posthog.js";
 import { analyticsPage } from "./analytics-page.js";
@@ -11854,11 +11854,12 @@ async function verifiedPayerOf(req, res) {
   return signer ? normalizePayerAddress(signer.slice(signer.indexOf(":") + 1)) : null;
 }
 function noteTopBuyerFailure(req, res, slug, status, answer) {
-  let error = null;
+  let error = null, attribution = null;
   try { error = answer?.has?.() ? errorTextOf(answer.body()) : null; } catch { error = null; }
+  try { attribution = answer?.has?.() ? attributionTextOf(answer.body()) : null; } catch { attribution = null; }
   const at = Date.now();
   verifiedPayerOf(req, res).then((payer) => {
-    if (payer && !isOwnWallet(payer)) noteVerifiedPaidOutcome({ payer, slug, status, error, at });
+    if (payer && !isOwnWallet(payer)) noteVerifiedPaidOutcome({ payer, slug, status, error, attribution, at });
   }, () => {});
 }
 function noteToolOutcomeOnClose(req, res, slug, def = null) {

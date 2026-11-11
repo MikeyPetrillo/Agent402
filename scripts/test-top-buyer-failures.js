@@ -102,6 +102,26 @@ const SPEND_EVM = [...OUR_EVM_WALLETS].find((w) => w.startsWith("0x7706"));
   ok((await T.topBuyerFailuresStatus({ now: t0 + 13 * MIN + 1, env })).status === "ok", "the caller's own input refused (400, 404, 409, 413, 415, 422) is never kept: six of them leave ok");
   T.noteVerifiedPaidOutcome({ payer: TOP, slug: "x", status: 503, at: t0 + 13 * MIN }, env);
   ok((await T.topBuyerFailuresStatus({ now: t0 + 13 * MIN + 1, env })).status === "alert", "a 5xx counts: a fourth failure puts three inside ten minutes");
+  // A caller-input status is the caller's only when the answer attributes it
+  // to the caller or to no one: a 422 for a third party refusing our access
+  // (src/tools/fetch-guard.js upstreamFailure, attribution upstream-access)
+  // is a failed answer and is kept.
+  {
+    const { upstreamFailure } = await import("../src/tools/fetch-guard.js");
+    const { toolErrorFields } = await import("../src/tool-error-fields.js");
+    const bodyOf = (e) => ({ error: e.message, ...toolErrorFields(e) });
+    const access = bodyOf(upstreamFailure(403, { host: "example.com" })), callerBad = bodyOf(upstreamFailure(404, { host: "example.com" }));
+    ok(T.attributionTextOf(access) === "upstream-access" && T.attributionTextOf(callerBad) === "caller" && T.attributionTextOf({ error: "x" }) === null && T.attributionTextOf({ error: { message: "x", attribution: "ours" } }) === "ours" && T.attributionTextOf({ attribution: "<script>" }) === null, "the attribution is read from the answer body as the catalog writes it");
+    T._resetTopBuyerFailures();
+    T.setTopBuyers([TOP], t0);
+    const kept = [];
+    for (const [st, a] of [[422, "caller"], [422, null], [400, "caller"], [404, null]]) kept.push(T.noteVerifiedPaidOutcome({ payer: TOP, slug: "x", status: st, attribution: a, at: t0 }, env));
+    ok(kept.every((k) => k === false), `caller-input statuses attributed to the caller or to no one are not kept (${kept.join(",")})`);
+    const kept2 = [];
+    for (const a of ["upstream-access", "upstream", "ours"]) kept2.push(T.noteVerifiedPaidOutcome({ payer: TOP, slug: "x", status: 422, attribution: a, at: t0 + 1000 }, env));
+    ok(kept2.every((k) => k === true) && T._localSizes().events === 3, `a 422 attributed to a third party's access, an upstream or us is kept (${kept2.join(",")})`);
+    ok((await T.topBuyerFailuresStatus({ now: t0 + 2000, env })).status === "alert", "three such 422s inside the window raise the alert");
+  }
   // Env: threshold, window, hold.
   T._resetTopBuyerFailures();
   T.setTopBuyers([TOP], t0);
@@ -130,6 +150,22 @@ const SPEND_EVM = [...OUR_EVM_WALLETS].find((w) => w.startsWith("0x7706"));
     T.noteVerifiedPaidOutcome({ payer: evm(0x6000), slug: "x", status: 502, at: at0 + span }, {});
     const dropped = T.sweepIdleTopBuyerFailures(at0 + span + 1, {});
     ok(dropped === 50 && T._localSizes().payers === 1, `the idle sweep drops every payer with nothing inside the window plus the hold and keeps the rest (${dropped} dropped, ${T._localSizes().payers} kept)`);
+    T._resetTopBuyerFailures();
+  }
+  // The refresh timer runs the idle sweep on every tick: a payer whose only
+  // failure is older than the window plus the hold is dropped by the timer
+  // itself, while a fresh one stays.
+  {
+    const span = T.failWindowMs({}) + T.failHoldMs({});
+    T._resetTopBuyerFailures();
+    const now0 = Date.now();
+    T.noteVerifiedPaidOutcome({ payer: evm(0x7000), slug: "x", status: 502, at: now0 - span - 60_000 }, {});
+    T.noteVerifiedPaidOutcome({ payer: evm(0x7001), slug: "x", status: 502, at: now0 }, {});
+    let reads = 0;
+    T.startTopBuyerRefresh({ read: async () => { reads++; return []; }, firstMs: 0, env: {}, log: { warn() {} } });
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline && (reads === 0 || T._localSizes().payers !== 1)) await new Promise((r) => setTimeout(r, 10));
+    ok(reads >= 1 && T._localSizes().payers === 1, `the refresh timer's tick runs the idle sweep (reads ${reads}, payers kept ${T._localSizes().payers})`);
     T._resetTopBuyerFailures();
   }
   T._resetTopBuyerFailures();
