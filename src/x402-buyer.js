@@ -9,7 +9,7 @@
 // settlement can cost us the one upstream payment (the LLM-gateway risk class),
 // so the margin guard below refuses any upstream quote over the caller's cap.
 import { assertPublicUrl, ssrfDispatcher, freshSsrfDispatcher } from "./tools/fetch-guard.js";
-import { isAbortError, isDnsFailure, transportCodeOf } from "./upstream-deadline.js";
+import { isAbortError, isNameNotFound, isOurResolverFailure } from "./upstream-deadline.js";
 import { Agent as UndiciAgent } from "undici";
 import { withDistrust } from "./tls-distrust.js";
 
@@ -87,7 +87,6 @@ const sellerSaid = (e) => Object.assign(e, { attribution: "upstream" });
  *  no data) is the seller's name, not our resolver, and like any other
  *  transport failure proves nothing about whose side failed. Never "Seller
  *  unreachable" for a leg our own clamp ended. */
-const NAME_DOES_NOT_RESOLVE = new Set(["ENOTFOUND", "EAI_NONAME", "EAI_NODATA"]);
 export function bareLegFailure(err, { capMs, clamped = false } = {}) {
   const secs = Math.max(1, Math.round(Number(capMs) / 1000) || 1);
   if (isAbortError(err)) {
@@ -95,10 +94,10 @@ export function bareLegFailure(err, { capMs, clamped = false } = {}) {
       ? `Seller did not answer the price request within the ${secs} s left of our limit for this call`
       : `Seller did not answer the price request within our ${secs} s limit`, 502), { attribution: "ours", hint: "our-deadline" });
   }
-  if (NAME_DOES_NOT_RESOLVE.has(transportCodeOf(err) || "")) {
+  if (isNameNotFound(err)) {
     return Object.assign(bad("The seller's host name does not resolve; no request was sent", 502), { attribution: "unknown", hint: "connect-failed" });
   }
-  if (isDnsFailure(err)) {
+  if (isOurResolverFailure(err)) {
     return Object.assign(bad("This server's DNS lookup for the seller's host failed; no request was sent", 502), { attribution: "ours", hint: "our-egress" });
   }
   return Object.assign(bad(`Seller could not be reached from here: ${String(err?.message || err).slice(0, 80)}`, 502), { attribution: "unknown", hint: "connect-failed" });

@@ -382,7 +382,7 @@ for (const [name, T, field, sameBody] of SPEND) {
   const created = (calls, T) => calls.filter((c) => c[1] === "create" && argOf(c, "--title") === T).length;
   const closedNum = (calls) => calls.filter((c) => c[1] === "close").map((c) => c[2]);
   const ourTimeout = () => { const ac = new AbortController(); ac.abort(new DOMException("t", "TimeoutError")); const p = Promise.reject(new DOMException("The operation was aborted due to timeout", "TimeoutError")); p.catch(() => {}); return [p, { signal: ac.signal }]; };
-  const ourDns = () => { const p = Promise.reject(Object.assign(new TypeError("fetch failed"), { cause: { code: "ENOTFOUND" } })); p.catch(() => {}); return [p, {}]; };
+  const ourDns = () => { const p = Promise.reject(Object.assign(new TypeError("fetch failed"), { cause: { code: "EAI_AGAIN" } })); p.catch(() => {}); return [p, {}]; };
   for (let i = 0; i < 40; i++) { const [p, init] = i % 2 ? ourTimeout() : ourDns(); m.observeFetch("hist.databento.com", p, init, "outside"); }
   await new Promise((r) => setTimeout(r, 0));
   let gw = await words();
@@ -530,13 +530,14 @@ for (const [name, T, field, sameBody] of SPEND) {
   const start = Date.parse("2026-11-10T15:00:00Z");
   const created = (calls, T) => calls.filter((c) => c[1] === "create" && argOf(c, "--title") === T);
   const closedNum = (calls) => calls.filter((c) => c[1] === "close").map((c) => c[2]);
-  const hungCall = (m, host, caller) => {
+  const hungCall = (m, host, caller, { heavy = false } = {}) => {
     const signal = AbortSignal.abort(new DOMException("t", "TimeoutError"));
     signal[Symbol.for("agent402.upstreamLimitMs")] = 25_000;
+    if (heavy) signal[Symbol.for("agent402.upstreamHeavyInput")] = true;
     const p = Promise.reject(new DOMException("The operation was aborted due to timeout", "TimeoutError")); p.catch(() => {});
     m.observeFetch(host, p, { signal }, "outside", null, () => caller);
   };
-  const dnsCall = (m, host) => { const p = Promise.reject(Object.assign(new TypeError("fetch failed"), { cause: { code: "ENOTFOUND" } })); p.catch(() => {}); m.observeFetch(host, p, {}, "outside", null, () => "x"); };
+  const dnsCall = (m, host) => { const p = Promise.reject(Object.assign(new TypeError("fetch failed"), { cause: { code: "EAI_AGAIN" } })); p.catch(() => {}); m.observeFetch(host, p, {}, "outside", null, () => "x"); };
   const answered = (m, host, n) => { for (let i = 0; i < n; i++) m.observeFetch(host, Promise.resolve(new Response("x")), {}, "outside"); };
   const read = async (m, t) => ({ upstreamHealth: (await m.status({ fresh: true, t })).upstreamHealth });
   let t = start;
@@ -581,7 +582,7 @@ for (const [name, T, field, sameBody] of SPEND) {
       assert.equal(created(calls, UN).length + created(calls, UH).length, 0, JSON.stringify(calls));
     });
   };
-  await quiet("one caller's long inputs held past our limit twenty times", (q) => { for (let i = 0; i < 20; i++) hungCall(q, "hist.databento.com", "caller-long"); answered(q, "api.exa.ai", 8); });
+  await quiet("one caller's long inputs held past our limit twenty times", (q) => { for (let i = 0; i < 20; i++) hungCall(q, "hist.databento.com", "caller-long", { heavy: true }); answered(q, "api.exa.ai", 8); });
   await quiet("one slow call", (q) => { hungCall(q, "hist.databento.com", "caller-1"); answered(q, "api.exa.ai", 8); });
   const ALL = ["hist.databento.com", "api.exa.ai", "openrouter.ai", "api.stlouisfed.org"];
   await quiet("our egress failing for every upstream", (q) => { for (const h of ALL) for (let i = 0; i < 10; i++) dnsCall(q, h); });
