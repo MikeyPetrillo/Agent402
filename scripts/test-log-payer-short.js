@@ -85,8 +85,36 @@ function walletHelpers(src) {
   return names;
 }
 // Quoted text inside an expression is not code: drop it before matching. A
-// nested template keeps its own ${...} parts (they are expressions).
-const withoutStrings = (expr) => expr.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '""').replace(/`(?:[^`\\$]|\\.|\$(?!\{))*`/g, "``");
+// nested template keeps its own ${...} parts (they are expressions) and drops
+// its text, so the words of `; buyer status: ${tx}` are not read as a wallet
+// while a ${payer} inside it still is.
+const withoutStrings = (expr) => withoutTemplateText(expr.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '""'));
+function withoutTemplateText(code) {
+  let out = "", i = 0;
+  // Copies code up to the closing brace of a ${...} (or the end), reading nested templates.
+  const expr = (stopAtBrace) => {
+    let depth = 0;
+    while (i < code.length) {
+      const c = code[i];
+      if (c === "`") { i++; out += "`"; template(); continue; }
+      if (stopAtBrace && c === "}" && depth === 0) return;
+      if (c === "{") depth++; else if (c === "}") depth--;
+      out += c; i++;
+    }
+  };
+  // Inside a template: skip text, keep each ${...} with its expression.
+  const template = () => {
+    while (i < code.length) {
+      const c = code[i];
+      if (c === "\\") { i += 2; continue; }
+      if (c === "`") { i++; out += "`"; return; }
+      if (c === "$" && code[i + 1] === "{") { out += "${"; i += 2; expr(true); if (i < code.length) { out += "}"; i++; } continue; }
+      i++;
+    }
+  };
+  expr(false);
+  return out;
+}
 
 /** Every flagged interpolation in `src` as { line, expr }. */
 function scanLogCalls(src, payment = false) {
@@ -118,9 +146,11 @@ function scanLogCalls(src, payment = false) {
     "log(`[x] ok ${shortPayer(payer)} and ${maskAddress(addr)} ${list.length} wallets`);",
     'log(`[x] ${ok ? "resolve it by hand from this line" : "kept"}`);',
     "Math.log(payer);",
+    "log(`[x] ${ok ? `; buyer status: GET /x?tx=${row.tx}` : \"\"}`);",
+    "log(`[x] ${ok ? `; status for ${entry.payer}` : \"\"}`);",
   ].join("\n");
   const hits = scanLogCalls(sample).map((h) => h.expr);
-  ok(hits.join("|") === "payer|auth.from", `control: the scanner flags a bare payer and a from, and passes shortened values, counts and quoted words (${hits.join(", ")})`);
+  ok(hits.join("|") === "payer|auth.from|ok ? `; status for ${entry.payer}` : \"\"", `control: the scanner flags a bare payer and a from, and passes shortened values, counts and quoted words, and reads a wallet (not the words) inside a nested template (${hits.join(", ")})`);
   const pay = [
     "const labelOf = (e) => `auth ${e.payer}/${e.nonce}`;",
     "const okLabel = (e) => `auth ${shortPayer(e.payer)}`;",

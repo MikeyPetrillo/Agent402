@@ -16,6 +16,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { pageText } from "./lib/html-text.js";
 
 let pass = 0, fail = 0;
@@ -52,7 +53,7 @@ for (const h of ["Subprocessors", "What we store, and where", "Encryption", "Bac
 // Every src/*.js and src/tools/*.js file, read once.
 const srcFiles = [];
 const walk = (d) => { for (const f of readdirSync(d)) { const p = join(d, f); if (statSync(p).isDirectory()) { if (f !== "generated") walk(p); } else if (p.endsWith(".js")) srcFiles.push(p); } };
-walk(new URL("../src", import.meta.url).pathname);
+walk(fileURLToPath(new URL("../src", import.meta.url)));
 const srcAll = srcFiles.filter((f) => !/\/(privacy|trust-page)\.js$/.test(f)).map((f) => readFileSync(f, "utf8")).join("\n");
 // The provider -> a host or marker its client code uses. A provider on the
 // page with no entry here fails, so a new row needs its call site named.
