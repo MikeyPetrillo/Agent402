@@ -309,11 +309,38 @@ for (const format of ["mp3", "pcm", "wav", "flac", "opus", "aac"]) {
   stub([["openrouter.ai", withBackups(audio(Buffer.from("ID3eleven")))]]);
   ok((await run("tts", { text: "hi" })).model === TTS_TIERS.tts.chain[0], "and the next buyer is still served by ElevenLabs");
   keepBreaker = false;
-  // The same deadline on the ElevenLabs link for several callers in a row
+  // The same deadline on a SHORT text (under HEAVY_INPUT_SHARE of the cap)
+  // counts toward the breaker: one caller is moved to the backups by the
+  // third, and the log names no failure.
+  {
+    const { requestTimingMiddleware } = await import("../src/request-timing.js");
+    const mw = requestTimingMiddleware(() => "tts");
+    const asCaller = (ip, fn) => new Promise((resolve, reject) => { mw({ ip }, { on() {}, headersSent: false }, () => { Promise.resolve().then(fn).then(resolve, reject); }); });
+    const warned = [];
+    const realWarn = console.warn;
+    console.warn = (...a) => { warned.push(a.join(" ")); };
+    try {
+      __resetTtsBreakerForTest(); keepBreaker = true;
+      const states = [];
+      for (let i = 0; i < 3; i++) {
+        stub([["openrouter.ai", withBackups(() => { throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" }); })]]);
+        const e = await asCaller("198.51.100.77", () => throwsWith(() => run("tts", { text: "hello there" })));
+        states.push(`${e?.statusCode}:${elevenLabsBreakerState()}`);
+      }
+      ok(states.join(" ") === "503:ok 503:ok 503:cooling", `one caller's short text held past our limit three times moves the link to the backups by the third (${states.join(" ")})`);
+      const line = warned.find((w) => w.startsWith("[tts] the speech link"));
+      ok(!!line && /did not answer within our limit on a short text/.test(line) && !/elevenlabs|fail|outage|is down/i.test(line), `the log line is neutral (${line})`);
+      stub([["openrouter.ai", (_u, init) => { if (isEleven(init)) throw new Error("ElevenLabs must not be called while cooling"); return backupAudio(init); }]]);
+      const next = await asCaller("198.51.100.77", () => run("tts", { text: "hello there" }));
+      ok(next.model === FIRST_BACKUP, `and the same caller's next call is served by the first backup (${next.model})`);
+    } finally { console.warn = realWarn; keepBreaker = false; }
+  }
+  // The same deadline on a LONG text for several callers in a row
   // (src/unanswered-rule.js) moves the next callers to the backups for the
   // cool-down; the log says only that the link did not answer within our
   // limit. One caller's long texts, and a link that answers between, do not.
   {
+    const LONG = "x".repeat(1200);
     const { requestTimingMiddleware } = await import("../src/request-timing.js");
     const mw = requestTimingMiddleware(() => "tts");
     const asCaller = (ip, fn) => new Promise((resolve, reject) => { mw({ ip }, { on() {}, headersSent: false }, () => { Promise.resolve().then(fn).then(resolve, reject); }); });
@@ -326,15 +353,15 @@ for (const format of ["mp3", "pcm", "wav", "flac", "opus", "aac"]) {
       for (let i = 0; i < 6; i++) { stub([["openrouter.ai", hung()]]); await asCaller("198.51.100.7", () => throwsWith(() => run("tts", { text: "x".repeat(2000) }))); }
       ok(elevenLabsBreakerState() === "ok", `one caller's six long texts past our limit leave the speech link in use (state ${elevenLabsBreakerState()})`);
       __resetTtsBreakerForTest();
-      for (let i = 0; i < 4; i++) { stub([["openrouter.ai", hung()]]); await asCaller(`198.51.100.${10 + i}`, () => throwsWith(() => run("tts", { text: "hello" }))); }
+      for (let i = 0; i < 4; i++) { stub([["openrouter.ai", hung()]]); await asCaller(`198.51.100.${10 + i}`, () => throwsWith(() => run("tts", { text: LONG }))); }
       stub([["openrouter.ai", withBackups(audio(Buffer.from("ID3eleven")))]]);
       await asCaller("198.51.100.20", () => run("tts", { text: "hi" }));
-      for (let i = 0; i < 4; i++) { stub([["openrouter.ai", hung()]]); await asCaller(`198.51.100.${30 + i}`, () => throwsWith(() => run("tts", { text: "hello" }))); }
+      for (let i = 0; i < 4; i++) { stub([["openrouter.ai", hung()]]); await asCaller(`198.51.100.${30 + i}`, () => throwsWith(() => run("tts", { text: LONG }))); }
       ok(elevenLabsBreakerState() === "ok", "an answer from the link between clears the count: four, an answer, four more do not move callers");
       __resetTtsBreakerForTest();
       warned.length = 0;
       const errs = [];
-      for (let i = 0; i < 5; i++) { stub([["openrouter.ai", hung()]]); errs.push(await asCaller(`203.0.113.${i + 1}`, () => throwsWith(() => run("tts", { text: "hello" })))); }
+      for (let i = 0; i < 5; i++) { stub([["openrouter.ai", hung()]]); errs.push(await asCaller(`203.0.113.${i + 1}`, () => throwsWith(() => run("tts", { text: LONG })))); }
       ok(elevenLabsBreakerState() === "cooling", `five callers whose calls the link held past our limit open the breaker (state ${elevenLabsBreakerState()})`);
       ok(errs.every((e) => e?.statusCode === 503 && /^Speech upstream did not answer the speech read within our \d+ s limit/.test(e.message)), "each held call is still its own uncharged 503");
       const line = warned.find((w) => w.startsWith("[tts] the speech link"));

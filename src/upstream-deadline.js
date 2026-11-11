@@ -72,6 +72,10 @@ export const DEFAULT_READ_MS = 8_000;
 export const MIN_READ_MS = 5;
 /** The key under which upstreamFetch records its cap on the signal it sends. */
 export const LIMIT_MS = Symbol.for("agent402.upstreamLimitMs");
+/** Set on the signal when the read's input is at or past HEAVY_INPUT_SHARE
+ *  of its cap: the failure monitor then leaves that deadline out of the rule
+ *  that needs no second caller (a long input can outlast the limit). */
+export const HEAVY_INPUT_MARK = Symbol.for("agent402.upstreamHeavyInput");
 
 const store = new AsyncLocalStorage();
 
@@ -169,7 +173,7 @@ export const KIND = Object.freeze({
   OUR_DEADLINE: "our-deadline",
   /** the call's budget was spent before this read left: no request was sent */
   BUDGET_SPENT: "budget-spent",
-  /** this server's DNS lookup for the host failed: no request was sent */
+  /** this server's resolver could not finish the lookup: no request was sent */
   OUR_EGRESS: "our-egress",
   /** the connection failed before any answer (refused, reset, unreachable) */
   CONNECT_FAILED: "connect-failed",
@@ -194,12 +198,24 @@ export function attributed(err, attribution, kind = null) {
   return Object.assign(err, { attribution, ...(kind ? { hint: kind } : {}) });
 }
 
+/** The answer when an upstream refuses this server's own key (401/403):
+ *  `service` names what is unavailable ("Image generation"); the answer names
+ *  our side, never the buyer's input or an upstream failure. */
+export function ourKeyRefusedError(service, status, statusCode = 502) {
+  return Object.assign(
+    attributed(bad(`${service} is unavailable right now: the provider refused this server's key (HTTP ${status}); this is on our side, not your input - retry shortly`, statusCode), ATTRIBUTION.OURS, KIND.OUR_KEY),
+    { upstreamStatus: status },
+  );
+}
+
 /** The share of an input's cap at which our read limit gets the
  *  smaller-input advice: a long input is the likeliest reason a read that
  *  normally answers in time did not. */
 export const HEAVY_INPUT_SHARE = 0.5;
-/** True when `ctx.input` ({ size, max }) is at or past HEAVY_INPUT_SHARE. */
-function heavyInput(input) {
+/** True when `ctx.input` ({ size, max }) is at or past HEAVY_INPUT_SHARE.
+ *  The speech and direct-link breakers read it too: our limit passing on an
+ *  input under that share is counted as the link not answering. */
+export function heavyInput(input) {
   const size = Number(input?.size), max = Number(input?.max);
   return Number.isFinite(size) && Number.isFinite(max) && max > 0 && size >= max * HEAVY_INPUT_SHARE;
 }
@@ -233,9 +249,14 @@ export function budgetSpentError(label, step, ms) {
   );
 }
 
-// A lookup that failed is this server's resolver path: getaddrinfo's codes and
-// the c-ares ones (src/tools/fetch-guard.js keeps the same list for caller URLs).
-const DNS_CODES = new Set(["ENOTFOUND", "EAI_AGAIN", "EAI_FAIL", "EAI_NODATA", "EAI_NONAME", "ESERVFAIL", "EREFUSED", "ETIMEOUT", "ECANCELLED", "EDNSLOOKUPTIMEOUT", "EDNSUNAVAILABLE"]);
+// A lookup the resolver could not finish is this server's resolver path:
+// getaddrinfo's EAI_AGAIN and EAI_FAIL, and the c-ares codes for a resolver
+// that returned SERVFAIL, timed out, refused the query or was unreachable
+// (src/tools/fetch-guard.js keeps the same split for caller URLs).
+const OUR_RESOLVER_CODES = new Set(["EAI_AGAIN", "EAI_FAIL", "ESERVFAIL", "EREFUSED", "ETIMEOUT", "ECANCELLED", "EDNSLOOKUPTIMEOUT", "EDNSUNAVAILABLE"]);
+// A lookup that was answered "no such name": the host's own name does not
+// resolve, which proves nothing about this server.
+const NAME_NOT_FOUND_CODES = new Set(["ENOTFOUND", "EAI_NONAME", "EAI_NODATA"]);
 /** The transport code on a fetch error's cause chain, or null. */
 export function transportCodeOf(err) {
   let e = err;
@@ -245,14 +266,25 @@ export function transportCodeOf(err) {
   }
   return null;
 }
-/** True when a fetch error is this server's DNS lookup failing. */
-export const isDnsFailure = (err) => DNS_CODES.has(transportCodeOf(err) || "");
+/** True when a fetch error is this server's resolver failing to finish a lookup. */
+export const isOurResolverFailure = (err) => OUR_RESOLVER_CODES.has(transportCodeOf(err) || "");
+/** True when a fetch error is the host's name not resolving. */
+export const isNameNotFound = (err) => NAME_NOT_FOUND_CODES.has(transportCodeOf(err) || "");
+/** True when a fetch error is any failed DNS lookup (either kind above). */
+export const isDnsFailure = (err) => isOurResolverFailure(err) || isNameNotFound(err);
 
-/** The 503 a read answers when no answer came back at all. A failed DNS
- *  lookup is this server's own resolver path; any other transport failure
- *  (refused, reset, unreachable) proves nothing about whose side failed. */
+/** The 503 a read answers when no answer came back at all. A lookup our
+ *  resolver could not finish is this server's own path; a name that does not
+ *  resolve, and any other transport failure (refused, reset, unreachable),
+ *  proves nothing about whose side failed. */
 export function upstreamUnreachable(label, step, cause = null) {
-  if (cause && isDnsFailure(cause)) {
+  if (cause && isNameNotFound(cause)) {
+    return Object.assign(
+      bad(`${label} could not be reached: its host name did not resolve (${step} read, no request sent); nothing was charged - retry shortly`, 503),
+      { attribution: ATTRIBUTION.UNKNOWN, hint: KIND.CONNECT_FAILED, upstreamFailure: "unreachable" },
+    );
+  }
+  if (cause && isOurResolverFailure(cause)) {
     return Object.assign(
       bad(`${label} could not be reached: this server's DNS lookup for its host failed (${step} read, no request sent); nothing was charged - retry shortly`, 503),
       { attribution: ATTRIBUTION.OURS, hint: KIND.OUR_EGRESS, upstreamFailure: "unreachable" },
@@ -302,6 +334,7 @@ export async function upstreamFetch(url, init = {}, ctx = {}) {
     // The cap rides on the signal so the failure monitor can name our limit
     // when it fires ("did not answer within our N s limit").
     signal[LIMIT_MS] = cap;
+    if (heavyInput(ctx.input)) signal[HEAVY_INPUT_MARK] = true;
     return await fetchImpl(url, { ...init, signal });
   } catch (err) {
     // A daily ceiling refusal (src/upstream-hard-caps.js) is already the

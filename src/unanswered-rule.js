@@ -16,6 +16,11 @@
 //   UPSTREAM_UNANSWERED_WINDOW_MS   the window (default 15 minutes)
 //   UPSTREAM_UNANSWERED_MIN         deadlines in the window (default 5)
 //   UPSTREAM_UNANSWERED_MIN_CALLERS distinct callers among them (default 3)
+//   UPSTREAM_UNANSWERED_ALL_HELD_MIN deadlines in the window that need no
+//                                   second caller when the upstream answered
+//                                   none of its calls there (default 10; the
+//                                   failure monitor reads it: one buyer or
+//                                   background work alone on a hung upstream)
 //   UPSTREAM_UNANSWERED_RATE        share of the upstream's calls in the window
 //                                   that ended at our deadline (default 0.5; the
 //                                   failure monitor reads it, the breakers see
@@ -31,6 +36,7 @@ export function unansweredSettings(env = process.env) {
     minCalls: num(env.UPSTREAM_UNANSWERED_MIN, 5),
     minCallers: num(env.UPSTREAM_UNANSWERED_MIN_CALLERS, 3),
     rate: num(env.UPSTREAM_UNANSWERED_RATE, 0.5),
+    allHeldMin: num(env.UPSTREAM_UNANSWERED_ALL_HELD_MIN, 10),
   };
 }
 

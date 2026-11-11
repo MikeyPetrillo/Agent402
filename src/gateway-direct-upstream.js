@@ -222,8 +222,11 @@ export function stripVendorExtensions(obj) {
 // mapped model. Only the upstream's own answer counts (DIRECT_BREAKER_COUNTED):
 // auth (401/403), quota (402), capacity (429), 5xx, a missing endpoint, a
 // malformed or oversized body, a late error in a 200, a missing cost, and a
-// connection its host refused or reset. Our own timeout, a DNS or egress
-// error on our side, a stream cut with no status, a refusal of the request
+// connection its host refused or reset (or a host name that does not
+// resolve), and our own timeout on a short prompt (under HEAVY_INPUT_SHARE of
+// the tier's input cap: nothing about the input explains it). Our own timeout
+// on a long prompt, a lookup our resolver could not finish or a route our
+// side lacks, a stream cut with no status, a refusal of the request
 // itself (any other 4xx: a parameter out of range, a prompt over the context,
 // which OpenRouter would refuse too), a client that went away and an empty
 // answer prove nothing about the upstream and do not count. An answered
@@ -274,16 +277,36 @@ export function directBreakerRelease(grant) {
   if (!grant?.trial || breaker.trialId !== grant.id || !breaker.trialAt) return;
   breaker.trialAt = 0;
 }
-// Our own timeout on the direct link: one never counts (a long prompt is one
-// caller's input), but the pattern of src/unanswered-rule.js (many calls,
-// several callers, one window, no answer between) opens the breaker so the
-// next callers go to OpenRouter; logged as "did not answer within our limit".
+// Our own timeout on the direct link. On a short prompt it counts like the
+// upstream's own failure (so one caller is moved to OpenRouter by the third).
+// On a long prompt one never counts (it may need more than the cap), but the
+// pattern of src/unanswered-rule.js (many calls, several callers, one window,
+// no answer between) opens the breaker so the next callers go to OpenRouter.
+// Both are logged as "did not answer within our limit".
 const directUnanswered = createUnansweredTracker();
 /** The outcome of one direct attempt: ok, or the failure's bucket. `caller`
- *  is the request's caller key (src/request-timing.js) when known. */
-export function noteDirectOutcome(ok, reason, caller = currentCallerKey()) {
+ *  is the request's caller key (src/request-timing.js; read only when the
+ *  unanswered rule needs it); `heavy`
+ *  says the prompt is at or past HEAVY_INPUT_SHARE of its cap (a timeout on
+ *  it then reads the unanswered rule instead of counting). */
+export function noteDirectOutcome(ok, reason, caller = undefined, { heavy = false } = {}) {
   if (ok) { directUnanswered.clear(); breaker.fails = 0; breaker.openUntil = 0; breaker.trialAt = 0; return; }
-  if (String(reason) === "timeout" && directUnanswered.note(caller)) {
+  const timeout = String(reason) === "timeout";
+  if (timeout && !heavy) {
+    breaker.fails++;
+    if (breaker.fails >= breakerFails()) {
+      const now = breakerNow();
+      if (!breaker.openUntil || now >= breaker.openUntil) {
+        breaker.opens++;
+        console.warn("[direct-upstream] the direct link did not answer within our limit on a short prompt, the last of the counted failures in a row; the next calls go to OpenRouter for the open period");
+      }
+      breaker.openUntil = now + breakerOpenMs();
+      breaker.trialAt = 0;
+    }
+    return;
+  }
+  // The caller key is read (hashed) only here, for a long prompt's timeout.
+  if (timeout && directUnanswered.note(caller === undefined ? currentCallerKey() : caller)) {
     const st = directUnanswered.state();
     directUnanswered.clear();
     console.warn(`[direct-upstream] the direct link did not answer within our limit on ${st.deadlines} calls from ${st.callers} callers; the next calls go to OpenRouter for the open period`);

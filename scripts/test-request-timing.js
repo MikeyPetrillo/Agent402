@@ -27,6 +27,20 @@ __resetTimingForTest();
   const { createHash } = await import("node:crypto");
   ok(!a.includes("203") && createHash("sha256").update("203.0.113.5").digest("hex").slice(0, 12) !== a, "the key is not the address and not its plain hash");
   ok(callerKeyOf({}) === null && currentCallerKey() === null, "no address, no key; outside a request, null");
+  // The key is hashed only when a rule reads it, and once: the middleware
+  // itself never reads the address.
+  {
+    let ipReads = 0;
+    const req = { get ip() { ipReads++; return "203.0.113.9"; }, socket: {} };
+    const mw = requestTimingMiddleware(() => "GET /lazy");
+    let before = -1, k1 = null, k2 = null;
+    await new Promise((done) => mw(req, { on() {}, once() {}, headersSent: false }, () => {
+      before = ipReads;
+      k1 = currentCallerKey(); k2 = currentCallerKey();
+      done();
+    }));
+    ok(before === 0 && ipReads === 1 && k1 === k2 && k1 === callerKeyOf({ ip: "203.0.113.9" }), `the caller key is read lazily and hashed once (reads before ${before}, after ${ipReads})`);
+  }
   let seen;
   const ends = [];
   requestTimingMiddleware(() => "k")({ ip: "198.51.100.1" }, { on(ev, fn) { ends.push(fn); }, headersSent: true, statusCode: 200, writableFinished: true }, () => { seen = currentCallerKey(); });

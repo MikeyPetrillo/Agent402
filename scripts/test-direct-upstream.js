@@ -334,35 +334,41 @@ setEnv(ON);
   D._setDirectBreakerNowForTest(null);
   setEnv(ON);
 }
-// Our own timeout and a DNS or egress failure on our side are not the
-// upstream's answer: any number of them leaves the breaker closed and the
-// next call still goes direct. A refused connection is the host's answer.
+// Our own timeout on a long prompt (at or past HEAVY_INPUT_SHARE of the
+// tier's input cap) and a lookup our resolver could not finish are not the
+// upstream's answer: any number of them leaves the breaker closed and the next
+// call still goes direct. A refused connection, a host name that does not
+// resolve, and our own timeout on a short prompt count.
 {
   setEnv({ ...ON, DIRECT_UPSTREAM_BREAKER_FAILS: "2", DIRECT_UPSTREAM_BREAKER_OPEN_MS: "60000" });
-  for (const [label, code] of [["our own timeout", null], ["a DNS failure on our side", "ENOTFOUND"], ["our resolver timing out", "EAI_AGAIN"]]) {
-    reset();
-    const prevFetch = globalThis.fetch;
-    globalThis.fetch = async (url, init) => {
-      if (String(url) === `${DIRECT_BASE}/chat/completions`) {
-        direct.hits.push({ url: String(url) });
-        if (!code) throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
-        throw Object.assign(new TypeError("fetch failed"), { cause: { code } });
-      }
-      return prevFetch(url, init);
-    };
-    try { for (let i = 0; i < 4; i++) await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 }); }
-    finally { globalThis.fetch = prevFetch; }
-    ok(direct.hits.length === 4 && or.hits.length === 4 && !D.directBreakerState().open && D.directBreakerState().fails === 0, `${label} four times: the breaker stays closed and every call still goes direct (direct ${direct.hits.length}, fails ${D.directBreakerState().fails})`);
-  }
-  reset();
-  const prevFetch = globalThis.fetch;
-  globalThis.fetch = async (url, init) => {
-    if (String(url) === `${DIRECT_BASE}/chat/completions`) { direct.hits.push({ url: String(url) }); throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } }); }
+  const longMsgs = [{ role: "user", content: "x".repeat(Math.ceil(K.maxInputCharsFor("v1-chat", MODEL) * 0.6)) }];
+  const failWith = (code) => async (url, init, prevFetch) => {
+    if (String(url) === `${DIRECT_BASE}/chat/completions`) {
+      direct.hits.push({ url: String(url) });
+      if (!code) throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+      throw Object.assign(new TypeError("fetch failed"), { cause: { code } });
+    }
     return prevFetch(url, init);
   };
-  try { for (let i = 0; i < 2; i++) await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 }); }
-  finally { globalThis.fetch = prevFetch; }
-  ok(D.directBreakerState().open, "control: two connections the upstream's host refused open the breaker");
+  const runWith = async (code, n, messages) => {
+    reset();
+    const prevFetch = globalThis.fetch;
+    const f = failWith(code);
+    globalThis.fetch = (url, init) => f(url, init, prevFetch);
+    try { for (let i = 0; i < n; i++) await base.handler({ model: MODEL, messages, max_tokens: 32 }); }
+    finally { globalThis.fetch = prevFetch; }
+  };
+  for (const [label, code, messages] of [["our own timeout on a long prompt", null, longMsgs], ["our resolver not finishing a lookup", "EAI_AGAIN", msgs]]) {
+    await runWith(code, 4, messages);
+    ok(direct.hits.length === 4 && or.hits.length === 4 && !D.directBreakerState().open && D.directBreakerState().fails === 0, `${label} four times: the breaker stays closed and every call still goes direct (direct ${direct.hits.length}, fails ${D.directBreakerState().fails})`);
+  }
+  for (const [label, code] of [["two connections the upstream's host refused", "ECONNREFUSED"], ["two lookups answered no such name", "ENOTFOUND"], ["two of our timeouts on a short prompt", null]]) {
+    await runWith(code, 2, msgs);
+    ok(D.directBreakerState().open, `${label} open the breaker (fails ${D.directBreakerState().fails})`);
+    const dBefore = direct.hits.length;
+    await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 });
+    ok(direct.hits.length === dBefore, `and the next call goes to OpenRouter without a direct attempt (${label})`);
+  }
   D._setDirectBreakerNowForTest(null);
   setEnv(ON);
 }
@@ -437,26 +443,41 @@ setEnv(ON);
   D._setDirectBreakerNowForTest(null);
   setEnv(ON);
 }
-// Our own timeout on the direct link for several callers in a row
-// (src/unanswered-rule.js, defaults 5 calls, 3 callers, 15 minutes, no answer
-// between) opens the breaker so the next callers go to OpenRouter; one
-// caller's long prompts, or an answer between, do not.
+// Our own timeout on the direct link on a SHORT prompt counts toward the
+// breaker: one caller is moved to OpenRouter by the third (default threshold).
+// On a LONG prompt, several callers in a row (src/unanswered-rule.js, defaults
+// 5 calls, 3 callers, 15 minutes, no answer between) open the breaker so the
+// next callers go to OpenRouter; one caller's long prompts, or an answer
+// between, do not.
 {
   setEnv({ ...ON, DIRECT_UPSTREAM_BREAKER_OPEN_MS: "60000" });
   reset();
-  for (let i = 0; i < 8; i++) D.noteDirectOutcome(false, "timeout", "caller-long");
-  ok(!D.directBreakerState().open && D.directBreakerAllows(), "eight of our timeouts for one caller leave the direct link in use");
+  const shortStates = [];
+  {
+    const warned = [];
+    const realWarn = console.warn;
+    console.warn = (...a) => { warned.push(a.join(" ")); };
+    try {
+      for (let i = 0; i < 3; i++) { D.noteDirectOutcome(false, "timeout", "caller-short"); shortStates.push(D.directBreakerState().open ? "open" : "closed"); }
+    } finally { console.warn = realWarn; }
+    ok(shortStates.join(" ") === "closed closed open" && !D.directBreakerAllows(), `three of our timeouts on one caller's short prompt open the breaker by the third (${shortStates.join(" ")})`);
+    const sl = warned.find((w) => w.startsWith("[direct-upstream]"));
+    ok(!!sl && /did not answer within our limit on a short prompt/.test(sl) && !/fail(?!ures)|outage|is down/i.test(sl), `the log line is neutral (${sl})`);
+  }
   reset();
-  for (let i = 0; i < 4; i++) D.noteDirectOutcome(false, "timeout", `caller-${i}`);
+  for (let i = 0; i < 8; i++) D.noteDirectOutcome(false, "timeout", "caller-long", { heavy: true });
+  ok(!D.directBreakerState().open && D.directBreakerAllows(), "eight of our timeouts on one caller's long prompts leave the direct link in use");
+  reset();
+  for (let i = 0; i < 4; i++) D.noteDirectOutcome(false, "timeout", `caller-${i}`, { heavy: true });
   D.noteDirectOutcome(true);
-  for (let i = 0; i < 4; i++) D.noteDirectOutcome(false, "timeout", `caller-${i + 4}`);
+  for (let i = 0; i < 4; i++) D.noteDirectOutcome(false, "timeout", `caller-${i + 4}`, { heavy: true });
   ok(!D.directBreakerState().open, "an answer between clears the count");
   reset();
   const warned = [];
   const realWarn = console.warn;
   console.warn = (...a) => { warned.push(a.join(" ")); };
   try {
-    for (let i = 0; i < 5; i++) D.noteDirectOutcome(false, "timeout", `caller-${i % 3}`);
+    for (let i = 0; i < 5; i++) D.noteDirectOutcome(false, "timeout", `caller-${i % 3}`, { heavy: true });
   } finally { console.warn = realWarn; }
   ok(D.directBreakerState().open && !D.directBreakerAllows(), "five of our timeouts from three callers open the breaker");
   const line = warned.find((w) => w.startsWith("[direct-upstream]"));
