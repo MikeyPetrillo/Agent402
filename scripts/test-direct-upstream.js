@@ -334,6 +334,38 @@ setEnv(ON);
   D._setDirectBreakerNowForTest(null);
   setEnv(ON);
 }
+// Our own timeout and a DNS or egress failure on our side are not the
+// upstream's answer: any number of them leaves the breaker closed and the
+// next call still goes direct. A refused connection is the host's answer.
+{
+  setEnv({ ...ON, DIRECT_UPSTREAM_BREAKER_FAILS: "2", DIRECT_UPSTREAM_BREAKER_OPEN_MS: "60000" });
+  for (const [label, code] of [["our own timeout", null], ["a DNS failure on our side", "ENOTFOUND"], ["our resolver timing out", "EAI_AGAIN"]]) {
+    reset();
+    const prevFetch = globalThis.fetch;
+    globalThis.fetch = async (url, init) => {
+      if (String(url) === `${DIRECT_BASE}/chat/completions`) {
+        direct.hits.push({ url: String(url) });
+        if (!code) throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+        throw Object.assign(new TypeError("fetch failed"), { cause: { code } });
+      }
+      return prevFetch(url, init);
+    };
+    try { for (let i = 0; i < 4; i++) await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 }); }
+    finally { globalThis.fetch = prevFetch; }
+    ok(direct.hits.length === 4 && or.hits.length === 4 && !D.directBreakerState().open && D.directBreakerState().fails === 0, `${label} four times: the breaker stays closed and every call still goes direct (direct ${direct.hits.length}, fails ${D.directBreakerState().fails})`);
+  }
+  reset();
+  const prevFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url) === `${DIRECT_BASE}/chat/completions`) { direct.hits.push({ url: String(url) }); throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } }); }
+    return prevFetch(url, init);
+  };
+  try { for (let i = 0; i < 2; i++) await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 }); }
+  finally { globalThis.fetch = prevFetch; }
+  ok(D.directBreakerState().open, "control: two connections the upstream's host refused open the breaker");
+  D._setDirectBreakerNowForTest(null);
+  setEnv(ON);
+}
 // A refusal of the request itself (any 4xx but auth, quota, capacity and a
 // missing endpoint) is the buyer's request, which OpenRouter refuses too: it
 // never opens the breaker, the word stays ok, honest traffic keeps going direct.
