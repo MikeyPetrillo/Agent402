@@ -108,6 +108,13 @@ const legFor = (route) => CANARY_LEGS.find((l) => l.path === route || l.path.sta
 const xt = legFor("/api/x-tweet");
 ok(!!xt && xt.method === "POST" && xt.body?.id === "20", "canary has an x-tweet leg (POST, post 20) - the X bearer + prepaid balance are proven daily on prod, not by the first buyer");
 if (xt) ok(Number.isInteger(xt.weekday) && xt.weekday >= 0 && xt.weekday <= 6, "x-tweet leg is weekly (weekday 0-6): it draws the prepaid X balance the announce posts share");
+// The leg's check must accept the answer the tool documents (no author is
+// read, so no username): a check that wants a field the tool does not return
+// fails every paid canary run.
+if (xt) {
+  const doc = X_DATA_TOOLS.find((t) => t.slug === "x-tweet")?.discovery?.output?.example;
+  ok(xt.check(doc) === true, `x-tweet leg check accepts the kit's documented answer (${xt.check(doc)})`);
+}
 if (xt) ok(xt.priceUsd === advertised(X_DATA_TOOLS, "x-tweet"), `x-tweet leg priceUsd (${xt?.priceUsd}) matches the kit's advertised price ($${advertised(X_DATA_TOOLS, "x-tweet")})`);
 const sq = legFor("/api/stock-quote");
 ok(!!sq, "canary has a stock-quote leg");
